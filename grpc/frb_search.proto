@@ -39,6 +39,24 @@ service FrbSearch {
   // a similar push-based use case in mind -- general status polling
   // should use GetStatus instead.
   rpc MonitorRingbuf (MonitorRingbufRequest) returns (stream MonitorRingbufResponse);
+
+  // Register a "stream": data matching (beam_ids x fpga-seq range) is
+  // queued for disk writing automatically as it flows through the server,
+  // with no further RPCs needed. Complements WriteFiles (one-shot,
+  // retroactive within the ring buffer): a stream captures each frame at
+  // the moment it transitions from "assembled" to "processed", so chunks
+  // that were already processed when StartStream arrives are NOT captured
+  // retroactively, even if fpga_seq_start is in the past.
+  rpc StartStream (StartStreamRequest) returns (StartStreamResponse);
+
+  // Report the server's current position (as an fpga seq), the full list
+  // of beams it processes, and all active streams with their stats.
+  rpc ShowStreams (ShowStreamsRequest) returns (ShowStreamsResponse);
+
+  // Cancel one active stream (by acq_name), or all of them. File writes
+  // already queued still complete (and still notify SubscribeFiles
+  // subscribers); cancellation only stops future matching.
+  rpc CancelStream (CancelStreamRequest) returns (CancelStreamResponse);
 }
 
 // Request message (currently empty, but extensible)
@@ -118,8 +136,13 @@ message WriteFilesResponse {
   repeated string filename_list = 1;  // List of filenames that will be written
 }
 
-// Request message for SubscribeFiles (currently empty, but extensible)
-message SubscribeFilesRequest {}
+// Request message for SubscribeFiles
+message SubscribeFilesRequest {
+  // If true, also receive notifications for files written by streams
+  // (StartStream RPC). Default false: WriteFiles-triggered notifications
+  // only, preserving pre-streams behavior.
+  bool subscribe_streams = 1;
+}
 
 // Response message for SubscribeFiles (streamed).
 //
@@ -147,6 +170,8 @@ message ReadySentinel {}
 message WriteNotification {
   string filename      = 1;  // Valid only when error_message is empty.
   string error_message = 2;  // Empty = success; non-empty = error string.
+  string acq_name      = 3;  // Empty if triggered by WriteFiles, nonempty
+                             // if triggered by StartStream.
 }
 
 // Request message for MonitorRingbuf (currently empty, but extensible).
@@ -155,4 +180,63 @@ message MonitorRingbufRequest {}
 // Streamed update for MonitorRingbuf. One message per change in rb_processed.
 message MonitorRingbufResponse {
   int64 rb_processed = 1;
+}
+
+// Request message for StartStream.
+//
+// The time range is expressed as fpga sequence numbers, half-open: a chunk
+// matches iff it overlaps [fpga_seq_start, fpga_seq_end). fpga_seq_start = 0
+// means "start asap"; fpga_seq_end = INT64_MAX means "run indefinitely".
+message StartStreamRequest {
+  string acq_name = 1;          // must be nonempty; unique among active streams
+  string filename_pattern = 2;  // must contain (BEAM) and (CHUNK); same format as WriteFiles
+  repeated int64 beam_ids = 3;  // must be nonempty; each must be a known beam
+                                // (no "empty = all beams" convention)
+  int64 fpga_seq_start = 4;     // 0 = start asap
+  int64 fpga_seq_end = 5;       // INT64_MAX = run indefinitely
+}
+
+// Response message for StartStream (empty on success; failures are
+// reported as gRPC errors).
+message StartStreamResponse {}
+
+// Request message for ShowStreams (currently empty, but extensible).
+message ShowStreamsRequest {}
+
+// One active stream, as reported by ShowStreams.
+message StreamInfo {
+  StartStreamRequest args = 1;   // the original StartStream args, echoed back
+
+  // "Queued" counters, incremented when a matching frame is queued for
+  // writing (not when the write completes). num_bytes_queued is logical:
+  // num_files_queued * (data-array bytes per frame), neglecting file
+  // headers, and counting the full size even when the bytes land on disk
+  // as a hardlink.
+  int64 num_files_queued = 2;
+  int64 num_bytes_queued = 3;
+}
+
+// Response message for ShowStreams.
+message ShowStreamsResponse {
+  // The server's current position as an fpga seq, derived from rb_processed
+  // (not rb_assembled): all data before this fpga seq has been fully
+  // processed. (Floor of the last fully-processed chunk boundary.)
+  int64 current_fpga_seq = 1;
+
+  // ALL beams processed by this server (not just those with active streams).
+  repeated int64 beam_ids = 2;
+
+  repeated StreamInfo streams = 3;
+}
+
+// Request message for CancelStream.
+message CancelStreamRequest {
+  bool cancel_all = 1;
+  string acq_name = 2;   // used only if cancel_all == false; unknown
+                         // acq_name is an error
+}
+
+// Response message for CancelStream.
+message CancelStreamResponse {
+  int64 num_cancelled = 1;
 }

@@ -33,6 +33,7 @@ import random
 import secrets
 import shutil
 
+import grpc
 import ksgpu
 import numpy as np
 
@@ -136,10 +137,15 @@ class NetworkTester:
         # RPC + tracking.
         self.rpc_client             = None
         self.file_sub               = None
+        self.stream_sub             = None
         self.safe_written_set       = None
         self.unsafe_written_set     = None
         self.unsafe_not_written_set = None
         self.filename_meta          = None
+        # Streams (StartStream RPC) exercises.
+        self.stream_group = None    # dict, set once by _maybe_start_streams
+        self.stream_must  = None    # set of (acq_name, filename), from _compute_stream_expectations
+        self.stream_must_chunks = None   # list of chunk indices underlying stream_must
 
     def __enter__(self):
         os.makedirs(self.ssd_dir, exist_ok=True)
@@ -159,6 +165,8 @@ class NetworkTester:
         try:
             if self.file_sub is not None:
                 self.file_sub.close()
+            if self.stream_sub is not None:
+                self.stream_sub.close()
             if self.rpc_client is not None:
                 self.rpc_client.close()
             if self.fxe is not None:
@@ -175,10 +183,17 @@ class NetworkTester:
         """Execute the test's post-build phases in order."""
         self._send_loop()
         self._post_loop_sync()
+        # Compute stream MUST-sets BEFORE _test_stream_misc (whose final
+        # cancel_all stops future stream captures; already-transitioned
+        # chunks have their writes queued regardless).
+        self._compute_stream_expectations()
+        self._test_stream_misc()
         self._print_debug_counters()
         self._drain_filesub()
+        self._drain_streamsub()
         self._print_summary()
         self._verify_files()
+        self._verify_stream_files()
 
     # ---- Private builders ----
 
@@ -308,6 +323,14 @@ class NetworkTester:
         self.rpc_client = FrbSearchClient(f"127.0.0.1:{p['rpc_port']}")
         self.file_sub   = self.rpc_client.subscribe_files()
 
+        # Second subscription with subscribe_streams=True: receives BOTH
+        # WriteFiles-triggered and stream-triggered notifications (drained in
+        # _drain_streamsub, which ignores the acq_name=="" WriteFiles ones).
+        # Also implicitly tests that file_sub (subscribe_streams=False, the
+        # default) never sees stream files -- _drain_filesub asserts
+        # acq_name == "" on everything it receives.
+        self.stream_sub = self.rpc_client.subscribe_files(subscribe_streams=True)
+
         # Filenames tracked across all iouter turns. Three disjoint sets:
         #   safe_written_set       -- requested chunk was in [safe_lower, safe_upper];
         #                             server MUST schedule it (and we wait for notif).
@@ -382,6 +405,10 @@ class NetworkTester:
             # Issue rpc write with 1% probability.
             if random.random() < 0.01:
                 self._maybe_issue_write(iouter)
+
+            # Start the stream group once, a quarter of the way in (retries
+            # until the server is rb_initialized; no-op after success).
+            self._maybe_start_streams(iouter)
 
     def _maybe_issue_write(self, iouter):
         """Compute the safe chunk range, pick a request rectangle (with
@@ -499,6 +526,218 @@ class NetworkTester:
             else:
                 self.unsafe_not_written_set.add(fn)
 
+    # ---- Stream (StartStream RPC) exercises ----
+
+    def _maybe_start_streams(self, iouter):
+        """Start the test's stream group (once, a quarter of the way through
+        the send loop, so plenty of chunks transition while it is active):
+
+          - acq_a and acq_b share ONE filename pattern -> every captured
+            frame gets duplicate save_paths, exercising the FileWriter NFS
+            dup-skip branch (both acqs must still get their own success
+            notifications, file written once);
+          - acq_c uses a distinct pattern in a subdirectory -> exercises
+            lazy directory creation in the FileWriter threads, and gives a
+            second NFS name that must be a HARDLINK of the shared-pattern
+            file (verified via st_ino in _verify_stream_files).
+
+        All three streams: same beams, fpga range [0, end) with end chosen
+        K chunks past the server's current position at start time. Retries
+        every turn until the server is rb_initialized.
+        """
+        if (self.stream_group is not None) or (iouter < 250):
+            return
+
+        p = self.p
+        K = 8   # chunks of stream lifetime beyond the start-time position
+        spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
+        sel_beams = self.beam_ids[:min(2, len(self.beam_ids))]
+        pattern_shared = "stream_shared_(BEAM)_(CHUNK).asdf"
+        pattern_c      = "stream_c/(BEAM)_(CHUNK).asdf"
+
+        try:
+            # Current position; the streams' chunk range is [0, c1 + K].
+            c1 = self.rpc_client.get_status().rb_processed // p['nbeams']
+            end_fpga = (c1 + K + 1) * spc
+
+            for acq, pattern in [("acq_a", pattern_shared),
+                                 ("acq_b", pattern_shared),
+                                 ("acq_c", pattern_c)]:
+                self.rpc_client.start_stream(
+                    acq_name=acq, filename_pattern=pattern, beam_ids=sel_beams,
+                    fpga_seq_start=0, fpga_seq_end=end_fpga)
+        except grpc.RpcError as e:
+            # Server hasn't locked onto the X-engine stream yet; retry on a
+            # later turn. Anything else is a real failure.
+            if "initial fpga chunk" in e.details():
+                return
+            raise
+
+        # Registration boundary for the capture guarantee: chunks strictly
+        # greater than c0 transition entirely AFTER all three streams were
+        # registered, so they MUST be captured (chunk c0 itself is
+        # ambiguous -- it may have partially transitioned mid-registration).
+        c0 = self.rpc_client.get_status().rb_processed // p['nbeams']
+
+        self.stream_group = dict(
+            sel_beams=sel_beams, spc=spc, c0=c0, chunk_last=(c1 + K),
+            pattern_shared=pattern_shared, pattern_c=pattern_c)
+
+    def _compute_stream_expectations(self):
+        """Compute the MUST-be-written set of (acq_name, filename) pairs, and
+        sanity-check the ShowStreams queued-counters.
+
+        Guarantee tested: every matching frame that TRANSITIONS
+        (assembled -> processed) while a stream is active must be written.
+        Chunks in [c0 + 1, min(chunk_last, c_end - 1)] provably transitioned
+        after registration and before now, so they are exactly the
+        guaranteed set (boundary chunk c0 and chunks still in flight are
+        ambiguous and merely tolerated by _drain_streamsub).
+        """
+        self.stream_must = set()
+        self.stream_must_chunks = []
+
+        if self.stream_group is None:
+            return
+        g = self.stream_group
+
+        c_end = self.rpc_client.get_status().rb_processed // self.p['nbeams']
+        lo = g['c0'] + 1
+        hi = min(g['chunk_last'], c_end - 1)
+        self.stream_must_chunks = list(range(lo, hi + 1))
+
+        for c in self.stream_must_chunks:
+            for b in g['sel_beams']:
+                fn_shared = g['pattern_shared'].replace("(BEAM)", str(b)).replace("(CHUNK)", str(c))
+                fn_c      = g['pattern_c'].replace("(BEAM)", str(b)).replace("(CHUNK)", str(c))
+                self.stream_must.add(("acq_a", fn_shared))
+                self.stream_must.add(("acq_b", fn_shared))
+                self.stream_must.add(("acq_c", fn_c))
+
+        # ShowStreams counter sanity. Streams may have expired (pruned from
+        # the listing) if rb_processed passed chunk_last; check whichever
+        # are still listed. num_bytes_queued is defined as logical
+        # data-array bytes: num_files_queued * slab_nbytes.
+        must_files_per_stream = len(self.stream_must_chunks) * len(g['sel_beams'])
+        max_files_per_stream = (g['chunk_last'] + 1) * len(g['sel_beams'])
+        slab = AssembledFrameAllocator.slab_nbytes(
+            self.p['total_nfreq'], self.p['time_samples_per_chunk'])
+
+        ss = self.rpc_client.show_streams()
+        assert list(ss.beam_ids) == self.beam_ids
+        for info in ss.streams:
+            assert info.args.acq_name in ("acq_a", "acq_b", "acq_c")
+            assert list(info.args.beam_ids) == g['sel_beams']
+            assert info.num_bytes_queued == info.num_files_queued * slab
+            assert must_files_per_stream <= info.num_files_queued <= max_files_per_stream
+
+    def _expect_rpc_error(self, fn, substr):
+        """Run fn(), assert it raises grpc.RpcError whose details contain substr."""
+        try:
+            fn()
+        except grpc.RpcError as e:
+            assert substr in e.details(), \
+                f"expected RPC error containing {substr!r}, got: {e.details()!r}"
+        else:
+            raise RuntimeError(f"expected RPC error containing {substr!r}, got success")
+
+    def _test_stream_misc(self):
+        """StartStream/CancelStream validation failures + cancel semantics.
+        Runs post-loop (so the server is rb_initialized and well past chunk
+        0). The valid stream used for cancel tests lives in the far future,
+        so it never matches (no files, no notifications)."""
+        rpc = self.rpc_client
+        p = self.p
+        spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
+        beam0 = self.beam_ids[0]
+        c_now = rpc.get_status().rb_processed // p['nbeams']
+
+        def start(**kw):
+            kw.setdefault('acq_name', 'misc_x')
+            kw.setdefault('filename_pattern', 'misc_(BEAM)_(CHUNK).asdf')
+            kw.setdefault('beam_ids', [beam0])
+            # Default range: far future (never matches).
+            kw.setdefault('fpga_seq_start', (c_now + 10**6) * spc)
+            kw.setdefault('fpga_seq_end', (c_now + 10**6 + 1) * spc)
+            return lambda: rpc.start_stream(**kw)
+
+        # Validation failures.
+        self._expect_rpc_error(start(acq_name=''), "acq_name must be a nonempty")
+        self._expect_rpc_error(start(beam_ids=[]), "beam_ids must be nonempty")
+        self._expect_rpc_error(start(beam_ids=[999999]), "unknown beam_id")
+        self._expect_rpc_error(start(beam_ids=[beam0, beam0]), "appears more than once")
+        self._expect_rpc_error(start(filename_pattern='misc_(CHUNK).asdf'), "(BEAM)")
+        self._expect_rpc_error(start(filename_pattern='misc_(BEAM).asdf'), "(CHUNK)")
+        self._expect_rpc_error(start(fpga_seq_start=100, fpga_seq_end=50), "invalid fpga_seq range")
+        if c_now >= 1:
+            # Range [0, spc) covers only chunk 0, long since processed.
+            self._expect_rpc_error(start(fpga_seq_start=0, fpga_seq_end=spc),
+                                   "entirely in the past")
+
+        # Cancel semantics: register a (never-matching) stream, then cancel it.
+        start()()   # succeeds
+        assert 'misc_x' in [i.args.acq_name for i in rpc.show_streams().streams]
+        self._expect_rpc_error(start(), "already in use")           # duplicate acq_name
+        assert rpc.cancel_stream(acq_name='misc_x') == 1
+        assert 'misc_x' not in [i.args.acq_name for i in rpc.show_streams().streams]
+        self._expect_rpc_error(lambda: rpc.cancel_stream(acq_name='misc_x'),
+                               "no active stream")
+
+        # cancel_all: 0 to 3 streams may remain (acq_a/b/c, if not yet
+        # expired). Their MUST files (computed in
+        # _compute_stream_expectations, before this) already transitioned,
+        # so their writes are queued regardless -- cancellation never
+        # retracts queued work.
+        n = rpc.cancel_stream(cancel_all=True)
+        assert 0 <= n <= 3
+        assert len(rpc.show_streams().streams) == 0
+
+    def _drain_streamsub(self):
+        """Wait until every MUST (acq_name, filename) pair has arrived via
+        the subscribe_streams=True subscription. This subscription also
+        receives WriteFiles-triggered notifications (acq_name == ""), which
+        are skipped; stream notifications beyond the MUST set (boundary
+        chunk c0, chunks still transitioning during the drain) are
+        tolerated. No timeout, matching _drain_filesub."""
+        received = set()
+        while not received.issuperset(self.stream_must):
+            filename, error_message, acq_name = next(self.stream_sub)
+            if acq_name == "":
+                continue    # WriteFiles-triggered; drained/checked in _drain_filesub
+            if error_message:
+                raise RuntimeError(
+                    f"stream_sub: write failed for {filename!r} "
+                    f"(acq_name={acq_name!r}): {error_message}")
+            assert acq_name in ("acq_a", "acq_b", "acq_c"), \
+                f"unexpected acq_name {acq_name!r} (misc_x streams never match)"
+            received.add((acq_name, filename))
+
+    def _verify_stream_files(self):
+        """Byte-verify the MUST stream files, and check the dedup/hardlink
+        behavior: for each captured (chunk, beam), acq_a/acq_b's shared
+        pattern and acq_c's distinct pattern must be ONE inode on NFS
+        (bytes written once; second name is a hardlink; duplicate second
+        entry for the shared pattern skipped)."""
+        if self.stream_group is None:
+            print("    streams: not exercised (server was not rb_initialized by iouter=250)")
+            return
+        g = self.stream_group
+
+        for c in self.stream_must_chunks:
+            for b in g['sel_beams']:
+                fn_shared = g['pattern_shared'].replace("(BEAM)", str(b)).replace("(CHUNK)", str(c))
+                fn_c      = g['pattern_c'].replace("(BEAM)", str(b)).replace("(CHUNK)", str(c))
+
+                # Full content check on one name; inode identity makes it
+                # cover the other.
+                self._verify_one_file(fn_c, c, b)
+
+                st_shared = os.stat(os.path.join(self.nfs_dir, fn_shared))
+                st_c      = os.stat(os.path.join(self.nfs_dir, fn_c))
+                assert st_shared.st_ino == st_c.st_ino, \
+                    f"expected hardlink: {fn_shared!r} and {fn_c!r} have different inodes"
+                assert st_shared.st_nlink >= 2
+
     # ---- Post-loop phases ----
 
     def _post_loop_sync(self):
@@ -539,7 +778,12 @@ class NetworkTester:
         scheduled = self.safe_written_set | self.unsafe_written_set
         received_filenames = set()
         while not received_filenames.issuperset(scheduled):
-            filename, error_message = next(self.file_sub)
+            filename, error_message, acq_name = next(self.file_sub)
+            # file_sub was opened with the default subscribe_streams=False,
+            # so stream-triggered files (nonempty acq_name) must never
+            # appear here.
+            assert acq_name == "", \
+                f"subscribe_streams=False subscriber received stream file {filename!r} (acq_name={acq_name!r})"
             if error_message:
                 raise RuntimeError(
                     f"FileSubscriber: write failed for {filename!r}: "
@@ -551,6 +795,7 @@ class NetworkTester:
         print(f"    safe, written:       {len(self.safe_written_set)}")
         print(f"    unsafe, written:     {len(self.unsafe_written_set)}")
         print(f"    unsafe, not written: {len(self.unsafe_not_written_set)}")
+        print(f"    stream, must-write:  {len(self.stream_must)}")
 
     def _verify_files(self):
         """Read every scheduled file back from disk and byte-compare its
@@ -561,42 +806,49 @@ class NetworkTester:
         scheduled = self.safe_written_set | self.unsafe_written_set
         for filename in sorted(scheduled):
             chunk_idx, beam_id = self.filename_meta[filename]
-            expected_data, expected_so = self._compute_expected_data(chunk_idx, beam_id)
-            path = os.path.join(self.nfs_dir, filename)
-            frame = AssembledFrame.from_asdf(path)
+            self._verify_one_file(filename, chunk_idx, beam_id)
 
-            assert frame.beam_id          == beam_id
-            assert frame.time_chunk_index == chunk_idx
-            assert frame.nfreq            == self.p['total_nfreq']
-            assert frame.ntime            == self.p['time_samples_per_chunk']
+    def _verify_one_file(self, filename, chunk_idx, beam_id):
+        """Read one written file back from NFS and byte-compare its contents
+        to the expected buffer reconstructed from client-side state. Shared
+        by _verify_files (WriteFiles) and _verify_stream_files (streams).
+        """
+        expected_data, expected_so = self._compute_expected_data(chunk_idx, beam_id)
+        path = os.path.join(self.nfs_dir, filename)
+        frame = AssembledFrame.from_asdf(path)
 
-            actual_data = np.asarray(frame.data)
-            if not np.array_equal(actual_data, expected_data):
-                mismatch = np.argwhere(actual_data != expected_data)
-                first = tuple(mismatch[0])
-                raise RuntimeError(
-                    f"data mismatch for {filename!r} "
-                    f"(chunk={chunk_idx}, beam={beam_id}): "
-                    f"{len(mismatch)} mismatching bytes, first at "
-                    f"index {first}: "
-                    f"actual=0x{actual_data[first]:02x}, "
-                    f"expected=0x{expected_data[first]:02x}"
-                )
+        assert frame.beam_id          == beam_id
+        assert frame.time_chunk_index == chunk_idx
+        assert frame.nfreq            == self.p['total_nfreq']
+        assert frame.ntime            == self.p['time_samples_per_chunk']
 
-            # scales_offsets: byte-exact compare via uint8 view (avoids
-            # any float-equality ambiguity from possibly-NaN bit patterns).
-            actual_so = np.asarray(frame.scales_offsets).view(np.uint8)
-            if not np.array_equal(actual_so, expected_so):
-                mismatch = np.argwhere(actual_so != expected_so)
-                first = tuple(mismatch[0])
-                raise RuntimeError(
-                    f"scales_offsets mismatch for {filename!r} "
-                    f"(chunk={chunk_idx}, beam={beam_id}): "
-                    f"{len(mismatch)} mismatching bytes, first at "
-                    f"index {first}: "
-                    f"actual=0x{actual_so[first]:02x}, "
-                    f"expected=0x{expected_so[first]:02x}"
-                )
+        actual_data = np.asarray(frame.data)
+        if not np.array_equal(actual_data, expected_data):
+            mismatch = np.argwhere(actual_data != expected_data)
+            first = tuple(mismatch[0])
+            raise RuntimeError(
+                f"data mismatch for {filename!r} "
+                f"(chunk={chunk_idx}, beam={beam_id}): "
+                f"{len(mismatch)} mismatching bytes, first at "
+                f"index {first}: "
+                f"actual=0x{actual_data[first]:02x}, "
+                f"expected=0x{expected_data[first]:02x}"
+            )
+
+        # scales_offsets: byte-exact compare via uint8 view (avoids
+        # any float-equality ambiguity from possibly-NaN bit patterns).
+        actual_so = np.asarray(frame.scales_offsets).view(np.uint8)
+        if not np.array_equal(actual_so, expected_so):
+            mismatch = np.argwhere(actual_so != expected_so)
+            first = tuple(mismatch[0])
+            raise RuntimeError(
+                f"scales_offsets mismatch for {filename!r} "
+                f"(chunk={chunk_idx}, beam={beam_id}): "
+                f"{len(mismatch)} mismatching bytes, first at "
+                f"index {first}: "
+                f"actual=0x{actual_so[first]:02x}, "
+                f"expected=0x{expected_so[first]:02x}"
+            )
 
     def _compute_expected_data(self, chunk_idx, beam_id):
         """Reconstruct the byte-exact contents of a written frame file.

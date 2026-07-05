@@ -196,11 +196,26 @@ struct AssembledFrame
     mutable std::mutex mutex;
     long finalize_count = 0;    // incremented by FrbServer worker thread(s)
 
+    // One queued write request: a relative output path, tagged with the
+    // acq_name of the stream that requested it ("" = WriteFiles-triggered).
+    // The acq_name rides through the FileWriter pipeline into the
+    // per-file WriteStatus, so SubscribeFiles notifications can report
+    // which stream (if any) triggered each file.
+    struct SaveRequest {
+        std::filesystem::path path;
+        std::string acq_name;
+    };
+
     // NOTE: all save_paths received from RPC clients MUST be validated with
     // pirate::is_safe_relpath(). If this check fails, then an error is returned in
     // the write request, and the save_path must not be added to the AssembledFrame.
+    //
+    // Duplicate paths are allowed (e.g. two streams registered with the same
+    // filename_pattern); FileWriter's NFS thread skips the filesystem
+    // operation for a duplicate of an earlier entry, but still emits a
+    // WriteStatus for it (one notification per entry, always).
 
-    std::vector<std::filesystem::path> save_paths;
+    std::vector<SaveRequest> save_paths;
 
     // Save state. These members are protected by the lock, and can only be modified
     // by member functions of 'class FileWriter'. In particular, when an RPC thread

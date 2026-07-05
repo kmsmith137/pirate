@@ -71,9 +71,12 @@ class _ServerMonitor:
         try:
             # subscribe_files() returns a FileSubscriber whose constructor has
             # already opened the stream and consumed the server's ready
-            # sentinel; iteration yields (filename, error_message) pairs.
+            # sentinel; iteration yields (filename, error_message, acq_name)
+            # triples. (acq_name is always "" here: this subscription uses
+            # the default subscribe_streams=False, so stream-triggered files
+            # are not delivered.)
             with self.client.subscribe_files() as sub:
-                for filename, error_message in sub:
+                for filename, error_message, acq_name in sub:
                     if self.stop_event.is_set():
                         return
                     if error_message:

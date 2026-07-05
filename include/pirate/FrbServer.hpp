@@ -4,6 +4,7 @@
 #include "Receiver.hpp"
 #include "AssembledFrame.hpp"
 #include "DedispersionConfig.hpp"
+#include "FileWriter.hpp"      // FilenamePattern (held by value in ActiveStream)
 #include "XEngineMetadata.hpp"
 
 #include <ksgpu/xassert.hpp>
@@ -32,7 +33,6 @@ namespace pirate {
 
 
 struct BumpAllocator;     // BumpAllocator.hpp (only shared_ptr<> members here)
-struct FileWriter;        // FileWriter.hpp
 struct DedispersionPlan;  // DedispersionPlan.hpp
 struct GpuDedisperser;    // Dedisperser.hpp
 struct CudaStreamPool;    // CudaStreamPool.hpp
@@ -179,6 +179,54 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // The frame_ringbuf is initialized at the same time as the metadata.
     // Ring buffer has length (params.ringbuf_nchunks * metadata.get_nbeams()).
     std::vector<std::shared_ptr<AssembledFrame>> frame_ringbuf;
+
+    // ----- Active streams (StartStream / ShowStreams / CancelStream RPCs) -----
+
+    // One registered "stream": frames matching (beam_ids x chunk range) are
+    // queued for disk writing by the frame_finalizing_thread, at the moment
+    // each frame transitions from "assembled" to "processed" (i.e. just
+    // before rb_processed advances past it -- see the capture-hook comment
+    // in _frame_finalizing_thread_main). Chunks already processed when the
+    // stream was registered are NOT captured retroactively (that's
+    // WriteFiles' job).
+    struct ActiveStream {
+        // Immutable after construction.
+        std::string acq_name;          // nonempty; unique among active streams
+        std::string pattern_string;    // original filename_pattern (echoed by ShowStreams)
+        FilenamePattern pattern;       // validated form of pattern_string
+        std::vector<long> beam_ids;    // original args (nonempty, validated, distinct)
+        std::vector<int> beam_indices; // parallel: position in metadata->beam_ids
+        long fpga_seq_start = 0;       // original args (echoed by ShowStreams)
+        long fpga_seq_end = 0;
+        long chunk_first = 0;          // derived: fpga_seq_start / seq_per_chunk
+        long chunk_last = 0;           // derived: (fpga_seq_end-1) / seq_per_chunk, INCLUSIVE
+
+        // Mutable, protected by FrbServer::mutex. Incremented at queue time
+        // by the frame_finalizing_thread ("queued", not "written"). Bytes
+        // are logical: num_files_queued * AssembledFrameAllocator::
+        // slab_nbytes(...) -- data arrays only, file headers neglected, and
+        // full size counted even when the bytes land on disk as a hardlink.
+        long num_files_queued = 0;
+        long num_bytes_queued = 0;
+
+        ActiveStream(const FilenamePattern &pattern_) : pattern(pattern_) {}
+    };
+
+    // Protected by 'mutex'. Expired streams (chunk_last fully processed)
+    // are pruned lazily, by the frame_finalizing_thread's capture hook and
+    // by the ShowStreams handler.
+    std::vector<std::shared_ptr<ActiveStream>> active_streams;
+
+    // Queue one file write on 'frame': push {relpath, acq_name} onto
+    // frame->save_paths and hand the frame to the FileWriter (which does
+    // all disk I/O on its own threads; process_frame only enqueues).
+    // Returns false if the frame was skipped because it has been reaped
+    // without ever being written. Shared by the WriteFiles RPC handler
+    // (acq_name = "") and the frame_finalizing_thread's stream-capture
+    // hook. Caller must NOT hold 'mutex' or frame->mutex.
+    bool _queue_frame_write(const std::shared_ptr<AssembledFrame> &frame,
+                            const std::string &relpath,
+                            const std::string &acq_name);
 
     // Dedispersion plan built by the processing thread once X-engine metadata
     // is available. Null before that; non-null once the plan is announced.

@@ -41,6 +41,7 @@ public:
     struct WriteStatus
     {
         std::filesystem::path save_path;
+        std::string acq_name;      // "" = WriteFiles-triggered; nonempty = stream (StartStream RPC)
         std::exception_ptr error;  // empty pointer if write was successful
     };
 

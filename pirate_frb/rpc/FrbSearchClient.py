@@ -121,7 +121,89 @@ class FrbSearchClient:
         response = self.stub.WriteFiles(request)
         return list(response.filename_list)
 
-    def subscribe_files(self):
+    def start_stream(
+        self,
+        acq_name: str,
+        filename_pattern: str,
+        beam_ids: list[int],
+        fpga_seq_start: int = 0,
+        fpga_seq_end: int = 2**63 - 1
+    ) -> None:
+        """Register a "stream": data matching (beam_ids x fpga-seq range) is
+        queued for disk writing automatically as it flows through the server.
+
+        Complements write_files() (one-shot, retroactive within the ring
+        buffer): a stream captures each frame at the moment it is processed,
+        so chunks that were already processed when StartStream arrives are
+        NOT captured retroactively, even if fpga_seq_start is in the past.
+
+        Args:
+            acq_name: Nonempty identifier, unique among active streams
+                (used by show_streams() / cancel_stream()).
+            filename_pattern: Pattern with (BEAM) and (CHUNK) placeholders,
+                same format as write_files().
+            beam_ids: Nonempty list of beam IDs (no all-beams convention;
+                list beams explicitly -- show_streams() returns the full list).
+            fpga_seq_start: Start of the fpga-seq range (inclusive);
+                0 (default) means "start asap".
+            fpga_seq_end: End of the fpga-seq range (exclusive);
+                2**63 - 1 (default) means "run indefinitely".
+
+        Raises grpc.RpcError on validation failure (empty/duplicate acq_name,
+        unknown beam_id, bad pattern, range entirely in the past, or server
+        not yet initialized).
+        """
+        request = frb_search_pb2.StartStreamRequest(
+            acq_name=acq_name,
+            filename_pattern=filename_pattern,
+            beam_ids=beam_ids,
+            fpga_seq_start=fpga_seq_start,
+            fpga_seq_end=fpga_seq_end
+        )
+        self.stub.StartStream(request)
+
+    def show_streams(self):
+        """Query the server for its active streams.
+
+        Returns:
+            ShowStreamsResponse protobuf message with fields:
+            - current_fpga_seq: the server's current position as an fpga seq,
+              derived from rb_processed (all data before this fpga seq has
+              been fully processed).
+            - beam_ids: ALL beams processed by this server (not just those
+              with active streams).
+            - streams: list of StreamInfo, each with 'args' (the original
+              StartStreamRequest, echoed back) and queued-so-far counters
+              'num_files_queued' / 'num_bytes_queued' (bytes are logical:
+              data arrays only, headers neglected, hardlinks counted at
+              full size).
+        """
+        request = frb_search_pb2.ShowStreamsRequest()
+        return self.stub.ShowStreams(request)
+
+    def cancel_stream(self, acq_name: str = None, cancel_all: bool = False) -> int:
+        """Cancel one active stream (by acq_name), or all of them.
+
+        File writes already queued still complete (and still notify
+        subscribe_files() subscribers); cancellation only stops future
+        matching.
+
+        Args:
+            acq_name: Stream to cancel (ignored if cancel_all=True).
+                Unknown acq_name raises grpc.RpcError.
+            cancel_all: If True, cancel all active streams.
+
+        Returns:
+            Number of streams cancelled.
+        """
+        request = frb_search_pb2.CancelStreamRequest(
+            cancel_all=cancel_all,
+            acq_name=("" if acq_name is None else acq_name)
+        )
+        response = self.stub.CancelStream(request)
+        return response.num_cancelled
+
+    def subscribe_files(self, subscribe_streams: bool = False):
         """Open a file-write-notification subscription.
 
         Returns a FileSubscriber whose constructor has already opened
@@ -130,10 +212,15 @@ class FrbSearchClient:
         guaranteed to have their notifications delivered through the
         returned object's iterator.
 
+        Args:
+            subscribe_streams: If True, also receive notifications for
+                files written by streams (start_stream()). Default False:
+                WriteFiles-triggered notifications only.
+
         See FileSubscriber for usage examples (context-manager and
         sloppy forms) and lifetime semantics.
         """
-        return FileSubscriber(self.stub)
+        return FileSubscriber(self.stub, subscribe_streams)
 
     def monitor_ringbuf(self):
         """Subscribe to a server push stream of rb_processed updates.

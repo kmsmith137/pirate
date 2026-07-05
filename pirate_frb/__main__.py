@@ -1152,6 +1152,146 @@ def rpc_write(args):
         _rpc_write_one(addr)
 
 
+##################################   rpc_start_stream command  ######################################
+
+
+def parse_rpc_start_stream(subparsers):
+    help_text = "Send StartStream RPC to an FrbServer (write data to disk as it is received)"
+    parser = subparsers.add_parser("rpc_start_stream", help=help_text, description=help_text)
+    parser.add_argument('server_address', metavar='ADDRESS', help='Server address (e.g. 127.0.0.1:6000)')
+    parser.add_argument('-a', '--acq-name', default=None,
+                        help='Acquisition name (default: "{username}_{date}_{time}", e.g. kmsmith_26_07_05_143052)')
+    parser.add_argument('-b', '--beam-id', type=int, action='append', metavar='BEAM_ID',
+                        help='Beam id to stream (repeatable); either -b or -B must be specified')
+    parser.add_argument('-B', '--all-beams', action='store_true',
+                        help='Stream all beams processed by the server')
+    parser.add_argument('-d', type=float, default=None, metavar='DURATION_SECONDS', dest='duration',
+                        help='Stream duration in seconds; either -d or -D must be specified')
+    parser.add_argument('-D', '--no-duration', action='store_true',
+                        help='Run indefinitely (fpga_seq_end = 2^63 - 1)')
+
+
+def rpc_start_stream(args):
+    import yaml
+    import datetime
+    from .rpc import FrbSearchClient
+
+    if bool(args.beam_id) == bool(args.all_beams):
+        raise RuntimeError("rpc_start_stream: specify exactly one of -b/--beam-id or -B/--all-beams")
+    if (args.duration is not None) == bool(args.no_duration):
+        raise RuntimeError("rpc_start_stream: specify exactly one of -d or -D/--no-duration")
+    if (args.duration is not None) and (args.duration <= 0):
+        raise RuntimeError(f"rpc_start_stream: duration must be positive (got {args.duration})")
+
+    acq_name = args.acq_name
+    if acq_name is None:
+        # "{username}_{date}_{time}", e.g. kmsmith_26_07_05_143052.
+        # ($USER mirrors run_server's nfs_dir {user} interpolation.)
+        user = os.environ.get('USER', 'unknown')
+        acq_name = user + '_' + datetime.datetime.now().strftime('%y_%m_%d_%H%M%S')
+
+    addr = args.server_address
+    client = FrbSearchClient(addr)
+
+    try:
+        # show_streams() fails cleanly if the server hasn't locked onto the
+        # X-engine stream yet, and returns the current fpga position (used
+        # for -d) and the server's full beam list (used for -B).
+        ss = client.show_streams()
+        beam_ids = args.beam_id if args.beam_id else list(ss.beam_ids)
+
+        if args.no_duration:
+            fpga_seq_end = 2**63 - 1
+        else:
+            # Convert seconds to fpga seqs via dt_ns_per_seq (from the
+            # X-engine metadata; non-empty since show_streams() succeeded).
+            xmd = yaml.safe_load(client.get_xengine_metadata())
+            dt_ns_per_seq = xmd['dt_ns_per_seq']
+            fpga_seq_end = ss.current_fpga_seq + round(args.duration * 1.0e9 / dt_ns_per_seq)
+
+        filename_pattern = f"streams/{acq_name}/frame_b(BEAM)_t(CHUNK).asdf"
+
+        client.start_stream(
+            acq_name=acq_name,
+            filename_pattern=filename_pattern,
+            beam_ids=beam_ids,
+            fpga_seq_start=0,          # "start asap"
+            fpga_seq_end=fpga_seq_end,
+        )
+
+        end_str = "indefinite" if args.no_duration else str(fpga_seq_end)
+        print(f"[{addr}] started stream acq_name={acq_name!r}")
+        print(f"[{addr}]   filename_pattern = {filename_pattern!r}")
+        print(f"[{addr}]   beam_ids = {beam_ids}")
+        print(f"[{addr}]   fpga_seq range = [0, {end_str})")
+    finally:
+        client.close()
+
+
+##################################   rpc_cancel_stream command  #####################################
+
+
+def parse_rpc_cancel_stream(subparsers):
+    help_text = "Send CancelStream RPC to an FrbServer"
+    parser = subparsers.add_parser("rpc_cancel_stream", help=help_text, description=help_text)
+    parser.add_argument('server_address', metavar='ADDRESS', help='Server address (e.g. 127.0.0.1:6000)')
+    parser.add_argument('-a', '--acq-name', default=None, metavar='ACQ_NAME',
+                        help='Cancel the stream with this acq_name')
+    parser.add_argument('-A', '--all', action='store_true', dest='cancel_all',
+                        help='Cancel all active streams')
+
+
+def rpc_cancel_stream(args):
+    from .rpc import FrbSearchClient
+
+    if bool(args.acq_name) == bool(args.cancel_all):
+        raise RuntimeError("rpc_cancel_stream: specify exactly one of -a/--acq-name or -A/--all")
+
+    addr = args.server_address
+    client = FrbSearchClient(addr)
+
+    try:
+        n = client.cancel_stream(acq_name=args.acq_name, cancel_all=args.cancel_all)
+        print(f"[{addr}] cancelled {n} stream(s)")
+    finally:
+        client.close()
+
+
+###################################   rpc_show_streams command  #####################################
+
+
+def parse_rpc_show_streams(subparsers):
+    help_text = "Send ShowStreams RPC to an FrbServer and print the response"
+    parser = subparsers.add_parser("rpc_show_streams", help=help_text, description=help_text)
+    parser.add_argument('server_address', metavar='ADDRESS', help='Server address (e.g. 127.0.0.1:6000)')
+
+
+def rpc_show_streams(args):
+    from .rpc import FrbSearchClient
+
+    addr = args.server_address
+    client = FrbSearchClient(addr)
+
+    try:
+        ss = client.show_streams()
+        print(f"[{addr}] current_fpga_seq = {ss.current_fpga_seq}")
+        print(f"[{addr}] beam_ids = {list(ss.beam_ids)}")
+
+        if not ss.streams:
+            print(f"[{addr}] no active streams")
+
+        for info in ss.streams:
+            a = info.args
+            end_str = "indefinite" if (a.fpga_seq_end == 2**63 - 1) else str(a.fpga_seq_end)
+            print(f"[{addr}] stream acq_name={a.acq_name!r}:")
+            print(f"[{addr}]   filename_pattern = {a.filename_pattern!r}")
+            print(f"[{addr}]   beam_ids = {list(a.beam_ids)}")
+            print(f"[{addr}]   fpga_seq range = [{a.fpga_seq_start}, {end_str})")
+            print(f"[{addr}]   files_queued = {info.num_files_queued}, bytes_queued = {info.num_bytes_queued}")
+    finally:
+        client.close()
+
+
 #####################################   random_kernels command  #####################################
 
 
@@ -1456,6 +1596,9 @@ def get_parser():
     parse_run_fake_xengine(subparsers)
     parse_rpc_status(subparsers)
     parse_rpc_write(subparsers)
+    parse_rpc_start_stream(subparsers)
+    parse_rpc_cancel_stream(subparsers)
+    parse_rpc_show_streams(subparsers)
     
     parse_test(subparsers)
     parse_test_simpulse(subparsers)
@@ -1529,6 +1672,12 @@ def main():
         rpc_status(args)
     elif args.command == "rpc_write":
         rpc_write(args)
+    elif args.command == "rpc_start_stream":
+        rpc_start_stream(args)
+    elif args.command == "rpc_cancel_stream":
+        rpc_cancel_stream(args)
+    elif args.command == "rpc_show_streams":
+        rpc_show_streams(args)
     elif args.command == "run_server":
         run_server_command(args)
     elif args.command == "run_toy_grouper":

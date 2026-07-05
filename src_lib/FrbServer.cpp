@@ -13,6 +13,7 @@
 
 #include <ksgpu/string_utils.hpp>  // tuple_str()
 
+#include <algorithm> // find (stream beam matching), remove_if (stream expiry)
 #include <chrono>    // duration<double> (processing-thread delay) + ms (MonitorRingbuf timeout)
 #include <thread>    // this_thread::sleep_for (processing-thread delay)
 #include <iomanip>   // setprecision (throughput suffix on the per-chunk line)
@@ -83,9 +84,12 @@ public:
     void _GetStatus(const fs::GetStatusRequest *request, fs::GetStatusResponse *response);
     void _GetXEngineMetadata(const fs::GetXEngineMetadataRequest *request, fs::GetXEngineMetadataResponse *response);
     void _WriteFiles(const fs::WriteFilesRequest *request, fs::WriteFilesResponse *response);
-    void _SubscribeFiles(grpc::ServerContext* context, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer);
+    void _SubscribeFiles(grpc::ServerContext* context, const fs::SubscribeFilesRequest *request, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer);
     void _GetConfig(const fs::GetConfigRequest *request, fs::GetConfigResponse *response);
     void _MonitorRingbuf(grpc::ServerContext* context, grpc::ServerWriter<fs::MonitorRingbufResponse>* writer);
+    void _StartStream(const fs::StartStreamRequest *request, fs::StartStreamResponse *response);
+    void _ShowStreams(const fs::ShowStreamsRequest *request, fs::ShowStreamsResponse *response);
+    void _CancelStream(const fs::CancelStreamRequest *request, fs::CancelStreamResponse *response);
 
     // Helper to lock the weak_ptr. Throws if the server is exiting.
     inline shared_ptr<FrbServer> _lock_state();
@@ -122,6 +126,21 @@ public:
         grpc::ServerContext* context,
         const fs::MonitorRingbufRequest* request,
         grpc::ServerWriter<fs::MonitorRingbufResponse>* writer) override;
+
+    grpc::Status StartStream(
+        grpc::ServerContext* context,
+        const fs::StartStreamRequest* request,
+        fs::StartStreamResponse* response) override;
+
+    grpc::Status ShowStreams(
+        grpc::ServerContext* context,
+        const fs::ShowStreamsRequest* request,
+        fs::ShowStreamsResponse* response) override;
+
+    grpc::Status CancelStream(
+        grpc::ServerContext* context,
+        const fs::CancelStreamRequest* request,
+        fs::CancelStreamResponse* response) override;
 };
 
 
@@ -1087,13 +1106,45 @@ void FrbServer::_frame_finalizing_thread_main()
     std::chrono::steady_clock::time_point t0;
     long ichunk0 = 0;
 
+    // Per-frame logical size for stream accounting (data arrays only,
+    // headers neglected -- see ActiveStream::num_bytes_queued).
+    const long bytes_per_frame = bytes_per_chunk / nbeams;
+
+    // Scratch for the stream-capture hook (reused across batches).
+    std::vector<std::pair<std::shared_ptr<AssembledFrame>,
+                          std::shared_ptr<ActiveStream>>> stream_matches;
+
     for (long seq_id = 0; ; seq_id++) {
         // Blocks (on the host) until the GPU completes batch seq_id's H2G
         // copies. Throws "called on stopped instance" if stop() cascaded into
         // evrb_h2g; the wrapper below catches it.
         evrb_h2g_p->synchronize(seq_id, /*blocking=*/true);
 
-        long completed_ichunk = -1;   // >= 0 once rb_processed crosses a chunk boundary
+        // The batch's frames [rb_processed, rb_processed + B) are about to
+        // transition from "assembled" to "processed". Stream capture happens
+        // in three phases:
+        //
+        //   A. Under 'mutex': prune expired streams, record matching
+        //      (frame, stream) pairs, bump the queued-counters. rb_processed
+        //      is NOT advanced yet.
+        //   B. Off-lock: expand patterns and queue the writes
+        //      (_queue_frame_write; disk I/O happens on FileWriter threads,
+        //      process_frame only enqueues).
+        //   C. Under 'mutex': advance rb_processed.
+        //
+        // Queueing BEFORE advancing rb_processed (B before C) is load-bearing,
+        // not cosmetic: the reaper only reaps frames with frame_id <
+        // rb_processed, and AssembledFrame::_reap_locked() refuses to free
+        // data while an unwritten save_path is pending. So pushing the
+        // save_path first guarantees the reaper can never free the data
+        // underneath a pending stream write. (Data is stable here: the
+        // batch's H2G copy has completed, in both the normal and
+        // --no-dedispersion paths.) A corollary: _queue_frame_write's
+        // reaped-and-never-written skip can never fire on this path, so
+        // every counted match really is queued.
+        stream_matches.clear();
+
+        // Phase A.
         {
             unique_lock<std::mutex> lock(mutex);
             if (is_stopped) return;
@@ -1109,6 +1160,48 @@ void FrbServer::_frame_finalizing_thread_main()
                    << "; this should never happen and indicates a logic bug";
                 throw std::runtime_error(ss.str());
             }
+
+            if (!active_streams.empty()) {
+                // All B frames lie in this chunk: rb_processed is a multiple
+                // of B, and B divides nbeams.
+                long ichunk = rb_processed / nbeams;
+
+                // Prune expired streams (they can never match chunk >= ichunk).
+                active_streams.erase(
+                    std::remove_if(active_streams.begin(), active_streams.end(),
+                                   [&](const std::shared_ptr<ActiveStream> &st)
+                                   { return st->chunk_last < ichunk; }),
+                    active_streams.end());
+
+                for (long frame_id = rb_processed; frame_id < rb_processed + B; frame_id++) {
+                    int ibeam = int(frame_id % nbeams);
+                    for (const auto &st : active_streams) {
+                        if ((ichunk < st->chunk_first) || (ichunk > st->chunk_last))
+                            continue;
+                        auto it = std::find(st->beam_indices.begin(), st->beam_indices.end(), ibeam);
+                        if (it == st->beam_indices.end())
+                            continue;
+
+                        st->num_files_queued++;
+                        st->num_bytes_queued += bytes_per_frame;
+                        long rb_slot = frame_id % long(frame_ringbuf.size());
+                        stream_matches.emplace_back(frame_ringbuf[rb_slot], st);
+                    }
+                }
+            }
+        }
+
+        // Phase B.
+        for (const auto &[frame, st] : stream_matches) {
+            string relpath = st->pattern.expand(frame);
+            _queue_frame_write(frame, relpath, st->acq_name);
+        }
+
+        // Phase C.
+        long completed_ichunk = -1;   // >= 0 once rb_processed crosses a chunk boundary
+        {
+            unique_lock<std::mutex> lock(mutex);
+            if (is_stopped) return;
 
             rb_processed += B;
             _check_rb_invariants();
@@ -1176,6 +1269,38 @@ void FrbServer::frame_finalizing_thread_main()
         std::cerr << "FrbServer: frame_finalizing thread terminated with unknown exception" << std::endl;
         stop(std::current_exception());
     }
+}
+
+
+// Queue one file write on 'frame'. Shared by the WriteFiles RPC handler
+// (acq_name = "") and the frame_finalizing_thread's stream-capture hook.
+// See declaration in FrbServer.hpp for the contract.
+bool FrbServer::_queue_frame_write(const shared_ptr<AssembledFrame> &frame,
+                                   const string &relpath, const string &acq_name)
+{
+    unique_lock<std::mutex> frame_lock(frame->mutex);
+
+    // Skip if frame has been reaped without ever being written.
+    // If save_paths is non-empty, then either the data is still
+    // in memory (data.size > 0), or it's on disk (on_ssd, or
+    // copied to NFS and tracked via nfs_count). In the latter
+    // case FileWriter's NFS thread can hardlink from the
+    // primary save_path to a new save_path (see _nfs_thread_main
+    // -- both _hardlink_in_nfs and the save_error path operate
+    // off save_paths[0]). So we should only skip when save_paths
+    // is empty AND data has been reaped.
+    if (frame->data.size == 0 && frame->save_paths.empty())
+        return false;
+
+    // Duplicate paths are legal here (e.g. two streams with the same
+    // filename_pattern, or a repeated WriteFiles): FileWriter's NFS thread
+    // skips the filesystem operation for a duplicate of an earlier entry,
+    // but still emits its WriteStatus.
+    frame->save_paths.push_back({relpath, acq_name});
+    frame_lock.unlock();
+
+    params.file_writer->process_frame(frame);
+    return true;
 }
 
 
@@ -1561,7 +1686,6 @@ grpc::Status FrbRpcService::GetXEngineMetadata(
 void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteFilesResponse *response)
 {
     shared_ptr<FrbServer> s = _lock_state();
-    shared_ptr<FileWriter> file_writer = s->params.file_writer;
 
     // RPC callers express the time range as fpga sequence numbers (aka fpga
     // counts), half-open: files are written for all chunks overlapping
@@ -1651,35 +1775,22 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
     }
 
     // Process frames in reverse order: push filenames onto frame->save_paths,
-    // then call file_writer->process_frame(). Reverse order ensures that frames
-    // with lower time_chunk_index are processed last (and appear earlier in queues).
+    // then call file_writer->process_frame() (via _queue_frame_write, shared
+    // with the frame_finalizing_thread's stream-capture hook). Reverse order
+    // ensures that frames with lower time_chunk_index are processed last
+    // (and appear earlier in queues).
 
     vector<string> filename_list;
     filename_list.reserve(local_frames.size());
 
     for (auto it = local_frames.rbegin(); it != local_frames.rend(); ++it) {
         auto &frame = *it;
-
-        unique_lock<std::mutex> frame_lock(frame->mutex);
-
-        // Skip if frame has been reaped without ever being written.
-        // If save_paths is non-empty, then either the data is still
-        // in memory (data.size > 0), or it's on disk (on_ssd, or
-        // copied to NFS and tracked via nfs_count). In the latter
-        // case FileWriter's NFS thread can hardlink from the
-        // primary save_path to a new save_path (see _nfs_thread_main
-        // -- both _hardlink_in_nfs and the save_error path operate
-        // off save_paths[0]). So we should only skip when save_paths
-        // is empty AND data has been reaped.
-        if (frame->data.size == 0 && frame->save_paths.empty())
-            continue;
-
         string filename = filename_pattern.expand(frame);
-        frame->save_paths.push_back(filename);
-        frame_lock.unlock();
 
-        file_writer->process_frame(frame);
-        filename_list.push_back(std::move(filename));
+        // acq_name = "": WriteFiles-triggered (as opposed to a stream).
+        // Returns false if the frame was reaped without ever being written.
+        if (s->_queue_frame_write(frame, filename, ""))
+            filename_list.push_back(std::move(filename));
     }
 
     // Return filename list to RPC caller.
@@ -1702,6 +1813,220 @@ grpc::Status FrbRpcService::WriteFiles(
     }
 }
 
+// ---- StartStream ----
+
+void FrbRpcService::_StartStream(const fs::StartStreamRequest *request, fs::StartStreamResponse *response)
+{
+    shared_ptr<FrbServer> s = _lock_state();
+
+    const string &acq_name = request->acq_name();
+    if (acq_name.empty())
+        throw runtime_error("StartStream: acq_name must be a nonempty string");
+
+    long fpga_seq_start = request->fpga_seq_start();
+    long fpga_seq_end   = request->fpga_seq_end();
+
+    if ((fpga_seq_start < 0) || (fpga_seq_end <= fpga_seq_start)) {
+        stringstream ss;
+        ss << "StartStream: invalid fpga_seq range [" << fpga_seq_start << ", "
+            << fpga_seq_end << ") (require 0 <= fpga_seq_start < fpga_seq_end)";
+        throw runtime_error(ss.str());
+    }
+
+    if (request->beam_ids_size() == 0)
+        throw runtime_error("StartStream: beam_ids must be nonempty"
+                            " (there is no all-beams convention; list beams explicitly)");
+
+    // Validates that the pattern contains "(BEAM)" and "(CHUNK)", and is a
+    // safe relative path.
+    FilenamePattern pattern(request->filename_pattern());
+
+    auto st = make_shared<FrbServer::ActiveStream>(pattern);
+    st->acq_name = acq_name;
+    st->pattern_string = request->filename_pattern();
+    st->fpga_seq_start = fpga_seq_start;
+    st->fpga_seq_end = fpga_seq_end;
+
+    unique_lock<std::mutex> server_lock(s->mutex);
+
+    // Same gate as WriteFiles: the fpga-seq <-> chunk mapping and
+    // beam_id_to_index only exist once rb_initialized.
+    if (!s->rb_initialized)
+        throw runtime_error("StartStream: server has not yet established an initial fpga chunk");
+
+    for (const auto &other : s->active_streams) {
+        if (other->acq_name == acq_name) {
+            stringstream ss;
+            ss << "StartStream: acq_name '" << acq_name << "' is already in use by an active stream";
+            throw runtime_error(ss.str());
+        }
+    }
+
+    // Same fpga-seq -> chunk conversion as WriteFiles: chunk t matches iff it
+    // overlaps [fpga_seq_start, fpga_seq_end). The (fpga_seq_end - 1) form
+    // avoids overflow when fpga_seq_end = INT64_MAX ("run indefinitely").
+    long nbeams = s->metadata->get_nbeams();
+    long seq_per_chunk = s->frame_allocator->time_samples_per_chunk * s->metadata->seq_per_frb_time_sample;
+    xassert(seq_per_chunk > 0);
+    st->chunk_first = fpga_seq_start / seq_per_chunk;
+    st->chunk_last  = (fpga_seq_end - 1) / seq_per_chunk;
+
+    // Convert beam_ids to beam_indices (unknown or repeated beams are errors).
+    for (int i = 0; i < request->beam_ids_size(); i++) {
+        long beam_id = request->beam_ids(i);
+        auto it = s->beam_id_to_index.find(beam_id);
+        if (it == s->beam_id_to_index.end()) {
+            stringstream ss;
+            ss << "StartStream: unknown beam_id " << beam_id;
+            throw runtime_error(ss.str());
+        }
+        if (std::find(st->beam_ids.begin(), st->beam_ids.end(), beam_id) != st->beam_ids.end()) {
+            stringstream ss;
+            ss << "StartStream: beam_id " << beam_id << " appears more than once";
+            throw runtime_error(ss.str());
+        }
+        st->beam_ids.push_back(beam_id);
+        st->beam_indices.push_back(it->second);
+    }
+
+    // Streams are not retroactive (chunks already processed are never
+    // captured), so a range entirely in the past could never match anything.
+    if (st->chunk_last < s->rb_processed / nbeams) {
+        stringstream ss;
+        ss << "StartStream: fpga_seq_end=" << fpga_seq_end
+           << " is entirely in the past (stream would never match); "
+           << "use WriteFiles for retroactive dumps within the ring buffer";
+        throw runtime_error(ss.str());
+    }
+
+    s->active_streams.push_back(st);
+}
+
+grpc::Status FrbRpcService::StartStream(
+    grpc::ServerContext* context,
+    const fs::StartStreamRequest* request,
+    fs::StartStreamResponse* response)
+{
+    try {
+        _StartStream(request, response);
+        return grpc::Status::OK;
+    } catch (const std::exception &e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    } catch (...) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in StartStream");
+    }
+}
+
+// ---- ShowStreams ----
+
+void FrbRpcService::_ShowStreams(const fs::ShowStreamsRequest *request, fs::ShowStreamsResponse *response)
+{
+    shared_ptr<FrbServer> s = _lock_state();
+
+    unique_lock<std::mutex> server_lock(s->mutex);
+
+    if (!s->rb_initialized)
+        throw runtime_error("ShowStreams: server has not yet established an initial fpga chunk");
+
+    long nbeams = s->metadata->get_nbeams();
+    long seq_per_chunk = s->frame_allocator->time_samples_per_chunk * s->metadata->seq_per_frb_time_sample;
+    long ichunk = s->rb_processed / nbeams;   // first not-fully-processed chunk
+
+    // Prune expired streams here too (the capture hook only prunes when a
+    // batch completes, so without this an expired stream would linger in
+    // the display whenever data stalls).
+    s->active_streams.erase(
+        std::remove_if(s->active_streams.begin(), s->active_streams.end(),
+                       [&](const std::shared_ptr<FrbServer::ActiveStream> &st)
+                       { return st->chunk_last < ichunk; }),
+        s->active_streams.end());
+
+    // "All data before this fpga seq has been fully processed."
+    response->set_current_fpga_seq(ichunk * seq_per_chunk);
+
+    for (long beam_id : s->metadata->beam_ids)
+        response->add_beam_ids(beam_id);
+
+    for (const auto &st : s->active_streams) {
+        fs::StreamInfo *info = response->add_streams();
+        fs::StartStreamRequest *args = info->mutable_args();
+        args->set_acq_name(st->acq_name);
+        args->set_filename_pattern(st->pattern_string);
+        for (long beam_id : st->beam_ids)
+            args->add_beam_ids(beam_id);
+        args->set_fpga_seq_start(st->fpga_seq_start);
+        args->set_fpga_seq_end(st->fpga_seq_end);
+        info->set_num_files_queued(st->num_files_queued);
+        info->set_num_bytes_queued(st->num_bytes_queued);
+    }
+}
+
+grpc::Status FrbRpcService::ShowStreams(
+    grpc::ServerContext* context,
+    const fs::ShowStreamsRequest* request,
+    fs::ShowStreamsResponse* response)
+{
+    try {
+        _ShowStreams(request, response);
+        return grpc::Status::OK;
+    } catch (const std::exception &e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    } catch (...) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in ShowStreams");
+    }
+}
+
+// ---- CancelStream ----
+
+void FrbRpcService::_CancelStream(const fs::CancelStreamRequest *request, fs::CancelStreamResponse *response)
+{
+    shared_ptr<FrbServer> s = _lock_state();
+
+    unique_lock<std::mutex> server_lock(s->mutex);
+
+    if (!s->rb_initialized)
+        throw runtime_error("CancelStream: server has not yet established an initial fpga chunk");
+
+    // Note: cancellation only stops future matching. File writes already
+    // queued to the FileWriter still complete, and still notify
+    // SubscribeFiles subscribers with this stream's acq_name.
+
+    if (request->cancel_all()) {
+        long n = long(s->active_streams.size());
+        s->active_streams.clear();
+        response->set_num_cancelled(n);
+        return;
+    }
+
+    const string &acq_name = request->acq_name();
+    for (auto it = s->active_streams.begin(); it != s->active_streams.end(); ++it) {
+        if ((*it)->acq_name == acq_name) {
+            s->active_streams.erase(it);
+            response->set_num_cancelled(1);
+            return;
+        }
+    }
+
+    stringstream ss;
+    ss << "CancelStream: no active stream with acq_name '" << acq_name << "'";
+    throw runtime_error(ss.str());
+}
+
+grpc::Status FrbRpcService::CancelStream(
+    grpc::ServerContext* context,
+    const fs::CancelStreamRequest* request,
+    fs::CancelStreamResponse* response)
+{
+    try {
+        _CancelStream(request, response);
+        return grpc::Status::OK;
+    } catch (const std::exception &e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    } catch (...) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in CancelStream");
+    }
+}
+
 // ---- SubscribeFiles ----
 
 // Subscribes to file write notifications from FileWriter.
@@ -1710,8 +2035,11 @@ grpc::Status FrbRpcService::WriteFiles(
 // Note: gRPC's server-streaming model provides one thread of execution per connection
 // via gRPC's internal thread pool.
 //
-// Each response has (filename, error_message). Empty error_message indicates success.
-void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
+// Each response has (filename, error_message, acq_name). Empty error_message
+// indicates success; nonempty acq_name means the file was triggered by a
+// stream (StartStream RPC) rather than a WriteFiles call. Stream-triggered
+// notifications are delivered only if request->subscribe_streams() is true.
+void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, const fs::SubscribeFilesRequest *request, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
 {
     shared_ptr<FrbServer> s = _lock_state();
     shared_ptr<FileWriter> file_writer = s->params.file_writer;
@@ -1765,12 +2093,18 @@ void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, grpc::ServerWr
 
         subscriber_lock.unlock();
 
-        // Build response with (filename, error_message) inside the
-        // 'notification' arm of the oneof. Empty error_message
+        // Stream-triggered notifications (nonempty acq_name) are delivered
+        // only if the subscriber opted in via subscribe_streams.
+        if (!request->subscribe_streams() && !write_status.acq_name.empty())
+            continue;
+
+        // Build response with (filename, error_message, acq_name) inside
+        // the 'notification' arm of the oneof. Empty error_message
         // indicates success.
         fs::SubscribeFilesResponse response;
         auto *notif = response.mutable_notification();
         notif->set_filename(write_status.save_path.string());
+        notif->set_acq_name(write_status.acq_name);
 
         if (write_status.error) {
             try {
@@ -1798,7 +2132,7 @@ grpc::Status FrbRpcService::SubscribeFiles(
     grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
 {
     try {
-        _SubscribeFiles(context, writer);
+        _SubscribeFiles(context, request, writer);
         return grpc::Status::OK;
     } catch (const std::exception &e) {
         return grpc::Status(grpc::StatusCode::INTERNAL, e.what());

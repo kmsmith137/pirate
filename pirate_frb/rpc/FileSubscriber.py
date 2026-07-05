@@ -13,8 +13,11 @@ class FileSubscriber:
     AFTER the constructor returns are guaranteed to have their
     notifications delivered through this object's iterator.
 
-    Iteration yields (filename, error_message) tuples. An empty
-    error_message indicates success; non-empty indicates an error.
+    Iteration yields (filename, error_message, acq_name) tuples. An
+    empty error_message indicates success; non-empty indicates an
+    error. acq_name is "" for WriteFiles-triggered files and the
+    stream's acq_name for stream-triggered files (only delivered when
+    the subscription was opened with subscribe_streams=True).
 
     Lifetime: the underlying gRPC stream stays open until either
     close() is called (explicitly or via __exit__/__del__), the
@@ -39,7 +42,7 @@ class FileSubscriber:
                 filename_pattern="x_(BEAM)_(CHUNK).asdf",
             )
             remaining = set(filenames)
-            for filename, error in sub:
+            for filename, error, acq_name in sub:
                 if error:
                     raise RuntimeError(f"{filename}: {error}")
                 remaining.discard(filename)
@@ -52,7 +55,7 @@ class FileSubscriber:
 
         sub = client.subscribe_files()
         client.write_files(...)
-        for filename, error in sub:
+        for filename, error, acq_name in sub:
             print(filename, error)
             if some_condition:
                 break
@@ -62,7 +65,7 @@ class FileSubscriber:
         # above is preferred.
     """
 
-    def __init__(self, stub):
+    def __init__(self, stub, subscribe_streams=False):
         # Set _closed and _call FIRST so __del__ -> close() is safe
         # even if __init__ raises partway through. CPython runs
         # __del__ on any object whose __new__ succeeded, including
@@ -70,7 +73,8 @@ class FileSubscriber:
         # attributes set later in __init__.
         self._closed = False
         self._call = None
-        self._call = stub.SubscribeFiles(frb_search_pb2.SubscribeFilesRequest())
+        request = frb_search_pb2.SubscribeFilesRequest(subscribe_streams=subscribe_streams)
+        self._call = stub.SubscribeFiles(request)
         try:
             first = next(self._call)
         except StopIteration:
@@ -109,7 +113,8 @@ class FileSubscriber:
             raise
         kind = r.WhichOneof("kind")
         if kind == "notification":
-            return (r.notification.filename, r.notification.error_message)
+            return (r.notification.filename, r.notification.error_message,
+                    r.notification.acq_name)
         # Defense-in-depth: the server should never send a second
         # ready sentinel, nor any unknown oneof case. (Forward-
         # compat: a future server emitting a new oneof variant

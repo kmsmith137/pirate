@@ -188,7 +188,7 @@ void FileWriter::_ssd_thread_main()
         // we copy save_paths[0] to a local variable, then drop the lock, then
         // write the file.
 
-        string path = frame->save_paths[0];
+        string path = frame->save_paths[0].path;
         frame_lock.unlock();
 
         std::exception_ptr eptr = nullptr;
@@ -270,7 +270,7 @@ void FileWriter::_nfs_thread_main()
         unique_lock<std::mutex> frame_lock(frame->mutex);
         xassert(frame->save_paths.size() > 0);
 
-        fs::path primary_path = frame->save_paths[0];
+        fs::path primary_path = frame->save_paths[0].path;
 
         // Inner loop over frames->save_paths.
         for (;;) {
@@ -310,7 +310,8 @@ void FileWriter::_nfs_thread_main()
 
             if (frame->save_error) {
                 WriteStatus ws;
-                ws.save_path = frame->save_paths[nfs_count];
+                ws.save_path = frame->save_paths[nfs_count].path;
+                ws.acq_name = frame->save_paths[nfs_count].acq_name;
                 ws.error = frame->save_error;
                 frame_lock.unlock();
 
@@ -322,9 +323,44 @@ void FileWriter::_nfs_thread_main()
                 continue;
             }
 
-            fs::path secondary_path = frame->save_paths[nfs_count];
+            // Duplicate-path skip. If save_paths[nfs_count] repeats the path of
+            // an earlier entry, the file is already on disk under this exact
+            // name: entries are processed strictly in order, and reaching this
+            // point with save_error == nullptr means every j < nfs_count
+            // completed successfully (an NFS failure sets save_error without
+            // incrementing nfs_count, diverting later entries to the branch
+            // above). Skip the filesystem operation -- a hardlink onto an
+            // existing dst would fail and poison save_error -- but still emit
+            // a success WriteStatus and still advance nfs_count: RPC clients
+            // rely on one notification per queued entry (a silent skip would
+            // hang a client waiting on this filename).
+            if (nfs_count > 0) {
+                bool duplicate = false;
+                for (long j = 0; j < nfs_count; j++) {
+                    if (frame->save_paths[j].path == frame->save_paths[nfs_count].path) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate) {
+                    WriteStatus ws;
+                    ws.save_path = frame->save_paths[nfs_count].path;
+                    ws.acq_name = frame->save_paths[nfs_count].acq_name;
+                    frame_lock.unlock();
+
+                    _update_rpc_subscribers(ws);
+
+                    // Re-acquire frame_lock, before going back to top of loop.
+                    frame_lock.lock();
+                    frame->nfs_count++;
+                    continue;
+                }
+            }
+
+            fs::path secondary_path = frame->save_paths[nfs_count].path;
+            string secondary_acq = frame->save_paths[nfs_count].acq_name;
             frame_lock.unlock();
-    
+
             try {
                 if (nfs_count == 0)
                     _copy_from_ssd_to_nfs(primary_path);
@@ -338,6 +374,7 @@ void FileWriter::_nfs_thread_main()
 
             WriteStatus ws;
             ws.save_path = secondary_path;
+            ws.acq_name = secondary_acq;
             _update_rpc_subscribers(ws);
 
             frame_lock.lock();
