@@ -8,11 +8,6 @@ from .core import BumpAllocator, CudaStreamPool
 from .kernels import GpuDequantizationKernel
 
 
-def _md_time_sample_ms(md):
-    """FRB time-sample length (ms) implied by an XEngineMetadata's seq timing."""
-    return md.dt_ns_per_seq * md.seq_per_frb_time_sample / 1.0e6
-
-
 class OfflineDedisperser:
     """Single-beam GPU tree-dedisperser driven one AssembledFrame at a time.
 
@@ -24,16 +19,23 @@ class OfflineDedisperser:
     time sampling (time_sample_ms), and the per-channel noise variances are taken
     from the first frame's XEngineMetadata (the data on disk is authoritative). The
     analytic peak-finding weights are then filled from those variances, so out_max
-    comes out as an SNR. Every subsequent frame's metadata is checked for
-    consistency with the first (zone_nfreq / zone_freq_edges / time_sample_ms /
-    noise_variance).
+    comes out as an SNR.
 
-    run(frame) dequantizes the frame on the GPU, feeds it to the dedisperser, and
-    returns the GpuDedisperserOutputs for that chunk (per-tree out_max / out_argmax
-    GPU arrays). Those arrays are views into a small output ring buffer and are only
-    valid until the NEXT run() (or close()) -- so the caller must consume them (e.g.
-    host-copy the peak) before calling run() again. Frames must be supplied in
-    increasing time-chunk order (the dedisperser is a streaming engine).
+    run(frame) validates the frame before dedispersing it:
+      - frame.metadata is present, and its beam_ids == [frame.beam_id];
+      - frames are the same beam, and consecutive in time_chunk_index (the
+        dedisperser is a streaming engine, so a gap/reorder would splice
+        non-adjacent chunks);
+      - every subsequent frame's metadata matches the first frame's:
+        zone_nfreq, zone_freq_edges, dt_ns_per_seq, seq_per_frb_time_sample,
+        noise_variance, unix_ns_at_seq_0, beamset.
+
+    run(frame) then dequantizes the frame on the GPU, feeds it to the dedisperser,
+    and returns the GpuDedisperserOutputs for that chunk (per-tree out_max /
+    out_argmax GPU arrays). Those arrays are views into a small output ring buffer
+    and are only valid until the NEXT run() (or close()) -- so the caller must
+    consume them (e.g. host-copy the peak) before calling run() again. After
+    close(), run() may not be called again.
 
     Attributes nfreq / nt_in / ntrees / trees / plan / dd are None until the first
     run() has initialized the pipeline (dtype is known immediately from the config).
@@ -66,11 +68,20 @@ class OfflineDedisperser:
         # Metadata captured from the first frame + checked against later frames.
         self.zone_nfreq = None
         self.zone_freq_edges = None
+        self.dt_ns_per_seq = None
+        self.seq_per_frb_time_sample = None
         self.time_sample_ms = None
         self.noise_variance = None
+        self.unix_ns_at_seq_0 = None
+        self.beamset = None
+
+        # Per-frame invariants captured from the first frame (see run()).
+        self._beam_id = None        # all frames must have this beam_id
+        self._initial_tci = None    # time_chunk_index of the first frame
 
         self._seq_id = 0            # next chunk's seq_id (== chunk index)
         self._acquired_seq = None   # seq_id of the currently-acquired output, if any
+        self._closed = False        # set by close(); guards against later run()
 
     def _initialize(self, md):
         """Build the plan + dedisperser from the first frame's XEngineMetadata 'md'.
@@ -81,7 +92,8 @@ class OfflineDedisperser:
         config = self.config
         config.zone_nfreq = list(md.zone_nfreq)
         config.zone_freq_edges = list(md.zone_freq_edges)
-        config.time_sample_ms = _md_time_sample_ms(md)
+        # FRB time-sample length (ms) implied by the metadata's seq timing.
+        config.time_sample_ms = md.dt_ns_per_seq * md.seq_per_frb_time_sample / 1.0e6
         config.validate()
 
         self.plan = DedispersionPlan(config)
@@ -117,8 +129,12 @@ class OfflineDedisperser:
         # Capture the metadata that later frames must match.
         self.zone_nfreq = list(md.zone_nfreq)
         self.zone_freq_edges = list(md.zone_freq_edges)
+        self.dt_ns_per_seq = md.dt_ns_per_seq
+        self.seq_per_frb_time_sample = md.seq_per_frb_time_sample
         self.time_sample_ms = config.time_sample_ms
         self.noise_variance = list(md.noise_variance)
+        self.unix_ns_at_seq_0 = md.unix_ns_at_seq_0
+        self.beamset = md.beamset
 
     def _check_metadata(self, md):
         """Check a subsequent frame's metadata against the first frame's."""
@@ -126,10 +142,18 @@ class OfflineDedisperser:
             (list(md.zone_nfreq), self.zone_nfreq)
         assert list(md.zone_freq_edges) == self.zone_freq_edges, \
             (list(md.zone_freq_edges), self.zone_freq_edges)
-        assert _md_time_sample_ms(md) == self.time_sample_ms, \
-            (_md_time_sample_ms(md), self.time_sample_ms)
+        # dt_ns_per_seq + seq_per_frb_time_sample determine time_sample_ms; checking
+        # the two integer fields is stricter than checking their product.
+        assert md.dt_ns_per_seq == self.dt_ns_per_seq, \
+            (md.dt_ns_per_seq, self.dt_ns_per_seq)
+        assert md.seq_per_frb_time_sample == self.seq_per_frb_time_sample, \
+            (md.seq_per_frb_time_sample, self.seq_per_frb_time_sample)
         assert list(md.noise_variance) == self.noise_variance, \
             (list(md.noise_variance), self.noise_variance)
+        # Same acquisition + beamset for the whole stream.
+        assert md.unix_ns_at_seq_0 == self.unix_ns_at_seq_0, \
+            (md.unix_ns_at_seq_0, self.unix_ns_at_seq_0)
+        assert md.beamset == self.beamset, (md.beamset, self.beamset)
 
     def run(self, frame):
         """Dedisperse one time chunk; return its GpuDedisperserOutputs.
@@ -140,10 +164,29 @@ class OfflineDedisperser:
         """
         import cupy as cp
 
+        assert not self._closed, "OfflineDedisperser: run() called after close()"
+
         md = frame.metadata
+        assert md is not None, "OfflineDedisperser: frame.metadata is None"
+        # A single-beam ASDF frame projects its metadata to a length-1 beam list.
+        assert list(md.beam_ids) == [frame.beam_id], \
+            (f"OfflineDedisperser: frame.metadata.beam_ids {list(md.beam_ids)} "
+             f"!= [frame.beam_id] ([{frame.beam_id}])")
+
         if self.dd is None:
+            self._beam_id = frame.beam_id
+            self._initial_tci = frame.time_chunk_index
             self._initialize(md)
         else:
+            # Consecutive frames must be the same beam and adjacent in time (the
+            # dedisperser is a streaming engine, so a gap or reordering would splice
+            # non-adjacent chunks). Independent of how the frames were enumerated.
+            assert frame.beam_id == self._beam_id, \
+                f"OfflineDedisperser: beam_id changed mid-stream ({frame.beam_id} != {self._beam_id})"
+            expected_tci = self._initial_tci + self._seq_id
+            assert frame.time_chunk_index == expected_tci, \
+                (f"OfflineDedisperser: non-consecutive time_chunk_index "
+                 f"(got {frame.time_chunk_index}, expected {expected_tci})")
             self._check_metadata(md)
 
         assert frame.nfreq == self.nfreq, (frame.nfreq, self.nfreq)
@@ -182,3 +225,4 @@ class OfflineDedisperser:
             stream.synchronize()
             self.dd.release_output(self._acquired_seq, stream=stream)
             self._acquired_seq = None
+        self._closed = True

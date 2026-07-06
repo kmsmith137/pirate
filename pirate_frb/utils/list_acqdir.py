@@ -27,6 +27,9 @@ def list_acqdir(acqdir, beam_id=None):
     the pattern. (Exception: filenames which look like they're from C++ make_tmp_filename()
     are ignored, with a message printed to stdout.)
 
+    For each beam, the time (chunk) indices must be contiguous -- a gap or duplicate
+    raises an exception. (Different beams may span different time-index ranges.)
+
     Returned filenames include the 'acqdir' prefix (i.e. are directly openable).
     """
     per_beam = {}   # beam_id -> list of (time_chunk, full_filename)
@@ -42,8 +45,19 @@ def list_acqdir(acqdir, beam_id=None):
             raise RuntimeError(f"list_acqdir: {acqdir} contains entry {name!r} which does not match "
                                f"the expected pattern 'frame_b(BEAM)_t(CHUNK).asdf'")
 
-    # Sort each beam's files by time chunk, dropping the chunk sort key.
-    result = [(b, [fn for _, fn in sorted(per_beam[b])]) for b in sorted(per_beam)]
+    # Sort each beam's files by time chunk (dropping the chunk sort key), after
+    # checking that the beam's time indices are contiguous (no gap or duplicate).
+    result = []
+    for b in sorted(per_beam):
+        entries = sorted(per_beam[b])   # list of (time_chunk, full_filename)
+        chunks = [c for c, _ in entries]
+        for i in range(1, len(chunks)):
+            if chunks[i] != chunks[i-1] + 1:
+                raise RuntimeError(
+                    f"list_acqdir: beam {b} time indices are not contiguous in {acqdir}: "
+                    f"chunk {chunks[i-1]} is followed by {chunks[i]} "
+                    f"(expected {chunks[i-1] + 1})")
+        result.append((b, [fn for _, fn in entries]))
 
     if beam_id is None:
         return result
