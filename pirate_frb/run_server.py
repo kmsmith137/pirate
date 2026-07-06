@@ -29,11 +29,19 @@ def _parse_memory_string(s):
 
 
 def _resolve_nfs_dir(template):
-    """Interpolate {user} and {date} in an NFS directory template."""
+    """Interpolate {user}, {date}, and {home} in an NFS directory template.
+
+    {home} expands to the current user's home directory (os.path.expanduser),
+    which is absolute -- so e.g. '{home}/frb_data/{date}' yields an absolute
+    nfs_dir (required by FileWriter)."""
 
     user = os.environ.get('USER', 'unknown')
     date = datetime.date.today().strftime('%Y-%m-%d')
-    return template.replace('{user}', user).replace('{date}', date)
+    home = os.path.expanduser('~')
+    return (template
+            .replace('{user}', user)
+            .replace('{date}', date)
+            .replace('{home}', home))
 
 
 def compute_async_bump_nthreads(vcpu_list, nbytes):

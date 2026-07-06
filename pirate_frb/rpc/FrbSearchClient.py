@@ -89,7 +89,7 @@ class FrbSearchClient:
             - time_samples_per_chunk: int
             - ringbuf_nchunks: logical ring buffer length (in time chunks)
             - ssd_dir: SSD cache directory
-            - nfs_dir: NFS output directory (already interpolated for {user}/{date})
+            - nfs_dir: NFS output directory (already interpolated for {user}/{date}/{home})
             - ssd_threads: number of FileWriter SSD threads
             - nfs_threads: number of FileWriter NFS threads
             - tree_rank: from config_prefilled

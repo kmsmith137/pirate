@@ -139,7 +139,7 @@ message GetConfigResponse {
   int64 ringbuf_nchunks = 4;           // Logical ring buffer length in time chunks
   int64 min_data_mtu = 5;              // Mirrors the server YAML 'min_data_mtu' key
   string ssd_dir = 6;                  // SSD cache directory for this server
-  string nfs_dir = 7;                  // NFS output directory (already interpolated for {user}/{date})
+  string nfs_dir = 7;                  // NFS output directory (already interpolated for {user}/{date}/{home})
   int64 ssd_threads = 8;               // Number of FileWriter SSD threads
   int64 nfs_threads = 9;               // Number of FileWriter NFS threads
   int64 tree_rank = 10;                // From config_prefilled.tree_rank
