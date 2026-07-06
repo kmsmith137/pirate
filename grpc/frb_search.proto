@@ -7,8 +7,52 @@ package frb.search.v1;
 // If you're reading this, please feel free to make improvements :)
 
 
+// Wire-protocol version. This is the single source of truth for the protocol
+// version on both the C++ server and the Python clients -- both reference
+// PROTOCOL_VERSION_CURRENT from the generated stubs, rather than each hardcoding
+// their own constant.
+//
+// proto3 requires every enum to have a zero value; PROTOCOL_VERSION_UNSPECIFIED
+// is that placeholder (a CheckVersionRequest.protocol_version of 0 is therefore
+// invalid -- e.g. an old client that never set the field). Bump
+// PROTOCOL_VERSION_CURRENT on any incompatible wire-format change (a new/removed
+// RPC, or a changed request/response/notification field).
+
+enum ProtocolVersion {
+  PROTOCOL_VERSION_UNSPECIFIED = 0;
+  PROTOCOL_VERSION_CURRENT = 1;
+}
+
+// Request message for CheckVersion.
+message CheckVersionRequest {
+  // The client's wire-protocol version (PROTOCOL_VERSION_CURRENT, see the
+  // ProtocolVersion enum). The server rejects the call with FAILED_PRECONDITION
+  // if this does not match its own PROTOCOL_VERSION_CURRENT. Kept as a uint32
+  // rather than the enum type so an out-of-range value from a newer client
+  // round-trips as a plain integer the server can report, instead of decoding
+  // to the proto3 "unknown enum" sentinel.
+  uint32 protocol_version = 1;
+}
+
+// Response message for CheckVersion (delivered only on a version match; a
+// mismatch is reported as a gRPC FAILED_PRECONDITION error).
+message CheckVersionResponse {
+  uint32 protocol_version = 1;   // the server's PROTOCOL_VERSION_CURRENT
+}
+
+
 // Service definition
 service FrbSearch {
+  // Wire-protocol version handshake. Unlike the grouper/sifter protocols
+  // (which piggyback protocol_version on a mandatory first message), the
+  // FrbSearch service is stateless -- clients issue independent RPCs -- so
+  // there is no natural handshake message. Instead, the Python FrbSearchClient
+  // calls CheckVersion once at construction: it sends its PROTOCOL_VERSION_CURRENT,
+  // and the server REJECTS (FAILED_PRECONDITION) if it does not match the
+  // server's own PROTOCOL_VERSION_CURRENT. This catches client/server
+  // wire-format skew at connect time rather than as silent misbehavior.
+  rpc CheckVersion (CheckVersionRequest) returns (CheckVersionResponse);
+
   // Returns the current status of the search engine
   rpc GetStatus (GetStatusRequest) returns (GetStatusResponse);
 

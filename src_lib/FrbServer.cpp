@@ -94,8 +94,16 @@ public:
     // Helper to lock the weak_ptr. Throws if the server is exiting.
     inline shared_ptr<FrbServer> _lock_state();
 
-    // Try-catch wrappers, to gracefully return an error status to the client 
+    // Try-catch wrappers, to gracefully return an error status to the client
     // (instead of crashing the server).
+
+    // No _CheckVersion() helper: a version mismatch maps to FAILED_PRECONDITION
+    // (not the INTERNAL that the try-catch wrappers below produce), so this is
+    // implemented directly.
+    grpc::Status CheckVersion(
+        grpc::ServerContext* context,
+        const fs::CheckVersionRequest* request,
+        fs::CheckVersionResponse* response) override;
 
     grpc::Status GetStatus(
         grpc::ServerContext* context,
@@ -1600,6 +1608,35 @@ shared_ptr<FrbServer> FrbRpcService::_lock_state()
     if (!s)
         throw runtime_error("FrbServer is in the process of exiting");
     return s;
+}
+
+// ---- CheckVersion ----
+
+// Wire-protocol version handshake. The Python FrbSearchClient calls this once
+// at construction. We reject a mismatched client with FAILED_PRECONDITION so
+// client/server wire-format skew surfaces at connect time (with a clear
+// message naming both versions), rather than as silent misbehavior on some
+// later RPC. Independent of server state (no _lock_state / rb_initialized), so
+// it can always be answered.
+grpc::Status FrbRpcService::CheckVersion(
+    grpc::ServerContext* context,
+    const fs::CheckVersionRequest* request,
+    fs::CheckVersionResponse* response)
+{
+    response->set_protocol_version(fs::PROTOCOL_VERSION_CURRENT);
+
+    // Compared as integers; protocol_version is a uint32 on the wire (see the
+    // proto comment) so an out-of-range value from a newer client round-trips
+    // rather than decoding to the proto3 "unknown enum" sentinel.
+    if (long(request->protocol_version()) != long(fs::PROTOCOL_VERSION_CURRENT)) {
+        stringstream ss;
+        ss << "FrbSearch protocol version mismatch: client sent protocol_version="
+           << request->protocol_version() << ", but this server requires "
+           << int(fs::PROTOCOL_VERSION_CURRENT)
+           << " (client and server pirate builds are out of sync)";
+        return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, ss.str());
+    }
+    return grpc::Status::OK;
 }
 
 // ---- GetStatus ----

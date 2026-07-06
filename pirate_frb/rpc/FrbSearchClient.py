@@ -25,13 +25,42 @@ class FrbSearchClient:
     
     def __init__(self, server_address: str = "localhost:50051"):
         """Create a client connected to the given server address.
-        
+
+        Verifies the server's wire-protocol version at construction (see
+        check_version); raises grpc.RpcError if the client and server pirate
+        builds are out of sync (or the server is unreachable).
+
         Args:
             server_address: gRPC server address (e.g. "localhost:50051")
         """
         self.server_address = server_address
         self.channel = grpc.insecure_channel(server_address)
         self.stub = frb_search_pb2_grpc.FrbSearchStub(self.channel)
+        self.check_version()
+
+    def check_version(self, protocol_version: int = None) -> int:
+        """Verify the server's wire-protocol version matches ours.
+
+        The FrbSearch service is stateless (independent RPCs, no handshake
+        message to piggyback on), so this dedicated CheckVersion RPC -- called
+        once from __init__ -- is the connect-time analog of the grouper/sifter
+        handshake. It sends 'protocol_version' as the client version; the
+        server rejects with FAILED_PRECONDITION (a grpc.RpcError naming both
+        versions) on a mismatch, which propagates.
+
+        Args:
+            protocol_version: Client version to send. Defaults to our
+                PROTOCOL_VERSION_CURRENT; override only to exercise the
+                mismatch path (e.g. from tests).
+
+        Returns:
+            The server's PROTOCOL_VERSION_CURRENT (on a match).
+        """
+        if protocol_version is None:
+            protocol_version = frb_search_pb2.PROTOCOL_VERSION_CURRENT
+        request = frb_search_pb2.CheckVersionRequest(protocol_version=protocol_version)
+        response = self.stub.CheckVersion(request)
+        return response.protocol_version
     
     def get_status(self):
         """Query the server for current status.
