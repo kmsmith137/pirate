@@ -26,30 +26,32 @@ DEFAULT_CONFIG = "configs/dedispersion/chord_sb2.yml"
 def _process_beam(beam_id, files, config):
     """Dedisperse all of one beam's chunks and print each chunk's peak SNR.
 
-    Builds a fresh GpuDedisperser (via OfflineDedisperser) for this beam, fills its
-    analytic weights from the first frame's metadata, then processes the frames in
-    time order (one line per beam+chunk). Rudimentary peak finding: the printed SNR
-    is the max out_max over the DM-vs-time plane of every tree, done on the GPU.
+    Builds a fresh OfflineDedisperser for this beam (which lazily initializes its
+    GpuDedisperser + analytic weights from the first frame's metadata), then
+    processes the frames in time order (one line per beam+chunk). Rudimentary peak
+    finding: the printed SNR is the max out_max over the DM-vs-time plane of every
+    tree, done on the GPU.
     """
     import cupy as cp
     from .core import AssembledFrame
     from .OfflineDedisperser import OfflineDedisperser
 
+    # FIXME: there is currently no way to reset an OfflineDedisperser, so we
+    # construct a new one from scratch for every beam.
     od = OfflineDedisperser(config)
-    print(f"\nBeam {beam_id}: {len(files)} chunks; nfreq={od.nfreq}, nt_in={od.nt_in}, "
-          f"ntrees={od.ntrees}, dtype={od.dtype}")
+    print(f"\nBeam {beam_id}: {len(files)} chunks")
 
-    weights_filled = False
     for ichunk, path in enumerate(files):
         frame = AssembledFrame.from_asdf(path)
         assert frame.beam_id == beam_id, (frame.beam_id, beam_id)
 
-        if not weights_filled:
-            # Analytic weights need the X-engine metadata (per-channel variances).
-            od.fill_analytic_weights(frame.metadata.get_channel_variances())
-            weights_filled = True
-
+        # The first run() lazily builds the pipeline from the frame's metadata; the
+        # dedisperser geometry (nfreq / nt_in / ntrees) is known only afterwards.
         outputs = od.run(frame)
+        if ichunk == 0:
+            print(f"  nfreq={od.nfreq}, nt_in={od.nt_in}, ntrees={od.ntrees}, dtype={od.dtype}, "
+                  f"time_sample_ms={od.time_sample_ms:.4f}")
+
         # out_max[t] has shape (beams_per_batch=1, ndm_out, nt_out); only the
         # scalar peak is copied back to the host.
         snr = max(float(cp.asarray(outputs.out_max[t]).max()) for t in range(od.ntrees))
