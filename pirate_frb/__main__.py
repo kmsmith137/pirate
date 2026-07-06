@@ -1480,6 +1480,25 @@ def run_toy_grouper_command(args):
         sys.exit(rc)
 
 
+######################################  run_toy_offline_dd command  #####################################
+
+
+def parse_run_toy_offline_dd(subparsers):
+    help_text = "Toy offline dedispersion: per-chunk peak SNR over an acqdir of .asdf frames"
+    parser = subparsers.add_parser("run_toy_offline_dd", help=help_text, description=help_text)
+    parser.add_argument("acqdir",
+                        help="acqdir of frame_b(BEAM)_t(CHUNK).asdf files")
+    parser.add_argument("config",
+                        help="dedispersion config yaml")
+    parser.add_argument("--max-chunks", type=int, default=None,
+                        help="only process the first N chunks of each beam (default: all)")
+
+
+def run_toy_offline_dd_command(args):
+    from .run_toy_offline_dd import run_toy_offline_dd
+    run_toy_offline_dd(args.acqdir, args.config, max_chunks=args.max_chunks)
+
+
 ######################################  run_toy_sifter command  #####################################
 
 
@@ -1602,6 +1621,7 @@ def get_parser():
 
     parse_run_server(subparsers)
     parse_run_toy_grouper(subparsers)
+    parse_run_toy_offline_dd(subparsers)
     parse_run_toy_sifter(subparsers)
     parse_run_fake_xengine(subparsers)
     parse_rpc_status(subparsers)
@@ -1692,6 +1712,8 @@ def main():
         run_server_command(args)
     elif args.command == "run_toy_grouper":
         run_toy_grouper_command(args)
+    elif args.command == "run_toy_offline_dd":
+        run_toy_offline_dd_command(args)
     elif args.command == "run_toy_sifter":
         run_toy_sifter_command(args)
     elif args.command == "run_fake_xengine":

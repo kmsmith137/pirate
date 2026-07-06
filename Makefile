@@ -346,7 +346,9 @@ PYFILES = \
   pirate_frb/run_fake_xengine.py \
   pirate_frb/run_rpc_status.py \
   pirate_frb/run_toy_grouper.py \
+  pirate_frb/run_toy_offline_dd.py \
   pirate_frb/run_toy_sifter.py \
+  pirate_frb/OfflineDedisperser.py \
   pirate_frb/yaml_utils.py \
   pirate_frb/chime/__init__.py \
   pirate_frb/casm/__init__.py \
