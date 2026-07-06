@@ -107,6 +107,10 @@ struct DedispersionConfig
     
     void validate() const;
 
+    // Returns a deep copy of this config. Useful when a caller wants to modify a
+    // config (e.g. override the beam geometry) without mutating the caller's original.
+    DedispersionConfig clone() const { return *this; }
+
     // Write in YAML format.
     // If 'verbose' is true, include comments explaining the meaning of each field.
     void to_yaml(YAML::Emitter &emitter, bool verbose = false) const; 

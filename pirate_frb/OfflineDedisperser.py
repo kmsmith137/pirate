@@ -25,8 +25,10 @@ class OfflineDedisperser:
     """
 
     def __init__(self, config, cuda_device_id=0):
-        # Coerce to single-beam geometry. num_active_batches = 1 => one CUDA
-        # compute stream, one beam-batch per chunk, seq_id == chunk index.
+        # Work on a copy: coercing to single-beam geometry below must not mutate
+        # the caller's config. num_active_batches = 1 => one CUDA compute stream,
+        # one beam-batch per chunk, seq_id == chunk index.
+        config = config.clone()
         config.beams_per_gpu = 1
         config.beams_per_batch = 1
         config.num_active_batches = 1

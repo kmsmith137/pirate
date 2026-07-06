@@ -145,6 +145,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Validate the configuration.\n\n"
                "Checks that all parameters are consistent and within valid ranges.\n"
                "Throws an exception if validation fails.")
+          .def("clone", &DedispersionConfig::clone,
+               "Return a deep copy of this config (does not mutate the original).\n\n"
+               "Useful before overriding fields (e.g. the beam geometry) without\n"
+               "affecting the caller's config object.")
           .def("add_early_trigger", &DedispersionConfig::add_early_trigger,
                py::arg("ds_level"), py::arg("delta_rank"),
                "Add a single early trigger.\n\n"
