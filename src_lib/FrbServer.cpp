@@ -95,15 +95,9 @@ public:
     inline shared_ptr<FrbServer> _lock_state();
 
     // Try-catch wrappers, to gracefully return an error status to the client
-    // (instead of crashing the server).
-
-    // No _CheckVersion() helper: a version mismatch maps to FAILED_PRECONDITION
-    // (not the INTERNAL that the try-catch wrappers below produce), so this is
-    // implemented directly.
-    grpc::Status CheckVersion(
-        grpc::ServerContext* context,
-        const fs::CheckVersionRequest* request,
-        fs::CheckVersionResponse* response) override;
+    // (instead of crashing the server). Each wrapper first checks the request's
+    // protocol_version against the server's PROTOCOL_VERSION_CURRENT (see
+    // _check_protocol_version); a mismatch throws and is reported to the client.
 
     grpc::Status GetStatus(
         grpc::ServerContext* context,
@@ -1640,33 +1634,23 @@ shared_ptr<FrbServer> FrbRpcService::_lock_state()
     return s;
 }
 
-// ---- CheckVersion ----
-
-// Wire-protocol version handshake. The Python FrbSearchClient calls this once
-// at construction. We reject a mismatched client with FAILED_PRECONDITION so
-// client/server wire-format skew surfaces at connect time (with a clear
-// message naming both versions), rather than as silent misbehavior on some
-// later RPC. Independent of server state (no _lock_state / rb_initialized), so
-// it can always be answered.
-grpc::Status FrbRpcService::CheckVersion(
-    grpc::ServerContext* context,
-    const fs::CheckVersionRequest* request,
-    fs::CheckVersionResponse* response)
+// Every RPC request carries a protocol_version field (see notes/grpc.md); each
+// wrapper below calls this first. Throws (mapped to a gRPC error by the wrapper)
+// if the client's version does not match the server's, so client/server
+// wire-format skew (out-of-sync pirate builds) surfaces as a clear error rather
+// than silent misbehavior. Compared as integers -- protocol_version is a uint32
+// on the wire (see the proto comment) so an out-of-range value from a newer
+// client round-trips rather than decoding to the proto3 "unknown enum" sentinel.
+static void _check_protocol_version(uint32_t client_version, const char *rpc_name)
 {
-    response->set_protocol_version(fs::PROTOCOL_VERSION_CURRENT);
-
-    // Compared as integers; protocol_version is a uint32 on the wire (see the
-    // proto comment) so an out-of-range value from a newer client round-trips
-    // rather than decoding to the proto3 "unknown enum" sentinel.
-    if (long(request->protocol_version()) != long(fs::PROTOCOL_VERSION_CURRENT)) {
+    if (long(client_version) != long(fs::PROTOCOL_VERSION_CURRENT)) {
         stringstream ss;
-        ss << "FrbSearch protocol version mismatch: client sent protocol_version="
-           << request->protocol_version() << ", but this server requires "
+        ss << rpc_name << ": protocol version mismatch (client sent protocol_version="
+           << client_version << ", but this server requires "
            << int(fs::PROTOCOL_VERSION_CURRENT)
-           << " (client and server pirate builds are out of sync)";
-        return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, ss.str());
+           << "; client and server pirate builds are out of sync)";
+        throw runtime_error(ss.str());
     }
-    return grpc::Status::OK;
 }
 
 // ---- GetStatus ----
@@ -1708,6 +1692,7 @@ grpc::Status FrbRpcService::GetStatus(
     fs::GetStatusResponse* response) 
 {
     try {
+        _check_protocol_version(request->protocol_version(), "GetStatus");
         _GetStatus(request, response);
         return grpc::Status::OK;
     } catch (const std::exception &e) {
@@ -1739,6 +1724,7 @@ grpc::Status FrbRpcService::GetXEngineMetadata(
     fs::GetXEngineMetadataResponse* response)
 {
     try {
+        _check_protocol_version(request->protocol_version(), "GetXEngineMetadata");
         _GetXEngineMetadata(request, response);
         return grpc::Status::OK;
     } catch (const std::exception &e) {
@@ -1871,6 +1857,7 @@ grpc::Status FrbRpcService::WriteFiles(
     fs::WriteFilesResponse* response) 
 {
     try {
+        _check_protocol_version(request->protocol_version(), "WriteFiles");
         _WriteFiles(request, response);
         return grpc::Status::OK;
     } catch (const std::exception &e) {
@@ -1980,6 +1967,7 @@ grpc::Status FrbRpcService::StartStream(
     fs::StartStreamResponse* response)
 {
     try {
+        _check_protocol_version(request->protocol_version(), "StartStream");
         _StartStream(request, response);
         return grpc::Status::OK;
     } catch (const std::exception &e) {
@@ -2074,6 +2062,7 @@ grpc::Status FrbRpcService::ShowStreams(
     fs::ShowStreamsResponse* response)
 {
     try {
+        _check_protocol_version(request->protocol_version(), "ShowStreams");
         _ShowStreams(request, response);
         return grpc::Status::OK;
     } catch (const std::exception &e) {
@@ -2147,6 +2136,7 @@ grpc::Status FrbRpcService::CancelStream(
     fs::CancelStreamResponse* response)
 {
     try {
+        _check_protocol_version(request->protocol_version(), "CancelStream");
         _CancelStream(request, response);
         return grpc::Status::OK;
     } catch (const std::exception &e) {
@@ -2261,6 +2251,7 @@ grpc::Status FrbRpcService::SubscribeFiles(
     grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
 {
     try {
+        _check_protocol_version(request->protocol_version(), "SubscribeFiles");
         _SubscribeFiles(context, request, writer);
         return grpc::Status::OK;
     } catch (const std::exception &e) {
@@ -2319,6 +2310,7 @@ grpc::Status FrbRpcService::GetConfig(
     fs::GetConfigResponse* response)
 {
     try {
+        _check_protocol_version(request->protocol_version(), "GetConfig");
         _GetConfig(request, response);
         return grpc::Status::OK;
     } catch (const std::exception &e) {
@@ -2395,6 +2387,7 @@ grpc::Status FrbRpcService::MonitorRingbuf(
     grpc::ServerWriter<fs::MonitorRingbufResponse>* writer)
 {
     try {
+        _check_protocol_version(request->protocol_version(), "MonitorRingbuf");
         _MonitorRingbuf(context, writer);
         return grpc::Status::OK;
     } catch (const std::exception &e) {

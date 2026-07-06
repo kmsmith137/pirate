@@ -332,20 +332,6 @@ class NetworkTester:
         # our scale (<= ~90 notifications * ~40 bytes is well below
         # the 64 KB INITIAL_WINDOW_SIZE).
         self.rpc_client = FrbSearchClient(f"127.0.0.1:{p['rpc_port']}")
-
-        # Wire-protocol version handshake. Constructing FrbSearchClient above
-        # already exercised the MATCHING path (its __init__ calls check_version()
-        # and would have raised on mismatch). Here drive check_version() with a
-        # bad version (0 = PROTOCOL_VERSION_UNSPECIFIED, always invalid) and
-        # verify the server REJECTS it with FAILED_PRECONDITION.
-        try:
-            self.rpc_client.check_version(protocol_version=0)
-        except grpc.RpcError as e:
-            assert e.code() == grpc.StatusCode.FAILED_PRECONDITION, \
-                f"check_version: expected FAILED_PRECONDITION on mismatch, got {e.code()}"
-        else:
-            raise RuntimeError("check_version accepted a mismatched protocol_version")
-
         self.file_sub   = self.rpc_client.subscribe_files()
 
         # Second subscription with subscribe_streams=True: receives BOTH

@@ -1424,8 +1424,13 @@ void FakeXEngine::_pacing_thread_main()
                                        grpc::InsecureChannelCredentials());
     auto stub = FrbSearch::NewStub(channel);
 
-    auto reader = stub->MonitorRingbuf(pacing_ctx.get(),
-                                       MonitorRingbufRequest());
+    // Stamp our wire-protocol version on the stream-opening request (see
+    // notes/grpc.md); the server rejects a mismatch. FakeXEngine and FrbServer
+    // are the same pirate build here, so this always matches -- but the field
+    // must be set (a default 0 would be rejected as PROTOCOL_VERSION_UNSPECIFIED).
+    MonitorRingbufRequest mr_req;
+    mr_req.set_protocol_version(PROTOCOL_VERSION_CURRENT);
+    auto reader = stub->MonitorRingbuf(pacing_ctx.get(), mr_req);
 
     MonitorRingbufResponse resp;
     while (reader->Read(&resp)) {

@@ -12,47 +12,31 @@ package frb.search.v1;
 // PROTOCOL_VERSION_CURRENT from the generated stubs, rather than each hardcoding
 // their own constant.
 //
+// Every request message carries a 'protocol_version' field (see notes/grpc.md):
+// the client sets it to PROTOCOL_VERSION_CURRENT, and the server rejects any RPC
+// whose value does not match its own PROTOCOL_VERSION_CURRENT. This catches
+// client/server wire-format skew (out-of-sync pirate builds) rather than letting
+// it become silent misbehavior. (Streaming RPCs carry the version on the
+// request that opens the stream; subsequent stream messages do not repeat it.)
+//
 // proto3 requires every enum to have a zero value; PROTOCOL_VERSION_UNSPECIFIED
-// is that placeholder (a CheckVersionRequest.protocol_version of 0 is therefore
-// invalid -- e.g. an old client that never set the field). Bump
-// PROTOCOL_VERSION_CURRENT on any incompatible wire-format change (a new/removed
-// RPC, or a changed request/response/notification field).
+// is that placeholder (a protocol_version of 0 is therefore invalid -- e.g. an
+// old client that never set the field). Bump PROTOCOL_VERSION_CURRENT on any
+// incompatible wire-format change (a new/removed RPC, or a changed
+// request/response/notification field).
+//
+// The field is kept as a uint32 rather than the ProtocolVersion enum type so an
+// out-of-range value from a newer client round-trips as a plain integer the
+// server can report, instead of decoding to the proto3 "unknown enum" sentinel.
 
 enum ProtocolVersion {
   PROTOCOL_VERSION_UNSPECIFIED = 0;
   PROTOCOL_VERSION_CURRENT = 1;
 }
 
-// Request message for CheckVersion.
-message CheckVersionRequest {
-  // The client's wire-protocol version (PROTOCOL_VERSION_CURRENT, see the
-  // ProtocolVersion enum). The server rejects the call with FAILED_PRECONDITION
-  // if this does not match its own PROTOCOL_VERSION_CURRENT. Kept as a uint32
-  // rather than the enum type so an out-of-range value from a newer client
-  // round-trips as a plain integer the server can report, instead of decoding
-  // to the proto3 "unknown enum" sentinel.
-  uint32 protocol_version = 1;
-}
-
-// Response message for CheckVersion (delivered only on a version match; a
-// mismatch is reported as a gRPC FAILED_PRECONDITION error).
-message CheckVersionResponse {
-  uint32 protocol_version = 1;   // the server's PROTOCOL_VERSION_CURRENT
-}
-
 
 // Service definition
 service FrbSearch {
-  // Wire-protocol version handshake. Unlike the grouper/sifter protocols
-  // (which piggyback protocol_version on a mandatory first message), the
-  // FrbSearch service is stateless -- clients issue independent RPCs -- so
-  // there is no natural handshake message. Instead, the Python FrbSearchClient
-  // calls CheckVersion once at construction: it sends its PROTOCOL_VERSION_CURRENT,
-  // and the server REJECTS (FAILED_PRECONDITION) if it does not match the
-  // server's own PROTOCOL_VERSION_CURRENT. This catches client/server
-  // wire-format skew at connect time rather than as silent misbehavior.
-  rpc CheckVersion (CheckVersionRequest) returns (CheckVersionResponse);
-
   // Returns the current status of the search engine
   rpc GetStatus (GetStatusRequest) returns (GetStatusResponse);
 
@@ -107,8 +91,10 @@ service FrbSearch {
   rpc CancelStream (CancelStreamRequest) returns (CancelStreamResponse);
 }
 
-// Request message (currently empty, but extensible)
-message GetStatusRequest {}
+// Request message for GetStatus.
+message GetStatusRequest {
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+}
 
 // Response message containing status metrics
 message GetStatusResponse {
@@ -122,8 +108,10 @@ message GetStatusResponse {
   int64 num_free_frames = 8;  // Number of available frames in AssembledFrameAllocator
 }
 
-// Request message for GetConfig (currently empty, but extensible)
-message GetConfigRequest {}
+// Request message for GetConfig.
+message GetConfigRequest {
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+}
 
 // Response message containing the per-server config.
 //
@@ -158,7 +146,8 @@ message GetConfigResponse {
 
 // Request message for GetXEngineMetadata
 message GetXEngineMetadataRequest {
-  bool verbose = 1;  // If true, include comments explaining each field
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+  bool verbose = 2;  // If true, include comments explaining each field
 }
 
 // Response message for GetXEngineMetadata
@@ -173,10 +162,11 @@ message GetXEngineMetadataResponse {
 //   fpga_seq_start <= f < fpga_seq_end.
 // The server translates this to its internal (absolute) time-chunk indices.
 message WriteFilesRequest {
-  repeated int64 beams = 1;           // List of beam IDs to write
-  int64 fpga_seq_start = 2;           // Start of fpga-seq range (inclusive)
-  int64 fpga_seq_end = 3;             // End of fpga-seq range (exclusive)
-  string filename_pattern = 4;        // Pattern with (BEAM) and (CHUNK) placeholders
+  uint32 protocol_version = 1;        // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+  repeated int64 beams = 2;           // List of beam IDs to write
+  int64 fpga_seq_start = 3;           // Start of fpga-seq range (inclusive)
+  int64 fpga_seq_end = 4;             // End of fpga-seq range (exclusive)
+  string filename_pattern = 5;        // Pattern with (BEAM) and (CHUNK) placeholders
 }
 
 // Response message for WriteFiles
@@ -184,12 +174,14 @@ message WriteFilesResponse {
   repeated string filename_list = 1;  // List of filenames that will be written
 }
 
-// Request message for SubscribeFiles
+// Request message for SubscribeFiles (opens the notification stream).
 message SubscribeFilesRequest {
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+
   // If true, also receive notifications for files written by streams
   // (StartStream RPC). Default false: WriteFiles-triggered notifications
   // only, preserving pre-streams behavior.
-  bool subscribe_streams = 1;
+  bool subscribe_streams = 2;
 }
 
 // Response message for SubscribeFiles (streamed).
@@ -222,8 +214,10 @@ message WriteNotification {
                              // if triggered by StartStream.
 }
 
-// Request message for MonitorRingbuf (currently empty, but extensible).
-message MonitorRingbufRequest {}
+// Request message for MonitorRingbuf (opens the push stream).
+message MonitorRingbufRequest {
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+}
 
 // Streamed update for MonitorRingbuf. One message per change in rb_processed.
 message MonitorRingbufResponse {
@@ -236,20 +230,23 @@ message MonitorRingbufResponse {
 // matches iff it overlaps [fpga_seq_start, fpga_seq_end). fpga_seq_start = 0
 // means "start asap"; fpga_seq_end = INT64_MAX means "run indefinitely".
 message StartStreamRequest {
-  string acq_name = 1;          // must be nonempty; unique among active streams
-  string filename_pattern = 2;  // must contain (BEAM) and (CHUNK); same format as WriteFiles
-  repeated int64 beam_ids = 3;  // must be nonempty; each must be a known beam
+  uint32 protocol_version = 1;  // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+  string acq_name = 2;          // must be nonempty; unique among active streams
+  string filename_pattern = 3;  // must contain (BEAM) and (CHUNK); same format as WriteFiles
+  repeated int64 beam_ids = 4;  // must be nonempty; each must be a known beam
                                 // (no "empty = all beams" convention)
-  int64 fpga_seq_start = 4;     // 0 = start asap
-  int64 fpga_seq_end = 5;       // INT64_MAX = run indefinitely
+  int64 fpga_seq_start = 5;     // 0 = start asap
+  int64 fpga_seq_end = 6;       // INT64_MAX = run indefinitely
 }
 
 // Response message for StartStream (empty on success; failures are
 // reported as gRPC errors).
 message StartStreamResponse {}
 
-// Request message for ShowStreams (currently empty, but extensible).
-message ShowStreamsRequest {}
+// Request message for ShowStreams.
+message ShowStreamsRequest {
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+}
 
 // Stream lifecycle, as reported by ShowStreams.
 //
@@ -308,8 +305,9 @@ message ShowStreamsResponse {
 
 // Request message for CancelStream.
 message CancelStreamRequest {
-  bool cancel_all = 1;
-  string acq_name = 2;   // used only if cancel_all == false; unknown
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+  bool cancel_all = 2;
+  string acq_name = 3;   // used only if cancel_all == false; unknown
                          // acq_name is an error
 }
 

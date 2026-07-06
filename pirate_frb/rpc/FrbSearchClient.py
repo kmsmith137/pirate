@@ -8,6 +8,11 @@ from .grpc import frb_search_pb2
 from .grpc import frb_search_pb2_grpc
 from .FileSubscriber import FileSubscriber
 
+# Our wire-protocol version, stamped onto every request's protocol_version
+# field (see notes/grpc.md). The server rejects any RPC whose value does not
+# match its own PROTOCOL_VERSION_CURRENT, catching out-of-sync pirate builds.
+_PROTOCOL_VERSION = frb_search_pb2.PROTOCOL_VERSION_CURRENT
+
 
 class FrbSearchClient:
     """Client for querying FrbServer via gRPC.
@@ -26,9 +31,10 @@ class FrbSearchClient:
     def __init__(self, server_address: str = "localhost:50051"):
         """Create a client connected to the given server address.
 
-        Verifies the server's wire-protocol version at construction (see
-        check_version); raises grpc.RpcError if the client and server pirate
-        builds are out of sync (or the server is unreachable).
+        Every RPC issued by this client stamps its request with our
+        _PROTOCOL_VERSION; the server rejects an RPC on a version mismatch
+        (raising grpc.RpcError) if the client and server pirate builds are
+        out of sync.
 
         Args:
             server_address: gRPC server address (e.g. "localhost:50051")
@@ -36,32 +42,7 @@ class FrbSearchClient:
         self.server_address = server_address
         self.channel = grpc.insecure_channel(server_address)
         self.stub = frb_search_pb2_grpc.FrbSearchStub(self.channel)
-        self.check_version()
 
-    def check_version(self, protocol_version: int = None) -> int:
-        """Verify the server's wire-protocol version matches ours.
-
-        The FrbSearch service is stateless (independent RPCs, no handshake
-        message to piggyback on), so this dedicated CheckVersion RPC -- called
-        once from __init__ -- is the connect-time analog of the grouper/sifter
-        handshake. It sends 'protocol_version' as the client version; the
-        server rejects with FAILED_PRECONDITION (a grpc.RpcError naming both
-        versions) on a mismatch, which propagates.
-
-        Args:
-            protocol_version: Client version to send. Defaults to our
-                PROTOCOL_VERSION_CURRENT; override only to exercise the
-                mismatch path (e.g. from tests).
-
-        Returns:
-            The server's PROTOCOL_VERSION_CURRENT (on a match).
-        """
-        if protocol_version is None:
-            protocol_version = frb_search_pb2.PROTOCOL_VERSION_CURRENT
-        request = frb_search_pb2.CheckVersionRequest(protocol_version=protocol_version)
-        response = self.stub.CheckVersion(request)
-        return response.protocol_version
-    
     def get_status(self):
         """Query the server for current status.
         
@@ -76,7 +57,7 @@ class FrbSearchClient:
             - rb_end: (Last frame_id in ring buffer) + 1
             - num_free_frames: Number of available frames in AssembledFrameAllocator
         """
-        request = frb_search_pb2.GetStatusRequest()
+        request = frb_search_pb2.GetStatusRequest(protocol_version=_PROTOCOL_VERSION)
         return self.stub.GetStatus(request)
 
     def get_config(self):
@@ -106,7 +87,7 @@ class FrbSearchClient:
         they're the pre-metadata values the receiver was started with, not
         what a real X-engine subsequently sent.
         """
-        request = frb_search_pb2.GetConfigRequest()
+        request = frb_search_pb2.GetConfigRequest(protocol_version=_PROTOCOL_VERSION)
         return self.stub.GetConfig(request)
 
     def get_xengine_metadata(self, verbose: bool = False) -> str:
@@ -119,7 +100,8 @@ class FrbSearchClient:
             YAML string representation of XEngine metadata, or empty string
             if metadata is not yet available.
         """
-        request = frb_search_pb2.GetXEngineMetadataRequest(verbose=verbose)
+        request = frb_search_pb2.GetXEngineMetadataRequest(
+            protocol_version=_PROTOCOL_VERSION, verbose=verbose)
         response = self.stub.GetXEngineMetadata(request)
         return response.yaml_string
 
@@ -145,6 +127,7 @@ class FrbSearchClient:
             List of filenames that will be written.
         """
         request = frb_search_pb2.WriteFilesRequest(
+            protocol_version=_PROTOCOL_VERSION,
             beams=beams,
             fpga_seq_start=fpga_seq_start,
             fpga_seq_end=fpga_seq_end,
@@ -206,6 +189,7 @@ class FrbSearchClient:
             fpga_seq_end = 2**63 - 1   # "run indefinitely"
 
         request = frb_search_pb2.StartStreamRequest(
+            protocol_version=_PROTOCOL_VERSION,
             acq_name=acq_name,
             filename_pattern=filename_pattern,
             beam_ids=beam_ids,
@@ -241,7 +225,7 @@ class FrbSearchClient:
               it exceeds the non-ACTIVE entries listed, older history was
               dropped (only the last few are retained).
         """
-        request = frb_search_pb2.ShowStreamsRequest()
+        request = frb_search_pb2.ShowStreamsRequest(protocol_version=_PROTOCOL_VERSION)
         return self.stub.ShowStreams(request)
 
     def cancel_stream(self, acq_name: str = None, cancel_all: bool = False) -> int:
@@ -264,6 +248,7 @@ class FrbSearchClient:
             Number of streams cancelled.
         """
         request = frb_search_pb2.CancelStreamRequest(
+            protocol_version=_PROTOCOL_VERSION,
             cancel_all=cancel_all,
             acq_name=("" if acq_name is None else acq_name)
         )
@@ -307,7 +292,7 @@ class FrbSearchClient:
         cleanly, break out of the for-loop and let the generator go
         out of scope -- gRPC cancels the underlying call on GC.
         """
-        request = frb_search_pb2.MonitorRingbufRequest()
+        request = frb_search_pb2.MonitorRingbufRequest(protocol_version=_PROTOCOL_VERSION)
         for response in self.stub.MonitorRingbuf(request):
             yield response.rb_processed
 

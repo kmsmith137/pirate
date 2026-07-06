@@ -73,7 +73,11 @@ class FileSubscriber:
         # attributes set later in __init__.
         self._closed = False
         self._call = None
-        request = frb_search_pb2.SubscribeFilesRequest(subscribe_streams=subscribe_streams)
+        # protocol_version stamps the stream-opening request (see notes/grpc.md);
+        # the server rejects a version mismatch when opening the stream.
+        request = frb_search_pb2.SubscribeFilesRequest(
+            protocol_version=frb_search_pb2.PROTOCOL_VERSION_CURRENT,
+            subscribe_streams=subscribe_streams)
         self._call = stub.SubscribeFiles(request)
         try:
             first = next(self._call)

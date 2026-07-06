@@ -16,4 +16,8 @@
   branch "far from production". In this case, I'd prefer not to increment the
   version number each time. It won't be clear from context which case applies,
   so it's best to ask explicitly.
-  
+
+- Every unary RPC should include the version number (but no need for the
+  version number in the response). If an RPC creates a TCP stream, then
+  the RPC should contain a version number, but subsequent messages on the
+  stream do not need a version number.
