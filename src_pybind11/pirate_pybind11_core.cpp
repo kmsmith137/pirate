@@ -141,6 +141,12 @@ void register_core_bindings(pybind11::module &m)
         .def_readonly("ntime", &AssembledFrame::ntime)
         .def_readonly("beam_id", &AssembledFrame::beam_id)
         .def_readonly("time_chunk_index", &AssembledFrame::time_chunk_index)
+        .def_property_readonly("fpga_seq_start", &AssembledFrame::fpga_seq_start,
+            "FPGA sequence number at the start of this frame's time chunk\n"
+            "(= time_chunk_index * ntime * metadata.seq_per_frb_time_sample).")
+        .def_property_readonly("fpga_seq_end", &AssembledFrame::fpga_seq_end,
+            "FPGA sequence number one-past-the-end of this frame's time chunk\n"
+            "(= start of the next chunk).")
         .def_property_readonly("metadata",
             [](const AssembledFrame &self) {
                 return std::const_pointer_cast<XEngineMetadata>(self.metadata);
@@ -176,6 +182,11 @@ void register_core_bindings(pybind11::module &m)
             },
             "Scales/offsets as float16 array with shape (nfreq, mpc, 2),\n"
             "where mpc = ntime / 256. The last axis is {scale, offset}.")
+        .def("dequantize", &AssembledFrame::dequantize,
+            "Dequantize the int4 'data' to a float32 array of shape (nfreq, ntime),\n"
+            "applying the per-(freq, minichunk) affine transform from 'scales_offsets'\n"
+            "(via a ReferenceDequantizationKernel). The -8 'missing sample' sentinel\n"
+            "maps to 0. Single-beam: no leading beam axis in the result.")
         .def("write_asdf", &AssembledFrame::write_asdf,
             py::arg("filename"), py::arg("sync") = true, py::arg("verbose") = false,
             "Write this AssembledFrame to an ASDF file.\n\n"

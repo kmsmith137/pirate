@@ -3,6 +3,7 @@
 #include "../include/pirate/XEngineMetadata.hpp"
 
 #include "../include/pirate/file_utils.hpp"   // FileDeleteGuard
+#include "../include/pirate/GpuDequantizationKernel.hpp"  // ReferenceDequantizationKernel (dequantize())
 #include "../include/pirate/inlines.hpp"      // xdiv(), align_up()
 #include "../include/pirate/constants.hpp"    // bytes_per_gpu_cache_line
 #include "../include/pirate/avx2_utils.hpp"   // avx2_simulate_4bit_noise(), avx2_4bit_postquant_noise_rms()
@@ -317,6 +318,37 @@ static shared_ptr<XEngineMetadata> _metadata_from_asdf_group(const shared_ptr<AS
 
     m->noise_variance = _read_float_vec(g, "noise_variance");
     return m;
+}
+
+
+long AssembledFrame::fpga_seq_start() const
+{
+    xassert(metadata != nullptr);
+    return time_chunk_index * ntime * metadata->seq_per_frb_time_sample;
+}
+
+
+long AssembledFrame::fpga_seq_end() const
+{
+    xassert(metadata != nullptr);
+    return (time_chunk_index + 1) * ntime * metadata->seq_per_frb_time_sample;
+}
+
+
+Array<float> AssembledFrame::dequantize() const
+{
+    // Single-beam dequantization: add a length-1 beam axis to this frame's arrays,
+    // run the CPU reference kernel, and return the (nfreq, ntime) float32 result.
+    ReferenceDequantizationKernel kernel(1, nfreq, ntime);
+
+    Array<float> out({nfreq, ntime}, af_rhost | af_zero);
+    Array<float> out3 = out.reshape({1, nfreq, ntime});
+    Array<void> data3 = data.reshape({1, nfreq, ntime});
+    Array<void> scoff_v = scales_offsets.reshape({1, nfreq, ntime/256, 2});
+    Array<__half> scoff = scoff_v.cast<__half>();
+
+    kernel.apply(out3, scoff, data3);
+    return out;
 }
 
 

@@ -132,6 +132,20 @@ struct AssembledFrame
     void write_asdf(const std::string &filename, bool sync=true, bool verbose=false) const;
     static std::shared_ptr<AssembledFrame> from_asdf(const std::string &filename);    // Call without lock held.
 
+    // FPGA sequence number at the start / end of this frame (i.e. of time chunk
+    // 'time_chunk_index'). fpga_seq_start() = time_chunk_index * ntime *
+    // metadata->seq_per_frb_time_sample; fpga_seq_end() is the start of the NEXT
+    // chunk (one-past-the-end). Requires non-null 'metadata' (invariant).
+    long fpga_seq_start() const;
+    long fpga_seq_end() const;
+
+    // Dequantize this frame's int4 'data' to float32, applying the per-(freq,
+    // minichunk) affine transform from 'scales_offsets' (via a
+    // ReferenceDequantizationKernel). Returns a freshly-allocated host
+    // Array<float> of shape (nfreq, ntime); the -8 "missing sample" sentinel maps
+    // to 0. Single-beam, so the result has no leading beam axis.
+    ksgpu::Array<float> dequantize() const;
+
     // --------------------  private/internal  --------------------
 
     // Call with lock held!
