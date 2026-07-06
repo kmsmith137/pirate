@@ -94,12 +94,16 @@ service FrbSearch {
   rpc StartStream (StartStreamRequest) returns (StartStreamResponse);
 
   // Report the server's current position (as an fpga seq), the full list
-  // of beams it processes, and all active streams with their stats.
+  // of beams it processes, and all streams with their status and stats --
+  // active streams first, then a bounded history of recently-deactivated
+  // (expired/cancelled) streams.
   rpc ShowStreams (ShowStreamsRequest) returns (ShowStreamsResponse);
 
   // Cancel one active stream (by acq_name), or all of them. File writes
   // already queued still complete (and still notify SubscribeFiles
-  // subscribers); cancellation only stops future matching.
+  // subscribers); cancellation only stops future matching. Cancelled
+  // streams remain visible in ShowStreams' bounded history; cancelling an
+  // already-inactive stream is an error.
   rpc CancelStream (CancelStreamRequest) returns (CancelStreamResponse);
 }
 
@@ -247,17 +251,38 @@ message StartStreamResponse {}
 // Request message for ShowStreams (currently empty, but extensible).
 message ShowStreamsRequest {}
 
-// One active stream, as reported by ShowStreams.
+// Stream lifecycle, as reported by ShowStreams.
+//
+// ACTIVE:   still matching chunks as they are processed.
+// DRAINING: deactivated (expired or cancelled), but some queued file
+//           writes have not completed yet (written + errored < queued).
+// INACTIVE: deactivated and fully drained (written + errored == queued;
+//           every queued file completed or errored).
+enum StreamStatus {
+  STREAM_STATUS_UNSPECIFIED = 0;
+  STREAM_STATUS_ACTIVE = 1;
+  STREAM_STATUS_DRAINING = 2;
+  STREAM_STATUS_INACTIVE = 3;
+}
+
+// One stream (active or recently deactivated), as reported by ShowStreams.
 message StreamInfo {
   StartStreamRequest args = 1;   // the original StartStream args, echoed back
+  StreamStatus status = 2;
+  bool cancelled = 3;               // true = CancelStream, false = expired
+                                    // via fpga_seq_end; meaningful only
+                                    // when status != ACTIVE
+  int64 started_at_unix_ns = 4;     // wall clock at StartStream
+  int64 deactivated_at_unix_ns = 5; // wall clock at expiry/cancel; 0 while ACTIVE
 
-  // "Queued" counters, incremented when a matching frame is queued for
-  // writing (not when the write completes). num_bytes_queued is logical:
-  // num_files_queued * (data-array bytes per frame), neglecting file
-  // headers, and counting the full size even when the bytes land on disk
-  // as a hardlink.
-  int64 num_files_queued = 2;
-  int64 num_bytes_queued = 3;
+  // File counters. num_files_queued is incremented when a matching frame
+  // is queued for writing; num_files_written / num_files_errored when the
+  // write completes / fails (a duplicate-filename skip counts as written:
+  // the file IS on disk under that name). written + errored <= queued at
+  // every instant; equality on a deactivated stream means fully drained.
+  int64 num_files_queued = 6;
+  int64 num_files_written = 7;
+  int64 num_files_errored = 8;
 }
 
 // Response message for ShowStreams.
@@ -270,7 +295,15 @@ message ShowStreamsResponse {
   // ALL beams processed by this server (not just those with active streams).
   repeated int64 beam_ids = 2;
 
+  // Active streams first, then deactivated streams in deactivation order
+  // (oldest first). Deactivated-stream history is bounded: only the last
+  // few are retained (pirate::constants::inactive_file_stream_capacity).
   repeated StreamInfo streams = 3;
+
+  // Total number of streams ever deactivated on this server. If this
+  // exceeds the number of non-ACTIVE entries in 'streams', older history
+  // has been dropped.
+  int64 num_deactivated_streams = 4;
 }
 
 // Request message for CancelStream.

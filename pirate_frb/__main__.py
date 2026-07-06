@@ -1257,27 +1257,47 @@ def parse_rpc_show_streams(subparsers):
 
 
 def rpc_show_streams(args):
+    import datetime
     from .rpc import FrbSearchClient
+    from .rpc.grpc import frb_search_pb2
+
+    def fmt_time(unix_ns):
+        if unix_ns == 0:
+            return "-"
+        return datetime.datetime.fromtimestamp(unix_ns * 1.0e-9).strftime('%Y-%m-%d %H:%M:%S')
 
     addr = args.server_address
     client = FrbSearchClient(addr)
 
     try:
         ss = client.show_streams()
+        n_listed_inactive = sum(1 for i in ss.streams
+                                if i.status != frb_search_pb2.STREAM_STATUS_ACTIVE)
         print(f"[{addr}] current_fpga_seq = {ss.current_fpga_seq}")
         print(f"[{addr}] beam_ids = {list(ss.beam_ids)}")
+        print(f"[{addr}] num_deactivated_streams = {ss.num_deactivated_streams}"
+              f" ({n_listed_inactive} retained in history)")
 
         if not ss.streams:
-            print(f"[{addr}] no active streams")
+            print(f"[{addr}] no active or recently-deactivated streams")
 
         for info in ss.streams:
             a = info.args
+            # "STREAM_STATUS_ACTIVE" -> "active", etc.
+            status = frb_search_pb2.StreamStatus.Name(info.status)
+            status = status.removeprefix('STREAM_STATUS_').lower()
+            if (info.status != frb_search_pb2.STREAM_STATUS_ACTIVE) and info.cancelled:
+                status += " (cancelled)"
             end_str = "indefinite" if (a.fpga_seq_end == 2**63 - 1) else str(a.fpga_seq_end)
             print(f"[{addr}] stream acq_name={a.acq_name!r}:")
+            print(f"[{addr}]   status = {status}")
             print(f"[{addr}]   filename_pattern = {a.filename_pattern!r}")
             print(f"[{addr}]   beam_ids = {list(a.beam_ids)}")
             print(f"[{addr}]   fpga_seq range = [{a.fpga_seq_start}, {end_str})")
-            print(f"[{addr}]   files_queued = {info.num_files_queued}, bytes_queued = {info.num_bytes_queued}")
+            print(f"[{addr}]   started = {fmt_time(info.started_at_unix_ns)}, "
+                  f"deactivated = {fmt_time(info.deactivated_at_unix_ns)}")
+            print(f"[{addr}]   files: queued = {info.num_files_queued}, "
+                  f"written = {info.num_files_written}, errored = {info.num_files_errored}")
     finally:
         client.close()
 

@@ -1114,13 +1114,9 @@ void FrbServer::_frame_finalizing_thread_main()
     std::chrono::steady_clock::time_point t0;
     long ichunk0 = 0;
 
-    // Per-frame logical size for stream accounting (data arrays only,
-    // headers neglected -- see ActiveStream::num_bytes_queued).
-    const long bytes_per_frame = bytes_per_chunk / nbeams;
-
     // Scratch for the stream-capture hook (reused across batches).
     std::vector<std::pair<std::shared_ptr<AssembledFrame>,
-                          std::shared_ptr<ActiveStream>>> stream_matches;
+                          std::shared_ptr<FileStream>>> stream_matches;
 
     for (long seq_id = 0; ; seq_id++) {
         // Blocks (on the host) until the GPU completes batch seq_id's H2G
@@ -1132,9 +1128,9 @@ void FrbServer::_frame_finalizing_thread_main()
         // transition from "assembled" to "processed". Stream capture happens
         // in three phases:
         //
-        //   A. Under 'mutex': prune expired streams, record matching
-        //      (frame, stream) pairs, bump the queued-counters. rb_processed
-        //      is NOT advanced yet.
+        //   A. Under 'mutex': deactivate expired streams (move to the
+        //      inactive ring), record matching (frame, stream) pairs, bump
+        //      the queued-counters. rb_processed is NOT advanced yet.
         //   B. Off-lock: expand patterns and queue the writes
         //      (_queue_frame_write; disk I/O happens on FileWriter threads,
         //      process_frame only enqueues).
@@ -1174,10 +1170,15 @@ void FrbServer::_frame_finalizing_thread_main()
                 // of B, and B divides nbeams.
                 long ichunk = rb_processed / nbeams;
 
-                // Prune expired streams (they can never match chunk >= ichunk).
+                // Deactivate expired streams (they can never match chunk >=
+                // ichunk); they remain visible in the inactive ring.
+                for (const auto &st : active_streams) {
+                    if (st->chunk_last < ichunk)
+                        _deactivate_stream(st, /*cancelled=*/ false);
+                }
                 active_streams.erase(
                     std::remove_if(active_streams.begin(), active_streams.end(),
-                                   [&](const std::shared_ptr<ActiveStream> &st)
+                                   [&](const std::shared_ptr<FileStream> &st)
                                    { return st->chunk_last < ichunk; }),
                     active_streams.end());
 
@@ -1190,8 +1191,12 @@ void FrbServer::_frame_finalizing_thread_main()
                         if (it == st->beam_indices.end())
                             continue;
 
+                        // Rule R1 (see FileStream's thread-safety comment):
+                        // counted at MATCH time, before the Phase-B push, so
+                        // written + errored <= queued at every instant, and
+                        // equality on a deactivated stream means "fully
+                        // drained".
                         st->num_files_queued++;
-                        st->num_bytes_queued += bytes_per_frame;
                         long rb_slot = frame_id % long(frame_ringbuf.size());
                         stream_matches.emplace_back(frame_ringbuf[rb_slot], st);
                     }
@@ -1202,7 +1207,7 @@ void FrbServer::_frame_finalizing_thread_main()
         // Phase B.
         for (const auto &[frame, st] : stream_matches) {
             string relpath = st->pattern.expand(frame);
-            _queue_frame_write(frame, relpath, st->acq_name);
+            _queue_frame_write(frame, relpath, st);
         }
 
         // Phase C.
@@ -1281,10 +1286,11 @@ void FrbServer::frame_finalizing_thread_main()
 
 
 // Queue one file write on 'frame'. Shared by the WriteFiles RPC handler
-// (acq_name = "") and the frame_finalizing_thread's stream-capture hook.
+// (stream = nullptr) and the frame_finalizing_thread's stream-capture hook.
 // See declaration in FrbServer.hpp for the contract.
 bool FrbServer::_queue_frame_write(const shared_ptr<AssembledFrame> &frame,
-                                   const string &relpath, const string &acq_name)
+                                   const string &relpath,
+                                   const shared_ptr<FileStream> &stream)
 {
     unique_lock<std::mutex> frame_lock(frame->mutex);
 
@@ -1297,6 +1303,11 @@ bool FrbServer::_queue_frame_write(const shared_ptr<AssembledFrame> &frame,
     // -- both _hardlink_in_nfs and the save_error path operate
     // off save_paths[0]). So we should only skip when save_paths
     // is empty AND data has been reaped.
+    //
+    // NOTE: on the stream path (stream != nullptr) this skip can never fire
+    // (frames at the assembled->processed transition are not yet reapable),
+    // which is what keeps FileStream::num_files_queued -- already bumped at
+    // match time, rule R1 -- consistent with the pushes.
     if (frame->data.size == 0 && frame->save_paths.empty())
         return false;
 
@@ -1304,11 +1315,30 @@ bool FrbServer::_queue_frame_write(const shared_ptr<AssembledFrame> &frame,
     // filename_pattern, or a repeated WriteFiles): FileWriter's NFS thread
     // skips the filesystem operation for a duplicate of an earlier entry,
     // but still emits its WriteStatus.
-    frame->save_paths.push_back({relpath, acq_name});
+    frame->save_paths.push_back({relpath, stream});
     frame_lock.unlock();
 
     params.file_writer->process_frame(frame);
     return true;
+}
+
+
+// (file-local) Wall-clock unix time in ns, for FileStream timestamps.
+static long _unix_time_ns()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+
+// Deactivate one stream. Caller must hold 'mutex' and removes 'st' from
+// active_streams itself. See declaration in FrbServer.hpp for the contract.
+void FrbServer::_deactivate_stream(const shared_ptr<FileStream> &st, bool cancelled)
+{
+    st->cancelled = cancelled;
+    st->deactivated_at_unix_ns = _unix_time_ns();
+    inactive_streams[num_deactivated_streams % constants::inactive_file_stream_capacity] = st;
+    num_deactivated_streams++;
 }
 
 
@@ -1824,9 +1854,9 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
         auto &frame = *it;
         string filename = filename_pattern.expand(frame);
 
-        // acq_name = "": WriteFiles-triggered (as opposed to a stream).
+        // stream = nullptr: WriteFiles-triggered (as opposed to a stream).
         // Returns false if the frame was reaped without ever being written.
-        if (s->_queue_frame_write(frame, filename, ""))
+        if (s->_queue_frame_write(frame, filename, nullptr))
             filename_list.push_back(std::move(filename));
     }
 
@@ -1878,11 +1908,16 @@ void FrbRpcService::_StartStream(const fs::StartStreamRequest *request, fs::Star
     // safe relative path.
     FilenamePattern pattern(request->filename_pattern());
 
-    auto st = make_shared<FrbServer::ActiveStream>(pattern);
+    auto st = make_shared<FileStream>(pattern);
     st->acq_name = acq_name;
     st->pattern_string = request->filename_pattern();
     st->fpga_seq_start = fpga_seq_start;
     st->fpga_seq_end = fpga_seq_end;
+
+    // Wall-clock start time. Stamped before publication (the push into
+    // active_streams below, under s->mutex), so it is immutable-after-
+    // publication like the other args -- see FileStream's comment.
+    st->started_at_unix_ns = _unix_time_ns();
 
     unique_lock<std::mutex> server_lock(s->mutex);
 
@@ -1969,12 +2004,16 @@ void FrbRpcService::_ShowStreams(const fs::ShowStreamsRequest *request, fs::Show
     long seq_per_chunk = s->frame_allocator->time_samples_per_chunk * s->metadata->seq_per_frb_time_sample;
     long ichunk = s->rb_processed / nbeams;   // first not-fully-processed chunk
 
-    // Prune expired streams here too (the capture hook only prunes when a
-    // batch completes, so without this an expired stream would linger in
-    // the display whenever data stalls).
+    // Deactivate expired streams here too (the capture hook only runs when
+    // a batch completes, so without this an expired stream would linger as
+    // ACTIVE whenever data stalls).
+    for (const auto &st : s->active_streams) {
+        if (st->chunk_last < ichunk)
+            s->_deactivate_stream(st, /*cancelled=*/ false);
+    }
     s->active_streams.erase(
         std::remove_if(s->active_streams.begin(), s->active_streams.end(),
-                       [&](const std::shared_ptr<FrbServer::ActiveStream> &st)
+                       [&](const std::shared_ptr<FileStream> &st)
                        { return st->chunk_last < ichunk; }),
         s->active_streams.end());
 
@@ -1984,8 +2023,24 @@ void FrbRpcService::_ShowStreams(const fs::ShowStreamsRequest *request, fs::Show
     for (long beam_id : s->metadata->beam_ids)
         response->add_beam_ids(beam_id);
 
-    for (const auto &st : s->active_streams) {
-        fs::StreamInfo *info = response->add_streams();
+    response->set_num_deactivated_streams(s->num_deactivated_streams);
+
+    // Fills one StreamInfo. Counter reads: written/errored are loaded BEFORE
+    // queued, so the reported triple always satisfies written + errored <=
+    // queued (each written/errored file was queued strictly earlier, rules
+    // R1/R2). For a deactivated stream, queued is final, so equality means
+    // fully drained (INACTIVE); short of it, writes are in flight (DRAINING).
+    auto fill_stream_info = [](fs::StreamInfo *info,
+                               const std::shared_ptr<FileStream> &st, bool active) {
+        long written = st->num_files_written;
+        long errored = st->num_files_errored;
+        long queued  = st->num_files_queued;
+
+        fs::StreamStatus status =
+            active ? fs::STREAM_STATUS_ACTIVE
+                   : ((written + errored == queued) ? fs::STREAM_STATUS_INACTIVE
+                                                    : fs::STREAM_STATUS_DRAINING);
+
         fs::StartStreamRequest *args = info->mutable_args();
         args->set_acq_name(st->acq_name);
         args->set_filename_pattern(st->pattern_string);
@@ -1993,9 +2048,24 @@ void FrbRpcService::_ShowStreams(const fs::ShowStreamsRequest *request, fs::Show
             args->add_beam_ids(beam_id);
         args->set_fpga_seq_start(st->fpga_seq_start);
         args->set_fpga_seq_end(st->fpga_seq_end);
-        info->set_num_files_queued(st->num_files_queued);
-        info->set_num_bytes_queued(st->num_bytes_queued);
-    }
+
+        info->set_status(status);
+        info->set_cancelled(st->cancelled);
+        info->set_started_at_unix_ns(st->started_at_unix_ns);
+        info->set_deactivated_at_unix_ns(st->deactivated_at_unix_ns);
+        info->set_num_files_queued(queued);
+        info->set_num_files_written(written);
+        info->set_num_files_errored(errored);
+    };
+
+    for (const auto &st : s->active_streams)
+        fill_stream_info(response->add_streams(), st, /*active=*/ true);
+
+    // Inactive ring, oldest to newest (deactivation order).
+    constexpr long cap = constants::inactive_file_stream_capacity;
+    long n = s->num_deactivated_streams;
+    for (long i = std::max(0L, n - cap); i < n; i++)
+        fill_stream_info(response->add_streams(), s->inactive_streams[i % cap], /*active=*/ false);
 }
 
 grpc::Status FrbRpcService::ShowStreams(
@@ -2026,10 +2096,19 @@ void FrbRpcService::_CancelStream(const fs::CancelStreamRequest *request, fs::Ca
 
     // Note: cancellation only stops future matching. File writes already
     // queued to the FileWriter still complete, and still notify
-    // SubscribeFiles subscribers with this stream's acq_name.
+    // SubscribeFiles subscribers with this stream's acq_name. Cancelled
+    // streams remain visible in ShowStreams (inactive ring history).
 
     if (request->cancel_all()) {
+        // Deactivate ALL active streams, in active_streams (registration)
+        // order, however many there are: num_cancelled counts every one,
+        // even when more than the ring capacity are cancelled in a single
+        // request and the ring immediately evicts the oldest. (Ring
+        // residency is display-only history; cancellation semantics never
+        // depend on it.)
         long n = long(s->active_streams.size());
+        for (const auto &st : s->active_streams)
+            s->_deactivate_stream(st, /*cancelled=*/ true);
         s->active_streams.clear();
         response->set_num_cancelled(n);
         return;
@@ -2038,9 +2117,22 @@ void FrbRpcService::_CancelStream(const fs::CancelStreamRequest *request, fs::Ca
     const string &acq_name = request->acq_name();
     for (auto it = s->active_streams.begin(); it != s->active_streams.end(); ++it) {
         if ((*it)->acq_name == acq_name) {
+            s->_deactivate_stream(*it, /*cancelled=*/ true);
             s->active_streams.erase(it);
             response->set_num_cancelled(1);
             return;
+        }
+    }
+
+    // Not active. Distinguish "already inactive" (present in the ring) from
+    // "never heard of" for a clearer error message.
+    constexpr long cap = constants::inactive_file_stream_capacity;
+    long n = s->num_deactivated_streams;
+    for (long i = std::max(0L, n - cap); i < n; i++) {
+        if (s->inactive_streams[i % cap]->acq_name == acq_name) {
+            stringstream ss;
+            ss << "CancelStream: stream '" << acq_name << "' is already inactive";
+            throw runtime_error(ss.str());
         }
     }
 

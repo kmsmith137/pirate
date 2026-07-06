@@ -82,6 +82,9 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         .def_readonly_static("k_dm", &constants::k_dm,
             "Dispersion constant K_DM, in (ms MHz^2) per (pc cm^{-3}): dispersion delay (ms) = "
             "k_dm * DM * (f_lo^{-2} - f_hi^{-2}), with frequencies in MHz.")
+        .def_readonly_static("inactive_file_stream_capacity", &constants::inactive_file_stream_capacity,
+            "Number of inactive (expired/cancelled) FileStreams retained by an FrbServer for "
+            "ShowStreams history; the oldest are dropped beyond this.")
     ;
 
     // Main dedispersion classes defined here

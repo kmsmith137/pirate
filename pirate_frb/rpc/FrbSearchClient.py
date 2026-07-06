@@ -216,7 +216,7 @@ class FrbSearchClient:
         return acq_name, filename_pattern
 
     def show_streams(self):
-        """Query the server for its active streams.
+        """Query the server for its streams (active + recent history).
 
         Returns:
             ShowStreamsResponse protobuf message with fields:
@@ -225,11 +225,21 @@ class FrbSearchClient:
               been fully processed).
             - beam_ids: ALL beams processed by this server (not just those
               with active streams).
-            - streams: list of StreamInfo, each with 'args' (the original
-              StartStreamRequest, echoed back) and queued-so-far counters
-              'num_files_queued' / 'num_bytes_queued' (bytes are logical:
-              data arrays only, headers neglected, hardlinks counted at
-              full size).
+            - streams: list of StreamInfo -- active streams first, then
+              recently-deactivated (expired/cancelled) streams in
+              deactivation order. Each has 'args' (the original
+              StartStreamRequest, echoed back), 'status' (a StreamStatus:
+              ACTIVE, DRAINING = deactivated with writes still in flight,
+              or INACTIVE = deactivated and fully drained), 'cancelled'
+              (true = CancelStream, false = expired; meaningful when not
+              ACTIVE), wall-clock timestamps 'started_at_unix_ns' /
+              'deactivated_at_unix_ns' (0 while active), and counters
+              'num_files_queued' / 'num_files_written' /
+              'num_files_errored' (written + errored <= queued always;
+              equality on a deactivated stream = fully drained).
+            - num_deactivated_streams: total streams ever deactivated; if
+              it exceeds the non-ACTIVE entries listed, older history was
+              dropped (only the last few are retained).
         """
         request = frb_search_pb2.ShowStreamsRequest()
         return self.stub.ShowStreams(request)
@@ -239,12 +249,16 @@ class FrbSearchClient:
 
         File writes already queued still complete (and still notify
         subscribe_files() subscribers); cancellation only stops future
-        matching.
+        matching. Cancelled streams remain visible in show_streams()'s
+        bounded history.
 
         Args:
             acq_name: Stream to cancel (ignored if cancel_all=True).
-                Unknown acq_name raises grpc.RpcError.
-            cancel_all: If True, cancel all active streams.
+                An unknown or already-inactive acq_name raises
+                grpc.RpcError.
+            cancel_all: If True, cancel all active streams (however many;
+                returns the full count even if the display history retains
+                only the most recent few).
 
         Returns:
             Number of streams cancelled.

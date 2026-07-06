@@ -20,6 +20,7 @@ namespace pirate {
 
 class SlabAllocator;     // defined in SlabAllocator.hpp
 struct XEngineMetadata;  // defined in XEngineMetadata.hpp
+struct FileStream;       // defined in FileWriter.hpp
 namespace simpulse { struct SinglePulse; }  // defined in simpulse.hpp
 
 
@@ -196,14 +197,16 @@ struct AssembledFrame
     mutable std::mutex mutex;
     long finalize_count = 0;    // incremented by FrbServer worker thread(s)
 
-    // One queued write request: a relative output path, tagged with the
-    // acq_name of the stream that requested it ("" = WriteFiles-triggered).
-    // The acq_name rides through the FileWriter pipeline into the
-    // per-file WriteStatus, so SubscribeFiles notifications can report
-    // which stream (if any) triggered each file.
+    // One queued write request: a relative output path, plus the FileStream
+    // that requested it (null pointer = WriteFiles-triggered). The pointer
+    // gives the FileWriter worker threads access to the stream throughout
+    // the file-writing code: at completion they bump
+    // FileStream::num_files_written / num_files_errored, and copy
+    // stream->acq_name into the per-file WriteStatus so SubscribeFiles
+    // notifications can report which stream (if any) triggered each file.
     struct SaveRequest {
         std::filesystem::path path;
-        std::string acq_name;
+        std::shared_ptr<FileStream> stream;
     };
 
     // NOTE: all save_paths received from RPC clients MUST be validated with

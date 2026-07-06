@@ -309,12 +309,18 @@ void FileWriter::_nfs_thread_main()
             }
 
             if (frame->save_error) {
+                shared_ptr<FileStream> stream = frame->save_paths[nfs_count].stream;
                 WriteStatus ws;
                 ws.save_path = frame->save_paths[nfs_count].path;
-                ws.acq_name = frame->save_paths[nfs_count].acq_name;
+                ws.acq_name = stream ? stream->acq_name : "";
                 ws.error = frame->save_error;
                 frame_lock.unlock();
 
+                // Rule R2 (see FileStream's thread-safety comment): bump the
+                // stream counter BEFORE emitting the notification, so "client
+                // received the notification" implies "counter reflects it".
+                if (stream)
+                    stream->num_files_errored++;
                 _update_rpc_subscribers(ws);
 
                 // Re-acquire frame_lock, before going back to top of loop.
@@ -343,11 +349,16 @@ void FileWriter::_nfs_thread_main()
                     }
                 }
                 if (duplicate) {
+                    shared_ptr<FileStream> stream = frame->save_paths[nfs_count].stream;
                     WriteStatus ws;
                     ws.save_path = frame->save_paths[nfs_count].path;
-                    ws.acq_name = frame->save_paths[nfs_count].acq_name;
+                    ws.acq_name = stream ? stream->acq_name : "";
                     frame_lock.unlock();
 
+                    // A duplicate-skip counts as WRITTEN (the file is on disk
+                    // under this exact name). Rule R2: bump before notifying.
+                    if (stream)
+                        stream->num_files_written++;
                     _update_rpc_subscribers(ws);
 
                     // Re-acquire frame_lock, before going back to top of loop.
@@ -358,7 +369,7 @@ void FileWriter::_nfs_thread_main()
             }
 
             fs::path secondary_path = frame->save_paths[nfs_count].path;
-            string secondary_acq = frame->save_paths[nfs_count].acq_name;
+            shared_ptr<FileStream> secondary_stream = frame->save_paths[nfs_count].stream;
             frame_lock.unlock();
 
             try {
@@ -367,14 +378,21 @@ void FileWriter::_nfs_thread_main()
                 else
                     _hardlink_in_nfs(primary_path, secondary_path);
             } catch (...) {
+                // No counter bump here: nfs_count is not incremented, so this
+                // entry is re-processed by the save_error branch above, which
+                // counts it as errored (exactly one count per entry).
                 frame_lock.lock();
                 frame->save_error = std::current_exception();
                 continue;  // back to top of loop, with lock held, and without incrementing frame->nfs_count.
             }
 
+            // Rule R2: bump the stream counter BEFORE emitting the notification.
+            if (secondary_stream)
+                secondary_stream->num_files_written++;
+
             WriteStatus ws;
             ws.save_path = secondary_path;
-            ws.acq_name = secondary_acq;
+            ws.acq_name = secondary_stream ? secondary_stream->acq_name : "";
             _update_rpc_subscribers(ws);
 
             frame_lock.lock();

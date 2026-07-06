@@ -29,6 +29,7 @@ Run via: python -m pirate_frb test --net
 """
 
 import os
+import time
 import random
 import secrets
 import shutil
@@ -47,8 +48,9 @@ from ..core import (
     SlabAllocator,
     XEngineMetadata,
 )
-from ..pirate_pybind11 import FrbServer
+from ..pirate_pybind11 import FrbServer, constants
 from ..rpc import FrbSearchClient
+from ..rpc.grpc import frb_search_pb2
 from .utils import make_random_subscale_config, pick_receiver_worker_counts
 
 
@@ -146,6 +148,7 @@ class NetworkTester:
         self.stream_group = None    # dict, set once by _maybe_start_streams
         self.stream_must  = None    # set of (acq_name, filename), from _compute_stream_expectations
         self.stream_must_chunks = None   # list of chunk indices underlying stream_must
+        self.expected_deactivations = 0  # python-side mirror of ShowStreams.num_deactivated_streams
 
     def __enter__(self):
         os.makedirs(self.ssd_dir, exist_ok=True)
@@ -191,6 +194,14 @@ class NetworkTester:
         self._print_debug_counters()
         self._drain_filesub()
         self._drain_streamsub()
+        # Ring-history phases, in a deliberate order: the INACTIVE poll for
+        # acq_a/b/c must run while they are still in the inactive ring
+        # (deactivation budget: 4 entries so far, capacity >= 5), so the
+        # re-registration test (+1 entry) and the eviction subtest (which
+        # floods the ring) come after.
+        self._poll_streams_inactive()
+        self._test_stream_reregister()
+        self._test_stream_eviction()
         self._print_summary()
         self._verify_files()
         self._verify_stream_files()
@@ -628,21 +639,20 @@ class NetworkTester:
                 self.stream_must.add(("acq_b", fn_shared))
                 self.stream_must.add(("acq_c", fn_c))
 
-        # ShowStreams counter sanity. Streams may have expired (pruned from
-        # the listing) if rb_processed passed chunk_last; check whichever
-        # are still listed. num_bytes_queued is defined as logical
-        # data-array bytes: num_files_queued * slab_nbytes.
+        # ShowStreams counter sanity. Streams may already be deactivated
+        # (expired) and listed from the inactive-ring history; either way,
+        # every stream listed at this point is one of acq_a/b/c. The
+        # R1/R2 increment-ordering rules guarantee written + errored <=
+        # queued at every instant.
         must_files_per_stream = len(self.stream_must_chunks) * len(g['sel_beams'])
         max_files_per_stream = (g['chunk_last'] + 1) * len(g['sel_beams'])
-        slab = AssembledFrameAllocator.slab_nbytes(
-            self.p['total_nfreq'], self.p['time_samples_per_chunk'])
 
         ss = self.rpc_client.show_streams()
         assert list(ss.beam_ids) == self.beam_ids
         for info in ss.streams:
             assert info.args.acq_name in ("acq_a", "acq_b", "acq_c")
             assert list(info.args.beam_ids) == g['sel_beams']
-            assert info.num_bytes_queued == info.num_files_queued * slab
+            assert info.num_files_written + info.num_files_errored <= info.num_files_queued
             assert must_files_per_stream <= info.num_files_queued <= max_files_per_stream
 
     def _expect_rpc_error(self, fn, substr):
@@ -655,16 +665,44 @@ class NetworkTester:
         else:
             raise RuntimeError(f"expected RPC error containing {substr!r}, got success")
 
+    def _start_never_matching_stream(self, acq_name):
+        """Register a stream whose fpga range is in the far future, so it
+        never matches (no files, no notifications, zero counters). Used by
+        the cancel / ring-history subtests."""
+        p = self.p
+        rpc = self.rpc_client
+        spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
+        c_now = rpc.get_status().rb_processed // p['nbeams']
+        rpc.start_stream([self.beam_ids[0]], acq_name=acq_name,
+                         filename_pattern=f"{acq_name}_(BEAM)_(CHUNK).asdf",
+                         fpga_seq_start=(c_now + 10**6) * spc,
+                         fpga_seq_end=(c_now + 10**6 + 1) * spc)
+
     def _test_stream_misc(self):
         """StartStream/CancelStream validation failures + cancel semantics.
         Runs post-loop (so the server is rb_initialized and well past chunk
         0). The valid stream used for cancel tests lives in the far future,
-        so it never matches (no files, no notifications)."""
+        so it never matches (no files, no notifications).
+
+        Ring-history budget: this phase adds exactly 1 + (3 if the stream
+        group ran) entries to the inactive ring (misc_x's cancel, plus
+        acq_a/b/c via expiry or cancel_all -- each stream deactivates
+        exactly once). Keeping the running total at 4 < CAP until after
+        _poll_streams_inactive is what guarantees the poll finds acq_a/b/c
+        still visible in the ring."""
         rpc = self.rpc_client
         p = self.p
+
+        CAP = constants.inactive_file_stream_capacity
+        assert CAP >= 5, (
+            "test's stream-history budget assumes inactive_file_stream_capacity >= 5; "
+            "if the capacity was decreased, revisit _test_stream_misc / _test_stream_eviction")
+
         spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
         beam0 = self.beam_ids[0]
         c_now = rpc.get_status().rb_processed // p['nbeams']
+        ACTIVE   = frb_search_pb2.STREAM_STATUS_ACTIVE
+        INACTIVE = frb_search_pb2.STREAM_STATUS_INACTIVE
 
         def start(**kw):
             kw.setdefault('acq_name', 'misc_x')
@@ -690,21 +728,128 @@ class NetworkTester:
 
         # Cancel semantics: register a (never-matching) stream, then cancel it.
         start()()   # succeeds
-        assert 'misc_x' in [i.args.acq_name for i in rpc.show_streams().streams]
+        infos = [i for i in rpc.show_streams().streams if i.args.acq_name == 'misc_x']
+        assert len(infos) == 1 and infos[0].status == ACTIVE
         self._expect_rpc_error(start(), "already in use")           # duplicate acq_name
         assert rpc.cancel_stream(acq_name='misc_x') == 1
-        assert 'misc_x' not in [i.args.acq_name for i in rpc.show_streams().streams]
+        self.expected_deactivations += 1
+
+        # The cancelled stream remains VISIBLE, now in the inactive-ring
+        # history: it never matched anything, so its counters are all zero
+        # and it is INACTIVE (nothing to drain) immediately, cancelled=true.
+        infos = [i for i in rpc.show_streams().streams if i.args.acq_name == 'misc_x']
+        assert len(infos) == 1
+        info = infos[0]
+        assert info.status == INACTIVE
+        assert info.cancelled
+        assert info.num_files_queued == 0
+        assert info.num_files_written == 0
+        assert info.num_files_errored == 0
+        assert info.started_at_unix_ns > 0
+        assert info.deactivated_at_unix_ns >= info.started_at_unix_ns
+
+        # Cancelling an already-inactive stream is an error (with a clearer
+        # message than the never-heard-of case).
         self._expect_rpc_error(lambda: rpc.cancel_stream(acq_name='misc_x'),
+                               "already inactive")
+        self._expect_rpc_error(lambda: rpc.cancel_stream(acq_name='no_such_acq'),
                                "no active stream")
 
-        # cancel_all: 0 to 3 streams may remain (acq_a/b/c, if not yet
-        # expired). Their MUST files (computed in
+        # cancel_all: 0 to 3 streams may remain active (acq_a/b/c, if not
+        # yet expired). Their MUST files (computed in
         # _compute_stream_expectations, before this) already transitioned,
         # so their writes are queued regardless -- cancellation never
-        # retracts queued work.
+        # retracts queued work. Either way, all of a/b/c have been
+        # deactivated (expiry or cancel) once this returns.
         n = rpc.cancel_stream(cancel_all=True)
         assert 0 <= n <= 3
-        assert len(rpc.show_streams().streams) == 0
+        if self.stream_group is not None:
+            self.expected_deactivations += 3
+
+        ss = rpc.show_streams()
+        assert all(i.status != ACTIVE for i in ss.streams)
+        assert ss.num_deactivated_streams == self.expected_deactivations
+
+    def _poll_streams_inactive(self):
+        """Post-drain strong check: poll ShowStreams until acq_a/b/c all
+        report INACTIVE (deactivated + fully drained), then verify their
+        final counters: errored == 0 and written == queued. No timeout,
+        matching the drain philosophy: all three are already deactivated
+        (the misc phase ended with cancel_all), and every queued write
+        eventually completes. Visibility is guaranteed by the ring budget:
+        only 4 deactivations have happened, and CAP >= 5."""
+        if self.stream_group is None:
+            return
+        INACTIVE = frb_search_pb2.STREAM_STATUS_INACTIVE
+        acqs = ("acq_a", "acq_b", "acq_c")
+
+        while True:
+            ss = self.rpc_client.show_streams()
+            infos = [i for i in ss.streams if i.args.acq_name in acqs]
+            assert len(infos) == 3, \
+                f"acq_a/b/c not all visible in stream history: {[i.args.acq_name for i in infos]}"
+            if all(i.status == INACTIVE for i in infos):
+                break
+            time.sleep(0.05)
+
+        for i in infos:
+            # 'cancelled' may be True (the misc-phase cancel_all got there
+            # first) or False (expired naturally) -- both are valid.
+            assert i.num_files_errored == 0
+            assert i.num_files_written == i.num_files_queued
+            assert i.started_at_unix_ns > 0
+            assert i.deactivated_at_unix_ns >= i.started_at_unix_ns
+
+    def _test_stream_reregister(self):
+        """acq_name uniqueness is enforced against ACTIVE streams only:
+        re-registering an acq_name that still sits in the inactive-ring
+        history succeeds. (Run AFTER _poll_streams_inactive: this adds a
+        5th ring entry, eating the a/b/c visibility margin.)"""
+        rpc = self.rpc_client
+        assert any(i.args.acq_name == 'misc_x' for i in rpc.show_streams().streams)
+        self._start_never_matching_stream('misc_x')   # succeeds despite the ring entry
+        assert rpc.cancel_stream(acq_name='misc_x') == 1
+        self.expected_deactivations += 1
+        assert rpc.show_streams().num_deactivated_streams == self.expected_deactivations
+
+    def _test_stream_eviction(self):
+        """Ring eviction + the mass-cancellation property: a single
+        cancel_all over MORE than CAP streams cancels ALL of them
+        (num_cancelled counts every one), while the display history retains
+        only the newest CAP. Runs LAST among the stream subtests: it evicts
+        acq_a/b/c and misc_x from the ring (their checks are done)."""
+        rpc = self.rpc_client
+        CAP = constants.inactive_file_stream_capacity
+        ACTIVE   = frb_search_pb2.STREAM_STATUS_ACTIVE
+        INACTIVE = frb_search_pb2.STREAM_STATUS_INACTIVE
+
+        names = [f"evict_{i}" for i in range(CAP + 1)]
+        for name in names:
+            self._start_never_matching_stream(name)
+
+        n = rpc.cancel_stream(cancel_all=True)
+        assert n == CAP + 1
+        self.expected_deactivations += CAP + 1
+
+        ss = rpc.show_streams()
+        assert all(i.status != ACTIVE for i in ss.streams)
+
+        # cancel_all deactivates in registration order, so evict_0 is the
+        # oldest ring entry and the one evicted; the ring lists
+        # evict_1 .. evict_CAP, oldest to newest.
+        inactive = [i for i in ss.streams if i.status != ACTIVE]
+        assert len(inactive) == CAP
+        assert [i.args.acq_name for i in inactive] == names[1:]
+        for i in inactive:
+            assert i.status == INACTIVE   # never matched -> nothing to drain
+            assert i.cancelled
+            assert i.num_files_queued == 0
+            assert i.num_files_written == 0
+            assert i.num_files_errored == 0
+
+        # The monotone total counts evict_0 too -- this is how a client
+        # detects that history was dropped.
+        assert ss.num_deactivated_streams == self.expected_deactivations
 
     def _drain_streamsub(self):
         """Wait until every MUST (acq_name, filename) pair has arrived via

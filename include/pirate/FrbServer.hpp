@@ -4,11 +4,13 @@
 #include "Receiver.hpp"
 #include "AssembledFrame.hpp"
 #include "DedispersionConfig.hpp"
-#include "FileWriter.hpp"      // FilenamePattern (held by value in ActiveStream)
+#include "FileWriter.hpp"      // FileStream, FilenamePattern
 #include "XEngineMetadata.hpp"
+#include "constants.hpp"       // inactive_file_stream_capacity
 
 #include <ksgpu/xassert.hpp>
 
+#include <array>
 #include <condition_variable>
 #include <exception>
 #include <memory>
@@ -180,53 +182,53 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // Ring buffer has length (params.ringbuf_nchunks * metadata.get_nbeams()).
     std::vector<std::shared_ptr<AssembledFrame>> frame_ringbuf;
 
-    // ----- Active streams (StartStream / ShowStreams / CancelStream RPCs) -----
+    // ----- Streams (StartStream / ShowStreams / CancelStream RPCs) -----
 
-    // One registered "stream": frames matching (beam_ids x chunk range) are
-    // queued for disk writing by the frame_finalizing_thread, at the moment
-    // each frame transitions from "assembled" to "processed" (i.e. just
-    // before rb_processed advances past it -- see the capture-hook comment
-    // in _frame_finalizing_thread_main). Chunks already processed when the
+    // A "stream" (pirate::FileStream, defined in FileWriter.hpp): frames
+    // matching (beam_ids x chunk range) are queued for disk writing by the
+    // frame_finalizing_thread, at the moment each frame transitions from
+    // "assembled" to "processed" (i.e. just before rb_processed advances
+    // past it -- see the capture-hook comment in
+    // _frame_finalizing_thread_main). Chunks already processed when the
     // stream was registered are NOT captured retroactively (that's
     // WriteFiles' job).
-    struct ActiveStream {
-        // Immutable after construction.
-        std::string acq_name;          // nonempty; unique among active streams
-        std::string pattern_string;    // original filename_pattern (echoed by ShowStreams)
-        FilenamePattern pattern;       // validated form of pattern_string
-        std::vector<long> beam_ids;    // original args (nonempty, validated, distinct)
-        std::vector<int> beam_indices; // parallel: position in metadata->beam_ids
-        long fpga_seq_start = 0;       // original args (echoed by ShowStreams)
-        long fpga_seq_end = 0;
-        long chunk_first = 0;          // derived: fpga_seq_start / seq_per_chunk
-        long chunk_last = 0;           // derived: (fpga_seq_end-1) / seq_per_chunk, INCLUSIVE
-
-        // Mutable, protected by FrbServer::mutex. Incremented at queue time
-        // by the frame_finalizing_thread ("queued", not "written"). Bytes
-        // are logical: num_files_queued * AssembledFrameAllocator::
-        // slab_nbytes(...) -- data arrays only, file headers neglected, and
-        // full size counted even when the bytes land on disk as a hardlink.
-        long num_files_queued = 0;
-        long num_bytes_queued = 0;
-
-        ActiveStream(const FilenamePattern &pattern_) : pattern(pattern_) {}
-    };
 
     // Protected by 'mutex'. Expired streams (chunk_last fully processed)
-    // are pruned lazily, by the frame_finalizing_thread's capture hook and
-    // by the ShowStreams handler.
-    std::vector<std::shared_ptr<ActiveStream>> active_streams;
+    // are deactivated lazily, by the frame_finalizing_thread's capture hook
+    // and by the ShowStreams handler; CancelStream deactivates eagerly.
+    std::vector<std::shared_ptr<FileStream>> active_streams;
 
-    // Queue one file write on 'frame': push {relpath, acq_name} onto
+    // Ring of the last inactive_file_stream_capacity deactivated streams
+    // (expired or cancelled), retained for ShowStreams history. Protected
+    // by 'mutex'. Uses the same absolute-counter + modular-slot idiom as
+    // frame_ringbuf/rb_*: deactivated stream number i (0-based, in
+    // deactivation order) lives in slot i % capacity, so the ring holds
+    // entries [max(0, n - capacity), n) where n = num_deactivated_streams
+    // (the monotone total, exported by ShowStreams so clients can detect
+    // dropped history). Eviction just drops the shared_ptr; ring residency
+    // is display-only history -- cancellation semantics (drain,
+    // notifications, counters) never depend on it.
+    std::array<std::shared_ptr<FileStream>,
+               constants::inactive_file_stream_capacity> inactive_streams;
+    long num_deactivated_streams = 0;
+
+    // Deactivate one stream: stamp the deactivation fields (cancelled,
+    // deactivated_at_unix_ns) and append it to the inactive ring, evicting
+    // the oldest entry beyond capacity. Caller must hold 'mutex' and is
+    // responsible for removing 'st' from active_streams. Never retracts
+    // queued writes -- the FileWriter drains them regardless.
+    void _deactivate_stream(const std::shared_ptr<FileStream> &st, bool cancelled);
+
+    // Queue one file write on 'frame': push {relpath, stream} onto
     // frame->save_paths and hand the frame to the FileWriter (which does
     // all disk I/O on its own threads; process_frame only enqueues).
     // Returns false if the frame was skipped because it has been reaped
     // without ever being written. Shared by the WriteFiles RPC handler
-    // (acq_name = "") and the frame_finalizing_thread's stream-capture
+    // (stream = nullptr) and the frame_finalizing_thread's stream-capture
     // hook. Caller must NOT hold 'mutex' or frame->mutex.
     bool _queue_frame_write(const std::shared_ptr<AssembledFrame> &frame,
                             const std::string &relpath,
-                            const std::string &acq_name);
+                            const std::shared_ptr<FileStream> &stream);
 
     // Dedispersion plan built by the processing thread once X-engine metadata
     // is available. Null before that; non-null once the plan is announced.

@@ -47,6 +47,12 @@ struct constants
     static constexpr int cuda_max_y_blocks = 65535;
     static constexpr int cuda_max_z_blocks = 65535;
 
+    // Number of inactive (expired/cancelled) FileStreams retained by an
+    // FrbServer for ShowStreams history; the oldest are dropped beyond this.
+    // (Exposed to python -- see the reminder at the top of this struct. The
+    // network test reads it at runtime and assumes >= 5.)
+    static constexpr int inactive_file_stream_capacity = 5;
+
     // These assumptions are made all over the place.
     // (Placement of static_asserts in this source file is arbitrary.)
     static_assert(sizeof(int) == 4);

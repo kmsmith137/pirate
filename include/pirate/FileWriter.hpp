@@ -1,6 +1,7 @@
 #ifndef _PIRATE_FILE_WRITER_HPP
 #define _PIRATE_FILE_WRITER_HPP
 
+#include <atomic>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -139,6 +140,67 @@ private:
     std::string pattern;
     std::size_t beam_pos;   // position of "(BEAM)" in pattern
     std::size_t chunk_pos;  // position of "(CHUNK)" in pattern
+};
+
+
+// FileStream: one registered "stream" (StartStream RPC): frames matching
+// (beam_ids x chunk range) are queued for disk writing automatically as they
+// are processed. Created by FrbServer's StartStream handler; referenced by
+// FrbServer's active/inactive stream lists, and by AssembledFrame::SaveRequest
+// entries -- the latter is what gives the FileWriter worker threads access to
+// the stream throughout the file-writing code (to bump the written/errored
+// counters and tag notifications with acq_name).
+//
+// THREAD-SAFETY: the fields fall into three groups.
+//
+//   (i) Immutable after publication. Set by the StartStream handler before
+//       the stream is pushed into FrbServer::active_streams (a push made
+//       under FrbServer::mutex, which is also how every other thread
+//       discovers the stream) -- so any thread that can see the stream can
+//       read these freely.
+//
+//   (ii) Atomic counters, readable anywhere. Two ordering rules keep them
+//       sound (and must be preserved if new call sites are added):
+//         R1: num_files_queued is incremented by the frame_finalizing_thread
+//             at MATCH time, BEFORE the corresponding save_paths push.
+//         R2: num_files_written / num_files_errored are incremented by the
+//             FileWriter NFS threads at completion, BEFORE the corresponding
+//             subscriber notification is emitted.
+//       Consequences: written + errored <= queued at every instant, and once
+//       the stream is deactivated and the FileWriter drains,
+//       written + errored == queued ("fully drained") -- which is how
+//       ShowStreams distinguishes DRAINING from INACTIVE.
+//
+//   (iii) Deactivation fields, guarded by the owning FrbServer's mutex:
+//       written exactly once, in the same critical section that moves the
+//       stream from FrbServer::active_streams to the inactive ring, and read
+//       only under that mutex (ShowStreams / CancelStream). FileWriter code
+//       must never touch these.
+
+struct FileStream
+{
+    // (i) Immutable after publication.
+    std::string acq_name;          // nonempty; unique among ACTIVE streams
+    std::string pattern_string;    // original filename_pattern (echoed by ShowStreams)
+    FilenamePattern pattern;       // validated form of pattern_string
+    std::vector<long> beam_ids;    // original args (nonempty, validated, distinct)
+    std::vector<int> beam_indices; // parallel: position in metadata->beam_ids
+    long fpga_seq_start = 0;       // original args (echoed by ShowStreams)
+    long fpga_seq_end = 0;
+    long chunk_first = 0;          // derived: fpga_seq_start / seq_per_chunk
+    long chunk_last = 0;           // derived: (fpga_seq_end-1) / seq_per_chunk, INCLUSIVE
+    long started_at_unix_ns = 0;   // wall clock, stamped by StartStream
+
+    // (ii) Atomic counters (rules R1/R2 above).
+    std::atomic<long> num_files_queued = 0;
+    std::atomic<long> num_files_written = 0;   // includes duplicate-skips (file IS on disk)
+    std::atomic<long> num_files_errored = 0;
+
+    // (iii) Deactivation fields -- guarded by the owning FrbServer's mutex.
+    bool cancelled = false;             // true = CancelStream, false = expired
+    long deactivated_at_unix_ns = 0;    // wall clock; 0 while active
+
+    FileStream(const FilenamePattern &pattern_) : pattern(pattern_) {}
 };
 
 
