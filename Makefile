@@ -374,6 +374,7 @@ PYFILES = \
   pirate_frb/tests/utils.py \
   pirate_frb/utils/__init__.py \
   pirate_frb/utils/core.py \
+  pirate_frb/utils/list_acqdir.py \
   pirate_frb/utils/ThreadAffinity.py \
   pirate_frb/utils/network.py \
   pirate_frb/utils/time_cupy_dedisperser.py \
