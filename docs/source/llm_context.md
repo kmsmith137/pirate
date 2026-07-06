@@ -12,6 +12,7 @@ maxdepth: 1
 notes/cpp
 notes/gpu_kernels
 notes/pybind11
+notes/grpc
 notes/docstrings
 notes/thread_backed_class
 notes/cuda_event_ringbuf
