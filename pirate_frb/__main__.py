@@ -1180,10 +1180,10 @@ def parse_rpc_start_stream(subparsers):
     parser = subparsers.add_parser("rpc_start_stream", help=help_text, description=help_text)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
                         help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
-    parser.add_argument('-a', '--acqdir', default=None,
-                        help='Acquisition name AND directory (the CLI always uses stream_name == acqdir); '
-                             'shared across all servers; default: "stream_{date}_{time}", '
-                             'e.g. stream_26_07_07_143052')
+    parser.add_argument('-s', '--stem', default='stream',
+                        help='Filename stem; the CLI sets stream_name == acqdir == '
+                             '"{stem}_{date}_{time}", shared across all servers '
+                             '(default stem "stream", e.g. stream_26_07_07_143052)')
     parser.add_argument('-b', '--beam-id', type=int, action='append', metavar='BEAM_ID',
                         help='Beam id to stream (repeatable), routed to the server that owns it; '
                              'either -b or -B must be specified')
@@ -1247,9 +1247,9 @@ def rpc_start_stream(args):
         # Generate ONE stream_name/acqdir, shared across all target servers, so a
         # multi-server event lands in a single acqdir. (If each server defaulted
         # stream_name=None, each would generate a different timestamp.) The CLI
-        # keeps stream_name == acqdir; this mirrors FrbSearchClient.start_stream's
-        # default format.
-        stream_name = args.acqdir or ('stream_' + datetime.datetime.now().strftime('%y_%m_%d_%H%M%S'))
+        # keeps stream_name == acqdir == "{stem}_{date}_{time}"; the date format
+        # mirrors FrbSearchClient.start_stream's default (with a caller-chosen stem).
+        stream_name = args.stem + '_' + datetime.datetime.now().strftime('%y_%m_%d_%H%M%S')
 
         # Phase 3: start one stream per target server (fpga_seq_end is per-server,
         # since each server has its own current_fpga_seq).
