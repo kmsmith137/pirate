@@ -215,6 +215,7 @@ message SubscribeFilesResponse {
 message ReadySentinel {}
 
 // One completed file's write status.
+// Note: the filename is relative to the server's nfs_path.
 message WriteNotification {
   string filename      = 1;  // Valid only when error_message is empty.
   string error_message = 2;  // Empty = success; non-empty = error string.
