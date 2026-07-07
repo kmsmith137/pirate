@@ -171,12 +171,19 @@ void FrbGrouper::start_listening()
         opened = true;
     }
 
+    // Bind + start. The 2-arg AddListeningPort does NOT report a bind failure:
+    // if the port is already in use, BuildAndStart() still returns a non-null
+    // server, so we would "wait for FrbServer to connect" while not actually
+    // listening -- and the FrbServer that connects would hang forever. Use the
+    // 3-arg overload and check selected_port, which is 0 iff the bind failed.
     grpc::ServerBuilder builder;
-    builder.AddListeningPort(grouper_ip_addr, grpc::InsecureServerCredentials());
+    int selected_port = 0;
+    builder.AddListeningPort(grouper_ip_addr, grpc::InsecureServerCredentials(), &selected_port);
     builder.RegisterService(grpc_state->service.get());
     grpc_state->server = builder.BuildAndStart();
-    if (!grpc_state->server)
-        throw runtime_error("FrbGrouper: failed to bind " + grouper_ip_addr);
+    if (!grpc_state->server || (selected_port == 0))
+        throw runtime_error("FrbGrouper: failed to bind " + grouper_ip_addr
+                            + " (already in use, or malformed 'ip:port'?)");
 
     send_thread = std::thread(&FrbGrouper::send_thread_main, this);
 }

@@ -312,11 +312,19 @@ void FrbServer::start()
         // Create the RPC service (needs shared_from_this(), so can't be done in constructor).
         this->rpc_service = make_unique<FrbRpcService> (weak_from_this());
 
-        // Start the RPC server.
+        // Start the RPC server. The 2-arg AddListeningPort does NOT report a bind
+        // failure: if the port is already in use, BuildAndStart() still returns a
+        // non-null server, so the RPC server would silently not listen and any
+        // X-engine / rpc_* client that connects would hang. Use the 3-arg overload
+        // and check selected_port, which is 0 iff the bind failed.
         grpc::ServerBuilder builder;
-        builder.AddListeningPort(params.rpc_server_address, grpc::InsecureServerCredentials());
+        int selected_port = 0;
+        builder.AddListeningPort(params.rpc_server_address, grpc::InsecureServerCredentials(), &selected_port);
         builder.RegisterService(rpc_service.get());
         this->rpc_server = builder.BuildAndStart();
+        if (!this->rpc_server || (selected_port == 0))
+            throw runtime_error("FrbServer: failed to bind RPC server to " + params.rpc_server_address
+                                + " (already in use, or malformed 'ip:port'?)");
 
         // Spawn one worker thread per receiver.
         int nreceivers = params.receivers.size();
