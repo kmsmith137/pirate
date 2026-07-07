@@ -423,7 +423,15 @@ class RunServerHelper:
             if grouper_client is None:
                 continue
             print(f"Pinging grouper at {grouper_client.grouper_ip_addr} (server {i})...")
-            grouper_client.ping()
+            try:
+                grouper_client.ping()
+            except Exception:
+                # The grouper isn't up. Print how to start it (this is why
+                # _print_help_lines omits the grouper line -- once the servers are
+                # running, the grouper is necessarily already up), then re-raise.
+                grouper_addrs = ' '.join(self.config['grouper_ip_addrs'])
+                print(f"\nTo start toy grouper(s):  pirate_frb run_toy_grouper [-s SIFTER_ADDR] {grouper_addrs}\n")
+                raise
 
         # Phase 2: wait for all 3 * num_servers async BumpAllocators to
         # finish initializing. Any async-init failures surface here with a
@@ -581,12 +589,11 @@ class RunServerHelper:
 
     def _print_help_lines(self):
         rpc_addrs = ' '.join(self.config['rpc_ip_addrs'])
-        print(f"\nTo send fake data to server(s):  pirate_frb run_fake_xengine {rpc_addrs}")
-        print(f"To monitor status:               pirate_frb rpc_status {rpc_addrs}")
-        print(f"To write random data:            pirate_frb rpc_rand_write {rpc_addrs}")
-        if not self.no_grouper:
-            grouper_addrs = ' '.join(self.config['grouper_ip_addrs'])
-            print(f"To start toy grouper(s):         pirate_frb run_toy_grouper {grouper_addrs}")
+        print(f"\nTo send fake data to server(s):     pirate_frb run_fake_xengine {rpc_addrs}")
+        print(f"To monitor status:                    pirate_frb rpc_status {rpc_addrs}")
+        print(f"To write random data:                 pirate_frb rpc_rand_write {rpc_addrs}")
+        print(f"To stream data (all beams, 60 sec):   pirate_frb rpc_start_stream -B -d 60 {rpc_addrs}")
+        print(f"To show streams:                      pirate_frb rpc_show_streams {rpc_addrs}")
 
         print(f"\nReminder: the only way to interact with running server(s) is via RPC, see above.")
         print(f"All {self.n} server(s) started. Press Ctrl-C to stop.")
