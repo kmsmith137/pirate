@@ -136,11 +136,18 @@ void register_core_bindings(pybind11::module &m)
     // The 'data' member is int4 with shape (nfreq, ntime), but exposed to Python as uint8
     // with shape (nfreq, ntime/2) since numpy doesn't support sub-byte dtypes.
     py::class_<AssembledFrame, std::shared_ptr<AssembledFrame>>(m, "AssembledFrame",
-        "Data frame containing beamformed data for one (time_chunk, beam_id) pair.")
-        .def_readonly("nfreq", &AssembledFrame::nfreq)
-        .def_readonly("ntime", &AssembledFrame::ntime)
-        .def_readonly("beam_id", &AssembledFrame::beam_id)
-        .def_readonly("time_chunk_index", &AssembledFrame::time_chunk_index)
+        "Data frame containing beamformed data for one (time_chunk, beam_id) pair.\n\n"
+        "The data is stored in its raw binary format (int4, special value -8 indicates\n"
+        "masked data, float16 offsets/scales at lower resolution). Most python callers\n"
+        "will want to convert to float32 by calling dequantize().")
+        .def_readonly("nfreq", &AssembledFrame::nfreq,
+            "Number of frequency channels.")
+        .def_readonly("ntime", &AssembledFrame::ntime,
+            "Number of time samples in this frame's time chunk.")
+        .def_readonly("beam_id", &AssembledFrame::beam_id,
+            "Beam id of this frame.")
+        .def_readonly("time_chunk_index", &AssembledFrame::time_chunk_index,
+            "Index of this frame's time chunk (one \"chunk\" is ntime samples).")
         .def_property_readonly("fpga_seq_start", &AssembledFrame::fpga_seq_start,
             "FPGA sequence number at the start of this frame's time chunk\n"
             "(= time_chunk_index * ntime * metadata.seq_per_frb_time_sample).")
@@ -172,21 +179,24 @@ void register_core_bindings(pybind11::module &m)
                 arr.check_invariants("AssembledFrame::data getter");
                 return arr;
             },
-            "Data as uint8 array with shape (nfreq, ntime/2).\n\n"
-            "The underlying data is int4 (nfreq, ntime), packed as uint8.")
+            "Raw int4 data (pre-scaled) as uint8 array with shape (nfreq, ntime/2).\n\n"
+            "Most python callers will want to call dequantize(), rather than working directly\n"
+            "with the raw data.")
         .def_property_readonly("scales_offsets",
             [](const AssembledFrame &self) {
                 // The Array<void> already carries dtype Dtype(df_float, 16);
                 // ksgpu's pybind11 type_caster maps that to numpy np.float16.
                 return self.scales_offsets;
             },
-            "Scales/offsets as float16 array with shape (nfreq, mpc, 2),\n"
-            "where mpc = ntime / 256. The last axis is {scale, offset}.")
+            "Raw scales/offsets as float16 array with shape (nfreq, ntime/256, 2), "
+            "where the last axis is {scale, offset}.\n\n"
+            "Most python callers will want to call dequantize(), rather than working directly\n"
+            "with the scales/offsets.")
         .def("dequantize", &AssembledFrame::dequantize,
-            "Dequantize the int4 'data' to a float32 array of shape (nfreq, ntime),\n"
-            "applying the per-(freq, minichunk) affine transform from 'scales_offsets'\n"
-            "(via a ReferenceDequantizationKernel). The -8 'missing sample' sentinel\n"
-            "maps to 0. Single-beam: no leading beam axis in the result.")
+            "Convert raw data/scales/offsets to a float32 array of shape (nfreq, ntime).\n\n"
+            "NOTE: we currently convert masked samples (represented by raw int4 value -8) to\n"
+            "zeroes. We don't currently define a separate method to return the boolean mask,\n"
+            "but if you need this let me know.")
         .def("write_asdf", &AssembledFrame::write_asdf,
             py::arg("filename"), py::arg("sync") = true, py::arg("verbose") = false,
             "Write this AssembledFrame to an ASDF file.\n\n"
@@ -209,9 +219,9 @@ void register_core_bindings(pybind11::module &m)
         .def_static("from_asdf", &AssembledFrame::from_asdf,
             py::arg("filename"),
             "Read an AssembledFrame back from an ASDF file.\n\n"
-            "Note: XEngineMetadata is projected through ASDF -- after reading, the\n"
+            "Note: XEngineMetadata is \"projected\" through ASDF -- after reading, the\n"
             "metadata's beam_ids / beam_positions_{x,y} are length-1 (just this\n"
-            "frame's beam) and freq_channels is empty. See XEngineMetadata.hpp.")
+            "frame's beam) and freq_channels is empty.")
         .def("randomize", &AssembledFrame::randomize,
             // normalize/gaussian required (be explicit); sp/dt_sp default to "no pulse".
             py::arg("normalize"), py::arg("gaussian"),
@@ -220,23 +230,13 @@ void register_core_bindings(pybind11::module &m)
             py::call_guard<py::gil_scoped_release>(),
             "Fill the frame with random int4 data (intended for testing), optionally\n"
             "injecting a simulated FRB pulse.\n\n"
-            "gaussian=False: data is uniform over [-8, +7]. gaussian=True: data is\n"
+            "If gaussian=False, data is uniform over [-8, +7]. If gaussian=True, data is\n"
             "simulated Gaussian noise quantized to int4 and clamped to [-7, +7]\n"
             "(the -8 sentinel is never produced).\n\n"
-            "scales/offsets (same regardless of 'gaussian'): normalize=False -> scales\n"
-            "are uniform in [0, 1] and offsets in [-1, 1]. normalize=True -> offset = 0\n"
-            "and scale = sqrt(variance / Vq) per frequency zone -- Vq = 17.5 (uniform,\n"
-            "folding the -8 sentinel to 0) or avx2_4bit_postquant_noise_rms()**2\n"
-            "(gaussian) -- so the dequantized data has the per-zone variance in this\n"
-            "frame's own metadata.noise_variance.\n\n"
-            "sp (default None): a SinglePulse to add on top of the noise. Requires\n"
-            "gaussian=True and normalize=True, and that sp matches this frame's metadata\n"
-            "(nfreq, per-channel freq edges + noise variances, time-sample duration);\n"
-            "channel i maps directly to frame row i (both low-to-high). dt_sp (default\n"
-            "0): frame time offset vs the pulse (frame sample it -> pulse sample it+dt_sp).\n\n"
-            "Thread-safe with respect to the RNG (uses ksgpu's per-thread default\n"
-            "RNG), but the caller must ensure no other thread concurrently reads or\n"
-            "writes the same frame's data buffer -- only the RNG is protected.")
+            "If normalize=False, scales are uniform in [0,1] and offsets in [-1,1].\n"
+            "If normalize=True, then offsets are zero, and scales are chosen to match\n"
+            "metadata.noise_variance.\n\n"
+            "sp (default None): a simulated FRB to add on top of the noise.")
     ;
 
     // AssembledFrameSet: container of (nbeams) AssembledFrames for one time chunk.
