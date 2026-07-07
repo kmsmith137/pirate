@@ -15,14 +15,13 @@ _TMP_RE = re.compile(r"\.tmp[0-9a-fA-F]{8}$")
 
 
 class Acquisition:
-    """Parsed contents of an acquisition directory (a 'start_stream' acqdir).
+    """Helper class, to enumerate `frame_b{beam}_t{chunk}.asdf` files in a pirate acqdir.
 
-    Enumerates the 'frame_b(BEAM)_t(CHUNK).asdf' files the server writes (see
-    make_acq_relpath() in src_lib/FileWriter.cpp) and groups them by beam. The
-    constructor raises if the acqdir contains a file that doesn't match the scheme
-    (except uncommitted C++ make_tmp_filename() temp files, which are ignored with a
-    message printed to stdout), or if any beam's time (chunk) indices are not
-    contiguous. Different beams may span different time-index ranges.
+    Typically, the acqdir will be created by either `pirate_frb start_stream`,
+    or a triggered `WriteFiles` RPC. The constructor raises an exception if the
+    acqdir contains a file that's not of the form `frame_b{beam}_t{chunk}.asdf`,
+    or if any beam's time chunk indices are non-contiguous. Different beams may
+    span different time-index ranges;
 
     Attributes
     ----------
