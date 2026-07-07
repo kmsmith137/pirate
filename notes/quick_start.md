@@ -32,15 +32,25 @@ pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml
 pirate_frb run_fake_xengine -f -g 30 -s 127.0.0.1:7500 127.0.0.1:6000
 
 # Optional: in window 5, send RPC "status" requests to the server.
-# This will monitor connections, bytes received, files written, ring buffer state.
+# This will monitor connections, files written, and ring buffer state.
 pirate_frb rpc_status 127.0.0.1:6000
 
-# Optional: in window 6, send RPC "write_files" requests to the server, for randomly
+# Optional: in window 6, send RPC "start_stream" requests to the server.
+# Here, we dump beam_id=10 for 1000 seconds. (The wallclock time will be smaller,
+# since the toy server runs faster than real time.) Filenames will be printed in
+# the 'rpc_status' process (window 5) as they are written, and will look like:
+#   ~/pirate_toy/toy_stream_{date}_{time}/frame_b{beam}_t{chunk}.asdf
+pirate_frb rpc_start_stream -b 10 -d 1000 -s toy_stream 127.0.0.1:6000
+
+# Optional: in window 7, send RPC "show_streams" requests to the server.
+# This will show the status of current streams, and the last 5 inactive streams.
+# Note: there is also a command 'pirate_frb rpc_cancel_stream'.
+pirate_frb rpc_show_streams 127.0.0.1:6000
+
+# Optional: in window 8, send RPC "write_files" requests to the server, for randomly
 # chosen beams/times. Filenames will be printed in the 'rpc_status' process (window 5)
-# as they are written. Files land under the toy config's nfs_dir (~/pirate_toy), in a
-# per-invocation acqdir:
-#   ~/pirate_toy/rand_write_{date}_{time}/frame_b(BEAM)_t(CHUNK).asdf
-# They persist after the server exits (delete them by hand when you're done).
+# as they are written, and will look like:
+#   ~/pirate_toy/rand_write_{date}_{time}/frame_b{beam}_t{chunk}.asdf
 pirate_frb rpc_rand_write 127.0.0.1:6000
 ```
 In this example, we simulated FRBs and sent two event streams to the sifter.
@@ -52,7 +62,7 @@ These event streams are distinguished by the `from_simulator` flag
 
 Note that you don't need to run this entire sequence every time!
 The programs above have command-line args to "short-circuit" the downstream programs.
-(For example, `pirate_frb run_server ---no-grouper` or `pirate_frb run_toy_grouper --no-sifter`.)
+(For example, `pirate_frb run_server --no-grouper` or `pirate_frb run_toy_grouper --no-sifter`.)
 
 ## Running a production search (cf00/cf05)
 
@@ -63,29 +73,44 @@ sifter on cf05, but it could be run on cf00 (or a third node). Note that there
 are two grouper processes (one per GPU), each of which independently connects
 to the sifter.
 ```
-# Window cf05/1: start the sifter (waits for grouper to connect)
+# Window 1 (cf05): start the sifter (waits for grouper to connect)
 pirate_frb run_toy_sifter 10.222.3.5:7500
 
-# Window cf05/2: start the grouper (waits for search to connect)
+# Window 2 (cf05): start the grouper (waits for search to connect)
 pirate_frb run_toy_grouper -s 10.222.3.5:7500 127.0.0.1:7000 127.0.0.1:7001
 
-# Window cf05/3: start the search (waits for fake X-engine to connect)
+# Window 3 (cf05): start the search (waits for fake X-engine to connect)
 pirate_frb run_server configs/frb_server/cf05_production.yml configs/dedispersion/chord_sb2_et.yml
 
-# Window cf00/1: start the fake X-engine.
+# NOTE: you'll need to wait ~60 seconds before starting the fake x-engine,
+# while the production-scale server initializes. When it's ready, you'll see:
+# "All 2 server(s) started. Press Ctrl-C to stop.".
+
+# Window 4 (MUST BE ON CF00): start the fake X-engine.
 # Data will start streaming through all 4 processes.
 # The -f flag randomly simulates FRBs.
 # The -s SIFTER_ADDR flag sends an event to the sifter for each simulated FRB.
 pirate_frb run_fake_xengine -f -s 10.222.3.5:7500 10.222.3.5:6000 10.222.3.5:6001
 
-# Optional: on either cf00 or cf05, send RPC "status" requests to the server.
+# Optional: window 5 (either cf00 or cf05): send RPC "status" requests to the server.
+# This will monitor connections, files written, and ring buffer state.
 pirate_frb rpc_status 10.222.3.5:6000 10.222.3.5:6001
 
-# Optional: in another window on cf00 or cf05, send RPC "write_files" requests to the server, for randomly
-# chosen beams/times. Filenames will be printed in the 'rpc_status' process as they
-# are written. Files land on the real NFS server, under nfs_dir, in a per-invocation acqdir:
-#   /mnt/cs00/data/{user}/rand_write_{date}_{time}/frame_b(BEAM)_t(CHUNK).asdf
-# They persist after the server exits.
+# Optional: in window 6, send RPC "start_stream" requests to the server.
+# Here, we dump beam_id=100 for 1000 seconds. Filenames will be printed in
+# the 'rpc_status' process (window 5) as they are written, and will look like:
+#   /mnt/cs00/data/{user}/prod_stream_{date}_{time}/frame_b{beam}_t{chunk}.asdf
+pirate_frb rpc_start_stream -b 100 -d 1000 -s prod_stream 10.222.3.5:6000 10.222.3.5:6001
+
+# Optional: in window 7, send RPC "show_streams" requests to the server.
+# This will show the status of current streams, and the last 5 inactive streams.
+# Note: there is also a command 'pirate_frb rpc_cancel_stream'.
+pirate_frb rpc_show_streams 10.222.3.5:6000 10.222.3.5:6001
+
+# Optional: in window 8, send RPC "write_files" requests to the server, for randomly
+# chosen beams/times. Filenames will be printed in the 'rpc_status' process (window 5)
+# as they are written, and will look like:
+#   /mnt/cs00/data/{user}/rand_write_{date}_{time}/frame_b{beam}_t{chunk}.asdf
 pirate_frb rpc_rand_write 10.222.3.5:6000 10.222.3.5:6001
 ```
 See above for more info on the simulated FRB event streams, or on "short-circuting" the
