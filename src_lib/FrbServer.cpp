@@ -1,4 +1,5 @@
 #include "../include/pirate/FrbServer.hpp"
+#include "../include/pirate/FrbGrouper.hpp"       // FrbGrouperClient
 #include "../include/pirate/BumpAllocator.hpp"    // gpu_allocator / host_allocator (complete type)
 #include "../include/pirate/FileWriter.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
@@ -59,17 +60,9 @@ namespace fg = frb::grouper::v1;
 // pImpl for the FrbGrouper gRPC client state (see FrbServer.hpp). Holds the
 // channel, stub, ClientContext, and the bidi ClientReaderWriter for the active
 // Session RPC. Built + published by grouper_send_thread; cancelled by stop().
-struct FrbServer::GrouperClient {
-    std::shared_ptr<grpc::Channel> channel;
-    std::unique_ptr<fg::FrbGrouper::Stub> stub;
-    std::unique_ptr<grpc::ClientContext> context;
-    std::unique_ptr<grpc::ClientReaderWriter<fg::ProducerMessage,
-                                             fg::ConsumerMessage>> stream;
-
-    // Idempotent; safe to call from FrbServer::stop() on any thread. TryCancel()
-    // unblocks any in-flight stream->Read / stream->Write (they return false).
-    void cancel() { if (context) context->TryCancel(); }
-};
+// (The producer-side grouper connection now lives in FrbGrouperClient, in
+// FrbGrouper.{hpp,cpp}; FrbServer holds a shared_ptr<FrbGrouperClient> and drives
+// the protocol over it.)
 
 
 // GRPC service implementation. See bottom of file for implementations of individual RPCs.
@@ -201,20 +194,22 @@ FrbServer::FrbServer(const Params &p) : params(p)
 
     // --no-dedispersion implies --no-grouper: the processing thread skips all
     // GPU work (so the dedisperser produces no output), leaving nothing for a
-    // grouper to consume. run_server.py enforces this by forcing an empty
-    // grouper_ip_addr; assert it here to catch direct Python callers / future
+    // grouper to consume. run_server.py enforces this by passing no
+    // grouper_client; assert it here to catch direct Python callers / future
     // mis-wiring.
     if (params.no_dedispersion)
-        xassert(params.grouper_ip_addr.empty());
+        xassert(!params.grouper_client);
 
-    if (!params.grouper_ip_addr.empty()) {
+    if (params.grouper_client) {
+        const string &grouper_addr = params.grouper_client->grouper_ip_addr;
+
         // CUDA IPC requires producer + consumer on the same physical GPU, so the
         // grouper must be local. Enforce a loopback address.
         string ip; uint16_t port;
-        parse_ip_address(params.grouper_ip_addr, ip, port);   // network_utils.hpp
+        parse_ip_address(grouper_addr, ip, port);   // network_utils.hpp
         if (!is_loopback_address(ip)) {
             stringstream ss;
-            ss << "FrbServer: grouper_ip_addr=" << params.grouper_ip_addr
+            ss << "FrbServer: grouper address " << grouper_addr
                << " is not a loopback address (CUDA IPC requires the grouper to be "
                << "on the same node / GPU)";
             throw runtime_error(ss.str());
@@ -227,12 +222,16 @@ FrbServer::FrbServer(const Params &p) : params(p)
         // null shared_ptr (cudaIpcGetMemHandle(nullptr) would then fail). Neither
         // can back output_ringbuf, so require capacity > 0.
         if (params.gpu_allocator->capacity <= 0) {
-            throw runtime_error("FrbServer: grouper_ip_addr requires a non-empty, "
+            throw runtime_error("FrbServer: a grouper requires a non-empty, "
                                 "non-dummy gpu_allocator (CUDA IPC needs a real GPU "
                                 "allocation; capacity < 0 is dummy mode, capacity == 0 "
                                 "allocates nothing)");
         }
     }
+
+    // Publish the (immutable-after-construction) grouper client, so the grouper
+    // threads and stop() can read it without a lock.
+    grouper_client = params.grouper_client;
 
     // Note: rpc_service is created in start(), not here, because we need shared_from_this().
 }
@@ -341,7 +340,7 @@ void FrbServer::start()
         processing_thread       = std::thread(&FrbServer::processing_thread_main,       this);
         frame_finalizing_thread = std::thread(&FrbServer::frame_finalizing_thread_main, this);
 
-        if (params.grouper_ip_addr.empty()) {
+        if (!params.grouper_client) {
             // No grouper: start receivers now.
             for (auto &r : params.receivers)
                 r->start();
@@ -378,19 +377,14 @@ void FrbServer::stop(std::exception_ptr e)
     shared_ptr<CudaEventRingbuf> edq  = evrb_dq;
     shared_ptr<CudaEventRingbuf> eh2g = evrb_h2g;
 
-    // Snapshot the grouper client pointer under the lock. grouper_send_thread
-    // publishes grouper_client under this same mutex *after* checking is_stopped,
-    // so either we ran first (it never publishes) or it published before this
-    // snapshot -- no lost wakeup. The raw pointer stays valid for the duration of
-    // stop() because grouper_client is destroyed only in ~FrbServer (after joins).
-    GrouperClient *gc = grouper_client.get();
-
     cv.notify_all();
     lock.unlock();
 
     // Cancel the grouper Session RPC: TryCancel() unblocks any in-flight
-    // stream->Read (receive thread) / stream->Write (send thread).
-    if (gc) gc->cancel();
+    // read() (receive thread) / write() (send thread). grouper_client is set at
+    // construction and immutable, so it is safe to read here without the lock;
+    // cancel() is idempotent and a no-op if connect() hasn't run yet.
+    if (grouper_client) grouper_client->cancel();
 
     // Unblock the two FrbServer-owned evrbs.
     if (edq) edq->stop();
@@ -778,7 +772,7 @@ void FrbServer::_processing_thread_main()
     dd_params.nbatches_out = 2 * config_postfilled.num_active_batches;  // leave a little headroom for grouper
     dd_params.nbatches_wt = (params.nbatches_wt > 0) ? params.nbatches_wt
                                                      : config_postfilled.num_active_batches;
-    dd_params.num_consumers = params.grouper_ip_addr.empty() ? 0 : 1;
+    dd_params.num_consumers = params.grouper_client ? 1 : 0;
     dd_params.synchronous = false;
     dd_params.cuda_device_id = params.cuda_device_id;
     
@@ -1348,7 +1342,7 @@ void FrbServer::_deactivate_stream(const shared_ptr<FileStream> &st, bool cancel
 //
 // FrbGrouper client: send thread + receive thread + handshake builder.
 //
-// Only active when params.grouper_ip_addr is non-empty. The send thread is the
+// Only active when params.grouper_client is non-null. The send thread is the
 // single GpuDedisperser output consumer (consumer_id 0): it connects to the
 // grouper, starts the receivers, builds + sends the Handshake, then streams
 // produced_seq_ids (one per cdd2-produced batch). The receive thread reads
@@ -1436,61 +1430,28 @@ void FrbServer::_grouper_send_thread_main()
 {
     CUDA_CALL(cudaSetDevice(params.cuda_device_id));   // cudaIpcGetMemHandle, acquire_output(sync)
 
-    // (1) Build the gRPC client WITHOUT the lock (CreateCustomChannel/NewStub
-    // allocate gRPC internals + may start name resolution -- too heavy to hold
-    // the hot FrbServer::mutex across), then publish it under the lock.
-    //
-    // Cap the channel's connection-reconnect backoff at 1s. By default gRPC
-    // backs off exponentially between TCP connect attempts (1s, 1.6s, ... up to
-    // 120s), so if the grouper isn't up yet the producer can be slow to notice
-    // it appear -- the wait loop below polls once/sec, but GetState(
-    // try_to_connect=true) does NOT shorten an in-progress backoff. With
-    // initial == max == 1s, the channel retries ~once per second.
-    grpc::ChannelArguments chan_args;
-    chan_args.SetInt(GRPC_ARG_INITIAL_RECONNECT_BACKOFF_MS, 1000);
-    chan_args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, 1000);
+    // (1) Open the real connection to the grouper. grouper_client was constructed
+    //     and pinged in run_server (before bump allocation), so this is a BOUNDED
+    //     reconnect: connect() builds a fresh channel + stub, waits for READY, and
+    //     opens the Session stream, throwing if the grouper is not reachable
+    //     within grouper_connect_timeout_ms (rather than the old infinite poll).
+    //     Recheck is_stopped first so we don't start an RPC we're about to abandon.
+    { unique_lock<std::mutex> lock(mutex); if (is_stopped) return; }
+    grouper_client->connect(constants::grouper_connect_timeout_ms);
 
-    auto gc = make_unique<GrouperClient>();
-    gc->channel = grpc::CreateCustomChannel(params.grouper_ip_addr,
-                                            grpc::InsecureChannelCredentials(),
-                                            chan_args);
-    gc->stub    = fg::FrbGrouper::NewStub(gc->channel);
-    gc->context = make_unique<grpc::ClientContext>();
-    {
-        unique_lock<std::mutex> lock(mutex);
-        if (is_stopped) return;            // stop() ran during construction; drop gc, return
-        grouper_client = std::move(gc);    // publish (O(1) move)
-    }
-
-    // (2) Wait for the channel to become READY, printing once/sec.
-    //     (try_to_connect=true kicks the channel out of IDLE.)
-    auto channel = grouper_client->channel;
-    while (channel->GetState(/*try_to_connect=*/true) != GRPC_CHANNEL_READY) {
-        { unique_lock<std::mutex> lock(mutex); if (is_stopped) return; }
-        std::cout << "FrbServer: waiting for grouper at "
-                  << params.grouper_ip_addr << " ..." << std::endl;
-        // Block up to 1s for a state change (bounds is_stopped re-check latency).
-        auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(1);
-        channel->WaitForStateChange(channel->GetState(false), deadline);
-    }
-
-    std::cout << "FrbServer: connected to grouper at " << params.grouper_ip_addr << std::endl;
+    std::cout << "FrbServer: connected to grouper at "
+              << grouper_client->grouper_ip_addr << std::endl;
     std::cout << "FrbServer: waiting for X-engine node(s) to connect at "
               << params.rpc_server_address << " (Ctrl-C to stop)" << std::endl;
 
-    // (3) Open the Session stream. Recheck is_stopped first (see
-    //     plans/grouper_client.md 4g): avoids starting an RPC we're about to
-    //     abandon if stop() landed during the connect loop.
-    { unique_lock<std::mutex> lock(mutex); if (is_stopped) return; }
-    grouper_client->stream = grouper_client->stub->Session(grouper_client->context.get());
-
-    // (4) Start receivers NOW (see "Thread ordering"). Data ingest begins ->
+    // (2) Start receivers NOW (unchanged location: after the grouper is connected,
+    //     before the Handshake -- see "Thread ordering"). Data ingest begins ->
     //     metadata arrives -> processing_thread builds the dedisperser.
     { unique_lock<std::mutex> lock(mutex); if (is_stopped) return; }
     for (auto &r : params.receivers)
         r->start();
 
-    // (5) Block until the dedisperser is initialized + allocated.
+    // (3) Block until the dedisperser is initialized + allocated.
     shared_ptr<GpuDedisperser> dd;
     shared_ptr<DedispersionPlan> plan_snap;
     {
@@ -1501,17 +1462,17 @@ void FrbServer::_grouper_send_thread_main()
         plan_snap = plan;
     }
 
-    // (6) Build + send the Handshake.
+    // (4) Build + send the Handshake.
     fg::ProducerMessage msg;
     fg::Handshake *hs = msg.mutable_handshake();
     _fill_handshake(hs, dd, plan_snap);
-    if (!grouper_client->stream->Write(msg))
+    if (!grouper_client->write(msg))
         throw runtime_error("FrbServer: grouper Write(Handshake) failed (stream closed)");
 
-    // (7) Read the single HandshakeReply (the only Read done by this thread;
+    // (5) Read the single HandshakeReply (the only Read done by this thread;
     //     receive_thread does all subsequent Reads).
     fg::ConsumerMessage reply;
-    if (!grouper_client->stream->Read(&reply))
+    if (!grouper_client->read(&reply))
         throw runtime_error("FrbServer: grouper closed stream before HandshakeReply");
     if (reply.body_case() != fg::ConsumerMessage::kHandshakeReply)
         throw runtime_error("FrbServer: expected HandshakeReply as first grouper message");
@@ -1519,10 +1480,10 @@ void FrbServer::_grouper_send_thread_main()
         throw runtime_error("FrbServer: grouper rejected handshake: "
                             + reply.handshake_reply().error_message());
 
-    // (8) Wake receive_thread.
+    // (6) Wake receive_thread.
     { lock_guard<std::mutex> lock(mutex); grouper_handshake_done = true; cv.notify_all(); }
 
-    // (9) Steady-state produced loop.
+    // (7) Steady-state produced loop.
     for (long seq_id = 0; ; seq_id++) {
         // Blocks the host until cdd2 has produced seq_id (or throws on stop).
         // sync=true -> 'stream' arg ignored; noreturn=true -> no Outputs built.
@@ -1531,7 +1492,7 @@ void FrbServer::_grouper_send_thread_main()
 
         fg::ProducerMessage pm;
         pm.set_produced_seq_id(seq_id);
-        if (!grouper_client->stream->Write(pm))
+        if (!grouper_client->write(pm))
             throw runtime_error("FrbServer: grouper Write(produced_seq_id) failed");
     }
 }
@@ -1584,15 +1545,14 @@ void FrbServer::_grouper_receive_thread_main()
         xassert(dd);
     }
 
-    // grouper_client->stream was published by send_thread before it set
-    // grouper_handshake_done (same mutex), so it is safe to read here. gRPC
+    // grouper_client->connect() opened the Session stream in send_thread before
+    // it set grouper_handshake_done (same mutex), so reads here are safe. gRPC
     // permits one concurrent Read (here) + one concurrent Write (send thread).
-    auto *stream = grouper_client->stream.get();
 
     // (2) Steady-state consumed loop.
     for (long seq_id = 0; ; seq_id++) {
         fg::ConsumerMessage msg;
-        if (!stream->Read(&msg)) {
+        if (!grouper_client->read(&msg)) {
             // Stream closed. If we initiated it (stop), exit quietly; else throw.
             { unique_lock<std::mutex> lock(mutex); if (is_stopped) return; }
             throw runtime_error("FrbServer: grouper Session stream closed unexpectedly");

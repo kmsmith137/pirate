@@ -39,6 +39,119 @@ namespace fg = frb::grouper::v1;
 
 // -------------------------------------------------------------------------------------------------
 //
+// FrbGrouperClient (gRPC *client* side; declared in FrbGrouper.hpp). Owns the
+// producer-side channel / stub / Session stream + the connect/ping/cancel logic.
+// FrbServer drives the protocol (Handshake + produced/consumed loops) over it.
+
+
+struct FrbGrouperClient::GrpcState
+{
+    std::shared_ptr<grpc::Channel> channel;
+    std::unique_ptr<fg::FrbGrouper::Stub> stub;
+    std::unique_ptr<grpc::ClientContext> context;
+    std::unique_ptr<grpc::ClientReaderWriter<fg::ProducerMessage,
+                                             fg::ConsumerMessage>> stream;
+};
+
+
+// Channel args shared by ping() and connect(): cap the connection-reconnect
+// backoff at 1s (gRPC defaults to exponential backoff up to 120s, which would
+// make a bounded READY wait racy). initial == max == 1s => retry ~once/second.
+static grpc::ChannelArguments _grouper_chan_args()
+{
+    grpc::ChannelArguments a;
+    a.SetInt(GRPC_ARG_INITIAL_RECONNECT_BACKOFF_MS, 1000);
+    a.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, 1000);
+    return a;
+}
+
+
+// Bring 'channel' to GRPC_CHANNEL_READY within timeout_ms, else throw.
+static void _wait_ready_or_throw(const shared_ptr<grpc::Channel> &channel,
+                                 const string &grouper_ip_addr, int timeout_ms)
+{
+    auto deadline = std::chrono::system_clock::now() + std::chrono::milliseconds(timeout_ms);
+    while (true) {
+        // Observe the state once (try_to_connect=true kicks the channel out of
+        // IDLE and starts connecting), and pass that same observation to
+        // WaitForStateChange -- so we wait for a change away from exactly what we
+        // saw, with no GetState()-called-twice race.
+        auto state = channel->GetState(/*try_to_connect=*/true);
+        if (state == GRPC_CHANNEL_READY)
+            return;
+        // Returns false iff the deadline expired with no change. Re-check once on
+        // expiry, in case we became READY right at the deadline.
+        if (!channel->WaitForStateChange(state, deadline)) {
+            if (channel->GetState(/*try_to_connect=*/false) == GRPC_CHANNEL_READY)
+                return;
+            stringstream ss;
+            ss << "FrbGrouperClient: grouper at " << grouper_ip_addr
+               << " not reachable within " << timeout_ms
+               << " ms (is run_toy_grouper running?)";
+            throw runtime_error(ss.str());
+        }
+    }
+}
+
+
+FrbGrouperClient::FrbGrouperClient(const string &grouper_ip_addr_)
+    : grouper_ip_addr(grouper_ip_addr_), grpc_state(make_unique<GrpcState>())
+{ }
+
+FrbGrouperClient::~FrbGrouperClient() = default;
+
+
+void FrbGrouperClient::ping(int timeout_ms)
+{
+    // Channel-level connectivity check: a throwaway channel, brought to READY,
+    // then dropped. No Session RPC / Handshake, so the grouper's single-session
+    // state is untouched.
+    auto channel = grpc::CreateCustomChannel(grouper_ip_addr,
+                                             grpc::InsecureChannelCredentials(),
+                                             _grouper_chan_args());
+    _wait_ready_or_throw(channel, grouper_ip_addr, timeout_ms);
+}
+
+
+void FrbGrouperClient::connect(int timeout_ms)
+{
+    // Fresh channel + stub (ping()'s throwaway channel was dropped). Wait for
+    // READY, then open the Session stream.
+    grpc_state->channel = grpc::CreateCustomChannel(grouper_ip_addr,
+                                                    grpc::InsecureChannelCredentials(),
+                                                    _grouper_chan_args());
+    grpc_state->stub = fg::FrbGrouper::NewStub(grpc_state->channel);
+    _wait_ready_or_throw(grpc_state->channel, grouper_ip_addr, timeout_ms);
+    grpc_state->context = make_unique<grpc::ClientContext>();
+    grpc_state->stream  = grpc_state->stub->Session(grpc_state->context.get());
+}
+
+
+bool FrbGrouperClient::write(const fg::ProducerMessage &msg)
+{
+    xassert(grpc_state->stream);   // connect() must have run first
+    return grpc_state->stream->Write(msg);
+}
+
+
+bool FrbGrouperClient::read(fg::ConsumerMessage *msg)
+{
+    xassert(grpc_state->stream);   // connect() must have run first
+    return grpc_state->stream->Read(msg);
+}
+
+
+void FrbGrouperClient::cancel()
+{
+    // Idempotent; safe from any thread. TryCancel() unblocks any in-flight
+    // Write/Read (they return false).
+    if (grpc_state->context)
+        grpc_state->context->TryCancel();
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // Helper: build a strided Array<void> view from an ArrayDescriptor. ksgpu's
 // default ctor + manual field init + check_invariants() is the documented way
 // to wrap externally-owned (here, IPC-mapped) memory.

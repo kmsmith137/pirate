@@ -40,6 +40,7 @@ struct GpuDedisperser;    // Dedisperser.hpp
 struct CudaStreamPool;    // CudaStreamPool.hpp
 struct CudaEventRingbuf;  // CudaEventRingbuf.hpp
 struct FrbRpcService;     // defined in FrbServer.cpp
+struct FrbGrouperClient;  // FrbGrouper.hpp (producer-side grouper connection)
 
 
 // FrbServer: a thread-backed class that manages Receivers and an RPC service.
@@ -111,11 +112,12 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
         // rb_assembled during the "work".
         double processing_delay_sec = 0.0;
 
-        // gRPC address ("ip:port") of the FrbGrouper this server feeds. Empty
-        // string => no grouper (no Session RPC; GpuDedisperser built with
-        // num_consumers=0). Must be a loopback address (CUDA IPC requires the
-        // grouper to be on the same physical GPU); the constructor enforces this.
-        std::string grouper_ip_addr;
+        // The FrbGrouper this server feeds, already constructed (and typically
+        // pinged) by the caller and handed in -- the way receivers / file_writer
+        // are. Null => no grouper (no Session RPC; GpuDedisperser built with
+        // num_consumers=0). Its address must be loopback (CUDA IPC requires the
+        // grouper on the same physical GPU); the constructor enforces this.
+        std::shared_ptr<FrbGrouperClient> grouper_client;
 
         // Weight-ring depth (GpuDedisperser::Params::nbatches_wt) of the internal
         // dedisperser. 0 (default) = num_active_batches. Must be >= num_active_batches
@@ -287,19 +289,19 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // (signaled via evrb_h2g). See top-of-file comment.
     std::thread frame_finalizing_thread;
 
-    // ----- FrbGrouper client state (only used when params.grouper_ip_addr is set) -----
+    // ----- FrbGrouper client state (only used when params.grouper_client is set) -----
 
-    // gRPC client state for the FrbGrouper Session stream. Defined in
-    // FrbServer.cpp (holds channel, stub, ClientContext, ClientReaderWriter).
-    // Hidden behind a pImpl so this header does not pull in grpc++/protobuf.
-    struct GrouperClient;
-    std::unique_ptr<GrouperClient> grouper_client;   // null unless grouper enabled
+    // The producer-side grouper connection (owns channel/stub/Session stream +
+    // connect/cancel). Copied from params.grouper_client at construction and
+    // immutable thereafter (so the grouper threads / stop() read it without a
+    // lock). Null unless grouper enabled.
+    std::shared_ptr<FrbGrouperClient> grouper_client;
 
     // Set true (under mutex) by grouper_send_thread once the handshake has been
     // sent and HandshakeReply received; wakes grouper_receive_thread.
     bool grouper_handshake_done = false;
 
-    // Grouper threads (only spawned when params.grouper_ip_addr is non-empty).
+    // Grouper threads (only spawned when params.grouper_client is non-null).
     std::thread grouper_send_thread;
     std::thread grouper_receive_thread;
 

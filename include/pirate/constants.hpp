@@ -53,6 +53,16 @@ struct constants
     // network test reads it at runtime and assumes >= 5.)
     static constexpr int inactive_file_stream_capacity = 5;
 
+    // Timeouts (milliseconds) for FrbGrouperClient's connection to the FrbGrouper.
+    // grouper_ping_timeout_ms: the early channel-level ping() done during server
+    //   startup (before bump allocation) -- fail fast if the grouper isn't up.
+    // grouper_connect_timeout_ms: the real reconnect done later, in
+    //   grouper_send_thread just before the Handshake. Small because the grouper
+    //   is always loopback (CUDA IPC requires it on the same node).
+    // (Both exposed to python -- see the reminder at the top of this struct.)
+    static constexpr int grouper_ping_timeout_ms = 5000;
+    static constexpr int grouper_connect_timeout_ms = 2000;
+
     // These assumptions are made all over the place.
     // (Placement of static_asserts in this source file is arbitrary.)
     static_assert(sizeof(int) == 4);

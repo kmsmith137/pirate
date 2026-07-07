@@ -85,6 +85,12 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         .def_readonly_static("inactive_file_stream_capacity", &constants::inactive_file_stream_capacity,
             "Number of inactive (expired/cancelled) FileStreams retained by an FrbServer for "
             "ShowStreams history; the oldest are dropped beyond this.")
+        .def_readonly_static("grouper_ping_timeout_ms", &constants::grouper_ping_timeout_ms,
+            "Timeout (ms) for FrbGrouperClient.ping(): the early channel-level connectivity "
+            "check done before bump allocation, to fail fast if the grouper isn't running.")
+        .def_readonly_static("grouper_connect_timeout_ms", &constants::grouper_connect_timeout_ms,
+            "Timeout (ms) for the real FrbGrouperClient reconnect (done in grouper_send_thread "
+            "just before the Handshake).")
     ;
 
     // Main dedispersion classes defined here

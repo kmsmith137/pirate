@@ -4,6 +4,7 @@
 #include "Dedisperser.hpp"          // GpuDedisperser::Outputs (+ ksgpu Array/Dtype)
 #include "XEngineMetadata.hpp"
 #include "DedispersionConfig.hpp"
+#include "constants.hpp"            // FrbGrouperClient default timeouts
 
 #include <yaml-cpp/yaml.h>          // YAML::Node
 
@@ -16,10 +17,11 @@
 #include <thread>
 #include <vector>
 
-// Forward-declare the generated proto type used by _process_handshake(), so
-// this header (included by pybind) does not pull in grpc++/protobuf. The .cpp
-// includes the generated headers.
-namespace frb::grouper::v1 { class Handshake; }
+// Forward-declare the generated proto types used below (by FrbGrouper's
+// _process_handshake() and by FrbGrouperClient's write()/read()), so this header
+// (included by pybind) does not pull in grpc++/protobuf. The .cpp includes the
+// generated headers.
+namespace frb::grouper::v1 { class Handshake; class ProducerMessage; class ConsumerMessage; }
 
 namespace pirate {
 #if 0
@@ -27,6 +29,64 @@ namespace pirate {
 #endif
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// FrbGrouperClient: gRPC *client* side of the FrbGrouper service -- the producer
+// (FrbServer) end of the connection. Owns the channel / stub / Session stream and
+// the connect/ping/cancel logic; FrbServer drives the protocol (Handshake +
+// produced/consumed loops) over it, on threads FrbServer owns.
+//
+// Usage: run_server constructs one per server, calls ping() EARLY (before bump
+// allocation) to fail fast if the grouper isn't running, then passes it into the
+// FrbServer constructor (the way Receivers / FileWriter are passed in). Later,
+// FrbServer's grouper_send_thread calls connect() just before the Handshake.
+
+
+struct FrbGrouperClient
+{
+    explicit FrbGrouperClient(const std::string &grouper_ip_addr);
+    ~FrbGrouperClient();
+
+    // The grouper's "ip:port" (loopback -- CUDA IPC requires it on the same node).
+    std::string grouper_ip_addr;
+
+    // Channel-level connectivity check: bring a throwaway channel to READY, then
+    // drop it. NO Session RPC, NO Handshake -- so it does not touch the grouper's
+    // single-session state. Throws runtime_error if the grouper is not reachable
+    // within timeout_ms. Meant to be called early in server startup.
+    void ping(int timeout_ms = constants::grouper_ping_timeout_ms);
+
+    // Open the real connection: build a fresh channel + stub, wait for READY
+    // (throws runtime_error on timeout), and open the Session stream. Called by
+    // FrbServer::grouper_send_thread just before the Handshake.
+    void connect(int timeout_ms = constants::grouper_connect_timeout_ms);
+
+    // Session-stream I/O forwarded to the ClientReaderWriter (valid only after
+    // connect()). Return false when the stream is closed (mirrors grpc Write/Read).
+    // gRPC permits one concurrent Write + one concurrent Read (send vs receive
+    // thread), which is how FrbServer uses these.
+    bool write(const frb::grouper::v1::ProducerMessage &msg);
+    bool read(frb::grouper::v1::ConsumerMessage *msg);
+
+    // Unblock any in-flight write()/read() (idempotent; safe from any thread).
+    // ClientContext::TryCancel() makes the pending Write/Read return false. Used
+    // by FrbServer::stop().
+    void cancel();
+
+    // Noncopyable / nonmovable (owns gRPC state).
+    FrbGrouperClient(const FrbGrouperClient&) = delete;
+    FrbGrouperClient& operator=(const FrbGrouperClient&) = delete;
+
+private:
+    // pImpl: channel / stub / context / Session stream. Defined in FrbGrouper.cpp
+    // so this header stays free of grpc++/protobuf.
+    struct GrpcState;
+    std::unique_ptr<GrpcState> grpc_state;
+};
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // FrbGrouper: gRPC *server* side of the FrbGrouper service (frb_grouper.proto).
 //
 // A downstream Python consumer uses FrbGrouper to receive an FrbServer's

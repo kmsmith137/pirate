@@ -55,6 +55,7 @@ from ..core import (
 from ..pirate_pybind11 import (
     DedispersionPlan,
     FrbServer,
+    FrbGrouperClient,
     GpuDedisperser,
     ReferenceDedisperser,
     ReferenceDequantizationKernel,
@@ -187,6 +188,7 @@ class ServerTester:
         self.receivers   = None
         self.file_writer = None
         self.server      = None
+        self.grouper_client = None
         self.child       = None
         self.queue       = None
         self.shutdown_event = None
@@ -210,6 +212,11 @@ class ServerTester:
         try:
             self._build_server()
             self._spawn_grouper_child()
+            # Ping the grouper before start(): this both fails fast if it's not
+            # coming up and (unlike run_server, where the grouper is already
+            # running) WAITS for the freshly-spawned child to import cupy + bind.
+            # A generous timeout, since start()'s reconnect is only bounded at 2s.
+            self.grouper_client.ping(timeout_ms=60000)
             self.server.start()
             # With a grouper, FrbServer starts its Receivers only after the
             # grouper connection is READY (grouper_send_thread). FakeXEngine's
@@ -317,6 +324,11 @@ class ServerTester:
         gpu_alloc  = BumpAllocator(ksgpu.af_gpu | ksgpu.af_zero,
                                    self._compute_gpu_nbytes(), cuda_device=0)
 
+        # Producer-side grouper connection (constructed now, pinged after the
+        # grouper child is spawned; see __enter__). FrbServer opens the real
+        # connection + Handshake later, from its grouper send thread.
+        self.grouper_client = FrbGrouperClient(f"127.0.0.1:{p['grouper_port']}")
+
         self.server = FrbServer(p['config'], self.receivers, self.file_writer,
                                 f"127.0.0.1:{p['rpc_port']}",
                                 p['ringbuf_nchunks'],
@@ -324,7 +336,7 @@ class ServerTester:
                                 host_allocator=host_alloc,
                                 gpu_allocator=gpu_alloc,
                                 cuda_device_id=0,
-                                grouper_ip_addr=f"127.0.0.1:{p['grouper_port']}",
+                                grouper_client=self.grouper_client,
                                 nbatches_wt=p['nbatches_wt'],
                                 quiet=True)
 

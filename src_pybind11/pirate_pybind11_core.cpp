@@ -1210,6 +1210,30 @@ void register_core_bindings(pybind11::module &m)
                "Address bound to (e.g. '127.0.0.1:5000')")
     ;
 
+    // FrbGrouperClient: gRPC *client* side of the FrbGrouper service -- the
+    // producer (FrbServer) end. Constructed in run_server, ping()'d early to fail
+    // fast if the grouper isn't up, then passed into the FrbServer constructor.
+    // shared_ptr holder so it can be handed to FrbServer (like Receiver/FileWriter).
+    // Registered BEFORE FrbServer so FrbServer's grouper_client=None default arg
+    // can resolve this type's holder.
+    py::class_<FrbGrouperClient, std::shared_ptr<FrbGrouperClient>>(m, "FrbGrouperClient",
+        "Producer-side client for an FrbGrouper (frb_grouper.proto). Construct with the\n"
+        "grouper's 'ip:port', call ping() early to fail fast if it isn't running, then\n"
+        "pass it to FrbServer(grouper_client=...). The FrbServer opens the real\n"
+        "connection + Handshake later, from its grouper send thread.")
+          .def(py::init([](const std::string &grouper_ip_addr) {
+                   return std::make_shared<FrbGrouperClient>(grouper_ip_addr);
+               }),
+               py::arg("grouper_ip_addr"))
+          .def("ping", &FrbGrouperClient::ping,
+               py::arg("timeout_ms") = constants::grouper_ping_timeout_ms,
+               "Channel-level connectivity check: bring a throwaway channel to READY, then\n"
+               "drop it (no Session RPC, no Handshake). Raises RuntimeError if the grouper is\n"
+               "not reachable within timeout_ms.")
+          .def_readonly("grouper_ip_addr", &FrbGrouperClient::grouper_ip_addr,
+               "The grouper's 'ip:port' (loopback).")
+    ;
+
     // FrbServer: gRPC server that queries Receivers and responds to RPCs.
     // Skipped members: params, rpc_service, rpc_server, mutex, is_started, is_stopped (internal)
     // Note: Params struct is not exposed; constructor takes receivers and address directly.
@@ -1229,7 +1253,7 @@ void register_core_bindings(pybind11::module &m)
                            std::shared_ptr<BumpAllocator> gpu_allocator,
                            int cuda_device_id,
                            double processing_delay_sec,
-                           const std::string &grouper_ip_addr,
+                           std::shared_ptr<FrbGrouperClient> grouper_client,
                            bool no_dedispersion,
                            long nbatches_wt,
                            bool quiet) {
@@ -1244,7 +1268,7 @@ void register_core_bindings(pybind11::module &m)
                params.gpu_allocator = std::move(gpu_allocator);
                params.cuda_device_id = cuda_device_id;
                params.processing_delay_sec = processing_delay_sec;
-               params.grouper_ip_addr = grouper_ip_addr;
+               params.grouper_client = std::move(grouper_client);
                params.no_dedispersion = no_dedispersion;
                params.nbatches_wt = nbatches_wt;
                params.quiet = quiet;
@@ -1258,7 +1282,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("gpu_allocator"),
                py::arg("cuda_device_id"),
                py::arg("processing_delay_sec") = 0.0,
-               py::arg("grouper_ip_addr") = "",
+               py::arg("grouper_client") = std::shared_ptr<FrbGrouperClient>(),
                py::arg("no_dedispersion") = false,
                py::arg("nbatches_wt") = 0,
                py::arg("quiet") = false,
@@ -1287,15 +1311,16 @@ void register_core_bindings(pybind11::module &m)
                "    processing_delay_sec (default 0): Artificial per-frame\n"
                "        delay (in seconds) injected by the processing thread,\n"
                "        for simulating slow GPU work in pacing tests.\n"
-               "    grouper_ip_addr (default ''): ip:port of the FrbGrouper to\n"
-               "        feed (the FrbServer is the gRPC client). Empty => disabled\n"
-               "        (GpuDedisperser built with num_consumers=0). Must be a\n"
-               "        loopback address (CUDA IPC requires the same node/GPU).\n"
+               "    grouper_client (default None): an FrbGrouperClient (already\n"
+               "        pinged) for the FrbGrouper to feed (the FrbServer is the\n"
+               "        gRPC client). None => disabled (GpuDedisperser built with\n"
+               "        num_consumers=0). Its address must be loopback (CUDA IPC\n"
+               "        requires the same node/GPU).\n"
                "    no_dedispersion (default False): if True, the processing thread\n"
                "        skips ALL GPU work -- data is not even copied host->device,\n"
                "        and no dequantization/dedispersion kernels run. The\n"
                "        receive/assemble/ringbuf/reaper pipeline still runs in full.\n"
-               "        Implies no grouper, so grouper_ip_addr must be '' (the\n"
+               "        Implies no grouper, so grouper_client must be None (the\n"
                "        constructor asserts this).\n"
                "    nbatches_wt (default 0): weight-ring depth of the internal\n"
                "        GpuDedisperser. 0 = num_active_batches. If nonzero, must be\n"

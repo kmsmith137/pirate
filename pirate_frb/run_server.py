@@ -337,6 +337,7 @@ class RunServerHelper:
         self.capacity = None
         self.aflags = None
         self.servers = []
+        self._grouper_clients = []   # one per server (None when no_grouper); pinged in phase 1.5
         self._print_config_summary(server_config_filename, dedispersion_config_filename)
 
     def run(self):
@@ -413,6 +414,16 @@ class RunServerHelper:
         # first get_slab(), which won't happen until server.start()).
         for i in range(self.n):
             self._build_server(i)
+
+        # Phase 1.5: ping every grouper (a channel-level connect + drop, no
+        # Session/Handshake) BEFORE the slow bump-alloc wait, so a missing grouper
+        # fails fast here rather than after a long init. The real connection +
+        # Handshake happen later, from each FrbServer's grouper send thread.
+        for i, grouper_client in enumerate(self._grouper_clients):
+            if grouper_client is None:
+                continue
+            print(f"Pinging grouper at {grouper_client.grouper_ip_addr} (server {i})...")
+            grouper_client.ping()
 
         # Phase 2: wait for all 3 * num_servers async BumpAllocators to
         # finish initializing. Any async-init failures surface here with a
@@ -507,8 +518,13 @@ class RunServerHelper:
             ]
             # FrbServer: ties together receivers, file writer, and RPC.
             # (Imported here to avoid circular import with __init__.py.)
-            from . import FrbServer
-            grouper_ip_addr = '' if self.no_grouper else self.config['grouper_ip_addrs'][i]
+            from . import FrbServer, FrbGrouperClient
+            # The grouper connection is owned C++-side by FrbGrouperClient. We
+            # only construct it here (no connect yet); it is pinged in phase 1.5
+            # (before the slow bump-alloc wait), and the FrbServer opens the real
+            # connection + Handshake later, from its grouper send thread.
+            grouper_client = (None if self.no_grouper
+                              else FrbGrouperClient(self.config['grouper_ip_addrs'][i]))
             server = FrbServer(self.dedisp_config, receivers, file_writer,
                                self.config['rpc_ip_addrs'][i],
                                self.config['ringbuf_nchunks'],
@@ -517,7 +533,7 @@ class RunServerHelper:
                                gpu_allocator=gpu_alloc,
                                cuda_device_id=cuda_device_id,
                                processing_delay_sec=self.processing_delay_sec,
-                               grouper_ip_addr=grouper_ip_addr,
+                               grouper_client=grouper_client,
                                no_dedispersion=self.no_dedispersion,
                                quiet=self.quiet)
             # server.start() is NOT called here. We defer all server.start()
@@ -526,6 +542,9 @@ class RunServerHelper:
             # (rather than getting blocked on the first server's startup).
 
         self.servers.append(server)
+        # Stash the grouper client (None when no_grouper) for the phase-1.5 ping.
+        # (FrbServer holds it but does not expose it back to Python.)
+        self._grouper_clients.append(grouper_client)
         # Stash rb_bump for the wait-until-initialized loop in phase 2.
         # (FrbServer doesn't store rb_bump itself; the SlabAllocator above
         # holds a shared_ptr to it which would keep it alive transitively,
