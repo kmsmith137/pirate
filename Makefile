@@ -376,7 +376,7 @@ PYFILES = \
   pirate_frb/run_fake_xengine.py \
   pirate_frb/run_rpc_status.py \
   pirate_frb/run_toy_grouper.py \
-  pirate_frb/run_toy_offline_dd.py \
+  pirate_frb/run_offline_dedisperser.py \
   pirate_frb/run_toy_sifter.py \
   pirate_frb/Acquisition.py \
   pirate_frb/OfflineDedisperser.py \

@@ -15,7 +15,7 @@ built from scratch, and for each of that beam's time chunks the driver:
 
 and prints the peak SNR of each chunk (one beam+chunk pair per line).
 
-Run via: python -m pirate_frb run_toy_offline_dd ACQDIR CONFIG [--max-chunks N]
+Run via: python -m pirate_frb run_offline_dedisperser ACQDIR CONFIG [--max-chunks N]
 """
 
 
@@ -58,7 +58,7 @@ def _process_beam(beam_id, files, config):
               f"snr_max={snr:7.3f}")
 
 
-def run_toy_offline_dd(acqdir=DEFAULT_ACQDIR, config_filename=DEFAULT_CONFIG, max_chunks=None):
+def run_offline_dedisperser(acqdir=DEFAULT_ACQDIR, config_filename=DEFAULT_CONFIG, max_chunks=None):
     """Offline single-beam dedispersion + peak-SNR print over an acqdir (see module docstring).
 
     Parameters

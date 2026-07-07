@@ -38,7 +38,7 @@ from .run_server import run_server
 from .run_toy_grouper import run_toy_grouper
 from .Acquisition import Acquisition
 from .OfflineDedisperser import OfflineDedisperser
-from .run_toy_offline_dd import run_toy_offline_dd
+from .run_offline_dedisperser import run_offline_dedisperser
 
 from .pirate_pybind11 import (
     DedispersionConfig,
