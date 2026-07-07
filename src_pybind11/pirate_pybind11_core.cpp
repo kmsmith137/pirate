@@ -762,7 +762,7 @@ void register_core_bindings(pybind11::module &m)
           .def_readwrite("freq_channels", &XEngineMetadata::freq_channels,
                "Which frequency channels are present. MEANINGFUL when the\n"
                "metadata is associated with one specific X-engine sender\n"
-               "(the wire-protocol case, or a FakeXEngine Worker).\n\n Otherwise\n"
+               "(the wire-protocol case, or a FakeXEngine Worker).\n\nOtherwise\n"
                "(bookkeeping contexts where no specific sender is distinguished,\n"
                "e.g. the allocator's canonical copy, FrbServer, AssembledFrame's\n"
                "metadata) the convention is to set this to an empty list, which\n"
