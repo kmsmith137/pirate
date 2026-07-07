@@ -245,6 +245,29 @@ class GpuDedisperserInjections:
     output buffers -- per-tree peak-finding max/argmax over the DM-vs-time plane.
     The Python interface is the get_input() / get_output() context managers (and
     the acquire/release methods they wrap), which add stream=None handling.
+
+    Beam-batches are fed one at a time, in increasing ``seq_id`` order (seq_id =
+    ichunk*nbatches + ibatch). Writing the input buffer and leaving the get_input()
+    block launches the dedispersion kernels for that seq_id; get_output() then
+    yields that seq_id's outputs, whose arrays are valid ONLY inside the block
+    (they are views into a small output ring buffer)::
+
+        dd = GpuDedisperser(plan, stream_pool, cuda_device_id=0, num_consumers=1)
+        dd.allocate(gpu_allocator, host_allocator)
+        dd.fill_analytic_weights(freq_variances)   # so out_max comes out as an SNR
+
+        for seq_id in range(nchunks * dd.nbatches):
+            # Write this beam-batch's input; leaving the block launches the
+            # dedispersion kernels. in_arr has shape (beams_per_batch, nfreq, nt_in).
+            with dd.get_input(seq_id) as in_arr:
+                in_arr[:] = chunk_data             # e.g. a cupy array
+
+            # Read this seq_id's outputs (only valid inside the block).
+            with dd.get_output(seq_id) as outputs:
+                for itree in range(dd.ntrees):
+                    out_max = outputs.out_max[itree]        # (beams_per_batch, ndm, nt)
+                    out_argmax = outputs.out_argmax[itree]
+                    ...
     """
     # This class docstring (above) is the GpuDedisperser docstring: the pybind11
     # binding deliberately sets none, and inject_methods copies this one onto the
@@ -301,9 +324,11 @@ class GpuDedisperserInjections:
         """Acquire output buffer for reading and return Outputs views.
 
         After this call returns, 'stream' sees a full output buffer ready
-        for reading. The returned object has two attributes:
-          .out_max     list of ntrees ksgpu.Arrays (peak-finding max values)
-          .out_argmax  list of ntrees ksgpu.Arrays (peak-finding argmax tokens)
+        for reading. The returned object has two attributes::
+
+            .out_max     list of ntrees ksgpu.Arrays (peak-finding max values)
+            .out_argmax  list of ntrees ksgpu.Arrays (peak-finding argmax tokens)
+
         The views are valid until the matching release_output() call.
 
         Parameters

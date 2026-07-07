@@ -13,6 +13,7 @@ classes/FrbGrouper
 classes/FrbSearchClient
 classes/FrbSifterClient
 classes/FrbSifterEvents
+classes/GpuDedisperser
 classes/GpuDedisperserOutputs
 classes/OfflineDedisperser
 classes/XEngineMetadata
