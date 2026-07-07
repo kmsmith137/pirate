@@ -10,6 +10,9 @@ cudaErrorInvalidValue. The wrappers below delegate to pirate's
 cuda_host_register_chunk_size-aligned host addresses. See
 `plans/python_h2g_chunking.md` and the doc-comment block at the top of
 `include/pirate/utils.hpp`.
+
+Note: currently, safe_h2g_copy() is only called from python in
+time_cupy_dedisperser, and safe_g2h_copy() is not called from python.
 """
 
 from ..pirate_pybind11 import (
