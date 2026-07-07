@@ -109,9 +109,39 @@ notes/%.pdf: notes/%.tex
 SPHINX_SOURCEDIR := docs/source
 SPHINX_BUILDDIR  := docs/build
 SPHINXOPTS       ?=
+SPHINX_STAMP     := $(SPHINX_BUILDDIR)/.docs-built
 
-docs: lib tex
-	$(PYTHON) -m sphinx -M html "$(SPHINX_SOURCEDIR)" "$(SPHINX_BUILDDIR)" $(SPHINXOPTS)
+# Inputs whose change should trigger a docs rebuild. 'docs' is .PHONY, so without
+# gating the Sphinx run on a real stamp file it would re-run on every invocation
+# (Sphinx's own incremental logic can't give a true no-op here: conf.py regenerates
+# several source pages each run, and autodoc reads docstrings from the compiled
+# extension, which Sphinx never sees). The set is deliberately broad-but-safe: the
+# Sphinx sources, the repo trees conf.py pulls in (notes/, grpc/, configs/), and the
+# whole Python package + compiled extension (conf.py imports pirate_frb to build the
+# CLI tables; autodoc reads the pybind11 docstrings out of the .so). __pycache__ is
+# excluded (it churns on import but never changes the docs). The find is cheap
+# (~200 files); it runs at parse time on every make, which is negligible.
+DOC_INPUTS := $(shell find docs/source notes grpc configs pirate_frb \
+                        -type f -not -path '*/__pycache__/*' 2>/dev/null) \
+              pyproject.toml
+
+# The stamp is the real build target; 'docs' (below) is a phony alias. 'lib' and
+# 'tex' are ORDER-ONLY (|): they build the outputs Sphinx/conf.py consume (the
+# extension, libpirate.so, example_*.yml, the notes PDFs), but -- being .PHONY,
+# hence always "out of date" -- must not themselves force the stamp to rebuild.
+#
+# -E rebuilds Sphinx's environment from scratch (re-read every source, re-run every
+# autodoc directive). We only reach the recipe when a DOC_INPUTS file changed, and
+# that change may be a docstring in the Python package or the pybind extension --
+# which autodoc reads but Sphinx's incremental rebuild (keyed off .md/.rst mtimes
+# only) would miss, leaving stale output. Since we only get here when something
+# actually changed, the full re-read is the right cost; the no-change case never
+# runs Sphinx at all (the stamp stays up to date).
+$(SPHINX_STAMP): $(DOC_INPUTS) | lib tex
+	$(PYTHON) -m sphinx -M html "$(SPHINX_SOURCEDIR)" "$(SPHINX_BUILDDIR)" -E $(SPHINXOPTS)
+	@touch "$@"
+
+docs: $(SPHINX_STAMP)
 
 docs-clean:
 	rm -rf docs/build docs/source/notes docs/source/configs docs/source/grpc docs/source/_autosummary docs/source/_cli_generated.md docs/source/_grpc_generated.md docs/source/_static/*.pdf
