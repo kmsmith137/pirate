@@ -232,7 +232,7 @@ class FrbSearchClient:
     def start_stream(
         self,
         beam_ids: list[int],
-        acq_name: str = None,
+        stream_name: str = None,
         acqdir: str = None,
         fpga_seq_start: int = 0,
         fpga_seq_end: int = None
@@ -256,13 +256,13 @@ class FrbSearchClient:
         Args:
             beam_ids: Nonempty list of beam IDs (no all-beams convention;
                 list beams explicitly -- show_streams() returns the full list).
-            acq_name: Nonempty identifier, unique among active streams
+            stream_name: Nonempty identifier, unique among active streams
                 (used by show_streams() / cancel_stream()). If None (default),
                 a name "stream_{date}_{time}" is generated, e.g.
                 "stream_26_07_07_143052".
             acqdir: Acquisition directory (same conventions as
-                write_files()). If None (default), acq_name is used, so the
-                acquisition lands at {nfs_root}/{acq_name}/.
+                write_files()). If None (default), stream_name is used, so the
+                acquisition lands at {nfs_root}/{stream_name}/.
             fpga_seq_start: Start of the fpga-seq range (inclusive);
                 0 (default) means "start asap".
             fpga_seq_end: End of the fpga-seq range (exclusive). None
@@ -270,33 +270,33 @@ class FrbSearchClient:
                 the wire).
 
         Returns:
-            (acq_name, acqdir): the resolved values that were sent
+            (stream_name, acqdir): the resolved values that were sent
             (useful to the caller when either defaulted from None).
 
-        Raises grpc.RpcError on validation failure (empty/duplicate acq_name,
+        Raises grpc.RpcError on validation failure (empty/duplicate stream_name,
         unknown beam_id, bad acqdir, range entirely in the past, or server
         not yet initialized).
         """
-        if acq_name is None:
+        if stream_name is None:
             # "stream_{date}_{time}", e.g. stream_26_07_07_143052.
-            acq_name = 'stream_' + datetime.datetime.now().strftime('%y_%m_%d_%H%M%S')
+            stream_name = 'stream_' + datetime.datetime.now().strftime('%y_%m_%d_%H%M%S')
 
         if acqdir is None:
-            acqdir = acq_name
+            acqdir = stream_name
 
         if fpga_seq_end is None:
             fpga_seq_end = 2**63 - 1   # "run indefinitely"
 
         request = frb_search_pb2.StartStreamRequest(
             protocol_version=_PROTOCOL_VERSION,
-            acq_name=acq_name,
+            stream_name=stream_name,
             acqdir=acqdir,
             beam_ids=beam_ids,
             fpga_seq_start=fpga_seq_start,
             fpga_seq_end=fpga_seq_end
         )
         self.stub.StartStream(request)
-        return acq_name, acqdir
+        return stream_name, acqdir
 
     def show_streams(self):
         """Query the server for its streams (active + recent history).
@@ -327,8 +327,8 @@ class FrbSearchClient:
         request = frb_search_pb2.ShowStreamsRequest(protocol_version=_PROTOCOL_VERSION)
         return self.stub.ShowStreams(request)
 
-    def cancel_stream(self, acq_name: str = None, cancel_all: bool = False) -> int:
-        """Cancel one active stream (by acq_name), or all of them.
+    def cancel_stream(self, stream_name: str = None, cancel_all: bool = False) -> int:
+        """Cancel one active stream (by stream_name), or all of them.
 
         File writes already queued still complete (and still notify
         subscribe_files() subscribers); cancellation only stops future
@@ -336,8 +336,8 @@ class FrbSearchClient:
         bounded history.
 
         Args:
-            acq_name: Stream to cancel (ignored if cancel_all=True).
-                An unknown or already-inactive acq_name raises
+            stream_name: Stream to cancel (ignored if cancel_all=True).
+                An unknown or already-inactive stream_name raises
                 grpc.RpcError.
             cancel_all: If True, cancel all active streams (however many;
                 returns the full count even if the display history retains
@@ -349,7 +349,7 @@ class FrbSearchClient:
         request = frb_search_pb2.CancelStreamRequest(
             protocol_version=_PROTOCOL_VERSION,
             cancel_all=cancel_all,
-            acq_name=("" if acq_name is None else acq_name)
+            stream_name=("" if stream_name is None else stream_name)
         )
         response = self.stub.CancelStream(request)
         return response.num_cancelled

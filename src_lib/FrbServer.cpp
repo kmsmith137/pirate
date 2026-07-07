@@ -1875,9 +1875,9 @@ void FrbRpcService::_StartStream(const fs::StartStreamRequest *request, fs::Star
 {
     shared_ptr<FrbServer> s = _lock_state();
 
-    const string &acq_name = request->acq_name();
-    if (acq_name.empty())
-        throw runtime_error("StartStream: acq_name must be a nonempty string");
+    const string &stream_name = request->stream_name();
+    if (stream_name.empty())
+        throw runtime_error("StartStream: stream_name must be a nonempty string");
 
     long fpga_seq_start = request->fpga_seq_start();
     long fpga_seq_end   = request->fpga_seq_end();
@@ -1899,7 +1899,7 @@ void FrbRpcService::_StartStream(const fs::StartStreamRequest *request, fs::Star
     validate_acqdir(request->acqdir());
 
     auto st = make_shared<FileStream>();
-    st->acq_name = acq_name;
+    st->stream_name = stream_name;
     st->acqdir = request->acqdir();
     st->fpga_seq_start = fpga_seq_start;
     st->fpga_seq_end = fpga_seq_end;
@@ -1917,9 +1917,9 @@ void FrbRpcService::_StartStream(const fs::StartStreamRequest *request, fs::Star
         throw runtime_error("StartStream: server has not yet established an initial fpga chunk");
 
     for (const auto &other : s->active_streams) {
-        if (other->acq_name == acq_name) {
+        if (other->stream_name == stream_name) {
             stringstream ss;
-            ss << "StartStream: acq_name '" << acq_name << "' is already in use by an active stream";
+            ss << "StartStream: stream_name '" << stream_name << "' is already in use by an active stream";
             throw runtime_error(ss.str());
         }
     }
@@ -2033,7 +2033,7 @@ void FrbRpcService::_ShowStreams(const fs::ShowStreamsRequest *request, fs::Show
                                                     : fs::STREAM_STATUS_DRAINING);
 
         fs::StartStreamRequest *args = info->mutable_args();
-        args->set_acq_name(st->acq_name);
+        args->set_stream_name(st->stream_name);
         args->set_acqdir(st->acqdir);
         for (long beam_id : st->beam_ids)
             args->add_beam_ids(beam_id);
@@ -2088,7 +2088,7 @@ void FrbRpcService::_CancelStream(const fs::CancelStreamRequest *request, fs::Ca
 
     // Note: cancellation only stops future matching. File writes already
     // queued to the FileWriter still complete, and still notify
-    // SubscribeFiles subscribers with this stream's acq_name. Cancelled
+    // SubscribeFiles subscribers with this stream's stream_name. Cancelled
     // streams remain visible in ShowStreams (inactive ring history).
 
     if (request->cancel_all()) {
@@ -2106,9 +2106,9 @@ void FrbRpcService::_CancelStream(const fs::CancelStreamRequest *request, fs::Ca
         return;
     }
 
-    const string &acq_name = request->acq_name();
+    const string &stream_name = request->stream_name();
     for (auto it = s->active_streams.begin(); it != s->active_streams.end(); ++it) {
-        if ((*it)->acq_name == acq_name) {
+        if ((*it)->stream_name == stream_name) {
             s->_deactivate_stream(*it, /*cancelled=*/ true);
             s->active_streams.erase(it);
             response->set_num_cancelled(1);
@@ -2121,15 +2121,15 @@ void FrbRpcService::_CancelStream(const fs::CancelStreamRequest *request, fs::Ca
     constexpr long cap = constants::inactive_file_stream_capacity;
     long n = s->num_deactivated_streams;
     for (long i = std::max(0L, n - cap); i < n; i++) {
-        if (s->inactive_streams[i % cap]->acq_name == acq_name) {
+        if (s->inactive_streams[i % cap]->stream_name == stream_name) {
             stringstream ss;
-            ss << "CancelStream: stream '" << acq_name << "' is already inactive";
+            ss << "CancelStream: stream '" << stream_name << "' is already inactive";
             throw runtime_error(ss.str());
         }
     }
 
     stringstream ss;
-    ss << "CancelStream: no active stream with acq_name '" << acq_name << "'";
+    ss << "CancelStream: no active stream with stream_name '" << stream_name << "'";
     throw runtime_error(ss.str());
 }
 
@@ -2157,8 +2157,8 @@ grpc::Status FrbRpcService::CancelStream(
 // Note: gRPC's server-streaming model provides one thread of execution per connection
 // via gRPC's internal thread pool.
 //
-// Each response has (filename, error_message, acq_name). Empty error_message
-// indicates success; nonempty acq_name means the file was triggered by a
+// Each response has (filename, error_message, stream_name). Empty error_message
+// indicates success; nonempty stream_name means the file was triggered by a
 // stream (StartStream RPC) rather than a WriteFiles call. Stream-triggered
 // notifications are delivered only if request->subscribe_streams() is true.
 void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, const fs::SubscribeFilesRequest *request, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
@@ -2215,18 +2215,18 @@ void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, const fs::Subs
 
         subscriber_lock.unlock();
 
-        // Stream-triggered notifications (nonempty acq_name) are delivered
+        // Stream-triggered notifications (nonempty stream_name) are delivered
         // only if the subscriber opted in via subscribe_streams.
-        if (!request->subscribe_streams() && !write_status.acq_name.empty())
+        if (!request->subscribe_streams() && !write_status.stream_name.empty())
             continue;
 
-        // Build response with (filename, error_message, acq_name) inside
+        // Build response with (filename, error_message, stream_name) inside
         // the 'notification' arm of the oneof. Empty error_message
         // indicates success.
         fs::SubscribeFilesResponse response;
         auto *notif = response.mutable_notification();
         notif->set_filename(write_status.save_path.string());
-        notif->set_acq_name(write_status.acq_name);
+        notif->set_stream_name(write_status.stream_name);
 
         if (write_status.error) {
             try {

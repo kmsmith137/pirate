@@ -13,10 +13,10 @@ class FileSubscriber:
     AFTER the constructor returns are guaranteed to have their
     notifications delivered through this object's iterator.
 
-    Iteration yields (filename, error_message, acq_name) tuples. An
+    Iteration yields (filename, error_message, stream_name) tuples. An
     empty error_message indicates success; non-empty indicates an
-    error. acq_name is "" for WriteFiles-triggered files and the
-    stream's acq_name for stream-triggered files (only delivered when
+    error. stream_name is "" for WriteFiles-triggered files and the
+    stream's stream_name for stream-triggered files (only delivered when
     the subscription was opened with subscribe_streams=True).
 
     Lifetime: the underlying gRPC stream stays open until either
@@ -42,7 +42,7 @@ class FileSubscriber:
                 acqdir="my_acquisition",
             )
             remaining = set(filenames)
-            for filename, error, acq_name in sub:
+            for filename, error, stream_name in sub:
                 if error:
                     raise RuntimeError(f"{filename}: {error}")
                 remaining.discard(filename)
@@ -55,7 +55,7 @@ class FileSubscriber:
 
         sub = client.subscribe_files()
         client.write_files(...)
-        for filename, error, acq_name in sub:
+        for filename, error, stream_name in sub:
             print(filename, error)
             if some_condition:
                 break
@@ -118,7 +118,7 @@ class FileSubscriber:
         kind = r.WhichOneof("kind")
         if kind == "notification":
             return (r.notification.filename, r.notification.error_message,
-                    r.notification.acq_name)
+                    r.notification.stream_name)
         # Defense-in-depth: the server should never send a second
         # ready sentinel, nor any unknown oneof case. (Forward-
         # compat: a future server emitting a new oneof variant

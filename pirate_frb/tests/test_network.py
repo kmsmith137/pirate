@@ -153,7 +153,7 @@ class NetworkTester:
         self.filename_meta          = None
         # Streams (StartStream RPC) exercises.
         self.stream_group = None    # dict, set once by _maybe_start_streams
-        self.stream_must  = None    # set of (acq_name, filename), from _compute_stream_expectations
+        self.stream_must  = None    # set of (stream_name, filename), from _compute_stream_expectations
         self.stream_must_chunks = None   # list of chunk indices underlying stream_must
         self.expected_deactivations = 0  # python-side mirror of ShowStreams.num_deactivated_streams
 
@@ -202,7 +202,7 @@ class NetworkTester:
         self._drain_filesub()
         self._drain_streamsub()
         # Ring-history phases, in a deliberate order: the INACTIVE poll for
-        # acq_a/b/c must run while they are still in the inactive ring
+        # stream_a/b/c must run while they are still in the inactive ring
         # (deactivation budget: 4 entries so far, capacity >= 5), so the
         # re-registration test (+1 entry) and the eviction subtest (which
         # floods the ring) come after.
@@ -343,10 +343,10 @@ class NetworkTester:
 
         # Second subscription with subscribe_streams=True: receives BOTH
         # WriteFiles-triggered and stream-triggered notifications (drained in
-        # _drain_streamsub, which ignores the acq_name=="" WriteFiles ones).
+        # _drain_streamsub, which ignores the stream_name=="" WriteFiles ones).
         # Also implicitly tests that file_sub (subscribe_streams=False, the
         # default) never sees stream files -- _drain_filesub asserts
-        # acq_name == "" on everything it receives.
+        # stream_name == "" on everything it receives.
         self.stream_sub = self.rpc_client.subscribe_files(subscribe_streams=True)
 
         # Filenames tracked across all iouter turns. Three disjoint sets:
@@ -549,11 +549,11 @@ class NetworkTester:
         """Start the test's stream group (once, a quarter of the way through
         the send loop, so plenty of chunks transition while it is active):
 
-          - acq_a and acq_b share ONE acqdir -> every captured frame gets
+          - stream_a and stream_b share ONE acqdir -> every captured frame gets
             duplicate save_paths, exercising the FileWriter NFS dup-skip
-            branch (both acqs must still get their own success
+            branch (both streams must still get their own success
             notifications, file written once);
-          - acq_c uses a distinct MULTI-LEVEL acqdir -> exercises lazy
+          - stream_c uses a distinct MULTI-LEVEL acqdir -> exercises lazy
             (two-deep) directory creation in the FileWriter threads, and
             gives a second NFS name that must be a HARDLINK of the
             shared-acqdir file (verified via st_ino in
@@ -578,11 +578,11 @@ class NetworkTester:
             c1 = self.rpc_client.get_status().rb_processed // p['nbeams']
             end_fpga = (c1 + K + 1) * spc
 
-            for acq, acqdir in [("acq_a", acqdir_shared),
-                                ("acq_b", acqdir_shared),
-                                ("acq_c", acqdir_c)]:
+            for stream_name, acqdir in [("stream_a", acqdir_shared),
+                                ("stream_b", acqdir_shared),
+                                ("stream_c", acqdir_c)]:
                 self.rpc_client.start_stream(
-                    acq_name=acq, acqdir=acqdir, beam_ids=sel_beams,
+                    stream_name=stream_name, acqdir=acqdir, beam_ids=sel_beams,
                     fpga_seq_start=0, fpga_seq_end=end_fpga)
         except grpc.RpcError as e:
             # Server hasn't locked onto the X-engine stream yet; retry on a
@@ -602,7 +602,7 @@ class NetworkTester:
             acqdir_shared=acqdir_shared, acqdir_c=acqdir_c)
 
     def _compute_stream_expectations(self):
-        """Compute the MUST-be-written set of (acq_name, filename) pairs, and
+        """Compute the MUST-be-written set of (stream_name, filename) pairs, and
         sanity-check the ShowStreams queued-counters.
 
         Guarantee tested: every matching frame that TRANSITIONS
@@ -628,13 +628,13 @@ class NetworkTester:
             for b in g['sel_beams']:
                 fn_shared = _acq_filename(g['acqdir_shared'], b, c)
                 fn_c      = _acq_filename(g['acqdir_c'], b, c)
-                self.stream_must.add(("acq_a", fn_shared))
-                self.stream_must.add(("acq_b", fn_shared))
-                self.stream_must.add(("acq_c", fn_c))
+                self.stream_must.add(("stream_a", fn_shared))
+                self.stream_must.add(("stream_b", fn_shared))
+                self.stream_must.add(("stream_c", fn_c))
 
         # ShowStreams counter sanity. Streams may already be deactivated
         # (expired) and listed from the inactive-ring history; either way,
-        # every stream listed at this point is one of acq_a/b/c. The
+        # every stream listed at this point is one of stream_a/b/c. The
         # R1/R2 increment-ordering rules guarantee written + errored <=
         # queued at every instant.
         must_files_per_stream = len(self.stream_must_chunks) * len(g['sel_beams'])
@@ -643,7 +643,7 @@ class NetworkTester:
         ss = self.rpc_client.show_streams()
         assert list(ss.beam_ids) == self.beam_ids
         for info in ss.streams:
-            assert info.args.acq_name in ("acq_a", "acq_b", "acq_c")
+            assert info.args.stream_name in ("stream_a", "stream_b", "stream_c")
             assert list(info.args.beam_ids) == g['sel_beams']
             assert info.num_files_written + info.num_files_errored <= info.num_files_queued
             assert must_files_per_stream <= info.num_files_queued <= max_files_per_stream
@@ -658,7 +658,7 @@ class NetworkTester:
         else:
             raise RuntimeError(f"expected RPC error containing {substr!r}, got success")
 
-    def _start_never_matching_stream(self, acq_name):
+    def _start_never_matching_stream(self, stream_name):
         """Register a stream whose fpga range is in the far future, so it
         never matches (no files, no notifications, zero counters). Used by
         the cancel / ring-history subtests."""
@@ -666,8 +666,8 @@ class NetworkTester:
         rpc = self.rpc_client
         spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
         c_now = rpc.get_status().rb_processed // p['nbeams']
-        rpc.start_stream([self.beam_ids[0]], acq_name=acq_name,
-                         acqdir=acq_name,
+        rpc.start_stream([self.beam_ids[0]], stream_name=stream_name,
+                         acqdir=stream_name,
                          fpga_seq_start=(c_now + 10**6) * spc,
                          fpga_seq_end=(c_now + 10**6 + 1) * spc)
 
@@ -679,9 +679,9 @@ class NetworkTester:
 
         Ring-history budget: this phase adds exactly 1 + (3 if the stream
         group ran) entries to the inactive ring (misc_x's cancel, plus
-        acq_a/b/c via expiry or cancel_all -- each stream deactivates
+        stream_a/b/c via expiry or cancel_all -- each stream deactivates
         exactly once). Keeping the running total at 4 < CAP until after
-        _poll_streams_inactive is what guarantees the poll finds acq_a/b/c
+        _poll_streams_inactive is what guarantees the poll finds stream_a/b/c
         still visible in the ring."""
         rpc = self.rpc_client
         p = self.p
@@ -698,7 +698,7 @@ class NetworkTester:
         INACTIVE = frb_search_pb2.STREAM_STATUS_INACTIVE
 
         def start(**kw):
-            kw.setdefault('acq_name', 'misc_x')
+            kw.setdefault('stream_name', 'misc_x')
             kw.setdefault('acqdir', 'misc_dir')
             kw.setdefault('beam_ids', [beam0])
             # Default range: far future (never matches).
@@ -707,7 +707,7 @@ class NetworkTester:
             return lambda: rpc.start_stream(**kw)
 
         # Validation failures.
-        self._expect_rpc_error(start(acq_name=''), "acq_name must be a nonempty")
+        self._expect_rpc_error(start(stream_name=''), "stream_name must be a nonempty")
         self._expect_rpc_error(start(beam_ids=[]), "beam_ids must be nonempty")
         self._expect_rpc_error(start(beam_ids=[999999]), "unknown beam_id")
         self._expect_rpc_error(start(beam_ids=[beam0, beam0]), "appears more than once")
@@ -725,16 +725,16 @@ class NetworkTester:
 
         # Cancel semantics: register a (never-matching) stream, then cancel it.
         start()()   # succeeds
-        infos = [i for i in rpc.show_streams().streams if i.args.acq_name == 'misc_x']
+        infos = [i for i in rpc.show_streams().streams if i.args.stream_name == 'misc_x']
         assert len(infos) == 1 and infos[0].status == ACTIVE
-        self._expect_rpc_error(start(), "already in use")           # duplicate acq_name
-        assert rpc.cancel_stream(acq_name='misc_x') == 1
+        self._expect_rpc_error(start(), "already in use")           # duplicate stream_name
+        assert rpc.cancel_stream(stream_name='misc_x') == 1
         self.expected_deactivations += 1
 
         # The cancelled stream remains VISIBLE, now in the inactive-ring
         # history: it never matched anything, so its counters are all zero
         # and it is INACTIVE (nothing to drain) immediately, cancelled=true.
-        infos = [i for i in rpc.show_streams().streams if i.args.acq_name == 'misc_x']
+        infos = [i for i in rpc.show_streams().streams if i.args.stream_name == 'misc_x']
         assert len(infos) == 1
         info = infos[0]
         assert info.status == INACTIVE
@@ -747,12 +747,12 @@ class NetworkTester:
 
         # Cancelling an already-inactive stream is an error (with a clearer
         # message than the never-heard-of case).
-        self._expect_rpc_error(lambda: rpc.cancel_stream(acq_name='misc_x'),
+        self._expect_rpc_error(lambda: rpc.cancel_stream(stream_name='misc_x'),
                                "already inactive")
-        self._expect_rpc_error(lambda: rpc.cancel_stream(acq_name='no_such_acq'),
+        self._expect_rpc_error(lambda: rpc.cancel_stream(stream_name='no_such_stream'),
                                "no active stream")
 
-        # cancel_all: 0 to 3 streams may remain active (acq_a/b/c, if not
+        # cancel_all: 0 to 3 streams may remain active (stream_a/b/c, if not
         # yet expired). Their MUST files (computed in
         # _compute_stream_expectations, before this) already transitioned,
         # so their writes are queued regardless -- cancellation never
@@ -768,7 +768,7 @@ class NetworkTester:
         assert ss.num_deactivated_streams == self.expected_deactivations
 
     def _poll_streams_inactive(self):
-        """Post-drain strong check: poll ShowStreams until acq_a/b/c all
+        """Post-drain strong check: poll ShowStreams until stream_a/b/c all
         report INACTIVE (deactivated + fully drained), then verify their
         final counters: errored == 0 and written == queued. No timeout,
         matching the drain philosophy: all three are already deactivated
@@ -778,13 +778,13 @@ class NetworkTester:
         if self.stream_group is None:
             return
         INACTIVE = frb_search_pb2.STREAM_STATUS_INACTIVE
-        acqs = ("acq_a", "acq_b", "acq_c")
+        stream_names = ("stream_a", "stream_b", "stream_c")
 
         while True:
             ss = self.rpc_client.show_streams()
-            infos = [i for i in ss.streams if i.args.acq_name in acqs]
+            infos = [i for i in ss.streams if i.args.stream_name in stream_names]
             assert len(infos) == 3, \
-                f"acq_a/b/c not all visible in stream history: {[i.args.acq_name for i in infos]}"
+                f"stream_a/b/c not all visible in stream history: {[i.args.stream_name for i in infos]}"
             if all(i.status == INACTIVE for i in infos):
                 break
             time.sleep(0.05)
@@ -798,14 +798,14 @@ class NetworkTester:
             assert i.deactivated_at_unix_ns >= i.started_at_unix_ns
 
     def _test_stream_reregister(self):
-        """acq_name uniqueness is enforced against ACTIVE streams only:
-        re-registering an acq_name that still sits in the inactive-ring
+        """stream_name uniqueness is enforced against ACTIVE streams only:
+        re-registering an stream_name that still sits in the inactive-ring
         history succeeds. (Run AFTER _poll_streams_inactive: this adds a
         5th ring entry, eating the a/b/c visibility margin.)"""
         rpc = self.rpc_client
-        assert any(i.args.acq_name == 'misc_x' for i in rpc.show_streams().streams)
+        assert any(i.args.stream_name == 'misc_x' for i in rpc.show_streams().streams)
         self._start_never_matching_stream('misc_x')   # succeeds despite the ring entry
-        assert rpc.cancel_stream(acq_name='misc_x') == 1
+        assert rpc.cancel_stream(stream_name='misc_x') == 1
         self.expected_deactivations += 1
         assert rpc.show_streams().num_deactivated_streams == self.expected_deactivations
 
@@ -814,7 +814,7 @@ class NetworkTester:
         cancel_all over MORE than CAP streams cancels ALL of them
         (num_cancelled counts every one), while the display history retains
         only the newest CAP. Runs LAST among the stream subtests: it evicts
-        acq_a/b/c and misc_x from the ring (their checks are done)."""
+        stream_a/b/c and misc_x from the ring (their checks are done)."""
         rpc = self.rpc_client
         CAP = constants.inactive_file_stream_capacity
         ACTIVE   = frb_search_pb2.STREAM_STATUS_ACTIVE
@@ -836,7 +836,7 @@ class NetworkTester:
         # evict_1 .. evict_CAP, oldest to newest.
         inactive = [i for i in ss.streams if i.status != ACTIVE]
         assert len(inactive) == CAP
-        assert [i.args.acq_name for i in inactive] == names[1:]
+        assert [i.args.stream_name for i in inactive] == names[1:]
         for i in inactive:
             assert i.status == INACTIVE   # never matched -> nothing to drain
             assert i.cancelled
@@ -849,29 +849,29 @@ class NetworkTester:
         assert ss.num_deactivated_streams == self.expected_deactivations
 
     def _drain_streamsub(self):
-        """Wait until every MUST (acq_name, filename) pair has arrived via
+        """Wait until every MUST (stream_name, filename) pair has arrived via
         the subscribe_streams=True subscription. This subscription also
-        receives WriteFiles-triggered notifications (acq_name == ""), which
+        receives WriteFiles-triggered notifications (stream_name == ""), which
         are skipped; stream notifications beyond the MUST set (boundary
         chunk c0, chunks still transitioning during the drain) are
         tolerated. No timeout, matching _drain_filesub."""
         received = set()
         while not received.issuperset(self.stream_must):
-            filename, error_message, acq_name = next(self.stream_sub)
-            if acq_name == "":
+            filename, error_message, stream_name = next(self.stream_sub)
+            if stream_name == "":
                 continue    # WriteFiles-triggered; drained/checked in _drain_filesub
             if error_message:
                 raise RuntimeError(
                     f"stream_sub: write failed for {filename!r} "
-                    f"(acq_name={acq_name!r}): {error_message}")
-            assert acq_name in ("acq_a", "acq_b", "acq_c"), \
-                f"unexpected acq_name {acq_name!r} (misc_x streams never match)"
-            received.add((acq_name, filename))
+                    f"(stream_name={stream_name!r}): {error_message}")
+            assert stream_name in ("stream_a", "stream_b", "stream_c"), \
+                f"unexpected stream_name {stream_name!r} (misc_x streams never match)"
+            received.add((stream_name, filename))
 
     def _verify_stream_files(self):
         """Byte-verify the MUST stream files, and check the dedup/hardlink
-        behavior: for each captured (chunk, beam), acq_a/acq_b's shared
-        acqdir and acq_c's distinct acqdir must be ONE inode on NFS
+        behavior: for each captured (chunk, beam), stream_a/stream_b's shared
+        acqdir and stream_c's distinct acqdir must be ONE inode on NFS
         (bytes written once; second name is a hardlink; duplicate second
         entry for the shared acqdir skipped)."""
         if self.stream_group is None:
@@ -934,12 +934,12 @@ class NetworkTester:
         scheduled = self.safe_written_set | self.unsafe_written_set
         received_filenames = set()
         while not received_filenames.issuperset(scheduled):
-            filename, error_message, acq_name = next(self.file_sub)
+            filename, error_message, stream_name = next(self.file_sub)
             # file_sub was opened with the default subscribe_streams=False,
-            # so stream-triggered files (nonempty acq_name) must never
+            # so stream-triggered files (nonempty stream_name) must never
             # appear here.
-            assert acq_name == "", \
-                f"subscribe_streams=False subscriber received stream file {filename!r} (acq_name={acq_name!r})"
+            assert stream_name == "", \
+                f"subscribe_streams=False subscriber received stream file {filename!r} (stream_name={stream_name!r})"
             if error_message:
                 raise RuntimeError(
                     f"FileSubscriber: write failed for {filename!r}: "

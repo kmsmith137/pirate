@@ -216,7 +216,7 @@ struct AssembledFrame
     // gives the FileWriter worker threads access to the stream throughout
     // the file-writing code: at completion they bump
     // FileStream::num_files_written / num_files_errored, and copy
-    // stream->acq_name into the per-file WriteStatus so SubscribeFiles
+    // stream->stream_name into the per-file WriteStatus so SubscribeFiles
     // notifications can report which stream (if any) triggered each file.
     struct SaveRequest {
         std::filesystem::path path;

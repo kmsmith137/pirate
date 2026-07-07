@@ -1160,7 +1160,7 @@ def parse_rpc_start_stream(subparsers):
     parser = subparsers.add_parser("rpc_start_stream", help=help_text, description=help_text)
     parser.add_argument('server_address', metavar='ADDRESS', help='Server address (e.g. 127.0.0.1:6000)')
     parser.add_argument('-a', '--acqdir', default=None,
-                        help='Acquisition name AND directory (the CLI always uses acq_name == acqdir); '
+                        help='Acquisition name AND directory (the CLI always uses stream_name == acqdir); '
                              'default: "stream_{date}_{time}", e.g. stream_26_07_07_143052')
     parser.add_argument('-b', '--beam-id', type=int, action='append', metavar='BEAM_ID',
                         help='Beam id to stream (repeatable); either -b or -B must be specified')
@@ -1200,19 +1200,19 @@ def rpc_start_stream(args):
             dt_ns_per_seq = client.xengine_metadata_yaml['dt_ns_per_seq']
             fpga_seq_end = ss.current_fpga_seq + round(args.duration * 1.0e9 / dt_ns_per_seq)
 
-        # The CLI always uses acq_name == acqdir: both come from -a/--acqdir
-        # if specified, else both default inside start_stream() (None acq_name
-        # -> generated "stream_{date}_{time}"; None acqdir -> acq_name). It
+        # The CLI always uses stream_name == acqdir: both come from -a/--acqdir
+        # if specified, else both default inside start_stream() (None stream_name
+        # -> generated "stream_{date}_{time}"; None acqdir -> stream_name). It
         # returns the resolved values so we can report them.
-        acq_name, acqdir = client.start_stream(
+        stream_name, acqdir = client.start_stream(
             beam_ids,
-            acq_name=args.acqdir,
+            stream_name=args.acqdir,
             acqdir=args.acqdir,
             fpga_seq_end=fpga_seq_end,   # fpga_seq_start defaults to 0 ("start asap")
         )
 
         end_str = "indefinite" if args.no_duration else str(fpga_seq_end)
-        print(f"[{addr}] started stream acq_name={acq_name!r}")
+        print(f"[{addr}] started stream stream_name={stream_name!r}")
         print(f"[{addr}]   acqdir = {acqdir!r}")
         print(f"[{addr}]   beam_ids = {beam_ids}")
         print(f"[{addr}]   fpga_seq range = [0, {end_str})")
@@ -1227,8 +1227,8 @@ def parse_rpc_cancel_stream(subparsers):
     help_text = "Send CancelStream RPC to an FrbServer"
     parser = subparsers.add_parser("rpc_cancel_stream", help=help_text, description=help_text)
     parser.add_argument('server_address', metavar='ADDRESS', help='Server address (e.g. 127.0.0.1:6000)')
-    parser.add_argument('-a', '--acq-name', default=None, metavar='ACQ_NAME',
-                        help='Cancel the stream with this acq_name')
+    parser.add_argument('-a', '--stream-name', default=None, metavar='STREAM_NAME',
+                        help='Cancel the stream with this stream_name')
     parser.add_argument('-A', '--all', action='store_true', dest='cancel_all',
                         help='Cancel all active streams')
 
@@ -1236,14 +1236,14 @@ def parse_rpc_cancel_stream(subparsers):
 def rpc_cancel_stream(args):
     from .rpc import FrbSearchClient
 
-    if bool(args.acq_name) == bool(args.cancel_all):
-        raise RuntimeError("rpc_cancel_stream: specify exactly one of -a/--acq-name or -A/--all")
+    if bool(args.stream_name) == bool(args.cancel_all):
+        raise RuntimeError("rpc_cancel_stream: specify exactly one of -a/--stream-name or -A/--all")
 
     addr = args.server_address
     client = FrbSearchClient(addr)
 
     try:
-        n = client.cancel_stream(acq_name=args.acq_name, cancel_all=args.cancel_all)
+        n = client.cancel_stream(stream_name=args.stream_name, cancel_all=args.cancel_all)
         print(f"[{addr}] cancelled {n} stream(s)")
     finally:
         client.close()
@@ -1291,7 +1291,7 @@ def rpc_show_streams(args):
             if (info.status != frb_search_pb2.STREAM_STATUS_ACTIVE) and info.cancelled:
                 status += " (cancelled)"
             end_str = "indefinite" if (a.fpga_seq_end == 2**63 - 1) else str(a.fpga_seq_end)
-            print(f"[{addr}] stream acq_name={a.acq_name!r}:")
+            print(f"[{addr}] stream stream_name={a.stream_name!r}:")
             print(f"[{addr}]   status = {status}")
             print(f"[{addr}]   acqdir = {a.acqdir!r}")
             print(f"[{addr}]   beam_ids = {list(a.beam_ids)}")

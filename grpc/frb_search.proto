@@ -85,7 +85,7 @@ service FrbSearch {
   // (expired/cancelled) streams.
   rpc ShowStreams (ShowStreamsRequest) returns (ShowStreamsResponse);
 
-  // Cancel one active stream (by acq_name), or all of them. File writes
+  // Cancel one active stream (by stream_name), or all of them. File writes
   // already queued still complete (and still notify SubscribeFiles
   // subscribers); cancellation only stops future matching. Cancelled
   // streams remain visible in ShowStreams' bounded history; cancelling an
@@ -218,7 +218,7 @@ message ReadySentinel {}
 message WriteNotification {
   string filename      = 1;  // Valid only when error_message is empty.
   string error_message = 2;  // Empty = success; non-empty = error string.
-  string acq_name      = 3;  // Empty if triggered by WriteFiles, nonempty
+  string stream_name   = 3;  // Empty if triggered by WriteFiles, nonempty
                              // if triggered by StartStream.
 }
 
@@ -239,7 +239,7 @@ message MonitorRingbufResponse {
 // means "start asap"; fpga_seq_end = INT64_MAX means "run indefinitely".
 message StartStreamRequest {
   uint32 protocol_version = 1;  // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
-  string acq_name = 2;          // must be nonempty; unique among active streams
+  string stream_name = 2;       // must be nonempty; unique among active streams
   string acqdir = 3;            // acquisition directory; same conventions as
                                 // WriteFilesRequest.acqdir (files are written to
                                 // {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf)
@@ -317,8 +317,8 @@ message ShowStreamsResponse {
 message CancelStreamRequest {
   uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
   bool cancel_all = 2;
-  string acq_name = 3;   // used only if cancel_all == false; unknown
-                         // acq_name is an error
+  string stream_name = 3;   // used only if cancel_all == false; unknown
+                            // stream_name is an error
 }
 
 // Response message for CancelStream.

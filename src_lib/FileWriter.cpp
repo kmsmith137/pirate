@@ -311,7 +311,7 @@ void FileWriter::_nfs_thread_main()
                 shared_ptr<FileStream> stream = frame->save_paths[nfs_count].stream;
                 WriteStatus ws;
                 ws.save_path = frame->save_paths[nfs_count].path;
-                ws.acq_name = stream ? stream->acq_name : "";
+                ws.stream_name = stream ? stream->stream_name : "";
                 ws.error = frame->save_error;
                 frame_lock.unlock();
 
@@ -351,7 +351,7 @@ void FileWriter::_nfs_thread_main()
                     shared_ptr<FileStream> stream = frame->save_paths[nfs_count].stream;
                     WriteStatus ws;
                     ws.save_path = frame->save_paths[nfs_count].path;
-                    ws.acq_name = stream ? stream->acq_name : "";
+                    ws.stream_name = stream ? stream->stream_name : "";
                     frame_lock.unlock();
 
                     // A duplicate-skip counts as WRITTEN (the file is on disk
@@ -391,7 +391,7 @@ void FileWriter::_nfs_thread_main()
 
             WriteStatus ws;
             ws.save_path = secondary_path;
-            ws.acq_name = secondary_stream ? secondary_stream->acq_name : "";
+            ws.stream_name = secondary_stream ? secondary_stream->stream_name : "";
             _update_rpc_subscribers(ws);
 
             frame_lock.lock();

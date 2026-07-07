@@ -42,7 +42,7 @@ public:
     struct WriteStatus
     {
         std::filesystem::path save_path;
-        std::string acq_name;      // "" = WriteFiles-triggered; nonempty = stream (StartStream RPC)
+        std::string stream_name;      // "" = WriteFiles-triggered; nonempty = stream (StartStream RPC)
         std::exception_ptr error;  // empty pointer if write was successful
     };
 
@@ -155,7 +155,7 @@ std::string make_acq_relpath(const std::string &acqdir,
 // FrbServer's active/inactive stream lists, and by AssembledFrame::SaveRequest
 // entries -- the latter is what gives the FileWriter worker threads access to
 // the stream throughout the file-writing code (to bump the written/errored
-// counters and tag notifications with acq_name).
+// counters and tag notifications with stream_name).
 //
 // THREAD-SAFETY: the fields fall into three groups.
 //
@@ -186,7 +186,7 @@ std::string make_acq_relpath(const std::string &acqdir,
 struct FileStream
 {
     // (i) Immutable after publication.
-    std::string acq_name;          // nonempty; unique among ACTIVE streams
+    std::string stream_name;          // nonempty; unique among ACTIVE streams
     std::string acqdir;            // acquisition directory (validated with validate_acqdir)
     std::vector<long> beam_ids;    // original args (nonempty, validated, distinct)
     std::vector<int> beam_indices; // parallel: position in metadata->beam_ids

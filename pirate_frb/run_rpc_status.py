@@ -70,15 +70,15 @@ class _ServerMonitor:
         try:
             # subscribe_files() returns a FileSubscriber whose constructor has
             # already opened the stream and consumed the server's ready
-            # sentinel; iteration yields (filename, error_message, acq_name)
+            # sentinel; iteration yields (filename, error_message, stream_name)
             # triples. subscribe_streams=True, so files written by streams
-            # (nonempty acq_name) are reported here too, alongside the usual
-            # WriteFiles-triggered files (acq_name == "").
+            # (nonempty stream_name) are reported here too, alongside the usual
+            # WriteFiles-triggered files (stream_name == "").
             with self.client.subscribe_files(subscribe_streams=True) as sub:
-                for filename, error_message, acq_name in sub:
+                for filename, error_message, stream_name in sub:
                     if self.stop_event.is_set():
                         return
-                    tag = f" (stream {acq_name})" if acq_name else ""
+                    tag = f" (stream {stream_name})" if stream_name else ""
                     if error_message:
                         print(f"[{self.addr}] {filename} failed: {error_message}{tag}")
                     else:
