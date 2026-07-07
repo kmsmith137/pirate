@@ -17,13 +17,15 @@ _PROTOCOL_VERSION = frb_search_pb2.PROTOCOL_VERSION_CURRENT
 
 class FrbSearchClient:
     """Client for querying FrbServer via gRPC.
-    
-    Usage:
+
+    Usage (as a context manager)::
+
         with FrbSearchClient("localhost:50051") as client:
             status = client.get_status()
             print(f"Connections: {status.num_connections}, Bytes: {status.num_bytes}")
-    
-    Or without context manager:
+
+    Or without a context manager::
+
         client = FrbSearchClient("localhost:50051")
         status = client.get_status()
         client.close()
@@ -64,28 +66,31 @@ class FrbSearchClient:
         request = frb_search_pb2.GetStatusRequest(protocol_version=_PROTOCOL_VERSION)
         return self.stub.GetStatus(request)
 
-    def get_config(self):
-        """Query the server for its run-time configuration.
+    @functools.cached_property
+    def config(self):
+        """The server's run-time configuration (cached).
 
-        Returns:
-            GetConfigResponse protobuf message with fields:
-            - rpc_ip_addr: "ip:port" this server's RPC is bound to
-            - data_ip_addrs: list of "ip:port" strings, one per Receiver
-            - time_samples_per_chunk: int
-            - ringbuf_nchunks: logical ring buffer length (in time chunks)
-            - ssd_dir: SSD cache directory
-            - nfs_dir: NFS output directory (already interpolated for {user}/{date}/{home})
-            - ssd_threads: number of FileWriter SSD threads
-            - nfs_threads: number of FileWriter NFS threads
-            - tree_rank: from config_prefilled
-            - beams_per_batch: from config_prefilled
-            - frequency_subband_counts: list[int] from config_prefilled (a real
-              search-config value, not a fake_ default)
-            - min_data_mtu: minimum data-NIC MTU expected on the sender side
-            - fake_zone_nfreq: list[int] from config_prefilled.zone_nfreq (pre-metadata)
-            - fake_zone_freq_edges: list[float] from config_prefilled.zone_freq_edges (pre-metadata)
-            - fake_time_sample_ms: float from config_prefilled.time_sample_ms (pre-metadata)
-            - fake_nbeams: int from config_prefilled.beams_per_gpu (pre-metadata)
+        Static for the server's lifetime, so it is fetched from the server once
+        on first access (a GetConfig RPC) and reused thereafter. A
+        GetConfigResponse protobuf message with fields:
+
+        - rpc_ip_addr: "ip:port" this server's RPC is bound to
+        - data_ip_addrs: list of "ip:port" strings, one per Receiver
+        - time_samples_per_chunk: int
+        - ringbuf_nchunks: logical ring buffer length (in time chunks)
+        - ssd_dir: SSD cache directory
+        - nfs_dir: NFS output directory (already interpolated for {user}/{date}/{home})
+        - ssd_threads: number of FileWriter SSD threads
+        - nfs_threads: number of FileWriter NFS threads
+        - tree_rank: from config_prefilled
+        - beams_per_batch: from config_prefilled
+        - frequency_subband_counts: list[int] from config_prefilled (a real
+          search-config value, not a ``fake_`` default)
+        - min_data_mtu: minimum data-NIC MTU expected on the sender side
+        - fake_zone_nfreq: list[int] from config_prefilled.zone_nfreq (pre-metadata)
+        - fake_zone_freq_edges: list[float] from config_prefilled.zone_freq_edges (pre-metadata)
+        - fake_time_sample_ms: float from config_prefilled.time_sample_ms (pre-metadata)
+        - fake_nbeams: int from config_prefilled.beams_per_gpu (pre-metadata)
 
         The 'fake_*' fields are what a fake X-engine sender should mimic;
         they're the pre-metadata values the receiver was started with, not
@@ -93,16 +98,6 @@ class FrbSearchClient:
         """
         request = frb_search_pb2.GetConfigRequest(protocol_version=_PROTOCOL_VERSION)
         return self.stub.GetConfig(request)
-
-    @functools.cached_property
-    def config(self):
-        """The server's run-time configuration (cached).
-
-        Static for the server's lifetime, so it is fetched once (via
-        get_config()) on first access and reused thereafter. See get_config()
-        for the full field list.
-        """
-        return self.get_config()
 
     def _try_xengine_metadata(self):
         """Fetch the server's X-engine metadata YAML string if it is available.
@@ -199,7 +194,7 @@ class FrbSearchClient:
         """Request the server to write files to disk.
 
         Files are written to {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf,
-        where nfs_root comes from the server config (get_config().nfs_dir).
+        where nfs_root comes from the server config (self.config.nfs_dir).
 
         Note: I recommend using a unique acqdir for each multibeam event (or stream).
         Our postprocessing tools generally assume contiguous time chunks (or close to
@@ -241,7 +236,7 @@ class FrbSearchClient:
         queued for disk writing automatically as it flows through the server.
 
         Files are written to {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf,
-        where nfs_root comes from the server config (get_config().nfs_dir).
+        where nfs_root comes from the server config (self.config.nfs_dir).
 
         Complements write_files() (one-shot, retroactive within the ring
         buffer): a stream captures each frame at the moment it is processed,

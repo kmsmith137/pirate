@@ -126,7 +126,7 @@ class RunFakeXEngineHelper:
         """
         print(f"\n[{rpc_addr}] Connecting ...")
         with FrbSearchClient(rpc_addr) as c:
-            cfg = c.get_config()
+            cfg = c.config
         if not list(cfg.data_ip_addrs):
             raise RuntimeError(f"[{rpc_addr}] reported empty data_ip_addrs")
 
