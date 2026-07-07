@@ -1370,14 +1370,26 @@ def rpc_show_streams(args):
     import grpc
     from .rpc.grpc import frb_search_pb2
 
+    ACTIVE = frb_search_pb2.STREAM_STATUS_ACTIVE
+    INDEF = 2**63 - 1   # fpga_seq_end sentinel for "run indefinitely"
+
     def fmt_time(unix_ns):
         if unix_ns == 0:
             return "-"
         return datetime.datetime.fromtimestamp(unix_ns * 1.0e-9).strftime('%Y-%m-%d %H:%M:%S')
 
-    def print_server(addr, ss):
-        n_listed_inactive = sum(1 for i in ss.streams
-                                if i.status != frb_search_pb2.STREAM_STATUS_ACTIVE)
+    def fmt_duration(sec):
+        sec = max(0, int(round(sec)))
+        if sec < 60:
+            return f"{sec}s"
+        m, s = divmod(sec, 60)
+        if m < 60:
+            return f"{m}m{s:02d}s"
+        h, m = divmod(m, 60)
+        return f"{h}h{m:02d}m"
+
+    def print_server(addr, ss, dt_ns_per_seq):
+        n_listed_inactive = sum(1 for i in ss.streams if i.status != ACTIVE)
         print(f"[{addr}] current_fpga_seq = {ss.current_fpga_seq}")
         print(f"[{addr}] beam_ids = {list(ss.beam_ids)}")
         print(f"[{addr}] num_deactivated_streams = {ss.num_deactivated_streams}"
@@ -1391,14 +1403,23 @@ def rpc_show_streams(args):
             # "STREAM_STATUS_ACTIVE" -> "active", etc.
             status = frb_search_pb2.StreamStatus.Name(info.status)
             status = status.removeprefix('STREAM_STATUS_').lower()
-            if (info.status != frb_search_pb2.STREAM_STATUS_ACTIVE) and info.cancelled:
+            if (info.status != ACTIVE) and info.cancelled:
                 status += " (cancelled)"
-            end_str = "indefinite" if (a.fpga_seq_end == 2**63 - 1) else str(a.fpga_seq_end)
+            end_str = "indefinite" if (a.fpga_seq_end == INDEF) else str(a.fpga_seq_end)
+            # For an active, finite-duration stream, show the estimated wall-clock
+            # time until its end fpga_seq is processed. Data flows in real time, so
+            # (remaining fpga-seqs) * dt_ns_per_seq ~= seconds left. This is
+            # independent of fpga_seq_start, so it makes no assumption about how
+            # the caller set the range's start.
+            remaining = ""
+            if (info.status == ACTIVE) and (a.fpga_seq_end != INDEF):
+                remaining_sec = (a.fpga_seq_end - ss.current_fpga_seq) * dt_ns_per_seq * 1.0e-9
+                remaining = f" (~{fmt_duration(remaining_sec)} remaining)"
             print(f"[{addr}] stream stream_name={a.stream_name!r}:")
             print(f"[{addr}]   status = {status}")
             print(f"[{addr}]   acqdir = {a.acqdir!r}")
             print(f"[{addr}]   beam_ids = {list(a.beam_ids)}")
-            print(f"[{addr}]   fpga_seq range = [{a.fpga_seq_start}, {end_str})")
+            print(f"[{addr}]   fpga_seq range = [{a.fpga_seq_start}, {end_str}){remaining}")
             print(f"[{addr}]   started = {fmt_time(info.started_at_unix_ns)}, "
                   f"deactivated = {fmt_time(info.deactivated_at_unix_ns)}")
             print(f"[{addr}]   files: queued = {info.num_files_queued}, "
@@ -1412,7 +1433,16 @@ def rpc_show_streams(args):
             if i > 0:
                 print()   # blank line between per-server blocks
             try:
-                print_server(addr, client.show_streams())
+                ss = client.show_streams()
+                # dt_ns_per_seq (for "time remaining") is only needed when some
+                # active stream has a finite end; fetch it lazily to skip an extra
+                # RPC otherwise. client.xengine_metadata_yaml is cached and is
+                # available here -- show_streams() and the metadata both require
+                # the server to have received X-engine metadata.
+                need_dt = any((s.status == ACTIVE) and (s.args.fpga_seq_end != INDEF)
+                              for s in ss.streams)
+                dt = client.xengine_metadata_yaml['dt_ns_per_seq'] if need_dt else None
+                print_server(addr, ss, dt)
             except grpc.RpcError as e:
                 had_error = True
                 print(f"[{addr}] ERROR: {_rpc_error_str(e)}", file=sys.stderr)
