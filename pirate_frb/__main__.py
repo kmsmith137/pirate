@@ -1065,7 +1065,6 @@ def parse_rpc_rand_write(subparsers):
 def _rpc_rand_write_one(addr):
     """Send a write_files RPC to a single FrbServer."""
 
-    import yaml
     import datetime
     from .rpc import FrbSearchClient
 
@@ -1073,14 +1072,14 @@ def _rpc_rand_write_one(addr):
     print(f"[{addr}] Connected")
 
     try:
-        # Get XEngine metadata to obtain beam IDs.
-        metadata_yaml = client.get_xengine_metadata(verbose=False)
-        if not metadata_yaml:
+        # Get XEngine metadata to obtain beam IDs. client.beam_ids / xengine_metadata_yaml
+        # raise RuntimeError until the server has received metadata.
+        try:
+            beam_ids = list(client.beam_ids)
+        except RuntimeError:
             print(f"[{addr}] Error: metadata not yet available")
             return
 
-        metadata = yaml.safe_load(metadata_yaml)
-        beam_ids = metadata['beam_ids']
         nbeams = len(beam_ids)
         print(f"[{addr}] Got metadata: {nbeams} beams, beam_ids={beam_ids}")
 
@@ -1089,7 +1088,7 @@ def _rpc_rand_write_one(addr):
         # from the X-engine metadata. Used to convert our chunk range (derived
         # from the ring-buffer frame-id counters below) into the fpga-seq range
         # that write_files expects.
-        seq_per_chunk = client.get_config().time_samples_per_chunk * metadata['seq_per_frb_time_sample']
+        seq_per_chunk = client.config.time_samples_per_chunk * client.xengine_metadata_yaml['seq_per_frb_time_sample']
 
         # Select random subset of beam IDs (1 to min(nbeams, 3)).
         n = random.randint(1, min(nbeams, 3))
@@ -1174,7 +1173,6 @@ def parse_rpc_start_stream(subparsers):
 
 
 def rpc_start_stream(args):
-    import yaml
     from .rpc import FrbSearchClient
 
     if bool(args.beam_id) == bool(args.all_beams):
@@ -1198,9 +1196,8 @@ def rpc_start_stream(args):
             fpga_seq_end = None    # "run indefinitely"
         else:
             # Convert seconds to fpga seqs via dt_ns_per_seq (from the
-            # X-engine metadata; non-empty since show_streams() succeeded).
-            xmd = yaml.safe_load(client.get_xengine_metadata())
-            dt_ns_per_seq = xmd['dt_ns_per_seq']
+            # X-engine metadata; available since show_streams() succeeded).
+            dt_ns_per_seq = client.xengine_metadata_yaml['dt_ns_per_seq']
             fpga_seq_end = ss.current_fpga_seq + round(args.duration * 1.0e9 / dt_ns_per_seq)
 
         # The CLI always uses acq_name == acqdir: both come from -a/--acqdir

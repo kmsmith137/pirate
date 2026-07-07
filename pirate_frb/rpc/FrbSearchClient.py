@@ -1,7 +1,9 @@
 """FrbSearchClient - Python client for FrbServer gRPC service."""
 
+import functools
 import datetime
 
+import yaml
 import grpc
 from .grpc import frb_search_pb2
 from .grpc import frb_search_pb2_grpc
@@ -41,6 +43,9 @@ class FrbSearchClient:
         self.server_address = server_address
         self.channel = grpc.insecure_channel(server_address)
         self.stub = frb_search_pb2_grpc.FrbSearchStub(self.channel)
+        # Cache for the X-engine metadata YAML string, populated by
+        # _try_xengine_metadata() once the server has it (static thereafter).
+        self._xengine_metadata_yaml = None
 
     def get_status(self):
         """Query the server for current status.
@@ -89,20 +94,100 @@ class FrbSearchClient:
         request = frb_search_pb2.GetConfigRequest(protocol_version=_PROTOCOL_VERSION)
         return self.stub.GetConfig(request)
 
-    def get_xengine_metadata(self, verbose: bool = False) -> str:
-        """Query the server for XEngine metadata as a YAML string.
+    @functools.cached_property
+    def config(self):
+        """The server's run-time configuration (cached).
 
-        Args:
-            verbose: If True, include comments explaining each field.
-
-        Returns:
-            YAML string representation of XEngine metadata, or empty string
-            if metadata is not yet available.
+        Static for the server's lifetime, so it is fetched once (via
+        get_config()) on first access and reused thereafter. See get_config()
+        for the full field list.
         """
-        request = frb_search_pb2.GetXEngineMetadataRequest(
-            protocol_version=_PROTOCOL_VERSION, verbose=verbose)
-        response = self.stub.GetXEngineMetadata(request)
-        return response.yaml_string
+        return self.get_config()
+
+    def _try_xengine_metadata(self):
+        """Fetch the server's X-engine metadata YAML string if it is available.
+
+        Returns the (terse, non-verbose) YAML string, or None if the server
+        has not yet received metadata from the X-engine. The first non-empty
+        result is cached, so later calls return it without another RPC; a None
+        result is NOT cached, so a subsequent call retries. This is the
+        non-raising primitive a caller polls (e.g. run_rpc_status); the
+        xengine_* / beam_ids accessors below wrap it and raise when it is None.
+
+        Always the terse form: the parsed tiers ignore YAML comments, and
+        nothing needs the commented dump over RPC.
+
+        Raises grpc.RpcError on transport failure (a server that is up but has
+        no metadata yet returns None, which is not an error).
+        """
+        if self._xengine_metadata_yaml is None:
+            request = frb_search_pb2.GetXEngineMetadataRequest(
+                protocol_version=_PROTOCOL_VERSION, verbose=False)
+            yaml_string = self.stub.GetXEngineMetadata(request).yaml_string
+            if not yaml_string:
+                return None   # not yet available; do NOT cache
+            self._xengine_metadata_yaml = yaml_string
+        return self._xengine_metadata_yaml
+
+    @property
+    def xengine_metadata_yaml_string(self) -> str:
+        """The server's X-engine metadata as a YAML string.
+
+        The single "not-ready" choke point shared by xengine_metadata_yaml,
+        xengine_metadata, and beam_ids: it raises RuntimeError if the metadata
+        is not available yet. For a non-raising, pollable form (returns None
+        while unavailable), use _try_xengine_metadata() -- which also holds the
+        cache, so repeated access here does not re-hit the server.
+
+        Raises:
+            RuntimeError: metadata not yet available.
+            grpc.RpcError: transport failure.
+        """
+        yaml_string = self._try_xengine_metadata()
+        if yaml_string is None:
+            raise RuntimeError(
+                f"{self!r}: X-engine metadata not yet available "
+                "(the server has not received it from the X-engine yet)")
+        return yaml_string
+
+    @functools.cached_property
+    def xengine_metadata_yaml(self) -> dict:
+        """The server's X-engine metadata, parsed to a plain dict (cached).
+
+        The parsed form of xengine_metadata_yaml_string. Keys include
+        dt_ns_per_seq, unix_ns_at_seq_0, seq_per_frb_time_sample, zone_nfreq,
+        zone_freq_edges, beamset, beam_ids, and version.
+
+        Raises RuntimeError / grpc.RpcError; see xengine_metadata_yaml_string.
+        """
+        return yaml.safe_load(self.xengine_metadata_yaml_string)
+
+    @functools.cached_property
+    def xengine_metadata(self):
+        """The server's X-engine metadata, parsed to a typed
+        pirate_pybind11.XEngineMetadata (cached).
+
+        beam_ids and beam_positions_{x,y} ARE populated (the server serializes
+        them via XEngineMetadata::to_yaml_string). freq_channels may be empty:
+        it is only meaningful as a per-sender channel subset, and the server's
+        aggregated metadata does not carry one.
+
+        Raises RuntimeError / grpc.RpcError; see xengine_metadata_yaml_string.
+        """
+        from ..pirate_pybind11 import XEngineMetadata
+        return XEngineMetadata.from_yaml_string(self.xengine_metadata_yaml_string)
+
+    @functools.cached_property
+    def beam_ids(self) -> tuple[int, ...]:
+        """The beam IDs processed by this server (cached).
+
+        Static for the server's lifetime. Sourced from the X-engine metadata
+        (the same values ShowStreams reports); returned as a tuple so the
+        shared cached value cannot be mutated by a caller.
+
+        Raises RuntimeError / grpc.RpcError; see xengine_metadata_yaml_string.
+        """
+        return tuple(self.xengine_metadata.beam_ids)
 
     def write_files(
         self,

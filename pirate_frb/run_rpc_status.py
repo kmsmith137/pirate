@@ -11,10 +11,11 @@ from .rpc import FrbSearchClient
 
 
 class _ServerMonitor:
-    """Owns the two daemon threads for a single FrbServer connection: one
-    polls get_status() once per second and prints a summary line; the other
-    prints filenames as the server reports them. An error in either loop sets
-    the shared stop_event, which tears down every connection.
+    """Owns the daemon threads for a single FrbServer connection: one polls
+    get_status() once per second and prints a summary line; one waits for the
+    X-engine metadata and prints it once it arrives; one prints filenames as
+    the server reports them. An error in any loop sets the shared stop_event,
+    which tears down every connection.
     """
 
     def __init__(self, addr, client, stop_event):
@@ -23,16 +24,9 @@ class _ServerMonitor:
         self.stop_event = stop_event
 
     def status_loop(self):
-        """Poll get_status() once per second and print a summary. Also tries
-        get_xengine_metadata() once per second until it returns a non-empty
-        YAML string, then prints it (once) and stops trying."""
+        """Poll get_status() once per second and print a summary line."""
         try:
-            metadata_printed = False
-
             while not self.stop_event.is_set():
-                if not metadata_printed:
-                    metadata_printed = self._try_print_metadata()
-
                 status = self.client.get_status()
                 print(f"[{self.addr}] connections={status.num_connections}, "
                       f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_processed},{status.rb_assembled},{status.rb_end}], "
@@ -43,20 +37,25 @@ class _ServerMonitor:
             print(f"[{self.addr}] ERROR: {e}", file=sys.stderr)
             self.stop_event.set()
 
-    def _try_print_metadata(self):
-        """Try once to fetch and print xengine_metadata. Returns True once it
-        has been printed (caller then stops trying), False while it is still
-        unavailable.
-        """
-        xmd_yaml = self.client.get_xengine_metadata(verbose=False)
-        if not xmd_yaml:
-            return False
+    def metadata_loop(self):
+        """Poll for the server's X-engine metadata once per second; print it
+        once it becomes available, then stop. Runs in its own thread so the
+        wait does not stall the status polling above, and stays responsive to
+        stop_event via _sleep_one_second()."""
+        try:
+            while not self.stop_event.is_set():
+                xmd_yaml = self.client._try_xengine_metadata()
+                if xmd_yaml is not None:
+                    print()
+                    print(f"[{self.addr}] xengine_metadata:")
+                    print(textwrap.indent(xmd_yaml.rstrip(), "  "))
+                    print()
+                    return
 
-        print()
-        print(f"[{self.addr}] xengine_metadata:")
-        print(textwrap.indent(xmd_yaml.rstrip(), "  "))
-        print()
-        return True
+                self._sleep_one_second()
+        except Exception as e:
+            print(f"[{self.addr}] ERROR: {e}", file=sys.stderr)
+            self.stop_event.set()
 
     def _sleep_one_second(self):
         """Sleep ~1 second, waking every 0.1s to check stop_event so the loop
@@ -122,10 +121,10 @@ def run_rpc_status(ip_addrs):
     """Connect to one or more FrbServers and stream status + filenames.
 
     Prints a one-shot config dump for each server, then -- per server -- runs
-    two daemon threads: one polls get_status() once per second (printing
-    connection count, instantaneous bandwidth, an EMA of "real-time beams"
-    throughput, and the ringbuffer counters), the other prints filenames as
-    the server reports them over subscribe_files().
+    three daemon threads: one polls get_status() once per second (printing the
+    connection count, ring-buffer counters, and free-frame count), one waits
+    for the X-engine metadata and prints it once it arrives, and one prints
+    filenames as the server reports them over subscribe_files().
 
     Blocks until Ctrl-C or until any thread hits an error (the first error
     sets a shared stop_event that tears down every connection). Exits the
@@ -153,7 +152,7 @@ def run_rpc_status(ip_addrs):
 
     # One-shot startup dump: print each server's configuration (GetConfig).
     for addr, client in clients:
-        _print_config(addr, client.get_config())
+        _print_config(addr, client.config)
     print()
 
     print("Running get_status (1/sec) and subscribe_files. Press Ctrl-C to stop.")
@@ -163,7 +162,7 @@ def run_rpc_status(ip_addrs):
     threads = []
     for addr, client in clients:
         monitor = _ServerMonitor(addr, client, stop_event)
-        for loop_fn in (monitor.status_loop, monitor.subscribe_loop):
+        for loop_fn in (monitor.status_loop, monitor.subscribe_loop, monitor.metadata_loop):
             t = threading.Thread(target=loop_fn, daemon=True)
             t.start()
             threads.append(t)
