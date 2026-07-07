@@ -115,3 +115,29 @@ pirate_frb rpc_rand_write 10.222.3.5:6000 10.222.3.5:6001
 ```
 See above for more info on the simulated FRB event streams, or on "short-circuting" the
 sequence of programs.
+
+## Running a toy offline dedisperser
+
+I started hacking together an offline dedisperser.
+Here are some example runs, based on `start_stream` acquisitions from the sections above
+(which included simulated FRBs):
+```
+# Toy acquisition
+pirate_frb run_offline_dedisperser \
+   ~/pirate_toy/toy_stream_26_07_07_123508 \   # your acqdir will be different
+   configs/dedispersion/toy.yml
+
+# "Production" acquisition
+pirate_frb run_offline_dedisperser \
+    /mnt/cs00/data/kmsmith/prod_stream_26_07_07_155938 \   # your acqdir will be different
+    configs/dedispersion/chord_sb2.yml
+```
+Currently, the results are difficult to interpret!
+The offline dedisperser doesn't do real peak-finding -- it just prints the max snr in
+each time-chunk of data. With this placeholder peak-finding, each injected pulse
+shows up in multiple time-chunks.
+Additionally, there may be boundary effects near the beginning of the acquisition.
+
+The offline dedisperser isn't really useful yet, but should be a useful starting point
+for further development, and as a way of establishing interfaces (`class Acquisition`,
+`class OfflineDedisperser`).
