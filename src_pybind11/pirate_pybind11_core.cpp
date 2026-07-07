@@ -751,13 +751,7 @@ void register_core_bindings(pybind11::module &m)
         "Metadata sent over the wire by X-engine nodes to FRB nodes at the\n"
         "start of every TCP stream. Also used for bookkeeping in several\n"
         "places (allocator's canonical copy, per-frame ASDF projection, etc).\n\n"
-        "See configs/xengine_metadata.yml for field-by-field\n"
-        "documentation. The freq_channels member has two distinct meanings\n"
-        "depending on context -- see the 'freq_channels' attribute docstring\n"
-        "and XEngineMetadata.hpp for the 'frequency-scrubbed' convention.\n\n"
-        "Note: YAML is the full-fidelity serialization. ASDF (via\n"
-        "AssembledFrame.write_asdf) drops/projects 4 members per-frame --\n"
-        "see the C++ header for details.")
+        "See configs/xengine_metadata.yml for an example with per-field documentation.")
           .def(py::init<>())
           .def_readwrite("version", &XEngineMetadata::version,
                "Version number of the metadata format")
@@ -768,11 +762,11 @@ void register_core_bindings(pybind11::module &m)
           .def_readwrite("freq_channels", &XEngineMetadata::freq_channels,
                "Which frequency channels are present. MEANINGFUL when the\n"
                "metadata is associated with one specific X-engine sender\n"
-               "(the wire-protocol case, or a FakeXEngine Worker). Otherwise\n"
+               "(the wire-protocol case, or a FakeXEngine Worker).\n\n Otherwise\n"
                "(bookkeeping contexts where no specific sender is distinguished,\n"
                "e.g. the allocator's canonical copy, FrbServer, AssembledFrame's\n"
                "metadata) the convention is to set this to an empty list, which\n"
-               "we call 'frequency-scrubbed'. See XEngineMetadata.hpp.")
+               "we call 'frequency-scrubbed'.")
           .def_readwrite("beamset", &XEngineMetadata::beamset,
                "Integer identifier for this set of beams")
           .def_readwrite("beam_ids", &XEngineMetadata::beam_ids,
