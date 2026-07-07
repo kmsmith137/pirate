@@ -1152,20 +1152,43 @@ def rpc_rand_write(args):
         _rpc_rand_write_one(addr)
 
 
-##################################   rpc_start_stream command  ######################################
+##############################   multi-server stream commands  ######################################
+#
+# rpc_start_stream / rpc_show_streams / rpc_cancel_stream each take one or more server
+# addresses and treat the collection as a single "super-server": each FrbServer processes
+# a DISJOINT set of beams, and the CLI routes (-b) / fans out (-B, -A) / loops so the user
+# sees one logical stream namespace across all servers.
+
+
+def _stream_clients(addresses):
+    """Open an FrbSearchClient per address; returns a list of (addr, client).
+    The caller is responsible for closing them (see the finally blocks below)."""
+    from .rpc import FrbSearchClient
+    return [(addr, FrbSearchClient(addr)) for addr in addresses]
+
+
+def _rpc_error_str(e):
+    """Human-readable message from a grpc.RpcError: unary-call errors are
+    grpc.Call and carry the server's message in .details(); fall back to str()."""
+    details = getattr(e, "details", None)
+    return details() if callable(details) else str(e)
 
 
 def parse_rpc_start_stream(subparsers):
-    help_text = "Send StartStream RPC to an FrbServer (write data to disk as it is received)"
+    help_text = ("Send StartStream RPC to one or more FrbServers (write data to disk as it is "
+                 "received). Multiple addresses act as one 'super-server'.")
     parser = subparsers.add_parser("rpc_start_stream", help=help_text, description=help_text)
-    parser.add_argument('server_address', metavar='ADDRESS', help='Server address (e.g. 127.0.0.1:6000)')
+    parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
+                        help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
     parser.add_argument('-a', '--acqdir', default=None,
                         help='Acquisition name AND directory (the CLI always uses stream_name == acqdir); '
-                             'default: "stream_{date}_{time}", e.g. stream_26_07_07_143052')
+                             'shared across all servers; default: "stream_{date}_{time}", '
+                             'e.g. stream_26_07_07_143052')
     parser.add_argument('-b', '--beam-id', type=int, action='append', metavar='BEAM_ID',
-                        help='Beam id to stream (repeatable); either -b or -B must be specified')
+                        help='Beam id to stream (repeatable), routed to the server that owns it; '
+                             'either -b or -B must be specified')
     parser.add_argument('-B', '--all-beams', action='store_true',
-                        help='Stream all beams processed by the server')
+                        help='Stream all beams; starts a stream on every server with its full beam list')
     parser.add_argument('-d', type=float, default=None, metavar='DURATION_SECONDS', dest='duration',
                         help='Stream duration in seconds; either -d or -D must be specified')
     parser.add_argument('-D', '--no-duration', action='store_true',
@@ -1173,7 +1196,8 @@ def parse_rpc_start_stream(subparsers):
 
 
 def rpc_start_stream(args):
-    from .rpc import FrbSearchClient
+    import datetime
+    import grpc
 
     if bool(args.beam_id) == bool(args.all_beams):
         raise RuntimeError("rpc_start_stream: specify exactly one of -b/--beam-id or -B/--all-beams")
@@ -1182,85 +1206,168 @@ def rpc_start_stream(args):
     if (args.duration is not None) and (args.duration <= 0):
         raise RuntimeError(f"rpc_start_stream: duration must be positive (got {args.duration})")
 
-    addr = args.server_address
-    client = FrbSearchClient(addr)
+    clients = _stream_clients(args.server_addresses)
 
     try:
-        # show_streams() fails cleanly if the server hasn't locked onto the
-        # X-engine stream yet, and returns the current fpga position (used
-        # for -d) and the server's full beam list (used for -B).
-        ss = client.show_streams()
-        beam_ids = args.beam_id if args.beam_id else list(ss.beam_ids)
+        # Phase 1: query every server up front. show_streams() fails cleanly if a
+        # server hasn't locked onto the X-engine stream yet, and returns its
+        # current fpga position (for -d) and its beam list (for -B / routing). We
+        # need ALL beam lists before routing -b, so any failure here is fatal --
+        # nothing has been started, so no partial super-server stream is left behind.
+        infos = []   # list of (addr, client, show_streams_response)
+        for addr, client in clients:
+            try:
+                infos.append((addr, client, client.show_streams()))
+            except grpc.RpcError as e:
+                raise RuntimeError(
+                    f"rpc_start_stream: server {addr} is not ready ({_rpc_error_str(e)}); "
+                    "no streams were started") from e
 
-        if args.no_duration:
-            fpga_seq_end = None    # "run indefinitely"
+        # Phase 2: decide each target server's beam subset -> list of (addr, client, ss, beams).
+        if args.all_beams:
+            # -B: every server streams its own full beam list.
+            targets = [(addr, client, ss, list(ss.beam_ids)) for (addr, client, ss) in infos]
         else:
-            # Convert seconds to fpga seqs via dt_ns_per_seq (from the
-            # X-engine metadata; available since show_streams() succeeded).
-            dt_ns_per_seq = client.xengine_metadata_yaml['dt_ns_per_seq']
-            fpga_seq_end = ss.current_fpga_seq + round(args.duration * 1.0e9 / dt_ns_per_seq)
+            # -b: route each requested beam to the server that owns it (servers
+            # process disjoint beam sets), then group by owning server preserving
+            # the order beams were given on the command line.
+            beam_to_server = {b: (addr, client, ss)
+                              for (addr, client, ss) in infos for b in ss.beam_ids}
+            missing = [b for b in args.beam_id if b not in beam_to_server]
+            if missing:
+                raise RuntimeError(
+                    f"rpc_start_stream: beam id(s) {missing} are not processed by any of the given "
+                    f"servers (available beams: {sorted(beam_to_server)})")
+            grouped = {}   # addr -> (addr, client, ss, [beams])
+            for b in args.beam_id:
+                addr, client, ss = beam_to_server[b]
+                grouped.setdefault(addr, (addr, client, ss, []))[3].append(b)
+            targets = list(grouped.values())
 
-        # The CLI always uses stream_name == acqdir: both come from -a/--acqdir
-        # if specified, else both default inside start_stream() (None stream_name
-        # -> generated "stream_{date}_{time}"; None acqdir -> stream_name). It
-        # returns the resolved values so we can report them.
-        stream_name, acqdir = client.start_stream(
-            beam_ids,
-            stream_name=args.acqdir,
-            acqdir=args.acqdir,
-            fpga_seq_end=fpga_seq_end,   # fpga_seq_start defaults to 0 ("start asap")
-        )
+        # Generate ONE stream_name/acqdir, shared across all target servers, so a
+        # multi-server event lands in a single acqdir. (If each server defaulted
+        # stream_name=None, each would generate a different timestamp.) The CLI
+        # keeps stream_name == acqdir; this mirrors FrbSearchClient.start_stream's
+        # default format.
+        stream_name = args.acqdir or ('stream_' + datetime.datetime.now().strftime('%y_%m_%d_%H%M%S'))
 
-        end_str = "indefinite" if args.no_duration else str(fpga_seq_end)
-        print(f"[{addr}] started stream stream_name={stream_name!r}")
-        print(f"[{addr}]   acqdir = {acqdir!r}")
-        print(f"[{addr}]   beam_ids = {beam_ids}")
-        print(f"[{addr}]   fpga_seq range = [0, {end_str})")
+        # Phase 3: start one stream per target server (fpga_seq_end is per-server,
+        # since each server has its own current_fpga_seq).
+        had_error = False
+        for (addr, client, ss, beams) in targets:
+            if args.no_duration:
+                fpga_seq_end, end_str = None, "indefinite"     # "run indefinitely"
+            else:
+                dt_ns_per_seq = client.xengine_metadata_yaml['dt_ns_per_seq']
+                fpga_seq_end = ss.current_fpga_seq + round(args.duration * 1.0e9 / dt_ns_per_seq)
+                end_str = str(fpga_seq_end)
+            try:
+                sn, acqdir = client.start_stream(
+                    beams, stream_name=stream_name, acqdir=stream_name,
+                    fpga_seq_end=fpga_seq_end,   # fpga_seq_start defaults to 0 ("start asap")
+                )
+            except grpc.RpcError as e:
+                had_error = True
+                print(f"[{addr}] ERROR: {_rpc_error_str(e)}", file=sys.stderr)
+                continue
+            print(f"[{addr}] started stream stream_name={sn!r}")
+            print(f"[{addr}]   acqdir = {acqdir!r}")
+            print(f"[{addr}]   beam_ids = {beams}")
+            print(f"[{addr}]   fpga_seq range = [0, {end_str})")
+
+        if had_error:
+            sys.exit(1)
     finally:
-        client.close()
+        for _, client in clients:
+            client.close()
 
 
 ##################################   rpc_cancel_stream command  #####################################
 
 
 def parse_rpc_cancel_stream(subparsers):
-    help_text = "Send CancelStream RPC to an FrbServer"
+    help_text = ("Send CancelStream RPC to one or more FrbServers. Multiple addresses act as one "
+                 "'super-server' (cancels loop over all servers).")
     parser = subparsers.add_parser("rpc_cancel_stream", help=help_text, description=help_text)
-    parser.add_argument('server_address', metavar='ADDRESS', help='Server address (e.g. 127.0.0.1:6000)')
+    parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
+                        help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
     parser.add_argument('-a', '--stream-name', default=None, metavar='STREAM_NAME',
-                        help='Cancel the stream with this stream_name')
+                        help='Cancel the stream with this stream_name, on every server that has it')
     parser.add_argument('-A', '--all', action='store_true', dest='cancel_all',
-                        help='Cancel all active streams')
+                        help='Cancel all active streams on every server')
 
 
 def rpc_cancel_stream(args):
-    from .rpc import FrbSearchClient
+    import grpc
+    from .rpc.grpc import frb_search_pb2
 
     if bool(args.stream_name) == bool(args.cancel_all):
         raise RuntimeError("rpc_cancel_stream: specify exactly one of -a/--stream-name or -A/--all")
 
-    addr = args.server_address
-    client = FrbSearchClient(addr)
+    clients = _stream_clients(args.server_addresses)
+    had_error = False
 
     try:
-        n = client.cancel_stream(stream_name=args.stream_name, cancel_all=args.cancel_all)
-        print(f"[{addr}] cancelled {n} stream(s)")
+        if args.cancel_all:
+            # -A: cancel every active stream on every server.
+            for addr, client in clients:
+                try:
+                    n = client.cancel_stream(cancel_all=True)
+                    print(f"[{addr}] cancelled {n} stream(s)")
+                except grpc.RpcError as e:
+                    had_error = True
+                    print(f"[{addr}] ERROR: {_rpc_error_str(e)}", file=sys.stderr)
+        else:
+            # -a NAME: cancel the named stream wherever it is ACTIVE. We check
+            # show_streams() first (rather than catching a per-server "not found"
+            # error) so a name that exists on no server is a single clear error
+            # rather than a pile of per-server failures.
+            name = args.stream_name
+            found = False
+            for addr, client in clients:
+                try:
+                    ss = client.show_streams()
+                except grpc.RpcError as e:
+                    had_error = True
+                    print(f"[{addr}] ERROR: {_rpc_error_str(e)}", file=sys.stderr)
+                    continue
+                if not any(i.args.stream_name == name and
+                           i.status == frb_search_pb2.STREAM_STATUS_ACTIVE
+                           for i in ss.streams):
+                    continue
+                found = True
+                try:
+                    n = client.cancel_stream(stream_name=name)
+                    print(f"[{addr}] cancelled {n} stream(s) named {name!r}")
+                except grpc.RpcError as e:
+                    had_error = True
+                    print(f"[{addr}] ERROR: {_rpc_error_str(e)}", file=sys.stderr)
+            if not found and not had_error:
+                raise RuntimeError(
+                    f"rpc_cancel_stream: no server has an active stream named {name!r} "
+                    f"(servers: {', '.join(args.server_addresses)})")
     finally:
-        client.close()
+        for _, client in clients:
+            client.close()
+
+    if had_error:
+        sys.exit(1)
 
 
 ###################################   rpc_show_streams command  #####################################
 
 
 def parse_rpc_show_streams(subparsers):
-    help_text = "Send ShowStreams RPC to an FrbServer and print the response"
+    help_text = ("Send ShowStreams RPC to one or more FrbServers and print the responses. "
+                 "Multiple addresses act as one 'super-server' (loops over all servers).")
     parser = subparsers.add_parser("rpc_show_streams", help=help_text, description=help_text)
-    parser.add_argument('server_address', metavar='ADDRESS', help='Server address (e.g. 127.0.0.1:6000)')
+    parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
+                        help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
 
 
 def rpc_show_streams(args):
     import datetime
-    from .rpc import FrbSearchClient
+    import grpc
     from .rpc.grpc import frb_search_pb2
 
     def fmt_time(unix_ns):
@@ -1268,11 +1375,7 @@ def rpc_show_streams(args):
             return "-"
         return datetime.datetime.fromtimestamp(unix_ns * 1.0e-9).strftime('%Y-%m-%d %H:%M:%S')
 
-    addr = args.server_address
-    client = FrbSearchClient(addr)
-
-    try:
-        ss = client.show_streams()
+    def print_server(addr, ss):
         n_listed_inactive = sum(1 for i in ss.streams
                                 if i.status != frb_search_pb2.STREAM_STATUS_ACTIVE)
         print(f"[{addr}] current_fpga_seq = {ss.current_fpga_seq}")
@@ -1300,8 +1403,25 @@ def rpc_show_streams(args):
                   f"deactivated = {fmt_time(info.deactivated_at_unix_ns)}")
             print(f"[{addr}]   files: queued = {info.num_files_queued}, "
                   f"written = {info.num_files_written}, errored = {info.num_files_errored}")
+
+    clients = _stream_clients(args.server_addresses)
+    had_error = False
+
+    try:
+        for i, (addr, client) in enumerate(clients):
+            if i > 0:
+                print()   # blank line between per-server blocks
+            try:
+                print_server(addr, client.show_streams())
+            except grpc.RpcError as e:
+                had_error = True
+                print(f"[{addr}] ERROR: {_rpc_error_str(e)}", file=sys.stderr)
     finally:
-        client.close()
+        for _, client in clients:
+            client.close()
+
+    if had_error:
+        sys.exit(1)
 
 
 #####################################   random_kernels command  #####################################
