@@ -36,6 +36,7 @@ from .Hwtest import Hwtest
 from .Hardware import Hardware
 from .run_server import run_server
 from .run_toy_grouper import run_toy_grouper
+from .Acquisition import Acquisition
 from .OfflineDedisperser import OfflineDedisperser
 from .run_toy_offline_dd import run_toy_offline_dd
 

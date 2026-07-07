@@ -3,7 +3,7 @@ Toy offline dedispersion driver + rudimentary peak-finding over an acquisition d
 
 Reads a directory of acquired AssembledFrame ".asdf" files (one file per
 (beam, time chunk) -- as written by 'pirate_frb rpc_start_stream'). Beams and their
-time chunks are enumerated with pirate_frb.utils.list_acqdir(). Each beam is
+time chunks are enumerated with pirate_frb.Acquisition. Each beam is
 processed independently: a fresh single-beam OfflineDedisperser (nbeams == 1) is
 built from scratch, and for each of that beam's time chunks the driver:
 
@@ -73,15 +73,15 @@ def run_toy_offline_dd(acqdir=DEFAULT_ACQDIR, config_filename=DEFAULT_CONFIG, ma
     max_chunks : int or None
         If given, only process the first 'max_chunks' time chunks of each beam.
     """
-    from . import DedispersionConfig
-    from .utils import list_acqdir
+    from . import Acquisition, DedispersionConfig
 
-    beams = list_acqdir(acqdir)   # [(beam_id, [filename, ...]), ...], sorted
-    print(f"Found {len(beams)} beam(s) in {acqdir}: {[b for b, _ in beams]}")
+    acq = Acquisition(acqdir)
+    print(f"Found {len(acq.beam_ids)} beam(s) in {acqdir}: {acq.beam_ids}")
 
     config = DedispersionConfig.from_yaml(config_filename)
 
-    for beam_id, files in beams:
+    for beam_id in acq.beam_ids:
+        files = acq.per_beam_filenames[beam_id]
         if max_chunks is not None:
             files = files[:max_chunks]
         _process_beam(beam_id, files, config)

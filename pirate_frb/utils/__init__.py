@@ -1,7 +1,6 @@
 """Utility functions and context managers for pirate_frb."""
 
 from .core import integer_log2, run_processes
-from .list_acqdir import list_acqdir
 from .ThreadAffinity import ThreadAffinity
 from .time_cupy_dedisperser import time_cupy_dedisperser
 from .show_asdf import show_asdf
@@ -10,7 +9,7 @@ from .safe_memcpy import safe_h2g_copy, safe_g2h_copy
 from ..pirate_pybind11 import (get_thread_affinity, set_thread_affinity,
                                test_avx2_simulate_4bit_noise, time_avx2_simulate_4bit_noise)
 
-__all__ = ['integer_log2', 'run_processes', 'list_acqdir',
+__all__ = ['integer_log2', 'run_processes',
            'ThreadAffinity', 'get_thread_affinity', 'set_thread_affinity',
            'time_cupy_dedisperser', 'show_asdf',
            'extract_ip', 'check_mtu', 'resolve_ip_spec', 'resolve_addr',

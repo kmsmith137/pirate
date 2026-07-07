@@ -348,6 +348,7 @@ PYFILES = \
   pirate_frb/run_toy_grouper.py \
   pirate_frb/run_toy_offline_dd.py \
   pirate_frb/run_toy_sifter.py \
+  pirate_frb/Acquisition.py \
   pirate_frb/OfflineDedisperser.py \
   pirate_frb/yaml_utils.py \
   pirate_frb/chime/__init__.py \
@@ -376,7 +377,6 @@ PYFILES = \
   pirate_frb/tests/utils.py \
   pirate_frb/utils/__init__.py \
   pirate_frb/utils/core.py \
-  pirate_frb/utils/list_acqdir.py \
   pirate_frb/utils/ThreadAffinity.py \
   pirate_frb/utils/network.py \
   pirate_frb/utils/time_cupy_dedisperser.py \
