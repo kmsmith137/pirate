@@ -45,20 +45,17 @@ def _process_beam(beam_id, files, config):
         frame = AssembledFrame.from_asdf(path)
         assert frame.beam_id == beam_id, (frame.beam_id, beam_id)
 
-        # The first run() lazily builds the pipeline from the frame's metadata; the
-        # dedisperser geometry (nfreq / nt_in / ntrees) is known only afterwards.
-        outputs = od.run(frame)
+        # The first dedisperse() lazily builds the pipeline from the frame's
+        # metadata; the outputs are valid only inside the 'with' block, so the peak
+        # is host-copied there. out_max[t] has shape (beams_per_batch=1, ndm, nt).
+        with od.dedisperse(frame) as outputs:
+            snr = max(float(cp.asarray(outputs.out_max[t]).max()) for t in range(od.ntrees))
+
         if ichunk == 0:
             print(f"  nfreq={od.nfreq}, nt_in={od.nt_in}, ntrees={od.ntrees}, dtype={od.dtype}, "
                   f"time_sample_ms={od.time_sample_ms:.4f}")
-
-        # out_max[t] has shape (beams_per_batch=1, ndm_out, nt_out); only the
-        # scalar peak is copied back to the host.
-        snr = max(float(cp.asarray(outputs.out_max[t]).max()) for t in range(od.ntrees))
         print(f"  beam {beam_id}  chunk {ichunk:3d} (tci={frame.time_chunk_index:3d}):  "
               f"snr_max={snr:7.3f}")
-
-    od.close()
 
 
 def run_toy_offline_dd(acqdir=DEFAULT_ACQDIR, config_filename=DEFAULT_CONFIG, max_chunks=None):

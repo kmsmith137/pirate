@@ -1,5 +1,7 @@
 """Single-beam offline GPU tree-dedisperser (class OfflineDedisperser)."""
 
+from contextlib import contextmanager
+
 import numpy as np
 
 import ksgpu
@@ -9,19 +11,19 @@ from .kernels import GpuDequantizationKernel
 
 
 class OfflineDedisperser:
-    """Single-beam GPU tree-dedisperser driven one AssembledFrame at a time.
+    """Single-beam GPU tree-dedisperser, driven one AssembledFrame at a time.
 
     Constructed from a DedispersionConfig (which is coerced to a single-beam
     geometry: beams_per_gpu = beams_per_batch = num_active_batches = 1).
 
     Construction of the DedispersionPlan and GpuDedisperser is DEFERRED until the
-    first run(): the frequency-zone structure (zone_nfreq / zone_freq_edges), the
-    time sampling (time_sample_ms), and the per-channel noise variances are taken
-    from the first frame's XEngineMetadata (the data on disk is authoritative). The
-    analytic peak-finding weights are then filled from those variances, so out_max
-    comes out as an SNR.
+    first dedisperse(): the frequency-zone structure (zone_nfreq / zone_freq_edges),
+    the time sampling (time_sample_ms), and the per-channel noise variances are
+    taken from the first frame's XEngineMetadata (the data on disk is
+    authoritative). The analytic peak-finding weights are then filled from those
+    variances, so out_max comes out as an SNR.
 
-    run(frame) validates the frame before dedispersing it:
+    dedisperse(frame) is a context manager. On entry it validates the frame:
       - frame.metadata is present, and its beam_ids == [frame.beam_id];
       - frames are the same beam, and consecutive in time_chunk_index (the
         dedisperser is a streaming engine, so a gap/reorder would splice
@@ -30,15 +32,24 @@ class OfflineDedisperser:
         zone_nfreq, zone_freq_edges, dt_ns_per_seq, seq_per_frb_time_sample,
         noise_variance, unix_ns_at_seq_0, beamset.
 
-    run(frame) then dequantizes the frame on the GPU, feeds it to the dedisperser,
-    and returns the GpuDedisperserOutputs for that chunk (per-tree out_max /
-    out_argmax GPU arrays). Those arrays are views into a small output ring buffer
-    and are only valid until the NEXT run() (or close()) -- so the caller must
-    consume them (e.g. host-copy the peak) before calling run() again. After
-    close(), run() may not be called again.
+    It then dequantizes the frame on the GPU, feeds it to the dedisperser, and
+    yields that chunk's GpuDedisperserOutputs (per-tree out_max / out_argmax GPU
+    arrays). Those arrays are views into a small output ring buffer, valid ONLY
+    inside the 'with' block -- consume them (e.g. host-copy the peak) before the
+    block exits. Frames must be supplied in increasing time-chunk order.
+
+    Example::
+
+        od = OfflineDedisperser(config)
+        for frame in frames:                       # in increasing time-chunk order
+            with od.dedisperse(frame) as outputs:
+                snr = max(float(cp.asarray(outputs.out_max[t]).max())
+                          for t in range(od.ntrees))
+                print(snr)
 
     Attributes nfreq / nt_in / ntrees / trees / plan / dd are None until the first
-    run() has initialized the pipeline (dtype is known immediately from the config).
+    dedisperse() has initialized the pipeline (dtype is known immediately from the
+    config).
     """
 
     def __init__(self, config, cuda_device_id=0):
@@ -80,8 +91,6 @@ class OfflineDedisperser:
         self._initial_tci = None    # time_chunk_index of the first frame
 
         self._seq_id = 0            # next chunk's seq_id (== chunk index)
-        self._acquired_seq = None   # seq_id of the currently-acquired output, if any
-        self._closed = False        # set by close(); guards against later run()
 
     def _initialize(self, md):
         """Build the plan + dedisperser from the first frame's XEngineMetadata 'md'.
@@ -155,16 +164,17 @@ class OfflineDedisperser:
             (md.unix_ns_at_seq_0, self.unix_ns_at_seq_0)
         assert md.beamset == self.beamset, (md.beamset, self.beamset)
 
-    def run(self, frame):
-        """Dedisperse one time chunk; return its GpuDedisperserOutputs.
+    @contextmanager
+    def dedisperse(self, frame):
+        """Dedisperse one time chunk; yield its GpuDedisperserOutputs.
 
-        The first call initializes the pipeline from frame.metadata; later calls
-        check their metadata is consistent. See the class docstring for the
-        output-lifetime contract.
+        A context manager. The first entry initializes the pipeline from
+        frame.metadata; later entries check their metadata is consistent. The
+        yielded arrays are views into the dedisperser's output ring buffer and are
+        valid ONLY inside the 'with' block -- consume them before it exits. See the
+        class docstring.
         """
         import cupy as cp
-
-        assert not self._closed, "OfflineDedisperser: run() called after close()"
 
         md = frame.metadata
         assert md is not None, "OfflineDedisperser: frame.metadata is None"
@@ -192,37 +202,24 @@ class OfflineDedisperser:
         assert frame.nfreq == self.nfreq, (frame.nfreq, self.nfreq)
         assert frame.ntime == self.nt_in, (frame.ntime, self.nt_in)
 
+        seq = self._seq_id
         stream = cp.cuda.get_current_stream()
 
-        # Release the previous chunk's output slot (its arrays are now stale). The
-        # caller has already consumed it (host-copied the peak) before this call.
-        if self._acquired_seq is not None:
-            stream.synchronize()
-            self.dd.release_output(self._acquired_seq, stream=stream)
-            self._acquired_seq = None
+        # Upload this chunk's quantized data to the GPU (add a length-1 beam axis)
+        # and dequantize it directly into the dedisperser's input buffer. Leaving
+        # the get_input() block launches the dedispersion kernels for this seq_id.
+        with self.dd.get_input(seq, stream=stream) as arr:               # (1, nfreq, nt_in), dtype
+            data_gpu = cp.asarray(np.asarray(frame.data))[None]          # (1, nfreq, nt_in/2) uint8
+            scoff_gpu = cp.asarray(np.asarray(frame.scales_offsets))[None]  # (1, nfreq, mpc, 2) float16
+            self.dqk.launch(arr, scoff_gpu, data_gpu, stream=stream)
 
-        # Upload this chunk's quantized data to the GPU, adding a length-1 beam axis.
-        data_gpu = cp.asarray(np.asarray(frame.data))[None]              # (1, nfreq, nt_in/2) uint8
-        scoff_gpu = cp.asarray(np.asarray(frame.scales_offsets))[None]   # (1, nfreq, mpc, 2) float16
-
-        seq = self._seq_id
-        # Dequantize directly into the dedisperser's input buffer, then launch the
-        # dedispersion kernels; finally acquire this chunk's output.
-        arr = self.dd.acquire_input(seq, stream=stream)                  # (1, nfreq, nt_in), dtype
-        self.dqk.launch(arr, scoff_gpu, data_gpu, stream=stream)
-        self.dd.release_input_and_launch_dd_kernels(seq, stream=stream)
-        outputs = self.dd.acquire_output(seq, stream=stream)
-
-        self._acquired_seq = seq
+        # Input committed; advance the seq counter now (before yielding) so that a
+        # caller exception inside the output block cannot desync us from the
+        # dedisperser's internal counters, which already advanced above.
         self._seq_id += 1
-        return outputs
 
-    def close(self):
-        """Release the final acquired output slot (call after the last run())."""
-        if self._acquired_seq is not None:
-            import cupy as cp
-            stream = cp.cuda.get_current_stream()
-            stream.synchronize()
-            self.dd.release_output(self._acquired_seq, stream=stream)
-            self._acquired_seq = None
-        self._closed = True
+        # get_output() acquires this chunk's output on entry and releases it on
+        # exit. release_output is stream-ordered, so no explicit host sync is
+        # needed: the caller consumes 'outputs' on the same stream inside the block.
+        with self.dd.get_output(seq, stream=stream) as outputs:
+            yield outputs
