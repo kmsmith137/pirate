@@ -2,7 +2,6 @@
 #include "../include/pirate/AssembledFrame.hpp"
 #include "../include/pirate/file_utils.hpp"
 
-#include <algorithm>
 #include <ksgpu/xassert.hpp>
 
 using namespace std;
@@ -514,48 +513,37 @@ void FileWriter::_throw_if_stopped(const char *method_name)
 // -------------------------------------------------------------------------------------------------
 
 
-FilenamePattern::FilenamePattern(const string &pattern_) : pattern(pattern_)
+// See FileWriter.hpp for the contract (nonempty, safe, canonical relative path).
+void validate_acqdir(const string &acqdir)
 {
-    const string beam_marker = "(BEAM)";
-    const string chunk_marker = "(CHUNK)";
+    if (acqdir.empty())
+        throw runtime_error("acqdir must be a nonempty string");
 
-    beam_pos = pattern.find(beam_marker);
-    if (beam_pos == string::npos)
-        throw runtime_error("FilenamePattern: pattern must contain '(BEAM)': " + pattern);
+    fs::path p(acqdir);
 
-    chunk_pos = pattern.find(chunk_marker);
-    if (chunk_pos == string::npos)
-        throw runtime_error("FilenamePattern: pattern must contain '(CHUNK)': " + pattern);
-
-    // Verify no stray parentheses (only '(' and ')' allowed are in (BEAM) and (CHUNK)).
-    long num_open = std::count(pattern.begin(), pattern.end(), '(');
-    long num_close = std::count(pattern.begin(), pattern.end(), ')');
-    if ((num_open != 2) || (num_close != 2))
-        throw runtime_error("FilenamePattern: pattern contains '(' or ')' outside of (BEAM) and (CHUNK): " + pattern);
-
-    if (!is_safe_relpath(pattern))
-        throw runtime_error("FilenamePattern: pattern is not a safe relative path: " + pattern);
+    // The canonical-form check (lexically_normal round-trip) compares STRINGS,
+    // not fs::path objects -- path equality decomposes elementwise and would
+    // accept e.g. "foo//bar". The has_filename() check rejects a trailing '/'
+    // (which lexically_normal preserves), and the "." check rejects the one
+    // normalized path that would alias the roots themselves.
+    if (!is_safe_relpath(p)
+        || (p.lexically_normal().string() != acqdir)
+        || !p.has_filename()
+        || (acqdir == "."))
+    {
+        throw runtime_error("invalid acqdir '" + acqdir + "': must be a normalized relative path"
+                            " (no leading/trailing '/', no '//', no '.' or '..' components)");
+    }
 }
 
 
-string FilenamePattern::expand(const shared_ptr<AssembledFrame> &f) const
+// See FileWriter.hpp for the contract; keep in sync with the python-side
+// parser (pirate_frb.utils.list_acqdir's _FRAME_RE).
+string make_acq_relpath(const string &acqdir, const shared_ptr<AssembledFrame> &frame)
 {
-    xassert(f);
-
-    string ret = pattern;
-    string beam_str = to_string(f->beam_id);
-    string chunk_str = to_string(f->time_chunk_index);
-
-    // Replace in reverse order of position, so that indices remain valid.
-    if (beam_pos > chunk_pos) {
-        ret.replace(beam_pos, 6, beam_str);    // "(BEAM)" has length 6
-        ret.replace(chunk_pos, 7, chunk_str);  // "(CHUNK)" has length 7
-    } else {
-        ret.replace(chunk_pos, 7, chunk_str);
-        ret.replace(beam_pos, 6, beam_str);
-    }
-
-    return ret;
+    xassert(frame);
+    return acqdir + "/frame_b" + to_string(frame->beam_id)
+                  + "_t" + to_string(frame->time_chunk_index) + ".asdf";
 }
 
 

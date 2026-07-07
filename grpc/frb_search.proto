@@ -48,7 +48,9 @@ service FrbSearch {
   // (metadata is sent by the X-engine, and is not available until the X-engine connects).
   rpc GetXEngineMetadata (GetXEngineMetadataRequest) returns (GetXEngineMetadataResponse);
 
-  // Write files to disk for specified beams and time range
+  // Write files to disk for specified beams and time range. Filenames are
+  // always {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf -- the caller
+  // chooses only the acquisition directory 'acqdir'.
   rpc WriteFiles (WriteFilesRequest) returns (WriteFilesResponse);
 
   // Subscribe to a stream of filenames. The connection can be closed by the client
@@ -166,7 +168,13 @@ message WriteFilesRequest {
   repeated int64 beams = 2;           // List of beam IDs to write
   int64 fpga_seq_start = 3;           // Start of fpga-seq range (inclusive)
   int64 fpga_seq_end = 4;             // End of fpga-seq range (exclusive)
-  string filename_pattern = 5;        // Pattern with (BEAM) and (CHUNK) placeholders
+
+  // Acquisition directory. Files are written to
+  //     {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf
+  // where nfs_root comes from the server config (GetConfigResponse.nfs_dir).
+  // Must be a nonempty, normalized relative path (no leading/trailing '/',
+  // no '//', no '.' or '..' components); may be multi-level, e.g. "foo/bar/baz".
+  string acqdir = 5;
 }
 
 // Response message for WriteFiles
@@ -232,7 +240,9 @@ message MonitorRingbufResponse {
 message StartStreamRequest {
   uint32 protocol_version = 1;  // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
   string acq_name = 2;          // must be nonempty; unique among active streams
-  string filename_pattern = 3;  // must contain (BEAM) and (CHUNK); same format as WriteFiles
+  string acqdir = 3;            // acquisition directory; same conventions as
+                                // WriteFilesRequest.acqdir (files are written to
+                                // {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf)
   repeated int64 beam_ids = 4;  // must be nonempty; each must be a known beam
                                 // (no "empty = all beams" convention)
   int64 fpga_seq_start = 5;     // 0 = start asap

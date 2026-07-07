@@ -51,6 +51,13 @@ from ..core import (
 from ..pirate_pybind11 import FrbServer, constants
 from ..rpc import FrbSearchClient
 from ..rpc.grpc import frb_search_pb2
+
+
+def _acq_filename(acqdir, beam_id, chunk):
+    """Client-side mirror of the server's fixed naming scheme
+    (make_acq_relpath in src_lib/FileWriter.cpp):
+    {acqdir}/frame_b{beam_id}_t{chunk}.asdf, unpadded decimal."""
+    return f"{acqdir}/frame_b{beam_id}_t{chunk}.asdf"
 from .utils import make_random_subscale_config, pick_receiver_worker_counts
 
 
@@ -482,20 +489,19 @@ class NetworkTester:
         selected_nbeams = random.randint(1, min(3, p['nbeams']))
         selected_beams = random.sample(all_beam_ids, selected_nbeams)
 
-        # Include iouter in the filename pattern so that filenames are
-        # unique across iouter turns (same beam+chunk may be requested
-        # twice across iterations).
-        filename_pattern = f"test_{iouter}_(BEAM)_(CHUNK).asdf"
+        # Include iouter in the acqdir so that filenames are unique across
+        # iouter turns (same beam+chunk may be requested twice across
+        # iterations; the per-turn uniqueness lives in the directory now).
+        acqdir = f"test_{iouter}"
 
-        # Expand the filename pattern client-side -- mirrors
-        # FilenamePattern::expand in src_lib/FileWriter.cpp:
-        # (BEAM) -> str(beam_id), (CHUNK) -> str(time_chunk_index).
-        # Tag each filename as safe or unsafe based on whether its
-        # chunk falls in [safe_lower, safe_upper].
+        # Compute the expected filenames client-side (via _acq_filename,
+        # which mirrors the server's make_acq_relpath). Tag each filename
+        # as safe or unsafe based on whether its chunk falls in
+        # [safe_lower, safe_upper].
         expanded = {}   # filename -> is_safe
         for c in range(chunk_min, chunk_max + 1):
             for b in selected_beams:
-                fn = filename_pattern.replace("(BEAM)", str(b)).replace("(CHUNK)", str(c))
+                fn = _acq_filename(acqdir, b, c)
                 expanded[fn] = (safe_lower <= c <= safe_upper)
                 self.filename_meta[fn] = (c, b)
 
@@ -505,10 +511,10 @@ class NetworkTester:
         # (same value the server uses, so it recovers exactly [chunk_min, chunk_max]).
         spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
         filenames = self.rpc_client.write_files(
-            beams            = selected_beams,
-            fpga_seq_start   = chunk_min * spc,
-            fpga_seq_end     = (chunk_max + 1) * spc,
-            filename_pattern = filename_pattern,
+            beams          = selected_beams,
+            fpga_seq_start = chunk_min * spc,
+            fpga_seq_end   = (chunk_max + 1) * spc,
+            acqdir         = acqdir,
         )
 
         returned = set(filenames)
@@ -543,14 +549,15 @@ class NetworkTester:
         """Start the test's stream group (once, a quarter of the way through
         the send loop, so plenty of chunks transition while it is active):
 
-          - acq_a and acq_b share ONE filename pattern -> every captured
-            frame gets duplicate save_paths, exercising the FileWriter NFS
-            dup-skip branch (both acqs must still get their own success
+          - acq_a and acq_b share ONE acqdir -> every captured frame gets
+            duplicate save_paths, exercising the FileWriter NFS dup-skip
+            branch (both acqs must still get their own success
             notifications, file written once);
-          - acq_c uses a distinct pattern in a subdirectory -> exercises
-            lazy directory creation in the FileWriter threads, and gives a
-            second NFS name that must be a HARDLINK of the shared-pattern
-            file (verified via st_ino in _verify_stream_files).
+          - acq_c uses a distinct MULTI-LEVEL acqdir -> exercises lazy
+            (two-deep) directory creation in the FileWriter threads, and
+            gives a second NFS name that must be a HARDLINK of the
+            shared-acqdir file (verified via st_ino in
+            _verify_stream_files).
 
         All three streams: same beams, fpga range [0, end) with end chosen
         K chunks past the server's current position at start time. Retries
@@ -563,19 +570,19 @@ class NetworkTester:
         K = 8   # chunks of stream lifetime beyond the start-time position
         spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
         sel_beams = self.beam_ids[:min(2, len(self.beam_ids))]
-        pattern_shared = "stream_shared_(BEAM)_(CHUNK).asdf"
-        pattern_c      = "stream_c/(BEAM)_(CHUNK).asdf"
+        acqdir_shared = "stream_shared"
+        acqdir_c      = "stream_c/sub"
 
         try:
             # Current position; the streams' chunk range is [0, c1 + K].
             c1 = self.rpc_client.get_status().rb_processed // p['nbeams']
             end_fpga = (c1 + K + 1) * spc
 
-            for acq, pattern in [("acq_a", pattern_shared),
-                                 ("acq_b", pattern_shared),
-                                 ("acq_c", pattern_c)]:
+            for acq, acqdir in [("acq_a", acqdir_shared),
+                                ("acq_b", acqdir_shared),
+                                ("acq_c", acqdir_c)]:
                 self.rpc_client.start_stream(
-                    acq_name=acq, filename_pattern=pattern, beam_ids=sel_beams,
+                    acq_name=acq, acqdir=acqdir, beam_ids=sel_beams,
                     fpga_seq_start=0, fpga_seq_end=end_fpga)
         except grpc.RpcError as e:
             # Server hasn't locked onto the X-engine stream yet; retry on a
@@ -592,7 +599,7 @@ class NetworkTester:
 
         self.stream_group = dict(
             sel_beams=sel_beams, spc=spc, c0=c0, chunk_last=(c1 + K),
-            pattern_shared=pattern_shared, pattern_c=pattern_c)
+            acqdir_shared=acqdir_shared, acqdir_c=acqdir_c)
 
     def _compute_stream_expectations(self):
         """Compute the MUST-be-written set of (acq_name, filename) pairs, and
@@ -619,8 +626,8 @@ class NetworkTester:
 
         for c in self.stream_must_chunks:
             for b in g['sel_beams']:
-                fn_shared = g['pattern_shared'].replace("(BEAM)", str(b)).replace("(CHUNK)", str(c))
-                fn_c      = g['pattern_c'].replace("(BEAM)", str(b)).replace("(CHUNK)", str(c))
+                fn_shared = _acq_filename(g['acqdir_shared'], b, c)
+                fn_c      = _acq_filename(g['acqdir_c'], b, c)
                 self.stream_must.add(("acq_a", fn_shared))
                 self.stream_must.add(("acq_b", fn_shared))
                 self.stream_must.add(("acq_c", fn_c))
@@ -660,7 +667,7 @@ class NetworkTester:
         spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
         c_now = rpc.get_status().rb_processed // p['nbeams']
         rpc.start_stream([self.beam_ids[0]], acq_name=acq_name,
-                         filename_pattern=f"{acq_name}_(BEAM)_(CHUNK).asdf",
+                         acqdir=acq_name,
                          fpga_seq_start=(c_now + 10**6) * spc,
                          fpga_seq_end=(c_now + 10**6 + 1) * spc)
 
@@ -692,7 +699,7 @@ class NetworkTester:
 
         def start(**kw):
             kw.setdefault('acq_name', 'misc_x')
-            kw.setdefault('filename_pattern', 'misc_(BEAM)_(CHUNK).asdf')
+            kw.setdefault('acqdir', 'misc_dir')
             kw.setdefault('beam_ids', [beam0])
             # Default range: far future (never matches).
             kw.setdefault('fpga_seq_start', (c_now + 10**6) * spc)
@@ -704,8 +711,12 @@ class NetworkTester:
         self._expect_rpc_error(start(beam_ids=[]), "beam_ids must be nonempty")
         self._expect_rpc_error(start(beam_ids=[999999]), "unknown beam_id")
         self._expect_rpc_error(start(beam_ids=[beam0, beam0]), "appears more than once")
-        self._expect_rpc_error(start(filename_pattern='misc_(CHUNK).asdf'), "(BEAM)")
-        self._expect_rpc_error(start(filename_pattern='misc_(BEAM).asdf'), "(CHUNK)")
+        self._expect_rpc_error(start(acqdir=''), "acqdir must be a nonempty")
+        self._expect_rpc_error(start(acqdir='/abs/path'), "invalid acqdir")
+        self._expect_rpc_error(start(acqdir='../evil'), "invalid acqdir")
+        self._expect_rpc_error(start(acqdir='foo//bar'), "invalid acqdir")
+        self._expect_rpc_error(start(acqdir='foo/'), "invalid acqdir")
+        self._expect_rpc_error(start(acqdir='.'), "invalid acqdir")
         self._expect_rpc_error(start(fpga_seq_start=100, fpga_seq_end=50), "invalid fpga_seq range")
         if c_now >= 1:
             # Range [0, spc) covers only chunk 0, long since processed.
@@ -860,9 +871,9 @@ class NetworkTester:
     def _verify_stream_files(self):
         """Byte-verify the MUST stream files, and check the dedup/hardlink
         behavior: for each captured (chunk, beam), acq_a/acq_b's shared
-        pattern and acq_c's distinct pattern must be ONE inode on NFS
+        acqdir and acq_c's distinct acqdir must be ONE inode on NFS
         (bytes written once; second name is a hardlink; duplicate second
-        entry for the shared pattern skipped)."""
+        entry for the shared acqdir skipped)."""
         if self.stream_group is None:
             print("    streams: not exercised (server was not rb_initialized by iouter=250)")
             return
@@ -870,8 +881,8 @@ class NetworkTester:
 
         for c in self.stream_must_chunks:
             for b in g['sel_beams']:
-                fn_shared = g['pattern_shared'].replace("(BEAM)", str(b)).replace("(CHUNK)", str(c))
-                fn_c      = g['pattern_c'].replace("(BEAM)", str(b)).replace("(CHUNK)", str(c))
+                fn_shared = _acq_filename(g['acqdir_shared'], b, c)
+                fn_c      = _acq_filename(g['acqdir_c'], b, c)
 
                 # Full content check on one name; inode identity makes it
                 # cover the other.

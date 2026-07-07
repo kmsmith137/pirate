@@ -1053,19 +1053,20 @@ def rpc_status(args):
     run_rpc_status(args.server_addresses)
 
 
-#########################################   rpc_write command  ######################################
+######################################   rpc_rand_write command  ####################################
 
 
-def parse_rpc_write(subparsers):
+def parse_rpc_rand_write(subparsers):
     help_text = "Send write_files RPC to FrbServer(s) with random beams/time range"
-    parser = subparsers.add_parser("rpc_write", help=help_text, description=help_text)
+    parser = subparsers.add_parser("rpc_rand_write", help=help_text, description=help_text)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS', help='Server address(es) (e.g. 127.0.0.1:6000)')
 
 
-def _rpc_write_one(addr):
+def _rpc_rand_write_one(addr):
     """Send a write_files RPC to a single FrbServer."""
 
     import yaml
+    import datetime
     from .rpc import FrbSearchClient
 
     client = FrbSearchClient(addr)
@@ -1130,13 +1131,13 @@ def _rpc_write_one(addr):
 
         # Send write_files RPC. Convert the chunk range [t0, t1) to the
         # half-open fpga-seq range [t0*seq_per_chunk, t1*seq_per_chunk) that
-        # write_files expects.
-        filename_pattern = "test_(BEAM)_(CHUNK).asdf"
+        # write_files expects. Files land in {nfs_root}/rand_write_{date}_{time}/.
+        acqdir = 'rand_write_' + datetime.datetime.now().strftime('%y_%m_%d_%H%M%S')
         filenames = client.write_files(
             beams=selected_beams,
             fpga_seq_start=t0 * seq_per_chunk,
             fpga_seq_end=t1 * seq_per_chunk,
-            filename_pattern=filename_pattern
+            acqdir=acqdir
         )
 
         print(f"[{addr}] write_files returned {len(filenames)} filenames:")
@@ -1147,9 +1148,9 @@ def _rpc_write_one(addr):
         client.close()
 
 
-def rpc_write(args):
+def rpc_rand_write(args):
     for addr in args.server_addresses:
-        _rpc_write_one(addr)
+        _rpc_rand_write_one(addr)
 
 
 ##################################   rpc_start_stream command  ######################################
@@ -1159,8 +1160,9 @@ def parse_rpc_start_stream(subparsers):
     help_text = "Send StartStream RPC to an FrbServer (write data to disk as it is received)"
     parser = subparsers.add_parser("rpc_start_stream", help=help_text, description=help_text)
     parser.add_argument('server_address', metavar='ADDRESS', help='Server address (e.g. 127.0.0.1:6000)')
-    parser.add_argument('-a', '--acq-name', default=None,
-                        help='Acquisition name (default: "{username}_{date}_{time}", e.g. kmsmith_26_07_05_143052)')
+    parser.add_argument('-a', '--acqdir', default=None,
+                        help='Acquisition name AND directory (the CLI always uses acq_name == acqdir); '
+                             'default: "stream_{date}_{time}", e.g. stream_26_07_07_143052')
     parser.add_argument('-b', '--beam-id', type=int, action='append', metavar='BEAM_ID',
                         help='Beam id to stream (repeatable); either -b or -B must be specified')
     parser.add_argument('-B', '--all-beams', action='store_true',
@@ -1201,17 +1203,20 @@ def rpc_start_stream(args):
             dt_ns_per_seq = xmd['dt_ns_per_seq']
             fpga_seq_end = ss.current_fpga_seq + round(args.duration * 1.0e9 / dt_ns_per_seq)
 
-        # acq_name / filename_pattern default inside start_stream() when None;
-        # it returns the resolved values so we can report them.
-        acq_name, filename_pattern = client.start_stream(
+        # The CLI always uses acq_name == acqdir: both come from -a/--acqdir
+        # if specified, else both default inside start_stream() (None acq_name
+        # -> generated "stream_{date}_{time}"; None acqdir -> acq_name). It
+        # returns the resolved values so we can report them.
+        acq_name, acqdir = client.start_stream(
             beam_ids,
-            acq_name=args.acq_name,
+            acq_name=args.acqdir,
+            acqdir=args.acqdir,
             fpga_seq_end=fpga_seq_end,   # fpga_seq_start defaults to 0 ("start asap")
         )
 
         end_str = "indefinite" if args.no_duration else str(fpga_seq_end)
         print(f"[{addr}] started stream acq_name={acq_name!r}")
-        print(f"[{addr}]   filename_pattern = {filename_pattern!r}")
+        print(f"[{addr}]   acqdir = {acqdir!r}")
         print(f"[{addr}]   beam_ids = {beam_ids}")
         print(f"[{addr}]   fpga_seq range = [0, {end_str})")
     finally:
@@ -1291,7 +1296,7 @@ def rpc_show_streams(args):
             end_str = "indefinite" if (a.fpga_seq_end == 2**63 - 1) else str(a.fpga_seq_end)
             print(f"[{addr}] stream acq_name={a.acq_name!r}:")
             print(f"[{addr}]   status = {status}")
-            print(f"[{addr}]   filename_pattern = {a.filename_pattern!r}")
+            print(f"[{addr}]   acqdir = {a.acqdir!r}")
             print(f"[{addr}]   beam_ids = {list(a.beam_ids)}")
             print(f"[{addr}]   fpga_seq range = [{a.fpga_seq_start}, {end_str})")
             print(f"[{addr}]   started = {fmt_time(info.started_at_unix_ns)}, "
@@ -1625,7 +1630,7 @@ def get_parser():
     parse_run_toy_sifter(subparsers)
     parse_run_fake_xengine(subparsers)
     parse_rpc_status(subparsers)
-    parse_rpc_write(subparsers)
+    parse_rpc_rand_write(subparsers)
     parse_rpc_start_stream(subparsers)
     parse_rpc_cancel_stream(subparsers)
     parse_rpc_show_streams(subparsers)
@@ -1700,8 +1705,8 @@ def main():
         show_file_format(args)
     elif args.command == "rpc_status":
         rpc_status(args)
-    elif args.command == "rpc_write":
-        rpc_write(args)
+    elif args.command == "rpc_rand_write":
+        rpc_rand_write(args)
     elif args.command == "rpc_start_stream":
         rpc_start_stream(args)
     elif args.command == "rpc_cancel_stream":

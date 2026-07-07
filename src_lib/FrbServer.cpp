@@ -1200,7 +1200,7 @@ void FrbServer::_frame_finalizing_thread_main()
 
         // Phase B.
         for (const auto &[frame, st] : stream_matches) {
-            string relpath = st->pattern.expand(frame);
+            string relpath = make_acq_relpath(st->acqdir, frame);
             _queue_frame_write(frame, relpath, st);
         }
 
@@ -1306,9 +1306,9 @@ bool FrbServer::_queue_frame_write(const shared_ptr<AssembledFrame> &frame,
         return false;
 
     // Duplicate paths are legal here (e.g. two streams with the same
-    // filename_pattern, or a repeated WriteFiles): FileWriter's NFS thread
-    // skips the filesystem operation for a duplicate of an earlier entry,
-    // but still emits its WriteStatus.
+    // acqdir, or a repeated WriteFiles): FileWriter's NFS thread skips
+    // the filesystem operation for a duplicate of an earlier entry, but
+    // still emits its WriteStatus.
     frame->save_paths.push_back({relpath, stream});
     frame_lock.unlock();
 
@@ -1755,8 +1755,10 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
         throw runtime_error(ss.str());
     }
 
-    // Construct FilenamePattern (validates that pattern contains "(BEAM)" and "(CHUNK)").
-    FilenamePattern filename_pattern(request->filename_pattern());
+    // Validate the acquisition directory (nonempty, normalized relative path).
+    // Filenames are always {acqdir}/frame_b(BEAM)_t(CHUNK).asdf, relative to
+    // the FileWriter's roots.
+    validate_acqdir(request->acqdir());
 
     vector<int> beam_indices;
     beam_indices.reserve(request->beams_size());
@@ -1838,7 +1840,7 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
 
     for (auto it = local_frames.rbegin(); it != local_frames.rend(); ++it) {
         auto &frame = *it;
-        string filename = filename_pattern.expand(frame);
+        string filename = make_acq_relpath(request->acqdir(), frame);
 
         // stream = nullptr: WriteFiles-triggered (as opposed to a stream).
         // Returns false if the frame was reaped without ever being written.
@@ -1891,13 +1893,14 @@ void FrbRpcService::_StartStream(const fs::StartStreamRequest *request, fs::Star
         throw runtime_error("StartStream: beam_ids must be nonempty"
                             " (there is no all-beams convention; list beams explicitly)");
 
-    // Validates that the pattern contains "(BEAM)" and "(CHUNK)", and is a
-    // safe relative path.
-    FilenamePattern pattern(request->filename_pattern());
+    // Validate the acquisition directory (nonempty, normalized relative path).
+    // Filenames are always {acqdir}/frame_b(BEAM)_t(CHUNK).asdf, relative to
+    // the FileWriter's roots.
+    validate_acqdir(request->acqdir());
 
-    auto st = make_shared<FileStream>(pattern);
+    auto st = make_shared<FileStream>();
     st->acq_name = acq_name;
-    st->pattern_string = request->filename_pattern();
+    st->acqdir = request->acqdir();
     st->fpga_seq_start = fpga_seq_start;
     st->fpga_seq_end = fpga_seq_end;
 
@@ -2031,7 +2034,7 @@ void FrbRpcService::_ShowStreams(const fs::ShowStreamsRequest *request, fs::Show
 
         fs::StartStreamRequest *args = info->mutable_args();
         args->set_acq_name(st->acq_name);
-        args->set_filename_pattern(st->pattern_string);
+        args->set_acqdir(st->acqdir);
         for (long beam_id : st->beam_ids)
             args->add_beam_ids(beam_id);
         args->set_fpga_seq_start(st->fpga_seq_start);

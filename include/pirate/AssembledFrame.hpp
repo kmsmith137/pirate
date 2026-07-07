@@ -223,14 +223,16 @@ struct AssembledFrame
         std::shared_ptr<FileStream> stream;
     };
 
-    // NOTE: all save_paths received from RPC clients MUST be validated with
-    // pirate::is_safe_relpath(). If this check fails, then an error is returned in
-    // the write request, and the save_path must not be added to the AssembledFrame.
+    // NOTE: save_paths are never taken verbatim from RPC clients: the client
+    // supplies only an acquisition directory, which the server validates with
+    // pirate::validate_acqdir() (nonempty, safe, canonical relative path)
+    // BEFORE building the path via pirate::make_acq_relpath() -- the basename
+    // is server-generated and safe by construction.
     //
     // Duplicate paths are allowed (e.g. two streams registered with the same
-    // filename_pattern); FileWriter's NFS thread skips the filesystem
-    // operation for a duplicate of an earlier entry, but still emits a
-    // WriteStatus for it (one notification per entry, always).
+    // acqdir); FileWriter's NFS thread skips the filesystem operation for a
+    // duplicate of an earlier entry, but still emits a WriteStatus for it
+    // (one notification per entry, always).
 
     std::vector<SaveRequest> save_paths;
 

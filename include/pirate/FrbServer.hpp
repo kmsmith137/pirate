@@ -4,7 +4,7 @@
 #include "Receiver.hpp"
 #include "AssembledFrame.hpp"
 #include "DedispersionConfig.hpp"
-#include "FileWriter.hpp"      // FileStream, FilenamePattern
+#include "FileWriter.hpp"      // FileStream, validate_acqdir, make_acq_relpath
 #include "XEngineMetadata.hpp"
 #include "constants.hpp"       // inactive_file_stream_capacity
 

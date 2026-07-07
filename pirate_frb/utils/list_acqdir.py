@@ -4,8 +4,9 @@ import os
 import re
 
 
-# Frame files written by FrbSearchClient's default pattern
-# 'streams/{acq_name}/frame_b(BEAM)_t(CHUNK).asdf' (see FrbSearchClient.start_stream).
+# Frame files written by the server's fixed naming scheme
+# '{acqdir}/frame_b(BEAM)_t(CHUNK).asdf' -- see make_acq_relpath() in
+# src_lib/FileWriter.cpp, which must stay in sync with this regex.
 _FRAME_RE = re.compile(r"^frame_b(\d+)_t(\d+)\.asdf$")
 
 # Uncommitted temporary files from C++ make_tmp_filename() (file_utils.cpp): the
@@ -22,10 +23,11 @@ def list_acqdir(acqdir, beam_id=None):
 
     If beam_id is specified, then returns the filename_list for the specific beam.
 
-    The filename_pattern is assumed to be 'frame_b(BEAM)_t(CHUNK).asdf'. This is the
-    default in FrbSearchClient. Raises an exception if the acqdir contains files that don't match
-    the pattern. (Exception: filenames which look like they're from C++ make_tmp_filename()
-    are ignored, with a message printed to stdout.)
+    Filenames follow the server's fixed naming scheme 'frame_b(BEAM)_t(CHUNK).asdf'
+    (see make_acq_relpath() in src_lib/FileWriter.cpp). Raises an exception if the
+    acqdir contains files that don't match the scheme. (Exception: filenames which
+    look like they're from C++ make_tmp_filename() are ignored, with a message
+    printed to stdout.)
 
     For each beam, the time (chunk) indices must be contiguous -- a gap or duplicate
     raises an exception. (Different beams may span different time-index ranges.)

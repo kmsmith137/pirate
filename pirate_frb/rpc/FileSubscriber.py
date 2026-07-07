@@ -39,7 +39,7 @@ class FileSubscriber:
             filenames = client.write_files(
                 beams=[100, 101],
                 fpga_seq_start=0, fpga_seq_end=4 * seq_per_chunk,
-                filename_pattern="x_(BEAM)_(CHUNK).asdf",
+                acqdir="my_acquisition",
             )
             remaining = set(filenames)
             for filename, error, acq_name in sub:

@@ -564,7 +564,7 @@ class RunServerHelper:
         rpc_addrs = ' '.join(self.config['rpc_ip_addrs'])
         print(f"\nTo send fake data to server(s):  pirate_frb run_fake_xengine {rpc_addrs}")
         print(f"To monitor status:               pirate_frb rpc_status {rpc_addrs}")
-        print(f"To write random data:            pirate_frb rpc_write {rpc_addrs}")
+        print(f"To write random data:            pirate_frb rpc_rand_write {rpc_addrs}")
         if not self.no_grouper:
             grouper_addrs = ' '.join(self.config['grouper_ip_addrs'])
             print(f"To start toy grouper(s):         pirate_frb run_toy_grouper {grouper_addrs}")

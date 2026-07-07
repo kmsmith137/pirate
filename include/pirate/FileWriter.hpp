@@ -124,23 +124,29 @@ private:
 };
 
 
-// FilenamePattern: helper class to expand 'pattern' strings, such as
-// "dir1/dir2/file_(BEAM)_(CHUNK).asdf"
+// Acquisition-directory helpers. RPC callers (WriteFiles, StartStream) specify
+// only an acquisition directory 'acqdir'; filenames are always of the form
+//
+//     {acqdir}/frame_b{beam_id}_t{time_chunk_index}.asdf
+//
+// relative to both file-writing roots (written to {ssd_root}/... and copied to
+// {nfs_root}/...; the user-visible final file is the nfs_root one).
 
-struct FilenamePattern
-{
-    // Constructor validates that 'pattern' contains exactly one "(BEAM)" and one "(CHUNK)".
-    // Throws an exception if validation fails.
-    FilenamePattern(const std::string &pattern);
+// Validates an RPC-supplied acqdir: nonempty, a safe relative path (no absolute
+// paths, no ".." escapes -- see is_safe_relpath), and in canonical form (no
+// leading/trailing '/', no '//', no '.' or '..' components). May be multi-level
+// ("foo/bar/baz"). Throws runtime_error on failure. Canonical form matters
+// beyond cosmetics: relpaths derived from acqdir are compared as strings by
+// FileWriter's NFS duplicate-skip, so two spellings of the same directory
+// (e.g. "foo" vs "foo/") must be impossible.
+void validate_acqdir(const std::string &acqdir);
 
-    // Replace "(BEAM)" with f->beam_id and "(CHUNK)" with f->time_chunk_index.
-    std::string expand(const std::shared_ptr<AssembledFrame> &f) const;
-
-private:
-    std::string pattern;
-    std::size_t beam_pos;   // position of "(BEAM)" in pattern
-    std::size_t chunk_pos;  // position of "(CHUNK)" in pattern
-};
+// Builds the roots-relative path for one frame of an acquisition:
+// "{acqdir}/frame_b{beam_id}_t{time_chunk_index}.asdf" (unpadded decimal).
+// This fixed naming scheme is parsed by python-side tooling
+// (pirate_frb.utils.list_acqdir's _FRAME_RE) -- keep the two in sync.
+std::string make_acq_relpath(const std::string &acqdir,
+                             const std::shared_ptr<AssembledFrame> &frame);
 
 
 // FileStream: one registered "stream" (StartStream RPC): frames matching
@@ -181,8 +187,7 @@ struct FileStream
 {
     // (i) Immutable after publication.
     std::string acq_name;          // nonempty; unique among ACTIVE streams
-    std::string pattern_string;    // original filename_pattern (echoed by ShowStreams)
-    FilenamePattern pattern;       // validated form of pattern_string
+    std::string acqdir;            // acquisition directory (validated with validate_acqdir)
     std::vector<long> beam_ids;    // original args (nonempty, validated, distinct)
     std::vector<int> beam_indices; // parallel: position in metadata->beam_ids
     long fpga_seq_start = 0;       // original args (echoed by ShowStreams)
@@ -199,8 +204,6 @@ struct FileStream
     // (iii) Deactivation fields -- guarded by the owning FrbServer's mutex.
     bool cancelled = false;             // true = CancelStream, false = expired
     long deactivated_at_unix_ns = 0;    // wall clock; 0 while active
-
-    FileStream(const FilenamePattern &pattern_) : pattern(pattern_) {}
 };
 
 

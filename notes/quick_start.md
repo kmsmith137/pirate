@@ -37,9 +37,11 @@ pirate_frb rpc_status 127.0.0.1:6000
 
 # Optional: in window 6, send RPC "write_files" requests to the server, for randomly
 # chosen beams/times. Filenames will be printed in the 'rpc_status' process (window 5)
-# as they are written. Files appear in /dev/shm/pirate_nfs, and will be deleted when
-# the server exits.
-pirate_frb rpc_write 127.0.0.1:6000
+# as they are written. Files land under the toy config's nfs_dir (~/pirate_toy), in a
+# per-invocation acqdir:
+#   ~/pirate_toy/rand_write_{date}_{time}/frame_b(BEAM)_t(CHUNK).asdf
+# They persist after the server exits (delete them by hand when you're done).
+pirate_frb rpc_rand_write 127.0.0.1:6000
 ```
 In this example, we simulated FRBs and sent two event streams to the sifter.
 One event stream is sent by the search code (via the grouper) and represents the outcome of the search.
@@ -81,9 +83,10 @@ pirate_frb rpc_status 10.222.3.5:6000 10.222.3.5:6001
 
 # Optional: in another window on cf00 or cf05, send RPC "write_files" requests to the server, for randomly
 # chosen beams/times. Filenames will be printed in the 'rpc_status' process as they
-# are written. Files appear on the real NFS server: /mnt/cs00/data/{user}/{date},
-# and persist after the server exits.
-pirate_frb rpc_write 10.222.3.5:6000 10.222.3.5:6001
+# are written. Files land on the real NFS server, under nfs_dir, in a per-invocation acqdir:
+#   /mnt/cs00/data/{user}/rand_write_{date}_{time}/frame_b(BEAM)_t(CHUNK).asdf
+# They persist after the server exits.
+pirate_frb rpc_rand_write 10.222.3.5:6000 10.222.3.5:6001
 ```
 See above for more info on the simulated FRB event streams, or on "short-circuting" the
 sequence of programs.
