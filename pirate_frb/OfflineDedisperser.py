@@ -13,60 +13,42 @@ from .kernels import GpuDequantizationKernel
 class OfflineDedisperser:
     """Single-beam GPU tree-dedisperser, driven one AssembledFrame at a time.
 
-    Constructed from a DedispersionConfig (which is coerced to a single-beam
-    geometry: beams_per_gpu = beams_per_batch = num_active_batches = 1).
+    Eventually, we'd like the entire real-time pipeline to be runnable in
+    an offline mode (for visualization, debugging, or developing RFI-flagging
+    logic). The OfflineDedisperser is a work in progress that will be expanded
+    later. Currently, it just processes a single beam, and is "driven" by an
+    externally-provided sequence of AssembledFrames (e.g. from class Acquisition).
 
-    Construction of the DedispersionPlan and GpuDedisperser is DEFERRED until the
-    first dedisperse(): the frequency-zone structure (zone_nfreq / zone_freq_edges),
-    the time sampling (time_sample_ms), and the per-channel noise variances are
-    taken from the first frame's XEngineMetadata (the data on disk is
-    authoritative). The analytic peak-finding weights are then filled from those
-    variances, so out_max comes out as an SNR.
+    Usage is simple::
 
-    dedisperse(frame) is a context manager. On entry it validates the frame:
-      - frame.metadata is present, and its beam_ids == [frame.beam_id];
-      - frames are the same beam, and consecutive in time_chunk_index (the
-        dedisperser is a streaming engine, so a gap/reorder would splice
-        non-adjacent chunks);
-      - every subsequent frame's metadata matches the first frame's:
-        zone_nfreq, zone_freq_edges, dt_ns_per_seq, seq_per_frb_time_sample,
-        noise_variance, unix_ns_at_seq_0, beamset.
+        import cupy as cp
 
-    It then dequantizes the frame on the GPU, feeds it to the dedisperser, and
-    yields that chunk's GpuDedisperserOutputs (per-tree out_max / out_argmax GPU
-    arrays). Those arrays are views into a small output ring buffer, valid ONLY
-    inside the 'with' block -- consume them (e.g. host-copy the peak) before the
-    block exits. Frames must be supplied in increasing time-chunk order.
-
-    Example::
-
+        # 'config' has type DedispersionConfig
         od = OfflineDedisperser(config)
-        for frame in frames:                       # in increasing time-chunk order
+
+        # loop over time chunks in single beam
+        for frame in frames:
+            # 'outputs' has type GpuDedisperserOutputs.
+            # WARNING: don't use output arrays outside their context manager, or
+            # you'll get a silent race condition!! (The output arrays are views
+            # into a shared GPU memory ring buffer, which is reused soon after
+            # context manager exit.)
             with od.dedisperse(frame) as outputs:
                 snr = max(float(cp.asarray(outputs.out_max[t]).max())
                           for t in range(od.ntrees))
-                print(snr)
+                print(f'max snr in chunk = {snr}')
 
-    Attributes nfreq / nt_in / ntrees / trees / plan / dd are None until the first
-    dedisperse() has initialized the pipeline (dtype is known immediately from the
-    config).
+    The first call to dedisperse() does a lot of initialization, including
+    initializing attributes config / nfreq / nt_in / ntrees / trees / plan / dd.
     """
 
     def __init__(self, config, cuda_device_id=0):
-        # Work on a copy: coercing to single-beam geometry (and overwriting the
-        # zone/timing fields from metadata, in _initialize) must not mutate the
-        # caller's config. num_active_batches = 1 => one CUDA compute stream, one
-        # beam-batch per chunk, seq_id == chunk index.
-        config = config.clone()
-        config.beams_per_gpu = 1
-        config.beams_per_batch = 1
-        config.num_active_batches = 1
-
-        self.config = config
+        self.original_config = config
+        self.config = None
         self.cuda_device_id = cuda_device_id
         self.dtype = config.dtype   # not metadata-dependent; known immediately
 
-        # Pipeline objects: built lazily on the first run() (see _initialize).
+        # Pipeline objects: built lazily on the first dedisperse() (see _initialize).
         self.plan = None
         self.dd = None
         self.dqk = None
@@ -86,7 +68,7 @@ class OfflineDedisperser:
         self.unix_ns_at_seq_0 = None
         self.beamset = None
 
-        # Per-frame invariants captured from the first frame (see run()).
+        # Per-frame invariants captured from the first frame (see dedisperse()).
         self._beam_id = None        # all frames must have this beam_id
         self._initial_tci = None    # time_chunk_index of the first frame
 
@@ -98,26 +80,29 @@ class OfflineDedisperser:
         The metadata is authoritative for the frequency-zone structure and time
         sampling, so those config fields are overwritten before the plan is built.
         """
-        config = self.config
-        config.zone_nfreq = list(md.zone_nfreq)
-        config.zone_freq_edges = list(md.zone_freq_edges)
+        self.config = self.original_config.clone()
+        self.config.beams_per_gpu = 1
+        self.config.beams_per_batch = 1
+        self.config.num_active_batches = 1
+        self.config.zone_nfreq = list(md.zone_nfreq)
+        self.config.zone_freq_edges = list(md.zone_freq_edges)
         # FRB time-sample length (ms) implied by the metadata's seq timing.
-        config.time_sample_ms = md.dt_ns_per_seq * md.seq_per_frb_time_sample / 1.0e6
-        config.validate()
+        self.config.time_sample_ms = md.dt_ns_per_seq * md.seq_per_frb_time_sample / 1.0e6
+        self.config.validate()
 
-        self.plan = DedispersionPlan(config)
+        self.plan = DedispersionPlan(self.config)
         self.nfreq = self.plan.nfreq
         self.nt_in = self.plan.nt_in
         self.ntrees = self.plan.ntrees
         self.trees = self.plan.trees
 
-        self.stream_pool = CudaStreamPool(config.num_active_batches)
+        self.stream_pool = CudaStreamPool(self.config.num_active_batches)
         self.dd = GpuDedisperser(
             self.plan, self.stream_pool,
             cuda_device_id=self.cuda_device_id,
             num_consumers=1,
-            nbatches_out=config.num_active_batches,   # 1: strictly sequential
-            nbatches_wt=config.num_active_batches,    # 1: one weight slot
+            nbatches_out=self.config.num_active_batches,   # 1: strictly sequential
+            nbatches_wt=self.config.num_active_batches,    # 1: one weight slot
             initial_chunk=0,
         )
         # Dummy-mode allocators (capacity < 0): each internal array gets its own
@@ -140,7 +125,7 @@ class OfflineDedisperser:
         self.zone_freq_edges = list(md.zone_freq_edges)
         self.dt_ns_per_seq = md.dt_ns_per_seq
         self.seq_per_frb_time_sample = md.seq_per_frb_time_sample
-        self.time_sample_ms = config.time_sample_ms
+        self.time_sample_ms = self.config.time_sample_ms
         self.noise_variance = list(md.noise_variance)
         self.unix_ns_at_seq_0 = md.unix_ns_at_seq_0
         self.beamset = md.beamset

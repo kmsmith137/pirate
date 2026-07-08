@@ -363,10 +363,12 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         .def_readonly("out_max", &GpuDedisperser::Outputs::out_max)
         .def_readonly("out_argmax", &GpuDedisperser::Outputs::out_argmax);
 
-    // GpuDedisperser: pybind11_injections.py adds stream=None wrappers for acquire/release
-    // methods. No class docstring here: it lives in the Python injector, since the primary
-    // Python interface is the injected get_input()/get_output() context managers (option 2
-    // in notes/docstrings.md).
+    // GpuDedisperser. No class docstring here: it lives in the Python injector, since the
+    // primary Python interface is the injected get_input()/get_output() context managers
+    // (option 2 in notes/docstrings.md). Those context managers wrap the low-level
+    // acquire/release methods below, which are bound with a leading underscore
+    // (_acquire_input, ...) to mark them internal -- Python callers should use the context
+    // managers, not call these directly.
     py::class_<GpuDedisperser, std::shared_ptr<GpuDedisperser>>(m, "GpuDedisperser")
           .def(py::init([](std::shared_ptr<DedispersionPlan> plan,
                           std::shared_ptr<CudaStreamPool> stream_pool,
@@ -419,7 +421,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Args:\n"
                "    gpu_allocator: BumpAllocator for GPU memory\n"
                "    host_allocator: BumpAllocator for host memory")
-          .def("acquire_input",
+          // Low-level acquire/release (raw stream_ptr). Underscore-prefixed to mark them
+          // internal: the Python interface is the get_input()/get_output() context managers
+          // (pirate_frb/pybind11_injections.py), which wrap these.
+          .def("_acquire_input",
                [](GpuDedisperser &self, long seq_id, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                    return self.acquire_input(seq_id, stream);
@@ -428,14 +433,14 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Acquire the input buffer for seq_id and return a\n"
                "ksgpu.Array view of it. After this call 'stream' sees an empty\n"
                "input buffer ready for writing; the returned view is valid until\n"
-               "the matching release_input_and_launch_dd_kernels() call.")
-          .def("release_input_and_launch_dd_kernels",
+               "the matching _release_input_and_launch_dd_kernels() call.")
+          .def("_release_input_and_launch_dd_kernels",
                [](GpuDedisperser &self, long seq_id, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                    self.release_input_and_launch_dd_kernels(seq_id, stream);
                },
                py::arg("seq_id"), py::arg("stream_ptr"))
-          .def("acquire_output",
+          .def("_acquire_output",
                [](GpuDedisperser &self, long consumer_id, long seq_id, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                    return self.acquire_output(consumer_id, seq_id, stream);
@@ -444,9 +449,9 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Acquire the output buffer for (consumer_id, seq_id) and return\n"
                "an Outputs object holding list-of-Array views of out_max and out_argmax.\n"
                "After this call 'stream' sees a full output buffer ready for reading;\n"
-               "the returned views are valid until the matching release_output() call.\n"
+               "the returned views are valid until the matching _release_output() call.\n"
                "consumer_id must be in [0, num_consumers).")
-          .def("release_output",
+          .def("_release_output",
                [](GpuDedisperser &self, long consumer_id, long seq_id, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                    self.release_output(consumer_id, seq_id, stream);

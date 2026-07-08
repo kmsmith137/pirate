@@ -116,7 +116,7 @@ pirate_frb rpc_rand_write 10.222.3.5:6000 10.222.3.5:6001
 See above for more info on the simulated FRB event streams, or on "short-circuting" the
 sequence of programs.
 
-## Running a toy offline dedisperser
+## Running an offline dedisperser
 
 I started hacking together an offline dedisperser.
 Here are some example runs, based on `start_stream` acquisitions from the sections above
@@ -141,3 +141,6 @@ Additionally, there may be boundary effects near the beginning of the acquisitio
 The offline dedisperser isn't really useful yet, but should be a useful starting point
 for further development, and as a way of establishing interfaces (`class Acquisition`,
 `class OfflineDedisperser`).
+Eventually, we'd like the entire real-time pipeline to be runnable in
+an offline mode (for visualization, debugging, or developing RFI-flagging
+logic).

@@ -239,18 +239,31 @@ class CasmBeamformerInjections:
 
 @ksgpu.inject_methods(pirate_pybind11.GpuDedisperser)
 class GpuDedisperserInjections:
-    """GPU tree-dedispersion engine.
+    """Low-level C++ GPU dedisperser class, with a python context-manager interface.
 
-    Consumes input chunks (one beam-batch at a time) and produces dedispersion
-    output buffers -- per-tree peak-finding max/argmax over the DM-vs-time plane.
-    The Python interface is the get_input() / get_output() context managers (and
-    the acquire/release methods they wrap), which add stream=None handling.
+    This is probably not the class you want -- you probably want OfflineDedisperser!
+    The OfflineDedisperser is a wrapper which handles details like memory allocation
+    and parsing AssembledFrames.
 
-    Beam-batches are fed one at a time, in increasing ``seq_id`` order (seq_id =
-    ichunk*nbatches + ibatch). Writing the input buffer and leaving the get_input()
-    block launches the dedispersion kernels for that seq_id; get_output() then
-    yields that seq_id's outputs, whose arrays are valid ONLY inside the block
-    (they are views into a small output ring buffer)::
+    GpuDedisperser has two interfaces: a high-level context manager interface::
+    
+        self.get_input(seq_id) -> (context manager)
+        self.get_output(seq_id) -> (context manager)
+
+    and a lower-level interface which is closer to C++::
+
+        self._acquire_input(seq_id, stream_ptr) -> (cupy array)
+        self._release_input_and_launch_dd_kernels(seq_id, stream_ptr) -> None
+        self._acquire_output(consumer_id, seq_id, stream_ptr) -> GpuDedispersionOuptuts
+        self._release_output(consumer_id, seq_id, stream_ptr) -> None
+
+    Processing is one seq_id at a time (seq_id = ichunk*nbatches + ibatch).
+    
+    WARNING: don't use input/output arrays outside their context managers -- otherwise
+    you'll get a silent race condition!! (The input/output arrays are views into a
+    GPU memory ring buffer, and will be overwritten soon after context manager exit.)
+
+    Example code::
 
         dd = GpuDedisperser(plan, stream_pool, cuda_device_id=0, num_consumers=1)
         dd.allocate(gpu_allocator, host_allocator)
@@ -273,103 +286,16 @@ class GpuDedisperserInjections:
     # binding deliberately sets none, and inject_methods copies this one onto the
     # class (option 2 in notes/docstrings.md).
 
-    # Save references to C++ methods
-    _cpp_acquire_input = pirate_pybind11.GpuDedisperser.acquire_input
-    _cpp_release_input_and_launch_dd_kernels = pirate_pybind11.GpuDedisperser.release_input_and_launch_dd_kernels
-    _cpp_acquire_output = pirate_pybind11.GpuDedisperser.acquire_output
-    _cpp_release_output = pirate_pybind11.GpuDedisperser.release_output
-    
-    def acquire_input(self, seq_id, stream=None):
-        """Acquire input buffer for writing and return a view of it.
+    # The get_input()/get_output() context managers below are the Python interface.
+    # They wrap the low-level C++ acquire/release methods, which are bound (with a
+    # leading underscore, to mark them internal) in pirate_pybind11.cpp:
+    #     self._acquire_input(seq_id, stream_ptr)
+    #     self._release_input_and_launch_dd_kernels(seq_id, stream_ptr)
+    #     self._acquire_output(consumer_id, seq_id, stream_ptr)
+    #     self._release_output(consumer_id, seq_id, stream_ptr)
+    # These take a raw cudaStream_t pointer (not a cupy stream); call them directly
+    # only if you need low-level acquire/release control outside the context managers.
 
-        After this call returns, 'stream' sees an empty input buffer ready
-        for writing. The returned array is the same view formerly obtained
-        via view_input() -- valid until the matching release_input_and_launch_dd_kernels() call.
-
-        Parameters
-        ----------
-        seq_id : int
-            Global batch index 0, 1, 2, ... (= ichunk*nbatches + ibatch).
-        stream : cupy.cuda.Stream or None, optional
-            CUDA stream to use. If None, uses current cupy stream.
-
-        Returns
-        -------
-        ksgpu.Array
-            View of the input buffer, shape (beams_per_batch, nfreq, nt_in).
-        """
-        import cupy as cp
-        if stream is None:
-            stream = cp.cuda.get_current_stream()
-        return self._cpp_acquire_input(seq_id, stream.ptr)
-    
-    def release_input_and_launch_dd_kernels(self, seq_id, stream=None):
-        """Release input buffer after writing.
-        
-        Before calling this, 'stream' must see a full input buffer.
-        
-        Parameters
-        ----------
-        seq_id : int
-            Global batch index 0, 1, 2, ... (= ichunk*nbatches + ibatch).
-        stream : cupy.cuda.Stream or None, optional
-            CUDA stream to use. If None, uses current cupy stream.
-        """
-        import cupy as cp
-        if stream is None:
-            stream = cp.cuda.get_current_stream()
-        self._cpp_release_input_and_launch_dd_kernels(seq_id, stream.ptr)
-    
-    def acquire_output(self, seq_id, stream=None, consumer_id=0):
-        """Acquire output buffer for reading and return Outputs views.
-
-        After this call returns, 'stream' sees a full output buffer ready
-        for reading. The returned object has two attributes::
-
-            .out_max     list of ntrees ksgpu.Arrays (peak-finding max values)
-            .out_argmax  list of ntrees ksgpu.Arrays (peak-finding argmax tokens)
-
-        The views are valid until the matching release_output() call.
-
-        Parameters
-        ----------
-        seq_id : int
-            Global batch index 0, 1, 2, ... (= ichunk*nbatches + ibatch).
-        stream : cupy.cuda.Stream or None, optional
-            CUDA stream to use. If None, uses current cupy stream.
-        consumer_id : int, optional
-            Output consumer id in [0, num_consumers). Defaults to 0, which
-            is correct for the typical num_consumers=1 case.
-
-        Returns
-        -------
-        GpuDedisperser.Outputs
-            Holds list-of-Array views of the acquired output buffers.
-        """
-        import cupy as cp
-        if stream is None:
-            stream = cp.cuda.get_current_stream()
-        return self._cpp_acquire_output(consumer_id, seq_id, stream.ptr)
-
-    def release_output(self, seq_id, stream=None, consumer_id=0):
-        """Release output buffer after reading.
-
-        Before calling this, 'stream' must see an empty output buffer.
-
-        Parameters
-        ----------
-        seq_id : int
-            Global batch index 0, 1, 2, ... (= ichunk*nbatches + ibatch).
-        stream : cupy.cuda.Stream or None, optional
-            CUDA stream to use. If None, uses current cupy stream.
-        consumer_id : int, optional
-            Output consumer id in [0, num_consumers). Defaults to 0.
-        """
-        import cupy as cp
-        if stream is None:
-            stream = cp.cuda.get_current_stream()
-        self._cpp_release_output(consumer_id, seq_id, stream.ptr)
-    
     @contextmanager
     def get_input(self, seq_id, stream=None):
         """Context manager for acquiring and releasing input buffer.
@@ -398,11 +324,11 @@ class GpuDedisperserInjections:
         import cupy as cp
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        arr = self._cpp_acquire_input(seq_id, stream.ptr)
+        arr = self._acquire_input(seq_id, stream.ptr)
         try:
             yield arr
         finally:
-            self._cpp_release_input_and_launch_dd_kernels(seq_id, stream.ptr)
+            self._release_input_and_launch_dd_kernels(seq_id, stream.ptr)
     
     @contextmanager
     def get_output(self, seq_id, stream=None, consumer_id=0):
@@ -423,10 +349,8 @@ class GpuDedisperserInjections:
 
         Yields
         ------
-        GpuDedisperser.Outputs
-            Object with attributes:
-              out_max    : list of ntrees ksgpu.Arrays (peak-finding max values)
-              out_argmax : list of ntrees ksgpu.Arrays (peak-finding argmax tokens)
+        GpuDedisperserOutputs
+            Object with out_max and out_argmax attributes (see docstring)
 
         Examples
         --------
@@ -439,11 +363,11 @@ class GpuDedisperserInjections:
         import cupy as cp
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        outputs = self._cpp_acquire_output(consumer_id, seq_id, stream.ptr)
+        outputs = self._acquire_output(consumer_id, seq_id, stream.ptr)
         try:
             yield outputs
         finally:
-            self._cpp_release_output(consumer_id, seq_id, stream.ptr)
+            self._release_output(consumer_id, seq_id, stream.ptr)
 
 
 @ksgpu.inject_methods(pirate_pybind11.SlabAllocator)
