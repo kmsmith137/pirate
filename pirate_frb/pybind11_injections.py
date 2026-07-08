@@ -254,11 +254,11 @@ class GpuDedisperserInjections:
 
         self._acquire_input(seq_id, stream_ptr) -> (cupy array)
         self._release_input_and_launch_dd_kernels(seq_id, stream_ptr) -> None
-        self._acquire_output(consumer_id, seq_id, stream_ptr) -> GpuDedispersionOuptuts
+        self._acquire_output(consumer_id, seq_id, stream_ptr) -> GpuDedisperserOutputs
         self._release_output(consumer_id, seq_id, stream_ptr) -> None
 
     Processing is one seq_id at a time (seq_id = ichunk*nbatches + ibatch).
-    
+
     WARNING: don't use input/output arrays outside their context managers -- otherwise
     you'll get a silent race condition!! (The input/output arrays are views into a
     GPU memory ring buffer, and will be overwritten soon after context manager exit.)
@@ -281,6 +281,43 @@ class GpuDedisperserInjections:
                     out_max = outputs.out_max[itree]        # (beams_per_batch, ndm, nt)
                     out_argmax = outputs.out_argmax[itree]
                     ...
+
+    Stream semantics. All synchronization is via CUDA events on the stream you pass
+    to get_input()/get_output() (default: cupy's current stream, captured at context
+    manager entry). The context managers never synchronize the host with the GPU:
+
+    - get_input(): entry makes 'stream' wait until the input slot is free; exit
+      records an event on 'stream' which the dedispersion kernels wait on. So all
+      writes to the input array must be ENQUEUED ON 'stream', inside the block.
+      They need only be enqueued (not finished) by exit. The buffer holds stale
+      data from an earlier chunk -- overwrite it completely.
+
+    - get_output(): entry makes 'stream' wait until the outputs for seq_id are
+      ready. (The host may block until the producing kernel has been *launched*,
+      but never waits for it to *finish* -- so at entry the outputs are visible
+      only to work enqueued on 'stream', not to the host or other streams.) Exit
+      records an event on 'stream'; the ring slot is reused only after that event,
+      so reads also need only be enqueued (not finished) by exit.
+
+    Gotchas which follow from the above:
+
+    - GPU work submitted on any OTHER stream inside a block is unordered in both
+      directions: it can read outputs before the kernels finish, and the ring slot
+      can be recycled while it is still running. With default cupy usage, just
+      don't change the current stream inside the block.
+
+    - A GPU->host copy of the outputs enqueued on the context manager's stream is
+      safe with no host sync (slot reuse is stream-ordered behind it), but the
+      HOST buffer is not valid until the copy actually finishes. Blocking copies
+      (cupy's arr.get() / cp.asnumpy(), blocking=True by default) handle this;
+      after arr.get(blocking=False) you must stream.synchronize() before reading
+      the numpy array.
+
+    - Back-pressure: exiting the get_input(seq_id) block blocks the host until
+      output (seq_id - nbatches_out) has been released. A single thread driving
+      both inputs and outputs (as in the example below) must therefore not let
+      output releases lag input submissions by more than nbatches_out batches,
+      or it will deadlock.
     """
     # This class docstring (above) is the GpuDedisperser docstring: the pybind11
     # binding deliberately sets none, and inject_methods copies this one onto the
@@ -299,16 +336,29 @@ class GpuDedisperserInjections:
     @contextmanager
     def get_input(self, seq_id, stream=None):
         """Context manager for acquiring and releasing input buffer.
-        
-        Acquires the input buffer on entry and releases it on exit.
-        
+
+        Acquires the input buffer on entry and releases it on exit. Entry makes
+        'stream' wait until the slot is free; exit records an event on 'stream'
+        and launches the dedispersion kernels behind it. All writes to the buffer
+        must be enqueued on 'stream' inside the block (enqueued suffices -- they
+        need not have completed by exit). The buffer holds stale data from an
+        earlier chunk: overwrite it completely. See the class docstring ("Stream
+        semantics") for gotchas.
+
+        Note: the release-and-launch happens in a 'finally', so leaving the block
+        by RAISING an exception still launches the dedispersion kernels on whatever
+        is in the input buffer (partially-written or stale). This keeps the internal
+        seq_id cursors consistent (the alternative -- skipping the launch -- would
+        desync them), at the cost of producing garbage outputs for this seq_id
+        rather than an error. So don't rely on an exception here to abort the chunk.
+
         Parameters
         ----------
         seq_id : int
             Global batch index 0, 1, 2, ... (= ichunk*nbatches + ibatch).
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
-            
+
         Yields
         ------
         ksgpu.Array
@@ -335,7 +385,15 @@ class GpuDedisperserInjections:
         """Context manager for acquiring and releasing output buffer.
 
         Acquires the output buffer on entry and yields the Outputs object;
-        releases the buffer on exit.
+        releases the buffer on exit. Entry makes 'stream' wait until the outputs
+        are ready (the host does not wait for the producing kernel to finish, so
+        at entry the outputs are visible only to work enqueued on 'stream'). Exit
+        records an event on 'stream'; the ring slot is reused only after that
+        event, so reads need only be enqueued (not completed) by exit. A GPU->host
+        copy enqueued on 'stream' is therefore race-free, but its host buffer is
+        only valid once the copy finishes (cupy's arr.get() blocks by default;
+        after a non-blocking copy, synchronize the stream before reading it). See
+        the class docstring ("Stream semantics") for gotchas.
 
         Parameters
         ----------

@@ -31,7 +31,7 @@ class FrbGrouperInjections:
     hands off the GpuDedisperser output ring buffer over CUDA IPC. Use the object as a
     context manager (see below).
 
-    Usage summary::
+    Usage summary is straightforward, but note warnings below::
 
         with pirate_frb.rpc.FrbGrouper('127.0.0.1:7000') as g:
             for ichunk in itertools.count():       # outer loop over time chunks
@@ -39,6 +39,17 @@ class FrbGrouperInjections:
                    with g.get_output(ichunk, ibatch) as outputs:
                        pass
                 events = g.create_events(...)
+
+    WARNING 1: don't use output arrays outside their context manager -- otherwise
+    you'll get a silent race condition!! (The output arrays are views into a GPU
+    memory ring buffer, and will be overwritten soon after context manager exit.)
+
+    WARNING 2: the context manager synchronizes the current cupy stream on exit,
+    then 'releases' the output arrays for the dedisperser to overwrite. The caller
+    is responsible for ensuring that synchronizing the cupy stream is sufficient
+    for buffer reuse. In normal cupy usage, you shouldn't need to worry about
+    race conditions, but if you're using multiple streams then you may need
+    additional synchronization logic.
 
     Attributes (all read-only):
 
@@ -141,13 +152,34 @@ class FrbGrouperInjections:
         """Acquire one beam-batch's outputs, as a GpuDedisperserOutputs object.
 
         Usage summary (see grouper-specific parts of sphinx docs for more info)::
-        
+
             # Warning: output arrays are only valid inside the context manager!!
             # Therefore, each batch must be fully processed, before seeing the next batch.
             with grouper.get_output(ichunk, ibatch) as outputs:
                 # Loop over dedispersion trees.
                 for itree, tree_out in enumerate(outputs.out_max):
                     # 'tree_out' has shape (beams_per_batch, coarse_ndm, coarse_ntime)
+        
+        WARNING 1: don't use output arrays outside their context manager -- otherwise
+        you'll get a silent race condition!! (The output arrays are views into a GPU
+        memory ring buffer, and will be overwritten soon after context manager exit.)
+        
+        WARNING 2: the context manager synchronizes the current cupy stream on exit,
+        then 'releases' the output arrays for the dedisperser to overwrite. The caller
+        is responsible for ensuring that synchronizing the cupy stream is sufficient
+        for buffer reuse. In normal cupy usage, you shouldn't need to worry about
+        race conditions, but if you're using multiple streams then you may need
+        additional synchronization logic. For example:
+        
+        - Any GPU read of 'outputs' that has not COMPLETED by block exit races
+          with the producer. The exit sync covers only work enqueued on the
+          current cupy stream: enqueue all reads there, and don't leave a
+          different stream current at exit. Work on any other stream must be
+          synchronized manually before the block exits.
+
+        - A GPU->host copy on the current cupy stream is covered by the exit
+          sync, so its host buffer is valid after the block. On any other
+          stream, it is not.
 
         Parameters
         ----------

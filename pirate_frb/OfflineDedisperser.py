@@ -19,7 +19,7 @@ class OfflineDedisperser:
     later. Currently, it just processes a single beam, and is "driven" by an
     externally-provided sequence of AssembledFrames (e.g. from class Acquisition).
 
-    Usage is simple::
+    Usage is simple, but note warnings and stream semantics below::
 
         import cupy as cp
 
@@ -37,7 +37,7 @@ class OfflineDedisperser:
                 snr = max(float(cp.asarray(outputs.out_max[t]).max())
                           for t in range(od.ntrees))
                 print(f'max snr in chunk = {snr}')
-
+    
     The first call to dedisperse() does a lot of initialization, including
     initializing attributes config / nfreq / nt_in / ntrees / trees / plan / dd.
     """
@@ -151,13 +151,25 @@ class OfflineDedisperser:
 
     @contextmanager
     def dedisperse(self, frame):
-        """Dedisperse one time chunk; yield its GpuDedisperserOutputs.
+        """Dedisperse one time chunk; yield its GpuDedisperserOutputs as a context manager.
+        
+        WARNING: don't use output arrays outside their context manager, or
+        you'll get a silent race condition!! (The output arrays are views
+        into a shared GPU memory ring buffer, which is reused soon after
+        context manager exit.)
 
-        A context manager. The first entry initializes the pipeline from
-        frame.metadata; later entries check their metadata is consistent. The
-        yielded arrays are views into the dedisperser's output ring buffer and are
-        valid ONLY inside the 'with' block -- consume them before it exits. See the
-        class docstring.
+        Stream semantics: dedisperse() issues all GPU work (upload, dequantization,
+        dedispersion kernels, output acquire/release) on the cupy stream that is
+        current when it is called, and the yielded outputs are tied to that stream.
+
+        With "normal" cupy usage you shouldn't need to worry about race conditions,
+        but if you use multiple streams or asynchronous copies, then you may need to
+        synchronize. For example, cupy's arr.get() / cp.asnumpy() are fine, but if
+        you call arr.get(blocking=False) then you must synchronize the stream before
+        exiting the context manager (or reading the numpy array).
+
+        The first call to dedisperse() does a lot of initialization, including
+        initializing attributes config / nfreq / nt_in / ntrees / trees / plan / dd.
         """
         import cupy as cp
 

@@ -560,9 +560,12 @@ void GpuDedisperser::_launch_et_g2g(long ichunk, long ibatch, cudaStream_t strea
 void GpuDedisperser::_do_et_h2h(long ichunk, long ibatch)
 {
     // copy host -> et_host
-    // FIXME: in principle this is a bug: running copy kernel without synchronizing
-    // wiuth gpu->host copy that produces its input data, or host->gpu copy that
-    // consumes its output data. The current unit tests don't detect this!
+    //
+    // No synchronization here: the caller (_worker_main) already synchronizes the
+    // producer of this kernel's input (the g2h copy, via evrb_g2h->synchronize())
+    // and the consumer of its output (the et_h2g copy, via evrb_et_h2g->synchronize())
+    // before calling _do_et_h2h(). (This is a plain host-side memcpy, not a stream
+    // kernel, so those host-blocking synchronize() calls are what make it safe.)
     this->h2h_copy_kernel->apply(this->host_ringbuf, ichunk, ibatch);
 }
 
