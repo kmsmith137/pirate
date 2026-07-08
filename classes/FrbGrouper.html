@@ -3,10 +3,10 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="FrbSifterClient" href="FrbSifterClient.html"><link rel="prev" title="Python class reference" href="../python_class_reference.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="FrbSearchClient" href="FrbSearchClient.html"><link rel="prev" title="DedispersionConfig" href="DedispersionConfig.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>FrbGrouper - pirate_frb 1.0.0 documentation</title>
+        <title>FrbGrouper - pirate_frb 1.2.1 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -163,7 +163,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.2.1 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -184,7 +184,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.0.0 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.2.1 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -217,16 +217,24 @@
 </ul>
 </li>
 <li class="toctree-l1 current has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="Acquisition.html">Acquisition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="AssembledFrame.html">AssembledFrame</a></li>
+<li class="toctree-l2"><a class="reference internal" href="DedispersionConfig.html">DedispersionConfig</a></li>
 <li class="toctree-l2 current current-page"><a class="current reference internal" href="#">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="FrbSearchClient.html">FrbSearchClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="FrbSifterClient.html">FrbSifterClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GpuDedisperser.html">GpuDedisperser</a></li>
 <li class="toctree-l2"><a class="reference internal" href="GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="OfflineDedisperser.html">OfflineDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../notes/cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/grpc.html">GRPC .proto guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
@@ -286,7 +294,7 @@ For a lot more info, see the grouper-specific parts of the sphinx docs.</p>
 ‘127.0.0.1:7000’); the producer (an FrbServer running pirate) connects to it and
 hands off the GpuDedisperser output ring buffer over CUDA IPC. Use the object as a
 context manager (see below).</p>
-<p>Usage summary:</p>
+<p>Usage summary is straightforward, but note warnings below:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">pirate_frb</span><span class="o">.</span><span class="n">rpc</span><span class="o">.</span><span class="n">FrbGrouper</span><span class="p">(</span><span class="s1">&#39;127.0.0.1:7000&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">g</span><span class="p">:</span>
     <span class="k">for</span> <span class="n">ichunk</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">count</span><span class="p">():</span>       <span class="c1"># outer loop over time chunks</span>
         <span class="k">for</span> <span class="n">ibatch</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">g</span><span class="o">.</span><span class="n">nbatches</span><span class="p">):</span>   <span class="c1"># inner loop over beam batches</span>
@@ -295,6 +303,15 @@ context manager (see below).</p>
         <span class="n">events</span> <span class="o">=</span> <span class="n">g</span><span class="o">.</span><span class="n">create_events</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
 </pre></div>
 </div>
+<p>WARNING 1: don’t use output arrays outside their context manager – otherwise
+you’ll get a silent race condition!! (The output arrays are views into a GPU
+memory ring buffer, and will be overwritten soon after context manager exit.)</p>
+<p>WARNING 2: the context manager synchronizes the current cupy stream on exit,
+then ‘releases’ the output arrays for the dedisperser to overwrite. The caller
+is responsible for ensuring that synchronizing the cupy stream is sufficient
+for buffer reuse. In normal cupy usage, you shouldn’t need to worry about
+race conditions, but if you’re using multiple streams then you may need
+additional synchronization logic.</p>
 <p>Attributes (all read-only):</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> (bool) – whether the grouper is in the stopped state.</p></li>
@@ -384,6 +401,25 @@ the subband = the full band (subband_freq_{lo,hi}_MHz).</p>
         <span class="c1"># &#39;tree_out&#39; has shape (beams_per_batch, coarse_ndm, coarse_ntime)</span>
 </pre></div>
 </div>
+<p>WARNING 1: don’t use output arrays outside their context manager – otherwise
+you’ll get a silent race condition!! (The output arrays are views into a GPU
+memory ring buffer, and will be overwritten soon after context manager exit.)</p>
+<p>WARNING 2: the context manager synchronizes the current cupy stream on exit,
+then ‘releases’ the output arrays for the dedisperser to overwrite. The caller
+is responsible for ensuring that synchronizing the cupy stream is sufficient
+for buffer reuse. In normal cupy usage, you shouldn’t need to worry about
+race conditions, but if you’re using multiple streams then you may need
+additional synchronization logic. For example:</p>
+<ul class="simple">
+<li><p>Any GPU read of ‘outputs’ that has not COMPLETED by block exit races
+with the producer. The exit sync covers only work enqueued on the
+current cupy stream: enqueue all reads there, and don’t leave a
+different stream current at exit. Work on any other stream must be
+synchronized manually before the block exits.</p></li>
+<li><p>A GPU-&gt;host copy on the current cupy stream is covered by the exit
+sync, so its host buffer is valid after the block. On any other
+stream, it is not.</p></li>
+</ul>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
@@ -409,23 +445,23 @@ convertible to cupy via DLPack).</p>
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="FrbSifterClient.html">
+          <a class="next-page" href="FrbSearchClient.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">FrbSifterClient</div>
+                <div class="title">FrbSearchClient</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="../python_class_reference.html">
+          <a class="prev-page" href="DedispersionConfig.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">Python class reference</div>
+                <div class="title">DedispersionConfig</div>
                 
               </div>
             </a>
@@ -476,7 +512,7 @@ convertible to cupy via DLPack).</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=8d563738"></script>
+</div><script src="../_static/documentation_options.js?v=ca842793"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

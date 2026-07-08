@@ -14,6 +14,34 @@ package frb.search.v1;
 // If you're reading this, please feel free to make improvements :)
 
 
+// Wire-protocol version. This is the single source of truth for the protocol
+// version on both the C++ server and the Python clients -- both reference
+// PROTOCOL_VERSION_CURRENT from the generated stubs, rather than each hardcoding
+// their own constant.
+//
+// Every request message carries a 'protocol_version' field (see notes/grpc.md):
+// the client sets it to PROTOCOL_VERSION_CURRENT, and the server rejects any RPC
+// whose value does not match its own PROTOCOL_VERSION_CURRENT. This catches
+// client/server wire-format skew (out-of-sync pirate builds) rather than letting
+// it become silent misbehavior. (Streaming RPCs carry the version on the
+// request that opens the stream; subsequent stream messages do not repeat it.)
+//
+// proto3 requires every enum to have a zero value; PROTOCOL_VERSION_UNSPECIFIED
+// is that placeholder (a protocol_version of 0 is therefore invalid -- e.g. an
+// old client that never set the field). Bump PROTOCOL_VERSION_CURRENT on any
+// incompatible wire-format change (a new/removed RPC, or a changed
+// request/response/notification field).
+//
+// The field is kept as a uint32 rather than the ProtocolVersion enum type so an
+// out-of-range value from a newer client round-trips as a plain integer the
+// server can report, instead of decoding to the proto3 "unknown enum" sentinel.
+
+enum ProtocolVersion {
+  PROTOCOL_VERSION_UNSPECIFIED = 0;
+  PROTOCOL_VERSION_CURRENT = 1;
+}
+
+
 // Service definition
 service FrbSearch {
   // Returns the current status of the search engine
@@ -27,7 +55,9 @@ service FrbSearch {
   // (metadata is sent by the X-engine, and is not available until the X-engine connects).
   rpc GetXEngineMetadata (GetXEngineMetadataRequest) returns (GetXEngineMetadataResponse);
 
-  // Write files to disk for specified beams and time range
+  // Write files to disk for specified beams and time range. Filenames are
+  // always {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf -- the caller
+  // chooses only the acquisition directory 'acqdir'.
   rpc WriteFiles (WriteFilesRequest) returns (WriteFilesResponse);
 
   // Subscribe to a stream of filenames. The connection can be closed by the client
@@ -46,10 +76,34 @@ service FrbSearch {
   // a similar push-based use case in mind -- general status polling
   // should use GetStatus instead.
   rpc MonitorRingbuf (MonitorRingbufRequest) returns (stream MonitorRingbufResponse);
+
+  // Register a "stream": data matching (beam_ids x fpga-seq range) is
+  // queued for disk writing automatically as it flows through the server,
+  // with no further RPCs needed. Complements WriteFiles (one-shot,
+  // retroactive within the ring buffer): a stream captures each frame at
+  // the moment it transitions from "assembled" to "processed", so chunks
+  // that were already processed when StartStream arrives are NOT captured
+  // retroactively, even if fpga_seq_start is in the past.
+  rpc StartStream (StartStreamRequest) returns (StartStreamResponse);
+
+  // Report the server's current position (as an fpga seq), the full list
+  // of beams it processes, and all streams with their status and stats --
+  // active streams first, then a bounded history of recently-deactivated
+  // (expired/cancelled) streams.
+  rpc ShowStreams (ShowStreamsRequest) returns (ShowStreamsResponse);
+
+  // Cancel one active stream (by stream_name), or all of them. File writes
+  // already queued still complete (and still notify SubscribeFiles
+  // subscribers); cancellation only stops future matching. Cancelled
+  // streams remain visible in ShowStreams' bounded history; cancelling an
+  // already-inactive stream is an error.
+  rpc CancelStream (CancelStreamRequest) returns (CancelStreamResponse);
 }
 
-// Request message (currently empty, but extensible)
-message GetStatusRequest {}
+// Request message for GetStatus.
+message GetStatusRequest {
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+}
 
 // Response message containing status metrics
 message GetStatusResponse {
@@ -63,8 +117,10 @@ message GetStatusResponse {
   int64 num_free_frames = 8;  // Number of available frames in AssembledFrameAllocator
 }
 
-// Request message for GetConfig (currently empty, but extensible)
-message GetConfigRequest {}
+// Request message for GetConfig.
+message GetConfigRequest {
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+}
 
 // Response message containing the per-server config.
 //
@@ -80,7 +136,7 @@ message GetConfigResponse {
   int64 ringbuf_nchunks = 4;           // Logical ring buffer length in time chunks
   int64 min_data_mtu = 5;              // Mirrors the server YAML 'min_data_mtu' key
   string ssd_dir = 6;                  // SSD cache directory for this server
-  string nfs_dir = 7;                  // NFS output directory (already interpolated for {user}/{date})
+  string nfs_dir = 7;                  // NFS output directory (already interpolated for {user}/{date}/{home})
   int64 ssd_threads = 8;               // Number of FileWriter SSD threads
   int64 nfs_threads = 9;               // Number of FileWriter NFS threads
   int64 tree_rank = 10;                // From config_prefilled.tree_rank
@@ -99,7 +155,8 @@ message GetConfigResponse {
 
 // Request message for GetXEngineMetadata
 message GetXEngineMetadataRequest {
-  bool verbose = 1;  // If true, include comments explaining each field
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+  bool verbose = 2;  // If true, include comments explaining each field
 }
 
 // Response message for GetXEngineMetadata
@@ -107,12 +164,24 @@ message GetXEngineMetadataResponse {
   string yaml_string = 1;  // Empty string if metadata not yet available
 }
 
-// Request message for WriteFiles
+// Request message for WriteFiles.
+//
+// The time range is expressed as fpga sequence numbers (aka "fpga_seq" or
+// "fpga counts"), half-open: files are written for all chunks overlapping
+//   fpga_seq_start <= f < fpga_seq_end.
+// The server translates this to its internal (absolute) time-chunk indices.
 message WriteFilesRequest {
-  repeated int64 beams = 1;           // List of beam IDs to write
-  int64 min_time_chunk_index = 2;     // First time chunk index (inclusive)
-  int64 max_time_chunk_index = 3;     // Last time chunk index (inclusive)
-  string filename_pattern = 4;        // Pattern with (BEAM) and (CHUNK) placeholders
+  uint32 protocol_version = 1;        // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+  repeated int64 beams = 2;           // List of beam IDs to write
+  int64 fpga_seq_start = 3;           // Start of fpga-seq range (inclusive)
+  int64 fpga_seq_end = 4;             // End of fpga-seq range (exclusive)
+
+  // Acquisition directory. Files are written to
+  //     {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf
+  // where nfs_root comes from the server config (GetConfigResponse.nfs_dir).
+  // Must be a nonempty, normalized relative path (no leading/trailing '/',
+  // no '//', no '.' or '..' components); may be multi-level, e.g. "foo/bar/baz".
+  string acqdir = 5;
 }
 
 // Response message for WriteFiles
@@ -120,8 +189,15 @@ message WriteFilesResponse {
   repeated string filename_list = 1;  // List of filenames that will be written
 }
 
-// Request message for SubscribeFiles (currently empty, but extensible)
-message SubscribeFilesRequest {}
+// Request message for SubscribeFiles (opens the notification stream).
+message SubscribeFilesRequest {
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+
+  // If true, also receive notifications for files written by streams
+  // (StartStream RPC). Default false: WriteFiles-triggered notifications
+  // only, preserving pre-streams behavior.
+  bool subscribe_streams = 2;
+}
 
 // Response message for SubscribeFiles (streamed).
 //
@@ -146,17 +222,116 @@ message SubscribeFilesResponse {
 message ReadySentinel {}
 
 // One completed file's write status.
+// Note: the filename is relative to the server's nfs_path.
 message WriteNotification {
   string filename      = 1;  // Valid only when error_message is empty.
   string error_message = 2;  // Empty = success; non-empty = error string.
+  string stream_name   = 3;  // Empty if triggered by WriteFiles, nonempty
+                             // if triggered by StartStream.
 }
 
-// Request message for MonitorRingbuf (currently empty, but extensible).
-message MonitorRingbufRequest {}
+// Request message for MonitorRingbuf (opens the push stream).
+message MonitorRingbufRequest {
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+}
 
 // Streamed update for MonitorRingbuf. One message per change in rb_processed.
 message MonitorRingbufResponse {
   int64 rb_processed = 1;
+}
+
+// Request message for StartStream.
+//
+// The time range is expressed as fpga sequence numbers, half-open: a chunk
+// matches iff it overlaps [fpga_seq_start, fpga_seq_end). fpga_seq_start = 0
+// means "start asap"; fpga_seq_end = INT64_MAX means "run indefinitely".
+message StartStreamRequest {
+  uint32 protocol_version = 1;  // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+  string stream_name = 2;       // must be nonempty; unique among active streams
+  string acqdir = 3;            // acquisition directory; same conventions as
+                                // WriteFilesRequest.acqdir (files are written to
+                                // {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf)
+  repeated int64 beam_ids = 4;  // must be nonempty; each must be a known beam
+                                // (no "empty = all beams" convention)
+  int64 fpga_seq_start = 5;     // 0 = start asap
+  int64 fpga_seq_end = 6;       // INT64_MAX = run indefinitely
+}
+
+// Response message for StartStream (empty on success; failures are
+// reported as gRPC errors).
+message StartStreamResponse {}
+
+// Request message for ShowStreams.
+message ShowStreamsRequest {
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+}
+
+// Stream lifecycle, as reported by ShowStreams.
+//
+// ACTIVE:   still matching chunks as they are processed.
+// DRAINING: deactivated (expired or cancelled), but some queued file
+//           writes have not completed yet (written + errored < queued).
+// INACTIVE: deactivated and fully drained (written + errored == queued;
+//           every queued file completed or errored).
+enum StreamStatus {
+  STREAM_STATUS_UNSPECIFIED = 0;
+  STREAM_STATUS_ACTIVE = 1;
+  STREAM_STATUS_DRAINING = 2;
+  STREAM_STATUS_INACTIVE = 3;
+}
+
+// One stream (active or recently deactivated), as reported by ShowStreams.
+message StreamInfo {
+  StartStreamRequest args = 1;   // the original StartStream args, echoed back
+  StreamStatus status = 2;
+  bool cancelled = 3;               // true = CancelStream, false = expired
+                                    // via fpga_seq_end; meaningful only
+                                    // when status != ACTIVE
+  int64 started_at_unix_ns = 4;     // wall clock at StartStream
+  int64 deactivated_at_unix_ns = 5; // wall clock at expiry/cancel; 0 while ACTIVE
+
+  // File counters. num_files_queued is incremented when a matching frame
+  // is queued for writing; num_files_written / num_files_errored when the
+  // write completes / fails (a duplicate-filename skip counts as written:
+  // the file IS on disk under that name). written + errored <= queued at
+  // every instant; equality on a deactivated stream means fully drained.
+  int64 num_files_queued = 6;
+  int64 num_files_written = 7;
+  int64 num_files_errored = 8;
+}
+
+// Response message for ShowStreams.
+message ShowStreamsResponse {
+  // The server's current position as an fpga seq, derived from rb_processed
+  // (not rb_assembled): all data before this fpga seq has been fully
+  // processed. (Floor of the last fully-processed chunk boundary.)
+  int64 current_fpga_seq = 1;
+
+  // ALL beams processed by this server (not just those with active streams).
+  repeated int64 beam_ids = 2;
+
+  // Active streams first, then deactivated streams in deactivation order
+  // (oldest first). Deactivated-stream history is bounded: only the last
+  // few are retained (pirate::constants::inactive_file_stream_capacity).
+  repeated StreamInfo streams = 3;
+
+  // Total number of streams ever deactivated on this server. If this
+  // exceeds the number of non-ACTIVE entries in 'streams', older history
+  // has been dropped.
+  int64 num_deactivated_streams = 4;
+}
+
+// Request message for CancelStream.
+message CancelStreamRequest {
+  uint32 protocol_version = 1;   // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
+  bool cancel_all = 2;
+  string stream_name = 3;   // used only if cancel_all == false; unknown
+                            // stream_name is an error
+}
+
+// Response message for CancelStream.
+message CancelStreamResponse {
+  int64 num_cancelled = 1;
 }
 
 ```

@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>frb_search.proto - pirate_frb 1.0.0 documentation</title>
+        <title>frb_search.proto - pirate_frb 1.2.1 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -163,7 +163,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.2.1 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -184,7 +184,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.0.0 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.2.1 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -217,16 +217,24 @@
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../classes/Acquisition.html">Acquisition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrame.html">AssembledFrame</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionConfig.html">DedispersionConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSearchClient.html">FrbSearchClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterClient.html">FrbSifterClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperser.html">GpuDedisperser</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/OfflineDedisperser.html">OfflineDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../notes/cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/grpc.html">GRPC .proto guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
@@ -281,6 +289,34 @@
 <span class="c1">// If you&#39;re reading this, please feel free to make improvements :)</span>
 
 
+<span class="c1">// Wire-protocol version. This is the single source of truth for the protocol</span>
+<span class="c1">// version on both the C++ server and the Python clients -- both reference</span>
+<span class="c1">// PROTOCOL_VERSION_CURRENT from the generated stubs, rather than each hardcoding</span>
+<span class="c1">// their own constant.</span>
+<span class="c1">//</span>
+<span class="c1">// Every request message carries a &#39;protocol_version&#39; field (see notes/grpc.md):</span>
+<span class="c1">// the client sets it to PROTOCOL_VERSION_CURRENT, and the server rejects any RPC</span>
+<span class="c1">// whose value does not match its own PROTOCOL_VERSION_CURRENT. This catches</span>
+<span class="c1">// client/server wire-format skew (out-of-sync pirate builds) rather than letting</span>
+<span class="c1">// it become silent misbehavior. (Streaming RPCs carry the version on the</span>
+<span class="c1">// request that opens the stream; subsequent stream messages do not repeat it.)</span>
+<span class="c1">//</span>
+<span class="c1">// proto3 requires every enum to have a zero value; PROTOCOL_VERSION_UNSPECIFIED</span>
+<span class="c1">// is that placeholder (a protocol_version of 0 is therefore invalid -- e.g. an</span>
+<span class="c1">// old client that never set the field). Bump PROTOCOL_VERSION_CURRENT on any</span>
+<span class="c1">// incompatible wire-format change (a new/removed RPC, or a changed</span>
+<span class="c1">// request/response/notification field).</span>
+<span class="c1">//</span>
+<span class="c1">// The field is kept as a uint32 rather than the ProtocolVersion enum type so an</span>
+<span class="c1">// out-of-range value from a newer client round-trips as a plain integer the</span>
+<span class="c1">// server can report, instead of decoding to the proto3 &quot;unknown enum&quot; sentinel.</span>
+
+<span class="kd">enum</span><span class="w"> </span><span class="n">ProtocolVersion</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="na">PROTOCOL_VERSION_UNSPECIFIED</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">  </span><span class="na">PROTOCOL_VERSION_CURRENT</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+
+
 <span class="c1">// Service definition</span>
 <span class="kd">service</span><span class="w"> </span><span class="n">FrbSearch</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="c1">// Returns the current status of the search engine</span>
@@ -294,7 +330,9 @@
 <span class="w">  </span><span class="c1">// (metadata is sent by the X-engine, and is not available until the X-engine connects).</span>
 <span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">GetXEngineMetadata</span><span class="w"> </span><span class="p">(</span><span class="n">GetXEngineMetadataRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">GetXEngineMetadataResponse</span><span class="p">);</span>
 
-<span class="w">  </span><span class="c1">// Write files to disk for specified beams and time range</span>
+<span class="w">  </span><span class="c1">// Write files to disk for specified beams and time range. Filenames are</span>
+<span class="w">  </span><span class="c1">// always {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf -- the caller</span>
+<span class="w">  </span><span class="c1">// chooses only the acquisition directory &#39;acqdir&#39;.</span>
 <span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">WriteFiles</span><span class="w"> </span><span class="p">(</span><span class="n">WriteFilesRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">WriteFilesResponse</span><span class="p">);</span>
 
 <span class="w">  </span><span class="c1">// Subscribe to a stream of filenames. The connection can be closed by the client</span>
@@ -313,10 +351,34 @@
 <span class="w">  </span><span class="c1">// a similar push-based use case in mind -- general status polling</span>
 <span class="w">  </span><span class="c1">// should use GetStatus instead.</span>
 <span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">MonitorRingbuf</span><span class="w"> </span><span class="p">(</span><span class="n">MonitorRingbufRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">stream</span><span class="w"> </span><span class="n">MonitorRingbufResponse</span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// Register a &quot;stream&quot;: data matching (beam_ids x fpga-seq range) is</span>
+<span class="w">  </span><span class="c1">// queued for disk writing automatically as it flows through the server,</span>
+<span class="w">  </span><span class="c1">// with no further RPCs needed. Complements WriteFiles (one-shot,</span>
+<span class="w">  </span><span class="c1">// retroactive within the ring buffer): a stream captures each frame at</span>
+<span class="w">  </span><span class="c1">// the moment it transitions from &quot;assembled&quot; to &quot;processed&quot;, so chunks</span>
+<span class="w">  </span><span class="c1">// that were already processed when StartStream arrives are NOT captured</span>
+<span class="w">  </span><span class="c1">// retroactively, even if fpga_seq_start is in the past.</span>
+<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">StartStream</span><span class="w"> </span><span class="p">(</span><span class="n">StartStreamRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">StartStreamResponse</span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// Report the server&#39;s current position (as an fpga seq), the full list</span>
+<span class="w">  </span><span class="c1">// of beams it processes, and all streams with their status and stats --</span>
+<span class="w">  </span><span class="c1">// active streams first, then a bounded history of recently-deactivated</span>
+<span class="w">  </span><span class="c1">// (expired/cancelled) streams.</span>
+<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">ShowStreams</span><span class="w"> </span><span class="p">(</span><span class="n">ShowStreamsRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">ShowStreamsResponse</span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// Cancel one active stream (by stream_name), or all of them. File writes</span>
+<span class="w">  </span><span class="c1">// already queued still complete (and still notify SubscribeFiles</span>
+<span class="w">  </span><span class="c1">// subscribers); cancellation only stops future matching. Cancelled</span>
+<span class="w">  </span><span class="c1">// streams remain visible in ShowStreams&#39; bounded history; cancelling an</span>
+<span class="w">  </span><span class="c1">// already-inactive stream is an error.</span>
+<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">CancelStream</span><span class="w"> </span><span class="p">(</span><span class="n">CancelStreamRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">CancelStreamResponse</span><span class="p">);</span>
 <span class="p">}</span>
 
-<span class="c1">// Request message (currently empty, but extensible)</span>
-<span class="kd">message</span><span class="w"> </span><span class="nc">GetStatusRequest</span><span class="w"> </span><span class="p">{}</span>
+<span class="c1">// Request message for GetStatus.</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">GetStatusRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">uint32</span><span class="w"> </span><span class="na">protocol_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">   </span><span class="c1">// client&#39;s PROTOCOL_VERSION_CURRENT (see ProtocolVersion)</span>
+<span class="p">}</span>
 
 <span class="c1">// Response message containing status metrics</span>
 <span class="kd">message</span><span class="w"> </span><span class="nc">GetStatusResponse</span><span class="w"> </span><span class="p">{</span>
@@ -330,8 +392,10 @@
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">num_free_frames</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span><span class="w">  </span><span class="c1">// Number of available frames in AssembledFrameAllocator</span>
 <span class="p">}</span>
 
-<span class="c1">// Request message for GetConfig (currently empty, but extensible)</span>
-<span class="kd">message</span><span class="w"> </span><span class="nc">GetConfigRequest</span><span class="w"> </span><span class="p">{}</span>
+<span class="c1">// Request message for GetConfig.</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">GetConfigRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">uint32</span><span class="w"> </span><span class="na">protocol_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">   </span><span class="c1">// client&#39;s PROTOCOL_VERSION_CURRENT (see ProtocolVersion)</span>
+<span class="p">}</span>
 
 <span class="c1">// Response message containing the per-server config.</span>
 <span class="c1">//</span>
@@ -347,7 +411,7 @@
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">ringbuf_nchunks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w">           </span><span class="c1">// Logical ring buffer length in time chunks</span>
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">min_data_mtu</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span><span class="w">              </span><span class="c1">// Mirrors the server YAML &#39;min_data_mtu&#39; key</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">ssd_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">;</span><span class="w">                  </span><span class="c1">// SSD cache directory for this server</span>
-<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">nfs_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">7</span><span class="p">;</span><span class="w">                  </span><span class="c1">// NFS output directory (already interpolated for {user}/{date})</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">nfs_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">7</span><span class="p">;</span><span class="w">                  </span><span class="c1">// NFS output directory (already interpolated for {user}/{date}/{home})</span>
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">ssd_threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span><span class="w">               </span><span class="c1">// Number of FileWriter SSD threads</span>
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">nfs_threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">9</span><span class="p">;</span><span class="w">               </span><span class="c1">// Number of FileWriter NFS threads</span>
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">tree_rank</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span><span class="w">                </span><span class="c1">// From config_prefilled.tree_rank</span>
@@ -366,7 +430,8 @@
 
 <span class="c1">// Request message for GetXEngineMetadata</span>
 <span class="kd">message</span><span class="w"> </span><span class="nc">GetXEngineMetadataRequest</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="na">verbose</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">  </span><span class="c1">// If true, include comments explaining each field</span>
+<span class="w">  </span><span class="kt">uint32</span><span class="w"> </span><span class="na">protocol_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">   </span><span class="c1">// client&#39;s PROTOCOL_VERSION_CURRENT (see ProtocolVersion)</span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="na">verbose</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w">  </span><span class="c1">// If true, include comments explaining each field</span>
 <span class="p">}</span>
 
 <span class="c1">// Response message for GetXEngineMetadata</span>
@@ -374,12 +439,24 @@
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">yaml_string</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">  </span><span class="c1">// Empty string if metadata not yet available</span>
 <span class="p">}</span>
 
-<span class="c1">// Request message for WriteFiles</span>
+<span class="c1">// Request message for WriteFiles.</span>
+<span class="c1">//</span>
+<span class="c1">// The time range is expressed as fpga sequence numbers (aka &quot;fpga_seq&quot; or</span>
+<span class="c1">// &quot;fpga counts&quot;), half-open: files are written for all chunks overlapping</span>
+<span class="c1">//   fpga_seq_start &lt;= f &lt; fpga_seq_end.</span>
+<span class="c1">// The server translates this to its internal (absolute) time-chunk indices.</span>
 <span class="kd">message</span><span class="w"> </span><span class="nc">WriteFilesRequest</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">int64</span><span class="w"> </span><span class="na">beams</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">           </span><span class="c1">// List of beam IDs to write</span>
-<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">min_time_chunk_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w">     </span><span class="c1">// First time chunk index (inclusive)</span>
-<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">max_time_chunk_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w">     </span><span class="c1">// Last time chunk index (inclusive)</span>
-<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">filename_pattern</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w">        </span><span class="c1">// Pattern with (BEAM) and (CHUNK) placeholders</span>
+<span class="w">  </span><span class="kt">uint32</span><span class="w"> </span><span class="na">protocol_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">        </span><span class="c1">// client&#39;s PROTOCOL_VERSION_CURRENT (see ProtocolVersion)</span>
+<span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">int64</span><span class="w"> </span><span class="na">beams</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w">           </span><span class="c1">// List of beam IDs to write</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">fpga_seq_start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w">           </span><span class="c1">// Start of fpga-seq range (inclusive)</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">fpga_seq_end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w">             </span><span class="c1">// End of fpga-seq range (exclusive)</span>
+
+<span class="w">  </span><span class="c1">// Acquisition directory. Files are written to</span>
+<span class="w">  </span><span class="c1">//     {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf</span>
+<span class="w">  </span><span class="c1">// where nfs_root comes from the server config (GetConfigResponse.nfs_dir).</span>
+<span class="w">  </span><span class="c1">// Must be a nonempty, normalized relative path (no leading/trailing &#39;/&#39;,</span>
+<span class="w">  </span><span class="c1">// no &#39;//&#39;, no &#39;.&#39; or &#39;..&#39; components); may be multi-level, e.g. &quot;foo/bar/baz&quot;.</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">acqdir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span>
 <span class="p">}</span>
 
 <span class="c1">// Response message for WriteFiles</span>
@@ -387,8 +464,15 @@
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="na">filename_list</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">  </span><span class="c1">// List of filenames that will be written</span>
 <span class="p">}</span>
 
-<span class="c1">// Request message for SubscribeFiles (currently empty, but extensible)</span>
-<span class="kd">message</span><span class="w"> </span><span class="nc">SubscribeFilesRequest</span><span class="w"> </span><span class="p">{}</span>
+<span class="c1">// Request message for SubscribeFiles (opens the notification stream).</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">SubscribeFilesRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">uint32</span><span class="w"> </span><span class="na">protocol_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">   </span><span class="c1">// client&#39;s PROTOCOL_VERSION_CURRENT (see ProtocolVersion)</span>
+
+<span class="w">  </span><span class="c1">// If true, also receive notifications for files written by streams</span>
+<span class="w">  </span><span class="c1">// (StartStream RPC). Default false: WriteFiles-triggered notifications</span>
+<span class="w">  </span><span class="c1">// only, preserving pre-streams behavior.</span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="na">subscribe_streams</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="p">}</span>
 
 <span class="c1">// Response message for SubscribeFiles (streamed).</span>
 <span class="c1">//</span>
@@ -413,17 +497,116 @@
 <span class="kd">message</span><span class="w"> </span><span class="nc">ReadySentinel</span><span class="w"> </span><span class="p">{}</span>
 
 <span class="c1">// One completed file&#39;s write status.</span>
+<span class="c1">// Note: the filename is relative to the server&#39;s nfs_path.</span>
 <span class="kd">message</span><span class="w"> </span><span class="nc">WriteNotification</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">filename</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">  </span><span class="c1">// Valid only when error_message is empty.</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">error_message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w">  </span><span class="c1">// Empty = success; non-empty = error string.</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">stream_name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w">  </span><span class="c1">// Empty if triggered by WriteFiles, nonempty</span>
+<span class="w">                             </span><span class="c1">// if triggered by StartStream.</span>
 <span class="p">}</span>
 
-<span class="c1">// Request message for MonitorRingbuf (currently empty, but extensible).</span>
-<span class="kd">message</span><span class="w"> </span><span class="nc">MonitorRingbufRequest</span><span class="w"> </span><span class="p">{}</span>
+<span class="c1">// Request message for MonitorRingbuf (opens the push stream).</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">MonitorRingbufRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">uint32</span><span class="w"> </span><span class="na">protocol_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">   </span><span class="c1">// client&#39;s PROTOCOL_VERSION_CURRENT (see ProtocolVersion)</span>
+<span class="p">}</span>
 
 <span class="c1">// Streamed update for MonitorRingbuf. One message per change in rb_processed.</span>
 <span class="kd">message</span><span class="w"> </span><span class="nc">MonitorRingbufResponse</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">rb_processed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// Request message for StartStream.</span>
+<span class="c1">//</span>
+<span class="c1">// The time range is expressed as fpga sequence numbers, half-open: a chunk</span>
+<span class="c1">// matches iff it overlaps [fpga_seq_start, fpga_seq_end). fpga_seq_start = 0</span>
+<span class="c1">// means &quot;start asap&quot;; fpga_seq_end = INT64_MAX means &quot;run indefinitely&quot;.</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">StartStreamRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">uint32</span><span class="w"> </span><span class="na">protocol_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">  </span><span class="c1">// client&#39;s PROTOCOL_VERSION_CURRENT (see ProtocolVersion)</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">stream_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w">       </span><span class="c1">// must be nonempty; unique among active streams</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">acqdir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w">            </span><span class="c1">// acquisition directory; same conventions as</span>
+<span class="w">                                </span><span class="c1">// WriteFilesRequest.acqdir (files are written to</span>
+<span class="w">                                </span><span class="c1">// {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf)</span>
+<span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">int64</span><span class="w"> </span><span class="na">beam_ids</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w">  </span><span class="c1">// must be nonempty; each must be a known beam</span>
+<span class="w">                                </span><span class="c1">// (no &quot;empty = all beams&quot; convention)</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">fpga_seq_start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span><span class="w">     </span><span class="c1">// 0 = start asap</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">fpga_seq_end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">;</span><span class="w">       </span><span class="c1">// INT64_MAX = run indefinitely</span>
+<span class="p">}</span>
+
+<span class="c1">// Response message for StartStream (empty on success; failures are</span>
+<span class="c1">// reported as gRPC errors).</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">StartStreamResponse</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="c1">// Request message for ShowStreams.</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">ShowStreamsRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">uint32</span><span class="w"> </span><span class="na">protocol_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">   </span><span class="c1">// client&#39;s PROTOCOL_VERSION_CURRENT (see ProtocolVersion)</span>
+<span class="p">}</span>
+
+<span class="c1">// Stream lifecycle, as reported by ShowStreams.</span>
+<span class="c1">//</span>
+<span class="c1">// ACTIVE:   still matching chunks as they are processed.</span>
+<span class="c1">// DRAINING: deactivated (expired or cancelled), but some queued file</span>
+<span class="c1">//           writes have not completed yet (written + errored &lt; queued).</span>
+<span class="c1">// INACTIVE: deactivated and fully drained (written + errored == queued;</span>
+<span class="c1">//           every queued file completed or errored).</span>
+<span class="kd">enum</span><span class="w"> </span><span class="n">StreamStatus</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="na">STREAM_STATUS_UNSPECIFIED</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">  </span><span class="na">STREAM_STATUS_ACTIVE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">  </span><span class="na">STREAM_STATUS_DRAINING</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">  </span><span class="na">STREAM_STATUS_INACTIVE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// One stream (active or recently deactivated), as reported by ShowStreams.</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">StreamInfo</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">StartStreamRequest</span><span class="w"> </span><span class="na">args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">   </span><span class="c1">// the original StartStream args, echoed back</span>
+<span class="w">  </span><span class="n">StreamStatus</span><span class="w"> </span><span class="na">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="na">cancelled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w">               </span><span class="c1">// true = CancelStream, false = expired</span>
+<span class="w">                                    </span><span class="c1">// via fpga_seq_end; meaningful only</span>
+<span class="w">                                    </span><span class="c1">// when status != ACTIVE</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">started_at_unix_ns</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w">     </span><span class="c1">// wall clock at StartStream</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">deactivated_at_unix_ns</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span><span class="w"> </span><span class="c1">// wall clock at expiry/cancel; 0 while ACTIVE</span>
+
+<span class="w">  </span><span class="c1">// File counters. num_files_queued is incremented when a matching frame</span>
+<span class="w">  </span><span class="c1">// is queued for writing; num_files_written / num_files_errored when the</span>
+<span class="w">  </span><span class="c1">// write completes / fails (a duplicate-filename skip counts as written:</span>
+<span class="w">  </span><span class="c1">// the file IS on disk under that name). written + errored &lt;= queued at</span>
+<span class="w">  </span><span class="c1">// every instant; equality on a deactivated stream means fully drained.</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">num_files_queued</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">num_files_written</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">7</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">num_files_errored</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// Response message for ShowStreams.</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">ShowStreamsResponse</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// The server&#39;s current position as an fpga seq, derived from rb_processed</span>
+<span class="w">  </span><span class="c1">// (not rb_assembled): all data before this fpga seq has been fully</span>
+<span class="w">  </span><span class="c1">// processed. (Floor of the last fully-processed chunk boundary.)</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">current_fpga_seq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+
+<span class="w">  </span><span class="c1">// ALL beams processed by this server (not just those with active streams).</span>
+<span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">int64</span><span class="w"> </span><span class="na">beam_ids</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+
+<span class="w">  </span><span class="c1">// Active streams first, then deactivated streams in deactivation order</span>
+<span class="w">  </span><span class="c1">// (oldest first). Deactivated-stream history is bounded: only the last</span>
+<span class="w">  </span><span class="c1">// few are retained (pirate::constants::inactive_file_stream_capacity).</span>
+<span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="n">StreamInfo</span><span class="w"> </span><span class="na">streams</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+
+<span class="w">  </span><span class="c1">// Total number of streams ever deactivated on this server. If this</span>
+<span class="w">  </span><span class="c1">// exceeds the number of non-ACTIVE entries in &#39;streams&#39;, older history</span>
+<span class="w">  </span><span class="c1">// has been dropped.</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">num_deactivated_streams</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// Request message for CancelStream.</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">CancelStreamRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">uint32</span><span class="w"> </span><span class="na">protocol_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">   </span><span class="c1">// client&#39;s PROTOCOL_VERSION_CURRENT (see ProtocolVersion)</span>
+<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="na">cancel_all</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">stream_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w">   </span><span class="c1">// used only if cancel_all == false; unknown</span>
+<span class="w">                            </span><span class="c1">// stream_name is an error</span>
+<span class="p">}</span>
+
+<span class="c1">// Response message for CancelStream.</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">CancelStreamResponse</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">num_cancelled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -460,7 +643,7 @@
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=8d563738"></script>
+</div><script src="../_static/documentation_options.js?v=ca842793"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

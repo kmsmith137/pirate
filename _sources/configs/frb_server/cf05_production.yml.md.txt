@@ -109,8 +109,8 @@ ssd_threads_per_server: 4
 
 # Currently, all servers write to the same nfs_dir (i.e. 'nfs_dir' is a string,
 # not a list of strings). The 'nfs_dir' member supports string interpolations
-# {user} and {date}. The nfs_dir will be created if it doesn't already exist.
+# {user}, {date}, and {home}. The nfs_dir will be created if necessary.
 
-nfs_dir: '/mnt/cs00/data/{user}/{date}'
+nfs_dir: '/mnt/cs00/data/{user}'   # during development, give each developer their own subdir
 nfs_threads_per_server: 2
 ```

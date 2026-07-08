@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="genindex.html"><link rel="search" title="Search" href="search.html"><link rel="next" title="File/network formats" href="formats.html"><link rel="prev" title="Hardware" href="notes/hardware.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>CLI reference - pirate_frb 1.0.0 documentation</title>
+        <title>CLI reference - pirate_frb 1.2.1 documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -163,7 +163,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="index.html"><div class="brand">pirate_frb 1.0.0 documentation</div></a>
+      <a href="index.html"><div class="brand">pirate_frb 1.2.1 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -184,7 +184,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.0.0 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.2.1 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -217,16 +217,24 @@
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="classes/Acquisition.html">Acquisition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/AssembledFrame.html">AssembledFrame</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/DedispersionConfig.html">DedispersionConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/FrbSearchClient.html">FrbSearchClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="classes/FrbSifterClient.html">FrbSifterClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/GpuDedisperser.html">GpuDedisperser</a></li>
 <li class="toctree-l2"><a class="reference internal" href="classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/OfflineDedisperser.html">OfflineDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="notes/cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/grpc.html">GRPC .proto guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
@@ -293,17 +301,29 @@
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run_toy_grouper</span></code></p></td>
 <td><p>Toy FrbGrouper consumer(s): per-chunk peak SNR + argmax, optionally reported to a sifter</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run_toy_sifter</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run_offline_dedisperser</span></code></p></td>
+<td><p>Toy offline dedispersion: per-chunk peak SNR over an acqdir of .asdf frames</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run_toy_sifter</span></code></p></td>
 <td><p>Toy FrbSifter gRPC server: print a one-line summary of each received message</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run_fake_xengine</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run_fake_xengine</span></code></p></td>
 <td><p>Send fake X-engine data to one or more running FrbServers</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">rpc_status</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">rpc_status</span></code></p></td>
 <td><p>Connect to FrbServer(s) and stream status + filenames</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">rpc_write</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">rpc_rand_write</span></code></p></td>
 <td><p>Send <code class="docutils literal notranslate"><span class="pre">write_files</span></code> RPC to FrbServer(s) with random beams/time range</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">rpc_start_stream</span></code></p></td>
+<td><p>Send StartStream RPC to one or more FrbServers (write data to disk as it is received). Multiple addresses act as one ‘super-server’.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">rpc_cancel_stream</span></code></p></td>
+<td><p>Send CancelStream RPC to one or more FrbServers. Multiple addresses act as one ‘super-server’ (cancels loop over all servers).</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">rpc_show_streams</span></code></p></td>
+<td><p>Send ShowStreams RPC to one or more FrbServers and print the responses. Multiple addresses act as one ‘super-server’ (loops over all servers).</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">test</span></code></p></td>
 <td><p>Run unit tests (use flags to select specific tests)</p></td>
@@ -377,13 +397,11 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -d, --delay SECONDS   Artificial per-frame delay in the processing thread (seconds; default 0). Used to simulate slow GPU work for testing FakeXEngine
-                        pacing.
+  -d, --delay SECONDS   Artificial per-frame delay in the processing thread (seconds; default 0). Used to simulate slow GPU work for testing FakeXEngine pacing.
   -G, --no-grouper      Disable FrbGrouper RPC even if grouper_ip_addrs is set in the config (GpuDedisperser runs with num_consumers=0).
   -D, --no-dedispersion
-                        Skip ALL GPU work in the processing thread: data is not even copied host-&gt;GPU, and no dequantization or dedispersion kernels run.
-                        The receive/assemble/ringbuf path still runs in full (the dedisperser is still built, just never fed). Implies --no-grouper.
-                        Infrequently used corner case.
+                        Skip ALL GPU work in the processing thread: data is not even copied host-&gt;GPU, and no dequantization or dedispersion kernels run. The receive/assemble/ringbuf path still
+                        runs in full (the dedisperser is still built, just never fed). Implies --no-grouper. Infrequently used corner case.
   -q, --quiet           Suppress the per-chunk &quot;FrbServer: beamset=...&quot; line (printed once per assembled time chunk).
 </pre></div>
 </div>
@@ -395,8 +413,8 @@ options:
 Toy FrbGrouper consumer(s): per-chunk peak SNR + argmax, optionally reported to a sifter
 
 positional arguments:
-  grouper_addr          FrbGrouper listen address(es) &#39;ip:port&#39; (e.g. 127.0.0.1:7000). With more than one, each grouper runs in its own child subprocess;
-                        if any child exits, the parent and all siblings exit.
+  grouper_addr          FrbGrouper listen address(es) &#39;ip:port&#39; (e.g. 127.0.0.1:7000). With more than one, each grouper runs in its own child subprocess; if any child exits, the parent and all
+                        siblings exit.
 
 options:
   -h, --help            show this help message and exit
@@ -406,6 +424,23 @@ options:
   -s, --sifter SIFTER_ADDR
                         Report to the FrbSifter at this &#39;ip:port&#39; (e.g. 127.0.0.1:7100):
   -S, --no-sifter       Run without a sifter (don&#39;t send any sifter RPCs).
+</pre></div>
+</div>
+</section>
+<section id="run-offline-dedisperser">
+<h3>run_offline_dedisperser<a class="headerlink" href="#run-offline-dedisperser" title="Link to this heading">¶</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>usage: pirate_frb run_offline_dedisperser [-h] [--max-chunks MAX_CHUNKS] acqdir config
+
+Toy offline dedispersion: per-chunk peak SNR over an acqdir of .asdf frames
+
+positional arguments:
+  acqdir                acqdir of frame_b(BEAM)_t(CHUNK).asdf files
+  config                dedispersion config yaml
+
+options:
+  -h, --help            show this help message and exit
+  --max-chunks MAX_CHUNKS
+                        only process the first N chunks of each beam (default: all)
 </pre></div>
 </div>
 </section>
@@ -440,8 +475,8 @@ options:
   -N, --unnormalized    Send unnormalized data -- leave scales/offsets arbitrary (default: calibrate them to the per-zone noise variance)
   -G, --non-gaussian    Fill int4 data with uniform noise over [-8,+7] (default: simulated Gaussian noise clamped to [-7,+7])
   -j, --send-junk       Randomize+send only the first chunk; send all-zero junk for every subsequent chunk (skips per-chunk randomization)
-  -f, --frbs            Inject simulated FRBs (parameters derived from the server GetConfig: max DM, base-tree width, and the frequency subbands). Prints
-                        one line per injected FRB. Incompatible with -N, -G, and -j.
+  -f, --frbs            Inject simulated FRBs (parameters derived from the server GetConfig: max DM, base-tree width, and the frequency subbands). Prints one line per injected FRB. Incompatible
+                        with -N, -G, and -j.
   -g, --gap GAP_SEC     Extra padding (seconds) between consecutive simulated FRBs on a beam (default 0). Requires -f.
   -s, --sifter SIFTER_ADDR
                         Send the simulated FRB events (from_simulator=True) to an FrbSifter at this &quot;ip:port&quot;. Requires -f.
@@ -462,9 +497,9 @@ options:
 </pre></div>
 </div>
 </section>
-<section id="rpc-write">
-<h3>rpc_write<a class="headerlink" href="#rpc-write" title="Link to this heading">¶</a></h3>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>usage: pirate_frb rpc_write [-h] ADDRESS [ADDRESS ...]
+<section id="rpc-rand-write">
+<h3>rpc_rand_write<a class="headerlink" href="#rpc-rand-write" title="Link to this heading">¶</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>usage: pirate_frb rpc_rand_write [-h] ADDRESS [ADDRESS ...]
 
 Send write_files RPC to FrbServer(s) with random beams/time range
 
@@ -476,10 +511,61 @@ options:
 </pre></div>
 </div>
 </section>
+<section id="rpc-start-stream">
+<h3>rpc_start_stream<a class="headerlink" href="#rpc-start-stream" title="Link to this heading">¶</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>usage: pirate_frb rpc_start_stream [-h] [-s STEM] [-b BEAM_ID] [-B] [-d DURATION_SECONDS] [-D] ADDRESS [ADDRESS ...]
+
+Send StartStream RPC to one or more FrbServers (write data to disk as it is received). Multiple addresses act as one &#39;super-server&#39;.
+
+positional arguments:
+  ADDRESS               Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server
+
+options:
+  -h, --help            show this help message and exit
+  -s, --stem STEM       Filename stem; the CLI sets stream_name == acqdir == &quot;{stem}_{date}_{time}&quot;, shared across all servers (default stem &quot;stream&quot;, e.g. stream_26_07_07_143052)
+  -b, --beam-id BEAM_ID
+                        Beam id to stream (repeatable), routed to the server that owns it; either -b or -B must be specified
+  -B, --all-beams       Stream all beams; starts a stream on every server with its full beam list
+  -d DURATION_SECONDS   Stream duration in seconds; either -d or -D must be specified
+  -D, --no-duration     Run indefinitely (fpga_seq_end = 2^63 - 1)
+</pre></div>
+</div>
+</section>
+<section id="rpc-cancel-stream">
+<h3>rpc_cancel_stream<a class="headerlink" href="#rpc-cancel-stream" title="Link to this heading">¶</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>usage: pirate_frb rpc_cancel_stream [-h] [-a STREAM_NAME] [-A] ADDRESS [ADDRESS ...]
+
+Send CancelStream RPC to one or more FrbServers. Multiple addresses act as one &#39;super-server&#39; (cancels loop over all servers).
+
+positional arguments:
+  ADDRESS               Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server
+
+options:
+  -h, --help            show this help message and exit
+  -a, --stream-name STREAM_NAME
+                        Cancel the stream with this stream_name, on every server that has it
+  -A, --all             Cancel all active streams on every server
+</pre></div>
+</div>
+</section>
+<section id="rpc-show-streams">
+<h3>rpc_show_streams<a class="headerlink" href="#rpc-show-streams" title="Link to this heading">¶</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>usage: pirate_frb rpc_show_streams [-h] ADDRESS [ADDRESS ...]
+
+Send ShowStreams RPC to one or more FrbServers and print the responses. Multiple addresses act as one &#39;super-server&#39; (loops over all servers).
+
+positional arguments:
+  ADDRESS     Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server
+
+options:
+  -h, --help  show this help message and exit
+</pre></div>
+</div>
+</section>
 <section id="test">
 <h3>test<a class="headerlink" href="#test" title="Link to this heading">¶</a></h3>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>usage: pirate_frb test [-h] [-g GPU] [-n NITER] [--rt] [--pfwr] [--pfom] [--gldk] [--gddk] [--gpfk] [--grck] [--gtgk] [--gdqk] [--cdd2] [--casm] [--zomb]
-                       [--dd] [--avar] [--chime] [--net] [--serv] [--sim]
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>usage: pirate_frb test [-h] [-g GPU] [-n NITER] [--rt] [--pfwr] [--pfom] [--gldk] [--gddk] [--gpfk] [--grck] [--gtgk] [--gdqk] [--cdd2] [--casm] [--zomb] [--dd] [--avar] [--chime] [--net] [--serv]
+                       [--sim]
 
 Run unit tests (use flags to select specific tests)
 
@@ -639,10 +725,8 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   -v, --verbose         Include comments explaining the meaning of each field
-  -c, --config          Also print the DedispersionConfig, with a separator, before the plan (by default only the plan is printed, matching the
-                        dedispersion_plan_yaml sent to the grouper)
-  -t, --time            Also print how long DedispersionPlan and C++ PfAvarApproximation construction took (non-deterministic lines; off by default so the
-                        output is reproducible)
+  -c, --config          Also print the DedispersionConfig, with a separator, before the plan (by default only the plan is printed, matching the dedispersion_plan_yaml sent to the grouper)
+  -t, --time            Also print how long DedispersionPlan and C++ PfAvarApproximation construction took (non-deterministic lines; off by default so the output is reproducible)
   -z, --zones           Include the per-clag mega_ringbuf host/gpu zone breakdown (independent of -v, which controls comments)
   -s, --streams STREAMS
                         Override config.num_active_batches with specified value
@@ -876,10 +960,14 @@ options:
 <li><a class="reference internal" href="#detailed-usage">Detailed usage</a><ul>
 <li><a class="reference internal" href="#run-server">run_server</a></li>
 <li><a class="reference internal" href="#run-toy-grouper">run_toy_grouper</a></li>
+<li><a class="reference internal" href="#run-offline-dedisperser">run_offline_dedisperser</a></li>
 <li><a class="reference internal" href="#run-toy-sifter">run_toy_sifter</a></li>
 <li><a class="reference internal" href="#run-fake-xengine">run_fake_xengine</a></li>
 <li><a class="reference internal" href="#rpc-status">rpc_status</a></li>
-<li><a class="reference internal" href="#rpc-write">rpc_write</a></li>
+<li><a class="reference internal" href="#rpc-rand-write">rpc_rand_write</a></li>
+<li><a class="reference internal" href="#rpc-start-stream">rpc_start_stream</a></li>
+<li><a class="reference internal" href="#rpc-cancel-stream">rpc_cancel_stream</a></li>
+<li><a class="reference internal" href="#rpc-show-streams">rpc_show_streams</a></li>
 <li><a class="reference internal" href="#test">test</a></li>
 <li><a class="reference internal" href="#test-simpulse">test_simpulse</a></li>
 <li><a class="reference internal" href="#check-avar-approximation">check_avar_approximation</a></li>
@@ -911,7 +999,7 @@ options:
       
     </aside>
   </div>
-</div><script src="_static/documentation_options.js?v=8d563738"></script>
+</div><script src="_static/documentation_options.js?v=ca842793"></script>
     <script src="_static/doctools.js?v=fd6eb6e6"></script>
     <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>

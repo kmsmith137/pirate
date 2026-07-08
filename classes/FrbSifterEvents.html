@@ -3,10 +3,10 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="GpuDedisperserOutputs" href="GpuDedisperserOutputs.html"><link rel="prev" title="FrbSifterClient" href="FrbSifterClient.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="GpuDedisperser" href="GpuDedisperser.html"><link rel="prev" title="FrbSifterClient" href="FrbSifterClient.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>FrbSifterEvents - pirate_frb 1.0.0 documentation</title>
+        <title>FrbSifterEvents - pirate_frb 1.2.1 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -163,7 +163,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.2.1 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -184,7 +184,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.0.0 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.2.1 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -217,16 +217,24 @@
 </ul>
 </li>
 <li class="toctree-l1 current has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="Acquisition.html">Acquisition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="AssembledFrame.html">AssembledFrame</a></li>
+<li class="toctree-l2"><a class="reference internal" href="DedispersionConfig.html">DedispersionConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="FrbSearchClient.html">FrbSearchClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="FrbSifterClient.html">FrbSifterClient</a></li>
 <li class="toctree-l2 current current-page"><a class="current reference internal" href="#">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GpuDedisperser.html">GpuDedisperser</a></li>
 <li class="toctree-l2"><a class="reference internal" href="GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="OfflineDedisperser.html">OfflineDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../notes/cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/grpc.html">GRPC .proto guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
@@ -311,12 +319,12 @@ scalars required by protobuf.</p>
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="GpuDedisperserOutputs.html">
+          <a class="next-page" href="GpuDedisperser.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">GpuDedisperserOutputs</div>
+                <div class="title">GpuDedisperser</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
@@ -377,7 +385,7 @@ scalars required by protobuf.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=8d563738"></script>
+</div><script src="../_static/documentation_options.js?v=ca842793"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

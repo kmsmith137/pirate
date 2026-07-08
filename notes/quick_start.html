@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Developer notes" href="developer.html"><link rel="prev" title="Introduction" href="intro.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Quick start - pirate_frb 1.0.0 documentation</title>
+        <title>Quick start - pirate_frb 1.2.1 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -163,7 +163,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.2.1 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -184,7 +184,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.0.0 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.2.1 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -217,16 +217,24 @@
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../classes/Acquisition.html">Acquisition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrame.html">AssembledFrame</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionConfig.html">DedispersionConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSearchClient.html">FrbSearchClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterClient.html">FrbSifterClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperser.html">GpuDedisperser</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/OfflineDedisperser.html">OfflineDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="grpc.html">GRPC .proto guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="docstrings.html">Writing sphinx-friendly docstrings</a></li>
 <li class="toctree-l2"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
@@ -303,14 +311,26 @@ run the following commands in separate terminal windows.</p>
 <span class="n">pirate_frb</span> <span class="n">run_fake_xengine</span> <span class="o">-</span><span class="n">f</span> <span class="o">-</span><span class="n">g</span> <span class="mi">30</span> <span class="o">-</span><span class="n">s</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
 
 <span class="c1"># Optional: in window 5, send RPC &quot;status&quot; requests to the server.</span>
-<span class="c1"># This will monitor connections, bytes received, files written, ring buffer state.</span>
+<span class="c1"># This will monitor connections, files written, and ring buffer state.</span>
 <span class="n">pirate_frb</span> <span class="n">rpc_status</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
 
-<span class="c1"># Optional: in window 6, send RPC &quot;write_files&quot; requests to the server, for randomly</span>
+<span class="c1"># Optional: in window 6, send RPC &quot;start_stream&quot; requests to the server.</span>
+<span class="c1"># Here, we dump beam_id=10 for 1000 seconds. (The wallclock time will be smaller,</span>
+<span class="c1"># since the toy server runs faster than real time.) Filenames will be printed in</span>
+<span class="c1"># the &#39;rpc_status&#39; process (window 5) as they are written, and will look like:</span>
+<span class="c1">#   ~/pirate_toy/toy_stream_{date}_{time}/frame_b{beam}_t{chunk}.asdf</span>
+<span class="n">pirate_frb</span> <span class="n">rpc_start_stream</span> <span class="o">-</span><span class="n">b</span> <span class="mi">10</span> <span class="o">-</span><span class="n">d</span> <span class="mi">1000</span> <span class="o">-</span><span class="n">s</span> <span class="n">toy_stream</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
+
+<span class="c1"># Optional: in window 7, send RPC &quot;show_streams&quot; requests to the server.</span>
+<span class="c1"># This will show the status of current streams, and the last 5 inactive streams.</span>
+<span class="c1"># Note: there is also a command &#39;pirate_frb rpc_cancel_stream&#39;.</span>
+<span class="n">pirate_frb</span> <span class="n">rpc_show_streams</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
+
+<span class="c1"># Optional: in window 8, send RPC &quot;write_files&quot; requests to the server, for randomly</span>
 <span class="c1"># chosen beams/times. Filenames will be printed in the &#39;rpc_status&#39; process (window 5)</span>
-<span class="c1"># as they are written. Files appear in /dev/shm/pirate_nfs, and will be deleted when</span>
-<span class="c1"># the server exits.</span>
-<span class="n">pirate_frb</span> <span class="n">rpc_write</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
+<span class="c1"># as they are written, and will look like:</span>
+<span class="c1">#   ~/pirate_toy/rand_write_{date}_{time}/frame_b{beam}_t{chunk}.asdf</span>
+<span class="n">pirate_frb</span> <span class="n">rpc_rand_write</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
 </pre></div>
 </div>
 <p>In this example, we simulated FRBs and sent two event streams to the sifter.
@@ -321,7 +341,7 @@ These event streams are distinguished by the <code class="docutils literal notra
 (see <a class="reference internal" href="../grpc/frb_sifter.proto.html"><span class="std std-doc">frb_sifter.proto</span></a> or the sifter terminal output).</p>
 <p>Note that you don’t need to run this entire sequence every time!
 The programs above have command-line args to “short-circuit” the downstream programs.
-(For example, <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_server</span> <span class="pre">---no-grouper</span></code> or <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_toy_grouper</span> <span class="pre">--no-sifter</span></code>.)</p>
+(For example, <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_server</span> <span class="pre">--no-grouper</span></code> or <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_toy_grouper</span> <span class="pre">--no-sifter</span></code>.)</p>
 </section>
 <section id="running-a-production-search-cf00-cf05">
 <h2>Running a production search (cf00/cf05)<a class="headerlink" href="#running-a-production-search-cf00-cf05" title="Link to this heading">¶</a></h2>
@@ -331,33 +351,77 @@ over the real network (not the loopback network). In this example, we run the
 sifter on cf05, but it could be run on cf00 (or a third node). Note that there
 are two grouper processes (one per GPU), each of which independently connects
 to the sifter.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Window cf05/1: start the sifter (waits for grouper to connect)</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Window 1 (cf05): start the sifter (waits for grouper to connect)</span>
 <span class="n">pirate_frb</span> <span class="n">run_toy_sifter</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">7500</span>
 
-<span class="c1"># Window cf05/2: start the grouper (waits for search to connect)</span>
-<span class="n">pirate_frb</span> <span class="n">run_toy_grouper</span> <span class="o">-</span><span class="n">s</span> <span class="mf">10.222.3.5</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7000</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7001</span>
+<span class="c1"># Window 2 (cf05): start the grouper (waits for search to connect)</span>
+<span class="n">pirate_frb</span> <span class="n">run_toy_grouper</span> <span class="o">-</span><span class="n">s</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7000</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7001</span>
 
-<span class="c1"># Window cf05/3: start the search (waits for fake X-engine to connect)</span>
+<span class="c1"># Window 3 (cf05): start the search (waits for fake X-engine to connect)</span>
 <span class="n">pirate_frb</span> <span class="n">run_server</span> <span class="n">configs</span><span class="o">/</span><span class="n">frb_server</span><span class="o">/</span><span class="n">cf05_production</span><span class="o">.</span><span class="n">yml</span> <span class="n">configs</span><span class="o">/</span><span class="n">dedispersion</span><span class="o">/</span><span class="n">chord_sb2_et</span><span class="o">.</span><span class="n">yml</span>
 
-<span class="c1"># Window cf00/1: start the fake X-engine.</span>
+<span class="c1"># NOTE: you&#39;ll need to wait ~60 seconds before starting the fake x-engine,</span>
+<span class="c1"># while the production-scale server initializes. When it&#39;s ready, you&#39;ll see:</span>
+<span class="c1"># &quot;All 2 server(s) started. Press Ctrl-C to stop.&quot;.</span>
+
+<span class="c1"># Window 4 (MUST BE ON CF00): start the fake X-engine.</span>
 <span class="c1"># Data will start streaming through all 4 processes.</span>
 <span class="c1"># The -f flag randomly simulates FRBs.</span>
 <span class="c1"># The -s SIFTER_ADDR flag sends an event to the sifter for each simulated FRB.</span>
 <span class="n">pirate_frb</span> <span class="n">run_fake_xengine</span> <span class="o">-</span><span class="n">f</span> <span class="o">-</span><span class="n">s</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
 
-<span class="c1"># Optional: on either cf00 or cf05, send RPC &quot;status&quot; requests to the server.</span>
+<span class="c1"># Optional: window 5 (either cf00 or cf05): send RPC &quot;status&quot; requests to the server.</span>
+<span class="c1"># This will monitor connections, files written, and ring buffer state.</span>
 <span class="n">pirate_frb</span> <span class="n">rpc_status</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
 
-<span class="c1"># Optional: in another window on cf00 or cf05, send RPC &quot;write_files&quot; requests to the server, for randomly</span>
-<span class="c1"># chosen beams/times. Filenames will be printed in the &#39;rpc_status&#39; process as they</span>
-<span class="c1"># are written. Files appear on the real NFS server: /mnt/cs00/data/{user}/{date},</span>
-<span class="c1"># and persist after the server exits.</span>
-<span class="n">pirate_frb</span> <span class="n">rpc_write</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
+<span class="c1"># Optional: in window 6, send RPC &quot;start_stream&quot; requests to the server.</span>
+<span class="c1"># Here, we dump beam_id=100 for 1000 seconds. Filenames will be printed in</span>
+<span class="c1"># the &#39;rpc_status&#39; process (window 5) as they are written, and will look like:</span>
+<span class="c1">#   /mnt/cs00/data/{user}/prod_stream_{date}_{time}/frame_b{beam}_t{chunk}.asdf</span>
+<span class="n">pirate_frb</span> <span class="n">rpc_start_stream</span> <span class="o">-</span><span class="n">b</span> <span class="mi">100</span> <span class="o">-</span><span class="n">d</span> <span class="mi">1000</span> <span class="o">-</span><span class="n">s</span> <span class="n">prod_stream</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
+
+<span class="c1"># Optional: in window 7, send RPC &quot;show_streams&quot; requests to the server.</span>
+<span class="c1"># This will show the status of current streams, and the last 5 inactive streams.</span>
+<span class="c1"># Note: there is also a command &#39;pirate_frb rpc_cancel_stream&#39;.</span>
+<span class="n">pirate_frb</span> <span class="n">rpc_show_streams</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
+
+<span class="c1"># Optional: in window 8, send RPC &quot;write_files&quot; requests to the server, for randomly</span>
+<span class="c1"># chosen beams/times. Filenames will be printed in the &#39;rpc_status&#39; process (window 5)</span>
+<span class="c1"># as they are written, and will look like:</span>
+<span class="c1">#   /mnt/cs00/data/{user}/rand_write_{date}_{time}/frame_b{beam}_t{chunk}.asdf</span>
+<span class="n">pirate_frb</span> <span class="n">rpc_rand_write</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
 </pre></div>
 </div>
 <p>See above for more info on the simulated FRB event streams, or on “short-circuting” the
 sequence of programs.</p>
+</section>
+<section id="running-an-offline-dedisperser">
+<h2>Running an offline dedisperser<a class="headerlink" href="#running-an-offline-dedisperser" title="Link to this heading">¶</a></h2>
+<p>I started hacking together an offline dedisperser.
+Here are some example runs, based on <code class="docutils literal notranslate"><span class="pre">start_stream</span></code> acquisitions from the sections above
+(which included simulated FRBs):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Toy acquisition (note: your acqdir will be different)</span>
+<span class="n">pirate_frb</span> <span class="n">run_offline_dedisperser</span> \
+   <span class="o">~/</span><span class="n">pirate_toy</span><span class="o">/</span><span class="n">toy_stream_26_07_07_123508</span> \
+   <span class="n">configs</span><span class="o">/</span><span class="n">dedispersion</span><span class="o">/</span><span class="n">toy</span><span class="o">.</span><span class="n">yml</span>
+
+<span class="c1"># &quot;Production&quot; acquisition (note: your acqdir will be different)</span>
+<span class="n">pirate_frb</span> <span class="n">run_offline_dedisperser</span> \
+    <span class="o">/</span><span class="n">mnt</span><span class="o">/</span><span class="n">cs00</span><span class="o">/</span><span class="n">data</span><span class="o">/</span><span class="n">kmsmith</span><span class="o">/</span><span class="n">prod_stream_26_07_07_155938</span> \
+    <span class="n">configs</span><span class="o">/</span><span class="n">dedispersion</span><span class="o">/</span><span class="n">chord_sb2</span><span class="o">.</span><span class="n">yml</span>
+</pre></div>
+</div>
+<p>Currently, the results are difficult to interpret!
+The offline dedisperser doesn’t do real peak-finding – it just prints the max snr in
+each time-chunk of data. With this placeholder peak-finding, each injected pulse
+shows up in multiple time-chunks.
+Additionally, there may be boundary effects near the beginning of the acquisition.</p>
+<p>The offline dedisperser isn’t really useful yet, but should be a useful starting point
+for further development, and as a way of establishing interfaces (<code class="docutils literal notranslate"><span class="pre">class</span> <span class="pre">Acquisition</span></code>,
+<code class="docutils literal notranslate"><span class="pre">class</span> <span class="pre">OfflineDedisperser</span></code>).
+Eventually, we’d like the entire real-time pipeline to be runnable in
+an offline mode (for visualization, debugging, or developing RFI-flagging
+logic).</p>
 </section>
 </section>
 
@@ -420,6 +484,7 @@ sequence of programs.</p>
 <li><a class="reference internal" href="#run-unit-tests">Run unit tests</a></li>
 <li><a class="reference internal" href="#running-a-toy-search">Running a toy search</a></li>
 <li><a class="reference internal" href="#running-a-production-search-cf00-cf05">Running a production search (cf00/cf05)</a></li>
+<li><a class="reference internal" href="#running-an-offline-dedisperser">Running an offline dedisperser</a></li>
 </ul>
 </li>
 </ul>
@@ -431,7 +496,7 @@ sequence of programs.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=8d563738"></script>
+</div><script src="../_static/documentation_options.js?v=ca842793"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

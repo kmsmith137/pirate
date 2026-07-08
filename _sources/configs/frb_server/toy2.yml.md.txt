@@ -55,11 +55,13 @@ min_rpc_mtu: 1500
 #####################################  File-writing config  ######################################
 
 
-check_mountpoints: [ ]
+# To keep the toy config portable, we don't assume any particular SSD/NFS setup.
+# We use a ramdisk for the "ssd", and a subdirectory of $HOME for the "nfs server".
 
 ssd_dirs: [ '/dev/shm/pirate_ssd' ]
-ssd_threads_per_server: 4
+ssd_threads_per_server: 1
 
-nfs_dir: '/dev/shm/pirate_nfs'
-nfs_threads_per_server: 2
-```
+nfs_dir: '{home}/pirate_toy'
+nfs_threads_per_server: 1
+
+check_mountpoints: [ ]   # disable mountpoint-checking```

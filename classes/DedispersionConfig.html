@@ -1,0 +1,732 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="FrbGrouper" href="FrbGrouper.html"><link rel="prev" title="AssembledFrame" href="AssembledFrame.html">
+
+    <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+        <title>DedispersionConfig - pirate_frb 1.2.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  --color-brand-primary: #007bff;
+  --color-brand-content: #0056b3;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">pirate_frb 1.2.1 documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  
+  <span class="sidebar-brand-text">pirate_frb 1.2.1 documentation</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
+  <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../notes/install.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/intro.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/quick_start.html">Quick start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/developer.html">Developer notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/grouper_interface.html">Writing a grouper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/build.html">Build system</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/hardware.html">Hardware</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/frb_server/cf05_production.yml.html">frb_server config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="Acquisition.html">Acquisition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="AssembledFrame.html">AssembledFrame</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">DedispersionConfig</a></li>
+<li class="toctree-l2"><a class="reference internal" href="FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="FrbSearchClient.html">FrbSearchClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GpuDedisperser.html">GpuDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="OfflineDedisperser.html">OfflineDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="XEngineMetadata.html">XEngineMetadata</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../notes/cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/grpc.html">GRPC .proto guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../_sources/classes/DedispersionConfig.md.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section id="dedispersionconfig">
+<h1>DedispersionConfig<a class="headerlink" href="#dedispersionconfig" title="Link to this heading">¶</a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pirate_frb.</span></span><span class="sig-name descname"><span class="pre">DedispersionConfig</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig" title="Link to this definition">¶</a></dt>
+<dd><p>Configuration for dedispersion processing.</p>
+<p>Specifies frequency channels, time samples, dedispersion tree parameters,
+downsampling levels, peak-finding configuration, early triggers, and GPU settings.
+Can be loaded from YAML files or constructed programmatically.</p>
+<p>See configs/dedispersion/chord_sb2_et.yml for an example with per-field documentation.</p>
+<p>Example usage:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Load from YAML</span>
+<span class="n">config</span> <span class="o">=</span> <span class="n">DedispersionConfig</span><span class="o">.</span><span class="n">from_yaml</span><span class="p">(</span><span class="s1">&#39;config.yaml&#39;</span><span class="p">)</span>
+
+<span class="c1"># Create and configure programmatically</span>
+<span class="n">config</span> <span class="o">=</span> <span class="n">DedispersionConfig</span><span class="p">()</span>
+<span class="n">config</span><span class="o">.</span><span class="n">zone_nfreq</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1024</span><span class="p">]</span>
+<span class="n">config</span><span class="o">.</span><span class="n">zone_freq_edges</span> <span class="o">=</span> <span class="p">[</span><span class="mf">400.0</span><span class="p">,</span> <span class="mf">800.0</span><span class="p">]</span>
+<span class="n">config</span><span class="o">.</span><span class="n">time_sample_ms</span> <span class="o">=</span> <span class="mf">0.983</span>
+<span class="n">config</span><span class="o">.</span><span class="n">tree_rank</span> <span class="o">=</span> <span class="mi">13</span>
+</pre></div>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.add_early_trigger">
+<span class="sig-name descname"><span class="pre">add_early_trigger</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">ds_level</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">delta_rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.add_early_trigger" title="Link to this definition">¶</a></dt>
+<dd><p>Add a single early trigger.</p>
+<p>Early triggers are automatically kept sorted by ds_level (increasing)
+and delta_rank (decreasing).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>ds_level</strong> – Downsampling level (0 &lt;= ds_level &lt; num_downsampling_levels)</p></li>
+<li><p><strong>delta_rank</strong> – Specifies ‘early-ness’ of trigger (must be &gt; 0)</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.add_early_triggers">
+<span class="sig-name descname"><span class="pre">add_early_triggers</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">ds_level</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">delta_ranks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/collections.abc.html#collections.abc.Sequence" title="(in Python v3.14)"><span class="pre">collections.abc.Sequence</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.add_early_triggers" title="Link to this definition">¶</a></dt>
+<dd><p>Add multiple early triggers at the same downsampling level.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>ds_level</strong> – Downsampling level for all triggers</p></li>
+<li><p><strong>delta_ranks</strong> – List of delta_rank values (each specifies ‘early-ness’, must be &gt; 0)</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.beams_per_batch">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">beams_per_batch</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.beams_per_batch" title="Link to this definition">¶</a></dt>
+<dd><p>Number of beams per batch</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.beams_per_gpu">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">beams_per_gpu</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.beams_per_gpu" title="Link to this definition">¶</a></dt>
+<dd><p>Number of beams processed per GPU</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.clone">
+<span class="sig-name descname"><span class="pre">clone</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.clone" title="Link to this definition">¶</a></dt>
+<dd><p>Return a deep copy of this config (does not mutate the original).</p>
+<p>Useful before overriding fields (e.g. the beam geometry) without
+affecting the caller’s config object.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.delay_to_frequency">
+<span class="sig-name descname"><span class="pre">delay_to_frequency</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">delay</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsFloat" title="(in Python v3.14)"><span class="pre">SupportsFloat</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.delay_to_frequency" title="Link to this definition">¶</a></dt>
+<dd><p>Convert dispersion delay to frequency.</p>
+<p>Delay is scaled so d=0 at f_max and d=2^tree_rank at f_min.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>delay</strong> – Dispersion delay in tree units</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Frequency in MHz</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.dm_per_unit_delay">
+<span class="sig-name descname"><span class="pre">dm_per_unit_delay</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.dm_per_unit_delay" title="Link to this definition">¶</a></dt>
+<dd><p>Get DM corresponding to one time sample delay across the full band.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>DM in pc cm^-3 for one time sample delay</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.dtype">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">dtype</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.dtype" title="Link to this definition">¶</a></dt>
+<dd><p>Data type for dedispersion.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>The current dtype setting.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>ksgpu.Dtype</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.early_triggers">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">early_triggers</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.early_triggers" title="Link to this definition">¶</a></dt>
+<dd><p>List of early triggers (sorted by ds_level, then delta_rank)</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.frequency_subband_counts">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">frequency_subband_counts</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.frequency_subband_counts" title="Link to this definition">¶</a></dt>
+<dd><p>Frequency subband counts (set to [1] to disable subbanding)</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.frequency_to_delay">
+<span class="sig-name descname"><span class="pre">frequency_to_delay</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">f</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsFloat" title="(in Python v3.14)"><span class="pre">SupportsFloat</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.frequency_to_delay" title="Link to this definition">¶</a></dt>
+<dd><p>Convert frequency to dispersion delay.</p>
+<p>Delay is scaled so d=0 at f_max and d=2^tree_rank at f_min.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>f</strong> – Frequency in MHz</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Dispersion delay in tree units</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.frequency_to_index">
+<span class="sig-name descname"><span class="pre">frequency_to_index</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">f</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsFloat" title="(in Python v3.14)"><span class="pre">SupportsFloat</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.frequency_to_index" title="Link to this definition">¶</a></dt>
+<dd><p>Convert frequency to fractional frequency channel index.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>f</strong> – Frequency in MHz</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Fractional channel index (0.0 at lowest frequency)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.from_yaml">
+<span class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">from_yaml</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">filename</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.from_yaml" title="Link to this definition">¶</a></dt>
+<dd><p>Load DedispersionConfig from a YAML file.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>filename</strong> – Path to YAML configuration file</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>DedispersionConfig object initialized from file</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.get_nelts_per_segment">
+<span class="sig-name descname"><span class="pre">get_nelts_per_segment</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.get_nelts_per_segment" title="Link to this definition">¶</a></dt>
+<dd><p>Get the number of elements per segment.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Number of elements per segment</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.get_total_nfreq">
+<span class="sig-name descname"><span class="pre">get_total_nfreq</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.get_total_nfreq" title="Link to this definition">¶</a></dt>
+<dd><p>Get total number of frequency channels across all zones.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Sum of zone_nfreq</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.index_to_frequency">
+<span class="sig-name descname"><span class="pre">index_to_frequency</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">index</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsFloat" title="(in Python v3.14)"><span class="pre">SupportsFloat</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.index_to_frequency" title="Link to this definition">¶</a></dt>
+<dd><p>Convert fractional channel index to frequency.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>index</strong> – Fractional channel index</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Frequency in MHz</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.make_channel_map">
+<span class="sig-name descname"><span class="pre">make_channel_map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Array&lt;double&gt;</span></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.make_channel_map" title="Link to this definition">¶</a></dt>
+<dd><p>Create channel map array defining tree-to-frequency mapping.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Array of length (2^tree_rank + 1) with channel boundaries</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.make_random">
+<span class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">make_random</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">max_rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">10</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_early_triggers</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">5</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpu_valid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">verbose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.make_random" title="Link to this definition">¶</a></dt>
+<dd><p>Generate a random DedispersionConfig for testing.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>max_rank</strong> – Maximum tree rank (default=10)</p></li>
+<li><p><strong>max_early_triggers</strong> – Max number of early triggers (0 to disable, default=5)</p></li>
+<li><p><strong>gpu_valid</strong> – Generate GPU-valid configuration (default=True)</p></li>
+<li><p><strong>verbose</strong> – Print debug info (default=False)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Randomly generated DedispersionConfig</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.make_random_freq_variances">
+<span class="sig-name descname"><span class="pre">make_random_freq_variances</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">noisy</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Array&lt;double&gt;</span></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.make_random_freq_variances" title="Link to this definition">¶</a></dt>
+<dd><p>Random per-channel input variances for testing (one random value in [0,1] per zone).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>noisy</strong> – if true, print the per-zone variances</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Array of length nfreq (constant within each frequency zone)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.max_gpu_clag">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">max_gpu_clag</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.max_gpu_clag" title="Link to this definition">¶</a></dt>
+<dd><p>limit on-GPU ring buffer clag (default=10000)</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Testing parameter</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.num_active_batches">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">num_active_batches</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.num_active_batches" title="Link to this definition">¶</a></dt>
+<dd><p>Number of active batches</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.num_downsampling_levels">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">num_downsampling_levels</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.num_downsampling_levels" title="Link to this definition">¶</a></dt>
+<dd><p>Number of downsampling levels (ds_level in 0..num_downsampling_levels-1)</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.peak_finding_params">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">peak_finding_params</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.peak_finding_params" title="Link to this definition">¶</a></dt>
+<dd><p>Peak-finding configuration for each downsampling level</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.test">
+<span class="sig-name descname"><span class="pre">test</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.test" title="Link to this definition">¶</a></dt>
+<dd><p>Test that frequency/delay conversions are self-consistent.</p>
+<p>Samples random values and checks that forward/inverse transforms
+are correct. Throws an exception if test fails.</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.time_sample_ms">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">time_sample_ms</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.time_sample_ms" title="Link to this definition">¶</a></dt>
+<dd><p>Time sample length in milliseconds</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.time_samples_per_chunk">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">time_samples_per_chunk</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.time_samples_per_chunk" title="Link to this definition">¶</a></dt>
+<dd><p>Number of time samples processed per chunk</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.to_yaml_string">
+<span class="sig-name descname"><span class="pre">to_yaml_string</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">verbose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.to_yaml_string" title="Link to this definition">¶</a></dt>
+<dd><p>Convert configuration to YAML string.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>verbose</strong> – Include explanatory comments (default=False)</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>YAML string representation</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.tree_rank">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">tree_rank</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.tree_rank" title="Link to this definition">¶</a></dt>
+<dd><p>number of tree channels is 2^tree_rank</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Tree rank</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.validate">
+<span class="sig-name descname"><span class="pre">validate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.validate" title="Link to this definition">¶</a></dt>
+<dd><p>Validate the configuration.</p>
+<p>Checks that all parameters are consistent and within valid ranges.
+Throws an exception if validation fails.</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.zone_freq_edges">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">zone_freq_edges</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.zone_freq_edges" title="Link to this definition">¶</a></dt>
+<dd><p>Frequency edges in MHz (list of length nzones+1, monotone increasing)</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionConfig.zone_nfreq">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">zone_nfreq</span></span><a class="headerlink" href="#pirate_frb.DedispersionConfig.zone_nfreq" title="Link to this definition">¶</a></dt>
+<dd><p>Number of frequency channels in each zone (list of length nzones)</p>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="FrbGrouper.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">FrbGrouper</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="AssembledFrame.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">AssembledFrame</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2026, Kendrick Smith
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">DedispersionConfig</a><ul>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig</span></code></a><ul>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.add_early_trigger"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.add_early_trigger()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.add_early_triggers"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.add_early_triggers()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.beams_per_batch"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.beams_per_batch</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.beams_per_gpu"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.beams_per_gpu</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.clone"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.clone()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.delay_to_frequency"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.delay_to_frequency()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.dm_per_unit_delay"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.dm_per_unit_delay()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.dtype"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.dtype</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.early_triggers"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.early_triggers</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.frequency_subband_counts"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.frequency_subband_counts</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.frequency_to_delay"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.frequency_to_delay()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.frequency_to_index"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.frequency_to_index()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.from_yaml"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.from_yaml()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.get_nelts_per_segment"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.get_nelts_per_segment()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.get_total_nfreq"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.get_total_nfreq()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.index_to_frequency"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.index_to_frequency()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.make_channel_map"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.make_channel_map()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.make_random"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.make_random()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.make_random_freq_variances"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.make_random_freq_variances()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.max_gpu_clag"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.max_gpu_clag</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.num_active_batches"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.num_active_batches</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.num_downsampling_levels"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.num_downsampling_levels</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.peak_finding_params"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.peak_finding_params</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.test"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.test()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.time_sample_ms"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.time_sample_ms</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.time_samples_per_chunk"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.time_samples_per_chunk</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.to_yaml_string"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.to_yaml_string()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.tree_rank"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.tree_rank</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.validate"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.validate()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.zone_freq_edges"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.zone_freq_edges</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionConfig.zone_nfreq"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.zone_nfreq</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=ca842793"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    </body>
+</html>

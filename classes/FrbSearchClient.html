@@ -1,0 +1,692 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="FrbSifterClient" href="FrbSifterClient.html"><link rel="prev" title="FrbGrouper" href="FrbGrouper.html">
+
+    <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+        <title>FrbSearchClient - pirate_frb 1.2.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  --color-brand-primary: #007bff;
+  --color-brand-content: #0056b3;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">pirate_frb 1.2.1 documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  
+  <span class="sidebar-brand-text">pirate_frb 1.2.1 documentation</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
+  <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../notes/install.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/intro.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/quick_start.html">Quick start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/developer.html">Developer notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/grouper_interface.html">Writing a grouper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/build.html">Build system</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/hardware.html">Hardware</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/frb_server/cf05_production.yml.html">frb_server config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="Acquisition.html">Acquisition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="AssembledFrame.html">AssembledFrame</a></li>
+<li class="toctree-l2"><a class="reference internal" href="DedispersionConfig.html">DedispersionConfig</a></li>
+<li class="toctree-l2"><a class="reference internal" href="FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">FrbSearchClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GpuDedisperser.html">GpuDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="OfflineDedisperser.html">OfflineDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="XEngineMetadata.html">XEngineMetadata</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../notes/cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/grpc.html">GRPC .proto guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../_sources/classes/FrbSearchClient.md.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section id="frbsearchclient">
+<h1>FrbSearchClient<a class="headerlink" href="#frbsearchclient" title="Link to this heading">¶</a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pirate_frb.rpc.</span></span><span class="sig-name descname"><span class="pre">FrbSearchClient</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">server_address</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'localhost:50051'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient" title="Link to this definition">¶</a></dt>
+<dd><p>Client for querying FrbServer via gRPC.</p>
+<p>Usage (as a context manager):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">FrbSearchClient</span><span class="p">(</span><span class="s2">&quot;localhost:50051&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+    <span class="n">status</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">get_status</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Connections: </span><span class="si">{</span><span class="n">status</span><span class="o">.</span><span class="n">num_connections</span><span class="si">}</span><span class="s2">, Bytes: </span><span class="si">{</span><span class="n">status</span><span class="o">.</span><span class="n">num_bytes</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Or without a context manager:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">client</span> <span class="o">=</span> <span class="n">FrbSearchClient</span><span class="p">(</span><span class="s2">&quot;localhost:50051&quot;</span><span class="p">)</span>
+<span class="n">status</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">get_status</span><span class="p">()</span>
+<span class="n">client</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.beam_ids">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">beam_ids</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)"><span class="pre">tuple</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.beam_ids" title="Link to this definition">¶</a></dt>
+<dd><p>The beam IDs processed by this server (cached).</p>
+<p>Static for the server’s lifetime. Sourced from the X-engine metadata
+(the same values ShowStreams reports); returned as a tuple so the
+shared cached value cannot be mutated by a caller.</p>
+<p>On first access, may send a GetXEngineMetadata RPC (via
+xengine_metadata_yaml_string).</p>
+<p>Raises RuntimeError / grpc.RpcError; see xengine_metadata_yaml_string.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.cancel_stream">
+<span class="sig-name descname"><span class="pre">cancel_stream</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">stream_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cancel_all</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span></span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.cancel_stream" title="Link to this definition">¶</a></dt>
+<dd><p>Cancel one active stream (by stream_name), or all of them, by
+sending a CancelStream RPC.</p>
+<p>File writes already queued still complete (and still notify
+subscribe_files() subscribers); cancellation only stops future
+matching. Cancelled streams remain visible in show_streams()’s
+bounded history.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>stream_name</strong> – Stream to cancel (ignored if cancel_all=True).
+An unknown or already-inactive stream_name raises
+grpc.RpcError.</p></li>
+<li><p><strong>cancel_all</strong> – If True, cancel all active streams (however many;
+returns the full count even if the display history retains
+only the most recent few).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Number of streams cancelled.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.close">
+<span class="sig-name descname"><span class="pre">close</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.close" title="Link to this definition">¶</a></dt>
+<dd><p>Close the gRPC channel.</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.config">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">config</span></span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.config" title="Link to this definition">¶</a></dt>
+<dd><p>The server’s run-time configuration (cached).</p>
+<p>Static for the server’s lifetime, so it is fetched from the server once
+on first access (a GetConfig RPC) and reused thereafter. A
+GetConfigResponse protobuf message with fields:</p>
+<ul class="simple">
+<li><p>rpc_ip_addr: “ip:port” this server’s RPC is bound to</p></li>
+<li><p>data_ip_addrs: list of “ip:port” strings, one per Receiver</p></li>
+<li><p>time_samples_per_chunk: int</p></li>
+<li><p>ringbuf_nchunks: logical ring buffer length (in time chunks)</p></li>
+<li><p>ssd_dir: SSD cache directory</p></li>
+<li><p>nfs_dir: NFS output directory (already interpolated for {user}/{date}/{home})</p></li>
+<li><p>ssd_threads: number of FileWriter SSD threads</p></li>
+<li><p>nfs_threads: number of FileWriter NFS threads</p></li>
+<li><p>tree_rank: from config_prefilled</p></li>
+<li><p>beams_per_batch: from config_prefilled</p></li>
+<li><p>frequency_subband_counts: list[int] from config_prefilled (a real
+search-config value, not a <code class="docutils literal notranslate"><span class="pre">fake_</span></code> default)</p></li>
+<li><p>min_data_mtu: minimum data-NIC MTU expected on the sender side</p></li>
+<li><p>fake_zone_nfreq: list[int] from config_prefilled.zone_nfreq (pre-metadata)</p></li>
+<li><p>fake_zone_freq_edges: list[float] from config_prefilled.zone_freq_edges (pre-metadata)</p></li>
+<li><p>fake_time_sample_ms: float from config_prefilled.time_sample_ms (pre-metadata)</p></li>
+<li><p>fake_nbeams: int from config_prefilled.beams_per_gpu (pre-metadata)</p></li>
+</ul>
+<p>The ‘fake_*’ fields are what a fake X-engine sender should mimic;
+they’re the pre-metadata values the receiver was started with, not
+what a real X-engine subsequently sent.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.get_status">
+<span class="sig-name descname"><span class="pre">get_status</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.get_status" title="Link to this definition">¶</a></dt>
+<dd><p>Query the server for current status, by sending a GetStatus RPC.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><ul class="simple">
+<li><p>num_connections: Total number of active TCP connections (summed over receivers)</p></li>
+<li><p>num_bytes: Total bytes received (summed over receivers)</p></li>
+<li><p>rb_start: First frame_id in ring buffer</p></li>
+<li><p>rb_reaped: (Last reaped frame_id) + 1</p></li>
+<li><p>rb_processed: (Last GPU-processed frame_id) + 1; rpc-writeable upper bound</p></li>
+<li><p>rb_assembled: (Last fully-assembled frame_id) + 1</p></li>
+<li><p>rb_end: (Last frame_id in ring buffer) + 1</p></li>
+<li><p>num_free_frames: Number of available frames in AssembledFrameAllocator</p></li>
+</ul>
+</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>GetStatusResponse protobuf message with the following int fields</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.monitor_ringbuf">
+<span class="sig-name descname"><span class="pre">monitor_ringbuf</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.monitor_ringbuf" title="Link to this definition">¶</a></dt>
+<dd><p>Subscribe to a server push stream of rb_processed updates, by opening
+a MonitorRingbuf server-streaming RPC.</p>
+<p>SPECIAL-PURPOSE: this RPC exists for the FakeXEngine “pacing”
+feature, which gates the sender’s chunk rate against the
+server’s GPU processing rate. Don’t use it from new code
+without a similar push-based use case in mind – for general
+status polling, use get_status() instead.</p>
+<p>Yields int64 rb_processed values, one per change. The stream
+starts with the current value, sent by the server as soon as
+the ring buffer is initialized. Iteration ends when the
+server closes the stream (e.g. FrbServer::stop() was called).</p>
+<p>Raises grpc.RpcError on transport failure. To end the stream
+cleanly, break out of the for-loop and let the generator go
+out of scope – gRPC cancels the underlying call on GC.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.show_streams">
+<span class="sig-name descname"><span class="pre">show_streams</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.show_streams" title="Link to this definition">¶</a></dt>
+<dd><p>Query the server for its streams (active + recent history), by
+sending a ShowStreams RPC.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><ul class="simple">
+<li><p>current_fpga_seq: the server’s current position as an fpga seq,
+derived from rb_processed (all data before this fpga seq has
+been fully processed).</p></li>
+<li><p>beam_ids: ALL beams processed by this server (not just those
+with active streams).</p></li>
+<li><p>streams: list of StreamInfo – active streams first, then
+recently-deactivated (expired/cancelled) streams in
+deactivation order. Each has ‘args’ (the original
+StartStreamRequest, echoed back), ‘status’ (a StreamStatus:
+ACTIVE, DRAINING = deactivated with writes still in flight,
+or INACTIVE = deactivated and fully drained), ‘cancelled’
+(true = CancelStream, false = expired; meaningful when not
+ACTIVE), wall-clock timestamps ‘started_at_unix_ns’ /
+‘deactivated_at_unix_ns’ (0 while active), and counters
+‘num_files_queued’ / ‘num_files_written’ /
+‘num_files_errored’ (written + errored &lt;= queued always;
+equality on a deactivated stream = fully drained).</p></li>
+<li><p>num_deactivated_streams: total streams ever deactivated; if
+it exceeds the non-ACTIVE entries listed, older history was
+dropped (only the last few are retained).</p></li>
+</ul>
+</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>ShowStreamsResponse protobuf message with fields</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.start_stream">
+<span class="sig-name descname"><span class="pre">start_stream</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">beam_ids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)"><span class="pre">list</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stream_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">acqdir</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fpga_seq_start</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fpga_seq_end</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)"><span class="pre">tuple</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.start_stream" title="Link to this definition">¶</a></dt>
+<dd><p>Register a “stream”, by sending a StartStream RPC: data matching
+(beam_ids x fpga-seq range) is queued for disk writing automatically as
+it flows through the server.</p>
+<p>Files are written to {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf,
+where nfs_root comes from the server config (self.config.nfs_dir).</p>
+<p>Complements write_files() (one-shot, retroactive within the ring
+buffer): a stream captures each frame at the moment it is processed,
+so chunks that were already processed when StartStream arrives are
+NOT captured retroactively, even if fpga_seq_start is in the past.</p>
+<p>Note: I recommend using a unique acqdir for each multibeam event (or stream).
+Our postprocessing tools generally assume contiguous time chunks (or close to
+that) within an acqdir. If the same file ends up in multiple acqdirs,
+hardlinks will be used to avoid copying and save space.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>beam_ids</strong> – Nonempty list of beam IDs (no all-beams convention;
+list beams explicitly – show_streams() returns the full list).</p></li>
+<li><p><strong>stream_name</strong> – Nonempty identifier, unique among active streams
+(used by show_streams() / cancel_stream()). If None (default),
+a name “stream_{date}_{time}” is generated, e.g.
+“stream_26_07_07_143052”.</p></li>
+<li><p><strong>acqdir</strong> – Acquisition directory (same conventions as
+write_files()). If None (default), stream_name is used, so the
+acquisition lands at {nfs_root}/{stream_name}/.</p></li>
+<li><p><strong>fpga_seq_start</strong> – Start of the fpga-seq range (inclusive);
+0 (default) means “start asap”.</p></li>
+<li><p><strong>fpga_seq_end</strong> – End of the fpga-seq range (exclusive). None
+(default) means “run indefinitely” (sent as 2**63 - 1 on
+the wire).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>the resolved values that were sent
+(useful to the caller when either defaulted from None).</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>(stream_name, <a class="reference internal" href="Acquisition.html#pirate_frb.Acquisition.acqdir" title="pirate_frb.Acquisition.acqdir">acqdir</a>)</p>
+</dd>
+</dl>
+<p>Raises grpc.RpcError on validation failure (empty/duplicate stream_name,
+unknown beam_id, bad acqdir, range entirely in the past, or server
+not yet initialized).</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.subscribe_files">
+<span class="sig-name descname"><span class="pre">subscribe_files</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">subscribe_streams</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.subscribe_files" title="Link to this definition">¶</a></dt>
+<dd><p>Open a file-write-notification subscription (a SubscribeFiles
+server-streaming RPC).</p>
+<p>Returns a FileSubscriber whose constructor has already opened
+the stream and consumed the server’s ready sentinel, so any
+WriteFiles calls issued AFTER this method returns are
+guaranteed to have their notifications delivered through the
+returned object’s iterator.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>subscribe_streams</strong> – If True, also receive notifications for
+files written by streams (start_stream()). Default False:
+WriteFiles-triggered notifications only.</p>
+</dd>
+</dl>
+<p>See FileSubscriber for usage examples (context-manager and
+sloppy forms) and lifetime semantics.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.write_files">
+<span class="sig-name descname"><span class="pre">write_files</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">beams</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)"><span class="pre">list</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fpga_seq_start</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">fpga_seq_end</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">acqdir</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)"><span class="pre">list</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.write_files" title="Link to this definition">¶</a></dt>
+<dd><p>Request the server to write files to disk, by sending a WriteFiles RPC.</p>
+<p>Files are written to {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf,
+where nfs_root comes from the server config (self.config.nfs_dir).</p>
+<p>Note: I recommend using a unique acqdir for each multibeam event (or stream).
+Our postprocessing tools generally assume contiguous time chunks (or close to
+that) within an acqdir. If the same file ends up in multiple acqdirs,
+hardlinks will be used to avoid copying and save space.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>beams</strong> – List of beam IDs to write.</p></li>
+<li><p><strong>fpga_seq_start</strong> – Start of the fpga-seq range (inclusive).</p></li>
+<li><p><strong>fpga_seq_end</strong> – End of the fpga-seq range (exclusive). Files are
+written for all chunks overlapping
+fpga_seq_start &lt;= f &lt; fpga_seq_end.</p></li>
+<li><p><strong>acqdir</strong> – Acquisition directory: a nonempty, normalized relative
+path (no leading/trailing ‘/’, no ‘//’, no ‘.’ or ‘..’
+components); may be multi-level, e.g. “foo/bar/baz”.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>List of filenames that will be written (nfs_root-relative).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.xengine_metadata">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">xengine_metadata</span></span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.xengine_metadata" title="Link to this definition">¶</a></dt>
+<dd><p>The server’s X-engine metadata, parsed to a typed
+pirate_pybind11.XEngineMetadata (cached).</p>
+<p>beam_ids and beam_positions_{x,y} ARE populated (the server serializes
+them via XEngineMetadata::to_yaml_string). freq_channels may be empty:
+it is only meaningful as a per-sender channel subset, and the server’s
+aggregated metadata does not carry one.</p>
+<p>On first access, may send a GetXEngineMetadata RPC (via
+xengine_metadata_yaml_string).</p>
+<p>Raises RuntimeError / grpc.RpcError; see xengine_metadata_yaml_string.</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.xengine_metadata_yaml">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">xengine_metadata_yaml</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.14)"><span class="pre">dict</span></a></span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.xengine_metadata_yaml" title="Link to this definition">¶</a></dt>
+<dd><p>The server’s X-engine metadata, parsed to a plain dict (cached).</p>
+<p>The parsed form of xengine_metadata_yaml_string. Keys include
+dt_ns_per_seq, unix_ns_at_seq_0, seq_per_frb_time_sample, zone_nfreq,
+zone_freq_edges, beamset, beam_ids, and version.</p>
+<p>On first access, may send a GetXEngineMetadata RPC (via
+xengine_metadata_yaml_string).</p>
+<p>Raises RuntimeError / grpc.RpcError; see xengine_metadata_yaml_string.</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSearchClient.xengine_metadata_yaml_string">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">xengine_metadata_yaml_string</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><a class="headerlink" href="#pirate_frb.rpc.FrbSearchClient.xengine_metadata_yaml_string" title="Link to this definition">¶</a></dt>
+<dd><p>The server’s X-engine metadata as a YAML string.</p>
+<p>On the first access that finds the value uncached, this sends a
+GetXEngineMetadata RPC (via _try_xengine_metadata(), which holds the
+cache); later accesses do not re-hit the server.</p>
+<p>The single “not-ready” choke point shared by xengine_metadata_yaml,
+xengine_metadata, and beam_ids: it raises RuntimeError if the metadata
+is not available yet. For a non-raising, pollable form (returns None
+while unavailable), use _try_xengine_metadata() – which also holds the
+cache, so repeated access here does not re-hit the server.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#RuntimeError" title="(in Python v3.14)"><strong>RuntimeError</strong></a> – metadata not yet available.</p></li>
+<li><p><strong>grpc.RpcError</strong> – transport failure.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="FrbSifterClient.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">FrbSifterClient</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="FrbGrouper.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">FrbGrouper</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2026, Kendrick Smith
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">FrbSearchClient</a><ul>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient</span></code></a><ul>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.beam_ids"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.beam_ids</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.cancel_stream"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.cancel_stream()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.close"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.close()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.config"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.config</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.get_status"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.get_status()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.monitor_ringbuf"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.monitor_ringbuf()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.show_streams"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.show_streams()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.start_stream"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.start_stream()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.subscribe_files"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.subscribe_files()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.write_files"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.write_files()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.xengine_metadata"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.xengine_metadata</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.xengine_metadata_yaml"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.xengine_metadata_yaml</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSearchClient.xengine_metadata_yaml_string"><code class="docutils literal notranslate"><span class="pre">FrbSearchClient.xengine_metadata_yaml_string</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=ca842793"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    </body>
+</html>
