@@ -122,14 +122,14 @@ I started hacking together an offline dedisperser.
 Here are some example runs, based on `start_stream` acquisitions from the sections above
 (which included simulated FRBs):
 ```
-# Toy acquisition
+# Toy acquisition (note: your acqdir will be different)
 pirate_frb run_offline_dedisperser \
-   ~/pirate_toy/toy_stream_26_07_07_123508 \   # your acqdir will be different
+   ~/pirate_toy/toy_stream_26_07_07_123508 \
    configs/dedispersion/toy.yml
 
-# "Production" acquisition
+# "Production" acquisition (note: your acqdir will be different)
 pirate_frb run_offline_dedisperser \
-    /mnt/cs00/data/kmsmith/prod_stream_26_07_07_155938 \   # your acqdir will be different
+    /mnt/cs00/data/kmsmith/prod_stream_26_07_07_155938 \
     configs/dedispersion/chord_sb2.yml
 ```
 Currently, the results are difficult to interpret!
