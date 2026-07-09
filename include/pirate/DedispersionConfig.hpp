@@ -40,7 +40,7 @@ struct DedispersionConfig
     // then search delay range 2^(toplevel_tree_rank+p-1) <= delay <= 2^(toplevel_tree_rank+p).
     //
     // (The name "toplevel" distinguishes this from the many derived tree ranks in the
-    // pipeline: individual trees have rank (toplevel_tree_rank - delta_rank - (p ? 1 : 0)).)
+    // pipeline: individual trees have rank (toplevel_tree_rank - early_trigger_level - (p ? 1 : 0)).)
 
     long toplevel_tree_rank = -1;
     long time_samples_per_chunk = 0;
@@ -65,14 +65,14 @@ struct DedispersionConfig
     // (primary tree p downsamples the input in time by 2^p, see 'toplevel_tree_rank' above).
     // Each primary tree is expanded into (num_early_triggers+1) "dedispersion trees":
     // the main (full-band) tree, plus one early-trigger tree for each
-    // delta_rank = 1, ..., num_early_triggers.
+    // early_trigger_level = 1, ..., num_early_triggers.
     //
     // An early trigger searches a subset [fmid,fmax] of the full frequency range
     // [freq_lo,freq_hi] at reduced latency. The early-trigger tree has rank
-    // (main_rank - delta_rank), where main_rank = (toplevel_tree_rank - S) is the rank of
-    // the main tree, with S=0 at p=0 and S=1 for p > 0. (Detail: the downsampled trees
-    // have one lower rank because they search a DM range which does not start at
-    // zero, see above.)
+    // (primary_tree_rank - early_trigger_level), where primary_tree_rank =
+    // (toplevel_tree_rank - S) is the rank of the primary tree's main tree, with S=0
+    // at p=0 and S=1 for p > 0. (Detail: the downsampled trees have one lower rank
+    // because they search a DM range which does not start at zero, see above.)
     //
     // The remaining members configure peak-finding, and must be powers of two:
     //   max_width: max width of peak-finding kernel, in "tree" time samples
@@ -145,7 +145,7 @@ struct DedispersionConfig
     // Returns the largest DM (pc cm^{-3}) searched by any dedispersion tree. Mirrors the
     // per-tree dm_max = dm_per_unit_delay() * 2^toplevel_tree_rank * 2^p computed in the
     // DedispersionPlan constructor; this is monotonic in the primary tree index p and
-    // independent of early-trigger delta_rank, so the maximum is at p = num_primary_trees()-1.
+    // independent of early_trigger_level, so the maximum is at p = num_primary_trees()-1.
     // (Depends only on pre-metadata config fields, so it is valid on config_prefilled.)
     double max_dm_of_all_trees() const;
 
@@ -188,7 +188,7 @@ struct DedispersionConfig
 
     struct RandomArgs
     {
-        int max_rank = 10;
+        int max_toplevel_rank = 10;  // bounds toplevel_tree_rank
         int max_early_triggers = 5;  // set to zero to disable early triggers
         bool gpu_valid = true;
         bool verbose = false;

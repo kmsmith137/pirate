@@ -378,7 +378,7 @@ class PfAvarExact:
       ntrees:          number of DedispersionTrees (= plan.ntrees)
       nfreq:           number of input frequency channels
       freq_variances:  length-nfreq input array containing input variances
-      tree_r:          toplevel_tree_rank - delta - (ipri>0 ? 1 : 0), a length-ntrees array
+      tree_r:          toplevel_tree_rank - et_level - (ipri>0 ? 1 : 0), a length-ntrees array
       tree_R:          pf_rank (a length-ntrees array, can differ from the config pf_rank)
       tree_P:          nprofiles (a length-ntrees array)
       tree_fs:         length-ntrees list of FrequencySubbands (= tree.frequency_subbands).
@@ -403,8 +403,8 @@ class PfAvarExact:
         assert self.freq_variances.shape == (self.nfreq,), (self.freq_variances.shape, self.nfreq)
         assert np.all(self.freq_variances > 0.0), float(self.freq_variances.min())
 
-        # First line is equivalent to: tree_r[itree] = toplevel_tree_rank - delta - (ipri > 0).
-        self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
+        # First line is equivalent to: tree_r[itree] = toplevel_tree_rank - et_level - (ipri > 0).
+        self.tree_r = np.array([t.total_rank() for t in plan.trees])
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
         self.tree_P = np.array([t.nprofiles for t in plan.trees])
         self.tree_fs = [t.frequency_subbands for t in plan.trees]
@@ -429,7 +429,7 @@ class PfAvarExact:
             if progress:
                 print(f"  PfAvarExact tree {itree}/{self.ntrees}: ", end="", flush=True)
                 
-            cmap_rank = r + (ipri > 0)                   # = tree_r + (ipri>0) = toplevel_tree_rank - delta
+            cmap_rank = r + (ipri > 0)                   # = tree_r + (ipri>0) = toplevel_tree_rank - et_level
             cmap = full_cmap[: (1 << cmap_rank) + 1]    # truncate to first 2^cmap_rank channels
 
             for ifreq in range(self.nfreq):
@@ -485,7 +485,7 @@ class PfAvarApproximation:
       ntrees:          number of DedispersionTrees (= plan.ntrees)
       nfreq:           number of input frequency channels
       freq_variances:  length-nfreq input array containing input variances
-      tree_r:          toplevel_tree_rank - delta - (ipri>0 ? 1 : 0), a length-ntrees array
+      tree_r:          toplevel_tree_rank - et_level - (ipri>0 ? 1 : 0), a length-ntrees array
       tree_R:          pf_rank (a length-ntrees array, can differ from the config pf_rank)
       tree_L:          log2(wt_dm_downsampling) (a length-ntrees array); requires 0 <= R <= L <= r
       tree_P:          nprofiles (a length-ntrees array)
@@ -511,8 +511,8 @@ class PfAvarApproximation:
         assert self.freq_variances.shape == (self.nfreq,), (self.freq_variances.shape, self.nfreq)
         assert np.all(self.freq_variances > 0.0), float(self.freq_variances.min())
 
-        # First line is equivalent to: tree_r[itree] = toplevel_tree_rank - delta - (ipri > 0).
-        self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
+        # First line is equivalent to: tree_r[itree] = toplevel_tree_rank - et_level - (ipri > 0).
+        self.tree_r = np.array([t.total_rank() for t in plan.trees])
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
         self.tree_L = np.array([integer_log2(int(t.pf.wt_dm_downsampling)) for t in plan.trees])
         self.tree_P = np.array([t.nprofiles for t in plan.trees])
@@ -597,7 +597,7 @@ class PfAvarApproximation:
         # Non-obvious: each tree only uses indices 0 <= f < 2^L.
         # For a non-early tree this is the full range 0 <= f < 2^{toplevel_tree_rank - k}.
         # For an early tree, this range is smaller, reflecting frequencies that are available at trigger.
-        # (To see this, it may help to note that (toplevel_tree_rank - k - delta) = L.)
+        # (To see this, it may help to note that (toplevel_tree_rank - k - et_level) = L.)
         
         f0 = sarr.f0
         f1 = min(sarr.f0 + sarr.nf, 1 << self._klevel_Lmax[k])

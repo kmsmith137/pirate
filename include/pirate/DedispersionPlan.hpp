@@ -27,7 +27,7 @@ namespace pirate {
 // Dedispersion is a two-stage process. In the first stage, there is one tree for each
 // primary tree (see DedispersionConfig.hpp). In the second stage, each primary tree is
 // expanded into (num_early_triggers+1) trees: the main (full-band) tree, plus one "early"
-// tree for each delta_rank = 1..num_early_triggers. Thus, there is a many-to-one mapping
+// tree for each early_trigger_level = 1..num_early_triggers. Thus, there is a many-to-one mapping
 // from stage2 trees to stage1 trees.
 
 struct DedispersionPlan

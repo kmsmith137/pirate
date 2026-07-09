@@ -121,21 +121,21 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                       "Returns:\n"
                       "    DedispersionConfig object initialized from file")
           .def_static("make_random",
-               [](int max_rank, int max_early_triggers, bool gpu_valid, bool verbose) {
+               [](int max_toplevel_rank, int max_early_triggers, bool gpu_valid, bool verbose) {
                    DedispersionConfig::RandomArgs args;
-                   args.max_rank = max_rank;
+                   args.max_toplevel_rank = max_toplevel_rank;
                    args.max_early_triggers = max_early_triggers;
                    args.gpu_valid = gpu_valid;
                    args.verbose = verbose;
                    return DedispersionConfig::make_random(args);
                },
-               py::arg("max_rank") = 10,
+               py::arg("max_toplevel_rank") = 10,
                py::arg("max_early_triggers") = 5,
                py::arg("gpu_valid") = true,
                py::arg("verbose") = false,
                "Generate a random DedispersionConfig for testing.\n\n"
                "Args:\n"
-               "    max_rank: Maximum tree rank (default=10)\n"
+               "    max_toplevel_rank: Bounds toplevel_tree_rank (default=10)\n"
                "    max_early_triggers: Max number of early triggers (0 to disable, default=5)\n"
                "    gpu_valid: Generate GPU-valid configuration (default=True)\n"
                "    verbose: Print debug info (default=False)\n\n"
@@ -222,7 +222,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Time sample length in milliseconds")
           .def_readwrite("toplevel_tree_rank", &DedispersionConfig::toplevel_tree_rank,
                "Toplevel tree rank: number of tree channels is 2^toplevel_tree_rank.\n"
-               "Individual trees have rank (toplevel_tree_rank - delta_rank - (p ? 1 : 0)).")
+               "Individual trees have rank (toplevel_tree_rank - early_trigger_level - (p ? 1 : 0)).")
           .def_readwrite("time_samples_per_chunk", &DedispersionConfig::time_samples_per_chunk,
                "Number of time samples processed per chunk")
           // Frequency sub-band configuration

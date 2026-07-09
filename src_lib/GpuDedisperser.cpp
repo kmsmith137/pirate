@@ -1367,7 +1367,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 Array<void> gdd_max = gdd_out.out_max.at(itree);
                 Array<uint> gpu_tokens = gdd_out.out_argmax.at(itree).to_host();
 
-                long n = tree.primary_tree_index + tree.amb_rank + tree.early_dd_rank;
+                long n = tree.primary_tree_index + tree.total_rank();
                 double eps = 3.0 * config.dtype.precision() * sqrt(n+2);
                 assert_arrays_equal(rdd0->out_max.at(itree), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"}, eps, eps);
 

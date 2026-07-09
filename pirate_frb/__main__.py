@@ -154,7 +154,7 @@ def test(args):
             if i == 0:
                 # Catches errors in DedispersionConfig::make_random() or validate().
                 for _ in range(500):
-                    c = DedispersionConfig.make_random(max_rank=8, max_early_triggers=4, gpu_valid=False)
+                    c = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=4, gpu_valid=False)
                     c.test()
             for _ in rrange(kernels.CoalescedDdKernel2):
                 GpuDedisperser.test_random()
@@ -1504,7 +1504,7 @@ def random_kernels(args):
             print(f"('fp{nbits}', {list(subband_counts)}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
 
     if args.cdd2:
-        print("# (dtype, dd_rank, Wmax, Dcore, Dout, Tinner, subband_counts, et_delta_ranks)")
+        print("# (dtype, dd_rank, Wmax, Dcore, Dout, Tinner, subband_counts, et_levels)")
 
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
@@ -1528,15 +1528,15 @@ def random_kernels(args):
             dd_rank_min = max(dd_rank_max-1, 3)
 
             for dd_rank in range(dd_rank_min, dd_rank_max+1):
-                et_delta_rank_min = 1
-                et_delta_rank_max = dd_rank-3
-                et_candidates = list(range(et_delta_rank_min, et_delta_rank_max+1))
+                et_level_min = 1
+                et_level_max = dd_rank-3
+                et_candidates = list(range(et_level_min, et_level_max+1))
 
                 ncand = randi(0, len(et_candidates)+1)
-                et_delta_ranks = [0] + random.sample(et_candidates, ncand)
+                et_levels = [0] + random.sample(et_candidates, ncand)
 
                 s = '     # continuation' if (dd_rank > dd_rank_min) else ''
-                print(f"('fp{nbits}', {dd_rank}, {Wmax}, {Dcore}, {Dout}, {Tinner}, {list(subband_counts)}, {et_delta_ranks}),{s}")
+                print(f"('fp{nbits}', {dd_rank}, {Wmax}, {Dcore}, {Dout}, {Tinner}, {list(subband_counts)}, {et_levels}),{s}")
 
     if args.pfwr:
         print('# (dtype, subband_counts, Dcore, P, Tinner)')

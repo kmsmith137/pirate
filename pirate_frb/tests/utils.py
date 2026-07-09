@@ -5,7 +5,7 @@ import random
 from ..pirate_pybind11 import DedispersionConfig
 
 
-def make_random_subscale_config(max_rank=6, max_beams=8):
+def make_random_subscale_config(max_toplevel_rank=6, max_beams=8):
     """Return one random "subscale" DedispersionConfig for the loopback tests.
 
     The DedispersionConfig is built FIRST (via make_random + rejection
@@ -20,12 +20,12 @@ def make_random_subscale_config(max_rank=6, max_beams=8):
       - time_samples_per_chunk % 256 == 0 (network protocol cadence)
       - beams_per_gpu <= max_beams (keep frame count manageable for the test)
 
-    max_rank=6 is the smallest value compatible with the precompiled
+    max_toplevel_rank=6 is the smallest value compatible with the precompiled
     cdd2 kernel registry (which has dd_rank in {3,4,5}, requiring
-    max_stage2_rank = (max_rank+1)/2 >= 3, i.e. max_rank >= 5).
+    max_stage2_rank = (max_toplevel_rank+1)/2 >= 3, i.e. max_toplevel_rank >= 5).
     """
     for _ in range(200):
-        config = DedispersionConfig.make_random(max_rank=max_rank)
+        config = DedispersionConfig.make_random(max_toplevel_rank=max_toplevel_rank)
         if config.time_samples_per_chunk % 256 != 0:
             continue
         if config.beams_per_gpu > max_beams:

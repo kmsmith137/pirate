@@ -165,17 +165,17 @@ void FrequencySubbands::validate_subband_counts(const std::vector<long> &subband
 
 // Static member function.
 // "Restricts" top-level subband counts to a specific tree.
-// The tree may have an early trigger (et_delta_rank > 0) or a different pf_rank.
-vector<long> FrequencySubbands::restrict_subband_counts(const vector<long> &subband_counts, long et_delta_rank, long new_pf_rank)
+// The tree may have an early trigger (early_trigger_level > 0) or a different pf_rank.
+vector<long> FrequencySubbands::restrict_subband_counts(const vector<long> &subband_counts, long early_trigger_level, long new_pf_rank)
 {
     validate_subband_counts(subband_counts);
-    xassert(et_delta_rank >= 0);
+    xassert(early_trigger_level >= 0);
     xassert(new_pf_rank >= 0);
 
-    // Step 1: apply early trigger (et_delta_rank).
+    // Step 1: apply early trigger (early_trigger_level).
 
     long src_rank = subband_counts.size() - 1;
-    long early_rank = max(src_rank - et_delta_rank, 0L);
+    long early_rank = max(src_rank - early_trigger_level, 0L);
 
     vector<long> early_counts(early_rank+1);
     early_counts[early_rank] = 1;

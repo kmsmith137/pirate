@@ -89,7 +89,7 @@ public:
     long ntrees = 0;
 
     // Output: one array per tree, tree_variance[itree] has shape (N, 2^(r-L), P), where:
-    //    r = tree rank = config.toplevel_tree_rank - delta_rank - (ipri>0 ? 1 : 0)
+    //    r = tree rank = config.toplevel_tree_rank - et_level - (ipri>0 ? 1 : 0)
     //    2^L = tree.pf.wt_dm_downsampling
     //    N = frequency_subbands.N
     // Note that the shape can also be written as (N, tree.ndm_wt, P).

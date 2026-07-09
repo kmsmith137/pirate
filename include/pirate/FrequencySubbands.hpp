@@ -88,9 +88,9 @@ struct FrequencySubbands
 
     // Static member function.
     // "Restricts" top-level subband counts to a specific tree.
-    // The tree may have an early trigger (et_delta_rank > 0) or a different pf_rank.
+    // The tree may have an early trigger (early_trigger_level > 0) or a different pf_rank.
 
-    static std::vector<long> restrict_subband_counts(const std::vector<long> &subband_counts, long et_delta_rank, long new_pf_rank);
+    static std::vector<long> restrict_subband_counts(const std::vector<long> &subband_counts, long early_trigger_level, long new_pf_rank);
 
     // For debugging/testing.
     static void validate_subband_counts(const std::vector<long> &subband_counts);

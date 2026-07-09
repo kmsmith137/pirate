@@ -218,7 +218,7 @@ double DedispersionConfig::max_dm_of_all_trees() const
 {
     // See DedispersionPlan.cpp: primary tree 'p' searches up to dm_max = dm0 * 2^p,
     // with dm0 = dm_per_unit_delay() * 2^toplevel_tree_rank. dm_max is monotonic in p and does
-    // not depend on the early-trigger delta_rank, so the largest DM across all trees
+    // not depend on early_trigger_level, so the largest DM across all trees
     // is at p = num_primary_trees() - 1.
     xassert(num_primary_trees() >= 1);
     double dm0 = dm_per_unit_delay() * double(pow2(toplevel_tree_rank));
@@ -382,18 +382,19 @@ void DedispersionConfig::validate() const
     for (long ipri = 0; ipri < num_primary_trees(); ipri++) {
         const PrimaryTree &pt = primary_trees.at(ipri);
 
-        long ds_rank = ipri ? (toplevel_tree_rank-1) : (toplevel_tree_rank);
-        long ds_stage1_rank = ds_rank / 2;
+        long primary_tree_rank = ipri ? (toplevel_tree_rank-1) : (toplevel_tree_rank);
+        long stage1_dd_rank = primary_tree_rank / 2;
 
-        // Primary tree ipri expands into early-trigger trees with delta_rank =
-        // 1..num_early_triggers, of rank (ds_rank - delta_rank). Every early-trigger
+        // Primary tree ipri expands into early-trigger trees with early_trigger_level =
+        // 1..num_early_triggers, of rank (primary_tree_rank - et_level). Every early-trigger
         // tree must be no smaller than the stage1 tree, i.e. num_early_triggers <=
-        // ds_rank - ds_stage1_rank. Note ds_rank - ds_stage1_rank = ceil(ds_rank/2),
-        // which for odd ds_rank is one MORE than ds_stage1_rank -- so do not write
-        // 'num_early_triggers < ds_stage1_rank' here (that rejects the largest legal
-        // value, which make_random() can emit for odd ds_rank).
+        // primary_tree_rank - stage1_dd_rank. Note primary_tree_rank - stage1_dd_rank =
+        // ceil(primary_tree_rank/2), which for odd primary_tree_rank is one MORE than
+        // stage1_dd_rank -- so do not write 'num_early_triggers < stage1_dd_rank' here
+        // (that rejects the largest legal value, which make_random() can emit for odd
+        // primary_tree_rank).
         xassert(pt.num_early_triggers >= 0);
-        xassert_le(pt.num_early_triggers, ds_rank - ds_stage1_rank);
+        xassert_le(pt.num_early_triggers, primary_tree_rank - stage1_dd_rank);
 
         xassert(pt.max_width > 0);
         xassert(pt.wt_dm_downsampling > 0);
@@ -406,8 +407,8 @@ void DedispersionConfig::validate() const
         xassert_le(pt.max_width, constants::max_pf_width);
 
         // Smallest rank of any tree in this primary tree's family (the earliest
-        // trigger has delta_rank = num_early_triggers).
-        long min_rank = ds_rank - pt.num_early_triggers;
+        // trigger has early_trigger_level = num_early_triggers).
+        long min_rank = primary_tree_rank - pt.num_early_triggers;
 
         if (pt.wt_dm_downsampling > pow2(min_rank)) {
             stringstream ss;
@@ -552,7 +553,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             "Primary trees: one entry per DM range searched, ordered from low to high DM\n"
             "(see the DM ranges in the comment above). Each primary tree is expanded into\n"
             "(num_early_triggers+1) dedispersion trees: the main full-band tree, plus one\n"
-            "early-trigger tree for each delta_rank = 1..num_early_triggers. Early triggers\n"
+            "early-trigger tree for each early_trigger_level = 1..num_early_triggers. Early triggers\n"
             "search a high-frequency subset of the band at reduced latency.\n"
             "All values must be powers of two.\n"
             "  num_early_triggers: number of early triggers (required, can be zero)\n"
@@ -582,14 +583,14 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             << YAML::Key << "wt_time_downsampling" << YAML::Value << pt.wt_time_downsampling
             << YAML::EndMap;
 
-        // In verbose mode, show the early-trigger frequencies (highest delta_rank =
+        // In verbose mode, show the early-trigger frequencies (highest early_trigger_level =
         // earliest trigger first, matching the order of trees in the DedispersionPlan).
         if (verbose && (pt.num_early_triggers > 0)) {
             stringstream ss;
             ss << fixed << setprecision(1) << "p=" << p << ": early triggers at ";
-            for (long delta = pt.num_early_triggers; delta > 0; delta--) {
-                double freq = this->delay_to_frequency(pow2(toplevel_tree_rank - delta));
-                ss << freq << ((delta > 1) ? ", " : " MHz");
+            for (long et_level = pt.num_early_triggers; et_level > 0; et_level--) {
+                double freq = this->delay_to_frequency(pow2(toplevel_tree_rank - et_level));
+                ss << freq << ((et_level > 1) ? ", " : " MHz");
             }
             emitter << YAML::Comment(ss.str());
         }
@@ -770,9 +771,9 @@ static CoalescedDdKernel2::RegistryKey _make_random_cdd2_key(Dtype dtype, long d
 // static member function
 DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 {
-    xassert(args.max_rank >= 2);
+    xassert(args.max_toplevel_rank >= 2);
     xassert(args.max_early_triggers >= 0);
-    long max_stage2_rank = (args.max_rank + 1) / 2;
+    long max_stage2_rank = (args.max_toplevel_rank + 1) / 2;
 
     using Key2 = CoalescedDdKernel2::RegistryKey;  // (dtype, dd_rank, Tinner, Dout, Wmax)
     vector<Key2> all_keys = CoalescedDdKernel2::registry().get_all_keys();
@@ -789,7 +790,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         if (valid_keys.size() == 0) {
             stringstream ss;
             ss << "DedispersionConfig::make_random(): no precompiled cdd2 kernel is available "
-               << "(max_rank=" << args.max_rank << ", max_stage2_rank=" << max_stage2_rank
+               << "(max_toplevel_rank=" << args.max_toplevel_rank << ", max_stage2_rank=" << max_stage2_rank
                << ")";
             throw runtime_error(ss.str());
         }
@@ -810,10 +811,11 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     ret.dtype = my_keys.at(0).dtype;
     ret.frequency_subband_counts = my_keys.at(0).subband_counts;
 
-    // Toplevel tree rank.
-    long min_toplevel_rank = max(2 * my_keys.at(0).dd_rank - 1, 2L);
-    long max_toplevel_rank = (2 * my_keys.at(0).dd_rank);
-    ret.toplevel_tree_rank = rand_int(min_toplevel_rank, max_toplevel_rank+1);
+    // Toplevel tree rank. (Locals named *_min/*_max to avoid confusion with
+    // args.max_toplevel_rank, the caller-specified bound.)
+    long toplevel_rank_min = max(2 * my_keys.at(0).dd_rank - 1, 2L);
+    long toplevel_rank_max = (2 * my_keys.at(0).dd_rank);
+    ret.toplevel_tree_rank = rand_int(toplevel_rank_min, toplevel_rank_max+1);
 
     // Frequency zones.
     long nzones = rand_int(1,6);
@@ -902,9 +904,9 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     for (long ipri = 0; ipri < npri; ipri++) {
         const Key2 &k = my_keys.at(ipri);
 
-        long tot_rank = ipri ? (ret.toplevel_tree_rank-1) : ret.toplevel_tree_rank;
-        long stage1_dd_rank = tot_rank / 2;
-        long stage2_dd_rank = tot_rank - stage1_dd_rank;
+        long primary_tree_rank = ipri ? (ret.toplevel_tree_rank-1) : ret.toplevel_tree_rank;
+        long stage1_dd_rank = primary_tree_rank / 2;
+        long stage2_dd_rank = primary_tree_rank - stage1_dd_rank;
 
         // Min/max log2(PrimaryTree::wt_time_downsampling).
         long nt_ds = xdiv(nt_divisor, pow2(ipri));
@@ -915,7 +917,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         // Min/max log2(PrimaryTree::wt_dm_downsampling).
         // FIXME: assuming default DM downsampling (PrimaryTree::dm_downsampling == 0) for now.
         long min_lg2_wdds = (stage2_dd_rank + 1) / 2;  // same as pf_rank
-        long max_lg2_wdds = tot_rank;
+        long max_lg2_wdds = primary_tree_rank;
 
         xassert_eq(k.dd_rank, stage2_dd_rank);
         xassert_le(min_lg2_wdds, max_lg2_wdds);
@@ -940,31 +942,30 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         // The early trigger tree size can't be less than the wt_dm downsampling factor.
         min_et_rank = max(min_et_rank, (long)integer_log2(pt.wt_dm_downsampling));
 
-        // Early triggers are consecutive (delta_rank = 1..num_early_triggers), so walk
-        // delta_rank upward (i.e. et_rank downward from tot_rank-1) and stop at the
+        // Early triggers are consecutive (et_level = 1..num_early_triggers), so walk
+        // et_level upward (tree rank downward from primary_tree_rank-1) and stop at the
         // first unsupported value: a gap in GPU-kernel coverage caps num_early_triggers.
 
-        for (long delta_rank = 1; ; delta_rank++) {
-            long et_rank = tot_rank - delta_rank;
-            if (et_rank < min_et_rank)
+        for (long et_level = 1; ; et_level++) {
+            if (primary_tree_rank - et_level < min_et_rank)
                 break;
 
             if (args.gpu_valid) {
                 Key2 ds_key = k;
-                ds_key.dd_rank = et_rank - stage1_dd_rank;
+                ds_key.dd_rank = stage2_dd_rank - et_level;
 
                 // Mimics the logic used in the DedispersionPlan constructor,
                 // to modify the subband_counts for the stage2 tree.
                 long pf_rank = (ds_key.dd_rank + 1) / 2;
-                ds_key.subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, delta_rank, pf_rank);
+                ds_key.subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, et_level, pf_rank);
 
                 // If there is no kernel in the registry for this (dd_rank, subband_counts),
-                // then this delta_rank (and all larger ones) is not supported.
+                // then this et_level (and all larger ones) is not supported.
                 if (!CoalescedDdKernel2::registry().has_key(ds_key))
                     break;
             }
 
-            max_et.at(ipri) = delta_rank;
+            max_et.at(ipri) = et_level;
         }
     }
 

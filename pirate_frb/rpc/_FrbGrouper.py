@@ -216,7 +216,7 @@ class FrbGrouperInjections:
         Called once from __enter__ (after the handshake yamls are parsed). Following
         notes/tree_dedispersion.tex, section "Dedispersion output arrays", the
         per-tree output geometry (ndm_out, nt_out, d_lo, d_hi) is computed from
-        (T_in, r_top, p, delta, T_ds, D_ds) and cross-checked against the plan's
+        (T_in, r_top, p, e, T_ds, D_ds) and cross-checked against the plan's
         stored ndm_out/nt_out/dm_min/dm_max (a one-time guard against code/tex/plan
         drift). Sets the members used by create_events():
 
@@ -224,7 +224,7 @@ class FrbGrouperInjections:
             d * dm_per_unit_delay (matches DedispersionConfig::dm_per_unit_delay).
           - _nt_in, _seq_per_sample: T_in, and fpga counts per input time sample.
           - _beam_id_lut: global beam index -> X-engine beam id (numpy array).
-          - _tree_{ndm_out,nt_out,d_lo,d_hi,delta}: per-tree numpy arrays, indexed
+          - _tree_{ndm_out,nt_out,d_lo,d_hi,et_level}: per-tree numpy arrays, indexed
             by tree index.
 
         Also sets the per-tree steady-state boundary (steady_state_it0, documented
@@ -255,14 +255,14 @@ class FrbGrouperInjections:
         self._band_freq_lo_MHz = float(f_lo)
         self._band_freq_hi_MHz = float(f_hi)
 
-        # Per-tree geometry from (p, delta, T_ds, D_ds) via the tex equations,
+        # Per-tree geometry from (p, e, T_ds, D_ds) via the tex equations,
         # cross-checked against the plan's stored ndm_out/nt_out/dm_min/dm_max.
-        ndm_l, nt_l, dlo_l, dhi_l, delta_l = [], [], [], [], []
+        ndm_l, nt_l, dlo_l, dhi_l, et_level_l = [], [], [], [], []
         ss_it0_l = []
         for i, tr in enumerate(trees):
-            p, delta = tr['primary_tree_index'], tr['delta_rank']
+            p, e = tr['primary_tree_index'], tr['early_trigger_level']
             T_ds, D_ds = tr['time_downsampling'], tr['dm_downsampling']
-            ndm = (2**(r_top - delta) if p == 0 else 2**(r_top - delta - 1)) // D_ds    # Eq.(ndm_out)
+            ndm = (2**(r_top - e) if p == 0 else 2**(r_top - e - 1)) // D_ds            # Eq.(ndm_out)
             nt  = T_in // (2**p * T_ds)                                                 # Eq.(nt_out)
             dlo = 0 if p == 0 else 2**(r_top + p - 1)                                   # Eq.(dlo_dhi)
             dhi = 2**(r_top + p)                                                        # Eq.(dlo_dhi)
@@ -277,13 +277,13 @@ class FrbGrouperInjections:
                     raise RuntimeError(f"FrbGrouper: tex-derived {label} = {got} disagrees with "
                                        f"the plan ({exp}) for tree {i}")
             ndm_l.append(ndm); nt_l.append(nt); dlo_l.append(dlo); dhi_l.append(dhi)
-            delta_l.append(delta)
+            et_level_l.append(e)
 
             # Steady-state boundary: element (ichunk, idm, it) is unaffected by the
             # zero-padding before the start of acquisition iff
             #     n*T_ds >= d0 + (idm+1)*D_ds - 1 + 4*Wmax,    n = ichunk*nt_out + it
             # in "tree" samples (= 2^p input samples; max_width has these units too).
-            # Here d0 = dlo/2^(delta+p) is the tree's lowest internal delay, and DM
+            # Here d0 = dlo/2^(e+p) is the tree's lowest internal delay, and DM
             # bin idm covers internal delays [d0 + idm*D_ds, d0 + (idm+1)*D_ds): the
             # dedispersion output at internal delay d and (trigger-freq) time tau
             # references input samples [tau - d, tau], subband multiplets reference
@@ -292,7 +292,7 @@ class FrbGrouperInjections:
             # (padded to 4*Wmax). Solving for the smallest steady-state n (ceil
             # division; exact for integer n) gives the per-idm array below.
             Wmax = tr['max_width']
-            d0 = dlo // 2**(delta + p)
+            d0 = dlo // 2**(e + p)
             dmax = d0 + (np.arange(ndm, dtype=np.int64) + 1) * D_ds - 1  # max internal delay in bin idm
             ss_it0_l.append((dmax + 4*Wmax + T_ds - 1) // T_ds)
 
@@ -305,7 +305,7 @@ class FrbGrouperInjections:
         self._tree_nt_out  = np.asarray(nt_l,    dtype=np.float64)
         self._tree_d_lo    = np.asarray(dlo_l,   dtype=np.float64)
         self._tree_d_hi    = np.asarray(dhi_l,   dtype=np.float64)
-        self._tree_delta   = np.asarray(delta_l, dtype=np.float64)
+        self._tree_et_level = np.asarray(et_level_l, dtype=np.float64)
 
         # Beam-id lookup table + timing scalars.
         self._beam_id_lut    = np.asarray(self.xengine_yaml['beam_ids'], dtype=np.int64)
@@ -391,7 +391,7 @@ class FrbGrouperInjections:
         d_lo, d_hi = self._tree_d_lo[itree_h], self._tree_d_hi[itree_h]
         d  = d_lo + (d_hi - d_lo) * (idm_h + 0.5) / self._tree_ndm_out[itree_h]
         t  = self._nt_in * (itime_h + 0.5) / self._tree_nt_out[itree_h]
-        t_full = t + (1.0 - 2.0**(-self._tree_delta[itree_h])) * d
+        t_full = t + (1.0 - 2.0**(-self._tree_et_level[itree_h])) * d
 
         dms = d * self.dm_per_unit_delay
         beam_ids = self._beam_id_lut[ibeam_h]

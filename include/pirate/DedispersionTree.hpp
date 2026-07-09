@@ -10,7 +10,7 @@ namespace pirate {
 #endif
 
 
-// DedispersionTree: a simple "data" class with no member functions.
+// DedispersionTree: a simple "data" class (only trivial member functions).
 // Represents the output of the dedisperser, for one choice of (primary tree, early trigger).
 //
 // A vector of DedispersionTrees is created in the DedispersionPlan constructor, and gets copied
@@ -18,12 +18,14 @@ namespace pirate {
 
 struct DedispersionTree
 {
-    // Note: for most purposes, you want 'early_dd_rank', not 'pri_dd_rank'.
-    int primary_tree_index = -1;  // Also identifies associated stage1 tree (input downsampled in time by 2^primary_tree_index).
-    int amb_rank = 0;        // Ambient rank of DedispersionTree (= dd_rank of associated stage1 tree)
-    int pri_dd_rank = 0;     // Active rank of primary DedispersionTree (= amb_rank of associated stage1 tree)
-    int early_dd_rank = 0;   // Active rank of this DedispersionTree (always <= pri_dd_rank)
-    int nt_ds = 0;           // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(primary_tree_index))
+    int primary_tree_index = -1;   // Also identifies associated stage1 tree (input downsampled in time by 2^primary_tree_index).
+    int early_trigger_level = -1;  // "Earliness" of trigger: 0 for the main tree, 1..num_early_triggers for early triggers.
+    int amb_rank = 0;              // Ambient rank of this DedispersionTree (= dd_rank of associated stage1 tree)
+    int dd_rank = 0;               // Active rank of this DedispersionTree (= amb_rank of stage1 tree, minus early_trigger_level)
+    int nt_ds = 0;                 // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(primary_tree_index))
+
+    // Total tree rank. Equal to (config.toplevel_tree_rank - early_trigger_level - (primary_tree_index ? 1 : 0)).
+    long total_rank() const { return amb_rank + dd_rank; }
 
     // Subbands searched in this tree.
     // Can differ from DedispersionConfig::frequency_subbands, due to early triggers and downsampling.

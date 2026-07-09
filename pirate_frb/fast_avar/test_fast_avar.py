@@ -122,7 +122,7 @@ def test_cpp_pf_avar_approximation():
 
     # gpu_valid=False: PfAvarApproximation is pure-CPU (tree structure + channel map only), so we
     # don't need a GPU-runnable config (which would require a precompiled cdd2 kernel for the rank).
-    config = DedispersionConfig.make_random(max_rank=5, max_early_triggers=2, gpu_valid=False)
+    config = DedispersionConfig.make_random(max_toplevel_rank=5, max_early_triggers=2, gpu_valid=False)
     config.validate()
     plan = DedispersionPlan(config)
     fv = np.asarray(config.make_random_freq_variances(noisy=True), dtype=np.float64)

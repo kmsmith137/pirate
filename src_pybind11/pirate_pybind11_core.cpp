@@ -571,7 +571,7 @@ void register_core_bindings(pybind11::module &m)
           .def_static("from_threshold", &FrequencySubbands::from_threshold,
                py::arg("fmin"), py::arg("fmax"), py::arg("threshold"), py::arg("pf_rank") = 4)
           .def_static("restrict_subband_counts", &FrequencySubbands::restrict_subband_counts,
-               py::arg("subband_counts"), py::arg("et_delta_rank"), py::arg("new_pf_rank"))
+               py::arg("subband_counts"), py::arg("early_trigger_level"), py::arg("new_pf_rank"))
           .def_static("validate_subband_counts", &FrequencySubbands::validate_subband_counts,
                py::arg("subband_counts"))
           .def_static("make_random_subband_counts",
@@ -596,7 +596,7 @@ void register_core_bindings(pybind11::module &m)
         "Configuration of a single primary tree (one DM range searched).\n\n"
         "A primary tree is expanded into (num_early_triggers+1) dedispersion trees:\n"
         "the main full-band tree, plus one early-trigger tree for each\n"
-        "delta_rank = 1..num_early_triggers. The remaining members define the maximum\n"
+        "early_trigger_level = 1..num_early_triggers. The remaining members define the maximum\n"
         "width for peak detection and downsampling factors for both the coarse-grained\n"
         "and weights arrays relative to tree resolution. All numeric members must be\n"
         "powers of two.")
@@ -621,14 +621,14 @@ void register_core_bindings(pybind11::module &m)
                py::arg("wt_time_downsampling"),
                "Create a PrimaryTree.\n\n"
                "Args:\n"
-               "    num_early_triggers: Number of early triggers (delta_rank = 1..num_early_triggers)\n"
+               "    num_early_triggers: Number of early triggers (early_trigger_level = 1..num_early_triggers)\n"
                "    max_width: Maximum width of peak-finding kernel (in tree time samples)\n"
                "    dm_downsampling: DM downsampling factor relative to tree\n"
                "    time_downsampling: Time downsampling factor relative to tree\n"
                "    wt_dm_downsampling: DM downsampling factor for weights (>= dm_downsampling)\n"
                "    wt_time_downsampling: Time downsampling for weights (>= time_downsampling)")
           .def_readwrite("num_early_triggers", &DedispersionConfig::PrimaryTree::num_early_triggers,
-               "Number of early triggers (delta_rank = 1..num_early_triggers, can be zero)")
+               "Number of early triggers (early_trigger_level = 1..num_early_triggers, can be zero)")
           .def_readwrite("max_width", &DedispersionConfig::PrimaryTree::max_width,
                "Maximum width of peak-finding kernel (in tree time samples)")
           .def_readwrite("dm_downsampling", &DedispersionConfig::PrimaryTree::dm_downsampling,
@@ -689,10 +689,12 @@ void register_core_bindings(pybind11::module &m)
     // for one choice of (primary tree, early trigger).
     py::class_<DedispersionTree>(m, "DedispersionTree")
           .def_readonly("primary_tree_index", &DedispersionTree::primary_tree_index)
+          .def_readonly("early_trigger_level", &DedispersionTree::early_trigger_level)
           .def_readonly("amb_rank", &DedispersionTree::amb_rank)
-          .def_readonly("pri_dd_rank", &DedispersionTree::pri_dd_rank)
-          .def_readonly("early_dd_rank", &DedispersionTree::early_dd_rank)
+          .def_readonly("dd_rank", &DedispersionTree::dd_rank)
           .def_readonly("nt_ds", &DedispersionTree::nt_ds)
+          .def("total_rank", &DedispersionTree::total_rank,
+               "Total tree rank (amb_rank + dd_rank).")
           .def_readonly("frequency_subbands", &DedispersionTree::frequency_subbands)
           .def_readonly("pf", &DedispersionTree::pf)
           .def_readonly("nprofiles", &DedispersionTree::nprofiles)

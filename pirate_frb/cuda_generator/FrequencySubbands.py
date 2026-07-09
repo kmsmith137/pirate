@@ -84,23 +84,23 @@ class FrequencySubbands:
 
 
     @classmethod
-    def restrict_subband_counts(cls, subband_counts, et_delta_rank, new_pf_rank):
+    def restrict_subband_counts(cls, subband_counts, early_trigger_level, new_pf_rank):
         """
         "Restricts" top-level subband counts to a specific tree.
-        The tree may have an early trigger (et_delta_rank > 0) or a different pf_rank.
+        The tree may have an early trigger (early_trigger_level > 0) or a different pf_rank.
         """
         
-        if et_delta_rank < 0:
-            raise RuntimeError("FrequencySubbands.restrict_subband_counts: et_delta_rank must be >= 0")
+        if early_trigger_level < 0:
+            raise RuntimeError("FrequencySubbands.restrict_subband_counts: early_trigger_level must be >= 0")
         if new_pf_rank < 0:
             raise RuntimeError("FrequencySubbands.restrict_subband_counts: new_pf_rank must be >= 0")
         
         cls.validate_subband_counts(subband_counts)
         
-        # Step 1: apply early trigger (et_delta_rank).
+        # Step 1: apply early trigger (early_trigger_level).
 
         src_rank = len(subband_counts) - 1
-        early_rank = max(src_rank - et_delta_rank, 0)
+        early_rank = max(src_rank - early_trigger_level, 0)
         
         early_counts = [0] * (early_rank + 1)
         early_counts[early_rank] = 1

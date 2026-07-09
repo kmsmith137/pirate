@@ -369,13 +369,13 @@ When we time-downsample by a factor $2^p$, we add time samples and multiply by $
 The integer $p$ is called the {\em primary tree index}, and is denoted in the code by \verb|primary_tree_index| (or the loop variable \verb|ipri|). Each value of $p$ defines a {\em primary tree} which searches a different DM range, ordered from low to high DM.
 If $p > 0$, then we only keep the upper half (in delay) of the dedispersion output, since the lower half was already searched by primary tree $(p-1)$.
 
-\item {\bf Early triggers} in order to reduce triggering latency, especially at high DM. By default, we only trigger when the pulse arrives at the highest tree-freq (i.e.\ lowest radio frequency). To trigger earlier for some bursts, we also run parallel dedispersion trees over the lowest $2^{r-\delta}$ tree-freqs, where $\delta=1,2,\cdots$ is denoted {\tt delta\_rank} in the code. These trees trigger at lower tree-freq (by a factor $2^\delta$), i.e.\ higher radio frequency.
-In the config file, each primary tree specifies an integer {\tt num\_early\_triggers} $= N \ge 0$, which selects early triggers $\delta = 1, \ldots, N$.
+\item {\bf Early triggers} in order to reduce triggering latency, especially at high DM. By default, we only trigger when the pulse arrives at the highest tree-freq (i.e.\ lowest radio frequency). To trigger earlier for some bursts, we also run parallel dedispersion trees over the lowest $2^{r-e}$ tree-freqs, where $e=1,2,\cdots$ is denoted {\tt early\_trigger\_level} in the code. These trees trigger at lower tree-freq (by a factor $2^e$), i.e.\ higher radio frequency.
+In the config file, each primary tree specifies an integer {\tt num\_early\_triggers} $= N \ge 0$, which selects early triggers $e = 1, \ldots, N$.
 
 \end{itemize}
-A {\tt Dedisperser} consists of one or more {\tt DedispersionTrees}, each identified by a $(p, \delta)$ pair; i.e.\ each primary tree is expanded into $({\tt num\_early\_triggers}+1)$ {\tt DedispersionTrees}.
-The ``base'' tree $(p, \delta)=(0,0)$ does not downsample or trigger early.
-Conceptually, each {\tt DedispersionTree} just runs ``vanilla'' rank-$(r-\delta$) tree dedispersion on the first $2^{r-\delta}$ tree-freqs, downsampled in time by $2^p$, and then drops the lower DM-half of the outputs if $p > 0$.\footnote{This description suggests that each tree is an independent computation run ``from scratch''. There are a lot of tricks in the code that reuse computations between trees, i.e.\ the {\tt Dedisperser} is faster than running the constituent {\tt DedispersionTrees} independently.}
+A {\tt Dedisperser} consists of one or more {\tt DedispersionTrees}, each identified by a $(p, e)$ pair; i.e.\ each primary tree is expanded into $({\tt num\_early\_triggers}+1)$ {\tt DedispersionTrees}.
+The ``base'' tree $(p, e)=(0,0)$ does not downsample or trigger early.
+Conceptually, each {\tt DedispersionTree} just runs ``vanilla'' rank-$(r-e$) tree dedispersion on the first $2^{r-e}$ tree-freqs, downsampled in time by $2^p$, and then drops the lower DM-half of the outputs if $p > 0$.\footnote{This description suggests that each tree is an independent computation run ``from scratch''. There are a lot of tricks in the code that reuse computations between trees, i.e.\ the {\tt Dedisperser} is faster than running the constituent {\tt DedispersionTrees} independently.}
 
 {\sloppy
 As a concrete example, Table~\ref{tab:chord_sb2_et} and Figures~\ref{fig:early_triggers}--\ref{fig:tree_segments} show the ten-tree family of the CHORD config {\tt chord\_sb2\_et.yml} ($r=16$, with four primary trees and six early triggers).
@@ -385,7 +385,7 @@ As a concrete example, Table~\ref{tab:chord_sb2_et} and Figures~\ref{fig:early_t
 \centering
 \begin{tabular}{c c c c c c}
 \toprule
-$p$ & $\delta$ & Full-band delay range (s) & DM range (pc\,cm$^{-3}$) & trigger (MHz) & latency range (s) \\
+$p$ & $e$ & Full-band delay range (s) & DM range (pc\,cm$^{-3}$) & trigger (MHz) & latency range (s) \\
 \midrule
 0 & 0 & 0.0--65.5 & 0--1481 & 300 & 0.0--65.5 \\
 \midrule
@@ -402,7 +402,7 @@ $p$ & $\delta$ & Full-band delay range (s) & DM range (pc\,cm$^{-3}$) & trigger 
  & 3 & & & 750 & 32.8--65.5 \\
 \bottomrule
 \end{tabular}
-\caption{The ten {\tt DedispersionTree}s of the CHORD config {\tt chord\_sb2\_et.yml} (rank $r=16$; four primary trees; six early triggers). Each tree is identified by a $(p, \delta)$ pair. The DM range and {\em full-band} dispersion delay range depend only on $p$. The trigger frequency depends only on $\delta$, and the latency range is $2^{-\delta} \times \mbox{(delay range)}$.
+\caption{The ten {\tt DedispersionTree}s of the CHORD config {\tt chord\_sb2\_et.yml} (rank $r=16$; four primary trees; six early triggers). Each tree is identified by a $(p, e)$ pair. The DM range and {\em full-band} dispersion delay range depend only on $p$. The trigger frequency depends only on $e$, and the latency range is $2^{-e} \times \mbox{(delay range)}$.
 (Generated with {\tt pirate\_frb show\_dedisperser -v configs/dedispersion/chord\_sb2\_et.yml}.)}
 \label{tab:chord_sb2_et}
 \end{table}
@@ -410,14 +410,14 @@ $p$ & $\delta$ & Full-band delay range (s) & DM range (pc\,cm$^{-3}$) & trigger 
 \begin{figure}[ht]
 \centering
 \includegraphics[width=\textwidth]{figs/early_triggers.pdf}
-\caption{A visualization of early triggers, in radio frequency (right panel) or the ``tree-freq'' reparametrization used in the code (left panel). Trees with early triggers search the lower part of the tree-freq range, i.e.\ the high part of the radio frequency range. A tree with $\delta > 0$ triggers earlier (by a factor $2^\delta$) than the main tree. The plot assumes CHORD params (300--1500 MHz, $r=16$, $0\le\delta\le 3$).}
+\caption{A visualization of early triggers, in radio frequency (right panel) or the ``tree-freq'' reparametrization used in the code (left panel). Trees with early triggers search the lower part of the tree-freq range, i.e.\ the high part of the radio frequency range. A tree with $e > 0$ triggers earlier (by a factor $2^e$) than the main tree. The plot assumes CHORD params (300--1500 MHz, $r=16$, $0\le e\le 3$).}
 \label{fig:early_triggers}
 \end{figure}
 
 \begin{figure}[ht]
 \centering
 \includegraphics[width=0.85\textwidth]{figs/tree_segments.pdf}
-\caption{The ten {\tt DedispersionTrees} from Table\ \ref{tab:chord_sb2_et}, shown as line segments in the (DM, triggering latency) plane. For each tree $(p, \delta)$, the value of $p$ determines the DM range, and the value of $\delta$ determines the slope.}
+\caption{The ten {\tt DedispersionTrees} from Table\ \ref{tab:chord_sb2_et}, shown as line segments in the (DM, triggering latency) plane. For each tree $(p, e)$, the value of $p$ determines the DM range, and the value of $e$ determines the slope.}
 \label{fig:tree_segments}
 \end{figure}
 
@@ -435,7 +435,7 @@ r_{\rm top} &= {\tt toplevel\_tree\_rank} & \mbox{ (toplevel tree rank, specifie
 and the following per-tree parameters:
 \begin{align}
 p &= {\tt primary\_tree\_index} & \mbox{ (primary tree index; input is time-downsampled by $2^p$)} \nn \\
-\delta &= {\tt delta\_rank}  & \mbox{ (``earliness'' of trigger)} \nn \\
+e &= {\tt early\_trigger\_level}  & \mbox{ (``earliness'' of trigger)} \nn \\
 T_{\rm ds} &= {\tt time\_downsampling} & \mbox{ (time coarse-graining factor in peak-finding kernel)} \nn \\
 D_{\rm ds} &= {\tt dm\_downsampling}   & \mbox{ (dm coarse-graining factor in peak-finding kernel)} \nn
 \end{align}
@@ -449,8 +449,8 @@ for each tree, indexed by (dm,time). (In the code, there is also a beam axis, om
 the notes for simplicity). The per-tree array shape $({\tt ndm\_out}, {\tt nt\_out})$ is given by:
 \begin{align}
 {\tt ndm\_out} &= \begin{cases}
-  2^{r_{\rm top} - \delta} / D_{\rm ds} & \mbox{ if } p=0 \\
-  2^{r_{\rm top} - \delta - 1} / D_{\rm ds} & \mbox{ if } p \ge 1
+  2^{r_{\rm top} - e} / D_{\rm ds} & \mbox{ if } p=0 \\
+  2^{r_{\rm top} - e - 1} / D_{\rm ds} & \mbox{ if } p \ge 1
 \end{cases} \label{eq:ndm_out} \\
 {\tt nt\_out} &= \frac{T_{\rm in}}{2^p T_{\rm ds}} \label{eq:nt_out}
 \end{align}
@@ -499,8 +499,8 @@ To derive Eqs.\ (\ref{eq:ndm_out})--(\ref{eq:dlo_dhi}), we walk through steps in
      2^{r_{\rm top}-1} & \mbox{ if } p > 0 \\
   \end{cases}
   \end{equation}
-  If this is an early-triggered tree with $\delta > 0$, then the {\em full-band} delay
-  range is unchanged, but the spacing between trial DMs increases by $2^\delta$, so
+  If this is an early-triggered tree with $e > 0$, then the {\em full-band} delay
+  range is unchanged, but the spacing between trial DMs increases by $2^e$, so
   {\tt ndm\_out} decreases by the same factor:
   \begin{equation}
    d_{\rm lo} = \begin{cases}
@@ -511,8 +511,8 @@ To derive Eqs.\ (\ref{eq:ndm_out})--(\ref{eq:dlo_dhi}), we walk through steps in
    d_{\rm hi} = 2^{r_{\rm top} + p}
      \hspace{1cm}
    {\tt ndm\_out} = \begin{cases}
-     2^{r_{\rm top}-\delta} & \mbox{ if } p = 0 \\
-     2^{r_{\rm top}-\delta-1} & \mbox{ if } p > 0 \\
+     2^{r_{\rm top}-e} & \mbox{ if } p = 0 \\
+     2^{r_{\rm top}-e-1} & \mbox{ if } p > 0 \\
   \end{cases}
   \end{equation}
   Finally, we downsample the output (max-ing, not averaging!) by $D_{\rm ds}$.
@@ -526,7 +526,7 @@ In the grouper, a peak in the (dm,time) plane is identified by a pair of indices
 $0 \le {\tt idm} < {\tt ndm\_out}$ and $0 \le {\tt it} < {\tt nt\_out}$.
 Before sending the event to the sifter, we must convert to a physical DM and arrival time.
 
-For a tree without an early trigger (i.e.\ $\delta=0$), we convert {\tt idm} and {\tt it} to $d$ and $t$ 
+For a tree without an early trigger (i.e.\ $e=0$), we convert {\tt idm} and {\tt it} to $d$ and $t$ 
 as follows:
 \begin{equation}
 d = d_{\rm lo} + \big( d_{\rm hi} - d_{\rm lo} \big) \, \frac{{\tt idm} + 0.5}{{\tt ndm\_out}}
@@ -539,7 +539,7 @@ Then we convert $d$ (full-band delay, in ``units'' of the input time sample leng
 and convert $t$ (arrival time relative to the start of the time chunk, in ``units'' of the 
 input time sample length) to a physical time.
 
-If the tree has an early trigger (i.e.\ $\delta>0$), then there is an extra subtlety.
+If the tree has an early trigger (i.e.\ $e>0$), then there is an extra subtlety.
 The value of $d$ in Eq.\ (\ref{eq:idm_it}) is the {\em full-band} dispersion delay, 
 but the time $t$ in Eq.\ (\ref{eq:idm_it}) is the arrival time {\em at the trigger frequency}.
 The sifter expects the arrival time {\em at the lowest frequency in the full band}, which
@@ -551,7 +551,7 @@ element. In the future, we'll add code to recover the fine-grained position, usi
 array uses an ``encoding'' that's convenient in the GPU kernel, and I need to write code
 to decode it.)}
 \begin{equation}
-t' = t + \big( 1 - 2^{-\delta} \big) \, d \label{eq:idm_it_early}
+t' = t + \big( 1 - 2^{-e} \big) \, d \label{eq:idm_it_early}
 \end{equation}
 
 \end{document}

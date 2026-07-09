@@ -140,8 +140,9 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
     // Step 2: copy from 'downsampled_inputs' to 'dedispersion_buffers'.
     // In downsampled trees, we compute twice as many DMs as necessary, then drop the bottom half.
     // Each early trigger is computed in an independent tree, by disregarding some input channels.
-    // Outer vector length is nout, inner shape is (beams_per_batch, 2^weird_rank, input_nt / pow2(ipri)).
-    //   where weird_rank = stage1_dd_rank + early_stage2_dd_rank + (is_downsampled ? 1 : 0)
+    // Outer vector length is nout, inner shape is (beams_per_batch, 2^ref_rank, input_nt / pow2(ipri)),
+    //   where ref_rank = tree.total_rank() + (is_downsampled ? 1 : 0) is the rank of the
+    //   one-stage reference tree.
     
     vector<Array<float>> dedispersion_buffers;  // length ntrees
 
@@ -172,21 +173,20 @@ ReferenceDedisperser0::ReferenceDedisperser0(const Params &params) :
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = trees.at(itree);
 
-        long out_rank = tree.amb_rank + tree.early_dd_rank;
         long out_ntime = tree.nt_ds;
         bool is_downsampled = (tree.primary_tree_index > 0);
-        long dd_rank = out_rank + (is_downsampled ? 1 : 0);
+        long ref_rank = tree.total_rank() + (is_downsampled ? 1 : 0);
         long ndm_out = tree.ndm_out * (is_downsampled ? 2 : 1);
         long M = tree.frequency_subbands.M;
 
-        this->dedispersion_buffers.at(itree) = Array<float> ({ beams_per_batch, pow2(dd_rank), out_ntime }, af_uhost | af_zero);
+        this->dedispersion_buffers.at(itree) = Array<float> ({ beams_per_batch, pow2(ref_rank), out_ntime }, af_uhost | af_zero);
         this->subband_buffers.at(itree) = Array<float> ({beams_per_batch, ndm_out, M, tree.nt_ds}, af_uhost | af_zero);
 
         for (int ibatch = 0; ibatch < nbatches; ibatch++) {
             ReferenceTree::Params tree_params;
             tree_params.num_beams = beams_per_batch;
             tree_params.amb_rank = 0;
-            tree_params.dd_rank = dd_rank;
+            tree_params.dd_rank = ref_rank;
             tree_params.ntime = out_ntime;
             tree_params.nspec = 1;
             tree_params.subband_counts = tree.frequency_subbands.subband_counts;
@@ -224,13 +224,12 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
     for (int itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = trees.at(itree);
 
-        long out_rank = tree.amb_rank + tree.early_dd_rank;
         long out_ntime = tree.nt_ds;
         long ipri = tree.primary_tree_index;
         bool is_downsampled = (ipri > 0);
-        long dd_rank = out_rank + (is_downsampled ? 1 : 0);
-        
-        Array<float> in = downsampled_inputs.at(ipri).slice(1, 0, pow2(dd_rank));
+        long ref_rank = tree.total_rank() + (is_downsampled ? 1 : 0);
+
+        Array<float> in = downsampled_inputs.at(ipri).slice(1, 0, pow2(ref_rank));
         Array<float> dd = dedispersion_buffers.at(itree);
         
         // Step 2: copy from 'downsampled_inputs' to 'dedispersion_buffers'.
@@ -241,7 +240,7 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
         // Vector length is (nbatches * ntrees).
         // Note dd->dd2 reshape: (B,D,T) -> (B,1,D,T).
 
-        Array<float> dd2 = dd.reshape({beams_per_batch, 1, pow2(dd_rank), out_ntime});
+        Array<float> dd2 = dd.reshape({beams_per_batch, 1, pow2(ref_rank), out_ntime});
         shared_ptr<ReferenceTree> t = reference_trees.at(ibatch*ntrees + itree);
         t->dedisperse(dd2, subband_buffers.at(itree));
 
@@ -333,12 +332,12 @@ ReferenceDedisperser1::ReferenceDedisperser1(const Params &params) :
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = trees.at(itree);
 
-        long rank = tree.amb_rank + tree.early_dd_rank;
+        long rank = tree.total_rank();
         long ntime = tree.nt_ds;
         long ipri = tree.primary_tree_index;
         bool is_downsampled = (ipri > 0);
         long stage2_amb_rank = tree.amb_rank;
-        long stage2_dd_rank = tree.early_dd_rank;
+        long stage2_dd_rank = tree.dd_rank;
 
         xassert_eq(rank, stage2_amb_rank + stage2_dd_rank);
         xassert_eq(ipri, tree.primary_tree_index);
@@ -404,9 +403,9 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = trees.at(itree);
 
-        long rank = tree.amb_rank + tree.early_dd_rank;
+        long rank = tree.total_rank();
         long ipri = tree.primary_tree_index;
-        
+
         Array<void> src = stage1_dd_buf.bufs.at(ipri);  // shape (beams_per_batch, 2^rank_ambient, ntime)
         src = src.slice(1, 0, pow2(rank));                  // shape (beams_per_batch, 2^rank, ntime)
 

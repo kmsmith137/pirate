@@ -516,9 +516,9 @@ class ServerTester:
 
         # Comparison threshold, per tree -- same formula as test_one:
         #   eps = 3 * dtype.precision * sqrt(n+2),
-        #   n = primary_tree_index + amb_rank + early_dd_rank.
+        #   n = primary_tree_index + total_rank.
         prec = p['config'].dtype.precision
-        self.eps = [3.0 * prec * math.sqrt(tr.primary_tree_index + tr.amb_rank + tr.early_dd_rank + 2)
+        self.eps = [3.0 * prec * math.sqrt(tr.primary_tree_index + tr.total_rank() + 2)
                     for tr in trees]
 
         # First child message: the handshake echo (arrives once the producer's

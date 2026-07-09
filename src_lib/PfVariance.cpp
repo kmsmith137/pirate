@@ -259,7 +259,7 @@ PfAvarApproximation::PfAvarApproximation(const shared_ptr<DedispersionPlan> &pla
     for (long t = 0; t < ntrees; t++) {
         const DedispersionTree &tr = plan->trees[t];
         const FrequencySubbands &fs = tr.frequency_subbands;
-        tree_r[t] = tr.amb_rank + tr.early_dd_rank;
+        tree_r[t] = tr.total_rank();
         tree_R[t] = fs.pf_rank;
         tree_L[t] = integer_log2(tr.pf.wt_dm_downsampling);
         tree_P[t] = tr.nprofiles;
