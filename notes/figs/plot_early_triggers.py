@@ -9,14 +9,14 @@ showing a single dispersed burst in two coordinate systems:
   - right panel: the radio-frequency plane (MHz, LINEAR scale, vs time), where
                  the same burst is the familiar nu^-2 dispersion sweep.
 
-In both panels the early triggers delta=0,1,2,3 are dashed horizontal lines: an
-early trigger of "earliness" delta dedisperses only the top 2^(r-delta) tree-freq
+In both panels the early triggers e=0,1,2,3 are dashed horizontal lines: an
+early trigger of level e dedisperses only the top 2^(r-e) tree-freq
 channels, so its dedispersed sum is complete when the burst sweeps down to that
 line. Time is in units of the full-band dispersion delay D, so the lines are
-crossed at t/D = 2^-delta (the trigger's latency fraction).
+crossed at t/D = 2^-e (the trigger's latency fraction).
 
-The trigger tree-freq indices (2^(r-delta)) and frequencies
-(delay_to_frequency(2^(r-delta))) are read from the config; nothing is hardcoded.
+The trigger tree-freq indices (2^(r-e)) and frequencies
+(delay_to_frequency(2^(r-e))) are read from the config; nothing is hardcoded.
 
 Run:  python3 notes/figs/plot_early_triggers.py
 """
@@ -33,8 +33,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(_HERE, "..", "..", "configs", "dedispersion", "chord_sb2_et.yml")
 OUTPUT = os.path.join(_HERE, "early_triggers.pdf")
 
-# One color per early-trigger "earliness" delta (shared with plot_tree_segments.py).
-DELTA_COLORS = ["#1f4e8c", "#2e8b3d", "#c44e1f", "#8a4fbf"]
+# One color per early-trigger level e (shared with plot_tree_segments.py).
+ET_COLORS = ["#1f4e8c", "#2e8b3d", "#c44e1f", "#8a4fbf"]
 
 
 def main(output=OUTPUT):
@@ -49,13 +49,13 @@ def main(output=OUTPUT):
     })
 
     config = DedispersionConfig.from_yaml(CONFIG)
-    r = config.tree_rank
+    r = config.toplevel_tree_rank
     N = 1 << r                       # 2^r tree-freq channels
-    deltas = [0, 1, 2, 3]            # earliness values illustrated
+    et_levels = [0, 1, 2, 3]         # early-trigger levels illustrated
 
-    # Trigger lines: delta -> (tree-freq index, radio frequency).
-    trig_idx = {d: 1 << (r - d) for d in deltas}             # 2^(r-delta)
-    trig_mhz = {d: config.delay_to_frequency(trig_idx[d]) for d in deltas}
+    # Trigger lines: et_level -> (tree-freq index, radio frequency).
+    trig_idx = {e: 1 << (r - e) for e in et_levels}          # 2^(r-e)
+    trig_mhz = {e: config.delay_to_frequency(trig_idx[e]) for e in et_levels}
     fhi = config.zone_freq_edges[-1]
     flo = config.zone_freq_edges[0]
 
@@ -76,33 +76,33 @@ def main(output=OUTPUT):
     # --- Left panel: tree-freq index (linear), burst is a straight line ---
     ax_t.plot([0, 1], [0, N], color="0.15", lw=2.0, zorder=4)
     ymax_t = 1.08 * N
-    for d in deltas:
-        y = trig_idx[d]
-        c = DELTA_COLORS[d]
+    for e in et_levels:
+        y = trig_idx[e]
+        c = ET_COLORS[e]
         ax_t.axhline(y, ls="--", lw=1.1, color=c, zorder=2,
-                     label=rf"$\delta={d}$  ({2 ** (6 - d)}K tree-freqs)")
-        ax_t.plot(2.0 ** (-d), y, "o", ms=4.5, color=c, zorder=5)  # trigger fires here
+                     label=rf"$e={e}$  ({2 ** (6 - e)}K tree-freqs)")
+        ax_t.plot(2.0 ** (-e), y, "o", ms=4.5, color=c, zorder=5)  # trigger fires here
     decorate_x(ax_t)
     ax_t.set_ylim(0, ymax_t)
     ax_t.set_yticks([0, N // 8, N // 4, N // 2, N])
     ax_t.set_yticklabels(["0", "8K", "16K", "32K", "64K"])
     ax_t.set_ylabel(r"tree-freq index  ($0\leq f<2^{%d}$)" % r)
     ax_t.set_title("(tree-freq, time) plane", fontsize=10)
-    # Legend in the upper-left, its top just below the delta=0 line (order 0 -> 3).
+    # Legend in the upper-left, its top just below the e=0 line (order 0 -> 3).
     ax_t.legend(loc="upper left", bbox_to_anchor=(0.03, (N / ymax_t) - 0.03),
                 fontsize=8, frameon=True, framealpha=0.9, edgecolor="0.8",
                 handlelength=1.7, borderpad=0.5, labelspacing=0.4)
 
     # --- Right panel: radio frequency (MHz, linear), burst is a nu^-2 sweep ---
     ax_f.plot(tau, track_mhz, color="0.15", lw=2.0, zorder=4)
-    for d in deltas:
-        y = trig_mhz[d]
-        c = DELTA_COLORS[d]
+    for e in et_levels:
+        y = trig_mhz[e]
+        c = ET_COLORS[e]
         ax_f.axhline(y, ls="--", lw=1.1, color=c, zorder=2,
-                     label=rf"$\delta={d}$  ({trig_mhz[d]:.0f} MHz trigger)")
-        ax_f.plot(2.0 ** (-d), y, "o", ms=4.5, color=c, zorder=5)
+                     label=rf"$e={e}$  ({trig_mhz[e]:.0f} MHz trigger)")
+        ax_f.plot(2.0 ** (-e), y, "o", ms=4.5, color=c, zorder=5)
     decorate_x(ax_f)
-    ax_f.set_ylim(flo - 12, fhi)   # dip below the band bottom so the delta=0 line is visible
+    ax_f.set_ylim(flo - 12, fhi)   # dip below the band bottom so the e=0 line is visible
     ax_f.set_yticks([300, 600, 900, 1200, 1500])
     ax_f.set_ylabel("radio frequency (MHz)")
     ax_f.set_title("(radio-frequency, time) plane", fontsize=10)

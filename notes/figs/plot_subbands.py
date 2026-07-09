@@ -40,7 +40,7 @@ def collect_subbands(config):
     keys: level, tlo/thi (tree-freq index range, 0..2^r) and freq_lo/freq_hi (frequency
     range in MHz).
     """
-    r = config.tree_rank
+    r = config.toplevel_tree_rank
     counts = list(config.frequency_subband_counts)
     R = len(counts) - 1
     fs = FrequencySubbands(counts)
