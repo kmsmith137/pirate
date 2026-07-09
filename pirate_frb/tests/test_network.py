@@ -560,24 +560,32 @@ class NetworkTester:
             _verify_stream_files).
 
         All three streams: same beams, fpga range [0, end) with end chosen
-        K chunks past the server's current position at start time. Retries
-        every turn until the server is rb_initialized.
+        K chunks past the highest chunk queued so far on the sender side.
+        Retries every turn until the server is rb_initialized.
         """
         if (self.stream_group is not None) or (iouter < 250):
             return
 
         p = self.p
-        K = 8   # chunks of stream lifetime beyond the start-time position
+        K = 8   # chunks of stream lifetime beyond the highest queued chunk
         spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
         sel_beams = self.beam_ids[:min(2, len(self.beam_ids))]
         acqdir_shared = "stream_shared"
         acqdir_c      = "stream_c/sub"
 
-        try:
-            # Current position; the streams' chunk range is [0, c1 + K].
-            c1 = self.rpc_client.get_status().rb_processed // p['nbeams']
-            end_fpga = (c1 + K + 1) * spc
+        # Highest chunk enqueued to any FakeXEngine worker (wpos[w] = next
+        # minichunk to enqueue). The streams' chunk range is [0, cq + K].
+        #
+        # Basing the range on the sender's queued position (rather than the
+        # server's current position, via GetStatus) makes the server-side
+        # "entirely in the past" rejection impossible instead of merely
+        # unlikely: the ring buffer only advances when new data (or skips)
+        # arrive, so rb_processed/nbeams <= cq + 1 <= cq + K -- and we are
+        # the thread that enqueues, so cq cannot grow before the RPC lands.
+        cq = (int(np.max(self.wpos)) - 1) // self.mpc
+        end_fpga = (cq + K + 1) * spc
 
+        try:
             for stream_name, acqdir in [("stream_a", acqdir_shared),
                                 ("stream_b", acqdir_shared),
                                 ("stream_c", acqdir_c)]:
@@ -598,7 +606,7 @@ class NetworkTester:
         c0 = self.rpc_client.get_status().rb_processed // p['nbeams']
 
         self.stream_group = dict(
-            sel_beams=sel_beams, spc=spc, c0=c0, chunk_last=(c1 + K),
+            sel_beams=sel_beams, spc=spc, c0=c0, chunk_last=(cq + K),
             acqdir_shared=acqdir_shared, acqdir_c=acqdir_c)
 
     def _compute_stream_expectations(self):
