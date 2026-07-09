@@ -139,7 +139,7 @@ double DedispersionConfig::delay_to_frequency(double delay) const
     
     double freq_lo = zone_freq_edges.front();
     double freq_hi = zone_freq_edges.back();
-    double ntree = pow2(tree_rank);
+    double ntree = pow2(toplevel_tree_rank);
     double eps = 1.0e-5 * ntree;
     
     if ((delay < -eps) || (delay > ntree + eps)) {
@@ -168,7 +168,7 @@ double DedispersionConfig::frequency_to_delay(double freq) const
     
     double freq_lo = zone_freq_edges.front();
     double freq_hi = zone_freq_edges.back();
-    double ntree = pow2(tree_rank);
+    double ntree = pow2(toplevel_tree_rank);
     double eps = 1.0e-5 * (freq_hi - freq_lo);
     
     if ((freq < freq_lo - eps) || (freq > freq_hi + eps)) {
@@ -217,11 +217,11 @@ double DedispersionConfig::dm_per_unit_delay() const
 double DedispersionConfig::max_dm_of_all_trees() const
 {
     // See DedispersionPlan.cpp: primary tree 'p' searches up to dm_max = dm0 * 2^p,
-    // with dm0 = dm_per_unit_delay() * 2^tree_rank. dm_max is monotonic in p and does
+    // with dm0 = dm_per_unit_delay() * 2^toplevel_tree_rank. dm_max is monotonic in p and does
     // not depend on the early-trigger delta_rank, so the largest DM across all trees
     // is at p = num_primary_trees() - 1.
     xassert(num_primary_trees() >= 1);
-    double dm0 = dm_per_unit_delay() * double(pow2(tree_rank));
+    double dm0 = dm_per_unit_delay() * double(pow2(toplevel_tree_rank));
     return dm0 * double(pow2(num_primary_trees() - 1));
 }
 
@@ -238,7 +238,7 @@ long DedispersionConfig::max_width_of_base_tree() const
 
 Array<double> DedispersionConfig::make_channel_map() const
 {
-    long nchan = pow2(tree_rank);
+    long nchan = pow2(toplevel_tree_rank);
     Array<double> channel_map({nchan+1}, af_rhost);
     
     for (long n = 0; n <= nchan; n++) {
@@ -279,7 +279,7 @@ void DedispersionConfig::test() const
     double freq_lo = zone_freq_edges.front();
     double freq_hi = zone_freq_edges.back();
     double tot_nfreq = this->get_total_nfreq();
-    double ntree = pow2(tree_rank);
+    double ntree = pow2(toplevel_tree_rank);
     
     // Test frequency_to_index / index_to_frequency at all zone boundaries.
     // E.g. if freq=zone_freq_edges[i], then index = sum_{j<i} zone_nfreq[j].
@@ -333,7 +333,7 @@ void DedispersionConfig::test() const
 void DedispersionConfig::validate() const
 {
     // Check that all members have been initialized.
-    xassert(tree_rank > 0);
+    xassert(toplevel_tree_rank > 0);
     xassert(primary_trees.size() > 0);
     xassert(time_samples_per_chunk > 0);
     xassert(time_sample_ms > 0);
@@ -341,7 +341,7 @@ void DedispersionConfig::validate() const
     xassert(beams_per_batch > 0);
     xassert(num_active_batches > 0);
 
-    xassert_le(tree_rank, constants::max_tree_rank);
+    xassert_le(toplevel_tree_rank, constants::max_tree_rank);
     xassert_le(num_primary_trees(), constants::max_primary_trees);
 
     // Validate zone_nfreq and zone_freq_edges.
@@ -382,7 +382,7 @@ void DedispersionConfig::validate() const
     for (long ipri = 0; ipri < num_primary_trees(); ipri++) {
         const PrimaryTree &pt = primary_trees.at(ipri);
 
-        long ds_rank = ipri ? (tree_rank-1) : (tree_rank);
+        long ds_rank = ipri ? (toplevel_tree_rank-1) : (toplevel_tree_rank);
         long ds_stage1_rank = ds_rank / 2;
 
         // Primary tree ipri expands into early-trigger trees with delta_rank =
@@ -486,14 +486,14 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
     if (verbose) {
         stringstream ss;
         ss << "Core dedispersion parameters.\n";
-        ss << "The number of \"tree\" channels is ntree = 2^tree_rank.\n";
-        ss << "The first primary tree (p=0) searches delay range [0, 2^tree_rank] time samples.\n";
+        ss << "The number of \"tree\" channels is ntree = 2^toplevel_tree_rank.\n";
+        ss << "The first primary tree (p=0) searches delay range [0, 2^toplevel_tree_rank] time samples.\n";
         ss << "Downsampled primary trees (p > 0) downsample in time by 2^p, to search beyond the diagonal DM.\n";
         ss << "In this config, the following DM ranges are searched by each primary tree:";
 
         for (long p = 0; p < num_primary_trees(); p++) {
-            long delay_lo = (p == 0) ? 0 : pow2(tree_rank + p - 1);
-            long delay_hi = pow2(tree_rank + p);
+            long delay_lo = (p == 0) ? 0 : pow2(toplevel_tree_rank + p - 1);
+            long delay_hi = pow2(toplevel_tree_rank + p);
             double dm_lo = delay_lo * this->dm_per_unit_delay();
             double dm_hi = delay_hi * this->dm_per_unit_delay();
             double dt = time_sample_ms * pow2(p);
@@ -507,7 +507,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         emitter << YAML::Newline << YAML::Newline << YAML::Comment(ss.str()) << YAML::Newline << YAML::Newline;
     }
 
-    emitter << YAML::Key << "tree_rank" << YAML::Value << tree_rank;
+    emitter << YAML::Key << "toplevel_tree_rank" << YAML::Value << toplevel_tree_rank;
 
     if (verbose)
         emitter << YAML::Newline;
@@ -557,7 +557,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             "All values must be powers of two.\n"
             "  num_early_triggers: number of early triggers (required, can be zero)\n"
             "  max_width: max width of peak-finding kernel, in \"tree\" time samples (required)\n"
-            "  dm_downsampling: downsampling factor of coarse-grained array, relative to tree (optional, default=2^ceil(tree_rank/4))\n"
+            "  dm_downsampling: downsampling factor of coarse-grained array, relative to tree (optional, default=2^ceil(toplevel_tree_rank/4))\n"
             "  time_downsampling: downsampling factor of coarse-grained array (optional, default=dm_downsampling)\n"
             "  wt_dm_downsampling: downsampling factor of weights array (required, must be >= dm_downsampling)\n"
             "  wt_time_downsampling: downsampling factor of weights array (required, must be >= time_downsampling)"
@@ -588,7 +588,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             stringstream ss;
             ss << fixed << setprecision(1) << "p=" << p << ": early triggers at ";
             for (long delta = pt.num_early_triggers; delta > 0; delta--) {
-                double freq = this->delay_to_frequency(pow2(tree_rank - delta));
+                double freq = this->delay_to_frequency(pow2(toplevel_tree_rank - delta));
                 ss << freq << ((delta > 1) ? ", " : " MHz");
             }
             emitter << YAML::Comment(ss.str());
@@ -648,7 +648,14 @@ DedispersionConfig DedispersionConfig::from_yaml(const string &filename)
 // static member function
 DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 {
-    // Detect the old (pre-primary_trees) config syntax and give a targeted error.
+    // Detect old config syntax and give targeted errors.
+    if (f.has_key("tree_rank")) {
+        stringstream ss;
+        ss << f.name << ": key 'tree_rank' is from an old config syntax -- it has been"
+           << " renamed to 'toplevel_tree_rank' (same meaning).";
+        throw runtime_error(ss.str());
+    }
+
     // (These keys were replaced by 'primary_trees' -- one entry per DM range, with
     // early triggers folded in as 'num_early_triggers'.)
     for (const char *k: { "peak_finding_params", "early_triggers", "num_downsampling_levels" }) {
@@ -667,7 +674,7 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     ret.zone_nfreq = f.get_vector<long> ("zone_nfreq");
     ret.zone_freq_edges = f.get_vector<double> ("zone_freq_edges");
     ret.time_sample_ms = f.get_scalar<double> ("time_sample_ms");
-    ret.tree_rank = f.get_scalar<long> ("tree_rank");
+    ret.toplevel_tree_rank = f.get_scalar<long> ("toplevel_tree_rank");
     ret.time_samples_per_chunk = f.get_scalar<long> ("time_samples_per_chunk");
     ret.dtype = Dtype::from_str(f.get_scalar<string> ("dtype"));
     ret.beams_per_gpu = f.get_scalar<long> ("beams_per_gpu");
@@ -726,7 +733,7 @@ void DedispersionConfig::emit_cpp(ostream &os, const char *name, int indent) con
     os << s << "zone_nfreq = " << ksgpu::brace_str(zone_nfreq) << ";\n"
        << s << "zone_freq_edges = " << ksgpu::brace_str(zone_freq_edges) << ";\n"
        << s << "time_sample_ms = " << time_sample_ms << ";\n"
-       << s << "tree_rank = " << tree_rank << ";\n"
+       << s << "toplevel_tree_rank = " << toplevel_tree_rank << ";\n"
        << s << "time_samples_per_chunk = " << time_samples_per_chunk << ";\n"
        << s << "dtype = Dtype::from_str(" << dtype.str() << ");\n"
        << s << "frequency_subband_counts = " << ksgpu::brace_str(frequency_subband_counts) << ";\n"
@@ -803,15 +810,15 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     ret.dtype = my_keys.at(0).dtype;
     ret.frequency_subband_counts = my_keys.at(0).subband_counts;
 
-    // Tree rank.
-    long min_tree_rank = max(2 * my_keys.at(0).dd_rank - 1, 2L);
-    long max_tree_rank = (2 * my_keys.at(0).dd_rank);
-    ret.tree_rank = rand_int(min_tree_rank, max_tree_rank+1);
+    // Toplevel tree rank.
+    long min_toplevel_rank = max(2 * my_keys.at(0).dd_rank - 1, 2L);
+    long max_toplevel_rank = (2 * my_keys.at(0).dd_rank);
+    ret.toplevel_tree_rank = rand_int(min_toplevel_rank, max_toplevel_rank+1);
 
     // Frequency zones.
     long nzones = rand_int(1,6);
-    long zone_nfreq_min = max(pow2(ret.tree_rank)/4, 1L);
-    long zone_nfreq_max = pow2(ret.tree_rank);
+    long zone_nfreq_min = max(pow2(ret.toplevel_tree_rank)/4, 1L);
+    long zone_nfreq_max = pow2(ret.toplevel_tree_rank);
     ret.zone_nfreq = rand_int_vec(nzones, zone_nfreq_min, zone_nfreq_max);
     ret.zone_freq_edges = rand_uniform_vec(nzones+1, 200.0, 2000.0);
     std::sort(ret.zone_freq_edges.begin(), ret.zone_freq_edges.end());
@@ -821,7 +828,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
     // Choose the number of primary trees (npri) and my_keys[1:].
 
-    long ds_stage2_dd_rank = ret.tree_rank / 2;
+    long ds_stage2_dd_rank = ret.toplevel_tree_rank / 2;
     long ds_pf_rank = (ds_stage2_dd_rank + 1) / 2;
     vector<long> ds_subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, 0, ds_pf_rank);
 
@@ -868,7 +875,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     ret.num_active_batches = rand_int(1,v[2]+1);
 
     // GPU configuration.
-    long max_delay = pow2(ret.tree_rank + npri - 1);
+    long max_delay = pow2(ret.toplevel_tree_rank + npri - 1);
     long max_clag = (max_delay / ret.time_samples_per_chunk) + 1;
     ret.max_gpu_clag = rand_int(0, max_clag+1);
 
@@ -895,7 +902,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     for (long ipri = 0; ipri < npri; ipri++) {
         const Key2 &k = my_keys.at(ipri);
 
-        long tot_rank = ipri ? (ret.tree_rank-1) : ret.tree_rank;
+        long tot_rank = ipri ? (ret.toplevel_tree_rank-1) : ret.toplevel_tree_rank;
         long stage1_dd_rank = tot_rank / 2;
         long stage2_dd_rank = tot_rank - stage1_dd_rank;
 
@@ -990,7 +997,7 @@ DedispersionConfig DedispersionConfig::make_mini_chord(Dtype dtype)
     // Parameters modelled on configs/dedispersion/chord_sb0.yml:
     //   zone_freq_edges: [300, 350, 450, 600, 800, 1500]
     //   zone_nfreq: [8192, 8192, 6144, 2048, 3584]   # total = 28160
-    //   tree_rank: 16
+    //   toplevel_tree_rank: 16
     //   time_samples_per_chunk: 2048
     //   beams_per_batch: 2
     //   time_sample_ms: 1.0
@@ -998,7 +1005,7 @@ DedispersionConfig DedispersionConfig::make_mini_chord(Dtype dtype)
     DedispersionConfig ret;
     ret.zone_freq_edges = { 300, 350, 450, 600, 800, 1500 };
     ret.zone_nfreq = { 8192, 8192, 6144, 2048, 3584 };
-    ret.tree_rank = 16;
+    ret.toplevel_tree_rank = 16;
     ret.time_sample_ms = 1.0;
     ret.time_samples_per_chunk = 2048;
     ret.dtype = dtype;

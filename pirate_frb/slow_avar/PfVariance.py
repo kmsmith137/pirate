@@ -370,7 +370,7 @@ class PfAvarExact:
 
     PfVariances are computed per-m, where the "multiplet" 0 <= m < M indexes a
     (frequency_subband, fine_dm) pair. Each per-m PfVariance has rank (r-R), where
-    r = tree_rank[itree] and R = pf_rank[itree].
+    r = tree_r[itree] and R = tree_R[itree].
 
     Members
     -------
@@ -378,7 +378,7 @@ class PfAvarExact:
       ntrees:          number of DedispersionTrees (= plan.ntrees)
       nfreq:           number of input frequency channels
       freq_variances:  length-nfreq input array containing input variances
-      tree_r:          config.tree_rank - delta - (ipri>0 ? 1 : 0), a length-ntrees array
+      tree_r:          toplevel_tree_rank - delta - (ipri>0 ? 1 : 0), a length-ntrees array
       tree_R:          pf_rank (a length-ntrees array, can differ from the config pf_rank)
       tree_P:          nprofiles (a length-ntrees array)
       tree_fs:         length-ntrees list of FrequencySubbands (= tree.frequency_subbands).
@@ -403,7 +403,7 @@ class PfAvarExact:
         assert self.freq_variances.shape == (self.nfreq,), (self.freq_variances.shape, self.nfreq)
         assert np.all(self.freq_variances > 0.0), float(self.freq_variances.min())
 
-        # First line is equivalent to: tree_r[itree] = config.tree_rank - delta - (ipri > 0).
+        # First line is equivalent to: tree_r[itree] = toplevel_tree_rank - delta - (ipri > 0).
         self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
         self.tree_P = np.array([t.nprofiles for t in plan.trees])
@@ -429,7 +429,7 @@ class PfAvarExact:
             if progress:
                 print(f"  PfAvarExact tree {itree}/{self.ntrees}: ", end="", flush=True)
                 
-            cmap_rank = r + (ipri > 0)                   # = tree_r + (ipri>0) = config.tree_rank - delta
+            cmap_rank = r + (ipri > 0)                   # = tree_r + (ipri>0) = toplevel_tree_rank - delta
             cmap = full_cmap[: (1 << cmap_rank) + 1]    # truncate to first 2^cmap_rank channels
 
             for ifreq in range(self.nfreq):
@@ -485,7 +485,7 @@ class PfAvarApproximation:
       ntrees:          number of DedispersionTrees (= plan.ntrees)
       nfreq:           number of input frequency channels
       freq_variances:  length-nfreq input array containing input variances
-      tree_r:          config.tree_rank - delta - (ipri>0 ? 1 : 0), a length-ntrees array
+      tree_r:          toplevel_tree_rank - delta - (ipri>0 ? 1 : 0), a length-ntrees array
       tree_R:          pf_rank (a length-ntrees array, can differ from the config pf_rank)
       tree_L:          log2(wt_dm_downsampling) (a length-ntrees array); requires 0 <= R <= L <= r
       tree_P:          nprofiles (a length-ntrees array)
@@ -511,7 +511,7 @@ class PfAvarApproximation:
         assert self.freq_variances.shape == (self.nfreq,), (self.freq_variances.shape, self.nfreq)
         assert np.all(self.freq_variances > 0.0), float(self.freq_variances.min())
 
-        # First line is equivalent to: tree_r[itree] = config.tree_rank - delta - (ipri > 0).
+        # First line is equivalent to: tree_r[itree] = toplevel_tree_rank - delta - (ipri > 0).
         self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
         self.tree_L = np.array([integer_log2(int(t.pf.wt_dm_downsampling)) for t in plan.trees])
@@ -560,7 +560,7 @@ class PfAvarApproximation:
             if progress and (ifreq + 1) % 1000 == 0:
                 print(".", end="", flush=True)
                 
-            sarr = SparseTileTriple.make_tree_gridding_output(full_cm, ifreq)   # rank config.tree_rank, level 0
+            sarr = SparseTileTriple.make_tree_gridding_output(full_cm, ifreq)   # rank toplevel_tree_rank, level 0
             
             for k in range(0, self._max_klevel + 1):
                 self._process_klevel(sarr, k, ifreq)
@@ -591,13 +591,13 @@ class PfAvarApproximation:
         if self._klevel_Lmax[k] < 0:
             return   # no trees at this klevel
 
-        # Iterate over singletons in 'sarr', which are indexed by 0 <= f < 2^{config.tree_rank - k}.
+        # Iterate over singletons in 'sarr', which are indexed by 0 <= f < 2^{toplevel_tree_rank - k}.
         # (For a given ifreq, only a subset of these f-indices will arise.)
 
         # Non-obvious: each tree only uses indices 0 <= f < 2^L.
-        # For a non-early tree this is the full range 0 <= f < 2^{config.tree_rank - k}.
+        # For a non-early tree this is the full range 0 <= f < 2^{toplevel_tree_rank - k}.
         # For an early tree, this range is smaller, reflecting frequencies that are available at trigger.
-        # (To see this, it may help to note that (config.tree_rank - k - delta) = L.)
+        # (To see this, it may help to note that (toplevel_tree_rank - k - delta) = L.)
         
         f0 = sarr.f0
         f1 = min(sarr.f0 + sarr.nf, 1 << self._klevel_Lmax[k])

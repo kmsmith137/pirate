@@ -89,7 +89,7 @@ public:
     long ntrees = 0;
 
     // Output: one array per tree, tree_variance[itree] has shape (N, 2^(r-L), P), where:
-    //    r = tree rank = config.tree_rank - delta_rank - (ipri>0 ? 1 : 0)
+    //    r = tree rank = config.toplevel_tree_rank - delta_rank - (ipri>0 ? 1 : 0)
     //    2^L = tree.pf.wt_dm_downsampling
     //    N = frequency_subbands.N
     // Note that the shape can also be written as (N, tree.ndm_wt, P).
@@ -109,7 +109,7 @@ private:
     std::vector<std::vector<long>> tree_n_to_flo, tree_n_to_fhi;
 
     std::vector<double> freq_variances_vec;   // (nfreq,)
-    std::vector<double> channel_map;          // plan.config.make_channel_map(), length 2^tree_rank+1
+    std::vector<double> channel_map;          // plan.config.make_channel_map(), length 2^toplevel_tree_rank+1
 
     long max_klevel = 0;
     std::vector<long> klevel_Pmax, klevel_Lmax;   // max P (or L) among trees at a given klevel

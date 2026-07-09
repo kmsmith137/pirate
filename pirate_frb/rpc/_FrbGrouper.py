@@ -236,8 +236,8 @@ class FrbGrouperInjections:
         """
         plan  = self.dedispersion_plan_yaml
         trees = plan['trees']
-        T_in  = plan['nt_in']           # input time samples per chunk  (T_in)
-        r_top = plan['toplevel_rank']   # tree rank                     (r_top)
+        T_in  = plan['nt_in']                # input time samples per chunk (T_in)
+        r_top = plan['toplevel_tree_rank']   # toplevel tree rank           (r_top)
 
         # DM per unit full-band delay, from constants::k_dm and the config's band
         # edges + sample length:  delay_ms = k_dm * DM * (f_lo^{-2} - f_hi^{-2}),

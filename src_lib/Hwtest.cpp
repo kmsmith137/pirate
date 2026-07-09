@@ -627,7 +627,7 @@ struct ChimeWorker : public Hwtest::Worker
         dedispersion_config.zone_nfreq = { 16384 };
         dedispersion_config.zone_freq_edges = { 400, 800 };
         dedispersion_config.time_sample_ms = 1.0;
-        dedispersion_config.tree_rank = 15;
+        dedispersion_config.toplevel_tree_rank = 15;
         dedispersion_config.time_samples_per_chunk = 2048;
         dedispersion_config.dtype = Dtype::from_str("float16");
         dedispersion_config.beams_per_gpu = 16;

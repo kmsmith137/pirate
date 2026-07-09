@@ -26,7 +26,7 @@ namespace pirate {
 // instances. In the first ("stage1") instance, arrays are indexed by
 // primary tree 0 <= ipri < config.num_primary_trees(), with:
 //
-//   rank = config.tree_rank - (ipri ? 1 : 0)
+//   rank = config.toplevel_tree_rank - (ipri ? 1 : 0)
 //   ntime = config.time_samples_per_chunk / 2^ipri.
 //
 // In the second ("stage2") instance, arrays are indexed by a "stage2 tree index"

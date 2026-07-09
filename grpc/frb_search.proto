@@ -132,7 +132,7 @@ message GetConfigResponse {
   string nfs_dir = 7;                  // NFS output directory (already interpolated for {user}/{date}/{home})
   int64 ssd_threads = 8;               // Number of FileWriter SSD threads
   int64 nfs_threads = 9;               // Number of FileWriter NFS threads
-  int64 tree_rank = 10;                // From config_prefilled.tree_rank
+  int64 toplevel_tree_rank = 10;       // From config_prefilled.toplevel_tree_rank
   int64 beams_per_batch = 11;          // From config_prefilled.beams_per_batch
 
   // Used by fake X-engine

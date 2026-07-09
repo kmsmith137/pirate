@@ -1389,7 +1389,7 @@ void GpuDedisperser::test_random()
     auto config = DedispersionConfig::make_random();
     config.validate();
     
-    long ntree = pow2(config.tree_rank);
+    long ntree = pow2(config.toplevel_tree_rank);
     long nt_chunk = config.time_samples_per_chunk;
     long min_nchunks = (ntree / nt_chunk) + 2;
     long max_nchunks = (1024*1024) / (ntree * nt_chunk * config.beams_per_gpu);

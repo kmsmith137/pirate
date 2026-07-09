@@ -34,7 +34,7 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Lagge
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     
     int nb = params.beams_per_batch;
-    int r = params.input_total_rank;
+    int r = params.input_toplevel_rank;
     int s = params.output_dd_rank + 1;
     int npri = params.num_primary_trees;
     int nt2 = xdiv(params.ntime, 2);
@@ -80,7 +80,7 @@ void ReferenceLaggedDownsamplingKernel::apply(DedispersionBuffer &buf, long ibat
     
     for (long ipri = 0; ipri < params.num_primary_trees; ipri++) {
         long nb = params.beams_per_batch;
-        long rk = params.input_total_rank - (ipri ? 1 : 0);
+        long rk = params.input_toplevel_rank - (ipri ? 1 : 0);
         long nt = xdiv(params.ntime, pow2(ipri));
         xassert_shape_eq(buf.bufs.at(ipri), ({ nb, pow2(rk), nt }));
     }
@@ -96,7 +96,7 @@ void ReferenceLaggedDownsamplingKernel::apply(DedispersionBuffer &buf, long ibat
             
 void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<void> *outp, long ibatch)
 {
-    long r = params.input_total_rank;
+    long r = params.input_toplevel_rank;
     long nb = params.beams_per_batch;
     long npri = params.num_primary_trees;
     long ntime = params.ntime;

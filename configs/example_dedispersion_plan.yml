@@ -7,7 +7,7 @@
 dtype: float16                 # Data type for dedispersion computations
 nfreq: 28160                   # Total number of frequency channels across all zones
 nt_in: 2048                    # Number of time samples per input chunk
-toplevel_rank: 16              # Tree rank specified in toplevel config
+toplevel_tree_rank: 16         # Same as config toplevel_tree_rank
 num_primary_trees: 4           # Number of primary trees (one per DM range searched)
 beams_per_gpu: 60              # Number of beams processed per GPU
 beams_per_batch: 2             # Number of beams per batch

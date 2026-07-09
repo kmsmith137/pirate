@@ -47,7 +47,7 @@ struct DedispersionPlan
     long nbits = 0;                      // same as config.dtype.nbits
 
     // Stage1 trees. These trees are "internal" to dedispersion, and can probably be ignored "from outside".
-    // Total tree rank (dd_rank + amb_rank) is equal to (config.tree_rank - (primary_tree_index ? 1 : 0)).
+    // Total tree rank (dd_rank + amb_rank) is equal to (toplevel_tree_rank - (primary_tree_index ? 1 : 0)).
     // Both vectors have length (num_primary_trees).
     std::vector<long> stage1_dd_rank;    // "Active" dedispersion rank of each stage1 tree.
     std::vector<long> stage1_amb_rank;   // "Ambient" rank of each stage1 tree (= number of coarse freq channels)

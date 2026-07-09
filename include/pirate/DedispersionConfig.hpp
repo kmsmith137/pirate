@@ -34,12 +34,15 @@ struct DedispersionConfig
     double time_sample_ms = 0.0f;
 
     // Core dedispersion parameters.
-    // The number of "tree" channels is ntree = 2^tree_rank.
-    // The first primary tree (p=0) searches to dispersion delay given by 2^tree_rank time samples.
+    // The number of "tree" channels is ntree = 2^toplevel_tree_rank.
+    // The first primary tree (p=0) searches to dispersion delay given by 2^toplevel_tree_rank time samples.
     // Downsampled primary trees (0 < p < num_primary_trees) downsample in time by 2^p,
-    // then search delay range 2^(tree_rank+p-1) <= delay <= 2^(tree_rank+p).
+    // then search delay range 2^(toplevel_tree_rank+p-1) <= delay <= 2^(toplevel_tree_rank+p).
+    //
+    // (The name "toplevel" distinguishes this from the many derived tree ranks in the
+    // pipeline: individual trees have rank (toplevel_tree_rank - delta_rank - (p ? 1 : 0)).)
 
-    long tree_rank = -1;
+    long toplevel_tree_rank = -1;
     long time_samples_per_chunk = 0;
 
     // For now, there is only one dtype, which can be either float32 or float16.
@@ -59,15 +62,15 @@ struct DedispersionConfig
     std::vector<long> frequency_subband_counts;
 
     // Each "primary tree" searches a different DM range, ordered from low to high
-    // (primary tree p downsamples the input in time by 2^p, see 'tree_rank' above).
+    // (primary tree p downsamples the input in time by 2^p, see 'toplevel_tree_rank' above).
     // Each primary tree is expanded into (num_early_triggers+1) "dedispersion trees":
     // the main (full-band) tree, plus one early-trigger tree for each
     // delta_rank = 1, ..., num_early_triggers.
     //
     // An early trigger searches a subset [fmid,fmax] of the full frequency range
     // [freq_lo,freq_hi] at reduced latency. The early-trigger tree has rank
-    // (main_rank - delta_rank), where main_rank = (tree_rank - S) is the rank of the
-    // main tree, with S=0 at p=0 and S=1 for p > 0. (Detail: the downsampled trees
+    // (main_rank - delta_rank), where main_rank = (toplevel_tree_rank - S) is the rank of
+    // the main tree, with S=0 at p=0 and S=1 for p > 0. (Detail: the downsampled trees
     // have one lower rank because they search a DM range which does not start at
     // zero, see above.)
     //
@@ -80,7 +83,7 @@ struct DedispersionConfig
     {
         long num_early_triggers = 0;    // required (can be zero)
         long max_width = 0;             // required
-        long dm_downsampling = 0;       // optional (default = "2^ceil(tree_rank/4)")
+        long dm_downsampling = 0;       // optional (default = "2^ceil(toplevel_tree_rank/4)")
         long time_downsampling = 0;     // optional (default = "use value of dm_downsampling")
         long wt_dm_downsampling = 0;    // required (must be >= dm_downsampling)
         long wt_time_downsampling = 0;  // required (must be >= time_downsampling)
@@ -129,8 +132,8 @@ struct DedispersionConfig
 
     // Converts between frequency and "delay" (a scaled version of freq^(-2)).
     // Delay is defined so that d=0 corresponds to freq=freq_hi, and d=ntree corresponds to freq=freq_lo,
-    // where freq_lo=zone_freq_edges.front(), freq_hi=zone_freq_edges.back(), and ntree=2^tree_rank.
-    // Valid delay range is [0, 2^tree_rank], valid frequency range is [freq_lo, freq_hi].
+    // where freq_lo=zone_freq_edges.front(), freq_hi=zone_freq_edges.back(), and ntree=2^toplevel_tree_rank.
+    // Valid delay range is [0, 2^toplevel_tree_rank], valid frequency range is [freq_lo, freq_hi].
     double delay_to_frequency(double delay) const;
     double frequency_to_delay(double freq) const;
 
@@ -140,7 +143,7 @@ struct DedispersionConfig
     double dm_per_unit_delay() const;
 
     // Returns the largest DM (pc cm^{-3}) searched by any dedispersion tree. Mirrors the
-    // per-tree dm_max = dm_per_unit_delay() * 2^tree_rank * 2^p computed in the
+    // per-tree dm_max = dm_per_unit_delay() * 2^toplevel_tree_rank * 2^p computed in the
     // DedispersionPlan constructor; this is monotonic in the primary tree index p and
     // independent of early-trigger delta_rank, so the maximum is at p = num_primary_trees()-1.
     // (Depends only on pre-metadata config fields, so it is valid on config_prefilled.)
@@ -154,7 +157,7 @@ struct DedispersionConfig
     // Returns sum of zone_nfreq (i.e. total number of frequency channels across all zones).
     long get_total_nfreq() const;
 
-    // Returns channel_map array of length (2^tree_rank + 1), stored in CPU memory.
+    // Returns channel_map array of length (2^toplevel_tree_rank + 1), stored in CPU memory.
     // The channel_map defines the mapping between "tree" channels and frequency channels.
     // Given tree channel 0 <= n < ntree, the values (channel_map[n+1], channel_map[n])
     // define the edges of the tree channel in frequency space. (Note: channel_map is

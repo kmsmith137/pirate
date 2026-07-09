@@ -367,8 +367,8 @@ void GpuTreeGriddingKernel::time_selected()
     // Generate channel_map (stored in CPU memory).
     Array<double> channel_map = dconfig.make_channel_map();
     
-    long nfreq = dconfig.get_total_nfreq();  // 28160
-    long nchan = pow2(dconfig.tree_rank);    // 65536
+    long nfreq = dconfig.get_total_nfreq();         // 28160
+    long nchan = pow2(dconfig.toplevel_tree_rank);  // 65536
     long ntime = 2048;
     long beams_per_batch = 4;
     long nstreams = 2;  // for latency hiding

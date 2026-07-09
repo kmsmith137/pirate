@@ -1067,7 +1067,7 @@ def test_network():
         params_no_config = {k: v for k, v in t.p.items() if k != 'config'}
         print(f"    params: {params_no_config}")
         c = t.p['config']
-        print(f"    config: tree_rank={c.tree_rank}, num_primary_trees={c.num_primary_trees},"
+        print(f"    config: toplevel_tree_rank={c.toplevel_tree_rank}, num_primary_trees={c.num_primary_trees},"
               f" beams_per_batch={c.beams_per_batch}, num_active_batches={c.num_active_batches},"
               f" dtype={c.dtype}")
         t.run()

@@ -2258,7 +2258,7 @@ void FrbRpcService::_GetConfig(const fs::GetConfigRequest *request, fs::GetConfi
     // into a local config_postfilled; the prefilled values are what the
     // fake X-engine sender should mimic.)
     const DedispersionConfig &c = s->params.config_prefilled;
-    response->set_tree_rank(c.tree_rank);
+    response->set_toplevel_tree_rank(c.toplevel_tree_rank);
     response->set_beams_per_batch(c.beams_per_batch);
     for (long v : c.frequency_subband_counts)
         response->add_frequency_subband_counts(v);

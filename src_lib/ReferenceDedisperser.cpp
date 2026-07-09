@@ -133,7 +133,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 
     // Step 0: Run tree gridding kernel (input_array -> downsampled_inputs.at(0)).
     // Step 1: downsample input array (straightforward downsample, not "lagged" downsample!)
-    // Outer length is npri, inner shape is (beams_per_batch, 2^config.tree_rank, input_nt / pow2(ipri)).
+    // Outer length is npri, inner shape is (beams_per_batch, 2^config.toplevel_tree_rank, input_nt / pow2(ipri)).
     
     vector<Array<float>> downsampled_inputs;   // length num_primary_trees
 
@@ -166,7 +166,7 @@ ReferenceDedisperser0::ReferenceDedisperser0(const Params &params) :
 
     for (long ipri = 0; ipri < num_primary_trees; ipri++) {
         long nt_ds = xdiv(nt_in, pow2(ipri));
-        downsampled_inputs.at(ipri) = Array<float> ({beams_per_batch, pow2(config.tree_rank), nt_ds}, af_uhost | af_zero);
+        downsampled_inputs.at(ipri) = Array<float> ({beams_per_batch, pow2(config.toplevel_tree_rank), nt_ds}, af_uhost | af_zero);
     }
     
     for (long itree = 0; itree < ntrees; itree++) {
@@ -207,7 +207,7 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
         
         // Step 1: downsample input array (straightforward downsample, not "lagged" downsample).
         // Outer length is num_primary_trees.
-        // Inner shape is (beams_per_batch, 2^config.tree_rank, input_nt / pow2(ipri)).
+        // Inner shape is (beams_per_batch, 2^config.toplevel_tree_rank, input_nt / pow2(ipri)).
         // Reminder: 'input_array' is an alias for downsampled_inputs[0].
 
         Array<float> src = downsampled_inputs.at(ipri-1);

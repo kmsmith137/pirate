@@ -52,7 +52,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         // non-downsampled tree, but is the same for different downsampled trees.
         // This property is necessary in order for the LaggedDownsampler to work later.
 
-        int total_rank = ipri ? (config.tree_rank - 1) : config.tree_rank;
+        int total_rank = ipri ? (config.toplevel_tree_rank - 1) : config.toplevel_tree_rank;
         int st1_dd_rank = (total_rank / 2);
         int st1_amb_rank = (total_rank - st1_dd_rank);
 
@@ -78,7 +78,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
             long pf_rank = (tree.early_dd_rank + 1) / 2;
 
             // Frequency range searched by tree, accounting for early trigger.
-            long dmax = pow2(config.tree_rank - delta_rank);
+            long dmax = pow2(config.toplevel_tree_rank - delta_rank);
             double fmin = config.delay_to_frequency(dmax);
             double fmax = config.zone_freq_edges.back();
 
@@ -116,7 +116,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
             tree.nt_out = xdiv(tree.nt_ds, tree.pf.time_downsampling);
             tree.nt_wt = xdiv(tree.nt_ds, tree.pf.wt_time_downsampling);
 
-            double dm0 = config.dm_per_unit_delay() * pow2(config.tree_rank);
+            double dm0 = config.dm_per_unit_delay() * pow2(config.toplevel_tree_rank);
             tree.dm_min = dm0 * ((ipri > 0) ? pow2(ipri-1) : 0);
             tree.dm_max = dm0 * pow2(ipri);
             tree.trigger_frequency = fmin;
@@ -226,7 +226,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     tree_gridding_kernel_params.channel_map = config.make_channel_map();
     tree_gridding_kernel_params.dtype = dtype;
     tree_gridding_kernel_params.nfreq = nfreq;
-    tree_gridding_kernel_params.nchan = pow2(config.tree_rank);
+    tree_gridding_kernel_params.nchan = pow2(config.toplevel_tree_rank);
     tree_gridding_kernel_params.ntime = nt_in;
     tree_gridding_kernel_params.beams_per_batch = beams_per_batch;
     tree_gridding_kernel_params.validate();
@@ -311,7 +311,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
     // Note that 'output_dd_rank' is guaranteed to be the same for all downsampled trees.
     lds_params.dtype = dtype;
-    lds_params.input_total_rank = config.tree_rank;
+    lds_params.input_toplevel_rank = config.toplevel_tree_rank;
     lds_params.output_dd_rank = (num_primary_trees > 1) ? stage1_dd_rank.at(1) : 0;
     lds_params.num_primary_trees = num_primary_trees;
     lds_params.total_beams = beams_per_gpu;
@@ -366,9 +366,9 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
     if (verbose)
         emitter << YAML::Comment("Number of time samples per input chunk");
 
-    emitter << YAML::Key << "toplevel_rank" << YAML::Value << config.tree_rank;
+    emitter << YAML::Key << "toplevel_tree_rank" << YAML::Value << config.toplevel_tree_rank;
     if (verbose)
-        emitter << YAML::Comment("Tree rank specified in toplevel config");
+        emitter << YAML::Comment("Same as config toplevel_tree_rank");
 
     emitter << YAML::Key << "num_primary_trees" << YAML::Value << num_primary_trees;
     if (verbose)
@@ -427,7 +427,7 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
         long delta_rank = tree.pri_dd_rank - tree.early_dd_rank;
         double time_sample_ms = config.time_sample_ms;
         double ds_factor = pow2(tree.primary_tree_index);
-        double max_delay = 1.0e-3 * time_sample_ms * ds_factor * pow2(config.tree_rank - delta_rank);
+        double max_delay = 1.0e-3 * time_sample_ms * ds_factor * pow2(config.toplevel_tree_rank - delta_rank);
 
         emitter << YAML::Newline;
         emitter << YAML::BeginMap;

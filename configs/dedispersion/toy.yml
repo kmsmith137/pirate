@@ -4,7 +4,7 @@
 zone_nfreq: [640]
 zone_freq_edges: [400, 800]
 time_sample_ms: 1.0
-tree_rank: 12
+toplevel_tree_rank: 12
 time_samples_per_chunk: 256
 dtype: float32
 

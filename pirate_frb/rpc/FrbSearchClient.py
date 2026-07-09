@@ -82,7 +82,7 @@ class FrbSearchClient:
         - nfs_dir: NFS output directory (already interpolated for {user}/{date}/{home})
         - ssd_threads: number of FileWriter SSD threads
         - nfs_threads: number of FileWriter NFS threads
-        - tree_rank: from config_prefilled
+        - toplevel_tree_rank: from config_prefilled
         - beams_per_batch: from config_prefilled
         - frequency_subband_counts: list[int] from config_prefilled (a real
           search-config value, not a ``fake_`` default)

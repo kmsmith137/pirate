@@ -25,21 +25,21 @@ struct LaggedDownsamplingKernelParams
 {
     // The input to the lagged downsampling kernel is an array of shape
     //
-    //   (beams_per_batch, pow2(input_total_rank), ntime).
+    //   (beams_per_batch, pow2(input_toplevel_rank), ntime).
     //
     // The output is a length (num_primary_trees - 1) sequence of arrays,
     // indexed by 1 <= ipri < num_primary_trees, with array shape
     //
-    //   (beams_per_batch, pow2(input_total_rank-1), ntime / 2^ipri).
+    //   (beams_per_batch, pow2(input_toplevel_rank-1), ntime / 2^ipri).
     //
     // The 'output_dd_rank' parameter is the dedispersion rank of the
     // "stage1" transform that will subseqeuntly be applied to the output
     // arrays (which must be the same for all values of ipri), satisfying:
     //
-    //   0 <= output_dd_rank <= (input_total_rank-1).
+    //   0 <= output_dd_rank <= (input_toplevel_rank-1).
     
     ksgpu::Dtype dtype;                 // same as DedispersionConfig::dtype
-    long input_total_rank = -1;         // same as DedispersionConfig::tree_rank;
+    long input_toplevel_rank = -1;      // same as DedispersionConfig::toplevel_tree_rank
     long output_dd_rank = -1;           // same as DedispersionPlan::stage1_dd_rank[1]
     long num_primary_trees = -1;        // same as DedispersionConfig::num_primary_trees()
     long total_beams = 0;               // same as DedispersionConfig::beams_per_gpu
@@ -96,7 +96,7 @@ public:
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
     void allocate(BumpAllocator &allocator);
 
-    // One call to launch() processes an array of shape (beams_per_batch, pow2(input_total_rank), ntime).
+    // One call to launch() processes an array of shape (beams_per_batch, pow2(input_toplevel_rank), ntime).
     // The NULL stream is allowed, but is not the default.
     // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
     virtual void launch(DedispersionBuffer &buf, long ichunk, long ibatch, cudaStream_t stream) = 0;

@@ -107,7 +107,7 @@ def _print_config(addr, cfg):
     print(f"  nfs_dir = {cfg.nfs_dir}")
     print(f"  ssd_threads = {cfg.ssd_threads}")
     print(f"  nfs_threads = {cfg.nfs_threads}")
-    print(f"  tree_rank = {cfg.tree_rank}")
+    print(f"  toplevel_tree_rank = {cfg.toplevel_tree_rank}")
     print(f"  beams_per_batch = {cfg.beams_per_batch}")
     print(f"  frequency_subband_counts = {list(cfg.frequency_subband_counts)}")
     print(f"  min_data_mtu = {cfg.min_data_mtu}")

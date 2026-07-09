@@ -74,7 +74,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     py::class_<constants>(m, "constants",
         "Compile-time constants (pirate::constants). Read-only; assignment raises AttributeError.")
         .def_readonly_static("max_tree_rank", &constants::max_tree_rank,
-            "Maximum dedispersion tree rank (number of tree channels is 2^tree_rank).")
+            "Maximum dedispersion tree rank (upper bound on DedispersionConfig.toplevel_tree_rank).")
         .def_readonly_static("max_primary_trees", &constants::max_primary_trees,
             "Maximum number of primary trees.")
         .def_readonly_static("max_pf_width", &constants::max_pf_width,
@@ -109,7 +109,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "    config.zone_nfreq = [1024]\n"
         "    config.zone_freq_edges = [400.0, 800.0]\n"
         "    config.time_sample_ms = 0.983\n"
-        "    config.tree_rank = 13")
+        "    config.toplevel_tree_rank = 13")
           .def(py::init<>(),
                "Create an empty DedispersionConfig.\n\n"
                "All fields are initialized to default values and should be set programmatically.")
@@ -174,14 +174,14 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    Frequency in MHz")
           .def("delay_to_frequency", &DedispersionConfig::delay_to_frequency, py::arg("delay"),
                "Convert dispersion delay to frequency.\n\n"
-               "Delay is scaled so d=0 at f_max and d=2^tree_rank at f_min.\n\n"
+               "Delay is scaled so d=0 at f_max and d=2^toplevel_tree_rank at f_min.\n\n"
                "Args:\n"
                "    delay: Dispersion delay in tree units\n\n"
                "Returns:\n"
                "    Frequency in MHz")
           .def("frequency_to_delay", &DedispersionConfig::frequency_to_delay, py::arg("f"),
                "Convert frequency to dispersion delay.\n\n"
-               "Delay is scaled so d=0 at f_max and d=2^tree_rank at f_min.\n\n"
+               "Delay is scaled so d=0 at f_max and d=2^toplevel_tree_rank at f_min.\n\n"
                "Args:\n"
                "    f: Frequency in MHz\n\n"
                "Returns:\n"
@@ -201,7 +201,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def("make_channel_map", &DedispersionConfig::make_channel_map,
                "Create channel map array defining tree-to-frequency mapping.\n\n"
                "Returns:\n"
-               "    Array of length (2^tree_rank + 1) with channel boundaries")
+               "    Array of length (2^toplevel_tree_rank + 1) with channel boundaries")
           .def("make_random_freq_variances", &DedispersionConfig::make_random_freq_variances,
                py::arg("noisy") = false,
                "Random per-channel input variances for testing (one random value in [0,1] per zone).\n\n"
@@ -220,8 +220,9 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           // Core dedispersion parameters
           .def_readwrite("time_sample_ms", &DedispersionConfig::time_sample_ms,
                "Time sample length in milliseconds")
-          .def_readwrite("tree_rank", &DedispersionConfig::tree_rank,
-               "Tree rank: number of tree channels is 2^tree_rank")
+          .def_readwrite("toplevel_tree_rank", &DedispersionConfig::toplevel_tree_rank,
+               "Toplevel tree rank: number of tree channels is 2^toplevel_tree_rank.\n"
+               "Individual trees have rank (toplevel_tree_rank - delta_rank - (p ? 1 : 0)).")
           .def_readwrite("time_samples_per_chunk", &DedispersionConfig::time_samples_per_chunk,
                "Number of time samples processed per chunk")
           // Frequency sub-band configuration
