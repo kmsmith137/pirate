@@ -19,11 +19,41 @@ The "stoppable class" X is a code pattern for cascading exceptions through all t
 
 - `X` is noncopyable, nonmoveable, and always accessed through a shared_ptr.
 
-- If `X` contains pointers to other stoppable classes (any class `Y` defining `Y::stop()` is probably stoppable, please ask if it's unclear), then `X::stop()` should call `ptr->stop()` for each such pointer.
+- If `X` contains pointers to other stoppable classes (any class `Y` defining `Y::stop()` is probably stoppable, please ask if it's unclear), then `X::stop(e)` should call `ptr->stop(e)` for each such pointer, forwarding the exception (see "Error reporting" below).
 
 - If any thread in the system throws an exception, then before the thread exits, an "exception handler of last resort" will call `ptr->stop()` on all stoppable classes to which the thread holds a pointer. (Not shown in the example code below.)
 
 The idea is that there are enough stoppable classes shared between threads that an exception in any thread will cascade its exception-text into all threads, and the server will shut down cleanly (all threads will exit).
+
+## Error reporting
+
+Conventions for how the exception text reaches a human:
+
+- Cascades forward the exception: `X::stop(e)` calls `ptr->stop(e)`, not
+  `ptr->stop()`. A thread that is blocked inside a downstream object then
+  rethrows the root-cause exception, rather than a generic
+  "called on stopped instance" message.
+
+- Worker threads never print exceptions. A worker's catch-all wrapper just
+  calls `stop(std::current_exception())` and exits. The first `stop(e)` caller
+  wins: its exception is saved in `X::error` and rethrown by every subsequent
+  entry-point call. (Corollary: an error that loses the first-caller race is
+  dropped. This is deliberate -- the first error is the root cause, and later
+  errors are usually downstream consequences of it.)
+
+- The saved error ultimately surfaces as a python exception. For code that
+  naturally blocks in entry points (e.g. a consumer loop calling
+  `get_frame_set()`), nothing extra is needed. A python-driven server whose
+  driver does NOT naturally block in an entry point should provide a method
+  like `FrbServer::poll_from_python(timeout_ms)`: block until stopped or
+  timeout; on stop, rethrow the saved error (a clean stop returns normally).
+  The pybind11 binding releases the GIL, and python calls it in a loop with a
+  short timeout (~500 ms) -- a fully-blocking call would never return to the
+  interpreter, so Ctrl-C (KeyboardInterrupt) could never be delivered.
+
+- A class may deliberately map an expected external event to a clean
+  (null-error) stop -- e.g. FakeXEngine treats a receiver hangup as its normal
+  end-of-run signal. Document such cases at the stop() call site.
 
 Here is a toy example of a stoppable class X with a fixed-size ring buffer, and two entry points `push()` and `pop()`.
 If `push()` is called and the ring buffer is full, the caller blocks until space is available.

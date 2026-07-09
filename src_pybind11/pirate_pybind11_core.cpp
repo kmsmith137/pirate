@@ -1314,6 +1314,20 @@ void register_core_bindings(pybind11::module &m)
                "    RuntimeError: If called twice or after stop().")
           .def("stop", [](FrbServer &self) { self.stop(); },
                "Stop the server and all Receivers. Safe to call multiple times.")
+          .def("poll_from_python", &FrbServer::poll_from_python, py::arg("timeout_ms"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Block until the server is stopped, or until ``timeout_ms`` elapses.\n\n"
+               "Releases the GIL while blocked. Call in a loop with a short timeout\n"
+               "(e.g. 500 ms) so that Ctrl-C stays responsive: KeyboardInterrupt is\n"
+               "raised between calls, never during one.\n\n"
+               "Args:\n"
+               "    timeout_ms: Maximum time to block, in milliseconds (must be >= 0).\n\n"
+               "Returns:\n"
+               "    True if the server is stopped (a clean stop); False if the timeout\n"
+               "    expired first.\n\n"
+               "Raises:\n"
+               "    Exception: If the server stopped due to an internal error, the\n"
+               "        saved root-cause exception is re-raised here.")
           .def_property_readonly("plan", [](FrbServer &self) {
                std::lock_guard<std::mutex> lock(self.mutex);
                return self.plan;
@@ -1327,9 +1341,9 @@ void register_core_bindings(pybind11::module &m)
                std::lock_guard<std::mutex> lock(self.mutex);
                return self.is_stopped;
           }, "True if the server has been stopped, either by a stop() call or because\n"
-             "a worker/reaper/processing thread threw an exception. When this transitions\n"
-             "to True due to an internal error, the C++ side prints the exception message\n"
-             "to stderr (see FrbServer.cpp's thread-main wrappers).")
+             "a worker/reaper/processing thread threw an exception. To retrieve the\n"
+             "error itself, call poll_from_python(), which re-raises the saved\n"
+             "exception (nothing is printed to stderr).")
           .def_property_readonly("host_allocator", [](FrbServer &self) {
                return self.params.host_allocator;
           }, "BumpAllocator for host (dd_host) memory. May be async; call\n"

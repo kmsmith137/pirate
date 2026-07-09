@@ -106,6 +106,9 @@ private:
     // Helper: check if stopped, with lock held by caller.
     void _throw_if_stopped(const char *method_name);
 
+    // Helper: returns true if stop() has been called. (Acquires mutex.)
+    bool _stopped();
+
     // Worker thread main function. Returns total bytes sent.
     long _worker_main(long endpoint_index);
 

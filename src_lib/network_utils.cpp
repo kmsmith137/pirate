@@ -96,6 +96,77 @@ void Socket::connect(const std::string &ip_addr, uint16_t port)
 }
 
 
+void Socket::start_connect(const std::string &ip_addr, uint16_t port)
+{
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::start_connect() called on uninitialized socket");
+
+    struct sockaddr_in saddr;
+    inet_pton_x(saddr, ip_addr, port);
+
+    // Temporarily put the socket in non-blocking mode, so that ::connect()
+    // returns immediately (with the TCP handshake continuing in the kernel).
+    // wait_for_connect() restores blocking mode when the connection completes,
+    // unless set_nonblocking() was previously called.
+    int flags = fcntl(this->fd, F_GETFL);
+
+    if (_unlikely(flags < 0))
+        throw runtime_error(errstr(fd, "Socket::start_connect: F_GETFL fcntl"));
+    if (_unlikely(fcntl(this->fd, F_SETFL, flags | O_NONBLOCK) < 0))
+        throw runtime_error(errstr(fd, "Socket::start_connect: F_SETFL fcntl"));
+
+    int err = ::connect(this->fd, (const struct sockaddr *) &saddr, sizeof(saddr));
+
+    // EINPROGRESS is the expected "handshake underway" case.
+    if (_unlikely((err < 0) && (errno != EINPROGRESS)))
+        throw runtime_error(errstr(fd, "Socket::start_connect"));
+}
+
+
+bool Socket::wait_for_connect(int timeout_ms)
+{
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::wait_for_connect() called on uninitialized socket");
+
+    struct pollfd pfd;
+    pfd.fd = this->fd;
+    pfd.events = POLLOUT;
+    pfd.revents = 0;
+
+    int ret = poll(&pfd, 1, timeout_ms);
+
+    if (_unlikely(ret < 0))
+        throw runtime_error(errstr(fd, "Socket::wait_for_connect: poll"));
+
+    // Timeout expired; handshake still in progress. The caller may recheck
+    // its stop flag and call wait_for_connect() again.
+    if (ret == 0)
+        return false;
+
+    // Socket is writable (or in an error state); retrieve the connect() result.
+    int so_error = 0;
+    socklen_t len = sizeof(so_error);
+    this->getopt(SOL_SOCKET, SO_ERROR, &so_error, &len);
+
+    if (_unlikely(so_error != 0)) {
+        errno = so_error;
+        throw runtime_error(errstr(fd, "Socket::wait_for_connect"));
+    }
+
+    // Connected. Restore blocking mode, unless set_nonblocking() was called earlier.
+    if (!this->nonblocking) {
+        int flags = fcntl(this->fd, F_GETFL);
+
+        if (_unlikely(flags < 0))
+            throw runtime_error(errstr(fd, "Socket::wait_for_connect: F_GETFL fcntl"));
+        if (_unlikely(fcntl(this->fd, F_SETFL, flags & ~O_NONBLOCK) < 0))
+            throw runtime_error(errstr(fd, "Socket::wait_for_connect: F_SETFL fcntl"));
+    }
+
+    return true;
+}
+
+
 void Socket::bind(const std::string &ip_addr, uint16_t port)
 {
     if (_unlikely(fd < 0))

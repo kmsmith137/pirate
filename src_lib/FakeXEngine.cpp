@@ -328,6 +328,15 @@ bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbyte
             // sibling workers exit too. stop()'s atomic CAS makes
             // repeated connreset->stop() calls cheap (only the first
             // one actually sweeps).
+            //
+            // DELIBERATE null-error stop: a receiver hangup is the normal
+            // end-of-run signal for a fake X-engine (the FrbServer closes
+            // connections when its run ends), so it maps to a clean stop,
+            // and subsequent entry points raise the generic "called on
+            // stopped instance" message -- which run_fake_xengine.py treats
+            // as its benign end-of-run sentinel (_surface_real_exceptions).
+            // Do not change this to a real error without updating that
+            // filter.
             stop();
             return false;
         }
@@ -1169,7 +1178,7 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
         // SKIPs leaves its TCP connection un-established.
         bool first_send_after_connect = false;
         if (!w.connected.load(std::memory_order_relaxed)) {
-            // connect() may throw on ECONNREFUSED etc.; worker_main's
+            // Connect failures throw (e.g. ECONNREFUSED); worker_main's
             // catch handler then calls FakeXEngine::stop().
             //
             // This branch is also entered after a DISCONNECT command
@@ -1179,7 +1188,20 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
             // first_send_after_connect=true branch packs both the
             // connection header and this minichunk into one _send_all).
             w.sock = Socket(PF_INET, SOCK_STREAM);
-            w.sock.connect(w.ip_addr, w.port);
+
+            // Non-blocking connect + poll, rechecking w.is_stopped every
+            // 100 ms. (A plain blocking connect() could stall for the
+            // kernel's SYN-retry timeout, ~2 minutes, if the receiver is
+            // unreachable -- blocking stop() and the destructor for that
+            // long.)
+            w.sock.start_connect(w.ip_addr, w.port);
+
+            while (!w.sock.wait_for_connect(100)) {
+                std::lock_guard<std::mutex> lk(w.mutex);
+                if (w.is_stopped)
+                    return false;
+            }
+
             w.connected.store(true, std::memory_order_relaxed);
             first_send_after_connect = true;
         }

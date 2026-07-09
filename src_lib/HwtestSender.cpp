@@ -51,7 +51,7 @@ void HwtestSender::_throw_if_stopped(const char *method_name)
 
 void HwtestSender::add_endpoint(const string &ip_addr, long num_tcp_connections, double total_gbps, const vector<int> &vcpu_list)
 {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::unique_lock<std::mutex> lock(mutex);
     _throw_if_stopped("HwtestSender::add_endpoint");
 
     if (is_started)
@@ -63,7 +63,15 @@ void HwtestSender::add_endpoint(const string &ip_addr, long num_tcp_connections,
     e.total_gbps = total_gbps;
     e.vcpu_list = vcpu_list;
 
-    endpoints.push_back(e);
+    // Per the stoppable-class pattern, a non-precondition throw in an entry
+    // point (here, only an out-of-memory push_back) stops the object.
+    try {
+        endpoints.push_back(e);
+    } catch (...) {
+        lock.unlock();
+        this->stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -81,11 +89,20 @@ void HwtestSender::start()
     is_started = true;
     lock.unlock();
 
-    long num_endpoints = endpoints.size();
-    workers.resize(num_endpoints);
+    // If thread creation fails partway (e.g. std::system_error), stop the
+    // already-spawned workers before rethrowing; otherwise they would keep
+    // running on a not-stopped object. (The destructor stops+joins as well,
+    // but a caller that catches the exception should see a stopped object.)
+    try {
+        long num_endpoints = endpoints.size();
+        workers.resize(num_endpoints);
 
-    for (long i = 0; i < num_endpoints; i++)
-        workers[i] = std::thread(&HwtestSender::worker_main, this, i);
+        for (long i = 0; i < num_endpoints; i++)
+            workers[i] = std::thread(&HwtestSender::worker_main, this, i);
+    } catch (...) {
+        this->stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -108,6 +125,13 @@ void HwtestSender::join()
         if (w.joinable())
             w.join();
     }
+}
+
+
+bool HwtestSender::_stopped()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return is_stopped;
 }
 
 
@@ -191,6 +215,12 @@ long HwtestSender::_worker_main(long endpoint_index)
     xassert(endpoint_index < long(endpoints.size()));
     Endpoint &e = endpoints.at(endpoint_index);
 
+    // Early check: covers the window where stop() lands between start()
+    // releasing the mutex and thread creation. (Later blocking points --
+    // connect and send -- recheck is_stopped themselves.)
+    if (_stopped())
+        return 0;
+
     long nconn = e.num_tcp_connections;
     set_thread_affinity(e.vcpu_list);
 
@@ -211,8 +241,16 @@ long HwtestSender::_worker_main(long endpoint_index)
         sockets.push_back(Socket(PF_INET, SOCK_STREAM));
         Socket &socket = sockets[i];
 
-        // FIXME connect() can block for a long time if receiver is not running.
-        socket.connect(e.ip_addr, 8787);  // TCP port 8787
+        // Non-blocking connect + poll, rechecking is_stopped every 100 ms.
+        // (A plain blocking connect() could stall for the kernel's SYN-retry
+        // timeout, ~2 minutes, if the receiver is not running -- blocking
+        // stop() and the destructor for that long.)
+        socket.start_connect(e.ip_addr, 8787);  // TCP port 8787
+
+        while (!socket.wait_for_connect(100)) {
+            if (_stopped())
+                return 0;
+        }
 
         if (e.total_gbps > 0.0) {
             double nbytes_per_sec = e.total_gbps / nconn / 8.0e-9;

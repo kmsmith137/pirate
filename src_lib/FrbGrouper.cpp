@@ -284,21 +284,44 @@ void FrbGrouper::start_listening()
         opened = true;
     }
 
-    // Bind + start. The 2-arg AddListeningPort does NOT report a bind failure:
-    // if the port is already in use, BuildAndStart() still returns a non-null
-    // server, so we would "wait for FrbServer to connect" while not actually
-    // listening -- and the FrbServer that connects would hang forever. Use the
-    // 3-arg overload and check selected_port, which is 0 iff the bind failed.
-    grpc::ServerBuilder builder;
-    int selected_port = 0;
-    builder.AddListeningPort(grouper_ip_addr, grpc::InsecureServerCredentials(), &selected_port);
-    builder.RegisterService(grpc_state->service.get());
-    grpc_state->server = builder.BuildAndStart();
-    if (!grpc_state->server || (selected_port == 0))
-        throw runtime_error("FrbGrouper: failed to bind " + grouper_ip_addr
-                            + " (already in use, or malformed 'ip:port'?)");
+    // Per the stoppable-class pattern, a failure below (bind failure, thread
+    // creation failure) stops the object before rethrowing. Without this, a
+    // caller that catches the exception would be left with a zombie grouper:
+    // 'opened' is already set, no server is listening, and wait_for_handshake()
+    // / acquire_output() would block forever instead of throwing.
+    try {
+        // Bind + start. The 2-arg AddListeningPort does NOT report a bind failure:
+        // if the port is already in use, BuildAndStart() still returns a non-null
+        // server, so we would "wait for FrbServer to connect" while not actually
+        // listening -- and the FrbServer that connects would hang forever. Use the
+        // 3-arg overload and check selected_port, which is 0 iff the bind failed.
+        grpc::ServerBuilder builder;
+        int selected_port = 0;
+        builder.AddListeningPort(grouper_ip_addr, grpc::InsecureServerCredentials(), &selected_port);
+        builder.RegisterService(grpc_state->service.get());
+        grpc_state->server = builder.BuildAndStart();
+        if (!grpc_state->server || (selected_port == 0))
+            throw runtime_error("FrbGrouper: failed to bind " + grouper_ip_addr
+                                + " (already in use, or malformed 'ip:port'?)");
 
-    send_thread = std::thread(&FrbGrouper::send_thread_main, this);
+        send_thread = std::thread(&FrbGrouper::send_thread_main, this);
+    } catch (...) {
+        // If the failure occurred after BuildAndStart() (e.g. send-thread
+        // creation failed), the server is briefly listening, and a client's
+        // Session handler may already be parked in its initial stream->Read.
+        // stop() below TryCancels that Read, but the handler then waits (in
+        // its step-5 teardown) for send_io_done -- which is normally set by
+        // the send thread on exit, and the send thread may never have been
+        // created. Set it here (vacuously true: no send thread will ever
+        // touch the stream), so the handler can return instead of hanging
+        // close()'s server->Wait() forever. stop() does the cv notify.
+        {
+            lock_guard<std::mutex> lock(mutex);
+            send_io_done = true;
+        }
+        this->stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -595,10 +618,12 @@ void FrbGrouper::send_thread_main()
     // cuda_device_id is not even known yet at this point.)
     try {
         _send_loop();
-    } catch (const std::exception &e) {
-        std::cerr << "FrbGrouper: send thread terminated: " << e.what() << std::endl;
-        stop(std::current_exception());
     } catch (...) {
+        // No print here (per the error-reporting convention in
+        // notes/stoppable_class.md): the saved error surfaces via the
+        // consumer's entry points. This also avoids a misleading "send thread
+        // terminated" message when a normal close() lands between the
+        // drain-wait check and a stream Write (the Write then fails benignly).
         stop(std::current_exception());
     }
     // Tell _run_session we have stopped touching the stream.

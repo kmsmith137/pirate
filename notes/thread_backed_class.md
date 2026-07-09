@@ -24,7 +24,7 @@ A pattern for a class `X`:
 
 - In the example below, the worker thread is created in `X::X()`, but in other cases, the worker may be created in a different method, for example `X::start()` or `X::allocate()`.
 
-- If `X` contains pointers to other thread-backed classes (or more generally, to any class `Y` defining `Y::stop()`), then `X::stop()` should call `ptr->stop()` for each such pointer.
+- If `X` contains pointers to other thread-backed classes (or more generally, to any class `Y` defining `Y::stop()`), then `X::stop(e)` should call `ptr->stop(e)` for each such pointer, forwarding the exception (see "Error reporting" in notes/stoppable_class.md).
 
 Every thread-backed class is a stoppable class (see notes/stoppable_class.md), but not vice versa.
 

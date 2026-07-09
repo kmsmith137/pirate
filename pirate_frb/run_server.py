@@ -2,7 +2,6 @@
 
 import os
 import re
-import time
 import datetime
 
 import cupy as cp
@@ -599,16 +598,19 @@ class RunServerHelper:
         print(f"All {self.n} server(s) started. Press Ctrl-C to stop.")
 
     def _wait_forever(self):
-        # Poll for two things: Ctrl-C (KeyboardInterrupt, raised out of
-        # time.sleep), and any FrbServer transitioning to is_stopped=True
-        # via an internal error (in which case the C++ side has already
-        # printed the exception message to stderr).
+        # Round-robin over the servers, blocking up to 500 ms per server in
+        # FrbServer.poll_from_python() (which releases the GIL while blocked).
+        # Control returns to the interpreter between calls, so Ctrl-C
+        # (KeyboardInterrupt) is raised within ~500 ms. If a server stopped on
+        # an internal error, poll_from_python() re-raises it here with the
+        # root-cause text; run()'s 'finally' block then stops the remaining
+        # servers, and the resulting traceback is the operator-facing log
+        # message. A clean stop (e.g. via RPC) returns True instead.
         while True:
             for i, server in enumerate(self.servers):
-                if server.is_stopped:
-                    print(f"FrbServer {i} stopped (internal error -- see stderr above). Exiting.")
+                if server.poll_from_python(timeout_ms=500):
+                    print(f"FrbServer {i} stopped. Exiting.")
                     return
-            time.sleep(1)
 
     def _stop_all_servers(self):
         for server in self.servers:

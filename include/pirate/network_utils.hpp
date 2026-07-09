@@ -69,6 +69,23 @@ struct Socket
     void bind(const std::string &ip_addr, uint16_t port);
     void listen(int backlog=128);
 
+    // Non-blocking connect, for callers that must remain responsive (e.g. to a
+    // stop flag) while a connection attempt is in progress. Typical use:
+    //
+    //   sock.start_connect(ip_addr, port);
+    //   while (!sock.wait_for_connect(100))   // 100 ms timeout
+    //       recheck_stop_flag();
+    //
+    // start_connect() initiates the TCP handshake and returns immediately.
+    // wait_for_connect() waits up to 'timeout_ms' for the handshake to
+    // complete: returns true on success, returns false on timeout (call again
+    // to keep waiting -- the kernel continues the same handshake), and throws
+    // on connection failure. A negative timeout is blocking. On success, the
+    // socket is returned to blocking mode (unless set_nonblocking() was
+    // called earlier).
+    void start_connect(const std::string &ip_addr, uint16_t port);
+    bool wait_for_connect(int timeout_ms);
+
     // noexcept so it's safe to call from the destructor and from
     // move-assignment without bringing down the program if a
     // logging-time allocation fails. Any error from ::close() is

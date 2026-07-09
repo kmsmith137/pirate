@@ -175,48 +175,89 @@ std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
 
     // Lazy init from the BumpAllocator (deferred from the constructor so
     // multiple async BumpAllocators can be constructed without
-    // serialization). First-caller does the b->allocate_bytes(); subsequent
-    // callers see `base` already set.
-    if (!base) {
-        long aligned_capacity = align_up(capacity, nalign);
+    // serialization). The first caller performs the (potentially
+    // long-blocking) b->allocate_bytes() with 'lock' RELEASED: stop() needs
+    // 'lock', and its cascade into the BumpAllocator is the very call that
+    // unblocks the wait -- holding 'lock' across the wait would deadlock
+    // stop() behind it. Other get_slab() callers wait on 'cv' until the
+    // init completes (or the allocator is stopped).
+    while (!base) {
+        if (init_underway) {
+            // Another thread is performing the lazy init; wait for it.
+            cv.wait(guard);
+            _throw_if_stopped();
+            continue;
+        }
+
+        init_underway = true;
+        guard.unlock();
+
+        std::shared_ptr<void> new_base;
+
         try {
             // b->allocate_bytes() blocks on async init and rethrows on
-            // async-init failure.
+            // async-init failure. (If stop() is called while we are blocked
+            // here, its cascade into the BumpAllocator makes this call throw.)
+            long aligned_capacity = align_up(capacity, nalign);
             void *ptr = bump_allocator->allocate_bytes(aligned_capacity);
             uintptr_t p = reinterpret_cast<uintptr_t>(ptr);
             xassert((p % nalign) == 0);
             std::shared_ptr<void> bump_base = bump_allocator->get_base();
-            this->base = std::shared_ptr<void>(bump_base, ptr);
+            new_base = std::shared_ptr<void>(bump_base, ptr);
         } catch (...) {
             // Surface the failure to this SlabAllocator's subsequent callers
-            // and propagate to the BumpAllocator. Drop the lock first
-            // since stop() needs to acquire it.
+            // and propagate to the BumpAllocator. stop() wakes any waiters,
+            // which then throw via _throw_if_stopped(); clearing
+            // 'init_underway' afterwards is just hygiene.
             auto e = std::current_exception();
+            this->stop(e);
+
+            {
+                std::lock_guard<std::mutex> g2(lock);
+                init_underway = false;
+            }
+
+            std::rethrow_exception(e);
+        }
+
+        guard.lock();
+        this->base = new_base;
+        this->init_underway = false;
+        cv.notify_all();  // wake threads waiting on 'init_underway'
+
+        // stop() may have been called while 'lock' was released.
+        _throw_if_stopped();
+    }
+
+    if (slab_size < 0) {
+        // Validate before committing 'slab_size' / 'num_slabs': an oversized
+        // first request must not leave the allocator in a broken state
+        // (slab size established, but zero slabs -- later blocking callers
+        // would hang forever). Per the stoppable-class pattern, this throw
+        // also stops the allocator, since it indicates a misconfiguration
+        // rather than a recoverable condition.
+        long aligned_capacity = align_up(capacity, nalign);
+        long new_num_slabs = aligned_capacity / aligned_nbytes;
+
+        if (new_num_slabs <= 0) {
+            std::stringstream ss;
+            ss << "SlabAllocator::get_slab(): capacity=" << capacity
+                << " is too small for slab_size=" << aligned_nbytes;
+            auto e = std::make_exception_ptr(std::runtime_error(ss.str()));
             guard.unlock();
             this->stop(e);
             std::rethrow_exception(e);
         }
-    }
 
-    if (slab_size < 0) {
         slab_size = aligned_nbytes;
+        num_slabs = new_num_slabs;
 
         // First allocation: initialize free list with all slabs.
-        long aligned_capacity = align_up(capacity, nalign);
-        num_slabs = aligned_capacity / slab_size;
-        
-        if (num_slabs <= 0) {
-            std::stringstream ss;
-            ss << "SlabAllocator::get_slab(): capacity=" << capacity
-                << " is too small for slab_size=" << slab_size;
-            throw std::runtime_error(ss.str());
-        }
-        
         char *base_ptr = static_cast<char *>(base.get());
         free_list.reserve(num_slabs);
         for (long i = 0; i < num_slabs; i++)
             free_list.push_back(base_ptr + i * slab_size);
-        
+
         // Wake up any thread waiting in block_until_empty() for initialization.
         cv.notify_all();
     }

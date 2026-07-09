@@ -28,10 +28,30 @@ FileWriter::FileWriter(const Params &params_) : params(params_)
 
     // All members are initialized before this point.
     // Now safe to start the worker threads.
-    for (long i = 0; i < params.num_ssd_threads; i++)
-        ssd_threads.emplace_back(&FileWriter::ssd_thread_main, this);
-    for (long i = 0; i < params.num_nfs_threads; i++)
-        nfs_threads.emplace_back(&FileWriter::nfs_thread_main, this);
+    //
+    // If thread creation fails partway (e.g. std::system_error on thread
+    // resource exhaustion), stop and join the already-spawned threads before
+    // rethrowing. Without this, the constructor would exit by exception with
+    // joinable std::thread members, and their destructors would call
+    // std::terminate.
+    try {
+        for (long i = 0; i < params.num_ssd_threads; i++)
+            ssd_threads.emplace_back(&FileWriter::ssd_thread_main, this);
+        for (long i = 0; i < params.num_nfs_threads; i++)
+            nfs_threads.emplace_back(&FileWriter::nfs_thread_main, this);
+    } catch (...) {
+        this->stop(std::current_exception());
+
+        for (auto &t : ssd_threads)
+            if (t.joinable())
+                t.join();
+
+        for (auto &t : nfs_threads)
+            if (t.joinable())
+                t.join();
+
+        throw;
+    }
 }
 
 
@@ -274,6 +294,20 @@ void FileWriter::_nfs_thread_main()
         // Inner loop over frames->save_paths.
         for (;;) {
             // At top of loop, frame_lock is held, but not state_lock.
+
+            // Recheck is_stopped once per save_path entry, so that a stopped
+            // FileWriter abandons the remaining (possibly slow) NFS operations
+            // for this frame promptly, instead of processing every remaining
+            // entry first. (Drop frame_lock before taking the state mutex:
+            // this class never holds both locks simultaneously.)
+            frame_lock.unlock();
+            {
+                unique_lock<std::mutex> stop_check_lock(mutex);
+                if (this->is_stopped)
+                    return;
+            }
+            frame_lock.lock();
+
             //
             // General comment: if the frame_lock is dropped and reacquired, then frame->save_paths
             // may be modified (by an RPC caller appending new save_paths). We generally handle this
@@ -403,6 +437,15 @@ void FileWriter::_nfs_thread_main()
     }  // outer loop over frames
 }
 
+
+// Note on stop-responsiveness: the file I/O in the helpers below (write+fsync
+// on SSD; copy/hardlink on NFS) is blocking, and cannot be interrupted by
+// stop() -- there is no practical way to abort a thread that is mid-syscall
+// in a write to a wedged filesystem (e.g. a hard-mounted NFS server that has
+// gone away). Consequence: stop() itself returns promptly, but ~FileWriter()
+// joins the worker threads and can hang until the in-flight filesystem
+// operation completes. The is_stopped rechecks in the worker loops bound the
+// damage to one in-flight operation per thread.
 
 void FileWriter::_write_to_ssd(const std::shared_ptr<AssembledFrame> &frame, const fs::path &path)
 {

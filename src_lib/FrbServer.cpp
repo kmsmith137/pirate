@@ -10,8 +10,6 @@
 #include "../include/pirate/utils.hpp"               // safe_memcpy_h2g_async
 #include "../include/pirate/network_utils.hpp"       // parse_ip_address, is_loopback_address
 
-#include <cstring>   // strstr
-
 #include <ksgpu/string_utils.hpp>  // tuple_str()
 
 #include <algorithm> // find (stream beam matching), remove_if (stream expiry)
@@ -265,17 +263,6 @@ FrbServer::~FrbServer()
 }
 
 
-// Helper: returns true if the exception is a "normal shutdown signaling"
-// exception (i.e., "called on stopped instance"). These get thrown by entry
-// points like Receiver::get_frame_set / AssembledFrameAllocator::* once
-// FrbServer::stop() has cascaded, and they're how the worker/reaper threads
-// notice the shutdown and exit. We don't want to print them as errors.
-static bool _is_cascade_stop_exception(const std::exception &e)
-{
-    return std::strstr(e.what(), "called on stopped instance") != nullptr;
-}
-
-
 void FrbServer::_throw_if_stopped(const char *method_name)
 {
     if (error)
@@ -284,6 +271,13 @@ void FrbServer::_throw_if_stopped(const char *method_name)
     if (is_stopped) {
         throw runtime_error(string(method_name) + " called on stopped instance");
     }
+}
+
+
+void FrbServer::_check_stopped(const char *method_name)
+{
+    std::lock_guard<std::mutex> lk(mutex);
+    _throw_if_stopped(method_name);
 }
 
 
@@ -386,27 +380,67 @@ void FrbServer::stop(std::exception_ptr e)
     // cancel() is idempotent and a no-op if connect() hasn't run yet.
     if (grouper_client) grouper_client->cancel();
 
+    // The cascades below forward 'e' (see "Error reporting" in
+    // notes/stoppable_class.md), so that a thread blocked inside a downstream
+    // object rethrows the root-cause exception rather than a generic
+    // "called on stopped instance" message.
+
     // Unblock the two FrbServer-owned evrbs.
-    if (edq) edq->stop();
-    if (eh2g) eh2g->stop();
+    if (edq) edq->stop(e);
+    if (eh2g) eh2g->stop(e);
 
     // Stop all receivers.
     for (auto &r : params.receivers)
-        r->stop();
+        r->stop(e);
 
     // Stop the frame_allocator (which will unblock num_total_frames).
-    frame_allocator->stop();
+    frame_allocator->stop(e);
 
     // Cascade to the dedisperser. GpuDedisperser::stop() also stops the
     // dedisperser's internal CudaEventRingbufs, which is how the
     // processing_thread is unblocked if it is parked in a blocking evrb_et_h2g
     // wait inside release_input_and_launch_dd_kernels.
     if (dd)
-        dd->stop();
+        dd->stop(e);
 
-    // Shutdown RPC server.
+    // Stop the FileWriter. This wakes its worker threads and any RPC
+    // "SubscribeFiles" subscribers. The latter must happen BEFORE the
+    // rpc_server->Shutdown() below: Shutdown() blocks until all in-flight
+    // RPC handlers return, and a SubscribeFiles handler exits only when its
+    // subscriber is marked stopped (by FileWriter::stop()) -- without this
+    // cascade, stop() would hang whenever a SubscribeFiles client is
+    // connected.
+    params.file_writer->stop(e);
+
+    // Stop the bump allocators, so that any thread blocked in an allocator
+    // call (allocate_bytes / get_base / wait_until_initialized) wakes up
+    // and throws.
+    params.host_allocator->stop(e);
+    params.gpu_allocator->stop(e);
+
+    // Shutdown RPC server. Note that Shutdown() blocks until in-flight RPC
+    // handlers have returned (all handlers exit promptly once is_stopped is
+    // set and the cascades above have run).
     if (rpc_server)
         rpc_server->Shutdown();
+}
+
+
+bool FrbServer::poll_from_python(int timeout_ms)
+{
+    xassert(timeout_ms >= 0);
+
+    unique_lock<std::mutex> lock(mutex);
+
+    if (!cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this] { return is_stopped; }))
+        return false;
+
+    // Server is stopped: rethrow the root-cause error, or return true on a
+    // clean stop.
+    if (error)
+        std::rethrow_exception(error);
+
+    return true;
 }
 
 
@@ -565,17 +599,13 @@ void FrbServer::_worker_main(int receiver_index)
 
 void FrbServer::worker_main(int receiver_index)
 {
+    // Note: worker wrappers (here and below) don't print the exception. Per
+    // the error-reporting convention in notes/stoppable_class.md, the first
+    // stop(e) caller's exception is saved in FrbServer::error and surfaces
+    // in python via poll_from_python() (see run_server.py).
     try {
         _worker_main(receiver_index);
-    } catch (const std::exception &e) {
-        if (!_is_cascade_stop_exception(e)) {
-            std::cerr << "FrbServer: worker thread " << receiver_index
-                      << " terminated with exception: " << e.what() << std::endl;
-        }
-        stop(std::current_exception());
     } catch (...) {
-        std::cerr << "FrbServer: worker thread " << receiver_index
-                  << " terminated with unknown exception" << std::endl;
         stop(std::current_exception());
     }
 }
@@ -642,14 +672,7 @@ void FrbServer::reaper_thread_main()
 {
     try {
         _reaper_thread_main();
-    } catch (const std::exception &e) {
-        if (!_is_cascade_stop_exception(e)) {
-            std::cerr << "FrbServer: reaper thread terminated with exception: "
-                      << e.what() << std::endl;
-        }
-        stop(std::current_exception());
     } catch (...) {
-        std::cerr << "FrbServer: reaper thread terminated with unknown exception" << std::endl;
         stop(std::current_exception());
     }
 }
@@ -736,6 +759,13 @@ void FrbServer::_processing_thread_main()
     // propagates to the wrapper which calls stop().
     config_postfilled.validate();
 
+    // The build steps below (plan construction, GpuDedisperser
+    // create/allocate, weight fill) are individually slow (seconds each) and
+    // not stop-interruptible, so recheck is_stopped between steps -- otherwise
+    // a stop() landing early in the build would only take effect after the
+    // full build completes.
+    _check_stopped("FrbServer::processing_thread_main");
+
     // Construct the DedispersionPlan OUTSIDE the mutex -- this is the slow
     // step (can take seconds), and we don't want to block other threads
     // (e.g. RPC handlers reading 'plan' or 'is_stopped') while it runs.
@@ -745,6 +775,8 @@ void FrbServer::_processing_thread_main()
     double dt_plan = std::chrono::duration<double>(t_plan1 - t_plan0).count();
     cout << "FrbServer: DedispersionPlan constructed in " << dt_plan << " sec"
          << " (nfreq=" << plan_p->nfreq << ", ntrees=" << plan_p->ntrees << ")" << endl;
+
+    _check_stopped("FrbServer::processing_thread_main");
 
     // Build the CudaStreamPool and GpuDedisperser (also OUTSIDE the mutex;
     // these create CUDA streams and other GPU-side resources, so they should
@@ -789,6 +821,8 @@ void FrbServer::_processing_thread_main()
     cout << "FrbServer: GpuDedisperser constructed in " << dt_dd << " sec"
          << " (nstreams=" << dedisperser_p->nstreams << ")" << endl;
 
+    _check_stopped("FrbServer::processing_thread_main");
+
     // Allocate GpuDedisperser resources from the FrbServer's dedicated
     // host/gpu BumpAllocators. allocate() also spawns the GpuDedisperser
     // worker thread, which sets cudaSetDevice on itself.
@@ -799,6 +833,8 @@ void FrbServer::_processing_thread_main()
     cout << "FrbServer: GpuDedisperser::allocate() done in " << dt_alloc << " sec"
          << " (gmem=" << dedisperser_p->resource_tracker.get_gmem_footprint() << " B"
          << ", hmem=" << dedisperser_p->resource_tracker.get_hmem_footprint() << " B)" << endl;
+
+    _check_stopped("FrbServer::processing_thread_main");
 
     // One-time fill of the dedisperser's peak-finding weights from analytic variances,
     // done after allocate() but before the dedisperser is "published" below (so no other
@@ -823,6 +859,8 @@ void FrbServer::_processing_thread_main()
         double dt = std::chrono::duration<double>(t1 - t0).count();
         cout << "FrbServer: filled analytic dedisperser weights in " << dt << " sec" << endl;
     }
+
+    _check_stopped("FrbServer::processing_thread_main");
 
     // Per-stream GPU scratch + dequantization kernel + the two new
     // CudaEventRingbufs. These are local to processing_thread; the evrb_*'s
@@ -1049,14 +1087,7 @@ void FrbServer::processing_thread_main()
 {
     try {
         _processing_thread_main();
-    } catch (const std::exception &e) {
-        if (!_is_cascade_stop_exception(e)) {
-            std::cerr << "FrbServer: processing thread terminated with exception: "
-                      << e.what() << std::endl;
-        }
-        stop(std::current_exception());
     } catch (...) {
-        std::cerr << "FrbServer: processing thread terminated with unknown exception" << std::endl;
         stop(std::current_exception());
     }
 }
@@ -1268,14 +1299,7 @@ void FrbServer::frame_finalizing_thread_main()
         // calls bound to the current device.
         CUDA_CALL(cudaSetDevice(params.cuda_device_id));
         _frame_finalizing_thread_main();
-    } catch (const std::exception &e) {
-        if (!_is_cascade_stop_exception(e)) {
-            std::cerr << "FrbServer: frame_finalizing thread terminated with exception: "
-                      << e.what() << std::endl;
-        }
-        stop(std::current_exception());
     } catch (...) {
-        std::cerr << "FrbServer: frame_finalizing thread terminated with unknown exception" << std::endl;
         stop(std::current_exception());
     }
 }
@@ -1502,14 +1526,7 @@ void FrbServer::grouper_send_thread_main()
 {
     try {
         _grouper_send_thread_main();
-    } catch (const std::exception &e) {
-        if (!_is_cascade_stop_exception(e)) {
-            std::cerr << "FrbServer: grouper send thread terminated with exception: "
-                      << e.what() << std::endl;
-        }
-        stop(std::current_exception());
     } catch (...) {
-        std::cerr << "FrbServer: grouper send thread terminated with unknown exception" << std::endl;
         stop(std::current_exception());
     }
 }
@@ -1575,14 +1592,7 @@ void FrbServer::grouper_receive_thread_main()
 {
     try {
         _grouper_receive_thread_main();
-    } catch (const std::exception &e) {
-        if (!_is_cascade_stop_exception(e)) {
-            std::cerr << "FrbServer: grouper receive thread terminated with exception: "
-                      << e.what() << std::endl;
-        }
-        stop(std::current_exception());
     } catch (...) {
-        std::cerr << "FrbServer: grouper receive thread terminated with unknown exception" << std::endl;
         stop(std::current_exception());
     }
 }

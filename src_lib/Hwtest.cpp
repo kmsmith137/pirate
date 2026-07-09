@@ -151,6 +151,12 @@ struct Hwtest::Worker
     virtual void worker_accept_connections() { }   // only TcpReceiver subclass defines this
     virtual Stats worker_body() = 0;
 
+    // Called by Hwtest::stop() (from an arbitrary thread, with no Hwtest locks
+    // held), to cascade the stop into any stoppable objects owned by the worker
+    // (see notes/stoppable_class.md). Implementations must be safe to call
+    // concurrently with the worker thread, and must not block.
+    virtual void worker_stop(std::exception_ptr e) { }
+
     shared_ptr<char> worker_alloc(long nbytes, bool on_gpu=false);
     string devstr(int device);
 };
@@ -217,16 +223,23 @@ void Hwtest::_throw_if_stopped(const char *method_name)
 }
 
 
-void Hwtest::_add_worker(const shared_ptr<Worker> &wp, const string &caller)
+// Helper for add_*() entry points: throws (without stopping the server) if
+// the server is stopped or already started. Caller must hold mutex.
+void Hwtest::_throw_unless_addable(const string &caller)
 {
-    std::lock_guard lk(this->mutex);
     _throw_if_stopped(caller.c_str());
 
     if (is_started)
         throw runtime_error(caller + " called after start()");
+}
 
+
+void Hwtest::_add_worker(const shared_ptr<Worker> &wp, const string &caller)
+{
+    std::lock_guard lk(this->mutex);
+    _throw_unless_addable(caller);
     this->workers.push_back(wp);
-}    
+}
 
 
 // Called by Hwtest::start().
@@ -415,12 +428,24 @@ double Hwtest::_show_stats()
 
 void Hwtest::stop(std::exception_ptr e)
 {
-    std::lock_guard lk(this->mutex);
+    std::unique_lock lk(this->mutex);
     if (is_stopped)
         return;
     is_stopped = true;
     error = e;
+
+    // Snapshot 'workers' under the mutex, then cascade after unlocking
+    // (per notes/stoppable_class.md, cascades should not run under the lock).
+    vector<shared_ptr<Worker>> workers_snapshot = workers;
+    lk.unlock();
+
     barrier.stop(e);
+
+    // Cascade into stoppable objects owned by workers (e.g. ChimeWorker's
+    // GpuDedisperser), so that a worker blocked inside such an object exits
+    // promptly instead of finishing its full worker_body() iteration.
+    for (const auto &wp : workers_snapshot)
+        wp->worker_stop(e);
 }
 
 
@@ -522,7 +547,22 @@ struct TcpReceiver : Hwtest::Worker
         // I tried SO_RECVLOWAT here, but uProf reported significantly higher memory bandwidth!
 
         for (unsigned int ids = 0; ids < data_sockets.size(); ids++) {
-            this->data_sockets[ids] = listening_socket.accept();
+            // Poll accept() with a 100 ms timeout, rechecking is_stopped between
+            // attempts. (A plain blocking accept() could not be woken by stop(),
+            // hanging join() and the destructor if too few senders connect.)
+            for (;;) {
+                {
+                    std::unique_lock lk(hwtest->mutex);
+                    hwtest->_throw_if_stopped("TcpReceiver::worker_accept_connections");
+                }
+
+                Socket s = listening_socket.accept(100);   // 100 ms timeout
+                if (s.fd >= 0) {
+                    this->data_sockets[ids] = std::move(s);
+                    break;
+                }
+            }
+
             this->data_sockets[ids].set_nonblocking();
 
             epoll_event ev;
@@ -659,7 +699,13 @@ struct ChimeWorker : public Hwtest::Worker
         gdd_params.stream_pool = cuda_stream_pool;
         gdd_params.num_consumers = 1;
         gdd_params.initial_chunk = 0;   // hwtest: outputs are zero-based
-        gpu_dedisperser = GpuDedisperser::create(gdd_params);
+
+        {
+            // Publish 'gpu_dedisperser' under Worker::lock, so that worker_stop()
+            // (called from another thread via Hwtest::stop()) can safely read it.
+            std::lock_guard lk(this->lock);
+            this->gpu_dedisperser = GpuDedisperser::create(gdd_params);
+        }
 
         // Allocate GpuDedisperser using dummy-mode BumpAllocators.
         int host_aflags = af_rhost | af_zero;
@@ -701,6 +747,21 @@ struct ChimeWorker : public Hwtest::Worker
         stats.g2h[device] = nouter * rt.get_g2h_bw();
         stats.chime_beams += nouter * beams_per_batch * tchunk;  // beam-seconds
         return stats;
+    }
+
+    // Cascade Hwtest::stop() into the GpuDedisperser, so that a worker thread
+    // blocked in acquire_*()/release_*() exits promptly instead of finishing
+    // its full worker_body() iteration. (The GpuDedisperser is created on the
+    // worker thread, so it may not exist yet when stop() is called.)
+    virtual void worker_stop(std::exception_ptr e) override
+    {
+        shared_ptr<GpuDedisperser> gdd;
+        {
+            std::lock_guard lk(this->lock);
+            gdd = gpu_dedisperser;
+        }
+        if (gdd)
+            gdd->stop(e);
     }
 };
 
@@ -1040,34 +1101,65 @@ struct DownsamplingWorker : public Hwtest::Worker
 // Add workers.
 
 
+// Shared implementation of the add_*() entry points. The 'make_worker' callback
+// constructs the Worker subclass and returns a shared_ptr to it.
+template<typename MakeWorker>
+static void add_worker_helper(Hwtest *ht, const string &caller, MakeWorker &&make_worker)
+{
+    {
+        // Early check, so that caller errors (stopped / already-started) throw
+        // before the worker constructor runs. Rechecked in _add_worker().
+        std::lock_guard lk(ht->mutex);
+        ht->_throw_unless_addable(caller);
+    }
+
+    // Worker constructors can fail for real reasons (e.g. CUDA calls), not just
+    // argument errors. Per the stoppable-class pattern (notes/stoppable_class.md),
+    // stop the server on failure, then rethrow.
+    shared_ptr<Hwtest::Worker> wp;
+    try {
+        wp = make_worker();
+    } catch (...) {
+        ht->stop(std::current_exception());
+        throw;
+    }
+
+    ht->_add_worker(wp, caller);
+}
+
 void Hwtest::add_tcp_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, const vector<int> &vcpu_list, int cpu, int inic)
 {
-    auto wp = make_shared<TcpReceiver> (this, vcpu_list, cpu, inic, ip_addr, num_tcp_connections, recv_bufsize);
-    this->_add_worker(wp, "add_tcp_receiver");
+    add_worker_helper(this, "add_tcp_receiver", [&] {
+        return make_shared<TcpReceiver> (this, vcpu_list, cpu, inic, ip_addr, num_tcp_connections, recv_bufsize);
+    });
 }
 
 void Hwtest::add_chime_dedisperser(int device, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<ChimeWorker> (this, vcpu_list, cpu, device);
-    this->_add_worker(wp, "add_chime_dedisperser");
+    add_worker_helper(this, "add_chime_dedisperser", [&] {
+        return make_shared<ChimeWorker> (this, vcpu_list, cpu, device);
+    });
 }
 
 void Hwtest::add_memcpy_thread(int src_device, int dst_device, long blocksize, bool use_copy_engine, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<MemcpyWorker> (this, vcpu_list, cpu, src_device, dst_device, blocksize, use_copy_engine);
-    this->_add_worker(wp, "add_memcpy_thread");
+    add_worker_helper(this, "add_memcpy_thread", [&] {
+        return make_shared<MemcpyWorker> (this, vcpu_list, cpu, src_device, dst_device, blocksize, use_copy_engine);
+    });
 }
 
 void Hwtest::add_ssd_writer(const string &root_dir, long nbytes_per_file, bool write_asdf, const vector<int> &vcpu_list, int cpu, int issd)
 {
-    auto wp = make_shared<SsdWorker> (this, vcpu_list, cpu, issd, root_dir, nbytes_per_file, write_asdf);
-    this->_add_worker(wp, "add_ssd_writer");
+    add_worker_helper(this, "add_ssd_writer", [&] {
+        return make_shared<SsdWorker> (this, vcpu_list, cpu, issd, root_dir, nbytes_per_file, write_asdf);
+    });
 }
 
 void Hwtest::add_downsampling_thread(int src_bit_depth, long src_nelts, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<DownsamplingWorker> (this, vcpu_list, cpu, src_bit_depth, src_nelts);
-    this->_add_worker(wp, "add_downsampling_thread");
+    add_worker_helper(this, "add_downsampling_thread", [&] {
+        return make_shared<DownsamplingWorker> (this, vcpu_list, cpu, src_bit_depth, src_nelts);
+    });
 }
 
 

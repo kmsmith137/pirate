@@ -158,6 +158,12 @@ private:
     long slab_size = -1;            // slab size in bytes (established by first get_slab)
     long num_slabs = 0;             // total number of slabs
     std::vector<void *> free_list;  // stack of free slab pointers
+
+    // True while a get_slab() caller is performing the deferred
+    // bump_allocator->allocate_bytes() with 'lock' released (so that stop()
+    // is not blocked behind the BumpAllocator's async init). Protected by
+    // 'lock'; other get_slab() callers wait on 'cv' while it is set.
+    bool init_underway = false;
     
     // Stop pattern (see notes/stoppable_class.md)
     bool is_stopped = false;

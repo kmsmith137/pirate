@@ -473,19 +473,22 @@ void GpuDedisperser::stop(std::exception_ptr e)
     // Cascade stop() to the internal CudaEventRingbufs so that any thread
     // parked in a blocking wait / synchronize / synchronize_with_producer
     // (e.g. an external caller of release_input_and_launch_dd_kernels,
-    // or our own et_h2h worker) throws "called on stopped instance" and exits
-    // promptly. This cascade is also what lets ~GpuDedisperser unblock and join
-    // the worker thread by calling stop() alone. NOTE: stopping an evrb does NOT
-    // cancel in-flight GPU work or destroy the cuda events -- ~GpuDedisperser
-    // still synchronizes all streams before any GPU array is freed.
-    if (evrb_tree_gridding) evrb_tree_gridding->stop();
-    if (evrb_g2g)           evrb_g2g->stop();
-    if (evrb_g2h)           evrb_g2h->stop();
-    if (evrb_h2g)           evrb_h2g->stop();
-    if (evrb_cdd2)          evrb_cdd2->stop();
-    if (evrb_et_h2g)        evrb_et_h2g->stop();
+    // or our own et_h2h worker) throws and exits promptly. 'e' is forwarded
+    // (see "Error reporting" in notes/stoppable_class.md): waiters rethrow
+    // the root cause, or throw a generic "called on stopped instance"
+    // message on a clean stop. This cascade is also what lets ~GpuDedisperser
+    // unblock and join the worker thread by calling stop() alone. NOTE:
+    // stopping an evrb does NOT cancel in-flight GPU work or destroy the cuda
+    // events -- ~GpuDedisperser still synchronizes all streams before any GPU
+    // array is freed.
+    if (evrb_tree_gridding) evrb_tree_gridding->stop(e);
+    if (evrb_g2g)           evrb_g2g->stop(e);
+    if (evrb_g2h)           evrb_g2h->stop(e);
+    if (evrb_h2g)           evrb_h2g->stop(e);
+    if (evrb_cdd2)          evrb_cdd2->stop(e);
+    if (evrb_et_h2g)        evrb_et_h2g->stop(e);
     for (auto &r : evrb_release_output)
-        if (r) r->stop();
+        if (r) r->stop(e);
 
     // GpuDedisperser doesn't currently need a condition_variable.
     // See comment in Dedisperser.hpp.

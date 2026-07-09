@@ -201,8 +201,9 @@ void SimulatedFrameFactory::stop(std::exception_ptr e)
     // Unblock a producer parked in allocator->get_frame_set() on an exhausted
     // pool -- the factory's own cvs are not enough. MUST be called with 'lock'
     // released (never hold the factory lock while calling into the allocator).
-    // No argument -> normal termination for the allocator.
-    params.allocator->stop();
+    // 'e' is forwarded (see "Error reporting" in notes/stoppable_class.md), so
+    // other allocator users see the root cause rather than a generic message.
+    params.allocator->stop(e);
 }
 
 

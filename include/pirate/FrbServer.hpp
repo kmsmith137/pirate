@@ -149,9 +149,25 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     ~FrbServer();  // calls stop(), joins workers/reaper, then rpc_server->Wait()
 
     // Start/stop the Receivers and the RPC service.
-    // Asynchronous: neither start() nor stop() calls rpc_server->Wait().
+    // Neither start() nor stop() calls rpc_server->Wait() or joins the worker
+    // threads (the destructor does both). Note that stop() is not fully
+    // asynchronous: it calls rpc_server->Shutdown(), which blocks until
+    // in-flight RPC handlers return (they exit promptly once the stop
+    // cascades have run).
     void start();  // entry point
     void stop(std::exception_ptr e = nullptr);  // idempotent
+
+    // Blocks until the server is stopped, or until 'timeout_ms' milliseconds
+    // elapse (returning false in the latter case). If the server stopped due
+    // to an error, rethrows the saved exception (the root cause); a clean
+    // stop returns true.
+    //
+    // Intended to be called in a loop from python (hence the name): each call
+    // returns to the interpreter within 'timeout_ms', so that Ctrl-C
+    // (KeyboardInterrupt) is delivered promptly. The pybind11 binding
+    // releases the GIL while blocked. See RunServer._wait_forever() in
+    // pirate_frb/run_server.py.
+    bool poll_from_python(int timeout_ms);
 
     Params params;
     std::shared_ptr<AssembledFrameAllocator> frame_allocator;
@@ -329,6 +345,13 @@ private:
 
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name);
+
+    // Like _throw_if_stopped(), but acquires the mutex itself. The processing
+    // thread calls this between long build steps (plan construction,
+    // GpuDedisperser create/allocate, weight fill), so that a stop() during
+    // the multi-second build takes effect promptly instead of after the full
+    // build completes.
+    void _check_stopped(const char *method_name);
 
     // Worker thread functions.
     void _worker_main(int receiver_index);

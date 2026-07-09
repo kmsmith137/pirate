@@ -1,6 +1,9 @@
 #include "../include/pirate/Barrier.hpp"
 #include <ksgpu/xassert.hpp>
 
+#include <string>
+#include <stdexcept>
+
 using namespace std;
 
 
@@ -35,17 +38,23 @@ bool Barrier::is_initialized()
 }
 
 
+// Helper for entry points. Caller must hold lock.
+void Barrier::_throw_if_stopped(const char *method_name)
+{
+    if (error)
+        std::rethrow_exception(error);
+    if (is_stopped)
+        throw std::runtime_error(std::string(method_name) + " called on stopped instance");
+}
+
+
 void Barrier::wait()
 {
     std::unique_lock ul(lock);
 
     xassert_msg(nthreads > 0, "Barrier::wait() called on uninitialized Barrier");
 
-    if (is_stopped) {
-        if (error)
-            std::rethrow_exception(error);
-        return;
-    }
+    _throw_if_stopped("Barrier::wait()");
 
     if (nthreads_waiting == nthreads-1) {
         this->nthreads_waiting = 0;
@@ -60,11 +69,8 @@ void Barrier::wait()
     int wc = this->wait_count;
     cv.wait(ul, [this,wc] { return (this->is_stopped || (this->wait_count > wc)); });
 
-    if (_unlikely(is_stopped)) {
-        if (error)
-            std::rethrow_exception(error);
-        return;
-    }
+    if (_unlikely(is_stopped))
+        _throw_if_stopped("Barrier::wait()");
 }
 
 

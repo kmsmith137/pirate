@@ -153,16 +153,28 @@ void Receiver::start()
 
     if (is_started)
         throw runtime_error("Receiver::start() called twice");
-    if (is_stopped)
-        throw runtime_error("Receiver::start() called on stopped instance");
+
+    // Rethrows the saved error if stop(e) was called, else throws a generic
+    // "called on stopped instance" message.
+    _throw_if_stopped("Receiver::start()");
 
     is_started = true;
     lock.unlock();
 
     // Spawn worker threads.
-    listener_thread = std::thread(&Receiver::listener_main, this);
-    reader_thread = std::thread(&Receiver::reader_main, this);
-    assembler_thread = std::thread(&Receiver::assembler_main, this);
+    //
+    // If thread creation fails partway (e.g. std::system_error), stop the
+    // already-spawned threads before rethrowing; otherwise they would keep
+    // running on a not-stopped object. (The destructor also stops+joins, but
+    // a caller that catches the exception should see a stopped object.)
+    try {
+        listener_thread = std::thread(&Receiver::listener_main, this);
+        reader_thread = std::thread(&Receiver::reader_main, this);
+        assembler_thread = std::thread(&Receiver::assembler_main, this);
+    } catch (...) {
+        this->stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -199,7 +211,9 @@ void Receiver::stop(std::exception_ptr e)
     error = e;
     lock.unlock();
 
-    params.allocator->stop();
+    // Forward 'e' so that threads blocked in allocator entry points rethrow
+    // the root cause (see "Error reporting" in notes/stoppable_class.md).
+    params.allocator->stop(e);
     cv.notify_all();
 }
 

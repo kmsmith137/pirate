@@ -78,6 +78,10 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name);
 
+    // Helper for add_*() entry points: throws (without stopping the server)
+    // if the server is stopped or already started. Caller must hold mutex.
+    void _throw_unless_addable(const std::string &caller);
+
 
     // ----- Noncopyable, nonmoveable -----
 

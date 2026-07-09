@@ -31,10 +31,17 @@ struct Barrier
     // set later, with a call to initialize().
     Barrier(int nthreads);
 
+    // Entry point: blocks until all N threads arrive. If the Barrier is
+    // stopped (including while blocked), throws the saved exception, or a
+    // generic runtime_error if stop() was called with a null exception_ptr.
     void wait();
+
     void stop(std::exception_ptr e = nullptr);
     void initialize(int nthreads);
     bool is_initialized();
+
+    // Helper for entry points. Caller must hold lock.
+    void _throw_if_stopped(const char *method_name);
 
     // Noncopyable
     Barrier(const Barrier &) = delete;

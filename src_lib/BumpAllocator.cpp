@@ -479,6 +479,13 @@ void BumpAllocator::_registrar_worker()
 
         const auto &offsets = _deleter_state->reg_chunk_offsets;
         for (long s = 0; s < _nreg_chunks; s++) {
+            // Check the stop flag once per chunk. Without this, the fast path
+            // (spin-wait predicate already satisfied, e.g. no zero workers)
+            // would proceed straight to cudaHostRegister on every remaining
+            // chunk, and a stop()/destructor could block for the full
+            // remaining registration time.
+            if (_stop_flag.load(std::memory_order_relaxed)) return;
+
             // If zero workers are present, wait until they've completed
             // all zero chunks belonging to this super. If not, needed=0
             // and we proceed immediately.
