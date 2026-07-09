@@ -854,7 +854,7 @@ def show_dedisperser(args):
 
     if args.test:
         print_separator('Testing GpuDedisperser')
-        nchunks = (2**(config.tree_rank + config.num_downsampling_levels - 1)) // config.time_samples_per_chunk + 10
+        nchunks = (2**(config.tree_rank + config.num_primary_trees - 1)) // config.time_samples_per_chunk + 10
         print(f'Running GpuDedisperser.test_one(config, nchunks={nchunks})')
         GpuDedisperser.test_one(config, nchunks)
         print('Test passed!')

@@ -11,7 +11,7 @@ namespace pirate {
 
 
 // DedispersionTree: a simple "data" class with no member functions.
-// Represents the output of the dedisperser, for one choice of (downsampling level, early trigger).
+// Represents the output of the dedisperser, for one choice of (primary tree, early trigger).
 //
 // A vector of DedispersionTrees is created in the DedispersionPlan constructor, and gets copied
 // into the dedisperser classes (GpuDedisperser, ReferenceDedisperser).
@@ -19,19 +19,19 @@ namespace pirate {
 struct DedispersionTree
 {
     // Note: for most purposes, you want 'early_dd_rank', not 'pri_dd_rank'.
-    int ds_level = -1;       // Downsampling level, also identifies associated stage1 tree.
+    int primary_tree_index = -1;  // Also identifies associated stage1 tree (input downsampled in time by 2^primary_tree_index).
     int amb_rank = 0;        // Ambient rank of DedispersionTree (= dd_rank of associated stage1 tree)
     int pri_dd_rank = 0;     // Active rank of primary DedispersionTree (= amb_rank of associated stage1 tree)
     int early_dd_rank = 0;   // Active rank of this DedispersionTree (always <= pri_dd_rank)
-    int nt_ds = 0;           // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(ds_level))
+    int nt_ds = 0;           // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(primary_tree_index))
 
     // Subbands searched in this tree.
     // Can differ from DedispersionConfig::frequency_subbands, due to early triggers and downsampling.
     FrequencySubbands frequency_subbands;
-    
-    // Contains members: max_width, {dm,time}_downsampling, wt_{dm,time}_downsampling.
+
+    // Contains members: num_early_triggers, max_width, {dm,time}_downsampling, wt_{dm,time}_downsampling.
     // Note that {dm,time}_downsampling can be 0 in the config, but are filled with nonzero values here.
-    DedispersionConfig::PeakFindingConfig pf;
+    DedispersionConfig::PrimaryTree pf;
 
     // Number of time profiles used in peak-finder. (Equal to 1 + 3*log2(pf.max_width).)
     long nprofiles = 0;

@@ -19,17 +19,17 @@ def _settle_chunks(tree, r, R, nt_in):
 
     settle = max dispersion delay (from dm_coarse) + 4*Wmax + 4*time_downsampling, in input time
     samples, then converted to chunks (ceil, +1 safety).  The delay is computed in the tree's
-    downsampled samples and scaled by 2^ids; for downsampled trees (ids>0) it includes the dropped
+    downsampled samples and scaled by 2^ipri; for downsampled trees (ipri>0) it includes the dropped
     lower-half delay offset 2^r (the "upper-half" logic).  See plans/check_avar_mc.md.
     """
-    ids = int(tree.ds_level)
+    ipri = int(tree.primary_tree_index)
     Wmax = int(tree.pf.max_width)
     Dtime = int(tree.pf.time_downsampling)
     ndm_out = int(tree.ndm_out)
     dm = np.arange(ndm_out, dtype=np.int64)
-    offset_ds = (1 << r) if ids > 0 else 0                              # dropped lower-half (downsampled)
+    offset_ds = (1 << r) if ipri > 0 else 0                              # dropped lower-half (downsampled)
     settle_ds = offset_ds + (dm + 1) * (1 << R) + 4 * Wmax + 4 * Dtime  # downsampled samples
-    settle_input = (1 << ids) * settle_ds                              # input samples
+    settle_input = (1 << ipri) * settle_ds                              # input samples
     return (settle_input + nt_in - 1) // nt_in + 1                     # chunks (ceil + 1 safety)
 
 

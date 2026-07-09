@@ -20,13 +20,15 @@ struct constants
     
     static constexpr int max_tree_rank = 16;
 
-    // If you need to change 'max_downsampling_level', there should be no issues
-    // (besides needing to recompile). However, if max_downsampling_level is
-    // gratuitously large, then compilation time may be an issue.
-    
-    static constexpr int max_downsampling_level = 6;
+    // If you need to change 'max_primary_trees', there should be no issues
+    // (besides needing to recompile). However, if max_primary_trees is
+    // gratuitously large, then compilation time may be an issue (the
+    // LaggedDownsampling GPU kernels are instantiated once per allowed
+    // number of primary trees).
 
-    // Max width of a peak-finding kernel (PeakFindingConfig::max_width, in "tree" time
+    static constexpr int max_primary_trees = 7;
+
+    // Max width of a peak-finding kernel (PrimaryTree::max_width, in "tree" time
     // samples). Must be a power of two. Bounds both DedispersionConfig::validate() and the
     // make_random() config generator. (Production configs currently use 16, and the compiled
     // GPU kernel registry currently provides Wmax in {8, 16}; this looser bound matches the

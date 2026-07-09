@@ -516,9 +516,9 @@ class ServerTester:
 
         # Comparison threshold, per tree -- same formula as test_one:
         #   eps = 3 * dtype.precision * sqrt(n+2),
-        #   n = ds_level + amb_rank + early_dd_rank.
+        #   n = primary_tree_index + amb_rank + early_dd_rank.
         prec = p['config'].dtype.precision
-        self.eps = [3.0 * prec * math.sqrt(tr.ds_level + tr.amb_rank + tr.early_dd_rank + 2)
+        self.eps = [3.0 * prec * math.sqrt(tr.primary_tree_index + tr.amb_rank + tr.early_dd_rank + 2)
                     for tr in trees]
 
         # First child message: the handshake echo (arrives once the producer's
@@ -650,7 +650,7 @@ def test_server():
         params_no_config = {k: v for k, v in t.p.items() if k != 'config'}
         print(f"    params: {params_no_config}")
         c = t.p['config']
-        print(f"    config: tree_rank={c.tree_rank}, num_downsampling_levels={c.num_downsampling_levels},"
+        print(f"    config: tree_rank={c.tree_rank}, num_primary_trees={c.num_primary_trees},"
               f" beams_per_batch={c.beams_per_batch}, num_active_batches={c.num_active_batches},"
               f" dtype={c.dtype}")
         t.run()

@@ -718,7 +718,7 @@ class SparseTilePerM:
 
         If upper_half_only, only the upper half of the coarse-DM range is kept (the top d_hi bit
         is fixed to 1 and dropped), so the result has rank (r-R-1) instead of (r-R). This is what
-        a downsampled tree (ds_level > 0) keeps.
+        a downsampled tree (primary_tree_index > 0) keeps.
 
         Implementation (notes Section "Subbanded dedispersion"): iterate a single
         under-the-hood SparseTileTriple (the full-band gridding footprint) and extract per-

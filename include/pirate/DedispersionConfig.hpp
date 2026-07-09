@@ -35,12 +35,11 @@ struct DedispersionConfig
 
     // Core dedispersion parameters.
     // The number of "tree" channels is ntree = 2^tree_rank.
-    // The first tree searches to dispersion delay given by 2^tree_rank time samples.
-    // Downsampled trees (0 < ids < num_downsampling_levels) downsample in time by 2^ids,
-    // then search delay range 2^(tree_rank+ids-1) <= delay <= 2^(tree_rank+ids).
+    // The first primary tree (p=0) searches to dispersion delay given by 2^tree_rank time samples.
+    // Downsampled primary trees (0 < p < num_primary_trees) downsample in time by 2^p,
+    // then search delay range 2^(tree_rank+p-1) <= delay <= 2^(tree_rank+p).
 
     long tree_rank = -1;
-    long num_downsampling_levels = 0;
     long time_samples_per_chunk = 0;
 
     // For now, there is only one dtype, which can be either float32 or float16.
@@ -59,14 +58,27 @@ struct DedispersionConfig
 
     std::vector<long> frequency_subband_counts;
 
-    // Each downsampling level has its own PeakFindingConfig.
-    // All members must be powers of two.
+    // Each "primary tree" searches a different DM range, ordered from low to high
+    // (primary tree p downsamples the input in time by 2^p, see 'tree_rank' above).
+    // Each primary tree is expanded into (num_early_triggers+1) "dedispersion trees":
+    // the main (full-band) tree, plus one early-trigger tree for each
+    // delta_rank = 1, ..., num_early_triggers.
+    //
+    // An early trigger searches a subset [fmid,fmax] of the full frequency range
+    // [freq_lo,freq_hi] at reduced latency. The early-trigger tree has rank
+    // (main_rank - delta_rank), where main_rank = (tree_rank - S) is the rank of the
+    // main tree, with S=0 at p=0 and S=1 for p > 0. (Detail: the downsampled trees
+    // have one lower rank because they search a DM range which does not start at
+    // zero, see above.)
+    //
+    // The remaining members configure peak-finding, and must be powers of two:
     //   max_width: max width of peak-finding kernel, in "tree" time samples
     //   {dm,time}_downsampling: downsampling factors of coarse-grained array, relative to tree
-    //   wt_{dm,downsampling}: downsampling factors of weights array, relative to tree.
+    //   wt_{dm,time}_downsampling: downsampling factors of weights array, relative to tree.
 
-    struct PeakFindingConfig
+    struct PrimaryTree
     {
+        long num_early_triggers = 0;    // required (can be zero)
         long max_width = 0;             // required
         long dm_downsampling = 0;       // optional (default = "2^ceil(tree_rank/4)")
         long time_downsampling = 0;     // optional (default = "use value of dm_downsampling")
@@ -74,27 +86,10 @@ struct DedispersionConfig
         long wt_time_downsampling = 0;  // required (must be >= time_downsampling)
     };
 
-    std::vector<PeakFindingConfig> peak_finding_params;  // length (num_downsampling_levels)
+    std::vector<PrimaryTree> primary_trees;  // one entry per DM range searched
 
-    // Early triggers: search a subset [fmid,fmax] of the full frequency range [freq_lo,freq_hi]
-    // at reduced latency. Each downsampling level has an independent set of early triggers.
-    //
-    // Early triggers are parameterized by EarlyTrigger::delta_rank > 0, the reduction in rank
-    // relative to the main (i.e. non-early) dedispersion tree: the early-trigger tree has rank
-    // (main_rank - delta_rank). The rank of the main tree is (DedispersionConfig::tree_rank - S),
-    // where S=0 at ds_level=0, and S=1 for ds_level > 0. (Detail: the downsampled trees have one
-    // lower rank because they search a DM range which does not start at zero, see above.)
-    //
-    // Early triggers are optional (i.e. 'early_triggers' can be an empty vector).
-
-    struct EarlyTrigger
-    {
-        long ds_level = -1;    // 0 <= ds_level < num_downsampling_levels
-        long delta_rank = 0;   // must be > 0, specifies "early-ness" of trigger
-    };
-
-    // Sorted first by increasing ds_level, second by decreasing delta_rank.
-    std::vector<EarlyTrigger> early_triggers;
+    // Number of primary trees. (Not a member -- inferred from 'primary_trees'.)
+    long num_primary_trees() const { return primary_trees.size(); }
 
     // GPU configuration.
     long beams_per_gpu = 0;
@@ -119,11 +114,6 @@ struct DedispersionConfig
     // Construct from YAML file.
     static DedispersionConfig from_yaml(const std::string &filename);
     static DedispersionConfig from_yaml(const YamlFile &file);
-    
-    // Helper functions for constructing DedispersionConfig instances.
-    // Add early triggers, while maintaining invariant that 'early_triggers' is sorted.
-    void add_early_trigger(long ds_level, long tree_rank);
-    void add_early_triggers(long ds_level, std::initializer_list<long> tree_ranks);
 
     // Note: rather than calling this function directly, you probably want the
     // DedispersionPlan (not DedispersionConfig) member 'nelts_per_segment'.
@@ -150,14 +140,14 @@ struct DedispersionConfig
     double dm_per_unit_delay() const;
 
     // Returns the largest DM (pc cm^{-3}) searched by any dedispersion tree. Mirrors the
-    // per-tree dm_max = dm_per_unit_delay() * 2^tree_rank * 2^ds_level computed in the
-    // DedispersionPlan constructor; this is monotonic in ds_level and independent of
-    // early-trigger delta_rank, so the maximum is at ds_level = num_downsampling_levels-1.
+    // per-tree dm_max = dm_per_unit_delay() * 2^tree_rank * 2^p computed in the
+    // DedispersionPlan constructor; this is monotonic in the primary tree index p and
+    // independent of early-trigger delta_rank, so the maximum is at p = num_primary_trees()-1.
     // (Depends only on pre-metadata config fields, so it is valid on config_prefilled.)
     double max_dm_of_all_trees() const;
 
-    // Returns the peak-finding kernel max_width of the base (non-downsampled, ds_level=0)
-    // tree, in time samples. At ds_level 0 the tree's time sampling equals the native
+    // Returns the peak-finding kernel max_width of the base (non-downsampled, p=0)
+    // tree, in time samples. At p=0 the tree's time sampling equals the native
     // (frame) time sampling, so this is a number of frame time samples (NOT milliseconds).
     long max_width_of_base_tree() const;
 
@@ -208,10 +198,6 @@ struct DedispersionConfig
     // Useful for testing and timing kernels that need a valid config.
     static DedispersionConfig make_mini_chord(ksgpu::Dtype dtype);
 };
-
-extern bool operator==(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y);
-extern bool operator>(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y);
-extern std::ostream &operator<<(std::ostream &os, const DedispersionConfig::EarlyTrigger &et);
 
 
 }  // namespace pirate

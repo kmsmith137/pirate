@@ -24,10 +24,10 @@ namespace pirate {
 //
 // E.g. in 'class GpuDedispersionBuffer', we use two DedispersionBuffer
 // instances. In the first ("stage1") instance, arrays are indexed by
-// downsampling level 0 <= ids < config.num_downsampling_levels, with:
+// primary tree 0 <= ipri < config.num_primary_trees(), with:
 //
-//   rank = config.tree_rank - (ids ? 1 : 0)
-//   ntime = config.time_samples_per_chunk / 2^ids.
+//   rank = config.tree_rank - (ipri ? 1 : 0)
+//   ntime = config.time_samples_per_chunk / 2^ipri.
 //
 // In the second ("stage2") instance, arrays are indexed by a "stage2 tree index"
 // 0 <= i < DedispersionPlan::ntrees, and the values of (rank, ntime) are

@@ -23,8 +23,8 @@ namespace pirate {
 #endif
 
 
-// NOTE!! The cuda kernels use a parameter "D" which is equal to (nds-1),
-// where nds = DedispersionConfig::num_downsampling_levels. Therefore, we
+// NOTE!! The cuda kernels use a parameter "D" which is equal to (npri-1),
+// where npri = DedispersionConfig::num_primary_trees(). Therefore, we
 // shift by (-1) when crossing the "C++/cuda boundary"!
 //
 // FIXME use "wide" loads/stores (including when loading/restoring state?)
@@ -728,10 +728,10 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
     
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     
-    if (params.num_downsampling_levels <= 1)
+    if (params.num_primary_trees <= 1)
         return;
     
-    int D = params.num_downsampling_levels - 1;
+    int D = params.num_primary_trees - 1;
     int M = pow2(params.output_dd_rank - 1);
     int A = pow2(params.input_total_rank - params.output_dd_rank - 1);
     int ST = xdiv(params.dtype.nbits, 8);  // sizeof(T)
@@ -766,9 +766,9 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
     this->state_nelts_per_beam = B * xdiv(shmem_nbytes_per_threadblock, ST);
 
     long gmem_bw = 0;
-    for (int ids = 0; ids < params.num_downsampling_levels; ids++) {
-        int r = params.input_total_rank - (ids ? 1 : 0);
-        long nt_ds = xdiv(params.ntime, pow2(ids));
+    for (int ipri = 0; ipri < params.num_primary_trees; ipri++) {
+        int r = params.input_total_rank - (ipri ? 1 : 0);
+        long nt_ds = xdiv(params.ntime, pow2(ipri));
         gmem_bw += params.beams_per_batch * pow2(r) * nt_ds * ST;
     }
 
@@ -837,15 +837,15 @@ template<typename T>
 DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const LaggedDownsamplingKernelParams &params_) :
     GpuLaggedDownsamplingKernel(params_)  // calls params.validate()
 {
-    if (params.num_downsampling_levels <= 1)
+    if (params.num_primary_trees <= 1)
         return;
 
-    // NOTE!! The cuda kernels use a parameter "D" which is equal to (nds-1),
-    // where nds = DedispersionConfig::num_downsampling_levels. Therefore, we
+    // NOTE!! The cuda kernels use a parameter "D" which is equal to (npri-1),
+    // where npri = DedispersionConfig::num_primary_trees(). Therefore, we
     // shift by (-1) when crossing the "C++/cuda boundary"!
 
-    int D = params.num_downsampling_levels - 1;
-    this->kernel = get_kernel<T32, constants::max_downsampling_level> (D);
+    int D = params.num_primary_trees - 1;
+    this->kernel = get_kernel<T32, constants::max_primary_trees - 1> (D);
 
     // FIXME rethink?
     CUDA_CALL(cudaFuncSetAttribute(
@@ -865,19 +865,19 @@ void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ichunk, lon
     xassert(is_allocated);
     
     buf.params.validate();
-    xassert_eq(buf.params.nbuf, params.num_downsampling_levels);
+    xassert_eq(buf.params.nbuf, params.num_primary_trees);
     xassert_eq(buf.params.beams_per_batch, params.beams_per_batch);         
     xassert(buf.is_allocated);
     xassert(buf.on_gpu());
 
-    for (long ids = 0; ids < params.num_downsampling_levels; ids++) {
+    for (long ipri = 0; ipri < params.num_primary_trees; ipri++) {
         long nb = params.beams_per_batch;
-        long rk = params.input_total_rank - (ids ? 1 : 0);
-        long nt = xdiv(params.ntime, pow2(ids));
-        xassert_shape_eq(buf.bufs.at(ids), ({ nb, pow2(rk), nt }));
+        long rk = params.input_total_rank - (ipri ? 1 : 0);
+        long nt = xdiv(params.ntime, pow2(ipri));
+        xassert_shape_eq(buf.bufs.at(ipri), ({ nb, pow2(rk), nt }));
     }
 
-    if (params.num_downsampling_levels <= 1)
+    if (params.num_primary_trees <= 1)
         return;
 
     T *pstate = (T*)persistent_state.data + (ibatch * params.beams_per_batch * state_nelts_per_beam);
@@ -959,13 +959,13 @@ struct TestInstanceLDS
         ti.params.dtype = (rand_uniform() < 0.5) ? Dtype::native<float>() : Dtype::native<__half>();
         ti.params.output_dd_rank = rand_int(1,8);  // GpuLaggedDownsamplingKernel needs 1 <= output_dd_rank <= 7
         ti.params.input_total_rank = ti.params.output_dd_rank + rand_int(1,5);
-        ti.params.num_downsampling_levels = rand_int(1, constants::max_downsampling_level);  // no +1 here
+        ti.params.num_primary_trees = rand_int(1, constants::max_primary_trees);  // no +1 here
 
         auto v = ksgpu::random_integers_with_bounded_product(2,10);
         ti.params.total_beams = v[0] * v[1];
         ti.params.beams_per_batch = v[1];
         
-        long nt_divisor = xdiv(1024, ti.params.dtype.nbits) * pow2(ti.params.num_downsampling_levels+1);
+        long nt_divisor = xdiv(1024, ti.params.dtype.nbits) * pow2(ti.params.num_primary_trees+1);
         long p = ti.params.total_beams * pow2(ti.params.input_total_rank) * nt_divisor;
         long q = (10*1000*1000) / p;
         q = max(q, 4L);
@@ -984,11 +984,11 @@ static DedispersionBuffer make_buffer(const LaggedDownsamplingKernelParams &lds_
     DedispersionBufferParams dd_params;
     dd_params.dtype = lds_params.dtype;
     dd_params.beams_per_batch = lds_params.beams_per_batch;
-    dd_params.nbuf = lds_params.num_downsampling_levels;
+    dd_params.nbuf = lds_params.num_primary_trees;
 
-    for (long ids = 0; ids < lds_params.num_downsampling_levels; ids++) {
-        long rk = lds_params.input_total_rank - (ids ? 1 : 0);
-        long nt = xdiv(lds_params.ntime, pow2(ids));
+    for (long ipri = 0; ipri < lds_params.num_primary_trees; ipri++) {
+        long rk = lds_params.input_total_rank - (ipri ? 1 : 0);
+        long nt = xdiv(lds_params.ntime, pow2(ipri));
         dd_params.buf_rank.push_back(rk);
         dd_params.buf_ntime.push_back(nt);
     }
@@ -1033,11 +1033,11 @@ static void run_test(const TestInstanceLDS &ti)
             gpu_kernel->launch(gpu_buf, ichunk, ibatch, nullptr);
 
             // Compare results.
-            for (int ids = 1; ids < p.num_downsampling_levels; ids++) {
-                double epsabs = 3 * p.dtype.precision() * sqrt(ids+1);
+            for (int ipri = 1; ipri < p.num_primary_trees; ipri++) {
+                double epsabs = 3 * p.dtype.precision() * sqrt(ipri+1);
                 
-                assert_arrays_equal(cpu_buf.bufs.at(ids),
-                                    gpu_buf.bufs.at(ids),
+                assert_arrays_equal(cpu_buf.bufs.at(ipri),
+                                    gpu_buf.bufs.at(ipri),
                                     "ref", "gpu", {"beam","freq","time"},
                                     epsabs, 0.0);  // epsrel=0
             }
@@ -1070,11 +1070,11 @@ DedispersionBuffer make_lds_timing_buffer(const LaggedDownsamplingKernelParams &
     DedispersionBufferParams dd_params;
     dd_params.dtype = lds_params.dtype;
     dd_params.beams_per_batch = lds_params.beams_per_batch;
-    dd_params.nbuf = lds_params.num_downsampling_levels;
+    dd_params.nbuf = lds_params.num_primary_trees;
 
-    for (long ids = 0; ids < lds_params.num_downsampling_levels; ids++) {
-        long rk = lds_params.input_total_rank - (ids ? 1 : 0);
-        long nt = xdiv(lds_params.ntime, pow2(ids));
+    for (long ipri = 0; ipri < lds_params.num_primary_trees; ipri++) {
+        long rk = lds_params.input_total_rank - (ipri ? 1 : 0);
+        long nt = xdiv(lds_params.ntime, pow2(ipri));
         dd_params.buf_rank.push_back(rk);
         dd_params.buf_ntime.push_back(nt);
     }
@@ -1119,7 +1119,7 @@ void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelParams &p
                 << "dtype=" << params.dtype
                 << ", input_total_rank=" << params.input_total_rank
                 << ", output_dd_rank=" << params.output_dd_rank
-                << ", num_downsampling_levels=" << params.num_downsampling_levels
+                << ", num_primary_trees=" << params.num_primary_trees
                 << ", pstate_overhead = " << pstate_overhead_percentage << "%"
                 << ")";
     string name = kernel_name.str();
@@ -1146,13 +1146,13 @@ void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelParams &p
 // static
 void GpuLaggedDownsamplingKernel::time_selected()
 {
-    for (int num_downsampling_levels: {2,6}) {
+    for (int num_primary_trees: {2,6}) {
         for (Dtype dtype: { Dtype::native<float>(), Dtype::native<__half>() }) {
             LaggedDownsamplingKernelParams params;
             params.dtype = dtype;
             params.input_total_rank = 16;
             params.output_dd_rank = 7;
-            params.num_downsampling_levels = num_downsampling_levels;
+            params.num_primary_trees = num_primary_trees;
             params.total_beams = 4;
             params.beams_per_batch = 4;
             params.ntime = 2048;

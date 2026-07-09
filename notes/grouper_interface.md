@@ -216,8 +216,8 @@ Here are some details that are not obvious from the example code:
    for some trees, only the upper half of the DM range is passed to the grouper,
    i.e.\ the lower edge of the dm-axis doesn't correspond to dm=0.
    (This happens for downsampled trees, since the lower half of the dm-range
-   has been searched by a previous `ds_level`. You can test for this by either
-   checking `ds_level > 0` or `dm_min > 0` in the per-tree metadata.)
+   has been searched by a previous primary tree. You can test for this by either
+   checking `primary_tree_index > 0` or `dm_min > 0` in the per-tree metadata.)
    This may affect details of your peak-finding logic.
 
    For a lot more info on these details, see the tex notes.

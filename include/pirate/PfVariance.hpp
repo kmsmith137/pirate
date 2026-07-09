@@ -89,7 +89,7 @@ public:
     long ntrees = 0;
 
     // Output: one array per tree, tree_variance[itree] has shape (N, 2^(r-L), P), where:
-    //    r = tree rank = config.tree_rank - delta_rank - (ids>0 ? 1 : 0)
+    //    r = tree rank = config.tree_rank - delta_rank - (ipri>0 ? 1 : 0)
     //    2^L = tree.pf.wt_dm_downsampling
     //    N = frequency_subbands.N
     // Note that the shape can also be written as (N, tree.ndm_wt, P).
@@ -105,7 +105,7 @@ private:
     PfVarianceConvolver convolver;     // shared full kernel bank; sliced per-tree by P
 
     // Per-tree scalars (length ntrees).
-    std::vector<long> tree_r, tree_R, tree_L, tree_P, tree_ids, tree_N, tree_klevel;
+    std::vector<long> tree_r, tree_R, tree_L, tree_P, tree_ipri, tree_N, tree_klevel;
     std::vector<std::vector<long>> tree_n_to_flo, tree_n_to_fhi;
 
     std::vector<double> freq_variances_vec;   // (nfreq,)

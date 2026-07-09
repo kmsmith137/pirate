@@ -339,18 +339,18 @@ class PfVariance:
         P2 = int(np.random.randint(P1, conv.Pmax + 1))    # shared P >= P1
         pv = PfVariance.from_tile(tile, P2, conv)          # shared, built at P2
 
-        # ids=0: add with p-truncation P2 -> P1, vs add_tile at P1.
+        # ipri=0: add with p-truncation P2 -> P1, vs add_tile at P1.
         a_new = PfVariance(k, P1); a_new.add(pv)
         a_old = PfVariance(k, P1); a_old.add_tile(tile, conv)
         assert np.allclose(a_new.unpack(tile.dbits), a_old.unpack(tile.dbits)), (k, P1, P2)
 
-        # ids>0: add(upper_half) + truncation, vs specialize_dbits(1, 1, low=False) + add_tile.
+        # ipri>0: add(upper_half) + truncation, vs specialize_dbits(1, 1, low=False) + add_tile.
         spec = tile.specialize_dbits(1, 1, low=False)
         b_new = PfVariance(k - 1, P1); b_new.add(pv, upper_half=True)
         b_old = PfVariance(k - 1, P1); b_old.add_tile(spec, conv)
         assert np.allclose(b_new.unpack(spec.dbits), b_old.unpack(spec.dbits)), (k, P1, P2)
 
-        # scale: add(scale=c) accumulates c * pfvar (both ids branches).
+        # scale: add(scale=c) accumulates c * pfvar (both ipri branches).
         c = float(np.random.uniform(0.5, 2.0))
         for base, ph in ((a_new, False), (b_new, True)):
             s = PfVariance(base.rank, P1); s.add(pv, upper_half=ph, scale=c)
@@ -378,7 +378,7 @@ class PfAvarExact:
       ntrees:          number of DedispersionTrees (= plan.ntrees)
       nfreq:           number of input frequency channels
       freq_variances:  length-nfreq input array containing input variances
-      tree_r:          config.tree_rank - delta - (ids>0 ? 1 : 0), a length-ntrees array
+      tree_r:          config.tree_rank - delta - (ipri>0 ? 1 : 0), a length-ntrees array
       tree_R:          pf_rank (a length-ntrees array, can differ from the config pf_rank)
       tree_P:          nprofiles (a length-ntrees array)
       tree_fs:         length-ntrees list of FrequencySubbands (= tree.frequency_subbands).
@@ -403,12 +403,12 @@ class PfAvarExact:
         assert self.freq_variances.shape == (self.nfreq,), (self.freq_variances.shape, self.nfreq)
         assert np.all(self.freq_variances > 0.0), float(self.freq_variances.min())
 
-        # First line is equivalent to: tree_r[itree] = config.tree_rank - delta - (ids > 0).
+        # First line is equivalent to: tree_r[itree] = config.tree_rank - delta - (ipri > 0).
         self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
         self.tree_P = np.array([t.nprofiles for t in plan.trees])
         self.tree_fs = [t.frequency_subbands for t in plan.trees]
-        self._tree_ids = np.array([t.ds_level for t in plan.trees])
+        self._tree_ipri = np.array([t.primary_tree_index for t in plan.trees])
 
         # per_tfm: (ntrees,nfreq,M) -> (length-M list of (PfVariance rank r-R, or None))
         # per_tm:  (ntrees,M) -> (PfVariance rank r-R)   [accumulated alongside per_tfm]
@@ -420,7 +420,7 @@ class PfAvarExact:
         
         for itree in range(self.ntrees):
             r, R, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_P[itree])
-            fs, ids = self.tree_fs[itree], self._tree_ids[itree]
+            fs, ipri = self.tree_fs[itree], self._tree_ipri[itree]
             
             self.tree_variance[itree] = np.zeros((fs.M, 2**(r-R), P))
             self.per_tfm[itree] = [ None ] * self.nfreq
@@ -429,7 +429,7 @@ class PfAvarExact:
             if progress:
                 print(f"  PfAvarExact tree {itree}/{self.ntrees}: ", end="", flush=True)
                 
-            cmap_rank = r + (ids > 0)                   # = tree_r + (ids>0) = config.tree_rank - delta
+            cmap_rank = r + (ipri > 0)                   # = tree_r + (ipri>0) = config.tree_rank - delta
             cmap = full_cmap[: (1 << cmap_rank) + 1]    # truncate to first 2^cmap_rank channels
 
             for ifreq in range(self.nfreq):
@@ -440,7 +440,7 @@ class PfAvarExact:
                 if not (ifreq < cmap[0] and ifreq + 1 > cmap[-1]):    # ifreq below the truncated band
                     continue
 
-                ssa = SparseTilePerM.make_dedispersion_output(cmap, ifreq, fs, upper_half_only=(ids > 0))
+                ssa = SparseTilePerM.make_dedispersion_output(cmap, ifreq, fs, upper_half_only=(ipri > 0))
 
                 for (m,tile) in enumerate(ssa.per_m):
                     if tile is None:
@@ -485,7 +485,7 @@ class PfAvarApproximation:
       ntrees:          number of DedispersionTrees (= plan.ntrees)
       nfreq:           number of input frequency channels
       freq_variances:  length-nfreq input array containing input variances
-      tree_r:          config.tree_rank - delta - (ids>0 ? 1 : 0), a length-ntrees array
+      tree_r:          config.tree_rank - delta - (ipri>0 ? 1 : 0), a length-ntrees array
       tree_R:          pf_rank (a length-ntrees array, can differ from the config pf_rank)
       tree_L:          log2(wt_dm_downsampling) (a length-ntrees array); requires 0 <= R <= L <= r
       tree_P:          nprofiles (a length-ntrees array)
@@ -511,7 +511,7 @@ class PfAvarApproximation:
         assert self.freq_variances.shape == (self.nfreq,), (self.freq_variances.shape, self.nfreq)
         assert np.all(self.freq_variances > 0.0), float(self.freq_variances.min())
 
-        # First line is equivalent to: tree_r[itree] = config.tree_rank - delta - (ids > 0).
+        # First line is equivalent to: tree_r[itree] = config.tree_rank - delta - (ipri > 0).
         self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
         self.tree_L = np.array([integer_log2(int(t.pf.wt_dm_downsampling)) for t in plan.trees])
@@ -521,12 +521,12 @@ class PfAvarApproximation:
 
         # Strategy for re-using computations between trees:
         #  - for each ifreq, we'll call SparseTileTriple.iterate() to iterate k=0,1,2,...
-        #  - at k = (r - L + (ids?1:0)), we convert SparseTileTriple -> PfVariance and accumulate
+        #  - at k = (r - L + (ipri?1:0)), we convert SparseTileTriple -> PfVariance and accumulate
         #  - different trees may have different k ("k-level"), so we outer-loop over k and
         #     inner-loop over the trees at each k-level.
 
-        self._tree_ids = np.array([t.ds_level for t in plan.trees])
-        self._tree_klevel = self.tree_r - self.tree_L + (self._tree_ids > 0)
+        self._tree_ipri = np.array([t.primary_tree_index for t in plan.trees])
+        self._tree_klevel = self.tree_r - self.tree_L + (self._tree_ipri > 0)
         self._max_klevel = np.max(self._tree_klevel)
 
         # max P (or L) among all trees with a given klevel.
@@ -614,7 +614,7 @@ class PfAvarApproximation:
                     continue
                 
                 r, R, L, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree]), int(self.tree_P[itree])
-                upper_half = (int(self._tree_ids[itree]) > 0)
+                upper_half = (int(self._tree_ipri[itree]) > 0)
                 norm = 2.0 ** (-(L - R))
 
                 if fp >= (1 << L):

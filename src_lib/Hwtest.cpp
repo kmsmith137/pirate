@@ -628,7 +628,6 @@ struct ChimeWorker : public Hwtest::Worker
         dedispersion_config.zone_freq_edges = { 400, 800 };
         dedispersion_config.time_sample_ms = 1.0;
         dedispersion_config.tree_rank = 15;
-        dedispersion_config.num_downsampling_levels = 4;
         dedispersion_config.time_samples_per_chunk = 2048;
         dedispersion_config.dtype = Dtype::from_str("float16");
         dedispersion_config.beams_per_gpu = 16;
@@ -637,16 +636,16 @@ struct ChimeWorker : public Hwtest::Worker
         dedispersion_config.max_gpu_clag = 1000;
 
         // No early triggers or frequency subbands.
-        dedispersion_config.early_triggers = { };
         dedispersion_config.frequency_subband_counts = { 0, 0, 0, 0, 1 };
 
-        // FIXME peak_finding_params are not quite right (same params at each level).
-        // (max_width, dm_downsampling, time_downsampling, wt_dm_downsampling, wt_time_downsampling)
-        dedispersion_config.peak_finding_params = {
-            { 16, 0, 0, 64, 64 },
-            { 16, 0, 0, 64, 64 },
-            { 16, 0, 0, 64, 64 },
-            { 16, 0, 0, 64, 64 }
+        // Four primary trees, no early triggers.
+        // FIXME primary_trees peak-finding params are not quite right (same params at each primary tree).
+        // (num_early_triggers, max_width, dm_downsampling, time_downsampling, wt_dm_downsampling, wt_time_downsampling)
+        dedispersion_config.primary_trees = {
+            { 0, 16, 0, 0, 64, 64 },
+            { 0, 16, 0, 0, 64, 64 },
+            { 0, 16, 0, 0, 64, 64 },
+            { 0, 16, 0, 0, 64, 64 }
         };
         
         dedispersion_config.validate();

@@ -75,10 +75,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "Compile-time constants (pirate::constants). Read-only; assignment raises AttributeError.")
         .def_readonly_static("max_tree_rank", &constants::max_tree_rank,
             "Maximum dedispersion tree rank (number of tree channels is 2^tree_rank).")
-        .def_readonly_static("max_downsampling_level", &constants::max_downsampling_level,
-            "Maximum number of downsampling levels.")
+        .def_readonly_static("max_primary_trees", &constants::max_primary_trees,
+            "Maximum number of primary trees.")
         .def_readonly_static("max_pf_width", &constants::max_pf_width,
-            "Maximum peak-finding kernel width (PeakFindingConfig::max_width), in tree time samples.")
+            "Maximum peak-finding kernel width (PrimaryTree::max_width), in tree time samples.")
         .def_readonly_static("k_dm", &constants::k_dm,
             "Dispersion constant K_DM, in (ms MHz^2) per (pc cm^{-3}): dispersion delay (ms) = "
             "k_dm * DM * (f_lo^{-2} - f_hi^{-2}), with frequencies in MHz.")
@@ -98,7 +98,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     py::class_<DedispersionConfig>(m, "DedispersionConfig",
         "Configuration for dedispersion processing.\n\n"
         "Specifies frequency channels, time samples, dedispersion tree parameters,\n"
-        "downsampling levels, peak-finding configuration, early triggers, and GPU settings.\n"
+        "primary trees (with peak-finding configuration and early triggers), and GPU settings.\n"
         "Can be loaded from YAML files or constructed programmatically.\n\n"
         "See configs/dedispersion/chord_sb2_et.yml for an example with per-field documentation.\n\n"
         "Example usage::\n\n"
@@ -156,25 +156,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Return a deep copy of this config (does not mutate the original).\n\n"
                "Useful before overriding fields (e.g. the beam geometry) without\n"
                "affecting the caller's config object.")
-          .def("add_early_trigger", &DedispersionConfig::add_early_trigger,
-               py::arg("ds_level"), py::arg("delta_rank"),
-               "Add a single early trigger.\n\n"
-               "Early triggers are automatically kept sorted by ds_level (increasing)\n"
-               "and delta_rank (decreasing).\n\n"
-               "Args:\n"
-               "    ds_level: Downsampling level (0 <= ds_level < num_downsampling_levels)\n"
-               "    delta_rank: Specifies 'early-ness' of trigger (must be > 0)")
-          .def("add_early_triggers",
-               [](DedispersionConfig &self, long ds_level, const std::vector<long> &delta_ranks) {
-                   for (long delta_rank : delta_ranks) {
-                       self.add_early_trigger(ds_level, delta_rank);
-                   }
-               },
-               py::arg("ds_level"), py::arg("delta_ranks"),
-               "Add multiple early triggers at the same downsampling level.\n\n"
-               "Args:\n"
-               "    ds_level: Downsampling level for all triggers\n"
-               "    delta_ranks: List of delta_rank values (each specifies 'early-ness', must be > 0)")
           .def("get_nelts_per_segment", &DedispersionConfig::get_nelts_per_segment,
                "Get the number of elements per segment.\n\n"
                "Returns:\n"
@@ -241,19 +222,17 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Time sample length in milliseconds")
           .def_readwrite("tree_rank", &DedispersionConfig::tree_rank,
                "Tree rank: number of tree channels is 2^tree_rank")
-          .def_readwrite("num_downsampling_levels", &DedispersionConfig::num_downsampling_levels,
-               "Number of downsampling levels (ds_level in 0..num_downsampling_levels-1)")
           .def_readwrite("time_samples_per_chunk", &DedispersionConfig::time_samples_per_chunk,
                "Number of time samples processed per chunk")
           // Frequency sub-band configuration
           .def_readwrite("frequency_subband_counts", &DedispersionConfig::frequency_subband_counts,
                "Frequency subband counts (set to [1] to disable subbanding)")
-          // Peak-finding parameters (one per downsampling level)
-          .def_readwrite("peak_finding_params", &DedispersionConfig::peak_finding_params,
-               "Peak-finding configuration for each downsampling level")
-          // Early triggers
-          .def_readwrite("early_triggers", &DedispersionConfig::early_triggers,
-               "List of early triggers (sorted by ds_level, then delta_rank)")
+          // Primary trees (one per DM range searched)
+          .def_readwrite("primary_trees", &DedispersionConfig::primary_trees,
+               "List of PrimaryTree objects, one per DM range searched (ordered low to high DM).\n"
+               "Each primary tree holds its peak-finding configuration and num_early_triggers.")
+          .def_property_readonly("num_primary_trees", &DedispersionConfig::num_primary_trees,
+               "Number of primary trees (= len(primary_trees))")
           // GPU configuration
           .def_readwrite("beams_per_gpu", &DedispersionConfig::beams_per_gpu,
                "Number of beams processed per GPU")
@@ -281,7 +260,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "    plan = DedispersionPlan(config)\n"
         "    print(f'Plan has {plan.ntrees} trees')\n"
         "    for i, tree in enumerate(plan.trees):\n"
-        "        print(f'Tree {i}: ds_level={tree.ds_level}, dm_range=[{tree.dm_min:.1f}, {tree.dm_max:.1f}]')")
+        "        print(f'Tree {i}: primary_tree_index={tree.primary_tree_index}, dm_range=[{tree.dm_min:.1f}, {tree.dm_max:.1f}]')")
           .def(py::init<const DedispersionConfig &>(), 
                py::arg("config"),
                "Create a DedispersionPlan from a configuration.\n\n"
@@ -295,8 +274,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Total number of frequency channels (same as config.get_total_nfreq())")
           .def_readonly("nt_in", &DedispersionPlan::nt_in,
                "Number of input time samples per chunk (same as config.time_samples_per_chunk)")
-          .def_readonly("num_downsampling_levels", &DedispersionPlan::num_downsampling_levels,
-               "Number of downsampling levels (same as config.num_downsampling_levels)")
+          .def_readonly("num_primary_trees", &DedispersionPlan::num_primary_trees,
+               "Number of primary trees (same as config.num_primary_trees)")
           .def_readonly("beams_per_gpu", &DedispersionPlan::beams_per_gpu,
                "Number of beams processed per GPU (same as config.beams_per_gpu)")
           .def_readonly("beams_per_batch", &DedispersionPlan::beams_per_batch,
@@ -304,18 +283,18 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("num_active_batches", &DedispersionPlan::num_active_batches,
                "Number of active batches (same as config.num_active_batches)")
           .def_readonly("ntrees", &DedispersionPlan::ntrees,
-               "Total number of stage2 trees (num_downsampling_levels + number of early triggers)")
+               "Total number of stage2 trees (num_primary_trees + number of early triggers)")
           .def_readonly("nbits", &DedispersionPlan::nbits,
                "Number of bits per element (same as config.dtype.nbits)")
           .def_readonly("trees", &DedispersionPlan::trees,
                "Vector of DedispersionTree objects representing stage2 output trees.\n"
-               "Length is ntrees. Each tree corresponds to one (downsampling level, early trigger) pair.")
+               "Length is ntrees. Each tree corresponds to one (primary tree, early trigger) pair.")
           .def_readonly("stage1_dd_rank", &DedispersionPlan::stage1_dd_rank,
                "Active dedispersion rank of each stage1 tree.\n"
-               "Vector of length num_downsampling_levels. Stage1 trees are internal to dedispersion.")
+               "Vector of length num_primary_trees. Stage1 trees are internal to dedispersion.")
           .def_readonly("stage1_amb_rank", &DedispersionPlan::stage1_amb_rank,
                "Ambient rank of each stage1 tree (= number of coarse frequency channels).\n"
-               "Vector of length num_downsampling_levels.")
+               "Vector of length num_primary_trees.")
           .def_readonly("nelts_per_segment", &DedispersionPlan::nelts_per_segment,
                "Number of elements per GPU memory segment.\n"
                "Currently always constants::bytes_per_gpu_cache_line / sizeof(dtype)")

@@ -28,37 +28,6 @@ namespace pirate {
 #endif
 
 
-bool operator==(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y)
-{
-    return (x.ds_level == y.ds_level) && (x.delta_rank == y.delta_rank);
-}
-
-bool operator>(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y)
-{
-    if (x.ds_level > y.ds_level)
-        return true;
-    if (x.ds_level < y.ds_level)
-        return false;
-    
-    // Note reversed inequalities here, so that std::sort() is first by increasing ds_level, 
-    // and second by decreasing delta_rank.
-    if (x.delta_rank < y.delta_rank)
-        return true;
-    if (x.delta_rank > y.delta_rank)
-        return false;
-    
-    return false;  // equal
-}
-
-bool operator<(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y)
-{
-    return y > x;
-}
-
-
-// -------------------------------------------------------------------------------------------------
-
-
 // Also validates DedispersionConfig::dtype.
 int DedispersionConfig::get_nelts_per_segment() const
 {
@@ -247,23 +216,23 @@ double DedispersionConfig::dm_per_unit_delay() const
 
 double DedispersionConfig::max_dm_of_all_trees() const
 {
-    // See DedispersionPlan.cpp: tree at downsampling level 'ids' searches up to
-    // dm_max = dm0 * 2^ids, with dm0 = dm_per_unit_delay() * 2^tree_rank. dm_max is
-    // monotonic in ids and does not depend on the early-trigger delta_rank, so the
-    // largest DM across all trees is at ids = num_downsampling_levels - 1.
-    xassert(num_downsampling_levels >= 1);
+    // See DedispersionPlan.cpp: primary tree 'p' searches up to dm_max = dm0 * 2^p,
+    // with dm0 = dm_per_unit_delay() * 2^tree_rank. dm_max is monotonic in p and does
+    // not depend on the early-trigger delta_rank, so the largest DM across all trees
+    // is at p = num_primary_trees() - 1.
+    xassert(num_primary_trees() >= 1);
     double dm0 = dm_per_unit_delay() * double(pow2(tree_rank));
-    return dm0 * double(pow2(num_downsampling_levels - 1));
+    return dm0 * double(pow2(num_primary_trees() - 1));
 }
 
 
 long DedispersionConfig::max_width_of_base_tree() const
 {
-    // peak_finding_params is length num_downsampling_levels; index 0 is the base
-    // (ds_level=0) tree. Its max_width is in "tree" time samples, which at ds_level 0
-    // equals native (frame) time samples. (validate() guarantees this is nonempty.)
-    xassert(!peak_finding_params.empty());
-    return peak_finding_params.at(0).max_width;
+    // primary_trees has one entry per primary tree; index 0 is the base (p=0) tree.
+    // Its max_width is in "tree" time samples, which at p=0 equals native (frame)
+    // time samples. (validate() guarantees this is nonempty.)
+    xassert(!primary_trees.empty());
+    return primary_trees.at(0).max_width;
 }
 
 
@@ -361,37 +330,11 @@ void DedispersionConfig::test() const
 }
 
 
-void DedispersionConfig::add_early_trigger(long ds_level, long delta_rank)
-{
-    EarlyTrigger e;
-    e.ds_level = ds_level;
-    e.delta_rank = delta_rank;
-    this->early_triggers.push_back(e);
-    
-    // Incredibly lazy -- add and re-sort
-    std::sort(early_triggers.begin(), early_triggers.end());
-}
-
-
-void DedispersionConfig::add_early_triggers(long ds_level, std::initializer_list<long> delta_ranks)
-{
-    for (long delta_rank: delta_ranks) {
-        EarlyTrigger e;
-        e.ds_level = ds_level;
-        e.delta_rank = delta_rank;
-        this->early_triggers.push_back(e);
-    }
-    
-    // Incredibly lazy -- add and re-sort
-    std::sort(early_triggers.begin(), early_triggers.end());
-}
-
-                        
 void DedispersionConfig::validate() const
 {
     // Check that all members have been initialized.
     xassert(tree_rank > 0);
-    xassert(num_downsampling_levels > 0);
+    xassert(primary_trees.size() > 0);
     xassert(time_samples_per_chunk > 0);
     xassert(time_sample_ms > 0);
     xassert(beams_per_gpu > 0);
@@ -399,7 +342,7 @@ void DedispersionConfig::validate() const
     xassert(num_active_batches > 0);
 
     xassert_le(tree_rank, constants::max_tree_rank);
-    xassert_le(num_downsampling_levels, constants::max_downsampling_level);
+    xassert_le(num_primary_trees(), constants::max_primary_trees);
 
     // Validate zone_nfreq and zone_freq_edges.
     xassert(zone_nfreq.size() > 0);
@@ -415,13 +358,13 @@ void DedispersionConfig::validate() const
 
     // Note: calling get_nelts_per_segment() checks 'dtype' for validity.
     int nelts_per_segment = this->get_nelts_per_segment();
-    int min_nt = nelts_per_segment * pow2(num_downsampling_levels-1);
-    
+    int min_nt = nelts_per_segment * pow2(num_primary_trees()-1);
+
     if (time_samples_per_chunk % min_nt) {
         stringstream ss;
         ss << "DedispersionConfig: time_samples_per_chunk=" << time_samples_per_chunk
            << " must be a multiple of " << min_nt
-           << " (this value depends on dtype and num_downsampling levels)";
+           << " (this value depends on dtype and the number of primary trees)";
         throw runtime_error(ss.str());
     }
 
@@ -430,72 +373,61 @@ void DedispersionConfig::validate() const
     xassert_le(num_active_batches * beams_per_batch, beams_per_gpu);
     xassert_ge(max_gpu_clag, 0);
 
-    for (const EarlyTrigger &et: early_triggers) {
-        long ds_rank = et.ds_level ? (tree_rank-1) : (tree_rank);
-        long ds_stage1_rank = ds_rank / 2;
-        
-        xassert((et.ds_level >= 0) && (et.ds_level < num_downsampling_levels));
-
-        // The early-trigger tree has rank (ds_rank - delta_rank): a strict early trigger
-        // (delta_rank > 0) that is no smaller than the stage1 tree (ds_rank - delta_rank >=
-        // ds_stage1_rank, i.e. delta_rank <= ds_rank - ds_stage1_rank). Note ds_rank - ds_stage1_rank
-        // = ceil(ds_rank/2), which for odd ds_rank is one MORE than ds_stage1_rank -- so do not
-        // write 'delta_rank < ds_stage1_rank' here (that rejects the largest legal delta_rank, the
-        // value make_random() can emit for odd ds_rank).
-        xassert((et.delta_rank > 0) && (et.delta_rank <= ds_rank - ds_stage1_rank));
-    }
-
-    // Check validity of early triggers.
-    if (!is_sorted(early_triggers))
-        throw runtime_error("DedispersionConfig: early triggers must be sorted first by"
-                            " increasing ds_level, then second by decreasing delta_rank");
-        
     // Validate frequency_subband_counts.
     // FIXME add check that pf_rank is not too large for tree_index=0.
     // (Not sure yet what the exact constraint will be, after dust settles on all code.)
     FrequencySubbands::validate_subband_counts(frequency_subband_counts);
 
-    // Validate peak_finding_params.
-    xassert(long(peak_finding_params.size()) == num_downsampling_levels);
-    
-    for (long ds_level = 0; ds_level < num_downsampling_levels; ds_level++) {
-        const PeakFindingConfig &pfp = peak_finding_params.at(ds_level);
+    // Validate primary_trees.
+    for (long ipri = 0; ipri < num_primary_trees(); ipri++) {
+        const PrimaryTree &pt = primary_trees.at(ipri);
 
-        xassert(pfp.max_width > 0);
-        xassert(pfp.wt_dm_downsampling > 0);
-        xassert(pfp.wt_time_downsampling > 0);
+        long ds_rank = ipri ? (tree_rank-1) : (tree_rank);
+        long ds_stage1_rank = ds_rank / 2;
 
-        xassert(is_power_of_two(pfp.max_width));
-        xassert(is_power_of_two(pfp.wt_dm_downsampling));
-        xassert(is_power_of_two(pfp.wt_time_downsampling));
+        // Primary tree ipri expands into early-trigger trees with delta_rank =
+        // 1..num_early_triggers, of rank (ds_rank - delta_rank). Every early-trigger
+        // tree must be no smaller than the stage1 tree, i.e. num_early_triggers <=
+        // ds_rank - ds_stage1_rank. Note ds_rank - ds_stage1_rank = ceil(ds_rank/2),
+        // which for odd ds_rank is one MORE than ds_stage1_rank -- so do not write
+        // 'num_early_triggers < ds_stage1_rank' here (that rejects the largest legal
+        // value, which make_random() can emit for odd ds_rank).
+        xassert(pt.num_early_triggers >= 0);
+        xassert_le(pt.num_early_triggers, ds_rank - ds_stage1_rank);
 
-        xassert_le(pfp.max_width, constants::max_pf_width);
+        xassert(pt.max_width > 0);
+        xassert(pt.wt_dm_downsampling > 0);
+        xassert(pt.wt_time_downsampling > 0);
 
-        long ds_rank = ds_level ? (tree_rank-1) : (tree_rank);
-        long min_rank = ds_rank;
-        for (const EarlyTrigger &et: early_triggers)
-            if (et.ds_level == ds_level)
-                min_rank = std::min(min_rank, ds_rank - et.delta_rank);
-        
-        if (pfp.wt_dm_downsampling > pow2(min_rank)) {
+        xassert(is_power_of_two(pt.max_width));
+        xassert(is_power_of_two(pt.wt_dm_downsampling));
+        xassert(is_power_of_two(pt.wt_time_downsampling));
+
+        xassert_le(pt.max_width, constants::max_pf_width);
+
+        // Smallest rank of any tree in this primary tree's family (the earliest
+        // trigger has delta_rank = num_early_triggers).
+        long min_rank = ds_rank - pt.num_early_triggers;
+
+        if (pt.wt_dm_downsampling > pow2(min_rank)) {
             stringstream ss;
-            ss << "DedispersionConfig: wt_dm_downsampling[" << ds_level << "]=" << pfp.wt_dm_downsampling
-               << " must be <= " << pow2(min_rank) << ". This upper bound is set by the max rank of"
-               << " all trees at ds_level=" << ds_level << ", including early triggers.";
+            ss << "DedispersionConfig: wt_dm_downsampling[" << ipri << "]=" << pt.wt_dm_downsampling
+               << " must be <= " << pow2(min_rank) << ". This upper bound is set by the smallest"
+               << " tree at primary_tree_index=" << ipri << " (i.e. the earliest trigger).";
             throw runtime_error(ss.str());
         }
 
         // dm_downsampling and time_downsampling are optional (can be zero).
         // If specified, they must be powers of two and <= wt_* counterparts.
 
-        if (pfp.dm_downsampling > 0) {
-            xassert(is_power_of_two(pfp.dm_downsampling));
-            xassert(pfp.wt_dm_downsampling >= pfp.dm_downsampling);
+        if (pt.dm_downsampling > 0) {
+            xassert(is_power_of_two(pt.dm_downsampling));
+            xassert(pt.wt_dm_downsampling >= pt.dm_downsampling);
         }
 
-        if (pfp.time_downsampling > 0) {
-            xassert(is_power_of_two(pfp.time_downsampling));
-            xassert(pfp.wt_time_downsampling >= pfp.time_downsampling);
+        if (pt.time_downsampling > 0) {
+            xassert(is_power_of_two(pt.time_downsampling));
+            xassert(pt.wt_time_downsampling >= pt.time_downsampling);
         }
     }
 }
@@ -555,28 +487,27 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         stringstream ss;
         ss << "Core dedispersion parameters.\n";
         ss << "The number of \"tree\" channels is ntree = 2^tree_rank.\n";
-        ss << "The first tree (ds=0) searches delay range [0, 2^tree_rank] time samples.\n";
-        ss << "Downsampled trees (ds > 0) downsample in time by 2^ds, to search beyond the diagonal DM.\n";
-        ss << "In this config, the following DM ranges are searched at each downsampling level:";
-        
-        for (long ds = 0; ds < num_downsampling_levels; ds++) {
-            long delay_lo = (ds == 0) ? 0 : pow2(tree_rank + ds - 1);
-            long delay_hi = pow2(tree_rank + ds);
+        ss << "The first primary tree (p=0) searches delay range [0, 2^tree_rank] time samples.\n";
+        ss << "Downsampled primary trees (p > 0) downsample in time by 2^p, to search beyond the diagonal DM.\n";
+        ss << "In this config, the following DM ranges are searched by each primary tree:";
+
+        for (long p = 0; p < num_primary_trees(); p++) {
+            long delay_lo = (p == 0) ? 0 : pow2(tree_rank + p - 1);
+            long delay_hi = pow2(tree_rank + p);
             double dm_lo = delay_lo * this->dm_per_unit_delay();
             double dm_hi = delay_hi * this->dm_per_unit_delay();
-            double dt = time_sample_ms * pow2(ds);
-            
+            double dt = time_sample_ms * pow2(p);
+
             ss << fixed << setprecision(1)
-               << "\n   ds=" << ds << ": " << dt << " ms samples, "
+               << "\n   p=" << p << ": " << dt << " ms samples, "
                << "max delay " << (1.0e-3 * delay_hi * time_sample_ms) << " seconds, "
                << "DM range [" << dm_lo << ", " << dm_hi << "] pc/cm^3";
         }
-        
+
         emitter << YAML::Newline << YAML::Newline << YAML::Comment(ss.str()) << YAML::Newline << YAML::Newline;
     }
 
-    emitter << YAML::Key << "tree_rank" << YAML::Value << tree_rank
-            << YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels;
+    emitter << YAML::Key << "tree_rank" << YAML::Value << tree_rank;
 
     if (verbose)
         emitter << YAML::Newline;
@@ -586,46 +517,6 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
     emitter << YAML::Key << "dtype" << YAML::Value << dtype.str();
     if (verbose)
         emitter << YAML::Comment("can be either float32 or float16");
-
-    // ---- Early triggers ----
-
-    if (verbose) {
-        emitter << YAML::Newline << YAML::Newline << YAML::Comment(
-            "Early triggers: search a subset [fmid,fmax] of the full frequency range [freq_lo,freq_hi]\n"
-            "at reduced latency. Each downsampling level has an independent set of early triggers.\n"
-            "Early triggers are optional (this can be an empty list).\n"
-            "Syntax: list of {ds_level, delta_rank} pairs.\n"
-            "Here, delta_rank > 0 controls 'early-ness' of the trigger."
-        ) << YAML::Newline << YAML::Newline;
-    }
-
-    emitter << YAML::Key << "early_triggers"
-            << YAML::Value 
-            << YAML::BeginSeq;
-
-    for (const auto &early_trigger: this->early_triggers) {
-        long ds = early_trigger.ds_level;
-        double dm_lo = this->dm_per_unit_delay() * ((ds == 0) ? 0 : pow2(tree_rank + ds - 1));
-        double dm_hi = this->dm_per_unit_delay() * pow2(tree_rank + ds);
-        double max_delay = 1.0e-3 * time_sample_ms * pow2(tree_rank + ds - early_trigger.delta_rank);
-        double freq = this->delay_to_frequency(pow2(tree_rank - early_trigger.delta_rank));
-       
-        stringstream ss;
-        ss << fixed << setprecision(1)
-           << "triggers at " << freq << " MHz, "
-           << "max delay " << max_delay << " seconds, "
-           << "DM range [" << dm_lo << ", " << dm_hi << "] pc/cm^3";
-
-        emitter
-            << YAML::Flow
-            << YAML::BeginMap
-            << YAML::Key << "ds_level" << YAML::Value << early_trigger.ds_level
-            << YAML::Key << "delta_rank" << YAML::Value << early_trigger.delta_rank
-            << YAML::EndMap
-            << YAML::Comment(ss.str());
-    }
-    
-    emitter << YAML::EndSeq;
 
     // ---- Frequency subbands ----
 
@@ -654,12 +545,17 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         emitter << n;
     emitter << YAML::EndSeq;
 
-    // ---- Peak finding params ----
+    // ---- Primary trees ----
 
     if (verbose) {
         emitter << YAML::Newline << YAML::Newline << YAML::Comment(
-            "Peak finding params: one entry per downsampling level.\n"
+            "Primary trees: one entry per DM range searched, ordered from low to high DM\n"
+            "(see the DM ranges in the comment above). Each primary tree is expanded into\n"
+            "(num_early_triggers+1) dedispersion trees: the main full-band tree, plus one\n"
+            "early-trigger tree for each delta_rank = 1..num_early_triggers. Early triggers\n"
+            "search a high-frequency subset of the band at reduced latency.\n"
             "All values must be powers of two.\n"
+            "  num_early_triggers: number of early triggers (required, can be zero)\n"
             "  max_width: max width of peak-finding kernel, in \"tree\" time samples (required)\n"
             "  dm_downsampling: downsampling factor of coarse-grained array, relative to tree (optional, default=2^ceil(tree_rank/4))\n"
             "  time_downsampling: downsampling factor of coarse-grained array (optional, default=dm_downsampling)\n"
@@ -668,20 +564,35 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         ) << YAML::Newline << YAML::Newline;
     }
 
-    emitter << YAML::Key << "peak_finding_params"
+    emitter << YAML::Key << "primary_trees"
             << YAML::Value
             << YAML::BeginSeq;
-    
-    for (const auto &pfp: this->peak_finding_params) {
+
+    for (long p = 0; p < num_primary_trees(); p++) {
+        const PrimaryTree &pt = primary_trees.at(p);
+
         emitter
             << YAML::Flow
             << YAML::BeginMap
-            << YAML::Key << "max_width" << YAML::Value << pfp.max_width
-            << YAML::Key << "dm_downsampling" << YAML::Value << pfp.dm_downsampling
-            << YAML::Key << "time_downsampling" << YAML::Value << pfp.time_downsampling
-            << YAML::Key << "wt_dm_downsampling" << YAML::Value << pfp.wt_dm_downsampling
-            << YAML::Key << "wt_time_downsampling" << YAML::Value << pfp.wt_time_downsampling
+            << YAML::Key << "num_early_triggers" << YAML::Value << pt.num_early_triggers
+            << YAML::Key << "max_width" << YAML::Value << pt.max_width
+            << YAML::Key << "dm_downsampling" << YAML::Value << pt.dm_downsampling
+            << YAML::Key << "time_downsampling" << YAML::Value << pt.time_downsampling
+            << YAML::Key << "wt_dm_downsampling" << YAML::Value << pt.wt_dm_downsampling
+            << YAML::Key << "wt_time_downsampling" << YAML::Value << pt.wt_time_downsampling
             << YAML::EndMap;
+
+        // In verbose mode, show the early-trigger frequencies (highest delta_rank =
+        // earliest trigger first, matching the order of trees in the DedispersionPlan).
+        if (verbose && (pt.num_early_triggers > 0)) {
+            stringstream ss;
+            ss << fixed << setprecision(1) << "p=" << p << ": early triggers at ";
+            for (long delta = pt.num_early_triggers; delta > 0; delta--) {
+                double freq = this->delay_to_frequency(pow2(tree_rank - delta));
+                ss << freq << ((delta > 1) ? ", " : " MHz");
+            }
+            emitter << YAML::Comment(ss.str());
+        }
     }
 
     emitter << YAML::EndSeq;
@@ -737,13 +648,26 @@ DedispersionConfig DedispersionConfig::from_yaml(const string &filename)
 // static member function
 DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 {
+    // Detect the old (pre-primary_trees) config syntax and give a targeted error.
+    // (These keys were replaced by 'primary_trees' -- one entry per DM range, with
+    // early triggers folded in as 'num_early_triggers'.)
+    for (const char *k: { "peak_finding_params", "early_triggers", "num_downsampling_levels" }) {
+        if (f.has_key(k)) {
+            stringstream ss;
+            ss << f.name << ": key '" << k << "' is from an old config syntax. The keys"
+               << " 'peak_finding_params', 'early_triggers', and 'num_downsampling_levels'"
+               << " have been replaced by 'primary_trees' -- see configs/dedispersion/*.yml"
+               << " for examples of the new syntax.";
+            throw runtime_error(ss.str());
+        }
+    }
+
     DedispersionConfig ret;
 
     ret.zone_nfreq = f.get_vector<long> ("zone_nfreq");
     ret.zone_freq_edges = f.get_vector<double> ("zone_freq_edges");
     ret.time_sample_ms = f.get_scalar<double> ("time_sample_ms");
     ret.tree_rank = f.get_scalar<long> ("tree_rank");
-    ret.num_downsampling_levels = f.get_scalar<long> ("num_downsampling_levels");
     ret.time_samples_per_chunk = f.get_scalar<long> ("time_samples_per_chunk");
     ret.dtype = Dtype::from_str(f.get_scalar<string> ("dtype"));
     ret.beams_per_gpu = f.get_scalar<long> ("beams_per_gpu");
@@ -751,54 +675,39 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     ret.num_active_batches = f.get_scalar<long> ("num_active_batches");
     ret.max_gpu_clag = f.get_scalar<long> ("max_gpu_clag", 10000);
 
-    YamlFile ets = f["early_triggers"];
-
-    for (long i = 0; i < ets.size(); i++) {
-        YamlFile et = ets[i];
-        long ds_level = et.get_scalar<long> ("ds_level");
-        long delta_rank = et.get_scalar<long> ("delta_rank");
-        ret.add_early_trigger(ds_level, delta_rank);
-        et.check_for_invalid_keys();
-    }
-
     ret.frequency_subband_counts = f.get_vector<long> ("frequency_subband_counts");
 
-    YamlFile pfps = f["peak_finding_params"];
+    YamlFile pts = f["primary_trees"];
 
-    for (long i = 0; i < pfps.size(); i++) {
-        YamlFile p = pfps[i];
-        PeakFindingConfig pfp;
-        pfp.max_width = p.get_scalar<long> ("max_width");
-        pfp.dm_downsampling = p.get_scalar<long> ("dm_downsampling", 0L);
-        pfp.time_downsampling = p.get_scalar<long> ("time_downsampling", 0L);
-        pfp.wt_dm_downsampling = p.get_scalar<long> ("wt_dm_downsampling");
-        pfp.wt_time_downsampling = p.get_scalar<long> ("wt_time_downsampling");
-        ret.peak_finding_params.push_back(pfp);
+    for (long i = 0; i < pts.size(); i++) {
+        YamlFile p = pts[i];
+        PrimaryTree pt;
+        pt.num_early_triggers = p.get_scalar<long> ("num_early_triggers");
+        pt.max_width = p.get_scalar<long> ("max_width");
+        pt.dm_downsampling = p.get_scalar<long> ("dm_downsampling", 0L);
+        pt.time_downsampling = p.get_scalar<long> ("time_downsampling", 0L);
+        pt.wt_dm_downsampling = p.get_scalar<long> ("wt_dm_downsampling");
+        pt.wt_time_downsampling = p.get_scalar<long> ("wt_time_downsampling");
+        ret.primary_trees.push_back(pt);
         p.check_for_invalid_keys();
     }
-    
+
     f.check_for_invalid_keys();
-    
+
     ret.validate();
     return ret;
 }
 
 // Helper for DedispersionConfig::emit_cpp()
-ostream &operator<<(ostream &os, const DedispersionConfig::EarlyTrigger &et)
-{
-    os << "{" << et.ds_level << "," << et.delta_rank << "}";
-    return os;
-}
-
-// Helper for DedispersionConfig::emit_cpp()
-ostream &operator<<(ostream &os, const DedispersionConfig::PeakFindingConfig &pfc)
+ostream &operator<<(ostream &os, const DedispersionConfig::PrimaryTree &pt)
 {
     os << "{"
-       << pfc.max_width << ","
-       << pfc.dm_downsampling << ","
-       << pfc.time_downsampling << ","
-       << pfc.wt_dm_downsampling << ","
-       << pfc.wt_time_downsampling 
+       << pt.num_early_triggers << ","
+       << pt.max_width << ","
+       << pt.dm_downsampling << ","
+       << pt.time_downsampling << ","
+       << pt.wt_dm_downsampling << ","
+       << pt.wt_time_downsampling
        << "}";
 
     return os;
@@ -818,12 +727,10 @@ void DedispersionConfig::emit_cpp(ostream &os, const char *name, int indent) con
        << s << "zone_freq_edges = " << ksgpu::brace_str(zone_freq_edges) << ";\n"
        << s << "time_sample_ms = " << time_sample_ms << ";\n"
        << s << "tree_rank = " << tree_rank << ";\n"
-       << s << "num_downsampling_levels = " << num_downsampling_levels << ";\n"
        << s << "time_samples_per_chunk = " << time_samples_per_chunk << ";\n"
        << s << "dtype = Dtype::from_str(" << dtype.str() << ");\n"
        << s << "frequency_subband_counts = " << ksgpu::brace_str(frequency_subband_counts) << ";\n"
-       << s << "peak_finding_params = " << ksgpu::brace_str(peak_finding_params) << ";\n"
-       << s << "early_triggers = " << ksgpu::brace_str(early_triggers) << ";\n"
+       << s << "primary_trees = " << ksgpu::brace_str(primary_trees) << ";\n"
        << s << "beams_per_gpu = " << beams_per_gpu << ";\n"
        << s << "beams_per_batch = " << beams_per_batch << ";\n"
        << s << "num_active_batches = " << num_active_batches << ";\n";
@@ -864,7 +771,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     vector<Key2> all_keys = CoalescedDdKernel2::registry().get_all_keys();
     vector<Key2> my_keys;
 
-    // Choose my_keys[0] ("primary" key).
+    // Choose my_keys[0] (the key for the base primary tree, ipri=0).
 
     if (args.gpu_valid) {
         vector<Key2> valid_keys;
@@ -887,11 +794,11 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         Dtype dtype = rand_bool() ? Dtype::from_str("float32") : Dtype::from_str("float16");
         long dd_rank = rand_int(1, max_stage2_rank + 1);
 
-        Key2 primary_key = _make_random_cdd2_key(dtype, dd_rank);
-        my_keys.push_back(primary_key);
+        Key2 base_key = _make_random_cdd2_key(dtype, dd_rank);
+        my_keys.push_back(base_key);
     }
 
-    // Primary key -> (dtype, subband_counts).
+    // Base key -> (dtype, subband_counts).
     DedispersionConfig ret;
     ret.dtype = my_keys.at(0).dtype;
     ret.frequency_subband_counts = my_keys.at(0).subband_counts;
@@ -912,14 +819,14 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     // Sample time.
     ret.time_sample_ms = rand_uniform(1.0, 10.0);
 
-    // Choose ret.num_downsampling_levels and my_keys[1:].
+    // Choose the number of primary trees (npri) and my_keys[1:].
 
     long ds_stage2_dd_rank = ret.tree_rank / 2;
     long ds_pf_rank = (ds_stage2_dd_rank + 1) / 2;
     vector<long> ds_subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, 0, ds_pf_rank);
 
     // May be overridden shortly.
-    ret.num_downsampling_levels = 1;
+    long npri = 1;
 
     if (args.gpu_valid && (ds_stage2_dd_rank >= 1)) {
         // All keys with correct (dtype, dd_rank, subband_counts).
@@ -929,9 +836,9 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
                 valid_keys.push_back(k);
 
         if (valid_keys.size() > 0) {
-            ret.num_downsampling_levels = rand_int(1,5);
-            for (int ds_level = 1; ds_level < ret.num_downsampling_levels; ds_level++) {
-                // For each downsampling level, we choose independent (Dout, Tinner, Wmax).
+            npri = rand_int(1,5);
+            for (int ipri = 1; ipri < npri; ipri++) {
+                // For each downsampled primary tree, we choose independent (Dout, Tinner, Wmax).
                 // This is artificial, but does a good job of exercising kernels.
                 long ix = rand_int(0, valid_keys.size());
                 my_keys.push_back(valid_keys.at(ix));
@@ -939,10 +846,10 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         }
     }
     else if (!args.gpu_valid && (ds_stage2_dd_rank >= 1)) {
-        ret.num_downsampling_levels = rand_int(1,5);
+        npri = rand_int(1,5);
 
-        for (int ds_level = 1; ds_level < ret.num_downsampling_levels; ds_level++) {
-            // For each downsampling level, we choose independent (Dout, Tinner, Wmax).   
+        for (int ipri = 1; ipri < npri; ipri++) {
+            // For each downsampled primary tree, we choose independent (Dout, Tinner, Wmax).
             Key2 ds_key = _make_random_cdd2_key(ret.dtype, ds_stage2_dd_rank);
             ds_key.subband_counts = ds_subband_counts;  // clobber
             my_keys.push_back(ds_key);
@@ -951,7 +858,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
     // Time_samples_per_chunk, beam configuration.
 
-    long nt_divisor = ret.get_nelts_per_segment() * pow2(ret.num_downsampling_levels-1);
+    long nt_divisor = ret.get_nelts_per_segment() * pow2(npri-1);
     long n = xdiv(8192, nt_divisor);
     auto v = ksgpu::random_integers_with_bounded_product(3, n);
 
@@ -961,7 +868,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     ret.num_active_batches = rand_int(1,v[2]+1);
 
     // GPU configuration.
-    long max_delay = pow2(ret.tree_rank + ret.num_downsampling_levels - 1);
+    long max_delay = pow2(ret.tree_rank + npri - 1);
     long max_clag = (max_delay / ret.time_samples_per_chunk) + 1;
     ret.max_gpu_clag = rand_int(0, max_clag+1);
 
@@ -971,34 +878,35 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         nt_divisor *= 2;
 
     if (args.verbose) {
-        for (int ds_level = 0; ds_level < ret.num_downsampling_levels; ds_level++)
-            cout << "DedispersionConfig::make_random(): key[" << ds_level << "]"
-                 << " = " << my_keys.at(ds_level) << endl;
+        for (int ipri = 0; ipri < npri; ipri++)
+            cout << "DedispersionConfig::make_random(): key[" << ipri << "]"
+                 << " = " << my_keys.at(ipri) << endl;
 
         cout << "DedispersionConfig::make_random(): "
              << "time_samples_per_chunk=" << ret.time_samples_per_chunk << ", "
              << "nt_divisor=" << nt_divisor << endl;
     }
 
-    // Loop over stage1 trees. Assign peak-finding params and early trigger candidates.
+    // Loop over primary trees. Assign peak-finding params, and compute the max
+    // supported num_early_triggers for each primary tree.
 
-    vector<EarlyTrigger> et_candidates;
+    vector<long> max_et(npri, 0);
 
-    for (long ds_level = 0; ds_level < ret.num_downsampling_levels; ds_level++) {
-        const Key2 &k = my_keys.at(ds_level);
+    for (long ipri = 0; ipri < npri; ipri++) {
+        const Key2 &k = my_keys.at(ipri);
 
-        long tot_rank = ds_level ? (ret.tree_rank-1) : ret.tree_rank;
+        long tot_rank = ipri ? (ret.tree_rank-1) : ret.tree_rank;
         long stage1_dd_rank = tot_rank / 2;
         long stage2_dd_rank = tot_rank - stage1_dd_rank;
 
-        // Min/max log2(PeakFindingConfig::wt_time_downsampling).
-        long nt_ds = xdiv(nt_divisor, pow2(ds_level)); 
+        // Min/max log2(PrimaryTree::wt_time_downsampling).
+        long nt_ds = xdiv(nt_divisor, pow2(ipri));
         long min_wtds = xdiv(1024, k.Tinner * ret.dtype.nbits);
         long min_lg2_wtds = integer_log2(min_wtds);
         long max_lg2_wtds = (k.Tinner == 1) ? integer_log2(nt_ds) : min_lg2_wtds;
 
-        // Min/max log2(PeakFindingConfig::wt_dm_downsampling).
-        // FIXME: assuming default DM downsampling (PeakFindingConfig::dm_downsampling == 0) for now.
+        // Min/max log2(PrimaryTree::wt_dm_downsampling).
+        // FIXME: assuming default DM downsampling (PrimaryTree::dm_downsampling == 0) for now.
         long min_lg2_wdds = (stage2_dd_rank + 1) / 2;  // same as pf_rank
         long max_lg2_wdds = tot_rank;
 
@@ -1008,57 +916,67 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
         // FIXME using default dm/time downsampling factors for now.
 
-        PeakFindingConfig pfc;
-        pfc.max_width = k.Wmax;
-        pfc.dm_downsampling = 0;    // see above
-        pfc.time_downsampling = k.Dout;
-        pfc.wt_dm_downsampling = pow2(rand_int(min_lg2_wdds, max_lg2_wdds+1));
-        pfc.wt_time_downsampling = pow2(rand_int(min_lg2_wtds, max_lg2_wtds+1));
-        ret.peak_finding_params.push_back(pfc);
+        PrimaryTree pt;
+        pt.num_early_triggers = 0;   // assigned below
+        pt.max_width = k.Wmax;
+        pt.dm_downsampling = 0;    // see above
+        pt.time_downsampling = k.Dout;
+        pt.wt_dm_downsampling = pow2(rand_int(min_lg2_wdds, max_lg2_wdds+1));
+        pt.wt_time_downsampling = pow2(rand_int(min_lg2_wtds, max_lg2_wtds+1));
+        ret.primary_trees.push_back(pt);
 
         // FIXME min_et_rank should be (stage1_dd_rank). I'm currently using (stage1_dd_rank + 1)
         // as a kludge, since my GpuDedispersionKernel doesn't support dd_rank=0.
 
-        int min_et_rank = stage1_dd_rank + 1;
-        int max_et_rank = tot_rank - 1;
+        long min_et_rank = stage1_dd_rank + 1;
 
         // The early trigger tree size can't be less than the wt_dm downsampling factor.
-        min_et_rank = max(min_et_rank, integer_log2(pfc.wt_dm_downsampling));
+        min_et_rank = max(min_et_rank, (long)integer_log2(pt.wt_dm_downsampling));
 
-        for (long et_rank = min_et_rank; et_rank <= max_et_rank; et_rank++) {
+        // Early triggers are consecutive (delta_rank = 1..num_early_triggers), so walk
+        // delta_rank upward (i.e. et_rank downward from tot_rank-1) and stop at the
+        // first unsupported value: a gap in GPU-kernel coverage caps num_early_triggers.
+
+        for (long delta_rank = 1; ; delta_rank++) {
+            long et_rank = tot_rank - delta_rank;
+            if (et_rank < min_et_rank)
+                break;
+
             if (args.gpu_valid) {
                 Key2 ds_key = k;
                 ds_key.dd_rank = et_rank - stage1_dd_rank;
 
-                // Mimics the logic used in the DedispersionPlan constructor, 
+                // Mimics the logic used in the DedispersionPlan constructor,
                 // to modify the subband_counts for the stage2 tree.
-                long delta_rank = tot_rank - et_rank;
                 long pf_rank = (ds_key.dd_rank + 1) / 2;
                 ds_key.subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, delta_rank, pf_rank);
 
                 // If there is no kernel in the registry for this (dd_rank, subband_counts),
-                // then this et_rank is not an early trigger candidate.
+                // then this delta_rank (and all larger ones) is not supported.
                 if (!CoalescedDdKernel2::registry().has_key(ds_key))
-                    continue;
+                    break;
             }
 
-            EarlyTrigger et;
-            et.ds_level = ds_level;
-            et.delta_rank = tot_rank - et_rank;
-            et_candidates.push_back(et);
+            max_et.at(ipri) = delta_rank;
         }
     }
 
-    // Choose early triggers (from et_candidates).
+    // Assign num_early_triggers to each primary tree, treating args.max_early_triggers
+    // as a bound on the TOTAL early-trigger count. Process the primary trees in random
+    // order, so the budget does not systematically starve large ipri.
 
-    ksgpu::randomly_permute(et_candidates);
+    vector<long> ipri_order(npri);
+    for (long i = 0; i < npri; i++)
+        ipri_order[i] = i;
+    ksgpu::randomly_permute(ipri_order);
 
-    int max_et = min(int(et_candidates.size()), args.max_early_triggers);
-    int num_et = rand_int(0, max_et+1);
+    long et_budget = args.max_early_triggers;
 
-    for (int i = 0; i < num_et; i++) {
-        const EarlyTrigger &et = et_candidates.at(i);
-        ret.add_early_trigger(et.ds_level, et.delta_rank);
+    for (long ipri: ipri_order) {
+        long cap = min(max_et.at(ipri), et_budget);
+        long num_et = rand_int(0, cap+1);
+        ret.primary_trees.at(ipri).num_early_triggers = num_et;
+        et_budget -= num_et;
     }
 
     ret.validate();
@@ -1082,18 +1000,20 @@ DedispersionConfig DedispersionConfig::make_mini_chord(Dtype dtype)
     ret.zone_nfreq = { 8192, 8192, 6144, 2048, 3584 };
     ret.tree_rank = 16;
     ret.time_sample_ms = 1.0;
-    ret.num_downsampling_levels = 4;
     ret.time_samples_per_chunk = 2048;
     ret.dtype = dtype;
     ret.beams_per_gpu = 4;
     ret.beams_per_batch = 2;
     ret.num_active_batches = 2;
     ret.frequency_subband_counts = { 0, 0, 0, 0, 1 };
-    ret.peak_finding_params = {
-        { 16, 0, 0, 64, 64 },
-        { 16, 0, 0, 64, 64 },
-        { 16, 0, 0, 64, 64 },
-        { 16, 0, 0, 64, 64 }
+
+    // Four primary trees, no early triggers.
+    // (num_early_triggers, max_width, dm_downsampling, time_downsampling, wt_dm_downsampling, wt_time_downsampling)
+    ret.primary_trees = {
+        { 0, 16, 0, 0, 64, 64 },
+        { 0, 16, 0, 0, 64, 64 },
+        { 0, 16, 0, 0, 64, 64 },
+        { 0, 16, 0, 0, 64, 64 }
     };
 
     ret.validate();

@@ -216,7 +216,7 @@ class FrbGrouperInjections:
         Called once from __enter__ (after the handshake yamls are parsed). Following
         notes/tree_dedispersion.tex, section "Dedispersion output arrays", the
         per-tree output geometry (ndm_out, nt_out, d_lo, d_hi) is computed from
-        (T_in, r_top, ids, delta, T_ds, D_ds) and cross-checked against the plan's
+        (T_in, r_top, p, delta, T_ds, D_ds) and cross-checked against the plan's
         stored ndm_out/nt_out/dm_min/dm_max (a one-time guard against code/tex/plan
         drift). Sets the members used by create_events():
 
@@ -255,17 +255,17 @@ class FrbGrouperInjections:
         self._band_freq_lo_MHz = float(f_lo)
         self._band_freq_hi_MHz = float(f_hi)
 
-        # Per-tree geometry from (ids, delta, T_ds, D_ds) via the tex equations,
+        # Per-tree geometry from (p, delta, T_ds, D_ds) via the tex equations,
         # cross-checked against the plan's stored ndm_out/nt_out/dm_min/dm_max.
         ndm_l, nt_l, dlo_l, dhi_l, delta_l = [], [], [], [], []
         ss_it0_l = []
         for i, tr in enumerate(trees):
-            ids, delta = tr['ds_level'], tr['delta_rank']
+            p, delta = tr['primary_tree_index'], tr['delta_rank']
             T_ds, D_ds = tr['time_downsampling'], tr['dm_downsampling']
-            ndm = (2**(r_top - delta) if ids == 0 else 2**(r_top - delta - 1)) // D_ds  # Eq.(ndm_out)
-            nt  = T_in // (2**ids * T_ds)                                               # Eq.(nt_out)
-            dlo = 0 if ids == 0 else 2**(r_top + ids - 1)                               # Eq.(dlo_dhi)
-            dhi = 2**(r_top + ids)                                                      # Eq.(dlo_dhi)
+            ndm = (2**(r_top - delta) if p == 0 else 2**(r_top - delta - 1)) // D_ds    # Eq.(ndm_out)
+            nt  = T_in // (2**p * T_ds)                                                 # Eq.(nt_out)
+            dlo = 0 if p == 0 else 2**(r_top + p - 1)                                   # Eq.(dlo_dhi)
+            dhi = 2**(r_top + p)                                                        # Eq.(dlo_dhi)
             if (ndm != tr['ndm_out']) or (nt != tr['nt_out']):
                 raise RuntimeError(f"FrbGrouper: tex-derived (ndm_out, nt_out) = ({ndm}, {nt}) "
                                    f"disagree with the plan ({tr['ndm_out']}, {tr['nt_out']}) "
@@ -282,8 +282,8 @@ class FrbGrouperInjections:
             # Steady-state boundary: element (ichunk, idm, it) is unaffected by the
             # zero-padding before the start of acquisition iff
             #     n*T_ds >= d0 + (idm+1)*D_ds - 1 + 4*Wmax,    n = ichunk*nt_out + it
-            # in "tree" samples (= 2^ids input samples; max_width has these units too).
-            # Here d0 = dlo/2^(delta+ids) is the tree's lowest internal delay, and DM
+            # in "tree" samples (= 2^p input samples; max_width has these units too).
+            # Here d0 = dlo/2^(delta+p) is the tree's lowest internal delay, and DM
             # bin idm covers internal delays [d0 + idm*D_ds, d0 + (idm+1)*D_ds): the
             # dedispersion output at internal delay d and (trigger-freq) time tau
             # references input samples [tau - d, tau], subband multiplets reference
@@ -292,7 +292,7 @@ class FrbGrouperInjections:
             # (padded to 4*Wmax). Solving for the smallest steady-state n (ceil
             # division; exact for integer n) gives the per-idm array below.
             Wmax = tr['max_width']
-            d0 = dlo // 2**(delta + ids)
+            d0 = dlo // 2**(delta + p)
             dmax = d0 + (np.arange(ndm, dtype=np.int64) + 1) * D_ds - 1  # max internal delay in bin idm
             ss_it0_l.append((dmax + 4*Wmax + T_ds - 1) // T_ds)
 

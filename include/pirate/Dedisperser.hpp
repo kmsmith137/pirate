@@ -409,7 +409,7 @@ struct ReferenceDedisperserBase
     long nt_in = 0;                        // same as params.plan->nt_in
     long total_beams = 0;                  // same as params.plan->beams_per_gpu
     long beams_per_batch = 0;              // same as params.plan->beams_per_batch
-    long num_downsampling_levels = 0;      // same as params.plan->num_downsampling_levels
+    long num_primary_trees = 0;      // same as params.plan->num_primary_trees
     long nbatches = 0;                     // = (total_beams / beams_per_batch)
     long ntrees = 0;                       // same as params.plan->ntrees
     std::vector<DedispersionTree> trees;   // same as params.plan->trees

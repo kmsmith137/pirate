@@ -27,21 +27,21 @@ struct LaggedDownsamplingKernelParams
     //
     //   (beams_per_batch, pow2(input_total_rank), ntime).
     //
-    // The output is a length (num_downsampling_levels - 1) sequence of arrays,
-    // indexed by 1 <= ids < num_downsampling_levels, with array shape
+    // The output is a length (num_primary_trees - 1) sequence of arrays,
+    // indexed by 1 <= ipri < num_primary_trees, with array shape
     //
-    //   (beams_per_batch, pow2(input_total_rank-1), ntime / 2^ids).
+    //   (beams_per_batch, pow2(input_total_rank-1), ntime / 2^ipri).
     //
     // The 'output_dd_rank' parameter is the dedispersion rank of the
     // "stage1" transform that will subseqeuntly be applied to the output
-    // arrays (which must be the same for all values of ids), satisfying:
+    // arrays (which must be the same for all values of ipri), satisfying:
     //
     //   0 <= output_dd_rank <= (input_total_rank-1).
     
     ksgpu::Dtype dtype;                 // same as DedispersionConfig::dtype
     long input_total_rank = -1;         // same as DedispersionConfig::tree_rank;
     long output_dd_rank = -1;           // same as DedispersionPlan::stage1_dd_rank[1]
-    long num_downsampling_levels = -1;  // same as DedispersionConfig::num_downsampling_levels
+    long num_primary_trees = -1;        // same as DedispersionConfig::num_primary_trees()
     long total_beams = 0;               // same as DedispersionConfig::beams_per_gpu
     long beams_per_batch = 0;           // same as DedispersionConfig::beams_per_batch
     long ntime = 0;                     // same as DedispersionConfig::time_samples_per_chunk

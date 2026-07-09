@@ -250,7 +250,7 @@ PfAvarApproximation::PfAvarApproximation(const shared_ptr<DedispersionPlan> &pla
     tree_R.resize(ntrees);
     tree_L.resize(ntrees);
     tree_P.resize(ntrees);
-    tree_ids.resize(ntrees);
+    tree_ipri.resize(ntrees);
     tree_N.resize(ntrees);
     tree_klevel.resize(ntrees);
     tree_n_to_flo.resize(ntrees);
@@ -263,12 +263,12 @@ PfAvarApproximation::PfAvarApproximation(const shared_ptr<DedispersionPlan> &pla
         tree_R[t] = fs.pf_rank;
         tree_L[t] = integer_log2(tr.pf.wt_dm_downsampling);
         tree_P[t] = tr.nprofiles;
-        tree_ids[t] = tr.ds_level;
+        tree_ipri[t] = tr.primary_tree_index;
         tree_N[t] = fs.N;
         tree_n_to_flo[t] = fs.n_to_flo;
         tree_n_to_fhi[t] = fs.n_to_fhi;
         xassert((tree_R[t] >= 0) && (tree_R[t] <= tree_L[t]) && (tree_L[t] <= tree_r[t]));
-        tree_klevel[t] = tree_r[t] - tree_L[t] + (tree_ids[t] > 0 ? 1 : 0);
+        tree_klevel[t] = tree_r[t] - tree_L[t] + (tree_ipri[t] > 0 ? 1 : 0);
     }
 
     max_klevel = ntrees ? *std::max_element(tree_klevel.begin(), tree_klevel.end()) : 0;
@@ -354,7 +354,7 @@ void PfAvarApproximation::process_klevel(const SparseTileTriple &sarr, long k, l
             long R = tree_R[t], L = tree_L[t];
             if (fp >= (1L << L))
                 continue;                              // sub-block fp is outside this tree
-            bool upper_half = (tree_ids[t] > 0);
+            bool upper_half = (tree_ipri[t] > 0);
             double norm = std::ldexp(1.0, -(int)(L - R));   // 2^-(L-R)
             long f = fp >> (L - R);                          // coarsify f-index by 2^(L-R)
             per_tf[t][f].add(pv, upper_half, norm * freq_variances_vec[ifreq]);

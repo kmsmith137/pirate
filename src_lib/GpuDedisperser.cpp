@@ -159,8 +159,8 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
     }
 
     // Stage1 dedispersion kernels.
-    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
-        const DedispersionKernelParams &dd_params = plan->stage1_dd_kernel_params.at(ids);
+    for (long ipri = 0; ipri < plan->num_primary_trees; ipri++) {
+        const DedispersionKernelParams &dd_params = plan->stage1_dd_kernel_params.at(ipri);
         auto dd_kernel = make_shared<GpuDedispersionKernel> (dd_params);
         this->resource_tracker += dd_kernel->resource_tracker;
         this->stage1_dd_kernels.push_back(dd_kernel);
@@ -538,10 +538,10 @@ void GpuDedisperser::_launch_dd_stage1(long ichunk, long ibatch, cudaStream_t st
 {
     long istream = (ichunk * nbatches + ibatch) % nstreams;
 
-    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
-        shared_ptr<GpuDedispersionKernel> kernel = stage1_dd_kernels.at(ids);
+    for (long ipri = 0; ipri < plan->num_primary_trees; ipri++) {
+        shared_ptr<GpuDedispersionKernel> kernel = stage1_dd_kernels.at(ipri);
         const DedispersionKernelParams &kp = kernel->params;
-        Array<void> dd_buf = stage1_dd_bufs.at(istream).bufs.at(ids);
+        Array<void> dd_buf = stage1_dd_bufs.at(istream).bufs.at(ipri);
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime });
@@ -1367,7 +1367,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 Array<void> gdd_max = gdd_out.out_max.at(itree);
                 Array<uint> gpu_tokens = gdd_out.out_argmax.at(itree).to_host();
 
-                long n = tree.ds_level + tree.amb_rank + tree.early_dd_rank;
+                long n = tree.primary_tree_index + tree.amb_rank + tree.early_dd_rank;
                 double eps = 3.0 * config.dtype.precision() * sqrt(n+2);
                 assert_arrays_equal(rdd0->out_max.at(itree), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"}, eps, eps);
 

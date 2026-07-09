@@ -36,10 +36,10 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Lagge
     int nb = params.beams_per_batch;
     int r = params.input_total_rank;
     int s = params.output_dd_rank + 1;
-    int nds = params.num_downsampling_levels;
+    int npri = params.num_primary_trees;
     int nt2 = xdiv(params.ntime, 2);
     
-    if (nds <= 1)
+    if (npri <= 1)
         return;
     
     Array<int> small_lags({nb * pow2(r)}, af_uhost | af_zero);
@@ -57,11 +57,11 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Lagge
         this->lagbufs_large.push_back(make_shared<ReferenceLagbuf> (large_lags, nt2));
     }
     
-    if (nds == 2)
+    if (npri == 2)
         return;
     
     LaggedDownsamplingKernelParams next_params = params;
-    next_params.num_downsampling_levels = nds-1;
+    next_params.num_primary_trees = npri-1;
     next_params.ntime = nt2;
     
     this->next = make_shared<ReferenceLaggedDownsamplingKernel> (next_params);
@@ -71,21 +71,21 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Lagge
 void ReferenceLaggedDownsamplingKernel::apply(DedispersionBuffer &buf, long ibatch)
 {
     buf.params.validate();
-    xassert_eq(buf.params.nbuf, params.num_downsampling_levels);
+    xassert_eq(buf.params.nbuf, params.num_primary_trees);
     xassert_eq(buf.params.beams_per_batch, params.beams_per_batch);         
     xassert(buf.is_allocated);
     xassert(buf.on_host());
 
     xassert((ibatch >= 0) && (ibatch < nbatches));
     
-    for (long ids = 0; ids < params.num_downsampling_levels; ids++) {
+    for (long ipri = 0; ipri < params.num_primary_trees; ipri++) {
         long nb = params.beams_per_batch;
-        long rk = params.input_total_rank - (ids ? 1 : 0);
-        long nt = xdiv(params.ntime, pow2(ids));
-        xassert_shape_eq(buf.bufs.at(ids), ({ nb, pow2(rk), nt }));
+        long rk = params.input_total_rank - (ipri ? 1 : 0);
+        long nt = xdiv(params.ntime, pow2(ipri));
+        xassert_shape_eq(buf.bufs.at(ipri), ({ nb, pow2(rk), nt }));
     }
 
-    if (params.num_downsampling_levels <= 1)
+    if (params.num_primary_trees <= 1)
         return;
 
     // The reference kernel uses float32, regardless of the dtype specified in 'params'.
@@ -98,10 +98,10 @@ void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<voi
 {
     long r = params.input_total_rank;
     long nb = params.beams_per_batch;
-    long nds = params.num_downsampling_levels;
+    long npri = params.num_primary_trees;
     long ntime = params.ntime;
 
-    xassert(nds >= 2);
+    xassert(npri >= 2);
     xassert_divisible(ntime, 2);
     xassert_shape_eq(in, ({ nb, pow2(r), ntime }));
 
@@ -130,7 +130,7 @@ void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<voi
     out_tmp = out_tmp.reshape(outp[0].ndim, outp[0].shape);
     out.fill(out_tmp);
 
-    if (nds == 2)
+    if (npri == 2)
         return;
     
     // Recurse to next downsampling level.

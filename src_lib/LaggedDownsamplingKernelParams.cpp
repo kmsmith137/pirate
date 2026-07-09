@@ -21,14 +21,14 @@ void LaggedDownsamplingKernelParams::validate() const
     xassert(output_dd_rank <= 7);
     xassert(input_total_rank >= output_dd_rank+1);
     xassert(input_total_rank <= constants::max_tree_rank);
-    xassert(num_downsampling_levels > 0);
-    xassert(num_downsampling_levels <= constants::max_downsampling_level);
+    xassert(num_primary_trees > 0);
+    xassert(num_primary_trees <= constants::max_primary_trees);
     xassert(total_beams > 0);
     xassert(beams_per_batch > 0);
     xassert(ntime > 0);
 
     xassert_divisible(total_beams, beams_per_batch);
-    xassert_divisible(ntime, pow2(num_downsampling_levels));
+    xassert_divisible(ntime, pow2(num_primary_trees));
     
     if ((dtype != Dtype::native<float>()) && (dtype != Dtype::native<__half>()))
         throw runtime_error("LaggedDownsamplingKernelParams: unsupported dtype: " + dtype.str());    
@@ -45,7 +45,7 @@ void LaggedDownsamplingKernelParams::emit_cpp(ostream &os, const char *name, int
     os << s << "dtype = Dtype::from_str(" << dtype.str() << ");\n"
        << s << "input_total_rank = " << input_total_rank << ";\n"
        << s << "output_dd_rank = " << output_dd_rank << ";\n"
-       << s << "num_downsampling_levels = " << num_downsampling_levels << ";\n"
+       << s << "num_primary_trees = " << num_primary_trees << ";\n"
        << s << "total_beams = " << total_beams << ";\n"
        << s << "beams_per_batch = " << beams_per_batch << ";\n"
        << s << "ntime = " << ntime << ";\n";

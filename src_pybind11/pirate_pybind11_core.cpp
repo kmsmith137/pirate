@@ -15,7 +15,7 @@
 #include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/SlabAllocator.hpp"
-#include "../include/pirate/DedispersionConfig.hpp"  // for PeakFindingConfig, EarlyTrigger
+#include "../include/pirate/DedispersionConfig.hpp"  // for PrimaryTree
 #include "../include/pirate/DedispersionPlan.hpp"     // FrbServer.plan property
 #include "../include/pirate/Dedisperser.hpp"           // FrbServer.dedisperser property
 #include "../include/pirate/DedispersionTree.hpp"
@@ -528,41 +528,6 @@ void register_core_bindings(pybind11::module &m)
             [](const CudaStreamPool &self) { return self.compute_streams; })
     ;
 
-    // DedispersionConfig::EarlyTrigger (nested struct)
-    py::class_<DedispersionConfig::EarlyTrigger>(m, "EarlyTrigger",
-        "Early trigger configuration for reduced-latency dedispersion.\n\n"
-        "Early triggers search a subset [fmid, fmax] of the full frequency range\n"
-        "at reduced latency. Each trigger is parameterized by a downsampling level\n"
-        "and delta_rank, which specifies how 'early' the trigger is.")
-          .def(py::init<>(),
-               "Create an EarlyTrigger with default values (ds_level=-1, delta_rank=0).")
-          .def(py::init([](long ds_level, long delta_rank) {
-                   DedispersionConfig::EarlyTrigger et;
-                   et.ds_level = ds_level;
-                   et.delta_rank = delta_rank;
-                   return et;
-               }),
-               py::arg("ds_level"),
-               py::arg("delta_rank"),
-               "Create an EarlyTrigger.\n\n"
-               "Args:\n"
-               "    ds_level: Downsampling level (0 <= ds_level < num_downsampling_levels)\n"
-               "    delta_rank: Specifies 'early-ness' of trigger (must be > 0)")
-          .def_readwrite("ds_level", &DedispersionConfig::EarlyTrigger::ds_level,
-               "Downsampling level (0 <= ds_level < num_downsampling_levels)")
-          .def_readwrite("delta_rank", &DedispersionConfig::EarlyTrigger::delta_rank,
-               "Specifies 'early-ness' of trigger (must be > 0)")
-          .def("__repr__", [](const DedispersionConfig::EarlyTrigger &self) {
-               std::ostringstream os;
-               os << self;  // Use C++ operator<<
-               return os.str();
-          })
-          .def("__eq__", [](const DedispersionConfig::EarlyTrigger &self, 
-                           const DedispersionConfig::EarlyTrigger &other) {
-               return self == other;  // Use C++ operator==
-          }, py::arg("other"))
-    ;
-
     py::class_<FrequencySubbands>(m, "FrequencySubbands")
           // Constructors
           .def(py::init<>())  // default constructor
@@ -626,49 +591,58 @@ void register_core_bindings(pybind11::module &m)
           .def_static("make_random", &FrequencySubbands::make_random)
     ;
 
-    // DedispersionConfig::PeakFindingConfig (nested struct)
-    py::class_<DedispersionConfig::PeakFindingConfig>(m, "PeakFindingConfig",
-        "Configuration for peak finding at a single downsampling level.\n\n"
-        "Defines the maximum width for peak detection and downsampling factors\n"
-        "for both the coarse-grained and weights arrays relative to tree resolution.\n"
-        "All members must be powers of two.")
+    // DedispersionConfig::PrimaryTree (nested struct)
+    py::class_<DedispersionConfig::PrimaryTree>(m, "PrimaryTree",
+        "Configuration of a single primary tree (one DM range searched).\n\n"
+        "A primary tree is expanded into (num_early_triggers+1) dedispersion trees:\n"
+        "the main full-band tree, plus one early-trigger tree for each\n"
+        "delta_rank = 1..num_early_triggers. The remaining members define the maximum\n"
+        "width for peak detection and downsampling factors for both the coarse-grained\n"
+        "and weights arrays relative to tree resolution. All numeric members must be\n"
+        "powers of two.")
           .def(py::init<>(),
-               "Create a PeakFindingConfig with default (zero) values.")
-          .def(py::init([](long max_width, long dm_downsampling, long time_downsampling,
-                          long wt_dm_downsampling, long wt_time_downsampling) {
-                   DedispersionConfig::PeakFindingConfig pf;
-                   pf.max_width = max_width;
-                   pf.dm_downsampling = dm_downsampling;
-                   pf.time_downsampling = time_downsampling;
-                   pf.wt_dm_downsampling = wt_dm_downsampling;
-                   pf.wt_time_downsampling = wt_time_downsampling;
-                   return pf;
+               "Create a PrimaryTree with default (zero) values.")
+          .def(py::init([](long num_early_triggers, long max_width, long dm_downsampling,
+                          long time_downsampling, long wt_dm_downsampling, long wt_time_downsampling) {
+                   DedispersionConfig::PrimaryTree pt;
+                   pt.num_early_triggers = num_early_triggers;
+                   pt.max_width = max_width;
+                   pt.dm_downsampling = dm_downsampling;
+                   pt.time_downsampling = time_downsampling;
+                   pt.wt_dm_downsampling = wt_dm_downsampling;
+                   pt.wt_time_downsampling = wt_time_downsampling;
+                   return pt;
                }),
+               py::arg("num_early_triggers"),
                py::arg("max_width"),
                py::arg("dm_downsampling"),
                py::arg("time_downsampling"),
                py::arg("wt_dm_downsampling"),
                py::arg("wt_time_downsampling"),
-               "Create a PeakFindingConfig.\n\n"
+               "Create a PrimaryTree.\n\n"
                "Args:\n"
+               "    num_early_triggers: Number of early triggers (delta_rank = 1..num_early_triggers)\n"
                "    max_width: Maximum width of peak-finding kernel (in tree time samples)\n"
                "    dm_downsampling: DM downsampling factor relative to tree\n"
                "    time_downsampling: Time downsampling factor relative to tree\n"
                "    wt_dm_downsampling: DM downsampling factor for weights (>= dm_downsampling)\n"
                "    wt_time_downsampling: Time downsampling for weights (>= time_downsampling)")
-          .def_readwrite("max_width", &DedispersionConfig::PeakFindingConfig::max_width,
+          .def_readwrite("num_early_triggers", &DedispersionConfig::PrimaryTree::num_early_triggers,
+               "Number of early triggers (delta_rank = 1..num_early_triggers, can be zero)")
+          .def_readwrite("max_width", &DedispersionConfig::PrimaryTree::max_width,
                "Maximum width of peak-finding kernel (in tree time samples)")
-          .def_readwrite("dm_downsampling", &DedispersionConfig::PeakFindingConfig::dm_downsampling,
+          .def_readwrite("dm_downsampling", &DedispersionConfig::PrimaryTree::dm_downsampling,
                "DM downsampling factor of coarse-grained array relative to tree")
-          .def_readwrite("time_downsampling", &DedispersionConfig::PeakFindingConfig::time_downsampling,
+          .def_readwrite("time_downsampling", &DedispersionConfig::PrimaryTree::time_downsampling,
                "Time downsampling factor of coarse-grained array relative to tree")
-          .def_readwrite("wt_dm_downsampling", &DedispersionConfig::PeakFindingConfig::wt_dm_downsampling,
+          .def_readwrite("wt_dm_downsampling", &DedispersionConfig::PrimaryTree::wt_dm_downsampling,
                "DM downsampling factor of weights array (must be >= dm_downsampling)")
-          .def_readwrite("wt_time_downsampling", &DedispersionConfig::PeakFindingConfig::wt_time_downsampling,
+          .def_readwrite("wt_time_downsampling", &DedispersionConfig::PrimaryTree::wt_time_downsampling,
                "Time downsampling factor of weights array (must be >= time_downsampling)")
-          .def("__repr__", [](const DedispersionConfig::PeakFindingConfig &self) {
+          .def("__repr__", [](const DedispersionConfig::PrimaryTree &self) {
                std::ostringstream os;
-               os << "PeakFindingConfig(max_width=" << self.max_width
+               os << "PrimaryTree(num_early_triggers=" << self.num_early_triggers
+                  << ", max_width=" << self.max_width
                   << ", dm_downsampling=" << self.dm_downsampling
                   << ", time_downsampling=" << self.time_downsampling
                   << ", wt_dm_downsampling=" << self.wt_dm_downsampling
@@ -712,9 +686,9 @@ void register_core_bindings(pybind11::module &m)
     ;
 
     // DedispersionTree: simple data class representing output of dedisperser
-    // for one choice of (downsampling level, early trigger).
+    // for one choice of (primary tree, early trigger).
     py::class_<DedispersionTree>(m, "DedispersionTree")
-          .def_readonly("ds_level", &DedispersionTree::ds_level)
+          .def_readonly("primary_tree_index", &DedispersionTree::primary_tree_index)
           .def_readonly("amb_rank", &DedispersionTree::amb_rank)
           .def_readonly("pri_dd_rank", &DedispersionTree::pri_dd_rank)
           .def_readonly("early_dd_rank", &DedispersionTree::early_dd_rank)
