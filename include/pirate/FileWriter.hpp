@@ -20,6 +20,7 @@ struct AssembledFrame;  // AssembledFrame.hpp
 
 
 // Note: the FileWriter spawns worker threads in its constructor.
+// Thread-backed class (see notes/thread_backed_class.md).
 // (Total threads = Params::num_ssd_threads + Params::num_nfs_threads.)
 //
 // All worker threads inherit their vCPU affinity from the caller of

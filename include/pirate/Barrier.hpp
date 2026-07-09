@@ -11,7 +11,8 @@ namespace pirate {
 #endif
 
 
-// Barrier: synchronization point between N threads
+// Barrier: synchronization point between N threads.
+// Stoppable class (see notes/stoppable_class.md).
 // (Note that std::barrier was introduced in C++20, but I'm still on C++17.)
 
 struct Barrier

@@ -83,6 +83,8 @@ namespace pirate {
 // the value passed in. It is rounded up to a multiple of
 // max(nalign, page-size implied by aflags) (4 KiB for af_uhost/af_rhost
 // without af_mmap_huge, 2 MiB with af_mmap_huge, nalign=128 B for af_gpu).
+//
+// Thread-backed class (see notes/thread_backed_class.md).
 
 
 struct BumpAllocator

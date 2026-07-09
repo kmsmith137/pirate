@@ -36,7 +36,7 @@ namespace pirate {
 // allocated. This is useful for pure producer-consumer synchronization without
 // GPU event overhead.
 //
-// Stopped state: The ringbuf can be put into a "stopped" state via stop(e).
+// Stoppable class: The ringbuf can be put into a "stopped" state via stop(e).
 // Entry points (record, wait, synchronize, synchronize_with_producer) will
 // rethrow the stored exception when called in the stopped state. If an entry
 // point throws an exception, stop(e) is called automatically before rethrowing.

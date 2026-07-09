@@ -17,6 +17,9 @@ namespace pirate {
 #endif
 
 
+// Hwtest: hardware performance tests (memory bandwidth, network bandwidth, etc.)
+// Thread-backed class (see notes/thread_backed_class.md).
+
 struct Hwtest : public std::enable_shared_from_this<Hwtest>
 {
     // Factory method (constructor is protected).

@@ -13,6 +13,7 @@ makefile_helper.out
 config.mk
 sdist_files.txt
 wheel_files.txt
+dist/
 plans/
 extern/
 prompts/

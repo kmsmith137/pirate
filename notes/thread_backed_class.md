@@ -2,6 +2,8 @@
 
 A pattern for a class `X`:
 
+- `X` is thread-safe.
+
 - `X` is backed by one or more worker threads whose lifetimes are "tied" to X: threads are created when new objects are created, and joined in `~X()`. Note that it is safe for the worker thread(s) to hold a bare pointer (`X *this`), since the object always outlives the worker thread(s).
 
 - `X` has a `stop(std::exception_ptr e)` method which can be called externally, to put the object into a "stopped" state (`X::is_stopped==true`). The value of `e` is saved in `X::error`, and is null or non-null depending on whether the call to `stop()` represents normal termination. The first caller to `stop()` sets `X::error`. 
@@ -14,7 +16,7 @@ A pattern for a class `X`:
 
 - If an entry point throws an exception, then `X::stop(e)` is called, and the exception is rethrown.
 
-- In a context where the value of `is_stopped` is checked (e.g. entry point or `worker_thread_main`), if a blocking call is made (e.g. `cv.wait()`) then `is_stopped` is rechecked on wakeup. `X::stop()` should call `cv.notify_all()`. In situations where this notification mechanism doesn't work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck `is_stopped` every millisecond.)
+- In a context where the value of `is_stopped` is checked (e.g. entry point or `worker_thread_main`), if a blocking call is made (e.g. `cv.wait()`) then `is_stopped` is rechecked on wakeup. `X::stop()` should call `notify_all()` on each of `X`'s condition variables. In situations where this notification mechanism doesn't work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck `is_stopped` every millisecond.)
 
 - `~X()` calls `stop()` before joining the worker thread, to force the worker thread to exit.
 
@@ -23,6 +25,8 @@ A pattern for a class `X`:
 - In the example below, the worker thread is created in `X::X()`, but in other cases, the worker may be created in a different method, for example `X::start()` or `X::allocate()`.
 
 - If `X` contains pointers to other thread-backed classes (or more generally, to any class `Y` defining `Y::stop()`), then `X::stop()` should call `ptr->stop()` for each such pointer.
+
+Every thread-backed class is a stoppable class (see notes/stoppable_class.md), but not vice versa.
 
 ## Example Code
 
@@ -102,21 +106,27 @@ public:
         if (worker.joinable())
             worker.join();
     }
+    
+    // Noncopyable.
+    X(const X &) = delete;
+    X &operator=(const X &) = delete;
 
     void stop(std::exception_ptr e = nullptr) 
     {
-        std::lock_guard lock(mutex);
+        std::unique_lock lock(mutex);
         if (is_stopped) return;
         is_stopped = true;
         error = e;
+        lock.unlock();
         cv.notify_all();
     }
 
     void queue_request(int id) 
     {
-        std::lock_guard lock(mutex);
+        std::unique_lock lock(mutex);
         _throw_if_stopped("X::queue_request");
         queue.push(id);
+        lock.unlock();
         cv.notify_one();
     }
 

@@ -17,6 +17,7 @@ namespace pirate {
 
 
 // SlabAllocator: A thread-safe pool allocator for fixed-size memory "slabs".
+// Stoppable class: see notes/stoppable_class.md.
 //
 // The allocator manages a large pre-allocated memory region, which is
 // subdivided into fixed-size slabs. Slabs are returned to the pool when their
@@ -158,7 +159,7 @@ private:
     long num_slabs = 0;             // total number of slabs
     std::vector<void *> free_list;  // stack of free slab pointers
     
-    // Stop pattern (see notes/thread_backed_class.md)
+    // Stop pattern (see notes/stoppable_class.md)
     bool is_stopped = false;
     std::exception_ptr error;
     
