@@ -356,7 +356,7 @@ void FrbServer::start()
 }
 
 
-void FrbServer::stop(std::exception_ptr e)
+void FrbServer::stop(std::exception_ptr e) const
 {
     unique_lock<std::mutex> lock(mutex);
 
@@ -429,7 +429,7 @@ void FrbServer::stop(std::exception_ptr e)
 }
 
 
-bool FrbServer::poll_from_python(int timeout_ms)
+bool FrbServer::poll_from_python(int timeout_ms) const
 {
     xassert(timeout_ms >= 0);
 

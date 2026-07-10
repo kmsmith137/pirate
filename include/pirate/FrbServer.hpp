@@ -155,7 +155,7 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // in-flight RPC handlers return (they exit promptly once the stop
     // cascades have run).
     void start();  // entry point
-    void stop(std::exception_ptr e = nullptr);  // idempotent
+    void stop(std::exception_ptr e = nullptr) const;  // idempotent
 
     // Blocks until the server is stopped, or until 'timeout_ms' milliseconds
     // elapse (returning false in the latter case). If the server stopped due
@@ -167,7 +167,7 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // (KeyboardInterrupt) is delivered promptly. The pybind11 binding
     // releases the GIL while blocked. See RunServer._wait_forever() in
     // pirate_frb/run_server.py.
-    bool poll_from_python(int timeout_ms);
+    bool poll_from_python(int timeout_ms) const;
 
     Params params;
     std::shared_ptr<AssembledFrameAllocator> frame_allocator;
@@ -175,12 +175,14 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     std::unique_ptr<FrbRpcService> rpc_service;
     std::unique_ptr<grpc::Server> rpc_server;
 
-    // Thread-backed class state (protected by mutex).
-    std::mutex mutex;
-    std::condition_variable cv;  // signaled on: stop, metadata available
+    // Thread-backed class state (protected by mutex). The stop-pattern
+    // members are 'mutable' since stop() is const (see notes/stoppable_class.md).
+    mutable std::mutex mutex;
+    mutable std::condition_variable cv;  // signaled on: stop, metadata available
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
+
     bool is_started = false;
-    bool is_stopped = false;
-    std::exception_ptr error;
 
     // Cached metadata pointer (canonical copy lives in the
     // AssembledFrameAllocator; this is the snapshot the FIRST worker thread

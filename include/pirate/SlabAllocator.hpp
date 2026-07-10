@@ -129,7 +129,7 @@ public:
     // Thread-safe; first call sets the error.
     // In non-dummy mode, also propagates stop(e) to the underlying BumpAllocator
     // (per the thread-backed-class pattern).
-    void stop(std::exception_ptr e = nullptr);
+    void stop(std::exception_ptr e = nullptr) const;
 
     const int aflags;           // allocation flags from ksgpu
     const long capacity;        // total bytes in base region, or < 0 for dummy mode
@@ -152,9 +152,14 @@ private:
     // lifetime (cheap; one shared_ptr).
     std::shared_ptr<BumpAllocator> bump_allocator;
 
-    // Slab management. These are protected by 'lock'.
+    // Stop-pattern state ('mutable' since stop() is const -- see
+    // notes/stoppable_class.md). is_stopped/error are protected by 'lock'.
     mutable std::mutex lock;
     mutable std::condition_variable cv;  // signaled when a slab is returned, initialized, or stop() is called
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
+
+    // Slab management. These are protected by 'lock'.
     long slab_size = -1;            // slab size in bytes (established by first get_slab)
     long num_slabs = 0;             // total number of slabs
     std::vector<void *> free_list;  // stack of free slab pointers
@@ -164,11 +169,7 @@ private:
     // is not blocked behind the BumpAllocator's async init). Protected by
     // 'lock'; other get_slab() callers wait on 'cv' while it is set.
     bool init_underway = false;
-    
-    // Stop pattern (see notes/stoppable_class.md)
-    bool is_stopped = false;
-    std::exception_ptr error;
-    
+
     // Helper for blocking operations. Caller must hold lock.
     void _throw_if_stopped() const;
 

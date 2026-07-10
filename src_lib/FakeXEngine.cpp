@@ -239,7 +239,7 @@ void FakeXEngine::_throw_if_stopped(Worker &w, const char *method_name)
 }
 
 
-void FakeXEngine::stop(std::exception_ptr e)
+void FakeXEngine::stop(std::exception_ptr e) const
 {
     // Re-entry guard: only the first caller's compare-exchange wins.
     // Subsequent concurrent or later callers see the cache already true

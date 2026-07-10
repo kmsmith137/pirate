@@ -100,7 +100,7 @@ struct Receiver
 
     // Put Receiver into stopped state. Worker threads exit promptly.
     // If 'e' is non-null, it represents an error; otherwise normal termination.
-    void stop(std::exception_ptr e = nullptr);
+    void stop(std::exception_ptr e = nullptr) const;
 
     // Entry point: schedule the assembler thread to evict all chunks with
     // chunk_index <= evicted_chunk (i.e., advance curr_base_chunk past
@@ -134,13 +134,15 @@ struct Receiver
     std::atomic<long> num_connections{0};
     std::atomic<long> nbytes_cumul{0};
 
-    // Thread-backed class state (protected by 'mutex').
+    // Thread-backed class state (protected by 'mutex'). The stop-pattern
+    // members are 'mutable' since stop() is const (see notes/stoppable_class.md).
     mutable std::mutex mutex;
     mutable std::condition_variable cv;
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
+
     bool is_started = false;
     bool is_listening = false;   // set by listener thread once the listening socket is bound
-    bool is_stopped = false;
-    std::exception_ptr error;
 
     // All public members after this point are protected by 'mutex'.
 

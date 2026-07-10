@@ -1100,7 +1100,7 @@ AssembledFrameAllocator::~AssembledFrameAllocator()
 // stop()
 
 
-void AssembledFrameAllocator::stop(exception_ptr e)
+void AssembledFrameAllocator::stop(exception_ptr e) const
 {
     unique_lock<mutex> guard(lock);
 

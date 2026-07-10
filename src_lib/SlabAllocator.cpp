@@ -80,7 +80,7 @@ SlabAllocator::SlabAllocator(const std::shared_ptr<BumpAllocator> &b, long nbyte
 // stop() and _throw_if_stopped()
 
 
-void SlabAllocator::stop(std::exception_ptr e)
+void SlabAllocator::stop(std::exception_ptr e) const
 {
     // Snapshot the bump_allocator pointer under the lock, then release the
     // lock before propagating stop() downstream -- avoids holding two
@@ -356,8 +356,7 @@ long SlabAllocator::num_total_slabs(bool blocking) const
 
         return num_slabs;
     } catch (...) {
-        // stop() is a mutating operation; the const_cast mirrors the mutable mutex.
-        const_cast<SlabAllocator *>(this)->stop(std::current_exception());
+        stop(std::current_exception());
         throw;
     }
 }

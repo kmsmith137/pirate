@@ -202,7 +202,7 @@ struct SimulatedFrameFactory
     // parked in allocator->get_frame_set() on an exhausted pool. Thread-safe;
     // callable from any thread (including the factory's own worker threads on
     // error).
-    void stop(std::exception_ptr e = nullptr);
+    void stop(std::exception_ptr e = nullptr) const;
 
     struct Event
     {
@@ -262,15 +262,15 @@ struct SimulatedFrameFactory
     // ----- Synchronization (all members below protected by 'lock') -----
 
     mutable std::mutex lock;
-    std::condition_variable queue_cv;      // consumer waits: ready_queue non-empty or stopped
-    std::condition_variable space_cv;      // producer waits: ready_queue not full or stopped
-    std::condition_variable rand_cv;       // randomizers wait: a job is available or stopped
-    std::condition_variable rand_done_cv;  // producer waits: current randomize job complete
-    std::condition_variable sp_queue_cv;   // producer waits: pulse_queue non-empty or stopped
-    std::condition_variable sp_space_cv;   // frb simulators wait: pulse_queue not full or stopped
+    mutable std::condition_variable queue_cv;      // consumer waits: ready_queue non-empty or stopped
+    mutable std::condition_variable space_cv;      // producer waits: ready_queue not full or stopped
+    mutable std::condition_variable rand_cv;       // randomizers wait: a job is available or stopped
+    mutable std::condition_variable rand_done_cv;  // producer waits: current randomize job complete
+    mutable std::condition_variable sp_queue_cv;   // producer waits: pulse_queue non-empty or stopped
+    mutable std::condition_variable sp_space_cv;   // frb simulators wait: pulse_queue not full or stopped
 
-    bool is_stopped = false;
-    std::exception_ptr error;
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
 
     // Bounded output queue (producer -> consumer). Bounded at frame_set_queue_size
     // by the producer; the slab pool is the secondary limiter (see class doc).

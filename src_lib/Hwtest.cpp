@@ -428,7 +428,7 @@ double Hwtest::_show_stats()
 }
 
 
-void Hwtest::stop(std::exception_ptr e)
+void Hwtest::stop(std::exception_ptr e) const
 {
     std::unique_lock lk(this->mutex);
     if (is_stopped)

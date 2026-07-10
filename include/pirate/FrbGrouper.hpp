@@ -161,7 +161,7 @@ struct FrbGrouper : public std::enable_shared_from_this<FrbGrouper>
     // ----- Lifecycle (entry points) -----
     void open();    // start listening + block until client connects + handshake processed
     void close();   // stop() + join + server shutdown (deterministic teardown)
-    void stop(std::exception_ptr e = nullptr);   // idempotent
+    void stop(std::exception_ptr e = nullptr) const;   // idempotent
 
     // open() decomposed into two steps, so the pybind binding can drive the wait
     // in 0.5s increments and poll for Ctrl-C between them (see the .cpp + binding):
@@ -195,10 +195,10 @@ private:
     std::unique_ptr<GrpcState> grpc_state;
 
     // Thread-backed state.
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool is_stopped = false;
-    std::exception_ptr error;
+    mutable std::mutex mutex;
+    mutable std::condition_variable cv;
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
 
     // Session coordination flags (all under mutex).
     bool session_active  = false;   // single-client guard

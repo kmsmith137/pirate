@@ -708,7 +708,7 @@ void FrbGrouper::release_output(long seq_id)
 // stop() / close() / destructor / misc
 
 
-void FrbGrouper::stop(std::exception_ptr e)
+void FrbGrouper::stop(std::exception_ptr e) const
 {
     std::unique_lock<std::mutex> lock(mutex);
     if (is_stopped) return;

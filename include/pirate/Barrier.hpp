@@ -17,15 +17,17 @@ namespace pirate {
 
 struct Barrier
 {
-    std::mutex lock;
-    std::condition_variable cv;
+    // Stop-pattern state ('mutable' since stop() is const -- see
+    // notes/stoppable_class.md). is_stopped/error are protected by 'lock'.
+    mutable std::mutex lock;
+    mutable std::condition_variable cv;
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
 
     // Protected by lock.
     int nthreads = 0;
     int nthreads_waiting = 0;
     int wait_count = 0;
-    bool is_stopped = false;
-    std::exception_ptr error;
 
     // If constructor is called with nthreads=0, then 'nthreads' must be
     // set later, with a call to initialize().
@@ -36,7 +38,7 @@ struct Barrier
     // generic runtime_error if stop() was called with a null exception_ptr.
     void wait();
 
-    void stop(std::exception_ptr e = nullptr);
+    void stop(std::exception_ptr e = nullptr) const;
     void initialize(int nthreads);
     bool is_initialized();
 

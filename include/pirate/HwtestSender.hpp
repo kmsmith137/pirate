@@ -60,7 +60,7 @@ struct HwtestSender
 
     // Put HwtestSender into stopped state. Worker threads exit promptly.
     // If 'e' is non-null, it represents an error; otherwise normal termination.
-    void stop(std::exception_ptr e = nullptr);
+    void stop(std::exception_ptr e = nullptr) const;
 
     // Block until all worker threads have exited.
     void join();
@@ -92,12 +92,14 @@ private:
 
     std::vector<Endpoint> endpoints;
 
-    // Thread-backed class state (protected by 'mutex').
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool is_stopped = false;
+    // Thread-backed class state (protected by 'mutex'). The stop-pattern
+    // members are 'mutable' since stop() is const (see notes/stoppable_class.md).
+    mutable std::mutex mutex;
+    mutable std::condition_variable cv;
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
+
     bool is_started = false;
-    std::exception_ptr error;
     long num_workers_exited = 0;
 
     // Worker threads (created in start()).

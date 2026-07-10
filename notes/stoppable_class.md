@@ -9,7 +9,7 @@ The "stoppable class" X is a code pattern for cascading exceptions through all t
 
 - `X` is thread-safe.
 
-- `X` has a `stop(std::exception_ptr e)` method which can be called externally from any thread, to put the object into a "stopped" state (`X::is_stopped==true`). The value of `e` is saved in `X::error`, and is null or non-null depending on whether the call to `stop()` represents normal termination. The first caller to `stop()` sets `X::error`. 
+- `X` has a `stop(std::exception_ptr e)` method which can be called externally from any thread, to put the object into a "stopped" state (`X::is_stopped==true`). The value of `e` is saved in `X::error`, and is null or non-null depending on whether the call to `stop()` represents normal termination. The first caller to `stop()` sets `X::error`. `stop()` is declared `const`, and the stop-pattern state (mutex, condition variables, `is_stopped`, `error`) is declared `mutable`: stoppability is control-plane state (analogous to a mutable mutex), and `const` entry points / accessors must be able to stop the object.
 
 - Some public methods of `X` are labelled as "entry points". If an entry point is called in the stopped state, the exception `e` is rethrown. (If `e` is `nullptr`, then a generic exception `runtime_error("X::f() called on stopped instance")` is thrown.) 
 
@@ -73,16 +73,19 @@ If `pop()` is called and the ring buffer is empty, the caller blocks until it be
 class X {
     static constexpr int rb_size = 5;
     
-    std::mutex mutex;
+    // The stop-pattern state is 'mutable', and stop() is declared 'const':
+    // stoppability is control-plane state (like a mutex), and const entry
+    // points / accessors must be able to stop the object.
+    mutable std::mutex mutex;
 
     // Two condition variables, one per wait predicate: pop() waits on
     // 'cv_nonempty' until the ring buffer is nonempty, and push() waits on
     // 'cv_nonfull' until it is nonfull.
-    std::condition_variable cv_nonempty;
-    std::condition_variable cv_nonfull;
+    mutable std::condition_variable cv_nonempty;
+    mutable std::condition_variable cv_nonfull;
 
-    bool is_stopped = false;
-    std::exception_ptr error;
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
 
     std::array<int,rb_size> ringbuf;
     long rb_start = 0;
@@ -103,7 +106,7 @@ public:
     X(const X &) = delete;
     X &operator=(const X &) = delete;
 
-    void stop(std::exception_ptr e = nullptr) 
+    void stop(std::exception_ptr e = nullptr) const
     {
         std::unique_lock lock(mutex);
         if (is_stopped) return;

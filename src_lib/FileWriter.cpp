@@ -69,7 +69,7 @@ FileWriter::~FileWriter()
 }
 
 
-void FileWriter::stop(std::exception_ptr e)
+void FileWriter::stop(std::exception_ptr e) const
 {
     unique_lock<std::mutex> lock(mutex);
     if (is_stopped)
@@ -511,7 +511,7 @@ void FileWriter::_try_to_delete_from_ssd(const fs::path &path)
 // Call with lock held!!
 // Returns this->rpc_subscribers, calling lock() to convert weak_ptr -> shared_ptr.
 // Any subscribers which do not lock() successfully are "pruned" from this->rpc_subscribers.
-vector<shared_ptr<FileWriter::RpcSubscriber>> FileWriter::_get_rpc_subscribers()
+vector<shared_ptr<FileWriter::RpcSubscriber>> FileWriter::_get_rpc_subscribers() const
 {
     vector<shared_ptr<FileWriter::RpcSubscriber>> ret;
 

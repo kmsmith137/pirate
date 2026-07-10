@@ -208,7 +208,7 @@ struct GpuDedisperser
     // into a "stopped" state. The first caller sets 'error'. If e is null,
     // represents normal termination; if non-null, represents an error.
     // Entry points called after stop() will rethrow the stored exception.
-    void stop(std::exception_ptr e = std::exception_ptr());
+    void stop(std::exception_ptr e = std::exception_ptr()) const;
 
     ~GpuDedisperser();
 
@@ -340,7 +340,11 @@ public:
     long et_seq_headroom = 0;  // has_early_triggers ? (mega_ringbuf->min_et_headroom * nbatches) : (2*nstreams)
     long et_seq_lag = 0;       // has_early_triggers ? (mega_ringbuf->min_et_clag * nbatches) : (2*nstreams)
 
-    std::mutex mutex;
+    // Stop-pattern state ('mutable' since stop() is const -- see
+    // notes/stoppable_class.md). is_stopped/error are protected by 'mutex'.
+    mutable std::mutex mutex;
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
 
     long curr_input_seq_id = 0;
     bool curr_input_acquired = false;
@@ -356,12 +360,10 @@ public:
     std::vector<long> curr_output_acquire_seq_id;
     std::vector<long> curr_output_release_seq_id;
 
-    // Thread-backed class pattern: worker thread and stopped state.
+    // Thread-backed class pattern: worker thread.
     // Note: no condition_variable needed to wake up worker thread, since the worker does
     // all of its waiting on condition_variables which are members of CudaEventRingbuf.
     std::thread worker;
-    bool is_stopped = false;
-    std::exception_ptr error;
 };
 
 

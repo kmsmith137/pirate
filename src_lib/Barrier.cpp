@@ -88,7 +88,7 @@ void Barrier::wait()
 }
 
 
-void Barrier::stop(exception_ptr e)
+void Barrier::stop(exception_ptr e) const
 {
     std::unique_lock ul(lock);
 

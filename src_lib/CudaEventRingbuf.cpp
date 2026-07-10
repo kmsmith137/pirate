@@ -56,7 +56,7 @@ CudaEventRingbuf::~CudaEventRingbuf()
 }
 
 
-void CudaEventRingbuf::stop(std::exception_ptr e)
+void CudaEventRingbuf::stop(std::exception_ptr e) const
 {
     std::unique_lock<std::mutex> lock(mutex);
     

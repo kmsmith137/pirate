@@ -179,7 +179,7 @@ SimulatedFrameFactory::~SimulatedFrameFactory()
 }
 
 
-void SimulatedFrameFactory::stop(std::exception_ptr e)
+void SimulatedFrameFactory::stop(std::exception_ptr e) const
 {
     {
         lock_guard<mutex> lk(lock);

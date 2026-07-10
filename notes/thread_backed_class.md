@@ -6,7 +6,7 @@ A pattern for a class `X`:
 
 - `X` is backed by one or more worker threads whose lifetimes are "tied" to X: threads are created when new objects are created, and joined in `~X()`. Note that it is safe for the worker thread(s) to hold a bare pointer (`X *this`), since the object always outlives the worker thread(s).
 
-- `X` has a `stop(std::exception_ptr e)` method which can be called externally, to put the object into a "stopped" state (`X::is_stopped==true`). The value of `e` is saved in `X::error`, and is null or non-null depending on whether the call to `stop()` represents normal termination. The first caller to `stop()` sets `X::error`. 
+- `X` has a `stop(std::exception_ptr e)` method which can be called externally, to put the object into a "stopped" state (`X::is_stopped==true`). The value of `e` is saved in `X::error`, and is null or non-null depending on whether the call to `stop()` represents normal termination. The first caller to `stop()` sets `X::error`. `stop()` is declared `const`, and the stop-pattern state (mutex, condition variables, `is_stopped`, `error`) is declared `mutable` -- see notes/stoppable_class.md.
 
 - When the object enters its stopped state, the worker thread returns (as promptly as is practical).
 
@@ -44,11 +44,14 @@ The entry point `X::queue_request()` adds work to the queue.
 #include <thread>
 
 class X {
-    std::mutex mutex;
-    std::condition_variable cv;
+    // Stop-pattern state is 'mutable' and stop() is 'const' (see
+    // notes/stoppable_class.md).
+    mutable std::mutex mutex;
+    mutable std::condition_variable cv;
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
+
     std::queue<int> queue;
-    bool is_stopped = false;
-    std::exception_ptr error;
     std::thread worker;
 
     void _worker_main() {
@@ -111,7 +114,7 @@ public:
     X(const X &) = delete;
     X &operator=(const X &) = delete;
 
-    void stop(std::exception_ptr e = nullptr) 
+    void stop(std::exception_ptr e = nullptr) const
     {
         std::unique_lock lock(mutex);
         if (is_stopped) return;

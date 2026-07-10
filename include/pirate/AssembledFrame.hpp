@@ -461,19 +461,20 @@ struct AssembledFrameAllocator
     // Stop the allocator. After calling stop(), entry points will throw.
     // If 'e' is non-null, it represents an error; if null, it's normal termination.
     // Thread-safe; first call sets the error.
-    void stop(std::exception_ptr e = nullptr);
+    void stop(std::exception_ptr e = nullptr) const;
 
 private:
     std::shared_ptr<SlabAllocator> slab_allocator;
     int num_consumers;
     bool is_dummy_mode;  // cached from slab_allocator->is_dummy()
     
+    // Stop-pattern state ('mutable' since stop() is const -- see
+    // notes/stoppable_class.md). is_stopped/error are protected by 'lock'.
     mutable std::mutex lock;
-    std::condition_variable cv;  // signaled on: stop, frame added to queue, frame received by all consumers
-    
-    // Thread-backed class pattern: stopped state and error
-    bool is_stopped = false;
-    std::exception_ptr error;
+    mutable std::condition_variable cv;  // signaled on: stop, frame added to queue, frame received by all consumers
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
+
     std::thread worker_thread;
     
     // Metadata-initialization state. Set to true the first time any caller

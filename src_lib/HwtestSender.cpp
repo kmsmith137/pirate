@@ -106,7 +106,7 @@ void HwtestSender::start()
 }
 
 
-void HwtestSender::stop(std::exception_ptr e)
+void HwtestSender::stop(std::exception_ptr e) const
 {
     std::lock_guard<std::mutex> lock(mutex);
 

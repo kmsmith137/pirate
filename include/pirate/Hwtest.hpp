@@ -53,18 +53,22 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
 
     void join();
     void start();
-    void stop(std::exception_ptr e = nullptr);
+    void stop(std::exception_ptr e = nullptr) const;
 
     // Defined in src_lib/Hwtest.cpp
     struct Stats;
     struct Worker;
 
     std::string server_name;
-    bool is_started = false;
-    bool is_stopped = false;
-    std::exception_ptr error;
-    std::mutex mutex;
     bool use_hugepages;
+
+    // Stop-pattern state ('mutable' since stop() is const -- see
+    // notes/stoppable_class.md). is_stopped/error are protected by 'mutex'.
+    mutable std::mutex mutex;
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
+
+    bool is_started = false;
     Barrier barrier;
 
     // After server is started, 'workers' is immutable.

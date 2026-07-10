@@ -65,7 +65,7 @@ public:
     FileWriter &operator=(const FileWriter &) = delete;
     FileWriter &operator=(FileWriter &&) = delete;
 
-    void stop(std::exception_ptr e = nullptr);
+    void stop(std::exception_ptr e = nullptr) const;
 
     // process_frame(): adds frame to ssd/nfs queues if needed.
     //  - called by RPC thread, after a new filename is appended.
@@ -86,15 +86,17 @@ public:
 
 private:
 
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool is_stopped = false;
-    std::exception_ptr error;
+    mutable std::mutex mutex;
+    mutable std::condition_variable cv;
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
 
     std::queue<std::shared_ptr<AssembledFrame>> ssd_queue;
     std::queue<std::shared_ptr<AssembledFrame>> nfs_queue;
 
-    std::vector<std::weak_ptr<RpcSubscriber>> rpc_subscribers;
+    // mutable: _get_rpc_subscribers() (const, called from stop() const)
+    // lazily prunes expired weak_ptrs in place, under the mutex.
+    mutable std::vector<std::weak_ptr<RpcSubscriber>> rpc_subscribers;
 
     std::vector<std::thread> ssd_threads;
     std::vector<std::thread> nfs_threads;
@@ -118,7 +120,7 @@ private:
     void _ssd_worker_checks(const std::shared_ptr<AssembledFrame> &frame);
     void _update_rpc_subscribers(const WriteStatus &write_status);
 
-    std::vector<std::shared_ptr<RpcSubscriber>> _get_rpc_subscribers();
+    std::vector<std::shared_ptr<RpcSubscriber>> _get_rpc_subscribers() const;
 
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name);

@@ -476,7 +476,7 @@ struct FakeXEngine
     //
     // NOT load-bearing for synchronization with worker threads -- those
     // synchronize through each Worker::is_stopped under its own mutex.
-    std::atomic<bool> is_stopped_cache{false};
+    mutable std::atomic<bool> is_stopped_cache{false};
 
     // ----- Worker state -----
 
@@ -768,7 +768,7 @@ struct FakeXEngine
     // enqueue_send_junk) then throw on their next predicate re-check.
     // If 'e' is non-null, it represents an error; otherwise normal
     // termination.
-    void stop(std::exception_ptr e = nullptr);
+    void stop(std::exception_ptr e = nullptr) const;
 
     // ----- Noncopyable, nonmoveable -----
 

@@ -536,7 +536,7 @@ void BumpAllocator::_gpu_memset_worker()
 // State machine: stop, finalize, blocking helper
 
 
-void BumpAllocator::stop(std::exception_ptr e)
+void BumpAllocator::stop(std::exception_ptr e) const
 {
     {
         std::lock_guard<std::mutex> guard(_mutex);
@@ -607,8 +607,7 @@ std::shared_ptr<void> BumpAllocator::get_base() const
         _block_until_ready_or_throw();
         return base;
     } catch (...) {
-        // stop() is a mutating operation; the const_cast mirrors the mutable mutex.
-        const_cast<BumpAllocator *>(this)->stop(std::current_exception());
+        stop(std::current_exception());
         throw;
     }
 }

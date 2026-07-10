@@ -135,7 +135,7 @@ struct BumpAllocator
     // the error; first stop wins. Workers see the stop_flag and exit.
     // Subsequent calls to allocate_bytes/get_base/wait_until_initialized
     // throw (rethrowing the stored error if any).
-    void stop(std::exception_ptr e = nullptr);
+    void stop(std::exception_ptr e = nullptr) const;
 
     template<typename T>
     ksgpu::Array<T> allocate_array(std::initializer_list<long> shape);
@@ -189,12 +189,15 @@ struct BumpAllocator
     // State machine. Sync mode leaves the mutex/cv mostly unused
     // (is_initialized is set true at end of sync ctor, so the blocking
     // helper is a single uncontended mutex acquire).
+    // The stop-pattern members are 'mutable' since stop() is const
+    // (see notes/stoppable_class.md).
     mutable std::mutex _mutex;
     mutable std::condition_variable _cv;
+    mutable bool _is_stopped = false;
+    mutable std::exception_ptr _error;
+    mutable std::atomic<bool> _stop_flag{false};
+
     bool _is_initialized = false;
-    bool _is_stopped = false;
-    std::exception_ptr _error;
-    std::atomic<bool> _stop_flag{false};
 
     // Async worker threads. Empty in sync mode.
     std::vector<std::thread> _workers;

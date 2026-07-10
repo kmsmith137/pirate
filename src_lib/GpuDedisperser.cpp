@@ -463,7 +463,7 @@ GpuDedisperser::~GpuDedisperser()
 }
 
 
-void GpuDedisperser::stop(std::exception_ptr e)
+void GpuDedisperser::stop(std::exception_ptr e) const
 {
     std::lock_guard<std::mutex> lock(mutex);
     if (is_stopped) return;

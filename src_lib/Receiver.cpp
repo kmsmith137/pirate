@@ -198,7 +198,7 @@ void Receiver::get_status(long &out_num_connections, long &out_nbytes_cumul)
 }
 
 
-void Receiver::stop(std::exception_ptr e)
+void Receiver::stop(std::exception_ptr e) const
 {
     unique_lock<std::mutex> lock(mutex);
 

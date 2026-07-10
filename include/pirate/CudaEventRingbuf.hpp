@@ -98,7 +98,7 @@ struct CudaEventRingbuf
     // Put the ringbuf into "stopped" state. The first caller sets 'error'.
     // If e is null, represents normal termination; if non-null, represents an error.
     // Entry points called after stop() will rethrow the stored exception.
-    void stop(std::exception_ptr e = std::exception_ptr());
+    void stop(std::exception_ptr e = std::exception_ptr()) const;
 
     // ----- Internals -----
 
@@ -123,13 +123,15 @@ struct CudaEventRingbuf
     std::vector<int> acquired;   // per-slot acquisition count (protected by mutex)
     std::vector<int> released;   // per-slot release count (protected by mutex)
     
-    std::mutex mutex;
-    std::condition_variable cv;  // signaled when seq_start/seq_end/produced/is_stopped changes
+    // Stop-pattern state ('mutable' since stop() is const -- see
+    // notes/stoppable_class.md). is_stopped/error are protected by 'mutex'.
+    mutable std::mutex mutex;
+    mutable std::condition_variable cv;  // signaled when seq_start/seq_end/produced/is_stopped changes
+    mutable bool is_stopped = false;     // true after stop() is called
+    mutable std::exception_ptr error;    // set by first caller to stop()
+
     long seq_start = 0;          // lowest valid seq_id in ring buffer
     long seq_end = 0;            // one past highest valid seq_id (next seq_id to be recorded)
-    
-    bool is_stopped = false;     // true after stop() is called
-    std::exception_ptr error;    // set by first caller to stop()
     
     // Helper: throw if stopped (call while holding mutex).
     void _throw_if_stopped(const char *method_name);
