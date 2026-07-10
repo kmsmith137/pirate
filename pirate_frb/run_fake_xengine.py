@@ -92,7 +92,9 @@ class RunFakeXEngineHelper:
 
         If any controller errors out, the cascade in _controller_wrapper
         stops every FakeXEngine; the main thread then surfaces the first
-        non-cascade exception.
+        captured exception. A clean shutdown (Ctrl-C) produces no
+        exceptions at all: the null stops make the controllers' blocking
+        calls return done-values, and the controllers return normally.
         """
         try:
             self._build_all()
@@ -101,7 +103,7 @@ class RunFakeXEngineHelper:
                   f"Press Ctrl-C to stop.")
             self._wait_for_controllers()
             self._stop_and_join_all()
-            self._surface_real_exceptions()
+            self._surface_exceptions()
         finally:
             # Defensive cleanup -- harmless if the main path already ran it.
             self._stop_all()
@@ -343,9 +345,11 @@ class RunFakeXEngineHelper:
     def _controller_wrapper(self, rpc_addr, fxe, factory, sifter):
         """Wraps _controller_main. On exit (normal or exceptional),
         cascade-stops every FakeXEngine, SimulatedFrameFactory, and allocator so
-        sibling controllers exit promptly (via "called on stopped instance").
-        Captures any exception (paired with its rpc_addr) under self.exc_lock for
-        the main thread to surface.
+        sibling controllers exit promptly (their blocking calls return
+        done-values on the cascade's clean stop). Captures any exception
+        (paired with its rpc_addr) under self.exc_lock for the main thread to
+        surface -- every captured exception is a real error, since clean stops
+        end _controller_main via done-values, not exceptions.
         """
         try:
             self._controller_main(rpc_addr, fxe, factory, sifter)
@@ -379,10 +383,12 @@ class RunFakeXEngineHelper:
         as all-zero SEND_JUNK (no frame set needed). The loop therefore pulls
         from the factory only at the chunk-0 boundary.
 
-        Runs until fxe.stop() or factory.stop() is called (from anywhere), at
-        which point the next factory.get_frame_set() / wait_until_processed() /
-        enqueue_send_minichunk() raises "called on stopped instance", ending the
-        loop (filtered as benign by _surface_real_exceptions).
+        Runs until fxe.stop() or factory.stop() is called (from anywhere).
+        A clean stop makes factory.get_frame_set() return None and the fxe
+        calls return False -- the loop returns normally. An error stop makes
+        the next call re-raise the root cause (e.g. "receiver closed
+        connection" when the server goes away), which propagates to
+        _controller_wrapper and is surfaced by the main thread.
         """
         nworkers = fxe.nworkers
         mpc = fxe.minichunks_per_chunk
@@ -395,10 +401,12 @@ class RunFakeXEngineHelper:
             chunk = n // mpc
             # Pull the next pre-randomized frame at chunk boundaries. In
             # send-junk mode only chunk 0 carries real data, so we pull (and
-            # block on the factory) only there. On shutdown get_frame_set()
-            # raises "called on stopped instance", which ends the loop.
+            # block on the factory) only there. On a clean shutdown
+            # get_frame_set() returns None, which ends the loop.
             if (n % mpc) == 0 and not (send_junk and chunk >= 1):
                 fset = factory.get_frame_set()
+                if fset is None:
+                    return   # factory cleanly stopped: normal end of run
 
                 # Per-chunk summary line, printed whether or not FRBs are simulated
                 # (with -f, one line per injected FRB follows below). The FPGA window
@@ -439,23 +447,24 @@ class RunFakeXEngineHelper:
                         sifter.send_events(beam_set_id, events, cg_snr, from_simulator=True)
 
             # Stay <= 2 minichunks ahead of every worker. For n < 2 the target
-            # is negative, so wait_until_processed returns immediately
-            # (per-worker last_processed_minichunk is -1).
+            # is negative, so wait_until_processed returns True immediately
+            # (per-worker last_processed_minichunk is -1). A False return
+            # means the FakeXEngine was cleanly stopped: normal end of run.
             for w in range(nworkers):
-                fxe.wait_until_processed(w, n - 2)
+                if not fxe.wait_until_processed(w, n - 2):
+                    return
 
             # Send minichunk n on every worker. For SEND_MINICHUNK all workers
             # reference the same chunk fset (each gathers its own freq-channel
             # subset); the C++ command queue holds a reference to fset until its
             # minichunks are processed, so it stays alive across the chunk even
             # after our reference is gone. In send-junk mode, chunks >= 1 send
-            # all-zero junk instead.
+            # all-zero junk instead. A False return means cleanly stopped.
             use_junk = send_junk and (chunk >= 1)
             for w in range(nworkers):
-                if use_junk:
-                    fxe.enqueue_send_junk(w, n)
-                else:
-                    fxe.enqueue_send_minichunk(w, n, fset)
+                if not (fxe.enqueue_send_junk(w, n) if use_junk
+                        else fxe.enqueue_send_minichunk(w, n, fset)):
+                    return
             n += 1
 
     @staticmethod
@@ -487,15 +496,21 @@ class RunFakeXEngineHelper:
         for t in self.controllers:
             t.join(timeout=5.0)
 
-    def _surface_real_exceptions(self):
+    def _surface_exceptions(self):
+        """Re-raise the first captured controller exception, if any.
+
+        Every captured exception is a real error: clean stops end the
+        controllers via done-values, not exceptions, so no filtering is
+        needed here. If several receivers failed (e.g. every controller saw
+        'receiver closed connection' when the server went away), print one
+        line for each additional one before raising the first.
+        """
         with self.exc_lock:
-            # A "called on stopped instance" RuntimeError is the controller's
-            # natural teardown artefact (or cascade artefact across receivers
-            # when one of them errors); re-raise only "real" exceptions.
-            real = [(addr, e) for (addr, e) in self.exc_list
-                    if "called on stopped instance" not in str(e)]
-            if real:
-                raise real[0][1]
+            if not self.exc_list:
+                return
+            for rpc_addr, e in self.exc_list[1:]:
+                print(f"[{rpc_addr}] (also) {type(e).__name__}: {e}", flush=True)
+            raise self.exc_list[0][1]
 
     def _stop_all(self):
         """Idempotent: stop every FakeXEngine, SimulatedFrameFactory, and
@@ -507,6 +522,15 @@ class RunFakeXEngineHelper:
         allocator). We also stop the allocators directly for defense in depth
         (idempotent). Called from each controller's finally and defensively from
         run()'s finally.
+
+        ORDER MATTERS: stop each holder before its dependency (factories
+        before allocators; factory.stop() forwards into its allocator, so the
+        direct allocator stops below are no-ops). Never null-stop a dependency
+        while its holder is still running: a holder thread unblocked by the
+        dependency's stop classifies the unwind via catch -> stop(e), which is
+        harmless only because the holder's own stop already won the
+        first-caller race. Stopping the dependency first would record the
+        unwind as a bogus error on the holder.
         """
         for fxe in self.fake_xengines:
             try:

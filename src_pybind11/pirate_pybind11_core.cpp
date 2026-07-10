@@ -490,10 +490,19 @@ void register_core_bindings(pybind11::module &m)
         .def("get_frame_set", &SimulatedFrameFactory::get_frame_set,
             py::call_guard<py::gil_scoped_release>(),
             "Block until a randomized AssembledFrameSet is available and return it\n"
-            "(FIFO / allocator order). Throws if the factory is stopped.")
+            "(FIFO / allocator order).\n\n"
+            "Returns:\n"
+            "    The next AssembledFrameSet, or None if the factory was cleanly\n"
+            "    stopped (normal end of production -- the consumer loop's signal\n"
+            "    to wind down).\n\n"
+            "Raises:\n"
+            "    RuntimeError: Re-raises the factory's saved root-cause error if\n"
+            "    it was stopped by an error.")
         .def("stop", [](SimulatedFrameFactory &self) { self.stop(); },
             py::call_guard<py::gil_scoped_release>(),
-            "Stop the factory (and its allocator); wakes all threads. Idempotent.")
+            "Stop the factory (and its allocator); wakes all threads. Idempotent.\n"
+            "This is a clean stop (normal termination): a blocked or later\n"
+            "get_frame_set() call returns None rather than raising.")
 
         // One awkward aspect of the current code: we have two very similar ways to represent an event
         // list, either a python FrbSifterEvents object, or a C++ vector<SimulatedFrameFactory::Event>.
@@ -901,11 +910,16 @@ void register_core_bindings(pybind11::module &m)
                "Wire effect: the worker sends one minichunk worth of all-zero\n"
                "data. The protocol handshake is sent ahead of the first\n"
                "SEND_JUNK or SEND_MINICHUNK on this worker.\n\n"
+               "Returns:\n"
+               "    True if the command was enqueued; False (command NOT\n"
+               "    enqueued) if the FakeXEngine was cleanly stopped -- the\n"
+               "    caller's signal to wind down.\n\n"
                "Raises:\n"
-               "    RuntimeError: If the FakeXEngine is stopped, arguments are\n"
-               "    out of range, or minichunk_index is not the +1 successor of\n"
-               "    the most recently enqueued state-advancing command on this\n"
-               "    worker (with the first-command exemption).")
+               "    RuntimeError: Re-raises the saved root-cause error if the\n"
+               "    FakeXEngine was stopped by an error. Also raised if\n"
+               "    arguments are out of range, or minichunk_index is not the\n"
+               "    +1 successor of the most recently enqueued state-advancing\n"
+               "    command on this worker (with the first-command exemption).")
           .def("enqueue_skip_minichunk", &FakeXEngine::enqueue_skip_minichunk,
                py::arg("worker_id"), py::arg("minichunk_index"),
                py::call_guard<py::gil_scoped_release>(),
@@ -918,9 +932,14 @@ void register_core_bindings(pybind11::module &m)
                "minichunk_index without putting any bytes on the wire.\n"
                "A worker whose only commands are SKIPs never opens its TCP\n"
                "connection -- useful for 'silent peer' tests.\n\n"
+               "Returns:\n"
+               "    True if the command was enqueued; False (command NOT\n"
+               "    enqueued) if the FakeXEngine was cleanly stopped.\n\n"
                "Raises:\n"
-               "    RuntimeError: If the FakeXEngine is stopped, arguments are\n"
-               "    out of range, or minichunk_index violates the +1 chain.")
+               "    RuntimeError: Re-raises the saved root-cause error if the\n"
+               "    FakeXEngine was stopped by an error. Also raised if\n"
+               "    arguments are out of range, or minichunk_index violates\n"
+               "    the +1 chain.")
           .def("enqueue_send_minichunk", &FakeXEngine::enqueue_send_minichunk,
                py::arg("worker_id"), py::arg("minichunk_index"), py::arg("frame_set"),
                py::call_guard<py::gil_scoped_release>(),
@@ -945,10 +964,14 @@ void register_core_bindings(pybind11::module &m)
                "colocated in the same process -- so the race does not occur in\n"
                "practice. If we ever want to colocate the two, the gather loop\n"
                "needs lock acquisition (one per beam).\n\n"
+               "Returns:\n"
+               "    True if the command was enqueued; False (command NOT\n"
+               "    enqueued) if the FakeXEngine was cleanly stopped.\n\n"
                "Raises:\n"
-               "    RuntimeError: If the FakeXEngine is stopped, arguments are\n"
-               "    out of range, frame_set is None, or minichunk_index violates\n"
-               "    the +1 chain.")
+               "    RuntimeError: Re-raises the saved root-cause error if the\n"
+               "    FakeXEngine was stopped by an error. Also raised if\n"
+               "    arguments are out of range, frame_set is None, or\n"
+               "    minichunk_index violates the +1 chain.")
           .def("enqueue_disconnect", &FakeXEngine::enqueue_disconnect,
                py::arg("worker_id"),
                py::call_guard<py::gil_scoped_release>(),
@@ -968,9 +991,13 @@ void register_core_bindings(pybind11::module &m)
                "advancing commands.\n\n"
                "DISCONNECT on an already-disconnected (or never-connected)\n"
                "worker is a no-op.\n\n"
+               "Returns:\n"
+               "    True if the command was enqueued; False (command NOT\n"
+               "    enqueued) if the FakeXEngine was cleanly stopped.\n\n"
                "Raises:\n"
-               "    RuntimeError: If the FakeXEngine is stopped or worker_id is\n"
-               "    out of range.")
+               "    RuntimeError: Re-raises the saved root-cause error if the\n"
+               "    FakeXEngine was stopped by an error. Also raised if\n"
+               "    worker_id is out of range.")
           .def("is_connected", &FakeXEngine::is_connected,
                py::arg("worker_id"),
                "Return True iff this worker has an open TCP connection to its\n"
@@ -989,12 +1016,18 @@ void register_core_bindings(pybind11::module &m)
                "(SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK) with the given\n"
                "minichunk_index has been fully handled by the worker -- bytes\n"
                "actually on the wire for SEND_*, or just state-advance for SKIP.\n\n"
-               "Returns immediately if minichunk_index is negative (since per-\n"
-               "worker last_processed_minichunk starts at -1, this lets the\n"
+               "Returns True immediately if minichunk_index is negative (since\n"
+               "per-worker last_processed_minichunk starts at -1, this lets the\n"
                "controller call wait_until_processed(w, n-2) unconditionally for\n"
                "n in {0, 1}).\n\n"
+               "Returns:\n"
+               "    True once the condition is reached; False if the FakeXEngine\n"
+               "    was cleanly stopped first -- the caller's signal to wind\n"
+               "    down.\n\n"
                "Raises:\n"
-               "    RuntimeError: If the FakeXEngine is stopped.")
+               "    RuntimeError: Re-raises the saved root-cause error if the\n"
+               "    FakeXEngine was stopped by an error. Also raised if\n"
+               "    worker_id is out of range.")
           .def("enqueue_wait_for_acks", &FakeXEngine::enqueue_wait_for_acks,
                py::arg("worker_id"),
                py::call_guard<py::gil_scoped_release>(),
@@ -1005,10 +1038,14 @@ void register_core_bindings(pybind11::module &m)
                "Useful when you want to issue a barrier without waiting for it\n"
                "to complete. To wait for all acks too, call synchronize() or\n"
                "poll get_minichunk_status().\n\n"
+               "Returns:\n"
+               "    True if the command was enqueued; False (command NOT\n"
+               "    enqueued) if the FakeXEngine was cleanly stopped.\n\n"
                "Raises:\n"
-               "    RuntimeError: If the FakeXEngine was not constructed with\n"
-               "    debug=True (no acks to wait for), if worker_id is out\n"
-               "    of range, or if the FakeXEngine is stopped.")
+               "    RuntimeError: Re-raises the saved root-cause error if the\n"
+               "    FakeXEngine was stopped by an error. Also raised if the\n"
+               "    FakeXEngine was not constructed with debug=True (no acks\n"
+               "    to wait for), or if worker_id is out of range.")
           .def("synchronize", &FakeXEngine::synchronize,
                py::arg("worker_id"),
                py::call_guard<py::gil_scoped_release>(),
@@ -1022,9 +1059,14 @@ void register_core_bindings(pybind11::module &m)
                "enqueueing commands on the same worker, synchronize() waits\n"
                "for those commands too (until command_queue stays empty long\n"
                "enough for synchronize() to observe it under the lock).\n\n"
+               "Returns:\n"
+               "    True once the queue (and, in debug mode, the ack queue) is\n"
+               "    fully drained; False if the FakeXEngine was cleanly stopped\n"
+               "    first.\n\n"
                "Raises:\n"
-               "    RuntimeError: If the FakeXEngine is stopped or worker_id\n"
-               "    is out of range.")
+               "    RuntimeError: Re-raises the saved root-cause error if the\n"
+               "    FakeXEngine was stopped by an error. Also raised if\n"
+               "    worker_id is out of range.")
           .def("get_minichunk_status", &FakeXEngine::get_minichunk_status,
                py::arg("worker_id"), py::arg("minichunk_index"),
                "Return the status byte for a previously-enqueued state-\n"
@@ -1072,9 +1114,10 @@ void register_core_bindings(pybind11::module &m)
                "Raises:\n"
                "    RuntimeError: If worker_id is out of range.")
           .def("stop", [](FakeXEngine &self) { self.stop(); },
-               "Signal worker threads to stop. Any in-flight wait_until_processed\n"
-               "/ enqueue_send_junk calls throw RuntimeError. Safe to call\n"
-               "multiple times.")
+               "Signal worker threads to stop. This is a clean stop (normal\n"
+               "termination): any in-flight or later enqueue_* /\n"
+               "wait_until_processed / synchronize calls return False rather\n"
+               "than raising. Safe to call multiple times.")
           .def_property_readonly("is_stopped",
                [](FakeXEngine &self) {
                    // O(1) atomic load -- the property's "true" value just
@@ -1083,7 +1126,8 @@ void register_core_bindings(pybind11::module &m)
                    // join) if you need to know they're fully done.
                    return self.is_stopped_cache.load(std::memory_order_acquire);
                },
-               "True if stop() has been called (e.g. due to connection reset).\n"
+               "True if stop() has been called -- explicitly (clean stop), or\n"
+               "internally on an error (e.g. the receiver closed the connection).\n"
                "Note: workers may still be in the process of exiting at the moment\n"
                "this returns true. Rely on the destructor's thread join if you need\n"
                "to know they've fully finished.")

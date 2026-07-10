@@ -212,8 +212,14 @@ shared_ptr<AssembledFrameSet> SimulatedFrameFactory::get_frame_set()
     unique_lock<mutex> lk(lock);
 
     for (;;) {
+        // Stop takes precedence over a nonempty ready_queue. On an
+        // error-stop, rethrow the root cause; on a clean stop (normal
+        // termination), return nullptr -- Python None -- which is the
+        // consumer loop's end-of-production signal.
+        if (error)
+            std::rethrow_exception(error);
         if (is_stopped)
-            _throw_if_stopped("SimulatedFrameFactory::get_frame_set");
+            return nullptr;
 
         if (!ready_queue.empty()) {
             shared_ptr<AssembledFrameSet> s = std::move(ready_queue.front());

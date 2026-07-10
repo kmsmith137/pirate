@@ -47,6 +47,15 @@ namespace pirate {
 // 'is_stopped' property reader and a re-entry guard for stop(); workers
 // and entry points synchronize through each Worker's own mutex+cv+flag.
 //
+// Stop-reporting convention (a documented variant of the pattern -- see
+// "Error reporting" in notes/stoppable_class.md): stop(nullptr) means
+// NORMAL TERMINATION, stop(e) means error shutdown. Entry points for
+// which "stopped while blocked" is an expected outcome (the enqueue_*
+// family, wait_until_processed, synchronize) do not throw on a cleanly
+// stopped instance -- they return false ("stopped") -- and rethrow the
+// saved error on an error-stopped instance. Exceptions are reserved for
+// real errors; a controller loop terminates cleanly on the false return.
+//
 // Each worker thread:
 //   - Waits on its per-worker command queue for SEND_JUNK commands.
 //   - On the first SEND_JUNK, opens a TCP connection to its assigned
@@ -262,10 +271,10 @@ struct FakeXEngine
         bool is_stopped = false;
 
         // Per-worker error slot. On a successful sweep from
-        // FakeXEngine::stop(e), every worker's error is set to e; on a
-        // clean shutdown (e == nullptr) every worker's error stays null
-        // and entry-point throws are "called on stopped instance"
-        // runtime_errors.
+        // FakeXEngine::stop(e), every worker's error is set to e. A null
+        // stop means normal termination: entry points then return their
+        // "stopped" done-value (false) instead of throwing. A non-null
+        // stop means error shutdown: entry points rethrow the error.
         std::exception_ptr error;
 
         // Debug-mode back-channel state. Both empty unless
@@ -610,17 +619,22 @@ struct FakeXEngine
     ~FakeXEngine();
 
     // Entry point: submit a SEND_JUNK(minichunk_index) command to
-    // workers[worker_id]->command_queue. Non-blocking. Throws if stopped
-    // or worker_id is out of range. The pybind11 wrapper releases the GIL.
+    // workers[worker_id]->command_queue. Non-blocking. Returns true if
+    // enqueued; returns false (command NOT enqueued) if cleanly stopped;
+    // rethrows the saved error if error-stopped. Throws on out-of-range
+    // worker_id or a non-monotonic minichunk_index (which, per the strict
+    // stoppable-class policy, also stops the FakeXEngine). The pybind11
+    // wrapper releases the GIL.
     //
     // Wire effect: the worker sends one minichunk worth of all-zero data.
     // (The protocol handshake is sent ahead of the first SEND_JUNK or
     // SEND_MINICHUNK on this worker; SKIP_MINICHUNK never triggers
     // connect/handshake.)
-    void enqueue_send_junk(long worker_id, long minichunk_index);
+    bool enqueue_send_junk(long worker_id, long minichunk_index);
 
     // Entry point: submit a SKIP_MINICHUNK(minichunk_index) command.
-    // Non-blocking; same lock discipline as enqueue_send_junk.
+    // Non-blocking; same return/throw semantics and lock discipline as
+    // enqueue_send_junk.
     //
     // Wire effect: NONE. Advances last_processed_minichunk past
     // minichunk_index (per the usual +1 monotonicity rule, with the
@@ -628,11 +642,11 @@ struct FakeXEngine
     // enqueue_send_junk). A worker whose only commands are SKIPs
     // never opens its TCP connection -- useful for "silent peer"
     // tests.
-    void enqueue_skip_minichunk(long worker_id, long minichunk_index);
+    bool enqueue_skip_minichunk(long worker_id, long minichunk_index);
 
     // Entry point: submit a SEND_MINICHUNK(minichunk_index, frame_set)
-    // command. Non-blocking; same lock discipline as enqueue_send_junk.
-    // Throws if frame_set is null.
+    // command. Non-blocking; same return/throw semantics and lock
+    // discipline as enqueue_send_junk. Throws if frame_set is null.
     //
     // Wire effect: gather the per-(beam, freq) int4 data for the
     // minichunk at offset (minichunk_index - frame_set->time_chunk_index
@@ -655,11 +669,12 @@ struct FakeXEngine
     // an actively-running reaper. If we ever want to colocate
     // FakeXEngine with a reaper, the gather loop needs lock acquisition
     // (one-per-beam) -- see plans/fake_xengine_skip_and_send_minichunk.md.
-    void enqueue_send_minichunk(long worker_id, long minichunk_index,
+    bool enqueue_send_minichunk(long worker_id, long minichunk_index,
                                 std::shared_ptr<AssembledFrameSet> frame_set);
 
     // Entry point: submit a DISCONNECT command. Non-blocking
-    // (fire-and-forget); the worker closes its TCP socket on receipt.
+    // (fire-and-forget); same return/throw semantics as enqueue_send_junk.
+    // The worker closes its TCP socket on receipt.
     // last_processed_minichunk and last_queued_minichunk are NOT
     // touched. The next SEND_JUNK or SEND_MINICHUNK on this worker
     // transparently reopens the connection AND re-sends the protocol
@@ -673,7 +688,7 @@ struct FakeXEngine
     //
     // DISCONNECT on an already-disconnected (or never-connected) worker
     // is a no-op. The pybind11 wrapper releases the GIL.
-    void enqueue_disconnect(long worker_id);
+    bool enqueue_disconnect(long worker_id);
 
     // Entry point: returns true iff workers[worker_id] has an open TCP
     // connection to its receiver right now. The result is a snapshot --
@@ -688,12 +703,14 @@ struct FakeXEngine
     bool is_connected(long worker_id) const;
 
     // Entry point: block until
-    // workers[worker_id]->last_processed_minichunk >= minichunk_index,
-    // or throw if stopped. Returns immediately for minichunk_index < 0
+    // workers[worker_id]->last_processed_minichunk >= minichunk_index.
+    // Returns true when the condition is reached; returns false if the
+    // FakeXEngine was cleanly stopped first; rethrows the saved error
+    // if error-stopped. Returns true immediately for minichunk_index < 0
     // (since last_processed_minichunk starts at -1) -- this is what
     // makes the controller's "wait_until_processed(w, n-2)" call work
     // for n in {0, 1}. The pybind11 wrapper releases the GIL.
-    void wait_until_processed(long worker_id, long minichunk_index);
+    bool wait_until_processed(long worker_id, long minichunk_index);
 
     // Entry point: enqueue a WAIT_FOR_ACKS command on
     // workers[worker_id]'s queue. Non-blocking (fire-and-forget):
@@ -701,11 +718,11 @@ struct FakeXEngine
     // _read_acks(blocking=true) -- which drains all outstanding
     // acks (or throws after the 1-second per-call deadline).
     //
-    // Throws if FakeXEngine was constructed with debug=false (a
-    // programming error to ask for acks when there are none), or
-    // if worker_id is out of range, or the FakeXEngine is stopped.
-    // The pybind11 wrapper releases the GIL.
-    void enqueue_wait_for_acks(long worker_id);
+    // Same return/throw semantics as enqueue_send_junk. Throws if
+    // FakeXEngine was constructed with debug=false (a programming
+    // error to ask for acks when there are none) or if worker_id is
+    // out of range. The pybind11 wrapper releases the GIL.
+    bool enqueue_wait_for_acks(long worker_id);
 
     // Entry point: block the CALLING thread until
     // workers[worker_id]->command_queue has been fully drained.
@@ -721,9 +738,11 @@ struct FakeXEngine
     // `command_queue.empty()`, which is sensitive to any future
     // pushes. Document this in your test code.
     //
-    // Throws on stopped FakeXEngine and on out-of-range worker_id.
-    // The pybind11 wrapper releases the GIL.
-    void synchronize(long worker_id);
+    // Returns true once fully drained; returns false if the FakeXEngine
+    // was cleanly stopped first; rethrows the saved error if
+    // error-stopped. Throws on out-of-range worker_id. The pybind11
+    // wrapper releases the GIL.
+    bool synchronize(long worker_id);
 
     // Entry point: snapshot the per-minichunk status byte for
     // workers[worker_id]->minichunk_status[minichunk_index -
@@ -763,11 +782,10 @@ struct FakeXEngine
     // Put FakeXEngine into stopped state. First caller's compare-exchange
     // on is_stopped_cache wins; subsequent concurrent calls return
     // immediately. The winner sweeps every worker, locking each one's
-    // mutex briefly to set is_stopped + error and notify its cv. Any
-    // in-flight entry-point calls (wait_until_processed /
-    // enqueue_send_junk) then throw on their next predicate re-check.
-    // If 'e' is non-null, it represents an error; otherwise normal
-    // termination.
+    // mutex briefly to set is_stopped + error and notify its cv. On
+    // their next predicate re-check, any in-flight entry-point calls
+    // (wait_until_processed / enqueue_send_junk / ...) then return false
+    // (e == nullptr: normal termination) or rethrow e (error shutdown).
     void stop(std::exception_ptr e = nullptr) const;
 
     // ----- Noncopyable, nonmoveable -----
@@ -781,10 +799,10 @@ private:
     // Helper: create XEngineMetadata for a specific worker (with subset of freq channels).
     XEngineMetadata make_worker_metadata(int worker_id) const;
 
-    // Helper: check if the given Worker is stopped; throw if so. Caller
-    // must hold w.mutex. Rethrows w.error if non-null; otherwise throws
-    // a runtime_error including method_name.
-    void _throw_if_stopped(Worker &w, const char *method_name);
+    // Helper: rethrows w.error if non-null (error-stopped); otherwise
+    // returns w.is_stopped (true = cleanly stopped; the caller returns
+    // its "stopped" done-value). Caller must hold w.mutex.
+    bool _stopped_or_rethrow(Worker &w);
 
     // Worker thread main function. Calls _initialize() once, then loops
     // popping commands off the worker's queue and dispatching them.
@@ -835,14 +853,14 @@ private:
 
     // Helper for the enqueue_send_junk / enqueue_skip_minichunk /
     // enqueue_send_minichunk / enqueue_disconnect entry points.
-    // Validates worker_id, takes workers[worker_id]->mutex,
-    // throws-if-stopped, performs the queue-time sequentiality check
-    // (only if is_state_advancing is true), updates
+    // Validates worker_id, takes workers[worker_id]->mutex, returns
+    // false without enqueueing if cleanly stopped (rethrows the saved
+    // error if error-stopped), performs the queue-time sequentiality
+    // check (only if is_state_advancing is true), updates
     // last_queued_minichunk and (on the very first call)
     // first_minichunk, pushes the Command, drops the lock, notifies
-    // the worker's cv. method_name is passed through to
-    // _throw_if_stopped and to the sequentiality-check error
-    // message for diagnostics.
+    // the worker's cv, and returns true. method_name is used in the
+    // range-check and sequentiality-check error messages.
     //
     // Callers MUST pass is_state_advancing = true for SEND_JUNK,
     // SKIP_MINICHUNK, SEND_MINICHUNK; and false for DISCONNECT.
@@ -853,14 +871,15 @@ private:
     // the counter updates, and the queue push -- so the recorded
     // last_queued_minichunk is always consistent with the FIFO
     // ordering of command_queue.
-    void _enqueue(long worker_id, Command &&cmd, bool is_state_advancing,
+    bool _enqueue(long worker_id, Command &&cmd, bool is_state_advancing,
                   const char *method_name);
 
     // Helper: send all bytes from buffer, using short send_with_timeout
     // calls so we can periodically re-check w.is_stopped under w.mutex
     // and bail out promptly. Returns false on stop or peer connection
-    // reset. On connection reset, also calls FakeXEngine::stop() so that
-    // sibling workers exit too.
+    // reset. On connection reset, also ERROR-stops the FakeXEngine
+    // ("receiver closed connection"), so sibling workers exit and every
+    // entry point reports the hangup as the root cause.
     bool _send_all(Worker &w, Socket &sock, const void *buf, long nbytes);
 
     // Drain ack bytes from the worker's socket and update

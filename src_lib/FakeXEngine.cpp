@@ -228,14 +228,15 @@ FakeXEngine::~FakeXEngine()
 }
 
 
-void FakeXEngine::_throw_if_stopped(Worker &w, const char *method_name)
+bool FakeXEngine::_stopped_or_rethrow(Worker &w)
 {
-    // Caller must hold w.mutex.
+    // Caller must hold w.mutex. Non-null error = error shutdown (rethrow
+    // the root cause); null-stopped = normal termination (the caller
+    // returns its "stopped" done-value).
     if (w.error)
         std::rethrow_exception(w.error);
 
-    if (w.is_stopped)
-        throw runtime_error(string(method_name) + " called on stopped instance");
+    return w.is_stopped;
 }
 
 
@@ -324,20 +325,18 @@ bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbyte
         long n = sock.send_with_timeout(ptr + pos, nbytes - pos, send_timeout_ms);
 
         if (sock.connreset) {
-            // Receiver hung up. Surface to the whole FakeXEngine so
-            // sibling workers exit too. stop()'s atomic CAS makes
-            // repeated connreset->stop() calls cheap (only the first
-            // one actually sweeps).
-            //
-            // DELIBERATE null-error stop: a receiver hangup is the normal
-            // end-of-run signal for a fake X-engine (the FrbServer closes
-            // connections when its run ends), so it maps to a clean stop,
-            // and subsequent entry points raise the generic "called on
-            // stopped instance" message -- which run_fake_xengine.py treats
-            // as its benign end-of-run sentinel (_surface_real_exceptions).
-            // Do not change this to a real error without updating that
-            // filter.
-            stop();
+            // Receiver hung up. The FakeXEngine cannot know WHY the peer
+            // closed (operator ended the run vs the server crashed), so it
+            // reports the hangup as an error and lets the caller judge --
+            // there is deliberately no "benign hangup" category. Error-stop
+            // the whole FakeXEngine so sibling workers exit too, and so
+            // every entry point reports this root cause. stop()'s atomic
+            // CAS makes repeated connreset->stop() calls cheap (only the
+            // first one actually sweeps).
+            stringstream ss;
+            ss << "FakeXEngine: receiver " << w.ip_addr << ":" << w.port
+               << " closed connection";
+            stop(std::make_exception_ptr(runtime_error(ss.str())));
             return false;
         }
 
@@ -381,14 +380,14 @@ bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbyte
 // enqueue_skip_minichunk(), enqueue_send_minichunk(),
 // enqueue_disconnect(), wait_until_processed(). All but the last
 // share an _enqueue() helper that does the worker_id range check +
-// lock + throw-if-stopped + (for state-advancing commands)
-// queue-time sequentiality check + push + notify pattern. The
-// is_state_advancing argument is passed explicitly per call rather
-// than inspected from cmd.kind, so each call site documents its
-// intent.
+// lock + stopped-check (false return / error rethrow) + (for
+// state-advancing commands) queue-time sequentiality check + push +
+// notify pattern. The is_state_advancing argument is passed explicitly
+// per call rather than inspected from cmd.kind, so each call site
+// documents its intent.
 
 
-void FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancing,
+bool FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancing,
                            const char *method_name)
 {
     if (worker_id < 0 || worker_id >= long(nworkers)) {
@@ -401,7 +400,8 @@ void FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancin
     Worker &w = *workers[worker_id];
 
     std::unique_lock<std::mutex> lock(w.mutex);
-    _throw_if_stopped(w, method_name);
+    if (_stopped_or_rethrow(w))
+        return false;   // cleanly stopped: command not enqueued
 
     // Queue-time sequentiality check for state-advancing commands
     // (SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK). DISCONNECT does
@@ -445,6 +445,7 @@ void FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancin
     // drop it and wake the worker.
     lock.unlock();
     w.cv.notify_all();   // wakes only this worker
+    return true;
 }
 
 
@@ -452,7 +453,7 @@ void FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancin
 // ANY exception thrown from an entry point stops the FakeXEngine --
 // including argument errors (bad worker_id, non-monotonic minichunk_index).
 
-void FakeXEngine::enqueue_send_junk(long worker_id, long minichunk_index)
+bool FakeXEngine::enqueue_send_junk(long worker_id, long minichunk_index)
 {
     try {
         xassert_ge(minichunk_index, 0L);
@@ -460,8 +461,8 @@ void FakeXEngine::enqueue_send_junk(long worker_id, long minichunk_index)
         Command cmd;
         cmd.kind = Command::Kind::SEND_JUNK;
         cmd.minichunk_index = minichunk_index;
-        _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
-                 "FakeXEngine::enqueue_send_junk");
+        return _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
+                        "FakeXEngine::enqueue_send_junk");
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -469,7 +470,7 @@ void FakeXEngine::enqueue_send_junk(long worker_id, long minichunk_index)
 }
 
 
-void FakeXEngine::enqueue_skip_minichunk(long worker_id, long minichunk_index)
+bool FakeXEngine::enqueue_skip_minichunk(long worker_id, long minichunk_index)
 {
     try {
         xassert_ge(minichunk_index, 0L);
@@ -477,8 +478,8 @@ void FakeXEngine::enqueue_skip_minichunk(long worker_id, long minichunk_index)
         Command cmd;
         cmd.kind = Command::Kind::SKIP_MINICHUNK;
         cmd.minichunk_index = minichunk_index;
-        _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
-                 "FakeXEngine::enqueue_skip_minichunk");
+        return _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
+                        "FakeXEngine::enqueue_skip_minichunk");
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -486,7 +487,7 @@ void FakeXEngine::enqueue_skip_minichunk(long worker_id, long minichunk_index)
 }
 
 
-void FakeXEngine::enqueue_send_minichunk(long worker_id, long minichunk_index,
+bool FakeXEngine::enqueue_send_minichunk(long worker_id, long minichunk_index,
                                          std::shared_ptr<AssembledFrameSet> frame_set)
 {
     try {
@@ -498,8 +499,8 @@ void FakeXEngine::enqueue_send_minichunk(long worker_id, long minichunk_index,
         cmd.kind = Command::Kind::SEND_MINICHUNK;
         cmd.minichunk_index = minichunk_index;
         cmd.frame_set = std::move(frame_set);
-        _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
-                 "FakeXEngine::enqueue_send_minichunk");
+        return _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
+                        "FakeXEngine::enqueue_send_minichunk");
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -507,15 +508,15 @@ void FakeXEngine::enqueue_send_minichunk(long worker_id, long minichunk_index,
 }
 
 
-void FakeXEngine::enqueue_disconnect(long worker_id)
+bool FakeXEngine::enqueue_disconnect(long worker_id)
 {
     try {
         Command cmd;
         cmd.kind = Command::Kind::DISCONNECT;
         // minichunk_index stays -1; frame_set stays null. Neither is read
         // by _disconnect.
-        _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
-                 "FakeXEngine::enqueue_disconnect");
+        return _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
+                        "FakeXEngine::enqueue_disconnect");
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -531,14 +532,14 @@ bool FakeXEngine::is_connected(long worker_id) const
            << " out of range [0, " << nworkers << ")";
         throw runtime_error(ss.str());
     }
-    // No _throw_if_stopped: this is an informational query, and the
+    // No stopped-check: this is an informational query, and the
     // last-known per-worker connected state is meaningful even after
     // FakeXEngine::stop(). Same semantics as the is_stopped property.
     return workers[worker_id]->connected.load(std::memory_order_relaxed);
 }
 
 
-void FakeXEngine::wait_until_processed(long worker_id, long minichunk_index)
+bool FakeXEngine::wait_until_processed(long worker_id, long minichunk_index)
 {
     try {
         if (worker_id < 0 || worker_id >= long(nworkers)) {
@@ -552,9 +553,10 @@ void FakeXEngine::wait_until_processed(long worker_id, long minichunk_index)
 
         std::unique_lock<std::mutex> lock(w.mutex);
         for (;;) {
-            _throw_if_stopped(w, "FakeXEngine::wait_until_processed");
+            if (_stopped_or_rethrow(w))
+                return false;   // cleanly stopped before the condition was reached
             if (w.last_processed_minichunk >= minichunk_index)
-                return;
+                return true;
             w.cv.wait(lock);
         }
     } catch (...) {
@@ -564,7 +566,7 @@ void FakeXEngine::wait_until_processed(long worker_id, long minichunk_index)
 }
 
 
-void FakeXEngine::enqueue_wait_for_acks(long worker_id)
+bool FakeXEngine::enqueue_wait_for_acks(long worker_id)
 {
     try {
         if (!debug)
@@ -574,8 +576,8 @@ void FakeXEngine::enqueue_wait_for_acks(long worker_id)
 
         Command cmd;
         cmd.kind = Command::Kind::WAIT_FOR_ACKS;
-        _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
-                 "FakeXEngine::enqueue_wait_for_acks");
+        return _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
+                        "FakeXEngine::enqueue_wait_for_acks");
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -583,7 +585,7 @@ void FakeXEngine::enqueue_wait_for_acks(long worker_id)
 }
 
 
-void FakeXEngine::synchronize(long worker_id)
+bool FakeXEngine::synchronize(long worker_id)
 {
     try {
         if (worker_id < 0 || worker_id >= long(nworkers)) {
@@ -596,9 +598,12 @@ void FakeXEngine::synchronize(long worker_id)
         // If debug mode is enabled, enqueue a WAIT_FOR_ACKS first. The
         // worker eventually pops it and calls _read_acks(blocking=true);
         // when that finishes the centralized cv.notify_all in
-        // _worker_main fires, which wakes us from cv.wait below.
-        if (debug)
-            enqueue_wait_for_acks(worker_id);
+        // _worker_main fires, which wakes us from cv.wait below. A false
+        // return means "cleanly stopped" -- report the same from here.
+        if (debug) {
+            if (!enqueue_wait_for_acks(worker_id))
+                return false;
+        }
 
         // Wait for the queue to drain. Predicate is (command_queue.empty()
         // && ack_queue.empty()):
@@ -623,9 +628,10 @@ void FakeXEngine::synchronize(long worker_id)
         Worker &w = *workers[worker_id];
         std::unique_lock<std::mutex> lock(w.mutex);
         for (;;) {
-            _throw_if_stopped(w, "FakeXEngine::synchronize");
+            if (_stopped_or_rethrow(w))
+                return false;   // cleanly stopped before the queue drained
             if (w.command_queue.empty() && w.ack_queue.empty())
-                return;
+                return true;
             w.cv.wait(lock);
         }
     } catch (...) {
@@ -1537,15 +1543,12 @@ void FakeXEngine::_pacing_thread_main()
 
 void FakeXEngine::pacing_thread_main()
 {
+    // Per the error-reporting convention (notes/stoppable_class.md),
+    // worker threads never print exceptions: stop(e) saves the root
+    // cause, and entry points rethrow it to the caller.
     try {
         _pacing_thread_main();
-    } catch (const std::exception &e) {
-        cerr << "FakeXEngine pacing thread terminated with exception: "
-             << e.what() << endl;
-        stop(std::current_exception());
     } catch (...) {
-        cerr << "FakeXEngine pacing thread terminated with unknown exception"
-             << endl;
         stop(std::current_exception());
     }
 }

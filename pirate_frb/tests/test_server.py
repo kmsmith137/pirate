@@ -440,6 +440,7 @@ class ServerTester:
         barrier makes impossible. (Acks are per-minichunk and immediate, so this
         does not wait on the 2-chunk assembly flush -- no deadlock.)"""
         fs = self.factory.get_frame_set()
+        assert fs is not None, "SimulatedFrameFactory stopped unexpectedly mid-test"
         assert fs.time_chunk_index == c
         self.framesets[c] = fs
         for w in range(self.p['nworkers']):

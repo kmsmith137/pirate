@@ -53,9 +53,31 @@ Conventions for how the exception text reaches a human:
   short timeout (~500 ms) -- a fully-blocking call would never return to the
   interpreter, so Ctrl-C (KeyboardInterrupt) could never be delivered.
 
-- A class may deliberately map an expected external event to a clean
-  (null-error) stop -- e.g. FakeXEngine treats a receiver hangup as its normal
-  end-of-run signal. Document such cases at the stop() call site.
+- A null stop() means normal termination; a non-null stop(e) means error
+  shutdown. Blocking methods for which "stopped while waiting" is an EXPECTED
+  outcome may adopt the poll_from_python() convention -- return a "done"
+  value on a clean stop, rethrow the saved error on an error stop -- instead
+  of throwing the generic "called on stopped instance" message. (Examples:
+  FakeXEngine's enqueue_* / wait_until_processed / synchronize return false;
+  SimulatedFrameFactory::get_frame_set() returns nullptr / Python None. A
+  controller loop then terminates cleanly on the done-value, and exceptions
+  are reserved for real errors.) Methods for which a stopped instance implies
+  caller misuse should keep the throwing convention.
+
+- Never make control-flow decisions by string-matching exception text (e.g.
+  filtering on "called on stopped instance"). If code needs to distinguish a
+  benign teardown unwind from a real error, make the distinction structural:
+  a done-value return, poll_from_python(), or the null-vs-non-null test on
+  the stored exception_ptr.
+
+- Stop-ordering invariant for external teardown code (e.g. a python-level
+  "stop everything" sweep): stop a holder object before its dependency,
+  never the reverse. A holder thread blocked inside a stopped dependency
+  unwinds via catch -> stop(current exception); that call is a harmless
+  no-op only if the holder's own stop already won the first-caller race.
+  Null-stopping a dependency under a still-running holder records the unwind
+  as a bogus error on the holder. (Internal cascades already satisfy this:
+  X::stop(e) forwards e down into its dependencies.)
 
 Here is a toy example of a stoppable class X with a fixed-size ring buffer, and two entry points `push()` and `pop()`.
 If `push()` is called and the ring buffer is full, the caller blocks until space is available.

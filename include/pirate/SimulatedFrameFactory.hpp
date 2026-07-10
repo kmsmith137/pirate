@@ -91,8 +91,12 @@ namespace pirate {
 //     MUST construct the factory inside a ThreadAffinity context manager.
 //
 // Follows the "thread-backed class" pattern (see notes/thread_backed_class.md):
-// stop() puts the object in a stopped state and wakes all threads; entry points
-// throw in the stopped state; the destructor calls stop() and joins.
+// stop() puts the object in a stopped state and wakes all threads; the
+// destructor calls stop() and joins. Stop-reporting convention (a documented
+// variant of the pattern -- see "Error reporting" in notes/stoppable_class.md):
+// a null stop() means normal termination -- get_frame_set() then returns
+// nullptr instead of throwing -- and a non-null stop(e) means error shutdown
+// (get_frame_set() rethrows e).
 
 struct SimulatedFrameFactory
 {
@@ -191,9 +195,10 @@ struct SimulatedFrameFactory
 
     // Entry point: block until a randomized AssembledFrameSet is available, then
     // return it (removing it from the output queue). Sets are returned in
-    // allocator order. Throws if the factory is stopped (rethrows the stored
-    // error, or "called on stopped instance"). The pybind11 wrapper releases the
-    // GIL.
+    // allocator order. If the factory is cleanly stopped (normal termination),
+    // returns nullptr -- Python None -- even if the output queue is nonempty;
+    // if error-stopped, rethrows the stored error. The pybind11 wrapper
+    // releases the GIL.
     std::shared_ptr<AssembledFrameSet> get_frame_set();
 
     // Put the factory into the stopped state and wake every thread. First caller
