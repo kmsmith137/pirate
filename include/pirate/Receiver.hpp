@@ -102,15 +102,20 @@ struct Receiver
     // If 'e' is non-null, it represents an error; otherwise normal termination.
     void stop(std::exception_ptr e = nullptr) const;
 
-    // Entry point: schedule the assembler thread to evict all chunks with
-    // chunk_index <= evicted_chunk (i.e., advance curr_base_chunk past
-    // evicted_chunk).
+    // Entry point, with a DELIBERATE deviation from the stopped-state
+    // contract (see below): schedule the assembler thread to evict all
+    // chunks with chunk_index <= evicted_chunk (i.e., advance
+    // curr_base_chunk past evicted_chunk).
     //
     // Non-blocking -- returns immediately after setting state and notifying.
     // Thread-safe; intended to be called from non-Receiver threads (in
     // practice, FrbServer worker threads). Idempotent / monotone: only
-    // ratchets the internal target upward. No-op (silently) if the Receiver
-    // is already stopped.
+    // ratchets the internal target upward.
+    //
+    // Deviation: silently no-ops (instead of throwing) when the Receiver is
+    // stopped. FrbServer workers call evict() during shutdown, after
+    // FrbServer::stop() has already cascaded into every Receiver -- throwing
+    // here would turn normal teardown into spurious errors.
     void evict(long evicted_chunk);
 
     // ----- Noncopyable, nonmoveable -----

@@ -68,10 +68,12 @@ public:
     void stop(std::exception_ptr e = nullptr) const;
 
     // process_frame(): adds frame to ssd/nfs queues if needed.
-    //  - called by RPC thread, after a new filename is appended.
-    //  - called by SSD thread, after writing to local disk.
+    //  - called only by FrbServer (via _queue_frame_write, from the RPC
+    //    handlers and the frame-finalizing thread's stream-capture hook).
+    //    The SSD worker thread does NOT call it -- it pushes directly to
+    //    nfs_queue under the state mutex.
     //  - this is an "entry point", in the sense defined in notes/thread_backed_class.md.
-    //  - caller must not hold this->lock or frame->lock.
+    //  - caller must not hold this->mutex or frame->mutex.
 
     void process_frame(const std::shared_ptr<AssembledFrame> &frame);
 

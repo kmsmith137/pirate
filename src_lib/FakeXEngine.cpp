@@ -221,8 +221,8 @@ FakeXEngine::~FakeXEngine()
     // and the workers are easier to reason about as "fully stopped"
     // before we let the pacing thread's destructor implicitly run.
     // (Both orders are correct given stop()'s independent signaling of
-    // each thread, but joining workers first matches the ctor's spawn
-    // order in reverse, which is the conventional pattern.)
+    // each thread; this join order happens to match the ctor's spawn
+    // order -- workers spawned first, joined first.)
     if (pacing_thread.joinable())
         pacing_thread.join();
 }
@@ -1532,10 +1532,11 @@ void FakeXEngine::_pacing_thread_main()
     // Stream ended. Finish() returns the final Status.
     grpc::Status status = reader->Finish();
 
-    // Acquire so we synchronize with stop()'s release-ordered write of
-    // is_stopped_cache. A relaxed load could miss a just-completed
-    // stop() call and produce a spurious "stream closed unexpectedly"
-    // stderr line.
+    // Acquire so we synchronize with stop()'s write of is_stopped_cache.
+    // (stop()'s compare_exchange_strong uses the default memory order,
+    // seq_cst, which includes the release semantics this pairing relies
+    // on.) A relaxed load could miss a just-completed stop() call and
+    // produce a spurious "stream closed unexpectedly" error.
     if (is_stopped_cache.load(std::memory_order_acquire))
         return;   // we cancelled via stop(); silent exit
 

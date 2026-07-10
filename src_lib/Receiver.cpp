@@ -582,8 +582,8 @@ void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
     peer->state = Peer::State::ReadData;
 
     // The reader thread (this one) is responsible for handing the parsed
-    // YAML to the AssembledFrameAllocator. The allocator's initialize()
-    // method does first-vs-subsequent branching internally:
+    // YAML to the AssembledFrameAllocator. The allocator's
+    // initialize_metadata() method does first-vs-subsequent branching internally:
     //   - first call (from any consumer): stores the metadata, projects
     //     away freq_channels, fills nfreq / beam_ids / etc.
     //   - subsequent calls: validates via check_sender_consistency() and
@@ -638,10 +638,15 @@ void Receiver::_read_data(const shared_ptr<Peer> &peer)
 
     // First-minichunk-header notification to the allocator. As soon as the
     // first 12 bytes are buffered we can parse the per-minichunk header and
-    // tell the allocator the canonical initial_time_chunk. The assembler
-    // hasn't run yet on this peer (it's still blocked on get_metadata() /
-    // wait_for_initial_chunk()), so rb_start is guaranteed to be 0 here and
-    // the header lives at rb_buf[0..11].
+    // tell the allocator the canonical initial_time_chunk.
+    //
+    // rb_start is guaranteed to be 0 here because the assembler has never
+    // been handed THIS peer: within _read_data, this header block (which
+    // needs >= 12 buffered bytes) always executes before the first enqueue
+    // of the peer to assembler_peer_queue (which needs a full minichunk,
+    // > 12 bytes) -- so nothing can have advanced this peer's rb_start yet,
+    // and the header lives at rb_buf[0..11]. (The assembler may well be
+    // running already, serving OTHER peers; the invariant is per-peer.)
     if (!peer->reader_seen_first_mc_header
         && updated_rb_end >= updated_rb_start + minichunk_header_nbytes)
     {
@@ -1018,6 +1023,17 @@ void Receiver::_advance_one_chunk()
 // promptly. If the client doesn't drain the byte within 1 second total wall-
 // clock, throws -- the assembler thread can stall for up to 1 second per peer,
 // but that's acceptable because FLAG_ACK is opted into only by test clients.
+//
+// FULL-DUPLEX SOCKET ASSUMPTION: this write (assembler thread) runs
+// concurrently with the reader thread's Socket::read() on the SAME fd, even
+// though network_utils.hpp declares Socket "not thread-safe". This is
+// race-free only because the mutable members the two paths touch are
+// disjoint: read() writes only 'eof' (read by the reader), send_with_timeout()
+// writes only 'connreset' (read by the assembler), and the remaining members
+// are immutable after the mutex-mediated peer handoff. Concurrent recv/send
+// on one fd is fine at the OS level. Any future Socket change that adds
+// shared mutable state (a common error field, buffered I/O) would introduce
+// a data race here.
 
 void Receiver::_send_ack(const shared_ptr<Peer> &peer, char ack_byte)
 {

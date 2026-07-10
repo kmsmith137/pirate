@@ -541,7 +541,11 @@ void GpuDedisperser::worker_main()
 {
     try {
         CUDA_CALL(cudaSetDevice(params.cuda_device_id));
-        _worker_main();  // only returns if GpuDedisperser::is_stopped
+        // _worker_main never returns normally: its for(;;) loop exits only
+        // by throwing (an evrb wait throws once stop() cascades into the
+        // internal ringbufs). The catch below makes that the normal
+        // shutdown path -- stop() is a no-op if already stopped.
+        _worker_main();
     } catch (...) {
         stop(std::current_exception());
     }

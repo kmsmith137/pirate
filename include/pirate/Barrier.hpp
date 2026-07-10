@@ -41,7 +41,13 @@ struct Barrier
     void wait();
 
     void stop(std::exception_ptr e = nullptr) const;
+
+    // Entry point: sets nthreads (for the ctor-with-nthreads=0 case).
+    // Throws if stopped (rethrows the saved error) or already initialized.
     void initialize(int nthreads);
+
+    // Stopped-tolerant informational accessor (no stopped-state check):
+    // returns whether nthreads has been set, meaningful even after stop().
     bool is_initialized();
 
     // Helper for entry points. Caller must hold lock.

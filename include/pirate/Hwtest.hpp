@@ -20,6 +20,13 @@ namespace pirate {
 // Hwtest: hardware performance tests (memory bandwidth, network bandwidth, etc.)
 // Thread-backed class (see notes/thread_backed_class.md).
 
+// WARNING on enable_shared_from_this: shared_from_this() is currently unused,
+// and must NEVER be handed to worker threads -- workers hold a bare Hwtest*
+// by design. If workers held shared_ptr<Hwtest>, the destructor (which is
+// what joins the threads) could never run: each worker's reference would keep
+// the object alive until the worker exits, and the worker exits only when
+// joined.
+
 struct Hwtest : public std::enable_shared_from_this<Hwtest>
 {
     // Factory method (constructor is protected).
@@ -100,7 +107,9 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
     Hwtest(Hwtest &&) = delete;
     Hwtest &operator=(Hwtest &&) = delete;
 
-    // Destructor calls stop() and join().
+    // Destructor calls stop(), then joins the worker threads inline (via
+    // _join_threads). It deliberately does NOT call Hwtest::join(), which
+    // rethrows the saved error -- fatal in a destructor.
     ~Hwtest();
     
 protected:

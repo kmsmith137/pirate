@@ -220,8 +220,10 @@ struct FakeXEngine
         // Notified by: enqueue_send_junk / enqueue_skip_minichunk /
         // enqueue_send_minichunk / enqueue_disconnect (after enqueue),
         // the worker thread (after a successful command processed-step
-        // updates last_processed_minichunk), and stop() (when
-        // is_stopped transitions to true).
+        // updates last_processed_minichunk, and when _read_acks drains
+        // ack_queue), the pacing thread (on each rb_processed advance,
+        // paced mode only), and stop() (when is_stopped transitions to
+        // true).
         std::condition_variable cv;
 
         // Commands waiting to be processed by this worker, FIFO.
@@ -485,6 +487,14 @@ struct FakeXEngine
     //
     // NOT load-bearing for synchronization with worker threads -- those
     // synchronize through each Worker::is_stopped under its own mutex.
+    //
+    // Transient window (benign, deliberate): because the cache is set
+    // before the per-worker sweep, a thread that observes is_stopped ==
+    // true can still successfully enqueue on a not-yet-swept worker (and
+    // vice versa). Harmless: the enqueued command is never processed, and
+    // any subsequent blocking call reports the stop. The per-worker design
+    // trades the single-mutex pattern's atomicity for an uncontended hot
+    // path.
     mutable std::atomic<bool> is_stopped_cache{false};
 
     // ----- Worker state -----

@@ -320,7 +320,8 @@ struct AssembledFrameSet
 // frame sets are initialized synchronously by the caller of get_frame_set().
 //
 // Entry points (following thread-backed class pattern): initialize_metadata(),
-// initialize_initial_chunk(), get_frame_set(). These will throw if the
+// get_metadata(), initialize_initial_chunk(), wait_for_initial_chunk(),
+// get_frame_set(), block_until_low_memory(). These will throw if the
 // allocator is stopped, and will call stop() on exception.
 
 struct AssembledFrameAllocator
@@ -348,7 +349,7 @@ struct AssembledFrameAllocator
     std::vector<long> get_beam_ids() const;
 
     // Shared X-engine metadata for this allocator. Set on the first call to
-    // initialize() (by the first consumer); subsequent consumers must provide
+    // initialize_metadata() (by the first consumer); subsequent consumers must provide
     // a metadata that passes XEngineMetadata::check_sender_consistency against
     // this one. Propagated by _create_frame() into every AssembledFrame via
     // AssembledFrame::metadata.
@@ -381,16 +382,17 @@ struct AssembledFrameAllocator
     // Returns the shared XEngineMetadata pointer once it has been set
     // (i.e. once any caller has called initialize_metadata()).
     //
-    // If blocking=true: blocks until metadata is available, or throws
-    //   if the allocator is stopped.
+    // If blocking=true: blocks until metadata is available.
     // If blocking=false: returns nullptr if metadata is not yet available.
+    // A stopped allocator throws in BOTH blocking modes (the stopped check
+    // precedes the metadata check).
     //
     // The returned shared_ptr points at the canonical (shared, immutable)
     // metadata. Always FREQUENCY-SCRUBBED (freq_channels is empty) -- see
     // _initialize_metadata() for rationale -- so callers should not look
     // there for the per-sender frequency subset.
     //
-    // Entry point: throws if stopped (in blocking=true case).
+    // Entry point: throws if stopped (in both blocking modes).
     std::shared_ptr<const XEngineMetadata> get_metadata(bool blocking);
 
     // Establishes (on the first call from any caller) the canonical

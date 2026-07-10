@@ -225,10 +225,8 @@ struct SimulatedFrameFactory
     // to drain any final events. Empty unless Params::simulate_frbs.
     std::vector<Event> pop_events();
 
-    // ----- Synchronization (all members below protected by 'lock') -----
+    // ----- Constants (immutable after construction; NOT lock-protected) -----
 
-    // ----- Synchronization (all members below protected by 'lock') -----
-    
     // Construction parameters (validated in the constructor), immutable after
     // construction.
     const Params params;
@@ -306,7 +304,11 @@ struct SimulatedFrameFactory
     // returns) -- so once _randomize_set() returns, the set is safe to hand off /
     // release. A published job ALWAYS runs to completion, even if stop() races in
     // (randomize() never blocks), so the producer's rand_done_cv wait is
-    // deliberately NOT stop-sensitive and can never hang.
+    // deliberately NOT stop-sensitive. The wait's termination rests on the
+    // invariant that every claimed beam increments rand_ndone, even when
+    // randomize() throws (the randomizer's catch still bumps the counter);
+    // the only way to break it would be a throw from the unique_lock
+    // unlock/lock calls themselves, which does not happen on a valid mutex.
     AssembledFrameSet *rand_fset = nullptr;
     long rand_total = 0;
     long rand_next  = 0;

@@ -1614,6 +1614,14 @@ void FrbServer::grouper_receive_thread_main()
 
     
 // Helper to lock the weak_ptr. Throws if the server is exiting.
+//
+// TEARDOWN HAZARD (accepted): the returned shared_ptr means an in-flight RPC
+// handler can hold the LAST reference to the FrbServer, in which case
+// ~FrbServer runs on the gRPC pool thread -- where rpc_server->Wait() would
+// wait on the very handler executing the destructor (self-deadlock). Owners
+// must therefore keep their reference alive until after stop() has run and
+// in-flight handlers have drained (the Python flow -- owner holds the server
+// and calls stop()/poll_from_python -- satisfies this).
 shared_ptr<FrbServer> FrbRpcService::_lock_state()
 {
     auto s = state.lock();

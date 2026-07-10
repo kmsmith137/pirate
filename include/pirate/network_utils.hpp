@@ -40,6 +40,14 @@ namespace pirate {
 // Note: Socket is not thread-safe!
 // (May be fixed in the future, but nontrivial since std::mutex
 // and std::atomic are non-moveable.)
+//
+// One sanctioned exception: full-duplex use from two threads (one thread
+// calling read()-family methods, another calling send()-family methods, on
+// the same fd) is currently race-free, because the mutable members the two
+// paths touch are disjoint ('eof' for reads, 'connreset' for sends) and the
+// rest are immutable after handoff. Receiver's FLAG_ACK back-channel relies
+// on this -- see the comment at Receiver::_send_ack before adding any
+// mutable state shared between the read and send paths.
 struct Socket
 {
     int fd = -1;

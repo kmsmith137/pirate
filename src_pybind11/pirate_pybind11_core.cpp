@@ -328,9 +328,10 @@ void register_core_bindings(pybind11::module &m)
                 auto m = self.get_metadata(/*blocking=*/false);
                 return std::const_pointer_cast<XEngineMetadata>(m);
             },
-            "Shared XEngineMetadata, set the first time initialize() is called.\n"
-            "None if no consumer has called initialize() yet. Read-only by\n"
-            "convention. (Note: freq_channels is cleared on the canonical copy.)")
+            "Shared XEngineMetadata, set the first time initialize_metadata() is\n"
+            "called. None if no consumer has called initialize_metadata() yet.\n"
+            "Read-only by convention. (Note: freq_channels is cleared on the\n"
+            "canonical copy.)")
         .def("initialize_metadata", &AssembledFrameAllocator::initialize_metadata,
             py::arg("metadata"),
             "Set the canonical XEngineMetadata on the allocator. The first call\n"
@@ -372,7 +373,8 @@ void register_core_bindings(pybind11::module &m)
             py::call_guard<py::gil_scoped_release>(),
             "Get the canonical XEngineMetadata pointer.\n\n"
             "Args:\n"
-            "    blocking: If True, wait until any consumer has called initialize().\n\n"
+            "    blocking: If True, wait until any consumer has called\n"
+            "        initialize_metadata().\n\n"
             "Returns:\n"
             "    XEngineMetadata object (or None if non-blocking and not yet set).\n"
             "    Note: freq_channels is cleared on the canonical copy.\n\n"
@@ -1202,14 +1204,17 @@ void register_core_bindings(pybind11::module &m)
     }
 
     // Receiver: listens for TCP connections and reads data.
-    // Skipped members: mutex, cv, is_started, is_stopped, error, listener_thread, reader_thread, pending_sockets (internal)
+    // Skipped members: mutex, cv, is_started, is_stopped, error, listener_thread,
+    //   reader_thread, assembler_thread, reader_peer_queue, assembler_peer_queue (internal)
     // Skipped methods: _listener_main, _reader_main, listener_main, reader_main (private)
     // Note: Uses shared_ptr holder so Receivers can be passed to FrbServer.
     py::class_<Receiver, std::shared_ptr<Receiver>>(m, "Receiver",
         "Listens for TCP connections and reads data.\n\n"
-        "A thread-backed class with two worker threads:\n"
+        "A thread-backed class with three worker threads:\n"
         "  - listener: accepts incoming connections\n"
-        "  - reader: reads data from all open connections using epoll")
+        "  - reader: reads data from all open connections using epoll\n"
+        "  - assembler: copies minichunks from per-peer ring buffers into\n"
+        "    AssembledFrames")
           .def(py::init([](const std::string &address,
                            std::shared_ptr<AssembledFrameAllocator> allocator,
                            long consumer_id,
@@ -1489,6 +1494,14 @@ void register_core_bindings(pybind11::module &m)
           // (pirate_frb/rpc/_FrbGrouper.py). Kept as a plain list, not a napoleon
           // "Attributes" section, so the rendering is compact and the members are not
           // re-registered as separate sphinx objects / sidebar entries.
+          //
+          // Synchronization convention for the raw def_readonly members below:
+          // they are written by the Session handler thread WITHOUT the mutex,
+          // and published via the mutexed handshake_done flag. They are safe
+          // to read only after wait_for_handshake() has returned true on the
+          // reading thread (the documented flow); reading them from a second
+          // Python thread while another is still blocked in open() would race
+          // with the handler's writes.
           .def_property_readonly("is_stopped", &FrbGrouper::is_stopped_pub)
           .def_readonly("cuda_device_id", &FrbGrouper::cuda_device_id)
           .def_readonly("dtype", &FrbGrouper::dtype)

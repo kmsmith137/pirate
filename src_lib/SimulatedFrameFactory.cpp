@@ -161,11 +161,12 @@ SimulatedFrameFactory::~SimulatedFrameFactory()
 {
     this->stop();
 
-    // Join the producer BEFORE the randomizers: a producer blocked mid-job (in
-    // _randomize_set, on rand_done_cv) can only exit once the randomizers finish
-    // draining the in-flight job, so they must still be running here. The frb
-    // simulators have no such dependency (they only touch the pulse queue) and
-    // can be joined last.
+    // Join the producer first, then the randomizers, then the frb simulators.
+    // The order is a readability convention, not load-bearing: join() only
+    // waits (it does not halt a thread), so joining the randomizers first
+    // would also complete -- they drain the in-flight job and exit once
+    // is_stopped, after which a producer blocked on rand_done_cv wakes and
+    // exits. Both orders are deadlock-free.
     if (producer_thread.joinable())
         producer_thread.join();
 

@@ -90,7 +90,10 @@ struct CudaEventRingbuf
 
     // Consumer: retrieve event from ringbuf, and call cudaStreamWaitEvent(stream, event).
     // If seq_id < 0, this is a no-op (aside from the stopped-state check --
-    // a stopped ringbuf throws for all seq_id values).
+    // a stopped ringbuf throws for all seq_id values). EXCEPTION: with
+    // nconsumers == 0, the no-op path is disabled and wait(-1) throws the
+    // "called with nconsumers=0" error like any other seq_id (and, per the
+    // entry-point contract, thereby stops the ringbuf).
     //
     // If the seq_id has not yet been produced (via record()):
     //   - If blocking=false (default), throws an exception.
@@ -100,7 +103,8 @@ struct CudaEventRingbuf
 
     // Consumer: retrieve event from ringbuf, and call cudaEventSynchronize(event).
     // If seq_id < 0, this is a no-op (aside from the stopped-state check --
-    // a stopped ringbuf throws for all seq_id values).
+    // a stopped ringbuf throws for all seq_id values). Same nconsumers == 0
+    // exception as wait() above.
     //
     // If the seq_id has not yet been produced (via record()):
     //   - If blocking=false (default), throws an exception.
@@ -127,7 +131,12 @@ struct CudaEventRingbuf
     bool blocking_sync = true;
     unsigned int event_flags = 0;
 
-    // Ring buffer state (all protected by mutex).
+    // Ring buffer state. The bookkeeping vectors (produced/acquired/released)
+    // and the seq_start/seq_end cursors are protected by 'mutex'. The
+    // cudaEvent_t objects themselves are USED outside the lock (record /
+    // wait / synchronize call CUDA APIs unlocked); their safety rests on the
+    // slot-recycling invariant below (a slot is re-recorded only after
+    // released[slot] == nconsumers), not on the mutex.
     // - 'events' is a fixed-size array of cuda events (size == max_size).
     // - 'produced[slot]' is true iff cudaEventRecord() has completed for the current seq_id at that slot.
     // - 'acquired[slot]' is the number of consumers who have acquired events[slot] for the current seq_id.

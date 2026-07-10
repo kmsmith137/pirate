@@ -406,7 +406,6 @@ FrbGrouper::SessionResult FrbGrouper::_run_session(void *ctx_, void *stream_)
         //    HandshakeReply and then drains consumed_seq_ids).
         {
             lock_guard<std::mutex> lock(mutex);
-            is_connected = true;
             handshake_done = true;
             cv.notify_all();
         }

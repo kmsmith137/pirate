@@ -177,8 +177,14 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
 
     // Thread-backed class state (protected by mutex). The stop-pattern
     // members are 'mutable' since stop() is const (see notes/stoppable_class.md).
+    //
+    // 'cv' is signaled on: stop(), metadata available, every frame insertion
+    // into the ring buffer, dedisperser publish, every rb_processed advance,
+    // and grouper handshake completion. Several wait predicates (RPC
+    // handlers, MonitorRingbuf pushes, poll_from_python) rely on this list
+    // being complete.
     mutable std::mutex mutex;
-    mutable std::condition_variable cv;  // signaled on: stop, metadata available
+    mutable std::condition_variable cv;
     mutable bool is_stopped = false;
     mutable std::exception_ptr error;
 

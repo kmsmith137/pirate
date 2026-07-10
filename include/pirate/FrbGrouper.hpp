@@ -159,6 +159,13 @@ struct FrbGrouper : public std::enable_shared_from_this<FrbGrouper>
     std::vector<long> nt_out;     // length ntrees, from dedispersion_plan_yaml['trees'][:]['nt_out']
 
     // ----- Lifecycle (entry points) -----
+    //
+    // NOTE: deterministic teardown requires an explicit close(). The Session
+    // handler holds a strong shared_ptr for the whole session, so merely
+    // dropping the consumer's last reference does NOT run the destructor
+    // while a session is active -- the object (and its CUDA IPC mapping)
+    // stays alive until the producer closes the stream. The Python context
+    // manager calls close() on exit, which is the intended usage.
     void open();    // start listening + block until client connects + handshake processed
     void close();   // stop() + join + server shutdown (deterministic teardown)
     void stop(std::exception_ptr e = nullptr) const;   // idempotent
@@ -202,7 +209,6 @@ private:
 
     // Session coordination flags (all under mutex).
     bool session_active  = false;   // single-client guard
-    bool is_connected    = false;   // a client's Session handler is running
     bool handshake_done  = false;   // handshake processed; output_ringbuf valid
     bool send_io_done    = false;   // send thread has stopped touching the stream
     bool opened          = false;   // start_listening() called-once guard (single session)
