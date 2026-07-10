@@ -254,6 +254,14 @@ class ServerTester:
                     self.child.join(timeout=10)
             if self.factory is not None:
                 self.factory.stop()
+            if self.server is not None:
+                # If the server error-stopped during the test, the stop()
+                # above was a no-op (first-stop-wins) and this rethrows the
+                # server's saved root-cause exception, chaining onto any
+                # in-flight test exception. After a clean stop it's a no-op.
+                # Deliberately LAST in this try block, so a raise here cannot
+                # skip the grouper-child release sequencing above.
+                self.server.poll_from_python(timeout_ms=0)
         finally:
             shutil.rmtree(self.ssd_dir, ignore_errors=True)
             shutil.rmtree(self.nfs_dir, ignore_errors=True)
