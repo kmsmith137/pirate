@@ -973,6 +973,7 @@ void FakeXEngine::_read_acks(Worker &w, bool blocking)
         }
 
         // Process the n bytes under the lock.
+        bool drained;
         {
             std::lock_guard<std::mutex> lock(w.mutex);
             // Defense-in-depth invariants. Should never trip under
@@ -1087,7 +1088,17 @@ void FakeXEngine::_read_acks(Worker &w, bool blocking)
                         .fetch_add(1, std::memory_order_relaxed);
                 }
             }
+            drained = w.ack_queue.empty();
         }
+
+        // Wake a synchronize() waiter whose predicate (command_queue and
+        // ack_queue both empty) may have just become true. Load-bearing for
+        // the idle-loop drain in _worker_main, which is not followed by any
+        // command-completion notify -- without this, a synchronize() caller
+        // could sleep forever after the idle drain pops the last ack.
+        if (drained)
+            w.cv.notify_all();
+
         need -= n;
     }
 }

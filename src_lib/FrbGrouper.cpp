@@ -284,13 +284,16 @@ void FrbGrouper::start_listening()
     // listening, and wait_for_handshake() / acquire_output() would block
     // forever instead of throwing.
     try {
-        {
-            unique_lock<std::mutex> lock(mutex);
-            _throw_if_stopped("FrbGrouper::open");
-            if (opened)   // single session only
-                throw runtime_error("FrbGrouper::open() called twice (single session only)");
-            opened = true;
-        }
+        // Hold the mutex across BuildAndStart + the send-thread spawn, so
+        // 'grpc_state->server' and 'send_thread' are PUBLISHED under the
+        // mutex (close() synchronizes on it before reading them). Safe:
+        // nothing here waits on the send thread or the Session handler,
+        // which both block briefly on the mutex until we release.
+        unique_lock<std::mutex> lock(mutex);
+        _throw_if_stopped("FrbGrouper::open");
+        if (opened)   // single session only
+            throw runtime_error("FrbGrouper::open() called twice (single session only)");
+        opened = true;
 
         try {
             // Bind + start. The 2-arg AddListeningPort does NOT report a bind failure:
@@ -316,12 +319,10 @@ void FrbGrouper::start_listening()
             // handler then waits (in its step-5 teardown) for send_io_done --
             // which is normally set by the send thread on exit, and the send
             // thread may never have been created. Set it here (vacuously true:
-            // no send thread will ever touch the stream), so the handler can
-            // return instead of hanging close()'s server->Wait() forever.
-            {
-                lock_guard<std::mutex> lock(mutex);
-                send_io_done = true;
-            }
+            // no send thread will ever touch the stream; the enclosing 'lock'
+            // is still held), so the handler can return instead of hanging
+            // close()'s server->Wait() forever.
+            send_io_done = true;
             throw;
         }
     } catch (...) {
@@ -737,10 +738,21 @@ void FrbGrouper::stop(std::exception_ptr e) const
 
 void FrbGrouper::close()
 {
+    // Serialize concurrent close() calls: a second caller must BLOCK here
+    // until the first finishes tearing down. (With only the 'closed' flag,
+    // the second caller would return immediately -- letting e.g. the
+    // destructor run and free members while the first close() is still
+    // joining the send thread / shutting the server down.) close_mutex is
+    // leaf-level: it is never acquired while 'mutex' is held.
+    std::lock_guard<std::mutex> close_lock(close_mutex);
+
     { std::lock_guard<std::mutex> lock(mutex); if (closed) return; closed = true; }
 
     stop();   // TryCancel -> the handler's Read returns false -> handler returns
 
+    // Reading send_thread / grpc_state->server without 'mutex' is safe here:
+    // open() publishes both under 'mutex', the closed-check above acquired
+    // 'mutex' (happens-before), and nothing writes them after open().
     if (send_thread.joinable())
         send_thread.join();
 

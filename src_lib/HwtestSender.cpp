@@ -92,8 +92,11 @@ void HwtestSender::start()
             throw runtime_error("HwtestSender::start() called with no endpoints");
 
         is_started = true;
-        lock.unlock();
 
+        // Publish 'workers' under the mutex (join()/wait() synchronize on
+        // it). Holding the lock across the spawns is safe: freshly-spawned
+        // workers block briefly in _stopped() until we release, and start()
+        // never waits on them.
         long num_endpoints = endpoints.size();
         workers.resize(num_endpoints);
 
@@ -121,9 +124,21 @@ void HwtestSender::stop(std::exception_ptr e) const
 
 void HwtestSender::join()
 {
-    for (auto &w : workers) {
-        if (w.joinable())
-            w.join();
+    // Briefly take the mutex to synchronize with start(), which publishes
+    // 'workers' under it -- this guarantees we observe either the
+    // fully-spawned vector or an empty one, never a mid-resize state. The
+    // joins themselves run with the mutex RELEASED: worker threads take
+    // the mutex on their exit path, so joining under it would deadlock.
+    // (Not safe to call join() concurrently with itself.)
+    long nworkers;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        nworkers = long(workers.size());
+    }
+
+    for (long i = 0; i < nworkers; i++) {
+        if (workers[i].joinable())
+            workers[i].join();
     }
 }
 
@@ -152,27 +167,34 @@ bool HwtestSender::wait(int timeout_ms)
 
 void HwtestSender::worker_main(long endpoint_index)
 {
-    const string &ip_addr = endpoints.at(endpoint_index).ip_addr;
-    string errmsg;
-    long nbytes_sent = 0;
-
+    // Everything that could conceivably throw -- endpoints.at() and the
+    // exit-summary print (stringstream allocation) -- lives inside the
+    // try/catch, so no exception can escape the thread (std::terminate).
+    // The exit-counter block stays outside the try: wait() depends on it
+    // running on every path, and it cannot throw.
     try {
-        nbytes_sent = _worker_main(endpoint_index);
-    } catch (const exception &exc) {
-        errmsg = exc.what();
-        stop(std::current_exception());
-    } catch (...) {
-        errmsg = "unknown exception";
-        stop(std::current_exception());
-    }
+        const string &ip_addr = endpoints.at(endpoint_index).ip_addr;
+        string errmsg;
+        long nbytes_sent = 0;
 
-    {
+        try {
+            nbytes_sent = _worker_main(endpoint_index);
+        } catch (const exception &exc) {
+            errmsg = exc.what();
+            stop(std::current_exception());
+        } catch (...) {
+            errmsg = "unknown exception";
+            stop(std::current_exception());
+        }
+
         stringstream ss;
         ss << ip_addr << ": exiting, sent " << nbytes_to_str(nbytes_sent);
         if (!errmsg.empty())
             ss << " [error: " << errmsg << "]";
         ss << "\n";
         cout << ss.str() << flush;
+    } catch (...) {
+        stop(std::current_exception());
     }
 
     {

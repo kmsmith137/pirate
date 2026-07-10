@@ -208,6 +208,11 @@ private:
     bool opened          = false;   // start_listening() called-once guard (single session)
     bool closed          = false;   // close() idempotency guard
 
+    // Serializes concurrent close() calls: the second caller blocks until
+    // the first has fully torn down (see FrbGrouper::close()). Leaf-level:
+    // never acquired while 'mutex' is held.
+    std::mutex close_mutex;
+
     // Guards the one-time "waiting for FrbServer to connect" stdout message in
     // wait_for_handshake() (which is polled every ~0.5s). Under mutex; set true
     // after the message is printed once, so it does not repeat.

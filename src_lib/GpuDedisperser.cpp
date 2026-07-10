@@ -470,6 +470,11 @@ GpuDedisperser::~GpuDedisperser()
     // all kernels that perform IO on those arrays have completed. Without this
     // synchronization, we would have a race condition where array memory could
     // be freed while GPU kernels are still accessing it.
+    //
+    // Accepted risk: cudaStreamSynchronize (like cudaEventSynchronize --
+    // see the blocking_sync note in CudaEventRingbuf.hpp) cannot be
+    // interrupted by stop(); if the GPU itself hangs, this destructor
+    // hangs rather than exiting with the error text.
     if (stream_pool) {
         cudaStreamSynchronize(stream_pool->low_priority_g2h_stream);
         cudaStreamSynchronize(stream_pool->low_priority_h2g_stream);

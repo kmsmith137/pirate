@@ -461,12 +461,19 @@ void BumpAllocator::_zero_worker()
         stop(std::current_exception());
     }
 
-    if (!has_registrar) {
-        // Last-out finalizes. (When a registrar is present, the
-        // registrar finalizes after its last chunk -- by construction
-        // it finishes after all zero workers.)
-        if (_workers_remaining.fetch_sub(1, std::memory_order_acq_rel) == 1)
-            _finalize_initialized();
+    // Last-out finalizes. (When a registrar is present, the registrar
+    // finalizes after its last chunk -- by construction it finishes after
+    // all zero workers.) This block must run on EVERY path -- including
+    // after a caught error above -- so it sits outside the main try; its
+    // own try/catch keeps a pathological throw (e.g. a mutex failure in
+    // _finalize_initialized) from escaping the thread (std::terminate).
+    try {
+        if (!has_registrar) {
+            if (_workers_remaining.fetch_sub(1, std::memory_order_acq_rel) == 1)
+                _finalize_initialized();
+        }
+    } catch (...) {
+        stop(std::current_exception());
     }
 }
 

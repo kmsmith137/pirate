@@ -75,9 +75,15 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
     // Before server is started, 'workers' is protected by mutex.
     std::vector<std::shared_ptr<Worker>> workers;
 
+    // Published by start() under the mutex; joined via _join_threads().
     std::vector<std::thread> threads;
 
     void _add_worker(const std::shared_ptr<Worker> &worker, const std::string &caller);
+
+    // Joins all worker threads (synchronizes with start()'s publication of
+    // 'threads' via the mutex, then joins with the mutex released). Called
+    // by join() and the destructor.
+    void _join_threads();
 
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name);

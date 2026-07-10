@@ -303,7 +303,14 @@ void FrbServer::start()
         xassert(params.gpu_allocator->is_initialized());
 
         is_started = true;
-        lock.unlock();
+
+        // Hold the mutex through the rest of start(), so rpc_server and all
+        // the thread handles below are PUBLISHED under it -- stop() and the
+        // destructor synchronize on the mutex before reading them (stop()
+        // can run concurrently with start(), e.g. from an RPC handler or a
+        // just-spawned worker). Safe: nothing below waits on the spawned
+        // threads or on RPC handlers, which block briefly on the mutex
+        // until we return.
 
         // Create the RPC service (needs shared_from_this(), so can't be done in constructor).
         this->rpc_service = make_unique<FrbRpcService> (weak_from_this());

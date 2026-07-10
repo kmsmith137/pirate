@@ -78,7 +78,7 @@ void Barrier::wait()
 
         this->nthreads_waiting++;
 
-        int wc = this->wait_count;
+        long wc = this->wait_count;
         cv.wait(ul, [this,wc] { return (this->is_stopped || (this->wait_count > wc)); });
 
         if (_unlikely(is_stopped))

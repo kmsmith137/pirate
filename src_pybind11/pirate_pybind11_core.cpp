@@ -310,9 +310,15 @@ void register_core_bindings(pybind11::module &m)
             py::arg("slab_allocator"),
             py::arg("num_consumers"),
             py::arg("time_samples_per_chunk"))
-        .def_readonly("nfreq", &AssembledFrameAllocator::nfreq)
+        // nfreq / beam_ids are written by initialize_metadata() under the
+        // allocator's lock, so (unlike the ctor-constant
+        // time_samples_per_chunk below) a raw def_readonly would read them
+        // unsynchronized -- a torn vector copy in the worst case. Route
+        // through the lock-synchronized getters, like the 'metadata'
+        // property.
+        .def_property_readonly("nfreq", &AssembledFrameAllocator::get_nfreq)
         .def_readonly("time_samples_per_chunk", &AssembledFrameAllocator::time_samples_per_chunk)
-        .def_readonly("beam_ids", &AssembledFrameAllocator::beam_ids)
+        .def_property_readonly("beam_ids", &AssembledFrameAllocator::get_beam_ids)
         .def_property_readonly("metadata",
             [](AssembledFrameAllocator &self) {
                 // Route through get_metadata(blocking=false) so the read is

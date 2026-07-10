@@ -40,6 +40,9 @@ namespace pirate {
 // Entry points (record, wait, synchronize, synchronize_with_producer) will
 // rethrow the stored exception when called in the stopped state. If an entry
 // point throws an exception, stop(e) is called automatically before rethrowing.
+// One exception to "stop() wakes all blocked threads": a thread parked inside
+// cudaEventSynchronize() (see the blocking_sync note on the constructor below)
+// cannot be woken by stop(); it returns only when the GPU fires the event.
 //
 // CudaEventRingbuf is noncopyable.
 //
@@ -53,6 +56,19 @@ struct CudaEventRingbuf
     //   - nconsumers: Number of times each event can be consumed (0 is allowed, see above).
     //   - max_size: Maximum ring buffer size (throws if exceeded).
     //   - blocking_sync: If true, then synchronize() will block instead of busy-waiting.
+    //
+    // Note on blocking_sync=true (the default): synchronize() then parks in
+    // cudaEventSynchronize(), a driver-level wait that stop() CANNOT
+    // interrupt (cv notification does not reach it). This is an accepted
+    // trade-off: _acquire only hands out events that were already recorded,
+    // and every cudaStreamWaitEvent in this class targets already-recorded
+    // events, so by induction a synchronized event depends only on GPU work
+    // already enqueued -- the wait is bounded unless the GPU itself hangs
+    // (hung kernel, driver fault, or a cross-ringbuf max_size deadlock of
+    // the kind notes/cuda_event_ringbuf.md warns about). In that pathological
+    // case, stop() / destructors hang instead of producing a clean error
+    // exit. If this ever becomes a problem in practice, the fix is a polling
+    // mode: loop on cudaEventQuery() + short sleep, rechecking is_stopped.
     
     CudaEventRingbuf(const std::string &name, int nconsumers, 
                      long max_size=1000, bool blocking_sync = true);

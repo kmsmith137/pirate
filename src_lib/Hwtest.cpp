@@ -300,23 +300,24 @@ static void worker_thread_main(Hwtest *hwtest, shared_ptr<Hwtest::Worker> worker
 void Hwtest::start()
 {
     try {
-        {
-            std::lock_guard lk(this->mutex);
-            _throw_if_stopped("Hwtest::start");
+        std::lock_guard lk(this->mutex);
+        _throw_if_stopped("Hwtest::start");
 
-            if (is_started)
-                throw runtime_error("Hwtest::start() called twice");
-            if (workers.empty())
-                throw runtime_error("Hwtest does not contain any worker threads");
+        if (is_started)
+            throw runtime_error("Hwtest::start() called twice");
+        if (workers.empty())
+            throw runtime_error("Hwtest does not contain any worker threads");
 
-            is_started = true;
-            barrier.initialize(workers.size());
-        }
+        is_started = true;
+        barrier.initialize(workers.size());
 
+        // Publish 'threads' under the mutex (_join_threads() synchronizes
+        // on it). Holding the lock across the spawns is safe: a freshly
+        // spawned worker that touches Hwtest state blocks briefly until we
+        // release, and start() never waits on the workers.
         long num_workers = workers.size();
         threads.resize(num_workers);
 
-        // Reminder: after server is started, 'workers' is immutable, so we don't need to hold the lock here.
         for (long i = 0; i < num_workers; i++) {
             auto wp = workers[i];
 
@@ -451,13 +452,28 @@ void Hwtest::stop(std::exception_ptr e) const
 }
 
 
+// Joins all worker threads. Takes the mutex briefly to synchronize with
+// start()'s publication of 'threads', then joins with the mutex RELEASED
+// (worker threads take it on their exit paths). Not safe to call
+// concurrently with itself.
+void Hwtest::_join_threads()
+{
+    long nthreads;
+    {
+        std::lock_guard lk(this->mutex);
+        nthreads = long(threads.size());
+    }
+
+    for (long i = 0; i < nthreads; i++)
+        if (threads[i].joinable())
+            threads[i].join();
+}
+
+
 Hwtest::~Hwtest()
 {
     stop();
-
-    for (auto &t : threads)
-        if (t.joinable())
-            t.join();
+    _join_threads();
 }
 
 
@@ -472,9 +488,7 @@ void Hwtest::join()
         e = error;
     }
 
-    for (auto &t : threads)
-        if (t.joinable())
-            t.join();
+    _join_threads();
 
     // Rethrow error so that python caller sees the exception (after joining all threads).
     if (e)

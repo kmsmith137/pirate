@@ -1225,6 +1225,20 @@ long AssembledFrameAllocator::slab_nbytes(long nfreq, long time_samples_per_chun
 }
 
 
+long AssembledFrameAllocator::get_nfreq() const
+{
+    lock_guard<mutex> lg(lock);
+    return nfreq;
+}
+
+
+std::vector<long> AssembledFrameAllocator::get_beam_ids() const
+{
+    lock_guard<mutex> lg(lock);
+    return beam_ids;   // copied under the lock
+}
+
+
 void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
 {
     xassert(metadata_is_initialized);
@@ -1233,6 +1247,29 @@ void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
     // If two threads are creating a frame set simultaneously, then something is wrong.
     xassert(!frame_creation_underway);
     frame_creation_underway = true;
+
+    // Scope guard: reset frame_creation_underway if we unwind on a throw
+    // (e.g. get_slab() on a stopped slab allocator, or an array
+    // invariant-check failure below). Without it the flag would stay set
+    // forever, parking every later get_frame_set() caller in the
+    // frame_creation_underway cv.wait branch. (Today the throw also stops
+    // the allocator via get_frame_set()'s entry-point wrapper, which masks
+    // the wedge -- but the flag's correctness shouldn't depend on that
+    // coupling.) On the success path the flag is reset explicitly below,
+    // BEFORE cv.notify_all(), and the guard is disarmed.
+    struct CreationFlagGuard {
+        unique_lock<mutex> &guard;
+        AssembledFrameAllocator *alloc;
+        bool armed = true;
+        ~CreationFlagGuard()
+        {
+            if (!armed)
+                return;
+            if (!guard.owns_lock())
+                guard.lock();   // unwinding from the unlocked middle section
+            alloc->frame_creation_underway = false;
+        }
+    } creation_flag_guard{guard, this};
 
     // Snapshot the loop bounds and shape under the lock.
     long nbeams = beam_ids.size();
@@ -1331,6 +1368,7 @@ void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
 
     this->frame_set_queue.push_back({std::move(set), 0});
     this->frame_creation_underway = false;
+    creation_flag_guard.armed = false;   // success: flag already reset
 
     cv.notify_all();  // Wake up any waiting get_frame_set() callers
 }

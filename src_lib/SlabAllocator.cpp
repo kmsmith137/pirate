@@ -95,7 +95,10 @@ void SlabAllocator::stop(std::exception_ptr e) const
         is_stopped = true;
         error = e;
         ba_to_notify = bump_allocator;  // may be null in dummy mode
-        cv.notify_all();
+        free_cv.notify_all();
+        init_cv.notify_all();
+        size_cv.notify_all();
+        empty_cv.notify_all();
     }
     if (ba_to_notify)
         ba_to_notify->stop(e);
@@ -105,7 +108,17 @@ void SlabAllocator::stop(std::exception_ptr e) const
 void SlabAllocator::wait_until_initialized()
 {
     try {
-        // No-op in dummy mode (no underlying BumpAllocator).
+        // Check our OWN stopped state first, so the stopped behavior is
+        // uniform across modes. Without this, an error-stopped allocator
+        // with no underlying BumpAllocator (dummy or aflags mode) would
+        // silently succeed, while bump-backed mode rethrows the root cause
+        // via the BumpAllocator's readiness gate.
+        {
+            std::lock_guard<std::mutex> guard(lock);
+            _throw_if_stopped("SlabAllocator::wait_until_initialized");
+        }
+
+        // No-op in dummy/aflags mode (no underlying BumpAllocator).
         if (!bump_allocator)
             return;
         // Delegates to the BumpAllocator's wait. Does NOT trigger the deferred
@@ -139,9 +152,11 @@ void SlabAllocator::block_until_empty()
         std::unique_lock<std::mutex> guard(lock);
         _throw_if_stopped("SlabAllocator::block_until_empty");
 
-        // Wait until slab size is established and free list is empty.
+        // Wait until slab size is established and free list is empty. The
+        // predicate can only become true at an empty-transition (which
+        // implies the slab size is established), so empty_cv alone covers it.
         while ((slab_size < 0) || !free_list.empty()) {
-            cv.wait(guard);
+            empty_cv.wait(guard);
             _throw_if_stopped("SlabAllocator::block_until_empty");
         }
     } catch (...) {
@@ -195,7 +210,9 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
     if (is_dummy()) {
         slab_size = aligned_nbytes;
         guard.unlock();
-        return ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint,8), slab_size, aflags);
+        // Use the local 'aligned_nbytes', not 'slab_size': the lock was just
+        // released, so re-reading the member here would be a data race.
+        return ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint,8), aligned_nbytes, aflags);
     }
 
     // Lazy init from the BumpAllocator (deferred from the constructor so
@@ -204,12 +221,12 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
     // long-blocking) b->allocate_bytes() with 'lock' RELEASED: stop() needs
     // 'lock', and its cascade into the BumpAllocator is the very call that
     // unblocks the wait -- holding 'lock' across the wait would deadlock
-    // stop() behind it. Other get_slab() callers wait on 'cv' until the
+    // stop() behind it. Other get_slab() callers wait on 'init_cv' until the
     // init completes (or the allocator is stopped).
     while (!base) {
         if (init_underway) {
             // Another thread is performing the lazy init; wait for it.
-            cv.wait(guard);
+            init_cv.wait(guard);
             _throw_if_stopped("SlabAllocator::get_slab");
             continue;
         }
@@ -243,7 +260,7 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
         guard.lock();
         this->base = new_base;
         this->init_underway = false;
-        cv.notify_all();  // wake threads waiting on 'init_underway'
+        init_cv.notify_all();  // wake threads waiting on 'init_underway'
 
         // stop() may have been called while 'lock' was released.
         _throw_if_stopped("SlabAllocator::get_slab");
@@ -274,8 +291,11 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
         for (long i = 0; i < num_slabs; i++)
             free_list.push_back(base_ptr + i * slab_size);
 
-        // Wake up any thread waiting in block_until_empty() for initialization.
-        cv.notify_all();
+        // Wake any thread waiting in num_total_slabs(blocking=true) for the
+        // slab size to be established. (block_until_empty() waiters don't
+        // need this wake: their predicate can only become true at an
+        // empty-transition, notified on empty_cv below.)
+        size_cv.notify_all();
     }
 
     // Wait for a slab if blocking, otherwise throw.
@@ -287,7 +307,7 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
             throw std::runtime_error(ss.str());
         }
 
-        cv.wait(guard);
+        free_cv.wait(guard);
         _throw_if_stopped("SlabAllocator::get_slab");
     }
 
@@ -295,9 +315,9 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
     free_list.pop_back();
     bool notify = free_list.empty();  // wake up block_until_empty() if free list is now empty
     guard.unlock();
-    
+
     if (notify)
-        cv.notify_all();
+        empty_cv.notify_all();
 
     // Create shared_ptr with a custom deleter that returns the slab to the pool.
     // The captured shared_ptr<SlabAllocator> ensures the allocator (and its
@@ -320,20 +340,26 @@ void SlabAllocator::return_slab(void *slab_ptr)
     std::unique_lock<std::mutex> guard(lock);
     free_list.push_back(slab_ptr);
     guard.unlock();
-    cv.notify_one();  // wake up one waiting thread, if any
+    // notify_one is sound here: every free_cv waiter has the same predicate
+    // (free list non-empty), and one returned slab satisfies exactly one
+    // waiter. See the cv comments in SlabAllocator.hpp.
+    free_cv.notify_one();
 }
 
 
 long SlabAllocator::num_free_slabs() const
 {
+    // No stopped-check: deliberately usable on a stopped allocator
+    // (stopped-tolerant informational accessor -- see the entry-point
+    // classification in SlabAllocator.hpp).
     if (is_dummy())
         throw std::runtime_error("SlabAllocator::num_free_slabs(): not available in dummy mode");
-    
+
     std::lock_guard<std::mutex> guard(lock);
-    
+
     if (slab_size < 0)
         throw std::runtime_error("SlabAllocator::num_free_slabs(): slab size has not been established yet");
-    
+
     return static_cast<long>(free_list.size());
 }
 
@@ -350,7 +376,7 @@ long SlabAllocator::num_total_slabs(bool blocking) const
         while (slab_size < 0) {
             if (!blocking)
                 throw std::runtime_error("SlabAllocator::num_total_slabs(): slab size has not been established yet");
-            cv.wait(guard);
+            size_cv.wait(guard);
             _throw_if_stopped("SlabAllocator::num_total_slabs");
         }
 
@@ -364,11 +390,14 @@ long SlabAllocator::num_total_slabs(bool blocking) const
 
 long SlabAllocator::get_slab_size() const
 {
+    // No stopped-check: deliberately usable on a stopped allocator
+    // (stopped-tolerant informational accessor -- see the entry-point
+    // classification in SlabAllocator.hpp).
     std::lock_guard<std::mutex> guard(lock);
-    
+
     if (slab_size < 0)
         throw std::runtime_error("SlabAllocator::get_slab_size(): slab size has not been established yet");
-    
+
     return slab_size;
 }
 

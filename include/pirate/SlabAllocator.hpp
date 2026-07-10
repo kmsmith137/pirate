@@ -40,6 +40,15 @@ namespace pirate {
 //   - No base memory is pre-allocated
 //   - get_slab() allocates fresh memory using af_alloc() for each request
 //   - num_total_slabs() and num_free_slabs() throw exceptions
+//
+// Entry points vs accessors (see notes/stoppable_class.md):
+//   - Entry points -- throw/rethrow the saved error when stopped, and any
+//     throw stops the allocator: get_slab(), block_until_empty(),
+//     num_total_slabs(), wait_until_initialized(). Rule of thumb: methods
+//     that can block are entry points.
+//   - Stopped-tolerant informational accessors -- no stopped-state check;
+//     last-known values remain meaningful for diagnostics after a stop:
+//     num_free_slabs(), get_slab_size(), is_initialized(), is_dummy().
 
 
 class SlabAllocator : public std::enable_shared_from_this<SlabAllocator>
@@ -83,7 +92,8 @@ public:
     std::shared_ptr<void> get_slab(long nbytes, bool blocking = false);
     
     // Returns the number of slabs currently available in the free list.
-    // Throws exception in dummy mode or if not initialized.
+    // Throws exception in dummy mode or if not initialized. Does NOT throw
+    // on a stopped allocator (stopped-tolerant informational accessor).
     long num_free_slabs() const;
     
     // Returns the total number of slabs in the pool.
@@ -93,7 +103,8 @@ public:
     long num_total_slabs(bool blocking = false) const;
     
     // Returns the established slab size.
-    // Throws exception if not initialized.
+    // Throws exception if not initialized. Does NOT throw on a stopped
+    // allocator (stopped-tolerant informational accessor).
     long get_slab_size() const;
     
     // Returns true if the SlabAllocator is ready to serve get_slab() calls
@@ -122,6 +133,9 @@ public:
     // first get_slab() does that. The purpose of calling this method
     // explicitly is to surface async-init failures eagerly rather than from
     // the first get_slab() (which may run later, from a worker thread).
+    //
+    // Throws on a stopped allocator (rethrows the saved error, or the
+    // generic message on a clean stop), uniformly across modes.
     void wait_until_initialized();
 
     // Stop the allocator. Any thread blocked in get_slab() will wake up and throw.
@@ -154,8 +168,26 @@ private:
 
     // Stop-pattern state ('mutable' since stop() is const -- see
     // notes/stoppable_class.md). is_stopped/error are protected by 'lock'.
+    //
+    // One condition variable per wait-predicate, so a targeted notify can
+    // never be "lost" waking a waiter with a different predicate:
+    //   free_cv  -- a slab was returned to the free list; awaited by
+    //               get_slab(blocking=true). return_slab() uses notify_one,
+    //               which is sound here BECAUSE all free_cv waiters share
+    //               the same predicate and one returned slab satisfies
+    //               exactly one of them.
+    //   init_cv  -- the deferred BumpAllocator init completed; awaited by
+    //               get_slab() callers that lost the init_underway race.
+    //   size_cv  -- slab_size was established (first allocation); awaited
+    //               by num_total_slabs(blocking=true).
+    //   empty_cv -- the free list became empty; awaited by
+    //               block_until_empty().
+    // stop() notify_all's all four.
     mutable std::mutex lock;
-    mutable std::condition_variable cv;  // signaled when a slab is returned, initialized, or stop() is called
+    mutable std::condition_variable free_cv;
+    mutable std::condition_variable init_cv;
+    mutable std::condition_variable size_cv;
+    mutable std::condition_variable empty_cv;
     mutable bool is_stopped = false;
     mutable std::exception_ptr error;
 
@@ -167,7 +199,7 @@ private:
     // True while a get_slab() caller is performing the deferred
     // bump_allocator->allocate_bytes() with 'lock' released (so that stop()
     // is not blocked behind the BumpAllocator's async init). Protected by
-    // 'lock'; other get_slab() callers wait on 'cv' while it is set.
+    // 'lock'; other get_slab() callers wait on 'init_cv' while it is set.
     bool init_underway = false;
 
     // Helper for blocking operations. Caller must hold lock. Rethrows the

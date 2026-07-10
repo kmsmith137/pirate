@@ -24,10 +24,12 @@ struct Barrier
     mutable bool is_stopped = false;
     mutable std::exception_ptr error;
 
-    // Protected by lock.
+    // Protected by lock. wait_count is a generation counter (one increment
+    // per barrier release); 'long' so it cannot overflow (UB, and a hung
+    // 'wait_count > wc' predicate) in a long-running server.
     int nthreads = 0;
     int nthreads_waiting = 0;
-    int wait_count = 0;
+    long wait_count = 0;
 
     // If constructor is called with nthreads=0, then 'nthreads' must be
     // set later, with a call to initialize().

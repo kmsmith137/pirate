@@ -340,6 +340,13 @@ struct AssembledFrameAllocator
     long time_samples_per_chunk = 0;
     std::vector<long> beam_ids;
 
+    // Lock-synchronized getters for nfreq / beam_ids, which (unlike the
+    // ctor-constant time_samples_per_chunk) are written by
+    // initialize_metadata() under 'lock'. Used by the pybind11 property
+    // bindings; C++ callers holding no lock should prefer these too.
+    long get_nfreq() const;
+    std::vector<long> get_beam_ids() const;
+
     // Shared X-engine metadata for this allocator. Set on the first call to
     // initialize() (by the first consumer); subsequent consumers must provide
     // a metadata that passes XEngineMetadata::check_sender_consistency against
