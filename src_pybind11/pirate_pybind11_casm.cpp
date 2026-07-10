@@ -42,14 +42,21 @@ void register_casm_bindings(pybind11::module &m)
                          int downsampling_factor,
                          float ns_feed_spacing,
                          py::object ew_feed_spacings_obj) {
-            if (ew_feed_spacings_obj.is_none()) {
-                return new CasmBeamformer(frequencies, feed_indices, beam_locations,
-                                          downsampling_factor, ns_feed_spacing);
-            } else {
-                Array<float> ew_feed_spacings = ew_feed_spacings_obj.cast<Array<float>>();
+            // The .cast<>() is python API, so it must happen BEFORE the GIL release
+            // below (a py::call_guard would be a bug here). The C++ constructor
+            // (host precompute + cudaMalloc + blocking H2D copies) runs GIL-free.
+            bool have_ew = !ew_feed_spacings_obj.is_none();
+            Array<float> ew_feed_spacings;
+            if (have_ew)
+                ew_feed_spacings = ew_feed_spacings_obj.cast<Array<float>>();
+
+            py::gil_scoped_release nogil;
+
+            if (have_ew)
                 return new CasmBeamformer(frequencies, feed_indices, beam_locations,
                                           downsampling_factor, ns_feed_spacing, ew_feed_spacings);
-            }
+            return new CasmBeamformer(frequencies, feed_indices, beam_locations,
+                                      downsampling_factor, ns_feed_spacing);
         }),
         py::arg("frequencies"),
         py::arg("feed_indices"),

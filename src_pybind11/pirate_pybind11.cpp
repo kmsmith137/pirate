@@ -520,6 +520,11 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
             if (!Dcore_obj.is_none())
                 p.Dcore = Dcore_obj.cast<std::vector<long>>();
             // empty p.Dcore -> make() fills it from tree.pf.time_downsampling (host-only default)
+
+            // The .cast<>() above is python API, so it must happen BEFORE this GIL
+            // release (a py::call_guard would be a bug here). make() -- plan walk
+            // plus large host allocations -- runs GIL-free.
+            py::gil_scoped_release nogil;
             return ReferenceDedisperserBase::make(p);
         }), py::arg("plan"), py::arg("sophistication"),
             py::arg("enable_variances") = false, py::arg("Dcore") = py::none())

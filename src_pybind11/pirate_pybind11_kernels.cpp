@@ -286,13 +286,15 @@ void register_kernel_bindings(pybind11::module &m)
           .def_readonly("frequency_subbands", &ReferenceTree::frequency_subbands)
           .def("dedisperse",
                [](ReferenceTree &self, Array<float> &buf, py::object out_obj) {
-                   if (out_obj.is_none()) {
-                       Array<float> out;
-                       self.dedisperse(buf, out);
-                   } else {
-                       Array<float> out = out_obj.cast<Array<float>>();
-                       self.dedisperse(buf, out);
-                   }
+                   // The .cast<>() is python API, so it must happen BEFORE the GIL
+                   // release below (a py::call_guard would be a bug here). The heavy
+                   // CPU dedispersion then runs GIL-free.
+                   Array<float> out;   // stays empty if out_obj is None (ok if M=1)
+                   if (!out_obj.is_none())
+                       out = out_obj.cast<Array<float>>();
+
+                   py::gil_scoped_release nogil;
+                   self.dedisperse(buf, out);
                },
                py::arg("buf"), py::arg("out") = py::none(),
                "Dedisperses buf in place, writes subbands to out.\n\n"
