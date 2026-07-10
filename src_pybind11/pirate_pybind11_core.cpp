@@ -136,7 +136,8 @@ void register_core_bindings(pybind11::module &m)
             "If blocking=True, waits until the slab size has been established\n"
             "(by the first get_slab()); releases the GIL while blocking.")
         .def("get_slab_size", &SlabAllocator::get_slab_size,
-            "Established slab size in bytes, or -1 if not yet established.")
+            "Established slab size in bytes. Throws if the slab size has not\n"
+            "been established yet (by the first get_slab()).")
         .def("is_dummy", &SlabAllocator::is_dummy,
             "True if in dummy mode (capacity < 0).")
         .def_readonly("aflags", &SlabAllocator::aflags,

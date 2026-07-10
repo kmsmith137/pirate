@@ -485,7 +485,7 @@ class GpuDequantizationKernelInjections:
     # pybind11 binding (option 1 in notes/docstrings.md); this injector adds dtype
     # conversion for the constructor and a stream argument for launch().
 
-# Save references to C++ methods
+    # Save references to C++ methods
     _cpp_init = pirate_pybind11.GpuDequantizationKernel.__init__
     _cpp_launch = pirate_pybind11.GpuDequantizationKernel.launch
 

@@ -282,7 +282,7 @@ ksgpu::Array<double> SparseTile::unpack(long ntime) const
         maxsh = std::max(maxsh, eval_tshifts(d, all_k, tshifts));
     xassert(ntime >= nt + t0 + maxsh);
 
-    Array<double> out({nf, nd_full, ntime}, af_rhost | af_zero);
+    Array<double> out({nf, nd_full, ntime}, af_uhost | af_zero);
     double *o = out.data;
     for (long f = 0; f < nf; f++) {
         for (long d = 0; d < nd_full; d++) {
@@ -434,7 +434,7 @@ ksgpu::Array<double> SparseTileTriple::unpack(long ntime) const
 {
     long nfreq_full = 1L << (r - k);
     long nd = 1L << k;
-    Array<double> out({nfreq_full, nd, ntime}, af_rhost | af_zero);
+    Array<double> out({nfreq_full, nd, ntime}, af_uhost | af_zero);
     for (int i = 0; i < ntiles; i++) {
         Array<double> u = tiles[i].unpack(ntime);     // (nf, nd, ntime), contiguous
         memcpy(out.data + tiles[i].f0 * nd * ntime, u.data,

@@ -211,7 +211,7 @@ ksgpu::Array<double> PfVariance::unpack(long dbits) const
 
     long m = popcount(dbits);
     long nrows = 1L << m;
-    Array<double> out({nrows, P}, af_rhost | af_zero);
+    Array<double> out({nrows, P}, af_uhost | af_zero);
     double *o = out.data;
 
     for (const Term &t : terms) {
@@ -290,7 +290,7 @@ PfAvarApproximation::PfAvarApproximation(const shared_ptr<DedispersionPlan> &pla
     per_tf.resize(ntrees);
     for (long t = 0; t < ntrees; t++) {
         long r = tree_r[t], L = tree_L[t], P = tree_P[t], R = tree_R[t], N = tree_N[t];
-        tree_variance[t] = Array<double>({N, 1L << (r - L), P}, af_rhost | af_zero);
+        tree_variance[t] = Array<double>({N, 1L << (r - L), P}, af_uhost | af_zero);
         per_tf[t].clear();
         per_tf[t].reserve(1L << R);
         for (long f = 0; f < (1L << R); f++)

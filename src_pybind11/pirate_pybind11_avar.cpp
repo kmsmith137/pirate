@@ -55,7 +55,7 @@ void register_avar_bindings(pybind11::module &m)
         .def_readonly("t0", &SparseTile::t0)
         .def_readonly("scale", &SparseTile::scale)
         .def_property_readonly("tshifts", [](const SparseTile &self) {
-            Array<long> out({self.k}, af_rhost);
+            Array<long> out({self.k}, af_uhost);   // plain host malloc (no cuda registration needed)
             for (long j = 0; j < self.k; j++)
                 out.data[j] = self.tshifts[j];
             return out;
@@ -94,7 +94,7 @@ void register_avar_bindings(pybind11::module &m)
         .def_readonly("Tmax_last", &PfVarianceConvolver::Tmax_last)
         .def_property_readonly("Tmax", [](const PfVarianceConvolver &self) { return self.Tmax; })
         .def_property_readonly("A", [](const PfVarianceConvolver &self) {
-            Array<double> a({self.Pmax, self.Tmax_last}, af_rhost);
+            Array<double> a({self.Pmax, self.Tmax_last}, af_uhost);
             memcpy(a.data, self.A.data(), self.A.size() * sizeof(double));
             return a;
         })
@@ -102,7 +102,7 @@ void register_avar_bindings(pybind11::module &m)
             xassert(x.on_host());   // x.data is dereferenced on the host
             xassert(x.ndim == 2 && x.is_fully_contiguous());
             long S = x.shape[0], nt = x.shape[1];
-            Array<double> out({S, P}, af_rhost);
+            Array<double> out({S, P}, af_uhost);
             self.variance(x.data, S, nt, P, out.data);
             return out;
         }, py::arg("x"), py::arg("P"), py::call_guard<py::gil_scoped_release>())
