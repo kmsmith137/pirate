@@ -117,12 +117,14 @@ void FileWriter::nfs_thread_main()
 
 void FileWriter::process_frame(const shared_ptr<AssembledFrame> &frame)
 {
-    xassert(frame);
-
+    // Per the strict stoppable-class policy (notes/stoppable_class.md), ANY
+    // exception thrown from an entry point (including the argument check)
+    // stops the FileWriter.
     try {
+        xassert(frame);
         _process_frame(frame);
     } catch (...) {
-        this->stop(std::current_exception());
+        stop(std::current_exception());
         throw;
     }
 }
@@ -167,12 +169,17 @@ void FileWriter::_process_frame(const shared_ptr<AssembledFrame> &frame)
 
 void FileWriter::add_subscriber(const shared_ptr<RpcSubscriber> &subscriber)
 {
-    xassert(subscriber);
+    try {
+        xassert(subscriber);
 
-    lock_guard<std::mutex> lock(mutex);
-    _throw_if_stopped("add_subscriber");
+        lock_guard<std::mutex> lock(mutex);
+        _throw_if_stopped("add_subscriber");
 
-    rpc_subscribers.push_back(subscriber);
+        rpc_subscribers.push_back(subscriber);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 

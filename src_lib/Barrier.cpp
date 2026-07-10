@@ -1,4 +1,5 @@
 #include "../include/pirate/Barrier.hpp"
+
 #include <ksgpu/xassert.hpp>
 
 #include <string>
@@ -22,12 +23,20 @@ Barrier::Barrier(int nthreads_)
 
 void Barrier::initialize(int nthreads_)
 {
-    xassert(nthreads_ > 0);
-    std::unique_lock ul(lock);
+    // Per the strict stoppable-class policy (notes/stoppable_class.md), ANY
+    // exception thrown from an entry point (here and in wait() below) stops
+    // the Barrier -- including argument/precondition errors.
+    try {
+        xassert(nthreads_ > 0);
+        std::unique_lock ul(lock);
 
-    xassert_msg(this->nthreads <= 0, "Barrier::initialize() called on already-initialized Barrier");
-    xassert_msg(!this->is_stopped, "Barrier::initialize() called on stopped Barrier");
-    this->nthreads = nthreads_;
+        xassert_msg(this->nthreads <= 0, "Barrier::initialize() called on already-initialized Barrier");
+        _throw_if_stopped("Barrier::initialize()");
+        this->nthreads = nthreads_;
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -50,27 +59,32 @@ void Barrier::_throw_if_stopped(const char *method_name)
 
 void Barrier::wait()
 {
-    std::unique_lock ul(lock);
+    try {
+        std::unique_lock ul(lock);
 
-    xassert_msg(nthreads > 0, "Barrier::wait() called on uninitialized Barrier");
+        xassert_msg(nthreads > 0, "Barrier::wait() called on uninitialized Barrier");
 
-    _throw_if_stopped("Barrier::wait()");
-
-    if (nthreads_waiting == nthreads-1) {
-        this->nthreads_waiting = 0;
-        this->wait_count++;
-        ul.unlock();
-        cv.notify_all();
-        return;
-    }
-
-    this->nthreads_waiting++;
-
-    int wc = this->wait_count;
-    cv.wait(ul, [this,wc] { return (this->is_stopped || (this->wait_count > wc)); });
-
-    if (_unlikely(is_stopped))
         _throw_if_stopped("Barrier::wait()");
+
+        if (nthreads_waiting == nthreads-1) {
+            this->nthreads_waiting = 0;
+            this->wait_count++;
+            ul.unlock();
+            cv.notify_all();
+            return;
+        }
+
+        this->nthreads_waiting++;
+
+        int wc = this->wait_count;
+        cv.wait(ul, [this,wc] { return (this->is_stopped || (this->wait_count > wc)); });
+
+        if (_unlikely(is_stopped))
+            _throw_if_stopped("Barrier::wait()");
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 

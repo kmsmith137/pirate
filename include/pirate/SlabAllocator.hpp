@@ -171,7 +171,11 @@ private:
     
     // Helper for blocking operations. Caller must hold lock.
     void _throw_if_stopped() const;
-    
+
+    // Entry-point body; get_slab() is a thin wrapper that stops the
+    // allocator if this throws (see notes/stoppable_class.md).
+    std::shared_ptr<void> _get_slab(long nbytes, bool blocking);
+
     // Helper called when a slab's refcount drops to zero.
     void return_slab(void *slab_ptr);
 };

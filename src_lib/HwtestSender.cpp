@@ -49,27 +49,28 @@ void HwtestSender::_throw_if_stopped(const char *method_name)
 }
 
 
+// Note: per the strict stoppable-class policy (notes/stoppable_class.md),
+// ANY exception thrown from an entry point stops the HwtestSender --
+// including precondition errors ("called twice", "called after start()").
+
 void HwtestSender::add_endpoint(const string &ip_addr, long num_tcp_connections, double total_gbps, const vector<int> &vcpu_list)
 {
-    std::unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("HwtestSender::add_endpoint");
-
-    if (is_started)
-        throw runtime_error("HwtestSender::add_endpoint() called after start()");
-
-    Endpoint e;
-    e.ip_addr = ip_addr;
-    e.num_tcp_connections = num_tcp_connections;
-    e.total_gbps = total_gbps;
-    e.vcpu_list = vcpu_list;
-
-    // Per the stoppable-class pattern, a non-precondition throw in an entry
-    // point (here, only an out-of-memory push_back) stops the object.
     try {
+        std::unique_lock<std::mutex> lock(mutex);
+        _throw_if_stopped("HwtestSender::add_endpoint");
+
+        if (is_started)
+            throw runtime_error("HwtestSender::add_endpoint() called after start()");
+
+        Endpoint e;
+        e.ip_addr = ip_addr;
+        e.num_tcp_connections = num_tcp_connections;
+        e.total_gbps = total_gbps;
+        e.vcpu_list = vcpu_list;
+
         endpoints.push_back(e);
     } catch (...) {
-        lock.unlock();
-        this->stop(std::current_exception());
+        stop(std::current_exception());
         throw;
     }
 }
@@ -77,30 +78,29 @@ void HwtestSender::add_endpoint(const string &ip_addr, long num_tcp_connections,
 
 void HwtestSender::start()
 {
-    std::unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("HwtestSender::start");
-
-    if (is_started)
-        throw runtime_error("HwtestSender::start() called twice");
-
-    if (endpoints.empty())
-        throw runtime_error("HwtestSender::start() called with no endpoints");
-
-    is_started = true;
-    lock.unlock();
-
-    // If thread creation fails partway (e.g. std::system_error), stop the
-    // already-spawned workers before rethrowing; otherwise they would keep
-    // running on a not-stopped object. (The destructor stops+joins as well,
-    // but a caller that catches the exception should see a stopped object.)
+    // The try/catch wrapper also covers thread-creation failure partway
+    // through the spawns: the already-spawned workers see the stop and exit
+    // promptly, instead of running on a not-stopped object.
     try {
+        std::unique_lock<std::mutex> lock(mutex);
+        _throw_if_stopped("HwtestSender::start");
+
+        if (is_started)
+            throw runtime_error("HwtestSender::start() called twice");
+
+        if (endpoints.empty())
+            throw runtime_error("HwtestSender::start() called with no endpoints");
+
+        is_started = true;
+        lock.unlock();
+
         long num_endpoints = endpoints.size();
         workers.resize(num_endpoints);
 
         for (long i = 0; i < num_endpoints; i++)
             workers[i] = std::thread(&HwtestSender::worker_main, this, i);
     } catch (...) {
-        this->stop(std::current_exception());
+        stop(std::current_exception());
         throw;
     }
 }

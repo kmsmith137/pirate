@@ -276,50 +276,56 @@ FrbGrouper::FrbGrouper(const std::string &ip_addr) : grouper_ip_addr(ip_addr)
 
 void FrbGrouper::start_listening()
 {
-    {
-        unique_lock<std::mutex> lock(mutex);
-        _throw_if_stopped("FrbGrouper::open");
-        if (opened)   // single session only
-            throw runtime_error("FrbGrouper::open() called twice (single session only)");
-        opened = true;
-    }
-
-    // Per the stoppable-class pattern, a failure below (bind failure, thread
-    // creation failure) stops the object before rethrowing. Without this, a
-    // caller that catches the exception would be left with a zombie grouper:
-    // 'opened' is already set, no server is listening, and wait_for_handshake()
-    // / acquire_output() would block forever instead of throwing.
+    // Per the strict stoppable-class policy (notes/stoppable_class.md), ANY
+    // exception thrown from an entry point stops the object -- including the
+    // "called twice" precondition, a bind failure, and thread-creation
+    // failure. Without the stop, a caller that catches the exception would be
+    // left with a zombie grouper: 'opened' is already set, no server is
+    // listening, and wait_for_handshake() / acquire_output() would block
+    // forever instead of throwing.
     try {
-        // Bind + start. The 2-arg AddListeningPort does NOT report a bind failure:
-        // if the port is already in use, BuildAndStart() still returns a non-null
-        // server, so we would "wait for FrbServer to connect" while not actually
-        // listening -- and the FrbServer that connects would hang forever. Use the
-        // 3-arg overload and check selected_port, which is 0 iff the bind failed.
-        grpc::ServerBuilder builder;
-        int selected_port = 0;
-        builder.AddListeningPort(grouper_ip_addr, grpc::InsecureServerCredentials(), &selected_port);
-        builder.RegisterService(grpc_state->service.get());
-        grpc_state->server = builder.BuildAndStart();
-        if (!grpc_state->server || (selected_port == 0))
-            throw runtime_error("FrbGrouper: failed to bind " + grouper_ip_addr
-                                + " (already in use, or malformed 'ip:port'?)");
-
-        send_thread = std::thread(&FrbGrouper::send_thread_main, this);
-    } catch (...) {
-        // If the failure occurred after BuildAndStart() (e.g. send-thread
-        // creation failed), the server is briefly listening, and a client's
-        // Session handler may already be parked in its initial stream->Read.
-        // stop() below TryCancels that Read, but the handler then waits (in
-        // its step-5 teardown) for send_io_done -- which is normally set by
-        // the send thread on exit, and the send thread may never have been
-        // created. Set it here (vacuously true: no send thread will ever
-        // touch the stream), so the handler can return instead of hanging
-        // close()'s server->Wait() forever. stop() does the cv notify.
         {
-            lock_guard<std::mutex> lock(mutex);
-            send_io_done = true;
+            unique_lock<std::mutex> lock(mutex);
+            _throw_if_stopped("FrbGrouper::open");
+            if (opened)   // single session only
+                throw runtime_error("FrbGrouper::open() called twice (single session only)");
+            opened = true;
         }
-        this->stop(std::current_exception());
+
+        try {
+            // Bind + start. The 2-arg AddListeningPort does NOT report a bind failure:
+            // if the port is already in use, BuildAndStart() still returns a non-null
+            // server, so we would "wait for FrbServer to connect" while not actually
+            // listening -- and the FrbServer that connects would hang forever. Use the
+            // 3-arg overload and check selected_port, which is 0 iff the bind failed.
+            grpc::ServerBuilder builder;
+            int selected_port = 0;
+            builder.AddListeningPort(grouper_ip_addr, grpc::InsecureServerCredentials(), &selected_port);
+            builder.RegisterService(grpc_state->service.get());
+            grpc_state->server = builder.BuildAndStart();
+            if (!grpc_state->server || (selected_port == 0))
+                throw runtime_error("FrbGrouper: failed to bind " + grouper_ip_addr
+                                    + " (already in use, or malformed 'ip:port'?)");
+
+            send_thread = std::thread(&FrbGrouper::send_thread_main, this);
+        } catch (...) {
+            // If the failure occurred after BuildAndStart() (e.g. send-thread
+            // creation failed), the server is briefly listening, and a client's
+            // Session handler may already be parked in its initial stream->Read.
+            // The outer catch's stop() TryCancels that Read, but the
+            // handler then waits (in its step-5 teardown) for send_io_done --
+            // which is normally set by the send thread on exit, and the send
+            // thread may never have been created. Set it here (vacuously true:
+            // no send thread will ever touch the stream), so the handler can
+            // return instead of hanging close()'s server->Wait() forever.
+            {
+                lock_guard<std::mutex> lock(mutex);
+                send_io_done = true;
+            }
+            throw;
+        }
+    } catch (...) {
+        stop(std::current_exception());
         throw;
     }
 }
@@ -638,50 +644,62 @@ void FrbGrouper::send_thread_main()
 
 GpuDedisperser::Outputs FrbGrouper::acquire_output(long seq_id)
 {
-    xassert(seq_id >= 0);
-    unique_lock<std::mutex> lock(mutex);
+    // Per the strict stoppable-class policy, ANY throw (including the
+    // defensive cursor xasserts) stops the grouper.
+    try {
+        xassert(seq_id >= 0);
+        unique_lock<std::mutex> lock(mutex);
 
-    // Defensive: acquire_output() must be called consecutively (seq_id = 0,1,2,...).
-    // (The producer-side GpuDedisperser enforces the analogous invariant on its
-    // own acquire cursor; we duplicate it here so a misbehaving consumer fails
-    // loudly rather than silently reading the wrong ring slot.)
-    xassert_eq(seq_id, rb_acquired);
+        // Defensive: acquire_output() must be called consecutively (seq_id = 0,1,2,...).
+        // (The producer-side GpuDedisperser enforces the analogous invariant on its
+        // own acquire cursor; we duplicate it here so a misbehaving consumer fails
+        // loudly rather than silently reading the wrong ring slot.)
+        xassert_eq(seq_id, rb_acquired);
 
-    // Block until the handshake is done AND produced_seq_id has reached seq_id.
-    cv.wait(lock, [&]{ return is_stopped || (handshake_done && rb_produced > seq_id); });
-    _throw_if_stopped("FrbGrouper::acquire_output");
+        // Block until the handshake is done AND produced_seq_id has reached seq_id.
+        cv.wait(lock, [&]{ return is_stopped || (handshake_done && rb_produced > seq_id); });
+        _throw_if_stopped("FrbGrouper::acquire_output");
 
-    rb_acquired = seq_id + 1;
-    long iout = seq_id % num_batch_slots;
-    GpuDedisperser::Outputs out =
-        output_ringbuf.slice(iout * beams_per_batch, (iout + 1) * beams_per_batch);
+        rb_acquired = seq_id + 1;
+        long iout = seq_id % num_batch_slots;
+        GpuDedisperser::Outputs out =
+            output_ringbuf.slice(iout * beams_per_batch, (iout + 1) * beams_per_batch);
 
-    // Set the chunk/beam identity fields on the returned slice. These override
-    // the values slice() copied from output_ringbuf: the ring slot 'iout'
-    // (= seq_id % num_batch_slots) is NOT the true chunk/beam index. Reconstruct
-    // them from seq_id = ichunk*nbatches + ibatch (the producer-side mapping in
-    // GpuDedisperser::acquire_output()), using initial_chunk from the handshake.
-    out.ichunk_zero_based = seq_id / nbatches;
-    out.ichunk_fpga_based = out.ichunk_zero_based + initial_chunk;
-    out.ibeam = (seq_id % nbatches) * beams_per_batch;
-    return out;
+        // Set the chunk/beam identity fields on the returned slice. These override
+        // the values slice() copied from output_ringbuf: the ring slot 'iout'
+        // (= seq_id % num_batch_slots) is NOT the true chunk/beam index. Reconstruct
+        // them from seq_id = ichunk*nbatches + ibatch (the producer-side mapping in
+        // GpuDedisperser::acquire_output()), using initial_chunk from the handshake.
+        out.ichunk_zero_based = seq_id / nbatches;
+        out.ichunk_fpga_based = out.ichunk_zero_based + initial_chunk;
+        out.ibeam = (seq_id % nbatches) * beams_per_batch;
+        return out;
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
 void FrbGrouper::release_output(long seq_id)
 {
-    unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("FrbGrouper::release_output");
+    try {
+        unique_lock<std::mutex> lock(mutex);
+        _throw_if_stopped("FrbGrouper::release_output");
 
-    // Defensive cursor checks (mirroring the producer-side GpuDedisperser checks):
-    //   - release_output() called consecutively (seq_id = 0,1,2,...);
-    //   - release stays strictly BEHIND acquire (a batch can't be released
-    //     before it has been acquired), i.e. rb_consumed < rb_acquired.
-    xassert_eq(seq_id, rb_consumed);
-    xassert_lt(rb_consumed, rb_acquired);
+        // Defensive cursor checks (mirroring the producer-side GpuDedisperser checks):
+        //   - release_output() called consecutively (seq_id = 0,1,2,...);
+        //   - release stays strictly BEHIND acquire (a batch can't be released
+        //     before it has been acquired), i.e. rb_consumed < rb_acquired.
+        xassert_eq(seq_id, rb_consumed);
+        xassert_lt(rb_consumed, rb_acquired);
 
-    rb_consumed = seq_id + 1;
-    cv.notify_all();                   // wake the send thread
+        rb_consumed = seq_id + 1;
+        cv.notify_all();                   // wake the send thread
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 

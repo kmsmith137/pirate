@@ -1,6 +1,6 @@
 #include "../include/pirate/Receiver.hpp"
 #include "../include/pirate/AssembledFrame.hpp"
-#include "../include/pirate/inlines.hpp"  // xdiv()
+#include "../include/pirate/inlines.hpp"     // xdiv()
 
 #include <chrono>
 #include <cstring>    // memcpy
@@ -149,30 +149,28 @@ Receiver::Receiver(const Params &p) : params(p)
 
 void Receiver::start()
 {
-    unique_lock<std::mutex> lock(mutex);
-
-    if (is_started)
-        throw runtime_error("Receiver::start() called twice");
-
-    // Rethrows the saved error if stop(e) was called, else throws a generic
-    // "called on stopped instance" message.
-    _throw_if_stopped("Receiver::start()");
-
-    is_started = true;
-    lock.unlock();
-
-    // Spawn worker threads.
-    //
-    // If thread creation fails partway (e.g. std::system_error), stop the
-    // already-spawned threads before rethrowing; otherwise they would keep
-    // running on a not-stopped object. (The destructor also stops+joins, but
-    // a caller that catches the exception should see a stopped object.)
+    // Per the strict stoppable-class policy (notes/stoppable_class.md), ANY
+    // exception thrown from an entry point stops the Receiver: precondition
+    // failures ("called twice"), and thread-creation failures partway through
+    // the spawns (so the already-spawned threads exit promptly instead of
+    // running on a not-stopped object).
     try {
+        unique_lock<std::mutex> lock(mutex);
+
+        if (is_started)
+            throw runtime_error("Receiver::start() called twice");
+
+        _throw_if_stopped("Receiver::start()");
+
+        is_started = true;
+        lock.unlock();
+
+        // Spawn worker threads.
         listener_thread = std::thread(&Receiver::listener_main, this);
         reader_thread = std::thread(&Receiver::reader_main, this);
         assembler_thread = std::thread(&Receiver::assembler_main, this);
     } catch (...) {
-        this->stop(std::current_exception());
+        stop(std::current_exception());
         throw;
     }
 }

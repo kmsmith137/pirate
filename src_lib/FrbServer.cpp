@@ -283,25 +283,28 @@ void FrbServer::_check_stopped(const char *method_name)
 
 void FrbServer::start()
 {
-    unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("FrbServer::start");
-
-    if (is_started)
-        throw runtime_error("FrbServer::start() called twice");
-
-    // Sanity check: all three async-eligible allocators must have finished
-    // initializing before start(). If any of these is false the build code
-    // forgot to call wait_until_initialized() before start() -- async-init
-    // failures would surface from the processing/receiver threads later
-    // rather than cleanly from the build path.
-    xassert(frame_allocator->is_initialized());
-    xassert(params.host_allocator->is_initialized());
-    xassert(params.gpu_allocator->is_initialized());
-
-    is_started = true;
-    lock.unlock();
-
+    // Per the strict stoppable-class policy (notes/stoppable_class.md), ANY
+    // exception thrown from an entry point stops the server -- including the
+    // precondition throws ("called twice", allocator-not-initialized).
     try {
+        unique_lock<std::mutex> lock(mutex);
+        _throw_if_stopped("FrbServer::start");
+
+        if (is_started)
+            throw runtime_error("FrbServer::start() called twice");
+
+        // Sanity check: all three async-eligible allocators must have finished
+        // initializing before start(). If any of these is false the build code
+        // forgot to call wait_until_initialized() before start() -- async-init
+        // failures would surface from the processing/receiver threads later
+        // rather than cleanly from the build path.
+        xassert(frame_allocator->is_initialized());
+        xassert(params.host_allocator->is_initialized());
+        xassert(params.gpu_allocator->is_initialized());
+
+        is_started = true;
+        lock.unlock();
+
         // Create the RPC service (needs shared_from_this(), so can't be done in constructor).
         this->rpc_service = make_unique<FrbRpcService> (weak_from_this());
 

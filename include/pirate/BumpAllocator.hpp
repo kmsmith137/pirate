@@ -182,6 +182,10 @@ struct BumpAllocator
     // Handles both normal mode and dummy mode.
     ksgpu::Array<void> _allocate_array_internal(ksgpu::Dtype dtype, int ndim, const long *shape, const long *strides);
 
+    // Entry-point body; allocate_bytes() is a thin wrapper that stops the
+    // allocator if this throws (see notes/stoppable_class.md).
+    void *_allocate_bytes(long nbytes);
+
     // State machine. Sync mode leaves the mutex/cv mostly unused
     // (is_initialized is set true at end of sync ctor, so the blocking
     // helper is a single uncontended mutex acquire).
@@ -273,22 +277,36 @@ struct BumpAllocator
 // Template implementations.
 
 
+// Note: the allocate_array() overloads are entry points; per the strict
+// stoppable-class policy (notes/stoppable_class.md), ANY throw (including
+// dtype/shape argument errors) stops the allocator.
+
 template<typename T>
 ksgpu::Array<T> BumpAllocator::allocate_array(std::initializer_list<long> shape)
 {
     static_assert(!std::is_void_v<T>, "BumpAllocator::allocate_array<void>() requires explicit dtype");
-    ksgpu::Dtype dtype = ksgpu::Dtype::native<T>();
-    ksgpu::Array<void> ret = _allocate_array_internal(dtype, shape.size(), shape.begin(), nullptr);
-    return ret.template cast<T>("BumpAllocator::allocate_array()");
+    try {
+        ksgpu::Dtype dtype = ksgpu::Dtype::native<T>();
+        ksgpu::Array<void> ret = _allocate_array_internal(dtype, shape.size(), shape.begin(), nullptr);
+        return ret.template cast<T>("BumpAllocator::allocate_array()");
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
 template<typename T>
 ksgpu::Array<T> BumpAllocator::allocate_array(ksgpu::Dtype dtype, std::initializer_list<long> shape)
 {
-    ksgpu::_check_dtype<T>(dtype, "BumpAllocator::allocate_array()");
-    ksgpu::Array<void> ret = _allocate_array_internal(dtype, shape.size(), shape.begin(), nullptr);
-    return ret.template cast<T>("BumpAllocator::allocate_array()");
+    try {
+        ksgpu::_check_dtype<T>(dtype, "BumpAllocator::allocate_array()");
+        ksgpu::Array<void> ret = _allocate_array_internal(dtype, shape.size(), shape.begin(), nullptr);
+        return ret.template cast<T>("BumpAllocator::allocate_array()");
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -296,26 +314,35 @@ template<typename T>
 ksgpu::Array<T> BumpAllocator::allocate_array(const std::vector<long> &shape, const std::vector<long> &strides)
 {
     static_assert(!std::is_void_v<T>, "BumpAllocator::allocate_array<void>() requires explicit dtype");
+    try {
+        if (shape.size() != strides.size())
+            throw std::runtime_error("BumpAllocator::allocate_array(): shape/strides size mismatch");
 
-    if (shape.size() != strides.size())
-        throw std::runtime_error("BumpAllocator::allocate_array(): shape/strides size mismatch");
-
-    ksgpu::Dtype dtype = ksgpu::Dtype::native<T>();
-    ksgpu::Array<void> ret = _allocate_array_internal(dtype, shape.size(), &shape[0], &strides[0]);
-    return ret.template cast<T>("BumpAllocator::allocate_array()");
+        ksgpu::Dtype dtype = ksgpu::Dtype::native<T>();
+        ksgpu::Array<void> ret = _allocate_array_internal(dtype, shape.size(), &shape[0], &strides[0]);
+        return ret.template cast<T>("BumpAllocator::allocate_array()");
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
 template<typename T>
 ksgpu::Array<T> BumpAllocator::allocate_array(ksgpu::Dtype dtype, const std::vector<long> &shape, const std::vector<long> &strides)
 {
-    ksgpu::_check_dtype<T>(dtype, "BumpAllocator::allocate_array()");
+    try {
+        ksgpu::_check_dtype<T>(dtype, "BumpAllocator::allocate_array()");
 
-    if (shape.size() != strides.size())
-        throw std::runtime_error("BumpAllocator::allocate_array(): shape/strides size mismatch");
+        if (shape.size() != strides.size())
+            throw std::runtime_error("BumpAllocator::allocate_array(): shape/strides size mismatch");
 
-    ksgpu::Array<void> ret = _allocate_array_internal(dtype, shape.size(), &shape[0], &strides[0]);
-    return ret.template cast<T>("BumpAllocator::allocate_array()");
+        ksgpu::Array<void> ret = _allocate_array_internal(dtype, shape.size(), &shape[0], &strides[0]);
+        return ret.template cast<T>("BumpAllocator::allocate_array()");
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 

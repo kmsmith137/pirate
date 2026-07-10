@@ -13,6 +13,9 @@
 
 - If a class `X` derives from `std::enable_shared_from_this`, then its constructor(s) must be protected, and the class must define `create()` static method(s) that return `shared_ptr<X>`.
 
+- Avoid lambdas inside templates defined in `.hpp` files that are instantiated
+  from multiple `.cpp` files (nvcc may miscompile these).
+
 - Minimize header `#include` dependencies. In a `.hpp`, if a type is only used by
   pointer, reference, or `std::shared_ptr<T>` (not by value, as a base class, or
   via member access / `sizeof`), forward-declare it instead of `#include`-ing its

@@ -448,54 +448,78 @@ void FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancin
 }
 
 
+// Note: per the strict stoppable-class policy (notes/stoppable_class.md),
+// ANY exception thrown from an entry point stops the FakeXEngine --
+// including argument errors (bad worker_id, non-monotonic minichunk_index).
+
 void FakeXEngine::enqueue_send_junk(long worker_id, long minichunk_index)
 {
-    xassert_ge(minichunk_index, 0L);
+    try {
+        xassert_ge(minichunk_index, 0L);
 
-    Command cmd;
-    cmd.kind = Command::Kind::SEND_JUNK;
-    cmd.minichunk_index = minichunk_index;
-    _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
-             "FakeXEngine::enqueue_send_junk");
+        Command cmd;
+        cmd.kind = Command::Kind::SEND_JUNK;
+        cmd.minichunk_index = minichunk_index;
+        _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
+                 "FakeXEngine::enqueue_send_junk");
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
 void FakeXEngine::enqueue_skip_minichunk(long worker_id, long minichunk_index)
 {
-    xassert_ge(minichunk_index, 0L);
+    try {
+        xassert_ge(minichunk_index, 0L);
 
-    Command cmd;
-    cmd.kind = Command::Kind::SKIP_MINICHUNK;
-    cmd.minichunk_index = minichunk_index;
-    _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
-             "FakeXEngine::enqueue_skip_minichunk");
+        Command cmd;
+        cmd.kind = Command::Kind::SKIP_MINICHUNK;
+        cmd.minichunk_index = minichunk_index;
+        _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
+                 "FakeXEngine::enqueue_skip_minichunk");
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
 void FakeXEngine::enqueue_send_minichunk(long worker_id, long minichunk_index,
                                          std::shared_ptr<AssembledFrameSet> frame_set)
 {
-    xassert_ge(minichunk_index, 0L);
-    if (!frame_set)
-        throw runtime_error("FakeXEngine::enqueue_send_minichunk: frame_set is null");
+    try {
+        xassert_ge(minichunk_index, 0L);
+        if (!frame_set)
+            throw runtime_error("FakeXEngine::enqueue_send_minichunk: frame_set is null");
 
-    Command cmd;
-    cmd.kind = Command::Kind::SEND_MINICHUNK;
-    cmd.minichunk_index = minichunk_index;
-    cmd.frame_set = std::move(frame_set);
-    _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
-             "FakeXEngine::enqueue_send_minichunk");
+        Command cmd;
+        cmd.kind = Command::Kind::SEND_MINICHUNK;
+        cmd.minichunk_index = minichunk_index;
+        cmd.frame_set = std::move(frame_set);
+        _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
+                 "FakeXEngine::enqueue_send_minichunk");
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
 void FakeXEngine::enqueue_disconnect(long worker_id)
 {
-    Command cmd;
-    cmd.kind = Command::Kind::DISCONNECT;
-    // minichunk_index stays -1; frame_set stays null. Neither is read
-    // by _disconnect.
-    _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
-             "FakeXEngine::enqueue_disconnect");
+    try {
+        Command cmd;
+        cmd.kind = Command::Kind::DISCONNECT;
+        // minichunk_index stays -1; frame_set stays null. Neither is read
+        // by _disconnect.
+        _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
+                 "FakeXEngine::enqueue_disconnect");
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -516,82 +540,97 @@ bool FakeXEngine::is_connected(long worker_id) const
 
 void FakeXEngine::wait_until_processed(long worker_id, long minichunk_index)
 {
-    if (worker_id < 0 || worker_id >= long(nworkers)) {
-        stringstream ss;
-        ss << "FakeXEngine::wait_until_processed: worker_id=" << worker_id
-           << " out of range [0, " << nworkers << ")";
-        throw runtime_error(ss.str());
-    }
+    try {
+        if (worker_id < 0 || worker_id >= long(nworkers)) {
+            stringstream ss;
+            ss << "FakeXEngine::wait_until_processed: worker_id=" << worker_id
+               << " out of range [0, " << nworkers << ")";
+            throw runtime_error(ss.str());
+        }
 
-    Worker &w = *workers[worker_id];
+        Worker &w = *workers[worker_id];
 
-    std::unique_lock<std::mutex> lock(w.mutex);
-    for (;;) {
-        _throw_if_stopped(w, "FakeXEngine::wait_until_processed");
-        if (w.last_processed_minichunk >= minichunk_index)
-            return;
-        w.cv.wait(lock);
+        std::unique_lock<std::mutex> lock(w.mutex);
+        for (;;) {
+            _throw_if_stopped(w, "FakeXEngine::wait_until_processed");
+            if (w.last_processed_minichunk >= minichunk_index)
+                return;
+            w.cv.wait(lock);
+        }
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
     }
 }
 
 
 void FakeXEngine::enqueue_wait_for_acks(long worker_id)
 {
-    if (!debug)
-        throw runtime_error(
-            "FakeXEngine::enqueue_wait_for_acks: FakeXEngine was not"
-            " constructed with debug=true (so there are no acks to wait for)");
+    try {
+        if (!debug)
+            throw runtime_error(
+                "FakeXEngine::enqueue_wait_for_acks: FakeXEngine was not"
+                " constructed with debug=true (so there are no acks to wait for)");
 
-    Command cmd;
-    cmd.kind = Command::Kind::WAIT_FOR_ACKS;
-    _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
-             "FakeXEngine::enqueue_wait_for_acks");
+        Command cmd;
+        cmd.kind = Command::Kind::WAIT_FOR_ACKS;
+        _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
+                 "FakeXEngine::enqueue_wait_for_acks");
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
 void FakeXEngine::synchronize(long worker_id)
 {
-    if (worker_id < 0 || worker_id >= long(nworkers)) {
-        stringstream ss;
-        ss << "FakeXEngine::synchronize: worker_id=" << worker_id
-           << " out of range [0, " << nworkers << ")";
-        throw runtime_error(ss.str());
-    }
+    try {
+        if (worker_id < 0 || worker_id >= long(nworkers)) {
+            stringstream ss;
+            ss << "FakeXEngine::synchronize: worker_id=" << worker_id
+               << " out of range [0, " << nworkers << ")";
+            throw runtime_error(ss.str());
+        }
 
-    // If debug mode is enabled, enqueue a WAIT_FOR_ACKS first. The
-    // worker eventually pops it and calls _read_acks(blocking=true);
-    // when that finishes the centralized cv.notify_all in
-    // _worker_main fires, which wakes us from cv.wait below.
-    if (debug)
-        enqueue_wait_for_acks(worker_id);
+        // If debug mode is enabled, enqueue a WAIT_FOR_ACKS first. The
+        // worker eventually pops it and calls _read_acks(blocking=true);
+        // when that finishes the centralized cv.notify_all in
+        // _worker_main fires, which wakes us from cv.wait below.
+        if (debug)
+            enqueue_wait_for_acks(worker_id);
 
-    // Wait for the queue to drain. Predicate is (command_queue.empty()
-    // && ack_queue.empty()):
-    //
-    //   - command_queue.empty() is the basic "all commands processed"
-    //     barrier. Sensitive to ANY commands in the queue, including
-    //     ones enqueued by other threads AFTER we called
-    //     enqueue_wait_for_acks above (synchronize is a "drain
-    //     everything in the queue" barrier, not "drain everything as
-    //     of when I was called").
-    //
-    //   - ack_queue.empty() is required for the debug case to close
-    //     the small window where the worker has popped WAIT_FOR_ACKS
-    //     (making command_queue.empty() == true) but is still inside
-    //     its blocking _read_acks call (so ack_queue is not yet
-    //     empty). Without the second clause, a spurious cv wakeup in
-    //     that window would let synchronize observe the transient
-    //     empty-but-not-drained state.
-    //
-    //   - When debug=false, ack_queue is always empty, so the
-    //     predicate reduces to command_queue.empty().
-    Worker &w = *workers[worker_id];
-    std::unique_lock<std::mutex> lock(w.mutex);
-    for (;;) {
-        _throw_if_stopped(w, "FakeXEngine::synchronize");
-        if (w.command_queue.empty() && w.ack_queue.empty())
-            return;
-        w.cv.wait(lock);
+        // Wait for the queue to drain. Predicate is (command_queue.empty()
+        // && ack_queue.empty()):
+        //
+        //   - command_queue.empty() is the basic "all commands processed"
+        //     barrier. Sensitive to ANY commands in the queue, including
+        //     ones enqueued by other threads AFTER we called
+        //     enqueue_wait_for_acks above (synchronize is a "drain
+        //     everything in the queue" barrier, not "drain everything as
+        //     of when I was called").
+        //
+        //   - ack_queue.empty() is required for the debug case to close
+        //     the small window where the worker has popped WAIT_FOR_ACKS
+        //     (making command_queue.empty() == true) but is still inside
+        //     its blocking _read_acks call (so ack_queue is not yet
+        //     empty). Without the second clause, a spurious cv wakeup in
+        //     that window would let synchronize observe the transient
+        //     empty-but-not-drained state.
+        //
+        //   - When debug=false, ack_queue is always empty, so the
+        //     predicate reduces to command_queue.empty().
+        Worker &w = *workers[worker_id];
+        std::unique_lock<std::mutex> lock(w.mutex);
+        for (;;) {
+            _throw_if_stopped(w, "FakeXEngine::synchronize");
+            if (w.command_queue.empty() && w.ack_queue.empty())
+                return;
+            w.cv.wait(lock);
+        }
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
     }
 }
 

@@ -293,22 +293,26 @@ static void worker_thread_main(Hwtest *hwtest, shared_ptr<Hwtest::Worker> worker
 
 
 // Called from python, to start server.
+// Note: per the strict stoppable-class policy (notes/stoppable_class.md),
+// ANY exception thrown from an entry point stops the Hwtest -- including
+// precondition errors ("called twice", "not started").
+
 void Hwtest::start()
 {
-    {
-        std::lock_guard lk(this->mutex);
-        _throw_if_stopped("Hwtest::start");
-
-        if (is_started)
-            throw runtime_error("Hwtest::start() called twice");
-        if (workers.empty())
-            throw runtime_error("Hwtest does not contain any worker threads");
-
-        is_started = true;
-        barrier.initialize(workers.size());
-    }
-
     try {
+        {
+            std::lock_guard lk(this->mutex);
+            _throw_if_stopped("Hwtest::start");
+
+            if (is_started)
+                throw runtime_error("Hwtest::start() called twice");
+            if (workers.empty())
+                throw runtime_error("Hwtest does not contain any worker threads");
+
+            is_started = true;
+            barrier.initialize(workers.size());
+        }
+
         long num_workers = workers.size();
         threads.resize(num_workers);
 
@@ -327,9 +331,8 @@ void Hwtest::start()
 
             threads[i] = std::thread(worker_thread_main, this, wp);
         }
-    }
-    catch (...) {
-        this->stop(std::current_exception());
+    } catch (...) {
+        stop(std::current_exception());
         throw;
     }
 }
@@ -337,18 +340,17 @@ void Hwtest::start()
 
 double Hwtest::show_stats()
 {
-    unique_lock lock(this->mutex);
-    _throw_if_stopped("Hwtest::show_stats");
-    
-    if (!is_started)
-        throw runtime_error("Hwtest::show_stats() called on server which has not been started");
-
-    lock.unlock();
-
     try {
+        unique_lock lock(this->mutex);
+        _throw_if_stopped("Hwtest::show_stats");
+
+        if (!is_started)
+            throw runtime_error("Hwtest::show_stats() called on server which has not been started");
+
+        lock.unlock();
         return _show_stats();
     } catch (...) {
-        this->stop(std::current_exception());
+        stop(std::current_exception());
         throw;
     }
 }
@@ -1102,29 +1104,28 @@ struct DownsamplingWorker : public Hwtest::Worker
 
 
 // Shared implementation of the add_*() entry points. The 'make_worker' callback
-// constructs the Worker subclass and returns a shared_ptr to it.
+// constructs the Worker subclass and returns a shared_ptr to it. Per the strict
+// stoppable-class policy (notes/stoppable_class.md), ANY throw -- a
+// stopped/already-started precondition, a worker-constructor argument error,
+// or a real failure (e.g. a CUDA call) -- stops the server.
 template<typename MakeWorker>
 static void add_worker_helper(Hwtest *ht, const string &caller, MakeWorker &&make_worker)
 {
-    {
-        // Early check, so that caller errors (stopped / already-started) throw
-        // before the worker constructor runs. Rechecked in _add_worker().
-        std::lock_guard lk(ht->mutex);
-        ht->_throw_unless_addable(caller);
-    }
-
-    // Worker constructors can fail for real reasons (e.g. CUDA calls), not just
-    // argument errors. Per the stoppable-class pattern (notes/stoppable_class.md),
-    // stop the server on failure, then rethrow.
-    shared_ptr<Hwtest::Worker> wp;
     try {
-        wp = make_worker();
+        {
+            // Check stopped/started before running the worker constructor (so
+            // a stopped instance rethrows its saved error, rather than
+            // reporting an arbitrary constructor error). Rechecked in
+            // _add_worker().
+            std::lock_guard lk(ht->mutex);
+            ht->_throw_unless_addable(caller);
+        }
+
+        ht->_add_worker(make_worker(), caller);
     } catch (...) {
         ht->stop(std::current_exception());
         throw;
     }
-
-    ht->_add_worker(wp, caller);
 }
 
 void Hwtest::add_tcp_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, const vector<int> &vcpu_list, int cpu, int inic)

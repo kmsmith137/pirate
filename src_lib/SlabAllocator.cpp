@@ -1,5 +1,5 @@
 #include "../include/pirate/SlabAllocator.hpp"
-#include "../include/pirate/inlines.hpp"  // align_up()
+#include "../include/pirate/inlines.hpp"     // align_up()
 
 #include <stdexcept>
 #include <sstream>
@@ -104,14 +104,19 @@ void SlabAllocator::stop(std::exception_ptr e)
 
 void SlabAllocator::wait_until_initialized()
 {
-    // No-op in dummy mode (no underlying BumpAllocator).
-    if (!bump_allocator)
-        return;
-    // Delegates to the BumpAllocator's wait. Does NOT trigger the deferred
-    // b->allocate_bytes() / b->get_base() calls -- those happen on first
-    // get_slab(). The purpose of explicit wait is to surface async-init
-    // failures eagerly.
-    bump_allocator->wait_until_initialized();
+    try {
+        // No-op in dummy mode (no underlying BumpAllocator).
+        if (!bump_allocator)
+            return;
+        // Delegates to the BumpAllocator's wait. Does NOT trigger the deferred
+        // b->allocate_bytes() / b->get_base() calls -- those happen on first
+        // get_slab(). The purpose of explicit wait is to surface async-init
+        // failures eagerly.
+        bump_allocator->wait_until_initialized();
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -127,16 +132,21 @@ void SlabAllocator::_throw_if_stopped() const
 
 void SlabAllocator::block_until_empty()
 {
-    if (is_dummy())
-        throw std::runtime_error("SlabAllocator::block_until_empty(): not available in dummy mode");
-    
-    std::unique_lock<std::mutex> guard(lock);
-    _throw_if_stopped();
+    try {
+        if (is_dummy())
+            throw std::runtime_error("SlabAllocator::block_until_empty(): not available in dummy mode");
 
-    // Wait until slab size is established and free list is empty.
-    while ((slab_size < 0) || !free_list.empty()) {
-        cv.wait(guard);
+        std::unique_lock<std::mutex> guard(lock);
         _throw_if_stopped();
+
+        // Wait until slab size is established and free list is empty.
+        while ((slab_size < 0) || !free_list.empty()) {
+            cv.wait(guard);
+            _throw_if_stopped();
+        }
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
     }
 }
 
@@ -147,6 +157,21 @@ void SlabAllocator::block_until_empty()
 
 
 std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
+{
+    // Per the strict stoppable-class policy (notes/stoppable_class.md), ANY
+    // exception thrown from an entry point stops the allocator -- including
+    // argument errors (bad nbytes, size mismatch) and the non-blocking
+    // "no free slabs" throw.
+    try {
+        return _get_slab(nbytes, blocking);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
+}
+
+
+std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
 {
     if (nbytes <= 0) {
         std::stringstream ss;
@@ -205,19 +230,14 @@ std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
             std::shared_ptr<void> bump_base = bump_allocator->get_base();
             new_base = std::shared_ptr<void>(bump_base, ptr);
         } catch (...) {
-            // Surface the failure to this SlabAllocator's subsequent callers
-            // and propagate to the BumpAllocator. stop() wakes any waiters,
-            // which then throw via _throw_if_stopped(); clearing
-            // 'init_underway' afterwards is just hygiene.
-            auto e = std::current_exception();
-            this->stop(e);
-
+            // The try/catch wrapper in get_slab() stops the allocator
+            // (waking any waiters, which then throw via _throw_if_stopped);
+            // here we just clear 'init_underway' and rethrow.
             {
                 std::lock_guard<std::mutex> g2(lock);
                 init_underway = false;
             }
-
-            std::rethrow_exception(e);
+            throw;
         }
 
         guard.lock();
@@ -233,9 +253,8 @@ std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
         // Validate before committing 'slab_size' / 'num_slabs': an oversized
         // first request must not leave the allocator in a broken state
         // (slab size established, but zero slabs -- later blocking callers
-        // would hang forever). Per the stoppable-class pattern, this throw
-        // also stops the allocator, since it indicates a misconfiguration
-        // rather than a recoverable condition.
+        // would hang forever). The throw stops the allocator, via the
+        // try/catch wrapper in get_slab().
         long aligned_capacity = align_up(capacity, nalign);
         long new_num_slabs = aligned_capacity / aligned_nbytes;
 
@@ -243,10 +262,7 @@ std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
             std::stringstream ss;
             ss << "SlabAllocator::get_slab(): capacity=" << capacity
                 << " is too small for slab_size=" << aligned_nbytes;
-            auto e = std::make_exception_ptr(std::runtime_error(ss.str()));
-            guard.unlock();
-            this->stop(e);
-            std::rethrow_exception(e);
+            throw std::runtime_error(ss.str());
         }
 
         slab_size = aligned_nbytes;
@@ -324,20 +340,26 @@ long SlabAllocator::num_free_slabs() const
 
 long SlabAllocator::num_total_slabs(bool blocking) const
 {
-    if (is_dummy())
-        throw std::runtime_error("SlabAllocator::num_total_slabs(): not available in dummy mode");
-    
-    std::unique_lock<std::mutex> guard(lock);
-    _throw_if_stopped();
+    try {
+        if (is_dummy())
+            throw std::runtime_error("SlabAllocator::num_total_slabs(): not available in dummy mode");
 
-    while (slab_size < 0) {
-        if (!blocking)
-            throw std::runtime_error("SlabAllocator::num_total_slabs(): slab size has not been established yet");
-        cv.wait(guard);
+        std::unique_lock<std::mutex> guard(lock);
         _throw_if_stopped();
+
+        while (slab_size < 0) {
+            if (!blocking)
+                throw std::runtime_error("SlabAllocator::num_total_slabs(): slab size has not been established yet");
+            cv.wait(guard);
+            _throw_if_stopped();
+        }
+
+        return num_slabs;
+    } catch (...) {
+        // stop() is a mutating operation; the const_cast mirrors the mutable mutex.
+        const_cast<SlabAllocator *>(this)->stop(std::current_exception());
+        throw;
     }
-    
-    return num_slabs;
 }
 
 

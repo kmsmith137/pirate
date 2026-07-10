@@ -660,7 +660,56 @@ void GpuDedisperser::_launch_cdd2(long ichunk, long ibatch, cudaStream_t stream)
 // -------------------------------------------------------------------------------------------------
 
 
+// The four progress-cursor entry points below are thin wrappers around
+// _acquire_input() / _release_input_and_launch_dd_kernels() /
+// _acquire_output() / _release_output(). Per the strict stoppable-class
+// policy (notes/stoppable_class.md), ANY exception thrown from an entry
+// point stops the GpuDedisperser -- including argument errors (bad seq_id
+// ordering, double acquire, consumer_id out of range).
+
 Array<void> GpuDedisperser::acquire_input(long seq_id, cudaStream_t stream)
+{
+    try {
+        return _acquire_input(seq_id, stream);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
+}
+
+void GpuDedisperser::release_input_and_launch_dd_kernels(long seq_id, cudaStream_t stream)
+{
+    try {
+        _release_input_and_launch_dd_kernels(seq_id, stream);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
+}
+
+GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long seq_id, cudaStream_t stream,
+                                                       bool sync, bool noreturn)
+{
+    try {
+        return _acquire_output(consumer_id, seq_id, stream, sync, noreturn);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
+}
+
+void GpuDedisperser::release_output(long consumer_id, long seq_id, cudaStream_t stream)
+{
+    try {
+        _release_output(consumer_id, seq_id, stream);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
+}
+
+
+Array<void> GpuDedisperser::_acquire_input(long seq_id, cudaStream_t stream)
 {
     xassert(seq_id >= 0);
     xassert(is_allocated);
@@ -694,20 +743,15 @@ Array<void> GpuDedisperser::acquire_input(long seq_id, cudaStream_t stream)
         view = input_arrays.slice(0, istream);
     }
 
-    try {
-        // This call to wait() can be nonblocking, since we know that the tree_gridding
-        // kernel was successfully launched by a previous call to release_input_and_launch_dd_kernels().
-        evrb_tree_gridding->wait(stream, seq_id - nstreams);
-    } catch (...) {
-        stop(std::current_exception());
-        throw;
-    }
+    // This call to wait() can be nonblocking, since we know that the tree_gridding
+    // kernel was successfully launched by a previous call to release_input_and_launch_dd_kernels().
+    evrb_tree_gridding->wait(stream, seq_id - nstreams);
 
     return view;
 }
 
 
-void GpuDedisperser::release_input_and_launch_dd_kernels(long seq_id, cudaStream_t stream)
+void GpuDedisperser::_release_input_and_launch_dd_kernels(long seq_id, cudaStream_t stream)
 {
     xassert(seq_id >= 0);
 
@@ -733,19 +777,14 @@ void GpuDedisperser::release_input_and_launch_dd_kernels(long seq_id, cudaStream
 
     lock.unlock();
 
-    // Argument-checking ends here. If an exception is thrown below, call stop().
-    // The rest of release_input_and_launch_dd_kernels() is in its own method _launch_dedispersion_kernels().
-    try {
-        _launch_dedispersion_kernels(seq_id, stream);
-    } catch (...) {
-        stop(std::current_exception());
-        throw;
-    }
+    // The rest of release_input_and_launch_dd_kernels() is in its own method
+    // _launch_dedispersion_kernels().
+    _launch_dedispersion_kernels(seq_id, stream);
 }
 
 
-GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long seq_id, cudaStream_t stream,
-                                                       bool sync, bool noreturn)
+GpuDedisperser::Outputs GpuDedisperser::_acquire_output(long consumer_id, long seq_id, cudaStream_t stream,
+                                                        bool sync, bool noreturn)
 {
     xassert(seq_id >= 0);
     xassert(is_allocated);
@@ -808,27 +847,21 @@ GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long se
         }
     }
 
-    // Argument checking ends here. If an exception is thrown below, call stop().
     // Wait for 'cdd2' to produce the output for seq_id. By default this makes the
     // caller-specified 'stream' wait; if sync=true we instead block the host
     // thread (and ignore 'stream'). The wait is blocking on the producer:
     // acquire_output() is assumed to run on a different thread than
     // acquire_input() / release_input_and_launch_dd_kernels().
-    try {
-        if (sync)
-            evrb_cdd2->synchronize(seq_id, /*blocking=*/true);
-        else
-            evrb_cdd2->wait(stream, seq_id, /*blocking=*/true);
-    } catch (...) {
-        stop(std::current_exception());
-        throw;
-    }
+    if (sync)
+        evrb_cdd2->synchronize(seq_id, /*blocking=*/true);
+    else
+        evrb_cdd2->wait(stream, seq_id, /*blocking=*/true);
 
     return outputs;
 }
 
 
-void GpuDedisperser::release_output(long consumer_id, long seq_id, cudaStream_t stream)
+void GpuDedisperser::_release_output(long consumer_id, long seq_id, cudaStream_t stream)
 {
     xassert(seq_id >= 0);
 
@@ -867,18 +900,13 @@ void GpuDedisperser::release_output(long consumer_id, long seq_id, cudaStream_t 
 
     lock.unlock();
 
-    // Argument-checking ends here. If an exception is thrown below, call stop().
     // We record an event from the caller-specified stream on the per-consumer
     // ringbuf evrb_release_output[consumer_id]. The cdd2 kernel waits on
     // ALL N rings before reusing the output slot.
-    try {
-        // blocking=true: the consumer (cdd2-launch on thread D) is cross-thread
-        // when release_output() runs on a separate thread R (e.g. FrbServer).
-        evrb_release_output[consumer_id]->record(stream, seq_id, /*blocking=*/true);
-    } catch (...) {
-        stop(std::current_exception());
-        throw;
-    }
+    //
+    // blocking=true: the consumer (cdd2-launch on thread D) is cross-thread
+    // when release_output() runs on a separate thread R (e.g. FrbServer).
+    evrb_release_output[consumer_id]->record(stream, seq_id, /*blocking=*/true);
 }
 
 

@@ -233,9 +233,10 @@ struct FakeXEngine
         // touch this field. Used in FakeXEngine::_enqueue to enforce
         // strict +1 monotonic submission ordering at queue time
         // (analogous to the processing-time check in _skip_or_send,
-        // but with the friendlier semantics of throwing
-        // runtime_error to the offending caller rather than tripping
-        // an internal xassert + stop()).
+        // but caught synchronously at submit time, so the offending
+        // caller sees a runtime_error naming its own bad argument.
+        // Per the strict stoppable-class policy, the throw also
+        // stops the FakeXEngine -- see notes/stoppable_class.md).
         //
         // Protected by 'mutex'. _enqueue holds the mutex continuously
         // across (a) the sequentiality check, (b) this counter's

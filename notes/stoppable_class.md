@@ -13,7 +13,9 @@ The "stoppable class" X is a code pattern for cascading exceptions through all t
 
 - Some public methods of `X` are labelled as "entry points". If an entry point is called in the stopped state, the exception `e` is rethrown. (If `e` is `nullptr`, then a generic exception `runtime_error("X::f() called on stopped instance")` is thrown.) 
 
-- If an entry point throws an exception, then `X::stop(e)` is called, and the exception is rethrown.
+- If an entry point throws an exception, then `X::stop(e)` is called, and the exception is rethrown. This is a strict policy: it applies to ALL throws, including routine argument-checking. (Rationale: a stoppable object is shared real-time infrastructure; an entry-point argument error means some pipeline thread has a bug, and the system is safest fully stopped, with the offending error preserved as the exception-text.) Implement this by wrapping the entry-point body in a try/catch that calls `stop(std::current_exception())` and rethrows, as illustrated by `example_entry_point()` in the example code below.
+
+- Methods that must remain usable on a stopped object are NOT entry points, and may throw without stopping: `stop()` itself, `is_stopped`-style accessors, `join()`/`wait()`-style methods (including `FrbServer::poll_from_python()`), and methods documented as informational accessors (e.g. `FakeXEngine::get_minichunk_status()`).
 
 - In a context where the value of `is_stopped` is checked (e.g. entry point), if a blocking call is made (e.g. `cv.wait()`) then `is_stopped` is rechecked on wakeup. `X::stop()` should call `notify_all()` on each of `X`'s condition variables. In situations where this notification mechanism doesn't work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck `is_stopped` every millisecond.)
 

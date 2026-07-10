@@ -595,16 +595,37 @@ bool BumpAllocator::is_initialized() const
 // in sync mode since _is_initialized is true from end of ctor).
 
 
+// Note: the public allocation methods are entry points; per the strict
+// stoppable-class policy (notes/stoppable_class.md), ANY throw (including
+// dummy-mode and argument errors) stops the allocator.
+
 std::shared_ptr<void> BumpAllocator::get_base() const
 {
-    if (capacity < 0)
-        throw std::runtime_error("BumpAllocator::get_base() called in dummy mode (capacity < 0)");
-    _block_until_ready_or_throw();
-    return base;
+    try {
+        if (capacity < 0)
+            throw std::runtime_error("BumpAllocator::get_base() called in dummy mode (capacity < 0)");
+        _block_until_ready_or_throw();
+        return base;
+    } catch (...) {
+        // stop() is a mutating operation; the const_cast mirrors the mutable mutex.
+        const_cast<BumpAllocator *>(this)->stop(std::current_exception());
+        throw;
+    }
 }
 
 
 void *BumpAllocator::allocate_bytes(long nbytes)
+{
+    try {
+        return _allocate_bytes(nbytes);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
+}
+
+
+void *BumpAllocator::_allocate_bytes(long nbytes)
 {
     if (capacity < 0)
         throw std::runtime_error("BumpAllocator::allocate_bytes() called in dummy mode (capacity < 0)");
