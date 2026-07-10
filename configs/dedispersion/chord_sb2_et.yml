@@ -42,12 +42,16 @@ num_active_batches: 2
 # in "time samples after downsampling by 2^(primary_tree_index)".
 # To get ~32 ms, we set max_width=[32,16,8,4] in each primary tree.
 #
-# FIXME the '*_downsampling' params are intended to control coarse-graining,
-# but are currently not completely implemented. For now, set dm_downsampling =
-# time_downsampling = 0 to auto-select coarse-graining factors. The actual
-# realized coarse-graining factors will show up in the dedispersion plan yaml
-# ('dm_downsampling' and 'time_downsampling', see example_dedispersion_plan.yml).
-# For more info on how to interpret these parameters, see the tex notes.
+# FIXME: the '*_downsampling' params are intended to control coarse-graining,
+# but are currently in a state of incomplete implementation. For now, set
+# dm_downsampling = time_downsampling = 0 to auto-select coarse-graining factors.
+# The dedisperser will "choose them for you", and they need not be the same in
+# all trees. The values chosen by the dedisperser will show up in the dedispersion
+# plan yaml ('dm_downsampling' and 'time_downsampling', see example_dedispersion_plan.yml).
+#
+# If your downstream code depends on how they're chosen, then you should put asserts
+# in your code, in case the values change in the future. This is something I hope
+# to improve soon!
 
 toplevel_tree_rank: 16
 

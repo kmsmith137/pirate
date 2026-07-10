@@ -467,6 +467,12 @@ D_{\rm ds} &= {\tt dm\_downsampling}   & \mbox{ (dm coarse-graining factor in pe
 These parameters can be inspected with \verb|pirate_frb show_dedisperser -v|, and are also
 passed from pirate to the grouper via the \verb|dedispersion_plan| yaml metadata.
 
+{\bf Warning.} Unfortunately, it's not currently possible to choose the coarse-graining factors
+$(T_{\rm ds}, D_{\rm ds})$ in the config file! The dedisperser will ``choose them for you'', and 
+they need not be the same in all trees. If your downstream code depends on how they're chosen, 
+you should put asserts in your code, in case the values change in the future. This is something
+I hope to improve soon!
+
 \subsection{Output array shapes}
 
 The \verb|out_max| and \verb|out_argmax| arrays (for a fixed tree and beam), have the same
