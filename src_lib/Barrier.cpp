@@ -30,8 +30,10 @@ void Barrier::initialize(int nthreads_)
         xassert(nthreads_ > 0);
         std::unique_lock ul(lock);
 
-        xassert_msg(this->nthreads <= 0, "Barrier::initialize() called on already-initialized Barrier");
+        // Stopped-check first: on an error-stopped Barrier, the saved root
+        // cause is rethrown in preference to the generic precondition assert.
         _throw_if_stopped("Barrier::initialize()");
+        xassert_msg(this->nthreads <= 0, "Barrier::initialize() called on already-initialized Barrier");
         this->nthreads = nthreads_;
     } catch (...) {
         stop(std::current_exception());

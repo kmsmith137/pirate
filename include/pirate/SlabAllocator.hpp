@@ -170,8 +170,10 @@ private:
     // 'lock'; other get_slab() callers wait on 'cv' while it is set.
     bool init_underway = false;
 
-    // Helper for blocking operations. Caller must hold lock.
-    void _throw_if_stopped() const;
+    // Helper for blocking operations. Caller must hold lock. Rethrows the
+    // saved error if non-null; otherwise throws a generic
+    // "<method_name> called on stopped instance".
+    void _throw_if_stopped(const char *method_name) const;
 
     // Entry-point body; get_slab() is a thin wrapper that stops the
     // allocator if this throws (see notes/stoppable_class.md).

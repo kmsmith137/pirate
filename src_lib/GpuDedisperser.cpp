@@ -355,8 +355,29 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
 
 void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator)
 {
-    if (this->is_allocated)
-        throw runtime_error("double call to GpuDedisperser::allocate()");
+    // Per the strict stoppable-class policy (notes/stoppable_class.md), ANY
+    // exception thrown from this entry point (including the precondition and
+    // aflags checks) stops the GpuDedisperser.
+    try {
+        _allocate(gpu_allocator, host_allocator);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
+}
+
+
+void GpuDedisperser::_allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator)
+{
+    // Stopped-check + double-call guard under the mutex. On an error-stopped
+    // instance the saved root cause is rethrown, in preference to an
+    // arbitrary downstream allocation failure.
+    {
+        std::unique_lock<std::mutex> ul(mutex);
+        _throw_if_stopped("allocate");
+        if (this->is_allocated)
+            throw runtime_error("double call to GpuDedisperser::allocate()");
+    }
 
     if (!(gpu_allocator.aflags & af_gpu))
         throw runtime_error("GpuDedisperser::allocate(): gpu_allocator.aflags must contain af_gpu");
@@ -412,7 +433,10 @@ void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_
     xassert_eq(gpu_nbytes_allocated, resource_tracker.get_gmem_footprint());
     xassert_eq(host_nbytes_allocated, resource_tracker.get_hmem_footprint());
 
-    this->is_allocated = true;
+    {
+        std::unique_lock<std::mutex> ul(mutex);
+        this->is_allocated = true;
+    }
 
     // Create worker thread (thread-backed class pattern).
     this->worker = std::thread(&GpuDedisperser::worker_main, this);

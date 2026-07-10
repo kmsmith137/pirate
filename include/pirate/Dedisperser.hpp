@@ -315,6 +315,7 @@ public:
 
     // Entry-point bodies. The public methods are thin wrappers that stop the
     // GpuDedisperser if the body throws (see notes/stoppable_class.md).
+    void _allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);
     ksgpu::Array<void> _acquire_input(long seq_id, cudaStream_t stream);
     void _release_input_and_launch_dd_kernels(long seq_id, cudaStream_t stream);
     Outputs _acquire_output(long consumer_id, long seq_id, cudaStream_t stream, bool sync, bool noreturn);

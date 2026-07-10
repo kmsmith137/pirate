@@ -219,8 +219,10 @@ struct BumpAllocator
     std::vector<int>  _super_of_zero_chunk;
     std::vector<int>  _zero_chunks_per_super;
 
-    // Blocking helper for async mode (no-op in sync mode).
-    void _block_until_ready_or_throw() const;
+    // Blocking helper for async mode (no-op in sync mode). Throws on a
+    // stopped allocator: the saved error if non-null, else a generic
+    // "<method_name> called on stopped instance".
+    void _block_until_ready_or_throw(const char *method_name) const;
 
     // Marked private-ish (in struct so accessible to internals but
     // not part of the user API).

@@ -132,6 +132,17 @@ void FileWriter::process_frame(const shared_ptr<AssembledFrame> &frame)
 
 void FileWriter::_process_frame(const shared_ptr<AssembledFrame> &frame)
 {
+    // Stopped-check FIRST -- before the no-enqueue early return, and before
+    // mutating the frame's in_*_queue flags. On an already-stopped writer we
+    // throw with the frame untouched (no flags set that no worker will ever
+    // clear). If stop() races in between this check and the push below, the
+    // second check throws with the flags set -- benign, since the whole
+    // pipeline is coming down at that point.
+    {
+        lock_guard<std::mutex> state_lock(this->mutex);
+        _throw_if_stopped("FileWriter::process_frame");
+    }
+
     unique_lock<std::mutex> frame_lock(frame->mutex);
 
     long npaths = frame->save_paths.size();
@@ -155,7 +166,7 @@ void FileWriter::_process_frame(const shared_ptr<AssembledFrame> &frame)
         return;
 
     lock_guard<std::mutex> state_lock(this->mutex);
-    _throw_if_stopped("process_frame");
+    _throw_if_stopped("FileWriter::process_frame");
 
     if (enqueue_ssd)
         this->ssd_queue.push(frame);
@@ -173,7 +184,7 @@ void FileWriter::add_subscriber(const shared_ptr<RpcSubscriber> &subscriber)
         xassert(subscriber);
 
         lock_guard<std::mutex> lock(mutex);
-        _throw_if_stopped("add_subscriber");
+        _throw_if_stopped("FileWriter::add_subscriber");
 
         rpc_subscribers.push_back(subscriber);
     } catch (...) {

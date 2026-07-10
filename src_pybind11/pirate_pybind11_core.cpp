@@ -388,7 +388,7 @@ void register_core_bindings(pybind11::module &m)
 
     // SimulatedFrameFactory: hands a consumer a stream of pre-randomized
     // AssembledFrameSets. Bound with a kwargs constructor that fills Params.
-    py::class_<SimulatedFrameFactory>(m, "SimulatedFrameFactory",
+    py::class_<SimulatedFrameFactory, std::shared_ptr<SimulatedFrameFactory>>(m, "SimulatedFrameFactory",
         "Produces a stream of pre-randomized AssembledFrameSets for an external\n"
         "consumer, staying a few frames ahead (bounded by frame_set_queue_size and\n"
         "the allocator's slab pool). Owns a producer thread plus a randomizer-thread\n"
@@ -841,7 +841,7 @@ void register_core_bindings(pybind11::module &m)
     // via enqueue_send_junk() and synchronizes via wait_until_processed().
     // Skipped members: mutex, cv, error, workers (internal state)
     // Skipped methods: _throw_if_stopped, make_worker_metadata, worker_main, _worker_main, _send_all (private)
-    py::class_<FakeXEngine>(m, "FakeXEngine",
+    py::class_<FakeXEngine, std::shared_ptr<FakeXEngine>>(m, "FakeXEngine",
         "Simulates multiple upstream X-engine nodes sending data to a receiver.\n\n"
         "Creates 'nworkers' worker threads in the constructor; each worker\n"
         "waits on a per-worker command queue. An external controller thread\n"
@@ -1504,7 +1504,7 @@ void register_core_bindings(pybind11::module &m)
     // HwtestSender: simulates a correlator sending data over TCP.
     // Skipped members: mutex, cv, is_stopped, is_started, error, workers, endpoints (internal state)
     // Skipped methods: _throw_if_stopped, worker_main, _worker_main, _send_all (private)
-    py::class_<HwtestSender>(m, "HwtestSender")
+    py::class_<HwtestSender, std::shared_ptr<HwtestSender>>(m, "HwtestSender")
         .def(py::init<long, bool, bool, bool>(),
              py::arg("send_bufsize"), py::arg("use_zerocopy"), py::arg("use_mmap"), py::arg("use_hugepages"))
 

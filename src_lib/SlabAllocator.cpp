@@ -120,13 +120,13 @@ void SlabAllocator::wait_until_initialized()
 }
 
 
-void SlabAllocator::_throw_if_stopped() const
+void SlabAllocator::_throw_if_stopped(const char *method_name) const
 {
     if (error)
         std::rethrow_exception(error);
-    
+
     if (is_stopped)
-        throw std::runtime_error("SlabAllocator method called on stopped instance");
+        throw std::runtime_error(std::string(method_name) + " called on stopped instance");
 }
 
 
@@ -137,12 +137,12 @@ void SlabAllocator::block_until_empty()
             throw std::runtime_error("SlabAllocator::block_until_empty(): not available in dummy mode");
 
         std::unique_lock<std::mutex> guard(lock);
-        _throw_if_stopped();
+        _throw_if_stopped("SlabAllocator::block_until_empty");
 
         // Wait until slab size is established and free list is empty.
         while ((slab_size < 0) || !free_list.empty()) {
             cv.wait(guard);
-            _throw_if_stopped();
+            _throw_if_stopped("SlabAllocator::block_until_empty");
         }
     } catch (...) {
         stop(std::current_exception());
@@ -182,7 +182,7 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
     long aligned_nbytes = align_up(nbytes, nalign);
 
     std::unique_lock<std::mutex> guard(lock);
-    _throw_if_stopped();
+    _throw_if_stopped("SlabAllocator::get_slab");
 
     if ((slab_size >= 0) && (aligned_nbytes != slab_size)) {
         std::stringstream ss;
@@ -210,7 +210,7 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
         if (init_underway) {
             // Another thread is performing the lazy init; wait for it.
             cv.wait(guard);
-            _throw_if_stopped();
+            _throw_if_stopped("SlabAllocator::get_slab");
             continue;
         }
 
@@ -246,7 +246,7 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
         cv.notify_all();  // wake threads waiting on 'init_underway'
 
         // stop() may have been called while 'lock' was released.
-        _throw_if_stopped();
+        _throw_if_stopped("SlabAllocator::get_slab");
     }
 
     if (slab_size < 0) {
@@ -288,7 +288,7 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
         }
 
         cv.wait(guard);
-        _throw_if_stopped();
+        _throw_if_stopped("SlabAllocator::get_slab");
     }
 
     void *slab_ptr = free_list.back();
@@ -345,13 +345,13 @@ long SlabAllocator::num_total_slabs(bool blocking) const
             throw std::runtime_error("SlabAllocator::num_total_slabs(): not available in dummy mode");
 
         std::unique_lock<std::mutex> guard(lock);
-        _throw_if_stopped();
+        _throw_if_stopped("SlabAllocator::num_total_slabs");
 
         while (slab_size < 0) {
             if (!blocking)
                 throw std::runtime_error("SlabAllocator::num_total_slabs(): slab size has not been established yet");
             cv.wait(guard);
-            _throw_if_stopped();
+            _throw_if_stopped("SlabAllocator::num_total_slabs");
         }
 
         return num_slabs;

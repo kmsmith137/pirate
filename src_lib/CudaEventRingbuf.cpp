@@ -246,10 +246,17 @@ void CudaEventRingbuf::_release(long seq_id)
 
 void CudaEventRingbuf::wait(cudaStream_t stream, long seq_id, bool blocking)
 {
-    if ((seq_id < 0) && (nconsumers > 0))
-        return;
-
     try {
+        // The seq_id < 0 no-op path still checks the stopped state, so a
+        // stopped ringbuf behaves consistently for all seq_id values (and
+        // stop-cascades surface promptly in wind-up loops that pass
+        // negative seq_ids).
+        if ((seq_id < 0) && (nconsumers > 0)) {
+            std::unique_lock<std::mutex> lock(mutex);
+            _throw_if_stopped("wait/synchronize");
+            return;
+        }
+
         cudaEvent_t event = _acquire(seq_id, blocking);
         CUDA_CALL(cudaStreamWaitEvent(stream, event, 0));
         _release(seq_id);
@@ -263,10 +270,14 @@ void CudaEventRingbuf::wait(cudaStream_t stream, long seq_id, bool blocking)
 
 void CudaEventRingbuf::synchronize(long seq_id, bool blocking)
 {
-    if ((seq_id < 0) && (nconsumers > 0))
-        return;
-    
     try {
+        // See wait() for why the no-op path checks the stopped state.
+        if ((seq_id < 0) && (nconsumers > 0)) {
+            std::unique_lock<std::mutex> lock(mutex);
+            _throw_if_stopped("wait/synchronize");
+            return;
+        }
+
         cudaEvent_t event = _acquire(seq_id, blocking);
         CUDA_CALL(cudaEventSynchronize(event));
         _release(seq_id);
@@ -280,22 +291,24 @@ void CudaEventRingbuf::synchronize(long seq_id, bool blocking)
 
 void CudaEventRingbuf::synchronize_with_producer(long seq_id)
 {
-    if (seq_id < 0)
-        return;
-
     try {
+        std::unique_lock<std::mutex> lock(mutex);
+
+        // Stopped-check before the seq_id < 0 no-op return -- see wait().
+        _throw_if_stopped("synchronize_with_producer");
+
+        if (seq_id < 0)
+            return;
+
         long slot = seq_id % max_size;
 
-        std::unique_lock<std::mutex> lock(mutex);
-        
         for (;;) {
-            _throw_if_stopped("synchronize_with_producer");
-            
             if (seq_id < seq_start)
                 return;
             if ((seq_id < seq_end) && produced[slot])
                 return;
             cv.wait(lock);
+            _throw_if_stopped("synchronize_with_producer");
         }
     }
     catch (...) {

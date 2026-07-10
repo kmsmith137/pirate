@@ -1130,35 +1130,35 @@ static void add_worker_helper(Hwtest *ht, const string &caller, MakeWorker &&mak
 
 void Hwtest::add_tcp_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, const vector<int> &vcpu_list, int cpu, int inic)
 {
-    add_worker_helper(this, "add_tcp_receiver", [&] {
+    add_worker_helper(this, "Hwtest::add_tcp_receiver", [&] {
         return make_shared<TcpReceiver> (this, vcpu_list, cpu, inic, ip_addr, num_tcp_connections, recv_bufsize);
     });
 }
 
 void Hwtest::add_chime_dedisperser(int device, const vector<int> &vcpu_list, int cpu)
 {
-    add_worker_helper(this, "add_chime_dedisperser", [&] {
+    add_worker_helper(this, "Hwtest::add_chime_dedisperser", [&] {
         return make_shared<ChimeWorker> (this, vcpu_list, cpu, device);
     });
 }
 
 void Hwtest::add_memcpy_thread(int src_device, int dst_device, long blocksize, bool use_copy_engine, const vector<int> &vcpu_list, int cpu)
 {
-    add_worker_helper(this, "add_memcpy_thread", [&] {
+    add_worker_helper(this, "Hwtest::add_memcpy_thread", [&] {
         return make_shared<MemcpyWorker> (this, vcpu_list, cpu, src_device, dst_device, blocksize, use_copy_engine);
     });
 }
 
 void Hwtest::add_ssd_writer(const string &root_dir, long nbytes_per_file, bool write_asdf, const vector<int> &vcpu_list, int cpu, int issd)
 {
-    add_worker_helper(this, "add_ssd_writer", [&] {
+    add_worker_helper(this, "Hwtest::add_ssd_writer", [&] {
         return make_shared<SsdWorker> (this, vcpu_list, cpu, issd, root_dir, nbytes_per_file, write_asdf);
     });
 }
 
 void Hwtest::add_downsampling_thread(int src_bit_depth, long src_nelts, const vector<int> &vcpu_list, int cpu)
 {
-    add_worker_helper(this, "add_downsampling_thread", [&] {
+    add_worker_helper(this, "Hwtest::add_downsampling_thread", [&] {
         return make_shared<DownsamplingWorker> (this, vcpu_list, cpu, src_bit_depth, src_nelts);
     });
 }

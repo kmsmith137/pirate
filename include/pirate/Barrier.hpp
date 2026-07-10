@@ -45,9 +45,11 @@ struct Barrier
     // Helper for entry points. Caller must hold lock.
     void _throw_if_stopped(const char *method_name);
 
-    // Noncopyable
+    // Noncopyable, nonmovable (std::mutex/std::condition_variable members).
     Barrier(const Barrier &) = delete;
     Barrier &operator=(const Barrier &) = delete;
+    Barrier(Barrier &&) = delete;
+    Barrier &operator=(Barrier &&) = delete;
 };
 
 

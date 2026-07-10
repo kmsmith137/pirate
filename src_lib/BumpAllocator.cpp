@@ -562,7 +562,7 @@ void BumpAllocator::_finalize_initialized()
 }
 
 
-void BumpAllocator::_block_until_ready_or_throw() const
+void BumpAllocator::_block_until_ready_or_throw(const char *method_name) const
 {
     std::unique_lock<std::mutex> guard(_mutex);
     while (!_is_initialized && !_is_stopped)
@@ -570,13 +570,13 @@ void BumpAllocator::_block_until_ready_or_throw() const
     if (_is_stopped && _error)
         std::rethrow_exception(_error);
     if (_is_stopped)
-        throw std::runtime_error("BumpAllocator method called on stopped instance");
+        throw std::runtime_error(std::string(method_name) + " called on stopped instance");
 }
 
 
 void BumpAllocator::wait_until_initialized() const
 {
-    _block_until_ready_or_throw();
+    _block_until_ready_or_throw("BumpAllocator::wait_until_initialized");
 }
 
 
@@ -604,7 +604,7 @@ std::shared_ptr<void> BumpAllocator::get_base() const
     try {
         if (capacity < 0)
             throw std::runtime_error("BumpAllocator::get_base() called in dummy mode (capacity < 0)");
-        _block_until_ready_or_throw();
+        _block_until_ready_or_throw("BumpAllocator::get_base");
         return base;
     } catch (...) {
         stop(std::current_exception());
@@ -635,10 +635,13 @@ void *BumpAllocator::_allocate_bytes(long nbytes)
         throw std::runtime_error(ss.str());
     }
 
+    _block_until_ready_or_throw("BumpAllocator::allocate_bytes");
+
+    // The nbytes == 0 no-op comes AFTER the readiness gate, so a zero-size
+    // allocation on a stopped allocator throws like any other allocation
+    // (and never returns nullptr from a not-yet-initialized allocator).
     if (nbytes == 0)
         return nullptr;
-
-    _block_until_ready_or_throw();
 
     // Round up to alignment boundary.
     long aligned_nbytes = align_up(nbytes, nalign);
@@ -682,7 +685,7 @@ ksgpu::Array<void> BumpAllocator::_allocate_array_internal(ksgpu::Dtype dtype, i
         // Block (and throw) on stop in both branches. In dummy mode
         // (sync-only) this is a non-blocking check: it returns
         // immediately unless stop() has been called.
-        _block_until_ready_or_throw();
+        _block_until_ready_or_throw("BumpAllocator::allocate_array");
         if (capacity < 0) {
             // Dummy mode: allocate a fresh array with af_alloc().
             ret.base = ksgpu::_af_alloc(dtype, nalloc, aflags);
