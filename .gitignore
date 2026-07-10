@@ -16,6 +16,7 @@ wheel_files.txt
 plans/
 extern/
 prompts/
+__pycache__/
 
 # GRPC
 grpc/*.pb.h

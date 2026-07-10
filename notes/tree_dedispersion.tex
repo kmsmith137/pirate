@@ -355,7 +355,7 @@ $(\lambda,q) = (0,0)$. Thus level $0$ contributes profiles $p = 0,1,2,3$, and ea
 $p = 3\lambda+1, 3\lambda+2, 3\lambda+3$ --- the single-boxcar kernel $h_{\lambda,0}$ is dropped for $\lambda>0$, since
 $h_{\lambda,0} = b_\lambda = h_{\lambda-1,1}$ would be redundant.
 
-\section{Downsampled trees and early triggers}
+\section{Time-downsampled trees and early triggers}
 \label{sec:downsampled_early}
 
 So far, we have described a single {\tt DedispersionTree} which searches up to slope 1 (i.e.~full-band dispersion delay equal to $2^r$ time samples), and ``triggers'' when the pulse arrives at the lowest frequency (highest tree-freq).
@@ -363,23 +363,44 @@ It will be useful to define a larger {\tt Dedisperser} object, consisting of mul
 
 \begin{itemize}
 
-\item {\bf Downsampled trees} in order to search to higher DM. If we time-downsample the data by a factor $2^p$, and run rank-$r$ dedispersion as usual, then we can search to a max dispersion delay which is larger by a factor $2^p$.
+\item {\bf Downsampled trees} in order to search to higher DM. 
+If we time-downsample the data by a factor $2^p$, and run rank-$r$ dedispersion as usual, then we can search to a max dispersion delay which is larger by a factor $2^p$.
 When we time-downsample by a factor $2^p$, we add time samples and multiply by $2^{-p/2}$, in order to leave the variance unchanged (assuming uncorrelated samples).
 
-The integer $p$ is called the {\em primary tree index}, and is denoted in the code by \verb|primary_tree_index| (or the loop variable \verb|ipri|). Each value of $p$ defines a {\em primary tree} which searches a different DM range, ordered from low to high DM.
 If $p > 0$, then we only keep the upper half (in delay) of the dedispersion output, since the lower half was already searched by primary tree $(p-1)$.
+Thus, each value of $p$ corresponds to a different DM range, ordered from low to high DM.
 
-\item {\bf Early triggers} in order to reduce triggering latency, especially at high DM. By default, we only trigger when the pulse arrives at the highest tree-freq (i.e.\ lowest radio frequency). To trigger earlier for some bursts, we also run parallel dedispersion trees over the lowest $2^{r-e}$ tree-freqs, where $e=1,2,\cdots$ is denoted {\tt early\_trigger\_level} in the code. These trees trigger at lower tree-freq (by a factor $2^e$), i.e.\ higher radio frequency.
-In the config file, each primary tree specifies an integer {\tt num\_early\_triggers} $= N \ge 0$, which selects early triggers $e = 1, \ldots, N$.
+\item {\bf Early triggers} in order to reduce triggering latency, especially at high DM. 
+By default, we only trigger when the pulse arrives at the highest tree-freq $f=2^r$ (i.e.\ lowest radio frequency).
+If we run parallel tree dedispersion over the lowest $2^{r-e}$ tree-freqs (i.e.\ highest radio frequencies),
+then the triggering time will be smaller by a factor $2^e$.
+This comes at the expense of losing low frequencies, so not all bursts will be detected in the early trigger.
 
 \end{itemize}
-A {\tt Dedisperser} consists of one or more {\tt DedispersionTrees}, each identified by a $(p, e)$ pair; i.e.\ each primary tree is expanded into $({\tt num\_early\_triggers}+1)$ {\tt DedispersionTrees}.
-The ``base'' tree $(p, e)=(0,0)$ does not downsample or trigger early.
-Conceptually, each {\tt DedispersionTree} just runs ``vanilla'' rank-$(r-e$) tree dedispersion on the first $2^{r-e}$ tree-freqs, downsampled in time by $2^p$, and then drops the lower DM-half of the outputs if $p > 0$.\footnote{This description suggests that each tree is an independent computation run ``from scratch''. There are a lot of tricks in the code that reuse computations between trees, i.e.\ the {\tt Dedisperser} is faster than running the constituent {\tt DedispersionTrees} independently.}
 
-{\sloppy
-As a concrete example, Table~\ref{tab:chord_sb2_et} and Figures~\ref{fig:early_triggers}--\ref{fig:tree_segments} show the ten-tree family of the CHORD config {\tt chord\_sb2\_et.yml} ($r=16$, with four primary trees and six early triggers).
-\par}
+\par\noindent
+The {\tt Dedisperser} consists of multiple trees parameterized by $(p,e)$.
+In the dedispersion config file, the syntax is (from {\tt chord\_sb2\_et.yml}):
+\begin{verbatim}
+  toplevel_tree_rank: 16    # rank r of "top-level" tree (p=0, e=0)
+
+  primary_trees:
+    - {num_early_triggers: 0, ...}   # This line creates one tree with p=0, e=0
+    - {num_early_triggers: 1, ...}   # This line creates two trees with p=1, e=0,1
+    - {num_early_triggers: 2, ...}   # This line creates three trees with p=2, e=0,1,2
+    - {num_early_triggers: 3, ...}   # This line creates four trees with p=3, e=0,1,2,3
+\end{verbatim}
+In the code, data structures are as follows:
+\begin{itemize}
+\item There is one ``top-level'' tree with $p=e=0$ (no time downsampling, no early triggers) and rank $r = {\tt toplevel\_tree\_rank}$.
+\item There are four ``primary'' trees with $e=0$ (no early triggers) and $p=0,1,2,3$.
+Each primary tree searches a different DM range, ordered from low to high DM.
+\item Each primary tree corresponds to multiple {\tt DedispersionTrees} with $0 \le e \le {\tt num\_early\_triggers}$.
+These trees (for fixed $p$) search the same DM range, with different threshold frequencies for triggering, ordered from latest in time (lowest frequency) to earliest (highest frequency).
+\end{itemize}
+The integer $p$ is called the {\em primary tree index}, and the integer $e$ is called the {\em early trigger level}.
+Conceptually, each {\tt DedispersionTree} just runs ``vanilla'' rank-$(r-e$) tree dedispersion on the first $2^{r-e}$ tree-freqs, downsampled in time by $2^p$, and then drops the lower DM-half of the outputs if $p > 0$.\footnote{This description suggests that each tree is an independent computation run ``from scratch''. There are a lot of tricks in the code that reuse computations between trees, i.e.\ the {\tt Dedisperser} is faster than running the constituent {\tt DedispersionTrees} independently.}
+For a more intuitive presentation of these trees, see Tab.\ \ref{tab:chord_sb2_et} and Figs.\ \ref{fig:early_triggers}, \ref{fig:tree_segments}.
 
 \begin{table}[ht]
 \centering
@@ -402,7 +423,7 @@ $p$ & $e$ & Full-band delay range (s) & DM range (pc\,cm$^{-3}$) & trigger (MHz)
  & 3 & & & 750 & 32.8--65.5 \\
 \bottomrule
 \end{tabular}
-\caption{The ten {\tt DedispersionTree}s of the CHORD config {\tt chord\_sb2\_et.yml} (rank $r=16$; four primary trees; six early triggers). Each tree is identified by a $(p, e)$ pair. The DM range and {\em full-band} dispersion delay range depend only on $p$. The trigger frequency depends only on $e$, and the latency range is $2^{-e} \times \mbox{(delay range)}$.
+\caption{The ten {\tt DedispersionTree}s of the CHORD config {\tt chord\_sb2\_et.yml} (rank $r=16$; four primary trees). Each tree is identified by a $(p, e)$ pair. The DM range and {\em full-band} dispersion delay range depend only on $p$. The trigger frequency depends only on $e$, and the latency range is $2^{-e} \times \mbox{(delay range)}$.
 (Generated with {\tt pirate\_frb show\_dedisperser -v configs/dedispersion/chord\_sb2\_et.yml}.)}
 \label{tab:chord_sb2_et}
 \end{table}
@@ -425,12 +446,16 @@ $p$ & $e$ & Full-band delay range (s) & DM range (pc\,cm$^{-3}$) & trigger (MHz)
 
 \section{Dedispersion output arrays}
 
+The dedispersion output consists of a pair of 2-d arrays (\verb|out_max|, \verb|out_argmax|)
+for each beam and \verb|DedispersionTree|, indexed by {\tt (dm,time)}.
+The purpose of this section is to describe these arrays in a little more detail.
+
 \subsection{Parameter definitions}
 
 The pirate \verb|DedispersionPlan| defines the following global (i.e.\ not per-tree) parameters:
 \begin{align}
 T_{\rm in} &= {\tt nt\_in} & \mbox{ (input time samples per time chunk)} \nn \\
-r_{\rm top} &= {\tt toplevel\_tree\_rank} & \mbox{ (toplevel tree rank, specified in the config file; denoted $r$ in earlier sections)} \nn
+r_{\rm top} &= {\tt toplevel\_tree\_rank} & \mbox{ (toplevel tree rank, specified in the config file)} \nn
 \end{align}
 and the following per-tree parameters:
 \begin{align}
@@ -442,11 +467,10 @@ D_{\rm ds} &= {\tt dm\_downsampling}   & \mbox{ (dm coarse-graining factor in pe
 These parameters can be inspected with \verb|pirate_frb show_dedisperser -v|, and are also
 passed from pirate to the grouper via the \verb|dedispersion_plan| yaml metadata.
 
-\subsection{Details of output arrays}
+\subsection{Output array shapes}
 
-The dedispersion output consists of a pair of 2-d arrays (\verb|out_max|, \verb|out_argmax|)
-for each tree, indexed by (dm,time). (In the code, there is also a beam axis, omitted in
-the notes for simplicity). The per-tree array shape $({\tt ndm\_out}, {\tt nt\_out})$ is given by:
+The \verb|out_max| and \verb|out_argmax| arrays (for a fixed tree and beam), have the same
+shape $({\tt ndm\_out}, {\tt nt\_out})$, given by:
 \begin{align}
 {\tt ndm\_out} &= \begin{cases}
   2^{r_{\rm top} - e} / D_{\rm ds} & \mbox{ if } p=0 \\
@@ -465,7 +489,7 @@ d_{\rm lo} = \begin{cases}
 d_{\rm hi} = 2^{r_{\rm top} + p}
 \label{eq:dlo_dhi}
 \end{equation}
-To derive Eqs.\ (\ref{eq:ndm_out})--(\ref{eq:dlo_dhi}), we walk through steps in the code:
+To explain where Eqs.\ (\ref{eq:ndm_out})--(\ref{eq:dlo_dhi}) come from, we walk through steps in the code:
 \begin{itemize}
 
 \item On the time axis, we start with a length-$T_{\rm in}$ input array,

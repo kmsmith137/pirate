@@ -34,15 +34,7 @@ struct DedispersionConfig
     double time_sample_ms = 0.0f;
 
     // Core dedispersion parameters.
-    // The number of "tree" channels is ntree = 2^toplevel_tree_rank.
-    // The first primary tree (p=0) searches to dispersion delay given by 2^toplevel_tree_rank time samples.
-    // Downsampled primary trees (0 < p < num_primary_trees) downsample in time by 2^p,
-    // then search delay range 2^(toplevel_tree_rank+p-1) <= delay <= 2^(toplevel_tree_rank+p).
-    //
-    // (The name "toplevel" distinguishes this from the many derived tree ranks in the
-    // pipeline: individual trees have rank (toplevel_tree_rank - early_trigger_level - (p ? 1 : 0)).)
-
-    long toplevel_tree_rank = -1;
+    long toplevel_tree_rank = -1;      // rank of "toplevel" tree (non-downsampled, no early trigger)
     long time_samples_per_chunk = 0;
 
     // For now, there is only one dtype, which can be either float32 or float16.
@@ -63,16 +55,8 @@ struct DedispersionConfig
 
     // Each "primary tree" searches a different DM range, ordered from low to high
     // (primary tree p downsamples the input in time by 2^p, see 'toplevel_tree_rank' above).
-    // Each primary tree is expanded into (num_early_triggers+1) "dedispersion trees":
-    // the main (full-band) tree, plus one early-trigger tree for each
-    // early_trigger_level = 1, ..., num_early_triggers.
-    //
-    // An early trigger searches a subset [fmid,fmax] of the full frequency range
-    // [freq_lo,freq_hi] at reduced latency. The early-trigger tree has rank
-    // (primary_tree_rank - early_trigger_level), where primary_tree_rank =
-    // (toplevel_tree_rank - S) is the rank of the primary tree's main tree, with S=0
-    // at p=0 and S=1 for p > 0. (Detail: the downsampled trees have one lower rank
-    // because they search a DM range which does not start at zero, see above.)
+    // Each primary tree is expanded into (num_early_triggers+1) "dedispersion trees".
+    // See the tex notes for more info.
     //
     // The remaining members configure peak-finding, and must be powers of two:
     //   max_width: max width of peak-finding kernel, in "tree" time samples

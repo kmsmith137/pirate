@@ -12,32 +12,47 @@ zone_freq_edges: [300, 350, 450, 600, 800, 1500]
 zone_nfreq: [ 8192, 8192, 6144, 2048, 3584 ]   # U = 32,16,8,4,1
 time_sample_ms: 1.0
 
-# Let's try to use rank=16 in CHORD.
-toplevel_tree_rank: 16
-time_samples_per_chunk: 2048
 dtype: float16
+beams_per_gpu: 60
+time_samples_per_chunk: 2048
 
 # Frequency subbands are specified as an integer-valued array. This array
 # corresponds to 25 subbands. For details/plots, see notes/tree_dedispersion.tex.
+# Command line: pirate_frb make_subbands 300 1500 0.1 -r 4
+
 frequency_subband_counts: [5,9,7,3,1]
 
-# Each "primary tree" searches a different DM range, ordered from low to high.
-# Each "primary tree" is expanded into (num_early_triggers+1) "dedispersion trees".
-# (If there are no early triggers, then there is no distinction between a tree
-# and a primary tree.)
-#
-# The early triggers below start at ~60 sec dedispersion delay.
-# See the tex notes or sphinx docs for an explanation of these params.
-#
-# FIXME peak-finding params could probably use more thought (same params for each
-# primary tree). Note: zeroes mean "let the GPU kernel decide".
-primary_trees:
-  - {num_early_triggers: 0, max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
-  - {num_early_triggers: 1, max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
-  - {num_early_triggers: 2, max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
-  - {num_early_triggers: 3, max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+# GPU configuration.
+# FIXME: the 'max_gpu_clag' parameter is a hack to control GPU memory usage.
+# If it's too large, then you'll run out of GPU memory. If it's too small, then
+# dedispersion will be slow. Currently, it has to be tuned by hand in the config
+# file -- I'll implement auto-tuning in the future.
 
 max_gpu_clag: 5
-beams_per_gpu: 60
 beams_per_batch: 2
 num_active_batches: 2
+
+# Dedispersion trees. I'm currently using toplevel rank 16 in CHORD.
+#
+# Each "primary tree" searches a different DM range, ordered from low to high,
+# and has early triggers (if needed) starting at ~60 sec dispersion delay. See
+# the tex notes for detailed info.
+#
+# The 'max_width' param is the max peak-finding width (see tex note),
+# in "time samples after downsampling by 2^(primary_tree_index)".
+# To get ~32 ms, we set max_width=[32,16,8,4] in each primary tree.
+#
+# FIXME the '*_downsampling' params are intended to control coarse-graining,
+# but are currently not completely implemented. For now, set dm_downsampling =
+# time_downsampling = 0 to auto-select coarse-graining factors. The actual
+# realized coarse-graining factors will show up in the dedispersion plan yaml
+# ('dm_downsampling' and 'time_downsampling', see example_dedispersion_plan.yml).
+# For more info on how to interpret these parameters, see the tex notes.
+
+toplevel_tree_rank: 16
+
+primary_trees:
+  - {num_early_triggers: 0, max_width: 32, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 1, max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 2, max_width:  8, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 3, max_width:  4, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
