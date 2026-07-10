@@ -337,14 +337,28 @@ long AssembledFrame::fpga_seq_end() const
 
 Array<float> AssembledFrame::dequantize() const
 {
+    // Acquire lock and copy the array members to local variables, to avoid racing
+    // against the reaper thread (same pattern as write_asdf()). Copying an Array
+    // also copies the shared_ptr in 'base', keeping the memory alive.
+    Array<void> local_data;
+    Array<void> local_scales_offsets;
+
+    unique_lock<std::mutex> guard(mutex);
+    local_data           = data;
+    local_scales_offsets = scales_offsets;
+    guard.unlock();
+
+    if (local_data.size == 0)
+        throw runtime_error("AssembledFrame::dequantize(): attempt to dequantize empty/reaped frame");
+
     // Single-beam dequantization: add a length-1 beam axis to this frame's arrays,
     // run the CPU reference kernel, and return the (nfreq, ntime) float32 result.
     ReferenceDequantizationKernel kernel(1, nfreq, ntime);
 
     Array<float> out({nfreq, ntime}, af_rhost | af_zero);
     Array<float> out3 = out.reshape({1, nfreq, ntime});
-    Array<void> data3 = data.reshape({1, nfreq, ntime});
-    Array<void> scoff_v = scales_offsets.reshape({1, nfreq, ntime/256, 2});
+    Array<void> data3 = local_data.reshape({1, nfreq, ntime});
+    Array<void> scoff_v = local_scales_offsets.reshape({1, nfreq, ntime/256, 2});
     Array<__half> scoff = scoff_v.cast<__half>();
 
     kernel.apply(out3, scoff, data3);

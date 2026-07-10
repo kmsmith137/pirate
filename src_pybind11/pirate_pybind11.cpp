@@ -397,6 +397,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
              "the reference kernels mimic this GpuDedisperser exactly.")
           .def("allocate", &GpuDedisperser::allocate,
                py::arg("gpu_allocator"), py::arg("host_allocator"),
+               py::call_guard<py::gil_scoped_release>(),   // GPU/host buffer allocation + worker spawn
                "Allocate GPU and host memory buffers for dedispersion.\n\n"
                "Args:\n"
                "    gpu_allocator: BumpAllocator for GPU memory\n"
@@ -449,15 +450,18 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                },
                py::arg("consumer_id"), py::arg("seq_id"), py::arg("stream_ptr"),
                py::call_guard<py::gil_scoped_release>())
-          .def_static("test_random", &GpuDedisperser::test_random)
+          .def_static("test_random", &GpuDedisperser::test_random,
+               py::call_guard<py::gil_scoped_release>())
           .def_static("test_one", &GpuDedisperser::test_one,
                py::arg("config"),
                py::arg("nchunks"),
                py::arg("nbatches_out") = 0,
                py::arg("nbatches_wt") = 0,
-               py::arg("host_only") = false)
+               py::arg("host_only") = false,
+               py::call_guard<py::gil_scoped_release>())
           .def("time", &GpuDedisperser::time,
                py::arg("gpu_allocator"), py::arg("cpu_allocator"), py::arg("niterations"),
+               py::call_guard<py::gil_scoped_release>(),   // minutes-long benchmark loop
                "Run timing benchmark.\n\n"
                "Must call allocate() first.\n\n"
                "Args:\n"
@@ -466,6 +470,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    niterations: Number of timing iterations")
           .def("fill_all_weights", &GpuDedisperser::fill_all_weights,
                py::arg("itree"), py::arg("pf_weights"),
+               py::call_guard<py::gil_scoped_release>(),   // heavy CPU permute + blocking H2D copies
                "Copy host-side peak-finding weights to the GPU for one tree, filling all\n"
                "nbatches_wt weight slots. Must call allocate() first.\n\n"
                "Args:\n"
@@ -475,6 +480,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "        t = plan.trees[itree]. Weights may differ per slot and per beam.")
           .def("fill_analytic_weights", &GpuDedisperser::fill_analytic_weights,
                py::arg("freq_variances"),
+               py::call_guard<py::gil_scoped_release>(),   // D2D copies + cudaDeviceSynchronize
                "Fill the peak-finding weight arrays with NON-random analytic weights,\n"
                "derived from the per-channel noise variances. All weight slots and beams\n"
                "get identical weights (unlike fill_all_weights). This is the weighting a\n"
@@ -563,6 +569,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         })
         .def("dedisperse",               &ReferenceDedisperserBase::dedisperse,
              py::arg("ichunk"), py::arg("ibatch"),
+             py::call_guard<py::gil_scoped_release>(),   // heavy CPU dedispersion + peak-finding
              "Dedisperse one (ichunk, ibatch). Fills out_max/out_argmax (and out_var if enabled).")
     ;
 }

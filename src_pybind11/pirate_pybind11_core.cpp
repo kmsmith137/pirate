@@ -54,6 +54,8 @@ void register_core_bindings(pybind11::module &m)
             py::arg("is_async") = false,
             py::arg("nthreads") = 0,
             py::arg("cuda_device") = -1,
+            // Sync-mode construction registers/zeros up to 100s of GB; release the GIL.
+            py::call_guard<py::gil_scoped_release>(),
             "Create allocator.\n\n"
             "Args:\n"
             "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.)\n"
@@ -73,8 +75,9 @@ void register_core_bindings(pybind11::module &m)
         .def_readonly("capacity", &BumpAllocator::capacity,
             "Total capacity in bytes, or -1 for dummy mode")
         .def("wait_until_initialized", &BumpAllocator::wait_until_initialized,
+            py::call_guard<py::gil_scoped_release>(),
             "In async mode: block until init complete, or rethrow async-init "
-            "exception. In sync mode: no-op.")
+            "exception. In sync mode: no-op. Releases the GIL while blocking.")
         .def("is_initialized", &BumpAllocator::is_initialized,
             "Non-blocking poll: True iff init has completed and the allocator "
             "has not been stopped.")
@@ -83,6 +86,8 @@ void register_core_bindings(pybind11::module &m)
                 return self->_allocate_array_internal(dtype, shape.size(), shape.data(), nullptr);
             },
             py::arg("dtype"), py::arg("shape"),
+            // Blocks on async init; in dummy mode does a fresh (possibly zeroed) allocation.
+            py::call_guard<py::gil_scoped_release>(),
             "Internal: allocate array with dtype and shape (use allocate_array() instead)")
     ;
 
@@ -98,6 +103,8 @@ void register_core_bindings(pybind11::module &m)
         "  - capacity < 0: Dummy mode, each get_slab() allocates fresh memory")
         .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(int, long)>(&SlabAllocator::create)),
             py::arg("aflags"), py::arg("capacity"),
+            // Allocates (and for af_rhost, cuda-registers) the full capacity; release the GIL.
+            py::call_guard<py::gil_scoped_release>(),
             "Create allocator with new memory.\n\n"
             "Args:\n"
             "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.)\n"
@@ -112,8 +119,10 @@ void register_core_bindings(pybind11::module &m)
             "constructor returns immediately, and the bump_allocator.allocate_bytes()\n"
             "call is deferred to the first get_slab().")
         .def("wait_until_initialized", &SlabAllocator::wait_until_initialized,
+            py::call_guard<py::gil_scoped_release>(),
             "If backed by an async BumpAllocator: block until it's initialized\n"
-            "(or rethrow async-init exception). Otherwise no-op.")
+            "(or rethrow async-init exception). Otherwise no-op. Releases the\n"
+            "GIL while blocking.")
         .def("is_initialized", &SlabAllocator::is_initialized,
             "Non-blocking poll: True iff the underlying BumpAllocator is ready\n"
             "to serve allocations (delegates to bump_allocator.is_initialized()).\n"
@@ -164,9 +173,19 @@ void register_core_bindings(pybind11::module &m)
             "Always frequency-scrubbed: metadata.freq_channels is empty.")
         .def_property_readonly("data",
             [](const AssembledFrame &self) {
+                // Snapshot the lock-protected member first, to avoid racing the
+                // reaper thread (same pattern as write_asdf()).
+                Array<void> local_data;
+                {
+                    std::lock_guard<std::mutex> guard(self.mutex);
+                    local_data = self.data;
+                }
+                if (local_data.size == 0)
+                    throw std::runtime_error("AssembledFrame.data: frame has been reaped (arrays released)");
+
                 // Convert int4 array (nfreq, ntime) to uint8 array (nfreq, ntime/2).
                 Array<uint8_t> arr;
-                arr.data = static_cast<uint8_t *>(self.data.data);
+                arr.data = static_cast<uint8_t *>(local_data.data);
                 arr.ndim = 2;
                 arr.shape[0] = self.nfreq;
                 arr.shape[1] = self.ntime / 2;
@@ -174,8 +193,8 @@ void register_core_bindings(pybind11::module &m)
                 arr.strides[0] = self.ntime / 2;
                 arr.strides[1] = 1;
                 arr.dtype = Dtype::native<uint8_t>();
-                arr.aflags = self.data.aflags;
-                arr.base = self.data.base;
+                arr.aflags = local_data.aflags;
+                arr.base = local_data.base;
                 arr.check_invariants("AssembledFrame::data getter");
                 return arr;
             },
@@ -184,8 +203,11 @@ void register_core_bindings(pybind11::module &m)
             "with the raw data.")
         .def_property_readonly("scales_offsets",
             [](const AssembledFrame &self) {
-                // The Array<void> already carries dtype Dtype(df_float, 16);
-                // ksgpu's pybind11 type_caster maps that to numpy np.float16.
+                // Snapshot under the lock, to avoid racing the reaper thread (see
+                // the 'data' getter above). The Array<void> already carries dtype
+                // Dtype(df_float, 16); ksgpu's pybind11 type_caster maps that to
+                // numpy np.float16.
+                std::lock_guard<std::mutex> guard(self.mutex);
                 return self.scales_offsets;
             },
             "Raw scales/offsets as float16 array with shape (nfreq, ntime/256, 2), "
@@ -193,12 +215,14 @@ void register_core_bindings(pybind11::module &m)
             "Most python callers will want to call dequantize(), rather than working directly\n"
             "with the scales/offsets.")
         .def("dequantize", &AssembledFrame::dequantize,
+            py::call_guard<py::gil_scoped_release>(),   // pinned alloc + full CPU dequantization loop
             "Convert raw data/scales/offsets to a float32 array of shape (nfreq, ntime).\n\n"
             "NOTE: we currently convert masked samples (represented by raw int4 value -8) to\n"
             "zeroes. We don't currently define a separate method to return the boolean mask,\n"
             "but if you need this let me know.")
         .def("write_asdf", &AssembledFrame::write_asdf,
             py::arg("filename"), py::arg("sync") = true, py::arg("verbose") = false,
+            py::call_guard<py::gil_scoped_release>(),   // 100s of MB of file I/O + fsync
             "Write this AssembledFrame to an ASDF file.\n\n"
             "If sync=True (default), fsync() the file after writing to avoid\n"
             "runaway page cache usage.\n\n"
@@ -208,6 +232,7 @@ void register_core_bindings(pybind11::module &m)
             "with 'pirate_frb show_file_format'.")
         .def_static("make_uninitialized", &AssembledFrame::make_uninitialized,
             py::arg("xmd"), py::arg("ntime"), py::arg("beam_id"), py::arg("time_chunk_index"),
+            py::call_guard<py::gil_scoped_release>(),   // pinned-host (cudaHostAlloc-scale) allocations
             "Create an AssembledFrame backed by the given XEngineMetadata, with\n"
             "freshly-allocated data / scales_offsets arrays whose CONTENTS ARE\n"
             "UNSPECIFIED -- the caller must fill them (e.g. via randomize()).\n\n"
@@ -218,6 +243,7 @@ void register_core_bindings(pybind11::module &m)
             "'always frequency-scrubbed' invariant on AssembledFrame.metadata.")
         .def_static("from_asdf", &AssembledFrame::from_asdf,
             py::arg("filename"),
+            py::call_guard<py::gil_scoped_release>(),   // file I/O + pinned-host allocation
             "Read an AssembledFrame back from an ASDF file.\n\n"
             "Note: XEngineMetadata is \"projected\" through ASDF -- after reading, the\n"
             "metadata's beam_ids / beam_positions_{x,y} are length-1 (just this\n"
@@ -1252,6 +1278,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("grouper_ip_addr"))
           .def("ping", &FrbGrouperClient::ping,
                py::arg("timeout_ms") = constants::grouper_ping_timeout_ms,
+               py::call_guard<py::gil_scoped_release>(),   // blocks up to timeout_ms when grouper is down
                "Channel-level connectivity check: bring a throwaway channel to READY, then\n"
                "drop it (no Session RPC, no Handshake). Raises RuntimeError if the grouper is\n"
                "not reachable within timeout_ms.")
@@ -1358,6 +1385,7 @@ void register_core_bindings(pybind11::module &m)
                "Raises:\n"
                "    RuntimeError: If called twice or after stop().")
           .def("stop", [](FrbServer &self) { self.stop(); },
+               py::call_guard<py::gil_scoped_release>(),   // deadline-less grpc Shutdown blocks ~seconds
                "Stop the server and all Receivers. Safe to call multiple times.")
           .def("poll_from_python", &FrbServer::poll_from_python, py::arg("timeout_ms"),
                py::call_guard<py::gil_scoped_release>(),

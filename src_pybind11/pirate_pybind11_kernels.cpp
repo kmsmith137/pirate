@@ -30,15 +30,15 @@ namespace pirate {
 void register_kernel_bindings(pybind11::module &m)
 {
     py::class_<CoalescedDdKernel2>(m, "CoalescedDdKernel2")
-          .def_static("test_random", &CoalescedDdKernel2::test_random)
-          .def_static("time_selected", &CoalescedDdKernel2::time_selected)
+          .def_static("test_random", &CoalescedDdKernel2::test_random, py::call_guard<py::gil_scoped_release>())
+          .def_static("time_selected", &CoalescedDdKernel2::time_selected, py::call_guard<py::gil_scoped_release>())
           .def_static("registry_size", &CoalescedDdKernel2::registry_size)
           .def_static("show_registry", &CoalescedDdKernel2::show_registry)
     ;
 
     py::class_<GpuDedispersionKernel>(m, "GpuDedispersionKernel")
-          .def_static("test_random", &GpuDedispersionKernel::test_random)
-          .def_static("time_selected", &GpuDedispersionKernel::time_selected)
+          .def_static("test_random", &GpuDedispersionKernel::test_random, py::call_guard<py::gil_scoped_release>())
+          .def_static("time_selected", &GpuDedispersionKernel::time_selected, py::call_guard<py::gil_scoped_release>())
           .def_static("registry_size", &GpuDedispersionKernel::registry_size)
           .def_static("show_registry", &GpuDedispersionKernel::show_registry)
     ;
@@ -105,6 +105,7 @@ void register_kernel_bindings(pybind11::module &m)
                    self.launch(out, scoff, data_int4, stream);
                },
                py::arg("out"), py::arg("scales_offsets"), py::arg("data_uint8"), py::arg("stream_ptr"),
+               py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++ (Array::cast, not python)
                "GPU kernel launch (async, does not sync stream).\n\n"
                "Args:\n"
                "    out: Output array, shape (nbeams, nfreq, ntime), dtype matches\n"
@@ -122,8 +123,10 @@ void register_kernel_bindings(pybind11::module &m)
                "(all dtypes must be at least 8 bits). Each uint8 element contains two\n"
                "int4 values: low nibble = even index, high nibble = odd index.")
           .def_static("test_random", &GpuDequantizationKernel::test_random,
+               py::call_guard<py::gil_scoped_release>(),
                "Run randomized tests (called via 'python -m pirate_frb test --gdqk')")
           .def_static("time_selected", &GpuDequantizationKernel::time_selected,
+               py::call_guard<py::gil_scoped_release>(),
                "Run timing benchmarks")
     ;
 
@@ -165,6 +168,7 @@ void register_kernel_bindings(pybind11::module &m)
                    self.apply(out, scoff, data_int4);
                },
                py::arg("out"), py::arg("scales_offsets"), py::arg("data_uint8"),
+               py::call_guard<py::gil_scoped_release>(),   // O(nbeams*nfreq*ntime) CPU loop
                "Reference implementation (CPU, always outputs float32).\n\n"
                "Args:\n"
                "    out: Output array, shape (nbeams, nfreq, ntime), dtype float32,\n"
@@ -183,23 +187,24 @@ void register_kernel_bindings(pybind11::module &m)
     ;
 
     py::class_<GpuLaggedDownsamplingKernel>(m, "GpuLaggedDownsamplingKernel")
-          .def_static("test_random", &GpuLaggedDownsamplingKernel::test_random)
-          .def_static("time_selected", &GpuLaggedDownsamplingKernel::time_selected)
+          .def_static("test_random", &GpuLaggedDownsamplingKernel::test_random, py::call_guard<py::gil_scoped_release>())
+          .def_static("time_selected", &GpuLaggedDownsamplingKernel::time_selected, py::call_guard<py::gil_scoped_release>())
     ;
 
     py::class_<GpuPeakFindingKernel>(m, "GpuPeakFindingKernel")
-          .def_static("test_random", &GpuPeakFindingKernel::test_random, py::arg("short_circuit") = false)
+          .def_static("test_random", &GpuPeakFindingKernel::test_random, py::arg("short_circuit") = false,
+               py::call_guard<py::gil_scoped_release>())
           .def_static("registry_size", &GpuPeakFindingKernel::registry_size)
           .def_static("show_registry", &GpuPeakFindingKernel::show_registry)
     ;
 
     py::class_<GpuRingbufCopyKernel>(m, "GpuRingbufCopyKernel")
-          .def_static("test_random", &GpuRingbufCopyKernel::test_random)
+          .def_static("test_random", &GpuRingbufCopyKernel::test_random, py::call_guard<py::gil_scoped_release>())
     ;
 
     py::class_<GpuTreeGriddingKernel>(m, "GpuTreeGriddingKernel")
-          .def_static("test_random", &GpuTreeGriddingKernel::test_random)
-          .def_static("time_selected", &GpuTreeGriddingKernel::time_selected)
+          .def_static("test_random", &GpuTreeGriddingKernel::test_random, py::call_guard<py::gil_scoped_release>())
+          .def_static("time_selected", &GpuTreeGriddingKernel::time_selected, py::call_guard<py::gil_scoped_release>())
     ;
 
     // ReferenceTreeGriddingKernel
@@ -237,6 +242,7 @@ void register_kernel_bindings(pybind11::module &m)
                    return out;
                },
                py::arg("in"),
+               py::call_guard<py::gil_scoped_release>(),   // O(B*N*F*T) CPU rebin + pinned-host alloc
                "Rebins input frequency channels into output tree channels.\n\n"
                "Args:\n"
                "    in: Input array, shape (beams_per_batch, nfreq, ntime)\n\n"
@@ -245,19 +251,19 @@ void register_kernel_bindings(pybind11::module &m)
     ;
 
     py::class_<PfOutputMicrokernel>(m, "PfOutputMicrokernel")
-          .def_static("test_random", &PfOutputMicrokernel::test_random)
+          .def_static("test_random", &PfOutputMicrokernel::test_random, py::call_guard<py::gil_scoped_release>())
           .def_static("registry_size", &PfOutputMicrokernel::registry_size)
           .def_static("show_registry", &PfOutputMicrokernel::show_registry)
     ;
 
     py::class_<PfWeightReaderMicrokernel>(m, "PfWeightReaderMicrokernel")
-          .def_static("test_random", &PfWeightReaderMicrokernel::test_random)
+          .def_static("test_random", &PfWeightReaderMicrokernel::test_random, py::call_guard<py::gil_scoped_release>())
           .def_static("registry_size", &PfWeightReaderMicrokernel::registry_size)
           .def_static("show_registry", &PfWeightReaderMicrokernel::show_registry)
     ;
 
     py::class_<ReferenceLagbuf>(m, "ReferenceLagbuf")
-          .def_static("test_random", &ReferenceLagbuf::test_random)
+          .def_static("test_random", &ReferenceLagbuf::test_random, py::call_guard<py::gil_scoped_release>())
     ;
 
     py::class_<ReferenceTree>(m, "ReferenceTree",
@@ -301,8 +307,8 @@ void register_kernel_bindings(pybind11::module &m)
                "Args:\n"
                "    buf: Input/output array, shape (num_beams, 2^amb_rank, 2^dd_rank, ntime*nspec)\n"
                "    out: Output array for subbands (optional if M=1)")
-          .def_static("test_basics", &ReferenceTree::test_basics)
-          .def_static("test_subbands", &ReferenceTree::test_subbands)
+          .def_static("test_basics", &ReferenceTree::test_basics, py::call_guard<py::gil_scoped_release>())
+          .def_static("test_subbands", &ReferenceTree::test_subbands, py::call_guard<py::gil_scoped_release>())
     ;
 
     // Exposed for unit tests only (see PfVarianceConvolver.test_kernels_match_reference).
@@ -342,20 +348,23 @@ void register_kernel_bindings(pybind11::module &m)
                    self.apply(out_max, out_argmax, out_var, in_, wt, ibatch);
                },
                py::arg("out_max"), py::arg("out_argmax"), py::arg("in_"),
-               py::arg("wt"), py::arg("ibatch"))
+               py::arg("wt"), py::arg("ibatch"),
+               py::call_guard<py::gil_scoped_release>())
           .def("apply",
                [](ReferencePeakFindingKernel &self, Array<float> &out_max, Array<uint> &out_argmax,
                   const Array<float> &in_, const Array<float> &wt, long ibatch, Array<double> &out_var) {
                    self.apply(out_max, out_argmax, out_var, in_, wt, ibatch);
                },
                py::arg("out_max"), py::arg("out_argmax"), py::arg("in_"),
-               py::arg("wt"), py::arg("ibatch"), py::arg("out_var"))
+               py::arg("wt"), py::arg("ibatch"), py::arg("out_var"),
+               py::call_guard<py::gil_scoped_release>())
           .def("eval_tokens",
                [](ReferencePeakFindingKernel &self, Array<float> &out,
                   const Array<uint> &in_tokens, const Array<float> &wt) {
                    self.eval_tokens(out, in_tokens, wt);
                },
-               py::arg("out"), py::arg("in_tokens"), py::arg("wt"))
+               py::arg("out"), py::arg("in_tokens"), py::arg("wt"),
+               py::call_guard<py::gil_scoped_release>())
     ;
 }
 

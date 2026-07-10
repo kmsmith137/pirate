@@ -25,8 +25,8 @@ namespace pirate {
 void register_utils_bindings(pybind11::module &m)
 {
     // avx2_simulate_4bit_noise() test + timing (see 'python -m pirate_frb test/time --sim').
-    m.def("test_avx2_simulate_4bit_noise", &test_avx2_simulate_4bit_noise);
-    m.def("time_avx2_simulate_4bit_noise", &time_avx2_simulate_4bit_noise, py::arg("nthreads"));
+    m.def("test_avx2_simulate_4bit_noise", &test_avx2_simulate_4bit_noise, py::call_guard<py::gil_scoped_release>());
+    m.def("time_avx2_simulate_4bit_noise", &time_avx2_simulate_4bit_noise, py::arg("nthreads"), py::call_guard<py::gil_scoped_release>());
 
     // safe_memcpy_{h2g,g2h}_{sync,async}: host<->device cudaMemcpy* wrappers
     // that split at absolute cuda_host_register_chunk_size-aligned host
@@ -45,6 +45,7 @@ void register_utils_bindings(pybind11::module &m)
                                     nbytes, stream);
           },
           py::arg("dst_ptr"), py::arg("src_ptr"), py::arg("nbytes"), py::arg("stream_ptr"),
+          py::call_guard<py::gil_scoped_release>(),
           "Host->device cudaMemcpyAsync that splits the host range at\n"
           "absolute cuda_host_register_chunk_size-aligned boundaries.");
 
@@ -56,6 +57,7 @@ void register_utils_bindings(pybind11::module &m)
                                     nbytes, stream);
           },
           py::arg("dst_ptr"), py::arg("src_ptr"), py::arg("nbytes"), py::arg("stream_ptr"),
+          py::call_guard<py::gil_scoped_release>(),
           "Device->host cudaMemcpyAsync, same splitting as safe_memcpy_h2g_async.");
 
     m.def("safe_memcpy_h2g_sync",
@@ -65,6 +67,7 @@ void register_utils_bindings(pybind11::module &m)
                                    nbytes);
           },
           py::arg("dst_ptr"), py::arg("src_ptr"), py::arg("nbytes"),
+          py::call_guard<py::gil_scoped_release>(),
           "Synchronous host->device cudaMemcpy with chunk-boundary splitting.");
 
     m.def("safe_memcpy_g2h_sync",
@@ -74,6 +77,7 @@ void register_utils_bindings(pybind11::module &m)
                                    nbytes);
           },
           py::arg("dst_ptr"), py::arg("src_ptr"), py::arg("nbytes"),
+          py::call_guard<py::gil_scoped_release>(),
           "Synchronous device->host cudaMemcpy with chunk-boundary splitting.");
 }
 

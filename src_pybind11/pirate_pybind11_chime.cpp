@@ -22,15 +22,19 @@ namespace pirate {
 void register_chime_bindings(pybind11::module &m)
 {
     m.def("test_chime_frb_beamform", &test_chime_frb_beamform,
+          py::call_guard<py::gil_scoped_release>(),
           "Unit test: compare GPU chime_frb_beamform against CPU reference.");
 
     m.def("test_chime_frb_upchan", &test_chime_frb_upchan,
+          py::call_guard<py::gil_scoped_release>(),
           "Unit test: compare GPU chime_frb_upchan against CPU reference.");
 
     m.def("time_chime_frb_beamform", &time_chime_frb_beamform,
+          py::call_guard<py::gil_scoped_release>(),
           "Run timing benchmark for the CHIME FRB beamforming kernel.");
 
     m.def("time_chime_frb_upchan", &time_chime_frb_upchan,
+          py::call_guard<py::gil_scoped_release>(),
           "Run timing benchmark for the CHIME FRB upchannelization kernel.");
 }
 

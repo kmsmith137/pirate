@@ -74,11 +74,14 @@ void register_casm_bindings(pybind11::module &m)
                  cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                  self.launch_beamformer(e_in, feed_weights, i_out, stream);
              },
-             py::arg("e_in"), py::arg("feed_weights"), py::arg("i_out"), py::arg("stream_ptr"))
+             py::arg("e_in"), py::arg("feed_weights"), py::arg("i_out"), py::arg("stream_ptr"),
+             py::call_guard<py::gil_scoped_release>())   // async launch, pure C++ body
 
         .def_static("get_max_beams", &CasmBeamformer::get_max_beams)
-        .def_static("test_microkernels", &CasmBeamformer::test_microkernels)
-        .def_static("run_timings", &CasmBeamformer::run_timings, py::arg("ncu_hack"))
+        .def_static("test_microkernels", &CasmBeamformer::test_microkernels,
+             py::call_guard<py::gil_scoped_release>())
+        .def_static("run_timings", &CasmBeamformer::run_timings, py::arg("ncu_hack"),
+             py::call_guard<py::gil_scoped_release>())
     ;
 }
 

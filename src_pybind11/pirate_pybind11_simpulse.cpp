@@ -88,7 +88,10 @@ void register_simpulse_bindings(pybind11::module &m)
              py::arg("undispersed_arrival_time_sec"), py::arg("time_sample_ms"), py::arg("snr"),
              py::arg("freq_edges_MHz"), py::arg("freq_variances"),
              py::arg("subband_freq_lo_MHz") = 0.0, py::arg("subband_freq_hi_MHz") = 1.0e9,
-             py::arg("internal_nt") = 1024)
+             py::arg("internal_nt") = 1024,
+             // Per-channel inverse FFTs + interpolation; body is pure C++ (copies
+             // pre-converted Arrays into Params).
+             py::call_guard<py::gil_scoped_release>())
 
         // Read-only views of the construction parameters (SinglePulse::params).
         .def_property_readonly("internal_nt", [](const SinglePulse &s) { return s.params.internal_nt; })
@@ -119,6 +122,7 @@ void register_simpulse_bindings(pybind11::module &m)
 
         .def("add_to_timestream", &SinglePulse::add_to_timestream,
              py::arg("out"), py::arg("out_it0"), py::arg("weight") = 1.0f,
+             py::call_guard<py::gil_scoped_release>(),   // O(pulse samples) CPU scatter
              "Add the pulse to a 2-d (nfreq, out_nt) float32 array, in place, scaled by 'weight'.\n"
              "\n"
              "Column it of 'out' represents grid sample index (out_it0 + it), i.e. 'out' spans sample\n"

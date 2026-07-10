@@ -27,23 +27,24 @@ namespace pirate {
 void register_loose_ends_bindings(pybind11::module &m)
 {
     // Timing functions
-    m.def("time_cpu_downsample", &time_cpu_downsample, py::arg("nthreads"));
-    m.def("time_gpu_downsample", &time_gpu_downsample);
-    m.def("time_gpu_transpose", &time_gpu_transpose);
+    m.def("time_cpu_downsample", &time_cpu_downsample, py::arg("nthreads"), py::call_guard<py::gil_scoped_release>());
+    m.def("time_gpu_downsample", &time_gpu_downsample, py::call_guard<py::gil_scoped_release>());
+    m.def("time_gpu_transpose", &time_gpu_transpose, py::call_guard<py::gil_scoped_release>());
     
     // "Zombie" test functions (code written during protoyping that may never get used)
-    m.def("test_avx2_m64_outbuf", &test_avx2_m64_outbuf);
-    m.def("test_cpu_downsampler", &test_cpu_downsampler);
-    m.def("test_gpu_downsample", &test_gpu_downsample);
-    m.def("test_gpu_transpose", &test_gpu_transpose);
-    m.def("test_gpu_reduce2", &test_gpu_reduce2);
+    m.def("test_avx2_m64_outbuf", &test_avx2_m64_outbuf, py::call_guard<py::gil_scoped_release>());
+    m.def("test_cpu_downsampler", &test_cpu_downsampler, py::call_guard<py::gil_scoped_release>());
+    m.def("test_gpu_downsample", &test_gpu_downsample, py::call_guard<py::gil_scoped_release>());
+    m.def("test_gpu_transpose", &test_gpu_transpose, py::call_guard<py::gil_scoped_release>());
+    m.def("test_gpu_reduce2", &test_gpu_reduce2, py::call_guard<py::gil_scoped_release>());
 
     // Called by 'python -m pirate_frb scratch'. Defined in src_lib/utils.cu.
     m.def("scratch", &scratch);
 
     // Called by 'python -m pirate_frb revisit_512gb'. Defined in src_lib/utils.cpp.
     m.def("revisit_512gb_inner", &revisit_512gb_inner,
-          py::arg("nbytes"), py::arg("use_hugepages"));
+          py::arg("nbytes"), py::arg("use_hugepages"),
+          py::call_guard<py::gil_scoped_release>());   // minutes: mmap/prefault + cudaHostRegister
 }
 
 }  // namespace pirate
