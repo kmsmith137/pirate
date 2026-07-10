@@ -130,7 +130,11 @@ void register_core_bindings(pybind11::module &m)
         .def("num_free_slabs", &SlabAllocator::num_free_slabs,
             "Number of slabs currently available. Throws in dummy mode.")
         .def("num_total_slabs", &SlabAllocator::num_total_slabs,
-            "Total number of slabs in the pool. Throws in dummy mode.")
+            py::arg("blocking") = false,
+            py::call_guard<py::gil_scoped_release>(),
+            "Total number of slabs in the pool. Throws in dummy mode.\n\n"
+            "If blocking=True, waits until the slab size has been established\n"
+            "(by the first get_slab()); releases the GIL while blocking.")
         .def("get_slab_size", &SlabAllocator::get_slab_size,
             "Established slab size in bytes, or -1 if not yet established.")
         .def("is_dummy", &SlabAllocator::is_dummy,

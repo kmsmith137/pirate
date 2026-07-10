@@ -28,8 +28,20 @@ void register_avar_bindings(pybind11::module &m)
     py::class_<SparseTile>(m, "SparseTile")
         .def(py::init([](long r, long k, long f0, long nf, long nt, long dbits,
                          const Array<double> &data, const Array<long> &tshifts, long t0, double scale) {
+                 // The C++ constructor validates the scalar args, but dereferences the
+                 // raw array pointers on the host (memcpy of nf*S*nt doubles, and
+                 // tshifts[0..k-1]), so the array args must be validated here: a cupy
+                 // array or an undersized numpy array would otherwise segfault / read
+                 // out of bounds. The k/dbits pre-checks (duplicating the ctor's) make
+                 // the expected-size computation below well-defined.
+                 xassert(data.on_host());
                  xassert(data.is_fully_contiguous());
+                 xassert(tshifts.on_host());
                  xassert(tshifts.is_fully_contiguous());
+                 xassert(0 <= k && k <= constants::max_tree_rank);
+                 xassert(0 <= dbits && dbits < (1L << k));
+                 xassert(data.size == nf * (1L << popcount(dbits)) * nt);
+                 xassert(tshifts.size == k);
                  return new SparseTile(r, k, f0, nf, nt, dbits, data.data, tshifts.data, t0, scale);
              }),
              py::arg("r"), py::arg("k"), py::arg("f0"), py::arg("nf"), py::arg("nt"),
@@ -55,6 +67,7 @@ void register_avar_bindings(pybind11::module &m)
 
     py::class_<SparseTileTriple>(m, "SparseTileTriple")
         .def_static("make_tree_gridding_output", [](const Array<double> &cm, long ifreq) {
+                 xassert(cm.on_host());   // cm.data is dereferenced on the host
                  xassert(cm.is_fully_contiguous());
                  return SparseTileTriple::make_tree_gridding_output(cm.data, cm.size, ifreq);
              }, py::arg("channel_map"), py::arg("ifreq"))
@@ -86,6 +99,7 @@ void register_avar_bindings(pybind11::module &m)
             return a;
         })
         .def("variance", [](const PfVarianceConvolver &self, const Array<double> &x, long P) {
+            xassert(x.on_host());   // x.data is dereferenced on the host
             xassert(x.ndim == 2 && x.is_fully_contiguous());
             long S = x.shape[0], nt = x.shape[1];
             Array<double> out({S, P}, af_rhost);
@@ -111,6 +125,7 @@ void register_avar_bindings(pybind11::module &m)
 
     py::class_<PfAvarApproximation>(m, "PfAvarApproximation")
         .def(py::init([](std::shared_ptr<DedispersionPlan> plan, const Array<double> &freq_variances) {
+                 xassert(freq_variances.on_host());   // dereferenced on the host by the ctor
                  return new PfAvarApproximation(plan, freq_variances);
              }), py::arg("plan"), py::arg("freq_variances"),
                  py::call_guard<py::gil_scoped_release>())   // seconds of CPU (per-channel sweep)

@@ -178,12 +178,13 @@ class CudaStreamPoolInjections:
     
     @property
     def compute_streams(self):
-        """First compute stream (compute_streams[0]).
-        
+        """List of all compute streams, as ksgpu.CudaStreamWrapper objects.
+
         Returns
         -------
-        ksgpu.CudaStreamWrapper
-            Stream wrapper that can be used with cupy context managers.
+        list of ksgpu.CudaStreamWrapper
+            One wrapper per compute stream; each can be used with cupy
+            context managers.
         """
         return [ ksgpu.CudaStreamWrapper(x) for x in self._cpp_compute_streams ]
 
