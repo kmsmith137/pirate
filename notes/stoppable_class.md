@@ -11,19 +11,21 @@ The "stoppable class" X is a code pattern for cascading exceptions through all t
 
 - `X` has a `stop(std::exception_ptr e)` method which can be called externally from any thread, to put the object into a "stopped" state (`X::is_stopped==true`). The value of `e` is saved in `X::error`, and is null or non-null depending on whether the call to `stop()` represents normal termination. The first caller to `stop()` sets `X::error`. `stop()` is declared `const`, and the stop-pattern state (mutex, condition variables, `is_stopped`, `error`) is declared `mutable`: stoppability is control-plane state (analogous to a mutable mutex), and `const` entry points / accessors must be able to stop the object.
 
-- Some public methods of `X` are labelled as "entry points". If an entry point is called in the stopped state, the exception `e` is rethrown. (If `e` is `nullptr`, then a generic exception `runtime_error("X::f() called on stopped instance")` is thrown.) 
+- Some public methods of `X` are labelled as "entry points". If an entry point is called in the stopped state, the exception `e` is rethrown. (If `e` is `nullptr`, then a generic exception `runtime_error("X::f() called on stopped instance")` is thrown -- always with the class-qualified method name, passed to the `_throw_if_stopped` helper as in the example below.)
 
 - If an entry point throws an exception, then `X::stop(e)` is called, and the exception is rethrown. This is a strict policy: it applies to ALL throws, including routine argument-checking. (Rationale: a stoppable object is shared real-time infrastructure; an entry-point argument error means some pipeline thread has a bug, and the system is safest fully stopped, with the offending error preserved as the exception-text.) Implement this by wrapping the entry-point body in a try/catch that calls `stop(std::current_exception())` and rethrows, as illustrated by `example_entry_point()` in the example code below.
 
 - Methods that must remain usable on a stopped object are NOT entry points, and may throw without stopping: `stop()` itself, `is_stopped`-style accessors, `join()`/`wait()`-style methods (including `FrbServer::poll_from_python()`), and methods documented as informational accessors (e.g. `FakeXEngine::get_minichunk_status()`).
 
+- Classify every public method in the header: entry point, or stopped-tolerant accessor. Rule of thumb: methods that can block are entry points; instantaneous snapshots may be stopped-tolerant (their last-known values stay meaningful for diagnostics). An unlabeled method reads as an oversight to a reviewer, and a missing `_throw_if_stopped` in an accessor body deserves a one-line "deliberate" comment (see SlabAllocator for the model).
+
 - In a context where the value of `is_stopped` is checked (e.g. entry point), if a blocking call is made (e.g. `cv.wait()`) then `is_stopped` is rechecked on wakeup. `X::stop()` should call `notify_all()` on each of `X`'s condition variables. In situations where this notification mechanism doesn't work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck `is_stopped` every millisecond.)
 
-- `X` is noncopyable, nonmoveable, and always accessed through a shared_ptr.
+- `X` is noncopyable, nonmoveable (delete all four special members explicitly), and normally accessed through a shared_ptr (pybind11 bindings use a shared_ptr holder -- see "pybind11 bindings" below). Rare exceptions -- a by-value member, or a stack-local instance in a single-threaded timing loop -- are acceptable when the owner provably outlives all users, and should say so in a comment.
 
 - If `X` contains pointers to other stoppable classes (any class `Y` defining `Y::stop()` is probably stoppable, please ask if it's unclear), then `X::stop(e)` should call `ptr->stop(e)` for each such pointer, forwarding the exception (see "Error reporting" below).
 
-- If any thread in the system throws an exception, then before the thread exits, an "exception handler of last resort" will call `ptr->stop()` on all stoppable classes to which the thread holds a pointer. (Not shown in the example code below.)
+- If a thread throws and nothing above it catches, its catch-all wrapper calls `stop(std::current_exception())` on the stoppable object(s) it works for, before exiting (see the worker wrapper in notes/thread_backed_class.md). (Not shown in the example code below.)
 
 The idea is that there are enough stoppable classes shared between threads that an exception in any thread will cascade its exception-text into all threads, and the server will shut down cleanly (all threads will exit).
 
@@ -79,6 +81,56 @@ Conventions for how the exception text reaches a human:
   as a bogus error on the holder. (Internal cascades already satisfy this:
   X::stop(e) forwards e down into its dependencies.)
 
+## Locking and condition variables
+
+Rules whose violations repeatedly turned up as real bugs in review:
+
+- One condition variable per wait-predicate. `notify_one()` is allowed ONLY
+  when every waiter on that cv has the same predicate and one event
+  satisfies exactly one waiter. If waiters with different predicates share
+  a cv, a targeted notify can wake the wrong waiter while the intended one
+  sleeps forever (lost wakeup). When in doubt, split the cv or use
+  `notify_all()`. `stop()` must `notify_all()` every cv.
+
+- Keep a COMPLETE "signaled on:" list next to each cv declaration. A wait
+  predicate is correct only if every state change it tests is followed by a
+  notify; an incomplete list hides missed-notify bugs (e.g. draining a
+  queue on a side path without notifying the waiter whose predicate just
+  became true). Reviewers should check the list against the code.
+
+- Never read a lock-protected member after dropping the lock -- snapshot it
+  into a local under the lock and use the local.
+
+- An "in progress" flag that other threads wait on (e.g. an init-underway
+  or creation-underway flag) must be reset on EVERY exit path, including
+  throws -- use a catch block or a scope guard. A flag left set wedges all
+  future waiters, even if a stop() coupling happens to mask it today.
+
+- Counters used in wait predicates are `long`, never `int`: signed overflow
+  is UB and a hung predicate in a long-running server.
+
+- If a blocking call genuinely cannot be interrupted by stop() (e.g.
+  `cudaEventSynchronize`), document the trade-off at the declaration: what
+  invariant bounds the wait in practice, and what happens in the
+  pathological case. (See the `blocking_sync` note in CudaEventRingbuf.hpp
+  for the model.)
+
+## pybind11 bindings
+
+- Stoppable classes use a shared_ptr holder:
+  `py::class_<X, std::shared_ptr<X>>`.
+
+- Any binding that can block (entry points that wait, `poll_from_python`)
+  releases the GIL via `py::call_guard<py::gil_scoped_release>()` -- the
+  waker may be another python thread, which can never run while the blocked
+  binding holds the GIL. See notes/pybind11.md for the full GIL rules.
+
+- Never `def_readonly` a lock-protected member: the read is unsynchronized
+  (a torn vector copy in the worst case). Route through a lock-taking
+  getter. Members published by a flag convention instead of a lock
+  (handler writes, then sets a mutexed "done" flag) may be `def_readonly`,
+  but document the convention and when reads are safe, at the binding.
+
 Here is a toy example of a stoppable class X with a fixed-size ring buffer, and two entry points `push()` and `pop()`.
 If `push()` is called and the ring buffer is full, the caller blocks until space is available.
 If `pop()` is called and the ring buffer is empty, the caller blocks until it becomes nonempty.
@@ -124,9 +176,11 @@ class X {
     }
 
 public:
-    // Noncopyable.
+    // Noncopyable, nonmovable.
     X(const X &) = delete;
     X &operator=(const X &) = delete;
+    X(X &&) = delete;
+    X &operator=(X &&) = delete;
 
     void stop(std::exception_ptr e = nullptr) const
     {
@@ -202,6 +256,36 @@ public:
     }
 };
 ```
+## Reviewer checklist
+
+When reviewing a class against this pattern, these are the failure modes to
+look for -- each occurred at least once in a past full review of the
+stoppable/thread-backed classes:
+
+1. Entry point missing the try/catch stop-and-rethrow wrapper, or a throw
+   path (argument check, precondition xassert) sitting BEFORE the wrapper /
+   outside the try.
+2. Entry point that silently succeeds, or returns stale data, on a stopped
+   instance -- with no comment claiming that's deliberate; or stopped
+   behavior that differs across modes (e.g. dummy vs normal).
+3. A stop() cascade that drops the exception: `ptr->stop()` instead of
+   `ptr->stop(e)`.
+4. Shared cv + notify_one() with waiters on different predicates (lost
+   wakeup); or a state change with no notify at all (missed wakeup).
+5. State read after unlock, or published outside the mutex -- thread
+   handles and grpc server handles are the recurring case (see
+   notes/thread_backed_class.md).
+6. An in-progress flag not reset on a throw path.
+7. A blocking wait that stop() cannot interrupt, undocumented.
+8. Control flow that string-matches exception text.
+9. Comment/code drift: stale method names, incomplete "signaled on" lists,
+   absolute claims ("can never hang", "only returns if stopped") that the
+   code does not implement. Verify every synchronization comment against
+   the code -- in past review, stale comments were about as common as real
+   bugs, and each one misleads the next reviewer.
+10. pybind11: missing shared_ptr holder; missing GIL release on a blocking
+    binding; `def_readonly` of a lock-protected member.
+
 Closely related: the "thread-backed class" is a special case of a stoppable class, in which objects have one or more worker threads
 whose lifetime is tied to the object lifetime. Every thread-backed class is stoppable, but not vice versa. See notes/thread_backed_class.md
 for more info.

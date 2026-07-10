@@ -130,6 +130,28 @@ The rules:
   implementation: check for python API usage, callbacks into python, and
   what can block.
 
+## Member bindings and thread-safety
+
+- Never `def_readonly` a lock-protected member: the read bypasses the lock,
+  which is a data race (a torn vector copy in the worst case) whenever
+  another thread can still write the member. Before binding a member, check
+  what protects it:
+  - Immutable after construction (const, or set only in the ctor):
+    `def_readonly` is fine.
+  - Written under a mutex after construction (e.g. set by an
+    initialize/handshake step or a worker thread): route through a
+    lock-taking C++ getter and bind with `def_property_readonly`
+    (see AssembledFrameAllocator's get_nfreq / get_beam_ids).
+  - Published via a flag convention rather than a lock (writer thread
+    fills the members, then sets a mutexed "done" flag): `def_readonly` is
+    acceptable, but add a comment at the binding saying when reads are safe
+    (see the FrbGrouper metadata block).
+
+- Stoppable / thread-backed classes (see notes/stoppable_class.md) use a
+  shared_ptr holder: `py::class_<X, std::shared_ptr<X>>`. This matches the
+  pattern's "accessed through a shared_ptr" rule and lets instances be
+  passed to other C++ components that retain a reference.
+
 ## Array conversion: streams, validation, overloads
 
 - Array conversion is zero-copy and does NO cuda stream synchronization:
