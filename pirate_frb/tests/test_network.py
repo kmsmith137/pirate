@@ -25,16 +25,20 @@ Goals of the network test:
 
  - test disconnect/reconnect logic and "missing" clients.
 
+NOTE: "stream" (StartStream/ShowStreams/CancelStream RPC) testing was
+temporarily removed from this test on 2026-07-10: it had race conditions
+that were a recurring source of spurious failures. Recover the removed
+code from git history when reinstating (it was introduced around commit
+9b0fd91, and removed in the commit that added this note).
+
 Run via: python -m pirate_frb test --net
 """
 
 import os
-import time
 import random
 import secrets
 import shutil
 
-import grpc
 import ksgpu
 import numpy as np
 
@@ -48,9 +52,11 @@ from ..core import (
     SlabAllocator,
     XEngineMetadata,
 )
-from ..pirate_pybind11 import FrbServer, constants
+
+from ..pirate_pybind11 import FrbServer
 from ..rpc import FrbSearchClient
-from ..rpc.grpc import frb_search_pb2
+
+from .utils import make_random_subscale_config, pick_receiver_worker_counts
 
 
 def _acq_filename(acqdir, beam_id, chunk):
@@ -58,7 +64,6 @@ def _acq_filename(acqdir, beam_id, chunk):
     (make_acq_relpath in src_lib/FileWriter.cpp):
     {acqdir}/frame_b{beam_id}_t{chunk}.asdf, unpadded decimal."""
     return f"{acqdir}/frame_b{beam_id}_t{chunk}.asdf"
-from .utils import make_random_subscale_config, pick_receiver_worker_counts
 
 
 class NetworkTester:
@@ -146,16 +151,10 @@ class NetworkTester:
         # RPC + tracking.
         self.rpc_client             = None
         self.file_sub               = None
-        self.stream_sub             = None
         self.safe_written_set       = None
         self.unsafe_written_set     = None
         self.unsafe_not_written_set = None
         self.filename_meta          = None
-        # Streams (StartStream RPC) exercises.
-        self.stream_group = None    # dict, set once by _maybe_start_streams
-        self.stream_must  = None    # set of (stream_name, filename), from _compute_stream_expectations
-        self.stream_must_chunks = None   # list of chunk indices underlying stream_must
-        self.expected_deactivations = 0  # python-side mirror of ShowStreams.num_deactivated_streams
 
     def __enter__(self):
         os.makedirs(self.ssd_dir, exist_ok=True)
@@ -175,8 +174,6 @@ class NetworkTester:
         try:
             if self.file_sub is not None:
                 self.file_sub.close()
-            if self.stream_sub is not None:
-                self.stream_sub.close()
             if self.rpc_client is not None:
                 self.rpc_client.close()
             if self.fxe is not None:
@@ -193,25 +190,10 @@ class NetworkTester:
         """Execute the test's post-build phases in order."""
         self._send_loop()
         self._post_loop_sync()
-        # Compute stream MUST-sets BEFORE _test_stream_misc (whose final
-        # cancel_all stops future stream captures; already-transitioned
-        # chunks have their writes queued regardless).
-        self._compute_stream_expectations()
-        self._test_stream_misc()
         self._print_debug_counters()
         self._drain_filesub()
-        self._drain_streamsub()
-        # Ring-history phases, in a deliberate order: the INACTIVE poll for
-        # stream_a/b/c must run while they are still in the inactive ring
-        # (deactivation budget: 4 entries so far, capacity >= 5), so the
-        # re-registration test (+1 entry) and the eviction subtest (which
-        # floods the ring) come after.
-        self._poll_streams_inactive()
-        self._test_stream_reregister()
-        self._test_stream_eviction()
         self._print_summary()
         self._verify_files()
-        self._verify_stream_files()
 
     # ---- Private builders ----
 
@@ -341,14 +323,6 @@ class NetworkTester:
         self.rpc_client = FrbSearchClient(f"127.0.0.1:{p['rpc_port']}")
         self.file_sub   = self.rpc_client.subscribe_files()
 
-        # Second subscription with subscribe_streams=True: receives BOTH
-        # WriteFiles-triggered and stream-triggered notifications (drained in
-        # _drain_streamsub, which ignores the stream_name=="" WriteFiles ones).
-        # Also implicitly tests that file_sub (subscribe_streams=False, the
-        # default) never sees stream files -- _drain_filesub asserts
-        # stream_name == "" on everything it receives.
-        self.stream_sub = self.rpc_client.subscribe_files(subscribe_streams=True)
-
         # Filenames tracked across all iouter turns. Three disjoint sets:
         #   safe_written_set       -- requested chunk was in [safe_lower, safe_upper];
         #                             server MUST schedule it (and we wait for notif).
@@ -423,10 +397,6 @@ class NetworkTester:
             # Issue rpc write with 1% probability.
             if random.random() < 0.01:
                 self._maybe_issue_write(iouter)
-
-            # Start the stream group once, a quarter of the way in (retries
-            # until the server is rb_initialized; no-op after success).
-            self._maybe_start_streams(iouter)
 
     def _maybe_issue_write(self, iouter):
         """Compute the safe chunk range, pick a request rectangle (with
@@ -543,365 +513,6 @@ class NetworkTester:
             else:
                 self.unsafe_not_written_set.add(fn)
 
-    # ---- Stream (StartStream RPC) exercises ----
-
-    def _maybe_start_streams(self, iouter):
-        """Start the test's stream group (once, a quarter of the way through
-        the send loop, so plenty of chunks transition while it is active):
-
-          - stream_a and stream_b share ONE acqdir -> every captured frame gets
-            duplicate save_paths, exercising the FileWriter NFS dup-skip
-            branch (both streams must still get their own success
-            notifications, file written once);
-          - stream_c uses a distinct MULTI-LEVEL acqdir -> exercises lazy
-            (two-deep) directory creation in the FileWriter threads, and
-            gives a second NFS name that must be a HARDLINK of the
-            shared-acqdir file (verified via st_ino in
-            _verify_stream_files).
-
-        All three streams: same beams, fpga range [0, end) with end chosen
-        K chunks past the highest chunk queued so far on the sender side.
-        Retries every turn until the server is rb_initialized.
-        """
-        if (self.stream_group is not None) or (iouter < 250):
-            return
-
-        p = self.p
-        K = 8   # chunks of stream lifetime beyond the highest queued chunk
-        spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
-        sel_beams = self.beam_ids[:min(2, len(self.beam_ids))]
-        acqdir_shared = "stream_shared"
-        acqdir_c      = "stream_c/sub"
-
-        # Highest chunk enqueued to any FakeXEngine worker (wpos[w] = next
-        # minichunk to enqueue). The streams' chunk range is [0, cq + K].
-        #
-        # Basing the range on the sender's queued position (rather than the
-        # server's current position, via GetStatus) makes the server-side
-        # "entirely in the past" rejection impossible instead of merely
-        # unlikely: the ring buffer only advances when new data (or skips)
-        # arrive, so rb_processed/nbeams <= cq + 1 <= cq + K -- and we are
-        # the thread that enqueues, so cq cannot grow before the RPC lands.
-        cq = (int(np.max(self.wpos)) - 1) // self.mpc
-        end_fpga = (cq + K + 1) * spc
-
-        try:
-            for stream_name, acqdir in [("stream_a", acqdir_shared),
-                                ("stream_b", acqdir_shared),
-                                ("stream_c", acqdir_c)]:
-                self.rpc_client.start_stream(
-                    stream_name=stream_name, acqdir=acqdir, beam_ids=sel_beams,
-                    fpga_seq_start=0, fpga_seq_end=end_fpga)
-        except grpc.RpcError as e:
-            # Server hasn't locked onto the X-engine stream yet; retry on a
-            # later turn. Anything else is a real failure.
-            if "initial fpga chunk" in e.details():
-                return
-            raise
-
-        # Registration boundary for the capture guarantee: chunks strictly
-        # greater than c0 transition entirely AFTER all three streams were
-        # registered, so they MUST be captured (chunk c0 itself is
-        # ambiguous -- it may have partially transitioned mid-registration).
-        c0 = self.rpc_client.get_status().rb_processed // p['nbeams']
-
-        self.stream_group = dict(
-            sel_beams=sel_beams, spc=spc, c0=c0, chunk_last=(cq + K),
-            acqdir_shared=acqdir_shared, acqdir_c=acqdir_c)
-
-    def _compute_stream_expectations(self):
-        """Compute the MUST-be-written set of (stream_name, filename) pairs, and
-        sanity-check the ShowStreams queued-counters.
-
-        Guarantee tested: every matching frame that TRANSITIONS
-        (assembled -> processed) while a stream is active must be written.
-        Chunks in [c0 + 1, min(chunk_last, c_end - 1)] provably transitioned
-        after registration and before now, so they are exactly the
-        guaranteed set (boundary chunk c0 and chunks still in flight are
-        ambiguous and merely tolerated by _drain_streamsub).
-        """
-        self.stream_must = set()
-        self.stream_must_chunks = []
-
-        if self.stream_group is None:
-            return
-        g = self.stream_group
-
-        c_end = self.rpc_client.get_status().rb_processed // self.p['nbeams']
-        lo = g['c0'] + 1
-        hi = min(g['chunk_last'], c_end - 1)
-        self.stream_must_chunks = list(range(lo, hi + 1))
-
-        for c in self.stream_must_chunks:
-            for b in g['sel_beams']:
-                fn_shared = _acq_filename(g['acqdir_shared'], b, c)
-                fn_c      = _acq_filename(g['acqdir_c'], b, c)
-                self.stream_must.add(("stream_a", fn_shared))
-                self.stream_must.add(("stream_b", fn_shared))
-                self.stream_must.add(("stream_c", fn_c))
-
-        # ShowStreams counter sanity. Streams may already be deactivated
-        # (expired) and listed from the inactive-ring history; either way,
-        # every stream listed at this point is one of stream_a/b/c. The
-        # R1/R2 increment-ordering rules guarantee written + errored <=
-        # queued at every instant.
-        must_files_per_stream = len(self.stream_must_chunks) * len(g['sel_beams'])
-        max_files_per_stream = (g['chunk_last'] + 1) * len(g['sel_beams'])
-
-        ss = self.rpc_client.show_streams()
-        assert list(ss.beam_ids) == self.beam_ids
-        for info in ss.streams:
-            assert info.args.stream_name in ("stream_a", "stream_b", "stream_c")
-            assert list(info.args.beam_ids) == g['sel_beams']
-            assert info.num_files_written + info.num_files_errored <= info.num_files_queued
-            assert must_files_per_stream <= info.num_files_queued <= max_files_per_stream
-
-    def _expect_rpc_error(self, fn, substr):
-        """Run fn(), assert it raises grpc.RpcError whose details contain substr."""
-        try:
-            fn()
-        except grpc.RpcError as e:
-            assert substr in e.details(), \
-                f"expected RPC error containing {substr!r}, got: {e.details()!r}"
-        else:
-            raise RuntimeError(f"expected RPC error containing {substr!r}, got success")
-
-    def _start_never_matching_stream(self, stream_name):
-        """Register a stream whose fpga range is in the far future, so it
-        never matches (no files, no notifications, zero counters). Used by
-        the cancel / ring-history subtests."""
-        p = self.p
-        rpc = self.rpc_client
-        spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
-        c_now = rpc.get_status().rb_processed // p['nbeams']
-        rpc.start_stream([self.beam_ids[0]], stream_name=stream_name,
-                         acqdir=stream_name,
-                         fpga_seq_start=(c_now + 10**6) * spc,
-                         fpga_seq_end=(c_now + 10**6 + 1) * spc)
-
-    def _test_stream_misc(self):
-        """StartStream/CancelStream validation failures + cancel semantics.
-        Runs post-loop (so the server is rb_initialized and well past chunk
-        0). The valid stream used for cancel tests lives in the far future,
-        so it never matches (no files, no notifications).
-
-        Ring-history budget: this phase adds exactly 1 + (3 if the stream
-        group ran) entries to the inactive ring (misc_x's cancel, plus
-        stream_a/b/c via expiry or cancel_all -- each stream deactivates
-        exactly once). Keeping the running total at 4 < CAP until after
-        _poll_streams_inactive is what guarantees the poll finds stream_a/b/c
-        still visible in the ring."""
-        rpc = self.rpc_client
-        p = self.p
-
-        CAP = constants.inactive_file_stream_capacity
-        assert CAP >= 5, (
-            "test's stream-history budget assumes inactive_file_stream_capacity >= 5; "
-            "if the capacity was decreased, revisit _test_stream_misc / _test_stream_eviction")
-
-        spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
-        beam0 = self.beam_ids[0]
-        c_now = rpc.get_status().rb_processed // p['nbeams']
-        ACTIVE   = frb_search_pb2.STREAM_STATUS_ACTIVE
-        INACTIVE = frb_search_pb2.STREAM_STATUS_INACTIVE
-
-        def start(**kw):
-            kw.setdefault('stream_name', 'misc_x')
-            kw.setdefault('acqdir', 'misc_dir')
-            kw.setdefault('beam_ids', [beam0])
-            # Default range: far future (never matches).
-            kw.setdefault('fpga_seq_start', (c_now + 10**6) * spc)
-            kw.setdefault('fpga_seq_end', (c_now + 10**6 + 1) * spc)
-            return lambda: rpc.start_stream(**kw)
-
-        # Validation failures.
-        self._expect_rpc_error(start(stream_name=''), "stream_name must be a nonempty")
-        self._expect_rpc_error(start(beam_ids=[]), "beam_ids must be nonempty")
-        self._expect_rpc_error(start(beam_ids=[999999]), "unknown beam_id")
-        self._expect_rpc_error(start(beam_ids=[beam0, beam0]), "appears more than once")
-        self._expect_rpc_error(start(acqdir=''), "acqdir must be a nonempty")
-        self._expect_rpc_error(start(acqdir='/abs/path'), "invalid acqdir")
-        self._expect_rpc_error(start(acqdir='../evil'), "invalid acqdir")
-        self._expect_rpc_error(start(acqdir='foo//bar'), "invalid acqdir")
-        self._expect_rpc_error(start(acqdir='foo/'), "invalid acqdir")
-        self._expect_rpc_error(start(acqdir='.'), "invalid acqdir")
-        self._expect_rpc_error(start(fpga_seq_start=100, fpga_seq_end=50), "invalid fpga_seq range")
-        if c_now >= 1:
-            # Range [0, spc) covers only chunk 0, long since processed.
-            self._expect_rpc_error(start(fpga_seq_start=0, fpga_seq_end=spc),
-                                   "entirely in the past")
-
-        # Cancel semantics: register a (never-matching) stream, then cancel it.
-        start()()   # succeeds
-        infos = [i for i in rpc.show_streams().streams if i.args.stream_name == 'misc_x']
-        assert len(infos) == 1 and infos[0].status == ACTIVE
-        self._expect_rpc_error(start(), "already in use")           # duplicate stream_name
-        assert rpc.cancel_stream(stream_name='misc_x') == 1
-        self.expected_deactivations += 1
-
-        # The cancelled stream remains VISIBLE, now in the inactive-ring
-        # history: it never matched anything, so its counters are all zero
-        # and it is INACTIVE (nothing to drain) immediately, cancelled=true.
-        infos = [i for i in rpc.show_streams().streams if i.args.stream_name == 'misc_x']
-        assert len(infos) == 1
-        info = infos[0]
-        assert info.status == INACTIVE
-        assert info.cancelled
-        assert info.num_files_queued == 0
-        assert info.num_files_written == 0
-        assert info.num_files_errored == 0
-        assert info.started_at_unix_ns > 0
-        assert info.deactivated_at_unix_ns >= info.started_at_unix_ns
-
-        # Cancelling an already-inactive stream is an error (with a clearer
-        # message than the never-heard-of case).
-        self._expect_rpc_error(lambda: rpc.cancel_stream(stream_name='misc_x'),
-                               "already inactive")
-        self._expect_rpc_error(lambda: rpc.cancel_stream(stream_name='no_such_stream'),
-                               "no active stream")
-
-        # cancel_all: 0 to 3 streams may remain active (stream_a/b/c, if not
-        # yet expired). Their MUST files (computed in
-        # _compute_stream_expectations, before this) already transitioned,
-        # so their writes are queued regardless -- cancellation never
-        # retracts queued work. Either way, all of a/b/c have been
-        # deactivated (expiry or cancel) once this returns.
-        n = rpc.cancel_stream(cancel_all=True)
-        assert 0 <= n <= 3
-        if self.stream_group is not None:
-            self.expected_deactivations += 3
-
-        ss = rpc.show_streams()
-        assert all(i.status != ACTIVE for i in ss.streams)
-        assert ss.num_deactivated_streams == self.expected_deactivations
-
-    def _poll_streams_inactive(self):
-        """Post-drain strong check: poll ShowStreams until stream_a/b/c all
-        report INACTIVE (deactivated + fully drained), then verify their
-        final counters: errored == 0 and written == queued. No timeout,
-        matching the drain philosophy: all three are already deactivated
-        (the misc phase ended with cancel_all), and every queued write
-        eventually completes. Visibility is guaranteed by the ring budget:
-        only 4 deactivations have happened, and CAP >= 5."""
-        if self.stream_group is None:
-            return
-        INACTIVE = frb_search_pb2.STREAM_STATUS_INACTIVE
-        stream_names = ("stream_a", "stream_b", "stream_c")
-
-        while True:
-            ss = self.rpc_client.show_streams()
-            infos = [i for i in ss.streams if i.args.stream_name in stream_names]
-            assert len(infos) == 3, \
-                f"stream_a/b/c not all visible in stream history: {[i.args.stream_name for i in infos]}"
-            if all(i.status == INACTIVE for i in infos):
-                break
-            time.sleep(0.05)
-
-        for i in infos:
-            # 'cancelled' may be True (the misc-phase cancel_all got there
-            # first) or False (expired naturally) -- both are valid.
-            assert i.num_files_errored == 0
-            assert i.num_files_written == i.num_files_queued
-            assert i.started_at_unix_ns > 0
-            assert i.deactivated_at_unix_ns >= i.started_at_unix_ns
-
-    def _test_stream_reregister(self):
-        """stream_name uniqueness is enforced against ACTIVE streams only:
-        re-registering an stream_name that still sits in the inactive-ring
-        history succeeds. (Run AFTER _poll_streams_inactive: this adds a
-        5th ring entry, eating the a/b/c visibility margin.)"""
-        rpc = self.rpc_client
-        assert any(i.args.stream_name == 'misc_x' for i in rpc.show_streams().streams)
-        self._start_never_matching_stream('misc_x')   # succeeds despite the ring entry
-        assert rpc.cancel_stream(stream_name='misc_x') == 1
-        self.expected_deactivations += 1
-        assert rpc.show_streams().num_deactivated_streams == self.expected_deactivations
-
-    def _test_stream_eviction(self):
-        """Ring eviction + the mass-cancellation property: a single
-        cancel_all over MORE than CAP streams cancels ALL of them
-        (num_cancelled counts every one), while the display history retains
-        only the newest CAP. Runs LAST among the stream subtests: it evicts
-        stream_a/b/c and misc_x from the ring (their checks are done)."""
-        rpc = self.rpc_client
-        CAP = constants.inactive_file_stream_capacity
-        ACTIVE   = frb_search_pb2.STREAM_STATUS_ACTIVE
-        INACTIVE = frb_search_pb2.STREAM_STATUS_INACTIVE
-
-        names = [f"evict_{i}" for i in range(CAP + 1)]
-        for name in names:
-            self._start_never_matching_stream(name)
-
-        n = rpc.cancel_stream(cancel_all=True)
-        assert n == CAP + 1
-        self.expected_deactivations += CAP + 1
-
-        ss = rpc.show_streams()
-        assert all(i.status != ACTIVE for i in ss.streams)
-
-        # cancel_all deactivates in registration order, so evict_0 is the
-        # oldest ring entry and the one evicted; the ring lists
-        # evict_1 .. evict_CAP, oldest to newest.
-        inactive = [i for i in ss.streams if i.status != ACTIVE]
-        assert len(inactive) == CAP
-        assert [i.args.stream_name for i in inactive] == names[1:]
-        for i in inactive:
-            assert i.status == INACTIVE   # never matched -> nothing to drain
-            assert i.cancelled
-            assert i.num_files_queued == 0
-            assert i.num_files_written == 0
-            assert i.num_files_errored == 0
-
-        # The monotone total counts evict_0 too -- this is how a client
-        # detects that history was dropped.
-        assert ss.num_deactivated_streams == self.expected_deactivations
-
-    def _drain_streamsub(self):
-        """Wait until every MUST (stream_name, filename) pair has arrived via
-        the subscribe_streams=True subscription. This subscription also
-        receives WriteFiles-triggered notifications (stream_name == ""), which
-        are skipped; stream notifications beyond the MUST set (boundary
-        chunk c0, chunks still transitioning during the drain) are
-        tolerated. No timeout, matching _drain_filesub."""
-        received = set()
-        while not received.issuperset(self.stream_must):
-            filename, error_message, stream_name = next(self.stream_sub)
-            if stream_name == "":
-                continue    # WriteFiles-triggered; drained/checked in _drain_filesub
-            if error_message:
-                raise RuntimeError(
-                    f"stream_sub: write failed for {filename!r} "
-                    f"(stream_name={stream_name!r}): {error_message}")
-            assert stream_name in ("stream_a", "stream_b", "stream_c"), \
-                f"unexpected stream_name {stream_name!r} (misc_x streams never match)"
-            received.add((stream_name, filename))
-
-    def _verify_stream_files(self):
-        """Byte-verify the MUST stream files, and check the dedup/hardlink
-        behavior: for each captured (chunk, beam), stream_a/stream_b's shared
-        acqdir and stream_c's distinct acqdir must be ONE inode on NFS
-        (bytes written once; second name is a hardlink; duplicate second
-        entry for the shared acqdir skipped)."""
-        if self.stream_group is None:
-            print("    streams: not exercised (server was not rb_initialized by iouter=250)")
-            return
-        g = self.stream_group
-
-        for c in self.stream_must_chunks:
-            for b in g['sel_beams']:
-                fn_shared = _acq_filename(g['acqdir_shared'], b, c)
-                fn_c      = _acq_filename(g['acqdir_c'], b, c)
-
-                # Full content check on one name; inode identity makes it
-                # cover the other.
-                self._verify_one_file(fn_c, c, b)
-
-                st_shared = os.stat(os.path.join(self.nfs_dir, fn_shared))
-                st_c      = os.stat(os.path.join(self.nfs_dir, fn_c))
-                assert st_shared.st_ino == st_c.st_ino, \
-                    f"expected hardlink: {fn_shared!r} and {fn_c!r} have different inodes"
-                assert st_shared.st_nlink >= 2
-
     # ---- Post-loop phases ----
 
     def _post_loop_sync(self):
@@ -943,11 +554,11 @@ class NetworkTester:
         received_filenames = set()
         while not received_filenames.issuperset(scheduled):
             filename, error_message, stream_name = next(self.file_sub)
-            # file_sub was opened with the default subscribe_streams=False,
-            # so stream-triggered files (nonempty stream_name) must never
-            # appear here.
+            # All writes in this test are WriteFiles-triggered; a nonempty
+            # stream_name would mark a stream-triggered write (StartStream
+            # RPC, not exercised here).
             assert stream_name == "", \
-                f"subscribe_streams=False subscriber received stream file {filename!r} (stream_name={stream_name!r})"
+                f"unexpected stream-triggered notification {filename!r} (stream_name={stream_name!r})"
             if error_message:
                 raise RuntimeError(
                     f"FileSubscriber: write failed for {filename!r}: "
@@ -959,7 +570,6 @@ class NetworkTester:
         print(f"    safe, written:       {len(self.safe_written_set)}")
         print(f"    unsafe, written:     {len(self.unsafe_written_set)}")
         print(f"    unsafe, not written: {len(self.unsafe_not_written_set)}")
-        print(f"    stream, must-write:  {len(self.stream_must)}")
 
     def _verify_files(self):
         """Read every scheduled file back from disk and byte-compare its
@@ -974,8 +584,7 @@ class NetworkTester:
 
     def _verify_one_file(self, filename, chunk_idx, beam_id):
         """Read one written file back from NFS and byte-compare its contents
-        to the expected buffer reconstructed from client-side state. Shared
-        by _verify_files (WriteFiles) and _verify_stream_files (streams).
+        to the expected buffer reconstructed from client-side state.
         """
         expected_data, expected_so = self._compute_expected_data(chunk_idx, beam_id)
         path = os.path.join(self.nfs_dir, filename)
