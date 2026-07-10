@@ -404,12 +404,21 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           // Low-level acquire/release (raw stream_ptr). Underscore-prefixed to mark them
           // internal: the Python interface is the get_input()/get_output() context managers
           // (pirate_frb/pybind11_injections.py), which wrap these.
+          //
+          // All four release the GIL. Each can block on progress driven by a DIFFERENT
+          // python thread (e.g. acquire_output blocks until the producer thread calls
+          // release_input_and_launch_dd_kernels for the same seq_id, and vice versa
+          // for back-pressure), so holding the GIL here would deadlock a multithreaded
+          // producer/consumer driver. The lambda bodies are pure C++ (safe to run
+          // GIL-free); the returned Array/Outputs views are converted to python after
+          // the GIL is reacquired.
           .def("_acquire_input",
                [](GpuDedisperser &self, long seq_id, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                    return self.acquire_input(seq_id, stream);
                },
                py::arg("seq_id"), py::arg("stream_ptr"),
+               py::call_guard<py::gil_scoped_release>(),
                "Acquire the input buffer for seq_id and return a\n"
                "ksgpu.Array view of it. After this call 'stream' sees an empty\n"
                "input buffer ready for writing; the returned view is valid until\n"
@@ -419,13 +428,15 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                    self.release_input_and_launch_dd_kernels(seq_id, stream);
                },
-               py::arg("seq_id"), py::arg("stream_ptr"))
+               py::arg("seq_id"), py::arg("stream_ptr"),
+               py::call_guard<py::gil_scoped_release>())
           .def("_acquire_output",
                [](GpuDedisperser &self, long consumer_id, long seq_id, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                    return self.acquire_output(consumer_id, seq_id, stream);
                },
                py::arg("consumer_id"), py::arg("seq_id"), py::arg("stream_ptr"),
+               py::call_guard<py::gil_scoped_release>(),
                "Acquire the output buffer for (consumer_id, seq_id) and return\n"
                "an Outputs object holding list-of-Array views of out_max and out_argmax.\n"
                "After this call 'stream' sees a full output buffer ready for reading;\n"
@@ -436,7 +447,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                    self.release_output(consumer_id, seq_id, stream);
                },
-               py::arg("consumer_id"), py::arg("seq_id"), py::arg("stream_ptr"))
+               py::arg("consumer_id"), py::arg("seq_id"), py::arg("stream_ptr"),
+               py::call_guard<py::gil_scoped_release>())
           .def_static("test_random", &GpuDedisperser::test_random)
           .def_static("test_one", &GpuDedisperser::test_one,
                py::arg("config"),

@@ -309,8 +309,12 @@ void register_core_bindings(pybind11::module &m)
             "Returns the established value (target_time_chunk on the first call,\n"
             "previously-established value on subsequent calls).")
         .def("wait_for_initial_chunk", &AssembledFrameAllocator::wait_for_initial_chunk,
+            py::call_guard<py::gil_scoped_release>(),
             "Block until some caller has invoked initialize_initial_chunk(),\n"
-            "then return the established initial_time_chunk.")
+            "then return the established initial_time_chunk.\n\n"
+            "Releases the GIL: the waker may be another python thread (which\n"
+            "could never run if we held the GIL while blocked), or a Receiver\n"
+            "reader thread whose arrival time is unbounded.")
         .def("get_frame_set", &AssembledFrameAllocator::get_frame_set,
             py::arg("consumer_id"),
             py::call_guard<py::gil_scoped_release>(),
@@ -328,20 +332,26 @@ void register_core_bindings(pybind11::module &m)
                 return std::const_pointer_cast<XEngineMetadata>(m);
             },
             py::arg("blocking"),
+            py::call_guard<py::gil_scoped_release>(),
             "Get the canonical XEngineMetadata pointer.\n\n"
             "Args:\n"
             "    blocking: If True, wait until any consumer has called initialize().\n\n"
             "Returns:\n"
             "    XEngineMetadata object (or None if non-blocking and not yet set).\n"
-            "    Note: freq_channels is cleared on the canonical copy.")
+            "    Note: freq_channels is cleared on the canonical copy.\n\n"
+            "Releases the GIL: with blocking=True, the initializer may be another\n"
+            "python thread, or a Receiver reader thread whose arrival time is\n"
+            "unbounded.")
         .def("num_free_frames", &AssembledFrameAllocator::num_free_frames,
             py::arg("permissive") = false,
             "Number of frames currently available in the pool.\n\n"
             "Throws in dummy mode or if not initialized.")
         .def("num_total_frames", &AssembledFrameAllocator::num_total_frames,
             py::arg("blocking") = false,
+            py::call_guard<py::gil_scoped_release>(),
             "Total number of frames in the pool.\n\n"
-            "Throws in dummy mode or if not initialized.")
+            "Throws in dummy mode or if not initialized. Releases the GIL\n"
+            "(with blocking=True, waits for the slab size to be established).")
         .def("is_initialized", &AssembledFrameAllocator::is_initialized,
             "Non-blocking poll: True iff the underlying memory is ready to\n"
             "serve allocations (delegates through SlabAllocator to BumpAllocator).")
