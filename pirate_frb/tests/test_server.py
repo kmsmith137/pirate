@@ -524,7 +524,7 @@ class ServerTester:
         # Real bugs produce order-unity errors, so the looser bound loses
         # essentially no detection power.
         prec = p['config'].dtype.precision
-        self.eps = [5.0 * prec * math.sqrt(tr.primary_tree_index + tr.total_rank() + 2)
+        self.eps = [ 5.0 * prec * math.sqrt(tr.primary_tree_index + tr.total_rank() + 2) for tr in trees ]
 
         # First child message: the handshake echo (arrives once the producer's
         # handshake completes; the queue orders it before any outputs).
