@@ -51,6 +51,15 @@ service FrbSearch {
   // Write files to disk for specified beams and time range. Filenames are
   // always {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf -- the caller
   // chooses only the acquisition directory 'acqdir'.
+  //
+  // The range may extend into the future ("future writes"): chunks not yet
+  // processed are scheduled automatically, up to the server config's
+  // future_write_max_samples (rounded up to a whole chunk) past the current
+  // processing threshold (GetStatusResponse.rb_streamed); the excess is
+  // silently truncated. Future files appear in filename_list immediately,
+  // and are written -- and reported to SubscribeFiles subscribers, with
+  // empty stream_name, like any WriteFiles-triggered write -- as the data
+  // is processed.
   rpc WriteFiles (WriteFilesRequest) returns (WriteFilesResponse);
 
   // Subscribe to a stream of filenames. The connection can be closed by the client
@@ -104,10 +113,11 @@ message GetStatusResponse {
   int64 num_bytes = 2;        // Total bytes received (summed over receivers)
   int64 rb_start = 3;         // First frame_id in ring buffer
   int64 rb_reaped = 4;        // (Last reaped frame_id) + 1
-  int64 rb_processed = 5;     // (Last GPU-processed frame_id) + 1; rpc-writeable upper bound
-  int64 rb_assembled = 6;     // (Last fully-assembled frame_id) + 1
-  int64 rb_end = 7;           // (Last frame_id in ring buffer) + 1
-  int64 num_free_frames = 8;  // Number of available frames in AssembledFrameAllocator
+  int64 rb_processed = 5;     // (Last GPU-processed frame_id) + 1
+  int64 rb_streamed = 6;      // Defines split between WriteFiles and streams
+  int64 rb_assembled = 7;     // (Last fully-assembled frame_id) + 1
+  int64 rb_end = 8;           // (Last frame_id in ring buffer) + 1
+  int64 num_free_frames = 9;  // Number of available frames in AssembledFrameAllocator
 }
 
 // Request message for GetConfig.
@@ -165,9 +175,10 @@ message GetXEngineMetadataResponse {
 // The server translates this to its internal (absolute) time-chunk indices.
 message WriteFilesRequest {
   uint32 protocol_version = 1;        // client's PROTOCOL_VERSION_CURRENT (see ProtocolVersion)
-  repeated int64 beams = 2;           // List of beam IDs to write
+  repeated int64 beams = 2;           // List of beam IDs to write (duplicates are rejected)
   int64 fpga_seq_start = 3;           // Start of fpga-seq range (inclusive)
-  int64 fpga_seq_end = 4;             // End of fpga-seq range (exclusive)
+  int64 fpga_seq_end = 4;             // End of fpga-seq range (exclusive); may extend into the
+                                      // future, up to future_write_max_samples (see rpc comment)
 
   // Acquisition directory. Files are written to
   //     {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf
@@ -179,7 +190,14 @@ message WriteFilesRequest {
 
 // Response message for WriteFiles
 message WriteFilesResponse {
-  repeated string filename_list = 1;  // List of filenames that will be written
+  // List of filenames that will be written, sorted ascending by (time chunk,
+  // then order of the beam in the request). Includes "future" files (not yet
+  // written; delivered to SubscribeFiles subscribers as they land) -- these
+  // are unconditional promises. Truncation of the requested range (past data
+  // that has left the ring buffer, or future data beyond
+  // future_write_max_samples) is reported only implicitly, via the missing
+  // filenames.
+  repeated string filename_list = 1;
 }
 
 // Request message for SubscribeFiles (opens the notification stream).

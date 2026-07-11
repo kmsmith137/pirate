@@ -241,6 +241,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Number of beams per batch")
           .def_readwrite("num_active_batches", &DedispersionConfig::num_active_batches,
                "Number of active batches")
+          .def_readwrite("future_write_max_samples", &DedispersionConfig::future_write_max_samples,
+               "Max time samples a WriteFiles RPC may extend into the future (0 = no future writes)")
           // Testing parameter
           .def_readwrite("max_gpu_clag", &DedispersionConfig::max_gpu_clag,
                "Testing parameter: limit on-GPU ring buffer clag (default=10000)")

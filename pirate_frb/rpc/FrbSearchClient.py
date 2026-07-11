@@ -58,7 +58,8 @@ class FrbSearchClient:
             - num_bytes: Total bytes received (summed over receivers)
             - rb_start: First frame_id in ring buffer
             - rb_reaped: (Last reaped frame_id) + 1
-            - rb_processed: (Last GPU-processed frame_id) + 1; rpc-writeable upper bound
+            - rb_processed: (Last GPU-processed frame_id) + 1
+            - rb_streamed: Defines split between WriteFiles and streams
             - rb_assembled: (Last fully-assembled frame_id) + 1
             - rb_end: (Last frame_id in ring buffer) + 1
             - num_free_frames: Number of available frames in AssembledFrameAllocator
@@ -210,13 +211,22 @@ class FrbSearchClient:
         Files are written to {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf,
         where nfs_root comes from the server config (self.config.nfs_dir).
 
+        The range may extend into the future ("future writes"): chunks not
+        yet processed are scheduled automatically, up to the server config's
+        future_write_max_samples (rounded up to a whole chunk) past the
+        current processing threshold (get_status().rb_streamed); the excess
+        is silently truncated. Future files appear in the returned list
+        immediately -- the list is a promise whose tail lands later -- and
+        are written (and reported to subscribe_files() subscribers, like any
+        write_files-triggered write) as the data is processed.
+
         Note: I recommend using a unique acqdir for each multibeam event (or stream).
         Our postprocessing tools generally assume contiguous time chunks (or close to
         that) within an acqdir. If the same file ends up in multiple acqdirs,
         hardlinks will be used to avoid copying and save space.
 
         Args:
-            beams: List of beam IDs to write.
+            beams: List of beam IDs to write (duplicates are rejected).
             fpga_seq_start: Start of the fpga-seq range (inclusive).
             fpga_seq_end: End of the fpga-seq range (exclusive). Files are
                 written for all chunks overlapping
@@ -226,7 +236,12 @@ class FrbSearchClient:
                 components); may be multi-level, e.g. "foo/bar/baz".
 
         Returns:
-            List of filenames that will be written (nfs_root-relative).
+            List of filenames that will be written (nfs_root-relative),
+            sorted ascending by (time chunk, then order of the beam in
+            'beams'). Truncation of the requested range (past data that has
+            left the ring buffer, or future data beyond
+            future_write_max_samples) is reported only implicitly, via the
+            missing filenames.
         """
         request = frb_search_pb2.WriteFilesRequest(
             protocol_version=_PROTOCOL_VERSION,
@@ -253,10 +268,13 @@ class FrbSearchClient:
         Files are written to {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf,
         where nfs_root comes from the server config (self.config.nfs_dir).
 
-        Complements write_files() (one-shot, retroactive within the ring
-        buffer): a stream captures each frame at the moment it is processed,
-        so chunks that were already processed when StartStream arrives are
-        NOT captured retroactively, even if fpga_seq_start is in the past.
+        Complements write_files() (one-shot; retroactive within the ring
+        buffer, plus a bounded look-ahead via future_write_max_samples): a
+        stream captures each frame at the moment it is processed, can run
+        arbitrarily far into the future, and its fpga_seq range can be
+        open-ended -- but chunks that were already processed when
+        StartStream arrives are NOT captured retroactively, even if
+        fpga_seq_start is in the past.
 
         Note: I recommend using a unique acqdir for each multibeam event (or stream).
         Our postprocessing tools generally assume contiguous time chunks (or close to

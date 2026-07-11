@@ -12,8 +12,9 @@
 
 #include <ksgpu/string_utils.hpp>  // tuple_str()
 
-#include <algorithm> // find (stream beam matching), remove_if (stream expiry)
+#include <algorithm> // find (stream beam matching), remove_if (stream expiry), sort (WriteFiles response)
 #include <chrono>    // duration<double> (processing-thread delay) + ms (MonitorRingbuf timeout)
+#include <tuple>     // WriteFiles response entries (chunk, beam position, filename)
 #include <thread>    // this_thread::sleep_for (processing-thread delay)
 #include <iomanip>   // setprecision (throughput suffix on the per-chunk line)
 #include <iostream>
@@ -499,6 +500,7 @@ void FrbServer::_worker_main(int receiver_index)
         rb_start        = initial_frame_id;
         rb_reaped       = initial_frame_id;
         rb_processed    = initial_frame_id;
+        rb_streamed     = initial_frame_id;
         rb_assembled    = initial_frame_id;
         rb_end          = initial_frame_id;
         rb_initialized  = true;
@@ -1165,30 +1167,50 @@ void FrbServer::_frame_finalizing_thread_main()
         // transition from "assembled" to "processed". Stream capture happens
         // in three phases:
         //
-        //   A. Under 'mutex': deactivate expired streams (move to the
-        //      inactive ring), record matching (frame, stream) pairs, bump
-        //      the queued-counters. rb_processed is NOT advanced yet.
+        //   A. Under 'mutex': deactivate expired streams (named streams move
+        //      to the inactive ring, anonymous streams are erased), record
+        //      matching (frame, stream) pairs, bump the queued-counters, and
+        //      advance rb_streamed. rb_processed is NOT advanced yet.
         //   B. Off-lock: expand patterns and queue the writes
         //      (_queue_frame_write; disk I/O happens on FileWriter threads,
         //      process_frame only enqueues).
         //   C. Under 'mutex': advance rb_processed.
         //
-        // Queueing BEFORE advancing rb_processed (B before C) is load-bearing,
-        // not cosmetic: the reaper only reaps frames with frame_id <
-        // rb_processed, and AssembledFrame::_reap_locked() refuses to free
-        // data while an unwritten save_path is pending. So pushing the
-        // save_path first guarantees the reaper can never free the data
-        // underneath a pending stream write. (Data is stable here: the
-        // batch's H2G copy has completed, in both the normal and
-        // --no-dedispersion paths.) A corollary: _queue_frame_write's
-        // reaped-and-never-written skip can never fire on this path, so
-        // every counted match really is queued.
+        // Two ordering constraints are load-bearing here, not cosmetic:
+        //
+        //  (i) Matching and the rb_streamed advance are ATOMIC (same Phase-A
+        //      critical section). This makes rb_streamed an exact
+        //      past/future boundary for WriteFiles future writes: for an
+        //      anonymous stream registered (under 'mutex') when rb_streamed
+        //      == X, every frame < X was already decision-committed here
+        //      (the RPC thread writes those directly), and every frame >= X
+        //      is examined by exactly one later Phase A -- batches tile the
+        //      frame_id axis -- all of which see the stream (it is erased
+        //      only after expiring, i.e. after the sweep passes its
+        //      chunk_last). So each promised file is written exactly once.
+        //
+        // (ii) Queueing BEFORE advancing rb_processed (B before C): the
+        //      reaper only reaps frames with frame_id < rb_processed, and
+        //      AssembledFrame::_reap_locked() refuses to free data while an
+        //      unwritten save_path is pending. So pushing the save_path
+        //      first guarantees the reaper can never free the data
+        //      underneath a pending stream write. (Data is stable here: the
+        //      batch's H2G copy has completed, in both the normal and
+        //      --no-dedispersion paths.) A corollary: _queue_frame_write's
+        //      reaped-and-never-written skip can never fire on this path,
+        //      so every counted match really is queued.
         stream_matches.clear();
 
         // Phase A.
         {
             unique_lock<std::mutex> lock(mutex);
             if (is_stopped) return;
+
+            // Single-advancer sanity check: rb_streamed is advanced only in
+            // this thread's Phase A, and rb_processed only in its Phase C,
+            // so they must agree here (the transient rb_streamed ==
+            // rb_processed + B state exists only between the two phases).
+            xassert(rb_streamed == rb_processed);
 
             // Each fired event was preceded by B inner-loop iterations in the
             // processing_thread, each gated on rb_curr < rb_assembled, so this
@@ -1202,13 +1224,13 @@ void FrbServer::_frame_finalizing_thread_main()
                 throw std::runtime_error(ss.str());
             }
 
-            if (!active_streams.empty()) {
+            if (!active_streams.empty() || !anonymous_streams.empty()) {
                 // All B frames lie in this chunk: rb_processed is a multiple
                 // of B, and B divides nbeams.
                 long ichunk = rb_processed / nbeams;
 
-                // Deactivate expired streams (they can never match chunk >=
-                // ichunk); they remain visible in the inactive ring.
+                // Deactivate expired named streams (they can never match
+                // chunk >= ichunk); they remain visible in the inactive ring.
                 for (const auto &st : active_streams) {
                     if (st->chunk_last < ichunk)
                         _deactivate_stream(st, /*cancelled=*/ false);
@@ -1219,26 +1241,50 @@ void FrbServer::_frame_finalizing_thread_main()
                                    { return st->chunk_last < ichunk; }),
                     active_streams.end());
 
+                // Expired anonymous streams are simply erased (no inactive
+                // ring, no deactivation bookkeeping): they are a WriteFiles
+                // implementation detail, not user-visible streams. The
+                // FileStream object stays alive via AssembledFrame::save_paths
+                // references until its queued writes drain.
+                anonymous_streams.erase(
+                    std::remove_if(anonymous_streams.begin(), anonymous_streams.end(),
+                                   [&](const std::shared_ptr<FileStream> &st)
+                                   { return st->chunk_last < ichunk; }),
+                    anonymous_streams.end());
+
+                // Match one frame against one (named or anonymous) stream.
+                auto match_stream = [&](long frame_id, int ibeam, const std::shared_ptr<FileStream> &st) {
+                    if ((ichunk < st->chunk_first) || (ichunk > st->chunk_last))
+                        return;
+                    auto it = std::find(st->beam_indices.begin(), st->beam_indices.end(), ibeam);
+                    if (it == st->beam_indices.end())
+                        return;
+
+                    // Rule R1 (see FileStream's thread-safety comment):
+                    // counted at MATCH time, before the Phase-B push, so
+                    // written + errored <= queued at every instant, and
+                    // equality on a deactivated stream means "fully
+                    // drained".
+                    st->num_files_queued++;
+                    long rb_slot = frame_id % long(frame_ringbuf.size());
+                    stream_matches.emplace_back(frame_ringbuf[rb_slot], st);
+                };
+
                 for (long frame_id = rb_processed; frame_id < rb_processed + B; frame_id++) {
                     int ibeam = int(frame_id % nbeams);
-                    for (const auto &st : active_streams) {
-                        if ((ichunk < st->chunk_first) || (ichunk > st->chunk_last))
-                            continue;
-                        auto it = std::find(st->beam_indices.begin(), st->beam_indices.end(), ibeam);
-                        if (it == st->beam_indices.end())
-                            continue;
-
-                        // Rule R1 (see FileStream's thread-safety comment):
-                        // counted at MATCH time, before the Phase-B push, so
-                        // written + errored <= queued at every instant, and
-                        // equality on a deactivated stream means "fully
-                        // drained".
-                        st->num_files_queued++;
-                        long rb_slot = frame_id % long(frame_ringbuf.size());
-                        stream_matches.emplace_back(frame_ringbuf[rb_slot], st);
-                    }
+                    for (const auto &st : active_streams)
+                        match_stream(frame_id, ibeam, st);
+                    for (const auto &st : anonymous_streams)
+                        match_stream(frame_id, ibeam, st);
                 }
             }
+
+            // Advance the stream-capture threshold: this batch's capture
+            // decisions are now committed, in this same critical section
+            // (load-bearing constraint (i) above). No cv notify: nothing
+            // waits on rb_streamed (see the declaration comment).
+            rb_streamed += B;
+            _check_rb_invariants();
         }
 
         // Phase B.
@@ -1673,6 +1719,7 @@ void FrbRpcService::_GetStatus(const fs::GetStatusRequest *request, fs::GetStatu
         response->set_rb_start(s->rb_start);
         response->set_rb_reaped(s->rb_reaped);
         response->set_rb_processed(s->rb_processed);
+        response->set_rb_streamed(s->rb_streamed);
         response->set_rb_assembled(s->rb_assembled);
         response->set_rb_end(s->rb_end);
     }
@@ -1756,10 +1803,21 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
     // the FileWriter's roots.
     validate_acqdir(request->acqdir());
 
-    vector<int> beam_indices;
+    vector<long> beam_ids;      // in request order
+    vector<int> beam_indices;   // parallel: position in metadata->beam_ids
+    beam_ids.reserve(request->beams_size());
     beam_indices.reserve(request->beams_size());
 
-    vector<shared_ptr<AssembledFrame>> local_frames;
+    // "Past" frames (frame_id < rb_streamed), collected from the ring buffer
+    // under the lock and queued off-lock. Each frame is paired with the
+    // position of its beam in the request, for the response sort below.
+    vector<pair<shared_ptr<AssembledFrame>,int>> local_frames;
+
+    // Response entries: (time_chunk_index, beam position in request,
+    // filename). Future filenames are appended under the lock (they must
+    // match the anonymous stream registered there); past filenames are
+    // appended off-lock, after each successful push. Sorted at the end.
+    vector<tuple<long,int,string>> entries;
 
     {
         unique_lock<std::mutex> server_lock(s->mutex);
@@ -1777,13 +1835,14 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
         // Chunk t spans fpga seqs [t*seq_per_chunk, (t+1)*seq_per_chunk),
         // measured from fpga seq 0 (time_chunk_index is absolute), so fpga seq f
         // lives in chunk floor(f / seq_per_chunk). Map the half-open fpga range
-        // to the inclusive range of chunks it touches.
+        // to the inclusive range of chunks it touches. The (fpga_seq_end - 1)
+        // form avoids overflow when fpga_seq_end = INT64_MAX.
         long seq_per_chunk = s->frame_allocator->time_samples_per_chunk * s->metadata->seq_per_frb_time_sample;
         xassert(seq_per_chunk > 0);
         long min_time_chunk_index = fpga_seq_start / seq_per_chunk;
         long max_time_chunk_index = (fpga_seq_end - 1) / seq_per_chunk;
 
-        // Convert beam_ids to beam_indices.
+        // Convert beam_ids to beam_indices (unknown or repeated beams are errors).
         for (int i = 0; i < request->beams_size(); i++) {
             long beam_id = request->beams(i);
             auto it = s->beam_id_to_index.find(beam_id);
@@ -1792,61 +1851,129 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
                 ss << "WriteFiles: unknown beam_id " << beam_id;
                 throw runtime_error(ss.str());
             }
+            if (std::find(beam_ids.begin(), beam_ids.end(), beam_id) != beam_ids.end()) {
+                stringstream ss;
+                ss << "WriteFiles: beam_id " << beam_id << " appears more than once";
+                throw runtime_error(ss.str());
+            }
+            beam_ids.push_back(beam_id);
             beam_indices.push_back(it->second);
         }
 
-        // Get frames from the ring buffer. We compute frame_id =
-        // time_chunk_index * nbeams + beam_index directly for each
-        // (time_chunk_index, beam_index) pair, rather than iterating over the
-        // entire ring buffer and checking each frame's metadata. This is
-        // O(num_time_chunks * num_beams) instead of O(ringbuf_size).
+        // Past/future boundary: rb_streamed, NOT rb_processed. Frames below
+        // rb_streamed have already been examined by the stream-capture hook
+        // (and their H2G copies have completed -- the same stability
+        // condition under which the hook itself queues writes for them), so
+        // the RPC thread writes them directly. Frames at/above rb_streamed
+        // are guaranteed to be examined by a future hook iteration that sees
+        // any anonymous stream registered in this critical section -- see
+        // the exactly-once comment in _frame_finalizing_thread_main.
+        long boundary = s->rb_streamed;
+        long ichunk_next = boundary / rb_nbeams;   // first not-fully-captured chunk
+
+        // ---- Past part: get frames from the ring buffer. ----
         //
-        // Use rb_processed (not rb_assembled) as the upper bound: frames in
-        // [rb_processed, rb_assembled) are fully assembled but the GPU may
-        // still be mutating them, so they are NOT rpc-writeable.
-        long rb_size      = s->frame_ringbuf.size();
-        long rb_start     = s->rb_start;
-        long rb_processed = s->rb_processed;
+        // We compute frame_id = time_chunk_index * nbeams + beam_index
+        // directly for each (time_chunk_index, beam_index) pair, rather than
+        // iterating over the entire ring buffer and checking each frame's
+        // metadata. This is O(num_time_chunks * num_beams) instead of
+        // O(ringbuf_size).
+        long rb_size  = s->frame_ringbuf.size();
+        long rb_start = s->rb_start;
 
-        min_time_chunk_index = max(min_time_chunk_index, rb_start / rb_nbeams);
-        max_time_chunk_index = min(max_time_chunk_index, rb_processed / rb_nbeams);
+        long past_min_chunk = max(min_time_chunk_index, rb_start / rb_nbeams);
+        long past_max_chunk = min(max_time_chunk_index, ichunk_next);
 
-        long num_time_chunks = max(0L, max_time_chunk_index - min_time_chunk_index + 1);
+        long num_time_chunks = max(0L, past_max_chunk - past_min_chunk + 1);
         local_frames.reserve(num_time_chunks * beam_indices.size());
 
-        for (long t = min_time_chunk_index; t <= max_time_chunk_index; t++) {
-            for (int b : beam_indices) {
-                long frame_id = t * rb_nbeams + b;
-                if ((frame_id >= rb_start) && (frame_id < rb_processed)) {
+        for (long t = past_min_chunk; t <= past_max_chunk; t++) {
+            for (size_t i = 0; i < beam_indices.size(); i++) {
+                long frame_id = t * rb_nbeams + beam_indices[i];
+                if ((frame_id >= rb_start) && (frame_id < boundary)) {
                     long rb_slot = frame_id % rb_size;
-                    local_frames.push_back(s->frame_ringbuf[rb_slot]);
+                    local_frames.emplace_back(s->frame_ringbuf[rb_slot], int(i));
+                }
+            }
+        }
+
+        // ---- Future part ("future writes"). ----
+        //
+        // Chunks at/above ichunk_next may be scheduled up to
+        // future_write_max_samples into the future, rounded UP to a whole
+        // number of chunks; the excess is silently truncated (the caller
+        // sees the truncation only through the shorter filename list).
+        long fwms = s->params.config_prefilled.future_write_max_samples;
+        long tspc = s->frame_allocator->time_samples_per_chunk;
+        long n_future_chunks = (fwms + tspc - 1) / tspc;   // round up
+
+        long chunk_first = max(min_time_chunk_index, ichunk_next);
+        long chunk_last  = min(max_time_chunk_index, ichunk_next + n_future_chunks - 1);
+
+        if (chunk_first <= chunk_last) {
+            // Register an anonymous stream: captured by the
+            // frame_finalizing_thread's hook exactly like a named stream,
+            // but with stream_name = "" (impossible for real streams),
+            // invisible to ShowStreams, and immune to CancelStream. Note the
+            // nominal rectangle [chunk_first, chunk_last] x beam_ids may
+            // include (chunk, beam) cells whose frames are already below
+            // 'boundary' (possible only for chunk == ichunk_next, when the
+            // boundary is mid-chunk). Those cells are DEAD -- the hook
+            // examines each frame exactly once and has already passed them
+            // -- and are handled by the past path above; the filename
+            // enumeration below skips them.
+            auto st = make_shared<FileStream>();
+            st->stream_name = "";   // anonymous marker
+            st->acqdir = request->acqdir();
+            st->beam_ids = beam_ids;
+            st->beam_indices = beam_indices;
+            st->fpga_seq_start = fpga_seq_start;
+            // Effective (post-truncation) endpoint, recorded for debugging.
+            st->fpga_seq_end = min(fpga_seq_end, (ichunk_next + n_future_chunks) * seq_per_chunk);
+            st->chunk_first = chunk_first;
+            st->chunk_last = chunk_last;
+            st->started_at_unix_ns = _unix_time_ns();
+            s->anonymous_streams.push_back(st);
+
+            // Promised future filenames. Returned unconditionally: the hook
+            // is guaranteed to capture each of these frames exactly once.
+            for (long t = chunk_first; t <= chunk_last; t++) {
+                for (size_t i = 0; i < beam_indices.size(); i++) {
+                    long frame_id = t * rb_nbeams + beam_indices[i];
+                    if (frame_id < boundary)
+                        continue;   // dead cell: handled by the past path
+                    entries.emplace_back(t, int(i), make_acq_relpath(request->acqdir(), beam_ids[i], t));
                 }
             }
         }
     }
 
-    // Process frames in reverse order: push filenames onto frame->save_paths,
-    // then call file_writer->process_frame() (via _queue_frame_write, shared
-    // with the frame_finalizing_thread's stream-capture hook). Reverse order
-    // ensures that frames with lower time_chunk_index are processed last
-    // (and appear earlier in queues).
-
-    vector<string> filename_list;
-    filename_list.reserve(local_frames.size());
+    // Queue the past writes: push filenames onto frame->save_paths, then
+    // call file_writer->process_frame() (via _queue_frame_write, shared with
+    // the frame_finalizing_thread's stream-capture hook). The reverse
+    // iteration order controls FileWriter QUEUE order, not response order:
+    // it ensures that frames with lower time_chunk_index are processed last
+    // (and appear earlier in queues). The response is sorted ascending below.
 
     for (auto it = local_frames.rbegin(); it != local_frames.rend(); ++it) {
-        auto &frame = *it;
+        auto &frame = it->first;
         string filename = make_acq_relpath(request->acqdir(), frame);
 
         // stream = nullptr: WriteFiles-triggered (as opposed to a stream).
-        // Returns false if the frame was reaped without ever being written.
+        // Returns false if the frame was reaped without ever being written,
+        // in which case the filename is omitted from the response (past
+        // filenames are best-effort; future filenames are promises).
         if (s->_queue_frame_write(frame, filename, nullptr))
-            filename_list.push_back(std::move(filename));
+            entries.emplace_back(frame->time_chunk_index, it->second, std::move(filename));
     }
 
-    // Return filename list to RPC caller.
-    for (const auto &fn : filename_list)
-        response->add_filename_list(fn);
+    // Response: normalized to ascending (time chunk, then beam order within
+    // the request). The past and future parts can interleave within the
+    // boundary chunk (when rb_streamed is mid-chunk), so sort the combined
+    // list.
+    std::sort(entries.begin(), entries.end());
+    for (auto &e : entries)
+        response->add_filename_list(std::get<2>(e));
 }
 
 grpc::Status FrbRpcService::WriteFiles(
@@ -1993,7 +2120,10 @@ void FrbRpcService::_ShowStreams(const fs::ShowStreamsRequest *request, fs::Show
 
     // Deactivate expired streams here too (the capture hook only runs when
     // a batch completes, so without this an expired stream would linger as
-    // ACTIVE whenever data stalls).
+    // ACTIVE whenever data stalls). Anonymous streams (WriteFiles future
+    // writes) are deliberately NOT pruned here: they are never displayed,
+    // so a lingering expired entry during a data stall is invisible and
+    // harmless, and the capture hook erases it as soon as data flows.
     for (const auto &st : s->active_streams) {
         if (st->chunk_last < ichunk)
             s->_deactivate_stream(st, /*cancelled=*/ false);
@@ -2086,6 +2216,10 @@ void FrbRpcService::_CancelStream(const fs::CancelStreamRequest *request, fs::Ca
     // queued to the FileWriter still complete, and still notify
     // SubscribeFiles subscribers with this stream's stream_name. Cancelled
     // streams remain visible in ShowStreams (inactive ring history).
+    //
+    // Anonymous streams (WriteFiles future writes) are exempt from
+    // cancellation BY DESIGN, including cancel_all: they are WriteFiles
+    // promises (the returned filename list), not cancellable streams.
 
     if (request->cancel_all()) {
         // Deactivate ALL active streams, in active_streams (registration)

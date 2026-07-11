@@ -25,3 +25,6 @@ primary_trees:
   - {num_early_triggers: 0, max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
   - {num_early_triggers: 0, max_width:  8, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
   - {num_early_triggers: 0, max_width:  4, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+
+# No early triggers, so we allow WriteFiles to extend ~5K samples into the future, in case padding is desired.
+future_write_max_samples: 5000

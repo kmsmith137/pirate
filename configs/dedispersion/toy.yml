@@ -27,3 +27,8 @@ primary_trees:
   - {num_early_triggers: 0, max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 16, wt_time_downsampling: 16}
   - {num_early_triggers: 1, max_width:  8, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 16, wt_time_downsampling: 16}
   - {num_early_triggers: 2, max_width:  4, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 16, wt_time_downsampling: 16}
+
+# In this config, early triggers may extend 12*1024 samples into the future.
+# We add an extra ~2K samples, in case padding is desired.
+
+future_write_max_samples: 14000

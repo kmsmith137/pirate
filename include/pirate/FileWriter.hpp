@@ -150,25 +150,41 @@ void validate_acqdir(const std::string &acqdir);
 // "{acqdir}/frame_b{beam_id}_t{time_chunk_index}.asdf" (unpadded decimal).
 // This fixed naming scheme is parsed by python-side tooling
 // (pirate_frb.utils.list_acqdir's _FRAME_RE) -- keep the two in sync.
+// The (beam_id, time_chunk_index) overload exists for frames that do not
+// exist yet (WriteFiles future-write filename enumeration).
+std::string make_acq_relpath(const std::string &acqdir,
+                             long beam_id, long time_chunk_index);
 std::string make_acq_relpath(const std::string &acqdir,
                              const std::shared_ptr<AssembledFrame> &frame);
 
 
-// FileStream: one registered "stream" (StartStream RPC): frames matching
-// (beam_ids x chunk range) are queued for disk writing automatically as they
-// are processed. Created by FrbServer's StartStream handler; referenced by
-// FrbServer's active/inactive stream lists, and by AssembledFrame::SaveRequest
-// entries -- the latter is what gives the FileWriter worker threads access to
-// the stream throughout the file-writing code (to bump the written/errored
-// counters and tag notifications with stream_name).
+// FileStream: one registered "stream": frames matching (beam_ids x chunk
+// range) are queued for disk writing automatically as they are processed.
+// Serves two roles:
+//
+//   - Named streams (StartStream RPC): created by FrbServer's StartStream
+//     handler, listed in FrbServer::active_streams / inactive_streams,
+//     user-visible via ShowStreams / CancelStream.
+//   - Anonymous streams (stream_name == "", impossible for named streams):
+//     the implementation of WriteFiles "future writes". Created by the
+//     WriteFiles handler, listed in FrbServer::anonymous_streams, not
+//     user-visible. The deactivation fields (group (iii) below) are never
+//     written for them: expired entries are simply erased.
+//
+// Referenced by the FrbServer stream lists above, and by
+// AssembledFrame::SaveRequest entries -- the latter is what gives the
+// FileWriter worker threads access to the stream throughout the file-writing
+// code (to bump the written/errored counters and tag notifications with
+// stream_name; the empty stream_name makes an anonymous stream's
+// notifications look WriteFiles-triggered, which is exactly right).
 //
 // THREAD-SAFETY: the fields fall into three groups.
 //
-//   (i) Immutable after publication. Set by the StartStream handler before
-//       the stream is pushed into FrbServer::active_streams (a push made
-//       under FrbServer::mutex, which is also how every other thread
-//       discovers the stream) -- so any thread that can see the stream can
-//       read these freely.
+//   (i) Immutable after publication. Set by the creating handler before
+//       the stream is pushed into FrbServer::active_streams or
+//       anonymous_streams (a push made under FrbServer::mutex, which is
+//       also how every other thread discovers the stream) -- so any thread
+//       that can see the stream can read these freely.
 //
 //   (ii) Atomic counters, readable anywhere. Two ordering rules keep them
 //       sound (and must be preserved if new call sites are added):
@@ -191,12 +207,12 @@ std::string make_acq_relpath(const std::string &acqdir,
 struct FileStream
 {
     // (i) Immutable after publication.
-    std::string stream_name;          // nonempty; unique among ACTIVE streams
+    std::string stream_name;       // named: nonempty, unique among ACTIVE named streams; anonymous: ""
     std::string acqdir;            // acquisition directory (validated with validate_acqdir)
     std::vector<long> beam_ids;    // original args (nonempty, validated, distinct)
     std::vector<int> beam_indices; // parallel: position in metadata->beam_ids
-    long fpga_seq_start = 0;       // original args (echoed by ShowStreams)
-    long fpga_seq_end = 0;
+    long fpga_seq_start = 0;       // original args (echoed by ShowStreams); on an anonymous
+    long fpga_seq_end = 0;         //   stream, fpga_seq_end is the EFFECTIVE (post-truncation) endpoint
     long chunk_first = 0;          // derived: fpga_seq_start / seq_per_chunk
     long chunk_last = 0;           // derived: (fpga_seq_end-1) / seq_per_chunk, INCLUSIVE
     long started_at_unix_ns = 0;   // wall clock, stamped by StartStream

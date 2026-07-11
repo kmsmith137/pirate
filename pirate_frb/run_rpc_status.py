@@ -29,7 +29,7 @@ class _ServerMonitor:
             while not self.stop_event.is_set():
                 status = self.client.get_status()
                 print(f"[{self.addr}] connections={status.num_connections}, "
-                      f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_processed},{status.rb_assembled},{status.rb_end}], "
+                      f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_processed},{status.rb_streamed},{status.rb_assembled},{status.rb_end}], "
                       f"free={status.num_free_frames}")
 
                 self._sleep_one_second()

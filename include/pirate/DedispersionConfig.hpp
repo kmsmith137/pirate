@@ -83,6 +83,13 @@ struct DedispersionConfig
     long beams_per_batch = 0;
     long num_active_batches = 0;
 
+    // Bound on how far a WriteFiles RPC may extend past the current
+    // processing threshold, in time samples; the excess is silently
+    // truncated. Rounded up to a whole number of chunks by the FrbServer.
+    // 0 = WriteFiles requests never extend into the future (but note that
+    // StartStream requests can always extend arbitrarily far).
+    long future_write_max_samples = 0;
+
     // For testing: limit on-gpu ring buffers to (clag) <= max_gpu_clag.
     // Set to 10000 to disable (this is the default).
     long max_gpu_clag = 10000;

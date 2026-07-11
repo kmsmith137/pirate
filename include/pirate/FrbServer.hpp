@@ -182,7 +182,8 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // into the ring buffer, dedisperser publish, every rb_processed advance,
     // and grouper handshake completion. Several wait predicates (RPC
     // handlers, MonitorRingbuf pushes, poll_from_python) rely on this list
-    // being complete.
+    // being complete. (The rb_streamed advance is deliberately NOT on this
+    // list -- no wait predicate reads rb_streamed; see its declaration.)
     mutable std::mutex mutex;
     mutable std::condition_variable cv;
     mutable bool is_stopped = false;
@@ -208,7 +209,8 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // Ring buffer has length (params.ringbuf_nchunks * metadata.get_nbeams()).
     std::vector<std::shared_ptr<AssembledFrame>> frame_ringbuf;
 
-    // ----- Streams (StartStream / ShowStreams / CancelStream RPCs) -----
+    // ----- Streams (StartStream / ShowStreams / CancelStream RPCs, and
+    //       the anonymous streams behind WriteFiles future writes) -----
 
     // A "stream" (pirate::FileStream, defined in FileWriter.hpp): frames
     // matching (beam_ids x chunk range) are queued for disk writing by the
@@ -223,6 +225,18 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // are deactivated lazily, by the frame_finalizing_thread's capture hook
     // and by the ShowStreams handler; CancelStream deactivates eagerly.
     std::vector<std::shared_ptr<FileStream>> active_streams;
+
+    // Anonymous streams: an implementation detail of WriteFiles "future
+    // writes" (requests extending past rb_streamed), NOT user-visible
+    // streams. Created by the WriteFiles RPC handler (under 'mutex');
+    // matched by the frame_finalizing_thread's capture hook exactly like
+    // active_streams. stream_name is "" (impossible for real streams --
+    // StartStream rejects empty names), so FileWriter notifications for
+    // their captures look WriteFiles-triggered, which they are. Protected
+    // by 'mutex'. Invisible to ShowStreams; not cancellable by CancelStream
+    // (including cancel_all); expired entries are simply erased by the
+    // capture hook, never retained in inactive_streams.
+    std::vector<std::shared_ptr<FileStream>> anonymous_streams;
 
     // Ring of the last inactive_file_stream_capacity deactivated streams
     // (expired or cancelled), retained for ShowStreams history. Protected
@@ -292,6 +306,7 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     long rb_start        = 0;   // (first frame_id in ringbuf)
     long rb_reaped       = 0;   // (last reaped frame_id) + 1
     long rb_processed    = 0;   // (last GPU-processed frame_id) + 1
+    long rb_streamed     = 0;   // defines split between WriteFiles and streams
     long rb_assembled    = 0;   // (last fully-assembled frame_id) + 1
     long rb_end          = 0;   // (last frame_id in ringbuf) + 1
     bool rb_initialized  = false;
@@ -342,7 +357,8 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
         xassert(rb_start >= 0);
         xassert(rb_start     <= rb_reaped);
         xassert(rb_reaped    <= rb_processed);
-        xassert(rb_processed <= rb_assembled);
+        xassert(rb_processed <= rb_streamed);
+        xassert(rb_streamed  <= rb_assembled);
         xassert(rb_assembled <= rb_end);
         xassert(rb_end <= rb_start + long(frame_ringbuf.size()));
     }

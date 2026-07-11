@@ -372,6 +372,7 @@ void DedispersionConfig::validate() const
     xassert_divisible(beams_per_gpu, beams_per_batch);  // assumed for convenience
     xassert_le(num_active_batches * beams_per_batch, beams_per_gpu);
     xassert_ge(max_gpu_clag, 0);
+    xassert_ge(future_write_max_samples, 0);
 
     // Validate frequency_subband_counts.
     // FIXME add check that pf_rank is not too large for tree_index=0.
@@ -615,6 +616,14 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
 
     emitter << YAML::Key << "num_active_batches" << YAML::Value << num_active_batches;
 
+    if (verbose)
+        emitter << YAML::Newline;
+
+    emitter << YAML::Key << "future_write_max_samples" << YAML::Value << future_write_max_samples;
+
+    if (verbose)
+        emitter << YAML::Comment("max samples a WriteFiles request may extend into the future (0 = no future writes)");
+
     if (max_gpu_clag < 10000) {
         if (verbose)
             emitter << YAML::Newline;
@@ -681,6 +690,7 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     ret.beams_per_gpu = f.get_scalar<long> ("beams_per_gpu");
     ret.beams_per_batch = f.get_scalar<long> ("beams_per_batch");
     ret.num_active_batches = f.get_scalar<long> ("num_active_batches");
+    ret.future_write_max_samples = f.get_scalar<long> ("future_write_max_samples");  // required (no default)
     ret.max_gpu_clag = f.get_scalar<long> ("max_gpu_clag", 10000);
 
     ret.frequency_subband_counts = f.get_vector<long> ("frequency_subband_counts");
@@ -742,6 +752,9 @@ void DedispersionConfig::emit_cpp(ostream &os, const char *name, int indent) con
        << s << "beams_per_gpu = " << beams_per_gpu << ";\n"
        << s << "beams_per_batch = " << beams_per_batch << ";\n"
        << s << "num_active_batches = " << num_active_batches << ";\n";
+
+    if (future_write_max_samples > 0)
+        os << s << "future_write_max_samples = " << future_write_max_samples << ";\n";
 
     if (max_gpu_clag < 10000)
         os << s << "max_gpu_clag = " << max_gpu_clag << ";\n";
@@ -880,6 +893,11 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     long max_delay = pow2(ret.toplevel_tree_rank + npri - 1);
     long max_clag = (max_delay / ret.time_samples_per_chunk) + 1;
     ret.max_gpu_clag = rand_int(0, max_clag+1);
+
+    // future_write_max_samples: zero 25% of the time (future writes disabled),
+    // else uniform in [0, 4*time_samples_per_chunk] (i.e. up to ~4 chunks).
+    ret.future_write_max_samples = (rand_uniform(0.0, 1.0) < 0.25) ? 0
+        : rand_int(0, 4 * ret.time_samples_per_chunk + 1);
 
     // For later convenience: set nt_divisor to the largest power of 2
     // which divides time_samples_per_chunk.

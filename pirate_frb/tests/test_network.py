@@ -25,6 +25,12 @@ Goals of the network test:
 
  - test disconnect/reconnect logic and "missing" clients.
 
+ - test WriteFiles "future writes": requests extending past the current
+     processing threshold (rb_streamed) return the promised filenames
+     immediately, every promised file is written EXACTLY once (delivered
+     via SubscribeFiles with empty stream_name), and the future part is
+     truncated at future_write_max_samples (rounded up to a chunk).
+
 NOTE: "stream" (StartStream/ShowStreams/CancelStream RPC) testing was
 temporarily removed from this test on 2026-07-10: it had race conditions
 that were a recurring source of spurious failures. Recover the removed
@@ -35,10 +41,12 @@ Run via: python -m pirate_frb test --net
 """
 
 import os
+import time
 import random
 import secrets
 import shutil
 
+import grpc
 import ksgpu
 import numpy as np
 
@@ -125,6 +133,13 @@ class NetworkTester:
         # threads, no directories) -- those happen in __enter__.
         self.p = NetworkTester._random_params()
         self.run_id = secrets.token_hex(8)
+
+        # Future-writes geometry: the server's truncation horizon in chunks
+        # (future_write_max_samples rounded up to whole chunks, mirroring
+        # the WriteFiles handler). Zero => future writes disabled.
+        tspc = self.p['time_samples_per_chunk']
+        fwms = self.p['config'].future_write_max_samples
+        self.n_fut = (fwms + tspc - 1) // tspc
         self.ssd_dir = f"/dev/shm/pirate_test_network_ssd_{self.run_id}"
         self.nfs_dir = f"/dev/shm/pirate_test_network_nfs_{self.run_id}"
 
@@ -195,6 +210,7 @@ class NetworkTester:
         """Execute the test's post-build phases in order."""
         self._send_loop()
         self._post_loop_sync()
+        self._flush_promises()
         self._print_debug_counters()
         self._drain_filesub()
         self._print_summary()
@@ -329,11 +345,13 @@ class NetworkTester:
         self.file_sub   = self.rpc_client.subscribe_files()
 
         # Filenames tracked across all iouter turns. Three disjoint sets:
-        #   safe_written_set       -- requested chunk was in [safe_lower, safe_upper];
+        #   safe_written_set       -- requested chunk was in the GUARANTEED range
+        #                             [safe_lower, guaranteed_upper] (fully processed
+        #                             past, or within the future-write guarantee);
         #                             server MUST schedule it (and we wait for notif).
-        #   unsafe_written_set     -- requested chunk was outside the safe range,
+        #   unsafe_written_set     -- requested chunk was outside the guaranteed range,
         #                             server scheduled it anyway (we wait for notif).
-        #   unsafe_not_written_set -- requested chunk was outside the safe range,
+        #   unsafe_not_written_set -- requested chunk was outside the guaranteed range,
         #                             server did not schedule it (no notif expected).
         self.safe_written_set       = set()
         self.unsafe_written_set     = set()
@@ -341,6 +359,11 @@ class NetworkTester:
 
         # Per-filename (chunk_idx, beam_id) for the readback verification.
         self.filename_meta = {}
+
+        # Highest chunk index over all returned (scheduled) filenames; the
+        # flush tail (_flush_promises) must push processing past it so that
+        # every promised future file actually gets written. -1 = none yet.
+        self.max_promised_chunk = -1
 
     # ---- Send loop ----
 
@@ -404,25 +427,29 @@ class NetworkTester:
                 self._maybe_issue_write(iouter)
 
     def _maybe_issue_write(self, iouter):
-        """Compute the safe chunk range, pick a request rectangle (with
-        unsafe widening), issue write_files, and update tracking sets.
-        Early-returns if no chunk is requestable this turn.
+        """Compute the guaranteed chunk range, pick a request rectangle
+        (widened into the past and the future), issue write_files, and
+        update tracking sets. Early-returns if no chunk is requestable
+        this turn.
         """
         p = self.p
-        status = self.rpc_client.get_status()
+        nbeams = p['nbeams']
+        n_fut = self.n_fut
+
+        status = self.rpc_client.get_status()   # "S0" (pre-request snapshot)
         rb_start     = status.rb_start
         rb_processed = status.rb_processed
+        rb_streamed  = status.rb_streamed
         rb_assembled = status.rb_assembled
         rb_end       = status.rb_end
 
-        # Compute "safe" chunk range. Two bounds:
+        # Compute the GUARANTEED-returned chunk range. Three bounds:
         #
-        # UPPER (rb_processed): chunks must be FULLY GPU-PROCESSED
+        # PAST UPPER (rb_processed): chunks must be FULLY GPU-PROCESSED
         # (every beam in the chunk satisfies frame_id < rb_processed).
         # A chunk in [rb_processed, rb_assembled) is fully assembled
         # but the GPU may still be modifying frames there, so it is
-        # NOT rpc-writeable. A chunk in [rb_assembled, rb_end) is in
-        # the ringbuf but still being assembled by some receivers.
+        # NOT rpc-writeable via the past path.
         #
         # LOWER (rb_start, plus a future-bound): chunks must
         # be in the ringbuf at SERVER-processing time, not
@@ -431,25 +458,40 @@ class NetworkTester:
         # worst-case rb_start at server time using:
         #   max_future_rb_end <= (max_wpos // mpc - 1) * nbeams
         #   max_future_rb_start <= max_future_rb_end - rb_size
-        rb_size = p['ringbuf_nchunks'] * p['nbeams']
+        #
+        # FUTURE UPPER (rb_streamed + n_fut): the server's past/future
+        # boundary chunk at handling time (its rb_streamed // nbeams) is
+        # >= lb_chunk, since rb_streamed is monotone and S0 was read
+        # before the RPC was handled. So every requested chunk in
+        # [lb_chunk, lb_chunk + n_fut - 1] is guaranteed returned:
+        # promised by the future path if it lands at/above the boundary,
+        # written by the past path otherwise. (The past sub-case needs the
+        # chunk to still be in the ringbuf -- covered by safe_lower -- and
+        # relies on this test running NO reaper (dummy-mode allocator), so
+        # the past path's reaped-skip can never drop a filename.)
+        rb_size = p['ringbuf_nchunks'] * nbeams
 
         max_wpos = int(np.max(self.wpos))
         if max_wpos > 0:
             highest_enqueued_chunk = (max_wpos - 1) // self.mpc
-            rb_end_upper = max(rb_end, (highest_enqueued_chunk - 1) * p['nbeams'])
+            rb_end_upper = max(rb_end, (highest_enqueued_chunk - 1) * nbeams)
         else:
             rb_end_upper = rb_end
         rb_start_upper = max(rb_start, max(0, rb_end_upper - rb_size))
 
-        safe_lower = (rb_start_upper + p['nbeams'] - 1) // p['nbeams']  # ceil
-        safe_upper = (rb_processed   // p['nbeams']) - 1                # fully GPU-processed
+        safe_lower = (rb_start_upper + nbeams - 1) // nbeams  # ceil
+        safe_upper = (rb_processed   // nbeams) - 1           # fully GPU-processed
+        lb_chunk   = rb_streamed // nbeams                    # lower bound on server boundary chunk
 
-        # Widen the requested chunk range to also exercise "unsafe"
-        # chunks (which may or may not still be in the ringbuf at
-        # server processing time). The safe sub-range remains
-        # guaranteed-writable.
+        guaranteed_upper = max(safe_upper, lb_chunk + n_fut - 1)
+
+        # Widen the requested chunk range beyond the guaranteed range, to
+        # also exercise "unsafe" past chunks (which may or may not still be
+        # in the ringbuf at server processing time) and future chunks beyond
+        # the truncation horizon. The guaranteed sub-range remains
+        # guaranteed-returned.
         lower_bound = max(0, safe_lower - 2)
-        upper_bound = safe_upper + 2
+        upper_bound = safe_upper + n_fut + 3
         if lower_bound > upper_bound:
             return   # nothing to request this turn
 
@@ -459,10 +501,15 @@ class NetworkTester:
         chunk_min = random.randint(lower_bound, upper_bound - selected_nchunks + 1)
         chunk_max = chunk_min + selected_nchunks - 1
 
-        # Pick 1-3 random beams.
+        # Pick 1-3 random beams (random.sample: no duplicates, matching the
+        # server's duplicate-beam rejection).
         all_beam_ids = list(range(p['base_beam_id'], p['base_beam_id'] + p['nbeams']))
         selected_nbeams = random.randint(1, min(3, p['nbeams']))
         selected_beams = random.sample(all_beam_ids, selected_nbeams)
+
+        # Occasionally check that duplicate beam_ids are rejected.
+        if random.random() < 0.05:
+            self._check_duplicate_beam_rejection(iouter, selected_beams, chunk_min, chunk_max)
 
         # Include iouter in the acqdir so that filenames are unique across
         # iouter turns (same beam+chunk may be requested twice across
@@ -470,14 +517,12 @@ class NetworkTester:
         acqdir = f"test_{iouter}"
 
         # Compute the expected filenames client-side (via _acq_filename,
-        # which mirrors the server's make_acq_relpath). Tag each filename
-        # as safe or unsafe based on whether its chunk falls in
-        # [safe_lower, safe_upper].
-        expanded = {}   # filename -> is_safe
+        # which mirrors the server's make_acq_relpath).
+        expanded = {}   # filename -> chunk index
         for c in range(chunk_min, chunk_max + 1):
             for b in selected_beams:
                 fn = _acq_filename(acqdir, b, c)
-                expanded[fn] = (safe_lower <= c <= safe_upper)
+                expanded[fn] = c
                 self.filename_meta[fn] = (c, b)
 
         # write_files takes an fpga-seq range (half-open). Convert our inclusive
@@ -492,31 +537,84 @@ class NetworkTester:
             acqdir         = acqdir,
         )
 
+        # "S1" (post-request snapshot): rb_streamed is monotone and S1 is
+        # read after the RPC was handled, so the server's boundary chunk at
+        # handling time was <= ub_chunk.
+        ub_chunk = self.rpc_client.get_status().rb_streamed // nbeams
+
         returned = set(filenames)
 
-        # Safety check: every safe filename in the requested rectangle
-        # MUST be returned. Unsafe filenames may or may not be returned
-        # (both outcomes are accepted).
-        safe_this_call = {fn for fn, is_safe in expanded.items() if is_safe}
-        missing_safe = safe_this_call - returned
-        if missing_safe:
+        # Every returned filename must be in the requested rectangle, and
+        # the list must be sorted ascending by (chunk, beam order in the
+        # request) -- the normalization promised by the RPC.
+        assert returned <= set(expanded), \
+            f"write_files at iouter={iouter}: unrequested filenames {returned - set(expanded)}"
+        order = [(self.filename_meta[fn][0], selected_beams.index(self.filename_meta[fn][1]))
+                 for fn in filenames]
+        assert order == sorted(order), \
+            f"write_files at iouter={iouter}: response not sorted: {filenames}"
+
+        # Truncation check: nothing may be returned beyond the largest
+        # admissible horizon (sharpest when n_fut == 0, where nothing beyond
+        # the capture-boundary chunk may ever be returned; the max() covers
+        # that case, where the past path can still return the boundary
+        # chunk's already-captured beams but nothing above it).
+        never_lo = ub_chunk + max(n_fut - 1, 0) + 1
+        overpromised = {fn for fn in returned if expanded[fn] >= never_lo}
+        if overpromised:
             raise RuntimeError(
-                f"write_files at iouter={iouter}: missing safe filenames {missing_safe}, "
-                f"chunks=[{chunk_min}, {chunk_max}], beams={selected_beams}, "
-                f"safe range=[{safe_lower}, {safe_upper}], "
-                f"rb=(start={rb_start}, processed={rb_processed}, assembled={rb_assembled}, end={rb_end}), "
+                f"write_files at iouter={iouter}: filenames beyond the truncation horizon "
+                f"{overpromised}, chunks=[{chunk_min}, {chunk_max}], beams={selected_beams}, "
+                f"n_fut={n_fut}, ub_chunk={ub_chunk}, "
+                f"rb=(start={rb_start}, processed={rb_processed}, streamed={rb_streamed}, "
+                f"assembled={rb_assembled}, end={rb_end})"
+            )
+
+        # Guarantee check: every filename in the guaranteed range MUST be
+        # returned. Others may or may not be (both outcomes are accepted).
+        guaranteed_this_call = {fn for fn, c in expanded.items()
+                                if safe_lower <= c <= guaranteed_upper}
+        missing_guaranteed = guaranteed_this_call - returned
+        if missing_guaranteed:
+            raise RuntimeError(
+                f"write_files at iouter={iouter}: missing guaranteed filenames "
+                f"{missing_guaranteed}, chunks=[{chunk_min}, {chunk_max}], beams={selected_beams}, "
+                f"guaranteed range=[{safe_lower}, {guaranteed_upper}] "
+                f"(safe_upper={safe_upper}, lb_chunk={lb_chunk}, n_fut={n_fut}), "
+                f"rb=(start={rb_start}, processed={rb_processed}, streamed={rb_streamed}, "
+                f"assembled={rb_assembled}, end={rb_end}), "
                 f"rb_start_upper={rb_start_upper}, max_wpos={max_wpos}"
             )
 
-        # Bookkeeping for the three running totals.
-        self.safe_written_set.update(safe_this_call)
-        for fn, is_safe in expanded.items():
-            if is_safe:
+        # Bookkeeping for the three running totals, and the flush tail.
+        self.safe_written_set.update(guaranteed_this_call)
+        for fn, c in expanded.items():
+            if fn in guaranteed_this_call:
                 continue
             if fn in returned:
                 self.unsafe_written_set.add(fn)
             else:
                 self.unsafe_not_written_set.add(fn)
+        if returned:
+            self.max_promised_chunk = max(self.max_promised_chunk,
+                                          max(expanded[fn] for fn in returned))
+
+    def _check_duplicate_beam_rejection(self, iouter, selected_beams, chunk_min, chunk_max):
+        """write_files with a duplicated beam_id must fail (a validation
+        error, rejected before any server state is touched)."""
+        spc = self.p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
+        try:
+            self.rpc_client.write_files(
+                beams          = selected_beams + [selected_beams[0]],
+                fpga_seq_start = chunk_min * spc,
+                fpga_seq_end   = (chunk_max + 1) * spc,
+                acqdir         = f"dup_{iouter}",
+            )
+        except grpc.RpcError as e:
+            assert "more than once" in e.details(), e.details()
+        else:
+            raise RuntimeError(
+                f"write_files with duplicate beam_ids unexpectedly succeeded (iouter={iouter})")
 
     # ---- Post-loop phases ----
 
@@ -537,6 +635,55 @@ class NetworkTester:
                 else:
                     assert (status == FakeXEngine.STATUS_DROPPED) or (status == FakeXEngine.STATUS_ASSEMBLED)
 
+    def _flush_promises(self):
+        """Future-write promises can extend past the last chunk the send
+        loop delivered; without more data those frames would never be
+        processed, and _drain_filesub() would block forever. Send a "flush
+        tail" -- every worker, real sends, deliberately ignoring the dstate
+        fiction (enqueue_send after a disconnect reconnects, as in the main
+        loop) -- through chunk (max_promised_chunk + 1), whose minichunks
+        give the assembly path the beyond-the-chunk data it needs to
+        finalize max_promised_chunk itself. Then wait (bounded) for the
+        server to process past every promised chunk.
+        """
+        if self.max_promised_chunk < 0:
+            return
+
+        # First minichunk NOT sent: end of chunk (max_promised_chunk + 1).
+        target_mc = (self.max_promised_chunk + 2) * self.mpc
+
+        for w in range(self.nworkers):
+            for imc in range(int(self.wpos[w]), target_mc):
+                ichunk = imc // self.mpc
+                while self.fspos <= ichunk:
+                    self.framesets[self.fspos] = self.client_allocator.get_frame_set(consumer_id=0)
+                    self.framesets[self.fspos].randomize(normalize=False, gaussian=False)
+                    assert self.framesets[self.fspos].time_chunk_index == self.fspos
+                    self.fspos += 1
+                self.fxe.enqueue_send_minichunk(w, imc, self.framesets[ichunk])
+            if self.wpos[w] < target_mc:
+                self.wpos[w] = target_mc
+
+        for w in range(self.nworkers):
+            self.fxe.synchronize(w)
+
+        # All flush sends are acked (statuses terminal, as _verify_files
+        # requires); now wait for the server-side pipeline to process past
+        # every promised chunk, so that every promised file has been queued
+        # to the FileWriter before _drain_filesub() starts waiting.
+        deadline = time.time() + 60.0
+        nbeams = self.p['nbeams']
+        while True:
+            status = self.rpc_client.get_status()
+            if status.rb_processed // nbeams > self.max_promised_chunk:
+                return
+            if time.time() > deadline:
+                raise RuntimeError(
+                    f"_flush_promises: rb_processed={status.rb_processed} did not pass "
+                    f"max_promised_chunk={self.max_promised_chunk} within 60s"
+                )
+            time.sleep(0.05)
+
     def _print_debug_counters(self):
         # All acks drained by _post_loop_sync; the counters are now a
         # stable snapshot.
@@ -552,16 +699,25 @@ class NetworkTester:
 
     def _drain_filesub(self):
         """Wait until every scheduled filename has arrived via the
-        FileSubscriber stream. No timeout (future prompt will add one);
-        a stuck write will manifest as the test blocking forever here.
+        FileSubscriber stream, checking EXACTLY-ONCE delivery: each
+        scheduled filename gets exactly one notification (a duplicate would
+        mean a frame was written twice, e.g. by both the WriteFiles past
+        path and an anonymous future-write stream -- the bug class the
+        rb_streamed boundary excludes), and no unscheduled filename is ever
+        written (zero-times and never-promised writes are both bugs).
+        _flush_promises() has already pushed rb_processed past every
+        promised chunk, so this terminates. No timeout: a stuck write
+        manifests as the test blocking forever here.
         """
         scheduled = self.safe_written_set | self.unsafe_written_set
-        received_filenames = set()
-        while not received_filenames.issuperset(scheduled):
+        seen = set()
+        remaining = set(scheduled)
+        while remaining:
             filename, error_message, stream_name = next(self.file_sub)
-            # All writes in this test are WriteFiles-triggered; a nonempty
-            # stream_name would mark a stream-triggered write (StartStream
-            # RPC, not exercised here).
+            # All writes in this test are WriteFiles-triggered. Anonymous
+            # future-write streams notify with stream_name == "" as well --
+            # and must arrive WITHOUT subscribe_streams, which this
+            # subscription never sets.
             assert stream_name == "", \
                 f"unexpected stream-triggered notification {filename!r} (stream_name={stream_name!r})"
             if error_message:
@@ -569,12 +725,15 @@ class NetworkTester:
                     f"FileSubscriber: write failed for {filename!r}: "
                     f"{error_message}"
                 )
-            received_filenames.add(filename)
+            assert filename in scheduled, f"unscheduled file written: {filename!r}"
+            assert filename not in seen, f"duplicate write notification for {filename!r}"
+            seen.add(filename)
+            remaining.discard(filename)
 
     def _print_summary(self):
-        print(f"    safe, written:       {len(self.safe_written_set)}")
-        print(f"    unsafe, written:     {len(self.unsafe_written_set)}")
-        print(f"    unsafe, not written: {len(self.unsafe_not_written_set)}")
+        print(f"    guaranteed, written:  {len(self.safe_written_set)}")
+        print(f"    unsafe, written:      {len(self.unsafe_written_set)}")
+        print(f"    unsafe, not written:  {len(self.unsafe_not_written_set)}")
 
     def _verify_files(self):
         """Read every scheduled file back from disk and byte-compare its
@@ -691,6 +850,6 @@ def test_network():
         c = t.p['config']
         print(f"    config: toplevel_tree_rank={c.toplevel_tree_rank}, num_primary_trees={c.num_primary_trees},"
               f" beams_per_batch={c.beams_per_batch}, num_active_batches={c.num_active_batches},"
-              f" dtype={c.dtype}")
+              f" dtype={c.dtype}, future_write_max_samples={c.future_write_max_samples} (n_fut={t.n_fut})")
         t.run()
     print("    PASSED")

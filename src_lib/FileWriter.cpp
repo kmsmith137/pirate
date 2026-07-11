@@ -600,11 +600,17 @@ void validate_acqdir(const string &acqdir)
 
 // See FileWriter.hpp for the contract; keep in sync with the python-side
 // parser (pirate_frb.utils.list_acqdir's _FRAME_RE).
+string make_acq_relpath(const string &acqdir, long beam_id, long time_chunk_index)
+{
+    return acqdir + "/frame_b" + to_string(beam_id)
+                  + "_t" + to_string(time_chunk_index) + ".asdf";
+}
+
+
 string make_acq_relpath(const string &acqdir, const shared_ptr<AssembledFrame> &frame)
 {
     xassert(frame);
-    return acqdir + "/frame_b" + to_string(frame->beam_id)
-                  + "_t" + to_string(frame->time_chunk_index) + ".asdf";
+    return make_acq_relpath(acqdir, frame->beam_id, frame->time_chunk_index);
 }
 
 
