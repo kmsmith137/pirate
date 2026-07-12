@@ -342,6 +342,11 @@ def test_decode_argmax():
     kinfo = [(k.M, k.P, k.Dout, k.Dcore) for k in scout.pf_kernels]
     del scout
 
+    # Cross-check: tree.Dcore (the decode-facing copy) must match the reference
+    # peak-finders' Dcore (which flows through stage2_pf_params).
+    for itree in range(plan.ntrees):
+        assert plan.trees[itree].Dcore == kinfo[itree][3]
+
     _check_bad_tokens(plan, kinfo)
 
     # Per tree: one token per distinct decoded band (fmin, fmax), i.e. per subband.

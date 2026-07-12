@@ -1,6 +1,7 @@
 #include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"  // used in CoalescedDdKernel2::time()
 #include "../include/pirate/DedispersionPlan.hpp"    // used in CoalescedDdKernel2::time()
+#include "../include/pirate/DedispersionTree.hpp"    // used in _make_registry_key(dtype, tree)
 #include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
@@ -23,6 +24,31 @@ namespace pirate {
 #endif
 
 
+// Shared core of the _make_registry_key() overloads -- keeps the Tinner formula in one place.
+static CoalescedDdKernel2::RegistryKey _make_key(
+    const Dtype &dtype, long dd_rank, long max_kernel_width,
+    long nt_in, long nt_out, long nt_wt, const vector<long> &subband_counts)
+{
+    CoalescedDdKernel2::RegistryKey key;
+    key.dtype = dtype;
+    key.dd_rank = dd_rank;
+    key.Dout = xdiv(nt_in, nt_out);
+    key.Wmax = max_kernel_width;
+    key.subband_counts = subband_counts;
+
+    // Recall the definition of Tinner (used for weight layout, see comments in
+    // cuda_generator.PeakFinder.py):
+    //
+    //   Tinner = max(32*SW/nt_in_per_wt, 1)
+
+    long SW = xdiv(32, dtype.nbits);      // simd width
+    long nt_in_per_wt = xdiv(nt_in, nt_wt);
+    key.Tinner = (nt_in_per_wt < 32*SW) ? xdiv(32*SW, nt_in_per_wt) : 1;
+
+    return key;
+}
+
+
 // Static member function. See warning in CoalescedDdKernel2.hpp (returned key contains no Dcore).
 CoalescedDdKernel2::RegistryKey CoalescedDdKernel2::_make_registry_key(
     const DedispersionKernelParams &dd_params, const PeakFindingKernelParams &pf_params)
@@ -30,23 +56,17 @@ CoalescedDdKernel2::RegistryKey CoalescedDdKernel2::_make_registry_key(
     // Note: does not call pf_params.validate(), since get_registry_dcore() calls this
     // function while pf_params.Dcore is still unset.
 
-    RegistryKey key;
-    key.dtype = pf_params.dtype;
-    key.dd_rank = dd_params.dd_rank;
-    key.Dout = xdiv(pf_params.nt_in, pf_params.nt_out);
-    key.Wmax = pf_params.max_kernel_width;
-    key.subband_counts = pf_params.subband_counts;
+    return _make_key(pf_params.dtype, dd_params.dd_rank, pf_params.max_kernel_width,
+                     pf_params.nt_in, pf_params.nt_out, pf_params.nt_wt, pf_params.subband_counts);
+}
 
-    // Recall the definition of Tinner (used for weight layout, see comments in
-    // cuda_generator.PeakFinder.py):
-    //
-    //   Tinner = max(32*SW/nt_in_per_wt, 1)
 
-    long SW = xdiv(32, pf_params.dtype.nbits);      // simd width
-    long nt_in_per_wt = xdiv(pf_params.nt_in, pf_params.nt_wt);
-    key.Tinner = (nt_in_per_wt < 32*SW) ? xdiv(32*SW, nt_in_per_wt) : 1;
-
-    return key;
+// Static member function.
+CoalescedDdKernel2::RegistryKey CoalescedDdKernel2::_make_registry_key(
+    const ksgpu::Dtype &dtype, const DedispersionTree &tree)
+{
+    return _make_key(dtype, tree.dd_rank, tree.pf.max_width,
+                     tree.nt_ds, tree.nt_out, tree.nt_wt, tree.frequency_subbands.subband_counts);
 }
 
 
@@ -55,6 +75,17 @@ long CoalescedDdKernel2::get_registry_dcore(
     const DedispersionKernelParams &dd_params, const PeakFindingKernelParams &pf_params)
 {
     RegistryKey key = _make_registry_key(dd_params, pf_params);
+    return registry().get(key, /*init_kernel=*/ false).Dcore;
+}
+
+
+// Static member function. Returns 'fallback' if no matching kernel is compiled into this build.
+long CoalescedDdKernel2::get_registry_dcore(
+    const ksgpu::Dtype &dtype, const DedispersionTree &tree, long fallback)
+{
+    RegistryKey key = _make_registry_key(dtype, tree);
+    if (!registry().has_key(key))
+        return fallback;
     return registry().get(key, /*init_kernel=*/ false).Dcore;
 }
 

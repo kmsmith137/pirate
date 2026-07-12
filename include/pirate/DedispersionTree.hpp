@@ -35,6 +35,12 @@ struct DedispersionTree
     // Note that {dm,time}_downsampling can be 0 in the config, but are filled with nonzero values here.
     DedispersionConfig::PrimaryTree pf;
 
+    // Internal time-downsampling ("core") factor of this tree's peak-finding kernel; sets
+    // the time granularity of out_argmax tokens (see PeakFindingKernelParams::Dcore).
+    // A property of the compiled cdd2 kernel (registry value), NOT derivable from the
+    // config; equals pf.time_downsampling if the kernel is not compiled into this build.
+    long Dcore = 0;
+
     // Number of time profiles used in peak-finder. (Equal to 1 + 3*log2(pf.max_width).)
     long nprofiles = 0;
 

@@ -116,8 +116,9 @@ struct PeakFindingKernelParams
     // this member matches the compiled kernel.
     //
     // Dcore == 0 is invalid: validate() requires a power of two dividing (nt_in / nt_out).
-    // DedispersionPlan fills stage2_pf_params[:].Dcore from the cdd2 registry (falling back
-    // to time_downsampling if the kernel is not compiled into this build).
+    // DedispersionPlan fills stage2_pf_params[:].Dcore from DedispersionTree::Dcore (which
+    // the plan fills from the cdd2 registry, falling back to time_downsampling if the
+    // kernel is not compiled into this build).
     long Dcore = 0;
 
     void validate() const;  // throws an exception if anything is wrong

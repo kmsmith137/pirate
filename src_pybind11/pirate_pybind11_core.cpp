@@ -755,6 +755,10 @@ void register_core_bindings(pybind11::module &m)
                "Total tree rank (amb_rank + dd_rank).")
           .def_readonly("frequency_subbands", &DedispersionTree::frequency_subbands)
           .def_readonly("pf", &DedispersionTree::pf)
+          .def_readonly("Dcore", &DedispersionTree::Dcore,
+               "Internal time-downsampling of this tree's peak-finding kernel (sets out_argmax\n"
+               "token granularity). From the cdd2 kernel registry; equals pf.time_downsampling\n"
+               "if the kernel is not compiled into this build.")
           .def_readonly("nprofiles", &DedispersionTree::nprofiles)
           .def_readonly("ndm_out", &DedispersionTree::ndm_out)
           .def_readonly("ndm_wt", &DedispersionTree::ndm_wt)

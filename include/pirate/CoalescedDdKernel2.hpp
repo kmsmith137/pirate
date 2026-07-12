@@ -19,6 +19,8 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
+struct DedispersionTree;   // defined in DedispersionTree.hpp
+
 
 struct CoalescedDdKernel2
 {
@@ -158,6 +160,16 @@ struct CoalescedDdKernel2
     // Can throw an exception, if matching kernel is not found in registry.
     static long get_registry_dcore(const DedispersionKernelParams &dd_params,
                                    const PeakFindingKernelParams &pf_params);
+
+    // Tree-based variants, for plan-time (per-tree) lookup -- all key fields are
+    // computable from (dtype, tree). Unlike the two-argument get_registry_dcore()
+    // above (which throws), the three-argument form returns 'fallback' if no
+    // matching kernel is compiled into this build.
+    static RegistryKey _make_registry_key(const ksgpu::Dtype &dtype,
+                                          const DedispersionTree &tree);
+    static long get_registry_dcore(const ksgpu::Dtype &dtype,
+                                   const DedispersionTree &tree,
+                                   long fallback);
 };
 
 // Defined in CoalescedDdKernel2.cu
