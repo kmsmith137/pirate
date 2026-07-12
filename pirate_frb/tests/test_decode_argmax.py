@@ -11,12 +11,13 @@ overlaps the trial's support. Probes are injected directly into the toplevel
 tree-domain space (ReferenceDedisperser(tree_domain_input=True)), which is the
 space decode_argmax() reports in.
 
-Per sampled tuple (itree, token, idm, itout), with decoded (fmin, fmax, tlo, thi):
+Per sampled tuple (itree, token, idm, itout), with decoded (fmin, fmax, tlo, thi)
+-- where tlo/thi are EXCLUSIVE trailing edges (one past the last summed sample):
 
-  P1: one-hot at (fmin, tlo)      -> eval_tokens cell must be nonzero
-  P2: one-hot at (fmax, thi)      -> eval_tokens cell must be nonzero
+  P1: one-hot at (fmin, tlo - 1)  -> eval_tokens cell must be nonzero
+  P2: one-hot at (fmax, thi - 1)  -> eval_tokens cell must be nonzero
   P3: indicator of the complement region {f < fmin} + {f > fmax} +
-      {f == fmin, t > tlo} + {f == fmax, t > thi}
+      {f == fmin, t >= tlo} + {f == fmax, t >= thi}
                                   -> eval_tokens cell must be exactly zero
 
 P1+P2+P3 pins the support's channel range and both edge trailing times exactly
@@ -173,12 +174,13 @@ def _probe_tuples(plan, r_top, C, tuples):
         run_tuples = tuples[i0 : i0 + per_run]
         dec = [plan.decode_argmax(tok, it, idm, ito) for (it, tok, idm, ito) in run_tuples]
 
-        # Global (multi-chunk) positions of the decoded trailing times; the warmup
-        # formula in _num_chunks() guarantees these land inside the simulated span.
+        # Global (multi-chunk) positions of the decoded trailing edges (EXCLUSIVE: the
+        # last summed sample is tlo-1 / thi-1); the warmup formula in _num_chunks()
+        # guarantees these land inside the simulated span.
         for (fmin, fmax, tlo, thi, p), (it, tok, idm, ito) in zip(dec, run_tuples):
             assert 0 <= fmin < fmax < nchan
-            assert tlo <= thi < nt_in
-            assert c_eval * nt_in + tlo >= 0, "test bug: warmup depth insufficient"
+            assert tlo <= thi <= nt_in
+            assert c_eval * nt_in + tlo - 1 >= 0, "test bug: warmup depth insufficient"
 
         rdd = _fresh_rdd(plan)
         ia = rdd.input_array
@@ -189,19 +191,19 @@ def _probe_tuples(plan, r_top, C, tuples):
                 glo = c_eval * nt_in + tlo
                 ghi = c_eval * nt_in + thi
 
-                # P1/P2: one-hot probes (beam slots 3k, 3k+1).
-                if t0 <= glo < t0 + nt_in:
-                    ia[3*k, fmin, glo - t0] = 1.0
-                if t0 <= ghi < t0 + nt_in:
-                    ia[3*k + 1, fmax, ghi - t0] = 1.0
+                # P1/P2: one-hot probes at the last summed samples (beam slots 3k, 3k+1).
+                if t0 <= glo - 1 < t0 + nt_in:
+                    ia[3*k, fmin, glo - 1 - t0] = 1.0
+                if t0 <= ghi - 1 < t0 + nt_in:
+                    ia[3*k + 1, fmax, ghi - 1 - t0] = 1.0
 
                 # P3: complement-region indicator (beam slot 3k+2).
                 ia[3*k + 2, :fmin, :] = 1.0
                 ia[3*k + 2, fmax + 1:, :] = 1.0
-                lo = glo + 1 - t0
+                lo = glo - t0
                 if lo < nt_in:
                     ia[3*k + 2, fmin, max(lo, 0):] = 1.0
-                hi = ghi + 1 - t0
+                hi = ghi - t0
                 if hi < nt_in:
                     ia[3*k + 2, fmax, max(hi, 0):] = 1.0
 
@@ -221,8 +223,8 @@ def _probe_tuples(plan, r_top, C, tuples):
 
             for k, tok, idm, ito in items:
                 msg = f"itree={it}, token={tok:#x}, idm={idm}, itout={ito}, decode={dec[k]}"
-                assert out[3*k, idm, ito] > 0, f"P1 failed (tlo not in support): {msg}"
-                assert out[3*k + 1, idm, ito] > 0, f"P2 failed (thi not in support): {msg}"
+                assert out[3*k, idm, ito] > 0, f"P1 failed (tlo-1 not in support): {msg}"
+                assert out[3*k + 1, idm, ito] > 0, f"P2 failed (thi-1 not in support): {msg}"
                 assert out[3*k + 2, idm, ito] == 0, f"P3 failed (support outside decoded region): {msg}"
 
 
@@ -263,9 +265,10 @@ def _test_pf_kernel_quantization(ntrials=8):
     """Kernel-level sweep of the token time-quantization formula, with arbitrary Dcore.
 
     A bare ReferencePeakFindingKernel (no dedispersion, single full-band multiplet) has
-    Tlag = Dsub = 0, so the trailing pf-input sample of token (p, t) at cell tout is
+    Tlag = Dsub = 0, so the LAST pf-input sample summed by token (p, t) at cell tout is
     T = tout*Dout + t + dt - 1 with dt = min(Dcore, 2^level) -- the same arithmetic as
-    decode_argmax(). Verify with one-hot / tail probes (fresh kernel per probe, since
+    decode_argmax(), which reports the exclusive edge (T + 1, before the toplevel time
+    conversion). Verify with one-hot / tail probes (fresh kernel per probe, since
     pstate carries the previous probe's tail).
     """
 

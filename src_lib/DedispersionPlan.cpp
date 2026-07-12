@@ -420,11 +420,12 @@ void DedispersionPlan::decode_argmax(
     long tlo_ds = thi_ds - (dhi * pow2(lsb) + dfine);        // Tpf - Tlag - Dsub
 
     // Convert to toplevel full-resolution samples. Downsampled sample T covers full-res
-    // samples [T*2^ipri, (T+1)*2^ipri - 1]; the trailing sample summed is the end of the
+    // samples [T*2^ipri, (T+1)*2^ipri - 1]. The reported trailing edge is EXCLUSIVE
+    // (one past the last full-res sample summed), i.e. the end boundary of the
     // trailing bin.
 
-    thi = ((thi_ds + 1) << ipri) - 1;
-    tlo = ((tlo_ds + 1) << ipri) - 1;
+    thi = (thi_ds + 1) << ipri;
+    tlo = (tlo_ds + 1) << ipri;
 }
 
 

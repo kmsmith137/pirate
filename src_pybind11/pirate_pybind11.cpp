@@ -330,11 +330,12 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    Tuple (fmin, fmax, tlo, thi, p), TOPLEVEL-relative: fmin/fmax are the\n"
                "    (inclusive) tree-freq range of the winning subband, in channels of the\n"
                "    rank-toplevel_tree_rank gridding (0 <= fmin < fmax < 2^toplevel_tree_rank).\n"
-               "    tlo/thi are the trailing (last-summed) arrival times at channels fmin/fmax,\n"
-               "    in full-resolution samples with t=0 at chunk start (tlo <= thi < nt_in;\n"
-               "    negative values refer to earlier chunks). p is the winning peak-finding\n"
-               "    profile index. Throws on out-of-range indices or a malformed token.\n"
-               "    See DedispersionPlan.hpp for the full specification.")
+               "    tlo/thi are the EXCLUSIVE trailing edges at channels fmin/fmax (one past\n"
+               "    the last-summed sample), in full-resolution samples with t=0 at chunk\n"
+               "    start (tlo <= thi <= nt_in; negative values refer to earlier chunks).\n"
+               "    p is the winning peak-finding profile index. Throws on out-of-range\n"
+               "    indices or a malformed token. See DedispersionPlan.hpp for the full\n"
+               "    specification.")
     ;
 
     // Returned by GpuDedisperser.acquire_output(). Must be registered

@@ -83,21 +83,21 @@ struct DedispersionPlan
     //       Tree-freq range (inclusive) spanned by the winning frequency subband.
     //       (Sharper per-tree bound: fmax < pow2(toplevel_tree_rank - early_trigger_level).)
     //
-    //   tlo <= thi < nt_in
-    //       Trailing arrival times: tlo (resp. thi) is the LAST time sample of channel
-    //       fmin (resp. fmax) which is summed into the winning out_max value. Negative
-    //       values are frequent (dedispersion delays usually exceed the chunk length),
-    //       and refer to earlier chunks. For downsampled trees (primary_tree_index > 0),
-    //       tlo/thi point at the end of their downsampled bin, i.e. always satisfy
-    //       t == pow2(ipri)-1 (mod pow2(ipri)).
+    //   tlo <= thi <= nt_in
+    //       Trailing edges (EXCLUSIVE): tlo (resp. thi) is one past the last time sample
+    //       of channel fmin (resp. fmax) which is summed into the winning out_max value,
+    //       i.e. the exclusive upper endpoint of the summed range. Negative values are
+    //       frequent (dedispersion delays usually exceed the chunk length), and refer to
+    //       earlier chunks. For downsampled trees (primary_tree_index > 0), tlo/thi lie
+    //       on downsampled-bin boundaries, i.e. always satisfy t == 0 (mod pow2(ipri)).
     //
     //   0 <= p < trees[itree].nprofiles
     //       Winning peak-finding profile index.
     //
-    // Note: the sum over channel f spans an f-dependent range tmin(f) <= t <= tmax(f)
-    // with tmax(f) nondecreasing in f; this function reports tmax at the two edge
-    // channels (where the tree delays are exact, not tree-rounded). tmin==tmax iff
-    // (p == 0 and primary_tree_index == 0).
+    // Note: the sum over channel f spans an f-dependent half-open range
+    // tmin(f) <= t < tmax(f), with tmax(f) nondecreasing in f; this function reports
+    // tmax at the two edge channels (where the tree delays are exact, not tree-rounded).
+    // The range has length 1 (tmax == tmin + 1) iff (p == 0 and primary_tree_index == 0).
     //
     // Throws an exception on out-of-range indices or a malformed token.
 
