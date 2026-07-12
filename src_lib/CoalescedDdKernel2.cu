@@ -23,6 +23,42 @@ namespace pirate {
 #endif
 
 
+// Static member function. See warning in CoalescedDdKernel2.hpp (returned key contains no Dcore).
+CoalescedDdKernel2::RegistryKey CoalescedDdKernel2::_make_registry_key(
+    const DedispersionKernelParams &dd_params, const PeakFindingKernelParams &pf_params)
+{
+    // Note: does not call pf_params.validate(), since get_registry_dcore() calls this
+    // function while pf_params.Dcore is still unset.
+
+    RegistryKey key;
+    key.dtype = pf_params.dtype;
+    key.dd_rank = dd_params.dd_rank;
+    key.Dout = xdiv(pf_params.nt_in, pf_params.nt_out);
+    key.Wmax = pf_params.max_kernel_width;
+    key.subband_counts = pf_params.subband_counts;
+
+    // Recall the definition of Tinner (used for weight layout, see comments in
+    // cuda_generator.PeakFinder.py):
+    //
+    //   Tinner = max(32*SW/nt_in_per_wt, 1)
+
+    long SW = xdiv(32, pf_params.dtype.nbits);      // simd width
+    long nt_in_per_wt = xdiv(pf_params.nt_in, pf_params.nt_wt);
+    key.Tinner = (nt_in_per_wt < 32*SW) ? xdiv(32*SW, nt_in_per_wt) : 1;
+
+    return key;
+}
+
+
+// Static member function.
+long CoalescedDdKernel2::get_registry_dcore(
+    const DedispersionKernelParams &dd_params, const PeakFindingKernelParams &pf_params)
+{
+    RegistryKey key = _make_registry_key(dd_params, pf_params);
+    return registry().get(key, /*init_kernel=*/ false).Dcore;
+}
+
+
 CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params_, const PeakFindingKernelParams &pf_params_) :
     dd_params(dd_params_), pf_params(pf_params_), fs(pf_params_.subband_counts)
 {
@@ -56,17 +92,7 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     this->Dout = xdiv(pf_params.nt_in, pf_params.nt_out);
     this->nprofiles = 3 * log2(pf_params.max_kernel_width) + 1;
 
-    this->registry_key.dtype = pf_params.dtype;
-    this->registry_key.dd_rank = dd_params.dd_rank;
-    this->registry_key.Dout = xdiv(pf_params.nt_in, pf_params.nt_out);
-    this->registry_key.Wmax = pf_params.max_kernel_width;
-    this->registry_key.subband_counts = fs.subband_counts;
-
-    long SW = xdiv(32, pf_params.dtype.nbits);      // simd width
-    long nt_in_per_wt = xdiv(pf_params.nt_in, pf_params.nt_wt);
-    this->registry_key.Tinner = (nt_in_per_wt < 32*SW) ? xdiv(32*SW, nt_in_per_wt) : 1;
-
-    // Call static member function CoalescedDdKernel2::registry().
+    this->registry_key = _make_registry_key(dd_params, pf_params);
     this->registry_value = registry().get(registry_key);
 
     // Derived parameters chosen by the kernel.
@@ -74,7 +100,10 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     this->expected_wt_shape = pf_weight_layout.get_shape(pf_params.beams_per_batch, pf_params.ndm_wt, pf_params.nt_wt);
     this->expected_wt_strides = pf_weight_layout.get_strides(pf_params.beams_per_batch, pf_params.ndm_wt, pf_params.nt_wt);
     this->Dcore = registry_value.Dcore;
-    
+
+    // Caller-specified Dcore (e.g. from DedispersionPlan) must match the compiled kernel.
+    xassert_eq(pf_params.Dcore, Dcore);
+
     // Important: ensure that caller-specified 'nt_per_segment' matches GPU kernel.
     xassert_eq(dd_params.nt_per_segment, registry_value.nt_per_segment);
 
@@ -291,12 +320,15 @@ void CoalescedDdKernel2::test_random()
     pf_params.nt_in = nt_in_per_chunk;
     pf_params.nt_wt = xdiv(nt_in_per_chunk, nt_in_per_wt);
 
+    // Dcore is a property of the compiled GPU kernel (registry value, not part of the key).
+    pf_params.Dcore = get_registry_dcore(dd_params, pf_params);
+
     CoalescedDdKernel2 cdd2_kernel(dd_params, pf_params);
     BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
     cdd2_kernel.allocate(allocator);
 
     ReferenceDedispersionKernel ref_dd_kernel(dd_params, pf_params.subband_counts);
-    ReferencePeakFindingKernel ref_pf_kernel(pf_params, cdd2_kernel.Dcore);
+    ReferencePeakFindingKernel ref_pf_kernel(pf_params);
 
     FrequencySubbands &fs = cdd2_kernel.fs;
     GpuPfWeightLayout &wl = cdd2_kernel.pf_weight_layout;

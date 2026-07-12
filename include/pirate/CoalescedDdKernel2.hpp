@@ -147,6 +147,17 @@ struct CoalescedDdKernel2
 
     // Static member function to access registry.
     static Registry &registry();
+
+    // Warning: Calling get() with the returned RegistryKey may return a kernel whose Dcore
+    // does not match PeakFindingKernelParams::Dcore. (This is because the RegistryKey does
+    // not include Dcore.) If a match is required, then caller must check/assert by hand.
+    static RegistryKey _make_registry_key(const DedispersionKernelParams &dd_params,
+                                          const PeakFindingKernelParams &pf_params);
+
+    // Ignores caller-specified PeakFindingKernelParams::Dcore.
+    // Can throw an exception, if matching kernel is not found in registry.
+    static long get_registry_dcore(const DedispersionKernelParams &dd_params,
+                                   const PeakFindingKernelParams &pf_params);
 };
 
 // Defined in CoalescedDdKernel2.cu

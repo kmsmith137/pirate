@@ -512,9 +512,9 @@ class ServerTester:
             dd.fill_all_weights(t, w)
             self.wt.append(w)
 
-        # Reference chain. Dcore from the GPU kernels makes the reference
-        # peak-finder mimic the GPU exactly (same convention as test_one).
-        self.rdd = ReferenceDedisperser(plan, sophistication=2, Dcore=dd.Dcore)
+        # Reference chain. The per-tree Dcore values come from the plan (filled from
+        # the cdd2 registry), so the reference peak-finder mimics the GPU exactly.
+        self.rdd = ReferenceDedisperser(plan, sophistication=2)
         self.rdqk = ReferenceDequantizationKernel(self.B, p['total_nfreq'],
                                                   p['time_samples_per_chunk'])
         self.pf_kernels = self.rdd.pf_kernels

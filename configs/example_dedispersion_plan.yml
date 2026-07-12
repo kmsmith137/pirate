@@ -37,6 +37,7 @@ trees:
     max_width: 32               # 32 ms
     dm_downsampling: 16
     time_downsampling: 16
+    Dcore: 8  # Peak-finder internal time-downsampling (sets out_argmax token granularity)
     wt_dm_downsampling: 64
     wt_time_downsampling: 64
 
@@ -63,6 +64,7 @@ trees:
     max_width: 16                          # 32 ms
     dm_downsampling: 16                    # 32 before downsampling
     time_downsampling: 16                  # 32 before downsampling
+    Dcore: 8                               # Peak-finder internal time-downsampling (sets out_argmax token granularity)
     wt_dm_downsampling: 64                 # 128 before downsampling
     wt_time_downsampling: 64               # 128 before downsampling
 
@@ -88,6 +90,7 @@ trees:
     max_width: 16               # 32 ms
     dm_downsampling: 16         # 32 before downsampling
     time_downsampling: 16       # 32 before downsampling
+    Dcore: 8                    # Peak-finder internal time-downsampling (sets out_argmax token granularity)
     wt_dm_downsampling: 64      # 128 before downsampling
     wt_time_downsampling: 64    # 128 before downsampling
 
@@ -114,6 +117,7 @@ trees:
     max_width: 8                          # 32 ms
     dm_downsampling: 8                    # 32 before downsampling
     time_downsampling: 8                  # 32 before downsampling
+    Dcore: 8                              # Peak-finder internal time-downsampling (sets out_argmax token granularity)
     wt_dm_downsampling: 64                # 256 before downsampling
     wt_time_downsampling: 64              # 256 before downsampling
 
@@ -137,6 +141,7 @@ trees:
     max_width: 8                           # 32 ms
     dm_downsampling: 16                    # 64 before downsampling
     time_downsampling: 16                  # 64 before downsampling
+    Dcore: 8                               # Peak-finder internal time-downsampling (sets out_argmax token granularity)
     wt_dm_downsampling: 64                 # 256 before downsampling
     wt_time_downsampling: 64               # 256 before downsampling
 
@@ -162,6 +167,7 @@ trees:
     max_width: 8                # 32 ms
     dm_downsampling: 16         # 64 before downsampling
     time_downsampling: 16       # 64 before downsampling
+    Dcore: 8                    # Peak-finder internal time-downsampling (sets out_argmax token granularity)
     wt_dm_downsampling: 64      # 256 before downsampling
     wt_time_downsampling: 64    # 256 before downsampling
 
@@ -188,6 +194,7 @@ trees:
     max_width: 4                # 32 ms
     dm_downsampling: 8          # 64 before downsampling
     time_downsampling: 8        # 64 before downsampling
+    Dcore: 8                    # Peak-finder internal time-downsampling (sets out_argmax token granularity)
     wt_dm_downsampling: 64      # 512 before downsampling
     wt_time_downsampling: 64    # 512 before downsampling
 
@@ -209,6 +216,7 @@ trees:
     max_width: 4                          # 32 ms
     dm_downsampling: 8                    # 64 before downsampling
     time_downsampling: 8                  # 64 before downsampling
+    Dcore: 8                              # Peak-finder internal time-downsampling (sets out_argmax token granularity)
     wt_dm_downsampling: 64                # 512 before downsampling
     wt_time_downsampling: 64              # 512 before downsampling
 
@@ -232,6 +240,7 @@ trees:
     max_width: 4                           # 32 ms
     dm_downsampling: 16                    # 128 before downsampling
     time_downsampling: 16                  # 128 before downsampling
+    Dcore: 8                               # Peak-finder internal time-downsampling (sets out_argmax token granularity)
     wt_dm_downsampling: 64                 # 512 before downsampling
     wt_time_downsampling: 64               # 512 before downsampling
 
@@ -257,6 +266,7 @@ trees:
     max_width: 4                # 32 ms
     dm_downsampling: 16         # 128 before downsampling
     time_downsampling: 16       # 128 before downsampling
+    Dcore: 8                    # Peak-finder internal time-downsampling (sets out_argmax token granularity)
     wt_dm_downsampling: 64      # 512 before downsampling
     wt_time_downsampling: 64    # 512 before downsampling
 

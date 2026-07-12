@@ -84,6 +84,10 @@ struct DedispersionPlan
 
     std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length num_primary_trees
     std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length ntrees
+
+    // Note: stage2_pf_params[:].Dcore is filled from the cdd2 kernel registry, so that
+    // peak-finders built from the plan (GPU or reference) agree on out_argmax token
+    // granularity. Fallback if the cdd2 kernel is not compiled in: pf.time_downsampling.
     std::vector<PeakFindingKernelParams> stage2_pf_params;          // length ntrees
 
     // Only needed if early triggers are used.

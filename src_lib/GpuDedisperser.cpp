@@ -1260,12 +1260,13 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         gdd->allocate(gpu_allocator, host_allocator);
     }
 
-    // Dcore: taken from GPU kernel, passed to reference kernel
-    vector<long> Dcore(ntrees);
-    for (long itree = 0; itree < ntrees; itree++) {
-        const DedispersionTree &tree = plan->trees.at(itree);
-        Dcore.at(itree) = host_only ? tree.pf.time_downsampling : gdd->cdd2_kernels.at(itree)->Dcore;
-    }
+    // Reference dedispersers take their per-tree Dcore from plan->stage2_pf_params, which
+    // the plan filled from the cdd2 registry -- so the reference peak-finders mimic the GPU
+    // kernels. (This assert is redundant with one in the CoalescedDdKernel2 constructor,
+    // but cheap documentation.)
+    if (!host_only)
+        for (long itree = 0; itree < ntrees; itree++)
+            xassert_eq(plan->stage2_pf_params.at(itree).Dcore, gdd->cdd2_kernels.at(itree)->Dcore);
 
     // pf_tmp: used to store output from ReferencePeakFindingKernel::eval_tokens().
     vector<Array<float>> pf_tmp(ntrees);
@@ -1274,11 +1275,9 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         pf_tmp.at(itree) = Array<float> ({beams_per_batch, tree.ndm_out, tree.nt_out}, af_uhost | af_zero);
     }
 
-    // Create ReferenceDedispersers (must come after Dcore initialization).
-    // Pass an explicit Dcore (from the GPU kernels), not the host-only default.
+    // Create ReferenceDedispersers.
     ReferenceDedisperserBase::Params rdd_params;
     rdd_params.plan = plan;
-    rdd_params.Dcore = Dcore;
     rdd_params.sophistication = 0;  shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(rdd_params);
     rdd_params.sophistication = 1;  shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(rdd_params);
     rdd_params.sophistication = 2;  shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(rdd_params);

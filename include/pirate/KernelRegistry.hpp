@@ -119,7 +119,13 @@ struct KernelRegistry
     }
 
 
-    Val get(const Key &key)
+    // If init_kernel=false, then deferred_initialization() is skipped (and so is the
+    // cudaGetDevice() call), making the lookup safe on GPU-less machines, e.g. at
+    // DedispersionPlan construction time. WARNING: a Val obtained with init_kernel=false
+    // is intended for metadata queries only -- launching its cuda kernel may fail
+    // (e.g. shared memory attribute not set).
+
+    Val get(const Key &key, bool init_kernel = true)
     {
         std::unique_lock<std::mutex> lk(this->lock);
         Entry *e = this->_get_locked(key);
@@ -131,11 +137,13 @@ struct KernelRegistry
             throw std::runtime_error(ss.str());
         }
 
-        int device;
-        cudaGetDevice(&device);
-        if (!e->initialized_devices.count(device)) {
-            this->deferred_initialization(e->val);
-            e->initialized_devices.insert(device);
+        if (init_kernel) {
+            int device;
+            cudaGetDevice(&device);
+            if (!e->initialized_devices.count(device)) {
+                this->deferred_initialization(e->val);
+                e->initialized_devices.insert(device);
+            }
         }
 
         Val ret = e->val;

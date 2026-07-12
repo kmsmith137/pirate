@@ -395,8 +395,9 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                    ret.push_back(k->Dcore);
                return ret;
           }, "Per-tree internal time-downsampling factors of the GPU peak-finding\n"
-             "kernels (length ntrees). Pass to ReferenceDedisperser(Dcore=...) to make\n"
-             "the reference kernels mimic this GpuDedisperser exactly.")
+             "kernels (length ntrees). Equal to plan.stage2_pf_params Dcore values, so a\n"
+             "ReferenceDedisperser built from the same plan mimics these kernels\n"
+             "automatically.")
           .def("allocate", &GpuDedisperser::allocate,
                py::arg("gpu_allocator"), py::arg("host_allocator"),
                py::call_guard<py::gil_scoped_release>(),   // GPU/host buffer allocation + worker spawn
@@ -500,7 +501,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "CPU reference dedisperser (for testing and variance studies).\n"
         "\n"
         "Constructed directly:\n"
-        "    ReferenceDedisperser(plan, sophistication, enable_variances=False, Dcore=None)\n"
+        "    ReferenceDedisperser(plan, sophistication, enable_variances=False)\n"
         "\n"
         "'sophistication' (0, 1, or 2) selects the reference implementation:\n"
         "  0 -- one-stage dedispersion (instead of two stages); in downsampled trees,\n"
@@ -512,34 +513,33 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "  2 -- as close to the GPU implementation as possible.\n"
         "All three produce the same peak-finding output, modulo float roundoff.\n"
         "\n"
-        "'Dcore' is the per-tree internal time-downsampling factor of the peak-finder\n"
-        "(see PeakFindingKernel.hpp). To perfectly mimic a GpuDedisperser, pass the\n"
-        "Dcore values from its GpuPeakFindingKernels. For a host-only reference (the\n"
-        "common case), leave Dcore=None to use plan.trees[i].pf.time_downsampling.\n"
+        "The per-tree peak-finder Dcore values come from the plan (filled from the cdd2\n"
+        "kernel registry when available), so the reference peak-finders mimic a\n"
+        "GpuDedisperser built from the same plan. Inspect via the Dcore property.\n"
         "\n"
         "If enable_variances=True, the per-tree out_var buffers are allocated and filled\n"
         "by dedisperse() (per-chunk peak-finding variances; see ReferencePeakFindingKernel).")
         .def(py::init([](std::shared_ptr<DedispersionPlan> plan, int sophistication,
-                         bool enable_variances, py::object Dcore_obj) {
+                         bool enable_variances) {
             ReferenceDedisperserBase::Params p;
             p.plan = plan;
             p.sophistication = sophistication;
             p.enable_variances = enable_variances;
-            if (!Dcore_obj.is_none())
-                p.Dcore = Dcore_obj.cast<std::vector<long>>();
-            // empty p.Dcore -> make() fills it from tree.pf.time_downsampling (host-only default)
 
-            // The .cast<>() above is python API, so it must happen BEFORE this GIL
-            // release (a py::call_guard would be a bug here). make() -- plan walk
-            // plus large host allocations -- runs GIL-free.
+            // make() -- plan walk plus large host allocations -- runs GIL-free.
             py::gil_scoped_release nogil;
             return ReferenceDedisperserBase::make(p);
         }), py::arg("plan"), py::arg("sophistication"),
-            py::arg("enable_variances") = false, py::arg("Dcore") = py::none())
+            py::arg("enable_variances") = false)
         // params fields (nested) exposed as read-only properties:
         .def_property_readonly("sophistication",   [](const ReferenceDedisperserBase &d){ return d.params.sophistication; })
-        .def_property_readonly("Dcore",            [](const ReferenceDedisperserBase &d){ return d.params.Dcore; })
         .def_property_readonly("enable_variances", [](const ReferenceDedisperserBase &d){ return d.params.enable_variances; })
+        .def_property_readonly("Dcore", [](const ReferenceDedisperserBase &d) {
+            std::vector<long> ret;
+            for (const auto &k : d.pf_kernels)
+                ret.push_back(k->Dcore);
+            return ret;
+        }, "Per-tree peak-finder internal time-downsampling factors (from the plan).")
         // derived convenience members:
         .def_readonly("ntrees",          &ReferenceDedisperserBase::ntrees)
         .def_readonly("nfreq",           &ReferenceDedisperserBase::nfreq)

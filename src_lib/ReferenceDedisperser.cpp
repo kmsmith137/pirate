@@ -52,7 +52,6 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
 {
     const auto &plan = params.plan;   // local alias -- keeps the plan->... body below unchanged
     xassert(plan);
-    xassert_eq(long(params.Dcore.size()), plan->ntrees);
 
     this->config = plan->config;
     this->dtype = plan->dtype;
@@ -68,10 +67,10 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
     // Tree gridding kernel.
     this->tree_gridding_kernel = make_shared<ReferenceTreeGriddingKernel> (plan->tree_gridding_kernel_params);
 
-    // Peak-finding kernels.
+    // Peak-finding kernels. (Per-tree Dcore comes from the plan, via pf_params.Dcore.)
     for (long itree = 0; itree < ntrees; itree++) {
         const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
-        auto pf_kernel = make_shared<ReferencePeakFindingKernel> (pf_params, params.Dcore.at(itree));
+        auto pf_kernel = make_shared<ReferencePeakFindingKernel> (pf_params);
         this->pf_kernels.push_back(pf_kernel);
     }
 
@@ -629,16 +628,9 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
 
 
 // Static member function
-shared_ptr<ReferenceDedisperserBase> ReferenceDedisperserBase::make(const Params &params_)
+shared_ptr<ReferenceDedisperserBase> ReferenceDedisperserBase::make(const Params &params)
 {
-    xassert(params_.plan);
-
-    // Copy params so we can resolve an empty Dcore (host-only default) without violating const.
-    Params params = params_;
-    if (params.Dcore.empty()) {
-        for (long itree = 0; itree < params.plan->ntrees; itree++)
-            params.Dcore.push_back(params.plan->trees.at(itree).pf.time_downsampling);
-    }
+    xassert(params.plan);
 
     if (params.sophistication == 0)
         return make_shared<ReferenceDedisperser0> (params);

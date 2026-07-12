@@ -388,29 +388,24 @@ public:
 //
 //   - As close to GPU implementation as possible!
 //
-// Note on Dcore: in order for the ReferenceDedisperser to perfectly mimic the GPU kernel, we
-// need a constructor argument 'Dcore' which contains Dcore values from the GpuPeakFindingKernels.
-// See PeakFindingKernel.hpp for the meaning of Dcore, and GpuDedisperser.cu for example code
-// to initialize the Dcore vector.
-//
-// For a "host-only" reference dedisperser -- one that does not need to perfectly mimic a
-// GpuDedisperser -- Dcore = plan->trees[:].pf.time_downsampling is a reasonable choice. Pass
-// an empty Params::Dcore (the default) to have make() fill it in this way.
+// Note on Dcore: the per-tree peak-finding Dcore values come from the plan
+// (plan->stage2_pf_params[:].Dcore, filled from the cdd2 kernel registry), so the
+// reference peak-finders mimic the GPU kernels whenever the corresponding cdd2 kernels
+// are compiled into the build. See PeakFindingKernelParams::Dcore for details.
 
 struct ReferenceDedisperserBase
 {
     struct Params {
         std::shared_ptr<DedispersionPlan> plan;
-        std::vector<long> Dcore;        // if empty, plan->trees[:].pf.time_downsampling is used (see above)
         int sophistication = -1;        // 0, 1, or 2 (see above)
         bool enable_variances = false;  // if true, allocate + fill out_var
     };
 
-    // Constructor not intended to be called directly -- use make() below, which resolves
-    // an empty Params::Dcore before constructing.
+    // Constructor not intended to be called directly -- use make() below, which
+    // dispatches on Params::sophistication.
     ReferenceDedisperserBase(const Params &params);
 
-    Params params;   // construction parameters (Params::Dcore is non-empty here -- resolved by make())
+    Params params;   // construction parameters
 
     // Some key members of DedispersionPlan, copied in for convenience.
     DedispersionConfig config;             // same as params.plan->config
@@ -452,7 +447,6 @@ struct ReferenceDedisperserBase
     std::vector<ksgpu::Array<double>> out_var;    // length ntrees (elements empty if disabled)
 
     // Factory function -- constructs ReferenceDedisperser of the sophistication in 'params'.
-    // Makes a copy of 'params' so it can resolve an empty Params::Dcore (see above).
     static std::shared_ptr<ReferenceDedisperserBase> make(const Params &params);
 };
 
