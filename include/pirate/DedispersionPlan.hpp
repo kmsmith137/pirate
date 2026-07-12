@@ -124,6 +124,29 @@ struct DedispersionPlan
         float &timestamp_samp, float &width_samp) const;
 
 
+    // An "incomplete" DedispersionPlan does not initialize any of the "low-level data needed
+    // for compute kernels", especially the heavyweight MegaRingbuf.  This is a footgun, and
+    // is only used as a hack in 'FrbGrouper' (where it is not externally visible).
+    // This hack may go away in the future!
+    //
+    // The arguments are the producer's DedispersionConfig::to_yaml_string() and
+    // DedispersionPlan::to_yaml_string() (as sent in the grouper Handshake). All members
+    // above this comment are naively transcribed from the yamls -- no code is shared with
+    // the normal constructor path, nothing is re-derived, and the kernel registry is not
+    // queried (in particular, trees[:].Dcore is the PRODUCER's value, which is what makes
+    // decode_argmax() correct for producer-generated tokens even if this process runs a
+    // different pirate_frb build).
+
+    static std::shared_ptr<DedispersionPlan> make_incomplete_plan_from_yaml(
+        const std::string &config_yaml_str,
+        const std::string &plan_yaml_str);
+
+    // True for plans built by make_incomplete_plan_from_yaml(). Code which touches the
+    // "low-level data" below should xassert(!is_incomplete) -- see e.g. to_yaml() and
+    // the GpuDedisperser/ReferenceDedisperser constructors.
+    bool is_incomplete = false;
+
+
     // -------------------------------------------------------------------------------------------------
     //
     // Low-level data needed for compute kernels.
@@ -153,6 +176,13 @@ struct DedispersionPlan
     // Only needed if early triggers are used.
     RingbufCopyKernelParams g2g_copy_kernel_params;
     RingbufCopyKernelParams h2h_copy_kernel_params;
+
+  protected:
+
+    // Used by make_incomplete_plan_from_yaml(). The tag constructor only initializes the
+    // (const) 'config' member and sets is_incomplete; the factory fills everything else.
+    struct IncompleteTag { };
+    DedispersionPlan(const DedispersionConfig &config, IncompleteTag);
 };
 
 

@@ -336,6 +336,18 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    p is the winning peak-finding profile index. Throws on out-of-range\n"
                "    indices or a malformed token. See DedispersionPlan.hpp for the full\n"
                "    specification.")
+          .def_static("make_incomplete_plan_from_yaml",
+               &DedispersionPlan::make_incomplete_plan_from_yaml,
+               py::arg("config_yaml_str"), py::arg("plan_yaml_str"),
+               "An 'incomplete' DedispersionPlan does not initialize any of the low-level\n"
+               "data needed for compute kernels (especially the heavyweight MegaRingbuf) --\n"
+               "only the members needed by decode_argmax(). This is a footgun, and is only\n"
+               "used as a hack in FrbGrouper; it may go away in the future!\n\n"
+               "Args:\n"
+               "    config_yaml_str: producer's DedispersionConfig.to_yaml_string()\n"
+               "    plan_yaml_str: producer's DedispersionPlan.to_yaml_string()")
+          .def_readonly("is_incomplete", &DedispersionPlan::is_incomplete,
+               "True for plans built by make_incomplete_plan_from_yaml()")
     ;
 
     // Returned by GpuDedisperser.acquire_output(). Must be registered

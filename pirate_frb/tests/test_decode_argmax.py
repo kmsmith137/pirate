@@ -35,6 +35,64 @@ from ..pirate_pybind11 import (DedispersionConfig, DedispersionPlan,
 
 
 ####################################################################################################
+#
+# Round-trip test of DedispersionPlan.make_incomplete_plan_from_yaml(). This is the
+# LOAD-BEARING guard keeping the "dumb" yaml parser in sync with to_yaml(): the factory
+# transcribes members verbatim (no re-derivation, no consistency asserts), so any
+# to_yaml/parser drift must fail HERE, via member-by-member comparison.
+
+
+def _test_incomplete_plan(config, plan, tuples):
+    cfg_yaml = config.to_yaml_string()
+    plan_yaml = plan.to_yaml_string()
+    p2 = DedispersionPlan.make_incomplete_plan_from_yaml(cfg_yaml, plan_yaml)
+
+    assert p2.is_incomplete and not plan.is_incomplete
+
+    for name in ['nfreq', 'nt_in', 'num_primary_trees', 'beams_per_gpu',
+                 'beams_per_batch', 'num_active_batches', 'nbits', 'ntrees']:
+        assert getattr(p2, name) == getattr(plan, name), name
+    assert list(p2.stage1_dd_rank) == list(plan.stage1_dd_rank)
+    assert list(p2.stage1_amb_rank) == list(plan.stage1_amb_rank)
+
+    for itree, (t1, t2) in enumerate(zip(plan.trees, p2.trees)):
+        for name in ['primary_tree_index', 'early_trigger_level', 'amb_rank', 'dd_rank',
+                     'nt_ds', 'Dcore', 'nprofiles', 'ndm_out', 'ndm_wt', 'nt_out', 'nt_wt']:
+            assert getattr(t2, name) == getattr(t1, name), f"tree {itree}: {name}"
+        for name in ['max_width', 'dm_downsampling', 'time_downsampling',
+                     'wt_dm_downsampling', 'wt_time_downsampling', 'num_early_triggers']:
+            assert getattr(t2.pf, name) == getattr(t1.pf, name), f"tree {itree}: pf.{name}"
+        for name in ['dm_min', 'dm_max', 'trigger_frequency']:
+            x1, x2 = getattr(t1, name), getattr(t2, name)
+            # Lossy yaml round-trip (to_yaml uses ~6-significant-digit doubles).
+            assert abs(x2 - x1) <= 1.0e-4 * max(abs(x1), 1.0), f"tree {itree}: {name}"
+        fs1, fs2 = t1.frequency_subbands, t2.frequency_subbands
+        assert list(fs2.subband_counts) == list(fs1.subband_counts), f"tree {itree}: subband_counts"
+        assert (fs2.N, fs2.M) == (fs1.N, fs1.M), f"tree {itree}: fs.N/M"
+
+    # decode_argmax() must agree exactly with the full plan.
+    for (itree, token, idm, itout) in tuples:
+        assert p2.decode_argmax(token, itree, idm, itout) == plan.decode_argmax(token, itree, idm, itout)
+
+    # Negative test: a missing plan-yaml key must throw (naming the key).
+    bad_yaml = plan_yaml.replace('Dcore:', 'Dcore_renamed:')
+    assert bad_yaml != plan_yaml
+    try:
+        DedispersionPlan.make_incomplete_plan_from_yaml(cfg_yaml, bad_yaml)
+        raise AssertionError("make_incomplete_plan_from_yaml() should have thrown (missing Dcore)")
+    except RuntimeError:
+        pass
+
+    # Negative test: to_yaml_string() on an incomplete plan must throw (it walks
+    # the uninitialized mega_ringbuf).
+    try:
+        p2.to_yaml_string()
+        raise AssertionError("to_yaml_string() on an incomplete plan should have thrown")
+    except RuntimeError:
+        pass
+
+
+####################################################################################################
 
 
 def _make_random_config(max_toplevel_rank=6, nbeams=6):
@@ -377,3 +435,6 @@ def test_decode_argmax():
     # P1/P2/P3 probes on sampled tuples (2 pipeline runs).
     tuples = _sample_tuples(plan, kinfo, interesting_ms, ntuples=2 * max(B // 3, 1))
     _probe_tuples(plan, r_top, C, tuples)
+
+    # Round-trip test of make_incomplete_plan_from_yaml() (reuses the sampled tuples).
+    _test_incomplete_plan(config, plan, tuples)

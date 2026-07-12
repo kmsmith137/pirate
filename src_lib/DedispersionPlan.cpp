@@ -1,6 +1,7 @@
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/CoalescedDdKernel2.hpp"  // get_registry_dcore()
 #include "../include/pirate/MegaRingbuf.hpp"
+#include "../include/pirate/YamlFile.hpp"  // used in make_incomplete_plan_from_yaml()
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"  // align_up(), pow2(), print_kv(), Indent
 #include "../include/pirate/utils.hpp"    // bit_reverse_slow(), rb_lag()
@@ -9,6 +10,7 @@
 #include <iomanip>
 #include <algorithm>   // std::min
 #include <ksgpu/xassert.hpp>
+#include <yaml-cpp/yaml.h>     // YAML::Load, used in make_incomplete_plan_from_yaml()
 #include <yaml-cpp/emitter.h>
 
 using namespace std;
@@ -348,6 +350,141 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
 
 // ------------------------------------------------------------------------------------------------
+//
+// make_incomplete_plan_from_yaml() and helpers. See doc-comment in DedispersionPlan.hpp.
+
+
+// Protected constructor: only initializes the (const) 'config' member and sets
+// is_incomplete; make_incomplete_plan_from_yaml() fills everything else.
+DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, IncompleteTag) :
+    config(config_)
+{
+    config.validate();
+    this->is_incomplete = true;
+}
+
+
+// Strict yaml accessors: unlike bare yaml-cpp lookups, these throw with the key name
+// on a missing key or a type mismatch. Strictness is what keeps to_yaml() and
+// make_incomplete_plan_from_yaml() in sync (enforced by the round-trip unit test in
+// test_decode_argmax.py).
+
+static YAML::Node _get_yaml_key(const YAML::Node &node, const string &key)
+{
+    YAML::Node ret = node[key];
+    if (!ret) {
+        stringstream ss;
+        ss << "make_incomplete_plan_from_yaml(): missing key '" << key << "' in plan yaml";
+        throw runtime_error(ss.str());
+    }
+    return ret;
+}
+
+template<typename T>
+static T _get_yaml_scalar(const YAML::Node &node, const string &key)
+{
+    try {
+        return _get_yaml_key(node, key).as<T>();
+    }
+    catch (const YAML::Exception &e) {
+        stringstream ss;
+        ss << "make_incomplete_plan_from_yaml(): key '" << key << "' in plan yaml: " << e.what();
+        throw runtime_error(ss.str());
+    }
+}
+
+
+// Static member function.
+shared_ptr<DedispersionPlan> DedispersionPlan::make_incomplete_plan_from_yaml(
+    const string &config_yaml_str, const string &plan_yaml_str)
+{
+    // Parse the config first, so that the (const) 'config' member can be initialized
+    // in the tag constructor's init-list. (Note: from_yaml() calls config.validate().)
+    YAML::Node cfg_node = YAML::Load(config_yaml_str);
+    DedispersionConfig cfg = DedispersionConfig::from_yaml(YamlFile("dedispersion_config", cfg_node));
+
+    // make_shared can't call a protected constructor.
+    shared_ptr<DedispersionPlan> plan(new DedispersionPlan(cfg, IncompleteTag()));
+
+    // Everything below is a naive transcription of the plan yaml ("dumb" by design:
+    // no code shared with the normal constructor path, no consistency asserts against
+    // re-derived values, no kernel registry queries -- producer values are adopted
+    // verbatim). The "low-level data needed for compute kernels" (mega_ringbuf,
+    // kernel/buffer params, nelts_per_segment) is deliberately left uninitialized.
+
+    YAML::Node py = YAML::Load(plan_yaml_str);
+
+    plan->dtype = ksgpu::Dtype::from_str(_get_yaml_scalar<string>(py, "dtype"));
+    plan->nfreq = _get_yaml_scalar<long>(py, "nfreq");
+    plan->nt_in = _get_yaml_scalar<long>(py, "nt_in");
+    plan->num_primary_trees = _get_yaml_scalar<long>(py, "num_primary_trees");
+    plan->beams_per_gpu = _get_yaml_scalar<long>(py, "beams_per_gpu");
+    plan->beams_per_batch = _get_yaml_scalar<long>(py, "beams_per_batch");
+    plan->num_active_batches = _get_yaml_scalar<long>(py, "num_active_batches");
+    plan->nbits = plan->dtype.nbits;
+    plan->stage1_dd_rank = _get_yaml_scalar<vector<long>>(py, "stage1_dd_rank");
+    plan->stage1_amb_rank = _get_yaml_scalar<vector<long>>(py, "stage1_amb_rank");
+    plan->ntrees = _get_yaml_scalar<long>(py, "ntrees");
+
+    YAML::Node ytrees = _get_yaml_key(py, "trees");
+    xassert(plan->ntrees > 0);
+    xassert_eq(plan->ntrees, long(ytrees.size()));
+
+    for (long i = 0; i < plan->ntrees; i++) {
+        YAML::Node yt = ytrees[i];
+        DedispersionTree tree;
+
+        tree.primary_tree_index = _get_yaml_scalar<int>(yt, "primary_tree_index");
+        tree.early_trigger_level = _get_yaml_scalar<int>(yt, "early_trigger_level");
+        tree.amb_rank = _get_yaml_scalar<int>(yt, "amb_rank");
+        tree.dd_rank = _get_yaml_scalar<int>(yt, "dd_rank");
+        tree.nt_ds = _get_yaml_scalar<int>(yt, "nt_ds");
+        tree.Dcore = _get_yaml_scalar<long>(yt, "Dcore");
+        tree.nprofiles = _get_yaml_scalar<long>(yt, "nprofiles");
+        tree.ndm_out = _get_yaml_scalar<long>(yt, "ndm_out");
+        tree.ndm_wt = _get_yaml_scalar<long>(yt, "ndm_wt");
+        tree.nt_out = _get_yaml_scalar<long>(yt, "nt_out");
+        tree.nt_wt = _get_yaml_scalar<long>(yt, "nt_wt");
+
+        // Informational members. Note that these round-trip lossily (to_yaml() uses
+        // yaml-cpp's default ~6-significant-digit precision for doubles); they are
+        // print/display values, not used by decode_argmax*().
+        tree.dm_min = _get_yaml_scalar<double>(yt, "dm_min");
+        tree.dm_max = _get_yaml_scalar<double>(yt, "dm_max");
+        tree.trigger_frequency = _get_yaml_scalar<double>(yt, "trigger_frequency");
+
+        // 'pf' is seeded from the config's PrimaryTree (for num_early_triggers), then
+        // the per-tree values are overwritten from the yaml. Note that the config's
+        // {dm,time}_downsampling can be 0 (= "choose for me"), but the yaml carries the
+        // post-auto-fill values -- the auto-fill rule is deliberately not reimplemented here.
+        xassert((tree.primary_tree_index >= 0) && (tree.primary_tree_index < long(cfg.primary_trees.size())));
+        tree.pf = cfg.primary_trees.at(tree.primary_tree_index);
+        tree.pf.max_width = _get_yaml_scalar<long>(yt, "max_width");
+        tree.pf.dm_downsampling = _get_yaml_scalar<long>(yt, "dm_downsampling");
+        tree.pf.time_downsampling = _get_yaml_scalar<long>(yt, "time_downsampling");
+        tree.pf.wt_dm_downsampling = _get_yaml_scalar<long>(yt, "wt_dm_downsampling");
+        tree.pf.wt_time_downsampling = _get_yaml_scalar<long>(yt, "wt_time_downsampling");
+
+        // Same (subband_counts, fmin, fmax) call as the normal constructor path, where
+        // fmin == trigger_frequency by construction, and fmax == top edge of the band.
+        vector<long> sc = _get_yaml_scalar<vector<long>>(yt, "frequency_subband_counts");
+        tree.frequency_subbands = FrequencySubbands(sc, tree.trigger_frequency, cfg.zone_freq_edges.back());
+
+        // Light local sanity checks (deliberately NOT consistency-vs-rederivation checks).
+        xassert(tree.Dcore > 0);
+        xassert(tree.nprofiles > 0);
+        xassert(tree.ndm_out > 0);
+        xassert(tree.nt_out > 0);
+        xassert(tree.nt_ds > 0);
+
+        plan->trees.push_back(tree);
+    }
+
+    return plan;
+}
+
+
+// ------------------------------------------------------------------------------------------------
 
 
 // For a detailed specification (and the definitions of the output params), see the
@@ -496,6 +633,10 @@ void DedispersionPlan::decode_argmax2(
 
 void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones) const
 {
+    // to_yaml() walks the mega_ringbuf, which an "incomplete" plan leaves uninitialized
+    // (see make_incomplete_plan_from_yaml()).
+    xassert(!is_incomplete);
+
     // Top-of-file header comment (verbose only).
     if (verbose) {
         emitter << YAML::Comment(
@@ -626,6 +767,18 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
             emitter << YAML::Comment(ss.str());
         }
 
+        emitter << YAML::Key << "amb_rank" << YAML::Value << tree.amb_rank;
+        if (verbose)
+            emitter << YAML::Comment("Ambient rank of this tree (see DedispersionTree.hpp)");
+
+        emitter << YAML::Key << "dd_rank" << YAML::Value << tree.dd_rank;
+        if (verbose)
+            emitter << YAML::Comment("Active dedispersion rank of this tree (see DedispersionTree.hpp)");
+
+        emitter << YAML::Key << "nt_ds" << YAML::Value << tree.nt_ds;
+        if (verbose)
+            emitter << YAML::Comment("Downsampled time samples per chunk (= nt_in / 2^primary_tree_index)");
+
         emitter << YAML::Key << "max_width" << YAML::Value << tree.pf.max_width;
         if (verbose) {
             stringstream ss;
@@ -651,6 +804,10 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
         if (verbose)
             emitter << YAML::Comment("Peak-finder internal time-downsampling (sets out_argmax token granularity)");
 
+        emitter << YAML::Key << "nprofiles" << YAML::Value << tree.nprofiles;
+        if (verbose)
+            emitter << YAML::Comment("Number of peak-finding profiles (= 1 + 3*log2(max_width))");
+
         emitter << YAML::Key << "wt_dm_downsampling" << YAML::Value << tree.pf.wt_dm_downsampling;
         if (verbose && (tree.primary_tree_index > 0)) {
             stringstream ss;
@@ -664,6 +821,14 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
             ss << (tree.pf.wt_time_downsampling * ds_factor) << " before downsampling";
             emitter << YAML::Comment(ss.str());
         }
+
+        emitter << YAML::Key << "ndm_wt" << YAML::Value << tree.ndm_wt;
+        if (verbose)
+            emitter << YAML::Comment("Number of DMs in peak-finding weights array");
+
+        emitter << YAML::Key << "nt_wt" << YAML::Value << tree.nt_wt;
+        if (verbose)
+            emitter << YAML::Comment("Number of time samples in peak-finding weights array");
 
         if (verbose) {
             const FrequencySubbands &fs = tree.frequency_subbands;

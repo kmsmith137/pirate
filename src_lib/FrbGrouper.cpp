@@ -1,5 +1,5 @@
 #include "../include/pirate/FrbGrouper.hpp"
-#include "../include/pirate/YamlFile.hpp"         // YamlFile (DedispersionConfig::from_yaml)
+#include "../include/pirate/DedispersionPlan.hpp"  // make_incomplete_plan_from_yaml()
 #include "../include/pirate/network_utils.hpp"    // parse_ip_address, is_loopback_address
 
 // See "NDEBUG and libabseil" in notes/build.md for the push_macro trick,
@@ -466,10 +466,13 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
     xengine_metadata = std::make_shared<XEngineMetadata>(
         XEngineMetadata::from_yaml_string(xengine_metadata_yaml_string));
 
-    // DedispersionConfig has no from_yaml_string(); go via YamlFile(name, node).
-    YAML::Node cfg_node = YAML::Load(dedispersion_config_yaml_string);
-    dedispersion_config = DedispersionConfig::from_yaml(
-        YamlFile("dedispersion_config", cfg_node));
+    // Build the "incomplete" DedispersionPlan from the handshake yamls (this parses
+    // the config internally, so we take 'dedispersion_config' from it rather than
+    // parsing twice). Supports decode_argmax*() with the producer's per-tree Dcore
+    // values; see doc-comment in DedispersionPlan.hpp.
+    incomplete_plan = DedispersionPlan::make_incomplete_plan_from_yaml(
+        dedispersion_config_yaml_string, dedispersion_plan_yaml_string);
+    dedispersion_config = incomplete_plan->config;
 
     dedispersion_plan_yaml = YAML::Load(dedispersion_plan_yaml_string);
 

@@ -52,6 +52,7 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
 {
     const auto &plan = params.plan;   // local alias -- keeps the plan->... body below unchanged
     xassert(plan);
+    xassert(!plan->is_incomplete);  // incomplete plans lack the buffer/kernel params used below
 
     this->config = plan->config;
     this->dtype = plan->dtype;

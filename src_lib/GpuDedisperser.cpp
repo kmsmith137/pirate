@@ -91,6 +91,7 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
     params(params_)
 {
     xassert(params.plan);
+    xassert(!params.plan->is_incomplete);  // incomplete plans lack the MegaRingbuf/kernel params used below
     xassert(params.stream_pool);
     xassert(params.cuda_device_id >= 0);
     xassert_eq(params.plan->num_active_batches, params.stream_pool->num_compute_streams);
