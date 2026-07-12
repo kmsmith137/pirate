@@ -429,6 +429,75 @@ void DedispersionPlan::decode_argmax(
 }
 
 
+// See DedispersionPlan.hpp for details of input/output params.
+void DedispersionPlan::decode_argmax2(
+    long itree, long fmin, long fmax, long tlo, long thi, long p,
+    float &freq_lo_MHz, float &freq_hi_MHz, float &dm,
+    float &timestamp_samp, float &width_samp) const
+{
+    xassert_ge(itree, 0);
+    xassert_lt(itree, this->ntrees);
+    
+    long ntree = pow2(config.toplevel_tree_rank);  // note "toplevel"
+    long ipri = trees.at(itree).primary_tree_index;
+    
+    xassert_ge(fmin, 0);
+    xassert_lt(fmin, fmax);
+    xassert_lt(fmax, ntree);  // strict inequality
+    xassert_le(tlo, thi);
+    xassert_ge(p, 0);
+    xassert_lt(p, trees.at(itree).nprofiles);
+
+    // dispersion delay (in samples) per tree-freq
+    float dslope = float(thi-tlo) / float(fmax-fmin);
+
+    // The next block of code computes (based on peak-finding kernel index 0 <= p < P):
+    //
+    //  pf_width = nominal width of peak-finding kernel, in time samples (not sec or ms)
+    //  pf_shift = offset between pf-kernel center-of-mass and "trailing edge" of kernel
+    //
+    // Currently, we use an informal definition of pf_width, but pf_shift is unambiguous.
+    
+    long pdiv = p / 3;
+    long pmod = p - 3*pdiv;
+    float pf_width, pf_shift;
+
+    if (p == 0) {
+        // Boxcar of width 2^ipri.
+        pf_width = 1.0f * (1 << ipri);
+        pf_shift = 0.5f * (1 << ipri);
+    }
+    else if (pmod == 1) {
+        // Boxcar of width 2^{ipri+pdiv+1}
+        pf_width = 1.0f * (1 << (ipri+pdiv+1));
+        pf_shift = 0.5f * (1 << (ipri+pdiv+1));
+    }
+    else if (pmod == 2) {
+        // kernel = [0.5,1,0.5] upsampled by 2^{ipri+pdiv}.
+        pf_width = 2.0f * (1 << (ipri+pdiv));    // let's say pre-upsampled kernel has nomimal width 2
+        pf_shift = 1.5f * (1 << (ipri+pdiv));    // pre-upsampled kernel has pshift 1.5 (unambiguous)
+    }
+    else {
+        // kernel = [0.5,1,1,0.5] upsamled by 2^(ipri+pdiv-1)
+        pf_width = 3.0f * (1 << (ipri+pdiv-1));   // let's say "base" kernel has nominal width 3
+        pf_shift = 2.0f * (1 << (ipri+pdiv-1));   // pre-upsampled kernel has pshift 2.0 (unambiguous)
+    }
+
+    // Now we're ready to compute output params.
+    // Note that the DM is estimated by converting "dslope" to a full-band delay (ntree tree-freqs)
+    // The timestamp is computed as (thi + tdd - pf_shift), where
+    //   thi = (trailing-edge timesamp at tree-freq f = fmax + 0.5)
+    //   tdd = (dedispersion delay between f=ntree and f=fmax+0.5)
+    //   pf_shift = (offset between pulse center and trailing edge)
+    
+    freq_lo_MHz = config.delay_to_frequency(fmax+1);
+    freq_hi_MHz = config.delay_to_frequency(fmin);
+    dm = dslope * ntree * config.dm_per_unit_delay();
+    timestamp_samp = thi + dslope * (ntree-0.5-fmax) - pf_shift;
+    width_samp = pf_width;
+}
+
+
 void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones) const
 {
     // Top-of-file header comment (verbose only).

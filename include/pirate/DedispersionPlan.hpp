@@ -106,6 +106,23 @@ struct DedispersionPlan
         long itree, long idm_coarse, long itime_coarse,
         long &fmin, long &fmax, long &tlo, long &thi, long &p) const;
 
+    
+    // Convert the parameters (fmin, fmax, tlo, thi, p) returned by decode_argmax()
+    // to "physical" params:
+    //
+    //   - freq_{lo,hi}_MHz: low/high radio frequency of "winning" subband
+    //   - dm:               dispersion measure in pc/cm^3
+    //   - timestamp_samp:   "winning" arrival time, see below
+    //   - width_samp:       "winning" peak-finder width, in toplevel time samples.
+    //
+    // The 'timestamp_samp' is the estimated arrival time of the pulse center
+    // at the lowest radio frequency (highest tree-freq).
+    
+    void decode_argmax2(
+        long itree, long fmin, long fmax, long tlo, long thi, long p,
+        float &freq_lo_MHz, float &freq_hi_MHz, float &dm,
+        float &timestamp_samp, float &width_samp) const;
+
 
     // -------------------------------------------------------------------------------------------------
     //

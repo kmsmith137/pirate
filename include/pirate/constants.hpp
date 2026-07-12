@@ -65,11 +65,6 @@ struct constants
     static constexpr int grouper_ping_timeout_ms = 5000;
     static constexpr int grouper_connect_timeout_ms = 2000;
 
-    // These assumptions are made all over the place.
-    // (Placement of static_asserts in this source file is arbitrary.)
-    static_assert(sizeof(int) == 4);
-    static_assert(sizeof(long) == 8);
-
     // The CUDA driver caps a single cudaHostRegister() call at ~511 GiB (undocumented!!)
     //
     // Calling cudaHostRegister() in chunks works, but creates a new problem:
@@ -89,6 +84,17 @@ struct constants
 
     // Chunk size for cudaHostRegister().
     static constexpr long cuda_host_register_chunk_size = 64L << 30;  // 64 GiB
+
+    // ---------------------------------------------------------------------------------------------
+    //
+    // Static asserts and derived params.
+
+    // These assumptions are made all over the place.
+    static_assert(sizeof(int) == 4);
+    static_assert(sizeof(long) == 8);
+
+    static_assert((max_pf_width & (max_pf_width-1)) == 0,
+                  "max_pf_kernels must be a power of two");
     
     // The constant is power-of-two so the splitter can use bit-arithmetic.
     static_assert((cuda_host_register_chunk_size
