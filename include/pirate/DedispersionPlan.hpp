@@ -63,6 +63,49 @@ struct DedispersionPlan
     void to_yaml(YAML::Emitter &emitter, bool verbose = false, bool zones = false) const;
     std::string to_yaml_string(bool verbose = false, bool zones = false) const;
 
+    // decode_argmax(): converts an out_argmax token (plus its array indices) into the
+    // winning trial parameters, i.e. the (subband, peak-finding profile, fine-grained dm,
+    // fine-grained arrival time) responsible for the coarse-grained maximum in 'out_max'.
+    //
+    // Inputs:
+    //
+    //   argmax_token = uint32 token from trees[itree]'s out_argmax array
+    //   0 <= itree < ntrees
+    //   0 <= idm_coarse < trees[itree].ndm_out     (dm index in out_max/out_argmax)
+    //   0 <= itime_coarse < trees[itree].nt_out    (time index in out_max/out_argmax)
+    //
+    // Outputs are TOPLEVEL-relative: tree-freq channels of the rank-toplevel_tree_rank
+    // gridding, and full-resolution time samples with t=0 at the start of the current
+    // chunk (i.e. no per-tree time downsampling or early-trigger reindexing -- all
+    // per-tree reindexing is done here, not by the caller):
+    //
+    //   0 <= fmin < fmax < pow2(toplevel_tree_rank)
+    //       Tree-freq range (inclusive) spanned by the winning frequency subband.
+    //       (Sharper per-tree bound: fmax < pow2(toplevel_tree_rank - early_trigger_level).)
+    //
+    //   tlo <= thi < nt_in
+    //       Trailing arrival times: tlo (resp. thi) is the LAST time sample of channel
+    //       fmin (resp. fmax) which is summed into the winning out_max value. Negative
+    //       values are frequent (dedispersion delays usually exceed the chunk length),
+    //       and refer to earlier chunks. For downsampled trees (primary_tree_index > 0),
+    //       tlo/thi point at the end of their downsampled bin, i.e. always satisfy
+    //       t == pow2(ipri)-1 (mod pow2(ipri)).
+    //
+    //   0 <= p < trees[itree].nprofiles
+    //       Winning peak-finding profile index.
+    //
+    // Note: the sum over channel f spans an f-dependent range tmin(f) <= t <= tmax(f)
+    // with tmax(f) nondecreasing in f; this function reports tmax at the two edge
+    // channels (where the tree delays are exact, not tree-rounded). tmin==tmax iff
+    // (p == 0 and primary_tree_index == 0).
+    //
+    // Throws an exception on out-of-range indices or a malformed token.
+
+    void decode_argmax(
+        uint argmax_token,
+        long itree, long idm_coarse, long itime_coarse,
+        long &fmin, long &fmax, long &tlo, long &thi, long &p) const;
+
 
     // -------------------------------------------------------------------------------------------------
     //

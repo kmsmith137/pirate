@@ -486,7 +486,7 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                 // Token parsing starts here.
                 // Reminder: token = (t) | (p << 8) | (m << 16).
 
-                long m = (token >> 16) & 0xffu;
+                long m = (token >> 16) & 0xffffu;
                 long p = (token >> 8) & 0xffu;
                 long t = (token & 0xffu);
 

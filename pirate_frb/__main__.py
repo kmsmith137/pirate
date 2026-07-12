@@ -59,6 +59,7 @@ def parse_test(subparsers):
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection test')
+    parser.add_argument('--amax', action='store_true', help='Runs DedispersionPlan.decode_argmax() tests (black-box probe arrays)')
 
 
 def rrange(registry_class):
@@ -78,7 +79,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -179,6 +180,9 @@ def test(args):
             test_fast_avar.test_cpp_pf_variance()
             if i == 0:  # end-to-end (builds a plan + runs the full python reference); run once
                 test_fast_avar.test_cpp_pf_avar_approximation()
+
+        if run_all_tests or args.amax:
+            tests.test_decode_argmax()
 
         if run_all_tests or args.net:
             # Network/allocator tests only need to run once (not niter times)

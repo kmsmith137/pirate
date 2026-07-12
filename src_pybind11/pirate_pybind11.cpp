@@ -313,6 +313,28 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    zones: Include the per-clag mega_ringbuf host/gpu zone breakdown\n\n"
                "Returns:\n"
                "    YAML string representation of the plan")
+          .def("decode_argmax",
+               [](const DedispersionPlan &self, uint token, long itree, long idm_coarse, long itime_coarse) {
+                   long fmin, fmax, tlo, thi, p;
+                   self.decode_argmax(token, itree, idm_coarse, itime_coarse, fmin, fmax, tlo, thi, p);
+                   return py::make_tuple(fmin, fmax, tlo, thi, p);
+               },
+               py::arg("token"), py::arg("itree"), py::arg("idm_coarse"), py::arg("itime_coarse"),
+               "Decode an out_argmax token into the winning trial parameters.\n\n"
+               "Args:\n"
+               "    token: uint32 token from trees[itree]'s out_argmax array\n"
+               "    itree: tree index, in [0, ntrees)\n"
+               "    idm_coarse: dm index in out_max/out_argmax, in [0, trees[itree].ndm_out)\n"
+               "    itime_coarse: time index in out_max/out_argmax, in [0, trees[itree].nt_out)\n\n"
+               "Returns:\n"
+               "    Tuple (fmin, fmax, tlo, thi, p), TOPLEVEL-relative: fmin/fmax are the\n"
+               "    (inclusive) tree-freq range of the winning subband, in channels of the\n"
+               "    rank-toplevel_tree_rank gridding (0 <= fmin < fmax < 2^toplevel_tree_rank).\n"
+               "    tlo/thi are the trailing (last-summed) arrival times at channels fmin/fmax,\n"
+               "    in full-resolution samples with t=0 at chunk start (tlo <= thi < nt_in;\n"
+               "    negative values refer to earlier chunks). p is the winning peak-finding\n"
+               "    profile index. Throws on out-of-range indices or a malformed token.\n"
+               "    See DedispersionPlan.hpp for the full specification.")
     ;
 
     // Returned by GpuDedisperser.acquire_output(). Must be registered
@@ -501,7 +523,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "CPU reference dedisperser (for testing and variance studies).\n"
         "\n"
         "Constructed directly:\n"
-        "    ReferenceDedisperser(plan, sophistication, enable_variances=False)\n"
+        "    ReferenceDedisperser(plan, sophistication, enable_variances=False,\n"
+        "                         tree_domain_input=False)\n"
         "\n"
         "'sophistication' (0, 1, or 2) selects the reference implementation:\n"
         "  0 -- one-stage dedispersion (instead of two stages); in downsampled trees,\n"
@@ -518,22 +541,30 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "GpuDedisperser built from the same plan. Inspect via the Dcore property.\n"
         "\n"
         "If enable_variances=True, the per-tree out_var buffers are allocated and filled\n"
-        "by dedisperse() (per-chunk peak-finding variances; see ReferencePeakFindingKernel).")
+        "by dedisperse() (per-chunk peak-finding variances; see ReferencePeakFindingKernel).\n"
+        "\n"
+        "If tree_domain_input=True, the tree gridding kernel is skipped: input_array has\n"
+        "shape (beams_per_batch, 2^toplevel_tree_rank, nt_in) and is interpreted as an\n"
+        "already-gridded toplevel tree-domain array. Used by unit tests that inject probes\n"
+        "into specific tree-freq channels (see test_decode_argmax).")
         .def(py::init([](std::shared_ptr<DedispersionPlan> plan, int sophistication,
-                         bool enable_variances) {
+                         bool enable_variances, bool tree_domain_input) {
             ReferenceDedisperserBase::Params p;
             p.plan = plan;
             p.sophistication = sophistication;
             p.enable_variances = enable_variances;
+            p.tree_domain_input = tree_domain_input;
 
             // make() -- plan walk plus large host allocations -- runs GIL-free.
             py::gil_scoped_release nogil;
             return ReferenceDedisperserBase::make(p);
         }), py::arg("plan"), py::arg("sophistication"),
-            py::arg("enable_variances") = false)
+            py::arg("enable_variances") = false,
+            py::arg("tree_domain_input") = false)
         // params fields (nested) exposed as read-only properties:
         .def_property_readonly("sophistication",   [](const ReferenceDedisperserBase &d){ return d.params.sophistication; })
         .def_property_readonly("enable_variances", [](const ReferenceDedisperserBase &d){ return d.params.enable_variances; })
+        .def_property_readonly("tree_domain_input", [](const ReferenceDedisperserBase &d){ return d.params.tree_domain_input; })
         .def_property_readonly("Dcore", [](const ReferenceDedisperserBase &d) {
             std::vector<long> ret;
             for (const auto &k : d.pf_kernels)

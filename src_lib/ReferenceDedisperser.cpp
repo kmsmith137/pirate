@@ -64,8 +64,10 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
     this->ntrees = plan->ntrees;
     this->trees = plan->trees;
 
-    // Tree gridding kernel.
-    this->tree_gridding_kernel = make_shared<ReferenceTreeGriddingKernel> (plan->tree_gridding_kernel_params);
+    // Tree gridding kernel. (Not needed in tree-domain-input mode, where the caller
+    // supplies an already-gridded toplevel array and "step 0" is a copy.)
+    if (!params.tree_domain_input)
+        this->tree_gridding_kernel = make_shared<ReferenceTreeGriddingKernel> (plan->tree_gridding_kernel_params);
 
     // Peak-finding kernels. (Per-tree Dcore comes from the plan, via pf_params.Dcore.)
     for (long itree = 0; itree < ntrees; itree++) {
@@ -74,8 +76,9 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
         this->pf_kernels.push_back(pf_kernel);
     }
 
-    // Allocate frequency-space input array.
-    this->input_array = Array<float>({beams_per_batch, nfreq, nt_in}, af_uhost | af_zero);
+    // Allocate input array (frequency-space, or toplevel tree-domain if tree_domain_input).
+    long input_nchan = params.tree_domain_input ? pow2(config.toplevel_tree_rank) : nfreq;
+    this->input_array = Array<float>({beams_per_batch, input_nchan, nt_in}, af_uhost | af_zero);
     
     // Allocate weights arrays.
     this->wt_arrays.resize(ntrees);
@@ -200,8 +203,12 @@ ReferenceDedisperser0::ReferenceDedisperser0(const Params &params) :
 void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
 {
     // Step 0: Run tree gridding kernel (input_array -> downsampled_inputs.at(0)).
-    tree_gridding_kernel->apply(downsampled_inputs.at(0), input_array);
-    
+    // In tree-domain-input mode, input_array is already gridded and step 0 is a copy.
+    if (params.tree_domain_input)
+        downsampled_inputs.at(0).fill(input_array);
+    else
+        tree_gridding_kernel->apply(downsampled_inputs.at(0), input_array);
+
     for (int ipri = 1; ipri < num_primary_trees; ipri++) {
         
         // Step 1: downsample input array (straightforward downsample, not "lagged" downsample).
@@ -378,9 +385,13 @@ ReferenceDedisperser1::ReferenceDedisperser1(const Params &params) :
 void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
 {
     // Step 0: Run tree gridding kernel (input_array -> stage1_dd_buf.bufs.at(0)).
+    // In tree-domain-input mode, input_array is already gridded and step 0 is a copy.
     Array<float> dd = stage1_dd_buf.bufs.at(0).template cast<float> ();
-    tree_gridding_kernel->apply(dd, input_array);
-    
+    if (params.tree_domain_input)
+        dd.fill(input_array);
+    else
+        tree_gridding_kernel->apply(dd, input_array);
+
     // Step 1: run LaggedDownsampler.    
     lds_kernel->apply(stage1_dd_buf, ibatch);
 
@@ -525,9 +536,13 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
     long iframe = (ichunk * BT) + (ibatch * BB);
 
     // Step 0: Run tree gridding kernel (input_array -> stage1_dd_buf.bufs.at(0)).
+    // In tree-domain-input mode, input_array is already gridded and step 0 is a copy.
     Array<float> dd = stage1_dd_buf.bufs.at(0).template cast<float> ();
-    tree_gridding_kernel->apply(dd, input_array);
-    
+    if (params.tree_domain_input)
+        dd.fill(input_array);
+    else
+        tree_gridding_kernel->apply(dd, input_array);
+
     // Step 1: run LaggedDownsampler.
     lds_kernel->apply(stage1_dd_buf, ibatch);
 

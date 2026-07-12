@@ -7,6 +7,7 @@
 
 #include <sstream>
 #include <iomanip>
+#include <algorithm>   // std::min
 #include <ksgpu/xassert.hpp>
 #include <yaml-cpp/emitter.h>
 
@@ -351,6 +352,80 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
 
 // ------------------------------------------------------------------------------------------------
+
+
+// For a detailed specification (and the definitions of the output params), see the
+// doc-comment in DedispersionPlan.hpp. Background for the formulas below: the token
+// encoding and its time quantization are described in PeakFindingKernel.hpp, the
+// subband time-lag conventions in notes/tree_dedispersion.tex (subband search section)
+// and ReferenceTree.cpp, and the output-array indexing in the "Dedispersion output
+// arrays" section of the tex notes.
+
+void DedispersionPlan::decode_argmax(
+    uint argmax_token,
+    long itree, long idm_coarse, long itime_coarse,
+    long &fmin, long &fmax, long &tlo, long &thi, long &p) const
+{
+    xassert((itree >= 0) && (itree < ntrees));
+    const DedispersionTree &tr = trees.at(itree);
+    const FrequencySubbands &fs = tr.frequency_subbands;
+
+    xassert((idm_coarse >= 0) && (idm_coarse < tr.ndm_out));
+    xassert((itime_coarse >= 0) && (itime_coarse < tr.nt_out));
+
+    long Dout = xdiv(tr.nt_ds, tr.nt_out);            // = tr.pf.time_downsampling
+    long Dcore = stage2_pf_params.at(itree).Dcore;    // token time granularity (see PeakFindingKernel.hpp)
+
+    // Parse token = (t) | (p << 8) | (m << 16).
+    long m = (argmax_token >> 16) & 0xffff;
+    p      = (argmax_token >> 8) & 0xff;
+    long t = argmax_token & 0xff;
+
+    xassert_lt(m, fs.M);           // m = multiplet (frequency subband, fine dm)
+    xassert_lt(p, tr.nprofiles);   // p = peak-finding profile
+    xassert_lt(t, Dout);           // t = fine time within coarse output bin
+
+    // The token's fine time is quantized: t = isamp * dt, where dt = min(Dcore, 2^lpf)
+    // and lpf is the peak-finding level (boxcar length 2^lpf) of profile p.
+    long lpf = p ? ((p-1)/3) : 0;
+    long dt = std::min(Dcore, pow2(lpf));
+    xassert_eq(t % dt, 0);
+
+    long n = fs.m_to_n.at(m);                 // frequency subband
+    long dfine = fs.m_to_d.at(m);             // fine dm within subband
+    long flo = fs.n_to_flo.at(n);             // subband range, in coarse-freq channels
+    long fhi = fs.n_to_fhi.at(n);
+    long lsb = integer_log2(fhi - flo);       // subband level
+
+    long ipri = tr.primary_tree_index;
+    long rr = tr.total_rank() + ((ipri > 0) ? 1 : 0);   // rank of underlying dedispersion
+    xassert_eq(rr, config.toplevel_tree_rank - tr.early_trigger_level);
+
+    // Frequency: the tree's channels ARE toplevel tree-freq channels (early triggers
+    // restrict the search to a prefix; time-downsampling leaves the freq axis alone).
+
+    long G = pow2(rr - fs.pf_rank);   // toplevel channels per coarse-freq channel
+    fmin = flo * G;
+    fmax = fhi * G - 1;
+
+    // Times, first in the tree's (time-downsampled) frame. The trailing pf-input sample
+    // read by the winning trial is Tpf. The pf input at time T sums channel f at time
+    // (T - Delta(f)), where Delta is exact at the subband edges: Delta(fmax) = Tlag
+    // (the extrapolate-to-band-top lag) and Delta(fmin) = Tlag + Dsub (Dsub = delay
+    // across the subband).
+
+    long dhi = idm_coarse + ((ipri > 0) ? tr.ndm_out : 0);   // coarse delay (downsampled trees search the upper half)
+    long Tpf = itime_coarse * Dout + t + dt - 1;
+    long thi_ds = Tpf - (pow2(fs.pf_rank) - fhi) * dhi;      // Tpf - Tlag
+    long tlo_ds = thi_ds - (dhi * pow2(lsb) + dfine);        // Tpf - Tlag - Dsub
+
+    // Convert to toplevel full-resolution samples. Downsampled sample T covers full-res
+    // samples [T*2^ipri, (T+1)*2^ipri - 1]; the trailing sample summed is the end of the
+    // trailing bin.
+
+    thi = ((thi_ds + 1) << ipri) - 1;
+    tlo = ((tlo_ds + 1) << ipri) - 1;
+}
 
 
 void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones) const

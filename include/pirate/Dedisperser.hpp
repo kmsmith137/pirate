@@ -399,6 +399,12 @@ struct ReferenceDedisperserBase
         std::shared_ptr<DedispersionPlan> plan;
         int sophistication = -1;        // 0, 1, or 2 (see above)
         bool enable_variances = false;  // if true, allocate + fill out_var
+
+        // If true, the tree gridding kernel is skipped: 'input_array' has shape
+        // (beams_per_batch, pow2(toplevel_tree_rank), nt_in) and is interpreted as an
+        // already-gridded toplevel tree-domain array. Used by unit tests that need to
+        // inject probes into specific tree-freq channels (see test_decode_argmax).
+        bool tree_domain_input = false;
     };
 
     // Constructor not intended to be called directly -- use make() below, which
@@ -427,7 +433,8 @@ struct ReferenceDedisperserBase
     virtual void dedisperse(long ichunk, long ibatch) = 0;
 
     // Before calling dedisperse(), caller should fill 'input_array'.
-    // Shape is (beams_per_batch, nfreq, nt_in).
+    // Shape is (beams_per_batch, nfreq, nt_in), or (beams_per_batch,
+    // pow2(toplevel_tree_rank), nt_in) if Params::tree_domain_input is set.
     ksgpu::Array<float> input_array;
 
     // Befre calling dedisperse(), caller should fill 'wt_arrays' (peak-finding weights).
