@@ -650,7 +650,7 @@ string DedispersionConfig::to_yaml_string(bool verbose) const
 // static member function
 DedispersionConfig DedispersionConfig::from_yaml(const string &filename)
 {
-    YamlFile f(filename);
+    YamlFile f = YamlFile::from_file(filename);
     return DedispersionConfig::from_yaml(f);
 }
 

@@ -12,20 +12,23 @@ namespace pirate {
 #endif
 
 
-// Helper for constructor.
-static YAML::Node load_yaml(const string &filename)
+// Static member function.
+YamlFile YamlFile::from_file(const string &filename)
 {
     if (!file_exists(filename))
         throw runtime_error("File '" + filename + "' not found");
-    return YAML::LoadFile(filename);
+    return YamlFile(filename, YAML::LoadFile(filename));   // name = filename
 }
 
 
-YamlFile::YamlFile(const string &filename) :
-    YamlFile(filename, load_yaml(filename))
-{ }
+// Static member function.
+YamlFile YamlFile::from_string(const string &yaml, const string &name)
+{
+    return YamlFile(name, YAML::Load(yaml));
+}
 
 
+// Protected constructor (callers use from_file() / from_string()).
 YamlFile::YamlFile(const string &name_, const YAML::Node &node_) :
     name(name_), node(node_)
 { }

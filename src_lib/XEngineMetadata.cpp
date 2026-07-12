@@ -446,8 +446,7 @@ string XEngineMetadata::to_yaml_string(bool verbose) const
 // static member function
 XEngineMetadata XEngineMetadata::from_yaml_string(const string &s)
 {
-    YAML::Node node = YAML::Load(s);
-    YamlFile f("<string>", node);
+    YamlFile f = YamlFile::from_string(s);
     return XEngineMetadata::from_yaml(f);
 }
 
@@ -455,7 +454,7 @@ XEngineMetadata XEngineMetadata::from_yaml_string(const string &s)
 // static member function
 XEngineMetadata XEngineMetadata::from_yaml_file(const string &filename)
 {
-    YamlFile f(filename);
+    YamlFile f = YamlFile::from_file(filename);
     return XEngineMetadata::from_yaml(f);
 }
 

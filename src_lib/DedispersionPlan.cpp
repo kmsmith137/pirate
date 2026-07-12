@@ -10,8 +10,7 @@
 #include <iomanip>
 #include <algorithm>   // std::min
 #include <ksgpu/xassert.hpp>
-#include <yaml-cpp/yaml.h>     // YAML::Load, used in make_incomplete_plan_from_yaml()
-#include <yaml-cpp/emitter.h>
+#include <yaml-cpp/emitter.h>   // YAML::Emitter, used in to_yaml()
 
 using namespace std;
 using namespace ksgpu;
@@ -364,94 +363,67 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, Incomplete
 }
 
 
-// Strict yaml accessors: unlike bare yaml-cpp lookups, these throw with the key name
-// on a missing key or a type mismatch. Strictness is what keeps to_yaml() and
-// make_incomplete_plan_from_yaml() in sync (enforced by the round-trip unit test in
-// test_decode_argmax.py).
-
-static YAML::Node _get_yaml_key(const YAML::Node &node, const string &key)
-{
-    YAML::Node ret = node[key];
-    if (!ret) {
-        stringstream ss;
-        ss << "make_incomplete_plan_from_yaml(): missing key '" << key << "' in plan yaml";
-        throw runtime_error(ss.str());
-    }
-    return ret;
-}
-
-template<typename T>
-static T _get_yaml_scalar(const YAML::Node &node, const string &key)
-{
-    try {
-        return _get_yaml_key(node, key).as<T>();
-    }
-    catch (const YAML::Exception &e) {
-        stringstream ss;
-        ss << "make_incomplete_plan_from_yaml(): key '" << key << "' in plan yaml: " << e.what();
-        throw runtime_error(ss.str());
-    }
-}
-
-
 // Static member function.
 shared_ptr<DedispersionPlan> DedispersionPlan::make_incomplete_plan_from_yaml(
     const string &config_yaml_str, const string &plan_yaml_str)
 {
     // Parse the config first, so that the (const) 'config' member can be initialized
     // in the tag constructor's init-list. (Note: from_yaml() calls config.validate().)
-    YAML::Node cfg_node = YAML::Load(config_yaml_str);
-    DedispersionConfig cfg = DedispersionConfig::from_yaml(YamlFile("dedispersion_config", cfg_node));
+    DedispersionConfig cfg = DedispersionConfig::from_yaml(
+        YamlFile::from_string(config_yaml_str, "dedispersion_config"));
 
     // make_shared can't call a protected constructor.
     shared_ptr<DedispersionPlan> plan(new DedispersionPlan(cfg, IncompleteTag()));
 
-    // Everything below is a naive transcription of the plan yaml ("dumb" by design:
-    // no code shared with the normal constructor path, no consistency asserts against
+    // Everything below is a naive transcription of the plan yaml ("dumb" by design: no
+    // code shared with the normal constructor path, no consistency asserts against
     // re-derived values, no kernel registry queries -- producer values are adopted
     // verbatim). The "low-level data needed for compute kernels" (mega_ringbuf,
-    // kernel/buffer params, nelts_per_segment) is deliberately left uninitialized.
+    // kernel/buffer params, nelts_per_segment) is deliberately left uninitialized. The
+    // YamlFile accessors throw (naming the key/index) on a missing key or type mismatch;
+    // that strictness is what keeps to_yaml() and this function in sync (enforced by the
+    // round-trip unit test in test_decode_argmax.py).
 
-    YAML::Node py = YAML::Load(plan_yaml_str);
+    YamlFile py = YamlFile::from_string(plan_yaml_str, "dedispersion_plan");
 
-    plan->dtype = ksgpu::Dtype::from_str(_get_yaml_scalar<string>(py, "dtype"));
-    plan->nfreq = _get_yaml_scalar<long>(py, "nfreq");
-    plan->nt_in = _get_yaml_scalar<long>(py, "nt_in");
-    plan->num_primary_trees = _get_yaml_scalar<long>(py, "num_primary_trees");
-    plan->beams_per_gpu = _get_yaml_scalar<long>(py, "beams_per_gpu");
-    plan->beams_per_batch = _get_yaml_scalar<long>(py, "beams_per_batch");
-    plan->num_active_batches = _get_yaml_scalar<long>(py, "num_active_batches");
+    plan->dtype = ksgpu::Dtype::from_str(py.get_scalar<string>("dtype"));
+    plan->nfreq = py.get_scalar<long>("nfreq");
+    plan->nt_in = py.get_scalar<long>("nt_in");
+    plan->num_primary_trees = py.get_scalar<long>("num_primary_trees");
+    plan->beams_per_gpu = py.get_scalar<long>("beams_per_gpu");
+    plan->beams_per_batch = py.get_scalar<long>("beams_per_batch");
+    plan->num_active_batches = py.get_scalar<long>("num_active_batches");
     plan->nbits = plan->dtype.nbits;
-    plan->stage1_dd_rank = _get_yaml_scalar<vector<long>>(py, "stage1_dd_rank");
-    plan->stage1_amb_rank = _get_yaml_scalar<vector<long>>(py, "stage1_amb_rank");
-    plan->ntrees = _get_yaml_scalar<long>(py, "ntrees");
+    plan->stage1_dd_rank = py.get_vector<long>("stage1_dd_rank");
+    plan->stage1_amb_rank = py.get_vector<long>("stage1_amb_rank");
+    plan->ntrees = py.get_scalar<long>("ntrees");
 
-    YAML::Node ytrees = _get_yaml_key(py, "trees");
+    YamlFile ytrees = py["trees"];
     xassert(plan->ntrees > 0);
-    xassert_eq(plan->ntrees, long(ytrees.size()));
+    xassert_eq(plan->ntrees, ytrees.size());
 
     for (long i = 0; i < plan->ntrees; i++) {
-        YAML::Node yt = ytrees[i];
+        YamlFile yt = ytrees[i];
         DedispersionTree tree;
 
-        tree.primary_tree_index = _get_yaml_scalar<int>(yt, "primary_tree_index");
-        tree.early_trigger_level = _get_yaml_scalar<int>(yt, "early_trigger_level");
-        tree.amb_rank = _get_yaml_scalar<int>(yt, "amb_rank");
-        tree.dd_rank = _get_yaml_scalar<int>(yt, "dd_rank");
-        tree.nt_ds = _get_yaml_scalar<int>(yt, "nt_ds");
-        tree.Dcore = _get_yaml_scalar<long>(yt, "Dcore");
-        tree.nprofiles = _get_yaml_scalar<long>(yt, "nprofiles");
-        tree.ndm_out = _get_yaml_scalar<long>(yt, "ndm_out");
-        tree.ndm_wt = _get_yaml_scalar<long>(yt, "ndm_wt");
-        tree.nt_out = _get_yaml_scalar<long>(yt, "nt_out");
-        tree.nt_wt = _get_yaml_scalar<long>(yt, "nt_wt");
+        tree.primary_tree_index = yt.get_scalar<int>("primary_tree_index");
+        tree.early_trigger_level = yt.get_scalar<int>("early_trigger_level");
+        tree.amb_rank = yt.get_scalar<int>("amb_rank");
+        tree.dd_rank = yt.get_scalar<int>("dd_rank");
+        tree.nt_ds = yt.get_scalar<int>("nt_ds");
+        tree.Dcore = yt.get_scalar<long>("Dcore");
+        tree.nprofiles = yt.get_scalar<long>("nprofiles");
+        tree.ndm_out = yt.get_scalar<long>("ndm_out");
+        tree.ndm_wt = yt.get_scalar<long>("ndm_wt");
+        tree.nt_out = yt.get_scalar<long>("nt_out");
+        tree.nt_wt = yt.get_scalar<long>("nt_wt");
 
         // Informational members. Note that these round-trip lossily (to_yaml() uses
         // yaml-cpp's default ~6-significant-digit precision for doubles); they are
         // print/display values, not used by decode_argmax*().
-        tree.dm_min = _get_yaml_scalar<double>(yt, "dm_min");
-        tree.dm_max = _get_yaml_scalar<double>(yt, "dm_max");
-        tree.trigger_frequency = _get_yaml_scalar<double>(yt, "trigger_frequency");
+        tree.dm_min = yt.get_scalar<double>("dm_min");
+        tree.dm_max = yt.get_scalar<double>("dm_max");
+        tree.trigger_frequency = yt.get_scalar<double>("trigger_frequency");
 
         // 'pf' is seeded from the config's PrimaryTree (for num_early_triggers), then
         // the per-tree values are overwritten from the yaml. Note that the config's
@@ -459,15 +431,15 @@ shared_ptr<DedispersionPlan> DedispersionPlan::make_incomplete_plan_from_yaml(
         // post-auto-fill values -- the auto-fill rule is deliberately not reimplemented here.
         xassert((tree.primary_tree_index >= 0) && (tree.primary_tree_index < long(cfg.primary_trees.size())));
         tree.pf = cfg.primary_trees.at(tree.primary_tree_index);
-        tree.pf.max_width = _get_yaml_scalar<long>(yt, "max_width");
-        tree.pf.dm_downsampling = _get_yaml_scalar<long>(yt, "dm_downsampling");
-        tree.pf.time_downsampling = _get_yaml_scalar<long>(yt, "time_downsampling");
-        tree.pf.wt_dm_downsampling = _get_yaml_scalar<long>(yt, "wt_dm_downsampling");
-        tree.pf.wt_time_downsampling = _get_yaml_scalar<long>(yt, "wt_time_downsampling");
+        tree.pf.max_width = yt.get_scalar<long>("max_width");
+        tree.pf.dm_downsampling = yt.get_scalar<long>("dm_downsampling");
+        tree.pf.time_downsampling = yt.get_scalar<long>("time_downsampling");
+        tree.pf.wt_dm_downsampling = yt.get_scalar<long>("wt_dm_downsampling");
+        tree.pf.wt_time_downsampling = yt.get_scalar<long>("wt_time_downsampling");
 
         // Same (subband_counts, fmin, fmax) call as the normal constructor path, where
         // fmin == trigger_frequency by construction, and fmax == top edge of the band.
-        vector<long> sc = _get_yaml_scalar<vector<long>>(yt, "frequency_subband_counts");
+        vector<long> sc = yt.get_vector<long>("frequency_subband_counts");
         tree.frequency_subbands = FrequencySubbands(sc, tree.trigger_frequency, cfg.zone_freq_edges.back());
 
         // Light local sanity checks (deliberately NOT consistency-vs-rederivation checks).

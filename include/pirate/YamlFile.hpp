@@ -36,21 +36,29 @@ namespace pirate {
 //
 // then the file could be parsed as follows:
 //
-//   f = YamlFile(filename);
+//   f = YamlFile::from_file(filename);
 //
 //   int x = f.get_scalar<int>("x");
 //   vector<int> y = f.get_vector<int>("y");
 //
 //   f.check_for_invalid_keys();
+//
+// A YamlFile is constructed through a factory (from_file / from_string) that names its
+// source; the node-wrapping constructor is protected. The 'name' is used only to make
+// exception messages traceable.
 
 
 struct YamlFile {
     // Allowed values: { Type::Undefined, Type::Null, Type::Scalar, Type::Sequence, Type::Map }
     using Type = YAML::NodeType::value;
-    
-    YamlFile(const std::string &filename);
-    YamlFile(const std::string &name, const YAML::Node &node);
-    
+
+    // Read + parse a YAML file. The 'name' (used in exception messages) is the filename.
+    static YamlFile from_file(const std::string &filename);
+
+    // Parse YAML from an in-memory string. 'name' is an optional label used only in
+    // exception messages (there is no filename to name the source).
+    static YamlFile from_string(const std::string &yaml, const std::string &name = "<string>");
+
     std::string name;
     YAML::Node node;
 
@@ -101,6 +109,13 @@ struct YamlFile {
 
     // Intended for debugging
     static std::string type_str(Type t);
+
+  protected:
+    // Fundamental primitive: wrap an already-parsed node with a name. Protected so that
+    // callers go through a factory (from_file / from_string) that names the source, rather
+    // than passing a bare string whose role (filename vs label) is ambiguous. The factories
+    // and the child-node accessors (operator[] / _get_child) call this.
+    YamlFile(const std::string &name, const YAML::Node &node);
 };
 
 
