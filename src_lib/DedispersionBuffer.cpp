@@ -42,7 +42,7 @@ void DedispersionBufferParams::validate() const
     long nt_divisor = xdiv(8 * constants::bytes_per_gpu_cache_line, dtype.nbits);;
     
     for (long i = 0; i < nbuf; i++) {
-        xassert((buf_rank[i] >= 0) && (buf_rank[i] <= 16));
+        xassert((buf_rank[i] >= 0) && (buf_rank[i] <= constants::max_tree_rank));
         xassert(buf_ntime[i] > 0);
         xassert_divisible(buf_ntime[i], nt_divisor);
     }

@@ -81,8 +81,15 @@ namespace pirate {
 //       - stage2 dedispersion (or ccd2) kernel (0 <= itree < num_trees)
 //         has consumer_id == (itree + num_primary_trees - 1).
 // 
-//   - "Segments" and "quadruples". Each consumer reads "segments" from the ring buffer, 
-//     where a segment is always 128 bytes (constants::bytes_per_gpu_cache_line). 
+//   - "Segments" and "quadruples". Each consumer reads "segments" from the ring buffer.
+//     MegaRingbuf is AGNOSTIC to the byte size of a segment (nbytes_per_segment): all of
+//     its bookkeeping -- offsets, capacities, the 2^32-segment overflow guard, and the
+//     quadruple encoding -- is done in segment COUNTS, and it is never told a byte size
+//     (its Params carry none). The physical byte size is known only to the compute/copy
+//     kernels that address the buffer. In the production (dedispersion) path a segment is
+//     always 128 bytes == constants::bytes_per_gpu_cache_line (nelts_per_segment =
+//     bytes_per_gpu_cache_line / sizeof(dtype); hard-asserted at GpuDedisperser.cpp:145),
+//     but MegaRingbuf itself does not depend on that.
 //
 //     The number of ** segments per beam ** that each consumer reads is denoted
 //
@@ -126,7 +133,7 @@ namespace pirate {
 //
 //        uint frame = (frame0 + frame_offset_within_zone + b) % frames_in_zone;
 //        long seg = global_segment_offset + (frame * segments_per_frame);
-//        char *p = global_base + (128 * seg);   // 128 bytes per segmnet
+//        char *p = global_base + (nbytes_per_segment * seg);   // kernel supplies nbytes_per_segment (128 in the dedispersion path)
 //
 //      The point of the quadruple is that it allows segment addresses to be computed
 //      on a single GPU thread, which stores only the uint quadruple[4].
@@ -200,9 +207,11 @@ struct MegaRingbuf {
     ksgpu::Array<uint> g2g_octuples;   // shape (segments_to_copy, 8)
     ksgpu::Array<uint> h2h_octuples;   // shape (segments_to_copy, 8)
 
-    // Size of "global" ring buffers on CPU and GPU, in "segments" not bytes.
-    // (Usually, a segment is 128 bytes, but there are some testing contexts
-    // where this isn't true, and it's more accurate to use segments here.)
+    // Size of "global" ring buffers on CPU and GPU, in "segments" not bytes:
+    // MegaRingbuf is agnostic to nbytes_per_segment (see class comment above), so
+    // all capacities are tracked as segment counts. A caller that needs bytes
+    // multiplies by the physical segment size itself (e.g. GpuDedisperser uses
+    // plan->nelts_per_segment).
     
     long host_global_nseg = 0;
     long gpu_global_nseg = 0;
@@ -218,6 +227,9 @@ struct MegaRingbuf {
     // Serialize this MegaRingbuf to YAML format. 'verbose' controls explanatory
     // comments; 'zones' independently controls whether the per-clag host/gpu zone
     // breakdown is emitted (vs. just a "total GiB" scalar for host_zones/gpu_zones).
+    //
+    // FIXME (minor): to_yaml (and its .cpp helper _emit_memory_zones) hardcode 128.0
+    // bytes/segment in informational-only parts of its output.
     void to_yaml(YAML::Emitter &emitter, double frames_per_second, long nfreq, long time_samples_per_chunk, bool verbose=false, bool zones=false) const;
 
     // ------------------------------------------------------------------------

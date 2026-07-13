@@ -738,7 +738,7 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
     int S = xdiv(M*ST,2) - 1;
     int shmem_nbytes_per_warp = D * (S+2) * 4;
 
-    xassert_divisible(params.ntime, pow2(D) * xdiv(128, ST));
+    xassert_divisible(params.ntime, pow2(D) * xdiv(constants::bytes_per_gpu_cache_line, ST));
     
     // Target warps per threadblock.
     int W_target = (98*1024) / shmem_nbytes_per_warp;
@@ -762,7 +762,7 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
     int B = M_B * A_B;  // threadblocks per beam
     xassert(W <= 32);
 
-    this->shmem_nbytes_per_threadblock = align_up(W * shmem_nbytes_per_warp, 128);
+    this->shmem_nbytes_per_threadblock = align_up(W * shmem_nbytes_per_warp, constants::bytes_per_gpu_cache_line);
     this->state_nelts_per_beam = B * xdiv(shmem_nbytes_per_threadblock, ST);
 
     long gmem_bw = 0;
@@ -882,8 +882,8 @@ void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ichunk, lon
 
     T *pstate = (T*)persistent_state.data + (ibatch * params.beams_per_batch * state_nelts_per_beam);
     
-    // Required by CUDA (max alllowed value of gridDims.z)
-    xassert_lt(params.beams_per_batch, 65536);
+    // Required by CUDA (max allowed value of gridDims.z)
+    xassert_le(params.beams_per_batch, constants::cuda_max_z_blocks);
 
     dim3 block_dims;
     block_dims.z = A_W;

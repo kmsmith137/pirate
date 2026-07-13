@@ -87,7 +87,7 @@ void GpuPfWeightLayout::validate() const
     xassert(is_power_of_two(Tinner));
     xassert(Pouter == (P+Pinner-1)/Pinner);   // round up
     xassert(touter_byte_stride >= Pouter * N * Tinner * xdiv(dtype.nbits,8));
-    xassert_divisible(touter_byte_stride, 128);
+    xassert_divisible(touter_byte_stride, constants::bytes_per_gpu_cache_line);
 }
 
 

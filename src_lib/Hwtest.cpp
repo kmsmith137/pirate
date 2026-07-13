@@ -825,7 +825,7 @@ struct MemcpyWorker : public Hwtest::Worker
             throw runtime_error("MemcpyWorker: copy between different GPUs is currently unsupported");
 
         xassert(blocksize > 0);
-        xassert((blocksize % 128) == 0);
+        xassert((blocksize % constants::bytes_per_gpu_cache_line) == 0);
 
         if ((src_device < 0) && (dst_device < 0))
             this->nbytes_per_iteration = 1024L * 1024L * 1024L;        // host->host
