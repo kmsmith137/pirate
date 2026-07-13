@@ -82,7 +82,7 @@ struct FrbGrouperClient;  // FrbGrouper.hpp (producer-side grouper connection)
 // custom thread pool mechanisms.)
 
 
-struct FrbServer : public std::enable_shared_from_this<FrbServer>
+struct FrbServer
 {
     struct Params {
         // Dedispersion config specified at construction.

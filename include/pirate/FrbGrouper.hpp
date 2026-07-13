@@ -111,7 +111,7 @@ private:
 // Session RPC is rejected. There is no reconnect support (the intended
 // deployment is one producer per consumer-process lifetime).
 
-struct FrbGrouper : public std::enable_shared_from_this<FrbGrouper>
+struct FrbGrouper
 {
     // Factory method (constructor is private). Constructs the RPC service but
     // does NOT listen; call open() to start listening + wait for a client.
@@ -169,12 +169,14 @@ struct FrbGrouper : public std::enable_shared_from_this<FrbGrouper>
 
     // ----- Lifecycle (entry points) -----
     //
-    // NOTE: deterministic teardown requires an explicit close(). The Session
-    // handler holds a strong shared_ptr for the whole session, so merely
-    // dropping the consumer's last reference does NOT run the destructor
-    // while a session is active -- the object (and its CUDA IPC mapping)
-    // stays alive until the producer closes the stream. The Python context
-    // manager calls close() on exit, which is the intended usage.
+    // Teardown is RAII-safe: the Session handler holds a bare back-pointer,
+    // never an owning reference (see the FrbGrouperService comment in
+    // FrbGrouper.cpp), so dropping the last reference runs ~FrbGrouper on
+    // the dropping thread. Its close() cancels any active session and shuts
+    // the gRPC server down -- waiting for the handler -- before members are
+    // destroyed. An explicit close() (e.g. from the Python context manager)
+    // remains good practice for prompt, predictable teardown, but is not
+    // required for correctness.
     void open();    // start listening + block until client connects + handshake processed
     void close();   // stop() + join + server shutdown (deterministic teardown)
     void stop(std::exception_ptr e = nullptr) const;   // idempotent
