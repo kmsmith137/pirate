@@ -641,16 +641,21 @@ class NetworkTester:
         processed, and _drain_filesub() would block forever. Send a "flush
         tail" -- every worker, real sends, deliberately ignoring the dstate
         fiction (enqueue_send after a disconnect reconnects, as in the main
-        loop) -- through chunk (max_promised_chunk + 1), whose minichunks
-        give the assembly path the beyond-the-chunk data it needs to
-        finalize max_promised_chunk itself. Then wait (bounded) for the
-        server to process past every promised chunk.
+        loop) -- through the FIRST minichunk of chunk (max_promised_chunk +
+        2). The receiver's 2-chunk assembly window advances on the chunk
+        index of INCOMING data (first data of chunk c finalizes chunk c-2),
+        so that one minichunk is exactly what finalizes max_promised_chunk
+        itself; sending only through the end of chunk (max_promised_chunk +
+        1) was observed to stall rb_processed one chunk short, at exactly
+        max_promised_chunk * nbeams. Then wait (bounded) for the server to
+        process past every promised chunk.
         """
         if self.max_promised_chunk < 0:
             return
 
-        # First minichunk NOT sent: end of chunk (max_promised_chunk + 1).
-        target_mc = (self.max_promised_chunk + 2) * self.mpc
+        # Last minichunk sent: the FIRST of chunk (max_promised_chunk + 2),
+        # which finalizes chunk max_promised_chunk (see docstring).
+        target_mc = (self.max_promised_chunk + 2) * self.mpc + 1
 
         for w in range(self.nworkers):
             for imc in range(int(self.wpos[w]), target_mc):
