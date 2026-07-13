@@ -162,14 +162,14 @@ struct CoalescedDdKernel2
                                    const PeakFindingKernelParams &pf_params);
 
     // Tree-based variants, for plan-time (per-tree) lookup -- all key fields are
-    // computable from (dtype, tree). Unlike the two-argument get_registry_dcore()
-    // above (which throws), the three-argument form returns 'fallback' if no
-    // matching kernel is compiled into this build.
+    // computable from (dtype, tree). Like the (dd_params, pf_params) form above,
+    // throws if no matching kernel is compiled into this build. (Plans that must be
+    // constructible without compiled kernels use DedispersionPlan::Params::gpu_runnable
+    // = false, which skips the registry query entirely.)
     static RegistryKey _make_registry_key(const ksgpu::Dtype &dtype,
                                           const DedispersionTree &tree);
     static long get_registry_dcore(const ksgpu::Dtype &dtype,
-                                   const DedispersionTree &tree,
-                                   long fallback);
+                                   const DedispersionTree &tree);
 };
 
 // Defined in CoalescedDdKernel2.cu

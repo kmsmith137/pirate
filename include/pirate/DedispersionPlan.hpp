@@ -32,9 +32,37 @@ namespace pirate {
 
 struct DedispersionPlan
 {
-    DedispersionPlan(const DedispersionConfig &config);
+    struct Params
+    {
+        // gpu_runnable: if true, then Dcore values will be taken from the cdd2 kernel
+        // registry, and an exception will be thrown if a cdd2 kernel is missing. If false,
+        // then default Dcore values will be assigned (Dcore = pf.time_downsampling), and
+        // the plan cannot be used in a GpuDedisperser (this is useful in contexts such as
+        // the 'pirate_frb show_dedisperser' CLI). Not to be confused with the config-level
+        // 'gpu_valid' flag in DedispersionConfig::make_random(), which restricts random
+        // configs to precompiled cdd2 kernels.
+        bool gpu_runnable = true;
+
+        // is_incomplete: this is a hack, only used by make_incomplete_plan_from_yaml().
+        // If true, then the constructor just sets 'config' and 'params'. Some (but not all)
+        // remaining members are set by make_incomplete_plan_from_yaml() after the
+        // constructor returns (see below). Code which touches the "low-level data needed
+        // for compute kernels" should xassert(!params.is_incomplete) -- see e.g. to_yaml()
+        // and the GpuDedisperser/ReferenceDedisperser constructors.
+        //
+        // The constructor asserts !(is_incomplete && gpu_runnable): incomplete plans take
+        // their Dcore values from the producer's yaml, never from the local kernel registry.
+        bool is_incomplete = false;
+    };
+
+    // The one-argument constructor delegates with default Params. (Two overloads rather
+    // than a default argument: C++ forbids 'params = Params()' here, since the nested
+    // class's default member initializers are incomplete inside the enclosing class.)
+    DedispersionPlan(const DedispersionConfig &config, const Params &params);
+    explicit DedispersionPlan(const DedispersionConfig &config);
 
     const DedispersionConfig config;
+    const Params params;
 
     // Some key members of DedispersionConfig, copied into DedispersionPlan for convenience.
     ksgpu::Dtype dtype;                  // same as config.dtype
@@ -141,12 +169,6 @@ struct DedispersionPlan
         const std::string &config_yaml_str,
         const std::string &plan_yaml_str);
 
-    // True for plans built by make_incomplete_plan_from_yaml(). Code which touches the
-    // "low-level data" below should xassert(!is_incomplete) -- see e.g. to_yaml() and
-    // the GpuDedisperser/ReferenceDedisperser constructors.
-    bool is_incomplete = false;
-
-
     // -------------------------------------------------------------------------------------------------
     //
     // Low-level data needed for compute kernels.
@@ -176,13 +198,6 @@ struct DedispersionPlan
     // Only needed if early triggers are used.
     RingbufCopyKernelParams g2g_copy_kernel_params;
     RingbufCopyKernelParams h2h_copy_kernel_params;
-
-  protected:
-
-    // Used by make_incomplete_plan_from_yaml(). The tag constructor only initializes the
-    // (const) 'config' member and sets is_incomplete; the factory fills everything else.
-    struct IncompleteTag { };
-    DedispersionPlan(const DedispersionConfig &config, IncompleteTag);
 };
 
 

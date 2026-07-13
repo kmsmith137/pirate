@@ -120,11 +120,12 @@ def test_cpp_pf_avar_approximation():
     """
     from ..pirate_pybind11 import DedispersionConfig, DedispersionPlan
 
-    # gpu_valid=False: PfAvarApproximation is pure-CPU (tree structure + channel map only), so we
-    # don't need a GPU-runnable config (which would require a precompiled cdd2 kernel for the rank).
+    # gpu_valid=False / gpu_runnable=False: PfAvarApproximation is pure-CPU (tree structure +
+    # channel map only), so we don't need a GPU-runnable config or plan (which would require
+    # a precompiled cdd2 kernel for the rank).
     config = DedispersionConfig.make_random(max_toplevel_rank=5, max_early_triggers=2, gpu_valid=False)
     config.validate()
-    plan = DedispersionPlan(config)
+    plan = DedispersionPlan(config, gpu_runnable=False)
     fv = np.asarray(config.make_random_freq_variances(noisy=True), dtype=np.float64)
 
     py = slow_avar.PfAvarApproximation(plan, fv)

@@ -79,13 +79,11 @@ long CoalescedDdKernel2::get_registry_dcore(
 }
 
 
-// Static member function. Returns 'fallback' if no matching kernel is compiled into this build.
+// Static member function. Throws if no matching kernel is compiled into this build.
 long CoalescedDdKernel2::get_registry_dcore(
-    const ksgpu::Dtype &dtype, const DedispersionTree &tree, long fallback)
+    const ksgpu::Dtype &dtype, const DedispersionTree &tree)
 {
     RegistryKey key = _make_registry_key(dtype, tree);
-    if (!registry().has_key(key))
-        return fallback;
     return registry().get(key, /*init_kernel=*/ false).Dcore;
 }
 

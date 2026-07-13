@@ -48,6 +48,7 @@ def _test_incomplete_plan(config, plan, tuples):
     p2 = DedispersionPlan.make_incomplete_plan_from_yaml(cfg_yaml, plan_yaml)
 
     assert p2.is_incomplete and not plan.is_incomplete
+    assert plan.gpu_runnable and not p2.gpu_runnable
 
     for name in ['nfreq', 'nt_in', 'num_primary_trees', 'beams_per_gpu',
                  'beams_per_batch', 'num_active_batches', 'nbits', 'ntrees']:
@@ -443,6 +444,12 @@ def test_decode_argmax():
     # peak-finders' Dcore (which flows through stage2_pf_params).
     for itree in range(plan.ntrees):
         assert plan.trees[itree].Dcore == kinfo[itree][3]
+
+    # gpu_runnable=False: no registry query; default Dcore = pf.time_downsampling.
+    p0 = DedispersionPlan(config, gpu_runnable=False)
+    assert not p0.gpu_runnable and not p0.is_incomplete
+    for tr in p0.trees:
+        assert tr.Dcore == tr.pf.time_downsampling
 
     _check_bad_tokens(plan, kinfo)
 

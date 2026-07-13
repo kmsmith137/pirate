@@ -276,11 +276,20 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "    print(f'Plan has {plan.ntrees} trees')\n"
         "    for i, tree in enumerate(plan.trees):\n"
         "        print(f'Tree {i}: primary_tree_index={tree.primary_tree_index}, dm_range=[{tree.dm_min:.1f}, {tree.dm_max:.1f}]')")
-          .def(py::init<const DedispersionConfig &>(), 
-               py::arg("config"),
+          .def(py::init([](const DedispersionConfig &config, bool gpu_runnable) {
+                   DedispersionPlan::Params params;
+                   params.gpu_runnable = gpu_runnable;
+                   return std::make_shared<DedispersionPlan>(config, params);
+               }),
+               py::arg("config"), py::arg("gpu_runnable") = true,
                "Create a DedispersionPlan from a configuration.\n\n"
                "Args:\n"
-               "    config: DedispersionConfig object (must be validated)")
+               "    config: DedispersionConfig object (must be validated)\n"
+               "    gpu_runnable: if True (default), per-tree Dcore values are taken from the\n"
+               "        cdd2 kernel registry, and an exception is thrown if a kernel is missing\n"
+               "        from this build. If False, default Dcore values are assigned, and the\n"
+               "        plan cannot be used in a GpuDedisperser (useful in host-only contexts,\n"
+               "        such as the 'pirate_frb show_dedisperser' CLI).")
           .def_readonly("config", &DedispersionPlan::config,
                "The DedispersionConfig used to create this plan")
           .def_readonly("dtype", &DedispersionPlan::dtype,
@@ -358,8 +367,13 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Args:\n"
                "    config_yaml_str: producer's DedispersionConfig.to_yaml_string()\n"
                "    plan_yaml_str: producer's DedispersionPlan.to_yaml_string()")
-          .def_readonly("is_incomplete", &DedispersionPlan::is_incomplete,
+          .def_property_readonly("is_incomplete",
+               [](const DedispersionPlan &self) { return self.params.is_incomplete; },
                "True for plans built by make_incomplete_plan_from_yaml()")
+          .def_property_readonly("gpu_runnable",
+               [](const DedispersionPlan &self) { return self.params.gpu_runnable; },
+               "False if the plan was constructed with gpu_runnable=False (default Dcore\n"
+               "values, not usable in a GpuDedisperser); see the constructor docstring.")
           .def("decode_argmax_batch", &_decode_argmax_batch,
                py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
                "Vectorized decode_argmax() over 1-d nonempty arrays (one event per element;\n"
