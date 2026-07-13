@@ -142,7 +142,33 @@ struct Receiver
     // Thread-backed class state (protected by 'mutex'). The stop-pattern
     // members are 'mutable' since stop() is const (see notes/stoppable_class.md).
     mutable std::mutex mutex;
-    mutable std::condition_variable cv;
+
+    // One condition variable per wait-predicate (see "Locking and condition
+    // variables" in notes/stoppable_class.md):
+    //
+    // frames_cv -- waiters: get_frame_set() callers (predicate:
+    //   completed_frame_sets non-empty, or stopped). Signaled on: completed-
+    //   set push in _advance_one_chunk() (notify_one -- work-queue handoff,
+    //   each set is retrieved exactly once), and stop().
+    //
+    // listening_cv -- waiters: wait_until_listening() callers (predicate:
+    //   is_listening, or stopped). Signaled on: the is_listening latch in
+    //   _listener_main() (notify_all -- one-shot latch), and stop().
+    //
+    // reader_cv -- waiter: the reader thread (predicate: reader_peer_queue
+    //   non-empty, or stopped). Signaled on: reader_peer_queue push in
+    //   _listener_main() (notify_one -- single waiter), and stop().
+    //
+    // assembler_cv -- waiter: the assembler thread (predicate:
+    //   assembler_peer_queue non-empty, or evicted_chunk >= curr_base_chunk,
+    //   or stopped). Signaled on: assembler_peer_queue push in _read_data()
+    //   and the evicted_chunk ratchet in evict() (notify_one each -- single
+    //   waiter), and stop().
+    mutable std::condition_variable frames_cv;
+    mutable std::condition_variable listening_cv;
+    mutable std::condition_variable reader_cv;
+    mutable std::condition_variable assembler_cv;
+
     mutable bool is_stopped = false;
     mutable std::exception_ptr error;
 

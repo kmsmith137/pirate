@@ -212,7 +212,10 @@ void Receiver::stop(std::exception_ptr e) const
     // Forward 'e' so that threads blocked in allocator entry points rethrow
     // the root cause (see "Error reporting" in notes/stoppable_class.md).
     params.allocator->stop(e);
-    cv.notify_all();
+    frames_cv.notify_all();
+    listening_cv.notify_all();
+    reader_cv.notify_all();
+    assembler_cv.notify_all();
 }
 
 
@@ -241,7 +244,7 @@ shared_ptr<AssembledFrameSet> Receiver::get_frame_set()
             return set;
         }
 
-        cv.wait(lock);
+        frames_cv.wait(lock);
     }
 }
 
@@ -258,9 +261,9 @@ bool Receiver::wait_until_listening(double timeout_sec)
     auto ready = [this] { return is_listening || is_stopped; };
 
     if (timeout_sec < 0.0)
-        cv.wait(lock, ready);
+        listening_cv.wait(lock, ready);
     else
-        cv.wait_for(lock, std::chrono::duration<double>(timeout_sec), ready);
+        listening_cv.wait_for(lock, std::chrono::duration<double>(timeout_sec), ready);
 
     _throw_if_stopped("Receiver::wait_until_listening");
     return is_listening;
@@ -283,7 +286,8 @@ void Receiver::evict(long evicted_chunk)
     if (evicted_chunk > this->evicted_chunk) {
         this->evicted_chunk = evicted_chunk;
         lock.unlock();
-        cv.notify_all();
+        // notify_one is sound: the assembler thread is the only waiter.
+        assembler_cv.notify_one();
     }
 }
 
@@ -315,7 +319,7 @@ void Receiver::_listener_main()
     {
         lock_guard<std::mutex> lock(mutex);
         is_listening = true;
-        cv.notify_all();
+        listening_cv.notify_all();   // one-shot latch: all waiters become ready
     }
 
     for (;;) {
@@ -343,8 +347,8 @@ void Receiver::_listener_main()
         reader_peer_queue.push_back(peer_ptr);
         lock.unlock();
 
-        // Wake up reader thread.
-        cv.notify_all();
+        // Wake up reader thread (notify_one: single waiter).
+        reader_cv.notify_one();
     }
 }
 
@@ -385,7 +389,7 @@ void Receiver::_reader_main()
                 break;
 
             // No active peers and no pending peers -- wait for listener thread.
-            cv.wait(lock);
+            reader_cv.wait(lock);
         }
 
         // Move pending peers from reader_peer_queue to local vector
@@ -680,7 +684,8 @@ void Receiver::_read_data(const shared_ptr<Peer> &peer)
         _throw_if_stopped("Receiver::_read_data");
         this->assembler_peer_queue.push_back(peer);
         rlock.unlock();
-        cv.notify_all();
+        // notify_one is sound: the assembler thread is the only waiter.
+        assembler_cv.notify_one();
     }
 }
 
@@ -740,12 +745,14 @@ void Receiver::_assembler_main()
     // Main loop. We have two kinds of work:
     //  - process peers handed off from the reader thread (via assembler_peer_queue),
     //  - advance curr_base_chunk in response to evict() calls from external threads.
-    // The cv.wait predicate covers both, plus the is_stopped exit.
+    // The assembler_cv wait predicate covers both, plus the is_stopped exit.
+    // (curr_base_chunk in the predicate is written only by this thread, so no
+    // cross-thread notify is needed for it.)
 
     unique_lock<std::mutex> lock(mutex);
 
     for (;;) {
-        cv.wait(lock, [&]() {
+        assembler_cv.wait(lock, [&]() {
             return is_stopped
                 || !assembler_peer_queue.empty()
                 || (evicted_chunk >= curr_base_chunk);
@@ -996,7 +1003,9 @@ void Receiver::_advance_one_chunk()
         this->completed_frame_sets.push(std::move(this->curr_frame_sets[0]));
     }
     xassert(!this->curr_frame_sets[0]);   // defense in depth: std::move did clear the slot
-    this->cv.notify_all();
+    // Wake one get_frame_set() caller for the pushed set (work-queue handoff:
+    // each set is retrieved exactly once, so notify_one per push is sound).
+    this->frames_cv.notify_one();
 
     // Step 2: shift slot 1 down to slot 0 (the now-vacant slot). The set
     // moving down was already live -- still safe to write to.

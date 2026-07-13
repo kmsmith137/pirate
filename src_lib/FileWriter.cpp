@@ -81,7 +81,9 @@ void FileWriter::stop(std::exception_ptr e) const
     auto subscribers = _get_rpc_subscribers();  // call with lock held
     lock.unlock();
 
-    cv.notify_all();
+    ssd_cv.notify_all();
+    nfs_cv.notify_all();
+    ssd_clear_cv.notify_all();
 
     for (const auto &s: subscribers) {
         unique_lock<std::mutex> subscriber_lock(s->mutex);        
@@ -165,7 +167,7 @@ void FileWriter::_process_frame(const shared_ptr<AssembledFrame> &frame)
     if (!enqueue_ssd && !enqueue_nfs)
         return;
 
-    lock_guard<std::mutex> state_lock(this->mutex);
+    unique_lock<std::mutex> state_lock(this->mutex);
     _throw_if_stopped("FileWriter::process_frame");
 
     if (enqueue_ssd)
@@ -173,8 +175,15 @@ void FileWriter::_process_frame(const shared_ptr<AssembledFrame> &frame)
     if (enqueue_nfs)
         this->nfs_queue.push(frame);
 
-    // Wake up ssd and nfs threads.
-    cv.notify_all();
+    state_lock.unlock();
+
+    // Wake one ssd/nfs thread per pushed frame. notify_one is sound: all
+    // waiters on each cv share the same predicate (queue non-empty), and one
+    // pushed frame is consumed by exactly one thread.
+    if (enqueue_ssd)
+        ssd_cv.notify_one();
+    if (enqueue_nfs)
+        nfs_cv.notify_one();
 }
 
 
@@ -199,23 +208,26 @@ void FileWriter::_ssd_thread_main()
     unique_lock<std::mutex> state_lock(mutex);
 
     for (;;) {
-        // At top of loop, lock is held. 
+        // At top of loop, lock is held.
         // Pop a frame from the ssd_queue.
         for (;;) {
             if (is_stopped)
                 return;
             if (!ssd_queue.empty())
                 break;
-            cv.wait(state_lock);
+            ssd_cv.wait(state_lock);
         }
 
         shared_ptr<AssembledFrame> frame = ssd_queue.front();
         ssd_queue.pop();
+        bool ssd_now_empty = ssd_queue.empty();   // snapshot under the lock
         state_lock.unlock();
 
-        // Wake up nfs threads that are waiting for the ssd queue to clear.
-        // (See _nfs_thread_main().)
-        cv.notify_all();
+        // If this pop emptied the ssd_queue, wake the nfs threads that are
+        // waiting for it to clear (see _nfs_thread_main()). notify_all: every
+        // waiter's predicate becomes true simultaneously.
+        if (ssd_now_empty)
+            ssd_clear_cv.notify_all();
 
         // Some paranoid checks.
         unique_lock<std::mutex> frame_lock(frame->mutex);
@@ -250,8 +262,9 @@ void FileWriter::_ssd_thread_main()
 
         state_lock.lock();
         nfs_queue.push(frame);
-        // Wake up nfs threads that are waiting for the nfs queue.
-        cv.notify_all();
+        // Wake one nfs thread for the pushed frame (work-queue handoff --
+        // see the ssd_cv/nfs_cv comment in FileWriter.hpp).
+        nfs_cv.notify_one();
         // Lock remains held for next loop iteration.
     }
 }
@@ -282,7 +295,7 @@ void FileWriter::_nfs_thread_main()
                 return;
             if (!nfs_queue.empty())
                 break;
-            cv.wait(state_lock);
+            nfs_cv.wait(state_lock);
         }
 
         shared_ptr<AssembledFrame> frame = nfs_queue.front();
@@ -299,7 +312,7 @@ void FileWriter::_nfs_thread_main()
                 return;
             if (ssd_queue.empty())
                 break;
-            cv.wait(state_lock);
+            ssd_clear_cv.wait(state_lock);
         }
         
         state_lock.unlock();
@@ -556,7 +569,9 @@ void FileWriter::_update_rpc_subscribers(const WriteStatus &write_status)
         if (!s->is_stopped) {
             s->queue.push(write_status);
             lock.unlock();
-            s->cv.notify_all();
+            // notify_one is sound here: the only waiter on a subscriber's cv
+            // is the single SubscribeFiles handler thread that created it.
+            s->cv.notify_one();
         }
     }
 }

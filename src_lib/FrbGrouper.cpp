@@ -336,6 +336,7 @@ void FrbGrouper::start_listening()
             // is still held), so the handler can return instead of hanging
             // close()'s server->Wait() forever.
             send_io_done = true;
+            send_io_cv.notify_all();
             throw;
         }
     } catch (...) {
@@ -364,7 +365,7 @@ bool FrbGrouper::wait_for_handshake(int timeout_ms)
                   << grouper_ip_addr << " ..." << std::endl;
     }
 
-    cv.wait_for(lock, std::chrono::milliseconds(timeout_ms));
+    handshake_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms));
     _throw_if_stopped("FrbGrouper::open");
     return handshake_done;
 }
@@ -416,11 +417,14 @@ FrbGrouper::SessionResult FrbGrouper::_run_session(void *ctx_, void *stream_)
         _process_handshake(first.handshake());
 
         // 3. Publish "ready": wakes open() and the send thread (which writes the
-        //    HandshakeReply and then drains consumed_seq_ids).
+        //    HandshakeReply and then drains consumed_seq_ids). Also notifies
+        //    produced_cv: acquire_output()'s predicate includes handshake_done,
+        //    and the consumer can legitimately be waiting before the handshake.
         {
             lock_guard<std::mutex> lock(mutex);
             handshake_done = true;
-            cv.notify_all();
+            handshake_cv.notify_all();
+            produced_cv.notify_all();
         }
 
         // Announce handshake completion (output_ringbuf is now valid). The
@@ -441,7 +445,7 @@ FrbGrouper::SessionResult FrbGrouper::_run_session(void *ctx_, void *stream_)
     stop();   // idempotent; guarantees is_stopped so the send thread exits
     {
         unique_lock<std::mutex> lock(mutex);
-        cv.wait(lock, [&]{ return send_io_done; });
+        send_io_cv.wait(lock, [&]{ return send_io_done; });
         grpc_state->stream = nullptr;
         grpc_state->context = nullptr;
         session_active = false;
@@ -584,7 +588,9 @@ void FrbGrouper::_receive_loop()
             lock_guard<std::mutex> lock(mutex);
             xassert_eq(n, rb_produced);   // producer sends in order 0,1,2,...
             rb_produced = n + 1;
-            cv.notify_all();              // unblocks acquire_output()
+            // Unblocks acquire_output(). notify_one: at most one waiter (the
+            // cursor xassert there makes a second concurrent caller throw).
+            produced_cv.notify_one();
         }
     }
 }
@@ -600,7 +606,7 @@ void FrbGrouper::_send_loop()
     // Wait for the handshake to be processed (stream published, ready to write).
     {
         unique_lock<std::mutex> lock(mutex);
-        cv.wait(lock, [&]{ return is_stopped || handshake_done; });
+        handshake_cv.wait(lock, [&]{ return is_stopped || handshake_done; });
         if (is_stopped) return;
     }
     auto *stream = grpc_state->stream;
@@ -618,7 +624,7 @@ void FrbGrouper::_send_loop()
         long seq;
         {
             unique_lock<std::mutex> lock(mutex);
-            cv.wait(lock, [&]{ return is_stopped || (rb_consumed_sent < rb_consumed); });
+            consumed_cv.wait(lock, [&]{ return is_stopped || (rb_consumed_sent < rb_consumed); });
             if (is_stopped) return;
             seq = rb_consumed_sent;
         }
@@ -649,7 +655,8 @@ void FrbGrouper::send_thread_main()
         stop(std::current_exception());
     }
     // Tell _run_session we have stopped touching the stream.
-    { lock_guard<std::mutex> lock(mutex); send_io_done = true; cv.notify_all(); }
+    // (notify_one: the Session handler's step-5 wait is the only waiter.)
+    { lock_guard<std::mutex> lock(mutex); send_io_done = true; send_io_cv.notify_one(); }
 }
 
 
@@ -673,7 +680,7 @@ GpuDedisperser::Outputs FrbGrouper::acquire_output(long seq_id)
         xassert_eq(seq_id, rb_acquired);
 
         // Block until the handshake is done AND produced_seq_id has reached seq_id.
-        cv.wait(lock, [&]{ return is_stopped || (handshake_done && rb_produced > seq_id); });
+        produced_cv.wait(lock, [&]{ return is_stopped || (handshake_done && rb_produced > seq_id); });
         _throw_if_stopped("FrbGrouper::acquire_output");
 
         rb_acquired = seq_id + 1;
@@ -711,7 +718,7 @@ void FrbGrouper::release_output(long seq_id)
         xassert_lt(rb_consumed, rb_acquired);
 
         rb_consumed = seq_id + 1;
-        cv.notify_all();                   // wake the send thread
+        consumed_cv.notify_one();          // wake the send thread (single waiter)
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -748,7 +755,10 @@ void FrbGrouper::stop(std::exception_ptr e) const
     if (grpc_state && grpc_state->context)
         grpc_state->context->TryCancel();
 
-    cv.notify_all();
+    handshake_cv.notify_all();
+    produced_cv.notify_all();
+    consumed_cv.notify_all();
+    send_io_cv.notify_all();
 
     // NOTE: we deliberately do NOT call the blocking Server::Shutdown() here.
     // stop() can be invoked FROM the handler (pool) thread (on exception), and

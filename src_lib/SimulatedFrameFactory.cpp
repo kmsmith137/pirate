@@ -433,8 +433,11 @@ void SimulatedFrameFactory::_randomizer_main()
         }
 
         lk.lock();
+        // notify_one is sound here: the only rand_done_cv waiter is the single
+        // producer blocked in _randomize_set() (single in-flight job, asserted
+        // there; single producer thread).
         if (++rand_ndone == rand_total)
-            rand_done_cv.notify_all();
+            rand_done_cv.notify_one();
 
         if (ex) {
             lk.unlock();

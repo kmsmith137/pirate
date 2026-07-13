@@ -154,7 +154,24 @@ struct CudaEventRingbuf
     // Stop-pattern state ('mutable' since stop() is const -- see
     // notes/stoppable_class.md). is_stopped/error are protected by 'mutex'.
     mutable std::mutex mutex;
-    mutable std::condition_variable cv;  // signaled when seq_start/seq_end/produced/is_stopped changes
+
+    // One condition variable per wait-predicate (see "Locking and condition
+    // variables" in notes/stoppable_class.md):
+    //
+    // space_cv -- waiter: the single producer, in record(blocking=true)
+    //   (predicate: seq_end - seq_start < max_size, or stopped).
+    //   Signaled on: seq_start advance in _release() (notify_one -- single
+    //   producer, see record()), and stop().
+    //
+    // event_cv -- waiters: consumers in _acquire(blocking=true) and
+    //   synchronize_with_producer() (predicate: seq_id produced, or seq_id
+    //   already recycled, or stopped). Signaled on: production in record()
+    //   (notify_all -- waiters wait on different seq_ids, and several
+    //   consumers can wait on the same one), and stop(). _release() does NOT
+    //   signal event_cv -- see the argument in _release().
+    mutable std::condition_variable space_cv;
+    mutable std::condition_variable event_cv;
+
     mutable bool is_stopped = false;     // true after stop() is called
     mutable std::exception_ptr error;    // set by first caller to stop()
 

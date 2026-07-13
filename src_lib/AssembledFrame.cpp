@@ -1125,7 +1125,10 @@ void AssembledFrameAllocator::stop(exception_ptr e) const
     is_stopped = true;
 
     guard.unlock();
-    cv.notify_all();
+    metadata_cv.notify_all();
+    chunk_cv.notify_all();
+    queue_cv.notify_all();
+    lowmem_cv.notify_all();
 
     // Propagate stop to SlabAllocator (wakes up worker thread if blocked in get_slab).
     slab_allocator->stop(e);
@@ -1171,8 +1174,13 @@ void AssembledFrameAllocator::_worker_main()
     // Wait until: stopped, or both initialization phases are complete.
     // We need metadata (nfreq, beam_ids) to size and stamp frames, AND
     // we need initial_time_chunk to stamp the first set's chunk index.
-    while (!is_stopped && !(metadata_is_initialized && initial_chunk_set))
-        cv.wait(guard);
+    // The two flags are set-once and never cleared, so waiting for them
+    // sequentially (each on its own cv) is equivalent to waiting for the
+    // conjunction.
+    while (!is_stopped && !metadata_is_initialized)
+        metadata_cv.wait(guard);
+    while (!is_stopped && !initial_chunk_set)
+        chunk_cv.wait(guard);
 
     // Main loop: create sets and add directly to frame_set_queue.
     while (!is_stopped)
@@ -1250,13 +1258,15 @@ void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
 
     // Scope guard: reset frame_creation_underway if we unwind on a throw
     // (e.g. get_slab() on a stopped slab allocator, or an array
-    // invariant-check failure below). Without it the flag would stay set
-    // forever, parking every later get_frame_set() caller in the
-    // frame_creation_underway cv.wait branch. (Today the throw also stops
-    // the allocator via get_frame_set()'s entry-point wrapper, which masks
-    // the wedge -- but the flag's correctness shouldn't depend on that
-    // coupling.) On the success path the flag is reset explicitly below,
-    // BEFORE cv.notify_all(), and the guard is disarmed.
+    // invariant-check failure below), and notify queue_cv -- a dummy-mode
+    // get_frame_set() caller can be parked on the "creation underway"
+    // branch, and resetting the flag is exactly what its predicate tests.
+    // Without the guard the flag would stay set forever; without the
+    // notify the waiter would only wake via the stop() that the throw
+    // happens to trigger today (get_frame_set()'s entry-point wrapper) --
+    // the flag's correctness shouldn't depend on that coupling. On the
+    // success path the flag is reset explicitly below, BEFORE
+    // queue_cv.notify_all(), and the guard is disarmed.
     struct CreationFlagGuard {
         unique_lock<mutex> &guard;
         AssembledFrameAllocator *alloc;
@@ -1268,6 +1278,7 @@ void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
             if (!guard.owns_lock())
                 guard.lock();   // unwinding from the unlocked middle section
             alloc->frame_creation_underway = false;
+            alloc->queue_cv.notify_all();
         }
     } creation_flag_guard{guard, this};
 
@@ -1370,7 +1381,9 @@ void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
     this->frame_creation_underway = false;
     creation_flag_guard.armed = false;   // success: flag already reset
 
-    cv.notify_all();  // Wake up any waiting get_frame_set() callers
+    // Wake up any waiting get_frame_set() callers. notify_all: every
+    // consumer receives every set, so one push can ready several waiters.
+    queue_cv.notify_all();
 }
 
 
@@ -1431,8 +1444,9 @@ void AssembledFrameAllocator::_initialize_metadata(const XEngineMetadata &metada
         XEngineMetadata::check_sender_consistency(*metadata, metadata_);
     }
 
-    // Notify worker thread and any get_metadata() waiters.
-    cv.notify_all();
+    // Notify the worker thread's init gate and any get_metadata() waiters
+    // (one-shot latch -> notify_all).
+    metadata_cv.notify_all();
 }
 
 
@@ -1486,10 +1500,10 @@ long AssembledFrameAllocator::_initialize_initial_chunk(long target_time_chunk)
     long ret = initial_time_chunk;
     guard.unlock();
 
-    // Notify worker thread (which waits for BOTH metadata_is_initialized and
-    // initial_chunk_set) and any wait_for_initial_chunk() waiters.
+    // Notify the worker thread's init gate and any wait_for_initial_chunk()
+    // waiters (one-shot latch -> notify_all).
     if (just_set)
-        cv.notify_all();
+        chunk_cv.notify_all();
     return ret;
 }
 
@@ -1501,7 +1515,7 @@ long AssembledFrameAllocator::wait_for_initial_chunk()
         _throw_if_stopped("AssembledFrameAllocator::wait_for_initial_chunk");
         if (initial_chunk_set)
             return initial_time_chunk;
-        cv.wait(guard);
+        chunk_cv.wait(guard);
     }
 }
 
@@ -1520,7 +1534,7 @@ shared_ptr<const XEngineMetadata> AssembledFrameAllocator::get_metadata(bool blo
             return metadata;
         if (!blocking)
             return nullptr;
-        cv.wait(guard);
+        metadata_cv.wait(guard);
     }
 }
 
@@ -1589,11 +1603,11 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(int consum
             // wait for that thread to finish. Otherwise, current thread creates a new set.
 
             if (!is_dummy_mode || frame_creation_underway)
-                cv.wait(guard);
+                queue_cv.wait(guard);
             else
                 _create_frame_set(guard);
 
-            // Back to top of loop, since lock was dropped in either cv.wait() or _create_frame_set().
+            // Back to top of loop, since lock was dropped in either queue_cv.wait() or _create_frame_set().
             continue;
         }
 
@@ -1610,7 +1624,7 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(int consum
         consumer_next_chunk_index[consumer_id]++;
         if (consumer_next_chunk_index[consumer_id] > first_unreceived_chunk_index) {
             first_unreceived_chunk_index = consumer_next_chunk_index[consumer_id];
-            cv.notify_all();  // Wake up block_until_low_memory() if waiting
+            lowmem_cv.notify_all();  // Wake up block_until_low_memory() if waiting
         }
 
         // Pop sets from front that all consumers have received.
@@ -1710,10 +1724,10 @@ void AssembledFrameAllocator::_block_until_low_memory(long nframe_threshold)
 
         if (num_preinitialized <= nframe_threshold)
             return;
-        
-        // Wait for something to change (either num_preinitialized decreases,
-        // or a slab is returned and a new frame is created).
-        cv.wait(guard);
+
+        // Wait for num_preinitialized to decrease (first_unreceived advance
+        // in _get_frame_set), then loop back through block_until_empty().
+        lowmem_cv.wait(guard);
     }
 }
 

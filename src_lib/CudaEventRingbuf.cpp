@@ -64,9 +64,10 @@ void CudaEventRingbuf::stop(std::exception_ptr e) const
         is_stopped = true;
         error = e;
     }
-    
+
     lock.unlock();
-    cv.notify_all();
+    space_cv.notify_all();
+    event_cv.notify_all();
 }
 
 
@@ -105,7 +106,7 @@ void CudaEventRingbuf::record(cudaStream_t stream, long seq_id, bool blocking)
         // Check ring buffer capacity. If the buffer is full:
         //   - blocking=false: throw an overflow exception (see below).
         //   - blocking=true:  block until a consumer frees a slot (advancing seq_start
-        //                     in _release(), which notifies 'cv').
+        //                     in _release(), which notifies 'space_cv').
         // Since there is a single producer, seq_end is unchanged while we wait; only
         // seq_start can advance, so the loop condition makes progress towards capacity.
         while (seq_end - seq_start >= max_size) {
@@ -116,7 +117,7 @@ void CudaEventRingbuf::record(cudaStream_t stream, long seq_id, bool blocking)
                    << nconsumers << " is too large.";
                 throw std::runtime_error(ss.str());
             }
-            cv.wait(lock);
+            space_cv.wait(lock);
             _throw_if_stopped("record");
         }
 
@@ -143,9 +144,11 @@ void CudaEventRingbuf::record(cudaStream_t stream, long seq_id, bool blocking)
             seq_start = seq_end;
         
         lock.unlock();
-            
-        // Wake up any threads waiting in synchronize_with_producer().
-        cv.notify_all();
+
+        // Wake up consumers waiting for this seq_id, in _acquire() or
+        // synchronize_with_producer(). notify_all: waiters wait on different
+        // seq_ids, and several consumers can wait on the same one.
+        event_cv.notify_all();
     }
     catch (...) {
         stop(std::current_exception());
@@ -190,8 +193,8 @@ cudaEvent_t CudaEventRingbuf::_acquire(long seq_id, bool blocking)
                << "), and blocking=false";
             throw std::runtime_error(ss.str());
         }
-        
-        cv.wait(lock);
+
+        event_cv.wait(lock);
     }
 
     // Check for over-consumption.
@@ -230,17 +233,32 @@ void CudaEventRingbuf::_release(long seq_id)
     // Advance seq_start past all fully-released events.
     while (seq_start < seq_end) {
         long front_slot = seq_start % max_size;
-            
+
         if (released[front_slot] < nconsumers)
             break;
-            
+
         seq_start++;
     }
-        
-    // Wake up any waiting threads (producers waiting for capacity, or
-    // consumers that might have been waiting on stale check).
+
+    // Wake the producer if it is blocked on capacity in record(blocking=true).
+    // notify_one is sound: there is a single producer (see record()), so at
+    // most one thread can be waiting on space_cv.
+    //
+    // No event_cv notify is needed here, even though the consumer-side wait
+    // predicates mention seq_start. A thread blocked on event_cv is waiting
+    // for a seq_id X with X >= seq_start and (X >= seq_end or !produced[X %
+    // max_size]):
+    //   - If X >= seq_end: seq_start can never advance past seq_end, so this
+    //     advance cannot make "X < seq_start" true.
+    //   - If X < seq_end and !produced[slot]: record(X) is mid-flight, and
+    //     released[slot] was reset to 0 when record(X) reserved the slot --
+    //     so this loop cannot advance seq_start past X.
+    // Any state change that unblocks an event_cv waiter is therefore preceded
+    // by a record() whose notify already wakes it; on wake it re-evaluates
+    // current state and correctly returns/throws even if seq_start has since
+    // advanced past its seq_id.
     lock.unlock();
-    cv.notify_all();
+    space_cv.notify_one();
 }
 
 
@@ -307,7 +325,7 @@ void CudaEventRingbuf::synchronize_with_producer(long seq_id)
                 return;
             if ((seq_id < seq_end) && produced[slot])
                 return;
-            cv.wait(lock);
+            event_cv.wait(lock);
             _throw_if_stopped("synchronize_with_producer");
         }
     }

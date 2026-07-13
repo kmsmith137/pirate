@@ -220,7 +220,40 @@ private:
 
     // Thread-backed state.
     mutable std::mutex mutex;
-    mutable std::condition_variable cv;
+
+    // One condition variable per wait-predicate (see "Locking and condition
+    // variables" in notes/stoppable_class.md):
+    //
+    // handshake_cv -- waiters: wait_for_handshake() (timed poll) and
+    //   _send_loop()'s startup wait (predicate: handshake_done, or stopped).
+    //   Signaled on: the handshake latch in _run_session() (notify_all --
+    //   one-shot latch), and stop().
+    //
+    // produced_cv -- waiter: acquire_output() (predicate: handshake_done &&
+    //   rb_produced > seq_id, or stopped). At most one thread can be parked
+    //   here: the consecutive-seq_id cursor xassert in acquire_output() makes
+    //   a second concurrent caller throw instead of waiting -- so the
+    //   rb_produced advance uses notify_one. Signaled on: rb_produced advance
+    //   in _receive_loop() (notify_one), the handshake latch (notify_all --
+    //   the predicate's handshake_done conjunct), and stop().
+    //
+    // consumed_cv -- waiter: the send thread's drain wait in _send_loop()
+    //   (predicate: rb_consumed_sent < rb_consumed, or stopped). Signaled on:
+    //   rb_consumed advance in release_output() (notify_one -- single
+    //   waiter), and stop().
+    //
+    // send_io_cv -- waiter: the Session handler's step-5 teardown wait in
+    //   _run_session() (predicate: send_io_done; deliberately NOT
+    //   stop-sensitive -- the handler must wait for the send thread to stop
+    //   touching the stream even when stopped). Signaled on: send-thread exit
+    //   in send_thread_main() (notify_one -- single waiter), the vacuous
+    //   send_io_done set in start_listening()'s failure path, and stop()
+    //   (harmless spurious wake; predicate re-checked).
+    mutable std::condition_variable handshake_cv;
+    mutable std::condition_variable produced_cv;
+    mutable std::condition_variable consumed_cv;
+    mutable std::condition_variable send_io_cv;
+
     mutable bool is_stopped = false;
     mutable std::exception_ptr error;
 

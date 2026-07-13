@@ -50,7 +50,13 @@ public:
     struct RpcSubscriber
     {
         std::mutex mutex;
+
+        // Waiter: the single SubscribeFiles handler thread that created this
+        // subscriber (predicate: queue non-empty, or is_stopped, or error).
+        // Signaled on: queue push in _update_rpc_subscribers() (notify_one,
+        // single waiter), and FileWriter::stop()'s subscriber sweep.
         std::condition_variable cv;
+
         std::queue<WriteStatus> queue;
         std::exception_ptr error;
         bool is_stopped = false;
@@ -89,7 +95,27 @@ public:
 private:
 
     mutable std::mutex mutex;
-    mutable std::condition_variable cv;
+
+    // One condition variable per wait-predicate (see "Locking and condition
+    // variables" in notes/stoppable_class.md):
+    //
+    // ssd_cv -- waiters: ssd threads (predicate: ssd_queue non-empty, or
+    //   stopped). Signaled on: ssd_queue push in _process_frame()
+    //   (notify_one -- work-queue handoff, one frame per waiter), and stop().
+    //
+    // nfs_cv -- waiters: nfs threads (predicate: nfs_queue non-empty, or
+    //   stopped). Signaled on: nfs_queue push in _process_frame() and the
+    //   ssd->nfs handoff push in _ssd_thread_main() (notify_one each), and
+    //   stop().
+    //
+    // ssd_clear_cv -- waiters: nfs threads (predicate: ssd_queue EMPTY, or
+    //   stopped; SSD-priority gate). Signaled on: an ssd_queue pop that
+    //   empties the queue, in _ssd_thread_main() (notify_all -- every waiter
+    //   becomes ready simultaneously), and stop().
+    mutable std::condition_variable ssd_cv;
+    mutable std::condition_variable nfs_cv;
+    mutable std::condition_variable ssd_clear_cv;
+
     mutable bool is_stopped = false;
     mutable std::exception_ptr error;
 

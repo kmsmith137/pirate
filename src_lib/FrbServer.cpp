@@ -396,7 +396,13 @@ void FrbServer::stop(std::exception_ptr e) const
     shared_ptr<CudaEventRingbuf> edq  = evrb_dq;
     shared_ptr<CudaEventRingbuf> eh2g = evrb_h2g;
 
-    cv.notify_all();
+    stop_cv.notify_all();
+    rb_init_cv.notify_all();
+    assembled_cv.notify_all();
+    dd_init_cv.notify_all();
+    grouper_hs_cv.notify_all();
+    reaper_cv.notify_all();
+    monitor_cv.notify_all();
     lock.unlock();
 
     // Cancel the grouper Session RPC: TryCancel() unblocks any in-flight
@@ -457,7 +463,7 @@ bool FrbServer::poll_from_python(int timeout_ms) const
 
     unique_lock<std::mutex> lock(mutex);
 
-    if (!cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this] { return is_stopped; }))
+    if (!stop_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this] { return is_stopped; }))
         return false;
 
     // Server is stopped: rethrow the root-cause error, or return true on a
@@ -519,7 +525,10 @@ void FrbServer::_worker_main(int receiver_index)
         rb_end          = initial_frame_id;
         rb_initialized  = true;
 
-        cv.notify_all();
+        // One-shot latch: wakes the processing thread's startup wait, and
+        // MonitorRingbuf handlers (whose predicate includes rb_initialized).
+        rb_init_cv.notify_all();
+        monitor_cv.notify_all();
     } else {
         xassert(long(frame_ringbuf.size()) == rb_size);
     }
@@ -612,7 +621,11 @@ void FrbServer::_worker_main(int receiver_index)
 
             lock.unlock();
             frame_lock.unlock();
-            cv.notify_all();
+            // Wake the processing thread (rb_assembled / rb_end advanced).
+            // notify_one: its inner loop is the only assembled_cv waiter.
+            // This fires once per frame per receiver -- the server's hottest
+            // notify -- so waking anyone else here would be pure overhead.
+            assembled_cv.notify_one();
             // (The per-chunk "FrbServer: ..." status line is printed by the
             // frame_finalizing_thread, when a chunk is fully PROCESSED by the GPU,
             // not here at network-assembly time.)
@@ -654,7 +667,7 @@ void FrbServer::_reaper_thread_main()
     // would be racy here: a FrbServer worker is responsible for the
     // frame_ringbuf.resize() call, and that may not have happened yet at
     // this point. The frame_ringbuf[rb_slot] access further down is still
-    // safe because it sits inside the cv-wait on (rb_reaped < rb_processed)
+    // safe because it sits inside the reaper_cv wait on (rb_reaped < rb_processed)
     // -- for that to become true, some worker has assembled and the
     // processing thread has advanced past a frame, which means the first
     // worker has already executed its resize.
@@ -670,16 +683,15 @@ void FrbServer::_reaper_thread_main()
         unique_lock<std::mutex> lock(mutex);
 
         // Wait for a reapable frame (i.e. rb_reaped < rb_processed). The
-        // processing thread signals the cv when it advances rb_processed.
-        // Worker threads also signal on every frame insertion, but those
-        // wakeups only become actionable for the reaper once the processing
-        // thread has caught up (rb_processed has advanced).
+        // frame_finalizing thread signals reaper_cv when it advances
+        // rb_processed (worker frame insertions never make this predicate
+        // true, so they don't signal the reaper at all).
         for (;;) {
             if (is_stopped)
                 return;
             if (rb_reaped < rb_processed)
                 break;
-            cv.wait(lock);
+            reaper_cv.wait(lock);
         }
 
         long rb_slot = rb_reaped % rb_size;
@@ -935,7 +947,9 @@ void FrbServer::_processing_thread_main()
         evrb_dq      = evrb_dq_p;
         evrb_h2g     = evrb_h2g_p;
         dedisperser_is_initialized = true;
-        cv.notify_all();
+        // One-shot latch: wakes the frame_finalizing thread and the grouper
+        // send thread.
+        dd_init_cv.notify_all();
     }
 
     // Snapshot rb_processed into rb_curr (local). Indexes the processing
@@ -950,7 +964,7 @@ void FrbServer::_processing_thread_main()
     long rb_curr;
     {
         unique_lock<std::mutex> lock(mutex);
-        cv.wait(lock, [&]{ return is_stopped || rb_initialized; });
+        rb_init_cv.wait(lock, [&]{ return is_stopped || rb_initialized; });
         if (is_stopped) return;
         rb_curr = rb_processed;
     }
@@ -1011,7 +1025,7 @@ void FrbServer::_processing_thread_main()
             std::shared_ptr<AssembledFrame> frame;
             {
                 unique_lock<std::mutex> lock(mutex);
-                cv.wait(lock, [&]{
+                assembled_cv.wait(lock, [&]{
                     return is_stopped || (rb_curr < rb_assembled);
                 });
                 if (is_stopped)
@@ -1136,7 +1150,7 @@ void FrbServer::_frame_finalizing_thread_main()
     shared_ptr<CudaEventRingbuf> evrb_h2g_p;
     {
         unique_lock<std::mutex> lock(mutex);
-        cv.wait(lock, [&]{ return is_stopped || dedisperser_is_initialized; });
+        dd_init_cv.wait(lock, [&]{ return is_stopped || dedisperser_is_initialized; });
         if (is_stopped) return;
         evrb_h2g_p = evrb_h2g;
         xassert(evrb_h2g_p);
@@ -1320,7 +1334,11 @@ void FrbServer::_frame_finalizing_thread_main()
             if (rb_processed % nbeams == 0)
                 completed_ichunk = rb_processed / nbeams - 1;
         }
-        cv.notify_all();
+        // rb_processed advanced: wake the reaper (notify_one -- single
+        // waiter) and any MonitorRingbuf handlers (notify_all -- several
+        // handlers, each with its own last_sent).
+        reaper_cv.notify_one();
+        monitor_cv.notify_all();
 
         // Announce a fully-processed chunk (once per chunk), unless params.quiet.
         // Printed off-lock. See the assembly-time note in _worker_main: the status
@@ -1550,7 +1568,7 @@ void FrbServer::_grouper_send_thread_main()
     shared_ptr<DedispersionPlan> plan_snap;
     {
         unique_lock<std::mutex> lock(mutex);
-        cv.wait(lock, [&]{ return is_stopped || dedisperser_is_initialized; });
+        dd_init_cv.wait(lock, [&]{ return is_stopped || dedisperser_is_initialized; });
         if (is_stopped) return;
         dd = dedisperser;
         plan_snap = plan;
@@ -1574,8 +1592,8 @@ void FrbServer::_grouper_send_thread_main()
         throw runtime_error("FrbServer: grouper rejected handshake: "
                             + reply.handshake_reply().error_message());
 
-    // (6) Wake receive_thread.
-    { lock_guard<std::mutex> lock(mutex); grouper_handshake_done = true; cv.notify_all(); }
+    // (6) Wake receive_thread (one-shot latch).
+    { lock_guard<std::mutex> lock(mutex); grouper_handshake_done = true; grouper_hs_cv.notify_all(); }
 
     // (7) Steady-state produced loop.
     for (long seq_id = 0; ; seq_id++) {
@@ -1626,7 +1644,7 @@ void FrbServer::_grouper_receive_thread_main()
     shared_ptr<GpuDedisperser> dd;
     {
         unique_lock<std::mutex> lock(mutex);
-        cv.wait(lock, [&]{ return is_stopped || grouper_handshake_done; });
+        grouper_hs_cv.wait(lock, [&]{ return is_stopped || grouper_handshake_done; });
         if (is_stopped) return;
         dd = dedisperser;
         xassert(dd);
@@ -2463,14 +2481,13 @@ grpc::Status FrbRpcService::GetConfig(
 // ends when the client closes the connection or when FrbServer::stop() is
 // called.
 //
-// Synchronization: reuses FrbServer::mutex + FrbServer::cv. The cv is already
-// notified on every event that matters (rb_initialized flip, rb_processed
-// advance, stop). Spurious wake-ups (e.g., from worker frame-insert notifies)
-// just re-check the predicate and re-wait; the cost is microseconds per notify.
+// Synchronization: reuses FrbServer::mutex + FrbServer::monitor_cv, which is
+// notified on every event the predicate tests (rb_initialized flip,
+// rb_processed advance, stop) -- see the cv comments in FrbServer.hpp.
 //
 // The 500ms wait timeout is a safety net for "silent disconnect during an
 // idle server" -- if a client disconnects with no Cancel() call AND
-// rb_processed is not advancing, we'd otherwise block forever on cv.wait.
+// rb_processed is not advancing, we'd otherwise block forever on the wait.
 // The timeout lets us periodically re-poll context->IsCancelled().
 void FrbRpcService::_MonitorRingbuf(
     grpc::ServerContext* context,
@@ -2491,7 +2508,7 @@ void FrbRpcService::_MonitorRingbuf(
 
             // Wait for: stop, OR (initialized AND value changed). Timeout
             // bounds the latency of silent-disconnect detection.
-            s->cv.wait_for(lock, std::chrono::milliseconds(500), [&]() {
+            s->monitor_cv.wait_for(lock, std::chrono::milliseconds(500), [&]() {
                 return s->is_stopped
                     || (s->rb_initialized && s->rb_processed != last_sent);
             });

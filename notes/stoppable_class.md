@@ -86,11 +86,18 @@ Conventions for how the exception text reaches a human:
 Rules whose violations repeatedly turned up as real bugs in review:
 
 - One condition variable per wait-predicate. `notify_one()` is allowed ONLY
-  when every waiter on that cv has the same predicate and one event
-  satisfies exactly one waiter. If waiters with different predicates share
-  a cv, a targeted notify can wake the wrong waiter while the intended one
-  sleeps forever (lost wakeup). When in doubt, split the cv or use
-  `notify_all()`. `stop()` must `notify_all()` every cv.
+  when (a) every waiter on that cv has the same predicate and one event
+  satisfies exactly one waiter (work-queue handoff), or (b) at most one
+  thread can ever be blocked on that cv (structurally single waiter) --
+  either way, write the justification as a comment at the notify site. If
+  waiters with different predicates share a cv, a targeted notify can wake
+  the wrong waiter while the intended one sleeps forever (lost wakeup).
+  When in doubt, split the cv or use `notify_all()`. One-shot latch events
+  (init flags) keep `notify_all()` -- the cost is paid once, and it is
+  robust against waiters added later. `stop()` must `notify_all()` every
+  cv. FrbServer (7 cvs) is the big worked example; CudaEventRingbuf's
+  `_release()` shows how to justify NOT notifying a cv whose waiters
+  mention the changed state.
 
 - Keep a COMPLETE "signaled on:" list next to each cv declaration. A wait
   predicate is correct only if every state change it tests is followed by a

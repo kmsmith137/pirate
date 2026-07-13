@@ -72,7 +72,7 @@ struct FrbGrouperClient;  // FrbGrouper.hpp (producer-side grouper connection)
 // frame_finalizing_thread: bridges H2G-copy completion (signaled via
 // evrb_h2g) to the FrbServer ringbuf accounting. For each fired
 // event it bumps rb_processed by beams_per_batch under 'mutex' and notifies
-// cv (waking the reaper).
+// reaper_cv / monitor_cv.
 //
 // Note that FrbServer::start() also spawns a grpc service with its own worker
 // threads. These threads will be unpinned (default system-wide affinity), since
@@ -178,14 +178,53 @@ struct FrbServer
     // Thread-backed class state (protected by mutex). The stop-pattern
     // members are 'mutable' since stop() is const (see notes/stoppable_class.md).
     //
-    // 'cv' is signaled on: stop(), metadata available, every frame insertion
-    // into the ring buffer, dedisperser publish, every rb_processed advance,
-    // and grouper handshake completion. Several wait predicates (RPC
-    // handlers, MonitorRingbuf pushes, poll_from_python) rely on this list
-    // being complete. (The rb_streamed advance is deliberately NOT on this
-    // list -- no wait predicate reads rb_streamed; see its declaration.)
+    // One condition variable per wait-predicate (see "Locking and condition
+    // variables" in notes/stoppable_class.md). stop() notify_all's all
+    // seven. (The rb_streamed advance deliberately notifies nothing -- no
+    // wait predicate reads rb_streamed; see its declaration.)
+    //
+    // stop_cv -- waiters: poll_from_python() callers (predicate:
+    //   is_stopped; timed). Signaled on: stop() only.
+    //
+    // rb_init_cv -- waiter: the processing thread's startup wait
+    //   (predicate: rb_initialized, or stopped). Signaled on: the
+    //   rb_initialized latch in the first worker's init block (notify_all
+    //   -- one-shot latch), and stop().
+    //
+    // assembled_cv -- waiter: the processing thread's inner loop
+    //   (predicate: rb_curr < rb_assembled, or stopped). Signaled on:
+    //   every frame insertion in _worker_main() (notify_one -- single
+    //   waiter; this is the hottest notify in the server), and stop().
+    //
+    // dd_init_cv -- waiters: the frame_finalizing thread and the grouper
+    //   send thread (predicate: dedisperser_is_initialized, or stopped).
+    //   Signaled on: the dedisperser publish in the processing thread
+    //   (notify_all -- one-shot latch), and stop().
+    //
+    // grouper_hs_cv -- waiter: the grouper receive thread (predicate:
+    //   grouper_handshake_done, or stopped). Signaled on: the handshake
+    //   latch in the grouper send thread (notify_all -- one-shot latch),
+    //   and stop().
+    //
+    // reaper_cv -- waiter: the reaper thread (predicate: rb_reaped <
+    //   rb_processed, or stopped). Signaled on: every rb_processed advance
+    //   in the frame_finalizing thread's Phase C (notify_one -- single
+    //   waiter), and stop(). (Worker frame insertions do NOT signal the
+    //   reaper: they never make its predicate true.)
+    //
+    // monitor_cv -- waiters: MonitorRingbuf RPC handlers (predicate:
+    //   rb_initialized && rb_processed != last_sent, or stopped; timed).
+    //   Signaled on: every rb_processed advance (notify_all -- several
+    //   handlers, each with its own last_sent), the rb_initialized latch
+    //   (the predicate's first conjunct), and stop().
     mutable std::mutex mutex;
-    mutable std::condition_variable cv;
+    mutable std::condition_variable stop_cv;
+    mutable std::condition_variable rb_init_cv;
+    mutable std::condition_variable assembled_cv;
+    mutable std::condition_variable dd_init_cv;
+    mutable std::condition_variable grouper_hs_cv;
+    mutable std::condition_variable reaper_cv;
+    mutable std::condition_variable monitor_cv;
     mutable bool is_stopped = false;
     mutable std::exception_ptr error;
 

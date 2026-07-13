@@ -41,11 +41,11 @@ namespace pirate {
 // This class follows the "thread-backed class" pattern (see
 // notes/thread_backed_class.md), but with the synchronization state moved
 // *into* each Worker rather than shared across workers. FakeXEngine itself
-// holds no mutex / cv / is_stopped bool / error slot of its own. The only
+// holds no mutex / cvs / is_stopped bool / error slot of its own. The only
 // FakeXEngine-level "stopped" representation is the atomic
 // 'is_stopped_cache', which is purely an O(1) cache for the pybind11
 // 'is_stopped' property reader and a re-entry guard for stop(); workers
-// and entry points synchronize through each Worker's own mutex+cv+flag.
+// and entry points synchronize through each Worker's own mutex+cvs+flag.
 //
 // Stop-reporting convention (a documented variant of the pattern -- see
 // "Error reporting" in notes/stoppable_class.md): stop(nullptr) means
@@ -86,7 +86,7 @@ namespace pirate {
 // ahead of the server, MEASURED AGAINST THE WORKER'S MOST RECENT
 // SUCCESSFUL SEND (Worker::last_ichunk_sent), not against the pending
 // command's ichunk. Before each SEND_JUNK / SEND_MINICHUNK, the
-// worker blocks on its cv until Worker::rb_processed >=
+// worker blocks on its gate_cv until Worker::rb_processed >=
 // (Worker::last_ichunk_sent - 5) * nbeams.
 //
 // Why "last_ichunk_sent" and not "ichunk-of-pending-send": SKIPs let a
@@ -209,7 +209,7 @@ struct FakeXEngine
     };
 
     // Worker: per-worker state and synchronization. Each Worker is an
-    // independent "thread-backed" unit -- mutex, cv, and is_stopped/error
+    // independent "thread-backed" unit -- mutex, cvs, and is_stopped/error
     // are all per-worker, so there is no cross-worker contention on the
     // hot path.
     struct Worker
@@ -217,14 +217,39 @@ struct FakeXEngine
         // ---- All of these are protected by 'mutex'. ----
 
         mutable std::mutex mutex;
-        // Notified by: enqueue_send_junk / enqueue_skip_minichunk /
-        // enqueue_send_minichunk / enqueue_disconnect (after enqueue),
-        // the worker thread (after a successful command processed-step
-        // updates last_processed_minichunk, and when _read_acks drains
-        // ack_queue), the pacing thread (on each rb_processed advance,
-        // paced mode only), and stop() (when is_stopped transitions to
-        // true).
-        std::condition_variable cv;
+
+        // One condition variable per wait-predicate (see "Locking and
+        // condition variables" in notes/stoppable_class.md). The stop()
+        // per-worker sweep notify_all's all four.
+        //
+        // cmd_cv -- waiter: the worker thread's command wait in
+        //   _worker_main() (predicate: command_queue non-empty, or
+        //   stopped). Signaled on: command push in _enqueue() (notify_one
+        //   -- single waiter: this worker), and stop().
+        //
+        // gate_cv -- waiter: the worker thread's paced-mode gate in
+        //   _skip_or_send() (predicate: rb_processed >= required, or
+        //   stopped). Signaled on: rb_processed advance by the pacing
+        //   thread (notify_one -- single waiter: this worker), and stop().
+        //   (The first-send bootstrap in _skip_or_send writes rb_processed
+        //   with no notify: the only gate waiter is the worker itself,
+        //   which is running that code.)
+        //
+        // processed_cv -- waiters: wait_until_processed() callers
+        //   (predicate: last_processed_minichunk >= index, or stopped).
+        //   Signaled on: the centralized per-command notify in
+        //   _worker_main() (notify_all -- multiple callers, different
+        //   indices), and stop().
+        //
+        // drain_cv -- waiters: synchronize() callers (predicate:
+        //   command_queue and ack_queue both empty, or stopped). Signaled
+        //   on: the centralized per-command notify in _worker_main(), the
+        //   ack-queue drain in _read_acks() (notify_all each -- when the
+        //   queues drain, every waiter becomes ready), and stop().
+        std::condition_variable cmd_cv;
+        std::condition_variable gate_cv;
+        std::condition_variable processed_cv;
+        std::condition_variable drain_cv;
 
         // Commands waiting to be processed by this worker, FIFO.
         std::deque<Command> command_queue;
@@ -792,7 +817,7 @@ struct FakeXEngine
     // Put FakeXEngine into stopped state. First caller's compare-exchange
     // on is_stopped_cache wins; subsequent concurrent calls return
     // immediately. The winner sweeps every worker, locking each one's
-    // mutex briefly to set is_stopped + error and notify its cv. On
+    // mutex briefly to set is_stopped + error and notify its cvs. On
     // their next predicate re-check, any in-flight entry-point calls
     // (wait_until_processed / enqueue_send_junk / ...) then return false
     // (e == nullptr: normal termination) or rethrow e (error shutdown).
@@ -834,7 +859,8 @@ private:
     // check in _enqueue), lazily connects on the first SEND_*, gathers
     // data into the minichunk_buf for SEND_MINICHUNK, stamps the
     // wire-seq, calls _send_all(), and finally publishes
-    // last_processed_minichunk + notifies the worker's cv.
+    // last_processed_minichunk (the processed_cv/drain_cv notify is
+    // centralized in _worker_main, after the dispatch returns).
     //
     // Returns false if _send_all() bailed out (stop or peer connreset);
     // the caller (_worker_main) should treat that as a signal to exit
@@ -844,8 +870,8 @@ private:
     // Handler for DISCONNECT. Idempotent: closes the worker's socket
     // and flips w.connected to false (no-op if already disconnected).
     // Does NOT touch w.last_processed_minichunk or
-    // w.last_queued_minichunk. Does NOT call cv.notify_all (no state
-    // that wait_until_processed waiters care about has changed).
+    // w.last_queued_minichunk, and does no notifying of its own (no
+    // state that any waiter's predicate tests has changed).
     void _disconnect(Worker &w);
 
     // Helper called by _skip_or_send for SEND_MINICHUNK: gather one
@@ -869,7 +895,7 @@ private:
     // check (only if is_state_advancing is true), updates
     // last_queued_minichunk and (on the very first call)
     // first_minichunk, pushes the Command, drops the lock, notifies
-    // the worker's cv, and returns true. method_name is used in the
+    // the worker's cmd_cv, and returns true. method_name is used in the
     // range-check and sequentiality-check error messages.
     //
     // Callers MUST pass is_state_advancing = true for SEND_JUNK,

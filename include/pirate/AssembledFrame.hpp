@@ -480,7 +480,38 @@ private:
     // Stop-pattern state ('mutable' since stop() is const -- see
     // notes/stoppable_class.md). is_stopped/error are protected by 'lock'.
     mutable std::mutex lock;
-    mutable std::condition_variable cv;  // signaled on: stop, frame added to queue, frame received by all consumers
+
+    // One condition variable per wait-predicate (see "Locking and condition
+    // variables" in notes/stoppable_class.md):
+    //
+    // metadata_cv -- waiters: get_metadata(blocking=true) callers, and phase
+    //   1 of the worker thread's init gate (predicate: metadata set, or
+    //   stopped). Signaled on: the metadata latch in _initialize_metadata()
+    //   (notify_all -- one-shot latch), and stop().
+    //
+    // chunk_cv -- waiters: wait_for_initial_chunk() callers, and phase 2 of
+    //   the worker thread's init gate (predicate: initial_chunk_set, or
+    //   stopped). Signaled on: the latch in _initialize_initial_chunk()
+    //   (notify_all -- one-shot latch), and stop().
+    //
+    // queue_cv -- waiters: _get_frame_set() callers (predicate: this
+    //   consumer's next set is in frame_set_queue, or -- dummy mode -- the
+    //   in-progress creation finished, or stopped). Signaled on: set push +
+    //   frame_creation_underway reset in _create_frame_set() (notify_all --
+    //   REQUIRED: every consumer receives every set once, so one new set can
+    //   make several waiters ready; this is not a work-queue handoff), the
+    //   CreationFlagGuard unwind path, and stop().
+    //
+    // lowmem_cv -- waiters: block_until_low_memory() callers (predicate:
+    //   num_preinitialized decreased below the caller's threshold, or
+    //   stopped). Signaled on: first_unreceived_chunk_index advance in
+    //   _get_frame_set() (notify_all -- several waiters with different
+    //   thresholds can become ready), and stop().
+    mutable std::condition_variable metadata_cv;
+    mutable std::condition_variable chunk_cv;
+    mutable std::condition_variable queue_cv;
+    mutable std::condition_variable lowmem_cv;
+
     mutable bool is_stopped = false;
     mutable std::exception_ptr error;
 

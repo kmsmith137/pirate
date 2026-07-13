@@ -268,7 +268,7 @@ struct SimulatedFrameFactory
     mutable std::condition_variable queue_cv;      // consumer waits: ready_queue non-empty or stopped
     mutable std::condition_variable space_cv;      // producer waits: ready_queue not full or stopped
     mutable std::condition_variable rand_cv;       // randomizers wait: a job is available or stopped
-    mutable std::condition_variable rand_done_cv;  // producer waits: current randomize job complete
+    mutable std::condition_variable rand_done_cv;  // producer waits: current randomize job complete (single waiter -> notify_one)
     mutable std::condition_variable sp_queue_cv;   // producer waits: pulse_queue non-empty or stopped
     mutable std::condition_variable sp_space_cv;   // frb simulators wait: pulse_queue not full or stopped
 

@@ -67,9 +67,9 @@ static inline void fetch_max(std::atomic<long> &dst, long src)
 }
 
 
-// File-scope helper: sets w.is_stopped, w.error, notifies w.cv. Idempotent
-// (no-op if w.is_stopped is already true). Used by FakeXEngine::stop()'s
-// per-worker sweep; never called from anywhere else.
+// File-scope helper: sets w.is_stopped, w.error, notifies all of w's cvs.
+// Idempotent (no-op if w.is_stopped is already true). Used by
+// FakeXEngine::stop()'s per-worker sweep; never called from anywhere else.
 static void _stop_one_worker(FakeXEngine::Worker &w, std::exception_ptr e)
 {
     {
@@ -78,7 +78,10 @@ static void _stop_one_worker(FakeXEngine::Worker &w, std::exception_ptr e)
         w.is_stopped = true;
         w.error = e;
     }
-    w.cv.notify_all();
+    w.cmd_cv.notify_all();
+    w.gate_cv.notify_all();
+    w.processed_cv.notify_all();
+    w.drain_cv.notify_all();
 }
 
 
@@ -442,9 +445,10 @@ bool FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancin
     // through the queue-time check, the counter updates, and the
     // push -- so the recorded last_queued_minichunk is consistent
     // with the FIFO position of this command in command_queue. Now
-    // drop it and wake the worker.
+    // drop it and wake the worker (notify_one: the worker thread is
+    // the only cmd_cv waiter).
     lock.unlock();
-    w.cv.notify_all();   // wakes only this worker
+    w.cmd_cv.notify_one();
     return true;
 }
 
@@ -557,7 +561,7 @@ bool FakeXEngine::wait_until_processed(long worker_id, long minichunk_index)
                 return false;   // cleanly stopped before the condition was reached
             if (w.last_processed_minichunk >= minichunk_index)
                 return true;
-            w.cv.wait(lock);
+            w.processed_cv.wait(lock);
         }
     } catch (...) {
         stop(std::current_exception());
@@ -597,8 +601,8 @@ bool FakeXEngine::synchronize(long worker_id)
 
         // If debug mode is enabled, enqueue a WAIT_FOR_ACKS first. The
         // worker eventually pops it and calls _read_acks(blocking=true);
-        // when that finishes the centralized cv.notify_all in
-        // _worker_main fires, which wakes us from cv.wait below. A false
+        // when that finishes the centralized drain_cv notify in
+        // _worker_main fires, which wakes us from the wait below. A false
         // return means "cleanly stopped" -- report the same from here.
         if (debug) {
             if (!enqueue_wait_for_acks(worker_id))
@@ -632,7 +636,7 @@ bool FakeXEngine::synchronize(long worker_id)
                 return false;   // cleanly stopped before the queue drained
             if (w.command_queue.empty() && w.ack_queue.empty())
                 return true;
-            w.cv.wait(lock);
+            w.drain_cv.wait(lock);
         }
     } catch (...) {
         stop(std::current_exception());
@@ -891,9 +895,8 @@ void FakeXEngine::_populate_minichunk_buf(Worker &w,
 // w.last_queued_minichunk; the next SEND_* on this worker will hit
 // the !w.connected branch in _skip_or_send and transparently reopen
 // the connection + re-send the protocol header (bundled with the
-// next minichunk in one _send_all). Also does NOT call
-// cv.notify_all: nothing in any wait_until_processed predicate
-// depends on the connected flag.
+// next minichunk in one _send_all). Also does no notifying of its
+// own: no waiter's predicate depends on the connected flag.
 
 
 // -------------------------------------------------------------------------------------------------
@@ -1091,13 +1094,14 @@ void FakeXEngine::_read_acks(Worker &w, bool blocking)
             drained = w.ack_queue.empty();
         }
 
-        // Wake a synchronize() waiter whose predicate (command_queue and
+        // Wake synchronize() waiters, whose predicate (command_queue and
         // ack_queue both empty) may have just become true. Load-bearing for
         // the idle-loop drain in _worker_main, which is not followed by any
         // command-completion notify -- without this, a synchronize() caller
         // could sleep forever after the idle drain pops the last ack.
+        // notify_all: when the queues drain, every waiter becomes ready.
         if (drained)
-            w.cv.notify_all();
+            w.drain_cv.notify_all();
 
         need -= n;
     }
@@ -1201,8 +1205,8 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
 
                 std::lock_guard<std::mutex> lk(w.mutex);
                 w.rb_processed = std::max(w.rb_processed, current_floor);
-                // No cv.notify needed -- this worker is the only thread
-                // that would be waiting on its own cv for an
+                // No gate_cv notify needed -- this worker is the only
+                // thread that would be waiting on its own gate_cv for an
                 // rb_processed change, and it's not waiting; it's
                 // running this code.
             }
@@ -1221,7 +1225,7 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
             long required = (w.last_ichunk_sent - 5) * nbeams;
             if (required > 0) {
                 std::unique_lock<std::mutex> lk(w.mutex);
-                w.cv.wait(lk, [&] {
+                w.gate_cv.wait(lk, [&] {
                     return w.is_stopped || w.rb_processed >= required;
                 });
                 if (w.is_stopped)
@@ -1365,10 +1369,10 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
     }
 
     // Publish last_processed_minichunk + (if debug) update status /
-    // push ack_queue under lock. (cv.notify_all is centralized in
-    // _worker_main, fired once per command dispatched -- so
-    // wait_until_processed AND synchronize waiters wake together
-    // after each command is fully processed.)
+    // push ack_queue under lock. (The processed_cv/drain_cv notifies are
+    // centralized in _worker_main, fired once per command dispatched -- so
+    // wait_until_processed AND synchronize waiters wake after each command
+    // is fully processed.)
     {
         std::lock_guard<std::mutex> lock(w.mutex);
         if (debug) {
@@ -1419,9 +1423,9 @@ void FakeXEngine::_worker_main(int worker_id)
                 // acks so we don't let the receiver's send buffer
                 // for ack bytes fill up.
                 if (w.ack_queue.empty()) {
-                    w.cv.wait(lock);
+                    w.cmd_cv.wait(lock);
                 } else {
-                    auto status = w.cv.wait_for(lock, std::chrono::milliseconds(1));
+                    auto status = w.cmd_cv.wait_for(lock, std::chrono::milliseconds(1));
                     if (status == std::cv_status::timeout) {
                         lock.unlock();
                         _read_acks(w, /*blocking=*/false);
@@ -1467,8 +1471,11 @@ void FakeXEngine::_worker_main(int worker_id)
         // advanced) AND synchronize() waiters (whenever command_queue
         // empties or shrinks). Notifying *after* the dispatch returns
         // is what makes synchronize() wait for WAIT_FOR_ACKS's
-        // blocking drain to finish before returning.
-        w.cv.notify_all();
+        // blocking drain to finish before returning. Both cvs are
+        // notified unconditionally (cheap when nobody waits); notify_all
+        // because several callers can wait on each.
+        w.processed_cv.notify_all();
+        w.drain_cv.notify_all();
     }
 }
 
@@ -1524,7 +1531,9 @@ void FakeXEngine::_pacing_thread_main()
             long new_val = std::max(w.rb_processed, v);
             if (new_val != w.rb_processed) {
                 w.rb_processed = new_val;
-                w.cv.notify_all();
+                // notify_one: the worker thread's paced gate is the only
+                // gate_cv waiter.
+                w.gate_cv.notify_one();
             }
         }
     }
