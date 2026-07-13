@@ -169,7 +169,7 @@ class FrbSearchClient:
     @functools.cached_property
     def xengine_metadata(self):
         """The server's X-engine metadata, parsed to a typed
-        pirate_pybind11.XEngineMetadata (cached).
+        pirate_frb.core.XEngineMetadata (cached).
 
         beam_ids and beam_positions_{x,y} ARE populated (the server serializes
         them via XEngineMetadata::to_yaml_string). freq_channels may be empty:

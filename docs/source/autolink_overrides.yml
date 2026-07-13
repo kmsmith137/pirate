@@ -1,0 +1,44 @@
+# Curated adjustments for the autolink Sphinx extension (_ext/autolink.py).
+#
+# The keyword registry is auto-derived every build from the Sphinx python
+# domain and the generated config/cli/proto/notes pages, so it never goes
+# stale on its own. This file holds ONLY the judgment calls that cannot be
+# derived. Maintained occasionally via the /review-docs slash command, which
+# reads docs/build/autolink_report.json and tunes the entries below.
+
+# aliases: phrase -> target. Targets are a page docname, 'docname#anchor', or
+# 'static:<path>' for a served asset. Aliases fire on every page (including
+# notes pages) because they are explicit intent, not auto-derived guesses.
+aliases:
+  # gRPC RPC method names -> the .proto page that defines them. These are plain
+  # words, so the deriver cannot know they are proto references.
+  WriteFiles: grpc/frb_search.proto
+  StartStream: grpc/frb_search.proto
+  CancelStream: grpc/frb_search.proto
+  ShowStreams: grpc/frb_search.proto
+  SubscribeFiles: grpc/frb_search.proto
+  GetStatus: grpc/frb_search.proto
+  GetConfig: grpc/frb_search.proto
+  GetXEngineMetadata: grpc/frb_search.proto
+  MonitorRingbuf: grpc/frb_search.proto
+  write_files: grpc/frb_search.proto
+  subscribe_files: grpc/frb_search.proto
+  # Prose pointer to the compiled tex notes -> the served PDF (open decision 5b).
+  the tex notes: static:_static/tree_dedispersion.pdf
+  tex notes: static:_static/tree_dedispersion.pdf
+
+# deny: suppress a keyword globally (no `page:`) or on one page. Add entries
+# here only when a match keeps recurring as a false positive.
+deny:
+  # "Acquisition directory" (the concept) collides with the Acquisition class
+  # in FrbSearchClient's write_files/start_stream parameter docstrings.
+  - keyword: Acquisition
+    page: classes/FrbSearchClient
+
+policy:
+  # every | first_per_section | first_per_page. Currently 'every' is not yet
+  # enforced by the extension (it always links every occurrence); this key is a
+  # placeholder for switching to first-per-section later (open decision 1).
+  plain_text_matches: every
+  # Link keywords inside the cli/<name> help blocks (open decision 2: in-block).
+  link_cli_help_blocks: true

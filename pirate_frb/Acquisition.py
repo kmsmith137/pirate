@@ -17,7 +17,7 @@ _TMP_RE = re.compile(r"\.tmp[0-9a-fA-F]{8}$")
 class Acquisition:
     """Helper class, to enumerate `frame_b{beam}_t{chunk}.asdf` files in a pirate acqdir.
 
-    Typically, the acqdir will be created by either `pirate_frb start_stream`,
+    Typically, the acqdir will be created by either `pirate_frb rpc_start_stream`,
     or a triggered `WriteFiles` RPC. The constructor raises an exception if the
     acqdir contains a file that's not of the form `frame_b{beam}_t{chunk}.asdf`,
     or if any beam's time chunk indices are non-contiguous. Different beams may

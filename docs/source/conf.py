@@ -189,6 +189,11 @@ version = release
 
 # -- General configuration ---------------------------------------------------
 
+# Local extensions (docs/source/_ext/) -- currently the 'autolink' extension,
+# which cross-links doc mentions of documented classes / config files / CLI
+# subcommands / protos at build time (see _ext/autolink.py).
+_sys.path.insert(0, os.path.join(os.path.dirname(__file__), '_ext'))
+
 extensions = [
     'sphinx.ext.autodoc',
     # napoleon parses NumPy/Google-style docstring sections (Parameters, Returns,
@@ -197,6 +202,7 @@ extensions = [
     'sphinx.ext.napoleon',
     'sphinx.ext.intersphinx',
     'myst_parser',
+    'autolink',
 ]
 
 templates_path = ['_templates']

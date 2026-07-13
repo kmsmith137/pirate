@@ -25,7 +25,7 @@ The "stoppable class" X is a code pattern for cascading exceptions through all t
 
 - If `X` contains pointers to other stoppable classes (any class `Y` defining `Y::stop()` is probably stoppable, please ask if it's unclear), then `X::stop(e)` should call `ptr->stop(e)` for each such pointer, forwarding the exception (see "Error reporting" below).
 
-- If a thread throws and nothing above it catches, its catch-all wrapper calls `stop(std::current_exception())` on the stoppable object(s) it works for, before exiting (see the worker wrapper in notes/thread_backed_class.md). (Not shown in the example code below.)
+- If a thread throws and nothing above it catches, its catch-all wrapper calls `stop(std::current_exception())` on the stoppable object(s) it works for, before exiting (see the worker wrapper in [notes/thread_backed_class.md](thread_backed_class.md)). (Not shown in the example code below.)
 
 The idea is that there are enough stoppable classes shared between threads that an exception in any thread will cascade its exception-text into all threads, and the server will shut down cleanly (all threads will exit).
 
@@ -123,7 +123,7 @@ Rules whose violations repeatedly turned up as real bugs in review:
 - Any binding that can block (entry points that wait, `poll_from_python`)
   releases the GIL via `py::call_guard<py::gil_scoped_release>()` -- the
   waker may be another python thread, which can never run while the blocked
-  binding holds the GIL. See notes/pybind11.md for the full GIL rules.
+  binding holds the GIL. See [notes/pybind11.md](pybind11.md) for the full GIL rules.
 
 - Never `def_readonly` a lock-protected member: the read is unsynchronized
   (a torn vector copy in the worst case). Route through a lock-taking

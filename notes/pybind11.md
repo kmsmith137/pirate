@@ -61,7 +61,7 @@ and documented (with `autoclass`) in the sphinx docs.
 
 - When writing docstrings, comments in the larger C++ codebase may be useful. For example, when writing python bindings for `class pirate::BumpAllocator`, comments in the source files `include/pirate/BumpAllocator.hpp` and `src_lib/BumpAllocator.cpp` may be useful for writing docstrings.
 
-- For how to write docstrings that render well in the Sphinx docs (documenting class members, the napoleon gotchas, etc.), see `notes/docstrings.md`.
+- For how to write docstrings that render well in the Sphinx docs (documenting class members, the napoleon gotchas, etc.), see [`notes/docstrings.md`](docstrings.md).
 
 - If it's technically challenging (or awkward) to python-bind a C++ class member/method, or if the member/method seems unlikely to be useful from python, then skip it. Please list in the chat all "skipped" members/methods.
 
@@ -147,7 +147,7 @@ The rules:
     acceptable, but add a comment at the binding saying when reads are safe
     (see the FrbGrouper metadata block).
 
-- Stoppable / thread-backed classes (see notes/stoppable_class.md) use a
+- Stoppable / thread-backed classes (see [notes/stoppable_class.md](stoppable_class.md)) use a
   shared_ptr holder: `py::class_<X, std::shared_ptr<X>>`. This matches the
   pattern's "accessed through a shared_ptr" rule and lets instances be
   passed to other C++ components that retain a reference.

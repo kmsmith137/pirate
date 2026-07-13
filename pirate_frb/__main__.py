@@ -399,8 +399,8 @@ def parse_make_subbands(subparsers):
         Example usage::
 
            # Specify frequency min, max, and threshold
-           python -m make_subbands 300 1500 0.2
-           python -m make_subbands 400 800 0.1 -r 4""")
+           python -m pirate_frb make_subbands 300 1500 0.2
+           python -m pirate_frb make_subbands 400 800 0.1 -r 4""")
     parser = subparsers.add_parser(
         "make_subbands",
         help = help_text,
@@ -442,10 +442,10 @@ def parse_hwtest(subparsers):
         Example networking-only run::
 
           # On cf05. The test will pause after "listening for TCP connections".
-          python -m pirate_frb hwtest configs/hwtest/cf05_net64.yml
+          python -m pirate_frb hwtest configs/hwtest/cf00_net64.yml
 
           # On cf00. Send to all four IP addresses on cf05.
-          python -m pirate_frb hwtest -s configs/hwtest/cf05_net64.yml
+          python -m pirate_frb hwtest -s configs/hwtest/cf00_net64.yml
 
         See configs/hwtest/*.yml for more examples.""")
     parser = subparsers.add_parser(
@@ -631,7 +631,7 @@ def hwtest_send_from_config(config):
 
 
 def parse_scratch(subparsers):
-    help_text = "For debugging: run whatever code is currently in src_lib/scratch.cu)"
+    help_text = "For debugging: run whatever code is currently in src_lib/scratch.cu"
     subparsers.add_parser("scratch", help=help_text, description=help_text)
 
 def scratch(args):

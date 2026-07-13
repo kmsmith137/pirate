@@ -4,7 +4,7 @@ The HTML docs are built from docstrings by sphinx `autoclass`/`autodoc`, with th
 `sphinx.ext.napoleon` extension enabled (see `docs/source/conf.py`). Docstrings are
 rendered as reStructuredText, and napoleon additionally parses NumPy/Google-style
 sections. A few conventions keep the rendered output clean. (See also
-`notes/pybind11.md` for the pybind-specific version of these rules.)
+[`notes/pybind11.md`](pybind11.md) for the pybind-specific version of these rules.)
 
 ## Class docstrings for classes with method injections
 

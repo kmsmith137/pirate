@@ -20,10 +20,10 @@ via `grpc` over the loopback network (`127.0.0.1`).
 For performance reasons, the grouper should leave arrays on the GPU
 if possible, and process them with `cupy`.
 
- - {py:class}`~pirate_frb.pirate_pybind11.FrbGrouper`: for managing communication with pirate.
- - {py:class}`~pirate_frb.rpc.FrbSifterClient`: for managing communication with the sifter.
- - {py:class}`~pirate_frb.rpc.FrbSifterEvents`: helper class for sending events to the sifter.
- - {py:class}`~pirate_frb.core.GpuDedisperserOutputs`: helper class for storing dedispersion output arrays.
+ - `FrbGrouper`: for managing communication with pirate.
+ - `FrbSifterClient`: for managing communication with the sifter.
+ - `FrbSifterEvents`: helper class for sending events to the sifter.
+ - `GpuDedisperserOutputs`: helper class for storing dedispersion output arrays.
  - Protocol for pirate-grouper communication: [`grpc/frb_grouper.proto`](../grpc/frb_grouper.proto).
  - Protocol for grouper-sifter communication: [`grpc/frb_sifter.proto`](../grpc/frb_sifter.proto).
 
@@ -187,7 +187,7 @@ Dedispersion outputs are processed in the following loop structure
  - Outer loop over time "chunks"
  
  - Middle loop over beam "batches". Call `FrbGrouper.get_output()` once per
-   iteration of the middle loop, to get a {py:class}`~pirate_frb.core.GpuDedisperserOutputs`
+   iteration of the middle loop, to get a `GpuDedisperserOutputs`
    object.
    
  - Inner loop over dedispersion trees. For each tree, the dedispersion outputs are
@@ -251,7 +251,7 @@ Here are some details that are not obvious from the example code:
    manager, while the arrays are valid -- see the example code above) and pass
    it to `create_events()` via the `argmax` argument.
 
-The `FrbGrouper` and `FrbSifter` classes aren't well-optimized at all.
+The `FrbGrouper` and `FrbSifterClient` classes aren't well-optimized at all.
 However, I find empirically that the "toy" grouper does not slow down a CHORD-scale search.
 If this changes in the future, then here are some optimization ideas (just want to write
 these down somewhere so I don't forget):
