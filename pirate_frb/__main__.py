@@ -1626,9 +1626,10 @@ def parse_run_toy_grouper(subparsers):
                         help="Emit one event per chunk per beam whose peak SNR exceeds this "
                              "threshold (default: 10).")
     parser.add_argument('--histogram', metavar='STEM',
-                        help="Write a histogram of SNR values to 'STEM.pkl' upon termination. "
-                             "With multiple groupers, the i-th grouper writes 'STEM<i>.pkl' "
-                             "(e.g. hist1.pkl, hist2.pkl, ...) so the filenames don't collide.")
+                        help="Write a histogram of steady-state SNR values (warmup values are "
+                             "excluded) to 'STEM.pkl' upon termination. With multiple groupers, "
+                             "the i-th grouper writes 'STEM<i>.pkl' (e.g. hist1.pkl, hist2.pkl, "
+                             "...) so the filenames don't collide.")
     # Exactly one of -s/-S is required.
     sifter_group = parser.add_mutually_exclusive_group(required=True)
     sifter_group.add_argument('-s', '--sifter', metavar='SIFTER_ADDR',

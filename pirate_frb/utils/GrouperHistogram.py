@@ -7,7 +7,8 @@ class GrouperHistogram:
     """Accumulates a histogram of dedispersion output (out_max) SNR values on the GPU.
 
     Intended for grouper main loops (see run_toy_grouper.py for example usage):
-    call add_tree() on each per-tree out_max array as it is processed, then write()
+    call add_tree() on each per-tree out_max array as it is processed (optionally
+    restricted by a boolean mask, e.g. FrbGrouper.steady_state_mask()), then write()
     on termination. The accumulation state lives on the GPU (one cp.histogram call
     per add_tree); nothing is copied to the host until write() / to_dict().
 
@@ -47,9 +48,14 @@ class GrouperHistogram:
         self._histogram = None    # cupy int64 array, shape (nbins,)
         self._bins = None         # cupy float64 array, shape (nbins+1,)
 
-    def add_tree(self, tree_out):
-        """Accumulate all values of 'tree_out' (a cupy array, e.g. one tree's out_max
-        array of shape (beams, ndm_out, nt_out)) into the histogram."""
+    def add_tree(self, tree_out, mask=None):
+        """Accumulate the values of 'tree_out' (a cupy array, e.g. one tree's out_max
+        array of shape (beams, ndm_out, nt_out)) into the histogram.
+
+        If 'mask' is not None, it must be a boolean cupy array matching the TRAILING
+        axes of 'tree_out' (e.g. shape (ndm_out, nt_out), applied to every beam), and
+        only values where the mask is True are accumulated -- e.g. pass
+        FrbGrouper.steady_state_mask(itree, ichunk) to exclude warmup values."""
         import cupy as cp
 
         if self._histogram is None:
@@ -58,7 +64,8 @@ class GrouperHistogram:
             self._bins[0] = -1e6    # catch-all outermost edges (see class docstring)
             self._bins[-1] = +1e6
 
-        h, _ = cp.histogram(tree_out.ravel(), bins=self._bins)
+        vals = tree_out[..., mask] if (mask is not None) else tree_out
+        h, _ = cp.histogram(vals.ravel(), bins=self._bins)
         self._histogram += h
 
     def to_dict(self):

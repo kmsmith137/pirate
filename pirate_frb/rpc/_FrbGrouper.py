@@ -79,9 +79,13 @@ class FrbGrouperInjections:
     - ``dedispersion_config_yaml`` (dict) -- parsed dedispersion config.
     - ``dedispersion_plan_yaml`` (dict) -- parsed dedispersion plan.
     - ``dm_per_unit_delay`` (float) -- DM of a full-band delay of one input time sample.
-    - ``steady_state_it0`` (list of int arrays). A dedispersion output array element
-      (ichunk, beam, itree, idm, it) is "steady-state", i.e. unaffected by initial
-      zero-padding, if: ``ichunk*nt_out + it >= steady_state_it0[itree][idm]``. 
+    - ``steady_state_it0`` (list of cupy int arrays, one per tree). A dedispersion
+      output array element (ichunk, beam, itree, idm, it) is "steady-state", i.e.
+      unaffected by initial zero-padding, if:
+      ``ichunk*nt_out + it >= steady_state_it0[itree][idm]``. Deliberately
+      GPU-resident: it is consumed on the GPU once per tree per chunk (see
+      ``steady_state_mask()``), and keeping it there avoids per-call host->GPU
+      copies. Call ``.get()`` on the elements for host copies.
     """
     # This class docstring (above) is the FrbGrouper docstring: the pybind11 binding
     # deliberately sets none, and ksgpu.inject_methods copies this one onto the class
@@ -227,10 +231,13 @@ class FrbGrouperInjections:
         Also sets the per-tree steady-state boundary (steady_state_it0, documented
         in the class docstring).
 
-        The tables are small numpy (host) arrays / scalars: create_events() indexes
+        The tables are small numpy (host) arrays / scalars -- create_events() indexes
         them on the CPU, since for the tiny event arrays a GPU kernel launch would
-        cost more than the CPU compute.
+        cost more than the CPU compute -- EXCEPT steady_state_it0, which is
+        deliberately GPU-resident (see below).
         """
+        import cupy as cp
+
         cfg = self.dedispersion_config
         xmd = self.xengine_metadata
 
@@ -239,11 +246,31 @@ class FrbGrouperInjections:
         self._beam_id_lut      = np.asarray(xmd.beam_ids, dtype=np.int64)
         self._seq_per_sample   = int(xmd.seq_per_frb_time_sample)
 
-        # Per-tree steady-state boundary (see class docstring), computed in C++:
-        # _compute_steady_state_it0() forwards DedispersionPlan.compute_steady_state_it0()
-        # on the producer's plan from the handshake.
+        # Per-tree steady-state boundary (see class docstring), computed in C++
+        # (_compute_steady_state_it0() forwards DedispersionPlan.compute_steady_state_it0()
+        # on the producer's plan from the handshake), then moved to the GPU: it is
+        # consumed on the GPU once per tree per chunk by steady_state_mask(), and
+        # keeping it GPU-resident avoids a host->GPU copy on every call. (__enter__
+        # has already selected the grouper's CUDA device at this point.)
         # (ichunk*nt_out + it) >= steady_state_it0[itree][idm]  ==>  steady-state.
-        self.steady_state_it0 = [self._compute_steady_state_it0(i) for i in range(self.ntrees)]
+        self.steady_state_it0 = [cp.asarray(self._compute_steady_state_it0(i))
+                                 for i in range(self.ntrees)]
+
+    def steady_state_mask(self, itree, ichunk):
+        """Return a cupy bool mask of shape (ndm_out, nt_out) for tree 'itree': True
+        where output element (ichunk, idm, it) is steady-state, i.e. unaffected by
+        the zero-padding before the start of the acquisition (see the
+        'steady_state_it0' bullet in the class docstring; the mask is independent
+        of the beam axis).
+
+        Computed entirely on the GPU (steady_state_it0 is GPU-resident), with no
+        host<->GPU copies or syncs -- cheap enough to call once per tree per chunk.
+        Intended for masking per-chunk statistics, e.g.
+        GrouperHistogram.add_tree(tree_out, mask=grouper.steady_state_mask(...)).
+        """
+        import cupy as cp
+        min_it = self.steady_state_it0[itree] - ichunk * self.nt_out[itree]
+        return cp.arange(self.nt_out[itree])[None, :] >= min_it[:, None]
 
     def create_events(self, ichunk, itrees, ibeams, idm, itime, snr, argmax):
         """Build a FrbSifterEvents from GPU arrays of (tree, beam, dm, time, token) data.
