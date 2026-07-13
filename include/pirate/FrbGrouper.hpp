@@ -221,8 +221,8 @@ private:
     // Thread-backed state.
     mutable std::mutex mutex;
 
-    // One condition variable per wait-predicate (see "Locking and condition
-    // variables" in notes/stoppable_class.md):
+    // One condition variable per wait-predicate (see the "Concurrency"
+    // section of notes/cpp.md):
     //
     // handshake_cv -- waiters: wait_for_handshake() (timed poll) and
     //   _send_loop()'s startup wait (predicate: handshake_done, or stopped).

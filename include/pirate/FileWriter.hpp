@@ -96,8 +96,8 @@ private:
 
     mutable std::mutex mutex;
 
-    // One condition variable per wait-predicate (see "Locking and condition
-    // variables" in notes/stoppable_class.md):
+    // One condition variable per wait-predicate (see the "Concurrency"
+    // section of notes/cpp.md):
     //
     // ssd_cv -- waiters: ssd threads (predicate: ssd_queue non-empty, or
     //   stopped). Signaled on: ssd_queue push in _process_frame()

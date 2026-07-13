@@ -1455,7 +1455,7 @@ void FakeXEngine::_worker_main(int worker_id)
         // stop-return, throw); on the two worker-exit paths the engine is
         // (or is about to be) stopped, so synchronize() waiters leave via
         // their stopped-check either way -- the reset just keeps the
-        // "in-progress flags" invariant clean (notes/stoppable_class.md).
+        // "in-progress flags" invariant clean (notes/cpp.md).
         bool worker_exiting = false;
         try {
             switch (cmd.kind) {

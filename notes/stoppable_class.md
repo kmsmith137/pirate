@@ -83,44 +83,13 @@ Conventions for how the exception text reaches a human:
 
 ## Locking and condition variables
 
-Rules whose violations repeatedly turned up as real bugs in review:
-
-- One condition variable per wait-predicate. `notify_one()` is allowed ONLY
-  when (a) every waiter on that cv has the same predicate and one event
-  satisfies exactly one waiter (work-queue handoff), or (b) at most one
-  thread can ever be blocked on that cv (structurally single waiter) --
-  either way, write the justification as a comment at the notify site. If
-  waiters with different predicates share a cv, a targeted notify can wake
-  the wrong waiter while the intended one sleeps forever (lost wakeup).
-  When in doubt, split the cv or use `notify_all()`. One-shot latch events
-  (init flags) keep `notify_all()` -- the cost is paid once, and it is
-  robust against waiters added later. `stop()` must `notify_all()` every
-  cv. FrbServer (7 cvs) is the big worked example; CudaEventRingbuf's
-  `_release()` shows how to justify NOT notifying a cv whose waiters
-  mention the changed state.
-
-- Keep a COMPLETE "signaled on:" list next to each cv declaration. A wait
-  predicate is correct only if every state change it tests is followed by a
-  notify; an incomplete list hides missed-notify bugs (e.g. draining a
-  queue on a side path without notifying the waiter whose predicate just
-  became true). Reviewers should check the list against the code.
-
-- Never read a lock-protected member after dropping the lock -- snapshot it
-  into a local under the lock and use the local.
-
-- An "in progress" flag that other threads wait on (e.g. an init-underway
-  or creation-underway flag) must be reset on EVERY exit path, including
-  throws -- use a catch block or a scope guard. A flag left set wedges all
-  future waiters, even if a stop() coupling happens to mask it today.
-
-- Counters used in wait predicates are `long`, never `int`: signed overflow
-  is UB and a hung predicate in a long-running server.
-
-- If a blocking call genuinely cannot be interrupted by stop() (e.g.
-  `cudaEventSynchronize`), document the trade-off at the declaration: what
-  invariant bounds the wait in practice, and what happens in the
-  pathological case. (See the `blocking_sync` note in CudaEventRingbuf.hpp
-  for the model.)
+The general rules -- one condition variable per wait-predicate, when
+`notify_one()` is sound, complete "signaled on:" lists, snapshot-under-lock,
+in-progress flags reset on every exit path, `long` counters in predicates,
+documenting uninterruptible waits -- live in the "Concurrency" section of
+notes/cpp.md and apply to every class in this pattern. In stoppable-class
+terms, the "shutdown event notifies every cv" rule there is `stop()`, and
+each cv's "signaled on:" list therefore includes `stop()`.
 
 ## pybind11 bindings
 
@@ -280,8 +249,8 @@ stoppable/thread-backed classes:
 4. Shared cv + notify_one() with waiters on different predicates (lost
    wakeup); or a state change with no notify at all (missed wakeup).
 5. State read after unlock, or published outside the mutex -- thread
-   handles and grpc server handles are the recurring case (see
-   notes/thread_backed_class.md).
+   handles and grpc server handles are the recurring case (see the
+   "Concurrency" section of notes/cpp.md).
 6. An in-progress flag not reset on a throw path.
 7. A blocking wait that stop() cannot interrupt, undocumented.
 8. Control flow that string-matches exception text.

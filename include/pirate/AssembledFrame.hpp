@@ -481,8 +481,8 @@ private:
     // notes/stoppable_class.md). is_stopped/error are protected by 'lock'.
     mutable std::mutex lock;
 
-    // One condition variable per wait-predicate (see "Locking and condition
-    // variables" in notes/stoppable_class.md):
+    // One condition variable per wait-predicate (see the "Concurrency"
+    // section of notes/cpp.md):
     //
     // metadata_cv -- waiters: get_metadata(blocking=true) callers, and phase
     //   1 of the worker thread's init gate (predicate: metadata set, or

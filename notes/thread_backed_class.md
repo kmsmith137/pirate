@@ -27,44 +27,18 @@ A pattern for a class `X`:
 - If `X` contains pointers to other thread-backed classes (or more generally, to any class `Y` defining `Y::stop()`), then `X::stop(e)` should call `ptr->stop(e)` for each such pointer, forwarding the exception (see "Error reporting" in notes/stoppable_class.md).
 
 Every thread-backed class is a stoppable class (see notes/stoppable_class.md), but not vice versa.
-In particular, the "Locking and condition variables", "pybind11 bindings", and "Reviewer checklist" sections there apply here too.
+In particular, the "Concurrency" rules in notes/cpp.md and the "pybind11 bindings" / "Reviewer checklist" sections in notes/stoppable_class.md apply here too.
 
 ## Spawning, joining, and teardown
 
-Rules for classes whose threads are spawned outside the constructor, or that
-have more than one thread. (The single-thread ctor-spawned example below has
-none of these hazards.) Each rule's violation turned up as a real data race
-or teardown bug in review:
-
-- Publish thread handles (and similar teardown state, e.g. a grpc server
-  handle) UNDER the mutex. If threads are spawned in start()/open()/
-  allocate(), the handle assignments happen with the mutex held, and
-  stop()/join()/close()/~X() synchronize on the mutex before reading them
-  -- stop() can run concurrently with start(). Holding the lock across the
-  spawns is safe as long as the spawner never waits on the spawned threads:
-  a freshly-spawned worker that touches X's state just blocks briefly until
-  the spawner releases.
-
-- Join paths take the mutex briefly (to synchronize with that publication),
-  then join with the mutex RELEASED -- workers take the mutex on their exit
-  paths, so joining under it deadlocks.
-
-- A constructor that spawns SEVERAL threads must handle a mid-spawn
-  failure: catch, stop(), join the already-spawned threads, rethrow.
-  Otherwise the std::thread members are destroyed while joinable, which is
-  std::terminate. (See FakeXEngine's constructor for the model.)
-
-- The destructor calls stop(), then joins the threads inline. It must never
-  call a public join()-style method that rethrows the saved error (a
-  throwing destructor). If both the destructor and a public join() need the
-  joining loop, factor a private _join_threads() helper (see Hwtest).
-
-- A close()-style teardown method needs more than an idempotency flag: a
-  second concurrent caller must BLOCK until the first finishes (e.g. a
-  leaf-level close_mutex held for the whole body -- see FrbGrouper). With a
-  flag alone, the second caller -- often the destructor -- returns
-  immediately and destroys members out from under the first caller's
-  still-running teardown.
+The general thread-lifecycle rules -- catch-all wrappers (an exception
+escaping a thread is std::terminate), publishing thread handles under the
+mutex, joining with the mutex released, mid-spawn constructor failure,
+destructors vs throwing join(), close() serialization -- live in the
+"Concurrency" section of notes/cpp.md; classes whose threads are spawned
+outside the constructor, or that have more than one thread, hit all of
+them. (The single-thread ctor-spawned example below has none of these
+hazards.) One rule is specific to this pattern:
 
 - Callback/handler threads (e.g. gRPC handlers) hold a BARE pointer to X,
   exactly like worker threads -- never a shared_ptr, and never
@@ -79,12 +53,6 @@ or teardown bug in review:
   path that blocks on handler drain (Shutdown/Wait) must never itself be
   reachable from a handler thread -- document that invariant where it
   applies (e.g. "no RPC handler may call stop()" when stop() Shutdowns).
-
-- In a worker's catch-all wrapper, everything that can throw (argument
-  lookups like vector::at, logging via stringstream) belongs INSIDE the
-  try. Must-always-run bookkeeping (e.g. an exit counter that a wait()
-  method depends on) stays outside, and must be unable to throw. An
-  exception escaping a thread is std::terminate.
 
 ## Example Code
 

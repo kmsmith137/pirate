@@ -34,6 +34,95 @@
   compiler-generated in the header (`unique_ptr` needs a complete type at the
   destructor; `shared_ptr` does not). When unsure, include it.
 
+## Concurrency
+
+Rules for any threaded C++ code; violations of each one turned up as real
+bugs in review. (In this codebase, threaded classes should additionally
+follow the stoppable / thread-backed patterns -- see notes/stoppable_class.md
+and notes/thread_backed_class.md, which build on these rules and add
+shutdown/error-propagation semantics.)
+
+### Locking and condition variables
+
+- One condition variable per wait-predicate. `notify_one()` is allowed ONLY
+  when (a) every waiter on that cv has the same predicate and one event
+  satisfies exactly one waiter (work-queue handoff), or (b) at most one
+  thread can ever be blocked on that cv (structurally single waiter) --
+  either way, write the justification as a comment at the notify site. If
+  waiters with different predicates share a cv, a targeted notify can wake
+  the wrong waiter while the intended one sleeps forever (lost wakeup).
+  When in doubt, split the cv or use `notify_all()`. One-shot latch events
+  (init flags) keep `notify_all()` -- the cost is paid once, and it is
+  robust against waiters added later. A shutdown/stop event must
+  `notify_all()` every cv of the class. FrbServer (7 cvs) is the big worked
+  example; CudaEventRingbuf's `_release()` shows how to justify NOT
+  notifying a cv whose waiters mention the changed state.
+
+- Keep a COMPLETE "signaled on:" list next to each cv declaration. A wait
+  predicate is correct only if every state change it tests is followed by a
+  notify; an incomplete list hides missed-notify bugs (e.g. draining a
+  queue on a side path without notifying the waiter whose predicate just
+  became true). Reviewers should check the list against the code.
+
+- Never read a lock-protected member after dropping the lock -- snapshot it
+  into a local under the lock and use the local.
+
+- An "in progress" flag that other threads wait on (e.g. an init-underway
+  or creation-underway flag) must be reset on EVERY exit path, including
+  throws -- use a catch block or a scope guard. A flag left set wedges all
+  future waiters, even if some other coupling (e.g. an error path that
+  shuts down the whole object) happens to mask it today.
+
+- Counters used in wait predicates are `long`, never `int`: signed overflow
+  is UB and a hung predicate in a long-running server.
+
+- If a blocking call genuinely cannot be interrupted by your shutdown
+  mechanism (e.g. `cudaEventSynchronize` vs the stoppable pattern's
+  `stop()`), document the trade-off at the declaration: what invariant
+  bounds the wait in practice, and what happens in the pathological case.
+  (See the `blocking_sync` note in CudaEventRingbuf.hpp for the model.)
+
+### Spawning, joining, and teardown
+
+- An exception escaping a thread is `std::terminate`. Every thread's main
+  function is a catch-all wrapper, and everything that can throw (argument
+  lookups like `vector::at`, logging via stringstream) belongs INSIDE the
+  try. Must-always-run bookkeeping (e.g. an exit counter that a `wait()`
+  method depends on) stays outside, and must be unable to throw. (See
+  HwtestSender::worker_main for the model.)
+
+- Publish thread handles (and similar teardown state, e.g. a grpc server
+  handle) UNDER the mutex. If threads are spawned outside the constructor
+  (in a `start()` / `open()` / `allocate()`), the handle assignments happen
+  with the mutex held, and every teardown path (stop/join/close/destructor)
+  synchronizes on the mutex before reading them -- teardown can run
+  concurrently with startup. Holding the lock across the spawns is safe as
+  long as the spawner never waits on the spawned threads: a freshly-spawned
+  worker that touches shared state just blocks briefly until the spawner
+  releases.
+
+- Join paths take the mutex briefly (to synchronize with that publication),
+  then join with the mutex RELEASED -- workers take the mutex on their exit
+  paths, so joining under it deadlocks.
+
+- A constructor that spawns SEVERAL threads must handle a mid-spawn
+  failure: catch, shut the workers down, join the already-spawned threads,
+  rethrow. Otherwise the `std::thread` members are destroyed while
+  joinable, which is `std::terminate`. (See FakeXEngine's constructor for
+  the model.)
+
+- The destructor joins threads inline, and must never call a public
+  `join()`-style method that rethrows a saved error (a throwing
+  destructor). If both the destructor and a public `join()` need the
+  joining loop, factor a private `_join_threads()` helper (see Hwtest).
+
+- A `close()`-style teardown method needs more than an idempotency flag: a
+  second concurrent caller must BLOCK until the first finishes (e.g. a
+  leaf-level `close_mutex` held for the whole body -- see FrbGrouper). With
+  a flag alone, the second caller -- often the destructor -- returns
+  immediately and destroys members out from under the first caller's
+  still-running teardown.
+
 ## ksgpu
 
 Uses the `ksgpu` helper library, especially the Array class (ksgpu/Array.hpp), memory managment (ksgpu/mem_utils.hpp),

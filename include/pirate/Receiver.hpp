@@ -143,8 +143,8 @@ struct Receiver
     // members are 'mutable' since stop() is const (see notes/stoppable_class.md).
     mutable std::mutex mutex;
 
-    // One condition variable per wait-predicate (see "Locking and condition
-    // variables" in notes/stoppable_class.md):
+    // One condition variable per wait-predicate (see the "Concurrency"
+    // section of notes/cpp.md):
     //
     // frames_cv -- waiters: get_frame_set() callers (predicate:
     //   completed_frame_sets non-empty, or stopped). Signaled on: completed-

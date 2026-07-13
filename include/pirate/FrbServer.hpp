@@ -178,8 +178,8 @@ struct FrbServer
     // Thread-backed class state (protected by mutex). The stop-pattern
     // members are 'mutable' since stop() is const (see notes/stoppable_class.md).
     //
-    // One condition variable per wait-predicate (see "Locking and condition
-    // variables" in notes/stoppable_class.md). stop() notify_all's all
+    // One condition variable per wait-predicate (see the "Concurrency"
+    // section of notes/cpp.md). stop() notify_all's all
     // seven. (The rb_streamed advance deliberately notifies nothing -- no
     // wait predicate reads rb_streamed; see its declaration.)
     //

@@ -218,8 +218,8 @@ struct FakeXEngine
 
         mutable std::mutex mutex;
 
-        // One condition variable per wait-predicate (see "Locking and
-        // condition variables" in notes/stoppable_class.md). The stop()
+        // One condition variable per wait-predicate (see the "Concurrency"
+        // section of notes/cpp.md). The stop()
         // per-worker sweep notify_all's all four.
         //
         // cmd_cv -- waiter: the worker thread's command wait in
@@ -262,7 +262,7 @@ struct FakeXEngine
         // published -- without it, synchronize()'s "drained" predicate
         // could return one command early. Set at pop and reset on every
         // dispatch exit path (normal, stop-return, throw) -- see the
-        // "in-progress flags" rule in notes/stoppable_class.md.
+        // "in-progress flags" rule in notes/cpp.md.
         bool cmd_in_flight = false;
 
         // Latest minichunk_index this worker has finished *processing*

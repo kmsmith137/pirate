@@ -155,8 +155,8 @@ struct CudaEventRingbuf
     // notes/stoppable_class.md). is_stopped/error are protected by 'mutex'.
     mutable std::mutex mutex;
 
-    // One condition variable per wait-predicate (see "Locking and condition
-    // variables" in notes/stoppable_class.md):
+    // One condition variable per wait-predicate (see the "Concurrency"
+    // section of notes/cpp.md):
     //
     // space_cv -- waiter: the single producer, in record(blocking=true)
     //   (predicate: seq_end - seq_start < max_size, or stopped).
