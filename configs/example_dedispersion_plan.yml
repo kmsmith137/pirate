@@ -1,5 +1,5 @@
-# To create a dedispersion_plan yaml file, use 'pirate_frb show_dedisperser -v'.
-# 
+# Created with: pirate_frb show_dedisperser -v -a configs/dedispersion/chord_sb2_et.yml
+
 # The dedispersion_plan yaml file is used internally by pirate, and is also one of three
 # metadata files sent from pirate to the grouper. (Most fields are only useful internally,
 # and won't be needed in the grouper.)

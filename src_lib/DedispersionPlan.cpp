@@ -621,11 +621,11 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
     // (see make_incomplete_plan_from_yaml()).
     xassert(!params.is_incomplete);
 
-    // Top-of-file header comment (verbose only).
+    // Top-of-file header comment (verbose only). Note that the 'show_dedisperser' CLI
+    // additionally prints a "# Created with: pirate_frb ..." line above this header,
+    // recording the exact command line used to generate the file.
     if (verbose) {
         emitter << YAML::Comment(
-            "To create a dedispersion_plan yaml file, use 'pirate_frb show_dedisperser -v'.\n"
-            "\n"
             "The dedispersion_plan yaml file is used internally by pirate, and is also one of three\n"
             "metadata files sent from pirate to the grouper. (Most fields are only useful internally,\n"
             "and won't be needed in the grouper.)")

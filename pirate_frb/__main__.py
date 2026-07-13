@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import time
+import shlex
 import random
 import textwrap
 import argparse
@@ -793,7 +794,16 @@ def show_dedisperser(args):
         
     config.validate()
     config.test()   # I decided to run the unit tests here, since they're very fast!
-    
+
+    # Header line (verbose only, like all other comments): record the exact command line,
+    # so readers of a generated yaml file know how to regenerate it. Reconstructed from
+    # sys.argv[1:] with a literal 'pirate_frb' prefix (argv[0] is the __main__.py path
+    # under 'python -m pirate_frb'). Deterministic, so generated files (e.g.
+    # configs/example_dedispersion_plan.yml) stay reproducible.
+    if args.verbose:
+        cmdline = ' '.join(shlex.quote(a) for a in sys.argv[1:])
+        print(f'# Created with: pirate_frb {cmdline}\n')
+
     # By default print only the DedispersionPlan, with no separator, so that the
     # output matches the dedispersion_plan_yaml that the FRB search sends to the
     # grouper (see FrbServer / frb_grouper.proto). With -c, also print the
