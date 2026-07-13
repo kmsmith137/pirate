@@ -189,24 +189,37 @@ static Array<void> _array_from_descriptor(const fg::ArrayDescriptor &ad,
 // gRPC service + pImpl
 
 
-// gRPC service: forwards Session() into the FrbGrouper (held by weak_ptr,
-// mirroring FrbRpcService in FrbServer.cpp).
+// gRPC service: forwards Session() into the FrbGrouper.
+//
+// 'state' is a BARE pointer, per the thread-backed pattern's worker rule (the
+// Session handler is morally a worker thread -- see
+// notes/thread_backed_class.md). It is safe for the same reason `X *this` is
+// safe in a worker: ~FrbGrouper always runs close() before member
+// destruction, and close() cancels the session then Shutdown()+Wait()s the
+// handler out of existence -- and gRPC dispatches no new handler once
+// Shutdown() has begun. (Holding an owning reference here instead -- the
+// previous design -- meant a consumer that dropped its last reference
+// mid-session deferred ~FrbGrouper onto this gRPC pool thread, where
+// close()'s server->Wait() would wait for the very handler running the
+// destructor: self-deadlock.) Load-bearing companion invariant:
+// FrbGrouper::stop() never calls Shutdown() -- see the comment in stop() --
+// so a handler-initiated stop cannot self-deadlock either.
 class FrbGrouperService final : public fg::FrbGrouper::Service {
 public:
-    std::weak_ptr<FrbGrouper> state;
-    explicit FrbGrouperService(std::weak_ptr<FrbGrouper> s) : state(std::move(s)) {}
+    FrbGrouper *state = nullptr;
+    explicit FrbGrouperService(FrbGrouper *s) : state(s) {}
 
     grpc::Status Session(grpc::ServerContext* context,
                          grpc::ServerReaderWriter<fg::ConsumerMessage,
                                                   fg::ProducerMessage>* stream) override
     {
-        auto s = state.lock();
-        if (!s)
-            return grpc::Status(grpc::StatusCode::UNAVAILABLE, "FrbGrouper is shutting down");
+        // No liveness check needed: 'state' outlives every handler (see the
+        // class comment). A Session arriving during teardown observes
+        // is_stopped inside _run_session and returns 'stopped'.
 
         // _run_session takes void* (grpc types kept out of FrbGrouper.hpp); it
         // casts them back. Map its result to a grpc::Status.
-        switch (s->_run_session(context, stream)) {
+        switch (state->_run_session(context, stream)) {
             case FrbGrouper::SessionResult::stopped:
                 return grpc::Status(grpc::StatusCode::UNAVAILABLE, "FrbGrouper stopped");
             case FrbGrouper::SessionResult::busy:
@@ -238,9 +251,9 @@ std::shared_ptr<FrbGrouper> FrbGrouper::create(const std::string &addr)
 {
     auto p = std::shared_ptr<FrbGrouper>(new FrbGrouper(addr));
     p->grpc_state = std::make_unique<GrpcState>();
-    // Construct the RPC service, but do not listen. weak_from_this() is valid
-    // now (the shared_ptr exists), so we can build the service here.
-    p->grpc_state->service = std::make_unique<FrbGrouperService>(p->weak_from_this());
+    // Construct the RPC service (bare back-pointer -- see the
+    // FrbGrouperService class comment), but do not listen yet.
+    p->grpc_state->service = std::make_unique<FrbGrouperService>(p.get());
     return p;
 }
 

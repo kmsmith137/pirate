@@ -68,9 +68,25 @@ namespace fg = frb::grouper::v1;
 
 class FrbRpcService final : public fs::FrbSearch::Service {
 public:
-    std::weak_ptr<FrbServer> state;
+    // BARE back-pointer, per the thread-backed pattern's worker rule (an RPC
+    // handler is morally a worker thread -- see notes/thread_backed_class.md).
+    // Safe because ~FrbServer runs stop() -- whose rpc_server->Shutdown()
+    // drains every in-flight handler -- before any member is destroyed, and
+    // gRPC dispatches no new handler once Shutdown() has begun. (Holding
+    // owning references here instead -- the previous weak_ptr::lock design --
+    // meant a streaming handler (SubscribeFiles / MonitorRingbuf) could end
+    // up with the LAST shared_ptr, running ~FrbServer on the gRPC pool
+    // thread, where stop()'s Shutdown() waits for the very handler running
+    // the destructor: self-deadlock.)
+    //
+    // Load-bearing invariant: NO RPC handler path may ever call
+    // FrbServer::stop(). stop() calls rpc_server->Shutdown(), which blocks
+    // until in-flight handlers return, so a handler calling stop() would
+    // self-deadlock. (The wrappers below convert exceptions to grpc::Status
+    // without stopping the server; keep it that way.)
+    FrbServer *state = nullptr;
 
-    FrbRpcService(const weak_ptr<FrbServer> &s) : state(s) {}
+    FrbRpcService(FrbServer *s) : state(s) {}
 
     // These functions implement the individual RPCs.
     void _GetStatus(const fs::GetStatusRequest *request, fs::GetStatusResponse *response);
@@ -82,9 +98,6 @@ public:
     void _StartStream(const fs::StartStreamRequest *request, fs::StartStreamResponse *response);
     void _ShowStreams(const fs::ShowStreamsRequest *request, fs::ShowStreamsResponse *response);
     void _CancelStream(const fs::CancelStreamRequest *request, fs::CancelStreamResponse *response);
-
-    // Helper to lock the weak_ptr. Throws if the server is exiting.
-    inline shared_ptr<FrbServer> _lock_state();
 
     // Try-catch wrappers, to gracefully return an error status to the client
     // (instead of crashing the server). Each wrapper first checks the request's
@@ -232,7 +245,7 @@ FrbServer::FrbServer(const Params &p) : params(p)
     // threads and stop() can read it without a lock.
     grouper_client = params.grouper_client;
 
-    // Note: rpc_service is created in start(), not here, because we need shared_from_this().
+    // Note: rpc_service is created in start(), alongside the rpc_server.
 }
 
 
@@ -313,8 +326,9 @@ void FrbServer::start()
         // threads or on RPC handlers, which block briefly on the mutex
         // until we return.
 
-        // Create the RPC service (needs shared_from_this(), so can't be done in constructor).
-        this->rpc_service = make_unique<FrbRpcService> (weak_from_this());
+        // Create the RPC service (bare back-pointer -- see the FrbRpcService
+        // class comment).
+        this->rpc_service = make_unique<FrbRpcService> (this);
 
         // Start the RPC server. The 2-arg AddListeningPort does NOT report a bind
         // failure: if the port is already in use, BuildAndStart() still returns a
@@ -1658,23 +1672,10 @@ void FrbServer::grouper_receive_thread_main()
 //
 // FrbRpcService implementation
 
-    
-// Helper to lock the weak_ptr. Throws if the server is exiting.
-//
-// TEARDOWN HAZARD (accepted): the returned shared_ptr means an in-flight RPC
-// handler can hold the LAST reference to the FrbServer, in which case
-// ~FrbServer runs on the gRPC pool thread -- where rpc_server->Wait() would
-// wait on the very handler executing the destructor (self-deadlock). Owners
-// must therefore keep their reference alive until after stop() has run and
-// in-flight handlers have drained (the Python flow -- owner holds the server
-// and calls stop()/poll_from_python -- satisfies this).
-shared_ptr<FrbServer> FrbRpcService::_lock_state()
-{
-    auto s = state.lock();
-    if (!s)
-        throw runtime_error("FrbServer is in the process of exiting");
-    return s;
-}
+// The handlers below read the bare back-pointer 'state' directly ("FrbServer
+// *s = state") -- no liveness check is needed, since 'state' outlives every
+// handler; see the comment on the member declaration near the top of this
+// file.
 
 // Every RPC request carries a protocol_version field (see notes/grpc.md); each
 // wrapper below calls this first. Throws (mapped to a gRPC error by the wrapper)
@@ -1699,7 +1700,7 @@ static void _check_protocol_version(uint32_t client_version, const char *rpc_nam
 
 void FrbRpcService::_GetStatus(const fs::GetStatusRequest *request, fs::GetStatusResponse *response)
 {
-    shared_ptr<FrbServer> s = _lock_state();
+    FrbServer *s = state;
 
     // Call Receiver::get_status() for each receiver,
     // and sum the results over receivers.
@@ -1749,7 +1750,7 @@ grpc::Status FrbRpcService::GetStatus(
 
 void FrbRpcService::_GetXEngineMetadata(const fs::GetXEngineMetadataRequest *request, fs::GetXEngineMetadataResponse *response)
 {
-    shared_ptr<FrbServer> s = _lock_state();
+    FrbServer *s = state;
 
     // Pull the canonical metadata from the allocator (non-blocking; if no
     // peer has yet sent YAML, returns nullptr and we return an empty
@@ -1781,7 +1782,7 @@ grpc::Status FrbRpcService::GetXEngineMetadata(
 
 void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteFilesResponse *response)
 {
-    shared_ptr<FrbServer> s = _lock_state();
+    FrbServer *s = state;
 
     // RPC callers express the time range as fpga sequence numbers (aka fpga
     // counts), half-open: files are written for all chunks overlapping
@@ -1996,7 +1997,7 @@ grpc::Status FrbRpcService::WriteFiles(
 
 void FrbRpcService::_StartStream(const fs::StartStreamRequest *request, fs::StartStreamResponse *response)
 {
-    shared_ptr<FrbServer> s = _lock_state();
+    FrbServer *s = state;
 
     const string &stream_name = request->stream_name();
     if (stream_name.empty())
@@ -2107,7 +2108,7 @@ grpc::Status FrbRpcService::StartStream(
 
 void FrbRpcService::_ShowStreams(const fs::ShowStreamsRequest *request, fs::ShowStreamsResponse *response)
 {
-    shared_ptr<FrbServer> s = _lock_state();
+    FrbServer *s = state;
 
     unique_lock<std::mutex> server_lock(s->mutex);
 
@@ -2205,7 +2206,7 @@ grpc::Status FrbRpcService::ShowStreams(
 
 void FrbRpcService::_CancelStream(const fs::CancelStreamRequest *request, fs::CancelStreamResponse *response)
 {
-    shared_ptr<FrbServer> s = _lock_state();
+    FrbServer *s = state;
 
     unique_lock<std::mutex> server_lock(s->mutex);
 
@@ -2293,7 +2294,7 @@ grpc::Status FrbRpcService::CancelStream(
 // notifications are delivered only if request->subscribe_streams() is true.
 void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, const fs::SubscribeFilesRequest *request, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
 {
-    shared_ptr<FrbServer> s = _lock_state();
+    FrbServer *s = state;
     shared_ptr<FileWriter> file_writer = s->params.file_writer;
 
     // Create subscriber and register with FileWriter.
@@ -2398,7 +2399,7 @@ grpc::Status FrbRpcService::SubscribeFiles(
 
 void FrbRpcService::_GetConfig(const fs::GetConfigRequest *request, fs::GetConfigResponse *response)
 {
-    shared_ptr<FrbServer> s = _lock_state();
+    FrbServer *s = state;
 
     response->set_rpc_ip_addr(s->params.rpc_server_address);
 
@@ -2475,7 +2476,7 @@ void FrbRpcService::_MonitorRingbuf(
     grpc::ServerContext* context,
     grpc::ServerWriter<fs::MonitorRingbufResponse>* writer)
 {
-    shared_ptr<FrbServer> s = _lock_state();
+    FrbServer *s = state;
 
     // rb_processed is always >= 0; -1 is a safe sentinel for "no value sent yet".
     long last_sent = -1;

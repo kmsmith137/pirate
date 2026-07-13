@@ -66,12 +66,19 @@ or teardown bug in review:
   immediately and destroys members out from under the first caller's
   still-running teardown.
 
-- If callback/handler threads (e.g. gRPC handlers) obtain a shared_ptr<X>
-  via weak_ptr::lock(), the LAST reference can die on the handler thread,
-  and ~X then joins/waits on the very thread running it (self-deadlock).
-  Either document that the owner must hold its reference until handlers
-  have drained, or require an explicit close() for deterministic teardown
-  (and document that too).
+- Callback/handler threads (e.g. gRPC handlers) hold a BARE pointer to X,
+  exactly like worker threads -- never a shared_ptr, and never
+  weak_ptr::lock() (which manufactures one). Any owning reference on a
+  handler thread can become the LAST reference, running ~X on that thread,
+  where teardown joins/waits on the very thread executing the destructor
+  (self-deadlock). The bare pointer is safe under the same invariant that
+  protects workers: the destructor shuts down and drains the handler
+  dispatcher (e.g. grpc Server::Shutdown + Wait) before members are
+  destroyed, and no handler is dispatched once Shutdown has begun. See
+  FrbGrouperService / FrbRpcService for the model. Corollary: a teardown
+  path that blocks on handler drain (Shutdown/Wait) must never itself be
+  reachable from a handler thread -- document that invariant where it
+  applies (e.g. "no RPC handler may call stop()" when stop() Shutdowns).
 
 - In a worker's catch-all wrapper, everything that can throw (argument
   lookups like vector::at, logging via stringstream) belongs INSIDE the
