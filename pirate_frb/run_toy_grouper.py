@@ -13,7 +13,7 @@ import itertools
 import time
 
 
-def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, do_histogram=False):
+def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histogram=None):
     """
     Main grouper loop (factored out of run_toy_grouper to reduce nesting).
 
@@ -27,6 +27,9 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, do_his
     If 'delay' > 0, sleep that many seconds at the end of each chunk -- an
     artificial slowdown for testing how the producer behaves when the consumer
     lags.
+
+    If 'histogram' is a pirate_frb.utils.GrouperHistogram (not None), all out_max
+    SNR values are accumulated into it (the caller writes it out on termination).
     """
     import cupy as cp
 
@@ -47,14 +50,6 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, do_his
         
         print(f'{grouper.grouper_ip_addr}: connected to sifter at {sifter.server_address}, '
               f'sent ConfigMessage', flush=True)
-
-    if do_histogram:
-        lo,hi = -10, +100
-        nbins = int((hi - lo)/0.1)
-        grouper.g_histogram = cp.zeros(nbins, int)
-        grouper.g_histogram_bins = cp.linspace(lo, hi, nbins+1)
-        grouper.g_histogram_bins[0]  = -1e6
-        grouper.g_histogram_bins[-1] = +1e6
 
     # The grouper receives dedispersion outputs as an outer loop over time chunks,
     # followed by an inner loop over beam batches. Dedispersion outputs are arrays
@@ -97,10 +92,8 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, do_his
                     flat_arg = outputs.out_argmax[itree].reshape(bpb, ndm * nt)
                     beam_tok = flat_arg[cp.arange(bpb), beam_arg]
 
-                    if do_histogram:
-                        # SNR histogram
-                        h,_ = cp.histogram(tree_out.ravel(), bins=grouper.g_histogram_bins)
-                        grouper.g_histogram += h
+                    if histogram is not None:
+                        histogram.add_tree(tree_out)   # SNR histogram (all values, all trees)
 
                     sl = slice(beam0, beam0 + bpb)
                     upd = beam_max > per_beam_max[sl]
@@ -152,18 +145,20 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
     'snr_threshold' (default 10) is the per-beam event threshold; see
     _run_toy_grouper.
     'histogram_stem' is a filename stem (or None): on termination, pickle a
-    histogram of all out_max SNR values (accumulated over all trees/beams/chunks)
-    to '<histogram_stem>.pkl'. Must not contain a '.' (guards against passing a
-    full filename). (The CLI gives each grouper subprocess a distinct stem, so
-    multi-grouper filenames don't collide.)
+    histogram of all out_max SNR values (accumulated over all trees/beams/chunks
+    via pirate_frb.utils.GrouperHistogram) to '<histogram_stem>.pkl'. Must not
+    contain a '.' (guards against passing a full filename). (The CLI gives each
+    grouper subprocess a distinct stem, so multi-grouper filenames don't collide.)
     """
-    if (histogram_stem is not None) and ('.' in histogram_stem):
-        raise ValueError(f"run_toy_grouper: histogram_stem {histogram_stem!r} contains a '.' -- "
-                         f"expected a filename stem, not a full filename (the '.pkl' suffix "
-                         f"is appended automatically)")
-
     # Imported here (not at module top) so 'import pirate_frb' stays light.
     from .rpc import FrbGrouper, FrbSifterClient
+    from .utils import GrouperHistogram
+
+    # Constructed up front (before connecting to anything): the GrouperHistogram
+    # constructor validates the stem, so a bad stem fails fast. GPU allocation is
+    # lazy (first add_tree), so construction outside the grouper's device context
+    # is fine.
+    histogram = GrouperHistogram(histogram_stem) if (histogram_stem is not None) else None
 
     # Construct the sifter client (opens a gRPC channel; the RPCs themselves are
     # issued in _run_toy_grouper, which has the grouper metadata). It's used as a
@@ -177,7 +172,7 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
     # 'with' exits (after the grouper's).
     with sifter_cm as sifter, FrbGrouper(grouper_addr) as grouper:
         try:
-            _run_toy_grouper(grouper, sifter, delay, snr_threshold, do_histogram=(histogram_stem is not None))
+            _run_toy_grouper(grouper, sifter, delay, snr_threshold, histogram)
         except KeyboardInterrupt:
             print(f'{grouper_addr}: interrupted; shutting down', flush=True)
         except RuntimeError as e:
@@ -189,11 +184,6 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
             else:
                 raise
         finally:
-            if histogram_stem:
-                filename = histogram_stem + '.pkl'
-                print(f'{grouper_addr}: writing {filename}', flush=True)
-                with open(filename, 'wb') as f:
-                    import pickle
-                    pickle.dump(dict(histogram=grouper.g_histogram.get(),
-                                     histogram_bins=grouper.g_histogram_bins.get()), f)
+            if histogram is not None:
+                histogram.write()
         # FrbGrouper.__exit__ restores affinity/device + closes on every path.

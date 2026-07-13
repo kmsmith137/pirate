@@ -409,6 +409,7 @@ PYFILES = \
   pirate_frb/utils/__init__.py \
   pirate_frb/utils/core.py \
   pirate_frb/utils/ThreadAffinity.py \
+  pirate_frb/utils/GrouperHistogram.py \
   pirate_frb/utils/network.py \
   pirate_frb/utils/time_cupy_dedisperser.py \
   pirate_frb/utils/safe_memcpy.py \
