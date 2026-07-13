@@ -10,7 +10,7 @@ import itertools
 import time
 
 
-def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0):
+def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, do_histogram=False):
     """
     Main grouper loop (factored out of run_toy_grouper to reduce nesting).
 
@@ -44,6 +44,14 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0):
         
         print(f'{grouper.grouper_ip_addr}: connected to sifter at {sifter.server_address}, '
               f'sent ConfigMessage', flush=True)
+
+    if do_histogram:
+        lo,hi = -10, +100
+        nbins = int((hi - lo)/0.1)
+        grouper.g_histogram = cp.zeros(nbins, int)
+        grouper.g_histogram_bins = cp.linspace(lo, hi, nbins+1)
+        grouper.g_histogram_bins[0]  = -1e6
+        grouper.g_histogram_bins[-1] = +1e6
 
     # The grouper receives dedispersion outputs as an outer loop over time chunks,
     # followed by an inner loop over beam batches. Dedispersion outputs are arrays
@@ -86,6 +94,11 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0):
                     flat_arg = outputs.out_argmax[itree].reshape(bpb, ndm * nt)
                     beam_tok = flat_arg[cp.arange(bpb), beam_arg]
 
+                    if do_histogram:
+                        # SNR histogram
+                        h,_ = cp.histogram(tree_out.ravel(), bins=grouper.g_histogram_bins)
+                        grouper.g_histogram += h
+
                     sl = slice(beam0, beam0 + bpb)
                     upd = beam_max > per_beam_max[sl]
                     per_beam_max[sl]   = cp.where(upd, beam_max,   per_beam_max[sl])
@@ -122,7 +135,7 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0):
             time.sleep(delay)
 
 
-def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.0):
+def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.0, histogram=None):
     """Run a toy FrbGrouper consumer at 'grouper_addr' (e.g. '127.0.0.1:7000').
 
     Acts as the downstream consumer of an FrbServer producer over CUDA IPC.
@@ -135,6 +148,8 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
     'delay' (seconds) inserts an artificial per-chunk slowdown into the loop.
     'snr_threshold' (default 10) is the per-beam event threshold; see
     _run_toy_grouper.
+    'histogram' is a filename (or None): on termination, pickle a histogram of
+    all out_max SNR values (accumulated over all trees/beams/chunks) to it.
     """
     # Imported here (not at module top) so 'import pirate_frb' stays light.
     from .rpc import FrbGrouper, FrbSifterClient
@@ -151,7 +166,7 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
     # 'with' exits (after the grouper's).
     with sifter_cm as sifter, FrbGrouper(grouper_addr) as grouper:
         try:
-            _run_toy_grouper(grouper, sifter, delay, snr_threshold)
+            _run_toy_grouper(grouper, sifter, delay, snr_threshold, do_histogram=(histogram is not None))
         except KeyboardInterrupt:
             print(f'{grouper_addr}: interrupted; shutting down', flush=True)
         except RuntimeError as e:
@@ -162,4 +177,12 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
                 print(f'{grouper_addr}: producer disconnected ({e}); exiting', flush=True)
             else:
                 raise
+        finally:
+            if histogram:
+                print('Grouper finally: writing histogram file' + histogram)
+                with open(histogram, 'wb') as f:
+                    import pickle
+                    print('Writing', histogram)
+                    pickle.dump(dict(histogram=grouper.g_histogram.get(),
+                                     histogram_bins=grouper.g_histogram_bins.get()), f)
         # FrbGrouper.__exit__ restores affinity/device + closes on every path.

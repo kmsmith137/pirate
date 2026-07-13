@@ -1625,6 +1625,8 @@ def parse_run_toy_grouper(subparsers):
     parser.add_argument('-t', '--snr-threshold', type=float, default=10.0, metavar='SNR_THRESHOLD',
                         help="Emit one event per chunk per beam whose peak SNR exceeds this "
                              "threshold (default: 10).")
+    parser.add_argument('--histogram', metavar='FILE',
+                        help='Write a histogram of SNR values to the given filename upon termination')
     # Exactly one of -s/-S is required.
     sifter_group = parser.add_mutually_exclusive_group(required=True)
     sifter_group.add_argument('-s', '--sifter', metavar='SIFTER_ADDR',
@@ -1641,13 +1643,16 @@ def run_toy_grouper_command(args):
     # rest. A fresh process (not fork) avoids CUDA-after-fork hazards.
     if len(args.grouper_addrs) == 1:
         run_toy_grouper(args.grouper_addrs[0], sifter_addr=args.sifter, delay=args.delay,
-                        snr_threshold=args.snr_threshold)
+                        snr_threshold=args.snr_threshold, histogram=args.histogram)
         return
     from .utils import run_processes
     # Re-pass exactly one of the (mutually-exclusive, required) sifter flags.
     sifter_flag = ['--sifter', args.sifter] if (args.sifter is not None) else ['--no-sifter']
     base = [sys.executable, '-m', 'pirate_frb', 'run_toy_grouper', *sifter_flag,
             '--delay', str(args.delay), '--snr-threshold', str(args.snr_threshold)]
+    # FIXME - not sure this makes sense - multiple copies, same filename??
+    if args.histogram:
+        base.extend(['--histogram', args.histogram])
     rc = run_processes([base + [addr] for addr in args.grouper_addrs])
     if rc:
         sys.exit(rc)
