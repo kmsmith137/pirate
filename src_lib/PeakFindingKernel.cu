@@ -696,13 +696,15 @@ void PeakFindingKernelParams::fill_host_weights(Array<float> &out, const Array<d
 // GpuPeakFindingKernel
 
 
-// Static member function. See warning in PeakFindingKernel.hpp (returned key contains no Dcore).
-GpuPeakFindingKernel::RegistryKey GpuPeakFindingKernel::_make_registry_key(const PeakFindingKernelParams &pf_params)
+// File-local. Warning: a RegistryKey contains no Dcore, so registry().get() may return
+// a kernel whose Dcore does not match PeakFindingKernelParams::Dcore. (The
+// GpuPeakFindingKernel constructor checks this by hand.)
+static GpuPeakFindingKernel::RegistryKey _make_registry_key(const PeakFindingKernelParams &pf_params)
 {
-    // Note: does not call pf_params.validate(), since get_registry_dcore() calls this
-    // function while pf_params.Dcore is still unset.
+    // Note: does not call pf_params.validate(), since test_random() calls this function
+    // (to peek the registry Dcore) while pf_params.Dcore is still unset.
 
-    RegistryKey key;
+    GpuPeakFindingKernel::RegistryKey key;
     key.dtype = pf_params.dtype;
     key.subband_counts = pf_params.subband_counts;
     key.Dout = xdiv(pf_params.nt_in, pf_params.nt_out);
@@ -718,14 +720,6 @@ GpuPeakFindingKernel::RegistryKey GpuPeakFindingKernel::_make_registry_key(const
     key.Tinner = (nt_in_per_wt < 32*SW) ? xdiv(32*SW, nt_in_per_wt) : 1;
 
     return key;
-}
-
-
-// Static member function.
-long GpuPeakFindingKernel::get_registry_dcore(const PeakFindingKernelParams &pf_params)
-{
-    RegistryKey key = _make_registry_key(pf_params);
-    return registry().get(key, /*init_kernel=*/ false).Dcore;
 }
 
 
@@ -886,8 +880,10 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     params_small.nt_out = nt_out_per_chunk;
     params_small.nt_wt = nt_wt_per_chunk;
 
-    // Dcore is a property of the compiled GPU kernel (registry value, not part of the key).
-    params_small.Dcore = get_registry_dcore(params_small);
+    // Dcore is a property of the compiled GPU kernel (registry value, not part of the
+    // key). Metadata-only peek: init_kernel=false skips GPU/kernel initialization.
+    params_small.Dcore = registry().get(_make_registry_key(params_small),
+                                        /*init_kernel=*/ false).Dcore;
     params_small.validate();
 
     PeakFindingKernelParams params_large;

@@ -1,7 +1,7 @@
 #include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"  // used in CoalescedDdKernel2::time()
 #include "../include/pirate/DedispersionPlan.hpp"    // used in CoalescedDdKernel2::time()
-#include "../include/pirate/DedispersionTree.hpp"    // used in _make_registry_key(dtype, tree)
+#include "../include/pirate/DedispersionTree.hpp"    // used in get_registry_dcore(dtype, tree)
 #include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
@@ -24,7 +24,8 @@ namespace pirate {
 #endif
 
 
-// Shared core of the _make_registry_key() overloads -- keeps the Tinner formula in one place.
+// Shared core of _make_registry_key() and get_registry_dcore() below -- keeps the
+// Tinner formula and key-field mapping in one place.
 static CoalescedDdKernel2::RegistryKey _make_key(
     const Dtype &dtype, long dd_rank, long max_kernel_width,
     long nt_in, long nt_out, long nt_wt, const vector<long> &subband_counts)
@@ -49,41 +50,27 @@ static CoalescedDdKernel2::RegistryKey _make_key(
 }
 
 
-// Static member function. See warning in CoalescedDdKernel2.hpp (returned key contains no Dcore).
-CoalescedDdKernel2::RegistryKey CoalescedDdKernel2::_make_registry_key(
+// File-local. Warning: a RegistryKey contains no Dcore, so registry().get() may return
+// a kernel whose Dcore does not match PeakFindingKernelParams::Dcore. (The
+// CoalescedDdKernel2 constructor checks this by hand.)
+static CoalescedDdKernel2::RegistryKey _make_registry_key(
     const DedispersionKernelParams &dd_params, const PeakFindingKernelParams &pf_params)
 {
-    // Note: does not call pf_params.validate(), since get_registry_dcore() calls this
-    // function while pf_params.Dcore is still unset.
+    // Note: does not call pf_params.validate(), since test_random() calls this function
+    // (to peek the registry Dcore) while pf_params.Dcore is still unset.
 
     return _make_key(pf_params.dtype, dd_params.dd_rank, pf_params.max_kernel_width,
                      pf_params.nt_in, pf_params.nt_out, pf_params.nt_wt, pf_params.subband_counts);
 }
 
 
-// Static member function.
-CoalescedDdKernel2::RegistryKey CoalescedDdKernel2::_make_registry_key(
-    const ksgpu::Dtype &dtype, const DedispersionTree &tree)
-{
-    return _make_key(dtype, tree.dd_rank, tree.pf.max_width,
-                     tree.nt_ds, tree.nt_out, tree.nt_wt, tree.frequency_subbands.subband_counts);
-}
-
-
-// Static member function.
-long CoalescedDdKernel2::get_registry_dcore(
-    const DedispersionKernelParams &dd_params, const PeakFindingKernelParams &pf_params)
-{
-    RegistryKey key = _make_registry_key(dd_params, pf_params);
-    return registry().get(key, /*init_kernel=*/ false).Dcore;
-}
-
-
-// Static member function. Throws if no matching kernel is compiled into this build.
+// Static member function. See doc-comment in CoalescedDdKernel2.hpp.
 long CoalescedDdKernel2::get_registry_dcore(
     const ksgpu::Dtype &dtype, const DedispersionTree &tree)
 {
-    RegistryKey key = _make_registry_key(dtype, tree);
+    RegistryKey key = _make_key(dtype, tree.dd_rank, tree.pf.max_width,
+                                tree.nt_ds, tree.nt_out, tree.nt_wt,
+                                tree.frequency_subbands.subband_counts);
     return registry().get(key, /*init_kernel=*/ false).Dcore;
 }
 
@@ -349,8 +336,10 @@ void CoalescedDdKernel2::test_random()
     pf_params.nt_in = nt_in_per_chunk;
     pf_params.nt_wt = xdiv(nt_in_per_chunk, nt_in_per_wt);
 
-    // Dcore is a property of the compiled GPU kernel (registry value, not part of the key).
-    pf_params.Dcore = get_registry_dcore(dd_params, pf_params);
+    // Dcore is a property of the compiled GPU kernel (registry value, not part of the
+    // key). Metadata-only peek: init_kernel=false skips GPU/kernel initialization.
+    pf_params.Dcore = registry().get(_make_registry_key(dd_params, pf_params),
+                                     /*init_kernel=*/ false).Dcore;
 
     CoalescedDdKernel2 cdd2_kernel(dd_params, pf_params);
     BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
