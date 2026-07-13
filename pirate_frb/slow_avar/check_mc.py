@@ -3,8 +3,9 @@
 Feeds Gaussian noise (per-channel variance = freq_variances) through a ReferenceDedisperser run with
 enable_variances=True, and compares its per-chunk variance estimates (out_var) to the analytic
 PfAvarExact.tree_variance.  A channel (tree, coarse-DM, multiplet m, profile p) is only compared
-once the *entire* chunk has reached statistical steady state for that channel, which we compute
-analytically from the dispersion delay (see _settle_chunks / plans/check_avar_mc.md).  Runs until
+once the *entire* chunk has reached statistical steady state for that channel, which we obtain by
+coarsening the grouper's per-element steady-state boundary (DedispersionPlan.compute_steady_state_it0)
+to whole chunks.  Runs until
 KeyboardInterrupt (or max_chunks), printing summary statistics of epsilon = mc/analytic - 1 after
 each chunk, over all channels that have at least one steady-state estimate so far.
 """
@@ -12,25 +13,6 @@ each chunk, over all channels that have at least one steady-state estimate so fa
 import numpy as np
 
 from .PfVariance import PfAvarExact
-
-
-def _settle_chunks(tree, r, R, nt_in):
-    """Length-ndm_out int array: first chunk index at which each coarse-DM bin is fully steady.
-
-    settle = max dispersion delay (from dm_coarse) + 4*Wmax + 4*time_downsampling, in input time
-    samples, then converted to chunks (ceil, +1 safety).  The delay is computed in the tree's
-    downsampled samples and scaled by 2^ipri; for downsampled trees (ipri>0) it includes the dropped
-    lower-half delay offset 2^r (the "upper-half" logic).  See plans/check_avar_mc.md.
-    """
-    ipri = int(tree.primary_tree_index)
-    Wmax = int(tree.pf.max_width)
-    Dtime = int(tree.pf.time_downsampling)
-    ndm_out = int(tree.ndm_out)
-    dm = np.arange(ndm_out, dtype=np.int64)
-    offset_ds = (1 << r) if ipri > 0 else 0                              # dropped lower-half (downsampled)
-    settle_ds = offset_ds + (dm + 1) * (1 << R) + 4 * Wmax + 4 * Dtime  # downsampled samples
-    settle_input = (1 << ipri) * settle_ds                              # input samples
-    return (settle_input + nt_in - 1) // nt_in + 1                     # chunks (ceil + 1 safety)
 
 
 def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, report_every=1):
@@ -64,7 +46,12 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
                                f"{1 << (r - R)} (dm_downsampling != 2^pf_rank is unsupported)")
         a = np.ascontiguousarray(exact.tree_variance[itree].transpose(1, 0, 2))   # (ndm_out, M, P)
         analytic.append(a)
-        settle.append(_settle_chunks(tree, r, R, nt_in))
+        # First fully-steady chunk per coarse-DM bin: coarsen the grouper's per-element
+        # steady-state boundary (compute_steady_state_it0, in output-time-bin units) to
+        # whole chunks -- ichunk*nt_out >= it0 -- with a +1-chunk safety margin.
+        nt_out = int(tree.nt_out)
+        it0 = plan.compute_steady_state_it0(itree)   # (ndm_out,) int64
+        settle.append((it0 + nt_out - 1) // nt_out + 1)
         mc_sum.append(np.zeros_like(a))
         mc_sumsq.append(np.zeros_like(a))
         mc_count.append(np.zeros(ndm_out, dtype=np.int64))
