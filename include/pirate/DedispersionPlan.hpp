@@ -143,9 +143,18 @@ struct DedispersionPlan
     //   - timestamp_samp:   "winning" arrival time, see below
     //   - width_samp:       "winning" peak-finder width, in toplevel time samples.
     //
-    // The 'timestamp_samp' is the estimated arrival time of the pulse center
-    // at the lowest radio frequency (highest tree-freq).
-    
+    // The 'timestamp_samp' is the estimated arrival time of the pulse center at the
+    // lowest radio frequency (highest tree-freq), in toplevel full-resolution time
+    // samples with t=0 at the START OF THE CURRENT CHUNK -- the same convention as
+    // decode_argmax()'s tlo/thi, and NOT relative to fpga_seq=0. (The caller adds the
+    // chunk's absolute FPGA start to convert to an absolute timestamp.)
+    //
+    // 'timestamp_samp' is NOT confined to [0, nt_in): an early-trigger tree extrapolates
+    // to the band bottom, so the time can lie past the chunk end (in the future); and
+    // the finite peak-finder kernel width (the pf_shift center-of-mass offset subtracted
+    // in the implementation) can push an event detected near the chunk start to a
+    // slightly negative value, i.e. slightly before the chunk start.
+
     void decode_argmax2(
         long itree, long fmin, long fmax, long tlo, long thi, long p,
         double &freq_lo_MHz, double &freq_hi_MHz, double &dm,

@@ -59,10 +59,13 @@ message ConfigReply {
   bool ok = 1;
 }
 
-// If there are early triggers, then the event timestamp can be outside
-// the EventsMessage range [chunk_fpga_start:chunk_fpga_end]! In this scenario,
-// the sifter may receive multiple events (in different chunks) for the same
-// FRB, as the pulse crosses different early-trigger frequencies.
+// The event timestamp can be outside the EventsMessage range
+// [chunk_fpga_start:chunk_fpga_end]! With early triggers it can be in the future
+// (the arrival time is extrapolated to the lower edge of the full band); in this
+// scenario the sifter may receive multiple events (in different chunks) for the
+// same FRB, as the pulse crosses different early-trigger frequencies. The timestamp
+// can also fall slightly before chunk_fpga_start, because finite peak-finder kernel
+// widths shift the estimated pulse-center time earlier than the detection sample.
 
 message FrbEvent {
   int32 beam_id = 1;

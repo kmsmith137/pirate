@@ -297,7 +297,9 @@ class FrbGrouperInjections:
         intrinsic width, and frequency subband are the fine-grained "winning" trial
         parameters, not coarse-pixel centers. This includes subtleties like early
         triggers: arrival times are extrapolated to the lowest frequency of the full
-        band, so they can lie outside the chunk's time window (even in the future!).
+        band, so they can lie outside the chunk's time window -- in the future (early
+        triggers), or slightly before the chunk start (finite peak-finder kernel widths
+        shift the estimated pulse-center time earlier than the detection sample).
         For more info, see the grouper-specific parts of the sphinx docs, and/or the
         tex notes.
 
@@ -395,8 +397,10 @@ class FrbGrouperInjections:
             # Per-event absolute timestamp = chunk start + chunk-relative offset (decoded
             # arrival time in input samples * fpga-counts-per-sample), rounded to the
             # nearest integer fpga count. Timestamps may fall before or after the chunk
-            # window (high-DM events reach into earlier chunks; early triggers
-            # extrapolate into the future); negative ABSOLUTE timestamps are clamped.
+            # window (high-DM events reach into earlier chunks, and finite peak-finder
+            # kernel widths shift near-chunk-start events slightly earlier; early
+            # triggers extrapolate into the future); negative ABSOLUTE timestamps are
+            # clamped.
             offset = np.rint(ts_samp * self._seq_per_sample).astype(np.int64)
             fpga_timestamps = np.maximum(chunk_fpga_start + offset, 0)
         else:

@@ -224,7 +224,9 @@ Here are some details that are not obvious from the example code:
    (This detail is "hidden" in `FrbGrouper.create_events()`, whose token
    decoding extrapolates each event's arrival time to the lowest full-band
    frequency. Event timestamps can also precede the chunk window: high-DM
-   events reference input samples from earlier chunks.)
+   events reference input samples from earlier chunks, and finite peak-finder
+   kernel widths can shift an event detected near the chunk start to slightly
+   before it.)
 
    Another thing that happens in pirate (but not its predecessor bonsai):
    for some trees, only the upper half of the DM range is passed to the grouper,
