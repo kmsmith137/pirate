@@ -96,39 +96,83 @@ for _f in glob.glob(os.path.join(_notes_dst, '*.md')):
         with open(_f, 'w') as _fout:
             _fout.write(_new_text)
 
-# -- Generate CLI subcommand summary table -----------------------------------
-# Import the argparse parser and extract the one-line help for each subcommand.
+# -- Generate CLI subcommand pages + summary table ---------------------------
+# Import the argparse parser and, for each subcommand, emit (a) a row in the
+# "Subcommands" table (in cli.md) that links to (b) a dedicated
+# docs/source/cli/<name>.md page embedding that subcommand's --help output. The
+# help text is captured from argparse's format_help(), so it stays in sync with
+# the CLI automatically. A hidden toctree (also generated below) turns "CLI
+# reference" into a sidebar dropdown, one entry per subcommand.
 
 import sys as _sys
 _sys.path.insert(0, _repo_root)
 from pirate_frb.__main__ import get_parser as _get_parser
 
+# Collect (name, one-line help, subparser) in parser-declaration order (this is
+# the order the table and the sidebar dropdown both use).
 _parser = _get_parser()
-_lines = ['| Subcommand | Description |', '|---|---|']
+_subcommands = []
 for _action in _parser._subparsers._actions:
     if not hasattr(_action, '_choices_actions'):
         continue
     for _choice in _action._choices_actions:
-        _help = re.sub(r'(\w+_\w+)', r'`\1`', _choice.help or "")
-        _lines.append(f'| `{_choice.dest}` | {_help} |')
+        _name = _choice.dest
+        _subcommands.append((_name, _choice.help or "", _action.choices[_name]))
 
-# Write the summary table and per-subcommand help to _cli_generated.md.
+# Per-subcommand pages live in docs/source/cli/ (gitignored; regenerated each
+# build, removed by 'make docs-clean').
+_cli_dst = os.path.join(os.path.dirname(__file__), 'cli')
+os.makedirs(_cli_dst, exist_ok=True)
+
+# Pin the wrap width while capturing format_help(). argparse wraps help to
+# shutil.get_terminal_size(), which honors $COLUMNS; without this it would wrap
+# to whatever width the build shell happened to have -- often very wide, so the
+# rendered <pre> overflows its box horizontally. argparse wraps at COLUMNS-2, so
+# 90 -> lines up to 88 chars. That fills furo's code column, which fits ~90
+# monospace chars: 46em content-box (736px) minus the 28px .highlight-pre
+# padding, over a 13px (81.25% of 16px) code font at ~0.6em advance. This is
+# zoom-invariant (column is em, font is %); only the reader's monospace font
+# shifts it a few chars. The .cli-help pre pre-wrap CSS (_static/custom.css) is
+# the safety net for narrow viewports / wider fonts, so 90 can never scroll.
+# Saved/restored so the rest of the build is unperturbed.
+_saved_columns = os.environ.get('COLUMNS')
+os.environ['COLUMNS'] = '90'
+try:
+    for _name, _help, _subparser in _subcommands:
+        _subparser.prog = f'pirate_frb {_name}'
+        _help_text = _subparser.format_help()
+        with open(os.path.join(_cli_dst, f'{_name}.md'), 'w') as _fout:
+            _fout.write(f'# {_name}\n\n')
+            if _help:
+                _fout.write(re.sub(r'(\w+_\w+)', r'`\1`', _help) + '\n\n')
+            # ':class: cli-help' is targeted by _static/custom.css, which wraps
+            # long lines (white-space: pre-wrap) instead of side-scrolling.
+            _fout.write('```{code-block} text\n:class: cli-help\n\n')
+            _fout.write(_help_text)
+            if not _help_text.endswith('\n'):
+                _fout.write('\n')
+            _fout.write('```\n')
+finally:
+    if _saved_columns is None:
+        os.environ.pop('COLUMNS', None)
+    else:
+        os.environ['COLUMNS'] = _saved_columns
+
+# Write the summary table (each subcommand links to its page) plus a hidden,
+# ordered toctree. cli.md {include}s this file, so the toctree registers against
+# cli.md and feeds the sidebar dropdown without rendering a redundant list on
+# the page (the linked table is the visible index).
 _cli_gen_path = os.path.join(os.path.dirname(__file__), '_cli_generated.md')
 with open(_cli_gen_path, 'w') as _fout:
-    # Summary table
     _fout.write('## Subcommands\n\n')
-    _fout.write('\n'.join(_lines) + '\n\n')
-    # Per-subcommand detailed docs (captured from argparse format_help)
-    _fout.write('## Detailed usage\n\n')
-    for _action in _parser._subparsers._actions:
-        if not hasattr(_action, '_choices_actions'):
-            continue
-        for _choice in _action._choices_actions:
-            _name = _choice.dest
-            _subparser = _action.choices[_name]
-            _subparser.prog = f'pirate_frb {_name}'
-            _fout.write(f'### {_name}\n\n')
-            _fout.write(f'```text\n{_subparser.format_help()}```\n\n')
+    _fout.write('| Subcommand | Description |\n|---|---|\n')
+    for _name, _help, _subparser in _subcommands:
+        _desc = re.sub(r'(\w+_\w+)', r'`\1`', _help)
+        _fout.write(f'| [`{_name}`](cli/{_name}.md) | {_desc} |\n')
+    _fout.write('\n```{toctree}\n:hidden:\n:maxdepth: 1\n\n')
+    for _name, _help, _subparser in _subcommands:
+        _fout.write(f'cli/{_name}\n')
+    _fout.write('```\n')
 
 # -- Project information -----------------------------------------------------
 
@@ -166,6 +210,7 @@ source_suffix = {
 
 html_theme = 'furo'
 html_static_path = ['_static']
+html_css_files = ['custom.css']
 
 html_theme_options = {
     "light_css_variables": {

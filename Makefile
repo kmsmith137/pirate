@@ -144,7 +144,7 @@ $(SPHINX_STAMP): $(DOC_INPUTS) | lib tex
 docs: $(SPHINX_STAMP)
 
 docs-clean:
-	rm -rf docs/build docs/source/notes docs/source/configs docs/source/grpc docs/source/_autosummary docs/source/_cli_generated.md docs/source/_grpc_generated.md docs/source/_static/*.pdf
+	rm -rf docs/build docs/source/notes docs/source/configs docs/source/grpc docs/source/cli docs/source/_autosummary docs/source/_cli_generated.md docs/source/_grpc_generated.md docs/source/_static/*.pdf
 
 docs-serve: docs
 	@echo "Starting documentation server at http://localhost:8000"

@@ -42,6 +42,7 @@ docs/source/_autosummary/
 docs/source/notes/
 docs/source/configs/
 docs/source/grpc/
+docs/source/cli/
 docs/source/_cli_generated.md
 docs/source/_grpc_generated.md
 
