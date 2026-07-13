@@ -388,6 +388,13 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "widths_samp), each a float64 array. Timestamps are CHUNK-RELATIVE toplevel\n"
                "sample counts (extrapolated to the full-band lowest frequency); the caller\n"
                "converts to absolute FPGA counts.")
+          .def("compute_steady_state_it0", &DedispersionPlan::compute_steady_state_it0,
+               py::arg("itree"),
+               "Returns a 1-d int64 array of shape (trees[itree].ndm_out,). A dedispersion\n"
+               "output element (ichunk, ibeam, idm, it) of tree 'itree' is \"steady-state\",\n"
+               "i.e. unaffected by the zero-padding before the start of the acquisition, iff\n"
+               "ichunk * nt_out + it >= compute_steady_state_it0(itree)[idm]. Earlier elements\n"
+               "have artificially low out_max values (warmup artifacts, not real triggers).")
     ;
 
     // Returned by GpuDedisperser.acquire_output(). Must be registered
@@ -528,13 +535,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                },
                py::arg("consumer_id"), py::arg("seq_id"), py::arg("stream_ptr"),
                py::call_guard<py::gil_scoped_release>())
-          .def("compute_steady_state_it0", &GpuDedisperser::compute_steady_state_it0,
-               py::arg("itree"),
-               "Returns a 1-d int64 array of shape (trees[itree].ndm_out,). A dedispersion\n"
-               "output element (ichunk, ibeam, idm, it) of tree 'itree' is \"steady-state\",\n"
-               "i.e. unaffected by the zero-padding before the start of the acquisition, iff\n"
-               "ichunk * nt_out + it >= compute_steady_state_it0(itree)[idm]. Earlier elements\n"
-               "have artificially low out_max values (warmup artifacts, not real triggers).")
           .def_static("test_random", &GpuDedisperser::test_random,
                py::call_guard<py::gil_scoped_release>())
           .def_static("test_one", &GpuDedisperser::test_one,

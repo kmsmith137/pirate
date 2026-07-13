@@ -1621,7 +1621,7 @@ void register_core_bindings(pybind11::module &m)
                "converts to absolute FPGA counts. Valid only after the handshake.")
           .def("_compute_steady_state_it0", &FrbGrouper::_compute_steady_state_it0,
                py::arg("itree"),
-               "Forwards GpuDedisperser.compute_steady_state_it0(), using the producer's\n"
+               "Forwards DedispersionPlan.compute_steady_state_it0(), using the producer's\n"
                "plan from the handshake (see the 'steady_state_it0' bullet in the FrbGrouper\n"
                "class docstring). Valid only after the handshake.")
           // Member docstrings are intentionally omitted here: each member is documented

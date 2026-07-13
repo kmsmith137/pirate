@@ -152,6 +152,20 @@ struct DedispersionPlan
         double &timestamp_samp, double &width_samp) const;
 
 
+    // Returns 1-d array of shape trees[itree].ndm_out (int64, on the host).
+    //
+    // A dedispersion output element (ichunk, ibeam, idm, it) of tree 'itree' is
+    // "steady-state", i.e. unaffected by the zero-padding before the start of the
+    // acquisition, iff
+    //
+    //     ichunk * trees[itree].nt_out + it >= compute_steady_state_it0(itree)[idm].
+    //
+    // Earlier elements are computed from sums whose dedispersion + peak-finding
+    // footprint extends past the start of the acquisition, so their out_max values
+    // are artificially low (warmup artifacts, not real triggers).
+    ksgpu::Array<long> compute_steady_state_it0(long itree) const;
+
+
     // An "incomplete" DedispersionPlan does not initialize any of the "low-level data needed
     // for compute kernels", especially the heavyweight MegaRingbuf.  This is a footgun, and
     // is only used as a hack in 'FrbGrouper' (where it is not externally visible).

@@ -747,55 +747,6 @@ void GpuDedisperser::release_output(long consumer_id, long seq_id, cudaStream_t 
 }
 
 
-// Static member function. See Dedisperser.hpp for the meaning of the returned array.
-//
-// Implementation: element (ichunk, idm, it) of tree 'itree' is unaffected by the
-// zero-padding before the start of the acquisition iff
-//
-//     n*T_ds >= d0 + (idm+1)*D_ds - 1 + 4*Wmax,    n = ichunk*nt_out + it
-//
-// in "tree" samples (= 2^p input samples; max_width has these units too), where
-// T_ds/D_ds are the tree's time/dm downsampling factors, and d0 = d_lo / 2^(e+p) is
-// the tree's lowest internal delay (d_lo = 0 for the base tree, 2^(r_top+p-1) for
-// downsampled trees). DM bin idm covers internal delays [d0 + idm*D_ds,
-// d0 + (idm+1)*D_ds): the dedispersion output at internal delay d and (trigger-freq)
-// time tau references input samples [tau - d, tau], subband multiplets reference
-// within that range, output time bin n starts at tree sample n*T_ds, and the causal
-// peak-finding kernels reach back up to 2*Wmax - 1 more samples (padded to 4*Wmax).
-// Solving for the smallest steady-state n (ceil division; exact for integer n) gives
-// the per-idm array below.
-Array<long> GpuDedisperser::_compute_steady_state_it0(const DedispersionPlan &plan, long itree)
-{
-    xassert((itree >= 0) && (itree < plan.ntrees));
-    const DedispersionTree &tr = plan.trees.at(itree);
-
-    long p = tr.primary_tree_index;
-    long e = tr.early_trigger_level;
-    long T_ds = tr.pf.time_downsampling;
-    long D_ds = tr.pf.dm_downsampling;
-    long Wmax = tr.pf.max_width;
-    long r_top = plan.config.toplevel_tree_rank;
-
-    long d_lo = (p > 0) ? pow2(r_top + p - 1) : 0;   // lowest full-band delay searched by tree
-    long d0 = xdiv(d_lo, pow2(e + p));               // lowest internal delay
-
-    Array<long> ret({tr.ndm_out}, af_uhost);
-
-    for (long idm = 0; idm < tr.ndm_out; idm++) {
-        long dmax = d0 + (idm+1) * D_ds - 1;         // max internal delay in DM bin idm
-        ret.data[idm] = (dmax + 4*Wmax + T_ds - 1) / T_ds;
-    }
-
-    return ret;
-}
-
-
-Array<long> GpuDedisperser::compute_steady_state_it0(long itree)
-{
-    return _compute_steady_state_it0(*plan, itree);
-}
-
-
 Array<void> GpuDedisperser::_acquire_input(long seq_id, cudaStream_t stream)
 {
     xassert(seq_id >= 0);

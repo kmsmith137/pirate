@@ -204,24 +204,6 @@ struct GpuDedisperser
     // (No separate view methods; both input and output return their views
     // directly from acquire.)
 
-    // Returns 1-d array of shape trees[itree].ndm_out (int64, on the host).
-    //
-    // A dedispersion output element (ichunk, ibeam, idm, it) of tree 'itree' is
-    // "steady-state", i.e. unaffected by the zero-padding before the start of the
-    // acquisition, iff
-    //
-    //     ichunk * trees[itree].nt_out + it >= compute_steady_state_it0(itree)[idm].
-    //
-    // Earlier elements are computed from sums whose dedispersion + peak-finding
-    // footprint extends past the start of the acquisition, so their out_max values
-    // are artificially low (warmup artifacts, not real triggers).
-    ksgpu::Array<long> compute_steady_state_it0(long itree);
-
-    // Static core of compute_steady_state_it0(): only needs the plan, so that
-    // FrbGrouper::_compute_steady_state_it0() can forward to it with the producer's
-    // (incomplete) plan from the handshake.
-    static ksgpu::Array<long> _compute_steady_state_it0(const DedispersionPlan &plan, long itree);
-
     // Thread-backed class pattern: stop the worker thread and put the object
     // into a "stopped" state. The first caller sets 'error'. If e is null,
     // represents normal termination; if non-null, represents an error.

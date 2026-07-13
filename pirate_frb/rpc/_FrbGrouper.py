@@ -240,8 +240,8 @@ class FrbGrouperInjections:
         self._seq_per_sample   = int(xmd.seq_per_frb_time_sample)
 
         # Per-tree steady-state boundary (see class docstring), computed in C++:
-        # _compute_steady_state_it0() forwards the shared GpuDedisperser steady-state
-        # core, using the producer's plan from the handshake.
+        # _compute_steady_state_it0() forwards DedispersionPlan.compute_steady_state_it0()
+        # on the producer's plan from the handshake.
         # (ichunk*nt_out + it) >= steady_state_it0[itree][idm]  ==>  steady-state.
         self.steady_state_it0 = [self._compute_steady_state_it0(i) for i in range(self.ntrees)]
 
