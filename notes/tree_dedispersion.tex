@@ -550,38 +550,23 @@ To explain where Eqs.\ (\ref{eq:ndm_out})--(\ref{eq:dlo_dhi}) come from, we walk
   unchanged. This implies Eqs.\ (\ref{eq:ndm_out}), (\ref{eq:dlo_dhi}).
 \end{itemize}
 
-\subsection{Converting output indices to DM and arrival time}
+\subsection{The out\_argmax array}
 
-In the grouper, a peak in the (dm,time) plane is identified by a pair of indices 
-$0 \le {\tt idm} < {\tt ndm\_out}$ and $0 \le {\tt it} < {\tt nt\_out}$.
-Before sending the event to the sifter, we must convert to a physical DM and arrival time.
+Each element of the \verb|out_max| array is a ``coarse-grained'' snr value, defined by taking
+a maximum over a certain set of parameters: frequency subbands, pulse widths, fine-grained DMs,
+and fine-grained arrival times. The \verb|out_argmax| array consists of integer ``tokens''
+which encode the ``winning'' parameters, that are responsible for the max snr.
 
-For a tree without an early trigger (i.e.\ $e=0$), we convert {\tt idm} and {\tt it} to $d$ and $t$ 
-as follows:
-\begin{equation}
-d = d_{\rm lo} + \big( d_{\rm hi} - d_{\rm lo} \big) \, \frac{{\tt idm} + 0.5}{{\tt ndm\_out}}
-  \hspace{1.5cm}
-t = T_{\rm in} \, \frac{{\tt it} + 0.5}{\tt nt\_out}  \label{eq:idm_it}
-\end{equation}
-where the quantities $d_{\rm lo}$, $d_{\rm hi}$, ${\tt ndm\_out}$, $T_{\rm in}$, ${\tt nt\_out}$
-were defined above (in the previous subsections).
-Then we convert $d$ (full-band delay, in ``units'' of the input time sample length) to DM, 
-and convert $t$ (arrival time relative to the start of the time chunk, in ``units'' of the 
-input time sample length) to a physical time.
+The method \verb|FrbGrouper.create_events()| decodes tokens to recover the ``winning''
+parameters (min/max freq, DM, timestamp, width) for each \verb|out_max| array value.
+A future version of these notes may explain details of the decoding.
 
-If the tree has an early trigger (i.e.\ $e>0$), then there is an extra subtlety.
-The value of $d$ in Eq.\ (\ref{eq:idm_it}) is the {\em full-band} dispersion delay, 
-but the time $t$ in Eq.\ (\ref{eq:idm_it}) is the arrival time {\em at the trigger frequency}.
-The sifter expects the arrival time {\em at the lowest frequency in the full band}, which
-is given by:\footnote{In the code, Eqs.\ (\ref{eq:idm_it}), (\ref{eq:idm_it_early}) appear
-in {\tt FrbGrouper.create\_events()}, which converts array indices to DMs and arrival times.
-Note that for now, we place each (dm,time) at the center of its coarse-grained output array
-element. In the future, we'll add code to recover the fine-grained position, using the
-{\tt out\_argmax} array. (This is not as trivial as it sounds, since the {\tt out\_argmax}
-array uses an ``encoding'' that's convenient in the GPU kernel, and I need to write code
-to decode it.)}
-\begin{equation}
-t' = t + \big( 1 - 2^{-e} \big) \, d \label{eq:idm_it_early}
-\end{equation}
+For now, we just note one key property: the timestamp is defined to be the
+arrival time at the lowest frequency of the band (400 MHz in CHIME, or 300 MHz 
+in CHORD), even if the FRB is detected in a subband.
+If there are early triggers, then the timestamp can be {\bf significantly later}
+($\sim 10^2$ seconds) than the end of the time-chunk.
+In any case, the timestamp can be {\bf slightly earlier} than the beginning of
+the time-chunk, due to the finite width of the peak-finding kernels.
 
 \end{document}

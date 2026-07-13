@@ -32,9 +32,9 @@ if possible, and process them with `cupy`.
 From `pirate_frb/run_toy_grouper.py` (slightly streamlined; optional features
 such as `--histogram` are deliberately omitted here):
 ```py
-# In the toy grouper, we don't do peak-finding or thresholding. We just send one
-# event per time chunk, corresponding to the (beam,dm,time) triple with highest
-# snr (even if the snr doesn't correspond to a statistically significant event!)
+# The toy grouper does minimal thresholding (no real peak-finding or classification):
+# for each time chunk it emits one event per beam whose peak SNR (over the tree/dm/time
+# it searched) exceeds snr_threshold, so a chunk produces between 0 and nbeams events.
 
 # The FrbGrouper context manager blocks until 'pirate' connects and sends metadata.
 # WARNING: don't touch the gpu (e.g. by allocating memory with cupy) until you enter

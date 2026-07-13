@@ -44,8 +44,10 @@ struct MegaRingbuf;                   // defined in MegaRingbuf.hpp
 
 struct GpuDedisperser
 {
-    struct Params 
+    struct Params
     {
+        // Must be a gpu_runnable (hence non-incomplete) plan: the constructor asserts
+        // plan->params.gpu_runnable, since the Dcore values must match the compiled kernels.
         std::shared_ptr<DedispersionPlan> plan;
         std::shared_ptr<CudaStreamPool> stream_pool;
 

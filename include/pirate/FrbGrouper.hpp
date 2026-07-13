@@ -125,10 +125,10 @@ struct FrbGrouper
     YAML::Node dedispersion_plan_yaml;      // NOT pybind-wrapped (see injections)
 
     // "Incomplete" DedispersionPlan, deserialized from the handshake yamls -- see
-    // DedispersionPlan::make_incomplete_plan_from_yaml(). Supports decode_argmax*()
-    // (with the PRODUCER's per-tree Dcore values); its low-level members (MegaRingbuf,
-    // kernel/buffer params) are uninitialized. Internal hack -- deliberately not
-    // pybind-wrapped.
+    // DedispersionPlan::make_incomplete_plan_from_yaml(). Supports decode_argmax*() and
+    // compute_steady_state_it0() (with the PRODUCER's per-tree Dcore values); its low-level
+    // members (MegaRingbuf, kernel/buffer params) are uninitialized. Internal hack --
+    // deliberately not pybind-wrapped.
     std::shared_ptr<DedispersionPlan> incomplete_plan;
 
     std::string xengine_metadata_yaml_string;

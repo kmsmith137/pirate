@@ -332,7 +332,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
         pf_params.nt_out = tree.nt_out;
         pf_params.nt_wt = tree.nt_wt;
         pf_params.nt_in = tree.nt_ds;
-        pf_params.Dcore = tree.Dcore;   // filled from the cdd2 registry in Part 1 (see above)
+        pf_params.Dcore = tree.Dcore;   // filled in Part 1 (from the cdd2 registry if gpu_runnable, else a default)
         pf_params.validate();
 
         stage2_pf_params.push_back(pf_params);

@@ -1548,7 +1548,8 @@ void register_core_bindings(pybind11::module &m)
 
     // FrbGrouper: gRPC *server* side of the FrbGrouper service. Downstream
     // consumer of an FrbServer's GpuDedisperser::output_ringbuf over CUDA IPC.
-    // py::dynamic_attr() lets the Python injection attach dedispersion_plan_yaml.
+    // py::dynamic_attr() lets the Python injection attach derived attributes (the
+    // parsed-yaml dicts, steady_state_it0, full_steady_ichunk, etc.).
     // Injections (pirate_frb/rpc/_FrbGrouper.py) add __enter__/__exit__ and
     // a get_output() context manager.
     // The class docstring (including the read-only-attribute bullet list) lives in

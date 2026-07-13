@@ -214,8 +214,9 @@ struct DedispersionPlan
     std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length ntrees
 
     // Note: stage2_pf_params[:].Dcore is copied from trees[:].Dcore (which the constructor
-    // fills from the cdd2 kernel registry), so that peak-finders built from the plan (GPU
-    // or reference) agree on out_argmax token granularity.
+    // fills from the cdd2 kernel registry if params.gpu_runnable, else from a default; see
+    // Part 1), so that peak-finders built from the plan (GPU or reference) agree on
+    // out_argmax token granularity.
     std::vector<PeakFindingKernelParams> stage2_pf_params;          // length ntrees
 
     // Only needed if early triggers are used.
