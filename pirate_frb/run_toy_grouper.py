@@ -28,7 +28,7 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
     artificial slowdown for testing how the producer behaves when the consumer
     lags.
 
-    If 'histogram' is a pirate_frb.utils.GrouperHistogram (not None), the out_max
+    If 'histogram' is a pirate_frb.utils.GpuGrouperHistogram (not None), the out_max
     SNR values are accumulated into it (the caller writes it out on termination).
     Only "steady-state" values are included: warmup elements -- whose dedispersion
     sums extend past the start of the acquisition -- are masked out via
@@ -159,19 +159,19 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
     'histogram_stem' is a filename stem (or None): on termination, pickle histograms
     of the steady-state out_max SNR values (all values, plus one-sample-per-(beam,
     chunk) maxes; warmup values are masked out -- see
-    pirate_frb.utils.GrouperHistogram) to '<histogram_stem>.pkl'. Must not contain
+    pirate_frb.utils.GpuGrouperHistogram) to '<histogram_stem>.pkl'. Must not contain
     a '.' (guards against passing a full filename). (The CLI gives each grouper
     subprocess a distinct stem, so multi-grouper filenames don't collide.)
     """
     # Imported here (not at module top) so 'import pirate_frb' stays light.
     from .rpc import FrbGrouper, FrbSifterClient
-    from .utils import GrouperHistogram
+    from .utils import GpuGrouperHistogram
 
     # Construct the histogram up front (before connecting to anything). The stem
     # must not contain a '.' (guards against passing a full filename; the '.pkl'
     # suffix is appended in the finally below, and the CLI prepends a per-grouper
     # index for multiple groupers) -- validate it here so a bad stem fails fast.
-    # GrouperHistogram allocates its GPU arrays lazily (first add_tree), so
+    # GpuGrouperHistogram allocates its GPU arrays lazily (first add_tree), so
     # constructing it outside the grouper's device context is fine.
     histogram = None
     if histogram_stem is not None:
@@ -179,7 +179,7 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
             raise ValueError(f"run_toy_grouper: histogram_stem {histogram_stem!r} contains a "
                              f"'.' -- expected a filename stem, not a full filename (the "
                              f"'.pkl' suffix is appended automatically)")
-        histogram = GrouperHistogram()
+        histogram = GpuGrouperHistogram()
 
     # Construct the sifter client (opens a gRPC channel; the RPCs themselves are
     # issued in _run_toy_grouper, which has the grouper metadata). It's used as a
@@ -206,9 +206,11 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
                 raise
         finally:
             if histogram is not None:
-                # Write the pickle FIRST, so the raw histograms are preserved even if
-                # the fit or the plotter below raises; then analyze + plot from it.
-                histogram.write(histogram_stem + '.pkl')
-                histogram.analyze()
-                histogram.plot(histogram_stem + '.pdf')
+                # finalize() returns the host-side GrouperHistogram. Write the pickle
+                # FIRST, so the raw histograms are preserved even if the fit or the
+                # plotter below raises; then analyze + plot.
+                h = histogram.finalize()
+                h.write(histogram_stem + '.pkl')
+                h.analyze()
+                h.plot(histogram_stem + '.pdf')
         # FrbGrouper.__exit__ restores affinity/device + closes on every path.

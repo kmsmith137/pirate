@@ -278,7 +278,7 @@ class FrbGrouperInjections:
         Computed entirely on the GPU (steady_state_it0 is GPU-resident), with no
         host<->GPU copies or syncs -- cheap enough to call once per tree per chunk.
         Intended for masking per-chunk statistics, e.g.
-        GrouperHistogram.add_tree(tree_out, itree, ..., mask=grouper.steady_state_mask(...)).
+        GpuGrouperHistogram.add_tree(tree_out, itree, ..., mask=grouper.steady_state_mask(...)).
         (For ichunk >= full_steady_ichunk the mask is all True; callers may pass
         mask=None in that case to skip the redundant mask + copy.)
         """
