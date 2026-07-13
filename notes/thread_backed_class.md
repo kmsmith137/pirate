@@ -73,7 +73,11 @@ class X {
     // Stop-pattern state is 'mutable' and stop() is 'const' (see
     // notes/stoppable_class.md).
     mutable std::mutex mutex;
+
+    // Waiter: the worker thread (predicate: queue non-empty, or stopped).
+    // Signaled on: queue_request() (notify_one -- single waiter), stop().
     mutable std::condition_variable cv;
+
     mutable bool is_stopped = false;
     mutable std::exception_ptr error;
 
@@ -158,7 +162,7 @@ public:
         _throw_if_stopped("X::queue_request");
         queue.push(id);
         lock.unlock();
-        cv.notify_one();
+        cv.notify_one();   // notify_one: the worker thread is the only waiter
     }
 
     void example_entry_point() 

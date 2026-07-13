@@ -128,9 +128,11 @@ class X {
     // points / accessors must be able to stop the object.
     mutable std::mutex mutex;
 
-    // Two condition variables, one per wait predicate: pop() waits on
-    // 'cv_nonempty' until the ring buffer is nonempty, and push() waits on
-    // 'cv_nonfull' until it is nonfull.
+    // Two condition variables, one per wait predicate.
+    // cv_nonempty -- waiters: pop() (predicate: ring buffer nonempty, or
+    //   stopped). Signaled on: push() (notify_one), stop().
+    // cv_nonfull -- waiters: push() (predicate: ring buffer nonfull, or
+    //   stopped). Signaled on: pop() (notify_one), stop().
     mutable std::condition_variable cv_nonempty;
     mutable std::condition_variable cv_nonfull;
 
@@ -202,6 +204,9 @@ public:
             if (rb_end < rb_start + rb_size) {
                 ringbuf[(rb_end++) % rb_size] = x;
                 lock.unlock();
+                // notify_one is sound: all cv_nonempty waiters share the
+                // predicate, and one pushed item satisfies exactly one pop()
+                // (work-queue handoff).
                 cv_nonempty.notify_one();
                 return;
             }
@@ -223,6 +228,8 @@ public:
             if (rb_start < rb_end) {
                 int ret = ringbuf[(rb_start++) % rb_size];
                 lock.unlock();
+                // notify_one is sound: one freed slot admits exactly one
+                // push() (work-queue handoff).
                 cv_nonfull.notify_one();
                 return ret;
             }
@@ -248,18 +255,21 @@ stoppable/thread-backed classes:
    `ptr->stop(e)`.
 4. Shared cv + notify_one() with waiters on different predicates (lost
    wakeup); or a state change with no notify at all (missed wakeup).
-5. State read after unlock, or published outside the mutex -- thread
+5. A "drained"/"idle" barrier whose predicate misses in-flight work
+   (popped from the queue but not yet fully dispatched).
+6. State read after unlock, or published outside the mutex -- thread
    handles and grpc server handles are the recurring case (see the
    "Concurrency" section of notes/cpp.md).
-6. An in-progress flag not reset on a throw path.
-7. A blocking wait that stop() cannot interrupt, undocumented.
-8. Control flow that string-matches exception text.
-9. Comment/code drift: stale method names, incomplete "signaled on" lists,
-   absolute claims ("can never hang", "only returns if stopped") that the
-   code does not implement. Verify every synchronization comment against
-   the code -- in past review, stale comments were about as common as real
-   bugs, and each one misleads the next reviewer.
-10. pybind11: missing shared_ptr holder; missing GIL release on a blocking
+7. An in-progress flag not reset on a throw path, or reset without
+   notifying the cv whose waiters test it.
+8. A blocking wait that stop() cannot interrupt, undocumented.
+9. Control flow that string-matches exception text.
+10. Comment/code drift: stale method names, incomplete "signaled on" lists,
+    absolute claims ("can never hang", "only returns if stopped") that the
+    code does not implement. Verify every synchronization comment against
+    the code -- in past review, stale comments were about as common as real
+    bugs, and each one misleads the next reviewer.
+11. pybind11: missing shared_ptr holder; missing GIL release on a blocking
     binding; `def_readonly` of a lock-protected member.
 
 Closely related: the "thread-backed class" is a special case of a stoppable class, in which objects have one or more worker threads

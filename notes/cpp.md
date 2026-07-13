@@ -54,8 +54,11 @@ shutdown/error-propagation semantics.)
   When in doubt, split the cv or use `notify_all()`. One-shot latch events
   (init flags) keep `notify_all()` -- the cost is paid once, and it is
   robust against waiters added later. A shutdown/stop event must
-  `notify_all()` every cv of the class. FrbServer (7 cvs) is the big worked
-  example; CudaEventRingbuf's `_release()` shows how to justify NOT
+  `notify_all()` every cv of the class. A wait on a CONJUNCTION of set-once
+  latch flags does not force a shared cv: wait for each flag sequentially,
+  each on its own cv (equivalent because the flags are never cleared -- see
+  AssembledFrameAllocator's worker init gate). FrbServer (7 cvs) is the big
+  worked example; CudaEventRingbuf's `_release()` shows how to justify NOT
   notifying a cv whose waiters mention the changed state.
 
 - Keep a COMPLETE "signaled on:" list next to each cv declaration. A wait
@@ -64,6 +67,25 @@ shutdown/error-propagation semantics.)
   queue on a side path without notifying the waiter whose predicate just
   became true). Reviewers should check the list against the code.
 
+- Notify with the mutex RELEASED where cleanly possible -- otherwise a
+  woken thread immediately blocks re-acquiring the lock the notifier still
+  holds. This is a throughput nicety, never a correctness requirement, so
+  it never justifies weakening a critical section -- and legitimate
+  under-lock notifies exist and deserve no "fix": a lock deliberately held
+  into the next loop iteration (FileWriter's ssd->nfs handoff), a
+  caller-owned guard (AssembledFrameAllocator::_create_frame_set), a
+  failure path where the lock must stay held (the throw in
+  FrbGrouper::start_listening).
+
+- A "fully drained" / "idle" barrier predicate must cover IN-FLIGHT work,
+  not just queue emptiness. A pop-then-dispatch worker makes "queue empty"
+  observable one item early: the item is popped in one critical section,
+  but its side effects are published only when the dispatch finishes. Give
+  the worker an in-flight flag, set in the same critical section as the
+  pop and reset on every dispatch exit path (normal, early-exit, throw),
+  and test it in the barrier predicate. (See FakeXEngine's
+  Worker::cmd_in_flight / synchronize() for the model.)
+
 - Never read a lock-protected member after dropping the lock -- snapshot it
   into a local under the lock and use the local.
 
@@ -71,7 +93,11 @@ shutdown/error-propagation semantics.)
   or creation-underway flag) must be reset on EVERY exit path, including
   throws -- use a catch block or a scope guard. A flag left set wedges all
   future waiters, even if some other coupling (e.g. an error path that
-  shuts down the whole object) happens to mask it today.
+  shuts down the whole object) happens to mask it today. And the reset is
+  itself a state change that waiters' predicates test: the reset path --
+  including a scope guard's unwind path -- must notify the corresponding
+  cv, and that cv's "signaled on:" list must include it. (See
+  AssembledFrameAllocator's CreationFlagGuard.)
 
 - Counters used in wait predicates are `long`, never `int`: signed overflow
   is UB and a hung predicate in a long-running server.
