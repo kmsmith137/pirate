@@ -610,7 +610,7 @@ bool FakeXEngine::synchronize(long worker_id)
         }
 
         // Wait for the queue to drain. Predicate is (command_queue.empty()
-        // && ack_queue.empty()):
+        // && ack_queue.empty() && !cmd_in_flight):
         //
         //   - command_queue.empty() is the basic "all commands processed"
         //     barrier. Sensitive to ANY commands in the queue, including
@@ -619,22 +619,30 @@ bool FakeXEngine::synchronize(long worker_id)
         //     everything in the queue" barrier, not "drain everything as
         //     of when I was called").
         //
-        //   - ack_queue.empty() is required for the debug case to close
-        //     the small window where the worker has popped WAIT_FOR_ACKS
-        //     (making command_queue.empty() == true) but is still inside
-        //     its blocking _read_acks call (so ack_queue is not yet
-        //     empty). Without the second clause, a spurious cv wakeup in
-        //     that window would let synchronize observe the transient
-        //     empty-but-not-drained state.
+        //   - !cmd_in_flight closes the window where the worker has popped
+        //     the last command (making command_queue.empty() == true) but
+        //     is still dispatching it -- its side effects (wire bytes,
+        //     last_processed_minichunk, ack_queue push) are not yet
+        //     published. Without this clause, a debug=false synchronize
+        //     could return one command early (in debug mode the
+        //     WAIT_FOR_ACKS we appended is itself covered by the
+        //     ack_queue clause below, but SEND/DISCONNECT dispatches
+        //     were not).
+        //
+        //   - ack_queue.empty() covers acks that are still outstanding
+        //     BETWEEN commands (pushed by an earlier SEND's dispatch,
+        //     drained later by _read_acks) -- cmd_in_flight cannot see
+        //     those.
         //
         //   - When debug=false, ack_queue is always empty, so the
-        //     predicate reduces to command_queue.empty().
+        //     predicate reduces to (command_queue.empty() &&
+        //     !cmd_in_flight).
         Worker &w = *workers[worker_id];
         std::unique_lock<std::mutex> lock(w.mutex);
         for (;;) {
             if (_stopped_or_rethrow(w))
                 return false;   // cleanly stopped before the queue drained
-            if (w.command_queue.empty() && w.ack_queue.empty())
+            if (w.command_queue.empty() && w.ack_queue.empty() && !w.cmd_in_flight)
                 return true;
             w.drain_cv.wait(lock);
         }
@@ -1436,35 +1444,58 @@ void FakeXEngine::_worker_main(int worker_id)
 
             cmd = w.command_queue.front();
             w.command_queue.pop_front();
+
+            // The popped command is now invisible to synchronize()'s
+            // queue-empty clause; cmd_in_flight covers it until the
+            // dispatch below has fully published its side effects.
+            w.cmd_in_flight = true;
         }
 
-        // Dispatch.
-        switch (cmd.kind) {
-        case Command::Kind::SEND_JUNK:
-        case Command::Kind::SKIP_MINICHUNK:
-        case Command::Kind::SEND_MINICHUNK:
-            if (!_skip_or_send(w, cmd))
-                return;
-            break;
-        case Command::Kind::DISCONNECT:
-            _disconnect(w);
-            break;
-        case Command::Kind::WAIT_FOR_ACKS:
-            // WAIT_FOR_ACKS is enqueued only by
-            // enqueue_wait_for_acks() / synchronize(), both of which
-            // check debug first. xassert here as a defense-in-depth
-            // invariant.
-            xassert(debug);
-            _read_acks(w, /*blocking=*/true);
-            break;
-        default: {
-            // Defensive -- UNINITIALIZED Commands should never be enqueued.
-            stringstream ss;
-            ss << "FakeXEngine worker " << worker_id
-               << ": got Command with kind=" << uint32_t(cmd.kind);
-            throw runtime_error(ss.str());
+        // Dispatch. cmd_in_flight is reset on every exit path (normal,
+        // stop-return, throw); on the two worker-exit paths the engine is
+        // (or is about to be) stopped, so synchronize() waiters leave via
+        // their stopped-check either way -- the reset just keeps the
+        // "in-progress flags" invariant clean (notes/stoppable_class.md).
+        bool worker_exiting = false;
+        try {
+            switch (cmd.kind) {
+            case Command::Kind::SEND_JUNK:
+            case Command::Kind::SKIP_MINICHUNK:
+            case Command::Kind::SEND_MINICHUNK:
+                worker_exiting = !_skip_or_send(w, cmd);
+                break;
+            case Command::Kind::DISCONNECT:
+                _disconnect(w);
+                break;
+            case Command::Kind::WAIT_FOR_ACKS:
+                // WAIT_FOR_ACKS is enqueued only by
+                // enqueue_wait_for_acks() / synchronize(), both of which
+                // check debug first. xassert here as a defense-in-depth
+                // invariant.
+                xassert(debug);
+                _read_acks(w, /*blocking=*/true);
+                break;
+            default: {
+                // Defensive -- UNINITIALIZED Commands should never be enqueued.
+                stringstream ss;
+                ss << "FakeXEngine worker " << worker_id
+                   << ": got Command with kind=" << uint32_t(cmd.kind);
+                throw runtime_error(ss.str());
+            }
+            }
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(w.mutex);
+            w.cmd_in_flight = false;
+            throw;   // worker_main's catch-all calls stop(e)
         }
+
+        {
+            std::lock_guard<std::mutex> lock(w.mutex);
+            w.cmd_in_flight = false;
         }
+
+        if (worker_exiting)
+            return;
 
         // Centralized notify, one per command dispatched. Wakes both
         // wait_until_processed waiters (whenever last_processed_minichunk

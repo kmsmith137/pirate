@@ -242,10 +242,11 @@ struct FakeXEngine
         //   indices), and stop().
         //
         // drain_cv -- waiters: synchronize() callers (predicate:
-        //   command_queue and ack_queue both empty, or stopped). Signaled
-        //   on: the centralized per-command notify in _worker_main(), the
-        //   ack-queue drain in _read_acks() (notify_all each -- when the
-        //   queues drain, every waiter becomes ready), and stop().
+        //   command_queue and ack_queue both empty AND no command in
+        //   flight, or stopped). Signaled on: the centralized per-command
+        //   notify in _worker_main(), the ack-queue drain in _read_acks()
+        //   (notify_all each -- when the queues drain, every waiter
+        //   becomes ready), and stop().
         std::condition_variable cmd_cv;
         std::condition_variable gate_cv;
         std::condition_variable processed_cv;
@@ -253,6 +254,16 @@ struct FakeXEngine
 
         // Commands waiting to be processed by this worker, FIFO.
         std::deque<Command> command_queue;
+
+        // True while the worker thread is dispatching a command it has
+        // already popped from command_queue. Covers the window where the
+        // queue is empty but the popped command's side effects (wire
+        // bytes, last_processed_minichunk, ack_queue push) are not yet
+        // published -- without it, synchronize()'s "drained" predicate
+        // could return one command early. Set at pop and reset on every
+        // dispatch exit path (normal, stop-return, throw) -- see the
+        // "in-progress flags" rule in notes/stoppable_class.md.
+        bool cmd_in_flight = false;
 
         // Latest minichunk_index this worker has finished *processing*
         // for a state-advancing command (SEND_JUNK / SKIP_MINICHUNK /
@@ -760,10 +771,11 @@ struct FakeXEngine
     bool enqueue_wait_for_acks(long worker_id);
 
     // Entry point: block the CALLING thread until
-    // workers[worker_id]->command_queue has been fully drained.
-    // If debug is true, additionally enqueue a WAIT_FOR_ACKS (via
-    // enqueue_wait_for_acks() above) BEFORE waiting -- so the wait
-    // also covers all outstanding acks.
+    // workers[worker_id]->command_queue has been fully drained AND the
+    // last-popped command has finished dispatching (Worker::
+    // cmd_in_flight). If debug is true, additionally enqueue a
+    // WAIT_FOR_ACKS (via enqueue_wait_for_acks() above) BEFORE waiting
+    // -- so the wait also covers all outstanding acks.
     //
     // SEMANTICS: this is a "drain everything in the queue"
     // barrier, NOT a "drain everything that was in the queue at
