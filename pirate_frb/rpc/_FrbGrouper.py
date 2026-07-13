@@ -86,6 +86,10 @@ class FrbGrouperInjections:
       GPU-resident: it is consumed on the GPU once per tree per chunk (see
       ``steady_state_mask()``), and keeping it there avoids per-call host->GPU
       copies. Call ``.get()`` on the elements for host copies.
+    - ``full_steady_ichunk`` (int) -- the smallest ichunk at/above which EVERY
+      element of EVERY tree's output is steady-state (so the whole chunk is free of
+      zero-padding artifacts). For ``ichunk >= full_steady_ichunk`` the entire
+      ``steady_state_mask()`` is True.
     """
     # This class docstring (above) is the FrbGrouper docstring: the pybind11 binding
     # deliberately sets none, and ksgpu.inject_methods copies this one onto the class
@@ -253,8 +257,16 @@ class FrbGrouperInjections:
         # keeping it GPU-resident avoids a host->GPU copy on every call. (__enter__
         # has already selected the grouper's CUDA device at this point.)
         # (ichunk*nt_out + it) >= steady_state_it0[itree][idm]  ==>  steady-state.
-        self.steady_state_it0 = [cp.asarray(self._compute_steady_state_it0(i))
-                                 for i in range(self.ntrees)]
+        it0 = [self._compute_steady_state_it0(i) for i in range(self.ntrees)]  # host (numpy)
+        self.steady_state_it0 = [cp.asarray(a) for a in it0]
+
+        # Chunk-level threshold: the smallest ichunk at/above which every element of
+        # every tree is steady-state. For tree i, the whole chunk is steady once
+        # ichunk*nt_out[i] >= max(it0[i]) (worst element is idm=argmax(it0), it=0), so
+        # ichunk >= ceil(max(it0[i]) / nt_out[i]); take the max over trees.
+        self.full_steady_ichunk = max(
+            ((int(a.max()) + self.nt_out[i] - 1) // self.nt_out[i] for i, a in enumerate(it0)),
+            default=0)
 
     def steady_state_mask(self, itree, ichunk):
         """Return a cupy bool mask of shape (ndm_out, nt_out) for tree 'itree': True
@@ -266,7 +278,9 @@ class FrbGrouperInjections:
         Computed entirely on the GPU (steady_state_it0 is GPU-resident), with no
         host<->GPU copies or syncs -- cheap enough to call once per tree per chunk.
         Intended for masking per-chunk statistics, e.g.
-        GrouperHistogram.add_tree(tree_out, mask=grouper.steady_state_mask(...)).
+        GrouperHistogram.add_tree(tree_out, itree, ..., mask=grouper.steady_state_mask(...)).
+        (For ichunk >= full_steady_ichunk the mask is all True; callers may pass
+        mask=None in that case to skip the redundant mask + copy.)
         """
         import cupy as cp
         min_it = self.steady_state_it0[itree] - ichunk * self.nt_out[itree]

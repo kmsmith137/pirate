@@ -100,8 +100,12 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
                         # partial sums (artificially low), and would contaminate them.
                         # 'itree' feeds the per-(beam, chunk) max histogram (itree=0
                         # starts a new group -- i.e. this batch's beams, this chunk).
-                        histogram.add_tree(tree_out, itree,
-                                           mask=grouper.steady_state_mask(itree, ichunk))
+                        # That max is accumulated only for chunks that are ENTIRELY
+                        # steady-state (ichunk >= full_steady_ichunk); such chunks need
+                        # no mask (all True), so pass mask=None.
+                        full_steady = ichunk >= grouper.full_steady_ichunk
+                        mask = None if full_steady else grouper.steady_state_mask(itree, ichunk)
+                        histogram.add_tree(tree_out, itree, full_steady, mask=mask)
 
                     sl = slice(beam0, beam0 + bpb)
                     upd = beam_max > per_beam_max[sl]
@@ -202,5 +206,9 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
                 raise
         finally:
             if histogram is not None:
+                # Write the pickle FIRST, so the raw histograms are preserved even if
+                # the fit or the plotter below raises; then analyze + plot from it.
                 histogram.write(histogram_stem + '.pkl')
+                histogram.analyze()
+                histogram.plot(histogram_stem + '.pdf')
         # FrbGrouper.__exit__ restores affinity/device + closes on every path.

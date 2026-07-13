@@ -16,10 +16,13 @@ class GrouperHistogram:
 
       - 'histogram': every (masked) out_max value.
       - 'max_histogram': one sample per (beam, time-chunk) -- the max, over all
-        trees/DMs/times, of the (masked) out_max values for that beam and chunk.
-        Built from the 'itree' argument of add_tree(), where itree=0 marks the
-        start of a new (beam set, time chunk) group; a (beam, chunk) whose values
-        are entirely masked out contributes no sample.
+        trees/DMs/times, of the out_max values for that beam and chunk. Built from
+        the 'itree' argument of add_tree() (itree=0 marks the start of a new (beam
+        set, time chunk) group), and only for chunks passed with full_steady=True
+        (an entirely steady-state chunk), so every sample is a max over the same
+        full set of cells. Chunks with full_steady=False contribute no sample, so
+        this histogram can legitimately be empty (e.g. a short run in which no chunk
+        is fully steady-state).
 
     Constructor args:
 
@@ -73,7 +76,7 @@ class GrouperHistogram:
         self._last_itree = -1
         self._group_max = None
 
-    def add_tree(self, tree_out, itree, mask=None):
+    def add_tree(self, tree_out, itree, full_steady, mask=None):
         """Accumulate the values of 'tree_out' (a cupy array, e.g. one tree's out_max
         array of shape (beams, ndm_out, nt_out)) into the histograms.
 
@@ -85,10 +88,19 @@ class GrouperHistogram:
         (beam set, time chunk) are visited as itree = 0, 1, ..., ntrees-1; the final
         group is committed by write()/to_dict().
 
+        'full_steady' (bool) gates ONLY the per-(beam, chunk) max histogram: the
+        group's per-beam max is accumulated only when full_steady is True for every
+        call of the group. Pass True only when the WHOLE chunk (all trees, all
+        dm/time) is steady-state (e.g. ichunk >= FrbGrouper.full_steady_ichunk), so
+        that every max sample is a max over the same full set of cells (a clean
+        max-of-N). A chunk with full_steady=False contributes no max sample. (The
+        plain 'histogram' is unaffected -- it accumulates every masked value.)
+
         If 'mask' is not None, it must be a boolean cupy array matching the TRAILING
         axes of 'tree_out' (e.g. shape (ndm_out, nt_out), applied to every beam), and
         only values where the mask is True are accumulated -- e.g. pass
-        FrbGrouper.steady_state_mask(itree, ichunk) to exclude warmup values.
+        FrbGrouper.steady_state_mask(itree, ichunk) to exclude warmup values. When
+        full_steady is True the mask is all-True, so pass mask=None to skip it.
         """
         if self._cpu_only:
             raise RuntimeError("GrouperHistogram.add_tree: object was loaded from a file "
@@ -120,8 +132,9 @@ class GrouperHistogram:
                                f"{self._last_itree})")
         self._last_itree = itree
 
+        # Per-(beam, chunk) max: only for fully-steady chunks (see full_steady above).
         v = vals.reshape(vals.shape[0], -1)   # (beams, everything-else)
-        if v.shape[1] > 0:                    # fully-masked trees contribute nothing
+        if full_steady and v.shape[1] > 0:    # v.shape[1]==0 only if fully masked out
             bmax = v.max(axis=1)
             self._group_max = bmax if (self._group_max is None) \
                               else cp.maximum(self._group_max, bmax)
@@ -223,8 +236,9 @@ class GrouperHistogram:
     def analyze(self):
         """Fit the tail of each histogram to a 'max of N i.i.d. standard Gaussians'
         model (CDF Phi(x)**N, with N real and >= 1) and store the best-fit N in the
-        self.fit_N dict (keys 'histogram', 'max_histogram'); returns that dict.
-        plot() then overlays the fitted model.
+        self.fit_N dict; returns that dict. A histogram with zero total counts (e.g.
+        an empty max_histogram) is skipped, so its key is absent from self.fit_N and
+        plot() omits its model/panel. plot() then overlays the fitted models.
 
         The fit is a binned maximum-likelihood (multinomial) fit over the exact
         histogram bin edges: everything below SNR=_FIT_LO is lumped into one bin and
@@ -237,7 +251,10 @@ class GrouperHistogram:
 
         self.fit_N = {}
         for name in ('histogram', 'max_histogram'):
-            fit_counts, fit_edges = self._make_fit_bins(d[name].astype(float), edges)
+            counts = d[name].astype(float)
+            if counts.sum() == 0:
+                continue   # no events (e.g. no fully-steady chunk yet): skip the fit
+            fit_counts, fit_edges = self._make_fit_bins(counts, edges)
 
             def nll(logN):
                 p = self._max_of_n_bin_probs(logN, fit_edges)
@@ -249,11 +266,13 @@ class GrouperHistogram:
         return self.fit_N
 
     def plot(self, filename):
-        """Write a two-panel PDF to 'filename': the 'histogram' (all steady-state
-        out_max values) in the top panel and 'max_histogram' (per-(beam, chunk)
-        maxes) in the bottom. Counts are on a log scale; x-limits are taken from the
-        populated (nonzero-count) bins. If analyze() has been called, each panel also
-        shows the best-fit max-of-N-Gaussian model as a dashed line (N in the legend)."""
+        """Write a PDF to 'filename' with one panel per non-empty histogram: the
+        'histogram' (all steady-state out_max values) and 'max_histogram'
+        (per-(beam, chunk) maxes over fully-steady chunks). An empty max_histogram
+        (no fully-steady chunk) is omitted, so the plot may have one or two panels.
+        Counts are on a log scale; x-limits are taken from the populated
+        (nonzero-count) bins. If analyze() has been called, each panel also shows the
+        best-fit max-of-N-Gaussian model as a dashed line (N in the legend)."""
         import matplotlib
         matplotlib.use('Agg')   # headless (writing a file, no display)
         import matplotlib.pyplot as plt
@@ -268,18 +287,24 @@ class GrouperHistogram:
         edges[0], edges[-1] = edges[1] - w, edges[-2] + w
         centers = 0.5 * (edges[:-1] + edges[1:])
 
-        panels = [('histogram',     'All out_max values (steady-state)'),
-                  ('max_histogram', 'Per-(beam, chunk) max')]
+        # One panel per histogram that has any counts (an empty max_histogram -- no
+        # fully-steady chunk -- is omitted; see add_tree's full_steady argument).
+        panels = [(name, title) for name, title in
+                  (('histogram',     'All out_max values (steady-state)'),
+                   ('max_histogram', 'Per-(beam, chunk) max (fully-steady chunks)'))
+                  if d[name].sum() > 0]
+        if not panels:   # nothing accumulated at all: show the (empty) top panel
+            panels = [('histogram', 'All out_max values (steady-state)')]
 
-        fig, axes = plt.subplots(2, 1, figsize=(8, 8))
-        for ax, (name, title) in zip(axes, panels):
+        fig, axes = plt.subplots(len(panels), 1, figsize=(8, 4 * len(panels)), squeeze=False)
+        for ax, (name, title) in zip(axes[:, 0], panels):
             counts = d[name]
             nz = counts > 0                       # log scale: skip empty bins
             ax.bar(centers[nz], counts[nz], width=w, label='data')
 
-            # Overlay the fitted max-of-N-Gaussian model (dashed), if analyze() ran.
-            # model[j] = (total counts) * P(value in fine bin j), from the exact edges.
-            if self.fit_N is not None:
+            # Overlay the fitted max-of-N-Gaussian model (dashed), if analyze() fit
+            # this histogram. model[j] = (total counts) * P(value in fine bin j).
+            if self.fit_N is not None and name in self.fit_N:
                 N = self.fit_N[name]
                 model = counts.sum() * self._max_of_n_bin_probs(np.log(N), edges)
                 mm = model > 0
