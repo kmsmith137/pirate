@@ -1558,14 +1558,20 @@ void FakeXEngine::_pacing_thread_main()
         // critical sections interleave freely.
         for (auto &wp : workers) {
             Worker &w = *wp;
-            std::lock_guard<std::mutex> lk(w.mutex);
-            long new_val = std::max(w.rb_processed, v);
-            if (new_val != w.rb_processed) {
-                w.rb_processed = new_val;
-                // notify_one: the worker thread's paced gate is the only
-                // gate_cv waiter.
-                w.gate_cv.notify_one();
+            bool advanced = false;
+            {
+                std::lock_guard<std::mutex> lk(w.mutex);
+                long new_val = std::max(w.rb_processed, v);
+                if (new_val != w.rb_processed) {
+                    w.rb_processed = new_val;
+                    advanced = true;
+                }
             }
+            // Notify after releasing the mutex, so a gate-blocked worker
+            // isn't woken straight into a lock it can't take. notify_one:
+            // the worker thread's paced gate is the only gate_cv waiter.
+            if (advanced)
+                w.gate_cv.notify_one();
         }
     }
 

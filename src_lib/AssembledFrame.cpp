@@ -1445,7 +1445,8 @@ void AssembledFrameAllocator::_initialize_metadata(const XEngineMetadata &metada
     }
 
     // Notify the worker thread's init gate and any get_metadata() waiters
-    // (one-shot latch -> notify_all).
+    // (one-shot latch -> notify_all, after releasing the lock).
+    guard.unlock();
     metadata_cv.notify_all();
 }
 

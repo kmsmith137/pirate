@@ -319,8 +319,8 @@ void Receiver::_listener_main()
     {
         lock_guard<std::mutex> lock(mutex);
         is_listening = true;
-        listening_cv.notify_all();   // one-shot latch: all waiters become ready
     }
+    listening_cv.notify_all();   // one-shot latch: all waiters become ready
 
     for (;;) {
         unique_lock<std::mutex> lock(mutex);

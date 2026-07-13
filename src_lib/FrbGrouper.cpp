@@ -423,9 +423,9 @@ FrbGrouper::SessionResult FrbGrouper::_run_session(void *ctx_, void *stream_)
         {
             lock_guard<std::mutex> lock(mutex);
             handshake_done = true;
-            handshake_cv.notify_all();
-            produced_cv.notify_all();
         }
+        handshake_cv.notify_all();
+        produced_cv.notify_all();
 
         // Announce handshake completion (output_ringbuf is now valid). The
         // connection itself was already announced at TCP-open (above).
@@ -656,7 +656,8 @@ void FrbGrouper::send_thread_main()
     }
     // Tell _run_session we have stopped touching the stream.
     // (notify_one: the Session handler's step-5 wait is the only waiter.)
-    { lock_guard<std::mutex> lock(mutex); send_io_done = true; send_io_cv.notify_one(); }
+    { lock_guard<std::mutex> lock(mutex); send_io_done = true; }
+    send_io_cv.notify_one();
 }
 
 
@@ -755,6 +756,9 @@ void FrbGrouper::stop(std::exception_ptr e) const
     if (grpc_state && grpc_state->context)
         grpc_state->context->TryCancel();
 
+    // Notify after releasing the mutex (the lock was needed through the
+    // TryCancel above -- see the use-after-free note -- but not here).
+    lock.unlock();
     handshake_cv.notify_all();
     produced_cv.notify_all();
     consumed_cv.notify_all();

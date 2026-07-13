@@ -111,13 +111,17 @@ void HwtestSender::start()
 
 void HwtestSender::stop(std::exception_ptr e) const
 {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::unique_lock<std::mutex> lock(mutex);
 
     if (is_stopped)
         return;
 
     is_stopped = true;
     error = e;
+
+    // Notify after releasing the mutex, so woken threads aren't
+    // immediately blocked re-acquiring it.
+    lock.unlock();
     cv.notify_all();
 }
 
@@ -200,8 +204,8 @@ void HwtestSender::worker_main(long endpoint_index)
     {
         std::lock_guard<std::mutex> lock(mutex);
         num_workers_exited++;
-        cv.notify_all();
     }
+    cv.notify_all();
 }
 
 

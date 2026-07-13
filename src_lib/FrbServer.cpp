@@ -396,6 +396,10 @@ void FrbServer::stop(std::exception_ptr e) const
     shared_ptr<CudaEventRingbuf> edq  = evrb_dq;
     shared_ptr<CudaEventRingbuf> eh2g = evrb_h2g;
 
+    lock.unlock();
+
+    // Notify after releasing the mutex, so woken threads aren't
+    // immediately blocked re-acquiring it.
     stop_cv.notify_all();
     rb_init_cv.notify_all();
     assembled_cv.notify_all();
@@ -403,7 +407,6 @@ void FrbServer::stop(std::exception_ptr e) const
     grouper_hs_cv.notify_all();
     reaper_cv.notify_all();
     monitor_cv.notify_all();
-    lock.unlock();
 
     // Cancel the grouper Session RPC: TryCancel() unblocks any in-flight
     // read() (receive thread) / write() (send thread). grouper_client is set at
@@ -505,6 +508,7 @@ void FrbServer::_worker_main(int receiver_index)
 
     unique_lock<std::mutex> lock(mutex);
 
+    bool rb_just_initialized = false;
     if (!metadata) {
         metadata = m;
         // The frame_ringbuf and beam_id_to_index are initialized at the same time
@@ -524,16 +528,20 @@ void FrbServer::_worker_main(int receiver_index)
         rb_assembled    = initial_frame_id;
         rb_end          = initial_frame_id;
         rb_initialized  = true;
-
-        // One-shot latch: wakes the processing thread's startup wait, and
-        // MonitorRingbuf handlers (whose predicate includes rb_initialized).
-        rb_init_cv.notify_all();
-        monitor_cv.notify_all();
+        rb_just_initialized = true;
     } else {
         xassert(long(frame_ringbuf.size()) == rb_size);
     }
 
     lock.unlock();
+
+    // One-shot latch: wakes the processing thread's startup wait, and
+    // MonitorRingbuf handlers (whose predicate includes rb_initialized).
+    // Notified after releasing the mutex.
+    if (rb_just_initialized) {
+        rb_init_cv.notify_all();
+        monitor_cv.notify_all();
+    }
 
     // The Receiver now hands us one whole AssembledFrameSet (= one time
     // chunk, all beams) per call. Each outer iteration of the loop
@@ -1592,8 +1600,9 @@ void FrbServer::_grouper_send_thread_main()
         throw runtime_error("FrbServer: grouper rejected handshake: "
                             + reply.handshake_reply().error_message());
 
-    // (6) Wake receive_thread (one-shot latch).
-    { lock_guard<std::mutex> lock(mutex); grouper_handshake_done = true; grouper_hs_cv.notify_all(); }
+    // (6) Wake receive_thread (one-shot latch; notify after releasing the mutex).
+    { lock_guard<std::mutex> lock(mutex); grouper_handshake_done = true; }
+    grouper_hs_cv.notify_all();
 
     // (7) Steady-state produced loop.
     for (long seq_id = 0; ; seq_id++) {
