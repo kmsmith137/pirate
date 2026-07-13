@@ -51,7 +51,7 @@ with FrbGrouper(grouper_addr) as grouper:
         grouper_yaml = {'toy_grouper': True},  # placeholder for future expansion
         search_ip_addr = grouper.search_ip_addr)
         
-    beam_set_id = grouper.xengine_yaml['beamset']
+    beam_set_id = grouper.xengine_metadata.beamset
     nbeams_tot = grouper.total_beams
     nbatches = grouper.nbatches
     beams_per_batch = nbeams_tot // nbatches

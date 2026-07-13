@@ -42,7 +42,7 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
 
     if sifter is not None:
         # Send the ConfigMessage to the sifter (this is only done once).
-        beam_set_id = grouper.xengine_yaml['beamset']
+        beam_set_id = grouper.xengine_metadata.beamset
 
         sifter.send_configuration(
             pirate_yaml = grouper.dedispersion_config_yaml_string,
@@ -128,7 +128,7 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
                                        per_beam_max[ibeam], per_beam_token[ibeam])
 
         coarse_snr_max = float(per_beam_max.max())
-        print(f'toy_grouper: beamset={grouper.xengine_yaml["beamset"]}, ichunk={ichunk}, '
+        print(f'toy_grouper: beamset={grouper.xengine_metadata.beamset}, ichunk={ichunk}, '
               f'fpga=[{events.chunk_fpga_start}:{events.chunk_fpga_end}], '
               f'coarse_snr_max={coarse_snr_max:.4g}, nevents={len(events)}', flush=True)
 

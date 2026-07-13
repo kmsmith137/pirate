@@ -78,7 +78,6 @@ class FrbGrouperInjections:
     - ``xengine_yaml`` (dict) -- parsed X-engine metadata (from xengine_metadata_yaml_string).
     - ``dedispersion_config_yaml`` (dict) -- parsed dedispersion config.
     - ``dedispersion_plan_yaml`` (dict) -- parsed dedispersion plan.
-    - ``dm_per_unit_delay`` (float) -- DM of a full-band delay of one input time sample.
     - ``steady_state_it0`` (list of cupy int arrays, one per tree). A dedispersion
       output array element (ichunk, beam, itree, idm, it) is "steady-state", i.e.
       unaffected by initial zero-padding, if:
@@ -128,9 +127,9 @@ class FrbGrouperInjections:
             self._exit_stack.enter_context(ThreadAffinity(vcpu_list))
             self._exit_stack.enter_context(cp.cuda.Device(self.cuda_device_id))
 
-            # Precompute the (host/numpy) per-tree lookup tables used by create_events(),
-            # once, rather than on every create_events() call.
-            self._precompute_event_tables()
+            # Precompute (once) the lookup tables derived from the handshake metadata,
+            # used by create_events() and steady_state_mask().
+            self._precompute_derived_tables()
         except BaseException:
             # Mirror __exit__: ensure close() runs even if the ExitStack unwind raises.
             try:
@@ -218,22 +217,22 @@ class FrbGrouperInjections:
             cp.cuda.get_current_stream().synchronize()
             self._release_output(seq_id)
 
-    def _precompute_event_tables(self):
-        """Precompute the small lookup tables used by create_events().
+    def _precompute_derived_tables(self):
+        """Precompute the small lookup tables derived from the handshake metadata,
+        used by create_events() and steady_state_mask().
 
         Called once from __enter__ (after the handshake). All quantities come from the
         pybind-wrapped handshake objects (dedispersion_config, xengine_metadata) or are
         computed in C++ (_compute_steady_state_it0) -- nothing is re-derived in python.
         Sets the members used by create_events():
 
-          - dm_per_unit_delay: a full-band delay of 'd' input samples is DM =
-            d * dm_per_unit_delay (= DedispersionConfig.dm_per_unit_delay()).
           - _seq_per_sample: fpga counts per input time sample.
           - _time_sample_ms: input time sample length (converts decoded widths to ms).
           - _beam_id_lut: global beam index -> X-engine beam id (numpy array).
 
-        Also sets the per-tree steady-state boundary (steady_state_it0, documented
-        in the class docstring).
+        and the members used by steady_state_mask() (the per-tree steady-state
+        boundary steady_state_it0 and the chunk-level threshold full_steady_ichunk,
+        both documented in the class docstring).
 
         The tables are small numpy (host) arrays / scalars -- create_events() indexes
         them on the CPU, since for the tiny event arrays a GPU kernel launch would
@@ -245,7 +244,6 @@ class FrbGrouperInjections:
         cfg = self.dedispersion_config
         xmd = self.xengine_metadata
 
-        self.dm_per_unit_delay = cfg.dm_per_unit_delay()
         self._time_sample_ms   = float(cfg.time_sample_ms)
         self._beam_id_lut      = np.asarray(xmd.beam_ids, dtype=np.int64)
         self._seq_per_sample   = int(xmd.seq_per_frb_time_sample)
