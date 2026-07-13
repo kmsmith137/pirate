@@ -23,33 +23,27 @@ class GrouperHistogram:
 
     Constructor args:
 
-      - stem: output filename stem; write() pickles to '<stem>.pkl'. Must not
-        contain a '.' (guards against accidentally passing a full filename;
-        callers with multiple groupers append a per-grouper index to the stem,
-        see 'pirate_frb run_toy_grouper --histogram').
       - lo, hi, bin_width: nominal histogram range and bin width. The outermost
         bin edges are widened to +-1e6, so the first/last bins act as catch-alls
         for out-of-range values (every accumulated value lands in some bin).
 
-    The pickled payload is dict(histogram=..., max_histogram=..., histogram_bins=...),
+    write(filename) pickles dict(histogram=..., max_histogram=..., histogram_bins=...),
     all numpy arrays (lengths nbins, nbins and nbins+1), where 'histogram_bins'
     contains the shared bin edges (including the widened outermost edges).
     """
 
-    def __init__(self, stem, lo=-10.0, hi=100.0, bin_width=0.1):
-        if '.' in stem:
-            raise ValueError(f"GrouperHistogram: stem {stem!r} contains a '.' -- expected a "
-                             f"filename stem, not a full filename (the '.pkl' suffix is "
-                             f"appended automatically)")
+    def __init__(self, lo=-10.0, hi=100.0, bin_width=0.1):
         if not (lo < hi) or not (bin_width > 0):
             raise ValueError(f"GrouperHistogram: expected lo < hi and bin_width > 0, "
                              f"got (lo, hi, bin_width) = ({lo}, {hi}, {bin_width})")
 
-        self.stem = stem
-        self.filename = stem + '.pkl'
         self.lo = float(lo)
         self.hi = float(hi)
         self.nbins = int((self.hi - self.lo) / bin_width)
+
+        # True for objects built by from_file(): arrays are host (numpy), and
+        # add_tree() is disallowed (there is no GPU accumulation state).
+        self._cpu_only = False
 
         # GPU arrays, allocated lazily on the first add_tree() call -- this keeps the
         # constructor cheap and device-agnostic (the arrays land on whatever CUDA
@@ -84,6 +78,10 @@ class GrouperHistogram:
         only values where the mask is True are accumulated -- e.g. pass
         FrbGrouper.steady_state_mask(itree, ichunk) to exclude warmup values.
         """
+        if self._cpu_only:
+            raise RuntimeError("GrouperHistogram.add_tree: object was loaded from a file "
+                               "(CPU-only, no GPU accumulation state); add_tree() is not "
+                               "supported -- construct a fresh GrouperHistogram to accumulate")
         import cupy as cp
 
         if self._histogram is None:
@@ -118,13 +116,18 @@ class GrouperHistogram:
 
     def _flush_group(self):
         """Commit the pending per-beam maxes (one sample per beam) to max_histogram."""
-        import cupy as cp
         if self._group_max is not None:
+            import cupy as cp   # only reachable with GPU accumulation state (never CPU-only)
             h, _ = cp.histogram(self._group_max, bins=self._bins)
             self._max_histogram += h
             self._group_max = None
         self._group_open = False
         self._last_itree = -1
+
+    @staticmethod
+    def _to_host(a):
+        """Return 'a' as a numpy array, whether it is a cupy array (GPU) or already numpy."""
+        return a.get() if hasattr(a, 'get') else np.asarray(a)
 
     def to_dict(self):
         """Return dict(histogram=..., max_histogram=..., histogram_bins=...) as host
@@ -136,9 +139,9 @@ class GrouperHistogram:
         self._flush_group()
 
         if self._histogram is not None:
-            return dict(histogram = self._histogram.get(),
-                        max_histogram = self._max_histogram.get(),
-                        histogram_bins = self._bins.get())
+            return dict(histogram = self._to_host(self._histogram),
+                        max_histogram = self._to_host(self._max_histogram),
+                        histogram_bins = self._to_host(self._bins))
 
         # add_tree() never ran (e.g. the producer disconnected during the handshake):
         # return all-zero histograms, so write() still produces a valid file.
@@ -148,13 +151,71 @@ class GrouperHistogram:
                     max_histogram = np.zeros(self.nbins, dtype=int),
                     histogram_bins = bins)
 
-    def write(self):
-        """Pickle to_dict() to '<stem>.pkl' (see class docstring for the payload)."""
+    def write(self, filename):
+        """Pickle to_dict() to 'filename' (see class docstring for the payload)."""
         import pickle
-        print(f'GrouperHistogram: writing {self.filename}', flush=True)
-        with open(self.filename, 'wb') as f:
+        print(f'GrouperHistogram: writing {filename}', flush=True)
+        with open(filename, 'wb') as f:
             pickle.dump(self.to_dict(), f)
 
+    @staticmethod
+    def from_file(filename):
+        """Load a pickle written by write() and return a CPU-only GrouperHistogram: the
+        histograms/bins are held as host (numpy) arrays (no GPU, no cupy needed), and
+        add_tree() raises. Use to_dict()/plot() to inspect the loaded histograms."""
+        import pickle
+        with open(filename, 'rb') as f:
+            d = pickle.load(f)
+
+        self = GrouperHistogram()
+        self._cpu_only = True
+        self._histogram = np.asarray(d['histogram'])
+        self._max_histogram = np.asarray(d['max_histogram'])
+        self._bins = np.asarray(d['histogram_bins'])
+        self.nbins = len(self._bins) - 1
+        return self
+
+    def plot(self, filename):
+        """Write a two-panel PDF to 'filename': the 'histogram' (all steady-state
+        out_max values) in the top panel and 'max_histogram' (per-(beam, chunk)
+        maxes) in the bottom. Counts are on a log scale; x-limits are taken from the
+        populated (nonzero-count) bins."""
+        import matplotlib
+        matplotlib.use('Agg')   # headless (writing a file, no display)
+        import matplotlib.pyplot as plt
+
+        d = self.to_dict()
+
+        # Bin edges: the outermost edges are the +-1e6 catch-alls (see class docstring).
+        # Replace them with one more interior-width step so those bins render at the
+        # edge instead of blowing the x-axis out to +-1e6.
+        edges = d['histogram_bins'].astype(float).copy()
+        w = edges[2] - edges[1]        # uniform interior bin width
+        edges[0], edges[-1] = edges[1] - w, edges[-2] + w
+        centers = 0.5 * (edges[:-1] + edges[1:])
+
+        panels = [('All out_max values (steady-state)', d['histogram']),
+                  ('Per-(beam, chunk) max', d['max_histogram'])]
+
+        fig, axes = plt.subplots(2, 1, figsize=(8, 8))
+        for ax, (title, counts) in zip(axes, panels):
+            nz = counts > 0                       # log scale: skip empty bins
+            ax.bar(centers[nz], counts[nz], width=w)
+            ax.set_yscale('log')
+            if nz.any():
+                lo = edges[np.argmax(nz)]
+                hi = edges[len(nz) - np.argmax(nz[::-1])]
+                ax.set_xlim(lo, hi)
+            ax.set_title(title)
+            ax.set_xlabel('SNR')
+            ax.set_ylabel('counts')
+
+        fig.tight_layout()
+        print(f'GrouperHistogram: writing {filename}', flush=True)
+        fig.savefig(filename)
+        plt.close(fig)
+
     def __repr__(self):
-        state = 'empty' if (self._histogram is None) else 'accumulating'
-        return f'GrouperHistogram(stem={self.stem!r}, nbins={self.nbins}, {state})'
+        state = 'cpu-only' if self._cpu_only else \
+                ('empty' if (self._histogram is None) else 'accumulating')
+        return f'GrouperHistogram(nbins={self.nbins}, {state})'

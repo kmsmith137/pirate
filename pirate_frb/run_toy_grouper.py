@@ -163,11 +163,19 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
     from .rpc import FrbGrouper, FrbSifterClient
     from .utils import GrouperHistogram
 
-    # Constructed up front (before connecting to anything): the GrouperHistogram
-    # constructor validates the stem, so a bad stem fails fast. GPU allocation is
-    # lazy (first add_tree), so construction outside the grouper's device context
-    # is fine.
-    histogram = GrouperHistogram(histogram_stem) if (histogram_stem is not None) else None
+    # Construct the histogram up front (before connecting to anything). The stem
+    # must not contain a '.' (guards against passing a full filename; the '.pkl'
+    # suffix is appended in the finally below, and the CLI prepends a per-grouper
+    # index for multiple groupers) -- validate it here so a bad stem fails fast.
+    # GrouperHistogram allocates its GPU arrays lazily (first add_tree), so
+    # constructing it outside the grouper's device context is fine.
+    histogram = None
+    if histogram_stem is not None:
+        if '.' in histogram_stem:
+            raise ValueError(f"run_toy_grouper: histogram_stem {histogram_stem!r} contains a "
+                             f"'.' -- expected a filename stem, not a full filename (the "
+                             f"'.pkl' suffix is appended automatically)")
+        histogram = GrouperHistogram()
 
     # Construct the sifter client (opens a gRPC channel; the RPCs themselves are
     # issued in _run_toy_grouper, which has the grouper metadata). It's used as a
@@ -194,5 +202,5 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
                 raise
         finally:
             if histogram is not None:
-                histogram.write()
+                histogram.write(histogram_stem + '.pkl')
         # FrbGrouper.__exit__ restores affinity/device + closes on every path.
