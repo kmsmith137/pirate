@@ -96,9 +96,12 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
                     beam_tok = flat_arg[cp.arange(bpb), beam_arg]
 
                     if histogram is not None:
-                        # SNR histogram, steady-state values only: warmup elements are
-                        # partial sums (artificially low), and would contaminate it.
-                        histogram.add_tree(tree_out, mask=grouper.steady_state_mask(itree, ichunk))
+                        # SNR histograms, steady-state values only: warmup elements are
+                        # partial sums (artificially low), and would contaminate them.
+                        # 'itree' feeds the per-(beam, chunk) max histogram (itree=0
+                        # starts a new group -- i.e. this batch's beams, this chunk).
+                        histogram.add_tree(tree_out, itree,
+                                           mask=grouper.steady_state_mask(itree, ichunk))
 
                     sl = slice(beam0, beam0 + bpb)
                     upd = beam_max > per_beam_max[sl]
@@ -149,12 +152,12 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
     'delay' (seconds) inserts an artificial per-chunk slowdown into the loop.
     'snr_threshold' (default 10) is the per-beam event threshold; see
     _run_toy_grouper.
-    'histogram_stem' is a filename stem (or None): on termination, pickle a
-    histogram of the steady-state out_max SNR values (accumulated over all
-    trees/beams/chunks via pirate_frb.utils.GrouperHistogram; warmup values are
-    masked out) to '<histogram_stem>.pkl'. Must not contain a '.' (guards against
-    passing a full filename). (The CLI gives each grouper subprocess a distinct
-    stem, so multi-grouper filenames don't collide.)
+    'histogram_stem' is a filename stem (or None): on termination, pickle histograms
+    of the steady-state out_max SNR values (all values, plus one-sample-per-(beam,
+    chunk) maxes; warmup values are masked out -- see
+    pirate_frb.utils.GrouperHistogram) to '<histogram_stem>.pkl'. Must not contain
+    a '.' (guards against passing a full filename). (The CLI gives each grouper
+    subprocess a distinct stem, so multi-grouper filenames don't collide.)
     """
     # Imported here (not at module top) so 'import pirate_frb' stays light.
     from .rpc import FrbGrouper, FrbSifterClient
