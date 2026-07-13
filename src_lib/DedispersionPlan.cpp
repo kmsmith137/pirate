@@ -537,8 +537,8 @@ void DedispersionPlan::decode_argmax(
 // See DedispersionPlan.hpp for details of input/output params.
 void DedispersionPlan::decode_argmax2(
     long itree, long fmin, long fmax, long tlo, long thi, long p,
-    float &freq_lo_MHz, float &freq_hi_MHz, float &dm,
-    float &timestamp_samp, float &width_samp) const
+    double &freq_lo_MHz, double &freq_hi_MHz, double &dm,
+    double &timestamp_samp, double &width_samp) const
 {
     xassert_ge(itree, 0);
     xassert_lt(itree, this->ntrees);
@@ -554,7 +554,7 @@ void DedispersionPlan::decode_argmax2(
     xassert_lt(p, trees.at(itree).nprofiles);
 
     // dispersion delay (in samples) per tree-freq
-    float dslope = float(thi-tlo) / float(fmax-fmin);
+    double dslope = double(thi-tlo) / double(fmax-fmin);
 
     // The next block of code computes (based on peak-finding kernel index 0 <= p < P):
     //
@@ -565,27 +565,27 @@ void DedispersionPlan::decode_argmax2(
     
     long pdiv = p / 3;
     long pmod = p - 3*pdiv;
-    float pf_width, pf_shift;
+    double pf_width, pf_shift;
 
     if (p == 0) {
         // Boxcar of width 2^ipri.
-        pf_width = 1.0f * (1 << ipri);
-        pf_shift = 0.5f * (1 << ipri);
+        pf_width = 1.0 * (1 << ipri);
+        pf_shift = 0.5 * (1 << ipri);
     }
     else if (pmod == 1) {
         // Boxcar of width 2^{ipri+pdiv+1}
-        pf_width = 1.0f * (1 << (ipri+pdiv+1));
-        pf_shift = 0.5f * (1 << (ipri+pdiv+1));
+        pf_width = 1.0 * (1 << (ipri+pdiv+1));
+        pf_shift = 0.5 * (1 << (ipri+pdiv+1));
     }
     else if (pmod == 2) {
         // kernel = [0.5,1,0.5] upsampled by 2^{ipri+pdiv}.
-        pf_width = 2.0f * (1 << (ipri+pdiv));    // let's say pre-upsampled kernel has nomimal width 2
-        pf_shift = 1.5f * (1 << (ipri+pdiv));    // pre-upsampled kernel has pshift 1.5 (unambiguous)
+        pf_width = 2.0 * (1 << (ipri+pdiv));    // let's say pre-upsampled kernel has nomimal width 2
+        pf_shift = 1.5 * (1 << (ipri+pdiv));    // pre-upsampled kernel has pshift 1.5 (unambiguous)
     }
     else {
         // kernel = [0.5,1,1,0.5] upsamled by 2^(ipri+pdiv-1)
-        pf_width = 3.0f * (1 << (ipri+pdiv-1));   // let's say "base" kernel has nominal width 3
-        pf_shift = 2.0f * (1 << (ipri+pdiv-1));   // pre-upsampled kernel has pshift 2.0 (unambiguous)
+        pf_width = 3.0 * (1 << (ipri+pdiv-1));   // let's say "base" kernel has nominal width 3
+        pf_shift = 2.0 * (1 << (ipri+pdiv-1));   // pre-upsampled kernel has pshift 2.0 (unambiguous)
     }
 
     // Now we're ready to compute output params.

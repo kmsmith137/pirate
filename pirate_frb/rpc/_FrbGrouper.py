@@ -405,21 +405,21 @@ class FrbGrouperInjections:
                 itree_h, fmins, fmaxs, tlos, this_, ps)
 
             beam_ids = self._beam_id_lut[ibeam_h]
-            widths_ms = widths_samp * np.float32(self._time_sample_ms)
+            widths_ms = widths_samp * self._time_sample_ms
 
             # Per-event absolute timestamp = chunk start + chunk-relative offset (decoded
             # arrival time in input samples * fpga-counts-per-sample), rounded to the
             # nearest integer fpga count. Timestamps may fall before or after the chunk
             # window (high-DM events reach into earlier chunks; early triggers
             # extrapolate into the future); negative ABSOLUTE timestamps are clamped.
-            offset = np.rint(ts_samp.astype(np.float64) * self._seq_per_sample).astype(np.int64)
+            offset = np.rint(ts_samp * self._seq_per_sample).astype(np.int64)
             fpga_timestamps = np.maximum(chunk_fpga_start + offset, 0)
         else:
             # Zero events: the batch decoders require nonempty arrays, so build the
             # (empty) per-event arrays directly. (FrbSifterEvents casts dtypes.)
             beam_ids = np.zeros(0, dtype=np.int64)
             fpga_timestamps = np.zeros(0, dtype=np.int64)
-            dms = freqs_lo = freqs_hi = widths_ms = np.zeros(0, dtype=np.float32)
+            dms = freqs_lo = freqs_hi = widths_ms = np.zeros(0, dtype=np.float64)
 
         # FrbSifterEvents casts dtypes and validates shapes. rfi_prob is the one remaining
         # placeholder (the grouper doesn't measure it).
@@ -428,7 +428,7 @@ class FrbGrouperInjections:
             fpga_timestamps = fpga_timestamps,
             dms = dms,
             snrs = snr_h,
-            rfi_probs = np.zeros(snr_h.shape, dtype=np.float32),
+            rfi_probs = np.zeros(snr_h.shape, dtype=np.float64),
             widths_ms = widths_ms,
             subband_freqs_lo_MHz = freqs_lo,
             subband_freqs_hi_MHz = freqs_hi,

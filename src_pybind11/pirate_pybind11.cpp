@@ -371,7 +371,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("tlos"), py::arg("this"), py::arg("ps"),
                "Vectorized decode_argmax2(): converts decode_argmax_batch() outputs to\n"
                "physical params. Returns (freqs_lo_MHz, freqs_hi_MHz, dms, timestamps_samp,\n"
-               "widths_samp), each a float32 array. Timestamps are CHUNK-RELATIVE toplevel\n"
+               "widths_samp), each a float64 array. Timestamps are CHUNK-RELATIVE toplevel\n"
                "sample counts (extrapolated to the full-band lowest frequency); the caller\n"
                "converts to absolute FPGA counts.")
     ;

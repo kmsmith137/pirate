@@ -20,12 +20,12 @@ class FrbSifterEvents:
     
     - ``beam_ids`` (int32) -- X-engine beam id of each event
     - ``fpga_timestamps`` (int64) -- absolute FPGA-counter timestamp of each event
-    - ``dms`` (float32) -- dispersion measure
-    - ``snrs`` (float32) -- signal-to-noise ratio
-    - ``rfi_probs`` (float32) -- RFI probability
-    - ``widths_ms`` (float32) -- intrinsic pulse width in milliseconds
-    - ``subband_freqs_lo_MHz`` (float32) -- low edge of the event's frequency subband (MHz)
-    - ``subband_freqs_hi_MHz`` (float32) -- high edge of the event's frequency subband (MHz)
+    - ``dms`` (float64) -- dispersion measure
+    - ``snrs`` (float64) -- signal-to-noise ratio
+    - ``rfi_probs`` (float64) -- RFI probability
+    - ``widths_ms`` (float64) -- intrinsic pulse width in milliseconds
+    - ``subband_freqs_lo_MHz`` (float64) -- low edge of the event's frequency subband (MHz)
+    - ``subband_freqs_hi_MHz`` (float64) -- high edge of the event's frequency subband (MHz)
 
     Other attributes:
 
@@ -38,12 +38,12 @@ class FrbSifterEvents:
     _FIELDS = (
         ("beam_ids",             "beam_id",             np.int32),
         ("fpga_timestamps",      "fpga_timestamp",      np.int64),
-        ("dms",                  "dm",                  np.float32),
-        ("snrs",                 "snr",                 np.float32),
-        ("rfi_probs",            "rfi_prob",            np.float32),
-        ("widths_ms",            "width_ms",            np.float32),
-        ("subband_freqs_lo_MHz", "subband_freq_lo_MHz", np.float32),
-        ("subband_freqs_hi_MHz", "subband_freq_hi_MHz", np.float32),
+        ("dms",                  "dm",                  np.float64),
+        ("snrs",                 "snr",                 np.float64),
+        ("rfi_probs",            "rfi_prob",            np.float64),
+        ("widths_ms",            "width_ms",            np.float64),
+        ("subband_freqs_lo_MHz", "subband_freq_lo_MHz", np.float64),
+        ("subband_freqs_hi_MHz", "subband_freq_hi_MHz", np.float64),
     )
 
     @staticmethod
@@ -249,7 +249,7 @@ class FrbSifterClient:
             Per-beam coarse-grained max SNR over the same FPGA window, as a 1-d numpy
             or cupy array (or any 1-d iterable). A cupy array is copied to the host in
             a single shot via ``.get()`` (cupy raises on implicit ``np.asarray()``),
-            then cast to float32.
+            then cast to float64.
         from_simulator : bool, optional
             False (default) for events produced by the real search pipeline; True for
             the parallel "ideal" events the fake X-engine emits when simulating pulses
@@ -263,7 +263,7 @@ class FrbSifterClient:
         ------
         RuntimeError
             Synchronously, for malformed input (a bad 'events' type, or a
-            coarsegrain_snr that can't be converted to a 1-d float32 array); with
+            coarsegrain_snr that can't be converted to a 1-d float64 array); with
             timeout=0, also on a transport error or not-ok reply. With
             raise_exception_on_timeout=True, a previous async send that timed out is
             re-raised here (deferred from its background callback thread).
@@ -275,7 +275,7 @@ class FrbSifterClient:
             raise RuntimeError(f"FrbSifterClient.send_events: 'events' must be a "
                                f"FrbSifterEvents, got {type(events).__name__}")
 
-        cg_snr = self._to_1d("coarsegrain_snr", coarsegrain_snr, np.float32)
+        cg_snr = self._to_1d("coarsegrain_snr", coarsegrain_snr, np.float64)
 
         request = frb_sifter_pb2.FrbEventsMessage(
             from_simulator = from_simulator,

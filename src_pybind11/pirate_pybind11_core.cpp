@@ -115,11 +115,11 @@ py::tuple _decode_argmax2_batch(
     _check_batch_arg(fname, "this", this_, n);
     _check_batch_arg(fname, "ps", ps, n);
 
-    Array<float> freqs_lo({n}, af_uhost);
-    Array<float> freqs_hi({n}, af_uhost);
-    Array<float> dms({n}, af_uhost);
-    Array<float> timestamps({n}, af_uhost);
-    Array<float> widths({n}, af_uhost);
+    Array<double> freqs_lo({n}, af_uhost);
+    Array<double> freqs_hi({n}, af_uhost);
+    Array<double> dms({n}, af_uhost);
+    Array<double> timestamps({n}, af_uhost);
+    Array<double> widths({n}, af_uhost);
 
     for (long i = 0; i < n; i++)
         plan.decode_argmax2(itrees.data[i], fmins.data[i], fmaxs.data[i],
@@ -1616,7 +1616,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("tlos"), py::arg("this"), py::arg("ps"),
                "Vectorized decode_argmax2(): converts decode_argmax_batch() outputs to\n"
                "physical params. Returns (freqs_lo_MHz, freqs_hi_MHz, dms, timestamps_samp,\n"
-               "widths_samp), each a float32 array. Timestamps are CHUNK-RELATIVE toplevel\n"
+               "widths_samp), each a float64 array. Timestamps are CHUNK-RELATIVE toplevel\n"
                "sample counts (extrapolated to the full-band lowest frequency); the caller\n"
                "converts to absolute FPGA counts. Valid only after the handshake.")
           // Member docstrings are intentionally omitted here: each member is documented

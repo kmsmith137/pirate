@@ -120,8 +120,8 @@ struct DedispersionPlan
     
     void decode_argmax2(
         long itree, long fmin, long fmax, long tlo, long thi, long p,
-        float &freq_lo_MHz, float &freq_hi_MHz, float &dm,
-        float &timestamp_samp, float &width_samp) const;
+        double &freq_lo_MHz, double &freq_hi_MHz, double &dm,
+        double &timestamp_samp, double &width_samp) const;
 
 
     // An "incomplete" DedispersionPlan does not initialize any of the "low-level data needed
