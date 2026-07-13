@@ -30,7 +30,15 @@ class GrouperHistogram:
     write(filename) pickles dict(histogram=..., max_histogram=..., histogram_bins=...),
     all numpy arrays (lengths nbins, nbins and nbins+1), where 'histogram_bins'
     contains the shared bin edges (including the widened outermost edges).
+
+    analyze() fits each histogram's tail to a 'max of N i.i.d. standard Gaussians'
+    model and stores the best-fit N in self.fit_N; plot() then overlays the model.
     """
+
+    # analyze() fit region (SNR): everything below _FIT_LO is one aggregated bin and
+    # everything above _FIT_HI is another, with the fine bins between them resolved.
+    _FIT_LO = 3.0
+    _FIT_HI = 10.0
 
     def __init__(self, lo=-10.0, hi=100.0, bin_width=0.1):
         if not (lo < hi) or not (bin_width > 0):
@@ -40,6 +48,10 @@ class GrouperHistogram:
         self.lo = float(lo)
         self.hi = float(hi)
         self.nbins = int((self.hi - self.lo) / bin_width)
+
+        # Best-fit max-of-N-Gaussian N for each histogram, set by analyze() (a dict
+        # keyed by 'histogram' / 'max_histogram'). None until analyze() runs.
+        self.fit_N = None
 
         # True for objects built by from_file(): arrays are host (numpy), and
         # add_tree() is disallowed (there is no GPU accumulation state).
@@ -175,11 +187,73 @@ class GrouperHistogram:
         self.nbins = len(self._bins) - 1
         return self
 
+    @staticmethod
+    def _max_of_n_bin_probs(logN, edges):
+        """Per-bin probabilities of the 'max of N i.i.d. standard Gaussians' model
+        (CDF F(x) = Phi(x)**N) over the consecutive 'edges' (which may include
+        +-inf), computed from the exact edges. Uses log(N) as the argument and is
+        numerically stable for large N: with L = log Phi,
+
+            Phi(b)**N - Phi(a)**N = exp(N*L_b) * (1 - exp(N*(L_a - L_b)))
+
+        and the 1 - exp(...) factor is evaluated with expm1 (no cancellation, and
+        exact at the +-inf edges, where L = -inf / 0)."""
+        from scipy.special import log_ndtr
+        N = np.exp(logN)
+        L = log_ndtr(np.asarray(edges, dtype=float))   # log Phi at each edge
+        La, Lb = L[:-1], L[1:]
+        return np.exp(N * Lb) * (-np.expm1(N * (La - Lb)))
+
+    @classmethod
+    def _make_fit_bins(cls, counts, edges):
+        """Aggregate the fine histogram (counts over edges) into the analyze() fit
+        bins: [-inf, ~_FIT_LO), the fine bins between ~_FIT_LO and ~_FIT_HI, and
+        [~_FIT_HI, +inf). The _FIT_LO/_FIT_HI boundaries snap to the nearest actual
+        bin edge (so counts and model probabilities use identical boundaries), and
+        the outer aggregated bins use +-inf -- so their model probabilities are
+        exactly Phi(_FIT_LO)**N and 1 - Phi(_FIT_HI)**N."""
+        i_lo = int(np.argmin(np.abs(edges - cls._FIT_LO)))
+        i_hi = int(np.argmin(np.abs(edges - cls._FIT_HI)))
+        fit_edges = np.concatenate(([-np.inf], edges[i_lo:i_hi + 1], [np.inf]))
+        fit_counts = np.concatenate(([counts[:i_lo].sum()],
+                                     counts[i_lo:i_hi],
+                                     [counts[i_hi:].sum()]))
+        return fit_counts, fit_edges
+
+    def analyze(self):
+        """Fit the tail of each histogram to a 'max of N i.i.d. standard Gaussians'
+        model (CDF Phi(x)**N, with N real and >= 1) and store the best-fit N in the
+        self.fit_N dict (keys 'histogram', 'max_histogram'); returns that dict.
+        plot() then overlays the fitted model.
+
+        The fit is a binned maximum-likelihood (multinomial) fit over the exact
+        histogram bin edges: everything below SNR=_FIT_LO is lumped into one bin and
+        everything above SNR=_FIT_HI into another, with the fine bins between them
+        resolved -- so the fit is driven by the tail shape while conserving total
+        probability. The optimization variable is log(N)."""
+        from scipy.optimize import minimize_scalar
+        d = self.to_dict()
+        edges = d['histogram_bins'].astype(float)
+
+        self.fit_N = {}
+        for name in ('histogram', 'max_histogram'):
+            fit_counts, fit_edges = self._make_fit_bins(d[name].astype(float), edges)
+
+            def nll(logN):
+                p = self._max_of_n_bin_probs(logN, fit_edges)
+                return -np.sum(fit_counts * np.log(np.clip(p, 1e-300, None)))
+
+            res = minimize_scalar(nll, bounds=(0.0, np.log(1e13)), method='bounded')
+            self.fit_N[name] = float(np.exp(res.x))
+
+        return self.fit_N
+
     def plot(self, filename):
         """Write a two-panel PDF to 'filename': the 'histogram' (all steady-state
         out_max values) in the top panel and 'max_histogram' (per-(beam, chunk)
         maxes) in the bottom. Counts are on a log scale; x-limits are taken from the
-        populated (nonzero-count) bins."""
+        populated (nonzero-count) bins. If analyze() has been called, each panel also
+        shows the best-fit max-of-N-Gaussian model as a dashed line (N in the legend)."""
         import matplotlib
         matplotlib.use('Agg')   # headless (writing a file, no display)
         import matplotlib.pyplot as plt
@@ -194,18 +268,34 @@ class GrouperHistogram:
         edges[0], edges[-1] = edges[1] - w, edges[-2] + w
         centers = 0.5 * (edges[:-1] + edges[1:])
 
-        panels = [('All out_max values (steady-state)', d['histogram']),
-                  ('Per-(beam, chunk) max', d['max_histogram'])]
+        panels = [('histogram',     'All out_max values (steady-state)'),
+                  ('max_histogram', 'Per-(beam, chunk) max')]
 
         fig, axes = plt.subplots(2, 1, figsize=(8, 8))
-        for ax, (title, counts) in zip(axes, panels):
+        for ax, (name, title) in zip(axes, panels):
+            counts = d[name]
             nz = counts > 0                       # log scale: skip empty bins
-            ax.bar(centers[nz], counts[nz], width=w)
+            ax.bar(centers[nz], counts[nz], width=w, label='data')
+
+            # Overlay the fitted max-of-N-Gaussian model (dashed), if analyze() ran.
+            # model[j] = (total counts) * P(value in fine bin j), from the exact edges.
+            if self.fit_N is not None:
+                N = self.fit_N[name]
+                model = counts.sum() * self._max_of_n_bin_probs(np.log(N), edges)
+                mm = model > 0
+                ax.plot(centers[mm], model[mm], 'k--', lw=1.5,
+                        label=f'max-of-N Gaussian fit (N = {N:.4g})')
+                ax.legend()
+
             ax.set_yscale('log')
             if nz.any():
                 lo = edges[np.argmax(nz)]
                 hi = edges[len(nz) - np.argmax(nz[::-1])]
                 ax.set_xlim(lo, hi)
+                # y-range from the data (counts >= 1); the model line falls off the
+                # bottom where it is << 1 (its values reach ~1e-300 at low SNR, which
+                # would otherwise flatten the whole plot onto the log axis).
+                ax.set_ylim(0.5, counts.max() * 3)
             ax.set_title(title)
             ax.set_xlabel('SNR')
             ax.set_ylabel('counts')
