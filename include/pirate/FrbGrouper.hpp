@@ -192,6 +192,13 @@ struct FrbGrouper : public std::enable_shared_from_this<FrbGrouper>
     // thread will emit CONSUMED(seq_id).
     void release_output(long seq_id);
 
+    // Forwards to GpuDedisperser::_compute_steady_state_it0() with the producer's
+    // (incomplete) plan from the handshake, so the steady-state logic is available on
+    // both the producer (GpuDedisperser) and consumer (grouper) sides. See
+    // GpuDedisperser::compute_steady_state_it0() for the meaning of the returned
+    // array. Valid only after the handshake.
+    ksgpu::Array<long> _compute_steady_state_it0(long itree) const;
+
     bool is_stopped_pub();   // lock-protected read, for Python polling
 
     // Noncopyable / nonmovable.

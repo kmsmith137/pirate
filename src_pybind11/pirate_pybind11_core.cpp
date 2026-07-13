@@ -1619,6 +1619,11 @@ void register_core_bindings(pybind11::module &m)
                "widths_samp), each a float64 array. Timestamps are CHUNK-RELATIVE toplevel\n"
                "sample counts (extrapolated to the full-band lowest frequency); the caller\n"
                "converts to absolute FPGA counts. Valid only after the handshake.")
+          .def("_compute_steady_state_it0", &FrbGrouper::_compute_steady_state_it0,
+               py::arg("itree"),
+               "Forwards GpuDedisperser.compute_steady_state_it0(), using the producer's\n"
+               "plan from the handshake (see the 'steady_state_it0' bullet in the FrbGrouper\n"
+               "class docstring). Valid only after the handshake.")
           // Member docstrings are intentionally omitted here: each member is documented
           // in the bullet list in the class docstring, which lives in the Python injector
           // (pirate_frb/rpc/_FrbGrouper.py). Kept as a plain list, not a napoleon

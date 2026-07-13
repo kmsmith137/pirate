@@ -706,6 +706,14 @@ void FrbGrouper::release_output(long seq_id)
 }
 
 
+// Forwards to the shared steady-state core (see FrbGrouper.hpp for rationale).
+Array<long> FrbGrouper::_compute_steady_state_it0(long itree) const
+{
+    xassert(incomplete_plan);   // populated at handshake
+    return GpuDedisperser::_compute_steady_state_it0(*incomplete_plan, itree);
+}
+
+
 // -------------------------------------------------------------------------------------------------
 //
 // stop() / close() / destructor / misc

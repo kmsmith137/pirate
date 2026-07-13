@@ -255,7 +255,6 @@ class FrbGrouperInjections:
         # (The geometry itself is no longer used by create_events -- which decodes
         # the out_argmax tokens instead -- but the cross-check is kept as a
         # one-time guard against code/tex/plan drift.)
-        ss_it0_l = []
         for i, tr in enumerate(trees):
             p, e = tr['primary_tree_index'], tr['early_trigger_level']
             T_ds, D_ds = tr['time_downsampling'], tr['dm_downsampling']
@@ -273,26 +272,12 @@ class FrbGrouperInjections:
                 if abs(got - exp) > 1e-9 * max(1.0, abs(exp)):
                     raise RuntimeError(f"FrbGrouper: tex-derived {label} = {got} disagrees with "
                                        f"the plan ({exp}) for tree {i}")
-            # Steady-state boundary: element (ichunk, idm, it) is unaffected by the
-            # zero-padding before the start of acquisition iff
-            #     n*T_ds >= d0 + (idm+1)*D_ds - 1 + 4*Wmax,    n = ichunk*nt_out + it
-            # in "tree" samples (= 2^p input samples; max_width has these units too).
-            # Here d0 = dlo/2^(e+p) is the tree's lowest internal delay, and DM
-            # bin idm covers internal delays [d0 + idm*D_ds, d0 + (idm+1)*D_ds): the
-            # dedispersion output at internal delay d and (trigger-freq) time tau
-            # references input samples [tau - d, tau], subband multiplets reference
-            # within that range, output time bin n starts at tree sample n*T_ds, and
-            # the causal peak-finding kernels reach back up to 2*Wmax - 1 more samples
-            # (padded to 4*Wmax). Solving for the smallest steady-state n (ceil
-            # division; exact for integer n) gives the per-idm array below.
-            Wmax = tr['max_width']
-            d0 = dlo // 2**(e + p)
-            dmax = d0 + (np.arange(ndm, dtype=np.int64) + 1) * D_ds - 1  # max internal delay in bin idm
-            ss_it0_l.append((dmax + 4*Wmax + T_ds - 1) // T_ds)
 
-        # Per-tree steady-state boundary (see the loop above + class docstring):
+        # Per-tree steady-state boundary (see class docstring), computed in C++:
+        # _compute_steady_state_it0() forwards the shared GpuDedisperser steady-state
+        # core, using the producer's plan from the handshake.
         # (ichunk*nt_out + it) >= steady_state_it0[itree][idm]  ==>  steady-state.
-        self.steady_state_it0 = ss_it0_l   # list of int64 arrays, shape (ndm_out,)
+        self.steady_state_it0 = [self._compute_steady_state_it0(i) for i in range(len(trees))]
 
         # Beam-id lookup table + timing scalars.
         self._beam_id_lut    = np.asarray(self.xengine_yaml['beam_ids'], dtype=np.int64)
