@@ -211,78 +211,39 @@ class FrbGrouperInjections:
             self._release_output(seq_id)
 
     def _precompute_event_tables(self):
-        """Precompute the per-tree lookup tables used by create_events().
+        """Precompute the small lookup tables used by create_events().
 
-        Called once from __enter__ (after the handshake yamls are parsed). Following
-        notes/tree_dedispersion.tex, section "Dedispersion output arrays", the
-        per-tree output geometry (ndm_out, nt_out, d_lo, d_hi) is computed from
-        (T_in, r_top, p, e, T_ds, D_ds) and cross-checked against the plan's
-        stored ndm_out/nt_out/dm_min/dm_max (a one-time guard against code/tex/plan
-        drift). Sets the members used by create_events():
+        Called once from __enter__ (after the handshake). All quantities come from the
+        pybind-wrapped handshake objects (dedispersion_config, xengine_metadata) or are
+        computed in C++ (_compute_steady_state_it0) -- nothing is re-derived in python.
+        Sets the members used by create_events():
 
           - dm_per_unit_delay: a full-band delay of 'd' input samples is DM =
-            d * dm_per_unit_delay (matches DedispersionConfig::dm_per_unit_delay).
-          - _nt_in, _seq_per_sample: T_in, and fpga counts per input time sample.
+            d * dm_per_unit_delay (= DedispersionConfig.dm_per_unit_delay()).
+          - _seq_per_sample: fpga counts per input time sample.
           - _time_sample_ms: input time sample length (converts decoded widths to ms).
           - _beam_id_lut: global beam index -> X-engine beam id (numpy array).
 
         Also sets the per-tree steady-state boundary (steady_state_it0, documented
         in the class docstring).
 
-        The tables are small numpy (host) arrays: create_events() indexes them on the
-        CPU, since for the tiny event arrays a GPU kernel launch would cost more than
-        the CPU compute.
+        The tables are small numpy (host) arrays / scalars: create_events() indexes
+        them on the CPU, since for the tiny event arrays a GPU kernel launch would
+        cost more than the CPU compute.
         """
-        plan  = self.dedispersion_plan_yaml
-        trees = plan['trees']
-        T_in  = plan['nt_in']                # input time samples per chunk (T_in)
-        r_top = plan['toplevel_tree_rank']   # toplevel tree rank           (r_top)
+        cfg = self.dedispersion_config
+        xmd = self.xengine_metadata
 
-        # DM per unit full-band delay, from constants::k_dm and the config's band
-        # edges + sample length:  delay_ms = k_dm * DM * (f_lo^{-2} - f_hi^{-2}),
-        # with delay_ms = d * time_sample_ms.
-        cfg   = self.dedispersion_config_yaml
-        edges = cfg['zone_freq_edges']
-        f_lo, f_hi = edges[0], edges[-1]
-        k_dm  = pirate_pybind11.constants.k_dm
-        self.dm_per_unit_delay = cfg['time_sample_ms'] / (k_dm * (1.0/f_lo**2 - 1.0/f_hi**2))
-
-        # Converts decoded per-event widths (in input time samples) to milliseconds.
-        self._time_sample_ms = float(cfg['time_sample_ms'])
-
-        # Per-tree geometry from (p, e, T_ds, D_ds) via the tex equations,
-        # cross-checked against the plan's stored ndm_out/nt_out/dm_min/dm_max.
-        # (The geometry itself is no longer used by create_events -- which decodes
-        # the out_argmax tokens instead -- but the cross-check is kept as a
-        # one-time guard against code/tex/plan drift.)
-        for i, tr in enumerate(trees):
-            p, e = tr['primary_tree_index'], tr['early_trigger_level']
-            T_ds, D_ds = tr['time_downsampling'], tr['dm_downsampling']
-            ndm = (2**(r_top - e) if p == 0 else 2**(r_top - e - 1)) // D_ds            # Eq.(ndm_out)
-            nt  = T_in // (2**p * T_ds)                                                 # Eq.(nt_out)
-            dlo = 0 if p == 0 else 2**(r_top + p - 1)                                   # Eq.(dlo_dhi)
-            dhi = 2**(r_top + p)                                                        # Eq.(dlo_dhi)
-            if (ndm != tr['ndm_out']) or (nt != tr['nt_out']):
-                raise RuntimeError(f"FrbGrouper: tex-derived (ndm_out, nt_out) = ({ndm}, {nt}) "
-                                   f"disagree with the plan ({tr['ndm_out']}, {tr['nt_out']}) "
-                                   f"for tree {i}")
-            # dm_min/dm_max are the DMs of full-band delays d_lo/d_hi.
-            for label, got, exp in (("dm_min", dlo * self.dm_per_unit_delay, tr['dm_min']),
-                                    ("dm_max", dhi * self.dm_per_unit_delay, tr['dm_max'])):
-                if abs(got - exp) > 1e-9 * max(1.0, abs(exp)):
-                    raise RuntimeError(f"FrbGrouper: tex-derived {label} = {got} disagrees with "
-                                       f"the plan ({exp}) for tree {i}")
+        self.dm_per_unit_delay = cfg.dm_per_unit_delay()
+        self._time_sample_ms   = float(cfg.time_sample_ms)
+        self._beam_id_lut      = np.asarray(xmd.beam_ids, dtype=np.int64)
+        self._seq_per_sample   = int(xmd.seq_per_frb_time_sample)
 
         # Per-tree steady-state boundary (see class docstring), computed in C++:
         # _compute_steady_state_it0() forwards the shared GpuDedisperser steady-state
         # core, using the producer's plan from the handshake.
         # (ichunk*nt_out + it) >= steady_state_it0[itree][idm]  ==>  steady-state.
-        self.steady_state_it0 = [self._compute_steady_state_it0(i) for i in range(len(trees))]
-
-        # Beam-id lookup table + timing scalars.
-        self._beam_id_lut    = np.asarray(self.xengine_yaml['beam_ids'], dtype=np.int64)
-        self._nt_in          = int(T_in)
-        self._seq_per_sample = int(self.xengine_yaml['seq_per_frb_time_sample'])
+        self.steady_state_it0 = [self._compute_steady_state_it0(i) for i in range(self.ntrees)]
 
     def create_events(self, ichunk, itrees, ibeams, idm, itime, snr, argmax):
         """Build a FrbSifterEvents from GPU arrays of (tree, beam, dm, time, token) data.
@@ -366,7 +327,7 @@ class FrbGrouperInjections:
         # to the producer's first output chunk); adding initial_chunk offsets it to FPGA
         # seq 0 (cf. GpuDedisperserOutputs.ichunk_fpga_based = ichunk_zero_based + initial_chunk).
         # fpga_per_chunk = nt_in input samples * fpga-counts-per-sample.
-        fpga_per_chunk = self._nt_in * self._seq_per_sample
+        fpga_per_chunk = self.nt_in * self._seq_per_sample
         chunk_fpga_start = (int(ichunk) + self.initial_chunk) * fpga_per_chunk
         chunk_fpga_end = chunk_fpga_start + fpga_per_chunk
 
