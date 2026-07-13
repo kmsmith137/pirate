@@ -1625,8 +1625,10 @@ def parse_run_toy_grouper(subparsers):
     parser.add_argument('-t', '--snr-threshold', type=float, default=10.0, metavar='SNR_THRESHOLD',
                         help="Emit one event per chunk per beam whose peak SNR exceeds this "
                              "threshold (default: 10).")
-    parser.add_argument('--histogram', metavar='FILE',
-                        help='Write a histogram of SNR values to the given filename upon termination')
+    parser.add_argument('--histogram', metavar='STEM',
+                        help="Write a histogram of SNR values to 'STEM.pkl' upon termination. "
+                             "With multiple groupers, the i-th grouper writes 'STEM<i>.pkl' "
+                             "(e.g. hist1.pkl, hist2.pkl, ...) so the filenames don't collide.")
     # Exactly one of -s/-S is required.
     sifter_group = parser.add_mutually_exclusive_group(required=True)
     sifter_group.add_argument('-s', '--sifter', metavar='SIFTER_ADDR',
@@ -1637,23 +1639,35 @@ def parse_run_toy_grouper(subparsers):
 
 def run_toy_grouper_command(args):
     from .run_toy_grouper import run_toy_grouper
+
+    # Fail fast (before launching anything): a '.' in the stem means the caller
+    # almost certainly passed a filename. (Checked here, not just in
+    # run_toy_grouper(), so a multi-grouper run errors once in the parent with
+    # the original stem, rather than once per child with an index-mangled one.)
+    if args.histogram and ('.' in args.histogram):
+        raise ValueError(f"run_toy_grouper: --histogram takes a filename STEM, got {args.histogram!r} "
+                         f"(contains a '.', looks like a full filename). The '.pkl' suffix is appended "
+                         f"automatically, with a per-grouper index if there are multiple groupers.")
     # A single grouper runs in this process (no subprocess indirection). With more
     # than one, launch each in its own child process (re-invoking this CLI with a
     # single address), and fail-fast: if any child exits, run_processes() stops the
     # rest. A fresh process (not fork) avoids CUDA-after-fork hazards.
     if len(args.grouper_addrs) == 1:
         run_toy_grouper(args.grouper_addrs[0], sifter_addr=args.sifter, delay=args.delay,
-                        snr_threshold=args.snr_threshold, histogram=args.histogram)
+                        snr_threshold=args.snr_threshold, histogram_stem=args.histogram)
         return
     from .utils import run_processes
     # Re-pass exactly one of the (mutually-exclusive, required) sifter flags.
     sifter_flag = ['--sifter', args.sifter] if (args.sifter is not None) else ['--no-sifter']
     base = [sys.executable, '-m', 'pirate_frb', 'run_toy_grouper', *sifter_flag,
             '--delay', str(args.delay), '--snr-threshold', str(args.snr_threshold)]
-    # FIXME - not sure this makes sense - multiple copies, same filename??
-    if args.histogram:
-        base.extend(['--histogram', args.histogram])
-    rc = run_processes([base + [addr] for addr in args.grouper_addrs])
+    # Each child gets a distinct histogram stem (STEM1, STEM2, ...), so the
+    # '<stem>.pkl' output filenames don't collide.
+    cmds = []
+    for i, addr in enumerate(args.grouper_addrs, start=1):
+        hist_flag = ['--histogram', f'{args.histogram}{i}'] if args.histogram else []
+        cmds.append(base + hist_flag + [addr])
+    rc = run_processes(cmds)
     if rc:
         sys.exit(rc)
 
