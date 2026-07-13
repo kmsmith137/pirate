@@ -23,7 +23,14 @@ trap cleanup EXIT
 echo "==> Building Sphinx docs (docs-clean for a fresh build; also builds notes/*.tex PDFs)..."
 # 'docs' depends on 'tex', so the notes PDFs are built and copied into the source
 # tree (conf.py) before Sphinx runs. 'docs-clean' first gives a from-scratch build.
-make -C "$REPO_ROOT" docs-clean docs
+# Run as two invocations, NOT 'make docs-clean docs': with -j the two independent
+# goals could run concurrently (clean racing the build), and a single invocation
+# also captures DOC_INPUTS (via $(shell find)) at parse time -- including the tex
+# PDF that docs-clean then deletes, leaving a stale prerequisite with no rule. A
+# separate second 'make' re-evaluates the file list after the clean. -j 32 speeds
+# up the underlying 'lib' compile that 'docs' pulls in.
+make -C "$REPO_ROOT" docs-clean
+make -C "$REPO_ROOT" -j 32 docs
 
 echo "==> Preparing gh-pages worktree..."
 git -C "$REPO_ROOT" worktree prune   # drop stale entries from a crashed earlier run
