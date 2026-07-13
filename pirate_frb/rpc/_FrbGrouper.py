@@ -223,9 +223,8 @@ class FrbGrouperInjections:
           - dm_per_unit_delay: a full-band delay of 'd' input samples is DM =
             d * dm_per_unit_delay (matches DedispersionConfig::dm_per_unit_delay).
           - _nt_in, _seq_per_sample: T_in, and fpga counts per input time sample.
+          - _time_sample_ms: input time sample length (converts decoded widths to ms).
           - _beam_id_lut: global beam index -> X-engine beam id (numpy array).
-          - _tree_{ndm_out,nt_out,d_lo,d_hi,et_level}: per-tree numpy arrays, indexed
-            by tree index.
 
         Also sets the per-tree steady-state boundary (steady_state_it0, documented
         in the class docstring).
@@ -248,16 +247,14 @@ class FrbGrouperInjections:
         k_dm  = pirate_pybind11.constants.k_dm
         self.dm_per_unit_delay = cfg['time_sample_ms'] / (k_dm * (1.0/f_lo**2 - 1.0/f_hi**2))
 
-        # Toy-grouper placeholders for the per-event width_ms / subband_freq_{lo,hi}_MHz fields
-        # (see create_events): the intrinsic width is set to one time sample, and the subband to
-        # the FULL band. A real grouper would instead recover these from the out_argmax arrays.
-        self._time_sample_ms   = float(cfg['time_sample_ms'])
-        self._band_freq_lo_MHz = float(f_lo)
-        self._band_freq_hi_MHz = float(f_hi)
+        # Converts decoded per-event widths (in input time samples) to milliseconds.
+        self._time_sample_ms = float(cfg['time_sample_ms'])
 
         # Per-tree geometry from (p, e, T_ds, D_ds) via the tex equations,
         # cross-checked against the plan's stored ndm_out/nt_out/dm_min/dm_max.
-        ndm_l, nt_l, dlo_l, dhi_l, et_level_l = [], [], [], [], []
+        # (The geometry itself is no longer used by create_events -- which decodes
+        # the out_argmax tokens instead -- but the cross-check is kept as a
+        # one-time guard against code/tex/plan drift.)
         ss_it0_l = []
         for i, tr in enumerate(trees):
             p, e = tr['primary_tree_index'], tr['early_trigger_level']
@@ -276,9 +273,6 @@ class FrbGrouperInjections:
                 if abs(got - exp) > 1e-9 * max(1.0, abs(exp)):
                     raise RuntimeError(f"FrbGrouper: tex-derived {label} = {got} disagrees with "
                                        f"the plan ({exp}) for tree {i}")
-            ndm_l.append(ndm); nt_l.append(nt); dlo_l.append(dlo); dhi_l.append(dhi)
-            et_level_l.append(e)
-
             # Steady-state boundary: element (ichunk, idm, it) is unaffected by the
             # zero-padding before the start of acquisition iff
             #     n*T_ds >= d0 + (idm+1)*D_ds - 1 + 4*Wmax,    n = ichunk*nt_out + it
@@ -300,38 +294,35 @@ class FrbGrouperInjections:
         # (ichunk*nt_out + it) >= steady_state_it0[itree][idm]  ==>  steady-state.
         self.steady_state_it0 = ss_it0_l   # list of int64 arrays, shape (ndm_out,)
 
-        # Per-tree lookup tables (numpy/host arrays), indexed by tree index.
-        self._tree_ndm_out = np.asarray(ndm_l,   dtype=np.float64)
-        self._tree_nt_out  = np.asarray(nt_l,    dtype=np.float64)
-        self._tree_d_lo    = np.asarray(dlo_l,   dtype=np.float64)
-        self._tree_d_hi    = np.asarray(dhi_l,   dtype=np.float64)
-        self._tree_et_level = np.asarray(et_level_l, dtype=np.float64)
-
         # Beam-id lookup table + timing scalars.
         self._beam_id_lut    = np.asarray(self.xengine_yaml['beam_ids'], dtype=np.int64)
         self._nt_in          = int(T_in)
         self._seq_per_sample = int(self.xengine_yaml['seq_per_frb_time_sample'])
 
-    def create_events(self, ichunk, itrees, ibeams, idm, itime, snr):
-        """Build a FrbSifterEvents from GPU arrays of (tree, beam, dm, time) indices.
+    def create_events(self, ichunk, itrees, ibeams, idm, itime, snr, argmax):
+        """Build a FrbSifterEvents from GPU arrays of (tree, beam, dm, time, token) data.
 
         The grouper finds peaks at index quadruples (itree, ibeam, idm, itime), and
         needs to translate these indices into physical quantities (DM, time, etc)
         before sending events to the sifter.
 
-        The create_events() method performs this translation, including subtleties
-        like early triggers (which mean that event arrival times can be in the future!)
-        For more info, see the grouper-specific parts of the sphinx docs, and/or
-        the tex notes.
+        The create_events() method performs this translation by decoding the
+        out_argmax tokens (via DedispersionPlan.decode_argmax / decode_argmax2, using
+        the producer's plan from the handshake): the per-event dm, arrival time,
+        intrinsic width, and frequency subband are the fine-grained "winning" trial
+        parameters, not coarse-pixel centers. This includes subtleties like early
+        triggers: arrival times are extrapolated to the lowest frequency of the full
+        band, so they can lie outside the chunk's time window (even in the future!).
+        For more info, see the grouper-specific parts of the sphinx docs, and/or the
+        tex notes.
 
-        Currently, when we assign dm/time value to each event, we ignore out_argmax
-        arrays, and use the center of each coarse dm/time pixel. I plan to improve
-        this in the future.
+        The per-event arrays (itrees, ibeams, idm, itime, snr, argmax) must all be
+        1-d cupy arrays of the same length -- one event per element. The 'argmax'
+        values are the out_argmax tokens of the selected peaks, which the caller must
+        gather (on the GPU) while the output arrays are valid, i.e. inside the
+        get_output() context manager. Indices and tokens are bounds-checked on the
+        host as a side effect of decoding.
 
-        The index arrays (itrees, ibeams, idm, itime, snr) must all be cupy arrays
-        with the same shape -- one event per element. Index values are assumed to be
-        in range; they are not bounds-checked, to avoid a device->host sync.
-        
         Parameters
         ----------
         ichunk : int
@@ -348,16 +339,22 @@ class FrbGrouperInjections:
             Per-event index along the selected tree's output time axis.
         snr : cupy.ndarray
             Per-event SNR.
+        argmax : cupy.ndarray
+            Per-event out_argmax token (uint32), gathered by the caller from
+            outputs.out_argmax[itree][ibeam - beam0, idm, itime] inside the
+            get_output() context manager.
 
         Returns
         -------
         FrbSifterEvents
             The events translated into physical units (beam id, absolute FPGA
-            timestamp, DM, SNR), ready to pass to FrbSifterClient.send_events(). Also
-            carries the chunk's absolute FPGA window (``chunk_fpga_start``,
-            ``chunk_fpga_end``). The per-event quantities not measured by the toy
-            grouper get placeholders: rfi_prob = 0, width_ms = one time sample, and
-            the subband = the full band (subband_freq_{lo,hi}_MHz).
+            timestamp, DM, SNR, width, frequency subband), ready to pass to
+            FrbSifterClient.send_events(). Also carries the chunk's absolute FPGA
+            window (``chunk_fpga_start``, ``chunk_fpga_end``). Per-event timestamps
+            may lie before or after that window (see above), but negative absolute
+            timestamps (possible in the earliest chunks, where events are warmup
+            artifacts anyway) are clamped to zero. rfi_prob is a placeholder (= 0,
+            not measured by the grouper).
         """
         import cupy as cp
 
@@ -367,34 +364,19 @@ class FrbGrouperInjections:
         if ichunk < 0:
             raise ValueError(f"FrbGrouper.create_events: ichunk must be >= 0 (got {ichunk})")
 
-        named = dict(itrees=itrees, ibeams=ibeams, idm=idm, itime=itime, snr=snr)
+        named = dict(itrees=itrees, ibeams=ibeams, idm=idm, itime=itime, snr=snr, argmax=argmax)
         for name, a in named.items():
             if not isinstance(a, cp.ndarray):
                 raise TypeError(f"FrbGrouper.create_events: {name!r} must be a cupy array, "
                                 f"got {type(a).__name__}")
+            if a.ndim != 1:
+                raise ValueError(f"FrbGrouper.create_events: {name!r} must be 1-d "
+                                 f"(one event per element), got shape {a.shape}")
         shapes = {name: a.shape for name, a in named.items()}
         if len(set(shapes.values())) != 1:
-            raise ValueError(f"FrbGrouper.create_events: itrees/ibeams/idm/itime/snr must all "
-                             f"have the same shape, got {shapes}")
+            raise ValueError(f"FrbGrouper.create_events: itrees/ibeams/idm/itime/snr/argmax "
+                             f"must all have the same shape, got {shapes}")
 
-        # Copy the (tiny) index arrays to the host in one stacked device->host copy,
-        # plus snr. All subsequent math is done on the CPU with numpy: these arrays
-        # are tiny, so a GPU kernel launch would cost more than the CPU compute.
-        itree_h, ibeam_h, idm_h, itime_h = cp.stack([itrees, ibeams, idm, itime]).get().astype(np.int64)
-        snr_h = snr.get()
-
-        # Index -> physical units (on the CPU), following the tex. The per-tree tables
-        # (_tree_*) and dm_per_unit_delay were precomputed in __enter__.
-        #   d  = full-band delay (input-sample units)        Eq.(idm_it)
-        #   t  = arrival time at the trigger frequency        Eq.(idm_it)
-        #   t' = arrival time at the lowest full-band freq    Eq.(idm_it_early)
-        d_lo, d_hi = self._tree_d_lo[itree_h], self._tree_d_hi[itree_h]
-        d  = d_lo + (d_hi - d_lo) * (idm_h + 0.5) / self._tree_ndm_out[itree_h]
-        t  = self._nt_in * (itime_h + 0.5) / self._tree_nt_out[itree_h]
-        t_full = t + (1.0 - 2.0**(-self._tree_et_level[itree_h])) * d
-
-        dms = d * self.dm_per_unit_delay
-        beam_ids = self._beam_id_lut[ibeam_h]
         # Absolute (FPGA-seq-0-based) timing of this chunk. 'ichunk' is zero-based (relative
         # to the producer's first output chunk); adding initial_chunk offsets it to FPGA
         # seq 0 (cf. GpuDedisperserOutputs.ichunk_fpga_based = ichunk_zero_based + initial_chunk).
@@ -402,23 +384,54 @@ class FrbGrouperInjections:
         fpga_per_chunk = self._nt_in * self._seq_per_sample
         chunk_fpga_start = (int(ichunk) + self.initial_chunk) * fpga_per_chunk
         chunk_fpga_end = chunk_fpga_start + fpga_per_chunk
-        # Per-event absolute timestamp = chunk start + within-chunk offset (t' in input
-        # samples * fpga-counts-per-sample), rounded to the nearest integer fpga count.
-        offset = np.rint(t_full * self._seq_per_sample).astype(np.int64)
-        fpga_timestamps = chunk_fpga_start + offset
 
-        # FrbSifterEvents casts dtypes and validates shapes. The toy grouper doesn't measure these
-        # per-event quantities, so they get placeholders: rfi_prob = 0, width_ms = one time sample,
-        # and the subband = the full band (see _precompute_event_tables).
+        snr_h = snr.get()
+        n = int(itrees.size)
+
+        if n > 0:
+            # Copy the (tiny) per-event arrays to the host in one stacked device->host
+            # copy, plus snr. All subsequent math is done on the CPU: these arrays are
+            # tiny, so a GPU kernel launch would cost more than the CPU compute.
+            itree_h, ibeam_h, idm_h, itime_h, tok_h = \
+                cp.stack([itrees, ibeams, idm, itime, argmax.astype(cp.int64)]).get().astype(np.int64)
+
+            # Decode the out_argmax tokens into the fine-grained "winning" trial params:
+            # frequency subband, DM (from the winning fine-grained delay slope), arrival
+            # timestamp (chunk-relative toplevel samples, extrapolated to the lowest
+            # full-band frequency), and peak-finder width (toplevel samples).
+            fmins, fmaxs, tlos, this_, ps = self.decode_argmax_batch(
+                tok_h.astype(np.uint32), itree_h, idm_h, itime_h)
+            freqs_lo, freqs_hi, dms, ts_samp, widths_samp = self.decode_argmax2_batch(
+                itree_h, fmins, fmaxs, tlos, this_, ps)
+
+            beam_ids = self._beam_id_lut[ibeam_h]
+            widths_ms = widths_samp * np.float32(self._time_sample_ms)
+
+            # Per-event absolute timestamp = chunk start + chunk-relative offset (decoded
+            # arrival time in input samples * fpga-counts-per-sample), rounded to the
+            # nearest integer fpga count. Timestamps may fall before or after the chunk
+            # window (high-DM events reach into earlier chunks; early triggers
+            # extrapolate into the future); negative ABSOLUTE timestamps are clamped.
+            offset = np.rint(ts_samp.astype(np.float64) * self._seq_per_sample).astype(np.int64)
+            fpga_timestamps = np.maximum(chunk_fpga_start + offset, 0)
+        else:
+            # Zero events: the batch decoders require nonempty arrays, so build the
+            # (empty) per-event arrays directly. (FrbSifterEvents casts dtypes.)
+            beam_ids = np.zeros(0, dtype=np.int64)
+            fpga_timestamps = np.zeros(0, dtype=np.int64)
+            dms = freqs_lo = freqs_hi = widths_ms = np.zeros(0, dtype=np.float32)
+
+        # FrbSifterEvents casts dtypes and validates shapes. rfi_prob is the one remaining
+        # placeholder (the grouper doesn't measure it).
         return FrbSifterEvents(
             beam_ids = beam_ids,
             fpga_timestamps = fpga_timestamps,
             dms = dms,
             snrs = snr_h,
             rfi_probs = np.zeros(snr_h.shape, dtype=np.float32),
-            widths_ms = np.full(snr_h.shape, self._time_sample_ms, dtype=np.float32),
-            subband_freqs_lo_MHz = np.full(snr_h.shape, self._band_freq_lo_MHz, dtype=np.float32),
-            subband_freqs_hi_MHz = np.full(snr_h.shape, self._band_freq_hi_MHz, dtype=np.float32),
+            widths_ms = widths_ms,
+            subband_freqs_lo_MHz = freqs_lo,
+            subband_freqs_hi_MHz = freqs_hi,
             chunk_fpga_start = chunk_fpga_start,
             chunk_fpga_end = chunk_fpga_end,
         )

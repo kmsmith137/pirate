@@ -61,12 +61,13 @@ with FrbGrouper(grouper_addr) as grouper:
     # (beams_per_batch, coarse_ndm, coarse_ntime). (One array for each dedispersion tree.)
 
     for ichunk in itertools.count():  # outer loop over time chunks
-        # Per-beam accumulators over (tree, dm, time): the peak SNR and its argmax.
-        # All GPU-resident, updated entirely on the GPU below.
+        # Per-beam accumulators over (tree, dm, time): the peak SNR, its argmax, and the
+        # winning out_argmax token. All GPU-resident, updated entirely on the GPU below.
         per_beam_max   = cp.full((nbeams_tot,), -cp.inf, dtype=cp.float32)  # peak snr
         per_beam_tree  = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(tree index)
         per_beam_idm   = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(dm index)
         per_beam_itime = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(time index)
+        per_beam_token = cp.zeros((nbeams_tot,), dtype=cp.uint32)           # out_argmax token at the argmax
 
         for ibatch in range(nbatches):          # inner loop over beam batches
             beam0 = ibatch * beams_per_batch    # global index of this batch's first beam
@@ -90,22 +91,31 @@ with FrbGrouper(grouper_addr) as grouper:
                     beam_arg = flat.argmax(axis=1)
                     beam_idm, beam_itime = beam_arg // nt, beam_arg % nt
 
+                    # Winning out_argmax token, gathered at the same argmax position.
+                    # (Must happen here, inside the context manager, while out_argmax
+                    # is valid -- create_events() decodes the tokens later.)
+                    flat_arg = outputs.out_argmax[itree].reshape(bpb, ndm * nt)
+                    beam_tok = flat_arg[cp.arange(bpb), beam_arg]
+
                     sl = slice(beam0, beam0 + bpb)
                     upd = beam_max > per_beam_max[sl]
                     per_beam_max[sl]   = cp.where(upd, beam_max,   per_beam_max[sl])
                     per_beam_tree[sl]  = cp.where(upd, itree,      per_beam_tree[sl])
                     per_beam_idm[sl]   = cp.where(upd, beam_idm,   per_beam_idm[sl])
                     per_beam_itime[sl] = cp.where(upd, beam_itime, per_beam_itime[sl])
+                    per_beam_token[sl] = cp.where(upd, beam_tok,   per_beam_token[sl])
 
         # Now we have one event per beam whose peak SNR exceeds threshold (0 <= nevents <= nbeams).
-        # Events are identified by (snr, itree, ibeam, idm, itime) on the GPU. We copy this data
-        # from the GPU to the CPU, and do a little math to convert to "physical" quantities such
-        # as DM and fpga_timestamp. The math is explained in notes/tree_dedispersion.tex, and is
-        # implemented in a helper method grouper.create_events(), which returns an FrbSifterEvents.
+        # Events are identified by (snr, itree, ibeam, idm, itime, token) on the GPU. We copy this
+        # data from the GPU to the CPU, and convert to "physical" quantities (DM, fpga_timestamp,
+        # width, frequency subband) by decoding the out_argmax tokens. The math is explained in
+        # notes/tree_dedispersion.tex, and is implemented in a helper method
+        # grouper.create_events(), which returns an FrbSifterEvents.
 
         ibeam = cp.nonzero(per_beam_max > snr_threshold)[0]   # global indices of above-threshold beams
         events = grouper.create_events(ichunk, per_beam_tree[ibeam], ibeam,
-                                       per_beam_idm[ibeam], per_beam_itime[ibeam], per_beam_max[ibeam])
+                                       per_beam_idm[ibeam], per_beam_itime[ibeam],
+                                       per_beam_max[ibeam], per_beam_token[ibeam])
 
         coarse_snr_max = float(per_beam_max.max())
         print(f'toy_grouper: beamset={beam_set_id}, ichunk={ichunk}, '
@@ -208,9 +218,12 @@ Here are some details that are not obvious from the example code:
    For trees with early triggers, there is an extra complication.
    There are two notions of arrival time: pulse arrival time at the trigger
    frequency, and pulse arrival time at the lower edge of the full band.
-   Currently, we send the latter arrival time (lower edge of full band)
+   We send the latter arrival time (lower edge of full band)
    to the sifter, even though this arrival time will often be in the future!
-   (This detail is also "hidden" in `FrbGrouper.create_events()`)
+   (This detail is "hidden" in `FrbGrouper.create_events()`, whose token
+   decoding extrapolates each event's arrival time to the lowest full-band
+   frequency. Event timestamps can also precede the chunk window: high-DM
+   events reference input samples from earlier chunks.)
 
    Another thing that happens in pirate (but not its predecessor bonsai):
    for some trees, only the upper half of the DM range is passed to the grouper,
@@ -224,16 +237,18 @@ Here are some details that are not obvious from the example code:
 
  - The dedisperser passes `out_argmax` arrays to the grouper, to indicate which
    fine-grained (dm, time, frequency subband, peak-finding width) is responsible
-   for each coarse-grained maximum SNR. Currently, these `out_argmax` arrays are
-   ignored by `FrbGrouper.create_events()`, which just uses the central (dm,time)
-   in each coarse-grained pixel, and sends placeholder values for the per-event
-   `width_ms` (one time sample) and frequency subband (`subband_freq_{lo,hi}_MHz`,
-   set to the full band).
+   for each coarse-grained maximum SNR. Each `out_argmax` element is a uint32
+   "token" in an encoding that's convenient for the GPU kernel.
 
-   In the future, I plan to add code to recover fine-grained information from
-   the `out_argmax` array. (This is not as trivial as it sounds, since the `out_argmax`
-   array uses an "encoding" that's convenient in the GPU kernel, and I need to write code
-   to decode it.)
+   `FrbGrouper.create_events()` decodes these tokens (via the vectorized
+   `decode_argmax_batch()` / `decode_argmax2_batch()` methods, which use the
+   producer's dedispersion plan from the handshake), so the per-event `dm`,
+   `fpga_timestamp`, `width_ms`, and frequency subband
+   (`subband_freq_{lo,hi}_MHz`) are the fine-grained "winning" trial
+   parameters, not coarse-pixel centers. The grouper's job is to gather each
+   selected peak's token on the GPU (inside the `get_output()` context
+   manager, while the arrays are valid -- see the example code above) and pass
+   it to `create_events()` via the `argmax` argument.
 
 The `FrbGrouper` and `FrbSifter` classes aren't well-optimized at all.
 However, I find empirically that the "toy" grouper does not slow down a CHORD-scale search.

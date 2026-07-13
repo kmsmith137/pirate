@@ -91,6 +91,45 @@ def _test_incomplete_plan(config, plan, tuples):
     except RuntimeError:
         pass
 
+    return p2
+
+
+def _test_batch_decode(plan, p2, tuples):
+    """Vectorized decode bindings: decode_argmax_batch() must equal a loop over the
+    scalar decode_argmax(); both batch methods must agree between the full plan and
+    the incomplete plan; basic postconditions on the physical params."""
+
+    itrees = np.array([t[0] for t in tuples], dtype=np.int64)
+    tokens = np.array([t[1] for t in tuples], dtype=np.uint32)
+    idms   = np.array([t[2] for t in tuples], dtype=np.int64)
+    itimes = np.array([t[3] for t in tuples], dtype=np.int64)
+
+    outs = plan.decode_argmax_batch(tokens, itrees, idms, itimes)
+    for i, (it, tok, idm, ito) in enumerate(tuples):
+        assert tuple(int(a[i]) for a in outs) == plan.decode_argmax(tok, it, idm, ito)
+
+    freqs_lo, freqs_hi, dms, ts_samp, widths_samp = plan.decode_argmax2_batch(itrees, *outs)
+    assert (freqs_lo < freqs_hi).all()
+    assert (dms >= 0).all()
+    assert (widths_samp > 0).all()
+    assert np.isfinite(ts_samp).all()
+
+    # The incomplete plan must decode identically (batch path).
+    outs_b = p2.decode_argmax_batch(tokens, itrees, idms, itimes)
+    for a, b in zip(outs, outs_b):
+        assert (a == b).all()
+    outs2_b = p2.decode_argmax2_batch(itrees, *outs)
+    for a, b in zip((freqs_lo, freqs_hi, dms, ts_samp, widths_samp), outs2_b):
+        assert (a == b).all()
+
+    # Batch methods reject empty inputs (python callers short-circuit that case).
+    empty = np.zeros(0, dtype=np.int64)
+    try:
+        plan.decode_argmax_batch(np.zeros(0, dtype=np.uint32), empty, empty, empty)
+        raise AssertionError("decode_argmax_batch() should have thrown on empty input")
+    except (RuntimeError, TypeError):
+        pass
+
 
 ####################################################################################################
 
@@ -437,4 +476,7 @@ def test_decode_argmax():
     _probe_tuples(plan, r_top, C, tuples)
 
     # Round-trip test of make_incomplete_plan_from_yaml() (reuses the sampled tuples).
-    _test_incomplete_plan(config, plan, tuples)
+    p2 = _test_incomplete_plan(config, plan, tuples)
+
+    # Vectorized decode bindings (batch == scalar loop; full plan == incomplete plan).
+    _test_batch_decode(plan, p2, tuples)

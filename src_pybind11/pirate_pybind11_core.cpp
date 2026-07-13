@@ -39,6 +39,101 @@ namespace py = pybind11;
 
 namespace pirate {
 
+
+// -------------------------------------------------------------------------------------------------
+//
+// Vectorized ("batch") decode_argmax*() helpers, bound as methods on both DedispersionPlan
+// (in pirate_pybind11.cpp, which declares these prototypes) and FrbGrouper (below, forwarding
+// to its internal incomplete_plan). Non-static, since the two class bindings live in
+// different source files.
+//
+// Inputs are 1-d contiguous nonempty host arrays, one event per element. (Python callers
+// should short-circuit the zero-event case: the Array -> numpy caster rejects zero-size
+// arrays.) Outputs are freshly-allocated numpy arrays. Implemented as loops over the scalar
+// DedispersionPlan methods, so per-element validation (index ranges, malformed tokens)
+// comes from decode_argmax() itself.
+
+
+template<typename T>
+static void _check_batch_arg(const char *fname, const char *arg_name, const ksgpu::Array<T> &a, long n)
+{
+    if ((a.ndim != 1) || !a.is_fully_contiguous() || !a.on_host() || (a.size != n)) {
+        stringstream ss;
+        ss << fname << ": argument '" << arg_name << "' must be a 1-d contiguous host array"
+           << " of length " << n << ", got shape " << a.shape_str();
+        throw runtime_error(ss.str());
+    }
+}
+
+
+py::tuple _decode_argmax_batch(
+    const DedispersionPlan &plan, const Array<uint> &tokens,
+    const Array<long> &itrees, const Array<long> &idms, const Array<long> &itimes)
+{
+    const char *fname = "decode_argmax_batch";
+    long n = tokens.size;
+
+    if (n <= 0)
+        throw runtime_error("decode_argmax_batch: empty input arrays (callers should "
+                            "short-circuit the zero-event case)");
+
+    _check_batch_arg(fname, "tokens", tokens, n);
+    _check_batch_arg(fname, "itrees", itrees, n);
+    _check_batch_arg(fname, "idms", idms, n);
+    _check_batch_arg(fname, "itimes", itimes, n);
+
+    Array<long> fmins({n}, af_uhost);
+    Array<long> fmaxs({n}, af_uhost);
+    Array<long> tlos({n}, af_uhost);
+    Array<long> this_({n}, af_uhost);
+    Array<long> ps({n}, af_uhost);
+
+    for (long i = 0; i < n; i++)
+        plan.decode_argmax(tokens.data[i], itrees.data[i], idms.data[i], itimes.data[i],
+                           fmins.data[i], fmaxs.data[i], tlos.data[i], this_.data[i], ps.data[i]);
+
+    return py::make_tuple(fmins, fmaxs, tlos, this_, ps);
+}
+
+
+py::tuple _decode_argmax2_batch(
+    const DedispersionPlan &plan, const Array<long> &itrees,
+    const Array<long> &fmins, const Array<long> &fmaxs,
+    const Array<long> &tlos, const Array<long> &this_, const Array<long> &ps)
+{
+    const char *fname = "decode_argmax2_batch";
+    long n = itrees.size;
+
+    if (n <= 0)
+        throw runtime_error("decode_argmax2_batch: empty input arrays (callers should "
+                            "short-circuit the zero-event case)");
+
+    _check_batch_arg(fname, "itrees", itrees, n);
+    _check_batch_arg(fname, "fmins", fmins, n);
+    _check_batch_arg(fname, "fmaxs", fmaxs, n);
+    _check_batch_arg(fname, "tlos", tlos, n);
+    _check_batch_arg(fname, "this", this_, n);
+    _check_batch_arg(fname, "ps", ps, n);
+
+    Array<float> freqs_lo({n}, af_uhost);
+    Array<float> freqs_hi({n}, af_uhost);
+    Array<float> dms({n}, af_uhost);
+    Array<float> timestamps({n}, af_uhost);
+    Array<float> widths({n}, af_uhost);
+
+    for (long i = 0; i < n; i++)
+        plan.decode_argmax2(itrees.data[i], fmins.data[i], fmaxs.data[i],
+                            tlos.data[i], this_.data[i], ps.data[i],
+                            freqs_lo.data[i], freqs_hi.data[i], dms.data[i],
+                            timestamps.data[i], widths.data[i]);
+
+    return py::make_tuple(freqs_lo, freqs_hi, dms, timestamps, widths);
+}
+
+
+// -------------------------------------------------------------------------------------------------
+
+
 void register_core_bindings(pybind11::module &m)
 {
     // BumpAllocator: Thread-safe bump allocator for GPU/host memory
@@ -1493,6 +1588,37 @@ void register_core_bindings(pybind11::module &m)
                "a per-batch slice (nbeams == beams_per_batch) of output_ringbuf.")
           .def("_release_output", &FrbGrouper::release_output, py::arg("seq_id"),
                "Record that the caller is done with 'seq_id' (emits CONSUMED).")
+          // Vectorized decode of out_argmax tokens, forwarding to the grouper's internal
+          // "incomplete" DedispersionPlan (deserialized at handshake). The plan's per-tree
+          // Dcore values come from the PRODUCER, so tokens decode correctly even if this
+          // process runs a different pirate_frb build. Valid only after the handshake.
+          .def("decode_argmax_batch",
+               [](const FrbGrouper &self, const Array<uint> &tokens, const Array<long> &itrees,
+                  const Array<long> &idms, const Array<long> &itimes) {
+                   xassert(self.incomplete_plan);   // populated at handshake
+                   return _decode_argmax_batch(*self.incomplete_plan, tokens, itrees, idms, itimes);
+               },
+               py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
+               "Vectorized decode of out_argmax tokens (see DedispersionPlan.decode_argmax\n"
+               "for the scalar spec). Inputs are 1-d nonempty arrays, one event per element\n"
+               "(tokens: uint32; itrees/idms/itimes: int64). Returns TOPLEVEL-relative\n"
+               "(fmins, fmaxs, tlos, this, ps), each an int64 array. Uses the producer's\n"
+               "plan from the handshake; valid only after the handshake.")
+          .def("decode_argmax2_batch",
+               [](const FrbGrouper &self, const Array<long> &itrees, const Array<long> &fmins,
+                  const Array<long> &fmaxs, const Array<long> &tlos, const Array<long> &this_,
+                  const Array<long> &ps) {
+                   xassert(self.incomplete_plan);   // populated at handshake
+                   return _decode_argmax2_batch(*self.incomplete_plan, itrees, fmins, fmaxs,
+                                                tlos, this_, ps);
+               },
+               py::arg("itrees"), py::arg("fmins"), py::arg("fmaxs"),
+               py::arg("tlos"), py::arg("this"), py::arg("ps"),
+               "Vectorized decode_argmax2(): converts decode_argmax_batch() outputs to\n"
+               "physical params. Returns (freqs_lo_MHz, freqs_hi_MHz, dms, timestamps_samp,\n"
+               "widths_samp), each a float32 array. Timestamps are CHUNK-RELATIVE toplevel\n"
+               "sample counts (extrapolated to the full-band lowest frequency); the caller\n"
+               "converts to absolute FPGA counts. Valid only after the handshake.")
           // Member docstrings are intentionally omitted here: each member is documented
           // in the bullet list in the class docstring, which lives in the Python injector
           // (pirate_frb/rpc/_FrbGrouper.py). Kept as a plain list, not a napoleon

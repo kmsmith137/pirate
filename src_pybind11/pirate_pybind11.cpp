@@ -40,6 +40,18 @@ namespace pirate {
     void register_loose_ends_bindings(pybind11::module &m);
     void register_simpulse_bindings(pybind11::module &m);
     void register_utils_bindings(pybind11::module &m);
+
+    // Vectorized decode_argmax*() helpers, defined in pirate_pybind11_core.cpp and bound
+    // as methods on both DedispersionPlan (below) and FrbGrouper (in core.cpp).
+    pybind11::tuple _decode_argmax_batch(
+        const DedispersionPlan &plan, const ksgpu::Array<uint> &tokens,
+        const ksgpu::Array<long> &itrees, const ksgpu::Array<long> &idms,
+        const ksgpu::Array<long> &itimes);
+    pybind11::tuple _decode_argmax2_batch(
+        const DedispersionPlan &plan, const ksgpu::Array<long> &itrees,
+        const ksgpu::Array<long> &fmins, const ksgpu::Array<long> &fmaxs,
+        const ksgpu::Array<long> &tlos, const ksgpu::Array<long> &this_,
+        const ksgpu::Array<long> &ps);
 }
 
 
@@ -348,6 +360,20 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    plan_yaml_str: producer's DedispersionPlan.to_yaml_string()")
           .def_readonly("is_incomplete", &DedispersionPlan::is_incomplete,
                "True for plans built by make_incomplete_plan_from_yaml()")
+          .def("decode_argmax_batch", &_decode_argmax_batch,
+               py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
+               "Vectorized decode_argmax() over 1-d nonempty arrays (one event per element;\n"
+               "tokens: uint32, itrees/idms/itimes: int64). Returns TOPLEVEL-relative\n"
+               "(fmins, fmaxs, tlos, this, ps), each an int64 array. Per-element validation\n"
+               "(index ranges, malformed tokens) is inherited from decode_argmax().")
+          .def("decode_argmax2_batch", &_decode_argmax2_batch,
+               py::arg("itrees"), py::arg("fmins"), py::arg("fmaxs"),
+               py::arg("tlos"), py::arg("this"), py::arg("ps"),
+               "Vectorized decode_argmax2(): converts decode_argmax_batch() outputs to\n"
+               "physical params. Returns (freqs_lo_MHz, freqs_hi_MHz, dms, timestamps_samp,\n"
+               "widths_samp), each a float32 array. Timestamps are CHUNK-RELATIVE toplevel\n"
+               "sample counts (extrapolated to the full-band lowest frequency); the caller\n"
+               "converts to absolute FPGA counts.")
     ;
 
     // Returned by GpuDedisperser.acquire_output(). Must be registered

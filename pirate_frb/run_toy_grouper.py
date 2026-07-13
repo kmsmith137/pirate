@@ -50,12 +50,13 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0):
     # (beams_per_batch, coarse_ndm, coarse_ntime). (One array for each dedispersion tree.)
 
     for ichunk in itertools.count():  # outer loop over time chunks
-        # Per-beam accumulators over (tree, dm, time): the peak SNR and its argmax.
-        # All GPU-resident, updated entirely on the GPU below.
+        # Per-beam accumulators over (tree, dm, time): the peak SNR, its argmax, and the
+        # winning out_argmax token. All GPU-resident, updated entirely on the GPU below.
         per_beam_max   = cp.full((nbeams_tot,), -cp.inf, dtype=cp.float32)  # peak snr
         per_beam_tree  = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(tree index)
         per_beam_idm   = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(dm index)
         per_beam_itime = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(time index)
+        per_beam_token = cp.zeros((nbeams_tot,), dtype=cp.uint32)           # out_argmax token at the argmax
 
         for ibatch in range(nbatches):          # inner loop over beam batches
             beam0 = ibatch * beams_per_batch    # global index of this batch's first beam
@@ -79,22 +80,31 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0):
                     beam_arg = flat.argmax(axis=1)
                     beam_idm, beam_itime = beam_arg // nt, beam_arg % nt
 
+                    # Winning out_argmax token, gathered at the same argmax position.
+                    # (Must happen here, inside the context manager, while out_argmax
+                    # is valid -- create_events() decodes the tokens later.)
+                    flat_arg = outputs.out_argmax[itree].reshape(bpb, ndm * nt)
+                    beam_tok = flat_arg[cp.arange(bpb), beam_arg]
+
                     sl = slice(beam0, beam0 + bpb)
                     upd = beam_max > per_beam_max[sl]
                     per_beam_max[sl]   = cp.where(upd, beam_max,   per_beam_max[sl])
                     per_beam_tree[sl]  = cp.where(upd, itree,      per_beam_tree[sl])
                     per_beam_idm[sl]   = cp.where(upd, beam_idm,   per_beam_idm[sl])
                     per_beam_itime[sl] = cp.where(upd, beam_itime, per_beam_itime[sl])
+                    per_beam_token[sl] = cp.where(upd, beam_tok,   per_beam_token[sl])
 
         # Now we have one event per beam whose peak SNR exceeds threshold (0 <= nevents <= nbeams).
-        # Events are identified by (snr, itree, ibeam, idm, itime) on the GPU. We copy this data
-        # from the GPU to the CPU, and do a little math to convert to "physical" quantities such
-        # as DM and fpga_timestamp. The math is explained in notes/tree_dedispersion.tex, and is
-        # implemented in a helper method grouper.create_events(), which returns an FrbSifterEvents.
-        
+        # Events are identified by (snr, itree, ibeam, idm, itime, token) on the GPU. We copy this
+        # data from the GPU to the CPU, and convert to "physical" quantities (DM, fpga_timestamp,
+        # width, frequency subband) by decoding the out_argmax tokens. The math is explained in
+        # notes/tree_dedispersion.tex, and is implemented in a helper method
+        # grouper.create_events(), which returns an FrbSifterEvents.
+
         ibeam = cp.nonzero(per_beam_max > snr_threshold)[0]   # global indices of above-threshold beams
         events = grouper.create_events(ichunk, per_beam_tree[ibeam], ibeam,
-                                       per_beam_idm[ibeam], per_beam_itime[ibeam], per_beam_max[ibeam])
+                                       per_beam_idm[ibeam], per_beam_itime[ibeam],
+                                       per_beam_max[ibeam], per_beam_token[ibeam])
 
         coarse_snr_max = float(per_beam_max.max())
         print(f'toy_grouper: beamset={grouper.xengine_yaml["beamset"]}, ichunk={ichunk}, '
