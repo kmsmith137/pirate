@@ -3,6 +3,9 @@ Toy FrbGrouper consumer(s): per-chunk peak SNR + argmax, optionally reported to 
 
 Note that a streamlined version of _run_toy_grouper() is cut-and-pasted into the sphinx
 docs (in notes/grouper_interface.md), so changes made here should be reflected there.
+Deliberate exception: the mirror captures "essentials" only, so optional bells and
+whistles (e.g. the --histogram feature) are NOT mirrored, and changes to them don't
+need to be reflected in the sphinx docs.
 """
 
 import contextlib

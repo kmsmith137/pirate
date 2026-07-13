@@ -29,7 +29,8 @@ if possible, and process them with `cupy`.
 
 ## Example code
 
-From `pirate_frb/run_toy_grouper.py` (slightly streamlined):
+From `pirate_frb/run_toy_grouper.py` (slightly streamlined; optional features
+such as `--histogram` are deliberately omitted here):
 ```py
 # In the toy grouper, we don't do peak-finding or thresholding. We just send one
 # event per time chunk, corresponding to the (beam,dm,time) triple with highest
