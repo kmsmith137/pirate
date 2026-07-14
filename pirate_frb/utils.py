@@ -684,9 +684,8 @@ def check_mtu(hw, label, ip_addr, min_mtu, min_mtu_param, is_dst_addr=False):
 # (`af_rhost | af_zero | af_mmap_huge`), such a copy can fail with
 # cudaErrorInvalidValue. The wrappers below delegate to pirate's
 # `safe_memcpy_*` C++ helpers, which split the copy at
-# cuda_host_register_chunk_size-aligned host addresses. See
-# `plans/python_h2g_chunking.md` and the doc-comment block at the top of
-# `include/pirate/utils.hpp`.
+# cuda_host_register_chunk_size-aligned host addresses. See the doc-comment
+# block at the top of `include/pirate/utils.hpp`.
 #
 # Note: currently, safe_h2g_copy() is only called from python in
 # time_cupy_dedisperser, and safe_g2h_copy() is not called from python.
@@ -880,7 +879,7 @@ def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations
         # instead of cupy's .set() because raw_cpu / scoff_cpu may live in
         # hugepage-backed BumpAllocator memory whose chunked
         # cudaHostRegister layout breaks an unsplit cudaMemcpyAsync.
-        # See plans/python_h2g_chunking.md.
+        # See the h2g-chunking comment block above (module level).
         safe_h2g_copy(raw_gpu,   raw_cpu,   h2g_stream)
         safe_h2g_copy(scoff_gpu, scoff_cpu, h2g_stream)
 

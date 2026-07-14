@@ -72,7 +72,8 @@ service FrbSearch {
   // the connection or when FrbServer::stop() is called.
   //
   // SPECIAL-PURPOSE: this RPC is intended for use by the FakeXEngine
-  // "pacing" feature (see plans/fake_xengine_pacing.md), which uses a
+  // "pacing" feature (see the paced-mode discussion in FakeXEngine.hpp's
+  // class doc-comment), which uses a
   // persistent push stream to gate the sender's chunk rate against the
   // server's GPU processing rate. Don't use this from new code without
   // a similar push-based use case in mind -- general status polling

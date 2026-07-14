@@ -1195,7 +1195,8 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
     long max_ack_at_submission = -1;
 
     if (need_send) {
-        // Paced-mode bootstrap + gate. See plans/fake_xengine_pacing.md.
+        // Paced-mode bootstrap + gate. See the paced-mode discussion in
+        // FakeXEngine.hpp's class doc-comment.
         // The bootstrap runs only on this worker's very first SEND_*
         // (!first_send_done). The gate runs on every SEND_*.
         if (paced) {

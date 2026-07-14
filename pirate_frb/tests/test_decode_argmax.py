@@ -1,7 +1,7 @@
 """
 Black-box tests of DedispersionPlan.decode_argmax() (run via 'test --amax').
 
-Strategy (see plans/argmax_decoding.md): for a FIXED token, eval_tokens() is a
+Strategy: for a FIXED token, eval_tokens() is a
 LINEAR functional of the input array -- the actual dedispersion + peak-finding
 computation for that one trial, with the max-reduce removed -- and all its
 coefficients are nonnegative (profile coefficients in {1/2, 1}; dedispersion and

@@ -34,8 +34,8 @@ void register_utils_bindings(pybind11::module &m)
     // pirate hugepage-backed BumpAllocator -- the chunked cudaHostRegister
     // layout means an unsplit cudaMemcpyAsync that crosses a chunk seam
     // (and, empirically, even a 55-MiB intra-chunk copy in some Python
-    // call paths) returns cudaErrorInvalidValue. See plans/python_h2g_chunking.md
-    // and the doc-comment block at the top of include/pirate/utils.hpp.
+    // call paths) returns cudaErrorInvalidValue. See the doc-comment block
+    // at the top of include/pirate/utils.hpp.
 
     m.def("safe_memcpy_h2g_async",
           [](uintptr_t dst_ptr, uintptr_t src_ptr, long nbytes, uintptr_t stream_ptr) {

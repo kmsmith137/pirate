@@ -398,8 +398,7 @@ void FrbServer::start()
         } else {
             // Grouper enabled: do NOT start receivers here. grouper_send_thread
             // starts them after the grouper connection is established (so we
-            // don't ingest data until the grouper is connected -- see the
-            // "Thread ordering" discussion in plans/grouper_client.md).
+            // don't ingest data until the grouper is connected).
             grouper_send_thread    = std::thread(&FrbServer::grouper_send_thread_main,    this);
             grouper_receive_thread = std::thread(&FrbServer::grouper_receive_thread_main, this);
         }
@@ -1525,8 +1524,7 @@ void FrbServer::_deactivate_stream(const shared_ptr<FileStream> &st, bool cancel
 // single GpuDedisperser output consumer (consumer_id 0): it connects to the
 // grouper, starts the receivers, builds + sends the Handshake, then streams
 // produced_seq_ids (one per cdd2-produced batch). The receive thread reads
-// consumed_seq_ids and releases each batch back to the dedisperser. See
-// plans/grouper_client.md for the full design / thread-ordering rationale.
+// consumed_seq_ids and releases each batch back to the dedisperser.
 
 
 void FrbServer::_fill_handshake(fg::Handshake *hs,
@@ -1737,8 +1735,8 @@ void FrbServer::_grouper_receive_thread_main()
         xassert_eq(got, seq_id);   // consumer must ack in order 0,1,2,...
 
         // Host-ordered release (records event on rel_stream). cdd2 will not reuse
-        // this slot until this returns (see the "Cross-process GPU
-        // synchronization" discussion in plans/grouper_client.md).
+        // this slot until this returns (see the rel_stream HACK comment above
+        // for why host-level ordering suffices).
         dd->release_output(/*consumer_id=*/0, seq_id, rel_stream);
     }
 }
@@ -2544,7 +2542,8 @@ grpc::Status FrbRpcService::GetConfig(
 // ---- MonitorRingbuf ----
 //
 // Special-purpose push stream of rb_processed updates, intended for use by
-// the FakeXEngine "pacing" feature (see plans/fake_xengine_pacing.md). The
+// the FakeXEngine "pacing" feature (see the paced-mode discussion in
+// FakeXEngine.hpp's class doc-comment). The
 // handler sends one message as soon as rb_initialized becomes true (carrying
 // the current value of rb_processed), then one message per change. The stream
 // ends when the client closes the connection or when FrbServer::stop() is

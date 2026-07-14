@@ -1,6 +1,6 @@
 """Sphinx extension: auto-cross-link doc mentions of documented objects.
 
-Design rationale lives in plans/cross_linking.md (ephemeral). In brief: at
+Design rationale, in brief: at
 'doctree-resolved' time -- after autodoc has populated the python domain and
 every generated page (configs/*, cli/*, grpc/*, notes/*) exists -- we walk
 each page's doctree and turn a plain-text or inline-code MENTION of a
@@ -16,7 +16,7 @@ What becomes a link:
   - curated aliases from autolink_overrides.yml (e.g. RPC method names -> their
     .proto page, "tex notes" -> the compiled PDF).
 
-Per-document policy (see plans/cross_linking.md sec 0): on notes/* pages we
+Per-document policy: on notes/* pages we
 create ONLY the Sphinx-only links (classes, cli). A real-file mention (a
 config/proto/sibling-note PATH) is left for a handwritten markdown link in the
 notes source -- which also works on GitHub -- and is reported as a

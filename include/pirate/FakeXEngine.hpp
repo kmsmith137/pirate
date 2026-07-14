@@ -71,8 +71,8 @@ namespace pirate {
 // robin to worker threads. There is NO internal cross-worker barrier --
 // the controller thread is responsible for any "minichunk N waits for
 // (N-2)" style serialization by interleaving wait_until_processed() and
-// enqueue_send_junk() calls. See plans/fake_xengine_command_queue.md
-// for the canonical controller pseudocode.
+// enqueue_send_junk() calls. See pirate_frb/run_fake_xengine.py for the
+// reference controller implementing this pattern.
 //
 // Worker threads inherit the vcpu affinity of the thread that calls the
 // FakeXEngine constructor. Python callers MUST call the constructor
@@ -101,7 +101,7 @@ namespace pirate {
 //
 // A bootstrap floor (FakeXEngine::rb_processed_floor) covers the
 // gap before the server has received enough data to publish its
-// first rb_processed value. See plans/fake_xengine_pacing.md.
+// first rb_processed value.
 //
 // Usage:
 //   with ThreadAffinity(vcpu_list):
@@ -480,7 +480,7 @@ struct FakeXEngine
     // When true, FakeXEngine spawns a pacing thread that opens a
     // MonitorRingbuf streaming RPC to the FrbServer and gates each
     // worker's sends to stay <=5 chunks ahead of server-side
-    // rb_processed. See class doc-comment + plans/fake_xengine_pacing.md.
+    // rb_processed. See the paced-mode discussion in the class doc-comment.
     const bool paced;
 
     // gRPC address ("ip:port") of the FrbServer's RPC endpoint. Required
@@ -709,7 +709,7 @@ struct FakeXEngine
     // calls against an already-reaped frame; it does NOT protect against
     // an actively-running reaper. If we ever want to colocate
     // FakeXEngine with a reaper, the gather loop needs lock acquisition
-    // (one-per-beam) -- see plans/fake_xengine_skip_and_send_minichunk.md.
+    // (one-per-beam).
     bool enqueue_send_minichunk(long worker_id, long minichunk_index,
                                 std::shared_ptr<AssembledFrameSet> frame_set);
 

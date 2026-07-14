@@ -134,7 +134,7 @@ class PfVarianceConvolver:
         """
         from ..pirate_pybind11 import ReferencePeakFindingKernel
 
-        nt_in, Dout, Dcore = 512, 4, 1     # validated params (see plans/); reads land mid-array
+        nt_in, Dout, Dcore = 512, 4, 1     # validated params; reads land mid-array
         nt_out = nt_in // Dout
         tout = nt_out // 2                  # middle output bin -> reference time interior, big margins
         J = nt_in                          # impulse-position axis == DM axis (a power of two)
