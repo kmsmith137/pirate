@@ -1,11 +1,13 @@
 # For documentation on this file format, see chord_sb2_et.yml, and the tex notes.
 
+# Overrideable params: frequency channels, time sample length, number of beams.
 zone_nfreq: [16384]
 zone_freq_edges: [400, 800]
 time_sample_ms: 1.0
-
-dtype: float16
 beams_per_gpu: 250
+
+# Non-overrideable params start here.
+dtype: float16
 time_samples_per_chunk: 2048
 
 # pirate_frb make_subbands 400 800 0.1 -r 4

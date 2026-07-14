@@ -2,12 +2,14 @@
 # Does not need production_kernels=True in makefile_helper.py (unlike the chime/chord files in this directory).
 # For documentation on this file format, see chord_sb2_et.yml, and the tex notes.
 
+# Overrideable params: frequency channels, time sample length, number of beams.
 zone_nfreq: [640]
 zone_freq_edges: [400, 800]
 time_sample_ms: 1.0
-
-dtype: float32
 beams_per_gpu: 16
+
+# Non-overrideable params start here.
+dtype: float32
 time_samples_per_chunk: 256
 
 frequency_subband_counts: [2,2,1]
