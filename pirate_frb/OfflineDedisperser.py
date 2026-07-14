@@ -74,6 +74,10 @@ class OfflineDedisperser:
 
         self._seq_id = 0            # next chunk's seq_id (== chunk index)
 
+        # Set (to the exception) when a dedisperse() call raises; all later
+        # dedisperse() calls then fail fast -- see the latch in dedisperse().
+        self._failed = None
+
     def _initialize(self, md):
         """Build the plan + dedisperser from the first frame's XEngineMetadata 'md'.
 
@@ -170,8 +174,25 @@ class OfflineDedisperser:
 
         The first call to dedisperse() does a lot of initialization, including
         initializing attributes config / nfreq / nt_in / ntrees / trees / plan / dd.
+
+        If a dedisperse() call raises -- from the GPU pipeline, from the caller's
+        with-block, or from a frame-sequencing assert -- the OfflineDedisperser
+        must be DISCARDED: internal state (including the seq_id cursors shared
+        with the C++ GpuDedisperser) may be out of sync, so every later call
+        raises RuntimeError pointing back at the original error. Construct a
+        fresh OfflineDedisperser to continue.
         """
         import cupy as cp
+
+        # A previous dedisperse() call raised: internal state (the python/C++
+        # seq_id cursors, or a partially-built pipeline) may be inconsistent, so
+        # fail fast with the root cause instead of tripping a confusing
+        # cursor-mismatch assert deeper in (see the except-latch below).
+        if self._failed is not None:
+            raise RuntimeError(
+                "OfflineDedisperser: a previous dedisperse() call raised "
+                f"({self._failed!r}); internal state may be out of sync -- "
+                "construct a fresh OfflineDedisperser") from self._failed
 
         md = frame.metadata
         assert md is not None, "OfflineDedisperser: frame.metadata is None"
@@ -180,43 +201,57 @@ class OfflineDedisperser:
             (f"OfflineDedisperser: frame.metadata.beam_ids {list(md.beam_ids)} "
              f"!= [frame.beam_id] ([{frame.beam_id}])")
 
-        if self.dd is None:
-            self._beam_id = frame.beam_id
-            self._initial_tci = frame.time_chunk_index
-            self._initialize(md)
-        else:
-            # Consecutive frames must be the same beam and adjacent in time (the
-            # dedisperser is a streaming engine, so a gap or reordering would splice
-            # non-adjacent chunks). Independent of how the frames were enumerated.
-            assert frame.beam_id == self._beam_id, \
-                f"OfflineDedisperser: beam_id changed mid-stream ({frame.beam_id} != {self._beam_id})"
-            expected_tci = self._initial_tci + self._seq_id
-            assert frame.time_chunk_index == expected_tci, \
-                (f"OfflineDedisperser: non-consecutive time_chunk_index "
-                 f"(got {frame.time_chunk_index}, expected {expected_tci})")
-            self._check_metadata(md)
+        try:
+            if self.dd is None:
+                self._beam_id = frame.beam_id
+                self._initial_tci = frame.time_chunk_index
+                self._initialize(md)
+            else:
+                # Consecutive frames must be the same beam and adjacent in time (the
+                # dedisperser is a streaming engine, so a gap or reordering would splice
+                # non-adjacent chunks). Independent of how the frames were enumerated.
+                assert frame.beam_id == self._beam_id, \
+                    f"OfflineDedisperser: beam_id changed mid-stream ({frame.beam_id} != {self._beam_id})"
+                expected_tci = self._initial_tci + self._seq_id
+                assert frame.time_chunk_index == expected_tci, \
+                    (f"OfflineDedisperser: non-consecutive time_chunk_index "
+                     f"(got {frame.time_chunk_index}, expected {expected_tci})")
+                self._check_metadata(md)
 
-        assert frame.nfreq == self.nfreq, (frame.nfreq, self.nfreq)
-        assert frame.ntime == self.nt_in, (frame.ntime, self.nt_in)
+            assert frame.nfreq == self.nfreq, (frame.nfreq, self.nfreq)
+            assert frame.ntime == self.nt_in, (frame.ntime, self.nt_in)
 
-        seq = self._seq_id
-        stream = cp.cuda.get_current_stream()
+            seq = self._seq_id
+            stream = cp.cuda.get_current_stream()
 
-        # Upload this chunk's quantized data to the GPU (add a length-1 beam axis)
-        # and dequantize it directly into the dedisperser's input buffer. Leaving
-        # the get_input() block launches the dedispersion kernels for this seq_id.
-        with self.dd.get_input(seq, stream=stream) as arr:               # (1, nfreq, nt_in), dtype
-            data_gpu = cp.asarray(np.asarray(frame.data))[None]          # (1, nfreq, nt_in/2) uint8
-            scoff_gpu = cp.asarray(np.asarray(frame.scales_offsets))[None]  # (1, nfreq, mpc, 2) float16
-            self.dqk.launch(arr, scoff_gpu, data_gpu, stream=stream)
+            # Upload this chunk's quantized data to the GPU (add a length-1 beam axis)
+            # and dequantize it directly into the dedisperser's input buffer. Leaving
+            # the get_input() block launches the dedispersion kernels for this seq_id.
+            with self.dd.get_input(seq, stream=stream) as arr:               # (1, nfreq, nt_in), dtype
+                data_gpu = cp.asarray(np.asarray(frame.data))[None]          # (1, nfreq, nt_in/2) uint8
+                scoff_gpu = cp.asarray(np.asarray(frame.scales_offsets))[None]  # (1, nfreq, mpc, 2) float16
+                self.dqk.launch(arr, scoff_gpu, data_gpu, stream=stream)
 
-        # Input committed; advance the seq counter now (before yielding) so that a
-        # caller exception inside the output block cannot desync us from the
-        # dedisperser's internal counters, which already advanced above.
-        self._seq_id += 1
+            # Input committed; advance the seq counter now (before yielding) so that a
+            # caller exception inside the output block cannot desync us from the
+            # dedisperser's internal counters, which already advanced above.
+            self._seq_id += 1
 
-        # get_output() acquires this chunk's output on entry and releases it on
-        # exit. release_output is stream-ordered, so no explicit host sync is
-        # needed: the caller consumes 'outputs' on the same stream inside the block.
-        with self.dd.get_output(seq, stream=stream) as outputs:
-            yield outputs
+            # get_output() acquires this chunk's output on entry and releases it on
+            # exit. release_output is stream-ordered, so no explicit host sync is
+            # needed: the caller consumes 'outputs' on the same stream inside the block.
+            with self.dd.get_output(seq, stream=stream) as outputs:
+                yield outputs
+        except BaseException as e:
+            # Anything that raises in here can leave internal state out of
+            # lockstep: an exception inside the get_input block advances the C++
+            # input cursor (the context manager's finally still releases and
+            # launches) but skips the _seq_id += 1; a partial _initialize()
+            # leaves self.dd built but not allocated/weighted; a sequencing
+            # assert means the frame stream itself is broken. Every such failure
+            # is loud, but a RETRY would trip a confusing C++ cursor xassert
+            # (which also stops the GpuDedisperser) -- so latch the failure and
+            # make later calls fail fast with a clear message instead (see the
+            # _failed check above).
+            self._failed = e
+            raise
