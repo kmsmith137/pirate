@@ -377,11 +377,20 @@ void GpuDedisperser::_allocate(BumpAllocator &gpu_allocator, BumpAllocator &host
     // Stopped-check + double-call guard under the mutex. On an error-stopped
     // instance the saved root cause is rethrown, in preference to an
     // arbitrary downstream allocation failure.
+    //
+    // The guard flag is 'allocate_called' (set HERE), not 'is_allocated' (set
+    // at the end): checking is_allocated alone would let two CONCURRENT
+    // allocate() calls both pass and both spawn a worker, and the second
+    // 'this->worker = ...' assignment would run on a joinable std::thread
+    // (std::terminate). No reset on a throw path: any throw from this entry
+    // point permanently stops the object, so later allocate() calls rethrow
+    // the stored error before ever seeing the flag.
     {
         std::unique_lock<std::mutex> ul(mutex);
         _throw_if_stopped("allocate");
-        if (this->is_allocated)
+        if (this->allocate_called)
             throw runtime_error("double call to GpuDedisperser::allocate()");
+        this->allocate_called = true;
     }
 
     if (!(gpu_allocator.aflags & af_gpu))
@@ -438,13 +447,24 @@ void GpuDedisperser::_allocate(BumpAllocator &gpu_allocator, BumpAllocator &host
     xassert_eq(gpu_nbytes_allocated, resource_tracker.get_gmem_footprint());
     xassert_eq(host_nbytes_allocated, resource_tracker.get_hmem_footprint());
 
+    // Publish is_allocated and spawn the worker thread (thread-backed class
+    // pattern) in one critical section: the thread handle is teardown state,
+    // published under the mutex like the rest (see "Spawning, joining, and
+    // teardown" in notes/cpp.md). The stopped-recheck closes the window where
+    // a stop() lands mid-allocate: without it, allocate() would silently
+    // succeed on a stopped instance and spawn the worker post-stop. (That
+    // worker would exit promptly -- every call on a stopped CudaEventRingbuf
+    // throws -- and ~GpuDedisperser joins unconditionally, so the recheck is
+    // about correct entry-point semantics, not a leak.) Holding the lock
+    // across the spawn is safe: we never wait on the worker, and the worker
+    // takes this mutex only via stop() in its catch-all, blocking briefly at
+    // worst.
     {
         std::unique_lock<std::mutex> ul(mutex);
+        _throw_if_stopped("allocate");
         this->is_allocated = true;
+        this->worker = std::thread(&GpuDedisperser::worker_main, this);
     }
-
-    // Create worker thread (thread-backed class pattern).
-    this->worker = std::thread(&GpuDedisperser::worker_main, this);
 }
 
 

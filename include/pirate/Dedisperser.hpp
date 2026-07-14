@@ -266,7 +266,13 @@ public:
     // extracted via output_ringbuf.slice().
     Outputs output_ringbuf;
 
+    // allocate() bookkeeping, both protected by 'mutex'. allocate_called is
+    // set at the START of allocate() (double-call guard -- correct even for
+    // concurrent calls); is_allocated is set at the END, once the buffers
+    // exist and the worker thread is spawned.
+    bool allocate_called = false;
     bool is_allocated = false;
+
     ResourceTracker resource_tracker;  // all rates are "per batch"
     
     // -----------------------------  Internals  -----------------------------
@@ -363,7 +369,9 @@ public:
     std::vector<long> curr_output_acquire_seq_id;
     std::vector<long> curr_output_release_seq_id;
 
-    // Thread-backed class pattern: worker thread.
+    // Thread-backed class pattern: worker thread. Spawned at the end of
+    // allocate(), with the handle published under 'mutex' (see "Spawning,
+    // joining, and teardown" in notes/cpp.md); joined in ~GpuDedisperser.
     // Note: no condition_variable needed to wake up worker thread, since the worker does
     // all of its waiting on condition_variables which are members of CudaEventRingbuf.
     std::thread worker;
