@@ -222,7 +222,8 @@ struct GpuDedisperser
     static void test_one(const DedispersionConfig &config, long nchunks,
                          long nbatches_out=0, long nbatches_wt=0, bool host_only=false);
 
-    // Run timing benchmark (C++ version).
+    // Run timing benchmark (C++ version). Entry point: throws on a stopped
+    // (or never-allocated) instance; any throw stops the GpuDedisperser.
     // To run from command line: 'python -m pirate_frb time_dedisperser config.yml'.
     // (Note that the --python flag will run the python version of the timing benchmark, 
     //  which is in pirate_frb.utils.time_cupy_dedisperser().)
@@ -232,7 +233,8 @@ struct GpuDedisperser
     // derived from a PfAvarApproximation built from (plan, freq_variances). All weight
     // slots and all beams get identical weights. Must be called after allocate(). Blocks
     // (calls cudaDeviceSynchronize) before returning, so the weights are in place on the
-    // GPU when it returns.
+    // GPU when it returns. Entry point: throws on a stopped (or never-allocated)
+    // instance; any throw stops the GpuDedisperser.
     void fill_analytic_weights(const ksgpu::Array<double> &freq_variances);
 
     // Copies host-side peak-finding weights to the GPU weight arrays (wt_arrays[itree]) for a
@@ -241,6 +243,8 @@ struct GpuDedisperser
     // with t = plan->trees[itree]. Unlike fill_analytic_weights(), the weights may differ per
     // slot and per beam. Must be called after allocate(). Does NOT synchronize -- the caller
     // owns any race conditions on the pf_weights (see the FIXME in the High-level API section).
+    // Entry point: throws on a stopped (or never-allocated) instance; any throw
+    // stops the GpuDedisperser.
     void fill_all_weights(long itree, const ksgpu::Array<float> &pf_weights);
 
     // --------------------------  Public members  --------------------------
@@ -328,9 +332,13 @@ public:
     void _release_input_and_launch_dd_kernels(long seq_id, cudaStream_t stream);
     Outputs _acquire_output(long consumer_id, long seq_id, cudaStream_t stream, bool sync, bool noreturn);
     void _release_output(long consumer_id, long seq_id, cudaStream_t stream);
+    void _time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_allocator, long niterations);
+    void _fill_analytic_weights(const ksgpu::Array<double> &freq_variances);
+    void _fill_all_weights(long itree, const ksgpu::Array<float> &pf_weights);
 
-    // Thread-backed class pattern: helpers.
+    // Thread-backed class pattern: helpers. Both must be called with 'mutex' held.
     void _throw_if_stopped(const char *method_name);
+    void _throw_if_unallocated(const char *method_name);
 
     // The CudaEventRingbufs keep track of lagged dependencies between kernels.
     std::shared_ptr<CudaEventRingbuf> evrb_tree_gridding;

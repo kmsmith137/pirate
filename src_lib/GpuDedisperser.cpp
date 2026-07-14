@@ -562,6 +562,20 @@ void GpuDedisperser::_throw_if_stopped(const char *method_name)
 }
 
 
+void GpuDedisperser::_throw_if_unallocated(const char *method_name)
+{
+    // Caller must hold mutex (is_allocated is mutex-protected). Besides
+    // catching call-before-allocate bugs with a clean exception (an unlocked
+    // read would be a data race in exactly that case), the locked check gives
+    // the caller an acquire-fence that orders its reads of the allocated
+    // members (input_arrays, wt_arrays, ...) after _allocate()'s writes,
+    // which are released by the critical section that sets is_allocated.
+    if (!is_allocated) {
+        throw std::runtime_error(std::string("GpuDedisperser::") + method_name + " called before allocate()");
+    }
+}
+
+
 void GpuDedisperser::worker_main()
 {
     try {
@@ -770,7 +784,6 @@ void GpuDedisperser::release_output(long consumer_id, long seq_id, cudaStream_t 
 Array<void> GpuDedisperser::_acquire_input(long seq_id, cudaStream_t stream)
 {
     xassert(seq_id >= 0);
-    xassert(is_allocated);
 
     long istream = seq_id % nstreams;
     Array<void> view;
@@ -778,6 +791,7 @@ Array<void> GpuDedisperser::_acquire_input(long seq_id, cudaStream_t stream)
     {
         std::unique_lock<std::mutex> lock(mutex);
         _throw_if_stopped("acquire_input");
+        _throw_if_unallocated("acquire_input");
 
         if (seq_id != curr_input_seq_id) {
             stringstream ss;
@@ -845,7 +859,6 @@ GpuDedisperser::Outputs GpuDedisperser::_acquire_output(long consumer_id, long s
                                                         bool sync, bool noreturn)
 {
     xassert(seq_id >= 0);
-    xassert(is_allocated);
 
     long iout = seq_id % params.nbatches_out;
     Outputs outputs;
@@ -853,6 +866,7 @@ GpuDedisperser::Outputs GpuDedisperser::_acquire_output(long consumer_id, long s
     {
         std::unique_lock<std::mutex> lock(mutex);
         _throw_if_stopped("acquire_output");
+        _throw_if_unallocated("acquire_output");
 
         if ((consumer_id < 0) || (consumer_id >= params.num_consumers)) {
             stringstream ss;
@@ -1091,6 +1105,9 @@ void GpuDedisperser::_launch_dedispersion_kernels(long seq_id, cudaStream_t stre
 
 void GpuDedisperser::_worker_main()
 {
+    // Unlocked is_allocated read is safe here (unlike the entry points, which
+    // check it under the mutex): the worker is spawned in _allocate() after
+    // is_allocated is set, so the thread-creation edge orders this read.
     xassert(is_allocated);
 
     cudaStream_t h2g_stream = stream_pool->low_priority_h2g_stream;
@@ -1136,9 +1153,28 @@ void GpuDedisperser::_worker_main()
 
 // Fills every weight slot/beam with the SAME non-random analytic weights, computed from
 // a PfAvarApproximation. See Dedisperser.hpp.
+//
+// Entry point: per the strict stoppable-class policy (notes/stoppable_class.md),
+// ANY exception from the body -- including PfAvarApproximation's argument
+// validation and CUDA_CALL failures -- stops the GpuDedisperser.
 void GpuDedisperser::fill_analytic_weights(const Array<double> &freq_variances)
 {
-    xassert(is_allocated);
+    try {
+        _fill_analytic_weights(freq_variances);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
+}
+
+
+void GpuDedisperser::_fill_analytic_weights(const Array<double> &freq_variances)
+{
+    {
+        std::unique_lock<std::mutex> ul(mutex);
+        _throw_if_stopped("fill_analytic_weights");
+        _throw_if_unallocated("fill_analytic_weights");
+    }
 
     // Analytic per-(subband, dm, profile) variances for every tree (validates freq_variances).
     PfAvarApproximation avar(plan, freq_variances);
@@ -1202,9 +1238,28 @@ void GpuDedisperser::fill_analytic_weights(const Array<double> &freq_variances)
 
 // Copies host-side peak-finding weights to the GPU for one tree, filling all nbatches_wt
 // weight slots. See Dedisperser.hpp.
+//
+// Entry point: any exception from the body (including the argument/shape
+// checks below) stops the GpuDedisperser (see notes/stoppable_class.md).
 void GpuDedisperser::fill_all_weights(long itree, const Array<float> &pf_weights)
 {
-    xassert(is_allocated);
+    try {
+        _fill_all_weights(itree, pf_weights);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
+}
+
+
+void GpuDedisperser::_fill_all_weights(long itree, const Array<float> &pf_weights)
+{
+    {
+        std::unique_lock<std::mutex> ul(mutex);
+        _throw_if_stopped("fill_all_weights");
+        _throw_if_unallocated("fill_all_weights");
+    }
+
     xassert((itree >= 0) && (itree < ntrees));
 
     const DedispersionTree &t = plan->trees.at(itree);
@@ -1509,9 +1564,29 @@ void GpuDedisperser::test_random()
 // Timing
 
 
+// Entry point: any exception from the body stops the GpuDedisperser (see
+// notes/stoppable_class.md). The entry points called inside the timing loop
+// (acquire_input etc.) already stop it themselves; this wrapper covers the
+// rest (precondition xasserts, allocator failures, CUDA_CALL failures).
 void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_allocator, long niterations)
 {
-    xassert(is_allocated);
+    try {
+        _time(gpu_allocator, cpu_allocator, niterations);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
+}
+
+
+void GpuDedisperser::_time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_allocator, long niterations)
+{
+    {
+        std::unique_lock<std::mutex> ul(mutex);
+        _throw_if_stopped("time");
+        _throw_if_unallocated("time");
+    }
+
     xassert(niterations > 2*nstreams);
 
     long B = beams_per_batch;
