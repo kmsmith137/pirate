@@ -146,7 +146,8 @@ struct FrbServer
     // Factory method (constructor is private).
     static std::shared_ptr<FrbServer> create(const Params &params);
 
-    ~FrbServer();  // calls stop(), joins workers/reaper, then rpc_server->Wait()
+    ~FrbServer();  // calls stop(), joins all backing threads (workers, reaper,
+                   // processing, frame-finalizing, grouper), then rpc_server->Wait()
 
     // Start/stop the Receivers and the RPC service.
     // Neither start() nor stop() calls rpc_server->Wait() or joins the worker

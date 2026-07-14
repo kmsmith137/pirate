@@ -1499,7 +1499,9 @@ void register_core_bindings(pybind11::module &m)
                "Raises:\n"
                "    RuntimeError: If called twice or after stop().")
           .def("stop", [](FrbServer &self) { self.stop(); },
-               py::call_guard<py::gil_scoped_release>(),   // stop() joins worker threads + grpc Shutdown; release the GIL
+               py::call_guard<py::gil_scoped_release>(),   // stop() blocks: grpc Shutdown() waits for in-flight
+                                                           // handlers, plus downstream stop() cascades. (It does
+                                                           // NOT join the backing threads -- the destructor does.)
                "Stop the server and all Receivers. Safe to call multiple times.")
           .def("poll_from_python", &FrbServer::poll_from_python, py::arg("timeout_ms"),
                py::call_guard<py::gil_scoped_release>(),

@@ -1022,11 +1022,12 @@ void FrbServer::_processing_thread_main()
     // thread's current position in the ring buffer, in lockstep with the loop
     // indices (ichunk, ibatch, b) below.
     //
-    // At this point the frame_finalizing_thread (the only other writer of
-    // rb_processed) is necessarily blocked in
-    // evrb_h2g->synchronize(0, true) -- we haven't called record()
-    // yet -- so rb_processed is still at its seed value and the snapshot is
-    // well-defined.
+    // At this point rb_processed is still at its seed value, so the snapshot
+    // is well-defined: rb_processed only advances in the
+    // frame_finalizing_thread's Phase C, Phase C runs only after
+    // evrb_h2g->synchronize(0) returns, and we haven't called record(0) yet.
+    // (Where that thread is parked right now -- the dd_init_cv wait, the
+    // synchronize itself, or already exited on stop -- doesn't matter.)
     long rb_curr;
     {
         unique_lock<std::mutex> lock(mutex);
