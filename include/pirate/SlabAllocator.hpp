@@ -136,6 +136,10 @@ public:
     //
     // Throws on a stopped allocator (rethrows the saved error, or the
     // generic message on a clean stop), uniformly across modes.
+    //
+    // Deliberately no timeout_ms param (unlike BumpAllocator): callers wait
+    // out slow async inits on the BumpAllocator itself (see run_server.py
+    // phase 2), so this call should always be fast in practice.
     void wait_until_initialized();
 
     // Stop the allocator. Any thread blocked in get_slab() will wake up and throw.
