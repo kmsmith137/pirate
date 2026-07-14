@@ -5,7 +5,7 @@
 #include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
-#include "../include/pirate/constants.hpp"     // cuda_static_shmem_bytes
+#include "../include/pirate/constants.hpp"     // cuda_max_static_shmem_bytes
 
 #include <mutex>
 #include <sstream>
@@ -562,7 +562,7 @@ struct Cdd2Registry : public CoalescedDdKernel2::Registry
 
     virtual void deferred_initialization(Val &val) override
     {
-        if (val.shmem_nbytes > constants::cuda_static_shmem_bytes) {
+        if (val.shmem_nbytes > constants::cuda_max_static_shmem_bytes) {
             CUDA_CALL(cudaFuncSetAttribute(
                 val.cuda_kernel,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,

@@ -37,8 +37,8 @@ namespace pirate {
 // Note: reg_chunk_bytes is 64 GiB by default. Lower for stress testing.
 static constexpr long reg_chunk_bytes = constants::cuda_host_register_chunk_size;
 static constexpr long zero_chunk_bytes = 128L << 20;     // 128 MiB
-static constexpr long hugepage_size = 2L << 20;          // 2 MiB
-static constexpr long host_page_size = 4096L;            // 4 KiB
+static constexpr long hugepage_size = constants::host_hugepage_size;   // 2 MiB
+static constexpr long host_page_size = constants::host_page_size;      // 4 KiB
 
 
 // -------------------------------------------------------------------------------------------------

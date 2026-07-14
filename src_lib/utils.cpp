@@ -152,7 +152,7 @@ bool revisit_512gb_inner(long nbytes, bool use_hugepages)
     if (!use_hugepages) {
         cout << "  prefaulting 4 KiB pages..." << std::flush;
         t = clk::now();
-        constexpr long page = 4096;
+        constexpr long page = constants::host_page_size;
         char *cp = static_cast<char *>(base);
         for (long off = 0; off < nbytes; off += page)
             cp[off] = 0;

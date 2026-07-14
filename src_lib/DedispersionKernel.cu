@@ -644,7 +644,7 @@ void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, lo
 template<typename F>
 inline void _set_shmem(F kernel, uint nbytes)
 {
-    if ((kernel != nullptr) && (nbytes > constants::cuda_static_shmem_bytes)) {
+    if ((kernel != nullptr) && (nbytes > constants::cuda_max_static_shmem_bytes)) {
         CUDA_CALL(cudaFuncSetAttribute(
             kernel,
             cudaFuncAttributeMaxDynamicSharedMemorySize,

@@ -1746,6 +1746,9 @@ def parse_run_fake_xengine(subparsers):
     parser.add_argument('-s', '--sifter', metavar='SIFTER_ADDR', default=None,
                         help='Send the simulated FRB events (from_simulator=True) to '
                              'an FrbSifter at this "ip:port". Requires -f.')
+    parser.add_argument('--frb-snr', metavar='SNR', type=float, default=30.0, dest='frb_snr',
+                        help='Matched-filter SNR of injected simulated FRBs (default 30). '
+                             'Requires -f.')
 
 
 def run_fake_xengine_command(args):
@@ -1778,12 +1781,18 @@ def run_fake_xengine_command(args):
         print("Error: -g/--gap must be >= 0 seconds.", file=sys.stderr)
         sys.exit(2)
 
+    # An FRB SNR only has meaning when FRBs are being simulated.
+    if args.frb_snr != 30.0 and not args.frbs:
+        print("Error: --frb-snr requires -f/--frbs (there are no FRBs to inject "
+              "without FRB simulation).", file=sys.stderr)
+        sys.exit(2)
+
     from .run_fake_xengine import run_fake_xengine
     run_fake_xengine(args.rpc_addrs, nworkers=args.workers,
                      paced=not args.unpaced, normalized=not args.unnormalized,
                      gaussian=not args.non_gaussian,
                      send_junk=args.send_junk, simulate_frbs=args.frbs,
-                     sifter_addr=args.sifter, frb_gap_sec=args.gap)
+                     sifter_addr=args.sifter, frb_gap_sec=args.gap, frb_snr=args.frb_snr)
 
 ####################################################################################################
 

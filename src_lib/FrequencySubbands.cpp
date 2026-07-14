@@ -1,4 +1,5 @@
 #include "../include/pirate/FrequencySubbands.hpp"
+#include "../include/pirate/constants.hpp"  // constants::max_peak_finding_rank
 #include "../include/pirate/inlines.hpp"  // pow2()
 #include "../include/pirate/utils.hpp"    // integer_log2()
 
@@ -95,8 +96,10 @@ FrequencySubbands FrequencySubbands::from_threshold(double fmin, double fmax, do
     xassert(pf_rank >= 0);
     
     // Currently, pf_rank=4 is max value supported by the peak-finding kernel
-    if (pf_rank > 4)
-        throw std::runtime_error("FrequencySubbands::from_threshold: max allowed pf_rank is 4. This may change in the future.");
+    if (pf_rank > constants::max_peak_finding_rank)
+        throw std::runtime_error("FrequencySubbands::from_threshold: max allowed pf_rank is "
+                                 + std::to_string(constants::max_peak_finding_rank)
+                                 + ". This may change in the future.");
     
     // Initialize f_to_freq: mapping (coarse-freq index 0 <= f <= 2^pf_rank) -> (physical frequency)
     // Following Python logic: np.linspace(fmax**(-2), fmin**(-2), 2**pf_rank + 1)**(-0.5)
@@ -152,8 +155,10 @@ void FrequencySubbands::validate_subband_counts(const std::vector<long> &subband
     // Currently, pf_rank=4 is max value supported by the peak-finding kernel,
     // so a larger value would indicate a bug (such as using the total tree rank
     // instead of the peak-finding rank).
-    if (pf_rank > 4)
-        throw std::runtime_error("FrequencySubbands: max allowed pf_rank is 4. This may change in the future.");
+    if (pf_rank > constants::max_peak_finding_rank)
+        throw std::runtime_error("FrequencySubbands: max allowed pf_rank is "
+                                 + std::to_string(constants::max_peak_finding_rank)
+                                 + ". This may change in the future.");
     
     for (long level = 0; level <= pf_rank; level++) {
         // Level 0 is special (non-overlapping bands).

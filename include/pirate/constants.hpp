@@ -19,7 +19,7 @@ struct constants
 {
     // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#features-and-technical-specifications
     static constexpr int bytes_per_gpu_cache_line = 128;
-    static constexpr int cuda_static_shmem_bytes = 48 * 1024;
+    static constexpr int cuda_max_static_shmem_bytes = 48 * 1024;
     static constexpr int cuda_max_dynamic_shmem_bytes = 99 * 1024;
     static constexpr int cuda_max_y_blocks = 65535;
     static constexpr int cuda_max_z_blocks = 65535;
@@ -45,6 +45,10 @@ struct constants
 
     static constexpr int max_pf_width = 32;
 
+    // Max peak-finding rank supported by the peak-finding kernel
+    // (FrequencySubbands enforces pf_rank <= this).
+    static constexpr int max_peak_finding_rank = 4;
+
     // Dispersion constant K_DM, in (ms . MHz^2) per (pc cm^{-3}):
     //   dispersion delay (ms) = k_dm * DM * (f_lo^{-2} - f_hi^{-2}),
     // with DM in pc cm^{-3} and f_lo, f_hi in MHz. (Equivalently, 4.148808e3 s MHz^2.)
@@ -53,6 +57,12 @@ struct constants
     // FRB pulse-scattering spectral index: scattering time tau ~ nu^-frb_scattering_index
     // (used by simpulse::scattering_time).
     static constexpr double frb_scattering_index = 4.0;
+
+    // DM-scale offset (pc cm^-3) for the log-uniform DM distribution of simulated
+    // FRBs: DM is drawn with u = log(DM + frb_dm0) uniform on [0, frb_max_dm], so
+    // frb_dm0 sets the DM scale below which the distribution is ~uniform. Used by
+    // run_fake_xengine (passed to SimulatedFrameFactory). (Exposed to python.)
+    static constexpr double frb_dm0 = 50.0;
 
     // Number of inactive (expired/cancelled) FileStreams retained by an
     // FrbServer for ShowStreams history; the oldest are dropped beyond this.
@@ -88,6 +98,11 @@ struct constants
     static constexpr int grpc_forced_shutdown_deadline_ms = 100;
     static constexpr int grouper_ping_timeout_ms = 5000;
     static constexpr int grouper_connect_timeout_ms = 2000;
+
+    // Host memory page sizes (system assumptions; BumpAllocator uses these for
+    // mmap alignment, and utils.cpp's prefault loop for the page stride).
+    static constexpr long host_page_size = 4096;          // 4 KiB
+    static constexpr long host_hugepage_size = 2L << 20;  // 2 MiB
 
     // The CUDA driver caps a single cudaHostRegister() call at ~511 GiB (undocumented!!)
     //
