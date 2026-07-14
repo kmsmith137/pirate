@@ -10,7 +10,7 @@ import ksgpu
 from . import pirate_pybind11
 
 # Most pybind11 injections are in this file, with the following exceptions:
-#  class FrbGrouper -> pirate_frb/rpc/_FrbGrouper.py
+#  class FrbGrouper -> pirate_frb/rpc/FrbGrouper.py
 
 
 ########################################################################################################

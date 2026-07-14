@@ -407,7 +407,7 @@ PYFILES = \
   pirate_frb/tests/utils.py \
   pirate_frb/utils.py \
   pirate_frb/rpc/__init__.py \
-  pirate_frb/rpc/_FrbGrouper.py \
+  pirate_frb/rpc/FrbGrouper.py \
   pirate_frb/rpc/FileSubscriber.py \
   pirate_frb/rpc/FrbSearchClient.py \
   pirate_frb/rpc/FrbSifterClient.py

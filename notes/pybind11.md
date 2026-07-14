@@ -65,7 +65,7 @@ and documented (with `autoclass`) in the sphinx docs.
 
 - If it's technically challenging (or awkward) to python-bind a C++ class member/method, or if the member/method seems unlikely to be useful from python, then skip it. Please list in the chat all "skipped" members/methods.
 
-- Put method injections in `pirate_frb/pybind11_injections.py`. Exception: `FrbGrouper`'s injections live in `pirate_frb/rpc/_FrbGrouper.py` (next to the RPC clients); that file's top comment notes the exception.
+- Put method injections in `pirate_frb/pybind11_injections.py`. Exception: `FrbGrouper`'s injections live in `pirate_frb/rpc/FrbGrouper.py` (next to the RPC clients); that file's top comment notes the exception.
 
 - If a class has method injections, then add a C++ comment to the pybind11 code with a concise description of the injections.
 

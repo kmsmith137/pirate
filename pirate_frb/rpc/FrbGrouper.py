@@ -11,11 +11,11 @@ from contextlib import contextmanager, ExitStack
 import numpy as np
 
 import ksgpu
-from .. import pirate_pybind11
+from ..pirate_pybind11 import FrbGrouper
 from .FrbSifterClient import FrbSifterEvents
 
 
-@ksgpu.inject_methods(pirate_pybind11.FrbGrouper)
+@ksgpu.inject_methods(FrbGrouper)
 class FrbGrouperInjections:
     """The FrbGrouper manages pirate-grouper communication (from the grouper side).
     
