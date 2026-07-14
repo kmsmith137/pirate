@@ -432,6 +432,12 @@ private:
     void _frame_finalizing_thread_main();
     void frame_finalizing_thread_main();
 
+    // Throws a verbose, user-facing runtime_error if the frame pool (sized from
+    // the config parameter 'rb_host_memory_per_server') is too small for this
+    // run's beam count. Called once from the processing thread, after the
+    // metadata -- hence nbeams -- is known.
+    void _check_frame_pool_size(long nbeams) const;
+
     // Grouper send/receive thread functions (mirroring the existing pairs).
     void _grouper_send_thread_main();
     void grouper_send_thread_main();

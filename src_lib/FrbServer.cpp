@@ -295,6 +295,31 @@ void FrbServer::_check_stopped(const char *method_name)
 }
 
 
+// Throws (with a verbose, user-facing message) if the frame pool -- sized from
+// the config parameter 'rb_host_memory_per_server' -- is too small for this run's
+// beam count. A config/runtime precondition, so it uses a descriptive
+// runtime_error rather than xassert.
+void FrbServer::_check_frame_pool_size(long nbeams) const
+{
+    long total_frames = frame_allocator->num_total_frames(/*blocking=*/ true);
+    long min_frames = long(constants::server_min_total_chunks) * nbeams;
+    if (total_frames >= min_frames)
+        return;
+
+    stringstream ss;
+    ss << "FrbServer: the frame pool is too small for this configuration -- it holds "
+       << total_frames << " frames (" << (total_frames / nbeams) << " time-chunks), but at "
+       << "least " << min_frames << " frames (" << constants::server_min_total_chunks
+       << " chunks x " << nbeams << " beams) are required.\n"
+       << "The pool size is set by the config parameter 'rb_host_memory_per_server', divided "
+       << "by the per-frame memory footprint (which grows with the number of frequency "
+       << "channels and time_samples_per_chunk). Increase 'rb_host_memory_per_server' to "
+       << "accommodate this run's beam count (" << nbeams << ") and frequency-channel count, "
+       << "then re-run.";
+    throw runtime_error(ss.str());
+}
+
+
 void FrbServer::start()
 {
     // Per the strict stoppable-class policy (notes/stoppable_class.md), ANY
@@ -688,12 +713,8 @@ void FrbServer::_reaper_thread_main()
     // worker has already executed its resize.
     long rb_size = params.ringbuf_nchunks * nbeams;
 
-    // Get total number of frames (blocking until frame_allocator is initialized).
-    long total_frames = frame_allocator->num_total_frames(/*blocking=*/ true);
-    xassert(total_frames >= 6 * nbeams);
-
     for (;;) {
-        frame_allocator->block_until_low_memory(2 * nbeams);
+        frame_allocator->block_until_low_memory(constants::reaper_lowmem_chunks * nbeams);
 
         unique_lock<std::mutex> lock(mutex);
 
@@ -811,6 +832,10 @@ void FrbServer::_processing_thread_main()
     // or if num_active_batches * beams_per_batch > beams_per_gpu. Exception
     // propagates to the wrapper which calls stop().
     config_postfilled.validate();
+
+    // Fail early, with a helpful message, if the frame pool sized from
+    // rb_host_memory_per_server is too small for this run's beam count.
+    _check_frame_pool_size(new_beams_per_gpu);
 
     // The build steps below (plan construction, GpuDedisperser
     // create/allocate, weight fill) are individually slow (seconds each) and

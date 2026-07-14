@@ -56,6 +56,17 @@ struct constants
     // network test reads it at runtime and assumes >= 5.)
     static constexpr int inactive_file_stream_capacity = 5;
 
+    // Frame-pool / pacing sizing, in "chunks" (one chunk = nbeams frames):
+    //   - server_min_total_chunks: the FrbServer frame pool must hold at least this
+    //     many chunks; checked at startup (FrbServer::_check_frame_pool_size).
+    //   - reaper_lowmem_chunks: chunks the reaper keeps pre-initialized (its
+    //     low-memory back-pressure threshold).
+    //   - fake_xengine_pacing_chunks: paced mode -- each FakeXEngine worker stays at
+    //     most this many chunks ahead of the server's rb_processed.
+    static constexpr int server_min_total_chunks = 10;
+    static constexpr int reaper_lowmem_chunks = 2;
+    static constexpr int fake_xengine_pacing_chunks = 5;
+
     // Timeouts.
     //
     //   - poll_cadence: low-level polling (e.g. for catching control-C)
@@ -112,6 +123,14 @@ struct constants
     
     static_assert(cuda_host_register_chunk_size <= (511L << 30),
                   "cuda_host_register_chunk_size must be <= 511 GiB");
+
+    static_assert(reaper_lowmem_chunks >= 2);
+    static_assert(fake_xengine_pacing_chunks >= 3);
+    
+    // The frame pool must hold the reaper's pre-init reserve + the FakeXEngine
+    // pacing lookahead, plus headroom for the in-flight chunks.
+    static_assert(server_min_total_chunks >= fake_xengine_pacing_chunks + reaper_lowmem_chunks + 2,
+                  "server_min_total_chunks too small for the pacing + reaper reserve");
 };
 
 

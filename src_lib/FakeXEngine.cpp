@@ -1220,10 +1220,11 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
                 // running this code.
             }
 
-            // Gate: wait until rb_processed catches up to within 5
-            // chunks of this worker's most recent successful SEND, or
-            // stop. The required > 0 fast path skips the lock for the
-            // (common) case where last_ichunk_sent <= 5 (worker hasn't
+            // Gate: wait until rb_processed catches up to within
+            // constants::fake_xengine_pacing_chunks chunks of this worker's most
+            // recent successful SEND, or stop. The required > 0 fast path skips
+            // the lock for the (common) case where last_ichunk_sent <=
+            // fake_xengine_pacing_chunks (worker hasn't
             // sent enough yet for the gate to bite). See the paced-mode
             // section of FakeXEngine.hpp's class doc-comment for why
             // the horizon is last_ichunk_sent rather than the pending
@@ -1231,7 +1232,7 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
             // run arbitrarily far ahead of its actual SENDs without
             // advancing the server, so gating against the pending
             // ichunk would deadlock after a SKIP-heavy stretch.
-            long required = (w.last_ichunk_sent - 5) * nbeams;
+            long required = (w.last_ichunk_sent - constants::fake_xengine_pacing_chunks) * nbeams;
             if (required > 0) {
                 std::unique_lock<std::mutex> lk(w.mutex);
                 w.gate_cv.wait(lk, [&] {
