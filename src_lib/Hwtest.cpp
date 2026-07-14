@@ -716,6 +716,7 @@ struct ChimeWorker : public Hwtest::Worker
         gdd_params.plan = dedispersion_plan;
         gdd_params.stream_pool = cuda_stream_pool;
         gdd_params.num_consumers = 1;
+        gdd_params.cuda_device_id = this->device;   // required (ctor asserts >= 0)
         gdd_params.initial_chunk = 0;   // hwtest: outputs are zero-based
 
         {
