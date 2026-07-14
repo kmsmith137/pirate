@@ -370,7 +370,8 @@ PYFILES = \
   pirate_frb/HwtestSender.py \
   pirate_frb/Hwtest.py \
   pirate_frb/Hardware.py \
-  pirate_frb/pybind11_injections.py \
+  pirate_frb/DedispersionConfig.py \
+  pirate_frb/GpuDedisperser.py \
   pirate_frb/run_server.py \
   pirate_frb/run_fake_xengine.py \
   pirate_frb/run_rpc_status.py \
@@ -382,9 +383,14 @@ PYFILES = \
   pirate_frb/yaml_utils.py \
   pirate_frb/chime/__init__.py \
   pirate_frb/casm/__init__.py \
+  pirate_frb/casm/CasmBeamformer.py \
   pirate_frb/casm/CasmReferenceBeamformer.py \
   pirate_frb/casm/Dense1dBeamformer.py \
   pirate_frb/core/__init__.py \
+  pirate_frb/core/BumpAllocator.py \
+  pirate_frb/core/CudaStreamPool.py \
+  pirate_frb/core/SimulatedFrameFactory.py \
+  pirate_frb/core/SlabAllocator.py \
   pirate_frb/slow_avar/__init__.py \
   pirate_frb/slow_avar/SparseTile.py \
   pirate_frb/slow_avar/PfVariance.py \
@@ -396,6 +402,7 @@ PYFILES = \
   pirate_frb/simpulse/test_pulse_upsampling.py \
   pirate_frb/simpulse/plot_pulses.py \
   pirate_frb/kernels/__init__.py \
+  pirate_frb/kernels/GpuDequantizationKernel.py \
   pirate_frb/loose_ends/__init__.py \
   pirate_frb/tests/__init__.py \
   pirate_frb/tests/test_assembled_frame_allocator.py \

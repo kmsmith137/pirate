@@ -507,7 +507,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    host_allocator: BumpAllocator for host memory")
           // Low-level acquire/release (raw stream_ptr). Underscore-prefixed to mark them
           // internal: the Python interface is the get_input()/get_output() context managers
-          // (pirate_frb/pybind11_injections.py), which wrap these.
+          // (pirate_frb/GpuDedisperser.py), which wrap these.
           //
           // All four release the GIL. Each can block on progress driven by a DIFFERENT
           // python thread (e.g. acquire_output blocks until the producer thread calls

@@ -43,7 +43,7 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("show_registry", &GpuDedispersionKernel::show_registry)
     ;
 
-    // GpuDequantizationKernel: Python injections in pybind11_injections.py:
+    // GpuDequantizationKernel: Python injections in pirate_frb/kernels/GpuDequantizationKernel.py:
     //   - __init__: converts dtype argument via ksgpu.Dtype()
     //   - launch: converts stream=None to current cupy stream
     py::class_<GpuDequantizationKernel>(m, "GpuDequantizationKernel",

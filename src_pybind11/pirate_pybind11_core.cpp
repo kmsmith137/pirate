@@ -137,7 +137,7 @@ void register_core_bindings(pybind11::module &m)
 {
     // BumpAllocator: Thread-safe bump allocator for GPU/host memory
     // Wrapped with shared_ptr for proper lifetime management when arrays reference the allocator.
-    // Note: Python injections in pirate_frb/pybind11_injections.py handle aflags and dtype conversions.
+    // Note: Python injections in pirate_frb/core/BumpAllocator.py handle aflags and dtype conversions.
     py::class_<BumpAllocator, std::shared_ptr<BumpAllocator>>(m, "BumpAllocator",
         "Thread-safe bump allocator supporting GPU/host memory.\n\n"
         "Modes:\n"
@@ -186,7 +186,7 @@ void register_core_bindings(pybind11::module &m)
     ;
 
     // SlabAllocator: Thread-safe pool allocator for fixed-size slabs
-    // Note: Python injections in pirate_frb/pybind11_injections.py handle aflags conversion.
+    // Note: Python injections in pirate_frb/core/SlabAllocator.py handle aflags conversion.
     // Note: get_slab() returns shared_ptr<void>, which is not wrapped (per pybind11 guidelines).
     py::class_<SlabAllocator, std::shared_ptr<SlabAllocator>>(m, "SlabAllocator",
         "Thread-safe pool allocator for fixed-size memory slabs.\n\n"
@@ -656,7 +656,7 @@ void register_core_bindings(pybind11::module &m)
     // CudaStreamPool: always accessed via shared_ptr.
     // Stream members are exposed to python as CudaStreamWrapper objects.
     // No class docstring here: CudaStreamPool's docstring lives in the Python
-    // injector (pirate_frb/pybind11_injections.py), since its Python interface is
+    // injector (pirate_frb/core/CudaStreamPool.py), since its Python interface is
     // the injected stream accessors that return ksgpu.CudaStreamWrapper objects
     // (option 2 in notes/docstrings.md).
     py::class_<CudaStreamPool, std::shared_ptr<CudaStreamPool>>(m, "CudaStreamPool")

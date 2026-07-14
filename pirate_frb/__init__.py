@@ -23,13 +23,18 @@ if getattr(ksgpu, "__file__", None) is None or not hasattr(ksgpu, "Dtype"):
 
 from . import pirate_pybind11
 from . import cuda_generator
-from . import pybind11_injections  # noqa: F401
 from . import casm
 from . import kernels
 from . import loose_ends
 from . import core
 from . import slow_avar
 from . import rpc  # noqa: F401  (RPC client/server classes; also applies FrbGrouper injections)
+
+# Method injections for pybind11 classes live in per-class modules (e.g.
+# core/BumpAllocator.py, casm/CasmBeamformer.py, kernels/GpuDequantizationKernel.py,
+# rpc/FrbGrouper.py, and DedispersionConfig/GpuDedisperser below); importing each
+# such module applies its injections. The subpackage imports above cover most of
+# them; see notes/pybind11.md.
 
 from .HwtestSender import HwtestSender
 from .Hwtest import Hwtest
@@ -40,10 +45,13 @@ from .Acquisition import Acquisition
 from .OfflineDedisperser import OfflineDedisperser
 from .run_offline_dedisperser import run_offline_dedisperser
 
+# DedispersionConfig and GpuDedisperser carry method injections, so they are
+# imported from their per-class modules (which apply the injections and re-export
+# the class); the rest are plain re-exports of the pybind11 classes.
+from .DedispersionConfig import DedispersionConfig
+from .GpuDedisperser import GpuDedisperser
 from .pirate_pybind11 import (
-    DedispersionConfig,
     DedispersionPlan,
-    GpuDedisperser,
     FrbServer,
     FrbGrouperClient,
     constants,

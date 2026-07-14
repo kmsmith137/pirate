@@ -22,8 +22,7 @@ namespace pirate {
 void register_casm_bindings(pybind11::module &m)
 {
     // CasmBeamformer: GPU beamformer for CASM telescope
-    // Note: Python method injections in pirate_frb/pybind11_injections.py add stream argument support
-    // Note: Python injections in pirate_frb/pybind11_injections.py add a stream
+    // Note: Python injections in pirate_frb/casm/CasmBeamformer.py add a stream
     // argument to launch_beamformer(); the class docstring stays here (option 1
     // in notes/docstrings.md).
     py::class_<CasmBeamformer> (m, "CasmBeamformer",
@@ -66,7 +65,7 @@ void register_casm_bindings(pybind11::module &m)
         py::arg("ew_feed_spacings") = py::none())
 
         // Internal launch_beamformer binding that accepts stream_ptr
-        // Python wrapper in pybind11_injections.py handles stream=None default
+        // Python wrapper in pirate_frb/casm/CasmBeamformer.py handles stream=None default
         .def("launch_beamformer",
              [](CasmBeamformer &self, const Array<uint8_t> &e_in, 
                 const Array<float> &feed_weights, Array<float> &i_out,

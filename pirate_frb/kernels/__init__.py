@@ -2,7 +2,6 @@
 from ..pirate_pybind11 import (
     CoalescedDdKernel2,
     GpuDedispersionKernel,
-    GpuDequantizationKernel,
     GpuLaggedDownsamplingKernel,
     GpuPeakFindingKernel,
     GpuRingbufCopyKernel,
@@ -14,4 +13,9 @@ from ..pirate_pybind11 import (
     ReferenceTree,
     ReferenceTreeGriddingKernel,
 )
+
+# GpuDequantizationKernel's method injections live in
+# kernels/GpuDequantizationKernel.py, which both applies the injections (as an
+# import side effect) and re-exports the class.
+from .GpuDequantizationKernel import GpuDequantizationKernel
 

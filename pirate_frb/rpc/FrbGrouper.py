@@ -1,9 +1,12 @@
 """
-FrbGrouper method injections (context-manager usage + get_output).
+FrbGrouper method injections (context-manager usage + get_output), plus
+re-export of the pybind11 class.
 
-Split out from pirate_frb/pybind11_injections.py and kept here, alongside the
-RPC clients, because FrbGrouper is the consumer side of the RPC interface.
-Applied as a side effect of importing pirate_frb.rpc.
+Per the per-class injection convention (see notes/pybind11.md), this file lives
+in the package that owns FrbGrouper -- pirate_frb.rpc, since FrbGrouper is the
+consumer side of the RPC interface. Importing it applies the injections (side
+effect) and re-exports the class; rpc/__init__.py does 'from .FrbGrouper import
+FrbGrouper'.
 """
 
 from contextlib import contextmanager, ExitStack

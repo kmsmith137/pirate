@@ -65,7 +65,7 @@ and documented (with `autoclass`) in the sphinx docs.
 
 - If it's technically challenging (or awkward) to python-bind a C++ class member/method, or if the member/method seems unlikely to be useful from python, then skip it. Please list in the chat all "skipped" members/methods.
 
-- Put method injections in `pirate_frb/pybind11_injections.py`. Exception: `FrbGrouper`'s injections live in `pirate_frb/rpc/FrbGrouper.py` (next to the RPC clients); that file's top comment notes the exception.
+- Put each pybind11 class's method injections in a file named after the class, in the package that owns (re-exports) that class -- e.g. `pirate_frb/core/BumpAllocator.py`, `pirate_frb/casm/CasmBeamformer.py`, `pirate_frb/kernels/GpuDequantizationKernel.py`, `pirate_frb/rpc/FrbGrouper.py`, or a top-level file like `pirate_frb/GpuDedisperser.py`. The file imports the class from `pirate_pybind11`, applies the `@ksgpu.inject_methods` injector, and (by keeping the class name bound at module scope) re-exports it. The owning package's `__init__.py` then does `from .ClassName import ClassName` instead of `from ..pirate_pybind11 import ClassName` -- a single line that both applies the injections (as an import side effect, since `inject_methods` mutates the class in place) and re-exports the class. See `pirate_frb/rpc/FrbGrouper.py` for the reference example.
 
 - If a class has method injections, then add a C++ comment to the pybind11 code with a concise description of the injections.
 
