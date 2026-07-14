@@ -453,7 +453,7 @@ class NetworkTester:
         #
         # LOWER (rb_start, plus a future-bound): chunks must
         # be in the ringbuf at SERVER-processing time, not
-        # just snapshot time. The FrbServer worker advances
+        # just snapshot time. The FrbServer receiver thread advances
         # rb_start as new chunks arrive. We bound the
         # worst-case rb_start at server time using:
         #   max_future_rb_end <= (max_wpos // mpc - 1) * nbeams

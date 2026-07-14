@@ -1530,7 +1530,7 @@ void register_core_bindings(pybind11::module &m)
                std::lock_guard<std::mutex> lock(self.mutex);
                return self.is_stopped;
           }, "True if the server has been stopped, either by a stop() call or because\n"
-             "a worker/reaper/processing thread threw an exception. To retrieve the\n"
+             "a receiver/reaper/processing thread threw an exception. To retrieve the\n"
              "error itself, call poll_from_python(), which re-raises the saved\n"
              "exception (nothing is printed to stderr).")
           .def_property_readonly("host_allocator", [](FrbServer &self) {

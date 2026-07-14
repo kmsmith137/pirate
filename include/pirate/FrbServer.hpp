@@ -45,7 +45,7 @@ struct FrbGrouperClient;  // FrbGrouper.hpp (producer-side grouper connection)
 
 // FrbServer: a thread-backed class that manages Receivers and an RPC service.
 //
-// Backing threads: one worker thread per Receiver, a reaper thread, a
+// Backing threads: one receiver thread per Receiver, a reaper thread, a
 // processing thread, and a frame-finalizing thread (see below). These
 // threads inherit their vcpu affinity from the caller
 // of FrbServer::start(). Python callers should call FrbServer.start() within
@@ -108,7 +108,7 @@ struct FrbServer
         // Artificial per-frame delay injected by the processing thread,
         // in seconds. Used to simulate slow GPU processing for testing
         // the FakeXEngine pacing path; defaults to 0 (no delay).
-        // Applied off-lock so worker threads can keep advancing
+        // Applied off-lock so receiver threads can keep advancing
         // rb_assembled during the "work".
         double processing_delay_sec = 0.0;
 
@@ -146,11 +146,11 @@ struct FrbServer
     // Factory method (constructor is private).
     static std::shared_ptr<FrbServer> create(const Params &params);
 
-    ~FrbServer();  // calls stop(), joins all backing threads (workers, reaper,
+    ~FrbServer();  // calls stop(), joins all backing threads (receivers, reaper,
                    // processing, frame-finalizing, grouper), then rpc_server->Wait()
 
     // Start/stop the Receivers and the RPC service.
-    // Neither start() nor stop() calls rpc_server->Wait() or joins the worker
+    // Neither start() nor stop() calls rpc_server->Wait() or joins the receiver
     // threads (the destructor does both). Note that stop() is not fully
     // asynchronous: it calls rpc_server->Shutdown(), which blocks until
     // in-flight RPC handlers return (they exit promptly once the stop
@@ -189,12 +189,12 @@ struct FrbServer
     //
     // rb_init_cv -- waiter: the processing thread's startup wait
     //   (predicate: rb_initialized, or stopped). Signaled on: the
-    //   rb_initialized latch in the first worker's init block (notify_all
+    //   rb_initialized latch in the first receiver's init block (notify_all
     //   -- one-shot latch), and stop().
     //
     // assembled_cv -- waiter: the processing thread's inner loop
     //   (predicate: rb_curr < rb_assembled, or stopped). Signaled on:
-    //   every frame insertion in _worker_main() (notify_one -- single
+    //   every frame insertion in _receiver_thread_main() (notify_one -- single
     //   waiter; this is the hottest notify in the server), and stop().
     //
     // dd_init_cv -- waiters: the frame_finalizing thread and the grouper
@@ -210,7 +210,7 @@ struct FrbServer
     // reaper_cv -- waiter: the reaper thread (predicate: rb_reaped <
     //   rb_processed, or stopped). Signaled on: every rb_processed advance
     //   in the frame_finalizing thread's Phase C (notify_one -- single
-    //   waiter), and stop(). (Worker frame insertions do NOT signal the
+    //   waiter), and stop(). (Receiver frame insertions do NOT signal the
     //   reaper: they never make its predicate true.)
     //
     // monitor_cv -- waiters: MonitorRingbuf RPC handlers (predicate:
@@ -232,10 +232,10 @@ struct FrbServer
     bool is_started = false;
 
     // Cached metadata pointer (canonical copy lives in the
-    // AssembledFrameAllocator; this is the snapshot the FIRST worker thread
+    // AssembledFrameAllocator; this is the snapshot the FIRST receiver thread
     // captured when it sized frame_ringbuf). Set under 'mutex' by the first
-    // worker that completes its init block; null before that. Used by the
-    // worker's "is this the first init?" check; the reaper and RPC handlers
+    // receiver that completes its init block; null before that. Used by the
+    // receiver's "is this the first init?" check; the reaper and RPC handlers
     // read metadata via frame_allocator->get_metadata() instead.
     //
     // freq_channels: always FREQUENCY-SCRUBBED (empty), inherited from the
@@ -351,8 +351,8 @@ struct FrbServer
     long rb_end          = 0;   // (last frame_id in ringbuf) + 1
     bool rb_initialized  = false;
 
-    // Worker threads (one per receiver).
-    std::vector<std::thread> workers;
+    // Receiver threads (one per Receiver).
+    std::vector<std::thread> receiver_threads;
 
     // Reaper thread (only spawned in non-dummy mode).
     std::thread reaper_thread;
@@ -417,9 +417,9 @@ private:
     // build completes.
     void _check_stopped(const char *method_name);
 
-    // Worker thread functions.
-    void _worker_main(int receiver_index);
-    void worker_main(int receiver_index);
+    // Receiver thread functions.
+    void _receiver_thread_main(int receiver_index);
+    void receiver_thread_main(int receiver_index);
 
     // Reaper thread functions.
     void _reaper_thread_main();

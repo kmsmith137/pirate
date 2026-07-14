@@ -209,7 +209,7 @@ struct AssembledFrame
     // These members are protected by the mutex, and are not saved to the ASDF file.
 
     mutable std::mutex mutex;
-    long finalize_count = 0;    // incremented by FrbServer worker thread(s)
+    long finalize_count = 0;    // incremented by FrbServer receiver thread(s)
 
     // One queued write request: a relative output path, plus the FileStream
     // that requested it (null pointer = WriteFiles-triggered). The pointer

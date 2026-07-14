@@ -970,7 +970,7 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
 // of curr_frame_sets[0] into completed_frame_sets, the assembler thread
 // MUST NOT perform any further write (in particular, no memcpy) to any
 // frame inside the just-evicted set. After the push, the set's frames may
-// be concurrently read by FrbServer workers / gRPC / FileWriter, or reaped
+// be concurrently read by FrbServer receiver threads / gRPC / FileWriter, or reaped
 // (data cleared) by the FrbServer reaper thread.
 //
 // We satisfy this invariant by:

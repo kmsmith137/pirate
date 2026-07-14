@@ -37,9 +37,9 @@ struct AssembledFrameAllocator;  // AssembledFrame.hpp
 // within a ThreadAffinity context manager.
 //
 // External-thread cross-coordination: evict(K) can be called from a non-
-// Receiver thread (in practice, a FrbServer worker) to ask the assembler to
+// Receiver thread (in practice, a FrbServer receiver thread) to ask the assembler to
 // force-advance its 2-chunk window past chunk K. Used by FrbServer to keep
-// multiple Receivers synchronized -- see FrbServer::_worker_main.
+// multiple Receivers synchronized -- see FrbServer::_receiver_thread_main.
 //
 // XEngineMetadata ownership: the Receiver does NOT own the consensus
 // metadata. The reader thread hands each peer's parsed YAML to
@@ -109,11 +109,11 @@ struct Receiver
     //
     // Non-blocking -- returns immediately after setting state and notifying.
     // Thread-safe; intended to be called from non-Receiver threads (in
-    // practice, FrbServer worker threads). Idempotent / monotone: only
+    // practice, FrbServer receiver threads). Idempotent / monotone: only
     // ratchets the internal target upward.
     //
     // Deviation: silently no-ops (instead of throwing) when the Receiver is
-    // stopped. FrbServer workers call evict() during shutdown, after
+    // stopped. FrbServer receiver threads call evict() during shutdown, after
     // FrbServer::stop() has already cascaded into every Receiver -- throwing
     // here would turn normal teardown into spurious errors.
     void evict(long evicted_chunk);

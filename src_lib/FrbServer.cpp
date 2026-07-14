@@ -229,7 +229,7 @@ FrbServer::FrbServer(const Params &p) : params(p)
 
         // The handshake exports an IPC handle via params.gpu_allocator->get_base().
         // Reject a dummy (capacity < 0) OR empty (capacity == 0) gpu_allocator early
-        // so the error is at construction rather than mid-handshake on a worker
+        // so the error is at construction rather than mid-handshake on a backing
         // thread. Dummy mode makes get_base() throw; empty mode makes it return a
         // null shared_ptr (cudaIpcGetMemHandle(nullptr) would then fail). Neither
         // can back output_ringbuf, so require capacity > 0.
@@ -253,9 +253,9 @@ FrbServer::~FrbServer()
 {
     stop();
 
-    for (auto &w : workers)
-        if (w.joinable())
-            w.join();
+    for (auto &t : receiver_threads)
+        if (t.joinable())
+            t.join();
 
     if (reaper_thread.joinable())
         reaper_thread.join();
@@ -354,7 +354,7 @@ void FrbServer::start()
         // the thread handles below are PUBLISHED under it -- stop() and the
         // destructor synchronize on the mutex before reading them (stop()
         // can run concurrently with start(), e.g. from an RPC handler or a
-        // just-spawned worker). Safe: nothing below waits on the spawned
+        // just-spawned backing thread). Safe: nothing below waits on the spawned
         // threads or on RPC handlers, which block briefly on the mutex
         // until we return.
 
@@ -376,10 +376,10 @@ void FrbServer::start()
             throw runtime_error("FrbServer: failed to bind RPC server to " + params.rpc_server_address
                                 + " (already in use, or malformed 'ip:port'?)");
 
-        // Spawn one worker thread per receiver.
+        // Spawn one receiver thread per Receiver.
         int nreceivers = params.receivers.size();
         for (int i = 0; i < nreceivers; i++)
-            workers.emplace_back(&FrbServer::worker_main, this, i);
+            receiver_threads.emplace_back(&FrbServer::receiver_thread_main, this, i);
 
         // Spawn reaper thread iff frame_allocator is not in dummy mode.
         if (!frame_allocator->is_dummy())
@@ -525,10 +525,10 @@ bool FrbServer::poll_from_python(int timeout_ms) const
 
 // -------------------------------------------------------------------------------------------------
 //
-// Worker threads
+// Receiver threads
 
 
-void FrbServer::_worker_main(int receiver_index)
+void FrbServer::_receiver_thread_main(int receiver_index)
 {
     auto &receiver = params.receivers.at(receiver_index);
     long num_receivers = params.receivers.size();
@@ -545,7 +545,7 @@ void FrbServer::_worker_main(int receiver_index)
     // Frame ids in the FrbServer ringbuf are absolute -- frame_id =
     // time_chunk_index * nbeams + ibeam -- so the very first frame has
     // frame_id = initial_time_chunk * nbeams. We seed rb_* with that
-    // offset below; the worker's frame_id loop starts there too.
+    // offset below; the receiver's frame_id loop starts there too.
     long initial_time_chunk = frame_allocator->wait_for_initial_chunk();
     long nbeams = m->get_nbeams();
     long rb_size = params.ringbuf_nchunks * nbeams;
@@ -558,13 +558,13 @@ void FrbServer::_worker_main(int receiver_index)
         metadata = m;
         // The frame_ringbuf and beam_id_to_index are initialized at the same time
         // as the metadata, without dropping the lock in between. Correctness of
-        // worker_main() and reaper_main() depend on this property.
+        // receiver_thread_main() and reaper_thread_main() depend on this property.
         frame_ringbuf.resize(rb_size);
         for (int i = 0; i < nbeams; i++)
             beam_id_to_index[m->beam_ids[i]] = i;
 
         // Seed the ring-buffer indices at initial_frame_id (rather than 0).
-        // Otherwise the worker's first install would fail the xassert
+        // Otherwise the receiver's first install would fail the xassert
         // rb_end == frame_id below.
         rb_start        = initial_frame_id;
         rb_reaped       = initial_frame_id;
@@ -646,7 +646,7 @@ void FrbServer::_worker_main(int receiver_index)
                 // during ringbuf warm-up, rb_start would point below the
                 // oldest actually-populated slot -- the formula
                 // 'frame_id - rb_size + 1' assumes the ringbuf has been
-                // filling since frame_id 0, but our worker seeds rb_start
+                // filling since frame_id 0, but our receiver seeds rb_start
                 // at initial_frame_id (which can be large, e.g. when the
                 // sender starts at a nonzero minichunk index). Floor at
                 // initial_frame_id makes [rb_start, rb_end) contain only
@@ -689,14 +689,14 @@ void FrbServer::_worker_main(int receiver_index)
 }
 
 
-void FrbServer::worker_main(int receiver_index)
+void FrbServer::receiver_thread_main(int receiver_index)
 {
-    // Note: worker wrappers (here and below) don't print the exception. Per
+    // Note: thread wrappers (here and below) don't print the exception. Per
     // the error-reporting convention in notes/stoppable_class.md, the first
     // stop(e) caller's exception is saved in FrbServer::error and surfaces
     // in python via poll_from_python() (see run_server.py).
     try {
-        _worker_main(receiver_index);
+        _receiver_thread_main(receiver_index);
     } catch (...) {
         stop(std::current_exception());
     }
@@ -717,13 +717,13 @@ void FrbServer::_reaper_thread_main()
     long nbeams = m->get_nbeams();
 
     // Compute rb_size from nbeams directly. Reading frame_ringbuf.size()
-    // would be racy here: a FrbServer worker is responsible for the
+    // would be racy here: a FrbServer receiver is responsible for the
     // frame_ringbuf.resize() call, and that may not have happened yet at
     // this point. The frame_ringbuf[rb_slot] access further down is still
     // safe because it sits inside the reaper_cv wait on (rb_reaped < rb_processed)
-    // -- for that to become true, some worker has assembled and the
+    // -- for that to become true, some receiver has assembled and the
     // processing thread has advanced past a frame, which means the first
-    // worker has already executed its resize.
+    // receiver has already executed its resize.
     long rb_size = params.ringbuf_nchunks * nbeams;
 
     for (;;) {
@@ -733,7 +733,7 @@ void FrbServer::_reaper_thread_main()
 
         // Wait for a reapable frame (i.e. rb_reaped < rb_processed). The
         // frame_finalizing thread signals reaper_cv when it advances
-        // rb_processed (worker frame insertions never make this predicate
+        // rb_processed (receiver frame insertions never make this predicate
         // true, so they don't signal the reaper at all).
         for (;;) {
             if (is_stopped)
@@ -1054,7 +1054,7 @@ void FrbServer::_processing_thread_main()
     //   nbeams   = beams per time chunk (= m->get_nbeams() = beams_per_gpu).
     //   nbatches = batches per time chunk (B = beams_per_batch beams each).
     //   initial_time_chunk = FPGA-based chunk index of seq_id=0 (the same
-    //     canonical value the workers seed rb_* with, and that we passed to
+    //     canonical value the receivers seed rb_* with, and that we passed to
     //     GpuDedisperser::Params::initial_chunk). wait_for_initial_chunk() is
     //     idempotent and already resolved here, so this does not block.
     const long nbeams             = m->get_nbeams();
@@ -1077,7 +1077,7 @@ void FrbServer::_processing_thread_main()
         // we keep the inner loop is that evrb_h2g must be recorded only AFTER all B
         // frames are assembled -- never ahead of assembly -- or frame_finalizing_thread
         // would advance rb_processed past rb_assembled and trip its invariant (and
-        // stall the reaper / trip the worker's slot-reuse assert).
+        // stall the reaper / trip the receiver's slot-reuse assert).
 
         // Before queueing the h2g copies, wait on its output buffer, by waiting on
         // the dequant kernel with (seq_id - nstreams). Skipped under
@@ -1127,7 +1127,7 @@ void FrbServer::_processing_thread_main()
             // any drift between the absolute frame ring (rb_curr) and the
             // zero-based seq_id world -- which would silently mislabel every
             // output -- is caught here rather than downstream. Mirrors the
-            // worker-side insertion check (frame_id = ichunk*nbeams + ibeam).
+            // receiver-side insertion check (frame_id = ichunk*nbeams + ibeam).
             const long expected_chunk   = initial_time_chunk + seq_id / nbatches;
             const long expected_beam_id = m->beam_ids.at((seq_id % nbatches) * B + b);
             xassert_eq(frame->time_chunk_index, expected_chunk);
@@ -1408,7 +1408,7 @@ void FrbServer::_frame_finalizing_thread_main()
         monitor_cv.notify_all();
 
         // Announce a fully-processed chunk (once per chunk), unless params.quiet.
-        // Printed off-lock. See the assembly-time note in _worker_main: the status
+        // Printed off-lock. See the assembly-time note in _receiver_thread_main: the status
         // line lives here (processed by the GPU), not there (assembled by the net).
         if ((completed_ichunk >= 0) && !params.quiet) {
             long ichunk = completed_ichunk;
