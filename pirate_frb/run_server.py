@@ -217,7 +217,7 @@ def _resolve_ip_addrs(config, hw, filename):
     this machine's concrete IPv4 addresses, in place. Literal-IPv4 specs pass
     through unchanged. This is what lets a single config file be shared across a
     cluster of machines with different IP addresses -- each machine resolves its
-    own local addresses. See resolve_addr() / resolve_ip_spec() in utils/network.py.
+    own local addresses. See resolve_addr() / resolve_ip_spec() in utils.py.
 
     grouper_ip_addrs are intentionally NOT resolved: they must stay loopback
     (CUDA IPC requires the grouper on the same node), so a literal '127.0.0.1' is

@@ -28,7 +28,6 @@
 #include "../include/pirate/FrbServer.hpp"
 #include "../include/pirate/FrbGrouper.hpp"
 #include "../include/pirate/FileWriter.hpp"
-#include "../include/pirate/HwtestSender.hpp"
 #include "../include/pirate/Hwtest.hpp"
 
 using namespace std;
