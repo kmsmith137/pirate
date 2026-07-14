@@ -20,13 +20,13 @@ class FrbSearchClient:
 
     Usage (as a context manager)::
 
-        with FrbSearchClient("localhost:50051") as client:
+        with FrbSearchClient("127.0.0.1:6000") as client:
             status = client.get_status()
             print(f"Connections: {status.num_connections}, Bytes: {status.num_bytes}")
 
     Or without a context manager::
 
-        client = FrbSearchClient("localhost:50051")
+        client = FrbSearchClient("127.0.0.1:6000")
         status = client.get_status()
         client.close()
     """
@@ -40,7 +40,7 @@ class FrbSearchClient:
         out of sync.
 
         Args:
-            server_address: gRPC server address (e.g. "localhost:50051")
+            server_address: gRPC server address (e.g. "127.0.0.1:6000")
         """
         self.server_address = server_address
         self.channel = grpc.insecure_channel(server_address)

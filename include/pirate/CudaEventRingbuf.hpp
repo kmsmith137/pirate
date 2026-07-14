@@ -70,8 +70,11 @@ struct CudaEventRingbuf
     // exit. If this ever becomes a problem in practice, the fix is a polling
     // mode: loop on cudaEventQuery() + short sleep, rechecking is_stopped.
     
-    CudaEventRingbuf(const std::string &name, int nconsumers, 
-                     long max_size=1000, bool blocking_sync = true);
+    // Default ring-buffer capacity (the max_size ctor arg).
+    static constexpr int default_size = 1000;
+
+    CudaEventRingbuf(const std::string &name, int nconsumers,
+                     long max_size = default_size, bool blocking_sync = true);
     
     ~CudaEventRingbuf();
 

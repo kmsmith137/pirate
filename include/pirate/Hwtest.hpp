@@ -29,6 +29,10 @@ namespace pirate {
 
 struct Hwtest : public std::enable_shared_from_this<Hwtest>
 {
+    // TCP port for the hwtest network test: Hwtest's TcpReceiver binds it, and
+    // HwtestSender connects to it.
+    static constexpr int tcp_port = 8787;
+
     // Factory method (constructor is protected).
     static std::shared_ptr<Hwtest> create(const std::string &server_name="Hwtest", bool use_hugepages=true);
 

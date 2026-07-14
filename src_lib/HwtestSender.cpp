@@ -1,4 +1,5 @@
 #include "../include/pirate/HwtestSender.hpp"
+#include "../include/pirate/Hwtest.hpp"         // Hwtest::tcp_port
 #include "../include/pirate/network_utils.hpp"  // Socket
 #include "../include/pirate/system_utils.hpp"   // set_thread_affinity()
 #include "../include/pirate/constants.hpp"      // default_poll_cadence_ms
@@ -272,7 +273,7 @@ long HwtestSender::_worker_main(long endpoint_index)
         // constants::default_poll_cadence_ms. (A plain blocking connect() could
         // stall for the kernel's SYN-retry timeout, ~2 minutes, if the receiver
         // is not running -- blocking stop() and the destructor for that long.)
-        socket.start_connect(e.ip_addr, 8787);  // TCP port 8787
+        socket.start_connect(e.ip_addr, Hwtest::tcp_port);
 
         while (!socket.wait_for_connect(constants::default_poll_cadence_ms)) {
             if (_stopped())

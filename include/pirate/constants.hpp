@@ -50,6 +50,10 @@ struct constants
     // with DM in pc cm^{-3} and f_lo, f_hi in MHz. (Equivalently, 4.148808e3 s MHz^2.)
     static constexpr double k_dm = 4.148808e6;
 
+    // FRB pulse-scattering spectral index: scattering time tau ~ nu^-frb_scattering_index
+    // (used by simpulse::scattering_time).
+    static constexpr double frb_scattering_index = 4.0;
+
     // Number of inactive (expired/cancelled) FileStreams retained by an
     // FrbServer for ShowStreams history; the oldest are dropped beyond this.
     // (Exposed to python -- see the reminder at the top of this struct. The

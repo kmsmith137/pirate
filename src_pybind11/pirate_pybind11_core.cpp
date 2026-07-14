@@ -1464,7 +1464,7 @@ void register_core_bindings(pybind11::module &m)
                "        once the plan has been built.\n"
                "    receivers: List of Receiver objects to query\n"
                "    file_writer: FileWriter for saving frames to disk\n"
-               "    rpc_server_address: gRPC server address (e.g. 'localhost:50051')\n"
+               "    rpc_server_address: gRPC server address (e.g. '127.0.0.1:6000')\n"
                "    ringbuf_nchunks: Logical ring buffer length in time chunks\n"
                "    min_data_mtu: Minimum data-NIC MTU expected on the sender\n"
                "        side; surfaced via the GetConfig RPC.\n"

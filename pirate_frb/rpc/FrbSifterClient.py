@@ -135,7 +135,7 @@ class FrbSifterClient:
 
     Usage::
 
-        with FrbSifterClient("localhost:7100") as sifter:
+        with FrbSifterClient("127.0.0.1:7500") as sifter:
             sifter.send_configuration(pirate_yaml, xengine_yaml,
                                        dedispersion_plan_yaml, grouper_yaml,
                                        search_ip_addr)

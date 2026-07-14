@@ -545,7 +545,7 @@ struct TcpReceiver : Hwtest::Worker
 
         this->listening_socket = Socket(PF_INET, SOCK_STREAM);
         this->listening_socket.set_reuseaddr();
-        this->listening_socket.bind(ip_addr, 8787);  // TCP port 8787
+        this->listening_socket.bind(ip_addr, Hwtest::tcp_port);
         this->epoll.initialize();
     }
 

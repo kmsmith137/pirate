@@ -41,9 +41,9 @@ double dispersion_delay(double dm, double freq_MHz)
 double scattering_time(double sm, double freq_MHz)
 {
     xassert(sm >= 0.0);
-    xassert(freq_MHz > 0.0);   // used as a divisor (and pow(negative, 4.4) is NaN)
+    xassert(freq_MHz > 0.0);   // used as a divisor (and pow(negative, index) is NaN)
     // 'sm' is the scattering time in milliseconds at 1 GHz.
-    return 1.0e-3 * sm / pow(freq_MHz/1000.0, 4.4);
+    return 1.0e-3 * sm / pow(freq_MHz/1000.0, constants::frb_scattering_index);
 }
 
 
