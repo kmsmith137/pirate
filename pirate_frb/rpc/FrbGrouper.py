@@ -103,12 +103,17 @@ class FrbGrouperInjections:
         from ..Hardware import Hardware
         from ..utils import ThreadAffinity
 
-        # Blocks until the client connects and the handshake is processed.
-        self._open()
-
-        # Everything below runs after _open() but before we return; if it raises, the
-        # caller's 'with' will NOT run __exit__, so we undo it here and re-raise.
+        # If anything below raises, the caller's 'with' will NOT run __exit__, so
+        # we undo it here and re-raise. _open() itself is INSIDE the try: if it
+        # raises (Ctrl-C while waiting for the producer, port already in use,
+        # handshake error), the grouper may already be listening with its send
+        # thread running, and without the _close() it would linger until garbage
+        # collection whenever the object outlives the with-statement (e.g.
+        # 'g = FrbGrouper(addr)' followed by 'with g:').
         try:
+            # Blocks until the client connects and the handshake is processed.
+            self._open()
+
             # The handshake yaml strings are not YAML::Node-wrapped in pybind; parse
             # the wire strings into Python objects and attach them as attributes
             # (py::dynamic_attr() on the C++ class enables setting these). The strings

@@ -236,11 +236,14 @@ private:
     //
     // produced_cv -- waiter: acquire_output() (predicate: handshake_done &&
     //   rb_produced > seq_id, or stopped). At most one thread can be parked
-    //   here: the consecutive-seq_id cursor xassert in acquire_output() makes
-    //   a second concurrent caller throw instead of waiting -- so the
-    //   rb_produced advance uses notify_one. Signaled on: rb_produced advance
-    //   in _receive_loop() (notify_one), the handshake latch (notify_all --
-    //   the predicate's handshake_done conjunct), and stop().
+    //   here: acquire_output() sets 'acquire_pending' before waiting, and a
+    //   second concurrent caller throws on that flag instead of waiting (the
+    //   consecutive-seq_id cursor xassert alone would NOT reject a second
+    //   caller with the SAME seq_id, since rb_acquired advances only after
+    //   the wait) -- so the rb_produced advance uses notify_one. Signaled on:
+    //   rb_produced advance in _receive_loop() (notify_one), the handshake
+    //   latch (notify_all -- the predicate's handshake_done conjunct), and
+    //   stop().
     //
     // consumed_cv -- waiter: the send thread's drain wait in _send_loop()
     //   (predicate: rb_consumed_sent < rb_consumed, or stopped). Signaled on:
@@ -283,7 +286,15 @@ private:
     long rb_produced      = 0;      // (last produced_seq_id) + 1   [updated by receive loop]
     long rb_acquired      = 0;      // (last seq_id passed to acquire_output) + 1
     long rb_consumed      = 0;      // (last seq_id passed to release_output) + 1
-    long rb_consumed_sent = 0;      // (last consumed_seq_id written to wire) + 1
+    long rb_consumed_sent = 0;      // (last consumed_seq_id CLAIMED by the send thread) + 1;
+                                    //   advanced just before the Write, so it runs ahead of the
+                                    //   wire by at most the one in-flight message (see _send_loop)
+
+    // True while an acquire_output() call is parked on produced_cv (under
+    // mutex). A second concurrent acquire_output() throws on this flag
+    // instead of waiting, which is what makes produced_cv's notify_one
+    // single-waiter contract hold (see the produced_cv comment above).
+    bool acquire_pending = false;
 
     // Shared GPU ring buffer: views into the IPC-mapped producer memory. NOT
     // initialized until the handshake is processed (see _process_handshake); it

@@ -545,6 +545,11 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
     // Geometry cross-checks (defensive).
     num_batch_slots = hs.num_batch_slots();
     initial_chunk = hs.initial_chunk();   // producer's GpuDedisperser::Params::initial_chunk
+    // Positivity check on the raw wire value: a zero would pass every check
+    // below vacuously (consistently empty descriptors) and then hit
+    // acquire_output()'s 'seq_id % num_batch_slots' as an integer division by
+    // zero (SIGFPE), instead of a cleanly stopped-with-error grouper.
+    xassert_gt(num_batch_slots, 0);
     xassert_eq(hs.num_trees(), ntrees);
     xassert_eq(hs.beams_per_batch(), beams_per_batch);
     // The output ring buffer's leading (beam) axis is num_batch_slots *
@@ -564,8 +569,18 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
     CUDA_CALL(cudaIpcOpenMemHandle(&base, h, cudaIpcMemLazyEnablePeerAccess));
     int dev = cuda_device_id;
     ipc_base = std::shared_ptr<void>(base, [dev](void *p) {
+        // Save/switch/restore the calling thread's device. Best-effort, no
+        // throws (raw CUDA calls, not CUDA_CALL) -- this is a deleter. It can
+        // run on the consumer thread at an arbitrary later point (e.g. when
+        // the last lingering output view is garbage-collected, AFTER __exit__
+        // has restored the thread's previous cupy device), so it must not
+        // leave the thread silently switched to 'dev'.
+        int saved = -1;
+        bool have_saved = (cudaGetDevice(&saved) == cudaSuccess);
         cudaSetDevice(dev);
-        cudaIpcCloseMemHandle(p);   // best-effort; do not throw from a deleter
+        cudaIpcCloseMemHandle(p);
+        if (have_saved && (saved != dev))
+            cudaSetDevice(saved);
     });
 
     // Reconstruct output_ringbuf from the ArrayDescriptors. Each array is a
@@ -619,9 +634,20 @@ void FrbGrouper::_receive_loop()
         {
             lock_guard<std::mutex> lock(mutex);
             xassert_eq(n, rb_produced);   // producer sends in order 0,1,2,...
+            // Producer back-pressure invariant (mirrors the producer side:
+            // GpuDedisperser launches batch n only after waiting on
+            // release_output(n - nbatches_out)): produced(n) implies the
+            // producer RECEIVED our consumed(n - num_batch_slots), which
+            // implies the send thread claimed that id first (rb_consumed_sent
+            // is advanced BEFORE the Write -- see _send_loop). The counter
+            // only advances, so this cannot false-positive. A violation means
+            // the producer is overwriting a ring slot the consumer may still
+            // be reading -- fail loudly instead of silently reading corrupted
+            // output.
+            xassert_lt(n, rb_consumed_sent + num_batch_slots);
             rb_produced = n + 1;
-            // Unblocks acquire_output(). notify_one: at most one waiter (the
-            // cursor xassert there makes a second concurrent caller throw).
+            // Unblocks acquire_output(). notify_one: at most one waiter (its
+            // acquire_pending guard makes a second concurrent caller throw).
             produced_cv.notify_one();
         }
     }
@@ -658,13 +684,18 @@ void FrbGrouper::_send_loop()
             unique_lock<std::mutex> lock(mutex);
             consumed_cv.wait(lock, [&]{ return is_stopped || (rb_consumed_sent < rb_consumed); });
             if (is_stopped) return;
-            seq = rb_consumed_sent;
+            // Claim the id by advancing rb_consumed_sent BEFORE the Write
+            // (not after): the receive loop's back-pressure xassert needs
+            // "producer received consumed(k)" to imply "rb_consumed_sent > k",
+            // which holds only if the counter is ahead of the wire. (If the
+            // Write below fails, the counter overshoots by one -- harmless:
+            // the throw stops the grouper and nothing reads it afterwards.)
+            seq = rb_consumed_sent++;
         }
         fg::ConsumerMessage cm;
         cm.set_consumed_seq_id(seq);
         if (!stream->Write(cm))
             throw runtime_error("FrbGrouper: Write(consumed_seq_id) failed");
-        { lock_guard<std::mutex> lock(mutex); rb_consumed_sent = seq + 1; }
     }
 }
 
@@ -712,8 +743,23 @@ GpuDedisperser::Outputs FrbGrouper::acquire_output(long seq_id)
         // loudly rather than silently reading the wrong ring slot.)
         xassert_eq(seq_id, rb_acquired);
 
+        // Defensive: at most one acquire_output() may be in flight. The cursor
+        // check above does NOT reject a second concurrent caller with the SAME
+        // seq_id (rb_acquired advances only after the wait below), and two
+        // parked waiters would break produced_cv's notify_one single-waiter
+        // contract -- the un-woken one could sleep through a wakeup whose
+        // predicate is true. Throw instead (which also stops the grouper).
+        xassert(!acquire_pending);
+        acquire_pending = true;
+
         // Block until the handshake is done AND produced_seq_id has reached seq_id.
         produced_cv.wait(lock, [&]{ return is_stopped || (handshake_done && rb_produced > seq_id); });
+
+        // Reset BEFORE the stopped-check, so the flag clears on every exit
+        // path including the throw below (in-progress-flag rule, notes/cpp.md;
+        // the cv wait itself does not throw). No notify needed: no waiter
+        // tests acquire_pending -- a second caller throws rather than waits.
+        acquire_pending = false;
         _throw_if_stopped("FrbGrouper::acquire_output");
 
         rb_acquired = seq_id + 1;
