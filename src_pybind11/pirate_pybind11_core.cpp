@@ -1551,10 +1551,10 @@ void register_core_bindings(pybind11::module &m)
     // consumer of an FrbServer's GpuDedisperser::output_ringbuf over CUDA IPC.
     // py::dynamic_attr() lets the Python injection attach derived attributes (the
     // parsed-yaml dicts, steady_state_it0, full_steady_ichunk, etc.).
-    // Injections (pirate_frb/rpc/_FrbGrouper.py) add __enter__/__exit__ and
+    // Injections (pirate_frb/rpc/FrbGrouper.py) add __enter__/__exit__ and
     // a get_output() context manager.
     // The class docstring (including the read-only-attribute bullet list) lives in
-    // the Python injector pirate_frb/rpc/_FrbGrouper.py, NOT here: FrbGrouper's
+    // the Python injector pirate_frb/rpc/FrbGrouper.py, NOT here: FrbGrouper's
     // primary interface is the context-manager / get_output() usage defined there,
     // and ksgpu.inject_methods copies the injector's docstring onto this class
     // (overriding any docstring set here). Per-class policy: notes/docstrings.md.
@@ -1628,7 +1628,7 @@ void register_core_bindings(pybind11::module &m)
                "class docstring). Valid only after the handshake.")
           // Member docstrings are intentionally omitted here: each member is documented
           // in the bullet list in the class docstring, which lives in the Python injector
-          // (pirate_frb/rpc/_FrbGrouper.py). Kept as a plain list, not a napoleon
+          // (pirate_frb/rpc/FrbGrouper.py). Kept as a plain list, not a napoleon
           // "Attributes" section, so the rendering is compact and the members are not
           // re-registered as separate sphinx objects / sidebar entries.
           //
