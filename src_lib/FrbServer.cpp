@@ -424,6 +424,9 @@ void FrbServer::stop(std::exception_ptr e) const
     // processing_thread publishes them under this same mutex). We call their
     // stop()s below, after unlocking -- reading them outside the lock would be
     // a data race, and we don't want to hold 'mutex' across the cascades.
+    // A null snapshot is conclusive: the publish checks is_stopped under this
+    // mutex and aborts once we've set it above, so "null here" means "never
+    // published", not "published just after we looked".
     shared_ptr<GpuDedisperser>   dd   = dedisperser;
     shared_ptr<CudaEventRingbuf> edq  = evrb_dq;
     shared_ptr<CudaEventRingbuf> eh2g = evrb_h2g;
@@ -990,8 +993,21 @@ void FrbServer::_processing_thread_main()
 
     // Publish plan + dedisperser + evrb_* atomically under the mutex, and set
     // dedisperser_is_initialized (which wakes the frame_finalizing_thread).
+    //
+    // The is_stopped check maintains the invariant that stop() relies on:
+    // anything published here was published with is_stopped false, so stop()'s
+    // snapshot (which sets is_stopped first, under this same mutex) sees it
+    // and cascades stop(e) into it. Without the check, a stop() landing after
+    // the last _check_stopped above would snapshot these members as null and
+    // never stop them -- notably the GpuDedisperser worker thread (spawned by
+    // allocate() above) would keep running until ~FrbServer. Returning without
+    // publishing unwinds the locals instead (~GpuDedisperser stops and joins
+    // its worker); every dd_init_cv waiter already handles "stopped without
+    // publish".
     {
         lock_guard<std::mutex> lock(mutex);
+        if (is_stopped)
+            return;
         plan         = plan_p;
         dedisperser  = dedisperser_p;
         evrb_dq      = evrb_dq_p;
