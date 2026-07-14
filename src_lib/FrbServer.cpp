@@ -301,6 +301,13 @@ void FrbServer::_check_stopped(const char *method_name)
 // runtime_error rather than xassert.
 void FrbServer::_check_frame_pool_size(long nbeams) const
 {
+    // In dummy mode there is no real frame pool (and num_total_frames()
+    // throws), so there is nothing to check. Mirrors the reaper -- the
+    // other consumer of the pool -- which is only spawned in non-dummy
+    // mode (see start()).
+    if (frame_allocator->is_dummy())
+        return;
+
     long total_frames = frame_allocator->num_total_frames(/*blocking=*/ true);
     long min_frames = long(constants::server_min_total_chunks) * nbeams;
     if (total_frames >= min_frames)
