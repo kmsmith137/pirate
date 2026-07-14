@@ -39,7 +39,7 @@ struct MegaRingbuf;                   // defined in MegaRingbuf.hpp
 
 // -------------------------------------------------------------------------------------------------
 //
-// GpuDedisperser (defined in src_lib/GpuDedisperser.cu)
+// GpuDedisperser (defined in src_lib/GpuDedisperser.cpp)
 
 
 struct GpuDedisperser
@@ -247,15 +247,15 @@ struct GpuDedisperser
     // stops the GpuDedisperser.
     void fill_all_weights(long itree, const ksgpu::Array<float> &pf_weights);
 
-    // --------------------------  Public members  --------------------------
-
 protected:
     // Constructor is protected - use create() factory function instead.
     GpuDedisperser(const Params &params);
 
 public:
 
-    // "inner" array shape (nstreams, beams_per_batch, nfreq, ntime).
+    // --------------------------  Public members  --------------------------
+
+    // Shape (nstreams, beams_per_batch, nfreq, nt_in); slot istream = seq_id % nstreams.
     ksgpu::Array<void> input_arrays;       // config.dtype
 
     // "outer" vector has length ntrees
@@ -388,7 +388,7 @@ public:
 
 // -------------------------------------------------------------------------------------------------
 //
-// ReferenceDedisperser (defined in src_lib/ReferenceDedisperser.cu)
+// ReferenceDedisperser (defined in src_lib/ReferenceDedisperser.cpp)
 //
 // Sophistication == 0:
 //

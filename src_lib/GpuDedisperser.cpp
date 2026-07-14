@@ -839,7 +839,7 @@ void GpuDedisperser::_release_input_and_launch_dd_kernels(long seq_id, cudaStrea
 
     if (!curr_input_acquired) {
         stringstream ss;
-        ss << "GpuDedisperser::acquire_input(): release_input_and_launch_dd_kernels() called without "
+        ss << "GpuDedisperser::release_input_and_launch_dd_kernels(): called without"
            << " acquire_input(), seq_id=" << seq_id;
         throw runtime_error(ss.str());
     }
@@ -921,9 +921,11 @@ GpuDedisperser::Outputs GpuDedisperser::_acquire_output(long consumer_id, long s
 
     // Wait for 'cdd2' to produce the output for seq_id. By default this makes the
     // caller-specified 'stream' wait; if sync=true we instead block the host
-    // thread (and ignore 'stream'). The wait is blocking on the producer:
-    // acquire_output() is assumed to run on a different thread than
-    // acquire_input() / release_input_and_launch_dd_kernels().
+    // thread (and ignore 'stream'). blocking=true because acquire_output() may
+    // run on a different thread than release_input_and_launch_dd_kernels(), so
+    // the cdd2 event may not have been recorded yet. (Same-thread callers --
+    // test_one(), time() -- are fine too: there the record has already happened
+    // and the wait returns immediately.)
     if (sync)
         evrb_cdd2->synchronize(seq_id, /*blocking=*/true);
     else
