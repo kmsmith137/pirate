@@ -790,13 +790,13 @@ void GpuLaggedDownsamplingKernel::allocate(BumpAllocator &allocator)
     if (!(allocator.aflags & af_zero))
         throw runtime_error("GpuLaggedDownsamplingKernel::allocate(): allocator.aflags must contain af_zero");
 
-    long nbytes_before = allocator.nbytes_allocated.load();
+    long nbytes_before = allocator.get_nbytes_allocated();
 
     // Allocate persistent_state.
     std::initializer_list<long> shape = { params.total_beams, state_nelts_per_beam };
     this->persistent_state = allocator.allocate_array<void>(params.dtype, shape);
 
-    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    long nbytes_allocated = allocator.get_nbytes_allocated() - nbytes_before;
     // cout << "GpuLaggedDownsamplingKernel: " << nbytes_allocated << " bytes allocated" << endl;
     xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint());
 

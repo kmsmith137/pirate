@@ -162,7 +162,7 @@ void register_core_bindings(pybind11::module &m)
             "        ignored for case 3 / af_gpu).\n"
             "    cuda_device: CUDA device id (>= 0 required in async mode).")
         .def_property_readonly("nbytes_allocated",
-            [](const BumpAllocator &self) { return self.nbytes_allocated.load(); },
+            [](const BumpAllocator &self) { return self.get_nbytes_allocated(); },
             "Bytes allocated so far (aligned to 128-byte cache lines)")
         .def_readonly("aflags", &BumpAllocator::aflags,
             "Memory allocation flags")

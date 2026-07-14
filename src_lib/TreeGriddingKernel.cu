@@ -133,13 +133,13 @@ void GpuTreeGriddingKernel::allocate(BumpAllocator &allocator)
     if (!(allocator.aflags & af_zero))
         throw runtime_error("GpuTreeGriddingKernel::allocate(): allocator.aflags must contain af_zero");
 
-    long nbytes_before = allocator.nbytes_allocated.load();
+    long nbytes_before = allocator.get_nbytes_allocated();
 
     // Copy host -> GPU.
     this->gpu_channel_map = allocator.allocate_array<double>({params.nchan + 1});
     this->gpu_channel_map.fill(params.channel_map);
 
-    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    long nbytes_allocated = allocator.get_nbytes_allocated() - nbytes_before;
     xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint("channel_map"));
 
     this->is_allocated = true;

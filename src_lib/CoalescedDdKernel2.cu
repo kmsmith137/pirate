@@ -154,7 +154,7 @@ void CoalescedDdKernel2::allocate(BumpAllocator &allocator)
     if (!(allocator.aflags & af_zero))
         throw runtime_error("CoalescedDdKernel2::allocate(): allocator.aflags must contain af_zero");
 
-    long nbytes_before = allocator.nbytes_allocated.load();
+    long nbytes_before = allocator.get_nbytes_allocated();
 
     // Allocate persistent_state.
     long ninner = registry_value.pstate32_per_small_tree * xdiv(32, dd_params.dtype.nbits);
@@ -171,7 +171,7 @@ void CoalescedDdKernel2::allocate(BumpAllocator &allocator)
     xassert(gpu_ringbuf_quadruples.is_fully_contiguous());
     xassert(gpu_ringbuf_quadruples.on_gpu());
 
-    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    long nbytes_allocated = allocator.get_nbytes_allocated() - nbytes_before;
     // cout << "CoalescedDdKernel2: " << nbytes_allocated << " bytes allocated" << endl;
     xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint());
 

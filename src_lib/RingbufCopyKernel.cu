@@ -147,13 +147,13 @@ void GpuRingbufCopyKernel::allocate(BumpAllocator &allocator)
     if (!(allocator.aflags & af_zero))
         throw runtime_error("GpuRingbufCopyKernel::allocate(): allocator.aflags must contain af_zero");
 
-    long nbytes_before = allocator.nbytes_allocated.load();
+    long nbytes_before = allocator.get_nbytes_allocated();
 
     // Copy host -> GPU.
     this->gpu_octuples = allocator.allocate_array<uint>({params.octuples.shape[0], params.octuples.shape[1]});
     this->gpu_octuples.fill(params.octuples);
 
-    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    long nbytes_allocated = allocator.get_nbytes_allocated() - nbytes_before;
     // cout << "GpuRingbufCopyKernel: " << nbytes_allocated << " bytes allocated" << endl;
     xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint());
 

@@ -71,7 +71,7 @@ void DedispersionBuffer::allocate(BumpAllocator &allocator)
     if (!(allocator.aflags & af_zero))
         throw runtime_error("DedispersionBuffer::allocate(): allocator.aflags must contain af_zero");
 
-    long nbytes_before = allocator.nbytes_allocated.load();
+    long nbytes_before = allocator.get_nbytes_allocated();
 
     long nb = params.beams_per_batch;
     long nbuf = params.nbuf;
@@ -97,7 +97,7 @@ void DedispersionBuffer::allocate(BumpAllocator &allocator)
         j += nr*nt;
     }
 
-    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    long nbytes_allocated = allocator.get_nbytes_allocated() - nbytes_before;
     // cout << "DedispersionBuffer: " << nbytes_allocated << " bytes allocated" << endl;
     xassert_eq(nbytes_allocated, this->footprint_nbytes);
 

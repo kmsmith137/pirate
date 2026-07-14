@@ -764,13 +764,13 @@ void GpuPeakFindingKernel::allocate(BumpAllocator &allocator)
     if (!(allocator.aflags & af_zero))
         throw runtime_error("GpuPeakFindingKernel::allocate(): allocator.aflags must contain af_zero");
 
-    long nbytes_before = allocator.nbytes_allocated.load();
+    long nbytes_before = allocator.get_nbytes_allocated();
 
     // Allocate persistent_state.
     std::initializer_list<long> shape = { params.total_beams, params.ndm_out, registry_value.PW32 };
     this->persistent_state = allocator.allocate_array<uint>(shape);
 
-    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    long nbytes_allocated = allocator.get_nbytes_allocated() - nbytes_before;
     // cout << "GpuPeakFindingKernel: " << nbytes_allocated << " bytes allocated" << endl;
     xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint());
 

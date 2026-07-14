@@ -269,8 +269,11 @@ void BumpAllocator::_init_async(int nthreads, int cuda_device)
     int n_zero_workers = host_memset
                        ? (registrar ? nthreads - 1 : nthreads)
                        : 0;
+
+    // Pre-spawn write on the ctor thread; no lock needed (workers don't
+    // exist yet, and std::thread creation synchronizes-with thread start).
     if (host_memset)
-        _workers_remaining.store(n_zero_workers);
+        _workers_remaining = n_zero_workers;
 
     int total_workers = n_zero_workers + (registrar ? 1 : 0) + (gpu_memset ? 1 : 0);
     _workers.reserve(total_workers);
@@ -383,18 +386,14 @@ void BumpAllocator::_register_chunks_serially()
 
 void BumpAllocator::_build_async_chunk_layout(bool has_zero_workers)
 {
+    // Runs on the ctor thread, before any worker is spawned -- no locking
+    // needed anywhere in this function.
+    //
     // _nreg_chunks > 0 iff _setup_rhost_deleter was called, iff af_rhost.
     // Size _super_done unconditionally when we have a registrar (zero
     // workers may or may not be present; the registrar still reads it).
-    if (_nreg_chunks > 0) {
-        _super_done = std::vector<std::atomic<int>>(_nreg_chunks);
-        // Explicit zero-init: std::atomic<int>'s default ctor does
-        // value-initialize to 0 (so the vector ctor leaves these at 0),
-        // but that corner of the spec is easy to forget -- make the
-        // invariant visible.
-        for (long s = 0; s < _nreg_chunks; s++)
-            _super_done[s].store(0, std::memory_order_relaxed);
-    }
+    if (_nreg_chunks > 0)
+        _super_done.assign(_nreg_chunks, 0);
 
     if (!has_zero_workers)
         return;
@@ -431,7 +430,7 @@ void BumpAllocator::_build_async_chunk_layout(bool has_zero_workers)
         }
     }
     _nzero_chunks = static_cast<long>(_zero_chunk_starts.size()) - 1;
-    _next_zero_chunk.store(0);
+    _next_zero_chunk = 0;
 }
 
 
@@ -446,15 +445,27 @@ void BumpAllocator::_zero_worker()
 
     try {
         while (true) {
-            if (_stop_flag.load(std::memory_order_relaxed)) break;
-            long i = _next_zero_chunk.fetch_add(1, std::memory_order_relaxed);
+            // Claim the next chunk (and check for stop) under _mutex. The
+            // memset itself runs OUTSIDE the lock -- holding _mutex across
+            // a 128 MiB memset would serialize the zero workers.
+            long i;
+            {
+                std::lock_guard<std::mutex> guard(_mutex);
+                if (_is_stopped) break;
+                i = _next_zero_chunk++;
+            }
             if (i >= _nzero_chunks) break;
             long off = _zero_chunk_starts[i];
             long sz  = _zero_chunk_starts[i + 1] - off;
             memset(static_cast<char *>(base.get()) + off, 0, sz);
             if (has_registrar) {
-                int super = _super_of_zero_chunk[i];
-                _super_done[super].fetch_add(1, std::memory_order_release);
+                {
+                    std::lock_guard<std::mutex> guard(_mutex);
+                    _super_done[_super_of_zero_chunk[i]]++;
+                }
+                // notify_one is sound: the registrar is structurally the
+                // only waiter on _cv_super_done.
+                _cv_super_done.notify_one();
             }
         }
     } catch (...) {
@@ -469,7 +480,15 @@ void BumpAllocator::_zero_worker()
     // _finalize_initialized) from escaping the thread (std::terminate).
     try {
         if (!has_registrar) {
-            if (_workers_remaining.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            bool last;
+            {
+                std::lock_guard<std::mutex> guard(_mutex);
+                last = (--_workers_remaining == 0);
+            }
+            // Only one worker can observe the transition to zero, so exactly
+            // one calls _finalize_initialized() -- after releasing _mutex,
+            // since it takes the lock itself.
+            if (last)
                 _finalize_initialized();
         }
     } catch (...) {
@@ -486,24 +505,23 @@ void BumpAllocator::_registrar_worker()
 
         const auto &offsets = _deleter_state->reg_chunk_offsets;
         for (long s = 0; s < _nreg_chunks; s++) {
-            // Check the stop flag once per chunk. Without this, the fast path
-            // (spin-wait predicate already satisfied, e.g. no zero workers)
-            // would proceed straight to cudaHostRegister on every remaining
-            // chunk, and a stop()/destructor could block for the full
-            // remaining registration time.
-            if (_stop_flag.load(std::memory_order_relaxed)) return;
-
-            // If zero workers are present, wait until they've completed
-            // all zero chunks belonging to this super. If not, needed=0
-            // and we proceed immediately.
-            int needed = _zero_chunks_per_super.empty()
-                       ? 0
-                       : _zero_chunks_per_super[s];
-            while (_super_done[s].load(std::memory_order_acquire) < needed) {
-                if (_stop_flag.load(std::memory_order_relaxed)) return;
-                std::this_thread::yield();
+            // If zero workers are present, wait until they've completed all
+            // zero chunks belonging to this super. If not, needed=0 and the
+            // wait reduces to a stop check -- important either way: checking
+            // _is_stopped once per chunk keeps a stop()/destructor from
+            // blocking for the full remaining registration time.
+            long needed = _zero_chunks_per_super.empty()
+                        ? 0
+                        : _zero_chunks_per_super[s];
+            {
+                std::unique_lock<std::mutex> lock(_mutex);
+                while (!_is_stopped && (_super_done[s] < needed))
+                    _cv_super_done.wait(lock);
+                if (_is_stopped) return;
             }
 
+            // cudaHostRegister runs OUTSIDE the lock (it can take seconds
+            // per 64 GiB chunk).
             long off = offsets[s];
             long sz  = offsets[s + 1] - off;
             cudaError_t err = cudaHostRegister(
@@ -550,11 +568,11 @@ void BumpAllocator::stop(std::exception_ptr e) const
         if (_is_stopped) return;       // first stop wins
         _is_stopped = true;
         _error = e;                    // may be null (normal stop) or non-null (error)
-        _stop_flag.store(true, std::memory_order_relaxed);
     }
     // Notify after releasing the mutex so woken threads aren't immediately
-    // blocked re-acquiring it.
+    // blocked re-acquiring it. Stop notifies every cv of the class.
     _cv.notify_all();
+    _cv_super_done.notify_all();
 }
 
 
@@ -569,15 +587,21 @@ void BumpAllocator::_finalize_initialized()
 }
 
 
-void BumpAllocator::_block_until_ready_or_throw(const char *method_name) const
+void BumpAllocator::_wait_ready_locked(std::unique_lock<std::mutex> &lock, const char *method_name) const
 {
-    std::unique_lock<std::mutex> guard(_mutex);
     while (!_is_initialized && !_is_stopped)
-        _cv.wait(guard);
+        _cv.wait(lock);
     if (_is_stopped && _error)
         std::rethrow_exception(_error);
     if (_is_stopped)
         throw std::runtime_error(std::string(method_name) + " called on stopped instance");
+}
+
+
+void BumpAllocator::_block_until_ready_or_throw(const char *method_name) const
+{
+    std::unique_lock<std::mutex> lock(_mutex);
+    _wait_ready_locked(lock, method_name);
 }
 
 
@@ -594,6 +618,15 @@ bool BumpAllocator::is_initialized() const
     // A stopped allocator -- whether with an error or via clean shutdown
     // (e.g., destructor) -- is not "ready to use".
     return _is_initialized && !_is_stopped;
+}
+
+
+long BumpAllocator::get_nbytes_allocated() const
+{
+    // Informational accessor: no _throw_if_stopped, no readiness gate
+    // (deliberate -- see the declaration in BumpAllocator.hpp).
+    std::lock_guard<std::mutex> guard(_mutex);
+    return _nbytes_allocated;
 }
 
 
@@ -642,7 +675,9 @@ void *BumpAllocator::_allocate_bytes(long nbytes)
         throw std::runtime_error(ss.str());
     }
 
-    _block_until_ready_or_throw("BumpAllocator::allocate_bytes");
+    // Wait for readiness and claim space under a single _mutex hold.
+    std::unique_lock<std::mutex> lock(_mutex);
+    _wait_ready_locked(lock, "BumpAllocator::allocate_bytes");
 
     // The nbytes == 0 no-op comes AFTER the readiness gate, so a zero-size
     // allocation on a stopped allocator throws like any other allocation
@@ -653,24 +688,17 @@ void *BumpAllocator::_allocate_bytes(long nbytes)
     // Round up to alignment boundary.
     long aligned_nbytes = align_up(nbytes, nalign);
 
-    // Atomically claim space using a compare-exchange loop. A simpler
-    // fetch_add(aligned_nbytes) + roll-back-on-overflow pattern is racy:
-    // the failing thread's transient over-increment of 'nbytes_allocated'
-    // can cause concurrent allocations that would have fit to be rejected.
-    // The CAS loop only advances 'nbytes_allocated' when the allocation
-    // succeeds.
-    long old_offset = nbytes_allocated.load(std::memory_order_relaxed);
-    long new_offset;
-    do {
-        new_offset = old_offset + aligned_nbytes;
-        if (new_offset > capacity) {
-            std::stringstream ss;
-            ss << "BumpAllocator::allocate_bytes(): allocation of " << nbytes
-               << " bytes would exceed capacity " << capacity
-               << " (currently allocated: " << old_offset << ")";
-            throw std::runtime_error(ss.str());
-        }
-    } while (!nbytes_allocated.compare_exchange_weak(old_offset, new_offset));
+    if (_nbytes_allocated + aligned_nbytes > capacity) {
+        std::stringstream ss;
+        ss << "BumpAllocator::allocate_bytes(): allocation of " << nbytes
+           << " bytes would exceed capacity " << capacity
+           << " (currently allocated: " << _nbytes_allocated << ")";
+        throw std::runtime_error(ss.str());
+    }
+
+    long old_offset = _nbytes_allocated;
+    _nbytes_allocated += aligned_nbytes;
+    lock.unlock();
 
     char *base_ptr = static_cast<char *>(base.get());
     return base_ptr + old_offset;
@@ -697,7 +725,8 @@ ksgpu::Array<void> BumpAllocator::_allocate_array_internal(ksgpu::Dtype dtype, i
             // Dummy mode: allocate a fresh array with af_alloc().
             ret.base = ksgpu::_af_alloc(dtype, nalloc, aflags);
             ret.data = ret.base.get();
-            nbytes_allocated.fetch_add(align_up(nbytes, nalign));
+            std::lock_guard<std::mutex> guard(_mutex);
+            _nbytes_allocated += align_up(nbytes, nalign);
         }
         else {
             // Normal mode: allocate from bump allocator.

@@ -102,9 +102,12 @@ struct BumpAllocator
     BumpAllocator(BumpAllocator &&) = delete;
     BumpAllocator &operator=(BumpAllocator &&) = delete;
 
-    // Number of bytes allocated so far (aligned to cache line size).
-    // This counter is always valid, even in dummy mode.
-    std::atomic<long> nbytes_allocated{0};
+    // Returns the number of bytes allocated so far (aligned to cache line
+    // size). Always valid, even in dummy mode. Informational accessor,
+    // deliberately NOT an entry point: it stays usable on a stopped
+    // instance, and never blocks on async init (returns 0 before the
+    // first allocation).
+    long get_nbytes_allocated() const;
 
     // Returns the base shared_ptr. Throws in dummy mode (capacity < 0).
     // For capacity == 0 ("empty" mode), returns a null shared_ptr (no
@@ -132,7 +135,7 @@ struct BumpAllocator
     bool is_initialized() const;
 
     // Stop the allocator. Idempotent. If 'e' is non-null, it's stored as
-    // the error; first stop wins. Workers see the stop_flag and exit.
+    // the error; first stop wins. Workers observe _is_stopped and exit.
     // Subsequent calls to allocate_bytes/get_base/wait_until_initialized
     // throw (rethrowing the stored error if any).
     void stop(std::exception_ptr e = nullptr) const;
@@ -160,6 +163,10 @@ struct BumpAllocator
     // SlabAllocator still holds a reference to base after BumpAllocator
     // dies).
     struct DeleterState {
+        // n_registered is the ONLY atomic in BumpAllocator (all other mutable
+        // shared state is protected by _mutex): the deleter can run after
+        // ~BumpAllocator, when _mutex no longer exists, so the mutex cannot
+        // protect it.
         std::atomic<int> n_registered{0};            // chunked-register paths only
         std::vector<long> reg_chunk_offsets;         // chunked-register paths only
     };
@@ -186,43 +193,71 @@ struct BumpAllocator
     // allocator if this throws (see notes/stoppable_class.md).
     void *_allocate_bytes(long nbytes);
 
-    // State machine. Sync mode leaves the mutex/cv mostly unused
-    // (is_initialized is set true at end of sync ctor, so the blocking
-    // helper is a single uncontended mutex acquire).
+    // State machine. _mutex is the single lock protecting ALL mutable shared
+    // state: _is_stopped, _error, _is_initialized, _nbytes_allocated,
+    // _next_zero_chunk, _super_done, _workers_remaining. (Everything else is
+    // either const or immutable once the worker threads exist -- workers read
+    // those members without the lock -- or the lone atomic
+    // DeleterState::n_registered, see above.)
+    // Sync mode leaves the mutex/cvs mostly unused (_is_initialized is set
+    // true at end of sync ctor, so the blocking helper is a single
+    // uncontended mutex acquire).
     // The stop-pattern members are 'mutable' since stop() is const
     // (see notes/stoppable_class.md).
     mutable std::mutex _mutex;
+
+    // _cv -- waiters: _block_until_ready_or_throw() (predicate:
+    //   _is_initialized || _is_stopped). Signaled on: _finalize_initialized(),
+    //   stop(). Always notify_all (one-shot latch event).
+    // _cv_super_done -- waiter: _registrar_worker() (predicate:
+    //   _super_done[s] >= needed, or _is_stopped). Signaled on: zero-worker
+    //   chunk completion (notify_one -- the registrar is structurally the
+    //   only waiter), stop() (notify_all).
     mutable std::condition_variable _cv;
+    mutable std::condition_variable _cv_super_done;
+
     mutable bool _is_stopped = false;
     mutable std::exception_ptr _error;
-    mutable std::atomic<bool> _stop_flag{false};
 
     bool _is_initialized = false;
+
+    // Number of bytes allocated so far (aligned to cache line size).
+    // Always valid, even in dummy mode. Read via get_nbytes_allocated().
+    long _nbytes_allocated = 0;
 
     // Async worker threads. Empty in sync mode.
     std::vector<std::thread> _workers;
     int _async_cuda_device = -1;     // captured by workers for cudaSetDevice()
 
-    // Async chunking state. The zero-chunk partition is built so no
-    // zero chunk straddles a register-chunk boundary:
+    // Async chunking state, built on the ctor thread before workers are
+    // spawned. The zero-chunk partition is built so no zero chunk straddles
+    // a register-chunk boundary:
     // _zero_chunk_starts[i+1] - _zero_chunk_starts[i] is at most
     // zero_chunk_bytes, and _super_of_zero_chunk[i] is the register
     // chunk index that contains zero chunk i. _zero_chunks_per_super[s]
     // is the count the registrar waits for. When there is no registrar
     // (zero workers only), _super_done is empty and _super_of_zero_chunk
     // is empty too (zero workers skip the signal).
-    std::atomic<long> _next_zero_chunk{0};
-    std::vector<std::atomic<int>> _super_done;
-    std::atomic<int>  _workers_remaining{0};   // last-out-finalizes counter (zero-only path)
+    //
+    // _next_zero_chunk, _super_done, and _workers_remaining are the mutable
+    // counters (protected by _mutex, like all mutable shared state); the
+    // remaining members are immutable once the workers exist, and are read
+    // by them without the lock.
+    long _next_zero_chunk = 0;
+    std::vector<long> _super_done;
+    long _workers_remaining = 0;   // last-out-finalizes counter (zero-only path)
     long _nzero_chunks = 0;
     std::vector<long> _zero_chunk_starts;
     std::vector<int>  _super_of_zero_chunk;
     std::vector<int>  _zero_chunks_per_super;
 
-    // Blocking helper for async mode (no-op in sync mode). Throws on a
+    // Blocking helpers for async mode (no-op in sync mode). Throw on a
     // stopped allocator: the saved error if non-null, else a generic
-    // "<method_name> called on stopped instance".
+    // "<method_name> called on stopped instance". The _locked variant is
+    // for callers that need _mutex after the readiness gate (e.g.
+    // _allocate_bytes); caller must hold 'lock' (on _mutex).
     void _block_until_ready_or_throw(const char *method_name) const;
+    void _wait_ready_locked(std::unique_lock<std::mutex> &lock, const char *method_name) const;
 
     // Marked private-ish (in struct so accessible to internals but
     // not part of the user API).

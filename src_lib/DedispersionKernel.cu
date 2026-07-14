@@ -539,7 +539,7 @@ void GpuDedispersionKernel::allocate(BumpAllocator &allocator)
     if (!(allocator.aflags & af_zero))
         throw runtime_error("GpuDedispersionKernel::allocate(): allocator.aflags must contain af_zero");
 
-    long nbytes_before = allocator.nbytes_allocated.load();
+    long nbytes_before = allocator.get_nbytes_allocated();
 
     // Allocate persistent_state.
     long ninner = registry_value.pstate32_per_small_tree * xdiv(32, params.dtype.nbits);
@@ -568,7 +568,7 @@ void GpuDedispersionKernel::allocate(BumpAllocator &allocator)
         xassert(gpu_output_quadruples.on_gpu());
     }
 
-    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    long nbytes_allocated = allocator.get_nbytes_allocated() - nbytes_before;
     // cout << "GpuDedispersionKernel: " << nbytes_allocated << " bytes allocated" << endl;
     xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint());
 

@@ -403,8 +403,8 @@ void GpuDedisperser::_allocate(BumpAllocator &gpu_allocator, BumpAllocator &host
     if (!(host_allocator.aflags & af_zero))
         throw runtime_error("GpuDedisperser::allocate(): host_allocator.aflags must contain af_zero");
 
-    long gpu_nbytes_before = gpu_allocator.nbytes_allocated.load();
-    long host_nbytes_before = host_allocator.nbytes_allocated.load();
+    long gpu_nbytes_before = gpu_allocator.get_nbytes_allocated();
+    long host_nbytes_before = host_allocator.get_nbytes_allocated();
 
     // Note: we allocate the output_ringbuf first, so that it will be located as
     // close as possible to the gpu_allocator 'base' pointer. This seems preferable,
@@ -440,8 +440,8 @@ void GpuDedisperser::_allocate(BumpAllocator &gpu_allocator, BumpAllocator &host
     this->lds_kernel->allocate(gpu_allocator);
     this->g2g_copy_kernel->allocate(gpu_allocator);
 
-    long gpu_nbytes_allocated = gpu_allocator.nbytes_allocated.load() - gpu_nbytes_before;
-    long host_nbytes_allocated = host_allocator.nbytes_allocated.load() - host_nbytes_before;
+    long gpu_nbytes_allocated = gpu_allocator.get_nbytes_allocated() - gpu_nbytes_before;
+    long host_nbytes_allocated = host_allocator.get_nbytes_allocated() - host_nbytes_before;
     // cout << "GpuDedisperser: " << gpu_nbytes_allocated << " bytes allocated on GPU" << endl;
     // cout << "GpuDedisperser: " << host_nbytes_allocated << " bytes allocated on host" << endl;
     xassert_eq(gpu_nbytes_allocated, resource_tracker.get_gmem_footprint());
