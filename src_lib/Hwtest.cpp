@@ -563,16 +563,17 @@ struct TcpReceiver : Hwtest::Worker
         // I tried SO_RECVLOWAT here, but uProf reported significantly higher memory bandwidth!
 
         for (unsigned int ids = 0; ids < data_sockets.size(); ids++) {
-            // Poll accept() with a 100 ms timeout, rechecking is_stopped between
-            // attempts. (A plain blocking accept() could not be woken by stop(),
-            // hanging join() and the destructor if too few senders connect.)
+            // Poll accept() with a constants::default_poll_cadence_ms timeout,
+            // rechecking is_stopped between attempts. (A plain blocking accept()
+            // could not be woken by stop(), hanging join() and the destructor if
+            // too few senders connect.)
             for (;;) {
                 {
                     std::unique_lock lk(hwtest->mutex);
                     hwtest->_throw_if_stopped("TcpReceiver::worker_accept_connections");
                 }
 
-                Socket s = listening_socket.accept(100);   // 100 ms timeout
+                Socket s = listening_socket.accept(constants::default_poll_cadence_ms);
                 if (s.fd >= 0) {
                     this->data_sockets[ids] = std::move(s);
                     break;
@@ -599,7 +600,7 @@ struct TcpReceiver : Hwtest::Worker
 
         while (nbytes_cumul < nbytes_per_iteration) {
             long nbytes_save = nbytes_cumul;
-            int num_events = epoll.wait(100);  // 100ms timeout, to recheck is_stopped periodically
+            int num_events = epoll.wait(constants::default_poll_cadence_ms);  // timeout, to recheck is_stopped periodically
 
             if (num_events == 0) {
                 std::unique_lock lk(hwtest->mutex);

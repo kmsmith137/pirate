@@ -103,6 +103,22 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         .def_readonly_static("grouper_connect_timeout_ms", &constants::grouper_connect_timeout_ms,
             "Timeout (ms) for the real FrbGrouperClient reconnect (done in grouper_send_thread "
             "just before the Handshake).")
+        .def_readonly_static("default_poll_cadence_ms", &constants::default_poll_cadence_ms,
+            "Default cadence (ms) for stop/cancel poll loops, e.g. the timeout passed to "
+            "FrbServer.poll_from_python() in run_server.py to keep Ctrl-C responsive. See "
+            "include/pirate/constants.hpp for the full list of use sites.")
+        .def_readonly_static("default_print_cadence_sec", &constants::default_print_cadence_sec,
+            "Default seconds between console/status prints in a report-then-pause loop "
+            "(e.g. run_rpc_status, Hwtest). Not a stop-poll cadence. See constants.hpp.")
+        .def_readonly_static("default_shutdown_timeout_sec", &constants::default_shutdown_timeout_sec,
+            "Default seconds to wait for a graceful shutdown step (thread/process join, "
+            "SIGTERM->SIGKILL grace) before escalating. See constants.hpp.")
+        .def_readonly_static("grpc_reconnect_backoff_ms", &constants::grpc_reconnect_backoff_ms,
+            "Cap (ms) on a gRPC channel's reconnect backoff (initial == max). Used by "
+            "FrbGrouper channel args and FrbSifterClient. See constants.hpp.")
+        .def_readonly_static("grpc_forced_shutdown_deadline_ms", &constants::grpc_forced_shutdown_deadline_ms,
+            "Deadline (ms) for grpc::Server::Shutdown() during teardown, to avoid the "
+            "deadline-less Shutdown()'s ~seconds internal block. See constants.hpp.")
     ;
 
     // Main dedispersion classes defined here

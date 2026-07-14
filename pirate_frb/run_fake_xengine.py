@@ -18,6 +18,7 @@ from .core import (
     XEngineMetadata,
 )
 from .rpc import FrbSearchClient, FrbSifterClient
+from .pirate_pybind11 import constants
 
 
 class RunFakeXEngineHelper:
@@ -487,14 +488,14 @@ class RunFakeXEngineHelper:
     def _wait_for_controllers(self):
         try:
             while any(t.is_alive() for t in self.controllers):
-                time.sleep(0.2)
+                time.sleep(constants.default_poll_cadence_ms / 1000)
         except KeyboardInterrupt:
             print("\nStopping...")
 
     def _stop_and_join_all(self):
         self._stop_all()
         for t in self.controllers:
-            t.join(timeout=5.0)
+            t.join(timeout=constants.default_shutdown_timeout_sec)
 
     def _surface_exceptions(self):
         """Re-raise the first captured controller exception, if any.

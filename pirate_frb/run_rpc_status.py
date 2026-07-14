@@ -8,6 +8,7 @@ import threading
 import grpc
 
 from .rpc import FrbSearchClient
+from .pirate_pybind11 import constants
 
 
 class _ServerMonitor:
@@ -32,7 +33,7 @@ class _ServerMonitor:
                       f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_processed},{status.rb_streamed},{status.rb_assembled},{status.rb_end}], "
                       f"free={status.num_free_frames}")
 
-                self._sleep_one_second()
+                self._wait_between_polls()
         except Exception as e:
             print(f"[{self.addr}] ERROR: {e}", file=sys.stderr)
             self.stop_event.set()
@@ -41,7 +42,7 @@ class _ServerMonitor:
         """Poll for the server's X-engine metadata once per second; print it
         once it becomes available, then stop. Runs in its own thread so the
         wait does not stall the status polling above, and stays responsive to
-        stop_event via _sleep_one_second()."""
+        stop_event via _wait_between_polls()."""
         try:
             while not self.stop_event.is_set():
                 xmd_yaml = self.client._try_xengine_metadata()
@@ -52,18 +53,24 @@ class _ServerMonitor:
                     print()
                     return
 
-                self._sleep_one_second()
+                self._wait_between_polls()
         except Exception as e:
             print(f"[{self.addr}] ERROR: {e}", file=sys.stderr)
             self.stop_event.set()
 
-    def _sleep_one_second(self):
-        """Sleep ~1 second, waking every 0.1s to check stop_event so the loop
-        exits promptly on Ctrl-C or a sibling thread's error."""
-        for _ in range(10):
+    def _wait_between_polls(self):
+        """Wait one print/refresh interval (constants.default_print_cadence_sec),
+        waking every constants.default_poll_cadence_ms ms to check stop_event so
+        the loop exits promptly on Ctrl-C or a sibling thread's error."""
+        step = constants.default_poll_cadence_ms / 1000
+        interval = constants.default_print_cadence_sec
+        slept = 0.0
+        while slept < interval:
             if self.stop_event.is_set():
                 return
-            time.sleep(0.1)
+            dt = min(step, interval - slept)
+            time.sleep(dt)
+            slept += dt
 
     def subscribe_loop(self):
         """Subscribe to filenames and print them as they arrive."""
@@ -169,13 +176,13 @@ def run_rpc_status(ip_addrs):
 
     try:
         while not stop_event.is_set():
-            time.sleep(0.1)
+            time.sleep(constants.default_poll_cadence_ms / 1000)
     except KeyboardInterrupt:
         print("\nStopping...")
         stop_event.set()
 
     for t in threads:
-        t.join(timeout=1.0)
+        t.join(timeout=constants.default_shutdown_timeout_sec)
     for _, client in clients:
         client.close()
     print("RPC client(s) stopped.")

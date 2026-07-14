@@ -102,7 +102,7 @@ class Hwtest:
 
         try:
             while True:
-                time.sleep(1)
+                time.sleep(pirate_pybind11.constants.default_print_cadence_sec)
                 if self.cpp_server.show_stats() > seconds:
                     break
         except KeyboardInterrupt:

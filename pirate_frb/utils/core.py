@@ -3,6 +3,8 @@
 import subprocess
 import time
 
+from ..pirate_pybind11 import constants
+
 
 def integer_log2(n):
     """Return log2(n) as an int, where n must be a positive power of two.
@@ -53,10 +55,10 @@ def _monitor_children(procs):
                 print(f"run_processes: child [{label}] exited (code {p.returncode}); "
                       f"stopping the other processes", flush=True)
             return 0 if all(p.returncode == 0 for _, p in dead) else 1
-        time.sleep(0.2)
+        time.sleep(constants.default_poll_cadence_ms / 1000)
 
 
-def _terminate_children(procs, grace_sec=5.0):
+def _terminate_children(procs, grace_sec=constants.default_shutdown_timeout_sec):
     """SIGTERM all still-running children, then SIGKILL any that don't exit within
     grace_sec. 'procs' is a list of (label, Popen) pairs."""
     for _, p in procs:

@@ -9,6 +9,7 @@ import yaml
 
 from .grpc import frb_sifter_pb2
 from .grpc import frb_sifter_pb2_grpc
+from ..pirate_pybind11 import constants
 
 
 class FrbSifterEvents:
@@ -151,7 +152,14 @@ class FrbSifterClient:
             raise ValueError(f"FrbSifterClient: timeout must be a finite value >= 0 seconds, "
                              f"got {timeout!r}")
         self.raise_exception_on_timeout = bool(raise_exception_on_timeout)
-        self.channel = grpc.insecure_channel(server_address)
+        # Cap the channel's reconnect backoff (gRPC defaults to exponential up to
+        # 120s) so that, after the sifter restarts, wait_for_ready sends resume
+        # within ~grpc_reconnect_backoff_ms instead of dropping events for up to
+        # ~2 min. Same cap the FrbGrouper channel uses. See constants.hpp.
+        self.channel = grpc.insecure_channel(server_address, options=[
+            ("grpc.initial_reconnect_backoff_ms", constants.grpc_reconnect_backoff_ms),
+            ("grpc.max_reconnect_backoff_ms", constants.grpc_reconnect_backoff_ms),
+        ])
         self.stub = frb_sifter_pb2_grpc.FrbSifterStub(self.channel)
         # For timeout > 0, send_events() is fire-and-forget: each FrbEvents RPC is
         # dispatched via stub.*.future() with a 'timeout'-second deadline. Retain each

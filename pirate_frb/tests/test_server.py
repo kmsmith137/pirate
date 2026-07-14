@@ -59,6 +59,7 @@ from ..pirate_pybind11 import (
     GpuDedisperser,
     ReferenceDedisperser,
     ReferenceDequantizationKernel,
+    constants,
 )
 from ..Hardware import Hardware
 from ..utils import ThreadAffinity
@@ -248,10 +249,10 @@ class ServerTester:
             if self.child is not None:
                 # Clean shutdown returns promptly; the terminate() is a fallback
                 # for a child wedged in a C++ wait (e.g. grouper never connected).
-                self.child.join(timeout=10)
+                self.child.join(timeout=constants.default_shutdown_timeout_sec)
                 if self.child.is_alive():
                     self.child.terminate()
-                    self.child.join(timeout=10)
+                    self.child.join(timeout=constants.default_shutdown_timeout_sec)
             if self.factory is not None:
                 self.factory.stop()
             if self.server is not None:

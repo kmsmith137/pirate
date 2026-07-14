@@ -30,7 +30,7 @@ class HwtestSender:
         self.cpp_correlator.join()
 
 
-    def wait(self, timeout_ms=500):
+    def wait(self, timeout_ms=pirate_pybind11.constants.default_poll_cadence_ms):
         return self.cpp_correlator.wait(timeout_ms)
 
 

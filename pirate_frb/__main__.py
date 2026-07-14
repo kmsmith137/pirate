@@ -621,7 +621,7 @@ def hwtest_send_from_config(config):
         sender.start()
 
         try:
-            while not sender.wait(500):
+            while not sender.wait(pirate_pybind11.constants.default_poll_cadence_ms):
                 pass
         except KeyboardInterrupt:
             print("\nInterrupted, stopping...")
@@ -1135,8 +1135,9 @@ def _rpc_rand_write_one(addr):
             print(f"[{addr}] Status: rb_reaped={rb_reaped}, rb_processed={rb_processed} -> time_chunk_index range [{rb_t0}, {rb_t1})")
 
             if rb_t0 >= rb_t1:
-                print(f"[{addr}] No frames available yet, sleeping 1 second...")
-                time.sleep(1)
+                dt = pirate_pybind11.constants.default_print_cadence_sec
+                print(f"[{addr}] No frames available yet, sleeping {dt}s...")
+                time.sleep(dt)
                 continue
 
             break

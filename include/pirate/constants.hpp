@@ -7,13 +7,21 @@ namespace pirate {
 #endif
 
 
+// NOTE 1: most of these constants don't really need to be known at compile time, and
+// could easily be promoted to "runtime" parameters, or moved to a config file.
+//
+// NOTE 2: selected constants here are exposed to python as pirate_frb.constants.<name>,
+// via the py::class_<constants> block in src_pybind11/pirate_pybind11.cpp (read-only). If you
+// add a constant that should be visible from python, add a def_readonly_static() line there too.
+
+
 struct constants
 {
-    // REMINDER: selected constants here are exposed to python as pirate_frb.constants.<name>,
-    // via the py::class_<constants> block in src_pybind11/pirate_pybind11.cpp (read-only). If you
-    // add a constant that should be visible from python, add a def_readonly_static() line there too.
-
+    // GPU hardware.
+    // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#features-and-technical-specifications
     static constexpr int bytes_per_gpu_cache_line = 128;
+    static constexpr int cuda_max_y_blocks = 65535;
+    static constexpr int cuda_max_z_blocks = 65535;
     
     // Currently all Dedispersers are two-stage, and each stage has rank <= 8,
     // so max total rank is 16.
@@ -41,23 +49,27 @@ struct constants
     // with DM in pc cm^{-3} and f_lo, f_hi in MHz. (Equivalently, 4.148808e3 s MHz^2.)
     static constexpr double k_dm = 4.148808e6;
 
-    // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#features-and-technical-specifications
-    static constexpr int cuda_max_y_blocks = 65535;
-    static constexpr int cuda_max_z_blocks = 65535;
-
     // Number of inactive (expired/cancelled) FileStreams retained by an
     // FrbServer for ShowStreams history; the oldest are dropped beyond this.
     // (Exposed to python -- see the reminder at the top of this struct. The
     // network test reads it at runtime and assumes >= 5.)
     static constexpr int inactive_file_stream_capacity = 5;
 
-    // Timeouts (milliseconds) for FrbGrouperClient's connection to the FrbGrouper.
-    // grouper_ping_timeout_ms: the early channel-level ping() done during server
-    //   startup (before bump allocation) -- fail fast if the grouper isn't up.
-    // grouper_connect_timeout_ms: the real reconnect done later, in
-    //   grouper_send_thread just before the Handshake. Small because the grouper
-    //   is always loopback (CUDA IPC requires it on the same node).
-    // (Both exposed to python -- see the reminder at the top of this struct.)
+    // Timeouts.
+    //
+    //   - poll_cadence: low-level polling (e.g. for catching control-C)
+    //   - print_cadence: monitoring print-statements (e.g. pirate_frb run_rpc_status)
+    //   - shutdown_timeout: joining threads/processes, waiting for SIGTERM/SIGKILL
+    //   - grpc_reconnect_backoff: client-side reconnection cadence
+    //   - grpc_forced_shutdown_deadline: server-side shutdown time (recommend short)
+    //   - grouper_ping_timeout: initial connection during server startup, "fail fast"
+    //   - grouper_connect_timeout: the real reconnect done later
+
+    static constexpr int default_poll_cadence_ms = 250;
+    static constexpr double default_print_cadence_sec = 1.0;
+    static constexpr double default_shutdown_timeout_sec = 5.0;
+    static constexpr int grpc_reconnect_backoff_ms = 1000;
+    static constexpr int grpc_forced_shutdown_deadline_ms = 100;
     static constexpr int grouper_ping_timeout_ms = 5000;
     static constexpr int grouper_connect_timeout_ms = 2000;
 

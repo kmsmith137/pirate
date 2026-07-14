@@ -1,6 +1,7 @@
 #include "../include/pirate/FakeXEngine.hpp"
 #include "../include/pirate/network_utils.hpp"
 #include "../include/pirate/system_utils.hpp"   // get_thread_affinity()
+#include "../include/pirate/constants.hpp"      // default_poll_cadence_ms
 
 #include <algorithm>     // std::max (paced-mode bootstrap), std::min (ack-read cap)
 #include <cstring>
@@ -1258,13 +1259,13 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
             w.sock = Socket(PF_INET, SOCK_STREAM);
 
             // Non-blocking connect + poll, rechecking w.is_stopped every
-            // 100 ms. (A plain blocking connect() could stall for the
-            // kernel's SYN-retry timeout, ~2 minutes, if the receiver is
-            // unreachable -- blocking stop() and the destructor for that
-            // long.)
+            // constants::default_poll_cadence_ms. (A plain blocking connect()
+            // could stall for the kernel's SYN-retry timeout, ~2 minutes, if the
+            // receiver is unreachable -- blocking stop() and the destructor for
+            // that long.)
             w.sock.start_connect(w.ip_addr, w.port);
 
-            while (!w.sock.wait_for_connect(100)) {
+            while (!w.sock.wait_for_connect(constants::default_poll_cadence_ms)) {
                 std::lock_guard<std::mutex> lk(w.mutex);
                 if (w.is_stopped)
                     return false;

@@ -1500,14 +1500,14 @@ void register_core_bindings(pybind11::module &m)
                "Raises:\n"
                "    RuntimeError: If called twice or after stop().")
           .def("stop", [](FrbServer &self) { self.stop(); },
-               py::call_guard<py::gil_scoped_release>(),   // deadline-less grpc Shutdown blocks ~seconds
+               py::call_guard<py::gil_scoped_release>(),   // stop() joins worker threads + grpc Shutdown; release the GIL
                "Stop the server and all Receivers. Safe to call multiple times.")
           .def("poll_from_python", &FrbServer::poll_from_python, py::arg("timeout_ms"),
                py::call_guard<py::gil_scoped_release>(),
                "Block until the server is stopped, or until ``timeout_ms`` elapses.\n\n"
                "Releases the GIL while blocked. Call in a loop with a short timeout\n"
-               "(e.g. 500 ms) so that Ctrl-C stays responsive: KeyboardInterrupt is\n"
-               "raised between calls, never during one.\n\n"
+               "(e.g. constants.default_poll_cadence_ms) so that Ctrl-C stays\n"
+               "responsive: KeyboardInterrupt is raised between calls, never during one.\n\n"
                "Args:\n"
                "    timeout_ms: Maximum time to block, in milliseconds (must be >= 0).\n\n"
                "Returns:\n"
@@ -1561,16 +1561,16 @@ void register_core_bindings(pybind11::module &m)
                py::arg("ip_addr"))
           // open() must stay interruptible by Ctrl-C while it blocks waiting for
           // a client. We can't just release the GIL for the whole call (Python
-          // signal handlers wouldn't run); instead we drive the wait in 0.5s
-          // steps, releasing the GIL during each wait and reacquiring it between
-          // steps to poll for pending Python signals (PyErr_CheckSignals() != 0
-          // => the SIGINT handler raised KeyboardInterrupt, propagated via
-          // error_already_set).
+          // signal handlers wouldn't run); instead we drive the wait in
+          // constants::default_poll_cadence_ms steps, releasing the GIL during each
+          // wait and reacquiring it between steps to poll for pending Python signals
+          // (PyErr_CheckSignals() != 0 => the SIGINT handler raised KeyboardInterrupt,
+          // propagated via error_already_set).
           .def("_open", [](FrbGrouper &self) {
                self.start_listening();                 // GIL held; quick (bind + spawn)
                for (;;) {
                    bool ready;
-                   { py::gil_scoped_release nogil; ready = self.wait_for_handshake(500); }
+                   { py::gil_scoped_release nogil; ready = self.wait_for_handshake(constants::default_poll_cadence_ms); }
                    if (ready)
                        break;
                    if (PyErr_CheckSignals() != 0)       // e.g. Ctrl-C

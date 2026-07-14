@@ -11,7 +11,7 @@ import ksgpu
 from .Hardware import Hardware
 from .utils import ThreadAffinity, extract_ip, check_mtu, resolve_addr
 from .core import BumpAllocator, SlabAllocator, AssembledFrameAllocator, FileWriter, Receiver
-from .pirate_pybind11 import DedispersionConfig
+from .pirate_pybind11 import DedispersionConfig, constants
 
 
 def _parse_memory_string(s):
@@ -598,17 +598,18 @@ class RunServerHelper:
         print(f"All {self.n} server(s) started. Press Ctrl-C to stop.")
 
     def _wait_forever(self):
-        # Round-robin over the servers, blocking up to 500 ms per server in
+        # Round-robin over the servers, blocking up to
+        # constants.default_poll_cadence_ms per server in
         # FrbServer.poll_from_python() (which releases the GIL while blocked).
         # Control returns to the interpreter between calls, so Ctrl-C
-        # (KeyboardInterrupt) is raised within ~500 ms. If a server stopped on
+        # (KeyboardInterrupt) is raised within that interval. If a server stopped on
         # an internal error, poll_from_python() re-raises it here with the
         # root-cause text; run()'s 'finally' block then stops the remaining
         # servers, and the resulting traceback is the operator-facing log
         # message. A clean stop (e.g. via RPC) returns True instead.
         while True:
             for i, server in enumerate(self.servers):
-                if server.poll_from_python(timeout_ms=500):
+                if server.poll_from_python(timeout_ms=constants.default_poll_cadence_ms):
                     print(f"FrbServer {i} stopped. Exiting.")
                     return
 

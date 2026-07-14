@@ -452,11 +452,18 @@ void FrbServer::stop(std::exception_ptr e) const
     params.host_allocator->stop(e);
     params.gpu_allocator->stop(e);
 
-    // Shutdown RPC server. Note that Shutdown() blocks until in-flight RPC
-    // handlers have returned (all handlers exit promptly once is_stopped is
-    // set and the cascades above have run).
+    // Shutdown RPC server. All handlers exit promptly once is_stopped is set and
+    // the cascades above have run, but the deadline-less Server::Shutdown() still
+    // blocks ~seconds internally before returning. Pass a short forced deadline
+    // (constants::grpc_forced_shutdown_deadline_ms) so it returns as soon as the
+    // (already-returned) handlers are reaped; anything somehow still in flight at
+    // the deadline is force-cancelled, which is fine during teardown. (~FrbServer
+    // calls Server::Wait() to finalize teardown.) Safe here: the load-bearing
+    // invariant above -- no RPC handler may call stop() -- means stop() never runs
+    // on a handler thread, so Shutdown() can't self-deadlock.
     if (rpc_server)
-        rpc_server->Shutdown();
+        rpc_server->Shutdown(std::chrono::system_clock::now()
+                             + std::chrono::milliseconds(constants::grpc_forced_shutdown_deadline_ms));
 }
 
 
@@ -2350,9 +2357,10 @@ void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, const fs::Subs
 
         unique_lock<std::mutex> subscriber_lock(subscriber->mutex);
 
-        // Wait for queue entry, stop signal, or error (with 0.5 sec timeout).
-        // Timeout ensures context->IsCancelled() is checked regularly.
-        subscriber->cv.wait_for(subscriber_lock, std::chrono::milliseconds(500), [&subscriber]() {
+        // Wait for queue entry, stop signal, or error (timeout =
+        // constants::default_poll_cadence_ms). Timeout ensures
+        // context->IsCancelled() is checked regularly.
+        subscriber->cv.wait_for(subscriber_lock, std::chrono::milliseconds(constants::default_poll_cadence_ms), [&subscriber]() {
             return !subscriber->queue.empty() || subscriber->is_stopped || subscriber->error;
         });
 
@@ -2494,10 +2502,10 @@ grpc::Status FrbRpcService::GetConfig(
 // notified on every event the predicate tests (rb_initialized flip,
 // rb_processed advance, stop) -- see the cv comments in FrbServer.hpp.
 //
-// The 500ms wait timeout is a safety net for "silent disconnect during an
-// idle server" -- if a client disconnects with no Cancel() call AND
-// rb_processed is not advancing, we'd otherwise block forever on the wait.
-// The timeout lets us periodically re-poll context->IsCancelled().
+// The wait timeout (constants::default_poll_cadence_ms) is a safety net for
+// "silent disconnect during an idle server" -- if a client disconnects with no
+// Cancel() call AND rb_processed is not advancing, we'd otherwise block forever
+// on the wait. The timeout lets us periodically re-poll context->IsCancelled().
 void FrbRpcService::_MonitorRingbuf(
     grpc::ServerContext* context,
     grpc::ServerWriter<fs::MonitorRingbufResponse>* writer)
@@ -2517,7 +2525,7 @@ void FrbRpcService::_MonitorRingbuf(
 
             // Wait for: stop, OR (initialized AND value changed). Timeout
             // bounds the latency of silent-disconnect detection.
-            s->monitor_cv.wait_for(lock, std::chrono::milliseconds(500), [&]() {
+            s->monitor_cv.wait_for(lock, std::chrono::milliseconds(constants::default_poll_cadence_ms), [&]() {
                 return s->is_stopped
                     || (s->rb_initialized && s->rb_processed != last_sent);
             });

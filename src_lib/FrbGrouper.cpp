@@ -55,13 +55,14 @@ struct FrbGrouperClient::GrpcState
 
 
 // Channel args shared by ping() and connect(): cap the connection-reconnect
-// backoff at 1s (gRPC defaults to exponential backoff up to 120s, which would
-// make a bounded READY wait racy). initial == max == 1s => retry ~once/second.
+// backoff at constants::grpc_reconnect_backoff_ms (gRPC defaults to exponential
+// backoff up to 120s, which would make a bounded READY wait racy). initial == max
+// => retry at that fixed interval.
 static grpc::ChannelArguments _grouper_chan_args()
 {
     grpc::ChannelArguments a;
-    a.SetInt(GRPC_ARG_INITIAL_RECONNECT_BACKOFF_MS, 1000);
-    a.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, 1000);
+    a.SetInt(GRPC_ARG_INITIAL_RECONNECT_BACKOFF_MS, constants::grpc_reconnect_backoff_ms);
+    a.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, constants::grpc_reconnect_backoff_ms);
     return a;
 }
 
@@ -283,8 +284,8 @@ FrbGrouper::FrbGrouper(const std::string &ip_addr) : grouper_ip_addr(ip_addr)
 // open() / start_listening() / wait_for_handshake()
 //
 // open() is split into two primitives so the pybind binding can drive the wait
-// in 0.5s steps and poll for Ctrl-C between them. The plain C++ open() is a
-// convenience that loops over them with no signal check.
+// in constants::default_poll_cadence_ms steps and poll for Ctrl-C between them.
+// The plain C++ open() is a convenience that loops over them with no signal check.
 
 
 void FrbGrouper::start_listening()
@@ -374,8 +375,8 @@ bool FrbGrouper::wait_for_handshake(int timeout_ms)
 void FrbGrouper::open()
 {
     start_listening();
-    while (!wait_for_handshake(500))
-        ;   // spin in 0.5s steps until the handshake is processed (or throw on stop)
+    while (!wait_for_handshake(constants::default_poll_cadence_ms))
+        ;   // spin in default_poll_cadence_ms steps until the handshake is processed (or throw on stop)
 }
 
 
@@ -802,7 +803,7 @@ void FrbGrouper::close()
         // any RPC somehow still in flight at the deadline is force-cancelled,
         // which is fine since we are tearing the server down.
         grpc_state->server->Shutdown(std::chrono::system_clock::now()
-                                     + std::chrono::milliseconds(100));
+                                     + std::chrono::milliseconds(constants::grpc_forced_shutdown_deadline_ms));
         grpc_state->server->Wait();
     }
 }
