@@ -17,9 +17,10 @@ namespace pirate {
 
 struct constants
 {
-    // GPU hardware.
     // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#features-and-technical-specifications
     static constexpr int bytes_per_gpu_cache_line = 128;
+    static constexpr int cuda_static_shmem_bytes = 48 * 1024;
+    static constexpr int cuda_max_dynamic_shmem_bytes = 99 * 1024;
     static constexpr int cuda_max_y_blocks = 65535;
     static constexpr int cuda_max_z_blocks = 65535;
     

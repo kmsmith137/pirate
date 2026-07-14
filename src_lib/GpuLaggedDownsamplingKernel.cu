@@ -741,7 +741,7 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
     xassert_divisible(params.ntime, pow2(D) * xdiv(constants::bytes_per_gpu_cache_line, ST));
     
     // Target warps per threadblock.
-    int W_target = (98*1024) / shmem_nbytes_per_warp;
+    int W_target = constants::cuda_max_dynamic_shmem_bytes / shmem_nbytes_per_warp;
     W_target = round_down_to_power_of_two(W_target);
     W_target = min(W_target, 8);
 
@@ -851,7 +851,7 @@ DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const LaggedDownsamplingKernel
     CUDA_CALL(cudaFuncSetAttribute(
         this->kernel,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
-        99 * 1024
+        constants::cuda_max_dynamic_shmem_bytes
     ));
 }
 
