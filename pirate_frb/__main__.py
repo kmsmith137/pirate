@@ -189,6 +189,7 @@ def test(args):
             # Network/allocator tests only need to run once (not niter times)
             if i == 0:
                 tests.test_assembled_frame_allocator()
+                tests.test_slow_subscriber()
             tests.test_assembled_frame_asdf()
             tests.test_network()
 

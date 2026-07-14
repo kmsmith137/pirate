@@ -2375,14 +2375,23 @@ grpc::Status FrbRpcService::CancelStream(
 // Each response has (filename, error_message, stream_name). Empty error_message
 // indicates success; nonempty stream_name means the file was triggered by a
 // stream (StartStream RPC) rather than a WriteFiles call. Stream-triggered
-// notifications are delivered only if request->subscribe_streams() is true.
+// notifications are delivered only if request->subscribe_streams() is true
+// (filtered at enqueue time, in FileWriter::_update_rpc_subscribers).
+//
+// A subscriber that falls too far behind (queue length reaches
+// FileWriter::Params::max_subscriber_backlog, e.g. a client that never
+// reads) is stopped by the FileWriter: its queued notifications are dropped
+// and the error rethrow below ends the stream with a "fell behind" message
+// the next time this handler makes progress.
 void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, const fs::SubscribeFilesRequest *request, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
 {
     FrbServer *s = state;
     shared_ptr<FileWriter> file_writer = s->params.file_writer;
 
-    // Create subscriber and register with FileWriter.
+    // Create subscriber and register with FileWriter. subscribe_streams must
+    // be set before add_subscriber() (immutable after publication).
     auto subscriber = make_shared<FileWriter::RpcSubscriber>();
+    subscriber->subscribe_streams = request->subscribe_streams();
     file_writer->add_subscriber(subscriber);
 
     // Ready sentinel. Must be the FIRST response on every stream --
@@ -2431,10 +2440,8 @@ void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, const fs::Subs
 
         subscriber_lock.unlock();
 
-        // Stream-triggered notifications (nonempty stream_name) are delivered
-        // only if the subscriber opted in via subscribe_streams.
-        if (!request->subscribe_streams() && !write_status.stream_name.empty())
-            continue;
+        // No subscribe_streams filter here: FileWriter applies it at enqueue
+        // time, so everything popped from the queue is deliverable.
 
         // Build response with (filename, error_message, stream_name) inside
         // the 'notification' arm of the oneof. Empty error_message

@@ -2,6 +2,8 @@
 #include "../include/pirate/AssembledFrame.hpp"
 #include "../include/pirate/file_utils.hpp"
 
+#include <sstream>
+
 #include <ksgpu/xassert.hpp>
 
 using namespace std;
@@ -21,6 +23,7 @@ FileWriter::FileWriter(const Params &params_) : params(params_)
     xassert(params.nfs_root.is_absolute());
     xassert(params.num_ssd_threads > 0);
     xassert(params.num_nfs_threads > 0);
+    xassert(params.max_subscriber_backlog >= 1);
 
     // Create directories, if they don't already exist.
     pirate::create_directories(params.ssd_root);
@@ -579,13 +582,51 @@ void FileWriter::_update_rpc_subscribers(const WriteStatus &write_status)
 
     for (const auto &s: subscribers) {
         unique_lock<std::mutex> lock(s->mutex);
-        if (!s->is_stopped) {
-            s->queue.push(write_status);
+
+        if (s->is_stopped)
+            continue;
+
+        // Push-time filter: stream-triggered notifications only go to
+        // subscribers that opted in. (This filter used to live at pop time,
+        // in the SubscribeFiles handler; filtering here keeps unwanted
+        // entries out of the queue entirely, so a subscriber can never
+        // overflow on notifications it never asked for.)
+        if (!s->subscribe_streams && !write_status.stream_name.empty())
+            continue;
+
+        if ((long)s->queue.size() >= params.max_subscriber_backlog) {
+            // Overflow: stop this subscriber and free its queue NOW, so
+            // server memory stays bounded even if the client never reads
+            // again. The handler observes error/is_stopped the next time it
+            // makes progress -- its blocking Write() may stay parked until
+            // the client reads or disconnects, but that costs no more than
+            // any idle subscriber's handler thread does. The subscriber
+            // stays in rpc_subscribers (skipped via is_stopped above) until
+            // the handler exits and the weak_ptr is pruned.
+            std::stringstream ss;
+            ss << "SubscribeFiles: subscriber fell behind (queue reached "
+               << params.max_subscriber_backlog << " entries); notifications "
+               << "were dropped -- resubscribe and resynchronize";
+            s->is_stopped = true;
+            s->error = std::make_exception_ptr(runtime_error(ss.str()));
+            std::queue<WriteStatus>().swap(s->queue);
             lock.unlock();
-            // notify_one is sound here: the only waiter on a subscriber's cv
-            // is the single SubscribeFiles handler thread that created it.
+            // Wake the handler if it's in its cv wait (it is almost always
+            // parked in Write() instead -- the queue can only build while
+            // the handler isn't popping -- but this covers the rare
+            // interleavings).
             s->cv.notify_one();
+            cout << "FileWriter: stopping slow SubscribeFiles subscriber "
+                 << "(queue reached " << params.max_subscriber_backlog
+                 << " entries)" << endl;
+            continue;
         }
+
+        s->queue.push(write_status);
+        lock.unlock();
+        // notify_one is sound here: the only waiter on a subscriber's cv
+        // is the single SubscribeFiles handler thread that created it.
+        s->cv.notify_one();
     }
 }
 

@@ -22,7 +22,14 @@ class FileSubscriber:
     Lifetime: the underlying gRPC stream stays open until either
     close() is called (explicitly or via __exit__/__del__), the
     server cancels the stream (e.g. on shutdown), or an RPC error
-    occurs. Use as a context manager for deterministic teardown;
+    occurs. The server also stops subscribers that fall too far
+    behind (unsent-notification backlog exceeds the server's
+    per-subscriber cap, e.g. a subscriber that is never iterated):
+    after any already-buffered notifications drain, iteration raises
+    grpc.RpcError with StatusCode.INTERNAL and "fell behind" in the
+    details. The backlogged notifications were dropped, so a caller
+    that still cares must resubscribe and resynchronize (e.g. list
+    the acqdir). Use as a context manager for deterministic teardown;
     "sloppy" use (let __del__ clean up at GC time) usually works
     but relies on CPython's reference-counting timeliness and
     gRPC's interpreter-shutdown behavior, neither of which is

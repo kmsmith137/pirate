@@ -64,6 +64,13 @@ service FrbSearch {
 
   // Subscribe to a stream of filenames. The connection can be closed by the client
   // at any time, or by the server on shutdown or exception.
+  //
+  // Backlog cap: a subscriber whose unsent-notification backlog exceeds the
+  // server's per-subscriber cap (e.g. a client that keeps the stream open
+  // but never reads) is stopped server-side. Its stream then ends with
+  // status INTERNAL ("fell behind ...") the next time the client reads;
+  // the backlogged notifications were dropped, so a client that still cares
+  // must resubscribe and resynchronize (e.g. by listing the acqdir).
   rpc SubscribeFiles (SubscribeFilesRequest) returns (stream SubscribeFilesResponse);
 
   // Push stream of rb_processed updates. The server sends one message as

@@ -1,6 +1,8 @@
 #ifndef _PIRATE_FILE_WRITER_HPP
 #define _PIRATE_FILE_WRITER_HPP
 
+#include "constants.hpp"
+
 #include <atomic>
 #include <mutex>
 #include <queue>
@@ -37,6 +39,13 @@ public:
         std::filesystem::path nfs_root;
         int num_ssd_threads = 4;
         int num_nfs_threads = 2;
+
+        // Max queued-but-unsent notifications per RPC subscriber. A
+        // subscriber that falls this far behind (e.g. a SubscribeFiles
+        // client that never reads) is stopped with a "fell behind" error
+        // and its queue freed, so server memory stays bounded (see
+        // _update_rpc_subscribers). Mainly overridden by tests.
+        long max_subscriber_backlog = constants::max_file_subscriber_backlog;
     };
 
     // Status of write request, reported to RPC subscribers.
@@ -53,11 +62,24 @@ public:
 
         // Waiter: the single SubscribeFiles handler thread that created this
         // subscriber (predicate: queue non-empty, or is_stopped, or error).
-        // Signaled on: queue push in _update_rpc_subscribers() (notify_one,
-        // single waiter), and FileWriter::stop()'s subscriber sweep.
+        // Signaled on: queue push and overflow stop, both in
+        // _update_rpc_subscribers() (notify_one, single waiter), and
+        // FileWriter::stop()'s subscriber sweep.
         std::condition_variable cv;
 
+        // Set by the creating handler BEFORE add_subscriber(), i.e. immutable
+        // after publication: deliver stream-triggered notifications?
+        // FileWriter filters at push time (_update_rpc_subscribers).
+        bool subscribe_streams = false;
+
         std::queue<WriteStatus> queue;
+
+        // is_stopped/error are set either by FileWriter::stop() (shutdown
+        // sweep) or by the per-subscriber overflow stop in
+        // _update_rpc_subscribers() (queue length reached
+        // Params::max_subscriber_backlog; error carries a "fell behind"
+        // message). Either way the handler exits via the same predicate.
+        // First stop wins.
         std::exception_ptr error;
         bool is_stopped = false;
     };

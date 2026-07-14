@@ -71,6 +71,13 @@ struct constants
     // Number of inactive (expired/cancelled) streams retained for ShowStreams history.
     static constexpr int inactive_file_stream_capacity = 5;
 
+    // Max queued-but-unsent file notifications per SubscribeFiles subscriber.
+    // A subscriber that falls this far behind (e.g. a client that keeps the
+    // stream open but never reads) is stopped and its queue freed, so server
+    // memory stays bounded. ~200-300 bytes/entry -> ~10 MB per subscriber
+    // at the cap.
+    static constexpr long max_file_subscriber_backlog = 50000;
+
     // ---------------------------------------------------------------------------------------------
     //
     // Static asserts and derived params.

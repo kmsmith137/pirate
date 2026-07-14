@@ -63,6 +63,8 @@ from ..core import (
 
 from ..pirate_pybind11 import FrbServer
 from ..rpc import FrbSearchClient
+from ..rpc.FileSubscriber import FileSubscriber
+from ..rpc.grpc import frb_search_pb2_grpc
 
 from .utils import make_random_subscale_config, pick_receiver_worker_counts
 
@@ -128,11 +130,14 @@ class NetworkTester:
             no_dedispersion        = no_dedispersion,
         )
 
-    def __init__(self):
+    def __init__(self, max_subscriber_backlog=None):
         # Random parameters + derived paths. No side effects yet (no
         # threads, no directories) -- those happen in __enter__.
+        # max_subscriber_backlog: optional FileWriter backlog-cap override
+        # (None = FileWriter default); used by test_slow_subscriber().
         self.p = NetworkTester._random_params()
         self.run_id = secrets.token_hex(8)
+        self.max_subscriber_backlog = max_subscriber_backlog
 
         # Future-writes geometry: the server's truncation horizon in chunks
         # (future_write_max_samples rounded up to whole chunks, mirroring
@@ -231,11 +236,16 @@ class NetworkTester:
             time_samples_per_chunk = p['time_samples_per_chunk'],
         )
 
+        fw_kwargs = {}
+        if self.max_subscriber_backlog is not None:
+            fw_kwargs['max_subscriber_backlog'] = self.max_subscriber_backlog
+
         self.file_writer = FileWriter(
             ssd_root        = self.ssd_dir,
             nfs_root        = self.nfs_dir,
             num_ssd_threads = p['num_ssd_threads'],
             num_nfs_threads = p['num_nfs_threads'],
+            **fw_kwargs,
         )
 
         self.receivers = [
@@ -367,8 +377,9 @@ class NetworkTester:
 
     # ---- Send loop ----
 
-    def _send_loop(self):
-        """1000-turn randomized send loop.
+    def _send_loop(self, nturns=1000):
+        """Randomized send loop (default 1000 turns; test_slow_subscriber
+        runs a shorter loop, since it only needs some processed chunks).
 
         Each turn picks a random worker, occasionally synchronizes it,
         and enqueues a Poisson-sized batch of SEND_MINICHUNK (or SKIP)
@@ -380,7 +391,7 @@ class NetworkTester:
         """
         fxe = self.fxe
 
-        for iouter in range(1000):
+        for iouter in range(nturns):
             worker_id = random.randrange(self.nworkers)
             skip = self.dstate[worker_id] or (random.random() < 0.1)
 
@@ -843,6 +854,143 @@ class NetworkTester:
 
         return expected_data, expected_so
 
+    # ---- Slow-subscriber (backlog cap) phase ----
+
+    def _run_slow_subscriber_phase(self):
+        """Verify the FileWriter's per-subscriber backlog cap
+        (Params::max_subscriber_backlog, set small via the NetworkTester
+        ctor): a SubscribeFiles client that never reads must be stopped
+        server-side with a "fell behind" error, WITHOUT affecting a
+        concurrently-consuming subscriber or the FileWriter itself.
+
+        Caller must have quiesced the pipeline first (_send_loop +
+        _post_loop_sync + _flush_promises + _drain_filesub): no new data is
+        arriving, rb_* are stable, and self.file_sub has been drained.
+
+        Mechanics: the server's handler only stops popping a subscriber's
+        queue once its blocking gRPC Write() stalls, i.e. once the
+        never-reading client's HTTP/2 flow-control window fills. The slow
+        subscriber's channel therefore pins that window (BDP probing off,
+        16 KiB stream lookahead) -- measured behavior without this: gRPC's
+        BDP estimator on loopback inflates the window past everything this
+        test sends, the client transport buffers it all, Write() never
+        blocks, and the cap never engages. (A production slow client hits
+        the cap the same way, just after window/message-size more
+        notifications.) We also pad acqdir names to ~190 chars (~240 wire
+        bytes per notification) and send a total that swamps window + cap
+        with a wide margin. A dedicated channel additionally isolates the
+        stalled connection-level window from self.rpc_client and the fast
+        subscriber.
+        """
+        p = self.p
+        cap = self.max_subscriber_backlog
+        assert cap is not None, "construct NetworkTester(max_subscriber_backlog=...) for this phase"
+
+        nbeams = p['nbeams']
+        spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
+
+        # Fully-processed chunk range still in the ringbuf: the past path of
+        # write_files is guaranteed to schedule (and write) every requested
+        # file in it. Quiescence (+ no reaper: dummy-mode slab allocator)
+        # makes the range stable for the whole phase.
+        status = self.rpc_client.get_status()
+        chunk_lo = (status.rb_start + nbeams - 1) // nbeams   # ceil: fully in ringbuf
+        chunk_hi = status.rb_processed // nbeams - 1          # fully GPU-processed
+        assert chunk_hi >= chunk_lo, \
+            f"no fully-processed chunks in the ringbuf (chunk range [{chunk_lo}, {chunk_hi}]) -- send loop too short?"
+
+        # Burst geometry: bursts of at most cap//2 files, so the FAST
+        # subscriber's transient queue (bounded by one burst; it is fully
+        # drained between bursts) stays far from the cap.
+        all_beams = list(range(p['base_beam_id'], p['base_beam_id'] + nbeams))
+        max_burst = max(1, cap // 2)
+        beams_sel = all_beams[:max_burst]
+        nchunks_sel = max(1, min(max_burst // len(beams_sel), chunk_hi - chunk_lo + 1))
+        c0 = chunk_hi - nchunks_sel + 1
+        burst_size = len(beams_sel) * nchunks_sel
+
+        # Total to send: >> (window fill ~ 64 KiB / ~240 B ~ 270 messages)
+        # + cap. 1500 gives a ~4x margin.
+        target_total = 1500
+        pad = 'x' * 180
+
+        # The slow subscriber: opened before the bursts (ready sentinel read
+        # by the FileSubscriber ctor), then never iterated until the final
+        # assertion. Channel options pin the flow-control window (see the
+        # docstring).
+        slow_channel = grpc.insecure_channel(
+            f"127.0.0.1:{p['rpc_port']}",
+            options=[("grpc.http2.bdp_probe", 0),
+                     ("grpc.http2.lookahead_bytes", 16384)])
+        slow_sub = FileSubscriber(frb_search_pb2_grpc.FrbSearchStub(slow_channel))
+        try:
+            total_sent = 0
+            iburst = 0
+            while total_sent < target_total:
+                acqdir = f"slow_{iburst}_{pad}"
+                filenames = self.rpc_client.write_files(
+                    beams          = beams_sel,
+                    fpga_seq_start = c0 * spc,
+                    fpga_seq_end   = (chunk_hi + 1) * spc,
+                    acqdir         = acqdir,
+                )
+                expected = {_acq_filename(acqdir, b, c)
+                            for b in beams_sel for c in range(c0, chunk_hi + 1)}
+                assert set(filenames) == expected, \
+                    f"burst {iburst}: write_files returned {set(filenames) ^ expected} unexpectedly"
+
+                # Drain this burst from the fast subscriber (self.file_sub)
+                # before issuing the next one: exactly-once per burst, and
+                # its queue never accumulates across bursts.
+                remaining = set(filenames)
+                while remaining:
+                    fn, err, sname = next(self.file_sub)
+                    assert not err, f"write failed for {fn!r}: {err}"
+                    assert sname == "", f"unexpected stream notification {fn!r}"
+                    assert fn in remaining, f"unexpected/duplicate notification {fn!r}"
+                    remaining.discard(fn)
+
+                total_sent += burst_size
+                iburst += 1
+
+            # Resume reading the slow subscriber: it drains whatever the
+            # transport had buffered (roughly the flow-control window), then
+            # the stream must end with INTERNAL / "fell behind". Receiving
+            # EVERY notification instead means the overflow never triggered.
+            got = 0
+            try:
+                while True:
+                    next(slow_sub)
+                    got += 1
+                    assert got < total_sent, \
+                        "slow subscriber received every notification -- backlog cap never triggered?"
+            except StopIteration:
+                raise AssertionError(
+                    "slow subscriber stream ended cleanly (expected INTERNAL 'fell behind')")
+            except grpc.RpcError as e:
+                assert e.code() == grpc.StatusCode.INTERNAL, \
+                    f"expected INTERNAL, got {e.code()}: {e.details()}"
+                assert "fell behind" in (e.details() or ""), \
+                    f"unexpected error details: {e.details()}"
+            print(f"    slow subscriber: {got}/{total_sent} notifications delivered, "
+                  f"then stopped with 'fell behind' (cap={cap})")
+
+            # The overflow must not have affected the FileWriter or other
+            # subscribers: one more write, delivered to the fast subscriber.
+            fn_check = self.rpc_client.write_files(
+                beams          = [beams_sel[0]],
+                fpga_seq_start = chunk_hi * spc,
+                fpga_seq_end   = (chunk_hi + 1) * spc,
+                acqdir         = "post_overflow_check",
+            )
+            assert fn_check == [_acq_filename("post_overflow_check", beams_sel[0], chunk_hi)]
+            fn, err, sname = next(self.file_sub)
+            assert (fn, err, sname) == (fn_check[0], "", ""), \
+                f"post-overflow write not delivered cleanly: {(fn, err, sname)}"
+        finally:
+            slow_sub.close()
+            slow_channel.close()
+
 
 def test_network():
     """One iteration of the FakeXEngine <-> FrbServer loopback test."""
@@ -857,4 +1005,22 @@ def test_network():
               f" beams_per_batch={c.beams_per_batch}, num_active_batches={c.num_active_batches},"
               f" dtype={c.dtype}, future_write_max_samples={c.future_write_max_samples} (n_fut={t.n_fut})")
         t.run()
+
+
+def test_slow_subscriber():
+    """Server-side backlog cap for SubscribeFiles: a subscriber that never
+    reads must be stopped ('fell behind'), without affecting a concurrent
+    consuming subscriber or the FileWriter. Uses the NetworkTester rig with a
+    small cap and a shortened send loop (this test only needs some
+    fully-processed chunks in the ringbuf, not the full 1000-turn stress).
+    """
+    print("  test_slow_subscriber()...")
+    with NetworkTester(max_subscriber_backlog=100) as t:
+        params_no_config = {k: v for k, v in t.p.items() if k != 'config'}
+        print(f"    params: {params_no_config}")
+        t._send_loop(nturns=400)
+        t._post_loop_sync()
+        t._flush_promises()
+        t._drain_filesub()
+        t._run_slow_subscriber_phase()
     print("    PASSED")

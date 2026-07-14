@@ -1670,22 +1670,29 @@ void register_core_bindings(pybind11::module &m)
         "Writes AssembledFrames to disk via SSD and NFS queues.\n\n"
         "Creates worker threads for writing to local SSD and copying to NFS.")
           .def(py::init([](const std::string &ssd_root, const std::string &nfs_root,
-                           int num_ssd_threads, int num_nfs_threads) {
+                           int num_ssd_threads, int num_nfs_threads,
+                           long max_subscriber_backlog) {
                FileWriter::Params params;
                params.ssd_root = ssd_root;
                params.nfs_root = nfs_root;
                params.num_ssd_threads = num_ssd_threads;
                params.num_nfs_threads = num_nfs_threads;
+               params.max_subscriber_backlog = max_subscriber_backlog;
                return std::make_shared<FileWriter>(params);
           }),
                py::arg("ssd_root"), py::arg("nfs_root"),
                py::arg("num_ssd_threads") = 4, py::arg("num_nfs_threads") = 2,
+               py::arg("max_subscriber_backlog") = constants::max_file_subscriber_backlog,
                "Create a FileWriter.\n\n"
                "Args:\n"
                "    ssd_root: Absolute path to local SSD directory\n"
                "    nfs_root: Absolute path to NFS directory\n"
                "    num_ssd_threads: Number of threads for SSD writes (default 4)\n"
-               "    num_nfs_threads: Number of threads for NFS copies (default 2)")
+               "    num_nfs_threads: Number of threads for NFS copies (default 2)\n"
+               "    max_subscriber_backlog: Max queued-but-unsent notifications per\n"
+               "        SubscribeFiles subscriber; a subscriber that falls this far\n"
+               "        behind is stopped with a 'fell behind' error (mainly\n"
+               "        overridden by tests)")
           .def("stop", [](FileWriter &self) { self.stop(); },
                "Stop the writer. Safe to call multiple times.")
     ;
