@@ -154,13 +154,15 @@ void register_core_bindings(pybind11::module &m)
             "Args:\n"
             "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.)\n"
             "    capacity: Bytes to pre-allocate (>= 0) or -1 for dummy mode\n"
-            "    is_async: If True, constructor returns immediately and the\n"
-            "        allocation/zeroing happens on worker threads. Public\n"
-            "        methods block until init complete. nthreads and\n"
-            "        cuda_device are then required.\n"
-            "    nthreads: Number of worker threads (>= 2 for case 1 and 2;\n"
-            "        ignored for case 3 / af_gpu).\n"
-            "    cuda_device: CUDA device id (>= 0 required in async mode).")
+            "    is_async: If True, constructor returns immediately; zeroing\n"
+            "        and (for af_rhost) the chunked register run on worker\n"
+            "        threads. Public methods block until init completes.\n"
+            "    nthreads: Async worker threads. Required >= 2 for async\n"
+            "        af_rhost + af_zero (1 registrar + >= 1 zero worker),\n"
+            "        >= 1 for async af_uhost + af_zero; otherwise ignored.\n"
+            "    cuda_device: CUDA device id. Required >= 0 whenever af_gpu\n"
+            "        is set with capacity > 0 (sync or async), and for\n"
+            "        af_rhost in async mode; otherwise ignored.")
         .def_property_readonly("nbytes_allocated",
             [](const BumpAllocator &self) { return self.get_nbytes_allocated(); },
             "Bytes allocated so far (aligned to 128-byte cache lines)")
@@ -177,7 +179,15 @@ void register_core_bindings(pybind11::module &m)
             "has not been stopped.")
         .def("_allocate_array_raw",
             [](std::shared_ptr<BumpAllocator> self, ksgpu::Dtype dtype, const std::vector<long> &shape) {
-                return self->_allocate_array_internal(dtype, shape.size(), shape.data(), nullptr);
+                // Entry-point wrapper (see notes/stoppable_class.md): ANY throw
+                // (shape errors, dummy-mode allocation failure) stops the
+                // allocator, matching the C++ allocate_array() overloads.
+                try {
+                    return self->_allocate_array_internal(dtype, shape.size(), shape.data(), nullptr);
+                } catch (...) {
+                    self->stop(std::current_exception());
+                    throw;
+                }
             },
             py::arg("dtype"), py::arg("shape"),
             // Blocks on async init; in dummy mode does a fresh (possibly zeroed) allocation.

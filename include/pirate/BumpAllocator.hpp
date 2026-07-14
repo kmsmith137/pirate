@@ -62,8 +62,9 @@ namespace pirate {
 //   - capacity >= 0 required (no dummy mode).
 //
 // Argument requirements:
-//   - cuda_device >= 0 if af_gpu is set (always: ctor uses it to pick
-//     the device for cudaMalloc / cudaMemset).
+//   - cuda_device >= 0 if af_gpu is set with capacity > 0 (sync and
+//     async alike: the ctor uses it to pick the device for cudaMalloc /
+//     cudaMemset). Dummy/empty modes allocate nothing and ignore it.
 //   - cuda_device >= 0 if (af_rhost) AND async (the registrar worker
 //     calls cudaSetDevice).
 //   - For sync mode + af_rhost, cuda_device is ignored: the chunked
@@ -176,17 +177,20 @@ struct BumpAllocator
     // `base` from the ctor's init list). Member init order follows
     // declaration order, so they must precede `base`.
     //
-    // _nreg_chunks > 0 iff af_rhost (set by _setup_rhost_deleter).
-    // _deleter_state is non-null iff af_rhost, in both sync and async
-    // modes; non-rhost paths rely on ksgpu's own deleter.
+    // _nreg_chunks > 0 iff af_rhost with capacity > 0 (set by
+    // _setup_rhost_deleter; dummy/empty modes never allocate or register).
+    // _deleter_state is non-null under the same condition, in both sync
+    // and async modes; non-rhost paths rely on ksgpu's own deleter.
     long _nreg_chunks = 0;
     std::shared_ptr<DeleterState> _deleter_state;
 
     // const after ctor: assigned exactly once via the init list.
     const std::shared_ptr<void> base;
 
-    // Helper: allocates array, used by all allocate_array() overloads.
-    // Handles both normal mode and dummy mode.
+    // Helper: allocates array, used by all allocate_array() overloads (and
+    // by the python _allocate_array_raw binding). Handles both normal mode
+    // and dummy mode. NOT an entry point itself: every caller must apply
+    // the try/catch stop-and-rethrow wrapper (see notes/stoppable_class.md).
     ksgpu::Array<void> _allocate_array_internal(ksgpu::Dtype dtype, int ndim, const long *shape, const long *strides);
 
     // Entry-point body; allocate_bytes() is a thin wrapper that stops the

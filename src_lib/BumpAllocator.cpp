@@ -36,6 +36,9 @@ namespace pirate {
 // Worker chunking parameters.
 // Note: reg_chunk_bytes is 64 GiB by default. Lower for stress testing.
 static constexpr long reg_chunk_bytes = constants::cuda_host_register_chunk_size;
+// _build_reg_chunk_offsets computes chunk boundaries with mask arithmetic.
+static_assert((reg_chunk_bytes & (reg_chunk_bytes - 1)) == 0,
+              "reg_chunk_bytes must be a power of two");
 static constexpr long zero_chunk_bytes = 128L << 20;     // 128 MiB
 static constexpr long hugepage_size = constants::host_hugepage_size;   // 2 MiB
 static constexpr long host_page_size = constants::host_page_size;      // 4 KiB
@@ -548,6 +551,14 @@ void BumpAllocator::_registrar_worker()
 void BumpAllocator::_gpu_memset_worker()
 {
     try {
+        // A stop() before we start skips the memset entirely. Once issued,
+        // cudaMemset cannot be interrupted by stop(): stop()/~BumpAllocator
+        // may block on the join for up to one full-capacity device memset
+        // (runs at GPU memory bandwidth, typically well under a second).
+        {
+            std::lock_guard<std::mutex> guard(_mutex);
+            if (_is_stopped) return;
+        }
         CUDA_CALL(cudaSetDevice(_async_cuda_device));
         CUDA_CALL(cudaMemset(base.get(), 0, capacity));
         _finalize_initialized();
@@ -708,6 +719,13 @@ void *BumpAllocator::_allocate_bytes(long nbytes)
 // Note: caller has checked 'dtype'.
 ksgpu::Array<void> BumpAllocator::_allocate_array_internal(ksgpu::Dtype dtype, int ndim, const long *shape, const long *strides)
 {
+    // The readiness/stopped gate comes FIRST -- before argument validation,
+    // and unconditionally (even for size-0 arrays, which allocate nothing) --
+    // so a stopped allocator always rethrows the stored root-cause error,
+    // matching allocate_bytes(). In dummy mode (sync-only) this is a
+    // non-blocking check: it returns immediately unless stop() was called.
+    _block_until_ready_or_throw("BumpAllocator::allocate_array");
+
     ksgpu::Array<void> ret;
 
     // _array_init_dchecked(..., allocate=false) initializes all Array members
@@ -717,10 +735,6 @@ ksgpu::Array<void> BumpAllocator::_allocate_array_internal(ksgpu::Dtype dtype, i
     long nbytes = (nalloc * dtype.nbits + 7) / 8;
 
     if (ret.size > 0) {
-        // Block (and throw) on stop in both branches. In dummy mode
-        // (sync-only) this is a non-blocking check: it returns
-        // immediately unless stop() has been called.
-        _block_until_ready_or_throw("BumpAllocator::allocate_array");
         if (capacity < 0) {
             // Dummy mode: allocate a fresh array with af_alloc().
             ret.base = ksgpu::_af_alloc(dtype, nalloc, aflags);

@@ -390,11 +390,12 @@ class RunServerHelper:
     def _setup_memory(self):
         # All three host/GPU BumpAllocators are constructed in async mode so
         # they initialize concurrently (zeroing + cudaHostRegister + cudaMalloc
-        # overlap across servers). Async mode requires af_zero, so we add it
-        # to rb_host (the receiver overwrites the memory, so zeroing isn't
-        # functionally required -- but with async zeroing the cost is hidden
-        # behind concurrent inits, so the previous concern about startup
-        # stalls no longer applies).
+        # overlap across servers). af_zero isn't functionally required for
+        # rb_host (the receiver overwrites the memory before anyone reads it),
+        # but the parallel memset pre-faults every page across the zero
+        # workers -- cheaper than the single registrar thread faulting them
+        # in during cudaHostRegister -- and the async cost is hidden behind
+        # concurrent inits.
         self.rb_host_aflags = ksgpu.af_rhost | ksgpu.af_zero
         # dd_host (GpuDedisperser host buffers): af_rhost + af_zero, per
         # GpuDedisperser::allocate()'s requirement.

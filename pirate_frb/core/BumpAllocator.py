@@ -29,24 +29,27 @@ class BumpAllocatorInjections:
             - If >= 0: pre-allocates this many bytes
             - If < 0: dummy mode (each array gets independent allocation)
         is_async : bool
-            If True, constructor returns immediately; allocation/zeroing
-            happens on worker threads. Public methods (allocate_array,
-            get_base) block until init complete; failures rethrow.
-            Async mode supports exactly these aflag combinations:
-              - af_mmap_huge | af_rhost | af_zero (mmap + chunked register)
-              - af_rhost | af_zero (cudaHostAlloc + parallel zero)
-              - af_gpu | af_zero (cudaMalloc + cudaMemset)
-            cuda_device is required (>= 0). nthreads >= 2 for cases 1 and 2;
-            ignored for case 3 (af_gpu).
+            If True, the constructor returns immediately; zeroing and (for
+            af_rhost) the chunked cudaHostRegister run on worker threads.
+            Public methods (e.g. allocate_array) block until init completes;
+            async-init failures rethrow. Requires capacity >= 0 (no dummy
+            mode). Any aflags combination is allowed; combinations with no
+            async work to do (e.g. af_uhost or af_gpu without af_zero)
+            initialize instantly.
         nthreads : int
-            Number of worker threads (async mode only).
+            Async worker threads. Required >= 2 for async af_rhost + af_zero
+            (1 registrar + >= 1 zero worker), >= 1 for async af_uhost +
+            af_zero; otherwise ignored.
         cuda_device : int
-            CUDA device id (async mode only; required >= 0).
+            CUDA device id. Required >= 0 whenever af_gpu is set with
+            capacity > 0 (sync or async), and for af_rhost in async mode;
+            otherwise ignored. (For sync af_rhost, the chunked register
+            runs against the caller's current CUDA device.)
 
         Examples
         --------
         >>> # GPU allocator with 1 GB capacity (sync)
-        >>> alloc = BumpAllocator('gpu', 1024**3)
+        >>> alloc = BumpAllocator('gpu', 1024**3, cuda_device=0)
         >>>
         >>> # Async host allocator with hugepages
         >>> alloc = BumpAllocator(ksgpu.af_mmap_huge | ksgpu.af_rhost | ksgpu.af_zero,
@@ -78,11 +81,13 @@ class BumpAllocatorInjections:
         Raises
         ------
         RuntimeError
-            If allocation would exceed capacity (in normal mode)
+            If allocation would exceed capacity (in normal mode). Per the
+            strict stoppable-class policy, any allocate_array() failure
+            also puts the allocator in the stopped state.
 
         Examples
         --------
-        >>> alloc = BumpAllocator('gpu', 1024**3)
+        >>> alloc = BumpAllocator('gpu', 1024**3, cuda_device=0)
         >>> arr1 = alloc.allocate_array('float32', (1024, 1024))
         >>> arr2 = alloc.allocate_array(np.int16, (512, 512, 4))
         >>> print(alloc.nbytes_allocated)  # Shows total allocated
