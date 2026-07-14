@@ -610,40 +610,48 @@ bool FakeXEngine::synchronize(long worker_id)
                 return false;
         }
 
+        // Enqueue a NO_OP sentinel. This is what makes the queue-empty
+        // predicate below sound. The worker pops a command BEFORE
+        // dispatching it, so "command_queue.empty()" is observable one
+        // command early -- the popped command's side effects (wire bytes,
+        // last_processed_minichunk, ack_queue push) may not be published
+        // yet. The sentinel closes that window: the worker dispatches
+        // each command fully before popping the next (single thread,
+        // FIFO), so by the time the NO_OP leaves the queue, every command
+        // enqueued before it has fully dispatched. The NO_OP's own
+        // pop-to-dispatch window is harmless, because its dispatch has
+        // no side effects to wait for.
+        Command cmd;
+        cmd.kind = Command::Kind::NO_OP;
+        if (!_enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
+                      "FakeXEngine::synchronize"))
+            return false;   // cleanly stopped: command not enqueued
+
         // Wait for the queue to drain. Predicate is (command_queue.empty()
-        // && ack_queue.empty() && !cmd_in_flight):
+        // && ack_queue.empty()):
         //
         //   - command_queue.empty() is the basic "all commands processed"
-        //     barrier. Sensitive to ANY commands in the queue, including
-        //     ones enqueued by other threads AFTER we called
-        //     enqueue_wait_for_acks above (synchronize is a "drain
-        //     everything in the queue" barrier, not "drain everything as
-        //     of when I was called").
-        //
-        //   - !cmd_in_flight closes the window where the worker has popped
-        //     the last command (making command_queue.empty() == true) but
-        //     is still dispatching it -- its side effects (wire bytes,
-        //     last_processed_minichunk, ack_queue push) are not yet
-        //     published. Without this clause, a debug=false synchronize
-        //     could return one command early (in debug mode the
-        //     WAIT_FOR_ACKS we appended is itself covered by the
-        //     ack_queue clause below, but SEND/DISCONNECT dispatches
-        //     were not).
+        //     barrier (sound because of the NO_OP sentinel above).
+        //     Sensitive to ANY commands in the queue, including ones
+        //     enqueued by other threads AFTER our sentinel (synchronize
+        //     is a "drain everything in the queue" barrier, not "drain
+        //     everything as of when I was called") -- though for those
+        //     late commands only the pop is covered, not the dispatch
+        //     (see the caveat at the declaration).
         //
         //   - ack_queue.empty() covers acks that are still outstanding
         //     BETWEEN commands (pushed by an earlier SEND's dispatch,
-        //     drained later by _read_acks) -- cmd_in_flight cannot see
-        //     those.
+        //     drained later by _read_acks) -- the queue-empty clause
+        //     cannot see those.
         //
         //   - When debug=false, ack_queue is always empty, so the
-        //     predicate reduces to (command_queue.empty() &&
-        //     !cmd_in_flight).
+        //     predicate reduces to command_queue.empty().
         Worker &w = *workers[worker_id];
         std::unique_lock<std::mutex> lock(w.mutex);
         for (;;) {
             if (_stopped_or_rethrow(w))
                 return false;   // cleanly stopped before the queue drained
-            if (w.command_queue.empty() && w.ack_queue.empty() && !w.cmd_in_flight)
+            if (w.command_queue.empty() && w.ack_queue.empty())
                 return true;
             w.drain_cv.wait(lock);
         }
@@ -1446,63 +1454,47 @@ void FakeXEngine::_worker_main(int worker_id)
 
             cmd = w.command_queue.front();
             w.command_queue.pop_front();
-
-            // The popped command is now invisible to synchronize()'s
-            // queue-empty clause; cmd_in_flight covers it until the
-            // dispatch below has fully published its side effects.
-            w.cmd_in_flight = true;
         }
 
-        // Dispatch. cmd_in_flight is reset on every exit path (normal,
-        // stop-return, throw); on the two worker-exit paths the engine is
-        // (or is about to be) stopped, so synchronize() waiters leave via
-        // their stopped-check either way -- the reset just keeps the
-        // "in-progress flags" invariant clean (notes/cpp.md).
-        bool worker_exiting = false;
-        try {
-            switch (cmd.kind) {
-            case Command::Kind::SEND_JUNK:
-            case Command::Kind::SKIP_MINICHUNK:
-            case Command::Kind::SEND_MINICHUNK:
-                worker_exiting = !_skip_or_send(w, cmd);
-                break;
-            case Command::Kind::DISCONNECT:
-                _disconnect(w);
-                break;
-            case Command::Kind::WAIT_FOR_ACKS:
-                // WAIT_FOR_ACKS is enqueued only by
-                // enqueue_wait_for_acks() / synchronize(), both of which
-                // check debug first. xassert here as a defense-in-depth
-                // invariant.
-                xassert(debug);
-                _read_acks(w, /*blocking=*/true);
-                break;
-            default: {
-                // Defensive -- UNINITIALIZED Commands should never be enqueued.
-                stringstream ss;
-                ss << "FakeXEngine worker " << worker_id
-                   << ": got Command with kind=" << uint32_t(cmd.kind);
-                throw runtime_error(ss.str());
-            }
-            }
-        } catch (...) {
-            std::lock_guard<std::mutex> lock(w.mutex);
-            w.cmd_in_flight = false;
-            throw;   // worker_main's catch-all calls stop(e)
+        // Dispatch.
+        switch (cmd.kind) {
+        case Command::Kind::SEND_JUNK:
+        case Command::Kind::SKIP_MINICHUNK:
+        case Command::Kind::SEND_MINICHUNK:
+            if (!_skip_or_send(w, cmd))
+                return;
+            break;
+        case Command::Kind::DISCONNECT:
+            _disconnect(w);
+            break;
+        case Command::Kind::WAIT_FOR_ACKS:
+            // WAIT_FOR_ACKS is enqueued only by
+            // enqueue_wait_for_acks() / synchronize(), both of which
+            // check debug first. xassert here as a defense-in-depth
+            // invariant.
+            xassert(debug);
+            _read_acks(w, /*blocking=*/true);
+            break;
+        case Command::Kind::NO_OP:
+            // Synchronization sentinel enqueued by synchronize(). The
+            // empty dispatch is load-bearing: NO_OP must have no side
+            // effects, or synchronize()'s queue-empty barrier predicate
+            // stops being sound (see the comment there).
+            break;
+        default: {
+            // Defensive -- UNINITIALIZED Commands should never be enqueued.
+            stringstream ss;
+            ss << "FakeXEngine worker " << worker_id
+               << ": got Command with kind=" << uint32_t(cmd.kind);
+            throw runtime_error(ss.str());
         }
-
-        {
-            std::lock_guard<std::mutex> lock(w.mutex);
-            w.cmd_in_flight = false;
         }
-
-        if (worker_exiting)
-            return;
 
         // Centralized notify, one per command dispatched. Wakes both
         // wait_until_processed waiters (whenever last_processed_minichunk
         // advanced) AND synchronize() waiters (whenever command_queue
-        // empties or shrinks). Notifying *after* the dispatch returns
+        // empties or shrinks -- in particular, right after a NO_OP
+        // sentinel dispatches). Notifying *after* the dispatch returns
         // is what makes synchronize() wait for WAIT_FOR_ACKS's
         // blocking drain to finish before returning. Both cvs are
         // notified unconditionally (cheap when nobody waits); notify_all

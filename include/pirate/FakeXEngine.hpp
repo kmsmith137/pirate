@@ -153,6 +153,9 @@ struct FakeXEngine
             DISCONNECT     = 4,   // close the worker's TCP socket
             WAIT_FOR_ACKS  = 5,   // worker calls _read_acks(blocking=true). Only
                                   // enqueued via FakeXEngine::enqueue_wait_for_acks().
+            NO_OP          = 6,   // dispatch does nothing, by design. Sentinel
+                                  // enqueued by FakeXEngine::synchronize() -- see
+                                  // there for why it must be side-effect-free.
         } kind = Kind::UNINITIALIZED;
 
         // Used by all of {SEND_JUNK, SKIP_MINICHUNK, SEND_MINICHUNK}.
@@ -242,8 +245,10 @@ struct FakeXEngine
         //   indices), and stop().
         //
         // drain_cv -- waiters: synchronize() callers (predicate:
-        //   command_queue and ack_queue both empty AND no command in
-        //   flight, or stopped). Signaled on: the centralized per-command
+        //   command_queue and ack_queue both empty, or stopped; each
+        //   caller has first enqueued a NO_OP sentinel, which is what
+        //   makes queue-empty imply fully-dispatched -- see
+        //   synchronize()). Signaled on: the centralized per-command
         //   notify in _worker_main(), the ack-queue drain in _read_acks()
         //   (notify_all each -- when the queues drain, every waiter
         //   becomes ready), and stop().
@@ -254,16 +259,6 @@ struct FakeXEngine
 
         // Commands waiting to be processed by this worker, FIFO.
         std::deque<Command> command_queue;
-
-        // True while the worker thread is dispatching a command it has
-        // already popped from command_queue. Covers the window where the
-        // queue is empty but the popped command's side effects (wire
-        // bytes, last_processed_minichunk, ack_queue push) are not yet
-        // published -- without it, synchronize()'s "drained" predicate
-        // could return one command early. Set at pop and reset on every
-        // dispatch exit path (normal, stop-return, throw) -- see the
-        // "in-progress flags" rule in notes/cpp.md.
-        bool cmd_in_flight = false;
 
         // Latest minichunk_index this worker has finished *processing*
         // for a state-advancing command (SEND_JUNK / SKIP_MINICHUNK /
@@ -770,12 +765,16 @@ struct FakeXEngine
     // out of range. The pybind11 wrapper releases the GIL.
     bool enqueue_wait_for_acks(long worker_id);
 
-    // Entry point: block the CALLING thread until
-    // workers[worker_id]->command_queue has been fully drained AND the
-    // last-popped command has finished dispatching (Worker::
-    // cmd_in_flight). If debug is true, additionally enqueue a
-    // WAIT_FOR_ACKS (via enqueue_wait_for_acks() above) BEFORE waiting
-    // -- so the wait also covers all outstanding acks.
+    // Entry point: enqueue a NO_OP sentinel command on
+    // workers[worker_id]'s queue, then block the CALLING thread until
+    // command_queue has fully drained. The sentinel is what makes
+    // "queue empty" mean "fully dispatched": the worker pops a command
+    // BEFORE dispatching it, so without the sentinel the queue can look
+    // empty while the last command's side effects are still being
+    // published (see synchronize() in the .cpp for the full argument).
+    // If debug is true, additionally enqueue a WAIT_FOR_ACKS (via
+    // enqueue_wait_for_acks() above) before the NO_OP -- so the wait
+    // also covers all outstanding acks.
     //
     // SEMANTICS: this is a "drain everything in the queue"
     // barrier, NOT a "drain everything that was in the queue at
@@ -783,7 +782,11 @@ struct FakeXEngine
     // concurrently enqueueing commands, synchronize() waits for
     // THEIR commands too -- the wait predicate is
     // `command_queue.empty()`, which is sensitive to any future
-    // pushes. Document this in your test code.
+    // pushes. (Caveat: full-dispatch coverage is only guaranteed
+    // through this caller's own NO_OP sentinel. A command that another
+    // thread enqueues AFTER the sentinel extends the wait until it is
+    // popped, but its dispatch may still be in flight when
+    // synchronize() returns.) Document this in your test code.
     //
     // Returns true once fully drained; returns false if the FakeXEngine
     // was cleanly stopped first; rethrows the saved error if

@@ -77,15 +77,6 @@ shutdown/error-propagation semantics.)
   failure path where the lock must stay held (the throw in
   FrbGrouper::start_listening).
 
-- A "fully drained" / "idle" barrier predicate must cover IN-FLIGHT work,
-  not just queue emptiness. A pop-then-dispatch worker makes "queue empty"
-  observable one item early: the item is popped in one critical section,
-  but its side effects are published only when the dispatch finishes. Give
-  the worker an in-flight flag, set in the same critical section as the
-  pop and reset on every dispatch exit path (normal, early-exit, throw),
-  and test it in the barrier predicate. (See FakeXEngine's
-  Worker::cmd_in_flight / synchronize() for the model.)
-
 - Never read a lock-protected member after dropping the lock -- snapshot it
   into a local under the lock and use the local.
 
