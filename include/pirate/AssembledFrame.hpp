@@ -71,9 +71,9 @@ struct AssembledFrame
     // cache-line aligned too. This ordering matches the per-minichunk wire
     // layout (scales_offsets precedes the int4 payload). See
     // AssembledFrameAllocator::get_layout() for the exact offsets/sizes -- the
-    // single source of truth shared by AssembledFrameAllocator::_build_frames
-    // and external slab-pool sizing. _reap_locked() releases both arrays together
-    // by dropping the slab shared_ptr.
+    // single source of truth shared by the allocator's worker thread (which
+    // builds the frames) and external slab-pool sizing. _reap_locked()
+    // releases both arrays together by dropping the slab shared_ptr.
     //
     // Warning: if the AssembledFrame has been "reaped" under memory pressure,
     // then both 'scales_offsets' and 'data' are empty arrays. The array state
@@ -561,26 +561,16 @@ private:
     long queue_start_chunk_index = 0;          // time_chunk_index of first set in queue
     long first_unreceived_chunk_index = 0;     // time_chunk_index of first set not yet received by any consumer
 
-    // Builds nbeams fully-initialized AssembledFrames (slab acquisition,
-    // memset, array setup) WITHOUT holding 'lock'. Called only by the
-    // worker thread, which snapshots the arguments under the lock and
-    // drops it around the call. Everything is initialized except
-    // beam_id / time_chunk_index, which the worker stamps under the lock
-    // at push time (so the set's chunk index is consistent with the queue
-    // state).
-    //
-    // Slab-pool sizing assumption: this function holds up to nbeams slabs
-    // simultaneously while assembling one set. The slab pool must be sized
-    // for at least nbeams slabs total; this is already a hard prerequisite
-    // for the Receiver's 2-chunk window (which pins 2*nbeams slabs).
-    std::vector<std::shared_ptr<AssembledFrame>>
-    _build_frames(long nbeams, long nfreq,
-                  const std::shared_ptr<const XEngineMetadata> &md);
-
     // Helper for entry points. Caller must hold lock.
     void _throw_if_stopped(const char *method_name);
 
     // Worker thread functions (sole producer of frame sets, both modes).
+    // _worker_main() builds each set with 'lock' dropped (slab acquisition
+    // + memset of the nbeams slabs), then stamps its time_chunk_index and
+    // pushes it under the lock. Slab-pool sizing assumption: the build
+    // holds up to nbeams slabs simultaneously, so the pool must have at
+    // least nbeams slabs total; this is already a hard prerequisite for
+    // the Receiver's 2-chunk window (which pins 2*nbeams slabs).
     void _worker_main();
     void worker_main();
 
@@ -602,7 +592,7 @@ public:
     // slab base is cache-line aligned by the SlabAllocator), and data at the
     // cache-line-aligned offset align_up(scales_offsets_nbytes, ...).
     //
-    // Used by _build_frames() (the authoritative allocator) AND by external
+    // Used by the worker thread (the authoritative allocator) AND by external
     // code that sizes a slab pool for AssembledFrameSets (e.g.
     // pirate_frb.run_fake_xengine). Static -- callable without an instance,
     // since pool sizing happens before the allocator is constructed.

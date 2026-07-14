@@ -288,8 +288,8 @@ class RunFakeXEngineHelper:
         """Backing bytes for one AssembledFrameSet (= nbeams frames).
 
         Delegates the per-frame slab arithmetic to AssembledFrameAllocator's
-        static slab_nbytes() so this stays in lockstep with
-        AssembledFrameAllocator::_build_frames (single source of truth).
+        static slab_nbytes() so this stays in lockstep with the frames built
+        by the AssembledFrameAllocator worker thread (single source of truth).
         """
         per_frame = AssembledFrameAllocator.slab_nbytes(
             xmd.get_total_nfreq(), cfg.time_samples_per_chunk)

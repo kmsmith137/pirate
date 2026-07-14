@@ -958,7 +958,7 @@ void AssembledFrame::randomize(bool normalize, bool gaussian,
 
     // int4 dtype packs 2 elements per byte, so nbytes = data.size / 2.
     // (data.size is the int4 element count, not the byte count -- see
-    // AssembledFrameAllocator::_build_frames in this file.)
+    // AssembledFrameAllocator::_worker_main in this file.)
     long data_nbytes = data_arr.size / 2;
     long so_nelts    = so_arr.size;  // (nfreq, mpc, 2) flat count
 
@@ -1186,54 +1186,118 @@ void AssembledFrameAllocator::_worker_main()
         metadata_cv.wait(guard);
     while (!is_stopped && !initial_chunk_set)
         chunk_cv.wait(guard);
+    if (is_stopped)
+        return;
+
+    // Snapshot the build parameters into locals, under the lock. All of
+    // them are set-once (written before the init gate above opens, and
+    // immutable afterward), so one snapshot suffices for the whole main
+    // loop -- and the unlocked build section below then touches no
+    // lock-protected members.
+    long nbeams = beam_ids.size();
+    long nfreq_snap = nfreq;
+    vector<long> beam_ids_snap = beam_ids;
+    shared_ptr<const XEngineMetadata> md = metadata;
+    xassert(md);  // non-null once metadata_is_initialized
+
+    long mpc = xdiv(time_samples_per_chunk, 256);
+    SlabLayout layout = get_layout(nfreq_snap, time_samples_per_chunk);
+    long nbytes = layout.slab_nbytes;
 
     // Main loop: wait for a free queue slot, build a set with the lock
-    // dropped, then stamp + push it with the lock re-held.
+    // dropped, then stamp its chunk index + push it with the lock re-held.
     for (;;) {
         while (!is_stopped && (long(frame_set_queue.size()) >= constants::assembled_frame_allocator_queue_size))
             slot_cv.wait(guard);
         if (is_stopped)
             return;
 
-        // Snapshot the build parameters under the lock. (They are set-once
-        // before the init gate opens, but snapshotting keeps the unlocked
-        // build below self-contained.)
-        long nbeams = beam_ids.size();
-        long nfreq_snap = nfreq;
-        shared_ptr<const XEngineMetadata> md = metadata;
-
-        // Drop the lock while allocating + memsetting the nbeams slabs.
-        // A throw from _build_frames() (e.g. get_slab() on a stopped slab
-        // allocator) unwinds with the lock released; worker_main()'s catch
-        // handler then calls stop(), which wakes all waiters. No queue
-        // state needs restoring, since nothing is published until the
-        // push below.
+        // Drop the lock while building the set (slab acquisition + memset
+        // of the nbeams slabs). A throw below (e.g. get_slab() on a
+        // stopped slab allocator) unwinds with the lock released;
+        // worker_main()'s catch handler then calls stop(), which wakes all
+        // waiters. No queue state needs restoring, since nothing is
+        // published until the push below.
         guard.unlock();
-        vector<shared_ptr<AssembledFrame>> new_frames = _build_frames(nbeams, nfreq_snap, md);
-        guard.lock();
 
-        // Compute the chunk_index after re-acquiring the lock. (Consumers
-        // popping fully-received sets off the front while the lock was
-        // dropped don't change queue_start_chunk_index + frame_set_queue.size(),
-        // since both change together; this is mostly defensive.)
-        long chunk_index = queue_start_chunk_index + long(frame_set_queue.size());
-
-        // Stamp each frame with its beam_id / time_chunk_index.
-        for (long b = 0; b < nbeams; b++) {
-            new_frames[b]->time_chunk_index = chunk_index;
-            new_frames[b]->beam_id = beam_ids[b];
-        }
-
-        // Build the AssembledFrameSet.
+        // The set is fully initialized here except for time_chunk_index
+        // (on the set and on each frame), which is stamped under the lock
+        // at push time so it is consistent with the queue state.
         auto set = make_shared<AssembledFrameSet>();
         set->nfreq = nfreq_snap;
         set->ntime = time_samples_per_chunk;
         set->nbeams = nbeams;
-        set->time_chunk_index = chunk_index;
         set->metadata = md;
-        set->frames = std::move(new_frames);
-        set->validate();  // cheap defensive check
+        set->frames.reserve(nbeams);
 
+        // Build nbeams frames, all backed by independent slabs.
+        //
+        // Slab layout: scales_offsets at offset 0, data at layout.data_offset (both
+        // cache-line aligned -- see AssembledFrameAllocator::get_layout()). Both arrays
+        // share a single slab shared_ptr; _reap_locked() drops both refs to free.
+        //
+        // Slab-pool sizing: this loop holds up to nbeams slabs at a time. The
+        // pool must have at least nbeams total slabs to make progress, which
+        // is also a hard prerequisite for the Receiver's 2-chunk window.
+        for (long b = 0; b < nbeams; b++) {
+            shared_ptr<void> slab = slab_allocator->get_slab(nbytes, /*blocking=*/true);
+
+            // scales_offsets initial: float16 0.0 (bytes 0x00); also zero the
+            // alignment padding between the two arrays (up to data_offset).
+            // data initial: int4 -8 (bytes 0x88, two -8 nibbles per byte).
+            memset(slab.get(), 0x00, layout.data_offset);
+            memset((char *)slab.get() + layout.data_offset, 0x88, layout.data_nbytes);
+
+            auto frame = make_shared<AssembledFrame>();
+            frame->nfreq = nfreq_snap;
+            frame->ntime = time_samples_per_chunk;
+            frame->beam_id = beam_ids_snap[b];
+            frame->metadata = md;  // shared, immutable
+
+            // Initialize frame->scales_offsets at slab offset 0.
+            frame->scales_offsets.data = slab.get();
+            frame->scales_offsets.ndim = 3;
+            frame->scales_offsets.shape[0] = nfreq_snap;
+            frame->scales_offsets.shape[1] = mpc;
+            frame->scales_offsets.shape[2] = 2;
+            frame->scales_offsets.size = nfreq_snap * mpc * 2;
+            frame->scales_offsets.strides[0] = mpc * 2;
+            frame->scales_offsets.strides[1] = 2;
+            frame->scales_offsets.strides[2] = 1;
+            frame->scales_offsets.dtype = ksgpu::Dtype(ksgpu::df_float, 16);
+            frame->scales_offsets.aflags = slab_allocator->aflags;
+            frame->scales_offsets.base = slab;   // shares slab with data
+            frame->scales_offsets.check_invariants("AssembledFrameAllocator::_worker_main()");
+
+            // Initialize frame->data at slab offset layout.data_offset
+            // (cache-line aligned -- see AssembledFrameAllocator::get_layout()).
+            frame->data.data = (char *)slab.get() + layout.data_offset;
+            frame->data.ndim = 2;
+            frame->data.shape[0] = nfreq_snap;
+            frame->data.shape[1] = time_samples_per_chunk;
+            frame->data.size = nfreq_snap * time_samples_per_chunk;
+            frame->data.strides[0] = time_samples_per_chunk;
+            frame->data.strides[1] = 1;
+            frame->data.dtype = ksgpu::Dtype(ksgpu::df_int, 4);
+            frame->data.aflags = slab_allocator->aflags;
+            frame->data.base = slab;
+            frame->data.check_invariants("AssembledFrameAllocator::_worker_main()");
+
+            set->frames.push_back(std::move(frame));
+        }
+
+        guard.lock();
+
+        // Stamp the chunk index after re-acquiring the lock. (Consumers
+        // popping fully-received sets off the front while the lock was
+        // dropped don't change queue_start_chunk_index + frame_set_queue.size(),
+        // since both change together; this is mostly defensive.)
+        long chunk_index = queue_start_chunk_index + long(frame_set_queue.size());
+        set->time_chunk_index = chunk_index;
+        for (long b = 0; b < nbeams; b++)
+            set->frames[b]->time_chunk_index = chunk_index;
+
+        set->validate();  // cheap defensive check
         frame_set_queue.push_back({std::move(set), 0});
 
         // Wake up any waiting get_frame_set() callers. notify_all: every
@@ -1257,8 +1321,8 @@ void AssembledFrameAllocator::worker_main()
 
 // -------------------------------------------------------------------------------------------------
 //
-// Slab layout, and _build_frames() (the frame-construction half of the
-// worker loop, run WITHOUT holding 'lock' -- see _worker_main above).
+// Slab layout (single source of truth for slab-pool sizing), and small
+// lock-synchronized accessors.
 
 
 AssembledFrameAllocator::SlabLayout
@@ -1300,80 +1364,6 @@ std::vector<long> AssembledFrameAllocator::get_beam_ids() const
 {
     lock_guard<mutex> lg(lock);
     return beam_ids;   // copied under the lock
-}
-
-
-vector<shared_ptr<AssembledFrame>>
-AssembledFrameAllocator::_build_frames(long nbeams, long nfreq, const shared_ptr<const XEngineMetadata> &md)
-{
-    xassert(md);  // non-null after initialize_metadata(); worker's init gate guarantees it
-
-    long mpc = xdiv(time_samples_per_chunk, 256);
-    SlabLayout layout = get_layout(nfreq, time_samples_per_chunk);
-    long nbytes = layout.slab_nbytes;
-
-    // Allocate nbeams frames, all backed by independent slabs. Each frame
-    // is fully initialized except for beam_id / time_chunk_index, which
-    // the worker stamps under the lock (so the set's chunk index is
-    // consistent with the queue state at push time).
-    //
-    // Slab layout: scales_offsets at offset 0, data at layout.data_offset (both
-    // cache-line aligned -- see AssembledFrameAllocator::get_layout()). Both arrays
-    // share a single slab shared_ptr; _reap_locked() drops both refs to free.
-    //
-    // Slab-pool sizing: this loop holds up to nbeams slabs at a time. The
-    // pool must have at least nbeams total slabs to make progress, which
-    // is also a hard prerequisite for the Receiver's 2-chunk window.
-    vector<shared_ptr<AssembledFrame>> new_frames;
-    new_frames.reserve(nbeams);
-
-    for (long b = 0; b < nbeams; b++) {
-        shared_ptr<void> slab = slab_allocator->get_slab(nbytes, /*blocking=*/true);
-
-        // scales_offsets initial: float16 0.0 (bytes 0x00); also zero the
-        // alignment padding between the two arrays (up to data_offset).
-        // data initial: int4 -8 (bytes 0x88, two -8 nibbles per byte).
-        memset(slab.get(), 0x00, layout.data_offset);
-        memset((char *)slab.get() + layout.data_offset, 0x88, layout.data_nbytes);
-
-        auto frame = make_shared<AssembledFrame>();
-        frame->nfreq = nfreq;
-        frame->ntime = time_samples_per_chunk;
-        frame->metadata = md;  // shared, immutable
-
-        // Initialize frame->scales_offsets at slab offset 0.
-        frame->scales_offsets.data = slab.get();
-        frame->scales_offsets.ndim = 3;
-        frame->scales_offsets.shape[0] = nfreq;
-        frame->scales_offsets.shape[1] = mpc;
-        frame->scales_offsets.shape[2] = 2;
-        frame->scales_offsets.size = nfreq * mpc * 2;
-        frame->scales_offsets.strides[0] = mpc * 2;
-        frame->scales_offsets.strides[1] = 2;
-        frame->scales_offsets.strides[2] = 1;
-        frame->scales_offsets.dtype = ksgpu::Dtype(ksgpu::df_float, 16);
-        frame->scales_offsets.aflags = slab_allocator->aflags;
-        frame->scales_offsets.base = slab;   // shares slab with data
-        frame->scales_offsets.check_invariants("AssembledFrameAllocator::_build_frames()");
-
-        // Initialize frame->data at slab offset layout.data_offset
-        // (cache-line aligned -- see AssembledFrameAllocator::get_layout()).
-        frame->data.data = (char *)slab.get() + layout.data_offset;
-        frame->data.ndim = 2;
-        frame->data.shape[0] = nfreq;
-        frame->data.shape[1] = time_samples_per_chunk;
-        frame->data.size = nfreq * time_samples_per_chunk;
-        frame->data.strides[0] = time_samples_per_chunk;
-        frame->data.strides[1] = 1;
-        frame->data.dtype = ksgpu::Dtype(ksgpu::df_int, 4);
-        frame->data.aflags = slab_allocator->aflags;
-        frame->data.base = slab;
-        frame->data.check_invariants("AssembledFrameAllocator::_build_frames()");
-
-        new_frames.push_back(std::move(frame));
-    }
-
-    return new_frames;
 }
 
 
