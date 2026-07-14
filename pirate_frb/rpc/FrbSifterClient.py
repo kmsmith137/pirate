@@ -144,7 +144,7 @@ class FrbSifterClient:
     where 'events' is a FrbSifterEvents.
     """
 
-    def __init__(self, server_address: str = "localhost:50051", timeout=1,
+    def __init__(self, server_address: str, timeout=1,
                  raise_exception_on_timeout=True):
         self.server_address = server_address
         self.timeout = float(timeout)               # per-send deadline (s); 0 = synchronous

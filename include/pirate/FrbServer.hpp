@@ -103,7 +103,7 @@ struct FrbServer
         // Minimum data-NIC MTU expected by the receiver. Used (only) on
         // the sender side: surfaced via the GetConfig RPC so a fake X-engine
         // sender can check that its outgoing NIC has MTU >= this value.
-        int min_data_mtu = 0;
+        int min_data_mtu = 1500;
 
         // Artificial per-frame delay injected by the processing thread,
         // in seconds. Used to simulate slow GPU processing for testing

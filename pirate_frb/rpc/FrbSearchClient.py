@@ -31,7 +31,7 @@ class FrbSearchClient:
         client.close()
     """
     
-    def __init__(self, server_address: str = "localhost:50051"):
+    def __init__(self, server_address: str):
         """Create a client connected to the given server address.
 
         Every RPC issued by this client stamps its request with our
