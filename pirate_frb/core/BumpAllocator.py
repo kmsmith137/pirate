@@ -1,7 +1,7 @@
 """BumpAllocator method injections (+ re-export of the pybind11 class)."""
 
 import ksgpu
-from ..pirate_pybind11 import BumpAllocator
+from ..pirate_pybind11 import BumpAllocator, constants
 
 
 @ksgpu.inject_methods(BumpAllocator)
@@ -58,6 +58,40 @@ class BumpAllocatorInjections:
         """
         aflags = ksgpu.parse_aflags(aflags)
         self._cpp_init(aflags, capacity, is_async, nthreads, cuda_device)
+
+    # Save the raw C++ binding (same pattern as _cpp_init above); the
+    # injected wait_until_initialized() below shadows it.
+    _cpp_wait_until_initialized = BumpAllocator.wait_until_initialized
+
+    def wait_until_initialized(self, timeout_ms=-1):
+        """
+        Block until async init completes, fails, or the timeout elapses.
+
+        Returns True once the allocator is initialized, or False if
+        timeout_ms elapsed first. If async init failed (or the allocator was
+        stopped), the stored error is re-raised. In sync mode, returns True
+        immediately. timeout_ms < 0 (the default) waits indefinitely;
+        timeout_ms == 0 is a non-blocking poll.
+
+        The wait is driven in constants.default_poll_cadence_ms steps: the
+        GIL is released during each step and reacquired between steps, so
+        Ctrl-C stays responsive even during multi-minute inits. (The raw C++
+        binding, saved as _cpp_wait_until_initialized, blocks signal
+        delivery for its whole duration.)
+        """
+        step = constants.default_poll_cadence_ms
+        if timeout_ms < 0:
+            while not self._cpp_wait_until_initialized(step):
+                pass    # KeyboardInterrupt is delivered here, between steps
+            return True
+        remaining = int(timeout_ms)
+        while True:
+            chunk = min(step, remaining)
+            if self._cpp_wait_until_initialized(chunk):
+                return True
+            remaining -= chunk
+            if remaining <= 0:
+                return False
 
     def allocate_array(self, dtype, shape):
         """

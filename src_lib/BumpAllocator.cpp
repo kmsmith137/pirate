@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -616,9 +617,27 @@ void BumpAllocator::_block_until_ready_or_throw(const char *method_name) const
 }
 
 
-void BumpAllocator::wait_until_initialized() const
+bool BumpAllocator::wait_until_initialized(int timeout_ms) const
 {
-    _block_until_ready_or_throw("BumpAllocator::wait_until_initialized");
+    std::unique_lock<std::mutex> lock(_mutex);
+
+    if (timeout_ms < 0) {
+        // Untimed: block until initialized (return true) or stopped (throw).
+        _wait_ready_locked(lock, "BumpAllocator::wait_until_initialized");
+        return true;
+    }
+
+    // Timed variant. False on timeout; a stopped allocator throws, same as
+    // the untimed path.
+    if (!_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                      [this] { return _is_initialized || _is_stopped; }))
+        return false;    // timeout
+
+    // Predicate satisfied (initialized or stopped): _wait_ready_locked won't
+    // block; reuse it for the throw-on-stopped logic (rethrow the stored
+    // error, or the generic "called on stopped instance" message).
+    _wait_ready_locked(lock, "BumpAllocator::wait_until_initialized");
+    return true;
 }
 
 

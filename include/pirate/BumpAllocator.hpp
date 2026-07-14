@@ -122,10 +122,19 @@ struct BumpAllocator
     // Warning: caller is responsible for keeping a reference to the base shared_ptr!
     void *allocate_bytes(long nbytes);
 
-    // In async mode: blocks until init complete (returns) or async init
-    // failed (rethrows the captured exception). In sync mode: returns
-    // immediately. Safe to call any number of times.
-    void wait_until_initialized() const;
+    // In async mode: blocks until init completes (returns true), async init
+    // fails (rethrows the captured exception), or timeout_ms elapses
+    // (returns false). timeout_ms < 0 means wait indefinitely; timeout_ms
+    // == 0 is a non-blocking poll. In sync mode: returns true immediately.
+    // Safe to call any number of times. A stopped allocator throws (waiting
+    // on a stopped allocator is an error path, not an expected outcome --
+    // see "Error reporting" in notes/stoppable_class.md).
+    //
+    // Python note: the injected wait_until_initialized() wrapper
+    // (pirate_frb/core/BumpAllocator.py) drives this binding in
+    // constants::default_poll_cadence_ms steps so Ctrl-C stays responsive
+    // during multi-minute inits.
+    bool wait_until_initialized(int timeout_ms = -1) const;
 
     // Returns true if the allocator is ready to serve allocations (sync
     // mode: always true after ctor returns; async mode: true after workers

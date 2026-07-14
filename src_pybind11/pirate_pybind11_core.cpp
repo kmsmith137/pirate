@@ -171,9 +171,18 @@ void register_core_bindings(pybind11::module &m)
         .def_readonly("capacity", &BumpAllocator::capacity,
             "Total capacity in bytes, or -1 for dummy mode")
         .def("wait_until_initialized", &BumpAllocator::wait_until_initialized,
+            py::arg("timeout_ms") = -1,
             py::call_guard<py::gil_scoped_release>(),
-            "In async mode: block until init complete, or rethrow async-init "
-            "exception. In sync mode: no-op. Releases the GIL while blocking.")
+            "In async mode: block until init completes (returns True), async\n"
+            "init fails (rethrows the captured exception), or timeout_ms\n"
+            "elapses (returns False). timeout_ms < 0 waits indefinitely;\n"
+            "timeout_ms == 0 is a non-blocking poll. In sync mode: returns\n"
+            "True immediately. Releases the GIL while blocking.\n\n"
+            "Note: python callers see the injected wrapper (see\n"
+            "pirate_frb/core/BumpAllocator.py), which drives this raw binding\n"
+            "in constants.default_poll_cadence_ms steps so Ctrl-C stays\n"
+            "responsive; the raw binding blocks signal delivery for up to\n"
+            "timeout_ms.")
         .def("is_initialized", &BumpAllocator::is_initialized,
             "Non-blocking poll: True iff init has completed and the allocator "
             "has not been stopped.")
