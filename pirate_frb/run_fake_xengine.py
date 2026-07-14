@@ -289,7 +289,7 @@ class RunFakeXEngineHelper:
 
         Delegates the per-frame slab arithmetic to AssembledFrameAllocator's
         static slab_nbytes() so this stays in lockstep with
-        AssembledFrameAllocator::_create_frame_set (single source of truth).
+        AssembledFrameAllocator::_build_frames (single source of truth).
         """
         per_frame = AssembledFrameAllocator.slab_nbytes(
             xmd.get_total_nfreq(), cfg.time_samples_per_chunk)

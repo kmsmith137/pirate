@@ -453,10 +453,10 @@ void register_core_bindings(pybind11::module &m)
             "Get the next AssembledFrameSet (one time chunk, all beams) for\n"
             "this consumer. The N-th call returns time_chunk_index =\n"
             "initial_time_chunk + N.\n\n"
-            "Releases the GIL: in dummy mode the calling thread does the\n"
-            "per-set allocation + memset synchronously, and in non-dummy mode\n"
-            "it may block on the worker thread -- neither should stall other\n"
-            "Python threads (e.g. a sender thread running concurrently with a\n"
+            "Releases the GIL: this may block on the allocator's worker\n"
+            "thread (the sole producer of frame sets, in both dummy and\n"
+            "non-dummy mode), which must not stall other Python threads\n"
+            "(e.g. a sender thread running concurrently with a\n"
             "frame-provider thread).")
         .def("get_metadata",
             [](AssembledFrameAllocator &self, bool blocking) {
@@ -497,7 +497,7 @@ void register_core_bindings(pybind11::module &m)
             py::arg("nfreq"), py::arg("time_samples_per_chunk"),
             "Total backing bytes for one AssembledFrame's slab (one beam), with\n"
             "scales_offsets and data each cache-line aligned. Matches\n"
-            "_create_frame_set exactly -- use it (times nbeams) to size a slab\n"
+            "_build_frames exactly -- use it (times nbeams) to size a slab\n"
             "pool for AssembledFrameSets. Static: callable without an instance.\n"
             "Throws unless time_samples_per_chunk is a positive multiple of 256.")
     ;

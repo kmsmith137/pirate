@@ -71,7 +71,7 @@ struct AssembledFrame
     // cache-line aligned too. This ordering matches the per-minichunk wire
     // layout (scales_offsets precedes the int4 payload). See
     // AssembledFrameAllocator::get_layout() for the exact offsets/sizes -- the
-    // single source of truth shared by AssembledFrameAllocator::_create_frame_set
+    // single source of truth shared by AssembledFrameAllocator::_build_frames
     // and external slab-pool sizing. _reap_locked() releases both arrays together
     // by dropping the slab shared_ptr.
     //
@@ -310,14 +310,15 @@ struct AssembledFrameSet
 // handed out one AssembledFrameSet (= nbeams frames for one time chunk) at a
 // time via get_frame_set().
 //
-// In non-dummy mode, a worker thread pre-initializes frames (calls memset to fill
-// with 0x88) to reduce latency for callers of get_frame_set(). The worker thread
-// inherits its vcpu affinity from the caller of the constructor. Python callers
-// should call the AssembledFrameAllocator constructor within a ThreadAffinity
-// context manager.
-//
-// In dummy mode (slab_allocator->is_dummy()), no worker thread is created, and
-// frame sets are initialized synchronously by the caller of get_frame_set().
+// A worker thread -- the sole producer of frame sets, in both dummy and
+// non-dummy mode -- pre-initializes frames (calls memset to fill with 0x88)
+// so that get_frame_set() callers never pay allocation/memset latency. The
+// worker pre-initializes at most constants::assembled_frame_allocator_queue_size
+// sets ahead of full consumption; in dummy mode (slab_allocator->is_dummy())
+// this queue bound is the only limit on memory use, since dummy-mode
+// get_slab() never blocks. The worker thread inherits its vcpu affinity from
+// the caller of the constructor. Python callers should call the
+// AssembledFrameAllocator constructor within a ThreadAffinity context manager.
 //
 // Entry points (following thread-backed class pattern): initialize_metadata(),
 // get_metadata(), initialize_initial_chunk(), wait_for_initial_chunk(),
@@ -495,12 +496,15 @@ private:
     //   (notify_all -- one-shot latch), and stop().
     //
     // queue_cv -- waiters: _get_frame_set() callers (predicate: this
-    //   consumer's next set is in frame_set_queue, or -- dummy mode -- the
-    //   in-progress creation finished, or stopped). Signaled on: set push +
-    //   frame_creation_underway reset in _create_frame_set() (notify_all --
-    //   REQUIRED: every consumer receives every set once, so one new set can
-    //   make several waiters ready; this is not a work-queue handoff), the
-    //   CreationFlagGuard unwind path, and stop().
+    //   consumer's next set is in frame_set_queue, or stopped). Signaled on:
+    //   set push in the worker thread (notify_all -- REQUIRED: every
+    //   consumer receives every set once, so one new set can make several
+    //   waiters ready; this is not a work-queue handoff), and stop().
+    //
+    // slot_cv -- waiter: the worker thread (predicate: frame_set_queue size
+    //   below constants::assembled_frame_allocator_queue_size, or stopped).
+    //   Signaled on: pop_front in _get_frame_set() (notify_one -- sound
+    //   because the worker is structurally the only waiter), and stop().
     //
     // lowmem_cv -- waiters: block_until_low_memory() callers (predicate:
     //   num_preinitialized decreased below the caller's threshold, or
@@ -510,6 +514,7 @@ private:
     mutable std::condition_variable metadata_cv;
     mutable std::condition_variable chunk_cv;
     mutable std::condition_variable queue_cv;
+    mutable std::condition_variable slot_cv;
     mutable std::condition_variable lowmem_cv;
 
     mutable bool is_stopped = false;
@@ -541,9 +546,12 @@ private:
     std::vector<long> consumer_next_chunk_index;
 
     // Queue of sets: (set, num_consumers_received).
-    // In non-dummy mode, the worker thread pushes pre-initialized sets to the back.
-    // In dummy mode, get_frame_set() creates sets synchronously and pushes to the back.
-    // Sets are popped from the front when all consumers have received them.
+    // The worker thread -- the sole producer, in both dummy and non-dummy
+    // mode -- pushes pre-initialized sets to the back; it never lets the
+    // queue grow beyond constants::assembled_frame_allocator_queue_size
+    // sets (this bound is the worker's only throttle in dummy mode, where
+    // get_slab() never blocks). Sets are popped from the front when all
+    // consumers have received them.
     //
     // The early part of the queue contains sets with (num_consumers_received > 0) that
     // are waiting for subsequent consumers. The later part contains sets with
@@ -552,23 +560,27 @@ private:
     std::deque<std::pair<std::shared_ptr<AssembledFrameSet>, int>> frame_set_queue;
     long queue_start_chunk_index = 0;          // time_chunk_index of first set in queue
     long first_unreceived_chunk_index = 0;     // time_chunk_index of first set not yet received by any consumer
-    bool frame_creation_underway = false;      // is there a thread in the process of creating a new set?
 
-    // Create a new AssembledFrameSet (= nbeams AssembledFrames) and add it
-    // to the queue. Caller must currently hold lock via 'guard'. The lock
-    // will be dropped (during slab acquisition + memset of the nbeams
-    // frames) and re-acquired.
+    // Builds nbeams fully-initialized AssembledFrames (slab acquisition,
+    // memset, array setup) WITHOUT holding 'lock'. Called only by the
+    // worker thread, which snapshots the arguments under the lock and
+    // drops it around the call. Everything is initialized except
+    // beam_id / time_chunk_index, which the worker stamps under the lock
+    // at push time (so the set's chunk index is consistent with the queue
+    // state).
     //
     // Slab-pool sizing assumption: this function holds up to nbeams slabs
     // simultaneously while assembling one set. The slab pool must be sized
     // for at least nbeams slabs total; this is already a hard prerequisite
     // for the Receiver's 2-chunk window (which pins 2*nbeams slabs).
-    void _create_frame_set(std::unique_lock<std::mutex> &lock);
+    std::vector<std::shared_ptr<AssembledFrame>>
+    _build_frames(long nbeams, long nfreq,
+                  const std::shared_ptr<const XEngineMetadata> &md);
 
     // Helper for entry points. Caller must hold lock.
     void _throw_if_stopped(const char *method_name);
 
-    // Worker thread functions (non-dummy mode only).
+    // Worker thread functions (sole producer of frame sets, both modes).
     void _worker_main();
     void worker_main();
 
@@ -590,7 +602,7 @@ public:
     // slab base is cache-line aligned by the SlabAllocator), and data at the
     // cache-line-aligned offset align_up(scales_offsets_nbytes, ...).
     //
-    // Used by _create_frame_set() (the authoritative allocator) AND by external
+    // Used by _build_frames() (the authoritative allocator) AND by external
     // code that sizes a slab pool for AssembledFrameSets (e.g.
     // pirate_frb.run_fake_xengine). Static -- callable without an instance,
     // since pool sizing happens before the allocator is constructed.

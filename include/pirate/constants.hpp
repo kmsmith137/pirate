@@ -50,6 +50,12 @@ struct constants
     static constexpr int reaper_lowmem_chunks = 2;
     static constexpr int fake_xengine_pacing_chunks = 5;
 
+    // Max depth of AssembledFrameAllocator::frame_set_queue: the allocator's
+    // worker thread pre-initializes at most this many chunks ahead of full
+    // consumption. Also bounds dummy-mode memory use (dummy-mode get_slab()
+    // never pushes back).
+    static constexpr int assembled_frame_allocator_queue_size = 5;
+
     // Timeouts.
     //
     //   - poll_cadence: low-level polling (e.g. for catching control-C)
@@ -99,6 +105,16 @@ struct constants
 
     static_assert(reaper_lowmem_chunks >= 2);
     static_assert(fake_xengine_pacing_chunks >= 3);
+
+    // The reaper's low-memory gate (FrbServer reaper thread ->
+    // AssembledFrameAllocator::block_until_low_memory) fires when (slab pool
+    // empty) AND (pre-initialized chunks <= reaper_lowmem_chunks). The queue
+    // bound must exceed reaper_lowmem_chunks: otherwise the second condition
+    // is vacuously true (the queue can never exceed the threshold) and the
+    // gate degenerates to "pool empty" alone. The bound is also what makes
+    // the first condition prompt under real pressure: while the queue is
+    // below its bound, the worker grabs every freed slab.
+    static_assert(assembled_frame_allocator_queue_size > reaper_lowmem_chunks);
     
     // The frame pool must hold the reaper's pre-init reserve + the FakeXEngine
     // pacing lookahead, plus headroom for the in-flight chunks.

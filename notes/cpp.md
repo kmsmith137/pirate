@@ -72,10 +72,9 @@ shutdown/error-propagation semantics.)
   holds. This is a throughput nicety, never a correctness requirement, so
   it never justifies weakening a critical section -- and legitimate
   under-lock notifies exist and deserve no "fix": a lock deliberately held
-  into the next loop iteration (FileWriter's ssd->nfs handoff), a
-  caller-owned guard (AssembledFrameAllocator::_create_frame_set), a
-  failure path where the lock must stay held (the throw in
-  FrbGrouper::start_listening).
+  into the next loop iteration (FileWriter's ssd->nfs handoff,
+  AssembledFrameAllocator's worker loop), a failure path where the lock
+  must stay held (the throw in FrbGrouper::start_listening).
 
 - Never read a lock-protected member after dropping the lock -- snapshot it
   into a local under the lock and use the local.
@@ -87,8 +86,9 @@ shutdown/error-propagation semantics.)
   shuts down the whole object) happens to mask it today. And the reset is
   itself a state change that waiters' predicates test: the reset path --
   including a scope guard's unwind path -- must notify the corresponding
-  cv, and that cv's "signaled on:" list must include it. (See
-  AssembledFrameAllocator's CreationFlagGuard.)
+  cv, and that cv's "signaled on:" list must include it. (Better still:
+  restructure so no such flag exists -- e.g. a single producer thread whose
+  failure mode is stop(), which already wakes every cv.)
 
 - Counters used in wait predicates are `long`, never `int`: signed overflow
   is UB and a hung predicate in a long-running server.
