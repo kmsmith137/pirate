@@ -60,7 +60,10 @@ struct FrbGrouperClient
 
     // Open the real connection: build a fresh channel + stub, wait for READY
     // (throws runtime_error on timeout), and open the Session stream. Called by
-    // FrbServer::grouper_send_thread just before the Handshake.
+    // FrbServer::grouper_send_thread just before the Handshake. Also throws if
+    // cancel() has been called, before or concurrently -- but the bounded READY
+    // wait itself is not cancel-interruptible (a cancel() landing during it
+    // takes effect, as a throw, only when the wait finishes).
     void connect(int timeout_ms = constants::grouper_connect_timeout_ms);
 
     // Session-stream I/O forwarded to the ClientReaderWriter (valid only after
@@ -70,9 +73,11 @@ struct FrbGrouperClient
     bool write(const frb::grouper::v1::ProducerMessage &msg);
     bool read(frb::grouper::v1::ConsumerMessage *msg);
 
-    // Unblock any in-flight write()/read() (idempotent; safe from any thread).
-    // ClientContext::TryCancel() makes the pending Write/Read return false. Used
-    // by FrbServer::stop().
+    // Unblock any in-flight write()/read() (idempotent; safe from any thread,
+    // including concurrently with connect()). ClientContext::TryCancel() makes
+    // the pending Write/Read return false; a cancel() that runs before or
+    // during connect() makes connect() throw instead of opening a Session that
+    // nothing would ever cancel. Used by FrbServer::stop().
     void cancel();
 
     // Noncopyable / nonmovable (owns gRPC state).

@@ -46,6 +46,16 @@ namespace fg = frb::grouper::v1;
 
 struct FrbGrouperClient::GrpcState
 {
+    // Guards 'cancelled' and the members below against the one legal
+    // cross-thread overlap: cancel() (any thread, e.g. FrbServer::stop())
+    // racing connect() (FrbServer's grouper send thread). write()/read()
+    // deliberately do NOT take it: they only run after connect() has
+    // returned, on threads ordered after it (the send thread ran connect()
+    // itself; the receive thread is ordered behind FrbServer's handshake
+    // latch), and gRPC permits TryCancel() concurrently with Read/Write.
+    std::mutex mutex;
+    bool cancelled = false;
+
     std::shared_ptr<grpc::Channel> channel;
     std::unique_ptr<fg::FrbGrouper::Stub> stub;
     std::unique_ptr<grpc::ClientContext> context;
@@ -116,13 +126,29 @@ void FrbGrouperClient::ping(int timeout_ms)
 
 void FrbGrouperClient::connect(int timeout_ms)
 {
-    // Fresh channel + stub (ping()'s throwaway channel was dropped). Wait for
-    // READY, then open the Session stream.
-    grpc_state->channel = grpc::CreateCustomChannel(grouper_ip_addr,
-                                                    grpc::InsecureChannelCredentials(),
-                                                    _grouper_chan_args());
-    grpc_state->stub = fg::FrbGrouper::NewStub(grpc_state->channel);
-    _wait_ready_or_throw(grpc_state->channel, grouper_ip_addr, timeout_ms);
+    // Fresh channel + stub (ping()'s throwaway channel was dropped). The READY
+    // wait runs on locals, outside the lock: it is bounded by timeout_ms but
+    // NOT interruptible by cancel() -- a cancel() landing during it takes
+    // effect at the publish step below (connect() throws), after waiting out
+    // at most the remaining timeout (~seconds in the pathological case).
+    auto channel = grpc::CreateCustomChannel(grouper_ip_addr,
+                                             grpc::InsecureChannelCredentials(),
+                                             _grouper_chan_args());
+    auto stub = fg::FrbGrouper::NewStub(channel);
+    _wait_ready_or_throw(channel, grouper_ip_addr, timeout_ms);
+
+    // Publish under the mutex, holding it across the cancelled-check AND the
+    // Session open, so cancel() cannot interleave: it either ran first (we
+    // throw here, before opening a Session that nothing would ever cancel) or
+    // runs after (it sees the published context and TryCancels the stream).
+    // Holding the lock across stub->Session() is fine: it starts the call
+    // without waiting for the server, and cancel() blocking briefly behind it
+    // is harmless.
+    std::lock_guard<std::mutex> lock(grpc_state->mutex);
+    if (grpc_state->cancelled)
+        throw runtime_error("FrbGrouperClient::connect(): cancelled");
+    grpc_state->channel = std::move(channel);
+    grpc_state->stub    = std::move(stub);
     grpc_state->context = make_unique<grpc::ClientContext>();
     grpc_state->stream  = grpc_state->stub->Session(grpc_state->context.get());
 }
@@ -144,8 +170,13 @@ bool FrbGrouperClient::read(fg::ConsumerMessage *msg)
 
 void FrbGrouperClient::cancel()
 {
-    // Idempotent; safe from any thread. TryCancel() unblocks any in-flight
-    // Write/Read (they return false).
+    // Idempotent; safe from any thread, including concurrently with connect().
+    // Under the mutex, either connect() has already published the context (and
+    // TryCancel() unblocks any in-flight or future Write/Read, which return
+    // false), or we set 'cancelled' first and a concurrent/later connect()
+    // throws instead of opening a Session.
+    std::lock_guard<std::mutex> lock(grpc_state->mutex);
+    grpc_state->cancelled = true;
     if (grpc_state->context)
         grpc_state->context->TryCancel();
 }

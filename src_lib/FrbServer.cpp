@@ -443,7 +443,10 @@ void FrbServer::stop(std::exception_ptr e) const
     // Cancel the grouper Session RPC: TryCancel() unblocks any in-flight
     // read() (receive thread) / write() (send thread). grouper_client is set at
     // construction and immutable, so it is safe to read here without the lock;
-    // cancel() is idempotent and a no-op if connect() hasn't run yet.
+    // cancel() is idempotent, and a cancel() that races grouper_send_thread's
+    // connect() makes that connect() throw (see FrbGrouperClient::cancel) --
+    // the send thread's wrapper then calls stop(), a no-op since we got here
+    // first, and exits.
     if (grouper_client) grouper_client->cancel();
 
     // The cascades below forward 'e' (see "Error reporting" in
