@@ -111,7 +111,9 @@ private:
     // ssd_clear_cv -- waiters: nfs threads (predicate: ssd_queue EMPTY, or
     //   stopped; SSD-priority gate). Signaled on: an ssd_queue pop that
     //   empties the queue, in _ssd_thread_main() (notify_all -- every waiter
-    //   becomes ready simultaneously), and stop().
+    //   becomes ready simultaneously), and stop(). The predicate is
+    //   deliberately queue-only: popped-and-mid-write frames are invisible
+    //   to it (see the gate comment in _nfs_thread_main()).
     mutable std::condition_variable ssd_cv;
     mutable std::condition_variable nfs_cv;
     mutable std::condition_variable ssd_clear_cv;

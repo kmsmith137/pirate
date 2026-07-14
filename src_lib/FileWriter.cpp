@@ -306,6 +306,12 @@ void FileWriter::_nfs_thread_main()
         // Before the nfs thread processes the frame, we wait for the ssd queue
         // to clear. This ensures that under memory pressure, the ssd threads have
         // near-100% access to SSD bandwidth.
+        //
+        // Deliberate approximation: the predicate tests only the QUEUE, so up to
+        // num_ssd_threads popped-and-mid-write frames are invisible to it, and a
+        // small bounded amount of nfs work can overlap those writes. Tracking
+        // in-flight writes too (a counter) isn't worth the complexity: the gate
+        // matters in the heavily-backlogged case, where the queue is rarely empty.
 
         for (;;) {
             if (this->is_stopped)
@@ -353,8 +359,15 @@ void FileWriter::_nfs_thread_main()
             xassert(!frame->in_ssd_queue);
             xassert(frame->in_nfs_queue);
 
-            // After a frame has been copied to NFS, it can be deleted from SSD.
-            // The frame has been copied to NFS iff (nfs_count > 0).
+            // Delete the SSD copy once save_paths[0] has been PROCESSED --
+            // either copied to NFS (nfs_count bumped by the success path) or
+            // given up on (nfs_count bumped by the save_error branch below).
+            // The error case is deliberate: the SSD is a staging area, not a
+            // backlog, so when the NFS write fails the data is dropped (the
+            // failure was already reported to subscribers as an errored
+            // WriteStatus) rather than left to accumulate on the SSD.
+            // Retaining errored files would only make sense together with
+            // NFS-retry logic and reboot recovery, which we don't implement.
             if (frame->on_ssd && (frame->nfs_count > 0)) {
                 frame_lock.unlock();
 
@@ -539,8 +552,8 @@ vector<shared_ptr<FileWriter::RpcSubscriber>> FileWriter::_get_rpc_subscribers()
 {
     vector<shared_ptr<FileWriter::RpcSubscriber>> ret;
 
-    ulong i = 0;
-    while (i < rpc_subscribers.size()) {
+    long i = 0;
+    while (i < long(rpc_subscribers.size())) {
         shared_ptr<RpcSubscriber> s = rpc_subscribers[i].lock();
 
         if (s) {
