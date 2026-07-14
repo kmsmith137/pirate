@@ -193,6 +193,10 @@ struct FrbGrouper
 
     // Blocks until produced_seq_id has been received for 'seq_id'; returns a
     // per-batch slice (nbeams == beams_per_batch) of output_ringbuf.
+    //
+    // MUST return Outputs BY VALUE (see the matching note at
+    // GpuDedisperser::acquire_output): the Python binding caches out_max/out_argmax
+    // per Outputs instance, which relies on each call yielding a fresh object.
     GpuDedisperser::Outputs acquire_output(long seq_id);
 
     // Non-blocking: records that the caller is done with 'seq_id'; the send

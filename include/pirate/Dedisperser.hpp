@@ -199,6 +199,12 @@ struct GpuDedisperser
     // (call evrb_cdd2->synchronize() instead of evrb_cdd2->wait()).
     // If noreturn=true, then return an empty Outputs object (reduces overhead
     // for callers who don't need it).
+    //
+    // MUST return Outputs BY VALUE. The Python binding wraps out_max/out_argmax
+    // in a per-instance @cached_property (pirate_frb/core/GpuDedisperserOutputs.py),
+    // which is correct only because each call yields a fresh Python object.
+    // Returning a reference/pointer into a persistent Outputs (e.g. output_ringbuf)
+    // would make that cache serve stale, recycled ring-buffer arrays.
     Outputs            acquire_output(long consumer_id, long seq_id, cudaStream_t stream,
                                       bool sync=false, bool noreturn=false);
     void               release_output(long consumer_id, long seq_id, cudaStream_t stream);

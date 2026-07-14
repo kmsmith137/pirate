@@ -389,6 +389,7 @@ PYFILES = \
   pirate_frb/core/__init__.py \
   pirate_frb/core/BumpAllocator.py \
   pirate_frb/core/CudaStreamPool.py \
+  pirate_frb/core/GpuDedisperserOutputs.py \
   pirate_frb/core/SimulatedFrameFactory.py \
   pirate_frb/core/SlabAllocator.py \
   pirate_frb/slow_avar/__init__.py \

@@ -6,7 +6,6 @@ from ..pirate_pybind11 import (
     FakeXEngine,
     FileWriter,
     FrequencySubbands,
-    GpuDedisperserOutputs,
     PrimaryTree,
     Receiver,
     ResourceTracker,
@@ -19,5 +18,6 @@ from ..pirate_pybind11 import (
 # injections (as an import side effect) and re-export the class.
 from .BumpAllocator import BumpAllocator
 from .CudaStreamPool import CudaStreamPool
+from .GpuDedisperserOutputs import GpuDedisperserOutputs
 from .SimulatedFrameFactory import SimulatedFrameFactory
 from .SlabAllocator import SlabAllocator

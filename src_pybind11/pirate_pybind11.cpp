@@ -418,32 +418,30 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     // Returned by GpuDedisperser.acquire_output(). Must be registered
     // before the GpuDedisperser class_ block, so pybind11 knows how to
     // convert the return value when acquire_output's lambda is bound below.
-    py::class_<GpuDedisperser::Outputs>(m, "GpuDedisperserOutputs",
-        "Helper class, representing dedispersion outputs for one beam batch.\n"
-        "Return value from FrbGrouper.get_output(ichunk, ibatch)\n"
-        "\n"
-        "Example usage::\n"
-        "\n"
-        "    with grouper.get_output(ichunk, ibatch) as outputs:\n"
-        "        # 'outputs' has type GpuDedisperserOutputs\n"
-        "        # Loop over dedispersion trees.\n"
-        "        for itree, tree_out in enumerate(outputs.out_max):\n"
-        "            # 'tree_out' has shape (beams_per_batch, coarse_ndm, coarse_ntime)\n"
-        "\n"
-        "Attributes (all read-only):\n"
-        "\n"
-        "- ``ichunk_zero_based`` (int) -- chunk index of this output, relative to the first dedisperser output.\n"
-        "- ``ichunk_fpga_based`` (int) -- chunk index relative to FPGA seq 0 (= ichunk_zero_based + the producer's initial_chunk).\n"
-        "- ``ibeam`` (int) -- beam index (NOT beam_id) of the first beam in this output.\n"
-        "- ``out_max`` (list) -- length-ntrees list of peak-finding maximum-value arrays.\n"
-        "- ``out_argmax`` (list) -- length-ntrees list of peak-finding argmax-token arrays.")
-        // Member docstrings omitted on purpose -- documented in the class docstring's
-        // bullet list above (see notes/docstrings.md).
+    // No class docstring here: GpuDedisperserOutputs's docstring lives in the
+    // Python injector (pirate_frb/core/GpuDedisperserOutputs.py), which is also
+    // where out_max/out_argmax get their cached_property accessors (option 2 in
+    // notes/docstrings.md).
+    py::class_<GpuDedisperser::Outputs>(m, "GpuDedisperserOutputs", py::dynamic_attr())
+        // Member docstrings omitted on purpose -- documented in the class docstring
+        // (which lives in the injector; see notes/docstrings.md).
         .def_readonly("ichunk_zero_based", &GpuDedisperser::Outputs::ichunk_zero_based)
         .def_readonly("ichunk_fpga_based", &GpuDedisperser::Outputs::ichunk_fpga_based)
         .def_readonly("ibeam", &GpuDedisperser::Outputs::ibeam)
-        .def_readonly("out_max", &GpuDedisperser::Outputs::out_max)
-        .def_readonly("out_argmax", &GpuDedisperser::Outputs::out_argmax);
+        // out_max/out_argmax are exposed here under underscore names; the Python
+        // injector (pirate_frb/core/GpuDedisperserOutputs.py) wraps them in
+        // @cached_property accessors named out_max/out_argmax, so the
+        // vector<Array> -> list conversion runs once per Outputs instead of on
+        // every attribute read. py::dynamic_attr() (above) gives each instance the
+        // __dict__ that cached_property caches into.
+        //
+        // CACHING CONTRACT: correct only because acquire_output() returns a fresh
+        // Outputs BY VALUE, so pybind mints a new Python object (empty __dict__)
+        // per batch. Returning a reference to a persistent Outputs would make the
+        // cache serve a prior batch's recycled arrays -- see acquire_output() in
+        // Dedisperser.hpp / FrbGrouper.hpp.
+        .def_readonly("_out_max", &GpuDedisperser::Outputs::out_max)
+        .def_readonly("_out_argmax", &GpuDedisperser::Outputs::out_argmax);
 
     // GpuDedisperser. No class docstring here: it lives in the Python injector, since the
     // primary Python interface is the injected get_input()/get_output() context managers
