@@ -107,6 +107,22 @@ public:
 
     void add_subscriber(const std::shared_ptr<RpcSubscriber> &subscriber);
 
+    // Stopped-tolerant health probe for a holding FrbServer (NOT an entry
+    // point: never stops the FileWriter, safe to call on a stopped one).
+    // Rethrows the saved root-cause error if the FileWriter stopped with an
+    // error; throws a generic runtime_error on a clean stop; returns
+    // normally otherwise.
+    //
+    // Exists to close an upward-propagation gap: stop() cascades run
+    // holder -> dependency only, and process_frame() -- the only other path
+    // that surfaces a dead FileWriter to the FrbServer -- is called only
+    // when a write is actually queued, which during normal running with no
+    // streams is NEVER. Without this probe, a FileWriter that stopped on
+    // its own (worker-thread logic error, OOM) would leave the server
+    // running healthy-looking but unable to write files. FrbServer's
+    // frame_finalizing thread calls this once per processed batch.
+    void check_healthy() const;
+
 
     // --------------------------------------------------
 

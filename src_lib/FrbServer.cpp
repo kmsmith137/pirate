@@ -1334,6 +1334,20 @@ void FrbServer::_frame_finalizing_thread_main()
             unique_lock<std::mutex> lock(mutex);
             if (is_stopped) return;
 
+            // FileWriter health check, once per batch: a FileWriter that
+            // died on its own (worker-thread logic error, OOM) has no other
+            // way to reach the FrbServer -- stop cascades run holder ->
+            // dependency only, and process_frame() is called only when a
+            // write is actually queued. Rethrows the FileWriter's saved
+            // root-cause error; this thread's wrapper then stops the server
+            // with it. On normal teardown FrbServer::stop() sets is_stopped
+            // BEFORE cascading into the FileWriter, so the check above
+            // usually exits first, and if not, the wrapper's stop() is a
+            // no-op (first caller wins). Takes FileWriter's mutex briefly
+            // while holding 'mutex' -- safe, no reverse nesting exists:
+            // FileWriter code never touches FrbServer.
+            params.file_writer->check_healthy();
+
             // Single-advancer sanity check: rb_streamed is advanced only in
             // this thread's Phase A, and rb_processed only in its Phase C,
             // so they must agree here (the transient rb_streamed ==
@@ -2074,12 +2088,15 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
 
     // Queue the past writes: push filenames onto frame->save_paths, then
     // call file_writer->process_frame() (via _queue_frame_write, shared with
-    // the frame_finalizing_thread's stream-capture hook). The reverse
-    // iteration order controls FileWriter QUEUE order, not response order:
-    // it ensures that frames with lower time_chunk_index are processed last
-    // (and appear earlier in queues). The response is sorted ascending below.
+    // the frame_finalizing_thread's stream-capture hook). Iteration order
+    // controls FileWriter QUEUE order, not response order (the response is
+    // sorted ascending below). Oldest-first: files land on disk in
+    // chronological order, and the frames the concurrent reaper would free
+    // next get their save_paths pinned first, minimizing best-effort losses
+    // (a frame reaped before its push is skipped and omitted from the
+    // response).
 
-    for (auto it = local_frames.rbegin(); it != local_frames.rend(); ++it) {
+    for (auto it = local_frames.begin(); it != local_frames.end(); ++it) {
         auto &frame = it->first;
         string filename = make_acq_relpath(request->acqdir(), frame);
 

@@ -206,6 +206,17 @@ void FileWriter::add_subscriber(const shared_ptr<RpcSubscriber> &subscriber)
 }
 
 
+// Stopped-tolerant health probe (NOT an entry point) -- see FileWriter.hpp.
+void FileWriter::check_healthy() const
+{
+    lock_guard<std::mutex> lock(mutex);
+    if (error)
+        std::rethrow_exception(error);
+    if (is_stopped)
+        throw runtime_error("FileWriter stopped underneath a running FrbServer");
+}
+
+
 void FileWriter::_ssd_thread_main()
 {
     unique_lock<std::mutex> state_lock(mutex);

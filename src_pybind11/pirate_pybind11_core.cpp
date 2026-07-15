@@ -1737,7 +1737,8 @@ void register_core_bindings(pybind11::module &m)
     ;
 
     // FileWriter: writes AssembledFrames to disk via SSD and NFS queues.
-    // Skipped members: Params, WriteStatus, RpcSubscriber, process_frame, add_subscriber (internal)
+    // Skipped members: Params, WriteStatus, RpcSubscriber, process_frame,
+    // add_subscriber, check_healthy (internal)
     py::class_<FileWriter, std::shared_ptr<FileWriter>>(m, "FileWriter",
         "Writes AssembledFrames to disk via SSD and NFS queues.\n\n"
         "Creates worker threads for writing to local SSD and copying to NFS.")
