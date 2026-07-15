@@ -58,7 +58,7 @@ class FrbGrouperInjections:
 
     - ``is_stopped`` (bool) -- whether the grouper is in the stopped state.
     - ``cuda_device_id`` (int) -- CUDA device where the IPC-mapped outputs live.
-    - ``dtype`` (ksgpu.Dtype) -- data type of the out_max arrays.
+    - ``dtype`` (numpy.dtype) -- data type of the out_max arrays.
     - ``nt_in`` (int) -- input time samples per time chunk.
     - ``total_beams`` (int) -- total beams per chunk (= beams_per_gpu).
     - ``beams_per_batch`` (int) -- beams per output batch.

@@ -137,7 +137,7 @@ void register_core_bindings(pybind11::module &m)
 {
     // BumpAllocator: Thread-safe bump allocator for GPU/host memory
     // Wrapped with shared_ptr for proper lifetime management when arrays reference the allocator.
-    // Note: Python injections in pirate_frb/core/BumpAllocator.py handle aflags and dtype conversions.
+    // Note: Python injections in pirate_frb/core/BumpAllocator.py handle aflags conversion.
     py::class_<BumpAllocator, std::shared_ptr<BumpAllocator>>(m, "BumpAllocator",
         "Thread-safe bump allocator supporting GPU/host memory.\n\n"
         "Modes:\n"

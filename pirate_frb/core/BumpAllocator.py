@@ -102,7 +102,7 @@ class BumpAllocatorInjections:
 
         Parameters
         ----------
-        dtype : str, numpy.dtype, cupy.dtype, or ksgpu.Dtype
+        dtype : str, numpy.dtype, or cupy dtype
             Data type. Examples: 'float32', np.int64, cp.complex64
         shape : list or tuple of int
             Array dimensions
@@ -126,5 +126,4 @@ class BumpAllocatorInjections:
         >>> arr2 = alloc.allocate_array(np.int16, (512, 512, 4))
         >>> print(alloc.nbytes_allocated)  # Shows total allocated
         """
-        dtype = ksgpu.Dtype(dtype)
         return self._allocate_array_raw(dtype, list(shape))

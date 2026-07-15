@@ -525,14 +525,19 @@ class ServerTester:
 
         # Comparison threshold, per tree -- same formula as test_one, but with
         # coefficient 5 instead of 3:
-        #   eps = 5 * dtype.precision * sqrt(n+2),
+        #   eps = 5 * prec * sqrt(n+2),
         #   n = ds_level + amb_rank + early_dd_rank.
         # The 3-sigma-style bound was flaky in this end-to-end test (~1-in-3
         # runs failed on a single element, with |delta| up to ~1.45x the
         # threshold, at a random position with a random config each time).
         # Real bugs produce order-unity errors, so the looser bound loses
         # essentially no detection power.
-        prec = p['config'].dtype.precision
+        #
+        # 'prec' is a per-dtype test tolerance (the values ksgpu uses for its
+        # own array comparisons) -- deliberately looser than np.finfo(...).eps.
+        prec = {np.dtype(np.float16): 1.0e-3,
+                np.dtype(np.float32): 1.0e-6,
+                np.dtype(np.float64): 1.0e-15}[p['config'].dtype]
         self.eps = [ 5.0 * prec * math.sqrt(tr.primary_tree_index + tr.total_rank() + 2) for tr in trees ]
 
         # First child message: the handshake echo (arrives once the producer's

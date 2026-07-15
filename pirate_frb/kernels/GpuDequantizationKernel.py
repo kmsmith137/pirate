@@ -7,40 +7,11 @@ from ..pirate_pybind11 import GpuDequantizationKernel
 @ksgpu.inject_methods(GpuDequantizationKernel)
 class GpuDequantizationKernelInjections:
     # No class docstring here: GpuDequantizationKernel's docstring lives in the
-    # pybind11 binding (option 1 in notes/docstrings.md); this injector adds dtype
-    # conversion for the constructor and a stream argument for launch().
+    # pybind11 binding (option 1 in notes/docstrings.md); this injector adds a
+    # stream argument for launch().
 
-    # Save references to C++ methods
-    _cpp_init = GpuDequantizationKernel.__init__
+    # Save reference to C++ method
     _cpp_launch = GpuDequantizationKernel.launch
-
-    def __init__(self, dtype, nbeams, nfreq, ntime):
-        """Create a GpuDequantizationKernel.
-
-        Applies the per-(beam, freq, minichunk) affine transform
-
-            out[b,f,t] = 0                                       if data[b,f,t] == -8
-            out[b,f,t] = scales_offsets[b,f,t//256,0] * data[b,f,t]
-                       + scales_offsets[b,f,t//256,1]            otherwise
-
-        during int4 -> float32/float16 conversion. data == -8 is the
-        "missing sample" sentinel (matching the convention of
-        AssembledFrame.data) and is always mapped to 0 in the output,
-        regardless of scale and offset.
-
-        Parameters
-        ----------
-        dtype : str, numpy.dtype, cupy.dtype, or ksgpu.Dtype
-            Output dtype (must be float32 or float16)
-        nbeams : int
-            Number of beams
-        nfreq : int
-            Number of frequency channels
-        ntime : int
-            Number of time samples (must be divisible by 256)
-        """
-        dtype = ksgpu.Dtype(dtype)
-        self._cpp_init(dtype, nbeams, nfreq, ntime)
 
     def launch(self, out, scales_offsets, data_uint8, stream=None):
         """GPU kernel launch (async, does not sync stream).

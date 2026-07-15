@@ -239,7 +239,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    noisy: if true, print the per-zone variances\n\n"
                "Returns:\n"
                "    Array of length nfreq (constant within each frequency zone)")
-          // dtype: now uses direct readwrite, Python injection provides flexible setter
+          // dtype: reads return numpy.dtype, writes accept strings/numpy dtypes/None,
+          // via ksgpu's type_caster<ksgpu::Dtype> (no wrapper needed on either side).
           .def_readwrite("dtype", &DedispersionConfig::dtype,
                "Data type for dedispersion (e.g. 'float32', 'float16')")
           // Frequency channel configuration

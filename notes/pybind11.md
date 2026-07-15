@@ -187,7 +187,7 @@ The rules:
 
 - If a C++ function takes an `aflags` argument (from `ksgpu/mem_utils.hpp`), then call `ksgpu.parse_aflags(aflags)` before passing it to the C++ function.
 
-- If a C++ function takes a `ksgpu::Dtype` argument, then call the `ksgpu.Dtype` constructor on `x` before passing it to the C++ function.
+- `ksgpu::Dtype` arguments, members, and return values need no wrapping: they convert automatically to/from `numpy.dtype` via ksgpu's `type_caster<ksgpu::Dtype>` (see "Dtype conversion" in ksgpu's `notes/pybind11.md`). Python code only ever sees numpy dtypes; strings and None (empty Dtype) are also accepted on input. A valid `ksgpu::Dtype` with no numpy equivalent (e.g. `"int7"`) raises on conversion to python -- bind such a member as a string (`Dtype::str()`) instead.
 
 - If a C++ function returns a bare pointer or `shared_ptr<void>`, then don't python-wrap it unless specifically requested.
 

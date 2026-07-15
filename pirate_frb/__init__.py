@@ -11,7 +11,7 @@ import ksgpu
 # RTLD_GLOBAL trick that publishes ksgpu's C++ symbols -- never runs, and the
 # 'pirate_pybind11' import below would otherwise fail with a cryptic
 # "undefined symbol: ksgpu::...".
-if getattr(ksgpu, "__file__", None) is None or not hasattr(ksgpu, "Dtype"):
+if getattr(ksgpu, "__file__", None) is None or not hasattr(ksgpu, "inject_methods"):
     raise ImportError(
         "'ksgpu' was imported as an empty namespace package "
         f"(ksgpu.__file__ = {getattr(ksgpu, '__file__', None)!r}), not the "
@@ -32,9 +32,9 @@ from . import rpc  # noqa: F401  (RPC client/server classes; also applies FrbGro
 
 # Method injections for pybind11 classes live in per-class modules (e.g.
 # core/BumpAllocator.py, casm/CasmBeamformer.py, kernels/GpuDequantizationKernel.py,
-# rpc/FrbGrouper.py, and DedispersionConfig/GpuDedisperser below); importing each
-# such module applies its injections. The subpackage imports above cover most of
-# them; see notes/pybind11.md.
+# rpc/FrbGrouper.py, and GpuDedisperser below); importing each such module applies
+# its injections. The subpackage imports above cover most of them; see
+# notes/pybind11.md.
 
 from .HwtestSender import HwtestSender
 from .Hwtest import Hwtest
@@ -45,12 +45,12 @@ from .Acquisition import Acquisition
 from .OfflineDedisperser import OfflineDedisperser
 from .run_offline_dedisperser import run_offline_dedisperser
 
-# DedispersionConfig and GpuDedisperser carry method injections, so they are
-# imported from their per-class modules (which apply the injections and re-export
-# the class); the rest are plain re-exports of the pybind11 classes.
-from .DedispersionConfig import DedispersionConfig
+# GpuDedisperser carries method injections, so it is imported from its per-class
+# module (which applies the injections and re-exports the class); the rest are
+# plain re-exports of the pybind11 classes.
 from .GpuDedisperser import GpuDedisperser
 from .pirate_pybind11 import (
+    DedispersionConfig,
     DedispersionPlan,
     FrbServer,
     FrbGrouperClient,
