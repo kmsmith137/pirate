@@ -1084,12 +1084,6 @@ AssembledFrameAllocator::AssembledFrameAllocator(const shared_ptr<SlabAllocator>
     if (!ksgpu::af_on_host(slab_allocator->aflags))
         throw runtime_error("AssembledFrameAllocator: slab_allocator must be on host");
 
-    // Initialized to 0 here; overwritten with initial_time_chunk by
-    // _initialize_initial_chunk on the first call (see comment in
-    // AssembledFrame.hpp). The values are only consulted after
-    // initial_chunk_set is true.
-    consumer_next_chunk_index.resize(num_consumers, 0);
-
     // Spawn the worker thread (sole producer of frame sets, in both dummy
     // and non-dummy mode). It parks on its init gate until metadata and
     // the initial chunk are established.
@@ -1475,8 +1469,6 @@ long AssembledFrameAllocator::_initialize_initial_chunk(long target_time_chunk)
         // meaningful once initial_chunk_set is true.)
         queue_start_chunk_index = initial_time_chunk;
         first_unreceived_chunk_index = initial_time_chunk;
-        for (long &c : consumer_next_chunk_index)
-            c = initial_time_chunk;
     }
     long ret = initial_time_chunk;
     guard.unlock();
@@ -1525,7 +1517,7 @@ shared_ptr<const XEngineMetadata> AssembledFrameAllocator::get_metadata(bool blo
 // get_frame_set() - Entry point
 
 
-shared_ptr<AssembledFrameSet> AssembledFrameAllocator::get_frame_set(int consumer_id)
+shared_ptr<AssembledFrameSet> AssembledFrameAllocator::get_frame_set(long time_chunk_index)
 {
     {
         unique_lock<mutex> guard(lock);
@@ -1533,7 +1525,7 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::get_frame_set(int consume
     }
 
     try {
-        return _get_frame_set(consumer_id);
+        return _get_frame_set(time_chunk_index);
     } catch (...) {
         this->stop(current_exception());
         throw;
@@ -1541,11 +1533,8 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::get_frame_set(int consume
 }
 
 
-shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(int consumer_id)
+shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_chunk_index)
 {
-    xassert_ge(consumer_id, 0);
-    xassert_lt(consumer_id, num_consumers);
-
     unique_lock<mutex> guard(lock);
 
     // Check that both initialization phases have completed. The allocator
@@ -1553,14 +1542,21 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(int consum
     // (which stamps set->time_chunk_index) before it can mint sets.
     if (!metadata_is_initialized) {
         stringstream ss;
-        ss << "AssembledFrameAllocator::get_frame_set(): consumer_id=" << consumer_id
-           << " called before any initialize_metadata()";
+        ss << "AssembledFrameAllocator::get_frame_set(time_chunk_index=" << time_chunk_index
+           << ") called before any initialize_metadata()";
         throw runtime_error(ss.str());
     }
     if (!initial_chunk_set) {
         stringstream ss;
-        ss << "AssembledFrameAllocator::get_frame_set(): consumer_id=" << consumer_id
-           << " called before any initialize_initial_chunk()";
+        ss << "AssembledFrameAllocator::get_frame_set(time_chunk_index=" << time_chunk_index
+           << ") called before any initialize_initial_chunk()";
+        throw runtime_error(ss.str());
+    }
+
+    if (time_chunk_index < initial_time_chunk) {
+        stringstream ss;
+        ss << "AssembledFrameAllocator::get_frame_set(): requested time_chunk_index="
+           << time_chunk_index << " precedes initial_time_chunk=" << initial_time_chunk;
         throw runtime_error(ss.str());
     }
 
@@ -1568,18 +1564,30 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(int consum
         if (is_stopped)
             _throw_if_stopped("AssembledFrameAllocator::get_frame_set");
 
-        // Get this consumer's next chunk index.
-        // Note that we re-read this data in each iteration of the for-loop,
-        // in case values changed while we dropped the lock.
-
-        long chunk_index = consumer_next_chunk_index[consumer_id];
-        long queue_pos = chunk_index - queue_start_chunk_index;
+        // Recompute queue_pos in each iteration of the for-loop, since the
+        // queue can advance while the lock is dropped in queue_cv.wait().
+        long queue_pos = time_chunk_index - queue_start_chunk_index;
         long queue_size = frame_set_queue.size();
 
-        xassert(queue_pos >= 0);
+        if (queue_pos < 0) {
+            // The requested set already received its num_consumers receipts
+            // and was evicted. Reachable only under a violation of the
+            // receipt contract (see get_frame_set() doc in
+            // AssembledFrame.hpp) -- e.g. a double-request by some OTHER
+            // caller inflated the receipt count, evicting the set
+            // prematurely.
+            stringstream ss;
+            ss << "AssembledFrameAllocator::get_frame_set(): requested time_chunk_index="
+               << time_chunk_index << " was already evicted (queue starts at chunk "
+               << queue_start_chunk_index << "); see the receipt contract in AssembledFrame.hpp";
+            throw runtime_error(ss.str());
+        }
+
+        // Catches requests that skip past the next-uncreated chunk (a
+        // receipt-contract violation that would otherwise deadlock).
         xassert(queue_pos <= queue_size);
 
-        if (queue_pos >= queue_size) {
+        if (queue_pos == queue_size) {
             // Set is not in the queue yet -- wait for the worker thread to
             // create it, then re-check from the top of the loop (the lock
             // was dropped in queue_cv.wait()).
@@ -1587,7 +1595,7 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(int consum
             continue;
         }
 
-        // Get set and increment receive count.
+        // Get set and increment its receipt count.
         auto &[set_ref, num_received] = frame_set_queue[queue_pos];
         num_received++;
 
@@ -1595,11 +1603,10 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(int consum
         // set_ref becomes a dangling reference after pop_front().
         auto result = set_ref;
 
-        // Increment this consumer's chunk index, and update first_unreceived_chunk_index.
-        // (first_unreceived_chunk_index is the max of all consumer_next_chunk_index values.)
-        consumer_next_chunk_index[consumer_id]++;
-        if (consumer_next_chunk_index[consumer_id] > first_unreceived_chunk_index) {
-            first_unreceived_chunk_index = consumer_next_chunk_index[consumer_id];
+        // Advance first_unreceived_chunk_index (under the receipt contract,
+        // the fastest consumer's next chunk index).
+        if (time_chunk_index + 1 > first_unreceived_chunk_index) {
+            first_unreceived_chunk_index = time_chunk_index + 1;
             lowmem_cv.notify_all();  // Wake up block_until_low_memory() if waiting
         }
 

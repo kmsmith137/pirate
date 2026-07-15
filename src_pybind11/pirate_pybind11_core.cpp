@@ -418,8 +418,11 @@ void register_core_bindings(pybind11::module &m)
     py::class_<AssembledFrameAllocator, std::shared_ptr<AssembledFrameAllocator>>(m, "AssembledFrameAllocator",
         "Allocates AssembledFrameSets for multiple consumers.\n\n"
         "Each consumer calls initialize_metadata() / initialize_initial_chunk()\n"
-        "once (or waits for someone else to), then get_frame_set() in a loop.\n"
-        "All consumers receive the same sequence of sets (same shared_ptr).")
+        "once (or waits for someone else to), then get_frame_set(time_chunk_index)\n"
+        "with consecutive chunk indices starting at initial_time_chunk. All\n"
+        "consumers requesting the same chunk receive the same set (same\n"
+        "shared_ptr); a set is evicted from the allocator's queue after\n"
+        "num_consumers requests (see get_frame_set for the receipt contract).")
         .def(py::init<const std::shared_ptr<SlabAllocator> &, int, long>(),
             py::arg("slab_allocator"),
             py::arg("num_consumers"),
@@ -455,8 +458,8 @@ void register_core_bindings(pybind11::module &m)
         .def("initialize_initial_chunk", &AssembledFrameAllocator::initialize_initial_chunk,
             py::arg("target_time_chunk"),
             "Establish (on the first call from any caller) the canonical\n"
-            "initial_time_chunk for the whole pipeline. The first set\n"
-            "returned by get_frame_set() has time_chunk_index = initial_time_chunk.\n"
+            "initial_time_chunk for the whole pipeline. get_frame_set() accepts\n"
+            "chunk indices starting at initial_time_chunk.\n"
             "Returns the established value (target_time_chunk on the first call,\n"
             "previously-established value on subsequent calls).")
         .def("wait_for_initial_chunk", &AssembledFrameAllocator::wait_for_initial_chunk,
@@ -467,16 +470,23 @@ void register_core_bindings(pybind11::module &m)
             "could never run if we held the GIL while blocked), or a Receiver\n"
             "reader thread whose arrival time is unbounded.")
         .def("get_frame_set", &AssembledFrameAllocator::get_frame_set,
-            py::arg("consumer_id"),
+            py::arg("time_chunk_index"),
             py::call_guard<py::gil_scoped_release>(),
-            "Get the next AssembledFrameSet (one time chunk, all beams) for\n"
-            "this consumer. The N-th call returns time_chunk_index =\n"
-            "initial_time_chunk + N.\n\n"
+            "Get the AssembledFrameSet (one time chunk, all beams) for the given\n"
+            "time_chunk_index, blocking until the worker thread has created it.\n\n"
+            "Receipt contract: every chunk index >= initial_time_chunk must be\n"
+            "requested exactly num_consumers times in total (once per logical\n"
+            "consumer, consecutive indices, no skips) -- the set is evicted from\n"
+            "the allocator's queue on its last receipt. Requesting an evicted\n"
+            "chunk raises; skipping a chunk deadlocks the pipeline.\n\n"
             "Releases the GIL: this may block on the allocator's worker\n"
             "thread (the sole producer of frame sets, in both dummy and\n"
             "non-dummy mode), which must not stall other Python threads\n"
             "(e.g. a sender thread running concurrently with a\n"
             "frame-provider thread).")
+        .def("get_num_consumers", &AssembledFrameAllocator::get_num_consumers,
+            "The num_consumers constructor argument: the receipt count at which\n"
+            "a set is evicted from the allocator's queue (see get_frame_set).")
         .def("get_metadata",
             [](AssembledFrameAllocator &self, bool blocking) {
                 auto m = self.get_metadata(blocking);
@@ -1334,25 +1344,21 @@ void register_core_bindings(pybind11::module &m)
         "    AssembledFrames")
           .def(py::init([](const std::string &address,
                            std::shared_ptr<AssembledFrameAllocator> allocator,
-                           long consumer_id,
                            bool misbehaving_reads) {
                Receiver::Params params;
                params.address = address;
                params.allocator = allocator;
-               params.consumer_id = consumer_id;
                params.misbehaving_reads = misbehaving_reads;
                return std::make_shared<Receiver>(params);
           }),
                py::arg("address"),
                py::arg("allocator"),
-               py::arg("consumer_id"),
                py::arg("misbehaving_reads") = false,
                "Create a Receiver (does not start worker threads).\n\n"
                "Args:\n"
                "    address: Address to bind to (e.g. '127.0.0.1:5000')\n"
                "    allocator: AssembledFrameAllocator for output frames\n"
                "        (time_samples_per_chunk is taken from the allocator).\n"
-               "    consumer_id: Consumer ID for the allocator\n"
                "    misbehaving_reads: If True, peer sockets accepted by\n"
                "        this Receiver will have set_misbehaving_reads()\n"
                "        called on them, which truncates each read() to a\n"

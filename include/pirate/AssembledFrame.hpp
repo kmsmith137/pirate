@@ -402,9 +402,9 @@ struct AssembledFrameAllocator
     // subsequent calls target_time_chunk is ignored and the previously-
     // established value is returned.
     //
-    // The first set returned by get_frame_set() has time_chunk_index =
-    // initial_time_chunk. Typically called by each Receiver's reader thread
-    // after it has parsed the first per-minichunk header.
+    // get_frame_set() accepts chunk indices starting at initial_time_chunk.
+    // Typically called by each Receiver's reader thread after it has parsed
+    // the first per-minichunk header.
     //
     // Thread-safe.
     //
@@ -417,29 +417,47 @@ struct AssembledFrameAllocator
     // Entry point: throws if stopped.
     long wait_for_initial_chunk();
 
-    // Each consumer calls get_frame_set() in a loop.
-    // The N-th call (N=0,1,2,...) returns the AssembledFrameSet for
-    // time_chunk_index = initial_time_chunk + N. The returned set contains
-    // one AssembledFrame per beam (in beam_ids order), all sharing this
-    // allocator's metadata pointer.
+    // Returns the AssembledFrameSet for the given time_chunk_index, blocking
+    // until the allocator's worker thread has created it. The returned set
+    // contains one AssembledFrame per beam (in beam_ids order), all sharing
+    // this allocator's metadata pointer. All callers requesting the same
+    // time_chunk_index receive the same shared_ptr<AssembledFrameSet> (not a
+    // copy) -- and therefore the same shared_ptr<AssembledFrame> for each
+    // beam inside the set.
     //
-    // All consumers receive the same sequence of sets, and the set object
-    // itself is shared: the N-th call returns the same shared_ptr<
-    // AssembledFrameSet> for all consumers (not a copy). (And therefore
-    // the same shared_ptr<AssembledFrame> for each beam inside the set.)
-    //
-    // The allocator holds a reference to each set until all consumers have
-    // received it. When the last consumer receives a set, the allocator
-    // drops its reference. (If all consumers have also dropped their
-    // references, then the underlying frames are deallocated.)
+    // RECEIPT CONTRACT. The allocator holds a reference to each set until
+    // the set has been requested num_consumers times, then drops it
+    // ("eviction" -- if all callers have also dropped their references, the
+    // underlying frames are deallocated). So every chunk index >=
+    // initial_time_chunk must be requested exactly num_consumers times in
+    // total: in the intended usage, once by each of num_consumers logical
+    // consumers, each requesting consecutive indices starting at
+    // initial_time_chunk. A request may run at most one chunk past the
+    // newest created set (it then blocks until the worker catches up);
+    // requests must not skip a chunk. Receipts are anonymous (the allocator
+    // cannot attribute them to callers), so misuse is only partially
+    // detectable:
+    //   - requesting an already-evicted chunk throws an informative error.
+    //     Note that a double-request inflates a receipt count and evicts the
+    //     set prematurely, so this throw can surface in a DIFFERENT,
+    //     innocent caller;
+    //   - a skipped chunk leaves its receipt count forever incomplete, so
+    //     the queue jams at capacity and all callers deadlock. Skips past
+    //     the creation frontier are caught by an xassert; skips within the
+    //     resident queue window are not detectable.
     //
     // Frame memory is allocated from 'slab_allocator', with nbytes =
-    // (nfreq * time_samples_per_chunk) / 2 per frame. One get_frame_set()
-    // call therefore corresponds to nbeams slab allocations.
+    // (nfreq * time_samples_per_chunk) / 2 per frame. One frame set
+    // corresponds to nbeams slab allocations (done by the worker thread).
     //
     // Entry point: throws if stopped, calls stop() on exception.
 
-    std::shared_ptr<AssembledFrameSet> get_frame_set(int consumer_id);
+    std::shared_ptr<AssembledFrameSet> get_frame_set(long time_chunk_index);
+
+    // Returns the num_consumers constructor argument: the receipt count at
+    // which a set is evicted from the internal queue (see get_frame_set()).
+    // Constructor-constant, so no lock is needed.
+    int get_num_consumers() const { return num_consumers; }
 
     // Returns the number of "available" frames: pre-initialized frames waiting for their first
     // consumer, plus free slabs in the underlying slab_allocator.
@@ -495,9 +513,9 @@ private:
     //   stopped). Signaled on: the latch in _initialize_initial_chunk()
     //   (notify_all -- one-shot latch), and stop().
     //
-    // queue_cv -- waiters: _get_frame_set() callers (predicate: this
-    //   consumer's next set is in frame_set_queue, or stopped). Signaled on:
-    //   set push in the worker thread (notify_all -- REQUIRED: every
+    // queue_cv -- waiters: _get_frame_set() callers (predicate: the
+    //   requested chunk's set is in frame_set_queue, or stopped). Signaled
+    //   on: set push in the worker thread (notify_all -- REQUIRED: every
     //   consumer receives every set once, so one new set can make several
     //   waiters ready; this is not a work-queue handoff), and stop().
     //
@@ -528,22 +546,17 @@ private:
     bool metadata_is_initialized = false;
 
     // Initial-chunk state. Set to true the first time any caller invokes
-    // initialize_initial_chunk(); immutable after that. The first set
-    // returned by get_frame_set() has time_chunk_index = initial_time_chunk.
-    // Both members protected by 'lock'.
+    // initialize_initial_chunk(); immutable after that. get_frame_set()
+    // accepts chunk indices starting at initial_time_chunk. Both members
+    // protected by 'lock'.
     //
     // When initial_chunk_set transitions to true (inside
-    // _initialize_initial_chunk), we seed queue_start_chunk_index,
-    // first_unreceived_chunk_index, and consumer_next_chunk_index[*] to
-    // initial_time_chunk -- so all chunk-indexed counters below are only
-    // meaningful once initial_chunk_set is true.
+    // _initialize_initial_chunk), we seed queue_start_chunk_index and
+    // first_unreceived_chunk_index to initial_time_chunk -- so all
+    // chunk-indexed counters below are only meaningful once
+    // initial_chunk_set is true.
     bool initial_chunk_set = false;
     long initial_time_chunk = 0;
-
-    // Per-consumer next-chunk-index for the get_frame_set() sequencing
-    // logic. Each entry is the time_chunk_index of the set this consumer
-    // will receive on its next get_frame_set() call.
-    std::vector<long> consumer_next_chunk_index;
 
     // Queue of sets: (set, num_consumers_received).
     // The worker thread -- the sole producer, in both dummy and non-dummy
@@ -577,7 +590,7 @@ private:
     // Internal implementations of entry points.
     void _initialize_metadata(const XEngineMetadata &metadata);
     long _initialize_initial_chunk(long target_time_chunk);
-    std::shared_ptr<AssembledFrameSet> _get_frame_set(int consumer_id);
+    std::shared_ptr<AssembledFrameSet> _get_frame_set(long time_chunk_index);
     void _block_until_low_memory(long nframe_threshold);
 
 public:

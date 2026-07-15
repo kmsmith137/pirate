@@ -104,7 +104,7 @@ struct SimulatedFrameFactory
     {
         // Source of AssembledFrameSets. Must be non-null, and must already have
         // been initialized (see class doc). num_consumers is expected to be 1
-        // (the factory is the sole consumer, at consumer_id 0).
+        // (the factory's producer thread is the sole consumer).
         std::shared_ptr<AssembledFrameAllocator> allocator;
 
         // If true, each frame's scales/offsets are calibrated to the per-zone
@@ -230,9 +230,6 @@ struct SimulatedFrameFactory
     // Construction parameters (validated in the constructor), immutable after
     // construction.
     const Params params;
-
-    // The factory is the sole consumer of 'params.allocator'.
-    static constexpr int consumer_id = 0;
 
     // ----- Derived from the allocator + its metadata at construction -----
 

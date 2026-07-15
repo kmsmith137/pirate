@@ -181,14 +181,20 @@ FrbServer::FrbServer(const Params &p) : params(p)
     // members to be present in the YAML.)
     params.config_prefilled.validate();
 
-    // Check that all recivers use the same allocator, and consumer IDs are consistent with ordering.
+    // Check that all receivers use the same allocator.
     for (uint i = 0; i < params.receivers.size(); i++) {
         xassert(params.receivers[i]);
         xassert(params.receivers[i]->params.allocator == params.receivers[0]->params.allocator);
-        xassert(params.receivers[i]->params.consumer_id == i);
     }
 
     this->frame_allocator = params.receivers[0]->params.allocator;
+
+    // The allocator evicts each frame set after num_consumers receipts, and
+    // each Receiver contributes exactly one receipt per chunk -- so the
+    // receiver count must match num_consumers exactly. (Fewer receivers ->
+    // the allocator's queue jams and everyone deadlocks; more -> premature
+    // eviction.)
+    xassert_eq(long(params.receivers.size()), long(frame_allocator->get_num_consumers()));
 
     // Verbose consistency check: the dedispersion config and the
     // frame_allocator must agree on time_samples_per_chunk. In the normal

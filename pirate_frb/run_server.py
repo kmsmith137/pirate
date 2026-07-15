@@ -519,10 +519,11 @@ class RunServerHelper:
                 num_ssd_threads=self.config['ssd_threads_per_server'],
                 num_nfs_threads=self.config['nfs_threads_per_server'],
             )
-            # Receivers: one per data IP address. No threads spawned in ctor.
+            # Receivers: one per data IP address (matching the allocator's
+            # num_consumers). No threads spawned in ctor.
             receivers = [
-                Receiver(address=addr, allocator=allocator, consumer_id=j)
-                for j, addr in enumerate(self.config['data_ip_addrs'][i])
+                Receiver(address=addr, allocator=allocator)
+                for addr in self.config['data_ip_addrs'][i]
             ]
             # FrbServer: ties together receivers, file writer, and RPC.
             # (Imported here to avoid circular import with __init__.py.)

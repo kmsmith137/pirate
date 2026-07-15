@@ -272,6 +272,14 @@ void SimulatedFrameFactory::_producer_main()
     // between consecutive FRBs rather than a constant shift of the whole stream.
     const long frb_gap_samples = std::llround(params.frb_gap_sec / (1.0e-3 * time_sample_ms));
 
+    // The producer thread is the allocator's sole consumer (num_consumers == 1)
+    // and requests consecutive chunks starting at the initial chunk. The class
+    // doc requires the allocator to be initialized before the factory is
+    // constructed, so this returns immediately in practice; if it does block
+    // and the factory is stopped, factory.stop() stops the allocator too, and
+    // the throw lands in producer_main()'s catch handler.
+    long tci = params.allocator->wait_for_initial_chunk();
+
     for (;;) {
         {
             unique_lock<mutex> lk(lock);
@@ -280,8 +288,7 @@ void SimulatedFrameFactory::_producer_main()
         }
 
         // Blocks on slab-pool backpressure; throws if the allocator is stopped.
-        shared_ptr<AssembledFrameSet> fset = params.allocator->get_frame_set(consumer_id);
-        long tci = fset->time_chunk_index;
+        shared_ptr<AssembledFrameSet> fset = params.allocator->get_frame_set(tci);
 
         // Assign a fresh pulse to every FRB-ready beam.
         if (params.simulate_frbs) {
@@ -329,6 +336,7 @@ void SimulatedFrameFactory::_producer_main()
             return;    // drop 'fset' -> its slabs return to the pool
         ready_queue.push_back(std::move(fset));
         queue_cv.notify_one();
+        tci++;
     }
 }
 

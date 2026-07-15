@@ -252,7 +252,6 @@ class NetworkTester:
             Receiver(
                 address     = f"127.0.0.1:{p['data_base_port'] + j}",
                 allocator   = self.allocator,
-                consumer_id = j,
                 # Per-Socket short-read misbehavior on every accepted
                 # peer socket. Strengthens the test by exercising the
                 # incremental-parse path against pathological short
@@ -410,12 +409,11 @@ class NetworkTester:
                 ichunk = imc // self.mpc                 # chunk index
 
                 while self.fspos <= ichunk:
-                    self.framesets[self.fspos] = self.client_allocator.get_frame_set(consumer_id=0)
+                    self.framesets[self.fspos] = self.client_allocator.get_frame_set(self.fspos)
                     # Serial randomization. This transport/assembly test doesn't
                     # check data normalization, so normalize=False (arbitrary
                     # scales/offsets) and uniform int4 are fine.
                     self.framesets[self.fspos].randomize(normalize=False, gaussian=False)
-                    assert self.framesets[self.fspos].time_chunk_index == self.fspos
                     self.fspos += 1
 
                 if skip:
@@ -672,9 +670,8 @@ class NetworkTester:
             for imc in range(int(self.wpos[w]), target_mc):
                 ichunk = imc // self.mpc
                 while self.fspos <= ichunk:
-                    self.framesets[self.fspos] = self.client_allocator.get_frame_set(consumer_id=0)
+                    self.framesets[self.fspos] = self.client_allocator.get_frame_set(self.fspos)
                     self.framesets[self.fspos].randomize(normalize=False, gaussian=False)
-                    assert self.framesets[self.fspos].time_chunk_index == self.fspos
                     self.fspos += 1
                 self.fxe.enqueue_send_minichunk(w, imc, self.framesets[ichunk])
             if self.wpos[w] < target_mc:

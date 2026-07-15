@@ -7,9 +7,11 @@ Tests covered:
   - Test 5: Multi-consumer scenarios (set/frame identity, independent progress)
   - Test 6 (partial): Set recycling
 
-The allocator hands out one AssembledFrameSet (= nbeams frames for one time
-chunk) per get_frame_set() call. Frame identity within a set is determined
-by the allocator -- frames[i].beam_id == metadata.beam_ids[i].
+get_frame_set(time_chunk_index) returns the AssembledFrameSet (= nbeams
+frames) for one time chunk; each chunk must be requested exactly
+num_consumers times in total (the set is evicted on its last receipt).
+Frame identity within a set is determined by the allocator --
+frames[i].beam_id == metadata.beam_ids[i].
 
 Run via: python -m pirate_frb test --net
 """
@@ -93,9 +95,8 @@ def test_sequence_ordering():
     """
     Test 4: Sequence ordering.
 
-    Verifies that get_frame_set() returns one set per call with monotonically
-    increasing time_chunk_index, and that each set contains frames in
-    metadata.beam_ids order.
+    Verifies that get_frame_set(chunk_idx) returns the set for exactly that
+    chunk index, and that each set contains frames in metadata.beam_ids order.
     """
     print("  test_sequence_ordering()...")
 
@@ -116,7 +117,7 @@ def test_sequence_ordering():
 
     # Walk through num_chunks sets and verify each.
     for chunk_idx in range(num_chunks):
-        fset = alloc.get_frame_set(0)
+        fset = alloc.get_frame_set(chunk_idx)
         assert fset.time_chunk_index == chunk_idx, \
             f"Set {chunk_idx}: expected time_chunk_index={chunk_idx}, got {fset.time_chunk_index}"
         assert len(fset.frames) == len(beam_ids)
@@ -133,7 +134,7 @@ def test_single_beam_sequence():
     """
     Test 4 (edge case): Single beam sequence.
 
-    Each set has exactly one frame; time_chunk_index increments by one per call.
+    Each set has exactly one frame; chunk indices 0..4 requested in order.
     """
     print("  test_single_beam_sequence()...")
 
@@ -147,7 +148,7 @@ def test_single_beam_sequence():
     alloc.initialize_initial_chunk(0)
 
     for chunk_idx in range(5):
-        fset = alloc.get_frame_set(0)
+        fset = alloc.get_frame_set(chunk_idx)
         assert fset.time_chunk_index == chunk_idx
         assert len(fset.frames) == 1
         frame = fset.frames[0]
@@ -161,9 +162,9 @@ def test_multi_consumer_frame_identity():
     """
     Test 5: Multi-consumer set+frame identity.
 
-    Verifies that multiple consumers calling get_frame_set() at the same chunk
-    index receive the exact same set object (and therefore the exact same
-    frame objects inside the set).
+    Verifies that multiple consumers requesting the same chunk index receive
+    the exact same set object (and therefore the exact same frame objects
+    inside the set).
     """
     print("  test_multi_consumer_frame_identity()...")
 
@@ -177,12 +178,12 @@ def test_multi_consumer_frame_identity():
 
     # Initialize the allocator (one initialize_metadata call is enough, but
     # the multi-call path is tested incidentally).
-    for consumer_id in range(num_consumers):
+    for _ in range(num_consumers):
         alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
     alloc.initialize_initial_chunk(0)
 
-    # Get the first set from each consumer; all should be the same object.
-    sets0 = [alloc.get_frame_set(consumer_id) for consumer_id in range(num_consumers)]
+    # Request chunk 0 once per consumer; all should get the same object.
+    sets0 = [alloc.get_frame_set(0) for _ in range(num_consumers)]
     for i in range(1, num_consumers):
         assert sets0[i] is sets0[0], \
             f"Consumer {i} got a different set object than consumer 0"
@@ -196,8 +197,8 @@ def test_multi_consumer_frame_identity():
     for i in range(1, num_consumers):
         assert np.asarray(sets0[i].frames[0].data)[0, 0] == 0xAB
 
-    # Get the second set and verify identity again.
-    sets1 = [alloc.get_frame_set(consumer_id) for consumer_id in range(num_consumers)]
+    # Request chunk 1 once per consumer and verify identity again.
+    sets1 = [alloc.get_frame_set(1) for _ in range(num_consumers)]
     for i in range(1, num_consumers):
         assert sets1[i] is sets1[0], \
             f"Consumer {i} got a different second-set object than consumer 0"
@@ -225,15 +226,15 @@ def test_multi_consumer_independent_progress():
     slab = make_slab_allocator()
     alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
 
-    for consumer_id in range(num_consumers):
+    for _ in range(num_consumers):
         alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
     alloc.initialize_initial_chunk(0)
 
     # Consumer 0 reads 2 chunks (= 2 sets).
-    sets_c0 = [alloc.get_frame_set(0) for _ in range(2)]
+    sets_c0 = [alloc.get_frame_set(chunk) for chunk in range(2)]
 
     # Consumer 1 reads only 1 chunk so far.
-    sets_c1 = [alloc.get_frame_set(1) for _ in range(1)]
+    sets_c1 = [alloc.get_frame_set(0)]
 
     # Verify consumer 0's chunk indices and per-frame beam_ids.
     for chunk_idx, fset in enumerate(sets_c0):
@@ -247,7 +248,7 @@ def test_multi_consumer_independent_progress():
     assert sets_c1[0] is sets_c0[0], \
         "First set should be shared between consumers"
 
-    # Consumer 1 catches up.
+    # Consumer 1 catches up (requests chunk 1).
     sets_c1.append(alloc.get_frame_set(1))
     assert sets_c1[1] is sets_c0[1], \
         "Second set should be shared between consumers"
@@ -288,7 +289,7 @@ def test_frame_recycling():
     slab = make_slab_allocator(capacity=capacity)
     alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
 
-    for consumer_id in range(num_consumers):
+    for _ in range(num_consumers):
         alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
     alloc.initialize_initial_chunk(0)
 
@@ -297,8 +298,8 @@ def test_frame_recycling():
     initial_total = alloc.num_total_frames()
     assert initial_total == 3, f"Expected 3 total frames, got {initial_total}"
 
-    # Consumer 1 gets set 0 - same set object, no new allocation.
-    set0_c1 = alloc.get_frame_set(1)
+    # Consumer 1 requests chunk 0 - same set object, no new allocation.
+    set0_c1 = alloc.get_frame_set(0)
     assert set0_c1 is set0_c0
 
     # Release references - set should be recycled.
@@ -306,7 +307,7 @@ def test_frame_recycling():
     del set0_c1
 
     # Allocate again after recycling.
-    set1_c0 = alloc.get_frame_set(0)
+    set1_c0 = alloc.get_frame_set(1)
     assert set1_c0.time_chunk_index == 1
     set1_c1 = alloc.get_frame_set(1)
     assert set1_c1 is set1_c0
@@ -317,10 +318,10 @@ def test_frame_recycling():
     # With only 3 slabs but 20 sets, recycling must be happening.
     num_sets_to_allocate = 20
     for i in range(num_sets_to_allocate):
-        s0 = alloc.get_frame_set(0)
+        s0 = alloc.get_frame_set(2 + i)
         assert s0.time_chunk_index == 2 + i, \
             f"Expected chunk index {2+i}, got {s0.time_chunk_index}"
-        s1 = alloc.get_frame_set(1)
+        s1 = alloc.get_frame_set(2 + i)
         assert s1 is s0
         del s0
         del s1
@@ -353,7 +354,7 @@ def test_frame_recycling_with_held_reference():
     slab = make_slab_allocator(capacity=capacity)
     alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
 
-    for consumer_id in range(num_consumers):
+    for _ in range(num_consumers):
         alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
     alloc.initialize_initial_chunk(0)
 
@@ -366,11 +367,11 @@ def test_frame_recycling_with_held_reference():
     initial_free = alloc.num_free_frames()
     assert 0 <= initial_free <= 3, f"Free frames out of range: {initial_free}"
 
-    set1 = alloc.get_frame_set(0)
-    set2 = alloc.get_frame_set(0)
+    set1 = alloc.get_frame_set(1)
+    set2 = alloc.get_frame_set(2)
 
-    # Consumer 1 gets set 0 - same object as set0.
-    set0_c1 = alloc.get_frame_set(1)
+    # Consumer 1 requests chunk 0 - same object as set0.
+    set0_c1 = alloc.get_frame_set(0)
     assert set0_c1 is set0
 
     # Both consumers have received set 0; allocator drops its reference.
@@ -386,13 +387,13 @@ def test_frame_recycling_with_held_reference():
     del set1
     del set2
 
-    # Consumer 1 catches up. Consumer 1 is the last receiver, so the
-    # allocator drops its reference. Consumer 0 already released its
-    # reference, so sets 1 and 2 are recycled immediately.
+    # Consumer 1 catches up (chunks 1 and 2). Consumer 1 is the last
+    # receiver, so the allocator drops its reference. Consumer 0 already
+    # released its reference, so sets 1 and 2 are recycled immediately.
     set1_c1 = alloc.get_frame_set(1)
     free_after_set1 = alloc.num_free_frames()
 
-    set2_c1 = alloc.get_frame_set(1)
+    set2_c1 = alloc.get_frame_set(2)
     free_after_set2 = alloc.num_free_frames()
 
     assert free_after_set2 >= free_after_set1, \

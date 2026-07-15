@@ -319,7 +319,6 @@ class ServerTester:
             Receiver(
                 address     = f"127.0.0.1:{p['data_base_port'] + j}",
                 allocator   = allocator,
-                consumer_id = j,
                 misbehaving_reads = True,   # stress the parser; doesn't alter data
             )
             for j in range(p['num_receivers'])

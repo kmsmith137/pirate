@@ -138,7 +138,6 @@ Receiver::Receiver(const Params &p) : params(p)
     parse_ip_address(params.address, this->ip_addr, this->tcp_port);
 
     xassert(params.allocator);
-    xassert(params.consumer_id >= 0);
     // time_samples_per_chunk lives on the allocator (validated > 0 at
     // allocator construction). The divisibility-by-256 check is specific
     // to the network protocol's minichunk size, so we enforce it here at
@@ -737,9 +736,7 @@ void Receiver::_assembler_main()
 
     for (long offset = 0; offset < 2; offset++) {
         long chunk_idx = initial_time_chunk + offset;
-        auto set = params.allocator->get_frame_set(params.consumer_id);
-        xassert(set->time_chunk_index == chunk_idx);
-        this->curr_frame_sets[offset] = std::move(set);
+        this->curr_frame_sets[offset] = params.allocator->get_frame_set(chunk_idx);
     }
 
     // Main loop. We have two kinds of work:
@@ -1015,9 +1012,7 @@ void Receiver::_advance_one_chunk()
     // Step 3: pull a fresh set for the chunk newly entering the top of the
     // 2-chunk window. allocator->get_frame_set() may block briefly while
     // the allocator's worker thread refills the slab pool.
-    shared_ptr<AssembledFrameSet> fresh = params.allocator->get_frame_set(params.consumer_id);
-    xassert(fresh->time_chunk_index == ichunk_new);
-    this->curr_frame_sets[1] = std::move(fresh);
+    this->curr_frame_sets[1] = params.allocator->get_frame_set(ichunk_new);
 
     this->curr_base_chunk++;
 }
