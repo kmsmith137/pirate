@@ -1023,8 +1023,11 @@ void register_core_bindings(pybind11::module &m)
     // FakeXEngine: simulates multiple upstream X-engine nodes sending data to a receiver.
     // Driven externally by a controller thread that submits SEND_JUNK commands
     // via enqueue_send_junk() and synchronizes via wait_until_processed().
-    // Skipped members: mutex, cv, error, workers (internal state)
-    // Skipped methods: _throw_if_stopped, make_worker_metadata, worker_main, _worker_main, _send_all (private)
+    // The Params struct is not bound: the constructor takes its fields as individual
+    // kwargs, and selected fields are exposed as read-only properties routed through
+    // self.params (so the python-side surface is unchanged by the Params refactor).
+    // Skipped members: workers, is_stopped_cache (internal state)
+    // Skipped methods: make_worker_metadata, worker_main, _worker_main, _send_all (private)
     py::class_<FakeXEngine, std::shared_ptr<FakeXEngine>>(m, "FakeXEngine",
         "Simulates multiple upstream X-engine nodes sending data to a receiver.\n\n"
         "Creates 'nworkers' worker threads in the constructor; each worker\n"
@@ -1044,9 +1047,20 @@ void register_core_bindings(pybind11::module &m)
         "        # calls fxe.enqueue_send_junk / fxe.wait_until_processed in a loop.\n"
         "    # ... wait ...\n"
         "    fxe.stop()   # signals workers and any in-flight entry points to exit")
-          .def(py::init<const std::shared_ptr<const XEngineMetadata> &,
-                        const std::vector<std::string> &,
-                        int, long, bool, bool, const std::string &>(),
+          .def(py::init([](const std::shared_ptr<const XEngineMetadata> &xmd,
+                           const std::vector<std::string> &ip_addrs,
+                           int nworkers, long time_samples_per_chunk,
+                           bool debug, bool paced, const std::string &rpc_address) {
+               FakeXEngine::Params params;
+               params.xmd = xmd;
+               params.ip_addrs = ip_addrs;
+               params.nworkers = nworkers;
+               params.time_samples_per_chunk = time_samples_per_chunk;
+               params.debug = debug;
+               params.paced = paced;
+               params.rpc_address = rpc_address;
+               return std::make_shared<FakeXEngine>(params);
+          }),
                py::arg("xmd"), py::arg("ip_addrs"), py::arg("nworkers"),
                py::arg("time_samples_per_chunk"),
                py::arg("debug") = false,
@@ -1315,17 +1329,22 @@ void register_core_bindings(pybind11::module &m)
                "Note: workers may still be in the process of exiting at the moment\n"
                "this returns true. Rely on the destructor's thread join if you need\n"
                "to know they've fully finished.")
-          .def_readonly("xmd", &FakeXEngine::xmd,
+          .def_property_readonly("xmd",
+               [](const FakeXEngine &self) { return self.params.xmd; },
                "X-engine metadata")
-          .def_readonly("ip_addrs", &FakeXEngine::ip_addrs,
+          .def_property_readonly("ip_addrs",
+               [](const FakeXEngine &self) { return self.params.ip_addrs; },
                "Receiver addresses in 'ip:port' format")
-          .def_readonly("nworkers", &FakeXEngine::nworkers,
+          .def_property_readonly("nworkers",
+               [](const FakeXEngine &self) { return self.params.nworkers; },
                "Number of worker threads")
-          .def_readonly("time_samples_per_chunk", &FakeXEngine::time_samples_per_chunk,
+          .def_property_readonly("time_samples_per_chunk",
+               [](const FakeXEngine &self) { return self.params.time_samples_per_chunk; },
                "Receiver-side chunk size in samples")
           .def_readonly("minichunks_per_chunk", &FakeXEngine::minichunks_per_chunk,
                "= time_samples_per_chunk / 256")
-          .def_readonly("debug", &FakeXEngine::debug,
+          .def_property_readonly("debug",
+               [](const FakeXEngine &self) { return self.params.debug; },
                "True if the FakeXEngine was constructed with debug=True.\n"
                "Read-only after construction.")
           .def_property_readonly_static("protocol_magic",

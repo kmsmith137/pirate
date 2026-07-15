@@ -450,59 +450,71 @@ struct FakeXEngine
 
     // ----- Constructor args -----
 
-    // Top-level metadata template; the constructor stores the shared_ptr
-    // handed in by the caller. freq_channels: typically FREQUENCY-SCRUBBED
-    // (empty) on the way in -- it's IGNORED here regardless, because
-    // make_worker_metadata() builds each Worker's xmd by copying this
-    // template and overwriting freq_channels with the per-worker
-    // round-robin subset (see Worker::xmd above). Non-null (the
-    // constructor throws if the caller passes nullptr).
-    const std::shared_ptr<const XEngineMetadata> xmd;
-    const std::vector<std::string> ip_addrs;  // each element is "ip:port"
-    const int nworkers;
+    struct Params
+    {
+        // Top-level metadata template; the constructor stores the shared_ptr
+        // handed in by the caller. freq_channels: typically FREQUENCY-SCRUBBED
+        // (empty) on the way in -- it's IGNORED here regardless, because
+        // make_worker_metadata() builds each Worker's xmd by copying this
+        // template and overwriting freq_channels with the per-worker
+        // round-robin subset (see Worker::xmd above). Non-null (the
+        // constructor throws if the caller passes nullptr).
+        std::shared_ptr<const XEngineMetadata> xmd;
 
-    // Receiver-side time_samples_per_chunk (from the FrbServer's
-    // AssembledFrameAllocator). Required for the ack-prediction
-    // assertion in _read_acks: it maps wire minichunk_index ->
-    // chunk index via
-    //   minichunks_per_chunk = time_samples_per_chunk / 256.
-    // Non-optional. Validated in the constructor to be > 0 and a
-    // multiple of 256.
-    const long time_samples_per_chunk;
+        // Receiver addresses; each element is "ip:port". Each address
+        // corresponds to one Receiver on the FrbServer; workers are
+        // assigned to addresses round-robin (worker_id % ip_addrs.size()).
+        std::vector<std::string> ip_addrs;
 
-    // Adds real-time debugging checks with nontrivial cpu/network
-    // cost, and unbounded memory usage. Useful for unit tests, but
-    // don't use in production!
-    const bool debug;
+        // Number of worker threads. Must be positive, a multiple of
+        // ip_addrs.size(), and <= xmd->get_total_nfreq(). Worker threads
+        // inherit the vcpu affinity of the thread that calls the
+        // FakeXEngine constructor -- Python callers MUST call the
+        // constructor inside a ThreadAffinity context manager.
+        int nworkers = 0;
 
-    // ----- Paced-mode config (constants after ctor) -----
-    //
-    // When true, FakeXEngine spawns a pacing thread that opens a
-    // MonitorRingbuf streaming RPC to the FrbServer and gates each
-    // worker's sends to stay <=5 chunks ahead of server-side
-    // rb_processed. See the paced-mode discussion in the class doc-comment.
-    const bool paced;
+        // Receiver-side time_samples_per_chunk (from the FrbServer's
+        // AssembledFrameAllocator). Required for the ack-prediction
+        // assertion in _read_acks: it maps wire minichunk_index ->
+        // chunk index via
+        //   minichunks_per_chunk = time_samples_per_chunk / 256.
+        // Non-optional. Validated in the constructor to be > 0 and a
+        // multiple of 256.
+        long time_samples_per_chunk = 0;
 
-    // gRPC address ("ip:port") of the FrbServer's RPC endpoint. Required
-    // (non-empty) when paced=true; ignored when paced=false (a non-empty
-    // value is silently accepted).
-    const std::string rpc_address;
+        // Adds real-time debugging checks with nontrivial cpu/network
+        // cost, and unbounded memory usage. Useful for unit tests, but
+        // don't use in production!
+        bool debug = false;
 
-    // = xmd->get_nbeams(). Cached at construction for use in the
+        // When true, FakeXEngine spawns a pacing thread that opens a
+        // MonitorRingbuf streaming RPC to the FrbServer and gates each
+        // worker's sends to stay <=5 chunks ahead of server-side
+        // rb_processed. See the paced-mode discussion in the class
+        // doc-comment.
+        bool paced = true;
+
+        // gRPC address ("ip:port") of the FrbServer's RPC endpoint. Required
+        // (non-empty) when paced=true; ignored when paced=false (a non-empty
+        // value is silently accepted).
+        std::string rpc_address;
+    };
+
+    const Params params;
+
+    // ----- Derived from params (constants after ctor) -----
+
+    // = params.xmd->get_nbeams(). Cached at construction for use in the
     // paced-mode gate (which computes 5-chunks-ahead in units of
     // frames = chunks * nbeams).
     const long nbeams;
 
-    // ----- Derived from time_samples_per_chunk -----
-
-    // = time_samples_per_chunk / 256. Number of wire minichunks per
+    // = params.time_samples_per_chunk / 256. Number of wire minichunks per
     // assembled chunk on the receiver side. Used by the ack-prediction
     // assertion to convert minichunk_index -> chunk_index.
     const long minichunks_per_chunk;
 
-    // ----- Derived from ip_addrs -----
-
-    // = long(ip_addrs.size()). Each ip_addr corresponds to one
+    // = long(params.ip_addrs.size()). Each ip_addr corresponds to one
     // Receiver on the FrbServer; each worker is assigned to one
     // Receiver via round-robin (worker.receiver_id = worker_id %
     // num_receivers, set in _initialize).
@@ -619,42 +631,17 @@ struct FakeXEngine
 
     // ----- Public interface -----
 
-    // Constructor: validates args, then spawns nworkers worker threads.
-    // Each worker thread inherits the vcpu affinity of the caller. Each
-    // element of 'ip_addrs' is "ip:port" format. nworkers must be a
-    // multiple of ip_addrs.size().
+    // Constructor: validates params, then spawns params.nworkers worker
+    // threads; when params.paced is true, also spawns the pacing thread.
+    // Per-argument semantics and validation rules are documented on the
+    // Params fields above.
     //
-    // time_samples_per_chunk: receiver-side chunk size (in samples).
-    // Must equal the FrbServer's
-    // AssembledFrameAllocator::time_samples_per_chunk. Must be
-    // positive and a multiple of 256.
-    //
-    // debug (default false): Adds real-time debugging checks with
-    // nontrivial cpu/network cost, and unbounded memory usage. Useful
-    // for unit tests, but don't use in production!
-    //
-    // Python callers MUST call the constructor inside a ThreadAffinity
-    // context manager so the spawned worker threads are pinned to the
-    // intended vcpus.
-    // xmd: required, non-null. xmd->freq_channels is IGNORED --
-    // make_worker_metadata() overwrites freq_channels per-worker, so the
-    // caller can pass either a meaningful or frequency-scrubbed xmd (the
-    // latter is the typical case, e.g. from XEngineMetadata::make_fiducial).
-    //
-    // paced (default true): if true, also spawns a pacing thread that
-    // holds a MonitorRingbuf streaming RPC to the FrbServer at
-    // rpc_address. Worker threads gate sends to stay <=5 chunks ahead
-    // of server-side rb_processed. rpc_address must be non-empty when
-    // paced=true; ignored (silently accepted) when paced=false.
-    //
-    // rpc_address: "ip:port" of the FrbServer's gRPC endpoint. Required
-    // when paced=true; pass empty string when paced=false.
-    FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd,
-                const std::vector<std::string> &ip_addrs,
-                int nworkers, long time_samples_per_chunk,
-                bool debug = false,
-                bool paced = true,
-                const std::string &rpc_address = "");
+    // Worker threads inherit the vcpu affinity of the caller, so Python
+    // callers MUST call the constructor inside a ThreadAffinity context
+    // manager. (The pybind11 wrapper takes the Params fields as individual
+    // keyword arguments, so the python-side constructor syntax is
+    // unchanged by the Params struct.)
+    FakeXEngine(const Params &params);
 
     // Destructor calls stop() and joins worker threads.
     ~FakeXEngine();

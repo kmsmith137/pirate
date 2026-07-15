@@ -86,73 +86,64 @@ static void _stop_one_worker(FakeXEngine::Worker &w, std::exception_ptr e)
 }
 
 
-FakeXEngine::FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd_,
-                         const std::vector<std::string> &ip_addrs_,
-                         int nworkers_, long time_samples_per_chunk_,
-                         bool debug_, bool paced_,
-                         const std::string &rpc_address_) :
-    xmd(xmd_),
-    ip_addrs(ip_addrs_),
-    nworkers(nworkers_),
-    time_samples_per_chunk(time_samples_per_chunk_),
-    debug(debug_),
-    paced(paced_),
-    rpc_address(rpc_address_),
-    nbeams(xmd_ ? xmd_->get_nbeams() : 0),  // null xmd is rejected below; guard avoids null-deref
-    minichunks_per_chunk(time_samples_per_chunk_ / 256),
-    num_receivers(long(ip_addrs_.size()))
+FakeXEngine::FakeXEngine(const Params &params_) :
+    params(params_),
+    // null xmd is rejected below; guard avoids null-deref
+    nbeams(params_.xmd ? params_.xmd->get_nbeams() : 0),
+    minichunks_per_chunk(params_.time_samples_per_chunk / 256),
+    num_receivers(long(params_.ip_addrs.size()))
 {
-    if (!xmd)
+    if (!params.xmd)
         throw runtime_error("FakeXEngine: xmd is null");
-    if (ip_addrs.empty())
+    if (params.ip_addrs.empty())
         throw runtime_error("FakeXEngine: ip_addrs is empty");
-    xassert(nworkers > 0);
+    xassert(params.nworkers > 0);
 
     // Paced mode requires an rpc_address. Non-paced silently accepts a
     // non-empty rpc_address (and ignores it).
-    if (paced && rpc_address.empty()) {
+    if (params.paced && params.rpc_address.empty()) {
         throw runtime_error(
             "FakeXEngine: paced=true requires a non-empty rpc_address");
     }
 
-    if (time_samples_per_chunk <= 0) {
+    if (params.time_samples_per_chunk <= 0) {
         stringstream ss;
-        ss << "FakeXEngine: time_samples_per_chunk=" << time_samples_per_chunk
+        ss << "FakeXEngine: time_samples_per_chunk=" << params.time_samples_per_chunk
            << " must be positive";
         throw runtime_error(ss.str());
     }
-    if ((time_samples_per_chunk % 256) != 0) {
+    if ((params.time_samples_per_chunk % 256) != 0) {
         stringstream ss;
-        ss << "FakeXEngine: time_samples_per_chunk=" << time_samples_per_chunk
+        ss << "FakeXEngine: time_samples_per_chunk=" << params.time_samples_per_chunk
            << " must be a multiple of 256";
         throw runtime_error(ss.str());
     }
 
-    long naddrs = ip_addrs.size();
-    if (nworkers % naddrs != 0) {
+    long naddrs = params.ip_addrs.size();
+    if (params.nworkers % naddrs != 0) {
         stringstream ss;
-        ss << "FakeXEngine: nworkers=" << nworkers
+        ss << "FakeXEngine: nworkers=" << params.nworkers
            << " is not a multiple of ip_addrs.size()=" << naddrs;
         throw runtime_error(ss.str());
     }
 
     // Validate all addresses (parse early to catch errors before threads spawn).
-    for (const auto &addr : ip_addrs) {
+    for (const auto &addr : params.ip_addrs) {
         string ip;
         uint16_t port;
         parse_ip_address(addr, ip, port);
     }
 
     // Validate that XEngineMetadata has enough frequency channels for all workers.
-    long total_nfreq = xmd->get_total_nfreq();
-    if (total_nfreq < nworkers) {
+    long total_nfreq = params.xmd->get_total_nfreq();
+    if (total_nfreq < params.nworkers) {
         stringstream ss;
-        ss << "FakeXEngine: nworkers=" << nworkers
+        ss << "FakeXEngine: nworkers=" << params.nworkers
            << " but total frequency channels=" << total_nfreq;
         throw runtime_error(ss.str());
     }
 
-    xmd->validate();
+    params.xmd->validate();
 
     // Size the per-Receiver ack high-water-mark vector and seed each
     // entry to -1. Can't use std::vector(n, atomic<long>{-1}) because
@@ -172,8 +163,8 @@ FakeXEngine::FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd_,
     // neither copyable nor movable). Then spawn the worker threads.
     // Workers inherit the vcpu affinity of the caller (the documented
     // constructor contract).
-    workers.reserve(nworkers);
-    for (int i = 0; i < nworkers; i++)
+    workers.reserve(params.nworkers);
+    for (int i = 0; i < params.nworkers; i++)
         workers.push_back(std::make_unique<Worker>());
 
     // In paced mode, allocate the MonitorRingbuf ClientContext before
@@ -181,17 +172,17 @@ FakeXEngine::FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd_,
     // is safe to call from any of them. The channel + Stub are NOT
     // members -- they live as locals in _pacing_thread_main; see
     // FakeXEngine.hpp for the forward-decl rationale.
-    if (paced)
+    if (params.paced)
         pacing_ctx = std::make_unique<grpc::ClientContext>();
 
     try {
-        for (int i = 0; i < nworkers; i++)
+        for (int i = 0; i < params.nworkers; i++)
             workers[i]->worker_thread = std::thread(&FakeXEngine::worker_main, this, i);
 
         // Spawn the pacing thread after the workers so that any incoming
         // MonitorRingbuf message can immediately broadcast to a fully
         // populated 'workers' vector.
-        if (paced)
+        if (params.paced)
             pacing_thread = std::thread(&FakeXEngine::pacing_thread_main, this);
     } catch (...) {
         // Partial-spawn cleanup: signal stop so any workers that did start
@@ -264,7 +255,7 @@ void FakeXEngine::stop(std::exception_ptr e) const
     // pacing thread's blocked Read() returns false. TryCancel is
     // safe to call concurrently with any gRPC operation; it's a
     // no-op if the call has already completed.
-    if (paced && pacing_ctx)
+    if (params.paced && pacing_ctx)
         pacing_ctx->TryCancel();
 }
 
@@ -272,14 +263,14 @@ void FakeXEngine::stop(std::exception_ptr e) const
 vector<long> FakeXEngine::get_worker_freq_channels(long worker_id) const
 {
     xassert(worker_id >= 0);
-    xassert(worker_id < nworkers);
+    xassert(worker_id < params.nworkers);
 
-    long total_nfreq = xmd->get_total_nfreq();
+    long total_nfreq = params.xmd->get_total_nfreq();
 
     // Assign frequency channels round-robin to this worker.
     // Worker 'worker_id' gets channels: worker_id, worker_id + nworkers, worker_id + 2*nworkers, ...
     vector<long> freq_channels;
-    for (long ch = worker_id; ch < total_nfreq; ch += nworkers)
+    for (long ch = worker_id; ch < total_nfreq; ch += params.nworkers)
         freq_channels.push_back(ch);
 
     return freq_channels;
@@ -289,7 +280,7 @@ vector<long> FakeXEngine::get_worker_freq_channels(long worker_id) const
 XEngineMetadata FakeXEngine::make_worker_metadata(int worker_id) const
 {
     // Copy the master metadata, patch freq_channels for this worker, return.
-    XEngineMetadata ret = *xmd;
+    XEngineMetadata ret = *params.xmd;
     ret.freq_channels = get_worker_freq_channels(worker_id);
     return ret;
 }
@@ -355,7 +346,7 @@ bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbyte
         // warning to cout and reset the timer so we'll print again
         // after each additional 1s of stuckness.
         if (clock::now() >= stall_deadline) {
-            if (debug) {
+            if (params.debug) {
                 std::stringstream ss;
                 ss << "FakeXEngine::_send_all: stalled >1s sending to "
                    << w.ip_addr << ":" << w.port
@@ -394,10 +385,10 @@ bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbyte
 bool FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancing,
                            const char *method_name)
 {
-    if (worker_id < 0 || worker_id >= long(nworkers)) {
+    if (worker_id < 0 || worker_id >= long(params.nworkers)) {
         stringstream ss;
         ss << method_name << ": worker_id=" << worker_id
-           << " out of range [0, " << nworkers << ")";
+           << " out of range [0, " << params.nworkers << ")";
         throw runtime_error(ss.str());
     }
 
@@ -436,7 +427,7 @@ bool FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancin
         // invariant
         //   minichunk_status.size() == last_queued_minichunk - first_minichunk + 1
         // holds.
-        if (debug)
+        if (params.debug)
             w.minichunk_status.push_back(STATUS_QUEUED);
     }
 
@@ -531,10 +522,10 @@ bool FakeXEngine::enqueue_disconnect(long worker_id)
 
 bool FakeXEngine::is_connected(long worker_id) const
 {
-    if (worker_id < 0 || worker_id >= long(nworkers)) {
+    if (worker_id < 0 || worker_id >= long(params.nworkers)) {
         stringstream ss;
         ss << "FakeXEngine::is_connected: worker_id=" << worker_id
-           << " out of range [0, " << nworkers << ")";
+           << " out of range [0, " << params.nworkers << ")";
         throw runtime_error(ss.str());
     }
     // No stopped-check: this is an informational query, and the
@@ -547,10 +538,10 @@ bool FakeXEngine::is_connected(long worker_id) const
 bool FakeXEngine::wait_until_processed(long worker_id, long minichunk_index)
 {
     try {
-        if (worker_id < 0 || worker_id >= long(nworkers)) {
+        if (worker_id < 0 || worker_id >= long(params.nworkers)) {
             stringstream ss;
             ss << "FakeXEngine::wait_until_processed: worker_id=" << worker_id
-               << " out of range [0, " << nworkers << ")";
+               << " out of range [0, " << params.nworkers << ")";
             throw runtime_error(ss.str());
         }
 
@@ -574,7 +565,7 @@ bool FakeXEngine::wait_until_processed(long worker_id, long minichunk_index)
 bool FakeXEngine::enqueue_wait_for_acks(long worker_id)
 {
     try {
-        if (!debug)
+        if (!params.debug)
             throw runtime_error(
                 "FakeXEngine::enqueue_wait_for_acks: FakeXEngine was not"
                 " constructed with debug=true (so there are no acks to wait for)");
@@ -593,10 +584,10 @@ bool FakeXEngine::enqueue_wait_for_acks(long worker_id)
 bool FakeXEngine::synchronize(long worker_id)
 {
     try {
-        if (worker_id < 0 || worker_id >= long(nworkers)) {
+        if (worker_id < 0 || worker_id >= long(params.nworkers)) {
             stringstream ss;
             ss << "FakeXEngine::synchronize: worker_id=" << worker_id
-               << " out of range [0, " << nworkers << ")";
+               << " out of range [0, " << params.nworkers << ")";
             throw runtime_error(ss.str());
         }
 
@@ -605,7 +596,7 @@ bool FakeXEngine::synchronize(long worker_id)
         // when that finishes the centralized drain_cv notify in
         // _worker_main fires, which wakes us from the wait below. A false
         // return means "cleanly stopped" -- report the same from here.
-        if (debug) {
+        if (params.debug) {
             if (!enqueue_wait_for_acks(worker_id))
                 return false;
         }
@@ -664,13 +655,13 @@ bool FakeXEngine::synchronize(long worker_id)
 
 unsigned char FakeXEngine::get_minichunk_status(long worker_id, long minichunk_index) const
 {
-    if (worker_id < 0 || worker_id >= long(nworkers)) {
+    if (worker_id < 0 || worker_id >= long(params.nworkers)) {
         stringstream ss;
         ss << "FakeXEngine::get_minichunk_status: worker_id=" << worker_id
-           << " out of range [0, " << nworkers << ")";
+           << " out of range [0, " << params.nworkers << ")";
         throw runtime_error(ss.str());
     }
-    if (!debug)
+    if (!params.debug)
         throw runtime_error(
             "FakeXEngine::get_minichunk_status: FakeXEngine was not"
             " constructed with debug=true");
@@ -763,7 +754,7 @@ void FakeXEngine::_initialize(int worker_id)
     // the FakeXEngine was constructed with debug=true.
     {
         uint32_t magic = protocol_magic;
-        uint32_t flags = debug ? FLAG_ACK : 0u;
+        uint32_t flags = params.debug ? FLAG_ACK : 0u;
         uint32_t len32 = static_cast<uint32_t>(padded_len);
         std::memcpy(w.send_buf.data() + 0, &magic, 4);
         std::memcpy(w.send_buf.data() + 4, &flags, 4);
@@ -780,7 +771,7 @@ void FakeXEngine::_initialize(int worker_id)
     }
 
     // Parsed destination (ip:port). Round-robin: workers share IPs cyclically.
-    parse_ip_address(ip_addrs[worker_id % ip_addrs.size()], w.ip_addr, w.port);
+    parse_ip_address(params.ip_addrs[worker_id % params.ip_addrs.size()], w.ip_addr, w.port);
 
     // w.sock stays default-constructed (fd == -1); w.connected stays false.
     // _skip_or_send's first need_send branch performs the connect().
@@ -941,7 +932,7 @@ void FakeXEngine::_read_acks(Worker &w, bool blocking)
 {
     // ensures that we never call Socket.read() in production (when
     // no acks will be sent)
-    xassert(debug);
+    xassert(params.debug);
 
     if (!w.connected.load(std::memory_order_relaxed))
         return;
@@ -1133,7 +1124,7 @@ void FakeXEngine::_disconnect(Worker &w)
     // calls stop(e) and the cascade tears down. No defensive
     // ack_queue.clear() is needed: either we drained successfully
     // (ack_queue is empty) or we threw (the worker is exiting).
-    if (debug)
+    if (params.debug)
         _read_acks(w, /*blocking=*/true);
 
     if (w.connected.load(std::memory_order_relaxed)) {
@@ -1199,7 +1190,7 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
         // FakeXEngine.hpp's class doc-comment.
         // The bootstrap runs only on this worker's very first SEND_*
         // (!first_send_done). The gate runs on every SEND_*.
-        if (paced) {
+        if (params.paced) {
             long ichunk = cmd.minichunk_index / minichunks_per_chunk;
 
             if (!w.first_send_done) {
@@ -1394,7 +1385,7 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
     // is fully processed.)
     {
         std::lock_guard<std::mutex> lock(w.mutex);
-        if (debug) {
+        if (params.debug) {
             long idx = cmd.minichunk_index - w.first_minichunk;
             xassert_ge(idx, 0L);
             xassert_lt(idx, long(w.minichunk_status.size()));
@@ -1409,7 +1400,7 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
     // Drain any acks that arrived while we were sending. Cheap
     // single-syscall non-blocking attempt -- if no bytes are
     // queued, the recv returns 0 and we proceed.
-    if (debug)
+    if (params.debug)
         _read_acks(w, /*blocking=*/false);
 
     return true;
@@ -1473,7 +1464,7 @@ void FakeXEngine::_worker_main(int worker_id)
             // enqueue_wait_for_acks() / synchronize(), both of which
             // check debug first. xassert here as a defense-in-depth
             // invariant.
-            xassert(debug);
+            xassert(params.debug);
             _read_acks(w, /*blocking=*/true);
             break;
         case Command::Kind::NO_OP:
@@ -1531,7 +1522,7 @@ void FakeXEngine::_pacing_thread_main()
     using namespace frb::search::v1;
 
     // Local channel + stub: the pacing thread is the sole user.
-    auto channel = grpc::CreateChannel(rpc_address,
+    auto channel = grpc::CreateChannel(params.rpc_address,
                                        grpc::InsecureChannelCredentials());
     auto stub = FrbSearch::NewStub(channel);
 
