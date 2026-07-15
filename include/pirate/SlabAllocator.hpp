@@ -92,18 +92,20 @@ public:
     std::shared_ptr<void> get_slab(long nbytes, bool blocking = false);
     
     // Returns the number of slabs currently available in the free list.
-    // Throws exception in dummy mode or if not initialized. Does NOT throw
+    // Throws exception in dummy mode, or if the slab pool has not been
+    // created yet (i.e. no get_slab() call has completed). Does NOT throw
     // on a stopped allocator (stopped-tolerant informational accessor).
     long num_free_slabs() const;
-    
+
     // Returns the total number of slabs in the pool.
     // Throws exception in dummy mode.
-    // If blocking=false (default) and not initialized, throws exception.
-    // If blocking=true and not initialized, blocks until initialized.
+    // If blocking=false (default) and the slab pool has not been created
+    // yet, throws exception. If blocking=true, blocks until it is created.
     long num_total_slabs(bool blocking = false) const;
     
     // Returns the established slab size.
-    // Throws exception if not initialized. Does NOT throw on a stopped
+    // Throws exception if the slab size has not been established yet (by
+    // the entry of the first get_slab() call). Does NOT throw on a stopped
     // allocator (stopped-tolerant informational accessor).
     long get_slab_size() const;
     
@@ -120,7 +122,8 @@ public:
     bool is_dummy() const { return capacity < 0; }
     
     // Block until there are no free slabs (all slabs are in use).
-    // If slab size has not been established yet, blocks until it is.
+    // If the slab pool has not been created yet (no completed get_slab()
+    // call), blocks until it is.
     // Throws exception in dummy mode, or if stop() is called from another thread.
     void block_until_empty();
 
@@ -182,7 +185,8 @@ private:
     //               exactly one of them.
     //   init_cv  -- the deferred BumpAllocator init completed; awaited by
     //               get_slab() callers that lost the init_underway race.
-    //   size_cv  -- slab_size was established (first allocation); awaited
+    //   size_cv  -- the pool was materialized (num_slabs set, free list
+    //               filled, on the first completed get_slab()); awaited
     //               by num_total_slabs(blocking=true).
     //   empty_cv -- the free list became empty; awaited by
     //               block_until_empty().
@@ -196,7 +200,12 @@ private:
     mutable std::exception_ptr error;
 
     // Slab management. These are protected by 'lock'.
-    long slab_size = -1;            // slab size in bytes (established by first get_slab)
+    //
+    // slab_size is committed at first get_slab() ENTRY (see the establish-
+    // or-throw logic at the top of _get_slab); num_slabs is set later,
+    // atomically with the free-list fill, and doubles as the "pool
+    // materialized" flag in wait predicates (dummy mode: stays 0).
+    long slab_size = -1;            // slab size in bytes
     long num_slabs = 0;             // total number of slabs
     std::vector<void *> free_list;  // stack of free slab pointers
 

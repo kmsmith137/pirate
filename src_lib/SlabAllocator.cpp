@@ -152,10 +152,13 @@ void SlabAllocator::block_until_empty()
         std::unique_lock<std::mutex> guard(lock);
         _throw_if_stopped("SlabAllocator::block_until_empty");
 
-        // Wait until slab size is established and free list is empty. The
-        // predicate can only become true at an empty-transition (which
-        // implies the slab size is established), so empty_cv alone covers it.
-        while ((slab_size < 0) || !free_list.empty()) {
+        // Wait until the pool is materialized and the free list is empty.
+        // The gate is 'num_slabs' (set atomically with the free-list fill),
+        // NOT 'slab_size' (committed earlier, at first get_slab() entry):
+        // an empty not-yet-filled free list must not satisfy this wait.
+        // The predicate can only become true at an empty-transition (which
+        // implies the pool exists), so empty_cv alone covers it.
+        while ((num_slabs == 0) || !free_list.empty()) {
             empty_cv.wait(guard);
             _throw_if_stopped("SlabAllocator::block_until_empty");
         }
@@ -199,7 +202,17 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
     std::unique_lock<std::mutex> guard(lock);
     _throw_if_stopped("SlabAllocator::get_slab");
 
-    if ((slab_size >= 0) && (aligned_nbytes != slab_size)) {
+    // The first call establishes the slab size; subsequent calls throw on a
+    // mismatch. Establish-at-entry (all modes) is what makes the size check
+    // race-free: 'lock' is released during the lazy-init wait below, so a
+    // check-only test here could go stale before the size was committed
+    // (handing out a wrong-size slab). Set-once, with no cv notify: no wait
+    // predicate tests slab_size -- it is committed BEFORE the pool exists,
+    // and predicates that need "pool materialized" test 'num_slabs' (set
+    // atomically with the free-list fill) instead.
+    if (slab_size < 0)
+        slab_size = aligned_nbytes;
+    else if (aligned_nbytes != slab_size) {
         std::stringstream ss;
         ss << "SlabAllocator::get_slab(): requested size " << nbytes
            << " (aligned: " << aligned_nbytes << ") does not match established slab size "
@@ -208,7 +221,6 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
     }
 
     if (is_dummy()) {
-        slab_size = aligned_nbytes;
         guard.unlock();
         // Use the local 'aligned_nbytes', not 'slab_size': the lock was just
         // released, so re-reading the member here would be a data race.
@@ -266,35 +278,34 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
         _throw_if_stopped("SlabAllocator::get_slab");
     }
 
-    if (slab_size < 0) {
-        // Validate before committing 'slab_size' / 'num_slabs': an oversized
-        // first request must not leave the allocator in a broken state
-        // (slab size established, but zero slabs -- later blocking callers
-        // would hang forever). The throw stops the allocator, via the
-        // try/catch wrapper in get_slab().
+    if (num_slabs == 0) {
+        // First completed allocation: materialize the pool. Validate before
+        // committing 'num_slabs' (the "pool exists" flag tested by wait
+        // predicates). The throw below stops the allocator (via the
+        // try/catch wrapper in get_slab()), so the slab_size committed at
+        // entry is only ever left without a pool on a stopped instance.
         long aligned_capacity = align_up(capacity, nalign);
-        long new_num_slabs = aligned_capacity / aligned_nbytes;
+        long new_num_slabs = aligned_capacity / slab_size;
 
         if (new_num_slabs <= 0) {
             std::stringstream ss;
             ss << "SlabAllocator::get_slab(): capacity=" << capacity
-                << " is too small for slab_size=" << aligned_nbytes;
+                << " is too small for slab_size=" << slab_size;
             throw std::runtime_error(ss.str());
         }
 
-        slab_size = aligned_nbytes;
         num_slabs = new_num_slabs;
 
-        // First allocation: initialize free list with all slabs.
+        // Initialize free list with all slabs.
         char *base_ptr = static_cast<char *>(base.get());
         free_list.reserve(num_slabs);
         for (long i = 0; i < num_slabs; i++)
             free_list.push_back(base_ptr + i * slab_size);
 
         // Wake any thread waiting in num_total_slabs(blocking=true) for the
-        // slab size to be established. (block_until_empty() waiters don't
-        // need this wake: their predicate can only become true at an
-        // empty-transition, notified on empty_cv below.)
+        // pool to be created. (block_until_empty() waiters don't need this
+        // wake: their predicate can only become true at an empty-transition,
+        // notified on empty_cv below.)
         size_cv.notify_all();
     }
 
@@ -357,8 +368,10 @@ long SlabAllocator::num_free_slabs() const
 
     std::lock_guard<std::mutex> guard(lock);
 
-    if (slab_size < 0)
-        throw std::runtime_error("SlabAllocator::num_free_slabs(): slab size has not been established yet");
+    // Gate on 'num_slabs', not 'slab_size': the latter is committed at first
+    // get_slab() entry, before the pool exists (see _get_slab).
+    if (num_slabs == 0)
+        throw std::runtime_error("SlabAllocator::num_free_slabs(): slab pool has not been created yet");
 
     return static_cast<long>(free_list.size());
 }
@@ -373,9 +386,12 @@ long SlabAllocator::num_total_slabs(bool blocking) const
         std::unique_lock<std::mutex> guard(lock);
         _throw_if_stopped("SlabAllocator::num_total_slabs");
 
-        while (slab_size < 0) {
+        // Gate on 'num_slabs', not 'slab_size': the latter is committed at
+        // first get_slab() entry, before the pool exists (see _get_slab),
+        // and waiters here return num_slabs.
+        while (num_slabs == 0) {
             if (!blocking)
-                throw std::runtime_error("SlabAllocator::num_total_slabs(): slab size has not been established yet");
+                throw std::runtime_error("SlabAllocator::num_total_slabs(): slab pool has not been created yet");
             size_cv.wait(guard);
             _throw_if_stopped("SlabAllocator::num_total_slabs");
         }
