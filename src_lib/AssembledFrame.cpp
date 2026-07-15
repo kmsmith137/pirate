@@ -472,6 +472,10 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync, bool ver
     // emitted before data so its binary block lands first in the file.
     {
         ofstream os(filename, ios::binary | ios::trunc | ios::out);
+        if (!os)
+            throw runtime_error("AssembledFrame::write_asdf(): couldn't open " + filename
+                                + " for writing: " + string(strerror(errno)));
+
         ASDF::writer w(os, map<string, string>());
 
         w << YAML::LocalTag("core/asdf-1.1.0");
@@ -578,6 +582,19 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync, bool ver
 
         w << YAML::EndMap;
         w.flush();
+
+        // ofstream reports write failures by silently setting badbit (and
+        // ASDF::writer does no stream checking of its own), so without this
+        // check a disk-full/quota error would yield a TRUNCATED file that
+        // this method reports as SUCCESS -- the fsync below only catches a
+        // MISSING file, and FileWriter would then commit the partial file
+        // into the acquisition directory and notify subscribers of a
+        // successful write. Stream state is sticky, so one check after the
+        // final flush covers every write since open.
+        os.flush();
+        if (!os)
+            throw runtime_error("AssembledFrame::write_asdf(): I/O error writing " + filename
+                                + " (disk full?): " + string(strerror(errno)));
     }
 
     // Re-open and fsync to ensure data is flushed to disk.
