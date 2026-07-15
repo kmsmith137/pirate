@@ -24,7 +24,7 @@ notes source -- which also works on GitHub -- and is reported as a
 
 Every build writes docs/build/autolink_report.json: what got linked, and what
 looked linkable but was skipped (unknown-class, missing-config-page, denied,
-handwrite-in-source, unknown-cli). That report drives the /review-docs command.
+handwrite-in-source, unknown-cli). That report drives the /pirate-review-docs command.
 """
 
 import json

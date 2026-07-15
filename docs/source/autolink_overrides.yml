@@ -3,7 +3,7 @@
 # The keyword registry is auto-derived every build from the Sphinx python
 # domain and the generated config/cli/proto/notes pages, so it never goes
 # stale on its own. This file holds ONLY the judgment calls that cannot be
-# derived. Maintained occasionally via the /review-docs slash command, which
+# derived. Maintained occasionally via the /pirate-review-docs slash command, which
 # reads docs/build/autolink_report.json and tunes the entries below.
 
 # aliases: phrase -> target. Targets are a page docname, 'docname#anchor', or
