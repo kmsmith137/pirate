@@ -38,7 +38,7 @@ service FrbSifter {
 
 enum ProtocolVersion {
   PROTOCOL_VERSION_UNSPECIFIED = 0;
-  PROTOCOL_VERSION_CURRENT = 3;
+  PROTOCOL_VERSION_CURRENT = 4;
 }
 
 message ConfigMessage {
@@ -66,25 +66,23 @@ message ConfigReply {
   bool ok = 1;
 }
 
-// If there are early triggers, then the event timestamp can be outside
-// the EventsMessage range [chunk_fpga_start:chunk_fpga_end]! In this scenario,
-// the sifter may receive multiple events (in different chunks) for the same
-// FRB, as the pulse crosses different early-trigger frequencies.
+// The event timestamp can be outside the EventsMessage range
+// [chunk_fpga_start:chunk_fpga_end]! With early triggers it can be in the future
+// (the arrival time is extrapolated to the lower edge of the full band); in this
+// scenario the sifter may receive multiple events (in different chunks) for the
+// same FRB, as the pulse crosses different early-trigger frequencies. The timestamp
+// can also fall slightly before chunk_fpga_start, because finite peak-finder kernel
+// widths shift the estimated pulse-center time earlier than the detection sample.
 
 message FrbEvent {
   int32 beam_id = 1;
   int64 fpga_timestamp = 2;  // can be outside the chunk, see above!
-  float dm = 3;
-  float snr = 4;
-  float rfi_prob = 5;
-
-  // Currently, these members are set to placeholder values in the main search, but when
-  // we send simulated events with 'pirate_frb run_fake_xengine -f -s ...', we do set
-  // meaningful values.
-  
-  float width_ms = 6;
-  float subband_freq_lo_MHz = 7;
-  float subband_freq_hi_MHz = 8;
+  double dm = 3;
+  double snr = 4;
+  double rfi_prob = 5;      // placeholder (= 0): not yet measured by the grouper
+  double width_ms = 6;
+  double subband_freq_lo_MHz = 7;
+  double subband_freq_hi_MHz = 8;
 }
 
 // When events are sent from the search pipeline, we set from_simulator=false.
@@ -102,7 +100,7 @@ message FrbEventsMessage {
 
   // Coarse-grained triggers
   // A small array of SNRs, the same length as the beams being handled by this beam_set_id.
-  repeated float coarsegrain_snr = 6;
+  repeated double coarsegrain_snr = 6;
 }
 
 message FrbEventsReply {

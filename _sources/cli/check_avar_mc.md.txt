@@ -1,0 +1,22 @@
+# check_avar_mc
+
+Monte-Carlo check of analytic peak-finding variance vs a ReferenceDedisperser
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb check_avar_mc [-h] [-r] [-s SOPHISTICATION] config_file
+
+Monte-Carlo check of analytic peak-finding variance vs a ReferenceDedisperser
+
+positional arguments:
+  config_file           Path to dedispersion YAML config file
+
+options:
+  -h, --help            show this help message and exit
+  -r, --random-variances
+                        Use random per-channel input variances
+                        (config.make_random_freq_variances) instead of all-ones
+  -s, --sophistication SOPHISTICATION
+                        ReferenceDedisperser sophistication (0, 1, or 2; default 1)
+```

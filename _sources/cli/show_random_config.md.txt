@@ -1,0 +1,18 @@
+# show_random_config
+
+For debugging: generate random DedispersionConfig(s) and print as YAML
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb show_random_config [-h] [-n NCONFIG] [-a] [-v]
+
+For debugging: generate random DedispersionConfig(s) and print as YAML
+
+options:
+  -h, --help  show this help message and exit
+  -n NCONFIG  generate multiple random configs
+  -a          generate arbitrary random config, without restricting to precompiled
+              kernels
+  -v          verbose
+```

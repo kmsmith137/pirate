@@ -1,0 +1,31 @@
+# time
+
+Run timings (use flags to select specific timings)
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb time [-h] [-g GPU] [-t NTHREADS] [--ncu] [--gldk] [--gddk] [--casm]
+                       [--chime] [--zomb] [--cdd2] [--gdqk] [--gtgk] [--sim]
+
+Run timings (use flags to select specific timings)
+
+options:
+  -h, --help            show this help message and exit
+  -g, --gpu GPU         GPU to use for timing (default 0)
+  -t, --nthreads NTHREADS
+                        number of CPU threads (for time_cpu_downsample and
+                        time_avx2_simulate_4bit_noise)
+  --ncu                 Just run a single kernel (intended for profiling with nvidia
+                        'ncu')
+  --gldk                Runs time_lagged_downsampling_kernels()
+  --gddk                Runs time_gpu_dedispersion_kernels()
+  --casm                Runs CasmBeamformer.run_timings()
+  --chime               Runs time_chime_frb_{beamform,upchan}()
+  --zomb                Runs "zombie" timings (code that I wrote during protoyping that
+                        may never get used)
+  --cdd2                Runs CoalescedDdKernel2.time_selected()
+  --gdqk                Runs GpuDequantizationKernel.time_selected()
+  --gtgk                Runs GpuTreeGriddingKernel.time_selected()
+  --sim                 Runs avx2_simulate_4bit_noise() timing
+```

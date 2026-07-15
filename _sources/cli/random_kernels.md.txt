@@ -1,0 +1,18 @@
+# random_kernels
+
+A utility for maintaining `makefile_helper`.py
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb random_kernels [-h] [-n N] [--pf] [--cdd2] [--pfwr]
+
+A utility for maintaining makefile_helper.py
+
+options:
+  -h, --help  show this help message and exit
+  -n N        Number of random kernels to print (default 20)
+  --pf        Print random PeakFinder kernel params
+  --cdd2      Print random CoalescedDdKernel2 kernel params
+  --pfwr      Print random PfWeightReader kernel params
+```

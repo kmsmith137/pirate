@@ -1,0 +1,19 @@
+# show_file_format
+
+Make an asdf file from an `xengine_metadata` YAML file, and write the header to stdout.
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb show_file_format [-h] [-n] metadata_yaml
+
+Make an asdf file from an xengine_metadata YAML file, and write the header to stdout.
+
+positional arguments:
+  metadata_yaml      Path to xengine_metadata YAML file
+
+options:
+  -h, --help         show this help message and exit
+  -n, --non-verbose  Emit the YAML header without the documentation comments
+                     (verbose=False).
+```

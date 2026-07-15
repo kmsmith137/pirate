@@ -64,6 +64,9 @@ Note that you don't need to run this entire sequence every time!
 The programs above have command-line args to "short-circuit" the downstream programs.
 (For example, `pirate_frb run_server --no-grouper` or `pirate_frb run_toy_grouper --no-sifter`.)
 
+To end a run, Ctrl-C the last process (in this case, the toy sifter).
+Errors will cascade backwards, and all processes will stop (with error messages).
+
 ## Running a production search (cf00/cf05)
 
 The "production" search uses an entire node (cf05), with full CHORD parameters,

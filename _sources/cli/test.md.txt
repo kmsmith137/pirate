@@ -1,0 +1,42 @@
+# test
+
+Run unit tests (use flags to select specific tests)
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb test [-h] [-g GPU] [-n NITER] [--rt] [--pfwr] [--pfom] [--gldk]
+                       [--gddk] [--gpfk] [--grck] [--gtgk] [--gdqk] [--cdd2] [--casm]
+                       [--zomb] [--dd] [--avar] [--chime] [--net] [--serv] [--sim]
+                       [--amax]
+
+Run unit tests (use flags to select specific tests)
+
+options:
+  -h, --help         show this help message and exit
+  -g, --gpu GPU      GPU to use for tests (default 0)
+  -n, --niter NITER  Number of unit test iterations (default 100)
+  --rt               Runs ReferenceTree and ReferenceLagbuf tests
+  --pfwr             Runs PfWeightReaderMicrokernel.test_random()
+  --pfom             Runs PfOutputMicrokernel.test_random()
+  --gldk             Runs GpuLaggedDownsamplingKernel.test_random()
+  --gddk             Runs GpuDedispersionKernel.test_random()
+  --gpfk             Runs GpuPeakFindingKernel.test_random()
+  --grck             Runs GpuRingbufCopyKernel.test_random()
+  --gtgk             Runs GpuTreeGriddingKernel.test_random()
+  --gdqk             Runs GpuDequantizationKernel.test_random()
+  --cdd2             Runs CoalescedDdKernel2.test_random()
+  --casm             Runs some casm tests
+  --zomb             Runs "zombie" tests (code that I wrote during protoyping that may
+                     never get used)
+  --dd               Runs GpuDedisperser.test_random()
+  --avar             Runs tests related to analytic variance
+  --chime            Runs test_chime_frb_{beamform,upchan}()
+  --net              Runs network/allocator tests (AssembledFrameAllocator, etc.)
+  --serv             Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser ->
+                     FrbGrouper test
+  --sim              Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame
+                     pulse-injection and pulse-invariants tests
+  --amax             Runs DedispersionPlan.decode_argmax() tests (black-box probe
+                     arrays)
+```

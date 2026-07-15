@@ -6,10 +6,11 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="FrbSearchClient" href="FrbSearchClient.html"><link rel="prev" title="DedispersionConfig" href="DedispersionConfig.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>FrbGrouper - pirate_frb 1.2.1 documentation</title>
+        <title>FrbGrouper - pirate_frb 1.3.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=e74aaa4d" />
     
     
 
@@ -163,7 +164,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.2.1 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.3.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -184,7 +185,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.2.1 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.3.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -205,8 +206,38 @@
 <li class="toctree-l1"><a class="reference internal" href="../notes/grouper_interface.html">Writing a grouper</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../notes/hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../cli.html">CLI reference</a><input aria-label="Toggle navigation of CLI reference" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_server.html">run_server</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_toy_grouper.html">run_toy_grouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_offline_dedisperser.html">run_offline_dedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_toy_sifter.html">run_toy_sifter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_fake_xengine.html">run_fake_xengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_status.html">rpc_status</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_rand_write.html">rpc_rand_write</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_start_stream.html">rpc_start_stream</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_cancel_stream.html">rpc_cancel_stream</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_show_streams.html">rpc_show_streams</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/test.html">test</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/test_simpulse.html">test_simpulse</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/check_avar_approximation.html">check_avar_approximation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/check_avar_mc.html">check_avar_mc</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/time.html">time</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/time_dedisperser.html">time_dedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_asdf.html">show_asdf</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_file_format.html">show_file_format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_dedisperser.html">show_dedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_hardware.html">show_hardware</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_kernels.html">show_kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_random_config.html">show_random_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_xengine_metadata.html">show_xengine_metadata</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/hwtest.html">hwtest</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/make_subbands.html">make_subbands</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/random_kernels.html">random_kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/scratch.html">scratch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/revisit_512gb.html">revisit_512gb</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
@@ -216,7 +247,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
-<li class="toctree-l1 current has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="Acquisition.html">Acquisition</a></li>
 <li class="toctree-l2"><a class="reference internal" href="AssembledFrame.html">AssembledFrame</a></li>
 <li class="toctree-l2"><a class="reference internal" href="DedispersionConfig.html">DedispersionConfig</a></li>
@@ -230,12 +261,13 @@
 <li class="toctree-l2"><a class="reference internal" href="XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../notes/cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/pybind11.html">Pybind11</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/grpc.html">GRPC .proto guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/stoppable_class.html">Stoppable Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
 </ul>
@@ -292,7 +324,7 @@ For a lot more info, see the grouper-specific parts of the sphinx docs.</p>
 </div>
 <p>where <code class="docutils literal notranslate"><span class="pre">ip_addr</span></code> (str) is the grouper’s own <code class="docutils literal notranslate"><span class="pre">ip:port</span></code> listen address (e.g.
 ‘127.0.0.1:7000’); the producer (an FrbServer running pirate) connects to it and
-hands off the GpuDedisperser output ring buffer over CUDA IPC. Use the object as a
+hands off the <a class="reference internal" href="GpuDedisperser.html#pirate_frb.GpuDedisperser">GpuDedisperser</a> output ring buffer over CUDA IPC. Use the object as a
 context manager (see below).</p>
 <p>Usage summary is straightforward, but note warnings below:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">pirate_frb</span><span class="o">.</span><span class="n">rpc</span><span class="o">.</span><span class="n">FrbGrouper</span><span class="p">(</span><span class="s1">&#39;127.0.0.1:7000&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">g</span><span class="p">:</span>
@@ -316,18 +348,18 @@ additional synchronization logic.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> (bool) – whether the grouper is in the stopped state.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">cuda_device_id</span></code> (int) – CUDA device where the IPC-mapped outputs live.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">dtype</span></code> (ksgpu.Dtype) – data type of the out_max arrays.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">dtype</span></code> (numpy.dtype) – data type of the out_max arrays.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">nt_in</span></code> (int) – input time samples per time chunk.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">total_beams</span></code> (int) – total beams per chunk (= beams_per_gpu).</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">beams_per_batch</span></code> (int) – beams per output batch.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">nbatches</span></code> (int) – beam-batches per chunk (= total_beams / beams_per_batch); producer <code class="docutils literal notranslate"><span class="pre">seq_id</span> <span class="pre">=</span> <span class="pre">ichunk*nbatches</span> <span class="pre">+</span> <span class="pre">ibatch</span></code>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">num_batch_slots</span></code> (int) – output ring-buffer depth; leading beam axis = <code class="docutils literal notranslate"><span class="pre">num_batch_slots*beams_per_batch</span></code> (&lt;= total_beams).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">initial_chunk</span></code> (int) – chunk index of the producer’s first output vs FPGA seq 0 (sets GpuDedisperserOutputs.ichunk_fpga_based).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">initial_chunk</span></code> (int) – chunk index of the producer’s first output vs FPGA seq 0 (sets <a class="reference internal" href="GpuDedisperserOutputs.html#pirate_frb.core.GpuDedisperserOutputs">GpuDedisperserOutputs.ichunk_fpga_based</a>).</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">ntrees</span></code> (int) – number of dedispersion trees.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">ndm_out</span></code> (list of int) – per-tree output DM-channel counts (length ntrees).</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">nt_out</span></code> (list of int) – per-tree output time-sample counts (length ntrees).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">dedispersion_config</span></code> (DedispersionConfig) – producer’s dedispersion config (from the handshake).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">xengine_metadata</span></code> (XEngineMetadata) – X-engine metadata (from the handshake).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">dedispersion_config</span></code> (<a class="reference internal" href="DedispersionConfig.html#pirate_frb.DedispersionConfig">DedispersionConfig</a>) – producer’s dedispersion config (from the handshake).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">xengine_metadata</span></code> (<a class="reference internal" href="XEngineMetadata.html#pirate_frb.core.XEngineMetadata">XEngineMetadata</a>) – X-engine metadata (from the handshake).</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">xengine_metadata_yaml_string</span></code> (str) – X-engine metadata as a YAML string.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">dedispersion_config_yaml_string</span></code> (str) – dedispersion config as a YAML string.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">dedispersion_plan_yaml_string</span></code> (str) – dedispersion plan as a YAML string.</p></li>
@@ -339,28 +371,42 @@ additional synchronization logic.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">xengine_yaml</span></code> (dict) – parsed X-engine metadata (from xengine_metadata_yaml_string).</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">dedispersion_config_yaml</span></code> (dict) – parsed dedispersion config.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">dedispersion_plan_yaml</span></code> (dict) – parsed dedispersion plan.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">dm_per_unit_delay</span></code> (float) – DM of a full-band delay of one input time sample.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">steady_state_it0</span></code> (list of int arrays). A dedispersion output array element
-(ichunk, beam, itree, idm, it) is “steady-state”, i.e. unaffected by initial
-zero-padding, if: <code class="docutils literal notranslate"><span class="pre">ichunk*nt_out</span> <span class="pre">+</span> <span class="pre">it</span> <span class="pre">&gt;=</span> <span class="pre">steady_state_it0[itree][idm]</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">steady_state_it0</span></code> (list of cupy int arrays, one per tree). A dedispersion
+output array element (ichunk, beam, itree, idm, it) is “steady-state”, i.e.
+unaffected by initial zero-padding, if:
+<code class="docutils literal notranslate"><span class="pre">ichunk*nt_out</span> <span class="pre">+</span> <span class="pre">it</span> <span class="pre">&gt;=</span> <span class="pre">steady_state_it0[itree][idm]</span></code>. Deliberately
+GPU-resident: it is consumed on the GPU once per tree per chunk (see
+<code class="docutils literal notranslate"><span class="pre">steady_state_mask()</span></code>), and keeping it there avoids per-call host-&gt;GPU
+copies. Call <code class="docutils literal notranslate"><span class="pre">.get()</span></code> on the elements for host copies.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">full_steady_ichunk</span></code> (int) – the smallest ichunk at/above which EVERY
+element of EVERY tree’s output is steady-state (so the whole chunk is free of
+zero-padding artifacts). For <code class="docutils literal notranslate"><span class="pre">ichunk</span> <span class="pre">&gt;=</span> <span class="pre">full_steady_ichunk</span></code> the entire
+<code class="docutils literal notranslate"><span class="pre">steady_state_mask()</span></code> is True.</p></li>
 </ul>
 <dl class="py method">
 <dt class="sig sig-object py" id="pirate_frb.rpc.FrbGrouper.create_events">
-<span class="sig-name descname"><span class="pre">create_events</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ichunk</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">itrees</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ibeams</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">idm</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">itime</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">snr</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbGrouper.create_events" title="Link to this definition">¶</a></dt>
-<dd><p>Build a FrbSifterEvents from GPU arrays of (tree, beam, dm, time) indices.</p>
+<span class="sig-name descname"><span class="pre">create_events</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ichunk</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">itrees</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ibeams</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">idm</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">itime</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">snr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">argmax</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbGrouper.create_events" title="Link to this definition">¶</a></dt>
+<dd><p>Build a <a class="reference internal" href="FrbSifterEvents.html#pirate_frb.rpc.FrbSifterEvents">FrbSifterEvents</a> from GPU arrays of (tree, beam, dm, time, token) data.</p>
 <p>The grouper finds peaks at index quadruples (itree, ibeam, idm, itime), and
 needs to translate these indices into physical quantities (DM, time, etc)
 before sending events to the sifter.</p>
-<p>The create_events() method performs this translation, including subtleties
-like early triggers (which mean that event arrival times can be in the future!)
-For more info, see the grouper-specific parts of the sphinx docs, and/or
-the tex notes.</p>
-<p>Currently, when we assign dm/time value to each event, we ignore out_argmax
-arrays, and use the center of each coarse dm/time pixel. I plan to improve
-this in the future.</p>
-<p>The index arrays (itrees, ibeams, idm, itime, snr) must all be cupy arrays
-with the same shape – one event per element. Index values are assumed to be
-in range; they are not bounds-checked, to avoid a device-&gt;host sync.</p>
+<p>The create_events() method performs this translation by decoding the
+out_argmax tokens (via DedispersionPlan.decode_argmax / decode_argmax2, using
+the producer’s plan from the handshake): the per-event dm, arrival time,
+intrinsic width, and frequency subband are the fine-grained “winning” trial
+parameters, not coarse-pixel centers. This includes subtleties like early
+triggers: arrival times are extrapolated to the lowest frequency of the full
+band, so they can lie outside the chunk’s time window – in the future (early
+triggers), or slightly before the chunk start (finite peak-finder kernel widths
+shift the estimated pulse-center time earlier than the detection sample).
+For more info, see the grouper-specific parts of the sphinx docs, and/or the
+<a class="reference internal" href="../_static/tree_dedispersion.pdf">tex notes</a>.</p>
+<p>The per-event arrays (itrees, ibeams, idm, itime, snr, argmax) must all be
+1-d cupy arrays of the same length – one event per element. The ‘argmax’
+values are the out_argmax tokens of the selected peaks, which the caller must
+gather (on the GPU) while the output arrays are valid, i.e. inside the
+get_output() context manager. Indices and tokens are bounds-checked on the
+host as a side effect of decoding.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
@@ -372,15 +418,20 @@ of ‘initial_chunk’, which was sent in the pirate-grouper handshake.)</p></li
 <li><p><strong>idm</strong> (<em>cupy.ndarray</em>) – Per-event index along the selected tree’s output DM axis.</p></li>
 <li><p><strong>itime</strong> (<em>cupy.ndarray</em>) – Per-event index along the selected tree’s output time axis.</p></li>
 <li><p><strong>snr</strong> (<em>cupy.ndarray</em>) – Per-event SNR.</p></li>
+<li><p><strong>argmax</strong> (<em>cupy.ndarray</em>) – Per-event out_argmax token (uint32), gathered by the caller from
+outputs.out_argmax[itree][ibeam - beam0, idm, itime] inside the
+get_output() context manager.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
 <dd class="field-even"><p>The events translated into physical units (beam id, absolute FPGA
-timestamp, DM, SNR), ready to pass to FrbSifterClient.send_events(). Also
-carries the chunk’s absolute FPGA window (<code class="docutils literal notranslate"><span class="pre">chunk_fpga_start</span></code>,
-<code class="docutils literal notranslate"><span class="pre">chunk_fpga_end</span></code>). The per-event quantities not measured by the toy
-grouper get placeholders: rfi_prob = 0, width_ms = one time sample, and
-the subband = the full band (subband_freq_{lo,hi}_MHz).</p>
+timestamp, DM, SNR, width, frequency subband), ready to pass to
+<a class="reference internal" href="FrbSifterClient.html#pirate_frb.rpc.FrbSifterClient.send_events">FrbSifterClient.send_events</a>(). Also carries the chunk’s absolute FPGA
+window (<code class="docutils literal notranslate"><span class="pre">chunk_fpga_start</span></code>, <code class="docutils literal notranslate"><span class="pre">chunk_fpga_end</span></code>). Per-event timestamps
+may lie before or after that window (see above), but negative absolute
+timestamps (possible in the earliest chunks, where events are warmup
+artifacts anyway) are clamped to zero. rfi_prob is a placeholder (= 0,
+not measured by the grouper).</p>
 </dd>
 <dt class="field-odd">Return type<span class="colon">:</span></dt>
 <dd class="field-odd"><p><a class="reference internal" href="FrbSifterEvents.html#pirate_frb.rpc.FrbSifterEvents" title="pirate_frb.rpc.FrbSifterEvents">FrbSifterEvents</a></p>
@@ -389,9 +440,29 @@ the subband = the full band (subband_freq_{lo,hi}_MHz).</p>
 </dd></dl>
 
 <dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbGrouper.decode_argmax2_batch">
+<span class="sig-name descname"><span class="pre">decode_argmax2_batch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.rpc.FrbGrouper" title="pirate_frb.pirate_pybind11.FrbGrouper"><span class="pre">pirate_frb.pirate_pybind11.FrbGrouper</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">itrees</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fmins</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fmaxs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tlos</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">this</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)"><span class="pre">tuple</span></a></span></span><a class="headerlink" href="#pirate_frb.rpc.FrbGrouper.decode_argmax2_batch" title="Link to this definition">¶</a></dt>
+<dd><p>Vectorized decode_argmax2(): converts decode_argmax_batch() outputs to
+physical params. Returns (freqs_lo_MHz, freqs_hi_MHz, dms, timestamps_samp,
+widths_samp), each a float64 array. Timestamps are CHUNK-RELATIVE toplevel
+sample counts (extrapolated to the full-band lowest frequency); the caller
+converts to absolute FPGA counts. Valid only after the handshake.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbGrouper.decode_argmax_batch">
+<span class="sig-name descname"><span class="pre">decode_argmax_batch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.rpc.FrbGrouper" title="pirate_frb.pirate_pybind11.FrbGrouper"><span class="pre">pirate_frb.pirate_pybind11.FrbGrouper</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">tokens</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;uint&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">itrees</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">idms</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">itimes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)"><span class="pre">tuple</span></a></span></span><a class="headerlink" href="#pirate_frb.rpc.FrbGrouper.decode_argmax_batch" title="Link to this definition">¶</a></dt>
+<dd><p>Vectorized decode of out_argmax tokens (see DedispersionPlan.decode_argmax
+for the scalar spec). Inputs are 1-d nonempty arrays, one event per element
+(tokens: uint32; itrees/idms/itimes: int64). Returns TOPLEVEL-relative
+(fmins, fmaxs, tlos, this, ps), each an int64 array. Uses the producer’s
+plan from the handshake; valid only after the handshake.</p>
+</dd></dl>
+
+<dl class="py method">
 <dt class="sig sig-object py" id="pirate_frb.rpc.FrbGrouper.get_output">
 <span class="sig-name descname"><span class="pre">get_output</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ichunk</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ibatch</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbGrouper.get_output" title="Link to this definition">¶</a></dt>
-<dd><p>Acquire one beam-batch’s outputs, as a GpuDedisperserOutputs object.</p>
+<dd><p>Acquire one beam-batch’s outputs, as a <a class="reference internal" href="GpuDedisperserOutputs.html#pirate_frb.core.GpuDedisperserOutputs">GpuDedisperserOutputs</a> object.</p>
 <p>Usage summary (see grouper-specific parts of sphinx docs for more info):</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Warning: output arrays are only valid inside the context manager!!</span>
 <span class="c1"># Therefore, each batch must be fully processed, before seeing the next batch.</span>
@@ -430,10 +501,26 @@ specify ichunk=0, and ignore the value of FrbGrouper.initial_chunk).</p></li>
 </ul>
 </dd>
 <dt class="field-even">Yields<span class="colon">:</span></dt>
-<dd class="field-even"><p><em>GpuDedisperserOutputs</em> – Per-batch slice with .out_max / .out_argmax (lists of ksgpu Arrays,
+<dd class="field-even"><p><em><a class="reference internal" href="GpuDedisperserOutputs.html#pirate_frb.core.GpuDedisperserOutputs">GpuDedisperserOutputs</a></em> – Per-batch slice with .out_max / .out_argmax (lists of ksgpu Arrays,
 convertible to cupy via DLPack).</p>
 </dd>
 </dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbGrouper.steady_state_mask">
+<span class="sig-name descname"><span class="pre">steady_state_mask</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">itree</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ichunk</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbGrouper.steady_state_mask" title="Link to this definition">¶</a></dt>
+<dd><p>Return a cupy bool mask of shape (ndm_out, nt_out) for tree ‘itree’: True
+where output element (ichunk, idm, it) is steady-state, i.e. unaffected by
+the zero-padding before the start of the acquisition (see the
+‘steady_state_it0’ bullet in the class docstring; the mask is independent
+of the beam axis).</p>
+<p>Computed entirely on the GPU (steady_state_it0 is GPU-resident), with no
+host&lt;-&gt;GPU copies or syncs – cheap enough to call once per tree per chunk.
+Intended for masking per-chunk statistics, e.g.
+GpuGrouperHistogram.add_tree(tree_out, itree, …, mask=grouper.steady_state_mask(…)).
+(For ichunk &gt;= full_steady_ichunk the mask is all True; callers may pass
+mask=None in that case to skip the redundant mask + copy.)</p>
 </dd></dl>
 
 </dd></dl>
@@ -498,7 +585,10 @@ convertible to cupy via DLPack).</p>
 <li><a class="reference internal" href="#">FrbGrouper</a><ul>
 <li><a class="reference internal" href="#pirate_frb.rpc.FrbGrouper"><code class="docutils literal notranslate"><span class="pre">FrbGrouper</span></code></a><ul>
 <li><a class="reference internal" href="#pirate_frb.rpc.FrbGrouper.create_events"><code class="docutils literal notranslate"><span class="pre">FrbGrouper.create_events()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbGrouper.decode_argmax2_batch"><code class="docutils literal notranslate"><span class="pre">FrbGrouper.decode_argmax2_batch()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbGrouper.decode_argmax_batch"><code class="docutils literal notranslate"><span class="pre">FrbGrouper.decode_argmax_batch()</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.rpc.FrbGrouper.get_output"><code class="docutils literal notranslate"><span class="pre">FrbGrouper.get_output()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbGrouper.steady_state_mask"><code class="docutils literal notranslate"><span class="pre">FrbGrouper.steady_state_mask()</span></code></a></li>
 </ul>
 </li>
 </ul>
@@ -512,7 +602,7 @@ convertible to cupy via DLPack).</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=ca842793"></script>
+</div><script src="../_static/documentation_options.js?v=1f29e9d3"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

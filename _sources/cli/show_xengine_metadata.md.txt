@@ -1,0 +1,18 @@
+# show_xengine_metadata
+
+Parse `xengine_metadata` yml file and write info to stdout
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb show_xengine_metadata [-h] [-v] config_file
+
+Parse xengine_metadata yml file and write info to stdout
+
+positional arguments:
+  config_file    Path to YAML config file
+
+options:
+  -h, --help     show this help message and exit
+  -v, --verbose  Include comments explaining the meaning of each field
+```

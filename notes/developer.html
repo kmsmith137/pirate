@@ -6,10 +6,11 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Writing a grouper" href="grouper_interface.html"><link rel="prev" title="Quick start" href="quick_start.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Developer notes - pirate_frb 1.2.1 documentation</title>
+        <title>Developer notes - pirate_frb 1.3.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=e74aaa4d" />
     
     
 
@@ -163,7 +164,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.2.1 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.3.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -184,7 +185,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.2.1 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.3.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -205,8 +206,38 @@
 <li class="toctree-l1"><a class="reference internal" href="grouper_interface.html">Writing a grouper</a></li>
 <li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../cli.html">CLI reference</a><input aria-label="Toggle navigation of CLI reference" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_server.html">run_server</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_toy_grouper.html">run_toy_grouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_offline_dedisperser.html">run_offline_dedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_toy_sifter.html">run_toy_sifter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_fake_xengine.html">run_fake_xengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_status.html">rpc_status</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_rand_write.html">rpc_rand_write</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_start_stream.html">rpc_start_stream</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_cancel_stream.html">rpc_cancel_stream</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_show_streams.html">rpc_show_streams</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/test.html">test</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/test_simpulse.html">test_simpulse</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/check_avar_approximation.html">check_avar_approximation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/check_avar_mc.html">check_avar_mc</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/time.html">time</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/time_dedisperser.html">time_dedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_asdf.html">show_asdf</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_file_format.html">show_file_format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_dedisperser.html">show_dedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_hardware.html">show_hardware</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_kernels.html">show_kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_random_config.html">show_random_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_xengine_metadata.html">show_xengine_metadata</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/hwtest.html">hwtest</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/make_subbands.html">make_subbands</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/random_kernels.html">random_kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/scratch.html">scratch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/revisit_512gb.html">revisit_512gb</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l2"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
@@ -216,7 +247,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../classes/Acquisition.html">Acquisition</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrame.html">AssembledFrame</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionConfig.html">DedispersionConfig</a></li>
@@ -230,12 +261,13 @@
 <li class="toctree-l2"><a class="reference internal" href="../classes/XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
 <li class="toctree-l2"><a class="reference internal" href="grpc.html">GRPC .proto guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="stoppable_class.html">Stoppable Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
 </ul>
@@ -313,9 +345,9 @@ half-precision arithmetic, heavily used in performance-critical kernels.</p></li
 <h2>Chunks, batches, frames, and segments<a class="headerlink" href="#chunks-batches-frames-and-segments" title="Link to this heading">¶</a></h2>
 <p>Throughout the code:</p>
 <ul class="simple">
-<li><p>A “chunk” (or “time chunk”) is a range of <strong>time indices</strong>. The chunk size (e.g. 1024 or 2048) is defined in <code class="docutils literal notranslate"><span class="pre">DedispersionConfig::time_samples_per_chunk</span></code>.</p></li>
+<li><p>A “chunk” (or “time chunk”) is a range of <strong>time indices</strong>. The chunk size (e.g. 1024 or 2048) is defined in <a class="reference internal" href="../classes/DedispersionConfig.html#pirate_frb.DedispersionConfig.time_samples_per_chunk"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig::time_samples_per_chunk</span></code></a>.</p></li>
 <li><p>A “minichunk” is 256 time samples. This is the cadence for sending data from the X-engine to the FRB backend, and only arises in a limited part of the code (<code class="docutils literal notranslate"><span class="pre">struct</span> <span class="pre">Receiver</span></code> and closely related).</p></li>
-<li><p>A “batch” (or “beam batch”) is a range of <strong>beam indices</strong>. The batch size (e.g. 1,2,4) is defined in <code class="docutils literal notranslate"><span class="pre">DedispersionConfig::beams_per_batch</span></code>.</p></li>
+<li><p>A “batch” (or “beam batch”) is a range of <strong>beam indices</strong>. The batch size (e.g. 1,2,4) is defined in <a class="reference internal" href="../classes/DedispersionConfig.html#pirate_frb.DedispersionConfig.beams_per_batch"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig::beams_per_batch</span></code></a>.</p></li>
 <li><p>A “frame” is a (chunk,beam) pair (not a (chunk,batch) pair!). Frames are used in <code class="docutils literal notranslate"><span class="pre">class</span> <span class="pre">MegaRingbuf</span></code>, and will also be used in the front-end server code and its intensity ring buffer.</p></li>
 <li><p>A “segment” refers to a 128-byte, memory-contiguous subset of any array in GPU memory. Segments are used in low-level GPU kernels, and data structures which are GPU kernel adjacent (e.g. <code class="docutils literal notranslate"><span class="pre">DedispersionPlan</span></code>, <code class="docutils literal notranslate"><span class="pre">MegaRingbuf</span></code>).</p></li>
 </ul>
@@ -340,7 +372,7 @@ freed individually — everything is released when the allocator is destroyed.</
 fixed-size “slabs” that are recycled via reference counting — when a slab’s refcount
 drops to zero, it is returned to the free list.</p></li>
 <li><p><strong><code class="docutils literal notranslate"><span class="pre">AssembledFrameAllocator</span></code></strong>: A multi-consumer frame allocator built on <code class="docutils literal notranslate"><span class="pre">SlabAllocator</span></code>.
-Manages <code class="docutils literal notranslate"><span class="pre">AssembledFrame</span></code> objects (host memory, int4 data) that hold beamformed intensity
+Manages <a class="reference internal" href="../classes/AssembledFrame.html#pirate_frb.core.AssembledFrame"><code class="docutils literal notranslate"><span class="pre">AssembledFrame</span></code></a> objects (host memory, int4 data) that hold beamformed intensity
 data received from the X-engine.</p></li>
 </ul>
 </section>
@@ -349,7 +381,7 @@ data received from the X-engine.</p></li>
 <p>The most important classes are:</p>
 <ul>
 <li><p><strong><code class="docutils literal notranslate"><span class="pre">Receiver</span></code></strong>: Listens for TCP connections from upstream X-engine nodes and assembles
-incoming data into <code class="docutils literal notranslate"><span class="pre">AssembledFrame</span></code> objects. Implements the
+incoming data into <a class="reference internal" href="../classes/AssembledFrame.html#pirate_frb.core.AssembledFrame"><code class="docutils literal notranslate"><span class="pre">AssembledFrame</span></code></a> objects. Implements the
 <a class="reference internal" href="network_protocol.html"><span class="std std-doc">X-&gt;FRB network protocol</span></a>, which includes YAML
 metadata (<a class="reference internal" href="../configs/xengine_metadata.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine_metadata.yml</span></code></span></a>).
 Each <code class="docutils literal notranslate"><span class="pre">Receiver</span></code> corresponds to one <code class="docutils literal notranslate"><span class="pre">(ip_addr,</span> <span class="pre">tcp_port)</span></code> pair.</p></li>
@@ -366,7 +398,7 @@ plan for full CHORD, where we expect to split X-&gt;backend traffic between two 
 <li><p><strong><code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code></strong>: A testing class that simulates upstream X-engine nodes sending data
 over TCP. Spawns multiple worker threads that each open a TCP connection, so that a
 single <code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code> node can simulate multiple X-engine nodes.
-Used for end-to-end testing (e.g. <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_fake_xengine</span></code>).</p></li>
+Used for end-to-end testing (e.g. <a class="reference internal" href="../cli/run_fake_xengine.html"><code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_fake_xengine</span></code></a>).</p></li>
 </ul>
 </section>
 <section id="file-writing">
@@ -377,12 +409,12 @@ server receives an RPC, instructing it to save data to disk. There are some nont
 design decisions here, so I made some notes. (Most of this came out of some blackboard
 brainstorming sessions with Dustin.)</p>
 <ul class="simple">
-<li><p>Client sends a <code class="docutils literal notranslate"><span class="pre">write_files</span></code> RPC, and server responds immediately (without
+<li><p>Client sends a <a class="reference internal" href="../grpc/frb_search.proto.html"><code class="docutils literal notranslate"><span class="pre">write_files</span></code></a> RPC, and server responds immediately (without
 waiting to write to disk) with a list of filenames that are scheduled for
 writing.</p></li>
-<li><p>There is a separate <code class="docutils literal notranslate"><span class="pre">subscribe_files</span></code> RPC, which establishes a persistent TCP
+<li><p>There is a separate <a class="reference internal" href="../grpc/frb_search.proto.html"><code class="docutils literal notranslate"><span class="pre">subscribe_files</span></code></a> RPC, which establishes a persistent TCP
 connection to the server. Whenever the server writes a file, it sends the filename
-to all callers of <code class="docutils literal notranslate"><span class="pre">subscribe_files</span></code>.</p></li>
+to all callers of <a class="reference internal" href="../grpc/frb_search.proto.html"><code class="docutils literal notranslate"><span class="pre">subscribe_files</span></code></a>.</p></li>
 <li><p>Files are written in asdf, using Erik’s <code class="docutils literal notranslate"><span class="pre">asdf-cxx</span></code> library.</p></li>
 <li><p>The FRB server uses a two-stage write path: first, data is written
 to a local high-bandwidth SSD to relieve short-term memory pressure,
@@ -537,7 +569,7 @@ get “baked in”.</p></li>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=ca842793"></script>
+</div><script src="../_static/documentation_options.js?v=1f29e9d3"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

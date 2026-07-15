@@ -1,0 +1,32 @@
+# run_server
+
+Start FRB server(s) from an `frb_server` .yml file and a dedispersion .yml file
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb run_server [-h] [-d SECONDS] [-G] [-D] [-q]
+                             server_config dedispersion_config
+
+Start FRB server(s) from an frb_server .yml file and a dedispersion .yml file
+
+positional arguments:
+  server_config         Path to FrbServer YAML config file
+  dedispersion_config   Path to DedispersionConfig YAML file
+
+options:
+  -h, --help            show this help message and exit
+  -d, --delay SECONDS   Artificial per-frame delay in the processing thread (seconds;
+                        default 0). Used to simulate slow GPU work for testing
+                        FakeXEngine pacing.
+  -G, --no-grouper      Disable FrbGrouper RPC even if grouper_ip_addrs is set in the
+                        config (GpuDedisperser runs with num_consumers=0).
+  -D, --no-dedispersion
+                        Skip ALL GPU work in the processing thread: data is not even
+                        copied host->GPU, and no dequantization or dedispersion kernels
+                        run. The receive/assemble/ringbuf path still runs in full (the
+                        dedisperser is still built, just never fed). Implies --no-
+                        grouper. Infrequently used corner case.
+  -q, --quiet           Suppress the per-chunk "FrbServer: beamset=..." line (printed
+                        once per assembled time chunk).
+```

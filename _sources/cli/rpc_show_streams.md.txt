@@ -1,0 +1,18 @@
+# rpc_show_streams
+
+Send ShowStreams RPC to one or more FrbServers and print the responses. Multiple addresses act as one 'super-server' (loops over all servers).
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb rpc_show_streams [-h] ADDRESS [ADDRESS ...]
+
+Send ShowStreams RPC to one or more FrbServers and print the responses. Multiple
+addresses act as one 'super-server' (loops over all servers).
+
+positional arguments:
+  ADDRESS     Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server
+
+options:
+  -h, --help  show this help message and exit
+```

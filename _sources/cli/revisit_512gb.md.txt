@@ -1,0 +1,19 @@
+# revisit_512gb
+
+Re-test the ~511 GiB cudaHostRegister cap (failure expected).
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb revisit_512gb [-h] [-H]
+
+Re-test the ~511 GiB single-call cudaHostRegister() cap on the current CUDA / driver version. The cap is an undocumented driver limit that currently forces pirate's BumpAllocator to register memory in chunks (see comments in BumpAllocator.hpp and constants.hpp). If this command starts succeeding on some future CUDA / driver release, the chunked-register workaround could potentially be simplified or removed.
+
+Test: mmap 550 GiB (hugepages with -H, 4 KiB pages otherwise), prefault, then attempt a single cudaHostRegister() over the entire region. Cleans up either way.
+
+Requires ~600 GiB of free memory of the requested type.
+
+options:
+  -h, --help       show this help message and exit
+  -H, --hugepages  Use 2 MiB hugepages (default: 4 KiB regular pages).
+```

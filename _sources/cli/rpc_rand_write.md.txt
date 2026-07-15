@@ -1,0 +1,17 @@
+# rpc_rand_write
+
+Send `write_files` RPC to FrbServer(s) with random beams/time range
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb rpc_rand_write [-h] ADDRESS [ADDRESS ...]
+
+Send write_files RPC to FrbServer(s) with random beams/time range
+
+positional arguments:
+  ADDRESS     Server address(es) (e.g. 127.0.0.1:6000)
+
+options:
+  -h, --help  show this help message and exit
+```

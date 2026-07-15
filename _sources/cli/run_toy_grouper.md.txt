@@ -1,0 +1,35 @@
+# run_toy_grouper
+
+Toy FrbGrouper consumer(s): per-chunk peak SNR + argmax, optionally reported to a sifter
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb run_toy_grouper [-h] [-d SECONDS] [-t SNR_THRESHOLD]
+                                  [--histogram STEM] (-s SIFTER_ADDR | -S)
+                                  grouper_addr [grouper_addr ...]
+
+Toy FrbGrouper consumer(s): per-chunk peak SNR + argmax, optionally reported to a sifter
+
+positional arguments:
+  grouper_addr          FrbGrouper listen address(es) 'ip:port' (e.g. 127.0.0.1:7000).
+                        With more than one, each grouper runs in its own child
+                        subprocess; if any child exits, the parent and all siblings
+                        exit.
+
+options:
+  -h, --help            show this help message and exit
+  -d, --delay SECONDS   Artificial per-chunk delay (seconds) inserted into the grouper
+                        loop, e.g. -d 0.001 for a 1 ms delay (default: 0, no delay).
+  -t, --snr-threshold SNR_THRESHOLD
+                        Emit one event per chunk per beam whose peak SNR exceeds this
+                        threshold (default: 10).
+  --histogram STEM      Write histograms of steady-state SNR values (all values, plus
+                        per-(beam, chunk) maxes; warmup values are excluded) to
+                        'STEM.pkl' upon termination. With multiple groupers, the i-th
+                        grouper writes 'STEM<i>.pkl' (e.g. hist1.pkl, hist2.pkl, ...) so
+                        the filenames don't collide.
+  -s, --sifter SIFTER_ADDR
+                        Report to the FrbSifter at this 'ip:port' (e.g. 127.0.0.1:7100):
+  -S, --no-sifter       Run without a sifter (don't send any sifter RPCs).
+```

@@ -1,0 +1,26 @@
+# time_dedisperser
+
+Run timing benchmarks from a dedisperser .yml file
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb time_dedisperser [-h] [-n NITER] [-b BEAMS] [-g MAX_GPU_CLAG] [-H]
+                                   [--python]
+                                   config_file
+
+Run timing benchmarks from a dedisperser .yml file
+
+positional arguments:
+  config_file           Path to YAML config file
+
+options:
+  -h, --help            show this help message and exit
+  -n, --niter NITER     Number of iterations for timing (default 1000)
+  -b, --beams BEAMS     Override config.beams_per_gpu with specified value
+  -g, --max-gpu-clag MAX_GPU_CLAG
+                        Override config.max_gpu_clag with specified value
+  -H, --no-hugepages    Disable hugepages
+  --python              Use Python/cupy timing instead of C++ (for testing pybind11
+                        interface)
+```

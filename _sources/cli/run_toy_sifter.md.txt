@@ -1,0 +1,18 @@
+# run_toy_sifter
+
+Toy FrbSifter gRPC server: print a one-line summary of each received message
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb run_toy_sifter [-h] ADDR
+
+Toy FrbSifter gRPC server: print a one-line summary of each received message
+
+positional arguments:
+  ADDR        Listen address 'ip:port' for the sifter gRPC server (e.g. 127.0.0.1:7100;
+              use [::]:7100 or 0.0.0.0:7100 for all interfaces).
+
+options:
+  -h, --help  show this help message and exit
+```

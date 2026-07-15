@@ -1,0 +1,40 @@
+# run_fake_xengine
+
+Send fake X-engine data to one or more running FrbServers
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb run_fake_xengine [-h] [-w WORKERS] [-P] [-N] [-G] [-j] [-f]
+                                   [-g GAP_SEC] [-s SIFTER_ADDR] [--frb-snr SNR]
+                                   RPC_ADDR [RPC_ADDR ...]
+
+Send fake X-engine data to one or more running FrbServers
+
+positional arguments:
+  RPC_ADDR              One or more "ip:port" strings (one per receiver)
+
+options:
+  -h, --help            show this help message and exit
+  -w, --workers WORKERS
+                        Number of worker threads per FakeXEngine (default 128)
+  -P, --unpaced         Disable pacing -- send chunks as fast as possible (default: pace
+                        to stay <=5 chunks ahead of server)
+  -N, --unnormalized    Send unnormalized data -- leave scales/offsets arbitrary
+                        (default: calibrate them to the per-zone noise variance)
+  -G, --non-gaussian    Fill int4 data with uniform noise over [-8,+7] (default:
+                        simulated Gaussian noise clamped to [-7,+7])
+  -j, --send-junk       Randomize+send only the first chunk; send all-zero junk for
+                        every subsequent chunk (skips per-chunk randomization)
+  -f, --frbs            Inject simulated FRBs (parameters derived from the server
+                        GetConfig: max DM, base-tree width, and the frequency subbands).
+                        Prints one line per injected FRB. Incompatible with -N, -G, and
+                        -j.
+  -g, --gap GAP_SEC     Extra padding (seconds) between consecutive simulated FRBs on a
+                        beam (default 0). Requires -f.
+  -s, --sifter SIFTER_ADDR
+                        Send the simulated FRB events (from_simulator=True) to an
+                        FrbSifter at this "ip:port". Requires -f.
+  --frb-snr SNR         Matched-filter SNR of injected simulated FRBs (default 30).
+                        Requires -f.
+```

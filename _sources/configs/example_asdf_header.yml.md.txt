@@ -18,7 +18,7 @@ orphan: true
 #   - all frequency channels
 #   - a specific time range (or time "chunk")
 # 
-# Written by pirate::AssembedFrame::write_asdf().
+# Written by pirate::AssembledFrame::write_asdf().
 # Note that we define a "minichunk" to be 256 time samples.
 # 
 # References:

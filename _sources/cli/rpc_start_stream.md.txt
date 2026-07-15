@@ -1,0 +1,31 @@
+# rpc_start_stream
+
+Send StartStream RPC to one or more FrbServers (write data to disk as it is received). Multiple addresses act as one 'super-server'.
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb rpc_start_stream [-h] [-s STEM] [-b BEAM_ID] [-B]
+                                   [-d DURATION_SECONDS] [-D]
+                                   ADDRESS [ADDRESS ...]
+
+Send StartStream RPC to one or more FrbServers (write data to disk as it is received).
+Multiple addresses act as one 'super-server'.
+
+positional arguments:
+  ADDRESS               Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-
+                        server
+
+options:
+  -h, --help            show this help message and exit
+  -s, --stem STEM       Filename stem; the CLI sets stream_name == acqdir ==
+                        "{stem}_{date}_{time}", shared across all servers (default stem
+                        "stream", e.g. stream_26_07_07_143052)
+  -b, --beam-id BEAM_ID
+                        Beam id to stream (repeatable), routed to the server that owns
+                        it; either -b or -B must be specified
+  -B, --all-beams       Stream all beams; starts a stream on every server with its full
+                        beam list
+  -d DURATION_SECONDS   Stream duration in seconds; either -d or -D must be specified
+  -D, --no-duration     Run indefinitely (fpga_seq_end = 2^63 - 1)
+```

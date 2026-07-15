@@ -1,0 +1,14 @@
+# scratch
+
+For debugging: run whatever code is currently in `src_lib`/scratch.cu
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb scratch [-h]
+
+For debugging: run whatever code is currently in src_lib/scratch.cu
+
+options:
+  -h, --help  show this help message and exit
+```

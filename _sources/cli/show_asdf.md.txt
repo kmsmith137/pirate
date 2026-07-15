@@ -1,0 +1,17 @@
+# show_asdf
+
+Print the YAML header of an ASDF file. (Note: 'asdftool --info' is also useful)
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb show_asdf [-h] asdf_file
+
+Print the YAML header of an ASDF file. (Note: 'asdftool --info' is also useful)
+
+positional arguments:
+  asdf_file   Path to ASDF file
+
+options:
+  -h, --help  show this help message and exit
+```

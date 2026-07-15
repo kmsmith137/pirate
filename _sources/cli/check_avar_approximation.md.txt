@@ -1,0 +1,20 @@
+# check_avar_approximation
+
+Compare exact vs approximate analytic peak-finding variance for a config
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb check_avar_approximation [-h] [-r] config_file
+
+Compare exact vs approximate analytic peak-finding variance for a config
+
+positional arguments:
+  config_file           Path to dedispersion YAML config file
+
+options:
+  -h, --help            show this help message and exit
+  -r, --random-variances
+                        Use random per-channel variances
+                        (config.make_random_freq_variances) instead of all-ones
+```

@@ -2,9 +2,11 @@
 
 A pattern for a class `X`:
 
-- `X` is backed by one or more worker threads whose lifetimes are "tied" to X: threads are created when new objects are created, and joined in `~X()`. Note that it is safe for the worker thread(s) to hold a bare pointer (`X *this`), since the object always outlives the worker thread(s).
+- `X` is thread-safe.
 
-- `X` has a `stop(std::exception_ptr e)` method which can be called externally, to put the object into a "stopped" state (`X::is_stopped==true`). The value of `e` is saved in `X::error`, and is null or non-null depending on whether the call to `stop()` represents normal termination. The first caller to `stop()` sets `X::error`. 
+- `X` is backed by one or more worker threads whose lifetimes are "tied" to X: threads are created when new objects are created, and joined in `~X()`. Workers hold a bare pointer (`X *this`) -- safe, since the object always outlives the worker thread(s). In fact workers MUST hold a bare pointer, never a `shared_ptr<X>` (or `shared_from_this()`): a worker's shared_ptr would keep the object alive until the worker exits, but the worker exits only when the destructor joins it, so the destructor could never run.
+
+- `X` has a `stop(std::exception_ptr e)` method which can be called externally, to put the object into a "stopped" state (`X::is_stopped==true`). The value of `e` is saved in `X::error`, and is null or non-null depending on whether the call to `stop()` represents normal termination. The first caller to `stop()` sets `X::error`. `stop()` is declared `const`, and the stop-pattern state (mutex, condition variables, `is_stopped`, `error`) is declared `mutable` -- see [notes/stoppable_class.md](stoppable_class.md).
 
 - When the object enters its stopped state, the worker thread returns (as promptly as is practical).
 
@@ -12,17 +14,45 @@ A pattern for a class `X`:
 
 - Some public methods of `X` are labelled as "entry points". If an entry point is called in the stopped state, the exception `e` is rethrown. (If `e` is `nullptr`, then a generic exception `runtime_error("X::f() called on stopped instance")` is thrown.) 
 
-- If an entry point throws an exception, then `X::stop(e)` is called, and the exception is rethrown.
+- If an entry point throws an exception, then `X::stop(e)` is called, and the exception is rethrown. This is the strict policy described in notes/stoppable_class.md, which also lists the exempt method categories (stop(), accessors, join/wait-style methods) and the "done-value" variant for blocking methods where a clean stop is an expected outcome.
 
-- In a context where the value of `is_stopped` is checked (e.g. entry point or `worker_thread_main`), if a blocking call is made (e.g. `cv.wait()`) then `is_stopped` is rechecked on wakeup. `X::stop()` should call `cv.notify_all()`. In situations where this notification mechanism doesn't work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck `is_stopped` every millisecond.)
+- In a context where the value of `is_stopped` is checked (e.g. entry point or `worker_thread_main`), if a blocking call is made (e.g. `cv.wait()`) then `is_stopped` is rechecked on wakeup. `X::stop()` should call `notify_all()` on each of `X`'s condition variables. In situations where this notification mechanism doesn't work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck `is_stopped` every millisecond.)
 
 - `~X()` calls `stop()` before joining the worker thread, to force the worker thread to exit.
 
-- `X` is noncopyable, nonmoveable, and always accessed through a shared_ptr.
+- `X` is noncopyable, nonmoveable, and normally accessed through a shared_ptr (see notes/stoppable_class.md for the pybind11 holder rule and the rare sanctioned exceptions).
 
-- In the example below, the worker thread is created in `X::X()`, but in other cases, the worker may be created in a different method, for example `X::start()` or `X::allocate()`.
+- In the example below, the worker thread is created in `X::X()`, but in other cases, the worker may be created in a different method, for example `X::start()` or `X::allocate()` (see "Spawning, joining, and teardown" below).
 
-- If `X` contains pointers to other thread-backed classes (or more generally, to any class `Y` defining `Y::stop()`), then `X::stop()` should call `ptr->stop()` for each such pointer.
+- If `X` contains pointers to other thread-backed classes (or more generally, to any class `Y` defining `Y::stop()`), then `X::stop(e)` should call `ptr->stop(e)` for each such pointer, forwarding the exception (see "Error reporting" in notes/stoppable_class.md).
+
+Every thread-backed class is a stoppable class (see notes/stoppable_class.md), but not vice versa.
+In particular, the "Concurrency" rules in [notes/cpp.md](cpp.md) and the "pybind11 bindings" / "Reviewer checklist" sections in notes/stoppable_class.md apply here too.
+
+## Spawning, joining, and teardown
+
+The general thread-lifecycle rules -- catch-all wrappers (an exception
+escaping a thread is std::terminate), publishing thread handles under the
+mutex, joining with the mutex released, mid-spawn constructor failure,
+destructors vs throwing join(), close() serialization -- live in the
+"Concurrency" section of notes/cpp.md; classes whose threads are spawned
+outside the constructor, or that have more than one thread, hit all of
+them. (The single-thread ctor-spawned example below has none of these
+hazards.) One rule is specific to this pattern:
+
+- Callback/handler threads (e.g. gRPC handlers) hold a BARE pointer to X,
+  exactly like worker threads -- never a shared_ptr, and never
+  weak_ptr::lock() (which manufactures one). Any owning reference on a
+  handler thread can become the LAST reference, running ~X on that thread,
+  where teardown joins/waits on the very thread executing the destructor
+  (self-deadlock). The bare pointer is safe under the same invariant that
+  protects workers: the destructor shuts down and drains the handler
+  dispatcher (e.g. grpc Server::Shutdown + Wait) before members are
+  destroyed, and no handler is dispatched once Shutdown has begun. See
+  FrbGrouperService / FrbRpcService for the model. Corollary: a teardown
+  path that blocks on handler drain (Shutdown/Wait) must never itself be
+  reachable from a handler thread -- document that invariant where it
+  applies (e.g. "no RPC handler may call stop()" when stop() Shutdowns).
 
 ## Example Code
 
@@ -40,11 +70,18 @@ The entry point `X::queue_request()` adds work to the queue.
 #include <thread>
 
 class X {
-    std::mutex mutex;
-    std::condition_variable cv;
+    // Stop-pattern state is 'mutable' and stop() is 'const' (see
+    // notes/stoppable_class.md).
+    mutable std::mutex mutex;
+
+    // Waiter: the worker thread (predicate: queue non-empty, or stopped).
+    // Signaled on: queue_request() (notify_one -- single waiter), stop().
+    mutable std::condition_variable cv;
+
+    mutable bool is_stopped = false;
+    mutable std::exception_ptr error;
+
     std::queue<int> queue;
-    bool is_stopped = false;
-    std::exception_ptr error;
     std::thread worker;
 
     void _worker_main() {
@@ -102,22 +139,30 @@ public:
         if (worker.joinable())
             worker.join();
     }
+    
+    // Noncopyable, nonmovable.
+    X(const X &) = delete;
+    X &operator=(const X &) = delete;
+    X(X &&) = delete;
+    X &operator=(X &&) = delete;
 
-    void stop(std::exception_ptr e = nullptr) 
+    void stop(std::exception_ptr e = nullptr) const
     {
-        std::lock_guard lock(mutex);
+        std::unique_lock lock(mutex);
         if (is_stopped) return;
         is_stopped = true;
         error = e;
+        lock.unlock();
         cv.notify_all();
     }
 
     void queue_request(int id) 
     {
-        std::lock_guard lock(mutex);
+        std::unique_lock lock(mutex);
         _throw_if_stopped("X::queue_request");
         queue.push(id);
-        cv.notify_one();
+        lock.unlock();
+        cv.notify_one();   // notify_one: the worker thread is the only waiter
     }
 
     void example_entry_point() 

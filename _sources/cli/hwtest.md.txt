@@ -1,0 +1,33 @@
+# hwtest
+
+Run hardware test from hwtest.yml (use -s to send data instead of receiving)
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb hwtest [-h] [-t TIME] [-s] config_file
+
+Run hardware test using YAML config file (use -s to send data instead of receiving).
+
+Runs and times parallel synthetic loads: network IO, disk IO, PCIe transfers
+between GPU and host, GPU compute kernels, CPU compute kernels, host memory
+bandwidth.
+
+Example networking-only run::
+
+  # On cf05. The test will pause after "listening for TCP connections".
+  python -m pirate_frb hwtest configs/hwtest/cf00_net64.yml
+
+  # On cf00. Send to all four IP addresses on cf05.
+  python -m pirate_frb hwtest -s configs/hwtest/cf00_net64.yml
+
+See configs/hwtest/*.yml for more examples.
+
+positional arguments:
+  config_file      Path to YAML config file
+
+options:
+  -h, --help       show this help message and exit
+  -t, --time TIME  Number of seconds to run test (default 20)
+  -s, --send       Send data to test server (uses ip_addrs from config file)
+```

@@ -1,0 +1,19 @@
+# show_kernels
+
+Show registered cuda kernels (use flags to select specific registries)
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb show_kernels [-h] [--pfom] [--pfwr] [--gddk] [--gpfk] [--cdd2]
+
+Show registered cuda kernels (use flags to select specific registries)
+
+options:
+  -h, --help  show this help message and exit
+  --pfom      Show PfOutputMicrokernel registry
+  --pfwr      Show PfWeightReaderMicrokernel registry
+  --gddk      Show GpuDedispersionKernel registry
+  --gpfk      Show GpuPeakFindingKernel registry
+  --cdd2      Show CoalescedDdKernel2 registry
+```

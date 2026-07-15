@@ -1,0 +1,20 @@
+# run_offline_dedisperser
+
+Toy offline dedispersion: per-chunk peak SNR over an acqdir of .asdf frames
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb run_offline_dedisperser [-h] [--max-chunks MAX_CHUNKS] acqdir config
+
+Toy offline dedispersion: per-chunk peak SNR over an acqdir of .asdf frames
+
+positional arguments:
+  acqdir                acqdir of frame_b(BEAM)_t(CHUNK).asdf files
+  config                dedispersion config yaml
+
+options:
+  -h, --help            show this help message and exit
+  --max-chunks MAX_CHUNKS
+                        only process the first N chunks of each beam (default: all)
+```

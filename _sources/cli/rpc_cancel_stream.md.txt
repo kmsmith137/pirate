@@ -1,0 +1,23 @@
+# rpc_cancel_stream
+
+Send CancelStream RPC to one or more FrbServers. Multiple addresses act as one 'super-server' (cancels loop over all servers).
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb rpc_cancel_stream [-h] [-a STREAM_NAME] [-A] ADDRESS [ADDRESS ...]
+
+Send CancelStream RPC to one or more FrbServers. Multiple addresses act as one 'super-
+server' (cancels loop over all servers).
+
+positional arguments:
+  ADDRESS               Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-
+                        server
+
+options:
+  -h, --help            show this help message and exit
+  -a, --stream-name STREAM_NAME
+                        Cancel the stream with this stream_name, on every server that
+                        has it
+  -A, --all             Cancel all active streams on every server
+```

@@ -1,0 +1,15 @@
+# test_simpulse
+
+Run simpulse tests (pulse-upsampling self-consistency) and write example plots to cwd
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb test_simpulse [-h] [-n NITER]
+
+Run simpulse tests (pulse-upsampling self-consistency) and write example plots to cwd
+
+options:
+  -h, --help         show this help message and exit
+  -n, --niter NITER  Number of upsampling-test iterations (default 100)
+```

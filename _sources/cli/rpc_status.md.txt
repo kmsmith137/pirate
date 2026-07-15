@@ -1,0 +1,17 @@
+# rpc_status
+
+Connect to FrbServer(s) and stream status + filenames
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb rpc_status [-h] ADDRESS [ADDRESS ...]
+
+Connect to FrbServer(s) and stream status + filenames
+
+positional arguments:
+  ADDRESS     Server address(es) (e.g. 127.0.0.1:6000)
+
+options:
+  -h, --help  show this help message and exit
+```

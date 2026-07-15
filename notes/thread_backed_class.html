@@ -3,13 +3,14 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="CudaEventRingbuf" href="cuda_event_ringbuf.html"><link rel="prev" title="Writing sphinx-friendly docstrings" href="docstrings.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="CudaEventRingbuf" href="cuda_event_ringbuf.html"><link rel="prev" title="Stoppable Class Pattern" href="stoppable_class.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Thread-Backed Class Pattern - pirate_frb 1.2.1 documentation</title>
+        <title>Thread-Backed Class Pattern - pirate_frb 1.3.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=e74aaa4d" />
     
     
 
@@ -163,7 +164,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.2.1 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.3.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -184,7 +185,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.2.1 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.3.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -205,8 +206,38 @@
 <li class="toctree-l1"><a class="reference internal" href="grouper_interface.html">Writing a grouper</a></li>
 <li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../cli.html">CLI reference</a><input aria-label="Toggle navigation of CLI reference" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_server.html">run_server</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_toy_grouper.html">run_toy_grouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_offline_dedisperser.html">run_offline_dedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_toy_sifter.html">run_toy_sifter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/run_fake_xengine.html">run_fake_xengine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_status.html">rpc_status</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_rand_write.html">rpc_rand_write</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_start_stream.html">rpc_start_stream</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_cancel_stream.html">rpc_cancel_stream</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_show_streams.html">rpc_show_streams</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/test.html">test</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/test_simpulse.html">test_simpulse</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/check_avar_approximation.html">check_avar_approximation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/check_avar_mc.html">check_avar_mc</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/time.html">time</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/time_dedisperser.html">time_dedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_asdf.html">show_asdf</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_file_format.html">show_file_format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_dedisperser.html">show_dedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_hardware.html">show_hardware</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_kernels.html">show_kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_random_config.html">show_random_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/show_xengine_metadata.html">show_xengine_metadata</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/hwtest.html">hwtest</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/make_subbands.html">make_subbands</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/random_kernels.html">random_kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/scratch.html">scratch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/revisit_512gb.html">revisit_512gb</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l2"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
@@ -216,7 +247,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../classes/Acquisition.html">Acquisition</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrame.html">AssembledFrame</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionConfig.html">DedispersionConfig</a></li>
@@ -230,12 +261,13 @@
 <li class="toctree-l2"><a class="reference internal" href="../classes/XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
-<li class="toctree-l1 current has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" checked="" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
 <li class="toctree-l2"><a class="reference internal" href="grpc.html">GRPC .proto guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="stoppable_class.html">Stoppable Class Pattern</a></li>
 <li class="toctree-l2 current current-page"><a class="current reference internal" href="#">Thread-Backed Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
 </ul>
@@ -282,18 +314,47 @@
 <h1>Thread-Backed Class Pattern<a class="headerlink" href="#thread-backed-class-pattern" title="Link to this heading">¶</a></h1>
 <p>A pattern for a class <code class="docutils literal notranslate"><span class="pre">X</span></code>:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">X</span></code> is backed by one or more worker threads whose lifetimes are “tied” to X: threads are created when new objects are created, and joined in <code class="docutils literal notranslate"><span class="pre">~X()</span></code>. Note that it is safe for the worker thread(s) to hold a bare pointer (<code class="docutils literal notranslate"><span class="pre">X</span> <span class="pre">*this</span></code>), since the object always outlives the worker thread(s).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">X</span></code> has a <code class="docutils literal notranslate"><span class="pre">stop(std::exception_ptr</span> <span class="pre">e)</span></code> method which can be called externally, to put the object into a “stopped” state (<code class="docutils literal notranslate"><span class="pre">X::is_stopped==true</span></code>). The value of <code class="docutils literal notranslate"><span class="pre">e</span></code> is saved in <code class="docutils literal notranslate"><span class="pre">X::error</span></code>, and is null or non-null depending on whether the call to <code class="docutils literal notranslate"><span class="pre">stop()</span></code> represents normal termination. The first caller to <code class="docutils literal notranslate"><span class="pre">stop()</span></code> sets <code class="docutils literal notranslate"><span class="pre">X::error</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">X</span></code> is thread-safe.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">X</span></code> is backed by one or more worker threads whose lifetimes are “tied” to X: threads are created when new objects are created, and joined in <code class="docutils literal notranslate"><span class="pre">~X()</span></code>. Workers hold a bare pointer (<code class="docutils literal notranslate"><span class="pre">X</span> <span class="pre">*this</span></code>) – safe, since the object always outlives the worker thread(s). In fact workers MUST hold a bare pointer, never a <code class="docutils literal notranslate"><span class="pre">shared_ptr&lt;X&gt;</span></code> (or <code class="docutils literal notranslate"><span class="pre">shared_from_this()</span></code>): a worker’s shared_ptr would keep the object alive until the worker exits, but the worker exits only when the destructor joins it, so the destructor could never run.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">X</span></code> has a <code class="docutils literal notranslate"><span class="pre">stop(std::exception_ptr</span> <span class="pre">e)</span></code> method which can be called externally, to put the object into a “stopped” state (<code class="docutils literal notranslate"><span class="pre">X::is_stopped==true</span></code>). The value of <code class="docutils literal notranslate"><span class="pre">e</span></code> is saved in <code class="docutils literal notranslate"><span class="pre">X::error</span></code>, and is null or non-null depending on whether the call to <code class="docutils literal notranslate"><span class="pre">stop()</span></code> represents normal termination. The first caller to <code class="docutils literal notranslate"><span class="pre">stop()</span></code> sets <code class="docutils literal notranslate"><span class="pre">X::error</span></code>. <code class="docutils literal notranslate"><span class="pre">stop()</span></code> is declared <code class="docutils literal notranslate"><span class="pre">const</span></code>, and the stop-pattern state (mutex, condition variables, <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code>, <code class="docutils literal notranslate"><span class="pre">error</span></code>) is declared <code class="docutils literal notranslate"><span class="pre">mutable</span></code> – see <a class="reference internal" href="stoppable_class.html"><span class="std std-doc">notes/stoppable_class.md</span></a>.</p></li>
 <li><p>When the object enters its stopped state, the worker thread returns (as promptly as is practical).</p></li>
 <li><p>If the worker thread throws an exception <code class="docutils literal notranslate"><span class="pre">e</span></code>, then the worker thread catches the exception, calls <code class="docutils literal notranslate"><span class="pre">X::stop(e)</span></code>, and exits.</p></li>
 <li><p>Some public methods of <code class="docutils literal notranslate"><span class="pre">X</span></code> are labelled as “entry points”. If an entry point is called in the stopped state, the exception <code class="docutils literal notranslate"><span class="pre">e</span></code> is rethrown. (If <code class="docutils literal notranslate"><span class="pre">e</span></code> is <code class="docutils literal notranslate"><span class="pre">nullptr</span></code>, then a generic exception <code class="docutils literal notranslate"><span class="pre">runtime_error(&quot;X::f()</span> <span class="pre">called</span> <span class="pre">on</span> <span class="pre">stopped</span> <span class="pre">instance&quot;)</span></code> is thrown.)</p></li>
-<li><p>If an entry point throws an exception, then <code class="docutils literal notranslate"><span class="pre">X::stop(e)</span></code> is called, and the exception is rethrown.</p></li>
-<li><p>In a context where the value of <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> is checked (e.g. entry point or <code class="docutils literal notranslate"><span class="pre">worker_thread_main</span></code>), if a blocking call is made (e.g. <code class="docutils literal notranslate"><span class="pre">cv.wait()</span></code>) then <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> is rechecked on wakeup. <code class="docutils literal notranslate"><span class="pre">X::stop()</span></code> should call <code class="docutils literal notranslate"><span class="pre">cv.notify_all()</span></code>. In situations where this notification mechanism doesn’t work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> every millisecond.)</p></li>
+<li><p>If an entry point throws an exception, then <code class="docutils literal notranslate"><span class="pre">X::stop(e)</span></code> is called, and the exception is rethrown. This is the strict policy described in notes/stoppable_class.md, which also lists the exempt method categories (stop(), accessors, join/wait-style methods) and the “done-value” variant for blocking methods where a clean stop is an expected outcome.</p></li>
+<li><p>In a context where the value of <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> is checked (e.g. entry point or <code class="docutils literal notranslate"><span class="pre">worker_thread_main</span></code>), if a blocking call is made (e.g. <code class="docutils literal notranslate"><span class="pre">cv.wait()</span></code>) then <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> is rechecked on wakeup. <code class="docutils literal notranslate"><span class="pre">X::stop()</span></code> should call <code class="docutils literal notranslate"><span class="pre">notify_all()</span></code> on each of <code class="docutils literal notranslate"><span class="pre">X</span></code>’s condition variables. In situations where this notification mechanism doesn’t work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> every millisecond.)</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">~X()</span></code> calls <code class="docutils literal notranslate"><span class="pre">stop()</span></code> before joining the worker thread, to force the worker thread to exit.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">X</span></code> is noncopyable, nonmoveable, and always accessed through a shared_ptr.</p></li>
-<li><p>In the example below, the worker thread is created in <code class="docutils literal notranslate"><span class="pre">X::X()</span></code>, but in other cases, the worker may be created in a different method, for example <code class="docutils literal notranslate"><span class="pre">X::start()</span></code> or <code class="docutils literal notranslate"><span class="pre">X::allocate()</span></code>.</p></li>
-<li><p>If <code class="docutils literal notranslate"><span class="pre">X</span></code> contains pointers to other thread-backed classes (or more generally, to any class <code class="docutils literal notranslate"><span class="pre">Y</span></code> defining <code class="docutils literal notranslate"><span class="pre">Y::stop()</span></code>), then <code class="docutils literal notranslate"><span class="pre">X::stop()</span></code> should call <code class="docutils literal notranslate"><span class="pre">ptr-&gt;stop()</span></code> for each such pointer.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">X</span></code> is noncopyable, nonmoveable, and normally accessed through a shared_ptr (see notes/stoppable_class.md for the pybind11 holder rule and the rare sanctioned exceptions).</p></li>
+<li><p>In the example below, the worker thread is created in <code class="docutils literal notranslate"><span class="pre">X::X()</span></code>, but in other cases, the worker may be created in a different method, for example <code class="docutils literal notranslate"><span class="pre">X::start()</span></code> or <code class="docutils literal notranslate"><span class="pre">X::allocate()</span></code> (see “Spawning, joining, and teardown” below).</p></li>
+<li><p>If <code class="docutils literal notranslate"><span class="pre">X</span></code> contains pointers to other thread-backed classes (or more generally, to any class <code class="docutils literal notranslate"><span class="pre">Y</span></code> defining <code class="docutils literal notranslate"><span class="pre">Y::stop()</span></code>), then <code class="docutils literal notranslate"><span class="pre">X::stop(e)</span></code> should call <code class="docutils literal notranslate"><span class="pre">ptr-&gt;stop(e)</span></code> for each such pointer, forwarding the exception (see “Error reporting” in notes/stoppable_class.md).</p></li>
 </ul>
+<p>Every thread-backed class is a stoppable class (see notes/stoppable_class.md), but not vice versa.
+In particular, the “Concurrency” rules in <a class="reference internal" href="cpp.html"><span class="std std-doc">notes/cpp.md</span></a> and the “pybind11 bindings” / “Reviewer checklist” sections in notes/stoppable_class.md apply here too.</p>
+<section id="spawning-joining-and-teardown">
+<h2>Spawning, joining, and teardown<a class="headerlink" href="#spawning-joining-and-teardown" title="Link to this heading">¶</a></h2>
+<p>The general thread-lifecycle rules – catch-all wrappers (an exception
+escaping a thread is std::terminate), publishing thread handles under the
+mutex, joining with the mutex released, mid-spawn constructor failure,
+destructors vs throwing join(), close() serialization – live in the
+“Concurrency” section of notes/cpp.md; classes whose threads are spawned
+outside the constructor, or that have more than one thread, hit all of
+them. (The single-thread ctor-spawned example below has none of these
+hazards.) One rule is specific to this pattern:</p>
+<ul class="simple">
+<li><p>Callback/handler threads (e.g. gRPC handlers) hold a BARE pointer to X,
+exactly like worker threads – never a shared_ptr, and never
+weak_ptr::lock() (which manufactures one). Any owning reference on a
+handler thread can become the LAST reference, running ~X on that thread,
+where teardown joins/waits on the very thread executing the destructor
+(self-deadlock). The bare pointer is safe under the same invariant that
+protects workers: the destructor shuts down and drains the handler
+dispatcher (e.g. grpc Server::Shutdown + Wait) before members are
+destroyed, and no handler is dispatched once Shutdown has begun. See
+FrbGrouperService / FrbRpcService for the model. Corollary: a teardown
+path that blocks on handler drain (Shutdown/Wait) must never itself be
+reachable from a handler thread – document that invariant where it
+applies (e.g. “no RPC handler may call stop()” when stop() Shutdowns).</p></li>
+</ul>
+</section>
 <section id="example-code">
 <h2>Example Code<a class="headerlink" href="#example-code" title="Link to this heading">¶</a></h2>
 <p>In this toy example, <code class="docutils literal notranslate"><span class="pre">X</span></code> is backed by one worker thread, and contains a thread-safe work queue.
@@ -308,11 +369,18 @@ The entry point <code class="docutils literal notranslate"><span class="pre">X::
 <span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;thread&gt;</span>
 
 <span class="k">class</span><span class="w"> </span><span class="nc">X</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="w"> </span><span class="n">mutex</span><span class="p">;</span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">condition_variable</span><span class="w"> </span><span class="n">cv</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// Stop-pattern state is &#39;mutable&#39; and stop() is &#39;const&#39; (see</span>
+<span class="w">    </span><span class="c1">// notes/stoppable_class.md).</span>
+<span class="w">    </span><span class="k">mutable</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="w"> </span><span class="n">mutex</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Waiter: the worker thread (predicate: queue non-empty, or stopped).</span>
+<span class="w">    </span><span class="c1">// Signaled on: queue_request() (notify_one -- single waiter), stop().</span>
+<span class="w">    </span><span class="k">mutable</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">condition_variable</span><span class="w"> </span><span class="n">cv</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">mutable</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_stopped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="w">    </span><span class="k">mutable</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">exception_ptr</span><span class="w"> </span><span class="n">error</span><span class="p">;</span>
+
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">queue</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="w"> </span><span class="n">queue</span><span class="p">;</span>
-<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_stopped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">exception_ptr</span><span class="w"> </span><span class="n">error</span><span class="p">;</span>
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="kr">thread</span><span class="w"> </span><span class="n">worker</span><span class="p">;</span>
 
 <span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">_worker_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
@@ -370,27 +438,35 @@ The entry point <code class="docutils literal notranslate"><span class="pre">X::
 <span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">worker</span><span class="p">.</span><span class="n">joinable</span><span class="p">())</span>
 <span class="w">            </span><span class="n">worker</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
 <span class="w">    </span><span class="p">}</span>
+<span class="w">    </span>
+<span class="w">    </span><span class="c1">// Noncopyable, nonmovable.</span>
+<span class="w">    </span><span class="n">X</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">X</span><span class="w"> </span><span class="o">&amp;</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">delete</span><span class="p">;</span>
+<span class="w">    </span><span class="n">X</span><span class="w"> </span><span class="o">&amp;</span><span class="k">operator</span><span class="o">=</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">X</span><span class="w"> </span><span class="o">&amp;</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">delete</span><span class="p">;</span>
+<span class="w">    </span><span class="n">X</span><span class="p">(</span><span class="n">X</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">delete</span><span class="p">;</span>
+<span class="w">    </span><span class="n">X</span><span class="w"> </span><span class="o">&amp;</span><span class="k">operator</span><span class="o">=</span><span class="p">(</span><span class="n">X</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">delete</span><span class="p">;</span>
 
-<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="n">stop</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">exception_ptr</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">)</span><span class="w"> </span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">stop</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">exception_ptr</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">)</span><span class="w"> </span><span class="k">const</span>
 <span class="w">    </span><span class="p">{</span>
-<span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">lock_guard</span><span class="w"> </span><span class="nf">lock</span><span class="p">(</span><span class="n">mutex</span><span class="p">);</span>
+<span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">unique_lock</span><span class="w"> </span><span class="n">lock</span><span class="p">(</span><span class="n">mutex</span><span class="p">);</span>
 <span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">is_stopped</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="p">;</span>
 <span class="w">        </span><span class="n">is_stopped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
 <span class="w">        </span><span class="n">error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">e</span><span class="p">;</span>
+<span class="w">        </span><span class="n">lock</span><span class="p">.</span><span class="n">unlock</span><span class="p">();</span>
 <span class="w">        </span><span class="n">cv</span><span class="p">.</span><span class="n">notify_all</span><span class="p">();</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="n">queue_request</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">id</span><span class="p">)</span><span class="w"> </span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">queue_request</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">id</span><span class="p">)</span><span class="w"> </span>
 <span class="w">    </span><span class="p">{</span>
-<span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">lock_guard</span><span class="w"> </span><span class="nf">lock</span><span class="p">(</span><span class="n">mutex</span><span class="p">);</span>
+<span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">unique_lock</span><span class="w"> </span><span class="n">lock</span><span class="p">(</span><span class="n">mutex</span><span class="p">);</span>
 <span class="w">        </span><span class="n">_throw_if_stopped</span><span class="p">(</span><span class="s">&quot;X::queue_request&quot;</span><span class="p">);</span>
 <span class="w">        </span><span class="n">queue</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">id</span><span class="p">);</span>
-<span class="w">        </span><span class="n">cv</span><span class="p">.</span><span class="n">notify_one</span><span class="p">();</span>
+<span class="w">        </span><span class="n">lock</span><span class="p">.</span><span class="n">unlock</span><span class="p">();</span>
+<span class="w">        </span><span class="n">cv</span><span class="p">.</span><span class="n">notify_one</span><span class="p">();</span><span class="w">   </span><span class="c1">// notify_one: the worker thread is the only waiter</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="n">example_entry_point</span><span class="p">()</span><span class="w"> </span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">example_entry_point</span><span class="p">()</span><span class="w"> </span>
 <span class="w">    </span><span class="p">{</span>
-<span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">unique_lock</span><span class="w"> </span><span class="nf">lock</span><span class="p">(</span><span class="n">mutex</span><span class="p">);</span>
+<span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">unique_lock</span><span class="w"> </span><span class="n">lock</span><span class="p">(</span><span class="n">mutex</span><span class="p">);</span>
 <span class="w">        </span><span class="n">_throw_if_stopped</span><span class="p">(</span><span class="s">&quot;X::example_entry_point&quot;</span><span class="p">);</span>
 <span class="w">        </span><span class="n">lock</span><span class="p">.</span><span class="n">unlock</span><span class="p">();</span>
 
@@ -402,7 +478,7 @@ The entry point <code class="docutils literal notranslate"><span class="pre">X::
 <span class="w">        </span><span class="p">}</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="n">_example_entry_point</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">_example_entry_point</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="c1">// Entry point body here.</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">};</span>
@@ -425,14 +501,14 @@ The entry point <code class="docutils literal notranslate"><span class="pre">X::
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="docstrings.html">
+          <a class="prev-page" href="stoppable_class.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">Writing sphinx-friendly docstrings</div>
+                <div class="title">Stoppable Class Pattern</div>
                 
               </div>
             </a>
@@ -467,6 +543,7 @@ The entry point <code class="docutils literal notranslate"><span class="pre">X::
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">Thread-Backed Class Pattern</a><ul>
+<li><a class="reference internal" href="#spawning-joining-and-teardown">Spawning, joining, and teardown</a></li>
 <li><a class="reference internal" href="#example-code">Example Code</a></li>
 </ul>
 </li>
@@ -479,7 +556,7 @@ The entry point <code class="docutils literal notranslate"><span class="pre">X::
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=ca842793"></script>
+</div><script src="../_static/documentation_options.js?v=1f29e9d3"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
