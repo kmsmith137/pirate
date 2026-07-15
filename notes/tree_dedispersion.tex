@@ -207,7 +207,7 @@ Subbanded dedispersion is an operation whose input array is the same as ordinary
 dedispersion (\ref{sec:tree_dedispersion}), i.e.\ a shape $(2^r, N_{\rm time})$ array where the first index is tree-freq.
 The output array has shape $(2^{r-R}, M, N_{\rm time})$, where $M$ is the number of ``multiplets'':
 \begin{equation}
-M \equiv \sum_{l=0}^R 2^l C_l
+M \equiv \sum_{l=0}^R 2^l C_l  \label{eq:multiplet_def}
 \end{equation}
 Each subband $(l,s)$ ``owns'' a shape $(2^{r-R}, 2^l, N_{\rm time})$ subarray of the output.
 The first two axes correspond to $2^{r-R+l}$ dispersion delays across the subband, split into a ``coarse'' index
@@ -557,16 +557,29 @@ a maximum over a certain set of parameters: frequency subbands, pulse widths, fi
 and fine-grained arrival times. The \verb|out_argmax| array consists of integer ``tokens''
 which encode the ``winning'' parameters, that are responsible for the max snr.
 
-The method \verb|FrbGrouper.create_events()| decodes tokens to recover the ``winning''
-parameters (min/max freq, DM, timestamp, width) for each \verb|out_max| array value.
-A future version of these notes may explain details of the decoding.
+For reference, the token encoding is:
+\begin{equation}
+\big(\mbox{32-bit {\tt argmax\_token}}\big)
+ = \, \mbox{\tt (t) | (p << 8) | (m << 16)}
+\end{equation}
+where $0 \le t < T_{\rm ds}$ is an 8-bit fine-grained arrival time, $0 \le p < P$ is
+an 8-bit peak-finding profile index (encoding pulse width and profile shape),
+and $0 \le m < M \le 114$ is a ``multiplet''
+(i.e.~(frequency subband, fine-grained DM) pair, see Eq.\ (\ref{eq:multiplet_def})).
+The arrival time $t$ has a small $p$-dependent time shift applied (see code for details).
 
-For now, we just note one key property: the timestamp is defined to be the
-arrival time at the lowest frequency of the band (400 MHz in CHIME, or 300 MHz 
+In practice, you shouldn't need to know the details of the token encoding -- there are helper
+functions that are intended to hide it. In particular, the method \verb|FrbGrouper.create_events()| 
+decodes tokens to recover the ``winning'' parameters (min/max freq, DM, timestamp, width) 
+for each \verb|out_max| array value.
+
+When using \verb|FrbGrouper.create_events()|, note that the output timestamp is defined to 
+be the arrival time at the lowest frequency of the band (400 MHz in CHIME, or 300 MHz 
 in CHORD), even if the FRB is detected in a subband.
 If there are early triggers, then the timestamp can be {\bf significantly later}
 ($\sim 10^2$ seconds) than the end of the time-chunk.
-In any case, the timestamp can be {\bf slightly earlier} than the beginning of
-the time-chunk, due to the finite width of the peak-finding kernels.
+With or without early triggers, the timestamp can also be {\bf slightly earlier} 
+than the beginning of the time-chunk, due to the finite width of the peak-finding 
+kernels.
 
 \end{document}
