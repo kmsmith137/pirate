@@ -1616,6 +1616,18 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_
         auto &[set_ref, num_received] = frame_set_queue[queue_pos];
         num_received++;
 
+        // Receipt-contract check: in legitimate flows a count can never
+        // exceed num_consumers (receipts are non-increasing along the queue
+        // -- each consumer requests consecutive indices -- so only the front
+        // can reach num_consumers, and it is popped in this same critical
+        // section). A double-request that pushed a NON-front set past
+        // num_consumers would otherwise jam the queue forever: the pop test
+        // below is an equality, so the overshot set would never pop -- an
+        // undetectable deadlock. Crash loudly at the offending caller
+        // instead (the throw stops the allocator, via the entry-point
+        // wrapper in get_frame_set).
+        xassert_le(num_received, num_consumers);
+
         // IMPORTANT: Make a copy of the shared_ptr BEFORE popping from queue!
         // set_ref becomes a dangling reference after pop_front().
         auto result = set_ref;

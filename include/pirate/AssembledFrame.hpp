@@ -441,6 +441,9 @@ struct AssembledFrameAllocator
     //     Note that a double-request inflates a receipt count and evicts the
     //     set prematurely, so this throw can surface in a DIFFERENT,
     //     innocent caller;
+    //   - a double-request that pushes a set's receipt count PAST
+    //     num_consumers (possible when the set is not yet at the queue
+    //     front) is caught by an xassert at the offending call;
     //   - a skipped chunk leaves its receipt count forever incomplete, so
     //     the queue jams at capacity and all callers deadlock. Skips past
     //     the creation frontier are caught by an xassert; skips within the
