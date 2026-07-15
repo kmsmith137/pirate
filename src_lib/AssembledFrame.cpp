@@ -934,7 +934,12 @@ static void inject_single_pulse(const ksgpu::Array<void> &data_arr, long nfreq, 
         for (long t = t0; t < t1; t++) {
             long  k = (t + dt_sp) - it0;                // invariant: 0 <= k < nt_ch
             float x = sd[sd0 + k] * inv_S + gdist(rng); // pre-scaled signal + pre-scaled noise
-            int   q = std::min(7, std::max(-7, (int) std::floor(x + 0.5f)));   // round-half-up, clamp; never -8
+            // Round-half-up, clamp to [-7,7] (never -8). Clamp in the FLOAT
+            // domain before the int cast: float->int conversion of an
+            // out-of-range value is UB, and x can overflow int for
+            // pathological signal/scale combinations.
+            float xq = std::min(7.0f, std::max(-7.0f, std::floor(x + 0.5f)));
+            int   q = (int) xq;
             long  idx = row + t;                        // int4 index; nibble parity == t parity
             unsigned char &b = bytes[idx >> 1];
             if (idx & 1) b = (unsigned char)((b & 0x0F) | ((q & 0xF) << 4));   // high nibble (odd t)
@@ -1407,6 +1412,12 @@ void AssembledFrameAllocator::_initialize_metadata(const XEngineMetadata &metada
 
     unique_lock<mutex> guard(lock);
 
+    // Re-check the stopped flag under the lock: the wrapper's gate ran
+    // before this body relocked, so a stop() can land in between -- without
+    // this, initialize_metadata would silently succeed on a stopped
+    // allocator. (Mirrors _initialize_initial_chunk.)
+    _throw_if_stopped("AssembledFrameAllocator::initialize_metadata");
+
     if (!metadata_is_initialized) {
         // First call (from any caller): establish parameters. Make a private
         // shared_ptr copy of the metadata so the allocator (and all frames it
@@ -1553,6 +1564,12 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::get_frame_set(long time_c
 shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_chunk_index)
 {
     unique_lock<mutex> guard(lock);
+
+    // Stopped-check FIRST, re-checked under the lock (the wrapper's gate ran
+    // before this body relocked): a caller racing a stop() should get the
+    // saved root-cause error, not a misleading "called before
+    // initialize_metadata()" init-state error.
+    _throw_if_stopped("AssembledFrameAllocator::get_frame_set");
 
     // Check that both initialization phases have completed. The allocator
     // needs metadata (for nfreq, beam_ids) AND the initial_time_chunk

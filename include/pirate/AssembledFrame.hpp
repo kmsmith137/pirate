@@ -338,27 +338,15 @@ struct AssembledFrameAllocator
     AssembledFrameAllocator(AssembledFrameAllocator &&) = delete;
     AssembledFrameAllocator &operator=(AssembledFrameAllocator &&) = delete;
 
-    long nfreq = 0;
-    long time_samples_per_chunk = 0;
-    std::vector<long> beam_ids;
+    long time_samples_per_chunk = 0;   // ctor-constant, safe to read without the lock
 
-    // Lock-synchronized getters for nfreq / beam_ids, which (unlike the
-    // ctor-constant time_samples_per_chunk) are written by
-    // initialize_metadata() under 'lock'. Used by the pybind11 property
-    // bindings; C++ callers holding no lock should prefer these too.
+    // Lock-synchronized getters for the metadata-derived parameters (nfreq,
+    // beam_ids -- PRIVATE members, written by initialize_metadata() under
+    // 'lock', so an unsynchronized public read would be a data race / torn
+    // vector copy). Used by the pybind11 property bindings and by any C++
+    // caller. For the canonical metadata pointer itself, use get_metadata().
     long get_nfreq() const;
     std::vector<long> get_beam_ids() const;
-
-    // Shared X-engine metadata for this allocator. Set on the first call to
-    // initialize_metadata() (by the first consumer); subsequent consumers must provide
-    // a metadata that passes XEngineMetadata::check_sender_consistency against
-    // this one. Propagated by _create_frame() into every AssembledFrame via
-    // AssembledFrame::metadata.
-    //
-    // freq_channels: always FREQUENCY-SCRUBBED (empty). The canonical copy
-    // represents consensus across senders; senders disagree on freq_channels
-    // by design, so it is explicitly cleared in _initialize_metadata.
-    std::shared_ptr<const XEngineMetadata> metadata;
 
     // Sets the canonical (consensus-across-senders) XEngineMetadata on the
     // allocator. Typically called by each Receiver's reader thread once it
@@ -553,7 +541,25 @@ private:
     mutable std::exception_ptr error;
 
     std::thread worker_thread;
-    
+
+    // Metadata-derived parameters and the canonical metadata pointer. All
+    // three are written by _initialize_metadata() under 'lock'; private, so
+    // no unsynchronized external read is possible (external readers use
+    // get_nfreq / get_beam_ids / get_metadata).
+    //
+    // metadata: set on the first initialize_metadata() call (from any
+    // caller); subsequent calls must pass
+    // XEngineMetadata::check_sender_consistency against it. Propagated by
+    // the worker thread into every AssembledFrame (via
+    // AssembledFrame::metadata) and AssembledFrameSet.
+    //
+    // freq_channels: always FREQUENCY-SCRUBBED (empty). The canonical copy
+    // represents consensus across senders; senders disagree on freq_channels
+    // by design, so it is explicitly cleared in _initialize_metadata.
+    long nfreq = 0;
+    std::vector<long> beam_ids;
+    std::shared_ptr<const XEngineMetadata> metadata;
+
     // Metadata-initialization state. Set to true the first time any caller
     // invokes initialize_metadata(); subsequent calls go through the
     // consistency-check path. Protected by 'lock'.

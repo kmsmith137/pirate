@@ -537,8 +537,9 @@ void register_core_bindings(pybind11::module &m)
         .def("stop", [](AssembledFrameAllocator &self) { self.stop(); },
             py::call_guard<py::gil_scoped_release>(),
             "Stop the allocator. After stop(), entry points throw and any\n"
-            "thread blocked in get_frame_set() (waiting for a free slab) wakes\n"
-            "and raises. Idempotent and safe to call from any thread.")
+            "thread blocked in get_frame_set() -- directly on the set queue,\n"
+            "or transitively on the worker's slab wait -- wakes and raises.\n"
+            "Idempotent and safe to call from any thread.")
         .def_static("slab_nbytes", &AssembledFrameAllocator::slab_nbytes,
             py::arg("nfreq"), py::arg("time_samples_per_chunk"),
             "Total backing bytes for one AssembledFrame's slab (one beam), with\n"
