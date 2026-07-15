@@ -144,6 +144,16 @@ struct FrbServer
         // Set true by callers that would otherwise be swamped by per-chunk output
         // (e.g. the ephemeral test server, which assembles hundreds of chunks).
         bool quiet = false;
+
+        // If true, skip the (rb_assembled - rb_processed) bound
+        // (constants::server_max_unprocessed_chunks, enforced at every
+        // rb_assembled advance). For unit tests with UNPACED FakeXEngines,
+        // which intentionally send much faster than real time -- there the
+        // assembled-but-unprocessed backlog is a benign consequence of the
+        // test setup, not a sign that the server can't keep up. Never set
+        // in production (real X-engines send at the real-time rate, so
+        // exceeding the bound means the server is falling behind).
+        bool disable_max_unprocessed_chunks = false;
     };
 
     // Factory method (constructor is private).

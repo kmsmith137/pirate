@@ -581,8 +581,10 @@ def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, normalized=True,
             receivers).
         paced: if True (default), each FakeXEngine spawns a pacing
             thread that subscribes to MonitorRingbuf and gates each
-            worker's sends to stay <=5 chunks ahead of server-side
-            rb_processed. If False, the sender runs unthrottled.
+            worker's sends to stay a few chunks ahead of server-side
+            rb_processed (the lookahead is derived from
+            constants.server_max_unprocessed_chunks). If False, the
+            sender runs unthrottled.
         normalized: if True (default), the factory calibrates each frame's
             scales/offsets to xmd's per-zone noise variance so the
             dequantized data is "normalized". If False, the normalization

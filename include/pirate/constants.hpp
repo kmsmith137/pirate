@@ -50,10 +50,22 @@ struct constants
     static constexpr double frb_scattering_index = 4.0;
     static constexpr double frb_dm0 = 50.0;   // gives median DM ~ 600
 
-    // Frame-pool / pacing sizing, in "chunks" (one chunk = nbeams frames).
-    static constexpr int server_min_total_chunks = 10;
+    // Frame-pool / backpressure sizing, in "chunks" (one chunk = nbeams frames).
+    static constexpr int server_min_total_chunks = 14;
+
+    // Upper bound on (rb_assembled - rb_processed), in time chunks: frames
+    // that have been fully assembled from the network but whose data has not
+    // yet been copied host->GPU. If the FrbServer ever exceeds this bound, it
+    // throws a verbose exception (crash-loudly: either the server can't keep
+    // up with the X-engines, or the input stream skipped far ahead, e.g. a
+    // corrupt sender seq). Enforced at rb_assembled advance, unless
+    // FrbServer::Params::disable_max_unprocessed_chunks is set (used by unit
+    // tests with unpaced FakeXEngines, which intentionally send much faster
+    // than real time). Also derives the FakeXEngine pacing lookahead -- see
+    // pacing_chunks in FakeXEngine.cpp.
+    static constexpr int server_max_unprocessed_chunks = 5;
+
     static constexpr int reaper_lowmem_chunks = 2;
-    static constexpr int fake_xengine_pacing_chunks = 5;
 
     // Max depth of AssembledFrameAllocator::frame_set_queue: the allocator's
     // worker thread pre-initializes at most this many chunks ahead of full
@@ -109,7 +121,14 @@ struct constants
                   "cuda_host_register_chunk_size must be <= 511 GiB");
 
     static_assert(reaper_lowmem_chunks >= 2);
-    static_assert(fake_xengine_pacing_chunks >= 3);
+
+    // The FakeXEngine pacing lookahead is derived from this constant
+    // (pacing_chunks = server_max_unprocessed_chunks - 1, in FakeXEngine.cpp,
+    // leaving one chunk of margin below the bound). The lookahead must be
+    // >= 3 chunks (the pre-existing lower bound on the pacing constant this
+    // replaced): assembly needs data from chunk c+2 to complete chunk c, so
+    // too small a lookahead stalls or deadlocks the paced pipeline.
+    static_assert(server_max_unprocessed_chunks - 1 >= 3);
 
     // The reaper's low-memory gate (FrbServer reaper thread ->
     // AssembledFrameAllocator::block_until_low_memory) fires when (slab pool
@@ -121,10 +140,17 @@ struct constants
     // below its bound, the worker grabs every freed slab.
     static_assert(assembled_frame_allocator_queue_size > reaper_lowmem_chunks);
     
-    // The frame pool must hold the reaper's pre-init reserve + the FakeXEngine
-    // pacing lookahead, plus headroom for the in-flight chunks.
-    static_assert(server_min_total_chunks >= fake_xengine_pacing_chunks + reaper_lowmem_chunks + 2,
-                  "server_min_total_chunks too small for the pacing + reaper reserve");
+    // The frame pool must be large enough that the max-unprocessed check can
+    // actually FIRE at minimal pool size, rather than assembly silently
+    // starving just below the bound. Worst-case simultaneous frame usage:
+    // (server_max_unprocessed_chunks + 1) chunks assembled-but-unprocessed
+    // (the +1 is the chunk that trips the check), plus the allocator's
+    // pre-init queue (assembled_frame_allocator_queue_size), plus the
+    // receivers' 2-chunk assembly window, plus one chunk of slack.
+    static_assert(server_min_total_chunks >=
+                  server_max_unprocessed_chunks + assembled_frame_allocator_queue_size + 4,
+                  "server_min_total_chunks too small for the max-unprocessed bound "
+                  "+ pre-init reserve + assembly window");
 };
 
 

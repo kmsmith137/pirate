@@ -44,6 +44,32 @@ namespace pirate {
 #endif
 
 
+// Paced-mode lookahead, in time chunks: a worker's sends may run at most
+// this far ahead of the server-side rb_processed (see the gate in
+// _skip_or_send). Derived from the server's backpressure bound, so a paced
+// skip-free sender can never trip the FrbServer's max-unprocessed check:
+//
+//   - the gate lets a worker send chunk j once at least (j - 1 - pacing)
+//     COMPLETE chunks are processed (last_ichunk_sent = j - 1 at gate time);
+//   - the receivers' 2-chunk assembly window means the arrival of chunk j's
+//     data completes assembly through chunk j - 2, i.e. at most (j - 1)
+//     COMPLETE chunks are assembled;
+//   - hence (assembled - processed) <= pacing chunks, one chunk BELOW
+//     constants::server_max_unprocessed_chunks. (Staleness of the sender's
+//     rb_processed view only delays sends, never loosens the bound.)
+//
+// CAVEAT: SKIPs are deliberately outside the pacing budget (the gate
+// references last_ichunk_sent -- see the class doc-comment for why gating
+// on the pending ichunk would deadlock). A paced sender that SKIPs k
+// chunks and then sends fast-forwards the receive window, assembling the
+// k skipped chunks nearly instantly -- so the gap can transiently exceed
+// the bound by ~k chunks. Unit tests that issue random SKIPs must
+// therefore set FrbServer::Params::disable_max_unprocessed_chunks (in
+// production, a comparable fast-forward IS the anomaly the check exists
+// to catch).
+static constexpr long pacing_chunks = constants::server_max_unprocessed_chunks - 1;
+
+
 // File-scope helper: atomically sets dst = max(dst, src). Portable
 // C++17 CAS-loop equivalent of C++26 std::atomic::fetch_max. Used by
 // the FLAG_ACK ack-prediction tracking (max_sent_minichunk and
@@ -1221,18 +1247,17 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
             }
 
             // Gate: wait until rb_processed catches up to within
-            // constants::fake_xengine_pacing_chunks chunks of this worker's most
-            // recent successful SEND, or stop. The required > 0 fast path skips
-            // the lock for the (common) case where last_ichunk_sent <=
-            // fake_xengine_pacing_chunks (worker hasn't
-            // sent enough yet for the gate to bite). See the paced-mode
-            // section of FakeXEngine.hpp's class doc-comment for why
-            // the horizon is last_ichunk_sent rather than the pending
+            // pacing_chunks chunks of this worker's most recent successful
+            // SEND, or stop. The required > 0 fast path skips the lock for
+            // the (common) case where last_ichunk_sent <= pacing_chunks
+            // (worker hasn't sent enough yet for the gate to bite). See the
+            // paced-mode section of FakeXEngine.hpp's class doc-comment for
+            // why the horizon is last_ichunk_sent rather than the pending
             // command's ichunk: SKIPs let a worker's pending ichunk
             // run arbitrarily far ahead of its actual SENDs without
             // advancing the server, so gating against the pending
             // ichunk would deadlock after a SKIP-heavy stretch.
-            long required = (w.last_ichunk_sent - constants::fake_xengine_pacing_chunks) * nbeams;
+            long required = (w.last_ichunk_sent - pacing_chunks) * nbeams;
             if (required > 0) {
                 std::unique_lock<std::mutex> lk(w.mutex);
                 w.gate_cv.wait(lk, [&] {

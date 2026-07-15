@@ -76,16 +76,16 @@ struct Receiver
         // being handed to the reader thread. Test-only -- never set
         // in production.
         bool misbehaving_reads = false;
-
-        // Bound on forward gaps in the input data stream, in time chunks:
-        // a minichunk more than max_chunk_skip chunks beyond the top of
-        // the 2-chunk receive window throws (stopping the Receiver, and
-        // the server with it). Guards against a corrupt seq / sender bug
-        // silently fast-forwarding the whole pipeline (flooding downstream
-        // with empty chunks and draining the frame pool). Zero means "can
-        // skip arbitrarily far" (no check).
-        long max_chunk_skip = 0;
     };
+
+    // Note: forward gaps in the input data stream are unbounded at the
+    // Receiver level (a corrupt seq can fast-forward the 2-chunk receive
+    // window arbitrarily far, flooding downstream with empty chunks). The
+    // FrbServer's max-unprocessed check (constants::server_max_unprocessed_chunks)
+    // catches this within a few chunks of flooding, since the empty chunks
+    // assemble much faster than they are processed. See also the FIXME in
+    // Receiver.cpp about a corrupt seq in the very FIRST minichunk header,
+    // which that check does NOT cover.
 
     // Constructor initializes state but does not start worker threads.
     Receiver(const Params &params);

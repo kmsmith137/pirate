@@ -82,12 +82,14 @@ namespace pirate {
 // extra "pacing thread" that holds a streaming MonitorRingbuf RPC to
 // the FrbServer and broadcasts each pushed rb_processed value to all
 // workers (Worker::rb_processed under each Worker::mutex). Worker
-// threads gate their sends so the sender stays at most 5 time chunks
-// ahead of the server, MEASURED AGAINST THE WORKER'S MOST RECENT
+// threads gate their sends so the sender stays at most pacing_chunks time
+// chunks ahead of the server (pacing_chunks is derived from
+// constants::server_max_unprocessed_chunks -- see the derivation comment
+// in FakeXEngine.cpp), MEASURED AGAINST THE WORKER'S MOST RECENT
 // SUCCESSFUL SEND (Worker::last_ichunk_sent), not against the pending
 // command's ichunk. Before each SEND_JUNK / SEND_MINICHUNK, the
 // worker blocks on its gate_cv until Worker::rb_processed >=
-// (Worker::last_ichunk_sent - 5) * nbeams.
+// (Worker::last_ichunk_sent - pacing_chunks) * nbeams.
 //
 // Why "last_ichunk_sent" and not "ichunk-of-pending-send": SKIPs let a
 // worker's ichunk race arbitrarily far ahead of its actual SENDs
@@ -489,9 +491,10 @@ struct FakeXEngine
 
         // When true, FakeXEngine spawns a pacing thread that opens a
         // MonitorRingbuf streaming RPC to the FrbServer and gates each
-        // worker's sends to stay <=5 chunks ahead of server-side
-        // rb_processed. See the paced-mode discussion in the class
-        // doc-comment.
+        // worker's sends to stay at most pacing_chunks (derived from
+        // constants::server_max_unprocessed_chunks, see FakeXEngine.cpp)
+        // chunks ahead of server-side rb_processed. See the paced-mode
+        // discussion in the class doc-comment.
         bool paced = true;
 
         // gRPC address ("ip:port") of the FrbServer's RPC endpoint. Required

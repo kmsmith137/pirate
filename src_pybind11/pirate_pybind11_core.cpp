@@ -1086,8 +1086,10 @@ void register_core_bindings(pybind11::module &m)
                "        unit tests, but don't use in production!\n"
                "    paced (default True): Spawn a pacing thread that subscribes\n"
                "        to the FrbServer's MonitorRingbuf push stream and gates\n"
-               "        each worker's sends to stay <=5 chunks ahead of\n"
-               "        server-side rb_processed. Requires rpc_address.\n"
+               "        each worker's sends to stay at most a few chunks ahead of\n"
+               "        server-side rb_processed (the lookahead is derived from\n"
+               "        constants.server_max_unprocessed_chunks). Requires\n"
+               "        rpc_address.\n"
                "    rpc_address: 'ip:port' of the FrbServer's gRPC endpoint.\n"
                "        Required (non-empty) when paced=True; ignored (silently\n"
                "        accepted) when paced=False.")
@@ -1381,29 +1383,21 @@ void register_core_bindings(pybind11::module &m)
         "    AssembledFrames")
           .def(py::init([](const std::string &address,
                            std::shared_ptr<AssembledFrameAllocator> allocator,
-                           long max_chunk_skip,
                            bool misbehaving_reads) {
                Receiver::Params params;
                params.address = address;
                params.allocator = allocator;
-               params.max_chunk_skip = max_chunk_skip;
                params.misbehaving_reads = misbehaving_reads;
                return std::make_shared<Receiver>(params);
           }),
                py::arg("address"),
                py::arg("allocator"),
-               py::arg("max_chunk_skip") = 0,
                py::arg("misbehaving_reads") = false,
                "Create a Receiver (does not start worker threads).\n\n"
                "Args:\n"
                "    address: Address to bind to (e.g. '127.0.0.1:5000')\n"
                "    allocator: AssembledFrameAllocator for output frames\n"
                "        (time_samples_per_chunk is taken from the allocator).\n"
-               "    max_chunk_skip: If > 0, throw (stopping the Receiver and\n"
-               "        the server) on a forward gap in the input data stream\n"
-               "        larger than this many time chunks -- guards against a\n"
-               "        corrupt seq silently fast-forwarding the pipeline.\n"
-               "        0 (default) means the stream can skip arbitrarily far.\n"
                "    misbehaving_reads: If True, peer sockets accepted by\n"
                "        this Receiver will have set_misbehaving_reads()\n"
                "        called on them, which truncates each read() to a\n"
@@ -1492,7 +1486,8 @@ void register_core_bindings(pybind11::module &m)
                            std::shared_ptr<FrbGrouperClient> grouper_client,
                            bool no_dedispersion,
                            long nbatches_wt,
-                           bool quiet) {
+                           bool quiet,
+                           bool disable_max_unprocessed_chunks) {
                FrbServer::Params params;
                params.config_prefilled = config_prefilled;
                params.receivers = std::move(receivers);
@@ -1508,6 +1503,7 @@ void register_core_bindings(pybind11::module &m)
                params.no_dedispersion = no_dedispersion;
                params.nbatches_wt = nbatches_wt;
                params.quiet = quiet;
+               params.disable_max_unprocessed_chunks = disable_max_unprocessed_chunks;
                return FrbServer::create(params);
           }),
                py::arg("config_prefilled"),
@@ -1522,6 +1518,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("no_dedispersion") = false,
                py::arg("nbatches_wt") = 0,
                py::arg("quiet") = false,
+               py::arg("disable_max_unprocessed_chunks") = false,
                "Create an FrbServer.\n\n"
                "Args:\n"
                "    config_prefilled: DedispersionConfig. Four members\n"
@@ -1563,7 +1560,12 @@ void register_core_bindings(pybind11::module &m)
                "        >= num_active_batches. Only used by unit tests.\n"
                "    quiet (default False): if True, suppress the per-chunk\n"
                "        'FrbServer: beamset=...' stdout line (one per assembled\n"
-               "        chunk). Everything else is unaffected.")
+               "        chunk). Everything else is unaffected.\n"
+               "    disable_max_unprocessed_chunks (default False): if True, skip\n"
+               "        the (rb_assembled - rb_processed) bound\n"
+               "        (constants.server_max_unprocessed_chunks). For unit tests\n"
+               "        with unpaced FakeXEngines, which send much faster than\n"
+               "        real time. Never set in production.")
           .def("start", &FrbServer::start,
                "Start all Receivers.\n\n"
                "Raises:\n"

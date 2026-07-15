@@ -319,7 +319,6 @@ class ServerTester:
             Receiver(
                 address     = f"127.0.0.1:{p['data_base_port'] + j}",
                 allocator   = allocator,
-                max_chunk_skip = 0,         # disable the input-stream gap check
                 misbehaving_reads = True    # stress the parser; doesn't alter data
             )
             for j in range(p['num_receivers'])
@@ -347,7 +346,12 @@ class ServerTester:
                                 cuda_device_id=0,
                                 grouper_client=self.grouper_client,
                                 nbatches_wt=p['nbatches_wt'],
-                                quiet=True)
+                                quiet=True,
+                                # The FakeXEngine here is always unpaced (the
+                                # send loop is throttled by the CPU-reference
+                                # comparison instead), so the max-unprocessed
+                                # bound doesn't apply.
+                                disable_max_unprocessed_chunks=True)
 
     def _spawn_grouper_child(self):
         # 'spawn' (not fork): the parent has already initialized CUDA, and a

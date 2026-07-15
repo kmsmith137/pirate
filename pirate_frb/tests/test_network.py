@@ -252,9 +252,6 @@ class NetworkTester:
             Receiver(
                 address     = f"127.0.0.1:{p['data_base_port'] + j}",
                 allocator   = self.allocator,
-                # 0 disables the input-stream gap check (the test's random
-                # chunk skips would otherwise need bounding).
-                max_chunk_skip = 0,
                 # Per-Socket short-read misbehavior on every accepted
                 # peer socket. Strengthens the test by exercising the
                 # incremental-parse path against pathological short
@@ -282,7 +279,17 @@ class NetworkTester:
                                 no_dedispersion=p['no_dedispersion'],
                                 # Suppress the per-chunk "FrbServer: beamset=..." line;
                                 # this test assembles hundreds of chunks.
-                                quiet=True)
+                                quiet=True,
+                                # Disabled unconditionally. Unpaced senders blast
+                                # much faster than the server's processing counters
+                                # advance; and even PACED iterations exceed the
+                                # bound, because this test's random SKIPs are
+                                # deliberately outside the pacing budget (see the
+                                # pacing_chunks comment in FakeXEngine.cpp) -- a
+                                # skipped-ahead worker's next send fast-forwards
+                                # the receive window, assembling the skipped
+                                # chunks nearly instantly.
+                                disable_max_unprocessed_chunks=True)
         self.server.start()
 
     def _build_client(self):

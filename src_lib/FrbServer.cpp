@@ -673,6 +673,29 @@ void FrbServer::_receiver_thread_main(int receiver_index)
                 // Frame received from last Receiver, so mark it assembled.
                 xassert(rb_assembled == frame_id);
                 rb_assembled++;
+
+                // Backpressure sanity bound: frames assembled but not yet
+                // copied host->GPU. Exceeding it means something is off the
+                // rails; throw (stopping the server) rather than letting the
+                // backlog grow silently. Skipped when
+                // params.disable_max_unprocessed_chunks (unpaced-test mode).
+                long max_unprocessed = long(constants::server_max_unprocessed_chunks) * nbeams;
+                if (!params.disable_max_unprocessed_chunks
+                    && (rb_assembled - rb_processed > max_unprocessed))
+                {
+                    stringstream ss;
+                    ss << "FrbServer: too many assembled-but-unprocessed frames: "
+                       << "rb_assembled=" << rb_assembled << ", rb_processed=" << rb_processed
+                       << " (gap = " << (rb_assembled - rb_processed) << " frames = "
+                       << ((rb_assembled - rb_processed) / double(nbeams)) << " time chunks, "
+                       << "limit = pirate::constants::server_max_unprocessed_chunks = "
+                       << constants::server_max_unprocessed_chunks << " chunks).\n"
+                       << "Possible causes: (1) the server can't keep up with the X-engines "
+                       << "(sustained overload, or a long GPU/host stall); (2) the input "
+                       << "stream skipped ahead by many chunks (e.g. a corrupt sender seq), "
+                       << "flooding the pipeline with empty chunks.";
+                    throw runtime_error(ss.str());
+                }
             }
 
             _check_rb_invariants();

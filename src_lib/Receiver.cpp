@@ -138,8 +138,6 @@ Receiver::Receiver(const Params &p) : params(p)
     parse_ip_address(params.address, this->ip_addr, this->tcp_port);
 
     xassert(params.allocator);
-    xassert(params.max_chunk_skip >= 0);
-
     // time_samples_per_chunk lives on the allocator (validated > 0 at
     // allocator construction). The divisibility-by-256 check is specific
     // to the network protocol's minichunk size, so we enforce it here at
@@ -677,6 +675,17 @@ void Receiver::_read_data(const shared_ptr<Peer> &peer)
         long mc_index = long(mc_seq) / seq_per_mc;
         long received_chunk = mc_index / peer->minichunks_per_chunk;
 
+        // FIXME (known issue, fix planned): 'received_chunk' is completely
+        // unvalidated here, and the FIRST header to arrive (on any peer of
+        // any Receiver) anchors the server's canonical initial_time_chunk.
+        // A corrupt seq in that first header anchors the initial chunk at a
+        // garbage value; every sane peer's data is then behind the receive
+        // window and silently dropped forever, and the server sits idle.
+        // The FrbServer max-unprocessed check (constants::
+        // server_max_unprocessed_chunks) does NOT cover this case: nothing
+        // ever assembles, so rb_assembled - rb_processed stays zero. A
+        // future fix should sanity-bound the anchor value (e.g. against
+        // wall-clock time via xmd's timekeeping fields).
         params.allocator->initialize_initial_chunk(received_chunk);
 
         peer->reader_seen_first_mc_header = true;
@@ -871,24 +880,6 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
             // Target chunk is no longer in buffer (peer is running slow).
             // In this case, we silently drop the data.
             goto minichunk_done;  // hmmm
-        }
-
-        // Bound forward gaps in the input stream (Params::max_chunk_skip;
-        // 0 disables the check). A minichunk more than max_chunk_skip
-        // chunks beyond the top of the receive window means a corrupt seq
-        // or a sender bug; without this check, the skip-ahead loop below
-        // would silently fast-forward the whole pipeline (flooding
-        // downstream with empty chunks and draining the frame pool).
-        if ((params.max_chunk_skip > 0)
-            && (ichunk > curr_base_chunk + 1 + params.max_chunk_skip))
-        {
-            stringstream ss;
-            ss << "Receiver: gap in input data stream too large: minichunk seq "
-               << mc_seq << " maps to time chunk " << ichunk
-               << ", but the receive window is chunks [" << curr_base_chunk
-               << ", " << (curr_base_chunk + 1) << "] and max_chunk_skip="
-               << params.max_chunk_skip;
-            throw runtime_error(ss.str());
         }
 
         // If the sender skipped one or more entire chunks (NOTE 1), advance
