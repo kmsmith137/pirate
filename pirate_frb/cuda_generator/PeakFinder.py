@@ -29,7 +29,7 @@ from .FrequencySubbands import FrequencySubbands
 #
 #   - All of these must be a power of two, except nt_in
 #   - nt_in is a multiple of nt_in_per_wt
-#   - nt_in is a multiple of (32*SW), where SW = 32/sizeof(dtype) is the simd width
+#   - nt_in is a multiple of (32*SW), where SW = 32/dtype.nbits is the simd width
 #   - nt_in_per_wt must be a multiple of Dout (= nt_in_per_out)   (*)
 #   - SW <= Dcore <= Dout <= 32
 #   - Wmax <= 32
@@ -733,7 +733,7 @@ class PfWeightLayout:
 
         Before describing the global memory layout, a few more definitions:
 
-          SW = 32 / sizeof(T)         "simd width"
+          SW = 32 / dtype.nbits       "simd width"
           Tinner = max(32*SW/nt_in_per_wt, 1)   see (*) below
           Pinner = SW                  see (**) below
 
@@ -799,7 +799,7 @@ class PfWeightReader:
         """
         The PfWeightReader is parameterized by Dcore, but the more important quantity is
 
-            Minner = Dcore / SW        where SW = 32/sizeof(dtype) = simd_width.
+            Minner = Dcore / SW        where SW = 32/dtype.nbits = simd_width.
 
         The PfWeightReader's purpose in life is to define
         
@@ -1177,7 +1177,7 @@ class PfOutput:
 
         Generated code looks like this:
 
-          constexpr int SW = 128 / sizeof(dtype);  // simd width
+          constexpr int SW = 32 / dtype.nbits;  // simd width (1 for fp32, 2 for fp16)
         
           // Initialization of output pointers is not supplied by PfOutput.
           T32 *zp = ...;   // per-warp output pointer, points to length (nt_in/(Dout*SW))
