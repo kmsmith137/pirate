@@ -245,7 +245,11 @@ void register_core_bindings(pybind11::module &m)
             "Always True if there is no underlying BumpAllocator (dummy mode,\n"
             "or construction from aflags).")
         .def("num_free_slabs", &SlabAllocator::num_free_slabs,
-            "Number of slabs currently available. Throws in dummy mode.")
+            py::arg("permissive") = false,
+            "Number of slabs currently available. Throws in dummy mode, or\n"
+            "before the slab pool has been created (by the first completed\n"
+            "get_slab() call). With permissive=True, returns 0 in those two\n"
+            "cases instead -- never throws.")
         .def("num_total_slabs", &SlabAllocator::num_total_slabs,
             py::arg("blocking") = false,
             py::call_guard<py::gil_scoped_release>(),
@@ -510,8 +514,12 @@ void register_core_bindings(pybind11::module &m)
             "unbounded.")
         .def("num_free_frames", &AssembledFrameAllocator::num_free_frames,
             py::arg("permissive") = false,
-            "Number of frames currently available in the pool.\n\n"
-            "Throws in dummy mode or if not initialized.")
+            "Number of frames currently available in the pool (pre-initialized\n"
+            "sets awaiting their first consumer, plus free slabs).\n\n"
+            "Throws in dummy mode, if initialize_metadata() has not been called,\n"
+            "or before the worker's first allocation creates the slab pool. With\n"
+            "permissive=True, returns a best-effort count instead (0 for whatever\n"
+            "is not ready yet) -- never throws.")
         .def("num_total_frames", &AssembledFrameAllocator::num_total_frames,
             py::arg("blocking") = false,
             py::call_guard<py::gil_scoped_release>(),

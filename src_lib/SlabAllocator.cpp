@@ -387,20 +387,26 @@ void SlabAllocator::return_slab(void *slab_ptr)
 }
 
 
-long SlabAllocator::num_free_slabs() const
+long SlabAllocator::num_free_slabs(bool permissive) const
 {
     // No stopped-check: deliberately usable on a stopped allocator
     // (stopped-tolerant informational accessor -- see the entry-point
     // classification in SlabAllocator.hpp).
-    if (is_dummy())
+    if (is_dummy()) {
+        if (permissive)
+            return 0;
         throw std::runtime_error("SlabAllocator::num_free_slabs(): not available in dummy mode");
+    }
 
     std::lock_guard<std::mutex> guard(lock);
 
     // Gate on 'num_slabs', not 'slab_size': the latter is committed at first
     // get_slab() entry, before the pool exists (see _get_slab).
-    if (num_slabs == 0)
+    if (num_slabs == 0) {
+        if (permissive)
+            return 0;
         throw std::runtime_error("SlabAllocator::num_free_slabs(): slab pool has not been created yet");
+    }
 
     return static_cast<long>(free_list.size());
 }

@@ -461,8 +461,13 @@ struct AssembledFrameAllocator
 
     // Returns the number of "available" frames: pre-initialized frames waiting for their first
     // consumer, plus free slabs in the underlying slab_allocator.
-    // If permissive=false (default): throws exception in dummy mode or if not initialized.
-    // If permissive=true: returns 0 in dummy mode or if not initialized.
+    // If permissive=false (default): throws in dummy mode, if initialize_metadata()
+    // has not been called, or (from the slab_allocator) before the worker's first
+    // allocation creates the slab pool.
+    // If permissive=true: never throws -- returns a best-effort count, with 0 for
+    // whatever is not ready yet ('permissive' is forwarded into
+    // slab_allocator->num_free_slabs()). Used by the GetStatus RPC, which must
+    // work at any point in the server's lifetime.
     long num_free_frames(bool permissive = false) const;
 
     // Entry point: Block until slab allocator is empty (all slabs in use), AND the number of

@@ -94,10 +94,12 @@ public:
     std::shared_ptr<void> get_slab(long nbytes, bool blocking = false);
     
     // Returns the number of slabs currently available in the free list.
-    // Throws exception in dummy mode, or if the slab pool has not been
-    // created yet (i.e. no get_slab() call has completed). Does NOT throw
-    // on a stopped allocator (stopped-tolerant informational accessor).
-    long num_free_slabs() const;
+    // If permissive=false (default): throws in dummy mode, or if the slab
+    // pool has not been created yet (i.e. no get_slab() call has completed).
+    // If permissive=true: returns 0 in those two cases instead -- never
+    // throws (there are no other throw paths). Does NOT throw on a stopped
+    // allocator in either mode (stopped-tolerant informational accessor).
+    long num_free_slabs(bool permissive = false) const;
 
     // Returns the total number of slabs in the pool.
     // Throws exception in dummy mode.

@@ -1660,10 +1660,13 @@ long AssembledFrameAllocator::num_free_frames(bool permissive) const
     }
 
     // Check that metadata has been set, then compute num_preinitialized
-    // under lock. (We only require metadata_is_initialized here -- frames
-    // can't be pre-created without initial_chunk_set too, but if the latter
-    // is missing we still return slab_allocator->num_free_slabs() below,
-    // which is a meaningful "no preinit yet" answer.)
+    // under lock. (Metadata alone does not imply the slab pool exists:
+    // the worker only starts allocating once initial_chunk_set is ALSO
+    // true, so the num_free_slabs() call below can still throw its
+    // "pool not created" error. Forwarding 'permissive' into it makes
+    // that term a best-effort 0 instead -- this is the window the
+    // GetStatus RPC hits when senders have handshook but not yet
+    // streamed data.)
     unique_lock<mutex> guard(lock);
 
     if (!metadata_is_initialized) {
@@ -1680,7 +1683,7 @@ long AssembledFrameAllocator::num_free_frames(bool permissive) const
     long num_preinitialized_frames = num_preinitialized_chunks * nbeams;
     guard.unlock();
 
-    return num_preinitialized_frames + slab_allocator->num_free_slabs();
+    return num_preinitialized_frames + slab_allocator->num_free_slabs(permissive);
 }
 
 
