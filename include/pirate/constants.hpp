@@ -27,9 +27,14 @@ struct constants
 
     // Memory management. The 'cuda_host_register_chunk_size' param is part of a complicated
     // workaround for an undocumented(!!) cudaHostRegister() limit -- see BumpAllocator.{hpp,cpp}.
+    // The chunk size also bounds stop()/control-C latency during async init (the registrar
+    // checks for stop between chunks, and an in-flight cudaHostRegister can't be interrupted),
+    // which is why it's much smaller than the ~511 GiB limit requires. Trade-off: smaller
+    // chunks mean more registration seams, and every host<->GPU copy that might be backed
+    // by a BumpAllocator must split at seams (see safe_memcpy_* in utils.hpp).
     static constexpr long host_page_size = 4096;          // 4 KiB
     static constexpr long host_hugepage_size = 2L << 20;  // 2 MiB
-    static constexpr long cuda_host_register_chunk_size = 64L << 30;  // 64 GiB
+    static constexpr long cuda_host_register_chunk_size = 1L << 30;  // 1 GiB
 
     // Dedispersion params.
     static constexpr int max_tree_rank = 16;          // hard to change

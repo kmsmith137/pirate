@@ -33,8 +33,10 @@ namespace pirate {
 //        python -m pirate_frb revisit_512gb [-H]
 //
 //     To work around this, we register memory in chunks
-//     (constants::cuda_host_register_chunk_size, currently 64 GiB)
-//     aligned on pointer addresses.
+//     (constants::cuda_host_register_chunk_size, currently 1 GiB)
+//     aligned on pointer addresses. (The chunk size is far below what the
+//     ~511 GiB limit requires: it is chosen small so that stop()/control-C
+//     during async init only waits for one in-flight cudaHostRegister.)
 //
 //   - This created a new problem: cudaMemcpy*() fails if it crosses
 //     registration chunk boundaries. We solved this problem as follows.

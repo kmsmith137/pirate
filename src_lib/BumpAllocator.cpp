@@ -35,7 +35,9 @@ namespace pirate {
 // addresses, since this is the only viable approach for nbytes > 511 GiB.)
 
 // Worker chunking parameters.
-// Note: reg_chunk_bytes is 64 GiB by default. Lower for stress testing.
+// Note: reg_chunk_bytes is 1 GiB by default -- small enough that the
+// registrar's once-per-chunk stop check keeps stop()/control-C latency
+// low. Lower for stress testing.
 static constexpr long reg_chunk_bytes = constants::cuda_host_register_chunk_size;
 // _build_reg_chunk_offsets computes chunk boundaries with mask arithmetic.
 static_assert((reg_chunk_bytes & (reg_chunk_bytes - 1)) == 0,
@@ -524,8 +526,8 @@ void BumpAllocator::_registrar_worker()
                 if (_is_stopped) return;
             }
 
-            // cudaHostRegister runs OUTSIDE the lock (it can take seconds
-            // per 64 GiB chunk).
+            // cudaHostRegister runs OUTSIDE the lock (it takes tens of
+            // milliseconds per 1 GiB chunk).
             long off = offsets[s];
             long sz  = offsets[s + 1] - off;
             cudaError_t err = cudaHostRegister(
