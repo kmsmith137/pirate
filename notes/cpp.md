@@ -38,8 +38,8 @@
 
 Rules for any threaded C++ code; violations of each one turned up as real
 bugs in review. (In this codebase, threaded classes should additionally
-follow the stoppable / thread-backed patterns -- see notes/stoppable_class.md
-and notes/thread_backed_class.md, which build on these rules and add
+follow the stoppable / thread-backed patterns -- see [notes/stoppable_class.md](stoppable_class.md)
+and [notes/thread_backed_class.md](thread_backed_class.md), which build on these rules and add
 shutdown/error-propagation semantics.)
 
 ### Locking and condition variables

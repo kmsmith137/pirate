@@ -726,7 +726,7 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
         emitter << r;
     emitter << YAML::EndSeq;
     if (verbose)
-        emitter << YAML::Comment("Ambient rank of each stage1 tree (= number of coarse freq channels)");
+        emitter << YAML::Comment("Ambient rank of each stage1 tree (log2 of the number of coarse freq channels)");
 
     emitter << YAML::Key << "ntrees" << YAML::Value << ntrees;
     if (verbose)

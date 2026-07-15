@@ -13,7 +13,7 @@ beams_per_gpu: 60              # Number of beams processed per GPU
 beams_per_batch: 2             # Number of beams per batch
 num_active_batches: 2          # Number of active batches
 stage1_dd_rank: [8, 7, 7, 7]   # Active dedispersion rank of each stage1 tree
-stage1_amb_rank: [8, 8, 8, 8]  # Ambient rank of each stage1 tree (= number of coarse freq channels)
+stage1_amb_rank: [8, 8, 8, 8]  # Ambient rank of each stage1 tree (log2 of the number of coarse freq channels)
 ntrees: 10                     # Number of output trees (== length of the 'trees' sequence below)
 
 # As explained in notes/tree_dedispersion.tex, the dedisperser consists of multiple "trees"

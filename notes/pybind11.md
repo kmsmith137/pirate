@@ -37,6 +37,7 @@ Pybind11 code is in the following source files:
    src_pybind11/pirate_pybind11_core.cpp
    src_pybind11/pirate_pybind11_kernels.cpp
    src_pybind11/pirate_pybind11_loose_ends.cpp
+   src_pybind11/pirate_pybind11_simpulse.cpp
    src_pybind11/pirate_pybind11_utils.cpp
    src_pybind11/pirate_pybind11.cpp   # toplevel
 ```
@@ -44,13 +45,14 @@ These get compiled into a single extension module `pirate_pybind11.so`.
 
 On the python side, the `pirate_frb` toplevel package is divided into subpackages `pirate_frb.casm`, `pirate_frb.core`, etc.
 Each subpackage imports the contents of the corresponding pybind11 file.
-For example, `pirate_frb/casm/__init__.py` contains the lines:
+For example, `pirate_frb/core/__init__.py` contains the lines:
 ```py
-# Import C++ class from pirate_pybind11
-from ..pirate_pybind11 import CasmBeamformer
+# Import core C++ classes from pirate_pybind11
+from ..pirate_pybind11 import AssembledFrame
 ```
-Note that each pybind11 class will appear with two names -- for example `pirate_frb.pirate_pybind11.CasmBeamformer`
-is the same as `pirate_frb.casm.CasmBeamformer`. In python code, always use the latter "non-pybind11" name if possible.
+Note that each pybind11 class will appear with two names -- for example `pirate_frb.pirate_pybind11.AssembledFrame`
+is the same as `pirate_frb.core.AssembledFrame`. In python code, always use the latter "non-pybind11" name if possible.
+(A class with method injections is instead re-exported from a per-class module -- see the injection convention in "General notes" below.)
 
 If you are asked to python-bind a new class, please make sure that it is also imported into a python subpackage,
 and documented (with `autoclass`) in the sphinx docs.

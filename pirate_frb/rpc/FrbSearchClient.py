@@ -87,6 +87,9 @@ class FrbSearchClient:
         - beams_per_batch: from config_prefilled
         - frequency_subband_counts: list[int] from config_prefilled (a real
           search-config value, not a ``fake_`` default)
+        - max_dm_of_all_trees: float, the search's DM reach (max DM over all trees)
+        - max_width_of_base_tree: int, base-tree peak-finding width (in frame
+          time samples, not ms)
         - min_data_mtu: minimum data-NIC MTU expected on the sender side
         - fake_zone_nfreq: list[int] from config_prefilled.zone_nfreq (pre-metadata)
         - fake_zone_freq_edges: list[float] from config_prefilled.zone_freq_edges (pre-metadata)

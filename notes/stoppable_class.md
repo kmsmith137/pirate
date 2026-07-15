@@ -87,7 +87,7 @@ The general rules -- one condition variable per wait-predicate, when
 `notify_one()` is sound, complete "signaled on:" lists, snapshot-under-lock,
 in-progress flags reset on every exit path, `long` counters in predicates,
 documenting uninterruptible waits -- live in the "Concurrency" section of
-notes/cpp.md and apply to every class in this pattern. In stoppable-class
+[notes/cpp.md](cpp.md) and apply to every class in this pattern. In stoppable-class
 terms, the "shutdown event notifies every cv" rule there is `stop()`, and
 each cv's "signaled on:" list therefore includes `stop()`.
 

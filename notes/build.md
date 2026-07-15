@@ -19,7 +19,7 @@
 - `make grpc` generates both C++ and Python files from `.proto` files.
 - C++ generated files (`*.pb.{h,cc}`, `*.grpc.pb.{h,cc}`) are output to `grpc/`.
 - Python generated files (`*_pb2.py`, `*_pb2_grpc.py`) are output to `pirate_frb/rpc/grpc/`.
-- C++ generation uses `protoc` with `grpc_cpp_plugin`. Python generation uses `grpc_tools.protoc` followed by `protol` (protoletariat) to fix relative imports.
+- C++ generation uses `protoc` with `grpc_cpp_plugin`. Python generation uses `grpc_tools.protoc` followed by `grpc/finalize_grpc_stubs.py` to fix relative imports.
 - Each `protoc` invocation emits several files at once (the four C++ outputs, or both Python stubs), so the rules are grouped multi-target pattern rules: one rule whose targets are all of those outputs, run once per `.proto`.
 - The shared library links against `-lgrpc++` and `-lprotobuf`.
 
@@ -82,7 +82,7 @@ still uses it). Instead we scope `NDEBUG` narrowly, using
 `#pragma push_macro`/`pop_macro`:
 
 - Hand-written source files that include grpc headers (`FrbServer.cpp`,
-  `FakeXEngine.cpp`) wrap the block of grpc/protobuf `#include`s in a
+  `FrbGrouper.cpp`, `FakeXEngine.cpp`) wrap the block of grpc/protobuf `#include`s in a
   `push_macro("NDEBUG")` + `#define NDEBUG` / ... / `pop_macro("NDEBUG")`
   pair. `NDEBUG` is active only while abseil is being parsed; the rest of
   the TU is unaffected.

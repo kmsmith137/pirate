@@ -56,10 +56,10 @@ def parse_test(subparsers):
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
     parser.add_argument('--avar', action='store_true', help='Runs tests related to analytic variance')
-    parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_upchan()')
+    parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_{beamform,upchan}()')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
-    parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection test')
+    parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection and pulse-invariants tests')
     parser.add_argument('--amax', action='store_true', help='Runs DedispersionPlan.decode_argmax() tests (black-box probe arrays)')
 
 
@@ -265,7 +265,7 @@ def parse_time(subparsers):
     help_text = "Run timings (use flags to select specific timings)"
     parser = subparsers.add_parser("time", help=help_text, description=help_text)
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for timing (default 0)")
-    parser.add_argument('-t', '--nthreads', type=int, default=0, help="number of CPU threads (only for time_cpu_downsample)")
+    parser.add_argument('-t', '--nthreads', type=int, default=0, help="number of CPU threads (for time_cpu_downsample and time_avx2_simulate_4bit_noise)")
     parser.add_argument('--ncu', action='store_true', help="Just run a single kernel (intended for profiling with nvidia 'ncu')")
     parser.add_argument('--gldk', action='store_true', help='Runs time_lagged_downsampling_kernels()')
     parser.add_argument('--gddk', action='store_true', help='Runs time_gpu_dedispersion_kernels()')
@@ -1003,7 +1003,7 @@ def time_dedisperser(args):
     print('Timing complete!')
 
 
-###################################   random_kernels command  ###################################
+###################################   show_asdf command  ###################################
 
 
 def parse_show_asdf(subparsers):

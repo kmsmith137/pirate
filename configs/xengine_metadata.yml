@@ -24,8 +24,8 @@ zone_freq_edges: [300, 350, 450, 600, 800, 1500]
 
 # Optional: which frequency channels are present?
 # A list of distinct integers 0 <= (channel_id) < (total frequency channels).
-# Only makes sense in "context 1" (see above), to indicate which frequency channels
-# are sent by a particular X-engine node.
+# Only makes sense when this file represents the data sent by a single X-engine
+# node, to indicate which frequency channels are sent by that node.
 
 freq_channels: [ 0, 10000, 20000, 28159 ]
 

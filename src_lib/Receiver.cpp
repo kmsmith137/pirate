@@ -57,7 +57,7 @@ struct Receiver::Peer
     // Parsing state machine.
     // Network protocol reference: notes/network_protocol.md.
     enum class State {
-        ReadIni = 0,      // Reading first 8 bytes (magic + yaml_len)
+        ReadIni = 0,      // Reading first 12 bytes (magic + flags + yaml_len)
         ReadYaml = 1,     // Reading zero-terminated YAML string
         ReadData = 2      // Reading (nbeams, nfreq, 256) data arrays
     };

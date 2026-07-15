@@ -370,7 +370,6 @@ PYFILES = \
   pirate_frb/HwtestSender.py \
   pirate_frb/Hwtest.py \
   pirate_frb/Hardware.py \
-  pirate_frb/DedispersionConfig.py \
   pirate_frb/GpuDedisperser.py \
   pirate_frb/run_server.py \
   pirate_frb/run_fake_xengine.py \

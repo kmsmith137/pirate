@@ -27,7 +27,7 @@ A pattern for a class `X`:
 - If `X` contains pointers to other thread-backed classes (or more generally, to any class `Y` defining `Y::stop()`), then `X::stop(e)` should call `ptr->stop(e)` for each such pointer, forwarding the exception (see "Error reporting" in notes/stoppable_class.md).
 
 Every thread-backed class is a stoppable class (see notes/stoppable_class.md), but not vice versa.
-In particular, the "Concurrency" rules in notes/cpp.md and the "pybind11 bindings" / "Reviewer checklist" sections in notes/stoppable_class.md apply here too.
+In particular, the "Concurrency" rules in [notes/cpp.md](cpp.md) and the "pybind11 bindings" / "Reviewer checklist" sections in notes/stoppable_class.md apply here too.
 
 ## Spawning, joining, and teardown
 

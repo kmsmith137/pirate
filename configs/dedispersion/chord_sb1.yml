@@ -10,7 +10,7 @@ beams_per_gpu: 60
 dtype: float16
 time_samples_per_chunk: 2048
 
-# python -m make_subbands 300 1500 0.4 -r 4
+# pirate_frb make_subbands 300 1500 0.4 -r 4
 frequency_subband_counts: [1,2,2,2,1]
 
 # GPU configuration.

@@ -135,7 +135,7 @@ class GpuDedisperserInjections:
 
         Examples
         --------
-        >>> g = GpuDedisperser(plan, stream_pool)
+        >>> g = GpuDedisperser(plan, stream_pool, cuda_device_id=0)
         >>> g.allocate(gpu_alloc, host_alloc)
         >>> with g.get_input(seq_id=0) as arr:
         ...     arr[:] = input_data  # write to the buffer

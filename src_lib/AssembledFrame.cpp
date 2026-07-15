@@ -503,7 +503,7 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync, bool ver
                 "  - all frequency channels\n"
                 "  - a specific time range (or time \"chunk\")\n"
                 "\n"
-                "Written by pirate::AssembedFrame::write_asdf().\n"
+                "Written by pirate::AssembledFrame::write_asdf().\n"
                 "Note that we define a \"minichunk\" to be 256 time samples.\n"
                 "\n"
                 "References:\n"
