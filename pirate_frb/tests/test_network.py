@@ -252,6 +252,9 @@ class NetworkTester:
             Receiver(
                 address     = f"127.0.0.1:{p['data_base_port'] + j}",
                 allocator   = self.allocator,
+                # 0 disables the input-stream gap check (the test's random
+                # chunk skips would otherwise need bounding).
+                max_chunk_skip = 0,
                 # Per-Socket short-read misbehavior on every accepted
                 # peer socket. Strengthens the test by exercising the
                 # incremental-parse path against pathological short

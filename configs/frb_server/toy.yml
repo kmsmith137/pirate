@@ -41,6 +41,9 @@ grouper_ip_addrs:
 min_data_mtu: 1500
 min_rpc_mtu: 1500
 
+# The FRB server will throw an exception if there is a gap in its input data stream larger than this.
+max_chunk_skip: 10
+
 
 #####################################  File-writing config  ######################################
 

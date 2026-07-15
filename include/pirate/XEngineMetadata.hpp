@@ -165,7 +165,8 @@ struct XEngineMetadata
     // Check that two XEngineMetadata objects (from different senders) have consistent fields.
     // Checks zone_nfreq, zone_freq_edges, beamset, beam_ids, beam_positions_x/y, all timekeeping
     // fields, all tel_* fields, and noise_variance. Does NOT check freq_channels (which legitimately
-    // differ across X-engine nodes). Throws exception on mismatch.
+    // differ across X-engine nodes; pairwise DISJOINTNESS is assumed but currently unvalidated --
+    // see the known-issue note in Receiver.hpp). Throws exception on mismatch.
     static void check_sender_consistency(const XEngineMetadata &ref, const XEngineMetadata &m);
 
     // -------------------------------- Test/fixture factories --------------------------------

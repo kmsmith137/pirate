@@ -116,7 +116,7 @@ def _parse_config(filename):
         'gpu_memory_per_server',
         'use_hugepages', 'data_ip_addrs', 'rpc_ip_addrs', 'grouper_ip_addrs',
         'check_mountpoints', 'ssd_dirs', 'ssd_threads_per_server',
-        'nfs_dir', 'nfs_threads_per_server',
+        'nfs_dir', 'nfs_threads_per_server', 'max_chunk_skip',
     ]
 
     missing = [k for k in required_keys if k not in config]
@@ -205,6 +205,12 @@ def _parse_config(filename):
         val = config[key]
         if not isinstance(val, int) or val <= 0:
             raise RuntimeError(f"{filename}: '{key}' must be a positive integer, got {val!r}")
+
+    # max_chunk_skip: 0 is legal (disables the input-stream gap check).
+    val = config['max_chunk_skip']
+    if not isinstance(val, int) or isinstance(val, bool) or val < 0:
+        raise RuntimeError(f"{filename}: 'max_chunk_skip' must be a non-negative integer "
+                           f"(0 disables the gap check), got {val!r}")
 
     if not isinstance(config['nfs_dir'], str):
         raise RuntimeError(f"{filename}: 'nfs_dir' must be a string, got {type(config['nfs_dir']).__name__}")
@@ -522,7 +528,8 @@ class RunServerHelper:
             # Receivers: one per data IP address (matching the allocator's
             # num_consumers). No threads spawned in ctor.
             receivers = [
-                Receiver(address=addr, allocator=allocator)
+                Receiver(address=addr, allocator=allocator,
+                         max_chunk_skip=self.config['max_chunk_skip'])
                 for addr in self.config['data_ip_addrs'][i]
             ]
             # FrbServer: ties together receivers, file writer, and RPC.

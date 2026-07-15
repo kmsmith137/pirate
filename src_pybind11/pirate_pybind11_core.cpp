@@ -1344,21 +1344,29 @@ void register_core_bindings(pybind11::module &m)
         "    AssembledFrames")
           .def(py::init([](const std::string &address,
                            std::shared_ptr<AssembledFrameAllocator> allocator,
+                           long max_chunk_skip,
                            bool misbehaving_reads) {
                Receiver::Params params;
                params.address = address;
                params.allocator = allocator;
+               params.max_chunk_skip = max_chunk_skip;
                params.misbehaving_reads = misbehaving_reads;
                return std::make_shared<Receiver>(params);
           }),
                py::arg("address"),
                py::arg("allocator"),
+               py::arg("max_chunk_skip") = 0,
                py::arg("misbehaving_reads") = false,
                "Create a Receiver (does not start worker threads).\n\n"
                "Args:\n"
                "    address: Address to bind to (e.g. '127.0.0.1:5000')\n"
                "    allocator: AssembledFrameAllocator for output frames\n"
                "        (time_samples_per_chunk is taken from the allocator).\n"
+               "    max_chunk_skip: If > 0, throw (stopping the Receiver and\n"
+               "        the server) on a forward gap in the input data stream\n"
+               "        larger than this many time chunks -- guards against a\n"
+               "        corrupt seq silently fast-forwarding the pipeline.\n"
+               "        0 (default) means the stream can skip arbitrarily far.\n"
                "    misbehaving_reads: If True, peer sockets accepted by\n"
                "        this Receiver will have set_misbehaving_reads()\n"
                "        called on them, which truncates each read() to a\n"

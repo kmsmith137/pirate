@@ -138,6 +138,8 @@ Receiver::Receiver(const Params &p) : params(p)
     parse_ip_address(params.address, this->ip_addr, this->tcp_port);
 
     xassert(params.allocator);
+    xassert(params.max_chunk_skip >= 0);
+
     // time_samples_per_chunk lives on the allocator (validated > 0 at
     // allocator construction). The divisibility-by-256 check is specific
     // to the network protocol's minichunk size, so we enforce it here at
@@ -162,9 +164,13 @@ void Receiver::start()
         _throw_if_stopped("Receiver::start()");
 
         is_started = true;
-        lock.unlock();
 
-        // Spawn worker threads.
+        // Spawn worker threads with the mutex HELD, publishing the thread
+        // handles under the lock (see "Spawning, joining, and teardown" in
+        // notes/cpp.md). Safe: we never wait on the spawned threads here, so
+        // a freshly-spawned worker that takes 'mutex' just blocks briefly.
+        // (If a spawn throws, the unique_lock is destroyed during unwinding
+        // BEFORE the catch handler runs, so the stop() below can relock.)
         listener_thread = std::thread(&Receiver::listener_main, this);
         reader_thread = std::thread(&Receiver::reader_main, this);
         assembler_thread = std::thread(&Receiver::assembler_main, this);
@@ -865,6 +871,24 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
             // Target chunk is no longer in buffer (peer is running slow).
             // In this case, we silently drop the data.
             goto minichunk_done;  // hmmm
+        }
+
+        // Bound forward gaps in the input stream (Params::max_chunk_skip;
+        // 0 disables the check). A minichunk more than max_chunk_skip
+        // chunks beyond the top of the receive window means a corrupt seq
+        // or a sender bug; without this check, the skip-ahead loop below
+        // would silently fast-forward the whole pipeline (flooding
+        // downstream with empty chunks and draining the frame pool).
+        if ((params.max_chunk_skip > 0)
+            && (ichunk > curr_base_chunk + 1 + params.max_chunk_skip))
+        {
+            stringstream ss;
+            ss << "Receiver: gap in input data stream too large: minichunk seq "
+               << mc_seq << " maps to time chunk " << ichunk
+               << ", but the receive window is chunks [" << curr_base_chunk
+               << ", " << (curr_base_chunk + 1) << "] and max_chunk_skip="
+               << params.max_chunk_skip;
+            throw runtime_error(ss.str());
         }
 
         // If the sender skipped one or more entire chunks (NOTE 1), advance

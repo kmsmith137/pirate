@@ -47,6 +47,17 @@ struct AssembledFrameAllocator;  // AssembledFrame.hpp
 // (assembler, FrbServer, RPC) read it back via
 // AssembledFrameAllocator::get_metadata().
 //
+// KNOWN ISSUE (fix planned): senders' freq_channels are assumed pairwise
+// DISJOINT, but nothing validates this. Frame sets are shared across all
+// Receivers of an allocator, and each assembler memcpy's its peers'
+// frequency rows into the shared frames -- so two senders claiming the
+// same channel (e.g. an X-engine config typo, or the same X-engine
+// started twice) silently corrupt that channel's data: last-writer-wins
+// if both peers land on one Receiver, a cross-thread data race on the
+// overlapping bytes if they land on different Receivers. Planned fix: a
+// claimed-channels registry on the shared AssembledFrameAllocator,
+// checked once per connection when the reader thread parses the YAML.
+//
 // See notes/network_protocol.md for the network protocol parsed by the Receiver.
 
 struct Receiver
@@ -65,6 +76,15 @@ struct Receiver
         // being handed to the reader thread. Test-only -- never set
         // in production.
         bool misbehaving_reads = false;
+
+        // Bound on forward gaps in the input data stream, in time chunks:
+        // a minichunk more than max_chunk_skip chunks beyond the top of
+        // the 2-chunk receive window throws (stopping the Receiver, and
+        // the server with it). Guards against a corrupt seq / sender bug
+        // silently fast-forwarding the whole pipeline (flooding downstream
+        // with empty chunks and draining the frame pool). Zero means "can
+        // skip arbitrarily far" (no check).
+        long max_chunk_skip = 0;
     };
 
     // Constructor initializes state but does not start worker threads.
@@ -77,6 +97,9 @@ struct Receiver
     void start();
 
     // Thread-safe: returns current number of active TCP connections, and total bytes read.
+    // Stopped-tolerant informational accessor, deliberately NOT an entry point
+    // (no _throw_if_stopped): the last-known values remain meaningful
+    // diagnostics on a stopped instance.
     void get_status(long &num_connections, long &nbytes_cumul);
 
     // Entry point: wait until the listener thread has bound the listening
