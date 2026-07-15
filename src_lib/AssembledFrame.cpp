@@ -44,8 +44,22 @@ void AssembledFrame::_reap_locked()
 {
     if (data.size == 0)
         return;  // already reaped
-    if (save_paths.size() && !on_ssd)
-        return;  // unreapable (until written to ssd)
+
+    // Unreapable while a write is pending (paths queued, not yet on SSD) --
+    // UNLESS the write already failed. save_error is terminal: the data will
+    // never reach disk (FileWriter's NFS thread only drains an errored
+    // frame's entries as error notifications), so freeing it is safe. It is
+    // also necessary: the FrbServer reaper visits each frame once (rb_reaped
+    // is monotone), so an errored frame left pinned here would leak its slab
+    // until the ringbuf slot is overwritten -- and under sustained SSD
+    // failure the leaked slabs exhaust the pool and silently wedge the whole
+    // pipeline (the allocator worker parks in get_slab, so rb_assembled
+    // stalls and the max-unprocessed check never fires). The FileWriter SSD
+    // worker calls _reap_locked() right after setting save_error, so an
+    // errored frame is freed immediately.
+    if (save_paths.size() && !on_ssd && !save_error)
+        return;
+
     // scales_offsets and data share a slab via a common base shared_ptr;
     // dropping both Array<void>s drops the last refs and frees the slab.
     this->scales_offsets = Array<void> ();

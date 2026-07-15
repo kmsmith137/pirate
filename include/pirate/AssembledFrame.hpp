@@ -75,8 +75,9 @@ struct AssembledFrame
     // builds the frames) and external slab-pool sizing. _reap_locked()
     // releases both arrays together by dropping the slab shared_ptr.
     //
-    // Warning: if the AssembledFrame has been "reaped" under memory pressure,
-    // then both 'scales_offsets' and 'data' are empty arrays. The array state
+    // Warning: if the AssembledFrame has been "reaped" (under memory
+    // pressure, or because a disk write failed -- see _reap_locked()), then
+    // both 'scales_offsets' and 'data' are empty arrays. The array state
     // (empty vs nonempty) is protected by the lock, but the array contents
     // are not lock-protected.
 

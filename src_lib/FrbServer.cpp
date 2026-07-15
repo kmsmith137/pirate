@@ -1314,14 +1314,19 @@ void FrbServer::_frame_finalizing_thread_main()
         //
         // (ii) Queueing BEFORE advancing rb_processed (B before C): the
         //      reaper only reaps frames with frame_id < rb_processed, and
-        //      AssembledFrame::_reap_locked() refuses to free data while an
-        //      unwritten save_path is pending. So pushing the save_path
-        //      first guarantees the reaper can never free the data
-        //      underneath a pending stream write. (Data is stable here: the
-        //      batch's H2G copy has completed, in both the normal and
-        //      --no-dedispersion paths.) A corollary: _queue_frame_write's
-        //      reaped-and-never-written skip can never fire on this path,
-        //      so every counted match really is queued.
+        //      AssembledFrame::_reap_locked() refuses to free data while a
+        //      pending save_path can still SUCCEED (paths queued, not on
+        //      SSD, no save_error). So pushing the save_path first
+        //      guarantees the reaper cannot free the data underneath a
+        //      pending stream write -- except when the frame's primary
+        //      write has already FAILED (save_error set), in which case the
+        //      data is deliberately freed early: every subsequent entry,
+        //      including this one, drains as an errored notification
+        //      without touching the data (see _reap_locked()). (Data is
+        //      stable here: the batch's H2G copy has completed, in both the
+        //      normal and --no-dedispersion paths.) A corollary:
+        //      _queue_frame_write's reaped-and-never-written skip can never
+        //      fire on this path, so every counted match really is queued.
         stream_matches.clear();
 
         // Phase A.
@@ -1498,19 +1503,24 @@ bool FrbServer::_queue_frame_write(const shared_ptr<AssembledFrame> &frame,
     unique_lock<std::mutex> frame_lock(frame->mutex);
 
     // Skip if frame has been reaped without ever being written.
-    // If save_paths is non-empty, then either the data is still
-    // in memory (data.size > 0), or it's on disk (on_ssd, or
-    // copied to NFS and tracked via nfs_count). In the latter
-    // case FileWriter's NFS thread can hardlink from the
-    // primary save_path to a new save_path (see _nfs_thread_main
-    // -- both _hardlink_in_nfs and the save_error path operate
-    // off save_paths[0]). So we should only skip when save_paths
-    // is empty AND data has been reaped.
+    // If save_paths is non-empty, the frame is in one of three states, and
+    // in each of them the FileWriter handles a newly pushed entry correctly:
+    //   - data still in memory (data.size > 0): normal write path;
+    //   - data on disk (on_ssd, or copied to NFS and tracked via nfs_count):
+    //     the NFS thread hardlinks from the primary save_path to the new one
+    //     (see _nfs_thread_main);
+    //   - primary write FAILED (save_error set; data reaped early -- see
+    //     _reap_locked()): the NFS thread drains the new entry as an errored
+    //     notification, without touching the data.
+    // So we should only skip when save_paths is empty AND data has been
+    // reaped.
     //
-    // NOTE: on the stream path (stream != nullptr) this skip can never fire
-    // (frames at the assembled->processed transition are not yet reapable),
-    // which is what keeps FileStream::num_files_queued -- already bumped at
-    // match time, rule R1 -- consistent with the pushes.
+    // NOTE: on the stream path (stream != nullptr) this skip can never fire:
+    // frames at the assembled->processed transition are unreapable unless a
+    // racing WriteFiles write has already failed -- and save_error implies
+    // nonempty save_paths, so the skip condition still cannot be met. This
+    // is what keeps FileStream::num_files_queued -- already bumped at match
+    // time, rule R1 -- consistent with the pushes.
     if (frame->data.size == 0 && frame->save_paths.empty())
         return false;
 

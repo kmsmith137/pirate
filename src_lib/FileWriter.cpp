@@ -259,7 +259,9 @@ void FileWriter::_ssd_thread_main()
         frame->in_nfs_queue = true;
         frame->on_ssd = !eptr;
         
-        // After the frame has been written to disk, it can be reaped to save memory.
+        // The frame can be reaped now: either the data is safely on the SSD,
+        // or the write FAILED (save_error set) and the data will never reach
+        // disk -- keeping it would leak the slab (see _reap_locked()).
         frame->_reap_locked();
         frame_lock.unlock();
 
