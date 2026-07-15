@@ -1689,6 +1689,18 @@ long AssembledFrameAllocator::num_free_frames(bool permissive) const
 
 long AssembledFrameAllocator::num_total_frames(bool blocking) const
 {
+    // Gate dummy mode HERE rather than delegating: num_total_slabs() is a
+    // SLAB ENTRY POINT, so its dummy-mode throw would STOP the slab
+    // allocator (strict stoppable-class policy) -- and thence this whole
+    // allocator, via the worker's next get_slab() -- as a side effect of an
+    // informational query. This AFA-local throw stops nothing
+    // (num_total_frames is an accessor, like num_free_frames above).
+    if (is_dummy_mode)
+        throw runtime_error("AssembledFrameAllocator::num_total_frames(): not available in dummy mode");
+
+    // Non-dummy delegation is still a slab entry point: with blocking=false,
+    // a call BEFORE the worker's first allocation creates the pool throws
+    // and stops the allocators. See the warning at the hpp declaration.
     return slab_allocator->num_total_slabs(blocking);
 }
 

@@ -476,9 +476,15 @@ struct AssembledFrameAllocator
     void block_until_low_memory(long nframe_threshold);
 
     // Returns the total number of frames (same as num_total_slabs() from the underlying slab_allocator).
-    // Throws exception in dummy mode.
-    // If blocking=false (default) and not initialized, throws exception.
-    // If blocking=true and not initialized, blocks until initialized.
+    // Throws in dummy mode (an AFA-local throw: stops nothing).
+    // If blocking=true: blocks until the worker's first allocation creates the
+    // slab pool (interruptible by stop()).
+    // If blocking=false (default), a call before the pool exists throws -- and
+    // NOTE that this throw comes from a SlabAllocator ENTRY POINT, so it STOPS
+    // the slab allocator (and thence this allocator, via the worker), per the
+    // strict stoppable-class policy. Callers probing before the pipeline is
+    // running should pass blocking=true (like FrbServer::_check_frame_pool_size)
+    // or use num_free_frames(permissive=true).
     long num_total_frames(bool blocking = false) const;
 
     // Returns true if in dummy mode.

@@ -523,9 +523,14 @@ void register_core_bindings(pybind11::module &m)
         .def("num_total_frames", &AssembledFrameAllocator::num_total_frames,
             py::arg("blocking") = false,
             py::call_guard<py::gil_scoped_release>(),
-            "Total number of frames in the pool.\n\n"
-            "Throws in dummy mode or if not initialized. Releases the GIL\n"
-            "(with blocking=True, waits for the slab size to be established).")
+            "Total number of frames in the pool. Throws in dummy mode.\n\n"
+            "With blocking=True, waits until the worker's first allocation\n"
+            "creates the slab pool; releases the GIL while blocking. With\n"
+            "blocking=False (default), a call before the pool exists throws --\n"
+            "and NOTE that this throw stops the underlying slab allocator (and\n"
+            "hence this allocator), per the strict stoppable-class policy.\n"
+            "Callers probing before the pipeline is running should pass\n"
+            "blocking=True, or use num_free_frames(permissive=True).")
         .def("is_initialized", &AssembledFrameAllocator::is_initialized,
             "Non-blocking poll: True iff the underlying memory is ready to\n"
             "serve allocations (delegates through SlabAllocator to BumpAllocator).")
