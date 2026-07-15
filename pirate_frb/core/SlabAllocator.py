@@ -28,8 +28,9 @@ class SlabAllocatorInjections:
             If BumpAllocator: memory is allocated from the BumpAllocator.
         nbytes : int
             Capacity in bytes.
-            - If aflags and >= 0: pre-allocates this many bytes, subdivided into slabs
+            - If aflags and > 0: pre-allocates this many bytes, subdivided into slabs
             - If aflags and < 0: dummy mode (each get_slab() allocates fresh memory)
+            - If aflags and == 0: rejected (raises)
             - If BumpAllocator: must be positive
 
         Examples

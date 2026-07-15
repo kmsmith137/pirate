@@ -212,8 +212,9 @@ void register_core_bindings(pybind11::module &m)
         "Pre-allocates a large memory region subdivided into fixed-size slabs.\n"
         "Slabs are returned to the pool when their reference count drops to zero.\n\n"
         "Modes:\n"
-        "  - capacity >= 0: Pre-allocates base region, slabs share this memory\n"
-        "  - capacity < 0: Dummy mode, each get_slab() allocates fresh memory")
+        "  - capacity > 0: Pre-allocates base region, slabs share this memory\n"
+        "  - capacity < 0: Dummy mode, each get_slab() allocates fresh memory\n"
+        "  - capacity == 0: rejected (throws)")
         .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(int, long)>(&SlabAllocator::create)),
             py::arg("aflags"), py::arg("capacity"),
             // Allocates (and for af_rhost, cuda-registers) the full capacity; release the GIL.
@@ -221,7 +222,8 @@ void register_core_bindings(pybind11::module &m)
             "Create allocator with new memory.\n\n"
             "Args:\n"
             "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.)\n"
-            "    capacity: Bytes to pre-allocate (>= 0) or < 0 for dummy mode")
+            "    capacity: Bytes to pre-allocate (> 0), or < 0 for dummy mode\n"
+            "        (capacity == 0 is rejected)")
         .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(const std::shared_ptr<BumpAllocator> &, long)>(&SlabAllocator::create)),
             py::arg("bump_allocator"), py::arg("nbytes"),
             "Create allocator using memory from a BumpAllocator.\n\n"
@@ -234,12 +236,14 @@ void register_core_bindings(pybind11::module &m)
         .def("wait_until_initialized", &SlabAllocator::wait_until_initialized,
             py::call_guard<py::gil_scoped_release>(),
             "If backed by an async BumpAllocator: block until it's initialized\n"
-            "(or rethrow async-init exception). Otherwise no-op. Releases the\n"
-            "GIL while blocking.")
+            "(or rethrow the async-init exception). Otherwise a no-op -- except\n"
+            "that a stopped allocator throws (rethrowing the saved error),\n"
+            "uniformly across modes. Releases the GIL while blocking.")
         .def("is_initialized", &SlabAllocator::is_initialized,
             "Non-blocking poll: True iff the underlying BumpAllocator is ready\n"
             "to serve allocations (delegates to bump_allocator.is_initialized()).\n"
-            "Always True in dummy mode.")
+            "Always True if there is no underlying BumpAllocator (dummy mode,\n"
+            "or construction from aflags).")
         .def("num_free_slabs", &SlabAllocator::num_free_slabs,
             "Number of slabs currently available. Throws in dummy mode.")
         .def("num_total_slabs", &SlabAllocator::num_total_slabs,

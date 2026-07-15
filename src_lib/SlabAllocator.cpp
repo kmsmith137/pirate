@@ -39,7 +39,16 @@ SlabAllocator::SlabAllocator(int aflags_, long capacity_)
     
     if (aflags & ksgpu::af_guard)
         throw std::runtime_error("SlabAllocator constructor: af_guard flag is not supported");
-    
+
+    // capacity == 0 would construct "successfully" but crash later:
+    // _af_alloc() returns an EMPTY pointer for a zero-byte request, so
+    // 'base' would be null and the first get_slab() would enter the
+    // bump-backed lazy-init path and dereference a null bump_allocator.
+    // A zero-capacity pool could never serve a get_slab() call anyway.
+    if (capacity == 0)
+        throw std::runtime_error("SlabAllocator constructor: capacity=0; "
+            "use capacity > 0 (normal mode) or capacity < 0 (dummy mode)");
+
     if (!is_dummy()) {
         // Normal mode: pre-allocate base region.
         long aligned_capacity = align_up(capacity, nalign);
@@ -94,12 +103,14 @@ void SlabAllocator::stop(std::exception_ptr e) const
             return;
         is_stopped = true;
         error = e;
-        ba_to_notify = bump_allocator;  // may be null in dummy mode
-        free_cv.notify_all();
-        init_cv.notify_all();
-        size_cv.notify_all();
-        empty_cv.notify_all();
+        ba_to_notify = bump_allocator;  // may be null (dummy/aflags mode)
     }
+    // Notify after releasing the mutex so woken threads aren't immediately
+    // blocked re-acquiring it. Stop notifies every cv of the class.
+    free_cv.notify_all();
+    init_cv.notify_all();
+    size_cv.notify_all();
+    empty_cv.notify_all();
     if (ba_to_notify)
         ba_to_notify->stop(e);
 }
@@ -235,6 +246,11 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
     // unblocks the wait -- holding 'lock' across the wait would deadlock
     // stop() behind it. Other get_slab() callers wait on 'init_cv' until the
     // init completes (or the allocator is stopped).
+    //
+    // Invariant: 'base' is always non-null in aflags mode (the constructor
+    // rejects capacity == 0, and _af_alloc() never returns null for a
+    // positive size), so entering this loop implies bump-backed mode and
+    // a non-null 'bump_allocator'.
     while (!base) {
         if (init_underway) {
             // Another thread is performing the lazy init; wait for it.
@@ -259,13 +275,19 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
             std::shared_ptr<void> bump_base = bump_allocator->get_base();
             new_base = std::shared_ptr<void>(bump_base, ptr);
         } catch (...) {
-            // The try/catch wrapper in get_slab() stops the allocator
-            // (waking any waiters, which then throw via _throw_if_stopped);
-            // here we just clear 'init_underway' and rethrow.
+            // Clear the in-progress flag and notify its waiters (an
+            // in-progress flag's reset path must notify the cv whose
+            // waiters test it -- see the Concurrency section of
+            // notes/cpp.md). A woken waiter may retry the init before the
+            // get_slab() wrapper's stop() lands; the retry is harmless:
+            // the BumpAllocator's own strict entry-point policy already
+            // stopped it before this exception propagated to us, so the
+            // retry rethrows the same root cause.
             {
                 std::lock_guard<std::mutex> g2(lock);
                 init_underway = false;
             }
+            init_cv.notify_all();
             throw;
         }
 
@@ -296,7 +318,9 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
 
         num_slabs = new_num_slabs;
 
-        // Initialize free list with all slabs.
+        // Initialize free list with all slabs. (The reserve also guarantees
+        // that return_slab()'s push_back never reallocates, hence never
+        // throws -- see the comment there.)
         char *base_ptr = static_cast<char *>(base.get());
         free_list.reserve(num_slabs);
         for (long i = 0; i < num_slabs; i++)
@@ -348,6 +372,11 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
 
 void SlabAllocator::return_slab(void *slab_ptr)
 {
+    // Runs inside a slab shared_ptr deleter, so it must never throw. The
+    // push_back can't: the free list's capacity was reserved (num_slabs
+    // entries) at the pool fill, and its size never exceeds num_slabs
+    // (each of the num_slabs slabs has exactly one deleter, invoked once),
+    // so the push_back never reallocates.
     std::unique_lock<std::mutex> guard(lock);
     free_list.push_back(slab_ptr);
     guard.unlock();
@@ -420,11 +449,12 @@ long SlabAllocator::get_slab_size() const
 
 bool SlabAllocator::is_initialized() const
 {
-    // Dummy mode: no underlying BumpAllocator; always "ready" (each
-    // get_slab call allocates fresh memory).
+    // No underlying BumpAllocator -- dummy mode (each get_slab call
+    // allocates fresh memory) or aflags mode (the constructor
+    // preallocated): always "ready".
     if (!bump_allocator)
         return true;
-    // Non-dummy: delegate to the underlying BumpAllocator. (Note: we do
+    // Bump-backed: delegate to the underlying BumpAllocator. (Note: we do
     // NOT check whether this->base has been set -- that happens lazily
     // on first get_slab(), after the BumpAllocator is initialized.)
     return bump_allocator->is_initialized();

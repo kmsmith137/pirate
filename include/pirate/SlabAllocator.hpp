@@ -59,6 +59,8 @@ public:
     // Factory method: create SlabAllocator that allocates new memory using af_alloc().
     // The 'aflags' are memory allocation flags from ksgpu/mem_utils.hpp.
     // If capacity < 0, operates in "dummy" mode (see class comment).
+    // capacity == 0 is rejected (throws): a zero-capacity pool could never
+    // serve a get_slab() call.
     static std::shared_ptr<SlabAllocator> create(int aflags, long capacity);
     
     // Factory method: create SlabAllocator that gets memory from an existing BumpAllocator.
@@ -111,8 +113,8 @@ public:
     
     // Returns true if the SlabAllocator is ready to serve get_slab() calls
     // without blocking on async init. Semantics:
-    //   - Dummy mode (no underlying BumpAllocator): always true.
-    //   - Non-dummy mode: delegates to bump_allocator->is_initialized().
+    //   - No underlying BumpAllocator (dummy and aflags modes): always true.
+    //   - Bump-backed mode: delegates to bump_allocator->is_initialized().
     //
     // Note: does NOT check whether slab_size has been established (that's
     // user-pattern state, established on the first get_slab() call).
@@ -128,9 +130,9 @@ public:
     void block_until_empty();
 
     // In async-aware mode (underlying BumpAllocator was constructed async),
-    // delegates to bump_allocator->wait_until_initialized(). In dummy mode
-    // (no underlying BumpAllocator), no-op. In sync mode (BumpAllocator was
-    // sync), bump_allocator's wait is a no-op too.
+    // delegates to bump_allocator->wait_until_initialized(). In dummy and
+    // aflags modes (no underlying BumpAllocator), no-op. In sync mode
+    // (BumpAllocator was sync), bump_allocator's wait is a no-op too.
     //
     // Note: this does NOT trigger the deferred b->allocate_bytes() call; the
     // first get_slab() does that. The purpose of calling this method
@@ -183,7 +185,8 @@ private:
     //               which is sound here BECAUSE all free_cv waiters share
     //               the same predicate and one returned slab satisfies
     //               exactly one of them.
-    //   init_cv  -- the deferred BumpAllocator init completed; awaited by
+    //   init_cv  -- the deferred BumpAllocator init completed, or failed
+    //               (init_underway reset on the throw path); awaited by
     //               get_slab() callers that lost the init_underway race.
     //   size_cv  -- the pool was materialized (num_slabs set, free list
     //               filled, on the first completed get_slab()); awaited
