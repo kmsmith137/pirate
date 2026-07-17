@@ -1,5 +1,6 @@
 #include "../include/pirate/SlabAllocator.hpp"
-#include "../include/pirate/inlines.hpp"     // align_up()
+#include "../include/pirate/BumpAllocator.hpp"   // forward-declared in SlabAllocator.hpp
+#include "../include/pirate/inlines.hpp"         // align_up()
 
 #include <cstring>     // std::memcpy
 #include <stdexcept>
@@ -96,33 +97,6 @@ void SlabAllocator::stop(std::exception_ptr e) const
 }
 
 
-void SlabAllocator::wait_until_initialized()
-{
-    try {
-        // Check our OWN stopped state first, so the stopped behavior is
-        // uniform across modes. Without this, an error-stopped dummy-mode
-        // allocator (no underlying BumpAllocator) would silently succeed,
-        // while bump-backed mode rethrows the root cause via the
-        // BumpAllocator's readiness gate.
-        {
-            std::lock_guard<std::mutex> guard(lock);
-            _throw_if_stopped("SlabAllocator::wait_until_initialized");
-        }
-
-        // No-op in dummy mode (no underlying BumpAllocator).
-        if (!bump_allocator)
-            return;
-        // Delegates to the BumpAllocator's wait. Does NOT carve any slabs --
-        // get_slab() does that. The purpose of explicit wait is to surface
-        // async-init failures eagerly.
-        bump_allocator->wait_until_initialized();
-    } catch (...) {
-        stop(std::current_exception());
-        throw;
-    }
-}
-
-
 void SlabAllocator::_throw_if_stopped(const char *method_name) const
 {
     if (error)
@@ -197,6 +171,12 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes)
     // test here could go stale before the size was committed (handing out a
     // wrong-size slab). Set-once, with no cv notify: no wait predicate
     // tests slab_size.
+    //
+    // The check is DELIBERATELY enforced in dummy mode too, although each
+    // dummy slab is an independent allocation with no mechanical need for
+    // uniformity: dummy mode is used by tests, and mirroring the non-dummy
+    // validation means a size-inconsistency bug fails there rather than
+    // only in production mode.
     if (slab_size < 0)
         slab_size = aligned_nbytes;
     else if (aligned_nbytes != slab_size) {

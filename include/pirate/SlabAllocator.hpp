@@ -2,7 +2,6 @@
 #define _PIRATE_SLAB_ALLOCATOR_HPP
 
 #include "constants.hpp"
-#include "BumpAllocator.hpp"
 
 #include <condition_variable>
 #include <cstdint>
@@ -14,6 +13,9 @@ namespace pirate {
 #if 0
 }  // editor auto-indent
 #endif
+
+
+struct BumpAllocator;  // defined in BumpAllocator.hpp
 
 
 // SlabAllocator: A thread-safe pool allocator for fixed-size memory "slabs".
@@ -56,9 +58,8 @@ namespace pirate {
 //
 // Entry points vs accessors (see notes/stoppable_class.md):
 //   - Entry points -- throw/rethrow the saved error when stopped, and any
-//     throw stops the allocator: get_slab(), block_until_empty(),
-//     wait_until_initialized(). Rule of thumb: methods that can block are
-//     entry points.
+//     throw stops the allocator: get_slab(), block_until_empty(). Rule of
+//     thumb: methods that can block are entry points.
 //   - Stopped-tolerant informational accessors -- no stopped-state check;
 //     last-known values remain meaningful for diagnostics after a stop:
 //     is_initialized().
@@ -81,8 +82,9 @@ public:
     // If the BumpAllocator is async, the SlabAllocator constructor still
     // returns immediately: each per-slab b->allocate_bytes() call blocks on
     // the async init internally (in practice only the first one waits).
-    // Async-init failures from `b` surface from either get_slab() or
-    // wait_until_initialized().
+    // Async-init failures from `b` surface from get_slab(). (Callers that
+    // want to surface them eagerly wait on the BumpAllocator itself -- see
+    // run_server.py phase 2.)
     static std::shared_ptr<SlabAllocator> create(const std::shared_ptr<BumpAllocator> &b);
 
     // Factory method: create SlabAllocator in "dummy" mode (see class comment).
@@ -128,29 +130,12 @@ public:
     // Throws exception in dummy mode, or if stop() is called from another thread.
     void block_until_empty();
 
-    // In async-aware mode (underlying BumpAllocator was constructed async),
-    // delegates to bump_allocator->wait_until_initialized(). In dummy mode
-    // (no underlying BumpAllocator), no-op. In sync mode (BumpAllocator was
-    // sync), bump_allocator's wait is a no-op too.
-    //
-    // Note: this does NOT carve any slabs; get_slab() does that. The purpose
-    // of calling this method explicitly is to surface async-init failures
-    // eagerly rather than from the first get_slab() (which may run later,
-    // from a worker thread).
-    //
-    // Throws on a stopped allocator (rethrows the saved error, or the
-    // generic message on a clean stop), uniformly across modes.
-    //
-    // Deliberately no timeout_ms param (unlike BumpAllocator): callers wait
-    // out slow async inits on the BumpAllocator itself (see run_server.py
-    // phase 2), so this call should always be fast in practice.
-    void wait_until_initialized();
-
     // Stop the allocator. Any thread blocked in get_slab() will wake up and throw.
     // If 'e' is non-null, it represents an error; if null, it's normal termination.
     // Thread-safe; first call sets the error.
-    // In non-dummy mode, also propagates stop(e) to the underlying BumpAllocator
-    // (per the thread-backed-class pattern).
+    // In non-dummy mode, also propagates stop(e) into the underlying
+    // BumpAllocator, which is a thread-backed class (see
+    // notes/thread_backed_class.md).
     void stop(std::exception_ptr e = nullptr) const;
 
     const int aflags;    // allocation flags from ksgpu (inherited from the BumpAllocator in non-dummy mode)

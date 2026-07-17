@@ -233,12 +233,6 @@ void register_core_bindings(pybind11::module &m)
             "Args:\n"
             "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.), used\n"
             "        for the fresh per-slab allocation in each get_slab() call")
-        .def("wait_until_initialized", &SlabAllocator::wait_until_initialized,
-            py::call_guard<py::gil_scoped_release>(),
-            "If backed by an async BumpAllocator: block until it's initialized\n"
-            "(or rethrow the async-init exception). Otherwise a no-op -- except\n"
-            "that a stopped allocator throws (rethrowing the saved error),\n"
-            "uniformly across modes. Releases the GIL while blocking.")
         .def("is_initialized", &SlabAllocator::is_initialized,
             "Non-blocking poll: True iff the underlying BumpAllocator is ready\n"
             "to serve allocations (delegates to bump_allocator.is_initialized()).\n"
