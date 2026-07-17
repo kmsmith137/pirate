@@ -301,38 +301,6 @@ void FrbServer::_check_stopped(const char *method_name)
 }
 
 
-// Throws (with a verbose, user-facing message) if the frame pool -- sized from
-// the config parameter 'rb_host_memory_per_server' -- is too small for this run's
-// beam count. A config/runtime precondition, so it uses a descriptive
-// runtime_error rather than xassert.
-void FrbServer::_check_frame_pool_size(long nbeams) const
-{
-    // In dummy mode there is no real frame pool (and num_total_frames()
-    // throws), so there is nothing to check. Mirrors the reaper -- the
-    // other consumer of the pool -- which is only spawned in non-dummy
-    // mode (see start()).
-    if (frame_allocator->is_dummy())
-        return;
-
-    long total_frames = frame_allocator->num_total_frames(/*blocking=*/ true);
-    long min_frames = long(constants::server_min_total_chunks) * nbeams;
-    if (total_frames >= min_frames)
-        return;
-
-    stringstream ss;
-    ss << "FrbServer: the frame pool is too small for this configuration -- it holds "
-       << total_frames << " frames (" << (total_frames / nbeams) << " time-chunks), but at "
-       << "least " << min_frames << " frames (" << constants::server_min_total_chunks
-       << " chunks x " << nbeams << " beams) are required.\n"
-       << "The pool size is set by the config parameter 'rb_host_memory_per_server', divided "
-       << "by the per-frame memory footprint (which grows with the number of frequency "
-       << "channels and time_samples_per_chunk). Increase 'rb_host_memory_per_server' to "
-       << "accommodate this run's beam count (" << nbeams << ") and frequency-channel count, "
-       << "then re-run.";
-    throw runtime_error(ss.str());
-}
-
-
 void FrbServer::start()
 {
     // Per the strict stoppable-class policy (notes/stoppable_class.md), ANY
@@ -470,7 +438,8 @@ void FrbServer::stop(std::exception_ptr e) const
     for (auto &r : params.receivers)
         r->stop(e);
 
-    // Stop the frame_allocator (which will unblock num_total_frames).
+    // Stop the frame_allocator (unblocking get_frame_set() and
+    // block_until_low_memory() waiters).
     frame_allocator->stop(e);
 
     // Cascade to the dedisperser. GpuDedisperser::stop() also stops the
@@ -874,9 +843,9 @@ void FrbServer::_processing_thread_main()
     // propagates to the wrapper which calls stop().
     config_postfilled.validate();
 
-    // Fail early, with a helpful message, if the frame pool sized from
-    // rb_host_memory_per_server is too small for this run's beam count.
-    _check_frame_pool_size(new_beams_per_gpu);
+    // NOTE: there is currently no check that the frame pool (sized from
+    // rb_host_memory_per_server) is large enough for this run's beam count
+    // -- see the warning at constants::server_min_total_chunks.
 
     // The build steps below (plan construction, GpuDedisperser
     // create/allocate, weight fill) are individually slow (seconds each) and
@@ -1861,10 +1830,6 @@ void FrbRpcService::_GetStatus(const fs::GetStatusRequest *request, fs::GetStatu
         response->set_rb_assembled(s->rb_assembled);
         response->set_rb_end(s->rb_end);
     }
-
-    // Get num_free_frames from the allocator (permissive=true to handle uninitialized state).
-    auto &allocator = s->params.receivers[0]->params.allocator;
-    response->set_num_free_frames(allocator->num_free_frames(/*permissive=*/true));
 }
 
 grpc::Status FrbRpcService::GetStatus(

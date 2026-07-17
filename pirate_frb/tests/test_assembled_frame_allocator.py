@@ -296,8 +296,6 @@ def test_frame_recycling():
 
     # First set establishes slab size in the underlying allocator.
     set0_c0 = alloc.get_frame_set(0)
-    initial_total = alloc.num_total_frames()
-    assert initial_total == 3, f"Expected 3 total frames, got {initial_total}"
 
     # Consumer 1 requests chunk 0 - same set object, no new allocation.
     set0_c1 = alloc.get_frame_set(0)
@@ -361,12 +359,11 @@ def test_frame_recycling_with_held_reference():
 
     # Consumer 0 gets sets 0, 1, 2.
     set0 = alloc.get_frame_set(0)
-    assert alloc.num_total_frames() == 4
 
-    # Note: with the worker thread, exact free counts are non-deterministic
-    # (worker may pre-allocate). We only check bounds.
-    initial_free = alloc.num_free_frames()
-    assert 0 <= initial_free <= 3, f"Free frames out of range: {initial_free}"
+    # Write a marker into set0's frame data. If set0's slab were ever wrongly
+    # recycled while we hold this reference, the worker's pre-init memset
+    # (0x88 fill) would clobber the marker -- checked at the end of the test.
+    set0.frames[0].data[:] = 0x77
 
     set1 = alloc.get_frame_set(1)
     set2 = alloc.get_frame_set(2)
@@ -392,23 +389,26 @@ def test_frame_recycling_with_held_reference():
     # receiver, so the allocator drops its reference. Consumer 0 already
     # released its reference, so sets 1 and 2 are recycled immediately.
     set1_c1 = alloc.get_frame_set(1)
-    free_after_set1 = alloc.num_free_frames()
-
     set2_c1 = alloc.get_frame_set(2)
-    free_after_set2 = alloc.num_free_frames()
-
-    assert free_after_set2 >= free_after_set1, \
-        f"Free frames should not decrease: {free_after_set1} -> {free_after_set2}"
-
     del set1_c1
     del set2_c1
 
-    # Finally release set 0 -- it should now be recycled.
-    del set0
+    # With set0 still held (pinning one of the 4 slabs), cycle through more
+    # chunks than the remaining 3 slabs. This only completes if released sets
+    # are recycled (on last receipt + refcount zero) -- i.e. recycling works
+    # even while another set's slab is pinned by a held reference.
+    for i in range(10):
+        sa = alloc.get_frame_set(3 + i)
+        sb = alloc.get_frame_set(3 + i)
+        assert sb is sa
+        del sa, sb
 
-    final_free = alloc.num_free_frames()
-    assert final_free >= 1, \
-        f"Expected at least 1 free after releasing all, got {final_free}"
+    # set0's data must have survived all that recycling untouched.
+    assert np.all(set0.frames[0].data == 0x77), \
+        "Held set's slab was clobbered -- wrongly recycled while referenced"
+
+    # Finally release set 0.
+    del set0
 
     print("    PASSED")
 

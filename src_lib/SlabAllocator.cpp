@@ -90,7 +90,6 @@ void SlabAllocator::stop(std::exception_ptr e) const
     // blocked re-acquiring it. Stop notifies every cv of the class.
     free_cv.notify_all();
     init_cv.notify_all();
-    size_cv.notify_all();
     empty_cv.notify_all();
     if (ba_to_notify)
         ba_to_notify->stop(e);
@@ -301,16 +300,13 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
         // Initialize free list with all slabs. (The reserve also guarantees
         // that return_slab()'s push_back never reallocates, hence never
         // throws -- see the comment there.)
+        // No cv notify here: no wait predicate tests "pool materialized"
+        // directly. block_until_empty() waiters can only be satisfied at an
+        // empty-transition, notified on empty_cv below.
         char *base_ptr = static_cast<char *>(base.get());
         free_list.reserve(num_slabs);
         for (long i = 0; i < num_slabs; i++)
             free_list.push_back(base_ptr + i * slab_size);
-
-        // Wake any thread waiting in num_total_slabs(blocking=true) for the
-        // pool to be created. (block_until_empty() waiters don't need this
-        // wake: their predicate can only become true at an empty-transition,
-        // notified on empty_cv below.)
-        size_cv.notify_all();
     }
 
     // Wait for a slab if blocking, otherwise throw.
@@ -364,58 +360,6 @@ void SlabAllocator::return_slab(void *slab_ptr)
     // (free list non-empty), and one returned slab satisfies exactly one
     // waiter. See the cv comments in SlabAllocator.hpp.
     free_cv.notify_one();
-}
-
-
-long SlabAllocator::num_free_slabs(bool permissive) const
-{
-    // No stopped-check: deliberately usable on a stopped allocator
-    // (stopped-tolerant informational accessor -- see the entry-point
-    // classification in SlabAllocator.hpp).
-    if (is_dummy()) {
-        if (permissive)
-            return 0;
-        throw std::runtime_error("SlabAllocator::num_free_slabs(): not available in dummy mode");
-    }
-
-    std::lock_guard<std::mutex> guard(lock);
-
-    // Gate on 'num_slabs', not 'slab_size': the latter is committed at first
-    // get_slab() entry, before the pool exists (see _get_slab).
-    if (num_slabs == 0) {
-        if (permissive)
-            return 0;
-        throw std::runtime_error("SlabAllocator::num_free_slabs(): slab pool has not been created yet");
-    }
-
-    return static_cast<long>(free_list.size());
-}
-
-
-long SlabAllocator::num_total_slabs(bool blocking) const
-{
-    try {
-        if (is_dummy())
-            throw std::runtime_error("SlabAllocator::num_total_slabs(): not available in dummy mode");
-
-        std::unique_lock<std::mutex> guard(lock);
-        _throw_if_stopped("SlabAllocator::num_total_slabs");
-
-        // Gate on 'num_slabs', not 'slab_size': the latter is committed at
-        // first get_slab() entry, before the pool exists (see _get_slab),
-        // and waiters here return num_slabs.
-        while (num_slabs == 0) {
-            if (!blocking)
-                throw std::runtime_error("SlabAllocator::num_total_slabs(): slab pool has not been created yet");
-            size_cv.wait(guard);
-            _throw_if_stopped("SlabAllocator::num_total_slabs");
-        }
-
-        return num_slabs;
-    } catch (...) {
-        stop(std::current_exception());
-        throw;
-    }
 }
 
 

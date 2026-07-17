@@ -1690,66 +1690,6 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_
 
 // -------------------------------------------------------------------------------------------------
 //
-// num_free_frames() and num_total_frames()
-
-
-long AssembledFrameAllocator::num_free_frames(bool permissive) const
-{
-    // In dummy mode: throw or return 0. (is_dummy_mode is set once in constructor, safe without lock.)
-    if (is_dummy_mode) {
-        if (permissive)
-            return 0;
-        throw runtime_error("AssembledFrameAllocator::num_free_frames(): not available in dummy mode");
-    }
-
-    // Check that metadata has been set, then compute num_preinitialized
-    // under lock. (Metadata alone does not imply the slab pool exists:
-    // the worker only starts allocating once initial_chunk_set is ALSO
-    // true, so the num_free_slabs() call below can still throw its
-    // "pool not created" error. Forwarding 'permissive' into it makes
-    // that term a best-effort 0 instead -- this is the window the
-    // GetStatus RPC hits when senders have handshook but not yet
-    // streamed data.)
-    unique_lock<mutex> guard(lock);
-
-    if (!metadata_is_initialized) {
-        if (permissive)
-            return 0;
-        throw runtime_error("AssembledFrameAllocator::num_free_frames(): allocator not initialized");
-    }
-
-    // Public API is in *frame* units; internally we count sets (= chunks)
-    // and multiply by nbeams. nbeams is fixed once metadata is set.
-    long nbeams = long(beam_ids.size());
-    long queue_end_chunk_index = queue_start_chunk_index + long(frame_set_queue.size());
-    long num_preinitialized_chunks = queue_end_chunk_index - first_unreceived_chunk_index;
-    long num_preinitialized_frames = num_preinitialized_chunks * nbeams;
-    guard.unlock();
-
-    return num_preinitialized_frames + slab_allocator->num_free_slabs(permissive);
-}
-
-
-long AssembledFrameAllocator::num_total_frames(bool blocking) const
-{
-    // Gate dummy mode HERE rather than delegating: num_total_slabs() is a
-    // SLAB ENTRY POINT, so its dummy-mode throw would STOP the slab
-    // allocator (strict stoppable-class policy) -- and thence this whole
-    // allocator, via the worker's next get_slab() -- as a side effect of an
-    // informational query. This AFA-local throw stops nothing
-    // (num_total_frames is an accessor, like num_free_frames above).
-    if (is_dummy_mode)
-        throw runtime_error("AssembledFrameAllocator::num_total_frames(): not available in dummy mode");
-
-    // Non-dummy delegation is still a slab entry point: with blocking=false,
-    // a call BEFORE the worker's first allocation creates the pool throws
-    // and stops the allocators. See the warning at the hpp declaration.
-    return slab_allocator->num_total_slabs(blocking);
-}
-
-
-// -------------------------------------------------------------------------------------------------
-//
 // block_until_low_memory() - Entry point
 
 
@@ -1791,7 +1731,7 @@ void AssembledFrameAllocator::_block_until_low_memory(long nframe_threshold)
         
         // num_preinitialized is in *frame* units (to match the
         // nframe_threshold argument's units), so we multiply chunks by
-        // nbeams here, same as num_free_frames().
+        // nbeams here.
         long nbeams = long(beam_ids.size());
         long queue_end_chunk_index = queue_start_chunk_index + long(frame_set_queue.size());
         long num_preinitialized_chunks = queue_end_chunk_index - first_unreceived_chunk_index;

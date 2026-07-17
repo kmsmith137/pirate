@@ -62,7 +62,6 @@ class FrbSearchClient:
             - rb_streamed: Defines split between WriteFiles and streams
             - rb_assembled: (Last fully-assembled frame_id) + 1
             - rb_end: (Last frame_id in ring buffer) + 1
-            - num_free_frames: Number of available frames in AssembledFrameAllocator
         """
         request = frb_search_pb2.GetStatusRequest(protocol_version=_PROTOCOL_VERSION)
         return self.stub.GetStatus(request)

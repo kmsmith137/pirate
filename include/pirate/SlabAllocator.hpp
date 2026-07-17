@@ -40,16 +40,15 @@ namespace pirate {
 // Dummy mode (constructed via the create(aflags) factory; capacity == -1):
 //   - No base memory is pre-allocated (and no BumpAllocator is involved)
 //   - get_slab() allocates fresh memory using af_alloc() for each request
-//   - num_total_slabs() and num_free_slabs() throw exceptions
 //
 // Entry points vs accessors (see notes/stoppable_class.md):
 //   - Entry points -- throw/rethrow the saved error when stopped, and any
 //     throw stops the allocator: get_slab(), block_until_empty(),
-//     num_total_slabs(), wait_until_initialized(). Rule of thumb: methods
-//     that can block are entry points.
+//     wait_until_initialized(). Rule of thumb: methods that can block are
+//     entry points.
 //   - Stopped-tolerant informational accessors -- no stopped-state check;
 //     last-known values remain meaningful for diagnostics after a stop:
-//     num_free_slabs(), get_slab_size(), is_initialized(), is_dummy().
+//     get_slab_size(), is_initialized(), is_dummy().
 
 
 class SlabAllocator : public std::enable_shared_from_this<SlabAllocator>
@@ -91,21 +90,7 @@ public:
     //
     // In dummy mode, always allocates fresh memory using af_alloc().
     std::shared_ptr<void> get_slab(long nbytes, bool blocking = false);
-    
-    // Returns the number of slabs currently available in the free list.
-    // If permissive=false (default): throws in dummy mode, or if the slab
-    // pool has not been created yet (i.e. no get_slab() call has completed).
-    // If permissive=true: returns 0 in those two cases instead -- never
-    // throws (there are no other throw paths). Does NOT throw on a stopped
-    // allocator in either mode (stopped-tolerant informational accessor).
-    long num_free_slabs(bool permissive = false) const;
 
-    // Returns the total number of slabs in the pool.
-    // Throws exception in dummy mode.
-    // If blocking=false (default) and the slab pool has not been created
-    // yet, throws exception. If blocking=true, blocks until it is created.
-    long num_total_slabs(bool blocking = false) const;
-    
     // Returns the established slab size.
     // Throws exception if the slab size has not been established yet (by
     // the entry of the first get_slab() call). Does NOT throw on a stopped
@@ -114,7 +99,7 @@ public:
     
     // Returns true if the SlabAllocator is ready to serve get_slab() calls
     // without blocking on async init. Semantics:
-    //   - No underlying BumpAllocator (dummy and aflags modes): always true.
+    //   - Dummy mode (no underlying BumpAllocator): always true.
     //   - Bump-backed mode: delegates to bump_allocator->is_initialized().
     //
     // Note: does NOT check whether slab_size has been established (that's
@@ -189,16 +174,12 @@ private:
     //   init_cv  -- the deferred BumpAllocator init completed, or failed
     //               (init_underway reset on the throw path); awaited by
     //               get_slab() callers that lost the init_underway race.
-    //   size_cv  -- the pool was materialized (num_slabs set, free list
-    //               filled, on the first completed get_slab()); awaited
-    //               by num_total_slabs(blocking=true).
     //   empty_cv -- the free list became empty; awaited by
     //               block_until_empty().
-    // stop() notify_all's all four.
+    // stop() notify_all's all three.
     mutable std::mutex lock;
     mutable std::condition_variable free_cv;
     mutable std::condition_variable init_cv;
-    mutable std::condition_variable size_cv;
     mutable std::condition_variable empty_cv;
     mutable bool is_stopped = false;
     mutable std::exception_ptr error;

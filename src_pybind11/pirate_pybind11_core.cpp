@@ -242,18 +242,6 @@ void register_core_bindings(pybind11::module &m)
             "Non-blocking poll: True iff the underlying BumpAllocator is ready\n"
             "to serve allocations (delegates to bump_allocator.is_initialized()).\n"
             "Always True in dummy mode (no underlying BumpAllocator).")
-        .def("num_free_slabs", &SlabAllocator::num_free_slabs,
-            py::arg("permissive") = false,
-            "Number of slabs currently available. Throws in dummy mode, or\n"
-            "before the slab pool has been created (by the first completed\n"
-            "get_slab() call). With permissive=True, returns 0 in those two\n"
-            "cases instead -- never throws.")
-        .def("num_total_slabs", &SlabAllocator::num_total_slabs,
-            py::arg("blocking") = false,
-            py::call_guard<py::gil_scoped_release>(),
-            "Total number of slabs in the pool. Throws in dummy mode.\n\n"
-            "If blocking=True, waits until the slab size has been established\n"
-            "(by the first get_slab()); releases the GIL while blocking.")
         .def("get_slab_size", &SlabAllocator::get_slab_size,
             "Established slab size in bytes. Throws if the slab size has not\n"
             "been established yet (by the first get_slab()).")
@@ -510,25 +498,6 @@ void register_core_bindings(pybind11::module &m)
             "Releases the GIL: with blocking=True, the initializer may be another\n"
             "python thread, or a Receiver reader thread whose arrival time is\n"
             "unbounded.")
-        .def("num_free_frames", &AssembledFrameAllocator::num_free_frames,
-            py::arg("permissive") = false,
-            "Number of frames currently available in the pool (pre-initialized\n"
-            "sets awaiting their first consumer, plus free slabs).\n\n"
-            "Throws in dummy mode, if initialize_metadata() has not been called,\n"
-            "or before the worker's first allocation creates the slab pool. With\n"
-            "permissive=True, returns a best-effort count instead (0 for whatever\n"
-            "is not ready yet) -- never throws.")
-        .def("num_total_frames", &AssembledFrameAllocator::num_total_frames,
-            py::arg("blocking") = false,
-            py::call_guard<py::gil_scoped_release>(),
-            "Total number of frames in the pool. Throws in dummy mode.\n\n"
-            "With blocking=True, waits until the worker's first allocation\n"
-            "creates the slab pool; releases the GIL while blocking. With\n"
-            "blocking=False (default), a call before the pool exists throws --\n"
-            "and NOTE that this throw stops the underlying slab allocator (and\n"
-            "hence this allocator), per the strict stoppable-class policy.\n"
-            "Callers probing before the pipeline is running should pass\n"
-            "blocking=True, or use num_free_frames(permissive=True).")
         .def("is_initialized", &AssembledFrameAllocator::is_initialized,
             "Non-blocking poll: True iff the underlying memory is ready to\n"
             "serve allocations (delegates through SlabAllocator to BumpAllocator).")

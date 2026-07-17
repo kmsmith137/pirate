@@ -451,33 +451,10 @@ struct AssembledFrameAllocator
     // Constructor-constant, so no lock is needed.
     int get_num_consumers() const { return num_consumers; }
 
-    // Returns the number of "available" frames: pre-initialized frames waiting for their first
-    // consumer, plus free slabs in the underlying slab_allocator.
-    // If permissive=false (default): throws in dummy mode, if initialize_metadata()
-    // has not been called, or (from the slab_allocator) before the worker's first
-    // allocation creates the slab pool.
-    // If permissive=true: never throws -- returns a best-effort count, with 0 for
-    // whatever is not ready yet ('permissive' is forwarded into
-    // slab_allocator->num_free_slabs()). Used by the GetStatus RPC, which must
-    // work at any point in the server's lifetime.
-    long num_free_frames(bool permissive = false) const;
-
     // Entry point: Block until slab allocator is empty (all slabs in use), AND the number of
     // pre-initialized frames waiting for first consumer is <= nframe_threshold.
     // Throws exception in dummy mode, or if stop() is called from another thread.
     void block_until_low_memory(long nframe_threshold);
-
-    // Returns the total number of frames (same as num_total_slabs() from the underlying slab_allocator).
-    // Throws in dummy mode (an AFA-local throw: stops nothing).
-    // If blocking=true: blocks until the worker's first allocation creates the
-    // slab pool (interruptible by stop()).
-    // If blocking=false (default), a call before the pool exists throws -- and
-    // NOTE that this throw comes from a SlabAllocator ENTRY POINT, so it STOPS
-    // the slab allocator (and thence this allocator, via the worker), per the
-    // strict stoppable-class policy. Callers probing before the pipeline is
-    // running should pass blocking=true (like FrbServer::_check_frame_pool_size)
-    // or use num_free_frames(permissive=true).
-    long num_total_frames(bool blocking = false) const;
 
     // Returns true if in dummy mode.
     bool is_dummy() const { return is_dummy_mode; }

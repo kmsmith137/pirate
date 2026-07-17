@@ -56,7 +56,15 @@ struct constants
     //  - server_max_unprocessed_chunks: fail if server can't keep up with x-engine
     //  - assembled_frame_allocator_queue_size: internal memory-recycling queue
     //  - reaper_lowmem_chunks: threshold for reaping data from ring buffer.
-    
+
+    // XXX WARNING: server_min_total_chunks is currently UNCHECKED! The check
+    // (formerly FrbServer::_check_frame_pool_size, called from the processing
+    // thread) was removed along with AssembledFrameAllocator::num_total_frames()
+    // in a refactoring sequence. Until the check is reinstated, an undersized
+    // frame pool (config parameter 'rb_host_memory_per_server' too small for
+    // the run's beam count) fails LATE and opaquely -- receivers block forever
+    // waiting for slabs -- instead of failing at startup with a helpful error.
+    // TODO: re-add a frame-pool-size check when the refactoring comes together.
     static constexpr int server_min_total_chunks = 14;
     static constexpr int server_max_unprocessed_chunks = 5;
     static constexpr int assembled_frame_allocator_queue_size = 3;
