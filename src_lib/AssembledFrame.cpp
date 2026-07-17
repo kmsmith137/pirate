@@ -1111,7 +1111,7 @@ AssembledFrameAllocator::AssembledFrameAllocator(const shared_ptr<SlabAllocator>
     : time_samples_per_chunk(time_samples_per_chunk_),
       slab_allocator(slab_allocator_),
       num_consumers(num_consumers_),
-      is_dummy_mode(slab_allocator_->is_dummy())
+      is_dummy_mode(slab_allocator_->is_dummy)
 {
     xassert(slab_allocator);
     xassert_gt(num_consumers, 0);
@@ -1712,17 +1712,21 @@ void AssembledFrameAllocator::_block_until_low_memory(long nframe_threshold)
         _throw_if_stopped("AssembledFrameAllocator::block_until_low_memory");
         guard.unlock();
 
-        // Block until slab allocator is empty (all slabs allocated).
+        // Block until the slab allocator is "empty" (its BumpAllocator is
+        // exhausted AND all carved slabs are in use). During ramp-up (bump
+        // not yet exhausted) this sleeps regardless of the free list -- an
+        // empty free list is not pressure while the next get_slab() would
+        // just carve a fresh slab.
         //
-        // Liveness note: this returns promptly whenever memory pressure is
-        // real, because the worker thread grabs every freed slab while
-        // frame_set_queue is below its bound. If free slabs persist
-        // instead, the worker must be parked on a full queue, so
-        // num_preinitialized equals the queue bound -- which exceeds the
-        // reaper's nframe_threshold by the static_assert relating
-        // assembled_frame_allocator_queue_size to reaper_lowmem_chunks in
-        // constants.hpp -- i.e. memory is genuinely not low, and blocking
-        // here is the desired behavior.
+        // Liveness note (post-exhaustion): this returns promptly whenever
+        // memory pressure is real, because the worker thread grabs every
+        // freed slab while frame_set_queue is below its bound. If free
+        // slabs persist instead, the worker must be parked on a full
+        // queue, so num_preinitialized equals the queue bound -- which
+        // exceeds the reaper's nframe_threshold by the static_assert
+        // relating assembled_frame_allocator_queue_size to
+        // reaper_lowmem_chunks in constants.hpp -- i.e. memory is
+        // genuinely not low, and blocking here is the desired behavior.
         slab_allocator->block_until_empty();
         
         // Check num_preinitialized under lock.

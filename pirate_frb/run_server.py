@@ -480,10 +480,11 @@ class RunServerHelper:
                 is_async=True,
                 nthreads=compute_async_bump_nthreads(vcpu_list, rb_nbytes),
                 cuda_device=cuda_device_id)
-            # SlabAllocator: async-aware. Returns immediately; defers the
-            # allocate_bytes() call to first get_slab() (which happens after
-            # server.start()).
-            slab_allocator = SlabAllocator(rb_bump, rb_nbytes)
+            # SlabAllocator: async-aware. Returns immediately; carves slabs
+            # from rb_bump on demand, one per get_slab() call (the first of
+            # which happens after server.start(), and blocks on rb_bump's
+            # async init internally).
+            slab_allocator = SlabAllocator(rb_bump)
             # AssembledFrameAllocator: spawns its own worker thread; that
             # worker calls into slab_allocator and will block on the
             # BumpAllocator's init if it tries to call get_slab() before

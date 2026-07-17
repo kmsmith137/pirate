@@ -68,7 +68,7 @@ def _make_frame(xmd, nbeams, nfreq, ntime):
     alive (it owns the frame's slab)."""
     per_frame = nfreq * (ntime // 256) * 4 + nfreq * (ntime // 2)
     bump = BumpAllocator("af_rhost", 2 * nbeams * per_frame)
-    slab = SlabAllocator(bump, 2 * nbeams * per_frame)
+    slab = SlabAllocator(bump)
     alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=ntime)
     alloc.initialize_metadata(xmd)
     alloc.initialize_initial_chunk(0)

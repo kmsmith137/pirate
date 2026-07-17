@@ -202,7 +202,7 @@ class RunFakeXEngineHelper:
             # threads all land on the data-NIC CPU. One consumer: this receiver's
             # controller thread (which pulls via factory.get_frame_set()).
             bump_allocator = BumpAllocator("af_rhost", capacity)
-            slab_allocator = SlabAllocator(bump_allocator, capacity)
+            slab_allocator = SlabAllocator(bump_allocator)
             allocator = AssembledFrameAllocator(
                 slab_allocator,
                 num_consumers=1,

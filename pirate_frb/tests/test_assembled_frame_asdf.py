@@ -76,7 +76,7 @@ def test_assembled_frame_asdf():
     per_frame_nbytes = nfreq * mpc * 4 + nfreq * (ntime // 2)
     slab_capacity = nbeams * per_frame_nbytes * 2
     bump = BumpAllocator("af_rhost", slab_capacity)
-    slab = SlabAllocator(bump, slab_capacity)
+    slab = SlabAllocator(bump)
     alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=ntime)
     alloc.initialize_metadata(md)
     alloc.initialize_initial_chunk(0)

@@ -315,7 +315,7 @@ struct AssembledFrameSet
 // non-dummy mode -- pre-initializes frames (calls memset to fill with 0x88)
 // so that get_frame_set() callers never pay allocation/memset latency. The
 // worker pre-initializes at most constants::assembled_frame_allocator_queue_size
-// sets ahead of full consumption; in dummy mode (slab_allocator->is_dummy())
+// sets ahead of full consumption; in dummy mode (slab_allocator->is_dummy)
 // this queue bound is the only limit on memory use, since dummy-mode
 // get_slab() never blocks. The worker thread inherits its vcpu affinity from
 // the caller of the constructor. Python callers should call the
@@ -474,7 +474,7 @@ struct AssembledFrameAllocator
 private:
     std::shared_ptr<SlabAllocator> slab_allocator;
     int num_consumers;
-    bool is_dummy_mode;  // cached from slab_allocator->is_dummy()
+    bool is_dummy_mode;  // cached from slab_allocator->is_dummy
     
     // Stop-pattern state ('mutable' since stop() is const -- see
     // notes/stoppable_class.md). is_stopped/error are protected by 'lock'.

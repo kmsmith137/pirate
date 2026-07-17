@@ -209,23 +209,24 @@ void register_core_bindings(pybind11::module &m)
     // Note: get_slab() returns shared_ptr<void>, which is not wrapped (per pybind11 guidelines).
     py::class_<SlabAllocator, std::shared_ptr<SlabAllocator>>(m, "SlabAllocator",
         "Thread-safe pool allocator for fixed-size memory slabs.\n\n"
-        "Carves a large memory region from a BumpAllocator, subdivided into\n"
-        "fixed-size slabs. Slabs are returned to the pool when their reference\n"
-        "count drops to zero.\n\n"
+        "Carves fixed-size slabs from a BumpAllocator on demand (one slab per\n"
+        "get_slab() call, until the BumpAllocator is exhausted). Slabs are\n"
+        "returned to the pool when their reference count drops to zero.\n\n"
         "Modes:\n"
-        "  - SlabAllocator(bump_allocator, nbytes): slabs share a region carved\n"
-        "    from the BumpAllocator\n"
+        "  - SlabAllocator(bump_allocator): slabs are carved on demand from\n"
+        "    the BumpAllocator\n"
         "  - SlabAllocator(aflags): dummy mode, each get_slab() allocates fresh\n"
         "    memory")
-        .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(const std::shared_ptr<BumpAllocator> &, long)>(&SlabAllocator::create)),
-            py::arg("bump_allocator"), py::arg("nbytes"),
-            "Create allocator using memory from a BumpAllocator.\n\n"
+        .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(const std::shared_ptr<BumpAllocator> &)>(&SlabAllocator::create)),
+            py::arg("bump_allocator"),
+            "Create allocator that carves slabs from a BumpAllocator on demand.\n\n"
             "Args:\n"
-            "    bump_allocator: Source of memory (must not be in dummy mode)\n"
-            "    nbytes: Bytes to allocate from the BumpAllocator (must be positive)\n\n"
-            "If the BumpAllocator is async, the SlabAllocator is itself async:\n"
-            "constructor returns immediately, and the bump_allocator.allocate_bytes()\n"
-            "call is deferred to the first get_slab().")
+            "    bump_allocator: Source of memory (must not be in dummy mode)\n\n"
+            "There is no up-front carve: the SlabAllocator draws from the\n"
+            "BumpAllocator one slab at a time until it is exhausted. If the\n"
+            "BumpAllocator is async, the constructor still returns immediately;\n"
+            "each carve blocks on the async init internally (in practice only\n"
+            "the first one waits).")
         .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(int)>(&SlabAllocator::create)),
             py::arg("aflags"),
             "Create allocator in dummy mode (no backing pool).\n\n"
@@ -242,15 +243,10 @@ void register_core_bindings(pybind11::module &m)
             "Non-blocking poll: True iff the underlying BumpAllocator is ready\n"
             "to serve allocations (delegates to bump_allocator.is_initialized()).\n"
             "Always True in dummy mode (no underlying BumpAllocator).")
-        .def("get_slab_size", &SlabAllocator::get_slab_size,
-            "Established slab size in bytes. Throws if the slab size has not\n"
-            "been established yet (by the first get_slab()).")
-        .def("is_dummy", &SlabAllocator::is_dummy,
+        .def_readonly("is_dummy", &SlabAllocator::is_dummy,
             "True if in dummy mode (constructed from aflags alone).")
         .def_readonly("aflags", &SlabAllocator::aflags,
             "Memory allocation flags")
-        .def_readonly("capacity", &SlabAllocator::capacity,
-            "Total capacity in bytes, or -1 in dummy mode")
     ;
 
     // AssembledFrame: data frame containing beamformed data for one (time_chunk, beam_id) pair.

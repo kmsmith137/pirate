@@ -21,9 +21,31 @@ from ..core import AssembledFrameAllocator, BumpAllocator, SlabAllocator, XEngin
 
 
 def make_slab_allocator(capacity=4*1024*1024, aflags='af_rhost'):
-    """Helper to create a host-memory SlabAllocator (backed by a dedicated BumpAllocator)."""
+    """Helper to create a host-memory SlabAllocator (backed by a dedicated
+    BumpAllocator of the given capacity; slabs are carved on demand)."""
     bump = BumpAllocator(aflags, capacity)
-    return SlabAllocator(bump, capacity)
+    return SlabAllocator(bump)
+
+
+def _align_up_128(n):
+    """align_up(n, 128) -- the SlabAllocator rounds each requested slab size
+    up to a 128-byte (GPU cache line) boundary."""
+    return -(-n // 128) * 128
+
+
+def _make_counted_slab_allocator(slab_size, num_slabs_requested):
+    """Helper for tests that need to know the EXACT slab count. Returns
+    (slab_allocator, num_slabs).
+
+    The BumpAllocator rounds its capacity up to a page multiple, so simply
+    requesting num_slabs_requested * slab_size bytes can yield extra slabs.
+    Derive the actual count from bump.capacity (the rounded value) instead
+    of assuming."""
+    aligned_slab = _align_up_128(slab_size)
+    bump = BumpAllocator('af_rhost', num_slabs_requested * aligned_slab)
+    num_slabs = bump.capacity // aligned_slab
+    assert num_slabs >= num_slabs_requested
+    return SlabAllocator(bump), num_slabs
 
 
 def _test_metadata(nfreq, beam_ids):
@@ -285,9 +307,9 @@ def test_frame_recycling():
     mpc = time_samples_per_chunk // 256
     slab_size = nfreq * mpc * 4 + (nfreq * time_samples_per_chunk) // 2
 
-    # Create allocator with capacity for exactly 3 slabs (= 3 sets).
-    capacity = slab_size * 3 + 1024  # +margin for alignment
-    slab = make_slab_allocator(capacity=capacity)
+    # Small pool (~3 slabs = 3 sets); the exact count is derived from the
+    # page-rounded BumpAllocator capacity, not assumed.
+    slab, num_slabs = _make_counted_slab_allocator(slab_size, 3)
     alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
 
     for _ in range(num_consumers):
@@ -314,8 +336,8 @@ def test_frame_recycling():
     del set1_c1
 
     # Prove recycling works by allocating many more sets than we have slabs.
-    # With only 3 slabs but 20 sets, recycling must be happening.
-    num_sets_to_allocate = 20
+    # With only num_slabs slabs but far more sets, recycling must be happening.
+    num_sets_to_allocate = 5 * num_slabs + 5
     for i in range(num_sets_to_allocate):
         s0 = alloc.get_frame_set(2 + i)
         assert s0.time_chunk_index == 2 + i, \
@@ -346,11 +368,12 @@ def test_frame_recycling_with_held_reference():
     beam_ids = [1]  # Single beam: one slab per set.
     num_consumers = 2
 
-    # See test_frame_recycling for slab_size derivation.
+    # See test_frame_recycling for slab_size derivation. Small pool (~4
+    # slabs); the exact count is derived from the page-rounded BumpAllocator
+    # capacity, not assumed.
     mpc = time_samples_per_chunk // 256
     slab_size = nfreq * mpc * 4 + (nfreq * time_samples_per_chunk) // 2
-    capacity = slab_size * 4 + 1024  # 4 slabs
-    slab = make_slab_allocator(capacity=capacity)
+    slab, num_slabs = _make_counted_slab_allocator(slab_size, 4)
     alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
 
     for _ in range(num_consumers):
@@ -393,11 +416,12 @@ def test_frame_recycling_with_held_reference():
     del set1_c1
     del set2_c1
 
-    # With set0 still held (pinning one of the 4 slabs), cycle through more
-    # chunks than the remaining 3 slabs. This only completes if released sets
-    # are recycled (on last receipt + refcount zero) -- i.e. recycling works
-    # even while another set's slab is pinned by a held reference.
-    for i in range(10):
+    # With set0 still held (pinning one of the num_slabs slabs), cycle
+    # through more chunks than the remaining slabs. This only completes if
+    # released sets are recycled (on last receipt + refcount zero) -- i.e.
+    # recycling works even while another set's slab is pinned by a held
+    # reference.
+    for i in range(num_slabs + 6):
         sa = alloc.get_frame_set(3 + i)
         sb = alloc.get_frame_set(3 + i)
         assert sb is sa
