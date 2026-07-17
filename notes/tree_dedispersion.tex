@@ -24,7 +24,10 @@
 
 \clearpage
 
-\section{Tree gridding kernel}
+\section{Tree dedispersion}
+\label{sec:tree_dedispersion_top}
+
+\subsection{Tree gridding kernel}
 \label{sec:gridding}
 
 Our starting point for tree dedispersion is a shape $(N_{\rm freq}, N_{\rm time})$ array representing channelized intensity time series. We do not assume that frequency channels are evenly spaced (in CHORD we use unequal spacing).
@@ -69,7 +72,7 @@ Because the intervals $I_f$ tile $[0, N_{\rm freq}]$, the weights of any fixed i
 Note that the tree gridding kernel is a monotone {\em decreasing} reindexing operation.
 Thus, to search for FRBs with positive dispersion (lowest frequencies arise last), we want to search over lines in the tree array with positive slope (highest tree-freq channels arrive last).
 
-\section{Tree dedispersion}
+\subsection{Tree dedispersion}
 \label{sec:tree_dedispersion}
 
 After the tree gridding kernel, the next step is ``tree dedispersion'', which searches for straight lines with $0\le \mbox{slope} \le 1$.
@@ -131,14 +134,14 @@ By default, \verb|in[...,t]| with $t<0$ is defined to be zero.
 
 \end{itemize}
 
-\section{Subband search}
+\subsection{Subband search}
 \label{sec:subband_search}
 
 So far, we have described a search for FRBs which cover the full tree-freq range $0 \le f < 2^r$.
 This would be suboptimal since real FRBs do not always cover the full frequency range.
 Next, we introduce a ``sub-band'' search for searching a configurable set of subbands.
 
-\subsection{Parameterization of subbands}
+\subsubsection{Parameterization of subbands}
 
 Our dedispersion config files contain a length-$(R+1)$ integer-valued array of subband counts $C_l$.\footnote{In 
 the code, $R$ is denoted {\tt pf\_rank}, $l$ is denoted {\tt pf\_level}, and $C_l$ is denoted {\tt frequency\_subband\_counts}.}
@@ -201,7 +204,7 @@ and $\nu$ is monotone decreasing.}
 \label{fig:subbands}
 \end{figure}
 
-\subsection{Subbanded dedispersion}
+\subsubsection{Subbanded dedispersion}
 
 Subbanded dedispersion is an operation whose input array is the same as ordinary (non-subbanded) tree 
 dedispersion (\ref{sec:tree_dedispersion}), i.e.\ a shape $(2^r, N_{\rm time})$ array where the first index is tree-freq.
@@ -299,7 +302,7 @@ time index for every multiplet of its DM. That choice replaces the lags above by
 i.e.~the (floored) half-integer extrapolation, for which $T_0 \ne T_1$. We may switch the code to
 this convention in the future.
 
-\section{Peak-finding}
+\subsection{Peak-finding}
 \label{sec:peak_finding}
 
 The final stage of the dedispersion transform is {\em peak-finding}.
@@ -323,7 +326,7 @@ In implementation, these 3 steps are coalesced into one GPU kernel for speed (an
 coalesced with the final stages of tree dedispersion), e.g.\ the shape $(2^{r-R}, M, N_{\rm time}, P)$
 is never ``materialized'' in GPU memory.
 
-\subsection{Peak-finding kernels}
+\subsubsection{Peak-finding kernels}
 
 The kernels are organized into $\Lambda \equiv \max(\log_2 W_{\rm max},\,1)$ {\em levels} $0 \le \lambda < \Lambda$,\footnote{In the code these are denoted {\tt l} and {\tt L}; we use $\lambda$ and $\Lambda$ here to avoid ambiguity with the subband level $l$ in \S\ref{sec:subband_search}.} where
 $W_{\rm max}$ (a power of two) is the config parameter \verb|max_kernel_width|. The total number of
@@ -355,7 +358,7 @@ $(\lambda,q) = (0,0)$. Thus level $0$ contributes profiles $p = 0,1,2,3$, and ea
 $p = 3\lambda+1, 3\lambda+2, 3\lambda+3$ --- the single-boxcar kernel $h_{\lambda,0}$ is dropped for $\lambda>0$, since
 $h_{\lambda,0} = b_\lambda = h_{\lambda-1,1}$ would be redundant.
 
-\section{Time-downsampled trees and early triggers}
+\subsection{Time-downsampled trees and early triggers}
 \label{sec:downsampled_early}
 
 So far, we have described a single {\tt DedispersionTree} which searches up to slope 1 (i.e.~full-band dispersion delay equal to $2^r$ time samples), and ``triggers'' when the pulse arrives at the lowest frequency (highest tree-freq).
@@ -444,13 +447,13 @@ $p$ & $e$ & Full-band delay range (s) & DM range (pc\,cm$^{-3}$) & trigger (MHz)
 
 \clearpage
 
-\section{Dedispersion output arrays}
+\subsection{Dedispersion output arrays}
 
 The dedispersion output consists of a pair of 2-d arrays (\verb|out_max|, \verb|out_argmax|)
 for each beam and \verb|DedispersionTree|, indexed by {\tt (dm,time)}.
 The purpose of this section is to describe these arrays in a little more detail.
 
-\subsection{Parameter definitions}
+\subsubsection{Parameter definitions}
 
 The pirate \verb|DedispersionPlan| defines the following global (i.e.\ not per-tree) parameters:
 \begin{align}
@@ -473,7 +476,7 @@ they need not be the same in all trees. If your downstream code depends on how t
 you should put asserts in your code, in case the values change in the future. This is something
 I hope to improve soon!
 
-\subsection{Output array shapes}
+\subsubsection{Output array shapes}
 
 The \verb|out_max| and \verb|out_argmax| arrays (for a fixed tree and beam), have the same
 shape $({\tt ndm\_out}, {\tt nt\_out})$, given by:
@@ -550,7 +553,7 @@ To explain where Eqs.\ (\ref{eq:ndm_out})--(\ref{eq:dlo_dhi}) come from, we walk
   unchanged. This implies Eqs.\ (\ref{eq:ndm_out}), (\ref{eq:dlo_dhi}).
 \end{itemize}
 
-\subsection{The out\_argmax array}
+\subsubsection{The out\_argmax array}
 
 Each element of the \verb|out_max| array is a ``coarse-grained'' snr value, defined by taking
 a maximum over a certain set of parameters: frequency subbands, pulse widths, fine-grained DMs,
@@ -578,8 +581,179 @@ be the arrival time at the lowest frequency of the band (400 MHz in CHIME, or 30
 in CHORD), even if the FRB is detected in a subband.
 If there are early triggers, then the timestamp can be {\bf significantly later}
 ($\sim 10^2$ seconds) than the end of the time-chunk.
-With or without early triggers, the timestamp can also be {\bf slightly earlier} 
-than the beginning of the time-chunk, due to the finite width of the peak-finding 
+With or without early triggers, the timestamp can also be {\bf slightly earlier}
+than the beginning of the time-chunk, due to the finite width of the peak-finding
 kernels.
+
+\clearpage
+
+\section{Variance estimation}
+\label{sec:variance_estimation}
+
+The peak-finding stage (\S\ref{sec:peak_finding}) normalizes its outputs to ``sigmas'' by applying
+weights $\propto (\mbox{variance})^{-1/2}$, where the variance depends on the tree, the frequency
+subband, the coarse DM, and the peak-finding profile.
+These variances depend in turn on the variances of the input frequency channels: write $v_F$ for
+the variance of input channel $0 \le F < N_{\rm freq}$, treating different channels and time samples
+as independent. In operation, $v = (v_F)$ drifts over time (gain drift, RFI excision), so we want to
+recompute the peak-finding variances cheaply whenever $v$ is updated.
+
+The key structural fact is {\em linearity}: every stage of the transform (gridding, tree
+dedispersion, subbanding, convolution with peak-finding kernels) is linear in the input array, so
+each pre-max peak-finding output $y$ is a linear combination $y = \sum_i c_i x_i$ of input samples,
+and ${\rm Var}(y) = \sum_i c_i^2 \, {\rm Var}(x_i)$ is a {\em linear} function of $v$.
+The pirate code contains ``analytic variance'' machinery\footnote{Python reference implementation
+in {\tt pirate\_frb/slow\_avar}; fast C++ port in {\tt pirate\_frb/fast\_avar}; main entry point
+{\tt PfAvarApproximation}.} which computes this linear function.
+This section describes some linear algebra, built on top of that machinery, which compresses the
+linear map into a canonical low-rank ``SVD form'' $\bar A = U_0^T \, {\rm diag}(S_0) \, V_0$,
+making reevaluation very cheap.
+
+\subsection{The variance map}
+
+Fix a {\tt DedispersionTree}, and let $r$ be its rank, $R$ its peak-finding rank
+(\S\ref{sec:subband_search}), and $P$ its number of peak-finding profiles
+(\S\ref{sec:peak_finding}). Let $2^L$ be the tree's DM downsampling factor for peak-finding
+weights, where $0 \le R \le L \le r$.\footnote{Code names: $r = {\tt total\_rank}$,
+$R = {\tt pf\_rank}$, $2^L = {\tt wt\_dm\_downsampling}$, $P = {\tt nprofiles}$.}
+
+The analytic machinery makes one approximation: frequency-channel overlaps between the $2^R$
+{\em level-0 bands} (the aligned blocks of $2^{r-R}$ tree-freqs appearing as subbands $(0,s)$ in
+\S\ref{sec:subband_search}) are neglected. Under this approximation, the variance is resolved as
+follows: for each level-0 band $0 \le j < 2^R$, there is a variance array
+\begin{equation}
+y_j[d, p], \hspace{1.5cm} 0 \le d < 2^{r-L}, \quad 0 \le p < P,
+\end{equation}
+where $d$ is the DM index truncated to its $r-L$ highest bits. Per-multiplet variances (the
+denominators of the pf-weights) are then obtained by averaging $y_j$ over the level-0 bands
+covered by each subband; the fine DM bits within a multiplet are spectators at this resolution.
+
+For a fixed $(\mbox{tree}, j)$, the map $v \mapsto y_j$ is linear, and only a contiguous range
+of input channels contributes (the channels overlapping band $j$):
+$F_{\rm lo} \le F < F_{\rm lo} + n_j$.\footnote{Code names: $F_{\rm lo} = {\tt ifreq\_lo}$,
+$n_j = {\tt nf\_tj}$.}
+Flattening $y_j$ to a length-$2^{r-L} P$ row vector, we can therefore write
+\begin{equation}
+y_j = v^T \bar A,  \label{eq:abar_def}
+\end{equation}
+where $v$ is restricted to the contributing channels, and $\bar A$ is an $(n_j,\ 2^{r-L} P)$
+matrix depending on $(\mbox{tree}, j)$. For CHORD-sized configs, $n_j$ is a few thousand and
+$2^{r-L} P \sim 10^4$, so we never materialize $\bar A$; instead we construct a low-rank
+factorization of it.
+
+\subsection{Factored structure of single-channel variances}
+
+The analytic machinery represents the variance contribution of a single channel $F$ in a factored
+form. For each contributing channel it produces one or two {\em terms}; a term is keyed by a
+bitmask $\delta$ over the $r-L$ DM bits (``{\tt dbits}''), and holds an array of shape
+$(2^{{\rm popc}(\delta)}, P)$, with
+\begin{equation}
+y^{(F)}[d, p] = \sum_{(\delta, a) \,\in\, {\rm terms}(F)} a\big[ {\rm sel}(d, \delta),\, p \big],
+\hspace{1.5cm}
+y_j = \sum_F v_F \, y^{(F)},
+\end{equation}
+where ${\rm sel}(d, \delta)$ packs the bits of $d$ selected by $\delta$ into an integer
+$0 \le {\rm sel}(d, \delta) < 2^{{\rm popc}(\delta)}$. That is, a term depends on the DM index $d$
+only through the few bits in $\delta$; keeping this dependence factored (rather than expanding
+every channel to a dense $(2^{r-L}, P)$ array) is what makes the analytic machinery tractable.
+Empirically, almost all channels produce exactly one term (in {\tt chord\_sb2\_et.yml}, 213 out
+of $\sim\!1.7\times 10^5$ channel-band pairs produce two, the rest one), and only a handful of
+distinct bitmasks $\delta$ occur for each $(\mbox{tree}, j)$.
+
+Now group the (channel, term) pairs by $\delta$. For each $\delta$, stack the flattened term
+arrays into a matrix $A_\delta$ of shape $(n_{j\delta},\ 2^{{\rm popc}(\delta)} P)$, where
+$n_{j\delta}$ is the number of contributing (channel, term) pairs,\footnote{Code name:
+$n_{j\delta} = {\tt nf\_tjd}$.} and let $v_\delta$ denote the corresponding length-$n_{j\delta}$
+slice of $v$. Then
+\begin{equation}
+y_j = \sum_\delta \big( v_\delta^T A_\delta \big) \, E_\delta,  \label{eq:group_sum}
+\end{equation}
+where $E_\delta$ is the $(2^{{\rm popc}(\delta)} P) \times (2^{r-L} P)$ zero/one ``expansion''
+matrix which replicates the packed DM axis over the unselected bits, i.e.\ copies packed entry
+$({\rm sel}(d,\delta), p)$ to entry $(d, p)$. (In the code, $E_\delta$ is an index gather, not a
+materialized matrix.)
+
+\subsection{Per-group SVD and stacking}
+
+Each $A_\delta$ turns out to be numerically low-rank (variances vary smoothly with channel).
+We compute the truncated SVD
+\begin{equation}
+A_\delta = U_\delta^T \, {\rm diag}(S_\delta) \, V_\delta,
+\end{equation}
+keeping the $K_\delta$ singular values with $S > \varepsilon S_{\rm max}$. We use
+$\varepsilon = 10^{-11}$: since $S_{\rm max} = \|A_\delta\|_2$, this threshold is automatically
+scaled to the matrix entries, and it sits well above the double-precision noise floor on singular
+values ($\sim \max(\mbox{shape}) \cdot \epsilon_{\rm f64} \approx 6 \times 10^{-13}\, S_{\rm max}$
+at these matrix sizes) while remaining far below any genuine component.
+
+Let $K_{\rm tot} = \sum_\delta K_\delta$. Substituting the truncated SVDs into
+Eq.\ (\ref{eq:group_sum}) and stacking the per-group factors, we obtain
+\begin{equation}
+\bar A = \bar U^T \, {\rm diag}(\bar S) \, \bar V,
+\end{equation}
+where:
+\begin{itemize}
+\item $\bar U$ ($K_{\rm tot} \times n_j$) stacks the $U_\delta$ vertically, with each group's
+columns scattered into its channel positions (zero-padded elsewhere);
+\item $\bar S$ (length $K_{\rm tot}$) concatenates the $S_\delta$;
+\item $\bar V$ ($K_{\rm tot} \times 2^{r-L} P$) stacks the expanded right factors
+$V_\delta E_\delta$.
+\end{itemize}
+This eliminates the sum over $\delta$, but $\bar U, \bar V$ are {\em not} semiorthogonal
+($\bar U \bar U^T \ne {\rm id}$): different groups' channel sets overlap (via the two-term
+channels), and the expanded rows $V_\delta E_\delta$ are not orthogonal across groups.
+Empirically, $K_{\rm tot} \sim 30$--$160$ -- already far smaller than $n_j \sim 300$--$3000$.
+
+\subsection{Canonical form}
+
+Finally, we reduce the stacked representation to a genuine truncated SVD of $\bar A$, without
+materializing any $\bar A$-sized matrix. SVD-decompose the two stacked factors:
+\begin{equation}
+\bar U = U_1 \, {\rm diag}(U_2) \, U_3, \hspace{1.5cm} \bar V = V_1 \, {\rm diag}(V_2) \, V_3,
+\end{equation}
+where $U_1, V_1$ are $(K_{\rm tot} \times K_{\rm tot})$ orthogonal, and $U_3$
+($K_{\rm tot} \times n_j$), $V_3$ ($K_{\rm tot} \times 2^{r-L} P$) are semiorthogonal,
+$U_3 U_3^T = V_3 V_3^T = {\rm id}$. (This uses $K_{\rm tot} \le n_j,\, 2^{r-L}P$, which holds in
+practice.) Then
+\begin{equation}
+\bar A = U_3^T \, M \, V_3,
+\hspace{1.5cm}
+M \equiv {\rm diag}(U_2) \, U_1^T \, {\rm diag}(\bar S) \, V_1 \, {\rm diag}(V_2),
+\end{equation}
+where $M$ is a small $(K_{\rm tot} \times K_{\rm tot})$ matrix. By semiorthogonality of $U_3,
+V_3$, the singular values of $M$ are exactly the singular values of $\bar A$. SVD-decompose
+$M = U_M^T \, {\rm diag}(S_M) \, V_M$, let $K_0$ be the number of singular values above the same
+relative threshold $\varepsilon$, and absorb the factors into $U_3, V_3$:
+\begin{equation}
+S_0 = (S_M)_{[:K_0]}, \hspace{1cm}
+U_0 = (U_M)_{[:K_0]} \, U_3, \hspace{1cm}
+V_0 = (V_M)_{[:K_0]} \, V_3,
+\end{equation}
+where $[:K_0]$ denotes the first $K_0$ rows. This gives the canonical representation
+\begin{equation}
+\bar A = U_0^T \, {\rm diag}(S_0) \, V_0 + O(\varepsilon \|\bar A\|_2),
+\hspace{1.5cm}
+U_0 U_0^T = V_0 V_0^T = {\rm id}_{K_0},
+\label{eq:canonical}
+\end{equation}
+with $S_0$ sorted descending -- i.e.\ a genuine truncated SVD of $\bar A$, with $K_0$ its
+numerical rank.
+
+Given an updated $v$, reevaluating the variances is two small matrix-vector multiplies and a
+diagonal scaling,
+\begin{equation}
+y_j = \big( ( U_0 \, v ) \odot S_0 \big)^T \, V_0,
+\end{equation}
+i.e.\ $O\big(K_0 (n_j + 2^{r-L} P)\big)$ flops per $(\mbox{tree}, j)$; likewise the storage is
+$O\big(K_0 (n_j + 2^{r-L} P)\big)$, instead of $O\big(n_j \cdot 2^{r-L} P\big)$ for a dense
+$\bar A$.
+
+For {\tt chord\_sb2\_et.yml} (10 trees, 136 $(\mbox{tree}, j)$ pairs), we find $K_0 \approx
+16$--$69$, with $\sum K_0 = 4969$ over all pairs versus $\sum K_{\rm tot} = 11301$ (a further
+factor $\sim\!2.3$ beyond the per-group SVDs), $n_j$ up to $2823$, and $2^{r-L} P$ up to $16384$.
+Reconstructing the variances through the canonical form agrees with the directly-computed values
+to $\sim\!10$ significant digits, consistent with the threshold $\varepsilon$.
+(The construction above is currently prototyped offline; it is not yet wired into the real-time
+pipeline.)
 
 \end{document}
