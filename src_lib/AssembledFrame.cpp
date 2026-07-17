@@ -1105,20 +1105,18 @@ void AssembledFrame::randomize(bool normalize, bool gaussian,
 // Constructor
 
 
-AssembledFrameAllocator::AssembledFrameAllocator(const shared_ptr<SlabAllocator> &slab_allocator_,
-                                                 int num_consumers_,
-                                                 long time_samples_per_chunk_)
-    : time_samples_per_chunk(time_samples_per_chunk_),
-      slab_allocator(slab_allocator_),
-      num_consumers(num_consumers_),
-      is_dummy_mode(slab_allocator_->is_dummy_mode)
+AssembledFrameAllocator::AssembledFrameAllocator(const Params &params_)
+    : params(params_)
 {
-    xassert(slab_allocator);
-    xassert_gt(num_consumers, 0);
-    xassert_gt(time_samples_per_chunk, 0L);
+    // Validate before the first params.slab_allocator dereference (below).
+    xassert(params.slab_allocator);
+    xassert_gt(params.num_consumers, 0);
+    xassert_gt(params.time_samples_per_chunk, 0L);
 
-    if (!ksgpu::af_on_host(slab_allocator->aflags))
+    if (!ksgpu::af_on_host(params.slab_allocator->aflags))
         throw runtime_error("AssembledFrameAllocator: slab_allocator must be on host");
+
+    is_dummy_mode = params.slab_allocator->is_dummy_mode;
 
     // Spawn the worker thread (sole producer of frame sets, in both dummy
     // and non-dummy mode). It parks on its init gate until metadata and
@@ -1163,14 +1161,14 @@ void AssembledFrameAllocator::stop(exception_ptr e) const
     lowmem_cv.notify_all();
 
     // Propagate stop to SlabAllocator (wakes up worker thread if blocked in get_slab).
-    slab_allocator->stop(e);
+    params.slab_allocator->stop(e);
 }
 
 
 bool AssembledFrameAllocator::is_initialized() const
 {
     // Delegates to slab_allocator, which delegates to bump_allocator.
-    return slab_allocator->is_initialized();
+    return params.slab_allocator->is_initialized();
 }
 
 
@@ -1230,8 +1228,8 @@ void AssembledFrameAllocator::_worker_main()
     shared_ptr<const XEngineMetadata> md = metadata;
     xassert(md);  // non-null once metadata_is_initialized
 
-    long mpc = xdiv(time_samples_per_chunk, 256);
-    SlabLayout layout = get_layout(nfreq_snap, time_samples_per_chunk);
+    long mpc = xdiv(params.time_samples_per_chunk, 256);
+    SlabLayout layout = get_layout(nfreq_snap, params.time_samples_per_chunk);
     long nbytes = layout.slab_nbytes;
 
     // Main loop: wait for a free queue slot, build a set with the lock
@@ -1255,7 +1253,7 @@ void AssembledFrameAllocator::_worker_main()
         // at push time so it is consistent with the queue state.
         auto set = make_shared<AssembledFrameSet>();
         set->nfreq = nfreq_snap;
-        set->ntime = time_samples_per_chunk;
+        set->ntime = params.time_samples_per_chunk;
         set->nbeams = nbeams;
         set->metadata = md;
         set->frames.reserve(nbeams);
@@ -1270,7 +1268,7 @@ void AssembledFrameAllocator::_worker_main()
         // pool must have at least nbeams total slabs to make progress, which
         // is also a hard prerequisite for the Receiver's 2-chunk window.
         for (long b = 0; b < nbeams; b++) {
-            shared_ptr<void> slab = slab_allocator->get_slab(nbytes);
+            shared_ptr<void> slab = params.slab_allocator->get_slab(nbytes);
 
             // scales_offsets initial: float16 0.0 (bytes 0x00); also zero the
             // alignment padding between the two arrays (up to data_offset).
@@ -1280,7 +1278,7 @@ void AssembledFrameAllocator::_worker_main()
 
             auto frame = make_shared<AssembledFrame>();
             frame->nfreq = nfreq_snap;
-            frame->ntime = time_samples_per_chunk;
+            frame->ntime = params.time_samples_per_chunk;
             frame->beam_id = beam_ids_snap[b];
             frame->metadata = md;  // shared, immutable
 
@@ -1295,7 +1293,7 @@ void AssembledFrameAllocator::_worker_main()
             frame->scales_offsets.strides[1] = 2;
             frame->scales_offsets.strides[2] = 1;
             frame->scales_offsets.dtype = ksgpu::Dtype(ksgpu::df_float, 16);
-            frame->scales_offsets.aflags = slab_allocator->aflags;
+            frame->scales_offsets.aflags = params.slab_allocator->aflags;
             frame->scales_offsets.base = slab;   // shares slab with data
             frame->scales_offsets.check_invariants("AssembledFrameAllocator::_worker_main()");
 
@@ -1304,12 +1302,12 @@ void AssembledFrameAllocator::_worker_main()
             frame->data.data = (char *)slab.get() + layout.data_offset;
             frame->data.ndim = 2;
             frame->data.shape[0] = nfreq_snap;
-            frame->data.shape[1] = time_samples_per_chunk;
-            frame->data.size = nfreq_snap * time_samples_per_chunk;
-            frame->data.strides[0] = time_samples_per_chunk;
+            frame->data.shape[1] = params.time_samples_per_chunk;
+            frame->data.size = nfreq_snap * params.time_samples_per_chunk;
+            frame->data.strides[0] = params.time_samples_per_chunk;
             frame->data.strides[1] = 1;
             frame->data.dtype = ksgpu::Dtype(ksgpu::df_int, 4);
-            frame->data.aflags = slab_allocator->aflags;
+            frame->data.aflags = params.slab_allocator->aflags;
             frame->data.base = slab;
             frame->data.check_invariants("AssembledFrameAllocator::_worker_main()");
 
@@ -1657,7 +1655,7 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_
         // undetectable deadlock. Crash loudly at the offending caller
         // instead (the throw stops the allocator, via the entry-point
         // wrapper in get_frame_set).
-        xassert_le(num_received, num_consumers);
+        xassert_le(num_received, params.num_consumers);
 
         // IMPORTANT: Make a copy of the shared_ptr BEFORE popping from queue!
         // set_ref becomes a dangling reference after pop_front().
@@ -1675,7 +1673,7 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_
         // the queue size. (notify_one is sound: the worker is structurally
         // the only slot_cv waiter.)
         bool popped = false;
-        while (!frame_set_queue.empty() && (frame_set_queue.front().second == num_consumers)) {
+        while (!frame_set_queue.empty() && (frame_set_queue.front().second == params.num_consumers)) {
             frame_set_queue.pop_front();
             queue_start_chunk_index++;
             popped = true;
@@ -1727,7 +1725,7 @@ void AssembledFrameAllocator::_block_until_low_memory(long nframe_threshold)
         // relating assembled_frame_allocator_queue_size to
         // reaper_lowmem_chunks in constants.hpp -- i.e. memory is
         // genuinely not low, and blocking here is the desired behavior.
-        slab_allocator->block_until_empty();
+        params.slab_allocator->block_until_empty();
         
         // Check num_preinitialized under lock.
         guard.lock();

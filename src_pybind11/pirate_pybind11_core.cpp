@@ -407,18 +407,31 @@ void register_core_bindings(pybind11::module &m)
         "consumers requesting the same chunk receive the same set (same\n"
         "shared_ptr); a set is evicted from the allocator's queue after\n"
         "num_consumers requests (see get_frame_set for the receipt contract).")
-        .def(py::init<const std::shared_ptr<SlabAllocator> &, int, long>(),
+        .def(py::init([](const std::shared_ptr<SlabAllocator> &slab_allocator,
+                         int num_consumers, long time_samples_per_chunk) {
+                // Assemble the C++-side Params struct from the Python kwargs.
+                AssembledFrameAllocator::Params params;
+                params.slab_allocator = slab_allocator;
+                params.num_consumers = num_consumers;
+                params.time_samples_per_chunk = time_samples_per_chunk;
+                return std::make_shared<AssembledFrameAllocator>(params);
+            }),
             py::arg("slab_allocator"),
             py::arg("num_consumers"),
             py::arg("time_samples_per_chunk"))
         // nfreq / beam_ids are written by initialize_metadata() under the
-        // allocator's lock, so (unlike the ctor-constant
-        // time_samples_per_chunk below) a raw def_readonly would read them
-        // unsynchronized -- a torn vector copy in the worst case. Route
-        // through the lock-synchronized getters, like the 'metadata'
-        // property.
+        // allocator's lock, so (unlike the ctor-constant params fields
+        // below) a raw def_readonly would read them unsynchronized -- a
+        // torn vector copy in the worst case. Route through the
+        // lock-synchronized getters, like the 'metadata' property.
         .def_property_readonly("nfreq", &AssembledFrameAllocator::get_nfreq)
-        .def_readonly("time_samples_per_chunk", &AssembledFrameAllocator::time_samples_per_chunk)
+        .def_property_readonly("time_samples_per_chunk",
+            [](const AssembledFrameAllocator &self) { return self.params.time_samples_per_chunk; },
+            "Frame length in time samples (constructor parameter).")
+        .def_property_readonly("num_consumers",
+            [](const AssembledFrameAllocator &self) { return self.params.num_consumers; },
+            "The num_consumers constructor parameter: the receipt count at which\n"
+            "a set is evicted from the allocator's queue (see get_frame_set).")
         .def_property_readonly("beam_ids", &AssembledFrameAllocator::get_beam_ids)
         .def_property_readonly("metadata",
             [](AssembledFrameAllocator &self) {
@@ -468,9 +481,6 @@ void register_core_bindings(pybind11::module &m)
             "non-dummy mode), which must not stall other Python threads\n"
             "(e.g. a sender thread running concurrently with a\n"
             "frame-provider thread).")
-        .def("get_num_consumers", &AssembledFrameAllocator::get_num_consumers,
-            "The num_consumers constructor argument: the receipt count at which\n"
-            "a set is evicted from the allocator's queue (see get_frame_set).")
         .def("get_metadata",
             [](AssembledFrameAllocator &self, bool blocking) {
                 auto m = self.get_metadata(blocking);

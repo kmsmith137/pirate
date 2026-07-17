@@ -194,19 +194,19 @@ FrbServer::FrbServer(const Params &p) : params(p)
     // receiver count must match num_consumers exactly. (Fewer receivers ->
     // the allocator's queue jams and everyone deadlocks; more -> premature
     // eviction.)
-    xassert_eq(long(params.receivers.size()), long(frame_allocator->get_num_consumers()));
+    xassert_eq(long(params.receivers.size()), long(frame_allocator->params.num_consumers));
 
     // Verbose consistency check: the dedispersion config and the
     // frame_allocator must agree on time_samples_per_chunk. In the normal
     // run_server.py path the frame_allocator is constructed FROM the
     // dedispersion config, so this guards against future mis-wiring or
     // direct Python callers.
-    if (params.config_prefilled.time_samples_per_chunk != frame_allocator->time_samples_per_chunk) {
+    if (params.config_prefilled.time_samples_per_chunk != frame_allocator->params.time_samples_per_chunk) {
         stringstream ss;
         ss << "FrbServer: DedispersionConfig::time_samples_per_chunk ("
            << params.config_prefilled.time_samples_per_chunk
            << ") does not match AssembledFrameAllocator::time_samples_per_chunk ("
-           << frame_allocator->time_samples_per_chunk << ")";
+           << frame_allocator->params.time_samples_per_chunk << ")";
         throw runtime_error(ss.str());
     }
 
@@ -1233,7 +1233,7 @@ void FrbServer::_frame_finalizing_thread_main()
     // exactly on each boundary. bytes_per_chunk / chunk_len_sec feed Gbps + rt_beams.
     shared_ptr<const XEngineMetadata> m = frame_allocator->get_metadata(true);
     const long   nbeams          = m->get_nbeams();
-    const long   ntime           = frame_allocator->time_samples_per_chunk;
+    const long   ntime           = frame_allocator->params.time_samples_per_chunk;
     const long   seq_per_chunk   = ntime * m->seq_per_frb_time_sample;
     const long   bytes_per_chunk = nbeams * AssembledFrameAllocator::slab_nbytes(m->get_total_nfreq(), ntime);
     const double chunk_len_sec   = double(seq_per_chunk) * double(m->dt_ns_per_seq) * 1.0e-9;
@@ -1940,7 +1940,7 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
         // lives in chunk floor(f / seq_per_chunk). Map the half-open fpga range
         // to the inclusive range of chunks it touches. The (fpga_seq_end - 1)
         // form avoids overflow when fpga_seq_end = INT64_MAX.
-        long seq_per_chunk = s->frame_allocator->time_samples_per_chunk * s->metadata->seq_per_frb_time_sample;
+        long seq_per_chunk = s->frame_allocator->params.time_samples_per_chunk * s->metadata->seq_per_frb_time_sample;
         xassert(seq_per_chunk > 0);
         long min_time_chunk_index = fpga_seq_start / seq_per_chunk;
         long max_time_chunk_index = (fpga_seq_end - 1) / seq_per_chunk;
@@ -2007,7 +2007,7 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
         // number of chunks; the excess is silently truncated (the caller
         // sees the truncation only through the shorter filename list).
         long fwms = s->params.config_prefilled.future_write_max_samples;
-        long tspc = s->frame_allocator->time_samples_per_chunk;
+        long tspc = s->frame_allocator->params.time_samples_per_chunk;
         long n_future_chunks = (fwms + tspc - 1) / tspc;   // round up
 
         long chunk_first = max(min_time_chunk_index, ichunk_next);
@@ -2157,7 +2157,7 @@ void FrbRpcService::_StartStream(const fs::StartStreamRequest *request, fs::Star
     // overlaps [fpga_seq_start, fpga_seq_end). The (fpga_seq_end - 1) form
     // avoids overflow when fpga_seq_end = INT64_MAX ("run indefinitely").
     long nbeams = s->metadata->get_nbeams();
-    long seq_per_chunk = s->frame_allocator->time_samples_per_chunk * s->metadata->seq_per_frb_time_sample;
+    long seq_per_chunk = s->frame_allocator->params.time_samples_per_chunk * s->metadata->seq_per_frb_time_sample;
     xassert(seq_per_chunk > 0);
     st->chunk_first = fpga_seq_start / seq_per_chunk;
     st->chunk_last  = (fpga_seq_end - 1) / seq_per_chunk;
@@ -2221,7 +2221,7 @@ void FrbRpcService::_ShowStreams(const fs::ShowStreamsRequest *request, fs::Show
         throw runtime_error("ShowStreams: server has not yet established an initial fpga chunk");
 
     long nbeams = s->metadata->get_nbeams();
-    long seq_per_chunk = s->frame_allocator->time_samples_per_chunk * s->metadata->seq_per_frb_time_sample;
+    long seq_per_chunk = s->frame_allocator->params.time_samples_per_chunk * s->metadata->seq_per_frb_time_sample;
     long ichunk = s->rb_processed / nbeams;   // first not-fully-processed chunk
 
     // Deactivate expired streams here too (the capture hook only runs when
@@ -2519,7 +2519,7 @@ void FrbRpcService::_GetConfig(const fs::GetConfigRequest *request, fs::GetConfi
     for (auto &r : s->params.receivers)
         response->add_data_ip_addrs(r->params.address);
 
-    response->set_time_samples_per_chunk(s->frame_allocator->time_samples_per_chunk);
+    response->set_time_samples_per_chunk(s->frame_allocator->params.time_samples_per_chunk);
     response->set_ringbuf_nchunks(s->params.ringbuf_nchunks);
     response->set_min_data_mtu(s->params.min_data_mtu);
 

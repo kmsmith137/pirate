@@ -242,7 +242,7 @@ struct SimulatedFrameFactory
     // Beam count (the allocator must already have been initialized).
     const long nbeams;
 
-    // Copied from allocator->time_samples_per_chunk ("tspc" in comments).
+    // Copied from allocator->params.time_samples_per_chunk ("tspc" in comments).
     const long time_samples_per_chunk;
 
     // Frame time-sample duration, = dt_ns_per_seq * seq_per_frb_time_sample

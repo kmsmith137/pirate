@@ -315,7 +315,7 @@ struct AssembledFrameSet
 // non-dummy mode -- pre-initializes frames (calls memset to fill with 0x88)
 // so that get_frame_set() callers never pay allocation/memset latency. The
 // worker pre-initializes at most constants::assembled_frame_allocator_queue_size
-// sets ahead of full consumption; in dummy mode (slab_allocator->is_dummy_mode)
+// sets ahead of full consumption; in dummy mode (params.slab_allocator->is_dummy_mode)
 // this queue bound is the only limit on memory use, since dummy-mode
 // get_slab() never blocks. The worker thread inherits its vcpu affinity from
 // the caller of the constructor. Python callers should call the
@@ -328,9 +328,21 @@ struct AssembledFrameSet
 
 struct AssembledFrameAllocator
 {
-    AssembledFrameAllocator(const std::shared_ptr<SlabAllocator> &slab_allocator,
-                            int num_consumers,
-                            long time_samples_per_chunk);
+    struct Params {
+        // Source of slab memory (bump-backed or dummy). Must be non-null,
+        // and its memory must be host-accessible.
+        std::shared_ptr<SlabAllocator> slab_allocator;
+
+        // Number of logical consumers: the receipt count at which a set is
+        // evicted from the internal queue (see get_frame_set()). Must be > 0.
+        int num_consumers = 0;
+
+        // Frame length in time samples. Must be positive (and divisible by
+        // 256, enforced when the first frame set is built -- see get_layout()).
+        long time_samples_per_chunk = 0;
+    };
+
+    explicit AssembledFrameAllocator(const Params &params);
     ~AssembledFrameAllocator();
 
     // Non-copyable, non-movable (required for thread-backed class pattern).
@@ -339,7 +351,8 @@ struct AssembledFrameAllocator
     AssembledFrameAllocator(AssembledFrameAllocator &&) = delete;
     AssembledFrameAllocator &operator=(AssembledFrameAllocator &&) = delete;
 
-    long time_samples_per_chunk = 0;   // ctor-constant, safe to read without the lock
+    // Constructor parameters (ctor-constant, safe to read without the lock).
+    const Params params;
 
     // Lock-synchronized getters for the metadata-derived parameters (nfreq,
     // beam_ids -- PRIVATE members, written by initialize_metadata() under
@@ -446,11 +459,6 @@ struct AssembledFrameAllocator
 
     std::shared_ptr<AssembledFrameSet> get_frame_set(long time_chunk_index);
 
-    // Returns the num_consumers constructor argument: the receipt count at
-    // which a set is evicted from the internal queue (see get_frame_set()).
-    // Constructor-constant, so no lock is needed.
-    int get_num_consumers() const { return num_consumers; }
-
     // Entry point: Block until slab allocator is empty (all slabs in use), AND the number of
     // pre-initialized frames waiting for first consumer is <= nframe_threshold.
     // Throws exception in dummy mode, or if stop() is called from another thread.
@@ -460,7 +468,7 @@ struct AssembledFrameAllocator
     bool is_dummy() const { return is_dummy_mode; }
 
     // Returns true if the underlying memory is ready to serve allocations.
-    // Delegates to slab_allocator->is_initialized(), which in turn delegates
+    // Delegates to params.slab_allocator->is_initialized(), which in turn delegates
     // to bump_allocator->is_initialized(). Use for sanity-checking that
     // wait_until_initialized() has been called on all the async
     // BumpAllocators upstream before kicking off pipeline activity.
@@ -472,9 +480,7 @@ struct AssembledFrameAllocator
     void stop(std::exception_ptr e = nullptr) const;
 
 private:
-    std::shared_ptr<SlabAllocator> slab_allocator;
-    int num_consumers;
-    bool is_dummy_mode;  // cached from slab_allocator->is_dummy_mode
+    bool is_dummy_mode;  // cached from params.slab_allocator->is_dummy_mode
     
     // Stop-pattern state ('mutable' since stop() is const -- see
     // notes/stoppable_class.md). is_stopped/error are protected by 'lock'.

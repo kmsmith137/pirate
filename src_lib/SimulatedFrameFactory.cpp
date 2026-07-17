@@ -89,7 +89,7 @@ SimulatedFrameFactory::SimulatedFrameFactory(const Params &params_) :
     params(params_),
     metadata(validate_and_get_metadata(params_)),   // validates params + returns the (retained) metadata
     nbeams(metadata->get_nbeams()),
-    time_samples_per_chunk(params_.allocator->time_samples_per_chunk),
+    time_samples_per_chunk(params_.allocator->params.time_samples_per_chunk),
     // Frame time-sample duration in ms (same expression AssembledFrame::randomize() checks pulses against).
     time_sample_ms((double) metadata->dt_ns_per_seq * (double) metadata->seq_per_frb_time_sample / 1.0e6)
 {
