@@ -35,7 +35,7 @@ std::shared_ptr<SlabAllocator> SlabAllocator::create(int aflags)
 // fresh memory with _af_alloc(aflags). (In non-dummy mode the aflags are
 // validated by the BumpAllocator's own constructor.)
 SlabAllocator::SlabAllocator(int aflags_)
-    : aflags(aflags_), is_dummy(true)
+    : aflags(aflags_), is_dummy_mode(true)
 {
     ksgpu::check_aflags(aflags, "SlabAllocator constructor");
 
@@ -48,7 +48,7 @@ SlabAllocator::SlabAllocator(int aflags_)
 
 
 SlabAllocator::SlabAllocator(const std::shared_ptr<BumpAllocator> &b)
-    : aflags(b->aflags), is_dummy(false), bump_allocator(b)
+    : aflags(b->aflags), is_dummy_mode(false), bump_allocator(b)
 {
     if (b->capacity < 0)
         throw std::runtime_error("SlabAllocator constructor: BumpAllocator is in dummy mode");
@@ -110,7 +110,7 @@ void SlabAllocator::_throw_if_stopped(const char *method_name) const
 void SlabAllocator::block_until_empty()
 {
     try {
-        if (is_dummy)
+        if (is_dummy_mode)
             throw std::runtime_error("SlabAllocator::block_until_empty(): not available in dummy mode");
 
         std::unique_lock<std::mutex> guard(lock);
@@ -162,6 +162,10 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes)
 
     long aligned_nbytes = align_up(nbytes, nalign);
 
+    // Check that slabs are large enough for (magic number) + (free_list_next pointer).
+    // (Automatic since nalign >= 16, but I wanted to make the check explicit anyway.)
+    xassert_ge(aligned_nbytes, 16);
+
     std::unique_lock<std::mutex> guard(lock);
     _throw_if_stopped("SlabAllocator::get_slab");
 
@@ -179,6 +183,7 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes)
     // only in production mode.
     if (slab_size < 0)
         slab_size = aligned_nbytes;
+    
     else if (aligned_nbytes != slab_size) {
         std::stringstream ss;
         ss << "SlabAllocator::get_slab(): requested size " << nbytes
@@ -187,7 +192,7 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes)
         throw std::runtime_error(ss.str());
     }
 
-    if (is_dummy) {
+    if (is_dummy_mode) {
         guard.unlock();
         // Use the local 'aligned_nbytes', not 'slab_size': the lock was just
         // released, so re-reading the member here would be a data race.

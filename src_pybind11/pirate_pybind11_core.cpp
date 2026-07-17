@@ -237,7 +237,7 @@ void register_core_bindings(pybind11::module &m)
             "Non-blocking poll: True iff the underlying BumpAllocator is ready\n"
             "to serve allocations (delegates to bump_allocator.is_initialized()).\n"
             "Always True in dummy mode (no underlying BumpAllocator).")
-        .def_readonly("is_dummy", &SlabAllocator::is_dummy,
+        .def_readonly("is_dummy_mode", &SlabAllocator::is_dummy_mode,
             "True if in dummy mode (constructed from aflags alone).")
         .def_readonly("aflags", &SlabAllocator::aflags,
             "Memory allocation flags")

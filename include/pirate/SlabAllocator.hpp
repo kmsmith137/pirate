@@ -139,7 +139,7 @@ public:
     void stop(std::exception_ptr e = nullptr) const;
 
     const int aflags;    // allocation flags from ksgpu (inherited from the BumpAllocator in non-dummy mode)
-    const bool is_dummy; // constant after construction, not lock-protected
+    const bool is_dummy_mode; // constant after construction, not lock-protected
 
 protected:
     // Protected constructors - use create() factory methods instead.

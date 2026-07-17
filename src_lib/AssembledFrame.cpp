@@ -1111,7 +1111,7 @@ AssembledFrameAllocator::AssembledFrameAllocator(const shared_ptr<SlabAllocator>
     : time_samples_per_chunk(time_samples_per_chunk_),
       slab_allocator(slab_allocator_),
       num_consumers(num_consumers_),
-      is_dummy_mode(slab_allocator_->is_dummy)
+      is_dummy_mode(slab_allocator_->is_dummy_mode)
 {
     xassert(slab_allocator);
     xassert_gt(num_consumers, 0);
