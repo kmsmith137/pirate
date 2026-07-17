@@ -101,20 +101,37 @@ for itree in range(ntrees):
         dbits_freqs = { dbits: np.array(ifreqs) for dbits,ifreqs in dbits_freqs.items() }
         dbits_varrs = { dbits: np.array(varrs) for dbits,varrs in dbits_varrs.items() }
 
+        # Preconditioner: lam[if_tj] = sum over the channel's terms of mean(term array).
+        # "Edge" channels which barely overlap band j contribute anomalously small
+        # variances; dividing lam out of the rows of Abar (equivalently, of the per-group
+        # A_delta arrays below) makes all rows comparable O(1) scale. Reconstructions then
+        # use the reweighted input v_lam = (v * lam) in place of the plain input
+        # v = freq_variances[ifreq_lo : ifreq_lo + nf_tj].
+
+        lam = np.zeros(nf_tj)
+        for dbits, ifreqs in dbits_freqs.items():
+            lam[ifreqs - ifreq_lo] += dbits_varrs[dbits].mean(axis=(1,2))
+        assert np.all(lam > 0.0), (itree, j, float(lam.min()))
+
+        dbits_varrs = { dbits: varrs / lam[dbits_freqs[dbits] - ifreq_lo][:, None, None]
+                        for dbits, varrs in dbits_varrs.items() }
+
+        v_lam = freq_variances[ifreq_lo : ifreq_lo + nf_tj] * lam
+
         # Check that we can recover ref_variance[j,:,:] from the (dbits_freqs, dbits_varrs)
-        # representation. (Loop over dbits,ifreqs,varrs. Use ifreqs to "slice" freq_variances
-        # to a length-nf_tjd array. Contract with varrs to get a shape (2^popcount, P) array.
-        # Apply SparseTile._remap_d() to get a (2^{r-L}, P) array. Sum this over loop
-        # iterations, and assert agreement with ref_variance[j,:,:].
+        # representation. (Loop over dbits,ifreqs,varrs. Use ifreqs to "slice" the reweighted
+        # input v_lam to a length-nf_tjd array. Contract with varrs to get a shape
+        # (2^popcount, P) array. Apply SparseTile._remap_d() to get a (2^{r-L}, P) array.
+        # Sum this over loop iterations, and assert agreement with ref_variance[j,:,:].
 
         all_dbits = (1 << (r-L)) - 1
         rows = np.arange(1 << (r-L))
         recon = np.zeros((1 << (r-L), P))
 
         for dbits, ifreqs in dbits_freqs.items():
-            varrs = dbits_varrs[dbits]                                         # (nf_tjd, 2^popcount(dbits), P)
-            contracted = np.einsum('f,fdp->dp', freq_variances[ifreqs], varrs) # (2^popcount(dbits), P)
-            recon += contracted[SparseTile._remap_d(rows, all_dbits, dbits)]   # (2^{r-L}, P)
+            varrs = dbits_varrs[dbits]                                           # (nf_tjd, 2^popcount(dbits), P)
+            contracted = np.einsum('f,fdp->dp', v_lam[ifreqs - ifreq_lo], varrs) # (2^popcount(dbits), P)
+            recon += contracted[SparseTile._remap_d(rows, all_dbits, dbits)]     # (2^{r-L}, P)
 
         maxdiff = float(np.max(np.abs(recon / ref_variance[itree][j] - 1.0)))
         assert np.allclose(recon, ref_variance[itree][j], rtol=1e-10, atol=0.0), (itree, j, maxdiff)
@@ -142,14 +159,14 @@ for itree in range(ntrees):
             dbits_vmat[dbits] = vh[:K, :]                # (K, D)
 
         # Check that we can recover ref_variance[j,:,:] from the SVD representation:
-        # slice freq_variances, multiply by U^T, then S, then V, and remap indices as before.
+        # slice v_lam, multiply by U^T, then S, then V, and remap indices as before.
         # (Truncating at 1e-11 * S[0] perturbs the reconstruction, so the tolerance is looser
         # than the exact check above.)
 
         recon2 = np.zeros((1 << (r-L), P))
 
         for dbits, ifreqs in dbits_freqs.items():
-            coeffs = dbits_umat[dbits] @ freq_variances[ifreqs]       # (K,)
+            coeffs = dbits_umat[dbits] @ v_lam[ifreqs - ifreq_lo]     # (K,)
             coeffs = coeffs * dbits_sdiag[dbits]                      # (K,)
             contracted = (coeffs @ dbits_vmat[dbits]).reshape(-1, P)  # (2^popc(dbits), P)
             recon2 += contracted[SparseTile._remap_d(rows, all_dbits, dbits)]
@@ -157,8 +174,9 @@ for itree in range(ntrees):
         maxdiff2 = float(np.max(np.abs(recon2 / ref_variance[itree][j] - 1.0)))
         assert np.allclose(recon2, ref_variance[itree][j], rtol=1e-8, atol=0.0), (itree, j, maxdiff2)
 
-        # Let Abar be the shape (nf_tj, 2^{r-L} * P) matrix representing the linear map
-        # freq_variances[ifreq_lo : ifreq_lo + nf_tj] -> ref_variance[j,:,:].ravel().
+        # Let Abar be the shape (nf_tj, 2^{r-L} * P) matrix with
+        # v_lam . Abar = ref_variance[j,:,:].ravel(), i.e. the preconditioned linear map
+        # y^T = v^T Lambda Abar with Lambda = diag(lam).
         # (Never materialized.) Stack the per-dbits (U, S, V) into
         #
         #    Ubar (Ktot, nf_tj),  Sbar (Ktot,),  Vbar (Ktot, 2^{r-L} * P)
@@ -192,10 +210,9 @@ for itree in range(ntrees):
 
         assert k0 == Ktot
 
-        # Check that freq_variances[ifreq_lo : ifreq_lo + nf_tj] . Ubar^T . diag(Sbar) . Vbar
-        # = ref_variance[j,:,:].
+        # Check that v_lam . Ubar^T . diag(Sbar) . Vbar = ref_variance[j,:,:].
 
-        coeffs = Ubar @ freq_variances[ifreq_lo : ifreq_lo + nf_tj]           # (Ktot,)
+        coeffs = Ubar @ v_lam                                                 # (Ktot,)
         recon3 = ((coeffs * Sbar) @ Vbar).reshape(1 << (r-L), P)
 
         maxdiff3 = float(np.max(np.abs(recon3 / ref_variance[itree][j] - 1.0)))
@@ -219,8 +236,8 @@ for itree in range(ntrees):
 
         M = (U2[:, None] * U1.T) @ (Sbar[:, None] * V1) * V2[None, :]   # (Ktot, Ktot)
 
-        # Sanity check: x . Abar = ((U3 x) M) V3 must still reproduce ref_variance[j,:,:].
-        recon4 = (((U3 @ freq_variances[ifreq_lo : ifreq_lo + nf_tj]) @ M) @ V3).reshape(1 << (r-L), P)
+        # Sanity check: v_lam . Abar = ((U3 v_lam) M) V3 must still reproduce ref_variance[j,:,:].
+        recon4 = (((U3 @ v_lam) @ M) @ V3).reshape(1 << (r-L), P)
         maxdiff4 = float(np.max(np.abs(recon4 / ref_variance[itree][j] - 1.0)))
         assert np.allclose(recon4, ref_variance[itree][j], rtol=1e-8, atol=0.0), (itree, j, maxdiff4)
 
@@ -240,10 +257,9 @@ for itree in range(ntrees):
         U0 = uM[:, :K0].T @ U3              # (K0, nf_tj)
         V0 = vMh[:K0, :] @ V3               # (K0, 2^{r-L} P)
 
-        # Check that freq_variances[ifreq_lo : ifreq_lo + nf_tj] . U0^T . diag(S0) . V0
-        # = ref_variance[j,:,:].
+        # Check that v_lam . U0^T . diag(S0) . V0 = ref_variance[j,:,:].
 
-        coeffs = (U0 @ freq_variances[ifreq_lo : ifreq_lo + nf_tj]) * S0      # (K0,)
+        coeffs = (U0 @ v_lam) * S0                                            # (K0,)
         recon5 = (coeffs @ V0).reshape(1 << (r-L), P)
 
         maxdiff5 = float(np.max(np.abs(recon5 / ref_variance[itree][j] - 1.0)))

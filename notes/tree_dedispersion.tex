@@ -632,14 +632,18 @@ For a fixed $(\mbox{tree}, j)$, the map $v \mapsto y_j$ is linear, and only a co
 of input channels contributes (the channels overlapping band $j$):
 $F_{\rm lo} \le F < F_{\rm lo} + n_j$.\footnote{Code names: $F_{\rm lo} = {\tt ifreq\_lo}$,
 $n_j = {\tt nf\_tj}$.}
-Flattening $y_j$ to a length-$2^{r-L} P$ row vector, we can therefore write
+Channels at the edges of this range may overlap band $j$ only slightly, and would contribute
+anomalously small rows to the matrix $\bar A$ below; we ``precondition'' this away with a
+diagonal matrix $\Lambda = {\rm diag}(\lambda)$, where $\lambda_F > 0$ is the mean variance
+contributed by channel $F$ (defined precisely in the next subsection).
+Flattening $y_j$ to a length-$2^{r-L} P$ row vector, we write
 \begin{equation}
-y_j = v^T \bar A,  \label{eq:abar_def}
+y_j = v^T \, \Lambda \, \bar A,  \label{eq:abar_def}
 \end{equation}
-where $v$ is restricted to the contributing channels, and $\bar A$ is an $(n_j,\ 2^{r-L} P)$
-matrix depending on $(\mbox{tree}, j)$. For CHORD-sized configs, $n_j$ is a few thousand and
-$2^{r-L} P \sim 10^4$, so we never materialize $\bar A$; instead we construct a low-rank
-factorization of it.
+where $v$ and $\Lambda$ are restricted to the contributing channels, and $\bar A$ is an
+$(n_j,\ 2^{r-L} P)$ matrix with rows of comparable scale, depending on $(\mbox{tree}, j)$.
+For CHORD-sized configs, $n_j$ is a few thousand and $2^{r-L} P \sim 10^4$, so we never
+materialize $\bar A$; instead we construct a low-rank factorization of it.
 
 \subsection{Factored structure of single-channel variances}
 
@@ -660,15 +664,24 @@ Empirically, almost all channels produce exactly one term (in {\tt chord\_sb2\_e
 of $\sim\!1.7\times 10^5$ channel-band pairs produce two, the rest one), and only a handful of
 distinct bitmasks $\delta$ occur for each $(\mbox{tree}, j)$.
 
-Now group the (channel, term) pairs by $\delta$. For each $\delta$, stack the flattened term
-arrays into a matrix $A_\delta$ of shape $(n_{j\delta},\ 2^{{\rm popc}(\delta)} P)$, where
-$n_{j\delta}$ is the number of contributing (channel, term) pairs,\footnote{Code name:
-$n_{j\delta} = {\tt nf\_tjd}$.} and let $v_\delta$ denote the corresponding length-$n_{j\delta}$
-slice of $v$. Then
+The preconditioner in Eq.\ (\ref{eq:abar_def}) is defined in terms of the factored form:
 \begin{equation}
-y_j = \sum_\delta \big( v_\delta^T A_\delta \big) \, E_\delta,  \label{eq:group_sum}
+\lambda_F = \sum_{(\delta, a) \,\in\, {\rm terms}(F)} {\rm mean}(a),  \label{eq:lambda_def}
 \end{equation}
-where $E_\delta$ is the $(2^{{\rm popc}(\delta)} P) \times (2^{r-L} P)$ zero/one ``expansion''
+where the mean is taken over all entries of the term array $a$. A low-overlap edge channel
+shows up as a small value of $\lambda_F$.
+
+Now group the (channel, term) pairs by $\delta$. For each $\delta$, stack the flattened term
+arrays, dividing the row of channel $F$ by $\lambda_F$, into a matrix $A_\delta$ of shape
+$(n_{j\delta},\ 2^{{\rm popc}(\delta)} P)$, where $n_{j\delta}$ is the number of contributing
+(channel, term) pairs,\footnote{Code name: $n_{j\delta} = {\tt nf\_tjd}$.} and let $v_\delta,
+\lambda_\delta$ denote the corresponding length-$n_{j\delta}$ slices of $v, \lambda$. Then
+\begin{equation}
+y_j = \sum_\delta \big( (v_\delta \odot \lambda_\delta)^T A_\delta \big) \, E_\delta,
+\label{eq:group_sum}
+\end{equation}
+where $\odot$ denotes elementwise multiplication, and $E_\delta$ is the
+$(2^{{\rm popc}(\delta)} P) \times (2^{r-L} P)$ zero/one ``expansion''
 matrix which replicates the packed DM axis over the unselected bits, i.e.\ copies packed entry
 $({\rm sel}(d,\delta), p)$ to entry $(d, p)$. (In the code, $E_\delta$ is an index gather, not a
 materialized matrix.)
@@ -685,6 +698,10 @@ $\varepsilon = 10^{-11}$: since $S_{\rm max} = \|A_\delta\|_2$, this threshold i
 scaled to the matrix entries, and it sits well above the double-precision noise floor on singular
 values ($\sim \max(\mbox{shape}) \cdot \epsilon_{\rm f64} \approx 6 \times 10^{-13}\, S_{\rm max}$
 at these matrix sizes) while remaining far below any genuine component.
+Note that the row normalization by $\Lambda^{-1}$ in the definition of $A_\delta$ does not change
+matrix ranks (diagonal scaling is invertible); its purpose is to make the fixed relative
+threshold $\varepsilon$ meaningful for every channel, so that low-overlap edge channels are not
+silently truncated away.
 
 Let $K_{\rm tot} = \sum_\delta K_\delta$. Substituting the truncated SVDs into
 Eq.\ (\ref{eq:group_sum}) and stacking the per-group factors, we obtain
@@ -702,7 +719,7 @@ $V_\delta E_\delta$.
 This eliminates the sum over $\delta$, but $\bar U, \bar V$ are {\em not} semiorthogonal
 ($\bar U \bar U^T \ne {\rm id}$): different groups' channel sets overlap (via the two-term
 channels), and the expanded rows $V_\delta E_\delta$ are not orthogonal across groups.
-Empirically, $K_{\rm tot} \sim 30$--$160$ -- already far smaller than $n_j \sim 300$--$3000$.
+Empirically, $K_{\rm tot} \sim 20$--$160$ -- already far smaller than $n_j \sim 300$--$3000$.
 
 \subsection{Canonical form}
 
@@ -739,17 +756,18 @@ U_0 U_0^T = V_0 V_0^T = {\rm id}_{K_0},
 with $S_0$ sorted descending -- i.e.\ a genuine truncated SVD of $\bar A$, with $K_0$ its
 numerical rank.
 
-Given an updated $v$, reevaluating the variances is two small matrix-vector multiplies and a
-diagonal scaling,
+Given an updated $v$, reevaluating the variances is two small matrix-vector multiplies and two
+diagonal scalings,
 \begin{equation}
-y_j = \big( ( U_0 \, v ) \odot S_0 \big)^T \, V_0,
+y_j = \big( ( U_0 \, \Lambda \, v ) \odot S_0 \big)^T \, V_0,
 \end{equation}
-i.e.\ $O\big(K_0 (n_j + 2^{r-L} P)\big)$ flops per $(\mbox{tree}, j)$; likewise the storage is
+i.e.\ $O\big(K_0 (n_j + 2^{r-L} P)\big)$ flops per $(\mbox{tree}, j)$; likewise the storage
+(the factors $U_0, S_0, V_0$ plus the length-$n_j$ vector $\lambda$) is
 $O\big(K_0 (n_j + 2^{r-L} P)\big)$, instead of $O\big(n_j \cdot 2^{r-L} P\big)$ for a dense
 $\bar A$.
 
 For {\tt chord\_sb2\_et.yml} (10 trees, 136 $(\mbox{tree}, j)$ pairs), we find $K_0 \approx
-16$--$69$, with $\sum K_0 = 4969$ over all pairs versus $\sum K_{\rm tot} = 11301$ (a further
+12$--$69$, with $\sum K_0 = 4969$ over all pairs versus $\sum K_{\rm tot} = 11301$ (a further
 factor $\sim\!2.3$ beyond the per-group SVDs), $n_j$ up to $2823$, and $2^{r-L} P$ up to $16384$.
 Reconstructing the variances through the canonical form agrees with the directly-computed values
 to $\sim\!10$ significant digits, consistent with the threshold $\varepsilon$.
