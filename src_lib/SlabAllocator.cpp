@@ -157,14 +157,13 @@ void SlabAllocator::block_until_empty()
 // get_slab(): the main allocation method
 
 
-std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
+std::shared_ptr<void> SlabAllocator::get_slab(long nbytes)
 {
     // Per the strict stoppable-class policy (notes/stoppable_class.md), ANY
     // exception thrown from an entry point stops the allocator -- including
-    // argument errors (bad nbytes, size mismatch) and the non-blocking
-    // "pool exhausted" throw.
+    // argument errors (bad nbytes, size mismatch).
     try {
-        return _get_slab(nbytes, blocking);
+        return _get_slab(nbytes);
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -172,7 +171,7 @@ std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
 }
 
 
-std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
+std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes)
 {
     if (nbytes <= 0) {
         std::stringstream ss;
@@ -271,14 +270,8 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
             continue;
         }
 
-        // 3. Free list empty AND BumpAllocator exhausted: wait or throw.
-        if (!blocking) {
-            std::stringstream ss;
-            ss << "SlabAllocator::get_slab(): pool exhausted (" << num_slabs_allocated
-               << " slabs carved from the BumpAllocator, all in use)";
-            throw std::runtime_error(ss.str());
-        }
-
+        // 3. Free list empty AND BumpAllocator exhausted: wait for a slab
+        // to be returned (interruptible by stop()).
         free_cv.wait(guard);
         _throw_if_stopped("SlabAllocator::get_slab");
     }

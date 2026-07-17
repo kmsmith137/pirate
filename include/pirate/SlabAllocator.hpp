@@ -38,7 +38,8 @@ namespace pirate {
 //   - Slabs hold a reference to the SlabAllocator, preventing the underlying
 //     memory from being freed while any slab is still in use
 //   - Compatible with weak_ptr (control blocks are allocated separately)
-//   - Supports blocking mode: get_slab() can wait for a slab to be returned
+//   - Backpressure: once the BumpAllocator is exhausted, get_slab() blocks
+//     until a slab is returned to the pool
 //
 // Dummy mode (constructed via the create(aflags) factory):
 //   - No BumpAllocator is involved
@@ -93,12 +94,12 @@ public:
     // pool for reuse.
     //
     // If no free slab is available, a new one is carved from the
-    // BumpAllocator. Once the BumpAllocator is exhausted:
-    //   - blocking=false (default): throws an exception;
-    //   - blocking=true: waits until a slab is returned to the pool.
+    // BumpAllocator. Once the BumpAllocator is exhausted, waits until a
+    // slab is returned to the pool (interruptible by stop()).
     //
-    // In dummy mode, always allocates fresh memory using af_alloc().
-    std::shared_ptr<void> get_slab(long nbytes, bool blocking = false);
+    // In dummy mode, always allocates fresh memory using af_alloc() (never
+    // blocks).
+    std::shared_ptr<void> get_slab(long nbytes);
 
     // Returns true if the SlabAllocator is ready to serve get_slab() calls
     // without blocking on async init. Semantics:
@@ -164,7 +165,7 @@ private:
     // One condition variable per wait-predicate, so a targeted notify can
     // never be "lost" waking a waiter with a different predicate:
     //   free_cv  -- a slab was returned to the free list; awaited by
-    //               get_slab(blocking=true) after BumpAllocator exhaustion.
+    //               get_slab() after BumpAllocator exhaustion.
     //               return_slab() uses notify_one, which is sound here
     //               BECAUSE all free_cv waiters share the same predicate and
     //               one returned slab satisfies exactly one of them.
@@ -212,7 +213,7 @@ private:
 
     // Entry-point body; get_slab() is a thin wrapper that stops the
     // allocator if this throws (see notes/stoppable_class.md).
-    std::shared_ptr<void> _get_slab(long nbytes, bool blocking);
+    std::shared_ptr<void> _get_slab(long nbytes);
 
     // Wraps a slab pointer in a shared_ptr whose deleter returns the slab to
     // the pool (and keeps 'this' alive via a captured shared_ptr).

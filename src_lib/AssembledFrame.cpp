@@ -1270,7 +1270,7 @@ void AssembledFrameAllocator::_worker_main()
         // pool must have at least nbeams total slabs to make progress, which
         // is also a hard prerequisite for the Receiver's 2-chunk window.
         for (long b = 0; b < nbeams; b++) {
-            shared_ptr<void> slab = slab_allocator->get_slab(nbytes, /*blocking=*/true);
+            shared_ptr<void> slab = slab_allocator->get_slab(nbytes);
 
             // scales_offsets initial: float16 0.0 (bytes 0x00); also zero the
             // alignment padding between the two arrays (up to data_offset).
