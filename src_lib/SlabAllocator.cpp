@@ -1,7 +1,7 @@
 #include "../include/pirate/SlabAllocator.hpp"
 #include "../include/pirate/inlines.hpp"     // align_up()
 
-#include <algorithm>   // std::max
+#include <cstring>     // std::memcpy
 #include <stdexcept>
 #include <sstream>
 #include <ksgpu/xassert.hpp>
@@ -51,6 +51,13 @@ SlabAllocator::SlabAllocator(const std::shared_ptr<BumpAllocator> &b)
 {
     if (b->capacity < 0)
         throw std::runtime_error("SlabAllocator constructor: BumpAllocator is in dummy mode");
+
+    // The intrusive free list writes magic + next-pointer into free slabs,
+    // so slabs must be in host-accessible memory (see class comment).
+    if (!ksgpu::af_on_host(aflags))
+        throw std::runtime_error("SlabAllocator constructor: BumpAllocator memory must be "
+            "host-accessible (af_gpu is not supported; the free list is threaded through "
+            "the slabs themselves)");
 
     // No memory is taken from the BumpAllocator here: slabs are carved one
     // at a time, on demand, by get_slab(). This also means the constructor
@@ -141,7 +148,7 @@ void SlabAllocator::block_until_empty()
         // carve another slab). Both true-ward transitions notify empty_cv
         // (see the cv roster in SlabAllocator.hpp), so no wakeup is lost
         // regardless of which conjunct becomes true last.
-        while (!bump_allocator_empty || !free_list.empty()) {
+        while (!bump_allocator_empty || (free_list_head != nullptr)) {
             empty_cv.wait(guard);
             _throw_if_stopped("SlabAllocator::block_until_empty");
         }
@@ -208,11 +215,28 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes)
     }
 
     for (;;) {
-        // 1. Serve from the free list if possible.
-        if (!free_list.empty()) {
-            void *slab_ptr = free_list.back();
-            free_list.pop_back();
-            bool notify = free_list.empty();  // true-ward transition of the block_until_empty() predicate
+        // 1. Serve from the free list if possible (pop the head of the
+        // intrusive list -- layout in SlabAllocator.hpp).
+        if (free_list_head != nullptr) {
+            void *slab_ptr = free_list_head;
+
+            // Verify the magic stamped by return_slab(). A mismatch means
+            // some holder wrote into this slab AFTER returning it
+            // (use-after-return); fail loudly here rather than following a
+            // corrupted next-pointer. (The alignment xassert below catches
+            // the residual case of a scribble that skips the magic but
+            // hits the next-pointer.) These throws stop the allocator, via
+            // the get_slab() wrapper.
+            uint64_t magic;
+            std::memcpy(&magic, slab_ptr, 8);
+            xassert_eq(magic, free_slab_magic);
+
+            void *next;
+            std::memcpy(&next, static_cast<char *>(slab_ptr) + 8, 8);
+            xassert((next == nullptr) || (reinterpret_cast<uintptr_t>(next) % nalign == 0));
+
+            free_list_head = next;
+            bool notify = (free_list_head == nullptr);  // true-ward transition of the block_until_empty() predicate
             guard.unlock();
             if (notify)
                 empty_cv.notify_all();
@@ -239,18 +263,6 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes)
             if (ptr != nullptr) {
                 uintptr_t p = reinterpret_cast<uintptr_t>(ptr);
                 xassert((p % nalign) == 0);
-
-                // Maintain the return_slab() no-throw invariant
-                // (free_list.capacity() >= num_slabs_allocated -- see the
-                // member comment in SlabAllocator.hpp) BEFORE the new slab
-                // can escape. Amortized doubling keeps ramp-up O(n) rather
-                // than O(n^2); if reserve() throws, num_slabs_allocated has
-                // not yet been incremented, so the invariant still holds
-                // for all previously handed-out slabs (the carved bytes are
-                // abandoned; the bump never reclaims them anyway).
-                if (long(free_list.capacity()) < num_slabs_allocated + 1)
-                    free_list.reserve(std::max(2 * long(free_list.capacity()), 16L));
-                num_slabs_allocated++;
                 guard.unlock();
                 return _wrap_slab(ptr);
             }
@@ -299,14 +311,21 @@ std::shared_ptr<void> SlabAllocator::_wrap_slab(void *slab_ptr)
 
 void SlabAllocator::return_slab(void *slab_ptr)
 {
-    // Runs inside a slab shared_ptr deleter, so it must never throw. The
-    // push_back can't: _get_slab()'s carve path maintains
-    // free_list.capacity() >= num_slabs_allocated, and
-    // (slabs handed out) + free_list.size() <= num_slabs_allocated (each
-    // carved slab has exactly one deleter, invoked once), so the push_back
-    // never reallocates.
+    // Runs inside a slab shared_ptr deleter, so it must never throw -- and
+    // trivially cannot: it writes 16 bytes into the returned slab (idle by
+    // definition; NOTE this clobbers the slab's first 16 bytes) and updates
+    // the head pointer. No container growth, no allocation, no checks (any
+    // verification lives on the pop side, in _get_slab(), which may throw).
+    //
+    // The magic stamp is written before taking 'lock' (the slab is still
+    // private to this thread); the next-pointer write needs
+    // 'free_list_head', which is lock-protected.
+    uint64_t magic = free_slab_magic;
+    std::memcpy(slab_ptr, &magic, 8);
+
     std::unique_lock<std::mutex> guard(lock);
-    free_list.push_back(slab_ptr);
+    std::memcpy(static_cast<char *>(slab_ptr) + 8, &free_list_head, 8);
+    free_list_head = slab_ptr;
     guard.unlock();
     // notify_one is sound here: every free_cv waiter has the same predicate
     // (free list non-empty), and one returned slab satisfies exactly one

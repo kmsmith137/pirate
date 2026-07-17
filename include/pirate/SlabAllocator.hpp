@@ -5,10 +5,10 @@
 #include "BumpAllocator.hpp"
 
 #include <condition_variable>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <mutex>
-#include <vector>
 
 namespace pirate {
 #if 0
@@ -26,6 +26,15 @@ namespace pirate {
 // is cached and get_slab() is thereafter served from returned slabs only.
 // Slabs are returned to the free list when their reference count drops to
 // zero, making them available for future allocations.
+//
+// The free list is INTRUSIVE: it is threaded through the free slabs
+// themselves (a returned slab's first 16 bytes hold a magic number plus the
+// next-free-slab pointer -- see 'free_list_head' below). Two consequences:
+//   - Non-dummy slabs must live in host-accessible memory; the constructor
+//     rejects an af_gpu BumpAllocator.
+//   - A returned slab's first 16 bytes are clobbered. Callers must not
+//     assume slab contents survive a return/re-get cycle (the only current
+//     caller, AssembledFrameAllocator's worker, memsets every slab anyway).
 //
 // Slab size is established by the first call to get_slab(). All subsequent calls
 // must request the same size; otherwise an exception is thrown.
@@ -65,7 +74,9 @@ public:
     // up-front carve amount: the SlabAllocator draws from the BumpAllocator
     // until allocate_bytes() reports exhaustion.
     // The aflags are inherited from the BumpAllocator.
-    // Throws exception if BumpAllocator is in dummy mode.
+    // Throws exception if BumpAllocator is in dummy mode, or if its memory
+    // is not host-accessible (af_gpu): the intrusive free list requires CPU
+    // writes into free slabs (see class comment).
     //
     // If the BumpAllocator is async, the SlabAllocator constructor still
     // returns immediately: each per-slab b->allocate_bytes() call blocks on
@@ -170,9 +181,9 @@ private:
     //               BECAUSE all free_cv waiters share the same predicate and
     //               one returned slab satisfies exactly one of them.
     //   empty_cv -- awaited by block_until_empty(); predicate is
-    //               (bump_allocator_empty && free_list.empty()). Signaled
-    //               on BOTH true-ward transitions: (1) the free list's
-    //               empty-transition on pop, in _get_slab(); (2)
+    //               (bump_allocator_empty && free_list_head == nullptr).
+    //               Signaled on BOTH true-ward transitions: (1) the free
+    //               list's empty-transition on pop, in _get_slab(); (2)
     //               bump_allocator_empty set true, in _get_slab().
     // stop() notify_all's both.
     mutable std::mutex lock;
@@ -187,19 +198,28 @@ private:
     // or-throw logic at the top of _get_slab): 'lock' is released during the
     // carve, so a check-only test at entry could go stale before the size
     // was committed. Set-once, with no cv notify: no wait predicate tests it.
-    //
-    // num_slabs_allocated counts slabs carved from the BumpAllocator so far
-    // (monotonically increasing; stays 0 in dummy mode).
-    //
-    // Invariant: free_list.capacity() >= num_slabs_allocated at all times.
-    // Since (slabs handed out) + free_list.size() <= num_slabs_allocated,
-    // this guarantees that return_slab()'s push_back never reallocates,
-    // hence never throws (it runs inside a slab deleter). The carve path in
-    // _get_slab() grows free_list (amortized doubling) BEFORE incrementing
-    // num_slabs_allocated and before the new slab pointer escapes.
     long slab_size = -1;              // slab size in bytes
-    long num_slabs_allocated = 0;     // slabs carved from the BumpAllocator so far
-    std::vector<void *> free_list;    // stack of free slab pointers
+
+    // Head of the intrusive singly-linked free list, threaded through the
+    // free slabs themselves. Null if the free list is empty (or always, in
+    // dummy mode). Layout of a FREE slab (both fields written by
+    // return_slab(), read + verified by _get_slab()'s pop; slab_size is
+    // always >= nalign = 128, so they always fit):
+    //   bytes 0-7  : free_slab_magic, to detect use-after-return -- a
+    //                holder that writes into a slab AFTER returning it
+    //                almost certainly destroys the magic, which the next
+    //                pop detects (xassert). The check lives on the POP side
+    //                only: return_slab() runs inside a slab deleter and
+    //                must never throw.
+    //   bytes 8-15 : next free slab (void *), or nullptr at the tail.
+    // This design is what makes return_slab() trivially no-throw: it just
+    // writes 16 bytes into an idle slab and updates this head pointer (no
+    // container growth, no allocation).
+    void *free_list_head = nullptr;
+
+    // Stamped on a slab by return_slab(); verified at pop time.
+    // ("f4ee51ab" ~ "free slab".)
+    static constexpr uint64_t free_slab_magic = 0xf4ee51abf4ee51abUL;
 
     // True once bump_allocator->allocate_bytes() has returned nullptr
     // (capacity exhausted); cached so allocate_bytes() is never called
