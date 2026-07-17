@@ -11,6 +11,7 @@ from .Hardware import Hardware
 from .utils import ThreadAffinity, extract_ip, check_mtu
 from .core import (
     AssembledFrameAllocator,
+    BumpAllocator,
     FakeXEngine,
     FrequencySubbands,
     SimulatedFrameFactory,
@@ -192,14 +193,16 @@ class RunFakeXEngineHelper:
                 time_samples_per_chunk=cfg.time_samples_per_chunk,
                 paced=self.paced, rpc_address=rpc_addr)
 
-            # SlabAllocator + AssembledFrameAllocator to source the
-            # AssembledFrameSets, then a SimulatedFrameFactory that pre-randomizes
-            # them on a producer + randomizer-thread pool. All built inside the
-            # ThreadAffinity context so the backing allocation, the allocator's
-            # pre-init thread, and the factory's producer/randomizer threads all
-            # land on the data-NIC CPU. One consumer: this receiver's controller
-            # thread (which pulls via factory.get_frame_set()).
-            slab_allocator = SlabAllocator("af_rhost", capacity)
+            # BumpAllocator (sync; dedicated to the SlabAllocator) + SlabAllocator
+            # + AssembledFrameAllocator to source the AssembledFrameSets, then a
+            # SimulatedFrameFactory that pre-randomizes them on a producer +
+            # randomizer-thread pool. All built inside the ThreadAffinity context
+            # so the backing allocation (in the BumpAllocator ctor), the
+            # allocator's pre-init thread, and the factory's producer/randomizer
+            # threads all land on the data-NIC CPU. One consumer: this receiver's
+            # controller thread (which pulls via factory.get_frame_set()).
+            bump_allocator = BumpAllocator("af_rhost", capacity)
+            slab_allocator = SlabAllocator(bump_allocator, capacity)
             allocator = AssembledFrameAllocator(
                 slab_allocator,
                 num_consumers=1,

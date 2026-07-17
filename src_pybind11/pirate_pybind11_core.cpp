@@ -209,30 +209,29 @@ void register_core_bindings(pybind11::module &m)
     // Note: get_slab() returns shared_ptr<void>, which is not wrapped (per pybind11 guidelines).
     py::class_<SlabAllocator, std::shared_ptr<SlabAllocator>>(m, "SlabAllocator",
         "Thread-safe pool allocator for fixed-size memory slabs.\n\n"
-        "Pre-allocates a large memory region subdivided into fixed-size slabs.\n"
-        "Slabs are returned to the pool when their reference count drops to zero.\n\n"
+        "Carves a large memory region from a BumpAllocator, subdivided into\n"
+        "fixed-size slabs. Slabs are returned to the pool when their reference\n"
+        "count drops to zero.\n\n"
         "Modes:\n"
-        "  - capacity > 0: Pre-allocates base region, slabs share this memory\n"
-        "  - capacity < 0: Dummy mode, each get_slab() allocates fresh memory\n"
-        "  - capacity == 0: rejected (throws)")
-        .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(int, long)>(&SlabAllocator::create)),
-            py::arg("aflags"), py::arg("capacity"),
-            // Allocates (and for af_rhost, cuda-registers) the full capacity; release the GIL.
-            py::call_guard<py::gil_scoped_release>(),
-            "Create allocator with new memory.\n\n"
-            "Args:\n"
-            "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.)\n"
-            "    capacity: Bytes to pre-allocate (> 0), or < 0 for dummy mode\n"
-            "        (capacity == 0 is rejected)")
+        "  - SlabAllocator(bump_allocator, nbytes): slabs share a region carved\n"
+        "    from the BumpAllocator\n"
+        "  - SlabAllocator(aflags): dummy mode, each get_slab() allocates fresh\n"
+        "    memory")
         .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(const std::shared_ptr<BumpAllocator> &, long)>(&SlabAllocator::create)),
             py::arg("bump_allocator"), py::arg("nbytes"),
             "Create allocator using memory from a BumpAllocator.\n\n"
             "Args:\n"
             "    bump_allocator: Source of memory (must not be in dummy mode)\n"
-            "    nbytes: Bytes to allocate from the BumpAllocator\n\n"
+            "    nbytes: Bytes to allocate from the BumpAllocator (must be positive)\n\n"
             "If the BumpAllocator is async, the SlabAllocator is itself async:\n"
             "constructor returns immediately, and the bump_allocator.allocate_bytes()\n"
             "call is deferred to the first get_slab().")
+        .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(int)>(&SlabAllocator::create)),
+            py::arg("aflags"),
+            "Create allocator in dummy mode (no backing pool).\n\n"
+            "Args:\n"
+            "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.), used\n"
+            "        for the fresh per-slab allocation in each get_slab() call")
         .def("wait_until_initialized", &SlabAllocator::wait_until_initialized,
             py::call_guard<py::gil_scoped_release>(),
             "If backed by an async BumpAllocator: block until it's initialized\n"
@@ -242,8 +241,7 @@ void register_core_bindings(pybind11::module &m)
         .def("is_initialized", &SlabAllocator::is_initialized,
             "Non-blocking poll: True iff the underlying BumpAllocator is ready\n"
             "to serve allocations (delegates to bump_allocator.is_initialized()).\n"
-            "Always True if there is no underlying BumpAllocator (dummy mode,\n"
-            "or construction from aflags).")
+            "Always True in dummy mode (no underlying BumpAllocator).")
         .def("num_free_slabs", &SlabAllocator::num_free_slabs,
             py::arg("permissive") = false,
             "Number of slabs currently available. Throws in dummy mode, or\n"
@@ -260,11 +258,11 @@ void register_core_bindings(pybind11::module &m)
             "Established slab size in bytes. Throws if the slab size has not\n"
             "been established yet (by the first get_slab()).")
         .def("is_dummy", &SlabAllocator::is_dummy,
-            "True if in dummy mode (capacity < 0).")
+            "True if in dummy mode (constructed from aflags alone).")
         .def_readonly("aflags", &SlabAllocator::aflags,
             "Memory allocation flags")
         .def_readonly("capacity", &SlabAllocator::capacity,
-            "Total capacity in bytes, or < 0 for dummy mode")
+            "Total capacity in bytes, or -1 in dummy mode")
     ;
 
     // AssembledFrame: data frame containing beamformed data for one (time_chunk, beam_id) pair.

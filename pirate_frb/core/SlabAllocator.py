@@ -13,43 +13,39 @@ class SlabAllocatorInjections:
     # Save original C++ constructor
     _cpp_init = SlabAllocator.__init__
 
-    def __init__(self, aflags_or_bump_allocator, nbytes):
+    def __init__(self, aflags_or_bump_allocator, nbytes=None):
         """
         Create a SlabAllocator.
 
         Parameters
         ----------
-        aflags_or_bump_allocator : int, str, ksgpu flags, or BumpAllocator
-            Either memory allocation flags or a BumpAllocator to get memory from.
-            If aflags:
-            - int: raw flags (e.g., af_gpu | af_zero)
-            - str: 'gpu', 'rhost', 'uhost', etc.
+        aflags_or_bump_allocator : BumpAllocator, int, str, or ksgpu flags
+            Either a BumpAllocator to carve memory from (normal mode), or
+            memory allocation flags (dummy mode: each get_slab() allocates
+            fresh memory). Flags can be:
+            - int: raw flags (e.g., af_rhost | af_zero)
+            - str: 'af_gpu', 'af_rhost', 'af_rhost | af_zero', etc.
             - Result of ksgpu.parse_aflags()
-            If BumpAllocator: memory is allocated from the BumpAllocator.
-        nbytes : int
-            Capacity in bytes.
-            - If aflags and > 0: pre-allocates this many bytes, subdivided into slabs
-            - If aflags and < 0: dummy mode (each get_slab() allocates fresh memory)
-            - If aflags and == 0: rejected (raises)
-            - If BumpAllocator: must be positive
+        nbytes : int, optional
+            Bytes to carve from the BumpAllocator (must be positive).
+            Required in normal mode; must be omitted in dummy mode.
 
         Examples
         --------
-        >>> # Host allocator with 100 MB capacity
-        >>> alloc = SlabAllocator('rhost', 100 * 1024**2)
-        >>>
-        >>> # GPU allocator with 1 GB capacity
-        >>> alloc = SlabAllocator('gpu', 1024**3)
+        >>> # Slab pool carved from a BumpAllocator
+        >>> bump = BumpAllocator('af_rhost', 1024**3)
+        >>> slab = SlabAllocator(bump, 100 * 1024**2)
         >>>
         >>> # Dummy mode (no pre-allocation)
-        >>> alloc = SlabAllocator('rhost', -1)
-        >>>
-        >>> # From a BumpAllocator
-        >>> bump = BumpAllocator('rhost', 1024**3)
-        >>> slab = SlabAllocator(bump, 100 * 1024**2)
+        >>> alloc = SlabAllocator('af_rhost')
         """
         if isinstance(aflags_or_bump_allocator, BumpAllocator):
+            if nbytes is None:
+                raise TypeError("SlabAllocator: 'nbytes' is required when constructing from a BumpAllocator")
             self._cpp_init(aflags_or_bump_allocator, nbytes)
         else:
+            if nbytes is not None:
+                raise TypeError("SlabAllocator: 'nbytes' must be omitted in dummy mode (constructed from"
+                                " aflags alone); to create a slab pool, pass a BumpAllocator instead")
             aflags = ksgpu.parse_aflags(aflags_or_bump_allocator)
-            self._cpp_init(aflags, nbytes)
+            self._cpp_init(aflags)

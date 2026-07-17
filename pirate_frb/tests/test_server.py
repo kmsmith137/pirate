@@ -299,9 +299,9 @@ class ServerTester:
     def _build_server(self):
         p = self.p
 
-        # Dummy-mode SlabAllocator (capacity=-1): FrbServer skips its reaper
-        # thread, frames are allocated lazily on demand.
-        slab_allocator = SlabAllocator("af_rhost", -1)
+        # Dummy-mode SlabAllocator: FrbServer skips its reaper thread,
+        # frames are allocated lazily on demand.
+        slab_allocator = SlabAllocator("af_rhost")
         allocator = AssembledFrameAllocator(
             slab_allocator,
             num_consumers          = p['num_receivers'],
@@ -397,7 +397,7 @@ class ServerTester:
         # window) + a SimulatedFrameFactory producing normalized, non-gaussian
         # frames with no injected pulses. The factory must be constructed
         # inside a ThreadAffinity context (its threads inherit the affinity).
-        client_slab = SlabAllocator("af_rhost", -1)
+        client_slab = SlabAllocator("af_rhost")
         client_alloc = AssembledFrameAllocator(
             client_slab, num_consumers=1,
             time_samples_per_chunk=p['time_samples_per_chunk'])

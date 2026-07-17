@@ -19,7 +19,7 @@ add_to_timestream(out, out_it0) span contract.
 
 import numpy as np
 
-from ..core import AssembledFrameAllocator, SlabAllocator, XEngineMetadata
+from ..core import AssembledFrameAllocator, BumpAllocator, SlabAllocator, XEngineMetadata
 from ..simpulse import SinglePulse
 
 
@@ -67,7 +67,8 @@ def _make_frame(xmd, nbeams, nfreq, ntime):
     """One AssembledFrame from a fresh allocator. Returns (frame, allocator); keep the allocator
     alive (it owns the frame's slab)."""
     per_frame = nfreq * (ntime // 256) * 4 + nfreq * (ntime // 2)
-    slab = SlabAllocator("af_rhost", 2 * nbeams * per_frame)
+    bump = BumpAllocator("af_rhost", 2 * nbeams * per_frame)
+    slab = SlabAllocator(bump, 2 * nbeams * per_frame)
     alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=ntime)
     alloc.initialize_metadata(xmd)
     alloc.initialize_initial_chunk(0)

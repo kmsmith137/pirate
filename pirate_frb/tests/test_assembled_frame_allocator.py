@@ -17,12 +17,13 @@ Run via: python -m pirate_frb test --net
 """
 
 import numpy as np
-from ..core import AssembledFrameAllocator, SlabAllocator, XEngineMetadata
+from ..core import AssembledFrameAllocator, BumpAllocator, SlabAllocator, XEngineMetadata
 
 
 def make_slab_allocator(capacity=4*1024*1024, aflags='af_rhost'):
-    """Helper to create a host-memory SlabAllocator."""
-    return SlabAllocator(aflags, capacity)
+    """Helper to create a host-memory SlabAllocator (backed by a dedicated BumpAllocator)."""
+    bump = BumpAllocator(aflags, capacity)
+    return SlabAllocator(bump, capacity)
 
 
 def _test_metadata(nfreq, beam_ids):

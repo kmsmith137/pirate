@@ -19,9 +19,10 @@ namespace pirate {
 // SlabAllocator: A thread-safe pool allocator for fixed-size memory "slabs".
 // Stoppable class: see notes/stoppable_class.md.
 //
-// The allocator manages a large pre-allocated memory region, which is
-// subdivided into fixed-size slabs. Slabs are returned to the pool when their
-// reference count drops to zero, making them available for future allocations.
+// The allocator carves a large memory region from a BumpAllocator, and
+// subdivides it into fixed-size slabs. Slabs are returned to the pool when
+// their reference count drops to zero, making them available for future
+// allocations.
 //
 // Slab size is established by the first call to get_slab(). All subsequent calls
 // must request the same size; otherwise an exception is thrown.
@@ -36,8 +37,8 @@ namespace pirate {
 //   - Compatible with weak_ptr (control blocks are allocated separately)
 //   - Supports blocking mode: get_slab() can wait for a slab to be returned
 //
-// Dummy mode (capacity < 0):
-//   - No base memory is pre-allocated
+// Dummy mode (constructed via the create(aflags) factory; capacity == -1):
+//   - No base memory is pre-allocated (and no BumpAllocator is involved)
 //   - get_slab() allocates fresh memory using af_alloc() for each request
 //   - num_total_slabs() and num_free_slabs() throw exceptions
 //
@@ -56,13 +57,6 @@ class SlabAllocator : public std::enable_shared_from_this<SlabAllocator>
 public:
     static constexpr int nalign = constants::bytes_per_gpu_cache_line;
     
-    // Factory method: create SlabAllocator that allocates new memory using af_alloc().
-    // The 'aflags' are memory allocation flags from ksgpu/mem_utils.hpp.
-    // If capacity < 0, operates in "dummy" mode (see class comment).
-    // capacity == 0 is rejected (throws): a zero-capacity pool could never
-    // serve a get_slab() call.
-    static std::shared_ptr<SlabAllocator> create(int aflags, long capacity);
-    
     // Factory method: create SlabAllocator that gets memory from an existing BumpAllocator.
     // The aflags are inherited from the BumpAllocator.
     // Throws exception if BumpAllocator is in dummy mode.
@@ -72,6 +66,11 @@ public:
     // is deferred to the first get_slab(). Async-init failures from `b`
     // surface from either get_slab() or wait_until_initialized().
     static std::shared_ptr<SlabAllocator> create(const std::shared_ptr<BumpAllocator> &b, long nbytes);
+
+    // Factory method: create SlabAllocator in "dummy" mode (see class comment).
+    // The 'aflags' are memory allocation flags from ksgpu/mem_utils.hpp, used
+    // for the per-slab af_alloc() calls in get_slab().
+    static std::shared_ptr<SlabAllocator> create(int aflags);
     
     // Non-copyable, non-movable.
     SlabAllocator(const SlabAllocator &) = delete;
@@ -122,7 +121,7 @@ public:
     // user-pattern state, established on the first get_slab() call).
     bool is_initialized() const;
     
-    // Returns true if in dummy mode (capacity < 0).
+    // Returns true if in dummy mode (constructed via create(aflags)).
     bool is_dummy() const { return capacity < 0; }
     
     // Block until there are no free slabs (all slabs are in use).
@@ -156,25 +155,25 @@ public:
     // (per the thread-backed-class pattern).
     void stop(std::exception_ptr e = nullptr) const;
 
-    const int aflags;           // allocation flags from ksgpu
-    const long capacity;        // total bytes in base region, or < 0 for dummy mode
+    const int aflags;           // allocation flags from ksgpu (inherited from the BumpAllocator in non-dummy mode)
+    const long capacity;        // bytes carved from the BumpAllocator, or -1 in dummy mode
 
 protected:
     // Protected constructors - use create() factory methods instead.
-    SlabAllocator(int aflags, long capacity);
     SlabAllocator(const std::shared_ptr<BumpAllocator> &b, long nbytes);
+    explicit SlabAllocator(int aflags);   // dummy mode
 
 private:
-    // The underlying memory region. Set in the constructor for the
-    // (aflags, capacity) factory; set lazily on first get_slab() for the
-    // BumpAllocator-backed factory (so the constructor doesn't block on
-    // an async BumpAllocator's init).
+    // The slab pool's memory region: an aliasing shared_ptr into the
+    // BumpAllocator's base region. Set lazily on first get_slab() (so the
+    // constructor doesn't block on an async BumpAllocator's init); its
+    // null-ness is the "carve not done yet" flag in the lazy-init wait.
+    // Always null in dummy mode.
     std::shared_ptr<void> base;
 
-    // Held only in non-dummy BumpAllocator-backed mode. Keeps the
-    // BumpAllocator alive until first get_slab() does the deferred
-    // allocate_bytes(). Stays alive afterward for the SlabAllocator's
-    // lifetime (cheap; one shared_ptr).
+    // Null in dummy mode. Keeps the BumpAllocator alive until first
+    // get_slab() does the deferred allocate_bytes(). Stays alive afterward
+    // for the SlabAllocator's lifetime (cheap; one shared_ptr).
     std::shared_ptr<BumpAllocator> bump_allocator;
 
     // Stop-pattern state ('mutable' since stop() is const -- see

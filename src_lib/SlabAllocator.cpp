@@ -17,50 +17,31 @@ namespace pirate {
 // SlabAllocator factory methods and constructors
 
 
-std::shared_ptr<SlabAllocator> SlabAllocator::create(int aflags, long capacity)
-{
-    return std::shared_ptr<SlabAllocator>(new SlabAllocator(aflags, capacity));
-}
-
-
 std::shared_ptr<SlabAllocator> SlabAllocator::create(const std::shared_ptr<BumpAllocator> &b, long nbytes)
 {
     return std::shared_ptr<SlabAllocator>(new SlabAllocator(b, nbytes));
 }
 
 
-SlabAllocator::SlabAllocator(int aflags_, long capacity_)
-    : aflags(aflags_), capacity(capacity_)
+std::shared_ptr<SlabAllocator> SlabAllocator::create(int aflags)
+{
+    return std::shared_ptr<SlabAllocator>(new SlabAllocator(aflags));
+}
+
+
+// Dummy-mode constructor: no base region, no BumpAllocator. Each get_slab()
+// call allocates fresh memory with _af_alloc(aflags). (In non-dummy mode the
+// aflags are validated by the BumpAllocator's own constructor.)
+SlabAllocator::SlabAllocator(int aflags_)
+    : aflags(aflags_), capacity(-1)
 {
     ksgpu::check_aflags(aflags, "SlabAllocator constructor");
-    
+
     if (aflags & ksgpu::af_random)
         throw std::runtime_error("SlabAllocator constructor: af_random flag is not supported");
-    
+
     if (aflags & ksgpu::af_guard)
         throw std::runtime_error("SlabAllocator constructor: af_guard flag is not supported");
-
-    // capacity == 0 would construct "successfully" but crash later:
-    // _af_alloc() returns an EMPTY pointer for a zero-byte request, so
-    // 'base' would be null and the first get_slab() would enter the
-    // bump-backed lazy-init path and dereference a null bump_allocator.
-    // A zero-capacity pool could never serve a get_slab() call anyway.
-    if (capacity == 0)
-        throw std::runtime_error("SlabAllocator constructor: capacity=0; "
-            "use capacity > 0 (normal mode) or capacity < 0 (dummy mode)");
-
-    if (!is_dummy()) {
-        // Normal mode: pre-allocate base region.
-        long aligned_capacity = align_up(capacity, nalign);
-        
-        // Allocate base region using dtype with 1 byte per element.
-        this->base = ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint, 8), aligned_capacity, aflags);
-        
-        // Verify that returned pointer is aligned.
-        uintptr_t p = reinterpret_cast<uintptr_t>(base.get());
-        xassert((p % nalign) == 0);
-    }
-    // else: dummy mode, base remains empty
 }
 
 
@@ -103,7 +84,7 @@ void SlabAllocator::stop(std::exception_ptr e) const
             return;
         is_stopped = true;
         error = e;
-        ba_to_notify = bump_allocator;  // may be null (dummy/aflags mode)
+        ba_to_notify = bump_allocator;  // null in dummy mode
     }
     // Notify after releasing the mutex so woken threads aren't immediately
     // blocked re-acquiring it. Stop notifies every cv of the class.
@@ -120,16 +101,16 @@ void SlabAllocator::wait_until_initialized()
 {
     try {
         // Check our OWN stopped state first, so the stopped behavior is
-        // uniform across modes. Without this, an error-stopped allocator
-        // with no underlying BumpAllocator (dummy or aflags mode) would
-        // silently succeed, while bump-backed mode rethrows the root cause
-        // via the BumpAllocator's readiness gate.
+        // uniform across modes. Without this, an error-stopped dummy-mode
+        // allocator (no underlying BumpAllocator) would silently succeed,
+        // while bump-backed mode rethrows the root cause via the
+        // BumpAllocator's readiness gate.
         {
             std::lock_guard<std::mutex> guard(lock);
             _throw_if_stopped("SlabAllocator::wait_until_initialized");
         }
 
-        // No-op in dummy/aflags mode (no underlying BumpAllocator).
+        // No-op in dummy mode (no underlying BumpAllocator).
         if (!bump_allocator)
             return;
         // Delegates to the BumpAllocator's wait. Does NOT trigger the deferred
@@ -247,10 +228,9 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
     // stop() behind it. Other get_slab() callers wait on 'init_cv' until the
     // init completes (or the allocator is stopped).
     //
-    // Invariant: 'base' is always non-null in aflags mode (the constructor
-    // rejects capacity == 0, and _af_alloc() never returns null for a
-    // positive size), so entering this loop implies bump-backed mode and
-    // a non-null 'bump_allocator'.
+    // (Dummy mode returned above, so reaching this loop implies bump-backed
+    // mode and a non-null 'bump_allocator'; 'base' is null until the
+    // deferred carve completes.)
     while (!base) {
         if (init_underway) {
             // Another thread is performing the lazy init; wait for it.
@@ -456,8 +436,7 @@ long SlabAllocator::get_slab_size() const
 bool SlabAllocator::is_initialized() const
 {
     // No underlying BumpAllocator -- dummy mode (each get_slab call
-    // allocates fresh memory) or aflags mode (the constructor
-    // preallocated): always "ready".
+    // allocates fresh memory): always "ready".
     if (!bump_allocator)
         return true;
     // Bump-backed: delegate to the underlying BumpAllocator. (Note: we do

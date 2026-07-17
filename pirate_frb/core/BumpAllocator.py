@@ -22,7 +22,7 @@ class BumpAllocatorInjections:
         aflags : int, str, or ksgpu flags
             Memory allocation flags. Can be:
             - int: raw flags (e.g., af_gpu | af_zero)
-            - str: 'gpu', 'rhost', 'uhost', etc.
+            - str: 'af_gpu', 'af_rhost', 'af_rhost | af_zero', etc.
             - Result of ksgpu.parse_aflags()
         capacity : int
             Capacity in bytes.
@@ -49,7 +49,7 @@ class BumpAllocatorInjections:
         Examples
         --------
         >>> # GPU allocator with 1 GB capacity (sync)
-        >>> alloc = BumpAllocator('gpu', 1024**3, cuda_device=0)
+        >>> alloc = BumpAllocator('af_gpu', 1024**3, cuda_device=0)
         >>>
         >>> # Async host allocator with hugepages
         >>> alloc = BumpAllocator(ksgpu.af_mmap_huge | ksgpu.af_rhost | ksgpu.af_zero,

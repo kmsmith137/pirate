@@ -64,9 +64,9 @@ This API is still in flux, and will probably change in the future.
   (GPU or host), then hands out 128-byte-aligned pointers sequentially. Memory is never
   freed individually — everything is released when the allocator is destroyed.
 
-- **`SlabAllocator`**: A pool allocator. Divides a pre-allocated memory region into
-  fixed-size "slabs" that are recycled via reference counting — when a slab's refcount
-  drops to zero, it is returned to the free list.
+- **`SlabAllocator`**: A pool allocator. Carves a memory region from a `BumpAllocator`
+  and divides it into fixed-size "slabs" that are recycled via reference counting --
+  when a slab's refcount drops to zero, it is returned to the free list.
 
 - **`AssembledFrameAllocator`**: A multi-consumer frame allocator built on `SlabAllocator`.
   Manages `AssembledFrame` objects (host memory, int4 data) that hold beamformed intensity

@@ -23,6 +23,7 @@ import numpy as np
 from ..core import (
     AssembledFrame,
     AssembledFrameAllocator,
+    BumpAllocator,
     SlabAllocator,
     XEngineMetadata,
 )
@@ -74,7 +75,8 @@ def test_assembled_frame_asdf():
     # Per-frame footprint = scales_offsets ((nfreq, mpc, 2) float16) + int4 data.
     per_frame_nbytes = nfreq * mpc * 4 + nfreq * (ntime // 2)
     slab_capacity = nbeams * per_frame_nbytes * 2
-    slab = SlabAllocator("af_rhost", slab_capacity)
+    bump = BumpAllocator("af_rhost", slab_capacity)
+    slab = SlabAllocator(bump, slab_capacity)
     alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=ntime)
     alloc.initialize_metadata(md)
     alloc.initialize_initial_chunk(0)

@@ -226,9 +226,9 @@ class NetworkTester:
     def _build_server(self):
         p = self.p
 
-        # Dummy-mode SlabAllocator (capacity=-1): FrbServer skips its
-        # reaper thread, frames are allocated lazily on demand.
-        slab_allocator = SlabAllocator("af_rhost", -1)
+        # Dummy-mode SlabAllocator: FrbServer skips its reaper thread,
+        # frames are allocated lazily on demand.
+        slab_allocator = SlabAllocator("af_rhost")
 
         self.allocator = AssembledFrameAllocator(
             slab_allocator,
@@ -340,8 +340,8 @@ class NetworkTester:
         self.framesets = dict()
         self.fspos     = ipos0 // self.mpc
 
-        # Client-side allocator (distinct from server-side).
-        client_slab_allocator = SlabAllocator("af_rhost", -1)
+        # Client-side allocator (distinct from server-side; dummy mode).
+        client_slab_allocator = SlabAllocator("af_rhost")
         self.client_allocator = AssembledFrameAllocator(
             client_slab_allocator,
             num_consumers = 1,
