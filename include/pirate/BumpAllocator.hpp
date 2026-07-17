@@ -119,10 +119,21 @@ struct BumpAllocator
     std::shared_ptr<void> get_base() const;
 
     // Allocates 'nbytes' from the base region, returns pointer.
-    // Throws in dummy mode, or if allocation would exceed capacity.
+    // Throws in dummy mode, or (with throw_on_failure=true, the default) if
+    // the allocation would exceed capacity.
+    //
+    // With throw_on_failure=false, a capacity-exceeded allocation returns
+    // nullptr instead -- a NON-exceptional outcome that does not stop the
+    // allocator (unlike the throwing path, per the strict stoppable-class
+    // policy). All other failures (dummy mode, negative nbytes,
+    // stopped/failed allocator) still throw regardless of the flag.
+    // Note: nbytes == 0 also returns nullptr (no memory handed out), so a
+    // throw_on_failure=false caller passing possibly-zero sizes cannot
+    // distinguish the two cases from the return value alone.
+    //
     // In async mode, blocks until init complete (or rethrows).
     // Warning: caller is responsible for keeping a reference to the base shared_ptr!
-    void *allocate_bytes(long nbytes);
+    void *allocate_bytes(long nbytes, bool throw_on_failure = true);
 
     // In async mode: blocks until init completes (returns true), async init
     // fails (rethrows the captured exception), or timeout_ms elapses
@@ -205,8 +216,10 @@ struct BumpAllocator
     ksgpu::Array<void> _allocate_array_internal(ksgpu::Dtype dtype, int ndim, const long *shape, const long *strides);
 
     // Entry-point body; allocate_bytes() is a thin wrapper that stops the
-    // allocator if this throws (see notes/stoppable_class.md).
-    void *_allocate_bytes(long nbytes);
+    // allocator if this throws (see notes/stoppable_class.md). The
+    // throw_on_failure=false capacity-exceeded nullptr return is not a
+    // throw, so it does not trigger the wrapper's stop.
+    void *_allocate_bytes(long nbytes, bool throw_on_failure);
 
     // State machine. _mutex is the single lock protecting ALL mutable shared
     // state: _is_stopped, _error, _is_initialized, _nbytes_allocated,

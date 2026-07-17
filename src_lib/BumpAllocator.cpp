@@ -685,10 +685,10 @@ std::shared_ptr<void> BumpAllocator::get_base() const
 }
 
 
-void *BumpAllocator::allocate_bytes(long nbytes)
+void *BumpAllocator::allocate_bytes(long nbytes, bool throw_on_failure)
 {
     try {
-        return _allocate_bytes(nbytes);
+        return _allocate_bytes(nbytes, throw_on_failure);
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -696,7 +696,7 @@ void *BumpAllocator::allocate_bytes(long nbytes)
 }
 
 
-void *BumpAllocator::_allocate_bytes(long nbytes)
+void *BumpAllocator::_allocate_bytes(long nbytes, bool throw_on_failure)
 {
     if (capacity < 0)
         throw std::runtime_error("BumpAllocator::allocate_bytes() called in dummy mode (capacity < 0)");
@@ -721,6 +721,11 @@ void *BumpAllocator::_allocate_bytes(long nbytes)
     long aligned_nbytes = align_up(nbytes, nalign);
 
     if (_nbytes_allocated + aligned_nbytes > capacity) {
+        // Non-exceptional failure path: no throw, so the allocate_bytes()
+        // wrapper does not stop the allocator (see the hpp comment).
+        if (!throw_on_failure)
+            return nullptr;
+
         std::stringstream ss;
         ss << "BumpAllocator::allocate_bytes(): allocation of " << nbytes
            << " bytes would exceed capacity " << capacity
