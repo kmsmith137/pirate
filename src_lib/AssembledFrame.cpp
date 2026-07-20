@@ -1121,9 +1121,9 @@ AssembledFrameAllocator::AssembledFrameAllocator(const Params &params_)
     // Production mode presupposes a real slab pool (the startup burst is a
     // fail-fast pool-size check); silently degrading a strict mode in dummy
     // mode would defeat it, so reject the combination loudly.
-    if (params.is_production && is_dummy_mode)
-        throw runtime_error("AssembledFrameAllocator: is_production=true requires a "
-            "non-dummy slab_allocator (pass is_production=false for dummy-mode use)");
+    if (params.throw_exception_if_empty && is_dummy_mode)
+        throw runtime_error("AssembledFrameAllocator: throw_exception_if_empty=true requires a "
+            "non-dummy slab_allocator (pass throw_exception_if_empty=false for dummy-mode use)");
 
     // Spawn the worker thread (sole producer of frame sets, in both dummy
     // and non-dummy mode). It parks on its init gate until metadata and
@@ -1201,9 +1201,9 @@ void AssembledFrameAllocator::_throw_if_stopped(const char *method_name)
 // The worker thread is the SOLE producer of AssembledFrameSets, in both
 // dummy and non-dummy mode: it pre-initializes whole sets (memsets nbeams
 // slabs to 0x88) and pushes them to frame_set_queue, so get_frame_set()
-// callers never pay allocation/memset latency. In production mode it first
-// pre-allocates constants::assembled_frame_allocator_initial_size sets (the
-// startup burst -- a fail-fast pool-size check), then opens the
+// callers never pay allocation/memset latency. If Params::throw_exception_if_empty
+// is set, it first pre-allocates constants::assembled_frame_allocator_initial_size
+// sets (the startup burst -- a fail-fast pool-size check), then opens the
 // queue_initialized latch. The main loop is throttled by the queue bound
 // (constants::assembled_frame_allocator_queue_size) -- the only throttle in
 // dummy mode, where get_slab() never blocks -- and by blocking get_slab()
@@ -1343,13 +1343,13 @@ void AssembledFrameAllocator::_worker_main()
         queue_cv.notify_all();
     };
 
-    // Startup phase (production mode): pre-allocate the initial burst with
+    // Startup phase (throw_exception_if_empty=true): pre-allocate the initial burst with
     // NONBLOCKING slab gets, so an undersized pool fails HERE, at startup,
     // with a config-guidance error -- rather than as receivers blocking
-    // forever. The burst has exclusive pool access: production-mode
+    // forever. The burst has exclusive pool access: fail-fast-mode
     // get_frame_set() callers are parked on the queue_initialized latch,
     // and this worker is the process's only get_slab() caller.
-    if (params.is_production) {
+    if (params.throw_exception_if_empty) {
         for (int i = 0; i < constants::assembled_frame_allocator_initial_size; i++) {
             // Build with the lock dropped (same discipline as the main
             // loop below); a throw unwinds to worker_main()'s catch
@@ -1358,16 +1358,22 @@ void AssembledFrameAllocator::_worker_main()
             auto set = _build_frame_set(nfreq_snap, beam_ids_snap, md, /*blocking=*/false);
 
             if (!set) {
+                SlabLayout layout = get_layout(nfreq_snap, params.time_samples_per_chunk);
+                long burst_nbytes = long(constants::assembled_frame_allocator_initial_size)
+                                    * nbeams * layout.slab_nbytes;
                 stringstream ss;
-                ss << "AssembledFrameAllocator: the slab pool was exhausted during the "
-                   << "production-mode startup burst -- it supplied " << i << " of "
+                ss << "AssembledFrameAllocator: the memory pool was exhausted during the "
+                   << "startup burst -- it supplied " << i << " of "
                    << constants::assembled_frame_allocator_initial_size
-                   << " initial frame sets (" << nbeams << " beams each).\n"
-                   << "The pool size is set by the config parameter 'host_memory_per_server', "
-                   << "divided by the per-frame memory footprint (which grows with the number of "
-                   << "frequency channels and time_samples_per_chunk). Increase "
-                   << "'host_memory_per_server' to accommodate this run's beam count ("
-                   << nbeams << ") and frequency-channel count, then re-run.";
+                   << " initial frame sets. The full burst needs " << burst_nbytes
+                   << " bytes (" << constants::assembled_frame_allocator_initial_size
+                   << " sets x " << nbeams << " beams x " << layout.slab_nbytes
+                   << " bytes/frame; the per-frame footprint grows with the "
+                   << "frequency-channel count and time_samples_per_chunk), on top of "
+                   << "whatever else is carved from the same pool.";
+                string ctx = params.slab_allocator->get_error_context();
+                if (!ctx.empty())
+                    ss << "\n" << ctx;
                 throw runtime_error(ss.str());
             }
 
@@ -1378,9 +1384,10 @@ void AssembledFrameAllocator::_worker_main()
         }
     }
 
-    // Open the latch: the startup phase is complete (in non-production
-    // mode there is nothing to do). One-shot latch -> notify_all; under
-    // lock deliberately (the lock stays held into the main loop).
+    // Open the latch: the startup phase is complete (without
+    // throw_exception_if_empty there is nothing to do). One-shot latch ->
+    // notify_all; under lock deliberately (the lock stays held into the
+    // main loop).
     queue_initialized = true;
     queue_init_cv.notify_all();
 
@@ -1683,7 +1690,7 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_
     // never open. (One-shot latch; opened in _worker_main, or never --
     // if the burst fails, the allocator is stopped and we wake via the
     // stopped arm.)
-    if (params.is_production) {
+    if (params.throw_exception_if_empty) {
         while (!is_stopped && !queue_initialized)
             queue_init_cv.wait(guard);
         _throw_if_stopped("AssembledFrameAllocator::get_frame_set");
@@ -1717,22 +1724,25 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_
         xassert(queue_pos <= queue_size);
 
         if (queue_pos == queue_size) {
-            if (params.is_production) {
+            if (params.throw_exception_if_empty) {
                 // Production fail-fast: the set is not immediately ready.
-                // We deliberately do not try to diagnose the cause here
-                // (the snapshot below is factual only); possible causes
-                // include the worker or reaper threads running slow, the
-                // x-engine skipping ahead by too many chunks, memory
-                // pressure from low ssd throughput, or an undersized pool
-                // (config 'host_memory_per_server').
+                // We deliberately do not try to diagnose the cause (the
+                // snapshot is factual only; the two-branch reading below is
+                // a hint for the operator, not a diagnosis).
                 stringstream ss;
                 ss << "AssembledFrameAllocator::get_frame_set(time_chunk_index="
                    << time_chunk_index << "): frame set not immediately ready "
-                   << "(production mode). Queue snapshot: chunks ["
+                   << "(throw_exception_if_empty=true; queue holds chunks ["
                    << queue_start_chunk_index << "," << (queue_start_chunk_index + queue_size)
-                   << "). Possible causes: worker/reaper threads running slow; x-engine "
-                   << "skipped ahead by too many chunks; memory pressure due to low ssd "
-                   << "throughput; pool undersized (config 'host_memory_per_server').";
+                   << ")).\n"
+                   << "If the requested index is far past the queue, the input stream skipped "
+                   << "ahead (e.g. a corrupt sender seq, or an x-engine restart). Otherwise the "
+                   << "pipeline is memory-starved -- frame memory is recycling too slowly: slow "
+                   << "ssd writes holding frames, a slow/stalled GPU pipeline (frames wait "
+                   << "unprocessed), or a pool too small for steady state.";
+                string ctx = params.slab_allocator->get_error_context();
+                if (!ctx.empty())
+                    ss << "\n" << ctx;
                 throw runtime_error(ss.str());
             }
 

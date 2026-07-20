@@ -22,8 +22,7 @@ server_cpus: [ 0, 1 ]   # length num_servers
 
 # Host memory is a single per-server pool, shared by the dedispersion buffers
 # (which carve exactly what the plan needs) and the frame ring buffer (which
-# expands to absorb all remaining memory). Units are IEC (MiB/GiB/TiB,
-# powers of 1024).
+# expands to absorb all remaining memory). Note that each node is two "servers".
 
 host_memory_per_server: '768 GiB'
 gpu_memory_per_server: '40 GiB'

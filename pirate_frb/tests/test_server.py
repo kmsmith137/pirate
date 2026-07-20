@@ -306,7 +306,7 @@ class ServerTester:
             slab_allocator,
             num_consumers          = p['num_receivers'],
             time_samples_per_chunk = p['time_samples_per_chunk'],
-            is_production          = False,   # dummy-mode slab (required), blocking get_frame_set
+            throw_exception_if_empty          = False,   # dummy-mode slab (required), blocking get_frame_set
         )
 
         self.file_writer = FileWriter(
@@ -403,7 +403,7 @@ class ServerTester:
         client_alloc = AssembledFrameAllocator(
             client_slab, num_consumers=1,
             time_samples_per_chunk=p['time_samples_per_chunk'],
-            is_production=False)   # dummy-mode slab (required)
+            throw_exception_if_empty=False)   # dummy-mode slab (required)
         client_alloc.initialize_metadata(self.xmd)
         client_alloc.initialize_initial_chunk(self.c0)
 

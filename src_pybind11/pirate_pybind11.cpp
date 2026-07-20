@@ -104,7 +104,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
             "(its worker's throttle, and the memory headroom held ahead of consumption).")
         .def_readonly_static("assembled_frame_allocator_initial_size", &constants::assembled_frame_allocator_initial_size,
             "Number of frame sets the AssembledFrameAllocator's worker pre-allocates at "
-            "startup in production mode (is_production=True); doubles as a fail-fast "
+            "startup when throw_exception_if_empty=True; doubles as a fail-fast "
             "pool-size check.")
         .def_readonly_static("grouper_ping_timeout_ms", &constants::grouper_ping_timeout_ms,
             "Timeout (ms) for FrbGrouperClient.ping(): the early channel-level connectivity "

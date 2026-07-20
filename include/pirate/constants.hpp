@@ -53,23 +53,9 @@ struct constants
     // Frame-pool / backpressure sizing, in time-chunks.
     //
     //  - server_max_unprocessed_chunks: fail if server can't keep up with x-engine
-    //  - assembled_frame_allocator_queue_size: steady-state bound on the
-    //    AssembledFrameAllocator's pre-init queue (its worker's throttle,
-    //    and -- since the reaper activates when the slab pool is empty --
-    //    the amount of memory "headroom" held ahead of consumption)
-    //  - assembled_frame_allocator_initial_size: number of frame sets the
-    //    AssembledFrameAllocator's worker pre-allocates at startup, in
-    //    production mode (is_production=true). This doubles as a fail-fast
-    //    pool-size check: if the slab pool cannot supply this many sets,
-    //    the worker throws at startup with a config-guidance error.
-    //
-    // Steady-state pool sizing (not statically checkable, since the pool
-    // size comes from the run-time config 'host_memory_per_server'): a
-    // pool needs roughly server_max_unprocessed_chunks +
-    // assembled_frame_allocator_queue_size + the receivers' 2-chunk
-    // assembly window + slack chunks. A pool that passes the startup check
-    // but is smaller than that fails at RUNTIME, via the production-mode
-    // fail-fast throw in AssembledFrameAllocator::get_frame_set().
+    //  - assembled_frame_allocator_queue_size: fail if frame queue becomes empty
+    //  - assembled_frame_allocator_initial_size: allocate initial "burst" and fail-fast.
+    
     static constexpr int server_max_unprocessed_chunks = 5;
     static constexpr int assembled_frame_allocator_queue_size = 5;
     static constexpr int assembled_frame_allocator_initial_size = 7;
@@ -129,7 +115,7 @@ struct constants
     // too small a lookahead stalls or deadlocks the paced pipeline.
     static_assert(server_max_unprocessed_chunks - 1 >= 3);
 
-    // The production-mode startup burst should at least fill the pre-init
+    // The startup burst (throw_exception_if_empty) should at least fill the pre-init
     // queue, so the worker parks after it (drain-then-replenish semantics)
     // and the startup runway is never less than the steady-state headroom.
     static_assert(assembled_frame_allocator_initial_size >=

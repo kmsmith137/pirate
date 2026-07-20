@@ -661,10 +661,13 @@ void FrbServer::_receiver_thread_main(int receiver_index)
                        << ((rb_assembled - rb_processed) / double(nbeams)) << " time chunks, "
                        << "limit = pirate::constants::server_max_unprocessed_chunks = "
                        << constants::server_max_unprocessed_chunks << " chunks).\n"
-                       << "Possible causes: (1) the server can't keep up with the X-engines "
-                       << "(sustained overload, or a long GPU/host stall); (2) the input "
-                       << "stream skipped ahead by many chunks (e.g. a corrupt sender seq), "
-                       << "flooding the pipeline with empty chunks.";
+                       << "This is a real-time keep-up failure, not a memory-sizing problem -- "
+                       << "no yaml change fixes it. Possible causes: (1) the server can't keep "
+                       << "up with the X-engines (sustained overload, or a long GPU/host "
+                       << "stall); (2) the input stream skipped ahead by many chunks (e.g. a "
+                       << "corrupt sender seq), flooding the pipeline with quickly-assembled "
+                       << "empty chunks. (Test harnesses with unpaced senders should set "
+                       << "FrbServer::Params::disable_max_unprocessed_chunks instead.)";
                     throw runtime_error(ss.str());
                 }
             }
@@ -857,7 +860,7 @@ void FrbServer::_processing_thread_main()
     config_postfilled.validate();
 
     // (Frame-pool sizing is checked by the AssembledFrameAllocator itself:
-    // in production mode its worker pre-allocates
+    // when throw_exception_if_empty is set (as in run_server), its worker pre-allocates
     // constants::assembled_frame_allocator_initial_size sets at startup and
     // throws a config-guidance error if the pool cannot supply them.)
 

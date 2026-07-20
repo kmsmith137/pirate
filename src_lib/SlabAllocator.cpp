@@ -180,7 +180,7 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
     // dummy slab is an independent allocation with no mechanical need for
     // uniformity: dummy mode is used by tests, and mirroring the non-dummy
     // validation means a size-inconsistency bug fails there rather than
-    // only in production mode.
+    // only in the real (bump-backed) mode.
     if (slab_size < 0)
         slab_size = aligned_nbytes;
     
@@ -321,6 +321,16 @@ void SlabAllocator::return_slab(void *slab_ptr)
     // (free list non-empty), and one returned slab satisfies exactly one
     // waiter. See the cv comments in SlabAllocator.hpp.
     free_cv.notify_one();
+}
+
+
+std::string SlabAllocator::get_error_context() const
+{
+    // Stopped-tolerant informational accessor (like is_initialized below):
+    // it is read on error paths, which are stopped by definition.
+    if (!bump_allocator)
+        return std::string();
+    return bump_allocator->get_error_context();
 }
 
 

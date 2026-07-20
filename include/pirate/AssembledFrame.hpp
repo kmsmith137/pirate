@@ -317,10 +317,10 @@ struct AssembledFrameSet
 // worker pre-initializes at most constants::assembled_frame_allocator_queue_size
 // sets ahead of full consumption; in dummy mode (params.slab_allocator->is_dummy_mode)
 // this queue bound is the only limit on memory use, since dummy-mode
-// get_slab() never blocks. In production mode (Params::is_production) the
+// get_slab() never blocks. If Params::throw_exception_if_empty is set, the
 // worker additionally pre-allocates
 // constants::assembled_frame_allocator_initial_size sets at startup, before
-// serving any consumer -- see Params::is_production. The worker thread
+// serving any consumer -- see Params::throw_exception_if_empty. The worker thread
 // inherits its vcpu affinity from the caller of the constructor. Python
 // callers should call the AssembledFrameAllocator constructor within a
 // ThreadAffinity context manager.
@@ -345,21 +345,20 @@ struct AssembledFrameAllocator
         // 256, enforced when the first frame set is built -- see get_layout()).
         long time_samples_per_chunk = 0;
 
-        // If is_production=true, then we throw exceptions in two situations:
+        // If throw_exception_if_empty=true, then we throw exceptions in two situations:
+        //
         //    1. If we can't allocate (constants::assembled_frame_allocator_initial_size)
         //       frame sets during initialization (the worker pre-allocates them
         //       up front, doubling as a fail-fast pool-size check).
+        //
         //    2. If the frame_set is not immediately ready in the queue when
         //       get_frame_set() is called. This can happen for multiple reasons
         //       (reaper/worker threads running slow, x-engine skips ahead by too
         //       many chunks, memory pressure due to low ssd throughput).
         //       Currently we don't try to diagnose the reason in the
         //       exception-text, but we may add diagnostic logic in the future.
-        //
-        // is_production=true requires a non-dummy slab_allocator (the
-        // constructor throws otherwise): the startup burst is a check on a
-        // real pool, and silently degrading a strict mode would defeat it.
-        bool is_production = true;
+        
+        bool throw_exception_if_empty = true;
     };
 
     explicit AssembledFrameAllocator(const Params &params);
@@ -447,13 +446,13 @@ struct AssembledFrameAllocator
     // shared_ptr<AssembledFrame> for each beam inside the set.
     //
     // If the requested set is not in the queue yet:
-    //   - is_production=false: block until the worker thread has created it.
-    //   - is_production=true: wait for the worker's startup burst to complete
+    //   - throw_exception_if_empty=false: block until the worker thread has created it.
+    //   - throw_exception_if_empty=true: wait for the worker's startup burst to complete
     //     (the queue_initialized latch), then THROW if the set is not
-    //     immediately available -- see Params::is_production. The exception
-    //     text includes a snapshot of the queue/pool state and hints that an
-    //     undersized pool (config 'host_memory_per_server') is one
-    //     possible cause.
+    //     immediately available -- see Params::throw_exception_if_empty. The exception
+    //     text includes a queue snapshot, the likely causes, and the memory
+    //     pool's error context (see BumpAllocator::set_error_context --
+    //     run_server injects the yaml key name and sizing guidance there).
     //
     // RECEIPT CONTRACT. The allocator holds a reference to each set until
     // the set has been requested num_consumers times, then drops it
@@ -464,7 +463,7 @@ struct AssembledFrameAllocator
     // consumers, each requesting consecutive indices starting at
     // initial_time_chunk. A request may run at most one chunk past the
     // newest created set (it then blocks until the worker catches up --
-    // or throws, in production mode); requests must not skip a chunk.
+    // or throws, if throw_exception_if_empty); requests must not skip a chunk.
     // Receipts are anonymous (the allocator
     // cannot attribute them to callers), so misuse is only partially
     // detectable:
@@ -534,8 +533,8 @@ private:
     //   Signaled on: pop_front in _get_frame_set() (notify_one -- sound
     //   because the worker is structurally the only waiter), and stop().
     //
-    // queue_init_cv -- waiters: production-mode _get_frame_set() callers
-    //   (predicate: queue_initialized, or stopped). Signaled on: the
+    // queue_init_cv -- waiters: _get_frame_set() callers with
+    //   throw_exception_if_empty set (predicate: queue_initialized, or stopped). Signaled on: the
     //   queue_initialized latch in _worker_main() (notify_all -- one-shot
     //   latch), and stop().
     mutable std::condition_variable metadata_cv;
@@ -590,7 +589,7 @@ private:
     // phase it never lets the queue grow beyond
     // constants::assembled_frame_allocator_queue_size sets (this bound is
     // the worker's only throttle in dummy mode, where get_slab() never
-    // blocks). In production mode the startup burst pushes
+    // blocks). With throw_exception_if_empty set, the startup burst pushes
     // constants::assembled_frame_allocator_initial_size sets (> the bound;
     // the queue then drains below the bound before the worker replenishes).
     // Sets are popped from the front when all consumers have received them.
@@ -603,8 +602,8 @@ private:
     long queue_start_chunk_index = 0;          // time_chunk_index of first set in queue
 
     // Set-once latch: true once the worker has completed its startup phase
-    // (in production mode, the initial-size burst; in non-production mode,
-    // immediately after the init gate). Production-mode get_frame_set()
+    // (with throw_exception_if_empty set, the initial-size burst; otherwise
+    // immediately after the init gate). Fail-fast-mode get_frame_set()
     // callers wait on it (via queue_init_cv) before applying their
     // serve-or-throw semantics. Protected by 'lock'. Stays false forever if
     // the burst fails -- correct, since the allocator is then stopped and

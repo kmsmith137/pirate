@@ -671,6 +671,20 @@ long BumpAllocator::get_nbytes_allocated() const
 // stoppable-class policy (notes/stoppable_class.md), ANY throw (including
 // dummy-mode and argument errors) stops the allocator.
 
+void BumpAllocator::set_error_context(const std::string &s)
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    _error_context = s;
+}
+
+
+std::string BumpAllocator::get_error_context() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _error_context;
+}
+
+
 std::shared_ptr<void> BumpAllocator::get_base() const
 {
     try {
@@ -730,6 +744,10 @@ void *BumpAllocator::_allocate_bytes(long nbytes, bool throw_on_failure)
         ss << "BumpAllocator::allocate_bytes(): allocation of " << nbytes
            << " bytes would exceed capacity " << capacity
            << " (currently allocated: " << _nbytes_allocated << ")";
+        // Direct member read: '_mutex' is already held here (the public
+        // get_error_context() would deadlock).
+        if (!_error_context.empty())
+            ss << "\n" << _error_context;
         throw std::runtime_error(ss.str());
     }
 

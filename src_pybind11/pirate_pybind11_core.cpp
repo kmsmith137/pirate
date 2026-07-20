@@ -186,6 +186,14 @@ void register_core_bindings(pybind11::module &m)
         .def("is_initialized", &BumpAllocator::is_initialized,
             "Non-blocking poll: True iff init has completed and the allocator "
             "has not been stopped.")
+        .def("set_error_context", &BumpAllocator::set_error_context,
+            py::arg("text"),
+            "Set free-form text appended to capacity-exceeded exception\n"
+            "messages (and to memory-related errors of downstream allocators\n"
+            "drawing from this pool). Intended use: the caller that SIZES the\n"
+            "pool names the config knob that controls it -- e.g. run_server\n"
+            "names the yaml key and file. Typically set once, right after\n"
+            "construction.")
         .def("_allocate_array_raw",
             [](std::shared_ptr<BumpAllocator> self, ksgpu::Dtype dtype, const std::vector<long> &shape) {
                 // Entry-point wrapper (see notes/stoppable_class.md): ANY throw
@@ -409,26 +417,26 @@ void register_core_bindings(pybind11::module &m)
         "num_consumers requests (see get_frame_set for the receipt contract).")
         .def(py::init([](const std::shared_ptr<SlabAllocator> &slab_allocator,
                          int num_consumers, long time_samples_per_chunk,
-                         bool is_production) {
+                         bool throw_exception_if_empty) {
                 // Assemble the C++-side Params struct from the Python kwargs.
                 AssembledFrameAllocator::Params params;
                 params.slab_allocator = slab_allocator;
                 params.num_consumers = num_consumers;
                 params.time_samples_per_chunk = time_samples_per_chunk;
-                params.is_production = is_production;
+                params.throw_exception_if_empty = throw_exception_if_empty;
                 return std::make_shared<AssembledFrameAllocator>(params);
             }),
             py::arg("slab_allocator"),
             py::arg("num_consumers"),
             py::arg("time_samples_per_chunk"),
-            // Matches the C++-side Params default. is_production=True: the
+            // Matches the C++-side Params default. throw_exception_if_empty=True: the
             // worker pre-allocates constants::assembled_frame_allocator_initial_size
             // sets at startup (fail-fast pool-size check; requires a
             // non-dummy slab_allocator), and get_frame_set() THROWS if the
-            // requested set is not immediately ready. is_production=False:
+            // requested set is not immediately ready. throw_exception_if_empty=False:
             // get_frame_set() blocks for the worker instead (unit-test /
             // fake-x-engine semantics).
-            py::arg("is_production") = true)
+            py::arg("throw_exception_if_empty") = true)
         // nfreq / beam_ids are written by initialize_metadata() under the
         // allocator's lock, so (unlike the ctor-constant params fields
         // below) a raw def_readonly would read them unsynchronized -- a
@@ -481,8 +489,8 @@ void register_core_bindings(pybind11::module &m)
             py::call_guard<py::gil_scoped_release>(),
             "Get the AssembledFrameSet (one time chunk, all beams) for the given\n"
             "time_chunk_index. If the set is not in the queue yet: with\n"
-            "is_production=False, blocks until the worker thread has created it;\n"
-            "with is_production=True, raises instead (after waiting for the\n"
+            "throw_exception_if_empty=False, blocks until the worker thread has created it;\n"
+            "with throw_exception_if_empty=True, raises instead (after waiting for the\n"
             "worker's startup burst to complete).\n\n"
             "Receipt contract: every chunk index >= initial_time_chunk must be\n"
             "requested exactly num_consumers times in total (once per logical\n"

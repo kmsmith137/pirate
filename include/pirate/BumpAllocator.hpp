@@ -135,6 +135,16 @@ struct BumpAllocator
     // Warning: caller is responsible for keeping a reference to the base shared_ptr!
     void *allocate_bytes(long nbytes, bool throw_on_failure = true);
 
+    // Optional free-form text appended to capacity-exceeded exception
+    // messages (and available to downstream allocators for their own
+    // memory-related errors, via get_error_context()). Intended use: the
+    // top-level caller that SIZES the pool knows which config knob controls
+    // it and who shares it (e.g. pirate_frb.run_server names the yaml key
+    // and file); this class deliberately does not. Protected by '_mutex';
+    // typically set once, right after construction.
+    void set_error_context(const std::string &s);
+    std::string get_error_context() const;
+
     // In async mode: blocks until init completes (returns true), async init
     // fails (rethrows the captured exception), or timeout_ms elapses
     // (returns false). timeout_ms < 0 means wait indefinitely; timeout_ms
@@ -223,10 +233,10 @@ struct BumpAllocator
 
     // State machine. _mutex is the single lock protecting ALL mutable shared
     // state: _is_stopped, _error, _is_initialized, _nbytes_allocated,
-    // _next_zero_chunk, _super_done, _workers_remaining. (Everything else is
-    // either const or immutable once the worker threads exist -- workers read
-    // those members without the lock -- or the lone atomic
-    // DeleterState::n_registered, see above.)
+    // _next_zero_chunk, _super_done, _workers_remaining, _error_context.
+    // (Everything else is either const or immutable once the worker threads
+    // exist -- workers read those members without the lock -- or the lone
+    // atomic DeleterState::n_registered, see above.)
     // Sync mode leaves the mutex/cvs mostly unused (_is_initialized is set
     // true at end of sync ctor, so the blocking helper is a single
     // uncontended mutex acquire).
@@ -252,6 +262,9 @@ struct BumpAllocator
     // Number of bytes allocated so far (aligned to cache line size).
     // Always valid, even in dummy mode. Read via get_nbytes_allocated().
     long _nbytes_allocated = 0;
+
+    // See set_error_context(). Appended to capacity-exceeded errors.
+    std::string _error_context;
 
     // Async worker threads. Empty in sync mode.
     std::vector<std::thread> _workers;

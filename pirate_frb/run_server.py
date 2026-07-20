@@ -504,6 +504,16 @@ class RunServerHelper:
                 is_async=True,
                 nthreads=compute_async_bump_nthreads(vcpu_list, host_nbytes),
                 cuda_device=cuda_device_id)
+            # Config-guidance text appended to memory-exhaustion errors from
+            # this pool (BumpAllocator capacity errors, and the frame
+            # allocator's burst / not-ready errors). The C++ layer doesn't
+            # know yaml key names; we inject them here.
+            host_bump.set_error_context(
+                f"This host memory pool is sized by the config key 'host_memory_per_server' "
+                f"(= {self.config['host_memory_per_server']!r} in {self.server_config_filename}), "
+                f"and is SHARED by the dedispersion host buffers and the frame ring buffer. "
+                f"To fix: increase 'host_memory_per_server'. (The dedispersion share is "
+                f"printed at server startup: 'GpuDedisperser::allocate() done ... hmem=...'.)")
 
             # SlabAllocator: async-aware. Returns immediately; carves slabs
             # from host_bump on demand, one per get_slab() call (the first
@@ -528,6 +538,14 @@ class RunServerHelper:
                 is_async=True,
                 nthreads=compute_async_bump_nthreads(vcpu_list, gpu_nbytes),
                 cuda_device=cuda_device_id)
+            gpu_alloc.set_error_context(
+                f"This GPU memory pool is sized by the config key 'gpu_memory_per_server' "
+                f"(= {self.config['gpu_memory_per_server']!r} in {self.server_config_filename}). "
+                f"To fix: increase 'gpu_memory_per_server', or decrease 'max_gpu_clag' in the "
+                f"dedispersion config (which keeps fewer dedispersion ring buffers on the GPU, "
+                f"trading GPU memory for host memory + PCIe bandwidth). (The dedispersion "
+                f"GPU footprint is printed at server startup: "
+                f"'GpuDedisperser::allocate() done ... gmem=...'.)")
 
             # FileWriter: writes frames to SSD and copies to NFS.
             # Spawns ssd_threads + nfs_threads worker threads.

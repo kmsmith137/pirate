@@ -8,6 +8,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <string>
 
 namespace pirate {
 #if 0
@@ -117,6 +118,13 @@ public:
     // In dummy mode, always allocates fresh memory using af_alloc() (never
     // blocks; 'blocking' is ignored).
     std::shared_ptr<void> get_slab(long nbytes, bool blocking = true);
+
+    // Returns the underlying BumpAllocator's error context (see
+    // BumpAllocator::set_error_context), or "" in dummy mode. Lets
+    // downstream consumers (e.g. AssembledFrameAllocator) append the
+    // pool-sizing guidance set by the top-level caller to their own
+    // memory-related error messages.
+    std::string get_error_context() const;
 
     // Returns true if the SlabAllocator is ready to serve get_slab() calls
     // without blocking on async init. Semantics:

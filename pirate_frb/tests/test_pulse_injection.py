@@ -69,7 +69,7 @@ def _make_frame(xmd, nbeams, nfreq, ntime):
     per_frame = nfreq * (ntime // 256) * 4 + nfreq * (ntime // 2)
     bump = BumpAllocator("af_rhost", 2 * nbeams * per_frame)
     slab = SlabAllocator(bump)
-    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=ntime, is_production=False)
+    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=ntime, throw_exception_if_empty=False)
     alloc.initialize_metadata(xmd)
     alloc.initialize_initial_chunk(0)
     fset = alloc.get_frame_set(0)

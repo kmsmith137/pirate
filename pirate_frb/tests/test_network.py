@@ -234,7 +234,7 @@ class NetworkTester:
             slab_allocator,
             num_consumers          = p['num_receivers'],
             time_samples_per_chunk = p['time_samples_per_chunk'],
-            is_production          = False,   # dummy-mode slab (required), blocking get_frame_set
+            throw_exception_if_empty          = False,   # dummy-mode slab (required), blocking get_frame_set
         )
 
         fw_kwargs = {}
@@ -347,7 +347,7 @@ class NetworkTester:
             client_slab_allocator,
             num_consumers = 1,
             time_samples_per_chunk = p['time_samples_per_chunk'],
-            is_production = False,   # dummy-mode slab (required), blocking get_frame_set
+            throw_exception_if_empty = False,   # dummy-mode slab (required), blocking get_frame_set
         )
         self.client_allocator.initialize_metadata(self.xmd)
         self.client_allocator.initialize_initial_chunk(self.fspos)
