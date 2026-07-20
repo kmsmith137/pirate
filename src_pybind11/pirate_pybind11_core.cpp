@@ -408,17 +408,27 @@ void register_core_bindings(pybind11::module &m)
         "shared_ptr); a set is evicted from the allocator's queue after\n"
         "num_consumers requests (see get_frame_set for the receipt contract).")
         .def(py::init([](const std::shared_ptr<SlabAllocator> &slab_allocator,
-                         int num_consumers, long time_samples_per_chunk) {
+                         int num_consumers, long time_samples_per_chunk,
+                         bool is_production) {
                 // Assemble the C++-side Params struct from the Python kwargs.
                 AssembledFrameAllocator::Params params;
                 params.slab_allocator = slab_allocator;
                 params.num_consumers = num_consumers;
                 params.time_samples_per_chunk = time_samples_per_chunk;
+                params.is_production = is_production;
                 return std::make_shared<AssembledFrameAllocator>(params);
             }),
             py::arg("slab_allocator"),
             py::arg("num_consumers"),
-            py::arg("time_samples_per_chunk"))
+            py::arg("time_samples_per_chunk"),
+            // Matches the C++-side Params default. is_production=True: the
+            // worker pre-allocates constants::assembled_frame_allocator_initial_size
+            // sets at startup (fail-fast pool-size check; requires a
+            // non-dummy slab_allocator), and get_frame_set() THROWS if the
+            // requested set is not immediately ready. is_production=False:
+            // get_frame_set() blocks for the worker instead (unit-test /
+            // fake-x-engine semantics).
+            py::arg("is_production") = true)
         // nfreq / beam_ids are written by initialize_metadata() under the
         // allocator's lock, so (unlike the ctor-constant params fields
         // below) a raw def_readonly would read them unsynchronized -- a
@@ -470,7 +480,10 @@ void register_core_bindings(pybind11::module &m)
             py::arg("time_chunk_index"),
             py::call_guard<py::gil_scoped_release>(),
             "Get the AssembledFrameSet (one time chunk, all beams) for the given\n"
-            "time_chunk_index, blocking until the worker thread has created it.\n\n"
+            "time_chunk_index. If the set is not in the queue yet: with\n"
+            "is_production=False, blocks until the worker thread has created it;\n"
+            "with is_production=True, raises instead (after waiting for the\n"
+            "worker's startup burst to complete).\n\n"
             "Receipt contract: every chunk index >= initial_time_chunk must be\n"
             "requested exactly num_consumers times in total (once per logical\n"
             "consumer, consecutive indices, no skips) -- the set is evicted from\n"

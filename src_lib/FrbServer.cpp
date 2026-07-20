@@ -1,6 +1,7 @@
 #include "../include/pirate/FrbServer.hpp"
 #include "../include/pirate/FrbGrouper.hpp"       // FrbGrouperClient
 #include "../include/pirate/BumpAllocator.hpp"    // gpu_allocator / host_allocator (complete type)
+#include "../include/pirate/SlabAllocator.hpp"    // reaper's block_until_empty() gate (complete type)
 #include "../include/pirate/FileWriter.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/Dedisperser.hpp"        // GpuDedisperser
@@ -438,8 +439,9 @@ void FrbServer::stop(std::exception_ptr e) const
     for (auto &r : params.receivers)
         r->stop(e);
 
-    // Stop the frame_allocator (unblocking get_frame_set() and
-    // block_until_low_memory() waiters).
+    // Stop the frame_allocator (unblocking get_frame_set() waiters, and --
+    // via its cascade into the SlabAllocator -- the reaper's
+    // block_until_empty() wait).
     frame_allocator->stop(e);
 
     // Cascade to the dedisperser. GpuDedisperser::stop() also stops the
@@ -724,7 +726,18 @@ void FrbServer::_reaper_thread_main()
     long rb_size = params.ringbuf_nchunks * nbeams;
 
     for (;;) {
-        frame_allocator->block_until_low_memory(constants::reaper_lowmem_chunks * nbeams);
+        // Memory gate: sleep until the slab pool is empty (BumpAllocator
+        // exhausted AND every carved slab in use) -- i.e. until some slab
+        // consumer is starved. The AssembledFrameAllocator's pre-init queue
+        // bound is what sets the memory "headroom": the worker hoards free
+        // slabs only while its queue is below the bound, so post-exhaustion
+        // the pool is empty almost always, and each reap below frees
+        // exactly one frame's slab (re-blocking this gate until the worker
+        // takes it). Note the gate is LEVEL-TRIGGERED; the reaper_cv wait
+        // below (for a reapable frame) is what prevents this loop from
+        // spinning when the pool is empty but nothing is reapable yet --
+        // it is load-bearing, not just a convenience.
+        frame_allocator->params.slab_allocator->block_until_empty();
 
         unique_lock<std::mutex> lock(mutex);
 
@@ -843,9 +856,10 @@ void FrbServer::_processing_thread_main()
     // propagates to the wrapper which calls stop().
     config_postfilled.validate();
 
-    // NOTE: there is currently no check that the frame pool (sized from
-    // rb_host_memory_per_server) is large enough for this run's beam count
-    // -- see the warning at constants::server_min_total_chunks.
+    // (Frame-pool sizing is checked by the AssembledFrameAllocator itself:
+    // in production mode its worker pre-allocates
+    // constants::assembled_frame_allocator_initial_size sets at startup and
+    // throws a config-guidance error if the pool cannot supply them.)
 
     // The build steps below (plan construction, GpuDedisperser
     // create/allocate, weight fill) are individually slow (seconds each) and

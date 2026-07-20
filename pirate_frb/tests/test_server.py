@@ -306,6 +306,7 @@ class ServerTester:
             slab_allocator,
             num_consumers          = p['num_receivers'],
             time_samples_per_chunk = p['time_samples_per_chunk'],
+            is_production          = False,   # dummy-mode slab (required), blocking get_frame_set
         )
 
         self.file_writer = FileWriter(
@@ -346,12 +347,13 @@ class ServerTester:
                                 cuda_device_id=0,
                                 grouper_client=self.grouper_client,
                                 nbatches_wt=p['nbatches_wt'],
-                                quiet=True,
-                                # The FakeXEngine here is always unpaced (the
-                                # send loop is throttled by the CPU-reference
-                                # comparison instead), so the max-unprocessed
-                                # bound doesn't apply.
-                                disable_max_unprocessed_chunks=True)
+                                quiet=True)
+        # Note: the server's max-unprocessed check runs ARMED here (we do
+        # not pass disable_max_unprocessed_chunks). This is safe by
+        # construction: run()'s send/compare interleave keeps <= ~3 chunks
+        # in flight (the blocking queue.get inside _compare_chunk is the
+        # backpressure), below constants::server_max_unprocessed_chunks = 5.
+        # If that constant ever shrinks, revisit.
 
     def _spawn_grouper_child(self):
         # 'spawn' (not fork): the parent has already initialized CUDA, and a
@@ -400,7 +402,8 @@ class ServerTester:
         client_slab = SlabAllocator("af_rhost")
         client_alloc = AssembledFrameAllocator(
             client_slab, num_consumers=1,
-            time_samples_per_chunk=p['time_samples_per_chunk'])
+            time_samples_per_chunk=p['time_samples_per_chunk'],
+            is_production=False)   # dummy-mode slab (required)
         client_alloc.initialize_metadata(self.xmd)
         client_alloc.initialize_initial_chunk(self.c0)
 

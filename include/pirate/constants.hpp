@@ -52,23 +52,27 @@ struct constants
 
     // Frame-pool / backpressure sizing, in time-chunks.
     //
-    //  - server_min_total_chunks: fail fast if insufficient memory available
     //  - server_max_unprocessed_chunks: fail if server can't keep up with x-engine
-    //  - assembled_frame_allocator_queue_size: internal memory-recycling queue
-    //  - reaper_lowmem_chunks: threshold for reaping data from ring buffer.
-
-    // XXX WARNING: server_min_total_chunks is currently UNCHECKED! The check
-    // (formerly FrbServer::_check_frame_pool_size, called from the processing
-    // thread) was removed along with AssembledFrameAllocator::num_total_frames()
-    // in a refactoring sequence. Until the check is reinstated, an undersized
-    // frame pool (config parameter 'rb_host_memory_per_server' too small for
-    // the run's beam count) fails LATE and opaquely -- receivers block forever
-    // waiting for slabs -- instead of failing at startup with a helpful error.
-    // TODO: re-add a frame-pool-size check when the refactoring comes together.
-    static constexpr int server_min_total_chunks = 14;
+    //  - assembled_frame_allocator_queue_size: steady-state bound on the
+    //    AssembledFrameAllocator's pre-init queue (its worker's throttle,
+    //    and -- since the reaper activates when the slab pool is empty --
+    //    the amount of memory "headroom" held ahead of consumption)
+    //  - assembled_frame_allocator_initial_size: number of frame sets the
+    //    AssembledFrameAllocator's worker pre-allocates at startup, in
+    //    production mode (is_production=true). This doubles as a fail-fast
+    //    pool-size check: if the slab pool cannot supply this many sets,
+    //    the worker throws at startup with a config-guidance error.
+    //
+    // Steady-state pool sizing (not statically checkable, since the pool
+    // size comes from the run-time config 'rb_host_memory_per_server'): a
+    // pool needs roughly server_max_unprocessed_chunks +
+    // assembled_frame_allocator_queue_size + the receivers' 2-chunk
+    // assembly window + slack chunks. A pool that passes the startup check
+    // but is smaller than that fails at RUNTIME, via the production-mode
+    // fail-fast throw in AssembledFrameAllocator::get_frame_set().
     static constexpr int server_max_unprocessed_chunks = 5;
-    static constexpr int assembled_frame_allocator_queue_size = 3;
-    static constexpr int reaper_lowmem_chunks = 2;
+    static constexpr int assembled_frame_allocator_queue_size = 5;
+    static constexpr int assembled_frame_allocator_initial_size = 7;
 
     // Timeouts.
     //
@@ -117,8 +121,6 @@ struct constants
     static_assert(cuda_host_register_chunk_size <= (511L << 30),
                   "cuda_host_register_chunk_size must be <= 511 GiB");
 
-    static_assert(reaper_lowmem_chunks >= 2);
-
     // The FakeXEngine pacing lookahead is derived from this constant
     // (pacing_chunks = server_max_unprocessed_chunks - 1, in FakeXEngine.cpp,
     // leaving one chunk of margin below the bound). The lookahead must be
@@ -127,27 +129,11 @@ struct constants
     // too small a lookahead stalls or deadlocks the paced pipeline.
     static_assert(server_max_unprocessed_chunks - 1 >= 3);
 
-    // The reaper's low-memory gate (FrbServer reaper thread ->
-    // AssembledFrameAllocator::block_until_low_memory) fires when (slab pool
-    // empty) AND (pre-initialized chunks <= reaper_lowmem_chunks). The queue
-    // bound must exceed reaper_lowmem_chunks: otherwise the second condition
-    // is vacuously true (the queue can never exceed the threshold) and the
-    // gate degenerates to "pool empty" alone. The bound is also what makes
-    // the first condition prompt under real pressure: while the queue is
-    // below its bound, the worker grabs every freed slab.
-    static_assert(assembled_frame_allocator_queue_size > reaper_lowmem_chunks);
-    
-    // The frame pool must be large enough that the max-unprocessed check can
-    // actually FIRE at minimal pool size, rather than assembly silently
-    // starving just below the bound. Worst-case simultaneous frame usage:
-    // (server_max_unprocessed_chunks + 1) chunks assembled-but-unprocessed
-    // (the +1 is the chunk that trips the check), plus the allocator's
-    // pre-init queue (assembled_frame_allocator_queue_size), plus the
-    // receivers' 2-chunk assembly window, plus one chunk of slack.
-    static_assert(server_min_total_chunks >=
-                  server_max_unprocessed_chunks + assembled_frame_allocator_queue_size + reaper_lowmem_chunks + 4,
-                  "server_min_total_chunks too small for the max-unprocessed bound "
-                  "+ pre-init reserve + assembly window");
+    // The production-mode startup burst should at least fill the pre-init
+    // queue, so the worker parks after it (drain-then-replenish semantics)
+    // and the startup runway is never less than the steady-state headroom.
+    static_assert(assembled_frame_allocator_initial_size >=
+                  assembled_frame_allocator_queue_size);
 };
 
 

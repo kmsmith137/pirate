@@ -1118,6 +1118,13 @@ AssembledFrameAllocator::AssembledFrameAllocator(const Params &params_)
 
     is_dummy_mode = params.slab_allocator->is_dummy_mode;
 
+    // Production mode presupposes a real slab pool (the startup burst is a
+    // fail-fast pool-size check); silently degrading a strict mode in dummy
+    // mode would defeat it, so reject the combination loudly.
+    if (params.is_production && is_dummy_mode)
+        throw runtime_error("AssembledFrameAllocator: is_production=true requires a "
+            "non-dummy slab_allocator (pass is_production=false for dummy-mode use)");
+
     // Spawn the worker thread (sole producer of frame sets, in both dummy
     // and non-dummy mode). It parks on its init gate until metadata and
     // the initial chunk are established.
@@ -1158,7 +1165,7 @@ void AssembledFrameAllocator::stop(exception_ptr e) const
     chunk_cv.notify_all();
     queue_cv.notify_all();
     slot_cv.notify_all();
-    lowmem_cv.notify_all();
+    queue_init_cv.notify_all();
 
     // Propagate stop to SlabAllocator (wakes up worker thread if blocked in get_slab).
     params.slab_allocator->stop(e);
@@ -1194,10 +1201,100 @@ void AssembledFrameAllocator::_throw_if_stopped(const char *method_name)
 // The worker thread is the SOLE producer of AssembledFrameSets, in both
 // dummy and non-dummy mode: it pre-initializes whole sets (memsets nbeams
 // slabs to 0x88) and pushes them to frame_set_queue, so get_frame_set()
-// callers never pay allocation/memset latency. It is throttled by the
-// queue bound (constants::assembled_frame_allocator_queue_size) -- the
-// only throttle in dummy mode, where get_slab() never blocks -- and by
-// blocking get_slab() when the slab pool is exhausted.
+// callers never pay allocation/memset latency. In production mode it first
+// pre-allocates constants::assembled_frame_allocator_initial_size sets (the
+// startup burst -- a fail-fast pool-size check), then opens the
+// queue_initialized latch. The main loop is throttled by the queue bound
+// (constants::assembled_frame_allocator_queue_size) -- the only throttle in
+// dummy mode, where get_slab() never blocks -- and by blocking get_slab()
+// when the slab pool is exhausted.
+
+
+// Build one fully-initialized frame set. Runs with 'lock' NOT held (slab
+// acquisition can block; the memsets are slow). The set is complete except
+// for time_chunk_index (on the set and on each frame), which the caller
+// stamps under the lock at push time so it is consistent with queue state.
+//
+// 'blocking' is forwarded to get_slab(). With blocking=false, a null slab
+// (pool exhausted) makes the helper return a null set pointer; the
+// partially-built set (and its already-acquired slabs) is released.
+shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_build_frame_set(
+    long nfreq_snap, const vector<long> &beam_ids_snap,
+    const shared_ptr<const XEngineMetadata> &md, bool blocking)
+{
+    // All inputs are either arguments or ctor-constant 'params' fields, so
+    // no lock-protected members are touched here.
+    long nbeams = beam_ids_snap.size();
+    long mpc = xdiv(params.time_samples_per_chunk, 256);
+    SlabLayout layout = get_layout(nfreq_snap, params.time_samples_per_chunk);
+
+    auto set = make_shared<AssembledFrameSet>();
+    set->nfreq = nfreq_snap;
+    set->ntime = params.time_samples_per_chunk;
+    set->nbeams = nbeams;
+    set->metadata = md;
+    set->frames.reserve(nbeams);
+
+    // Build nbeams frames, all backed by independent slabs.
+    //
+    // Slab layout: scales_offsets at offset 0, data at layout.data_offset (both
+    // cache-line aligned -- see AssembledFrameAllocator::get_layout()). Both arrays
+    // share a single slab shared_ptr; _reap_locked() drops both refs to free.
+    //
+    // Slab-pool sizing: this loop holds up to nbeams slabs at a time. The
+    // pool must have at least nbeams total slabs to make progress, which
+    // is also a hard prerequisite for the Receiver's 2-chunk window.
+    for (long b = 0; b < nbeams; b++) {
+        shared_ptr<void> slab = params.slab_allocator->get_slab(layout.slab_nbytes, blocking);
+        if (!slab)
+            return nullptr;   // nonblocking, pool exhausted
+
+        // scales_offsets initial: float16 0.0 (bytes 0x00); also zero the
+        // alignment padding between the two arrays (up to data_offset).
+        // data initial: int4 -8 (bytes 0x88, two -8 nibbles per byte).
+        memset(slab.get(), 0x00, layout.data_offset);
+        memset((char *)slab.get() + layout.data_offset, 0x88, layout.data_nbytes);
+
+        auto frame = make_shared<AssembledFrame>();
+        frame->nfreq = nfreq_snap;
+        frame->ntime = params.time_samples_per_chunk;
+        frame->beam_id = beam_ids_snap[b];
+        frame->metadata = md;  // shared, immutable
+
+        // Initialize frame->scales_offsets at slab offset 0.
+        frame->scales_offsets.data = slab.get();
+        frame->scales_offsets.ndim = 3;
+        frame->scales_offsets.shape[0] = nfreq_snap;
+        frame->scales_offsets.shape[1] = mpc;
+        frame->scales_offsets.shape[2] = 2;
+        frame->scales_offsets.size = nfreq_snap * mpc * 2;
+        frame->scales_offsets.strides[0] = mpc * 2;
+        frame->scales_offsets.strides[1] = 2;
+        frame->scales_offsets.strides[2] = 1;
+        frame->scales_offsets.dtype = ksgpu::Dtype(ksgpu::df_float, 16);
+        frame->scales_offsets.aflags = params.slab_allocator->aflags;
+        frame->scales_offsets.base = slab;   // shares slab with data
+        frame->scales_offsets.check_invariants("AssembledFrameAllocator::_build_frame_set()");
+
+        // Initialize frame->data at slab offset layout.data_offset
+        // (cache-line aligned -- see AssembledFrameAllocator::get_layout()).
+        frame->data.data = (char *)slab.get() + layout.data_offset;
+        frame->data.ndim = 2;
+        frame->data.shape[0] = nfreq_snap;
+        frame->data.shape[1] = params.time_samples_per_chunk;
+        frame->data.size = nfreq_snap * params.time_samples_per_chunk;
+        frame->data.strides[0] = params.time_samples_per_chunk;
+        frame->data.strides[1] = 1;
+        frame->data.dtype = ksgpu::Dtype(ksgpu::df_int, 4);
+        frame->data.aflags = params.slab_allocator->aflags;
+        frame->data.base = slab;
+        frame->data.check_invariants("AssembledFrameAllocator::_build_frame_set()");
+
+        set->frames.push_back(std::move(frame));
+    }
+
+    return set;
+}
 
 
 void AssembledFrameAllocator::_worker_main()
@@ -1220,7 +1317,7 @@ void AssembledFrameAllocator::_worker_main()
     // Snapshot the build parameters into locals, under the lock. All of
     // them are set-once (written before the init gate above opens, and
     // immutable afterward), so one snapshot suffices for the whole main
-    // loop -- and the unlocked build section below then touches no
+    // loop -- and the unlocked build sections below then touch no
     // lock-protected members.
     long nbeams = beam_ids.size();
     long nfreq_snap = nfreq;
@@ -1228,12 +1325,67 @@ void AssembledFrameAllocator::_worker_main()
     shared_ptr<const XEngineMetadata> md = metadata;
     xassert(md);  // non-null once metadata_is_initialized
 
-    long mpc = xdiv(params.time_samples_per_chunk, 256);
-    SlabLayout layout = get_layout(nfreq_snap, params.time_samples_per_chunk);
-    long nbytes = layout.slab_nbytes;
+    // Stamp the chunk index and publish a freshly-built set. Caller must
+    // hold 'lock'. (Consumers popping fully-received sets off the front
+    // while the lock was dropped don't change queue_start_chunk_index +
+    // frame_set_queue.size(), since both change together; recomputing here
+    // is mostly defensive.) The queue_cv notify is under lock,
+    // deliberately: the lock stays held into the caller's next iteration.
+    // notify_all: every consumer receives every set, so one push can ready
+    // several waiters.
+    auto push_set_locked = [&](const shared_ptr<AssembledFrameSet> &set) {
+        long chunk_index = queue_start_chunk_index + long(frame_set_queue.size());
+        set->time_chunk_index = chunk_index;
+        for (long b = 0; b < nbeams; b++)
+            set->frames[b]->time_chunk_index = chunk_index;
+        set->validate();  // cheap defensive check
+        frame_set_queue.push_back({set, 0});
+        queue_cv.notify_all();
+    };
+
+    // Startup phase (production mode): pre-allocate the initial burst with
+    // NONBLOCKING slab gets, so an undersized pool fails HERE, at startup,
+    // with a config-guidance error -- rather than as receivers blocking
+    // forever. The burst has exclusive pool access: production-mode
+    // get_frame_set() callers are parked on the queue_initialized latch,
+    // and this worker is the process's only get_slab() caller.
+    if (params.is_production) {
+        for (int i = 0; i < constants::assembled_frame_allocator_initial_size; i++) {
+            // Build with the lock dropped (same discipline as the main
+            // loop below); a throw unwinds to worker_main()'s catch
+            // handler, which calls stop().
+            guard.unlock();
+            auto set = _build_frame_set(nfreq_snap, beam_ids_snap, md, /*blocking=*/false);
+
+            if (!set) {
+                stringstream ss;
+                ss << "AssembledFrameAllocator: the slab pool was exhausted during the "
+                   << "production-mode startup burst -- it supplied " << i << " of "
+                   << constants::assembled_frame_allocator_initial_size
+                   << " initial frame sets (" << nbeams << " beams each).\n"
+                   << "The pool size is set by the config parameter 'rb_host_memory_per_server', "
+                   << "divided by the per-frame memory footprint (which grows with the number of "
+                   << "frequency channels and time_samples_per_chunk). Increase "
+                   << "'rb_host_memory_per_server' to accommodate this run's beam count ("
+                   << nbeams << ") and frequency-channel count, then re-run.";
+                throw runtime_error(ss.str());
+            }
+
+            guard.lock();
+            if (is_stopped)
+                return;
+            push_set_locked(set);
+        }
+    }
+
+    // Open the latch: the startup phase is complete (in non-production
+    // mode there is nothing to do). One-shot latch -> notify_all; under
+    // lock deliberately (the lock stays held into the main loop).
+    queue_initialized = true;
+    queue_init_cv.notify_all();
 
     // Main loop: wait for a free queue slot, build a set with the lock
-    // dropped, then stamp its chunk index + push it with the lock re-held.
+    // dropped, then stamp + push it with the lock re-held.
     for (;;) {
         while (!is_stopped && (long(frame_set_queue.size()) >= constants::assembled_frame_allocator_queue_size))
             slot_cv.wait(guard);
@@ -1245,94 +1397,13 @@ void AssembledFrameAllocator::_worker_main()
         // stopped slab allocator) unwinds with the lock released;
         // worker_main()'s catch handler then calls stop(), which wakes all
         // waiters. No queue state needs restoring, since nothing is
-        // published until the push below.
+        // published until the push.
         guard.unlock();
-
-        // The set is fully initialized here except for time_chunk_index
-        // (on the set and on each frame), which is stamped under the lock
-        // at push time so it is consistent with the queue state.
-        auto set = make_shared<AssembledFrameSet>();
-        set->nfreq = nfreq_snap;
-        set->ntime = params.time_samples_per_chunk;
-        set->nbeams = nbeams;
-        set->metadata = md;
-        set->frames.reserve(nbeams);
-
-        // Build nbeams frames, all backed by independent slabs.
-        //
-        // Slab layout: scales_offsets at offset 0, data at layout.data_offset (both
-        // cache-line aligned -- see AssembledFrameAllocator::get_layout()). Both arrays
-        // share a single slab shared_ptr; _reap_locked() drops both refs to free.
-        //
-        // Slab-pool sizing: this loop holds up to nbeams slabs at a time. The
-        // pool must have at least nbeams total slabs to make progress, which
-        // is also a hard prerequisite for the Receiver's 2-chunk window.
-        for (long b = 0; b < nbeams; b++) {
-            shared_ptr<void> slab = params.slab_allocator->get_slab(nbytes);
-
-            // scales_offsets initial: float16 0.0 (bytes 0x00); also zero the
-            // alignment padding between the two arrays (up to data_offset).
-            // data initial: int4 -8 (bytes 0x88, two -8 nibbles per byte).
-            memset(slab.get(), 0x00, layout.data_offset);
-            memset((char *)slab.get() + layout.data_offset, 0x88, layout.data_nbytes);
-
-            auto frame = make_shared<AssembledFrame>();
-            frame->nfreq = nfreq_snap;
-            frame->ntime = params.time_samples_per_chunk;
-            frame->beam_id = beam_ids_snap[b];
-            frame->metadata = md;  // shared, immutable
-
-            // Initialize frame->scales_offsets at slab offset 0.
-            frame->scales_offsets.data = slab.get();
-            frame->scales_offsets.ndim = 3;
-            frame->scales_offsets.shape[0] = nfreq_snap;
-            frame->scales_offsets.shape[1] = mpc;
-            frame->scales_offsets.shape[2] = 2;
-            frame->scales_offsets.size = nfreq_snap * mpc * 2;
-            frame->scales_offsets.strides[0] = mpc * 2;
-            frame->scales_offsets.strides[1] = 2;
-            frame->scales_offsets.strides[2] = 1;
-            frame->scales_offsets.dtype = ksgpu::Dtype(ksgpu::df_float, 16);
-            frame->scales_offsets.aflags = params.slab_allocator->aflags;
-            frame->scales_offsets.base = slab;   // shares slab with data
-            frame->scales_offsets.check_invariants("AssembledFrameAllocator::_worker_main()");
-
-            // Initialize frame->data at slab offset layout.data_offset
-            // (cache-line aligned -- see AssembledFrameAllocator::get_layout()).
-            frame->data.data = (char *)slab.get() + layout.data_offset;
-            frame->data.ndim = 2;
-            frame->data.shape[0] = nfreq_snap;
-            frame->data.shape[1] = params.time_samples_per_chunk;
-            frame->data.size = nfreq_snap * params.time_samples_per_chunk;
-            frame->data.strides[0] = params.time_samples_per_chunk;
-            frame->data.strides[1] = 1;
-            frame->data.dtype = ksgpu::Dtype(ksgpu::df_int, 4);
-            frame->data.aflags = params.slab_allocator->aflags;
-            frame->data.base = slab;
-            frame->data.check_invariants("AssembledFrameAllocator::_worker_main()");
-
-            set->frames.push_back(std::move(frame));
-        }
+        auto set = _build_frame_set(nfreq_snap, beam_ids_snap, md, /*blocking=*/true);
+        xassert(set);   // blocking build never returns null
 
         guard.lock();
-
-        // Stamp the chunk index after re-acquiring the lock. (Consumers
-        // popping fully-received sets off the front while the lock was
-        // dropped don't change queue_start_chunk_index + frame_set_queue.size(),
-        // since both change together; this is mostly defensive.)
-        long chunk_index = queue_start_chunk_index + long(frame_set_queue.size());
-        set->time_chunk_index = chunk_index;
-        for (long b = 0; b < nbeams; b++)
-            set->frames[b]->time_chunk_index = chunk_index;
-
-        set->validate();  // cheap defensive check
-        frame_set_queue.push_back({std::move(set), 0});
-
-        // Wake up any waiting get_frame_set() callers. notify_all: every
-        // consumer receives every set, so one push can ready several
-        // waiters. (Notify under lock, deliberately: the lock stays held
-        // into the next loop iteration.)
-        queue_cv.notify_all();
+        push_set_locked(set);
     }
 }
 
@@ -1503,12 +1574,11 @@ long AssembledFrameAllocator::_initialize_initial_chunk(long target_time_chunk)
         initial_chunk_set = true;
         just_set = true;
 
-        // Seed all chunk-indexed counters to initial_time_chunk. (See
-        // AssembledFrame.hpp -- these counters track "time chunk index of
-        // the next set in queue / received / created" and are only
-        // meaningful once initial_chunk_set is true.)
+        // Seed the chunk-indexed counter to initial_time_chunk. (See
+        // AssembledFrame.hpp -- it tracks "time chunk index of the first
+        // set in queue" and is only meaningful once initial_chunk_set is
+        // true.)
         queue_start_chunk_index = initial_time_chunk;
-        first_unreceived_chunk_index = initial_time_chunk;
     }
     long ret = initial_time_chunk;
     guard.unlock();
@@ -1606,6 +1676,19 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_
         throw runtime_error(ss.str());
     }
 
+    // Production mode: wait for the worker's startup burst to complete
+    // before applying the serve-or-throw semantics below. This wait comes
+    // AFTER the init-state checks above, so pre-init misuse still throws
+    // the descriptive errors rather than hanging on a latch that will
+    // never open. (One-shot latch; opened in _worker_main, or never --
+    // if the burst fails, the allocator is stopped and we wake via the
+    // stopped arm.)
+    if (params.is_production) {
+        while (!is_stopped && !queue_initialized)
+            queue_init_cv.wait(guard);
+        _throw_if_stopped("AssembledFrameAllocator::get_frame_set");
+    }
+
     for (;;) {
         if (is_stopped)
             _throw_if_stopped("AssembledFrameAllocator::get_frame_set");
@@ -1634,6 +1717,25 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_
         xassert(queue_pos <= queue_size);
 
         if (queue_pos == queue_size) {
+            if (params.is_production) {
+                // Production fail-fast: the set is not immediately ready.
+                // We deliberately do not try to diagnose the cause here
+                // (the snapshot below is factual only); possible causes
+                // include the worker or reaper threads running slow, the
+                // x-engine skipping ahead by too many chunks, memory
+                // pressure from low ssd throughput, or an undersized pool
+                // (config 'rb_host_memory_per_server').
+                stringstream ss;
+                ss << "AssembledFrameAllocator::get_frame_set(time_chunk_index="
+                   << time_chunk_index << "): frame set not immediately ready "
+                   << "(production mode). Queue snapshot: chunks ["
+                   << queue_start_chunk_index << "," << (queue_start_chunk_index + queue_size)
+                   << "). Possible causes: worker/reaper threads running slow; x-engine "
+                   << "skipped ahead by too many chunks; memory pressure due to low ssd "
+                   << "throughput; pool undersized (config 'rb_host_memory_per_server').";
+                throw runtime_error(ss.str());
+            }
+
             // Set is not in the queue yet -- wait for the worker thread to
             // create it, then re-check from the top of the loop (the lock
             // was dropped in queue_cv.wait()).
@@ -1661,13 +1763,6 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_
         // set_ref becomes a dangling reference after pop_front().
         auto result = set_ref;
 
-        // Advance first_unreceived_chunk_index (under the receipt contract,
-        // the fastest consumer's next chunk index).
-        if (time_chunk_index + 1 > first_unreceived_chunk_index) {
-            first_unreceived_chunk_index = time_chunk_index + 1;
-            lowmem_cv.notify_all();  // Wake up block_until_low_memory() if waiting
-        }
-
         // Pop sets from front that all consumers have received. If any set
         // was popped, wake the worker thread, whose slot_cv predicate tests
         // the queue size. (notify_one is sound: the worker is structurally
@@ -1682,69 +1777,6 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_
             slot_cv.notify_one();
 
         return result;
-    }
-}
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// block_until_low_memory() - Entry point
-
-
-void AssembledFrameAllocator::block_until_low_memory(long nframe_threshold)
-{
-    try {
-        _block_until_low_memory(nframe_threshold);
-    } catch (...) {
-        this->stop(current_exception());
-        throw;
-    }
-}
-
-
-void AssembledFrameAllocator::_block_until_low_memory(long nframe_threshold)
-{
-    unique_lock<mutex> guard(lock);
-
-    for (;;) {
-        _throw_if_stopped("AssembledFrameAllocator::block_until_low_memory");
-        guard.unlock();
-
-        // Block until the slab allocator is "empty" (its BumpAllocator is
-        // exhausted AND all carved slabs are in use). During ramp-up (bump
-        // not yet exhausted) this sleeps regardless of the free list -- an
-        // empty free list is not pressure while the next get_slab() would
-        // just carve a fresh slab.
-        //
-        // Liveness note (post-exhaustion): this returns promptly whenever
-        // memory pressure is real, because the worker thread grabs every
-        // freed slab while frame_set_queue is below its bound. If free
-        // slabs persist instead, the worker must be parked on a full
-        // queue, so num_preinitialized equals the queue bound -- which
-        // exceeds the reaper's nframe_threshold by the static_assert
-        // relating assembled_frame_allocator_queue_size to
-        // reaper_lowmem_chunks in constants.hpp -- i.e. memory is
-        // genuinely not low, and blocking here is the desired behavior.
-        params.slab_allocator->block_until_empty();
-        
-        // Check num_preinitialized under lock.
-        guard.lock();
-        _throw_if_stopped("AssembledFrameAllocator::block_until_low_memory");
-        
-        // num_preinitialized is in *frame* units (to match the
-        // nframe_threshold argument's units), so we multiply chunks by
-        // nbeams here.
-        long nbeams = long(beam_ids.size());
-        long queue_end_chunk_index = queue_start_chunk_index + long(frame_set_queue.size());
-        long num_preinitialized_chunks = queue_end_chunk_index - first_unreceived_chunk_index;
-        long num_preinitialized = num_preinitialized_chunks * nbeams;
-
-        if (num_preinitialized <= nframe_threshold)
-            return;
-
-        // Wait for num_preinitialized to decrease (first_unreceived advance
-        // in _get_frame_set), then loop back through block_until_empty().
-        lowmem_cv.wait(guard);
     }
 }
 

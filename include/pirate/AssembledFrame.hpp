@@ -317,14 +317,18 @@ struct AssembledFrameSet
 // worker pre-initializes at most constants::assembled_frame_allocator_queue_size
 // sets ahead of full consumption; in dummy mode (params.slab_allocator->is_dummy_mode)
 // this queue bound is the only limit on memory use, since dummy-mode
-// get_slab() never blocks. The worker thread inherits its vcpu affinity from
-// the caller of the constructor. Python callers should call the
-// AssembledFrameAllocator constructor within a ThreadAffinity context manager.
+// get_slab() never blocks. In production mode (Params::is_production) the
+// worker additionally pre-allocates
+// constants::assembled_frame_allocator_initial_size sets at startup, before
+// serving any consumer -- see Params::is_production. The worker thread
+// inherits its vcpu affinity from the caller of the constructor. Python
+// callers should call the AssembledFrameAllocator constructor within a
+// ThreadAffinity context manager.
 //
 // Entry points (following thread-backed class pattern): initialize_metadata(),
 // get_metadata(), initialize_initial_chunk(), wait_for_initial_chunk(),
-// get_frame_set(), block_until_low_memory(). These will throw if the
-// allocator is stopped, and will call stop() on exception.
+// get_frame_set(). These will throw if the allocator is stopped, and will
+// call stop() on exception.
 
 struct AssembledFrameAllocator
 {
@@ -340,6 +344,22 @@ struct AssembledFrameAllocator
         // Frame length in time samples. Must be positive (and divisible by
         // 256, enforced when the first frame set is built -- see get_layout()).
         long time_samples_per_chunk = 0;
+
+        // If is_production=true, then we throw exceptions in two situations:
+        //    1. If we can't allocate (constants::assembled_frame_allocator_initial_size)
+        //       frame sets during initialization (the worker pre-allocates them
+        //       up front, doubling as a fail-fast pool-size check).
+        //    2. If the frame_set is not immediately ready in the queue when
+        //       get_frame_set() is called. This can happen for multiple reasons
+        //       (reaper/worker threads running slow, x-engine skips ahead by too
+        //       many chunks, memory pressure due to low ssd throughput).
+        //       Currently we don't try to diagnose the reason in the
+        //       exception-text, but we may add diagnostic logic in the future.
+        //
+        // is_production=true requires a non-dummy slab_allocator (the
+        // constructor throws otherwise): the startup burst is a check on a
+        // real pool, and silently degrading a strict mode would defeat it.
+        bool is_production = true;
     };
 
     explicit AssembledFrameAllocator(const Params &params);
@@ -419,13 +439,21 @@ struct AssembledFrameAllocator
     // Entry point: throws if stopped.
     long wait_for_initial_chunk();
 
-    // Returns the AssembledFrameSet for the given time_chunk_index, blocking
-    // until the allocator's worker thread has created it. The returned set
-    // contains one AssembledFrame per beam (in beam_ids order), all sharing
-    // this allocator's metadata pointer. All callers requesting the same
-    // time_chunk_index receive the same shared_ptr<AssembledFrameSet> (not a
-    // copy) -- and therefore the same shared_ptr<AssembledFrame> for each
-    // beam inside the set.
+    // Returns the AssembledFrameSet for the given time_chunk_index. The
+    // returned set contains one AssembledFrame per beam (in beam_ids order),
+    // all sharing this allocator's metadata pointer. All callers requesting
+    // the same time_chunk_index receive the same
+    // shared_ptr<AssembledFrameSet> (not a copy) -- and therefore the same
+    // shared_ptr<AssembledFrame> for each beam inside the set.
+    //
+    // If the requested set is not in the queue yet:
+    //   - is_production=false: block until the worker thread has created it.
+    //   - is_production=true: wait for the worker's startup burst to complete
+    //     (the queue_initialized latch), then THROW if the set is not
+    //     immediately available -- see Params::is_production. The exception
+    //     text includes a snapshot of the queue/pool state and hints that an
+    //     undersized pool (config 'rb_host_memory_per_server') is one
+    //     possible cause.
     //
     // RECEIPT CONTRACT. The allocator holds a reference to each set until
     // the set has been requested num_consumers times, then drops it
@@ -435,8 +463,9 @@ struct AssembledFrameAllocator
     // total: in the intended usage, once by each of num_consumers logical
     // consumers, each requesting consecutive indices starting at
     // initial_time_chunk. A request may run at most one chunk past the
-    // newest created set (it then blocks until the worker catches up);
-    // requests must not skip a chunk. Receipts are anonymous (the allocator
+    // newest created set (it then blocks until the worker catches up --
+    // or throws, in production mode); requests must not skip a chunk.
+    // Receipts are anonymous (the allocator
     // cannot attribute them to callers), so misuse is only partially
     // detectable:
     //   - requesting an already-evicted chunk throws an informative error.
@@ -458,11 +487,6 @@ struct AssembledFrameAllocator
     // Entry point: throws if stopped, calls stop() on exception.
 
     std::shared_ptr<AssembledFrameSet> get_frame_set(long time_chunk_index);
-
-    // Entry point: Block until slab allocator is empty (all slabs in use), AND the number of
-    // pre-initialized frames waiting for first consumer is <= nframe_threshold.
-    // Throws exception in dummy mode, or if stop() is called from another thread.
-    void block_until_low_memory(long nframe_threshold);
 
     // Returns true if in dummy mode.
     bool is_dummy() const { return is_dummy_mode; }
@@ -510,16 +534,15 @@ private:
     //   Signaled on: pop_front in _get_frame_set() (notify_one -- sound
     //   because the worker is structurally the only waiter), and stop().
     //
-    // lowmem_cv -- waiters: block_until_low_memory() callers (predicate:
-    //   num_preinitialized decreased below the caller's threshold, or
-    //   stopped). Signaled on: first_unreceived_chunk_index advance in
-    //   _get_frame_set() (notify_all -- several waiters with different
-    //   thresholds can become ready), and stop().
+    // queue_init_cv -- waiters: production-mode _get_frame_set() callers
+    //   (predicate: queue_initialized, or stopped). Signaled on: the
+    //   queue_initialized latch in _worker_main() (notify_all -- one-shot
+    //   latch), and stop().
     mutable std::condition_variable metadata_cv;
     mutable std::condition_variable chunk_cv;
     mutable std::condition_variable queue_cv;
     mutable std::condition_variable slot_cv;
-    mutable std::condition_variable lowmem_cv;
+    mutable std::condition_variable queue_init_cv;
 
     mutable bool is_stopped = false;
     mutable std::exception_ptr error;
@@ -555,28 +578,38 @@ private:
     // protected by 'lock'.
     //
     // When initial_chunk_set transitions to true (inside
-    // _initialize_initial_chunk), we seed queue_start_chunk_index and
-    // first_unreceived_chunk_index to initial_time_chunk -- so all
-    // chunk-indexed counters below are only meaningful once
+    // _initialize_initial_chunk), we seed queue_start_chunk_index to
+    // initial_time_chunk -- so it is only meaningful once
     // initial_chunk_set is true.
     bool initial_chunk_set = false;
     long initial_time_chunk = 0;
 
     // Queue of sets: (set, num_consumers_received).
     // The worker thread -- the sole producer, in both dummy and non-dummy
-    // mode -- pushes pre-initialized sets to the back; it never lets the
-    // queue grow beyond constants::assembled_frame_allocator_queue_size
-    // sets (this bound is the worker's only throttle in dummy mode, where
-    // get_slab() never blocks). Sets are popped from the front when all
-    // consumers have received them.
+    // mode -- pushes pre-initialized sets to the back; after the startup
+    // phase it never lets the queue grow beyond
+    // constants::assembled_frame_allocator_queue_size sets (this bound is
+    // the worker's only throttle in dummy mode, where get_slab() never
+    // blocks). In production mode the startup burst pushes
+    // constants::assembled_frame_allocator_initial_size sets (> the bound;
+    // the queue then drains below the bound before the worker replenishes).
+    // Sets are popped from the front when all consumers have received them.
     //
     // The early part of the queue contains sets with (num_consumers_received > 0) that
     // are waiting for subsequent consumers. The later part contains sets with
     // (num_consumers_received == 0) that have been pre-initialized, waiting for their
-    // first consumer. The boundary between these regions is at first_unreceived_chunk_index.
+    // first consumer.
     std::deque<std::pair<std::shared_ptr<AssembledFrameSet>, int>> frame_set_queue;
     long queue_start_chunk_index = 0;          // time_chunk_index of first set in queue
-    long first_unreceived_chunk_index = 0;     // time_chunk_index of first set not yet received by any consumer
+
+    // Set-once latch: true once the worker has completed its startup phase
+    // (in production mode, the initial-size burst; in non-production mode,
+    // immediately after the init gate). Production-mode get_frame_set()
+    // callers wait on it (via queue_init_cv) before applying their
+    // serve-or-throw semantics. Protected by 'lock'. Stays false forever if
+    // the burst fails -- correct, since the allocator is then stopped and
+    // waiters wake via the stopped arm of their predicate.
+    bool queue_initialized = false;
 
     // Helper for entry points. Caller must hold lock.
     void _throw_if_stopped(const char *method_name);
@@ -595,7 +628,15 @@ private:
     void _initialize_metadata(const XEngineMetadata &metadata);
     long _initialize_initial_chunk(long target_time_chunk);
     std::shared_ptr<AssembledFrameSet> _get_frame_set(long time_chunk_index);
-    void _block_until_low_memory(long nframe_threshold);
+
+    // Worker helper: build one fully-initialized frame set (slab acquisition
+    // + memsets), with 'lock' NOT held. 'blocking' is forwarded to
+    // get_slab(); a null slab (nonblocking, pool exhausted) makes the
+    // helper return a null set pointer. Called from the startup burst
+    // (blocking=false) and the main loop (blocking=true).
+    std::shared_ptr<AssembledFrameSet> _build_frame_set(
+        long nfreq_snap, const std::vector<long> &beam_ids_snap,
+        const std::shared_ptr<const XEngineMetadata> &md, bool blocking);
 
 public:
     // ------------------------  Slab layout  ------------------------

@@ -6,6 +6,7 @@ Tests covered:
   - Test 4: Sequence ordering (set / beam cycling, time chunks)
   - Test 5: Multi-consumer scenarios (set/frame identity, independent progress)
   - Test 6 (partial): Set recycling
+  - Test 7: Production mode (startup burst, fail-fast get_frame_set)
 
 get_frame_set(time_chunk_index) returns the AssembledFrameSet (= nbeams
 frames) for one time chunk; each chunk must be requested exactly
@@ -18,6 +19,7 @@ Run via: python -m pirate_frb test --net
 
 import numpy as np
 from ..core import AssembledFrameAllocator, BumpAllocator, SlabAllocator, XEngineMetadata
+from ..pirate_pybind11 import constants
 
 
 def make_slab_allocator(capacity=4*1024*1024, aflags='af_rhost'):
@@ -70,7 +72,7 @@ def test_frame_properties():
     beam_ids = [10, 20, 30]
 
     slab = make_slab_allocator()
-    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk)
+    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk, is_production=False)
     alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
     alloc.initialize_initial_chunk(0)
 
@@ -129,7 +131,7 @@ def test_sequence_ordering():
     num_chunks = 4
 
     slab = make_slab_allocator()
-    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk)
+    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk, is_production=False)
     alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
     alloc.initialize_initial_chunk(0)
 
@@ -166,7 +168,7 @@ def test_single_beam_sequence():
     beam_ids = [42]
 
     slab = make_slab_allocator()
-    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk)
+    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk, is_production=False)
     alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
     alloc.initialize_initial_chunk(0)
 
@@ -197,7 +199,7 @@ def test_multi_consumer_frame_identity():
     num_consumers = 3
 
     slab = make_slab_allocator()
-    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
+    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk, is_production=False)
 
     # Initialize the allocator (one initialize_metadata call is enough, but
     # the multi-call path is tested incidentally).
@@ -247,7 +249,7 @@ def test_multi_consumer_independent_progress():
     num_consumers = 2
 
     slab = make_slab_allocator()
-    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
+    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk, is_production=False)
 
     for _ in range(num_consumers):
         alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
@@ -310,7 +312,7 @@ def test_frame_recycling():
     # Small pool (~3 slabs = 3 sets); the exact count is derived from the
     # page-rounded BumpAllocator capacity, not assumed.
     slab, num_slabs = _make_counted_slab_allocator(slab_size, 3)
-    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
+    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk, is_production=False)
 
     for _ in range(num_consumers):
         alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
@@ -374,7 +376,7 @@ def test_frame_recycling_with_held_reference():
     mpc = time_samples_per_chunk // 256
     slab_size = nfreq * mpc * 4 + (nfreq * time_samples_per_chunk) // 2
     slab, num_slabs = _make_counted_slab_allocator(slab_size, 4)
-    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
+    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk, is_production=False)
 
     for _ in range(num_consumers):
         alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
@@ -437,6 +439,92 @@ def test_frame_recycling_with_held_reference():
     print("    PASSED")
 
 
+def test_production_mode():
+    """
+    Test 7: production mode (is_production=True).
+
+    Verifies:
+      (a) the worker's startup burst pre-allocates
+          constants.assembled_frame_allocator_initial_size sets, and chunks
+          within the burst window are served;
+      (b) requesting a chunk past the queue frontier raises the
+          "not immediately ready" fail-fast error (instead of blocking);
+      (c) a pool too small for the burst raises the verbose
+          pool-exhausted-during-startup error from get_frame_set();
+      (d) is_production=True with a dummy-mode slab allocator raises at
+          construction.
+    """
+    print("  test_production_mode()...")
+
+    nfreq = 64
+    time_samples_per_chunk = 256
+    beam_ids = [1]  # Single beam: one slab per set.
+    initial_size = constants.assembled_frame_allocator_initial_size
+
+    mpc = time_samples_per_chunk // 256
+    slab_size = nfreq * mpc * 4 + (nfreq * time_samples_per_chunk) // 2
+
+    # (a) + (b): pool sized for exactly the burst. The determinism of (b)
+    # below relies on the pool having NO slabs beyond the burst (the worker
+    # would otherwise carve extras in its main loop, racing our frontier
+    # request); page rounding happens not to add any at this slab_size, and
+    # this assert makes it loud if that ever changes.
+    slab, num_slabs = _make_counted_slab_allocator(slab_size, initial_size)
+    assert num_slabs == initial_size, \
+        f"page rounding added slabs ({num_slabs} != {initial_size}); test needs adjusting"
+    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk,
+                                    is_production=True)
+    alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
+    alloc.initialize_initial_chunk(0)
+
+    # Consume a few burst chunks, HOLDING the sets (so their slabs are never
+    # recycled). The receipts shrink the queue below the steady-state bound,
+    # so the worker wakes -- but the pool is exhausted and nothing is ever
+    # freed, so it parks in blocking get_slab() and the queue frontier is
+    # deterministically frozen at chunk initial_size.
+    held = [alloc.get_frame_set(c) for c in range(3)]
+    for c, fset in enumerate(held):
+        assert fset.time_chunk_index == c
+
+    # (b) Request the frontier chunk itself: deterministically not in the
+    # queue (the worker cannot have built it -- we hold all freed slabs),
+    # so production mode must raise rather than block.
+    try:
+        alloc.get_frame_set(initial_size)
+        raise AssertionError("expected 'not immediately ready' error")
+    except RuntimeError as e:
+        assert "not immediately ready" in str(e), f"unexpected error: {e}"
+
+    # The fail-fast throw stopped the allocator (entry-point policy).
+    del held, alloc, slab
+
+    # (c) Pool too small for the burst: the worker's fail-fast error
+    # surfaces from get_frame_set() (which waits on the queue_initialized
+    # latch, wakes on the stop, and rethrows the saved burst error).
+    slab, num_slabs = _make_counted_slab_allocator(slab_size, 2)
+    assert num_slabs < initial_size   # else the burst would succeed
+    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk,
+                                    is_production=True)
+    alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
+    alloc.initialize_initial_chunk(0)
+    try:
+        alloc.get_frame_set(0)
+        raise AssertionError("expected startup-burst pool-exhausted error")
+    except RuntimeError as e:
+        assert "startup burst" in str(e), f"unexpected error: {e}"
+    del alloc, slab
+
+    # (d) Production mode requires a non-dummy slab allocator.
+    try:
+        AssembledFrameAllocator(SlabAllocator('af_rhost'), num_consumers=1,
+                                time_samples_per_chunk=time_samples_per_chunk, is_production=True)
+        raise AssertionError("expected is_production+dummy constructor error")
+    except RuntimeError as e:
+        assert "is_production" in str(e), f"unexpected error: {e}"
+
+    print("    PASSED")
+
+
 def test_assembled_frame_allocator():
     """
     Run all AssembledFrameAllocator unit tests.
@@ -459,5 +547,8 @@ def test_assembled_frame_allocator():
     # Test 6 (partial): Set recycling
     test_frame_recycling()
     test_frame_recycling_with_held_reference()
+
+    # Test 7: Production mode
+    test_production_mode()
 
     print("All AssembledFrameAllocator tests PASSED!")

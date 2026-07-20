@@ -50,7 +50,8 @@ struct BumpAllocator;  // defined in BumpAllocator.hpp
 //     memory from being freed while any slab is still in use
 //   - Compatible with weak_ptr (control blocks are allocated separately)
 //   - Backpressure: once the BumpAllocator is exhausted, get_slab() blocks
-//     until a slab is returned to the pool
+//     until a slab is returned to the pool (or, with blocking=false,
+//     returns an empty pointer instead)
 //
 // Dummy mode (constructed via the create(aflags) factory):
 //   - No BumpAllocator is involved
@@ -107,12 +108,15 @@ public:
     // pool for reuse.
     //
     // If no free slab is available, a new one is carved from the
-    // BumpAllocator. Once the BumpAllocator is exhausted, waits until a
-    // slab is returned to the pool (interruptible by stop()).
+    // BumpAllocator. Once the BumpAllocator is exhausted:
+    //   - blocking=true (default): waits until a slab is returned to the
+    //     pool (interruptible by stop());
+    //   - blocking=false: returns an EMPTY pointer -- no throw, no block.
+    //     (Errors -- stopped allocator, size mismatch -- still throw.)
     //
     // In dummy mode, always allocates fresh memory using af_alloc() (never
-    // blocks).
-    std::shared_ptr<void> get_slab(long nbytes);
+    // blocks; 'blocking' is ignored).
+    std::shared_ptr<void> get_slab(long nbytes, bool blocking = true);
 
     // Returns true if the SlabAllocator is ready to serve get_slab() calls
     // without blocking on async init. Semantics:
@@ -217,8 +221,10 @@ private:
     void _throw_if_stopped(const char *method_name) const;
 
     // Entry-point body; get_slab() is a thin wrapper that stops the
-    // allocator if this throws (see notes/stoppable_class.md).
-    std::shared_ptr<void> _get_slab(long nbytes);
+    // allocator if this throws (see notes/stoppable_class.md). The
+    // blocking=false exhaustion nullptr return is not a throw, so it does
+    // not trigger the wrapper's stop.
+    std::shared_ptr<void> _get_slab(long nbytes, bool blocking);
 
     // Wraps a slab pointer in a shared_ptr whose deleter returns the slab to
     // the pool (and keeps 'this' alive via a captured shared_ptr).

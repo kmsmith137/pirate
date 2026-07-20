@@ -138,13 +138,13 @@ void SlabAllocator::block_until_empty()
 // get_slab(): the main allocation method
 
 
-std::shared_ptr<void> SlabAllocator::get_slab(long nbytes)
+std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
 {
     // Per the strict stoppable-class policy (notes/stoppable_class.md), ANY
     // exception thrown from an entry point stops the allocator -- including
     // argument errors (bad nbytes, size mismatch).
     try {
-        return _get_slab(nbytes);
+        return _get_slab(nbytes, blocking);
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -152,7 +152,7 @@ std::shared_ptr<void> SlabAllocator::get_slab(long nbytes)
 }
 
 
-std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes)
+std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes, bool blocking)
 {
     if (nbytes <= 0) {
         std::stringstream ss;
@@ -268,7 +268,12 @@ std::shared_ptr<void> SlabAllocator::_get_slab(long nbytes)
         }
 
         // 3. Free list empty AND BumpAllocator exhausted: wait for a slab
-        // to be returned (interruptible by stop()).
+        // to be returned (interruptible by stop()), or -- nonblocking --
+        // report exhaustion with an empty pointer (a non-exceptional
+        // outcome; the caller decides what it means).
+        if (!blocking)
+            return nullptr;
+
         free_cv.wait(guard);
         _throw_if_stopped("SlabAllocator::get_slab");
     }

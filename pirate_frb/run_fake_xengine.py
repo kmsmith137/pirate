@@ -207,6 +207,10 @@ class RunFakeXEngineHelper:
                 slab_allocator,
                 num_consumers=1,
                 time_samples_per_chunk=cfg.time_samples_per_chunk,
+                # The SimulatedFrameFactory's producer is EXPECTED to outrun
+                # the allocator's worker (it pulls as fast as it can);
+                # production-mode serve-or-throw semantics would be wrong here.
+                is_production=False,
             )
             allocator.initialize_metadata(xmd)
             allocator.initialize_initial_chunk(0)
