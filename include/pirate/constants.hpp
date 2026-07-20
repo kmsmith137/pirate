@@ -64,7 +64,7 @@ struct constants
     //    the worker throws at startup with a config-guidance error.
     //
     // Steady-state pool sizing (not statically checkable, since the pool
-    // size comes from the run-time config 'rb_host_memory_per_server'): a
+    // size comes from the run-time config 'host_memory_per_server'): a
     // pool needs roughly server_max_unprocessed_chunks +
     // assembled_frame_allocator_queue_size + the receivers' 2-chunk
     // assembly window + slack chunks. A pool that passes the startup check

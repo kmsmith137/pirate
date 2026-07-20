@@ -1363,10 +1363,10 @@ void AssembledFrameAllocator::_worker_main()
                    << "production-mode startup burst -- it supplied " << i << " of "
                    << constants::assembled_frame_allocator_initial_size
                    << " initial frame sets (" << nbeams << " beams each).\n"
-                   << "The pool size is set by the config parameter 'rb_host_memory_per_server', "
+                   << "The pool size is set by the config parameter 'host_memory_per_server', "
                    << "divided by the per-frame memory footprint (which grows with the number of "
                    << "frequency channels and time_samples_per_chunk). Increase "
-                   << "'rb_host_memory_per_server' to accommodate this run's beam count ("
+                   << "'host_memory_per_server' to accommodate this run's beam count ("
                    << nbeams << ") and frequency-channel count, then re-run.";
                 throw runtime_error(ss.str());
             }
@@ -1724,7 +1724,7 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_
                 // include the worker or reaper threads running slow, the
                 // x-engine skipping ahead by too many chunks, memory
                 // pressure from low ssd throughput, or an undersized pool
-                // (config 'rb_host_memory_per_server').
+                // (config 'host_memory_per_server').
                 stringstream ss;
                 ss << "AssembledFrameAllocator::get_frame_set(time_chunk_index="
                    << time_chunk_index << "): frame set not immediately ready "
@@ -1732,7 +1732,7 @@ shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(long time_
                    << queue_start_chunk_index << "," << (queue_start_chunk_index + queue_size)
                    << "). Possible causes: worker/reaper threads running slow; x-engine "
                    << "skipped ahead by too many chunks; memory pressure due to low ssd "
-                   << "throughput; pool undersized (config 'rb_host_memory_per_server').";
+                   << "throughput; pool undersized (config 'host_memory_per_server').";
                 throw runtime_error(ss.str());
             }
 

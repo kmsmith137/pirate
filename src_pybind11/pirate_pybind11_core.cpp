@@ -1587,8 +1587,10 @@ void register_core_bindings(pybind11::module &m)
              "exception (nothing is printed to stderr).")
           .def_property_readonly("host_allocator", [](FrbServer &self) {
                return self.params.host_allocator;
-          }, "BumpAllocator for host (dd_host) memory. May be async; call\n"
-             "wait_until_initialized() before start() if so.")
+          }, "BumpAllocator for host memory (used by GpuDedisperser::allocate;\n"
+             "in run_server, the same pool also backs the frame ring buffer's\n"
+             "SlabAllocator). May be async; call wait_until_initialized()\n"
+             "before start() if so.")
           .def_property_readonly("gpu_allocator", [](FrbServer &self) {
                return self.params.gpu_allocator;
           }, "BumpAllocator for GPU memory. May be async; call\n"
@@ -1596,7 +1598,7 @@ void register_core_bindings(pybind11::module &m)
           .def_property_readonly("frame_allocator", [](FrbServer &self) {
                return self.frame_allocator;
           }, "AssembledFrameAllocator (backs the receivers). Underlying memory\n"
-             "is from the ring-buffer host BumpAllocator; may be async.")
+             "is from a host BumpAllocator; may be async.")
     ;
 
     // FrbGrouper: gRPC *server* side of the FrbGrouper service. Downstream

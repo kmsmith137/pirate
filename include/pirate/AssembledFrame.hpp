@@ -452,7 +452,7 @@ struct AssembledFrameAllocator
     //     (the queue_initialized latch), then THROW if the set is not
     //     immediately available -- see Params::is_production. The exception
     //     text includes a snapshot of the queue/pool state and hints that an
-    //     undersized pool (config 'rb_host_memory_per_server') is one
+    //     undersized pool (config 'host_memory_per_server') is one
     //     possible cause.
     //
     // RECEIPT CONTRACT. The allocator holds a reference to each set until

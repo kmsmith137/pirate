@@ -15,9 +15,8 @@
 num_servers: 1
 server_cpus: [ 0 ]   # length num_servers
 
-rb_host_memory_per_server: '1 GB'
-dd_host_memory_per_server: '1 GB'
-gpu_memory_per_server: '1 GB'
+host_memory_per_server: '2 GiB'
+gpu_memory_per_server: '1 GiB'
 use_hugepages: true
 
 ringbuf_nchunks: 512

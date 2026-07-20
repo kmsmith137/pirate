@@ -925,9 +925,15 @@ void FrbServer::_processing_thread_main()
 
     _check_stopped("FrbServer::processing_thread_main");
 
-    // Allocate GpuDedisperser resources from the FrbServer's dedicated
-    // host/gpu BumpAllocators. allocate() also spawns the GpuDedisperser
-    // worker thread, which sets cudaSetDevice on itself.
+    // Allocate GpuDedisperser resources from the FrbServer's host/gpu
+    // BumpAllocators. allocate() also spawns the GpuDedisperser worker
+    // thread, which sets cudaSetDevice on itself.
+    //
+    // Note: in run_server, the host BumpAllocator is SHARED with the frame
+    // ring buffer's SlabAllocator, which carves slabs until the pool is
+    // exhausted. These carves must land first -- see the carve-ordering
+    // comment in run_server.py's _build_server (the timing margin is
+    // large; a violation fails loudly here with a capacity error).
     auto t_alloc0 = std::chrono::steady_clock::now();
     dedisperser_p->allocate(*params.gpu_allocator, *params.host_allocator);
     auto t_alloc1 = std::chrono::steady_clock::now();

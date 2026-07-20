@@ -14,16 +14,30 @@ from .core import BumpAllocator, SlabAllocator, AssembledFrameAllocator, FileWri
 from .pirate_pybind11 import DedispersionConfig, constants
 
 
-def _parse_memory_string(s):
-    """Parse a string like '256 GB' or '10 MB' into a byte count."""
+def _parse_memory_string(key, s):
+    """Parse a memory-size config value like '256 GiB' into a byte count.
 
-    m = re.fullmatch(r'\s*([0-9]+(?:\.[0-9]*)?)\s*(TB|GB|MB)\s*', s, re.IGNORECASE)
+    Units are IEC (MiB/GiB/TiB, powers of 1024). The legacy spellings
+    MB/GB/TB are REJECTED with a pointed error: they were historically
+    parsed as powers of 1024 anyway, so migrating a config is a pure
+    renaming (e.g. '256 GB' -> '256 GiB', same byte count).
+
+    'key' is the config key being parsed, included in exception text.
+    """
+
+    m = re.fullmatch(r'\s*([0-9]+(?:\.[0-9]*)?)\s*(TiB|GiB|MiB)\s*', s, re.IGNORECASE)
     if not m:
-        raise RuntimeError(f"Could not parse memory string: {s!r} (expected e.g. '256 GB')")
+        if re.fullmatch(r'\s*[0-9.]+\s*(TB|GB|MB)\s*', s, re.IGNORECASE):
+            raise RuntimeError(
+                f"{key!r}: memory string {s!r} uses a legacy unit; use MiB/GiB/TiB "
+                f"(powers of 1024). MB/GB/TB were always parsed as powers of 1024, "
+                f"so the conversion is a pure renaming (e.g. '256 GB' -> '256 GiB')."
+            )
+        raise RuntimeError(f"{key!r}: could not parse memory string {s!r} (expected e.g. '256 GiB')")
 
     value = float(m.group(1))
     unit = m.group(2).upper()
-    multiplier = {'MB': 1024**2, 'GB': 1024**3, 'TB': 1024**4}[unit]
+    multiplier = {'MIB': 1024**2, 'GIB': 1024**3, 'TIB': 1024**4}[unit]
     return int(value * multiplier)
 
 
@@ -112,8 +126,7 @@ def _parse_config(filename):
 
     required_keys = [
         'num_servers', 'server_cpus',
-        'rb_host_memory_per_server', 'dd_host_memory_per_server',
-        'gpu_memory_per_server',
+        'host_memory_per_server', 'gpu_memory_per_server',
         'use_hugepages', 'data_ip_addrs', 'rpc_ip_addrs', 'grouper_ip_addrs',
         'check_mountpoints', 'ssd_dirs', 'ssd_threads_per_server',
         'nfs_dir', 'nfs_threads_per_server',
@@ -137,15 +150,13 @@ def _parse_config(filename):
         if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu < 0:
             raise RuntimeError(f"{filename}: server_cpus[{i}] must be a non-negative integer, got {cpu!r}")
 
-    for key in ('rb_host_memory_per_server',
-                'dd_host_memory_per_server',
-                'gpu_memory_per_server'):
+    for key in ('host_memory_per_server', 'gpu_memory_per_server'):
         val = config[key]
         if not isinstance(val, str):
             raise RuntimeError(
-                f"{filename}: {key!r} must be a string like '256 GB', got {val!r}"
+                f"{filename}: {key!r} must be a string like '256 GiB', got {val!r}"
             )
-        config[f'{key}_bytes'] = _parse_memory_string(val)
+        config[f'{key}_bytes'] = _parse_memory_string(key, val)
 
     if not isinstance(config['use_hugepages'], bool):
         raise RuntimeError(f"{filename}: 'use_hugepages' must be a boolean, got {config['use_hugepages']!r}")
@@ -359,9 +370,8 @@ class RunServerHelper:
         print(f"Parsed dedispersion config: {dedispersion_config_filename}")
         print(f"  num_servers = {self.n}")
         print(f"  time_samples_per_chunk = {self.dedisp_config.time_samples_per_chunk}  (from dedispersion config)")
-        print(f"  rb_host_memory_per_server = {self.config['rb_host_memory_per_server']}")
-        print(f"  dd_host_memory_per_server = {self.config['dd_host_memory_per_server']}")
-        print(f"  gpu_memory_per_server    = {self.config['gpu_memory_per_server']}")
+        print(f"  host_memory_per_server = {self.config['host_memory_per_server']}")
+        print(f"  gpu_memory_per_server  = {self.config['gpu_memory_per_server']}")
         print(f"  use_hugepages = {self.config['use_hugepages']}")
         if self.processing_delay_sec > 0.0:
             print(f"  processing_delay_sec = {self.processing_delay_sec}  (artificial per-frame delay)")
@@ -388,30 +398,26 @@ class RunServerHelper:
         print(f"Hardware validation passed: server CPUs = {self.config['server_cpus']}")
 
     def _setup_memory(self):
-        # All three host/GPU BumpAllocators are constructed in async mode so
-        # they initialize concurrently (zeroing + cudaHostRegister + cudaMalloc
-        # overlap across servers). af_zero isn't functionally required for
-        # rb_host (the receiver overwrites the memory before anyone reads it),
-        # but the parallel memset pre-faults every page across the zero
-        # workers -- cheaper than the single registrar thread faulting them
-        # in during cudaHostRegister -- and the async cost is hidden behind
+        # Both BumpAllocators are constructed in async mode so they
+        # initialize concurrently (zeroing + cudaHostRegister + cudaMalloc
+        # overlap across servers). af_zero on the host pool serves two
+        # masters: GpuDedisperser::allocate() requires zeroed memory, and
+        # the parallel memset pre-faults every page across the zero workers
+        # -- cheaper than the single registrar thread faulting them in
+        # during cudaHostRegister -- with the async cost hidden behind
         # concurrent inits.
-        self.rb_host_aflags = ksgpu.af_rhost | ksgpu.af_zero
-        # dd_host (GpuDedisperser host buffers): af_rhost + af_zero, per
-        # GpuDedisperser::allocate()'s requirement.
-        self.dd_host_aflags = ksgpu.af_rhost | ksgpu.af_zero
+        self.host_aflags = ksgpu.af_rhost | ksgpu.af_zero
         if self.config['use_hugepages']:
-            self.rb_host_aflags |= ksgpu.af_mmap_huge
-            self.dd_host_aflags |= ksgpu.af_mmap_huge
+            self.host_aflags |= ksgpu.af_mmap_huge
         # gpu: af_gpu + af_zero, per GpuDedisperser::allocate()'s requirement.
         self.gpu_aflags = ksgpu.af_gpu | ksgpu.af_zero
 
     def _build_all_servers(self):
-        # Phase 1 happens inside _build_server: all 3 async BumpAllocators per
+        # Phase 1 happens inside _build_server: both async BumpAllocators per
         # server kick off and return immediately. SlabAllocator and
         # AssembledFrameAllocator are also constructed (their ctors don't
-        # block because the SlabAllocator defers its allocate_bytes call to
-        # first get_slab(), which won't happen until server.start()).
+        # block because the SlabAllocator carves slabs on demand, starting at
+        # the first get_slab(), which won't happen until server.start()).
         for i in range(self.n):
             self._build_server(i)
 
@@ -433,17 +439,16 @@ class RunServerHelper:
                 print(f"\nTo start toy grouper(s):  pirate_frb run_toy_grouper [-s SIFTER_ADDR] {grouper_addrs}\n")
                 raise
 
-        # Phase 2: wait for all 3 * num_servers async BumpAllocators to
+        # Phase 2: wait for all 2 * num_servers async BumpAllocators to
         # finish initializing. Any async-init failures surface here with a
         # clean stack trace through run_server rather than from a server
-        # worker thread later.
+        # worker thread later. (The host bump also backs the SlabAllocator,
+        # so no separate wait is needed for the frame pool.)
         for i, server in enumerate(self.servers):
             print(f"Waiting for server {i}'s async BumpAllocators to initialize, "
                   f"before accepting connections (may take some time).")
             server.host_allocator.wait_until_initialized()
             server.gpu_allocator.wait_until_initialized()
-            # rb_bump is held in self._rb_bumps[i] so we can wait on it here.
-            self._rb_bumps[i].wait_until_initialized()
             print(f"  Server {i} ready.")
 
         # Phase 3: start all servers.
@@ -469,22 +474,42 @@ class RunServerHelper:
         with ThreadAffinity(vcpu_list), cp.cuda.Device(cuda_device_id):
             num_addrs = len(self.config['data_ip_addrs'][i])
 
-            rb_nbytes = self.config['rb_host_memory_per_server_bytes']
-            dd_nbytes = self.config['dd_host_memory_per_server_bytes']
             gpu_nbytes = self.config['gpu_memory_per_server_bytes']
 
-            # Ring-buffer host memory: async, so the ctor returns immediately
-            # and workers handle zero (+ register, in hugepage case).
-            rb_bump = BumpAllocator(
-                self.rb_host_aflags, rb_nbytes,
+            # SINGLE host memory pool (async ctor: returns immediately;
+            # workers handle zero + register, in hugepage case). Two carvers
+            # share it:
+            #   1. The processing thread's GpuDedisperser::allocate call
+            #      (via FrbServer's host_allocator), which carves exactly
+            #      what the dedispersion plan needs;
+            #   2. the SlabAllocator below, whose frame pool carves ONE SLAB
+            #      AT A TIME until the pool is exhausted -- by design, the
+            #      frame ring buffer's retention expands to absorb all
+            #      remaining memory.
+            #
+            # CARVE-ORDERING INVARIANT: correctness requires that the
+            # dedisperser's carves land before the frame pool exhausts the
+            # bump. Both start after the first X-engine metadata arrives,
+            # but the margin is large (~two orders of magnitude): the
+            # dedisperser's allocations are instant bump-pointer advances,
+            # made seconds after metadata (once the plan is built), while
+            # the frame pool grows at the real-time data rate and would
+            # need MINUTES to encroach on the dedispersion share. If the
+            # invariant were ever violated (e.g. a stalled processing
+            # thread), GpuDedisperser::allocate fails loudly with a
+            # capacity error rather than corrupting anything.
+            host_nbytes = self.config['host_memory_per_server_bytes']
+            host_bump = BumpAllocator(
+                self.host_aflags, host_nbytes,
                 is_async=True,
-                nthreads=compute_async_bump_nthreads(vcpu_list, rb_nbytes),
+                nthreads=compute_async_bump_nthreads(vcpu_list, host_nbytes),
                 cuda_device=cuda_device_id)
+
             # SlabAllocator: async-aware. Returns immediately; carves slabs
-            # from rb_bump on demand, one per get_slab() call (the first of
-            # which happens after server.start(), and blocks on rb_bump's
-            # async init internally).
-            slab_allocator = SlabAllocator(rb_bump)
+            # from host_bump on demand, one per get_slab() call (the first
+            # of which happens after server.start(), and blocks on the
+            # bump's async init internally).
+            slab_allocator = SlabAllocator(host_bump)
             # AssembledFrameAllocator: spawns its own worker thread; that
             # worker calls into slab_allocator and will block on the
             # BumpAllocator's init if it tries to call get_slab() before
@@ -495,14 +520,6 @@ class RunServerHelper:
                 num_consumers=num_addrs,
                 time_samples_per_chunk=self.dedisp_config.time_samples_per_chunk,
             )
-
-            # Dedispersion host memory (passed to FrbServer; used by the
-            # processing thread's GpuDedisperser::allocate call). Async.
-            host_alloc = BumpAllocator(
-                self.dd_host_aflags, dd_nbytes,
-                is_async=True,
-                nthreads=compute_async_bump_nthreads(vcpu_list, dd_nbytes),
-                cuda_device=cuda_device_id)
 
             # GPU memory (cudaMalloc + cudaMemset). Async; nthreads ignored
             # for case 3 but we pass it for uniformity.
@@ -539,7 +556,7 @@ class RunServerHelper:
                                self.config['rpc_ip_addrs'][i],
                                self.config['ringbuf_nchunks'],
                                min_data_mtu=self.config['min_data_mtu'],
-                               host_allocator=host_alloc,
+                               host_allocator=host_bump,
                                gpu_allocator=gpu_alloc,
                                cuda_device_id=cuda_device_id,
                                processing_delay_sec=self.processing_delay_sec,
@@ -555,13 +572,6 @@ class RunServerHelper:
         # Stash the grouper client (None when no_grouper) for the phase-1.5 ping.
         # (FrbServer holds it but does not expose it back to Python.)
         self._grouper_clients.append(grouper_client)
-        # Stash rb_bump for the wait-until-initialized loop in phase 2.
-        # (FrbServer doesn't store rb_bump itself; the SlabAllocator above
-        # holds a shared_ptr to it which would keep it alive transitively,
-        # but we want explicit access for the wait loop.)
-        if not hasattr(self, '_rb_bumps'):
-            self._rb_bumps = []
-        self._rb_bumps.append(rb_bump)
         print(f"  Server {i} built (async init in progress).")
 
     def _print_server_details(self, i, vcpu_list, cuda_device_id):
