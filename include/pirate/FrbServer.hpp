@@ -95,8 +95,8 @@ struct FrbServer
         std::shared_ptr<BumpAllocator> gpu_allocator;
         int cuda_device_id = -1;
 
-        // All Receivers must share the same AssembledChunkAllocator.
-        // AssembledChunkAllocator::time_samples_per_chunk must agree
+        // All Receivers must share the same AssembledFrameAllocator.
+        // AssembledFrameAllocator::time_samples_per_chunk must agree
         // with DedispersionConfig::time_samples_per_chunk.
         std::vector<std::shared_ptr<Receiver>> receivers;
         std::shared_ptr<FileWriter> file_writer;
