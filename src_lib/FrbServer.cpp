@@ -1665,10 +1665,16 @@ void FrbServer::_grouper_send_thread_main()
     { unique_lock<std::mutex> lock(mutex); if (is_stopped) return; }
     grouper_client->connect(constants::grouper_connect_timeout_ms);
 
-    std::cout << "FrbServer: connected to grouper at "
-              << grouper_client->grouper_ip_addr << std::endl;
-    std::cout << "FrbServer: waiting for X-engine node(s) to connect at "
-              << params.rpc_server_address << " (Ctrl-C to stop)" << std::endl;
+    // Composed in an ostringstream and printed with a single operator<<, so
+    // that with multiple servers the concurrent grouper send threads can't
+    // interleave their output mid-line (same pattern as the per-chunk status
+    // line in _frame_finalizing_thread_main).
+    std::ostringstream connect_msg;
+    connect_msg << "FrbServer: connected to grouper at "
+                << grouper_client->grouper_ip_addr << "\n"
+                << "FrbServer: waiting for X-engine node(s) to connect at "
+                << params.rpc_server_address << " (Ctrl-C to stop)\n";
+    std::cout << connect_msg.str() << std::flush;
 
     // (2) Start receivers NOW (unchanged location: after the grouper is connected,
     //     before the Handshake -- see "Thread ordering"). Data ingest begins ->
