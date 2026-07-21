@@ -1477,8 +1477,9 @@ void FrbServer::_frame_finalizing_thread_main()
                 line << std::fixed << std::setprecision(2)
                      << ", Gbps=" << gbps
                      << ", beams=" << rt_beams
-                     << "/" << nbeams << "\n";
+                     << "/" << nbeams;
             }
+            line << "\n";
             std::cout << line.str() << std::flush;
         }
     }
