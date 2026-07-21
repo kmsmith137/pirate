@@ -24,6 +24,11 @@ asdf/library: !core/software-1.0.0
     homepage: https://github.com/eschnett/asdf-cxx
     version: 8.0.0
 
+# Version number for the AssembledFrame file format.
+# Note that the xengine_metadata has an independent version number.
+
+file_format_version: 1
+
 # Per-frame scalar metadata.
 #   nfreq:            total frequency channels across all zones; equals
 #                     sum(xengine_metadata.zone_nfreq) below.

@@ -74,6 +74,15 @@ void AssembledFrame::_reap_locked()
 // specially in AssembledFrame::{write,from}_asdf -- see XEngineMetadata.hpp
 // for the rationale.
 
+
+// Version number for the AssembledFrame ASDF file format. Written by
+// write_asdf() and checked by from_asdf(); bump on any incompatible change
+// to the file layout. Deliberately a file-local constant, not an
+// AssembledFrame member: the version describes the FILE format, not the
+// in-memory object. (Note that xengine_metadata has an independent version
+// number of its own.)
+static constexpr long asdf_file_format_version = 1;
+
 static shared_ptr<ASDF::sequence> _make_int_seq(const vector<long> &v)
 {
     auto seq = make_shared<ASDF::sequence>();
@@ -518,6 +527,15 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync, bool ver
 
         if (verbose) {
             w << YAML::Newline << YAML::Newline << YAML::Comment(
+                "Version number for the AssembledFrame file format.\n"
+                "Note that the xengine_metadata has an independent version number."
+            ) << YAML::Newline << YAML::Newline;
+        }
+        w << YAML::Key << "file_format_version" << YAML::Value
+          << ASDF::int_entry(int64_t(asdf_file_format_version));
+
+        if (verbose) {
+            w << YAML::Newline << YAML::Newline << YAML::Comment(
                 "Per-frame scalar metadata.\n"
                 "  nfreq:            total frequency channels across all zones; equals\n"
                 "                    sum(xengine_metadata.zone_nfreq) below.\n"
@@ -631,6 +649,11 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
     ASDF::asdf project(filename);
     auto grp = project.get_group();
     xassert(grp != nullptr);
+
+    // Check the file-format version FIRST, so an incompatible file fails
+    // with a version mismatch rather than a confusing parse error.
+    long file_format_version = _read_int(grp, "file_format_version");
+    xassert_eq(file_format_version, asdf_file_format_version);
 
     // Read per-frame scalars.
     long nfreq = _read_int(grp, "nfreq");
