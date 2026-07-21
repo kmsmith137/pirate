@@ -912,6 +912,9 @@ void FrbServer::_processing_thread_main()
     dd_params.num_consumers = params.grouper_client ? 1 : 0;
     dd_params.synchronous = false;
     dd_params.cuda_device_id = params.cuda_device_id;
+    // Whether the caller shares the host allocator with concurrent carvers
+    // (run_server: the frame ring buffer's SlabAllocator) -- see Params.
+    dd_params.shared_host_allocator = params.shared_host_allocator;
     
     // initial_chunk: the canonical initial_time_chunk (time-chunk index of the
     // very first frame, relative to FPGA seq 0). Lets the dedisperser stamp each

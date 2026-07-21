@@ -444,8 +444,20 @@ void GpuDedisperser::_allocate(BumpAllocator &gpu_allocator, BumpAllocator &host
     long host_nbytes_allocated = host_allocator.get_nbytes_allocated() - host_nbytes_before;
     // cout << "GpuDedisperser: " << gpu_nbytes_allocated << " bytes allocated on GPU" << endl;
     // cout << "GpuDedisperser: " << host_nbytes_allocated << " bytes allocated on host" << endl;
+
     xassert_eq(gpu_nbytes_allocated, resource_tracker.get_gmem_footprint());
-    xassert_eq(host_nbytes_allocated, resource_tracker.get_hmem_footprint());
+
+    // Cross-check the host allocator's bump-pointer advance against the
+    // ResourceTracker's predicted hmem footprint. With a shared host allocator
+    // (params.shared_host_allocator), other threads may have carved from it
+    // between the two get_nbytes_allocated() snapshots above, so the delta can
+    // legitimately exceed our own footprint -- assert only the inequality.
+    // (The delta can't be less: our allocation advances the monotone counter
+    // by exactly the footprint, and concurrent carves only add to it.)
+    if (params.shared_host_allocator)
+        xassert_ge(host_nbytes_allocated, resource_tracker.get_hmem_footprint());
+    else
+        xassert_eq(host_nbytes_allocated, resource_tracker.get_hmem_footprint());
 
     // Publish is_allocated and spawn the worker thread (thread-backed class
     // pattern) in one critical section: the thread handle is teardown state,

@@ -83,6 +83,16 @@ struct GpuDedisperser
         // This optional member is only used to set Outputs::ichunk_fpga_based
         // (to Outputs::ichunk_zero-based + initial_chunk).
         long initial_chunk = 0;
+
+        // Set to true if other threads may allocate CONCURRENTLY from the
+        // host_allocator passed to allocate() (e.g. in run_server, the host
+        // BumpAllocator is shared with the frame ring buffer's SlabAllocator).
+        // allocate() cross-checks the allocator's bump-pointer advance against
+        // the ResourceTracker's predicted hmem footprint; concurrent carves
+        // would make the exact check fail spuriously, so when this flag is set
+        // the check is weakened to an inequality (see _allocate()). The
+        // gpu_allocator needs no analogous flag: no context shares it.
+        bool shared_host_allocator = false;
     };
 
     

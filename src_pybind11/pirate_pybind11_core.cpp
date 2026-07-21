@@ -1475,7 +1475,8 @@ void register_core_bindings(pybind11::module &m)
                            bool no_dedispersion,
                            long nbatches_wt,
                            bool quiet,
-                           bool disable_max_unprocessed_chunks) {
+                           bool disable_max_unprocessed_chunks,
+                           bool shared_host_allocator) {
                FrbServer::Params params;
                params.config_prefilled = config_prefilled;
                params.receivers = std::move(receivers);
@@ -1492,6 +1493,7 @@ void register_core_bindings(pybind11::module &m)
                params.nbatches_wt = nbatches_wt;
                params.quiet = quiet;
                params.disable_max_unprocessed_chunks = disable_max_unprocessed_chunks;
+               params.shared_host_allocator = shared_host_allocator;
                return FrbServer::create(params);
           }),
                py::arg("config_prefilled"),
@@ -1507,6 +1509,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("nbatches_wt") = 0,
                py::arg("quiet") = false,
                py::arg("disable_max_unprocessed_chunks") = false,
+               py::arg("shared_host_allocator") = false,
                "Create an FrbServer.\n\n"
                "Args:\n"
                "    config_prefilled: DedispersionConfig. Four members\n"
@@ -1553,7 +1556,14 @@ void register_core_bindings(pybind11::module &m)
                "        the (rb_assembled - rb_processed) bound\n"
                "        (constants.server_max_unprocessed_chunks). For unit tests\n"
                "        with unpaced FakeXEngines, which send much faster than\n"
-               "        real time. Never set in production.")
+               "        real time. Never set in production.\n"
+               "    shared_host_allocator (default False): set True if the caller\n"
+               "        shares host_allocator with other concurrent carvers\n"
+               "        (run_server shares it with the frame ring buffer's\n"
+               "        SlabAllocator). Weakens an exact footprint cross-check in\n"
+               "        GpuDedisperser.allocate() to an inequality, which would\n"
+               "        otherwise fail spuriously under concurrent slab carving.\n"
+               "        Leave False when host_allocator is dedicated (unit tests).")
           .def("start", &FrbServer::start,
                "Start all Receivers.\n\n"
                "Raises:\n"

@@ -95,6 +95,16 @@ struct FrbServer
         std::shared_ptr<BumpAllocator> gpu_allocator;
         int cuda_device_id = -1;
 
+        // Set to true if the caller shares 'host_allocator' with other
+        // concurrent carvers (run_server shares it with the frame ring
+        // buffer's SlabAllocator). Forwarded to
+        // GpuDedisperser::Params::shared_host_allocator, which weakens an
+        // exact footprint cross-check in GpuDedisperser::allocate() to an
+        // inequality (the exact check fails spuriously under concurrent
+        // carving). Leave false when host_allocator is dedicated to this
+        // FrbServer (e.g. unit tests), to keep the exact check.
+        bool shared_host_allocator = false;
+
         // All Receivers must share the same AssembledFrameAllocator.
         // AssembledFrameAllocator::time_samples_per_chunk must agree
         // with DedispersionConfig::time_samples_per_chunk.

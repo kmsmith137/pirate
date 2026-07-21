@@ -580,7 +580,14 @@ class RunServerHelper:
                                processing_delay_sec=self.processing_delay_sec,
                                grouper_client=grouper_client,
                                no_dedispersion=self.no_dedispersion,
-                               quiet=self.quiet)
+                               quiet=self.quiet,
+                               # The host pool is SHARED with the frame ring buffer's
+                               # SlabAllocator (see the single-host-pool comment above),
+                               # which carves from it concurrently with
+                               # GpuDedisperser.allocate(). This weakens an exact
+                               # footprint cross-check there to an inequality (the
+                               # exact check fails spuriously under concurrent carving).
+                               shared_host_allocator=True)
             # server.start() is NOT called here. We defer all server.start()
             # calls to _build_all_servers's phase 3 so that the async
             # BumpAllocators across all servers can initialize concurrently
