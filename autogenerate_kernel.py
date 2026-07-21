@@ -4,6 +4,15 @@ import os
 import sys
 import contextlib
 
+# Cap BLAS/OpenMP thread pools BEFORE numpy is imported (via cuda_generator below).
+# 'make -jN' runs N copies of this script concurrently, and each OpenBLAS would
+# otherwise start one thread per core, so N processes x N threads can exceed the
+# system's thread/pid limit (e.g. a cgroup pids.max). When pthread_create fails,
+# OpenBLAS aborts by signaling its process group, killing the whole make run.
+# Kernel generation does no significant linear algebra, so single-threaded is fine.
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+
 if (len(sys.argv) != 2) or (not sys.argv[1].endswith('.cu')):
     with contextlib.redirect_stdout(sys.stderr):
         print('Usage: autogenerate_kernel.py <filename>')
