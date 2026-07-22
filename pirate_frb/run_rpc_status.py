@@ -11,6 +11,24 @@ from .rpc import FrbSearchClient
 from .pirate_pybind11 import constants
 
 
+# print() is not atomic: it writes the message and the trailing newline as two
+# separate stream writes. With one set of monitor threads per server, a sibling
+# thread can print between those two writes, merging two lines into one (e.g.
+# "...rb=[...][10.0.0.2:6001] connections=..."). Serialize all printing done by
+# the monitor threads, and emit each message -- including multi-line blocks --
+# as a single write.
+_print_lock = threading.Lock()
+
+
+def _atomic_print(msg, stream=None):
+    """Write 'msg' (which may span multiple lines) plus a newline, as one
+    lock-guarded write. Used by every print that runs on a monitor thread."""
+    stream = stream if stream is not None else sys.stdout
+    with _print_lock:
+        stream.write(msg + "\n")
+        stream.flush()
+
+
 class _ServerMonitor:
     """Owns the daemon threads for a single FrbServer connection: one polls
     get_status() once per second and prints a summary line; one waits for the
@@ -29,12 +47,12 @@ class _ServerMonitor:
         try:
             while not self.stop_event.is_set():
                 status = self.client.get_status()
-                print(f"[{self.addr}] connections={status.num_connections}, "
-                      f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_processed},{status.rb_streamed},{status.rb_assembled},{status.rb_end}]")
+                _atomic_print(f"[{self.addr}] connections={status.num_connections}, "
+                              f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_processed},{status.rb_streamed},{status.rb_assembled},{status.rb_end}]")
 
                 self._wait_between_polls()
         except Exception as e:
-            print(f"[{self.addr}] ERROR: {e}", file=sys.stderr)
+            _atomic_print(f"[{self.addr}] ERROR: {e}", sys.stderr)
             self.stop_event.set()
 
     def metadata_loop(self):
@@ -46,15 +64,14 @@ class _ServerMonitor:
             while not self.stop_event.is_set():
                 xmd_yaml = self.client._try_xengine_metadata()
                 if xmd_yaml is not None:
-                    print()
-                    print(f"[{self.addr}] xengine_metadata:")
-                    print(textwrap.indent(xmd_yaml.rstrip(), "  "))
-                    print()
+                    # One write, so the whole block stays contiguous.
+                    _atomic_print(f"\n[{self.addr}] xengine_metadata:\n"
+                                  f"{textwrap.indent(xmd_yaml.rstrip(), '  ')}\n")
                     return
 
                 self._wait_between_polls()
         except Exception as e:
-            print(f"[{self.addr}] ERROR: {e}", file=sys.stderr)
+            _atomic_print(f"[{self.addr}] ERROR: {e}", sys.stderr)
             self.stop_event.set()
 
     def _wait_between_polls(self):
@@ -86,19 +103,19 @@ class _ServerMonitor:
                         return
                     tag = f" (stream {stream_name})" if stream_name else ""
                     if error_message:
-                        print(f"[{self.addr}] {filename} failed: {error_message}{tag}")
+                        _atomic_print(f"[{self.addr}] {filename} failed: {error_message}{tag}")
                     else:
-                        print(f"[{self.addr}] {filename} received{tag}")
+                        _atomic_print(f"[{self.addr}] {filename} received{tag}")
         except grpc.RpcError as e:
             # CANCELLED here is from something OTHER than our own close()
             # (which the FileSubscriber converts to clean StopIteration). In
             # practice: server graceful shutdown. Silence it; surface anything
             # else.
             if e.code() != grpc.StatusCode.CANCELLED:
-                print(f"[{self.addr}] subscribe_files ERROR: {e}", file=sys.stderr)
+                _atomic_print(f"[{self.addr}] subscribe_files ERROR: {e}", sys.stderr)
                 self.stop_event.set()
         except Exception as e:
-            print(f"[{self.addr}] subscribe_files ERROR: {e}", file=sys.stderr)
+            _atomic_print(f"[{self.addr}] subscribe_files ERROR: {e}", sys.stderr)
             self.stop_event.set()
 
 
@@ -177,14 +194,16 @@ def run_rpc_status(ip_addrs):
         while not stop_event.is_set():
             time.sleep(constants.default_poll_cadence_ms / 1000)
     except KeyboardInterrupt:
-        print("\nStopping...")
+        # Monitor threads may still be printing here, and join() below can time
+        # out with one still alive -- so these go through _atomic_print too.
+        _atomic_print("\nStopping...")
         stop_event.set()
 
     for t in threads:
         t.join(timeout=constants.default_shutdown_timeout_sec)
     for _, client in clients:
         client.close()
-    print("RPC client(s) stopped.")
+    _atomic_print("RPC client(s) stopped.")
 
     if stop_event.is_set():
         sys.exit(1)
