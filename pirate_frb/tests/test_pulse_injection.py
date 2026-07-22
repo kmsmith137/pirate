@@ -21,6 +21,7 @@ import numpy as np
 
 from ..core import AssembledFrameAllocator, BumpAllocator, SlabAllocator, XEngineMetadata
 from ..simpulse import SinglePulse
+from ..utils import atomic_print
 
 
 def _unpack_int4(frame):
@@ -83,7 +84,7 @@ def _single_pulse(edges, variances, time_sample_ms, dm=10.0, snr=40.0, uat_sec=0
 
 
 def test_pulse_injection():
-    print("  test_pulse_injection()...")
+    atomic_print("  test_pulse_injection()...")
 
     nfreq = 64
     flo, fhi = 400.0, 800.0
@@ -127,8 +128,8 @@ def test_pulse_injection():
         rvar = float(resid[expected == 0.0].var())
         assert abs(rvar / V - 1.0) < 0.15, f"[{label}] off-pulse residual variance {rvar:.4f} != V={V}"
 
-        print(f"    {label}: it=[{sp.it_start},{sp.it_end}) vs frame [0,{ntime}), "
-              f"matched-filter amp={amp:.3f}, off-pulse var={rvar:.4f} (V={V:.3f}) -- ok")
+        atomic_print(f"    {label}: it=[{sp.it_start},{sp.it_end}) vs frame [0,{ntime}), "
+                     f"matched-filter amp={amp:.3f}, off-pulse var={rvar:.4f} (V={V:.3f}) -- ok")
 
     # Learn the pulse's grid span L (with dt_sp=0, frame-time == pulse-time) from a uat=0
     # reference. Since uat += K*dt shifts every freq_it0 -- hence it_start -- by exactly K
@@ -177,7 +178,7 @@ def test_pulse_injection():
     sp_bad_var = _single_pulse(edges, np.full(nfreq, V * 2.0), frame_dt_ms)
     _expect_throw("freq_variances mismatch", lambda: frame.randomize(True, True, sp=sp_bad_var, dt_sp=0))
 
-    print("    consistency/precondition checks all threw -- ok")
+    atomic_print("    consistency/precondition checks all threw -- ok")
 
 
 def test_pulse_invariants():
@@ -188,7 +189,7 @@ def test_pulse_invariants():
     identical up to the shift (nothing is discarded at t < 0); shift_samples(); and
     add_to_timestream()'s (out, out_it0) span contract.
     """
-    print("  test_pulse_invariants()...")
+    atomic_print("  test_pulse_invariants()...")
 
     nfreq = 64
     dt_ms = 1.0
@@ -263,5 +264,5 @@ def test_pulse_invariants():
     _expect_throw("out ends too early",
                   lambda: sp_a.add_to_timestream(np.zeros((nfreq, nt - 1), np.float32), sp_a.it_start))
 
-    print(f"    it=[{sp_a.it_start},{sp_a.it_end}): shift-equivalence + "
-          f"add_to_timestream span contract -- ok")
+    atomic_print(f"    it=[{sp_a.it_start},{sp_a.it_end}): shift-equivalence + "
+                 f"add_to_timestream span contract -- ok")

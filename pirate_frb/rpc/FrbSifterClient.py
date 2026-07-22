@@ -10,6 +10,7 @@ import yaml
 from .grpc import frb_sifter_pb2
 from .grpc import frb_sifter_pb2_grpc
 from ..pirate_pybind11 import constants
+from ..utils import atomic_print
 
 
 class FrbSifterEvents:
@@ -337,8 +338,8 @@ class FrbSifterClient:
             self._on_event_expired(e.code().name)
             return
         if not reply.ok:
-            print(f"FrbSifterClient.send_events: sifter at {self.server_address!r} "
-                  f"rejected the message: {reply.message!r}", file=sys.stderr, flush=True)
+            atomic_print(f"FrbSifterClient.send_events: sifter at {self.server_address!r} "
+                         f"rejected the message: {reply.message!r}", fd=2)
 
     def _on_event_expired(self, code_name):
         """Handle an event that couldn't be delivered within 'timeout' (runs on a grpc
@@ -351,7 +352,7 @@ class FrbSifterClient:
                 if self._deferred_error is None:   # keep the first; coalesce a burst
                     self._deferred_error = RuntimeError(msg)
         else:
-            print(msg, flush=True)                 # stdout: make sifter outages visible
+            atomic_print(msg)                 # stdout: make sifter outages visible
 
     def _raise_deferred_error(self):
         """If a prior async send timed out (raise_exception_on_timeout=True), re-raise it."""
@@ -423,7 +424,7 @@ class FrbSifterClient:
             err = self._deferred_error
             self._deferred_error = None
         if err is not None:
-            print(str(err), file=sys.stderr, flush=True)
+            atomic_print(str(err), fd=2)
 
     def __enter__(self):
         return self

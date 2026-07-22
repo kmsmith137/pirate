@@ -11,6 +11,7 @@ need to be reflected in the sphinx docs.
 import contextlib
 import itertools
 import time
+from .utils import atomic_print
 
 
 def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histogram=None):
@@ -51,8 +52,8 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
             grouper_yaml = {'toy_grouper': True},  # placeholder for future expansion
             search_ip_addr = grouper.search_ip_addr)
         
-        print(f'{grouper.grouper_ip_addr}: connected to sifter at {sifter.server_address}, '
-              f'sent ConfigMessage', flush=True)
+        atomic_print(f'{grouper.grouper_ip_addr}: connected to sifter at {sifter.server_address}, '
+                     f'sent ConfigMessage')
 
     # The grouper receives dedispersion outputs as an outer loop over time chunks,
     # followed by an inner loop over beam batches. Dedispersion outputs are arrays
@@ -128,9 +129,9 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
                                        per_beam_max[ibeam], per_beam_token[ibeam])
 
         coarse_snr_max = float(per_beam_max.max())
-        print(f'toy_grouper: beamset={grouper.xengine_metadata.beamset}, ichunk={ichunk}, '
-              f'fpga=[{events.chunk_fpga_start}:{events.chunk_fpga_end}], '
-              f'coarse_snr_max={coarse_snr_max:.4g}, nevents={len(events)}', flush=True)
+        atomic_print(f'toy_grouper: beamset={grouper.xengine_metadata.beamset}, ichunk={ichunk}, '
+                     f'fpga=[{events.chunk_fpga_start}:{events.chunk_fpga_end}], '
+                     f'coarse_snr_max={coarse_snr_max:.4g}, nevents={len(events)}')
 
         if sifter is not None:
             # Send the FrbEventsMessage (even if nevents==0).
@@ -195,13 +196,13 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
         try:
             _run_toy_grouper(grouper, sifter, delay, snr_threshold, histogram)
         except KeyboardInterrupt:
-            print(f'{grouper_addr}: interrupted; shutting down', flush=True)
+            atomic_print(f'{grouper_addr}: interrupted; shutting down')
         except RuntimeError as e:
             # Most likely the producer disconnected (the grouper stops and
             # _acquire_output rethrows). Report cleanly; re-raise anything that is
             # not a stop (e.g. a genuine usage/assert bug).
             if grouper.is_stopped:
-                print(f'{grouper_addr}: producer disconnected ({e}); exiting', flush=True)
+                atomic_print(f'{grouper_addr}: producer disconnected ({e}); exiting')
             else:
                 raise
         finally:

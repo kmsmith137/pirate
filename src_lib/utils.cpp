@@ -9,11 +9,16 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
+#include <thread>
+#include <vector>
 #include <iomanip>
 
 #include <sys/mman.h>
+#include <unistd.h>         // write()
 #include <cuda_runtime.h>
 
 #include <ksgpu/cuda_utils.hpp>   // CUDA_CALL
@@ -26,6 +31,124 @@ namespace pirate {
 #if 0
 }  // editor auto-indent
 #endif
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Serialized output: atomic_print() and class AtomicPrint. See utils.hpp for
+// the rationale and for usage of the one-liner and block forms.
+
+
+void atomic_print(std::string_view s, int fd) noexcept
+{
+    // An AtomicPrint that was never streamed to prints nothing.
+    if (s.empty())
+        return;
+
+    // Process-global: shared by every C++ caller and, through the pybind11
+    // binding, by every python caller in this process.
+    static std::mutex lock;
+
+    // Copy only in the case where we must append the newline.
+    string tmp;
+    if (s.back() != '\n') {
+        tmp = string(s) + '\n';
+        s = tmp;
+    }
+
+    // Everything above is formatting; the critical section below is
+    // write-only, so a slow write never serializes message construction.
+    lock_guard<std::mutex> l(lock);
+
+    const char *p = s.data();
+    long n = (long)s.size();
+
+    while (n > 0) {
+        ssize_t w = ::write(fd, p, n);
+
+        if (w < 0) {
+            // Retry a signal-interrupted write; otherwise give up silently
+            // (see the noexcept/best-effort rationale in utils.hpp).
+            if (errno == EINTR)
+                continue;
+            return;
+        }
+
+        p += w;
+        n -= (long)w;
+    }
+
+    // Note on the loop: we hold the mutex across a short write, so
+    // intra-process atomicity is unconditional. Cross-process atomicity
+    // relies on the message going out in a single write(2), which the kernel
+    // guarantees for pipes up to PIPE_BUF (4 KiB on linux) and which holds in
+    // practice for regular files and ttys. A multi-KiB block sharing a pipe
+    // with another process could therefore split; our lines are far smaller.
+}
+
+
+AtomicPrint::AtomicPrint(int fd_) :
+    fd(fd_)
+{
+    xassert_ge(fd_, 0);
+}
+
+
+AtomicPrint::~AtomicPrint()
+{
+    // Destructors are implicitly noexcept, and atomic_print() is noexcept, but
+    // ss.str() allocates and could in principle throw -- which would be
+    // std::terminate during unwinding. Belt-and-braces.
+    try {
+        atomic_print(ss.str(), fd);
+    } catch (...) {
+    }
+}
+
+
+void test_atomic_print(int fd, long nthreads, long nlines)
+{
+    xassert_ge(fd, 0);
+    xassert_gt(nthreads, 0);
+    xassert_gt(nlines, 0);
+
+    vector<std::thread> threads;
+    threads.reserve(nthreads);
+
+    for (long t = 0; t < nthreads; t++) {
+        threads.emplace_back([fd,nlines,t]() {
+            for (long i = 0; i < nlines; i++) {
+                // Rotate through all three call styles, so the test exercises
+                // the one-liner form, the multi-line block form, and a direct
+                // atomic_print() -- including a line long enough to make a
+                // splice obvious if the funnel ever regresses.
+                switch (i % 3) {
+                case 0:
+                    AtomicPrint(fd) << "cpp t=" << t << " i=" << i << " oneliner "
+                                  << string(200, 'x');
+                    break;
+
+                case 1: {
+                    AtomicPrint a(fd);
+                    a << "cpp t=" << t << " i=" << i << " block1 " << string(200, 'y') << "\n";
+                    a << "cpp t=" << t << " i=" << i << " block2 " << string(200, 'y') << "\n";
+                    break;
+                }
+
+                default: {
+                    stringstream ss;
+                    ss << "cpp t=" << t << " i=" << i << " direct " << string(200, 'z');
+                    atomic_print(ss.str(), fd);
+                    break;
+                }
+                }
+            }
+        });
+    }
+
+    for (auto &t: threads)
+        t.join();
+}
 
 
 // -------------------------------------------------------------------------------------------------

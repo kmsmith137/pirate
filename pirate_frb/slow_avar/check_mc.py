@@ -13,6 +13,7 @@ each chunk, over all channels that have at least one steady-state estimate so fa
 import numpy as np
 
 from .PfVariance import PfAvarExact
+from ..utils import atomic_print
 
 
 def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, report_every=1):
@@ -25,11 +26,11 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
     freq_variances = np.asarray(freq_variances, dtype=np.float64)
     assert freq_variances.shape == (nfreq,), (freq_variances.shape, nfreq)
 
-    print("check_avar_mc: building PfAvarExact (analytic variances) ...", flush=True)
+    atomic_print("check_avar_mc: building PfAvarExact (analytic variances) ...")
     exact = PfAvarExact(plan, freq_variances, progress=True)
 
-    print(f"check_avar_mc: building ReferenceDedisperser(sophistication={sophistication}, "
-          "enable_variances=True) ...", flush=True)
+    atomic_print(f"check_avar_mc: building ReferenceDedisperser(sophistication={sophistication}, "
+                 "enable_variances=True) ...")
     rdd = ReferenceDedisperser(plan, sophistication, enable_variances=True)
     assert int(rdd.beams_per_batch) == 1 and int(rdd.nbatches) == 1, "check_avar_mc requires nbeams==1"
 
@@ -64,8 +65,8 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
     in_shape = tuple(int(s) for s in rdd.input_array.shape)
     rng = np.random.default_rng()
 
-    print(f"check_avar_mc: nfreq={nfreq} nt_in={nt_in} ntrees={ntrees}; running "
-          f"{'until Ctrl-C' if max_chunks is None else f'for {max_chunks} chunks'} ...\n", flush=True)
+    atomic_print(f"check_avar_mc: nfreq={nfreq} nt_in={nt_in} ntrees={ntrees}; running "
+                 f"{'until Ctrl-C' if max_chunks is None else f'for {max_chunks} chunks'} ...\n\n")
 
     ichunk = 0
     try:
@@ -83,10 +84,10 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
                 _report(ichunk, exact, analytic, mc_sum, mc_sumsq, mc_count)
             ichunk += 1
     except KeyboardInterrupt:
-        print("\ncheck_avar_mc: interrupted.", flush=True)
+        atomic_print("\ncheck_avar_mc: interrupted.")
 
     if ichunk > 0:
-        print("check_avar_mc: final summary:", flush=True)
+        atomic_print("check_avar_mc: final summary:")
         _report(ichunk - 1, exact, analytic, mc_sum, mc_sumsq, mc_count)
 
 
@@ -141,8 +142,8 @@ def _report(ichunk, exact, analytic, mc_sum, mc_sumsq, mc_count):
                f"Delta(eps)={_spread(e):.4g}")
         hdr += (f", worst(eps)={worst[1]:+.4g} ({worst[2]:+.1f} sigma)" if worst is not None
                 else f", worst(eps)=n/a (need count>={_MIN_COUNT_WORST})")
-        print(hdr, flush=True)
+        atomic_print(hdr)
     else:
-        print(f"[chunk {ichunk}] overall: no steady-state channels yet", flush=True)
+        atomic_print(f"[chunk {ichunk}] overall: no steady-state channels yet")
     for line in lines:
-        print(line, flush=True)
+        atomic_print(line)

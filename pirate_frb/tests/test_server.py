@@ -64,6 +64,7 @@ from ..pirate_pybind11 import (
 from ..Hardware import Hardware
 from ..utils import ThreadAffinity
 from .utils import make_random_subscale_config, pick_receiver_worker_counts
+from ..utils import atomic_print
 
 
 def _grouper_child_main(grouper_addr, nchunks, out_queue, shutdown_event):
@@ -647,7 +648,7 @@ class ServerTester:
             z = c - self.c0 - 2
             if z >= 0:
                 maxdiff = self._compare_chunk(z)
-                print(f"    chunk {z}/{self.nchunks}: OK (max |gpu-ref| = {maxdiff:.3g})")
+                atomic_print(f"    chunk {z}/{self.nchunks}: OK (max |gpu-ref| = {maxdiff:.3g})")
 
         # Tail: two junk chunks flush the last two real chunks (and nothing
         # more -- junk chunk N would itself need chunk N+2 to assemble).
@@ -655,7 +656,7 @@ class ServerTester:
             self._send_junk_chunk(self.c0 + self.nchunks + j)
             z = self.nchunks - 2 + j
             maxdiff = self._compare_chunk(z)
-            print(f"    chunk {z}/{self.nchunks}: OK (max |gpu-ref| = {maxdiff:.3g})")
+            atomic_print(f"    chunk {z}/{self.nchunks}: OK (max |gpu-ref| = {maxdiff:.3g})")
 
         # Child exits its with-block after nchunks chunks and reports 'done'.
         msg = self._queue_get()
@@ -672,13 +673,13 @@ class ServerTester:
 
 def test_server():
     """One iteration of the end-to-end FakeXEngine -> FrbServer -> FrbGrouper test."""
-    print("  test_server()...")
+    atomic_print("  test_server()...")
     with ServerTester() as t:
         params_no_config = {k: v for k, v in t.p.items() if k != 'config'}
-        print(f"    params: {params_no_config}")
+        atomic_print(f"    params: {params_no_config}")
         c = t.p['config']
-        print(f"    config: toplevel_tree_rank={c.toplevel_tree_rank}, num_primary_trees={c.num_primary_trees},"
-              f" beams_per_batch={c.beams_per_batch}, num_active_batches={c.num_active_batches},"
-              f" dtype={c.dtype}")
+        atomic_print(f"    config: toplevel_tree_rank={c.toplevel_tree_rank}, num_primary_trees={c.num_primary_trees},"
+                     f" beams_per_batch={c.beams_per_batch}, num_active_batches={c.num_active_batches},"
+                     f" dtype={c.dtype}")
         t.run()
-    print("    PASSED")
+    atomic_print("    PASSED")

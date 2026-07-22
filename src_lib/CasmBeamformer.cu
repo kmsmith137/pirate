@@ -16,6 +16,13 @@
 //x This script is processed with 'vendorize.py' (in the toplevel pirate dir)
 //x to produce a "vendorized" source file for the casm pipeline. The markup
 //x in comments (e.g. "//x") is parsed by vendorize.py.
+//x
+//x NOTE TO FUTURE PIRATE WORK: do NOT convert output in this file to pirate's
+//x AtomicPrint / atomic_print() (notes/cpp.md), even though that is the rule
+//x everywhere else in src_lib. The vendorized copy is built in the casm_bf
+//x repo, which has no pirate dependency -- the same reason the CUDA_CALL
+//x macros below are duplicated here instead of taken from ksgpu. Use plain
+//x std::cout / printf here. (The audit greps in notes/cpp.md skip this file.)
 
 #include "../include/pirate/CasmBeamformer.hpp" //x
 //i #include "CasmBeamformer.hpp"

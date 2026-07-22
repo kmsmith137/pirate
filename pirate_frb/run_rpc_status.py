@@ -8,25 +8,8 @@ import threading
 import grpc
 
 from .rpc import FrbSearchClient
+from .utils import atomic_print
 from .pirate_pybind11 import constants
-
-
-# print() is not atomic: it writes the message and the trailing newline as two
-# separate stream writes. With one set of monitor threads per server, a sibling
-# thread can print between those two writes, merging two lines into one (e.g.
-# "...rb=[...][10.0.0.2:6001] connections=..."). Serialize all printing done by
-# the monitor threads, and emit each message -- including multi-line blocks --
-# as a single write.
-_print_lock = threading.Lock()
-
-
-def _atomic_print(msg, stream=None):
-    """Write 'msg' (which may span multiple lines) plus a newline, as one
-    lock-guarded write. Used by every print that runs on a monitor thread."""
-    stream = stream if stream is not None else sys.stdout
-    with _print_lock:
-        stream.write(msg + "\n")
-        stream.flush()
 
 
 class _ServerMonitor:
@@ -47,12 +30,12 @@ class _ServerMonitor:
         try:
             while not self.stop_event.is_set():
                 status = self.client.get_status()
-                _atomic_print(f"[{self.addr}] connections={status.num_connections}, "
-                              f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_processed},{status.rb_streamed},{status.rb_assembled},{status.rb_end}]")
+                atomic_print(f"[{self.addr}] connections={status.num_connections}, "
+                             f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_processed},{status.rb_streamed},{status.rb_assembled},{status.rb_end}]")
 
                 self._wait_between_polls()
         except Exception as e:
-            _atomic_print(f"[{self.addr}] ERROR: {e}", sys.stderr)
+            atomic_print(f"[{self.addr}] ERROR: {e}", fd=2)
             self.stop_event.set()
 
     def metadata_loop(self):
@@ -64,14 +47,14 @@ class _ServerMonitor:
             while not self.stop_event.is_set():
                 xmd_yaml = self.client._try_xengine_metadata()
                 if xmd_yaml is not None:
-                    # One write, so the whole block stays contiguous.
-                    _atomic_print(f"\n[{self.addr}] xengine_metadata:\n"
-                                  f"{textwrap.indent(xmd_yaml.rstrip(), '  ')}\n")
+                    # One call, so the whole block stays contiguous.
+                    atomic_print(f"\n[{self.addr}] xengine_metadata:\n"
+                                 f"{textwrap.indent(xmd_yaml.rstrip(), '  ')}\n\n")
                     return
 
                 self._wait_between_polls()
         except Exception as e:
-            _atomic_print(f"[{self.addr}] ERROR: {e}", sys.stderr)
+            atomic_print(f"[{self.addr}] ERROR: {e}", fd=2)
             self.stop_event.set()
 
     def _wait_between_polls(self):
@@ -103,41 +86,42 @@ class _ServerMonitor:
                         return
                     tag = f" (stream {stream_name})" if stream_name else ""
                     if error_message:
-                        _atomic_print(f"[{self.addr}] {filename} failed: {error_message}{tag}")
+                        atomic_print(f"[{self.addr}] {filename} failed: {error_message}{tag}")
                     else:
-                        _atomic_print(f"[{self.addr}] {filename} received{tag}")
+                        atomic_print(f"[{self.addr}] {filename} received{tag}")
         except grpc.RpcError as e:
             # CANCELLED here is from something OTHER than our own close()
             # (which the FileSubscriber converts to clean StopIteration). In
             # practice: server graceful shutdown. Silence it; surface anything
             # else.
             if e.code() != grpc.StatusCode.CANCELLED:
-                _atomic_print(f"[{self.addr}] subscribe_files ERROR: {e}", sys.stderr)
+                atomic_print(f"[{self.addr}] subscribe_files ERROR: {e}", fd=2)
                 self.stop_event.set()
         except Exception as e:
-            _atomic_print(f"[{self.addr}] subscribe_files ERROR: {e}", sys.stderr)
+            atomic_print(f"[{self.addr}] subscribe_files ERROR: {e}", fd=2)
             self.stop_event.set()
 
 
 def _print_config(addr, cfg):
-    """Print the one-shot GetConfig dump for a single server."""
-    print(f"[{addr}] config:")
-    print(f"  rpc_ip_addr = {cfg.rpc_ip_addr}")
-    print(f"  data_ip_addrs = {list(cfg.data_ip_addrs)}")
-    print(f"  time_samples_per_chunk = {cfg.time_samples_per_chunk}")
-    print(f"  ringbuf_nchunks = {cfg.ringbuf_nchunks}")
-    print(f"  ssd_dir = {cfg.ssd_dir}")
-    print(f"  nfs_dir = {cfg.nfs_dir}")
-    print(f"  ssd_threads = {cfg.ssd_threads}")
-    print(f"  nfs_threads = {cfg.nfs_threads}")
-    print(f"  toplevel_tree_rank = {cfg.toplevel_tree_rank}")
-    print(f"  beams_per_batch = {cfg.beams_per_batch}")
-    print(f"  frequency_subband_counts = {list(cfg.frequency_subband_counts)}")
-    print(f"  min_data_mtu = {cfg.min_data_mtu}")
-    print(f"  fake_zone_nfreq = {list(cfg.fake_zone_nfreq)}")
-    print(f"  fake_zone_freq_edges = {list(cfg.fake_zone_freq_edges)}")
-    print(f"  fake_time_sample_ms = {cfg.fake_time_sample_ms}")
-    print(f"  fake_nbeams = {cfg.fake_nbeams}")
+    """Print the one-shot GetConfig dump for a single server, as one block."""
+    atomic_print(
+        f"[{addr}] config:\n"
+        f"  rpc_ip_addr = {cfg.rpc_ip_addr}\n"
+        f"  data_ip_addrs = {list(cfg.data_ip_addrs)}\n"
+        f"  time_samples_per_chunk = {cfg.time_samples_per_chunk}\n"
+        f"  ringbuf_nchunks = {cfg.ringbuf_nchunks}\n"
+        f"  ssd_dir = {cfg.ssd_dir}\n"
+        f"  nfs_dir = {cfg.nfs_dir}\n"
+        f"  ssd_threads = {cfg.ssd_threads}\n"
+        f"  nfs_threads = {cfg.nfs_threads}\n"
+        f"  toplevel_tree_rank = {cfg.toplevel_tree_rank}\n"
+        f"  beams_per_batch = {cfg.beams_per_batch}\n"
+        f"  frequency_subband_counts = {list(cfg.frequency_subband_counts)}\n"
+        f"  min_data_mtu = {cfg.min_data_mtu}\n"
+        f"  fake_zone_nfreq = {list(cfg.fake_zone_nfreq)}\n"
+        f"  fake_zone_freq_edges = {list(cfg.fake_zone_freq_edges)}\n"
+        f"  fake_time_sample_ms = {cfg.fake_time_sample_ms}\n"
+        f"  fake_nbeams = {cfg.fake_nbeams}")
 
 
 def run_rpc_status(ip_addrs):
@@ -170,16 +154,14 @@ def run_rpc_status(ip_addrs):
 
     clients = [(addr, FrbSearchClient(addr)) for addr in ip_addrs]
 
-    print(f"RPC client(s) connected to {', '.join(ip_addrs)}")
-    print()
+    atomic_print(f"RPC client(s) connected to {', '.join(ip_addrs)}\n\n")
 
     # One-shot startup dump: print each server's configuration (GetConfig).
     for addr, client in clients:
         _print_config(addr, client.config)
-    print()
+    atomic_print("\n")
 
-    print("Running get_status (1/sec) and subscribe_files. Press Ctrl-C to stop.")
-    print()
+    atomic_print("Running get_status (1/sec) and subscribe_files. Press Ctrl-C to stop.\n\n")
 
     stop_event = threading.Event()
     threads = []
@@ -195,15 +177,15 @@ def run_rpc_status(ip_addrs):
             time.sleep(constants.default_poll_cadence_ms / 1000)
     except KeyboardInterrupt:
         # Monitor threads may still be printing here, and join() below can time
-        # out with one still alive -- so these go through _atomic_print too.
-        _atomic_print("\nStopping...")
+        # out with one still alive -- so these go through atomic_print too.
+        atomic_print("\nStopping...")
         stop_event.set()
 
     for t in threads:
         t.join(timeout=constants.default_shutdown_timeout_sec)
     for _, client in clients:
         client.close()
-    _atomic_print("RPC client(s) stopped.")
+    atomic_print("RPC client(s) stopped.")
 
     if stop_event.is_set():
         sys.exit(1)

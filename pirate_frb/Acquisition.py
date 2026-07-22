@@ -2,6 +2,7 @@
 
 import os
 import re
+from .utils import atomic_print
 
 
 # Frame files written by the server's fixed naming scheme
@@ -47,7 +48,7 @@ class Acquisition:
                 b, chunk = int(m.group(1)), int(m.group(2))
                 per_beam.setdefault(b, []).append((chunk, os.path.join(acqdir, name)))
             elif _TMP_RE.search(name):
-                print(f"Acquisition: ignoring temporary (uncommitted) file {name!r} in {acqdir}")
+                atomic_print(f"Acquisition: ignoring temporary (uncommitted) file {name!r} in {acqdir}")
             else:
                 raise RuntimeError(f"Acquisition: {acqdir} contains entry {name!r} which does not "
                                    f"match the expected pattern 'frame_b(BEAM)_t(CHUNK).asdf'")

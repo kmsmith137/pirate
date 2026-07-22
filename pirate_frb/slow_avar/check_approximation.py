@@ -3,6 +3,7 @@
 import numpy as np
 
 from .PfVariance import PfAvarExact, PfAvarApproximation
+from ..utils import atomic_print
 
 
 def check_approximation(plan, freq_variances=None):
@@ -25,7 +26,7 @@ def check_approximation(plan, freq_variances=None):
         freq_variances = np.ones(int(plan.nfreq))
     exact = PfAvarExact(plan, freq_variances, progress=True)
     approx = PfAvarApproximation(plan, freq_variances, progress=True)
-    print("PfAvar exact-vs-approx (epsilon = var_approx/var_exact - 1):")
+    atomic_print("PfAvar exact-vs-approx (epsilon = var_approx/var_exact - 1):")
     for itree in range(plan.ntrees):
         _check_one_tree(exact, approx, itree)
 
@@ -69,8 +70,8 @@ def _check_one_tree(exact, approx, itree):
     max_abs = float(np.max(np.abs(eps)))
     quantiles = np.percentile(eps, _EPS_PERCENTILES)
 
-    print(f"  tree {itree} [r={r} R={R} L={L} M={M}]: {eps.size} vals")
-    print(f"    mean(eps)={mean:+.6g}  Delta(eps)={delta:.6g}  max|eps|={max_abs:.4g}")
+    atomic_print(f"  tree {itree} [r={r} R={R} L={L} M={M}]: {eps.size} vals")
+    atomic_print(f"    mean(eps)={mean:+.6g}  Delta(eps)={delta:.6g}  max|eps|={max_abs:.4g}")
     pct_legend = " ".join(f"{p:g}" for p in _EPS_PERCENTILES)
     pct_values = "  ".join(f"{q:+.3g}" for q in quantiles)
-    print(f"    eps percentiles [{pct_legend}]%:  {pct_values}")
+    atomic_print(f"    eps percentiles [{pct_legend}]%:  {pct_values}")

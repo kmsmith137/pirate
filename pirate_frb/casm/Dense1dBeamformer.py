@@ -1,3 +1,9 @@
+# NOTE TO FUTURE PIRATE WORK: do NOT convert print() calls in this file to
+# pirate's atomic_print() (see notes/cpp.md), even though that is the rule
+# everywhere else in pirate_frb. This module is vendorized outside pirate
+# (the casm_bf repo), which cannot import pirate_frb. Plain print() only.
+# (The audit greps in notes/cpp.md skip the casm files.)
+
 import numpy as np
 
     

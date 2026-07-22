@@ -6,6 +6,8 @@ import shlex
 import random
 import textwrap
 import argparse
+import threading
+import traceback
 
 import argcomplete
 import ksgpu
@@ -32,6 +34,7 @@ from .Hardware import Hardware
 from .Hwtest import Hwtest
 from .HwtestSender import HwtestSender
 from .yaml_utils import indent_dedispersion_plan_comments, align_inline_comments
+from .utils import atomic_print
 
 
 #########################################   test command  ##########################################
@@ -61,6 +64,7 @@ def parse_test(subparsers):
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection and pulse-invariants tests')
     parser.add_argument('--amax', action='store_true', help='Runs DedispersionPlan.decode_argmax() tests (black-box probe arrays)')
+    parser.add_argument('--aout', action='store_true', help='Runs the serialized-output test (atomic_print/AtomicPrint, C++ and python threads)')
 
 
 def rrange(registry_class):
@@ -72,7 +76,7 @@ def rrange(registry_class):
     n = registry_class.registry_size()
 
     if n == 0:
-        print(f'{registry_class.__name__}: no kernels were registered, associated unit test will be skipped.')
+        atomic_print(f'{registry_class.__name__}: no kernels were registered, associated unit test will be skipped.')
         return
     
     for i in range((n+9)//10):
@@ -80,14 +84,14 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
     from . import utils   # local import (utils pulls in heavier deps)
 
     for i in range(args.niter):
-        print(f'\nIteration {i+1}/{args.niter}\n')
+        atomic_print(f'\nIteration {i+1}/{args.niter}\n\n')
         
         if run_all_tests or args.rt:
             kernels.ReferenceLagbuf.test_random()
@@ -132,7 +136,7 @@ def test(args):
                 kernels.CoalescedDdKernel2.test_random()
         
         if run_all_tests or args.casm:
-            print()
+            atomic_print("\n")
             if i == 0:
                 # This test is slower than the others, but I don't think we need it more than once.
                 casm.CasmReferenceBeamformer.test_interpolative_beamforming()
@@ -184,6 +188,11 @@ def test(args):
 
         if run_all_tests or args.amax:
             tests.test_decode_argmax()
+
+        if run_all_tests or args.aout:
+            # Output-funnel test is deterministic and fast; once is enough.
+            if i == 0:
+                tests.test_atomic_out()
 
         if run_all_tests or args.net:
             # Network/allocator tests only need to run once (not niter times)
@@ -247,8 +256,8 @@ def parse_check_avar_mc(subparsers):
 
 def check_avar_mc(args):
     config = DedispersionConfig.from_yaml(args.config_file)
-    print(f"check_avar_mc: forcing nbeams=1 (config had beams_per_gpu={config.beams_per_gpu}, "
-          f"beams_per_batch={config.beams_per_batch})", flush=True)
+    atomic_print(f"check_avar_mc: forcing nbeams=1 (config had beams_per_gpu={config.beams_per_gpu}, "
+                 f"beams_per_batch={config.beams_per_batch})")
     config.beams_per_gpu = 1
     config.beams_per_batch = 1
     config.num_active_batches = 1
@@ -346,42 +355,42 @@ def show_kernels(args):
 
     if show_all or args.cdd2:
         if not first:
-            print()
+            atomic_print("\n")
         first = False
         n = kernels.CoalescedDdKernel2.registry_size()
-        print(f"CoalescedDdKernel2 registry ({n} entries):", flush=True)
+        atomic_print(f"CoalescedDdKernel2 registry ({n} entries):")
         kernels.CoalescedDdKernel2.show_registry()
 
     if show_all or args.pfom:
         if not first:
-            print()
+            atomic_print("\n")
         first = False
         n = kernels.PfOutputMicrokernel.registry_size()
-        print(f"PfOutput microkernel registry ({n} entries):", flush=True)
+        atomic_print(f"PfOutput microkernel registry ({n} entries):")
         kernels.PfOutputMicrokernel.show_registry()
 
     if show_all or args.pfwr:
         if not first:
-            print()
+            atomic_print("\n")
         first = False
         n = kernels.PfWeightReaderMicrokernel.registry_size()
-        print(f"PfWeightReader microkernel registry ({n} entries):", flush=True)
+        atomic_print(f"PfWeightReader microkernel registry ({n} entries):")
         kernels.PfWeightReaderMicrokernel.show_registry()
 
     if show_all or args.gddk:
         if not first:
-            print()
+            atomic_print("\n")
         first = False
         n = kernels.GpuDedispersionKernel.registry_size()
-        print(f"Dedispersion kernel registry ({n} entries):", flush=True)
+        atomic_print(f"Dedispersion kernel registry ({n} entries):")
         kernels.GpuDedispersionKernel.show_registry()
     
     if show_all or args.gpfk:
         if not first:
-            print()
+            atomic_print("\n")
         first = False
         n = kernels.GpuPeakFindingKernel.registry_size()
-        print(f"Peak-finding kernel registry ({n} entries):", flush=True)
+        atomic_print(f"Peak-finding kernel registry ({n} entries):")
         kernels.GpuPeakFindingKernel.show_registry()
 
 
@@ -416,7 +425,7 @@ def parse_make_subbands(subparsers):
 
 
 def make_subbands(args):
-    print(f'Constructing FrequencySubbands(pf_rank={args.pf_rank}, fmin={args.fmin}, fmax={args.fmax}, threshold={args.threshold})')
+    atomic_print(f'Constructing FrequencySubbands(pf_rank={args.pf_rank}, fmin={args.fmin}, fmax={args.fmax}, threshold={args.threshold})')
 
     # These asserts detect out-of-order positional arguments.
     assert args.fmin > 99.0
@@ -424,7 +433,7 @@ def make_subbands(args):
     assert args.threshold <= 10.0
     
     fs = core.FrequencySubbands.from_threshold(args.fmin, args.fmax, args.threshold, args.pf_rank)
-    print(fs.show())
+    atomic_print(fs.show())
 
 
 ########################################   hwtest command  #########################################
@@ -625,7 +634,7 @@ def hwtest_send_from_config(config):
             while not sender.wait(pirate_pybind11.constants.default_poll_cadence_ms):
                 pass
         except KeyboardInterrupt:
-            print("\nInterrupted, stopping...")
+            atomic_print("\nInterrupted, stopping...")
 
 
 ######################################   scratch command  #######################################
@@ -677,17 +686,17 @@ def revisit_512gb(args):
 
     # Pin process (and any child threads) to CPU 0.
     os.sched_setaffinity(0, {0})
-    print('Pinned process to CPU 0.')
+    atomic_print('Pinned process to CPU 0.')
 
     h = Hardware()
-    print('\nHardware:')
+    atomic_print('\nHardware:')
     for gpu in range(h.num_gpus):
         bus_id = h._pcie_bus_id_from_gpu(gpu)
         desc = h._description_from_pcie_bus_id(bus_id)
-        print(f'  GPU {gpu}: pcie={bus_id}  ({desc})')
+        atomic_print(f'  GPU {gpu}: pcie={bus_id}  ({desc})')
 
     # Check memory availability.
-    print()
+    atomic_print("\n")
     if args.hugepages:
         if hp2m not in h.hugepage_sizes:
             raise RuntimeError(
@@ -702,7 +711,7 @@ def revisit_512gb(args):
             raise RuntimeError(
                 f"Need >= {need_gib} GiB of 2 MiB hugepages free; only {free_gib:.1f} GiB free.\n"
                 "Free up hugepages or allocate more before re-running.")
-        print(f'  2 MiB hugepages free: {free_gib:.1f} GiB (test needs {need_gib} GiB)')
+        atomic_print(f'  2 MiB hugepages free: {free_gib:.1f} GiB (test needs {need_gib} GiB)')
     else:
         # MemAvailable from /proc/meminfo (the kernel's estimate of how much
         # we can allocate without swapping). Note: this is for regular RAM;
@@ -716,27 +725,27 @@ def revisit_512gb(args):
                 f"Need >= {need_gib} GiB MemAvailable for 4 KiB-paged test; "
                 f"got {avail_gib:.1f} GiB.\nFree up memory (or reduce hugepage "
                 "reservations) before re-running.")
-        print(f'  MemAvailable: {avail_gib:.1f} GiB (test needs {need_gib} GiB)')
+        atomic_print(f'  MemAvailable: {avail_gib:.1f} GiB (test needs {need_gib} GiB)')
 
     page_label = 'hugepages' if args.hugepages else '4 KiB pages'
-    print(f'\nAllocating + registering {test_gib} GiB ({page_label})...')
+    atomic_print(f'\nAllocating + registering {test_gib} GiB ({page_label})...')
     success = pirate_pybind11.revisit_512gb_inner(test_nbytes, args.hugepages)
 
     bar = '=' * 64
-    print()
-    print(bar)
+    atomic_print("\n")
+    atomic_print(bar)
     if success:
-        print(f'cudaHostRegister({test_gib} GiB) SUCCEEDED.')
-        print(f'On this CUDA / driver version, the ~511 GiB single-call cap')
-        print(f'appears to have been LIFTED. Pirate\'s chunked-register workaround')
-        print(f'in BumpAllocator could potentially be simplified or removed --')
-        print(f'verify on multiple hardware/driver combinations before doing so.')
+        atomic_print(f'cudaHostRegister({test_gib} GiB) SUCCEEDED.')
+        atomic_print(f'On this CUDA / driver version, the ~511 GiB single-call cap')
+        atomic_print(f'appears to have been LIFTED. Pirate\'s chunked-register workaround')
+        atomic_print(f'in BumpAllocator could potentially be simplified or removed --')
+        atomic_print(f'verify on multiple hardware/driver combinations before doing so.')
     else:
-        print(f'cudaHostRegister({test_gib} GiB) FAILED (this is the expected outcome).')
-        print(f'The ~511 GiB single-call cap is still in effect on this CUDA / driver')
-        print(f'version. Pirate\'s chunked-register workaround in BumpAllocator')
-        print(f'remains necessary.')
-    print(bar)
+        atomic_print(f'cudaHostRegister({test_gib} GiB) FAILED (this is the expected outcome).')
+        atomic_print(f'The ~511 GiB single-call cap is still in effect on this CUDA / driver')
+        atomic_print(f'version. Pirate\'s chunked-register workaround in BumpAllocator')
+        atomic_print(f'remains necessary.')
+    atomic_print(bar)
 
 
 ################################   show_xengine_metadata command  ##################################
@@ -752,7 +761,7 @@ def parse_show_xengine_metadata(subparsers):
 def show_xengine_metadata(args):
     metadata = core.XEngineMetadata.from_yaml_file(args.config_file)
     yaml_str = metadata.to_yaml_string(args.verbose)
-    print(yaml_str)
+    atomic_print(yaml_str)
 
 
 ###################################   show_dedisperser command  ###################################
@@ -760,7 +769,7 @@ def show_xengine_metadata(args):
 
 def print_separator(label, filler='-'):
     t = filler * (50 - len(label)//2)
-    print(f'\n{t}  {label}  {t}\n')
+    atomic_print(f'\n{t}  {label}  {t}\n\n')
     sys.stdout.flush()
 
 
@@ -803,7 +812,7 @@ def show_dedisperser(args):
     # configs/example_dedispersion_plan.yml) stay reproducible.
     if args.verbose:
         cmdline = ' '.join(shlex.quote(a) for a in sys.argv[1:])
-        print(f'# Created with: pirate_frb {cmdline}\n')
+        atomic_print(f'# Created with: pirate_frb {cmdline}\n\n')
 
     # By default print only the DedispersionPlan, with no separator, so that the
     # output matches the dedispersion_plan_yaml that the FRB search sends to the
@@ -814,7 +823,7 @@ def show_dedisperser(args):
         config_yaml = config.to_yaml_string(args.verbose)
         if args.verbose:
             config_yaml = align_inline_comments(config_yaml)
-        print(config_yaml)
+        atomic_print(config_yaml)
         print_separator('DedispersionPlan starts here')
 
     # gpu_runnable iff some flag needs consistency with the compiled GPU kernels:
@@ -827,7 +836,7 @@ def show_dedisperser(args):
     plan = DedispersionPlan(config, gpu_runnable=gpu_runnable)
     plan_dt = time.time() - t0
     if args.time:
-        print(f'# DedispersionPlan construction took {plan_dt:.3f} seconds\n')
+        atomic_print(f'# DedispersionPlan construction took {plan_dt:.3f} seconds\n\n')
         # Also time the C++ PfAvarApproximation build from the plan (uses unit input variances;
         # the construction time is independent of the variance values).
         import numpy as np
@@ -835,23 +844,23 @@ def show_dedisperser(args):
         t0 = time.time()
         PfAvarApproximation(plan, freq_variances)
         avar_dt = time.time() - t0
-        print(f'# C++ PfAvarApproximation construction took {avar_dt:.3f} seconds\n')
+        atomic_print(f'# C++ PfAvarApproximation construction took {avar_dt:.3f} seconds\n\n')
     plan_yaml = plan.to_yaml_string(args.verbose, args.zones)
     if args.verbose:
         plan_yaml = indent_dedispersion_plan_comments(plan_yaml)
         plan_yaml = align_inline_comments(plan_yaml)
-    print(plan_yaml)
+    atomic_print(plan_yaml)
 
     if args.channel_map:
         print_separator('Channel map starts here')
         channel_map = config.make_channel_map()
         
-        print()
-        print('Channel map (tree_index -> freq_index -> frequency)')
+        atomic_print("\n")
+        atomic_print('Channel map (tree_index -> freq_index -> frequency)')
         for i in range(len(channel_map)):
             freq_index = channel_map[i]
             freq = config.index_to_frequency(freq_index)
-            print(f'  tree_index={i}  freq_index={freq_index:.4f}  freq={freq:.2f}')
+            atomic_print(f'  tree_index={i}  freq_index={freq_index:.4f}  freq={freq:.2f}')
 
     if args.resources or args.fine_grained_resources:
         print_separator('Resource tracking starts here (assumes 4-bit raw data)')
@@ -872,14 +881,14 @@ def show_dedisperser(args):
 
         multiplier = (config.beams_per_gpu / config.beams_per_batch) / (1.0e-3 * config.time_samples_per_chunk * config.time_sample_ms)
         fine_grained = args.fine_grained_resources
-        print(rt.to_yaml_string(multiplier, fine_grained))
+        atomic_print(rt.to_yaml_string(multiplier, fine_grained))
 
     if args.test:
         print_separator('Testing GpuDedisperser')
         nchunks = (2**(config.toplevel_tree_rank + config.num_primary_trees - 1)) // config.time_samples_per_chunk + 10
-        print(f'Running GpuDedisperser.test_one(config, nchunks={nchunks})')
+        atomic_print(f'Running GpuDedisperser.test_one(config, nchunks={nchunks})')
         GpuDedisperser.test_one(config, nchunks)
-        print('Test passed!')
+        atomic_print('Test passed!')
 
 
 ###################################   show_random_config command  ###################################
@@ -902,7 +911,7 @@ def show_random_config(args):
         
         config = DedispersionConfig.make_random(gpu_valid=gpu_valid)
         yaml_str = config.to_yaml_string(verbose=args.v)
-        print(yaml_str)
+        atomic_print(yaml_str)
 
 
 ###################################   time_dedisperser command  ###################################
@@ -927,7 +936,7 @@ def time_dedisperser(args):
     hw = Hardware()
     vcpu_list = hw.vcpu_list_from_cpu(0)
     core.set_thread_affinity(vcpu_list)
-    print(f'Pinned thread to CPU 0 (vcpus {vcpu_list})')
+    atomic_print(f'Pinned thread to CPU 0 (vcpus {vcpu_list})')
     
     config = DedispersionConfig.from_yaml(args.config_file)
 
@@ -950,7 +959,7 @@ def time_dedisperser(args):
         cpu_aflags += ' | af_mmap_huge'
     
     # Create GpuDedisperser (unallocated, to get resource tracking)
-    print(f'Creating GpuDedisperser...')
+    atomic_print(f'Creating GpuDedisperser...')
     stream_pool = core.CudaStreamPool(plan.num_active_batches)
     dedisperser = GpuDedisperser(plan, stream_pool, cuda_device_id=0,
                                  num_consumers=1)
@@ -982,8 +991,8 @@ def time_dedisperser(args):
     # stays sync (gpu init is fast enough that the async machinery
     # isn't worth it here).
     nthreads = compute_async_bump_nthreads(vcpu_list, cpu_nbytes)
-    print(f'Allocating (gpu={gpu_nbytes/1e9:.3f} GB sync, '
-          f'cpu={cpu_nbytes/1e9:.3f} GB async, nthreads={nthreads})...')
+    atomic_print(f'Allocating (gpu={gpu_nbytes/1e9:.3f} GB sync, '
+                 f'cpu={cpu_nbytes/1e9:.3f} GB async, nthreads={nthreads})...')
     gpu_allocator = core.BumpAllocator(gpu_aflags, gpu_nbytes, cuda_device=0)
     cpu_allocator = core.BumpAllocator(cpu_aflags, cpu_nbytes,
                                        is_async=True, nthreads=nthreads,
@@ -992,7 +1001,7 @@ def time_dedisperser(args):
     dedisperser.allocate(gpu_allocator, cpu_allocator)
     
     # Run timing
-    print(f'Running timing (niterations={niterations}, use_hugepages={use_hugepages}, python={use_python})...')
+    atomic_print(f'Running timing (niterations={niterations}, use_hugepages={use_hugepages}, python={use_python})...')
     if use_python:
         # Python version of timing code: pirate_frb.utils.time_cupy_dedisperser().
         utils.time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations)
@@ -1000,7 +1009,7 @@ def time_dedisperser(args):
         # C++ version of timing code: GpuDedisperser::time().
         dedisperser.time(gpu_allocator, cpu_allocator, niterations)
     
-    print('Timing complete!')
+    atomic_print('Timing complete!')
 
 
 ###################################   show_asdf command  ###################################
@@ -1091,7 +1100,7 @@ def _rpc_rand_write_one(addr):
     from .rpc import FrbSearchClient
 
     client = FrbSearchClient(addr)
-    print(f"[{addr}] Connected")
+    atomic_print(f"[{addr}] Connected")
 
     try:
         # Get XEngine metadata to obtain beam IDs. client.beam_ids / xengine_metadata_yaml
@@ -1099,11 +1108,11 @@ def _rpc_rand_write_one(addr):
         try:
             beam_ids = list(client.beam_ids)
         except RuntimeError:
-            print(f"[{addr}] Error: metadata not yet available")
+            atomic_print(f"[{addr}] Error: metadata not yet available")
             return
 
         nbeams = len(beam_ids)
-        print(f"[{addr}] Got metadata: {nbeams} beams, beam_ids={beam_ids}")
+        atomic_print(f"[{addr}] Got metadata: {nbeams} beams, beam_ids={beam_ids}")
 
         # seq_per_chunk (fpga seqs per time chunk) = time_samples_per_chunk *
         # seq_per_frb_time_sample. The former comes from GetConfig, the latter
@@ -1115,7 +1124,7 @@ def _rpc_rand_write_one(addr):
         # Select random subset of beam IDs (1 to min(nbeams, 3)).
         n = random.randint(1, min(nbeams, 3))
         selected_beams = random.sample(beam_ids, n)
-        print(f"[{addr}] Selected {n} beams: {selected_beams}")
+        atomic_print(f"[{addr}] Selected {n} beams: {selected_beams}")
 
         # Loop until we have frames available.
         while True:
@@ -1133,11 +1142,11 @@ def _rpc_rand_write_one(addr):
             rb_t0 = (rb_reaped    + nbeams - 1) // nbeams  # round up
             rb_t1 =  rb_processed // nbeams                # round down
 
-            print(f"[{addr}] Status: rb_reaped={rb_reaped}, rb_processed={rb_processed} -> time_chunk_index range [{rb_t0}, {rb_t1})")
+            atomic_print(f"[{addr}] Status: rb_reaped={rb_reaped}, rb_processed={rb_processed} -> time_chunk_index range [{rb_t0}, {rb_t1})")
 
             if rb_t0 >= rb_t1:
                 dt = pirate_pybind11.constants.default_print_cadence_sec
-                print(f"[{addr}] No frames available yet, sleeping {dt}s...")
+                atomic_print(f"[{addr}] No frames available yet, sleeping {dt}s...")
                 time.sleep(dt)
                 continue
 
@@ -1149,7 +1158,7 @@ def _rpc_rand_write_one(addr):
         t0 = random.randint(rb_t0, rb_t1 - range_size)
         t1 = t0 + range_size
 
-        print(f"[{addr}] Requesting time_chunk_index range [{t0}, {t1})")
+        atomic_print(f"[{addr}] Requesting time_chunk_index range [{t0}, {t1})")
 
         # Send write_files RPC. Convert the chunk range [t0, t1) to the
         # half-open fpga-seq range [t0*seq_per_chunk, t1*seq_per_chunk) that
@@ -1162,9 +1171,9 @@ def _rpc_rand_write_one(addr):
             acqdir=acqdir
         )
 
-        print(f"[{addr}] write_files returned {len(filenames)} filenames:")
+        atomic_print(f"[{addr}] write_files returned {len(filenames)} filenames:")
         for fn in filenames:
-            print(f"[{addr}]   {fn}")
+            atomic_print(f"[{addr}]   {fn}")
 
     finally:
         client.close()
@@ -1291,12 +1300,12 @@ def rpc_start_stream(args):
                 )
             except grpc.RpcError as e:
                 had_error = True
-                print(f"[{addr}] ERROR: {_rpc_error_str(e)}", file=sys.stderr)
+                atomic_print(f"[{addr}] ERROR: {_rpc_error_str(e)}", fd=2)
                 continue
-            print(f"[{addr}] started stream stream_name={sn!r}")
-            print(f"[{addr}]   acqdir = {acqdir!r}")
-            print(f"[{addr}]   beam_ids = {beams}")
-            print(f"[{addr}]   fpga_seq range = [0, {end_str})")
+            atomic_print(f"[{addr}] started stream stream_name={sn!r}")
+            atomic_print(f"[{addr}]   acqdir = {acqdir!r}")
+            atomic_print(f"[{addr}]   beam_ids = {beams}")
+            atomic_print(f"[{addr}]   fpga_seq range = [0, {end_str})")
 
         if had_error:
             sys.exit(1)
@@ -1336,10 +1345,10 @@ def rpc_cancel_stream(args):
             for addr, client in clients:
                 try:
                     n = client.cancel_stream(cancel_all=True)
-                    print(f"[{addr}] cancelled {n} stream(s)")
+                    atomic_print(f"[{addr}] cancelled {n} stream(s)")
                 except grpc.RpcError as e:
                     had_error = True
-                    print(f"[{addr}] ERROR: {_rpc_error_str(e)}", file=sys.stderr)
+                    atomic_print(f"[{addr}] ERROR: {_rpc_error_str(e)}", fd=2)
         else:
             # -a NAME: cancel the named stream wherever it is ACTIVE. We check
             # show_streams() first (rather than catching a per-server "not found"
@@ -1352,7 +1361,7 @@ def rpc_cancel_stream(args):
                     ss = client.show_streams()
                 except grpc.RpcError as e:
                     had_error = True
-                    print(f"[{addr}] ERROR: {_rpc_error_str(e)}", file=sys.stderr)
+                    atomic_print(f"[{addr}] ERROR: {_rpc_error_str(e)}", fd=2)
                     continue
                 if not any(i.args.stream_name == name and
                            i.status == frb_search_pb2.STREAM_STATUS_ACTIVE
@@ -1361,10 +1370,10 @@ def rpc_cancel_stream(args):
                 found = True
                 try:
                     n = client.cancel_stream(stream_name=name)
-                    print(f"[{addr}] cancelled {n} stream(s) named {name!r}")
+                    atomic_print(f"[{addr}] cancelled {n} stream(s) named {name!r}")
                 except grpc.RpcError as e:
                     had_error = True
-                    print(f"[{addr}] ERROR: {_rpc_error_str(e)}", file=sys.stderr)
+                    atomic_print(f"[{addr}] ERROR: {_rpc_error_str(e)}", fd=2)
             if not found and not had_error:
                 raise RuntimeError(
                     f"rpc_cancel_stream: no server has an active stream named {name!r} "
@@ -1413,13 +1422,13 @@ def rpc_show_streams(args):
 
     def print_server(addr, ss, dt_ns_per_seq):
         n_listed_inactive = sum(1 for i in ss.streams if i.status != ACTIVE)
-        print(f"[{addr}] current_fpga_seq = {ss.current_fpga_seq}")
-        print(f"[{addr}] beam_ids = {list(ss.beam_ids)}")
-        print(f"[{addr}] num_deactivated_streams = {ss.num_deactivated_streams}"
-              f" ({n_listed_inactive} retained in history)")
+        atomic_print(f"[{addr}] current_fpga_seq = {ss.current_fpga_seq}")
+        atomic_print(f"[{addr}] beam_ids = {list(ss.beam_ids)}")
+        atomic_print(f"[{addr}] num_deactivated_streams = {ss.num_deactivated_streams}"
+                     f" ({n_listed_inactive} retained in history)")
 
         if not ss.streams:
-            print(f"[{addr}] no active or recently-deactivated streams")
+            atomic_print(f"[{addr}] no active or recently-deactivated streams")
 
         for info in ss.streams:
             a = info.args
@@ -1438,15 +1447,15 @@ def rpc_show_streams(args):
             if (info.status == ACTIVE) and (a.fpga_seq_end != INDEF):
                 remaining_sec = (a.fpga_seq_end - ss.current_fpga_seq) * dt_ns_per_seq * 1.0e-9
                 remaining = f" (~{fmt_duration(remaining_sec)} remaining)"
-            print(f"[{addr}] stream stream_name={a.stream_name!r}:")
-            print(f"[{addr}]   status = {status}")
-            print(f"[{addr}]   acqdir = {a.acqdir!r}")
-            print(f"[{addr}]   beam_ids = {list(a.beam_ids)}")
-            print(f"[{addr}]   fpga_seq range = [{a.fpga_seq_start}, {end_str}){remaining}")
-            print(f"[{addr}]   started = {fmt_time(info.started_at_unix_ns)}, "
-                  f"deactivated = {fmt_time(info.deactivated_at_unix_ns)}")
-            print(f"[{addr}]   files: queued = {info.num_files_queued}, "
-                  f"written = {info.num_files_written}, errored = {info.num_files_errored}")
+            atomic_print(f"[{addr}] stream stream_name={a.stream_name!r}:")
+            atomic_print(f"[{addr}]   status = {status}")
+            atomic_print(f"[{addr}]   acqdir = {a.acqdir!r}")
+            atomic_print(f"[{addr}]   beam_ids = {list(a.beam_ids)}")
+            atomic_print(f"[{addr}]   fpga_seq range = [{a.fpga_seq_start}, {end_str}){remaining}")
+            atomic_print(f"[{addr}]   started = {fmt_time(info.started_at_unix_ns)}, "
+                         f"deactivated = {fmt_time(info.deactivated_at_unix_ns)}")
+            atomic_print(f"[{addr}]   files: queued = {info.num_files_queued}, "
+                         f"written = {info.num_files_written}, errored = {info.num_files_errored}")
 
     clients = _stream_clients(args.server_addresses)
     had_error = False
@@ -1454,7 +1463,7 @@ def rpc_show_streams(args):
     try:
         for i, (addr, client) in enumerate(clients):
             if i > 0:
-                print()   # blank line between per-server blocks
+                atomic_print("\n")   # blank line between per-server blocks
             try:
                 ss = client.show_streams()
                 # dt_ns_per_seq (for "time remaining") is only needed when some
@@ -1468,7 +1477,7 @@ def rpc_show_streams(args):
                 print_server(addr, ss, dt)
             except grpc.RpcError as e:
                 had_error = True
-                print(f"[{addr}] ERROR: {_rpc_error_str(e)}", file=sys.stderr)
+                atomic_print(f"[{addr}] ERROR: {_rpc_error_str(e)}", fd=2)
     finally:
         for _, client in clients:
             client.close()
@@ -1496,16 +1505,16 @@ def random_kernels(args):
     nflags = sum(1 if getattr(args, x) else 0 for x in flags)
     
     if nflags != 1:
-        print("Error: precisely one of --pf, --cdd2, --pfwr must be specified", file=sys.stderr)
-        print("  --pf     Print random PeakFinder kernel params", file=sys.stderr)
-        print("  --cdd2   Print random CoalescedDdKernel2 kernel params", file=sys.stderr)
-        print("  --pfwr   Print random PfWeightReader kernel params", file=sys.stderr)
+        atomic_print("Error: precisely one of --pf, --cdd2, --pfwr must be specified", fd=2)
+        atomic_print("  --pf     Print random PeakFinder kernel params", fd=2)
+        atomic_print("  --cdd2   Print random CoalescedDdKernel2 kernel params", fd=2)
+        atomic_print("  --pfwr   Print random PfWeightReader kernel params", fd=2)
         sys.exit(2)
 
     randi = lambda *a: int(numpy.random.randint(*a))
 
     if args.pf:
-        print('# (dtype, subband_counts, Wmax, Dcore, Dout, Tinner)')
+        atomic_print('# (dtype, subband_counts, Wmax, Dcore, Dout, Tinner)')
 
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
@@ -1524,10 +1533,10 @@ def random_kernels(args):
             
             Wmax = 2**randi(5)
             subband_counts = core.FrequencySubbands.make_random_subband_counts()
-            print(f"('fp{nbits}', {list(subband_counts)}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
+            atomic_print(f"('fp{nbits}', {list(subband_counts)}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
 
     if args.cdd2:
-        print("# (dtype, dd_rank, Wmax, Dcore, Dout, Tinner, subband_counts, et_levels)")
+        atomic_print("# (dtype, dd_rank, Wmax, Dcore, Dout, Tinner, subband_counts, et_levels)")
 
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
@@ -1559,10 +1568,10 @@ def random_kernels(args):
                 et_levels = [0] + random.sample(et_candidates, ncand)
 
                 s = '     # continuation' if (dd_rank > dd_rank_min) else ''
-                print(f"('fp{nbits}', {dd_rank}, {Wmax}, {Dcore}, {Dout}, {Tinner}, {list(subband_counts)}, {et_levels}),{s}")
+                atomic_print(f"('fp{nbits}', {dd_rank}, {Wmax}, {Dcore}, {Dout}, {Tinner}, {list(subband_counts)}, {et_levels}),{s}")
 
     if args.pfwr:
-        print('# (dtype, subband_counts, Dcore, P, Tinner)')
+        atomic_print('# (dtype, subband_counts, Dcore, P, Tinner)')
         
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
@@ -1571,7 +1580,7 @@ def random_kernels(args):
             Dcore_log = randi(6-Tinner_log) + (32//nbits) - 1
             P = randi(1,15)
             subband_counts = core.FrequencySubbands.make_random_subband_counts()
-            print(f"('fp{nbits}', {tuple(subband_counts)}, {2**Dcore_log}, {P}, {2**Tinner_log})")
+            atomic_print(f"('fp{nbits}', {tuple(subband_counts)}, {2**Dcore_log}, {P}, {2**Tinner_log})")
 
 
 ######################################  run_server command  #####################################
@@ -1762,30 +1771,30 @@ def run_fake_xengine_command(args):
         if args.non_gaussian: bad.append('-G/--non-gaussian')
         if args.send_junk:    bad.append('-j/--send-junk')
         if bad:
-            print(f"Error: -f/--frbs is incompatible with {', '.join(bad)} "
-                  f"(FRB injection requires normalized + gaussian data and "
-                  f"randomizes every chunk).", file=sys.stderr)
+            atomic_print(f"Error: -f/--frbs is incompatible with {', '.join(bad)} "
+                         f"(FRB injection requires normalized + gaussian data and "
+                         f"randomizes every chunk).", fd=2)
             sys.exit(2)
 
     # Sending events to a sifter only makes sense when FRBs are being simulated.
     if args.sifter is not None and not args.frbs:
-        print("Error: -s/--sifter requires -f/--frbs (there are no events to send "
-              "without FRB simulation).", file=sys.stderr)
+        atomic_print("Error: -s/--sifter requires -f/--frbs (there are no events to send "
+                     "without FRB simulation).", fd=2)
         sys.exit(2)
 
     # An inter-FRB gap only has meaning when FRBs are being simulated.
     if args.gap != 0.0 and not args.frbs:
-        print("Error: -g/--gap requires -f/--frbs (there are no FRBs to space "
-              "without FRB simulation).", file=sys.stderr)
+        atomic_print("Error: -g/--gap requires -f/--frbs (there are no FRBs to space "
+                     "without FRB simulation).", fd=2)
         sys.exit(2)
     if args.gap < 0.0:
-        print("Error: -g/--gap must be >= 0 seconds.", file=sys.stderr)
+        atomic_print("Error: -g/--gap must be >= 0 seconds.", fd=2)
         sys.exit(2)
 
     # An FRB SNR only has meaning when FRBs are being simulated.
     if args.frb_snr != 30.0 and not args.frbs:
-        print("Error: --frb-snr requires -f/--frbs (there are no FRBs to inject "
-              "without FRB simulation).", file=sys.stderr)
+        atomic_print("Error: --frb-snr requires -f/--frbs (there are no FRBs to inject "
+                     "without FRB simulation).", fd=2)
         sys.exit(2)
 
     from .run_fake_xengine import run_fake_xengine
@@ -1859,7 +1868,51 @@ def get_parser():
     return parser
 
 
+def _install_atomic_hooks():
+    """Route uncaught-exception output through atomic_print().
+
+    The shutdown cascade is a designed feature (Ctrl-C on the sifter is
+    supposed to end with an exception in every upstream process), so
+    tracebacks are our most common multi-line output. The interpreter's
+    default hooks emit them in many small writes, which interleave both with
+    other threads and -- since run_toy_grouper's children share the parent's
+    stderr -- with other PROCESSES. Formatting each traceback and emitting it
+    in a single write fixes both.
+
+    Child subprocesses run 'python -m pirate_frb ...', so they install these
+    hooks themselves.
+    """
+    def _format(exc_type, exc_value, exc_tb, prefix=""):
+        return prefix + "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+
+    def _excepthook(exc_type, exc_value, exc_tb):
+        atomic_print(_format(exc_type, exc_value, exc_tb), fd=2)
+
+    def _thread_hook(args):
+        if args.exc_type is SystemExit:
+            return   # parity with the default threading.excepthook
+        name = args.thread.name if args.thread is not None else "<unknown>"
+        atomic_print(_format(args.exc_type, args.exc_value, args.exc_traceback,
+                             prefix=f"Exception in thread {name}:\n"), fd=2)
+
+    def _unraisable_hook(unraisable):
+        # Errors in __del__ / GC callbacks. The object can be mid-teardown, so
+        # guard its repr().
+        err = unraisable.err_msg or "Exception ignored in"
+        try:
+            obj = repr(unraisable.object)
+        except Exception:
+            obj = "<object repr() failed>"
+        atomic_print(_format(unraisable.exc_type, unraisable.exc_value,
+                             unraisable.exc_traceback, prefix=f"{err}: {obj}\n"), fd=2)
+
+    sys.excepthook = _excepthook
+    threading.excepthook = _thread_hook
+    sys.unraisablehook = _unraisable_hook
+
+
 def main():
+    _install_atomic_hooks()
     ksgpu.seed_default_rng(137)   # reproducible run; remove for full randomness
 
     parser = get_parser()
@@ -1924,7 +1977,7 @@ def main():
     elif args.command == "run_fake_xengine":
         run_fake_xengine_command(args)
     else:
-        print(f"Command '{args.command}' not recognized", file=sys.stderr)
+        atomic_print(f"Command '{args.command}' not recognized", fd=2)
         sys.exit(2)
 
 

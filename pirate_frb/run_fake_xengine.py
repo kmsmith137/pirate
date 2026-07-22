@@ -20,6 +20,7 @@ from .core import (
 )
 from .rpc import FrbSearchClient, FrbSifterClient
 from .pirate_pybind11 import constants
+from .utils import atomic_print
 
 
 class RunFakeXEngineHelper:
@@ -103,8 +104,8 @@ class RunFakeXEngineHelper:
         try:
             self._build_all()
             self._spawn_all_controllers()
-            print(f"\nAll {len(self.rpc_addrs)} FakeXEngine(s) running. "
-                  f"Press Ctrl-C to stop.")
+            atomic_print(f"\nAll {len(self.rpc_addrs)} FakeXEngine(s) running. "
+                         f"Press Ctrl-C to stop.")
             self._wait_for_controllers()
             self._stop_and_join_all()
             self._surface_exceptions()
@@ -114,7 +115,7 @@ class RunFakeXEngineHelper:
             # Close the sifter channels after the controllers have been stopped/joined (above),
             # so close()'s brief drain covers the last in-flight async sends.
             self._close_sifters()
-            print("All FakeXEngine(s) stopped.")
+            atomic_print("All FakeXEngine(s) stopped.")
 
     def _build_all(self):
         # Doing all per-receiver builds before spawning any controllers means
@@ -130,7 +131,7 @@ class RunFakeXEngineHelper:
         XEngineMetadata so that, with multiple servers, each one advertises a
         distinct beam-set id.
         """
-        print(f"\n[{rpc_addr}] Connecting ...")
+        atomic_print(f"\n[{rpc_addr}] Connecting ...")
         with FrbSearchClient(rpc_addr) as c:
             cfg = c.config
         if not list(cfg.data_ip_addrs):
@@ -247,8 +248,8 @@ class RunFakeXEngineHelper:
                         f"max_width={factory.frb_max_width_ms:.2f} ms, "
                         f"N_subbands={len(factory.frb_subband_fmin_MHz)}{gap_note})")
         sifter_note = f", sifter={self.sifter_addr}" if (sifter is not None) else ""
-        print(f"[{rpc_addr}] FakeXEngine started ({self.nworkers} workers, "
-              f"{paced_note}, {norm_note}, {data_note}{frb_note}{sifter_note}).")
+        atomic_print(f"[{rpc_addr}] FakeXEngine started ({self.nworkers} workers, "
+                     f"{paced_note}, {norm_note}, {data_note}{frb_note}{sifter_note}).")
 
     def _frb_kwargs(self, cfg, xmd, num_randomizer_threads):
         """SimulatedFrameFactory FRB-injection kwargs, or {} when --frbs is off.
@@ -305,13 +306,13 @@ class RunFakeXEngineHelper:
     def _print_receiver_details(self, rpc_addr, cfg, xmd):
         ip_addrs = list(cfg.data_ip_addrs)
         actual_time_sample_ms = (xmd.dt_ns_per_seq * xmd.seq_per_frb_time_sample) / 1.0e6
-        print(f"[{rpc_addr}]   data_ip_addrs = {ip_addrs}")
-        print(f"[{rpc_addr}]   time_samples_per_chunk = {cfg.time_samples_per_chunk}")
-        print(f"[{rpc_addr}]   min_data_mtu = {cfg.min_data_mtu}")
-        print(f"[{rpc_addr}]   beamset = {xmd.beamset}, nbeams = {cfg.fake_nbeams}, total_nfreq = {xmd.get_total_nfreq()}")
-        print(f"[{rpc_addr}]   time_sample_ms = {actual_time_sample_ms}")
-        print(f"[{rpc_addr}]   dt_ns_per_seq = {xmd.dt_ns_per_seq}")
-        print(f"[{rpc_addr}]   seq_per_frb_time_sample = {xmd.seq_per_frb_time_sample}")
+        atomic_print(f"[{rpc_addr}]   data_ip_addrs = {ip_addrs}")
+        atomic_print(f"[{rpc_addr}]   time_samples_per_chunk = {cfg.time_samples_per_chunk}")
+        atomic_print(f"[{rpc_addr}]   min_data_mtu = {cfg.min_data_mtu}")
+        atomic_print(f"[{rpc_addr}]   beamset = {xmd.beamset}, nbeams = {cfg.fake_nbeams}, total_nfreq = {xmd.get_total_nfreq()}")
+        atomic_print(f"[{rpc_addr}]   time_sample_ms = {actual_time_sample_ms}")
+        atomic_print(f"[{rpc_addr}]   dt_ns_per_seq = {xmd.dt_ns_per_seq}")
+        atomic_print(f"[{rpc_addr}]   seq_per_frb_time_sample = {xmd.seq_per_frb_time_sample}")
 
     def _verify_nics_and_mtu(self, rpc_addr, cfg):
         """Check MTU on each data NIC and verify all NICs are on one CPU.
@@ -424,8 +425,8 @@ class RunFakeXEngineHelper:
                 seq_per_chunk = fset.ntime * fset.metadata.seq_per_frb_time_sample
                 tci = fset.time_chunk_index
                 fpga_start, fpga_end = tci * seq_per_chunk, (tci + 1) * seq_per_chunk
-                print(f"fake_xengine: beamset={fset.metadata.beamset}, ichunk={tci}, "
-                      f"fpga=[{fpga_start}:{fpga_end}]", flush=True)
+                atomic_print(f"fake_xengine: beamset={fset.metadata.beamset}, ichunk={tci}, "
+                             f"fpga=[{fpga_start}:{fpga_end}]")
 
                 # With -f, drain and print this chunk's simulated-FRB injection events (the
                 # C++ producer records them; the printing lives here in Python), and with -s
@@ -440,8 +441,8 @@ class RunFakeXEngineHelper:
                             pirate_yaml="", xengine_yaml=fset.metadata.to_yaml_string(),
                             dedispersion_plan_yaml="", grouper_yaml="", search_ip_addr="")
                         beam_set_id = fset.metadata.beamset
-                        print(f"[{rpc_addr}] sent ConfigMessage to sifter at "
-                              f"{sifter.server_address}", flush=True)
+                        atomic_print(f"[{rpc_addr}] sent ConfigMessage to sifter at "
+                                     f"{sifter.server_address}")
 
                     events = factory.pop_events(fpga_start, fpga_end)
                     self._print_events(events)
@@ -486,20 +487,20 @@ class RunFakeXEngineHelper:
         printed by the controller (whether or not FRBs are simulated).
         """
         for i in range(len(events)):
-            print(f"    injected FRB: beam_id={int(events.beam_ids[i])}, "
-                  f"dm={float(events.dms[i]):.4g}, "
-                  f"fpga_timestamp={int(events.fpga_timestamps[i])}, "
-                  f"width={float(events.widths_ms[i]):.4g} ms, "
-                  f"subband=[{float(events.subband_freqs_lo_MHz[i]):.1f},"
-                  f"{float(events.subband_freqs_hi_MHz[i]):.1f}] MHz, "
-                  f"snr={float(events.snrs[i]):.4g}", flush=True)
+            atomic_print(f"    injected FRB: beam_id={int(events.beam_ids[i])}, "
+                         f"dm={float(events.dms[i]):.4g}, "
+                         f"fpga_timestamp={int(events.fpga_timestamps[i])}, "
+                         f"width={float(events.widths_ms[i]):.4g} ms, "
+                         f"subband=[{float(events.subband_freqs_lo_MHz[i]):.1f},"
+                         f"{float(events.subband_freqs_hi_MHz[i]):.1f}] MHz, "
+                         f"snr={float(events.snrs[i]):.4g}")
 
     def _wait_for_controllers(self):
         try:
             while any(t.is_alive() for t in self.controllers):
                 time.sleep(constants.default_poll_cadence_ms / 1000)
         except KeyboardInterrupt:
-            print("\nStopping...")
+            atomic_print("\nStopping...")
 
     def _stop_and_join_all(self):
         self._stop_all()
@@ -519,7 +520,7 @@ class RunFakeXEngineHelper:
             if not self.exc_list:
                 return
             for rpc_addr, e in self.exc_list[1:]:
-                print(f"[{rpc_addr}] (also) {type(e).__name__}: {e}", flush=True)
+                atomic_print(f"[{rpc_addr}] (also) {type(e).__name__}: {e}")
             raise self.exc_list[0][1]
 
     def _stop_all(self):

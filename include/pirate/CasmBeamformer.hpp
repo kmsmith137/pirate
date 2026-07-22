@@ -2,6 +2,11 @@
 //x to produce a "vendorized" source file for the casm pipeline. The markup
 //x in comments (e.g. "//x") is parsed by vendorize.py.
 //x
+//x NOTE TO FUTURE PIRATE WORK: do NOT convert output in this file to pirate's
+//x AtomicPrint / atomic_print() (notes/cpp.md). The vendorized copy is built
+//x in the casm_bf repo, which has no pirate dependency. Plain std::cout /
+//x printf only. (The audit greps in notes/cpp.md skip the casm files.)
+//x
 #ifndef _CASM_BEAMFORMER_HPP
 #define _CASM_BEAMFORMER_HPP
 

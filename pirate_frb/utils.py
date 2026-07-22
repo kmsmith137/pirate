@@ -16,6 +16,7 @@ the former source files pirate_frb/utils/<name>.py.
 
 
 from .pirate_pybind11 import (get_thread_affinity, set_thread_affinity,
+                              atomic_print, test_atomic_print,
                               test_avx2_simulate_4bit_noise, time_avx2_simulate_4bit_noise)
 
 __all__ = ['integer_log2', 'run_processes',
@@ -24,6 +25,7 @@ __all__ = ['integer_log2', 'run_processes',
            'time_cupy_dedisperser', 'show_asdf',
            'extract_ip', 'check_mtu', 'resolve_ip_spec', 'resolve_addr',
            'safe_h2g_copy', 'safe_g2h_copy',
+           'atomic_print', 'test_atomic_print',
            'test_avx2_simulate_4bit_noise', 'time_avx2_simulate_4bit_noise']
 
 
@@ -70,7 +72,7 @@ def run_processes(multi_args):
             procs.append((" ".join(argv), subprocess.Popen(argv)))
         rc = _monitor_children(procs)
     except KeyboardInterrupt:
-        print("run_processes: interrupted; stopping all processes", flush=True)
+        atomic_print("run_processes: interrupted; stopping all processes")
     finally:
         _terminate_children(procs)
     return rc
@@ -84,8 +86,8 @@ def _monitor_children(procs):
         dead = [(label, p) for label, p in procs if p.poll() is not None]
         if dead:
             for label, p in dead:
-                print(f"run_processes: child [{label}] exited (code {p.returncode}); "
-                      f"stopping the other processes", flush=True)
+                atomic_print(f"run_processes: child [{label}] exited (code {p.returncode}); "
+                             f"stopping the other processes")
             return 0 if all(p.returncode == 0 for _, p in dead) else 1
         time.sleep(constants.default_poll_cadence_ms / 1000)
 
@@ -219,7 +221,7 @@ class GrouperHistogram:
     def write(self, filename):
         """Pickle dict(histogram=..., max_histogram=..., histogram_bins=...) to 'filename'."""
         import pickle
-        print(f'GrouperHistogram: writing {filename}', flush=True)
+        atomic_print(f'GrouperHistogram: writing {filename}')
         with open(filename, 'wb') as f:
             pickle.dump(dict(histogram = self.histogram,
                              max_histogram = self.max_histogram,
@@ -348,7 +350,7 @@ class GrouperHistogram:
             ax.set_ylabel('counts')
 
         fig.tight_layout()
-        print(f'GrouperHistogram: writing {filename}', flush=True)
+        atomic_print(f'GrouperHistogram: writing {filename}')
         fig.savefig(filename)
         plt.close(fig)
 
@@ -816,8 +818,8 @@ def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations
     assert niterations > 2 * S, f"niterations ({niterations}) must be > 2*num_active_batches ({2*S})"
     assert T % 256 == 0, f"T ({T}) must be divisible by 256"
 
-    print(f"time_cupy_dedisperser: B={B}, F={F}, T={T}, S={S}, Tc={Tc:.3f}s")
-    print()
+    atomic_print(f"time_cupy_dedisperser: B={B}, F={F}, T={T}, S={S}, Tc={Tc:.3f}s")
+    atomic_print("\n")
 
     # Create dequantization kernel (int4 -> float16/float32, with affine transform).
     dequantization_kernel = GpuDequantizationKernel(dtype, B, F, T)
@@ -834,15 +836,15 @@ def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations
     g2h_bw = rt.get_g2h_bw()
     gmem_bw = rt.get_gmem_bw()
 
-    print(f"Expected bandwidth per iteration: h2g={h2g_bw/1e9:.2f} GB, gmem={gmem_bw/1e9:.2f} GB")
-    print()
+    atomic_print(f"Expected bandwidth per iteration: h2g={h2g_bw/1e9:.2f} GB, gmem={gmem_bw/1e9:.2f} GB")
+    atomic_print("\n")
 
     # Create raw data + scales_offsets arrays.
     # int4 is represented as uint8 with half the elements (two int4 values per uint8 byte),
     # so the raw data shape is (S, B, F, T//2). scales_offsets is fp16 with shape
     # (S, B, F, T//256, 2); last axis is (scale, offset).
     # Note that cpu_allocator returns pinned memory.
-    print("time_cupy_dedisperser: allocating raw data + scales_offsets arrays")
+    atomic_print("time_cupy_dedisperser: allocating raw data + scales_offsets arrays")
 
     multi_raw_shape   = (S, B, F, T // 2)
     multi_scoff_shape = (S, B, F, T // 256, 2)
@@ -852,8 +854,8 @@ def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations
     multi_scoff_gpu = gpu_allocator.allocate_array(cp.float16, multi_scoff_shape)
 
     # Timing loop
-    print(f"time_cupy_dedisperser: running {niterations} iterations...")
-    print()
+    atomic_print(f"time_cupy_dedisperser: running {niterations} iterations...")
+    atomic_print("\n")
 
     # Warmup and drain any pending work
     cp.cuda.Device().synchronize()
@@ -918,10 +920,10 @@ def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations
             g2h_bw_achieved = 1.0e-9 * g2h_bw / dt
             h2g_bw_achieved = 1.0e-9 * h2g_bw / dt
 
-            print(f"  iteration {iteration}: real-time beams = {real_time_beams:.2f}, "
-                  f"gmem_bw = {gmem_bw_achieved:.2f}, "
-                  f"g2h_bw = {g2h_bw_achieved:.2f}, "
-                  f"h2g_bw = {h2g_bw_achieved:.2f} GB/s")
+            atomic_print(f"  iteration {iteration}: real-time beams = {real_time_beams:.2f}, "
+                         f"gmem_bw = {gmem_bw_achieved:.2f}, "
+                         f"g2h_bw = {g2h_bw_achieved:.2f}, "
+                         f"h2g_bw = {h2g_bw_achieved:.2f} GB/s")
 
-    print()
-    print("time_cupy_dedisperser: timing complete!")
+    atomic_print("\n")
+    atomic_print("time_cupy_dedisperser: timing complete!")

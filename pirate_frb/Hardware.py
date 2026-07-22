@@ -5,6 +5,7 @@ import socket
 import itertools
 import functools
 import subprocess
+from .utils import atomic_print
 
 
 class Hardware:
@@ -279,33 +280,33 @@ class Hardware:
         
     def show(self):
         for cpu in range(self.num_cpus):
-            print(f'CPU {cpu}: vcpu_list = {self.vcpu_list_from_cpu(cpu)}')
-        print()
+            atomic_print(f'CPU {cpu}: vcpu_list = {self.vcpu_list_from_cpu(cpu)}')
+        atomic_print("\n")
         
         for gpu in range(self.num_gpus):
             bus_id = self._pcie_bus_id_from_gpu(gpu)
             description = self._description_from_pcie_bus_id(bus_id)
             vcpu_list = self.vcpu_list_from_gpu(gpu)
-            print(f'GPU {gpu}')
-            print(f'   pcie = {bus_id}  ({description})')
-            print(f'   {vcpu_list = }\n')
+            atomic_print(f'GPU {gpu}')
+            atomic_print(f'   pcie = {bus_id}  ({description})')
+            atomic_print(f'   {vcpu_list = }\n\n')
 
         for nic, ip_addr in self._parse_ip_addr_show:
             bus_id = self._pcie_bus_id_from_nic(nic)
             description = self._description_from_pcie_bus_id(bus_id)
             vcpu_list = self.vcpu_list_from_ip_addr(ip_addr)
             mtu = self.mtu_from_nic(nic)
-            print(f'IP addr {ip_addr}')
-            print(f'   nic = {nic}, mtu = {mtu}, pcie = {bus_id}  ({description})')
-            print(f'   {vcpu_list = }\n')
+            atomic_print(f'IP addr {ip_addr}')
+            atomic_print(f'   nic = {nic}, mtu = {mtu}, pcie = {bus_id}  ({description})')
+            atomic_print(f'   {vcpu_list = }\n\n')
 
         for disk in self.disks:
             bus_id = self._pcie_bus_id_from_block_device(disk)
             description = self._description_from_pcie_bus_id(bus_id)
             vcpu_list = self.vcpu_list_from_disk(disk)
-            print(f'Disk {disk}')
-            print(f'   pcie = {bus_id}  ({description})')
-            print(f'   {vcpu_list = }\n')
+            atomic_print(f'Disk {disk}')
+            atomic_print(f'   pcie = {bus_id}  ({description})')
+            atomic_print(f'   {vcpu_list = }\n\n')
 
         self._show_hugepages()
 
@@ -320,11 +321,11 @@ class Hardware:
 
         sizes = self.hugepage_sizes
         if not sizes:
-            print('hugepages: not configured (no /sys/kernel/mm/hugepages tree)\n')
+            atomic_print('hugepages: not configured (no /sys/kernel/mm/hugepages tree)\n\n')
             return
 
         nodes = self.numa_nodes
-        print('hugepages:')
+        atomic_print('hugepages:')
         # Label width: 'system total', 'system surplus', 'unpinned',
         # 'node<N>'. 'system surplus' is the longest at 14 chars.
         lw = 14
@@ -334,9 +335,9 @@ class Hardware:
             total_bytes = pool['nr']   * size
             free_bytes  = pool['free'] * size
 
-            print(f'  page_size = {size_str}:')
-            print(f'    {"system total":<{lw}} = {pool["nr"]} ({self._fmt_bytes(total_bytes)}),'
-                  f' free = {pool["free"]} ({self._fmt_bytes(free_bytes)})')
+            atomic_print(f'  page_size = {size_str}:')
+            atomic_print(f'    {"system total":<{lw}} = {pool["nr"]} ({self._fmt_bytes(total_bytes)}),'
+                         f' free = {pool["free"]} ({self._fmt_bytes(free_bytes)})')
 
             if pool['nr'] == 0 and pool['surplus'] == 0:
                 # Skip per-node breakdown when nothing is configured.
@@ -352,15 +353,15 @@ class Hardware:
                         f' free = {npool["free"]}')
                 if npool['surplus']:
                     line += f', surplus = {npool["surplus"]}'
-                print(line)
+                atomic_print(line)
 
             unpinned = pool['nr'] - sum_nr
-            print(f'    {"unpinned":<{lw}} = {unpinned}  '
-                  f'(system total - sum over NUMA nodes)')
+            atomic_print(f'    {"unpinned":<{lw}} = {unpinned}  '
+                         f'(system total - sum over NUMA nodes)')
 
             if pool['surplus']:
-                print(f'    {"system surplus":<{lw}} = {pool["surplus"]}')
-        print()
+                atomic_print(f'    {"system surplus":<{lw}} = {pool["surplus"]}')
+        atomic_print("\n")
 
 
     ################################################################################################

@@ -27,6 +27,7 @@ from ..core import (
     SlabAllocator,
     XEngineMetadata,
 )
+from ..utils import atomic_print
 
 
 def _assert_metadata_unchanged(md1, md2):
@@ -52,7 +53,7 @@ def _assert_metadata_unchanged(md1, md2):
 
 def test_assembled_frame_asdf():
     """Round-trip an AssembledFrame through ASDF and check per-frame projection."""
-    print("  test_assembled_frame_asdf()...")
+    atomic_print("  test_assembled_frame_asdf()...")
 
     # Build a multi-beam XEngineMetadata via make_random (fuzz-style), but
     # overwrite beam_ids and beam_positions_{x,y} to a small known length so
@@ -107,7 +108,7 @@ def test_assembled_frame_asdf():
 
     # Generate temp filename in /dev/shm so the test doesn't touch persistent storage.
     filename = f"/dev/shm/test_assembled_frame_asdf_{secrets.token_hex(8)}.asdf"
-    print(f"    filename={filename}")
+    atomic_print(f"    filename={filename}")
 
     try:
         frame.write_asdf(filename)

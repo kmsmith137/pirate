@@ -1,5 +1,6 @@
 #include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/inlines.hpp"    // align_up()
+#include "../include/pirate/utils.hpp"      // AtomicPrint
 
 #include <algorithm>
 #include <cerrno>
@@ -360,10 +361,11 @@ std::shared_ptr<void> BumpAllocator::_setup_rhost_deleter(std::shared_ptr<void> 
                 long off = state->reg_chunk_offsets[s];
                 cudaError_t err = cudaHostUnregister(cp + off);
                 if (err != cudaSuccess) {
-                    std::fprintf(stderr,
-                        "BumpAllocator deleter: cudaHostUnregister chunk "
-                        "%d (offset=%ld) failed: %s\n",
-                        s, off, cudaGetErrorString(err));
+                    // AtomicPrint's destructor is noexcept and best-effort, which
+                    // is what we want on this deleter path.
+                    AtomicPrint(2) << "BumpAllocator deleter: cudaHostUnregister chunk "
+                                 << s << " (offset=" << off << ") failed: "
+                                 << cudaGetErrorString(err);
                 }
             }
             // keepalive drops at end of lambda -> ksgpu deleter (munmap).

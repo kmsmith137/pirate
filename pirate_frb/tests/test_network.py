@@ -67,6 +67,7 @@ from ..rpc.FileSubscriber import FileSubscriber
 from ..rpc.grpc import frb_search_pb2_grpc
 
 from .utils import make_random_subscale_config, pick_receiver_worker_counts
+from ..utils import atomic_print
 
 
 def _acq_filename(acqdir, beam_id, chunk):
@@ -720,7 +721,7 @@ class NetworkTester:
             "ambiguous,   ASSEMBLED",
         ]
         for label, count in zip(labels, counters):
-            print(f"    {label}: {count}")
+            atomic_print(f"    {label}: {count}")
 
     def _drain_filesub(self):
         """Wait until every scheduled filename has arrived via the
@@ -756,9 +757,9 @@ class NetworkTester:
             remaining.discard(filename)
 
     def _print_summary(self):
-        print(f"    guaranteed, written:  {len(self.safe_written_set)}")
-        print(f"    unsafe, written:      {len(self.unsafe_written_set)}")
-        print(f"    unsafe, not written:  {len(self.unsafe_not_written_set)}")
+        atomic_print(f"    guaranteed, written:  {len(self.safe_written_set)}")
+        atomic_print(f"    unsafe, written:      {len(self.unsafe_written_set)}")
+        atomic_print(f"    unsafe, not written:  {len(self.unsafe_not_written_set)}")
 
     def _verify_files(self):
         """Read every scheduled file back from disk and byte-compare its
@@ -981,8 +982,8 @@ class NetworkTester:
                     f"expected INTERNAL, got {e.code()}: {e.details()}"
                 assert "fell behind" in (e.details() or ""), \
                     f"unexpected error details: {e.details()}"
-            print(f"    slow subscriber: {got}/{total_sent} notifications delivered, "
-                  f"then stopped with 'fell behind' (cap={cap})")
+            atomic_print(f"    slow subscriber: {got}/{total_sent} notifications delivered, "
+                         f"then stopped with 'fell behind' (cap={cap})")
 
             # The overflow must not have affected the FileWriter or other
             # subscribers: one more write, delivered to the fast subscriber.
@@ -1003,16 +1004,16 @@ class NetworkTester:
 
 def test_network():
     """One iteration of the FakeXEngine <-> FrbServer loopback test."""
-    print("  test_network()...")
+    atomic_print("  test_network()...")
     with NetworkTester() as t:
         # The DedispersionConfig is verbose; print other params and a
         # one-line config summary separately.
         params_no_config = {k: v for k, v in t.p.items() if k != 'config'}
-        print(f"    params: {params_no_config}")
+        atomic_print(f"    params: {params_no_config}")
         c = t.p['config']
-        print(f"    config: toplevel_tree_rank={c.toplevel_tree_rank}, num_primary_trees={c.num_primary_trees},"
-              f" beams_per_batch={c.beams_per_batch}, num_active_batches={c.num_active_batches},"
-              f" dtype={c.dtype}, future_write_max_samples={c.future_write_max_samples} (n_fut={t.n_fut})")
+        atomic_print(f"    config: toplevel_tree_rank={c.toplevel_tree_rank}, num_primary_trees={c.num_primary_trees},"
+                     f" beams_per_batch={c.beams_per_batch}, num_active_batches={c.num_active_batches},"
+                     f" dtype={c.dtype}, future_write_max_samples={c.future_write_max_samples} (n_fut={t.n_fut})")
         t.run()
 
 
@@ -1023,13 +1024,13 @@ def test_slow_subscriber():
     small cap and a shortened send loop (this test only needs some
     fully-processed chunks in the ringbuf, not the full 1000-turn stress).
     """
-    print("  test_slow_subscriber()...")
+    atomic_print("  test_slow_subscriber()...")
     with NetworkTester(max_subscriber_backlog=100) as t:
         params_no_config = {k: v for k, v in t.p.items() if k != 'config'}
-        print(f"    params: {params_no_config}")
+        atomic_print(f"    params: {params_no_config}")
         t._send_loop(nturns=400)
         t._post_loop_sync()
         t._flush_promises()
         t._drain_filesub()
         t._run_slow_subscriber_phase()
-    print("    PASSED")
+    atomic_print("    PASSED")

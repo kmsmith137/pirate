@@ -1468,12 +1468,12 @@ void FrbServer::_frame_finalizing_thread_main()
                     chunks_per_sec = double(dchunks) / elapsed;
             }
 
-            std::ostringstream line;
+            AtomicPrint line;
             line << "FrbServer: beamset=" << m->beamset
                  << ", ichunk=" << ichunk
                  << ", fpga=[" << (ichunk * seq_per_chunk)
                  << ":" << ((ichunk + 1) * seq_per_chunk) << "]";
-            
+
             if (chunks_per_sec >= 0.0) {
                 double gbps = chunks_per_sec * double(bytes_per_chunk) * 8.0 / 1.0e9;
                 double rt_beams = chunks_per_sec * chunk_len_sec * double(nbeams);
@@ -1482,8 +1482,6 @@ void FrbServer::_frame_finalizing_thread_main()
                      << ", beams=" << rt_beams
                      << "/" << nbeams;
             }
-            line << "\n";
-            std::cout << line.str() << std::flush;
         }
     }
 }
@@ -1665,16 +1663,15 @@ void FrbServer::_grouper_send_thread_main()
     { unique_lock<std::mutex> lock(mutex); if (is_stopped) return; }
     grouper_client->connect(constants::grouper_connect_timeout_ms);
 
-    // Composed in an ostringstream and printed with a single operator<<, so
-    // that with multiple servers the concurrent grouper send threads can't
-    // interleave their output mid-line (same pattern as the per-chunk status
-    // line in _frame_finalizing_thread_main).
-    std::ostringstream connect_msg;
-    connect_msg << "FrbServer: connected to grouper at "
-                << grouper_client->grouper_ip_addr << "\n"
-                << "FrbServer: waiting for X-engine node(s) to connect at "
-                << params.rpc_server_address << " (Ctrl-C to stop)\n";
-    std::cout << connect_msg.str() << std::flush;
+    // Both lines are emitted together when 'msg' goes out of scope, so with
+    // multiple servers the concurrent grouper send threads can't interleave.
+    {
+        AtomicPrint msg;
+        msg << "FrbServer: connected to grouper at "
+            << grouper_client->grouper_ip_addr << "\n"
+            << "FrbServer: waiting for X-engine node(s) to connect at "
+            << params.rpc_server_address << " (Ctrl-C to stop)\n";
+    }
 
     // (2) Start receivers NOW (unchanged location: after the grouper is connected,
     //     before the Handshake -- see "Thread ordering"). Data ingest begins ->

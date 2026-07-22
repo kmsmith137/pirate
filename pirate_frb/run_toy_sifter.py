@@ -15,6 +15,7 @@ import grpc
 
 from .rpc.grpc import frb_sifter_pb2
 from .rpc.grpc import frb_sifter_pb2_grpc
+from .utils import atomic_print
 
 
 def _peer_ip(context):
@@ -48,7 +49,7 @@ class ToyFrbSifterServicer(frb_sifter_pb2_grpc.FrbSifterServicer):
             msg = (f"protocol version mismatch: client sent protocol_version="
                    f"{request.protocol_version}, but this sifter requires "
                    f"{frb_sifter_pb2.PROTOCOL_VERSION_CURRENT}")
-            print(f"{_peer_ip(context)}  CheckConfiguration REJECTED ({msg})", flush=True)
+            atomic_print(f"{_peer_ip(context)}  CheckConfiguration REJECTED ({msg})")
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, msg)
 
         # One-line summary: the size of each (possibly empty) config YAML field,
@@ -62,8 +63,8 @@ class ToyFrbSifterServicer(frb_sifter_pb2_grpc.FrbSifterServicer):
                 ("grouper", request.grouper_yaml),
             )
         )
-        print(f"{_peer_ip(context)}  CheckConfiguration("
-              f"search_ip_addr={request.search_ip_addr!r}, {sizes})", flush=True)
+        atomic_print(f"{_peer_ip(context)}  CheckConfiguration("
+                     f"search_ip_addr={request.search_ip_addr!r}, {sizes})")
         return frb_sifter_pb2.ConfigReply(ok=True)
 
     def FrbEvents(self, request, context):
@@ -84,7 +85,7 @@ class ToyFrbSifterServicer(frb_sifter_pb2_grpc.FrbSifterServicer):
                          f"fpga_timestamp={ev.fpga_timestamp}, width={ev.width_ms:.4g} ms, "
                          f"subband=[{ev.subband_freq_lo_MHz:.1f},{ev.subband_freq_hi_MHz:.1f}] MHz, "
                          f"snr={ev.snr:.4g}")
-        print("\n".join(lines), flush=True)
+        atomic_print("\n".join(lines))
         return frb_sifter_pb2.FrbEventsReply(ok=True, message="")
 
 
@@ -106,9 +107,9 @@ def run_toy_sifter(addr, max_workers=4):
                            "(already in use, or malformed 'ip:port'?)")
 
     server.start()
-    print(f"run_toy_sifter: waiting for grouper(s) to connect at {addr} (Ctrl-C to stop)", flush=True)
+    atomic_print(f"run_toy_sifter: waiting for grouper(s) to connect at {addr} (Ctrl-C to stop)")
     try:
         server.wait_for_termination()
     except KeyboardInterrupt:
-        print("\nrun_toy_sifter: interrupted; shutting down", flush=True)
+        atomic_print("\nrun_toy_sifter: interrupted; shutting down")
         server.stop(grace=1.0).wait()

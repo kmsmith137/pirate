@@ -1,6 +1,7 @@
 #include "../include/pirate/FakeXEngine.hpp"
 #include "../include/pirate/network_utils.hpp"
 #include "../include/pirate/system_utils.hpp"   // get_thread_affinity()
+#include "../include/pirate/utils.hpp"          // AtomicPrint
 #include "../include/pirate/constants.hpp"      // default_poll_cadence_ms
 
 #include <algorithm>     // std::max (paced-mode bootstrap), std::min (ack-read cap)
@@ -380,13 +381,11 @@ bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbyte
                    << " bytes); treating as deadlock in debug mode";
                 throw runtime_error(ss.str());
             }
-            // std::endl flushes; we want the warning visible
-            // immediately even if cout is fully buffered (e.g. when
-            // redirected to a file).
-            std::cout << "FakeXEngine: receiver " << w.ip_addr << ":" << w.port
-                      << " is down or very slow (sent " << pos << " of "
-                      << nbytes << " bytes in 1s)"
-                      << std::endl;
+            // (AtomicPrint emits via write(2), so the warning is visible
+            // immediately even when stdout is redirected to a file.)
+            AtomicPrint() << "FakeXEngine: receiver " << w.ip_addr << ":" << w.port
+                        << " is down or very slow (sent " << pos << " of "
+                        << nbytes << " bytes in 1s)";
             stall_deadline = clock::now() + stall_period;
         }
     }

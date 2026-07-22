@@ -17,6 +17,7 @@ and prints the peak SNR of each chunk (one beam+chunk pair per line).
 
 Run via: python -m pirate_frb run_offline_dedisperser ACQDIR CONFIG [--max-chunks N]
 """
+from .utils import atomic_print
 
 
 DEFAULT_ACQDIR = "/mnt/cs00/data/kmsmith/2026-07-05/streams/kmsmith_26_07_05_202822"
@@ -39,7 +40,7 @@ def _process_beam(beam_id, files, config):
     # FIXME: there is currently no way to reset an OfflineDedisperser, so we
     # construct a new one from scratch for every beam.
     od = OfflineDedisperser(config)
-    print(f"\nBeam {beam_id}: {len(files)} chunks")
+    atomic_print(f"\nBeam {beam_id}: {len(files)} chunks")
 
     for ichunk, path in enumerate(files):
         frame = AssembledFrame.from_asdf(path)
@@ -52,10 +53,10 @@ def _process_beam(beam_id, files, config):
             snr = max(float(cp.asarray(outputs.out_max[t]).max()) for t in range(od.ntrees))
 
         if ichunk == 0:
-            print(f"  nfreq={od.nfreq}, nt_in={od.nt_in}, ntrees={od.ntrees}, dtype={od.dtype}, "
-                  f"time_sample_ms={od.time_sample_ms:.4f}")
-        print(f"  beam {beam_id}  chunk {ichunk:3d} (tci={frame.time_chunk_index:3d}):  "
-              f"snr_max={snr:7.3f}")
+            atomic_print(f"  nfreq={od.nfreq}, nt_in={od.nt_in}, ntrees={od.ntrees}, dtype={od.dtype}, "
+                         f"time_sample_ms={od.time_sample_ms:.4f}")
+        atomic_print(f"  beam {beam_id}  chunk {ichunk:3d} (tci={frame.time_chunk_index:3d}):  "
+                     f"snr_max={snr:7.3f}")
 
 
 def run_offline_dedisperser(acqdir=DEFAULT_ACQDIR, config_filename=DEFAULT_CONFIG, max_chunks=None):
@@ -73,7 +74,7 @@ def run_offline_dedisperser(acqdir=DEFAULT_ACQDIR, config_filename=DEFAULT_CONFI
     from . import Acquisition, DedispersionConfig
 
     acq = Acquisition(acqdir)
-    print(f"Found {len(acq.beam_ids)} beam(s) in {acqdir}: {acq.beam_ids}")
+    atomic_print(f"Found {len(acq.beam_ids)} beam(s) in {acqdir}: {acq.beam_ids}")
 
     config = DedispersionConfig.from_yaml(config_filename)
 

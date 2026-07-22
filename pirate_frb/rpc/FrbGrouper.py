@@ -16,6 +16,7 @@ import numpy as np
 import ksgpu
 from ..pirate_pybind11 import FrbGrouper
 from .FrbSifterClient import FrbSifterEvents
+from ..utils import atomic_print
 
 
 @ksgpu.inject_methods(FrbGrouper)
@@ -129,8 +130,8 @@ class FrbGrouperInjections:
             # cupy work runs on the right device with good CPU locality. Both are
             # entered via an ExitStack and undone in __exit__.
             vcpu_list = Hardware().vcpu_list_from_gpu(self.cuda_device_id)
-            print(f"FrbGrouper: pinning thread to vcpu_list={vcpu_list} and selecting "
-                  f"cuda_device_id={self.cuda_device_id}", flush=True)
+            atomic_print(f"FrbGrouper: pinning thread to vcpu_list={vcpu_list} and selecting "
+                         f"cuda_device_id={self.cuda_device_id}")
             self._exit_stack = ExitStack()
             self._exit_stack.enter_context(ThreadAffinity(vcpu_list))
             self._exit_stack.enter_context(cp.cuda.Device(self.cuda_device_id))

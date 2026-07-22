@@ -32,6 +32,7 @@ import numpy as np
 
 from ..pirate_pybind11 import (DedispersionConfig, DedispersionPlan,
                                ReferenceDedisperser, ReferencePeakFindingKernel)
+from ..utils import atomic_print
 
 
 ####################################################################################################
@@ -432,8 +433,8 @@ def test_decode_argmax():
     nchan = 2 ** r_top
     C = _num_chunks(plan, r_top, nt_in)
 
-    print(f"test_decode_argmax: r_top={r_top}, nt_in={nt_in}, ntrees={plan.ntrees}, "
-          f"nbeams={B}, nchunks={C}")
+    atomic_print(f"test_decode_argmax: r_top={r_top}, nt_in={nt_in}, ntrees={plan.ntrees}, "
+                 f"nbeams={B}, nchunks={C}")
 
     # Per-tree (M, P, Dout, Dcore), from a scout ReferenceDedisperser.
     scout = ReferenceDedisperser(plan, sophistication=0, tree_domain_input=True)

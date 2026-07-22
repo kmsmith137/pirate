@@ -1,4 +1,5 @@
 #include "../include/pirate/avx2_utils.hpp"
+#include "../include/pirate/utils.hpp"      // AtomicPrint
 
 #include <immintrin.h>
 #include <random>
@@ -11,6 +12,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cstdio>
+#include <iomanip>
 
 using namespace std;
 
@@ -273,8 +275,12 @@ void test_avx2_simulate_4bit_noise()
     }
     var -= mean * mean;
 
-    printf("    test_avx2_simulate_4bit_noise: pass  (n=%ld, mean=%+.4f, rms=%.4f [analytic %.4f], max deviation=%.1f sigma)\n",
-           n, mean, std::sqrt(var), avx2_4bit_postquant_noise_rms(), max_sigma);
+    AtomicPrint() << std::fixed << std::setprecision(4)
+                  << "    test_avx2_simulate_4bit_noise: pass  (n=" << n
+                  << ", mean=" << std::showpos << mean << std::noshowpos
+                  << ", rms=" << std::sqrt(var)
+                  << " [analytic " << avx2_4bit_postquant_noise_rms() << "]"
+                  << ", max deviation=" << std::setprecision(1) << max_sigma << " sigma)";
 }
 
 
@@ -333,12 +339,20 @@ void time_avx2_simulate_4bit_noise(long nthreads)
     double total_N = (double) (nthreads * N) / tN / 1e9;
     double perthread_N = total_N / nthreads;
 
-    printf("avx2_simulate_4bit_noise() throughput  (nthreads = %ld, 2^27 samples per variant)\n", nthreads);
-    printf("   1 thread,    2^7 x 2^20:    %6.2f Gsamp/s\n", g1);
-    printf("   1 thread,    2^17 x 2^10:   %6.2f Gsamp/s\n", g2);
-    printf("   1 thread,    1 x 2^27:      %6.2f Gsamp/s\n", g3);
-    printf("   %2ld threads,  1 x 2^27 ea:   %7.2f Gsamp/s total,  %5.2f per-thread   (%.1fx vs 1 thread)\n",
-           nthreads, total_N, perthread_N, total_N / g3);
+    // The whole report is emitted as one block, so another thread's output
+    // can't break it up. std::setw is not sticky (unlike fixed/setprecision),
+    // hence the repetition -- the columns are worth it in a timing table.
+    AtomicPrint rep;
+    rep << std::fixed << std::setprecision(2)
+        << "avx2_simulate_4bit_noise() throughput  (nthreads = " << nthreads
+        << ", 2^27 samples per variant)\n"
+        << "   1 thread,    2^7 x 2^20:    " << std::setw(6) << g1 << " Gsamp/s\n"
+        << "   1 thread,    2^17 x 2^10:   " << std::setw(6) << g2 << " Gsamp/s\n"
+        << "   1 thread,    1 x 2^27:      " << std::setw(6) << g3 << " Gsamp/s\n"
+        << "   " << std::setw(2) << nthreads << " threads,  1 x 2^27 ea:   "
+        << std::setw(7) << total_N << " Gsamp/s total,  "
+        << std::setw(5) << perthread_N << " per-thread   ("
+        << std::setprecision(1) << (total_N / g3) << "x vs 1 thread)\n";
 }
 
 

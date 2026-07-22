@@ -12,6 +12,7 @@ from .Hardware import Hardware
 from .utils import ThreadAffinity, extract_ip, check_mtu, resolve_addr
 from .core import BumpAllocator, SlabAllocator, AssembledFrameAllocator, FileWriter, Receiver
 from .pirate_pybind11 import DedispersionConfig, constants
+from .utils import atomic_print
 
 
 def _parse_memory_string(key, s):
@@ -361,22 +362,22 @@ class RunServerHelper:
             self._print_help_lines()
             self._wait_forever()
         except KeyboardInterrupt:
-            print("\nStopping servers...")
+            atomic_print("\nStopping servers...")
         finally:
             self._stop_all_servers()
 
     def _print_config_summary(self, server_config_filename, dedispersion_config_filename):
-        print(f"Parsed server config: {server_config_filename}")
-        print(f"Parsed dedispersion config: {dedispersion_config_filename}")
-        print(f"  num_servers = {self.n}")
-        print(f"  time_samples_per_chunk = {self.dedisp_config.time_samples_per_chunk}  (from dedispersion config)")
-        print(f"  host_memory_per_server = {self.config['host_memory_per_server']}")
-        print(f"  gpu_memory_per_server  = {self.config['gpu_memory_per_server']}")
-        print(f"  use_hugepages = {self.config['use_hugepages']}")
+        atomic_print(f"Parsed server config: {server_config_filename}")
+        atomic_print(f"Parsed dedispersion config: {dedispersion_config_filename}")
+        atomic_print(f"  num_servers = {self.n}")
+        atomic_print(f"  time_samples_per_chunk = {self.dedisp_config.time_samples_per_chunk}  (from dedispersion config)")
+        atomic_print(f"  host_memory_per_server = {self.config['host_memory_per_server']}")
+        atomic_print(f"  gpu_memory_per_server  = {self.config['gpu_memory_per_server']}")
+        atomic_print(f"  use_hugepages = {self.config['use_hugepages']}")
         if self.processing_delay_sec > 0.0:
-            print(f"  processing_delay_sec = {self.processing_delay_sec}  (artificial per-frame delay)")
+            atomic_print(f"  processing_delay_sec = {self.processing_delay_sec}  (artificial per-frame delay)")
         if self.no_dedispersion:
-            print(f"  no_dedispersion = True  (skip all GPU work; implies --no-grouper)")
+            atomic_print(f"  no_dedispersion = True  (skip all GPU work; implies --no-grouper)")
 
     def _prepare_directories(self):
         # Check configured mountpoints are actually mounted BEFORE creating any
@@ -391,11 +392,11 @@ class RunServerHelper:
         os.makedirs(self.nfs_dir, exist_ok=True)
         for ssd_dir in self.config['ssd_dirs']:
             os.makedirs(ssd_dir, exist_ok=True)
-        print(f"  nfs_dir = {self.nfs_dir}")
+        atomic_print(f"  nfs_dir = {self.nfs_dir}")
 
     def _run_hardware_check(self):
         _validate_hardware(self.config, self.hw)
-        print(f"Hardware validation passed: server CPUs = {self.config['server_cpus']}")
+        atomic_print(f"Hardware validation passed: server CPUs = {self.config['server_cpus']}")
 
     def _setup_memory(self):
         # Both BumpAllocators are constructed in async mode so they
@@ -428,7 +429,7 @@ class RunServerHelper:
         for i, grouper_client in enumerate(self._grouper_clients):
             if grouper_client is None:
                 continue
-            print(f"Pinging grouper at {grouper_client.grouper_ip_addr} (server {i})...")
+            atomic_print(f"Pinging grouper at {grouper_client.grouper_ip_addr} (server {i})...")
             try:
                 grouper_client.ping()
             except Exception:
@@ -436,7 +437,7 @@ class RunServerHelper:
                 # _print_help_lines omits the grouper line -- once the servers are
                 # running, the grouper is necessarily already up), then re-raise.
                 grouper_addrs = ' '.join(self.config['grouper_ip_addrs'])
-                print(f"\nTo start toy grouper(s):  pirate_frb run_toy_grouper [-s SIFTER_ADDR] {grouper_addrs}\n")
+                atomic_print(f"\nTo start toy grouper(s):  pirate_frb run_toy_grouper [-s SIFTER_ADDR] {grouper_addrs}\n\n")
                 raise
 
         # Phase 2: wait for all 2 * num_servers async BumpAllocators to
@@ -445,16 +446,16 @@ class RunServerHelper:
         # worker thread later. (The host bump also backs the SlabAllocator,
         # so no separate wait is needed for the frame pool.)
         for i, server in enumerate(self.servers):
-            print(f"Waiting for server {i}'s async BumpAllocators to initialize, "
-                  f"before accepting connections (may take some time).")
+            atomic_print(f"Waiting for server {i}'s async BumpAllocators to initialize, "
+                         f"before accepting connections (may take some time).")
             server.host_allocator.wait_until_initialized()
             server.gpu_allocator.wait_until_initialized()
-            print(f"  Server {i} ready.")
+            atomic_print(f"  Server {i} ready.")
 
         # Phase 3: start all servers.
         for i, server in enumerate(self.servers):
             server.start()
-            print(f"  Server {i} started.")
+            atomic_print(f"  Server {i} started.")
 
     def _build_server(self, i):
         cpus = self.config['server_cpus']
@@ -597,14 +598,14 @@ class RunServerHelper:
         # Stash the grouper client (None when no_grouper) for the phase-1.5 ping.
         # (FrbServer holds it but does not expose it back to Python.)
         self._grouper_clients.append(grouper_client)
-        print(f"  Server {i} built (async init in progress).")
+        atomic_print(f"  Server {i} built (async init in progress).")
 
     def _print_server_details(self, i, vcpu_list, cuda_device_id):
         cpus = self.config['server_cpus']
-        print(f"\nServer {i}: CPU {cpus[i]}, vcpu_list = {vcpu_list}")
-        print(f"  cuda_device_id = {cuda_device_id}")
-        print(f"  data_ip_addrs = {self.config['data_ip_addrs'][i]}")
-        print(f"  rpc_ip_addr = {self.config['rpc_ip_addrs'][i]}")
+        atomic_print(f"\nServer {i}: CPU {cpus[i]}, vcpu_list = {vcpu_list}")
+        atomic_print(f"  cuda_device_id = {cuda_device_id}")
+        atomic_print(f"  data_ip_addrs = {self.config['data_ip_addrs'][i]}")
+        atomic_print(f"  rpc_ip_addr = {self.config['rpc_ip_addrs'][i]}")
         grouper = '' if self.no_grouper else self.config['grouper_ip_addrs'][i]
         if self.no_dedispersion:
             grouper_note = "  (disabled via --no-dedispersion)"
@@ -612,8 +613,8 @@ class RunServerHelper:
             grouper_note = "  (disabled via --no-grouper)"
         else:
             grouper_note = ""
-        print(f"  grouper_ip_addr = {grouper!r}{grouper_note}")
-        print(f"  ssd_dir = {self.config['ssd_dirs'][i]}")
+        atomic_print(f"  grouper_ip_addr = {grouper!r}{grouper_note}")
+        atomic_print(f"  ssd_dir = {self.config['ssd_dirs'][i]}")
 
     def _check_mtus_for_server(self, i):
         # Enforce minimum MTU on the local data and RPC NICs.
@@ -626,14 +627,14 @@ class RunServerHelper:
 
     def _print_help_lines(self):
         rpc_addrs = ' '.join(self.config['rpc_ip_addrs'])
-        print(f"\nTo send fake data to server(s):     pirate_frb run_fake_xengine {rpc_addrs}")
-        print(f"To monitor status:                    pirate_frb rpc_status {rpc_addrs}")
-        print(f"To write random data:                 pirate_frb rpc_rand_write {rpc_addrs}")
-        print(f"To stream data (all beams, 60 sec):   pirate_frb rpc_start_stream -B -d 60 {rpc_addrs}")
-        print(f"To show streams:                      pirate_frb rpc_show_streams {rpc_addrs}")
+        atomic_print(f"\nTo send fake data to server(s):     pirate_frb run_fake_xengine {rpc_addrs}")
+        atomic_print(f"To monitor status:                    pirate_frb rpc_status {rpc_addrs}")
+        atomic_print(f"To write random data:                 pirate_frb rpc_rand_write {rpc_addrs}")
+        atomic_print(f"To stream data (all beams, 60 sec):   pirate_frb rpc_start_stream -B -d 60 {rpc_addrs}")
+        atomic_print(f"To show streams:                      pirate_frb rpc_show_streams {rpc_addrs}")
 
-        print(f"\nReminder: the only way to interact with running server(s) is via RPC, see above.")
-        print(f"All {self.n} server(s) started. Press Ctrl-C to stop.")
+        atomic_print(f"\nReminder: the only way to interact with running server(s) is via RPC, see above.")
+        atomic_print(f"All {self.n} server(s) started. Press Ctrl-C to stop.")
 
     def _wait_forever(self):
         # Round-robin over the servers, blocking up to
@@ -648,13 +649,13 @@ class RunServerHelper:
         while True:
             for i, server in enumerate(self.servers):
                 if server.poll_from_python(timeout_ms=constants.default_poll_cadence_ms):
-                    print(f"FrbServer {i} stopped. Exiting.")
+                    atomic_print(f"FrbServer {i} stopped. Exiting.")
                     return
 
     def _stop_all_servers(self):
         for server in self.servers:
             server.stop()
-        print("All servers stopped.")
+        atomic_print("All servers stopped.")
 
 
 def run_server(server_config_filename, dedispersion_config_filename,

@@ -14,6 +14,7 @@ coefficient and residual for the operator to interpret; it does not raise. Run i
 import numpy as np
 
 from .. import simpulse
+from ..utils import atomic_print
 
 
 def log_uniform(xmin, xmax, size=None):
@@ -163,20 +164,20 @@ class upsampling_test_instance:
         d = np.sum((a0-a1)**2)**0.5 / t**0.25
         r = np.sum(a0*a1) / t**0.5
 
-        print(self)
-        print()
-        print('(nupfreq, nupsample) = (%d, %d)' % (nupfreq, nupsample))
-        print('Correlation coefficient:', r, '  (expect ~1; original float64 threshold was |r-1| < 1e-5)')
-        print('Residual difference:', d, '  (expect ~0; original float64 threshold was |d| < 1e-3)')
-        print()
+        atomic_print(self)
+        atomic_print("\n")
+        atomic_print('(nupfreq, nupsample) = (%d, %d)' % (nupfreq, nupsample))
+        atomic_print(f'Correlation coefficient: {r}  (expect ~1; original float64 threshold was |r-1| < 1e-5)')
+        atomic_print(f'Residual difference: {d}  (expect ~0; original float64 threshold was |d| < 1e-3)')
+        atomic_print("\n")
 
 
 def run_tests(niter=100):
     combos = [(1, 2), (1, 3), (1, 4), (2, 1), (3, 1), (4, 1), (2, 2), (2, 3), (3, 2), (3, 3)]
 
     for it in range(niter):
-        print('Iteration %d/%d' % (it, niter))
-        print()
+        atomic_print('Iteration %d/%d' % (it, niter))
+        atomic_print("\n")
 
         nupfreq, nupsample = combos[np.random.randint(0, len(combos))]
         t = upsampling_test_instance()

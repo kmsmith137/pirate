@@ -20,6 +20,7 @@ Run via: python -m pirate_frb test --net
 import numpy as np
 from ..core import AssembledFrameAllocator, BumpAllocator, SlabAllocator, XEngineMetadata
 from ..pirate_pybind11 import constants
+from ..utils import atomic_print
 
 
 def make_slab_allocator(capacity=4*1024*1024, aflags='af_rhost'):
@@ -65,7 +66,7 @@ def test_frame_properties():
       - Data array has correct shape (nfreq, ntime/2 as uint8)
       - Data is initialized to 0x88 (representing -8 in int4)
     """
-    print("  test_frame_properties()...")
+    atomic_print("  test_frame_properties()...")
 
     nfreq = 128
     time_samples_per_chunk = 256
@@ -113,7 +114,7 @@ def test_frame_properties():
     # validate() should not throw on a freshly-allocated set.
     fset.validate()
 
-    print("    PASSED")
+    atomic_print("    PASSED")
 
 
 def test_sequence_ordering():
@@ -123,7 +124,7 @@ def test_sequence_ordering():
     Verifies that get_frame_set(chunk_idx) returns the set for exactly that
     chunk index, and that each set contains frames in metadata.beam_ids order.
     """
-    print("  test_sequence_ordering()...")
+    atomic_print("  test_sequence_ordering()...")
 
     nfreq = 64
     time_samples_per_chunk = 256
@@ -152,7 +153,7 @@ def test_sequence_ordering():
                 f"Chunk {chunk_idx}, frame {beam_idx}: expected beam_id={beam_ids[beam_idx]}, got {frame.beam_id}"
             assert frame.time_chunk_index == chunk_idx
 
-    print("    PASSED")
+    atomic_print("    PASSED")
 
 
 def test_single_beam_sequence():
@@ -161,7 +162,7 @@ def test_single_beam_sequence():
 
     Each set has exactly one frame; chunk indices 0..4 requested in order.
     """
-    print("  test_single_beam_sequence()...")
+    atomic_print("  test_single_beam_sequence()...")
 
     nfreq = 32
     time_samples_per_chunk = 256
@@ -180,7 +181,7 @@ def test_single_beam_sequence():
         assert frame.beam_id == 42
         assert frame.time_chunk_index == chunk_idx
 
-    print("    PASSED")
+    atomic_print("    PASSED")
 
 
 def test_multi_consumer_frame_identity():
@@ -191,7 +192,7 @@ def test_multi_consumer_frame_identity():
     the exact same set object (and therefore the exact same frame objects
     inside the set).
     """
-    print("  test_multi_consumer_frame_identity()...")
+    atomic_print("  test_multi_consumer_frame_identity()...")
 
     nfreq = 64
     time_samples_per_chunk = 256
@@ -231,7 +232,7 @@ def test_multi_consumer_frame_identity():
     # Second set should be a different object from the first.
     assert sets1[0] is not sets0[0], "Second set should be a different object from first"
 
-    print("    PASSED")
+    atomic_print("    PASSED")
 
 
 def test_multi_consumer_independent_progress():
@@ -241,7 +242,7 @@ def test_multi_consumer_independent_progress():
     Verifies that consumers can progress at different rates (in chunk units),
     each receiving the correct sequence of AssembledFrameSets.
     """
-    print("  test_multi_consumer_independent_progress()...")
+    atomic_print("  test_multi_consumer_independent_progress()...")
 
     nfreq = 32
     time_samples_per_chunk = 256
@@ -278,7 +279,7 @@ def test_multi_consumer_independent_progress():
     assert sets_c1[1] is sets_c0[1], \
         "Second set should be shared between consumers"
 
-    print("    PASSED")
+    atomic_print("    PASSED")
 
 
 def test_frame_recycling():
@@ -296,7 +297,7 @@ def test_frame_recycling():
     can grab returned slabs to pre-create sets). So we test recycling by
     verifying the no-block / no-deadlock property over many iterations.
     """
-    print("  test_frame_recycling()...")
+    atomic_print("  test_frame_recycling()...")
 
     nfreq = 64
     time_samples_per_chunk = 256
@@ -350,7 +351,7 @@ def test_frame_recycling():
         del s1
 
     # If we got here without blocking/deadlock, recycling is working.
-    print("    PASSED")
+    atomic_print("    PASSED")
 
 
 def test_frame_recycling_with_held_reference():
@@ -363,7 +364,7 @@ def test_frame_recycling_with_held_reference():
     - If a consumer holds a reference, the underlying slab won't be freed
       even after the allocator drops its reference.
     """
-    print("  test_frame_recycling_with_held_reference()...")
+    atomic_print("  test_frame_recycling_with_held_reference()...")
 
     nfreq = 64
     time_samples_per_chunk = 256
@@ -436,7 +437,7 @@ def test_frame_recycling_with_held_reference():
     # Finally release set 0.
     del set0
 
-    print("    PASSED")
+    atomic_print("    PASSED")
 
 
 def test_throw_exception_if_empty():
@@ -454,7 +455,7 @@ def test_throw_exception_if_empty():
       (d) throw_exception_if_empty=True with a dummy-mode slab allocator raises at
           construction.
     """
-    print("  test_throw_exception_if_empty()...")
+    atomic_print("  test_throw_exception_if_empty()...")
 
     nfreq = 64
     time_samples_per_chunk = 256
@@ -522,7 +523,7 @@ def test_throw_exception_if_empty():
     except RuntimeError as e:
         assert "throw_exception_if_empty" in str(e), f"unexpected error: {e}"
 
-    print("    PASSED")
+    atomic_print("    PASSED")
 
 
 def test_assembled_frame_allocator():
@@ -531,7 +532,7 @@ def test_assembled_frame_allocator():
 
     Raises an exception if any test fails.
     """
-    print("Testing AssembledFrameAllocator...")
+    atomic_print("Testing AssembledFrameAllocator...")
 
     # Test 3: Frame allocation and properties
     test_frame_properties()
@@ -551,4 +552,4 @@ def test_assembled_frame_allocator():
     # Test 7: throw_exception_if_empty (startup burst + fail-fast)
     test_throw_exception_if_empty()
 
-    print("All AssembledFrameAllocator tests PASSED!")
+    atomic_print("All AssembledFrameAllocator tests PASSED!")

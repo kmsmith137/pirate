@@ -24,6 +24,29 @@ namespace pirate {
 
 void register_utils_bindings(pybind11::module &m)
 {
+    // atomic_print(): the output funnel shared by C++ and python. Python code
+    // calls this (C++ code uses class AtomicPrint, which routes here), so that
+    // both languages serialize on the same process-global mutex and every
+    // line is emitted with a single write(2). See include/pirate/utils.hpp.
+    //
+    // The GIL is released before we block on the mutex, so a slow write can
+    // never stall the interpreter; the str -> std::string conversion happens
+    // during argument parsing, before the call guard takes effect. C++ threads
+    // never touch the GIL in this path, so there is no lock-order cycle.
+    m.def("atomic_print",
+          [](const string &s, int fd) { atomic_print(s, fd); },
+          py::arg("s"), py::arg("fd") = 1,
+          py::call_guard<py::gil_scoped_release>(),
+          "Emit 's' as one atomic line (appending '\\n' if absent) on file "
+          "descriptor 'fd' (1=stdout, 2=stderr). Thread- and process-safe: "
+          "concurrent writers cannot interleave mid-line. Empty 's' is a "
+          "no-op; pass '\\n' for a blank line.");
+
+    // Concurrency smoke test for the above (see 'python -m pirate_frb test --aout').
+    m.def("test_atomic_print", &test_atomic_print,
+          py::arg("fd"), py::arg("nthreads"), py::arg("nlines"),
+          py::call_guard<py::gil_scoped_release>());
+
     // avx2_simulate_4bit_noise() test + timing (see 'python -m pirate_frb test/time --sim').
     m.def("test_avx2_simulate_4bit_noise", &test_avx2_simulate_4bit_noise, py::call_guard<py::gil_scoped_release>());
     m.def("time_avx2_simulate_4bit_noise", &time_avx2_simulate_4bit_noise, py::arg("nthreads"), py::call_guard<py::gil_scoped_release>());

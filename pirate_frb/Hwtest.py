@@ -4,6 +4,7 @@ import time
 from . import pirate_pybind11
 
 from .Hardware import Hardware
+from .utils import atomic_print
 
 
 class Hwtest:
@@ -106,7 +107,7 @@ class Hwtest:
                 if self.cpp_server.show_stats() > seconds:
                     break
         except KeyboardInterrupt:
-            print("\nInterrupted, stopping...")
+            atomic_print("\nInterrupted, stopping...")
         finally:
             self.cpp_server.stop()
             self.cpp_server.join()

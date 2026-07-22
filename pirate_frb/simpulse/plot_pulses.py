@@ -16,6 +16,7 @@ so that 'import pirate_frb.simpulse' does not require matplotlib.
 import numpy as np
 
 from .. import simpulse
+from ..utils import atomic_print
 
 
 def _make_pulse(freq_lo_MHz, freq_hi_MHz, nfreq, dm, sm, intrinsic_width, spectral_index, nsamp):
@@ -88,7 +89,7 @@ def make_plot(plt, matplotlib, pulse_args, ifreq_list, color_list, label_list, f
     plt.legend(loc='upper right').draw_frame(False)
     plt.savefig(filename)
     plt.clf()
-    print('wrote', filename)
+    atomic_print(f'wrote {filename}')
 
 
 def plot1(plt, matplotlib):
@@ -170,7 +171,7 @@ def plot4(plt, matplotlib):
     fig.tight_layout()
     fig.savefig('plot4.png')
     plt.close(fig)
-    print('wrote plot4.png')
+    atomic_print('wrote plot4.png')
 
 
 def make_plots():

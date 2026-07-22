@@ -2,6 +2,7 @@ import numpy as np
 
 from .SparseTile import SparseTile, SparseTileTriple, SparseTilePerM
 from ..utils import integer_log2
+from ..utils import atomic_print
 
 
 ###################################   class PfVarianceConvolver   ##################################
@@ -456,7 +457,7 @@ class PfAvarExact:
                 (itree, float(self.tree_variance[itree].min()))
 
             if progress:
-                print(flush=True)
+                atomic_print("\n")
 
 
 ###################################   class PfAvarApproximation   ##################################
@@ -554,7 +555,7 @@ class PfAvarApproximation:
             self.per_tf[itree] = [ PfVariance(r-L,P) for _ in range(1 << R) ]
 
         if progress:
-            print('PfAvarApproximation', flush=True)
+            atomic_print('PfAvarApproximation')
             
         for ifreq in range(self.nfreq):
             if progress and (ifreq + 1) % 1000 == 0:
@@ -584,7 +585,7 @@ class PfAvarApproximation:
                 (itree, float(self.tree_variance[itree].min()))
 
         if progress:
-            print(flush=True)
+            atomic_print("\n")
 
     
     def _process_klevel(self, sarr, k, ifreq):

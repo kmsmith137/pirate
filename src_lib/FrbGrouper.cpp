@@ -1,6 +1,7 @@
 #include "../include/pirate/FrbGrouper.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"  // make_incomplete_plan_from_yaml()
 #include "../include/pirate/network_utils.hpp"    // parse_ip_address, is_loopback_address
+#include "../include/pirate/utils.hpp"            // AtomicPrint
 
 // See "NDEBUG and libabseil" in notes/build.md for the push_macro trick,
 // and its companion comment on -Wdeprecated-declarations. Uniform grpc
@@ -393,8 +394,8 @@ bool FrbGrouper::wait_for_handshake(int timeout_ms)
     // so the message would be misleading.
     if (!session_active && !waiting_print_done) {
         waiting_print_done = true;
-        std::cout << "FrbGrouper: waiting for FrbServer to connect at "
-                  << grouper_ip_addr << " ..." << std::endl;
+        AtomicPrint() << "FrbGrouper: waiting for FrbServer to connect at "
+                    << grouper_ip_addr << " ...";
     }
 
     handshake_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms));
@@ -437,7 +438,7 @@ FrbGrouper::SessionResult FrbGrouper::_run_session(void *ctx_, void *stream_)
     // The TCP connection is now open (gRPC invoked our Session handler).
     // Announce it immediately -- do NOT wait for the handshake (the producer may
     // take a while to build its dedisperser before sending the Handshake).
-    std::cout << "FrbGrouper: client connected at " << grouper_ip_addr << std::endl;
+    AtomicPrint() << "FrbGrouper: client connected at " << grouper_ip_addr;
 
     try {
         // 1. Read the Handshake (must be the first message).
@@ -461,10 +462,10 @@ FrbGrouper::SessionResult FrbGrouper::_run_session(void *ctx_, void *stream_)
 
         // Announce handshake completion (output_ringbuf is now valid). The
         // connection itself was already announced at TCP-open (above).
-        std::cout << "FrbGrouper: handshake processed (cuda_device_id=" << cuda_device_id
-                  << ", ntrees=" << ntrees
-                  << ", total_beams=" << total_beams
-                  << ", nbatches=" << nbatches << ")" << std::endl;
+        AtomicPrint() << "FrbGrouper: handshake processed (cuda_device_id=" << cuda_device_id
+                    << ", ntrees=" << ntrees
+                    << ", total_beams=" << total_beams
+                    << ", nbatches=" << nbatches << ")";
 
         // 4. Receive loop (this thread). Returns when the stream closes / is cancelled.
         _receive_loop();
