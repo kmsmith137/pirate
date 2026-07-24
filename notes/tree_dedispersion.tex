@@ -7,6 +7,8 @@
 \usepackage{multirow}
 \usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}  % load last
 
+\numberwithin{equation}{section}   % equations numbered (2.13), where "2" is the section number
+
 \def\DS{{\rm DS}}
 \def\DD{{\rm DD}}
 \def\LAG{{\rm LAG}}
@@ -625,9 +627,9 @@ f = \big[ f_{r-1} \cdots f_1 f_0 \big]_2
   \hspace{1.5cm}
 d = \big[ d_{r-1} \cdots d_1 d_0 \big]_2
 \end{equation}
-To prove that the nonrecursive definition (\ref{eq:DD_nonrecursive}) is equivalent to
-our previous recursive definition in Eqs.\ (\ref{eq:DD_composition}), (\ref{eq:DD_DS}),
-we use induction on $r$. (Details omitted for now.)
+In Appendix \ref{app:nonrecursive_proof}, we show that the nonrecursive definition 
+(\ref{eq:DD_nonrecursive}) of tree dedispersion is equivalent to our previous
+recursive definition in Eqs.\ (\ref{eq:DD_composition}), (\ref{eq:DD_DS}).
 
 \subsection{The splitting identity}
 
@@ -675,9 +677,8 @@ may help visualize the RHS:
 where tuples such as $(f'',d',t)$ indicate whether an input/output array is 2-d or 3-d,
 and indicate whether each index is interpreted as a frequency or a DM.
 
-A proof of the splitting identity (\ref{eq:splitting}) is straightforward, if we use
-the nonrecursive definition (\ref{eq:DD_nonrecursive}) as the starting point.
-(Details omitted for now.)
+We defer the proof of the splitting identity (\ref{eq:splitting}) to 
+Appendix \ref{app:splitting_proof}.
 
 \clearpage
 
@@ -867,5 +868,171 @@ Reconstructing the variances through the canonical form agrees with the directly
 to $\sim\!10$ significant digits, consistent with the threshold $\varepsilon$.
 (The construction above is currently prototyped offline; it is not yet wired into the real-time
 pipeline.)
+
+\clearpage
+
+\appendix
+
+\section{Derivations}
+\label{app:derivations}
+
+\subsection{The non-recursive formulation of tree dedispersion}
+\label{app:nonrecursive_proof}
+
+In this appendix we prove that the recursive definition of tree dedispersion
+(Eqs.\ \ref{eq:DD_composition}, \ref{eq:DD_DS}) is equivalent to the non-recursive definition
+(Eq.\ \ref{eq:DD_nonrecursive}), with lag function $L_r(f,d)$ given by Eq.\ (\ref{eq:L_def}).
+The proof is by induction on $r$, and uses two structural observations.
+
+\par\noindent
+{\bf Observation 1: block structure.}
+By inspection of its defining equations, the dedispersion step $\DS(k)$ computes output
+coarse-freq block $f$ using only input blocks $2f$ and $2f+1$, via formulas which do not depend
+on $f$ or $r$. Unrolling this over the composition (\ref{eq:DD_DS}): after steps
+$\DS(0), \ldots, \DS(k-1)$, coarse-freq block $f$ of the intermediate array depends only on
+tree-freq channels $2^k f \le (\mbox{tree-freq}) < 2^k (f+1)$, and equals rank-$k$ dedispersion
+$\DD(k)$ applied to those $2^k$ channels. In particular, isolating the last step of a
+rank-$(r+1)$ composition,
+\begin{equation}
+\DD(r+1) = \DS(r) \circ \big( 1 \otimes \DD(r) \big)   \label{eq:app_last_step}
+\end{equation}
+where we view the rank-$(r+1)$ input array as having shape $(2, 2^r, N_{\rm time})$, and
+$(1 \otimes \DD(r))$ applies $\DD(r)$ independently to the lower and upper half-bands
+(same tensor notation as in the splitting identity, Eq.\ \ref{eq:splitting}).
+
+\par\noindent
+{\bf Observation 2: delay bits.}
+By the defining equations of $\DS(k)$, the output delay is $D = 2\delta + e$, where $\delta$ is
+the input delay and $e \in \{0,1\}$ selects the even/odd output line. Thus each step appends one
+new low bit to the delay index; at the final step, $D_0 = e$ and $D_j = \delta_{j-1}$ for
+$j \ge 1$.
+
+\par\noindent
+{\bf Base case.}
+For $r=0$, the composition (\ref{eq:DD_DS}) is empty, so $\DD(0)$ is the identity; and
+$L_0(0,0) = 0$ is an empty sum, so Eq.\ (\ref{eq:DD_nonrecursive}) reduces to
+${\tt out}[0,t] = {\tt in}[0,t]$. (The reader preferring a nontrivial base case may check $r=1$:
+$L_1(f,d) = \Omega_{-1} (1-f_0) d_0 = (1-f_0) d_0$, so Eq.\ (\ref{eq:DD_nonrecursive}) reads
+${\tt out}[d,t] = 2^{-1/2} \big( {\tt in}[0,t-d] + {\tt in}[1,t] \big)$, which matches $\DS(0)$
+applied to a $(2,1,N_{\rm time})$ input.)
+
+\par\noindent
+{\bf Inductive step.}
+Assume Eq.\ (\ref{eq:DD_nonrecursive}) holds at rank $r$. By Eq.\ (\ref{eq:app_last_step}) and
+the defining equations of $\DS(r)$ (with coarse output index $f=0$, input delay $\delta$, and
+output delay $D = 2\delta + e$):
+\begin{equation}
+{\tt out}[2\delta+e, t] = \frac{1}{\sqrt{2}}
+  \Big( {\tt lo}\big[\delta,\, t - \delta - e\big] + {\tt hi}\big[\delta,\, t\big] \Big)
+  \hspace{1.5cm} e \in \{0,1\}
+\end{equation}
+where ${\tt lo}, {\tt hi}$ denote $\DD(r)$ applied to channels $[0, 2^r)$ and $[2^r, 2^{r+1})$
+respectively (the lag $\delta + e$ on the lower block combines the $t-d$ and $t-d-1$ lines).
+Substituting the inductive hypothesis,
+\begin{equation}
+{\tt out}[D, t] = \frac{1}{2^{(r+1)/2}} \left(
+  \sum_{g=0}^{2^r-1} {\tt in}\big[g,\ t - \delta - e - L_r(g,\delta)\big]
+  + \sum_{g=0}^{2^r-1} {\tt in}\big[2^r + g,\ t - L_r(g,\delta)\big] \right)
+\end{equation}
+Comparing with Eq.\ (\ref{eq:DD_nonrecursive}) at rank $r+1$, it suffices to prove two
+identities for the lag function:
+\begin{align}
+L_{r+1}(2^r + g,\ D) &= L_r(g, \delta)  \label{eq:app_lag_upper} \\
+L_{r+1}(g,\ D) &= L_r(g, \delta) + \delta + e  \label{eq:app_lag_lower}
+\end{align}
+where (by Observation 2) the bits of $D$ are $D_0 = e$ and $D_j = \delta_{j-1}$ for $j \ge 1$.
+
+To prove Eq.\ (\ref{eq:app_lag_upper}), write $F = 2^r + g$, so that $F_r = 1$ and $F_i = g_i$
+for $i < r$. In the double sum
+\begin{equation}
+L_{r+1}(F, D) = \sum_{i=0}^{r} \sum_{j=0}^{r} \Omega_{i+j-(r+1)} \, (1 - F_i) \, D_j
+\end{equation}
+the $i=r$ terms vanish, since $(1 - F_r) = 0$. For $i \le r-1$, the $j=0$ term contains
+$\Omega_{i-(r+1)}$ with index $i-(r+1) \le -2$, hence also vanishes. Substituting $j = j'+1$ in
+the remaining terms gives $\Omega_{i+j'-r} (1-g_i) \delta_{j'}$ summed over
+$0 \le i, j' \le r-1$, which is $L_r(g, \delta)$.
+
+To prove Eq.\ (\ref{eq:app_lag_lower}), take $F = g$, so that $F_r = 0$. The $i \le r-1$ terms
+give $L_r(g,\delta)$ exactly as before, and the $i = r$ terms contribute
+\begin{equation}
+(1 - F_r) \sum_{j=0}^{r} \Omega_{j-1} D_j
+ = \Omega_{-1} D_0 + \sum_{j=1}^{r} 2^{j-1} D_j = e + \delta
+\end{equation}
+This completes the induction.
+
+We remark that $\delta + e = \lceil D/2 \rceil$, so Eq.\ (\ref{eq:app_lag_lower}) says that the
+lower half-band lags the upper half-band by half of the total delay, rounded up. The case
+$\Omega_{-1} = 1$ in the definition of $\Omega_n$ is precisely this round-up -- the algebraic
+counterpart of the $(t-d-1)$ in the odd-delay line of $\DS(k)$.
+
+\subsection{The splitting identity}
+\label{app:splitting_proof}
+
+Next we prove the splitting identity (\ref{eq:splitting}), taking the non-recursive definition
+(\ref{eq:DD_nonrecursive}) as the starting point. The key statement is an ``additivity''
+identity for the lag function: with the index splittings of Eq.\ (\ref{eq:fd_splittings}),
+\begin{equation}
+L_r(f, d) = L_{r'}(f', d') + (2^{r''} - 1 - f'') \, d' + L_{r''}(f'', d'')
+\label{eq:lag_additivity}
+\end{equation}
+
+\par\noindent
+{\bf Reduction to Eq.\ (\ref{eq:lag_additivity}).}
+Expand the right-hand side of the splitting identity (\ref{eq:splitting}) using the
+non-recursive form (\ref{eq:DD_nonrecursive}) at ranks $r'$ and $r''$. Acting on an input array
+${\tt in}[f'', f', t]$, the three stages give:
+\begin{align}
+\big( 1 \otimes \DD(r') \big): \hspace{0.5cm}
+  A[f'', d', t] &= \frac{1}{2^{r'/2}} \sum_{f'} {\tt in}\big[ f'', f',\ t - L_{r'}(f', d') \big] \nn \\
+\LAG: \hspace{0.5cm}
+  B[f'', d', t] &= A\big[ f'', d',\ t - (2^{r''}-1-f'') d' \big] \nn \\
+\big( \DD(r'') \otimes 1 \big): \hspace{0.5cm}
+  C[d'', d', t] &= \frac{1}{2^{r''/2}} \sum_{f''} B\big[ f'', d',\ t - L_{r''}(f'', d'') \big]
+\end{align}
+Since each stage is a sum of lagged copies of its input, the lags add under composition:
+\begin{equation}
+C[d'', d', t] = \frac{1}{2^{r/2}} \sum_{f'', f'}
+  {\tt in}\Big[ f'', f',\ t - L_{r'}(f',d') - (2^{r''}-1-f'')\,d' - L_{r''}(f'',d'') \Big]
+\end{equation}
+using $2^{-r'/2}\, 2^{-r''/2} = 2^{-r/2}$. Comparing with $\DD(r)$ in the form
+(\ref{eq:DD_nonrecursive}), the splitting identity holds if and only if the total lag above
+equals $L_r(f,d)$ for every $(f,d)$ -- i.e.\ if and only if Eq.\ (\ref{eq:lag_additivity})
+holds.
+
+\par\noindent
+{\bf Proof of Eq.\ (\ref{eq:lag_additivity}).}
+Under the splittings (\ref{eq:fd_splittings}), the bits decompose as $f_i = f'_i$ for
+$0 \le i < r'$ and $f_{r'+i''} = f''_{i''}$ for $0 \le i'' < r''$; likewise $d_j = d''_j$ for
+$0 \le j < r''$ and $d_{r''+j'} = d'_{j'}$ for $0 \le j' < r'$. Now split the double sum
+(\ref{eq:L_def}) into four blocks:
+\begin{itemize}
+\item {\bf (fine freq) $\times$ (low DM):} $i < r'$ and $j < r''$. Here
+$i+j-r \le (r'-1) + (r''-1) - r = -2$, so $\Omega_{i+j-r} = 0$ and the block vanishes:
+fine-frequency bits never couple to sub-block DM bits.
+\item {\bf (fine freq) $\times$ (high DM):} $i < r'$ and $j = r''+j'$. Here
+$\Omega_{i+j-r} = \Omega_{i+j'-r'}$, so the block is
+$\sum_{i<r'} \sum_{j'<r'} \Omega_{i+j'-r'} (1-f'_i)\, d'_{j'} = L_{r'}(f', d')$.
+\item {\bf (coarse freq) $\times$ (low DM):} $i = r'+i''$ and $j < r''$. Here
+$\Omega_{i+j-r} = \Omega_{i''+j-r''}$, giving $L_{r''}(f'', d'')$ by the same reindexing.
+\item {\bf (coarse freq) $\times$ (high DM):} $i = r'+i''$ and $j = r''+j'$. Here
+$i+j-r = i''+j' \ge 0$, so $\Omega$ is in its $2^n$ regime and the block {\em factorizes}:
+\begin{equation}
+\left( \sum_{i''=0}^{r''-1} 2^{i''} (1 - f''_{i''}) \right)
+\left( \sum_{j'=0}^{r'-1} 2^{j'} d'_{j'} \right)
+ = (2^{r''} - 1 - f'') \, d'
+\end{equation}
+which is the $\LAG$ term.
+\end{itemize}
+Summing the four blocks proves Eq.\ (\ref{eq:lag_additivity}), and hence the splitting
+identity.
+
+We remark that each of the three cases in the definition of $\Omega_n$ plays a distinct role
+here: the $2^n$ regime produces the factorized cross term (the linear extrapolation of the
+coarse-DM slope $d'$ across the $(2^{r''}-1-f'')$ blocks above block $f''$); the shift
+invariance of $\Omega_{i+j-r}$ under $(i,j,r) \to (i+a,\, j+b,\, r+a+b)$ makes the two diagonal
+blocks reproduce the lower-rank lag functions; and the cutoff $\Omega_n = 0$ for $n \le -2$
+expresses the fact that fine-frequency structure never couples to sub-block DM bits. Compare
+also the time lags $T$ appearing in the subbanded-dedispersion construction
+(\S\ref{sec:subband_search}), which have the same form as the cross term.
 
 \end{document}
