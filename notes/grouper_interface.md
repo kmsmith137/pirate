@@ -40,7 +40,7 @@ such as `--histogram` are deliberately omitted here):
 # WARNING: don't touch the gpu (e.g. by allocating memory with cupy) until you enter
 # the context manager. See 'FrbGrouper context manager' below
 
-with FrbGrouper(grouper_addr) as grouper:
+with FrbGrouper(grouper_addr, restore_cuda_device=False) as grouper:
     sifter = FrbSifterClient(sifter_addr)
     
     # Send the ConfigMessage to the sifter (this is only done once).
@@ -140,10 +140,15 @@ When the `FrbGrouper` context manager is entered, a lot happens under the hood:
  - The grouper receives metadata (three yaml objects, see below) from `pirate`.
 
  - The grouper learns which GPU it is running on (by receiving a cuda `device_id`),
-   and *changes the current cupy device* to the appropriate GPU. This change will
-   be un-done when the context manager exits. Within the `FrbGrouper` context manager,
-   cupy functions will use the correct GPU, but may revert to GPU 0 after the context
-   manager exits.
+   and *changes the current cupy device* to the appropriate GPU. Within the
+   `FrbGrouper` context manager, cupy functions will use the correct GPU.
+
+   Whether this device change is un-done on exit is controlled by the (required)
+   `restore_cuda_device` constructor arg. True switches back to the caller's device
+   on exit -- "cleaner", but a hidden footgun: the switch-back can allocate GPU
+   memory on the caller's device, leading to confusing out-of-memory errors on
+   shutdown paths. In contexts such as a dedicated grouper process, where the intent
+   is to use one gpu throughout, False is recommended (as in the example above).
 
    *Important consequence:* the grouper code must not touch the GPU outside
    (either before or after) the `FrbGrouper` context manager. Otherwise, you

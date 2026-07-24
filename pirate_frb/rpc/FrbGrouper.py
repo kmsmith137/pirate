@@ -28,16 +28,24 @@ class FrbGrouperInjections:
 
     Constructor::
 
-        g = pirate_frb.rpc.FrbGrouper(ip_addr)
+        g = pirate_frb.rpc.FrbGrouper(ip_addr, restore_cuda_device)
 
-    where ``ip_addr`` (str) is the grouper's own ``ip:port`` listen address (e.g.
-    '127.0.0.1:7000'); the producer (an FrbServer running pirate) connects to it and
-    hands off the GpuDedisperser output ring buffer over CUDA IPC. Use the object as a
-    context manager (see below).
+    where:
+
+    - ``ip_addr`` (str) is the grouper's own ``ip:port`` listen address (e.g.
+      '127.0.0.1:7000'); the producer (an FrbServer running pirate) connects to it and
+      hands off the GpuDedisperser output ring buffer over CUDA IPC. Use the object as
+      a context manager (see below).
+
+    - ``restore_cuda_device`` (bool): if True, the context manager switches back to the
+      caller's cuda device on exit. This is "cleaner" but has a hidden footgun: it can
+      allocate GPU memory on the caller's device, which can lead to confusing
+      out-of-memory errors on shutdown paths. In contexts such as the grouper, where
+      the intent is to use one gpu throughout, False is recommended.
 
     Usage summary is straightforward, but note warnings below::
 
-        with pirate_frb.rpc.FrbGrouper('127.0.0.1:7000') as g:
+        with pirate_frb.rpc.FrbGrouper('127.0.0.1:7000', restore_cuda_device=False) as g:
             for ichunk in itertools.count():       # outer loop over time chunks
                 for ibatch in range(g.nbatches):   # inner loop over beam batches
                    with g.get_output(ichunk, ibatch) as outputs:
@@ -99,6 +107,16 @@ class FrbGrouperInjections:
     # (option 2 in notes/docstrings.md). It's kept here, next to the context-manager
     # / get_output() code that defines FrbGrouper's primary Python interface.
 
+    # Save the pybind11 C++ constructor so the Python __init__ below can call it
+    # (the ksgpu.inject_methods constructor-override pattern). Storing the extra
+    # attribute in __init__ relies on py::dynamic_attr() on the C++ class.
+    _cpp_init = FrbGrouper.__init__
+
+    def __init__(self, ip_addr, restore_cuda_device):
+        # restore_cuda_device is documented in the class docstring; read in __enter__.
+        self._cpp_init(ip_addr)
+        self.restore_cuda_device = bool(restore_cuda_device)
+
     def __enter__(self):
         import cupy as cp
         from ..Hardware import Hardware
@@ -127,14 +145,24 @@ class FrbGrouperInjections:
             # The IPC-mapped output arrays live on cuda_device_id (known after the
             # handshake). For the duration of the 'with' block, pin this thread to
             # the vcpus local to that GPU and select the device, so the consumer's
-            # cupy work runs on the right device with good CPU locality. Both are
-            # entered via an ExitStack and undone in __exit__.
+            # cupy work runs on the right device with good CPU locality. The affinity
+            # is always entered via the ExitStack and undone in __exit__.
             vcpu_list = Hardware().vcpu_list_from_gpu(self.cuda_device_id)
             atomic_print(f"FrbGrouper: pinning thread to vcpu_list={vcpu_list} and selecting "
                          f"cuda_device_id={self.cuda_device_id}")
             self._exit_stack = ExitStack()
             self._exit_stack.enter_context(ThreadAffinity(vcpu_list))
-            self._exit_stack.enter_context(cp.cuda.Device(self.cuda_device_id))
+
+            # Device selection. The two branches differ only in what happens on exit:
+            # the cp.cuda.Device context manager restores the previous device, which is
+            # a cudaSetDevice() that CREATES that device's cuda context (~430 MiB) if it
+            # has none -- this is the restore_cuda_device=True OOM footgun from the
+            # class docstring. .use() switches permanently and never touches the
+            # previous device.
+            if self.restore_cuda_device:
+                self._exit_stack.enter_context(cp.cuda.Device(self.cuda_device_id))
+            else:
+                cp.cuda.Device(self.cuda_device_id).use()
 
             # Precompute (once) the lookup tables derived from the handshake metadata,
             # used by create_events() and steady_state_mask().
@@ -152,8 +180,11 @@ class FrbGrouperInjections:
         return self
 
     def __exit__(self, *exc):
-        # Undo the ThreadAffinity / cuda.Device contexts entered in __enter__,
-        # then close the grouper. try/finally so close() always runs.
+        # Undo whatever __enter__ pushed onto the ExitStack (ThreadAffinity, plus the
+        # cuda.Device context iff restore_cuda_device=True), then close the grouper.
+        # try/finally so close() always runs. If restoring the device raises (see the
+        # restore_cuda_device note in the class docstring), that error propagates to
+        # the caller -- it is not suppressed here.
         try:
             es = getattr(self, "_exit_stack", None)
             if es is not None:

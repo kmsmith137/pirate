@@ -88,7 +88,9 @@ def _grouper_child_main(grouper_addr, nchunks, out_queue, shutdown_event):
         import cupy as cp
         from pirate_frb.rpc import FrbGrouper
 
-        with FrbGrouper(grouper_addr) as g:
+        # restore_cuda_device=False: this child process is a dedicated grouper
+        # (same situation as run_toy_grouper; see FrbGrouper docstring).
+        with FrbGrouper(grouper_addr, restore_cuda_device=False) as g:
             out_queue.put(('handshake', g.nbatches, g.initial_chunk, g.ntrees))
             for ichunk in range(nchunks):
                 for ibatch in range(g.nbatches):

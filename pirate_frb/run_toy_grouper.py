@@ -190,9 +190,14 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
 
     # FrbGrouper.__enter__ blocks until the producer connects, then pins this thread
     # to the GPU's vcpus and selects the CUDA device (printing a message); __exit__
-    # restores them and closes the grouper. The sifter (if any) is closed when its
+    # unpins the thread and closes the grouper. The sifter (if any) is closed when its
     # 'with' exits (after the grouper's).
-    with sifter_cm as sifter, FrbGrouper(grouper_addr) as grouper:
+    #
+    # restore_cuda_device=False: this process is a dedicated grouper (it owns its GPU),
+    # so there is nothing meaningful to restore the CUDA device to on exit. Restoring
+    # would re-select the previously-current GPU, which allocates a CUDA context on it
+    # and OOMs when a co-located FrbServer owns that GPU (see FrbGrouper docstring).
+    with sifter_cm as sifter, FrbGrouper(grouper_addr, restore_cuda_device=False) as grouper:
         try:
             _run_toy_grouper(grouper, sifter, delay, snr_threshold, histogram)
         except KeyboardInterrupt:
