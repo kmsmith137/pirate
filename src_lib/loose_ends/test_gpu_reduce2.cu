@@ -1,3 +1,4 @@
+#include <cmath>      // ldexp
 #include <iostream>
 #include <ksgpu.hpp>
 
@@ -61,7 +62,20 @@ static void test_gpu_reduce2(int nblocks, int nwarps)
     CUDA_PEEK("reduce2_kernel");
     CUDA_CALL(cudaDeviceSynchronize());
 
-    assert_arrays_equal(res_cpu, res_gpu, "reduce2 (cpu)", "reduce2 (gpu)", {"block","thread"});
+    // Absolute tolerance, from the roundoff model of the two reductions. The
+    // dominant error is the CPU reference's sequential float32 sum: for N
+    // U(-1,1) addends, the partial sums random-walk (|S_i| ~ sqrt(i/3)), and
+    // the accumulated rounding error has rms ~ u*N/8 with u = 2^-24. (The
+    // GPU's pairwise tree is much more accurate, so the CPU side dominates.)
+    // This ABSOLUTE error floor does not shrink when the sum cancels -- which
+    // is exactly the 5% zero-den blocks, where r = nsum ~ 0, the epsrel term
+    // vanishes, and a value-independent default epsabs (1e-5, only ~1.6 rms)
+    // failed ~1 in 10^5 blocks. epsabs = 2^-23 * N is ~16 rms: in simulation
+    // (100k blocks per N), the worst delta reaches only ~0.3x this threshold,
+    // while a dropped-element bug still exceeds it by >= ~8x (ratio branch at
+    // N=1024; >= ~1000x in the zero-den branch).
+    double epsabs = std::ldexp((double)nthreads, -23);
+    assert_arrays_equal(res_cpu, res_gpu, "reduce2 (cpu)", "reduce2 (gpu)", {"block","thread"}, epsabs);
     cout << "test_reduce2: pass" << endl;
 }
                   
