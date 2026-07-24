@@ -7,7 +7,9 @@
 \usepackage{multirow}
 \usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}  % load last
 
+\def\DS{{\rm DS}}
 \def\DD{{\rm DD}}
+\def\LAG{{\rm LAG}}
 \def\nn{\nonumber}
 
 \title{Notes on tree dedispersion (very incomplete)}
@@ -88,18 +90,18 @@ Thus, the dedispersion output array also has shape $(2^r, N_{\rm time})$, where 
 Tree dedispersion is a composition of functions:
 \begin{equation}
 \big( \mbox{Input array} \big)
-  \overset{\DD(0)}{\longrightarrow} \big( \mbox{Intermediate array} \big)
-  \overset{\DD(1)}{\longrightarrow} \cdots 
-  \overset{\DD(r-1)}{\longrightarrow}
+  \overset{\DS(0)}{\longrightarrow} \big( \mbox{Intermediate array} \big)
+  \overset{\DS(1)}{\longrightarrow} \cdots 
+  \overset{\DS(r-1)}{\longrightarrow}
 \big( \mbox{Output array} \big)
 \label{eq:DD_composition}
 \end{equation}
-where the function $\DD(k)$ is described as follows:
+where the function $\DS(k)$ (``dedispersion step $k$'') is described as follows:
 
 \begin{itemize}
 
 \item
-The $\DD(k)$ input array is a shape $(2^{r-k}, 2^k, N_{\rm time})$ array.
+The $\DS(k)$ input array is a shape $(2^{r-k}, 2^k, N_{\rm time})$ array.
 The first axis represents a coarse frequency channel.
 Each coarse-freq channel $f$ corresponds to a block of $2^k$ tree-freq channels
 in the original tree input array:
@@ -113,7 +115,7 @@ and we need twice as many delay indices to cover the range $0 \le (\mbox{slope})
 The time index represents an arrival time at the largest tree-freq channel
 in the coarse-freq channel (\ref{eq:coarse_freq}), i.e.~the latest arrival time within the coarse-freq channel.
 
-\item The $\DD(k)$ operation is defined by:
+\item The $\DS(k)$ operation is defined by:
 
 \begin{align}
 {\tt out}[f,2d,t] &= \frac{1}{\sqrt{2}} 
@@ -127,12 +129,18 @@ As formulated above, tree dedispersion can lead to negative time indices.
 By default, \verb|in[...,t]| with $t<0$ is defined to be zero.
 (In the real-time system, we run tree dedispersion in an ``incremental'' context where a negative time index should be interpreted as a reference to data received in a previous time chunk.)
 
-\item The $\DD(0)$ input array is sometimes reshaped from $(2^r,1,N_{\rm time})$
- to $(2^r,N_{\rm time})$, and the $\DD(r-1)$ output array is sometimes reshaped
+\item The $\DS(0)$ input array is sometimes reshaped from $(2^r,1,N_{\rm time})$
+ to $(2^r,N_{\rm time})$, and the $\DS(r-1)$ output array is sometimes reshaped
  from $(1,2^r,N_{\rm time})$ to $(2^r,N_{\rm time})$.
  Thus, we think of the entire tree dedispersion operation (\ref{eq:DD_composition}) as having input and output shapes $(2^r, N_{\rm time})$.
 
 \end{itemize}
+
+\par\noindent
+We define $\DD(r)$ (``rank-$r$ dedispersion'') to be the composition of all $r$ steps in Eq.\ (\ref{eq:DD_composition}):
+\begin{equation}
+\DD(r) = \DS(r-1) \circ \cdots \circ \DS(0)  \label{eq:DD_DS}
+\end{equation}
 
 \subsection{Subband search}
 \label{sec:subband_search}
@@ -242,7 +250,7 @@ The subband owns a shape $(2^{r-R}, 2^l, N_{\rm time})$ subarray of the output (
 
 In this case, the per-subband dedispersion outputs already arise as intermediates in tree dedispersion
 (Eq.\ \ref{eq:DD_composition}); we just need to apply a time lag.
-Let \verb|tmp| be the output array of $\DD(k-1)$, where $k=r-R+l$. 
+Let \verb|tmp| be the output array of $\DS(k-1)$, where $k=r-R+l$. 
 Then \verb|tmp| has shape $(2^{R-l}, 2^{r-R+l}, N_{\rm time})$.
 To populate the \verb|out| array, we slice/reshape \verb|tmp| and apply time lags:
 \begin{equation}
@@ -261,9 +269,9 @@ In this case, the subband corresponds to a ``half-aligned'' tree-freq range of t
 where the coarse-freq index $f$ is given by $f \equiv (s-1)/2$.
 The subband owns a shape $(2^{r-R}, 2^l, N_{\rm time})$ subarray of the output (denote by \verb|out|).
 
-This case is a little more complicated, since the per-subband dedispersion outputs are ``one DD-step away''
+This case is a little more complicated, since the per-subband dedispersion outputs are ``one dedispersion step away''
 from the intermediate arrays in tree dedispersion.
-Let \verb|tmp| be the output array of $\DD(k-1)$, where $k=r-R+l-1$. 
+Let \verb|tmp| be the output array of $\DS(k-1)$, where $k=r-R+l-1$. 
 Then \verb|tmp| has shape $(2^{R-l+1}, 2^{r-R+l-1}, N_{\rm time})$.
 \begin{align}
 {\tt out}\big[ d_{\rm hi}, 2 d_{\rm lo}, t \big] 
@@ -584,6 +592,92 @@ If there are early triggers, then the timestamp can be {\bf significantly later}
 With or without early triggers, the timestamp can also be {\bf slightly earlier}
 than the beginning of the time-chunk, due to the finite width of the peak-finding
 kernels.
+
+\clearpage
+
+\section{Implementation}
+
+\subsection{Non-recursive formulation of tree dedispersion}
+
+Recall from \S\ref{sec:tree_dedispersion} that tree dedispersion $\DD(r)$ is a linear operator
+whose inputs and outputs are both $(2^r,N_{\rm time})$, defined recursively via
+Eqs.\ (\ref{eq:DD_composition}), (\ref{eq:DD_DS}).
+Here, we show that $\DD(r)$ has the following non-recursive definition, where
+we sum over frequency channels with lags:
+\begin{equation}
+{\tt out}[d,t] = \frac{1}{2^{r/2}} \sum_{f=0}^{2^r-1} {\tt in}[f,t - L_r(f,d)]  \label{eq:DD_nonrecursive}
+\end{equation}
+The ``lag'' function $L_r(f,d)$ is defined by:
+\begin{equation}
+L_r(f,d) = \sum_{i=0}^{r-1} \sum_{j=0}^{r-1} \Omega_{i+j-r} \, (1-f_i) \, d_j  \label{eq:L_def}
+\end{equation}
+where $\Omega_n$ is defined by:
+\begin{equation}
+\Omega_n \equiv \begin{cases}
+ 2^n & \mbox{if } n \ge 0 \\
+  1 & \mbox{if } n = -1 \\
+  0 & \mbox{if } n < -1
+\end{cases}
+\end{equation}
+and $f_j,d_j \in \{0,1\}$ are the bits in the base-2 representation:
+\begin{equation}
+f = \big[ f_{r-1} \cdots f_1 f_0 \big]_2
+  \hspace{1.5cm}
+d = \big[ d_{r-1} \cdots d_1 d_0 \big]_2
+\end{equation}
+To prove that the nonrecursive definition (\ref{eq:DD_nonrecursive}) is equivalent to
+our previous recursive definition in Eqs.\ (\ref{eq:DD_composition}), (\ref{eq:DD_DS}),
+we use induction on $r$. (Details omitted for now.)
+
+\subsection{The splitting identity}
+
+The purpose of this section is to explain the following ``splitting identity'':
+if $r = r' + r''$, then
+\begin{equation}
+\DD(r) = \big( \DD(r'') \otimes 1 \big) \circ \LAG\big[ (2^{r''}-1-f'') \, d' \big] \circ \big( 1 \otimes \DD(r') \big)
+  \label{eq:splitting}
+\end{equation}
+where the notation will take a little time to explain.
+
+We split the frequency index $0 \le f < 2^r$ and DM-index $0 \le d < 2^r$ into low/high parts as follows:
+\begin{align}
+f &= 2^{r'} f'' + f' & \mbox{where } 0 \le f' < 2^{r'} \mbox{ and } 0 \le f'' < 2^{r''} \nn \\
+d &= 2^{r''} d' + d'' & \mbox{where } 0 \le d' < 2^{r'} \mbox{ and } 0 \le d'' < 2^{r''} \label{eq:fd_splittings}
+\end{align}
+Using these splittings, we can view tree dedispersion $\DD(r)$ as a linear operator with
+input/output shapes $(2^{r''}, 2^{r'}, N_{\rm time})$.
+In the splitting identity (\ref{eq:splitting}), the operators $(\DD(r'') \otimes 1)$
+and $(1 \otimes \DD(r'))$ are naturally defined with this array shape.
+The middle operator $\LAG\big[ (2^{r''}-1-f'') \, d' \big]$ is defined as follows,
+on the same array shape $(2^{r''}, 2^{r'}, N_{\rm time})$.
+\begin{equation}
+{\tt out}\big[ f'', d', t \big] = {\tt in}\big[f'', d', t - (2^{r''}-1-f'') d' \big]
+\end{equation}
+Note the asymmetry in the splittings of $f,d$ in Eq.\ (\ref{eq:fd_splittings}): the ``primed''
+index $f'$ is the ``fine'' frequency index, whereas the ``primed'' index $d'$ is the ``coarse''
+DM-index. This asymmetry arises from the details of the tree dedispersion algorithm. 
+
+One consequence: in implementation, we sometimes end up using bit-reversed DM indices
+so that array computations are ``in-place'', rather than via temporary arrays.
+(Note that the same phenomenon happens for the FFT algorithm!)
+We'll gloss over this detail in the notes, where our goal is to explain the math but
+not necessarily the details of the implementation.
+
+When contemplating the splitting identity (\ref{eq:splitting}), the following diagram
+may help visualize the RHS:
+\begin{equation}
+(f,t) \xrightarrow{\rm Reshape} (f'',f',t)
+ \xrightarrow{ 1 \otimes \DD(r')} (f'',d',t)
+ \xrightarrow{\rm LAG} (f'',d',t)
+ \xrightarrow{\DD(r'') \otimes 1} (d'',d',t)
+ \xrightarrow{\rm Transpose + Reshape} (d,t)
+\end{equation}
+where tuples such as $(f'',d',t)$ indicate whether an input/output array is 2-d or 3-d,
+and indicate whether each index is interpreted as a frequency or a DM.
+
+A proof of the splitting identity (\ref{eq:splitting}) is straightforward, if we use
+the nonrecursive definition (\ref{eq:DD_nonrecursive}) as the starting point.
+(Details omitted for now.)
 
 \clearpage
 
