@@ -120,7 +120,10 @@ struct Receiver
     // assembler side.
     std::shared_ptr<AssembledFrameSet> get_frame_set();
 
-    // Put Receiver into stopped state. Worker threads exit promptly.
+    // Put Receiver into stopped state. Worker threads exit promptly, and the
+    // listening port is released BEFORE stop() returns: a new Receiver can bind
+    // the same port as soon as stop() returns (SO_REUSEADDR binders only, which
+    // every Receiver is -- see the port-release comment in stop()).
     // If 'e' is non-null, it represents an error; otherwise normal termination.
     void stop(std::exception_ptr e = nullptr) const;
 
@@ -197,6 +200,13 @@ struct Receiver
     bool is_started = false;
     bool is_listening = false;   // set by listener thread once the listening socket is bound
 
+    // Listening socket fd, published (under 'mutex') by the listener thread once
+    // bound, and un-published just BEFORE the listener closes it -- so stop() can
+    // never act on a closed (possibly recycled) fd. stop() uses it to shutdown()
+    // the listening socket, which releases the port synchronously and wakes the
+    // listener's accept() poll. 'mutable' since stop() is const.
+    mutable int listener_fd = -1;
+
     // All public members after this point are protected by 'mutex'.
 
     // Queue of completed frame sets ready for retrieval via get_frame_set().
@@ -218,8 +228,10 @@ struct Receiver
     long evicted_chunk = -1;
 
 private:
-    // Worker thread main functions.
-    void _listener_main();
+    // Worker thread main functions. The listener's listening socket is owned by
+    // its WRAPPER (listener_main), not by _listener_main -- see the fd-lifetime
+    // comment in listener_main().
+    void _listener_main(Socket &listening_socket);
     void _reader_main();
     void _assembler_main();
 

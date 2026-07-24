@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include <sys/socket.h>   // shutdown(), SHUT_RDWR
+
 #include <ksgpu/Array.hpp>
 #include <ksgpu/xassert.hpp>
 
@@ -210,6 +212,27 @@ void Receiver::stop(std::exception_ptr e) const
 
     is_stopped = true;
     error = e;
+
+    // Release the listening port NOW, not when the listener thread exits, so a
+    // new Receiver can bind the same port as soon as stop() returns. shutdown()
+    // (not close()!) is the safe cross-thread operation here: the fd number
+    // stays allocated (no fd-reuse hazard -- the listener thread still owns and
+    // closes it), and the listener's in-flight accept() poll wakes immediately.
+    // (close() would do neither: it doesn't wake a blocked poll(), and the port
+    // is only released when the in-flight syscall drops its file reference.)
+    //
+    // Port-release nuance (Linux): shutdown() removes the socket from the
+    // LISTEN hash but the socket stays bound until the listener closes it. So
+    // an SO_REUSEADDR bind (what every Receiver does -- see set_reuseaddr() in
+    // _listener_main) succeeds as soon as stop() returns, measured 50/50;
+    // a plain bind still conflicts until the listener exits (<= ~10 ms).
+    //
+    // The return value is deliberately ignored: on non-Linux, shutdown() on a
+    // listening socket fails with ENOTCONN, harmlessly reducing to the old
+    // behavior (port released when the listener thread exits, <= 10 ms later).
+    if (listener_fd >= 0)
+        ::shutdown(listener_fd, SHUT_RDWR);
+
     lock.unlock();
 
     // Forward 'e' so that threads blocked in allocator entry points rethrow
@@ -302,25 +325,43 @@ void Receiver::evict(long evicted_chunk)
 
 void Receiver::listener_main()
 {
+    // The listening socket is owned HERE, not in _listener_main(), so that its
+    // fd stays open until the end of this function -- in particular through the
+    // catch block's stop() (which may shutdown() it) and through the
+    // un-publish below. This ordering -- un-publish listener_fd, THEN close the
+    // fd (socket destructor, at return) -- is what makes it impossible for a
+    // concurrent stop() to shutdown() a closed/recycled fd. (If the socket were
+    // a local of _listener_main(), unwinding would close the fd before either
+    // the catch or the un-publish runs, reopening exactly that hazard.)
+    Socket listening_socket;
+
     try {
-        _listener_main();
+        _listener_main(listening_socket);
     } catch (...) {
         stop(std::current_exception());
+    }
+
+    {
+        lock_guard<std::mutex> lock(mutex);
+        listener_fd = -1;
     }
 }
 
 
-void Receiver::_listener_main()
+void Receiver::_listener_main(Socket &listening_socket)
 {
-    // Create and configure listening socket.
-    Socket listening_socket(PF_INET, SOCK_STREAM);
+    // Configure the listening socket (owned by listener_main -- see the
+    // fd-lifetime comment there).
+    listening_socket = Socket(PF_INET, SOCK_STREAM);
     listening_socket.set_reuseaddr();
     listening_socket.bind(ip_addr, tcp_port);
     listening_socket.listen();
 
-    // Announce that a client's connect() will now succeed (see wait_until_listening()).
+    // Announce that a client's connect() will now succeed (see wait_until_listening()),
+    // and publish the fd so stop() can shutdown() the listening socket.
     {
         lock_guard<std::mutex> lock(mutex);
+        listener_fd = listening_socket.fd;
         is_listening = true;
     }
     listening_cv.notify_all();   // one-shot latch: all waiters become ready
@@ -332,7 +373,20 @@ void Receiver::_listener_main()
 
         // Call accept() without lock held, and with a ~10ms timeout so that we
         // regularly check for calls to Receiver::stop() (via is_stopped).
-        Socket new_socket = listening_socket.accept(accept_timeout_ms);
+        // (The 10 ms poll is now defense-in-depth: stop()'s shutdown() wakes an
+        // in-flight accept() immediately.)
+        Socket new_socket;
+        try {
+            new_socket = listening_socket.accept(accept_timeout_ms);
+        } catch (...) {
+            // stop()'s shutdown() makes an in-flight accept() fail (EINVAL);
+            // that is the normal stop path, not an error. Any accept() failure
+            // on a NON-stopped Receiver is real, and propagates to
+            // listener_main() -> stop(e) as before.
+            lock.lock();
+            if (is_stopped) return;
+            throw;
+        }
 
         // Timeout expired, loop again.
         if (new_socket.fd < 0)
