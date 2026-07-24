@@ -99,7 +99,11 @@ def run_toy_sifter(addr, max_workers=4):
     'addr' is passed to grpc's add_insecure_port(): use 'ip:port' for a specific
     interface, or '[::]:port' / '0.0.0.0:port' to listen on all interfaces.
     """
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers))
+    # so_reuseport=0: grpc's Linux default (ON) lets two servers silently bind the
+    # same port, with connections load-balanced between them -- and defeats the
+    # bind-failure check below. See notes/grpc.md ("Creating a grpc server").
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers),
+                         options=[('grpc.so_reuseport', 0)])
     frb_sifter_pb2_grpc.add_FrbSifterServicer_to_server(ToyFrbSifterServicer(), server)
 
     if server.add_insecure_port(addr) == 0:

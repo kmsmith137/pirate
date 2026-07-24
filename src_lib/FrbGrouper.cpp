@@ -347,8 +347,15 @@ void FrbGrouper::start_listening()
             // server, so we would "wait for FrbServer to connect" while not actually
             // listening -- and the FrbServer that connects would hang forever. Use the
             // 3-arg overload and check selected_port, which is 0 iff the bind failed.
+            //
+            // Disable SO_REUSEPORT (grpc's default is ON on Linux): with it enabled,
+            // two grpc servers can bind the SAME port -- the bind "succeeds",
+            // selected_port is nonzero (defeating the check below), and the kernel
+            // silently load-balances incoming connections between the two servers.
+            // See notes/grpc.md ("Creating a grpc server").
             grpc::ServerBuilder builder;
             int selected_port = 0;
+            builder.AddChannelArgument(GRPC_ARG_ALLOW_REUSEPORT, 0);
             builder.AddListeningPort(grouper_ip_addr, grpc::InsecureServerCredentials(), &selected_port);
             builder.RegisterService(grpc_state->service.get());
             grpc_state->server = builder.BuildAndStart();

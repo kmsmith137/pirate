@@ -1,4 +1,34 @@
-# GRPC .proto guidelines
+# GRPC guidelines
+
+## Creating a grpc server
+
+Checklist for ANY new grpc server, C++ or python (all three existing servers --
+FrbServer's RPC service, FrbGrouper, run_toy_sifter -- follow it):
+
+1. **Disable SO_REUSEPORT.** grpc's default on Linux is ON, which lets two grpc
+   servers bind the SAME port: both binds "succeed", and the kernel silently
+   load-balances incoming connections between the two servers. Real-world
+   scenario: an orphaned old server survives a restart, the new server starts
+   "successfully", and RPCs randomly reach the dying process -- intermittent
+   failures with no loud error anywhere. Disabling makes port conflicts fail
+   loudly at startup instead.
+
+   ```cpp
+   builder.AddChannelArgument(GRPC_ARG_ALLOW_REUSEPORT, 0);   // C++
+   ```
+   ```py
+   grpc.server(..., options=[('grpc.so_reuseport', 0)])       # python
+   ```
+
+2. **Check for bind failure explicitly.** In C++, the 2-arg AddListeningPort
+   does NOT report bind failures (BuildAndStart() still returns a non-null
+   server that silently isn't listening); use the 3-arg overload and treat
+   selected_port == 0 as an error. In python, check add_insecure_port() == 0
+   (recent grpcio also raises on failure -- keep the check anyway). Note step 1
+   is what makes this check effective: with SO_REUSEPORT on, a conflicting bind
+   "succeeds" and the check passes.
+
+## .proto guidelines
 
 - When editing .proto files, rewrite gRPC field numbers in order to keep them
   "canoncial": the first member in a message is 1, the second member is 2, etc.

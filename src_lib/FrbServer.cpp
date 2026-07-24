@@ -342,8 +342,15 @@ void FrbServer::start()
         // non-null server, so the RPC server would silently not listen and any
         // X-engine / rpc_* client that connects would hang. Use the 3-arg overload
         // and check selected_port, which is 0 iff the bind failed.
+        //
+        // Disable SO_REUSEPORT (grpc's default is ON on Linux): with it enabled, two
+        // grpc servers can bind the SAME port -- the bind "succeeds", selected_port
+        // is nonzero (defeating the check below), and the kernel silently
+        // load-balances incoming connections between the two servers. See
+        // notes/grpc.md ("Creating a grpc server").
         grpc::ServerBuilder builder;
         int selected_port = 0;
+        builder.AddChannelArgument(GRPC_ARG_ALLOW_REUSEPORT, 0);
         builder.AddListeningPort(params.rpc_server_address, grpc::InsecureServerCredentials(), &selected_port);
         builder.RegisterService(rpc_service.get());
         this->rpc_server = builder.BuildAndStart();
