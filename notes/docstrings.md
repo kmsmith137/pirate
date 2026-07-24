@@ -6,6 +6,9 @@ rendered as reStructuredText, and napoleon additionally parses NumPy/Google-styl
 sections. A few conventions keep the rendered output clean. (See also
 [`notes/pybind11.md`](pybind11.md) for the pybind-specific version of these rules.)
 
+These notes cover rendering mechanics only. For guidance on docstring CONTENT --
+what to say, and at what level of detail -- see [`notes/comments.md`](comments.md).
+
 ## Class docstrings for classes with method injections
 
 A pybind11-wrapped class that is extended via `ksgpu.inject_methods` (see

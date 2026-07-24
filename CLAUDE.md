@@ -7,6 +7,8 @@
 
 ### Links to more rules
 
+- Before writing or modifying code in ANY language, read `notes/comments.md`
+  (guidelines for comment/docstring content).
 - If a task involves `.hpp`, `.cpp`, or `.cu` files, then read `notes/cpp.md` into context.
 - If a task involves reviewing or editing gpu kernels, then read `notes/gpu_kernels.md` into context.
   This file is large, so only read it into context if you're reviewing/editing `__device__` or `__global__` functions.
@@ -25,8 +27,11 @@
 - All functions should error-check function arguments thoroughly and throw an exception if anything is wrong, unless the function is in a "hot loop". 
 - If similar code is repeated in multiple places, please consider whether a helper function would be a cleaner design.
 - Don't git commit unless explicitly requested.
-- Please write comments to explain big-picture functionality or non-obvious issues, but avoid superficial comments. 
 - Please ask me questions in the chat if my instructions are incomplete or unclear.
+- Throughout development, revisit interfaces to avoid technical debt. If implementing
+  a new feature doesn't go "cleanly" -- it feels awkward, or needs workarounds -- that
+  may be a sign that our existing interfaces need rethinking. Flag such situations in
+  the chat, even if you don't have a recommended solution, so that we can discuss.
 - When planning code, always think carefully about race conditions and corner cases.
 - When planning code, always check carefully to make sure that comments stay up-to-date with code.
 
