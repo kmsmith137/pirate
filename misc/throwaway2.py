@@ -63,6 +63,9 @@ for itree in range(ntrees):
 # entries occupy a contiguous range ifreq_lo <= ifreq < ifreq_lo + nf_tj, and each one
 # is a PfVariance of rank (r-L) whose P is the tree's P, with only 1 or 2 terms.
 
+# (itree, j) -> (lam, U0, S0, V0), pickled to throwaway2.pkl at the end.
+svd_dict = { }
+
 for itree in range(ntrees):
     r, R, L, P = int(tree_r[itree]), int(tree_R[itree]), int(tree_L[itree]), int(tree_P[itree])
     nf_tj_list = []
@@ -265,4 +268,14 @@ for itree in range(ntrees):
         maxdiff5 = float(np.max(np.abs(recon5 / ref_variance[itree][j] - 1.0)))
         assert np.allclose(recon5, ref_variance[itree][j], rtol=1e-8, atol=0.0), (itree, j, maxdiff5)
 
+        svd_dict[(itree, j)] = (lam, U0, S0, V0)
+
         print(f'tree {itree}, {j=}: {ifreq_lo=}, {nf_tj=}, {2**(r-L)*P=}, {Ktot=}, {K0=}')
+
+out_filename = os.path.join(script_dir, 'throwaway2.pkl')
+
+with open(out_filename, 'wb') as f:
+    pickle.dump(svd_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+nbytes = os.path.getsize(out_filename)
+print(f'wrote {out_filename} ({nbytes} bytes = {nbytes/2**20:.1f} MiB)')
