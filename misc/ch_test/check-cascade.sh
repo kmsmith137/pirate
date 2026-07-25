@@ -12,10 +12,22 @@
 #                 production server needs ~25 s to release its 1.5 TiB
 #                 hugepage pool and ~80 GiB of GPU memory)
 #
-# Reports, per process: the pid, seconds from SIGINT to exit, and the last
-# line of its log (which should be the documented cascade message -- the
-# sifter's clean "interrupted; shutting down" and everyone else's RuntimeError
-# are the expected "errors cascade backwards" path, not failures).
+# Reports, per process: the pid, seconds from SIGINT to exit, and seconds from
+# SIGINT to the FIRST cascade message appearing in its log, followed by the
+# last few matching lines (which should be the documented cascade messages --
+# the sifter's clean "interrupted; shutting down" and everyone else's
+# RuntimeError are the expected "errors cascade backwards" path, not failures).
+#
+# Print time and exit time are reported separately because the cascade must be
+# judged by the former. The production FrbServer prints its RuntimeError within
+# ~2 s like everything else, then spends ~25 s tearing down its 1.5 TiB
+# hugepage pool and ~80 GiB of GPU memory before the process actually goes
+# away; reading only the exit time makes that look like a 25 s cascade.
+#
+# Matching lines are counted only from the point of the SIGINT onward: each
+# log's length is snapshotted before the signal, so a pre-existing "Error" from
+# earlier in the run cannot be mistaken for a cascade message (which would
+# otherwise report a print time of 0.0 s for every process).
 #
 # Two liveness gotchas this handles, both of which make a naive check lie:
 #
@@ -35,6 +47,18 @@
 # returned; 1 otherwise.
 
 set -u
+
+# The lines that count as "a cascade message". Used BOTH to time the first
+# such line and to select the ones printed at the end -- they must agree, or
+# the reported time would describe a different line than the reported text.
+# ERROR (uppercase) is listed explicitly: python's rpc_status logs
+# "subscribe_files ERROR:", which a case-sensitive 'Error' misses.
+ERR_PAT='interrupted|RuntimeError|Error|ERROR|stopped|disconnected'
+
+# How many matching lines to show per process. More than one because the
+# documented expectation is sometimes a PAIR: rpc_status should show its
+# subscribe_files error AND the subsequent "RPC client(s) stopped".
+NSHOW=3
 
 LOG=${1:-}
 TARGET=${2:-}
@@ -101,25 +125,62 @@ if grep -q '^SigIgn' "/proc/$TPID/status" 2>/dev/null; then
     fi
 fi
 
+# Snapshot each log's length BEFORE the signal, so the cascade-message scan
+# below only ever sees lines produced in response to it.
+lognames=()
+declare -A base_lines
+for pf in "$LOG"/*.pid; do
+    [ -e "$pf" ] || continue
+    n=$(basename "$pf" .pid)
+    [ -r "$LOG/$n.log" ] || continue
+    lognames+=("$n")
+    base_lines[$n]=$(wc -l < "$LOG/$n.log" 2>/dev/null || echo 0)
+done
+
+# Lines added to $1's log since the snapshot.
+new_lines() {
+    tail -n +$(( ${base_lines[$1]} + 1 )) "$LOG/$1.log" 2>/dev/null
+}
+
 echo
 echo "sending SIGINT to $TARGET (pid $TPID) at $(date +%H:%M:%S)"
 kill -INT "$TPID"
 t0=$(date +%s%N)
 
+elapsed() { awk "BEGIN{printf \"%.1f\", ($(date +%s%N) - $t0) / 1e9}"; }
+
+# Record, for each log, when its first post-SIGINT cascade message appears.
+declare -A msg_at
+scan_msgs() {
+    local n
+    for n in "${lognames[@]}"; do
+        [ -n "${msg_at[$n]:-}" ] && continue
+        if new_lines "$n" | grep -qE "$ERR_PAT"; then
+            msg_at[$n]=$(elapsed)
+        fi
+    done
+}
+
 declare -A exit_at
 remaining=${#pids[@]}
 ticks=$((MAX_WAIT * 2))
 for ((tick = 0; tick < ticks; tick++)); do
+    # Messages first: a process that prints and exits within one tick must
+    # still get its print time recorded.
+    scan_msgs
     for i in "${!pids[@]}"; do
         [ -n "${exit_at[$i]:-}" ] && continue
         if ! alive "${pids[$i]}"; then
-            exit_at[$i]=$(awk "BEGIN{printf \"%.1f\", ($(date +%s%N) - $t0) / 1e9}")
+            exit_at[$i]=$(elapsed)
             remaining=$((remaining - 1))
         fi
     done
     [ $remaining -eq 0 ] && break
     sleep 0.5
 done
+
+# Final sweep: catch anything flushed between the last scan and the last exit.
+scan_msgs
 
 echo
 echo "exit times (seconds after SIGINT):"
@@ -134,20 +195,42 @@ for i in "${!pids[@]}"; do
 done
 
 echo
-echo "cascade message per process (expect the documented shutdown messages):"
-for pf in "$LOG"/*.pid; do
-    [ -e "$pf" ] || continue
-    n=$(basename "$pf" .pid)
-    [ -r "$LOG/$n.log" ] || continue
-    # Search the tail rather than taking the last line: a process can emit
-    # more output AFTER its shutdown message (the sifter's gRPC worker
-    # threads keep printing in-flight events for a moment after the main
-    # thread's interrupt handler runs).
-    msg=$(tail -40 "$LOG/$n.log" \
-          | grep -E 'interrupted|RuntimeError|Error|stopped|disconnected' \
-          | tail -1)
-    [ -n "$msg" ] || msg=$(grep -v '^[[:space:]]*$' "$LOG/$n.log" | tail -1)
-    printf '  %-16s %s\n' "$n" "$msg"
+echo "cascade message times (seconds after SIGINT -- JUDGE THE CASCADE BY THESE,"
+echo "not by the exit times above; a slow teardown is not a slow cascade):"
+for n in "${lognames[@]}"; do
+    if [ -n "${msg_at[$n]:-}" ]; then
+        printf '  %-16s printed@%ss\n' "$n" "${msg_at[$n]}"
+    else
+        printf '  %-16s NO cascade message within %ss\n' "$n" "$MAX_WAIT"
+        rc=1
+    fi
+done
+
+echo
+echo "cascade messages per process (last $NSHOW matching lines since the SIGINT;"
+echo "expect the documented shutdown messages):"
+for n in "${lognames[@]}"; do
+    # Match only post-SIGINT lines, and show several: a process can emit more
+    # output AFTER its shutdown message (the sifter's gRPC worker threads keep
+    # printing in-flight events for a moment after the main thread's interrupt
+    # handler runs), and some expectations are a pair rather than one line.
+    msgs=$(new_lines "$n" | grep -E "$ERR_PAT" | tail -$NSHOW)
+    if [ -z "$msgs" ]; then
+        # Nothing matched: show the tail verbatim so the caller can see what
+        # the process actually said instead of an empty row.
+        printf '  %-16s (no matching line; last log line follows)\n' "$n"
+        printf '  %-16s   | %s\n' "" "$(grep -v '^[[:space:]]*$' "$LOG/$n.log" | tail -1)"
+        continue
+    fi
+    first=1
+    while IFS= read -r line; do
+        if [ $first -eq 1 ]; then
+            printf '  %-16s %s\n' "$n" "$line"
+            first=0
+        else
+            printf '  %-16s %s\n' "" "$line"
+        fi
+    done <<< "$msgs"
 done
 
 # Zombies hold no memory, but the counters can lag the exit by a moment.

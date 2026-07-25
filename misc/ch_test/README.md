@@ -36,7 +36,7 @@ numbers; the agent decides what they mean. Do not wrap them in a single
 | Script | What it does |
 |--------|--------------|
 | `launch-pipeline.sh` | Launch a pipeline downstream-first, gating each start on the previous process's readiness marker; handles the SIGINT and background-survival problems above. |
-| `check-cascade.sh` | SIGINT one process, verify the shutdown cascades to all of them, report exit timings and confirm hugepages/GPU came back. |
+| `check-cascade.sh` | SIGINT one process, verify the shutdown cascades to all of them, report exit AND cascade-message timings (the latter is what the cascade should be judged by) and confirm hugepages/GPU came back. |
 | `check-logs.py` | The "looks reasonable" checks: per-chunk progress, grouper baseline/spikes, both sifter event streams, ring-buffer counter monotonicity, error localization. |
 | `check-truth.py` | Every injected FRB on the streamed beam should produce a spike in the offline dedisperser output. Handles dispersion sweep windows and acquisition-warmup allowances. |
 | `preflight-prod.py` | Before a production run: mountpoints, ssd/nfs writability, hugepage budget, GPU idleness, rpc address resolution, proxy exemption, MTU. |
