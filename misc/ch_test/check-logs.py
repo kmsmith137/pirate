@@ -30,7 +30,8 @@ Checks, per log:
 With --cascade (the run ended with a deliberate SIGINT), errors are EXPECTED
 in the tail of each log -- that is the documented "errors cascade backwards"
 path. Errors are then a failure only if they appear before the cascade
-region. Without --cascade, any error is a failure.
+region, which is located by find_cascade_start(). Without --cascade, any
+error is a failure.
 
 Exit status 0 if every check passed, 1 if any hard check failed, 2 on usage
 error. A log that exists but yields zero parseable lines is a FAILURE, not a
@@ -65,6 +66,21 @@ RE_SIFTER_EV = re.compile(
 RE_RPC = re.compile(r'\[([^\]]+)\] connections=(\d+), rb=\[([\d,]+)\]')
 
 RB_LABELS = ['start', 'reaped', 'processed', 'streamed', 'assembled', 'end']
+
+# The "normal progress" line of each log: what the process prints while it is
+# doing its job. Used by find_cascade_start() to locate where the shutdown
+# begins, since a process that is shutting down stops making progress.
+PROGRESS_RE = {
+    'server': RE_SERVER,
+    'grouper': RE_GROUPER,
+    'xengine': RE_INJECT,
+    'sifter': RE_SIFTER_HDR,
+    'rpc_status': RE_RPC,
+}
+
+# Smallest cascade region we will ever consider, in lines. See
+# find_cascade_start() for why the region is never allowed to be shorter.
+MIN_CASCADE_LINES = 60
 
 
 class Report:
@@ -244,6 +260,36 @@ def check_rpc_status(lines, r, acqdir):
         (r.ok if n else r.fail)(f"{n} received filename(s) mention acqdir {acqdir!r}")
 
 
+def find_cascade_start(name, lines):
+    """Index of the first line that may belong to the shutdown cascade.
+
+    A fixed-size tail is not enough. The production grouper forks one child per
+    GPU and every child dumps its own ~30-line traceback into this one log, so
+    the cascade region grows with the process count -- a 2-GPU run overflows a
+    60-line window and its perfectly normal cascade reads as a mid-run error.
+
+    So anchor on the last line of NORMAL PROGRESS instead: once a process starts
+    shutting down it stops doing its job, and anything after that point is
+    shutdown output however long it runs. Errors that appear while the process
+    is still making progress stay failures, which is the case worth catching.
+
+    The region is never allowed to be shorter than MIN_CASCADE_LINES, because a
+    log can emit a few in-flight progress lines AFTER its shutdown message (the
+    sifter's gRPC worker threads do exactly that) -- which would otherwise drag
+    the anchor to the very end and fail a healthy run.
+    """
+    tail_start = max(0, len(lines) - MIN_CASCADE_LINES)
+    prog = PROGRESS_RE.get(name)
+    if prog is None:
+        return tail_start
+    for i in range(len(lines) - 1, -1, -1):
+        if prog.search(lines[i]):
+            return min(tail_start, i + 1)
+    # No progress lines at all. The per-log checkers already fail loudly on
+    # that ("format changed?"), so just keep the fixed window here.
+    return tail_start
+
+
 def check_errors(name, lines, r, cascade):
     hits = [(i, ln) for i, ln in enumerate(lines)
             if ERR_RE.search(ln) and not ERR_SKIP_RE.search(ln)]
@@ -251,7 +297,7 @@ def check_errors(name, lines, r, cascade):
         r.ok(f"{name}: no errors ({len(lines)} lines)")
         return
     first = hits[0][0]
-    tail_start = max(0, len(lines) - 60)
+    tail_start = find_cascade_start(name, lines)
     if cascade and first >= tail_start:
         r.ok(f"{name}: {len(hits)} error line(s), all in the final "
              f"{len(lines) - first} lines (the expected shutdown cascade)")
