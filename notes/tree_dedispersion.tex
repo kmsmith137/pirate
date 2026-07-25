@@ -680,6 +680,133 @@ and indicate whether each index is interpreted as a frequency or a DM.
 We defer the proof of the splitting identity (\ref{eq:splitting}) to 
 Appendix \ref{app:splitting_proof}.
 
+\subsection{GPU implementation}
+
+In this section, we describe our fast GPU implementation of tree dedispersion.
+This section is slightly simplified compared to the full implementation, but
+accurately captures the ``vibe''.
+
+Our goal is to implement $(1_M \otimes \DD(r))$, where $1_M$ is the identity operator
+over a spectator index $0 \le m < M$.
+In the text below, we usually streamline notation by omitting the spectator index.
+The data is a real-time stream which arrives in ``chunks'' with shape $(M, 2^r, N_{\rm time})$.
+The kernel looks like:
+\begin{center}
+\begin{verbatim}
+// Length-M and length-2^r axes have caller-specified strides, time axis has stride 1.
+__global__ void dd(float *arr, long mstride, long dstride, float *persistent_state);
+\end{verbatim}
+\end{center}
+The kernel operates in-place (i.e.\ no separate {\tt in} and {\tt out} args).
+The ``persistent'' state is a kernel-defined ring buffer that is carried over from one
+time chunk to the next (see below).
+(Context: we're assuming that as real-time data arrives, the kernel is launched for
+$0 \le t < N_{\rm time}$, then launched for $N_{\rm time} \le t < 2N_{\rm time}$, etc.)
+
+For small $r$, we can implement tree dedispersion in a single warp, and launch the
+kernel with $M$ warps.
+First consider $r=1$. 
+From the perspective of a single warp, $\DD(1)$ has input/output shape $(2,N_{\rm time})$
+and is defined by:
+\begin{align}
+{\tt out}[0,t] &= \frac{1}{\sqrt{2}} 
+  \big( {\tt in}[0,t] + {\tt in}[1,t] \big) \nn \\
+{\tt out}[1,t] &= \frac{1}{\sqrt{2}} 
+  \big( {\tt in}[0,t-1] + {\tt in}[1,t] \big)
+\end{align}
+This is straightforward to implement in a single warp, but note that we need to save
+the value of ${\tt in}[0,N_{\rm time}-1]$ for the next time chunk.
+Thus, for $r=1$ the persistent state consists of one element per warp ($M$ elements per kernel).
+
+Next consider a single-warp implementation with $r>1$.
+We use the splitting identity (\ref{eq:splitting}) to write:
+\begin{equation}
+\DD(r) = \underbrace{\big( \DD(1) \otimes 1_{2^{r-1}} \big)}_{\equiv \mathcal A} 
+  \circ \LAG\big[ (1-f'')\, d' \big] 
+  \circ \underbrace{\big( 1_2 \otimes \DD(r-1) \big)}_{\equiv \mathcal B}
+\end{equation}
+Suppose by induction that we have a single-warp implementation of $\DD(1)$ and $\DD(r-1)$.
+The $\LAG\big[\cdots\big]$ operator just means that we put the outputs of $\mathcal B$
+into a logical ring buffer, before feeding them to $\mathcal A$.
+Here, ``logical'' means that the ring buffer is held in registers of a single warp.
+This is persistent state: we save the ring buffer to global memory at the end of the kernel, 
+and restore it at the beginning of the next kernel.
+
+As $r$ increases, the single-warp implementation eventually becomes impractical.
+A little thought shows that the persistent-state size (in elements, not bytes) $P_r$ 
+satisfies the recursion:
+\begin{equation}
+P_r = \underbrace{\Bigg( 2^{r-1} \Bigg)}_{\mathcal A} 
+  + \underbrace{\Bigg( \sum_{d'=0}^{2^{r-1}-1} d' \Bigg)}_{\rm LAG}
+  + \underbrace{\Bigg( 2 P_{r-1} \Bigg)}_{\mathcal B}
+\end{equation}
+with initial condition $P_1=1$. The solution to this recursion relation is:
+\begin{equation}
+P_r = 2^{r-2} \big( 2^r + r - 1 \big)  \label{eq:Pr_def}
+\end{equation}
+Additionally, our implementation uses $2^r$ registers/thread to store a length-32
+sliding time window of array values.
+Currently, we use the single-warp implementation for $r \le 4$.
+
+To explain the $r > 4$ case, consider $r=8$ for concreteness.
+We apply the splitting identity (\ref{eq:splitting}) to write:
+\begin{equation}
+\DD(8) = \underbrace{\big( \DD(4) \otimes 1_{16} \big)}_{\equiv \mathcal A}
+   \circ \LAG\big[ (15-f'') \, d' \big] 
+   \circ \underbrace{\big(1_{16} \otimes \DD(4) \big)}_{\equiv \mathcal B}
+\label{eq:DD8}
+\end{equation}
+The operators $(\DD(4) \otimes 1_{16})$ and $(1_{16} \otimes \DD(4))$ can be distributed
+across 16 warps in a single threadblock (using our single-warp implementation of $\DD(4)$
+described above).
+In between, we write the data to a ring buffer in {\bf GPU shared memory}, in order to apply 
+lags and in order to move data between different warps.
+This idea can be applied for any $r$, to obtain a single-threadblock implementation
+with one shared memory read/write cycle.
+
+As $r$ increases, the single-threadblock implementation eventually becomes impractical,
+due to register and shared memory limits.
+The total persistent state size $P_r$ (now interpreted as elements per threadblock) 
+is still given by Eq.\ (\ref{eq:Pr_def})\footnote{This is not obvious, but follows from
+the following identity: if $r=r'+r''$, then
+\begin{equation}
+P_r = 2^{r'} P_{r''} + 2^{r''} P_{r'} 
++ \sum_{d'=0}^{2^{r'}-1} \sum_{f''=0}^{2^{r''}-1} (2^{r''}-1-f'') d'
+\end{equation}}, but note that the underlying ring buffers
+are split between registers and shared memory.
+Currently, we use the single-threadblock implementation for $5 \le r \le 8$.
+
+To explain the $r > 8$ case, consider $r=16$ for concreteness.
+We use the splitting identity (\ref{eq:splitting}) to write:
+\begin{equation}
+\DD(16) = \underbrace{\big( \DD(8) \otimes 1_{256} \big)}_{\equiv \mathcal A}
+   \circ \LAG\big[ (255-f'') \, d' \big] 
+   \circ \underbrace{\big( 1_{256} \otimes \DD(8) \big)}_{\equiv \mathcal B}
+\label{eq:DD16}
+\end{equation}
+The operators $(\DD(8) \otimes 1_{256})$ and $(1_{256} \otimes \DD(8))$ can be distributed
+across 256 threadblocks in a single kernel (using our single-threadblock implementation 
+of $\DD(8)$ described above).
+
+The middle operator $\LAG[\cdots]$ in Eq.\ (\ref{eq:DD16}) is really a no-op.
+It just means that we put the outputs of $\mathcal B$ in a ring buffer in GPU global memory,
+before reading them with $\mathcal A$.
+Thus, Eq.\ (\ref{eq:DD16}) tells us how to divide the $\DD(16)$ operation into two GPU kernels,
+separated by a ring buffer in {\bf GPU global memory}.
+We use this ``two-pass'' implementation of $\DD(r)$ for $9 \le r \le 16$.
+(The current code only implements $r \le 16$, but if larger $r$ were needed, then a ``three-pass''
+implementation would cover $17 \le r \le 24$.)
+
+In the above implementation, the main idea is to use the splitting identity recursively, to
+split tree dedispersion across multiple kernels, then parallelize over threadblocks in a kernel,
+then parallelize over threads in a warp.
+
+% Future section: MegaRingbuf and segment alignment.
+
+% Future section: Downsampled trees and the LaggedDownsampler.
+
+% Future section: Early triggers.
+
 \clearpage
 
 \section{Variance estimation}
