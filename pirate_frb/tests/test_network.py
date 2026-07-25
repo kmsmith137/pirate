@@ -101,11 +101,34 @@ class NetworkTester:
         config = make_random_subscale_config()
         total_nfreq = sum(config.zone_nfreq)
         num_receivers, nworkers = pick_receiver_worker_counts(total_nfreq)
-        # Exercise the FakeXEngine pacing path 20% of the time. Default
-        # paced=False because pacing throttles the sender, which masks
-        # the real-time eviction races and FLAG_ACK ack-prediction
-        # checks that this test was designed for.
-        paced = (random.random() < 0.2)
+        ringbuf_nchunks = random.randint(50, 100)
+
+        # Always paced, with the server's keep-up bound ARMED (the production
+        # configuration). The bound M (FrbServer max_unprocessed_chunks) and
+        # the pacing budget p are co-sampled to explore two regimes:
+        # "strongly paced" (small p: the pacing gate bites constantly) and
+        # "loosely paced" (p near M: the gate is idle in the healthy regime,
+        # so the sender blasts at full throughput, preserving the eviction
+        # races and FLAG_ACK ack-prediction coverage that an unpaced sender
+        # used to provide -- without ever outrunning the bound). Safe
+        # combinations satisfy 3 <= p <= M - 1 (sequential sends then keep
+        # rb_assembled - rb_processed <= p chunks) and M + 2 <=
+        # ringbuf_nchunks (the server validates this; it makes the
+        # ring-capacity assert unreachable). Skips are bounded separately, by
+        # the dynamic window check in _send_loop.
+        M = random.randint(8, ringbuf_nchunks - 2)
+        if random.random() < 0.7:
+            pacing_budget = random.randint(3, min(8, M - 1))
+        else:
+            pacing_budget = random.randint(max(3, M // 2), M - 1)
+
+        # ~10% of iterations: slow the server's processing thread by a few ms
+        # per frame. With a strongly-paced budget this reliably engages the
+        # pacing gate (throttle-and-drain, and stop-while-gated when such an
+        # iteration ends mid-throttle), and it drags the pacing view behind
+        # the send positions so the _send_loop skip-window check exercises
+        # its convert-to-sends branch.
+        delay = random.uniform(0.001, 0.005) if (random.random() < 0.1) else 0.0
         # Exercise the FrbServer's --no-dedispersion processing path 80% of
         # the time. In this mode the processing thread skips ALL GPU work
         # (no host->device copies, no dequant/dedispersion kernels), but
@@ -126,8 +149,11 @@ class NetworkTester:
             base_beam_id           = random.randint(0, 10000),
             data_base_port         = 5000,
             rpc_port               = 6000,
-            ringbuf_nchunks        = random.randint(50, 100),
-            paced                  = paced,
+            ringbuf_nchunks        = ringbuf_nchunks,
+            max_unprocessed_chunks = M,
+            pacing_budget_chunks   = pacing_budget,
+            skip_window            = M - 2,
+            processing_delay_sec   = delay,
             no_dedispersion        = no_dedispersion,
         )
 
@@ -282,16 +308,15 @@ class NetworkTester:
                                 # Suppress the per-chunk "FrbServer: beamset=..." line;
                                 # this test assembles hundreds of chunks.
                                 quiet=True,
-                                # Disabled unconditionally. Unpaced senders blast
-                                # much faster than the server's processing counters
-                                # advance; and even PACED iterations exceed the
-                                # bound, because this test's random SKIPs are
-                                # deliberately outside the pacing budget (see the
-                                # pacing_chunks comment in FakeXEngine.cpp) -- a
-                                # skipped-ahead worker's next send fast-forwards
-                                # the receive window, assembling the skipped
-                                # chunks nearly instantly.
-                                disable_max_unprocessed_chunks=True)
+                                # Keep-up bound, ARMED and sampled per iteration
+                                # (see _random_params). The FakeXEngine in
+                                # _build_client paces within it, and _send_loop's
+                                # skip-window check keeps skips inside it.
+                                max_unprocessed_chunks=p['max_unprocessed_chunks'],
+                                # Usually 0; ~10% of iterations slow the
+                                # processing thread to engage the pacing gate
+                                # deterministically (see _random_params).
+                                processing_delay_sec=p['processing_delay_sec'])
         self.server.start()
 
     def _build_client(self):
@@ -309,17 +334,15 @@ class NetworkTester:
         ip_addrs = [f"127.0.0.1:{p['data_base_port'] + j}"
                     for j in range(p['num_receivers'])]
 
-        # Pacing is randomized in _random_params (20% chance True).
-        # Most iterations run paced=False so the test continues to
-        # exercise real-time eviction races and FLAG_ACK ack-prediction
-        # at full throughput; the occasional paced=True iteration
-        # exercises the FakeXEngine pacing-thread path against a live
-        # MonitorRingbuf stream from the in-process FrbServer.
+        # Always paced, against a live MonitorRingbuf stream from the
+        # in-process FrbServer; the budget is sampled in _random_params
+        # (strongly paced to loosely paced -- see the regime comment there).
         self.fxe = FakeXEngine(
             self.xmd, ip_addrs, self.nworkers,
             time_samples_per_chunk = p['time_samples_per_chunk'],
             debug = True,
-            paced = p['paced'],
+            paced = True,
+            pacing_budget_chunks = p['pacing_budget_chunks'],
             rpc_address = f"127.0.0.1:{p['rpc_port']}",
         )
 
@@ -335,6 +358,14 @@ class NetworkTester:
 
         # Keeps track of which (worker_id, minichunk_index) pairs have been skipped.
         self.skipped = set()
+
+        # Skip-window statistics (see the check in _send_loop): total skip
+        # batches drawn, and how many were converted to sends because they
+        # would have jumped past the window. Reported by
+        # _print_debug_counters, so a run shows whether (and how often) the
+        # check engaged.
+        self.n_skip_batches = 0
+        self.n_skip_converted = 0
 
         # Client-side AssembledFrameSets, allocated lazily as workers
         # advance into new chunks. self.fspos is the next un-allocated
@@ -415,6 +446,29 @@ class NetworkTester:
             # Computed in a way that biases workers toward catching up with the leader.
             lag = int(np.max(self.wpos) - self.wpos[worker_id])
             n = int(np.random.poisson(1.0 + 0.1 * lag))
+
+            # Skip-window check: a skip batch may advance this worker only
+            # to a chunk within p['skip_window'] chunks of the server's
+            # processed frontier, as seen through the FakeXEngine's pacing
+            # view (a monotone lower bound, so staleness only makes the
+            # check more conservative). Skips bypass the pacing gate and are
+            # realized wire-side by the NEXT send's position jump, which
+            # fast-forwards assembly of the whole skipped span nearly
+            # instantly -- an unchecked jump would trip the server's armed
+            # keep-up bound. Out-of-window skip batches are converted to
+            # sends (execution-gated by the worker, so always safe). For a
+            # disconnected worker the conversion doubles as the forced
+            # reconnect: waiting for the view to advance instead would
+            # deadlock, since assembly is stalled on precisely this worker's
+            # missing minichunks.
+            if skip and (n > 0):
+                self.n_skip_batches += 1
+                end_chunk = (int(self.wpos[worker_id]) + n - 1) // self.mpc
+                view_chunk = fxe.rb_processed // self.p['nbeams']
+                if end_chunk > view_chunk + self.p['skip_window']:
+                    skip = False
+                    self.dstate[worker_id] = False   # reconnect (if disconnected)
+                    self.n_skip_converted += 1
 
             # Advance (either skip or send) by n minichunks.
             for k in range(n):
@@ -722,6 +776,8 @@ class NetworkTester:
         ]
         for label, count in zip(labels, counters):
             atomic_print(f"    {label}: {count}")
+        atomic_print(f"    skip batches: {self.n_skip_batches} "
+                     f"({self.n_skip_converted} converted to sends by the skip-window check)")
 
     def _drain_filesub(self):
         """Wait until every scheduled filename has arrived via the

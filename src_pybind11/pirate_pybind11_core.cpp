@@ -1038,7 +1038,8 @@ void register_core_bindings(pybind11::module &m)
           .def(py::init([](const std::shared_ptr<const XEngineMetadata> &xmd,
                            const std::vector<std::string> &ip_addrs,
                            int nworkers, long time_samples_per_chunk,
-                           bool debug, bool paced, const std::string &rpc_address) {
+                           bool debug, bool paced, long pacing_budget_chunks,
+                           const std::string &rpc_address) {
                FakeXEngine::Params params;
                params.xmd = xmd;
                params.ip_addrs = ip_addrs;
@@ -1046,6 +1047,7 @@ void register_core_bindings(pybind11::module &m)
                params.time_samples_per_chunk = time_samples_per_chunk;
                params.debug = debug;
                params.paced = paced;
+               params.pacing_budget_chunks = pacing_budget_chunks;
                params.rpc_address = rpc_address;
                return std::make_shared<FakeXEngine>(params);
           }),
@@ -1053,6 +1055,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("time_samples_per_chunk"),
                py::arg("debug") = false,
                py::arg("paced") = true,
+               py::arg("pacing_budget_chunks") = long(constants::default_server_max_unprocessed_chunks - 1),
                py::arg("rpc_address") = "",
                "Create a FakeXEngine and spawn 'nworkers' worker threads.\n\n"
                "Workers inherit the vcpu affinity of the calling thread, so the\n"
@@ -1074,10 +1077,16 @@ void register_core_bindings(pybind11::module &m)
                "        unit tests, but don't use in production!\n"
                "    paced (default True): Spawn a pacing thread that subscribes\n"
                "        to the FrbServer's MonitorRingbuf push stream and gates\n"
-               "        each worker's sends to stay at most a few chunks ahead of\n"
-               "        server-side rb_processed (the lookahead is derived from\n"
-               "        constants.server_max_unprocessed_chunks). Requires\n"
+               "        each worker's sends to stay at most pacing_budget_chunks\n"
+               "        chunks ahead of server-side rb_processed. Requires\n"
                "        rpc_address.\n"
+               "    pacing_budget_chunks (default\n"
+               "        constants.default_server_max_unprocessed_chunks - 1 = 4): paced-mode\n"
+               "        lookahead, in time chunks. A paced skip-free sender never\n"
+               "        trips the server's keep-up bound as long as this is <=\n"
+               "        the server's max_unprocessed_chunks - 1. Must be >= 3;\n"
+               "        ignored when paced=False. Skips bypass the budget -- see\n"
+               "        the rb_processed property.\n"
                "    rpc_address: 'ip:port' of the FrbServer's gRPC endpoint.\n"
                "        Required (non-empty) when paced=True; ignored (silently\n"
                "        accepted) when paced=False.")
@@ -1292,6 +1301,18 @@ void register_core_bindings(pybind11::module &m)
                "snapshot is only 'consistent' if no acks are arriving\n"
                "concurrently -- typically call after synchronize() has\n"
                "drained all in-flight acks. Does NOT throw.")
+          // No GIL release (def_property does not support call_guard): the
+          // getter only takes each Worker's mutex briefly, and those are
+          // held only by pure-C++ threads that never need the GIL.
+          .def_property_readonly("rb_processed", &FakeXEngine::get_rb_processed,
+               "Lower bound (in frames) on server-side rb_processed, from\n"
+               "paced-mode state (bootstrap floor + per-worker pacing views).\n"
+               "Monotone: a stale value only understates server progress (0\n"
+               "before any data has flowed). -1 when paced=False. Use to bound\n"
+               "SKIP jumps, which bypass the pacing gate: a skip that lands more\n"
+               "than (max_unprocessed_chunks - 2) chunks past rb_processed //\n"
+               "nbeams can trip the server's keep-up bound when the next send\n"
+               "fast-forwards assembly of the skipped span. Does NOT throw.")
           .def("get_worker_freq_channels",
                &FakeXEngine::get_worker_freq_channels,
                py::arg("worker_id"),
@@ -1475,7 +1496,7 @@ void register_core_bindings(pybind11::module &m)
                            bool no_dedispersion,
                            long nbatches_wt,
                            bool quiet,
-                           bool disable_max_unprocessed_chunks,
+                           long max_unprocessed_chunks,
                            bool shared_host_allocator) {
                FrbServer::Params params;
                params.config_prefilled = config_prefilled;
@@ -1492,7 +1513,7 @@ void register_core_bindings(pybind11::module &m)
                params.no_dedispersion = no_dedispersion;
                params.nbatches_wt = nbatches_wt;
                params.quiet = quiet;
-               params.disable_max_unprocessed_chunks = disable_max_unprocessed_chunks;
+               params.max_unprocessed_chunks = max_unprocessed_chunks;
                params.shared_host_allocator = shared_host_allocator;
                return FrbServer::create(params);
           }),
@@ -1508,7 +1529,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("no_dedispersion") = false,
                py::arg("nbatches_wt") = 0,
                py::arg("quiet") = false,
-               py::arg("disable_max_unprocessed_chunks") = false,
+               py::arg("max_unprocessed_chunks") = long(constants::default_server_max_unprocessed_chunks),
                py::arg("shared_host_allocator") = false,
                "Create an FrbServer.\n\n"
                "Args:\n"
@@ -1552,11 +1573,14 @@ void register_core_bindings(pybind11::module &m)
                "    quiet (default False): if True, suppress the per-chunk\n"
                "        'FrbServer: beamset=...' stdout line (one per assembled\n"
                "        chunk). Everything else is unaffected.\n"
-               "    disable_max_unprocessed_chunks (default False): if True, skip\n"
-               "        the (rb_assembled - rb_processed) bound\n"
-               "        (constants.server_max_unprocessed_chunks). For unit tests\n"
-               "        with unpaced FakeXEngines, which send much faster than\n"
-               "        real time. Never set in production.\n"
+               "    max_unprocessed_chunks (default\n"
+               "        constants.default_server_max_unprocessed_chunks = 5): keep-up\n"
+               "        bound, in time chunks -- the server error-stops if\n"
+               "        rb_assembled - rb_processed exceeds it. A paced sender\n"
+               "        with lookahead <= max_unprocessed_chunks - 1 never trips\n"
+               "        it; senders that skip ahead must bound the jump against\n"
+               "        the pacing view (see FakeXEngine.rb_processed).\n"
+               "        Validated: >= 4 and <= ringbuf_nchunks - 2.\n"
                "    shared_host_allocator (default False): set True if the caller\n"
                "        shares host_allocator with other concurrent carvers\n"
                "        (run_server shares it with the frame ring buffer's\n"

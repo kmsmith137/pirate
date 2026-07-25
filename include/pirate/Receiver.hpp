@@ -81,9 +81,10 @@ struct Receiver
     // Note: forward gaps in the input data stream are unbounded at the
     // Receiver level (a corrupt seq can fast-forward the 2-chunk receive
     // window arbitrarily far, flooding downstream with empty chunks). The
-    // FrbServer's max-unprocessed check (constants::server_max_unprocessed_chunks)
-    // catches this within a few chunks of flooding, since the empty chunks
-    // assemble much faster than they are processed. See also the FIXME in
+    // FrbServer's max-unprocessed check (FrbServer::Params::
+    // max_unprocessed_chunks) catches this within a few chunks of
+    // flooding, since the empty chunks assemble much faster than they are
+    // processed. See also the FIXME in
     // Receiver.cpp about a corrupt seq in the very FIRST minichunk header,
     // which that check does NOT cover.
 

@@ -170,6 +170,14 @@ FrbServer::FrbServer(const Params &p) : params(p)
     xassert(params.receivers.size() > 0);
     xassert(params.rpc_server_address.size() > 0);  // check that string was initialized
     xassert(params.ringbuf_nchunks > 0);
+    // Keep-up bound (see Params::max_unprocessed_chunks). The floor
+    // preserves the old compile-time constraint (the default pacing
+    // lookahead, bound - 1, must be >= 3); the ceiling keeps the
+    // ring-capacity assert in _receiver_thread_main unreachable for
+    // conforming senders, whose receive frontier stays within
+    // (max_unprocessed_chunks + 1) chunks of rb_processed.
+    xassert_ge(params.max_unprocessed_chunks, 4);
+    xassert_le(params.max_unprocessed_chunks + 2, long(params.ringbuf_nchunks));
     xassert(params.min_data_mtu > 0);
     xassert(params.host_allocator);
     xassert(params.gpu_allocator);
@@ -652,29 +660,28 @@ void FrbServer::_receiver_thread_main(int receiver_index)
                 xassert(rb_assembled == frame_id);
                 rb_assembled++;
 
-                // Backpressure sanity bound: frames assembled but not yet
-                // copied host->GPU. Exceeding it means something is off the
-                // rails; throw (stopping the server) rather than letting the
-                // backlog grow silently. Skipped when
-                // params.disable_max_unprocessed_chunks (unpaced-test mode).
-                long max_unprocessed = long(constants::server_max_unprocessed_chunks) * nbeams;
-                if (!params.disable_max_unprocessed_chunks
-                    && (rb_assembled - rb_processed > max_unprocessed))
-                {
+                // Keep-up bound: frames assembled but not yet copied
+                // host->GPU. Exceeding it means something is off the rails;
+                // throw (stopping the server) rather than letting the
+                // backlog grow silently. See Params::max_unprocessed_chunks.
+                long max_unprocessed = params.max_unprocessed_chunks * nbeams;
+                if (rb_assembled - rb_processed > max_unprocessed) {
                     stringstream ss;
                     ss << "FrbServer: too many assembled-but-unprocessed frames: "
                        << "rb_assembled=" << rb_assembled << ", rb_processed=" << rb_processed
                        << " (gap = " << (rb_assembled - rb_processed) << " frames = "
                        << ((rb_assembled - rb_processed) / double(nbeams)) << " time chunks, "
-                       << "limit = pirate::constants::server_max_unprocessed_chunks = "
-                       << constants::server_max_unprocessed_chunks << " chunks).\n"
+                       << "limit = FrbServer::Params::max_unprocessed_chunks = "
+                       << params.max_unprocessed_chunks << " chunks).\n"
                        << "This is a real-time keep-up failure, not a memory-sizing problem -- "
                        << "no yaml change fixes it. Possible causes: (1) the server can't keep "
                        << "up with the X-engines (sustained overload, or a long GPU/host "
                        << "stall); (2) the input stream skipped ahead by many chunks (e.g. a "
                        << "corrupt sender seq), flooding the pipeline with quickly-assembled "
-                       << "empty chunks. (Test harnesses with unpaced senders should set "
-                       << "FrbServer::Params::disable_max_unprocessed_chunks instead.)";
+                       << "empty chunks. (Senders that legitimately outrun real time -- e.g. "
+                       << "test harnesses -- must pace against the MonitorRingbuf stream, "
+                       << "bound their skip jumps against the pacing view, or raise "
+                       << "max_unprocessed_chunks.)";
                     throw runtime_error(ss.str());
                 }
             }

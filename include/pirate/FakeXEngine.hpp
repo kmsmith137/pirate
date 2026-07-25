@@ -15,6 +15,7 @@
 
 #include "AssembledFrame.hpp"   // AssembledFrameSet (Command holds a shared_ptr<>)
 #include "XEngineMetadata.hpp"
+#include "constants.hpp"       // default_server_max_unprocessed_chunks (Params default)
 #include "network_utils.hpp"   // Socket (Worker holds one by value)
 
 
@@ -82,14 +83,14 @@ namespace pirate {
 // extra "pacing thread" that holds a streaming MonitorRingbuf RPC to
 // the FrbServer and broadcasts each pushed rb_processed value to all
 // workers (Worker::rb_processed under each Worker::mutex). Worker
-// threads gate their sends so the sender stays at most pacing_chunks time
-// chunks ahead of the server (pacing_chunks is derived from
-// constants::server_max_unprocessed_chunks -- see the derivation comment
-// in FakeXEngine.cpp), MEASURED AGAINST THE WORKER'S MOST RECENT
-// SUCCESSFUL SEND (Worker::last_ichunk_sent), not against the pending
-// command's ichunk. Before each SEND_JUNK / SEND_MINICHUNK, the
-// worker blocks on its gate_cv until Worker::rb_processed >=
-// (Worker::last_ichunk_sent - pacing_chunks) * nbeams.
+// threads gate their sends so the sender stays at most
+// Params::pacing_budget_chunks time chunks ahead of the server (see the
+// derivation comment in the FakeXEngine constructor), MEASURED AGAINST
+// THE WORKER'S MOST RECENT SUCCESSFUL SEND (Worker::last_ichunk_sent),
+// not against the pending command's ichunk. Before each SEND_JUNK /
+// SEND_MINICHUNK, the worker blocks on its gate_cv until
+// Worker::rb_processed >=
+// (Worker::last_ichunk_sent - pacing_budget_chunks) * nbeams.
 //
 // Why "last_ichunk_sent" and not "ichunk-of-pending-send": SKIPs let a
 // worker's ichunk race arbitrarily far ahead of its actual SENDs
@@ -491,11 +492,20 @@ struct FakeXEngine
 
         // When true, FakeXEngine spawns a pacing thread that opens a
         // MonitorRingbuf streaming RPC to the FrbServer and gates each
-        // worker's sends to stay at most pacing_chunks (derived from
-        // constants::server_max_unprocessed_chunks, see FakeXEngine.cpp)
-        // chunks ahead of server-side rb_processed. See the paced-mode
-        // discussion in the class doc-comment.
+        // worker's sends to stay at most pacing_budget_chunks chunks ahead
+        // of server-side rb_processed. See the paced-mode discussion in
+        // the class doc-comment.
         bool paced = true;
+
+        // Paced-mode lookahead, in time chunks. A paced skip-free sender
+        // never trips the FrbServer's keep-up bound as long as
+        // pacing_budget_chunks <= FrbServer::Params::max_unprocessed_chunks
+        // - 1 (the default is exactly that, for the default bound); callers
+        // that raise the server bound may raise this correspondingly. Must
+        // be >= 3 (validated in the constructor -- see the derivation
+        // comment there); ignored when paced=false. SKIPs are outside the
+        // budget: see get_rb_processed() for how callers bound skip jumps.
+        long pacing_budget_chunks = constants::default_server_max_unprocessed_chunks - 1;
 
         // gRPC address ("ip:port") of the FrbServer's RPC endpoint. Required
         // (non-empty) when paced=true; ignored when paced=false (a non-empty
@@ -808,6 +818,21 @@ struct FakeXEngine
     // Does NOT throw, even on a stopped FakeXEngine or when debug=false
     // (in which case all four entries are zero).
     std::array<long, 4> get_debug_counters() const;
+
+    // Entry point: lower bound (in frames) on server-side rb_processed, as
+    // seen through paced-mode state (the bootstrap floor and every worker's
+    // pacing view). Monotone -- the server value only grows, so a stale
+    // return only understates its progress. Before any data has flowed the
+    // value is the trivial bound 0 (Worker views initialize to 0, and rb
+    // counters are non-negative); it jumps to the bootstrap floor at the
+    // first worker SEND_*, and tracks MonitorRingbuf pushes thereafter.
+    // Returns -1 when paced=false (no view exists).
+    // Intended for callers that SKIP: skips bypass the pacing gate, so the
+    // caller must bound how far a skip jumps ahead of this value to stay
+    // inside the server's keep-up bound (see the CAVEAT in the pacing
+    // derivation comment in FakeXEngine.cpp). Takes each Worker's mutex
+    // briefly; does NOT throw, even on a stopped FakeXEngine.
+    long get_rb_processed();
 
     // Return the round-robin subset of total frequency channels assigned
     // to workers[worker_id]: { worker_id, worker_id + nworkers,

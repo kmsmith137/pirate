@@ -735,8 +735,8 @@ void Receiver::_read_data(const shared_ptr<Peer> &peer)
         // A corrupt seq in that first header anchors the initial chunk at a
         // garbage value; every sane peer's data is then behind the receive
         // window and silently dropped forever, and the server sits idle.
-        // The FrbServer max-unprocessed check (constants::
-        // server_max_unprocessed_chunks) does NOT cover this case: nothing
+        // The FrbServer max-unprocessed check (FrbServer::Params::
+        // max_unprocessed_chunks) does NOT cover this case: nothing
         // ever assembles, so rb_assembled - rb_processed stays zero. A
         // future fix should sanity-bound the anchor value (e.g. against
         // wall-clock time via xmd's timekeeping fields).

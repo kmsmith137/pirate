@@ -350,13 +350,16 @@ class ServerTester:
                                 cuda_device_id=0,
                                 grouper_client=self.grouper_client,
                                 nbatches_wt=p['nbatches_wt'],
-                                quiet=True)
-        # Note: the server's max-unprocessed check runs ARMED here (we do
-        # not pass disable_max_unprocessed_chunks). This is safe by
-        # construction: run()'s send/compare interleave keeps <= ~3 chunks
-        # in flight (the blocking queue.get inside _compare_chunk is the
-        # backpressure), below constants::server_max_unprocessed_chunks = 5.
-        # If that constant ever shrinks, revisit.
+                                quiet=True,
+                                # Pinned explicitly (not inherited from the
+                                # default) so this test's safety argument is
+                                # self-contained: the FakeXEngine here runs
+                                # UNPACED, which is safe because run()'s
+                                # send/compare interleave keeps <= ~3 chunks in
+                                # flight (the blocking queue.get inside
+                                # _compare_chunk is the backpressure), below
+                                # this bound.
+                                max_unprocessed_chunks=5)
 
     def _spawn_grouper_child(self):
         # 'spawn' (not fork): the parent has already initialized CUDA, and a

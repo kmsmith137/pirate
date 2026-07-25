@@ -6,7 +6,7 @@
 #include "DedispersionConfig.hpp"
 #include "FileWriter.hpp"      // FileStream, validate_acqdir, make_acq_relpath
 #include "XEngineMetadata.hpp"
-#include "constants.hpp"       // inactive_file_stream_capacity
+#include "constants.hpp"       // inactive_file_stream_capacity, default_server_max_unprocessed_chunks
 
 #include <ksgpu/xassert.hpp>
 
@@ -155,15 +155,19 @@ struct FrbServer
         // (e.g. the ephemeral test server, which assembles hundreds of chunks).
         bool quiet = false;
 
-        // If true, skip the (rb_assembled - rb_processed) bound
-        // (constants::server_max_unprocessed_chunks, enforced at every
-        // rb_assembled advance). For unit tests with UNPACED FakeXEngines,
-        // which intentionally send much faster than real time -- there the
-        // assembled-but-unprocessed backlog is a benign consequence of the
-        // test setup, not a sign that the server can't keep up. Never set
-        // in production (real X-engines send at the real-time rate, so
-        // exceeding the bound means the server is falling behind).
-        bool disable_max_unprocessed_chunks = false;
+        // Keep-up bound, in time chunks: the server throws (error-stops) if
+        // rb_assembled - rb_processed exceeds this many chunks, checked at
+        // every rb_assembled advance. Exceeding it means the server is
+        // falling behind the sender (or the input stream skipped far
+        // ahead). Senders that outrun real time (e.g. test FakeXEngines)
+        // must pace against the MonitorRingbuf stream: a paced sender with
+        // lookahead <= max_unprocessed_chunks - 1 never trips the bound,
+        // and skip jumps must be bounded against the live pacing view
+        // (see FakeXEngine::get_rb_processed()). Validated: >= 4, and
+        // <= ringbuf_nchunks - 2 (the latter makes the ring-capacity
+        // assert in _receiver_thread_main unreachable for conforming
+        // senders).
+        long max_unprocessed_chunks = constants::default_server_max_unprocessed_chunks;
     };
 
     // Factory method (constructor is private).

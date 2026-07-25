@@ -106,6 +106,11 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
             "Number of frame sets the AssembledFrameAllocator's worker pre-allocates at "
             "startup when throw_exception_if_empty=True; doubles as a fail-fast "
             "pool-size check.")
+        .def_readonly_static("default_server_max_unprocessed_chunks", &constants::default_server_max_unprocessed_chunks,
+            "Default keep-up bound, in time chunks: FrbServer error-stops if "
+            "rb_assembled - rb_processed exceeds FrbServer's max_unprocessed_chunks "
+            "param, which defaults to this constant. The FakeXEngine pacing lookahead "
+            "(pacing_budget_chunks) defaults to this constant minus one.")
         .def_readonly_static("grouper_ping_timeout_ms", &constants::grouper_ping_timeout_ms,
             "Timeout (ms) for FrbGrouperClient.ping(): the early channel-level connectivity "
             "check done before bump allocation, to fail fast if the grouper isn't running.")

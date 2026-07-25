@@ -52,11 +52,11 @@ struct constants
 
     // Frame-pool / backpressure sizing, in time-chunks.
     //
-    //  - server_max_unprocessed_chunks: fail if server can't keep up with x-engine
+    //  - default_server_max_unprocessed_chunks: fail if server can't keep up with x-engine
     //  - assembled_frame_allocator_queue_size: fail if frame queue becomes empty
     //  - assembled_frame_allocator_initial_size: allocate initial "burst" and fail-fast.
     
-    static constexpr int server_max_unprocessed_chunks = 5;
+    static constexpr int default_server_max_unprocessed_chunks = 5;
     static constexpr int assembled_frame_allocator_queue_size = 5;
     static constexpr int assembled_frame_allocator_initial_size = 7;
 
@@ -107,13 +107,15 @@ struct constants
     static_assert(cuda_host_register_chunk_size <= (511L << 30),
                   "cuda_host_register_chunk_size must be <= 511 GiB");
 
-    // The FakeXEngine pacing lookahead is derived from this constant
-    // (pacing_chunks = server_max_unprocessed_chunks - 1, in FakeXEngine.cpp,
-    // leaving one chunk of margin below the bound). The lookahead must be
-    // >= 3 chunks (the pre-existing lower bound on the pacing constant this
-    // replaced): assembly needs data from chunk c+2 to complete chunk c, so
-    // too small a lookahead stalls or deadlocks the paced pipeline.
-    static_assert(server_max_unprocessed_chunks - 1 >= 3);
+    // default_server_max_unprocessed_chunks is the DEFAULT of two runtime params:
+    // FrbServer::Params::max_unprocessed_chunks (the keep-up bound itself)
+    // and FakeXEngine::Params::pacing_budget_chunks (defaults to the bound
+    // minus one, leaving one chunk of margin below it). This static_assert
+    // validates the compile-time defaults; runtime overrides are validated
+    // in the two constructors. The pacing lookahead must be >= 3 chunks:
+    // assembly needs data from chunk c+2 to complete chunk c, so too small
+    // a lookahead stalls or deadlocks the paced pipeline.
+    static_assert(default_server_max_unprocessed_chunks - 1 >= 3);
 
     // The startup burst (throw_exception_if_empty) should at least fill the pre-init
     // queue, so the worker parks after it (drain-then-replenish semantics)
