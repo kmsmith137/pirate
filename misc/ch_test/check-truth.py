@@ -21,6 +21,15 @@ covers the other direction, where early-trigger trees fire before it. Adjacent
 chunks also echo, because the offline dedisperser's peak-finding is a
 placeholder that just reports each chunk's max.
 
+A chunk counts as a spike when its snr_max clears
+
+    threshold = max(--floor, median + --nsigma * sigma)
+
+where sigma is estimated from the median absolute deviation, NOT the plain
+stdev. The spikes are a large fraction of the sample at production scale
+(~12% of chunks), so they dominate a plain stdev and push the threshold above
+the very spikes it is meant to detect; see robust_sigma() below.
+
 Truth events in the first --warmup chunks of the acquisition are allowed to
 have no spike: dedispersion sums there extend back past the start of the
 acquired data (the documented "boundary effects near the beginning of the
@@ -55,6 +64,22 @@ RE_SPFTS = re.compile(r'seq_per_frb_time_sample\s*[:=]\s*(\d+)')
 def die(msg):
     print(f"check-truth: ERROR: {msg}", file=sys.stderr)
     sys.exit(2)
+
+
+def robust_sigma(vals, med):
+    """Gaussian-equivalent sigma estimated from the median absolute deviation.
+
+    MAD measures the spread of the BULK of the distribution, so it is not
+    inflated by the spikes we are trying to detect. Plain stdev is, and that
+    is not a safe direction: at production scale ~12% of chunks contain a
+    pulse (high-DM pulses also smear across many chunks), which drags the
+    stdev from the baseline's ~0.3 up to ~6.5 -- so a median + 4*stdev
+    threshold lands at ~32.5, ABOVE the largest spike in the run (~31.7),
+    and every injection is reported as a miss. MAD tolerates contamination
+    up to 50%, well above the ~12% seen here.
+    """
+    mad = statistics.median([abs(v - med) for v in vals])
+    return 1.4826 * mad
 
 
 def parse_dedisp(path, beam):
@@ -133,8 +158,9 @@ def main():
                          'tci (early-trigger trees, adjacent-chunk echoes; '
                          'default 4)')
     ap.add_argument('--nsigma', type=float, default=4.0,
-                    help='spike threshold = max(--floor, median + nsigma*stdev) '
-                         'over all chunks (default 4)')
+                    help='spike threshold = max(--floor, median + nsigma*sigma) '
+                         'over all chunks, where sigma is the MAD-based robust '
+                         'stdev of the baseline (default 4)')
     ap.add_argument('--floor', type=float, default=10.0,
                     help='lower bound on the spike threshold (default 10)')
     args = ap.parse_args()
@@ -148,15 +174,23 @@ def main():
     lo, hi = tcis[0], tcis[-1]
     vals = [per[t] for t in tcis]
     med = statistics.median(vals)
-    # Population stdev is inflated by the spikes themselves, which RAISES the
-    # threshold -- the conservative direction for a detection test.
-    sd = statistics.pstdev(vals) if len(vals) > 1 else 0.0
+    sd = robust_sigma(vals, med) if len(vals) > 1 else 0.0
     thresh = max(args.floor, med + args.nsigma * sd)
 
     print(f"dedisperser: beam {args.beam}, {len(tcis)} chunks, tci [{lo}, {hi}]")
-    print(f"  snr_max median={med:.3f} stdev={sd:.3f} max={max(vals):.3f}")
+    print(f"  snr_max median={med:.3f} robust_sigma={sd:.3f} (from MAD) "
+          f"max={max(vals):.3f}")
     print(f"  spike threshold = max({args.floor}, {med:.3f} + {args.nsigma}*{sd:.3f})"
           f" = {thresh:.3f}  ({sum(1 for v in vals if v >= thresh)} chunks above)")
+
+    # No vacuous passes: if the baseline itself sits at or above the spike
+    # floor, every chunk clears the threshold and every injection would
+    # "match" without the dedisperser having found anything.
+    if med >= args.floor:
+        die(f"baseline median snr_max ({med:.3f}) is at or above the spike "
+            f"floor ({args.floor}) -- every chunk would count as a spike, so "
+            f"a pass would be meaningless. Either the dedisperser output is "
+            f"pathological, or --floor needs raising for this configuration.")
     print(f"x-engine:    seqs_per_chunk = {seqs_per_chunk}, "
           f"{len(truth_all)} injection(s) on beam {args.beam}")
 
