@@ -152,7 +152,17 @@ class NetworkTester:
             ringbuf_nchunks        = ringbuf_nchunks,
             max_unprocessed_chunks = M,
             pacing_budget_chunks   = pacing_budget,
-            skip_window            = M - 2,
+            # M-3, not M-2. A skip realized at the window edge lands the
+            # assembled frontier at (skip_window + 1) chunks past the pacing
+            # view, and the view is only a LOWER bound on rb_processed -- so
+            # the realized gap can reach (skip_window + 1) * nbeams frames,
+            # plus up to ~nbeams+1 more from the receivers' 2-chunk assembly
+            # window as the following sends land. Against the server's
+            # M * nbeams limit, M-2 leaves only nbeams frames of headroom and
+            # the slop can exceed it (observed: 69 frames vs a 68-frame limit,
+            # M=17/nbeams=4). M-3 leaves a full chunk of margin, which covers
+            # the slop for any nbeams >= 1. M >= 8, so skip_window >= 5.
+            skip_window            = M - 3,
             processing_delay_sec   = delay,
             no_dedispersion        = no_dedispersion,
         )
