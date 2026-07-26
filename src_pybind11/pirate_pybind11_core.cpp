@@ -297,7 +297,9 @@ void register_core_bindings(pybind11::module &m)
         "Data frame containing beamformed data for one (time_chunk, beam_id) pair.\n\n"
         "The data is stored in its raw binary format (int4, special value -8 indicates\n"
         "masked data, float16 offsets/scales at lower resolution). Most python callers\n"
-        "will want to convert to float32 by calling dequantize().")
+        "will want to convert to float32 by calling dequantize().\n\n"
+        "Obtained from AssembledFrameSet.get_frame(), from an Acquisition (offline,\n"
+        "reading .asdf files from an acqdir), or from AssembledFrame.from_asdf().")
         .def_readonly("nfreq", &AssembledFrame::nfreq,
             "Number of frequency channels.")
         .def_readonly("ntime", &AssembledFrame::ntime,
@@ -420,7 +422,9 @@ void register_core_bindings(pybind11::module &m)
         "Helper class which is used by python callers in conjunction with FakeXEngine.\n"
         "For example, the main loop in run_fake_xengine.py gets AssembledFrameSets from\n"
         "a SimulatedFrameFactory, and passes them to a FakeXEngine (for sending to an\n"
-        "FrbServer).")
+        "FrbServer).\n\n"
+        "Obtained from SimulatedFrameFactory.get_frame_set() or\n"
+        "AssembledFrameAllocator.get_frame_set().")
         .def_readonly("nfreq", &AssembledFrameSet::nfreq)
         .def_readonly("ntime", &AssembledFrameSet::ntime)
         .def_readonly("nbeams", &AssembledFrameSet::nbeams)
@@ -637,6 +641,17 @@ void register_core_bindings(pybind11::module &m)
         "(initialize_metadata + initialize_initial_chunk), and the factory MUST be\n"
         "constructed inside a ThreadAffinity context manager -- the spawned threads\n"
         "inherit the caller's vcpu affinity. stop() propagates to the allocator.\n\n"
+        "Constructor::\n\n"
+        "    SimulatedFrameFactory(allocator, num_randomizer_threads,\n"
+        "                          normalized=True, gaussian=True,\n"
+        "                          frame_set_queue_size=4,\n"
+        "                          simulate_frbs=False, frb_dm0=-1.0, frb_max_dm=-1.0,\n"
+        "                          frb_max_width_ms=-1.0, frb_snr=-1.0,\n"
+        "                          frb_subband_fmin_MHz=[], frb_subband_fmax_MHz=[],\n"
+        "                          frb_gap_sec=0.0, num_frb_simulator_threads=0,\n"
+        "                          single_pulse_queue_size=0)\n\n"
+        "The frb_* args and num_frb_simulator_threads / single_pulse_queue_size only\n"
+        "matter when simulate_frbs=True.\n\n"
         "The simulate/send loop, schematically (from run_fake_xengine.py -- the real\n"
         "one also handles send-junk mode and FRB-injection events)::\n\n"
         "    mpc = fxe.minichunks_per_chunk\n"
@@ -1024,7 +1039,10 @@ void register_core_bindings(pybind11::module &m)
         "Metadata sent over the wire by X-engine nodes to FRB nodes at the\n"
         "start of every TCP stream. Also used for bookkeeping in several\n"
         "places (allocator's canonical copy, per-frame ASDF projection, etc).\n\n"
-        "See configs/xengine_metadata.yml for an example with per-field documentation.")
+        "See configs/xengine_metadata.yml for an example with per-field documentation.\n\n"
+        "Obtained from XEngineMetadata.from_yaml_file(),\n"
+        "XEngineMetadata.from_yaml_string(), FrbSearchClient.xengine_metadata, or\n"
+        "AssembledFrameSet.metadata.")
           .def(py::init<>())
           .def_readwrite("version", &XEngineMetadata::version,
                "Version number of the metadata format")

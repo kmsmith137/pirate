@@ -10,7 +10,8 @@ from ..pirate_pybind11 import GpuDedisperserOutputs
 class GpuDedisperserOutputsInjections:
     """Helper class, representing dedispersion outputs for one beam batch.
 
-    Return value from FrbGrouper.get_output(ichunk, ibatch).
+    Obtained from FrbGrouper.get_output(), GpuDedisperser.get_output(), or
+    OfflineDedisperser.dedisperse().
 
     Example usage::
 
