@@ -839,32 +839,32 @@ void FrbServer::_processing_thread_main()
     DedispersionConfig config_postfilled = params.config_prefilled;
 
     if (config_postfilled.zone_nfreq != m->zone_nfreq) {
-        cout << "FrbServer: config_postfilled.zone_nfreq changed from "
-             << tuple_str(config_postfilled.zone_nfreq) << " to "
-             << tuple_str(m->zone_nfreq) << endl;
+        AtomicPrint() << "FrbServer: config_postfilled.zone_nfreq changed from "
+                      << tuple_str(config_postfilled.zone_nfreq) << " to "
+                      << tuple_str(m->zone_nfreq);
         config_postfilled.zone_nfreq = m->zone_nfreq;
     }
 
     if (config_postfilled.zone_freq_edges != m->zone_freq_edges) {
-        cout << "FrbServer: config_postfilled.zone_freq_edges changed from "
-             << tuple_str(config_postfilled.zone_freq_edges) << " to "
-             << tuple_str(m->zone_freq_edges) << endl;
+        AtomicPrint() << "FrbServer: config_postfilled.zone_freq_edges changed from "
+                      << tuple_str(config_postfilled.zone_freq_edges) << " to "
+                      << tuple_str(m->zone_freq_edges);
         config_postfilled.zone_freq_edges = m->zone_freq_edges;
     }
 
     // time_sample_ms is derived from XMD's seq-based timekeeping.
     double new_time_sample_ms = (double(m->dt_ns_per_seq) * double(m->seq_per_frb_time_sample)) / 1.0e6;
     if (config_postfilled.time_sample_ms != new_time_sample_ms) {
-        cout << "FrbServer: config_postfilled.time_sample_ms changed from "
-             << config_postfilled.time_sample_ms << " to " << new_time_sample_ms << endl;
+        AtomicPrint() << "FrbServer: config_postfilled.time_sample_ms changed from "
+                      << config_postfilled.time_sample_ms << " to " << new_time_sample_ms;
         config_postfilled.time_sample_ms = new_time_sample_ms;
     }
 
     // beams_per_gpu = number of beams in the XMD.
     long new_beams_per_gpu = m->get_nbeams();
     if (config_postfilled.beams_per_gpu != new_beams_per_gpu) {
-        cout << "FrbServer: config_postfilled.beams_per_gpu changed from "
-             << config_postfilled.beams_per_gpu << " to " << new_beams_per_gpu << endl;
+        AtomicPrint() << "FrbServer: config_postfilled.beams_per_gpu changed from "
+                      << config_postfilled.beams_per_gpu << " to " << new_beams_per_gpu;
         config_postfilled.beams_per_gpu = new_beams_per_gpu;
     }
 
@@ -892,8 +892,8 @@ void FrbServer::_processing_thread_main()
     auto plan_p = make_shared<DedispersionPlan>(config_postfilled);
     auto t_plan1 = std::chrono::steady_clock::now();
     double dt_plan = std::chrono::duration<double>(t_plan1 - t_plan0).count();
-    cout << "FrbServer: DedispersionPlan constructed in " << dt_plan << " sec"
-         << " (nfreq=" << plan_p->nfreq << ", ntrees=" << plan_p->ntrees << ")" << endl;
+    AtomicPrint() << "FrbServer: DedispersionPlan constructed in " << dt_plan << " sec"
+                  << " (nfreq=" << plan_p->nfreq << ", ntrees=" << plan_p->ntrees << ")";
 
     _check_stopped("FrbServer::processing_thread_main");
 
@@ -940,8 +940,8 @@ void FrbServer::_processing_thread_main()
     auto dedisperser_p = GpuDedisperser::create(dd_params);
     auto t_dd1 = std::chrono::steady_clock::now();
     double dt_dd = std::chrono::duration<double>(t_dd1 - t_dd0).count();
-    cout << "FrbServer: GpuDedisperser constructed in " << dt_dd << " sec"
-         << " (nstreams=" << dedisperser_p->nstreams << ")" << endl;
+    AtomicPrint() << "FrbServer: GpuDedisperser constructed in " << dt_dd << " sec"
+                  << " (nstreams=" << dedisperser_p->nstreams << ")";
 
     _check_stopped("FrbServer::processing_thread_main");
 
@@ -958,9 +958,9 @@ void FrbServer::_processing_thread_main()
     dedisperser_p->allocate(*params.gpu_allocator, *params.host_allocator);
     auto t_alloc1 = std::chrono::steady_clock::now();
     double dt_alloc = std::chrono::duration<double>(t_alloc1 - t_alloc0).count();
-    cout << "FrbServer: GpuDedisperser::allocate() done in " << dt_alloc << " sec"
-         << " (gmem=" << dedisperser_p->resource_tracker.get_gmem_footprint() << " B"
-         << ", hmem=" << dedisperser_p->resource_tracker.get_hmem_footprint() << " B)" << endl;
+    AtomicPrint() << "FrbServer: GpuDedisperser::allocate() done in " << dt_alloc << " sec"
+                  << " (gmem=" << dedisperser_p->resource_tracker.get_gmem_footprint() << " B"
+                  << ", hmem=" << dedisperser_p->resource_tracker.get_hmem_footprint() << " B)";
 
     _check_stopped("FrbServer::processing_thread_main");
 
@@ -985,7 +985,7 @@ void FrbServer::_processing_thread_main()
         dedisperser_p->fill_analytic_weights(freq_variances);
         auto t1 = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double>(t1 - t0).count();
-        cout << "FrbServer: filled analytic dedisperser weights in " << dt << " sec" << endl;
+        AtomicPrint() << "FrbServer: filled analytic dedisperser weights in " << dt << " sec";
     }
 
     _check_stopped("FrbServer::processing_thread_main");

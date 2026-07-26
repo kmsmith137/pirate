@@ -428,7 +428,7 @@ double Hwtest::_show_stats()
     string s = ss.str();
 
     if (s.size() > 0)
-        cout << "Elapsed time: " << dt_max << " sec\n" << s << flush;
+        AtomicPrint() << "Elapsed time: " << dt_max << " sec\n" << s;
 
     return dt_max;
 }

@@ -1,6 +1,7 @@
 #include "../include/pirate/FileWriter.hpp"
 #include "../include/pirate/AssembledFrame.hpp"
 #include "../include/pirate/file_utils.hpp"
+#include "../include/pirate/utils.hpp"          // AtomicPrint
 
 #include <sstream>
 
@@ -550,13 +551,13 @@ void FileWriter::_try_to_delete_from_ssd(const fs::path &path)
     try {
         // remove_file() returns true if file was deleted, false if it didn't exist.
         if (!pirate::remove_file(full_path))
-            cout << "Warning: file not found when deleting " << full_path << " from SSD" << endl;
+            AtomicPrint() << "Warning: file not found when deleting " << full_path << " from SSD";
     }
     catch (std::exception &e) {
-        cout << "Warning: deletion from SSD failed: " << e.what() << endl;
+        AtomicPrint() << "Warning: deletion from SSD failed: " << e.what();
     }
     catch (...) {
-        cout << "Warning: unknown error while deleting " << full_path << " from SSD" << endl;
+        AtomicPrint() << "Warning: unknown error while deleting " << full_path << " from SSD";
     }
 }
 
@@ -629,9 +630,9 @@ void FileWriter::_update_rpc_subscribers(const WriteStatus &write_status)
             // the handler isn't popping -- but this covers the rare
             // interleavings).
             s->cv.notify_one();
-            cout << "FileWriter: stopping slow SubscribeFiles subscriber "
-                 << "(queue reached " << params.max_subscriber_backlog
-                 << " entries)" << endl;
+            AtomicPrint() << "FileWriter: stopping slow SubscribeFiles subscriber "
+                          << "(queue reached " << params.max_subscriber_backlog
+                          << " entries)";
             continue;
         }
 
