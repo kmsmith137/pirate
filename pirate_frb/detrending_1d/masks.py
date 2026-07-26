@@ -1,19 +1,28 @@
 """
 Randomized mask generation for the detrender tests.
 
-random_mask() draws a shape (M,T) boolean mask by choosing a *type* independently
-for each of the M rows, then randomizing that type's parameters.  Rows are
+random_mask() draws a shape (M,T) boolean mask by choosing a base *type*
+independently for each of the M rows, randomizing that type's parameters, and
+then perturbing the result with a random set of fully-masked / fully-valid
+subintervals (see _perturb).  Rows are
 therefore independent, which matches the real data layout (every (beam,freq) pair
 has its own RFI mask) and exercises the spectator axis rather than replicating one
 pattern across it.
 
-All-valid is deliberately given 50% of the probability mass: it is by far the most
-common case in real data, and it is also the case where the estimator has exact
-analytic properties (symmetric window => S_odd = 0 => checkerboard Gram), so it is
-worth hitting often.  The remaining 50% is spread over the geometries that broke
-earlier candidate algorithms -- long gaps, one-sided windows, narrow off-center
-clusters, and fully masked scan blocks (see the appendix of
-notes/tree_dedispersion.tex).
+All-valid gets 50% of the *base* probability mass: it is by far the most common
+case in real data, and it is the case where the estimator has exact analytic
+properties (symmetric window => S_odd = 0 => checkerboard Gram), so it is worth
+hitting often.  The remaining 50% is spread over the geometries that broke earlier
+candidate algorithms -- long gaps, one-sided windows, narrow off-center clusters,
+and fully masked scan blocks (see the appendix of notes/tree_dedispersion.tex).
+
+Note that the perturbation erodes this considerably: a base all-valid row survives
+intact only if none of its N stamps is a masking stamp, which has probability
+1/(N+1) averaged over p, or H_21/21 = 0.174 averaged over N as well.  So only
+about 50% * 0.174 = 9% of rows come out fully valid, and the measured figure is
+about 10%.  That is a consequence of the specified procedure rather than a
+tuning choice, and it is recorded here because the 50% figure above no longer
+describes the output distribution.
 
 Note that a single cluster in a length-T array automatically sweeps the whole
 range of within-window offsets as the window slides past it, so the cluster
@@ -135,6 +144,41 @@ def _sparse_lattice(T, W, rng):
     return m
 
 
+def _perturb(m, T, W, rng):
+    """
+    Stamp N random subintervals over the base mask, each set entirely masked or
+    entirely valid.  Applied in sequence, so later stamps overwrite earlier ones;
+    that is what produces nested structure, e.g. a short island of valid samples
+    inside a long masked stretch.
+
+        N  = uniform_int(0, 20)
+        p  = uniform_float(0, 1)                    (one draw per row)
+        u  = uniform_float(-1, -T^(-1/3))           (per stamp)
+        nt = floor(-u^-3)                           in [1, T]
+
+    Since u < 0, -u^-3 = 1/|u|^3, which is how it is evaluated below (a negative
+    base with a float exponent is not well defined in numpy).  With |u| uniform
+    on (T^(-1/3), 1), the interval length nt follows a power law:
+    P(nt > x) = (x^(-1/3) - T^(-1/3)) / (1 - T^(-1/3)), so most stamps are a few
+    samples long and a few span a large fraction of the array.  The 1/3 exponent
+    is empirical -- it is simply what looked right on inspection.
+
+    p is drawn once per row rather than per stamp, so a row tends to be either
+    mostly-masking or mostly-unmasking rather than a wash.
+    """
+    if T <= 1:
+        return m
+    N = int(rng.integers(0, 21))            # uniform_int(0,20), 20 inclusive
+    p = rng.uniform(0.0, 1.0)
+    u_hi = -(T ** (-1.0/3.0))
+    for _ in range(N):
+        u = rng.uniform(-1.0, u_hi)
+        nt = int(np.clip(np.floor(1.0 / abs(u)**3), 1, T))
+        start = int(rng.integers(0, T - nt + 1))
+        m[start:start+nt] = (rng.random() >= p)
+    return m
+
+
 # name, probability, builder
 MASK_TYPES = (
     ('all-valid',      0.50, _all_valid),
@@ -165,6 +209,6 @@ def random_mask(M, T, W, rng):
     labels = []
     for i, k in enumerate(picks):
         name, _, builder = MASK_TYPES[k]
-        mask[i] = builder(T, W, rng)
+        mask[i] = _perturb(builder(T, W, rng), T, W, rng)
         labels.append(name)
     return mask, labels
