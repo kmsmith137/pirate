@@ -63,8 +63,10 @@ namespace pirate {
 //     receiver IP and sends the protocol header (magic + flags + YAML
 //     metadata).
 //   - On every SEND_JUNK, sends one minichunk: a 12-byte header (uint32
-//     magic + uint64 seq) followed by a shape-(nbeams, nfreq, 256) int4
-//     data array (all zeros -- "junk"). The wire seq is derived from
+//     magic + uint64 seq), followed by a shape-(nbeams, nfreq, 2) float16
+//     scales/offsets block (nbeams*nfreq*4 bytes), followed by a
+//     shape-(nbeams, nfreq, 256) int4 data array (nbeams*nfreq*128 bytes,
+//     all zeros -- "junk"). The wire seq is derived from
 //     Command::minichunk_index.
 //
 // Workers are assigned round-robin to IP addresses (nworkers must be a
@@ -109,7 +111,11 @@ namespace pirate {
 // Usage:
 //   with ThreadAffinity(vcpu_list):
 //       fxe = FakeXEngine(xmd, {"10.0.0.2:5000", "10.0.1.2:5000"}, 64,
-//                         /*time_samples_per_chunk=*/32768)
+//                         /*time_samples_per_chunk=*/32768,
+//                         /*rpc_address=*/"10.0.0.2:6000")
+//       # paced defaults to true, and paced mode REQUIRES a non-empty
+//       # rpc_address (the constructor throws otherwise). Pass paced=false
+//       # for a server-less run.
 //       # Spawn a controller thread (under the same affinity) that calls
 //       # fxe.enqueue_send_junk / fxe.wait_until_processed in a loop.
 //   ...

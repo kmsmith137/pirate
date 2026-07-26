@@ -17,12 +17,16 @@ documentation snapshots (do not edit them by hand; regenerate by running
   `-t` for plan-construction timing; the default output is reproducible.
 
 - **`dedispersion/`** -- GPU dedispersion pipeline configs (frequency zones, tree rank,
-  downsampling levels, peak-finding parameters, batching, etc.). Used by two subcommands:
+  downsampling levels, peak-finding parameters, batching, etc.). Used by several
+  subcommands, most directly:
 
   - `pirate_frb show_dedisperser [-v] [-c] configs/dedispersion/chime.yml`
     -- parse and pretty-print the plan (add `-c` to also print the config).
   - `pirate_frb time_dedisperser [-n NITER] configs/dedispersion/chime.yml`
     -- run GPU timing benchmarks.
+
+  They are also the second positional argument to `run_server` (see below), and are
+  consumed by `run_offline_dedisperser`, `check_avar_approximation`, and `check_avar_mc`.
 
   `toy.yml` is a subscale config for quick testing; the remaining files are
   production-scale configs for CHIME and CHORD (with subband/early-trigger variants).
@@ -38,7 +42,8 @@ documentation snapshots (do not edit them by hand; regenerate by running
   pirate_frb run_fake_xengine 127.0.0.1:6000   # send fake X-engine data
   ```
 
-  `toy.yml` runs a single server on loopback for local testing;
+  `toy.yml` runs a single server on loopback for local testing; `toy2.yml` is the
+  same but with two receivers on the single server;
   `cf05_production.yml` is a multi-server production config.
 
 - **`hwtest/`** -- Hardware stress-test configs that drive parallel synthetic loads
@@ -56,7 +61,8 @@ documentation snapshots (do not edit them by hand; regenerate by running
   run on their own.
 
 - **`xengine_metadata.yml`** (top-level file) -- X-engine metadata defining the
-  frequency-zone layout, beam configuration, and initial time sample. This file
+  frequency-zone layout, beam configuration, FPGA timekeeping (seq epoch and tick
+  rate), telescope alignment/localization, and per-zone noise variance. This file
   serves double duty:
 
   1. It documents the metadata YAML string that each X-engine node sends at the

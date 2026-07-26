@@ -17,8 +17,9 @@ class Hardware:
     with each FrbServer instance. This is all currently done from python. To dump
     what it discovers on the current machine, run 'pirate_frb show_hardware'.
 
-    The constructor takes no arguments and does no work: every accessor is a
-    cached_property, so the underlying system queries run on first use.
+    The constructor takes no arguments and does no work: every accessor is cached
+    (functools.cached_property for the no-argument ones, functools.cache for the
+    parameterized ones), so the underlying system queries run on first use.
 
     This code is currently pretty terrible -- feel free to improve it.
     """

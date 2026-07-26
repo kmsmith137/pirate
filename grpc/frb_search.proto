@@ -54,7 +54,7 @@ service FrbSearch {
   // chooses only the acquisition directory 'acqdir'.
   //
   // The range may extend into the future ("future writes"): chunks not yet
-  // processed are scheduled automatically, up to the server config's
+  // processed are scheduled automatically, up to the dedispersion config's
   // future_write_max_samples (rounded up to a whole chunk) past the current
   // processing threshold (GetStatusResponse.rb_streamed); the excess is
   // silently truncated. Future files appear in filename_list immediately,

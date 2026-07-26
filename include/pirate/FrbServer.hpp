@@ -150,7 +150,7 @@ struct FrbServer
         bool no_dedispersion = false;
 
         // If true, suppress the per-chunk "FrbServer: beamset=..." stdout line
-        // (printed once per fully-assembled chunk). Everything else is unaffected.
+        // (printed once per fully-processed chunk). Everything else is unaffected.
         // Set true by callers that would otherwise be swamped by per-chunk output
         // (e.g. the ephemeral test server, which assembles hundreds of chunks).
         bool quiet = false;

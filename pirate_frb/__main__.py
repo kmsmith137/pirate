@@ -150,7 +150,6 @@ def test(args):
             chime.test_chime_frb_upchan()
 
         if run_all_tests or args.zomb:
-            # print()
             loose_ends.test_avx2_m64_outbuf()
             loose_ends.test_cpu_downsampler()
             loose_ends.test_gpu_downsample()
@@ -1612,7 +1611,7 @@ def parse_run_server(subparsers):
                              'Implies --no-grouper. Infrequently used corner case.')
     parser.add_argument('-q', '--quiet', action='store_true',
                         help='Suppress the per-chunk "FrbServer: beamset=..." line '
-                             '(printed once per assembled time chunk).')
+                             '(printed once per fully-processed time chunk).')
 
 
 def run_server_command(args):
@@ -1649,7 +1648,7 @@ def parse_run_toy_grouper(subparsers):
     # Exactly one of -s/-S is required.
     sifter_group = parser.add_mutually_exclusive_group(required=True)
     sifter_group.add_argument('-s', '--sifter', metavar='SIFTER_ADDR',
-                              help="Report to the FrbSifter at this 'ip:port' (e.g. 127.0.0.1:7100):")
+                              help="Report to the FrbSifter at this 'ip:port' (e.g. 127.0.0.1:7100).")
     sifter_group.add_argument('-S', '--no-sifter', action='store_true',
                               help="Run without a sifter (don't send any sifter RPCs).")
 

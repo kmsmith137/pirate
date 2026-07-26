@@ -9,7 +9,8 @@
 
 # Overrideable params: frequency channels, time sample length, number of beams.
 # In a fully "production" context, these parameters get overridden by the real-time X-engine.
-# In testing contexts (e.g. fake X-engine, test_dedisperser) these parameters are used "as is".
+# In testing contexts (e.g. fake X-engine, 'pirate_frb show_dedisperser' / 'time_dedisperser')
+# these parameters are used "as is".
 
 zone_freq_edges: [300, 350, 450, 600, 800, 1500]
 zone_nfreq: [ 8192, 8192, 6144, 2048, 3584 ]   # U = 32,16,8,4,1 (28160 freq channels total)
@@ -69,6 +70,6 @@ primary_trees:
 # In this config, early triggers may extend 448*1024 samples into the future.
 # We add an extra ~5K samples, in case padding is desired.
 # Note: the 'max_samples' bound only applies to WriteFiles requests.
-# StartStreams requests can extend arbitrarily far into the future.
+# StartStream requests can extend arbitrarily far into the future.
 
 future_write_max_samples: 464000

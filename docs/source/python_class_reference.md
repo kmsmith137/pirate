@@ -29,7 +29,9 @@ classes/GpuGrouperHistogram
 classes/GrouperHistogram
 classes/Hardware
 classes/OfflineDedisperser
+classes/PrimaryTree
 classes/Receiver
+classes/ReferenceDedisperser
 classes/SimulatedFrameFactory
 classes/SlabAllocator
 classes/ThreadAffinity

@@ -441,7 +441,7 @@ class RunServerHelper:
                 # _print_help_lines omits the grouper line -- once the servers are
                 # running, the grouper is necessarily already up), then re-raise.
                 grouper_addrs = ' '.join(self.config['grouper_ip_addrs'])
-                atomic_print(f"\nTo start toy grouper(s):  pirate_frb run_toy_grouper [-s SIFTER_ADDR] {grouper_addrs}\n\n")
+                atomic_print(f"\nTo start toy grouper(s):  pirate_frb run_toy_grouper (-s SIFTER_ADDR | -S) {grouper_addrs}\n\n")
                 raise
 
         # Phase 2: wait for all 2 * num_servers async BumpAllocators to
@@ -681,7 +681,7 @@ def run_server(server_config_filename, dedispersion_config_filename,
     still runs in full. Infrequently used corner case. Implies no_grouper.
 
     quiet (default False): if True, suppress the per-chunk "FrbServer:
-    beamset=..." stdout line (one per assembled chunk) on every server.
+    beamset=..." stdout line (one per fully-processed chunk) on every server.
     """
     helper = RunServerHelper(server_config_filename, dedispersion_config_filename,
                              processing_delay_sec=processing_delay_sec,

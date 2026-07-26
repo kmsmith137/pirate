@@ -3,9 +3,11 @@
 Some notes/caveats:
 
   - This repo contains real-time server code (network receive, ring buffering,
-    file-writing RPCs) and GPU dedispersion code, but currently the **dedispersion
-    output is not correctly normalized, and looks like random noise**!
-    Fixing this is my top priority.
+    file-writing RPCs) and GPU dedispersion code. Peak-finding output is
+    normalized to an SNR: the server calls `GpuDedisperser::fill_analytic_weights()`
+    with per-channel noise variances derived from the X-engine metadata.
+    Real-time RFI masking is still not implemented (see below), so SNRs from
+    real data won't be trustworthy until it is.
 
   - Currently, this code can only be compiled on a recent ubuntu
     linux machine with **a physical GPU**, and the cuda toolkit installed.
@@ -26,9 +28,9 @@ Pirate is a real-time FRB search written in C++ / cuda / python.
     The FRB search "dynamically" configures itself when this data is
     received from the X-engine.
 
-    (However, not all configuration is dynamic -- the FRB search will
-    have its own config file, which contains parameters that don't affect
-    the X-engine.)
+    (However, not all configuration is dynamic -- the FRB search has its own
+    config files (see `configs/frb_server/` and `configs/dedispersion/`), which
+    contain parameters that don't affect the X-engine.)
 
   - Most code is written in C++/cuda, but exported to python via pybind11.
     (The python module is named `pirate_frb`, since `pirate` was already

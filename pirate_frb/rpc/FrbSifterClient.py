@@ -16,7 +16,9 @@ from ..utils import atomic_print
 class FrbSifterEvents:
     """Helper class, representing FRB events to send to the sifter.
 
-    Returned by FrbGrouper.create_events(), and passed to FrbSifterClient.send_events().
+    Returned by FrbGrouper.create_events() (real search events) or
+    SimulatedFrameFactory.pop_events() (simulated ones), and passed to
+    FrbSifterClient.send_events().
 
     Attributes (numpy arrays, shapes must be equal):
     
@@ -113,11 +115,13 @@ class FrbSifterEvents:
 
 class FrbSifterClient:
     """
-    The FrbSifterClient manages grouper-sifter communication (from the grouper side).
+    Pirate's client side of the grouper -> sifter protocol (frb_sifter.proto).
 
-    The grouper sends two types of messages to the sifter: a ConfigMessage
-    (sent once), and FrbEventsMessages (sent once per FPGA window, typically
-    one per time chunk).
+    Two senders use it: the grouper (real search events, from_simulator=False),
+    and the fake X-engine, which sends a parallel stream of "ideal" simulated
+    events (from_simulator=True) so the sifter can compare the two. Either way
+    the client sends a ConfigMessage once, then one FrbEventsMessage per FPGA
+    window (typically one per time chunk).
 
     If FrbSifterClient is used as a context manager, then close() is automatically called.
 

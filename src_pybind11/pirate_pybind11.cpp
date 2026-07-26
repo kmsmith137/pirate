@@ -404,8 +404,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "True for plans built by make_incomplete_plan_from_yaml()")
           .def_property_readonly("gpu_runnable",
                [](const DedispersionPlan &self) { return self.params.gpu_runnable; },
-               "False if the plan was constructed with gpu_runnable=False (default Dcore\n"
-               "values, not usable in a GpuDedisperser); see the constructor docstring.")
+               "False if the plan was constructed as DedispersionPlan(config,\n"
+               "gpu_runnable=False): per-tree Dcore values are defaults rather than cdd2\n"
+               "kernel-registry values, so the plan cannot be used in a GpuDedisperser.\n"
+               "Useful in host-only contexts, such as the 'pirate_frb show_dedisperser' CLI.")
           .def("decode_argmax_batch", &_decode_argmax_batch,
                py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
                "Vectorized decode_argmax() over 1-d nonempty arrays (one event per element;\n"
@@ -617,13 +619,15 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "                         tree_domain_input=False)\n"
         "\n"
         "'sophistication' (0, 1, or 2) selects the reference implementation:\n"
-        "  0 -- one-stage dedispersion (instead of two stages); in downsampled trees,\n"
-        "       compute twice as many DMs as necessary then drop the bottom half; each\n"
-        "       early trigger is a separate tree (disregarding some input channels).\n"
-        "  1 -- the same two-stage tree/lag structure as the plan; lags applied with a\n"
-        "       per-tree ReferenceLagbuf (not ring/staging buffers); lags split into\n"
-        "       segments + residuals, but not further split into chunks.\n"
-        "  2 -- as close to the GPU implementation as possible.\n"
+        "\n"
+        "* 0 -- one-stage dedispersion (instead of two stages); in downsampled trees,\n"
+        "  compute twice as many DMs as necessary then drop the bottom half; each\n"
+        "  early trigger is a separate tree (disregarding some input channels).\n"
+        "* 1 -- the same two-stage tree/lag structure as the plan; lags applied with a\n"
+        "  per-tree ReferenceLagbuf (not ring/staging buffers); lags split into\n"
+        "  segments + residuals, but not further split into chunks.\n"
+        "* 2 -- as close to the GPU implementation as possible.\n"
+        "\n"
         "All three produce the same peak-finding output, modulo float roundoff.\n"
         "\n"
         "The per-tree peak-finder Dcore values come from the plan (filled from the cdd2\n"

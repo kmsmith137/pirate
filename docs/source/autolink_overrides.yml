@@ -48,6 +48,10 @@ deny:
   # in FrbSearchClient's write_files/start_stream parameter docstrings.
   - keyword: Acquisition
     page: classes/FrbSearchClient
+  # "Hardware stress-test configs" (the English word, describing configs/hwtest/)
+  # collides with the Hardware class.
+  - keyword: Hardware
+    page: configs/README
 
 policy:
   # every | first_per_section | first_per_page. Currently 'every' is not yet

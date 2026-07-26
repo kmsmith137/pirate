@@ -83,6 +83,14 @@ message FrbEvent {
 // of events with from_simulator=true. Thus, the sifter can use this flag to
 // compare the actual outcome of the search (from_simulator=false) to the
 // ideal outcome (from simulator=true).
+//
+// Note: unlike the other request messages in the pirate protos, this one carries
+// no protocol_version field (see notes/grpc.md, "Every unary RPC should include
+// the version number"). That is deliberate and safe here: CheckConfiguration is
+// a mandatory first call, and its ConfigMessage.protocol_version version-gates
+// the whole session, so by the time any FrbEventsMessage is sent the versions
+// have already been agreed. Repeating it once per time chunk would be pure
+// overhead on the hottest message in this proto.
 
 message FrbEventsMessage {
   bool from_simulator = 1;

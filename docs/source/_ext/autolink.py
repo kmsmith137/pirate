@@ -64,7 +64,10 @@ _CAMEL_RE = re.compile(r'\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b')
 _ADVISORY_IGNORE = {
     'RuntimeError', 'ValueError', 'TypeError', 'KeyError', 'IndexError',
     'KeyboardInterrupt', 'NotImplementedError', 'FileNotFoundError',
-    'RpcError', 'NumPy', 'GitHub',
+    'StopIteration',
+    'RpcError', 'StatusCode', 'NumPy', 'GitHub',
+    # grpc C++ API method names (notes/grpc.md), never pirate doc pages.
+    'AddListeningPort', 'BuildAndStart',
 }
 _ADVISORY_IGNORE_SUFFIXES = ('Request', 'Response', 'Message', 'Messages')
 

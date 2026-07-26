@@ -216,8 +216,8 @@ class FrbSearchClient:
         where nfs_root comes from the server config (self.config.nfs_dir).
 
         The range may extend into the future ("future writes"): chunks not
-        yet processed are scheduled automatically, up to the server config's
-        future_write_max_samples (rounded up to a whole chunk) past the
+        yet processed are scheduled automatically, up to the dedispersion
+        config's future_write_max_samples (rounded up to a whole chunk) past the
         current processing threshold (get_status().rb_streamed); the excess
         is silently truncated. Future files appear in the returned list
         immediately -- the list is a promise whose tail lands later -- and

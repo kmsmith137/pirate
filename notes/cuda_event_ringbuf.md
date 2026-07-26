@@ -11,7 +11,11 @@ Each event has a `seq_id = 0,1,...` which must be consecutive.
 ```
 struct CudaEventRingbuf
 {
-    CudaEventRingbuf(const std::string &name, int nconsumers, long max_size=1000);
+    // blocking_sync=true: synchronize() parks in cudaEventSynchronize(), which
+    // stop() cannot interrupt. See the note on the constructor in CudaEventRingbuf.hpp.
+    CudaEventRingbuf(const std::string &name, int nconsumers,
+                     long max_size = default_size,   // default_size = 1000
+                     bool blocking_sync = true);
 
     // Producer: records a cuda event from 'stream', and saves it in the ring buffer.
     // If there is no room in the ring buffer, then the 'blocking' argument determines

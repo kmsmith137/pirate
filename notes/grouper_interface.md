@@ -38,11 +38,13 @@ such as `--histogram` are deliberately omitted here):
 
 # The FrbGrouper context manager blocks until 'pirate' connects and sends metadata.
 # WARNING: don't touch the gpu (e.g. by allocating memory with cupy) until you enter
-# the context manager. See 'FrbGrouper context manager' below
+# the context manager. See 'FrbGrouper context manager' below.
 
-with FrbGrouper(grouper_addr, restore_cuda_device=False) as grouper:
-    sifter = FrbSifterClient(sifter_addr)
-    
+# Create and enter context managers for the sifter client and grouper.
+sifter_cm = FrbSifterClient(sifter_addr)
+grouper_cm = FrbGrouper(grouper_addr, restore_cuda_device=False)
+
+with sifter_cm as sifter, grouper_cm as grouper:
     # Send the ConfigMessage to the sifter (this is only done once).
     sifter.send_configuration(
         pirate_yaml = grouper.dedispersion_config_yaml_string,
@@ -119,9 +121,10 @@ with FrbGrouper(grouper_addr, restore_cuda_device=False) as grouper:
                                        per_beam_max[ibeam], per_beam_token[ibeam])
 
         coarse_snr_max = float(per_beam_max.max())
-        print(f'toy_grouper: beamset={beam_set_id}, ichunk={ichunk}, '
-              f'fpga=[{events.chunk_fpga_start}:{events.chunk_fpga_end}], '
-              f'coarse_snr_max={coarse_snr_max:.4g}, nevents={len(events)}', flush=True)
+
+        atomic_print(f'toy_grouper: beamset={beam_set_id}, ichunk={ichunk}, '
+                     f'fpga=[{events.chunk_fpga_start}:{events.chunk_fpga_end}], '
+                     f'coarse_snr_max={coarse_snr_max:.4g}, nevents={len(events)}')
 
         # Send the FrbEventsMessage (even if nevents==0).
         sifter.send_events(

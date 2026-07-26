@@ -277,8 +277,10 @@ private:
     // this is safe because the assembler itself is the only writer.
     //
     // The Receiver incrementally receives a data "cube" indexed by (beam, freq, time).
-    // Time indices are divided into "chunks" (of size Params::time_samples_per_chunk),
-    // and further subdivided into 256-sample "minichunks".
+    // Time indices are divided into "chunks" (of size
+    // AssembledFrameAllocator::Params::time_samples_per_chunk -- the chunk size
+    // comes from the allocator, not from Receiver::Params), and further
+    // subdivided into 256-sample "minichunks".
     //
     // At any time, the Receiver holds a two-chunk subset of the data cube.
     // When the first bit of data is received for chunk N, it evicts chunk (N-2).

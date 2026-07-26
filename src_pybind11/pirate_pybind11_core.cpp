@@ -256,8 +256,10 @@ void register_core_bindings(pybind11::module &m)
         "    # is used for the AssembledFrameAllocator and the dedisperser.\n"
         "    server = FrbServer(dedisp_config, receivers, file_writer, rpc_addr,\n"
         "                       ringbuf_nchunks,\n"
+        "                       min_data_mtu=min_data_mtu,\n"
         "                       host_allocator=host_bump,\n"
         "                       gpu_allocator=gpu_alloc,\n"
+        "                       cuda_device_id=cuda_device_id,\n"
         "                       shared_host_allocator=True)\n\n"
         "Modes:\n"
         "  - SlabAllocator(bump_allocator): slabs are carved on demand from\n"
@@ -268,7 +270,9 @@ void register_core_bindings(pybind11::module &m)
             py::arg("bump_allocator"),
             "Create allocator that carves slabs from a BumpAllocator on demand.\n\n"
             "Args:\n"
-            "    bump_allocator: Source of memory (must not be in dummy mode)\n\n"
+            "    bump_allocator: Source of memory (must not be in dummy mode, and must\n"
+            "        be host-accessible -- af_gpu is rejected, since the free list is\n"
+            "        threaded through the slabs themselves)\n\n"
             "There is no up-front carve: the SlabAllocator draws from the\n"
             "BumpAllocator one slab at a time until it is exhausted. If the\n"
             "BumpAllocator is async, the constructor still returns immediately;\n"
@@ -298,8 +302,9 @@ void register_core_bindings(pybind11::module &m)
         "The data is stored in its raw binary format (int4, special value -8 indicates\n"
         "masked data, float16 offsets/scales at lower resolution). Most python callers\n"
         "will want to convert to float32 by calling dequantize().\n\n"
-        "Obtained from AssembledFrameSet.get_frame(), from an Acquisition (offline,\n"
-        "reading .asdf files from an acqdir), or from AssembledFrame.from_asdf().")
+        "Obtained from AssembledFrameSet.get_frame(), or offline from\n"
+        "AssembledFrame.from_asdf(filename) -- e.g. on the filenames enumerated by an\n"
+        "Acquisition (Acquisition.per_beam_filenames).")
         .def_readonly("nfreq", &AssembledFrame::nfreq,
             "Number of frequency channels.")
         .def_readonly("ntime", &AssembledFrame::ntime,
@@ -423,7 +428,8 @@ void register_core_bindings(pybind11::module &m)
         "For example, the main loop in run_fake_xengine.py gets AssembledFrameSets from\n"
         "a SimulatedFrameFactory, and passes them to a FakeXEngine (for sending to an\n"
         "FrbServer).\n\n"
-        "Obtained from SimulatedFrameFactory.get_frame_set() or\n"
+        "Obtained from Receiver.get_frame_set() (the real-time path),\n"
+        "SimulatedFrameFactory.get_frame_set(), or\n"
         "AssembledFrameAllocator.get_frame_set().")
         .def_readonly("nfreq", &AssembledFrameSet::nfreq)
         .def_readonly("ntime", &AssembledFrameSet::ntime)
@@ -473,8 +479,10 @@ void register_core_bindings(pybind11::module &m)
         "    gpu_alloc = BumpAllocator(gpu_aflags, gpu_nbytes, is_async=True)\n"
         "    server = FrbServer(dedisp_config, receivers, file_writer, rpc_addr,\n"
         "                       ringbuf_nchunks,\n"
+        "                       min_data_mtu=min_data_mtu,\n"
         "                       host_allocator=host_bump,\n"
         "                       gpu_allocator=gpu_alloc,\n"
+        "                       cuda_device_id=cuda_device_id,\n"
         "                       shared_host_allocator=True)\n\n"
         "Example (from run_fake_xengine.py -- a single SimulatedFrameFactory consumer,\n"
         "which is expected to outrun the allocator's worker, so it opts out of\n"
@@ -541,7 +549,7 @@ void register_core_bindings(pybind11::module &m)
             py::arg("metadata"),
             "Set the canonical XEngineMetadata on the allocator. The first call\n"
             "stores the metadata (with freq_channels cleared); subsequent calls\n"
-            "validate consistency via XEngineMetadata.check_sender_consistency.\n"
+            "validate consistency across senders (C++ XEngineMetadata::check_sender_consistency).\n"
             "Typically called by each Receiver's reader thread as it parses a\n"
             "peer's YAML, so many calls per allocator are expected.")
         .def("initialize_initial_chunk", &AssembledFrameAllocator::initialize_initial_chunk,
@@ -608,7 +616,7 @@ void register_core_bindings(pybind11::module &m)
             "scales_offsets and data each cache-line aligned. Matches the\n"
             "worker thread's frames exactly -- use it (times nbeams) to size a slab\n"
             "pool for AssembledFrameSets. Static: callable without an instance.\n"
-            "Throws unless time_samples_per_chunk is a positive multiple of 256.")
+            "Throws unless nfreq > 0 and time_samples_per_chunk is a positive multiple of 256.")
     ;
 
     // SimulatedFrameFactory::Event: one recorded FRB-injection event. Bound as a top-level
@@ -901,13 +909,15 @@ void register_core_bindings(pybind11::module &m)
 
     // DedispersionConfig::PrimaryTree (nested struct)
     py::class_<DedispersionConfig::PrimaryTree>(m, "PrimaryTree",
-        "Configuration of a single primary tree (one DM range searched).\n\n"
-        "A primary tree is expanded into (num_early_triggers+1) dedispersion trees:\n"
-        "the main full-band tree, plus one early-trigger tree for each\n"
-        "early_trigger_level = 1..num_early_triggers. The remaining members define the maximum\n"
-        "width for peak detection and downsampling factors for both the coarse-grained\n"
-        "and weights arrays relative to tree resolution. All numeric members must be\n"
-        "powers of two.")
+        "Helper class for DedispersionConfig (one element of the 'primary_trees' member).\n\n"
+        "DedispersionConfig.primary_trees is a list of PrimaryTrees. Each PrimaryTree is a\n"
+        "\"dataclass\" with six members as shown below. (See also\n"
+        "configs/dedispersion/chord_sb2_et.yml for yaml representation.)\n\n"
+        "Constructed either with default (zero) values::\n\n"
+        "    pt = PrimaryTree()\n\n"
+        "or with all six members::\n\n"
+        "    pt = PrimaryTree(num_early_triggers, max_width, dm_downsampling,\n"
+        "                     time_downsampling, wt_dm_downsampling, wt_time_downsampling)")
           .def(py::init<>(),
                "Create a PrimaryTree with default (zero) values.")
           .def(py::init([](long num_early_triggers, long max_width, long dm_downsampling,
@@ -1158,7 +1168,9 @@ void register_core_bindings(pybind11::module &m)
         "    xmd = XEngineMetadata.from_yaml_file('...')\n"
         "    with ThreadAffinity(vcpu_list):\n"
         "        fxe = FakeXEngine(xmd, ['10.0.0.2:5000', '10.0.1.2:5000'], 64,\n"
-        "                          time_samples_per_chunk=32768)\n"
+        "                          time_samples_per_chunk=32768,\n"
+        "                          rpc_address='10.0.0.2:6000')  # paced=True (default)\n"
+        "                                                        # requires an rpc_address\n"
         "        # Spawn a controller thread (under the same affinity) that\n"
         "        # calls fxe.enqueue_send_junk / fxe.wait_until_processed in a loop.\n"
         "    # ... wait ...\n"
@@ -1402,8 +1414,8 @@ void register_core_bindings(pybind11::module &m)
                "the caller observes it (the worker thread or an ack may have\n"
                "advanced the state). Does NOT throw on a stopped FakeXEngine.\n\n"
                "Example::\n\n"
-               "    fxe = FakeXEngine(xmd, ip_addrs, 1,\n"
-               "                      time_samples_per_chunk=32768, debug=True)\n"
+               "    fxe = FakeXEngine(xmd, ip_addrs, 1, time_samples_per_chunk=32768,\n"
+               "                      debug=True, paced=False)\n"
                "    fxe.enqueue_send_junk(0, 0)\n"
                "    fxe.synchronize(0)\n"
                "    s = fxe.get_minichunk_status(0, 0)\n"
@@ -1418,7 +1430,7 @@ void register_core_bindings(pybind11::module &m)
                "    minichunk_index is out of range.")
           .def("get_debug_counters", &FakeXEngine::get_debug_counters,
                "Snapshot the four ack-prediction outcome counters as a\n"
-               "tuple (length 4). Indices::\n\n"
+               "length-4 list of ints. Indices::\n\n"
                "    [0] unambiguous, DROPPED   (predicted + got DROPPED)\n"
                "    [1] unambiguous, ASSEMBLED (predicted + got ASSEMBLED)\n"
                "    [2] ambiguous,   DROPPED   (no prediction; got DROPPED)\n"
@@ -1438,9 +1450,11 @@ void register_core_bindings(pybind11::module &m)
                "Monotone: a stale value only understates server progress (0\n"
                "before any data has flowed). -1 when paced=False. Use to bound\n"
                "SKIP jumps, which bypass the pacing gate: a skip that lands more\n"
-               "than (max_unprocessed_chunks - 2) chunks past rb_processed //\n"
+               "than (max_unprocessed_chunks - 3) chunks past rb_processed //\n"
                "nbeams can trip the server's keep-up bound when the next send\n"
-               "fast-forwards assembly of the skipped span. Does NOT throw.")
+               "fast-forwards assembly of the skipped span (the view is only a\n"
+               "LOWER bound, and the receivers' 2-chunk assembly window adds\n"
+               "slop). Does NOT throw.")
           .def("get_worker_freq_channels",
                &FakeXEngine::get_worker_freq_channels,
                py::arg("worker_id"),
@@ -1529,8 +1543,10 @@ void register_core_bindings(pybind11::module &m)
         "    receivers = [Receiver(address=a, allocator=allocator) for a in addrs]\n"
         "    server = FrbServer(dedisp_config, receivers, file_writer, rpc_addr,\n"
         "                       ringbuf_nchunks,\n"
+        "                       min_data_mtu=min_data_mtu,\n"
         "                       host_allocator=host_bump,\n"
         "                       gpu_allocator=gpu_alloc,\n"
+        "                       cuda_device_id=cuda_device_id,\n"
         "                       shared_host_allocator=True)\n"
         "    server.start()   # this is what starts each Receiver's worker threads")
           .def(py::init([](const std::string &address,
@@ -1607,8 +1623,10 @@ void register_core_bindings(pybind11::module &m)
         "    grouper_client.ping()   # fail fast if the grouper isn't running\n"
         "    server = FrbServer(dedisp_config, receivers, file_writer, rpc_addr,\n"
         "                       ringbuf_nchunks,\n"
+        "                       min_data_mtu=min_data_mtu,\n"
         "                       host_allocator=host_bump,\n"
         "                       gpu_allocator=gpu_alloc,\n"
+        "                       cuda_device_id=cuda_device_id,\n"
         "                       grouper_client=grouper_client,\n"
         "                       shared_host_allocator=True)")
           .def(py::init([](const std::string &grouper_ip_addr) {
@@ -1650,12 +1668,14 @@ void register_core_bindings(pybind11::module &m)
         "                                        num_consumers=len(addrs),\n"
         "                                        time_samples_per_chunk=nt_chunk)\n"
         "    receivers = [Receiver(address=a, allocator=allocator) for a in addrs]\n"
-        "    file_writer = FileWriter(ssd_dirs, nfs_dir)\n"
+        "    file_writer = FileWriter(ssd_dir, nfs_dir)\n"
         "    grouper_client = FrbGrouperClient(grouper_ip_addr)\n\n"
         "    server = FrbServer(dedisp_config, receivers, file_writer, rpc_addr,\n"
         "                       ringbuf_nchunks,\n"
+        "                       min_data_mtu=min_data_mtu,\n"
         "                       host_allocator=host_bump,\n"
         "                       gpu_allocator=gpu_alloc,\n"
+        "                       cuda_device_id=cuda_device_id,\n"
         "                       grouper_client=grouper_client,\n"
         "                       shared_host_allocator=True)\n"
         "    server.start()\n"
@@ -1750,7 +1770,7 @@ void register_core_bindings(pybind11::module &m)
                "        GpuDedisperser. 0 = num_active_batches. If nonzero, must be\n"
                "        >= num_active_batches. Only used by unit tests.\n"
                "    quiet (default False): if True, suppress the per-chunk\n"
-               "        'FrbServer: beamset=...' stdout line (one per assembled\n"
+               "        'FrbServer: beamset=...' stdout line (one per fully-processed\n"
                "        chunk). Everything else is unaffected.\n"
                "    max_unprocessed_chunks (default\n"
                "        constants.default_server_max_unprocessed_chunks = 5): keep-up\n"
@@ -1768,7 +1788,12 @@ void register_core_bindings(pybind11::module &m)
                "        otherwise fail spuriously under concurrent slab carving.\n"
                "        Leave False when host_allocator is dedicated (unit tests).")
           .def("start", &FrbServer::start,
-               "Start all Receivers.\n\n"
+               "Start the server: bind the gRPC RPC server, and spawn the receiver,\n"
+               "reaper, processing and frame-finalizing threads.\n\n"
+               "Without a grouper_client, the Receivers are started here. With a\n"
+               "grouper_client they are NOT started here: the grouper send thread\n"
+               "starts them once the grouper connection is established, so no data is\n"
+               "ingested until the grouper is connected.\n\n"
                "Raises:\n"
                "    RuntimeError: If called twice or after stop().")
           .def("stop", [](FrbServer &self) { self.stop(); },
@@ -1949,13 +1974,15 @@ void register_core_bindings(pybind11::module &m)
         "rather than calling its methods: the FrbServer drives the writes, which are\n"
         "triggered by WriteFiles / StartStream RPCs.\n\n"
         "Example from run_server.py::\n\n"
-        "    file_writer = FileWriter(ssd_dirs, nfs_dir,\n"
+        "    file_writer = FileWriter(ssd_dir, nfs_dir,\n"
         "                             num_ssd_threads=ssd_threads_per_server,\n"
         "                             num_nfs_threads=nfs_threads_per_server)\n"
         "    server = FrbServer(dedisp_config, receivers, file_writer, rpc_addr,\n"
         "                       ringbuf_nchunks,\n"
+        "                       min_data_mtu=min_data_mtu,\n"
         "                       host_allocator=host_bump,\n"
         "                       gpu_allocator=gpu_alloc,\n"
+        "                       cuda_device_id=cuda_device_id,\n"
         "                       shared_host_allocator=True)")
           .def(py::init([](const std::string &ssd_root, const std::string &nfs_root,
                            int num_ssd_threads, int num_nfs_threads,

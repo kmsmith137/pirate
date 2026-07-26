@@ -1,13 +1,4 @@
-"""FrbGrouper method injections, plus re-export of the pybind11 class.
-
-The injections are the context-manager usage and get_output().
-
-Per the per-class injection convention (see notes/pybind11.md), this file lives
-in the package that owns FrbGrouper -- pirate_frb.rpc, since FrbGrouper is the
-consumer side of the RPC interface. Importing it applies the injections (side
-effect) and re-exports the class; rpc/__init__.py does 'from .FrbGrouper import
-FrbGrouper'.
-"""
+"""FrbGrouper method injections, plus re-export of the pybind11 class."""
 
 from contextlib import contextmanager, ExitStack
 
@@ -335,8 +326,8 @@ class FrbGrouperInjections:
         before sending events to the sifter.
 
         The create_events() method performs this translation by decoding the
-        out_argmax tokens (via DedispersionPlan.decode_argmax / decode_argmax2, using
-        the producer's plan from the handshake): the per-event dm, arrival time,
+        out_argmax tokens (via FrbGrouper.decode_argmax_batch() and
+        FrbGrouper.decode_argmax2_batch()): the per-event dm, arrival time,
         intrinsic width, and frequency subband are the fine-grained "winning" trial
         parameters, not coarse-pixel centers. This includes subtleties like early
         triggers: arrival times are extrapolated to the lowest frequency of the full
