@@ -164,11 +164,15 @@ import numpy as np
 
 
 class GrouperHistogram:
-    """Host-side (numpy) SNR histograms, with fitting analysis and plotting.
+    """CPU-side helper class, used to analyze the finalized histograms from a
+    GpuGrouperHistogram and make summary plots.
 
     Produced by GpuGrouperHistogram.finalize() (online, in a grouper main loop) or
     by GrouperHistogram.from_file() (offline re-analysis); the two paths yield
-    identical objects. All arrays are numpy -- no GPU or cupy in this class.
+    identical objects. All arrays are numpy -- no GPU or cupy in this class. The
+    three things a caller does with one are write() (pickle the raw counts),
+    analyze() (fit each histogram to a max-of-N-Gaussian) and plot() (write a
+    summary PDF).
 
     Two histograms, sharing the same bins:
 
@@ -362,7 +366,15 @@ class GrouperHistogram:
 
 
 class GpuGrouperHistogram:
-    """GPU-side SNR histogram accumulator for grouper main loops.
+    """Helper class used in run_toy_grouper.py, to accumulate SNR histograms in
+    GPU memory.
+
+    It computes two histograms of the dedisperser's peak-finding output (out_max),
+    both accumulated on the GPU as the grouper's main loop consumes each chunk.
+    The first bins EVERY steady-state out_max value; the second bins one value per
+    (beam, time chunk) -- the max over all trees, DMs and times for that beam and
+    chunk. Warmup values are excluded from both, since they are partial sums and
+    would be artificially low.
 
     Intended usage (see run_toy_grouper.py): call add_tree() on each per-tree
     out_max array as it is processed, then finalize() on termination to obtain a
@@ -370,8 +382,25 @@ class GpuGrouperHistogram:
     accumulation state is cupy (a few small GPU calls per add_tree); nothing is
     copied to the host until finalize().
 
-    See the GrouperHistogram docstring for the meaning of the two accumulated
-    histograms, and the add_tree() docstring for how they are built.
+    Example (from run_toy_grouper.py)::
+
+        histogram = GpuGrouperHistogram()
+        ...
+        # In the grouper main loop, per chunk, per tree. Only chunks that are
+        # ENTIRELY steady-state feed the per-(beam, chunk) max histogram; a
+        # partially-steady chunk passes a mask instead.
+        full_steady = ichunk >= grouper.full_steady_ichunk
+        mask = None if full_steady else grouper.steady_state_mask(itree, ichunk)
+        histogram.add_tree(tree_out, itree, full_steady, mask=mask)
+        ...
+        # On termination: hand off to the host-side class.
+        h = histogram.finalize()
+        h.write(stem + '.pkl')
+        h.analyze()
+        h.plot(stem + '.pdf')
+
+    See the GrouperHistogram docstring for more on the two histograms, and the
+    add_tree() docstring for how they are built.
 
     Constructor args:
 

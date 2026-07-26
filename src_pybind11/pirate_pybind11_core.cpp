@@ -140,6 +140,28 @@ void register_core_bindings(pybind11::module &m)
     // Note: Python injections in pirate_frb/core/BumpAllocator.py handle aflags conversion.
     py::class_<BumpAllocator, std::shared_ptr<BumpAllocator>>(m, "BumpAllocator",
         "Thread-safe bump allocator supporting GPU/host memory.\n\n"
+        "This is a low-level class. A python caller usually constructs one only as the\n"
+        "root of a \"constructor chain\" -- to be handed to something else -- rather than\n"
+        "calling its methods directly.\n\n"
+        "Example (from run_fake_xengine.py -- sync host memory; the chain ends at a\n"
+        "SimulatedFrameFactory, which is the sole consumer of the frames)::\n\n"
+        "    bump_allocator = BumpAllocator('af_rhost', capacity)\n"
+        "    slab_allocator = SlabAllocator(bump_allocator)\n"
+        "    allocator = AssembledFrameAllocator(slab_allocator, num_consumers=1,\n"
+        "                                        time_samples_per_chunk=nt_chunk,\n"
+        "                                        throw_exception_if_empty=False)\n"
+        "    allocator.initialize_metadata(xmd)\n"
+        "    allocator.initialize_initial_chunk(0)\n"
+        "    factory = SimulatedFrameFactory(allocator,\n"
+        "                                    num_randomizer_threads=nthreads)\n"
+        "    # A controller thread then pulls frames via factory.get_frame_set().\n\n"
+        "Example (from run_server.py -- async, one host pool and one GPU pool per\n"
+        "server, both handed to FrbServer)::\n\n"
+        "    host_bump = BumpAllocator(host_aflags, host_nbytes, is_async=True,\n"
+        "                              nthreads=nthreads, cuda_device=cuda_device_id)\n"
+        "    gpu_alloc = BumpAllocator(gpu_aflags, gpu_nbytes, is_async=True,\n"
+        "                              nthreads=nthreads, cuda_device=cuda_device_id)\n"
+        "    server = FrbServer(..., host_allocator=host_bump, gpu_allocator=gpu_alloc)\n\n"
         "Modes:\n"
         "  - capacity >= 0: Pre-allocates base region, allocations share this memory\n"
         "  - capacity < 0: Dummy mode, each allocation gets independent memory")
@@ -220,6 +242,23 @@ void register_core_bindings(pybind11::module &m)
         "Carves fixed-size slabs from a BumpAllocator on demand (one slab per\n"
         "get_slab() call, until the BumpAllocator is exhausted). Slabs are\n"
         "returned to the pool when their reference count drops to zero.\n\n"
+        "This is a low-level class, and it is the middle link of a \"constructor chain\":\n"
+        "a python caller normally constructs one only to pass it to an\n"
+        "AssembledFrameAllocator, and never calls get_slab() directly.\n\n"
+        "Example (from run_server.py)::\n\n"
+        "    host_bump = BumpAllocator(host_aflags, host_nbytes, is_async=True)\n"
+        "    slab_allocator = SlabAllocator(host_bump)\n"
+        "    allocator = AssembledFrameAllocator(slab_allocator,\n"
+        "                                        num_consumers=len(addrs),\n"
+        "                                        time_samples_per_chunk=nt_chunk)\n"
+        "    receivers = [Receiver(address=a, allocator=allocator) for a in addrs]\n\n"
+        "    # Detail: shared_host_allocator=True means that the same BumpAllocator\n"
+        "    # is used for the AssembledFrameAllocator and the dedisperser.\n"
+        "    server = FrbServer(dedisp_config, receivers, file_writer, rpc_addr,\n"
+        "                       ringbuf_nchunks,\n"
+        "                       host_allocator=host_bump,\n"
+        "                       gpu_allocator=gpu_alloc,\n"
+        "                       shared_host_allocator=True)\n\n"
         "Modes:\n"
         "  - SlabAllocator(bump_allocator): slabs are carved on demand from\n"
         "    the BumpAllocator\n"
@@ -377,7 +416,11 @@ void register_core_bindings(pybind11::module &m)
 
     // AssembledFrameSet: container of (nbeams) AssembledFrames for one time chunk.
     py::class_<AssembledFrameSet, std::shared_ptr<AssembledFrameSet>>(m, "AssembledFrameSet",
-        "Container of (nbeams) AssembledFrames for one time chunk.")
+        "Container of (nbeams) AssembledFrames for one time chunk.\n\n"
+        "Helper class which is used by python callers in conjunction with FakeXEngine.\n"
+        "For example, the main loop in run_fake_xengine.py gets AssembledFrameSets from\n"
+        "a SimulatedFrameFactory, and passes them to a FakeXEngine (for sending to an\n"
+        "FrbServer).")
         .def_readonly("nfreq", &AssembledFrameSet::nfreq)
         .def_readonly("ntime", &AssembledFrameSet::ntime)
         .def_readonly("nbeams", &AssembledFrameSet::nbeams)
@@ -409,12 +452,39 @@ void register_core_bindings(pybind11::module &m)
     // Designed for multi-threaded use, but works fine with a single Python consumer.
     py::class_<AssembledFrameAllocator, std::shared_ptr<AssembledFrameAllocator>>(m, "AssembledFrameAllocator",
         "Allocates AssembledFrameSets for multiple consumers.\n\n"
+        "This is a low-level class, and the last link of a \"constructor chain\": a python\n"
+        "caller builds one from a SlabAllocator and hands it to whatever consumes the\n"
+        "frames. Apart from the two initialize_*() calls below, its methods are normally\n"
+        "called by that consumer (a Receiver or a SimulatedFrameFactory) rather than\n"
+        "from python.\n\n"
+        "Example (from run_server.py -- the full chain, ending at FrbServer). One\n"
+        "allocator is shared by all of this server's Receivers, so num_consumers is\n"
+        "the number of data IP addresses::\n\n"
+        "    host_bump = BumpAllocator(host_aflags, host_nbytes, is_async=True)\n"
+        "    slab_allocator = SlabAllocator(host_bump)\n"
+        "    allocator = AssembledFrameAllocator(slab_allocator,\n"
+        "                                        num_consumers=len(addrs),\n"
+        "                                        time_samples_per_chunk=nt_chunk)\n"
+        "    receivers = [Receiver(address=a, allocator=allocator) for a in addrs]\n"
+        "    gpu_alloc = BumpAllocator(gpu_aflags, gpu_nbytes, is_async=True)\n"
+        "    server = FrbServer(dedisp_config, receivers, file_writer, rpc_addr,\n"
+        "                       ringbuf_nchunks,\n"
+        "                       host_allocator=host_bump,\n"
+        "                       gpu_allocator=gpu_alloc,\n"
+        "                       shared_host_allocator=True)\n\n"
+        "Example (from run_fake_xengine.py -- a single SimulatedFrameFactory consumer,\n"
+        "which is expected to outrun the allocator's worker, so it opts out of\n"
+        "serve-or-throw)::\n\n"
+        "    allocator = AssembledFrameAllocator(slab_allocator, num_consumers=1,\n"
+        "                                        time_samples_per_chunk=nt_chunk,\n"
+        "                                        throw_exception_if_empty=False)\n"
+        "    allocator.initialize_metadata(xmd)\n"
+        "    allocator.initialize_initial_chunk(0)\n"
+        "    factory = SimulatedFrameFactory(allocator,\n"
+        "                                    num_randomizer_threads=nthreads)\n\n"
         "Each consumer calls initialize_metadata() / initialize_initial_chunk()\n"
         "once (or waits for someone else to), then get_frame_set(time_chunk_index)\n"
-        "with consecutive chunk indices starting at initial_time_chunk. All\n"
-        "consumers requesting the same chunk receive the same set (same\n"
-        "shared_ptr); a set is evicted from the allocator's queue after\n"
-        "num_consumers requests (see get_frame_set for the receipt contract).")
+        "with consecutive chunk indices starting at initial_time_chunk.")
         .def(py::init([](const std::shared_ptr<SlabAllocator> &slab_allocator,
                          int num_consumers, long time_samples_per_chunk,
                          bool throw_exception_if_empty) {
@@ -557,13 +627,36 @@ void register_core_bindings(pybind11::module &m)
     // SimulatedFrameFactory: hands a consumer a stream of pre-randomized
     // AssembledFrameSets. Bound with a kwargs constructor that fills Params.
     py::class_<SimulatedFrameFactory, std::shared_ptr<SimulatedFrameFactory>>(m, "SimulatedFrameFactory",
-        "Produces a stream of pre-randomized AssembledFrameSets for an external\n"
-        "consumer, staying a few frames ahead (bounded by frame_set_queue_size and\n"
-        "the allocator's slab pool). Owns a producer thread plus a randomizer-thread\n"
+        "Helper class for FakeXEngine: produces the simulated data (AssembledFrameSets)\n"
+        "that a FakeXEngine sends. Simulations consist of FRBs plus Gaussian noise,\n"
+        "with static per-frequency offsets/scales (not dynamic per-minichunk\n"
+        "offsets/scales). FRB injection is opt-in (simulate_frbs); with gaussian=False\n"
+        "the noise is uniform rather than Gaussian.\n\n"
+        "Owns a producer thread plus a randomizer-thread\n"
         "pool. The allocator (num_consumers=1) must already be initialized\n"
         "(initialize_metadata + initialize_initial_chunk), and the factory MUST be\n"
         "constructed inside a ThreadAffinity context manager -- the spawned threads\n"
-        "inherit the caller's vcpu affinity. stop() propagates to the allocator.")
+        "inherit the caller's vcpu affinity. stop() propagates to the allocator.\n\n"
+        "The simulate/send loop, schematically (from run_fake_xengine.py -- the real\n"
+        "one also handles send-junk mode and FRB-injection events)::\n\n"
+        "    mpc = fxe.minichunks_per_chunk\n"
+        "    n = 0                                    # minichunk counter\n"
+        "    while True:\n"
+        "        if (n % mpc) == 0:                   # chunk boundary: pull a frame\n"
+        "            fset = factory.get_frame_set()   # blocks until one is ready\n"
+        "            if fset is None:\n"
+        "                return                       # factory cleanly stopped\n"
+        "        for w in range(fxe.nworkers):        # stay <= 2 minichunks ahead\n"
+        "            if not fxe.wait_until_processed(w, n - 2):\n"
+        "                return\n"
+        "        for w in range(fxe.nworkers):        # send minichunk n\n"
+        "            if not fxe.enqueue_send_minichunk(w, n, fset):\n"
+        "                return\n"
+        "        n += 1\n\n"
+        "All workers reference the same 'fset' for a chunk (each gathers its own\n"
+        "frequency-channel subset). The loop keeps no reference to a frame beyond the\n"
+        "chunk it is sending: the C++ command queue holds it alive until its\n"
+        "minichunks are processed, after which the slabs return to the pool.")
         .def(py::init([](std::shared_ptr<AssembledFrameAllocator> allocator,
                          long num_randomizer_threads, bool normalized, bool gaussian,
                          long frame_set_queue_size, bool simulate_frbs,
@@ -716,35 +809,19 @@ void register_core_bindings(pybind11::module &m)
     ;
 
     py::class_<FrequencySubbands>(m, "FrequencySubbands",
-        "Frequency sub-bands searched by the peak-finding kernel.\n\n"
-        "Searching sub-bands, rather than only the full band, improves SNR for bursts\n"
-        "that do not span the full frequency range.\n\n"
-        "Usually constructed with from_threshold(fmin, fmax, threshold, pf_rank=4),\n"
-        "where 'threshold' is a TARGET fractional bandwidth (some sub-bands may end up\n"
-        "wider). 'pirate_frb make_subbands FMIN FMAX THRESHOLD' does this from the\n"
-        "command line and prints the result. Alternatively, construct directly from\n"
-        "'subband_counts' -- a length-(pf_rank+1) list giving the number of sub-bands at\n"
-        "each peak-finding level, which fully parameterizes the sub-bands. Use\n"
-        "subband_counts=[1] to disable sub-banding and search only the full band.\n\n"
-        "Constraints: subband_counts[pf_rank] must be 1 (the top level is the full band),\n"
-        "and pf_rank must be <= constants.max_peak_finding_rank (currently 4).\n\n"
-        "Sub-bands are expressed in coarse-frequency indices 0 <= f <= 2^pf_rank. Two\n"
-        "conventions here are easy to get backwards: these indices are equally spaced in\n"
-        "DELAY, not in frequency, and f=0 is the HIGH-frequency end of the band. See the\n"
-        "comments in include/pirate/FrequencySubbands.hpp for the full indexing scheme.\n\n"
-        "Footgun: 'f_to_freq' is empty, and show_compact() raises, unless fmin/fmax were\n"
-        "supplied at construction. from_threshold() always supplies them; the\n"
-        "subband_counts-only constructor does not.\n\n"
-        "Attributes (read-only):\n\n"
-        "- ``subband_counts`` (list) -- number of sub-bands at each peak-finding level.\n"
-        "- ``pf_rank`` (int) -- peak-finding rank, equal to len(``subband_counts``) - 1.\n"
-        "- ``N`` (int) -- number of distinct frequency sub-bands.\n"
-        "- ``M`` (int) -- number of \"multiplets\", i.e. (sub-band, fine-grained DM) pairs.\n"
-        "- ``fmin``, ``fmax`` (float) -- frequency range in MHz, or 0.0 if not supplied.\n"
-        "- ``f_to_freq`` (list) -- coarse-frequency index to physical frequency in MHz.\n"
-        "- ``m_to_n``, ``m_to_d`` (list) -- multiplet to sub-band, and multiplet to fine-grained DM.\n"
-        "- ``n_to_flo``, ``n_to_fhi`` (list) -- sub-band to its coarse-frequency index range.\n"
-        "- ``n_to_mbase`` (list) -- sub-band to the start of its multiplet range.")
+        "Low-level helper class, used internally to represent a set of frequency\n"
+        "subbands searched by the peak-finding kernel. (Searching subbands, rather\n"
+        "than only the full band, improves SNR for bursts that do not span the full\n"
+        "frequency range.) A python caller will probably not need to use this class!\n\n"
+        "The details of the subband representation are nontrivial to explain -- see\n"
+        "the tex notes, section \"Subband search\", whose subsection \"Parameterization\n"
+        "of subbands\" explains them with examples and plots.\n\n"
+        "The low-level C++ class can be constructed in one of four ways::\n\n"
+        "    FrequencySubbands()                            # full-band only\n"
+        "    FrequencySubbands(subband_counts)              # e.g. [5,9,7,3,1]\n"
+        "    FrequencySubbands(subband_counts, fmin, fmax)  # optional fmin/fmax in MHz\n\n"
+        "    # Same subbands as 'pirate_frb make_subbands FMIN FMAX THRESH -r PF_RANK'\n"
+        "    FrequencySubbands.from_threshold(fmin, fmax, threshold, pf_rank=4)")
           // Constructors
           .def(py::init<>())  // default constructor
           .def(py::init<const std::vector<long> &>(), py::arg("subband_counts"))
@@ -1047,6 +1124,10 @@ void register_core_bindings(pybind11::module &m)
     // Skipped methods: make_worker_metadata, worker_main, _worker_main, _send_all (private)
     py::class_<FakeXEngine, std::shared_ptr<FakeXEngine>>(m, "FakeXEngine",
         "Simulates multiple upstream X-engine nodes sending data to a receiver.\n\n"
+        "The command-line utility 'pirate_frb run_fake_xengine' is intended to be the\n"
+        "main interface to the fake X-engine code, and uses this class under the hood\n"
+        "(paired with a SimulatedFrameFactory, which supplies the simulated data).\n"
+        "Use the class directly only if you need something the CLI does not expose.\n\n"
         "Creates 'nworkers' worker threads in the constructor; each worker\n"
         "waits on a per-worker command queue. An external controller thread\n"
         "drives the workers by calling enqueue_send_junk(worker_id, minichunk_index)\n"
@@ -1055,7 +1136,7 @@ void register_core_bindings(pybind11::module &m)
         "multiple of len(ip_addrs). Worker threads inherit the vcpu affinity\n"
         "of the thread that calls the constructor -- Python callers MUST\n"
         "instantiate FakeXEngine inside a ThreadAffinity context manager.\n\n"
-        "Usage::\n\n"
+        "Usage (schematic; see run_fake_xengine.py for more details)::\n\n"
         "    xmd = XEngineMetadata.from_yaml_file('...')\n"
         "    with ThreadAffinity(vcpu_list):\n"
         "        fxe = FakeXEngine(xmd, ['10.0.0.2:5000', '10.0.1.2:5000'], 64,\n"
@@ -1414,11 +1495,26 @@ void register_core_bindings(pybind11::module &m)
     // Note: Uses shared_ptr holder so Receivers can be passed to FrbServer.
     py::class_<Receiver, std::shared_ptr<Receiver>>(m, "Receiver",
         "Listens for TCP connections and reads data.\n\n"
-        "A thread-backed class with three worker threads:\n"
-        "  - listener: accepts incoming connections\n"
-        "  - reader: reads data from all open connections using epoll\n"
-        "  - assembler: copies minichunks from per-peer ring buffers into\n"
-        "    AssembledFrames")
+        "This is a low-level helper class for FrbServer. One Receiver reads X-engine\n"
+        "data from a single (IP address, TCP port) pair. One FrbServer may have\n"
+        "multiple Receivers, if its data stream is split across multiple NICs. A\n"
+        "python caller usually constructs Receivers only as part of a \"constructor\n"
+        "chain\" leading to an FrbServer, rather than calling its methods directly.\n"
+        "(In particular, the constructor does NOT spawn the worker threads: FrbServer\n"
+        "starts them, so start() / stop() are not normally called from python.)\n\n"
+        "Example from run_server.py::\n\n"
+        "    host_bump = BumpAllocator(host_aflags, host_nbytes, is_async=True)\n"
+        "    slab_allocator = SlabAllocator(host_bump)\n"
+        "    allocator = AssembledFrameAllocator(slab_allocator,\n"
+        "                                        num_consumers=len(addrs),\n"
+        "                                        time_samples_per_chunk=nt_chunk)\n"
+        "    receivers = [Receiver(address=a, allocator=allocator) for a in addrs]\n"
+        "    server = FrbServer(dedisp_config, receivers, file_writer, rpc_addr,\n"
+        "                       ringbuf_nchunks,\n"
+        "                       host_allocator=host_bump,\n"
+        "                       gpu_allocator=gpu_alloc,\n"
+        "                       shared_host_allocator=True)\n"
+        "    server.start()   # this is what starts each Receiver's worker threads")
           .def(py::init([](const std::string &address,
                            std::shared_ptr<AssembledFrameAllocator> allocator,
                            bool misbehaving_reads) {
@@ -1484,10 +1580,19 @@ void register_core_bindings(pybind11::module &m)
     // Registered BEFORE FrbServer so FrbServer's grouper_client=None default arg
     // can resolve this type's holder.
     py::class_<FrbGrouperClient, std::shared_ptr<FrbGrouperClient>>(m, "FrbGrouperClient",
-        "Producer-side client for an FrbGrouper (frb_grouper.proto). Construct with the\n"
-        "grouper's 'ip:port', call ping() early to fail fast if it isn't running, then\n"
-        "pass it to FrbServer(grouper_client=...). The FrbServer opens the real\n"
-        "connection + Handshake later, from its grouper send thread.")
+        "Producer-side client for an FrbGrouper (frb_grouper.proto).\n\n"
+        "This is a low-level class, constructed by a python caller only as part of a\n"
+        "\"constructor chain\" leading to an FrbServer. Apart from the early ping(),\n"
+        "its methods are not called from python -- the connection is owned C++-side.\n\n"
+        "Example from run_server.py::\n\n"
+        "    grouper_client = FrbGrouperClient(grouper_ip_addr)\n"
+        "    grouper_client.ping()   # fail fast if the grouper isn't running\n"
+        "    server = FrbServer(dedisp_config, receivers, file_writer, rpc_addr,\n"
+        "                       ringbuf_nchunks,\n"
+        "                       host_allocator=host_bump,\n"
+        "                       gpu_allocator=gpu_alloc,\n"
+        "                       grouper_client=grouper_client,\n"
+        "                       shared_host_allocator=True)")
           .def(py::init([](const std::string &grouper_ip_addr) {
                    return std::make_shared<FrbGrouperClient>(grouper_ip_addr);
                }),
@@ -1507,10 +1612,37 @@ void register_core_bindings(pybind11::module &m)
     // Note: Params struct is not exposed; constructor takes receivers and address directly.
     // Note: FrbServer::create() is used internally, but appears as a constructor to Python.
     py::class_<FrbServer, std::shared_ptr<FrbServer>>(m, "FrbServer",
-        "gRPC server that queries Receivers via RPC.\n\n"
+        "The FrbServer is the top-level class representing an FRB search server.\n"
+        "Includes network receive code, dedispersion, an RPC server for monitoring and\n"
+        "file-writing callbacks, and the endpoint for communication with the downstream\n"
+        "grouper. The grouper itself is a separate process, not part of the FrbServer.\n\n"
+        "The command-line utility 'pirate_frb run_server' is intended to be the main\n"
+        "interface to the FRB search server, and uses this class under the hood (it\n"
+        "builds the allocator/Receiver constructor chain, then hands the pieces to\n"
+        "FrbServer). Use the class directly only if you need something the CLI does\n"
+        "not expose.\n\n"
         "Wraps multiple Receivers and exposes their status via gRPC. Also\n"
         "builds a DedispersionPlan (via a dedicated processing thread) once\n"
-        "X-engine metadata arrives -- accessible via the 'plan' property.")
+        "X-engine metadata arrives -- accessible via the 'plan' property.\n\n"
+        "Usage (schematic; see run_server.py for more details)::\n\n"
+        "    # Memory pools, frame pool, and one Receiver per data IP address.\n"
+        "    host_bump = BumpAllocator(host_aflags, host_nbytes, is_async=True)\n"
+        "    gpu_alloc = BumpAllocator(gpu_aflags, gpu_nbytes, is_async=True)\n"
+        "    allocator = AssembledFrameAllocator(SlabAllocator(host_bump),\n"
+        "                                        num_consumers=len(addrs),\n"
+        "                                        time_samples_per_chunk=nt_chunk)\n"
+        "    receivers = [Receiver(address=a, allocator=allocator) for a in addrs]\n"
+        "    file_writer = FileWriter(ssd_dirs, nfs_dir)\n"
+        "    grouper_client = FrbGrouperClient(grouper_ip_addr)\n\n"
+        "    server = FrbServer(dedisp_config, receivers, file_writer, rpc_addr,\n"
+        "                       ringbuf_nchunks,\n"
+        "                       host_allocator=host_bump,\n"
+        "                       gpu_allocator=gpu_alloc,\n"
+        "                       grouper_client=grouper_client,\n"
+        "                       shared_host_allocator=True)\n"
+        "    server.start()\n"
+        "    # ... run ...\n"
+        "    server.stop()")
           .def(py::init([](const DedispersionConfig &config_prefilled,
                            std::vector<std::shared_ptr<Receiver>> receivers,
                            std::shared_ptr<FileWriter> file_writer,
@@ -1794,7 +1926,19 @@ void register_core_bindings(pybind11::module &m)
     // add_subscriber, check_healthy (internal)
     py::class_<FileWriter, std::shared_ptr<FileWriter>>(m, "FileWriter",
         "Writes AssembledFrames to disk via SSD and NFS queues.\n\n"
-        "Creates worker threads for writing to local SSD and copying to NFS.")
+        "This is a low-level class. A python caller normally constructs one only as\n"
+        "part of a \"constructor chain\" leading to an FrbServer, and hands it over\n"
+        "rather than calling its methods: the FrbServer drives the writes, which are\n"
+        "triggered by WriteFiles / StartStream RPCs.\n\n"
+        "Example from run_server.py::\n\n"
+        "    file_writer = FileWriter(ssd_dirs, nfs_dir,\n"
+        "                             num_ssd_threads=ssd_threads_per_server,\n"
+        "                             num_nfs_threads=nfs_threads_per_server)\n"
+        "    server = FrbServer(dedisp_config, receivers, file_writer, rpc_addr,\n"
+        "                       ringbuf_nchunks,\n"
+        "                       host_allocator=host_bump,\n"
+        "                       gpu_allocator=gpu_alloc,\n"
+        "                       shared_host_allocator=True)")
           .def(py::init([](const std::string &ssd_root, const std::string &nfs_root,
                            int num_ssd_threads, int num_nfs_threads,
                            long max_subscriber_backlog) {

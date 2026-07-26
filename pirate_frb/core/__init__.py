@@ -2,6 +2,7 @@
 from ..pirate_pybind11 import (
     AssembledFrame,
     AssembledFrameAllocator,
+    AssembledFrameSet,
     DedispersionTree,
     FakeXEngine,
     FileWriter,

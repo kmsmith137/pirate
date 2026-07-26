@@ -9,8 +9,10 @@ maxdepth: 1
 classes/Acquisition
 classes/AssembledFrame
 classes/AssembledFrameAllocator
+classes/AssembledFrameSet
 classes/BumpAllocator
 classes/DedispersionConfig
+classes/DedispersionPlan
 classes/FakeXEngine
 classes/FileSubscriber
 classes/FileWriter
@@ -25,6 +27,7 @@ classes/GpuDedisperser
 classes/GpuDedisperserOutputs
 classes/GpuGrouperHistogram
 classes/GrouperHistogram
+classes/Hardware
 classes/OfflineDedisperser
 classes/Receiver
 classes/SimulatedFrameFactory

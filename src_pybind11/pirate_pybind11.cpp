@@ -293,8 +293,9 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 
     // DedispersionPlan: construct via shared_ptr
     py::class_<DedispersionPlan, std::shared_ptr<DedispersionPlan>>(m, "DedispersionPlan",
-        "Dedispersion execution plan.\n\n"
-        "Created from a DedispersionConfig, this class contains all the derived parameters\n"
+        "Large, low-level data structure created from a DedispersionConfig.\n\n"
+        "This class is probably not useful for python callers! Created from a\n"
+        "DedispersionConfig, this class contains all the derived parameters\n"
         "and data structures needed to execute dedispersion on the GPU. The plan includes:\n\n"
         "  - Stage1 and Stage2 dedispersion trees\n"
         "  - Kernel parameters for all processing stages\n"

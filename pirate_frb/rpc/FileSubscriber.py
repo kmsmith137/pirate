@@ -5,7 +5,8 @@ from .grpc import frb_search_pb2
 
 
 class FileSubscriber:
-    """A live subscription to FrbServer file-write notifications.
+    """A python caller uses this class to subscribe to file-writing notifications
+    from an FrbServer.
 
     Constructed via FrbSearchClient.subscribe_files(). The constructor opens
     the gRPC stream AND blocks until the server confirms that the
@@ -13,27 +14,19 @@ class FileSubscriber:
     AFTER the constructor returns are guaranteed to have their
     notifications delivered through this object's iterator.
 
+    Big picture: file writes are triggered either by a WriteFiles RPC, or by a
+    StartStream RPC. Either way, writing is a two-stage process. The RPC returns
+    success as soon as the write has been successfully QUEUED -- not when the
+    data is on disk. Later, when the file has actually been written, a
+    notification is sent to all FileSubscribers. So a caller who needs to know
+    that a file exists (rather than that it was requested) must subscribe and
+    wait for the notification.
+
     Iteration yields (filename, error_message, stream_name) tuples. An
     empty error_message indicates success; non-empty indicates an
     error. stream_name is "" for WriteFiles-triggered files and the
     stream's stream_name for stream-triggered files (only delivered when
     the subscription was opened with subscribe_streams=True).
-
-    Lifetime: the underlying gRPC stream stays open until either
-    close() is called (explicitly or via __exit__/__del__), the
-    server cancels the stream (e.g. on shutdown), or an RPC error
-    occurs. The server also stops subscribers that fall too far
-    behind (unsent-notification backlog exceeds the server's
-    per-subscriber cap, e.g. a subscriber that is never iterated):
-    after any already-buffered notifications drain, iteration raises
-    grpc.RpcError with StatusCode.INTERNAL and "fell behind" in the
-    details. The backlogged notifications were dropped, so a caller
-    that still cares must resubscribe and resynchronize (e.g. list
-    the acqdir). Use as a context manager for deterministic teardown;
-    "sloppy" use (let __del__ clean up at GC time) usually works
-    but relies on CPython's reference-counting timeliness and
-    gRPC's interpreter-shutdown behavior, neither of which is
-    formally guaranteed.
 
     Not thread-safe: a single FileSubscriber must be iterated from
     one thread at a time. Multiple FileSubscriber objects from the
