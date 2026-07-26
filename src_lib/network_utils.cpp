@@ -1,4 +1,5 @@
 #include "../include/pirate/network_utils.hpp"
+#include "../include/pirate/utils.hpp"    // AtomicPrint
 
 #include <cstring>
 #include <fcntl.h>
@@ -212,13 +213,14 @@ void Socket::close() noexcept
     this->reads_are_misbehaving = false;
 
     if (_unlikely(err < 0)) {
-        // Best-effort logging: errstr() allocates a stringstream
-        // and string (can throw bad_alloc), and 'cout' could throw
-        // if a caller has enabled its exception mask. Swallow those
-        // so close() stays noexcept and is safe to call from the
-        // destructor / move-assignment.
+        // Best-effort logging: errstr() allocates a stringstream and string,
+        // so it can throw bad_alloc. Swallow that so close() stays noexcept
+        // and is safe to call from the destructor / move-assignment. The try
+        // now guards only errstr() and AtomicPrint's own buffering -- the
+        // emission itself cannot throw, since ~AtomicPrint() hands off to
+        // atomic_print(), which is noexcept and swallows write errors.
         try {
-            cout << errstr("Socket::close") << endl;
+            AtomicPrint() << errstr("Socket::close");
         } catch (...) {
             // Nothing useful to do; close() is already past the
             // syscall and the bool state is reset.
@@ -661,7 +663,7 @@ void Epoll::close()
     this->epfd = -1;
 
     if (_unlikely(err < 0))
-        cout << errstr("Epoll::close") << endl;
+        AtomicPrint() << errstr("Epoll::close");
 }
 
 

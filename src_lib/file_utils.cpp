@@ -1,4 +1,5 @@
 #include "../include/pirate/file_utils.hpp"
+#include "../include/pirate/utils.hpp"    // AtomicPrint
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/rand_utils.hpp>
 
@@ -146,7 +147,7 @@ RemoveGuard::~RemoveGuard()
     }
     catch (const fs::filesystem_error &e) {
         // In destructor, don't throw -- just print warning on failure.
-        cout << "RemoveGuard warning: " << e.what() << endl;
+        AtomicPrint() << "RemoveGuard warning: " << e.what();
     }
 }
 
@@ -189,7 +190,7 @@ TmpFileGuard::~TmpFileGuard()
     }
     catch (const fs::filesystem_error &e) {
         // In destructor, don't throw -- just print warning on failure.
-        cout << "TmpFileGuard warning: " << e.what() << endl;
+        AtomicPrint() << "TmpFileGuard warning: " << e.what();
     }
 }
 
