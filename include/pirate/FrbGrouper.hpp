@@ -187,7 +187,8 @@ struct FrbGrouper
     void stop(std::exception_ptr e = nullptr) const;   // idempotent
 
     // open() decomposed into two steps, so the pybind binding can drive the wait
-    // in 0.5s increments and poll for Ctrl-C between them (see the .cpp + binding):
+    // in constants::default_poll_cadence_ms increments and poll for Ctrl-C between
+    // them (see the .cpp + binding):
     void start_listening();                   // bind port + spawn send thread (once); non-blocking
     bool wait_for_handshake(int timeout_ms);  // true once handshake done; else waits timeout_ms
 
@@ -282,7 +283,8 @@ private:
     std::mutex close_mutex;
 
     // Guards the one-time "waiting for FrbServer to connect" stdout message in
-    // wait_for_handshake() (which is polled every ~0.5s). Under mutex; set true
+    // wait_for_handshake() (polled every constants::default_poll_cadence_ms).
+    // Under mutex; set true
     // after the message is printed once, so it does not repeat.
     bool waiting_print_done = false;
 

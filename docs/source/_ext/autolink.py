@@ -24,7 +24,7 @@ notes source -- which also works on GitHub -- and is reported as a
 
 Every build writes docs/build/autolink_report.json: what got linked, and what
 looked linkable but was skipped (unknown-class, missing-config-page, denied,
-handwrite-in-source, unknown-cli). That report drives the /pirate-review-docs command.
+handwrite-in-source, unknown-cli). That report drives the /ch-review-docs command.
 """
 
 import json
@@ -390,13 +390,16 @@ def _skip(report, page, text, reason):
 
 def _skip_realfile(report, docname, tok, reg, missing=None):
     """Report a real-file mention on a notes page as needing a handwritten link
-    -- unless the page already links that target once (first-mention convention)
-    or the target has no page at all (`missing`)."""
+    -- unless the page already links that target once (first-mention convention),
+    the mention is the page's OWN filename, or the target has no page at all
+    (`missing`)."""
     target_doc = reg['page'].get(tok)
     if target_doc is None:
         if missing:
             _skip(report, docname, tok, missing)
         return
+    if target_doc == docname:
+        return                          # self-reference: never handwrite a self-link
     if reg['builder'].get_relative_uri(docname, target_doc) in _EXISTING_REFURIS:
         return
     _skip(report, docname, tok, 'handwrite-in-source')

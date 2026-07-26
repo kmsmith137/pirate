@@ -301,7 +301,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "  - Memory buffer layouts and ring buffer configuration\n"
         "  - Derived parameters like tree dimensions and output array shapes\n\n"
         "The plan is immutable once constructed and is shared between dedisperser instances.\n\n"
-        "Example:\n"
+        "Example::\n\n"
         "    config = DedispersionConfig.from_yaml('config.yaml')\n"
         "    plan = DedispersionPlan(config)\n"
         "    print(f'Plan has {plan.ntrees} trees')\n"

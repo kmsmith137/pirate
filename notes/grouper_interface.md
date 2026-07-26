@@ -272,6 +272,9 @@ these down somewhere so I don't forget):
    with host grpc threads on both sides. It would be more efficient to serialize and
    exchange cuda events, to directly "couple" pirate's cuda streams to cupy's streams).
 
- - Currently, grouper-sifter intercommunication is synchronous: the grouper blocks
-   until a tcp connection to the sifter is opened and closed. It would be better to
-   use asynchronous communication, with the tcp connection managed by another thread.
+ - (Done.) Grouper-sifter intercommunication is asynchronous by default:
+   `FrbSifterClient` holds one persistent grpc channel, and `send_events()`
+   dispatches each `FrbEvents` rpc via `stub.FrbEvents.future()` with a
+   `timeout`-second deadline (default 1 second), so the grouper does not block.
+   Constructing the client with `timeout=0` restores synchronous sends.
+   (`send_configuration()` is always synchronous, but it is sent only once.)

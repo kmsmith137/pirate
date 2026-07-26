@@ -128,7 +128,7 @@ class FrbGrouperInjections:
         # handshake error), the grouper may already be listening with its send
         # thread running, and without the _close() it would linger until garbage
         # collection whenever the object outlives the with-statement (e.g.
-        # 'g = FrbGrouper(addr)' followed by 'with g:').
+        # 'g = FrbGrouper(addr, restore_cuda_device=False)' followed by 'with g:').
         try:
             # Blocks until the client connects and the handshake is processed.
             self._open()
@@ -240,8 +240,9 @@ class FrbGrouperInjections:
         Yields
         ------
         GpuDedisperserOutputs
-            Per-batch slice with .out_max / .out_argmax (lists of ksgpu Arrays,
-            convertible to cupy via DLPack).
+            Per-batch slice with .out_max / .out_argmax (lists of cupy arrays,
+            one per dedispersion tree -- the pybind11 layer converts the C++
+            GPU arrays to cupy via DLPack).
         """
         if ichunk < 0:
             raise ValueError(f"FrbGrouper.get_output: ichunk must be >= 0 (got {ichunk})")

@@ -681,7 +681,7 @@ void validate_acqdir(const string &acqdir)
 
 
 // See FileWriter.hpp for the contract; keep in sync with the python-side
-// parser (pirate_frb.utils.list_acqdir's _FRAME_RE).
+// parser (pirate_frb.Acquisition's _FRAME_RE).
 string make_acq_relpath(const string &acqdir, long beam_id, long time_chunk_index)
 {
     return acqdir + "/frame_b" + to_string(beam_id)

@@ -276,8 +276,8 @@ def parse_time(subparsers):
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for timing (default 0)")
     parser.add_argument('-t', '--nthreads', type=int, default=0, help="number of CPU threads (for time_cpu_downsample and time_avx2_simulate_4bit_noise)")
     parser.add_argument('--ncu', action='store_true', help="Just run a single kernel (intended for profiling with nvidia 'ncu')")
-    parser.add_argument('--gldk', action='store_true', help='Runs time_lagged_downsampling_kernels()')
-    parser.add_argument('--gddk', action='store_true', help='Runs time_gpu_dedispersion_kernels()')
+    parser.add_argument('--gldk', action='store_true', help='Runs GpuLaggedDownsamplingKernel.time_selected()')
+    parser.add_argument('--gddk', action='store_true', help='Runs GpuDedispersionKernel.time_selected()')
     parser.add_argument('--casm', action='store_true', help='Runs CasmBeamformer.run_timings()')
     parser.add_argument('--chime', action='store_true', help='Runs time_chime_frb_{beamform,upchan}()')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" timings (code that I wrote during protoyping that may never get used)')
@@ -441,20 +441,20 @@ def make_subbands(args):
 
 def parse_hwtest(subparsers):
     import argparse, textwrap
-    help_text = "Run hardware test from hwtest.yml (use -s to send data instead of receiving)"
+    help_text = "Run hardware test from a hwtest YAML config file (use -s to send data instead of receiving)"
     description = textwrap.dedent("""\
         Run hardware test using YAML config file (use -s to send data instead of receiving).
 
         Runs and times parallel synthetic loads: network IO, disk IO, PCIe transfers
-        between GPU and host, GPU compute kernels, CPU compute kernels, host memory
-        bandwidth.
+        between GPU and host, GPU compute kernels, CPU compute kernels, and host and
+        GPU memory bandwidth.
 
         Example networking-only run::
 
-          # On cf05. The test will pause after "listening for TCP connections".
+          # On cf00. The test will pause after "listening for TCP connections".
           python -m pirate_frb hwtest configs/hwtest/cf00_net64.yml
 
-          # On cf00. Send to all four IP addresses on cf05.
+          # On cf05. Send to all four IP addresses on cf00.
           python -m pirate_frb hwtest -s configs/hwtest/cf00_net64.yml
 
         See configs/hwtest/*.yml for more examples.""")
@@ -1638,10 +1638,10 @@ def parse_run_toy_grouper(subparsers):
                              "threshold (default: 10).")
     parser.add_argument('--histogram', metavar='STEM',
                         help="Write histograms of steady-state SNR values (all values, plus "
-                             "per-(beam, chunk) maxes; warmup values are excluded) to 'STEM.pkl' "
-                             "upon termination. With multiple groupers, the i-th grouper writes "
-                             "'STEM<i>.pkl' (e.g. hist1.pkl, hist2.pkl, ...) so the filenames "
-                             "don't collide.")
+                             "per-(beam, chunk) maxes; warmup values are excluded) to 'STEM.pkl', "
+                             "plus a plot 'STEM.pdf', upon termination. With multiple groupers, "
+                             "the i-th grouper writes 'STEM<i>.pkl' / 'STEM<i>.pdf' (e.g. "
+                             "hist1.pkl, hist2.pkl, ...) so the filenames don't collide.")
     # Exactly one of -s/-S is required.
     sifter_group = parser.add_mutually_exclusive_group(required=True)
     sifter_group.add_argument('-s', '--sifter', metavar='SIFTER_ADDR',
@@ -1727,12 +1727,12 @@ def parse_run_fake_xengine(subparsers):
     help_text = "Send fake X-engine data to one or more running FrbServers"
     parser = subparsers.add_parser("run_fake_xengine", help=help_text, description=help_text)
     parser.add_argument('rpc_addrs', nargs='+', metavar='RPC_ADDR',
-                        help='One or more "ip:port" strings (one per receiver)')
+                        help='One or more "ip:port" strings (one per server, matching the config\'s rpc_ip_addrs)')
     parser.add_argument('-w', '--workers', type=int, default=128,
                         help='Number of worker threads per FakeXEngine (default 128)')
     parser.add_argument('-P', '--unpaced', action='store_true',
                         help='Disable pacing -- send chunks as fast as possible '
-                             '(default: pace to stay <=5 chunks ahead of server)')
+                             '(default: pace to stay <=4 chunks ahead of server)')
     parser.add_argument('-N', '--unnormalized', action='store_true',
                         help='Send unnormalized data -- leave scales/offsets '
                              'arbitrary (default: calibrate them to the per-zone '

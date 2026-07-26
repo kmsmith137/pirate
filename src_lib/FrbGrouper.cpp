@@ -394,7 +394,8 @@ bool FrbGrouper::wait_for_handshake(int timeout_ms)
         return true;
 
     // Print a one-time "waiting for FrbServer to connect" message (this is polled
-    // every ~0.5s by open() / the pybind binding). Guarded by waiting_print_done so
+    // every constants::default_poll_cadence_ms by open() / the pybind binding).
+    // Guarded by waiting_print_done so
     // it prints once, not repeatedly. Suppressed once a TCP connection is
     // established (session_active is set by the Session handler's guard at connect
     // time): past that point we are waiting on the handshake, not the connection,

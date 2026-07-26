@@ -46,7 +46,7 @@ help:
 	@echo "  build_sdist      - Build source distribution (called by pip)"
 	@echo "  clean            - Remove all build artifacts"
 	@echo ""
-	@echo "Documentation targets (note that sphinx documentation is currently a placeholder)"
+	@echo "Documentation targets"
 	@echo "  docs             - Build sphinx documentation (HTML); also builds 'tex'"
 	@echo "  tex              - Compile notes/*.tex to PDF with pdflatex"
 	@echo "  docs-clean       - Remove generated documentation"

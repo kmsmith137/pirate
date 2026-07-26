@@ -88,7 +88,7 @@ min_rpc_mtu: 1500
 
 check_mountpoints: [ '/scratch2', '/mnt/cs00/data' ]
 
-# 'ssd_dirs' and 'ssd_devices' are lists of length num_servers. If an ssd_dir isn't on the
+# 'ssd_dirs' is a list of length num_servers. If an ssd_dir isn't on the
 # correct numa domain, then an exception is raised. (If this proves to be too restrictive
 # in the future, then I might introduce a config flag to relax it.)
 #

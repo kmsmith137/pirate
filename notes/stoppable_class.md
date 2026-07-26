@@ -52,8 +52,9 @@ Conventions for how the exception text reaches a human:
   like `FrbServer::poll_from_python(timeout_ms)`: block until stopped or
   timeout; on stop, rethrow the saved error (a clean stop returns normally).
   The pybind11 binding releases the GIL, and python calls it in a loop with a
-  short timeout (~500 ms) -- a fully-blocking call would never return to the
-  interpreter, so Ctrl-C (KeyboardInterrupt) could never be delivered.
+  short timeout (`constants::default_poll_cadence_ms`, currently 250 ms) -- a
+  fully-blocking call would never return to the interpreter, so Ctrl-C
+  (KeyboardInterrupt) could never be delivered.
 
 - A null stop() means normal termination; a non-null stop(e) means error
   shutdown. Blocking methods for which "stopped while waiting" is an EXPECTED

@@ -48,6 +48,18 @@ if os.path.isdir(_configs_src):
                 with open(_yml_path + '.md', 'w') as _fout:
                     _fout.write('---\norphan: true\n---\n\n')
                     _fout.write(f'# {_fname}\n\n```yaml\n{_yml_content}```\n')
+            elif _fname.endswith('.md'):
+                # A .md that was copied verbatim from configs/ (e.g. configs/README.md).
+                # Every configs/* page is a link target reached from elsewhere, never a
+                # toctree entry, so mark it orphan -- otherwise Sphinx warns
+                # "document isn't included in any toctree". We rewrite the COPY under
+                # docs/source/configs/ (generated + gitignored), never the tracked source.
+                _md_path = os.path.join(_root, _fname)
+                with open(_md_path) as _fin:
+                    _md_content = _fin.read()
+                if not _md_content.startswith('---'):
+                    with open(_md_path, 'w') as _fout:
+                        _fout.write('---\norphan: true\n---\n\n' + _md_content)
 
 # Copy grpc/*.proto into docs/source/grpc/ and generate rendered .md pages.
 _grpc_src = os.path.join(_repo_root, 'grpc')
@@ -70,7 +82,7 @@ for _f in sorted(glob.glob(os.path.join(_grpc_src, '*.proto'))):
 # proto file not listed here is appended afterward (alphabetically) with no description,
 # so a newly-added proto still shows up.
 _grpc_descriptions = {
-    'frb_search.proto':  'RPC server embedded in pirate (e.g. write_file callbacks)',
+    'frb_search.proto':  'RPC server embedded in pirate (e.g. WriteFiles / SubscribeFiles)',
     'frb_grouper.proto': 'RPC intercommunication between pirate and grouper',
     'frb_sifter.proto':  'RPC intercommunication between grouper and sifter',
 }
@@ -206,7 +218,7 @@ extensions = [
 ]
 
 templates_path = ['_templates']
-exclude_patterns = ['_cli_generated.md', '_cli_summary.md']
+exclude_patterns = ['_cli_generated.md']
 
 source_suffix = {
     '.md': 'markdown',

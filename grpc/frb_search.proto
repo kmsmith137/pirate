@@ -2,8 +2,9 @@ syntax = "proto3";
 
 package frb.search.v1;
 
-// Currently, there isn't much documentation for RPCs.
-// Comments in the .proto file are all we've got!
+// The comments in this file are the reference documentation for the FrbSearch
+// wire protocol. See also notes/grpc.md (server/client conventions) and the
+// python client, pirate_frb/rpc/FrbSearchClient.py.
 // If you're reading this, please feel free to make improvements :)
 
 
@@ -158,7 +159,7 @@ message GetConfigResponse {
   double fake_time_sample_ms = 14;     // From config_prefilled.time_sample_ms (pre-metadata)
   int64 fake_nbeams = 15;              // From config_prefilled.beams_per_gpu (pre-metadata)
   
-  repeated int64 frequency_subband_counts = 16;   // config_prefilled.frequency_subband_counts}
+  repeated int64 frequency_subband_counts = 16;   // From config_prefilled.frequency_subband_counts
   double max_dm_of_all_trees = 17;
   int64 max_width_of_base_tree = 18;   // in samples, not ms
 }
@@ -240,9 +241,9 @@ message SubscribeFilesResponse {
 message ReadySentinel {}
 
 // One completed file's write status.
-// Note: the filename is relative to the server's nfs_path.
+// Note: the filename is relative to the server's nfs_root (GetConfigResponse.nfs_dir).
 message WriteNotification {
-  string filename      = 1;  // Valid only when error_message is empty.
+  string filename      = 1;  // Always set (names the file, success or failure).
   string error_message = 2;  // Empty = success; non-empty = error string.
   string stream_name   = 3;  // Empty if triggered by WriteFiles, nonempty
                              // if triggered by StartStream.

@@ -20,9 +20,10 @@ class Acquisition:
 
     Typically, the acqdir will be created by either `pirate_frb rpc_start_stream`,
     or a triggered `WriteFiles` RPC. The constructor raises an exception if the
-    acqdir contains a file that's not of the form `frame_b{beam}_t{chunk}.asdf`,
-    or if any beam's time chunk indices are non-contiguous. Different beams may
-    span different time-index ranges;
+    acqdir contains a file that's not of the form `frame_b{beam}_t{chunk}.asdf`
+    (except uncommitted C++ make_tmp_filename() temp files, which are ignored
+    with a message printed to stdout), or if any beam's time chunk indices are
+    non-contiguous. Different beams may span different time-index ranges.
 
     Attributes
     ----------

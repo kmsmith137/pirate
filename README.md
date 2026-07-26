@@ -5,9 +5,8 @@ An experimental GPU-based fast transient search, intended for use in CHORD.
 Some notes/caveats:
 
   - This repo contains real-time server code (network receive, ring buffering,
-    file-writing RPCs) and GPU dedispersion code, but currently the **real-time
-    server does not call the GPU dedisperser**! Working on this is my top
-    priority.
+    file-writing RPCs) and GPU dedispersion code, but currently **does not do RFI flagging**.
+    Fixing this is my top priority.
 
   - Currently, this code can only be compiled on a recent ubuntu
     linux machine with **a physical GPU**, and the cuda toolkit installed.

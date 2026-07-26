@@ -33,7 +33,7 @@ Choosing between them -- put the docstring where the class is most naturally des
 - Use **option 1** for classes that are essentially C++ objects with a thin Python
   shim (a constructor/`launch`/setter that just converts dtypes, streams, or aflags),
   especially when a good C++ docstring already exists. Examples: `BumpAllocator`,
-  `SlabAllocator`, `DedispersionConfig`, `GpuDequantizationKernel`, `CasmBeamformer`.
+  `SlabAllocator`, `SimulatedFrameFactory`, `GpuDequantizationKernel`, `CasmBeamformer`.
 - Use **option 2** when the class's primary Python interface *is* the injection -- a
   context-manager usage pattern, or accessors that return Python wrapper objects -- so
   the narrative (and the read-only-attribute bullet list, per the next section) belongs

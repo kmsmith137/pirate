@@ -19,8 +19,8 @@ documentation snapshots (do not edit them by hand; regenerate by running
 - **`dedispersion/`** -- GPU dedispersion pipeline configs (frequency zones, tree rank,
   downsampling levels, peak-finding parameters, batching, etc.). Used by two subcommands:
 
-  - `pirate_frb show_dedisperser [-v] configs/dedispersion/chime.yml`
-    -- parse and pretty-print the config and plan.
+  - `pirate_frb show_dedisperser [-v] [-c] configs/dedispersion/chime.yml`
+    -- parse and pretty-print the plan (add `-c` to also print the config).
   - `pirate_frb time_dedisperser [-n NITER] configs/dedispersion/chime.yml`
     -- run GPU timing benchmarks.
 
@@ -30,8 +30,8 @@ documentation snapshots (do not edit them by hand; regenerate by running
   Production configs are also used by the build system (`makefile_helper.py`) to
   determine which CUDA kernels to autogenerate.
 
-- **`frb_server/`** -- FRB search server configs (network addresses, memory allocation,
-  file-writing threads, SSD/NFS paths, fake-X-engine parameters). Used by:
+- **`frb_server/`** -- FRB search server configs (server/CPU layout, network addresses,
+  host+GPU memory pools, ring buffer length, file-writing threads, SSD/NFS paths). Used by:
 
   ```
   pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml   # start server
@@ -50,14 +50,17 @@ documentation snapshots (do not edit them by hand; regenerate by running
   ```
 
   Each file enables a different subset of loads (e.g. `cf00_net.yml` for
-  networking only, `cf00_all.yml` for everything, `cf00_blob.yml` for storage).
+  networking only, `cf00_blob.yml` for storage, `cf00_all.yml` for network +
+  SSD + dedispersion + CPU downsampling together). The four `*_bw` bandwidth
+  loads are off in all of these files: they are heavyweight and meant to be
+  run on their own.
 
 - **`xengine_metadata.yml`** (top-level file) -- X-engine metadata defining the
   frequency-zone layout, beam configuration, and initial time sample. This file
   serves double duty:
 
-  1. It documents the binary metadata header that each X-engine node sends at the
-     start of a TCP stream to an FRB search node.
+  1. It documents the metadata YAML string that each X-engine node sends at the
+     start of a TCP stream to an FRB search node (see notes/network_protocol.md).
   2. It is the input from which the `example_asdf_header.yml` documentation
      snapshot is generated (`pirate_frb show_file_format configs/xengine_metadata.yml`).
 

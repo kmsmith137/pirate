@@ -715,7 +715,36 @@ void register_core_bindings(pybind11::module &m)
             [](const CudaStreamPool &self) { return self.compute_streams; })
     ;
 
-    py::class_<FrequencySubbands>(m, "FrequencySubbands")
+    py::class_<FrequencySubbands>(m, "FrequencySubbands",
+        "Frequency sub-bands searched by the peak-finding kernel.\n\n"
+        "Searching sub-bands, rather than only the full band, improves SNR for bursts\n"
+        "that do not span the full frequency range.\n\n"
+        "Usually constructed with from_threshold(fmin, fmax, threshold, pf_rank=4),\n"
+        "where 'threshold' is a TARGET fractional bandwidth (some sub-bands may end up\n"
+        "wider). 'pirate_frb make_subbands FMIN FMAX THRESHOLD' does this from the\n"
+        "command line and prints the result. Alternatively, construct directly from\n"
+        "'subband_counts' -- a length-(pf_rank+1) list giving the number of sub-bands at\n"
+        "each peak-finding level, which fully parameterizes the sub-bands. Use\n"
+        "subband_counts=[1] to disable sub-banding and search only the full band.\n\n"
+        "Constraints: subband_counts[pf_rank] must be 1 (the top level is the full band),\n"
+        "and pf_rank must be <= constants.max_peak_finding_rank (currently 4).\n\n"
+        "Sub-bands are expressed in coarse-frequency indices 0 <= f <= 2^pf_rank. Two\n"
+        "conventions here are easy to get backwards: these indices are equally spaced in\n"
+        "DELAY, not in frequency, and f=0 is the HIGH-frequency end of the band. See the\n"
+        "comments in include/pirate/FrequencySubbands.hpp for the full indexing scheme.\n\n"
+        "Footgun: 'f_to_freq' is empty, and show_compact() raises, unless fmin/fmax were\n"
+        "supplied at construction. from_threshold() always supplies them; the\n"
+        "subband_counts-only constructor does not.\n\n"
+        "Attributes (read-only):\n\n"
+        "- ``subband_counts`` (list) -- number of sub-bands at each peak-finding level.\n"
+        "- ``pf_rank`` (int) -- peak-finding rank, equal to len(``subband_counts``) - 1.\n"
+        "- ``N`` (int) -- number of distinct frequency sub-bands.\n"
+        "- ``M`` (int) -- number of \"multiplets\", i.e. (sub-band, fine-grained DM) pairs.\n"
+        "- ``fmin``, ``fmax`` (float) -- frequency range in MHz, or 0.0 if not supplied.\n"
+        "- ``f_to_freq`` (list) -- coarse-frequency index to physical frequency in MHz.\n"
+        "- ``m_to_n``, ``m_to_d`` (list) -- multiplet to sub-band, and multiplet to fine-grained DM.\n"
+        "- ``n_to_flo``, ``n_to_fhi`` (list) -- sub-band to its coarse-frequency index range.\n"
+        "- ``n_to_mbase`` (list) -- sub-band to the start of its multiplet range.")
           // Constructors
           .def(py::init<>())  // default constructor
           .def(py::init<const std::vector<long> &>(), py::arg("subband_counts"))
@@ -1026,7 +1055,7 @@ void register_core_bindings(pybind11::module &m)
         "multiple of len(ip_addrs). Worker threads inherit the vcpu affinity\n"
         "of the thread that calls the constructor -- Python callers MUST\n"
         "instantiate FakeXEngine inside a ThreadAffinity context manager.\n\n"
-        "Usage:\n"
+        "Usage::\n\n"
         "    xmd = XEngineMetadata.from_yaml_file('...')\n"
         "    with ThreadAffinity(vcpu_list):\n"
         "        fxe = FakeXEngine(xmd, ['10.0.0.2:5000', '10.0.1.2:5000'], 64,\n"
@@ -1273,7 +1302,7 @@ void register_core_bindings(pybind11::module &m)
                "Snapshot semantic: the value may already be stale by the time\n"
                "the caller observes it (the worker thread or an ack may have\n"
                "advanced the state). Does NOT throw on a stopped FakeXEngine.\n\n"
-               "Example:\n"
+               "Example::\n\n"
                "    fxe = FakeXEngine(xmd, ip_addrs, 1,\n"
                "                      time_samples_per_chunk=32768, debug=True)\n"
                "    fxe.enqueue_send_junk(0, 0)\n"
@@ -1290,7 +1319,7 @@ void register_core_bindings(pybind11::module &m)
                "    minichunk_index is out of range.")
           .def("get_debug_counters", &FakeXEngine::get_debug_counters,
                "Snapshot the four ack-prediction outcome counters as a\n"
-               "tuple (length 4). Indices:\n"
+               "tuple (length 4). Indices::\n\n"
                "    [0] unambiguous, DROPPED   (predicted + got DROPPED)\n"
                "    [1] unambiguous, ASSEMBLED (predicted + got ASSEMBLED)\n"
                "    [2] ambiguous,   DROPPED   (no prediction; got DROPPED)\n"

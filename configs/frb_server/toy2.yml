@@ -2,8 +2,7 @@
 # Same as toy.yml, but with two receivers on the single server.
 # See cf05_production.yml for more info on file format.
 #
-# To start the server:
-#   mkdir -p /dev/shm/pirate_ssd /dev/shm/pirate_nfs
+# To start the server (SSD/NFS dirs are created automatically):
 #   pirate_frb run_server configs/frb_server/toy2.yml configs/dedispersion/toy.yml
 #
 # To send fake X-engine data (in a separate terminal):

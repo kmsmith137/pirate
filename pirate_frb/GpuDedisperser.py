@@ -84,7 +84,7 @@ class GpuDedisperserInjections:
 
     - Back-pressure: exiting the get_input(seq_id) block blocks the host until
       output (seq_id - nbatches_out) has been released. A single thread driving
-      both inputs and outputs (as in the example below) must therefore not let
+      both inputs and outputs (as in the example above) must therefore not let
       output releases lag input submissions by more than nbatches_out batches,
       or it will deadlock.
     """
@@ -135,7 +135,7 @@ class GpuDedisperserInjections:
 
         Examples
         --------
-        >>> g = GpuDedisperser(plan, stream_pool, cuda_device_id=0)
+        >>> g = GpuDedisperser(plan, stream_pool, cuda_device_id=0, num_consumers=1)
         >>> g.allocate(gpu_alloc, host_alloc)
         >>> with g.get_input(seq_id=0) as arr:
         ...     arr[:] = input_data  # write to the buffer

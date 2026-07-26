@@ -215,7 +215,7 @@ void validate_acqdir(const std::string &acqdir);
 // Builds the roots-relative path for one frame of an acquisition:
 // "{acqdir}/frame_b{beam_id}_t{time_chunk_index}.asdf" (unpadded decimal).
 // This fixed naming scheme is parsed by python-side tooling
-// (pirate_frb.utils.list_acqdir's _FRAME_RE) -- keep the two in sync.
+// (pirate_frb.Acquisition's _FRAME_RE) -- keep the two in sync.
 // The (beam_id, time_chunk_index) overload exists for frames that do not
 // exist yet (WriteFiles future-write filename enumeration).
 std::string make_acq_relpath(const std::string &acqdir,

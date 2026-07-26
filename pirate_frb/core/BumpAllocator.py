@@ -121,7 +121,7 @@ class BumpAllocatorInjections:
 
         Examples
         --------
-        >>> alloc = BumpAllocator('gpu', 1024**3, cuda_device=0)
+        >>> alloc = BumpAllocator('af_gpu', 1024**3, cuda_device=0)
         >>> arr1 = alloc.allocate_array('float32', (1024, 1024))
         >>> arr2 = alloc.allocate_array(np.int16, (512, 512, 4))
         >>> print(alloc.nbytes_allocated)  # Shows total allocated

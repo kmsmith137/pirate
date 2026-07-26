@@ -121,7 +121,8 @@ class ThreadAffinity:
     On entry, sets the calling thread's affinity to the specified vCPUs.
     On exit, restores the original affinity.
 
-    Example:
+    Example::
+
         with ThreadAffinity([2, 3]):
             # Thread is pinned to vCPUs 2 and 3
             do_work()
