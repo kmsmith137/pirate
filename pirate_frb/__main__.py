@@ -65,6 +65,7 @@ def parse_test(subparsers):
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection and pulse-invariants tests')
     parser.add_argument('--amax', action='store_true', help='Runs DedispersionPlan.decode_argmax() tests (black-box probe arrays)')
     parser.add_argument('--aout', action='store_true', help='Runs the serialized-output test (atomic_print/AtomicPrint, C++ and python threads)')
+    parser.add_argument('--dt1d', action='store_true', help='Runs pirate_frb.detrending_1d tests (pure-numpy 1-d detrender)')
 
 
 def rrange(registry_class):
@@ -85,7 +86,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -93,6 +94,10 @@ def test(args):
 
     for i in range(args.niter):
         atomic_print(f'\nIteration {i+1}/{args.niter}\n\n')
+        
+        if run_all_tests or args.dt1d:
+            from .detrending_1d import tests as dt1d_tests
+            dt1d_tests.run_all()
         
         if run_all_tests or args.rt:
             kernels.ReferenceLagbuf.test_random()
