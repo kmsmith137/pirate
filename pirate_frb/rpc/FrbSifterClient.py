@@ -342,9 +342,11 @@ class FrbSifterClient:
                          f"rejected the message: {reply.message!r}", fd=2)
 
     def _on_event_expired(self, code_name):
-        """Handle an event that couldn't be delivered within 'timeout' (runs on a grpc
-        thread). raise_exception_on_timeout=True -> stash the error to re-raise from the
-        next send_events(); False -> print a message to stdout and drop it."""
+        """Handle an event that couldn't be delivered within 'timeout'.
+
+        Runs on a grpc thread. raise_exception_on_timeout=True -> stash the error to
+        re-raise from the next send_events(); False -> print a message to stdout and
+        drop it."""
         msg = (f"FrbSifterClient.send_events: event to sifter at {self.server_address!r} "
                f"was not delivered ({code_name}); sifter offline or not responding?")
         if self.raise_exception_on_timeout:
@@ -376,8 +378,9 @@ class FrbSifterClient:
 
     @staticmethod
     def _to_1d(name, x, np_dtype):
-        """Convert a 1-d numpy/cupy array (or any 1-d iterable) to a contiguous 1-d
-        numpy array of dtype 'np_dtype'. A cupy array is first copied to the host in
+        """Convert a 1-d array (or any 1-d iterable) to a contiguous 1-d numpy array.
+
+        The result has dtype 'np_dtype'. A cupy array is first copied to the host in
         one shot via .get() (np.asarray() can't be applied directly: cupy raises on
         implicit conversion)."""
         arr = x

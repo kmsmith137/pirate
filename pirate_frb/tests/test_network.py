@@ -71,8 +71,9 @@ from ..utils import atomic_print
 
 
 def _acq_filename(acqdir, beam_id, chunk):
-    """Client-side mirror of the server's fixed naming scheme
-    (make_acq_relpath in src_lib/FileWriter.cpp):
+    """Client-side mirror of the server's fixed naming scheme.
+
+    See make_acq_relpath in src_lib/FileWriter.cpp:
     {acqdir}/frame_b{beam_id}_t{chunk}.asdf, unpadded decimal."""
     return f"{acqdir}/frame_b{beam_id}_t{chunk}.asdf"
 
@@ -431,8 +432,10 @@ class NetworkTester:
     # ---- Send loop ----
 
     def _send_loop(self, nturns=1000):
-        """Randomized send loop (default 1000 turns; test_slow_subscriber
-        runs a shorter loop, since it only needs some processed chunks).
+        """Randomized send loop.
+
+        Runs 1000 turns by default; test_slow_subscriber
+        runs a shorter loop, since it only needs some processed chunks.
 
         Each turn picks a random worker, occasionally synchronizes it,
         and enqueues a Poisson-sized batch of SEND_MINICHUNK (or SKIP)
@@ -513,9 +516,11 @@ class NetworkTester:
                 self._maybe_issue_write(iouter)
 
     def _maybe_issue_write(self, iouter):
-        """Compute the guaranteed chunk range, pick a request rectangle
-        (widened into the past and the future), issue write_files, and
-        update tracking sets. Early-returns if no chunk is requestable
+        """Issue one randomized write_files request, if any chunk is requestable.
+
+        Computes the guaranteed chunk range, picks a request rectangle
+        (widened into the past and the future), issues write_files, and
+        updates tracking sets. Early-returns if no chunk is requestable
         this turn.
         """
         p = self.p
@@ -686,8 +691,10 @@ class NetworkTester:
                                           max(expanded[fn] for fn in returned))
 
     def _check_duplicate_beam_rejection(self, iouter, selected_beams, chunk_min, chunk_max):
-        """write_files with a duplicated beam_id must fail (a validation
-        error, rejected before any server state is touched)."""
+        """Check that write_files with a duplicated beam_id fails.
+
+        It must be a validation error, rejected before any server state is
+        touched."""
         spc = self.p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
         try:
             self.rpc_client.write_files(
@@ -705,8 +712,9 @@ class NetworkTester:
     # ---- Post-loop phases ----
 
     def _post_loop_sync(self):
-        """Block on each worker's command queue and assert that every
-        enqueued minichunk reached a terminal status.
+        """Block on each worker's command queue and check terminal statuses.
+
+        Asserts that every enqueued minichunk reached a terminal status.
         """
         for worker_id in range(self.nworkers):
             # Block until worker thread has processed all commands,
@@ -722,10 +730,12 @@ class NetworkTester:
                     assert (status == FakeXEngine.STATUS_DROPPED) or (status == FakeXEngine.STATUS_ASSEMBLED)
 
     def _flush_promises(self):
-        """Future-write promises can extend past the last chunk the send
+        """Send a "flush tail" so outstanding future-write promises can complete.
+
+        Future-write promises can extend past the last chunk the send
         loop delivered; without more data those frames would never be
-        processed, and _drain_filesub() would block forever. Send a "flush
-        tail" -- every worker, real sends, deliberately ignoring the dstate
+        processed, and _drain_filesub() would block forever. The flush tail is
+        every worker, real sends, deliberately ignoring the dstate
         fiction (enqueue_send after a disconnect reconnects, as in the main
         loop) -- through the FIRST minichunk of chunk (max_promised_chunk +
         2). The receiver's 2-chunk assembly window advances on the chunk
@@ -790,8 +800,9 @@ class NetworkTester:
                      f"({self.n_skip_converted} converted to sends by the skip-window check)")
 
     def _drain_filesub(self):
-        """Wait until every scheduled filename has arrived via the
-        FileSubscriber stream, checking EXACTLY-ONCE delivery: each
+        """Wait until every scheduled filename has arrived via the FileSubscriber.
+
+        Checks EXACTLY-ONCE delivery: each
         scheduled filename gets exactly one notification (a duplicate would
         mean a frame was written twice, e.g. by both the WriteFiles past
         path and an anonymous future-write stream -- the bug class the
@@ -828,9 +839,10 @@ class NetworkTester:
         atomic_print(f"    unsafe, not written:  {len(self.unsafe_not_written_set)}")
 
     def _verify_files(self):
-        """Read every scheduled file back from disk and byte-compare its
-        contents to an expected buffer reconstructed from client-side
-        state. _drain_filesub ensures every file is on disk; minichunk
+        """Read every scheduled file back from disk and byte-compare its contents.
+
+        The comparison is against an expected buffer reconstructed from
+        client-side state. _drain_filesub ensures every file is on disk; minichunk
         statuses are terminal after _post_loop_sync.
         """
         scheduled = self.safe_written_set | self.unsafe_written_set
@@ -839,8 +851,10 @@ class NetworkTester:
             self._verify_one_file(filename, chunk_idx, beam_id)
 
     def _verify_one_file(self, filename, chunk_idx, beam_id):
-        """Read one written file back from NFS and byte-compare its contents
-        to the expected buffer reconstructed from client-side state.
+        """Read one written file back from NFS and byte-compare its contents.
+
+        The comparison is against the expected buffer reconstructed from
+        client-side state.
         """
         expected_data, expected_so = self._compute_expected_data(chunk_idx, beam_id)
         path = os.path.join(self.nfs_dir, filename)
@@ -933,9 +947,10 @@ class NetworkTester:
     # ---- Slow-subscriber (backlog cap) phase ----
 
     def _run_slow_subscriber_phase(self):
-        """Verify the FileWriter's per-subscriber backlog cap
-        (Params::max_subscriber_backlog, set small via the NetworkTester
-        ctor): a SubscribeFiles client that never reads must be stopped
+        """Verify the FileWriter's per-subscriber backlog cap.
+
+        The cap is Params::max_subscriber_backlog, set small via the NetworkTester
+        ctor. A SubscribeFiles client that never reads must be stopped
         server-side with a "fell behind" error, WITHOUT affecting a
         concurrently-consuming subscriber or the FileWriter itself.
 
@@ -1084,7 +1099,9 @@ def test_network():
 
 
 def test_slow_subscriber():
-    """Server-side backlog cap for SubscribeFiles: a subscriber that never
+    """Test the server-side backlog cap for SubscribeFiles.
+
+    A subscriber that never
     reads must be stopped ('fell behind'), without affecting a concurrent
     consuming subscriber or the FileWriter. Uses the NetworkTester rig with a
     small cap and a shortened send loop (this test only needs some

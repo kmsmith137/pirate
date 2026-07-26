@@ -316,6 +316,7 @@ class RunFakeXEngineHelper:
 
     def _verify_nics_and_mtu(self, rpc_addr, cfg):
         """Check MTU on each data NIC and verify all NICs are on one CPU.
+
         Returns the (consistent) vcpu_list for use with ThreadAffinity.
         """
         ip_addrs = list(cfg.data_ip_addrs)
@@ -354,8 +355,10 @@ class RunFakeXEngineHelper:
             self.controllers.append(t)
 
     def _controller_wrapper(self, rpc_addr, fxe, factory, sifter):
-        """Wraps _controller_main. On exit (normal or exceptional),
-        cascade-stops every FakeXEngine, SimulatedFrameFactory, and allocator so
+        """Wrap _controller_main, cascade-stopping everything on exit.
+
+        On exit (normal or exceptional), cascade-stops every FakeXEngine,
+        SimulatedFrameFactory, and allocator so
         sibling controllers exit promptly (their blocking calls return
         done-values on the cascade's clean stop). Captures any exception
         (paired with its rpc_addr) under self.exc_lock for the main thread to
@@ -524,8 +527,9 @@ class RunFakeXEngineHelper:
             raise self.exc_list[0][1]
 
     def _stop_all(self):
-        """Idempotent: stop every FakeXEngine, SimulatedFrameFactory, and
-        AssembledFrameAllocator.
+        """Stop every FakeXEngine, SimulatedFrameFactory, and AssembledFrameAllocator.
+
+        Idempotent.
 
         Stopping the factories is what unblocks a controller parked in
         factory.get_frame_set(), and a factory producer parked in the allocator's

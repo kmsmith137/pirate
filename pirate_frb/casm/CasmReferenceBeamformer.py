@@ -24,9 +24,9 @@ class CasmReferenceBeamformer:
                  downsampling_factor,       # scalar (integer)
                  ns_feed_spacing = None,    # meters
                  ew_feed_spacings = None):  # meters
-        """
-        CasmReferenceBeamformer: implements the following, in single-threaded numpy
-        code which is slow and easy to read.
+        """Reference beamformer for CASM, in slow single-threaded numpy.
+
+        Implements the following, in code which is slow and easy to read.
 
           (1) Exact beamforming, by summing all electric fields with beamforming phases,
               squaring, and averaging over time/polarization. This is useful as a
@@ -206,7 +206,8 @@ class CasmReferenceBeamformer:
         
 
     def beamform(self, e_arr, feed_weights, interpolate=True):
-        """
+        """Beamform an electric-field array.
+
         Arguments
         ---------
         
@@ -264,7 +265,8 @@ class CasmReferenceBeamformer:
 
 
     def _beamform_exact(self, e_weighted):
-        """
+        """Exact beamforming (no interpolation).
+
         This is the function you should read, if you want a reference for the details
         of the beaforming computation (e.g. sign conventions, coordinate conventions.)
         """
@@ -468,8 +470,9 @@ class CasmReferenceBeamformer:
     #       but only needs the python standard library (via 'import ctypes')
 
     def run_cuda_kernel_via_pybind11(self, e_in, feed_weights, i_out):
-        """
-        Launches cuda kernel via pybind11 interface. Only used for testing.
+        """Launch the cuda kernel via the pybind11 interface.
+
+        Only used for testing.
         Note: this works in the chord pipeline, but not in the casm_bf repo!
         """
         
@@ -493,8 +496,8 @@ class CasmReferenceBeamformer:
     @classmethod
     @functools.lru_cache(None)
     def libcasm_bf(cls):
-        """
-        Helper function to load and initialize the C++/cuda code via ctypes interface.
+        """Load and initialize the C++/cuda code via the ctypes interface.
+
         Only used for testing.
 
         Note: this works in the casm_bf repo, but not in the chord pipeline!
@@ -530,9 +533,9 @@ class CasmReferenceBeamformer:
 
 
     def run_cuda_kernel_via_ctypes(self, e_in, feed_weights, i_out):
-        """
-        Launches cuda kernel via ctypes interface. This is a slow interface,
-        used only for testing.
+        """Launch the cuda kernel via the ctypes interface.
+
+        This is a slow interface, used only for testing.
 
         Note: this works in the casm_bf repo, but not in the chord pipeline!
         """

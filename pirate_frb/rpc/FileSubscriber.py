@@ -5,8 +5,9 @@ from .grpc import frb_search_pb2
 
 
 class FileSubscriber:
-    """A python caller uses this class to subscribe to file-writing notifications
-    from an FrbServer.
+    """Subscribe to file-writing notifications from an FrbServer.
+
+    A python caller uses this class to learn when files have actually been written.
 
     Constructed via FrbSearchClient.subscribe_files(). The constructor opens
     the gRPC stream AND blocks until the server confirms that the

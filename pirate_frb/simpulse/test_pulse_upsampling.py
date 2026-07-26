@@ -1,6 +1,7 @@
-"""
-test_pulse_upsampling: checks that the pulse simulation is (approximately) invariant under
-upsampling in frequency and/or time. Ported from simpulse/test_pulse_upsampling.py.
+"""Check that the pulse simulation is invariant under upsampling.
+
+The invariance is approximate, in frequency and/or time. Ported from
+simpulse/test_pulse_upsampling.py.
 
 Time sampling is now a construction parameter (time_sample_ms), and the grid is zero-based, so a
 time-upsampled pulse is one built with a smaller time_sample_ms (= coarse / nupsample). The pulse
@@ -98,6 +99,7 @@ class upsampling_test_instance:
     @staticmethod
     def _upsample_edges(edges, nupfreq):
         """Subdivide each coarse channel [edges[i], edges[i+1]] into 'nupfreq' EQUAL sub-channels.
+
         Returns the fine edge array of length nupfreq*(len(edges)-1) + 1."""
         if nupfreq == 1:
             return edges

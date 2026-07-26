@@ -103,8 +103,9 @@ class FrbSearchClient:
         return self.stub.GetConfig(request)
 
     def _try_xengine_metadata(self):
-        """Fetch the server's X-engine metadata YAML string, by sending a
-        GetXEngineMetadata RPC (only when the value is not already cached).
+        """Fetch the server's X-engine metadata YAML string.
+
+        Sends a GetXEngineMetadata RPC (only when the value is not already cached).
 
         Returns the (terse, non-verbose) YAML string, or None if the server
         has not yet received metadata from the X-engine. The first non-empty
@@ -170,8 +171,9 @@ class FrbSearchClient:
 
     @functools.cached_property
     def xengine_metadata(self):
-        """The server's X-engine metadata, parsed to a typed
-        pirate_frb.core.XEngineMetadata (cached).
+        """The server's X-engine metadata, parsed and cached.
+
+        The result is a typed pirate_frb.core.XEngineMetadata.
 
         beam_ids and beam_positions_{x,y} ARE populated (the server serializes
         them via XEngineMetadata::to_yaml_string). freq_channels may be empty:
@@ -263,9 +265,10 @@ class FrbSearchClient:
         fpga_seq_start: int = 0,
         fpga_seq_end: int = None
     ) -> tuple[str, str]:
-        """Register a "stream", by sending a StartStream RPC: data matching
-        (beam_ids x fpga-seq range) is queued for disk writing automatically as
-        it flows through the server.
+        """Register a "stream", by sending a StartStream RPC.
+
+        Data matching (beam_ids x fpga-seq range) is queued for disk writing
+        automatically as it flows through the server.
 
         Files are written to {nfs_root}/{acqdir}/frame_b(BEAM)_t(CHUNK).asdf,
         where nfs_root comes from the server config (self.config.nfs_dir).
@@ -329,8 +332,9 @@ class FrbSearchClient:
         return stream_name, acqdir
 
     def show_streams(self):
-        """Query the server for its streams (active + recent history), by
-        sending a ShowStreams RPC.
+        """Query the server for its streams (active + recent history).
+
+        Sends a ShowStreams RPC.
 
         Returns:
             ShowStreamsResponse protobuf message with fields:
@@ -359,8 +363,9 @@ class FrbSearchClient:
         return self.stub.ShowStreams(request)
 
     def cancel_stream(self, stream_name: str = None, cancel_all: bool = False) -> int:
-        """Cancel one active stream (by stream_name), or all of them, by
-        sending a CancelStream RPC.
+        """Cancel one active stream (by stream_name), or all of them.
+
+        Sends a CancelStream RPC.
 
         File writes already queued still complete (and still notify
         subscribe_files() subscribers); cancellation only stops future
@@ -387,8 +392,9 @@ class FrbSearchClient:
         return response.num_cancelled
 
     def subscribe_files(self, subscribe_streams: bool = False):
-        """Open a file-write-notification subscription (a SubscribeFiles
-        server-streaming RPC).
+        """Open a file-write-notification subscription.
+
+        Sends a SubscribeFiles server-streaming RPC.
 
         Returns a FileSubscriber whose constructor has already opened
         the stream and consumed the server's ready sentinel, so any
@@ -407,8 +413,9 @@ class FrbSearchClient:
         return FileSubscriber(self.stub, subscribe_streams)
 
     def monitor_ringbuf(self):
-        """Subscribe to a server push stream of rb_processed updates, by opening
-        a MonitorRingbuf server-streaming RPC.
+        """Subscribe to a server push stream of rb_processed updates.
+
+        Opens a MonitorRingbuf server-streaming RPC.
 
         SPECIAL-PURPOSE: this RPC exists for the FakeXEngine "pacing"
         feature, which gates the sender's chunk rate against the

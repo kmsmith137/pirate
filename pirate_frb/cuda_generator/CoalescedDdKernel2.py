@@ -14,8 +14,8 @@ from .PeakFinder import PeakFinder
 
 class CoalescedDdKernel2:
     def __init__(self, dtype, dd_rank, frequency_subbands, Wmax, Dcore, Dout, Tinner):
-        """
-        Coalesced Dedisperser + PeakFinder.
+        """Coalesced Dedisperser + PeakFinder.
+
         We currently assume apply_input_residual_lags == input_is_ringbuf == True.
         """
 

@@ -3,7 +3,8 @@
 
 class Ringbuf:
     def __init__(self, dtype):
-        """
+        """Generator for the per-warp register ring buffer used to apply lags.
+
         Consider a situation where we are processing a timestream in 32-element chunks,
         so that thread 0 <= th < 32 holds x[t] at time index t = (32*i + th).
 

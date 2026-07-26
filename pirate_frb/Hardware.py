@@ -9,8 +9,9 @@ from .utils import atomic_print
 
 
 class Hardware:
-    """Queries the machine's hardware topology: which devices (GPUs, NICs, SSDs)
-    are associated with each CPU.
+    """Query the machine's hardware topology.
+
+    Works out which devices (GPUs, NICs, SSDs) are associated with each CPU.
 
     Used when starting the real-time server, to decide which hardware to associate
     with each FrbServer instance. This is all currently done from python. To dump
@@ -43,7 +44,9 @@ class Hardware:
     @functools.cached_property
     def numa_nodes(self):
         """Sorted list of NUMA node ids found in /sys/devices/system/node/.
-        Returns [] on a system without a NUMA sysfs tree."""
+
+        Returns [] on a system without a NUMA sysfs tree.
+        """
 
         base = '/sys/devices/system/node'
         if not os.path.isdir(base):
@@ -71,8 +74,10 @@ class Hardware:
 
     @functools.cached_property
     def hugepage_sizes(self):
-        """Sorted list of hugepage sizes (BYTES) found in
-        /sys/kernel/mm/hugepages/. Returns [] if HugeTLB is unconfigured."""
+        """Sorted list of hugepage sizes, in bytes.
+
+        Found in /sys/kernel/mm/hugepages/. Returns [] if HugeTLB is unconfigured.
+        """
 
         base = '/sys/kernel/mm/hugepages'
         if not os.path.isdir(base):
@@ -87,8 +92,10 @@ class Hardware:
     @functools.cache
     def hugepage_pool(self, size):
         """System-wide hugepage pool for the given page size (in bytes).
+
         Returns dict {'nr', 'free', 'surplus'}. Raises if 'size' is not
-        in self.hugepage_sizes."""
+        in self.hugepage_sizes.
+        """
 
         assert size in self.hugepage_sizes, f'unknown hugepage size {size}'
         d = f'/sys/kernel/mm/hugepages/hugepages-{size // 1024}kB'
@@ -96,8 +103,10 @@ class Hardware:
 
     @functools.cache
     def hugepage_pool_per_node(self, size, node):
-        """Per-NUMA-node hugepage pool. Returns dict {'nr', 'free',
-        'surplus'} -- same keys as hugepage_pool()."""
+        """Per-NUMA-node hugepage pool.
+
+        Returns dict {'nr', 'free', 'surplus'} -- same keys as hugepage_pool().
+        """
 
         assert size in self.hugepage_sizes, f'unknown hugepage size {size}'
         assert node in self.numa_nodes,     f'unknown NUMA node {node}'
@@ -123,7 +132,9 @@ class Hardware:
     @staticmethod
     def _fmt_bytes(n):
         """Format byte count as e.g. '2 MiB', '1.50 GiB', '768 GiB', '0 B'.
-        Integers stay integer; non-integers print with 2 decimals."""
+
+        Integers stay integer; non-integers print with 2 decimals.
+        """
         if n == 0:
             return '0 B'
         for unit_bytes, unit_name in [(1<<30, 'GiB'), (1<<20, 'MiB'), (1<<10, 'KiB')]:
@@ -233,8 +244,10 @@ class Hardware:
         return self._mount_from_dirname(dirname)[0]
 
     def _mount_from_dirname(self, dirname):
-        """Returns the /proc/mounts entry (device_name, mount_point, fstype,
-        device_id) whose filesystem contains 'dirname' (matched by st_dev)."""
+        """Return the /proc/mounts entry whose filesystem contains 'dirname'.
+
+        The entry is (device_name, mount_point, fstype, device_id), matched by st_dev.
+        """
 
         dev_id = os.stat(dirname).st_dev  # Device ID (major:minor)
 
@@ -404,7 +417,8 @@ class Hardware:
 
     @functools.cache
     def _pcie_bus_id_from_sys_subdir(self, pathname):
-        """
+        """Return the PCIe bus id for a /sys subdirectory, or None.
+
         The 'pathname' arg is e.g. '/sys/class/net/eno8303' or '/sys/class/block/nvme0n1p1'.
         Note that this function can return None -- caller should check return value.
         """
@@ -434,7 +448,8 @@ class Hardware:
     
     @functools.cache
     def _pcie_bus_id_from_nic(self, nic):
-        """
+        """Return the PCIe bus id for a NIC, or None.
+
         The 'nic' argument should be e.g. 'eth0'. Returns a PCIe bus id (e.g. '0000:03:00.0'),
         or None if not a PCIe device (e.g. loopback, docker).
         """
@@ -443,7 +458,8 @@ class Hardware:
 
     @functools.cache
     def _pcie_bus_id_from_block_device(self, device_name):
-        """
+        """Return the PCIe bus id for a block device.
+
         Given a block device (e.g., '/dev/nvme0n1' or '/dev/nvme0n1p1'), returns
         the PCIe bus id (e.g. '0000:03:00.0'). Raises exception on failure.
         """
@@ -469,8 +485,9 @@ class Hardware:
 
     
     def _parse_vcpu_list(self, cpu_str):
-        """
-        Parses a CPU list string like '0-3,8-11' and returns a list of integers
+        """Parse a CPU list string into a list of integers.
+
+        Parses a string like '0-3,8-11' and returns a list of integers
         such as [0,1,2,3,8,9,10,11].
         """
         
@@ -537,8 +554,9 @@ class Hardware:
 
     @functools.cached_property
     def _parse_proc_mounts(self):
-        """Parses /proc/mounts and returns a list of tuples
-        (device_name, mount_point, fstype, device_id).
+        """Parse /proc/mounts into a list of tuples.
+
+        Each tuple is (device_name, mount_point, fstype, device_id).
 
         Here, the 'device_name' is e.g. '/dev/nvme0n1p2' (or 'tmpfs'/'shm' for
         shared memory), 'fstype' is e.g. 'ext4' or 'tmpfs', and the 'device_id'

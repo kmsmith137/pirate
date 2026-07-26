@@ -9,7 +9,8 @@ from ..utils import atomic_print
 
 
 class PfVarianceConvolver:
-    """
+    """Convert time series to variances, for the peak-finding kernels.
+
     The PfVarianceConvolver has one purpose in life: to convert time series to variances,
     after convolving with the first P pirate peak-finding kernels. See variance() below.
     """
@@ -46,8 +47,9 @@ class PfVarianceConvolver:
 
     @staticmethod
     def _autocorr(a, maxlag):
-        """
-        One-sided autocorrelation sum_t a[..., t] a[..., t+k] for lags k = 0..maxlag-1.
+        """One-sided autocorrelation over the last axis.
+
+        Computes sum_t a[..., t] a[..., t+k] for lags k = 0..maxlag-1.
         Acts on the last axis (leading axes are spectators); needs 1 <= maxlag <= a.shape[-1].
         Returns shape a.shape[:-1] + (maxlag,).
         """
@@ -58,7 +60,8 @@ class PfVarianceConvolver:
         return np.stack([(a[..., :T - k] * a[..., k:]).sum(axis=-1) for k in range(maxlag)], axis=-1)
 
     def variance(self, x, P):
-        """
+        """Return per-profile variances for a time series.
+
         Setup: x[..., T] is an array whose last index is time (other indices are spectators).
         Returns an array of variances x[..., P] for the first P peak-finding kernels.
 
@@ -180,9 +183,9 @@ class PfVarianceConvolver:
 
 
 class PfVariance:
-    """
-    Represents a variance array var[d, p], for delay 0 <= d < 2^rank and peak-finding
-    profile 0 <= p < P (P is fixed by the convolver). Variance arrays with more indices
+    """A variance array var[d, p], indexed by delay and peak-finding profile.
+
+    Here 0 <= d < 2^rank and 0 <= p < P (P is fixed by the convolver). Variance arrays with more indices
     can be represented by building larger data structures that contain PfVariance objects.
 
     The variance is stored as a small sum of terms, each of which depends on the delay d
@@ -221,8 +224,8 @@ class PfVariance:
 
     
     def unpack(self, dbits):
-        """
-        Expand every term to shape (2^popcount(dbits), P) and return their sum.
+        """Expand every term to shape (2^popcount(dbits), P) and return their sum.
+
         'dbits' must be a superset of every term's dbits.
         """
         
@@ -244,9 +247,10 @@ class PfVariance:
 
     
     def add_tile(self, tile, convolver):
-        """
-        Given a singleton SparseTile representing dedisperser output, compute the variance
-        and accumulate it into (self.terms).
+        """Compute the variance of a singleton SparseTile and accumulate it.
+
+        The tile represents dedisperser output; the variance is accumulated into
+        (self.terms).
         """
         assert tile.nf == 1, "PfVariance.add_tile: tile must be a singleton (nf == 1)"
         assert tile.k == self.rank, (tile.k, self.rank)
@@ -281,9 +285,9 @@ class PfVariance:
 
     @staticmethod
     def from_tile(tile, P, convolver):
-        """
-        Given a singleton SparseTile representing dedisperser output, compute the variance
-        and return it as a new PfVariance object.
+        """Compute the variance of a singleton SparseTile, as a new PfVariance.
+
+        The tile represents dedisperser output.
         """
         pfvar = PfVariance(tile.k, P)
         pfvar.add_tile(tile, convolver)
@@ -291,8 +295,8 @@ class PfVariance:
 
     
     def _accumulate(self, dbits, arr, *, scale=1.0, steal=False):
-        """
-        Accumulate (dbits, scale*arr) into self.terms.
+        """Accumulate (dbits, scale*arr) into self.terms.
+
         The 'steal' arg indicates whether it's okay to steal ownership of 'arr'.
         """
         

@@ -65,8 +65,10 @@ def _expected_pulse(sp, nfreq, ntime, dt_sp):
 
 
 def _make_frame(xmd, nbeams, nfreq, ntime):
-    """One AssembledFrame from a fresh allocator. Returns (frame, allocator); keep the allocator
-    alive (it owns the frame's slab)."""
+    """Return one AssembledFrame from a fresh allocator.
+
+    Returns (frame, allocator); keep the allocator alive (it owns the frame's
+    slab)."""
     per_frame = nfreq * (ntime // 256) * 4 + nfreq * (ntime // 2)
     bump = BumpAllocator("af_rhost", 2 * nbeams * per_frame)
     slab = SlabAllocator(bump)
@@ -103,8 +105,10 @@ def test_pulse_injection():
     variances = np.full(nfreq, V)
 
     def _inject_and_check(sp, label):
-        """Inject 'sp' into a fresh frame, dequantize, and run the pulse-content + noise
-        checks. 'expected' is clipped to [0, ntime) exactly like inject_single_pulse(), so this
+        """Inject 'sp' into a fresh frame, dequantize, and run the checks.
+
+        The checks are pulse-content + noise. 'expected' is clipped to [0, ntime)
+        exactly like inject_single_pulse(), so this
         works whether or not the pulse straddles a frame edge."""
         frame, _alloc = _make_frame(xmd, len(beam_ids), nfreq, ntime)
         frame.randomize(normalize=True, gaussian=True, sp=sp, dt_sp=dt_sp)

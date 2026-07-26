@@ -225,8 +225,10 @@ def _parse_config(filename):
 
 
 def _resolve_ip_addrs(config, hw, filename):
-    """Resolve glob / device-name 'ip' specs in data_ip_addrs and rpc_ip_addrs to
-    this machine's concrete IPv4 addresses, in place. Literal-IPv4 specs pass
+    """Resolve 'ip' specs in data_ip_addrs and rpc_ip_addrs, in place.
+
+    Glob / device-name specs are resolved to this machine's concrete IPv4
+    addresses; literal-IPv4 specs pass
     through unchanged. This is what lets a single config file be shared across a
     cluster of machines with different IP addresses -- each machine resolves its
     own local addresses. See resolve_addr() / resolve_ip_spec() in utils.py.
@@ -352,8 +354,10 @@ class RunServerHelper:
         self._print_config_summary(server_config_filename, dedispersion_config_filename)
 
     def run(self):
-        """Top-level lifecycle: prepare, build all servers, wait for Ctrl-C,
-        then stop everything (including any partially-built state)."""
+        """Top-level lifecycle for the whole set of servers.
+
+        Prepare, build all servers, wait for Ctrl-C, then stop everything
+        (including any partially-built state)."""
         self._prepare_directories()
         self._run_hardware_check()
         self._setup_memory()

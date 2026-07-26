@@ -97,9 +97,11 @@ def _test_incomplete_plan(config, plan, tuples):
 
 
 def _test_batch_decode(plan, p2, tuples):
-    """Vectorized decode bindings: decode_argmax_batch() must equal a loop over the
-    scalar decode_argmax(); both batch methods must agree between the full plan and
-    the incomplete plan; basic postconditions on the physical params."""
+    """Test the vectorized decode bindings.
+
+    decode_argmax_batch() must equal a loop over the scalar decode_argmax(); both
+    batch methods must agree between the full plan and the incomplete plan; basic
+    postconditions on the physical params."""
 
     itrees = np.array([t[0] for t in tuples], dtype=np.int64)
     tokens = np.array([t[1] for t in tuples], dtype=np.uint32)
@@ -235,8 +237,10 @@ def _membership_sweep(plan, tree_bands, C, chans):
 
 
 def _sample_tuples(plan, kinfo, interesting_ms, ntuples):
-    """Stratified-ish random tuples: bias m toward subband/fine-dm extremes, p and t
-    toward their extremes, cells toward corners."""
+    """Return stratified-ish random tuples.
+
+    Biases m toward subband/fine-dm extremes, p and t toward their extremes, cells
+    toward corners."""
 
     def _pick(lo_hi_n):
         return random.choice(lo_hi_n)

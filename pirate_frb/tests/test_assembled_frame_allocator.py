@@ -24,21 +24,26 @@ from ..utils import atomic_print
 
 
 def make_slab_allocator(capacity=4*1024*1024, aflags='af_rhost'):
-    """Helper to create a host-memory SlabAllocator (backed by a dedicated
-    BumpAllocator of the given capacity; slabs are carved on demand)."""
+    """Create a host-memory SlabAllocator.
+
+    Backed by a dedicated BumpAllocator of the given capacity; slabs are carved
+    on demand."""
     bump = BumpAllocator(aflags, capacity)
     return SlabAllocator(bump)
 
 
 def _align_up_128(n):
-    """align_up(n, 128) -- the SlabAllocator rounds each requested slab size
-    up to a 128-byte (GPU cache line) boundary."""
+    """Round n up to a 128-byte boundary.
+
+    The SlabAllocator rounds each requested slab size up to a 128-byte (GPU cache
+    line) boundary."""
     return -(-n // 128) * 128
 
 
 def _make_counted_slab_allocator(slab_size, num_slabs_requested):
-    """Helper for tests that need to know the EXACT slab count. Returns
-    (slab_allocator, num_slabs).
+    """Helper for tests that need to know the EXACT slab count.
+
+    Returns (slab_allocator, num_slabs).
 
     The BumpAllocator rounds its capacity up to a page multiple, so simply
     requesting num_slabs_requested * slab_size bytes can yield extra slabs.

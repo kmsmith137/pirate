@@ -68,7 +68,8 @@ def parse_test(subparsers):
 
 
 def rrange(registry_class):
-    """
+    """Repeat-range helper for iterating over a kernel registry.
+
     This function is used to iterate over a kernel registry, for an appropriate number
     of iterations, so that every kernel is tested a few times. See usage in test() below.
     """
@@ -1194,14 +1195,17 @@ def rpc_rand_write(args):
 
 def _stream_clients(addresses):
     """Open an FrbSearchClient per address; returns a list of (addr, client).
+
     The caller is responsible for closing them (see the finally blocks below)."""
     from .rpc import FrbSearchClient
     return [(addr, FrbSearchClient(addr)) for addr in addresses]
 
 
 def _rpc_error_str(e):
-    """Human-readable message from a grpc.RpcError: unary-call errors are
-    grpc.Call and carry the server's message in .details(); fall back to str()."""
+    """Human-readable message from a grpc.RpcError.
+
+    Unary-call errors are grpc.Call and carry the server's message in .details();
+    fall back to str()."""
     details = getattr(e, "details", None)
     return details() if callable(details) else str(e)
 
@@ -1808,10 +1812,12 @@ def run_fake_xengine_command(args):
 
 
 class _PirateParser(argparse.ArgumentParser):
-    """ArgumentParser variant that swallows argparse's auto-appended
-    '(choose from {...})' in invalid-choice errors and points the user at
-    --help instead. Pairs with metavar='command' on add_subparsers() so
-    the run-on choices listing also disappears from --help / usage."""
+    """ArgumentParser variant with terser invalid-choice errors.
+
+    Swallows argparse's auto-appended '(choose from {...})' in invalid-choice
+    errors and points the user at --help instead. Pairs with metavar='command'
+    on add_subparsers() so the run-on choices listing also disappears from
+    --help / usage."""
     def error(self, message):
         # Strip the "(choose from ...)" suffix argparse appends on
         # invalid-subcommand errors. Wording is fragile across Python

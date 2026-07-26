@@ -12,7 +12,8 @@ class Dense1dBeamformer:
     c = 299.79
     
     def __init__(self, freq, feed_positions, sin_za_grid):
-        """
+        """Dense 1-d beamformer, for exploratory plots.
+
         Currently, this class is only used to make some exploratory/forecasting
         plots for the CASM beamforming design doc.
         
@@ -67,7 +68,8 @@ class Dense1dBeamformer:
     
     
     def locate_sin_za(self, sin_za, weights=True):
-        """
+        """Locate k in the wavenumber grid.
+
         Returns integer n, such that wavenumber_grid[n] <= k <= wavenumber_grid[n+1].
         If weights=True, also returns interpolation weights [w0,w1,w2,w3].
         """

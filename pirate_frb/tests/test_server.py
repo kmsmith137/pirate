@@ -124,7 +124,9 @@ class ServerTester:
 
     @staticmethod
     def _random_params():
-        """Return one random subscale config (a plain dict). Config-first, like
+        """Return one random subscale config (a plain dict).
+
+        Config-first, like
         test --net (see tests/utils.py); no_dedispersion/pacing are never used
         here, and a grouper is always configured.
 
@@ -425,7 +427,9 @@ class ServerTester:
     # ---- Blocking-wait helpers (poll so the parent stays interruptible) ----
 
     def _check_child_alive(self):
-        """Raise if the grouper child died. The parent's waits below all depend
+        """Raise if the grouper child died.
+
+        The parent's waits below all depend
         on the child being alive (the server's Receivers only start once the
         child's grouper connects), so a dead child would otherwise hang us."""
         if self.child is not None and not self.child.is_alive():
@@ -434,7 +438,9 @@ class ServerTester:
                 f"(exitcode={self.child.exitcode})")
 
     def _wait_until_listening(self, r, timeout=60.0):
-        """Wait for Receiver r to start listening, polling with a finite C++
+        """Wait for Receiver r to start listening.
+
+        Polls with a finite C++
         timeout so the parent processes signals (Ctrl-C) and can detect a dead
         child instead of blocking forever in the GIL-released C++ call."""
         t0 = time.monotonic()
@@ -447,8 +453,10 @@ class ServerTester:
     # ---- Send helpers ----
 
     def _send_chunk(self, c):
-        """Fetch the frame set for absolute chunk c from the factory, enqueue all
-        its minichunks on every worker, and barrier on the acks. The per-chunk
+        """Send one chunk: fetch its frame set, enqueue it, and barrier on the acks.
+
+        Fetches the frame set for absolute chunk c from the factory, enqueues all
+        its minichunks on every worker, and barriers on the acks. The per-chunk
         barrier guarantees zero drops: a minichunk can only be DROPPED if its
         worker lags >= 2 chunks behind the receiver's leading edge, which the
         barrier makes impossible. (Acks are per-minichunk and immediate, so this
@@ -465,6 +473,7 @@ class ServerTester:
 
     def _send_junk_chunk(self, c):
         """Send junk minichunks for the whole of chunk c from every worker.
+
         The first data of chunk c is what advances each Receiver's 2-chunk
         assembly window past chunk c-2; the junk contents are never verified
         (and chunk c itself never assembles, since c+2 is never sent). All
@@ -479,8 +488,9 @@ class ServerTester:
     # ---- Reference-side setup ----
 
     def _wait_for_dedisperser(self, timeout=120.0):
-        """Poll until the FrbServer's processing thread publishes its
-        GpuDedisperser (which happens once chunk 0's data has arrived)."""
+        """Poll until the FrbServer's processing thread publishes its GpuDedisperser.
+
+        This happens once chunk 0's data has arrived."""
         t0 = time.monotonic()
         while True:
             dd = self.server.dedisperser
@@ -496,8 +506,10 @@ class ServerTester:
             time.sleep(0.1)
 
     def _setup_reference(self):
-        """Fill random peak-finding weights (once), and build the reference
-        dequantizer + dedisperser.
+        """Fill random peak-finding weights, and build the reference dedisperser.
+
+        The weights are filled once; the reference dequantizer is built alongside
+        the dedisperser.
 
         Called after chunk 0 was sent (so the server's dedisperser exists) but
         before chunk 1 is sent. Nothing can be assembled until chunk 2's data

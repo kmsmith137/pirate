@@ -79,9 +79,10 @@ def run_processes(multi_args):
 
 
 def _monitor_children(procs):
-    """Block until any child exits; return 0 if all dead children exited cleanly,
-    else 1. (The caller then terminates the survivors.) 'procs' is a list of
-    (label, Popen) pairs."""
+    """Block until any child exits; return 0 if all dead children exited cleanly.
+
+    Returns 1 otherwise. (The caller then terminates the survivors.) 'procs' is a
+    list of (label, Popen) pairs."""
     while True:
         dead = [(label, p) for label, p in procs if p.poll() is not None]
         if dead:
@@ -93,8 +94,10 @@ def _monitor_children(procs):
 
 
 def _terminate_children(procs, grace_sec=constants.default_shutdown_timeout_sec):
-    """SIGTERM all still-running children, then SIGKILL any that don't exit within
-    grace_sec. 'procs' is a list of (label, Popen) pairs."""
+    """SIGTERM all still-running children, then SIGKILL the stragglers.
+
+    A child that doesn't exit within grace_sec is SIGKILLed. 'procs' is a list of
+    (label, Popen) pairs."""
     for _, p in procs:
         if p.poll() is None:
             p.terminate()
@@ -164,8 +167,9 @@ import numpy as np
 
 
 class GrouperHistogram:
-    """CPU-side helper class, used to analyze the finalized histograms from a
-    GpuGrouperHistogram and make summary plots.
+    """CPU-side helper class, to analyze finalized histograms and make summary plots.
+
+    Analyzes the histograms finalized by a GpuGrouperHistogram.
 
     Produced by GpuGrouperHistogram.finalize() (online, in a grouper main loop) or
     by GrouperHistogram.from_file() (offline re-analysis); the two paths yield
@@ -234,10 +238,11 @@ class GrouperHistogram:
 
     @staticmethod
     def _max_of_n_bin_probs(logN, edges):
-        """Per-bin probabilities of the 'max of N i.i.d. standard Gaussians' model
-        (CDF F(x) = Phi(x)**N) over the consecutive 'edges' (which may include
-        +-inf), computed from the exact edges. Uses log(N) as the argument and is
-        numerically stable for large N: with L = log Phi,
+        """Per-bin probabilities of the 'max of N i.i.d. standard Gaussians' model.
+
+        The model has CDF F(x) = Phi(x)**N, evaluated over the consecutive 'edges'
+        (which may include +-inf), computed from the exact edges. Uses log(N) as the
+        argument and is numerically stable for large N: with L = log Phi,
 
             Phi(b)**N - Phi(a)**N = exp(N*L_b) * (1 - exp(N*(L_a - L_b)))
 
@@ -251,9 +256,10 @@ class GrouperHistogram:
 
     @classmethod
     def _make_fit_bins(cls, counts, edges):
-        """Aggregate the fine histogram (counts over edges) into the analyze() fit
-        bins: [-inf, ~_FIT_LO), the fine bins between ~_FIT_LO and ~_FIT_HI, and
-        [~_FIT_HI, +inf). The _FIT_LO/_FIT_HI boundaries snap to the nearest actual
+        """Aggregate the fine histogram (counts over edges) into the analyze() fit bins.
+
+        The fit bins are [-inf, ~_FIT_LO), the fine bins between ~_FIT_LO and
+        ~_FIT_HI, and [~_FIT_HI, +inf). The _FIT_LO/_FIT_HI boundaries snap to the nearest actual
         bin edge (so counts and model probabilities use identical boundaries), and
         the outer aggregated bins use +-inf -- so their model probabilities are
         exactly Phi(_FIT_LO)**N and 1 - Phi(_FIT_HI)**N."""
@@ -266,9 +272,10 @@ class GrouperHistogram:
         return fit_counts, fit_edges
 
     def analyze(self):
-        """Fit the tail of each histogram to a 'max of N i.i.d. standard Gaussians'
-        model (CDF Phi(x)**N, with N real and >= 1) and store the best-fit N in the
-        self.fit_N dict; returns that dict. A histogram with zero total counts (e.g.
+        """Fit each histogram's tail to a 'max of N i.i.d. standard Gaussians' model.
+
+        The model has CDF Phi(x)**N, with N real and >= 1. Stores the best-fit N in
+        the self.fit_N dict, and returns that dict. A histogram with zero total counts (e.g.
         an empty max_histogram) is skipped, so its key is absent from self.fit_N and
         plot() omits its model/panel. plot() then overlays the fitted models.
 
@@ -297,9 +304,10 @@ class GrouperHistogram:
         return self.fit_N
 
     def plot(self, filename):
-        """Write a PDF to 'filename' with one panel per non-empty histogram: the
-        'histogram' (all steady-state out_max values) and 'max_histogram'
-        (per-(beam, chunk) maxes over fully-steady chunks). An empty max_histogram
+        """Write a PDF to 'filename', with one panel per non-empty histogram.
+
+        The panels are 'histogram' (all steady-state out_max values) and
+        'max_histogram' (per-(beam, chunk) maxes over fully-steady chunks). An empty max_histogram
         (no fully-steady chunk) is omitted, so the plot may have one or two panels.
         Counts are on a log scale; x-limits are taken from the populated
         (nonzero-count) bins. If analyze() has been called, each panel also shows the
@@ -366,8 +374,9 @@ class GrouperHistogram:
 
 
 class GpuGrouperHistogram:
-    """Helper class used in run_toy_grouper.py, to accumulate SNR histograms in
-    GPU memory.
+    """Helper class, to accumulate SNR histograms in GPU memory.
+
+    Used in run_toy_grouper.py.
 
     It computes two histograms of the dedisperser's peak-finding output (out_max),
     both accumulated on the GPU as the grouper's main loop consumes each chunk.
@@ -440,8 +449,10 @@ class GpuGrouperHistogram:
         self._group_max = None
 
     def add_tree(self, tree_out, itree, full_steady, mask=None):
-        """Accumulate the values of 'tree_out' (a cupy array, e.g. one tree's out_max
-        array of shape (beams, ndm_out, nt_out)) into the histograms.
+        """Accumulate the values of 'tree_out' into the histograms.
+
+        'tree_out' is a cupy array, e.g. one tree's out_max array of shape
+        (beams, ndm_out, nt_out).
 
         'itree' is the dedispersion-tree index, used to build the per-(beam, chunk)
         max histogram: itree=0 commits the previous group's per-beam maxes (one
@@ -507,8 +518,9 @@ class GpuGrouperHistogram:
         self._last_itree = -1
 
     def finalize(self):
-        """Commit the pending add_tree() group and return the accumulated histograms
-        as a host-side (numpy) GrouperHistogram, which handles saving/fitting/
+        """Commit the pending add_tree() group and return the accumulated histograms.
+
+        Returns a host-side (numpy) GrouperHistogram, which handles saving/fitting/
         plotting. If add_tree() never ran (e.g. the producer disconnected during the
         handshake), the returned histograms are all-zero.
 
@@ -602,8 +614,10 @@ _GLOB_CHARS = '*?['
 
 
 def resolve_ip_spec(hw, ipspec, context=''):
-    """Resolve the 'ip' part of a config 'ip:port' entry to a concrete local IPv4
-    address on THIS machine. 'ipspec' may be written in any of three forms:
+    """Resolve the 'ip' part of a config 'ip:port' entry to a local IPv4 address.
+
+    The address is a concrete one on THIS machine. 'ipspec' may be written in any of
+    three forms:
 
       - a literal IPv4 address (e.g. '10.0.0.2')    -> returned unchanged;
       - a glob (e.g. '10.0.0.*') matched against this machine's IPv4 addresses
@@ -659,8 +673,10 @@ def resolve_ip_spec(hw, ipspec, context=''):
 
 
 def resolve_addr(hw, addr, context=''):
-    """Resolve a config 'ipspec:port' entry to a concrete 'ip:port' string, where
-    'ipspec' is resolved by resolve_ip_spec() (literal IPv4 / glob / device name).
+    """Resolve a config 'ipspec:port' entry to a concrete 'ip:port' string.
+
+    The 'ipspec' part is resolved by resolve_ip_spec() (literal IPv4 / glob /
+    device name).
 
     'context' is prepended to every error message. Raises RuntimeError on failure.
     """

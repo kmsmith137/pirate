@@ -13,11 +13,12 @@ from .pirate_pybind11 import constants
 
 
 class _ServerMonitor:
-    """Owns the daemon threads for a single FrbServer connection: one polls
-    get_status() once per second and prints a summary line; one waits for the
-    X-engine metadata and prints it once it arrives; one prints filenames as
-    the server reports them. An error in any loop sets the shared stop_event,
-    which tears down every connection.
+    """Owns the daemon threads for a single FrbServer connection.
+
+    One thread polls get_status() once per second and prints a summary line; one
+    waits for the X-engine metadata and prints it once it arrives; one prints
+    filenames as the server reports them. An error in any loop sets the shared
+    stop_event, which tears down every connection.
     """
 
     def __init__(self, addr, client, stop_event):
@@ -39,8 +40,9 @@ class _ServerMonitor:
             self.stop_event.set()
 
     def metadata_loop(self):
-        """Poll for the server's X-engine metadata once per second; print it
-        once it becomes available, then stop. Runs in its own thread so the
+        """Poll for the server's X-engine metadata, print it once, then stop.
+
+        Polls once per second. Runs in its own thread so the
         wait does not stall the status polling above, and stays responsive to
         stop_event via _wait_between_polls()."""
         try:
@@ -58,8 +60,9 @@ class _ServerMonitor:
             self.stop_event.set()
 
     def _wait_between_polls(self):
-        """Wait one print/refresh interval (constants.default_print_cadence_sec),
-        waking every constants.default_poll_cadence_ms ms to check stop_event so
+        """Wait one print/refresh interval (constants.default_print_cadence_sec).
+
+        Wakes every constants.default_poll_cadence_ms ms to check stop_event so
         the loop exits promptly on Ctrl-C or a sibling thread's error."""
         step = constants.default_poll_cadence_ms / 1000
         interval = constants.default_print_cadence_sec

@@ -9,7 +9,8 @@ from ..pirate_pybind11 import GpuDedisperserOutputs
 @ksgpu.inject_methods(GpuDedisperserOutputs)
 class GpuDedisperserOutputsInjections:
     """Helper class, representing dedispersion outputs for one beam batch.
-    Return value from FrbGrouper.get_output(ichunk, ibatch)
+
+    Return value from FrbGrouper.get_output(ichunk, ibatch).
 
     Example usage::
 
@@ -57,12 +58,16 @@ class GpuDedisperserOutputsInjections:
 
     @functools.cached_property
     def out_max(self):
-        """Length-ntrees list of peak-finding maximum-value arrays. Valid only
-        inside the get_output() context manager (see the class docstring)."""
+        """Length-ntrees list of peak-finding maximum-value arrays.
+
+        Valid only inside the get_output() context manager (see the class
+        docstring)."""
         return self._out_max
 
     @functools.cached_property
     def out_argmax(self):
-        """Length-ntrees list of peak-finding argmax-token arrays. Valid only
-        inside the get_output() context manager (see the class docstring)."""
+        """Length-ntrees list of peak-finding argmax-token arrays.
+
+        Valid only inside the get_output() context manager (see the class
+        docstring)."""
         return self._out_argmax

@@ -1,6 +1,6 @@
-"""
-FrbGrouper method injections (context-manager usage + get_output), plus
-re-export of the pybind11 class.
+"""FrbGrouper method injections, plus re-export of the pybind11 class.
+
+The injections are the context-manager usage and get_output().
 
 Per the per-class injection convention (see notes/pybind11.md), this file lives
 in the package that owns FrbGrouper -- pirate_frb.rpc, since FrbGrouper is the
@@ -259,8 +259,9 @@ class FrbGrouperInjections:
             self._release_output(seq_id)
 
     def _precompute_derived_tables(self):
-        """Precompute the small lookup tables derived from the handshake metadata,
-        used by create_events() and steady_state_mask().
+        """Precompute the small lookup tables derived from the handshake metadata.
+
+        The tables are used by create_events() and steady_state_mask().
 
         Called once from __enter__ (after the handshake). All quantities come from the
         pybind-wrapped handshake objects (dedispersion_config, xengine_metadata) or are
@@ -308,11 +309,12 @@ class FrbGrouperInjections:
             default=0)
 
     def steady_state_mask(self, itree, ichunk):
-        """Return a cupy bool mask of shape (ndm_out, nt_out) for tree 'itree': True
-        where output element (ichunk, idm, it) is steady-state, i.e. unaffected by
-        the zero-padding before the start of the acquisition (see the
-        'steady_state_it0' bullet in the class docstring; the mask is independent
-        of the beam axis).
+        """Return a cupy bool mask of shape (ndm_out, nt_out) for tree 'itree'.
+
+        The mask is True where output element (ichunk, idm, it) is steady-state,
+        i.e. unaffected by the zero-padding before the start of the acquisition
+        (see the 'steady_state_it0' bullet in the class docstring; the mask is
+        independent of the beam axis).
 
         Computed entirely on the GPU (steady_state_it0 is GPU-resident), with no
         host<->GPU copies or syncs -- cheap enough to call once per tree per chunk.

@@ -1,5 +1,6 @@
-"""
-plot_pulses: a throwaway script from visually debugging the pulse simulation. Ported from
+"""Throwaway script for visually debugging the pulse simulation.
+
+Ported from
 simpulse/visual_check/plot-pulses.py. make_plots() writes plot1.png, plot2.png, plot3.png into
 the current directory; the reference_plot*.png files in the original repo
 (../extern/simpulse/visual_check/) show what the pulse shapes should look like.
@@ -20,7 +21,9 @@ from ..utils import atomic_print
 
 
 def _make_pulse(freq_lo_MHz, freq_hi_MHz, nfreq, dm, sm, intrinsic_width, spectral_index, nsamp):
-    """Build a SinglePulse with equal-width channels (unit noise variance), framed near t=0 and
+    """Build a SinglePulse with equal-width channels (unit noise variance).
+
+    The pulse is framed near t=0 and
     sampled at ~nsamp samples across the pulse. The framing (extent/undispersed_arrival_time_sec) is
     independent of nsamp, so coarse- and fine-nsamp pulses overlay on the time axis."""
     d_hi = simpulse.dispersion_delay(dm, freq_hi_MHz)
@@ -126,8 +129,10 @@ def plot3(plt, matplotlib):
 
 
 def plot4(plt, matplotlib):
-    """Two channelizations of the same dispersed + scattered pulse, as waterfalls (32 channels x
-    time): channels even in freq (the freq^-2 dispersion sweep -> a CURVED track) vs even in
+    """Two channelizations of the same dispersed + scattered pulse, as waterfalls.
+
+    Each waterfall is 32 channels x
+    time: channels even in freq (the freq^-2 dispersion sweep -> a CURVED track) vs even in
     freq^-2 (== even in dispersion delay -> a STRAIGHT track). Low-freq channels show the longer
     scattering tails (sm = 0.1 ms at 1 GHz)."""
     freq_lo, freq_hi = 400.0, 800.0

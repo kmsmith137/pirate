@@ -14,7 +14,8 @@ from .Ringbuf import Ringbuf
 
 class Dedisperser:
     def __init__(self, dtype, rank, apply_input_residual_lags, input_is_ringbuf, output_is_ringbuf, nspec, ringbuf = None):
-        """
+        """Generator for the tree-dedispersion cuda kernel.
+
         We distinguish notationally between three ring buffers:
            - grb: global ring buffer, used if {input,output}_is_ringbuf == True
            - srb: shared memory ring buffer, used if self.two_stage == True
@@ -769,8 +770,9 @@ class MultiDedisperser:
     """
     
     def __init__(self, dtype, apply_input_residual_lags, input_is_ringbuf, output_is_ringbuf, nspec):
-        """
-        Constructor takes individual parameters (no 'rank' argument).
+        """Construct a MultiDedisperser.
+
+        Takes individual parameters (no 'rank' argument).
         The rank_list is computed internally in emit_kernel().
         """
 

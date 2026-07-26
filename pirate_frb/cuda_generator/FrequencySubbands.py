@@ -6,7 +6,8 @@ from . import utils
 
 class FrequencySubbands:
     def __init__(self, subband_counts):    
-        """
+        """Python reimplementation of the C++ FrequencySubbands, for kernel generation.
+
         This is probably not the class you want! You probably want the C++ class 
         pirate_frb.FrequencySubbands (or equivalently, pirate_frb.pybind11.FrequencySubbands).
         
@@ -85,8 +86,8 @@ class FrequencySubbands:
 
     @classmethod
     def restrict_subband_counts(cls, subband_counts, early_trigger_level, new_pf_rank):
-        """
-        "Restricts" top-level subband counts to a specific tree.
+        """"Restrict" top-level subband counts to a specific tree.
+
         The tree may have an early trigger (early_trigger_level > 0) or a different pf_rank.
         """
         

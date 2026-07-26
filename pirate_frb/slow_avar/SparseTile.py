@@ -7,7 +7,8 @@ from ..utils import integer_log2
 
 
 class SparseTile:
-    """
+    """Sparse representation of a tree-dedispersion intermediate array.
+
     During tree dedispersion, intermediate arrays have shape (2^(r-k), 2^k, ntime), 
     where the axes are (coarse-freq, delay, time). See notes/tree_dedispersion.tex.
     
@@ -70,9 +71,9 @@ class SparseTile:
                           self.tshifts, t0=self.t0, scale=self.scale)
 
     def unpack(self, ntime):
-        """
-        Returns a dense (nf, 2^k, ntime) array for this tile's f-rows (data scaled by self.scale).
-        The ntime arg must be >= nt + max_d T(d).
+        """Return a dense (nf, 2^k, ntime) array for this tile's f-rows.
+
+        Data is scaled by self.scale. The ntime arg must be >= nt + max_d T(d).
         """
         nd_full = 2**self.k
         tshift = self._eval_tshifts(np.arange(nd_full), nd_full - 1, self.tshifts)   # (nd_full,)
@@ -94,7 +95,8 @@ class SparseTile:
 
     @staticmethod
     def _remap_d(d, dbits_in, dbits_out):
-        """
+        """Remap a delay index from one dbits mask to a subset mask.
+
         Returns an index 'dout' with 0 <= dout < 2^popc(dbits_out).
           - 'd' is an index with 0 <= d < 2^popc(dbits_in)
           - 'dbits_out' is a subset of 'dbits_in'
@@ -113,7 +115,8 @@ class SparseTile:
 
     @staticmethod
     def _eval_tshifts(d, dbits, tshifts):
-        """
+        """Return the forward time shift T associated with a delay index.
+
         The 'd' arg satisfies 0 <= d < 2^popcount(dbits), and 'tshifts' is a length-k array.
         Returns the associated forward time shift T, obtained summing tshifts for each bit that has been set.
         Vectorized: 'd' can be an int or a numpy array.
@@ -136,8 +139,9 @@ class SparseTile:
 
     @staticmethod
     def iterate_aligned(tile):
-        """
-        Applies DD(k) to an even-aligned tile, returning a tile with k->k+1.
+        """Apply DD(k) to an even-aligned tile, returning a tile with k->k+1.
+
+        "Even-aligned" is defined below.
         "Even-aligned" means that tile.f0 and tile.nf both even, so every output channel has both halves.
         """
         
@@ -170,9 +174,10 @@ class SparseTile:
     
     @staticmethod
     def iterate_singletons(lower, upper):
-        """
-        Applies DD(k) to a pair of adjacent singleton tiles, returning a singleton tile with k->k+1.
-        Either 'lower' or 'upper' may be None, but not both.
+        """Apply DD(k) to a pair of adjacent singleton tiles.
+
+        Returns a singleton tile with k->k+1. Either 'lower' or 'upper' may be None,
+        but not both.
         """
 
         assert lower is not None or upper is not None
@@ -252,8 +257,9 @@ class SparseTile:
     
 
     def specialize_dbits(self, value, nbits, *, low):
-        """
-        Specialize this singleton tile's (nf==1) level-k DM (delay) index by fixing 'nbits' of
+        """Specialize this singleton tile's level-k DM (delay) index.
+
+        Fixes 'nbits' of
         its delay bits to the value 'value' (0 <= value < 2^nbits), keeping the other (k-nbits)
         bits. Collapses to a standalone fully-iterated rank-(k-nbits) SparseTile (r == k == rho,
         f0 == 0, nf == 1). The boolean 'low' argument indicates whether the lowest or highest
@@ -400,8 +406,11 @@ class SparseTile:
 
     @staticmethod
     def test_random_specialize_dbits():
-        """specialize_dbits(value, nbits, low) vs. brute-force 'fix nbits of the delay to value',
-        for both low=True (fix the low nbits bits) and low=False (fix the high nbits bits)."""
+        """Test specialize_dbits() against a brute-force reference.
+
+        Compares specialize_dbits(value, nbits, low) vs. brute-force 'fix nbits of the
+        delay to value', for both low=True (fix the low nbits bits) and low=False (fix
+        the high nbits bits)."""
         import ksgpu
         r = int(np.random.randint(2, 8))
         k = int(np.random.randint(1, r + 1))                # 1 <= k <= r
@@ -423,7 +432,9 @@ class SparseTile:
 
     @staticmethod
     def test_random_scale():
-        """The scale member: unpack multiplies data by scale, iterate_aligned folds it (scale_out=1),
+        """Test the scale member.
+
+        unpack multiplies data by scale, iterate_aligned folds it (scale_out=1),
         and PfVariance.add_tile picks up scale^2 (variance is quadratic in the data)."""
         import ksgpu
         from .PfVariance import PfVarianceConvolver, PfVariance
@@ -460,8 +471,9 @@ class SparseTile:
 
 
 class SparseTileTriple:
-    """
-    A tree-dedispersion array of shape (2^(r-k), 2^k, ntime) over a contiguous f-index
+    """A tree-dedispersion array over a contiguous f-index range, as three tiles.
+
+    The array has shape (2^(r-k), 2^k, ntime) over the f-index
     range [f0, f0+nf), represented as a list of SparseTiles. The split lets the first
     and last f-index carry a different (smaller) sparsity pattern than the bulk:
 
@@ -504,8 +516,9 @@ class SparseTileTriple:
         return SparseTileTriple(tile.r, tile.k, tile.f0, tile.nf, tiles)
 
     def get_singleton(self, f, allow_none=False):
-        """Return the singleton SparseTile for f-index f. If f is out of [f0, f0+nf):
-        return None when allow_none, else raise."""
+        """Return the singleton SparseTile for f-index f.
+
+        If f is out of [f0, f0+nf): return None when allow_none, else raise."""
 
         for tile in self.tiles:
             if tile.f0 <= f < tile.f0 + tile.nf:
@@ -518,7 +531,8 @@ class SparseTileTriple:
     
     @staticmethod
     def make_tree_gridding_output(channel_map, ifreq):
-        """
+        """Return the TreeGriddingKernel output for a one-hot input, as a SparseTileTriple.
+
         Suppose the TreeGriddingKernel is called on a "one-hot" shape (nfreq,ntime) array
         whose (ifreq,0) entry is 1. The output is a shape (2^rank, 1, ntime) array which is
         mostly zeros. This method returns an equivalent SparseTileTriple.
@@ -578,8 +592,9 @@ class SparseTileTriple:
 
     @staticmethod
     def random_channel_map():
-        """
-        Generate a random (channel_map, ifreq) pair for the tree-gridding/dedispersion
+        """Generate a random (channel_map, ifreq) pair for the tests.
+
+        Used by the tree-gridding/dedispersion
         tests. channel_map is a random strictly-decreasing length 2^rank+1 array with
         endpoints pinned to the band edges (channel_map[0]=nfreq, channel_map[-1]=0) and
         RANDOM interior edges; ifreq is uniform in [0, nfreq). The "width" of freq channel
@@ -643,8 +658,9 @@ class SparseTileTriple:
 
 
 class SparseTilePerM:
-    """
-    Sparse representation of a SUBBANDED tree-dedisperser's output for a one-hot input.
+    """Sparse representation of a SUBBANDED tree-dedisperser's output.
+
+    For a one-hot input.
     The dense output has shape (2^(r-R), M, ntime) (notes Section "Subbanded
     dedispersion"), held as a length-M list 'per_m'. Each entry is either a rank-(r-R),
     fully-iterated (k == r-R), nf==1 SparseTile carrying that multiplet's 2^(r-R) coarse
@@ -676,7 +692,8 @@ class SparseTilePerM:
             assert (t.r, t.k, t.nf) == (rho, rho, 1), (t.r, t.k, t.nf, rho)
 
     def unpack(self, ntime):
-        """Returns the dense (2^(r-R), M, ntime) output array.
+        """Return the dense (2^(r-R), M, ntime) output array.
+
         Multiplets with no overlap (per_m[m] is None) are left as zeros."""
         rho = self.r - self.R
         out = np.zeros((1 << rho, len(self.per_m), ntime), dtype=np.float64)
@@ -708,7 +725,8 @@ class SparseTilePerM:
 
     @staticmethod
     def make_dedispersion_output(channel_map, ifreq, fs, upper_half_only=False):
-        """
+        """Return the subbanded dedispersion output for a one-hot input.
+
         Suppose TreeGriddingKernel -> (subbanded tree dedispersion) is applied to a one-hot
         shape (nfreq, ntime) input whose (ifreq, 0) entry is 1. The output is a mostly-zero
         shape (2^(r-R), M, ntime) array; this returns an equivalent SparseTilePerM.
@@ -768,7 +786,8 @@ class SparseTilePerM:
 
     @staticmethod
     def test_one_subbanded_dedispersion(channel_map, ifreq, subband_counts, upper_half_only=False):
-        """
+        """Test one subbanded dedispersion against the reference implementation.
+
         Compare SparseTilePerM.make_dedispersion_output(...).unpack() against
         ReferenceTreeGriddingKernel -> ReferenceTree(subband_counts) on a one-hot input.
         With upper_half_only, compares against the upper coarse-DM half of the reference.

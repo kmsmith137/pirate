@@ -467,9 +467,10 @@ class PeakFinder:
 
     
     def _read_weights(self, k, m, p):
-        """
-        Called in pfy_registers_ready(), to "prefetch" weights.
-        The weights are applied in pfz_register_ready().
+        """Emit code to "prefetch" weights.
+
+        Called in pfy_registers_ready(). The weights are applied in
+        pfz_register_ready().
         """
 
         Dcore, Minner, Pinner = self.Dcore, self.Minner, self.Pinner
@@ -489,7 +490,8 @@ class PeakFinder:
 
     
     def _absorb_pfz(self, k, var, m, p, t):
-        """
+        """Absorb pfz values into the running max.
+
         Helper for pfy_registers_ready().
         Variables named 'pfz_m{m}_p{p}' store max-values (either float or __half2)
         Variables named 'pfiz_m{m}_p{p}' store "mini-tokens" 0 <= t < Dcore.
@@ -912,7 +914,8 @@ class PfWeightReader:
 
 
     def _get_I(self, m, p, tinner):
-        """
+        """Return the flattened index I for the triple (pouter, n, tinner).
+
         Throughout 'class PfWeightReader', a capitalized index 0 <= I < Pouter*N*Tinner
         denotes a "flattened" index triple (pouter, n, tinner). Such an index I can be
         viewed as an offset relative to the 'wp' pointer (see docstring), and (I >> 5)
@@ -1163,7 +1166,8 @@ class PfWeightReader:
 
 class PfOutput:
     def __init__(self, dtype, Dout):
-        """
+        """Generator for the PfOutput microkernel.
+
         Input: partially reduced Z_{st} array, with associated 32-bit argmax values.
         Here, "s" is a spectator index (from the perspective of the PfOutput microkernel).
         In the larger kernel, "s" is a combination of (m,p,tlo). The register assignment is:
@@ -1221,7 +1225,8 @@ class PfOutput:
         
         
     def apply_inner(self, k, z, alist):
-        """
+        """Emit the inner (within-warp) reduction.
+
         The 'z' arg is the name of a variable containing Z-values to be reduced (dtype=dt32).
         The 'alist' arg is a list of varnames for corresponding argmax values (length 1,2 for fp32,fp16).
         Contents of the 'alist' registers are opaque "tokens" in class PfOutput.
@@ -1264,7 +1269,8 @@ class PfOutput:
 
     
     def apply_outer(self, k, zout, aout, tin, nt_in):
-        """
+        """Emit the outer (across-warp) reduction.
+
         The 'zout' arg is a per-warp (dt32 *) varname.
         The 'aout' arg is a per-warp (uint *) varname.
         The 'tin' and 'nt_in' args are uint varnames.

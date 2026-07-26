@@ -42,7 +42,8 @@ class Hwtest:
                                   
     
     def add_memcpy_thread(self, src_device, dst_device, blocksize=1024**3, cpu=None, use_copy_engine=False):
-        """
+        """Add a memcpy thread to the hardware test.
+
         Represents either a host->host, host->GPU, or GPU->host copy.
         The 'src_device' and 'dst_device' args are GPU indices, or (-1) for "host".
 
