@@ -27,4 +27,4 @@ from .scan import tree_prefix_scan, tree_suffix_scan
 from .LocalPolyFit import solve, gram, cholesky_floored
 from .Detrender import Detrender
 from .reference import detrend_reference
-from .masks import mask_zoo
+from .masks import random_mask, MASK_TYPES
