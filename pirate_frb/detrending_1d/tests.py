@@ -20,6 +20,14 @@ from . import LocalPolyFit
 
 # ------------------------------------------------------------------ utilities
 
+def _default_rng(rng):
+    """Unseeded by choice: these tests are randomized, so repeated runs (and
+    'test --dt1d -n N') explore different data rather than re-checking one
+    fixture.  run_all() prints the entropy of the generator it creates, which is
+    enough to reproduce a specific failing run if one turns up."""
+    return np.random.default_rng() if rng is None else rng
+
+
 def _maxdiff(a, b):
     a = np.asarray(a, dtype=np.float64)
     b = np.asarray(b, dtype=np.float64)
@@ -59,8 +67,8 @@ def _random_set(rng, S_ax, L, W, n, dtype, pvalid=0.7, offset=0.0):
 
 # ------------------------------------------------------------------- 1. monoid
 
-def test_monoid(niter=8, verbose=True):
-    rng = np.random.default_rng(1234)
+def test_monoid(rng=None, niter=8, verbose=True):
+    rng = _default_rng(rng)
     n, W, dtype = 2, 16, np.float64
     binom = _binom_table(2*n+1)
     worst = dict(merge=0.0, assoc=0.0, comm=0.0, ident=0.0, s1=0.0, shift=0.0, empty=0.0)
@@ -119,8 +127,8 @@ def test_monoid(niter=8, verbose=True):
 
 # ------------------------------------------------------------------ 2. vanherk
 
-def test_vanherk(niter=4, verbose=True):
-    rng = np.random.default_rng(2345)
+def test_vanherk(rng=None, niter=4, verbose=True):
+    rng = _default_rng(rng)
     n, dtype = 2, np.float64
     worst_ms, worst_cnt = 0.0, 0
 
@@ -159,8 +167,8 @@ def test_vanherk(niter=4, verbose=True):
 
 # -------------------------------------------------------------------- 3. solve
 
-def test_solve(niter=4, verbose=True):
-    rng = np.random.default_rng(3456)
+def test_solve(rng=None, niter=4, verbose=True):
+    rng = _default_rng(rng)
     n, dtype = 2, np.float64
     eps, mu = 1e-3, 1e-30
     W = 16
@@ -284,7 +292,7 @@ def _poly_stream(rng, S_ax, T, deg, W, dtype):
     return P.astype(dtype)
 
 
-def test_polynomial_exactness(verbose=True):
+def test_polynomial_exactness(rng=None, verbose=True):
     """
     Feed d[t] = P(t) for a polynomial of degree <= n with an arbitrary mask and
     no noise.  Every window's valid samples then lie exactly on P, the local fit
@@ -295,7 +303,7 @@ def test_polynomial_exactness(verbose=True):
     implementation and has no statistical tolerance: whatever residual appears is
     pure accumulated numerical error.
     """
-    rng = np.random.default_rng(4567)
+    rng = _default_rng(rng)
     n = 2
     results = []
 
@@ -358,8 +366,8 @@ def test_polynomial_exactness(verbose=True):
 
 # ------------------------------------------------------ 5. vs fp64 reference
 
-def test_detrender_vs_reference(verbose=True):
-    rng = np.random.default_rng(5678)
+def test_detrender_vs_reference(rng=None, verbose=True):
+    rng = _default_rng(rng)
     n, dtype = 2, np.float64
     worst = 0.0
     worst_name = ''
@@ -399,7 +407,7 @@ def test_detrender_vs_reference(verbose=True):
 
 # ------------------------------------------------ 6. dtype agreement (fp32/fp64)
 
-def test_dtype_agreement(tol=1e-3, verbose=True):
+def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
     """
     Run the *same instance* twice, float32 and float64, and compare.
 
@@ -412,7 +420,7 @@ def test_dtype_agreement(tol=1e-3, verbose=True):
     (0.047 sigma at W=512), so the target is numerical error well under
     1e-3 sigma.
     """
-    rng = np.random.default_rng(6789)
+    rng = _default_rng(rng)
     n = 2
     rows = []
     worst = 0.0
@@ -478,12 +486,18 @@ def test_dtype_agreement(tol=1e-3, verbose=True):
 
 # ----------------------------------------------------------------- entry point
 
-def run_all(verbose=True):
-    print('  detrending_1d tests')
-    test_monoid(verbose=verbose)
-    test_vanherk(verbose=verbose)
-    test_solve(verbose=verbose)
-    test_polynomial_exactness(verbose=verbose)
-    test_detrender_vs_reference(verbose=verbose)
-    test_dtype_agreement(verbose=verbose)
+def run_all(verbose=True, rng=None):
+    """
+    All six tests share one generator, so printing its entropy makes the whole
+    run reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
+    """
+    rng = _default_rng(rng)
+    ent = rng.bit_generator.seed_seq.entropy
+    print(f'  detrending_1d tests (rng entropy {ent})')
+    test_monoid(rng, verbose=verbose)
+    test_vanherk(rng, verbose=verbose)
+    test_solve(rng, verbose=verbose)
+    test_polynomial_exactness(rng, verbose=verbose)
+    test_detrender_vs_reference(rng, verbose=verbose)
+    test_dtype_agreement(rng, verbose=verbose)
     print('  detrending_1d tests passed')
