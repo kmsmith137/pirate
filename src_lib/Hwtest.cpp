@@ -13,6 +13,7 @@
 #include <ksgpu/xassert.hpp>
 
 #include "../include/pirate/inlines.hpp"
+#include "../include/pirate/utils.hpp"          // AtomicPrint
 #include "../include/pirate/file_utils.hpp"     // File, remove_file()
 #include "../include/pirate/system_utils.hpp"
 #include "../include/pirate/network_utils.hpp"  // Socket, Epoll
@@ -322,14 +323,17 @@ void Hwtest::start()
         for (long i = 0; i < num_workers; i++) {
             auto wp = workers[i];
 
-            stringstream ss;
-            ss << "  [Thread " << i << "] " << wp->worker_name << ": ";
-            if (wp->cpu >= 0)
-                ss << "cpu=" << wp->cpu;
-            else
-                ss << "cpu=None";
-            ss << ", vcpu_list=" << ksgpu::tuple_str(wp->vcpu_list) << "\n";
-            cout << ss.str() << flush;
+            {
+                // Tight scope: AtomicPrint emits when it falls out of scope, so
+                // this must close before the thread is spawned below.
+                AtomicPrint ap;
+                ap << "  [Thread " << i << "] " << wp->worker_name << ": ";
+                if (wp->cpu >= 0)
+                    ap << "cpu=" << wp->cpu;
+                else
+                    ap << "cpu=None";
+                ap << ", vcpu_list=" << ksgpu::tuple_str(wp->vcpu_list);
+            }
 
             threads[i] = std::thread(worker_thread_main, this, wp);
         }
@@ -553,9 +557,7 @@ struct TcpReceiver : Hwtest::Worker
 
     virtual void worker_accept_connections()
     {
-        stringstream ss;
-        ss << worker_name << ": listening for TCP connections. Reminder: use 'pirate_frb hwtest -s <config.yml>' to send data\n";
-        cout << ss.str() << flush;
+        AtomicPrint() << worker_name << ": listening for TCP connections. Reminder: use 'pirate_frb hwtest -s <config.yml>' to send data";
 
         this->data_sockets.resize(num_tcp_connections);
         this->listening_socket.listen();
@@ -589,9 +591,7 @@ struct TcpReceiver : Hwtest::Worker
             epoll.add_fd(data_sockets[ids].fd, ev);
         }
 
-        stringstream ss2;
-        ss2 << worker_name << ": receiving data\n";
-        cout << ss2.str() << flush;
+        AtomicPrint() << worker_name << ": receiving data";
     }
 
 
@@ -988,9 +988,8 @@ struct SsdWorker : public Hwtest::Worker
         if (files_to_delete.empty())
             return;
 
-        stringstream ss;
-        ss << "SsdWriter(" << root_dir.string() << "): deleting " << files_to_delete.size() << " stale files from previous run\n";
-        cout << ss.str() << flush;
+        AtomicPrint() << "SsdWriter(" << root_dir.string() << "): deleting "
+                      << files_to_delete.size() << " stale files from previous run";
 
         for (const auto &path : files_to_delete)
             remove_file(path);
@@ -1357,12 +1356,10 @@ void HwtestSender::worker_main(long endpoint_index)
             stop(std::current_exception());
         }
 
-        stringstream ss;
-        ss << ip_addr << ": exiting, sent " << nbytes_to_str(nbytes_sent);
+        AtomicPrint ap;
+        ap << ip_addr << ": exiting, sent " << nbytes_to_str(nbytes_sent);
         if (!errmsg.empty())
-            ss << " [error: " << errmsg << "]";
-        ss << "\n";
-        cout << ss.str() << flush;
+            ap << " [error: " << errmsg << "]";
     } catch (...) {
         stop(std::current_exception());
     }
@@ -1416,11 +1413,7 @@ long HwtestSender::_worker_main(long endpoint_index)
     long nconn = e.num_tcp_connections;
     set_thread_affinity(e.vcpu_list);
 
-    {
-        stringstream ss;
-        ss << e.ip_addr << ": creating " << nconn << " TCP connection(s)\n";
-        cout << ss.str() << flush;
-    }
+    AtomicPrint() << e.ip_addr << ": creating " << nconn << " TCP connection(s)";
 
     int aflags = ksgpu::af_uhost;
     if (use_mmap)
@@ -1453,11 +1446,7 @@ long HwtestSender::_worker_main(long endpoint_index)
             socket.set_zerocopy();
     }
 
-    {
-        stringstream ss;
-        ss << e.ip_addr << ": " << nconn << " TCP connection(s) active, sending data\n";
-        cout << ss.str() << flush;
-    }
+    AtomicPrint() << e.ip_addr << ": " << nconn << " TCP connection(s) active, sending data";
 
     long nbytes_sent = 0;
 

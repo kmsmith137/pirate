@@ -980,7 +980,7 @@ void FrbServer::_processing_thread_main()
                 freq_variances.data[ifreq++] = m->noise_variance[z];
         xassert_eq(ifreq, nfreq);
 
-        cout << "FrbServer: calling fill_analytic_weights() ..." << endl;
+        AtomicPrint() << "FrbServer: calling fill_analytic_weights() ...";
         auto t0 = std::chrono::steady_clock::now();
         dedisperser_p->fill_analytic_weights(freq_variances);
         auto t1 = std::chrono::steady_clock::now();
