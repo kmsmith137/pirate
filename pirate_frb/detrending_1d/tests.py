@@ -458,9 +458,13 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
     close to a superset of the float64 one, but they are not exactly nested since
     rmin32 != rmin64.
 
-    The constant-offset sweep is temporarily dropped and needs restoring: it is
-    what catches a broken offset subtraction (5e-3 sigma when broken against
-    1e-7 sigma when working).
+    A constant offset ~ U(0, 1e3) is added to the data on each draw.  This is what
+    catches a broken constant-offset subtraction, which shows up as ~5e-3 sigma
+    against ~1e-7 sigma when it is working -- the failure mode that a stale kappa
+    inherited from a previous chunk used to produce.  1e3 rather than a larger
+    value because the residual error scales as 3.4*eps_mach*|d - kappa|, so the
+    requirement is |d - kappa| <~ 1e3 sigma; at that level float32's ulp is
+    6.1e-5 sigma, so input quantization stays mild.
     """
     rng = _default_rng(rng)
     n = 2
@@ -470,11 +474,12 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
     worst_name = ''
     worst_rmin = 0.0
 
-    for W, Tc, nchunk, S_ax, ndraw in ((16, 64, 3, 16, 2), (512, 2048, 2, 6, 1)):
+    for W, Tc, nchunk, S_ax, ndraw in ((16, 64, 3, 16, 4), (512, 2048, 2, 6, 2)):
         T = nchunk*Tc + 2*W
         for _ in range(ndraw):
             mask, labels = random_mask(S_ax, T, W, rng)
-            d64 = rng.normal(size=(S_ax, T))
+            offset = rng.uniform(0.0, 1e3)
+            d64 = rng.normal(size=(S_ax, T)) + offset
             d32 = d64.astype(np.float32)
             dref = d32.astype(np.float64)     # bit-identical inputs
 
@@ -491,22 +496,22 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
                     continue
                 e = _maxdiff(r32[s][both[s]], r64[s][both[s]])
                 vin = mask[s, W:T-W]
-                rows.append((W, labels[s], e, int((vin & ~m32[s]).sum()), int(vin.sum())))
+                rows.append((W, labels[s], e, int((vin & ~m32[s]).sum()), int(vin.sum()), offset))
                 if e > worst:
-                    worst, worst_name = e, f'W={W} {labels[s]}'
+                    worst, worst_name = e, f'W={W} {labels[s]} offset={offset:.3g}'
 
     if verbose:
         print(f'    test_dtype_agreement: max |r32-r64| = {worst:.3e} sigma  ({worst_name})')
         print(f'      max |rmin32-rmin64| = {worst_rmin:.3e}   '
               f'(eps32={eps32:.0e}, eps64={eps64:.0e})')
         by_W = {}
-        for W, name, e, nx, nv in rows:
+        for W, name, e, nx, nv, off in rows:
             by_W[W] = max(by_W.get(W, 0.0), e)
         for W, e in sorted(by_W.items()):
             print(f'      W={W:4d}: max |r32-r64| = {e:.3e} sigma')
-        for W, name, e, nx, nv in sorted(rows, key=lambda r: -r[2])[:4]:
+        for W, name, e, nx, nv, off in sorted(rows, key=lambda r: -r[2])[:4]:
             print(f'        worst masks: W={W:4d} {name:16s} {e:.3e}  '
-                  f'(expanded {nx}/{nv})')
+                  f'(expanded {nx}/{nv}, offset {off:.3g})')
 
     assert worst < tol, (f'test_dtype_agreement: max |r32-r64| = {worst:.3e} sigma '
                          f'> {tol:.0e} ({worst_name})')
