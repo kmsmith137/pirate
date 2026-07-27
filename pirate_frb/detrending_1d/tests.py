@@ -548,6 +548,61 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
                          f'> {tol:.0e} ({worst_name})')
 
 
+# ------------------------------------------------- 7. masked data must be unread
+
+def test_masked_data_unused(rng=None, verbose=True):
+    """
+    The detrender must never read a masked sample.  Checked by poisoning the
+    masked entries and requiring every output to be *bit-identical* to a run on
+    clean data.
+
+    Bit-identity rather than "the tolerances still hold": a leak small enough to
+    stay inside a tolerance would otherwise go unnoticed, and the whole point is
+    that masked values must have exactly zero influence, not merely a small one.
+
+    The poison includes nan and inf as well as huge finite values, since a masked
+    sample may hold literally anything (a dropped packet can leave uninitialized
+    memory behind).  That is the strong form: it fails for any arithmetic that
+    weights by the mask rather than selecting on it, because 0*inf and 0*nan are
+    nan.
+    """
+    rng = _default_rng(rng)
+    n = 2
+    checked = 0
+
+    for W, Tc, nchunk, S_ax in ((16, 64, 3, 16), (512, 2048, 2, 4)):
+        T = nchunk*Tc + 2*W
+        mask, _ = random_mask(S_ax, T, W, rng)
+        clean = rng.normal(size=(S_ax, T)) + rng.uniform(0.0, 1e3)
+        junk = rng.uniform(-1e10, 1e10, size=(S_ax, T))
+        pick = rng.integers(0, 4, size=(S_ax, T))
+        junk = np.where(pick == 1, np.inf, junk)
+        junk = np.where(pick == 2, -np.inf, junk)
+        junk = np.where(pick == 3, np.nan, junk)
+        poison = np.where(mask, clean, junk)
+
+        for dtype in (np.float32, np.float64):
+            det = lambda d: Detrender(W=W, n=n, chunk_size=Tc,
+                                      dtype=dtype).detrend_stream(d.astype(dtype), mask)
+            for nm, x, y in zip(('residual', 'mask_out', 'leverage', 'rmin'),
+                                det(clean), det(poison)):
+                assert np.array_equal(x, y), \
+                    f'{nm} changed when masked samples were poisoned ' \
+                    f'({np.dtype(dtype).name}, W={W})'
+                checked += 1
+
+        for nm, x, y in zip(('residual', 'mask_out', 'leverage', 'rmin'),
+                            detrend_reference(clean, mask, W, n=n),
+                            detrend_reference(poison, mask, W, n=n)):
+            assert np.array_equal(x, y), \
+                f'detrend_reference: {nm} changed when masked samples were poisoned (W={W})'
+            checked += 1
+
+    if verbose:
+        print(f'    test_masked_data_unused: {checked} output arrays bit-identical '
+              f'under nan/inf/+-1e10 poisoning of masked samples')
+
+
 # ----------------------------------------------------------------- entry point
 
 def run_all(verbose=True, rng=None):
@@ -564,4 +619,5 @@ def run_all(verbose=True, rng=None):
     test_polynomial_exactness(rng, verbose=verbose)
     test_detrender_vs_reference(rng, verbose=verbose)
     test_dtype_agreement(rng, verbose=verbose)
+    test_masked_data_unused(rng, verbose=verbose)
     print(f'  detrending_1d tests passed   [cumulative mask expansion: {_expansion_str()}]')

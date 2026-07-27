@@ -174,9 +174,14 @@ class Detrender:
     # ---------------------------------------------------------------- helpers
 
     def _masked_mean(self, d, m):
+        # Select with np.where rather than weighting by m: a masked sample may hold
+        # anything at all, and 0*inf and 0*nan are nan, which would poison kappa and
+        # hence every output.  Selecting keeps masked values strictly unread, which
+        # test_masked_data_unused() checks by bit-identity under nan/inf poisoning.
         nv = m.sum(axis=1)
         safe = nv > 0
-        return np.where(safe, (m*d).sum(axis=1) / np.where(safe, nv, 1), 0).astype(self.dtype)
+        tot = np.where(m > 0, d, 0).sum(axis=1)
+        return np.where(safe, tot / np.where(safe, nv, 1), 0).astype(self.dtype)
 
     def _to_blocks(self, leaves, S_ax):
         shp = (S_ax, self.nblocks, self.B)

@@ -47,9 +47,11 @@ def detrend_reference(d, mask, W, n=2, eps=1e-3, mu=1e-30, dtype=np.float64,
 
     if kappa is None:
         if subtract_offset:
+            # np.where rather than m*d: see the note in Detrender._masked_mean.
             nv = m.sum(axis=1)
             safe = nv > 0
-            kappa = np.where(safe, (m*d).sum(axis=1)/np.where(safe, nv, 1), 0).astype(dtype)
+            tot = np.where(m > 0, d, 0).sum(axis=1)
+            kappa = np.where(safe, tot/np.where(safe, nv, 1), 0).astype(dtype)
         else:
             kappa = np.zeros(S_ax, dtype=dtype)
     kappa = np.asarray(kappa, dtype=dtype)
