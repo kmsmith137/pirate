@@ -406,6 +406,7 @@ PYFILES = \
   pirate_frb/tests/__init__.py \
   pirate_frb/tests/test_assembled_frame_allocator.py \
   pirate_frb/tests/test_assembled_frame_asdf.py \
+  pirate_frb/tests/test_atomic_out.py \
   pirate_frb/tests/test_decode_argmax.py \
   pirate_frb/tests/test_network.py \
   pirate_frb/tests/test_pulse_injection.py \
