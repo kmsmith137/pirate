@@ -390,6 +390,14 @@ PYFILES = \
   pirate_frb/core/GpuDedisperserOutputs.py \
   pirate_frb/core/SimulatedFrameFactory.py \
   pirate_frb/core/SlabAllocator.py \
+  pirate_frb/detrending_1d/__init__.py \
+  pirate_frb/detrending_1d/MomentSet.py \
+  pirate_frb/detrending_1d/scan.py \
+  pirate_frb/detrending_1d/LocalPolyFit.py \
+  pirate_frb/detrending_1d/Detrender.py \
+  pirate_frb/detrending_1d/reference.py \
+  pirate_frb/detrending_1d/masks.py \
+  pirate_frb/detrending_1d/tests.py \
   pirate_frb/slow_avar/__init__.py \
   pirate_frb/slow_avar/SparseTile.py \
   pirate_frb/slow_avar/PfVariance.py \
