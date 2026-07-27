@@ -24,7 +24,7 @@ Deliberate divergences from the eventual GPU version (not bugs):
 
 from .MomentSet import MomentSet, merge, pascal_shift
 from .scan import tree_prefix_scan, tree_suffix_scan
-from .LocalPolyFit import solve, gram, cholesky_floored
+from .LocalPolyFit import solve, gram, cholesky
 from .Detrender import Detrender
 from .reference import detrend_reference
 from .masks import random_mask, MASK_TYPES

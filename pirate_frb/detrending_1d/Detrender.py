@@ -36,6 +36,8 @@ from . import LocalPolyFit
 class Detrender:
     def __init__(self, W, n=2, chunk_size=2048, dtype=np.float32,
                  eps=1e-3, mu=1e-30, subtract_offset=True):
+        # eps is a masking threshold on rmin (see LocalPolyFit), not a
+        # regularizer strength; mu is a NaN guard.
         B = 2*W
         if chunk_size % B != 0:
             raise ValueError(f'chunk_size={chunk_size} must be a multiple of B=2*W={B}')
@@ -69,8 +71,13 @@ class Detrender:
         carrying one entry per (beam,freq) pair.  Every operation is elementwise
         along S; there is no coupling between spectator entries.
 
-        Returns (residual, leverage, flagged), each of shape (S, chunk_size).
-        'residual' is d - fhat at valid samples, and d unchanged at masked ones.
+        Returns (residual, mask_out, leverage, rmin), each of shape (S, chunk_size).
+
+        mask_out is the *expanded* mask: an output sample is dropped if its input
+        sample was masked, or if its window is too ill-conditioned to fit
+        (rmin < eps).  Where mask_out is false the residual is meaningless and is
+        set to zero -- note this differs from the in-place formulation in
+        notes/tree_dedispersion.tex, which leaves masked samples untouched.
         """
         d_buf = np.asarray(d_buf)
         mask_buf = np.asarray(mask_buf)
@@ -121,19 +128,30 @@ class Detrender:
         ms = merge(suff.take_batch(sl), pref.take_batch(sr))
 
         u_eval = (np.arange(self.chunk_size, dtype=dtype) + W)[None, :]
-        fhat, leverage, flagged, _ = LocalPolyFit.solve(ms, u_eval, self.eps, self.mu)
+        fhat, leverage, rmin = LocalPolyFit.solve(ms, u_eval, self.mu)
 
+        # Mask expansion.  A window with rmin < eps cannot determine a degree-n
+        # fit, so we drop the sample rather than shrinking the fit toward lower
+        # order.  For a sample we keep, the two are the same thing: rmin >= eps
+        # implies p_i >= eps*G_ii for every i, so a floor would have been inert.
+        # Dropping instead means surviving samples carry no shrinkage bias at
+        # all, and polynomial reproduction is exact on all of them.
+        #
+        # This is a single pass: the expansion applies to the output mask only,
+        # and is not fed back into the moments of neighbouring windows.
         out = slice(W, W + self.chunk_size)
         d_out, m_out = d_buf[:, out], m_buf[:, out]
-        resid = np.where(m_out > 0, (d_out - kappa[:, None]) - fhat, d_out).astype(dtype)
-        return resid, leverage, flagged
+        mask_out = (m_out > 0) & (rmin >= self.eps)
+        resid = np.where(mask_out, (d_out - kappa[:, None]) - fhat, 0).astype(dtype)
+        return resid, mask_out, leverage, rmin
 
     # ----------------------------------------------------------------- stream
 
     def detrend_stream(self, d, mask):
         """
         d, mask: shape (S, T) with (T - 2W) a positive multiple of chunk_size.
-        Returns detrended samples [W, T-W), i.e. shape (S, T - 2W).
+        Returns (residual, mask_out, leverage, rmin) for samples [W, T-W), i.e.
+        each of shape (S, T - 2W).
 
         This is the path that exercises chunk stitching.  Because the block
         lattice is chunk-invariant, the result should agree sample-by-sample
@@ -146,14 +164,13 @@ class Detrender:
             raise ValueError(f'(T - 2W) = {nout} must be a positive multiple of '
                              f'chunk_size={self.chunk_size}')
 
-        rs, ls, fs = [], [], []
+        cols = [[], [], [], []]
         for i in range(nout // self.chunk_size):
             lo = i * self.chunk_size
-            r, lv, fl = self.detrend_chunk(d[:, lo:lo+self.buflen],
-                                           mask[:, lo:lo+self.buflen])
-            rs.append(r); ls.append(lv); fs.append(fl)
-        return (np.concatenate(rs, axis=1), np.concatenate(ls, axis=1),
-                np.concatenate(fs, axis=1))
+            for c, x in zip(cols, self.detrend_chunk(d[:, lo:lo+self.buflen],
+                                                     mask[:, lo:lo+self.buflen])):
+                c.append(x)
+        return tuple(np.concatenate(c, axis=1) for c in cols)
 
     # ---------------------------------------------------------------- helpers
 

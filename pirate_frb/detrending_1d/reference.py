@@ -18,8 +18,8 @@ from . import LocalPolyFit
 def detrend_reference(d, mask, W, n=2, eps=1e-3, mu=1e-30, dtype=np.float64,
                       subtract_offset=True, kappa=None, max_outputs_per_pass=4096):
     """
-    d, mask: shape (S, T).  Returns (residual, leverage, flagged) of shape
-    (S, T - 2W), for output samples [W, T-W).
+    d, mask: shape (S, T).  Returns (residual, mask_out, leverage, rmin), each of
+    shape (S, T - 2W), for output samples [W, T-W).
 
     Unlike Detrender, this has no chunk structure at all, so it also serves as
     the check that chunking introduces nothing.
@@ -48,8 +48,9 @@ def detrend_reference(d, mask, W, n=2, eps=1e-3, mu=1e-30, dtype=np.float64,
     dz = np.where(m > 0, d - kappa[:, None], 0).astype(dtype)
 
     resid = np.empty((S_ax, nout), dtype=dtype)
+    mout = np.empty((S_ax, nout), dtype=bool)
     lev = np.empty((S_ax, nout), dtype=dtype)
-    flag = np.empty((S_ax, nout), dtype=bool)
+    rmn = np.empty((S_ax, nout), dtype=dtype)
 
     # Process outputs in passes to bound the (nout, 2W+1) gather.
     for lo in range(0, nout, max_outputs_per_pass):
@@ -62,12 +63,14 @@ def detrend_reference(d, mask, W, n=2, eps=1e-3, mu=1e-30, dtype=np.float64,
 
         ms = MomentSet.direct(u, mm, dd, n, W, dtype, axis=-1)
         u_eval = (j + W).astype(dtype)[None, :]
-        fhat, lv_, fl_, _ = LocalPolyFit.solve(ms, u_eval, eps, mu)
+        fhat, lv_, rm_ = LocalPolyFit.solve(ms, u_eval, mu)
 
         d_out = d[:, j+W]
         m_out = m[:, j+W]
-        resid[:, lo:hi] = np.where(m_out > 0, (d_out - kappa[:, None]) - fhat, d_out)
+        mo_ = (m_out > 0) & (rm_ >= eps)
+        resid[:, lo:hi] = np.where(mo_, (d_out - kappa[:, None]) - fhat, 0)
+        mout[:, lo:hi] = mo_
         lev[:, lo:hi] = lv_
-        flag[:, lo:hi] = fl_
+        rmn[:, lo:hi] = rm_
 
-    return resid, lev, flag
+    return resid, mout, lev, rmn

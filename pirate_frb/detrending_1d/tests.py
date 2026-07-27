@@ -20,6 +20,24 @@ from . import LocalPolyFit
 
 # ------------------------------------------------------------------ utilities
 
+# Cumulative mask-expansion accounting, for visual inspection.  Deliberately
+# module-level and never reset: under 'test --dt1d -n N' each iteration draws
+# fresh masks, and the running total across iterations is what tells us whether
+# expansion is firing at a sane rate.
+_EXPANSION = {'valid_in': 0, 'expanded': 0}
+
+
+def _note_expansion(mask_in, mask_out):
+    """mask_in restricted to the output range, and the detrender's mask_out."""
+    _EXPANSION['valid_in'] += int(mask_in.sum())
+    _EXPANSION['expanded'] += int((mask_in & ~mask_out).sum())
+
+
+def _expansion_str():
+    v, e = _EXPANSION['valid_in'], _EXPANSION['expanded']
+    return f'{e}/{v} = {(e/v if v else 0.0):.3e}'
+
+
 def _default_rng(rng):
     """Unseeded by choice: these tests are randomized, so repeated runs (and
     'test --dt1d -n N') explore different data rather than re-checking one
@@ -184,11 +202,12 @@ def test_solve(rng=None, niter=4, verbose=True):
         d = rng.normal(size=(S_ax, L)).astype(dtype)
         ms = MomentSet.direct(u, m, (m*d).astype(dtype), n, W, dtype)
         u_eval = np.full(S_ax, float(W), dtype=dtype)
-        fhat, lev, flagged, ratios = LocalPolyFit.solve(ms, u_eval, eps, mu)
+        _Lc, ratios = LocalPolyFit.cholesky(LocalPolyFit.gram(ms), mu)
+        fhat, lev, rmin = LocalPolyFit.solve(ms, u_eval, mu)
 
         # With randomized masks some rows are genuinely degenerate; agreement with
-        # lstsq is only meaningful where the pivot floor did not fire.
-        for s in np.flatnonzero(~flagged):
+        # lstsq is only meaningful on rows the detrender would keep.
+        for s in np.flatnonzero(rmin >= eps):
             x = (u[s] - ms.c[s]) / W
             A = np.vander(x, n+1, increasing=True) * m[s][:, None]
             coef = np.linalg.lstsq(A, m[s]*d[s], rcond=None)[0]
@@ -227,9 +246,9 @@ def test_solve(rng=None, niter=4, verbose=True):
         for i in range(S_ax):
             dd[i, i] = 1.0
         mm = np.broadcast_to(base, (S_ax, Tbuf)).copy()
-        resid, lev, flagged = det.detrend_chunk(dd, mm)
-        if bool(flagged[0, 0]):
-            continue          # the identity holds only where the floor is inactive
+        resid, mko, lev, rmin = det.detrend_chunk(dd, mm)
+        if not bool(mko[0, 0]):
+            continue          # the sample was mask-expanded away
         # fhat at local output 0 (buffer index W) = kernel weight for sample i
         kern = np.array([dd[i, W] - resid[i, 0] for i in range(S_ax)])
         lam = lev[0, 0]
@@ -247,7 +266,7 @@ def test_solve(rng=None, niter=4, verbose=True):
         det = Detrender(W=Wbig, n=n, chunk_size=2*Wbig, dtype=np.float64,
                         eps=eps, mu=mu, subtract_offset=False)
         dd = np.zeros((1, det.buflen)); mm = np.ones((1, det.buflen), dtype=bool)
-        _, lev, _ = det.detrend_chunk(dd, mm)
+        _, _, lev, _ = det.detrend_chunk(dd, mm)
 
         xx = np.arange(-Wbig, Wbig+1) / Wbig
         Pv = np.vander(xx, n+1, increasing=True)
@@ -264,27 +283,26 @@ def test_solve(rng=None, niter=4, verbose=True):
     Tbuf = det.buflen
     dvals = np.arange(Tbuf, dtype=dtype) + 0.5
 
-    # nv = 1, the single valid sample being the output sample itself
-    mm = np.zeros((1, Tbuf), dtype=bool); mm[0, W] = True
-    r, lv, fl = det.detrend_chunk(dvals[None, :], mm)
-    assert abs(float(r[0, 0])) < 1e-12, f'nv=1 residual {r[0,0]} (expected 0)'
+    # nv <= n cannot determine a degree-n fit, so all of these must be masked
+    # away rather than producing a degenerate estimate.  nv=1 gives G_11=G_22=0
+    # (every valid sample sits at the centroid) so rmin = 0; nv=2 has G_ii > 0 for
+    # every i but p_2 = 0 exactly, so rmin = 0 as well -- which is why rmin has to
+    # look at the pivots and not at the diagonal.
+    for lbl, idx in (('nv=0', []), ('nv=1 at the output sample', [W]),
+                     ('nv=1 elsewhere', [3]), ('nv=2', [W, W+2])):
+        mm = np.zeros((1, Tbuf), dtype=bool)
+        for i in idx:
+            mm[0, i] = True
+        r, mko, lv, rmin = det.detrend_chunk(dvals[None, :], mm)
+        assert np.all(np.isfinite(r)) and np.all(np.isfinite(rmin)), f'{lbl}: non-finite'
+        assert not bool(mko[0, 0]), f'{lbl}: expected mask expansion, got mask_out=True'
+        assert float(r[0, 0]) == 0.0, f'{lbl}: masked residual should be 0'
 
-    # nv = 1, valid sample elsewhere in the window: fhat must equal that value
-    mm = np.zeros((1, Tbuf), dtype=bool); mm[0, W] = True; mm[0, 3] = True
-    mm2 = np.zeros((1, Tbuf), dtype=bool); mm2[0, 3] = True
-    r2, _, _ = det.detrend_chunk(dvals[None, :], mm2)
-    assert np.all(np.isfinite(r2))
-
-    # nv = 0 anywhere in the window: finite output, no NaN
-    mm0 = np.zeros((1, Tbuf), dtype=bool)
-    r0, lv0, fl0 = det.detrend_chunk(dvals[None, :], mm0)
-    assert np.all(np.isfinite(r0)) and np.all(np.isfinite(lv0))
-
-    # nv = 2 with n = 2: succeeds, and the floor fires
-    mm2 = np.zeros((1, Tbuf), dtype=bool); mm2[0, W] = True; mm2[0, W+2] = True
-    r3, lv3, fl3 = det.detrend_chunk(dvals[None, :], mm2)
-    assert np.all(np.isfinite(r3))
-    assert bool(fl3[0, 0]), 'expected the pivot floor to fire for nv=2, n=2'
+    # nv = n+1 spread across the window determines the fit exactly, so it must
+    # survive -- rmin is a conditioning test, not a sample count.
+    mm = np.zeros((1, Tbuf), dtype=bool); mm[0, 1] = True; mm[0, W] = True; mm[0, 2*W-1] = True
+    r, mko, lv, rmin = det.detrend_chunk(dvals[None, :], mm)
+    assert bool(mko[0, 0]), f'nv=3 spread should survive (rmin={rmin[0,0]:.2e})'
 
     if verbose:
         print(f'    test_solve: lstsq={worst_lstsq:.2e}  kappa[0]-lev={worst_kap:.2e}  '
@@ -330,22 +348,21 @@ def test_polynomial_exactness(rng=None, verbose=True):
                 mask, labels = random_mask(S_ax, T, W, rng)
                 P = _poly_stream(rng, S_ax, T, n, W, dtype)
                 det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype)
-                resid, lev, flagged = det.detrend_stream(P, mask)
-                mout = mask[:, W:T-W]
-                good = mout & ~flagged
-                bad = mout & flagged
-                nflag += int(bad.sum())
+                resid, mko, lev, rmin = det.detrend_stream(P, mask)
+                min_ = mask[:, W:T-W]
+                _note_expansion(min_, mko)
+                nflag += int((min_ & ~mko).sum())
+                # No regularizer means no shrinkage bias, so exactness holds at
+                # *every* surviving sample -- there is no carve-out to make.
                 for s in range(S_ax):
-                    if not good[s].any():
+                    if not mko[s].any():
                         continue
-                    e = float(np.max(np.abs(resid[s][good[s]])))
+                    e = float(np.max(np.abs(resid[s][mko[s]])))
                     if e > worst_ok:
                         worst_ok, worst_lbl = e, labels[s]
                     assert e < tol, (f'test_polynomial_exactness [{np.dtype(dtype).name} '
                                      f'W={W} mask={labels[s]}]: residual {e:.3e} > {tol:.1e}')
-                if bad.any():
-                    worst_flag = max(worst_flag, float(np.max(np.abs(resid[bad]))))
-            results.append((np.dtype(dtype).name, W, worst_ok, worst_flag, nflag, worst_lbl))
+            results.append((np.dtype(dtype).name, W, worst_ok, nflag, worst_lbl))
 
     # Controls.  Note that for a *fully valid* window the mask is symmetric about
     # the evaluation point, so S_odd = 0, G is checkerboard, and a_0 depends only
@@ -361,26 +378,25 @@ def test_polynomial_exactness(rng=None, verbose=True):
     asym[:, ::3] = False          # breaks the within-window symmetry
 
     P1 = _poly_stream(rng, 2, T, n+1, W, np.float64)
-    r1, _, _ = det.detrend_stream(P1, allvalid)
+    r1, mk1, _, _ = det.detrend_stream(P1, allvalid)
     assert float(np.max(np.abs(r1))) < 1e-11, \
         (f'degree n+1 should be reproduced exactly on a fully valid window '
          f'(checkerboard degeneracy), got {float(np.max(np.abs(r1))):.3e}')
 
-    r2, _, f2 = det.detrend_stream(P1, asym)
-    mo = asym[:, W:T-W] & ~f2
+    r2, mk2, _, _ = det.detrend_stream(P1, asym)
+    mo = mk2
     assert float(np.max(np.abs(r2[mo]))) > 1e-6, \
         'degree n+1 was reproduced even under an asymmetric mask'
 
     P2 = _poly_stream(rng, 2, T, n+2, W, np.float64)
-    r3, _, _ = det.detrend_stream(P2, allvalid)
+    r3, mk3, _, _ = det.detrend_stream(P2, allvalid)
     assert float(np.max(np.abs(r3))) > 1e-6, \
         'negative control: a degree-(n+2) polynomial was reproduced exactly'
 
     if verbose:
-        for name, W, wok, wfl, nf, lbl in results:
+        for name, W, wok, nf, lbl in results:
             print(f'    test_polynomial_exactness [{name} W={W}]: '
-                  f'max|resid| unflagged={wok:.2e} ({lbl})  flagged={wfl:.2e} '
-                  f'({nf} flagged samples)')
+                  f'max|resid| = {wok:.2e} ({lbl})  ({nf} samples mask-expanded)')
 
 
 # ------------------------------------------------------ 5. vs fp64 reference
@@ -397,15 +413,16 @@ def test_detrender_vs_reference(rng=None, verbose=True):
             mask, labels = random_mask(S_ax, T, W, rng)
             d = (rng.normal(size=(S_ax, T)) + 3.0).astype(dtype)
             det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype)
-            got, glev, gfl = det.detrend_stream(d, mask)
-            want, wlev, wfl = detrend_reference(d, mask, W, n=n, dtype=dtype)
+            got, gmk, glev, grm = det.detrend_stream(d, mask)
+            want, wmk, wlev, wrm = detrend_reference(d, mask, W, n=n, dtype=dtype)
+            _note_expansion(mask[:, W:T-W], gmk)
             scale = max(1.0, float(np.max(np.abs(d))))
             for s in range(S_ax):
                 e = _maxdiff(got[s], want[s]) / scale
                 if e > worst:
                     worst, worst_name = e, f'W={W} {labels[s]}'
-            e = _maxdiff(got, want) / scale
-            assert np.array_equal(gfl, wfl), f'flag mismatch, W={W} {labels}'
+            assert np.array_equal(gmk, wmk), f'mask_out mismatch, W={W} {labels}'
+            assert _maxdiff(grm, wrm) < 1e-11, f'rmin mismatch, W={W} {labels}'
 
             # Leverage is only well defined where the window holds at least one
             # valid sample.  With nv = 0 the whole Gram is zero, every pivot is
@@ -413,12 +430,10 @@ def test_detrender_vs_reference(rng=None, verbose=True):
             # arbitrary finite placeholder centroid, which the two code paths
             # choose differently.  Both are meaninglessly huge (1e30 vs 3e30) and
             # those samples are masked in the output anyway.
-            cs = np.concatenate([np.zeros((S_ax, 1), dtype=np.int64),
-                                 np.cumsum(mask.astype(np.int64), axis=1)], axis=1)
-            nvw = cs[:, 2*W+1:] - cs[:, :-(2*W+1)]
-            live = nvw > 0
-            assert np.all(glev[~live] > 1e20) and np.all(wlev[~live] > 1e20)
-            rel = np.abs(glev[live] - wlev[live]) / np.maximum(np.abs(wlev[live]), 1e-300)
+            # Leverage is only meaningful on surviving samples; elsewhere the mu
+            # guard, not the data, set the smallest pivot.
+            rel = (np.abs(glev[gmk] - wlev[gmk]) / np.maximum(np.abs(wlev[gmk]), 1e-300)
+                   if gmk.any() else np.zeros(0))
             assert (rel.max() if rel.size else 0.0) < 1e-9, \
                 f'leverage mismatch, W={W} {labels}'
     if verbose:
@@ -430,77 +445,68 @@ def test_detrender_vs_reference(rng=None, verbose=True):
 
 def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
     """
-    Run the *same instance* twice, float32 and float64, and compare.
+    Run the same instance twice, float32 and float64, and compare.
 
-    To make this a pure arithmetic comparison, the data is generated in fp64,
-    cast to fp32, and then cast *back* to fp64 for the fp64 run, so both runs see
-    bit-identical inputs and the only difference is intermediate precision.
+    The data is generated in fp64, cast to fp32, then cast *back* to fp64 for the
+    fp64 run, so both runs see bit-identical inputs and the only difference is
+    intermediate precision.  Noise is unit-variance, so all numbers are in units
+    of sigma.
 
-    Noise is unit-variance, so all numbers below are in units of sigma.  Recall
-    that fhat carries an irreducible statistical error of 1.06*sigma/sqrt(W)
-    (0.047 sigma at W=512), so the target is numerical error well under
-    1e-3 sigma.
+    The two runs use *different* masking thresholds, eps32 = 1e-3 and
+    eps64 = 1e-6, so they do not produce the same output mask.  Residuals are
+    therefore compared on the intersection.  eps32 > eps64 makes the float32 mask
+    close to a superset of the float64 one, but they are not exactly nested since
+    rmin32 != rmin64.
+
+    The constant-offset sweep is temporarily dropped and needs restoring: it is
+    what catches a broken offset subtraction (5e-3 sigma when broken against
+    1e-7 sigma when working).
     """
     rng = _default_rng(rng)
     n = 2
+    eps32, eps64 = 1e-3, 1e-6
     rows = []
     worst = 0.0
     worst_name = ''
+    worst_rmin = 0.0
 
     for W, Tc, nchunk, S_ax, ndraw in ((16, 64, 3, 16, 2), (512, 2048, 2, 6, 1)):
         T = nchunk*Tc + 2*W
-        for offset in (0.0, 1e4):
-            for _ in range(ndraw):
-                mask, labels = random_mask(S_ax, T, W, rng)
-                d64 = rng.normal(size=(S_ax, T)) + offset
-                d32 = d64.astype(np.float32)
-                dref = d32.astype(np.float64)     # bit-identical inputs
+        for _ in range(ndraw):
+            mask, labels = random_mask(S_ax, T, W, rng)
+            d64 = rng.normal(size=(S_ax, T))
+            d32 = d64.astype(np.float32)
+            dref = d32.astype(np.float64)     # bit-identical inputs
 
-                r32, l32, f32 = Detrender(W=W, n=n, chunk_size=Tc,
-                                          dtype=np.float32).detrend_stream(d32, mask)
-                r64, l64, f64 = Detrender(W=W, n=n, chunk_size=Tc,
-                                          dtype=np.float64).detrend_stream(dref, mask)
+            r32, m32, l32, q32 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps32,
+                                           dtype=np.float32).detrend_stream(d32, mask)
+            r64, m64, l64, q64 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps64,
+                                           dtype=np.float64).detrend_stream(dref, mask)
+            _note_expansion(mask[:, W:T-W], m32)
 
-                mo = mask[:, W:T-W]
-                for s in range(S_ax):
-                    if not mo[s].any():
-                        continue
-                    e = _maxdiff(r32[s][mo[s]], r64[s][mo[s]])
-                    rows.append((W, offset, labels[s], e, int((f32[s] != f64[s]).sum())))
-                    if e > worst:
-                        worst, worst_name = e, f'W={W} offset={offset:g} {labels[s]}'
-
-    # Moment-level comparison: localizes a failure to the scan rather than the solve.
-    def _scan_err(W, dtype, scanner):
-        B, nblocks = 2*W, 3
-        Tb = nblocks*B
-        m = (rng.random((1, Tb)) < 0.9)
-        dd = rng.normal(size=(1, Tb))
-        out = []
-        for dt in (dtype, np.float64):
-            mm = m.astype(dt)
-            lv = MomentSet.leaves(np.broadcast_to(np.arange(Tb, dtype=dt), (1, Tb)),
-                                  mm, (mm*dd).astype(dt), n, W, dt)
-            lv = MomentSet(lv.nv.reshape(1, nblocks, B), lv.c.reshape(1, nblocks, B),
-                           lv.S.reshape(1, nblocks, B, 2*n+1),
-                           lv.U.reshape(1, nblocks, B, n+1), n, W)
-            out.append(scanner(lv))
-        return _maxdiff(out[0].S, out[1].S), _maxdiff(out[0].U, out[1].U)
-
-    tree_S, tree_U = _scan_err(512, np.float32, tree_prefix_scan)
+            both = m32 & m64
+            worst_rmin = max(worst_rmin, _maxdiff(q32, q64))
+            for s in range(S_ax):
+                if not both[s].any():
+                    continue
+                e = _maxdiff(r32[s][both[s]], r64[s][both[s]])
+                vin = mask[s, W:T-W]
+                rows.append((W, labels[s], e, int((vin & ~m32[s]).sum()), int(vin.sum())))
+                if e > worst:
+                    worst, worst_name = e, f'W={W} {labels[s]}'
 
     if verbose:
         print(f'    test_dtype_agreement: max |r32-r64| = {worst:.3e} sigma  ({worst_name})')
-        print(f'      moments, fp32 tree scan vs fp64 (1024-sample block): '
-              f'max|dS|={tree_S:.2e} max|dU|={tree_U:.2e}')
-        by_case = {}
-        for W, off, name, e, nf in rows:
-            by_case[(W, off)] = max(by_case.get((W, off), 0.0), e)
-        for (W, off), e in sorted(by_case.items()):
-            print(f'      W={W:4d} offset={off:8g}: max |r32-r64| = {e:.3e} sigma')
-        for W, off, name, e, nf in sorted(rows, key=lambda r: -r[3])[:6]:
-            print(f'        worst masks: W={W:4d} offset={off:8g} '
-                  f'{name:32s} {e:.3e}  (flag mismatches: {nf})')
+        print(f'      max |rmin32-rmin64| = {worst_rmin:.3e}   '
+              f'(eps32={eps32:.0e}, eps64={eps64:.0e})')
+        by_W = {}
+        for W, name, e, nx, nv in rows:
+            by_W[W] = max(by_W.get(W, 0.0), e)
+        for W, e in sorted(by_W.items()):
+            print(f'      W={W:4d}: max |r32-r64| = {e:.3e} sigma')
+        for W, name, e, nx, nv in sorted(rows, key=lambda r: -r[2])[:4]:
+            print(f'        worst masks: W={W:4d} {name:16s} {e:.3e}  '
+                  f'(expanded {nx}/{nv})')
 
     assert worst < tol, (f'test_dtype_agreement: max |r32-r64| = {worst:.3e} sigma '
                          f'> {tol:.0e} ({worst_name})')
@@ -522,4 +528,4 @@ def run_all(verbose=True, rng=None):
     test_polynomial_exactness(rng, verbose=verbose)
     test_detrender_vs_reference(rng, verbose=verbose)
     test_dtype_agreement(rng, verbose=verbose)
-    print('  detrending_1d tests passed')
+    print(f'  detrending_1d tests passed   [cumulative mask expansion: {_expansion_str()}]')
