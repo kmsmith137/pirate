@@ -9,26 +9,17 @@ roundoff accumulation.  Work-efficiency does not matter in numpy, and
 Hillis-Steele is also what a GPU warp-level shuffle scan does, so this mirrors
 the eventual kernel.  (The GPU block-level scan will likely use Blelloch.)
 
-Measured, float32, one 1024-sample block, worst-case moment error against a
-float64 reference: 2e-6 for the tree versus 3.4e-4 for a sequential scan.  Do
-not substitute a sequential scan here; sequential_prefix_scan() below exists
-only so that tests can demonstrate the gap.
+Do not substitute a sequential scan here: it costs about 10x in moment accuracy,
+and that degradation is small enough to slip past every tolerance the test suite
+asserts.  test_vanherk() therefore checks the structure directly, by counting
+merge() calls -- this scan makes log2(B) of them, a sequential one would make
+B-1.
 
 Validity: at every step the two operands cover disjoint, adjacent ranges, which
 is what merge() requires.
 """
 
-import numpy as np
-
 from .MomentSet import merge
-
-
-def _npasses(n):
-    k, p = 1, 0
-    while k < n:
-        k *= 2
-        p += 1
-    return p
 
 
 def tree_prefix_scan(leaves):
@@ -54,18 +45,4 @@ def tree_suffix_scan(leaves):
         merged = merge(out.slice_pos(slice(0, B-k)), out.slice_pos(slice(k, B)))
         out.set_pos(slice(0, B-k), merged)
         k *= 2
-    return out
-
-
-def sequential_prefix_scan(leaves):
-    """
-    Test-only.  Same result as tree_prefix_scan() in exact arithmetic, but with
-    O(B) depth instead of O(log B), hence much worse roundoff.  Used by the
-    tests to confirm that the tree scan is actually being exercised.
-    """
-    out = leaves.copy()
-    B = out.batch_shape[-1]
-    for i in range(1, B):
-        out.set_pos(slice(i, i+1), merge(out.slice_pos(slice(i-1, i)),
-                                         out.slice_pos(slice(i, i+1))))
     return out

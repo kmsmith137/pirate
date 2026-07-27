@@ -86,7 +86,7 @@ class Detrender:
         if d_buf.shape[1] != self.buflen:
             raise ValueError(f'expected buffer length {self.buflen}, got {d_buf.shape[1]}')
 
-        dtype, W, B, n = self.dtype, self.W, self.B, self.n
+        dtype, W, n = self.dtype, self.W, self.n
         S_ax, T = d_buf.shape
 
         d_buf = d_buf.astype(dtype, copy=False)
@@ -115,9 +115,8 @@ class Detrender:
 
         # ---- leaves, reshaped to (S, nblocks, B)
         u = np.arange(T, dtype=dtype)
-        leaves = MomentSet.leaves(np.broadcast_to(u, (S_ax, T)), m_buf, dz, n, W, dtype)
-        leaves = leaves.take_batch((slice(None), slice(None)))
-        leaves = self._to_blocks(leaves, S_ax)
+        leaves = self._to_blocks(
+            MomentSet.leaves(np.broadcast_to(u, (S_ax, T)), m_buf, dz, n, W, dtype), S_ax)
 
         pref = tree_prefix_scan(leaves)
         suff = tree_suffix_scan(leaves)

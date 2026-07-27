@@ -56,7 +56,7 @@ def pascal_shift(v, delta, binom):
 
     # powers[k] = delta**k
     powers = [np.ones_like(delta)]
-    for k in range(1, K):
+    for _ in range(1, K):
         powers.append(powers[-1] * delta)
 
     out = np.empty_like(v)

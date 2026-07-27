@@ -11,7 +11,8 @@ full-size (W=512) run where it is cheap enough to matter.
 import numpy as np
 
 from .MomentSet import MomentSet, merge, pascal_shift, _binom_table
-from .scan import tree_prefix_scan, tree_suffix_scan, sequential_prefix_scan
+from . import scan as scan_mod
+from .scan import tree_prefix_scan, tree_suffix_scan
 from .Detrender import Detrender
 from .reference import detrend_reference
 from .masks import random_mask
@@ -92,7 +93,7 @@ def test_monoid(rng=None, niter=8, verbose=True):
     binom = _binom_table(2*n+1)
     worst = dict(merge=0.0, assoc=0.0, comm=0.0, ident=0.0, s1=0.0, shift=0.0, empty=0.0)
 
-    for it in range(niter):
+    for _ in range(niter):
         S_ax, L = 8, 40
         u, m, md = _random_set(rng, S_ax, L, W, dtype, offset=100.0)
 
@@ -154,7 +155,7 @@ def test_vanherk(rng=None, niter=4, verbose=True):
     for W in (4, 16):
         B, nblocks = 2*W, 3
         T = nblocks*B
-        for it in range(niter):
+        for _ in range(niter):
             S_ax = 8
             m = random_mask(S_ax, T, W, rng)[0].astype(dtype)
             d = rng.normal(size=(S_ax, T)).astype(dtype)
@@ -179,9 +180,39 @@ def test_vanherk(rng=None, niter=4, verbose=True):
                     want = MomentSet.direct(u[:, idx], m[:, idx], (m*d)[:, idx], n, W, dtype)
                     worst_ms = max(worst_ms, _ms_maxdiff(got, want))
 
+    # The scans must be trees.  Nothing else in the suite would notice if they were
+    # replaced by a sequential scan: that costs about 10x in moment accuracy on a
+    # full block, which is still inside every tolerance we assert.  Check the
+    # structural property directly, by counting merge() calls -- a Hillis-Steele
+    # scan makes log2(B) vectorized calls, a sequential one makes B-1 -- rather
+    # than by comparing accuracy, whose ratio depends on the mask and turns out to
+    # be a weak signal (under 2x at a 90% valid fraction).
+    Wt, Bt = 512, 1024
+    mm = (rng.random((1, Bt)) < 0.9).astype(np.float64)
+    dd = rng.normal(size=(1, Bt))
+    lv = MomentSet.leaves(np.broadcast_to(np.arange(Bt, dtype=np.float64), (1, Bt)),
+                          mm, (mm*dd).astype(np.float64), n, Wt, np.float64)
+    ncalls = [0]
+    orig = scan_mod.merge
+
+    def _counting_merge(a, b):
+        ncalls[0] += 1
+        return orig(a, b)
+
+    scan_mod.merge = _counting_merge
+    try:
+        tree_prefix_scan(lv)
+    finally:
+        scan_mod.merge = orig
+    depth = int(np.ceil(np.log2(Bt)))
+
     if verbose:
-        print(f'    test_vanherk: {worst_cnt} decompositions checked, max err {worst_ms:.2e}')
+        print(f'    test_vanherk: {worst_cnt} decompositions checked, max err {worst_ms:.2e}; '
+              f'prefix scan over B={Bt} used {ncalls[0]} merges (tree depth {depth})')
     assert worst_ms < 1e-9, f'test_vanherk: {worst_ms}'
+    assert ncalls[0] <= 2*depth, (f'the prefix scan is not a tree: {ncalls[0]} merge calls over '
+                                  f'B={Bt}, expected about log2(B)={depth} '
+                                  f'(a sequential scan would use {Bt-1})')
 
 
 # -------------------------------------------------------------------- 3. solve
@@ -195,7 +226,7 @@ def test_solve(rng=None, niter=4, verbose=True):
     worst_lstsq, worst_lev, worst_kap = 0.0, 0.0, 0.0
 
     # (a) against np.linalg.lstsq on well-determined windows
-    for it in range(niter):
+    for _ in range(niter):
         S_ax = 16
         u = np.broadcast_to(np.arange(L, dtype=dtype), (S_ax, L))
         m = random_mask(S_ax, L, W, rng)[0].astype(dtype)
@@ -239,14 +270,14 @@ def test_solve(rng=None, niter=4, verbose=True):
     Tbuf = det.buflen
     S_ax = 2*W + 1
     nchecked = 0
-    for it in range(3*niter):
+    for _ in range(3*niter):
         base = random_mask(1, Tbuf, W, rng)[0][0]
         base[W] = True
         dd = np.zeros((S_ax, Tbuf), dtype=dtype)
         for i in range(S_ax):
             dd[i, i] = 1.0
         mm = np.broadcast_to(base, (S_ax, Tbuf)).copy()
-        resid, mko, lev, rmin = det.detrend_chunk(dd, mm)
+        resid, mko, lev, _ = det.detrend_chunk(dd, mm)
         if not bool(mko[0, 0]):
             continue          # the sample was mask-expanded away
         # fhat at local output 0 (buffer index W) = kernel weight for sample i
@@ -293,7 +324,7 @@ def test_solve(rng=None, niter=4, verbose=True):
         mm = np.zeros((1, Tbuf), dtype=bool)
         for i in idx:
             mm[0, i] = True
-        r, mko, lv, rmin = det.detrend_chunk(dvals[None, :], mm)
+        r, mko, _, rmin = det.detrend_chunk(dvals[None, :], mm)
         assert np.all(np.isfinite(r)) and np.all(np.isfinite(rmin)), f'{lbl}: non-finite'
         assert not bool(mko[0, 0]), f'{lbl}: expected mask expansion, got mask_out=True'
         assert float(r[0, 0]) == 0.0, f'{lbl}: masked residual should be 0'
@@ -301,7 +332,7 @@ def test_solve(rng=None, niter=4, verbose=True):
     # nv = n+1 spread across the window determines the fit exactly, so it must
     # survive -- rmin is a conditioning test, not a sample count.
     mm = np.zeros((1, Tbuf), dtype=bool); mm[0, 1] = True; mm[0, W] = True; mm[0, 2*W-1] = True
-    r, mko, lv, rmin = det.detrend_chunk(dvals[None, :], mm)
+    r, mko, _, rmin = det.detrend_chunk(dvals[None, :], mm)
     assert bool(mko[0, 0]), f'nv=3 spread should survive (rmin={rmin[0,0]:.2e})'
 
     if verbose:
@@ -343,12 +374,12 @@ def test_polynomial_exactness(rng=None, verbose=True):
     for dtype, tol in ((np.float64, 1e-11), (np.float32, 3e-5)):
         for W, Tc, nchunk, S_ax, ndraw in ((16, 64, 3, 16, 2), (512, 2048, 2, 6, 1)):
             T = nchunk*Tc + 2*W
-            worst_ok, worst_flag, nflag, worst_lbl = 0.0, 0.0, 0, '-'
+            worst_ok, nflag, worst_lbl = 0.0, 0, '-'
             for _ in range(ndraw):
                 mask, labels = random_mask(S_ax, T, W, rng)
                 P = _poly_stream(rng, S_ax, T, n, W, dtype)
                 det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype)
-                resid, mko, lev, rmin = det.detrend_stream(P, mask)
+                resid, mko, _, _ = det.detrend_stream(P, mask)
                 min_ = mask[:, W:T-W]
                 _note_expansion(min_, mko)
                 nflag += int((min_ & ~mko).sum())
@@ -378,7 +409,7 @@ def test_polynomial_exactness(rng=None, verbose=True):
     asym[:, ::3] = False          # breaks the within-window symmetry
 
     P1 = _poly_stream(rng, 2, T, n+1, W, np.float64)
-    r1, mk1, _, _ = det.detrend_stream(P1, allvalid)
+    r1, _, _, _ = det.detrend_stream(P1, allvalid)
     assert float(np.max(np.abs(r1))) < 1e-11, \
         (f'degree n+1 should be reproduced exactly on a fully valid window '
          f'(checkerboard degeneracy), got {float(np.max(np.abs(r1))):.3e}')
@@ -389,7 +420,7 @@ def test_polynomial_exactness(rng=None, verbose=True):
         'degree n+1 was reproduced even under an asymmetric mask'
 
     P2 = _poly_stream(rng, 2, T, n+2, W, np.float64)
-    r3, mk3, _, _ = det.detrend_stream(P2, allvalid)
+    r3, _, _, _ = det.detrend_stream(P2, allvalid)
     assert float(np.max(np.abs(r3))) > 1e-6, \
         'negative control: a degree-(n+2) polynomial was reproduced exactly'
 
@@ -483,9 +514,9 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
             d32 = d64.astype(np.float32)
             dref = d32.astype(np.float64)     # bit-identical inputs
 
-            r32, m32, l32, q32 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps32,
+            r32, m32, _, q32 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps32,
                                            dtype=np.float32).detrend_stream(d32, mask)
-            r64, m64, l64, q64 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps64,
+            r64, m64, _, q64 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps64,
                                            dtype=np.float64).detrend_stream(dref, mask)
             _note_expansion(mask[:, W:T-W], m32)
 

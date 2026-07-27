@@ -5,6 +5,15 @@ No blocks, no scans: for each output, the moments of its window are computed
 directly from the definition and handed to the same LocalPolyFit.solve().  This
 is O(T*W) and slow, and is the ground truth for the tests that need one.
 
+What this does and does not check.  It is an independent implementation of the
+*block decomposition and scans* only -- it shares solve(), MomentSet.direct() and
+the offset convention with Detrender, so a bug in any of those would appear in
+both and the comparison would not catch it.  Those are covered instead by
+test_solve and test_polynomial_exactness, whose expected answers do not come from
+another implementation.  The small duplication of the masked-mean below is
+deliberate for the same reason: it costs five lines and keeps the offset
+convention verifiable by eye against Detrender.
+
 Note that test_polynomial_exactness() does *not* need it -- its expected answer
 is known analytically -- which is why it can run before this module is trusted.
 """
