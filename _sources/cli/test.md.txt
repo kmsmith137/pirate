@@ -8,7 +8,7 @@ Run unit tests (use flags to select specific tests)
 usage: pirate_frb test [-h] [-g GPU] [-n NITER] [--rt] [--pfwr] [--pfom] [--gldk]
                        [--gddk] [--gpfk] [--grck] [--gtgk] [--gdqk] [--cdd2] [--casm]
                        [--zomb] [--dd] [--avar] [--chime] [--net] [--serv] [--sim]
-                       [--amax]
+                       [--amax] [--aout]
 
 Run unit tests (use flags to select specific tests)
 
@@ -39,4 +39,6 @@ options:
                      pulse-injection and pulse-invariants tests
   --amax             Runs DedispersionPlan.decode_argmax() tests (black-box probe
                      arrays)
+  --aout             Runs the serialized-output test (atomic_print/AtomicPrint, C++ and
+                     python threads)
 ```

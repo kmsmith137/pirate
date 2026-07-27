@@ -28,5 +28,5 @@ options:
                         dedisperser is still built, just never fed). Implies --no-
                         grouper. Infrequently used corner case.
   -q, --quiet           Suppress the per-chunk "FrbServer: beamset=..." line (printed
-                        once per assembled time chunk).
+                        once per fully-processed time chunk).
 ```

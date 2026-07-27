@@ -40,9 +40,9 @@ Pirate uses `ksgpu`, a standalone helper library for CUDA/C++ development
 
 Throughout the code:
 - A "chunk" (or "time chunk") is a range of **time indices**. The chunk size (e.g. 1024 or 2048) is defined in `DedispersionConfig::time_samples_per_chunk`.
-- A "minichunk" is 256 time samples. This is the cadence for sending data from the X-engine to the FRB backend, and only arises in a limited part of the code (`struct Receiver` and closely related).
+- A "minichunk" is 256 time samples. This is the cadence for sending data from the X-engine to the FRB backend (`struct Receiver`). It also sets the granularity of the per-(beam, freq, minichunk) scales/offsets in `struct AssembledFrame` -- and hence of the int4 -> float affine transform applied by `GpuDequantizationKernel`.
 - A "batch" (or "beam batch") is a range of **beam indices**. The batch size (e.g. 1,2,4) is defined in `DedispersionConfig::beams_per_batch`.
-- A "frame" is a (chunk,beam) pair (not a (chunk,batch) pair!). Frames are used in `class MegaRingbuf`, and will also be used in the front-end server code and its intensity ring buffer.
+- A "frame" is a (chunk,beam) pair (not a (chunk,batch) pair!). Frames are used in `class MegaRingbuf`, and in the front-end server's intensity ring buffer (`FrbServer::frame_ringbuf`, whose `rb_*` counters are frame indices).
 - A "segment" refers to a 128-byte, memory-contiguous subset of any array in GPU memory. Segments are used in low-level GPU kernels, and data structures which are GPU kernel adjacent (e.g. `DedispersionPlan`, `MegaRingbuf`).
 
 ## Allocators
@@ -62,10 +62,11 @@ This API is still in flux, and will probably change in the future.
 
 - **`BumpAllocator`**: A simple linear allocator. Pre-allocates a large block of memory
   (GPU or host), then hands out 128-byte-aligned pointers sequentially. Memory is never
-  freed individually — everything is released when the allocator is destroyed.
+  freed individually -- everything is released when the allocator is destroyed.
 
-- **`SlabAllocator`**: A pool allocator. Divides a pre-allocated memory region into
-  fixed-size "slabs" that are recycled via reference counting — when a slab's refcount
+- **`SlabAllocator`**: A pool allocator. Carves fixed-size "slabs" from a
+  `BumpAllocator` on demand (one per request, until the `BumpAllocator` is
+  exhausted); slabs are recycled via reference counting -- when a slab's refcount
   drops to zero, it is returned to the free list.
 
 - **`AssembledFrameAllocator`**: A multi-consumer frame allocator built on `SlabAllocator`.

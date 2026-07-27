@@ -8,8 +8,7 @@ orphan: true
 # Toy config for testing on a single machine with loopback.
 # See cf05_production.yml for more info on file format.
 #
-# To start the server:
-#   mkdir -p /dev/shm/pirate_ssd /dev/shm/pirate_nfs
+# To start the server (SSD/NFS dirs are created automatically):
 #   pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml
 #
 # To send fake X-engine data (in a separate terminal):
@@ -22,9 +21,8 @@ orphan: true
 num_servers: 1
 server_cpus: [ 0 ]   # length num_servers
 
-rb_host_memory_per_server: '1 GB'
-dd_host_memory_per_server: '1 GB'
-gpu_memory_per_server: '1 GB'
+host_memory_per_server: '2 GiB'
+gpu_memory_per_server: '1 GiB'
 use_hugepages: true
 
 ringbuf_nchunks: 512

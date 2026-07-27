@@ -3,10 +3,10 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Stoppable Class Pattern" href="stoppable_class.html"><link rel="prev" title="GRPC .proto guidelines" href="grpc.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Stoppable Class Pattern" href="stoppable_class.html"><link rel="prev" title="GRPC guidelines" href="grpc.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Writing sphinx-friendly docstrings - pirate_frb 1.3.1 documentation</title>
+        <title>Writing sphinx-friendly docstrings - pirate_frb 1.4.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -164,7 +164,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.3.1 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.4.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -185,7 +185,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.3.1 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.4.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -250,22 +250,42 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../classes/Acquisition.html">Acquisition</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrame.html">AssembledFrame</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrameAllocator.html">AssembledFrameAllocator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrameSet.html">AssembledFrameSet</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/BumpAllocator.html">BumpAllocator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionConfig.html">DedispersionConfig</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionPlan.html">DedispersionPlan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FakeXEngine.html">FakeXEngine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FileSubscriber.html">FileSubscriber</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FileWriter.html">FileWriter</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouperClient.html">FrbGrouperClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSearchClient.html">FrbSearchClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbServer.html">FrbServer</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterClient.html">FrbSifterClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrequencySubbands.html">FrequencySubbands</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperser.html">GpuDedisperser</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GpuGrouperHistogram.html">GpuGrouperHistogram</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GrouperHistogram.html">GrouperHistogram</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/Hardware.html">Hardware</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/OfflineDedisperser.html">OfflineDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/PrimaryTree.html">PrimaryTree</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/Receiver.html">Receiver</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/ReferenceDedisperser.html">ReferenceDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/SimulatedFrameFactory.html">SimulatedFrameFactory</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/SlabAllocator.html">SlabAllocator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/ThreadAffinity.html">ThreadAffinity</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
 <li class="toctree-l1 current has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" checked="" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="comments.html">Writing comments and docstrings</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
-<li class="toctree-l2"><a class="reference internal" href="grpc.html">GRPC .proto guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="grpc.html">GRPC guidelines</a></li>
 <li class="toctree-l2 current current-page"><a class="current reference internal" href="#">Writing sphinx-friendly docstrings</a></li>
 <li class="toctree-l2"><a class="reference internal" href="stoppable_class.html">Stoppable Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
@@ -317,6 +337,8 @@
 rendered as reStructuredText, and napoleon additionally parses NumPy/Google-style
 sections. A few conventions keep the rendered output clean. (See also
 <a class="reference internal" href="pybind11.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">notes/pybind11.md</span></code></span></a> for the pybind-specific version of these rules.)</p>
+<p>These notes cover rendering mechanics only. For guidance on docstring CONTENT –
+what to say, and at what level of detail – see <a class="reference internal" href="comments.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">notes/comments.md</span></code></span></a>.</p>
 <section id="class-docstrings-for-classes-with-method-injections">
 <h2>Class docstrings for classes with method injections<a class="headerlink" href="#class-docstrings-for-classes-with-method-injections" title="Link to this heading">¶</a></h2>
 <p>A pybind11-wrapped class that is extended via <code class="docutils literal notranslate"><span class="pre">ksgpu.inject_methods</span></code> (see
@@ -338,8 +360,8 @@ Python injector’s docstring, and set <em>no</em> docstring in the C++ <code cl
 <ul class="simple">
 <li><p>Use <strong>option 1</strong> for classes that are essentially C++ objects with a thin Python
 shim (a constructor/<code class="docutils literal notranslate"><span class="pre">launch</span></code>/setter that just converts dtypes, streams, or aflags),
-especially when a good C++ docstring already exists. Examples: <code class="docutils literal notranslate"><span class="pre">BumpAllocator</span></code>,
-<code class="docutils literal notranslate"><span class="pre">SlabAllocator</span></code>, <a class="reference internal" href="../classes/DedispersionConfig.html#pirate_frb.DedispersionConfig"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig</span></code></a>, <code class="docutils literal notranslate"><span class="pre">GpuDequantizationKernel</span></code>, <code class="docutils literal notranslate"><span class="pre">CasmBeamformer</span></code>.</p></li>
+especially when a good C++ docstring already exists. Examples: <a class="reference internal" href="../classes/BumpAllocator.html#pirate_frb.core.BumpAllocator"><code class="docutils literal notranslate"><span class="pre">BumpAllocator</span></code></a>,
+<a class="reference internal" href="../classes/SlabAllocator.html#pirate_frb.core.SlabAllocator"><code class="docutils literal notranslate"><span class="pre">SlabAllocator</span></code></a>, <a class="reference internal" href="../classes/SimulatedFrameFactory.html#pirate_frb.core.SimulatedFrameFactory"><code class="docutils literal notranslate"><span class="pre">SimulatedFrameFactory</span></code></a>, <code class="docutils literal notranslate"><span class="pre">GpuDequantizationKernel</span></code>, <code class="docutils literal notranslate"><span class="pre">CasmBeamformer</span></code>.</p></li>
 <li><p>Use <strong>option 2</strong> when the class’s primary Python interface <em>is</em> the injection – a
 context-manager usage pattern, or accessors that return Python wrapper objects – so
 the narrative (and the read-only-attribute bullet list, per the next section) belongs
@@ -472,7 +494,7 @@ block (used e.g. for the <code class="docutils literal notranslate"><span class=
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">GRPC .proto guidelines</div>
+                <div class="title">GRPC guidelines</div>
                 
               </div>
             </a>
@@ -522,7 +544,7 @@ block (used e.g. for the <code class="docutils literal notranslate"><span class=
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=bb516dca"></script>
+</div><script src="../_static/documentation_options.js?v=9172181d"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

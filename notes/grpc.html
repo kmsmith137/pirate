@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Writing sphinx-friendly docstrings" href="docstrings.html"><link rel="prev" title="Pybind11" href="pybind11.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>GRPC .proto guidelines - pirate_frb 1.3.1 documentation</title>
+        <title>GRPC guidelines - pirate_frb 1.4.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -164,7 +164,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.3.1 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.4.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -175,7 +175,7 @@
           <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
         </button>
       </div>
-      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
         <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
       </label>
     </div>
@@ -185,7 +185,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.3.1 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.4.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -250,22 +250,42 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../classes/Acquisition.html">Acquisition</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrame.html">AssembledFrame</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrameAllocator.html">AssembledFrameAllocator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrameSet.html">AssembledFrameSet</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/BumpAllocator.html">BumpAllocator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionConfig.html">DedispersionConfig</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionPlan.html">DedispersionPlan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FakeXEngine.html">FakeXEngine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FileSubscriber.html">FileSubscriber</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FileWriter.html">FileWriter</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouperClient.html">FrbGrouperClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSearchClient.html">FrbSearchClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbServer.html">FrbServer</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterClient.html">FrbSifterClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrequencySubbands.html">FrequencySubbands</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperser.html">GpuDedisperser</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GpuGrouperHistogram.html">GpuGrouperHistogram</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GrouperHistogram.html">GrouperHistogram</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/Hardware.html">Hardware</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/OfflineDedisperser.html">OfflineDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/PrimaryTree.html">PrimaryTree</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/Receiver.html">Receiver</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/ReferenceDedisperser.html">ReferenceDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/SimulatedFrameFactory.html">SimulatedFrameFactory</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/SlabAllocator.html">SlabAllocator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/ThreadAffinity.html">ThreadAffinity</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
 <li class="toctree-l1 current has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" checked="" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="comments.html">Writing comments and docstrings</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
-<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">GRPC .proto guidelines</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">GRPC guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="docstrings.html">Writing sphinx-friendly docstrings</a></li>
 <li class="toctree-l2"><a class="reference internal" href="stoppable_class.html">Stoppable Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
@@ -305,13 +325,43 @@
               <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
             </button>
           </div>
-          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
             <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="grpc-proto-guidelines">
-<h1>GRPC .proto guidelines<a class="headerlink" href="#grpc-proto-guidelines" title="Link to this heading">¶</a></h1>
+          <section id="grpc-guidelines">
+<h1>GRPC guidelines<a class="headerlink" href="#grpc-guidelines" title="Link to this heading">¶</a></h1>
+<section id="creating-a-grpc-server">
+<h2>Creating a grpc server<a class="headerlink" href="#creating-a-grpc-server" title="Link to this heading">¶</a></h2>
+<p>Checklist for ANY new grpc server, C++ or python (all three existing servers –
+<a class="reference internal" href="../classes/FrbServer.html#pirate_frb.FrbServer">FrbServer</a>’s RPC service, <a class="reference internal" href="../classes/FrbGrouper.html#pirate_frb.rpc.FrbGrouper">FrbGrouper</a>, run_toy_sifter – follow it):</p>
+<ol class="arabic">
+<li><p><strong>Disable SO_REUSEPORT.</strong> grpc’s default on Linux is ON, which lets two grpc
+servers bind the SAME port: both binds “succeed”, and the kernel silently
+load-balances incoming connections between the two servers. Real-world
+scenario: an orphaned old server survives a restart, the new server starts
+“successfully”, and RPCs randomly reach the dying process – intermittent
+failures with no loud error anywhere. Disabling makes port conflicts fail
+loudly at startup instead.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">builder</span><span class="p">.</span><span class="n">AddChannelArgument</span><span class="p">(</span><span class="n">GRPC_ARG_ALLOW_REUSEPORT</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w">   </span><span class="c1">// C++</span>
+</pre></div>
+</div>
+<div class="highlight-py notranslate"><div class="highlight"><pre><span></span><span class="n">grpc</span><span class="o">.</span><span class="n">server</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">options</span><span class="o">=</span><span class="p">[(</span><span class="s1">&#39;grpc.so_reuseport&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)])</span>       <span class="c1"># python</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>Check for bind failure explicitly.</strong> In C++, the 2-arg AddListeningPort
+does NOT report bind failures (BuildAndStart() still returns a non-null
+server that silently isn’t listening); use the 3-arg overload and treat
+selected_port == 0 as an error. In python, check add_insecure_port() == 0
+(recent grpcio also raises on failure – keep the check anyway). Note step 1
+is what makes this check effective: with SO_REUSEPORT on, a conflicting bind
+“succeeds” and the check passes.</p></li>
+</ol>
+</section>
+<section id="proto-guidelines">
+<h2>.proto guidelines<a class="headerlink" href="#proto-guidelines" title="Link to this heading">¶</a></h2>
 <ul>
 <li><p>When editing .proto files, rewrite gRPC field numbers in order to keep them
 “canoncial”: the first member in a message is 1, the second member is 2, etc.</p>
@@ -333,6 +383,7 @@ version number in the response). If an RPC creates a TCP stream, then
 the RPC should contain a version number, but subsequent messages on the
 stream do not need a version number.</p></li>
 </ul>
+</section>
 </section>
 
         </article>
@@ -378,13 +429,33 @@ stream do not need a version number.</p></li>
         
       </footer>
     </div>
-    <aside class="toc-drawer no-toc">
+    <aside class="toc-drawer">
       
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">GRPC guidelines</a><ul>
+<li><a class="reference internal" href="#creating-a-grpc-server">Creating a grpc server</a></li>
+<li><a class="reference internal" href="#proto-guidelines">.proto guidelines</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
       
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=bb516dca"></script>
+</div><script src="../_static/documentation_options.js?v=9172181d"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

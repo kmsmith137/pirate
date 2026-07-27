@@ -26,10 +26,11 @@ options:
                         threshold (default: 10).
   --histogram STEM      Write histograms of steady-state SNR values (all values, plus
                         per-(beam, chunk) maxes; warmup values are excluded) to
-                        'STEM.pkl' upon termination. With multiple groupers, the i-th
-                        grouper writes 'STEM<i>.pkl' (e.g. hist1.pkl, hist2.pkl, ...) so
-                        the filenames don't collide.
+                        'STEM.pkl', plus a plot 'STEM.pdf', upon termination. With
+                        multiple groupers, the i-th grouper writes 'STEM<i>.pkl' /
+                        'STEM<i>.pdf' (e.g. hist1.pkl, hist2.pkl, ...) so the filenames
+                        don't collide.
   -s, --sifter SIFTER_ADDR
-                        Report to the FrbSifter at this 'ip:port' (e.g. 127.0.0.1:7100):
+                        Report to the FrbSifter at this 'ip:port' (e.g. 127.0.0.1:7100).
   -S, --no-sifter       Run without a sifter (don't send any sifter RPCs).
 ```

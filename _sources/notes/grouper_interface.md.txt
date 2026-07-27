@@ -38,11 +38,13 @@ such as `--histogram` are deliberately omitted here):
 
 # The FrbGrouper context manager blocks until 'pirate' connects and sends metadata.
 # WARNING: don't touch the gpu (e.g. by allocating memory with cupy) until you enter
-# the context manager. See 'FrbGrouper context manager' below
+# the context manager. See 'FrbGrouper context manager' below.
 
-with FrbGrouper(grouper_addr) as grouper:
-    sifter = FrbSifterClient(sifter_addr)
-    
+# Create and enter context managers for the sifter client and grouper.
+sifter_cm = FrbSifterClient(sifter_addr)
+grouper_cm = FrbGrouper(grouper_addr, restore_cuda_device=False)
+
+with sifter_cm as sifter, grouper_cm as grouper:
     # Send the ConfigMessage to the sifter (this is only done once).
     sifter.send_configuration(
         pirate_yaml = grouper.dedispersion_config_yaml_string,
@@ -119,9 +121,10 @@ with FrbGrouper(grouper_addr) as grouper:
                                        per_beam_max[ibeam], per_beam_token[ibeam])
 
         coarse_snr_max = float(per_beam_max.max())
-        print(f'toy_grouper: beamset={beam_set_id}, ichunk={ichunk}, '
-              f'fpga=[{events.chunk_fpga_start}:{events.chunk_fpga_end}], '
-              f'coarse_snr_max={coarse_snr_max:.4g}, nevents={len(events)}', flush=True)
+
+        atomic_print(f'toy_grouper: beamset={beam_set_id}, ichunk={ichunk}, '
+                     f'fpga=[{events.chunk_fpga_start}:{events.chunk_fpga_end}], '
+                     f'coarse_snr_max={coarse_snr_max:.4g}, nevents={len(events)}')
 
         # Send the FrbEventsMessage (even if nevents==0).
         sifter.send_events(
@@ -140,10 +143,15 @@ When the `FrbGrouper` context manager is entered, a lot happens under the hood:
  - The grouper receives metadata (three yaml objects, see below) from `pirate`.
 
  - The grouper learns which GPU it is running on (by receiving a cuda `device_id`),
-   and *changes the current cupy device* to the appropriate GPU. This change will
-   be un-done when the context manager exits. Within the `FrbGrouper` context manager,
-   cupy functions will use the correct GPU, but may revert to GPU 0 after the context
-   manager exits.
+   and *changes the current cupy device* to the appropriate GPU. Within the
+   `FrbGrouper` context manager, cupy functions will use the correct GPU.
+
+   Whether this device change is un-done on exit is controlled by the (required)
+   `restore_cuda_device` constructor arg. True switches back to the caller's device
+   on exit -- "cleaner", but a hidden footgun: the switch-back can allocate GPU
+   memory on the caller's device, leading to confusing out-of-memory errors on
+   shutdown paths. In contexts such as a dedicated grouper process, where the intent
+   is to use one gpu throughout, False is recommended (as in the example above).
 
    *Important consequence:* the grouper code must not touch the GPU outside
    (either before or after) the `FrbGrouper` context manager. Otherwise, you
@@ -267,6 +275,9 @@ these down somewhere so I don't forget):
    with host grpc threads on both sides. It would be more efficient to serialize and
    exchange cuda events, to directly "couple" pirate's cuda streams to cupy's streams).
 
- - Currently, grouper-sifter intercommunication is synchronous: the grouper blocks
-   until a tcp connection to the sifter is opened and closed. It would be better to
-   use asynchronous communication, with the tcp connection managed by another thread.
+ - (Done.) Grouper-sifter intercommunication is asynchronous by default:
+   `FrbSifterClient` holds one persistent grpc channel, and `send_events()`
+   dispatches each `FrbEvents` rpc via `stub.FrbEvents.future()` with a
+   `timeout`-second deadline (default 1 second), so the grouper does not block.
+   Constructing the client with `timeout=0` restores synchronous sends.
+   (`send_configuration()` is always synchronous, but it is sent only once.)

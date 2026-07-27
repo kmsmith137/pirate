@@ -3,10 +3,10 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="GPU kernels" href="gpu_kernels.html"><link rel="prev" title="LLM context files" href="../llm_context.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="GPU kernels" href="gpu_kernels.html"><link rel="prev" title="Writing comments and docstrings" href="comments.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>C++ guidelines - pirate_frb 1.3.1 documentation</title>
+        <title>C++ guidelines - pirate_frb 1.4.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -164,7 +164,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.3.1 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.4.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -185,7 +185,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.3.1 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.4.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -250,22 +250,42 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../classes/Acquisition.html">Acquisition</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrame.html">AssembledFrame</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrameAllocator.html">AssembledFrameAllocator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrameSet.html">AssembledFrameSet</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/BumpAllocator.html">BumpAllocator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionConfig.html">DedispersionConfig</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionPlan.html">DedispersionPlan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FakeXEngine.html">FakeXEngine</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FileSubscriber.html">FileSubscriber</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FileWriter.html">FileWriter</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouperClient.html">FrbGrouperClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSearchClient.html">FrbSearchClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbServer.html">FrbServer</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterClient.html">FrbSifterClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrequencySubbands.html">FrequencySubbands</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperser.html">GpuDedisperser</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GpuGrouperHistogram.html">GpuGrouperHistogram</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GrouperHistogram.html">GrouperHistogram</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/Hardware.html">Hardware</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/OfflineDedisperser.html">OfflineDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/PrimaryTree.html">PrimaryTree</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/Receiver.html">Receiver</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/ReferenceDedisperser.html">ReferenceDedisperser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/SimulatedFrameFactory.html">SimulatedFrameFactory</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/SlabAllocator.html">SlabAllocator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/ThreadAffinity.html">ThreadAffinity</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
 <li class="toctree-l1 current has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" checked="" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="comments.html">Writing comments and docstrings</a></li>
 <li class="toctree-l2 current current-page"><a class="current reference internal" href="#">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
-<li class="toctree-l2"><a class="reference internal" href="grpc.html">GRPC .proto guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="grpc.html">GRPC guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="docstrings.html">Writing sphinx-friendly docstrings</a></li>
 <li class="toctree-l2"><a class="reference internal" href="stoppable_class.html">Stoppable Class Pattern</a></li>
 <li class="toctree-l2"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
@@ -339,6 +359,129 @@ compiler-generated in the header (<code class="docutils literal notranslate"><sp
 destructor; <code class="docutils literal notranslate"><span class="pre">shared_ptr</span></code> does not). When unsure, include it.</p>
 </li>
 </ul>
+<section id="serialized-output-atomicprint-atomic-print">
+<h2>Serialized output (AtomicPrint / atomic_print)<a class="headerlink" href="#serialized-output-atomicprint-atomic-print" title="Link to this heading">¶</a></h2>
+<p>ALL pirate output should go through one funnel, declared near the top of
+<code class="docutils literal notranslate"><span class="pre">include/pirate/utils.hpp</span></code>. Two real bugs came from raw output: chained
+<code class="docutils literal notranslate"><span class="pre">operator&lt;&lt;</span></code> from concurrent <a class="reference internal" href="../classes/FrbServer.html#pirate_frb.FrbServer">FrbServer</a> threads, and python’s <code class="docutils literal notranslate"><span class="pre">print()</span></code>
+(which writes the message and its newline separately, so a sibling thread
+can slip in between).</p>
+<ul class="simple">
+<li><p>C++ code uses <strong><code class="docutils literal notranslate"><span class="pre">AtomicPrint</span></code></strong>; python code calls <strong><code class="docutils literal notranslate"><span class="pre">atomic_print()</span></code></strong>
+(a pybind11 binding of the same C++ primitive, so both languages share
+one process-global mutex). Each message is formatted in full, then
+emitted with a single <code class="docutils literal notranslate"><span class="pre">write(2)</span></code>.</p></li>
+<li><p>The single syscall is what makes a line unsplittable across PROCESSES
+sharing an fd – <code class="docutils literal notranslate"><span class="pre">run_toy_grouper</span></code> spawns one child per grouper address,
+all inheriting the parent’s stdout, and no in-process lock can help
+there. The mutex covers everything in-process.</p></li>
+<li><p>Use it EVERYWHERE, including single-threaded call sites where nothing
+could interleave today. Uniformity keeps the invariant greppable and
+removes the judgement call about whether a given site “needs” it.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">AtomicPrint</span></code> emits when it goes out of scope, so keep scopes tight – one
+held across a blocking call hides its output for the duration. The block
+form (declare a named <code class="docutils literal notranslate"><span class="pre">AtomicPrint</span></code>, stream several lines, let it fall out
+of scope) emits the whole block as one contiguous write.</p></li>
+<li><p>No <code class="docutils literal notranslate"><span class="pre">flush()</span></code> or <code class="docutils literal notranslate"><span class="pre">std::endl</span></code> is needed (nor <code class="docutils literal notranslate"><span class="pre">PYTHONUNBUFFERED</span></code> for our own
+python output): <code class="docutils literal notranslate"><span class="pre">write(2)</span></code> bypasses stdio and python buffering.</p></li>
+</ul>
+<p>Audit – neither grep comes back empty; the rule is that every hit must fall
+into one of the documented exception categories below. A hit in code that can
+run on a thread is a real violation.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">grep</span> <span class="o">-</span><span class="n">rnE</span> <span class="s2">&quot;</span><span class="se">\b</span><span class="s2">(std::)?(cout|cerr|clog|wcout|wcerr)</span><span class="se">\b</span><span class="s2">|</span><span class="se">\b</span><span class="s2">(v?f?printf|puts|fputs|putchar|perror)\s*\(&quot;</span> \
+     <span class="n">src_lib</span><span class="o">/</span> <span class="n">src_pybind11</span><span class="o">/</span> <span class="o">|</span> <span class="n">grep</span> <span class="o">-</span><span class="n">vE</span> <span class="s2">&quot;autogenerated_kernels|Casm&quot;</span>
+
+<span class="n">grep</span> <span class="o">-</span><span class="n">rnE</span> <span class="s2">&quot;</span><span class="se">\b</span><span class="s2">p?print\(|</span><span class="se">\b</span><span class="s2">sys\.std(out|err)\.write</span><span class="se">\b</span><span class="s2">|</span><span class="se">\b</span><span class="s2">os\.write\(&quot;</span> \
+     <span class="n">pirate_frb</span><span class="o">/</span> <span class="o">--</span><span class="n">include</span><span class="o">=*.</span><span class="n">py</span> <span class="o">|</span> <span class="n">grep</span> <span class="o">-</span><span class="n">vE</span> <span class="s2">&quot;cuda_generator|/casm/&quot;</span>
+</pre></div>
+</div>
+<p>Why each piece of those patterns is there – do not simplify them back:</p>
+<ul class="simple">
+<li><p><strong>Do not anchor on the <code class="docutils literal notranslate"><span class="pre">std::</span></code> prefix.</strong> Every <code class="docutils literal notranslate"><span class="pre">src_lib/*.cpp</span></code> has
+<code class="docutils literal notranslate"><span class="pre">using</span> <span class="pre">namespace</span> <span class="pre">std;</span></code>, so <code class="docutils literal notranslate"><span class="pre">cout</span></code> usually appears bare. An earlier version of
+this audit grepped for <code class="docutils literal notranslate"><span class="pre">std::cout</span></code>, always returned zero, and so silently
+reported compliance for years.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">\bprintf\(</span></code> alone misses <code class="docutils literal notranslate"><span class="pre">fprintf(</span></code></strong>, because there is no word boundary
+between the <code class="docutils literal notranslate"><span class="pre">f</span></code> and the <code class="docutils literal notranslate"><span class="pre">printf</span></code>. <code class="docutils literal notranslate"><span class="pre">fprintf(stderr,</span> <span class="pre">...)</span></code> is raw output and
+would slip through. Hence <code class="docutils literal notranslate"><span class="pre">v?f?printf</span></code>. Note this correctly still EXCLUDES
+<code class="docutils literal notranslate"><span class="pre">sprintf</span></code>/<code class="docutils literal notranslate"><span class="pre">snprintf</span></code>, which format into a buffer rather than writing to a
+stream, and so are not output at all.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">cout</span></code>/<code class="docutils literal notranslate"><span class="pre">cerr</span></code> are not the only streams</strong>: <code class="docutils literal notranslate"><span class="pre">clog</span></code> is a third, and the wide
+variants exist. <code class="docutils literal notranslate"><span class="pre">puts</span></code>/<code class="docutils literal notranslate"><span class="pre">fputs</span></code>/<code class="docutils literal notranslate"><span class="pre">putchar</span></code>/<code class="docutils literal notranslate"><span class="pre">perror</span></code> are output calls with no
+<code class="docutils literal notranslate"><span class="pre">printf</span></code> in the name.</p></li>
+<li><p><strong>Audit <code class="docutils literal notranslate"><span class="pre">src_pybind11/</span></code> as well as <code class="docutils literal notranslate"><span class="pre">src_lib/</span></code></strong> – it is also C++ that can
+print, and it is not covered by the python grep.</p></li>
+<li><p><strong>Python: <code class="docutils literal notranslate"><span class="pre">\bprint\(</span></code> misses <code class="docutils literal notranslate"><span class="pre">sys.stdout.write</span></code> / <code class="docutils literal notranslate"><span class="pre">sys.stderr.write</span></code></strong>, which
+are the usual way raw python output sneaks in.</p></li>
+<li><p><strong>Python: no <code class="docutils literal notranslate"><span class="pre">\s*</span></code> before the paren.</strong> <code class="docutils literal notranslate"><span class="pre">\bprint\s*\(</span></code> matches ordinary prose
+such as an argparse help string reading “…kernels to print (default 20)”.
+Python never writes <code class="docutils literal notranslate"><span class="pre">print</span> <span class="pre">(</span></code>, so the tighter pattern is both correct and
+quieter.</p></li>
+<li><p><strong>The <code class="docutils literal notranslate"><span class="pre">\b</span></code> prefix is load-bearing</strong> in the python grep: it is what keeps
+<code class="docutils literal notranslate"><span class="pre">atomic_print(</span></code> and <code class="docutils literal notranslate"><span class="pre">get_gmem_footprint(</span></code> out of the results, while <code class="docutils literal notranslate"><span class="pre">p?</span></code>
+still catches <code class="docutils literal notranslate"><span class="pre">pprint(</span></code>.</p></li>
+</ul>
+<p>Known false positives, which a reader must filter by eye – neither grep can
+distinguish these, and trying to exclude them mechanically would risk hiding
+real hits:</p>
+<ul class="simple">
+<li><p><strong>Comments</strong>, including commented-out debug lines (<code class="docutils literal notranslate"><span class="pre">//</span> <span class="pre">cout</span> <span class="pre">&lt;&lt;</span> <span class="pre">...</span></code>) and prose
+that merely mentions a stream by name.</p></li>
+<li><p><strong>Docstring usage examples</strong> in python, which illustrate an API for a reader
+rather than executing. (An <code class="docutils literal notranslate"><span class="pre">ast</span></code> scan can separate these from real code if the
+list ever gets long enough to be worth automating.)</p></li>
+</ul>
+<p>Deliberately OUT OF SCOPE of both greps, so do not expect them to appear:</p>
+<ul class="simple">
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">include/</span></code></strong>. Headers hold <code class="docutils literal notranslate"><span class="pre">show()</span></code> / <code class="docutils literal notranslate"><span class="pre">emit_cpp()</span></code> methods taking
+<code class="docutils literal notranslate"><span class="pre">std::ostream</span> <span class="pre">&amp;os</span> <span class="pre">=</span> <span class="pre">std::cout</span></code> (the CALLER supplies the stream, and these are
+used from single-threaded CLI dump paths), and a one-shot <code class="docutils literal notranslate"><span class="pre">std::cout</span></code> note
+that runs during static registration. Routing those through <code class="docutils literal notranslate"><span class="pre">AtomicPrint</span></code>
+would mean pulling <code class="docutils literal notranslate"><span class="pre">utils.hpp</span></code> into widely-included headers for no
+concurrency benefit.</p></li>
+<li><p><strong>Caller-supplied-stream functions generally</strong>, in both languages – a C++
+function taking <code class="docutils literal notranslate"><span class="pre">ostream</span> <span class="pre">&amp;os</span></code>, or a python function taking <code class="docutils literal notranslate"><span class="pre">out=sys.stdout</span></code>.
+These name no stream at the point of writing, so no grep will find them. They
+are fine: the caller chooses the destination, and the callers are
+single-threaded dump paths.</p></li>
+</ul>
+<p>Documented exceptions, all deliberate:</p>
+<ul class="simple">
+<li><p><strong>C++ dump-path exceptions.</strong> Most C++ hits are single-threaded paths where
+the output IS the point of the command, and routing them through
+<code class="docutils literal notranslate"><span class="pre">AtomicPrint</span></code> would buy nothing: the <code class="docutils literal notranslate"><span class="pre">test_*</span></code> / <code class="docutils literal notranslate"><span class="pre">time_*</span></code> unit-test and
+benchmark harnesses dispatched from <a class="reference internal" href="../cli/test.html"><code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">test</span></code></a> / <code class="docutils literal notranslate"><span class="pre">time</span></code>; one-off
+developer subcommands; <code class="docutils literal notranslate"><span class="pre">make_random*</span></code> and <code class="docutils literal notranslate"><span class="pre">Params::print</span></code> config dumps; and
+cleanup guards / socket teardown. The test for this category is that no
+other pirate thread can be producing output at the same time. If that
+stops being true for a given site, it stops being an exception.</p></li>
+<li><p><strong>Argparse error reporting</strong> – the <code class="docutils literal notranslate"><span class="pre">sys.stderr.write</span></code> calls in the
+<code class="docutils literal notranslate"><span class="pre">ArgumentParser.error()</span></code> override. These run before anything has started, on
+the way to <code class="docutils literal notranslate"><span class="pre">sys.exit(2)</span></code>, and must go to stderr.</p></li>
+<li><p><strong>A <code class="docutils literal notranslate"><span class="pre">stringstream</span></code> is NOT a substitute for <code class="docutils literal notranslate"><span class="pre">AtomicPrint</span></code>.</strong> Several threaded
+sites used to build a message in a <code class="docutils literal notranslate"><span class="pre">stringstream</span></code> and emit it with a single
+<code class="docutils literal notranslate"><span class="pre">cout</span> <span class="pre">&lt;&lt;</span> <span class="pre">ss.str()</span> <span class="pre">&lt;&lt;</span> <span class="pre">flush</span></code>. That looks atomic and is not: C++ guarantees only
+that concurrent writes to <code class="docutils literal notranslate"><span class="pre">cout</span></code> are free of data races, and explicitly permits
+the characters to INTERLEAVE ([iostream.objects]); and one <code class="docutils literal notranslate"><span class="pre">operator&lt;&lt;</span></code> is not
+one <code class="docutils literal notranslate"><span class="pre">write(2)</span></code>, since stdio may split it. So the idiom gets neither guarantee
+the funnel exists to provide. Don’t reintroduce the pattern – use the block
+form of <code class="docutils literal notranslate"><span class="pre">AtomicPrint</span></code> when a message is assembled conditionally.</p></li>
+<li><p><strong>The casm files</strong> – <code class="docutils literal notranslate"><span class="pre">src_lib/CasmBeamformer.cu</span></code>,
+<code class="docutils literal notranslate"><span class="pre">include/pirate/CasmBeamformer.hpp</span></code>, and <code class="docutils literal notranslate"><span class="pre">pirate_frb/casm/*.py</span></code>. These are
+vendorized outside pirate (into the casm_bf repo, which has no pirate
+dependency and cannot import pirate_frb), so they must keep plain
+<code class="docutils literal notranslate"><span class="pre">std::cout</span></code> / <code class="docutils literal notranslate"><span class="pre">printf</span></code> / <code class="docutils literal notranslate"><span class="pre">print()</span></code>. Each file carries a note saying so;
+in the C++ files the note is <code class="docutils literal notranslate"><span class="pre">//x</span></code>-marked, so <code class="docutils literal notranslate"><span class="pre">vendorize.py</span></code> strips it
+from the vendorized output.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">pirate_frb/cuda_generator/</span></code>: build-time code generation, which must stay
+importable without the compiled extension it helps build.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">pirate_frb/slow_avar/PfVariance.py</span></code>: <code class="docutils literal notranslate"><span class="pre">print(...,</span> <span class="pre">end=&quot;&quot;)</span></code> progress dots.
+Incremental partial-line output is fundamentally incompatible with
+line-atomic emission, and the incremental feedback is the point.</p></li>
+<li><p>Docstring usage examples still say <code class="docutils literal notranslate"><span class="pre">print(...)</span></code>, since they illustrate
+the API for a reader rather than executing.</p></li>
+</ul>
+</section>
 <section id="concurrency">
 <h2>Concurrency<a class="headerlink" href="#concurrency" title="Link to this heading">¶</a></h2>
 <p>Rules for any threaded C++ code; violations of each one turned up as real
@@ -362,8 +505,8 @@ robust against waiters added later. A shutdown/stop event must
 <code class="docutils literal notranslate"><span class="pre">notify_all()</span></code> every cv of the class. A wait on a CONJUNCTION of set-once
 latch flags does not force a shared cv: wait for each flag sequentially,
 each on its own cv (equivalent because the flags are never cleared – see
-AssembledFrameAllocator’s worker init gate). FrbServer (7 cvs) is the big
-worked example; CudaEventRingbuf’s <code class="docutils literal notranslate"><span class="pre">_release()</span></code> shows how to justify NOT
+<a class="reference internal" href="../classes/AssembledFrameAllocator.html#pirate_frb.core.AssembledFrameAllocator">AssembledFrameAllocator</a>’s worker init gate). <a class="reference internal" href="../classes/FrbServer.html#pirate_frb.FrbServer">FrbServer</a> (7 cvs) is the big
+worked example; <a class="reference internal" href="cuda_event_ringbuf.html">CudaEventRingbuf</a>’s <code class="docutils literal notranslate"><span class="pre">_release()</span></code> shows how to justify NOT
 notifying a cv whose waiters mention the changed state.</p></li>
 <li><p>Keep a COMPLETE “signaled on:” list next to each cv declaration. A wait
 predicate is correct only if every state change it tests is followed by a
@@ -375,8 +518,8 @@ woken thread immediately blocks re-acquiring the lock the notifier still
 holds. This is a throughput nicety, never a correctness requirement, so
 it never justifies weakening a critical section – and legitimate
 under-lock notifies exist and deserve no “fix”: a lock deliberately held
-into the next loop iteration (FileWriter’s ssd-&gt;nfs handoff,
-AssembledFrameAllocator’s worker loop), a failure path where the lock
+into the next loop iteration (<a class="reference internal" href="../classes/FileWriter.html#pirate_frb.core.FileWriter">FileWriter</a>’s ssd-&gt;nfs handoff,
+<a class="reference internal" href="../classes/AssembledFrameAllocator.html#pirate_frb.core.AssembledFrameAllocator">AssembledFrameAllocator</a>’s worker loop), a failure path where the lock
 must stay held (the throw in <a class="reference internal" href="../classes/FrbGrouper.html#pirate_frb.rpc.FrbGrouper">FrbGrouper::start_listening</a>).</p></li>
 <li><p>Never read a lock-protected member after dropping the lock – snapshot it
 into a local under the lock and use the local.</p></li>
@@ -396,7 +539,7 @@ is UB and a hung predicate in a long-running server.</p></li>
 mechanism (e.g. <code class="docutils literal notranslate"><span class="pre">cudaEventSynchronize</span></code> vs the stoppable pattern’s
 <code class="docutils literal notranslate"><span class="pre">stop()</span></code>), document the trade-off at the declaration: what invariant
 bounds the wait in practice, and what happens in the pathological case.
-(See the <code class="docutils literal notranslate"><span class="pre">blocking_sync</span></code> note in CudaEventRingbuf.hpp for the model.)</p></li>
+(See the <code class="docutils literal notranslate"><span class="pre">blocking_sync</span></code> note in <a class="reference internal" href="cuda_event_ringbuf.html">CudaEventRingbuf</a>.hpp for the model.)</p></li>
 </ul>
 </section>
 <section id="spawning-joining-and-teardown">
@@ -423,7 +566,7 @@ paths, so joining under it deadlocks.</p></li>
 <li><p>A constructor that spawns SEVERAL threads must handle a mid-spawn
 failure: catch, shut the workers down, join the already-spawned threads,
 rethrow. Otherwise the <code class="docutils literal notranslate"><span class="pre">std::thread</span></code> members are destroyed while
-joinable, which is <code class="docutils literal notranslate"><span class="pre">std::terminate</span></code>. (See FakeXEngine’s constructor for
+joinable, which is <code class="docutils literal notranslate"><span class="pre">std::terminate</span></code>. (See <a class="reference internal" href="../classes/FakeXEngine.html#pirate_frb.core.FakeXEngine">FakeXEngine</a>’s constructor for
 the model.)</p></li>
 <li><p>The destructor joins threads inline, and must never call a public
 <code class="docutils literal notranslate"><span class="pre">join()</span></code>-style method that rethrows a saved error (a throwing
@@ -509,14 +652,14 @@ For example:</p>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="../llm_context.html">
+          <a class="prev-page" href="comments.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">LLM context files</div>
+                <div class="title">Writing comments and docstrings</div>
                 
               </div>
             </a>
@@ -551,6 +694,7 @@ For example:</p>
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">C++ guidelines</a><ul>
+<li><a class="reference internal" href="#serialized-output-atomicprint-atomic-print">Serialized output (AtomicPrint / atomic_print)</a></li>
 <li><a class="reference internal" href="#concurrency">Concurrency</a><ul>
 <li><a class="reference internal" href="#locking-and-condition-variables">Locking and condition variables</a></li>
 <li><a class="reference internal" href="#spawning-joining-and-teardown">Spawning, joining, and teardown</a></li>
@@ -569,7 +713,7 @@ For example:</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=bb516dca"></script>
+</div><script src="../_static/documentation_options.js?v=9172181d"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

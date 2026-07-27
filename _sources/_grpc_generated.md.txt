@@ -1,5 +1,5 @@
 # gRPC Protocol Definitions
 
-- [frb_search.proto](grpc/frb_search.proto.md) - RPC server embedded in pirate (e.g. write_file callbacks)
+- [frb_search.proto](grpc/frb_search.proto.md) - RPC server embedded in pirate (e.g. WriteFiles / SubscribeFiles)
 - [frb_grouper.proto](grpc/frb_grouper.proto.md) - RPC intercommunication between pirate and grouper
 - [frb_sifter.proto](grpc/frb_sifter.proto.md) - RPC intercommunication between grouper and sifter

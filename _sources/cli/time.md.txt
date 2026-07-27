@@ -18,8 +18,8 @@ options:
                         time_avx2_simulate_4bit_noise)
   --ncu                 Just run a single kernel (intended for profiling with nvidia
                         'ncu')
-  --gldk                Runs time_lagged_downsampling_kernels()
-  --gddk                Runs time_gpu_dedispersion_kernels()
+  --gldk                Runs GpuLaggedDownsamplingKernel.time_selected()
+  --gddk                Runs GpuDedispersionKernel.time_selected()
   --casm                Runs CasmBeamformer.run_timings()
   --chime               Runs time_chime_frb_{beamform,upchan}()
   --zomb                Runs "zombie" timings (code that I wrote during protoyping that

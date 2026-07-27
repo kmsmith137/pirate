@@ -45,10 +45,13 @@ These get compiled into a single extension module `pirate_pybind11.so`.
 
 On the python side, the `pirate_frb` toplevel package is divided into subpackages `pirate_frb.casm`, `pirate_frb.core`, etc.
 Each subpackage imports the contents of the corresponding pybind11 file.
-For example, `pirate_frb/core/__init__.py` contains the lines:
+For example, `pirate_frb/core/__init__.py` contains lines like:
 ```py
 # Import core C++ classes from pirate_pybind11
-from ..pirate_pybind11 import AssembledFrame
+from ..pirate_pybind11 import (
+    AssembledFrame,
+    ...
+)
 ```
 Note that each pybind11 class will appear with two names -- for example `pirate_frb.pirate_pybind11.AssembledFrame`
 is the same as `pirate_frb.core.AssembledFrame`. In python code, always use the latter "non-pybind11" name if possible.

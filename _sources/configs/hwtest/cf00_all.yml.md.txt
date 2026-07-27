@@ -15,6 +15,8 @@ dedisperse: true
 
 
 # ip_addrs: list of IP addresses where TCP data will be received (to disable networking, use empty list)
+# tcp_connections_per_ip_address: number of TCP connections opened per entry of 'ip_addrs'.
+#  Must be >= 1. Required when 'ip_addrs' is non-empty.
 
 ip_addrs: [ '10.0.0.1', '10.0.1.1', '10.0.2.1', '10.0.3.1' ]
 tcp_connections_per_ip_address: 1
@@ -23,6 +25,12 @@ tcp_connections_per_ip_address: 1
 # ssd_dirs: list of directories where data is written (to disable ssd writes, use empty list).
 # ssd_devices: if these don't match 'ssd_dirs', then an exception is thrown.
 #  (This is intended to catch misconfiguration where a device is not mounted.)
+# write_threads_per_ssd: number of writer threads per entry of 'ssd_dirs' (must be >= 1).
+# write_asdf: if true, each writer emits one real ASDF frame per iteration
+#  (AssembledFrame::write_asdf); if false, it writes fixed-size binary blobs
+#  (64 MiB each) instead.
+# ssd_devices, write_threads_per_ssd and write_asdf are all required when
+#  'ssd_dirs' is non-empty.
 
 ssd_dirs: [ '/scratch', '/scratch2' ]
 ssd_devices: [ '/dev/nvme0n1p2', '/dev/nvme1n1p1' ]

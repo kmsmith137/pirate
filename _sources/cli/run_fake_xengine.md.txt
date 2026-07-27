@@ -12,14 +12,15 @@ usage: pirate_frb run_fake_xengine [-h] [-w WORKERS] [-P] [-N] [-G] [-j] [-f]
 Send fake X-engine data to one or more running FrbServers
 
 positional arguments:
-  RPC_ADDR              One or more "ip:port" strings (one per receiver)
+  RPC_ADDR              One or more "ip:port" strings (one per server, matching the
+                        config's rpc_ip_addrs)
 
 options:
   -h, --help            show this help message and exit
   -w, --workers WORKERS
                         Number of worker threads per FakeXEngine (default 128)
   -P, --unpaced         Disable pacing -- send chunks as fast as possible (default: pace
-                        to stay <=5 chunks ahead of server)
+                        to stay <=4 chunks ahead of server)
   -N, --unnormalized    Send unnormalized data -- leave scales/offsets arbitrary
                         (default: calibrate them to the per-zone noise variance)
   -G, --non-gaussian    Fill int4 data with uniform noise over [-8,+7] (default:
