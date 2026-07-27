@@ -835,11 +835,16 @@ where $f[t]$ is a smooth trend and $\epsilon[t]$ is white Gaussian noise with ze
 variance $\sigma^2$.  The detrender computes an estimate $\hat f[t]$ and replaces $d[t] \rightarrow d[t] - \hat f[t]$
 at valid samples.
 
-{\bf Outputs.}  The detrended residual $r[t] = d[t] - \hat f[t]$ is the obvious one, but it is not sufficient
-on its own, and two further per-sample arrays are emitted alongside it.
+{\bf Outputs.}  Four per-sample arrays, of which only the first is obvious.
+
+The detrended residual is $r[t] = d[t] - \hat f[t]$.  Alongside it the detrender emits an {\em expanded} mask
+$m_{\rm out}[t]$: a sample is dropped either because its input sample was masked, or because its window turned
+out to be too ill-conditioned to fit (\S\ref{sec:dt_estimator}).  Where $m_{\rm out}$ is false the residual is
+meaningless and is set to zero.  So the detrender does modify the mask, and a consumer must use
+$m_{\rm out}$ rather than the mask it supplied.
 
 For a {\em fixed mask} the estimator is linear in the data, so we may write $\hat f = Hd$ for a $T \times T$
-smoothing matrix $H$ (which depends on the mask but not on $d$).  The first extra output is the {\em leverage}
+smoothing matrix $H$ (which depends on the mask but not on $d$).  The third output is the {\em leverage}
 \begin{equation}
 \lambda[t] \;\equiv\; H_{tt} \;=\; \frac{\partial \hat f[t]}{\partial d[t]} ,
 \label{eq:dt_leverage_def}
@@ -849,27 +854,28 @@ propagated downstream,
 \begin{equation}
 {\rm Var}\big(\hat f[t]\big) = \sigma^2 \lambda[t],
 \qquad
-{\rm Var}\big(r[t]\big) = \sigma^2 \big(1 - \lambda[t]\big).
+{\rm Var}\big(r[t]\big) = \sigma^2 \big(1 - \lambda[t]\big) ,
 \label{eq:dt_var_r}
 \end{equation}
-So $\lambda$ is simultaneously the variance of the trend estimate in units of $\sigma^2$, the fraction of the
-variance the detrender removes, and a measure of how well determined the window is.  The essential point is
-that ${\rm Var}(r[t])$ is {\em not} $t$-independent even though ${\rm Var}(\epsilon[t])$ is: it varies with the
-local mask, dropping sharply near mask edges and in sparsely populated windows.  Any downstream normalization
-to sigmas (\S\ref{sec:peak_finding}) must divide by $\sigma\sqrt{1-\lambda[t]}$ rather than by $\sigma$, or it
-will report biased significances exactly where the data is worst.  For a fully valid window
+exactly, on every surviving sample where the mask is locally constant.  So $\lambda$ is simultaneously the
+variance of the trend estimate in units of $\sigma^2$, the fraction of the variance the detrender removes, and
+a measure of how well determined the window is.  The essential point is that ${\rm Var}(r[t])$ is {\em not}
+$t$-independent even though ${\rm Var}(\epsilon[t])$ is: it varies with the local mask, dropping sharply near
+mask edges and in sparsely populated windows.  Any downstream normalization to sigmas
+(\S\ref{sec:peak_finding}) must divide by $\sigma\sqrt{1-\lambda[t]}$ rather than by $\sigma$, or it will
+report biased significances exactly where the data is worst.  For a fully valid window
 $\lambda = 9/8W = 2.2\times10^{-3}$, but under adversarial masking $\lambda$ ranges over several decades and
 approaches $1$, where ${\rm Var}(r) \rightarrow 0$ and the residual carries no information at all.
-(Both identities in (\ref{eq:dt_var_r}) hold where the mask is locally constant and the regularizer of
-\S\ref{sec:dt_estimator} is inactive; where it is active, $\sigma^2\lambda[t]$ becomes an upper bound on
-${\rm Var}(\hat f[t])$.)
 
-The second extra output is a per-sample flag recording whether the regularizer of \S\ref{sec:dt_estimator}
-activated, i.e.~whether the fit was shrunk toward a lower order because the window could not determine the full
-degree-$n$ shape.  This is needed because $\lambda$ bounds the {\em variance} of $\hat f$ but says nothing about
-the shrinkage {\em bias} that the regularizer introduces, so the two together are what a consumer needs in
-order to decide whether to trust a sample.  Note that the detrender does not itself modify the mask: deciding
-that a large $\lambda$ or a raised flag warrants discarding a sample is left to the caller.
+The fourth output is the conditioning statistic $r_{\rm min}[t]$ of (\ref{eq:dt_rmin}), which is what the mask
+expansion thresholds on.  It is worth emitting because it and $\lambda$ answer different questions, and neither
+subsumes the other.  $r_{\rm min}$ asks whether the {\em fit} is well posed; $\lambda$ asks whether the
+{\em residual} carries information.  Measured over $2.4\times10^5$ samples at $W=512$, every sample with
+$r_{\rm min} < \epsilon$ had $\lambda \ge 0.1$, so mask expansion never discards a sample that $\lambda$ would
+call healthy -- but the converse fails, and $0.07\%$ of surviving samples have $\lambda > 0.1$.  Those are well
+conditioned and numerically accurate, and merely statistically degenerate: $N_v = 3$ with $n = 2$ determines a
+parabola exactly, so $G$ is perfectly conditioned while $\lambda = 1$ and ${\rm Var}(r) = 0$.  Whether to cut on
+$\lambda$ as well is the consumer's decision, which is why we hand over both.
 
 The detrender runs {\em incrementally}.  On the $i$-th call it is handed a buffer containing chunk $i$
 (samples $iT_c \le t < (i+1)T_c$) together with $W$ samples of pre- and postpadding.  Samples $t < iT_c$ have
@@ -887,7 +893,7 @@ $2W{+}1$ & window length (odd, symmetric)          & $1025$ \\
 $B$      & scan block length                       & $1024$ \\
 $T_c$    & time samples per chunk                  & $2048$ \\
          & buffer length $T_c + 2W$                & $3072$ \\
-$\epsilon$ & pivot floor                           & $10^{-3}$ \\
+$\epsilon$ & mask-expansion threshold on $r_{\rm min}$ & $10^{-3}$ \\
          & arithmetic                              & float32 \\
 \bottomrule
 \end{tabular}
@@ -935,35 +941,53 @@ U = (U_0, U_1, U_2)^T .
 \label{eq:dt_G}
 \end{equation}
 
-{\bf Regularized Cholesky.}
+{\bf Cholesky, and the conditioning statistic.}
 $G$ is singular whenever $N_v \le n$, and ill-conditioned whenever the valid samples cannot pin down the
-higher-order shape (two surviving clumps, for instance).  We repair this by flooring the Cholesky pivots
-multiplicatively.  Factor $G = LL^T$ in the usual way, but replace the pivot at each step by
-\begin{equation}
-p_i \;\longrightarrow\; \max\big(\, p_i,\ \epsilon\, G_{ii},\ \mu \,\big),
-\qquad
-p_i = G_{ii} - \sum_{k<i} L_{ik}^2 ,
-\label{eq:dt_pivot}
-\end{equation}
-with $\epsilon = 10^{-3}$ and $\mu$ a tiny absolute backstop.  Written out for $n=2$:
+higher-order shape (two surviving clumps, for instance).  Rather than regularize, we detect this and drop the
+sample.  Factor $G = LL^T$ in the usual way; written out for $n=2$,
 \begin{align}
 p_0 &= S_0,                              & L_{00} &= \sqrt{p_0}, & L_{10} &= 0, & L_{20} &= S_2/L_{00}, \nn \\
 p_1 &= S_2,                              & L_{11} &= \sqrt{p_1}, & L_{21} &= S_3/L_{11}, \nn \\
 p_2 &= S_4 - L_{20}^2 - L_{21}^2,        & L_{22} &= \sqrt{p_2},
 \label{eq:dt_chol}
 \end{align}
-each $p_i$ passed through (\ref{eq:dt_pivot}) before the square root.  Because $G_{01} = 0$ we get
-$p_0 = G_{00}$ and $p_1 = G_{11}$ exactly, so the pivots are in natural (level, slope, curvature) order and
-the ratio
+where in general $p_i = G_{ii} - \sum_{k<i} L_{ik}^2$.  Because $G_{01} = 0$ we get $p_0 = G_{00}$ and
+$p_1 = G_{11}$ exactly, so the pivots are in natural (level, slope, curvature) order and $p_i/G_{ii} \in [0,1]$
+is the fraction of order-$i$ information surviving after the lower orders are projected out.  Define
 \begin{equation}
-r_i \equiv p_i / G_{ii} \in [0,1]
-\label{eq:dt_ratio}
+r_{\rm min}[t] \;\equiv\; \min_i \frac{p_i}{G_{ii}} , \qquad r_{\rm min} \equiv 0 \mbox{ if any } G_{ii} = 0,
+\label{eq:dt_rmin}
 \end{equation}
-is the fraction of order-$i$ information surviving after the lower orders are projected out.  Since a rank-$k$
-$G$ has $p_i = 0$ for $i \ge k$, flooring $r_i$ at $\epsilon$ is exactly ``fall back to a lower-order fit'',
-applied continuously and with no branch.  The floor is inactive on a well-populated window ($r_2 = 0.44$ for a
-full one), so it introduces no bias there.  With the backstop $\mu$ the factorization succeeds for any mask
-with $N_v \ge 1$; at $N_v = 1$ it returns exactly $d$ at the single valid sample.
+the smallest relative pivot, so that the equilibrated condition number of $G$ is roughly $1/r_{\rm min}$.  The
+detrender then {\bf masks the output sample when $r_{\rm min} < \epsilon$}, with $\epsilon = 10^{-3}$.
+
+Three remarks.  First, $r_{\rm min}$ has to look at the {\em pivots} and not at the diagonal: $N_v = 2$ with the
+two samples at $\pm x$ gives $G_{ii} > 0$ for every $i$ and yet $p_2 = 0$ exactly, since $G$ has rank $2$.
+Second, since a rank-$k$ $G$ has $p_i = 0$ for $i \ge k$, this masks exactly the windows that cannot determine a
+degree-$n$ fit -- $N_v \le n$ always, and more besides.  It is a conditioning test and not a sample count:
+$N_v = 3$ spread across the window survives, while $N_v = 300$ in two tight clumps does not.
+Third, and this is the reason for choosing $r_{\rm min}$ as the threshold quantity,
+\begin{equation}
+r_{\rm min} \ge \epsilon
+\quad\Longrightarrow\quad
+{\rm cond}\big(\mbox{equilibrated } G\big) \;\le\; O(1/\epsilon) = O(10^3) ,
+\label{eq:dt_cond_bound}
+\end{equation}
+so on every sample we keep, the relative error of the solve is bounded by
+$\epsilon_{\rm mach}/\epsilon \approx 1.2\times10^{-4}$ {\em independently of the mask}.  That bound is what
+makes the float32 implementation safe (\S\ref{sec:dt_numerics}).
+
+Masking rather than regularizing costs nothing on the samples we keep, and buys exactness.  Any multiplicative
+pivot floor $p_i \rightarrow \max(p_i, \epsilon G_{ii})$ would be {\em inert} wherever $r_{\rm min} \ge
+\epsilon$, so the two agree on every surviving sample and differ only in the disposition of the rest.  Dropping
+them instead of shrinking their fits means no surviving sample carries any shrinkage bias, so polynomial
+reproduction and the identities (\ref{eq:dt_var_r}) hold exactly rather than approximately.  The price is a
+mask-expansion rate measured at $5\times10^{-4}$ over the randomized-mask test suite.
+
+One implementation detail: $p_i$ can be zero, or slightly negative through cancellation, on a sample we are
+about to mask, and every sample is evaluated branch-free.  Replace $p_i$ by $\max(p_i, \mu)$ with
+$\mu = 10^{-30}$ before the square root, purely to keep NaNs out of the batch.  $\mu$ is a guard, not a tuning
+parameter: it is inert wherever $r_{\rm min} \ge \epsilon$.
 
 {\bf Solve and evaluate.}  With $w = (1, x_0, \ldots, x_0^n)^T$,
 \begin{equation}
@@ -971,19 +995,15 @@ with $N_v \ge 1$; at $N_v = 1$ it returns exactly $d$ at the single valid sample
 \end{equation}
 by forward then back substitution.
 
-{\bf Diagnostic.}  A second forward substitution $L z = w$ gives
+{\bf Leverage.}  A second forward substitution $L z = w$ gives
 \begin{equation}
-\lambda[t] \equiv \|z\|^2 = w^T G_{\rm reg}^{-1} w ,
+\lambda[t] = \|z\|^2 = w^T G^{-1} w ,
 \label{eq:dt_leverage}
 \end{equation}
-which is simultaneously (i) the leverage $H_{tt}$ of the smoother, (ii) ${\rm Var}(\hat f[t])/\sigma^2$, and
-(iii) the ``is this window well determined'' statistic.  Consequently the detrended residual has
-${\rm Var}(r[t]) = \sigma^2(1 - \lambda[t])$, which is {\em not} $t$-independent, and downstream normalization
-to sigmas (\S\ref{sec:peak_finding}) should use it.  For a fully valid window $\lambda = 9/8W = 2.2\times10^{-3}$,
-so the detrender removes $0.22\%$ of the variance and ${\rm sd}(\hat f) = 1.06\,\sigma/\sqrt{W} = 0.047\,\sigma$.
-Emit $\lambda[t]$ alongside the residual, together with a one-bit flag recording whether the pivot floor
-activated (\verb|flagged |\verb$|$\verb|= (p_i < eps*G_ii)|, no branch): $\lambda$ bounds the variance but says
-nothing about the shrinkage bias the floor introduces, so both are wanted.
+the leverage of (\ref{eq:dt_leverage_def}), for the cost of one extra $O(n^2)$ triangular solve.  With no
+regularizer this is exact on every surviving sample.  For a fully valid window $\lambda = 9/8W$, so the
+detrender removes $0.22\%$ of the variance and ${\rm sd}(\hat f) = 1.06\,\sigma/\sqrt{W} = 0.047\,\sigma$ at
+$W = 512$.
 
 {\bf Response.}  For a fully valid window the estimator is a fixed FIR smoother with
 $1 - H(\omega) = O(\omega^{4})$ at low frequency and a smoothing timescale $\sim W$.  Two consequences worth
@@ -1086,9 +1106,13 @@ $T_c/W = 4$, and the amplification $1.6\times10^4$).
 \subsection{Numerical requirements}
 \label{sec:dt_numerics}
 
-Everything runs in float32.  The budget is set by $\hat f$'s own statistical error of $0.047\,\sigma$: numerical
-error below $\sim\!10^{-3}\sigma$ is invisible, which on data reduced to a few $\sigma$ is a relative accuracy
-of $3\times10^{-4}$, leaving about $3.5$ decimal digits of headroom.  Four requirements keep us inside it.
+Everything runs in float32.  The budget follows from (\ref{eq:dt_cond_bound}): on a surviving sample the
+equilibrated condition number is at most $O(1/\epsilon)$, so the relative error of the solve is at most
+$\epsilon_{\rm mach}/\epsilon \approx 1.2\times10^{-4}$.  Measured worst case over the randomized-mask test
+suite is $8.7\times10^{-5}\sigma$, consistent with that bound, and far below $\hat f$'s own statistical error of
+$0.047\,\sigma$.  The bound holds {\em independently of the mask}, which is the property that matters: it is
+what stops the accuracy from degrading as the mask distribution is made more adversarial.  Four requirements
+keep us there.
 
 \begin{itemize}
 \item {\bf Subtract a constant offset first.}  Intensity data is total power, so $d[t]$ carries a large
@@ -1109,11 +1133,8 @@ The residual error scales as $3.4\,\epsilon_{\rm mach}|d-\kappa|$, so the requir
 $|d-\kappa| \le 10^3\sigma$.  Note this bounds the {\em spread} of $d$ within one buffer rather than its
 absolute level: no single additive constant helps when a large step falls inside a window, where a step of
 $10^5\sigma$ still costs $2\times10^{-2}\sigma$.
-Note that this survives the pivot floor: shifting the data sends $U \rightarrow U + \kappa\,G e_0$, so
-exactness requires $G_{\rm reg}^{-1} G e_0 = e_0$, which holds because the $0$th pivot is never floored
-($p_0 = G_{00} = N_v$), leaving the $0$th column of $L$, and hence of $G_{\rm reg}$, exactly equal to that of
-$G$.  Seen less numerically, the offset {\em is} the zeroth-order piece of the trend: this just splits the
-trend into a crude constant handled once per chunk plus the local polynomial handled per sample.
+Seen less numerically, the offset {\em is} the zeroth-order piece of the trend: this just splits the trend into
+a crude constant handled once per chunk plus the local polynomial handled per sample.
 \item {\bf Rebuild per chunk.}  Moment state is never carried across calls; each chunk's scans are built from
 scratch.  (The shared block between consecutive chunks may be cached, but as a recomputation-avoidance
 optimization only.)
@@ -1122,18 +1143,19 @@ sample units) but is a pure diagonal-scaling artifact; Cholesky is equivariant u
 relevant quantity, the condition number of the equilibrated matrix $G_{jl}/\sqrt{G_{jj}G_{ll}}$, is $23$.
 Legendre or Gram polynomials would reduce that to $O(1)$, which buys nothing, and would cost the Hankel
 structure of (\ref{eq:dt_moments}).
-\item {\bf $\epsilon$ must clear the rounding floor.}  The pivot floor is meaningful only if it exceeds the
-float32 noise in $r_i$, measured at $1.7\times10^{-7}$ worst case over random masks with valid fractions from
-$0.3\%$ to $100\%$.  At $\epsilon = 10^{-3}$ the margin is $6000\times$, and since the floor is inactive when
-not needed there is no bias cost to that choice.
+\item {\bf $\epsilon$ must clear the rounding noise in $r_{\rm min}$.}  Mask expansion is a threshold decision,
+so it is only well defined if $\epsilon$ sits well above the precision to which $r_{\rm min}$ itself is
+computed.  Measured worst-case disagreement between a float32 and a float64 run is $1.6\times10^{-5}$, so
+$\epsilon = 10^{-3}$ has a margin of $60\times$.  Note this is the {\em only} place float32 precision feeds back
+into a discrete decision; everywhere else it perturbs a continuous quantity.
 \end{itemize}
 
-Two things follow that are worth stating positively.  The regularizer is multiplicative, hence covariant under
-diagonal rescaling of the basis, so it needs no calibration against $\sigma$, against the trend amplitude, or
-against the effective window width -- unlike an absolute ridge, which has to be recalibrated as the mask
-narrows and which turns out not to clear the rounding floor at all.  And the floor depends only on $G$, hence
-only on the mask, so $\hat f$ remains linear in $d$ for a fixed mask; the transfer function, the leverage
-identity (\ref{eq:dt_leverage}), and Monte-Carlo noise propagation all remain valid.
+Two things follow that are worth stating positively.  $r_{\rm min}$ is a ratio of a pivot to a diagonal entry,
+hence covariant under diagonal rescaling of the basis, so the threshold $\epsilon$ needs no calibration against
+$\sigma$, against the trend amplitude, or against the effective window width -- unlike an absolute ridge, which
+has to be recalibrated as the mask narrows.  And the masking decision depends only on $G$, hence only on the
+mask, so $\hat f$ remains linear in $d$ for a fixed mask; the transfer function, the leverage identity
+(\ref{eq:dt_leverage}), and Monte-Carlo noise propagation all remain valid.
 
 \subsection{Cost}
 \label{sec:dt_cost}
@@ -1150,7 +1172,7 @@ over $3072$ input samples per $2048$ outputs:
 \midrule
 prefix $+$ suffix tree scans ($4$ merges/input $\times 1.5$) & $360$ \\
 window merge (\ref{eq:dt_vanherk}), one per output           & $60$ \\
-regularized Cholesky, two solves, evaluation, diagnostic     & $40$ \\
+Cholesky, two solves, evaluation, leverage                   & $40$ \\
 \midrule
 total & $\approx 460$ \\
 \bottomrule
@@ -1176,22 +1198,48 @@ thread per pair walking time sequentially, with the time axis fastest in memory.
 \subsection{Validation}
 \label{sec:dt_validation}
 
-A float64, direct-summation implementation of \S\ref{sec:dt_estimator} -- no blocks, no scans, one
-$O(W)$ sum per output -- is a few dozen lines and is the reference.  Compare the production path against it
-sample by sample.  The tests worth keeping as regressions:
+Two things make this unusually testable.  A float64, direct-summation implementation of
+\S\ref{sec:dt_estimator} -- no blocks, no scans, one $O(W)$ sum per output -- is a few dozen lines and serves as
+a reference for the block/scan machinery.  And the estimator has an exact fixed point: fed a degree-$\le n$
+polynomial with no noise, it must return {\em identically zero} at every surviving sample.  The second is the
+sharper test, because the expected answer is known analytically, with no reference implementation and no
+statistical tolerance -- whatever residual appears is pure accumulated roundoff.  It is also what mask expansion
+made unconditional: with a regularizer there would be a shrunk-fit carve-out to exclude.
+
+Masks are randomized rather than enumerated.  Each row of a test mask independently draws a type (all-valid with
+probability $1/2$, then Bernoulli at a random rate, long gaps, one-sided, narrow off-center clusters, two
+clumps, periodic dropouts, fully masked scan blocks, sparse lattices, all-masked), randomizes that type's
+parameters, and is then perturbed by a random set of fully-masked and fully-valid subintervals whose lengths
+follow a power law.  Rows are independent, which is what exercises the spectator axis.
+
+The checks worth keeping as regressions:
 \begin{itemize}
-\item Adversarial masks: one long gap; periodic gaps commensurate with $B$ and with $T_c$; a window masked
-entirely on one side of its center; a narrow cluster far off-center; $N_v = 0, 1, 2$; a fully masked block
-(the NaN trap of \S\ref{sec:dt_monoid}).
-\item Seam test: inject a {\em noiseless} trend, run the incremental path over several chunks, and check for
-steps at chunk boundaries.
-\item Response: empirical $|1-H(\omega)|$ from injected sinusoids, and recovered signal-to-noise versus pulse
-width, checked against the $1.125\,w/W$ flux loss.
-\item Residual statistics: push simulated white noise through the same operator with the same mask and confirm
-the per-sample residual variance matches $\sigma^2(1-\lambda[t])$, including near mask edges.
-\item Float32 versus float64: the whole pipeline in both, on all of the above.  The failure this catches --
-a scan that loses precision only for particular mask geometries -- is invisible in an all-valid smoke test.
+\item {\bf Monoid algebra}: (\ref{eq:dt_merge}) against direct moments, associativity, commutativity, identity,
+$S_1 \equiv 0$, and the empty-set rule of \S\ref{sec:dt_monoid} (the NaN trap).
+\item {\bf Block decomposition}: (\ref{eq:dt_vanherk}) against direct moments for {\em every} offset $p$, which
+is what pins the odd-window-over-even-block arithmetic at both endpoints.
+\item {\bf Polynomial exactness}, as above, at both precisions and over several chunks.  Running it through the
+chunked path is also what covers chunk stitching: a wrong block anchor or an off-by-one in the buffer slicing
+shows up as a nonzero residual, and a seam shows up as structure at multiples of $T_c$.  This subsumes a
+separate seam test.
+\item {\bf Degenerate windows}: $N_v = 0, 1, 2$ must all be mask-expanded away, with a positive control that
+$N_v = n+1$ spread across the window survives.
+\item {\bf Leverage identity}: build the kernel by feeding unit impulses through the full path and check
+$\kappa[0] = \sum_s \kappa[s]^2 = \lambda$.  Doing this by impulse response rather than by pushing noise through
+and measuring ${\rm Var}(r)$ is exact, needs no statistical tolerance, and subsumes a Monte-Carlo variance test.
+\item {\bf Against the float64 reference}, over the randomized masks, comparing $r$, $m_{\rm out}$, $\lambda$
+and $r_{\rm min}$.
+\item {\bf Float32 versus float64}, the whole pipeline in both.  Run the two at {\em different} $\epsilon$
+($10^{-3}$ against $10^{-6}$) and compare on the intersection of their masks: with matched $\epsilon$ the two
+runs make identical masking decisions, so the test never exercises a sample whose $r_{\rm min}$ roundoff was
+large enough to move it across the threshold.  Also track the cumulative mask-expansion rate, which is the
+diagnostic for a systematic bias in float32's $r_{\rm min}$ -- that would show up as an elevated expansion rate
+rather than as a residual discrepancy.
 \end{itemize}
+
+Two properties are checked analytically rather than in code, because they are properties of the estimator and
+cannot regress when the implementation changes: the $O(\omega^4)$ rolloff of $1-H$ (which is the same statement
+as polynomial exactness, in the other domain) and the $1.125\,w/W$ flux loss.
 
 \clearpage
 
@@ -2171,6 +2219,13 @@ Given that the mask is per (beam, freq), the natural mapping is one thread per (
 
 \subsection{Regularization revisited}
 \label{sec:time_detrend_reg2}
+
+{\bf Superseded.}  The shipped design has no regularizer at all: it thresholds on $r_{\rm min}$ and expands the
+mask instead (\S\ref{sec:dt_estimator}).  This subsection is kept because its conclusions are what led there --
+in particular that the right form is multiplicative and covariant under diagonal rescaling, and that a floor
+(inactive when not needed) beats a bump (always active).  Mask expansion is the limit of the floor in which the
+repaired samples are discarded rather than kept, and it agrees with the floor exactly on every sample either
+keeps.
 
 Adaptive centering changes the regularization problem, and for the better.
 The additive prior of (\ref{eq:sg_ridge}) should be discarded: it is calibrated in absolute units against a fixed full-window basis, which is exactly the property that made it break when the effective window narrows, and which put $\eta \sim 10^{-5}$ below the float32 noise floor (\S\ref{sec:time_detrend_accum}).
