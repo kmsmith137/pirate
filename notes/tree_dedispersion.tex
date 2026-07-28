@@ -864,7 +864,7 @@ $t$-independent even though ${\rm Var}(\epsilon[t])$ is: it varies with the loca
 mask edges and in sparsely populated windows.  Any downstream normalization to sigmas
 (\S\ref{sec:peak_finding}) must divide by $\sigma\sqrt{1-\lambda[t]}$ rather than by $\sigma$, or it will
 report biased significances exactly where the data is worst.  For a fully valid window
-$\lambda = 9/8W = 2.2\times10^{-3}$, but under adversarial masking $\lambda$ ranges over several decades and
+$\lambda = 9/8W = 4.4\times10^{-3}$, but under adversarial masking $\lambda$ ranges over several decades and
 approaches $1$, where ${\rm Var}(r) \rightarrow 0$ and the residual carries no information at all.
 
 The fourth output is the conditioning statistic $r_{\rm min}[t]$ of (\ref{eq:dt_rmin}), which is what the mask
@@ -891,16 +891,21 @@ Parameters:
 symbol & meaning & value \\
 \midrule
 $n$      & polynomial degree                       & $2$ \\
-$W$      & window half-width                       & $512$ \\
-$2W{+}1$ & window length (odd, symmetric)          & $1025$ \\
-$B$      & scan block length                       & $1024$ \\
+$W$      & window half-width                       & $256$ \\
+$2W{+}1$ & window length (odd, symmetric)          & $513$ \\
+$B = 2W$ & scan block length                       & $512$ \\
 $T_c$    & time samples per chunk                  & $2048$ \\
-         & buffer length $T_c + 2W$                & $3072$ \\
+         & buffer length $T_c + 2W$                & $2560$ \\
+         & scan blocks per chunk, $T_c/B + 1$      & $5$ \\
 $\epsilon$ & mask-expansion threshold on $r_{\rm min}$ & $10^{-3}$ \\
          & arithmetic                              & float32 \\
 \bottomrule
 \end{tabular}
 \end{center}
+The values are those the kernel is compiled at ({\tt include/pirate/Detrender1d.hpp}); everything below is
+written for general $(n, W, T_c)$ and the numpy reference is parameterized by them.  An earlier draft of this
+section used $W = 512$, and the {\em measured} numbers quoted below were taken there unless stated otherwise;
+the analytic ones have been recomputed at $W = 256$.
 
 \subsection{The estimator}
 \label{sec:dt_estimator}
@@ -1005,13 +1010,13 @@ by forward then back substitution.
 \end{equation}
 the leverage of (\ref{eq:dt_leverage_def}), for the cost of one extra $O(n^2)$ triangular solve.  With no
 regularizer this is exact on every surviving sample.  For a fully valid window $\lambda = 9/8W$, so the
-detrender removes $0.22\%$ of the variance and ${\rm sd}(\hat f) = 1.06\,\sigma/\sqrt{W} = 0.047\,\sigma$ at
-$W = 512$.
+detrender removes $0.44\%$ of the variance and ${\rm sd}(\hat f) = 1.06\,\sigma/\sqrt{W} = 0.066\,\sigma$ at
+$W = 256$.
 
 {\bf Response.}  For a fully valid window the estimator is a fixed FIR smoother with
 $1 - H(\omega) = O(\omega^{4})$ at low frequency and a smoothing timescale $\sim W$.  Two consequences worth
 keeping in view.  A pulse of width $w \ll W$ loses a fraction $\approx 1.125\,w/W$ of its flux into the trend
-($14\%$ at $w = 64$), so $W$ must stay well above the widest searched boxcar $W_{\rm max}$.  And $H$ is a
+($28\%$ at $w = 64$, $W = 256$), so $W$ must stay well above the widest searched boxcar $W_{\rm max}$.  And $H$ is a
 truncated polynomial kernel, so $1-H$ has stopband ripple at the $\sim\!20\%$ level near
 $\omega \approx 3\pi/2W$; this is a property of the estimator, not of the implementation.
 
@@ -1064,11 +1069,11 @@ empties propagates zeros.  Getting this wrong injects NaNs into every window tou
 \subsection{Block decomposition and scans}
 \label{sec:dt_blocks}
 
-Partition the buffer into blocks of length $B = 1024$, anchored at (chunk start $- W$); since $T_c = 2B$ this
-lattice is the same for every chunk, each chunk needs exactly $3$ blocks, and the last block of chunk $i$ is
-the first block of chunk $i+1$.
+Partition the buffer into blocks of length $B = 2W = 512$, anchored at (chunk start $- W$); since $T_c$ is
+required to be a multiple of $B$ (here $T_c = 4B$) this lattice is the same for every chunk, each chunk needs
+exactly $T_c/B + 1 = 5$ blocks, and the last block of chunk $i$ is the first block of chunk $i+1$.
 
-A window has length $B+1 = 1025$, so it spans {\em exactly} two adjacent blocks for every alignment: an
+A window has length $B+1 = 513$, so it spans {\em exactly} two adjacent blocks for every alignment: an
 interval $[q, q+B]$ meets blocks $\lfloor q/B \rfloor$ and $\lfloor q/B \rfloor + 1$ and no others.  Writing
 $p = q \bmod B$,
 \begin{equation}
@@ -1085,8 +1090,11 @@ sample rather than half way between two.
 
 {\bf The scans must be trees, and must carry the centroid.}  Two requirements, both load-bearing:
 \begin{itemize}
-\item Build $\mathrm{Pref}$ and $\mathrm{Suff}$ with a work-efficient tree (Blelloch) scan, not a sequential
-one, so that each output depends on its leaves through $O(\log B)$ merges rather than $O(B)$.  Measured
+\item Build $\mathrm{Pref}$ and $\mathrm{Suff}$ with a tree scan, not a sequential one, so that each output
+depends on its leaves through $O(\log B)$ merges rather than $O(B)$.  Which tree does not matter -- the
+load-bearing property is the depth, and both implementations use Hillis-Steele (the numpy reference because
+work-efficiency is irrelevant there, the kernel because it is what a warp shuffle scan does) where a
+work-efficient Blelloch scan would do equally well.  Measured
 worst-case moment error over a full block in float32, against a float64 reference: $3.8\times10^{-5}$ for the
 tree versus $4.0\times10^{-4}$ sequential, a factor of $10$.  (An earlier draft quoted $170$; that came from a
 pure {\em reduction}, which returns only the root value, whereas a prefix scan must be judged by the worst of
@@ -1165,19 +1173,19 @@ mask, so $\hat f$ remains linear in $d$ for a fixed mask; the transfer function,
 
 Per output sample, at $n=2$, counting FMAs.  A merge (\ref{eq:dt_merge}) is $\approx 60$ flops: two Pascal
 shifts ($15$ for the mask part, $6$ for the data part, each), $7$ adds to combine, and $11$ for the centroid
-update.  The Blelloch scan costs $\approx 2$ merges per element and we need both a prefix and a suffix scan,
-over $3072$ input samples per $2048$ outputs:
+update.  A work-efficient tree scan costs $\approx 2$ merges per element and we need both a prefix and a
+suffix scan, over $2560$ input samples per $2048$ outputs:
 \begin{center}
 \small
 \begin{tabular}{lc}
 \toprule
  & flops/output \\
 \midrule
-prefix $+$ suffix tree scans ($4$ merges/input $\times 1.5$) & $360$ \\
+prefix $+$ suffix tree scans ($4$ merges/input $\times 1.25$) & $300$ \\
 window merge (\ref{eq:dt_vanherk}), one per output           & $60$ \\
 Cholesky, two solves, evaluation, leverage                   & $40$ \\
 \midrule
-total & $\approx 460$ \\
+total & $\approx 400$ \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -1186,15 +1194,30 @@ in accuracy and for GPU parity.  The cost is {\em independent of the mask}, whic
 choosing this decomposition: in a real-time system the latency budget must be met in the worst case, and RFI
 is bursty, so a scheme whose cost degrades under heavy masking degrades for many channels at once.
 
-At $n=3$ the merge grows to $\approx 115$ flops and the total to $\approx 830$, for an answer that is
+At $n=3$ the merge grows to $\approx 115$ flops and the total to $\approx 715$, for an answer that is
 {\em identical} wherever the window is fully valid (with $S_{\rm odd} = 0$ the Gram matrix is checkerboard and
 $a_0$ depends only on the even block).  Degree $3$ differs from degree $2$ only where the mask is asymmetric
 within the window, so we start at $n=2$ and measure whether it matters near mask edges.
 
-Storage for the flat scheme is $3n{+}2$ floats $\times\, B \times$ two scans, i.e.~$64$ KB per block at $n=2$.
-A two-level variant avoids this: within sub-blocks of $32$ samples the span is only $32/W = 0.06$ in
-normalized units, so no adaptive centering is needed there and the sub-block partials are pure accumulation
-maintainable in registers; only the $32$ sub-block aggregates per block carry centroids, which is $1$ KB.
+One consequence of $n=3$ is worth flagging in advance, because it is structural rather than a matter of
+flops: {\bf the kernel's division-free mask test does not survive it}.  At $n=2$, $G_{01} = 0$ gives
+$p_0 = G_{00}$ and $p_1 = G_{11}$ exactly, so $r_0 = r_1 = 1$ and $r_{\rm min}$ collapses to the single ratio
+$p_2/G_{22} = \det G/(G_{00}G_{11}G_{22})$.  That is what lets {\tt Detrender1d.cu} evaluate the fit through
+the adjugate and test {\tt det >= eps*N*A*C} with no square roots.  At $n=3$ we still have $r_0 = r_1 = 1$,
+but $r_2$ and $r_3$ both bind, and $\min(p_2/G_{22},\, p_3/G_{33})$ cannot be recovered from $\det G$ alone --
+it needs the leading principal minors, i.e.~the factorization.  So $n=3$ means an unrolled Cholesky in the
+kernel rather than an adjugate.  That costs nothing in accuracy: measured over the randomized-mask suite at
+$n=2$, $W=256$, restricted to the windows the detrender actually keeps ($m[t]=1$ and $r_{\rm min} \ge
+\epsilon$), the two solves agree to within a factor of two in the worst case ($2.8\times10^{-7}\sigma$ for
+Cholesky against $5.1\times10^{-7}\sigma$ for the adjugate, with equal medians at $5\times10^{-9}\sigma$),
+and both sit two orders of magnitude below the $8.7\times10^{-5}\sigma$ the full pipeline achieves.  The
+float32 budget is spent in the moment scans, not in the solve.
+
+Storage for the flat scheme is $3n{+}2$ floats $\times\, B \times$ two scans, i.e.~$32$ KB per block at $n=2$.
+A two-level variant avoids this, and is what the kernel does: within sub-blocks of $B/32 = 16$ samples the
+span is only $16/W = 0.06$ in normalized units, so no adaptive centering is needed there and the sub-block
+partials are pure accumulation maintainable in registers; only the $32$ sub-block aggregates per block carry
+centroids, which is $1$ KB.
 Since the mask is per (beam, frequency) and there are thousands of such pairs, the natural mapping is one
 thread per pair walking time sequentially, with the time axis fastest in memory.
 
