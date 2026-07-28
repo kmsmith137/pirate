@@ -820,7 +820,9 @@ This section describes the algorithm we plan to implement.
 It is a masked, adaptively centered {\em moving local polynomial fit}, evaluated by a van Herk block
 decomposition over a moment monoid.
 Appendix \ref{sec:time_detrend_appendix} records the alternatives that were considered and why they were
-discarded; nothing in this section depends on it.
+discarded; nothing in this section depends on it.  One of those alternatives, the fixed-lag recursive
+estimator of \S\ref{sec:time_detrend_kalman}, is being built as a second detrender to compare against this
+one, and is written out in full there.
 
 \subsection{Problem statement}
 \label{sec:dt_problem}
@@ -1740,11 +1742,13 @@ also the time lags $T$ appearing in the subbanded-dedispersion construction
 \section{Time detrending: options considered}
 \label{sec:time_detrend_appendix}
 
-This appendix records the design space explored before converging on \S\ref{sec:time_detrending}, including options that were considered and discarded, and several measurements that motivated the choices there. It is kept for reference in case any of those decisions is revisited; nothing in \S\ref{sec:time_detrending} depends on it.
+This appendix records the design space explored before converging on \S\ref{sec:time_detrending}, including options that were considered and discarded, and several measurements that motivated the choices there. Nothing in \S\ref{sec:time_detrending} depends on it.
+
+One of those options is no longer merely historical: the fixed-lag form of the recursive estimator (\S\ref{sec:time_detrend_kalman}) is being built as a second detrender, to be run alongside the local polynomial fit and compared against it. That subsection has accordingly been written out in full rather than sketched. The rest of the appendix is kept for reference in case any of the other decisions is revisited.
 
 Upstream of the dedispersion transform, each frequency channel is a 1-d intensity time series which must be {\em detrended}: we want to subtract a slowly varying baseline (gain drift, sky rotation, imperfectly calibrated bandpass) while leaving short-timescale structure -- in particular FRBs -- intact.
 This section surveys three algorithms for doing this.
-Nothing here is implemented yet; the purpose is to write down the design space precisely enough to choose.
+When it was written, none of them was implemented, and its purpose was to write down the design space precisely enough to choose; \S\ref{sec:time_detrend_sg} has since become \S\ref{sec:time_detrending}, and \S\ref{sec:time_detrend_kalman} is being built alongside it.
 
 \subsection{Statement of the problem}
 \label{sec:time_detrend_setup}
@@ -1939,14 +1943,86 @@ Cost is $O(k^3(1 + L/T_c))$ per sample.
 The estimate for chunk $i$ is anchored at $(i+1)T_c + L$, so this has a seam of size $O(e^{-L/\ell})$, exactly as in \S\ref{sec:time_detrend_wh}.
 \item {\bf Fixed-lag smoothing}: define the committed trend to be
 \begin{equation}
-\hat f_L[t] = E\big[\, f[t] \;\big|\; d[0 .. t+L] \,\big],
+\hat f_L[t] = E\big[\, f[t] \;\big|\; d[0 .. t+L] \,\big].
 \label{eq:fixed_lag}
 \end{equation}
-obtained by running (\ref{eq:kalman_rts}) over $[t, t+L]$ for each $t$.
 This is a {\em per-sample} estimator: it depends on $t$ and $L$ only, and not at all on where the chunk boundaries fall.
 Hence there is no seam, by construction -- not ``a small seam'', but none.
-The price is $O(L k^3)$ per sample, plus storage of the last $L$ filter states.
 \end{itemize}
+
+The fixed-lag variant is the one we are pursuing as a second estimator, and it is worth writing down properly, because the obvious implementation (run (\ref{eq:kalman_rts}) over $[t,t+L]$ for each $t$, at $O(Lk^3)$ per sample) is neither the cheapest nor the most natural.
+Since $x$ is Markov and the data split at $t$,
+\begin{equation}
+p\big(x[t] \mid d[0..t+L]\big) \;\propto\;
+  \underbrace{p\big(x[t] \mid d[0..t]\big)}_{\rm forward\ filter} \cdot
+  \underbrace{p\big(d[t{+}1..t{+}L] \mid x[t]\big)}_{\rm backward\ likelihood} ,
+\label{eq:fixed_lag_split}
+\end{equation}
+and in {\em information} form -- precision $J$ and information vector $\eta$, meaning $\propto \exp(-\frac12 x^TJx + \eta^Tx)$ -- the combination is pure addition:
+\begin{equation}
+J[t] = J_f[t] + J_b[t], \qquad \eta[t] = \eta_f[t] + \eta_b[t], \qquad
+\hat f_L[t] = \big( J[t]^{-1}\eta[t] \big)_0 .
+\label{eq:fixed_lag_combine}
+\end{equation}
+The two sides are mirror images. Writing $g = e_{k-1}$, the forward step is a congruence by $A^{-T}$ followed by a rank-one downdate, and the backward step is the same downdate followed by a congruence by $A^T$:
+\begin{align}
+\mbox{forward:}\quad & \tilde J = J_f + m[t]\,e_0e_0^T/\sigma^2, \quad \tilde\eta = \eta_f + m[t]\,d[t]\,e_0/\sigma^2, \quad M = A^{-T}\tilde JA^{-1}, \quad \zeta = A^{-T}\tilde\eta, \nn \\
+& J_f \leftarrow M - \frac{Mgg^TM}{\beta}, \qquad \eta_f \leftarrow \zeta - \frac{Mg\,(g^T\zeta)}{\beta}, \qquad \beta = g^TMg + 1/q, \nn \\
+\mbox{backward:}\quad & J_b \leftarrow A^T\Big(\tilde J - \frac{\tilde Jgg^T\tilde J}{\beta}\Big)A, \qquad \eta_b \leftarrow A^T\Big(\tilde\eta - \frac{\tilde Jg\,(g^T\tilde\eta)}{\beta}\Big), \qquad \beta = g^T\tilde Jg + 1/q .
+\label{eq:info_recursions}
+\end{align}
+Three things follow.
+The diffuse prior is exactly $J_f = 0$, with no large-$\kappa$ fudge, so the estimator reproduces polynomials of degree $\le k-1$ {\em exactly} rather than approximately.
+The single divide is by $\beta \ge 1/q > 0$, so unlike the moment monoid of \S\ref{sec:dt_monoid} there is no guarded divide and no empty-set rule anywhere in the recursion.
+And the backward factor is a {\em likelihood}, not a distribution: it is rank-deficient whenever $[t{+}1,t{+}L]$ holds fewer than $k$ valid samples, which the covariance form of (\ref{eq:kalman_rts}) cannot represent at all.
+
+{\bf The degenerate window, and why a mask cut is still needed.}
+Unlike \S\ref{sec:time_detrending}, the prior makes the estimator well posed for {\em almost} every mask: $J[t]$ is singular only when $[0,t+L]$ holds fewer than $k$ valid samples, which -- since the fixed-lag prefix reaches back to the start of the stream -- can happen only at stream start.
+It is worth recording what happens there, because the answer is not uniform in $k$.
+The recursions themselves need no protection at any $k$: the only divide is by $\beta \ge 1/q > 0$, the diffuse state is exactly zero and propagates as exactly zero, and the map $J \mapsto M - Mgg^TM/\beta = M^{1/2}(I - vv^T/\beta)M^{1/2}$ (with $v = M^{1/2}g$, $\beta > \|v\|^2$) is a congruence by a positive definite matrix, hence exactly rank-preserving.
+Nothing downstream of the per-output solve feeds back into the state, so a bad output cannot propagate.
+Moreover the singular system is {\em consistent}: $\eta \in {\rm range}(J)$ by induction from $(J,\eta) = (0,0)$, and if $m[t]=1$ then $e_0 \in {\rm range}(J)$ because the measurement at $t$ contributes $e_0e_0^T$, so $e_0 \perp \ker J$ and $\hat f[t]$ is uniquely determined even though $\hat x[t]$ is not.
+With a single valid sample $J = e_0e_0^T$ and $\eta = d[t]e_0$, giving $\hat f = d[t]$, $r = 0$ and $\lambda = 1$: exactly right, since one datum under a diffuse prior determines its own baseline.
+
+In float32 that exact answer survives only at $k=2$, and only with a Cholesky.
+At $k=2$, rank deficiency with $e_0 \in {\rm range}(J)$ forces ${\rm range}(J) = {\rm span}(e_0)$, so $J$ is {\em diagonal}, the factorization is trivial and $r = 0$ comes out bitwise.
+At $k=3$ the deficient $J$ is a general PSD matrix, the floored pivot puts a large value in the near-null direction, and back-substitution leaks it into $\hat x_0$: measured worst relative error in $\hat f$ over randomized rank-deficient consistent systems is $10^{10}$ (float64) and $10^{80}$ (float32) -- finite, and therefore worse than a NaN, since it does not announce itself.
+The adjugate form $\hat f = e_0^T{\rm adj}(J)\eta/\det J$ is $0/0$ at any $k$, since both the numerator and $\det J$ vanish exactly.
+This is {\em not} an argument against the kernel of \S\ref{sec:time_detrending}, which uses that form and is safe: it floors the denominator at $\mu$ and selects on $m_{\rm out}$, so the degenerate window yields a finite value that is then discarded, and at $n=2$ the adaptive-centering identity $G_{01} = 0$ makes $r_{\rm min} = \det/(S_0S_2S_4)$ exactly, so the pivot test survives the rewrite.
+Neither property carries over to $J$, which has no zero structure.
+So, for this estimator: solve by Cholesky with the pivot floor $\mu$ of \S\ref{sec:dt_estimator}, form the residual by a select rather than a multiply, and cut the sample.
+
+{\bf The cut is the one from \S\ref{sec:dt_estimator}, unchanged.}
+Take the smallest relative Cholesky pivot of $J$ and threshold it,
+\begin{equation}
+r_{\rm min}[t] = \min_i \frac{p_i}{J_{ii}}, \qquad
+m_{\rm out}[t] = m[t] \wedge \big( r_{\rm min}[t] \ge \epsilon \big),
+\label{eq:kalman_rmin}
+\end{equation}
+which is (\ref{eq:dt_rmin}) verbatim with $J$ in place of $G$, and inherits the same guarantee: on a surviving sample the equilibrated condition number is bounded, hence the relative error of the solve is $O(\epsilon_{\rm mach}/\epsilon)$ independently of the mask.
+A rank-deficient $J$ has $p_i = 0$ for $i \ge {\rm rank}$, so every degenerate case above is caught by this comparison and no separate rank test is needed.
+Measured at steady state on a full mask, the pivot ratios are $(1, 1)$ at $k=2$ and $(1, 0.9999, 0.7499)$ at $k=3$, so normal operation sits three decades above $\epsilon = 10^{-3}$.
+(At $k=2$, $J_{01} \rightarrow 0$ in steady state -- level and slope decorrelate -- which is why $r_{\rm min} \rightarrow 1$ exactly. Unlike $G$, whose $G_{01} = 0$ is exact by adaptive centering, $J_{01} \ne 0$ in general, so every $r_i$ is live and $r_{\rm min}$ loses the ``fraction of order-$i$ information'' reading of \S\ref{sec:dt_estimator}; it remains the smallest relative pivot, which is all the bound needs.)
+
+What (\ref{eq:kalman_rmin}) does {\em not} catch is $\lambda[t] \rightarrow 1$, and that is deliberate, exactly as in \S\ref{sec:dt_problem}.
+A nonzero polynomial of degree $<k$ vanishing at every valid sample but $t$ gives $\lambda = 1$ exactly, so $\lambda < 1$ requires $k{+}1$ valid samples where positive definiteness requires only $k$; and for one valid sample at $t$ plus a clump of $M$ samples of width $\sigma_w$ at distance $D$, $\lambda = (D^2+\sigma_w^2)/(D^2+(M{+}1)\sigma_w^2) \rightarrow 1$ while $r_{\rm min} \approx 1/(M{+}1)$ stays four decades above threshold.
+The fit is well posed and accurately computed; it is the {\em residual} that carries no information.
+$r_{\rm min}$ and $\lambda$ answer different questions here for the same reason they do there, so the disposition is the same: expand on $r_{\rm min}$ only, emit $\lambda$, and leave the $\lambda$ cut to the consumer.
+One caveat specific to this estimator: by (\ref{eq:kalman_var_r}) the consumer's normalization wants $\sqrt{1-2\lambda+\nu}$, and since $\nu \le \lambda$, using $\sqrt{1-\lambda}$ instead overestimates the residual variance and so understates the significance -- wrong, but conservative, and both vanish together as $\lambda \rightarrow 1$.
+
+The forward pass is a running prefix and needs no repetition.
+The backward pass is a {\em sliding window} $[t{+}1, t{+}L]$, and it cannot be slid: the recursion is exponentially forgetting, so its inverse is exponentially amplifying, and there is no analogue of the moment monoid's ``subtract the departing sample''.
+What does work is the van Herk decomposition of \S\ref{sec:dt_blocks}, over blocks of length $B = L$: the composition of these Gaussian potentials is associative, so prefix and suffix scans within a block reduce the window to one merge, and the cost falls from $O(Lk^3)$ to $O(k^3)$ per sample -- the same structure, and the same order of flops, as the estimator we actually built.
+The monoid element is larger: for an interval $[a,b]$ it is the Gaussian potential relating $x_{a-1}$ to $x_b$ having absorbed $d[a..b]$, which is $2k^2+3k$ numbers ($14$ at $k=2$) against the $3n+2$ of (\ref{eq:dt_shift}).
+
+It is worth noticing that the two monoids are the same object at different values of $q$.
+At $q = 0$ the state propagates deterministically, $x[t] = A^t x[0]$, so $f$ is exactly a polynomial of degree $\le k-1$; the rank-one downdate in (\ref{eq:info_recursions}) vanishes, and
+\begin{equation}
+J_b[t] = \sum_u m[u]\,(A^{u-t})^T e_0e_0^T A^{u-t}, \qquad
+\eta_b[t] = \sum_u m[u]\,d[u]\,(A^{u-t})^T e_0 ,
+\end{equation}
+which is exactly the masked Gram matrix and data moments of (\ref{eq:dt_moments}) in the binomial rather than the monomial basis -- $A^s$ {\em is} the Pascal shift (\ref{eq:dt_shift}) at integer displacement.
+So the moment monoid is the $q \rightarrow 0$ degeneration of this one, the process noise is precisely what destroys additivity, and the finite window of \S\ref{sec:time_detrend_sg} plays the role that the process noise plays here: both exist to localize a fit that would otherwise be global.
 
 {\bf Variance and leverage.}
 The smoother returns $P^s[t]$ along with $\mu^s[t]$, at no extra cost.
@@ -1958,12 +2034,64 @@ H_{tt} = P^s_{00}[t] \,/\, \sigma^2 \qquad \mbox{at valid samples}.
 \label{eq:leverage}
 \end{equation}
 This is worth having.
-By (\ref{eq:detrend_linear}) the residual variance is ${\rm Var}(r[t]) = \sigma^2 [(I-H)^2]_{tt} = \sigma^2(1 - 2H_{tt} + [H^2]_{tt})$, which is {\em not} $\sigma^2$ and {\em not} $t$-independent: it is suppressed by $O(c_k/\tau)$ in well-sampled regions, but $H_{tt}$ grows near mask edges and inside sparsely sampled intervals.
+For the fixed-lag estimator the same identity holds with $J[t]$ of (\ref{eq:fixed_lag_combine}) in place of $P^s[t]^{-1}$: $\hat f_L[t]$ is row $t$ of the {\em full} smoother of the sub-problem on $[0,t+L]$, so the identity applies to that sub-problem.
+Note $H_L$ itself is not symmetric -- each row comes from a different sub-problem -- but the diagonal identity survives, because each row is a row of a symmetric matrix.
+Note also $0 \le H_{tt} \le 1$ at every valid sample, since $e_t^TN^{-1}e_t = \max_v v_t^2/(v^TNv) \le \max_v v_t^2/(v^TMv) = 1$.
+
+By (\ref{eq:detrend_linear}) the residual variance is ${\rm Var}(r[t]) = \sigma^2 [(I-H)M(I-H)^T]_{tt} = \sigma^2(1 - 2H_{tt} + [H^2]_{tt})$, which is {\em not} $\sigma^2$ and {\em not} $t$-independent: it is suppressed by $O(c_k/\tau)$ in well-sampled regions, but $H_{tt}$ grows near mask edges and inside sparsely sampled intervals.
 Since the peak-finder normalizes to sigmas (\S\ref{sec:peak_finding}), an uncorrected $H_{tt}$ biases the reported significance exactly where the data is worst.
 Getting the same quantity out of \S\ref{sec:time_detrend_wh} requires a selected-inverse (Takahashi) recursion on the Cholesky factor -- also $O(Tk^2)$, but extra code.
 
+{\bf Two numbers, not one.}
+It is worth being explicit that $[H^2]_{tt}$ is a {\em second} quantity here, and is not free.
+Write $\nu[t] \equiv [H^2]_{tt} = \sum_u m[u] H_{tu}^2 = {\rm Var}(\hat f[t])/\sigma^2$.
+For the local polynomial fit of \S\ref{sec:time_detrend_sg} the restricted $H$ is a {\em projection}, so $\nu = H_{tt}$ identically and ${\rm Var}(r) = \sigma^2(1-\lambda)$ exactly, with one number doing both jobs (\ref{eq:sg_leverage}).
+The penalized estimator is a {\em shrinkage} operator, not a projection, so $\nu \le H_{tt}$ strictly and
+\begin{equation}
+{\rm Var}\big(r[t]\big) = \sigma^2\big(1 - 2\lambda[t] + \nu[t]\big), \qquad \nu[t] \le \lambda[t] .
+\label{eq:kalman_var_r}
+\end{equation}
+$\nu$ costs a Lyapunov recursion alongside each information recursion: $\eta_f$ and $\eta_b$ are independent linear functionals of $d$ (disjoint data), so with $C_{f,b} = {\rm Cov}(\eta_{f,b})/\sigma^2$ propagated by the same maps that propagate $J$, $\nu[t] = e_0^TJ^{-1}(C_f + C_b)J^{-1}e_0$.
+That is one extra symmetric $k \times k$ per direction, so roughly a factor of two.
+In the well-sampled regime $\lambda \approx c_k/\tau$ and the gap between $1-\lambda$ and $1-2\lambda+\nu$ is below $1\%$ in variance; near mask edges it is not, and the whole point of propagating $\lambda$ is what happens near mask edges.
+Whether the extra recursion is worth carrying is a measurement, not a derivation.
+
+{\bf Polynomial reproduction: two degrees, not one.}
+The estimator annihilates polynomials at two different strengths, and the distinction is what the sharp tests are built on.
+Setting $f = P$ in (\ref{eq:wh_normal}) leaves the residual $\rho\,D_k^TD_kP$, and $(D_k^TD_kP)[j] \propto (\Delta^{2k}P)[j-k]$ for $k \le j \le T'-k-1$.
+So:
+\begin{itemize}
+\item {\bf Degree $\le k-1$: exact, unconditionally.} Here $f = P$ zeroes {\em both} terms of (\ref{eq:wh_chi2}) at once, so it is the unique minimizer for any mask, any array length and any position, and the residual is identically zero. This is the analogue of polynomial exactness in \S\ref{sec:dt_validation}, and the same kind of test: the expected answer is analytic, with no reference implementation and no statistical tolerance.
+\item {\bf Degree $k$ to $2k-1$: exact on the infinite array, asymptotic in practice.} $\Delta^{2k}P = 0$ kills the interior rows but not the $k$ truncated rows at each end, so reproduction fails only near an {\em array endpoint}. Note it does {\em not} fail at a mask edge: inside a gap the equation reduces to $D_k^TD_kf = 0$, which $P$ satisfies, so a degree-$(2k{-}1)$ polynomial continues straight through a gap of any length. The frequency-domain statement is the same one: $1-H(\omega) = O(\omega^{2k})$ is equivalent to $\sum_s h[s]s^r = \delta_{r0}$ for $r \le 2k-1$.
+\item {\bf Degree $\ge 2k$: never}, by $O(1)$.
+\end{itemize}
+For the fixed-lag estimator the right endpoint sits at $t+L$ for {\em every} output, so the middle case is always $O(e^{-L/\ell})$ rather than zero.
+Measured at $\tau = 32$ with a full mask and a steady-state forward filter, feeding $d[u] = ((u-t)/\tau)^{\deg}$: at $k=2$, degrees $0,1$ give $10^{-15}$ at every $L$, while degree $3$ falls $2.5 \rightarrow 1.7\times10^{-1} \rightarrow 2.5\times10^{-2} \rightarrow 9.1\times10^{-6} \rightarrow 8.5\times10^{-13}$ as $L/\ell$ runs $2, 4, 8, 16, 32$, and degree $4$ sits at $24$ throughout.
+The decay is $e^{-L/\ell}$ (measured exponent $0.86$--$1.12$ per unit $L/\ell$), with a prefactor growing like the polynomial's size at the boundary.
+Under the correspondence $n = 2k-2$ the two estimators therefore share an asymptotic degree of $2k-1 = n+1$, but the local polynomial fit's {\em guaranteed} degree $n = 2k-2$ is one higher than this one's $k-1$, and holds with no conditions at all.
+
+This settles the choice of $k$, and it is worth spelling out because the naive reading points the other way.
+One might expect to need $k=3$ to match the shipped $n=2$ detrender, since the guaranteed degrees are $k-1 = 1$ against $n = 2$.
+But the guaranteed degree is not what governs the passband; the asymptotic one is, and there $k=2$ already gives $2k-1 = 3 = n+1$.
+So {\bf $k=2$ matches the estimator we ship} on the property that matters, and $k=3$ would buy $O(\omega^6)$ rolloff -- more than the current detrender has.
+Three secondary considerations point the same way: the degenerate-window blowup above is a $k=3$ phenomenon and is unreachable at $k=2$; the equilibrated condition number is $5.83$ against $35.5$; and the scan monoid element is $2k^2+3k = 14$ floats against $27$.
+The price is that the zero-tolerance analytic test covers only degree $\le 1$ here, against degree $\le 2$ for \S\ref{sec:time_detrending} -- a weaker instrument for validating the implementation, not weaker filtering.
+
 {\bf Steady state.}
 If the mask is constant over a long stretch, $P[t]$ converges to the fixed point of the Riccati recursion in (\ref{eq:kalman_fwd}) and $K$ becomes a constant vector, at which point the filter degenerates to a fixed IIR filter.
+This gives a closed-form check on the whole construction, which is worth recording because it exercises the forward recursion, the backward recursion and the combine (\ref{eq:fixed_lag_combine}) together against an analytic answer: on a full mask with $L \gg \ell$, the leverage must approach $\lambda = h[0] = c_k/\tau$ of (\ref{eq:wh_ck}).
+Running (\ref{eq:info_recursions}) to steady state reproduces it to five significant figures at $k = 2, 3$ and $\tau = 8, 32, 80.5$, the residual deviation shrinking with $\tau$ as the continuum limit is approached.
+
+The steady state also settles the conditioning question, and the answer is the same red herring as in \S\ref{sec:time_detrend_sg_impl}.
+${\rm cond}(J_f)$ grows exactly as $\tau^{2(k-1)}$ -- reaching $1.7\times10^{10}$ at $k=3$, $\tau=256$ -- because the state components $\Delta^jf$ carry scales differing by $\tau^j$.
+That is a pure diagonal scaling, under which Cholesky is equivariant, and the equilibrated condition number $J_{ij}/\sqrt{J_{ii}J_{jj}}$ is {\em flat in $\tau$}: measured $5.828$ at $k=2$ and $35.47$ at $k=3$, unchanged across $\tau = 4, 16, 64, 256$.
+(It has to be: in the rescaled basis $\tilde A = I + N/\tau$ has a continuum limit, so $\tilde J$ converges to a fixed matrix. $J_b$ gives the same values, as the duality of (\ref{eq:info_recursions}) requires.)
+Against the $23$ of the local polynomial fit, $k=2$ is better conditioned and $k=3$ comparable.
+The matrix actually solved is better still, since combining forward and backward information nearly symmetrizes it: $J_f + e_0e_0^T + J_b$ has equilibrated condition $1.004$ at $k=2$ -- it tends to the identity, which is the same statement as $J_{01} \rightarrow 0$ above -- and $3.000$ at $k=3$.
+Two regimes worth checking do not spoil this.
+Iterating $J_f$ through a long masked gap with no measurements, the raw condition number runs away but the equilibrated one {\em plateaus} by $G \approx 10\tau$, at $13.9$ ($k=2$) and $285.6$ ($k=3$), with $r_{\rm min}$ plateauing at exactly $1/4$ and $1/16$: the matrix approaches a fixed shape and merely shrinks, as $J_{00} \sim 1/(qG^{2k-1})$, which is polynomial and so cannot underflow for any realistic gap.
+And sparse masks (Bernoulli at $p = 0.5, 0.05, 0.01$; lattices of stride $50$ and $500$) stay within $5.1$--$8.3$ and $29$--$50$ respectively.
+So the $D = {\rm diag}(1, \tau, \ldots, \tau^{k-1})$ rescaling is worth doing for overflow headroom and legibility, exactly as $x = s/W$ is in \S\ref{sec:time_detrend_sg_impl}, and for nothing else.
 The recursion is thus genuinely ``adaptive'' only within $O(\ell)$ of a mask transition, which is a possible optimization (precompute the steady-state gains; run the covariance recursion only near mask edges).
 
 \subsection{Moving local polynomial fits}
