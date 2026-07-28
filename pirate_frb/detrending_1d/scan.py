@@ -7,7 +7,9 @@ Blelloch scan, but the property we care about is *depth*: each output depends on
 its leaves through O(log B) merges rather than O(B), which is what bounds
 roundoff accumulation.  Work-efficiency does not matter in numpy, and
 Hillis-Steele is also what a GPU warp-level shuffle scan does, so this mirrors
-the eventual kernel.  (The GPU block-level scan will likely use Blelloch.)
+src_lib/Detrender1d.cu, whose block-level scan over 32 sub-block aggregates is
+Hillis-Steele as well (over 32 lanes the work difference is irrelevant and the
+depth is identical, so there was no reason to reach for Blelloch).
 
 Do not substitute a sequential scan here: it costs about 10x in moment accuracy,
 and that degradation is small enough to slip past every tolerance the test suite

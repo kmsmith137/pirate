@@ -65,9 +65,9 @@ def _ms_maxdiff(a, b):
 def _moments_about(u, m, md, origin, n, W, dtype, axis=-1):
     """Moments about an arbitrary origin (not necessarily the centroid)."""
     x = ((u - np.expand_dims(origin, axis)) / W).astype(dtype)
-    S = np.zeros(x.shape[:axis] + x.shape[axis+1:] + (2*n+1,), dtype=dtype) \
-        if False else np.zeros(np.sum(m, axis=axis).shape + (2*n+1,), dtype=dtype)
-    U = np.zeros(np.sum(m, axis=axis).shape + (n+1,), dtype=dtype)
+    batch_shape = np.sum(m, axis=axis).shape
+    S = np.zeros(batch_shape + (2*n+1,), dtype=dtype)
+    U = np.zeros(batch_shape + (n+1,), dtype=dtype)
     p = np.ones_like(x)
     for r in range(2*n+1):
         S[..., r] = (m*p).sum(axis=axis)
