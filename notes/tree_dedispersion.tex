@@ -1246,6 +1246,308 @@ as polynomial exactness, in the other domain) and the $1.125\,w/W$ flux loss.
 
 \clearpage
 
+\section{Analytic variance}
+\label{sec:analytic_variance}
+
+The second step of peak-finding (\S\ref{sec:peak_finding}) normalizes its output to ``sigmas'',
+by applying weights which are the inverse square roots of the output variances.
+The purpose of this section is to explain how these variances are computed analytically, given
+the per-channel variances of the dedisperser input array.
+
+To keep the presentation manageable, we make two simplifying assumptions throughout: we consider
+only the ``base tree'' (no time downsampling and no early triggers, \S\ref{sec:downsampled_early}),
+and we disable subbands (i.e.\ $R=0$ and $C_l = \{1\}$, \S\ref{sec:subband_search}).
+Then there is a single multiplet ($M=1$), and the output of the calculation is a shape $(2^r,P)$
+array, indexed by delay $0 \le d < 2^r$ and peak-finding profile $0 \le p < P$, where
+$r = {\tt toplevel\_tree\_rank}$.
+
+The algorithm is implemented by the class \verb|PfAvarExact|, with helper classes
+\verb|SparseTile|, \verb|SparseTileTriple|, \verb|PfVariance| and \verb|PfVarianceConvolver|
+(all in \verb|pirate_frb/slow_avar/|).\footnote{This is an exact but slow reference
+implementation. Production uses a faster approximate algorithm ({\tt PfAvarApproximation},
+which is also ported to C++), and of course handles subbands, time-downsampled trees and early
+triggers. A future version of these notes will describe both.}
+
+\subsection{Statement of the problem}
+\label{sec:avar_statement}
+
+The dedisperser input is a shape $(N_{\rm freq}, N_{\rm time})$ array ${\tt in}[F,t]$.
+We assume that its elements are uncorrelated, with a variance which depends on frequency but not
+time:
+\begin{equation}
+\big\langle {\tt in}[F,t] \, {\tt in}[F',t'] \big\rangle = V_F \, \delta_{FF'} \, \delta_{tt'}
+  \label{eq:avar_input}
+\end{equation}
+(In the code, the length-$N_{\rm freq}$ array $V_F$ is the constructor argument
+\verb|freq_variances|.)
+The three stages downstream -- tree gridding (\S\ref{sec:gridding}), tree dedispersion
+(\S\ref{sec:tree_dedispersion}), and convolution with the peak-finding kernels $h_p$
+(\S\ref{sec:peak_finding}) -- are all linear, and are all time-translation invariant, so their
+composition can be written as
+\begin{equation}
+y_p[d,t] = \sum_{F=0}^{N_{\rm freq}-1} \sum_{t'} \big( h_p * G_{Fd} \big)[t-t'] \; {\tt in}[F,t']
+\end{equation}
+Here, $G_{Fd}$ is the {\em impulse response}: the tree dedispersion output at delay $d$, if
+gridding and $\DD(r)$ are run on an input array whose only nonzero element is ${\tt in}[F,0]=1$.
+Combining with Eq.\ (\ref{eq:avar_input}), the array we want to compute is
+\begin{equation}
+{\rm Var}[d,p] \equiv \big\langle y_p[d,t]^2 \big\rangle
+  = \sum_F V_F \, \big\| h_p * G_{Fd} \big\|^2
+  \hspace{1.5cm} \mbox{where } \|g\|^2 \equiv \sum_t g[t]^2
+  \label{eq:avar_master}
+\end{equation}
+Note that the RHS does not depend on $t$, i.e.\ every output time sample has the same
+variance.\footnote{This is a steady-state statement. Near the beginning of a run, output samples
+have a {\em smaller} variance, since part of the impulse response reaches back to times before the
+start of the stream (recall from \S\ref{sec:tree_dedispersion} that ${\tt in}[\cdots,t]$ is
+defined to be zero for $t<0$). The {\tt DedispersionPlan} knows when each DM row reaches steady
+state ({\tt compute\_steady\_state\_it0}), and the Monte Carlo check of \S\ref{sec:avar_validation}
+uses this.}
+
+We can make Eq.\ (\ref{eq:avar_master}) completely explicit. Recall from
+Eq.\ (\ref{eq:DD_nonrecursive}) that $\DD(r)$ maps a one-hot tree-freq channel $f$ to a single
+sample, at lag $L_r(f,d)$ with amplitude $2^{-r/2}$, and from \S\ref{sec:gridding} that input
+channel $F$ is gridded onto tree-freq channels with weights $w_{fF}$. Therefore
+\begin{equation}
+G_{Fd}[t] = 2^{-r/2} \sum_{f \in {\mathcal S}_F} w_{fF} \; \delta_{t, L_r(f,d)}
+  \label{eq:avar_impulse}
+\end{equation}
+where the {\em gridding footprint} ${\mathcal S}_F \equiv \{ f : w_{fF} > 0 \}$ is the set of
+tree-freq channels whose interval $I_f$ overlaps the input channel $[F,F+1)$. Since the intervals
+$I_f$ tile the band, ${\mathcal S}_F$ is a contiguous range
+\begin{equation}
+f_0(F) \le f < f_1(F)
+\end{equation}
+which is usually just a few channels wide (in the CHORD config, $N_{\rm freq} = 28160$ input
+channels are gridded onto $2^r = 65536$ tree-freq channels).
+
+Thus the impulse response of a single input channel is a handful of delta functions, and
+Eqs.\ (\ref{eq:avar_master}), (\ref{eq:avar_impulse}) are a complete specification of the answer.
+However, evaluating them directly, for each $(F,d)$ pair, would be too slow
+($N_{\rm freq} 2^r \approx 2 \times 10^9$ pairs in the CHORD config), and would also be wasteful:
+we will see that the $2^r$ delays give rise to far fewer than $2^r$ distinct answers.
+The rest of this section describes the algorithm which is actually used.
+
+\subsection{Variance from autocorrelations}
+\label{sec:avar_convolver}
+
+The lowest-level building block is the map $g \mapsto \|h_p * g\|^2$, for a short time series $g$
+and each of the $P$ peak-finding kernels. Expanding the convolutions and collecting terms by lag,
+\begin{equation}
+\big\| h_p * g \big\|^2 = \sum_{\delta} \rho_g[\delta] \, A_p[\delta]
+  = \rho_g[0] \, A_p[0] + 2 \sum_{\delta \ge 1} \rho_g[\delta] \, A_p[\delta]
+  \label{eq:avar_autocorr}
+\end{equation}
+where $\rho_g$ and $A_p$ are the (one-sided) autocorrelations of the data and of the kernel:
+\begin{equation}
+\rho_g[\delta] = \sum_t g[t] \, g[t+\delta]
+  \hspace{1.5cm}
+A_p[\delta] = \sum_t h_p[t] \, h_p[t+\delta]
+\end{equation}
+Two features of Eq.\ (\ref{eq:avar_autocorr}) are worth noting.
+\begin{itemize}
+\item $A_p[\delta]$ vanishes for $\delta \ge {\rm len}(h_p)$, so lags
+$\delta \ge T_{\rm max} \equiv \max_p {\rm len}(h_p) = 2 W_{\rm max}$ never contribute.
+The class \verb|PfVarianceConvolver| precomputes the shape $(P,T_{\rm max})$ table $A_p[\delta]$
+once, and Eq.\ (\ref{eq:avar_autocorr}) then becomes a small matrix multiply which returns all $P$
+profiles at once. The $\delta=0$ column is just the kernel norms:
+\begin{equation}
+A_p[0] = \|h_p\|^2 = 2^\lambda \times \big\{ 1, \; 2, \; \tfrac{3}{2}, \; \tfrac{5}{2} \big\}_q
+\end{equation}
+where $p = 3\lambda + q$ as in \S\ref{sec:peak_finding}.
+Evaluating (\ref{eq:avar_autocorr}) for a time series whose support has length $n_t$ costs
+$O(n_t \min(n_t, T_{\rm max}))$ for $\rho_g$, plus $O(\min(n_t,T_{\rm max}) \, P)$ for the
+contraction.
+
+\item The LHS is invariant under a time translation $g[t] \rightarrow g[t-T]$. Therefore, we only
+need each impulse response {\em up to an arbitrary time shift}. This is the key to the
+compression in \S\ref{sec:avar_dbits}--\ref{sec:avar_sparsetile}: most of the $d$-dependence of
+$G_{Fd}$ is a pure time shift, and can simply be discarded.
+\end{itemize}
+
+\subsection{Which delay bits matter}
+\label{sec:avar_dbits}
+
+By the time-translation invariance just noted, only the {\em relative} lags within the footprint
+matter in Eq.\ (\ref{eq:avar_impulse}). From the definition (\ref{eq:L_def}) of the lag function,
+the relative lag of two tree-freq channels $f,f'$ is
+\begin{equation}
+L_r(f,d) - L_r(f',d) = \sum_{i=0}^{r-1} \sum_{j=0}^{r-1} \Omega_{i+j-r} \, (f'_i - f_i) \, d_j
+  \label{eq:avar_lagdiff}
+\end{equation}
+Suppose that $f$ and $f'$ agree in all bits above position $i_0$, so that only terms with
+$i \le i_0$ survive in Eq.\ (\ref{eq:avar_lagdiff}). Since $\Omega_n = 0$ for $n < -1$, a term also
+vanishes unless $j \ge r-1-i$. Therefore the relative lag depends only on the bits $d_j$ with
+$j \ge r-1-i_0$, i.e.\ on the top $(i_0+1)$ bits of $d$.
+For a contiguous footprint, all channels agree in the bits above
+\begin{equation}
+i_0(F) \equiv \Big\lfloor \log_2 \big( f_0(F) \oplus (f_1(F)-1) \big) \Big\rfloor
+  \label{eq:avar_i0}
+\end{equation}
+where $\oplus$ denotes bitwise XOR (and we define $i_0=-1$ if the footprint is a single channel).
+We conclude:
+\begin{quote}
+The contribution of input channel $F$ to Eq.\ (\ref{eq:avar_master}) depends on the delay $d$ only
+through its top $(i_0(F)+1)$ bits.
+\end{quote}
+In particular, if the footprint is a single tree-freq channel $f$, then the contribution is
+$d$-independent, and Eqs.\ (\ref{eq:avar_master}), (\ref{eq:avar_impulse}) collapse to
+\begin{equation}
+V_F \big\| h_p * G_{Fd} \big\|^2 = 2^{-r} \, V_F \, w_{fF}^2 \, \|h_p\|^2
+\end{equation}
+
+Eq.\ (\ref{eq:avar_i0}) has a simple interpretation: $i_0(F)$ is the largest $i$ such that the
+footprint straddles a boundary between two ``coarse'' frequency channels of width $2^i$
+(cf.\ Eq.\ \ref{eq:coarse_freq}). Equivalently, $\DS(i_0)$ is the last dedispersion step which
+combines two nonzero halves of the footprint with each other. There are only $2^{r-i}$ such
+boundaries in the band, and each one is straddled by at most one input channel, so at most
+$O(2^{r-i})$ input channels have $i_0 \ge i$: large $i_0(F)$ is rare, but (as we will see)
+expensive.
+
+The algorithm below never computes $i_0(F)$ explicitly. Instead, it discovers the same structure
+-- and sometimes a strictly smaller set of relevant bits, when relative lags happen to cancel --
+while propagating the impulse response through the dedispersion steps.
+
+\subsection{Sparse propagation of the impulse response}
+\label{sec:avar_sparsetile}
+
+Recall from \S\ref{sec:tree_dedispersion} that the intermediate array after $k$ dedispersion steps
+has shape $(2^{r-k}, 2^k, N_{\rm time})$, with axes (coarse-freq, delay, time). For a one-hot
+input, such an array is highly structured, and the class \verb|SparseTile| represents it with the
+following members:
+\begin{itemize}
+\item $f_0, n_f$: the array vanishes outside coarse-freq channels $f_0 \le f < f_0 + n_f$.
+\item $n_t$: the stored data vanishes outside time samples $0 \le t < n_t$.
+\item {\tt dbits}: a bitmask selecting a subset of the $k$ delay bits (the ``content bits'').
+We write $|{\tt dbits}|$ for its popcount.
+\item {\tt data}: an array of shape $(n_f, 2^{|{\tt dbits}|}, n_t)$.
+\item $t_0$ and $\tau_0, \cdots, \tau_{k-1}$: a constant time shift, and one time shift per delay bit.
+\item $s$: a scalar multiplier.
+\end{itemize}
+The dense array represented by the tile is
+\begin{equation}
+{\tt arr}[f,d,t] = s \cdot {\tt data}\big[ f - f_0, \; d|_{\tt dbits}, \; t - T(d) \big]
+  \hspace{1.2cm}
+T(d) = t_0 + \sum_{i=0}^{k-1} d_i \, \tau_i
+  \label{eq:avar_tile}
+\end{equation}
+where $d|_{\tt dbits}$ denotes the selected bits of $d$, packed (highest bit first) into an index
+$0 \le d|_{\tt dbits} < 2^{|{\tt dbits}|}$.
+The compression is therefore two-fold: the array is stored only on its $(n_f, n_t)$ support, and
+its $2^k$ delay rows are represented by $2^{|{\tt dbits}|}$ stored rows, plus a time shift $T(d)$
+which is affine in the bits of $d$.
+
+The starting point ($k=0$) is the gridding output for a one-hot input, which is a tile with
+$f_0 = f_0(F)$, $n_f = f_1(F) - f_0(F)$, $n_t = 1$, ${\tt dbits} = 0$, $s=1$, no shifts, and
+${\tt data}[f,0,0] = w_{fF}$.
+
+The tile representation is preserved by a dedispersion step $\DS(k)$. Consider an output
+coarse-freq channel $f$, whose inputs are the ``lower'' channel $2f$ and the ``upper'' channel
+$2f+1$, and write the output delay index as $d' = 2d+b$ (so that $d'_0 = b$ and $d'_{j+1} = d_j$).
+There are three cases:
+\begin{itemize}
+
+\item {\bf Upper half only} (the lower half is outside the footprint).
+Then ${\tt out}[f,2d+b,t] = 2^{-1/2} \, {\tt in}[2f+1,d,t]$ for both $b=0,1$, i.e.\ the output does
+not depend on the new delay bit at all. The tile is unchanged, except that its bitmask and shift
+vector are ``lifted'' by one bit,
+\begin{equation}
+{\tt dbits} \rightarrow 2 \, {\tt dbits}
+  \hspace{1.5cm}
+(\tau_0, \cdots, \tau_{k-1}) \rightarrow (0, \tau_0, \cdots, \tau_{k-1})
+  \label{eq:avar_lift}
+\end{equation}
+and $s \rightarrow s/\sqrt{2}$. No data is touched.
+
+\item {\bf Lower half only}. Then ${\tt out}[f,2d+b,t] = 2^{-1/2} \, {\tt in}[2f,d,t-d-b]$, i.e.\ the
+output depends on the new delay bit only through a time shift. The bitmask and shift vector are
+lifted as in Eq.\ (\ref{eq:avar_lift}), and in addition the dedispersion lag $(d+b)$ is absorbed
+into the shifts, by adding
+\begin{equation}
+(1, 1, 2, 4, \cdots, 2^{k-1})
+  \label{eq:avar_ddshifts}
+\end{equation}
+to the (lifted) length-$(k+1)$ shift vector, using $d + b = b + \sum_{j \ge 1} d'_j 2^{j-1}$.
+Again no data is touched.
+
+\item {\bf Both halves.} Now the output is a sum of two ``legs'', each of which is a lifted copy of
+one input tile, and each of which carries its own shift vector: $\sigma^U$ for the upper leg, and
+$\sigma^L$ for the lower leg (which includes the extra dedispersion lags of
+Eq.\ \ref{eq:avar_ddshifts}). Only the {\em difference} between the two shift vectors is physical,
+so we factor the common part $\tau_j = \min(\sigma^L_j, \sigma^U_j)$ out into the output tile's
+shifts, and fold the residuals $(\sigma^L_j - \tau_j)$ and $(\sigma^U_j - \tau_j)$ into the data,
+by materializing each output row and adding the two legs at their residual offsets (the constant
+shifts $t_0$ are treated the same way). A delay bit $j$ becomes a content bit of the output if the
+two legs' residuals differ ($\sigma^L_j \ne \sigma^U_j$), or if it was already a content bit of
+either leg.
+
+This is the only case in which content bits are created, data is copied, and the time support
+grows (by up to $\sum_j (\sigma^L_j - \tau_j) \le 2^k$).
+
+\end{itemize}
+Since the footprint is contiguous, at most two coarse-freq channels -- the first and the last --
+can have a missing half. The class \verb|SparseTileTriple| exploits this by splitting the array
+into (at most) three tiles: first channel, bulk, last channel. The two edge tiles can then take
+the cheap single-leg cases, while the bulk is processed with the both-halves case uniformly.
+
+After $r$ dedispersion steps, only one coarse-freq channel is left, and the resulting tile
+($k=r$, $n_f=1$) is an exact, compressed representation of the impulse response $G_{Fd}$ of
+Eq.\ (\ref{eq:avar_impulse}). Its content bits are always a subset of the top $(i_0(F)+1)$ bits
+predicted in \S\ref{sec:avar_dbits}, and are sometimes a proper subset, since the merge rule above
+only marks a bit when the two legs' residual shifts actually differ.
+
+\subsection{Accumulating over frequency}
+\label{sec:avar_pfvariance}
+
+Let ${\tt data}$, {\tt dbits} and $s$ be the members of the final ($k=r$) tile for input channel
+$F$. Since $\|h_p * g\|^2$ is invariant under time translation, the shifts $T(d)$ in
+Eq.\ (\ref{eq:avar_tile}) drop out of the variance entirely, leaving
+\begin{equation}
+\big\| h_p * G_{Fd} \big\|^2 = s^2 \, \big\| h_p * {\tt data}[0, \, d|_{\tt dbits}, \, \cdot] \big\|^2
+  \label{eq:avar_tile_variance}
+\end{equation}
+So we simply run each of the $2^{|{\tt dbits}|}$ stored rows through Eq.\ (\ref{eq:avar_autocorr}).
+The result is a shape $(2^{|{\tt dbits}|}, P)$ array containing the entire contribution of input
+channel $F$ to Eq.\ (\ref{eq:avar_master}).
+
+The frequency sum in Eq.\ (\ref{eq:avar_master}) is then accumulated in factored form. A
+\verb|PfVariance| object is a small dictionary which maps a bitmask to an array of shape
+$(2^{|{\tt dbits}|}, P)$, and represents
+\begin{equation}
+{\rm Var}[d,p] = \sum_{\rm terms} {\tt arr}^{({\tt dbits})}\big[ d|_{\tt dbits}, \, p \big]
+  \label{eq:avar_terms}
+\end{equation}
+Accumulating channel $F$ means scaling its array by $V_F$, and adding it to the term with the same
+bitmask (creating a new term if there is none). Only at the very end is
+Eq.\ (\ref{eq:avar_terms}) ``unpacked'' into the dense shape $(2^r,P)$ output array. Note that the
+largest object ever materialized is a single channel's tile: the full
+$(N_{\rm freq}, 2^r, N_{\rm time})$ impulse response never exists in memory.
+
+The cost is dominated by input channels with large $i_0(F)$, whose final tile has $O(2^{i_0})$
+stored rows, each of length $n_t = O(2^{i_0})$. As noted in \S\ref{sec:avar_dbits}, such channels
+are rare -- at most $O(2^{r-i})$ input channels have $i_0 \ge i$ -- but the few channels which
+straddle a high-level boundary (e.g.\ the middle of the band) are expensive enough that this exact
+calculation is only practical at moderate ranks. This is the main reason that it is used as a
+testing/reference implementation, rather than in production.
+
+\subsection{Validation}
+\label{sec:avar_validation}
+
+The pieces above are unit-tested against dense reference implementations
+(\verb|pirate_frb test --avar|): the \verb|SparseTile| operations are compared to a dense
+$\DS(k)$ applied to randomly generated tiles, tree gridding is compared to
+\verb|ReferenceTreeGriddingKernel|, dedispersion of a one-hot input is compared to
+\verb|ReferenceTree|, and \verb|PfVarianceConvolver| is compared both to a brute-force evaluation
+of $\|h_p * x\|^2$, and to the kernels which \verb|ReferencePeakFindingKernel| actually uses.
+
+End-to-end, the analytic variances are checked by Monte Carlo
+(\verb|pirate_frb check_avar_mc|): Gaussian noise with per-channel variance $V_F$ is fed through a
+\verb|ReferenceDedisperser| (with \verb|enable_variances=True| and peak-finding weights set to 1),
+and its empirical per-chunk variances are compared to the analytic prediction, restricted to
+output channels which have reached steady state.
+
+\clearpage
+
 \appendix
 
 \section{Derivations}
