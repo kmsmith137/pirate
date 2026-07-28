@@ -801,11 +801,78 @@ In the above implementation, the main idea is to use the splitting identity recu
 split tree dedispersion across multiple kernels, then parallelize over threadblocks in a kernel,
 then parallelize over threads in a warp.
 
-% Future section: MegaRingbuf and segment alignment.
+\subsection{Alignment constraints and the MegaRingbuf}
 
-% Future section: Downsampled trees and the LaggedDownsampler.
+In the previous section, we stated (just after Eq.\ (\ref{eq:DD16})) that the $\LAG[\cdots]$
+operator in global memory is a no-op.
+This is a slight simplification: in implementation, we constrain global memory lags to be
+128-byte aligned.
+(The reason why is a long story -- see the last few paragraphs in this section!)
 
-% Future section: Early triggers.
+Let $S$ be the ``segment size'', or the number of data elements per 128-byte cache line:
+\begin{equation}
+S \equiv \frac{128}{\mbox{\tt sizeof(dtype)}} = \begin{cases}
+ 32 & \mbox{ for a float32 kernel} \\
+ 64 & \mbox{ for a float16 kernel}
+\end{cases}
+\end{equation}
+Taking $\DD(16)$ as an example, we split the lag $\lambda(f'',d') = (255-f'') \, d'$ 
+appearing in Eq.\ (\ref{eq:DD16}) into ``aligned'' and ``residual'' parts:
+\begin{equation}
+\lambda(f'',d') \equiv (255-f'') \, d'
+  \hspace{1cm}
+\lambda_a(f'',d') \equiv S \left\lfloor \frac{\lambda(f'',d')}{S} \right\rfloor
+  \hspace{1cm}
+\lambda_r(f'',d') \equiv \lambda(f'',d') - \lambda_a(f'',d')
+\end{equation}
+We factorize $\DD(16)$ as follows (compare with Eq.\ (\ref{eq:DD16})):
+\begin{equation}
+\DD(16) =
+\underbrace{\big( \DD(8) \otimes 1_{256} \big) 
+            \circ \LAG\big[ \lambda_r(f'',d') \big] }_{\equiv \mathcal A}
+   \circ \LAG\big[ \lambda_a(f'',d') \big]
+   \circ \underbrace{\big( 1_{256} \otimes \DD(8) \big)}_{\equiv \mathcal B}
+\label{eq:DD16b}
+\end{equation}
+The residual lag $\lambda_r(f'',d')$ is coalesced into the second-stage
+dedispersion kernel $\mathcal A$ (slightly increasing the size of its persistent
+state), and the aligned lag $\lambda_a(f'',d')$ is a no-op in global memory.
+The dedispersion kernels have a boolean compile-time parameter \verb|apply_input_residual_lags|
+which indicates whether the lag $\lambda_r(f'',d')$ is applied before dedispersion.
+(There is a related parameter \verb|input_is_downsampled_tree| which will be explained in
+the next section.)
+
+As an aside, something analogous happens internally in the float16 dedispersion
+kernels for $5 \le r \le 8$. In this case, recall from the previous section that
+we use a single-threadblock, multi-warp kernel with a lagged ring buffer in shared
+memory. In order to keep the shared memory IO 32-bit aligned, we split the 16-bit
+lag into an even (aligned) part, and a $\{0,1\}$-valued residual part. The shared
+memory ring buffer applies the aligned part, and the residual part is coalesced into
+the second half of the dedispersion.
+
+Finally, we explain why we constrain global memory lags to be 128-byte aligned.
+An obvious reason is that it allows global memory access to be cache-aligned, but
+this has a small performance impact.
+The larger reason is as follows.
+
+So far, we've stated that intermediate arrays between dedispersion kernels are
+stored in a GPU global memory ring buffer.
+This is a simplification: we actually store intermediate arrays in the {\tt MegaRingbuf},
+a complicated data structure which lives partially in GPU memory, and partially in host
+memory.
+This is because the total ring buffer size is much larger than GPU memory.
+The {\tt MegaRingbuf} is responsible for organizing ring buffer state so that ``short-lag''
+elements of the ring buffer stay on the GPU, and ``long-lag'' elements spill to host
+memory (in order to minimize PCIe bandwidth).
+The {\tt MegaRingbuf} requires 128-byte aligned lags, in order to ensure that all
+host-GPU copies are 128-byte aligned.
+Here, the alignment really matters -- profiling shows that host-gpu bandwidth is
+significantly reduced if addresses are not 128-byte aligned (but does not benefit
+from 256-byte alignment).
+
+\subsection{Placeholder: downsampled trees and the LaggedDownsampler}
+
+\subsection{Placeholder: early triggers}
 
 \clearpage
 
