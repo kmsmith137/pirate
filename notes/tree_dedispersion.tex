@@ -875,7 +875,10 @@ $r_{\rm min} < \epsilon$ had $\lambda \ge 0.1$, so mask expansion never discards
 call healthy -- but the converse fails, and $0.07\%$ of surviving samples have $\lambda > 0.1$.  Those are well
 conditioned and numerically accurate, and merely statistically degenerate: $N_v = 3$ with $n = 2$ determines a
 parabola exactly, so $G$ is perfectly conditioned while $\lambda = 1$ and ${\rm Var}(r) = 0$.  Whether to cut on
-$\lambda$ as well is the consumer's decision, which is why we hand over both.
+$\lambda$ as well is the consumer's decision.  As of writing that decision has been made and is {\em not} to:
+high leverage is not a problem for the downstream code, so the detrender expands the mask on $r_{\rm min}$ only.
+$\lambda$ is still emitted, both because the sigma normalization above needs it and because the decision could
+be revisited.
 
 The detrender runs {\em incrementally}.  On the $i$-th call it is handed a buffer containing chunk $i$
 (samples $iT_c \le t < (i+1)T_c$) together with $W$ samples of pre- and postpadding.  Samples $t < iT_c$ have
