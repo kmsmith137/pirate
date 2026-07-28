@@ -1781,23 +1781,26 @@ Seams matter: a step discontinuity in the detrended time series is a broadband t
 \subsection{Penalized least squares (Whittaker--Henderson smoothing)}
 \label{sec:time_detrend_wh}
 
-Fix an integer order $k \ge 1$ and a penalty weight $\lambda > 0$.
+Fix an integer order $k \ge 1$ and a penalty weight $\rho > 0$.
+(The penalty weight is conventionally called $\lambda$; we write $\rho$ throughout this
+appendix, because $\lambda[t]$ already denotes the leverage in \S\ref{sec:time_detrending}
+and both quantities appear below.)
 Let $(\Delta f)[t] = f[t+1] - f[t]$, and let $\Delta^k$ be the $k$-fold iterate.
 Define $\hat f$ as the length-$T$ vector minimizing
 \begin{equation}
 \chi^2(f) = \sum_{t=0}^{T-1} m[t] \big( d[t] - f[t] \big)^2
-          \;+\; \lambda \sum_{t=0}^{T-k-1} \big( \Delta^k f \big)[t]^2.
+          \;+\; \rho \sum_{t=0}^{T-k-1} \big( \Delta^k f \big)[t]^2.
 \label{eq:wh_chi2}
 \end{equation}
 The first term pulls $\hat f$ toward the valid data; the second penalizes roughness.
 Writing $M = {\rm diag}(m)$ and letting $D_k$ be the $(T-k) \times T$ $k$-th difference matrix, the normal equations are
 \begin{equation}
-\big( M + \lambda D_k^T D_k \big) \hat f = M d.
+\big( M + \rho D_k^T D_k \big) \hat f = M d.
 \label{eq:wh_normal}
 \end{equation}
 
 {\bf Structure of the linear system.}
-The matrix $N \equiv M + \lambda D_k^T D_k$ is symmetric and banded with bandwidth $k$, so (\ref{eq:wh_normal}) is solved by a banded Cholesky factorization in $O(Tk^2)$ flops and $O(Tk)$ memory.
+The matrix $N \equiv M + \rho D_k^T D_k$ is symmetric and banded with bandwidth $k$, so (\ref{eq:wh_normal}) is solved by a banded Cholesky factorization in $O(Tk^2)$ flops and $O(Tk)$ memory.
 It is positive definite as soon as there are at least $k$ valid samples {\em in the entire array}: the null space of $D_k$ is the space of polynomials in $t$ of degree $< k$, and a nonzero such polynomial has at most $k-1$ roots.
 This is the main practical argument for the penalty.
 An unpenalized fit to a basis becomes rank-deficient whenever a basis function's support is mostly masked, and one then has to detect and special-case that situation; here it simply cannot happen.
@@ -1807,21 +1810,21 @@ The estimate degrades gracefully rather than blowing up (though its {\em varianc
 {\bf Remark on knots.}
 A natural-looking alternative is to fit B-splines on a coarse knot lattice with continuity constraints, and (\ref{eq:wh_chi2}) is the limit of that construction with a knot at every sample plus a roughness penalty.
 It is worth noticing that the coarse lattice buys nothing: the B-spline normal equations are also banded with bandwidth $k$, so the cost is $O(Tk^2)$ either way.
-Putting knots everywhere removes the knot-placement question, and replaces ``how do I regularize a knot interval that is mostly masked'' with a single global parameter $\lambda$.
+Putting knots everywhere removes the knot-placement question, and replaces ``how do I regularize a knot interval that is mostly masked'' with a single global parameter $\rho$.
 
 {\bf Transfer function.}
 Suppose $m[t] \equiv 1$ and $T \rightarrow \infty$.
 Then (\ref{eq:wh_normal}) diagonalizes in Fourier space, and since $\Delta$ acts on $e^{i\omega t}$ by multiplication by $(e^{i\omega}-1)$,
 \begin{equation}
-H(\omega) = \frac{1}{1 + \lambda \, \big( 2 \sin(\omega/2) \big)^{2k}}
-          \;\approx\; \frac{1}{1 + \lambda \omega^{2k}},
+H(\omega) = \frac{1}{1 + \rho \, \big( 2 \sin(\omega/2) \big)^{2k}}
+          \;\approx\; \frac{1}{1 + \rho \omega^{2k}},
 \qquad
-1 - H(\omega) \approx \frac{\lambda \omega^{2k}}{1 + \lambda \omega^{2k}}.
+1 - H(\omega) \approx \frac{\rho \omega^{2k}}{1 + \rho \omega^{2k}}.
 \label{eq:wh_transfer}
 \end{equation}
 So the smoothing timescale is
 \begin{equation}
-\tau = \lambda^{1/2k} \quad \mbox{samples},
+\tau = \rho^{1/2k} \quad \mbox{samples},
 \end{equation}
 and the high-pass response rolls off as $\omega^{2k}$ at low frequency: trend power at frequency $\omega \ll \tau^{-1}$ is suppressed by $(\omega\tau)^{2k}$.
 Note that $1-H$ is monotone in $|\omega|$, with no stopband ripple.
@@ -1875,7 +1878,7 @@ Interpret (\ref{eq:wh_chi2}) as $-2\sigma^2 \log(\mbox{posterior})$ for the foll
 \mbox{likelihood:} \quad & d[t] \sim {\cal N}\big( f[t], \sigma^2 \big) \quad \mbox{for valid $t$ only},
 \label{eq:ss_model}
 \end{align}
-with $q = \sigma^2/\lambda$.
+with $q = \sigma^2/\rho$.
 Indeed $-2\log(\mbox{posterior}) = \sigma^{-2}\sum_t m[t](d[t]-f[t])^2 + q^{-1}\sum_t (\Delta^k f)[t]^2$, which is $\chi^2(f)/\sigma^2$.
 Since the model is linear-Gaussian, the posterior for $f$ is Gaussian, and its mean (= mode = $\hat f$) is what we want.
 The prior says: the trend is a $k$-fold integrated random walk.
@@ -2034,7 +2037,7 @@ Sections \ref{sec:time_detrend_wh} and \ref{sec:time_detrend_kalman} compute the
  & (\S\ref{sec:time_detrend_wh}) & (\S\ref{sec:time_detrend_kalman}) & (\S\ref{sec:time_detrend_sg}) \\
 \midrule
 Estimator & \multicolumn{2}{c}{minimizer of (\ref{eq:wh_chi2})} & value at center of (\ref{eq:sg_fit}) \\
-Parameters & $k, \lambda$ & $k, q/\sigma^2$ & $n, W$ \\
+Parameters & $k, \rho$ & $k, q/\sigma^2$ & $n, W$ \\
 Mask handling & automatic (prior) & automatic (skip update) & ad hoc fallback needed \\
 Seam & $O(e^{-L/\ell})$ & $O(e^{-L/\ell})$, or none & none \\
 Lookahead & few $\times\ \ell$ & few $\times\ \ell$ & exactly $W$ \\
