@@ -290,9 +290,10 @@ def parse_time(subparsers):
     parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.time_selected()')
     parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.time_selected()')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() timing')
+    parser.add_argument('--dt1d', action='store_true', help='Runs Detrender1d.time_selected() (1-d detrender kernel)')
 
 def time_command(args):
-    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim' ]
+    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim', 'dt1d' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
     if args.ncu:
@@ -325,6 +326,8 @@ def time_command(args):
         kernels.GpuDequantizationKernel.time_selected()
     if run_all_timings or args.gtgk:
         kernels.GpuTreeGriddingKernel.time_selected()
+    if run_all_timings or args.dt1d:
+        kernels.Detrender1d.time_selected()
     if run_all_timings or args.sim:
         utils.time_avx2_simulate_4bit_noise(nthreads)
 

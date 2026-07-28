@@ -11,6 +11,7 @@
 
 #include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/DedispersionKernel.hpp"
+#include "../include/pirate/Detrender1d.hpp"
 #include "../include/pirate/GpuDequantizationKernel.hpp"
 #include "../include/pirate/LaggedDownsamplingKernel.hpp"
 #include "../include/pirate/PeakFindingKernel.hpp"
@@ -41,6 +42,53 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("time_selected", &GpuDedispersionKernel::time_selected, py::call_guard<py::gil_scoped_release>())
           .def_static("registry_size", &GpuDedispersionKernel::registry_size)
           .def_static("show_registry", &GpuDedispersionKernel::show_registry)
+    ;
+
+    // Detrender1d: Python injections in pirate_frb/kernels/Detrender1d.py:
+    //   - launch: converts stream=None to current cupy stream
+    py::class_<Detrender1d> detrender_1d(m, "Detrender1d",
+        "The 1-d time detrender: a masked, adaptively centered moving local polynomial fit.\n\n"
+        "For each output sample t, a degree-n polynomial is fit to the valid samples of the\n"
+        "window [t-W, t+W] and evaluated back at t; the fit is subtracted from the data, and\n"
+        "the sample is dropped ('mask expansion') if its window is too ill-conditioned to\n"
+        "determine the fit. Operates in place on a (data, mask) pair, independently for each\n"
+        "row (one row per (beam, freq) pair).\n\n"
+        "Only the middle T samples of each row are written, i.e. buffer samples [W, W+T).\n"
+        "The 2W padding samples are read but not written, and the caller is responsible for\n"
+        "the buffer shift between chunks. Where the expanded mask is false, the residual is\n"
+        "written as zero.\n\n"
+        "All parameters except the number of rows are compile-time constants (exposed as the\n"
+        "class attributes n, W, T, nbuf, eps), so there is nothing to configure and the entry\n"
+        "points are static.\n\n"
+        "The algorithm is specified in notes/tree_dedispersion.tex, section 'Time detrending'.\n"
+        "pirate_frb.detrending_1d is the pure-numpy reference that this kernel is validated\n"
+        "against.");
+
+    detrender_1d.attr("n") = Detrender1d::n;
+    detrender_1d.attr("W") = Detrender1d::W;
+    detrender_1d.attr("T") = Detrender1d::T;
+    detrender_1d.attr("nbuf") = Detrender1d::nbuf;
+    detrender_1d.attr("eps") = Detrender1d::eps;
+
+    detrender_1d
+          .def_static("launch",
+               [](Array<float> &data, Array<unsigned char> &mask, uintptr_t stream_ptr) {
+                   cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                   Detrender1d::launch(data, mask, stream);
+               },
+               py::arg("data"), py::arg("mask"), py::arg("stream_ptr"),
+               py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+               "GPU kernel launch (async, does not sync stream).\n\n"
+               "Args:\n"
+               "    data: Array, shape (M, nbuf), dtype float32, fully contiguous, on GPU.\n"
+               "          Modified in place.\n"
+               "    mask: Array, shape (M, nbuf), dtype uint8, fully contiguous, on GPU,\n"
+               "          {0,1}-valued. Modified in place, and the output mask is the\n"
+               "          authoritative one (it can only lose samples).\n"
+               "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
+          .def_static("time_selected", &Detrender1d::time_selected,
+               py::call_guard<py::gil_scoped_release>(),
+               "Run timing benchmark (called via 'python -m pirate_frb time --dt1d')")
     ;
 
     // GpuDequantizationKernel: Python injections in pirate_frb/kernels/GpuDequantizationKernel.py:

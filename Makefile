@@ -303,6 +303,7 @@ LIB_SRCFILES = \
   src_lib/DedispersionConfig.cpp \
   src_lib/DedispersionKernel.cu \
   src_lib/DedispersionPlan.cpp \
+  src_lib/Detrender1d.cu \
   src_lib/Hwtest.cpp \
   src_lib/FakeXEngine.cpp \
   src_lib/FileWriter.cpp \
@@ -409,6 +410,7 @@ PYFILES = \
   pirate_frb/simpulse/test_pulse_upsampling.py \
   pirate_frb/simpulse/plot_pulses.py \
   pirate_frb/kernels/__init__.py \
+  pirate_frb/kernels/Detrender1d.py \
   pirate_frb/kernels/GpuDequantizationKernel.py \
   pirate_frb/loose_ends/__init__.py \
   pirate_frb/tests/__init__.py \
@@ -461,6 +463,7 @@ HFILES = \
   include/pirate/DedispersionKernel.hpp \
   include/pirate/DedispersionPlan.hpp \
   include/pirate/DedispersionTree.hpp \
+  include/pirate/Detrender1d.hpp \
   include/pirate/Hwtest.hpp \
   include/pirate/FakeXEngine.hpp \
   include/pirate/file_utils.hpp \

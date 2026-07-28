@@ -602,13 +602,113 @@ def test_masked_data_unused(rng=None, verbose=True):
         print(f'    test_masked_data_unused: {checked} output arrays bit-identical '
               f'under nan/inf/+-1e10 poisoning of masked samples')
 
+# ------------------------------------------------------------- 8. GPU kernel
+
+def test_gpu_kernel(rng=None, tol=1e-3, rmin_tol=1e-4, verbose=True):
+    """
+    Compare pirate.Detrender1d (the GPU kernel) to detrend_reference().
+
+    Structured like test_dtype_agreement(): the GPU runs in float32 at
+    eps = 1e-3 and the reference in float64 at eps = 1e-6, so the two do not
+    produce the same output mask and residuals are compared on the
+    intersection.  Data is generated in fp64, cast to fp32, then cast back for
+    the reference, so both see bit-identical inputs.  A constant offset
+    ~ U(0, 1e3) is added on each draw, which is what catches a broken
+    constant-offset subtraction (the kernel uses a per-BLOCK kappa rather than
+    the reference's per-buffer one, which is exact in principle but has its own
+    ways to go wrong -- see the comments in src_lib/Detrender1d.cu).
+
+    The float32 CPU Detrender is run on the same data at the same parameters
+    and reported alongside, so the two implementations' numerical stability can
+    be compared directly.  Do not expect them to agree closely: they sum in
+    completely different orders.
+
+    The kernel emits no rmin, so mask expansion is checked against the
+    reference's: the GPU mask must equal mask_in & (rmin64 >= eps32), except on
+    samples whose rmin sits within 'rmin_tol' of the threshold, where the two
+    are free to disagree.  rmin_tol = 1e-4 is an order of magnitude above the
+    measured float32-vs-float64 disagreement in rmin, and an order of magnitude
+    below eps itself.
+
+    Unlike the rest of this module, the geometry is not a free parameter: W, T
+    and eps are compile-time constants of the kernel and are read back from it.
+    """
+    from ..kernels import Detrender1d   # local import: this package is otherwise numpy-only
+    import cupy as cp
+
+    rng = _default_rng(rng)
+    n = 2
+    W, T, nbuf = Detrender1d.W, Detrender1d.T, Detrender1d.nbuf
+    eps32, eps64 = Detrender1d.eps, 1e-6
+    S_ax, ndraw = 8, 2
+
+    worst_gpu, worst_cpu, worst_name = 0.0, 0.0, ''
+    ndisagree, worst_slack = 0, 0.0
+
+    for _ in range(ndraw):
+        mask, labels = random_mask(S_ax, nbuf, W, rng)
+        offset = rng.uniform(0.0, 1e3)
+        d32 = (rng.normal(size=(S_ax, nbuf)) + offset).astype(np.float32)
+        dref = d32.astype(np.float64)      # bit-identical inputs
+
+        gpu_d = cp.asarray(d32)
+        gpu_m = cp.asarray(mask.astype(np.uint8))
+        Detrender1d.launch(gpu_d, gpu_m)
+        cp.cuda.get_current_stream().synchronize()
+        out_d, out_m = cp.asnumpy(gpu_d), cp.asnumpy(gpu_m)
+
+        # The kernel writes samples [W, W+T) in place and must leave the padding alone.
+        # This is the check that catches an off-by-one in the output range, or a write
+        # that races ahead of a read of the same buffer.
+        for lo, hi, what in ((0, W, 'prepadding'), (W+T, nbuf, 'postpadding')):
+            assert np.array_equal(out_d[:, lo:hi], d32[:, lo:hi]), f'{what} data modified'
+            assert np.array_equal(out_m[:, lo:hi], mask[:, lo:hi]), f'{what} mask modified'
+
+        r_gpu, m_gpu = out_d[:, W:W+T], out_m[:, W:W+T].astype(bool)
+        r_cpu, m_cpu, _, _ = Detrender(W=W, n=n, chunk_size=T, eps=eps32,
+                                       dtype=np.float32).detrend_stream(d32, mask)
+        r_ref, m_ref, _, rmin = detrend_reference(dref, mask, W, n=n, eps=eps64,
+                                                  dtype=np.float64,
+                                                  max_outputs_per_pass=512)
+        _note_expansion(mask[:, W:W+T], m_gpu)
+
+        bad = (m_gpu != (mask[:, W:W+T] & (rmin >= eps32)))
+        if bad.any():
+            ndisagree += int(bad.sum())
+            worst_slack = max(worst_slack, float(np.abs(rmin[bad] - eps32).max()))
+
+        for s in range(S_ax):
+            for m_other, r_other, which in ((m_gpu, r_gpu, 'gpu'), (m_cpu, r_cpu, 'cpu')):
+                both = m_other[s] & m_ref[s]
+                if not both.any():
+                    continue
+                e = _maxdiff(r_other[s][both], r_ref[s][both])
+                if which == 'gpu' and e > worst_gpu:
+                    worst_gpu, worst_name = e, f'{labels[s]} offset={offset:.3g}'
+                elif which == 'cpu':
+                    worst_cpu = max(worst_cpu, e)
+
+    if verbose:
+        print(f'    test_gpu_kernel [W={W} T={T}]: max |r_gpu-r_ref| = {worst_gpu:.3e} sigma  ({worst_name})')
+        print(f'      same data through the float32 CPU Detrender: {worst_cpu:.3e} sigma')
+        print(f'      mask expansion disagreements: {ndisagree} '
+              f'(worst |rmin-eps| = {worst_slack:.3e}, tolerated below {rmin_tol:.0e})')
+
+    assert worst_slack < rmin_tol, (f'test_gpu_kernel: {ndisagree} mask disagreements, worst '
+                                    f'|rmin-eps| = {worst_slack:.3e} > {rmin_tol:.0e}')
+    assert worst_gpu < tol, (f'test_gpu_kernel: max |r_gpu-r_ref| = {worst_gpu:.3e} sigma '
+                             f'> {tol:.0e} ({worst_name})')
+
 
 # ----------------------------------------------------------------- entry point
 
 def run_all(verbose=True, rng=None):
     """
-    All six tests share one generator, so printing its entropy makes the whole
+    All seven tests share one generator, so printing its entropy makes the whole
     run reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
+
+    The last test needs a GPU (and the compiled extension); the other six are
+    pure numpy.
     """
     rng = _default_rng(rng)
     ent = rng.bit_generator.seed_seq.entropy
@@ -620,4 +720,5 @@ def run_all(verbose=True, rng=None):
     test_detrender_vs_reference(rng, verbose=verbose)
     test_dtype_agreement(rng, verbose=verbose)
     test_masked_data_unused(rng, verbose=verbose)
+    test_gpu_kernel(rng, verbose=verbose)
     print(f'  detrending_1d tests passed   [cumulative mask expansion: {_expansion_str()}]')
