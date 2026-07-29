@@ -2,12 +2,14 @@
 Pure-numpy 1-d detrender: a masked, adaptively centered moving local polynomial
 fit, evaluated by a van Herk block decomposition over a moment monoid.
 
-The algorithm is specified in notes/tree_dedispersion.tex, section "Detrending".
-The appendix of the same document records the alternatives that were considered
-and discarded, and the measurements behind the choices made here.
+The algorithm is specified in notes/tree_dedispersion.tex, section "Time
+detrending algorithm 1: local polynomial subtraction", which also records the
+measurements behind the choices made here.  (Algorithm 2, in the section after
+it, is a fixed-lag Kalman filter -- a second, independent detrender, implemented
+in detrending_1d_kalman.)
 
-A GPU implementation will follow; this package is the reference that will
-validate it.  Everything is parameterized by dtype (float32 or float64) so that
+This package is the reference implementation that validates the GPU kernel in
+src_lib/Detrender1d.cu.  Everything is parameterized by dtype (float32 or float64) so that
 the same instance can be run twice and the results compared.
 
 Deliberate divergences from the eventual GPU version (not bugs):

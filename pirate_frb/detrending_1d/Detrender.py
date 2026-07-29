@@ -1,6 +1,6 @@
 """
-The chunked, block-scan 1-d detrender (see notes/tree_dedispersion.tex, section
-"Detrending").
+The chunked, block-scan 1-d detrender (see notes/tree_dedispersion.tex,
+section "Time detrending algorithm 1: local polynomial subtraction").
 
 Geometry.  The window is 2W+1 samples and the scan blocks are B = 2W samples, so
 a window spans *exactly* two adjacent blocks for every alignment: writing

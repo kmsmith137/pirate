@@ -1,6 +1,6 @@
 """
 The 'moment monoid' used by the 1-d detrender (see notes/tree_dedispersion.tex,
-section "Detrending").
+section "Time detrending algorithm 1: local polynomial subtraction").
 
 A MomentSet represents, for some set S of time samples, the quantities
 
@@ -48,8 +48,9 @@ def pascal_shift(v, delta, binom):
 
     'v' has shape (batch..., K) and 'delta' has shape (batch...,).  Note
     T_delta T_delta' = T_(delta+delta') exactly, so composing many small shifts
-    is *not* cheaper (numerically) than one large one -- see the appendix of
-    notes/tree_dedispersion.tex.
+    is *not* cheaper (numerically) than one large one: only the total origin
+    travel matters, which is why the scans restart at every block (see
+    "Block decomposition and scans" in notes/tree_dedispersion.tex).
     """
     K = v.shape[-1]
     dtype = v.dtype

@@ -18,7 +18,8 @@ namespace pirate {
 //
 // Overview.
 //
-// Notation follows notes/tree_dedispersion.tex, section "Time detrending". The moment
+// Notation follows notes/tree_dedispersion.tex, section "Time detrending algorithm 1:
+// local polynomial subtraction". The moment
 // monoid, the van Herk block decomposition, and the per-window solve are all specified
 // there; pirate_frb/detrending_1d is a line-by-line numpy implementation of the same
 // algorithm, and is the oracle this kernel is tested against.

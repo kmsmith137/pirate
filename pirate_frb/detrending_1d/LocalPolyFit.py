@@ -1,6 +1,6 @@
 """
-The per-window regularized least-squares solve (see notes/tree_dedispersion.tex,
-section "Detrending", subsection "The estimator").
+The per-window least-squares solve (see notes/tree_dedispersion.tex,
+section "Time detrending algorithm 1: local polynomial subtraction", subsection "The estimator").
 
 Given the moments of a window, we fit a degree-n polynomial in x = (u-c)/W to
 the valid samples, and evaluate it back at the window center.  The normal

@@ -1,6 +1,7 @@
 """
 The chunked fixed-lag ("seam-free") Kalman detrender (see plans/detrend_1d_kalman.md,
-and notes/tree_dedispersion.tex section "Recursive (state-space) formulation").
+and notes/tree_dedispersion.tex,
+section "Time detrending algorithm 2: Kalman filter").
 
 The committed baseline at time t is
 

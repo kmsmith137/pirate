@@ -12,7 +12,8 @@ namespace pirate {
 
 // Detrender1d: the 1-d time detrender, a masked, adaptively centered moving local
 // polynomial fit. The algorithm is specified in notes/tree_dedispersion.tex, section
-// "Time detrending"; pirate_frb/detrending_1d is the pure-numpy reference that this
+// "Time detrending algorithm 1: local polynomial subtraction"; pirate_frb/detrending_1d
+// is the pure-numpy reference that this
 // kernel is validated against.
 //
 // Operates in place on a (data, mask) pair, independently for each row (one row per

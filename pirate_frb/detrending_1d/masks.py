@@ -14,7 +14,7 @@ case in real data, and it is the case where the estimator has exact analytic
 properties (symmetric window => S_odd = 0 => checkerboard Gram), so it is worth
 hitting often.  The remaining 50% is spread over the geometries that broke earlier
 candidate algorithms -- long gaps, one-sided windows, narrow off-center clusters,
-and fully masked scan blocks (see the appendix of notes/tree_dedispersion.tex).
+and fully masked scan blocks.
 
 Note that the perturbation erodes this considerably: a base all-valid row survives
 intact only if none of its N stamps is a masking stamp, which has probability

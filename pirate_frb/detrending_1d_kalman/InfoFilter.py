@@ -1,7 +1,8 @@
 """
 The two information-filter recursions of the fixed-lag detrender (see
 plans/detrend_1d_kalman.md, sections "Forward information filter" and "Backward
-information filter", and notes/tree_dedispersion.tex eq (info_recursions)).
+information filter", and notes/tree_dedispersion.tex,
+section "Time detrending algorithm 2: Kalman filter", eq (kf_fwd) and (kf_bwd)).
 
 A Gaussian is carried in *information* form: the pair (J, eta) represents
 
