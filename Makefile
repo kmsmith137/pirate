@@ -399,6 +399,12 @@ PYFILES = \
   pirate_frb/detrending_1d/reference.py \
   pirate_frb/detrending_1d/masks.py \
   pirate_frb/detrending_1d/tests.py \
+  pirate_frb/detrending_1d_kalman/__init__.py \
+  pirate_frb/detrending_1d_kalman/model.py \
+  pirate_frb/detrending_1d_kalman/InfoFilter.py \
+  pirate_frb/detrending_1d_kalman/KalmanDetrender.py \
+  pirate_frb/detrending_1d_kalman/brute_force.py \
+  pirate_frb/detrending_1d_kalman/tests.py \
   pirate_frb/slow_avar/__init__.py \
   pirate_frb/slow_avar/SparseTile.py \
   pirate_frb/slow_avar/PfVariance.py \
