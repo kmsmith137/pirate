@@ -1151,6 +1151,9 @@ optimization only.)
 \item {\bf Monomials in $x$, no orthogonalization.}  ${\rm cond}(G)$ looks alarming ($\sim\!10^{15}$ in raw
 sample units) but is a pure diagonal-scaling artifact; Cholesky is equivariant under diagonal scaling and the
 relevant quantity, the condition number of the equilibrated matrix $G_{jl}/\sqrt{G_{jj}G_{ll}}$, is $23$.
+This is the standard equilibration result (van der Sluis; see Higham, {\em Accuracy and Stability of Numerical
+Algorithms}): the error bound for Cholesky depends on the equilibrated condition number, not on
+${\rm cond}(G)$.
 Legendre or Gram polynomials would reduce that to $O(1)$, which buys nothing, and would cost the Hankel
 structure of (\ref{eq:dt_moments}).
 \item {\bf $\epsilon$ must clear the rounding noise in $r_{\rm min}$.}  Mask expansion is a threshold decision,
@@ -1545,7 +1548,8 @@ local polynomial fit have none.
 
 {\bf Conditioning.}  ${\rm cond}(J_f)$ grows as $\tau^{2(k-1)}$, because the state components $\Delta^jf$
 carry scales differing by $\tau^j$ -- $1.3\times10^5$ at $k=2$, $\tau=256$.  That is a pure diagonal scaling,
-under which Cholesky is equivariant, and the quantity that matters is the equilibrated condition number
+under which Cholesky is equivariant (\S\ref{sec:dt_numerics}), and the quantity that matters is the
+equilibrated condition number
 $J_{ij}/\sqrt{J_{ii}J_{jj}}$, which is {\em flat in $\tau$}: measured $5.83$ at $k=2$ across
 $\tau = 4, 16, 64, 256$, against $23$ for the local polynomial fit's Gram matrix.  So no rescaling of the
 state is needed or used, and $A$, $A^{-1}$ stay exact integer matrices.  Two regimes do not spoil this.  The
@@ -1555,7 +1559,10 @@ information nearly symmetrizes it: at $k=2$ its equilibrated condition number te
 $r_{\rm min} \rightarrow 1$ -- three decades above $\epsilon$.  And iterating $J_f$
 through a long masked gap with no measurements, the raw condition number runs away but the equilibrated one
 {\em plateaus} by $G \approx 10\tau$ at $13.9$, with $J_{00} \sim 1/(qG^{2k-1})$ decaying only polynomially,
-so it cannot underflow for any realistic gap.
+so it cannot underflow for any realistic gap.  (Inside such a gap (\ref{eq:kf_normal}) reduces to
+$\Delta^{2k}\hat f = 0$, so the estimate is the degree-$(2k{-}1)$ discrete spline interpolating between the
+surrounding data -- it degrades gracefully rather than blowing up, though its variance does grow across the
+gap, which is unavoidable and physical.)
 
 {\bf Float32.}  Everything runs in float32.  Two things are needed and both are cheap.  The constant offset of
 \S\ref{sec:kf_impl}, without which the residual is a cancelling difference of two $|d|$-sized numbers; and
