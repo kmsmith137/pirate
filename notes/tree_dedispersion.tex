@@ -901,7 +901,7 @@ where $f[t]$ is a smooth trend and $\epsilon[t]$ is white Gaussian noise with ze
 variance $\sigma^2$.  The detrender computes an estimate $\hat f[t]$ and replaces $d[t] \rightarrow d[t] - \hat f[t]$
 at valid samples.
 
-{\bf Outputs.}  Four per-sample arrays, of which only the first is obvious.
+{\bf Outputs.}  Three per-sample arrays, of which only the first is obvious.
 
 The detrended residual is $r[t] = d[t] - \hat f[t]$.  Alongside it the detrender emits an {\em expanded} mask
 $m_{\rm out}[t]$: a sample is dropped either because its input sample was masked, or because its window turned
@@ -909,14 +909,17 @@ out to be too ill-conditioned to fit (\S\ref{sec:dt_estimator}).  Where $m_{\rm 
 meaningless and is set to zero.  So the detrender does modify the mask, and a consumer must use
 $m_{\rm out}$ rather than the mask it supplied.
 
-For a {\em fixed mask} the estimator is linear in the data, so we may write $\hat f = Hd$ for a $T \times T$
-smoothing matrix $H$ (which depends on the mask but not on $d$).  The third output is the {\em leverage}
+The third is the conditioning statistic $r_{\rm min}[t]$ of (\ref{eq:dt_rmin}), which is what the mask
+expansion thresholds on.
+
+{\bf The leverage, and why it is not one of them.}  For a {\em fixed mask} the estimator is linear in the data,
+so we may write $\hat f = Hd$ for a $T \times T$ smoothing matrix $H$ (which depends on the mask but not on
+$d$).  The {\em leverage} is its diagonal,
 \begin{equation}
 \lambda[t] \;\equiv\; H_{tt} \;=\; \frac{\partial \hat f[t]}{\partial d[t]} ,
 \label{eq:dt_leverage_def}
 \end{equation}
-the sensitivity of the trend estimate at $t$ to the datum at $t$.  Equivalently, and this is why it must be
-propagated downstream,
+the sensitivity of the trend estimate at $t$ to the datum at $t$.  Equivalently,
 \begin{equation}
 {\rm Var}\big(\hat f[t]\big) = \sigma^2 \lambda[t],
 \qquad
@@ -925,26 +928,32 @@ propagated downstream,
 \end{equation}
 exactly, on every surviving sample where the mask is locally constant.  So $\lambda$ is simultaneously the
 variance of the trend estimate in units of $\sigma^2$, the fraction of the variance the detrender removes, and
-a measure of how well determined the window is.  The essential point is that ${\rm Var}(r[t])$ is {\em not}
-$t$-independent even though ${\rm Var}(\epsilon[t])$ is: it varies with the local mask, dropping sharply near
-mask edges and in sparsely populated windows.  Any downstream normalization to sigmas
-(\S\ref{sec:peak_finding}) must divide by $\sigma\sqrt{1-\lambda[t]}$ rather than by $\sigma$, or it will
-report biased significances exactly where the data is worst.  For a fully valid window
-$\lambda = 9/8W = 4.4\times10^{-3}$, but under adversarial masking $\lambda$ ranges over several decades and
-approaches $1$, where ${\rm Var}(r) \rightarrow 0$ and the residual carries no information at all.
+a measure of how well determined the window is.  ${\rm Var}(r[t])$ is therefore {\em not} $t$-independent even
+though ${\rm Var}(\epsilon[t])$ is: it varies with the local mask, dropping sharply near mask edges and in
+sparsely populated windows.  For a fully valid window $\lambda = 9/8W = 4.4\times10^{-3}$, but under
+adversarial masking $\lambda$ ranges over several decades and approaches $1$, where
+${\rm Var}(r) \rightarrow 0$ and the residual carries no information at all.
 
-The fourth output is the conditioning statistic $r_{\rm min}[t]$ of (\ref{eq:dt_rmin}), which is what the mask
-expansion thresholds on.  It is worth emitting because it and $\lambda$ answer different questions, and neither
-subsumes the other.  $r_{\rm min}$ asks whether the {\em fit} is well posed; $\lambda$ asks whether the
-{\em residual} carries information.  Measured over $2.4\times10^5$ samples at $W=512$, every sample with
+None of that is computed.  It would matter if the peak-finder's normalization to sigmas
+(\S\ref{sec:peak_finding}) divided by $\sigma\sqrt{1-\lambda[t]}$ rather than by $\sigma$, but there is no path
+by which a per-sample quantity could reach it: the peak-finding weights are built once at startup
+(\S\ref{sec:analytic_variance}) from per-zone input variances supplied by the X-engine metadata.  Two things
+make that acceptable rather than merely expedient.  Where the mask is locally constant $\lambda$ is the known
+constant $9/8W$, i.e. a uniform $0.22\%$ rescaling of $\sigma$, degenerate with the overall normalization; and
+the {\em variation} about it is confined to a small tail -- measured over $2.4\times10^5$ samples at $W=512$,
+$0.07\%$ of surviving samples have $\lambda > 0.1$, which perturbs the variance of a sum over thousands of
+channels by $O(10^{-4})$.  If a correction is ever wanted, the bulk of it is that single analytic constant, not
+a per-sample array.
+
+A separate question is whether to cut on $\lambda$ as well as on $r_{\rm min}$: they answer different
+questions, and neither subsumes the other.  $r_{\rm min}$ asks whether the {\em fit} is well posed; $\lambda$
+asks whether the {\em residual} carries information.  Measured over the same samples, every sample with
 $r_{\rm min} < \epsilon$ had $\lambda \ge 0.1$, so mask expansion never discards a sample that $\lambda$ would
-call healthy -- but the converse fails, and $0.07\%$ of surviving samples have $\lambda > 0.1$.  Those are well
-conditioned and numerically accurate, and merely statistically degenerate: $N_v = 3$ with $n = 2$ determines a
-parabola exactly, so $G$ is perfectly conditioned while $\lambda = 1$ and ${\rm Var}(r) = 0$.  Whether to cut on
-$\lambda$ as well is the consumer's decision.  As of writing that decision has been made and is {\em not} to:
-high leverage is not a problem for the downstream code, so the detrender expands the mask on $r_{\rm min}$ only.
-$\lambda$ is still emitted, both because the sigma normalization above needs it and because the decision could
-be revisited.
+call healthy -- but the converse fails.  Those extra samples are well conditioned and numerically accurate, and
+merely statistically degenerate: $N_v = 3$ with $n = 2$ determines a parabola exactly, so $G$ is perfectly
+conditioned while $\lambda = 1$ and ${\rm Var}(r) = 0$.  That decision has been taken and is {\em not} to cut:
+high leverage is not a problem for the downstream code, whereas numerical instability is, so the detrender
+expands the mask on $r_{\rm min}$ only.
 
 The detrender runs {\em incrementally}.  On the $i$-th call it is handed a buffer containing chunk $i$
 (samples $iT_c \le t < (i+1)T_c$) together with $W$ samples of pre- and postpadding.  Samples $t < iT_c$ have
@@ -1069,15 +1078,15 @@ parameter: it is inert wherever $r_{\rm min} \ge \epsilon$.
 \end{equation}
 by forward then back substitution.
 
-{\bf Leverage.}  A second forward substitution $L z = w$ gives
+{\bf Leverage.}  The leverage (\ref{eq:dt_leverage_def}) of this estimator is
 \begin{equation}
-\lambda[t] = \|z\|^2 = w^T G^{-1} w ,
+\lambda[t] = \|z\|^2 = w^T G^{-1} w , \qquad Lz = w ,
 \label{eq:dt_leverage}
 \end{equation}
-the leverage of (\ref{eq:dt_leverage_def}), for the cost of one extra $O(n^2)$ triangular solve.  With no
-regularizer this is exact on every surviving sample.  For a fully valid window $\lambda = 9/8W$, so the
-detrender removes $0.44\%$ of the variance and ${\rm sd}(\hat f) = 1.06\,\sigma/\sqrt{W} = 0.066\,\sigma$ at
-$W = 256$.
+so one extra $O(n^2)$ forward substitution would give it, exactly on every surviving sample since there is no
+regularizer.  It is not computed (\S\ref{sec:dt_problem}); the expression is recorded because the response
+statements below are statements about it.  For a fully valid window $\lambda = 9/8W$, so the detrender removes
+$0.44\%$ of the variance and ${\rm sd}(\hat f) = 1.06\,\sigma/\sqrt{W} = 0.066\,\sigma$ at $W = 256$.
 
 {\bf Response.}  For a fully valid window the estimator is a fixed FIR smoother with
 $1 - H(\omega) = O(\omega^{4})$ at low frequency and a smoothing timescale $\sim W$.  Two consequences worth
@@ -1242,8 +1251,8 @@ Two things follow that are worth stating positively.  $r_{\rm min}$ is a ratio o
 hence covariant under diagonal rescaling of the basis, so the threshold $\epsilon$ needs no calibration against
 $\sigma$, against the trend amplitude, or against the effective window width -- unlike an absolute ridge, which
 has to be recalibrated as the mask narrows.  And the masking decision depends only on $G$, hence only on the
-mask, so $\hat f$ remains linear in $d$ for a fixed mask; the transfer function, the leverage identity
-(\ref{eq:dt_leverage}), and Monte-Carlo noise propagation all remain valid.
+mask, so $\hat f$ remains linear in $d$ for a fixed mask; the transfer function, the identities
+(\ref{eq:dt_var_r}), and Monte-Carlo noise propagation all remain valid.
 
 \subsection{Cost}
 \label{sec:dt_cost}
@@ -1260,7 +1269,7 @@ suffix scan, over $2560$ input samples per $2048$ outputs:
 \midrule
 prefix $+$ suffix tree scans ($4$ merges/input $\times 1.25$) & $300$ \\
 window merge (\ref{eq:dt_vanherk}), one per output           & $60$ \\
-Cholesky, two solves, evaluation, leverage                   & $40$ \\
+Cholesky, two solves, evaluation                             & $35$ \\
 \midrule
 total & $\approx 400$ \\
 \bottomrule
@@ -1327,11 +1336,16 @@ shows up as a nonzero residual, and a seam shows up as structure at multiples of
 separate seam test.
 \item {\bf Degenerate windows}: $N_v = 0, 1, 2$ must all be mask-expanded away, with a positive control that
 $N_v = n+1$ spread across the window survives.
-\item {\bf Leverage identity}: build the kernel by feeding unit impulses through the full path and check
-$\kappa[0] = \sum_s \kappa[s]^2 = \lambda$.  Doing this by impulse response rather than by pushing noise through
-and measuring ${\rm Var}(r)$ is exact, needs no statistical tolerance, and subsumes a Monte-Carlo variance test.
-\item {\bf Against the float64 reference}, over the randomized masks, comparing $r$, $m_{\rm out}$, $\lambda$
-and $r_{\rm min}$.
+\item {\bf Projection identity}: build the equivalent kernel $\kappa$ by feeding unit impulses through the full
+path and check $\kappa[0] = \sum_s \kappa[s]^2$.  Both sides equal $\lambda$ by (\ref{eq:dt_leverage}), but the
+identity is checked from the kernel alone, so it needs nothing the solve does not already produce.  Doing this
+by impulse response rather than by pushing noise through and measuring ${\rm Var}(r)$ is exact, needs no
+statistical tolerance, and subsumes a Monte-Carlo variance test.
+\item {\bf Kernel at zero lag}: on a full window, $\kappa[0] = (G^{-1})_{00}$ for the exact discrete Gram, which
+approaches $9/8W$ as $W$ grows.  This is the sharpest check here, since the expected answer is analytic -- no
+reference implementation and no statistical tolerance -- and one impulse suffices.
+\item {\bf Against the float64 reference}, over the randomized masks, comparing $r$, $m_{\rm out}$ and
+$r_{\rm min}$.
 \item {\bf Float32 versus float64}, the whole pipeline in both.  Run the two at {\em different} $\epsilon$
 ($10^{-3}$ against $10^{-6}$) and compare on the intersection of their masks: with matched $\epsilon$ the two
 runs make identical masking decisions, so the test never exercises a sample whose $r_{\rm min}$ roundoff was
@@ -1501,7 +1515,7 @@ The practical consequences are in \S\ref{sec:kf_impl}.
 \subsection{Outputs}
 \label{sec:kf_outputs}
 
-The same four per-sample arrays as \S\ref{sec:dt_problem}, so the two detrenders are drop-in comparable.
+The same three per-sample arrays as \S\ref{sec:dt_problem}, so the two detrenders are drop-in comparable.
 
 {\bf Residual and expanded mask.}  Factor $J[t] = LL^T$ and, exactly as in (\ref{eq:dt_rmin}), take the
 smallest relative pivot
@@ -1513,11 +1527,11 @@ m_{\rm out}[t] = m[t] \;\wedge\; \big(r_{\rm min}[t] \ge \epsilon\big) ,
 \end{equation}
 with $\epsilon = 10^{-3}$.  This inherits the guarantee of \S\ref{sec:dt_estimator}: on a surviving sample the
 equilibrated condition number is bounded, hence the relative error of the solve is
-$O(\epsilon_{\rm mach}/\epsilon)$ {\em independently of the mask}.  Where $m_{\rm out}$ is false, all of the
-residual, the leverage and $r_{\rm min}$ are set to zero, so a consumer that forgets to check the mask cannot
-pick up a meaningless leverage.  The expansion is a single pass: it is never fed back into $J_f$, $J_b$ or the
+$O(\epsilon_{\rm mach}/\epsilon)$ {\em independently of the mask}.  Where $m_{\rm out}$ is false, both the
+residual and $r_{\rm min}$ are set to zero, so a consumer that forgets to check the mask cannot pick up a
+meaningless $r_{\rm min}$.  The expansion is a single pass: it is never fed back into $J_f$, $J_b$ or the
 carried state, which is what keeps $\hat f$ linear in $d$ for a fixed input mask, and hence keeps
-$m_{\rm out}$, $\lambda$ and $r_{\rm min}$ functions of that mask alone.
+$m_{\rm out}$ and $r_{\rm min}$ functions of that mask alone.
 
 Because a rank-deficient $J$ has $p_i = 0$ for $i \ge {\rm rank}$, (\ref{eq:kf_rmin}) subsumes the rank test:
 ``fewer than $k$ valid samples in $[0,t+L]$'' and every near-degenerate variant of it fall out of the same
@@ -1530,8 +1544,10 @@ property at all: it is a fixed handful of samples per stream, diluted by however
 \lambda[t] = \big(J[t]^{-1}\big)_{00} = H_{tt} = \frac{\partial \hat f_L[t]}{\partial d[t]} ,
 \label{eq:kf_leverage}
 \end{equation}
-free from the same factorization.  That this is the leverage and not merely the posterior variance is worth a
-line: $\hat f_L[t]$ is row $t$ of the {\em full} smoother of the sub-problem on $[0,t+L]$, and for that
+which the same factorization would give for free.  Like the local fit's (\ref{eq:dt_leverage}) it is not
+computed (\S\ref{sec:dt_problem}); the expression is recorded because (\ref{eq:kf_response}) below is a
+statement about it.  That this is the leverage and not merely the posterior variance is worth a line:
+$\hat f_L[t]$ is row $t$ of the {\em full} smoother of the sub-problem on $[0,t+L]$, and for that
 sub-problem the posterior precision of $f$ is ${\cal N}/\sigma^2$, so $\Sigma = \sigma^2{\cal N}^{-1}$ and
 comparing with $\hat f = {\cal N}^{-1}Md$ gives $H = \Sigma M/\sigma^2$, whence $H_{tt} = \Sigma_{tt}/\sigma^2$.
 The fixed-lag $H_L$ is itself {\em not} symmetric -- each row comes from a different sub-problem -- but the
@@ -1547,14 +1563,17 @@ estimator {\em shrinks} rather than projects, and instead
 \nu[t] \equiv \frac{{\rm Var}(\hat f_L[t])}{\sigma^2} = \sum_u m[u]\,H_{tu}^2 \;\le\; \lambda[t] .
 \label{eq:kf_var_r}
 \end{equation}
-$\nu$ is not free: it needs a Lyapunov recursion for ${\rm Cov}(\eta_f)$ and ${\rm Cov}(\eta_b)$ alongside
-each information recursion, roughly doubling the cost.  It is {\em not} computed.  Using $1-\lambda$ in its
-place overestimates the residual variance, since $\nu \le \lambda$, and therefore understates significance --
-wrong, but in the conservative direction, and both vanish together as $\lambda \rightarrow 1$.  How much it
-costs is a measurement: over the randomized-mask suite $\max(\lambda - \nu)$ is $0.14$ to $0.17$, so on
-adversarial masks the discrepancy is real, while in well-sampled stretches $\lambda \approx c_k/\tau$ and
-$\nu \le \lambda$ bound it below a percent.  Whether the peak-finder of \S\ref{sec:peak_finding} needs the
-exact form is the open question here.
+Neither $\lambda$ nor $\nu$ is computed, so this matters only if the residual variance is ever wanted.  It is
+recorded because it is the one place where the two detrenders genuinely differ in what a correction would
+cost: $\lambda$ would be free from the factorization, whereas $\nu$ needs a Lyapunov recursion for
+${\rm Cov}(\eta_f)$ and ${\rm Cov}(\eta_b)$ alongside each information recursion, roughly doubling the cost.
+Using $1-\lambda$ in its place overestimates the residual variance, since $\nu \le \lambda$, and therefore
+understates significance -- wrong, but in the conservative direction, and both vanish together as
+$\lambda \rightarrow 1$.  How much that shortcut costs has been measured: over the randomized-mask suite
+$\max(\lambda - \nu)$ ran $0.12$ to $0.19$, so on adversarial masks the discrepancy is real, while in
+well-sampled stretches $\lambda \approx c_k/\tau$ and $\nu \le \lambda$ bound it below a percent.  The number
+is quoted here because reproducing it means reinstating both quantities in the dense oracle of
+\S\ref{sec:kf_validation}, neither of which that oracle now computes.
 
 \subsection{Exact properties}
 \label{sec:kf_exact}
@@ -1565,7 +1584,7 @@ Three, and they are what the implementation is tested against.
 window lies entirely inside the buffer, so the arithmetic performed for output $t$ does not depend on the
 chunk decomposition at all.  Running the stream at any chunk size must agree with a single whole-stream call
 {\em bit for bit}.  Moreover $J_f$ and $J_b$ are driven by the mask alone -- a measurement adds $e_0e_0^T$
-regardless of $d$ -- so $m_{\rm out}$, $\lambda$ and $r_{\rm min}$ are bit-identical unconditionally, while
+regardless of $d$ -- so $m_{\rm out}$ and $r_{\rm min}$ are bit-identical unconditionally, while
 the residual is bit-identical once the constant offset of \S\ref{sec:kf_impl} is held fixed.  This is the
 operational meaning of ``seam-free''.
 
@@ -1622,11 +1641,12 @@ widest searched boxcar.
 (\ref{eq:kf_response}) is also a closed-form check on the whole construction, and a strong one, since it
 exercises the forward recursion, the backward recursion and the combine (\ref{eq:kf_combine}) together against
 an analytic answer rather than against another implementation: run (\ref{eq:kf_fwd}) and (\ref{eq:kf_bwd}) to
-steady state on a full mask with $L \gg \ell$ and the leverage must approach $c_k/\tau$.  It does, to five
-significant figures at $k = 2, 3$ and $\tau = 8, 32, 80.5$, the residual deviation shrinking with $\tau$ as
-the continuum limit is approached.  Worth re-running by hand after any change to the recursions; it is not in
-the test suite, because \S\ref{sec:kf_validation}'s dense oracle covers the same ground with an independent
-implementation.  Finite $L$ perturbs all of this by $O(e^{-L/\ell})$; note that truncating the future
+steady state on a full mask with $L \gg \ell$, and $h[0]$ -- read off the equivalent kernel by impulses, so
+that nothing beyond the shipped outputs is needed -- must approach $c_k/\tau$.  It does, from above and as
+$O(\tau^{-2})$: measured relative deviations $3.0\times10^{-2}, 7.7\times10^{-3}, 2.0\times10^{-3}$ at
+$\tau = 2, 4, 8$.  This is in the test suite (\S\ref{sec:kf_validation}).  Both the history behind the output
+sample and the lag ahead of it must be several $\ell$, or the forward filter is still spinning up and that
+dominates the deviation instead.  Finite $L$ perturbs all of this by $O(e^{-L/\ell})$; note that truncating the future
 also breaks the kernel's symmetry, so $H_L$ has a small phase response where the two-sided smoother and the
 local polynomial fit have none.
 
@@ -1740,12 +1760,14 @@ should be trusted before it passes.
 precisions; and degree $2k-1$ asserted from both sides -- $O(1)$ near the stream start, suppressed as
 $e^{-L/\ell}$ in the interior -- so that neither half can silently regress.
 \item {\bf Chunk invariance}: several chunk sizes against a whole-stream call, requiring bit-identity for
-$m_{\rm out}$, $\lambda$ and $r_{\rm min}$ unconditionally and for the residual at fixed $\kappa$.  Writing
-this as a single tolerance over all four outputs would discard the unconditional half, which is the half worth
-having.
-\item {\bf Leverage identity}: build row $t$ of $H_L$ by feeding unit impulses through the full path and check
-$\lambda = H_{tt}$ exactly.  Note $\sum_u m[u]H_{tu}^2 = \nu \ne \lambda$ here, unlike
-\S\ref{sec:dt_validation}: that identity needs a projection.
+$m_{\rm out}$ and $r_{\rm min}$ unconditionally and for the residual at fixed $\kappa$.  Writing this as a
+single tolerance over all three outputs would discard the unconditional half, which is the half worth having.
+\item {\bf Steady-state response}: on a full mask, the equivalent kernel at zero lag must approach
+$h[0] = c_k/\tau$ as in (\ref{eq:kf_response}), from above and as $O(\tau^{-2})$.  Like the local fit's
+zero-lag check this is analytic, so it needs neither the dense oracle nor a statistical tolerance, and it
+exercises both recursions and the combine at once.  Note the projection identity of
+\S\ref{sec:dt_validation} has no analogue here: $\sum_u m[u]H_{tu}^2 = \nu \ne \lambda$, since a penalized
+estimator shrinks rather than projects.
 \item {\bf Positive semidefiniteness and finiteness} over the randomized masks, including all-masked rows and
 rows with a single valid sample, with $\beta \ge 1/q$ checked at every step.  The tolerance has to be
 per-precision, or float32 roundoff hides a genuine float64 failure.

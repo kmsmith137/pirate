@@ -155,7 +155,7 @@ class KalmanDetrender:
         approximation -- so the first outputs of a stream are the correct posterior
         given the data seen so far.  They are emitted rather than trimmed; the ones
         with fewer than k valid samples behind them are removed by the rmin cut, and
-        the rest simply carry a large leverage.
+        the rest are simply poorly determined.
         """
         k = self.k
         return KalmanState(np.zeros((S, k, k), dtype=self.dtype),
@@ -169,18 +169,17 @@ class KalmanDetrender:
         d_buf, mask_buf: shape (S, chunk_size + L), where S is a spectator axis
         carrying one entry per (beam,freq) pair.  There is no prepadding.
 
-        Returns ((residual, mask_out, leverage, rmin), new_state), the first four of
-        shape (S, chunk_size).
+        Returns ((residual, mask_out, rmin), new_state), the first three of shape
+        (S, chunk_size).
 
         mask_out is the expanded mask: a sample is dropped if its input sample was
         masked, or if J is too ill-conditioned to solve (rmin < eps).  Where mask_out
-        is false, ALL of residual, leverage and rmin are zero -- not just the
-        residual -- so a consumer that forgets to check the mask cannot pick up a
-        meaningless leverage.
+        is false, both residual and rmin are zero -- not just the residual -- so a
+        consumer that forgets to check the mask cannot pick up a meaningless rmin.
 
         The expansion is a single pass: it never feeds back into J_f, J_b or the
-        carried state, so fhat stays linear in d for a fixed input mask and
-        mask_out, leverage and rmin remain functions of that mask alone.
+        carried state, so fhat stays linear in d for a fixed input mask and both
+        mask_out and rmin remain functions of that mask alone.
         """
         d_buf = np.asarray(d_buf)
         mask_buf = np.asarray(mask_buf)
@@ -240,26 +239,25 @@ class KalmanDetrender:
         # ---- combine and solve
         J = Jf_out + Jb
         eta = ef_out + eb
-        fhat, lev, rmin = self._solve(J, eta)
+        fhat, rmin = self._solve(J, eta)
 
         mask_out = mf[:, :Tc] & (rmin >= self.eps)
         resid = np.where(mask_out, dz[:, :Tc] - fhat, 0).astype(self.dtype)
-        lev = np.where(mask_out, lev, 0).astype(self.dtype)
         rmin = np.where(mask_out, rmin, 0).astype(self.dtype)
 
-        return (resid, mask_out, lev, rmin), KalmanState(Jf, etaf, kappa)
+        return (resid, mask_out, rmin), KalmanState(Jf, etaf, kappa)
 
     # ----------------------------------------------------------------- stream
 
     def detrend_stream(self, d, mask, state=None):
         """
         d, mask: shape (S, T) with (T - L) a positive multiple of chunk_size.
-        Returns (residual, mask_out, leverage, rmin) for outputs [0, T-L), i.e. each
-        of shape (S, T-L).
+        Returns (residual, mask_out, rmin) for outputs [0, T-L), i.e. each of shape
+        (S, T-L).
 
         Because the estimator is seam-free, this must agree with a single
-        whole-stream call sample by sample -- bit-identically for mask_out, leverage
-        and rmin, which depend on the mask alone.
+        whole-stream call sample by sample -- bit-identically for mask_out and rmin,
+        which depend on the mask alone.
         """
         d = np.asarray(d)
         mask = np.asarray(mask)
@@ -270,7 +268,7 @@ class KalmanDetrender:
 
         if state is None:
             state = self.initial_state(d.shape[0])
-        cols = [[], [], [], []]
+        cols = [[], [], []]
         for i in range(nout // self.chunk_size):
             lo = i * self.chunk_size
             outs, state = self.detrend_chunk(d[:, lo:lo+self.buflen],
@@ -283,8 +281,13 @@ class KalmanDetrender:
 
     def _solve(self, J, eta):
         """
-        Solve J a = eta and return (fhat, leverage, rmin), where fhat = a_0 and
-        leverage = (J^-1)_00.
+        Solve J a = eta and return (fhat, rmin), where fhat = a_0.
+
+        The leverage (J^-1)_00 is not computed; see the discussion in
+        LocalPolyFit.solve().  Unlike the local polynomial fit, a penalized
+        estimator shrinks rather than projects, so Var(r) needs a second number
+        beyond the leverage anyway -- see notes/tree_dedispersion.tex, section
+        "Time detrending algorithm 2: Kalman filter", subsection "Outputs".
 
         The factorization is LocalPolyFit.cholesky() with J in place of the local
         fit's Gram matrix: same algorithm, same mu pivot guard, and the same
@@ -298,12 +301,7 @@ class KalmanDetrender:
 
         a = _tri_backward(Lc, _tri_forward(Lc, eta))
         fhat = a[..., 0]
-
-        w = np.zeros(eta.shape, dtype=eta.dtype)
-        w[..., 0] = 1
-        z = _tri_forward(Lc, w)
-        lev = (z*z).sum(axis=-1)
-        return fhat, lev, rmin
+        return fhat, rmin
 
     def _masked_mean(self, d, mf, fallback):
         # Select with np.where rather than weighting by the mask: a masked sample may

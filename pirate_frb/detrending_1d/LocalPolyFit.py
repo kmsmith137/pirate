@@ -115,16 +115,18 @@ def solve(ms, u_eval, mu):
     Evaluate the local polynomial fit at buffer index 'u_eval' (broadcastable
     against the batch shape of 'ms').
 
-    Returns (fhat, leverage, rmin).
+    Returns (fhat, rmin), where 'rmin' is the conditioning statistic described in
+    the module docstring.  On a sample whose rmin is below the caller's threshold,
+    fhat is meaningless (the mu guard, not the data, set the smallest pivot).
 
-    'leverage' = w^T G^{-1} w is simultaneously the smoother's H_tt, the variance
-    of fhat in units of sigma^2, and Var(r[t]) = sigma^2 (1 - leverage[t]); for a
-    fully valid window it equals 9/(8W).  With no regularizer these identities are
-    exact on every sample the caller keeps.
-
-    'rmin' is the conditioning statistic described in the module docstring.  On a
-    sample whose rmin is below the caller's threshold, fhat and leverage are
-    meaningless (the mu guard, not the data, set the smallest pivot).
+    The smoother's leverage H_tt = w^T G^{-1} w is not computed.  Nothing consumes
+    it: the peak-finding weights are built from per-zone input variances fixed once
+    at startup, so there is no path by which a per-sample quantity could reach the
+    significance calculation.  Where the mask is locally constant the leverage is a
+    known constant anyway (9/(8W) at n=2), i.e. a uniform rescaling of sigma that
+    is degenerate with the overall normalization.  It remains defined in
+    notes/tree_dedispersion.tex, and equals the equivalent-kernel weight at zero
+    lag, which is how the tests get at it without a separate code path.
     """
     dtype, W, n = ms.dtype, ms.W, ms.n
     m = n + 1
@@ -143,7 +145,4 @@ def solve(ms, u_eval, mu):
     a = _backward(L, _forward(L, ms.U))
     fhat = (w * a).sum(axis=-1).astype(dtype)
 
-    z = _forward(L, w)
-    leverage = (z * z).sum(axis=-1).astype(dtype)
-
-    return fhat, leverage, rmin
+    return fhat, rmin

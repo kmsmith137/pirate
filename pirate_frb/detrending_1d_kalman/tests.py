@@ -245,7 +245,7 @@ def test_polynomial_exactness(rng=None, verbose=True):
             mask, labels = random_mask(S_ax, T, L, rng)
             P = _poly_stream(rng, S_ax, T, k-1, tau, dtype)
             det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
-            resid, mko, _, _ = det.detrend_stream(P, mask)
+            resid, mko, _ = det.detrend_stream(P, mask)
             _note_expansion(mask[:, :T-L], mko)
             for s in range(S_ax):
                 if not mko[s].any():
@@ -267,7 +267,7 @@ def test_polynomial_exactness(rng=None, verbose=True):
     T = 2*Tc + L
     det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
     P = _poly_stream(rng, 1, T, 2*k-1, tau, np.float64)
-    r3, mk3, _, _ = det.detrend_stream(P, np.ones((1, T), dtype=bool))
+    r3, mk3, _ = det.detrend_stream(P, np.ones((1, T), dtype=bool))
     head = float(np.max(np.abs(r3[0, :int(2*ell)])))
     interior = float(np.max(np.abs(r3[0, int(8*ell):])))
 
@@ -295,7 +295,7 @@ def test_polynomial_exactness(rng=None, verbose=True):
 def test_seam_free(rng=None, verbose=True):
     """
     The headline test.  Because J_f and J_b are driven by the input mask alone,
-    mask_out, leverage and rmin are bit-identical across chunk decompositions
+    mask_out and rmin are bit-identical across chunk decompositions
     unconditionally.  The residual is bit-identical only when kappa is held fixed:
     with a per-buffer kappa the decompositions see different buffers, so the residual
     differs by pure rounding.  Asserting bit-identity there would be asserting
@@ -320,7 +320,7 @@ def test_seam_free(rng=None, verbose=True):
                 ref = out
                 _note_expansion(mask[:, :nout], out[1])
                 continue
-            for j, nm in ((1, 'mask_out'), (2, 'leverage'), (3, 'rmin')):
+            for j, nm in ((1, 'mask_out'), (2, 'rmin')):
                 assert np.array_equal(out[j], ref[j]), \
                     f'T4: {nm} not bit-identical at chunk_size={Tc} (subtract_offset={offs})'
             if not offs:
@@ -330,7 +330,7 @@ def test_seam_free(rng=None, verbose=True):
                 worst_r = max(worst_r, _maxdiff(out[0], ref[0]))
 
     if verbose:
-        print(f'    T4 test_seam_free: mask_out/leverage/rmin bit-identical over '
+        print(f'    T4 test_seam_free: mask_out/rmin bit-identical over '
               f'chunk sizes {sizes}; residual bit-identical at fixed kappa, '
               f'{worst_r:.2e} with per-buffer kappa')
     assert worst_r < 1e-12
@@ -349,8 +349,8 @@ def test_vs_brute_force(rng=None, verbose=True):
         mask, labels = random_mask(S_ax, T, L, rng)
         d = rng.normal(size=(S_ax, T)) + 2.0
         det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
-        r, mk, lev, rmn = det.detrend_stream(d, mask)
-        br, bmk, blev, brmn, bnu = kalman_brute_force(d, mask, k, tau, L, eps=det.eps)
+        r, mk, rmn = det.detrend_stream(d, mask)
+        br, bmk, brmn = kalman_brute_force(d, mask, k, tau, L, eps=det.eps)
         _note_expansion(mask[:, :T-L], mk)
 
         assert np.array_equal(mk, bmk), (
@@ -360,58 +360,60 @@ def test_vs_brute_force(rng=None, verbose=True):
             e = _maxdiff(r[mk], br[mk])
             if e > worst_r:
                 worst_r, name = e, str(labels)
-            worst_l = max(worst_l, _maxdiff(lev[mk], blev[mk]))
             worst_l = max(worst_l, _maxdiff(rmn[mk], brmn[mk]))
 
     if verbose:
         print(f'    T5 test_vs_brute_force: max|r-r_ref| = {worst_r:.2e}, '
-              f'max|lev,rmin diff| = {worst_l:.2e}')
+              f'max|rmin diff| = {worst_l:.2e}')
     assert worst_r < 1e-9, f'residual vs oracle: {worst_r} ({name})'
-    assert worst_l < 1e-9, f'leverage/rmin vs oracle: {worst_l}'
+    assert worst_l < 1e-9, f'rmin vs oracle: {worst_l}'
 
 
-# ------------------------------------------------------------------ T6. leverage
+# ----------------------------------------------------- T6. steady-state response
 
-def test_leverage(rng=None, niter=4, verbose=True):
+def test_kernel_response(rng=None, verbose=True):
     """
-    lambda[t] = H_tt exactly, checked by building row t of H by impulses.
+    On a full mask, the equivalent kernel at zero lag must approach the closed form
+    h[0] = c_k/tau of notes/tree_dedispersion.tex, section "Time detrending
+    algorithm 2: Kalman filter", subsection "Response and numerics".
 
-    Note sum_u m[u] H_tu^2 = nu is NOT equal to lambda here, unlike the local
-    polynomial fit: that identity needs H to be a projection, and a penalized
-    estimator shrinks.  nu is reported, not asserted -- it is what would decide
-    whether Var(r) = 1 - 2 lambda + nu ever has to be computed for real.
+    This is the strongest check in the file: the expected answer is analytic, so it
+    needs neither the dense oracle nor a statistical tolerance, and it exercises the
+    forward recursion, the backward recursion and the combine together.
+
+    c_k/tau is the continuum limit, approached from above as O(tau^-2) (measured
+    3.0e-2, 7.7e-3, 2.0e-3 at tau = 2, 4, 8), so what is asserted is the rate of
+    approach rather than a fixed tolerance.  Both the history behind the output
+    sample and the lag ahead of it must be several ell = tau/sin(pi/2k), or the
+    forward filter is still spinning up and the deviation is dominated by that
+    instead -- hence Tc and L scale with tau below.
     """
-    rng = _default_rng(rng)
-    k, tau, L, Tc = K, TAU, 16, 32
-    det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64,
-                          subtract_offset=False)
-    worst, nchecked = 0.0, 0
-    max_gap, worst_var = 0.0, 1.0
+    k, Tc0 = K, 32
+    c_k = 1.0 / (2*k*np.sin(np.pi/(2*k)))
+    devs = []
 
-    for _ in range(niter):
-        base = random_mask(1, det.buflen, L, rng)[0][0]
-        for t_out in (0, 5, Tc//2, Tc-1):
-            base[t_out] = True
-            kern, mk, lev = impulse_kernel(det, base, t_out)
-            if not bool(mk[0]):
-                continue
-            lam = float(lev[0])
-            worst = max(worst, abs(kern[t_out] - lam))
-            assert -1e-12 <= lam <= 1.0 + 1e-12, f'leverage out of [0,1]: {lam}'
-            nu = float((base.astype(float) * kern**2).sum())
-            max_gap = max(max_gap, lam - nu)
-            worst_var = min(worst_var, 1 - 2*lam + nu)
-            nchecked += 1
+    for tau in (2.0, 4.0, 8.0):
+        # ell = sqrt(2) tau at k=2; 64 samples is 11 ell at tau=8, 23 at tau=4.
+        n = int(64 * max(1.0, tau/4.0))
+        det = KalmanDetrender(k=k, tau=tau, L=n, chunk_size=n, dtype=np.float64,
+                              subtract_offset=False)
+        base = np.ones(det.buflen, dtype=bool)
+        t_out = n - 1                    # deepest into the chunk, so J_f is in steady state
+        kern, mk = impulse_kernel(det, base, t_out)
+        assert bool(mk[0]), 'T6: full-mask output was mask-expanded away'
+        h0 = float(kern[t_out])
+        assert 0.0 <= h0 <= 1.0, f'T6: h[0] outside [0,1]: {h0}'
+        devs.append(abs(h0/(c_k/tau) - 1.0))
 
     if verbose:
-        # max(lambda-nu) is the number that decides whether nu ever has to be computed
-        # for real: it is how far sigma^2 (1-lambda) sits from the true residual
-        # variance sigma^2 (1-2 lambda + nu).  min Var(r) reaching 0 is the
-        # lambda -> 1 geometry, which survives the rmin cut by design.
-        print(f'    T6 test_leverage: {nchecked} rows, max|kern[t]-lambda| = {worst:.2e}; '
-              f'max(lambda-nu) = {max_gap:.3e}, min Var(r)/sigma^2 = {worst_var:.3e}')
-    assert nchecked > 0, 'leverage identity was never checked'
-    assert worst < 1e-10
+        print(f'    T6 test_kernel_response: |h[0]/(c_k/tau) - 1| = '
+              + ', '.join(f'{d:.2e}' for d in devs) + ' at tau = 2, 4, 8')
+    assert devs[0] > devs[1] > devs[2], \
+        f'continuum limit c_k/tau not approached: {devs}'
+    # O(tau^-2), so each doubling should gain a factor near 4; 3.0 leaves margin.
+    assert devs[0]/devs[1] > 3.0 and devs[1]/devs[2] > 3.0, \
+        f'approach to c_k/tau not O(tau^-2): {devs}'
+    assert devs[2] < 3e-3, f'h[0] vs c_k/tau at tau=8: {devs[2]}'
 
 
 # ------------------------------------------------------------ T7. PSD and finite
@@ -468,7 +470,7 @@ def test_psd_and_finite(rng=None, verbose=True):
         d = (rng.normal(size=(24, T)) + 3.0).astype(dtype)
         outs = det.detrend_stream(d, mask)
         _note_expansion(mask[:, :T-LAG], outs[1])
-        for nm, x in zip(('residual', 'mask_out', 'leverage', 'rmin'), outs):
+        for nm, x in zip(('residual', 'mask_out', 'rmin'), outs):
             assert np.all(np.isfinite(np.asarray(x, dtype=np.float64))), \
                 f'T7: non-finite {nm} ({np.dtype(dtype).name})'
 
@@ -521,7 +523,7 @@ def test_masked_data_unused(rng=None, verbose=True):
                 return outs, st
 
             (oc, sc), (op, sp) = run(clean), run(poison)
-            for nm, x, y in zip(('residual', 'mask_out', 'leverage', 'rmin'), oc, op):
+            for nm, x, y in zip(('residual', 'mask_out', 'rmin'), oc, op):
                 assert np.array_equal(x, y), \
                     f'T8: {nm} changed under poisoning ({np.dtype(dtype).name}, tau={tau})'
                 checked += 1
@@ -566,12 +568,12 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
             d32 = d64.astype(np.float32)
             dref = d32.astype(np.float64)          # bit-identical inputs
 
-            r32, m32, _, q32 = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
-                                               dtype=np.float32, eps=eps32
-                                               ).detrend_stream(d32, mask)
-            r64, m64, _, q64 = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
-                                               dtype=np.float64, eps=eps64
-                                               ).detrend_stream(dref, mask)
+            r32, m32, q32 = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
+                                            dtype=np.float32, eps=eps32
+                                            ).detrend_stream(d32, mask)
+            r64, m64, q64 = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
+                                            dtype=np.float64, eps=eps64
+                                            ).detrend_stream(dref, mask)
             _note_expansion(mask[:, :T-L], m32)
             both = m32 & m64
             worst_rmin = max(worst_rmin, _maxdiff(q32, q64))
@@ -589,11 +591,11 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
     mask = np.ones((S_ax, T), dtype=bool)
     d64 = rng.normal(size=(S_ax, T)) + rng.uniform(0.0, 1e3)
     d32 = d64.astype(np.float32)
-    r32, m32, _, _ = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
-                                     dtype=np.float32).detrend_stream(d32, mask)
-    r64, m64, _, _ = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
-                                     dtype=np.float64).detrend_stream(
-                                         d32.astype(np.float64), mask)
+    r32, m32, _ = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
+                                  dtype=np.float32).detrend_stream(d32, mask)
+    r64, m64, _ = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
+                                  dtype=np.float64).detrend_stream(
+                                      d32.astype(np.float64), mask)
     nout = T - L
     for a, b in ((0, nout//3), (nout//3, 2*nout//3), (2*nout//3, nout)):
         drift.append(_maxdiff(r32[:, a:b], r64[:, a:b]))
@@ -613,7 +615,7 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
 # ----------------------------------------------------------------- entry point
 
 _STAGE1 = [test_model_algebra, test_recursions_vs_dense, test_polynomial_exactness,
-           test_seam_free, test_vs_brute_force, test_leverage, test_psd_and_finite,
+           test_seam_free, test_vs_brute_force, test_kernel_response, test_psd_and_finite,
            test_masked_data_unused]
 
 

@@ -234,7 +234,7 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
     eps, mu = 1e-3, 1e-30
     W = 16
     L = 2*W + 1
-    worst_lstsq, worst_lev, worst_kap = 0.0, 0.0, 0.0
+    worst_lstsq, worst_proj, worst_h0 = 0.0, 0.0, 0.0
 
     # (a) against np.linalg.lstsq on well-determined windows
     for _ in range(niter):
@@ -245,7 +245,7 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
         ms = MomentSet.direct(u, m, (m*d).astype(dtype), n, W, dtype)
         u_eval = np.full(S_ax, float(W), dtype=dtype)
         _Lc, ratios = LocalPolyFit.cholesky(LocalPolyFit.gram(ms), mu)
-        fhat, lev, rmin = LocalPolyFit.solve(ms, u_eval, mu)
+        fhat, rmin = LocalPolyFit.solve(ms, u_eval, mu)
 
         # With randomized masks some rows are genuinely degenerate; agreement with
         # lstsq is only meaningful on rows the detrender would keep.
@@ -270,11 +270,18 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
                     f'r_{i} != 1 where G_{i}{i} > 0'
             assert np.all(ratios[..., i][~live] == 0)
 
-    # (b) leverage identity, via impulses through the FULL Detrender path.
+    # (b) the estimator is an orthogonal projection: kappa[0] = sum_s kappa[s]^2,
+    #     where kappa is the equivalent kernel of the fit, obtained by impulses
+    #     through the FULL Detrender path.  Both sides equal the leverage H_tt,
+    #     but the identity is checked from the kernel alone, so it needs nothing
+    #     the solve does not already produce.  Note kappa[i] = 0 automatically at
+    #     a masked i, since a masked sample is never read, so the sum restricts
+    #     itself to the valid samples.
+    #
     #     One spectator per impulse position, so a single call gives the kernel.
-    #     Here the mask must be identical across spectators (we vary only the
-    #     impulse position), and the centre sample must be valid for
-    #     kappa[0] == leverage, so we draw one random row and force m[W] = True.
+    #     The mask must be identical across spectators (we vary only the impulse
+    #     position), and the centre sample must be valid, so we draw one random
+    #     row and force m[W] = True.
     Tc = 2*W
     det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype, eps=eps, mu=mu,
                     subtract_offset=False)
@@ -288,36 +295,43 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
         for i in range(S_ax):
             dd[i, i] = 1.0
         mm = np.broadcast_to(base, (S_ax, Tbuf)).copy()
-        resid, mko, lev, _ = det.detrend_chunk(dd, mm)
+        resid, mko, _ = det.detrend_chunk(dd, mm)
         if not bool(mko[0, 0]):
             continue          # the sample was mask-expanded away
         # fhat at local output 0 (buffer index W) = kernel weight for sample i
         kern = np.array([dd[i, W] - resid[i, 0] for i in range(S_ax)])
-        lam = lev[0, 0]
-        worst_kap = max(worst_kap, abs(kern[W] - lam))
-        worst_lev = max(worst_lev, abs(float((kern**2).sum()) - lam))
+        worst_proj = max(worst_proj, abs(kern[W] - float((kern**2).sum())))
         nchecked += 1
-    assert nchecked > 0, "leverage identity was never checked"
+    assert nchecked > 0, "projection identity was never checked"
 
-    # (c) full window: leverage equals (G^-1)_00 for the exact discrete Gram, and
-    #     approaches the continuum value C_n/(2W) as W grows, with C_1 = 1 and
-    #     C_2 = 9/4.  (At n=1 the fit on a symmetric window is just the boxcar
-    #     mean, so the discrete value is exactly 1/(2W+1).)  Note C_n/(2W) is the
-    #     continuum limit; the discrete value differs by O(1/W) (about 3% at
-    #     W=16, 0.1% at W=512), so it is the discrete value we assert against.
+    # (c) full window: the kernel weight at zero lag equals (G^-1)_00 for the exact
+    #     discrete Gram, and approaches the continuum value C_n/(2W) as W grows,
+    #     with C_1 = 1 and C_2 = 9/4.  (At n=1 the fit on a symmetric window is
+    #     just the boxcar mean, so the discrete value is exactly 1/(2W+1).)  Note
+    #     C_n/(2W) is the continuum limit; the discrete value differs by O(1/W)
+    #     (about 3% at W=16, 0.1% at W=512), so it is the discrete value we assert
+    #     against.
+    #
+    #     This is the sharpest test here: the expected answer is analytic, so it
+    #     needs neither a reference implementation nor a statistical tolerance.
+    #     Only kappa[0] is needed, so one impulse at the output sample suffices --
+    #     no need for the full 2W+1 impulse sweep of (b).
     cont_c = {1: 1.0, 2: 2.25}[n]
     devs = []
     for Wbig in (16, 128, 512):
         det = Detrender(W=Wbig, n=n, chunk_size=2*Wbig, dtype=np.float64,
                         eps=eps, mu=mu, subtract_offset=False)
-        dd = np.zeros((1, det.buflen)); mm = np.ones((1, det.buflen), dtype=bool)
-        _, _, lev, _ = det.detrend_chunk(dd, mm)
+        dd = np.zeros((1, det.buflen)); dd[0, Wbig] = 1.0
+        mm = np.ones((1, det.buflen), dtype=bool)
+        resid, _, _ = det.detrend_chunk(dd, mm)
+        h0 = float(dd[0, Wbig] - resid[0, 0])
 
         xx = np.arange(-Wbig, Wbig+1) / Wbig
         Pv = np.vander(xx, n+1, increasing=True)
         exact = np.linalg.inv(Pv.T @ Pv)[0, 0]
-        assert abs(float(lev[0, 0]) - exact) < 1e-12 * exact, \
-            f'W={Wbig}: leverage {lev[0,0]} vs exact discrete {exact}'
+        worst_h0 = max(worst_h0, abs(h0 - exact) / exact)
+        assert abs(h0 - exact) < 1e-12 * exact, \
+            f'W={Wbig}: kappa[0] {h0} vs exact discrete (G^-1)_00 {exact}'
         devs.append(abs(exact / (cont_c/(2*Wbig)) - 1))
     assert devs[0] > devs[1] > devs[2] and devs[2] < 2e-3, \
         f'continuum limit {cont_c}/(2W) not approached: {devs}'
@@ -344,7 +358,7 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
         mm = np.zeros((1, Tbuf), dtype=bool)
         for i in idx:
             mm[0, i] = True
-        r, mko, _, rmin = det.detrend_chunk(dvals[None, :], mm)
+        r, mko, rmin = det.detrend_chunk(dvals[None, :], mm)
         assert np.all(np.isfinite(r)) and np.all(np.isfinite(rmin)), f'{lbl}: non-finite'
         assert not bool(mko[0, 0]), f'{lbl}: expected mask expansion, got mask_out=True'
         assert float(r[0, 0]) == 0.0, f'{lbl}: masked residual should be 0'
@@ -356,15 +370,15 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
     mm = np.zeros((1, Tbuf), dtype=bool)
     for i in [W, 1, 2*W-1][:n+1]:
         mm[0, i] = True
-    r, mko, _, rmin = det.detrend_chunk(dvals[None, :], mm)
+    r, mko, rmin = det.detrend_chunk(dvals[None, :], mm)
     assert bool(mko[0, 0]), f'nv={n+1} spread should survive (rmin={rmin[0,0]:.2e})'
 
     if verbose:
-        print(f'    test_solve: lstsq={worst_lstsq:.2e}  kappa[0]-lev={worst_kap:.2e}  '
-              f'sum(kappa^2)-lev={worst_lev:.2e}')
+        print(f'    test_solve: lstsq={worst_lstsq:.2e}  '
+              f'kappa[0]-sum(kappa^2)={worst_proj:.2e}  '
+              f'kappa[0] vs (G^-1)_00 (rel)={worst_h0:.2e}')
     assert worst_lstsq < 1e-10
-    assert worst_kap < 1e-10
-    assert worst_lev < 1e-10
+    assert worst_proj < 1e-10
 
 
 # ---------------------------------------------------- 4. polynomial exactness
@@ -402,7 +416,7 @@ def test_polynomial_exactness(rng=None, n=2, verbose=True):
                 mask, labels = random_mask(S_ax, T, W, rng)
                 P = _poly_stream(rng, S_ax, T, n, W, dtype)
                 det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype)
-                resid, mko, _, _ = det.detrend_stream(P, mask)
+                resid, mko, _ = det.detrend_stream(P, mask)
                 min_ = mask[:, W:T-W]
                 _note_expansion(n, min_, mko)
                 nflag += int((min_ & ~mko).sum())
@@ -439,7 +453,7 @@ def test_polynomial_exactness(rng=None, n=2, verbose=True):
     asym[:, ::3] = False          # breaks the within-window symmetry
 
     P1 = _poly_stream(rng, 2, T, n+1, W, np.float64)
-    r1, _, _, _ = det.detrend_stream(P1, allvalid)
+    r1, _, _ = det.detrend_stream(P1, allvalid)
     w1 = float(np.max(np.abs(r1)))
     if (n+1)//2 <= n//2:
         assert w1 < 1e-11, \
@@ -450,13 +464,13 @@ def test_polynomial_exactness(rng=None, n=2, verbose=True):
             (f'degree n+1 was reproduced on a fully valid window at n={n}, where '
              f'the even basis functions cannot span its even part')
 
-    r2, mk2, _, _ = det.detrend_stream(P1, asym)
+    r2, mk2, _ = det.detrend_stream(P1, asym)
     mo = mk2
     assert float(np.max(np.abs(r2[mo]))) > 1e-6, \
         'degree n+1 was reproduced even under an asymmetric mask'
 
     P2 = _poly_stream(rng, 2, T, n+2, W, np.float64)
-    r3, _, _, _ = det.detrend_stream(P2, allvalid)
+    r3, _, _ = det.detrend_stream(P2, allvalid)
     assert float(np.max(np.abs(r3))) > 1e-6, \
         'negative control: a degree-(n+2) polynomial was reproduced exactly'
 
@@ -480,8 +494,8 @@ def test_detrender_vs_reference(rng=None, n=2, verbose=True):
             mask, labels = random_mask(S_ax, T, W, rng)
             d = (rng.normal(size=(S_ax, T)) + 3.0).astype(dtype)
             det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype)
-            got, gmk, glev, grm = det.detrend_stream(d, mask)
-            want, wmk, wlev, wrm = detrend_reference(d, mask, W, n=n, dtype=dtype)
+            got, gmk, grm = det.detrend_stream(d, mask)
+            want, wmk, wrm = detrend_reference(d, mask, W, n=n, dtype=dtype)
             _note_expansion(n, mask[:, W:T-W], gmk)
             scale = max(1.0, float(np.max(np.abs(d))))
             for s in range(S_ax):
@@ -490,19 +504,6 @@ def test_detrender_vs_reference(rng=None, n=2, verbose=True):
                     worst, worst_name = e, f'W={W} {labels[s]}'
             assert np.array_equal(gmk, wmk), f'mask_out mismatch, W={W} {labels}'
             assert _maxdiff(grm, wrm) < 1e-11, f'rmin mismatch, W={W} {labels}'
-
-            # Leverage is only well defined where the window holds at least one
-            # valid sample.  With nv = 0 the whole Gram is zero, every pivot is
-            # floored to mu, and leverage = |w|^2/mu -- where w depends on the
-            # arbitrary finite placeholder centroid, which the two code paths
-            # choose differently.  Both are meaninglessly huge (1e30 vs 3e30) and
-            # those samples are masked in the output anyway.
-            # Leverage is only meaningful on surviving samples; elsewhere the mu
-            # guard, not the data, set the smallest pivot.
-            rel = (np.abs(glev[gmk] - wlev[gmk]) / np.maximum(np.abs(wlev[gmk]), 1e-300)
-                   if gmk.any() else np.zeros(0))
-            assert (rel.max() if rel.size else 0.0) < 1e-9, \
-                f'leverage mismatch, W={W} {labels}'
     if verbose:
         print(f'    test_detrender_vs_reference: max rel err {worst:.2e} ({worst_name})')
     assert worst < 1e-11, f'test_detrender_vs_reference: {worst} ({worst_name})'
@@ -549,10 +550,10 @@ def test_dtype_agreement(rng=None, n=2, tol=1e-3, verbose=True):
             d32 = d64.astype(np.float32)
             dref = d32.astype(np.float64)     # bit-identical inputs
 
-            r32, m32, _, q32 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps32,
-                                           dtype=np.float32).detrend_stream(d32, mask)
-            r64, m64, _, q64 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps64,
-                                           dtype=np.float64).detrend_stream(dref, mask)
+            r32, m32, q32 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps32,
+                                      dtype=np.float32).detrend_stream(d32, mask)
+            r64, m64, q64 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps64,
+                                      dtype=np.float64).detrend_stream(dref, mask)
             _note_expansion(n, mask[:, W:T-W], m32)
 
             both = m32 & m64
@@ -618,14 +619,14 @@ def test_masked_data_unused(rng=None, n=2, verbose=True):
         for dtype in (np.float32, np.float64):
             det = lambda d: Detrender(W=W, n=n, chunk_size=Tc,
                                       dtype=dtype).detrend_stream(d.astype(dtype), mask)
-            for nm, x, y in zip(('residual', 'mask_out', 'leverage', 'rmin'),
+            for nm, x, y in zip(('residual', 'mask_out', 'rmin'),
                                 det(clean), det(poison)):
                 assert np.array_equal(x, y), \
                     f'{nm} changed when masked samples were poisoned ' \
                     f'({np.dtype(dtype).name}, W={W})'
                 checked += 1
 
-        for nm, x, y in zip(('residual', 'mask_out', 'leverage', 'rmin'),
+        for nm, x, y in zip(('residual', 'mask_out', 'rmin'),
                             detrend_reference(clean, mask, W, n=n),
                             detrend_reference(poison, mask, W, n=n)):
             assert np.array_equal(x, y), \
@@ -717,11 +718,11 @@ def _test_gpu_kernel_1(rng, det, cp, eps32, eps64, ndraw, tol, rmin_tol, verbose
             assert np.array_equal(out_m[:, lo:hi], mask[:, lo:hi]), f'{what} mask modified'
 
         r_gpu, m_gpu = out_d[:, W:W+T], out_m[:, W:W+T].astype(bool)
-        r_cpu, m_cpu, _, _ = Detrender(W=W, n=n, chunk_size=T, eps=eps32,
-                                       dtype=np.float32).detrend_stream(d32, mask)
-        r_ref, m_ref, _, rmin = detrend_reference(dref, mask, W, n=n, eps=eps64,
-                                                  dtype=np.float64,
-                                                  max_outputs_per_pass=512)
+        r_cpu, m_cpu, _ = Detrender(W=W, n=n, chunk_size=T, eps=eps32,
+                                    dtype=np.float32).detrend_stream(d32, mask)
+        r_ref, m_ref, rmin = detrend_reference(dref, mask, W, n=n, eps=eps64,
+                                              dtype=np.float64,
+                                              max_outputs_per_pass=512)
         _note_expansion(n, mask[:, W:W+T], m_gpu)
 
         bad = (m_gpu != (mask[:, W:W+T] & (rmin >= eps32)))

@@ -71,7 +71,7 @@ class Detrender:
         carrying one entry per (beam,freq) pair.  Every operation is elementwise
         along S; there is no coupling between spectator entries.
 
-        Returns (residual, mask_out, leverage, rmin), each of shape (S, chunk_size).
+        Returns (residual, mask_out, rmin), each of shape (S, chunk_size).
 
         mask_out is the *expanded* mask: an output sample is dropped if its input
         sample was masked, or if its window is too ill-conditioned to fit
@@ -127,7 +127,7 @@ class Detrender:
         ms = merge(suff.take_batch(sl), pref.take_batch(sr))
 
         u_eval = (np.arange(self.chunk_size, dtype=dtype) + W)[None, :]
-        fhat, leverage, rmin = LocalPolyFit.solve(ms, u_eval, self.mu)
+        fhat, rmin = LocalPolyFit.solve(ms, u_eval, self.mu)
 
         # Mask expansion.  A window with rmin < eps cannot determine a degree-n
         # fit, so we drop the sample rather than shrinking the fit toward lower
@@ -142,14 +142,14 @@ class Detrender:
         d_out, m_out = d_buf[:, out], m_buf[:, out]
         mask_out = (m_out > 0) & (rmin >= self.eps)
         resid = np.where(mask_out, (d_out - kappa[:, None]) - fhat, 0).astype(dtype)
-        return resid, mask_out, leverage, rmin
+        return resid, mask_out, rmin
 
     # ----------------------------------------------------------------- stream
 
     def detrend_stream(self, d, mask):
         """
         d, mask: shape (S, T) with (T - 2W) a positive multiple of chunk_size.
-        Returns (residual, mask_out, leverage, rmin) for samples [W, T-W), i.e.
+        Returns (residual, mask_out, rmin) for samples [W, T-W), i.e.
         each of shape (S, T - 2W).
 
         This is the path that exercises chunk stitching.  Because the block
@@ -163,7 +163,7 @@ class Detrender:
             raise ValueError(f'(T - 2W) = {nout} must be a positive multiple of '
                              f'chunk_size={self.chunk_size}')
 
-        cols = [[], [], [], []]
+        cols = [[], [], []]
         for i in range(nout // self.chunk_size):
             lo = i * self.chunk_size
             for c, x in zip(cols, self.detrend_chunk(d[:, lo:lo+self.buflen],

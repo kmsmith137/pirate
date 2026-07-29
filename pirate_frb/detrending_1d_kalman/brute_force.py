@@ -51,17 +51,11 @@ def _state_from_samples(k, dtype=np.float64):
 
 def kalman_brute_force(d, mask, k, tau, L, eps=1e-3, mu=1e-30, dtype=np.float64):
     """
-    d, mask: shape (S, T).  Returns (residual, mask_out, leverage, rmin, nu), each of
-    shape (S, T-L), for outputs [0, T-L).
+    d, mask: shape (S, T).  Returns (residual, mask_out, rmin), each of shape
+    (S, T-L), for outputs [0, T-L).
 
-    Matches KalmanDetrender.detrend_stream()'s contract, including setting residual,
-    leverage and rmin to zero wherever mask_out is false.
-
-    'nu' = Var(fhat)/sigma^2 = sum_u m[u] H[t,u]^2 is emitted here but NOT by the
-    implementation: Var(r) = sigma^2 (1 - 2 lambda + nu) rather than the local fit's
-    sigma^2 (1 - lambda), because a penalized estimator shrinks rather than projects.
-    It is free from N^-1 and the tests report it, which is what would decide whether
-    it ever has to be computed for real.
+    Matches KalmanDetrender.detrend_stream()'s contract, including setting both
+    residual and rmin to zero wherever mask_out is false.
 
     No constant offset appears anywhere: kappa is mathematically inert (the fit
     reproduces constants), so the residual is the same with or without it.
@@ -79,9 +73,7 @@ def kalman_brute_force(d, mask, k, tau, L, eps=1e-3, mu=1e-30, dtype=np.float64)
 
     resid = np.zeros((S_ax, nout), dtype=dtype)
     mout = np.zeros((S_ax, nout), dtype=bool)
-    lev = np.zeros((S_ax, nout), dtype=dtype)
     rmn = np.zeros((S_ax, nout), dtype=dtype)
-    nu = np.zeros((S_ax, nout), dtype=dtype)
 
     for s in range(S_ax):
         for t in range(nout):
@@ -113,14 +105,11 @@ def kalman_brute_force(d, mask, k, tau, L, eps=1e-3, mu=1e-30, dtype=np.float64)
             if not keep:
                 continue
 
-            H_row = Sigma[t] * m_sub            # row t of H = N^-1 M
             resid[s, t] = d[s, t] - fhat
             mout[s, t] = True
-            lev[s, t] = Sigma[t, t]
             rmn[s, t] = rmin
-            nu[s, t] = float((m_sub * H_row**2).sum())
 
-    return resid, mout, lev, rmn, nu
+    return resid, mout, rmn
 
 
 def impulse_kernel(det, mask_row, t_out):
@@ -144,11 +133,11 @@ def impulse_kernel(det, mask_row, t_out):
     np.fill_diagonal(dd, 1.0)
     mm = np.broadcast_to(mask_row, (Tbuf, Tbuf)).copy()
 
-    (resid, mask_out, lev, rmin), _ = det.detrend_chunk(dd, mm, det.initial_state(Tbuf))
+    (resid, mask_out, rmin), _ = det.detrend_chunk(dd, mm, det.initial_state(Tbuf))
 
     # fhat = dz - resid, and dz[u_out] is 1 only for the spectator whose impulse sits
     # on the output sample itself.
     valid = bool(mask_row[t_out])
     kern = np.array([(1.0 if (u == t_out and valid) else 0.0) - resid[u, t_out]
                      for u in range(Tbuf)])
-    return kern, mask_out[:, t_out], lev[:, t_out]
+    return kern, mask_out[:, t_out]
