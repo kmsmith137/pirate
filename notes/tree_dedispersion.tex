@@ -1016,8 +1016,16 @@ $W = 256$.
 $1 - H(\omega) = O(\omega^{4})$ at low frequency and a smoothing timescale $\sim W$.  Two consequences worth
 keeping in view.  A pulse of width $w \ll W$ loses a fraction $\approx 1.125\,w/W$ of its flux into the trend
 ($28\%$ at $w = 64$, $W = 256$), so $W$ must stay well above the widest searched boxcar $W_{\rm max}$.  And $H$ is a
-truncated polynomial kernel, so $1-H$ has stopband ripple at the $\sim\!20\%$ level near
-$\omega \approx 3\pi/2W$; this is a property of the estimator, not of the implementation.
+truncated polynomial kernel, so $1-H$ has stopband ripple: at $n=2$ the first and largest lobe is
+$H = -0.242$ at $\omega \approx 2.2\pi/W$ (exactly, $W\omega = 6.988$ in the large-$W$ limit), where the
+detrender {\em amplifies} by $24\%$ rather than attenuating.  This is a property of the estimator, not of the
+implementation.  Both numbers come from the closed form: the equivalent kernel is $h[s] = a + bs^2$ with
+$a = 3(3P-1)/(N(4P-3))$ and $b = -15/(N(4P-3))$, where $N = 2W+1$ and $P = W(W+1)$, so
+$H = a D_W + b S_W$ with $D_W$ the Dirichlet kernel $\sin(N\omega/2)/\sin(\omega/2)$ and
+$S_W = -D_W''$; as $W \rightarrow \infty$ this tends to
+$H(x) = \frac{15}{2}(x^{-3}\sin x - x^{-2}\cos x) - \frac{3}{2}x^{-1}\sin x$ with $x = W\omega$, which is
+$1 - x^4/280 + O(x^6)$ at low frequency.  ($n=1$ is the boxcar, whose ripple is $0.217$ at
+$\omega \approx 1.4\pi/W$.)
 
 \subsection{The moment monoid}
 \label{sec:dt_monoid}
@@ -1533,9 +1541,10 @@ H(\omega) = \frac{1}{1 + \rho\,\big(2\sin(\omega/2)\big)^{2k}} ,
 1 - H(\omega) = \frac{\rho\,(2\sin(\omega/2))^{2k}}{1+\rho\,(2\sin(\omega/2))^{2k}} ,
 \label{eq:kf_transfer}
 \end{equation}
-{\em monotone} in $|\omega|$ with no stopband ripple, against the $\sim\!20\%$ ripple that
-\S\ref{sec:time_detrending}'s truncated polynomial kernel has near $\omega \approx 3\pi/2W$.  This is the main
-statistical argument for the estimator.  The kernel at zero lag is
+{\em monotone} in $|\omega|$ with no stopband ripple, against the $24\%$ ripple that
+\S\ref{sec:time_detrending}'s truncated polynomial kernel has near $\omega \approx 2.2\pi/W$.  Monotonicity is
+immediate here, since $\sin(\omega/2)$ is monotone on $[0,\pi]$ and $z \mapsto z/(1+z)$ is increasing.  This is
+the main statistical argument for the estimator.  The kernel at zero lag is
 \begin{equation}
 h[0] = \frac{c_k}{\tau} = \lambda_{\rm full} ,
 \label{eq:kf_response}
