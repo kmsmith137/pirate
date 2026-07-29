@@ -721,13 +721,13 @@ Thus, for $r=1$ the persistent state consists of one element per warp ($M$ eleme
 Next consider a single-warp implementation with $r>1$.
 We use the splitting identity (\ref{eq:splitting}) to write:
 \begin{equation}
-\DD(r) = \underbrace{\big( \DD(1) \otimes 1_{2^{r-1}} \big)}_{\equiv \mathcal A} 
+\DD(r) = \underbrace{\big( \DD(1) \otimes 1_{2^{r-1}} \big)}_{\equiv {\mathcal D}_2} 
   \circ \LAG\big[ (1-f'')\, d' \big] 
-  \circ \underbrace{\big( 1_2 \otimes \DD(r-1) \big)}_{\equiv \mathcal B}
+  \circ \underbrace{\big( 1_2 \otimes \DD(r-1) \big)}_{\equiv {\mathcal D}_1}
 \end{equation}
 Suppose by induction that we have a single-warp implementation of $\DD(1)$ and $\DD(r-1)$.
-The $\LAG\big[\cdots\big]$ operator just means that we put the outputs of $\mathcal B$
-into a logical ring buffer, before feeding them to $\mathcal A$.
+The $\LAG\big[\cdots\big]$ operator just means that we put the outputs of ${\mathcal D}_1$
+into a logical ring buffer, before feeding them to ${\mathcal D}_2$.
 Here, ``logical'' means that the ring buffer is held in registers of a single warp.
 This is persistent state: we save the ring buffer to global memory at the end of the kernel, 
 and restore it at the beginning of the next kernel.
@@ -736,9 +736,9 @@ As $r$ increases, the single-warp implementation eventually becomes impractical.
 A little thought shows that the persistent-state size (in elements, not bytes) $P_r$ 
 satisfies the recursion:
 \begin{equation}
-P_r = \underbrace{\Bigg( 2^{r-1} \Bigg)}_{\mathcal A} 
+P_r = \underbrace{\Bigg( 2^{r-1} \Bigg)}_{{\mathcal D}_2} 
   + \underbrace{\Bigg( \sum_{d'=0}^{2^{r-1}-1} d' \Bigg)}_{\rm LAG}
-  + \underbrace{\Bigg( 2 P_{r-1} \Bigg)}_{\mathcal B}
+  + \underbrace{\Bigg( 2 P_{r-1} \Bigg)}_{{\mathcal D}_1}
 \end{equation}
 with initial condition $P_1=1$. The solution to this recursion relation is:
 \begin{equation}
@@ -751,9 +751,9 @@ Currently, we use the single-warp implementation for $r \le 4$.
 To explain the $r > 4$ case, consider $r=8$ for concreteness.
 We apply the splitting identity (\ref{eq:splitting}) to write:
 \begin{equation}
-\DD(8) = \underbrace{\big( \DD(4) \otimes 1_{16} \big)}_{\equiv \mathcal A}
+\DD(8) = \underbrace{\big( \DD(4) \otimes 1_{16} \big)}_{\equiv {\mathcal D}_2}
    \circ \LAG\big[ (15-f'') \, d' \big] 
-   \circ \underbrace{\big(1_{16} \otimes \DD(4) \big)}_{\equiv \mathcal B}
+   \circ \underbrace{\big(1_{16} \otimes \DD(4) \big)}_{\equiv {\mathcal D}_1}
 \label{eq:DD8}
 \end{equation}
 The operators $(\DD(4) \otimes 1_{16})$ and $(1_{16} \otimes \DD(4))$ can be distributed
@@ -779,9 +779,9 @@ Currently, we use the single-threadblock implementation for $5 \le r \le 8$.
 To explain the $r > 8$ case, consider $r=16$ for concreteness.
 We use the splitting identity (\ref{eq:splitting}) to write:
 \begin{equation}
-\DD(16) = \underbrace{\big( \DD(8) \otimes 1_{256} \big)}_{\equiv \mathcal A}
+\DD(16) = \underbrace{\big( \DD(8) \otimes 1_{256} \big)}_{\equiv {\mathcal D}_2}
    \circ \LAG\big[ (255-f'') \, d' \big] 
-   \circ \underbrace{\big( 1_{256} \otimes \DD(8) \big)}_{\equiv \mathcal B}
+   \circ \underbrace{\big( 1_{256} \otimes \DD(8) \big)}_{\equiv {\mathcal D}_1}
 \label{eq:DD16}
 \end{equation}
 The operators $(\DD(8) \otimes 1_{256})$ and $(1_{256} \otimes \DD(8))$ can be distributed
@@ -789,8 +789,8 @@ across 256 threadblocks in a single kernel (using our single-threadblock impleme
 of $\DD(8)$ described above).
 
 The middle operator $\LAG[\cdots]$ in Eq.\ (\ref{eq:DD16}) is really a no-op.
-It just means that we put the outputs of $\mathcal B$ in a ring buffer in GPU global memory,
-before reading them with $\mathcal A$.
+It just means that we put the outputs of ${\mathcal D}_1$ in a ring buffer in GPU global memory,
+before reading them with ${\mathcal D}_2$.
 Thus, Eq.\ (\ref{eq:DD16}) tells us how to divide the $\DD(16)$ operation into two GPU kernels,
 separated by a ring buffer in {\bf GPU global memory}.
 We use this ``two-pass'' implementation of $\DD(r)$ for $9 \le r \le 16$.
@@ -809,9 +809,9 @@ This is a slight simplification: in implementation, we constrain global memory l
 128-byte aligned.
 (The reason why is a long story -- see the last few paragraphs in this section!)
 
-Let $S$ be the ``segment size'', or the number of data elements per 128-byte cache line:
+Let $E$ be the ``segment size'', or the number of data elements per 128-byte cache line:
 \begin{equation}
-S \equiv \frac{128}{\mbox{\tt sizeof(dtype)}} = \begin{cases}
+E \equiv \frac{128}{\mbox{\tt sizeof(dtype)}} = \begin{cases}
  32 & \mbox{ for a float32 kernel} \\
  64 & \mbox{ for a float16 kernel}
 \end{cases}
@@ -821,7 +821,7 @@ appearing in Eq.\ (\ref{eq:DD16}) into ``aligned'' and ``residual'' parts:
 \begin{equation}
 \lambda(f'',d') \equiv (255-f'') \, d'
   \hspace{1cm}
-\lambda_a(f'',d') \equiv S \left\lfloor \frac{\lambda(f'',d')}{S} \right\rfloor
+\lambda_a(f'',d') \equiv E \left\lfloor \frac{\lambda(f'',d')}{E} \right\rfloor
   \hspace{1cm}
 \lambda_r(f'',d') \equiv \lambda(f'',d') - \lambda_a(f'',d')
 \end{equation}
@@ -829,13 +829,13 @@ We factorize $\DD(16)$ as follows (compare with Eq.\ (\ref{eq:DD16})):
 \begin{equation}
 \DD(16) =
 \underbrace{\big( \DD(8) \otimes 1_{256} \big) 
-            \circ \LAG\big[ \lambda_r(f'',d') \big] }_{\equiv \mathcal A}
+            \circ \LAG\big[ \lambda_r(f'',d') \big] }_{\equiv {\mathcal D}_2}
    \circ \LAG\big[ \lambda_a(f'',d') \big]
-   \circ \underbrace{\big( 1_{256} \otimes \DD(8) \big)}_{\equiv \mathcal B}
+   \circ \underbrace{\big( 1_{256} \otimes \DD(8) \big)}_{\equiv {\mathcal D}_1}
 \label{eq:DD16b}
 \end{equation}
 The residual lag $\lambda_r(f'',d')$ is coalesced into the second-stage
-dedispersion kernel $\mathcal A$ (slightly increasing the size of its persistent
+dedispersion kernel ${\mathcal D}_2$ (slightly increasing the size of its persistent
 state), and the aligned lag $\lambda_a(f'',d')$ is a no-op in global memory.
 The dedispersion kernels have a boolean compile-time parameter \verb|apply_input_residual_lags|
 which indicates whether the lag $\lambda_r(f'',d')$ is applied before dedispersion.
