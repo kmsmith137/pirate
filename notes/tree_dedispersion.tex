@@ -809,20 +809,17 @@ then parallelize over threads in a warp.
 
 \clearpage
 
-\section{Time detrending}
+\section{Time detrending algorithm 1: local polynomial subtraction}
 \label{sec:time_detrending}
 
 Upstream of the tree gridding kernel (\S\ref{sec:gridding}), each frequency channel is a 1-d intensity time
 series which must be {\em detrended}: we subtract a slowly varying baseline (gain drift, sky rotation,
 imperfectly calibrated bandpass) while leaving short-timescale structure -- in particular FRBs -- intact.
 
-This section describes the algorithm we plan to implement.
-It is a masked, adaptively centered {\em moving local polynomial fit}, evaluated by a van Herk block
-decomposition over a moment monoid.
-Appendix \ref{sec:time_detrend_appendix} records the alternatives that were considered and why they were
-discarded; nothing in this section depends on it.  One of those alternatives, the fixed-lag recursive
-estimator of \S\ref{sec:time_detrend_kalman}, is being built as a second detrender to compare against this
-one, and is written out in full there.
+We have two detrenders for this problem.  The one described here is a masked, adaptively centered {\em moving
+local polynomial fit}, evaluated by a van Herk block decomposition over a moment monoid.  The second, in
+\S\ref{sec:kalman_detrending}, is a fixed-lag Kalman filter.  They are independent -- neither section depends
+on the other -- and the intent is to run both and compare them.
 
 \subsection{Problem statement}
 \label{sec:dt_problem}
@@ -1268,6 +1265,406 @@ rather than as a residual discrepancy.
 Two properties are checked analytically rather than in code, because they are properties of the estimator and
 cannot regress when the implementation changes: the $O(\omega^4)$ rolloff of $1-H$ (which is the same statement
 as polynomial exactness, in the other domain) and the $1.125\,w/W$ flux loss.
+
+\clearpage
+
+\section{Time detrending algorithm 2: Kalman filter}
+\label{sec:kalman_detrending}
+
+This is the second detrender.  It solves the problem of \S\ref{sec:dt_problem} -- same inputs $d[t]$ and
+$m[t]$, same requirement to run incrementally, same four output arrays -- and differs from
+\S\ref{sec:time_detrending} in what it assumes about the trend.  There, the trend is whatever a degree-$n$
+polynomial can follow across a window of $2W{+}1$ samples, and the window is what makes the estimate local.
+Here the trend is a random process with a characteristic timescale, the estimate is a posterior mean, and
+there is no window at all.
+
+{\bf The structural difference in the contract.}  The estimate committed at time $t$ is
+\begin{equation}
+\hat f_L[t] = E\big[\, f[t] \;\big|\; d[0 .. t+L] \,\big] ,
+\label{eq:kf_fixed_lag}
+\end{equation}
+a {\em fixed-lag} estimator: it depends on $t$ and the lag $L$ only, and not at all on where the chunk
+boundaries fall.  It is therefore {\bf seam-free by construction} -- not to a small tolerance, but exactly.
+(A seam is a step discontinuity in the committed $\hat f$, which is a broadband transient, i.e.~precisely
+what the dedispersion search is built to find.  \S\ref{sec:time_detrending} avoids seams by making each
+output depend only on a window centered on it; this section avoids them by letting the endpoint move with
+$t$.)  The price is memory: the buffer handed to the $i$-th call is chunk $i$ plus $L$ samples of
+postpadding and {\em no prepadding}, with $O(k^2)$ of filter state carried across the call boundary, so
+chunks must be processed in order.
+
+\subsection{The model}
+\label{sec:kf_model}
+
+Fix an integer order $k \ge 1$.  The trend is a $k$-fold integrated random walk observed in noise:
+\begin{align}
+\mbox{prior:} \quad & \big(\Delta^k f\big)[t] = w[t], \qquad w[t] \sim {\cal N}(0, q) \mbox{ i.i.d.}, \nn \\
+\mbox{likelihood:} \quad & d[t] \sim {\cal N}\big(f[t], \sigma^2\big) \quad \mbox{at valid $t$ only},
+\label{eq:kf_model}
+\end{align}
+where $(\Delta f)[t] = f[t+1]-f[t]$.  For $k=1$ the trend is a random walk; for $k=2$ it has a level and a
+slope, and the slope wanders.
+
+The point of (\ref{eq:kf_model}) is that it is Markov in the $k$-dimensional state
+\begin{equation}
+x[t] = \Big( f[t],\ (\Delta f)[t],\ \ldots,\ (\Delta^{k-1} f)[t] \Big)^T ,
+\end{equation}
+since $x_j[t+1] = x_j[t] + x_{j+1}[t]$ for $j < k-1$ and $x_{k-1}[t+1] = x_{k-1}[t] + w[t]$.  Writing $N$ for
+the superdiagonal shift,
+\begin{equation}
+x[t+1] = A\,x[t] + g\,w[t], \qquad A = I + N, \qquad g = e_{k-1}, \qquad d[t] = e_0^T x[t] + \epsilon[t] .
+\label{eq:kf_recursion}
+\end{equation}
+$A$ is the Pascal matrix, $(A^s)_{jl} = \binom{s}{l-j}$, and $A^{-1} = I - N + N^2 - \cdots$ terminates
+because $N$ is nilpotent.  Both are exact integer matrices in any floating-point type.
+
+{\bf Equivalent penalized least squares.}  With a {\em diffuse} prior on $x[0]$ -- no prior at all -- the
+posterior mode of (\ref{eq:kf_model}) is the minimizer of
+\begin{equation}
+\chi^2(f) = \sum_t m[t]\,\big(d[t]-f[t]\big)^2 \;+\; \rho \sum_t \big(\Delta^k f\big)[t]^2 ,
+\qquad \rho = \sigma^2/q ,
+\label{eq:kf_chi2}
+\end{equation}
+whose normal equations are
+\begin{equation}
+{\cal N}\hat f = M d, \qquad {\cal N} \equiv M + \rho\, D_k^T D_k, \qquad M = {\rm diag}(m),
+\label{eq:kf_normal}
+\end{equation}
+with $D_k$ the $k$-th difference matrix.  Two consequences are used throughout.
+
+${\cal N}$ is positive definite as soon as the array holds $k$ valid samples anywhere: the null space of
+$D_k$ is the polynomials of degree $<k$, and a nonzero one has at most $k-1$ roots.  So there is no
+per-window rank deficiency to detect and no analogue of the ill-conditioned windows of
+\S\ref{sec:dt_estimator}; the prior regularizes everything, and mask handling reduces to ``skip the
+measurement update'', which is exactly correct because a masked sample carries no information.
+
+And the estimator depends on $(k,\rho)$ only, {\em not} on $\sigma$: scaling $d \rightarrow cd$ scales
+$\hat f \rightarrow c\hat f$ with $\rho$ fixed.  So $\sigma$ never has to be known or estimated, and every
+formula below may be written with $\sigma^2 = 1$ and $q = 1/\rho$.  What this does assume is that $\sigma$ is
+independent of $t$ within a row.
+
+{\bf Timescales.}  Three derived quantities recur:
+\begin{equation}
+\tau = \rho^{1/2k}, \qquad
+\ell = \frac{\tau}{\sin(\pi/2k)}, \qquad
+c_k = \frac{1}{2k \sin(\pi/2k)} , \qquad \ell = 2k\,c_k\,\tau .
+\label{eq:kf_scales}
+\end{equation}
+$\tau$ is the smoothing timescale in samples and is the parameter to think in.  $\ell$ is the correlation
+length of ${\cal N}^{-1}$, whose entries decay as $\exp(-|t-t'|/\ell)$; it is what governs how much lookahead
+is needed.  $c_k$ is the flux-loss constant of (\ref{eq:kf_response}).  At $k=2$, $c_2 = 0.354$ and
+$\ell = \sqrt2\,\tau$.
+
+\subsection{The estimator}
+\label{sec:kf_estimator}
+
+Because $x$ is Markov and the data split at $t$, the posterior in (\ref{eq:kf_fixed_lag}) factorizes:
+\begin{equation}
+p\big(x[t] \mid d[0..t+L]\big) \;\propto\;
+  \underbrace{p\big(x[t] \mid d[0..t]\big)}_{\rm forward\ filter} \;\cdot\;
+  \underbrace{p\big(d[t{+}1..t{+}L] \mid x[t]\big)}_{\rm backward\ likelihood} .
+\label{eq:kf_split}
+\end{equation}
+Both factors are Gaussian in $x[t]$.  Carry each in {\em information} form -- the pair $(J,\eta)$ standing for
+$\exp(-\frac12 x^TJx + \eta^Tx)$, so $J$ is a precision and $\eta = J\mu$ -- and the combination is pure
+addition:
+\begin{equation}
+\boxed{\;J[t] = J_f[t] + J_b[t], \qquad \eta[t] = \eta_f[t] + \eta_b[t], \qquad
+\hat f_L[t] = \big(J[t]^{-1}\eta[t]\big)_0 . \;}
+\label{eq:kf_combine}
+\end{equation}
+That is the whole algorithm.  Information form rather than the more familiar covariance form for three
+reasons, each of which is load-bearing: the diffuse initialization is {\em exactly} $J_f = 0$, with no
+large-variance fudge, which is what makes the polynomial reproduction of \S\ref{sec:kf_exact} exact rather
+than approximate; the measurement update becomes a pure addition; and the backward factor is a
+{\em likelihood} rather than a distribution, so it is allowed to be rank-deficient -- which it is whenever
+$[t{+}1, t{+}L]$ holds fewer than $k$ valid samples, a state the covariance form cannot represent at all.
+
+{\bf The two recursions.}  They are mirror images: measure, rank-one downdate, then a congruence by $A^{-T}$
+going forwards or $A^{T}$ going backwards.  Forwards, initialize $(J_f,\eta_f) = (0,0)$ before $t=0$ and at
+each $t$
+\begin{align}
+\mbox{measure:}\quad & J_f \mathrel{+}= m[t]\,e_0e_0^T, \qquad \eta_f \mathrel{+}= m[t]\,d[t]\,e_0, \nn \\
+\mbox{predict:}\quad & M = A^{-T}J_fA^{-1}, \quad \zeta = A^{-T}\eta_f, \quad \beta = g^TMg + 1/q, \nn \\
+& J_f \leftarrow M - \frac{Mgg^TM}{\beta}, \qquad
+  \eta_f \leftarrow \zeta - \frac{Mg\,(g^T\zeta)}{\beta} ,
+\label{eq:kf_fwd}
+\end{align}
+where the post-measurement, pre-predict value is the $J_f[t]$ of (\ref{eq:kf_combine}).  Backwards, to
+summarize $d[t{+}1..t{+}L]$ as a likelihood in $x[t]$, initialize $(J_b,\eta_b) = (0,0)$ at $u = t{+}L$ and
+step $u$ down to $t$, absorbing the sample at $u{+}1$:
+\begin{align}
+& \tilde J = J_b + m[u{+}1]e_0e_0^T, \qquad \tilde\eta = \eta_b + m[u{+}1]\,d[u{+}1]\,e_0, \qquad
+  \beta = g^T\tilde Jg + 1/q, \nn \\
+& J_b \leftarrow A^T\Big(\tilde J - \frac{\tilde Jgg^T\tilde J}{\beta}\Big)A, \qquad
+  \eta_b \leftarrow A^T\Big(\tilde\eta - \frac{\tilde Jg\,(g^T\tilde\eta)}{\beta}\Big) .
+\label{eq:kf_bwd}
+\end{align}
+Skipping the update at $m=0$ is the entire handling of the mask.  Note the only division in either recursion
+is by $\beta$, and $g^T(\cdot)g \ge 0$ by positive semidefiniteness, so $\beta \ge 1/q > 0$ always: unlike the
+moment monoid of \S\ref{sec:dt_monoid} there is no guarded divide and no empty-set rule anywhere.  The
+downdate is a Schur complement of a PSD matrix, so it preserves both positive semidefiniteness and rank
+exactly, and ${\rm rank}\,J[t] = \min(j,k)$ where $j$ is the number of valid samples in $[0,t+L]$.
+
+{\bf The backward window slides, and cannot be slid.}  The forward pass is a running prefix and is computed
+once.  The backward factor is over $[t{+}1,t{+}L]$, which moves with $t$, and the tempting trick -- walk it by
+adding the entering sample and subtracting the departing one, as \S\ref{sec:time_detrending} walks its moment
+window -- does not work.  The new sample enters at the {\em far} end of the chain, which is the bottom of the
+recursion; and although the single-sample step is invertible, being
+$\tilde J \mapsto (\tilde J^{-1} + q\,gg^T)^{-1}$, the recursion forgets exponentially on scale $\ell$, so its
+inverse amplifies exponentially.  The obstruction is exactly the rank-one downdate, i.e.~exactly the process
+noise: at $q = 0$ it vanishes, the accumulation becomes additive, and $J_b$ degenerates to the masked Gram
+matrix $\sum_u m[u](A^{u-t})^Te_0e_0^TA^{u-t}$ of a global polynomial fit -- which is
+(\ref{eq:dt_moments}) in the binomial rather than the monomial basis, $A^s$ being the Pascal shift.  So the
+moment monoid is the $q \rightarrow 0$ degeneration of this construction, and the process noise plays the
+role that the finite window plays there: both exist to localize a fit that would otherwise be global.
+
+The practical consequences are in \S\ref{sec:kf_impl}.
+
+\subsection{Outputs}
+\label{sec:kf_outputs}
+
+The same four per-sample arrays as \S\ref{sec:dt_problem}, so the two detrenders are drop-in comparable.
+
+{\bf Residual and expanded mask.}  Factor $J[t] = LL^T$ and, exactly as in (\ref{eq:dt_rmin}), take the
+smallest relative pivot
+\begin{equation}
+r_{\rm min}[t] = \min_i \frac{p_i}{J_{ii}} \quad (0 \mbox{ if any } J_{ii} = 0),
+\qquad
+m_{\rm out}[t] = m[t] \;\wedge\; \big(r_{\rm min}[t] \ge \epsilon\big) ,
+\label{eq:kf_rmin}
+\end{equation}
+with $\epsilon = 10^{-3}$.  This inherits the guarantee of \S\ref{sec:dt_estimator}: on a surviving sample the
+equilibrated condition number is bounded, hence the relative error of the solve is
+$O(\epsilon_{\rm mach}/\epsilon)$ {\em independently of the mask}.  Where $m_{\rm out}$ is false, all of the
+residual, the leverage and $r_{\rm min}$ are set to zero, so a consumer that forgets to check the mask cannot
+pick up a meaningless leverage.  The expansion is a single pass: it is never fed back into $J_f$, $J_b$ or the
+carried state, which is what keeps $\hat f$ linear in $d$ for a fixed input mask, and hence keeps
+$m_{\rm out}$, $\lambda$ and $r_{\rm min}$ functions of that mask alone.
+
+Because a rank-deficient $J$ has $p_i = 0$ for $i \ge {\rm rank}$, (\ref{eq:kf_rmin}) subsumes the rank test:
+``fewer than $k$ valid samples in $[0,t+L]$'' and every near-degenerate variant of it fall out of the same
+comparison.  Since the fixed-lag prefix reaches back to the start of the stream, this can only fire at the start of a
+stream (or after a state reset), so unlike \S\ref{sec:dt_estimator} the expansion rate is not a per-sample
+property at all: it is a fixed handful of samples per stream, diluted by however long the stream runs.
+
+{\bf Leverage.}  With $\sigma^2 = 1$,
+\begin{equation}
+\lambda[t] = \big(J[t]^{-1}\big)_{00} = H_{tt} = \frac{\partial \hat f_L[t]}{\partial d[t]} ,
+\label{eq:kf_leverage}
+\end{equation}
+free from the same factorization.  That this is the leverage and not merely the posterior variance is worth a
+line: $\hat f_L[t]$ is row $t$ of the {\em full} smoother of the sub-problem on $[0,t+L]$, and for that
+sub-problem the posterior precision of $f$ is ${\cal N}/\sigma^2$, so $\Sigma = \sigma^2{\cal N}^{-1}$ and
+comparing with $\hat f = {\cal N}^{-1}Md$ gives $H = \Sigma M/\sigma^2$, whence $H_{tt} = \Sigma_{tt}/\sigma^2$.
+The fixed-lag $H_L$ is itself {\em not} symmetric -- each row comes from a different sub-problem -- but the
+diagonal identity survives because each row is a row of a symmetric matrix.  Note $0 \le \lambda \le 1$ at
+every valid sample, since
+$e_t^T{\cal N}^{-1}e_t = \max_v v_t^2/(v^T{\cal N}v) \le \max_v v_t^2/(v^TMv) = 1$.
+
+{\bf Residual variance needs a second number.}  In \S\ref{sec:time_detrending} the restricted $H$ is a
+projection, so ${\rm Var}(r) = \sigma^2(1-\lambda)$ exactly and one number does both jobs.  A penalized
+estimator {\em shrinks} rather than projects, and instead
+\begin{equation}
+\frac{{\rm Var}(r[t])}{\sigma^2} = 1 - 2\lambda[t] + \nu[t] , \qquad
+\nu[t] \equiv \frac{{\rm Var}(\hat f_L[t])}{\sigma^2} = \sum_u m[u]\,H_{tu}^2 \;\le\; \lambda[t] .
+\label{eq:kf_var_r}
+\end{equation}
+$\nu$ is not free: it needs a Lyapunov recursion for ${\rm Cov}(\eta_f)$ and ${\rm Cov}(\eta_b)$ alongside
+each information recursion, roughly doubling the cost.  It is {\em not} computed.  Using $1-\lambda$ in its
+place overestimates the residual variance, since $\nu \le \lambda$, and therefore understates significance --
+wrong, but in the conservative direction, and both vanish together as $\lambda \rightarrow 1$.  How much it
+costs is a measurement: over the randomized-mask suite $\max(\lambda - \nu)$ is $0.14$ to $0.17$, so on
+adversarial masks the discrepancy is real, while in well-sampled stretches $\lambda \approx c_k/\tau$ and
+$\nu \le \lambda$ bound it below a percent.  Whether the peak-finder of \S\ref{sec:peak_finding} needs the
+exact form is the open question here.
+
+\subsection{Exact properties}
+\label{sec:kf_exact}
+
+Three, and they are what the implementation is tested against.
+
+{\bf Chunk invariance, exactly.}  The forward recursion is a pure left-to-right sequence and the backward
+window lies entirely inside the buffer, so the arithmetic performed for output $t$ does not depend on the
+chunk decomposition at all.  Running the stream at any chunk size must agree with a single whole-stream call
+{\em bit for bit}.  Moreover $J_f$ and $J_b$ are driven by the mask alone -- a measurement adds $e_0e_0^T$
+regardless of $d$ -- so $m_{\rm out}$, $\lambda$ and $r_{\rm min}$ are bit-identical unconditionally, while
+the residual is bit-identical once the constant offset of \S\ref{sec:kf_impl} is held fixed.  This is the
+operational meaning of ``seam-free''.
+
+{\bf Polynomial reproduction, at two different strengths.}  Setting $f = P$ in (\ref{eq:kf_normal}) leaves the
+residual $\rho\,D_k^TD_kP$, and $(D_k^TD_kP)[j] \propto (\Delta^{2k}P)[j-k]$ for $k \le j \le T'-k-1$.  Hence:
+\begin{itemize}
+\item {\bf Degree $\le k-1$: exact, unconditionally.}  Here $f = P$ zeroes {\em both} terms of
+(\ref{eq:kf_chi2}) at once, so it is the unique minimizer for any mask, any array length and any position, and
+the residual is identically zero.  Analytic, with no reference implementation and no statistical tolerance.
+\item {\bf Degree $k$ to $2k-1$: exact on the infinite array.}  $\Delta^{2k}P = 0$ kills the interior rows but
+not the $k$ truncated rows at each end, so reproduction fails only near an {\em array endpoint} -- and
+notably {\em not} at a mask edge: inside a gap the equation reduces to $D_k^TD_kf = 0$, which $P$ satisfies,
+so a degree-$(2k{-}1)$ polynomial continues straight through a gap of any length.  The fixed-lag estimator
+always has an endpoint $L$ away, so in practice the residual is $O(e^{-L/\ell})$ rather than zero.  Measured
+at $k=2$, $\tau=32$ on a full mask, the degree-3 residual falls
+$2.5 \rightarrow 1.7\times10^{-1} \rightarrow 2.5\times10^{-2} \rightarrow 9.1\times10^{-6} \rightarrow
+8.5\times10^{-13}$ as $L/\ell$ runs $2,4,8,16,32$, i.e.~as $e^{-L/\ell}$ with a slowly growing prefactor.
+\item {\bf Degree $\ge 2k$: never}, by $O(1)$.
+\end{itemize}
+
+{\bf The degenerate window is well defined.}  When $[0,t+L]$ holds fewer than $k$ valid samples, $J$ is
+singular; the system stays {\em consistent} nonetheless, since $\eta \in {\rm range}(J)$ by induction from
+$(0,0)$, and if $m[t]=1$ then $e_0 \in {\rm range}(J)$ because the measurement at $t$ contributes $e_0e_0^T$.
+So $e_0 \perp \ker J$ and $\hat f_L[t]$ is uniquely determined even though $x[t]$ is not.  With a single valid
+sample $J = e_0e_0^T$ and $\eta = d[t]e_0$, giving $\hat f = d[t]$, $r = 0$, $\lambda = 1$: exactly right,
+since one datum under a diffuse prior determines its own baseline.  In float32 that exact answer survives at
+$k=2$, where rank deficiency forces ${\rm range}(J) = {\rm span}(e_0)$ and hence a {\em diagonal} $J$, so the
+factorization is trivial and $r = 0$ comes out bitwise.  It is not relied on: (\ref{eq:kf_rmin}) cuts these
+samples anyway.
+
+\subsection{Response and numerics}
+\label{sec:kf_numerics}
+
+{\bf Transfer function.}  Where the mask is constant over a long stretch, $J_f$ reaches the fixed point of its
+Riccati recursion and the estimator degenerates to a fixed IIR filter.  For the two-sided limit
+$L \rightarrow \infty$, (\ref{eq:kf_normal}) diagonalizes in Fourier space and
+\begin{equation}
+H(\omega) = \frac{1}{1 + \rho\,\big(2\sin(\omega/2)\big)^{2k}} ,
+\qquad
+1 - H(\omega) = \frac{\rho\,(2\sin(\omega/2))^{2k}}{1+\rho\,(2\sin(\omega/2))^{2k}} ,
+\label{eq:kf_transfer}
+\end{equation}
+{\em monotone} in $|\omega|$ with no stopband ripple, against the $\sim\!20\%$ ripple that
+\S\ref{sec:time_detrending}'s truncated polynomial kernel has near $\omega \approx 3\pi/2W$.  This is the main
+statistical argument for the estimator.  The kernel at zero lag is
+\begin{equation}
+h[0] = \frac{c_k}{\tau} = \lambda_{\rm full} ,
+\label{eq:kf_response}
+\end{equation}
+so a pulse of width $w \ll \tau$ loses a fraction $\approx c_k w/\tau$ of its flux into the trend, the
+detrender removes $\approx c_k/\tau$ of the variance, and the requirement is $\tau \gg W_{\rm max}$, the
+widest searched boxcar.  Finite $L$ perturbs all of this by $O(e^{-L/\ell})$; note that truncating the future
+also breaks the kernel's symmetry, so $H_L$ has a small phase response where the two-sided smoother and the
+local polynomial fit have none.
+
+{\bf Conditioning.}  ${\rm cond}(J_f)$ grows as $\tau^{2(k-1)}$, because the state components $\Delta^jf$
+carry scales differing by $\tau^j$ -- $1.3\times10^5$ at $k=2$, $\tau=256$.  That is a pure diagonal scaling,
+under which Cholesky is equivariant, and the quantity that matters is the equilibrated condition number
+$J_{ij}/\sqrt{J_{ii}J_{jj}}$, which is {\em flat in $\tau$}: measured $5.83$ at $k=2$ across
+$\tau = 4, 16, 64, 256$, against $23$ for the local polynomial fit's Gram matrix.  So no rescaling of the
+state is needed or used, and $A$, $A^{-1}$ stay exact integer matrices.  Two regimes do not spoil this.  The
+matrix actually solved is better conditioned than $J_f$ alone, since combining forward and backward
+information nearly symmetrizes it: at $k=2$ its equilibrated condition number tends to $1$ as $\tau$ grows
+($1.016$ at $\tau=64$, $1.004$ at $\tau=256$), the steady-state pivot ratios are $(1,1)$, and
+$r_{\rm min} \rightarrow 1$ -- three decades above $\epsilon$.  And iterating $J_f$
+through a long masked gap with no measurements, the raw condition number runs away but the equilibrated one
+{\em plateaus} by $G \approx 10\tau$ at $13.9$, with $J_{00} \sim 1/(qG^{2k-1})$ decaying only polynomially,
+so it cannot underflow for any realistic gap.
+
+{\bf Float32.}  Everything runs in float32.  Two things are needed and both are cheap.  The constant offset of
+\S\ref{sec:kf_impl}, without which the residual is a cancelling difference of two $|d|$-sized numbers; and
+$\epsilon$ clearing the float32 noise in $r_{\rm min}$, since the mask expansion is the only place float32
+feeds back into a discrete decision.  That noise is measured at $3\times10^{-7}$, so $\epsilon = 10^{-3}$
+clears it by a factor of $3500$.  Measured worst-case float32-against-float64 residual over the
+randomized-mask suite is $3\times10^{-7}\sigma$, and -- the property the carried state depends on -- it does
+{\em not} grow along a stream: the forward recursion is exponentially forgetting, so roundoff injected at time
+$u$ contributes $O(e^{-(t-u)/\ell})$ and the error is bounded rather than accumulating.
+
+\subsection{Parameters}
+\label{sec:kf_params}
+
+{\bf Order.}  $k=2$.  The naive reading points the other way -- the {\em guaranteed} reproduction degrees are
+$k-1 = 1$ here against $n = 2$ in \S\ref{sec:time_detrending} -- but the guaranteed degree is not what governs
+the passband; the asymptotic one is, and there $k=2$ already gives $2k-1 = 3$, matching the local fit's $n+1 =
+3$.  So $k=3$ would buy $O(\omega^6)$ rolloff, more than the other detrender has.  It would also cost:
+the equilibrated condition number rises from $5.83$ to $35.5$, and the degenerate window of
+\S\ref{sec:kf_exact} stops being benign, since for $k \ge 3$ the deficient $J$ is no longer diagonal and a
+floored pivot leaks into $\hat x_0$.
+
+{\bf Timescale and lag.}  Take $(k, \tau, L)$ as the parameters, with $\tau$ and $L$ in samples; $\rho$ and
+$q$ are machine quantities with enormous dynamic range and change meaning with $k$.  To match
+\S\ref{sec:time_detrending} at half-width $W$, equate the kernels at zero lag, $9/8W$ there against $c_k/\tau$
+here:
+\begin{equation}
+\tau = \frac{8\,c_k}{9}\,W \;=\; 0.314\,W \quad (k=2) ,
+\label{eq:kf_match}
+\end{equation}
+which also matches the flux loss and the degrees of freedom removed.  $L$ then follows from $\ell$: the
+influence of data beyond $t+L$ decays as $e^{-L/\ell}$, and $L \approx 4\ell$ leaves a $\sim\!1\%$ deviation
+from the ideal two-sided estimate.  At the local fit's $W = 256$ that gives $\tau = 80.5$, $\ell = 114$,
+$L \approx 455$.
+
+The lookahead is the real cost of this detrender: $L \approx 4\ell = 1.8\,W$, against exactly $W$ for
+\S\ref{sec:time_detrending}, so matched on smoothing strength it roughly doubles the latency.  Against that,
+it needs no prepadding at all.
+
+\subsection{Implementation and cost}
+\label{sec:kf_impl}
+
+{\bf Chunking and state.}  On the $i$-th call the buffer is chunk $i$ plus $L$ samples of postpadding, so
+$T_c + L$ samples, and the carried state is $(J_f, \eta_f)$ plus the constant offset $\kappa$ -- $O(k^2)$ per
+row, five floats at $k=2$.  Outputs are committed once and never revisited.
+
+{\bf The constant offset.}  Intensity data is total power, so $d$ carries a large positive mean while
+everything of interest sits at the $\sigma$ level on top of it.  Subtract $\kappa$, the masked mean of the
+buffer in hand, before filtering.  This is mathematically inert -- the basis reproduces constants, since
+$\deg 0 \le k-1$, so it shifts $\hat f$ by exactly $\kappa$ and leaves the residual unchanged -- and exists
+only so that the filter carries numbers of size $|d-\kappa|$.  Unlike \S\ref{sec:dt_numerics}, $\kappa$ cannot
+simply be recomputed per buffer and forgotten, because the state is expressed relative to it.  Rebasing is
+exact and needs no special case: shifting the data by $\Delta = \kappa'-\kappa$ shifts the level component of
+the state, so $\mu \rightarrow \mu - \Delta e_0$ with $J$ untouched, i.e.
+\begin{equation}
+\eta_f \;\longrightarrow\; \eta_f - \Delta\,J_f e_0 .
+\label{eq:kf_rebase}
+\end{equation}
+At stream start $J_f = \eta_f = 0$ and this is a no-op.  If a buffer has no valid samples, keep the previous
+$\kappa$ rather than collapsing to zero, which would silently disable the subtraction.
+
+{\bf Masked samples must be selected, never weighted.}  A masked sample may hold anything at all, including
+NaN, and $0 \times \infty$ is NaN.  This matters more here than in \S\ref{sec:time_detrending}: a NaN reaching
+the carried state destroys every subsequent output of that row, where there it would be confined to one
+buffer.
+
+{\bf Cost.}  The forward pass is $O(k^2)$ per sample and is computed once.  The backward factor is the
+expensive part.  Evaluating (\ref{eq:kf_bwd}) independently for each output is $O(Lk^3)$ per sample --
+$\sim\!10^4$ flops at $L = 512$, $k=2$ -- which is fine for a reference implementation but not for a kernel.
+It is not the only option: the composition of these Gaussian potentials is associative, so the same van Herk
+block decomposition as \S\ref{sec:dt_blocks} applies, with blocks of length $B = L$ so that
+$[t{+}1,t{+}L]$ spans exactly two adjacent blocks, prefix and suffix scans within a block, and one merge per
+output.  That brings the cost to $O(k^3)$ per sample, of order $600$ flops at $k=2$, comparable to the
+$\approx 400$ of \S\ref{sec:dt_cost}.  The monoid element is larger than the moment monoid's $3n{+}2$: for an
+interval it is the Gaussian potential relating the state at one end to the state at the other, $2k^2+3k = 14$
+numbers at $k=2$.  Note also that a sequential sweep is numerically acceptable here, unlike in
+\S\ref{sec:dt_blocks}: the recursion forgets exponentially, so roundoff injected at one step decays rather
+than persisting, and tree depth is not load-bearing -- only parallelism is.
+
+\subsection{Validation}
+\label{sec:kf_validation}
+
+Implemented in {\tt pirate\_frb/detrending\_1d\_kalman} and run by {\tt python -m pirate\_frb test --dt1k}.
+The checks worth keeping as regressions:
+\begin{itemize}
+\item {\bf Against a dense oracle}: for each output, assemble (\ref{eq:kf_normal}) on $[0,t+L]$ explicitly and
+solve it with dense linear algebra, sharing no code with the recursions.  Comparing the forward filter alone
+and the combination (\ref{eq:kf_combine}) pins both recursions, since $J_b = J - J_f$ is then determined by
+difference.  This is the test that fixes the signs and the $A$ versus $A^{-T}$ placement, and nothing else
+should be trusted before it passes.
+\item {\bf Polynomial reproduction}: degree $\le k-1$ identically zero under arbitrary masks, at both
+precisions; and degree $2k-1$ asserted from both sides -- $O(1)$ near the stream start, suppressed as
+$e^{-L/\ell}$ in the interior -- so that neither half can silently regress.
+\item {\bf Chunk invariance}: several chunk sizes against a whole-stream call, requiring bit-identity for
+$m_{\rm out}$, $\lambda$ and $r_{\rm min}$ unconditionally and for the residual at fixed $\kappa$.  Writing
+this as a single tolerance over all four outputs would discard the unconditional half, which is the half worth
+having.
+\item {\bf Leverage identity}: build row $t$ of $H_L$ by feeding unit impulses through the full path and check
+$\lambda = H_{tt}$ exactly.  Note $\sum_u m[u]H_{tu}^2 = \nu \ne \lambda$ here, unlike
+\S\ref{sec:dt_validation}: that identity needs a projection.
+\item {\bf Positive semidefiniteness and finiteness} over the randomized masks, including all-masked rows and
+rows with a single valid sample, with $\beta \ge 1/q$ checked at every step.  The tolerance has to be
+per-precision, or float32 roundoff hides a genuine float64 failure.
+\item {\bf Masked data unread}: poison masked samples with NaN/Inf and require every output {\em and the
+carried state} to be bit-identical.  The state half is what keeps the hazard above from being live.
+\item {\bf Float32 versus float64}, which is a test of understanding rather than a debugging test: it asks
+whether the error is where \S\ref{sec:kf_numerics} says it is.  It should report the fp32 noise in
+$r_{\rm min}$, which is what $\epsilon$ must clear, and check that the discrepancy does not grow along a long
+stream.
+\end{itemize}
 
 \clearpage
 
