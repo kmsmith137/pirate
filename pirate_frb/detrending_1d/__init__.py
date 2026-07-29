@@ -19,7 +19,7 @@ Deliberate divergences from the eventual GPU version (not bugs):
   - Hillis-Steele scan rather than work-efficient Blelloch: same O(log B) depth,
     more work.  Work does not matter in numpy, and Hillis-Steele is what a GPU
     warp-level shuffle scan does anyway.
-  - Full Pref/Suff arrays are materialized; the GPU version will use a two-level
+  - Full Pref/Suff arrays are materialized, where the GPU kernel uses a two-level
     register-resident decomposition.
   - No offset-tracking state machine beyond a per-chunk constant.
 """

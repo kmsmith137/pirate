@@ -6,6 +6,12 @@ Unit tests for the 1-d detrender.  Dispatched from pirate_frb/__main__.py:
 Most tests run at a small size (W=16, B=32, Tc=64) for speed -- the algorithm is
 size-parameterized, so small sizes exercise the same code paths -- plus a
 full-size (W=512) run where it is cheap enough to matter.
+
+The polynomial degree n is drawn per call by run_all() rather than fixed, so a
+multi-iteration run covers both degrees we build kernels for.  n=1 and n=2 are
+not cosmetic variants of each other: at n=1 the Gram matrix is diagonal, so
+rmin collapses to a valid-sample count and several of the controls below flip
+sign.  Those places are marked.
 """
 
 import numpy as np
@@ -25,18 +31,23 @@ from . import LocalPolyFit
 # module-level and never reset: under 'test --dt1d -n N' each iteration draws
 # fresh masks, and the running total across iterations is what tells us whether
 # expansion is firing at a sane rate.
-_EXPANSION = {'valid_in': 0, 'expanded': 0}
+# Keyed by polynomial degree, because the two degrees expand at rates that differ
+# by about an order of magnitude (at n=1 the only windows rmin can reject are
+# nv <= 1), and pooling them would make the number uninterpretable.
+_EXPANSION = {}
 
 
-def _note_expansion(mask_in, mask_out):
+def _note_expansion(n, mask_in, mask_out):
     """mask_in restricted to the output range, and the detrender's mask_out."""
-    _EXPANSION['valid_in'] += int(mask_in.sum())
-    _EXPANSION['expanded'] += int((mask_in & ~mask_out).sum())
+    d = _EXPANSION.setdefault(n, {'valid_in': 0, 'expanded': 0})
+    d['valid_in'] += int(mask_in.sum())
+    d['expanded'] += int((mask_in & ~mask_out).sum())
 
 
 def _expansion_str():
-    v, e = _EXPANSION['valid_in'], _EXPANSION['expanded']
-    return f'{e}/{v} = {(e/v if v else 0.0):.3e}'
+    return '  '.join(f"n={n}: {d['expanded']}/{d['valid_in']} = "
+                     f"{(d['expanded']/d['valid_in'] if d['valid_in'] else 0.0):.3e}"
+                     for n, d in sorted(_EXPANSION.items()))
 
 
 def _default_rng(rng):
@@ -87,9 +98,9 @@ def _random_set(rng, S_ax, L, W, dtype, offset=0.0):
 
 # ------------------------------------------------------------------- 1. monoid
 
-def test_monoid(rng=None, niter=8, verbose=True):
+def test_monoid(rng=None, n=2, niter=8, verbose=True):
     rng = _default_rng(rng)
-    n, W, dtype = 2, 16, np.float64
+    W, dtype = 16, np.float64
     binom = _binom_table(2*n+1)
     worst = dict(merge=0.0, assoc=0.0, comm=0.0, ident=0.0, s1=0.0, shift=0.0, empty=0.0)
 
@@ -147,9 +158,9 @@ def test_monoid(rng=None, niter=8, verbose=True):
 
 # ------------------------------------------------------------------ 2. vanherk
 
-def test_vanherk(rng=None, niter=4, verbose=True):
+def test_vanherk(rng=None, n=2, niter=4, verbose=True):
     rng = _default_rng(rng)
-    n, dtype = 2, np.float64
+    dtype = np.float64
     worst_ms, worst_cnt = 0.0, 0
 
     for W in (4, 16):
@@ -217,9 +228,9 @@ def test_vanherk(rng=None, niter=4, verbose=True):
 
 # -------------------------------------------------------------------- 3. solve
 
-def test_solve(rng=None, niter=4, verbose=True):
+def test_solve(rng=None, n=2, niter=4, verbose=True):
     rng = _default_rng(rng)
-    n, dtype = 2, np.float64
+    dtype = np.float64
     eps, mu = 1e-3, 1e-30
     W = 16
     L = 2*W + 1
@@ -289,9 +300,12 @@ def test_solve(rng=None, niter=4, verbose=True):
     assert nchecked > 0, "leverage identity was never checked"
 
     # (c) full window: leverage equals (G^-1)_00 for the exact discrete Gram, and
-    #     approaches the continuum value 9/(8W) as W grows.  Note 9/(8W) is the
-    #     continuum limit; the discrete value differs by O(1/W) (2.9% at W=16,
-    #     0.1% at W=512), so it is the discrete value we assert against.
+    #     approaches the continuum value C_n/(2W) as W grows, with C_1 = 1 and
+    #     C_2 = 9/4.  (At n=1 the fit on a symmetric window is just the boxcar
+    #     mean, so the discrete value is exactly 1/(2W+1).)  Note C_n/(2W) is the
+    #     continuum limit; the discrete value differs by O(1/W) (about 3% at
+    #     W=16, 0.1% at W=512), so it is the discrete value we assert against.
+    cont_c = {1: 1.0, 2: 2.25}[n]
     devs = []
     for Wbig in (16, 128, 512):
         det = Detrender(W=Wbig, n=n, chunk_size=2*Wbig, dtype=np.float64,
@@ -304,9 +318,9 @@ def test_solve(rng=None, niter=4, verbose=True):
         exact = np.linalg.inv(Pv.T @ Pv)[0, 0]
         assert abs(float(lev[0, 0]) - exact) < 1e-12 * exact, \
             f'W={Wbig}: leverage {lev[0,0]} vs exact discrete {exact}'
-        devs.append(abs(exact / (9.0/(8*Wbig)) - 1))
+        devs.append(abs(exact / (cont_c/(2*Wbig)) - 1))
     assert devs[0] > devs[1] > devs[2] and devs[2] < 2e-3, \
-        f'continuum limit 9/(8W) not approached: {devs}'
+        f'continuum limit {cont_c}/(2W) not approached: {devs}'
 
     # (d) degenerate windows
     det = Detrender(W=W, n=n, chunk_size=2*W, dtype=dtype, eps=eps, mu=mu,
@@ -315,12 +329,18 @@ def test_solve(rng=None, niter=4, verbose=True):
     dvals = np.arange(Tbuf, dtype=dtype) + 0.5
 
     # nv <= n cannot determine a degree-n fit, so all of these must be masked
-    # away rather than producing a degenerate estimate.  nv=1 gives G_11=G_22=0
-    # (every valid sample sits at the centroid) so rmin = 0; nv=2 has G_ii > 0 for
-    # every i but p_2 = 0 exactly, so rmin = 0 as well -- which is why rmin has to
-    # look at the pivots and not at the diagonal.
-    for lbl, idx in (('nv=0', []), ('nv=1 at the output sample', [W]),
-                     ('nv=1 elsewhere', [3]), ('nv=2', [W, W+2])):
+    # away rather than producing a degenerate estimate.  nv=1 gives G_ii = 0 for
+    # every i >= 1 (the single valid sample sits at the centroid), so rmin = 0.
+    degenerate = [('nv=0', []), ('nv=1 at the output sample', [W]),
+                  ('nv=1 elsewhere', [3])]
+    if n >= 2:
+        # nv=2 is the case that shows why rmin has to look at the pivots and not
+        # at the diagonal: G_ii > 0 for every i, and yet p_2 = 0 exactly, since G
+        # has rank 2.  At n=1 the same window has full rank and must SURVIVE, so
+        # there it is the positive control below rather than a degenerate case.
+        degenerate.append(('nv=2', [W, W+2]))
+
+    for lbl, idx in degenerate:
         mm = np.zeros((1, Tbuf), dtype=bool)
         for i in idx:
             mm[0, i] = True
@@ -330,10 +350,14 @@ def test_solve(rng=None, niter=4, verbose=True):
         assert float(r[0, 0]) == 0.0, f'{lbl}: masked residual should be 0'
 
     # nv = n+1 spread across the window determines the fit exactly, so it must
-    # survive -- rmin is a conditioning test, not a sample count.
-    mm = np.zeros((1, Tbuf), dtype=bool); mm[0, 1] = True; mm[0, W] = True; mm[0, 2*W-1] = True
+    # survive -- rmin is a conditioning test, not a sample count.  The output
+    # sample itself must be one of them, or mask_out is false for the trivial
+    # reason.
+    mm = np.zeros((1, Tbuf), dtype=bool)
+    for i in [W, 1, 2*W-1][:n+1]:
+        mm[0, i] = True
     r, mko, _, rmin = det.detrend_chunk(dvals[None, :], mm)
-    assert bool(mko[0, 0]), f'nv=3 spread should survive (rmin={rmin[0,0]:.2e})'
+    assert bool(mko[0, 0]), f'nv={n+1} spread should survive (rmin={rmin[0,0]:.2e})'
 
     if verbose:
         print(f'    test_solve: lstsq={worst_lstsq:.2e}  kappa[0]-lev={worst_kap:.2e}  '
@@ -356,7 +380,7 @@ def _poly_stream(rng, S_ax, T, deg, W, dtype):
     return P.astype(dtype)
 
 
-def test_polynomial_exactness(rng=None, verbose=True):
+def test_polynomial_exactness(rng=None, n=2, verbose=True):
     """
     Feed d[t] = P(t) for a polynomial of degree <= n with an arbitrary mask and
     no noise.  Every window's valid samples then lie exactly on P, the local fit
@@ -368,7 +392,6 @@ def test_polynomial_exactness(rng=None, verbose=True):
     pure accumulated numerical error.
     """
     rng = _default_rng(rng)
-    n = 2
     results = []
 
     for dtype, tol in ((np.float64, 1e-11), (np.float32, 3e-5)):
@@ -381,7 +404,7 @@ def test_polynomial_exactness(rng=None, verbose=True):
                 det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype)
                 resid, mko, _, _ = det.detrend_stream(P, mask)
                 min_ = mask[:, W:T-W]
-                _note_expansion(min_, mko)
+                _note_expansion(n, min_, mko)
                 nflag += int((min_ & ~mko).sum())
                 # No regularizer means no shrinkage bias, so exactness holds at
                 # *every* surviving sample -- there is no carve-out to make.
@@ -395,12 +418,19 @@ def test_polynomial_exactness(rng=None, verbose=True):
                                      f'W={W} mask={labels[s]}]: residual {e:.3e} > {tol:.1e}')
             results.append((np.dtype(dtype).name, W, worst_ok, nflag, worst_lbl))
 
-    # Controls.  Note that for a *fully valid* window the mask is symmetric about
-    # the evaluation point, so S_odd = 0, G is checkerboard, and a_0 depends only
-    # on the even block: a degree-n fit then reproduces degree n+1 exactly, for
-    # even n.  This is the n=2 == n=3 degeneracy noted in tree_dedispersion.tex,
-    # and it is asserted below rather than treated as a failure.  Degree n+2, and
-    # degree n+1 under an asymmetric mask, must both fail to be reproduced.
+    # Controls.  For a *fully valid* window the mask is symmetric about the
+    # evaluation point, so S_odd = 0 and G is checkerboard: the even and odd
+    # coefficients decouple, and fhat (which is a_0, since x_0 = 0) is determined
+    # by the even part of the data alone.  A degree-D polynomial is therefore
+    # reproduced exactly iff its even part is spanned by the even basis functions
+    # {1, x^2, ..., x^(2*(n//2))}, i.e. iff D//2 <= n//2.
+    #
+    # For even n that admits D = n+1 -- the n=2 == n=3 degeneracy noted in
+    # tree_dedispersion.tex, asserted below rather than treated as a failure.
+    # For odd n it does not (at n=1 the even basis is just the constant), so
+    # degree n+1 joins degree n+2 as a negative control.  Degree n+1 under an
+    # *asymmetric* mask must fail at every n, since the decoupling is what the
+    # symmetry was buying.
     W, Tc = 16, 64
     T = 2*Tc + 2*W
     det = Detrender(W=W, n=n, chunk_size=Tc, dtype=np.float64)
@@ -410,9 +440,15 @@ def test_polynomial_exactness(rng=None, verbose=True):
 
     P1 = _poly_stream(rng, 2, T, n+1, W, np.float64)
     r1, _, _, _ = det.detrend_stream(P1, allvalid)
-    assert float(np.max(np.abs(r1))) < 1e-11, \
-        (f'degree n+1 should be reproduced exactly on a fully valid window '
-         f'(checkerboard degeneracy), got {float(np.max(np.abs(r1))):.3e}')
+    w1 = float(np.max(np.abs(r1)))
+    if (n+1)//2 <= n//2:
+        assert w1 < 1e-11, \
+            (f'degree n+1 should be reproduced exactly on a fully valid window '
+             f'(checkerboard degeneracy, n={n}), got {w1:.3e}')
+    else:
+        assert w1 > 1e-6, \
+            (f'degree n+1 was reproduced on a fully valid window at n={n}, where '
+             f'the even basis functions cannot span its even part')
 
     r2, mk2, _, _ = det.detrend_stream(P1, asym)
     mo = mk2
@@ -432,9 +468,9 @@ def test_polynomial_exactness(rng=None, verbose=True):
 
 # ------------------------------------------------------ 5. vs fp64 reference
 
-def test_detrender_vs_reference(rng=None, verbose=True):
+def test_detrender_vs_reference(rng=None, n=2, verbose=True):
     rng = _default_rng(rng)
-    n, dtype = 2, np.float64
+    dtype = np.float64
     worst = 0.0
     worst_name = ''
 
@@ -446,7 +482,7 @@ def test_detrender_vs_reference(rng=None, verbose=True):
             det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype)
             got, gmk, glev, grm = det.detrend_stream(d, mask)
             want, wmk, wlev, wrm = detrend_reference(d, mask, W, n=n, dtype=dtype)
-            _note_expansion(mask[:, W:T-W], gmk)
+            _note_expansion(n, mask[:, W:T-W], gmk)
             scale = max(1.0, float(np.max(np.abs(d))))
             for s in range(S_ax):
                 e = _maxdiff(got[s], want[s]) / scale
@@ -474,7 +510,7 @@ def test_detrender_vs_reference(rng=None, verbose=True):
 
 # ------------------------------------------------ 6. dtype agreement (fp32/fp64)
 
-def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
+def test_dtype_agreement(rng=None, n=2, tol=1e-3, verbose=True):
     """
     Run the same instance twice, float32 and float64, and compare.
 
@@ -498,7 +534,6 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
     6.1e-5 sigma, so input quantization stays mild.
     """
     rng = _default_rng(rng)
-    n = 2
     eps32, eps64 = 1e-3, 1e-6
     rows = []
     worst = 0.0
@@ -518,7 +553,7 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
                                            dtype=np.float32).detrend_stream(d32, mask)
             r64, m64, _, q64 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps64,
                                            dtype=np.float64).detrend_stream(dref, mask)
-            _note_expansion(mask[:, W:T-W], m32)
+            _note_expansion(n, mask[:, W:T-W], m32)
 
             both = m32 & m64
             worst_rmin = max(worst_rmin, _maxdiff(q32, q64))
@@ -550,7 +585,7 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
 
 # ------------------------------------------------- 7. masked data must be unread
 
-def test_masked_data_unused(rng=None, verbose=True):
+def test_masked_data_unused(rng=None, n=2, verbose=True):
     """
     The detrender must never read a masked sample.  Checked by poisoning the
     masked entries and requiring every output to be *bit-identical* to a run on
@@ -567,7 +602,6 @@ def test_masked_data_unused(rng=None, verbose=True):
     nan.
     """
     rng = _default_rng(rng)
-    n = 2
     checked = 0
 
     for W, Tc, nchunk, S_ax in ((16, 64, 3, 16), (512, 2048, 2, 4)):
@@ -630,14 +664,16 @@ def test_gpu_kernel(rng=None, tol=1e-3, rmin_tol=1e-4, verbose=True):
     measured float32-vs-float64 disagreement in rmin, and an order of magnitude
     below eps itself.
 
-    Unlike the rest of this module, the geometry is not a free parameter: W, T
-    and eps are compile-time constants of the kernel and are read back from it.
+    Unlike the rest of this module, nothing here is a free parameter: n, W, T
+    and eps are compile-time constants of the kernel and are all read back from
+    it.  In particular this test does NOT follow run_all()'s randomized degree --
+    it can only test the degree the kernel was compiled at.
     """
     from ..kernels import Detrender1d   # local import: this package is otherwise numpy-only
     import cupy as cp
 
     rng = _default_rng(rng)
-    n = 2
+    n = Detrender1d.n
     W, T, nbuf = Detrender1d.W, Detrender1d.T, Detrender1d.nbuf
     eps32, eps64 = Detrender1d.eps, 1e-6
     S_ax, ndraw = 8, 2
@@ -670,7 +706,7 @@ def test_gpu_kernel(rng=None, tol=1e-3, rmin_tol=1e-4, verbose=True):
         r_ref, m_ref, _, rmin = detrend_reference(dref, mask, W, n=n, eps=eps64,
                                                   dtype=np.float64,
                                                   max_outputs_per_pass=512)
-        _note_expansion(mask[:, W:W+T], m_gpu)
+        _note_expansion(n, mask[:, W:W+T], m_gpu)
 
         bad = (m_gpu != (mask[:, W:W+T] & (rmin >= eps32)))
         if bad.any():
@@ -689,7 +725,7 @@ def test_gpu_kernel(rng=None, tol=1e-3, rmin_tol=1e-4, verbose=True):
                     worst_cpu = max(worst_cpu, e)
 
     if verbose:
-        print(f'    test_gpu_kernel [W={W} T={T}]: max |r_gpu-r_ref| = {worst_gpu:.3e} sigma  ({worst_name})')
+        print(f'    test_gpu_kernel [n={n} W={W} T={T}]: max |r_gpu-r_ref| = {worst_gpu:.3e} sigma  ({worst_name})')
         print(f'      same data through the float32 CPU Detrender: {worst_cpu:.3e} sigma')
         print(f'      mask expansion disagreements: {ndisagree} '
               f'(worst |rmin-eps| = {worst_slack:.3e}, tolerated below {rmin_tol:.0e})')
@@ -702,23 +738,28 @@ def test_gpu_kernel(rng=None, tol=1e-3, rmin_tol=1e-4, verbose=True):
 
 # ----------------------------------------------------------------- entry point
 
-def run_all(verbose=True, rng=None):
+def run_all(verbose=True, rng=None, n=None):
     """
-    All seven tests share one generator, so printing its entropy makes the whole
+    All eight tests share one generator, so printing its entropy makes the whole
     run reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
 
-    The last test needs a GPU (and the compiled extension); the other six are
-    pure numpy.
+    The polynomial degree is drawn from {1, 2} per call rather than fixed, so a
+    multi-iteration run ('test --dt1d -n 100') covers both.  Pass n explicitly to
+    pin it.  The exception is test_gpu_kernel, which uses the degree its kernel
+    was compiled at; it is also the only test that needs a GPU (and the compiled
+    extension), the other seven being pure numpy.
     """
     rng = _default_rng(rng)
     ent = rng.bit_generator.seed_seq.entropy
-    print(f'  detrending_1d tests (rng entropy {ent})')
-    test_monoid(rng, verbose=verbose)
-    test_vanherk(rng, verbose=verbose)
-    test_solve(rng, verbose=verbose)
-    test_polynomial_exactness(rng, verbose=verbose)
-    test_detrender_vs_reference(rng, verbose=verbose)
-    test_dtype_agreement(rng, verbose=verbose)
-    test_masked_data_unused(rng, verbose=verbose)
+    if n is None:
+        n = int(rng.integers(1, 3))
+    print(f'  detrending_1d tests (n={n}, rng entropy {ent})')
+    test_monoid(rng, n=n, verbose=verbose)
+    test_vanherk(rng, n=n, verbose=verbose)
+    test_solve(rng, n=n, verbose=verbose)
+    test_polynomial_exactness(rng, n=n, verbose=verbose)
+    test_detrender_vs_reference(rng, n=n, verbose=verbose)
+    test_dtype_agreement(rng, n=n, verbose=verbose)
+    test_masked_data_unused(rng, n=n, verbose=verbose)
     test_gpu_kernel(rng, verbose=verbose)
     print(f'  detrending_1d tests passed   [cumulative mask expansion: {_expansion_str()}]')

@@ -18,9 +18,19 @@ condition number of G is roughly 1/rmin.
 
 Because G_01 = 0 we get p_0 = G_00 = nv and p_1 = G_11 exactly, so the pivots
 are in natural (level, slope, curvature) order and p_i/G_ii is the fraction of
-order-i information surviving after the lower orders are projected out.  For
-n = 2 only i = 2 can pull rmin below 1, unless nv <= 1 (where every valid sample
-sits at the centroid, so G_11 = G_22 = 0 and rmin = 0).
+order-i information surviving after the lower orders are projected out.  Hence
+r_0 = r_1 = 1 wherever the corresponding G_ii > 0, and only i >= 2 can pull rmin
+below 1.  What that leaves depends on the degree:
+
+  - n = 2: only i = 2 binds, unless nv <= 1 (where every valid sample sits at the
+    centroid, so G_11 = G_22 = 0 and rmin = 0).
+  - n = 1: there is no i >= 2 at all, so G is diagonal and rmin takes only the
+    values 0 and 1 -- it is 1 iff nv >= 2, since S_2 = 0 exactly when every valid
+    sample sits at the centroid.  Mask expansion therefore degenerates to a
+    valid-sample count and eps is inert (any threshold in (0,1] agrees).  The
+    conditioning half of rmin's job is vacuous at n = 1: the equilibrated G is the
+    identity.  Its statistical half is not -- an nv = 2 window is kept, and the
+    line through two points has leverage 1, hence Var(r) = 0.
 
 Note p_0 is never modified for nv >= 1, which is what makes constant-offset
 subtraction exact -- see Detrender.
