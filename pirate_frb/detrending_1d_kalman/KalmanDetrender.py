@@ -26,6 +26,18 @@ Contrast with detrending_1d, whose Detrender holds no state at all:
     a new one rather than mutating, so a caller can still checkpoint and replay.
   - there is no prepadding.  The buffer is (chunk_size + L) samples: the past lives
     in the state, and only the lookahead has to be supplied.
+
+CALLER CONTRACT, and the one footgun the carried state creates: unmasked samples
+must be finite.  Masked samples may hold anything -- NaN, Inf, uninitialized
+memory from a dropped packet -- and are selected away rather than multiplied by
+the mask, so they cannot reach the arithmetic.  A NaN in an *unmasked* sample is
+different: it enters the forward filter, lands in the state, and from then on
+every subsequent output of that row is NaN, forever.  There is no guard here,
+deliberately -- one would cost a per-sample branch to defend against something
+upstream already guarantees -- so if that guarantee ever weakens, the fix is an
+isfinite() check on the state at chunk boundaries with a reset to
+initial_state().  Contrast detrending_1d, which holds no state and where the
+same poison would be confined to a single buffer.
 """
 
 import numpy as np

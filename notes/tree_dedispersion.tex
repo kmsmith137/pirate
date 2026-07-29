@@ -1542,7 +1542,15 @@ h[0] = \frac{c_k}{\tau} = \lambda_{\rm full} ,
 \end{equation}
 so a pulse of width $w \ll \tau$ loses a fraction $\approx c_k w/\tau$ of its flux into the trend, the
 detrender removes $\approx c_k/\tau$ of the variance, and the requirement is $\tau \gg W_{\rm max}$, the
-widest searched boxcar.  Finite $L$ perturbs all of this by $O(e^{-L/\ell})$; note that truncating the future
+widest searched boxcar.
+(\ref{eq:kf_response}) is also a closed-form check on the whole construction, and a strong one, since it
+exercises the forward recursion, the backward recursion and the combine (\ref{eq:kf_combine}) together against
+an analytic answer rather than against another implementation: run (\ref{eq:kf_fwd}) and (\ref{eq:kf_bwd}) to
+steady state on a full mask with $L \gg \ell$ and the leverage must approach $c_k/\tau$.  It does, to five
+significant figures at $k = 2, 3$ and $\tau = 8, 32, 80.5$, the residual deviation shrinking with $\tau$ as
+the continuum limit is approached.  Worth re-running by hand after any change to the recursions; it is not in
+the test suite, because \S\ref{sec:kf_validation}'s dense oracle covers the same ground with an independent
+implementation.  Finite $L$ perturbs all of this by $O(e^{-L/\ell})$; note that truncating the future
 also breaks the kernel's symmetry, so $H_L$ has a small phase response where the two-sided smoother and the
 local polynomial fit have none.
 
