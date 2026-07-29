@@ -57,24 +57,41 @@ void register_kernel_bindings(pybind11::module &m)
         "The 2W padding samples are read but not written, and the caller is responsible for\n"
         "the buffer shift between chunks. Where the expanded mask is false, the residual is\n"
         "written as zero.\n\n"
-        "All parameters except the number of rows are compile-time constants (exposed as the\n"
-        "class attributes n, W, T, nbuf, eps), so there is nothing to configure and the entry\n"
-        "points are static.\n\n"
-        "The algorithm is specified in notes/tree_dedispersion.tex, section 'Time detrending'.\n"
-        "pirate_frb.detrending_1d is the pure-numpy reference that this kernel is validated\n"
-        "against.");
+        "(n, W, T) are compile-time parameters of the cuda kernel, so only the configurations\n"
+        "listed in the constructor's error message exist; the number of rows M is runtime.\n\n"
+        "The algorithm is specified in notes/tree_dedispersion.tex, section 'Time detrending\n"
+        "algorithm 1: local polynomial subtraction'. pirate_frb.detrending_1d is the\n"
+        "pure-numpy reference that this kernel is validated against.");
 
-    detrender_1d.attr("n") = Detrender1d::n;
-    detrender_1d.attr("W") = Detrender1d::W;
-    detrender_1d.attr("T") = Detrender1d::T;
-    detrender_1d.attr("nbuf") = Detrender1d::nbuf;
     detrender_1d.attr("eps") = Detrender1d::eps;
 
     detrender_1d
-          .def_static("launch",
-               [](Array<float> &data, Array<unsigned char> &mask, uintptr_t stream_ptr) {
+          .def(py::init<long, long, long>(),
+               py::arg("n"), py::arg("W"), py::arg("T") = 2048,
+               "Create a Detrender1d.\n\n"
+               "Args:\n"
+               "    n: polynomial degree\n"
+               "    W: window half-width (the window is 2W+1 samples)\n"
+               "    T: output samples per row (chunk size)\n\n"
+               "Raises:\n"
+               "    RuntimeError: if no kernel is compiled for (n, W, T). The message lists\n"
+               "        the available configurations.")
+          .def_readonly("n", &Detrender1d::n, "Polynomial degree")
+          .def_readonly("W", &Detrender1d::W, "Window half-width (the window is 2W+1 samples)")
+          .def_readonly("T", &Detrender1d::T, "Output samples per row (chunk size)")
+          .def_readonly("nbuf", &Detrender1d::nbuf, "Buffer samples per row, = T + 2W")
+          .def_static("configs", &Detrender1d::configs,
+               "The compiled (n, W, T) configurations, i.e. the arguments the constructor\n"
+               "accepts. Returned as a list of (n, W, T) tuples.")
+          .def_static("time_selected", &Detrender1d::time_selected,
+               py::call_guard<py::gil_scoped_release>(),
+               "Run timing benchmarks, for every compiled configuration "
+               "(called via 'python -m pirate_frb time --dt1d')")
+          .def("launch",
+               [](const Detrender1d &self, Array<float> &data, Array<unsigned char> &mask,
+                  uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                   Detrender1d::launch(data, mask, stream);
+                   self.launch(data, mask, stream);
                },
                py::arg("data"), py::arg("mask"), py::arg("stream_ptr"),
                py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
@@ -86,9 +103,6 @@ void register_kernel_bindings(pybind11::module &m)
                "          {0,1}-valued. Modified in place, and the output mask is the\n"
                "          authoritative one (it can only lose samples).\n"
                "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
-          .def_static("time_selected", &Detrender1d::time_selected,
-               py::call_guard<py::gil_scoped_release>(),
-               "Run timing benchmark (called via 'python -m pirate_frb time --dt1d')")
     ;
 
     // GpuDequantizationKernel: Python injections in pirate_frb/kernels/GpuDequantizationKernel.py:

@@ -13,8 +13,7 @@ class Detrender1dInjections:
     # Save reference to C++ method
     _cpp_launch = Detrender1d.launch
 
-    @staticmethod
-    def launch(data, mask, stream=None):
+    def launch(self, data, mask, stream=None):
         """GPU kernel launch (async, does not sync stream).
 
         Parameters
@@ -36,4 +35,4 @@ class Detrender1dInjections:
         if stream is None:
             stream = cp.cuda.get_current_stream()
 
-        Detrender1d._cpp_launch(data, mask, stream.ptr)
+        self._cpp_launch(data, mask, stream.ptr)

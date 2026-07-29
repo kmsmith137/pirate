@@ -638,7 +638,7 @@ def test_masked_data_unused(rng=None, n=2, verbose=True):
 
 # ------------------------------------------------------------- 8. GPU kernel
 
-def test_gpu_kernel(rng=None, tol=1e-3, rmin_tol=1e-4, verbose=True):
+def test_gpu_kernel(rng=None, n=2, tol=1e-3, rmin_tol=1e-4, verbose=True):
     """
     Compare pirate.Detrender1d (the GPU kernel) to detrend_reference().
 
@@ -664,19 +664,35 @@ def test_gpu_kernel(rng=None, tol=1e-3, rmin_tol=1e-4, verbose=True):
     measured float32-vs-float64 disagreement in rmin, and an order of magnitude
     below eps itself.
 
-    Unlike the rest of this module, nothing here is a free parameter: n, W, T
-    and eps are compile-time constants of the kernel and are all read back from
-    it.  In particular this test does NOT follow run_all()'s randomized degree --
-    it can only test the degree the kernel was compiled at.
+    Unlike the rest of this module, W, T and eps are not free parameters: they
+    are compile-time constants of the kernel and are read back from it.  Every
+    compiled configuration of the requested degree is tested; if there is none
+    (the kernel does not have to be built for every degree the numpy reference
+    supports) the test is a no-op and says so.
     """
     from ..kernels import Detrender1d   # local import: this package is otherwise numpy-only
     import cupy as cp
 
     rng = _default_rng(rng)
-    n = Detrender1d.n
-    W, T, nbuf = Detrender1d.W, Detrender1d.T, Detrender1d.nbuf
+    cfgs = [c for c in Detrender1d.configs() if c[0] == n]
+    if not cfgs:
+        if verbose:
+            print(f'    test_gpu_kernel: no kernel compiled at n={n}, skipped '
+                  f'(have {Detrender1d.configs()})')
+        return
+
     eps32, eps64 = Detrender1d.eps, 1e-6
-    S_ax, ndraw = 8, 2
+    ndraw = 2
+
+    for (_n, W, T) in cfgs:
+        _test_gpu_kernel_1(rng, Detrender1d(n=n, W=W, T=T), cp, eps32, eps64,
+                           ndraw, tol, rmin_tol, verbose)
+
+
+def _test_gpu_kernel_1(rng, det, cp, eps32, eps64, ndraw, tol, rmin_tol, verbose):
+    """One configuration of test_gpu_kernel(); see its docstring."""
+    n, W, T, nbuf = det.n, det.W, det.T, det.nbuf
+    S_ax = 8
 
     worst_gpu, worst_cpu, worst_name = 0.0, 0.0, ''
     ndisagree, worst_slack = 0, 0.0
@@ -689,7 +705,7 @@ def test_gpu_kernel(rng=None, tol=1e-3, rmin_tol=1e-4, verbose=True):
 
         gpu_d = cp.asarray(d32)
         gpu_m = cp.asarray(mask.astype(np.uint8))
-        Detrender1d.launch(gpu_d, gpu_m)
+        det.launch(gpu_d, gpu_m)
         cp.cuda.get_current_stream().synchronize()
         out_d, out_m = cp.asnumpy(gpu_d), cp.asnumpy(gpu_m)
 
@@ -745,9 +761,9 @@ def run_all(verbose=True, rng=None, n=None):
 
     The polynomial degree is drawn from {1, 2} per call rather than fixed, so a
     multi-iteration run ('test --dt1d -n 100') covers both.  Pass n explicitly to
-    pin it.  The exception is test_gpu_kernel, which uses the degree its kernel
-    was compiled at; it is also the only test that needs a GPU (and the compiled
-    extension), the other seven being pure numpy.
+    pin it.  test_gpu_kernel follows the same degree, and skips itself if no
+    kernel is compiled for it; it is also the only test that needs a GPU (and the
+    compiled extension), the other seven being pure numpy.
     """
     rng = _default_rng(rng)
     ent = rng.bit_generator.seed_seq.entropy
@@ -761,5 +777,5 @@ def run_all(verbose=True, rng=None, n=None):
     test_detrender_vs_reference(rng, n=n, verbose=verbose)
     test_dtype_agreement(rng, n=n, verbose=verbose)
     test_masked_data_unused(rng, n=n, verbose=verbose)
-    test_gpu_kernel(rng, verbose=verbose)
+    test_gpu_kernel(rng, n=n, verbose=verbose)
     print(f'  detrending_1d tests passed   [cumulative mask expansion: {_expansion_str()}]')
