@@ -67,6 +67,7 @@ def parse_test(subparsers):
     parser.add_argument('--aout', action='store_true', help='Runs the serialized-output test (atomic_print/AtomicPrint, C++ and python threads)')
     parser.add_argument('--dt1d', action='store_true', help='Runs pirate_frb.detrending_1d tests (pure-numpy 1-d detrender)')
     parser.add_argument('--dt1k', action='store_true', help='Runs pirate_frb.detrending_1d_kalman tests (pure-numpy fixed-lag Kalman detrender)')
+    parser.add_argument('--dts', action='store_true', help='Runs pirate_frb.detrending_spline tests (pure-numpy regularized spline detrender)')
 
 
 def rrange(registry_class):
@@ -87,7 +88,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d', 'dt1k' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d', 'dt1k', 'dts' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -103,6 +104,10 @@ def test(args):
         if run_all_tests or args.dt1k:
             from .detrending_1d_kalman import tests as dt1k_tests
             dt1k_tests.run_all()
+
+        if run_all_tests or args.dts:
+            from .detrending_spline import tests as dts_tests
+            dts_tests.run_all()
         
         if run_all_tests or args.rt:
             kernels.ReferenceLagbuf.test_random()
