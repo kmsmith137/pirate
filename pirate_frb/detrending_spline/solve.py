@@ -83,11 +83,14 @@ then settle it:
 
   1. Overfitting here has the WRONG SIGN and cannot manufacture an excursion at
      all.  Restricted to the unmasked channels, H = Phi (G + eta D_1)^-1 Phi^T W
-     is symmetric positive semidefinite with spectrum in [0,1], so
-     Var[r_f] = sigma^2 (1 - h_ff)^2 <= sigma^2 identically.  Measured maximum
-     0.9968 over 101 masks; over-dispersion never occurs.  Low nu can only
-     suppress the residual, never inflate it.  This is stronger than "small on
-     average" -- it is "wrong direction, always".
+     is symmetric positive semidefinite with spectrum in [0,1], so I-H and hence
+     (I-H)^2 also have spectrum in [0,1], and
+         Var[r_f] = sigma^2 [(I-H)^2]_ff <= sigma^2
+     identically.  (NOT sigma^2 (1-h_ff)^2, which drops the off-diagonal term
+     sum_{g != f} h_fg^2; the bound is what matters and it holds either way.)
+     Measured maximum 0.9968 over 101 masks; over-dispersion never occurs.  Low
+     nu can only suppress the residual, never inflate it.  This is stronger than
+     "small on average" -- it is "wrong direction, always".
   2. Operationally the leverage is negligible, and rigorously bounded:
      tr(H) <= N_phi(n+1), so leverage <= N_phi(n+1)/M.  Measured at
      nfreq = 4096: 0.0032 fully valid, 0.0035 at 10% flagged, 0.0064 at 50%
