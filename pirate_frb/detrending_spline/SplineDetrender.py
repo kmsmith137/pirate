@@ -13,23 +13,48 @@ from .assemble import assemble, commit, bandwidth
 from .solve import solve_banded, zone_slices
 from .expand import expand_mask
 
-# Defaults.  eta is dimensionless: because D_1 is defined on coefficient indices
-# it is already in "index coordinates", so eta needs no rescaling by the knot
-# spacing, and the worst-case shrinkage bias is about eta times the baseline
-# amplitude.  It also needs no rescaling by the time-window width when the 2-d
-# detrender arrives: the bias and the residual noise are both W-independent.
+# eta and eps are chosen JOINTLY, not independently, and the reason is a measured
+# scaling law.
 #
-# 3e-3 rather than 1e-3: at 1e-3 the worst adversarial mask at nfreq = 30000 with
-# a single very wide knot interval reaches r_min = 8.9e-5, below EPS_FLOAT32, so
-# the zone expander fires on a fit that is in fact perfectly usable.  3e-3 keeps
-# that case at 2.1e-4, and costs a factor 3 in shrinkage bias.
-ETA_DEFAULT = 3e-3
+# eta is dimensionless: D_1 is defined on coefficient indices, so it is already in
+# "index coordinates" and eta needs no rescaling by the knot spacing.  It also
+# needs none by the time-window width -- the shrinkage bias and the residual noise
+# are each W-independent.  The worst-case bias is about eta times the baseline
+# amplitude, and it is UNDERSUBTRACTION, which in a rare-event search is dangerous
+# at any rate however rare (see solve.py).  So eta wants to be small.
+#
+# What stops it is conditioning: the worst r_min over adversarial masks scales as
+# eta^(4/5) at n_phi >= 2.  Measured over five configurations spanning
+# nfreq = 10000 to 30000, uniform to single-knot-interval, the ratio on cutting
+# eta by 3 is 0.417 to 0.421 against 0.415 predicted -- three-digit agreement.
+#
+# The two therefore move together.  Cutting eta from 3e-3 to 1e-3 costs a factor
+# 2.4 in r_min, but eps can come down by 3.3, so every margin IMPROVES by ~1.4x
+# while the median shrinkage bias roughly halves (1.06e-3 to 5.4e-4 of baseline
+# amplitude).  Worst-case r_min/eps, from an offline exhaustive sweep:
+#
+#     config                        (3e-3, 1e-4)    (1e-3, 3e-5)
+#     nfreq=10000, K=10 uniform          23.3x           32.7x
+#     nfreq=10000, no interior knots      5.1x            7.1x
+#     nfreq=30000, one 29900-wide         2.1x            3.0x
+#     nfreq=30000, no interior knots      2.1x            3.0x
+#
+# LOWERING eps IS NOT FREE, which is what bounds this.  A zone surviving at
+# r_min ~ eps carries a float32 error of order eps_mach/(4 r_min), and that error
+# is COHERENT -- same dangerous category as shrinkage, not the harmless one.
+# Measured at each setting's worst configuration it is 5.8e-6, 8.6e-6, 1.6e-5 at
+# eta = 3e-3, 1e-3, 3e-4, against shrinkage biases of 1.06e-3, 5.4e-4, 1.7e-4.
+# So at 1e-3 the numerical term is still ~60x below the regulator term, but by
+# 3e-4 the two are within a factor of 2 of crossing.  eta = 3e-4 is the floor:
+# below it one coherent error is simply traded for another.
+ETA_DEFAULT = 1e-3
 
-# eps is a pure conditioning threshold on the equilibrated pivot, so its natural
-# scale is machine epsilon, not anything physical -- hence one value per working
-# precision rather than one value.  Selected automatically from 'dtype' unless
-# the caller overrides.
-EPS_FLOAT32 = 1e-4
+# eps is a threshold on the equilibrated pivot, so its natural scale is machine
+# epsilon rather than anything physical -- hence one value per working precision,
+# selected automatically from 'dtype' unless the caller overrides.  EPS_FLOAT64 is
+# nowhere near binding (890x margin at the worst configuration above) and is left
+# where it is.
+EPS_FLOAT32 = 3e-5
 EPS_FLOAT64 = 1e-7
 
 

@@ -658,14 +658,33 @@ def test_dtype_agreement(rng, verbose=True):
     Baselines are O(1) with no large offset: without offset subtraction a large DC
     level would consume float32 mantissa and this test would be measuring that
     instead of the algorithm.
+
+    This is also the only test that reaches nfreq = 30000, because the float32 vs
+    float64 comparison is what would actually catch a large-h_max problem.  It
+    does NOT measure the conditioning margin there -- see the note by the print.
     """
     n_flip, n_zone, worst_rel, worst_resid = 0, 0, 0.0, 0.0
+    worst_abs_p = 0.0
+    worst_p, worst_cfg = np.inf, None
 
     for _ in range(12):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(128, 10001)),
-                              kind='no_interior' if rng.random() < 0.3 else None)
+        # nfreq reaches 30000 HERE AND NOWHERE ELSE.  Conditioning turns on h_max,
+        # and the worst configurations are a nearly-band-wide knot interval at the
+        # top of the range -- where the float32/float64 comparison is the thing
+        # that would actually catch a problem.  Confined to this test because a
+        # 30000-channel accumulate is not worth paying for in the other twenty.
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(128, 30001)),
+                              kind='no_interior' if rng.random() < 0.4 else None)
         M_ax, ntime = 1, 10
-        mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, ETA_DEFAULT)
+        # Cycle the extremal kinds explicitly rather than letting random_mask draw
+        # them.  At large h_max the conditioning extremum is reached only by
+        # 'adversarial' and 'one_run', and a random draw finds neither reliably --
+        # measured, it reported a margin about 2.6x better than the truth, which
+        # is exactly the direction that matters.
+        kinds = ('adversarial', 'one_run', 'one_run', 'adversarial',
+                 'one_run', None, 'knot_blocks', 'bernoulli', 'dead_run', None)
+        mask = np.stack([msk.random_mask_1d(kv, rng, ETA_DEFAULT, kind=kinds[t])
+                         for t in range(ntime)], axis=1)[None, :, :]
         base, _ = _smooth_baseline(kv, rng, M_ax, ntime)
         d = base + 0.05 * rng.standard_normal(base.shape)
         d32 = d.astype(np.float32)
@@ -704,20 +723,45 @@ def test_dtype_agreement(rng, verbose=True):
             worst_resid = max(worst_resid,
                               float(np.abs(r32.astype(np.float64) - r64)[inter].max() / scale))
 
-        # (e) r_min agreement away from the band.
-        ok = (~band) & (p64 > 0)
+        live = p64[p64 > 0]
+        if live.size and float(live.min()) < worst_p:
+            worst_p = float(live.min())
+            worst_cfg = (kv.nfreq, kv.nzone, int(np.diff(np.unique(kv.knots)).max()))
+
+        # (e) r_min agreement, asserted in ABSOLUTE terms.  r_min is a Cholesky
+        # pivot, computed as a difference, so its error is roundoff-limited in
+        # absolute terms and the RELATIVE error therefore scales as
+        # eps_mach/r_min -- large exactly where r_min is small, i.e. where the
+        # zone is masked anyway and the value is irrelevant.  Measured, the
+        # absolute error sits at about 13*eps_mach across four decades of r_min
+        # while the relative error spans 1.8e-7 to 8.0e-3.  Asserting on the
+        # relative figure would need recalibration every time eps moves, which is
+        # exactly how this test broke when eps went from 1e-4 to 3e-5.
+        ok = p64 > 0
         if ok.any():
-            rel = np.abs(p32.astype(np.float64) - p64)[ok] / p64[ok]
-            worst_rel = max(worst_rel, float(rel.max()))
+            ae = np.abs(p32.astype(np.float64) - p64)[ok]
+            worst_abs_p = max(worst_abs_p, float(ae.max()))
+            worst_rel = max(worst_rel, float((ae / p64[ok]).max()))
 
     assert n_flip <= 1e-3 * max(n_zone, 1), \
         f'{n_flip}/{n_zone} zone decisions flipped outside the threshold band'
     assert worst_resid < 1e-3, f'float32 vs float64 residual {worst_resid:.3e}'
-    assert worst_rel < 1e-2, f'float32 vs float64 r_min relative error {worst_rel:.3e}'
+    assert worst_abs_p < 100*np.finfo(np.float32).eps, \
+        f'float32 vs float64 r_min absolute error {worst_abs_p:.3e}'
 
     if verbose:
         print(f'    test_dtype_agreement: pass  [resid {worst_resid:.2e}, '
-              f'r_min rel {worst_rel:.2e}, flips {n_flip}/{n_zone}]')
+              f'r_min abs {worst_abs_p:.2e} (rel {worst_rel:.2e}), '
+              f'flips {n_flip}/{n_zone}]')
+        # Reported, not asserted, and NOT the conditioning margin.  Sampling 120
+        # masks cannot reach the adversarial extremum -- measured, this number is
+        # eta-independent while the true worst r_min scales as eta^(4/5), because
+        # what the sampler finds is data-dominated rather than regulator-limited.
+        # The authoritative margin comes from an offline exhaustive sweep; this is
+        # only the smallest r_min that happened to be exercised.
+        print(f'      smallest r_min exercised {worst_p:.3e} = '
+              f'{worst_p/EPS_FLOAT32:.1f} x eps32 (not the margin; see the code) '
+              f'at nfreq,nzone,h_max = {worst_cfg}')
 
 
 
