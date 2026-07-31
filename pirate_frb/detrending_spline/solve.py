@@ -22,15 +22,48 @@ cancels eta exactly, and a coefficient with data has diagonal O(h), which cancel
 the h.  The equilibrated condition number is then O(1) in both.  Do not "optimize"
 this away, and do not threshold on the un-equilibrated pivot.
 
-WHAT r_min IS AND IS NOT.  r_min is a NUMERICAL statistic: it says the factorization
-is trustworthy, and nothing more.  It cannot detect a zone that is statistically
-degenerate.  The clearest case: a zone with ONE unmasked channel has r_min ~ 1e-2,
-healthier than most masks -- because the regulator's null space contains the
-constants, the fit passes exactly through that one point, and the residual is
-identically zero with zero degrees of freedom.  Detecting that needs the residual
-degrees of freedom M - tr(H), which is deliberately not implemented yet.  Until it
-is, a nearly empty zone will produce an identically zero residual and nothing here
-will complain.
+WHY r_min AND NOT THE CONDITION NUMBER.  These measure different errors, and the
+choice is deliberate.
+
+Cholesky is backward stable, so the error in the COEFFICIENTS is governed by
+kappa = lambda_max/lambda_min, and equilibration pins lambda_max = O(1) (it is
+bounded by n_phi+1; see the proof sketch below), leaving a relative coefficient
+error of order eps_mach/lambda_min.  r_min is NOT that quantity: Cholesky pivots
+are diagonal entries of Schur complements, so lambda_min <= r_min <= 1 always, and
+the gap reaches 84x on real detrender matrices.  Using eps_mach/r_min as a bound on
+the coefficient error fails by up to 17x.
+
+But the coefficients are not what this module emits.  The residual is evaluated at
+UNMASKED CHANNELS, and for THAT error we have no rigorous bound in terms of either
+statistic -- only a measurement.  Over 523 random and adversarial configurations
+spanning four decades of r_min, in float32:
+
+    r_min in [1e-1, 1)      worst fit error 1.9e-7
+    r_min in [1e-2, 1e-1)   worst fit error 1.7e-6
+    r_min in [1e-3, 1e-2)   worst fit error 1.9e-5
+    r_min below 1e-3        worst fit error 1.2e-4
+
+roughly eps_mach/(4 r_min).  TREAT THIS AS AN EMPIRICAL RULE OF THUMB, NOT A BOUND.
+It is a trend, not a law: the log-log slope against 1/r_min is 0.68 rather than 1,
+the correlation is 0.62, and "no case exceeded eps_mach/r_min" is an observation
+about the masks we generated, not a theorem.  A rigorous statement would need the
+componentwise (Skeel) bound |A^-1||A||x|, which is not cheap to evaluate.
+
+With that caveat, r_min is still the better choice of the two, and for a structural
+reason rather than a lucky one: lambda_min's small modes are typically DELOCALIZED
+over coefficients with no data -- the extremal one is a ramp across a dead run,
+giving lambda_min ~ 1/K^2 -- and such a mode contributes nothing at an unmasked
+channel.  r_min is a local statistic and does not see it.  Thresholding on
+lambda_min would therefore mask zones whose fits are perfectly accurate, on account
+of a direction the output never touches.
+
+Neither statistic, however, detects a zone that is STATISTICALLY degenerate.  The
+clearest case: a zone with ONE unmasked channel has r_min ~ 1e-2, healthier than
+most masks -- because the regulator's null space contains the constants, the fit
+passes exactly through that one point, and the residual is identically zero with
+zero degrees of freedom.  Detecting that needs the residual degrees of freedom
+M - tr(H), which is deliberately not implemented yet.  Until it is, a nearly empty
+zone will produce an identically zero residual and nothing here will complain.
 
 NO DEFLATION.  Unlike an unregularized spline detrender, there is nothing to
 deflate: with one unmasked channel in the zone, G + eta*D_1 is positive definite
@@ -149,9 +182,23 @@ def solve_normal_equations(G, U, kv, D1, eta, eps):
         bad:  (..., nzone)   bool, rmin < eps
 
     A zone is DEAD (no unmasked channel anywhere in it) exactly when the sum of
-    G's diagonal over that zone is zero: G_jj = sum_f w_f phi_j(f)^2 and the basis
-    is a partition of unity, so that sum is sum_f w_f over the zone.  Testing it
-    this way is exact and needs no separate channel count.
+    G's diagonal over that zone is zero.  Since
+
+        sum_{j in zone} G_jj = sum_f w_f * (sum_{j in zone} phi_j(f)^2)
+
+    and partition of unity plus Cauchy-Schwarz give
+    sum_j phi_j(f)^2 >= 1/(n_phi+1) at every channel, that sum lies in
+    [M_zone/(n_phi+1), M_zone] where M_zone is the unmasked channel count.  So
+    the test is exact -- positive iff M_zone >= 1 -- and cannot underflow, which
+    is why no separate channel count is needed.  (It is NOT equal to M_zone;
+    measured, the ratio ranges over about 0.38 to 0.63 at n_phi = 2.)
+
+    Testing this way rather than by pivot magnitude is deliberate.  A dead zone
+    leaves A = eta*D_1 restricted to it, which is EXACTLY singular (null vector
+    = the all-ones coefficient vector of the zone), so its last pivot is
+    roundoff of either sign; any magnitude threshold would be arbitrary and
+    dtype-dependent.  The structural test makes the reported r_min exactly 0
+    instead of dtype-dependent noise -- which matters because r_min is an output.
     """
     dtype = G.dtype
     N, n_phi = kv.N_phi, kv.n_phi

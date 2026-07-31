@@ -13,10 +13,25 @@ from .expand import expand_mask
 # Defaults.  eta is dimensionless: because D_1 is defined on coefficient indices
 # it is already in "index coordinates", so eta needs no rescaling by the knot
 # spacing, and the worst-case shrinkage bias is about eta times the baseline
-# amplitude.  eps is a pure conditioning threshold; see the class docstring.
+# amplitude.  It also needs no rescaling by the time-window width when the 2-d
+# detrender arrives: the bias and the residual noise are both W-independent.
+#
+# 3e-3 rather than 1e-3: at 1e-3 the worst adversarial mask at nfreq = 30000 with
+# a single very wide knot interval reaches r_min = 8.9e-5, below EPS_FLOAT32, so
+# the zone expander fires on a fit that is in fact perfectly usable.  3e-3 keeps
+# that case at 2.1e-4, and costs a factor 3 in shrinkage bias.
 ETA_DEFAULT = 3e-3
-EPS_DEFAULT = 1e-4
+
+# eps is a pure conditioning threshold on the equilibrated pivot, so its natural
+# scale is machine epsilon, not anything physical -- hence one value per working
+# precision rather than one value.  Selected automatically from 'dtype' unless
+# the caller overrides.
+EPS_FLOAT32 = 1e-4
 EPS_FLOAT64 = 1e-7
+
+
+def default_eps(dtype):
+    return EPS_FLOAT32 if np.dtype(dtype) == np.dtype(np.float32) else EPS_FLOAT64
 
 
 class SplineDetrender:
@@ -37,7 +52,8 @@ class SplineDetrender:
         is roughly eta times the baseline amplitude.  A CONSTANT baseline is
         removed exactly at any eta (regulator.py), so the bias only involves
         baseline structure, not its mean level.
-      eps (float): conditioning threshold.  A zone whose r_min falls below eps is
+      eps (float): conditioning threshold, defaulting to EPS_FLOAT32 or
+        EPS_FLOAT64 according to 'dtype'.  A zone whose r_min falls below eps is
         masked out entirely.  This is a guardrail against a numerically untrustworthy
         factorization; it is NOT a test of whether the fit is statistically
         meaningful, and in particular it will not fire for a zone with a single
@@ -51,11 +67,11 @@ class SplineDetrender:
     large offset relative to its structure will lose mantissa bits for nothing.
     """
 
-    def __init__(self, kv, eta=ETA_DEFAULT, eps=EPS_DEFAULT, dtype=np.float32):
+    def __init__(self, kv, eta=ETA_DEFAULT, eps=None, dtype=np.float32):
         self.kv = kv
         self.eta = float(eta)
-        self.eps = float(eps)
         self.dtype = np.dtype(dtype)
+        self.eps = float(default_eps(self.dtype) if eps is None else eps)
         if self.eta <= 0:
             raise ValueError(f'SplineDetrender: eta={eta} must be > 0')
         if self.eps <= 0:

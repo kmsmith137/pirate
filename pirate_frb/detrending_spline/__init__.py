@@ -36,7 +36,7 @@ from .reduce import tree_sum, accumulate, evaluate, band_to_dense, dense_to_band
 from .solve import (equilibrate, forward_subst, backward_subst,
                     solve_normal_equations, zone_slices)
 from .expand import expand_mask, zone_channel_ranges
-from .SplineDetrender import (SplineDetrender, ETA_DEFAULT, EPS_DEFAULT,
-                              EPS_FLOAT64)
+from .SplineDetrender import (SplineDetrender, ETA_DEFAULT, EPS_FLOAT32,
+                              EPS_FLOAT64, default_eps)
 from .reference import detrend_reference
 from .masks import random_knots, random_mask, random_mask_1d, adversarial_mask, MASK_TYPES

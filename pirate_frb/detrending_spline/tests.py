@@ -28,7 +28,7 @@ from .reference import detrend_reference
 from .regulator import d1_banded, d1_dense
 from .solve import solve_normal_equations, zone_slices
 from .expand import zone_channel_ranges
-from .SplineDetrender import SplineDetrender, ETA_DEFAULT, EPS_DEFAULT, EPS_FLOAT64
+from .SplineDetrender import SplineDetrender, ETA_DEFAULT, EPS_FLOAT32, EPS_FLOAT64
 
 N_PHI = 2
 
@@ -457,7 +457,7 @@ def test_conditioning(rng, verbose=True, heavy=False):
     'heavy' adds the large-F, wide-knot-interval configurations from the parameter
     study.  They are slow and are not run by default.
     """
-    eta, eps = ETA_DEFAULT, EPS_DEFAULT
+    eta, eps = ETA_DEFAULT, EPS_FLOAT32
     worst, worst_cfg = np.inf, None
 
     cfgs = [(int(rng.integers(200, 2000)), None) for _ in range(14)]
@@ -548,7 +548,7 @@ def test_zone_expansion(rng, verbose=True):
 def test_reference_agreement(rng, verbose=True):
     for _ in range(10):
         kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 500)))
-        eta, eps = ETA_DEFAULT, EPS_DEFAULT
+        eta, eps = ETA_DEFAULT, EPS_FLOAT32
         det = SplineDetrender(kv, dtype=np.float64, eta=eta, eps=eps)
         M_ax, ntime = 2, 5
         mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, eta)
@@ -600,9 +600,9 @@ def test_dtype_agreement(rng, verbose=True):
         d = base + 0.05 * rng.standard_normal(base.shape)
         d32 = d.astype(np.float32)
 
-        det32 = SplineDetrender(kv, dtype=np.float32, eps=EPS_DEFAULT)
+        det32 = SplineDetrender(kv, dtype=np.float32, eps=EPS_FLOAT32)
         det64 = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT64)
-        det64_loose = SplineDetrender(kv, dtype=np.float64, eps=EPS_DEFAULT)
+        det64_loose = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT32)
 
         r32, m32, p32 = det32.detrend(d32, mask)
         r64, m64, p64 = det64.detrend(d, mask)
@@ -614,15 +614,15 @@ def test_dtype_agreement(rng, verbose=True):
         assert np.array_equal(np.where(both, r64, 0), np.where(both, r64l, 0))
 
         # (b) monotone in eps.
-        for eps_a, eps_b in ((EPS_FLOAT64, 1e-5), (1e-5, EPS_DEFAULT), (EPS_DEFAULT, 1e-3)):
+        for eps_a, eps_b in ((EPS_FLOAT64, 1e-5), (1e-5, EPS_FLOAT32), (EPS_FLOAT32, 1e-3)):
             ma = SplineDetrender(kv, dtype=np.float64, eps=eps_a).detrend(d, mask)[1]
             mb = SplineDetrender(kv, dtype=np.float64, eps=eps_b).detrend(d, mask)[1]
             assert np.all(mb <= ma), 'kept set grew when eps increased'
 
         # (c) decisions agree away from the threshold band.
-        band = (p64 > EPS_DEFAULT / 3) & (p64 < 3 * EPS_DEFAULT)
-        keep32 = ~(p32 < EPS_DEFAULT)
-        keep64l = ~(p64l < EPS_DEFAULT)
+        band = (p64 > EPS_FLOAT32 / 3) & (p64 < 3 * EPS_FLOAT32)
+        keep32 = ~(p32 < EPS_FLOAT32)
+        keep64l = ~(p64l < EPS_FLOAT32)
         disagree = (keep32 != keep64l) & ~band
         n_flip += int(disagree.sum())
         n_zone += int(disagree.size)
@@ -663,7 +663,7 @@ def run_all(verbose=True, rng=None, heavy=False):
     rng = _default_rng(rng)
     ent = rng.bit_generator.seed_seq.entropy
     print(f'  detrending_spline tests (n_phi={N_PHI}, eta={ETA_DEFAULT:g}, '
-          f'eps={EPS_DEFAULT:g}, rng entropy {ent})')
+          f'eps={EPS_FLOAT32:g}, rng entropy {ent})')
     test_knots(rng, verbose=verbose)
     test_basis(rng, verbose=verbose)
     test_regulator(rng, verbose=verbose)
@@ -680,4 +680,4 @@ def run_all(verbose=True, rng=None, heavy=False):
     test_dtype_agreement(rng, verbose=verbose)
     print(f'  detrending_spline tests passed   '
           f'[cumulative worst r_min: {_worst_rmin[0]:.3e}, '
-          f'{_worst_rmin[0]/EPS_DEFAULT:.1f} x eps]')
+          f'{_worst_rmin[0]/EPS_FLOAT32:.1f} x eps]')
