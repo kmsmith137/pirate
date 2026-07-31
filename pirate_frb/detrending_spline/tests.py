@@ -49,6 +49,35 @@ N_PHI = 2
 # can print the measured margin over eps.
 _worst_rmin = [np.inf]
 
+# Cumulative mask-expansion accounting for test_2d_dtype_agreement(), in the
+# style of detrending_1d.tests.  Deliberately module-level and never reset:
+# under 'test --dts -n N' each iteration draws fresh knots and masks, and the
+# running total across iterations is what tells us whether expansion is firing at
+# a sane rate -- a single iteration is far too small a sample to judge from.
+#
+# Keyed by (n_phi, dtype-eps), because the two precisions use different eps
+# (1e-4 vs 1e-7) and therefore expand at different rates BY CONSTRUCTION; pooling
+# them would make the number uninterpretable.  n_phi is in the key because at
+# n_phi = 0 the regulator is identically zero and r_min is exactly 1, so
+# expansion can never fire there and a pooled rate would be diluted by it.
+_EXPANSION_2D = {}
+
+
+def _note_expansion_2d(key, mask_in, mask_out):
+    """mask_in restricted to the output range, and the detrender's mask_out."""
+    d = _EXPANSION_2D.setdefault(key, {'valid_in': 0, 'expanded': 0})
+    d['valid_in'] += int(mask_in.sum())
+    d['expanded'] += int((mask_in & ~mask_out).sum())
+
+
+def _expansion_2d_str():
+    if not _EXPANSION_2D:
+        return 'none recorded'
+    return '  '.join(
+        f"n_phi={k[0]},{k[1]}: {d['expanded']}/{d['valid_in']} = "
+        f"{(d['expanded']/d['valid_in'] if d['valid_in'] else 0.0):.3e}"
+        for k, d in sorted(_EXPANSION_2D.items()))
+
 
 def _default_rng(rng):
     return np.random.default_rng() if rng is None else rng
@@ -939,8 +968,26 @@ def test_2d_conditioning(rng, verbose=True):
 
 
 def test_2d_dtype_agreement(rng, verbose=True):
-    """float32 at EPS_FLOAT32 vs float64 at EPS_FLOAT64, swept over (n, W)."""
+    """
+    float32 at EPS_FLOAT32 vs float64 at EPS_FLOAT64, swept over (n, W).
+
+    Also the only place mask expansion is tallied.  The point of the tally is not
+    a pass/fail threshold but a number to look at: a sudden change in the rate is
+    a signal even when every assertion still passes.
+
+    THE TWO PRECISIONS NORMALLY REPORT THE SAME COUNT, and that is the expected
+    state rather than a broken tally.  Expansion here is essentially all
+    RANK-driven, not eps-driven: measured over these configurations, 14.1% of
+    zone-samples had r_min exactly 0 (a zone failing the >= n+1 distinct live
+    offsets condition, which is structural and precision-independent) and 0 of
+    320 fell in 0 < r_min < eps.  Since r_min = 0 is below both thresholds, the
+    f32 and f64 runs flag the same zones despite their eps differing by 1000x.
+    They are still counted separately because a DIVERGENCE between them is
+    exactly the signal that eps has begun to bite, which is the thing worth
+    noticing.
+    """
     worst = 0.0
+    iter_counts = {}
     for _ in range(4):
         kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(128, 800)))
         for n, W in NW_CASES:
@@ -953,6 +1000,16 @@ def test_2d_dtype_agreement(rng, verbose=True):
             a64 = SplineDetrender(kv, n=n, W=W, dtype=np.float64)
             r32, m32, _ = a32.detrend_chunk(d.astype(np.float32), m)
             r64, m64, _ = a64.detrend_chunk(d, m)
+
+            # The input mask restricted to the output range is what expansion is
+            # measured against; the halo is never emitted.
+            m_in = (m[:, :, W:W+T] != 0)
+            for tag, mo in (('f32', m32), ('f64', m64)):
+                _note_expansion_2d((N_PHI, tag), m_in, mo)
+                c = iter_counts.setdefault(tag, [0, 0])
+                c[0] += int((m_in & ~mo).sum())
+                c[1] += int(m_in.sum())
+
             inter = m32 & m64
             if inter.any():
                 e = float(np.abs(r32.astype(np.float64) - r64)[inter].max()
@@ -960,7 +1017,12 @@ def test_2d_dtype_agreement(rng, verbose=True):
                 worst = max(worst, e)
     assert worst < 1e-3, worst
     if verbose:
+        this = '  '.join(f'{t}: {c[0]}/{c[1]} = '
+                         f'{(c[0]/c[1] if c[1] else 0.0):.3e}'
+                         for t, c in sorted(iter_counts.items()))
         print(f'    test_2d_dtype_agreement: pass  [resid {worst:.2e}]')
+        print(f'      mask expansion this iteration: {this}')
+        print(f'      cumulative:                    {_expansion_2d_str()}')
 
 
 # ----------------------------------------------------------------
