@@ -34,9 +34,13 @@ from .basis import eval_basis, BasisTable
 from .regulator import d1_banded, d1_dense
 from .reduce import tree_sum, accumulate, evaluate, band_to_dense, dense_to_band
 from .solve import (equilibrate, forward_subst, backward_subst,
-                    solve_normal_equations, zone_slices)
+                    solve_normal_equations, solve_banded, zone_slices)
 from .expand import expand_mask, zone_channel_ranges
 from .SplineDetrender import (SplineDetrender, ETA_DEFAULT, EPS_FLOAT32,
                               EPS_FLOAT64, default_eps)
 from .reference import detrend_reference
-from .masks import random_knots, random_mask, random_mask_1d, adversarial_mask, MASK_TYPES
+from .timebasis import TimeBasis
+from .moments import window_moments, zone_live_counts
+from .assemble import assemble, commit, bandwidth
+from .masks import (random_knots, random_mask, random_mask_1d, random_mask_2d,
+                    adversarial_mask, MASK_TYPES, TIME_TYPES)

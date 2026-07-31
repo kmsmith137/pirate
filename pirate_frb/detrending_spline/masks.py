@@ -311,3 +311,53 @@ def random_mask(shape, kv, rng, eta, kind=None):
         for t in range(ntime):
             out[m, :, t] = random_mask_1d(kv, rng, eta, kind=kind)
     return out
+
+
+# ---------------------------------------------------------------- time structure
+
+TIME_TYPES = ['persistent', 'transition', 'dropout', 'independent']
+
+
+def random_mask_2d(shape, kv, rng, eta, kind=None, time_kind=None):
+    """
+    (M, nfreq, ntime) boolean mask WITH time structure.
+
+    random_mask() draws every (beam, time) column independently, which makes the
+    mask maximally time-varying.  That is the wrong default for the 2-d
+    detrender: real flags are persistent over thousands of samples, the
+    window-constant case is the common one, and several properties hold exactly
+    only there (n=1 reduces to n=0; r_min factorizes).  A suite built on
+    independent columns would exercise none of them.
+
+      'persistent'   one column, held for the whole chunk -- window-constant
+                     everywhere, the common real case
+      'transition'   persistent, with the flag pattern switching at one time;
+                     the windows straddling the switch are where n=1 earns its
+                     keep and where the Kronecker factorization fails
+      'dropout'      persistent, plus isolated fully-masked time samples, which
+                     remove an offset from the window and probe the >= n+1
+                     distinct offsets rank condition
+      'independent'  the original per-column draw
+    """
+    M_ax, nfreq, ntime = shape
+    if nfreq != kv.nfreq:
+        raise ValueError(f'random_mask_2d: shape has {nfreq} channels, kv has {kv.nfreq}')
+    if time_kind is None:
+        time_kind = str(rng.choice(TIME_TYPES, p=[0.35, 0.25, 0.2, 0.2]))
+
+    out = np.zeros(shape, dtype=bool)
+    for m in range(M_ax):
+        if time_kind == 'independent':
+            for t in range(ntime):
+                out[m, :, t] = random_mask_1d(kv, rng, eta, kind=kind)
+            continue
+        base = random_mask_1d(kv, rng, eta, kind=kind)
+        out[m] = base[:, None]
+        if time_kind == 'transition':
+            other = random_mask_1d(kv, rng, eta, kind=kind)
+            t0 = int(rng.integers(0, max(1, ntime)))
+            out[m, :, t0:] = other[:, None]
+        elif time_kind == 'dropout':
+            for _ in range(int(rng.integers(1, 4))):
+                out[m, :, int(rng.integers(0, ntime))] = False
+    return out

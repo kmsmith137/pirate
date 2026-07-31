@@ -170,57 +170,53 @@ def zone_slices(kv):
     return out
 
 
+def solve_banded(A, U, kv, n, live, nmin):
+    """
+    A: (..., N_phi*(n+1), nb+1) banded and already regularized, U: (..., N_phi*(n+1)).
+    live: (..., nzone) int, the number of window offsets at which each zone holds
+    data (moments.zone_live_counts); nmin = n+1 is the number required.
+
+    Returns (alpha, rmin, bad) with alpha zeroed in flagged zones, rmin the
+    minimum relative pivot per zone (exactly 0 for a zone that fails the rank
+    test), and bad = rmin < eps applied by the caller.
+
+    THE RANK TEST GENERALIZES THE 1-d DEAD-ZONE TEST.  At n = 0 "at least one
+    unmasked channel" is exactly "live >= 1".  At n > 0 a degree-n fit in time is
+    singular unless the zone carries data at n+1 distinct offsets, whatever the
+    channel count at those offsets, because a nonzero degree-n polynomial
+    vanishing on every populated offset is a null direction of the whole
+    assembled matrix.  Structural, exact, and not inferrable from a pivot.
+    """
+    dtype = A.dtype
+    Ahat, s_ = equilibrate(A)
+    L, piv = _cholesky_banded(Ahat)
+    alpha = backward_subst(L, forward_subst(L, U.astype(dtype) / s_)) / s_
+
+    rmin = np.empty(A.shape[:-2] + (kv.nzone,), dtype=dtype)
+    for z, (lo, hi) in enumerate(zone_slices(kv)):
+        Ilo, Ihi = lo*(n+1), hi*(n+1)
+        ok = live[..., z] >= nmin
+        rmin[..., z] = np.where(ok, piv[..., Ilo:Ihi].min(axis=-1), 0)
+    return alpha, rmin
+
+
 def solve_normal_equations(G, U, kv, D1, eta, eps):
     """
-    G: (..., N_phi, n_phi+1) banded, U: (..., N_phi), both in the working dtype.
-    D1: (N_phi, 2) banded regulator from regulator.d1_banded().
-
-    Returns (a, rmin, bad) with
-
-        a:    (..., N_phi)   fitted coefficients, zeroed in flagged zones
-        rmin: (..., nzone)   min relative pivot in each zone, 0 if the zone is dead
-        bad:  (..., nzone)   bool, rmin < eps
-
-    A zone is DEAD (no unmasked channel anywhere in it) exactly when the sum of
-    G's diagonal over that zone is zero.  Since
-
-        sum_{j in zone} G_jj = sum_f w_f * (sum_{j in zone} phi_j(f)^2)
-
-    and partition of unity plus Cauchy-Schwarz give
-    sum_j phi_j(f)^2 >= 1/(n_phi+1) at every channel, that sum lies in
-    [M_zone/(n_phi+1), M_zone] where M_zone is the unmasked channel count.  So
-    the test is exact -- positive iff M_zone >= 1 -- and cannot underflow, which
-    is why no separate channel count is needed.  (It is NOT equal to M_zone;
-    measured, the ratio ranges over about 0.38 to 0.63 at n_phi = 2.)
-
-    Testing this way rather than by pivot magnitude is deliberate.  A dead zone
-    leaves A = eta*D_1 restricted to it, which is EXACTLY singular (null vector
-    = the all-ones coefficient vector of the zone), so its last pivot is
-    roundoff of either sign; any magnitude threshold would be arbitrary and
-    dtype-dependent.  The structural test makes the reported r_min exactly 0
-    instead of dtype-dependent noise -- which matters because r_min is an output.
+    The (n, W) = (0, 0) path, kept as a thin wrapper: G banded (..., N_phi,
+    n_phi+1), U (..., N_phi).  Returns (a, rmin, bad).
     """
     dtype = G.dtype
-    N, n_phi = kv.N_phi, kv.n_phi
-
     A = G.astype(dtype, copy=True)
     A[..., 0] += (eta * D1[:, 0]).astype(dtype)
-    if n_phi >= 1:
+    if kv.n_phi >= 1:
         A[..., 1] += (eta * D1[:, 1]).astype(dtype)
 
-    Ahat, s = equilibrate(A)
-    L, piv = _cholesky_banded(Ahat)
+    live = np.zeros(G.shape[:-2] + (kv.nzone,), dtype=np.int64)
+    for z, (lo, hi) in enumerate(zone_slices(kv)):
+        live[..., z] = (G[..., lo:hi, 0].sum(axis=-1) > 0).astype(np.int64)
 
-    a = backward_subst(L, forward_subst(L, U.astype(dtype) / s)) / s
-
-    zs = zone_slices(kv)
-    rmin = np.empty(G.shape[:-2] + (kv.nzone,), dtype=dtype)
-    for z, (lo, hi) in enumerate(zs):
-        alive = G[..., lo:hi, 0].sum(axis=-1) > 0
-        rmin[..., z] = np.where(alive, piv[..., lo:hi].min(axis=-1), 0)
-
+    a, rmin = solve_banded(A, U, kv, 0, live, 1)
     bad = rmin < eps
-    for z, (lo, hi) in enumerate(zs):
+    for z, (lo, hi) in enumerate(zone_slices(kv)):
         a[..., lo:hi] = np.where(bad[..., z, None], 0, a[..., lo:hi])
-
     return a, rmin, bad
