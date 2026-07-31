@@ -738,7 +738,7 @@ def test_bandwidth(rng, verbose=True):
             det = SplineDetrender(kv, n=n, W=W, dtype=np.float64)
             d = rng.standard_normal((1, kv.nfreq, 3 + 2*W))
             m = msk.random_mask_2d((1, kv.nfreq, 3 + 2*W), kv, rng, det.eta,
-                                   time_kind='independent')
+                                   time_kind='bernoulli')
             G, U = accumulate(d, m, det.table)
             from .moments import window_moments
             from .assemble import assemble
@@ -761,7 +761,7 @@ def test_2d_reference_agreement(rng, verbose=True):
         for n, W in NW_CASES:
             det = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eps=EPS_FLOAT64)
             T = 4
-            m = msk.random_mask_2d((1, kv.nfreq, T + 2*W), kv, rng, det.eta)
+            m = msk.random_mask_2d((1, kv.nfreq, T + 2*W), kv, rng, det.eta, n=n, W=W)
             base, _ = _smooth_baseline(kv, rng, 1, T + 2*W)
             d = base + 0.05*rng.standard_normal(base.shape)
             r0, m0, p0 = det.detrend_chunk(d, m)
@@ -795,7 +795,7 @@ def test_2d_flat_baseline_exact(rng, verbose=True):
             coef = rng.standard_normal(n+1)
             level = sum(coef[q]*tt**q for q in range(n+1))       # degree-n in time
             d = np.broadcast_to(level[None, None, :], (1, kv.nfreq, nbuf)).copy()
-            m = msk.random_mask_2d((1, kv.nfreq, nbuf), kv, rng, det.eta)
+            m = msk.random_mask_2d((1, kv.nfreq, nbuf), kv, rng, det.eta, n=n, W=W)
             r, mo, p = det.detrend_chunk(d, m)
             live = p[p > 0]
             rmin = float(live.min()) if live.size else 1.0
@@ -822,15 +822,15 @@ def test_n1_degeneracy(rng, verbose=True):
         base, _ = _smooth_baseline(kv, rng, 1, T + 2*W)
         d = base + 0.05*rng.standard_normal(base.shape)
 
-        mc = msk.random_mask_2d((1, kv.nfreq, T+2*W), kv, rng, d0.eta,
-                                time_kind='persistent')
+        mc = msk.random_mask_2d((1, kv.nfreq, T+2*W), kv, rng, d0.eta, n=1, W=W,
+                                time_kind='frozen', perturb=False)
         r0 = d0.detrend_chunk(d, mc)[0]
         r1 = d1.detrend_chunk(d, mc)[0]
         same = max(same, float(np.abs(r0-r1).max()))
         assert np.abs(r0-r1).max() < 1e-9*max(1.0, np.abs(d).max()), 'n=1 != n=0'
 
-        mv = msk.random_mask_2d((1, kv.nfreq, T+2*W), kv, rng, d0.eta,
-                                time_kind='independent')
+        mv = msk.random_mask_2d((1, kv.nfreq, T+2*W), kv, rng, d0.eta, n=1, W=W,
+                                time_kind='bernoulli')
         rr0 = d0.detrend_chunk(d, mv)[0]
         rr1 = d1.detrend_chunk(d, mv)[0]
         both = (d0.detrend_chunk(d, mv)[1] & d1.detrend_chunk(d, mv)[1])
@@ -882,7 +882,7 @@ def test_2d_chunk_invariance(rng, verbose=True):
         det = SplineDetrender(kv, n=n, W=W, dtype=np.float32)
         T = 12
         nbuf = T + 2*W
-        m = msk.random_mask_2d((2, kv.nfreq, nbuf), kv, rng, det.eta)
+        m = msk.random_mask_2d((2, kv.nfreq, nbuf), kv, rng, det.eta, n=n, W=W)
         d = rng.standard_normal((2, kv.nfreq, nbuf)).astype(np.float32)
         r0, m0, p0 = det.detrend_chunk(d, m)
         for chunk in (1, 2, 5, T):
@@ -918,7 +918,7 @@ def test_2d_conditioning(rng, verbose=True):
             nbuf = 1 + 2*W
             d = rng.standard_normal((1, kv.nfreq, nbuf))
             m = msk.random_mask_2d((1, kv.nfreq, nbuf), kv, rng, det2.eta,
-                                   time_kind='persistent')
+                                   time_kind='frozen', perturb=False)
             p2 = det2.detrend_chunk(d, m)[2]
             p1 = det1.detrend_chunk(d[:, :, W:W+1], m[:, :, W:W+1])[2]
             live = p1 > 0
@@ -928,7 +928,7 @@ def test_2d_conditioning(rng, verbose=True):
                 f'window-constant r_min not preserved at n={n}, W={W}'
             # Time-varying: no factorization, so only require it stays sane.
             mv = msk.random_mask_2d((1, kv.nfreq, nbuf), kv, rng, det2.eta,
-                                    time_kind='independent')
+                                    time_kind='bernoulli')
             pv = det2.detrend_chunk(d, mv)[2]
             if (pv > 0).any():
                 worst_abs = min(worst_abs, float(pv[pv > 0].min()))
@@ -946,7 +946,7 @@ def test_2d_dtype_agreement(rng, verbose=True):
         for n, W in NW_CASES:
             T = 5
             nbuf = T + 2*W
-            m = msk.random_mask_2d((1, kv.nfreq, nbuf), kv, rng, ETA_DEFAULT)
+            m = msk.random_mask_2d((1, kv.nfreq, nbuf), kv, rng, ETA_DEFAULT, n=n, W=W)
             base, _ = _smooth_baseline(kv, rng, 1, nbuf)
             d = base + 0.05*rng.standard_normal(base.shape)
             a32 = SplineDetrender(kv, n=n, W=W, dtype=np.float32)
