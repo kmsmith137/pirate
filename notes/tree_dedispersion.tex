@@ -9,8 +9,11 @@
 
 \numberwithin{equation}{section}   % equations numbered (2.13), where "2" is the section number
 
-\def\DS{{\rm DS}}
+\def\DDS{{\rm DDS}}
 \def\DD{{\rm DD}}
+\def\DS{{\rm DS}}
+\def\LDS{{\rm LDS}}
+\def\LS{{\rm LS}}
 \def\LAG{{\rm LAG}}
 \def\nn{\nonumber}
 
@@ -92,18 +95,18 @@ Thus, the dedispersion output array also has shape $(2^r, N_{\rm time})$, where 
 Tree dedispersion is a composition of functions:
 \begin{equation}
 \big( \mbox{Input array} \big)
-  \overset{\DS(0)}{\longrightarrow} \big( \mbox{Intermediate array} \big)
-  \overset{\DS(1)}{\longrightarrow} \cdots 
-  \overset{\DS(r-1)}{\longrightarrow}
+  \overset{\DDS(0)}{\longrightarrow} \big( \mbox{Intermediate array} \big)
+  \overset{\DDS(1)}{\longrightarrow} \cdots 
+  \overset{\DDS(r-1)}{\longrightarrow}
 \big( \mbox{Output array} \big)
 \label{eq:DD_composition}
 \end{equation}
-where the function $\DS(k)$ (``dedispersion step $k$'') is described as follows:
+where the function $\DDS(k)$ (``dedispersion step $k$'') is described as follows:
 
 \begin{itemize}
 
 \item
-The $\DS(k)$ input array is a shape $(2^{r-k}, 2^k, N_{\rm time})$ array.
+The $\DDS(k)$ input array is a shape $(2^{r-k}, 2^k, N_{\rm time})$ array.
 The first axis represents a coarse frequency channel.
 Each coarse-freq channel $f$ corresponds to a block of $2^k$ tree-freq channels
 in the original tree input array:
@@ -117,7 +120,7 @@ and we need twice as many delay indices to cover the range $0 \le (\mbox{slope})
 The time index represents an arrival time at the largest tree-freq channel
 in the coarse-freq channel (\ref{eq:coarse_freq}), i.e.~the latest arrival time within the coarse-freq channel.
 
-\item The $\DS(k)$ operation is defined by:
+\item The $\DDS(k)$ operation is defined by:
 
 \begin{align}
 {\tt out}[f,2d,t] &= \frac{1}{\sqrt{2}} 
@@ -131,8 +134,8 @@ As formulated above, tree dedispersion can lead to negative time indices.
 By default, \verb|in[...,t]| with $t<0$ is defined to be zero.
 (In the real-time system, we run tree dedispersion in an ``incremental'' context where a negative time index should be interpreted as a reference to data received in a previous time chunk.)
 
-\item The $\DS(0)$ input array is sometimes reshaped from $(2^r,1,N_{\rm time})$
- to $(2^r,N_{\rm time})$, and the $\DS(r-1)$ output array is sometimes reshaped
+\item The $\DDS(0)$ input array is sometimes reshaped from $(2^r,1,N_{\rm time})$
+ to $(2^r,N_{\rm time})$, and the $\DDS(r-1)$ output array is sometimes reshaped
  from $(1,2^r,N_{\rm time})$ to $(2^r,N_{\rm time})$.
  Thus, we think of the entire tree dedispersion operation (\ref{eq:DD_composition}) as having input and output shapes $(2^r, N_{\rm time})$.
 
@@ -141,7 +144,7 @@ By default, \verb|in[...,t]| with $t<0$ is defined to be zero.
 \par\noindent
 We define $\DD(r)$ (``rank-$r$ dedispersion'') to be the composition of all $r$ steps in Eq.\ (\ref{eq:DD_composition}):
 \begin{equation}
-\DD(r) = \DS(r-1) \circ \cdots \circ \DS(0)  \label{eq:DD_DS}
+\DD(r) = \DDS(r-1) \circ \cdots \circ \DDS(0)  \label{eq:DD_DS}
 \end{equation}
 
 \subsection{Subband search}
@@ -252,7 +255,7 @@ The subband owns a shape $(2^{r-R}, 2^l, N_{\rm time})$ subarray of the output (
 
 In this case, the per-subband dedispersion outputs already arise as intermediates in tree dedispersion
 (Eq.\ \ref{eq:DD_composition}); we just need to apply a time lag.
-Let \verb|tmp| be the output array of $\DS(k-1)$, where $k=r-R+l$. 
+Let \verb|tmp| be the output array of $\DDS(k-1)$, where $k=r-R+l$. 
 Then \verb|tmp| has shape $(2^{R-l}, 2^{r-R+l}, N_{\rm time})$.
 To populate the \verb|out| array, we slice/reshape \verb|tmp| and apply time lags:
 \begin{equation}
@@ -273,7 +276,7 @@ The subband owns a shape $(2^{r-R}, 2^l, N_{\rm time})$ subarray of the output (
 
 This case is a little more complicated, since the per-subband dedispersion outputs are ``one dedispersion step away''
 from the intermediate arrays in tree dedispersion.
-Let \verb|tmp| be the output array of $\DS(k-1)$, where $k=r-R+l-1$. 
+Let \verb|tmp| be the output array of $\DDS(k-1)$, where $k=r-R+l-1$. 
 Then \verb|tmp| has shape $(2^{R-l+1}, 2^{r-R+l-1}, N_{\rm time})$.
 \begin{align}
 {\tt out}\big[ d_{\rm hi}, 2 d_{\rm lo}, t \big] 
@@ -377,11 +380,11 @@ It will be useful to define a larger {\tt Dedisperser} object, consisting of mul
 \begin{itemize}
 
 \item {\bf Downsampled trees} in order to search to higher DM. 
-If we time-downsample the data by a factor $2^p$, and run rank-$r$ dedispersion as usual, then we can search to a max dispersion delay which is larger by a factor $2^p$.
-When we time-downsample by a factor $2^p$, we add time samples and multiply by $2^{-p/2}$, in order to leave the variance unchanged (assuming uncorrelated samples).
+If we time-downsample the data by a factor $2^\gamma$, and run rank-$r$ dedispersion as usual, then we can search to a max dispersion delay which is larger by a factor $2^\gamma$.
+When we time-downsample by a factor $2^\gamma$, we add time samples and multiply by $2^{-\gamma/2}$, in order to leave the variance unchanged (assuming uncorrelated samples).
 
-If $p > 0$, then we only keep the upper half (in delay) of the dedispersion output, since the lower half was already searched by primary tree $(p-1)$.
-Thus, each value of $p$ corresponds to a different DM range, ordered from low to high DM.
+If $\gamma > 0$, then we only keep the upper half (in delay) of the dedispersion output, since the lower half was already searched by primary tree $(\gamma-1)$.
+Thus, each value of $\gamma$ corresponds to a different DM range, ordered from low to high DM.
 
 \item {\bf Early triggers} in order to reduce triggering latency, especially at high DM. 
 By default, we only trigger when the pulse arrives at the highest tree-freq $f=2^r$ (i.e.\ lowest radio frequency).
@@ -392,34 +395,34 @@ This comes at the expense of losing low frequencies, so not all bursts will be d
 \end{itemize}
 
 \par\noindent
-The {\tt Dedisperser} consists of multiple trees parameterized by $(p,e)$.
+The {\tt Dedisperser} consists of multiple trees parameterized by $(\gamma,e)$.
 In the dedispersion config file, the syntax is (from {\tt chord\_sb2\_et.yml}):
 \begin{verbatim}
-  toplevel_tree_rank: 16    # rank r of "top-level" tree (p=0, e=0)
+  toplevel_tree_rank: 16    # rank r of "top-level" tree (gamma=0, e=0)
 
   primary_trees:
-    - {num_early_triggers: 0, ...}   # This line creates one tree with p=0, e=0
-    - {num_early_triggers: 1, ...}   # This line creates two trees with p=1, e=0,1
-    - {num_early_triggers: 2, ...}   # This line creates three trees with p=2, e=0,1,2
-    - {num_early_triggers: 3, ...}   # This line creates four trees with p=3, e=0,1,2,3
+    - {num_early_triggers: 0, ...}   # This line creates one tree with gamma=0, e=0
+    - {num_early_triggers: 1, ...}   # This line creates two trees with gamma=1, e=0,1
+    - {num_early_triggers: 2, ...}   # This line creates three trees with gamma=2, e=0,1,2
+    - {num_early_triggers: 3, ...}   # This line creates four trees with gamma=3, e=0,1,2,3
 \end{verbatim}
 In the code, data structures are as follows:
 \begin{itemize}
-\item There is one ``top-level'' tree with $p=e=0$ (no time downsampling, no early triggers) and rank $r = {\tt toplevel\_tree\_rank}$.
-\item There are four ``primary'' trees with $e=0$ (no early triggers) and $p=0,1,2,3$.
+\item There is one ``top-level'' tree with $\gamma=e=0$ (no time downsampling, no early triggers) and rank $r = {\tt toplevel\_tree\_rank}$.
+\item There are four ``primary'' trees with $e=0$ (no early triggers) and $\gamma=0,1,2,3$.
 Each primary tree searches a different DM range, ordered from low to high DM.
 \item Each primary tree corresponds to multiple {\tt DedispersionTrees} with $0 \le e \le {\tt num\_early\_triggers}$.
-These trees (for fixed $p$) search the same DM range, with different threshold frequencies for triggering, ordered from latest in time (lowest frequency) to earliest (highest frequency).
+These trees (for fixed $\gamma$) search the same DM range, with different threshold frequencies for triggering, ordered from latest in time (lowest frequency) to earliest (highest frequency).
 \end{itemize}
-The integer $p$ is called the {\em primary tree index}, and the integer $e$ is called the {\em early trigger level}.
-Conceptually, each {\tt DedispersionTree} just runs ``vanilla'' rank-$(r-e$) tree dedispersion on the first $2^{r-e}$ tree-freqs, downsampled in time by $2^p$, and then drops the lower DM-half of the outputs if $p > 0$.\footnote{This description suggests that each tree is an independent computation run ``from scratch''. There are a lot of tricks in the code that reuse computations between trees, i.e.\ the {\tt Dedisperser} is faster than running the constituent {\tt DedispersionTrees} independently.}
+The integer $\gamma$ is called the {\em primary tree index}, and the integer $e$ is called the {\em early trigger level}.
+Conceptually, each {\tt DedispersionTree} just runs ``vanilla'' rank-$(r-e$) tree dedispersion on the first $2^{r-e}$ tree-freqs, downsampled in time by $2^\gamma$, and then drops the lower DM-half of the outputs if $\gamma > 0$.\footnote{This description suggests that each tree is an independent computation run ``from scratch''. There are a lot of tricks in the code that reuse computations between trees, i.e.\ the {\tt Dedisperser} is faster than running the constituent {\tt DedispersionTrees} independently.}
 For a more intuitive presentation of these trees, see Tab.\ \ref{tab:chord_sb2_et} and Figs.\ \ref{fig:early_triggers}, \ref{fig:tree_segments}.
 
 \begin{table}[ht]
 \centering
 \begin{tabular}{c c c c c c}
 \toprule
-$p$ & $e$ & Full-band delay range (s) & DM range (pc\,cm$^{-3}$) & trigger (MHz) & latency range (s) \\
+$\gamma$ & $e$ & Full-band delay range (s) & DM range (pc\,cm$^{-3}$) & trigger (MHz) & latency range (s) \\
 \midrule
 0 & 0 & 0.0--65.5 & 0--1481 & 300 & 0.0--65.5 \\
 \midrule
@@ -436,7 +439,7 @@ $p$ & $e$ & Full-band delay range (s) & DM range (pc\,cm$^{-3}$) & trigger (MHz)
  & 3 & & & 750 & 32.8--65.5 \\
 \bottomrule
 \end{tabular}
-\caption{The ten {\tt DedispersionTree}s of the CHORD config {\tt chord\_sb2\_et.yml} (rank $r=16$; four primary trees). Each tree is identified by a $(p, e)$ pair. The DM range and {\em full-band} dispersion delay range depend only on $p$. The trigger frequency depends only on $e$, and the latency range is $2^{-e} \times \mbox{(delay range)}$.
+\caption{The ten {\tt DedispersionTree}s of the CHORD config {\tt chord\_sb2\_et.yml} (rank $r=16$; four primary trees). Each tree is identified by a $(\gamma, e)$ pair. The DM range and {\em full-band} dispersion delay range depend only on $\gamma$. The trigger frequency depends only on $e$, and the latency range is $2^{-e} \times \mbox{(delay range)}$.
 (Generated with {\tt pirate\_frb show\_dedisperser -v configs/dedispersion/chord\_sb2\_et.yml}.)}
 \label{tab:chord_sb2_et}
 \end{table}
@@ -451,7 +454,7 @@ $p$ & $e$ & Full-band delay range (s) & DM range (pc\,cm$^{-3}$) & trigger (MHz)
 \begin{figure}[ht]
 \centering
 \includegraphics[width=0.85\textwidth]{figs/tree_segments.pdf}
-\caption{The ten {\tt DedispersionTrees} from Table\ \ref{tab:chord_sb2_et}, shown as line segments in the (DM, triggering latency) plane. For each tree $(p, e)$, the value of $p$ determines the DM range, and the value of $e$ determines the slope.}
+\caption{The ten {\tt DedispersionTrees} from Table\ \ref{tab:chord_sb2_et}, shown as line segments in the (DM, triggering latency) plane. For each tree $(\gamma, e)$, the value of $\gamma$ determines the DM range, and the value of $e$ determines the slope.}
 \label{fig:tree_segments}
 \end{figure}
 
@@ -472,7 +475,7 @@ r_{\rm top} &= {\tt toplevel\_tree\_rank} & \mbox{ (toplevel tree rank, specifie
 \end{align}
 and the following per-tree parameters:
 \begin{align}
-p &= {\tt primary\_tree\_index} & \mbox{ (primary tree index; input is time-downsampled by $2^p$)} \nn \\
+\gamma &= {\tt primary\_tree\_index} & \mbox{ (primary tree index; input is time-downsampled by $2^\gamma$)} \nn \\
 e &= {\tt early\_trigger\_level}  & \mbox{ (``earliness'' of trigger)} \nn \\
 T_{\rm ds} &= {\tt time\_downsampling} & \mbox{ (time coarse-graining factor in peak-finding kernel)} \nn \\
 D_{\rm ds} &= {\tt dm\_downsampling}   & \mbox{ (dm coarse-graining factor in peak-finding kernel)} \nn
@@ -492,27 +495,27 @@ The \verb|out_max| and \verb|out_argmax| arrays (for a fixed tree and beam), hav
 shape $({\tt ndm\_out}, {\tt nt\_out})$, given by:
 \begin{align}
 {\tt ndm\_out} &= \begin{cases}
-  2^{r_{\rm top} - e} / D_{\rm ds} & \mbox{ if } p=0 \\
-  2^{r_{\rm top} - e - 1} / D_{\rm ds} & \mbox{ if } p \ge 1
+  2^{r_{\rm top} - e} / D_{\rm ds} & \mbox{ if } \gamma=0 \\
+  2^{r_{\rm top} - e - 1} / D_{\rm ds} & \mbox{ if } \gamma \ge 1
 \end{cases} \label{eq:ndm_out} \\
-{\tt nt\_out} &= \frac{T_{\rm in}}{2^p T_{\rm ds}} \label{eq:nt_out}
+{\tt nt\_out} &= \frac{T_{\rm in}}{2^\gamma T_{\rm ds}} \label{eq:nt_out}
 \end{align}
 The {\em full-band} delay range searched by each tree (expressed as an integer number samples, 
 before any per-tree time downsampling has been done) is:
 \begin{equation}
 d_{\rm lo} = \begin{cases}
-  0 & \mbox{ if } p=0 \\
-  2^{r_{\rm top} + p - 1} & \mbox{ if } p\ge 1
+  0 & \mbox{ if } \gamma=0 \\
+  2^{r_{\rm top} + \gamma - 1} & \mbox{ if } \gamma\ge 1
 \end{cases}
 \hspace{1.5cm}
-d_{\rm hi} = 2^{r_{\rm top} + p}
+d_{\rm hi} = 2^{r_{\rm top} + \gamma}
 \label{eq:dlo_dhi}
 \end{equation}
 To explain where Eqs.\ (\ref{eq:ndm_out})--(\ref{eq:dlo_dhi}) come from, we walk through steps in the code:
 \begin{itemize}
 
 \item On the time axis, we start with a length-$T_{\rm in}$ input array,
-  downsample by a factor $2^p$, run tree dedispersion,
+  downsample by a factor $2^\gamma$, run tree dedispersion,
   and downsample the output (max-ing, not averaging!) by $T_{\rm ds}$. 
   This implies Eq.\ (\ref{eq:nt_out}).
 
@@ -526,20 +529,20 @@ To explain where Eqs.\ (\ref{eq:ndm_out})--(\ref{eq:dlo_dhi}) come from, we walk
    {\tt ndm\_out} = 2^{r_{\rm top}}
   \end{equation}
   Then we include additional complications one at a time.
-  If we downsample the input by $2^p$, then $d_{\rm hi}$ gets multiplied by $2^p$.
-  Recall that for $p > 0$, we also discard the lower half of the output DMs (which was already searched by primary tree $(p-1)$).
+  If we downsample the input by $2^\gamma$, then $d_{\rm hi}$ gets multiplied by $2^\gamma$.
+  Recall that for $\gamma > 0$, we also discard the lower half of the output DMs (which was already searched by primary tree $(\gamma-1)$).
   Therefore:
   \begin{equation}
    d_{\rm lo} = \begin{cases}
-        0 & \mbox{ if } p = 0 \\
-        2^{r_{\rm top} + p - 1} & \mbox{ if } p > 0
+        0 & \mbox{ if } \gamma = 0 \\
+        2^{r_{\rm top} + \gamma - 1} & \mbox{ if } \gamma > 0
    \end{cases}
      \hspace{1cm}
-   d_{\rm hi} = 2^{r_{\rm top} + p}
+   d_{\rm hi} = 2^{r_{\rm top} + \gamma}
      \hspace{1cm}
    {\tt ndm\_out} = \begin{cases}
-     2^{r_{\rm top}} & \mbox{ if } p = 0 \\
-     2^{r_{\rm top}-1} & \mbox{ if } p > 0 \\
+     2^{r_{\rm top}} & \mbox{ if } \gamma = 0 \\
+     2^{r_{\rm top}-1} & \mbox{ if } \gamma > 0 \\
   \end{cases}
   \end{equation}
   If this is an early-triggered tree with $e > 0$, then the {\em full-band} delay
@@ -547,15 +550,15 @@ To explain where Eqs.\ (\ref{eq:ndm_out})--(\ref{eq:dlo_dhi}) come from, we walk
   {\tt ndm\_out} decreases by the same factor:
   \begin{equation}
    d_{\rm lo} = \begin{cases}
-        0 & \mbox{ if } p = 0 \\
-        2^{r_{\rm top} + p - 1} & \mbox{ if } p > 0
+        0 & \mbox{ if } \gamma = 0 \\
+        2^{r_{\rm top} + \gamma - 1} & \mbox{ if } \gamma > 0
    \end{cases}
      \hspace{1cm}
-   d_{\rm hi} = 2^{r_{\rm top} + p}
+   d_{\rm hi} = 2^{r_{\rm top} + \gamma}
      \hspace{1cm}
    {\tt ndm\_out} = \begin{cases}
-     2^{r_{\rm top}-e} & \mbox{ if } p = 0 \\
-     2^{r_{\rm top}-e-1} & \mbox{ if } p > 0 \\
+     2^{r_{\rm top}-e} & \mbox{ if } \gamma = 0 \\
+     2^{r_{\rm top}-e-1} & \mbox{ if } \gamma > 0 \\
   \end{cases}
   \end{equation}
   Finally, we downsample the output (max-ing, not averaging!) by $D_{\rm ds}$.
@@ -711,8 +714,9 @@ and is defined by:
 \begin{align}
 {\tt out}[0,t] &= \frac{1}{\sqrt{2}} 
   \big( {\tt in}[0,t] + {\tt in}[1,t] \big) \nn \\
-{\tt out}[1,t] &= \frac{1}{\sqrt{2}} 
+{\tt out}[1,t] &= \frac{1}{\sqrt{2}}
   \big( {\tt in}[0,t-1] + {\tt in}[1,t] \big)
+\label{eq:DD1}
 \end{align}
 This is straightforward to implement in a single warp, but note that we need to save
 the value of ${\tt in}[0,N_{\rm time}-1]$ for the next time chunk.
@@ -802,6 +806,7 @@ split tree dedispersion across multiple kernels, then parallelize over threadblo
 then parallelize over threads in a warp.
 
 \subsection{Alignment constraints and the MegaRingbuf}
+\label{ssec:dd_alignment}
 
 In the previous section, we stated (just after Eq.\ (\ref{eq:DD16})) that the $\LAG[\cdots]$
 operator in global memory is a no-op.
@@ -824,6 +829,7 @@ appearing in Eq.\ (\ref{eq:DD16}) into ``aligned'' and ``residual'' parts:
 \lambda_a(f'',d') \equiv E \left\lfloor \frac{\lambda(f'',d')}{E} \right\rfloor
   \hspace{1cm}
 \lambda_r(f'',d') \equiv \lambda(f'',d') - \lambda_a(f'',d')
+\label{eq:DD16_align}
 \end{equation}
 We factorize $\DD(16)$ as follows (compare with Eq.\ (\ref{eq:DD16})):
 \begin{equation}
@@ -870,9 +876,120 @@ Here, the alignment really matters -- profiling shows that host-gpu bandwidth is
 significantly reduced if addresses are not 128-byte aligned (but does not benefit
 from 256-byte alignment).
 
-\subsection{Placeholder: downsampled trees and the LaggedDownsampler}
+\subsection{Downsampled trees and the LaggedDownsampler}
 
-\subsection{Placeholder: early triggers}
+As mentioned previously (\S\ref{sec:downsampled_early}), for downsampled trees,
+we only keep the upper half (in delay $d$) of the dedispersion transform output.
+In this section, we explain some tricks to make this more efficient in implementation,
+by not computing the lower half, and coalescing kernels.
+
+First we introduce notation for the operator that we want to implement:
+\begin{equation}
+U \circ \DD(r) \circ \DS(\gamma)
+\end{equation}
+The operator $U$ is the ``upper half'' operator whose
+input is a shape $(2^r,N_{\rm time}/2^\gamma)$ array and whose output is a shape
+$(2^{r-1},N_{\rm time}/2^\gamma)$ array, defined by ${\tt out}[d,t] = {\tt in}[2^{r-1}+d,\,t]$.
+The operator $\DS(\gamma)$ downsamples in time by a factor $2^\gamma$
+(with a factor $2^{-\gamma/2}$), i.e.\ it maps a shape $(2^r,N_{\rm time})$ array to a
+shape $(2^r,N_{\rm time}/2^\gamma)$ array.
+
+Now consider the following identity (non-obvious, proved in Appendix \ref{app:upper_half_proof}):
+\begin{equation}
+U \circ \DD(r) = \DD(r-1) \circ \LAG\big[ 2^{r-1} - 1 - f\big] \circ \LS
+\label{eq:U_LS}
+\end{equation}
+Here, $\LS$ is a ``lagged sum'' operator defined as follows. The input is a shape
+$(2^r,N_{\rm time}/2^\gamma)$ array, and the output is a shape
+$(2^{r-1},N_{\rm time}/2^\gamma)$ array, defined by:
+\begin{equation}
+{\tt out}[f,t] = \frac{1}{\sqrt{2}} \big( {\tt in}[2f,t-1] + {\tt in}[2f+1,t] \big)
+\label{eq:LS_def}
+\end{equation}
+In implementation, the RHS of Eq.\ (\ref{eq:U_LS}) can be more efficient than the LHS,
+since the RHS avoids computing (and throwing away) the lower half of the dedispersion
+output (i.e.\ the dedispersion is rank $(r-1)$ instead of rank $r$).
+
+To compute $\DD(r-1)$ on the GPU (for the large $r$-values that arise for CHIME and CHORD),
+we apply the splitting identity (\ref{eq:splitting}) to $\DD(r-1)$.
+We choose a splitting (note $r-1$ in the leftmost equation):
+\begin{equation}
+r-1 = r'+r''
+  \hspace{1cm}
+f = 2^{r'} f'' + f'
+  \hspace{1cm}
+d = 2^{r''} d' + d''
+\end{equation}
+and write:
+\begin{align}
+\DD(r-1)
+  &= \big( \DD(r'') \otimes 1 \big)
+       \circ \LAG\big[ (2^{r''}-1-f'') \, d' \big] 
+       \circ \big( 1 \otimes \DD(r') \big) \\
+\LAG\big[ 2^{r-1} - 1 - f\big]
+%  &= \LAG\big[ 2^{r'+r''} - 1 - 2^{r'}f'' - f'\big] \nn \\
+  &= \LAG\big[ 2^{r'} (2^{r''}-1-f'') \big] \circ \LAG\big[ 2^{r'}-1-f' \big]
+\end{align}
+In the last line, we have split the lag into two pieces which depend only on
+$f''$ and $f'$.
+Putting the two equations together, we get:
+\begin{equation}
+\DD(r-1) \circ \LAG\big[ 2^{r-1} - 1 - f\big] = 
+  \big( \DD(r'') \otimes 1 \big)
+       \circ \LAG\big[ (2^{r''}-1-f'') \, (d'+2^{r'}) \big]
+       \circ \big( 1 \otimes \DD(r') \big)
+  \circ \LAG\big[ 2^{r'}-1-f' \big]
+\end{equation}
+where we used the fact that the operators $\LAG\big[ 2^{r'} (2^{r''}-1-f'') \big]$ and $(1 \otimes \DD(r'))$ commute,
+since the lag depends on $f''$ but not $f'$.
+Next, we split the leftmost lag on the RHS into aligned and residual parts (as in Eq.\ (\ref{eq:DD16_align})):
+\begin{equation}
+\lambda(f'',d') \equiv (2^{r''}-1-f'') \, (d'+2^{r'})
+  \hspace{1cm}
+\lambda_a(f'',d') \equiv E \left\lfloor \frac{\lambda(f'',d')}{E} \right\rfloor
+  \hspace{1cm}
+\lambda_r(f'',d') \equiv \lambda(f'',d') - \lambda_a(f'',d')
+\label{eq:ds_tree_align}
+\end{equation}
+Putting all of this together:
+\begin{align}
+U \circ \DD(r) \circ \DS(\gamma)
+  &= 
+\underbrace{\big( \DD(r'') \otimes 1 \big) 
+            \circ \LAG\big[ \lambda_r(f'',d') \big] }_{\equiv {\mathcal D}_2}
+   \circ \LAG\big[ \lambda_a(f'',d') \big]
+   \circ \underbrace{\big( 1 \otimes \DD(r') \big)}_{\equiv {\mathcal D}_1} \nn \\
+ & \hspace{1cm} \circ \underbrace{\LAG\big[ 2^{r'}-1-f' \big] \circ \LS \circ \DS(\gamma)}_{\equiv \LDS(r',\gamma)}
+\end{align}
+where the last line defines the ``lagged downsampling kernel'' $\LDS(r',\gamma)$.
+As in \S\ref{ssec:dd_alignment}, we coalesce the residual lag $\LAG[\lambda_r(f'',d')]$ into
+the second stage dedispersion kernel ${\mathcal D}_2$.
+Note however that the form of $\lambda_r(f'',d')$ is different from before (Eqs.\ (\ref{eq:DD16_align}),
+(\ref{eq:ds_tree_align}) differ by $d' \rightarrow (d'+2^{r'})$).
+The GPU kernel has a boolean argument \verb|input_is_downsampled_tree| to select which residual
+lag is applied.
+
+We have now written the downsampled tree $U \circ \DD(r) \circ \DS(\gamma)$ as the
+composition of three kernels $\LDS$, ${\mathcal D}_1$, ${\mathcal D}_2$.
+The ``aligned'' lag operator $\LAG[\lambda_a(f'',d')]$ is implemented as a
+no-op, using the MegaRingbuf (\S\ref{ssec:dd_alignment}).
+
+For large downsampling factor $\gamma$, the most expensive step in this length-three
+chain is the relatively trivial kernel $\LDS(r',\gamma)$, for memory bandwidth reasons:
+\begin{itemize}
+\item $\LDS(r',\gamma)$ has input shape $(2^r, N_{\rm time})$ and output shape $(2^{r-1}, N_{\rm time}/2^\gamma)$.
+\item ${\mathcal D}_1$ and ${\mathcal D}_2$ have input/output shapes $(2^{r-1}, N_{\rm time}/2^\gamma)$.
+\end{itemize}
+The memory bandwidth requirements are driven by the $\LDS(r',\gamma)$ input array, which
+is {\em the same for all $\gamma$}.
+Therefore, our ``production'' {\tt LaggedDownsamplingKernel} is a coalesced kernel
+which computes $\LDS(r',\gamma)$ for all values of $\gamma$ simultaneously, i.e.\ the
+kernel has one input array and $\gamma_{\rm max}$ output arrays.
+This coalesced kernel improves performance significantly.
+
+\subsection{More details: early triggers, stage1/stage2 trees, coalesced kernels}
+
+Placeholder section for now.
 
 \clearpage
 
@@ -2623,7 +2740,7 @@ V_F \big\| h_p * G_{Fd} \big\|^2 = 2^{-r} \, V_F \, w_{fF}^2 \, \|h_p\|^2
 
 Eq.\ (\ref{eq:avar_i0}) has a simple interpretation: $i_0(F)$ is the largest $i$ such that the
 footprint straddles a boundary between two ``coarse'' frequency channels of width $2^i$
-(cf.\ Eq.\ \ref{eq:coarse_freq}). Equivalently, $\DS(i_0)$ is the last dedispersion step which
+(cf.\ Eq.\ \ref{eq:coarse_freq}). Equivalently, $\DDS(i_0)$ is the last dedispersion step which
 combines two nonzero halves of the footprint with each other. There are only $2^{r-i}$ such
 boundaries in the band, and each one is straddled by at most one input channel, so at most
 $O(2^{r-i})$ input channels have $i_0 \ge i$: large $i_0(F)$ is rare, but (as we will see)
@@ -2666,7 +2783,7 @@ The starting point ($k=0$) is the gridding output for a one-hot input, which is 
 $f_0 = f_0(F)$, $n_f = f_1(F) - f_0(F)$, $n_t = 1$, ${\tt dbits} = 0$, $s=1$, no shifts, and
 ${\tt data}[f,0,0] = w_{fF}$.
 
-The tile representation is preserved by a dedispersion step $\DS(k)$. Consider an output
+The tile representation is preserved by a dedispersion step $\DDS(k)$. Consider an output
 coarse-freq channel $f$, whose inputs are the ``lower'' channel $2f$ and the ``upper'' channel
 $2f+1$, and write the output delay index as $d' = 2d+b$ (so that $d'_0 = b$ and $d'_{j+1} = d_j$).
 There are three cases:
@@ -2760,7 +2877,7 @@ testing/reference implementation, rather than in production.
 
 The pieces above are unit-tested against dense reference implementations
 (\verb|pirate_frb test --avar|): the \verb|SparseTile| operations are compared to a dense
-$\DS(k)$ applied to randomly generated tiles, tree gridding is compared to
+$\DDS(k)$ applied to randomly generated tiles, tree gridding is compared to
 \verb|ReferenceTreeGriddingKernel|, dedispersion of a one-hot input is compared to
 \verb|ReferenceTree|, and \verb|PfVarianceConvolver| is compared both to a brute-force evaluation
 of $\|h_p * x\|^2$, and to the kernels which \verb|ReferencePeakFindingKernel| actually uses.
@@ -2788,15 +2905,15 @@ The proof is by induction on $r$, and uses two structural observations.
 
 \par\noindent
 {\bf Observation 1: block structure.}
-By inspection of its defining equations, the dedispersion step $\DS(k)$ computes output
+By inspection of its defining equations, the dedispersion step $\DDS(k)$ computes output
 coarse-freq block $f$ using only input blocks $2f$ and $2f+1$, via formulas which do not depend
 on $f$ or $r$. Unrolling this over the composition (\ref{eq:DD_DS}): after steps
-$\DS(0), \ldots, \DS(k-1)$, coarse-freq block $f$ of the intermediate array depends only on
+$\DDS(0), \ldots, \DDS(k-1)$, coarse-freq block $f$ of the intermediate array depends only on
 tree-freq channels $2^k f \le (\mbox{tree-freq}) < 2^k (f+1)$, and equals rank-$k$ dedispersion
 $\DD(k)$ applied to those $2^k$ channels. In particular, isolating the last step of a
 rank-$(r+1)$ composition,
 \begin{equation}
-\DD(r+1) = \DS(r) \circ \big( 1 \otimes \DD(r) \big)   \label{eq:app_last_step}
+\DD(r+1) = \DDS(r) \circ \big( 1 \otimes \DD(r) \big)   \label{eq:app_last_step}
 \end{equation}
 where we view the rank-$(r+1)$ input array as having shape $(2, 2^r, N_{\rm time})$, and
 $(1 \otimes \DD(r))$ applies $\DD(r)$ independently to the lower and upper half-bands
@@ -2804,7 +2921,7 @@ $(1 \otimes \DD(r))$ applies $\DD(r)$ independently to the lower and upper half-
 
 \par\noindent
 {\bf Observation 2: delay bits.}
-By the defining equations of $\DS(k)$, the output delay is $D = 2\delta + e$, where $\delta$ is
+By the defining equations of $\DDS(k)$, the output delay is $D = 2\delta + e$, where $\delta$ is
 the input delay and $e \in \{0,1\}$ selects the even/odd output line. Thus each step appends one
 new low bit to the delay index; at the final step, $D_0 = e$ and $D_j = \delta_{j-1}$ for
 $j \ge 1$.
@@ -2815,13 +2932,13 @@ For $r=0$, the composition (\ref{eq:DD_DS}) is empty, so $\DD(0)$ is the identit
 $L_0(0,0) = 0$ is an empty sum, so Eq.\ (\ref{eq:DD_nonrecursive}) reduces to
 ${\tt out}[0,t] = {\tt in}[0,t]$. (The reader preferring a nontrivial base case may check $r=1$:
 $L_1(f,d) = \Omega_{-1} (1-f_0) d_0 = (1-f_0) d_0$, so Eq.\ (\ref{eq:DD_nonrecursive}) reads
-${\tt out}[d,t] = 2^{-1/2} \big( {\tt in}[0,t-d] + {\tt in}[1,t] \big)$, which matches $\DS(0)$
+${\tt out}[d,t] = 2^{-1/2} \big( {\tt in}[0,t-d] + {\tt in}[1,t] \big)$, which matches $\DDS(0)$
 applied to a $(2,1,N_{\rm time})$ input.)
 
 \par\noindent
 {\bf Inductive step.}
 Assume Eq.\ (\ref{eq:DD_nonrecursive}) holds at rank $r$. By Eq.\ (\ref{eq:app_last_step}) and
-the defining equations of $\DS(r)$ (with coarse output index $f=0$, input delay $\delta$, and
+the defining equations of $\DDS(r)$ (with coarse output index $f=0$, input delay $\delta$, and
 output delay $D = 2\delta + e$):
 \begin{equation}
 {\tt out}[2\delta+e, t] = \frac{1}{\sqrt{2}}
@@ -2865,7 +2982,7 @@ This completes the induction.
 We remark that $\delta + e = \lceil D/2 \rceil$, so Eq.\ (\ref{eq:app_lag_lower}) says that the
 lower half-band lags the upper half-band by half of the total delay, rounded up. The case
 $\Omega_{-1} = 1$ in the definition of $\Omega_n$ is precisely this round-up -- the algebraic
-counterpart of the $(t-d-1)$ in the odd-delay line of $\DS(k)$.
+counterpart of the $(t-d-1)$ in the odd-delay line of $\DDS(k)$.
 
 \subsection{The splitting identity}
 \label{app:splitting_proof}
@@ -2936,6 +3053,90 @@ blocks reproduce the lower-rank lag functions; and the cutoff $\Omega_n = 0$ for
 expresses the fact that fine-frequency structure never couples to sub-block DM bits. Compare
 also the time lags $T$ appearing in the subbanded-dedispersion construction
 (\S\ref{sec:subband_search}), which have the same form as the cross term.
+
+\subsection{The upper-half identity}
+\label{app:upper_half_proof}
+
+Finally we prove the upper-half identity (\ref{eq:U_LS}), which is what lets a downsampled
+tree -- where only the upper half of the DM range is kept -- be computed at rank $(r-1)$
+instead of rank $r$. It is a corollary of the splitting identity, so no new computation is
+needed: it is the $d'=1$ slice of Eq.\ (\ref{eq:splitting}) at $r'=1$.
+
+Take $r' = 1$ and $r'' = r-1$ in the splittings (\ref{eq:fd_splittings}). The frequency
+splitting $f = 2^{r'} f'' + f'$ becomes
+\begin{equation}
+f = 2 f'' + f'
+  \hspace{1.5cm} 0 \le f'' < 2^{r-1}, \quad f' \in \{0,1\}
+\end{equation}
+so $f''$ indexes a {\em pair} of adjacent tree-freq channels and $f'$ selects a channel within
+the pair. The DM splitting $d = 2^{r''} d' + d''$ becomes
+\begin{equation}
+d = 2^{r-1} d' + d''
+  \hspace{1.5cm} d' \in \{0,1\}, \quad 0 \le d'' < 2^{r-1}
+\end{equation}
+so $d'$ is simply the {\em top bit} of the DM index. Therefore the upper half of the DM range
+is exactly the $d'=1$ slice:
+\begin{equation}
+d \ge 2^{r-1} \iff d' = 1,
+  \hspace{1cm}\mbox{and then}\hspace{1cm} d = 2^{r-1} + d''
+\end{equation}
+i.e.\ $U$ selects $d'=1$, and the surviving DM index of $U \circ \DD(r)$ is $d''$.
+
+With these values, the splitting identity (\ref{eq:splitting}) reads
+\begin{equation}
+\DD(r) = \big( \DD(r-1) \otimes 1_2 \big)
+   \circ \LAG\big[ (2^{r-1}-1-f'') \, d' \big]
+   \circ \big( 1_{2^{r-1}} \otimes \DD(1) \big)
+\label{eq:uh_splitting}
+\end{equation}
+on arrays of shape $(2^{r-1}, 2, N_{\rm time})$. Now restrict each of the three factors to
+$d'=1$, working right to left:
+
+\begin{itemize}
+
+\item {\bf The $\DD(1)$ factor becomes $\LS$.} The operator $(1 \otimes \DD(1))$ applies
+$\DD(1)$ along the length-2 axis, taking $(f'',f',t) \to (f'',d',t)$. By the definition
+(\ref{eq:DD1}) of $\DD(1)$, its $d'=1$ output is
+\begin{equation}
+{\tt out}[f'',1,t] = \frac{1}{\sqrt 2} \big( {\tt in}[f'',0,t-1] + {\tt in}[f'',1,t] \big)
+\end{equation}
+Since ${\tt in}[f'',0,\cdot]$ and ${\tt in}[f'',1,\cdot]$ are the tree-freq channels $2f''$ and
+$2f''+1$, this is precisely the definition (\ref{eq:LS_def}) of $\LS$. (The $d'=0$ output is
+the {\em un}lagged sum of the pair, which is what the discarded lower DM-half is built from.)
+
+\item {\bf The $\LAG$ factor becomes $\LAG[2^{r-1}-1-f'']$.} Substituting $d'=1$ into the lag
+$(2^{r-1}-1-f'')\,d'$ leaves $(2^{r-1}-1-f'')$, a per-channel lag on the length-$2^{r-1}$ axis.
+This is the middle factor of (\ref{eq:U_LS}), with $f''$ playing the role of $f$.
+
+\item {\bf The $\DD(r-1)$ factor is unchanged.} The operator $(\DD(r-1) \otimes 1_2)$ dedisperses
+along the $f''$ axis with the $d'$ axis a spectator, so its restriction to the $d'=1$ slice is
+just $\DD(r-1)$, taking $f'' \to d''$.
+
+\end{itemize}
+
+\par\noindent
+Composing the three restricted factors gives Eq.\ (\ref{eq:U_LS}). As a check on the
+normalization, $\LS$ contributes $2^{-1/2}$ and $\DD(r-1)$ contributes $2^{-(r-1)/2}$, for a
+total of $2^{-r/2}$, matching $\DD(r)$.
+
+\par\noindent
+{\bf The identity at the level of lag functions.} It is worth recording what
+(\ref{eq:U_LS}) says about $L_r$, since this is the form in which it is easiest to check.
+Writing $f = 2g+b$ with $b \in \{0,1\}$, the additivity identity (\ref{eq:lag_additivity})
+at $r'=1$, $d'=1$, $d''=\tilde d$ gives
+\begin{equation}
+L_r\big(2g+b,\; 2^{r-1}+\tilde d\big)
+  = L_{r-1}(g, \tilde d) + \big(2^{r-1}-1-g\big) + (1-b)
+\label{eq:uh_lag}
+\end{equation}
+where we used $L_1(b,1) = \Omega_{-1}(1-b) = 1-b$. Read right to left, the three terms are
+exactly the three stages of (\ref{eq:U_LS}): the $\LS$ lag of one sample applied to the even
+channel of each pair and none to the odd channel, the $\LAG$ term, and the rank-$(r-1)$ tree.
+Note that $(1-b)$ carries no $\tilde d$-dependence -- the lowest frequency bit does not couple
+to any DM bit below the top one, by the cutoff $\Omega_n = 0$ for $n \le -2$. That is what makes
+the construction possible: within a pair of adjacent tree-freqs, {\em every} DM in the upper half
+sees the same one-sample offset, so the pair can be collapsed by $\LS$ before the DM index is
+resolved.
 
 \clearpage
 
