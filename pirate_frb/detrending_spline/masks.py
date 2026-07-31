@@ -47,17 +47,29 @@ def random_knots(rng, n_phi=2, nfreq=None, kind=None):
     """
     A random KnotVector.  'kind' selects the width profile; None draws one.
 
-    The profiles exist to cover h_max, which is what conditioning turns on:
-    'one_wide' is the family that came closest to eps in the parameter study, and
-    it is not reachable by drawing cut points uniformly at random.
+    The profiles exist to cover h_max, which is what conditioning turns on --
+    NOT nfreq and not the interval count.  Neither 'one_wide' nor 'no_interior'
+    is reachable by drawing cut points uniformly at random, and they are the two
+    that approach eps.
+
+    'no_interior' (K = 1, the whole band one knot interval, h_max = nfreq) is the
+    extreme.  Measured at nfreq = 10000, eta = 3e-3, against adversarially
+    constructed masks: r_min = 5.9e-4, 5.1e-4, 5.1e-4 at n_phi = 1, 2, 3, i.e.
+    about 5x eps, and exactly 1 at n_phi = 0 where the zone is a single
+    coefficient.  The h^(-4/5) law that governs this regime predicts a further
+    factor 2.06 going from nfreq 4096 to 10000 against 2.02 measured, so it
+    extrapolates: r_min would not reach eps until nfreq ~ 7.6e4 with no interior
+    knots.  Note lambda_min DOES dip below eps there (8.6e-5 at n_phi = 2) while
+    r_min does not -- see solve.py on why r_min is the statistic we threshold.
     """
     if nfreq is None:
-        nfreq = int(rng.integers(64, 4096))
+        nfreq = int(rng.integers(64, 10001))
     if kind is None:
-        kind = str(rng.choice(['uniform', 'graded', 'one_wide', 'random']))
+        kind = str(rng.choice(['uniform', 'graded', 'one_wide', 'random',
+                               'no_interior']))
 
     kmax = max(1, min(10, nfreq // (n_phi + 2)))
-    K = int(rng.integers(1, kmax + 1))
+    K = 1 if kind == 'no_interior' else int(rng.integers(1, kmax + 1))
 
     if K == 1:
         widths = np.array([nfreq])

@@ -330,7 +330,8 @@ def test_flat_baseline_exact(rng, verbose=True):
     """
     worst = 0.0
     for _ in range(25):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 900)))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 10001)),
+                              kind='no_interior' if rng.random() < 0.3 else None)
         for dtype in (np.float64, np.float32):
             det = SplineDetrender(kv, dtype=dtype, eps=EPS_FLOAT64)
             M_ax, ntime = 1, 8
@@ -488,7 +489,11 @@ def test_conditioning(rng, verbose=True, heavy=False):
     eta, eps = ETA_DEFAULT, EPS_FLOAT32
     worst, worst_cfg = np.inf, None
 
-    cfgs = [(int(rng.integers(200, 2000)), None) for _ in range(14)]
+    cfgs = [(int(rng.integers(200, 10001)), None) for _ in range(10)]
+    # The two profiles that approach eps are not reachable by chance, so pin them
+    # at the top of the nfreq range rather than hoping the draw produces them.
+    cfgs += [(10000, 'no_interior'), (10000, 'one_wide'), (10000, 'no_interior'),
+             (4096, 'no_interior')]
     if heavy:
         cfgs += [(30000, 'uniform'), (30000, 'one_wide'), (15000, 'one_wide')]
 
@@ -497,9 +502,15 @@ def test_conditioning(rng, verbose=True, heavy=False):
         det = SplineDetrender(kv, dtype=np.float64, eta=eta, eps=eps)
         table = det.table
         D1 = d1_banded(kv)
-        for _ in range(6 if nfreq < 5000 else 2):
-            w = msk.random_mask_1d(kv, rng, eta,
-                                   kind='adversarial' if rng.random() < 0.6 else None)
+        # Cycle the two extremal families explicitly rather than drawing kinds at
+        # random.  'adversarial' (Dinkelbach) and 'one_run' (a contiguous run at a
+        # measured fractional offset) reach DIFFERENT extrema -- the alternating
+        # minimization in the former is a local method and does not reliably find
+        # the single-run optimum -- and leaving the choice to chance made the
+        # reported margin about 2x optimistic at large h_max.
+        for kk in ('adversarial', 'one_run', 'one_run', 'adversarial',
+                   'one_run', None):
+            w = msk.random_mask_1d(kv, rng, eta, kind=kk)
             mask = w[None, :, None]
             d = rng.standard_normal((1, kv.nfreq, 1))
             G, U = accumulate(d, mask, table)
@@ -622,7 +633,8 @@ def test_dtype_agreement(rng, verbose=True):
     n_flip, n_zone, worst_rel, worst_resid = 0, 0, 0.0, 0.0
 
     for _ in range(12):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(128, 1500)))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(128, 10001)),
+                              kind='no_interior' if rng.random() < 0.3 else None)
         M_ax, ntime = 1, 10
         mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, ETA_DEFAULT)
         base, _ = _smooth_baseline(kv, rng, M_ax, ntime)
