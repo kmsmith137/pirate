@@ -20,13 +20,19 @@ here; they exist because the 2-d detrender will couple the time axis, and the
 sufficient statistics (G, U) produced by reduce.py are already in the layout it
 will need.
 
-Not yet implemented, and worth knowing before relying on the output:
+Worth knowing before relying on the output:
 
-  - No offset (kappa) subtraction.  Inert mathematically, but it is what would
-    protect float32 precision against a large DC level in the data.
-  - No residual-degrees-of-freedom test.  r_min is a numerical statistic only: a
-    zone reduced to a single unmasked channel is fit exactly, leaves an
-    identically zero residual, and is not flagged.  See solve.py.
+  - No offset (kappa) subtraction.  DEFERRED, not decided: inert mathematically,
+    but it is what would protect float32 precision against a large DC level in
+    the data.
+  - No residual-degrees-of-freedom (nu) cut.  DECIDED, not a gap.  r_min is a
+    numerical statistic, so a zone reduced to a single unmasked channel is fit
+    exactly, leaves an identically zero residual, and is not flagged.  That is
+    intended: nu measures overfitting, which in a rare-event search cannot
+    manufacture a false trigger -- the residual is provably under-dispersed,
+    Var[r] <= sigma^2 -- whereas undersubtraction and excess variance can, at any
+    rate.  solve.py has the full argument, and it should be read before anyone
+    adds a nu cut.
 """
 
 from .knots import KnotVector

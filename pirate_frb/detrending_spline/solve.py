@@ -57,13 +57,62 @@ channel.  r_min is a local statistic and does not see it.  Thresholding on
 lambda_min would therefore mask zones whose fits are perfectly accurate, on account
 of a direction the output never touches.
 
-Neither statistic, however, detects a zone that is STATISTICALLY degenerate.  The
-clearest case: a zone with ONE unmasked channel has r_min ~ 1e-2, healthier than
-most masks -- because the regulator's null space contains the constants, the fit
-passes exactly through that one point, and the residual is identically zero with
-zero degrees of freedom.  Detecting that needs the residual degrees of freedom
-M - tr(H), which is deliberately not implemented yet.  Until it is, a nearly empty
-zone will produce an identically zero residual and nothing here will complain.
+Neither statistic detects a zone that is STATISTICALLY degenerate, and THAT IS A
+DECISION RATHER THAN A GAP.  The clearest case: a zone with ONE unmasked channel
+has r_min ~ 1e-2, healthier than most masks -- because the regulator's null space
+contains the constants, the fit passes exactly through that one point, and the
+residual is identically zero with zero residual degrees of freedom
+nu = M - tr(H).  There is deliberately no nu cut.  Do not add one without
+revisiting the argument below, which is not recoverable by reading the code.
+
+The argument turns on an asymmetry specific to a rare-event search.  Two failure
+modes are not comparable:
+
+  - UNDERSUBTRACTION (shrinkage, or excess variance) leaves excursions, and
+    converts noise into triggers.  With large trial factors there are many 7
+    sigma noise fluctuations, so a mechanism that biases by 3 sigma with
+    probability 1e-5 can still flood the search and force the threshold up.
+    Dangerous at ANY rate, however rare.
+  - OVERFITTING (leverage) subtracts noise instead of baseline and suppresses the
+    residual.  Converting a 20 sigma event to 10 sigma with probability 1e-5 does
+    not move the event rate and does not change the threshold.  Only a
+    significant AVERAGE effect matters.
+
+nu is an overfitting statistic, so it lands in the second category.  Three things
+then settle it:
+
+  1. Overfitting here has the WRONG SIGN and cannot manufacture an excursion at
+     all.  Restricted to the unmasked channels, H = Phi (G + eta D_1)^-1 Phi^T W
+     is symmetric positive semidefinite with spectrum in [0,1], so
+     Var[r_f] = sigma^2 (1 - h_ff)^2 <= sigma^2 identically.  Measured maximum
+     0.9968 over 101 masks; over-dispersion never occurs.  Low nu can only
+     suppress the residual, never inflate it.  This is stronger than "small on
+     average" -- it is "wrong direction, always".
+  2. Operationally the leverage is negligible, and rigorously bounded:
+     tr(H) <= N_phi(n+1), so leverage <= N_phi(n+1)/M.  Measured at
+     nfreq = 4096: 0.0032 fully valid, 0.0035 at 10% flagged, 0.0064 at 50%
+     flagged, each sitting exactly on that bound.  (Much larger figures appear if
+     you measure over the test mask generator, whose masks have tiny M by
+     construction; those are not operational numbers.)
+  3. Computing nu costs a banded inverse per zone per time sample -- the
+     Takahashi recursion on the factor already in hand -- for no false-positive
+     protection.
+
+CONTRAST with what does matter, since the two look similar and are not.  Poor
+conditioning produces excess variance through ROUNDOFF in a near-singular solve,
+which is undersubtraction's category, and that is why eps exists and why the
+rank test below is not optional.  A rank-deficient matrix gives garbage
+coefficients, i.e. an excursion risk, so it is a correctness guard rather than a
+statistical one.
+
+ONE CAVEAT, and it is an interface concern rather than a detrender defect: at
+nu = 0 the residual is identically ZERO, not merely small.  Anything downstream
+that estimates a variance from the data and divides by it will meet 0/0 on such a
+zone.  If that matters, the cheap fix is not nu but the count: tr(H) <= min(M, K)
+with K = N_phi(n+1), so M >= K + nu_min guarantees nu >= nu_min, and
+sum_{j in zone} G_jj -- already computed just below for the dead-zone test -- lies
+in [M_zone/(n_phi+1), M_zone], so changing its "> 0" to "> c*K" is a complete,
+free, conservative surrogate.
 
 NO DEFLATION.  Unlike an unregularized spline detrender, there is nothing to
 deflate: with one unmasked channel in the zone, G + eta*D_1 is positive definite

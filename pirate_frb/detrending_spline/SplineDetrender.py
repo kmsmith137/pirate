@@ -75,8 +75,10 @@ class SplineDetrender:
         any eta (see regulator.py and timebasis.py).
       eps (float): conditioning threshold, defaulting to EPS_FLOAT32 or
         EPS_FLOAT64 according to 'dtype'.  A zone whose r_min falls below eps is
-        masked out entirely.  A guardrail against an untrustworthy factorization;
-        NOT a test of statistical sufficiency (see solve.py).
+        masked out entirely.  A guardrail against an untrustworthy factorization,
+        and deliberately NOT a test of statistical sufficiency: a zone with a
+        single surviving channel is fit exactly and is not flagged.  See solve.py
+        for why no such test is wanted rather than merely missing.
       dtype: float32 or float64, the working precision of the whole pipeline.
       orthogonal_time (bool): use discrete orthogonal polynomials on the window
         rather than raw monomials.  Default True and it should stay True; the
