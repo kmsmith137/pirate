@@ -45,6 +45,26 @@ NW_CASES = [(0, 0), (0, 1), (0, 3), (1, 1), (1, 2), (2, 1), (2, 2), (2, 4)]
 
 N_PHI = 2
 
+# test_dtype_agreement()'s bound on the float32-vs-float64 disagreement in r_min,
+# in units of float32 machine epsilon.  A named constant because the number is
+# calibrated rather than chosen, and the calibration is worth recording.
+#
+# r_min is a Cholesky pivot, i.e. a difference, so its error is roundoff-limited in
+# ABSOLUTE terms whatever r_min itself is.  The TYPICAL value is small and the TAIL
+# is heavy: measured over 120 seeds, median 13, p90 55, p99 153, max 274.  The
+# previous bound of 100 was therefore exceeded on 3.3% of draws, which under the
+# default 'test --dts -n 100' is a spurious failure in essentially every run.
+#
+# 1000 is set from the mechanism rather than from the sample maximum: errors
+# propagate through a banded factorization of dimension N with half-bandwidth n_b,
+# so O(N n_b) eps_mach ~ 600 is the scale to expect at n = n_phi = 2, and a bound
+# below that would be policing the tail of a distribution rather than testing
+# anything.  Note this is 4x eps itself (eps = 3e-5 = 252 eps_mach): a disagreement
+# this large genuinely flips a near-threshold masking decision, which is assertion
+# (c)'s job, not this one's.  This assertion only checks that r_min is
+# roundoff-limited rather than garbage; the printed value is what tracks drift.
+RMIN_ABS_TOL_EPS = 1000
+
 # Smallest r_min observed across a run of test_conditioning(), so that run_all()
 # can print the measured margin over eps.
 _worst_rmin = [np.inf]
@@ -512,8 +532,15 @@ def test_conditioning(rng, verbose=True, heavy=False):
     margin into an opaque failure, whereas the number itself is the thing we want
     to see when eta, eps or n_phi change.
 
-    'heavy' adds the large-F, wide-knot-interval configurations from the parameter
-    study.  They are slow and are not run by default.
+    nfreq = 30000 IS RUN BY DEFAULT, and deliberately so: 3.0x is the worst margin
+    over eps anywhere in the parameter study, it is the number the constants block
+    in SplineDetrender.py quotes to justify eta and eps, and until it was promoted
+    here nothing verified it -- an offline sweep is not a test.  It costs about
+    0.3 s, so there was never a real reason for it to sit behind 'heavy'.
+
+    'heavy' still adds the remaining large-F configurations from the parameter
+    study.  They probe the same regime and are redundant with the pinned pair, so
+    they are not run by default.
     """
     eta, eps = ETA_DEFAULT, EPS_FLOAT32
     worst, worst_cfg = np.inf, None
@@ -521,13 +548,25 @@ def test_conditioning(rng, verbose=True, heavy=False):
     cfgs = [(int(rng.integers(200, 10001)), None) for _ in range(10)]
     # The two profiles that approach eps are not reachable by chance, so pin them
     # at the top of the nfreq range rather than hoping the draw produces them.
+    # h_max, not nfreq, is what conditioning turns on, so the 30000-channel entries
+    # are the single-wide-interval profiles rather than 'uniform'.
     cfgs += [(10000, 'no_interior'), (10000, 'one_wide'), (10000, 'no_interior'),
-             (4096, 'no_interior')]
+             (4096, 'no_interior'), (30000, 'no_interior'), (30000, 'one_wide')]
     if heavy:
-        cfgs += [(30000, 'uniform'), (30000, 'one_wide'), (15000, 'one_wide')]
+        cfgs += [(30000, 'uniform'), (15000, 'one_wide')]
 
-    for nfreq, kind in cfgs:
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=nfreq, kind=kind)
+    kvs = [msk.random_knots(rng, n_phi=N_PHI, nfreq=nfreq, kind=kind)
+           for nfreq, kind in cfgs]
+
+    # One fixed geometry on top of the random draws: 30000 channels, four zones,
+    # three interior knots each.  It is far from the extremum (h_max is 1875, not
+    # 30000, so the margin is ~70x rather than 3x) and that is the point -- it is
+    # an operationally plausible configuration, so a regression that made ordinary
+    # knot vectors ill-conditioned would show up here rather than only in a corner
+    # nobody runs.
+    kvs.append(msk.zoned_knots(N_PHI, 30000, 4, 3))
+
+    for kv in kvs:
         det = SplineDetrender(kv, dtype=np.float64, eta=eta, eps=eps)
         table = det.table
         D1 = d1_banded(kv)
@@ -659,9 +698,11 @@ def test_dtype_agreement(rng, verbose=True):
     level would consume float32 mantissa and this test would be measuring that
     instead of the algorithm.
 
-    This is also the only test that reaches nfreq = 30000, because the float32 vs
-    float64 comparison is what would actually catch a large-h_max problem.  It
-    does NOT measure the conditioning margin there -- see the note by the print.
+    This is where nfreq = 30000 is reached with a RANDOM knot vector, because the
+    float32 vs float64 comparison is what would actually catch a large-h_max
+    problem.  It does NOT measure the conditioning margin there -- see the note by
+    the print; test_conditioning() pins that, and test_production_geometry() pins
+    one fixed 30000-channel geometry end to end.
     """
     n_flip, n_zone, worst_rel, worst_resid = 0, 0, 0.0, 0.0
     worst_abs_p = 0.0
@@ -746,8 +787,9 @@ def test_dtype_agreement(rng, verbose=True):
     assert n_flip <= 1e-3 * max(n_zone, 1), \
         f'{n_flip}/{n_zone} zone decisions flipped outside the threshold band'
     assert worst_resid < 1e-3, f'float32 vs float64 residual {worst_resid:.3e}'
-    assert worst_abs_p < 100*np.finfo(np.float32).eps, \
-        f'float32 vs float64 r_min absolute error {worst_abs_p:.3e}'
+    assert worst_abs_p < RMIN_ABS_TOL_EPS*np.finfo(np.float32).eps, \
+        f'float32 vs float64 r_min absolute error {worst_abs_p:.3e} ' \
+        f'= {worst_abs_p/np.finfo(np.float32).eps:.0f} x eps_mach'
 
     if verbose:
         print(f'    test_dtype_agreement: pass  [resid {worst_resid:.2e}, '
@@ -1069,6 +1111,84 @@ def test_2d_dtype_agreement(rng, verbose=True):
         print(f'      cumulative:                    {_expansion_2d_str()}')
 
 
+def test_production_geometry(rng, verbose=True):
+    """
+    One pinned end-to-end run at the geometry a GPU kernel would be compiled for:
+    n_phi = 2, nfreq = 30000, four zones of three interior knots each, n = 2,
+    W = 4, M = 2.
+
+    Everything else in this file sweeps; this one deliberately does not.  It pins
+    n_phi, n and W rather than reading N_PHI and NW_CASES, because the point is to
+    exercise the one configuration that gets compiled, and to leave measured
+    numbers behind -- worst r_min, and the float32-vs-float64 residual -- that a
+    kernel's tolerances can be set from.
+
+    Two things here are not covered elsewhere.  The knot intervals are 1875
+    channels wide, about 2x what the random draws reach at K up to 10, so this is
+    the widest float32 frequency accumulation the suite performs -- and the
+    frequency reduction is exactly what a port is most likely to get subtly wrong,
+    since reduce.py's binary tree exists for that reason and is easy to replace
+    with something that looks equivalent and is not.  And M = 2 with four zones
+    means the (beam, zone) index pair is non-degenerate in both slots at once,
+    which the single-beam tests cannot check.
+    """
+    n_phi, n, W, M_ax, T = 2, 2, 4, 2, 8
+    nbuf = T + 2*W
+    kv = msk.zoned_knots(n_phi, 30000, 4, 3)
+    assert (kv.nzone, kv.N_phi) == (4, 24), (kv.nzone, kv.N_phi)
+
+    det32 = SplineDetrender(kv, n=n, W=W, dtype=np.float32)
+    det64 = SplineDetrender(kv, n=n, W=W, dtype=np.float64)
+
+    m = msk.random_mask_2d((M_ax, kv.nfreq, nbuf), kv, rng, ETA_DEFAULT, n=n, W=W)
+    base, _ = _smooth_baseline(kv, rng, M_ax, nbuf)
+    d = base + 0.05*rng.standard_normal(base.shape)
+
+    r32, m32, p32 = det32.detrend_chunk(d.astype(np.float32), m)
+    r64, m64, p64 = det64.detrend_chunk(d, m)
+
+    # The float32-vs-float64 residual is scaled against eps_mach/r_min rather than
+    # compared to a constant, and r_min here is the worst over the zone-samples the
+    # comparison actually sees -- those BOTH runs kept.  A flat threshold does not
+    # work: the mask generator routinely produces a zone sitting just above eps,
+    # which survives the cut and then carries an error of order eps_mach/(4 r_min)
+    # by design (solve.py), so the residual moves by more than an order of
+    # magnitude from draw to draw while nothing is wrong.  Measured over 24 draws
+    # at this geometry the ratio below runs 0.005 to 3.1, median 0.13.
+    kept = (p32 >= EPS_FLOAT32) & (p64 > 0)
+    rmin = float(p32[kept].min()) if kept.any() else 1.0
+    inter = m32 & m64
+    resid = float(np.abs(r32.astype(np.float64) - r64)[inter].max()) if inter.any() else 0.0
+    tol = np.finfo(np.float32).eps / rmin * max(1.0, float(np.abs(d).max()))
+    assert resid < 50*tol, (resid, tol)
+
+    # The exact-reproduction property at this geometry, in float32: constant in
+    # frequency within each zone, degree-n in time.  This is the assertion that
+    # would catch a regulator assembled across a zone boundary, and doing it in
+    # float32 at 30000 channels is what makes it a statement about the working
+    # precision rather than about float64.
+    tt = np.arange(nbuf, dtype=np.float64) - (nbuf-1)/2.0
+    coef = rng.standard_normal(n+1)
+    level = sum(coef[q]*tt**q for q in range(n+1))
+    dflat = np.broadcast_to(level[None, None, :], (M_ax, kv.nfreq, nbuf)).astype(np.float32)
+    rf, mf, pf = det32.detrend_chunk(dflat, m)
+    livef = pf[pf > 0]
+    rminf = float(livef.min()) if livef.size else 1.0
+    tolf = np.finfo(np.float32).eps/rminf*max(1.0, float(np.abs(dflat).max()))
+    flat = float(np.abs(rf).max())
+    assert flat < 200*tolf, (flat, tolf)
+
+    # Both errors are reported in the same unit, eps_mach/r_min times the data
+    # scale, so the two lines are directly comparable and neither depends on the
+    # particular mask draw the way a raw magnitude would.
+    if verbose:
+        exp = int(((m[:, :, W:W+T] != 0) & ~m32).sum())
+        print(f'    test_production_geometry: pass  [f32-vs-f64 resid {resid:.2e} '
+              f'= {resid/tol:.3f} x eps_mach/r_min at worst kept r_min {rmin:.2e} '
+              f'({rmin/EPS_FLOAT32:.1f} x eps); flat baseline {flat/tolf:.1e} x the '
+              f'same bound; {exp} channel-samples expanded]')
+
+
 # ----------------------------------------------------------------
 
 def run_all(verbose=True, rng=None, heavy=False, n_phi=None):
@@ -1082,8 +1202,10 @@ def run_all(verbose=True, rng=None, heavy=False, n_phi=None):
     half-bandwidth 1 regardless of n_phi, so its off-diagonal band outlives the
     data bands) is invisible at n_phi = 2.
 
-    'heavy' turns on the large-nfreq conditioning configurations, which are slow;
-    they are the ones that probe the eps margin most closely.
+    'heavy' turns on some extra large-nfreq conditioning configurations.  It is no
+    longer where the eps margin is probed -- the configurations that reach 3x eps
+    are pinned and run by default (see test_conditioning) -- so leaving it off does
+    not weaken the suite.
     """
     global N_PHI
     rng = _default_rng(rng)
@@ -1116,6 +1238,7 @@ def run_all(verbose=True, rng=None, heavy=False, n_phi=None):
     test_2d_chunk_invariance(rng, verbose=verbose)
     test_2d_conditioning(rng, verbose=verbose)
     test_2d_dtype_agreement(rng, verbose=verbose)
+    test_production_geometry(rng, verbose=verbose)
     print(f'  detrending_spline tests passed   '
           f'[cumulative worst r_min: {_worst_rmin[0]:.3e}, '
           f'{_worst_rmin[0]/EPS_FLOAT32:.1f} x eps]')

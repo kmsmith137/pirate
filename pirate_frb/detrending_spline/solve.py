@@ -228,9 +228,10 @@ def solve_banded(A, U, kv, n, live, nmin):
     live: (..., nzone) int, the number of window offsets at which each zone holds
     data (moments.zone_live_counts); nmin = n+1 is the number required.
 
-    Returns (alpha, rmin, bad) with alpha zeroed in flagged zones, rmin the
-    minimum relative pivot per zone (exactly 0 for a zone that fails the rank
-    test), and bad = rmin < eps applied by the caller.
+    Returns (alpha, rmin), with rmin the minimum relative pivot per zone, exactly
+    0 for a zone that fails the rank test.  Zeroing alpha in a flagged zone is the
+    CALLER's job: eps lives with the caller, so this function reports the statistic
+    and does not apply a policy to it.
 
     THE RANK TEST GENERALIZES THE 1-d DEAD-ZONE TEST.  At n = 0 "at least one
     unmasked channel" is exactly "live >= 1".  At n > 0 a degree-n fit in time is

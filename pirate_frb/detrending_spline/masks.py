@@ -110,6 +110,38 @@ def random_knots(rng, n_phi=2, nfreq=None, kind=None):
     return KnotVector(np.array(knots, dtype=np.int64), n_phi, nfreq)
 
 
+def zoned_knots(n_phi, nfreq, nzone, kint):
+    """
+    A DETERMINISTIC multi-zone knot vector: 'nzone' equal zones, each carrying
+    'kint' equally spaced simple interior knots.
+
+    random_knots() is the right tool for coverage and the wrong one for a pinned
+    test: the margin at a geometry we have committed to should be a number that
+    does not move from run to run.  This is the complement -- no rng argument, and
+    the same knots every time.
+
+    At n_phi = 0 the zone-boundary multiplicity is 1, so EVERY interior knot is a
+    zone boundary and the result has nzone*(kint+1) zones rather than nzone.  That
+    is the honest degenerate behaviour rather than a special case; read kv.nzone
+    rather than assuming.
+    """
+    if nfreq % nzone:
+        raise ValueError(f'zoned_knots: nzone={nzone} must divide nfreq={nfreq}')
+    zw = nfreq // nzone
+    if zw < kint + 1:
+        raise ValueError(f'zoned_knots: zone width {zw} cannot hold {kint} '
+                         f'interior knots')
+
+    knots = [0] * (n_phi + 1)
+    for z in range(nzone):
+        base = z * zw
+        knots += [base + (i * zw) // (kint + 1) for i in range(1, kint + 1)]
+        if z < nzone - 1:
+            knots += [base + zw] * (n_phi + 1)
+    knots += [nfreq] * (n_phi + 1)
+    return KnotVector(np.array(knots, dtype=np.int64), n_phi, nfreq)
+
+
 # ---------------------------------------------------------------- adversarial
 
 def adversarial_mask(kv, rng, eta, v=None, niter=25):
