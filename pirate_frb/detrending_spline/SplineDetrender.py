@@ -205,9 +205,14 @@ class SplineDetrender:
         mask_ctr = (mask_buf[:, :, W:W+ntime] != 0)
         mask_out = expand_mask(mask_ctr, bad, self.kv)
 
-        # Subtract only where the output mask is set.  Doing it the other way
-        # round (subtract everywhere, then zero) would read d at masked channels,
-        # which may be NaN.
+        # SELECT, do not multiply.  np.where evaluates both arms, so d - model IS
+        # computed at masked channels and may be NaN there; the select discards it
+        # and the output is correct (test_masked_data_unused checks bit-identity
+        # under NaN poisoning).  What must NOT be done is the arithmetic form
+        # mask*(d-model), because 0*nan = nan.  This distinction matters for the
+        # GPU port: a predicated select is the right lane-uniform construct here,
+        # and adding a branch to "avoid reading d" would introduce warp divergence
+        # for no benefit.
         resid = np.where(mask_out,
                          d_buf[:, :, W:W+ntime].astype(self.dtype) - model,
                          self.dtype.type(0))
