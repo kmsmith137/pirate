@@ -22,8 +22,23 @@ import numpy as np
 
 
 def bandwidth(kv, n):
-    """Half-bandwidth of the assembled matrix; see the module docstring."""
-    return kv.n_phi * (n + 1) + n
+    """
+    Half-bandwidth of the assembled matrix; see the module docstring.
+
+    The max() is not cosmetic.  The assembled matrix carries bands from two
+    sources with DIFFERENT bandwidths in j: the data block, half-bandwidth n_phi,
+    and the regulator, half-bandwidth 1 whatever n_phi is (D_1 is a difference
+    penalty on coefficient indices and knows nothing about the spline degree).
+    At n_phi = 0 the data block is diagonal and the regulator is the wider of the
+    two, so a formula using n_phi alone under-allocates and the assembly writes
+    out of bounds.
+
+    At n_phi = 0 the extra band is in fact identically zero -- every interior knot
+    has multiplicity n_phi+1 = 1, so every coefficient is its own zone and D_1 has
+    no intra-zone differences left to penalize -- but that is a coincidence of the
+    degenerate case, not something to rely on for the layout.
+    """
+    return max(kv.n_phi, 1) * (n + 1) + n
 
 
 def assemble(Mcal, Vcal, kv, tb, D1, eta):

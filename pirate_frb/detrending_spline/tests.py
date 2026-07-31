@@ -35,6 +35,14 @@ from .reduce import band_to_dense as _b2d
 
 NW_CASES = [(0, 0), (0, 1), (0, 3), (1, 1), (1, 2), (2, 1), (2, 2), (2, 4)]
 
+# Spline degree under test.  Rebound by run_all() rather than fixed, so that a
+# multi-iteration run ('test --dts -n 8') covers 0..3; every test reads it, in
+# the same style as the module-level counter below.  Degree 0 is not a rounding
+# error in the coverage: there, multiplicity n_phi+1 is 1, so EVERY interior knot
+# is a zone boundary, the median zone count goes from 1 to 5, and D_1 is
+# identically zero (a zone is a single coefficient, so there are no intra-zone
+# differences to penalize) -- the unregularized limit, reached legitimately.
+
 N_PHI = 2
 
 # Smallest r_min observed across a run of test_conditioning(), so that run_all()
@@ -390,8 +398,17 @@ def test_shrinkage_bias_bounded(rng, verbose=True):
         det = SplineDetrender(kv, dtype=np.float64, eta=eta, eps=EPS_FLOAT64)
         r, _, _ = det.detrend_chunk(d, mask)
         biases.append(np.abs(r).max())
-    assert biases[0] > biases[1] > biases[2], biases
-    assert biases[0] / max(biases[2], 1e-300) > 4, biases
+    if np.abs(d1_dense(kv)).max() == 0:
+        # Degree 0: every interior knot has multiplicity n_phi+1 = 1, so every
+        # coefficient is its own zone, D_1 has no intra-zone difference left to
+        # penalize, and the regulator is identically zero.  The detrender is then
+        # exactly the unregularized block-mean fit, there is no shrinkage bias at
+        # any eta, and asserting monotonicity would be asserting that roundoff is
+        # monotone.  Assert the stronger thing instead.
+        assert max(biases) < 1e-12 * np.abs(d).max(), biases
+    else:
+        assert biases[0] > biases[1] > biases[2], biases
+        assert biases[0] / max(biases[2], 1e-300) > 4, biases
 
     if verbose:
         print(f'    test_shrinkage_bias_bounded: pass  '
@@ -696,7 +713,13 @@ def test_time_basis(rng, verbose=True):
 
 
 def test_bandwidth(rng, verbose=True):
-    """The assembled matrix is banded only in coefficient-major order."""
+    """
+    The assembled matrix is banded only in coefficient-major order, and the
+    half-bandwidth is max(n_phi,1)(n+1)+n -- the max() because the regulator has
+    half-bandwidth 1 in j regardless of n_phi, so at n_phi = 0 it is the WIDER of
+    the two contributions.  Getting that wrong writes out of bounds rather than
+    producing a wrong answer, but only at n_phi = 0.
+    """
     for _ in range(6):
         kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(200, 600)))
         for n, W in NW_CASES:
@@ -930,15 +953,25 @@ def test_2d_dtype_agreement(rng, verbose=True):
 
 # ----------------------------------------------------------------
 
-def run_all(verbose=True, rng=None, heavy=False):
+def run_all(verbose=True, rng=None, heavy=False, n_phi=None):
     """
     All tests share one generator, so printing its entropy makes the whole run
     reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
 
+    The spline degree is drawn from {0,1,2,3} per call rather than fixed, so a
+    multi-iteration run covers all four; pass n_phi explicitly to pin it.  This
+    matters more than it looks: an assembly bug confined to n_phi = 0 (D_1 has
+    half-bandwidth 1 regardless of n_phi, so its off-diagonal band outlives the
+    data bands) is invisible at n_phi = 2.
+
     'heavy' turns on the large-nfreq conditioning configurations, which are slow;
     they are the ones that probe the eps margin most closely.
     """
+    global N_PHI
     rng = _default_rng(rng)
+    if n_phi is None:
+        n_phi = int(rng.integers(0, 4))
+    N_PHI = n_phi
     ent = rng.bit_generator.seed_seq.entropy
     print(f'  detrending_spline tests (n_phi={N_PHI}, eta={ETA_DEFAULT:g}, '
           f'eps={EPS_FLOAT32:g}, rng entropy {ent})')
