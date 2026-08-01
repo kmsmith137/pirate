@@ -1236,8 +1236,8 @@ def test_gpu_kernel(rng=None, verbose=True, nfreq=1024, M_ax=2):
             print('    test_gpu_kernel: no kernel compiled, skipped')
         return
 
-    n_phi, n = cfgs[0]
-    W = 4
+    n_phi = cfgs[0]
+    n, W = 2, 4
 
     # T is a RUNTIME argument, not a compiled configuration, so each part of this test
     # picks the chunk length that suits it.  That matters most for the sweep below, whose

@@ -126,10 +126,10 @@ void register_kernel_bindings(pybind11::module &m)
         "samples are read but not written, and the caller is responsible for the buffer\n"
         "shift between chunks. Where the expanded mask is false, the residual is written as\n"
         "zero.\n\n"
-        "(n_phi, n) are the only compile-time parameters of the cuda kernel, so only the\n"
-        "configurations listed in the constructor's error message exist. Everything else is\n"
-        "runtime, including the window half-width W and the chunk length T. T must be a\n"
-        "positive multiple of 32, and W at most 16.\n\n"
+        "n_phi is the ONLY compile-time parameter of the cuda kernel, so only the values\n"
+        "listed in the constructor's error message exist. Everything else is runtime,\n"
+        "including the time-polynomial degree n, the window half-width W and the chunk\n"
+        "length T. T must be a positive multiple of 32, W at most 16, and n at most 3.\n\n"
         "FOOTGUN: no constant-offset subtraction is performed, so float32 data with a large\n"
         "DC level relative to its structure loses mantissa bits for nothing. In the intended\n"
         "pipeline the 1-d time detrender runs first and leaves the data roughly zero-mean.\n\n"
@@ -159,9 +159,10 @@ void register_kernel_bindings(pybind11::module &m)
                "    eta: regularization strength (dimensionless)\n"
                "    eps: mask-expansion threshold on r_min\n\n"
                "Raises:\n"
-               "    RuntimeError: if no kernel is compiled for (n_phi, n), if T is not a\n"
-               "        positive multiple of 32, if W is outside [0,16] or gives 2W+1 < n+1,\n"
-               "        or if the knot vector is invalid. The message says which.")
+               "    RuntimeError: if no kernel is compiled for n_phi, if T is not a positive\n"
+               "        multiple of 32, if n is outside [0,3], if W is outside [0,16] or\n"
+               "        gives 2W+1 < n+1, or if the knot vector is invalid. The message says\n"
+               "        which.")
           .def_readonly("nfreq", &Detrender2d::nfreq, "Number of frequency channels")
           .def_readonly("M", &Detrender2d::M, "Number of spectator (beam) rows")
           .def_readonly("n_phi", &Detrender2d::n_phi, "Spline degree in frequency")
@@ -174,8 +175,8 @@ void register_kernel_bindings(pybind11::module &m)
           .def_readonly("N_phi", &Detrender2d::N_phi, "Number of B-spline basis functions")
           .def_readonly("nzone", &Detrender2d::nzone, "Number of zones")
           .def_static("configs", &Detrender2d::configs,
-               "The compiled (n_phi, n) configurations. W and T are not among them: both\n"
-               "are runtime arguments. Returned as a list of (n_phi, n) tuples.")
+               "The compiled n_phi values. n, W and T are not among them: all three are\n"
+               "runtime arguments. Returned as a list of ints.")
           .def_static("time_selected", &Detrender2d::time_selected,
                py::call_guard<py::gil_scoped_release>(),
                "Run timing benchmarks, for every compiled configuration "

@@ -72,10 +72,10 @@ namespace pirate {
 // COMPILE-TIME PARAMETERS, as template arguments throughout:
 //
 //   NPHI       spline degree in frequency          (n_phi in the reference and the tex)
-//   NDEG_TIME  degree of the local time polynomial (n)
+//   n_deg  degree of the local time polynomial (n)
 //
 // These two must be compile-time: they size register arrays (acc[NCOMP], a[NPHI+1],
-// Mc[NPAIR_T], Vc[NDEG_TIME+1]) and drive the #pragma unroll in kernel 1's inner loop.
+// Mc[NPAIR_T], Vc[n_deg+1]) and drive the #pragma unroll in kernel 1's inner loop.
 //
 // T (chunk length) and W (window half-width) are RUNTIME kernel arguments. Neither sizes
 // a register array: T appears only as a stride and a bound, and W only as a loop bound
@@ -88,6 +88,12 @@ static constexpr int PASS_THREADS = 256;
 // Largest supported window half-width. It bounds nothing in the algorithm -- it exists
 // only to give the by-value stencil struct a compile-time size.
 static constexpr int MAX_W = 16;
+
+// Largest supported time-polynomial degree, and the pair count it implies. Like MAX_W
+// these bound nothing in the algorithm: they give the by-value stencil struct and kernel
+// 2's moment registers a compile-time size.
+static constexpr int MAX_NDEG = 3;
+static constexpr int MAX_NPAIR_T = (MAX_NDEG+1)*(MAX_NDEG+2)/2;
 
 // Target width of a freq-range, in channels. Occupancy knob, and NOT a correctness
 // parameter -- but it must stay a compile-time constant, because the freq-range
@@ -136,16 +142,13 @@ static __host__ __device__ constexpr int pair_index(int deg, int a, int b)
 // the multiplies. That also makes the even/odd structure EXACT rather than a
 // cancellation of rounding errors, which matters because "n=1 reduces to n=0 for a
 // window-constant mask" depends on the odd moments vanishing identically.
-template<int NDEG_TIME>
 struct TimeStencils
 {
-    static constexpr int NPAIR_T = (NDEG_TIME+1)*(NDEG_TIME+2)/2;
-
-    float gs[NPAIR_T][MAX_W+1];    // gs[p][k] = p_q(k) p_r(k), the s >= 0 half
-    float us[NDEG_TIME+1][MAX_W+1];     // us[q][k] = p_q(k)
-    float gpar[NPAIR_T];       // +1 if even in s, -1 if odd
-    float upar[NDEG_TIME+1];
-    float eval0[NDEG_TIME+1];       // p_q(0): the contraction that commits the baseline
+    float gs[MAX_NPAIR_T][MAX_W+1];   // gs[p][k] = p_q(k) p_r(k), the s >= 0 half
+    float us[MAX_NDEG+1][MAX_W+1];    // us[q][k] = p_q(k)
+    float gpar[MAX_NPAIR_T];          // +1 if even in s, -1 if odd
+    float upar[MAX_NDEG+1];
+    float eval0[MAX_NDEG+1];          // p_q(0): the contraction that commits the baseline
 };
 
 
@@ -165,7 +168,7 @@ struct TimeStencils
 // are padded to a multiple of 4 floats per channel anyway, so a future 128-bit load
 // needs no change to the host side.
 
-template<int NPHI, int NDEG_TIME>
+template<int NPHI>
 __global__ void __launch_bounds__(PASS_THREADS)
 detrend_2d_accum_kernel(const float *data, const unsigned char *mask, float *gu,
                         const float *phi_tab, const float *prod_tab, const int *fr_desc,
@@ -266,18 +269,18 @@ detrend_2d_accum_kernel(const float *data, const unsigned char *mask, float *gu,
 // block rather than once per thread is worth 8x in global loads: each thread would
 // otherwise read nfr*9*(2W+1) floats of its own.
 
-template<int NPHI, int NDEG_TIME>
+template<int NPHI>
 __global__ void __launch_bounds__(256)
 detrend_2d_solve_kernel(const float *gu, float *acoef, float *rmin_out,
                         const int *zone_desc, const int *fr_desc,
                         int nfrange, int nzone, int N_phi, int nbuf, int nphi_zone_max,
-                        int W, int T, float eta, float eps, TimeStencils<NDEG_TIME> tb)
+                        int n_deg, int W, int T, float eta, float eps, TimeStencils tb)
 {
     constexpr int NPAIR_F = (NPHI+1)*(NPHI+2)/2;
     constexpr int NCOMP   = NPAIR_F + (NPHI+1);
-    constexpr int NPAIR_T = (NDEG_TIME+1)*(NDEG_TIME+2)/2;
-    constexpr int NB      = bandwidth(NPHI, NDEG_TIME);
-    constexpr int NQ      = NDEG_TIME + 1;
+    const int NPAIR_T = (n_deg+1)*(n_deg+2)/2;
+    const int NB      = bandwidth(NPHI, n_deg);
+    const int NQ      = n_deg + 1;
 
     const int S = blockDim.x;
     const int tid = threadIdx.x;
@@ -364,7 +367,7 @@ detrend_2d_solve_kernel(const float *gu, float *acoef, float *rmin_out,
             // that would force W to be a compile-time constant.  This form needs two
             // scalars per k instead, is register-cheaper, and accumulates each Mc[p] over
             // k in exactly the same order, so it is bit-identical.
-            float Mc[NPAIR_T];
+            float Mc[MAX_NPAIR_T];
             #pragma unroll
             for (int p = 0; p < NPAIR_T; p++)
                 Mc[p] = tb.gs[p][0] * zz[W];
@@ -383,14 +386,14 @@ detrend_2d_solve_kernel(const float *gu, float *acoef, float *rmin_out,
             // half-bandwidth n*N_phi + n_phi, which grows with N_phi and is effectively
             // dense -- an O(N nb^2) factorization would silently become O(N^3).
             #pragma unroll
-            for (int q = 0; q <= NDEG_TIME; q++) {
+            for (int q = 0; q <= n_deg; q++) {
                 #pragma unroll
-                for (int r = 0; r <= NDEG_TIME; r++) {
+                for (int r = 0; r <= n_deg; r++) {
                     if ((bd == 0) && (r < q))
                         continue;               // held by the (r,q) entry instead
                     const int I = j*NQ + q;
                     const int B = bd*NQ + (r - q);
-                    A[(I*(NB+1) + B)*S + tid] += Mc[pair_index(NDEG_TIME, q, r)];
+                    A[(I*(NB+1) + B)*S + tid] += Mc[pair_index(n_deg, q, r)];
                 }
             }
         }
@@ -411,7 +414,7 @@ detrend_2d_solve_kernel(const float *gu, float *acoef, float *rmin_out,
         const float d0 = (nphi_z == 1) ? 0.0f : (((j == 0) || (j == nphi_z-1)) ? 1.0f : 2.0f);
         const float d1 = (j < nphi_z-1) ? -1.0f : 0.0f;
         #pragma unroll
-        for (int q = 0; q <= NDEG_TIME; q++) {
+        for (int q = 0; q <= n_deg; q++) {
             const int I = j*NQ + q;
             A[(I*(NB+1) + 0)*S + tid] += eta * d0;
             if (j+1 < nphi_z)
@@ -421,20 +424,20 @@ detrend_2d_solve_kernel(const float *gu, float *acoef, float *rmin_out,
         // --- the right-hand side.
         {
             const float *zz = Z + long(nphi_z*(NPHI+1) + j)*nloc + tid;
-            float Vc[NDEG_TIME+1];
+            float Vc[MAX_NDEG+1];
             #pragma unroll
-            for (int q = 0; q <= NDEG_TIME; q++)
+            for (int q = 0; q <= n_deg; q++)
                 Vc[q] = tb.us[q][0] * zz[W];
 
             for (int k = 1; k <= W; k++) {
                 const float e = zz[W+k] + zz[W-k];
                 const float o = zz[W+k] - zz[W-k];
                 #pragma unroll
-                for (int q = 0; q <= NDEG_TIME; q++)
+                for (int q = 0; q <= n_deg; q++)
                     Vc[q] += tb.us[q][k] * ((tb.upar[q] > 0.0f) ? e : o);
             }
             #pragma unroll
-            for (int q = 0; q <= NDEG_TIME; q++)
+            for (int q = 0; q <= n_deg; q++)
                 u[(j*NQ + q)*S + tid] = Vc[q];
         }
     }
@@ -515,7 +518,7 @@ detrend_2d_solve_kernel(const float *gu, float *acoef, float *rmin_out,
     int live = 0;
     for (int k = 0; k <= 2*W; k++)
         live += (Zlive[tid + k] > 0.0f) ? 1 : 0;
-    if (live < NDEG_TIME+1)
+    if (live < n_deg+1)
         rmin = 0.0f;
 
     // ---- Solve, unscale, commit.
@@ -547,7 +550,7 @@ detrend_2d_solve_kernel(const float *gu, float *acoef, float *rmin_out,
     for (int j = 0; j < nphi_z; j++) {
         float a = 0.0f;
         #pragma unroll
-        for (int q = 0; q <= NDEG_TIME; q++)
+        for (int q = 0; q <= n_deg; q++)
             a += u[(j*NQ + q)*S + tid] * tb.eval0[q];
         // A select, not a multiply: 'a' may be Inf or NaN in a zone that failed above.
         acoef[(long(m)*N_phi + coef_lo + j)*T + t] = bad ? 0.0f : a;
@@ -571,7 +574,7 @@ detrend_2d_solve_kernel(const float *gu, float *acoef, float *rmin_out,
 // "expand" is the single '&& !bad' below. There is no connected-component chase through
 // G's zero pattern; that is what eta > 0 bought.
 
-template<int NPHI, int NDEG_TIME>
+template<int NPHI>
 __global__ void __launch_bounds__(PASS_THREADS)
 detrend_2d_subtract_kernel(float *data, unsigned char *mask,
                            const float *acoef, const float *rmin,
@@ -653,10 +656,10 @@ detrend_2d_subtract_kernel(float *data, unsigned char *mask,
 // launch(). T is deliberately NOT part of a configuration -- it is a runtime kernel
 // argument (see the glossary at the top), so a caller may pick any chunk length without
 // a recompile, and test_gpu_kernel() uses a small one to keep its numpy oracle cheap.
-struct Detrender2dConfig { long n_phi, n; };
+struct Detrender2dConfig { long n_phi; };
 
 static constexpr Detrender2dConfig detrender_2d_configs[] = {
-    { 2, 2 },
+    { 2 },
 };
 
 
@@ -665,16 +668,16 @@ static string config_list_str()
     stringstream ss;
     for (const Detrender2dConfig &c: detrender_2d_configs)
         ss << ((&c == &detrender_2d_configs[0]) ? "" : ", ")
-           << "(n_phi=" << c.n_phi << ", n=" << c.n << ")";
+           << "(n_phi=" << c.n_phi << ")";
     return ss.str();
 }
 
 
-vector<tuple<long,long>> Detrender2d::configs()
+vector<long> Detrender2d::configs()
 {
-    vector<tuple<long,long>> ret;
+    vector<long> ret;
     for (const Detrender2dConfig &c: detrender_2d_configs)
-        ret.push_back({ c.n_phi, c.n });
+        ret.push_back(c.n_phi);
     return ret;
 }
 
@@ -756,19 +759,18 @@ static void build_time_basis(long n, long W, vector<double> &P)
 }
 
 
-template<int NDEG_TIME>
-static void fill_stencils(TimeStencils<NDEG_TIME> &tb, const vector<double> &P, int W)
+static void fill_stencils(TimeStencils &tb, const vector<double> &P, int n_deg, int W)
 {
-    constexpr int NPAIR_T = (NDEG_TIME+1)*(NDEG_TIME+2)/2;
-    const int nq = NDEG_TIME + 1;
+    const int NPAIR_T = (n_deg+1)*(n_deg+2)/2;
+    const int nq = n_deg + 1;
 
-    double parity[NDEG_TIME+1];
-    for (int q = 0; q <= NDEG_TIME; q++)
+    double parity[MAX_NDEG+1];
+    for (int q = 0; q <= n_deg; q++)
         parity[q] = (q % 2 == 0) ? 1.0 : -1.0;
 
     int p = 0;
-    for (int q = 0; q <= NDEG_TIME; q++) {
-        for (int r = q; r <= NDEG_TIME; r++, p++) {
+    for (int q = 0; q <= n_deg; q++) {
+        for (int r = q; r <= n_deg; r++, p++) {
             for (int k = 0; k <= W; k++)
                 tb.gs[p][k] = float(P[(W+k)*nq + q] * P[(W+k)*nq + r]);
             tb.gpar[p] = float(parity[q] * parity[r]);
@@ -776,7 +778,7 @@ static void fill_stencils(TimeStencils<NDEG_TIME> &tb, const vector<double> &P, 
     }
     xassert_eq(p, NPAIR_T);
 
-    for (int q = 0; q <= NDEG_TIME; q++) {
+    for (int q = 0; q <= n_deg; q++) {
         for (int k = 0; k <= W; k++)
             tb.us[q][k] = float(P[(W+k)*nq + q]);
         tb.upar[q] = float(parity[q]);
@@ -793,13 +795,20 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
 {
     bool found = false;
     for (const Detrender2dConfig &c: detrender_2d_configs)
-        if ((c.n_phi == n_phi_) && (c.n == n_))
+        if (c.n_phi == n_phi_)
             found = true;
 
     if (!found) {
         stringstream ss;
-        ss << "Detrender2d: no kernel is compiled for (n_phi=" << n_phi_ << ", n=" << n_
-           << "); available configurations are " << config_list_str();
+        ss << "Detrender2d: no kernel is compiled for n_phi=" << n_phi_
+           << "; available configurations are " << config_list_str();
+        throw runtime_error(ss.str());
+    }
+
+    // n is runtime, bounded only by the size of the by-value stencil struct.
+    if ((n_ < 0) || (n_ > MAX_NDEG)) {
+        stringstream ss;
+        ss << "Detrender2d: n=" << n_ << " must be in [0, " << MAX_NDEG << "]";
         throw runtime_error(ss.str());
     }
 
@@ -1024,9 +1033,9 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
     // ---- The time basis (compile-time in (n, W), so this runs once and never changes).
     vector<double> P;
     build_time_basis(n, W, P);
-    if ((n_phi == 2) && (n == 2)) {
-        TimeStencils<2> *tb = new TimeStencils<2>;
-        fill_stencils<2>(*tb, P, int(W));
+    if (n_phi == 2) {
+        TimeStencils *tb = new TimeStencils;
+        fill_stencils(*tb, P, int(n), int(W));
         tb_blob = tb;
     }
     else
@@ -1072,12 +1081,12 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
 
 Detrender2d::~Detrender2d()
 {
-    delete reinterpret_cast<TimeStencils<2> *>(tb_blob);
+    delete reinterpret_cast<TimeStencils *>(tb_blob);
     tb_blob = nullptr;
 }
 
 
-template<int NPHI, int NDEG_TIME>
+template<int NPHI>
 static void _launch(const Detrender2d &d, float *data, unsigned char *mask,
                     float *gu, float *acoef, float *rmin,
                     const float *phi_tab, const float *prod_tab,
@@ -1086,10 +1095,11 @@ static void _launch(const Detrender2d &d, float *data, unsigned char *mask,
                     long phi_stride, long prod_stride, const void *tb_blob,
                     cudaStream_t stream)
 {
-    constexpr int NB = bandwidth(NPHI, NDEG_TIME);
-    const TimeStencils<NDEG_TIME> &tb = *reinterpret_cast<const TimeStencils<NDEG_TIME> *>(tb_blob);
+    const int NB = bandwidth(NPHI, int(d.n));
+    const TimeStencils &tb = *reinterpret_cast<const TimeStencils *>(tb_blob);
 
     const int nbuf = int(d.nbuf);
+    const int n_deg = int(d.n);
     const int W = int(d.W);
     const int T = int(d.T);
     const int S = int(solve_threads);
@@ -1097,7 +1107,7 @@ static void _launch(const Detrender2d &d, float *data, unsigned char *mask,
     // Kernel 1.
     {
         dim3 nblocks((nbuf + PASS_THREADS - 1)/PASS_THREADS, int(d.nfrange), int(d.M));
-        detrend_2d_accum_kernel<NPHI,NDEG_TIME> <<< nblocks, PASS_THREADS, 0, stream >>>
+        detrend_2d_accum_kernel<NPHI> <<< nblocks, PASS_THREADS, 0, stream >>>
             (data, mask, gu, phi_tab, prod_tab, fr_desc,
              int(d.nfreq), int(d.nfrange), nbuf, int(phi_stride), int(prod_stride));
         CUDA_PEEK("detrend_2d_accum_kernel");
@@ -1106,7 +1116,7 @@ static void _launch(const Detrender2d &d, float *data, unsigned char *mask,
     // Kernel 2. The shared-memory request usually exceeds the 48 KB default, so opt in.
     // Done once per (configuration, process) rather than per launch.
     {
-        const long nblk_max = long(nphi_zone_max)*(NDEG_TIME+1);
+        const long nblk_max = long(nphi_zone_max)*(long(d.n)+1);
         const long ncompz_max = long(nphi_zone_max)*(NPHI+2);
         const long shmem = ((nblk_max*(NB+1) + 2*nblk_max)*S + ncompz_max*(S + 2*W) + (S + 2*W)) * 4;
 
@@ -1118,24 +1128,24 @@ static void _launch(const Detrender2d &d, float *data, unsigned char *mask,
         // instance with a smaller zone lower it and break an earlier one.
         static long attr_shmem = 0;
         if (shmem > attr_shmem) {
-            CUDA_CALL(cudaFuncSetAttribute(detrend_2d_solve_kernel<NPHI,NDEG_TIME>,
+            CUDA_CALL(cudaFuncSetAttribute(detrend_2d_solve_kernel<NPHI>,
                                            cudaFuncAttributeMaxDynamicSharedMemorySize,
                                            int(shmem)));
             attr_shmem = shmem;
         }
 
         dim3 nblocks(int(T/S), int(d.nzone), int(d.M));
-        detrend_2d_solve_kernel<NPHI,NDEG_TIME> <<< nblocks, S, size_t(shmem), stream >>>
+        detrend_2d_solve_kernel<NPHI> <<< nblocks, S, size_t(shmem), stream >>>
             (gu, acoef, rmin, zone_desc, fr_desc,
              int(d.nfrange), int(d.nzone), int(d.N_phi), nbuf, int(nphi_zone_max),
-             W, T, float(d.eta), float(d.eps), tb);
+             n_deg, W, T, float(d.eta), float(d.eps), tb);
         CUDA_PEEK("detrend_2d_solve_kernel");
     }
 
     // Kernel 3.
     {
         dim3 nblocks((nbuf + PASS_THREADS - 1)/PASS_THREADS, int(d.nfrange), int(d.M));
-        detrend_2d_subtract_kernel<NPHI,NDEG_TIME> <<< nblocks, PASS_THREADS, 0, stream >>>
+        detrend_2d_subtract_kernel<NPHI> <<< nblocks, PASS_THREADS, 0, stream >>>
             (data, mask, acoef, rmin, phi_tab, fr_desc,
              int(d.nfreq), int(d.N_phi), int(d.nzone), nbuf, W, T, int(phi_stride), float(d.eps));
         CUDA_PEEK("detrend_2d_subtract_kernel");
@@ -1153,8 +1163,8 @@ void Detrender2d::launch(Array<float> &data, Array<unsigned char> &mask, cudaStr
     xassert(data.on_gpu());
     xassert(mask.on_gpu());
 
-    if ((n_phi == 2) && (n == 2))
-        _launch<2,2> (*this, data.data, mask.data, gu.data, acoef.data, rmin.data,
+    if (n_phi == 2)
+        _launch<2> (*this, data.data, mask.data, gu.data, acoef.data, rmin.data,
                         phi_tab.data, prod_tab.data, fr_desc.data, zone_desc.data,
                         nphi_zone_max, solve_threads, phi_stride, prod_stride,
                         tb_blob, stream);
@@ -1190,7 +1200,7 @@ void Detrender2d::time_selected()
 
     const Detrender2dConfig &c = detrender_2d_configs[0];
     for (long Tc: { 2048L, 512L }) {
-        Detrender2d det(nfreq, knots, M, c.n_phi, c.n, /*W=*/4, Tc);
+        Detrender2d det(nfreq, knots, M, c.n_phi, /*n=*/2, /*W=*/4, Tc);
 
         // Global memory traffic: kernel 1 reads the whole buffer, kernel 3 reads and
         // writes the output region. Every byte of an ideal implementation is touched
