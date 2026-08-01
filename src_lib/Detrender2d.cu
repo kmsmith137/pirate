@@ -662,6 +662,7 @@ static constexpr Detrender2dConfig detrender_2d_configs[] = {
     { 0 },
     { 1 },
     { 2 },
+    { 3 },
 };
 
 
@@ -1047,24 +1048,46 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
     const long nblk_max = nphi_zone_max * (n+1);
     const long ncompz_max = nphi_zone_max * (n_phi+2);
 
-    int shmem_max = 0;
+    int shmem_max = 0, shmem_per_sm = 0, max_blocks_sm = 0, max_threads_sm = 0;
     CUDA_CALL(cudaDeviceGetAttribute(&shmem_max, cudaDevAttrMaxSharedMemoryPerBlockOptin, 0));
+    CUDA_CALL(cudaDeviceGetAttribute(&shmem_per_sm, cudaDevAttrMaxSharedMemoryPerMultiprocessor, 0));
+    CUDA_CALL(cudaDeviceGetAttribute(&max_blocks_sm, cudaDevAttrMaxBlocksPerMultiprocessor, 0));
+    CUDA_CALL(cudaDeviceGetAttribute(&max_threads_sm, cudaDevAttrMaxThreadsPerMultiProcessor, 0));
 
+    // MAXIMIZE THREADS PER SM, NOT THREADS PER BLOCK, and the difference is not academic.
+    // The obvious rule -- take the largest block that fits -- is actively wrong here,
+    // because shared memory per block is what caps blocks per SM. At the production
+    // configuration a 64-thread block needs 57.9 KB, and an SM has 100 KB, so exactly ONE
+    // block is resident: 64 threads. A 32-thread block needs 29.3 KB, so THREE are
+    // resident: 96 threads. Measured, the 32-thread choice runs kernel 2 in 112 us
+    // against 124 us, i.e. 10% faster, despite doing more work -- its stage-1 halo is
+    // amortized over half as many solves (40/32 against 72/64).
+    //
+    // Ties go to the largest block, since that is the one with the least halo redundancy.
+    // Sub-warp blocks (16, 8) are allowed and are not a mistake: they waste most of a
+    // warp, but a large zone running at quarter-warp occupancy is very much better than a
+    // configuration the kernel refuses outright, and at 8 threads a zone of ~60 basis
+    // functions still fits -- more than anything random_knots can produce at n_phi = 3.
     solve_threads = 0;
-    for (long s: { 256L, 128L, 64L, 32L }) {
+    long best_threads_sm = -1;
+    for (long s: { 256L, 128L, 64L, 32L, 16L, 8L }) {
         if (T % s != 0)
             continue;
         const long bytes = ((nblk_max*(NB+1) + 2*nblk_max)*s + ncompz_max*(s + 2*W) + (s + 2*W)) * 4;
-        if (bytes <= shmem_max) {
+        if (bytes > shmem_max)
+            continue;
+        const long blocks = min(long(shmem_per_sm) / bytes, long(max_blocks_sm));
+        const long threads = min(blocks * s, long(max_threads_sm));
+        if (threads > best_threads_sm) {
+            best_threads_sm = threads;
             solve_threads = s;
-            break;
         }
     }
     if (solve_threads == 0) {
         stringstream ss;
         ss << "Detrender2d: the largest zone has " << nphi_zone_max << " basis functions,"
            << " which needs more shared memory than this GPU offers (" << shmem_max
-           << " bytes) even at 32 threads per block. Use more zone boundaries, i.e."
+           << " bytes) even at 8 threads per block. Use more zone boundaries, i.e."
            << " interior knots of multiplicity n_phi+1, to split the frequency band.";
         throw runtime_error(ss.str());
     }
@@ -1173,6 +1196,8 @@ void Detrender2d::launch(Array<float> &data, Array<unsigned char> &mask, cudaStr
         _DT2D_DISPATCH(1);
     else if (n_phi == 2)
         _DT2D_DISPATCH(2);
+    else if (n_phi == 3)
+        _DT2D_DISPATCH(3);
     else
         throw runtime_error("Detrender2d::launch: internal error, unhandled configuration");
 

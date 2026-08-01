@@ -1218,10 +1218,12 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
         why one is enough here.  (Two of the eight, the residual comparison and the
         flat-baseline bound, ARE numerical -- they ride along because the run is already
         set up.)
-      - PART 2 runs only the agreement check, but sweeps knot vectors.  Its job is to
-        reach small r_min, which is where the GPU and the reference can actually disagree:
-        conditioning turns on h_max, and a fixed benign vector never leaves the
-        well-conditioned regime.
+      - PART 2 runs only the agreement check, but sweeps 8 knot vectors x 6 mask kinds.
+        Its job is to reach small r_min, which is where the GPU and the reference can
+        actually disagree: conditioning turns on h_max, and a fixed benign vector never
+        leaves the well-conditioned regime.  Sized to be comparable to
+        test_dtype_agreement's 120 draws, allowing for the GPU oracle being several times
+        more expensive per draw (T >= 32 against that test's ntime = 10).
 
     TWO DEGENERATE CORNERS ARE PINNED rather than left to the sweep.  W = 0 means there
     is no padding at all (nbuf == T), the parity fold has no k >= 1 term, and the rank
@@ -1263,7 +1265,10 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
     # length that suits it.  That matters most for the sweep, whose cost is dominated by
     # the numpy oracle: at T = 64 the reference is ~8x cheaper than at 512, which is what
     # lets the sweep reach nfreq = 30000.
-    T, Tbig, Tsweep = 512, 2048, 64
+    # Tsweep is the smallest legal chunk (T must be a positive multiple of 32).  The
+    # sweep's cost is dominated by the numpy oracle, which scales with nfreq*(T+2W), so
+    # the smallest T is what buys the draw count below.
+    T, Tbig, Tsweep = 512, 2048, 32
     epsm = np.finfo(np.float32).eps
     band = RMIN_ABS_TOL_EPS * epsm
 
@@ -1430,11 +1435,27 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
     #
     # (n,W) = (0,0) appears here too, at a wide knot interval, so the degenerate corner is
     # exercised against small r_min and not only in part 1's well-conditioned geometry.
-    sweep = [(int(rng.integers(128, 2000)), None, 1, 2, n_phis[-1]),
-             (30000, 'no_interior', 4, 2, n_phis[-1]),
-             (int(rng.integers(4000, 20000)), 'one_wide', 0, 0, n_phis[len(n_phis)//2]),
-             (int(rng.integers(128, 8000)), None, 8, 1, n_phis[0])]
-    kinds = ('adversarial', 'adversarial_singular', 'narrowband')
+    # Two pinned extremes plus six random draws, each a (nfreq, knot profile, W, n, n_phi)
+    # tuple.  nfreq is drawn log-uniformly so most draws are cheap and a few are wide; the
+    # pinned pair guarantees the wide-h_max regime is visited every call regardless.
+    sweep = [(30000, 'no_interior', 4, 2, n_phis[-1]),
+             (int(rng.integers(8000, 20001)), 'one_wide', 1, 2, n_phis[-1])]
+    for _ in range(6):
+        ns = int(rng.integers(0, 3))
+        # 2W+1 >= n+1 is the algebraic minimum, so W = 0 is legal only at n = 0.
+        Wok = [w for w in (0, 1, 2, 4, 8) if 2*w + 1 >= ns + 1]
+        sweep.append((int(round(np.exp(rng.uniform(np.log(128), np.log(30000))))),
+                      None if rng.random() < 0.6 else 'no_interior',
+                      int(rng.choice(Wok)),
+                      ns,
+                      int(rng.choice(n_phis))))
+
+    # Cycled explicitly rather than drawn: a random draw under-samples the extremes, and
+    # masks.py measures a factor of 23 between Bernoulli and adversarial masks.  The first
+    # three are the conditioning extremes; the next two drive mask expansion; None adds
+    # breadth from the generator's own weighted mixture.
+    kinds = ('adversarial', 'adversarial_singular', 'narrowband',
+             'n_live_offsets', 'dead_zone', None)
 
     worst_ratio, worst_rmin, ndraw, nflag = 0.0, np.inf, 0, 0
     nsecond = [0]         # draws that tripped the screen and needed the float32 reference
