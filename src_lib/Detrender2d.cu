@@ -95,9 +95,11 @@ static constexpr int MAX_W = 16;
 // Largest supported time-polynomial degree, and the pair count it implies. Like MAX_W
 // these bound nothing in the algorithm: they give the by-value stencil struct and kernel
 // 2's moment registers a compile-time size.
-// NOTE: the numpy reference caps n at 2 (SplineDetrender rejects anything higher), so
-// n = 3 is reachable here but has NO ORACLE -- test_gpu_kernel cannot validate it. Either
-// keep production at n <= 2, or extend the reference first.
+// NOTE: the numpy reference caps the TIME polynomial degree n at 2 (SplineDetrender
+// rejects anything higher), so n = 3 is reachable here but has NO ORACLE --
+// test_gpu_kernel cannot validate it. Either keep production at n <= 2, or extend the
+// reference first. This is specific to n: the spline degree n_phi = 3 is fully supported
+// and tested on both sides.
 static constexpr int MAX_NDEG = 3;
 static constexpr int MAX_NPAIR_T = (MAX_NDEG+1)*(MAX_NDEG+2)/2;
 

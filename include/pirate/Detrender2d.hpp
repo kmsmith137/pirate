@@ -47,8 +47,10 @@ namespace pirate {
 //
 // Two things a caller should know about n and about reproducibility:
 //
-//   - n = 3 is accepted but UNVALIDATED. The numpy reference caps n at 2, so nothing
-//     checks the kernel there; keep production at n <= 2 unless the reference is extended.
+//   - TIME polynomial degree n = 3 is accepted but UNVALIDATED: the numpy reference caps
+//     n at 2, so nothing checks the kernel there. Keep production at n <= 2 unless the
+//     reference is extended. The spline degree n_phi = 3 is a different matter -- it is
+//     fully supported and tested.
 //   - Results are bit-reproducible run to run, and across chunk lengths, only for a FIXED
 //     'channels_per_range'. It defaults to a value derived from (nfreq, knots, T), so two
 //     instances with different T sum frequency in different groupings and agree to
