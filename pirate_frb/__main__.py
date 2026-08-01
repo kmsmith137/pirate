@@ -68,6 +68,7 @@ def parse_test(subparsers):
     parser.add_argument('--dt1d', action='store_true', help='Runs pirate_frb.detrending_1d tests (pure-numpy 1-d detrender)')
     parser.add_argument('--dt1k', action='store_true', help='Runs pirate_frb.detrending_1d_kalman tests (pure-numpy fixed-lag Kalman detrender)')
     parser.add_argument('--dts', action='store_true', help='Runs pirate_frb.detrending_spline tests (pure-numpy regularized spline detrender)')
+    parser.add_argument('--dt2g', action='store_true', help='Runs pirate_frb.detrending_spline.tests.test_gpu_kernel() (Detrender2d GPU kernel vs the numpy reference)')
 
 
 def rrange(registry_class):
@@ -88,7 +89,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d', 'dt1k', 'dts' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -108,7 +109,12 @@ def test(args):
         if run_all_tests or args.dts:
             from .detrending_spline import tests as dts_tests
             dts_tests.run_all()
-        
+
+        if run_all_tests or args.dt2g:
+            from .detrending_spline import tests as dts_tests
+            print('  detrending_spline: Detrender2d GPU kernel vs the numpy reference')
+            dts_tests.test_gpu_kernel(None)
+
         if run_all_tests or args.rt:
             kernels.ReferenceLagbuf.test_random()
             kernels.ReferenceTree.test_basics()
@@ -301,9 +307,10 @@ def parse_time(subparsers):
     parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.time_selected()')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() timing')
     parser.add_argument('--dt1d', action='store_true', help='Runs Detrender1d.time_selected() (1-d detrender kernel)')
+    parser.add_argument('--dt2d', action='store_true', help='Runs Detrender2d.time_selected() (2-d spline detrender kernel)')
 
 def time_command(args):
-    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim', 'dt1d' ]
+    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim', 'dt1d', 'dt2d' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
     if args.ncu:
@@ -338,6 +345,8 @@ def time_command(args):
         kernels.GpuTreeGriddingKernel.time_selected()
     if run_all_timings or args.dt1d:
         kernels.Detrender1d.time_selected()
+    if run_all_timings or args.dt2d:
+        kernels.Detrender2d.time_selected()
     if run_all_timings or args.sim:
         utils.time_avx2_simulate_4bit_noise(nthreads)
 

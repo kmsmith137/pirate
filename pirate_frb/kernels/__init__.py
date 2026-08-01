@@ -14,9 +14,10 @@ from ..pirate_pybind11 import (
     ReferenceTreeGriddingKernel,
 )
 
-# These two classes have method injections, which live in kernels/<ClassName>.py.
+# These classes have method injections, which live in kernels/<ClassName>.py.
 # Each of those modules both applies the injections (as an import side effect) and
 # re-exports the class.
 from .Detrender1d import Detrender1d
+from .Detrender2d import Detrender2d
 from .GpuDequantizationKernel import GpuDequantizationKernel
 

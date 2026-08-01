@@ -1189,9 +1189,189 @@ def test_production_geometry(rng, verbose=True):
               f'same bound; {exp} channel-samples expanded]')
 
 
+def test_gpu_kernel(rng=None, verbose=True, nfreq=1024, M_ax=2):
+    """
+    Compare pirate.Detrender2d (the GPU kernel) to SplineDetrender.
+
+    Structured like detrending_1d.tests.test_gpu_kernel(): the GPU runs in float32 and
+    the reference in float64, so the two do not produce identical masks and residuals
+    are compared on the intersection.  Data is generated in fp64, cast to fp32, then
+    cast back for the reference, so both see bit-identical inputs.
+
+    THE TOLERANCE IS SCALED BY eps_mach/r_min, NOT A CONSTANT.  The mask generator
+    routinely leaves a zone sitting just above eps; it survives the cut and then carries
+    an error of order eps_mach/(4 r_min) BY DESIGN (see solve.py), so a flat threshold
+    either fails on a normal draw or is too loose to test anything.
+
+    Four of the checks below are exact rather than approximate, and they are the
+    structurally interesting ones:
+
+      - the 2W padding samples must be bit-identical to the input, which catches an
+        off-by-one in the output range or a write racing a read;
+      - two runs on the same input must be bit-identical, which is the cheapest race
+        detector available and only works because the reduction is deterministic (no
+        atomics anywhere -- see the "chunk invariance" comment in Detrender2d.cu);
+      - the same output sample computed at two different chunk lengths must be
+        bit-identical, which is what would catch a reduction order that depends on the
+        tile decomposition, or a freq-range partition that depends on T;
+      - poisoning the masked samples with nan/inf must not change the output at all,
+        which catches any 'mask * data' that crept in where a select belongs.
+
+    Skips itself with a message if no kernel is compiled, or if cupy is missing.
+    """
+    rng = _default_rng(rng)
+
+    try:
+        import cupy as cp
+    except ImportError:
+        if verbose:
+            print('    test_gpu_kernel: cupy not available, skipped')
+        return
+
+    from ..kernels import Detrender2d      # local import: this package is otherwise numpy-only
+
+    cfgs = Detrender2d.configs()
+    if not cfgs:
+        if verbose:
+            print('    test_gpu_kernel: no kernel compiled, skipped')
+        return
+
+    n_phi, n, W = cfgs[0][0], cfgs[0][1], cfgs[0][2]
+    Ts = sorted(c[3] for c in cfgs if (c[0], c[1], c[2]) == (n_phi, n, W))
+    T = Ts[0]                      # the cheapest compiled chunk length
+    nbuf = T + 2*W
+    epsm = np.finfo(np.float32).eps
+
+    kv = msk.zoned_knots(n_phi, nfreq, 4, 3)
+    knots = [int(x) for x in kv.knots]
+    det = Detrender2d(nfreq=nfreq, knots=knots, M=M_ax, n_phi=n_phi, n=n, W=W, T=T)
+
+    def run(dd, mm, d2=det):
+        gd, gm = cp.asarray(dd.copy()), cp.asarray(mm.astype(np.uint8))
+        d2.launch(gd, gm)
+        cp.cuda.get_current_stream().synchronize()
+        return cp.asnumpy(gd), cp.asnumpy(gm)
+
+    m_in = msk.random_mask_2d((M_ax, nfreq, nbuf), kv, rng, det.eta, n=n, W=W)
+    base, _ = _smooth_baseline(kv, rng, M_ax, nbuf)
+    d64 = base + 0.05*rng.standard_normal(base.shape)
+    d32 = d64.astype(np.float32)
+    d64 = d32.astype(np.float64)               # bit-identical inputs
+
+    ref = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eta=det.eta, eps=det.eps)
+    r64, m64, p64 = ref.detrend_chunk(d64, m_in)
+
+    out_d, out_m = run(d32, m_in)
+
+    # (a) the padding is read but never written.
+    for lo, hi, what in ((0, W, 'prepadding'), (W+T, nbuf, 'postpadding')):
+        assert np.array_equal(out_d[:, :, lo:hi], d32[:, :, lo:hi]), f'{what} data modified'
+        assert np.array_equal(out_m[:, :, lo:hi], m_in[:, :, lo:hi].astype(np.uint8)), \
+            f'{what} mask modified'
+
+    r_gpu, m_gpu = out_d[:, :, W:W+T], out_m[:, :, W:W+T].astype(bool)
+
+    # (b) residuals, on the channels both runs keep.
+    inter = m_gpu & m64
+    kept = (p64 > 0)
+    rmin = float(p64[kept].min()) if kept.any() else 1.0
+    tol = epsm/rmin*max(1.0, float(np.abs(d32).max()))
+    resid = float(np.abs(r_gpu.astype(np.float64) - r64)[inter].max()) if inter.any() else 0.0
+    assert resid < 50*tol, (resid, tol)
+
+    # (c) mask expansion.  The kernel emits no r_min, so expansion is checked against the
+    # reference's, and zone-samples whose r_min sits within a band of eps are exempt: the
+    # float32-vs-float64 disagreement in r_min reaches a few hundred machine epsilons
+    # (see RMIN_ABS_TOL_EPS), which is comparable to eps itself.
+    band = RMIN_ABS_TOL_EPS * epsm
+    expect_bad = (p64 < det.eps)
+    ambiguous = np.abs(p64 - det.eps) < band
+    for z, (lo, hi) in enumerate(zone_channel_ranges(kv)):
+        want = (m_in[:, lo:hi, W:W+T] != 0) & ~expect_bad[:, None, :, z]
+        got = m_gpu[:, lo:hi, :]
+        free = np.broadcast_to(ambiguous[:, None, :, z], got.shape)
+        assert np.array_equal(got[~free], want[~free]), f'mask expansion differs in zone {z}'
+
+    # (d) run-to-run bit identity.
+    again = run(d32, m_in)
+    assert np.array_equal(out_d, again[0]) and np.array_equal(out_m, again[1]), \
+        'two runs on the same input are not bit-identical'
+
+    # (e) bit-identical across chunk lengths, given consistent padding.  Run on the
+    # LARGEST compiled T and compare against the smallest, which needs no reference and is
+    # therefore cheap: the numpy oracle is what makes the checks above expensive, not the
+    # kernel.
+    nchunk = 0
+    Tbig = Ts[-1]
+    if Tbig > T:
+        nb2 = Tbig + 2*W
+        m2 = msk.random_mask_2d((M_ax, nfreq, nb2), kv, rng, det.eta, n=n, W=W)
+        b2, _ = _smooth_baseline(kv, rng, M_ax, nb2)
+        d2 = (b2 + 0.05*rng.standard_normal(b2.shape)).astype(np.float32)
+        big = Detrender2d(nfreq=nfreq, knots=knots, M=M_ax, n_phi=n_phi, n=n, W=W, T=Tbig)
+        big_d, big_m = run(d2, m2, big)
+        for c in range(Tbig // T):
+            sub_d = np.ascontiguousarray(d2[:, :, T*c:T*c + T + 2*W])
+            sub_m = np.ascontiguousarray(m2[:, :, T*c:T*c + T + 2*W])
+            o_d, o_m = run(sub_d, sub_m)
+            assert np.array_equal(o_d[:, :, W:W+T], big_d[:, :, W+T*c:W+T*(c+1)]), \
+                f'chunk invariance: T={T} vs T={Tbig} differ in data (chunk {c})'
+            assert np.array_equal(o_m[:, :, W:W+T], big_m[:, :, W+T*c:W+T*(c+1)]), \
+                f'chunk invariance: T={T} vs T={Tbig} differ in mask (chunk {c})'
+            nchunk += 1
+
+    # (f) masked samples are never read.  Only the OUTPUT region is compared: the padding
+    # is not written, so it still holds the poison.
+    for poison in (np.nan, np.inf, -1.0e30):
+        dp = d32.copy()
+        dp[m_in == 0] = poison
+        p_d, p_m = run(dp, m_in)
+        assert np.array_equal(p_d[:, :, W:W+T], out_d[:, :, W:W+T]), \
+            f'output changed when masked samples were poisoned with {poison}'
+        assert np.array_equal(p_m[:, :, W:W+T], out_m[:, :, W:W+T]), \
+            f'mask changed when masked samples were poisoned with {poison}'
+
+    # (g) exact reproduction: constant in frequency within a zone, degree-n in time.  An
+    # absolute-zero assertion, and the reason it is worth keeping alongside (b): (b)'s
+    # tolerance is set by the WORST r_min in the draw, so an O(eta) error in the regulator
+    # hides inside it, while this one is immune.
+    tt = (np.arange(nbuf, dtype=np.float64) - (nbuf-1)/2.0) / max(W, 1)
+    coef = rng.standard_normal(n+1)
+    level = sum(coef[q]*tt**q for q in range(n+1))
+    level = level / np.abs(level).max()
+    dflat = np.broadcast_to(level[None, None, :], (M_ax, nfreq, nbuf)).astype(np.float32)
+    f_d, f_m = run(dflat, m_in)
+    pf = ref.detrend_chunk(dflat.astype(np.float64), m_in)[2]
+    rminf = float(pf[pf > 0].min()) if (pf > 0).any() else 1.0
+    tolf = epsm/rminf*max(1.0, float(np.abs(dflat).max()))
+    flat = float(np.abs(f_d[:, :, W:W+T])[f_m[:, :, W:W+T].astype(bool)].max())
+    assert flat < 200*tolf, (flat, tolf)
+
+    # (h) the time rank test: a zone carrying data at fewer than n+1 distinct window
+    # offsets must be flagged, whatever its channel count.  Constructed rather than drawn
+    # -- the generator produces it often, but not reliably enough to rely on here, and a
+    # silently non-firing rank test yields garbage coefficients.
+    if n > 0:
+        m_rank = msk.random_mask_2d((M_ax, nfreq, nbuf), kv, rng, det.eta, n=n, W=W,
+                                    time_kind='n_live_offsets', perturb=False)
+        rr_d, rr_m = run(d32, m_rank)
+        p_rank = ref.detrend_chunk(d64, m_rank)[2]
+        dead = (p_rank == 0.0)
+        if dead.any():
+            for z, (lo, hi) in enumerate(zone_channel_ranges(kv)):
+                sel = dead[:, None, :, z] & np.ones((1, hi-lo, 1), dtype=bool)
+                assert not rr_m[:, lo:hi, W:W+T][sel].any(), \
+                    f'rank-deficient zone {z} was not flagged'
+
+    if verbose:
+        print(f'    test_gpu_kernel: pass  [resid {resid:.2e} = {resid/tol:.3f} x '
+              f'eps_mach/r_min; flat baseline {flat/tolf:.1e} x the same bound; '
+              f'{nchunk} chunk-invariance comparisons bit-identical]')
+
+
 # ----------------------------------------------------------------
 
-def run_all(verbose=True, rng=None, heavy=False, n_phi=None):
+def run_all(verbose=True, rng=None, heavy=False, n_phi=None, gpu=False):
     """
     All tests share one generator, so printing its entropy makes the whole run
     reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
@@ -1239,6 +1419,8 @@ def run_all(verbose=True, rng=None, heavy=False, n_phi=None):
     test_2d_conditioning(rng, verbose=verbose)
     test_2d_dtype_agreement(rng, verbose=verbose)
     test_production_geometry(rng, verbose=verbose)
+    if gpu:
+        test_gpu_kernel(rng, verbose=verbose)
     print(f'  detrending_spline tests passed   '
           f'[cumulative worst r_min: {_worst_rmin[0]:.3e}, '
           f'{_worst_rmin[0]/EPS_FLOAT32:.1f} x eps]')

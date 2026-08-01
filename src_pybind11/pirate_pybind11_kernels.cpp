@@ -12,6 +12,7 @@
 #include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/DedispersionKernel.hpp"
 #include "../include/pirate/Detrender1d.hpp"
+#include "../include/pirate/Detrender2d.hpp"
 #include "../include/pirate/GpuDequantizationKernel.hpp"
 #include "../include/pirate/LaggedDownsamplingKernel.hpp"
 #include "../include/pirate/PeakFindingKernel.hpp"
@@ -102,6 +103,96 @@ void register_kernel_bindings(pybind11::module &m)
                "    mask: Array, shape (M, nbuf), dtype uint8, fully contiguous, on GPU,\n"
                "          {0,1}-valued. Modified in place, and the output mask is the\n"
                "          authoritative one (it can only lose samples).\n"
+               "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
+    ;
+
+    // Detrender2d: Python injections in pirate_frb/kernels/Detrender2d.py:
+    //   - launch: converts stream=None to current cupy stream
+    py::class_<Detrender2d> detrender_2d(m, "Detrender2d",
+        "The 2-d spline detrender: a regularized fit of a B-spline in frequency times a\n"
+        "local polynomial in time, subtracted from the data.\n\n"
+        "For each output sample t, the baseline over a window of 2W+1 time samples is\n"
+        "modelled as sum_{jq} alpha_jq phi_j(f) p_q(s), with {phi_j} the B-spline basis of\n"
+        "the caller's knot vector and {p_q} orthonormal polynomials on the window. It is\n"
+        "fitted by weighted least squares over the unmasked samples, with a first-difference\n"
+        "regulator eta*D_1 on the frequency coefficients, and evaluated back at the window\n"
+        "centre.\n\n"
+        "Zones -- interior knots of multiplicity n_phi+1 -- decouple the fit exactly, and\n"
+        "mask expansion is per zone: a zone whose conditioning statistic r_min falls below\n"
+        "eps has all of its channels dropped for that time sample. There is no per-channel\n"
+        "expansion.\n\n"
+        "Operates in place on a (data, mask) pair of shape (M, nfreq, nbuf). Only the middle\n"
+        "T samples of each row are written, i.e. buffer samples [W, W+T). The 2W padding\n"
+        "samples are read but not written, and the caller is responsible for the buffer\n"
+        "shift between chunks. Where the expanded mask is false, the residual is written as\n"
+        "zero.\n\n"
+        "(n_phi, n, W, T) are compile-time parameters of the cuda kernel, so only the\n"
+        "configurations listed in the constructor's error message exist; nfreq, the knot\n"
+        "vector, M, eta and eps are runtime.\n\n"
+        "FOOTGUN: no constant-offset subtraction is performed, so float32 data with a large\n"
+        "DC level relative to its structure loses mantissa bits for nothing. In the intended\n"
+        "pipeline the 1-d time detrender runs first and leaves the data roughly zero-mean.\n\n"
+        "THREAD SAFETY: an instance owns per-launch scratch arrays, so one instance must not\n"
+        "be used concurrently from two streams.\n\n"
+        "The algorithm is specified in notes/tree_dedispersion.tex, section '2-d detrending'.\n"
+        "pirate_frb.detrending_spline is the pure-numpy reference that this kernel is\n"
+        "validated against.");
+
+    detrender_2d
+          .def(py::init<long, const std::vector<long> &, long, long, long, long, long, double, double>(),
+               py::arg("nfreq"), py::arg("knots"), py::arg("M"),
+               py::arg("n_phi") = 2, py::arg("n") = 2, py::arg("W") = 4, py::arg("T") = 2048,
+               py::arg("eta") = 1.0e-3, py::arg("eps") = 3.0e-5,
+               "Create a Detrender2d.\n\n"
+               "Args:\n"
+               "    nfreq: number of frequency channels\n"
+               "    knots: non-decreasing list of channel indices, running from 0 to nfreq,\n"
+               "        with the first and last values repeated exactly n_phi+1 times and no\n"
+               "        interior value repeated more than n_phi+1 times. An interior value\n"
+               "        repeated exactly n_phi+1 times is a zone boundary.\n"
+               "    M: number of spectator (beam) rows\n"
+               "    n_phi: spline degree in frequency\n"
+               "    n: degree of the time polynomial\n"
+               "    W: window half-width (the window is 2W+1 samples)\n"
+               "    T: output samples per row (chunk size)\n"
+               "    eta: regularization strength (dimensionless)\n"
+               "    eps: mask-expansion threshold on r_min\n\n"
+               "Raises:\n"
+               "    RuntimeError: if no kernel is compiled for (n_phi, n, W, T), or if the\n"
+               "        knot vector is invalid. The message says which.")
+          .def_readonly("nfreq", &Detrender2d::nfreq, "Number of frequency channels")
+          .def_readonly("M", &Detrender2d::M, "Number of spectator (beam) rows")
+          .def_readonly("n_phi", &Detrender2d::n_phi, "Spline degree in frequency")
+          .def_readonly("n", &Detrender2d::n, "Degree of the time polynomial")
+          .def_readonly("W", &Detrender2d::W, "Window half-width (the window is 2W+1 samples)")
+          .def_readonly("T", &Detrender2d::T, "Output samples per row (chunk size)")
+          .def_readonly("nbuf", &Detrender2d::nbuf, "Buffer samples per row, = T + 2W")
+          .def_readonly("eta", &Detrender2d::eta, "Regularization strength")
+          .def_readonly("eps", &Detrender2d::eps, "Mask-expansion threshold on r_min")
+          .def_readonly("N_phi", &Detrender2d::N_phi, "Number of B-spline basis functions")
+          .def_readonly("nzone", &Detrender2d::nzone, "Number of zones")
+          .def_static("configs", &Detrender2d::configs,
+               "The compiled (n_phi, n, W, T) configurations, i.e. the arguments the\n"
+               "constructor accepts. Returned as a list of (n_phi, n, W, T) tuples.")
+          .def_static("time_selected", &Detrender2d::time_selected,
+               py::call_guard<py::gil_scoped_release>(),
+               "Run timing benchmarks, for every compiled configuration "
+               "(called via 'python -m pirate_frb time --dt2d')")
+          .def("launch",
+               [](const Detrender2d &self, Array<float> &data, Array<unsigned char> &mask,
+                  uintptr_t stream_ptr) {
+                   cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                   self.launch(data, mask, stream);
+               },
+               py::arg("data"), py::arg("mask"), py::arg("stream_ptr"),
+               py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+               "GPU kernel launch (async, does not sync stream).\n\n"
+               "Args:\n"
+               "    data: Array, shape (M, nfreq, nbuf), dtype float32, fully contiguous,\n"
+               "          on GPU. Modified in place over buffer samples [W, W+T).\n"
+               "    mask: Array, shape (M, nfreq, nbuf), dtype uint8, fully contiguous, on\n"
+               "          GPU, {0,1}-valued. Modified in place over the same range, and the\n"
+               "          output mask is the authoritative one (it can only lose samples).\n"
                "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
     ;
 
