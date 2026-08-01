@@ -45,6 +45,18 @@ namespace pirate {
 // time-polynomial degree n, the window half-width W and the chunk length T. T must be a
 // positive multiple of 32, W at most 16, and n at most 3.
 //
+// Two things a caller should know about n and about reproducibility:
+//
+//   - n = 3 is accepted but UNVALIDATED. The numpy reference caps n at 2, so nothing
+//     checks the kernel there; keep production at n <= 2 unless the reference is extended.
+//   - Results are bit-reproducible run to run, and across chunk lengths, only for a FIXED
+//     'channels_per_range'. It defaults to a value derived from (nfreq, knots, T), so two
+//     instances with different T sum frequency in different groupings and agree to
+//     roundoff (~1e-6 relative) rather than bit-for-bit. Pass it explicitly if bit-exact
+//     replay across chunk sizes matters. M is deliberately not an input to it, so the beam
+//     axis is always a spectator: one row's output never depends on how many rows were
+//     processed alongside it.
+//
 // FOOTGUN, inherited from the reference: no constant-offset subtraction is performed.
 // The constant function is exactly in the span, so subtracting a per-zone offset would
 // be mathematically inert, but it is what would protect float32 precision against a

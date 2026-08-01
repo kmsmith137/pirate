@@ -2384,9 +2384,12 @@ equilibration guard, the pivot guards, the rank test, the residual -- is a predi
 a GPU port has no warp divergence to design around.  That is not luck: the governing rule is {\em select masked
 samples away, never weight by the mask}, adopted because a flagged sample may hold anything including NaN from
 a dropped packet and $0 \times {\rm NaN} = {\rm NaN}$.  The binding constraint for a kernel is instead the
-working set: the banded factor plus window moments plus assembled matrix is about $2.8$ KB per (beam, time) in
-float32 at $n_\phi = 2$, $n = 2$, $K \sim 16$, which is far past per-thread registers, so the natural
-one-thread-per-(beam,time) mapping is not available at $n = 2$.
+working set.  Zones decouple, so the unit of work is a {\em zone} rather than the whole coefficient vector: the
+banded factor, right-hand side and equilibration scales are $11 N_\phi^{\rm zone}(n{+}1)$ floats, about $800$
+bytes in float32 at $n_\phi = n = 2$ with six basis functions per zone.  That is past per-thread registers --
+and registers are unavailable in any case, since arbitrary runtime knots make the dimension a runtime quantity
+and the loops therefore unrollable -- so one thread per (beam, zone, time sample) is workable provided the
+working set lives in {\em shared} memory, which is what \texttt{Detrender2d} does.
 
 \subsection{Validation}
 \label{sec:sd_validation}

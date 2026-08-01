@@ -42,7 +42,7 @@ namespace pirate {
 // L40S balance point of 106. They are pure bandwidth with a 30x margin, so the only
 // things that matter in them are full cache lines and enough warps in flight. Kernel 2
 // does ~2000 FMA per (beam, zone, output sample) but there are only M*nzone*T of those,
-// which is ~1% of the chunk; it is written for clarity, not speed.
+// which is ~3% of the chunk; it is written for clarity, not speed.
 //
 // FREQ-RANGES. A "freq-range" is a contiguous run of channels inside a single non-empty
 // knot interval, so every channel in it shares a span index j0 and exactly n_phi+1 basis
@@ -95,6 +95,9 @@ static constexpr int MAX_W = 16;
 // Largest supported time-polynomial degree, and the pair count it implies. Like MAX_W
 // these bound nothing in the algorithm: they give the by-value stencil struct and kernel
 // 2's moment registers a compile-time size.
+// NOTE: the numpy reference caps n at 2 (SplineDetrender rejects anything higher), so
+// n = 3 is reachable here but has NO ORACLE -- test_gpu_kernel cannot validate it. Either
+// keep production at n <= 2, or extend the reference first.
 static constexpr int MAX_NDEG = 3;
 static constexpr int MAX_NPAIR_T = (MAX_NDEG+1)*(MAX_NDEG+2)/2;
 
@@ -591,6 +594,25 @@ detrend_2d_solve_kernel(const float *gu, float *acoef, float *rmin_out,
 // Mask expansion is whole-zone-only, and a freq-range lies in exactly one zone, so
 // "expand" is the single '&& !bad' below. There is no connected-component chase through
 // G's zero pattern; that is what eta > 0 bought.
+//
+// PERFORMANCE, AND WHAT HAS ALREADY BEEN RULED OUT. This kernel is ~72% of the chunk and
+// sustains only 62% of peak DRAM bandwidth, against kernel 1's 92%, and it reads about
+// 250 MB more than it asks for (866 MB measured against 614 MB of useful traffic). The
+// one structural difference from kernel 1 is that this is a read+write stream where that
+// one is read-only, and ~62% is a plausible GDDR6 figure for a 1:1 mix. Three hypotheses
+// were tested and are NOT the answer -- do not spend time on them again:
+//
+//   - Load-to-store dependency stalling. The body reads and writes the same address, so
+//     each iteration carries a dependency. Unrolling 4x changed nothing.
+//   - Basis-table locality. The phi_tab broadcasts are 11.5 M sectors and a block streams
+//     ~480 KB, so the resident working set rivals the 96 MB L2. Staging the table into
+//     shared memory moved DRAM traffic by 0.2%. The tables hit L2 fine.
+//   - Sector misalignment. This one WAS real and is fixed above (tiling on the buffer
+//     index rather than the output index). It cut L1 sectors 12% and left DRAM unchanged.
+//
+// What remains untried is widening the per-thread access: 4 samples per thread would make
+// a warp write a full 128-byte line of mask instead of a 32-byte sector, which is the last
+// partial write in the kernel. It requires 4 | W, 4 | T and 4 | nbuf.
 
 template<int NPHI>
 __global__ void __launch_bounds__(PASS_THREADS)

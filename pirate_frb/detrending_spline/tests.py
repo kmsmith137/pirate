@@ -1218,6 +1218,10 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
         why one is enough here.  (Two of the eight, the residual comparison and the
         flat-baseline bound, ARE numerical -- they ride along because the run is already
         set up.)
+      - PART 1b pins the degenerate mask endpoints (all-masked, all-valid, one live
+        channel, dead zones, ...) that the sweep leaves to chance -- and two of which it
+        actively discards, since a draw with no live zone is skipped.  Checked for
+        non-finite output as well as agreement.
       - PART 2 runs only the agreement check, but sweeps 8 knot vectors x 6 mask kinds.
         Its job is to reach small r_min, which is where the GPU and the reference can
         actually disagree: conditioning turns on h_max, and a fixed benign vector never
@@ -1432,6 +1436,56 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
             f'{tag}: channels_per_range={alt_cpr} differs by {cpr_diff:.3e}, tol {tol:.3e}'
 
         report.append((n_phi, n, W, resid/tol, flat/tolf, nchunk, nrank))
+
+    # ------------------------------------------ part 1b: pinned mask corner cases
+    #
+    # random_mask_2d draws its base type per zone from a weighted mixture, which covers
+    # the extremal FAMILIES well but leaves the degenerate ENDPOINTS to chance -- and two
+    # of them the sweep actively discards, since a draw with no live zone is skipped.
+    # These are constructed instead, and checked for non-finite output as well as
+    # agreement: every one of them drives a guard (a zero pivot, an empty zone, a
+    # single-point exact fit), and the failure mode of a guard is Inf or NaN escaping,
+    # not a wrong number.
+    cnfreq, cT, cW, cn = 2048, 128, 4, 2
+    cnbuf = cT + 2*cW
+    ckv = msk.zoned_knots(n_phis[-1], cnfreq, 4, 3)
+    cdet = Detrender2d(nfreq=cnfreq, knots=[int(x) for x in ckv.knots], M=1,
+                       n_phi=n_phis[-1], n=cn, W=cW, T=cT)
+    cref = SplineDetrender(ckv, n=cn, W=cW, dtype=np.float64, eta=cdet.eta, eps=cdet.eps)
+    cbase, _ = _smooth_baseline(ckv, rng, 1, cnbuf)
+    cd = (cbase + 0.05*rng.standard_normal(cbase.shape)).astype(np.float32)
+
+    ones = np.ones((1, cnfreq, cnbuf), dtype=bool)
+    corner = {}
+    corner['all masked'] = np.zeros((1, cnfreq, cnbuf), dtype=bool)
+    corner['all valid'] = ones.copy()
+    mm = np.zeros((1, cnfreq, cnbuf), dtype=bool); mm[:, 7, :] = True
+    corner['one live channel'] = mm                      # must SURVIVE: fit is exact there
+    mm = ones.copy(); mm[:, 0, :] = False; mm[:, -1, :] = False
+    corner['band edges'] = mm                            # the clamped ends of the basis
+    mm = ones.copy(); mm[:, :, cW] = False
+    corner['one dead time sample'] = mm
+    mm = ones.copy(); mm[:, :, :cW] = False; mm[:, :, cW+cT:] = False
+    corner['padding only'] = mm                          # the halo is masked, the output is not
+    mm = np.zeros((1, cnfreq, cnbuf), dtype=bool); mm[:, ::2, :] = True
+    corner['alternating channels'] = mm
+    mm = ones.copy(); mm[:, cnfreq//4:3*cnfreq//4, :] = False
+    corner['whole zones dead'] = mm
+
+    for cname, cmask in corner.items():
+        cr64, cm64, cp64 = cref.detrend_chunk(cd.astype(np.float64), cmask)
+        co_d, co_m = run(cdet, cd, cmask)
+        cout = co_d[:, :, cW:cW+cT]
+        assert np.isfinite(cout).all(), f'corner case "{cname}": non-finite output'
+        cmg = co_m[:, :, cW:cW+cT].astype(bool)
+        assert np.array_equal(cmg, cm64), \
+            f'corner case "{cname}": mask differs from the reference'
+        clive = cp64[cp64 > 0]
+        cii = cmg & cm64
+        if cii.any() and clive.size:
+            ce = float(np.abs(cout.astype(np.float64) - cr64)[cii].max())
+            ctol = epsm/float(clive.min())*max(1.0, float(np.abs(cd).max()))
+            assert ce < 50*ctol, f'corner case "{cname}": resid {ce:.3e} vs tol {ctol:.3e}'
 
     # ------------------------------------------ part 2: agreement, over many knot vectors
     #
