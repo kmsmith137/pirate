@@ -659,6 +659,8 @@ detrend_2d_subtract_kernel(float *data, unsigned char *mask,
 struct Detrender2dConfig { long n_phi; };
 
 static constexpr Detrender2dConfig detrender_2d_configs[] = {
+    { 0 },
+    { 1 },
     { 2 },
 };
 
@@ -1033,13 +1035,9 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
     // ---- The time basis (compile-time in (n, W), so this runs once and never changes).
     vector<double> P;
     build_time_basis(n, W, P);
-    if (n_phi == 2) {
-        TimeStencils *tb = new TimeStencils;
-        fill_stencils(*tb, P, int(n), int(W));
-        tb_blob = tb;
-    }
-    else
-        throw runtime_error("Detrender2d: internal error, no stencil builder for this configuration");
+    TimeStencils *tb = new TimeStencils;
+    fill_stencils(*tb, P, int(n), int(W));
+    tb_blob = tb;
 
     // ---- Kernel-2 block size. One thread per (beam, zone, output sample) solve, so the
     // shared memory scales with the block, and the grid is T/solve_threads blocks -- hence
@@ -1163,13 +1161,22 @@ void Detrender2d::launch(Array<float> &data, Array<unsigned char> &mask, cudaStr
     xassert(data.on_gpu());
     xassert(mask.on_gpu());
 
-    if (n_phi == 2)
-        _launch<2> (*this, data.data, mask.data, gu.data, acoef.data, rmin.data,
-                        phi_tab.data, prod_tab.data, fr_desc.data, zone_desc.data,
-                        nphi_zone_max, solve_threads, phi_stride, prod_stride,
-                        tb_blob, stream);
+    // One line per compiled n_phi; see detrender_2d_configs[] above.
+    #define _DT2D_DISPATCH(P)                                                          \
+        _launch<P> (*this, data.data, mask.data, gu.data, acoef.data, rmin.data,        \
+                    phi_tab.data, prod_tab.data, fr_desc.data, zone_desc.data,          \
+                    nphi_zone_max, solve_threads, phi_stride, prod_stride, tb_blob, stream)
+
+    if (n_phi == 0)
+        _DT2D_DISPATCH(0);
+    else if (n_phi == 1)
+        _DT2D_DISPATCH(1);
+    else if (n_phi == 2)
+        _DT2D_DISPATCH(2);
     else
         throw runtime_error("Detrender2d::launch: internal error, unhandled configuration");
+
+    #undef _DT2D_DISPATCH
 }
 
 
@@ -1181,26 +1188,27 @@ void Detrender2d::time_selected()
     const long M = 2;
     const long nzone = 4;
     const long kint = 3;
-    const long n_phi = 2;
 
-    vector<long> knots;
-    for (long i = 0; i <= n_phi; i++)
-        knots.push_back(0);
-    const long zw = nfreq / nzone;
-    for (long z = 0; z < nzone; z++) {
-        const long base = z*zw;
-        for (long i = 1; i <= kint; i++)
-            knots.push_back(base + (i*zw)/(kint+1));
-        if (z < nzone-1)
-            for (long i = 0; i <= n_phi; i++)
-                knots.push_back(base + zw);
-    }
-    for (long i = 0; i <= n_phi; i++)
-        knots.push_back(nfreq);
+    for (const Detrender2dConfig &c: detrender_2d_configs) {
+        const long n_phi = c.n_phi;
 
-    const Detrender2dConfig &c = detrender_2d_configs[0];
-    for (long Tc: { 2048L, 512L }) {
-        Detrender2d det(nfreq, knots, M, c.n_phi, /*n=*/2, /*W=*/4, Tc);
+        vector<long> knots;
+        for (long i = 0; i <= n_phi; i++)
+            knots.push_back(0);
+        const long zw = nfreq / nzone;
+        for (long z = 0; z < nzone; z++) {
+            const long base = z*zw;
+            for (long i = 1; i <= kint; i++)
+                knots.push_back(base + (i*zw)/(kint+1));
+            if (z < nzone-1)
+                for (long i = 0; i <= n_phi; i++)
+                    knots.push_back(base + zw);
+        }
+        for (long i = 0; i <= n_phi; i++)
+            knots.push_back(nfreq);
+
+        const long Tc = 2048;
+        Detrender2d det(nfreq, knots, M, n_phi, /*n=*/2, /*W=*/4, Tc);
 
         // Global memory traffic: kernel 1 reads the whole buffer, kernel 3 reads and
         // writes the output region. Every byte of an ideal implementation is touched

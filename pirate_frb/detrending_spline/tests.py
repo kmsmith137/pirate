@@ -1198,9 +1198,10 @@ def test_gpu_kernel(rng=None, verbose=True, nfreq=1024, M_ax=2):
     are compared on the intersection.  Data is generated in fp64, cast to fp32, then
     cast back for the reference, so both see bit-identical inputs.
 
-    n_phi is the kernel's only compile-time parameter, so EVERYTHING else is swept:
-    the knot vector, nfreq, the mask kind, the window half-width W, the time-polynomial
-    degree n, and the chunk length T.
+    Everything the kernel does not fix is swept: the knot vector, nfreq, the mask kind,
+    the window half-width W, the time-polynomial degree n, and the chunk length T.  n_phi
+    is the one compile-time parameter, so the test covers every value the kernel was
+    compiled for, read back from configs().
 
 Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what kind
     of property they check:
@@ -1222,11 +1223,15 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
         conditioning turns on h_max, and a fixed benign vector never leaves the
         well-conditioned regime.
 
-    (n, W) = (0, 0) IS IN BOTH PARTS, and not as a formality.  W = 0 means there is no
-    padding at all (nbuf == T), the parity fold has no k >= 1 term, the rank test
-    degenerates to the 1-d dead-zone test, and the assembled matrix drops from
-    half-bandwidth 8 to 2 -- different code paths in all three kernels.  It is the corner
-    where 'the buffer geometry' assumptions would break if any survived.
+    TWO DEGENERATE CORNERS ARE PINNED rather than left to the sweep.  W = 0 means there
+    is no padding at all (nbuf == T), the parity fold has no k >= 1 term, and the rank
+    test degenerates to the 1-d dead-zone test.  n_phi = 0 means every interior knot has
+    multiplicity 1 and is therefore a zone boundary, so every zone is a single
+    coefficient, D_1 is identically zero, and the regulator disappears -- the
+    unregularized limit, reached legitimately.  Their intersection,
+    (n_phi, n, W) = (0, 0, 0), is a 1x1 solve per zone with no padding and no regulator,
+    and is where any surviving assumption about buffer geometry or matrix shape would
+    break.
 
     THE TOLERANCE IS SCALED BY eps_mach/r_min, NOT A CONSTANT.  The mask generator
     routinely leaves a zone sitting just above eps; it survives the cut and then carries
@@ -1252,7 +1257,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
             print('    test_gpu_kernel: no kernel compiled, skipped')
         return
 
-    n_phi = cfgs[0]
+    n_phis = sorted(cfgs)
 
     # T is a RUNTIME argument, not a compiled configuration, so each half picks the chunk
     # length that suits it.  That matters most for the sweep, whose cost is dominated by
@@ -1262,9 +1267,10 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
     epsm = np.finfo(np.float32).eps
     band = RMIN_ABS_TOL_EPS * epsm
 
-    # (n, W) pairs for part 1.  (2,4) is the production configuration; (0,0) is the
-    # degenerate corner described above.
-    FIXED_CASES = ((2, 4), (0, 0))
+    # (n_phi, n, W) for part 1: every compiled n_phi at the production (n, W), plus the
+    # two degenerate corners described above.
+    FIXED_CASES = ([(p, 2, 4) for p in n_phis]
+                   + [(n_phis[-1], 0, 0), (n_phis[0], 0, 0)])
 
     def run(det, dd, mm):
         gd, gm = cp.asarray(dd.copy()), cp.asarray(mm.astype(np.uint8))
@@ -1291,8 +1297,8 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
     # ------------------------------------------ part 1: every check, at one knot vector
 
     report = []
-    for (n, W) in FIXED_CASES:
-        tag = f'(n,W)=({n},{W})'
+    for (n_phi, n, W) in FIXED_CASES:
+        tag = f'(n_phi,n,W)=({n_phi},{n},{W})'
         nbuf = T + 2*W
 
         kv = msk.zoned_knots(n_phi, nfreq, 4, 3)
@@ -1400,7 +1406,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
                 assert not rr_m[:, lo:hi, W:W+T][sel].any(), \
                     f'{tag}: rank-deficient zone {z} was not flagged'
 
-        report.append((n, W, resid/tol, flat/tolf, nchunk, nrank))
+        report.append((n_phi, n, W, resid/tol, flat/tolf, nchunk, nrank))
 
     # ------------------------------------------ part 2: agreement, over many knot vectors
     #
@@ -1424,22 +1430,24 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
     #
     # (n,W) = (0,0) appears here too, at a wide knot interval, so the degenerate corner is
     # exercised against small r_min and not only in part 1's well-conditioned geometry.
-    sweep = [(int(rng.integers(128, 2000)), None, 1, 2),
-             (30000, 'no_interior', 4, 2),
-             (int(rng.integers(4000, 20000)), 'one_wide', 0, 0),
-             (int(rng.integers(128, 8000)), None, 8, 1)]
+    sweep = [(int(rng.integers(128, 2000)), None, 1, 2, n_phis[-1]),
+             (30000, 'no_interior', 4, 2, n_phis[-1]),
+             (int(rng.integers(4000, 20000)), 'one_wide', 0, 0, n_phis[len(n_phis)//2]),
+             (int(rng.integers(128, 8000)), None, 8, 1, n_phis[0])]
     kinds = ('adversarial', 'adversarial_singular', 'narrowband')
 
     worst_ratio, worst_rmin, ndraw, nflag = 0.0, np.inf, 0, 0
-    for nf, kind, Ws, ns in sweep:
-        kvs = msk.random_knots(rng, n_phi=n_phi, nfreq=nf, kind=kind)
+    nsecond = [0]         # draws that tripped the screen and needed the float32 reference
+    for nf, kind, Ws, ns, ps in sweep:
+        kvs = msk.random_knots(rng, n_phi=ps, nfreq=nf, kind=kind)
         dets = Detrender2d(nfreq=kvs.nfreq, knots=[int(x) for x in kvs.knots], M=1,
-                           n_phi=n_phi, n=ns, W=Ws, T=Tsweep)
+                           n_phi=ps, n=ns, W=Ws, T=Tsweep)
         refs = SplineDetrender(kvs, n=ns, W=Ws, dtype=np.float64, eta=dets.eta, eps=dets.eps)
         nbs = Tsweep + 2*Ws
 
         for kind_t in kinds:
-            tag = f'nfreq={kvs.nfreq}, (n,W)=({ns},{Ws}), kind={kind}/{kind_t}'
+            tag = (f'nfreq={kvs.nfreq}, (n_phi,n,W)=({ps},{ns},{Ws}), '
+                   f'kind={kind}/{kind_t}')
             ms = msk.random_mask_2d((1, kvs.nfreq, nbs), kvs, rng, dets.eta,
                                     n=ns, W=Ws, time_kind=kind_t)
             bs, _ = _smooth_baseline(kvs, rng, 1, nbs)
@@ -1460,25 +1468,48 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
             if ii.any():
                 es = float(np.abs(rs_g.astype(np.float64) - rs64)[ii].max())
                 worst_ratio = max(worst_ratio, es/tol_s)
-                # 50x is calibrated, not guessed: measured over 24 seeds of the sweep the
-                # ratio runs median 2.8, p90 4.8, max 7.1.  The tail is light (the max is
-                # 2.5x the median, unlike RMIN_ABS_TOL_EPS's 21x), so 7x over the observed
-                # maximum is ample.
-                assert es < 50*tol_s, f'{tag}: resid {es:.3e} vs tol {tol_s:.3e}'
+
+                # TWO-STAGE, and the second stage is the one that means something.
+                #
+                # eps_mach/r_min is a rule of thumb rather than a bound -- solve.py says
+                # so outright: log-log slope 0.68 against 1, correlation 0.62.  Measured
+                # over 28 seeds of this sweep the ratio runs median 3.1, p90 4.3, but one
+                # draw in 28 reaches 79, at a configuration that is not even
+                # ill-conditioned.  A constant large enough never to trip on those is
+                # large enough to be meaningless.
+                #
+                # So when the cheap screen trips, ask the question the test actually cares
+                # about: is the GPU worse than the numpy reference AT THE SAME PRECISION?
+                # A hard configuration makes both float32 paths equally bad, which is not
+                # a GPU bug; only the GPU being an order of magnitude worse is.  Measured
+                # over the configurations that trip the screen, the ratio of the two
+                # float32 errors runs 0.2 to 3.0, so 10x is a wide margin.  The second
+                # reference costs a float32 detrend_chunk, paid on ~4% of draws.
+                if es >= 50*tol_s:
+                    r32, m32ref, _ = SplineDetrender(
+                        kvs, n=ns, W=Ws, dtype=np.float32, eta=dets.eta,
+                        eps=dets.eps).detrend_chunk(ds, ms)
+                    jj = m32ref[:, :, :] & ms64
+                    enp = float(np.abs(r32.astype(np.float64) - rs64)[jj].max()) if jj.any() else 0.0
+                    nsecond[0] += 1
+                    assert es < 10*enp, \
+                        f'{tag}: GPU resid {es:.3e} vs numpy-float32 {enp:.3e} ' \
+                        f'(r_min {rmin_s:.2e}, eps_mach/r_min bound {tol_s:.3e})'
 
             nflag += int((ps64 < dets.eps).sum())
             check_expansion(kvs, ms, ms_g, ps64, dets.eps, Ws, Tsweep, tag)
             ndraw += 1
 
     if verbose:
-        for (n, W, rr, ff, nc, nk) in report:
-            print(f'    test_gpu_kernel (n,W)=({n},{W}): pass  [resid {rr:.3f} x '
-                  f'eps_mach/r_min, flat baseline {ff:.1e} x the same bound, '
-                  f'{nc} chunk-invariance comparisons bit-identical, '
+        for (pp, n, W, rr, ff, nc, nk) in report:
+            print(f'    test_gpu_kernel (n_phi,n,W)=({pp},{n},{W}): pass  '
+                  f'[resid {rr:.3f} x eps_mach/r_min, flat baseline {ff:.1e} x the same '
+                  f'bound, {nc} chunk-invariance comparisons bit-identical, '
                   f'{nk} rank-deficient zone-samples]')
-        print(f'      sweep: {ndraw} draws over (nfreq, knots, n, W, mask kind), '
+        print(f'      sweep: {ndraw} draws over (nfreq, knots, n_phi, n, W, mask kind), '
               f'worst resid {worst_ratio:.3f} x eps_mach/r_min, '
-              f'worst r_min {worst_rmin:.2e}, {nflag} zone-samples flagged')
+              f'worst r_min {worst_rmin:.2e}, {nflag} zone-samples flagged, '
+              f'{nsecond[0]} checked against numpy-float32')
 
 
 # ----------------------------------------------------------------
