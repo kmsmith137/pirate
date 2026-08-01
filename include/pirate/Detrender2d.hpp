@@ -40,9 +40,10 @@ namespace pirate {
 // Where the expanded mask is false, the residual is written as zero rather than left
 // untouched, matching SplineDetrender.detrend_chunk() in the numpy reference.
 //
-// (n_phi, n, W, T) are compile-time parameters of the cuda kernel, so only the
-// combinations listed in the constructor's error message exist. nfreq, the knot vector,
-// M, eta and eps are runtime.
+// (n_phi, n, W) are compile-time parameters of the cuda kernel, so only the combinations
+// listed in the constructor's error message exist. Everything else is runtime, including
+// the chunk length T: it appears in the kernels only as an array stride and a loop bound,
+// so it needs no recompile. T must be a positive multiple of 32.
 //
 // FOOTGUN, inherited from the reference: no constant-offset subtraction is performed.
 // The constant function is exactly in the span, so subtracting a per-zone offset would
@@ -56,8 +57,8 @@ namespace pirate {
 
 struct Detrender2d
 {
-    // Throws unless (n_phi, n, W, T) is one of the compiled configurations, or if the
-    // knot vector is invalid. 'knots' is a non-decreasing list of channel indices with
+    // Throws unless (n_phi, n, W) is one of the compiled configurations, if T is not a
+    // positive multiple of 32, or if the knot vector is invalid. 'knots' is a non-decreasing list of channel indices with
     // multiplicity expressed by repetition; it must run from 0 to nfreq, with the first
     // and last values repeated exactly n_phi+1 times (clamped ends are what put the
     // constant function in the span) and no interior value repeated more than n_phi+1
@@ -96,9 +97,8 @@ struct Detrender2d
                 ksgpu::Array<unsigned char> &mask,
                 cudaStream_t stream) const;
 
-    // The compiled (n_phi, n, W, T) configurations, i.e. the arguments the constructor
-    // accepts.
-    static std::vector<std::tuple<long,long,long,long>> configs();
+    // The compiled (n_phi, n, W) configurations. T is not among them: it is runtime.
+    static std::vector<std::tuple<long,long,long>> configs();
 
     // Static timing function (called via 'python -m pirate_frb time --dt2d').
     static void time_selected();

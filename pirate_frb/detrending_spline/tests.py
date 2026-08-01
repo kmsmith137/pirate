@@ -1236,9 +1236,13 @@ def test_gpu_kernel(rng=None, verbose=True, nfreq=1024, M_ax=2):
             print('    test_gpu_kernel: no kernel compiled, skipped')
         return
 
-    n_phi, n, W = cfgs[0][0], cfgs[0][1], cfgs[0][2]
-    Ts = sorted(c[3] for c in cfgs if (c[0], c[1], c[2]) == (n_phi, n, W))
-    T = Ts[0]                      # the cheapest compiled chunk length
+    n_phi, n, W = cfgs[0]
+
+    # T is a RUNTIME argument, not a compiled configuration, so each part of this test
+    # picks the chunk length that suits it.  That matters most for the sweep below, whose
+    # cost is dominated by the numpy oracle: at T = 64 the reference is ~8x cheaper than
+    # at 512, which is what lets the sweep reach nfreq = 30000.
+    T, Tbig, Tsweep = 512, 2048, 64
     nbuf = T + 2*W
     epsm = np.finfo(np.float32).eps
 
@@ -1302,7 +1306,6 @@ def test_gpu_kernel(rng=None, verbose=True, nfreq=1024, M_ax=2):
     # therefore cheap: the numpy oracle is what makes the checks above expensive, not the
     # kernel.
     nchunk = 0
-    Tbig = Ts[-1]
     if Tbig > T:
         nb2 = Tbig + 2*W
         m2 = msk.random_mask_2d((M_ax, nfreq, nb2), kv, rng, det.eta, n=n, W=W)
@@ -1394,19 +1397,20 @@ def test_gpu_kernel(rng=None, verbose=True, nfreq=1024, M_ax=2):
     for nf, kind in sweep:
         kvs = msk.random_knots(rng, n_phi=n_phi, nfreq=nf, kind=kind)
         dets = Detrender2d(nfreq=kvs.nfreq, knots=[int(x) for x in kvs.knots], M=1,
-                           n_phi=n_phi, n=n, W=W, T=T)
+                           n_phi=n_phi, n=n, W=W, T=Tsweep)
         refs = SplineDetrender(kvs, n=n, W=W, dtype=np.float64, eta=dets.eta, eps=dets.eps)
         zr = zone_channel_ranges(kvs)
 
         for kind_t in kinds:
-            ms = msk.random_mask_2d((1, kvs.nfreq, nbuf), kvs, rng, dets.eta,
+            nbs = Tsweep + 2*W
+            ms = msk.random_mask_2d((1, kvs.nfreq, nbs), kvs, rng, dets.eta,
                                     n=n, W=W, time_kind=kind_t)
-            bs, _ = _smooth_baseline(kvs, rng, 1, nbuf)
+            bs, _ = _smooth_baseline(kvs, rng, 1, nbs)
             ds = (bs + 0.05*rng.standard_normal(bs.shape)).astype(np.float32)
             rs64, ms64, ps64 = refs.detrend_chunk(ds.astype(np.float64), ms)
             os_d, os_m = run(ds, ms, dets)
-            rs_g = os_d[:, :, W:W+T]
-            ms_g = os_m[:, :, W:W+T].astype(bool)
+            rs_g = os_d[:, :, W:W+Tsweep]
+            ms_g = os_m[:, :, W:W+Tsweep].astype(bool)
 
             live = ps64[ps64 > 0]
             if not live.size:
@@ -1427,7 +1431,7 @@ def test_gpu_kernel(rng=None, verbose=True, nfreq=1024, M_ax=2):
             amb = np.abs(ps64 - dets.eps) < band
             nflag += int(eb.sum())
             for z, (lo, hi) in enumerate(zr):
-                want = (ms[:, lo:hi, W:W+T] != 0) & ~eb[:, None, :, z]
+                want = (ms[:, lo:hi, W:W+Tsweep] != 0) & ~eb[:, None, :, z]
                 got = ms_g[:, lo:hi, :]
                 free = np.broadcast_to(amb[:, None, :, z], got.shape)
                 assert np.array_equal(got[~free], want[~free]), \
