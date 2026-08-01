@@ -95,13 +95,20 @@ static constexpr int MAX_W = 16;
 // Largest supported time-polynomial degree, and the pair count it implies. Like MAX_W
 // these bound nothing in the algorithm: they give the by-value stencil struct and kernel
 // 2's moment registers a compile-time size.
-// NOTE: the numpy reference caps the TIME polynomial degree n at 2 (SplineDetrender
-// rejects anything higher), so n = 3 is reachable here but has NO ORACLE --
-// test_gpu_kernel cannot validate it. Either keep production at n <= 2, or extend the
-// reference first. This is specific to n: the spline degree n_phi = 3 is fully supported
-// and tested on both sides.
 static constexpr int MAX_NDEG = 3;
 static constexpr int MAX_NPAIR_T = (MAX_NDEG+1)*(MAX_NDEG+2)/2;
+
+// Largest TIME polynomial degree we are willing to RUN, as opposed to the largest the
+// arrays are sized for. The two differ on purpose. The numpy reference
+// (pirate_frb/detrending_spline) rejects n > 2, so n = 3 would be a configuration no test
+// can validate -- and the parts of this kernel that n touches are exactly the parts a
+// test would need to check: the (q,r) assembly loops, the moment stencils, and the
+// Theta = I structure of the regulator. Refusing it is better than shipping an
+// unvalidated path. Raising it is a two-step change, reference first, then here.
+//
+// This is specific to n. The SPLINE degree n_phi = 3 is fully supported and tested on
+// both sides.
+static constexpr int MAX_ORACLE_NDEG = 2;
 
 // Freq-range width is DERIVED from the instance size rather than fixed, because the right
 // value moves by 4x across the sizes we care about and the penalty for getting it wrong is
@@ -900,10 +907,17 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
         throw runtime_error(ss.str());
     }
 
-    // n is runtime, bounded only by the size of the by-value stencil struct.
-    if ((n_ < 0) || (n_ > MAX_NDEG)) {
+    // n is runtime. The bound is what the reference can validate, not what the kernel
+    // could execute; see MAX_ORACLE_NDEG.
+    if ((n_ < 0) || (n_ > MAX_ORACLE_NDEG)) {
         stringstream ss;
-        ss << "Detrender2d: n=" << n_ << " must be in [0, " << MAX_NDEG << "]";
+        ss << "Detrender2d: n=" << n_ << " must be in [0, " << MAX_ORACLE_NDEG << "]. "
+           << "(The kernel's arrays are sized up to n = " << MAX_NDEG << ", but the numpy "
+           << "reference pirate_frb.detrending_spline.SplineDetrender rejects n > "
+           << MAX_ORACLE_NDEG << ", so a larger n would be a configuration that no test "
+           << "validates. To raise this, extend the reference first, then this check. "
+           << "Note this is the TIME polynomial degree; the spline degree n_phi = 3 is "
+           << "supported.)";
         throw runtime_error(ss.str());
     }
 

@@ -43,14 +43,14 @@ namespace pirate {
 // n_phi is the ONLY compile-time parameter of the cuda kernel, so only the values listed
 // in the constructor's error message exist. Everything else is runtime, including the
 // time-polynomial degree n, the window half-width W and the chunk length T. T must be a
-// positive multiple of 32, W at most 16, and n at most 3.
+// positive multiple of 32, W at most 16, and n at most 2.
 //
 // Two things a caller should know about n and about reproducibility:
 //
-//   - TIME polynomial degree n = 3 is accepted but UNVALIDATED: the numpy reference caps
-//     n at 2, so nothing checks the kernel there. Keep production at n <= 2 unless the
-//     reference is extended. The spline degree n_phi = 3 is a different matter -- it is
-//     fully supported and tested.
+//   - The TIME polynomial degree is capped at n <= 2, matching the numpy reference. The
+//     kernel's arrays are sized for n = 3, but running there would be a configuration no
+//     test validates, so the constructor refuses it; extend the reference first. The
+//     spline degree n_phi = 3 is a different matter -- fully supported and tested.
 //   - Results are bit-reproducible run to run, and across chunk lengths, only for a FIXED
 //     'channels_per_range'. It defaults to a value derived from (nfreq, knots, T), so two
 //     instances with different T sum frequency in different groupings and agree to
@@ -72,7 +72,7 @@ namespace pirate {
 struct Detrender2d
 {
     // Throws unless n_phi is one of the compiled configurations, if T is not a positive
-    // multiple of 32, if n is outside [0,3], if W is outside [0,16] or gives 2W+1 < n+1,
+    // multiple of 32, if n is outside [0,2], if W is outside [0,16] or gives 2W+1 < n+1,
     // or if the knot vector is invalid. 'knots' is a non-decreasing list of channel indices with
     // multiplicity expressed by repetition; it must run from 0 to nfreq, with the first
     // and last values repeated exactly n_phi+1 times (clamped ends are what put the

@@ -129,7 +129,9 @@ void register_kernel_bindings(pybind11::module &m)
         "n_phi is the ONLY compile-time parameter of the cuda kernel, so only the values\n"
         "listed in the constructor's error message exist. Everything else is runtime,\n"
         "including the time-polynomial degree n, the window half-width W and the chunk\n"
-        "length T. T must be a positive multiple of 32, W at most 16, and n at most 3.\n\n"
+        "length T. T must be a positive multiple of 32, W at most 16, and n at most 2 --\n"
+        "the last matching the numpy reference, since a larger time-polynomial degree would\n"
+        "be a configuration no test validates.\n\n"
         "FOOTGUN: no constant-offset subtraction is performed, so float32 data with a large\n"
         "DC level relative to its structure loses mantissa bits for nothing. In the intended\n"
         "pipeline the 1-d time detrender runs first and leaves the data roughly zero-mean.\n\n"
@@ -166,7 +168,7 @@ void register_kernel_bindings(pybind11::module &m)
                "        instances must agree exactly (e.g. comparing T=512 against T=2048).\n\n"
                "Raises:\n"
                "    RuntimeError: if no kernel is compiled for n_phi, if T is not a positive\n"
-               "        multiple of 32, if n is outside [0,3], if W is outside [0,16] or\n"
+               "        multiple of 32, if n is outside [0,2], if W is outside [0,16] or\n"
                "        gives 2W+1 < n+1, or if the knot vector is invalid. The message says\n"
                "        which.")
           .def_readonly("nfreq", &Detrender2d::nfreq, "Number of frequency channels")
