@@ -64,9 +64,15 @@ struct Detrender2d
     // and last values repeated exactly n_phi+1 times (clamped ends are what put the
     // constant function in the span) and no interior value repeated more than n_phi+1
     // times.
+    // 'channels_per_range' is an internal tuning knob, exposed only because it is part
+    // of the frequency summation order: two instances with different values agree to
+    // roundoff but not bit-for-bit. Leave it 0 to derive it from (nfreq, knots, T), which
+    // is what production should do; pass it explicitly when two instances must agree
+    // exactly, e.g. to compare a T=512 run against a T=2048 one.
     Detrender2d(long nfreq, const std::vector<long> &knots, long M,
                 long n_phi = 2, long n = 2, long W = 4, long T = 2048,
-                double eta = 1.0e-3, double eps = 3.0e-5);
+                double eta = 1.0e-3, double eps = 3.0e-5,
+                long channels_per_range = 0);
 
     ~Detrender2d();
 
@@ -83,6 +89,7 @@ struct Detrender2d
     long N_phi;          // number of B-spline basis functions
     long nzone;          // number of zones
     long nfrange;        // number of freq-ranges (an internal decomposition; see the .cu)
+    long channels_per_range;   // freq-range width actually used (derived unless requested)
 
     // launch(): asynchronously launch the kernels, and return without synchronizing
     // the stream. Note: stream=NULL is allowed, but is not the default.

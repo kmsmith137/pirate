@@ -49,20 +49,23 @@ namespace pirate {
 // functions are nonzero on it. Kernel 1 therefore accumulates a fixed
 // (n_phi+1)x(n_phi+1) symmetric block plus a length-(n_phi+1) vector -- 9 floats at
 // n_phi=2 -- per (beam, freq-range, buffer sample), and kernel 2 sums the freq-ranges of
-// a zone. The partition is a host-side function of (nfreq, knots, CHANNELS_PER_RANGE)
-// and of nothing else; see "chunk invariance" below. Its width is an occupancy knob: it
-// sets the block count in kernels 1 and 3.
+// a zone. Their width is the occupancy knob: it sets the block count in kernels 1 and 3.
 //
-// CHUNK INVARIANCE. Output sample t is computed by an identical sequence of floating
-// point operations whatever T is, so results are bit-identical across chunkings (given
-// consistent padding, which is the caller's contract) and across runs. This is a
-// correctness property inherited from the reference, and it is not free: it requires
-// that the freq-range partition not depend on T, M or the launch geometry, that the
-// per-thread accumulation blocking be a compile-time constant, and that there be NO
-// atomics anywhere in the reduction. Reducing (G,U) with atomicAdd would be slightly
-// simpler and about as fast, and would give this up; do not do it without revisiting
-// test_gpu_kernel()'s bit-identity assertions, which are the strongest structural tests
-// we have.
+// CHUNK INVARIANCE, AND WHAT IT NOW DEPENDS ON. Output sample t is computed by an
+// identical sequence of floating point operations whatever T is, so results are
+// bit-identical across chunkings (given consistent padding, which is the caller's
+// contract) and across runs -- PROVIDED channels_per_range is held fixed. That proviso is
+// new and is the price of deriving it from the instance size: the freq-range partition is
+// part of the frequency summation order, so two instances with different
+// channels_per_range agree only to roundoff, not bit-for-bit.
+//
+// Everything else the property needs still holds unconditionally: the partition does not
+// depend on M (so the beam axis stays a spectator -- beam 0's output is identical whether
+// it was processed alone or alongside others), the per-thread accumulation blocking is a
+// compile-time constant, and there are NO atomics anywhere in the reduction. Reducing
+// (G,U) with atomicAdd would be slightly simpler and about as fast, and would give up
+// run-to-run determinism as well; do not do it without revisiting test_gpu_kernel()'s
+// bit-identity assertions, which are the strongest structural tests we have.
 //
 // NAN SAFETY. Masked samples are allowed to hold anything, including NaN from a dropped
 // packet. Every use of the data is a SELECT on the mask, never a multiply, because
@@ -95,10 +98,25 @@ static constexpr int MAX_W = 16;
 static constexpr int MAX_NDEG = 3;
 static constexpr int MAX_NPAIR_T = (MAX_NDEG+1)*(MAX_NDEG+2)/2;
 
-// Target width of a freq-range, in channels. Occupancy knob, and NOT a correctness
-// parameter -- but it must stay a compile-time constant, because the freq-range
-// partition it induces is part of the summation order (see "chunk invariance" above).
-static constexpr long CHANNELS_PER_RANGE = 512;
+// Freq-range width is DERIVED from the instance size rather than fixed, because the right
+// value moves by 4x across the sizes we care about and the penalty for getting it wrong is
+// large in one direction. Kernels 1 and 3 launch M * nfrange * ntile blocks; at a fixed
+// 512 channels a small instance (M=1, nfreq=4096, T=512) gets nfrange = 8 and therefore 24
+// blocks on 142 SMs, and runs 43% slower than the same instance at 128 channels. Measured
+// on an L40S:
+//
+//     channels_per_range   128     256     512    1875
+//     M=2 F=30000 T=2048   3.99    3.91    4.11    4.35   ms
+//     M=1 F=4096  T=512    0.108   0.158   0.158   0.158  ms
+//
+// Note the asymmetry: over-provisioning freq-ranges costs almost nothing (the extra load
+// falls on kernel 2, which is ~3% of the chunk), while under-provisioning costs 40%. So
+// the target block count is deliberately generous, and M is left OUT of the estimate --
+// using M = 1 is the conservative choice, and it is what keeps the beam axis a spectator
+// (see "chunk invariance" above).
+static constexpr long CPR_TARGET_BLOCKS = 1024;
+static constexpr long CPR_MIN = 128;
+static constexpr long CPR_MAX = 1024;
 
 // The Makefile compiles with --use_fast_math, which turns '/' into an unrefined
 // MUFU.RCP and 'sqrtf' into MUFU.RSQ, both ~2^-22 relative. That is twice float32
@@ -792,7 +810,7 @@ static void fill_stencils(TimeStencils &tb, const vector<double> &P, int n_deg, 
 
 Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
                          long n_phi_, long n_, long W_, long T_,
-                         double eta_, double eps_) :
+                         double eta_, double eps_, long channels_per_range_) :
     nfreq(nfreq_), M(M_), n_phi(n_phi_), n(n_), W(W_), T(T_), nbuf(T_ + 2*W_),
     eta(eta_), eps(eps_)
 {
@@ -941,6 +959,16 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
 
     // ---- Basis tables, built in float64 and cast, so that the working dtype affects the
     // arithmetic that uses the basis but not the basis itself.
+    // ---- Freq-range width: honour an explicit request, else derive it (see above).
+    if (channels_per_range_ > 0)
+        channels_per_range = channels_per_range_;
+    else {
+        const long ntile = (nbuf + PASS_THREADS - 1) / PASS_THREADS;
+        channels_per_range = (nfreq * ntile) / CPR_TARGET_BLOCKS;
+        channels_per_range = max(channels_per_range, CPR_MIN);
+        channels_per_range = min(channels_per_range, CPR_MAX);
+    }
+
     const long npair_f = (n_phi+1)*(n_phi+2)/2;
     phi_stride  = 4*((n_phi + 1 + 3) / 4);
     prod_stride = 4*((npair_f + 3) / 4);
@@ -963,7 +991,7 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
     prod_tab = prod_host.to_gpu();
 
     // ---- Freq-ranges: split each non-empty knot interval into pieces of about
-    // CHANNELS_PER_RANGE channels. A freq-range never crosses a knot, so j0 is fixed on
+    // channels_per_range channels. A freq-range never crosses a knot, so j0 is fixed on
     // it, and because a zone boundary IS a knot it never crosses a zone either.
     vector<long> fr_lo, fr_hi, fr_j0, fr_zone;
     for (long f = 0; f < nfreq; ) {
@@ -971,7 +999,7 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
         while ((g < nfreq) && (j0[g] == j0[f]))
             g++;
         const long len = g - f;
-        long k = (len + CHANNELS_PER_RANGE/2) / CHANNELS_PER_RANGE;
+        long k = (len + channels_per_range/2) / channels_per_range;
         if (k < 1)
             k = 1;
         for (long i = 0; i < k; i++) {
@@ -1253,7 +1281,8 @@ void Detrender2d::time_selected()
              << "    (n_phi, n, W, T) = (" << det.n_phi << ", " << det.n << ", " << det.W
              << ", " << det.T << "), M = " << M << ", nfreq = " << nfreq << "\n"
              << "    N_phi = " << det.N_phi << ", nzone = " << det.nzone
-             << ", nfrange = " << det.nfrange << ", solve_threads = " << det.solve_threads << "\n"
+             << ", nfrange = " << det.nfrange << ", solve_threads = " << det.solve_threads
+             << ", channels_per_range = " << det.channels_per_range << "\n"
              << "    data = " << (double(M)*nfreq*det.nbuf*4 / 1.0e9) << " GB, "
              << "mask = " << (double(M)*nfreq*det.nbuf / 1.0e9) << " GB\n"
              << "    global memory traffic per launch = " << (nbytes / 1.0e9) << " GB\n"

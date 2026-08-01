@@ -1354,7 +1354,12 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
         m2 = msk.random_mask_2d((M_ax, nfreq, nb2), kv, rng, det.eta, n=n, W=W)
         b2, _ = _smooth_baseline(kv, rng, M_ax, nb2)
         d2 = (b2 + 0.05*rng.standard_normal(b2.shape)).astype(np.float32)
-        big = Detrender2d(nfreq=nfreq, knots=knots, M=M_ax, n_phi=n_phi, n=n, W=W, T=Tbig)
+        # channels_per_range must MATCH, or the two runs sum frequency in different
+        # groupings and agree only to roundoff.  It is derived from T by default, so the
+        # T=2048 instance would otherwise pick a different value than the T=512 one; this
+        # is the documented way to make two instances agree exactly.
+        big = Detrender2d(nfreq=nfreq, knots=knots, M=M_ax, n_phi=n_phi, n=n, W=W, T=Tbig,
+                          channels_per_range=det.channels_per_range)
         big_d, big_m = run(big, d2, m2)
         for c in range(Tbig // T):
             sub_d = np.ascontiguousarray(d2[:, :, T*c:T*c + T + 2*W])
@@ -1410,6 +1415,21 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
                 sel = dead[:, None, :, z] & np.ones((1, hi-lo, 1), dtype=bool)
                 assert not rr_m[:, lo:hi, W:W+T][sel].any(), \
                     f'{tag}: rank-deficient zone {z} was not flagged'
+
+        # (i) channels_per_range changes the frequency summation grouping and nothing
+        # else, so a different value must agree to ROUNDOFF but need not agree bit-for-bit.
+        # Asserting both halves is what pins it as a pure tuning knob: if it ever started
+        # affecting the answer materially, this is where it would show.
+        alt_cpr = 128 if det.channels_per_range != 128 else 256
+        alt = Detrender2d(nfreq=nfreq, knots=knots, M=M_ax, n_phi=n_phi, n=n, W=W, T=T,
+                          channels_per_range=alt_cpr)
+        alt_d, alt_m = run(alt, d32, m_in)
+        assert np.array_equal(alt_m, out_m), \
+            f'{tag}: channels_per_range changed the output MASK, which it must not'
+        cpr_diff = float(np.abs(alt_d[:, :, W:W+T].astype(np.float64)
+                                - r_gpu.astype(np.float64))[m_gpu].max()) if m_gpu.any() else 0.0
+        assert cpr_diff < 50*tol, \
+            f'{tag}: channels_per_range={alt_cpr} differs by {cpr_diff:.3e}, tol {tol:.3e}'
 
         report.append((n_phi, n, W, resid/tol, flat/tolf, nchunk, nrank))
 

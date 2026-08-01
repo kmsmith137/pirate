@@ -140,10 +140,11 @@ void register_kernel_bindings(pybind11::module &m)
         "validated against.");
 
     detrender_2d
-          .def(py::init<long, const std::vector<long> &, long, long, long, long, long, double, double>(),
+          .def(py::init<long, const std::vector<long> &, long, long, long, long, long, double, double, long>(),
                py::arg("nfreq"), py::arg("knots"), py::arg("M"),
                py::arg("n_phi") = 2, py::arg("n") = 2, py::arg("W") = 4, py::arg("T") = 2048,
                py::arg("eta") = 1.0e-3, py::arg("eps") = 3.0e-5,
+               py::arg("channels_per_range") = 0,
                "Create a Detrender2d.\n\n"
                "Args:\n"
                "    nfreq: number of frequency channels\n"
@@ -157,7 +158,12 @@ void register_kernel_bindings(pybind11::module &m)
                "    W: window half-width (the window is 2W+1 samples)\n"
                "    T: output samples per row (chunk size)\n"
                "    eta: regularization strength (dimensionless)\n"
-               "    eps: mask-expansion threshold on r_min\n\n"
+               "    eps: mask-expansion threshold on r_min\n"
+               "    channels_per_range: internal freq-range width; 0 (the default) derives it\n"
+               "        from (nfreq, knots, T).  Exposed only because it is part of the\n"
+               "        frequency summation order: two instances with different values agree\n"
+               "        to roundoff but not bit-for-bit, so pass it explicitly when two\n"
+               "        instances must agree exactly (e.g. comparing T=512 against T=2048).\n\n"
                "Raises:\n"
                "    RuntimeError: if no kernel is compiled for n_phi, if T is not a positive\n"
                "        multiple of 32, if n is outside [0,3], if W is outside [0,16] or\n"
@@ -174,6 +180,9 @@ void register_kernel_bindings(pybind11::module &m)
           .def_readonly("eps", &Detrender2d::eps, "Mask-expansion threshold on r_min")
           .def_readonly("N_phi", &Detrender2d::N_phi, "Number of B-spline basis functions")
           .def_readonly("nzone", &Detrender2d::nzone, "Number of zones")
+          .def_readonly("nfrange", &Detrender2d::nfrange, "Number of internal freq-ranges")
+          .def_readonly("channels_per_range", &Detrender2d::channels_per_range,
+               "Freq-range width actually used (derived unless requested)")
           .def_static("configs", &Detrender2d::configs,
                "The compiled n_phi values. n, W and T are not among them: all three are\n"
                "runtime arguments. Returned as a list of ints.")
