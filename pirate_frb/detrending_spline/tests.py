@@ -1363,10 +1363,84 @@ def test_gpu_kernel(rng=None, verbose=True, nfreq=1024, M_ax=2):
                 assert not rr_m[:, lo:hi, W:W+T][sel].any(), \
                     f'rank-deficient zone {z} was not flagged'
 
+    # ---- The agreement sweep.
+    #
+    # Everything above runs on ONE fixed, benign knot vector, which is right for the
+    # structural checks -- they are about indexing and ordering, not about numerics, and a
+    # second configuration would not make them stronger.  It is wrong for the numerical
+    # comparison: conditioning turns on h_max, the widest knot interval, and the fixed
+    # vector above has h_max = nfreq/16.  The eps / r_min regime that the whole design
+    # exists for is never touched there, and the residual ratio sits three orders of
+    # magnitude inside its tolerance as a result.
+    #
+    # So sweep the knot vector, which is a RUNTIME parameter of the kernel even though
+    # (n_phi, n, W, T) are compile-time.  The profiles are the ones test_conditioning
+    # pins for the same reason: 'no_interior' and 'one_wide' put h_max at or near nfreq
+    # and are not reachable by drawing cut points at random.  Mask kinds are cycled
+    # explicitly rather than drawn, because a random draw under-samples the extremes --
+    # masks.py measures a factor of 23 between Bernoulli and adversarial masks.
+    #
+    # nfreq is capped well below 30000 here only for speed: the reference costs ~0.9 s per
+    # call at 30000 with T = 512, and this test runs once per iteration.  h_max = 10000
+    # already reaches r_min ~ 7x eps, and test_conditioning pins the 30000-channel margin
+    # on the numpy side.
+    sweep = [(int(rng.integers(128, 2000)), None),
+             (10000, 'no_interior'),
+             (int(rng.integers(2000, 8000)), 'one_wide'),
+             (int(rng.integers(128, 4000)), None)]
+    kinds = ('adversarial', 'adversarial_singular', 'narrowband')
+
+    worst_ratio, worst_rmin, ndraw, nflag = 0.0, np.inf, 0, 0
+    for nf, kind in sweep:
+        kvs = msk.random_knots(rng, n_phi=n_phi, nfreq=nf, kind=kind)
+        dets = Detrender2d(nfreq=kvs.nfreq, knots=[int(x) for x in kvs.knots], M=1,
+                           n_phi=n_phi, n=n, W=W, T=T)
+        refs = SplineDetrender(kvs, n=n, W=W, dtype=np.float64, eta=dets.eta, eps=dets.eps)
+        zr = zone_channel_ranges(kvs)
+
+        for kind_t in kinds:
+            ms = msk.random_mask_2d((1, kvs.nfreq, nbuf), kvs, rng, dets.eta,
+                                    n=n, W=W, time_kind=kind_t)
+            bs, _ = _smooth_baseline(kvs, rng, 1, nbuf)
+            ds = (bs + 0.05*rng.standard_normal(bs.shape)).astype(np.float32)
+            rs64, ms64, ps64 = refs.detrend_chunk(ds.astype(np.float64), ms)
+            os_d, os_m = run(ds, ms, dets)
+            rs_g = os_d[:, :, W:W+T]
+            ms_g = os_m[:, :, W:W+T].astype(bool)
+
+            live = ps64[ps64 > 0]
+            if not live.size:
+                continue
+            rmin_s = float(live.min())
+            worst_rmin = min(worst_rmin, rmin_s)
+            tol_s = epsm/rmin_s*max(1.0, float(np.abs(ds).max()))
+
+            ii = ms_g & ms64
+            if ii.any():
+                es = float(np.abs(rs_g.astype(np.float64) - rs64)[ii].max())
+                worst_ratio = max(worst_ratio, es/tol_s)
+                assert es < 50*tol_s, \
+                    f'nfreq={kvs.nfreq}, kind={kind}/{kind_t}: resid {es:.3e} vs tol {tol_s:.3e}'
+
+            # Mask expansion, with the same threshold band as above.
+            eb = (ps64 < dets.eps)
+            amb = np.abs(ps64 - dets.eps) < band
+            nflag += int(eb.sum())
+            for z, (lo, hi) in enumerate(zr):
+                want = (ms[:, lo:hi, W:W+T] != 0) & ~eb[:, None, :, z]
+                got = ms_g[:, lo:hi, :]
+                free = np.broadcast_to(amb[:, None, :, z], got.shape)
+                assert np.array_equal(got[~free], want[~free]), \
+                    f'nfreq={kvs.nfreq}, kind={kind}/{kind_t}: mask expansion differs in zone {z}'
+            ndraw += 1
+
     if verbose:
-        print(f'    test_gpu_kernel: pass  [resid {resid:.2e} = {resid/tol:.3f} x '
-              f'eps_mach/r_min; flat baseline {flat/tolf:.1e} x the same bound; '
+        print(f'    test_gpu_kernel: pass  [fixed config: resid {resid/tol:.3f} x '
+              f'eps_mach/r_min, flat baseline {flat/tolf:.1e} x the same bound, '
               f'{nchunk} chunk-invariance comparisons bit-identical]')
+        print(f'      sweep: {ndraw} draws, worst resid {worst_ratio:.3f} x eps_mach/r_min, '
+              f'worst r_min {worst_rmin:.2e} = {worst_rmin/det.eps:.1f} x eps, '
+              f'{nflag} zone-samples flagged')
 
 
 # ----------------------------------------------------------------

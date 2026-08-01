@@ -1071,12 +1071,18 @@ static void _launch(const Detrender2d &d, float *data, unsigned char *mask,
         const long ncompz_max = long(nphi_zone_max)*(NPHI+2);
         const long shmem = ((nblk_max*(NB+1) + 2*nblk_max)*S + ncompz_max*(S + 2*W) + (S + 2*W)) * 4;
 
-        static bool attr_set = false;
-        if (!attr_set) {
+        // The attribute is per (kernel, device), but the requirement depends on the
+        // largest ZONE of this instance, and several Detrender2d instances with
+        // different knot vectors coexist in one process. Track the high-water mark:
+        // setting it once would make a later instance with a bigger zone fail to launch
+        // with "invalid argument", and setting it unconditionally would let a later
+        // instance with a smaller zone lower it and break an earlier one.
+        static long attr_shmem = 0;
+        if (shmem > attr_shmem) {
             CUDA_CALL(cudaFuncSetAttribute(detrend_2d_solve_kernel<NPHI,NDEG,W,T>,
                                            cudaFuncAttributeMaxDynamicSharedMemorySize,
                                            int(shmem)));
-            attr_set = true;
+            attr_shmem = shmem;
         }
 
         dim3 nblocks(int(T/S), int(d.nzone), int(d.M));
