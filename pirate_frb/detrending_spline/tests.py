@@ -1236,7 +1236,8 @@ def test_gpu_kernel(rng=None, verbose=True, nfreq=1024, M_ax=2):
             print('    test_gpu_kernel: no kernel compiled, skipped')
         return
 
-    n_phi, n, W = cfgs[0]
+    n_phi, n = cfgs[0]
+    W = 4
 
     # T is a RUNTIME argument, not a compiled configuration, so each part of this test
     # picks the chunk length that suits it.  That matters most for the sweep below, whose
@@ -1376,41 +1377,45 @@ def test_gpu_kernel(rng=None, verbose=True, nfreq=1024, M_ax=2):
     # exists for is never touched there, and the residual ratio sits three orders of
     # magnitude inside its tolerance as a result.
     #
-    # So sweep the knot vector, which is a RUNTIME parameter of the kernel even though
-    # (n_phi, n, W, T) are compile-time.  The profiles are the ones test_conditioning
-    # pins for the same reason: 'no_interior' and 'one_wide' put h_max at or near nfreq
-    # and are not reachable by drawing cut points at random.  Mask kinds are cycled
-    # explicitly rather than drawn, because a random draw under-samples the extremes --
-    # masks.py measures a factor of 23 between Bernoulli and adversarial masks.
+    # So sweep the knot vector, W and nfreq -- all runtime arguments of the kernel; only
+    # (n_phi, n) are compile-time.  The knot profiles are the ones test_conditioning pins,
+    # for the same reason: 'no_interior' and 'one_wide' put h_max at or near nfreq and are
+    # not reachable by drawing cut points at random.  Mask kinds are cycled explicitly
+    # rather than drawn, because a random draw under-samples the extremes -- masks.py
+    # measures a factor of 23 between Bernoulli and adversarial masks.
     #
-    # nfreq is capped well below 30000 here only for speed: the reference costs ~0.9 s per
-    # call at 30000 with T = 512, and this test runs once per iteration.  h_max = 10000
-    # already reaches r_min ~ 7x eps, and test_conditioning pins the 30000-channel margin
-    # on the numpy side.
-    sweep = [(int(rng.integers(128, 2000)), None),
-             (10000, 'no_interior'),
-             (int(rng.integers(2000, 8000)), 'one_wide'),
-             (int(rng.integers(128, 4000)), None)]
+    # Running at T = Tsweep is what makes nfreq = 30000 affordable: the numpy oracle costs
+    # ~0.9 s per call at (30000, T=512) and an eighth of that at T = 64.  30000 with
+    # 'no_interior' reaches the worst margin over eps anywhere in the parameter study
+    # (3.0x), so the GPU now sees it rather than only the reference.
+    #
+    # W = 1 is the corner worth having: at n = 2 the window is then exactly 3 = n+1
+    # samples, so the time fit is exactly determined and interpolates noise, which is the
+    # worst-conditioned configuration the reference supports.
+    sweep = [(int(rng.integers(128, 2000)), None, 1),
+             (30000, 'no_interior', 4),
+             (int(rng.integers(4000, 20000)), 'one_wide', 2),
+             (int(rng.integers(128, 8000)), None, 8)]
     kinds = ('adversarial', 'adversarial_singular', 'narrowband')
 
     worst_ratio, worst_rmin, ndraw, nflag = 0.0, np.inf, 0, 0
-    for nf, kind in sweep:
+    for nf, kind, Ws in sweep:
         kvs = msk.random_knots(rng, n_phi=n_phi, nfreq=nf, kind=kind)
         dets = Detrender2d(nfreq=kvs.nfreq, knots=[int(x) for x in kvs.knots], M=1,
-                           n_phi=n_phi, n=n, W=W, T=Tsweep)
-        refs = SplineDetrender(kvs, n=n, W=W, dtype=np.float64, eta=dets.eta, eps=dets.eps)
+                           n_phi=n_phi, n=n, W=Ws, T=Tsweep)
+        refs = SplineDetrender(kvs, n=n, W=Ws, dtype=np.float64, eta=dets.eta, eps=dets.eps)
         zr = zone_channel_ranges(kvs)
 
         for kind_t in kinds:
-            nbs = Tsweep + 2*W
+            nbs = Tsweep + 2*Ws
             ms = msk.random_mask_2d((1, kvs.nfreq, nbs), kvs, rng, dets.eta,
-                                    n=n, W=W, time_kind=kind_t)
+                                    n=n, W=Ws, time_kind=kind_t)
             bs, _ = _smooth_baseline(kvs, rng, 1, nbs)
             ds = (bs + 0.05*rng.standard_normal(bs.shape)).astype(np.float32)
             rs64, ms64, ps64 = refs.detrend_chunk(ds.astype(np.float64), ms)
             os_d, os_m = run(ds, ms, dets)
-            rs_g = os_d[:, :, W:W+Tsweep]
-            ms_g = os_m[:, :, W:W+Tsweep].astype(bool)
+            rs_g = os_d[:, :, Ws:Ws+Tsweep]
+            ms_g = os_m[:, :, Ws:Ws+Tsweep].astype(bool)
 
             live = ps64[ps64 > 0]
             if not live.size:
@@ -1423,19 +1428,25 @@ def test_gpu_kernel(rng=None, verbose=True, nfreq=1024, M_ax=2):
             if ii.any():
                 es = float(np.abs(rs_g.astype(np.float64) - rs64)[ii].max())
                 worst_ratio = max(worst_ratio, es/tol_s)
+                # 50x is calibrated, not guessed: measured over 24 seeds of the sweep
+                # the ratio runs median 2.8, p90 4.8, max 7.1.  The tail is light (the max
+                # is 2.5x the median, unlike RMIN_ABS_TOL_EPS's 21x), so 7x over the
+                # observed maximum is ample.
                 assert es < 50*tol_s, \
-                    f'nfreq={kvs.nfreq}, kind={kind}/{kind_t}: resid {es:.3e} vs tol {tol_s:.3e}'
+                    f'nfreq={kvs.nfreq}, W={Ws}, kind={kind}/{kind_t}: ' \
+                    f'resid {es:.3e} vs tol {tol_s:.3e}'
 
             # Mask expansion, with the same threshold band as above.
             eb = (ps64 < dets.eps)
             amb = np.abs(ps64 - dets.eps) < band
             nflag += int(eb.sum())
             for z, (lo, hi) in enumerate(zr):
-                want = (ms[:, lo:hi, W:W+Tsweep] != 0) & ~eb[:, None, :, z]
+                want = (ms[:, lo:hi, Ws:Ws+Tsweep] != 0) & ~eb[:, None, :, z]
                 got = ms_g[:, lo:hi, :]
                 free = np.broadcast_to(amb[:, None, :, z], got.shape)
                 assert np.array_equal(got[~free], want[~free]), \
-                    f'nfreq={kvs.nfreq}, kind={kind}/{kind_t}: mask expansion differs in zone {z}'
+                    f'nfreq={kvs.nfreq}, W={Ws}, kind={kind}/{kind_t}: ' \
+                    f'mask expansion differs in zone {z}'
             ndraw += 1
 
     if verbose:
