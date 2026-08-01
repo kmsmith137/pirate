@@ -670,6 +670,56 @@ detrend_2d_subtract_kernel(float *data, unsigned char *mask,
 // Host code: knot vector, basis tables, freq-ranges, zones, time basis.
 
 
+// Exact blocks-per-SM for kernel 2, from the occupancy API rather than an estimate.
+//
+// Dividing the per-SM shared memory by the per-block request is off by one at the
+// boundary and ignores register pressure entirely. Measured on an L40S at 256 threads:
+// 49 KB per block gives 2 resident blocks and 50 KB gives 1, even though 2 x 50 KB is
+// exactly the 100 KB the device reports per SM -- there is about 1 KB of reserve, and
+// MaxSharedMemoryPerBlockOptin (99 KB) is the pool that actually predicts it. Rather than
+// encode that, ask CUDA.
+//
+// The MaxDynamicSharedMemorySize attribute must be raised BEFORE querying, or the API
+// reports 0 for any request above 48 KB.
+template<int NPHI>
+static int solve_blocks_per_sm_t(long threads, long shmem)
+{
+    int nb = 0;
+    CUDA_CALL(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &nb, detrend_2d_solve_kernel<NPHI>, int(threads), size_t(shmem)));
+    return nb;
+}
+
+template<int NPHI>
+static void solve_permit_shmem_t(long bytes)
+{
+    CUDA_CALL(cudaFuncSetAttribute(detrend_2d_solve_kernel<NPHI>,
+                                   cudaFuncAttributeMaxDynamicSharedMemorySize, int(bytes)));
+}
+
+static int solve_blocks_per_sm(long n_phi, long threads, long shmem)
+{
+    switch (n_phi) {
+        case 0: return solve_blocks_per_sm_t<0>(threads, shmem);
+        case 1: return solve_blocks_per_sm_t<1>(threads, shmem);
+        case 2: return solve_blocks_per_sm_t<2>(threads, shmem);
+        case 3: return solve_blocks_per_sm_t<3>(threads, shmem);
+    }
+    throw runtime_error("Detrender2d: internal error in solve_blocks_per_sm()");
+}
+
+static void solve_permit_shmem(long n_phi, long bytes)
+{
+    switch (n_phi) {
+        case 0: solve_permit_shmem_t<0>(bytes); return;
+        case 1: solve_permit_shmem_t<1>(bytes); return;
+        case 2: solve_permit_shmem_t<2>(bytes); return;
+        case 3: solve_permit_shmem_t<3>(bytes); return;
+    }
+    throw runtime_error("Detrender2d: internal error in solve_permit_shmem()");
+}
+
+
 // The compiled configurations. To add one: add a row here, and a line to the dispatch in
 // launch(). T is deliberately NOT part of a configuration -- it is a runtime kernel
 // argument (see the glossary at the top), so a caller may pick any chunk length without
@@ -1076,11 +1126,13 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
     const long nblk_max = nphi_zone_max * (n+1);
     const long ncompz_max = nphi_zone_max * (n_phi+2);
 
-    int shmem_max = 0, shmem_per_sm = 0, max_blocks_sm = 0, max_threads_sm = 0;
+    int shmem_max = 0, max_threads_sm = 0;
     CUDA_CALL(cudaDeviceGetAttribute(&shmem_max, cudaDevAttrMaxSharedMemoryPerBlockOptin, 0));
-    CUDA_CALL(cudaDeviceGetAttribute(&shmem_per_sm, cudaDevAttrMaxSharedMemoryPerMultiprocessor, 0));
-    CUDA_CALL(cudaDeviceGetAttribute(&max_blocks_sm, cudaDevAttrMaxBlocksPerMultiprocessor, 0));
     CUDA_CALL(cudaDeviceGetAttribute(&max_threads_sm, cudaDevAttrMaxThreadsPerMultiProcessor, 0));
+
+    // Raise the limit once, to the device maximum, so the occupancy queries below see the
+    // same permission every launch will. Idempotent across instances.
+    solve_permit_shmem(n_phi, shmem_max);
 
     // MAXIMIZE THREADS PER SM, NOT THREADS PER BLOCK, and the difference is not academic.
     // The obvious rule -- take the largest block that fits -- is actively wrong here,
@@ -1089,7 +1141,8 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
     // block is resident: 64 threads. A 32-thread block needs 29.3 KB, so THREE are
     // resident: 96 threads. Measured, the 32-thread choice runs kernel 2 in 112 us
     // against 124 us, i.e. 10% faster, despite doing more work -- its stage-1 halo is
-    // amortized over half as many solves (40/32 against 72/64).
+    // amortized over half as many solves (40/32 against 72/64). Blocks per SM comes from
+    // the occupancy API, not arithmetic; see solve_blocks_per_sm().
     //
     // Ties go to the largest block, since that is the one with the least halo redundancy.
     // Sub-warp blocks (16, 8) are allowed and are not a mistake: they waste most of a
@@ -1104,7 +1157,7 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
         const long bytes = ((nblk_max*(NB+1) + 2*nblk_max)*s + ncompz_max*(s + 2*W) + (s + 2*W)) * 4;
         if (bytes > shmem_max)
             continue;
-        const long blocks = min(long(shmem_per_sm) / bytes, long(max_blocks_sm));
+        const long blocks = solve_blocks_per_sm(n_phi, s, bytes);
         const long threads = min(blocks * s, long(max_threads_sm));
         if (threads > best_threads_sm) {
             best_threads_sm = threads;
@@ -1169,19 +1222,10 @@ static void _launch(const Detrender2d &d, float *data, unsigned char *mask,
         const long ncompz_max = long(nphi_zone_max)*(NPHI+2);
         const long shmem = ((nblk_max*(NB+1) + 2*nblk_max)*S + ncompz_max*(S + 2*W) + (S + 2*W)) * 4;
 
-        // The attribute is per (kernel, device), but the requirement depends on the
-        // largest ZONE of this instance, and several Detrender2d instances with
-        // different knot vectors coexist in one process. Track the high-water mark:
-        // setting it once would make a later instance with a bigger zone fail to launch
-        // with "invalid argument", and setting it unconditionally would let a later
-        // instance with a smaller zone lower it and break an earlier one.
-        static long attr_shmem = 0;
-        if (shmem > attr_shmem) {
-            CUDA_CALL(cudaFuncSetAttribute(detrend_2d_solve_kernel<NPHI>,
-                                           cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                           int(shmem)));
-            attr_shmem = shmem;
-        }
+        // No cudaFuncSetAttribute here: the constructor already raised the limit to the
+        // device maximum, which is idempotent across instances and immune to the ordering
+        // hazard a per-instance value has (an instance with a small zone must never lower
+        // a limit an earlier instance with a big zone depends on).
 
         dim3 nblocks(int(T/S), int(d.nzone), int(d.M));
         detrend_2d_solve_kernel<NPHI> <<< nblocks, S, size_t(shmem), stream >>>
