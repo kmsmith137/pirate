@@ -2,6 +2,8 @@
 # (see notes/tree_dedispersion.tex).
 from .SparseTile import SparseTile, SparseTileTriple, SparseTilePerM
 from .PfVariance import PfVarianceConvolver, PfVariance, PfAvarExact, PfAvarApproximation
-from .VarianceMapExact import VarianceMapExact, VarianceMapExactBlock
+from .VarianceMap import VarianceMapBlock, VarianceMapBase
+from .VarianceMapExact import VarianceMapExact
+from .VarianceMapApproximation import VarianceMapApproximation
 from .check_approximation import check_approximation
 from .check_mc import check_avar_mc

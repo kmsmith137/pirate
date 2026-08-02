@@ -529,9 +529,25 @@ class PfAvarApproximation:
     
       per_tff:         (ntrees, nfreq, 2^R) array of (None or single-channel PfVariance).
                        This is a "ragged" array (list of list of lists) since 2^R is tree-dependent.
-    
+                       This is the variance map in factored per-channel form, and is what
+                       slow_avar.VarianceMapApproximation consumes.
+
       per_tf:          (ntrees, 2^R) ragged array of frequency-summed PfVariances (never None):
                        per_tf[t][f] = sum_ifreq freq_variances[ifreq] * per_tff[t][ifreq][f].
+
+      per_tf_ifreq_lo: (ntrees, 2^R) ragged array of ints: the lowest input channel which
+                       contributes to per_tf[t][f] (zero if there is none).
+      per_tf_nf:       (ntrees, 2^R) ragged array of ints: the number of contributing input
+                       channels. The contributing channels are contiguous (see __init__), i.e.
+                       per_tff[t][ifreq][f] is non-None precisely for
+                       per_tf_ifreq_lo[t][f] <= ifreq < per_tf_ifreq_lo[t][f] + per_tf_nf[t][f].
+                       Unlike PfAvarExact, per_tf_nf is not asserted to be nonzero. PfAvarExact's
+                       tree_variance > 0 assert is per multiplet, which forces every multiplet to
+                       have a contributing channel; here the same assert is per subband, and a
+                       subband averages over bands, so it does not rule out an empty band. (No
+                       config we've tried produces one -- every band spans a contiguous tree-freq
+                       range, which overlaps at least one input channel -- but VarianceMapBlock
+                       handles nf == 0 rather than relying on that.)
 
       tree_variance:   For each tree, a shape (N,2^{r-L},P) array; entry n is per_tf averaged
                        over subband n's coarse-freq range (the per-subband mean of per_tf).
@@ -579,14 +595,25 @@ class PfAvarApproximation:
         self.tree_variance = [ None ] * self.ntrees
         self.per_tff = [ None ] * self.ntrees
         self.per_tf = [ None ] * self.ntrees
+        self.per_tf_ifreq_lo = [ None ] * self.ntrees
+        self.per_tf_nf = [ None ] * self.ntrees
+
+        # Scratch for the (ifreq_lo, nf) ranges; filled in by _process_klevel() and reduced to
+        # per_tf_ifreq_lo/per_tf_nf after the ifreq loop, then deleted.
+        self._per_tf_hi = [ None ] * self.ntrees      # last contributing ifreq, plus one
+        self._per_tf_cnt = [ None ] * self.ntrees     # number of contributing ifreq's
 
         for itree in range(self.ntrees):
             r, R, L = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree])
             P, N = int(self.tree_P[itree]), int(self.tree_fs[itree].N)
-            
+
             self.tree_variance[itree] = np.zeros((N, 2**(r-L), P))
             self.per_tff[itree] = [ [None]*(1<<R) for _ in range(self.nfreq) ]
             self.per_tf[itree] = [ PfVariance(r-L,P) for _ in range(1 << R) ]
+
+            self.per_tf_ifreq_lo[itree] = np.full(1 << R, -1, dtype=int)   # -1 = none yet
+            self._per_tf_hi[itree] = np.zeros(1 << R, dtype=int)
+            self._per_tf_cnt[itree] = np.zeros(1 << R, dtype=int)
 
         if progress:
             atomic_print('PfAvarApproximation')
@@ -601,6 +628,20 @@ class PfAvarApproximation:
                 self._process_klevel(sarr, k, ifreq)
                 if k < self._max_klevel:
                     sarr = sarr.iterate()
+
+        for itree in range(self.ntrees):
+            # Channel ifreq contributes to level-0 band f iff its gridding footprint overlaps f's
+            # coarse-freq range. The footprints are intervals which advance monotonically with
+            # ifreq (the channel map is strictly decreasing), so the contributing channels form an
+            # interval. VarianceMapApproximation relies on this. (A band with no contributing
+            # channels is allowed -- see the per_tf_nf docstring -- and gets ifreq_lo = nf = 0.)
+            lo, hi, cnt = self.per_tf_ifreq_lo[itree], self._per_tf_hi[itree], self._per_tf_cnt[itree]
+            nf = np.where(cnt > 0, hi - lo, 0)
+            assert np.all(cnt == nf), (itree, list(cnt), list(nf))
+            self.per_tf_ifreq_lo[itree] = np.where(cnt > 0, lo, 0)
+            self.per_tf_nf[itree] = nf
+
+        del self._per_tf_hi, self._per_tf_cnt
 
         for itree in range(self.ntrees):
             r, R, L = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree])
@@ -659,6 +700,15 @@ class PfAvarApproximation:
 
                 if self.per_tff[itree][ifreq][f] is None:
                     self.per_tff[itree][ifreq][f] = PfVariance(r - L, P)
+
+                    # First contribution from this (itree, ifreq, f). The (ifreq_lo, nf) bookkeeping
+                    # must stay inside this branch: the code below it runs up to 2^(L-R) times for
+                    # the same triple (once per sub-block fp, all of which map to the same f), and
+                    # counting those would break the contiguity check in __init__.
+                    if self.per_tf_ifreq_lo[itree][f] < 0:
+                        self.per_tf_ifreq_lo[itree][f] = ifreq
+                    self._per_tf_hi[itree][f] = ifreq + 1
+                    self._per_tf_cnt[itree][f] += 1
 
                 self.per_tff[itree][ifreq][f].add(pv, upper_half=upper_half, scale=norm)
                 self.per_tf[itree][f].add(pv, upper_half=upper_half, scale=norm * self.freq_variances[ifreq])
