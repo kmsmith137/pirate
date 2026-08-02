@@ -3562,7 +3562,7 @@ output channels which have reached steady state.
 
 \clearpage
 
-\section{SVD decomposition of variance map (work in progress)}
+\section{SVD decomposition of the approximate variance map (work in progress)}
 \label{sec:variance_svd}
 
 This section describes work in progress to compute the full variance map $A$, not just
@@ -3571,13 +3571,20 @@ A key finding is that $A$ has low rank.
 Since $A$ is a huge matrix at CHIME/CHORD scale, the low-rank representation lets us
 store $A$ in a manageable form.
 
-I'd like to make a few changes to this section.
-It's currently based on an approximation ({\tt class PfAvarApproximation}), whereas I'd
-now prefer to compute $A$ exactly ({\tt class PfAvarExact}).
-There are also some minor notational differences with the main text, such as ``transposing''
-the definition of $A$.
-Finally, the implementation is rough, and is in \verb|misc/throwaway*| scripts,
-and I'd prefer a polished implementation in \verb|pirate_frb/slow_avar/PfVariance.py|.
+This section treats the {\em approximate} variance map ({\tt class PfAvarApproximation}),
+and its implementation is still the rough one in the \verb|misc/throwaway*| scripts.
+The {\em exact} map ({\tt class PfAvarExact}) is treated in \S\ref{sec:variance_svd_exact},
+and is implemented in \verb|pirate_frb/slow_avar/VarianceMapExact.py|. The linear algebra is
+the same in both cases; the differences are which variance array is being compressed, and how
+finely it resolves the DM axis. This section has been brought into line with
+\S\ref{sec:variance_svd_exact} notationally (in particular $A$ is no longer transposed relative
+to the main text), so that the two can be read together.
+
+A caveat which applies to both sections: the linear operator here is bare gridding, tree
+dedispersion and peak-finding convolution, as in \S\ref{sec:analytic_variance} -- {\em not} the
+operator of \S\ref{ssec:variance_map_setup}, which also applies a {\tt Detrender2d} first. So
+the matrix called $A$ here is the $A$ of Eq.\ (\ref{eq:variance_map_def}) with the detrending
+step omitted. Extending the construction to include the detrender is future work.
 
 The peak-finding stage (\S\ref{sec:peak_finding}) normalizes its outputs to ``sigmas'' by applying
 weights $\propto (\mbox{variance})^{-1/2}$, where the variance depends on the tree, the frequency
@@ -3625,12 +3632,14 @@ Channels at the edges of this range may overlap band $j$ only slightly, and woul
 anomalously small rows to the matrix $\bar A$ below; we ``precondition'' this away with a
 diagonal matrix $\Lambda = {\rm diag}(\lambda)$, where $\lambda_F > 0$ is the mean variance
 contributed by channel $F$ (defined precisely in the next subsection).
-Flattening $y_j$ to a length-$2^{r-L} P$ row vector, we write
+Flattening $y_j$ to a length-$2^{r-L} P$ column vector, indexed by $\alpha = dP+p$ as in
+\S\ref{ssec:variance_map_setup}, we write
 \begin{equation}
-y_j = v^T \, \Lambda \, \bar A,  \label{eq:abar_def}
+y_j = \bar A \, \Lambda \, v,  \label{eq:abar_def}
 \end{equation}
-where $v$ and $\Lambda$ are restricted to the contributing channels, and $\bar A$ is an
-$(n_j,\ 2^{r-L} P)$ matrix with rows of comparable scale, depending on $(\mbox{tree}, j)$.
+where $v$ and $\Lambda$ are restricted to the contributing channels, and $\bar A$ is a
+$(2^{r-L} P,\ n_j)$ matrix with columns of comparable scale, depending on $(\mbox{tree}, j)$.
+(Rows index outputs and columns index input channels, as in Eq.\ (\ref{eq:variance_map_def}).)
 For CHORD-sized configs, $n_j$ is a few thousand and $2^{r-L} P \sim 10^4$, so we never
 materialize $\bar A$; instead we construct a low-rank factorization of it.
 
@@ -3661,16 +3670,17 @@ where the mean is taken over all entries of the term array $a$. A low-overlap ed
 shows up as a small value of $\lambda_F$.
 
 Now group the (channel, term) pairs by $\delta$. For each $\delta$, stack the flattened term
-arrays, dividing the row of channel $F$ by $\lambda_F$, into a matrix $A_\delta$ of shape
-$(n_{j\delta},\ 2^{{\rm popc}(\delta)} P)$, where $n_{j\delta}$ is the number of contributing
+arrays as the {\em columns} of a matrix $A_\delta$ of shape
+$(2^{{\rm popc}(\delta)} P,\ n_{j\delta})$, dividing the column of channel $F$ by $\lambda_F$,
+where $n_{j\delta}$ is the number of contributing
 (channel, term) pairs,\footnote{Code name: $n_{j\delta} = {\tt nf\_tjd}$.} and let $v_\delta,
 \lambda_\delta$ denote the corresponding length-$n_{j\delta}$ slices of $v, \lambda$. Then
 \begin{equation}
-y_j = \sum_\delta \big( (v_\delta \odot \lambda_\delta)^T A_\delta \big) \, E_\delta,
+y_j = \sum_\delta E_\delta \, A_\delta \, (v_\delta \odot \lambda_\delta),
 \label{eq:group_sum}
 \end{equation}
 where $\odot$ denotes elementwise multiplication, and $E_\delta$ is the
-$(2^{{\rm popc}(\delta)} P) \times (2^{r-L} P)$ zero/one ``expansion''
+$(2^{r-L} P) \times (2^{{\rm popc}(\delta)} P)$ zero/one ``expansion''
 matrix which replicates the packed DM axis over the unselected bits, i.e.\ copies packed entry
 $({\rm sel}(d,\delta), p)$ to entry $(d, p)$. (In the code, $E_\delta$ is an index gather, not a
 materialized matrix.)
@@ -3680,66 +3690,76 @@ materialized matrix.)
 Each $A_\delta$ turns out to be numerically low-rank (variances vary smoothly with channel).
 We compute the truncated SVD
 \begin{equation}
-A_\delta = U_\delta^T \, {\rm diag}(S_\delta) \, V_\delta,
+A_\delta = W_\delta \, {\rm diag}(S_\delta) \, Q_\delta^T,
 \end{equation}
+where $W_\delta$ is $(2^{{\rm popc}(\delta)}P) \times K_\delta$ and $Q_\delta$ is
+$n_{j\delta} \times K_\delta$, both with orthonormal columns,
 keeping the $K_\delta$ singular values with $S > \varepsilon S_{\rm max}$. We use
 $\varepsilon = 10^{-11}$: since $S_{\rm max} = \|A_\delta\|_2$, this threshold is automatically
 scaled to the matrix entries, and it sits well above the double-precision noise floor on singular
 values ($\sim \max(\mbox{shape}) \cdot \epsilon_{\rm f64} \approx 6 \times 10^{-13}\, S_{\rm max}$
-at these matrix sizes) while remaining far below any genuine component.
-Note that the row normalization by $\Lambda^{-1}$ in the definition of $A_\delta$ does not change
-matrix ranks (diagonal scaling is invertible); its purpose is to make the fixed relative
+at these matrix sizes) while remaining far below any genuine component. A fixed threshold is only
+safe while that inequality holds; at larger matrix sizes it must be replaced by the shape-aware
+rule of \S\ref{ssec:svd_exact_threshold}.
+Note that the column normalization by $\Lambda^{-1}$ in the definition of $A_\delta$ does not
+change matrix ranks (diagonal scaling is invertible); its purpose is to make the fixed relative
 threshold $\varepsilon$ meaningful for every channel, so that low-overlap edge channels are not
 silently truncated away.
 
 Let $K_{\rm tot} = \sum_\delta K_\delta$. Substituting the truncated SVDs into
 Eq.\ (\ref{eq:group_sum}) and stacking the per-group factors, we obtain
 \begin{equation}
-\bar A = \bar U^T \, {\rm diag}(\bar S) \, \bar V,
+\bar A = \bar W \, {\rm diag}(\bar S) \, \bar Q^T,
 \end{equation}
 where:
 \begin{itemize}
-\item $\bar U$ ($K_{\rm tot} \times n_j$) stacks the $U_\delta$ vertically, with each group's
-columns scattered into its channel positions (zero-padded elsewhere);
+\item $\bar W$ ($2^{r-L} P \times K_{\rm tot}$) concatenates the expanded left factors
+$E_\delta W_\delta$ horizontally;
 \item $\bar S$ (length $K_{\rm tot}$) concatenates the $S_\delta$;
-\item $\bar V$ ($K_{\rm tot} \times 2^{r-L} P$) stacks the expanded right factors
-$V_\delta E_\delta$.
+\item $\bar Q$ ($n_j \times K_{\rm tot}$) concatenates the $Q_\delta$ horizontally, with each
+group's rows scattered into its channel positions (zero-padded elsewhere).
 \end{itemize}
-This eliminates the sum over $\delta$, but $\bar U, \bar V$ are {\em not} semiorthogonal
-($\bar U \bar U^T \ne {\rm id}$): different groups' channel sets overlap (via the two-term
-channels), and the expanded rows $V_\delta E_\delta$ are not orthogonal across groups.
+This eliminates the sum over $\delta$, but the columns of $\bar W, \bar Q$ are {\em not}
+orthonormal ($\bar Q^T \bar Q \ne {\rm id}$): different groups' channel sets overlap (via the
+two-term channels), and the expanded columns $E_\delta W_\delta$ are not orthogonal across
+groups -- nor even unit norm, since
+$\|E_\delta w\|^2 = 2^{r-L-{\rm popc}(\delta)} \|w\|^2$.
 Empirically, $K_{\rm tot} \sim 20$--$160$ -- already far smaller than $n_j \sim 300$--$3000$.
 
 \subsection{Canonical form}
 
 Finally, we reduce the stacked representation to a genuine truncated SVD of $\bar A$, without
-materializing any $\bar A$-sized matrix. SVD-decompose the two stacked factors:
+materializing any $\bar A$-sized matrix. Take thin SVDs of the two stacked factors:
 \begin{equation}
-\bar U = U_1 \, {\rm diag}(U_2) \, U_3, \hspace{1.5cm} \bar V = V_1 \, {\rm diag}(V_2) \, V_3,
+\bar W = W_1 \, {\rm diag}(W_2) \, W_3^T, \hspace{1.5cm} \bar Q = Q_1 \, {\rm diag}(Q_2) \, Q_3^T,
 \end{equation}
-where $U_1, V_1$ are $(K_{\rm tot} \times K_{\rm tot})$ orthogonal, and $U_3$
-($K_{\rm tot} \times n_j$), $V_3$ ($K_{\rm tot} \times 2^{r-L} P$) are semiorthogonal,
-$U_3 U_3^T = V_3 V_3^T = {\rm id}$. (This uses $K_{\rm tot} \le n_j,\, 2^{r-L}P$, which holds in
-practice.) Then
+where $W_1$ ($2^{r-L}P \times k_W$) and $Q_1$ ($n_j \times k_Q$) have orthonormal columns,
+$W_3$ ($K_{\rm tot} \times k_W$) and $Q_3$ ($K_{\rm tot} \times k_Q$) also have orthonormal
+columns, and $k_W = \min(2^{r-L}P,\, K_{\rm tot})$, $k_Q = \min(n_j,\, K_{\rm tot})$. Then
 \begin{equation}
-\bar A = U_3^T \, M \, V_3,
+\bar A = W_1 \, M \, Q_1^T,
 \hspace{1.5cm}
-M \equiv {\rm diag}(U_2) \, U_1^T \, {\rm diag}(\bar S) \, V_1 \, {\rm diag}(V_2),
+M \equiv {\rm diag}(W_2) \, W_3^T \, {\rm diag}(\bar S) \, Q_3 \, {\rm diag}(Q_2),
 \end{equation}
-where $M$ is a small $(K_{\rm tot} \times K_{\rm tot})$ matrix. By semiorthogonality of $U_3,
-V_3$, the singular values of $M$ are exactly the singular values of $\bar A$. SVD-decompose
-$M = U_M^T \, {\rm diag}(S_M) \, V_M$, let $K_0$ be the number of singular values above the same
-relative threshold $\varepsilon$, and absorb the factors into $U_3, V_3$:
+where $M$ is a small $(k_W \times k_Q)$ matrix. This is an identity, not an approximation, and it
+holds even if $\bar W$ or $\bar Q$ is rank deficient: a near-null direction shows up as a
+roundoff-sized entry of $W_2$ or $Q_2$, which multiplies the corresponding row or column of $M$
+and thereby kills the (arbitrary) direction in $W_1$ or $Q_1$. Using $\min$ shapes means that no
+assumption such as $K_{\rm tot} \le n_j$ is needed.
+Since the columns of $W_1, Q_1$ are orthonormal,
+the singular values of $M$ are exactly the singular values of $\bar A$. SVD-decompose
+$M = X \, {\rm diag}(S_M) \, Y^T$, let $K_0$ be the number of singular values above the same
+relative threshold $\varepsilon$, and absorb the factors into $W_1, Q_1$:
 \begin{equation}
 S_0 = (S_M)_{[:K_0]}, \hspace{1cm}
-U_0 = (U_M)_{[:K_0]} \, U_3, \hspace{1cm}
-V_0 = (V_M)_{[:K_0]} \, V_3,
+U_{\rm out} = W_1 \, X_{[:,\,:K_0]}, \hspace{1cm}
+U_{\rm freq} = Q_1 \, Y_{[:,\,:K_0]},
 \end{equation}
-where $[:K_0]$ denotes the first $K_0$ rows. This gives the canonical representation
+where $[:,:K_0]$ denotes the first $K_0$ columns. This gives the canonical representation
 \begin{equation}
-\bar A = U_0^T \, {\rm diag}(S_0) \, V_0 + O(\varepsilon \|\bar A\|_2),
+\bar A = U_{\rm out} \, {\rm diag}(S_0) \, U_{\rm freq}^T + O(\varepsilon \|\bar A\|_2),
 \hspace{1.5cm}
-U_0 U_0^T = V_0 V_0^T = {\rm id}_{K_0},
+U_{\rm out}^T U_{\rm out} = U_{\rm freq}^T U_{\rm freq} = {\rm id}_{K_0},
 \label{eq:canonical}
 \end{equation}
 with $S_0$ sorted descending -- i.e.\ a genuine truncated SVD of $\bar A$, with $K_0$ its
@@ -3748,10 +3768,10 @@ numerical rank.
 Given an updated $v$, reevaluating the variances is two small matrix-vector multiplies and two
 diagonal scalings,
 \begin{equation}
-y_j = \big( ( U_0 \, \Lambda \, v ) \odot S_0 \big)^T \, V_0,
+y_j = U_{\rm out} \, \big( S_0 \odot ( U_{\rm freq}^T \, \Lambda \, v ) \big),
 \end{equation}
 i.e.\ $O\big(K_0 (n_j + 2^{r-L} P)\big)$ flops per $(\mbox{tree}, j)$; likewise the storage
-(the factors $U_0, S_0, V_0$ plus the length-$n_j$ vector $\lambda$) is
+(the factors $U_{\rm out}, S_0, U_{\rm freq}$ plus the length-$n_j$ vector $\lambda$) is
 $O\big(K_0 (n_j + 2^{r-L} P)\big)$, instead of $O\big(n_j \cdot 2^{r-L} P\big)$ for a dense
 $\bar A$.
 
@@ -3760,7 +3780,297 @@ For {\tt chord\_sb2\_et.yml} (10 trees, 136 $(\mbox{tree}, j)$ pairs), we find $
 factor $\sim\!2.3$ beyond the per-group SVDs), $n_j$ up to $2823$, and $2^{r-L} P$ up to $16384$.
 Reconstructing the variances through the canonical form agrees with the directly-computed values
 to $\sim\!10$ significant digits, consistent with the threshold $\varepsilon$.
-(The construction above is currently prototyped offline; it is not yet wired into the real-time
-pipeline.)
+(The construction above is currently prototyped offline, in \verb|misc/throwaway1.py| and
+\verb|misc/throwaway2.py|; it is not yet wired into the real-time pipeline. The exact analogue
+of \S\ref{sec:variance_svd_exact} {\em is} implemented, in
+\verb|pirate_frb/slow_avar/VarianceMapExact.py|.)
+
+\clearpage
+
+\section{SVD decomposition of the exact variance map}
+\label{sec:variance_svd_exact}
+
+This section is the exact counterpart of \S\ref{sec:variance_svd}: it compresses the variance
+map of {\tt PfAvarExact} (\S\ref{sec:analytic_variance}) rather than that of
+{\tt PfAvarApproximation}. It is implemented by \verb|class VarianceMapExact| in
+\verb|pirate_frb/slow_avar/VarianceMapExact.py|.
+
+The motivation is the same. Every stage of the transform is linear in the input array, so each
+pre-max peak-finding output $y$ is a linear combination $y = \sum_i c_i x_i$ of input samples,
+and ${\rm Var}(y) = \sum_i c_i^2 \, {\rm Var}(x_i)$ is a {\em linear} function of the input
+channel variances $v_F$. In operation $v$ drifts (gain drift, RFI excision), so we want to
+recompute the peak-finding variances cheaply whenever $v$ is updated. {\tt PfAvarExact} computes
+$y = Av$ for one specific $v$; this section compresses the map $A$ itself into a canonical
+low-rank form, making reevaluation for any $v$ cheap.
+
+Two differences from \S\ref{sec:variance_svd} are worth stating up front:
+\begin{itemize}
+\item No approximation is made. \S\ref{sec:variance_svd} neglects frequency-channel overlaps
+between the $2^R$ level-0 bands, which lets the variance be resolved per level-0 band $j$ and on
+only the $(r-L)$ highest DM bits. Here the variance is resolved per {\em multiplet} $m$ and on
+the $(r-R)$ highest DM bits, exactly as {\tt PfAvarExact} computes it.
+\item {\tt PfAvarExact} is an exact-but-slow reference implementation, practical only at moderate
+rank (\S\ref{sec:avar_pfvariance}), so this section inherits that limitation: it cannot be run at
+CHIME/CHORD scale.
+\end{itemize}
+The caveat about the {\tt Detrender2d} noted in \S\ref{sec:variance_svd} applies here too: the
+operator is bare gridding, tree dedispersion and peak-finding convolution, i.e.\ the $A$ of
+Eq.\ (\ref{eq:variance_map_def}) with the detrending step omitted.
+
+\subsection{The variance map}
+\label{ssec:svd_exact_map}
+
+Fix a {\tt DedispersionTree} with rank $r$, peak-finding rank $R$, and $P$ peak-finding
+profiles, and write
+\begin{equation}
+\rho = r-R, \hspace{1.5cm} D = 2^\rho
+\end{equation}
+for the number of coarse-DM bits and coarse DMs.\footnote{Code names: $r = {\tt tree\_r}$,
+$R = {\tt tree\_R}$, $P = {\tt tree\_P}$, $M = {\tt tree\_M}$, all members of
+{\tt VarianceMapExact}.}
+Recall from \S\ref{sec:subband_search} that a {\em multiplet} $0 \le m < M$ is a
+(frequency subband, fine DM) pair. For each $m$, {\tt PfAvarExact} produces a variance array
+\begin{equation}
+y_m[d,p], \hspace{1.5cm} 0 \le d < D, \quad 0 \le p < P,
+\end{equation}
+(the array {\tt tree\_variance[itree][m]}), which we flatten to a length-$DP$ column vector
+using the index $\alpha = dP + p$ of \S\ref{ssec:variance_map_setup}. Then, for each
+$(\mbox{tree}, m)$, the map $v \mapsto y_m$ is linear:
+\begin{equation}
+y_m = A^{(m)} v, \hspace{1.5cm} A^{(m)}_{\alpha F} = \mbox{(contribution of channel $F$ to $y_m[d,p]$
+per unit input variance)},
+\label{eq:svdx_map}
+\end{equation}
+which is the matrix of Eq.\ (\ref{eq:variance_map_def}), restricted to one multiplet: rows index
+outputs, columns index input channels.
+
+Only a contiguous range of input channels contributes,
+\begin{equation}
+F_{\rm lo} \le F < F_{\rm lo} + n_m,
+\label{eq:svdx_support}
+\end{equation}
+namely those whose gridding footprint ${\mathcal S}_F$ (\S\ref{sec:avar_statement}) intersects
+the coarse-freq range of $m$'s frequency subband.\footnote{Code names: $F_{\rm lo} =
+{\tt per\_tm\_ifreq\_lo}$, $n_m = {\tt per\_tm\_nf}$, both members of {\tt PfAvarExact}.}
+Contiguity holds because the channel map is strictly decreasing, so the ${\mathcal S}_F$ are
+intervals which advance monotonically with $F$, and the set of $F$ whose interval meets a fixed
+interval is itself an interval. ({\tt PfAvarExact} asserts this at construction.) We restrict
+$A^{(m)}$ to those columns from here on, so it is a $(DP) \times n_m$ matrix; it is never
+materialized.
+
+Channels at the two ends of the range (\ref{eq:svdx_support}) may overlap the subband only
+slightly, and would contribute anomalously small columns to $A^{(m)}$; a fixed relative SVD
+threshold would silently truncate them away. We precondition this away with a diagonal matrix
+$\Lambda = {\rm diag}(\lambda)$, where $\lambda_F > 0$ is the mean variance contributed by
+channel $F$ (defined precisely in the next subsection), and write
+\begin{equation}
+\bar A = A^{(m)} \Lambda^{-1},
+\hspace{1.5cm}
+y_m = \bar A \, \Lambda \, v,
+\label{eq:svdx_abar}
+\end{equation}
+so that $\bar A$ has columns of comparable scale. Diagonal scaling is invertible, so this does
+not change matrix ranks; its only purpose is to make a fixed relative threshold mean the same
+thing for every channel.
+
+\subsection{Factored structure of single-channel variances}
+\label{ssec:svd_exact_factored}
+
+{\tt PfAvarExact} already holds the variance contribution of a single channel in a factored
+form: {\tt per\_tfm[itree][F][m]} is a {\tt PfVariance} of rank $\rho$
+(\S\ref{sec:avar_pfvariance}), i.e.\ a small set of {\em terms}, each keyed by a bitmask $\delta$
+over the $\rho$ DM bits (``{\tt dbits}'') and holding an array of shape
+$(2^{{\rm popc}(\delta)}, P)$, with
+\begin{equation}
+y^{(F)}_m[d, p] = \sum_{(\delta, a) \,\in\, {\rm terms}(F,m)} a\big[ {\rm sel}(d, \delta),\, p \big],
+\hspace{1.5cm}
+y_m = \sum_F v_F \, y^{(F)}_m,
+\label{eq:svdx_terms}
+\end{equation}
+where ${\rm sel}(d, \delta)$ packs the bits of $d$ selected by $\delta$ into an integer
+$0 \le {\rm sel}(d, \delta) < 2^{{\rm popc}(\delta)}$ (the function
+\verb|SparseTile._remap_d|). That is, a term depends on the DM index $d$ only through the few
+bits in $\delta$. Note that the entries of $a$ are variances $\|h_p * g\|^2$, hence
+non-negative.
+
+Compared with \S\ref{sec:variance_svd}, the masks $\delta$ here are drawn from the $\rho = r-R$
+resolved DM bits rather than $r-L$, and satisfy
+${\rm popc}(\delta) \le \min(i_0(F)+1, \rho)$ with $i_0(F)$ as in \S\ref{sec:avar_dbits}. More
+channels therefore carry multi-bit masks, and more distinct masks occur per $(\mbox{tree},m)$
+pair -- 12 to 25 in {\tt toy.yml}, where the approximation sees only a handful.
+
+The preconditioner in Eq.\ (\ref{eq:svdx_abar}) is defined in terms of the factored form:
+\begin{equation}
+\lambda_F = \sum_{(\delta, a) \,\in\, {\rm terms}(F,m)} {\rm mean}(a) \; \ge \; 0,
+\label{eq:svdx_lambda}
+\end{equation}
+where the mean is taken over all entries of the term array $a$. A low-overlap edge channel shows
+up as a small value of $\lambda_F$. Since the entries of $a$ are non-negative, $\lambda_F = 0$
+happens only if channel $F$'s contribution vanishes identically; the code drops such channels
+rather than dividing by zero (their columns of $\bar A$, and rows of $U_{\rm freq}$ below, are
+zero).
+
+Now group the (channel, term) pairs by $\delta$. Since a {\tt PfVariance}'s terms are keyed by
+$\delta$, a channel contributes at most one term to each group -- but a two-term channel appears
+in two groups, which is why the groups' channel sets can overlap. For each $\delta$, stack the
+flattened term arrays as the {\em columns} of a matrix $A_\delta$ of shape
+$(2^{{\rm popc}(\delta)} P,\ n_{m\delta})$, dividing the column of channel $F$ by $\lambda_F$,
+where $n_{m\delta}$ is the number of (channel, term) pairs in the group, and let $v_\delta,
+\lambda_\delta$ denote the corresponding slices of $v, \lambda$. Then
+\begin{equation}
+y_m = \sum_\delta E_\delta \, A_\delta \, (v_\delta \odot \lambda_\delta),
+\label{eq:svdx_group_sum}
+\end{equation}
+where $\odot$ denotes elementwise multiplication, and $E_\delta$ is the
+$(DP) \times (2^{{\rm popc}(\delta)} P)$ zero/one ``expansion'' matrix which replicates the
+packed DM axis over the unselected bits, i.e.\ copies packed entry $({\rm sel}(d,\delta), p)$ to
+entry $(d, p)$. (In the code, $E_\delta$ is an index gather, not a materialized matrix.)
+
+\subsection{Per-group SVD and stacking}
+\label{ssec:svd_exact_stacking}
+
+Each $A_\delta$ turns out to be numerically low-rank (variances vary smoothly with channel).
+We compute the truncated SVD
+\begin{equation}
+A_\delta = W_\delta \, {\rm diag}(S_\delta) \, Q_\delta^T,
+\end{equation}
+where $W_\delta$ is $(2^{{\rm popc}(\delta)}P) \times K_\delta$ and $Q_\delta$ is
+$n_{m\delta} \times K_\delta$, both with orthonormal columns, keeping the $K_\delta$ singular
+values with $S > \varepsilon S_{\rm max}$ (\S\ref{ssec:svd_exact_threshold}).
+
+Let $K_{\rm tot} = \sum_\delta K_\delta$. Substituting the truncated SVDs into
+Eq.\ (\ref{eq:svdx_group_sum}) and stacking the per-group factors along the rank axis, we obtain
+\begin{equation}
+\bar A = \bar W \, {\rm diag}(\bar S) \, \bar Q^T,
+\label{eq:svdx_stacked}
+\end{equation}
+where:
+\begin{itemize}
+\item $\bar W$ ($DP \times K_{\rm tot}$) concatenates the expanded left factors
+$E_\delta W_\delta$ horizontally;
+\item $\bar S$ (length $K_{\rm tot}$) concatenates the $S_\delta$;
+\item $\bar Q$ ($n_m \times K_{\rm tot}$) concatenates the $Q_\delta$ horizontally, with each
+group's rows scattered into its channel positions (zero-padded elsewhere).
+\end{itemize}
+This eliminates the sum over $\delta$, but the columns of $\bar W, \bar Q$ are {\em not}
+orthonormal ($\bar Q^T \bar Q \ne {\rm id}$): different groups' channel sets overlap (via the
+two-term channels), and the expanded columns $E_\delta W_\delta$ are not orthogonal across
+groups -- nor even unit norm, since
+$\|E_\delta w\|^2 = 2^{\rho-{\rm popc}(\delta)}\|w\|^2$. So $\bar S$ is not yet a set of
+singular values of anything.
+
+\subsection{Canonical form}
+\label{ssec:svd_exact_canonical}
+
+Finally, we reduce the stacked representation to a genuine truncated SVD of $\bar A$, without
+materializing any $\bar A$-sized matrix. Take thin SVDs of the two stacked factors:
+\begin{equation}
+\bar W = W_1 \, {\rm diag}(W_2) \, W_3^T, \hspace{1.5cm} \bar Q = Q_1 \, {\rm diag}(Q_2) \, Q_3^T,
+\end{equation}
+where $W_1$ ($DP \times k_W$), $Q_1$ ($n_m \times k_Q$), $W_3$ ($K_{\rm tot} \times k_W$) and
+$Q_3$ ($K_{\rm tot} \times k_Q$) have orthonormal columns, with
+$k_W = \min(DP,\, K_{\rm tot})$ and $k_Q = \min(n_m,\, K_{\rm tot})$. Then
+\begin{equation}
+\bar A = W_1 \, M \, Q_1^T,
+\hspace{1.5cm}
+M \equiv {\rm diag}(W_2) \, W_3^T \, {\rm diag}(\bar S) \, Q_3 \, {\rm diag}(Q_2),
+\label{eq:svdx_M}
+\end{equation}
+where $M$ is a small $(k_W \times k_Q)$ matrix. Eq.\ (\ref{eq:svdx_M}) is an identity, not an
+approximation -- the only error so far is the per-group truncation. It holds even if $\bar W$ or
+$\bar Q$ is rank deficient: a near-null direction shows up as a roundoff-sized entry of $W_2$ or
+$Q_2$, which multiplies the corresponding row or column of $M$ and thereby kills the (arbitrary)
+direction in $W_1$ or $Q_1$. Using $\min$ shapes means that no assumption such as
+$K_{\rm tot} \le n_m$ is needed.
+
+Since the columns of $W_1, Q_1$ are orthonormal, the singular values of $M$ are exactly the
+singular values of $\bar A$. SVD-decompose $M = X \, {\rm diag}(S_M) \, Y^T$, let $K_0$ be the
+number of singular values above the same relative threshold $\varepsilon$, and absorb the
+factors into $W_1, Q_1$:
+\begin{equation}
+S_0 = (S_M)_{[:K_0]}, \hspace{1cm}
+U_{\rm out} = W_1 \, X_{[:,\,:K_0]}, \hspace{1cm}
+U_{\rm freq} = Q_1 \, Y_{[:,\,:K_0]},
+\end{equation}
+where $[:,:K_0]$ denotes the first $K_0$ columns. This gives the canonical representation
+\begin{equation}
+\bar A = U_{\rm out} \, {\rm diag}(S_0) \, U_{\rm freq}^T + O(\varepsilon \|\bar A\|_2),
+\hspace{1.5cm}
+U_{\rm out}^T U_{\rm out} = U_{\rm freq}^T U_{\rm freq} = {\rm id}_{K_0},
+\label{eq:svdx_canonical}
+\end{equation}
+with $S_0$ sorted descending -- i.e.\ a genuine truncated SVD of $\bar A$, with $K_0$ its
+numerical rank. The three factors are the {\tt VarianceMapExact} block members {\tt sv\_out},
+{\tt sval} and {\tt sv\_freq}, stored with the rank axis first.
+
+Given an updated $v$, reevaluating the variances is two small matrix-vector multiplies and two
+diagonal scalings,
+\begin{equation}
+y_m = U_{\rm out} \, \big( S_0 \odot ( U_{\rm freq}^T \, \Lambda \, v ) \big),
+\label{eq:svdx_eval}
+\end{equation}
+i.e.\ $O\big(K_0 (n_m + DP)\big)$ flops per $(\mbox{tree}, m)$; likewise the storage (the
+factors $U_{\rm out}, S_0, U_{\rm freq}$ plus the length-$n_m$ vector $\lambda$) is
+$O\big(K_0 (n_m + DP)\big)$, instead of $O(n_m \cdot DP)$ for a dense $\bar A$.
+
+\subsection{Truncation threshold}
+\label{ssec:svd_exact_threshold}
+
+Truncating at $\varepsilon S_{\rm max}$ perturbs the reconstruction at the $\varepsilon$ level
+relative to $\|\bar A\|_2$, so $\varepsilon$ is an accuracy knob -- but it is only meaningful
+above the double-precision noise floor on singular values, which numpy's {\tt matrix\_rank}
+estimates as $\max(\mbox{shape}) \cdot \epsilon_{\rm f64} \cdot S_{\rm max}$.
+\S\ref{sec:variance_svd} uses a fixed $\varepsilon = 10^{-11}$, which is safe at the
+approximation's matrix sizes (noise floor $\approx 6 \times 10^{-13}$) but not in general: the
+exact map's output axis $DP = 2^{r-R}P$ is larger than the approximation's $2^{r-L}P$ by
+$2^{L-R}$, and at $DP = 65536$ the floor is $\approx 1.5 \times 10^{-11}$, i.e.\ {\em above}
+$10^{-11}$. We therefore choose $\varepsilon$ per $(\mbox{tree},m)$ block from its largest
+matrix dimension,
+\begin{equation}
+\varepsilon = \max\Big( 10^{-11}, \;\; 16 \cdot \max(DP,\, n_m) \cdot \epsilon_{\rm f64} \Big),
+\label{eq:svdx_epsilon}
+\end{equation}
+and apply it to every SVD in that block. The factor 16 sits comfortably above the estimated
+floor while remaining far below any genuine component. ({\tt VarianceMapExact} takes an
+{\tt epsilon} constructor argument which overrides this default.)
+
+That $K_0$ is a genuine numerical rank, rather than an artifact of where the threshold is put,
+can be checked directly: for a representative {\tt toy.yml} block ($n_m = 640$,
+$DP = 6656$), $K_0 = 175$ or $176$ for every $\varepsilon$ from $10^{-8}$ down to $10^{-12}$ --
+the spectrum has a clean cliff, with the last retained singular value at
+$4 \times 10^{-11} S_{\rm max}$ and the next one below $10^{-12} S_{\rm max}$. Loosening to
+$\varepsilon = 10^{-6}$ gives $K_0 = 135$.
+
+\subsection{Cost, storage and validation}
+\label{ssec:svd_exact_cost}
+
+For {\tt toy.yml} ($N_{\rm freq} = 640$, 6 trees, 110 $(\mbox{tree},m)$ pairs), we find
+$n_m$ from $159$ to $640$, $DP$ from $896$ to $6656$, $K_{\rm tot}$ from $90$ to $294$ (summing
+to $18131$), and $K_0$ from $45$ to $178$ (summing to $9812$) -- so the canonical form buys a
+further factor $\sim\!1.9$ beyond the per-group SVDs. Total storage is $261$ MiB, versus $907$
+MiB for the dense $\bar A$'s, a factor $3.5$. Building {\tt PfAvarExact} takes $3.5$ sec and
+building {\tt VarianceMapExact} from it takes $11$ sec.
+
+The compression factor is modest here only because {\tt toy.yml} is small in frequency: when
+$DP \gg n_m$, Eq.\ (\ref{eq:svdx_eval}) gives a storage ratio of $n_m DP / K_0(n_m + DP) \to
+n_m / K_0$, which is $\sim\!3.6$ at $n_m = 640$. Configs with more input channels compress
+better, since $K_0$ grows much more slowly than $n_m$.
+
+Reconstructing the variances through Eq.\ (\ref{eq:svdx_eval}) agrees with the directly-computed
+{\tt PfAvarExact} values to a relative accuracy of $4 \times 10^{-12}$ on {\tt toy.yml}, and
+$\sim\!10^{-14}$ on small random configs, consistent with the threshold $\varepsilon$. The check
+that matters is done at an input vector $v$ which {\tt PfAvarExact} was {\em not} built with,
+recomputing the reference directly from {\tt per\_tfm}: this tests that we have captured the
+linear map, not merely its value at one input. It is available as
+{\tt VarianceMapExact.check()}.
+
+Finally, a note on scale. At {\tt chord\_sb2\_et.yml} parameters ($r = 16$, $R = 4$,
+$DP = 65536$, $M = 91$, 10 trees, so $\sim\!910$ blocks), $U_{\rm out}$ alone would run to tens
+of GB. This is moot, however, since {\tt PfAvarExact} cannot be built at that scale in the first
+place (\S\ref{sec:avar_pfvariance}). Should storage become the binding constraint at some
+intermediate scale, the lever is to stop materializing the expanded output-side factor: writing
+$U_{\rm out} = \sum_\delta E_\delta W_\delta C_\delta$ for small $C_\delta$ of shape
+$K_\delta \times K_0$, a block would store the packed $W_\delta$ (with $2^{{\rm popc}(\delta)}P$
+rows) and the $C_\delta$, instead of $K_0 \cdot DP$ doubles.
 
 \end{document}

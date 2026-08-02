@@ -391,10 +391,19 @@ class PfAvarExact:
     
       per_tfm:         (ntrees, nfreq, M) array of (None or single-channel PfVariance).
                        This is a "ragged" array (list of list of lists) since M is tree-dependent.
-    
+                       This is the variance map in factored per-channel form, and is what
+                       slow_avar.VarianceMapExact consumes.
+
       per_tm:          (ntrees, M) ragged array of frequency-summed PfVariances (never None):
                        per_tm[t][m] = sum_ifreq freq_variances[ifreq] * per_tfm[t][ifreq][m].
-    
+
+      per_tm_ifreq_lo: (ntrees, M) ragged array of ints: the lowest input channel which
+                       contributes to per_tm[t][m].
+      per_tm_nf:       (ntrees, M) ragged array of ints: the number of contributing input
+                       channels. The contributing channels are contiguous (see __init__), i.e.
+                       per_tfm[t][ifreq][m] is non-None precisely for
+                       per_tm_ifreq_lo[t][m] <= ifreq < per_tm_ifreq_lo[t][m] + per_tm_nf[t][m].
+
       tree_variance:   For each tree, a shape (M,2^{r-R},P) array (same contents as per_tm).
     """
 
@@ -420,17 +429,24 @@ class PfAvarExact:
         self.tree_variance = [ None ] * self.ntrees
         self.per_tfm = [ None ] * self.ntrees
         self.per_tm = [ None ] * self.ntrees
+        self.per_tm_ifreq_lo = [ None ] * self.ntrees
+        self.per_tm_nf = [ None ] * self.ntrees
 
         full_cmap = np.asarray(plan.config.make_channel_map(), dtype=np.float64)
-        
+
         for itree in range(self.ntrees):
             r, R, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_P[itree])
             fs, ipri = self.tree_fs[itree], self._tree_ipri[itree]
-            
+
             self.tree_variance[itree] = np.zeros((fs.M, 2**(r-R), P))
             self.per_tfm[itree] = [ None ] * self.nfreq
             self.per_tm[itree] = [ PfVariance(r-R, P) for _ in range(fs.M) ]
-            
+
+            # Per-multiplet bookkeeping for the (ifreq_lo, nf) ranges below.
+            m_lo = np.full(fs.M, -1, dtype=int)    # first contributing ifreq (-1 = none yet)
+            m_hi = np.zeros(fs.M, dtype=int)       # last contributing ifreq, plus one
+            m_cnt = np.zeros(fs.M, dtype=int)      # number of contributing ifreq's
+
             if progress:
                 print(f"  PfAvarExact tree {itree}/{self.ntrees}: ", end="", flush=True)
                 
@@ -454,7 +470,21 @@ class PfAvarExact:
                     pv = PfVariance.from_tile(tile, P, self.convolver)
                     self.per_tm[itree][m].add(pv, scale=self.freq_variances[ifreq])
                     self.per_tfm[itree][ifreq][m] = pv
-                    
+
+                    if m_lo[m] < 0:
+                        m_lo[m] = ifreq
+                    m_hi[m] = ifreq + 1
+                    m_cnt[m] += 1
+
+            # Multiplet m gets a contribution from channel ifreq iff ifreq's gridding footprint
+            # overlaps m's frequency subband. The footprints are intervals which advance
+            # monotonically with ifreq (the channel map is strictly decreasing), so the
+            # contributing channels form an interval. VarianceMapExact relies on this.
+            assert np.all(m_cnt >= 1), (itree, int(np.min(m_cnt)))
+            assert np.all(m_cnt == m_hi - m_lo), (itree, list(m_cnt), list(m_hi - m_lo))
+            self.per_tm_ifreq_lo[itree] = m_lo
+            self.per_tm_nf[itree] = m_hi - m_lo
+
             for m in range(fs.M):
                 self.tree_variance[itree][m, :, :] = self.per_tm[itree][m].unpack((1 << (r - R)) - 1)
             assert np.all(self.tree_variance[itree] > 0.0), \
