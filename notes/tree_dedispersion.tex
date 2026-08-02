@@ -2799,7 +2799,7 @@ D(A^{\rm true}, A^{\rm approx})
 \end{equation}
 where $N_\alpha = \sum_\alpha 1$ is the number of $\alpha$-values, and $f(x)$ is defined by:
 \begin{equation}
-f(x) \equiv \frac{x-1}{1+x/10}
+f(x) \equiv \frac{x-1}{1+(x/10)}
 \end{equation}
 This unusual distance function has the following properties:
 \begin{enumerate}
@@ -2829,13 +2829,90 @@ but this is a statistical concern, not a hard constraint.
 Because it's a statistical concern, our cost function focuses on the typical case where
 all channels have similar variance, not per-matrix-element analysis.
 
-% \subsection{Ideas to explore}
+\subsection{Ideas to explore}
 
-% Relaxation. Could consider a more ``relaxed'' cost function if that's helpful.
-% Giving up on low DMs
-% Coarse-graining must happen
+Our goal is to find a low-rank, efficiently computable, accurate approximation
+to the variance map $A$. Note that $A$ has many parameters: all the parameters
+needed to configure tree dedispersion, and to configure a {\tt Detrender2d}.
 
-\subsection{Brute-force computation of $A$}
+In this section, let's brainstorm ideas, without implementing anything yet.
+Some of these ideas are human-generated, others are LLM-generated.
+
+\begin{itemize}
+
+\item I suspect that heuristic algorithms and empirical approaches will
+ work best, and that making rigorous guarantees will be hard. (But I'd love to
+ be wrong about this!)
+
+\item Let's disable downsampled trees and early triggers. I suspect that
+ if we can solve the problem for a single {\tt DedispersionTree}, we'll
+ be able to solve the multi-tree case.
+
+\item To start out, let's also disable frequency subbands, so that the
+ main parameters to explore are the frequency zones, and the {\tt Detrender2d}.
+ Let's also use subscale instances (say rank-10 and $\sim$400 frequency channels).
+ Later, we can scale up, and add frequency subbands.
+
+\item If we simplify the problem by removing the {\tt Detrender2d}, then
+ there is an exact low-rank representation for $A$, and an approximation which
+ is fast to compute (see the appendices). This is all implemented and tested.
+ I don't know if it's a useful starting point -- it's not clear whether the
+ approach can be generalized to include the {\tt Detrender2d}.
+
+\item We have code to compute the $A$-matrix in dense form (\S\ref{ssec:variance_map_bruteforce}).
+ This may be a useful ``crutch'' for initial exploration, although in the long run it won't
+ scale to CHIME/CHORD. For example, we could compute the full SVD decomposition of the $A$-matrix,
+ as a starting point for finding low-rank approximations. It would be a significant milestone
+ to develop an algorithm which works well starting from a dense representation of $A$.
+
+\item Our distance function (\ref{eq:distance_function}) is discontinuous,
+ which makes it hard to use optimization-based approaches. It may be useful to
+ ``relax'' to a continuous distance function in an intermediate stage. Or, if
+ continuity turns out to be very helpful, then we could think about changing
+ the definition of the cost function.
+
+\item Suppose we have an accurate approximation $A_1 = Q W^T$ with
+ a large rank (say 1000). Can we find an algorithm to search for a lower-rank
+ (say 100) representation $A_2$ with small $D(A_1,A_2)$? If such an algorithm
+ exists, it could be useful for ``bootstrapping'' low-rank approximations from
+ medium-rank ones.
+
+\item Is coarse-graining DM a useful idea? Recall that $0 \le \alpha < (2^{r-R}MP)$
+is a ``flattened'' index. Let $0\le \beta < (2^{r-L}NP)$ be a coarser ``flattened''
+index obtained by coarse-graining DM. Here, $L \ge R$ is a coarse-graining factor, 
+and $N \le M$ is the number of frequency subbands (a multiplet is a subband plus
+a fine-grained DM). Define the coarse-grained variance map $\bar A$ by:
+\begin{equation}
+\bar A_{\beta F} = \max_{\alpha\in\beta} A_{\alpha F}
+\end{equation}
+One approach to controlling rank/cost is to find a low-rank approximation to $\bar A$, 
+and ``lift'' it to a low-rank approximation to $A$. (Note that our current ``production''
+GPU kernels use coarse-grained weights, which implicitly assumes that this approach is
+viable at some level.)
+
+\item If we're having trouble at low DM specifically, then we could inflate variance
+estimates at low DM (with little or no change in the rank). Given our unusual distance
+function $D$, it may not change the value of $D$ dramatically.
+
+\item As a heuristic approach, we might try modelling the effect of the {\tt Detrender2d}
+as a DM-dependent time convolution. I think that the approach from the appendices generalizes
+straightforwardly to the case where a time convolution is applied to the data -- but the 2-d
+detrender is harder.
+
+\end{itemize}
+
+\subsection{Agentic approach (placeholder section)}
+\label{ssec:agentic}
+
+In this section, I plan to write about an agentic approach to exploring this problem.
+
+% Installing new software packages
+
+% Requested code changes
+
+% CPU / GPU resources
+
+\subsection{Brute-force computation of the variance map}
 \label{ssec:variance_map_bruteforce}
 
 Although Eq.\ (\ref{eq:variance_map_def}) defines $A$ through a random ensemble, $A$ is really just
