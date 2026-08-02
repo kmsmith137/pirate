@@ -2756,6 +2756,85 @@ y_\alpha = \sum_F A_{\alpha F} v_F  \label{eq:variance_map_def}
 \end{equation}
 where this equation defines the {\bf variance map} $A$, a $(2^{r-R}MP)$-by-$N_{\rm freq}$ matrix.
 
+In its dense matrix representation, the variance map is too expensive to compute (or even store)
+at CHIME/CHORD scale.
+This section is concerned with the following central, currently unsolved, problem:
+can we find a {\bf low-rank} approximation to the variance map $A \approx QW^T$, which can be computed
+in a reasonable amount of time?
+That is, we are trying to achieve three goals:
+\begin{enumerate}
+\item We want to minimize the rank of the approximation $A^{\rm approx} \equiv QW^T$.
+\item We want the approximation $A^{\rm approx} \approx A^{\rm true}$ to be accurate,
+ in the sense that a certain distance function $D(A^{\rm true}, A^{\rm approx})$ is
+ small. The choice of distance function is unusual, and is discussed in the next subsection.
+\item We want $A^{\rm approx}$ to be computable in a reasonable amount of time.
+ In particular, we'd like to avoid computing every matrix element of $A^{\rm true}$,
+ since this is cost-prohibitive at CHIME/CHORD scale.
+ This aspect of the problem is particularly challenging, so I suggest ``warming up'' by
+ exploring subscale examples, where computing $A^{\rm true}$ is feasible, and finding
+ a scalable solution later.
+\end{enumerate}
+
+\subsection{Distance function}
+\label{ssec:distance_function}
+
+Given matrices $A^{\rm true}_{\alpha F}, A^{\rm approx}_{\alpha F}$,
+our distance function $D(A^{\rm true}, A^{\rm approx})$ is defined as follows.
+First, we define vectors
+$y^{\rm true}_{\alpha}$, $y^{\rm approx}_{\alpha}$ by:
+\begin{equation}
+y^{\rm true}_{\alpha} \equiv \sum_F A^{\rm true}_{\alpha F}
+  \hspace{1.5cm}
+y^{\rm approx}_{\alpha} \equiv \sum_F A^{\rm approx}_{\alpha F}
+\end{equation}
+Then we define:
+\begin{equation}
+D(A^{\rm true}, A^{\rm approx})
+ \equiv \begin{cases}
+   \infty & \mbox{if $A^{\rm approx}_{\alpha F} < A^{\rm true}_{\alpha F}$ for any $(\alpha,F)$} \\
+   N_\alpha^{-1} \sum_\alpha f(y_\alpha^{\rm approx}/y_\alpha^{\rm true})
+    & \mbox{otherwise}
+\end{cases} 
+\label{eq:distance_function}
+\end{equation}
+where $N_\alpha = \sum_\alpha 1$ is the number of $\alpha$-values, and $f(x)$ is defined by:
+\begin{equation}
+f(x) \equiv \frac{x-1}{1+x/10}
+\end{equation}
+This unusual distance function has the following properties:
+\begin{enumerate}
+\item Underestimating any matrix element of $A$ is catastrophic -- the approximation
+ is considered infinitely bad.
+\item Overestimating is okay, but our goal is to minimize the average level of
+ overestimation.
+\item Extreme overestimation is fine, as long as it's confined to a small number
+ of $\alpha$-values. (If we send $y_\alpha \rightarrow \infty$ for a few $\alpha$
+ values, then it has a bounded effect on the distance function.)
+\end{enumerate}
+The motivation is as follows.
+In the real-time search, we normalize dedispersion outputs to ``sigmas'' by multiplying
+by $(Av)^{-1/2}$, where $v_F$ is a real-time estimate for the RFI-masked variance.
+We search a gigantic number of trials ($\sim\!10^{15}$) for rare events, and we use
+a high threshold (9--10$\sigma$) due to the high trial factor.
+
+Underestimating variance is catastrophic, even in corner cases, since it can generate
+a large number of false positives in the far tail of the SNR distribution.
+The RFI mask is unpredictable and can produce corner cases, such as a small number
+of frequency channels contributing.
+Therefore, we impose a strict constraint (per matrix element!) that we never underestimate
+variance.
+
+In contrast, overestimating variance is undesirable, since it reduces the total event rate,
+but this is a statistical concern, not a hard constraint.
+Because it's a statistical concern, our cost function focuses on the typical case where
+all channels have similar variance, not per-matrix-element analysis.
+
+% \subsection{Ideas to explore}
+
+% Relaxation. Could consider a more ``relaxed'' cost function if that's helpful.
+% Giving up on low DMs
+% Coarse-graining must happen
+
 \subsection{Brute-force computation of $A$}
 \label{ssec:variance_map_bruteforce}
 
