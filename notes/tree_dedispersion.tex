@@ -2756,6 +2756,249 @@ y_\alpha = \sum_F A_{\alpha F} v_F  \label{eq:variance_map_def}
 \end{equation}
 where this equation defines the {\bf variance map} $A$, a $(2^{r-R}MP)$-by-$N_{\rm freq}$ matrix.
 
+\subsection{Brute-force computation of $A$}
+\label{ssec:variance_map_bruteforce}
+
+Although Eq.\ (\ref{eq:variance_map_def}) defines $A$ through a random ensemble, $A$ is really just
+a statement about the matrix elements of $L$, and can be computed one column at a time by applying
+$L$ to ``one-hot'' input arrays. This subsection works out that brute-force algorithm.
+
+It is very slow, but it treats every stage of $L$ as a black box, so it needs no new analysis to
+handle subbands, time-downsampled trees, early triggers, or -- most importantly -- the
+{\tt Detrender2d}, which the machinery of \S\ref{sec:analytic_variance} cannot currently handle at
+all. In fact the relationship is closer than that: \S\ref{sec:analytic_variance} {\em is} this
+algorithm, executed sparsely (propagating the one-hot impulse response through the dedispersion
+steps in compressed form) instead of densely. The brute-force version is the dense reference that
+the sparse version should be tested against.
+
+Besides the parameters of \S\ref{ssec:variance_map_setup}, we will need the {\tt Detrender2d} time
+half-width $W$ (\S\ref{sec:sd_problem}) and the max peak-finding kernel width $W_{\rm max}$
+(\S\ref{sec:peak_finding}).
+
+\subsubsection{$A$ as a set of column norms}
+
+Write the matrix elements of $L$ as $L_{\alpha t, F t'}$, i.e.
+\begin{equation}
+{\tt out}_\alpha[t] = \sum_{F=0}^{N_{\rm freq}-1} \sum_{t'} L_{\alpha t, F t'} \, {\tt in}[F,t']
+\label{eq:bf_L_matrix}
+\end{equation}
+where $0 \le \alpha < 2^{r-R}MP$ is the flattened output index, $t$ is a downsampled output time,
+and $t'$ is an undownsampled input time. Since the input has covariance
+$\langle {\tt in}[F,t'] \, {\tt in}[F',t''] \rangle = v_F \, \delta_{FF'} \, \delta_{t't''}$,
+\begin{equation}
+y_\alpha = \big\langle {\tt out}_\alpha[t]^2 \big\rangle = \sum_F v_F \sum_{t'} L_{\alpha t, F t'}^2
+\end{equation}
+and comparing with Eq.\ (\ref{eq:variance_map_def}),
+\begin{equation}
+A_{\alpha F} = \sum_{t'} L_{\alpha t, F t'}^2
+\label{eq:bf_A_colnorm}
+\end{equation}
+for any output time $t$ which has reached steady state. That is, {\bf a column of $A$ is a set of
+squared column norms of $L$}, taken over the input time axis at fixed output time.
+
+Now let $e^{(F,t_0)}$ denote the one-hot input array ${\tt in}[F',t'] = \delta_{FF'} \delta_{t't_0}$.
+Applying $L$ to it picks out a {\em row} of $L$, not a column:
+\begin{equation}
+\big( L \, e^{(F,t_0)} \big)_\alpha[t] = L_{\alpha t, F t_0}
+\hspace{1.2cm}\Longrightarrow\hspace{1.2cm}
+\sum_t \big( L \, e^{(F,t_0)} \big)_\alpha[t]^2 = \sum_t L_{\alpha t, F t_0}^2
+\label{eq:bf_rownorm}
+\end{equation}
+So the proposed algorithm computes a {\em row} norm where Eq.\ (\ref{eq:bf_A_colnorm}) asks for a
+{\em column} norm. The two agree by time-translation invariance -- but the details differ between
+$\gamma=0$ and $\gamma>0$, which is the one place where the algorithm needs care.
+
+\subsubsection{Undownsampled trees ($\gamma=0$)}
+
+Every stage of $L$ is time-translation invariant. The {\tt Detrender2d} run with no mask is a fixed
+FIR filter along time: with no mask its normal equations, and hence its mask expansion and its
+conditioning cuts, depend on neither the data nor $t$, so $L$ really is both linear and
+shift-invariant. Tree gridding acts only on the frequency axis, and tree dedispersion and the
+peak-finding convolutions are sums of lagged copies. Therefore
+\begin{equation}
+L_{\alpha t, F t'} = \ell_{\alpha F}[t-t']
+\end{equation}
+and Eqs.\ (\ref{eq:bf_A_colnorm}), (\ref{eq:bf_rownorm}) both collapse to
+$\sum_u \ell_{\alpha F}[u]^2$. Hence, for any $t_0$ satisfying the support conditions of
+\S\ref{sssec:bf_sizing} below,
+\begin{equation}
+A_{\alpha F} = \sum_t \big( L \, e^{(F,t_0)} \big)_\alpha[t]^2
+\label{eq:bf_master}
+\end{equation}
+i.e.\ apply $L$ to a one-hot input, square, and sum over the output time axis. One pass per input
+channel gives all $N_{\rm freq}$ columns of $A$.
+
+\subsubsection{Downsampled trees ($\gamma>0$)}
+
+For $\gamma>0$, the operator $L$ contains a time-downsampling stage $\TDS(\gamma)$
+(\S\ref{ssec:lagged_downsampler}) between the detrender and the tree, and is therefore invariant
+only under input shifts by $2^\gamma$ samples. The right generalization is a {\em polyphase}
+decomposition of the input time index into a downsampled index and a phase,
+\begin{equation}
+t' = 2^\gamma s + c, \hspace{1.5cm} 0 \le c < 2^\gamma
+\end{equation}
+Invariance under $s \rightarrow s+1$ (which shifts the output by one downsampled sample) gives
+\begin{equation}
+L_{\alpha t, F(2^\gamma s + c)} = \ell^{(c)}_{\alpha F}[t-s]
+\end{equation}
+with $2^\gamma$ generally-distinct impulse responses $\ell^{(0)},\cdots,\ell^{(2^\gamma-1)}$.
+Eq.\ (\ref{eq:bf_A_colnorm}) now reads
+\begin{equation}
+A_{\alpha F} = \sum_{c=0}^{2^\gamma-1} \sum_s \ell^{(c)}_{\alpha F}[t-s]^2
+  = \sum_{c=0}^{2^\gamma-1} \big\| \ell^{(c)}_{\alpha F} \big\|^2
+\end{equation}
+whereas a single one-hot at input time $t_0$ sees only the phase $c = t_0 \bmod 2^\gamma$.
+So a downsampled tree does need $2^\gamma$ one-hot arrays per input channel, one per residue class
+of $t_0$ modulo $2^\gamma$, and the results are {\em summed} (not averaged):
+\begin{equation}
+A_{\alpha F} = \sum_{c=0}^{2^\gamma-1} \sum_t \big( L \, e^{(F,t_c)} \big)_\alpha[t]^2,
+  \hspace{1.5cm} t_c \equiv c \ (\mbox{mod } 2^\gamma)
+\label{eq:bf_master_ds}
+\end{equation}
+Any representative $t_c$ of each residue class will do; e.g.\ $t_c = t_0 + c$ with $t_0$ a multiple
+of $2^\gamma$.
+
+There is one important special case. If the part of $L$ upstream of $\TDS(\gamma)$ is
+{\em instantaneous} in time -- no detrender at all, or a {\tt Detrender2d} with $W=0$, which fits
+each time sample independently and is therefore a pure frequency-axis operator -- then
+$\TDS(\gamma)$ maps $e^{(F, 2^\gamma s + c)}$ to the {\em same} downsampled array for every $c$,
+the $2^\gamma$ phases coincide, and one pass suffices:
+\begin{equation}
+A_{\alpha F} = 2^\gamma \sum_t \big( L \, e^{(F,t_0)} \big)_\alpha[t]^2
+  \hspace{1.5cm} (W=0)
+\end{equation}
+This is the familiar statement that downsampling with a $2^{-\gamma/2}$ normalization leaves the
+variance unchanged (\S\ref{sec:downsampled_early}), and it is worth keeping as a unit test: with
+$W=0$ the $2^\gamma$ phase outputs must agree {\em exactly}. For $W>0$ they genuinely differ, since
+the polyphase components of the detrender's time response differ, and all $2^\gamma$ passes are
+needed.
+
+\subsubsection{Placing the one-hot, and sizing $N_{\rm time}$}
+\label{sssec:bf_sizing}
+
+Eqs.\ (\ref{eq:bf_master}), (\ref{eq:bf_master_ds}) are exact only if the {\em entire} impulse
+response is emitted: anything clipped at either end of the array is silently dropped from the sum
+of squares, and the result is an underestimate with no error indication. Three conditions.
+
+\begin{itemize}
+
+\item {\bf Detrender padding.} The {\tt Detrender2d} is handed a length-$(T+2W)$ buffer and
+overwrites only samples $[W, W+T)$ with the residual (\S\ref{sec:sd_problem}). A one-hot at buffer
+index $t_0$ produces a detrended response on $[t_0-W,\, t_0+W]$, all of which must lie in the
+emitted region, so we need $t_0 \ge 2W$.
+
+\item {\bf No negative times.} Tree dedispersion defines ${\tt in}[\cdots,t] = 0$ for $t<0$
+(\S\ref{sec:tree_dedispersion}), so a response reaching back before the start of the stream would
+be truncated -- equivalently, we would be computing a non-steady-state variance
+(cf.\ the footnote to Eq.\ \ref{eq:avar_master}). The previous condition already rules this out,
+since the response starts at $t_0 - W \ge W \ge 0$.
+
+\item {\bf Enough room downstream.} Going forward from the one-hot, the response is spread by
+three stages:
+\begin{itemize}
+\item the detrender, over $2W+1$ undownsampled samples, hence
+$\lfloor 2W/2^\gamma \rfloor + 1$ downsampled samples after $\TDS(\gamma)$;
+\item (subbanded) tree dedispersion, by at most $\Delta_{\rm dd}$ downsampled samples, where
+\begin{equation}
+\Delta_{\rm dd} \equiv \begin{cases} 2^r & \mbox{if } \gamma = 0 \\
+                                     2^{r+1} & \mbox{if } \gamma > 0 \end{cases}
+\label{eq:bf_ddspread}
+\end{equation}
+\item the peak-finding convolution, by at most $T_{\rm max} - 1 = 2W_{\rm max}-1$ downsampled
+samples (\S\ref{sec:avar_convolver}). If the kernel applies a per-profile time shift
+(\S\ref{ssec:dedispersion_output_arrays}), that only translates the response, which is harmless
+here.
+\end{itemize}
+\end{itemize}
+\par\noindent
+Eq.\ (\ref{eq:bf_ddspread}) deserves a comment. $\Delta_{\rm dd}$ is simply the largest full-band
+delay searched by the tree, because the output time index is by construction the arrival time
+extrapolated to the top of the tree's own band (\S\ref{sec:subband_search}) -- so the per-subband
+time lags $T$ do not {\em add} to this bound, they are part of it. Concretely, in Case 1 of
+\S\ref{sec:subband_search} the total lag from tree-freq $f$ to the output is at most
+\begin{equation}
+\underbrace{T}_{= \, d_{\rm hi}2^l(2^{R-l}-1-f)} + \underbrace{d}_{= \, d_{\rm hi}2^l + d_{\rm lo}}
+\ \le \ d_{\rm hi} 2^R + d_{\rm lo} \ \le \ (2^{r-R}-1)2^R + (2^l-1) \ < \ 2^r
+\end{equation}
+(maximized at $f=0$, and using the fact that the largest within-subband lag is
+$L_{r-R+l}(0,d) = d$), and Case 2 is the same. The two cases in Eq.\ (\ref{eq:bf_ddspread}) differ
+because for $\gamma>0$ the tree keeps only the upper DM half (\S\ref{sec:downsampled_early}), so
+the tree rank $r$ is one less than the rank of the underlying $\DD$: in the code,
+$r = {\tt total\_rank} = r_{\rm top} - e - [\gamma>0]$, and $\Delta_{\rm dd} = 2^{r_{\rm top}-e}$
+downsampled samples in both cases.
+
+Adding the three contributions, the response occupies at most
+\begin{equation}
+n_t = \left\lfloor \frac{2W}{2^\gamma} \right\rfloor + \Delta_{\rm dd} + 2 W_{\rm max}
+\end{equation}
+downsampled output samples starting from the one-hot, so it suffices to take
+\begin{equation}
+2W \le t_0 < 2W + 2^\gamma
+  \hspace{1.5cm}
+N_{\rm time} \ \ge \ 4W + 2^\gamma \big( \Delta_{\rm dd} + 2W_{\rm max} + 1 \big)
+\label{eq:bf_ntime}
+\end{equation}
+where the $4W$ is $2W$ from the placement of $t_0$, plus $W$ for the detrender's forward reach,
+plus $W$ of trailing detrender padding; and the ``$+1$'' inside the parentheses absorbs the choice
+of phase $c$.
+
+Two practical remarks. First, because the answer is a sum over {\em all} output times, the
+algorithm is insensitive to how the stream is chunked: one may equally run the dedisperser over
+several chunks totalling $N_{\rm time}$ samples and accumulate $\sum_t(\cdots)^2$ across them, and
+there is no need to know when each DM row reaches steady state. Second, the cheapest guard against
+a mis-sized array is to assert that the last few emitted output samples are identically zero;
+Eq.\ (\ref{eq:bf_ntime}) is a bound, not a tight estimate, and it is easy to get wrong by a factor
+of $2^\gamma$.
+
+\subsubsection{Cost, and relation to the other algorithms}
+
+Each pass costs one full evaluation of $L$ on an $(N_{\rm freq}, N_{\rm time})$ array, and
+$N_{\rm freq} 2^\gamma$ passes are needed per tree ($N_{\rm freq}$ passes if $W=0$). For a
+CHORD-sized config that is $28160$ passes per tree, each dedispersing $\sim\!10^5$ downsampled time
+samples at rank $r=16$: hopelessly slow. Brute force is a small-config reference implementation,
+not a production algorithm -- and not even a practical replacement for
+\S\ref{sec:analytic_variance}, which is itself described there as too slow for production. Two
+things make it less bad than it looks: passes for different $F$ can be batched along the
+dedisperser's spectator beam axis, and almost all of the work in each pass is on identically-zero
+data, which a specialized implementation could skip. Skipping it systematically is precisely what
+\S\ref{sec:avar_sparsetile} does.
+
+Three remarks on how this fits with the rest of the notes.
+
+\begin{itemize}
+
+\item {\bf It generalizes the Monte Carlo check} of \S\ref{sec:avar_validation}. That check feeds
+random Gaussian noise with per-channel variance $V_F$ through a {\tt ReferenceDedisperser} and
+compares empirical variances against the analytic prediction. The brute-force algorithm runs the
+same forward machinery, but replaces the random ensemble by the deterministic standard basis
+$\{e^{(F,t_0)}\}$ -- so the result is exact rather than noisy, and it yields the full matrix $A$
+rather than a single product $Av$.
+
+\item {\bf It should agree with {\tt PfAvarExact}} wherever both apply. With the detrender
+disabled, $\gamma=0$, and subbands disabled, Eq.\ (\ref{eq:bf_master}) must reproduce
+Eq.\ (\ref{eq:avar_master}) column by column: indeed $A_{(d,p),F} = \|h_p * G_{Fd}\|^2$ is exactly
+the statement that the two agree. This is a strong end-to-end test, since the two computations
+share no code.
+
+\item {\bf It is the only algorithm we have which handles the detrender.} The efficiency of
+\S\ref{sec:avar_sparsetile} rests on the gridding footprint ${\mathcal S}_F$ being a contiguous
+range of a few tree-freq channels. A {\tt Detrender2d} destroys this: the detrended response to a
+one-hot in channel $F$ is spread over every channel of $F$'s spline zone (\S\ref{sec:sd_problem}),
+so the {\tt SparseTile} representation would degrade towards a dense one. Brute force is completely
+insensitive to it. Note also that these off-diagonal responses are individually small but not
+negligible in aggregate: each contributes $O(\lambda_F^2)$ to $A$, but there are $O(N_{\rm freq})$
+of them, so they are a percent-level effect rather than a rounding error.
+
+\end{itemize}
+\par\noindent
+Finally, three checks worth asserting in any implementation. Every entry of $A$ is a sum of
+squares, so $A_{\alpha F} \ge 0$ identically. For an early-triggered tree ($e>0$, and likewise for
+a tree whose subbands do not span the full band), the columns of all input channels outside the
+tree's frequency range must vanish identically. And the arithmetic should be done in float64: the
+one-hot response has amplitude $O(2^{-r/2})$ before squaring, and the detrender's off-diagonal
+contributions are smaller still, so in float32 the aggregate effect noted above would be at risk of
+being lost to roundoff against the diagonal term.
+
 \clearpage
 
 \appendix
