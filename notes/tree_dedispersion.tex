@@ -2714,13 +2714,316 @@ interval -- including the $K=1$ case where the whole band is a single knot inter
 
 \clearpage
 
+\section{The ``variance map'' (in progress)}
+\label{sec:variance_map}
+
+This section is work in progress, and its relation to the rest of the real-time
+pipeline won't be clear yet!
+
+\subsection{Setup}
+\label{ssec:variance_map_setup}
+
+Fix a {\tt DedispersionTree} and use notation from \S\ref{sec:tree_dedispersion_top}:
+\begin{align}
+r &= \mbox{tree rank} \\
+R &= \mbox{pf\_rank} \\
+M &= \mbox{number of multiplets} \\
+P &= \mbox{number of peak-finding profiles} \\
+\gamma &= \mbox{downsampling level (i.e.\ downsampling factor is $2^\gamma$)}
+\end{align}
+Consider a linear operator $L$, whose input is an $(N_{\rm freq}, N_{\rm time})$ array
+and whose output is a $(2^{r-R}, M, P, N_{\rm time}/2^\gamma)$ array defined by the
+following sequence of steps:
+\begin{enumerate}
+\item Apply a {\tt Detrender2d} to the $(N_{\rm freq}, N_{\rm time})$ array
+  in-place with {\bf no mask}. The parameters of the {\tt Detrender2d} are
+  part of the problem specification -- we might ``warm up'' with a simple
+  case (e.g.\ $n=W=0$).
+\item Apply tree dedispersion, including peak-finding convolution for each $0 \le p < P$, 
+  but {\bf not} multiplying by a weight array to normalize to ``sigmas'', or coarse-graining.
+  Thus, $L$ is the unnormalized dedispersion transform with explicit indices for subbands
+  and peak-finding kernel.
+\end{enumerate}
+Assume that each element of the input $(N_{\rm freq}, N_{\rm time})$ array is an independent
+mean-zero Gaussian with known variance $v_F$ which depends on frequency channel
+$0 \le F < N_{\rm freq}$ but not time.
+Then, after dedispersion reaches steady state, the variance of the output array $y_{dmp}$
+depends on $0 \le d < 2^{r-R}$, $0 \le m < M$, $0 \le p < P$, but not time.
+We sometimes ``flatten'' the indices $(d,m,p)$ to a single index $0 \le \alpha < 2^{r-R}MP$.
+Since $L$ is linear, the output variance $y_\alpha$ is linear in the input variance $v_F$:
+\begin{equation}
+y_\alpha = \sum_F A_{\alpha F} v_F  \label{eq:variance_map_def}
+\end{equation}
+where this equation defines the {\bf variance map} $A$, a $(2^{r-R}MP)$-by-$N_{\rm freq}$ matrix.
+
+\clearpage
+
+\appendix
+
+\section{Derivations}
+\label{app:derivations}
+
+\subsection{The non-recursive formulation of tree dedispersion}
+\label{app:nonrecursive_proof}
+
+In this appendix we prove that the recursive definition of tree dedispersion
+(Eqs.\ \ref{eq:DD_composition}, \ref{eq:DD_DS}) is equivalent to the non-recursive definition
+(Eq.\ \ref{eq:DD_nonrecursive}), with lag function $L_r(f,d)$ given by Eq.\ (\ref{eq:L_def}).
+The proof is by induction on $r$, and uses two structural observations.
+
+\par\noindent
+{\bf Observation 1: block structure.}
+By inspection of its defining equations, the dedispersion step $\DDS(k)$ computes output
+coarse-freq block $f$ using only input blocks $2f$ and $2f+1$, via formulas which do not depend
+on $f$ or $r$. Unrolling this over the composition (\ref{eq:DD_DS}): after steps
+$\DDS(0), \ldots, \DDS(k-1)$, coarse-freq block $f$ of the intermediate array depends only on
+tree-freq channels $2^k f \le (\mbox{tree-freq}) < 2^k (f+1)$, and equals rank-$k$ dedispersion
+$\DD(k)$ applied to those $2^k$ channels. In particular, isolating the last step of a
+rank-$(r+1)$ composition,
+\begin{equation}
+\DD(r+1) = \DDS(r) \circ \big( 1 \otimes \DD(r) \big)   \label{eq:app_last_step}
+\end{equation}
+where we view the rank-$(r+1)$ input array as having shape $(2, 2^r, N_{\rm time})$, and
+$(1 \otimes \DD(r))$ applies $\DD(r)$ independently to the lower and upper half-bands
+(same tensor notation as in the splitting identity, Eq.\ \ref{eq:splitting}).
+
+\par\noindent
+{\bf Observation 2: delay bits.}
+By the defining equations of $\DDS(k)$, the output delay is $D = 2\delta + e$, where $\delta$ is
+the input delay and $e \in \{0,1\}$ selects the even/odd output line. Thus each step appends one
+new low bit to the delay index; at the final step, $D_0 = e$ and $D_j = \delta_{j-1}$ for
+$j \ge 1$.
+
+\par\noindent
+{\bf Base case.}
+For $r=0$, the composition (\ref{eq:DD_DS}) is empty, so $\DD(0)$ is the identity; and
+$L_0(0,0) = 0$ is an empty sum, so Eq.\ (\ref{eq:DD_nonrecursive}) reduces to
+${\tt out}[0,t] = {\tt in}[0,t]$. (The reader preferring a nontrivial base case may check $r=1$:
+$L_1(f,d) = \Omega_{-1} (1-f_0) d_0 = (1-f_0) d_0$, so Eq.\ (\ref{eq:DD_nonrecursive}) reads
+${\tt out}[d,t] = 2^{-1/2} \big( {\tt in}[0,t-d] + {\tt in}[1,t] \big)$, which matches $\DDS(0)$
+applied to a $(2,1,N_{\rm time})$ input.)
+
+\par\noindent
+{\bf Inductive step.}
+Assume Eq.\ (\ref{eq:DD_nonrecursive}) holds at rank $r$. By Eq.\ (\ref{eq:app_last_step}) and
+the defining equations of $\DDS(r)$ (with coarse output index $f=0$, input delay $\delta$, and
+output delay $D = 2\delta + e$):
+\begin{equation}
+{\tt out}[2\delta+e, t] = \frac{1}{\sqrt{2}}
+  \Big( {\tt lo}\big[\delta,\, t - \delta - e\big] + {\tt hi}\big[\delta,\, t\big] \Big)
+  \hspace{1.5cm} e \in \{0,1\}
+\end{equation}
+where ${\tt lo}, {\tt hi}$ denote $\DD(r)$ applied to channels $[0, 2^r)$ and $[2^r, 2^{r+1})$
+respectively (the lag $\delta + e$ on the lower block combines the $t-d$ and $t-d-1$ lines).
+Substituting the inductive hypothesis,
+\begin{equation}
+{\tt out}[D, t] = \frac{1}{2^{(r+1)/2}} \left(
+  \sum_{g=0}^{2^r-1} {\tt in}\big[g,\ t - \delta - e - L_r(g,\delta)\big]
+  + \sum_{g=0}^{2^r-1} {\tt in}\big[2^r + g,\ t - L_r(g,\delta)\big] \right)
+\end{equation}
+Comparing with Eq.\ (\ref{eq:DD_nonrecursive}) at rank $r+1$, it suffices to prove two
+identities for the lag function:
+\begin{align}
+L_{r+1}(2^r + g,\ D) &= L_r(g, \delta)  \label{eq:app_lag_upper} \\
+L_{r+1}(g,\ D) &= L_r(g, \delta) + \delta + e  \label{eq:app_lag_lower}
+\end{align}
+where (by Observation 2) the bits of $D$ are $D_0 = e$ and $D_j = \delta_{j-1}$ for $j \ge 1$.
+
+To prove Eq.\ (\ref{eq:app_lag_upper}), write $F = 2^r + g$, so that $F_r = 1$ and $F_i = g_i$
+for $i < r$. In the double sum
+\begin{equation}
+L_{r+1}(F, D) = \sum_{i=0}^{r} \sum_{j=0}^{r} \Omega_{i+j-(r+1)} \, (1 - F_i) \, D_j
+\end{equation}
+the $i=r$ terms vanish, since $(1 - F_r) = 0$. For $i \le r-1$, the $j=0$ term contains
+$\Omega_{i-(r+1)}$ with index $i-(r+1) \le -2$, hence also vanishes. Substituting $j = j'+1$ in
+the remaining terms gives $\Omega_{i+j'-r} (1-g_i) \delta_{j'}$ summed over
+$0 \le i, j' \le r-1$, which is $L_r(g, \delta)$.
+
+To prove Eq.\ (\ref{eq:app_lag_lower}), take $F = g$, so that $F_r = 0$. The $i \le r-1$ terms
+give $L_r(g,\delta)$ exactly as before, and the $i = r$ terms contribute
+\begin{equation}
+(1 - F_r) \sum_{j=0}^{r} \Omega_{j-1} D_j
+ = \Omega_{-1} D_0 + \sum_{j=1}^{r} 2^{j-1} D_j = e + \delta
+\end{equation}
+This completes the induction.
+
+We remark that $\delta + e = \lceil D/2 \rceil$, so Eq.\ (\ref{eq:app_lag_lower}) says that the
+lower half-band lags the upper half-band by half of the total delay, rounded up. The case
+$\Omega_{-1} = 1$ in the definition of $\Omega_n$ is precisely this round-up -- the algebraic
+counterpart of the $(t-d-1)$ in the odd-delay line of $\DDS(k)$.
+
+\subsection{The splitting identity}
+\label{app:splitting_proof}
+
+Next we prove the splitting identity (\ref{eq:splitting}), taking the non-recursive definition
+(\ref{eq:DD_nonrecursive}) as the starting point. The key statement is an ``additivity''
+identity for the lag function: with the index splittings of Eq.\ (\ref{eq:fd_splittings}),
+\begin{equation}
+L_r(f, d) = L_{r'}(f', d') + (2^{r''} - 1 - f'') \, d' + L_{r''}(f'', d'')
+\label{eq:lag_additivity}
+\end{equation}
+
+\par\noindent
+{\bf Reduction to Eq.\ (\ref{eq:lag_additivity}).}
+Expand the right-hand side of the splitting identity (\ref{eq:splitting}) using the
+non-recursive form (\ref{eq:DD_nonrecursive}) at ranks $r'$ and $r''$. Acting on an input array
+${\tt in}[f'', f', t]$, the three stages give:
+\begin{align}
+\big( 1 \otimes \DD(r') \big): \hspace{0.5cm}
+  A[f'', d', t] &= \frac{1}{2^{r'/2}} \sum_{f'} {\tt in}\big[ f'', f',\ t - L_{r'}(f', d') \big] \nn \\
+\LAG: \hspace{0.5cm}
+  B[f'', d', t] &= A\big[ f'', d',\ t - (2^{r''}-1-f'') d' \big] \nn \\
+\big( \DD(r'') \otimes 1 \big): \hspace{0.5cm}
+  C[d'', d', t] &= \frac{1}{2^{r''/2}} \sum_{f''} B\big[ f'', d',\ t - L_{r''}(f'', d'') \big]
+\end{align}
+Since each stage is a sum of lagged copies of its input, the lags add under composition:
+\begin{equation}
+C[d'', d', t] = \frac{1}{2^{r/2}} \sum_{f'', f'}
+  {\tt in}\Big[ f'', f',\ t - L_{r'}(f',d') - (2^{r''}-1-f'')\,d' - L_{r''}(f'',d'') \Big]
+\end{equation}
+using $2^{-r'/2}\, 2^{-r''/2} = 2^{-r/2}$. Comparing with $\DD(r)$ in the form
+(\ref{eq:DD_nonrecursive}), the splitting identity holds if and only if the total lag above
+equals $L_r(f,d)$ for every $(f,d)$ -- i.e.\ if and only if Eq.\ (\ref{eq:lag_additivity})
+holds.
+
+\par\noindent
+{\bf Proof of Eq.\ (\ref{eq:lag_additivity}).}
+Under the splittings (\ref{eq:fd_splittings}), the bits decompose as $f_i = f'_i$ for
+$0 \le i < r'$ and $f_{r'+i''} = f''_{i''}$ for $0 \le i'' < r''$; likewise $d_j = d''_j$ for
+$0 \le j < r''$ and $d_{r''+j'} = d'_{j'}$ for $0 \le j' < r'$. Now split the double sum
+(\ref{eq:L_def}) into four blocks:
+\begin{itemize}
+\item {\bf (fine freq) $\times$ (low DM):} $i < r'$ and $j < r''$. Here
+$i+j-r \le (r'-1) + (r''-1) - r = -2$, so $\Omega_{i+j-r} = 0$ and the block vanishes:
+fine-frequency bits never couple to sub-block DM bits.
+\item {\bf (fine freq) $\times$ (high DM):} $i < r'$ and $j = r''+j'$. Here
+$\Omega_{i+j-r} = \Omega_{i+j'-r'}$, so the block is
+$\sum_{i<r'} \sum_{j'<r'} \Omega_{i+j'-r'} (1-f'_i)\, d'_{j'} = L_{r'}(f', d')$.
+\item {\bf (coarse freq) $\times$ (low DM):} $i = r'+i''$ and $j < r''$. Here
+$\Omega_{i+j-r} = \Omega_{i''+j-r''}$, giving $L_{r''}(f'', d'')$ by the same reindexing.
+\item {\bf (coarse freq) $\times$ (high DM):} $i = r'+i''$ and $j = r''+j'$. Here
+$i+j-r = i''+j' \ge 0$, so $\Omega$ is in its $2^n$ regime and the block {\em factorizes}:
+\begin{equation}
+\left( \sum_{i''=0}^{r''-1} 2^{i''} (1 - f''_{i''}) \right)
+\left( \sum_{j'=0}^{r'-1} 2^{j'} d'_{j'} \right)
+ = (2^{r''} - 1 - f'') \, d'
+\end{equation}
+which is the $\LAG$ term.
+\end{itemize}
+Summing the four blocks proves Eq.\ (\ref{eq:lag_additivity}), and hence the splitting
+identity.
+
+We remark that each of the three cases in the definition of $\Omega_n$ plays a distinct role
+here: the $2^n$ regime produces the factorized cross term (the linear extrapolation of the
+coarse-DM slope $d'$ across the $(2^{r''}-1-f'')$ blocks above block $f''$); the shift
+invariance of $\Omega_{i+j-r}$ under $(i,j,r) \to (i+a,\, j+b,\, r+a+b)$ makes the two diagonal
+blocks reproduce the lower-rank lag functions; and the cutoff $\Omega_n = 0$ for $n \le -2$
+expresses the fact that fine-frequency structure never couples to sub-block DM bits. Compare
+also the time lags $T$ appearing in the subbanded-dedispersion construction
+(\S\ref{sec:subband_search}), which have the same form as the cross term.
+
+\subsection{The upper-half identity}
+\label{app:upper_half_proof}
+
+Finally we prove the upper-half identity (\ref{eq:U_LS}), which is what lets a downsampled
+tree -- where only the upper half of the DM range is kept -- be computed at rank $(r-1)$
+instead of rank $r$. It is a corollary of the splitting identity, so no new computation is
+needed: it is the $d'=1$ slice of Eq.\ (\ref{eq:splitting}) at $r'=1$.
+
+Take $r' = 1$ and $r'' = r-1$ in the splittings (\ref{eq:fd_splittings}). The frequency
+splitting $f = 2^{r'} f'' + f'$ becomes
+\begin{equation}
+f = 2 f'' + f'
+  \hspace{1.5cm} 0 \le f'' < 2^{r-1}, \quad f' \in \{0,1\}
+\end{equation}
+so $f''$ indexes a {\em pair} of adjacent tree-freq channels and $f'$ selects a channel within
+the pair. The DM splitting $d = 2^{r''} d' + d''$ becomes
+\begin{equation}
+d = 2^{r-1} d' + d''
+  \hspace{1.5cm} d' \in \{0,1\}, \quad 0 \le d'' < 2^{r-1}
+\end{equation}
+so $d'$ is simply the {\em top bit} of the DM index. Therefore the upper half of the DM range
+is exactly the $d'=1$ slice:
+\begin{equation}
+d \ge 2^{r-1} \iff d' = 1,
+  \hspace{1cm}\mbox{and then}\hspace{1cm} d = 2^{r-1} + d''
+\end{equation}
+i.e.\ $U$ selects $d'=1$, and the surviving DM index of $U \circ \DD(r)$ is $d''$.
+
+With these values, the splitting identity (\ref{eq:splitting}) reads
+\begin{equation}
+\DD(r) = \big( \DD(r-1) \otimes 1_2 \big)
+   \circ \LAG\big[ (2^{r-1}-1-f'') \, d' \big]
+   \circ \big( 1_{2^{r-1}} \otimes \DD(1) \big)
+\label{eq:uh_splitting}
+\end{equation}
+on arrays of shape $(2^{r-1}, 2, N_{\rm time})$. Now restrict each of the three factors to
+$d'=1$, working right to left:
+
+\begin{itemize}
+
+\item {\bf The $\DD(1)$ factor becomes $\LS$.} The operator $(1 \otimes \DD(1))$ applies
+$\DD(1)$ along the length-2 axis, taking $(f'',f',t) \to (f'',d',t)$. By the definition
+(\ref{eq:DD1}) of $\DD(1)$, its $d'=1$ output is
+\begin{equation}
+{\tt out}[f'',1,t] = \frac{1}{\sqrt 2} \big( {\tt in}[f'',0,t-1] + {\tt in}[f'',1,t] \big)
+\end{equation}
+Since ${\tt in}[f'',0,\cdot]$ and ${\tt in}[f'',1,\cdot]$ are the tree-freq channels $2f''$ and
+$2f''+1$, this is precisely the definition (\ref{eq:LS_def}) of $\LS$. (The $d'=0$ output is
+the {\em un}lagged sum of the pair, which is what the discarded lower DM-half is built from.)
+
+\item {\bf The $\LAG$ factor becomes $\LAG[2^{r-1}-1-f'']$.} Substituting $d'=1$ into the lag
+$(2^{r-1}-1-f'')\,d'$ leaves $(2^{r-1}-1-f'')$, a per-channel lag on the length-$2^{r-1}$ axis.
+This is the middle factor of (\ref{eq:U_LS}), with $f''$ playing the role of $f$.
+
+\item {\bf The $\DD(r-1)$ factor is unchanged.} The operator $(\DD(r-1) \otimes 1_2)$ dedisperses
+along the $f''$ axis with the $d'$ axis a spectator, so its restriction to the $d'=1$ slice is
+just $\DD(r-1)$, taking $f'' \to d''$.
+
+\end{itemize}
+
+\par\noindent
+Composing the three restricted factors gives Eq.\ (\ref{eq:U_LS}). As a check on the
+normalization, $\LS$ contributes $2^{-1/2}$ and $\DD(r-1)$ contributes $2^{-(r-1)/2}$, for a
+total of $2^{-r/2}$, matching $\DD(r)$.
+
+\par\noindent
+{\bf The identity at the level of lag functions.} It is worth recording what
+(\ref{eq:U_LS}) says about $L_r$, since this is the form in which it is easiest to check.
+Writing $f = 2g+b$ with $b \in \{0,1\}$, the additivity identity (\ref{eq:lag_additivity})
+at $r'=1$, $d'=1$, $d''=\tilde d$ gives
+\begin{equation}
+L_r\big(2g+b,\; 2^{r-1}+\tilde d\big)
+  = L_{r-1}(g, \tilde d) + \big(2^{r-1}-1-g\big) + (1-b)
+\label{eq:uh_lag}
+\end{equation}
+where we used $L_1(b,1) = \Omega_{-1}(1-b) = 1-b$. Read right to left, the three terms are
+exactly the three stages of (\ref{eq:U_LS}): the $\LS$ lag of one sample applied to the even
+channel of each pair and none to the odd channel, the $\LAG$ term, and the rank-$(r-1)$ tree.
+Note that $(1-b)$ carries no $\tilde d$-dependence -- the lowest frequency bit does not couple
+to any DM bit below the top one, by the cutoff $\Omega_n = 0$ for $n \le -2$. That is what makes
+the construction possible: within a pair of adjacent tree-freqs, {\em every} DM in the upper half
+sees the same one-sample offset, so the pair can be collapsed by $\LS$ before the DM index is
+resolved.
+
+\clearpage
+
 \section{Analytic variance}
 \label{sec:analytic_variance}
 
 The second step of peak-finding (\S\ref{sec:peak_finding}) normalizes its output to ``sigmas'',
 by applying weights which are the inverse square roots of the output variances.
-The purpose of this section is to explain how these variances are computed analytically, given
+In this appendix, we describe some code that 
+computes the variance of the dedispersion outputs, given 
 the per-channel variances of the dedisperser input array.
+
+This is closely related to the variance map $A$ defined in \S\ref{sec:variance_map}, 
+Eq.\ (\ref{eq:variance_map_def}).
+Here, we are assuming that the input variances $v_f$ are known, and we compute the
+output variances $y = A v$, but not the full matrix $A$.
+Another major difference is that in \S\ref{ssec:variance_map_setup}, the underlying
+linear operator includes a {\tt Detrender2d} before tree dedispersion, whereas here we
+consider ``bare'' tree dedispersion.
 
 To keep the presentation manageable, we make two simplifying assumptions throughout: we consider
 only the ``base tree'' (no time downsampling and no early triggers, \S\ref{sec:downsampled_early}),
@@ -3016,258 +3319,22 @@ output channels which have reached steady state.
 
 \clearpage
 
-\appendix
-
-\section{Derivations}
-\label{app:derivations}
-
-\subsection{The non-recursive formulation of tree dedispersion}
-\label{app:nonrecursive_proof}
-
-In this appendix we prove that the recursive definition of tree dedispersion
-(Eqs.\ \ref{eq:DD_composition}, \ref{eq:DD_DS}) is equivalent to the non-recursive definition
-(Eq.\ \ref{eq:DD_nonrecursive}), with lag function $L_r(f,d)$ given by Eq.\ (\ref{eq:L_def}).
-The proof is by induction on $r$, and uses two structural observations.
-
-\par\noindent
-{\bf Observation 1: block structure.}
-By inspection of its defining equations, the dedispersion step $\DDS(k)$ computes output
-coarse-freq block $f$ using only input blocks $2f$ and $2f+1$, via formulas which do not depend
-on $f$ or $r$. Unrolling this over the composition (\ref{eq:DD_DS}): after steps
-$\DDS(0), \ldots, \DDS(k-1)$, coarse-freq block $f$ of the intermediate array depends only on
-tree-freq channels $2^k f \le (\mbox{tree-freq}) < 2^k (f+1)$, and equals rank-$k$ dedispersion
-$\DD(k)$ applied to those $2^k$ channels. In particular, isolating the last step of a
-rank-$(r+1)$ composition,
-\begin{equation}
-\DD(r+1) = \DDS(r) \circ \big( 1 \otimes \DD(r) \big)   \label{eq:app_last_step}
-\end{equation}
-where we view the rank-$(r+1)$ input array as having shape $(2, 2^r, N_{\rm time})$, and
-$(1 \otimes \DD(r))$ applies $\DD(r)$ independently to the lower and upper half-bands
-(same tensor notation as in the splitting identity, Eq.\ \ref{eq:splitting}).
-
-\par\noindent
-{\bf Observation 2: delay bits.}
-By the defining equations of $\DDS(k)$, the output delay is $D = 2\delta + e$, where $\delta$ is
-the input delay and $e \in \{0,1\}$ selects the even/odd output line. Thus each step appends one
-new low bit to the delay index; at the final step, $D_0 = e$ and $D_j = \delta_{j-1}$ for
-$j \ge 1$.
-
-\par\noindent
-{\bf Base case.}
-For $r=0$, the composition (\ref{eq:DD_DS}) is empty, so $\DD(0)$ is the identity; and
-$L_0(0,0) = 0$ is an empty sum, so Eq.\ (\ref{eq:DD_nonrecursive}) reduces to
-${\tt out}[0,t] = {\tt in}[0,t]$. (The reader preferring a nontrivial base case may check $r=1$:
-$L_1(f,d) = \Omega_{-1} (1-f_0) d_0 = (1-f_0) d_0$, so Eq.\ (\ref{eq:DD_nonrecursive}) reads
-${\tt out}[d,t] = 2^{-1/2} \big( {\tt in}[0,t-d] + {\tt in}[1,t] \big)$, which matches $\DDS(0)$
-applied to a $(2,1,N_{\rm time})$ input.)
-
-\par\noindent
-{\bf Inductive step.}
-Assume Eq.\ (\ref{eq:DD_nonrecursive}) holds at rank $r$. By Eq.\ (\ref{eq:app_last_step}) and
-the defining equations of $\DDS(r)$ (with coarse output index $f=0$, input delay $\delta$, and
-output delay $D = 2\delta + e$):
-\begin{equation}
-{\tt out}[2\delta+e, t] = \frac{1}{\sqrt{2}}
-  \Big( {\tt lo}\big[\delta,\, t - \delta - e\big] + {\tt hi}\big[\delta,\, t\big] \Big)
-  \hspace{1.5cm} e \in \{0,1\}
-\end{equation}
-where ${\tt lo}, {\tt hi}$ denote $\DD(r)$ applied to channels $[0, 2^r)$ and $[2^r, 2^{r+1})$
-respectively (the lag $\delta + e$ on the lower block combines the $t-d$ and $t-d-1$ lines).
-Substituting the inductive hypothesis,
-\begin{equation}
-{\tt out}[D, t] = \frac{1}{2^{(r+1)/2}} \left(
-  \sum_{g=0}^{2^r-1} {\tt in}\big[g,\ t - \delta - e - L_r(g,\delta)\big]
-  + \sum_{g=0}^{2^r-1} {\tt in}\big[2^r + g,\ t - L_r(g,\delta)\big] \right)
-\end{equation}
-Comparing with Eq.\ (\ref{eq:DD_nonrecursive}) at rank $r+1$, it suffices to prove two
-identities for the lag function:
-\begin{align}
-L_{r+1}(2^r + g,\ D) &= L_r(g, \delta)  \label{eq:app_lag_upper} \\
-L_{r+1}(g,\ D) &= L_r(g, \delta) + \delta + e  \label{eq:app_lag_lower}
-\end{align}
-where (by Observation 2) the bits of $D$ are $D_0 = e$ and $D_j = \delta_{j-1}$ for $j \ge 1$.
-
-To prove Eq.\ (\ref{eq:app_lag_upper}), write $F = 2^r + g$, so that $F_r = 1$ and $F_i = g_i$
-for $i < r$. In the double sum
-\begin{equation}
-L_{r+1}(F, D) = \sum_{i=0}^{r} \sum_{j=0}^{r} \Omega_{i+j-(r+1)} \, (1 - F_i) \, D_j
-\end{equation}
-the $i=r$ terms vanish, since $(1 - F_r) = 0$. For $i \le r-1$, the $j=0$ term contains
-$\Omega_{i-(r+1)}$ with index $i-(r+1) \le -2$, hence also vanishes. Substituting $j = j'+1$ in
-the remaining terms gives $\Omega_{i+j'-r} (1-g_i) \delta_{j'}$ summed over
-$0 \le i, j' \le r-1$, which is $L_r(g, \delta)$.
-
-To prove Eq.\ (\ref{eq:app_lag_lower}), take $F = g$, so that $F_r = 0$. The $i \le r-1$ terms
-give $L_r(g,\delta)$ exactly as before, and the $i = r$ terms contribute
-\begin{equation}
-(1 - F_r) \sum_{j=0}^{r} \Omega_{j-1} D_j
- = \Omega_{-1} D_0 + \sum_{j=1}^{r} 2^{j-1} D_j = e + \delta
-\end{equation}
-This completes the induction.
-
-We remark that $\delta + e = \lceil D/2 \rceil$, so Eq.\ (\ref{eq:app_lag_lower}) says that the
-lower half-band lags the upper half-band by half of the total delay, rounded up. The case
-$\Omega_{-1} = 1$ in the definition of $\Omega_n$ is precisely this round-up -- the algebraic
-counterpart of the $(t-d-1)$ in the odd-delay line of $\DDS(k)$.
-
-\subsection{The splitting identity}
-\label{app:splitting_proof}
-
-Next we prove the splitting identity (\ref{eq:splitting}), taking the non-recursive definition
-(\ref{eq:DD_nonrecursive}) as the starting point. The key statement is an ``additivity''
-identity for the lag function: with the index splittings of Eq.\ (\ref{eq:fd_splittings}),
-\begin{equation}
-L_r(f, d) = L_{r'}(f', d') + (2^{r''} - 1 - f'') \, d' + L_{r''}(f'', d'')
-\label{eq:lag_additivity}
-\end{equation}
-
-\par\noindent
-{\bf Reduction to Eq.\ (\ref{eq:lag_additivity}).}
-Expand the right-hand side of the splitting identity (\ref{eq:splitting}) using the
-non-recursive form (\ref{eq:DD_nonrecursive}) at ranks $r'$ and $r''$. Acting on an input array
-${\tt in}[f'', f', t]$, the three stages give:
-\begin{align}
-\big( 1 \otimes \DD(r') \big): \hspace{0.5cm}
-  A[f'', d', t] &= \frac{1}{2^{r'/2}} \sum_{f'} {\tt in}\big[ f'', f',\ t - L_{r'}(f', d') \big] \nn \\
-\LAG: \hspace{0.5cm}
-  B[f'', d', t] &= A\big[ f'', d',\ t - (2^{r''}-1-f'') d' \big] \nn \\
-\big( \DD(r'') \otimes 1 \big): \hspace{0.5cm}
-  C[d'', d', t] &= \frac{1}{2^{r''/2}} \sum_{f''} B\big[ f'', d',\ t - L_{r''}(f'', d'') \big]
-\end{align}
-Since each stage is a sum of lagged copies of its input, the lags add under composition:
-\begin{equation}
-C[d'', d', t] = \frac{1}{2^{r/2}} \sum_{f'', f'}
-  {\tt in}\Big[ f'', f',\ t - L_{r'}(f',d') - (2^{r''}-1-f'')\,d' - L_{r''}(f'',d'') \Big]
-\end{equation}
-using $2^{-r'/2}\, 2^{-r''/2} = 2^{-r/2}$. Comparing with $\DD(r)$ in the form
-(\ref{eq:DD_nonrecursive}), the splitting identity holds if and only if the total lag above
-equals $L_r(f,d)$ for every $(f,d)$ -- i.e.\ if and only if Eq.\ (\ref{eq:lag_additivity})
-holds.
-
-\par\noindent
-{\bf Proof of Eq.\ (\ref{eq:lag_additivity}).}
-Under the splittings (\ref{eq:fd_splittings}), the bits decompose as $f_i = f'_i$ for
-$0 \le i < r'$ and $f_{r'+i''} = f''_{i''}$ for $0 \le i'' < r''$; likewise $d_j = d''_j$ for
-$0 \le j < r''$ and $d_{r''+j'} = d'_{j'}$ for $0 \le j' < r'$. Now split the double sum
-(\ref{eq:L_def}) into four blocks:
-\begin{itemize}
-\item {\bf (fine freq) $\times$ (low DM):} $i < r'$ and $j < r''$. Here
-$i+j-r \le (r'-1) + (r''-1) - r = -2$, so $\Omega_{i+j-r} = 0$ and the block vanishes:
-fine-frequency bits never couple to sub-block DM bits.
-\item {\bf (fine freq) $\times$ (high DM):} $i < r'$ and $j = r''+j'$. Here
-$\Omega_{i+j-r} = \Omega_{i+j'-r'}$, so the block is
-$\sum_{i<r'} \sum_{j'<r'} \Omega_{i+j'-r'} (1-f'_i)\, d'_{j'} = L_{r'}(f', d')$.
-\item {\bf (coarse freq) $\times$ (low DM):} $i = r'+i''$ and $j < r''$. Here
-$\Omega_{i+j-r} = \Omega_{i''+j-r''}$, giving $L_{r''}(f'', d'')$ by the same reindexing.
-\item {\bf (coarse freq) $\times$ (high DM):} $i = r'+i''$ and $j = r''+j'$. Here
-$i+j-r = i''+j' \ge 0$, so $\Omega$ is in its $2^n$ regime and the block {\em factorizes}:
-\begin{equation}
-\left( \sum_{i''=0}^{r''-1} 2^{i''} (1 - f''_{i''}) \right)
-\left( \sum_{j'=0}^{r'-1} 2^{j'} d'_{j'} \right)
- = (2^{r''} - 1 - f'') \, d'
-\end{equation}
-which is the $\LAG$ term.
-\end{itemize}
-Summing the four blocks proves Eq.\ (\ref{eq:lag_additivity}), and hence the splitting
-identity.
-
-We remark that each of the three cases in the definition of $\Omega_n$ plays a distinct role
-here: the $2^n$ regime produces the factorized cross term (the linear extrapolation of the
-coarse-DM slope $d'$ across the $(2^{r''}-1-f'')$ blocks above block $f''$); the shift
-invariance of $\Omega_{i+j-r}$ under $(i,j,r) \to (i+a,\, j+b,\, r+a+b)$ makes the two diagonal
-blocks reproduce the lower-rank lag functions; and the cutoff $\Omega_n = 0$ for $n \le -2$
-expresses the fact that fine-frequency structure never couples to sub-block DM bits. Compare
-also the time lags $T$ appearing in the subbanded-dedispersion construction
-(\S\ref{sec:subband_search}), which have the same form as the cross term.
-
-\subsection{The upper-half identity}
-\label{app:upper_half_proof}
-
-Finally we prove the upper-half identity (\ref{eq:U_LS}), which is what lets a downsampled
-tree -- where only the upper half of the DM range is kept -- be computed at rank $(r-1)$
-instead of rank $r$. It is a corollary of the splitting identity, so no new computation is
-needed: it is the $d'=1$ slice of Eq.\ (\ref{eq:splitting}) at $r'=1$.
-
-Take $r' = 1$ and $r'' = r-1$ in the splittings (\ref{eq:fd_splittings}). The frequency
-splitting $f = 2^{r'} f'' + f'$ becomes
-\begin{equation}
-f = 2 f'' + f'
-  \hspace{1.5cm} 0 \le f'' < 2^{r-1}, \quad f' \in \{0,1\}
-\end{equation}
-so $f''$ indexes a {\em pair} of adjacent tree-freq channels and $f'$ selects a channel within
-the pair. The DM splitting $d = 2^{r''} d' + d''$ becomes
-\begin{equation}
-d = 2^{r-1} d' + d''
-  \hspace{1.5cm} d' \in \{0,1\}, \quad 0 \le d'' < 2^{r-1}
-\end{equation}
-so $d'$ is simply the {\em top bit} of the DM index. Therefore the upper half of the DM range
-is exactly the $d'=1$ slice:
-\begin{equation}
-d \ge 2^{r-1} \iff d' = 1,
-  \hspace{1cm}\mbox{and then}\hspace{1cm} d = 2^{r-1} + d''
-\end{equation}
-i.e.\ $U$ selects $d'=1$, and the surviving DM index of $U \circ \DD(r)$ is $d''$.
-
-With these values, the splitting identity (\ref{eq:splitting}) reads
-\begin{equation}
-\DD(r) = \big( \DD(r-1) \otimes 1_2 \big)
-   \circ \LAG\big[ (2^{r-1}-1-f'') \, d' \big]
-   \circ \big( 1_{2^{r-1}} \otimes \DD(1) \big)
-\label{eq:uh_splitting}
-\end{equation}
-on arrays of shape $(2^{r-1}, 2, N_{\rm time})$. Now restrict each of the three factors to
-$d'=1$, working right to left:
-
-\begin{itemize}
-
-\item {\bf The $\DD(1)$ factor becomes $\LS$.} The operator $(1 \otimes \DD(1))$ applies
-$\DD(1)$ along the length-2 axis, taking $(f'',f',t) \to (f'',d',t)$. By the definition
-(\ref{eq:DD1}) of $\DD(1)$, its $d'=1$ output is
-\begin{equation}
-{\tt out}[f'',1,t] = \frac{1}{\sqrt 2} \big( {\tt in}[f'',0,t-1] + {\tt in}[f'',1,t] \big)
-\end{equation}
-Since ${\tt in}[f'',0,\cdot]$ and ${\tt in}[f'',1,\cdot]$ are the tree-freq channels $2f''$ and
-$2f''+1$, this is precisely the definition (\ref{eq:LS_def}) of $\LS$. (The $d'=0$ output is
-the {\em un}lagged sum of the pair, which is what the discarded lower DM-half is built from.)
-
-\item {\bf The $\LAG$ factor becomes $\LAG[2^{r-1}-1-f'']$.} Substituting $d'=1$ into the lag
-$(2^{r-1}-1-f'')\,d'$ leaves $(2^{r-1}-1-f'')$, a per-channel lag on the length-$2^{r-1}$ axis.
-This is the middle factor of (\ref{eq:U_LS}), with $f''$ playing the role of $f$.
-
-\item {\bf The $\DD(r-1)$ factor is unchanged.} The operator $(\DD(r-1) \otimes 1_2)$ dedisperses
-along the $f''$ axis with the $d'$ axis a spectator, so its restriction to the $d'=1$ slice is
-just $\DD(r-1)$, taking $f'' \to d''$.
-
-\end{itemize}
-
-\par\noindent
-Composing the three restricted factors gives Eq.\ (\ref{eq:U_LS}). As a check on the
-normalization, $\LS$ contributes $2^{-1/2}$ and $\DD(r-1)$ contributes $2^{-(r-1)/2}$, for a
-total of $2^{-r/2}$, matching $\DD(r)$.
-
-\par\noindent
-{\bf The identity at the level of lag functions.} It is worth recording what
-(\ref{eq:U_LS}) says about $L_r$, since this is the form in which it is easiest to check.
-Writing $f = 2g+b$ with $b \in \{0,1\}$, the additivity identity (\ref{eq:lag_additivity})
-at $r'=1$, $d'=1$, $d''=\tilde d$ gives
-\begin{equation}
-L_r\big(2g+b,\; 2^{r-1}+\tilde d\big)
-  = L_{r-1}(g, \tilde d) + \big(2^{r-1}-1-g\big) + (1-b)
-\label{eq:uh_lag}
-\end{equation}
-where we used $L_1(b,1) = \Omega_{-1}(1-b) = 1-b$. Read right to left, the three terms are
-exactly the three stages of (\ref{eq:U_LS}): the $\LS$ lag of one sample applied to the even
-channel of each pair and none to the odd channel, the $\LAG$ term, and the rank-$(r-1)$ tree.
-Note that $(1-b)$ carries no $\tilde d$-dependence -- the lowest frequency bit does not couple
-to any DM bit below the top one, by the cutoff $\Omega_n = 0$ for $n \le -2$. That is what makes
-the construction possible: within a pair of adjacent tree-freqs, {\em every} DM in the upper half
-sees the same one-sample offset, so the pair can be collapsed by $\LS$ before the DM index is
-resolved.
-
-\clearpage
-
 \section{SVD decomposition of variance map (work in progress)}
 \label{sec:variance_svd}
+
+This section describes work in progress to compute the full variance map $A$, not just
+a matrix-vector product $Av$.
+A key finding is that $A$ has low rank.
+Since $A$ is a huge matrix at CHIME/CHORD scale, the low-rank representation lets us
+store $A$ in a manageable form.
+
+I'd like to make a few changes to this section.
+It's currently based on an approximation ({\tt class PfAvarApproximation}), whereas I'd
+now prefer to compute $A$ exactly ({\tt class PfAvarExact}).
+There are also some minor notational differences with the main text, such as ``transposing''
+the definition of $A$.
+Finally, the implementation is rough, and is in \verb|misc/throwaway*| scripts,
+and I'd prefer a polished implementation in \verb|pirate_frb/slow_avar/PfVariance.py|.
 
 The peak-finding stage (\S\ref{sec:peak_finding}) normalizes its outputs to ``sigmas'' by applying
 weights $\propto (\mbox{variance})^{-1/2}$, where the variance depends on the tree, the frequency
