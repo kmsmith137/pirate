@@ -1021,6 +1021,14 @@ DedispersionConfig DedispersionConfig::make_mini_chord(Dtype dtype)
     //   time_samples_per_chunk: 2048
     //   beams_per_batch: 2
     //   time_sample_ms: 1.0
+    //
+    // The beam counts are halved for float32, so that the MegaRingbuf's GPU zone is ~27 GiB
+    // for either dtype (its size scales as beams * sizeof(dtype)), and hence fits on a 46 GiB
+    // L40S. Without this, the float32 config would need ~54 GiB, and callers which actually
+    // allocate the ring buffer (e.g. CoalescedDdKernel2::time_one()) would fail with an
+    // out-of-memory error.
+
+    bool fp32 = (dtype == Dtype::native<float> ());
 
     DedispersionConfig ret;
     ret.zone_freq_edges = { 300, 350, 450, 600, 800, 1500 };
@@ -1029,8 +1037,8 @@ DedispersionConfig DedispersionConfig::make_mini_chord(Dtype dtype)
     ret.time_sample_ms = 1.0;
     ret.time_samples_per_chunk = 2048;
     ret.dtype = dtype;
-    ret.beams_per_gpu = 4;
-    ret.beams_per_batch = 2;
+    ret.beams_per_gpu = fp32 ? 2 : 4;
+    ret.beams_per_batch = fp32 ? 1 : 2;
     ret.num_active_batches = 2;
     ret.frequency_subband_counts = { 0, 0, 0, 0, 1 };
 
