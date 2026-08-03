@@ -5,6 +5,7 @@ from ..pirate_pybind11 import (
     GpuLaggedDownsamplingKernel,
     GpuPeakFindingKernel,
     GpuRingbufCopyKernel,
+    GpuSbDedispersionKernel,
     GpuTreeGriddingKernel,
     PfOutputMicrokernel,
     PfWeightReaderMicrokernel,

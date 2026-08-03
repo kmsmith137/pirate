@@ -164,86 +164,21 @@ class CoalescedDdKernel2:
         self.dd._load_input_data(k)              # behaves differently, depending on self.input_is_ringbuf
         self.dd._apply_input_residual_lags(k)    # no-ops if (self.apply_input_residual_lags) is False
 
-        # The 'return_early=True' arg means that the caller is responsible for emitting the following code.
-        # (Assumes that self.dd.rank1 == self.pf_rank, which is assert-ed at the beginning of the kernel.)
-        #
-        #   for i in range(self.pf_rank):
-        #       self.dd._dedispersion_pass(k,i)
-
-        self.dd._two_stage_dedispersion_core(k, return_early=True)
-
         k.emit()
-        k.emit("// Here is the point in the code where we start emitting peak-finding logic.")
-        k.emit("// The peak-finding logic is interleaved with the later stages of dedispersion.")
+        k.emit("// The rest of this loop body is the second half of the dedispersion transform,")
+        k.emit("// with the peak-finding logic interleaved into it.")
         k.emit("// FIXME I'm a bit worried that this way of doing it will lead to register pressure")
         k.emit("// I made a note to revisit this later.")
         k.emit()
 
-        sc = self.frequency_subbands.subband_counts
-        mcurr = 0
-        
-        k.emit()
-        k.emit(f'// Create {sc[0]} peak-finding output(s) at pf_level 0. I decided to treat this as a')
-        k.emit(f'// special case, because the bands are "unstaggered" (see comments in FrequencySubbands.cu')
-        k.emit()
+        # Dedisperser.emit_subband_extraction() emits the entire second stage, and yields one
+        # (register name, multiplet index) pair per frequency subband multiplet. Note that it
+        # must be fully consumed -- see its docstring, and the 'sbx_complete' assert below.
 
-        for pfs in range(sc[0]):
-            self.frequency_subbands.check_m(mcurr, pfs, pfs+1, 0)
-            self.pf.process_pf_input(k, f'dd{pfs}', mcurr)
-            mcurr += 1
+        for rname, m in self.dd.emit_subband_extraction(k, self.frequency_subbands):
+            self.pf.process_pf_input(k, rname, m)
 
-        for pf_level in range(1, self.pf_rank+1):
-            k.emit()
-            k.emit(f'// Create {sc[pf_level]} "staggered" peak-finding output(s) at pf_level {pf_level}.')
-            k.emit(f'// Step 1: generate odd values of "pfs", and save to registers.')
-            k.emit()
-
-            for pfs in range(1, sc[pf_level], 2):
-                for pfd2 in range(2**(pf_level-1)):
-                    # Generate (pfs,2*pfd2) and (pfs,2*pfd2+1)
-                    isrc = pfs * 2**(pf_level-1) + utils.bit_reverse(pfd2, pf_level-1)
-                    src0 = f'dd{isrc}'
-                    src1 = f'dd{isrc + 2**(pf_level-1)}'
-                    dst0 = f'pfodd_l{pf_level}_s{pfs}_d{2*pfd2}'
-                    dst1 = f'pfodd_l{pf_level}_s{pfs}_d{2*pfd2+1}'
-                    lag = pfd2
-
-                    k.emit(f'// Sum with lag=({lag},{lag+1}): src=({src0},{src1}), dst=({dst0,dst1})')
-                    tmp0, tmp1 = self.dd._advance2(k, src0, lag)   # behaves differently for float32, float16
-
-                    k.emit(f'{self.dt32} {dst0} = rsqrt2 * ({tmp1} + {src1});')
-                    k.emit(f'{self.dt32} {dst1} = rsqrt2 * ({tmp0} + {src1});')
-
-
-            k.emit()
-            k.emit(f'// Create {sc[pf_level]} "staggered" peak-finding output(s) at pf_level {pf_level}.')
-            k.emit(f'// Step 2: do one dedispersion stage.')
-            k.emit()
-
-            self.dd._dedispersion_pass(k, pf_level-1)
-            
-            k.emit()
-            k.emit(f'// Create {sc[pf_level]} "staggered" peak-finding output(s) at pf_level {pf_level}.')
-            k.emit(f'// Step 3: generate even values of "pfs", with peak-finding logic emitted incrementally')
-            k.emit()
-
-            for pfs in range(sc[pf_level]):
-                for pfd in range(2**pf_level):
-                    # The peak-finding output is already held in a register, but the logic for generating
-                    # the register name depends on whether 'pfs' is even or odd. If 'pfs' is odd, then it
-                    # was generated in "step 1" above. If 'pfs' is even, then it was generated in step 2.
-
-                    if pfs % 2:
-                        name = f'pfodd_l{pf_level}_s{pfs}_d{pfd}'
-                    else:
-                        isrc = (pfs//2) * 2**(pf_level) + utils.bit_reverse(pfd, pf_level)
-                        name = f'dd{isrc}'
-
-                    self.frequency_subbands.check_m(mcurr, pfs * 2**(pf_level-1), (pfs+2) * 2**(pf_level-1), pfd)
-                    self.pf.process_pf_input(k, name, mcurr)
-                    mcurr += 1
-
-        assert mcurr == self.frequency_subbands.M
+        assert self.dd.sbx_complete
 
         # No call to self.dd._save_output_data() in coalesced kernel.
         # Instead, call self.pf.process_pf_outputs()

@@ -19,3 +19,4 @@ from .PeakFinder import \
     PfOutput
 
 from .CoalescedDdKernel2 import CoalescedDdKernel2
+from .SbDedisperser import SbDedisperser

@@ -55,6 +55,7 @@ def parse_test(subparsers):
     parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.test_random()')
     parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.test_random()')
     parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.test_random()')
+    parser.add_argument('--sbdd', action='store_true', help='Runs GpuSbDedispersionKernel.test_random()')
     parser.add_argument('--casm', action='store_true', help='Runs some casm tests')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
@@ -89,7 +90,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -156,6 +157,10 @@ def test(args):
         if run_all_tests or args.cdd2:
             for _ in rrange(kernels.CoalescedDdKernel2):
                 kernels.CoalescedDdKernel2.test_random()
+
+        if run_all_tests or args.sbdd:
+            for _ in rrange(kernels.GpuSbDedispersionKernel):
+                kernels.GpuSbDedispersionKernel.test_random()
         
         if run_all_tests or args.casm:
             atomic_print("\n")
@@ -374,9 +379,10 @@ def parse_show_kernels(subparsers):
     parser.add_argument('--gddk', action='store_true', help='Show GpuDedispersionKernel registry')
     parser.add_argument('--gpfk', action='store_true', help='Show GpuPeakFindingKernel registry')
     parser.add_argument('--cdd2', action='store_true', help='Show CoalescedDdKernel2 registry')
+    parser.add_argument('--sbdd', action='store_true', help='Show GpuSbDedispersionKernel registry')
     
 def show_kernels(args):
-    show_flags = [ 'pfom', 'pfwr', 'gddk', 'gpfk', 'cdd2' ]
+    show_flags = [ 'pfom', 'pfwr', 'gddk', 'gpfk', 'cdd2', 'sbdd' ]
     show_all = not any(getattr(args, x) for x in show_flags)
     first = True
 
@@ -387,6 +393,14 @@ def show_kernels(args):
         n = kernels.CoalescedDdKernel2.registry_size()
         atomic_print(f"CoalescedDdKernel2 registry ({n} entries):")
         kernels.CoalescedDdKernel2.show_registry()
+
+    if show_all or args.sbdd:
+        if not first:
+            atomic_print("\n")
+        first = False
+        n = kernels.GpuSbDedispersionKernel.registry_size()
+        atomic_print(f"GpuSbDedispersionKernel registry ({n} entries):")
+        kernels.GpuSbDedispersionKernel.show_registry()
 
     if show_all or args.pfom:
         if not first:

@@ -19,6 +19,7 @@
 #include "../include/pirate/ReferenceLagbuf.hpp"
 #include "../include/pirate/ReferenceTree.hpp"
 #include "../include/pirate/RingbufCopyKernel.hpp"
+#include "../include/pirate/SbDedispersionKernel.hpp"
 #include "../include/pirate/TreeGriddingKernel.hpp"
 
 using namespace std;
@@ -36,6 +37,12 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("time_selected", &CoalescedDdKernel2::time_selected, py::call_guard<py::gil_scoped_release>())
           .def_static("registry_size", &CoalescedDdKernel2::registry_size)
           .def_static("show_registry", &CoalescedDdKernel2::show_registry)
+    ;
+
+    py::class_<GpuSbDedispersionKernel>(m, "GpuSbDedispersionKernel")
+          .def_static("test_random", &GpuSbDedispersionKernel::test_random, py::call_guard<py::gil_scoped_release>())
+          .def_static("registry_size", &GpuSbDedispersionKernel::registry_size)
+          .def_static("show_registry", &GpuSbDedispersionKernel::show_registry)
     ;
 
     py::class_<GpuDedispersionKernel>(m, "GpuDedispersionKernel")
