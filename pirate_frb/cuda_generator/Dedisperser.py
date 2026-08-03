@@ -131,10 +131,11 @@ class Dedisperser:
         if self.input_is_ringbuf:
             k.emit('// Load data from input ringbuf into registers.')
             k.emit('// Reminder: grb_quads is indexed by (tseg, dm_amb, f)')
-            k.emit('// FIXME: terrible parallelization in this step (all threads do same computation!)')
+
+            gso = self._emit_grb_quads(k, 0)
 
             for i in range(self.ndd):
-                ix = self._grb_ix(k, i, 0)
+                ix = self._grb_ix(k, gso, i)
                 k.emit(f'{self.dt32} dd{i} = grb_base[{ix}];')
 
         else:
@@ -153,10 +154,11 @@ class Dedisperser:
         if self.output_is_ringbuf:
             k.emit('\n//Store data from registers to output ringbuf')
             k.emit('// Reminder: grb_quads is indexed by (tseg, f, dmbr)')
-            k.emit('// FIXME: terrible parallelization in this step (all threads do same computation!)')
+
+            gso = self._emit_grb_quads(k, dshift)
 
             for i in range(self.ndd):
-                ix = self._grb_ix(k, i, dshift)
+                ix = self._grb_ix(k, gso, i)
                 k.emit(f'grb_base[{ix}] = dd{i};')
 
         else:
@@ -167,21 +169,59 @@ class Dedisperser:
         k.emit()
 
 
-    def _grb_ix(self, k, i, dshift):
-        """Helper, called by _load_input_data() and _save_output_data()."""
-        
-        q, global_segment_offset, frame_offset_within_zone, frames_in_zone, segments_per_frame, ix = k.get_tmp_rname(6)
-                
-        k.emit(f'uint4 {q} = grb_quads[{i} << {dshift}];')
-        k.emit(f'uint {global_segment_offset} = {q}.x;  // global_segment_offset, in segments not bytes')
+    def _emit_grb_quads(self, k, dshift):
+        """Emit the per-register-index part of the ring buffer address computation.
+
+        Called once per time segment by _load_input_data() / _save_output_data(), before their
+        loop over the register index 0 <= i < ndd.
+
+        The work is distributed across the warp: lane 'i' processes the quadruple for register
+        index i, so the whole computation -- including the modulo, which is expensive -- is
+        done once per warp rather than once per register. (Previously every lane looped over i
+        and redundantly repeated the identical computation ndd times.) Lanes i >= ndd repeat
+        some other lane's work harmlessly; masking the index with (ndd-1) keeps their loads
+        in-bounds, which matters at the end of the quadruples array.
+
+        Returns the name of a register holding 'global_segment_offset' for register index
+        (laneId % ndd). The per-i values are broadcast back to the warp by _grb_ix() below.
+        """
+
+        # Assumed below: one lane per register index. (ndd = 2^rank1 <= 16 in the two-stage
+        # case, and 2^rank <= 4 in the single-stage case, so this is not a real constraint.)
+        assert self.ndd <= 32
+
+        q, gso, frame_offset_within_zone, frames_in_zone, segments_per_frame = k.get_tmp_rname(5)
+
+        lane = f'(threadIdx.x & {self.ndd-1})' if (self.ndd < 32) else 'threadIdx.x'
+        qix = f'{lane} << {dshift}' if (dshift > 0) else lane
+
+        k.emit(f'// Ring buffer address computation, one register index per lane (see Dedisperser._emit_grb_quads)')
+        k.emit(f'uint4 {q} = grb_quads[{qix}];   // lane i reads the quadruple for register index i')
+        k.emit(f'uint {gso} = {q}.x;  // global_segment_offset, in segments not bytes')
         k.emit(f'uint {frame_offset_within_zone} = {q}.y;   // frame_offset_within_zone: index of (time chunk, beam) pair, relative to current pair')
         k.emit(f'uint {frames_in_zone} = {q}.z;     // frames_in_zone: number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)')
         k.emit(f'uint {segments_per_frame} = {q}.w;    // segments_per_frame: number of segments per (time chunk, beam)')
         k.emit(f'{frame_offset_within_zone} = (grb_frame0 + {frame_offset_within_zone}) % {frames_in_zone};   // updated frame_offset_within_zone')
-        k.emit(f'{global_segment_offset} += ({frame_offset_within_zone} * {segments_per_frame});      // updated global_segment_offset')
-        k.emit(f'long {ix} = (long({global_segment_offset}) << 5) + threadIdx.x;  // index relative to rb_base')
+        k.emit(f'{gso} += ({frame_offset_within_zone} * {segments_per_frame});      // updated global_segment_offset')
+
+        return gso
+
+
+    def _grb_ix(self, k, gso, i):
+        """Helper, called by _load_input_data() and _save_output_data().
+
+        Broadcasts lane i's 'global_segment_offset' (computed by _emit_grb_quads() above) to
+        the whole warp, and forms the per-lane address. Note that the shuffle's source lane is
+        a compile-time constant.
+        """
+
+        g, ix = k.get_tmp_rname(2)
+
+        k.emit(f'uint {g} = __shfl_sync(0xffffffff, {gso}, {i});   // global_segment_offset for register index {i}')
+        k.emit(f'long {ix} = (long({g}) << 5) + threadIdx.x;  // index relative to rb_base')
         return ix
-    
+
+
     
     def _dedispersion_core(self, k):
         if self.two_stage:
