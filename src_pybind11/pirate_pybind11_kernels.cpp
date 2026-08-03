@@ -19,7 +19,6 @@
 #include "../include/pirate/ReferenceLagbuf.hpp"
 #include "../include/pirate/ReferenceTree.hpp"
 #include "../include/pirate/RingbufCopyKernel.hpp"
-#include "../include/pirate/SbDedispersionKernel.hpp"
 #include "../include/pirate/TreeGriddingKernel.hpp"
 
 using namespace std;

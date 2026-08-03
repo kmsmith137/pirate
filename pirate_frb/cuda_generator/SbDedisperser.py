@@ -14,7 +14,7 @@ class SbDedisperser:
         """Generator for the "subbanded dedispersion" cuda kernel.
 
         This emits the cuda kernels registered by the C++ class GpuSbDedispersionKernel
-        (see include/pirate/SbDedispersionKernel.hpp for what the kernel computes, and
+        (see include/pirate/DedispersionKernel.hpp for what the kernel computes, and
         for the constraints on its parameters).
 
         The kernel is the second dedispersion stage, writing the shape (ndm_out, M, ntime)
@@ -66,7 +66,7 @@ class SbDedisperser:
 
         # ---------------  Prologue  ---------------
 
-        k.emit('#include "../../include/pirate/SbDedispersionKernel.hpp"')
+        k.emit('#include "../../include/pirate/DedispersionKernel.hpp"')
         k.emit('#include "../../include/pirate/FrequencySubbands.hpp"')
         k.emit('#include "../../include/pirate/inlines.hpp"')
         k.emit()
