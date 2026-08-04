@@ -4,6 +4,7 @@ from ..pirate_pybind11 import (
     GpuDedispersionKernel,
     GpuLaggedDownsamplingKernel,
     GpuPeakFindingKernel,
+    GpuPfSquare,
     GpuRingbufCopyKernel,
     GpuSbDedispersionKernel,
     GpuTreeGriddingKernel,

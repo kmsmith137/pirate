@@ -370,6 +370,10 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("show_registry", &GpuPeakFindingKernel::show_registry)
     ;
 
+    py::class_<GpuPfSquare>(m, "GpuPfSquare")
+          .def_static("test_random", &GpuPfSquare::test_random, py::call_guard<py::gil_scoped_release>())
+    ;
+
     py::class_<GpuRingbufCopyKernel>(m, "GpuRingbufCopyKernel")
           .def_static("test_random", &GpuRingbufCopyKernel::test_random, py::call_guard<py::gil_scoped_release>())
     ;

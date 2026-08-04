@@ -48,6 +48,7 @@ def parse_test(subparsers):
     parser.add_argument('--rt', action='store_true', help='Runs ReferenceTree and ReferenceLagbuf tests')
     parser.add_argument('--pfwr', action='store_true', help='Runs PfWeightReaderMicrokernel.test_random()')
     parser.add_argument('--pfom', action='store_true', help='Runs PfOutputMicrokernel.test_random()')
+    parser.add_argument('--pfsq', action='store_true', help='Runs GpuPfSquare.test_random()')
     parser.add_argument('--gldk', action='store_true', help='Runs GpuLaggedDownsamplingKernel.test_random()')
     parser.add_argument('--gddk', action='store_true', help='Runs GpuDedispersionKernel.test_random()')
     parser.add_argument('--gpfk', action='store_true', help='Runs GpuPeakFindingKernel.test_random()')
@@ -90,7 +91,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -128,6 +129,9 @@ def test(args):
         if run_all_tests or args.pfom:
             for _ in rrange(kernels.PfOutputMicrokernel):
                 kernels.PfOutputMicrokernel.test_random()
+        
+        if run_all_tests or args.pfsq:
+            kernels.GpuPfSquare.test_random()
         
         if run_all_tests or args.gldk:
             kernels.GpuLaggedDownsamplingKernel.test_random()

@@ -1402,4 +1402,422 @@ void PfOutputMicrokernel::test_random()
 }
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// GpuPfSquare
+
+
+// Returns b at time (u0 + lane - k), given that 'cur' holds b at (u0 + lane), and 'prev'
+// holds b at (u0 - 32 + lane), on every lane of the warp. Requires 0 < k <= 32.
+//
+// Note that __shfl_sync() reduces its srcLane argument mod 32, so the two shuffles read the
+// same lane; all we do is select which of the two 32-sample blocks the value came from.
+
+__device__ __forceinline__ float _pfsq_shift(float cur, float prev, int k, int lane)
+{
+    float a = __shfl_sync(0xffffffffU, cur, lane - k);
+    float b = __shfl_sync(0xffffffffU, prev, lane - k);
+    return (lane >= k) ? a : b;
+}
+
+
+// One warp per row; the 32 lanes of a warp hold 32 consecutive time samples, so every
+// boxcar value maintained in the inner loop has register assignment
+//
+//   thread:  t4 t3 t2 t1 t0  <->  u4 u3 u2 u1 u0    (u = time index within a 32-sample block)
+//   warp:    (blockIdx.x, threadIdx.y)  <->  row
+//
+// Why a warp per row, rather than a thread per row: the profiles need boxcar values at time
+// offsets up to 2^Lambda = max_kernel_width, and with one thread per row those would have to
+// live in a shift register indexed by the loop counter -- which spills. Spreading time
+// across the warp turns every such offset into a shuffle of the current or previous block,
+// so the only carried state is one register per boxcar level. The maximum offset is exactly
+// max_kernel_width <= 32, i.e. at most one 32-sample block back, which is why the single
+// 'prev' register per level suffices.
+//
+// Template parameter W = log2(max_kernel_width), so 0 <= W <= log2(constants::max_pf_width).
+
+// Warps per threadblock. Small enough that the register budget (~55/thread at
+// max_kernel_width=32, dominated by the P accumulators) is never the occupancy limit.
+static constexpr int pfsq_warps_per_block = 4;
+
+template<int W>
+__global__ void __launch_bounds__(32 * pfsq_warps_per_block, 1)
+gpu_pf_square_kernel(
+    double *acc,        // shape (nrows, P), accumulated into
+    const float *in,    // shape (nrows, nt_in)
+    float *pstate,      // shape (nrows, tpad), already sliced to this batch
+    long nrows,
+    int nt_in,
+    int tpad)
+{
+    constexpr int P = 3*W + 1;             // number of peak-finding profiles
+    constexpr int L = (W > 0) ? W : 1;     // number of peak-finding levels
+    constexpr int NB = L + 1;              // number of boxcars maintained (b_0 .. b_L)
+
+    const int lane = threadIdx.x;
+    long row = (long(blockIdx.x) * long(blockDim.y)) + threadIdx.y;
+
+    // Note that 'row' is warp-uniform, so the whole warp returns together, and the
+    // __shfl_sync() calls below always have their full mask converged.
+
+    if (row >= nrows)
+        return;
+
+    // Apply per-warp offsets.
+    //   acc:     before shape (nrows,P) contiguous;      after: length P, contiguous
+    //   in:      before shape (nrows,nt_in) contiguous;  after: length nt_in, contiguous
+    //   pstate:  before shape (nrows,tpad) contiguous;   after: length tpad, contiguous
+
+    acc += row * P;
+    in += row * long(nt_in);
+    pstate += row * long(tpad);
+
+    float accum[P];
+
+    #pragma unroll
+    for (int p = 0; p < P; p++)
+        accum[p] = 0.0f;
+
+    // prev[j] = b_j at time (u0 - 32 + lane), i.e. the previous loop iteration's value.
+    // Zeroing it is harmless: the first 'tpad' samples are warm-up (see below).
+
+    float prev[NB];
+
+    #pragma unroll
+    for (int j = 0; j < NB; j++)
+        prev[j] = 0.0f;
+
+    // Pass 0 replays the 'tpad' samples preceding the chunk. The boxcar cascade is wrong
+    // until it has seen 2*max_kernel_width samples, so pass 0 accumulates nothing; it exists
+    // only to bring the cascade into a correct state at the start of the chunk. Pass 1 is
+    // the chunk itself.
+
+    for (int pass = 0; pass < 2; pass++) {
+        const float *src = pass ? in : pstate;
+        int nsamp = pass ? nt_in : tpad;
+
+        for (int u0 = 0; u0 < nsamp; u0 += 32) {
+            float cur[NB];
+            float sh[NB];
+
+            cur[0] = src[u0 + lane];
+
+            // Boxcar cascade b_{j+1}[u] = b_j[u] + b_j[u - 2^j], where b_j is the sum of the
+            // 2^j input samples ending at u. (A running sliding-window update would be
+            // cheaper, but its float32 error accumulates along the stream, whereas this
+            // recursion is a fresh balanced sum at every step.)
+
+            #pragma unroll
+            for (int j = 0; j < L; j++) {
+                sh[j] = _pfsq_shift(cur[j], prev[j], 1 << j, lane);
+                cur[j+1] = cur[j] + sh[j];
+            }
+
+            sh[L] = _pfsq_shift(cur[L], prev[L], 1 << L, lane);
+
+            if (pass) {
+                // Profiles at level 'lam' (S = 2^lam), from the "Peak-finding kernels"
+                // section of notes/tree_dedispersion.tex:
+                //
+                //   h_{lam,0} = [1]^S                   -> y = b_lam[u]
+                //   h_{lam,1} = [1]^2S                  -> y = b_{lam+1}[u]
+                //   h_{lam,2} = [1/2]^S [1]^S [1/2]^S   -> y = (b_{lam+1}[u] + b_{lam+1}[u-S])/2
+                //   h_{lam,3} = [1/2]^S [1]^2S [1/2]^S  -> y = (b_{lam+1}[u] + b_{lam+1}[u-S]
+                //                                                + b_{lam+1}[u-2S])/2
+                //
+                // The last two identities are what make this cheap. Written in terms of
+                // b_lam they need four taps at spacing S; written in terms of b_{lam+1} they
+                // need two, and one of those (the u-2S tap) is the cascade shift sh[lam+1],
+                // already computed above.
+                //
+                // Profile index is p = 3*lam + q. Level 0 contributes q=0..3 and higher
+                // levels contribute q=1..3, which the two conditionals below encode: q=0
+                // exists only at lam==0, and (3*lam+3 < P) is false only in the degenerate
+                // case max_kernel_width==1, where P==1 and p=0 is the only profile.
+
+                #pragma unroll
+                for (int lam = 0; lam < L; lam++) {
+                    if (lam == 0) {
+                        float y = cur[0];
+                        accum[0] = fmaf(y, y, accum[0]);
+                    }
+
+                    if (3*lam + 3 < P) {
+                        float s1 = _pfsq_shift(cur[lam+1], prev[lam+1], 1 << lam, lane);
+                        float y1 = cur[lam+1];
+                        float y2 = 0.5f * (y1 + s1);
+                        float y3 = 0.5f * (y1 + s1 + sh[lam+1]);
+
+                        accum[3*lam+1] = fmaf(y1, y1, accum[3*lam+1]);
+                        accum[3*lam+2] = fmaf(y2, y2, accum[3*lam+2]);
+                        accum[3*lam+3] = fmaf(y3, y3, accum[3*lam+3]);
+                    }
+                }
+            }
+
+            #pragma unroll
+            for (int j = 0; j < NB; j++)
+                prev[j] = cur[j];
+        }
+    }
+
+    // Warp-reduce each accumulator, and fold the result into the float64 output.
+    //
+    // This is the kernel's only float64 arithmetic, and it runs once per row per chunk
+    // rather than once per sample. That is deliberate: float64 runs at 1/64 of float32 on
+    // the consumer GPUs we target, so P float64 adds in the inner loop would cost ~1000
+    // float32-equivalent flops per sample and make the kernel compute bound by a factor of
+    // a few, where it is otherwise comfortably memory-bandwidth bound.
+    //
+    // No float32 compensation is needed below the float64 level: each lane's partial holds
+    // only (nt_in/32) terms, all non-negative (they are squares, so there is no
+    // cancellation), and the tree reduction adds only log2(32) further levels.
+    //
+    // The store below is single-lane and therefore not cache-friendly, unlike every other
+    // global access in this kernel. That is deliberate: it moves P*8 bytes once per row per
+    // chunk, against nt_in*4 bytes of input read, so at nt_in=2048, P=16 it is under 2% of
+    // the traffic -- not worth a transpose to coalesce.
+
+    #pragma unroll
+    for (int p = 0; p < P; p++) {
+        float s = accum[p];
+
+        #pragma unroll
+        for (int d = 16; d > 0; d >>= 1)
+            s += __shfl_down_sync(0xffffffffU, s, d);
+
+        if (lane == 0)
+            acc[p] += double(s);
+    }
+
+    // Save the last 'tpad' input samples, for the next chunk's warm-up pass.
+
+    for (int i = lane; i < tpad; i += 32)
+        pstate[i] = in[nt_in - tpad + i];
+}
+
+
+GpuPfSquare::GpuPfSquare(long max_kernel_width_, long total_beams_, long beams_per_batch_,
+                         long ndm_, long nt_in_) :
+    max_kernel_width(max_kernel_width_),
+    total_beams(total_beams_),
+    beams_per_batch(beams_per_batch_),
+    ndm(ndm_),
+    nt_in(nt_in_)
+{
+    xassert(max_kernel_width > 0);
+    xassert(is_power_of_two(max_kernel_width));
+    xassert_le(max_kernel_width, long(constants::max_pf_width));
+    xassert(total_beams > 0);
+    xassert(beams_per_batch > 0);
+    xassert_divisible(total_beams, beams_per_batch);
+    xassert(ndm > 0);
+    xassert(nt_in > 0);
+
+    // The kernel processes 32 time samples per warp-wide iteration, and copies the chunk's
+    // last 'tpad' samples into the persistent state.
+    xassert_divisible(nt_in, 32);
+
+    this->nprofiles = 3 * integer_log2(max_kernel_width) + 1;
+    this->nbatches = xdiv(total_beams, beams_per_batch);
+    this->nrows = beams_per_batch * ndm;
+    this->tpad = std::max(2 * max_kernel_width, 32L);
+
+    xassert_ge(nt_in, tpad);
+
+    // Global memory traffic per launch: the input, plus the warm-up re-read of 'tpad'
+    // samples and the read+write of the persistent state, plus the float64 accumulator
+    // read-modify-write.
+
+    long nbytes = nrows * ((nt_in + 3*tpad) * 4L + nprofiles * 16L);
+    resource_tracker.add_kernel("pf_square", nbytes);
+    resource_tracker.add_gmem_footprint("pf_square_pstate", total_beams * ndm * tpad * 4L, true);
+}
+
+
+void GpuPfSquare::allocate(BumpAllocator &allocator)
+{
+    if (is_allocated)
+        throw runtime_error("double call to GpuPfSquare::allocate()");
+    if (!(allocator.aflags & af_gpu))
+        throw runtime_error("GpuPfSquare::allocate(): allocator.aflags must contain af_gpu");
+    if (!(allocator.aflags & af_zero))
+        throw runtime_error("GpuPfSquare::allocate(): allocator.aflags must contain af_zero");
+
+    long nbytes_before = allocator.get_nbytes_allocated();
+
+    // Zero-initialized, which is the correct state for ichunk=0: it says that all samples
+    // preceding the stream are zero, matching the convention in the tex notes.
+    this->persistent_state = allocator.allocate_array<float> ({total_beams, ndm, tpad});
+
+    long nbytes_allocated = allocator.get_nbytes_allocated() - nbytes_before;
+    xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint());
+
+    this->is_allocated = true;
+}
+
+
+void GpuPfSquare::launch(Array<double> &acc, const Array<float> &in, long ibatch, cudaStream_t stream)
+{
+    xassert(this->is_allocated);
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert_eq(ibatch, expected_ibatch);
+    expected_ibatch = (ibatch + 1) % nbatches;
+
+    xassert_shape_eq(acc, ({ beams_per_batch, ndm, nprofiles }));
+    xassert_shape_eq(in, ({ beams_per_batch, ndm, nt_in }));
+
+    // The kernel derives all of its strides from (nt_in, tpad, nprofiles).
+    xassert(acc.is_fully_contiguous());
+    xassert(in.is_fully_contiguous());
+    xassert(acc.on_gpu());
+    xassert(in.on_gpu());
+
+    // Slice the persistent state along its beam axis. Note that the beam axis is outermost,
+    // so the slice is still fully contiguous, and reshapes to (nrows, tpad).
+    long b0 = ibatch * beams_per_batch;
+    long b1 = b0 + beams_per_batch;
+    Array<float> pstate = this->persistent_state.slice(0, b0, b1);
+
+    dim3 grid_dims = { uint((nrows + pfsq_warps_per_block - 1) / pfsq_warps_per_block), 1, 1 };
+    dim3 block_dims = { 32, pfsq_warps_per_block, 1 };
+
+    // 'W' is a compile-time parameter, so we dispatch on log2(max_kernel_width). There are
+    // only (1 + log2(constants::max_pf_width)) possible values, so a switch is enough -- no
+    // KernelRegistry is needed, unlike the peak-finding kernels above.
+
+    void (*kernel)(double *, const float *, float *, long, int, int) = nullptr;
+
+    switch (integer_log2(max_kernel_width)) {
+        case 0: kernel = gpu_pf_square_kernel<0>; break;
+        case 1: kernel = gpu_pf_square_kernel<1>; break;
+        case 2: kernel = gpu_pf_square_kernel<2>; break;
+        case 3: kernel = gpu_pf_square_kernel<3>; break;
+        case 4: kernel = gpu_pf_square_kernel<4>; break;
+        case 5: kernel = gpu_pf_square_kernel<5>; break;
+        default: throw runtime_error("GpuPfSquare::launch(): unsupported max_kernel_width");
+    }
+
+    static_assert(constants::max_pf_width == 32, "GpuPfSquare: switch above needs updating");
+
+    kernel <<< grid_dims, block_dims, 0, stream >>>
+        (acc.data, in.data, pstate.data, nrows, int(nt_in), int(tpad));
+
+    CUDA_PEEK("GpuPfSquare::launch");
+}
+
+
+// Static member function: runs one randomized test iteration.
+//
+// The reference is ReferencePeakFindingKernel's 'out_var' output, which is the per-chunk
+// MEAN square of the weighted peak-finder output w*y, resolved by (multiplet, profile).
+// Configured with weights = 1, Dcore = 1 and nt_out = nt_in, it computes
+//
+//   out_var[b,d,m,p] = (1/nt_in) sum_t (h_p * y)[t]^2
+//
+// which is exactly this kernel's output over nt_in. Setting Dcore=1 is the essential part:
+// at its production value the reference evaluates h_p only on a grid of spacing
+// min(Dcore, 2^lambda), which is not the quantity we want (see PeakFindingKernel.hpp).
+//
+// The two computations share no code, and the reference is a plain triple loop over
+// explicitly materialized boxcar arrays, so this is a real test of the shuffle-based
+// cascade rather than a restatement of it.
+
+void GpuPfSquare::test_random()
+{
+    // The reference kernel requires ndm_out and (ndm_out/ndm_wt) to be powers of two, so
+    // 'ndm' is drawn as a power of two and we take ndm_wt = 1. We take nt_wt = nt_in rather
+    // than 1, which lets nt_in be any multiple of 32 (the reference requires the ratio
+    // nt_out/nt_wt to be a power of two).
+
+    long Wmax = pow2(rand_int(0, integer_log2(constants::max_pf_width) + 1));
+    long ndm = pow2(rand_int(0, 7));
+    long nchunks = rand_int(1, 5);
+
+    auto v = ksgpu::random_integers_with_bounded_product(3, std::max(2000/ndm, 8L));
+    long beams_per_batch = v[0];
+    long nbatches = v[1];
+    long total_beams = beams_per_batch * nbatches;
+
+    // The kernel requires nt_in to be a multiple of 32, and at least tpad = max(2*Wmax,32).
+    // Both bounds are multiples of 32, so the max below is too.
+    long nt_in = std::max(32 * v[2], std::max(2*Wmax, 32L));
+
+    GpuPfSquare gpu_kernel(Wmax, total_beams, beams_per_batch, ndm, nt_in);
+    long P = gpu_kernel.nprofiles;
+
+    PeakFindingKernelParams ref_params;
+    ref_params.subband_counts = {1};   // pf_rank=0, N=M=1
+    ref_params.dtype = Dtype::native<float> ();
+    ref_params.max_kernel_width = Wmax;
+    ref_params.beams_per_batch = beams_per_batch;
+    ref_params.total_beams = total_beams;
+    ref_params.ndm_out = ndm;
+    ref_params.ndm_wt = 1;
+    ref_params.nt_out = nt_in;   // Dout = 1, i.e. no time coarse-graining
+    ref_params.nt_in = nt_in;
+    ref_params.nt_wt = nt_in;
+    ref_params.Dcore = 1;        // evaluate h_p at every time sample
+    ref_params.validate();
+
+    ReferencePeakFindingKernel ref_kernel(ref_params);
+    xassert_eq(ref_kernel.nprofiles, P);
+
+    cout << "\nGpuPfSquare::test_random()\n"
+         << "    max_kernel_width = " << Wmax << "\n"
+         << "    nprofiles = " << P << "\n"
+         << "    tpad = " << gpu_kernel.tpad << "\n"
+         << "    ndm = " << ndm << "\n"
+         << "    beams_per_batch = " << beams_per_batch << "\n"
+         << "    total_beams = " << total_beams << "\n"
+         << "    nt_in = " << nt_in << "\n"
+         << "    nchunks = " << nchunks << endl;
+
+    BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
+    gpu_kernel.allocate(allocator);
+
+    // One accumulator per beam, so that batches don't overwrite each other. Both kernels
+    // accumulate over all chunks; the reference's out_var is a per-chunk MEAN, so we undo
+    // its 1/nt_in here.
+    Array<double> acc_gpu({total_beams, ndm, P}, af_gpu | af_zero);
+    Array<double> acc_ref({total_beams, ndm, P}, af_uhost | af_zero);
+
+    // Weights = 1, so the reference's (w*y) is the raw y.
+    Array<float> wt({beams_per_batch, 1L, nt_in, P, 1L}, af_uhost | af_zero);
+    for (long i = 0; i < wt.size; i++)
+        wt.data[i] = 1.0f;
+
+    Array<float> out_max({beams_per_batch, ndm, nt_in}, af_uhost | af_zero);
+    Array<uint> out_argmax({beams_per_batch, ndm, nt_in}, af_uhost | af_zero);
+    Array<double> out_var({beams_per_batch, ndm, 1L, P}, af_uhost | af_zero);
+
+    for (long ichunk = 0; ichunk < nchunks; ichunk++) {
+        for (long ibatch = 0; ibatch < nbatches; ibatch++) {
+            long b0 = ibatch * beams_per_batch;
+
+            Array<float> in_cpu({beams_per_batch, ndm, nt_in}, af_uhost | af_random);
+            Array<float> in_gpu = in_cpu.to_gpu();
+            Array<double> acc_slice = acc_gpu.slice(0, b0, b0 + beams_per_batch);
+
+            gpu_kernel.launch(acc_slice, in_gpu, ibatch, nullptr);   // null stream
+
+            Array<float> in_ref = in_cpu.reshape({beams_per_batch, ndm, 1L, nt_in});
+            ref_kernel.apply(out_max, out_argmax, out_var, in_ref, wt, ibatch);
+
+            for (long b = 0; b < beams_per_batch; b++)
+                for (long d = 0; d < ndm; d++)
+                    for (long p = 0; p < P; p++)
+                        acc_ref.at({b0+b, d, p}) += out_var.at({b,d,0,p}) * nt_in;
+        }
+    }
+
+    // Tolerance: both kernels sum the same non-negative terms, but in different orders and
+    // in float32 arithmetic, so the error is set by float32 roundoff over the number of
+    // accumulated terms -- not by the float64 accumulators.
+    double eps = 1.0e-4;
+    assert_arrays_equal(acc_ref, acc_gpu, "acc_ref", "acc_gpu", {"b","d","p"}, eps, eps);
+}
+
+
 }  // namespace pirate

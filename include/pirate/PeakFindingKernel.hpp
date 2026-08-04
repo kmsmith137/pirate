@@ -568,6 +568,93 @@ extern std::ostream &operator<<(std::ostream &os, const PfOutputMicrokernel::Reg
 extern std::ostream &operator<<(std::ostream &os, const PfOutputMicrokernel::RegistryValue &v);
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// GpuPfSquare: convolves with the peak-finding kernels h_p and accumulates sum_t (h_p * y)^2.
+//
+// This is for variance calculations (see the "variance map" section of
+// notes/tree_dedispersion.tex), not for the real-time search. Two differences from the
+// peak-finders above are essential rather than incidental:
+//
+//   - No weights, no max, no argmax, no coarse-graining. The output is the raw sum of
+//     squares, which is what a variance map needs.
+//
+//   - The convolution is evaluated at EVERY time sample. The peak-finders evaluate h_p only
+//     on a grid of spacing min(Dcore, 2^lambda), which is harmless when you want the
+//     variance of one output element (all elements have the same variance), but wrong when
+//     you want a sum over the whole time axis. So there is no Dcore here.
+//
+// The (dm, multiplet, beam) structure of the caller's data is irrelevant to this kernel:
+// every axis except time is a spectator. So the input is a 2-d array of 'nrows'
+// independent time series, and the caller flattens whatever it has into that. In
+// particular a GpuSbDedispersionKernel 'sb_out' array, shape (beams_per_batch, Dpf, M,
+// ntime), is fully contiguous and reshapes to (beams_per_batch * Dpf * M, ntime) for free.
+//
+// Runs incrementally: call launch() once per (time chunk, beam batch). The
+// (2 * max_kernel_width) input samples preceding each chunk are carried in
+// 'persistent_state', so that profiles overlapping a chunk boundary are exact.
+//
+// The 'acc' array is float64 and is ACCUMULATED INTO (+=), never overwritten -- the caller
+// zeroes it to start a new accumulation. Float64 matters: a sweep accumulates ~10^5 terms
+// per element, which float32 could not hold. The kernel does not pay for it, since the
+// float64 add happens once per row per chunk (see the accumulation comment in the .cu).
+
+struct GpuPfSquare
+{
+    // 'ndm' is the number of independent time series per beam (any positive value; it need
+    // not be a power of two). 'nt_in' must be a multiple of 32.
+    GpuPfSquare(long max_kernel_width, long total_beams, long beams_per_batch,
+                long ndm, long nt_in);
+
+    // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized).
+    void allocate(BumpAllocator &allocator);
+
+    // launch(): asynchronously launch kernel, and return without synchronizing stream.
+    //
+    // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam
+    // indices. Since 'persistent_state' carries the inter-chunk history, calls must be
+    // ordered ibatch = 0, 1, ..., nbatches-1, 0, 1, ... (checked, and the same convention
+    // as ReferencePeakFindingKernel::apply()).
+
+    void launch(ksgpu::Array<double> &acc,   // shape (beams_per_batch, ndm, nprofiles)
+                const ksgpu::Array<float> &in,  // shape (beams_per_batch, ndm, nt_in)
+                long ibatch,                 // 0 <= ibatch < nbatches
+                cudaStream_t stream);        // NULL stream is allowed, but is not the default
+
+    // Static member function: runs one randomized test iteration.
+    // Called by 'python -m pirate_frb test --pfsq'.
+    static void test_random();
+
+
+    // ------------------------  Members  ------------------------
+
+    long max_kernel_width = 0;   // power of two, <= constants::max_pf_width
+    long total_beams = 0;
+    long beams_per_batch = 0;
+    long ndm = 0;
+    long nt_in = 0;
+
+    long nprofiles = 0;   // = (3 * log2(max_kernel_width) + 1)
+    long nbatches = 0;    // = (total_beams / beams_per_batch)
+    long nrows = 0;       // = (beams_per_batch * ndm), the number of time series per launch
+
+    // Number of input samples carried between chunks. The longest peak-finding kernel
+    // h_{Lambda-1,3} spans (2 * max_kernel_width) samples, which is the real requirement;
+    // we round up to 32 so that the kernel's warm-up loop is a whole number of warp-wide
+    // iterations. (Extra history is harmless -- it just lengthens the warm-up.)
+    long tpad = 0;        // = max(2 * max_kernel_width, 32)
+
+    // Shape (total_beams, ndm, tpad): the 'tpad' input samples preceding the next chunk.
+    // Allocated and zeroed by allocate(); sliced along the beam axis in launch().
+    ksgpu::Array<float> persistent_state;
+    bool is_allocated = false;
+    long expected_ibatch = 0;   // checked in launch()
+
+    // All rates are "per call to launch()".
+    ResourceTracker resource_tracker;
+};
+
+
 }  // namespace pirate
 
 #endif // _PIRATE_PEAK_FINDING_KERNEL_HPP
