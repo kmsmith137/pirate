@@ -634,6 +634,7 @@ void register_core_bindings(pybind11::module &m)
         .def_readonly("width_ms", &SimulatedFrameFactory::Event::width_ms)
         .def_readonly("subband_freq_lo_MHz", &SimulatedFrameFactory::Event::subband_freq_lo_MHz)
         .def_readonly("subband_freq_hi_MHz", &SimulatedFrameFactory::Event::subband_freq_hi_MHz)
+        .def_readonly("tree_index", &SimulatedFrameFactory::Event::tree_index)
     ;
 
     // SimulatedFrameFactory: hands a consumer a stream of pre-randomized

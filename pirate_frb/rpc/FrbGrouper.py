@@ -427,6 +427,7 @@ class FrbGrouperInjections:
 
             beam_ids = self._beam_id_lut[ibeam_h]
             widths_ms = widths_samp * self._time_sample_ms
+            tree_index = itree_h
 
             # Per-event absolute timestamp = chunk start + chunk-relative offset (decoded
             # arrival time in input samples * fpga-counts-per-sample), rounded to the
@@ -443,6 +444,7 @@ class FrbGrouperInjections:
             beam_ids = np.zeros(0, dtype=np.int64)
             fpga_timestamps = np.zeros(0, dtype=np.int64)
             dms = freqs_lo = freqs_hi = widths_ms = np.zeros(0, dtype=np.float64)
+            tree_index = np.zeros(0, dtype=np.int32)
 
         # FrbSifterEvents casts dtypes and validates shapes. rfi_prob is the one remaining
         # placeholder (the grouper doesn't measure it).
@@ -457,6 +459,7 @@ class FrbGrouperInjections:
             subband_freqs_hi_MHz = freqs_hi,
             chunk_fpga_start = chunk_fpga_start,
             chunk_fpga_end = chunk_fpga_end,
+            tree_index = tree_index,
         )
 
 

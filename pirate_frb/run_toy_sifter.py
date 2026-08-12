@@ -84,7 +84,8 @@ class ToyFrbSifterServicer(frb_sifter_pb2_grpc.FrbSifterServicer):
             lines.append(f"    beam_id={ev.beam_id}, dm={ev.dm:.4g}, "
                          f"fpga_timestamp={ev.fpga_timestamp}, width={ev.width_ms:.4g} ms, "
                          f"subband=[{ev.subband_freq_lo_MHz:.1f},{ev.subband_freq_hi_MHz:.1f}] MHz, "
-                         f"snr={ev.snr:.4g}")
+                         f"snr={ev.snr:.4g}, "
+                         f"tree_index={ev.tree_index}")
         atomic_print("\n".join(lines))
         return frb_sifter_pb2.FrbEventsReply(ok=True, message="")
 
