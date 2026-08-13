@@ -415,6 +415,7 @@ PYFILES = \
   pirate_frb/slow_avar/VarianceMapApproximation.py \
   pirate_frb/slow_avar/brute_force.py \
   pirate_frb/slow_avar/brute_force_gpu.py \
+  pirate_frb/slow_avar/variance_map_io.py \
   pirate_frb/slow_avar/check_approximation.py \
   pirate_frb/slow_avar/check_mc.py \
   pirate_frb/fast_avar/__init__.py \

@@ -2,9 +2,13 @@
 #define _PIRATE_DETRENDER_2D_HPP
 
 #include <tuple>
+#include <string>
 #include <vector>
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
+
+namespace YAML { class Emitter; }      // #include <yaml-cpp/yaml.h>
+namespace pirate { struct YamlFile; }  // #include <pirate/YamlFile.hpp>
 
 namespace pirate {
 #if 0
@@ -93,6 +97,17 @@ struct Detrender2d
         // or gives 2W+1 < n+1, if nfreq/M/eta/eps are non-positive, or if the knot vector
         // violates any of the rules above.
         void validate() const;
+
+        // Yaml I/O. The yaml keys are spelled out rather than matching the member names
+        // (M -> num_beams, n_phi -> spline_degree_freq, and so on); the mapping lives in
+        // to_yaml()/from_yaml() and nowhere else. 'eta' and 'eps' are optional on read and
+        // default to the values above; every other key is required. from_yaml() calls
+        // validate(), so an invalid file fails at read rather than at construction.
+        void to_yaml(YAML::Emitter &emitter, bool verbose = false) const;
+        std::string to_yaml_string(bool verbose = false) const;
+
+        static Params from_yaml(const std::string &filename);
+        static Params from_yaml(const YamlFile &f);
     };
 
     explicit Detrender2d(const Params &params);

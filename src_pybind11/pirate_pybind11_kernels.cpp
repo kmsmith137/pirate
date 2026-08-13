@@ -299,6 +299,23 @@ void register_kernel_bindings(pybind11::module &m)
           .def("validate", &Detrender2d::Params::validate,
                "Raises RuntimeError if any parameter is invalid; see the Detrender2d\n"
                "constructor, which calls this.")
+          .def_static("from_yaml",
+               static_cast<Detrender2d::Params (*)(const std::string &)> (&Detrender2d::Params::from_yaml),
+               py::arg("filename"),
+               "Load Detrender2dParams from a YAML file.\n\n"
+               "The yaml keys are spelled out rather than matching the member names:\n"
+               "num_beams (M), spline_degree_freq (n_phi), poly_degree_time (n),\n"
+               "time_halfwidth (W), time_samples_per_chunk (T),\n"
+               "regularization_strength (eta), conditioning_threshold (eps), plus nfreq\n"
+               "and knots. The last two tuning parameters are optional and default to\n"
+               "1.0e-3 and 3.0e-5; every other key is required.\n\n"
+               "Raises:\n"
+               "    RuntimeError: on a missing/unknown key, or if the parameters are\n"
+               "        invalid (validate() is called before returning).")
+          .def("to_yaml_string", &Detrender2d::Params::to_yaml_string,
+               py::arg("verbose") = false,
+               "Convert to a YAML string. If 'verbose', include explanatory comments and\n"
+               "the derived basis-function and zone counts.")
     ;
 
     // Detrender2d: Python injections in pirate_frb/kernels/Detrender2d.py:

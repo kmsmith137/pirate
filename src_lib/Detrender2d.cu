@@ -4,9 +4,12 @@
 #include <sstream>
 #include <iostream>
 #include <algorithm>
+#include <yaml-cpp/yaml.h>
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/KernelTimer.hpp>
+
+#include "../include/pirate/YamlFile.hpp"
 
 using namespace std;
 using namespace ksgpu;
@@ -1006,6 +1009,146 @@ void Detrender2d::Params::validate() const
         i = j;
     }
 }
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Yaml I/O.
+//
+// The yaml keys are spelled out, rather than matching the (terse) member names. The mapping
+// is defined here and nowhere else -- if you add a member, it needs a row in both functions
+// below, and the key should read as English.
+
+
+void Detrender2d::Params::to_yaml(YAML::Emitter &emitter, bool verbose) const
+{
+    this->validate();
+
+    emitter << YAML::BeginMap;
+
+    if (verbose) {
+        stringstream ss;
+        ss << "Detrender2d: a regularized fit of a B-spline in frequency times a local\n";
+        ss << "polynomial in time, subtracted from the data. See the class comment in\n";
+        ss << "Detrender2d.hpp, and notes/tree_dedispersion.tex section \"2-d detrending\".";
+        emitter << YAML::Comment(ss.str()) << YAML::Newline << YAML::Newline;
+    }
+
+    emitter << YAML::Key << "nfreq" << YAML::Value << nfreq;
+    emitter << YAML::Key << "num_beams" << YAML::Value << M;
+
+    if (verbose) {
+        stringstream ss;
+        ss << "The fit. The window is (2*time_halfwidth + 1) samples, and only its middle\n";
+        ss << "time_samples_per_chunk samples are written; the caller owns the 2*time_halfwidth\n";
+        ss << "padding. Only spline_degree_freq is a compile-time property of the cuda kernel:\n";
+        ss << "the compiled values are " << config_list_str() << ".";
+        emitter << YAML::Newline << YAML::Comment(ss.str()) << YAML::Newline;
+    }
+
+    emitter << YAML::Key << "spline_degree_freq" << YAML::Value << n_phi;
+    emitter << YAML::Key << "poly_degree_time" << YAML::Value << n;
+    emitter << YAML::Key << "time_halfwidth" << YAML::Value << W;
+    emitter << YAML::Key << "time_samples_per_chunk" << YAML::Value << T;
+
+    if (verbose) {
+        stringstream ss;
+        ss << "Tuning parameters; both are optional and default to the values below.\n";
+        ss << "  regularization_strength: first-difference regulator on the frequency\n";
+        ss << "    coefficients. A baseline that is constant in frequency within a zone is\n";
+        ss << "    removed EXACTLY at any value.\n";
+        ss << "  conditioning_threshold: a zone whose conditioning statistic r_min falls\n";
+        ss << "    below this has all of its channels dropped for that time sample.";
+        emitter << YAML::Newline << YAML::Comment(ss.str()) << YAML::Newline;
+    }
+
+    emitter << YAML::Key << "regularization_strength" << YAML::Value << eta;
+    emitter << YAML::Key << "conditioning_threshold" << YAML::Value << eps;
+
+    if (verbose) {
+        // Derived quantities, so a reader can sanity-check a knot vector without doing the
+        // arithmetic. Recomputed here rather than taken from a Detrender2d, since a Params
+        // can be written without ever constructing one.
+        long nzone = 1;
+        for (long i = 0; i < long(knots.size()); ) {
+            long j = i;
+            while ((j < long(knots.size())) && (knots[j] == knots[i]))
+                j++;
+            if ((knots[i] > 0) && (knots[i] < nfreq) && (j - i == n_phi + 1))
+                nzone++;
+            i = j;
+        }
+
+        stringstream ss;
+        ss << "Knot vector: a non-decreasing list of channel indices, running from 0 to\n";
+        ss << "nfreq, with the first and last values repeated exactly spline_degree_freq+1\n";
+        ss << "times. An interior value repeated that many times is a zone boundary, and\n";
+        ss << "zones decouple the fit exactly.\n";
+        ss << "In this file: " << (long(knots.size()) - n_phi - 1) << " basis functions, "
+           << nzone << " zone" << ((nzone != 1) ? "s" : "") << ".";
+        emitter << YAML::Newline << YAML::Comment(ss.str()) << YAML::Newline;
+    }
+
+    emitter << YAML::Key << "knots" << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (long k: knots)
+        emitter << k;
+    emitter << YAML::EndSeq;
+
+    emitter << YAML::EndMap;
+}
+
+
+string Detrender2d::Params::to_yaml_string(bool verbose) const
+{
+    YAML::Emitter emitter;
+    this->to_yaml(emitter, verbose);
+    return emitter.c_str();
+}
+
+
+// static member function
+Detrender2d::Params Detrender2d::Params::from_yaml(const string &filename)
+{
+    YamlFile f = YamlFile::from_file(filename);
+    return Detrender2d::Params::from_yaml(f);
+}
+
+
+// static member function
+Detrender2d::Params Detrender2d::Params::from_yaml(const YamlFile &f)
+{
+    // 'channels_per_range' was a constructor argument before it became a derived member.
+    // A file carrying it was written against an interface where it could be requested, so
+    // silently ignoring it would silently change the caller's meaning.
+    if (f.has_key("channels_per_range")) {
+        stringstream ss;
+        ss << f.name << ": key 'channels_per_range' is no longer part of Detrender2d's"
+           << " interface -- it is always derived from (nfreq, knots,"
+           << " time_samples_per_chunk). Remove the key.";
+        throw runtime_error(ss.str());
+    }
+
+    Params p;
+    p.nfreq = f.get_scalar<long> ("nfreq");
+    p.M = f.get_scalar<long> ("num_beams");
+    p.n_phi = f.get_scalar<long> ("spline_degree_freq");
+    p.n = f.get_scalar<long> ("poly_degree_time");
+    p.W = f.get_scalar<long> ("time_halfwidth");
+    p.T = f.get_scalar<long> ("time_samples_per_chunk");
+
+    // Tuning parameters: optional, defaulting to the member initializers.
+    p.eta = f.get_scalar<double> ("regularization_strength", Params().eta);
+    p.eps = f.get_scalar<double> ("conditioning_threshold", Params().eps);
+
+    p.knots = f.get_vector<long> ("knots");
+
+    f.check_for_invalid_keys();
+    p.validate();
+    return p;
+}
+
+
+// -------------------------------------------------------------------------------------------------
 
 
 Detrender2d::Detrender2d(const Params &params_) :

@@ -237,6 +237,7 @@ def test(args):
                 GpuBruteForceVarianceMap.test_vs_cpu(8, [2,2,1], nbeams=4)
                 GpuBruteForceVarianceMap.test_vs_cpu(8, [2,2,1], num_early_triggers=1,
                                                      detrender=True, nfreq=200)
+                slow_avar.variance_map_io.test_variance_map_io(7)
 
         if run_all_tests or args.amax:
             tests.test_decode_argmax()
@@ -317,6 +318,137 @@ def check_avar_mc(args):
     plan = DedispersionPlan(config)
     freq_variances = config.make_random_freq_variances(noisy=True) if args.random_variances else None
     slow_avar.check_avar_mc(plan, sophistication=args.sophistication, freq_variances=freq_variances)
+
+
+#################################   variance_map command  ###############################
+
+
+def parse_variance_map(subparsers):
+    help_text = "Compute the dense variance map A by brute force, and write it to an ASDF file"
+    parser = subparsers.add_parser("variance_map", help=help_text, description=help_text)
+    parser.add_argument('config_file', help="Path to dedispersion YAML config file")
+    parser.add_argument('detrender_file', nargs='?', default=None,
+                        help="Path to Detrender2dParams YAML file (omit with --no-detrender)")
+    parser.add_argument('-o', '--output', required=True, metavar='PATH',
+                        help="Output .asdf file (required)")
+    parser.add_argument('--no-detrender', action='store_true',
+                        help="Run with no Detrender2d; 'detrender_file' must then be omitted")
+    parser.add_argument('--cpu', action='store_true',
+                        help="Force the CPU sweep (default: GPU)")
+    parser.add_argument('--no-guard-chunk', action='store_true',
+                        help="Skip the per-pass guard chunk. The guard is what proves no part"
+                             " of the impulse response was truncated, and an undersized sweep"
+                             " silently UNDERESTIMATES A, so only use this on a config you"
+                             " have already validated.")
+    parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use (default 0)")
+
+
+# Config keys that this tool overrides, with the value it forces. Each is safe to override
+# because none of them can change A: the analytic PfAvarExact computes the same matrix and
+# never reads Dcore or any downsampling factor. See plans/variance_map_io.md for the
+# argument, and BruteForceVarianceMap's constructor for why the tool needs these values.
+def _variance_map_override_config(config, nbeams=1):
+    overrides = []
+
+    def _set(obj, field, want, label):
+        got = getattr(obj, field)
+        if int(got) != int(want):
+            setattr(obj, field, want)
+            overrides.append(f'{label}: {int(got)} -> {int(want)}')
+
+    _set(config, 'beams_per_gpu', nbeams, 'beams_per_gpu')
+    _set(config, 'beams_per_batch', nbeams, 'beams_per_batch')
+    _set(config, 'num_active_batches', 1, 'num_active_batches')
+
+    pts = list(config.primary_trees)
+    for (i, pt) in enumerate(pts):
+        _set(pt, 'time_downsampling', 1, f'primary_trees[{i}].time_downsampling')
+        _set(pt, 'dm_downsampling', 0, f'primary_trees[{i}].dm_downsampling')
+    config.primary_trees = pts
+
+    return overrides
+
+
+def variance_map(args):
+    import numpy as np   # local: __main__ is otherwise numpy-free
+    from .kernels import Detrender2dParams
+
+    # ---- Argument-level rejections (see plans/variance_map_io.md sec. 4.1).
+    if args.no_detrender and (args.detrender_file is not None):
+        raise RuntimeError("variance_map: --no-detrender was given together with"
+                           f" '{args.detrender_file}'. These say opposite things; pass one or"
+                           " the other.")
+    if (not args.no_detrender) and (args.detrender_file is None):
+        raise RuntimeError("variance_map: no detrender specified. Pass a Detrender2dParams"
+                           " yaml file, or --no-detrender to run without one.")
+
+    config = DedispersionConfig.from_yaml(args.config_file)
+    detrender = Detrender2dParams.from_yaml(args.detrender_file) if args.detrender_file else None
+
+    # ---- Config-level rejections. Collected rather than raised one at a time: no shipped
+    # config satisfies all of them, so a user editing a config would otherwise discover the
+    # requirements one run at a time.
+    errs = []
+    if config.num_primary_trees > 1:
+        errs.append(f"num_primary_trees = {config.num_primary_trees}, expected 1 (this CLI"
+                    " does not support time-downsampled trees)")
+    for (i, pt) in enumerate(config.primary_trees):
+        if pt.num_early_triggers > 0:
+            errs.append(f"primary_trees[{i}].num_early_triggers ="
+                        f" {pt.num_early_triggers}, expected 0 (this CLI does not support"
+                        " early triggers)")
+
+    if detrender is not None:
+        # The two files carry three quantities in common. Beam counts are overridden rather
+        # than checked (they cannot change A); the other two must agree, since a mismatch
+        # means the pair of files does not describe one computation.
+        nfreq = int(config.get_total_nfreq())
+        if int(detrender.nfreq) != nfreq:
+            errs.append(f"{args.detrender_file}: nfreq = {int(detrender.nfreq)}, but"
+                        f" {args.config_file} has sum(zone_nfreq) = {nfreq}")
+        if int(detrender.T) != int(config.time_samples_per_chunk):
+            errs.append(f"{args.detrender_file}: time_samples_per_chunk ="
+                        f" {int(detrender.T)}, but {args.config_file} has"
+                        f" {int(config.time_samples_per_chunk)}")
+
+    if errs:
+        raise RuntimeError("variance_map: the config is not usable by this tool:\n  - "
+                           + "\n  - ".join(errs))
+
+    # ---- Overrides. One beam always: the beam axis carries passes, not beams, and
+    # measurement showed batching does not speed up a full sweep (plans/variance_map_io.md).
+    overrides = _variance_map_override_config(config, nbeams=1)
+    if detrender is not None and int(detrender.M) != 1:
+        overrides.append(f'detrender num_beams: {int(detrender.M)} -> 1')
+        detrender.M = 1
+
+    for o in overrides:
+        atomic_print(f"variance_map: overriding {o}")
+
+    config.validate()
+
+    # Before constructing the plan, not just before the GPU sweep: DedispersionPlan allocates
+    # through cudaHostAlloc, so even the CPU path needs a cuda device selected.
+    ksgpu.set_cuda_device(args.gpu)
+    plan = DedispersionPlan(config, cdd2_kernel_required=False)
+
+    bf = (slow_avar.BruteForceVarianceMap(plan, detrender=detrender) if args.cpu
+          else slow_avar.GpuBruteForceVarianceMap(plan, detrender=detrender))
+
+    t0 = time.time()
+    A = bf.run(progress=True, guard_chunk=(not args.no_guard_chunk))
+    dt = time.time() - t0
+
+    geom = bf if args.cpu else bf.geom
+    slow_avar.write_variance_map(
+        args.output, A, plan, detrender=detrender, device=('cpu' if args.cpu else 'gpu'),
+        overrides=overrides, ntime=geom.ntime, nphases=geom.nphases,
+        ndata_chunks=geom.ndata_chunks, guard_chunk=(not args.no_guard_chunk),
+        nbeams=geom.nbeams)
+
+    nbytes = sum(np.asarray(a).nbytes for a in A)
+    atomic_print(f"variance_map: swept {geom.npasses()} passes in {dt:.1f} s; wrote"
+                 f" {args.output} ({nbytes/2**20:.1f} MiB of float64 in {len(A)} tree(s))")
 
 
 #########################################   time command  ##########################################
@@ -1920,6 +2052,7 @@ def get_parser():
     parse_test_simpulse(subparsers)
     parse_check_avar_approximation(subparsers)
     parse_check_avar_mc(subparsers)
+    parse_variance_map(subparsers)
     parse_time(subparsers)
     parse_time_dedisperser(subparsers)
     
@@ -2000,6 +2133,8 @@ def main():
         check_avar_approximation(args)
     elif args.command == "check_avar_mc":
         check_avar_mc(args)
+    elif args.command == "variance_map":
+        variance_map(args)
     elif args.command == "time":
         time_command(args)
     elif args.command == "show_hardware":

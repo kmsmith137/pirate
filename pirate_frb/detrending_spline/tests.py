@@ -1605,6 +1605,88 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
 
 # ----------------------------------------------------------------
 
+def test_params_yaml(rng=None, verbose=True):
+    """
+    Detrender2dParams round-trips through yaml: from_yaml(to_yaml_string(p)) == p.
+
+    Skips itself if the extension is not built.  The knot geometries are drawn rather
+    than pinned, since the knot vector is the only field whose yaml representation is
+    non-trivial, and its validity rules (end multiplicity, monotonicity, span) are
+    exactly what a serialization bug would violate.
+    """
+    rng = _default_rng(rng)
+
+    try:
+        from ..kernels import Detrender2dParams
+    except ImportError:
+        if verbose:
+            print('    test_params_yaml: extension not built, skipped')
+        return
+
+    import tempfile, os
+
+    ncase = 0
+
+    for n_phi in (0, 1, 2, 3):
+        for (nzone, kint) in ((1, 0), (1, 3), (4, 2)):
+            nfreq = 64 * int(rng.integers(1, 8))
+            kv = msk.zoned_knots(n_phi, nfreq, nzone, kint)
+            knots = [int(x) for x in kv.knots]
+            W = int(rng.integers(0, 9))
+            n = int(rng.integers(0, min(2, 2*W) + 1))
+
+            for explicit_tuning in (False, True):
+                kw = {}
+                if explicit_tuning:
+                    kw = dict(eta=float(rng.uniform(1e-4, 1e-2)),
+                              eps=float(rng.uniform(1e-6, 1e-4)))
+                p = Detrender2dParams(nfreq=nfreq, knots=knots, M=int(rng.integers(1, 4)),
+                                      n_phi=n_phi, n=n, W=W, T=32*int(rng.integers(1, 8)), **kw)
+
+                with tempfile.NamedTemporaryFile('w', suffix='.yml', delete=False) as fh:
+                    fh.write(p.to_yaml_string(verbose=explicit_tuning))
+                    path = fh.name
+                try:
+                    q = Detrender2dParams.from_yaml(path)
+                finally:
+                    os.unlink(path)
+
+                for field in ('nfreq', 'M', 'n_phi', 'n', 'W', 'T', 'eta', 'eps'):
+                    assert getattr(p, field) == getattr(q, field), \
+                        (field, getattr(p, field), getattr(q, field))
+                assert list(q.knots) == knots, (list(q.knots), knots)
+                ncase += 1
+
+    # Retired key: a file written against the old interface must be rejected, not
+    # silently reinterpreted (channels_per_range used to be a constructor argument).
+    with tempfile.NamedTemporaryFile('w', suffix='.yml', delete=False) as fh:
+        fh.write(p.to_yaml_string() + '\nchannels_per_range: 256\n')
+        path = fh.name
+    try:
+        Detrender2dParams.from_yaml(path)
+        raise AssertionError('from_yaml accepted the retired channels_per_range key')
+    except RuntimeError as e:
+        assert 'channels_per_range' in str(e), str(e)
+    finally:
+        os.unlink(path)
+
+    # An unknown key is an error too (YamlFile.check_for_invalid_keys).
+    with tempfile.NamedTemporaryFile('w', suffix='.yml', delete=False) as fh:
+        fh.write(p.to_yaml_string() + '\nnot_a_real_key: 7\n')
+        path = fh.name
+    try:
+        Detrender2dParams.from_yaml(path)
+        raise AssertionError('from_yaml accepted an unknown key')
+    except RuntimeError:
+        pass
+    finally:
+        os.unlink(path)
+
+    if verbose:
+        print(f'    test_params_yaml: pass  [{ncase} round trips, plus retired-key and '
+              f'unknown-key rejection]')
+
+
 def run_all(verbose=True, rng=None, heavy=False, n_phi=None, gpu=False):
     """
     All tests share one generator, so printing its entropy makes the whole run
@@ -1653,6 +1735,7 @@ def run_all(verbose=True, rng=None, heavy=False, n_phi=None, gpu=False):
     test_2d_conditioning(rng, verbose=verbose)
     test_2d_dtype_agreement(rng, verbose=verbose)
     test_production_geometry(rng, verbose=verbose)
+    test_params_yaml(rng, verbose=verbose)
     if gpu:
         test_gpu_kernel(rng, verbose=verbose)
     print(f'  detrending_spline tests passed   '
