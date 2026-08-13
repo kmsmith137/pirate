@@ -1607,7 +1607,8 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
 
 def test_params_yaml(rng=None, verbose=True):
     """
-    Detrender2dParams round-trips through yaml: from_yaml(to_yaml_string(p)) == p.
+    Detrender2dParams round-trips through yaml: from_yaml_string(to_yaml_string(p)) == p,
+    plus one case through a real file to cover from_yaml().
 
     Skips itself if the extension is not built.  The knot geometries are drawn rather
     than pinned, since the knot vector is the only field whose yaml representation is
@@ -1623,7 +1624,11 @@ def test_params_yaml(rng=None, verbose=True):
             print('    test_params_yaml: extension not built, skipped')
         return
 
-    import tempfile, os
+    def _check_equal(p, q):
+        for field in ('nfreq', 'M', 'n_phi', 'n', 'W', 'T', 'eta', 'eps'):
+            assert getattr(p, field) == getattr(q, field), \
+                (field, getattr(p, field), getattr(q, field))
+        assert list(p.knots) == list(q.knots), (list(p.knots), list(q.knots))
 
     ncase = 0
 
@@ -1635,6 +1640,8 @@ def test_params_yaml(rng=None, verbose=True):
             W = int(rng.integers(0, 9))
             n = int(rng.integers(0, min(2, 2*W) + 1))
 
+            # explicit_tuning=False exercises the optional eta/eps defaults; the verbose
+            # form is round-tripped too, since its comments must not confuse the reader.
             for explicit_tuning in (False, True):
                 kw = {}
                 if explicit_tuning:
@@ -1643,48 +1650,36 @@ def test_params_yaml(rng=None, verbose=True):
                 p = Detrender2dParams(nfreq=nfreq, knots=knots, M=int(rng.integers(1, 4)),
                                       n_phi=n_phi, n=n, W=W, T=32*int(rng.integers(1, 8)), **kw)
 
-                with tempfile.NamedTemporaryFile('w', suffix='.yml', delete=False) as fh:
-                    fh.write(p.to_yaml_string(verbose=explicit_tuning))
-                    path = fh.name
-                try:
-                    q = Detrender2dParams.from_yaml(path)
-                finally:
-                    os.unlink(path)
-
-                for field in ('nfreq', 'M', 'n_phi', 'n', 'W', 'T', 'eta', 'eps'):
-                    assert getattr(p, field) == getattr(q, field), \
-                        (field, getattr(p, field), getattr(q, field))
-                assert list(q.knots) == knots, (list(q.knots), knots)
+                _check_equal(p, Detrender2dParams.from_yaml_string(
+                    p.to_yaml_string(verbose=explicit_tuning)))
                 ncase += 1
 
-    # Retired key: a file written against the old interface must be rejected, not
-    # silently reinterpreted (channels_per_range used to be a constructor argument).
+    # The file path is a thin wrapper over the string path, so one case covers it.
+    import os
+    import tempfile
+
     with tempfile.NamedTemporaryFile('w', suffix='.yml', delete=False) as fh:
-        fh.write(p.to_yaml_string() + '\nchannels_per_range: 256\n')
+        fh.write(p.to_yaml_string())
         path = fh.name
     try:
-        Detrender2dParams.from_yaml(path)
-        raise AssertionError('from_yaml accepted the retired channels_per_range key')
-    except RuntimeError as e:
-        assert 'channels_per_range' in str(e), str(e)
+        _check_equal(p, Detrender2dParams.from_yaml(path))
     finally:
         os.unlink(path)
 
-    # An unknown key is an error too (YamlFile.check_for_invalid_keys).
-    with tempfile.NamedTemporaryFile('w', suffix='.yml', delete=False) as fh:
-        fh.write(p.to_yaml_string() + '\nnot_a_real_key: 7\n')
-        path = fh.name
-    try:
-        Detrender2dParams.from_yaml(path)
-        raise AssertionError('from_yaml accepted an unknown key')
-    except RuntimeError:
-        pass
-    finally:
-        os.unlink(path)
+    # Retired key: yaml written against the old interface must be rejected, not silently
+    # reinterpreted (channels_per_range used to be a constructor argument). An unknown key
+    # is an error too, via YamlFile.check_for_invalid_keys().
+    for (extra, want) in ((f'\nchannels_per_range: 256\n', 'channels_per_range'),
+                          (f'\nnot_a_real_key: 7\n', '')):
+        try:
+            Detrender2dParams.from_yaml_string(p.to_yaml_string() + extra)
+            raise AssertionError(f'from_yaml_string accepted {extra.strip()!r}')
+        except RuntimeError as e:
+            assert want in str(e), (want, str(e))
 
     if verbose:
-        print(f'    test_params_yaml: pass  [{ncase} round trips, plus retired-key and '
-              f'unknown-key rejection]')
+        print(f'    test_params_yaml: pass  [{ncase} round trips via from_yaml_string, plus '
+              f'the file path, retired-key and unknown-key rejection]')
 
 
 def run_all(verbose=True, rng=None, heavy=False, n_phi=None, gpu=False):

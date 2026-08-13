@@ -162,6 +162,12 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                       "    filename: Path to YAML configuration file\n\n"
                       "Returns:\n"
                       "    DedispersionConfig object initialized from file")
+          .def_static("from_yaml_string", &DedispersionConfig::from_yaml_string,
+                      py::arg("yaml_string"),
+                      "Load DedispersionConfig from a YAML string: the inverse of\n"
+                      "to_yaml_string(). Use this wherever a config travels as a string\n"
+                      "rather than a file, e.g. one embedded in a variance-map file by\n"
+                      "pirate_frb.slow_avar.write_variance_map().")
           .def_static("make_random",
                [](int max_toplevel_rank, int max_early_triggers, bool gpu_valid, bool verbose) {
                    DedispersionConfig::RandomArgs args;

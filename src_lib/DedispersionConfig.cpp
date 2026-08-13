@@ -657,6 +657,14 @@ DedispersionConfig DedispersionConfig::from_yaml(const string &filename)
 
 
 // static member function
+DedispersionConfig DedispersionConfig::from_yaml_string(const string &yaml_string)
+{
+    YamlFile f = YamlFile::from_string(yaml_string, "<dedispersion config string>");
+    return DedispersionConfig::from_yaml(f);
+}
+
+
+// static member function
 DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 {
     // Detect old config syntax and give targeted errors.

@@ -109,6 +109,12 @@ struct DedispersionConfig
     static DedispersionConfig from_yaml(const std::string &filename);
     static DedispersionConfig from_yaml(const YamlFile &file);
 
+    // Construct from a YAML string, i.e. the inverse of to_yaml_string(). Needed wherever a
+    // config travels as a string rather than a file -- over the wire (see
+    // DedispersionPlan::make_incomplete_plan_from_yaml), or embedded in a container format
+    // (see pirate_frb.slow_avar.write_variance_map).
+    static DedispersionConfig from_yaml_string(const std::string &yaml_string);
+
     // Note: rather than calling this function directly, you probably want the
     // DedispersionPlan (not DedispersionConfig) member 'nelts_per_segment'.
     int get_nelts_per_segment() const;

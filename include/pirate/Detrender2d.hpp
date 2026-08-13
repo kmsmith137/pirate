@@ -108,6 +108,11 @@ struct Detrender2d
 
         static Params from_yaml(const std::string &filename);
         static Params from_yaml(const YamlFile &f);
+
+        // Inverse of to_yaml_string(), for a Params that travels as a string rather than a
+        // file (e.g. embedded in a variance-map file; see
+        // pirate_frb.slow_avar.write_variance_map).
+        static Params from_yaml_string(const std::string &yaml_string);
     };
 
     explicit Detrender2d(const Params &params);

@@ -92,8 +92,7 @@ class VarianceMapFile:
         overrides; see the 'overrides' member for what changed)."""
         if self._config is None:
             from ..pirate_pybind11 import DedispersionConfig
-            self._config = _config_from_yaml_string(DedispersionConfig,
-                                                    self._tree['config_yaml'])
+            self._config = DedispersionConfig.from_yaml_string(self._tree['config_yaml'])
         return self._config
 
     @property
@@ -104,7 +103,7 @@ class VarianceMapFile:
             return None
         if self._detrender is None:
             from ..pirate_pybind11 import Detrender2dParams
-            self._detrender = _config_from_yaml_string(Detrender2dParams, y)
+            self._detrender = Detrender2dParams.from_yaml_string(y)
         return self._detrender
 
     # ---- lifetime ----
@@ -315,18 +314,3 @@ def test_variance_map_io(toplevel_tree_rank=8, verbose=True):
         atomic_print(f"    test_variance_map_io(r={toplevel_tree_rank}): {len(A)} tree(s)"
                      f" round-tripped lazily and eagerly, {nbytes/2**20:.1f} MiB file,"
                      f" memmap + use-after-close checked")
-
-
-def _config_from_yaml_string(cls, yaml_string):
-    """from_yaml() takes a filename, so a yaml string round-trips through a temp file."""
-
-    import os
-    import tempfile
-
-    with tempfile.NamedTemporaryFile('w', suffix='.yml', delete=False) as fh:
-        fh.write(yaml_string)
-        path = fh.name
-    try:
-        return cls.from_yaml(path)
-    finally:
-        os.unlink(path)

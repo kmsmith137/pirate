@@ -1115,6 +1115,14 @@ Detrender2d::Params Detrender2d::Params::from_yaml(const string &filename)
 
 
 // static member function
+Detrender2d::Params Detrender2d::Params::from_yaml_string(const string &yaml_string)
+{
+    YamlFile f = YamlFile::from_string(yaml_string, "<detrender params string>");
+    return Detrender2d::Params::from_yaml(f);
+}
+
+
+// static member function
 Detrender2d::Params Detrender2d::Params::from_yaml(const YamlFile &f)
 {
     // 'channels_per_range' was a constructor argument before it became a derived member.

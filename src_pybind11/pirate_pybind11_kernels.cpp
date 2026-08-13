@@ -312,6 +312,11 @@ void register_kernel_bindings(pybind11::module &m)
                "Raises:\n"
                "    RuntimeError: on a missing/unknown key, or if the parameters are\n"
                "        invalid (validate() is called before returning).")
+          .def_static("from_yaml_string", &Detrender2d::Params::from_yaml_string,
+               py::arg("yaml_string"),
+               "Load Detrender2dParams from a YAML string: the inverse of to_yaml_string().\n"
+               "Same keys and same errors as from_yaml(); use this when the yaml travels as\n"
+               "a string rather than a file, e.g. one embedded in a variance-map file.")
           .def("to_yaml_string", &Detrender2d::Params::to_yaml_string,
                py::arg("verbose") = false,
                "Convert to a YAML string. If 'verbose', include explanatory comments and\n"
