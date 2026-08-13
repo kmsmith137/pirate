@@ -2871,6 +2871,27 @@ An ideal milestone would be to have some code which reads a precomputed variance
 and returns a few (matrix rank, distance) pairs, to get a sense for how the level of approximation
 might depend on the rank of the approximation.
 
+Some practical notes, to get started:
+\begin{itemize}
+
+\item To compute an $A$-matrix, use \verb|pirate_frb variance_map <config> <detrender> -o A.asdf|
+ (\S\ref{ssec:variance_map_bruteforce}), and to read it back, use
+ \verb|slow_avar.read_variance_map()|.
+
+\item To evaluate the distance function, use \verb|class VarMapDistance| (in
+ \verb|pirate_frb/slow_avar/|, see \S\ref{ssec:distance_function}). Please use it, rather than
+ reimplementing $D$, so that distances reported by different experiments are comparable.
+ Besides \verb|D|, report \verb|D0| and \verb|max_r|, since these distinguish an approximation
+ which is nearly usable from one which is hopeless.
+
+\item There is no subscale config in \verb|configs/dedispersion/| yet, so part of the task is to
+ create a variety of them, exploring the {\tt DedispersionConfig} and {\tt Detrender2dParams}
+ parameter space. We are more interested in {\em typical} cases than in adversarial or edge
+ cases: the goal is an algorithm that works well on the configs we would actually run, not one
+ that survives a worst case we will never encounter.
+
+\end{itemize}
+
 Here are some initial thoughts and directions that may be interesting, but
 I encourage you to propose new ideas and directions:
 
