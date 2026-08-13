@@ -2829,14 +2829,39 @@ but this is a statistical concern, not a hard constraint.
 Because it's a statistical concern, our cost function focuses on the typical case where
 all channels have similar variance, not per-matrix-element analysis.
 
-\subsection{Ideas to explore}
+\subsection{Current status}
 
-Our goal is to find a low-rank, efficiently computable, accurate approximation
-to the variance map $A$. Note that $A$ has many parameters: all the parameters
-needed to configure tree dedispersion, and to configure a {\tt Detrender2d}.
+\begin{itemize}
 
-In this section, let's brainstorm ideas, without implementing anything yet.
-Some of these ideas are human-generated, others are LLM-generated.
+\item If we simplify the problem by removing the {\tt Detrender2d}, then
+ there is an exact low-rank representation for $A$, and an approximation which
+ is fast to compute (see the appendices). This is all implemented and tested.
+ I don't know if it's a useful starting point -- it's not clear whether the
+ approach can be generalized to include the {\tt Detrender2d}.
+
+\item We have code to compute the $A$-matrix in dense form (\S\ref{ssec:variance_map_bruteforce}),
+ given a {\tt DedispersionConfig} and a {\tt Detrender2dParams}. (See \verb|variance_map| in \verb|__main__.py|.)
+ This may be a useful ``crutch'' for initial exploration, although in the long run it won't
+ scale to CHIME/CHORD. For example, we could compute the full SVD decomposition of the $A$-matrix,
+ as a starting point for finding low-rank approximations. It would be a significant milestone
+ to develop an algorithm which works well starting from a dense representation of $A$.
+
+\end{itemize}
+
+\subsection{First milestone: assume a precomputed $A$-matrix}
+
+Let's start by considering the following question.
+Suppose that we've precomputed the variance map $A$, given a {\tt DedispersionConfig} 
+and a {\tt Detrender2dParams}, and written it to disk.
+What are some interesting algorithms for finding a low-rank approximation with
+small $D(A^{\rm true}, A^{\rm approx})$?
+
+An ideal milestone would be to have some code which reads a precomputed variance map $A$,
+and returns a few (matrix rank, distance) pairs, to get a sense for how the level of approximation
+might depend on the rank of the approximation.
+
+Here are some initial thoughts and directions that may be interesting, but
+I encourage you to propose new ideas and directions:
 
 \begin{itemize}
 
@@ -2852,18 +2877,6 @@ Some of these ideas are human-generated, others are LLM-generated.
  main parameters to explore are the frequency zones, and the {\tt Detrender2d}.
  Let's also use subscale instances (say rank-10 and $\sim$400 frequency channels).
  Later, we can scale up, and add frequency subbands.
-
-\item If we simplify the problem by removing the {\tt Detrender2d}, then
- there is an exact low-rank representation for $A$, and an approximation which
- is fast to compute (see the appendices). This is all implemented and tested.
- I don't know if it's a useful starting point -- it's not clear whether the
- approach can be generalized to include the {\tt Detrender2d}.
-
-\item We have code to compute the $A$-matrix in dense form (\S\ref{ssec:variance_map_bruteforce}).
- This may be a useful ``crutch'' for initial exploration, although in the long run it won't
- scale to CHIME/CHORD. For example, we could compute the full SVD decomposition of the $A$-matrix,
- as a starting point for finding low-rank approximations. It would be a significant milestone
- to develop an algorithm which works well starting from a dense representation of $A$.
 
 \item Our distance function (\ref{eq:distance_function}) is discontinuous,
  which makes it hard to use optimization-based approaches. It may be useful to
@@ -2894,23 +2907,7 @@ viable at some level.)
 estimates at low DM (with little or no change in the rank). Given our unusual distance
 function $D$, it may not change the value of $D$ dramatically.
 
-\item As a heuristic approach, we might try modelling the effect of the {\tt Detrender2d}
-as a DM-dependent time convolution. I think that the approach from the appendices generalizes
-straightforwardly to the case where a time convolution is applied to the data -- but the 2-d
-detrender is harder.
-
 \end{itemize}
-
-\subsection{Agentic approach (placeholder section)}
-\label{ssec:agentic}
-
-In this section, I plan to write about an agentic approach to exploring this problem.
-
-% Installing new software packages
-
-% Requested code changes
-
-% CPU / GPU resources
 
 \subsection{Brute-force computation of the variance map}
 \label{ssec:variance_map_bruteforce}
