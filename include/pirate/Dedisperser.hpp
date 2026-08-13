@@ -46,8 +46,9 @@ struct GpuDedisperser
 {
     struct Params
     {
-        // Must be a gpu_runnable (hence non-incomplete) plan: the constructor asserts
-        // plan->params.gpu_runnable, since the Dcore values must match the compiled kernels.
+        // The plan must have been built with cdd2_kernel_required (which also rules out an
+        // incomplete plan): the constructor asserts it, since the Dcore values have to match
+        // the compiled cdd2 kernels.
         std::shared_ptr<DedispersionPlan> plan;
         std::shared_ptr<CudaStreamPool> stream_pool;
 

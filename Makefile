@@ -410,6 +410,11 @@ PYFILES = \
   pirate_frb/slow_avar/__init__.py \
   pirate_frb/slow_avar/SparseTile.py \
   pirate_frb/slow_avar/PfVariance.py \
+  pirate_frb/slow_avar/VarianceMap.py \
+  pirate_frb/slow_avar/VarianceMapExact.py \
+  pirate_frb/slow_avar/VarianceMapApproximation.py \
+  pirate_frb/slow_avar/brute_force.py \
+  pirate_frb/slow_avar/brute_force_gpu.py \
   pirate_frb/slow_avar/check_approximation.py \
   pirate_frb/slow_avar/check_mc.py \
   pirate_frb/fast_avar/__init__.py \

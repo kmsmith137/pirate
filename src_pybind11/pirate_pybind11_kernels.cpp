@@ -9,12 +9,14 @@
 #include <pybind11/stl.h>
 #include <ksgpu/pybind11.hpp>
 
+#include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/DedispersionKernel.hpp"
 #include "../include/pirate/Detrender1d.hpp"
 #include "../include/pirate/Detrender2d.hpp"
 #include "../include/pirate/GpuDequantizationKernel.hpp"
 #include "../include/pirate/LaggedDownsamplingKernel.hpp"
+#include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/PeakFindingKernel.hpp"
 #include "../include/pirate/ReferenceLagbuf.hpp"
 #include "../include/pirate/ReferenceTree.hpp"
@@ -38,13 +40,158 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("show_registry", &CoalescedDdKernel2::show_registry)
     ;
 
-    py::class_<GpuSbDedispersionKernel>(m, "GpuSbDedispersionKernel")
+    // MegaRingbuf is bound as an opaque handle: it is reachable only via a DedispersionPlan
+    // (or a DedispersionKernelParams), and python callers pass it around rather than inspect
+    // it. Only the few members a caller needs in order to size the ring buffer are exposed.
+    py::class_<MegaRingbuf, std::shared_ptr<MegaRingbuf>>(m, "MegaRingbuf",
+        "The ring buffer through which stage-1 dedispersion feeds stage 2.\n\n"
+        "Not constructible from python: obtain one from DedispersionPlan.mega_ringbuf. See\n"
+        "MegaRingbuf.hpp for how it works.")
+          .def_readonly("gpu_global_nseg", &MegaRingbuf::gpu_global_nseg,
+               "Segments in the GPU ring buffer, per beam. The buffer a kernel expects is a\n"
+               "1-d array of (gpu_global_nseg * nt_per_segment) elements.")
+          .def_readonly("host_global_nseg", &MegaRingbuf::host_global_nseg,
+               "Segments in the HOST ring buffer, per beam. Zero unless some consumer's\n"
+               "chunk_lag exceeds the previous consumer's by more than max_gpu_clag, which\n"
+               "never happens at the default max_gpu_clag = 10000.")
+          .def_readonly("max_clag", &MegaRingbuf::max_clag,
+               "Largest lag, in chunks, of any zone")
+          .def_readonly("num_producers", &MegaRingbuf::num_producers)
+          .def_readonly("num_consumers", &MegaRingbuf::num_consumers)
+          .def_readonly("is_finalized", &MegaRingbuf::is_finalized)
+    ;
+
+    // The kernel-parameter structs below are bound READ-ONLY, with no constructor: a caller
+    // gets them from a DedispersionPlan (plan.stage1_dd_kernel_params etc.) and passes them
+    // straight to a kernel constructor. They encode the ring-buffer lag structure, which must
+    // not be re-derived on the python side.
+    py::class_<DedispersionKernelParams>(m, "DedispersionKernelParams",
+        "Construction parameters for a (Reference|Gpu|GpuSb)DedispersionKernel.\n\n"
+        "Not constructible from python: obtain one from DedispersionPlan.stage1_dd_kernel_params\n"
+        "or .stage2_dd_kernel_params.")
+          .def_readonly("dtype", &DedispersionKernelParams::dtype)
+          .def_readonly("dd_rank", &DedispersionKernelParams::dd_rank,
+               "log2(number of 'active' tree channels)")
+          .def_readonly("amb_rank", &DedispersionKernelParams::amb_rank,
+               "log2(number of 'spectator' tree channels)")
+          .def_readonly("total_beams", &DedispersionKernelParams::total_beams)
+          .def_readonly("beams_per_batch", &DedispersionKernelParams::beams_per_batch)
+          .def_readonly("ntime", &DedispersionKernelParams::ntime,
+               "Time samples per chunk (includes the tree's time downsampling, if any)")
+          .def_readonly("nspec", &DedispersionKernelParams::nspec, "'Inner' spectator index")
+          .def_readonly("input_is_ringbuf", &DedispersionKernelParams::input_is_ringbuf)
+          .def_readonly("output_is_ringbuf", &DedispersionKernelParams::output_is_ringbuf)
+          .def_readonly("apply_input_residual_lags", &DedispersionKernelParams::apply_input_residual_lags)
+          .def_readonly("input_is_downsampled_tree", &DedispersionKernelParams::input_is_downsampled_tree)
+          .def_readonly("nt_per_segment", &DedispersionKernelParams::nt_per_segment)
+          .def_readonly("mega_ringbuf", &DedispersionKernelParams::mega_ringbuf,
+               "The MegaRingbuf, if either input_is_ringbuf or output_is_ringbuf")
+          .def_readonly("producer_id", &DedispersionKernelParams::producer_id)
+          .def_readonly("consumer_id", &DedispersionKernelParams::consumer_id)
+          .def("validate", &DedispersionKernelParams::validate,
+               "Raises RuntimeError if any parameter is invalid.")
+    ;
+
+    py::class_<TreeGriddingKernelParams>(m, "TreeGriddingKernelParams",
+        "Construction parameters for a (Reference|Gpu)TreeGriddingKernel.\n\n"
+        "Not constructible from python: obtain one from\n"
+        "DedispersionPlan.tree_gridding_kernel_params.")
+          .def_readonly("dtype", &TreeGriddingKernelParams::dtype)
+          .def_readonly("nfreq", &TreeGriddingKernelParams::nfreq, "Input frequency channels")
+          .def_readonly("nchan", &TreeGriddingKernelParams::nchan, "Output tree channels")
+          .def_readonly("ntime", &TreeGriddingKernelParams::ntime, "Time samples per chunk")
+          .def_readonly("beams_per_batch", &TreeGriddingKernelParams::beams_per_batch)
+          .def_readonly("channel_map", &TreeGriddingKernelParams::channel_map,
+               "Length (nchan+1) host array of frequency-channel edges, monotonically decreasing")
+    ;
+
+    py::class_<GpuSbDedispersionKernel>(m, "GpuSbDedispersionKernel",
+        "Stage-2 dedispersion with frequency subbands: the GPU counterpart of\n"
+        "ReferenceDedispersionKernel's 'sb_out' output, which the production dedisperser\n"
+        "(CoalescedDdKernel2) never materializes.\n\n"
+        "Constructed from a plan's stage-2 kernel params and the tree's subbands::\n\n"
+        "    k = GpuSbDedispersionKernel(plan.stage2_dd_kernel_params[itree],\n"
+        "                                plan.trees[itree].frequency_subbands)\n"
+        "    k.allocate(bump_allocator)\n"
+        "    k.launch(sb_out, ringbuf, ichunk, ibatch)\n\n"
+        "float32 only. The constructor raises RuntimeError if no kernel is compiled for this\n"
+        "(dd_rank, subband_counts) pair; the message names the missing key, which can be added\n"
+        "to autogenerated_sbdd_kernels() in makefile_helper.py.")
+          .def(py::init<const DedispersionKernelParams &, const FrequencySubbands &>(),
+               py::arg("dd_params"), py::arg("frequency_subbands"),
+               py::call_guard<py::gil_scoped_release>())
+          .def("allocate", &GpuSbDedispersionKernel::allocate, py::arg("allocator"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Allocate (and zero) persistent state from a BumpAllocator. Must be called\n"
+               "before launch().")
+          .def("launch",
+               [](GpuSbDedispersionKernel &self, Array<float> &sb_out, const Array<float> &in,
+                  long ichunk, long ibatch, uintptr_t stream_ptr) {
+                   self.launch(sb_out, in, ichunk, ibatch,
+                               reinterpret_cast<cudaStream_t> (stream_ptr));
+               },
+               py::arg("sb_out"), py::arg("in_"), py::arg("ichunk"), py::arg("ibatch"),
+               py::arg("stream_ptr"),
+               py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+               "GPU kernel launch (async, does not sync stream).\n\n"
+               "Args:\n"
+               "    sb_out: Array, shape (beams_per_batch, Dpf, fs.M, ntime), float32, fully\n"
+               "        contiguous, on GPU. The kernel derives all its strides from (M, ntime),\n"
+               "        so a padded or sliced buffer is rejected.\n"
+               "    in_: the ring buffer, a 1-d float32 GPU array of length\n"
+               "        (mega_ringbuf.gpu_global_nseg * nt_per_segment)\n"
+               "    ichunk: time-chunk index 0, 1, ...\n"
+               "    ibatch: 0 <= ibatch < nbatches\n"
+               "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
+          .def_readonly("dd_params", &GpuSbDedispersionKernel::dd_params)
+          .def_readonly("fs", &GpuSbDedispersionKernel::fs)
+          .def_readonly("Dpf", &GpuSbDedispersionKernel::Dpf,
+               "= 2^(amb_rank + dd_rank - fs.pf_rank), the 'sb_out' DM axis")
+          .def_readonly("nbatches", &GpuSbDedispersionKernel::nbatches)
+          .def_readonly("is_allocated", &GpuSbDedispersionKernel::is_allocated)
+          .def_readonly("resource_tracker", &GpuSbDedispersionKernel::resource_tracker)
           .def_static("test_random", &GpuSbDedispersionKernel::test_random, py::call_guard<py::gil_scoped_release>())
           .def_static("registry_size", &GpuSbDedispersionKernel::registry_size)
           .def_static("show_registry", &GpuSbDedispersionKernel::show_registry)
     ;
 
-    py::class_<GpuDedispersionKernel>(m, "GpuDedispersionKernel")
+    py::class_<GpuDedispersionKernel>(m, "GpuDedispersionKernel",
+        "One stage of GPU tree dedispersion; inputs and outputs are plain buffers or ring\n"
+        "buffers according to the params.\n\n"
+        "Constructed from a plan's kernel params::\n\n"
+        "    k = GpuDedispersionKernel(plan.stage1_dd_kernel_params[ipri])\n"
+        "    k.allocate(bump_allocator)\n"
+        "    k.launch(in_, out, ichunk, ibatch)\n\n"
+        "Unlike GpuSbDedispersionKernel, this kernel has no 'sb_out' (subband) output.")
+          .def(py::init<const DedispersionKernelParams &>(), py::arg("params"),
+               py::call_guard<py::gil_scoped_release>())
+          .def("allocate", &GpuDedispersionKernel::allocate, py::arg("allocator"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Allocate (and zero) persistent state from a BumpAllocator. Must be called\n"
+               "before launch().")
+          .def("launch",
+               [](GpuDedispersionKernel &self, Array<void> &in_, Array<void> &out,
+                  long ichunk, long ibatch, uintptr_t stream_ptr) {
+                   self.launch(in_, out, ichunk, ibatch,
+                               reinterpret_cast<cudaStream_t> (stream_ptr));
+               },
+               py::arg("in_"), py::arg("out"), py::arg("ichunk"), py::arg("ibatch"),
+               py::arg("stream_ptr"),
+               py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+               "GPU kernel launch (async, does not sync stream).\n\n"
+               "Args:\n"
+               "    in_, out: on-GPU arrays with the kernel's dtype. A 'simple' buffer has\n"
+               "        shape (beams_per_batch, 2^amb_rank, 2^dd_rank, ntime) -- or one more\n"
+               "        axis of length nspec, if nspec > 1. A ring buffer is 1-d of length\n"
+               "        (mega_ringbuf.gpu_global_nseg * nt_per_segment * nspec). Which one\n"
+               "        each is comes from params.{input,output}_is_ringbuf.\n"
+               "    ichunk: time-chunk index 0, 1, ...\n"
+               "    ibatch: 0 <= ibatch < nbatches\n"
+               "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
+          .def_readonly("params", &GpuDedispersionKernel::params)
+          .def_readonly("nbatches", &GpuDedispersionKernel::nbatches)
+          .def_readonly("is_allocated", &GpuDedispersionKernel::is_allocated)
+          .def_readonly("resource_tracker", &GpuDedispersionKernel::resource_tracker)
           .def_static("test_random", &GpuDedispersionKernel::test_random, py::call_guard<py::gil_scoped_release>())
           .def_static("time_selected", &GpuDedispersionKernel::time_selected, py::call_guard<py::gil_scoped_release>())
           .def_static("registry_size", &GpuDedispersionKernel::registry_size)
@@ -112,11 +259,55 @@ void register_kernel_bindings(pybind11::module &m)
                "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
     ;
 
+    // Detrender2d::Params. Unlike FakeXEngine (whose Params is deliberately not bound),
+    // this one is: callers that configure a detrender without constructing it -- e.g.
+    // slow_avar.BruteForceVarianceMap, which needs the same parameters for both the GPU
+    // kernel and the numpy reference -- need the struct as a value.
+    py::class_<Detrender2d::Params>(m, "Detrender2dParams",
+        "Construction parameters for a Detrender2d (which see for what they mean).")
+          .def(py::init([](long nfreq, const std::vector<long> &knots, long M, long n_phi,
+                           long n, long W, long T, double eta, double eps) {
+              Detrender2d::Params params;
+              params.nfreq = nfreq;
+              params.knots = knots;
+              params.M = M;
+              params.n_phi = n_phi;
+              params.n = n;
+              params.W = W;
+              params.T = T;
+              params.eta = eta;
+              params.eps = eps;
+              return params;
+          }),
+          py::arg("nfreq"), py::arg("knots"), py::arg("M"),
+          py::arg("n_phi") = 2, py::arg("n") = 2, py::arg("W") = 4, py::arg("T") = 2048,
+          py::arg("eta") = 1.0e-3, py::arg("eps") = 3.0e-5)
+          .def_readwrite("nfreq", &Detrender2d::Params::nfreq, "Number of frequency channels")
+          .def_readwrite("knots", &Detrender2d::Params::knots,
+               "Non-decreasing list of channel indices, running from 0 to nfreq, with the\n"
+               "first and last values repeated exactly n_phi+1 times and no interior value\n"
+               "repeated more than n_phi+1 times. An interior value repeated exactly n_phi+1\n"
+               "times is a zone boundary.")
+          .def_readwrite("M", &Detrender2d::Params::M, "Number of spectator (beam) rows")
+          .def_readwrite("n_phi", &Detrender2d::Params::n_phi, "Spline degree in frequency")
+          .def_readwrite("n", &Detrender2d::Params::n, "Degree of the time polynomial")
+          .def_readwrite("W", &Detrender2d::Params::W,
+               "Window half-width (the window is 2W+1 samples)")
+          .def_readwrite("T", &Detrender2d::Params::T, "Output samples per row (chunk size)")
+          .def_readwrite("eta", &Detrender2d::Params::eta, "Regularization strength")
+          .def_readwrite("eps", &Detrender2d::Params::eps, "Mask-expansion threshold on r_min")
+          .def("validate", &Detrender2d::Params::validate,
+               "Raises RuntimeError if any parameter is invalid; see the Detrender2d\n"
+               "constructor, which calls this.")
+    ;
+
     // Detrender2d: Python injections in pirate_frb/kernels/Detrender2d.py:
     //   - launch: converts stream=None to current cupy stream
     py::class_<Detrender2d> detrender_2d(m, "Detrender2d",
         "The 2-d spline detrender: a regularized fit of a B-spline in frequency times a\n"
         "local polynomial in time, subtracted from the data.\n\n"
+        "Constructed either from a Detrender2dParams, or from the same fields as kwargs::\n\n"
+        "    det = Detrender2d(nfreq=4096, knots=knots, M=1, W=4, T=2048)\n\n"
         "For each output sample t, the baseline over a window of 2W+1 time samples is\n"
         "modelled as sum_{jq} alpha_jq phi_j(f) p_q(s), with {phi_j} the B-spline basis of\n"
         "the caller's knot vector and {p_q} orthonormal polynomials on the window. It is\n"
@@ -148,12 +339,31 @@ void register_kernel_bindings(pybind11::module &m)
         "validated against.");
 
     detrender_2d
-          .def(py::init<long, const std::vector<long> &, long, long, long, long, long, double, double, long>(),
+          .def(py::init<const Detrender2d::Params &>(), py::arg("params"),
+               "Create a Detrender2d from a Detrender2dParams.\n\n"
+               "Raises:\n"
+               "    RuntimeError: if no kernel is compiled for n_phi, if T is not a positive\n"
+               "        multiple of 32, if n is outside [0,2], if W is outside [0,16] or\n"
+               "        gives 2W+1 < n+1, or if the knot vector is invalid. The message says\n"
+               "        which.")
+          .def(py::init([](long nfreq, const std::vector<long> &knots, long M, long n_phi,
+                           long n, long W, long T, double eta, double eps) {
+              Detrender2d::Params params;
+              params.nfreq = nfreq;
+              params.knots = knots;
+              params.M = M;
+              params.n_phi = n_phi;
+              params.n = n;
+              params.W = W;
+              params.T = T;
+              params.eta = eta;
+              params.eps = eps;
+              return new Detrender2d(params);
+          }),
                py::arg("nfreq"), py::arg("knots"), py::arg("M"),
                py::arg("n_phi") = 2, py::arg("n") = 2, py::arg("W") = 4, py::arg("T") = 2048,
                py::arg("eta") = 1.0e-3, py::arg("eps") = 3.0e-5,
-               py::arg("channels_per_range") = 0,
-               "Create a Detrender2d.\n\n"
+               "Create a Detrender2d, from the Detrender2dParams fields as kwargs.\n\n"
                "Args:\n"
                "    nfreq: number of frequency channels\n"
                "    knots: non-decreasing list of channel indices, running from 0 to nfreq,\n"
@@ -166,31 +376,26 @@ void register_kernel_bindings(pybind11::module &m)
                "    W: window half-width (the window is 2W+1 samples)\n"
                "    T: output samples per row (chunk size)\n"
                "    eta: regularization strength (dimensionless)\n"
-               "    eps: mask-expansion threshold on r_min\n"
-               "    channels_per_range: internal freq-range width; 0 (the default) derives it\n"
-               "        from (nfreq, knots, T).  Exposed only because it is part of the\n"
-               "        frequency summation order: two instances with different values agree\n"
-               "        to roundoff but not bit-for-bit, so pass it explicitly when two\n"
-               "        instances must agree exactly (e.g. comparing T=512 against T=2048).\n\n"
+               "    eps: mask-expansion threshold on r_min\n\n"
                "Raises:\n"
-               "    RuntimeError: if no kernel is compiled for n_phi, if T is not a positive\n"
-               "        multiple of 32, if n is outside [0,2], if W is outside [0,16] or\n"
-               "        gives 2W+1 < n+1, or if the knot vector is invalid. The message says\n"
-               "        which.")
-          .def_readonly("nfreq", &Detrender2d::nfreq, "Number of frequency channels")
-          .def_readonly("M", &Detrender2d::M, "Number of spectator (beam) rows")
-          .def_readonly("n_phi", &Detrender2d::n_phi, "Spline degree in frequency")
-          .def_readonly("n", &Detrender2d::n, "Degree of the time polynomial")
-          .def_readonly("W", &Detrender2d::W, "Window half-width (the window is 2W+1 samples)")
-          .def_readonly("T", &Detrender2d::T, "Output samples per row (chunk size)")
+               "    RuntimeError: see the Detrender2dParams overload.")
+          .def_readonly("params", &Detrender2d::params, "The Detrender2dParams used to create this")
+          .def_property_readonly("nfreq", [](const Detrender2d &d) { return d.params.nfreq; })
+          .def_property_readonly("M", [](const Detrender2d &d) { return d.params.M; })
+          .def_property_readonly("n_phi", [](const Detrender2d &d) { return d.params.n_phi; })
+          .def_property_readonly("n", [](const Detrender2d &d) { return d.params.n; })
+          .def_property_readonly("W", [](const Detrender2d &d) { return d.params.W; })
+          .def_property_readonly("T", [](const Detrender2d &d) { return d.params.T; })
+          .def_property_readonly("eta", [](const Detrender2d &d) { return d.params.eta; })
+          .def_property_readonly("eps", [](const Detrender2d &d) { return d.params.eps; })
           .def_readonly("nbuf", &Detrender2d::nbuf, "Buffer samples per row, = T + 2W")
-          .def_readonly("eta", &Detrender2d::eta, "Regularization strength")
-          .def_readonly("eps", &Detrender2d::eps, "Mask-expansion threshold on r_min")
           .def_readonly("N_phi", &Detrender2d::N_phi, "Number of B-spline basis functions")
           .def_readonly("nzone", &Detrender2d::nzone, "Number of zones")
           .def_readonly("nfrange", &Detrender2d::nfrange, "Number of internal freq-ranges")
           .def_readonly("channels_per_range", &Detrender2d::channels_per_range,
-               "Freq-range width actually used (derived unless requested)")
+               "Internal freq-range width, derived from (nfreq, knots, T). It is part of the\n"
+               "frequency summation order, which is why results are bit-reproducible across\n"
+               "chunkings at a fixed T but only to roundoff across different T.")
           .def_static("configs", &Detrender2d::configs,
                "The compiled n_phi values. n, W and T are not among them: all three are\n"
                "runtime arguments. Returned as a list of ints.")
@@ -370,7 +575,63 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("show_registry", &GpuPeakFindingKernel::show_registry)
     ;
 
-    py::class_<GpuPfSquare>(m, "GpuPfSquare")
+    py::class_<GpuPfSquare>(m, "GpuPfSquare",
+        "Convolves the peak-finding profiles with an input array and accumulates the sum of\n"
+        "squares over time, in place, into a float64 accumulator.\n\n"
+        "This is what a peak-finding kernel does NOT give you: out_max is a max over trials\n"
+        "and a coarse-grained one at that, whereas the variance map is a sum over every\n"
+        "output time. Every axis except time is a spectator, so 'ndm' is just a row count::\n\n"
+        "    k = GpuPfSquare(max_kernel_width, total_beams, beams_per_batch, ndm, nt_in)\n"
+        "    k.allocate(bump_allocator)\n"
+        "    k.launch(acc, in_, ibatch)         # acc += sum_t (h_p * in)[t]^2\n")
+          .def(py::init<long, long, long, long, long>(),
+               py::arg("max_kernel_width"), py::arg("total_beams"), py::arg("beams_per_batch"),
+               py::arg("ndm"), py::arg("nt_in"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Create a GpuPfSquare.\n\n"
+               "Args:\n"
+               "    max_kernel_width: largest peak-finding boxcar, a power of two in\n"
+               "        [1, constants.max_pf_width]\n"
+               "    total_beams, beams_per_batch: beam geometry (total_beams must be a\n"
+               "        multiple of beams_per_batch)\n"
+               "    ndm: independent time series per beam. Any positive value -- it need not\n"
+               "        be a power of two, so a (Dpf, M) pair can simply be flattened.\n"
+               "    nt_in: time samples per chunk; a multiple of 32, and at least\n"
+               "        max(2*max_kernel_width, 32)")
+          .def("allocate", &GpuPfSquare::allocate, py::arg("allocator"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Allocate (and zero) persistent state from a BumpAllocator. Must be called\n"
+               "before launch().")
+          .def("launch",
+               [](GpuPfSquare &self, Array<double> &acc, const Array<float> &in_,
+                  long ibatch, uintptr_t stream_ptr) {
+                   self.launch(acc, in_, ibatch, reinterpret_cast<cudaStream_t> (stream_ptr));
+               },
+               py::arg("acc"), py::arg("in_"), py::arg("ibatch"), py::arg("stream_ptr"),
+               py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+               "GPU kernel launch (async, does not sync stream).\n\n"
+               "Args:\n"
+               "    acc: Array, shape (beams_per_batch, ndm, nprofiles), float64, fully\n"
+               "        contiguous, on GPU. ACCUMULATED INTO (+=), never overwritten, so the\n"
+               "        caller zeroes it when a new accumulation starts.\n"
+               "    in_: Array, shape (beams_per_batch, ndm, nt_in), float32, fully\n"
+               "        contiguous, on GPU.\n"
+               "    ibatch: 0 <= ibatch < nbatches. Calls must run 0, 1, ..., nbatches-1, 0,\n"
+               "        ... -- the kernel checks, since it carries per-beam input history\n"
+               "        across chunks.\n"
+               "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
+          .def_readonly("max_kernel_width", &GpuPfSquare::max_kernel_width)
+          .def_readonly("total_beams", &GpuPfSquare::total_beams)
+          .def_readonly("beams_per_batch", &GpuPfSquare::beams_per_batch)
+          .def_readonly("ndm", &GpuPfSquare::ndm)
+          .def_readonly("nt_in", &GpuPfSquare::nt_in)
+          .def_readonly("nprofiles", &GpuPfSquare::nprofiles,
+               "= 1 + 3*log2(max_kernel_width)")
+          .def_readonly("nbatches", &GpuPfSquare::nbatches)
+          .def_readonly("tpad", &GpuPfSquare::tpad,
+               "Input samples of history carried across chunks, = max(2*max_kernel_width, 32)")
+          .def_readonly("is_allocated", &GpuPfSquare::is_allocated)
+          .def_readonly("resource_tracker", &GpuPfSquare::resource_tracker)
           .def_static("test_random", &GpuPfSquare::test_random, py::call_guard<py::gil_scoped_release>())
     ;
 
@@ -378,7 +639,34 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("test_random", &GpuRingbufCopyKernel::test_random, py::call_guard<py::gil_scoped_release>())
     ;
 
-    py::class_<GpuTreeGriddingKernel>(m, "GpuTreeGriddingKernel")
+    py::class_<GpuTreeGriddingKernel>(m, "GpuTreeGriddingKernel",
+        "Rebins input frequency channels into 'tree' channels by weighted sums (the GPU\n"
+        "counterpart of ReferenceTreeGriddingKernel).\n\n"
+        "Constructed from a plan's gridding params::\n\n"
+        "    k = GpuTreeGriddingKernel(plan.tree_gridding_kernel_params)\n"
+        "    k.allocate(bump_allocator)\n"
+        "    k.launch(out, in_)")
+          .def(py::init<const TreeGriddingKernelParams &>(), py::arg("params"),
+               py::call_guard<py::gil_scoped_release>())
+          .def("allocate", &GpuTreeGriddingKernel::allocate, py::arg("allocator"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Copy the channel map to the GPU (as 32.32 fixed point). Must be called before\n"
+               "launch().")
+          .def("launch",
+               [](GpuTreeGriddingKernel &self, Array<void> &out, const Array<void> &in_,
+                  uintptr_t stream_ptr) {
+                   self.launch(out, in_, reinterpret_cast<cudaStream_t> (stream_ptr));
+               },
+               py::arg("out"), py::arg("in_"), py::arg("stream_ptr"),
+               py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+               "GPU kernel launch (async, does not sync stream).\n\n"
+               "Args:\n"
+               "    out: Array, shape (beams_per_batch, nchan, ntime), kernel dtype, on GPU\n"
+               "    in_: Array, shape (beams_per_batch, nfreq, ntime), kernel dtype, on GPU\n"
+               "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
+          .def_readonly("params", &GpuTreeGriddingKernel::params)
+          .def_readonly("is_allocated", &GpuTreeGriddingKernel::is_allocated)
+          .def_readonly("resource_tracker", &GpuTreeGriddingKernel::resource_tracker)
           .def_static("test_random", &GpuTreeGriddingKernel::test_random, py::call_guard<py::gil_scoped_release>())
           .def_static("time_selected", &GpuTreeGriddingKernel::time_selected, py::call_guard<py::gil_scoped_release>())
     ;
@@ -518,6 +806,11 @@ void register_kernel_bindings(pybind11::module &m)
           .def_property_readonly("N", [](const ReferencePeakFindingKernel &self) { return self.fs.N; })
           .def_property_readonly("Dout", [](const ReferencePeakFindingKernel &self) { return self.Dout; })
           .def_property_readonly("Dcore", [](const ReferencePeakFindingKernel &self) { return self.Dcore; })
+          .def_readonly("samples_per_chunk", &ReferencePeakFindingKernel::samples_per_chunk,
+               "Length-nprofiles list: the count that apply() divides by to turn its sum of\n"
+               "squares into out_var. Multiply out_var by this to recover the raw sum of\n"
+               "squares. Equal to nt_in for every profile when Dcore == 1, and smaller\n"
+               "otherwise -- the peak-finder then evaluates on a sublattice of output times.")
           .def("apply",
                [](ReferencePeakFindingKernel &self, Array<float> &out_max, Array<uint> &out_argmax,
                   const Array<float> &in_, const Array<float> &wt, long ibatch) {

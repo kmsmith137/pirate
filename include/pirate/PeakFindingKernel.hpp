@@ -117,7 +117,7 @@ struct PeakFindingKernelParams
     //
     // Dcore == 0 is invalid: validate() requires a power of two dividing (nt_in / nt_out).
     // DedispersionPlan fills stage2_pf_params[:].Dcore from DedispersionTree::Dcore (which
-    // the plan fills from the cdd2 registry if Params::gpu_runnable -- the default -- and
+    // the plan fills from the cdd2 registry if Params::cdd2_kernel_required -- the default -- and
     // otherwise sets to the default value time_downsampling).
     long Dcore = 0;
 
@@ -251,6 +251,14 @@ struct ReferencePeakFindingKernel
     long tpad = 0;  // prepadding (in "input time samples"), same for all levels
     long num_levels = 0;
     long expected_ibatch = 0;  // checked in apply()
+
+    // Number of (tout, isamp) evaluations per chunk, per profile p: the count that apply()
+    // divides by to turn its sum of squares into 'out_var'. Multiplying out_var by this
+    // recovers the raw sum of squares, which is what a caller summing over the whole time
+    // axis wants (see slow_avar.BruteForceVarianceMap). Equal to (nt_in / tmp_dt[l]) for
+    // p = 3l+q, hence to nt_in for every p when Dcore == 1, and smaller otherwise -- which
+    // is exactly why a sum over output times needs Dcore == 1 to be meaningful.
+    std::vector<long> samples_per_chunk;   // length (nprofiles)
 
     std::vector<long> tmp_dt;
     std::vector<long> tmp_nt;

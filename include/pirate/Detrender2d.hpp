@@ -51,13 +51,12 @@ namespace pirate {
 //     kernel's arrays are sized for n = 3, but running there would be a configuration no
 //     test validates, so the constructor refuses it; extend the reference first. The
 //     spline degree n_phi = 3 is a different matter -- fully supported and tested.
-//   - Results are bit-reproducible run to run, and across chunk lengths, only for a FIXED
-//     'channels_per_range'. It defaults to a value derived from (nfreq, knots, T), so two
-//     instances with different T sum frequency in different groupings and agree to
-//     roundoff (~1e-6 relative) rather than bit-for-bit. Pass it explicitly if bit-exact
-//     replay across chunk sizes matters. M is deliberately not an input to it, so the beam
-//     axis is always a spectator: one row's output never depends on how many rows were
-//     processed alongside it.
+//   - Results are bit-reproducible run to run, and across chunkings AT A FIXED T, but NOT
+//     across different T. The frequency summation is grouped into "freq-ranges" whose
+//     width is derived from (nfreq, knots, T), so two instances with different T sum
+//     frequency in different groupings and agree only to roundoff (~1e-6 relative). M is
+//     deliberately not an input to that width, so the beam axis is always a spectator: one
+//     row's output never depends on how many rows were processed alongside it.
 //
 // FOOTGUN, inherited from the reference: no constant-offset subtraction is performed.
 // The constant function is exactly in the span, so subtracting a per-zone offset would
@@ -71,39 +70,43 @@ namespace pirate {
 
 struct Detrender2d
 {
-    // Throws unless n_phi is one of the compiled configurations, if T is not a positive
-    // multiple of 32, if n is outside [0,2], if W is outside [0,16] or gives 2W+1 < n+1,
-    // or if the knot vector is invalid. 'knots' is a non-decreasing list of channel indices with
-    // multiplicity expressed by repetition; it must run from 0 to nfreq, with the first
-    // and last values repeated exactly n_phi+1 times (clamped ends are what put the
-    // constant function in the span) and no interior value repeated more than n_phi+1
-    // times.
-    // 'channels_per_range' is an internal tuning knob, exposed only because it is part
-    // of the frequency summation order: two instances with different values agree to
-    // roundoff but not bit-for-bit. Leave it 0 to derive it from (nfreq, knots, T), which
-    // is what production should do; pass it explicitly when two instances must agree
-    // exactly, e.g. to compare a T=512 run against a T=2048 one.
-    Detrender2d(long nfreq, const std::vector<long> &knots, long M,
-                long n_phi = 2, long n = 2, long W = 4, long T = 2048,
-                double eta = 1.0e-3, double eps = 3.0e-5,
-                long channels_per_range = 0);
+    struct Params
+    {
+        long nfreq = 0;
+
+        // A non-decreasing list of channel indices, with multiplicity expressed by
+        // repetition. It must run from 0 to nfreq, with the first and last values repeated
+        // exactly n_phi+1 times (clamped ends are what put the constant function in the
+        // span) and no interior value repeated more than n_phi+1 times.
+        std::vector<long> knots;
+
+        long M = 0;             // number of spectator (beam) rows
+        long n_phi = 2;         // spline degree in frequency
+        long n = 2;             // degree of the time polynomial
+        long W = 4;             // window half-width (the window is 2W+1 samples)
+        long T = 2048;          // output samples per row (chunk size)
+        double eta = 1.0e-3;    // regularization strength (dimensionless)
+        double eps = 3.0e-5;    // mask-expansion threshold on r_min
+
+        // Throws unless n_phi is one of the compiled configurations (see configs()), if T
+        // is not a positive multiple of 32, if n is outside [0,2], if W is outside [0,16]
+        // or gives 2W+1 < n+1, if nfreq/M/eta/eps are non-positive, or if the knot vector
+        // violates any of the rules above.
+        void validate() const;
+    };
+
+    explicit Detrender2d(const Params &params);
 
     ~Detrender2d();
 
-    const long nfreq;
-    const long M;        // number of spectator (beam) rows
-    const long n_phi;    // spline degree in frequency
-    const long n;        // degree of the time polynomial
-    const long W;        // window half-width (the window is 2W+1 samples)
-    const long T;        // output samples per row (chunk size)
-    const long nbuf;     // buffer samples per row, = T + 2W
-    const double eta;    // regularization strength (dimensionless)
-    const double eps;    // mask-expansion threshold on r_min
+    const Params params;
 
+    // Derived in the constructor.
+    const long nbuf;     // buffer samples per row, = T + 2W
     long N_phi;          // number of B-spline basis functions
     long nzone;          // number of zones
     long nfrange;        // number of freq-ranges (an internal decomposition; see the .cu)
-    long channels_per_range;   // freq-range width actually used (derived unless requested)
+    long channels_per_range;   // freq-range width used, derived from (nfreq, knots, T)
 
     // launch(): asynchronously launch the kernels, and return without synchronizing
     // the stream. Note: stream=NULL is allowed, but is not the default.

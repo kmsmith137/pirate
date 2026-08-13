@@ -231,9 +231,17 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
         tmp_sout[l] = xdiv(pow2(l), dt);
         tmp_arr[l] = Array<float> ({B,D,M,nt}, af_uhost | af_zero);
 
-        // To see that this is correct, note that the "base" time sample ends at 
+        // To see that this is correct, note that the "base" time sample ends at
         // time dt, and has length 2^l.
         tmp_iout[l] = xdiv(tpad + dt - pow2(l), dt);
+    }
+
+    // Per-profile evaluation count (see the .hpp). Profile 0 lives at level 0; profiles
+    // 3l+1, 3l+2, 3l+3 live at level l.
+    this->samples_per_chunk.resize(nprofiles);
+    for (long ip = 0; ip < nprofiles; ip++) {
+        long l = (ip > 0) ? ((ip-1) / 3) : 0;
+        samples_per_chunk[ip] = p.nt_out * tmp_nout[l];
     }
 }
 

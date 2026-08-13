@@ -889,29 +889,25 @@ static void fill_stencils(TimeStencils &tb, const vector<double> &P, int n_deg, 
 }
 
 
-Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
-                         long n_phi_, long n_, long W_, long T_,
-                         double eta_, double eps_, long channels_per_range_) :
-    nfreq(nfreq_), M(M_), n_phi(n_phi_), n(n_), W(W_), T(T_), nbuf(T_ + 2*W_),
-    eta(eta_), eps(eps_)
+void Detrender2d::Params::validate() const
 {
     bool found = false;
     for (const Detrender2dConfig &c: detrender_2d_configs)
-        if (c.n_phi == n_phi_)
+        if (c.n_phi == n_phi)
             found = true;
 
     if (!found) {
         stringstream ss;
-        ss << "Detrender2d: no kernel is compiled for n_phi=" << n_phi_
+        ss << "Detrender2d: no kernel is compiled for n_phi=" << n_phi
            << "; available configurations are " << config_list_str();
         throw runtime_error(ss.str());
     }
 
     // n is runtime. The bound is what the reference can validate, not what the kernel
     // could execute; see MAX_ORACLE_NDEG.
-    if ((n_ < 0) || (n_ > MAX_ORACLE_NDEG)) {
+    if ((n < 0) || (n > MAX_ORACLE_NDEG)) {
         stringstream ss;
-        ss << "Detrender2d: n=" << n_ << " must be in [0, " << MAX_ORACLE_NDEG << "]. "
+        ss << "Detrender2d: n=" << n << " must be in [0, " << MAX_ORACLE_NDEG << "]. "
            << "(The kernel's arrays are sized up to n = " << MAX_NDEG << ", but the numpy "
            << "reference pirate_frb.detrending_spline.SplineDetrender rejects n > "
            << MAX_ORACLE_NDEG << ", so a larger n would be a configuration that no test "
@@ -964,7 +960,7 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
     // constant baseline removable EXACTLY rather than shrunk. Reducing it does not
     // degrade gracefully, it destroys the property (at end multiplicity n_phi the best
     // fit to the constant 1 is off by 0.99).
-    const vector<long> &kn = knots_;
+    const vector<long> &kn = knots;
     if (long(kn.size()) < n_phi + 2)
         throw runtime_error("Detrender2d: knot vector is too short");
     for (size_t i = 1; i < kn.size(); i++)
@@ -992,32 +988,55 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
         }
     }
 
-    const long nk = long(kn.size());
-    N_phi = nk - n_phi - 1;
-    if (N_phi < 1)
+    if (long(kn.size()) - n_phi - 1 < 1)
         throw runtime_error("Detrender2d: N_phi = len(knots)-n_phi-1 must be >= 1");
 
-    // Interior multiplicities, and the zone boundaries (an interior knot of multiplicity
-    // exactly n_phi+1). No basis function straddles one -- phi_j has support
-    // [k_j, k_{j+n_phi+1}), and if the boundary occupies knot indices i..i+n_phi then
-    // j <= i-1 gives supp_hi <= v and j >= i gives supp_lo >= v -- so G and D_1 are
-    // exactly block diagonal there and the fits on the two sides decouple.
+    // Interior multiplicities. A multiplicity of exactly n_phi+1 is a zone boundary and is
+    // allowed (see the constructor); above that, the basis would be discontinuous.
+    for (long i = 0; i < long(kn.size()); ) {
+        long j = i;
+        while ((j < long(kn.size())) && (kn[j] == kn[i]))
+            j++;
+        if ((kn[i] > 0) && (kn[i] < nfreq) && (j - i > n_phi + 1)) {
+            stringstream ss;
+            ss << "Detrender2d: interior knot " << kn[i] << " has multiplicity "
+               << (j - i) << ", above n_phi+1 = " << (n_phi+1);
+            throw runtime_error(ss.str());
+        }
+        i = j;
+    }
+}
+
+
+Detrender2d::Detrender2d(const Params &params_) :
+    params(params_), nbuf(params_.T + 2*params_.W)
+{
+    params.validate();
+
+    // Local aliases for the params the constructor uses repeatedly.
+    const long nfreq = params.nfreq;
+    const long M = params.M;
+    const long n_phi = params.n_phi;
+    const long n = params.n;
+    const long W = params.W;
+    const long T = params.T;
+    const vector<long> &kn = params.knots;
+
+    const long nk = long(kn.size());
+    N_phi = nk - n_phi - 1;
+
+    // Zone boundaries: an interior knot of multiplicity exactly n_phi+1. No basis function
+    // straddles one -- phi_j has support [k_j, k_{j+n_phi+1}), and if the boundary occupies
+    // knot indices i..i+n_phi then j <= i-1 gives supp_hi <= v and j >= i gives supp_lo >= v
+    // -- so G and D_1 are exactly block diagonal there and the fits on the two sides
+    // decouple. (Larger multiplicities are rejected by validate().)
     vector<long> bounds;
     for (long i = 0; i < nk; ) {
         long j = i;
         while ((j < nk) && (kn[j] == kn[i]))
             j++;
-        const long mult = j - i;
-        if ((kn[i] > 0) && (kn[i] < nfreq)) {
-            if (mult > n_phi + 1) {
-                stringstream ss;
-                ss << "Detrender2d: interior knot " << kn[i] << " has multiplicity "
-                   << mult << ", above n_phi+1 = " << (n_phi+1);
-                throw runtime_error(ss.str());
-            }
-            if (mult == n_phi + 1)
-                bounds.push_back(kn[i]);
-        }
+        if ((kn[i] > 0) && (kn[i] < nfreq) && (j - i == n_phi + 1))
+            bounds.push_back(kn[i]);
         i = j;
     }
     nzone = long(bounds.size()) + 1;
@@ -1045,17 +1064,16 @@ Detrender2d::Detrender2d(long nfreq_, const vector<long> &knots_, long M_,
         zone_of_coef[j] = z;
     }
 
-    // ---- Basis tables, built in float64 and cast, so that the working dtype affects the
-    // arithmetic that uses the basis but not the basis itself.
-    // ---- Freq-range width: honour an explicit request, else derive it (see above).
-    if (channels_per_range_ > 0)
-        channels_per_range = channels_per_range_;
-    else {
+    // ---- Freq-range width, derived from the instance size (see above).
+    {
         const long ntile = (nbuf + PASS_THREADS - 1) / PASS_THREADS;
         channels_per_range = (nfreq * ntile) / CPR_TARGET_BLOCKS;
         channels_per_range = max(channels_per_range, CPR_MIN);
         channels_per_range = min(channels_per_range, CPR_MAX);
     }
+
+    // ---- Basis tables, built in float64 and cast, so that the working dtype affects the
+    // arithmetic that uses the basis but not the basis itself.
 
     const long npair_f = (n_phi+1)*(n_phi+2)/2;
     phi_stride  = 4*((n_phi + 1 + 3) / 4);
@@ -1235,28 +1253,29 @@ static void _launch(const Detrender2d &d, float *data, unsigned char *mask,
                     long phi_stride, long prod_stride, const void *tb_blob,
                     cudaStream_t stream)
 {
-    const int NB = bandwidth(NPHI, int(d.n));
+    const int NB = bandwidth(NPHI, int(d.params.n));
     const TimeStencils &tb = *reinterpret_cast<const TimeStencils *>(tb_blob);
 
     const int nbuf = int(d.nbuf);
-    const int n_deg = int(d.n);
-    const int W = int(d.W);
-    const int T = int(d.T);
+    const int n_deg = int(d.params.n);
+    const int W = int(d.params.W);
+    const int T = int(d.params.T);
+    const int M = int(d.params.M);
     const int S = int(solve_threads);
 
     // Kernel 1.
     {
-        dim3 nblocks((nbuf + PASS_THREADS - 1)/PASS_THREADS, int(d.nfrange), int(d.M));
+        dim3 nblocks((nbuf + PASS_THREADS - 1)/PASS_THREADS, int(d.nfrange), M);
         detrend_2d_accum_kernel<NPHI> <<< nblocks, PASS_THREADS, 0, stream >>>
             (data, mask, gu, phi_tab, prod_tab, fr_desc,
-             int(d.nfreq), int(d.nfrange), nbuf, int(phi_stride), int(prod_stride));
+             int(d.params.nfreq), int(d.nfrange), nbuf, int(phi_stride), int(prod_stride));
         CUDA_PEEK("detrend_2d_accum_kernel");
     }
 
     // Kernel 2. The shared-memory request usually exceeds the 48 KB default, so opt in.
     // Done once per (configuration, process) rather than per launch.
     {
-        const long nblk_max = long(nphi_zone_max)*(long(d.n)+1);
+        const long nblk_max = long(nphi_zone_max)*(long(n_deg)+1);
         const long ncompz_max = long(nphi_zone_max)*(NPHI+2);
         const long shmem = ((nblk_max*(NB+1) + 2*nblk_max)*S + ncompz_max*(S + 2*W) + (S + 2*W)) * 4;
 
@@ -1265,20 +1284,21 @@ static void _launch(const Detrender2d &d, float *data, unsigned char *mask,
         // hazard a per-instance value has (an instance with a small zone must never lower
         // a limit an earlier instance with a big zone depends on).
 
-        dim3 nblocks(int(T/S), int(d.nzone), int(d.M));
+        dim3 nblocks(int(T/S), int(d.nzone), M);
         detrend_2d_solve_kernel<NPHI> <<< nblocks, S, size_t(shmem), stream >>>
             (gu, acoef, rmin, zone_desc, fr_desc,
              int(d.nfrange), int(d.nzone), int(d.N_phi), nbuf, int(nphi_zone_max),
-             n_deg, W, T, float(d.eta), float(d.eps), tb);
+             n_deg, W, T, float(d.params.eta), float(d.params.eps), tb);
         CUDA_PEEK("detrend_2d_solve_kernel");
     }
 
     // Kernel 3.
     {
-        dim3 nblocks((nbuf + PASS_THREADS - 1)/PASS_THREADS, int(d.nfrange), int(d.M));
+        dim3 nblocks((nbuf + PASS_THREADS - 1)/PASS_THREADS, int(d.nfrange), M);
         detrend_2d_subtract_kernel<NPHI> <<< nblocks, PASS_THREADS, 0, stream >>>
             (data, mask, acoef, rmin, phi_tab, fr_desc,
-             int(d.nfreq), int(d.N_phi), int(d.nzone), nbuf, W, T, int(phi_stride), float(d.eps));
+             int(d.params.nfreq), int(d.N_phi), int(d.nzone), nbuf, W, T, int(phi_stride),
+             float(d.params.eps));
         CUDA_PEEK("detrend_2d_subtract_kernel");
     }
 }
@@ -1287,8 +1307,8 @@ static void _launch(const Detrender2d &d, float *data, unsigned char *mask,
 void Detrender2d::launch(Array<float> &data, Array<unsigned char> &mask, cudaStream_t stream) const
 {
     xassert_eq(data.ndim, 3);
-    xassert_shape_eq(data, ({M, nfreq, nbuf}));
-    xassert_shape_eq(mask, ({M, nfreq, nbuf}));
+    xassert_shape_eq(data, ({params.M, params.nfreq, nbuf}));
+    xassert_shape_eq(mask, ({params.M, params.nfreq, nbuf}));
     xassert(data.is_fully_contiguous());
     xassert(mask.is_fully_contiguous());
     xassert(data.on_gpu());
@@ -1300,13 +1320,13 @@ void Detrender2d::launch(Array<float> &data, Array<unsigned char> &mask, cudaStr
                     phi_tab.data, prod_tab.data, fr_desc.data, zone_desc.data,          \
                     nphi_zone_max, solve_threads, phi_stride, prod_stride, tb_blob, stream)
 
-    if (n_phi == 0)
+    if (params.n_phi == 0)
         _DT2D_DISPATCH(0);
-    else if (n_phi == 1)
+    else if (params.n_phi == 1)
         _DT2D_DISPATCH(1);
-    else if (n_phi == 2)
+    else if (params.n_phi == 2)
         _DT2D_DISPATCH(2);
-    else if (n_phi == 3)
+    else if (params.n_phi == 3)
         _DT2D_DISPATCH(3);
     else
         throw runtime_error("Detrender2d::launch: internal error, unhandled configuration");
@@ -1342,15 +1362,22 @@ void Detrender2d::time_selected()
         for (long i = 0; i <= n_phi; i++)
             knots.push_back(nfreq);
 
-        const long Tc = 2048;
-        Detrender2d det(nfreq, knots, M, n_phi, /*n=*/2, /*W=*/4, Tc);
+        Detrender2d::Params p;
+        p.nfreq = nfreq;
+        p.knots = knots;
+        p.M = M;
+        p.n_phi = n_phi;
+        p.n = 2;
+        p.W = 4;
+        p.T = 2048;
+        Detrender2d det(p);
 
         // Global memory traffic: kernel 1 reads the whole buffer, kernel 3 reads and
         // writes the output region. Every byte of an ideal implementation is touched
         // exactly once per pass, so (time -> bandwidth) is the figure of merit: the
         // kernels are expected to be memory bound.
         const double nbytes = double(M) * double(nfreq)
-            * (double(det.nbuf) + 2.0*double(det.T)) * 5.0;   // 4 bytes data + 1 byte mask
+            * (double(det.nbuf) + 2.0*double(p.T)) * 5.0;   // 4 bytes data + 1 byte mask
 
         // The kernels are branch-free and the work is mask-independent, so the timing
         // does not depend on the data. An all-valid mask is used so that the "normal"
@@ -1360,8 +1387,8 @@ void Detrender2d::time_selected()
         CUDA_CALL(cudaMemset(mask.data, 1, M*nfreq*det.nbuf));
 
         cout << "\nDetrender2d::time_selected()\n"
-             << "    (n_phi, n, W, T) = (" << det.n_phi << ", " << det.n << ", " << det.W
-             << ", " << det.T << "), M = " << M << ", nfreq = " << nfreq << "\n"
+             << "    (n_phi, n, W, T) = (" << p.n_phi << ", " << p.n << ", " << p.W
+             << ", " << p.T << "), M = " << M << ", nfreq = " << nfreq << "\n"
              << "    N_phi = " << det.N_phi << ", nzone = " << det.nzone
              << ", nfrange = " << det.nfrange << ", solve_threads = " << det.solve_threads
              << ", channels_per_range = " << det.channels_per_range << "\n"

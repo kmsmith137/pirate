@@ -90,11 +90,11 @@ long CoalescedDdKernel2::get_registry_dcore(
 // 'production_kernels' flag is set, and even then only for the (dtype, subband_counts, ...)
 // combinations listed there.
 //
-// The 'plan' argument must have been constructed with gpu_runnable=false, since a
-// gpu_runnable=true plan queries the registry itself (and throws on a missing kernel).
+// The 'plan' argument must have been constructed with cdd2_kernel_required=false, since a
+// cdd2_kernel_required=true plan queries the registry itself (and throws on a missing kernel).
 static bool _all_kernels_registered(const Dtype &dtype, const DedispersionPlan &plan)
 {
-    xassert(!plan.params.gpu_runnable);
+    xassert(!plan.params.cdd2_kernel_required);
 
     for (const DedispersionTree &tree: plan.trees)
         if (!CoalescedDdKernel2::registry().has_key(_make_tree_key(dtype,tree)))
@@ -482,11 +482,11 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
         config.validate();
 
         // Check that this build actually contains the cdd2 kernels for 'config', and skip
-        // with a message if not. (A gpu_runnable=false plan does not query the registry,
+        // with a message if not. (A cdd2_kernel_required=false plan does not query the registry,
         // so it can be constructed in any build -- unlike the real plan below, which
         // throws on a missing kernel.)
         DedispersionPlan::Params probe_params;
-        probe_params.gpu_runnable = false;
+        probe_params.cdd2_kernel_required = false;
 
         if (!_all_kernels_registered(dtype, DedispersionPlan(config, probe_params))) {
             cout << "\nCoalescedDdKernel2::time(): " << name << ", " << dtype.str()

@@ -5,5 +5,7 @@ from .PfVariance import PfVarianceConvolver, PfVariance, PfAvarExact, PfAvarAppr
 from .VarianceMap import VarianceMapBlock, VarianceMapBase
 from .VarianceMapExact import VarianceMapExact
 from .VarianceMapApproximation import VarianceMapApproximation
+from .brute_force import BruteForceVarianceMap
+from .brute_force_gpu import GpuBruteForceVarianceMap
 from .check_approximation import check_approximation
 from .check_mc import check_avar_mc

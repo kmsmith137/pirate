@@ -34,14 +34,21 @@ struct DedispersionPlan
 {
     struct Params
     {
-        // gpu_runnable: if true, then Dcore values will be taken from the cdd2 kernel
+        // cdd2_kernel_required: if true, then Dcore values will be taken from the cdd2 kernel
         // registry, and an exception will be thrown if a cdd2 kernel is missing. If false,
-        // then default Dcore values will be assigned (Dcore = pf.time_downsampling), and
-        // the plan cannot be used in a GpuDedisperser (this is useful in contexts such as
-        // the 'pirate_frb show_dedisperser' CLI). Not to be confused with the config-level
-        // 'gpu_valid' flag in DedispersionConfig::make_random(), which restricts random
-        // configs to precompiled cdd2 kernels.
-        bool gpu_runnable = true;
+        // then default Dcore values will be assigned (Dcore = pf.time_downsampling).
+        //
+        // Since the Dcore values are then not the compiled kernels' values, a false plan
+        // cannot be used in a GpuDedisperser. It is still perfectly usable on the GPU by
+        // callers that drive kernels themselves without going through cdd2 -- see
+        // slow_avar.GpuBruteForceVarianceMap, which runs GpuDedispersionKernel,
+        // GpuSbDedispersionKernel and GpuPfSquare -- as well as in host-only contexts such
+        // as the 'pirate_frb show_dedisperser' CLI.
+        //
+        // Not to be confused with the config-level 'gpu_valid' flag in
+        // DedispersionConfig::make_random(), which restricts random configs to precompiled
+        // cdd2 kernels.
+        bool cdd2_kernel_required = true;
 
         // is_incomplete: this is a hack, only used by make_incomplete_plan_from_yaml().
         // If true, then the constructor just sets 'config' and 'params'. Some (but not all)
@@ -50,7 +57,7 @@ struct DedispersionPlan
         // for compute kernels" should xassert(!params.is_incomplete) -- see e.g. to_yaml()
         // and the GpuDedisperser/ReferenceDedisperser constructors.
         //
-        // The constructor asserts !(is_incomplete && gpu_runnable): incomplete plans take
+        // The constructor asserts !(is_incomplete && cdd2_kernel_required): incomplete plans take
         // their Dcore values from the producer's yaml, never from the local kernel registry.
         bool is_incomplete = false;
     };
@@ -214,7 +221,7 @@ struct DedispersionPlan
     std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length ntrees
 
     // Note: stage2_pf_params[:].Dcore is copied from trees[:].Dcore (which the constructor
-    // fills from the cdd2 kernel registry if params.gpu_runnable, else from a default; see
+    // fills from the cdd2 kernel registry if params.cdd2_kernel_required, else from a default; see
     // Part 1), so that peak-finders built from the plan (GPU or reference) agree on
     // out_argmax token granularity.
     std::vector<PeakFindingKernelParams> stage2_pf_params;          // length ntrees

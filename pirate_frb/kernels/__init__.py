@@ -1,6 +1,8 @@
 # Import C++ kernel classes from pirate_pybind11
 from ..pirate_pybind11 import (
     CoalescedDdKernel2,
+    DedispersionKernelParams,
+    Detrender2dParams,
     GpuDedispersionKernel,
     GpuLaggedDownsamplingKernel,
     GpuPeakFindingKernel,
@@ -8,12 +10,14 @@ from ..pirate_pybind11 import (
     GpuRingbufCopyKernel,
     GpuSbDedispersionKernel,
     GpuTreeGriddingKernel,
+    MegaRingbuf,
     PfOutputMicrokernel,
     PfWeightReaderMicrokernel,
     ReferenceDequantizationKernel,
     ReferenceLagbuf,
     ReferenceTree,
     ReferenceTreeGriddingKernel,
+    TreeGriddingKernelParams,
 )
 
 # These classes have method injections, which live in kernels/<ClassName>.py.

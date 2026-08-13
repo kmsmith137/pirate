@@ -22,7 +22,8 @@ from . import tests
 from . import slow_avar
 from .fast_avar import PfAvarApproximation, test_fast_avar
 
-from .slow_avar import SparseTile, SparseTileTriple, SparseTilePerM, PfVarianceConvolver, PfVariance
+from .slow_avar import (SparseTile, SparseTileTriple, SparseTilePerM, PfVarianceConvolver, PfVariance,
+                        BruteForceVarianceMap, GpuBruteForceVarianceMap)
 
 from . import (
     DedispersionConfig,
@@ -215,6 +216,27 @@ def test(args):
             test_fast_avar.test_cpp_pf_variance()
             if i == 0:  # end-to-end (builds a plan + runs the full python reference); run once
                 test_fast_avar.test_cpp_pf_avar_approximation()
+
+            # Brute-force variance map: deterministic (fixed configs, no randomness), and each
+            # test runs a full sweep over all input channels, so once is enough.
+            if i == 0:
+                BruteForceVarianceMap.test_vs_per_tfm(7, [1])
+                BruteForceVarianceMap.test_vs_per_tfm(7, [2,2,1], num_early_triggers=1)
+                BruteForceVarianceMap.test_phase_collapse(7)
+                BruteForceVarianceMap.test_detrender_fp32(7)
+                # The Detrender2d path has no analytic oracle, so test_column_norms is what
+                # covers it -- and the polyphase sum, which is where it interacts with a
+                # time-downsampled tree.
+                BruteForceVarianceMap.test_column_norms(6, [2,1], detrender=False)
+                BruteForceVarianceMap.test_column_norms(6, [2,1], detrender=True)
+                BruteForceVarianceMap.test_column_norms(6, [2,1], num_primary_trees=2, nifreq=1)
+                BruteForceVarianceMap.test_column_norms(6, [1], num_early_triggers=1, nifreq=1)
+                # The GPU sweep against the CPU one. Both GPU kernels are validated against
+                # their reference implementations by --sbdd and --pfsq, so this covers the
+                # python driver rather than the kernels.
+                GpuBruteForceVarianceMap.test_vs_cpu(8, [2,2,1], nbeams=4)
+                GpuBruteForceVarianceMap.test_vs_cpu(8, [2,2,1], num_early_triggers=1,
+                                                     detrender=True, nfreq=200)
 
         if run_all_tests or args.amax:
             tests.test_decode_argmax()
@@ -871,14 +893,14 @@ def show_dedisperser(args):
         atomic_print(config_yaml)
         print_separator('DedispersionPlan starts here')
 
-    # gpu_runnable iff some flag needs consistency with the compiled GPU kernels:
+    # cdd2_kernel_required iff some flag needs consistency with the compiled cdd2 kernels:
     # -a requests it explicitly; -r/-R construct a GpuDedisperser from this plan.
     # Otherwise the plan is displayable even in a build without the config's cdd2
     # kernels, at the cost of showing default (non-registry) Dcore values.
-    gpu_runnable = args.authoritative or args.resources or args.fine_grained_resources
+    cdd2_kernel_required = args.authoritative or args.resources or args.fine_grained_resources
 
     t0 = time.time()
-    plan = DedispersionPlan(config, gpu_runnable=gpu_runnable)
+    plan = DedispersionPlan(config, cdd2_kernel_required=cdd2_kernel_required)
     plan_dt = time.time() - t0
     if args.time:
         atomic_print(f'# DedispersionPlan construction took {plan_dt:.3f} seconds\n\n')

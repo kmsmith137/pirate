@@ -155,7 +155,7 @@ struct CoalescedDdKernel2
     // Metadata-only: does not touch the GPU (safe in GPU-less contexts). Used at
     // DedispersionPlan-construction time (Part 1) to fill tree.Dcore; plans that
     // must be constructible without compiled kernels use
-    // DedispersionPlan::Params::gpu_runnable = false, which skips this query
+    // DedispersionPlan::Params::cdd2_kernel_required = false, which skips this query
     // entirely. (Key-building helpers are file-local in CoalescedDdKernel2.cu.)
     static long get_registry_dcore(const ksgpu::Dtype &dtype,
                                    const DedispersionTree &tree);
