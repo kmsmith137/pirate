@@ -2801,6 +2801,16 @@ where $N_\alpha = \sum_\alpha 1$ is the number of $\alpha$-values, and $f(x)$ is
 \begin{equation}
 f(x) \equiv \frac{x-1}{1+(x/10)}
 \end{equation}
+This is implemented by \verb|class VarMapDistance| (in \verb|pirate_frb/slow_avar/|),
+which should be used wherever a distance is reported, so that results are comparable.
+Besides $D$ itself, it exposes the quantity $D_0$ (the second branch above, evaluated
+unconditionally) and the worst per-element ratio
+$\max_{\alpha F} (A^{\rm true}_{\alpha F} / A^{\rm approx}_{\alpha F})$ together with the
+$(\alpha,F)$ where it occurs. These are more informative than $D$ alone: if the max ratio
+is only a little larger than $1$, then inflating $A^{\rm approx}$ slightly gives a finite
+distance close to $D_0$, so such an approximation is nearly usable -- whereas
+$D = \infty$ by itself does not distinguish it from a hopeless one.
+
 This unusual distance function has the following properties:
 \begin{enumerate}
 \item Underestimating any matrix element of $A$ is catastrophic -- the approximation
@@ -2849,6 +2859,7 @@ all channels have similar variance, not per-matrix-element analysis.
 \end{itemize}
 
 \subsection{First milestone: assume a precomputed $A$-matrix}
+\label{ssec:first_milestone}
 
 Let's start by considering the following question.
 Suppose that we've precomputed the variance map $A$, given a {\tt DedispersionConfig} 

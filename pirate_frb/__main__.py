@@ -239,6 +239,8 @@ def test(args):
                                                      detrender=True, nfreq=200)
                 slow_avar.variance_map_io.test_variance_map_io(7)
 
+            slow_avar.VarMapDistance.test_random()
+
         if run_all_tests or args.amax:
             tests.test_decode_argmax()
 
