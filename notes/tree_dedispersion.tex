@@ -3,6 +3,7 @@
 \usepackage{setspace}
 \usepackage{graphicx}
 \usepackage{amsmath}
+\usepackage{amssymb}
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{tikz}
@@ -2858,8 +2859,19 @@ all channels have similar variance, not per-matrix-element analysis.
 
 \end{itemize}
 
-\subsection{First milestone: assume a precomputed $A$-matrix}
+\subsection{How well can we do starting from a precomputed $A$-matrix?}
 \label{ssec:first_milestone}
+
+In this subsection, we'll explore algorithms for finding low-rank approximations,
+under the assumption that the dense $A$-matrix has been precomputed and saved to disk.
+
+This subsection is organized as alternating subsubsections which are human-authored
+or agent-authored.
+The human-authored sections usually propose ideas for the agent to explore, and the
+agent-authored sections usually report results (after running a ``campaign'' via the
+\verb|ch-research| skill).
+
+\subsubsection{Campaign 1 setup [human-authored]}
 
 Let's start by considering the following question.
 Suppose that we've precomputed the variance map $A$, given a {\tt DedispersionConfig} 
@@ -2940,6 +2952,388 @@ estimates at low DM (with little or no change in the rank). Given our unusual di
 function $D$, it may not change the value of $D$ dramatically.
 
 \end{itemize}
+
+\subsubsection{Campaign 1 results [agent-authored]}
+\label{sssec:varmap_proposed}
+
+This subsubsection describes an algorithm which came out of an initial exploration of the
+milestone above, and the numbers it produces. The short version: the approximation which works is
+a {\em one-sided nonnegative factorization at coarse-grained DM}, built by alternating two
+linear programs. It is more accurate than any clustering we tried, it turns out to be cheaper to
+apply than the alternatives, it never forms the dense $A$, and its output is the array the
+production peak-finding kernel already stores.
+
+Throughout, $Q$ and $W$ are the factors of $A^{\rm approx} = QW^T$ as in
+\S\ref{ssec:variance_map_setup}: $W$ is $N_{\rm freq}$-by-$K$ and $Q$ is $(2^{r-R}MP)$-by-$K$.
+Note the symbol clash with the {\tt Detrender2d} time half-width $W$ of \S\ref{sec:sd_problem};
+below, the detrender's half-width is always named in words, never as $W$.
+
+\paragraph*{Why not least squares.}
+It is worth being explicit about why the obvious tool fails, because it shapes everything else.
+The constraint in Eq.\ (\ref{eq:distance_function}) is {\em per matrix element}: a single
+$A^{\rm approx}_{\alpha F} < A^{\rm true}_{\alpha F}$ anywhere sends $D$ to infinity. So this is
+a {\em one-sided} (upper-bound) approximation problem, not a least-squares problem, and a
+truncated SVD is not merely suboptimal but usually inadmissible. A truncation has negative
+entries; clipping them to zero still leaves it underestimating $A$ somewhere, and no rescaling
+can repair that. On a rank-8 map with a detrender, truncations at rank 8, 16, 32 and 64 are all
+inadmissible ($D = \infty$); the first admissible one is rank 128, and it scores $D = 0.10$
+where a rank-128 envelope scores $0.054$. Least-squares accuracy is close to irrelevant here,
+and at low rank it is actively misleading.
+
+The exception is instructive. With {\em no} {\tt Detrender2d}, $A$ really is close to low rank
+-- numerically ${\rm rank}(A) = 54$ to $138$ on our maps -- and a clipped, inflated rank-16 SVD
+reaches $D \approx 10^{-6}$, four orders of magnitude better than any clustering at the same
+rank. Frequency subbands alone do not break this. It is the {\tt Detrender2d} that destroys the
+algebraic structure (\S\ref{sec:detrending_2d} smears every one-hot across its whole spline
+zone, which also destroys the exact zeros of $A$), and once it is switched on the SVD is dead at
+every rank below $N_{\rm freq}$. The algorithm below is aimed at that case, since it is the one
+we run.
+
+\paragraph*{The shape of the approximation: coarse assignment.}
+Partition the $N_\alpha \equiv 2^{r-R}MP$ output indices $\alpha$ into $N_\beta$ groups, indexed by
+$\beta$, and write $\beta(\alpha)$ for the group containing $\alpha$. Give each {\em group} a
+single coefficient vector $q_\beta \in \mathbb{R}^K_{\ge 0}$, and let every $\alpha$ in that
+group share it:
+\begin{equation}
+A^{\rm approx}_{\alpha F} = (W q_{\beta(\alpha)})_F
+\label{eq:varmap_coarse_assign}
+\end{equation}
+To fix the shapes: $W$ is $N_{\rm freq}$-by-$K$, so its $K$ columns are frequency vectors (the
+``dictionary''); $q_\beta$ is a column vector of $K$ nonnegative numbers; $W q_\beta$ is
+therefore an $N_{\rm freq}$-vector, and $(\cdot)_F$ takes its $F$-th component. In words,
+Eq.\ (\ref{eq:varmap_coarse_assign}) says {\em every output row in a group is the same
+nonnegative combination of the same $K$ dictionary vectors}.
+
+This is the notes' own coarse-graining of \S\ref{ssec:first_milestone} with one generalization:
+instead of assigning each group a single dictionary vector, we let it use a nonnegative
+{\em combination} of them.
+
+{\bf Relation to $Q$, and the degrees of freedom.} Collect the $q_\beta$ as the rows of a
+$N_\beta$-by-$K$ matrix $\bar Q$. Then the $Q$ of $A^{\rm approx} = QW^T$ is $\bar Q$ with its rows
+duplicated across each group,
+\begin{equation}
+Q = S \bar Q,
+\hspace{1.5cm}
+S_{\alpha\beta} = \begin{cases} 1 & \mbox{if $\beta(\alpha) = \beta$} \\ 0 & \mbox{otherwise}\end{cases}
+\label{eq:varmap_qbar}
+\end{equation}
+where $S$ is the $N_\alpha$-by-$N_\beta$ one-hot group-membership matrix. So $Q$ formally has
+$N_\alpha$ rows, but only $N_\beta$ {\em distinct} ones, and the free parameters are $W$ and
+$\bar Q$ alone: $K(N_{\rm freq} + N_\beta)$ of them, against $K(N_{\rm freq} + N_\alpha)$ for an
+unrestricted per-row factorization. The rank is $K$ either way.
+
+That row duplication is not a technicality -- it is where the practical win comes from, since
+$N_\alpha / N_\beta = 2^{L-R} (M/N)$ is large (233 at CHORD tree 0). At the CHIME tree-0 geometry
+below, with $N_\alpha = 524288$, $N_\beta = 8192$, $N_{\rm freq} = 16384$ and $K = 32$: $W$ carries
+$5.2\times10^5$ parameters and $\bar Q$ carries $2.6\times10^5$ dense -- or $1.6\times10^4$
+nonzeros once $q_\beta$ is capped at two nonzero entries -- against $1.7\times10^7$ for a
+per-row $Q$ of the same rank.
+
+The groups are exactly the $\beta$ of \S\ref{ssec:first_milestone}, so that
+$N_\beta = 2^{r-L}NP$: coarse-grain DM by a factor
+$2^{L-R}$, and never merge across a frequency subband or a peak-finding profile. An ablation
+over the three axes says this is not a stylistic choice -- merging subbands costs a factor
+$489$ to $3174$ at equal rank, merging profiles a factor $11$ to $175$, whereas merging
+{\em fine-grained} DM within a multiplet is nearly free (a factor $1.0$ to $3.9$). The reason
+subbands cannot be merged is that they have disjoint frequency support, and this survives the
+detrender: the support stops being disjoint but stays concentrated, which is enough.
+
+Define the coarse-grained variance map, as in \S\ref{ssec:first_milestone},
+\begin{equation}
+\bar A_{\beta F} = \max_{\alpha \in \beta} A_{\alpha F}
+\label{eq:varmap_abar}
+\end{equation}
+Then any $q_\beta$ satisfying $W q_\beta \ge \bar A_{\beta,:}$ elementwise is automatically
+admissible for every fine row in the group, since $(Wq_\beta)_F \ge \bar A_{\beta F} \ge
+A_{\alpha F}$. {\bf This is the pivot of the whole algorithm}: admissibility becomes a property
+of $\bar A$ alone, so the optimization never needs to see a dense row of $A$.
+
+\paragraph*{What the algorithm needs, and why it is cheap.}
+Only three things: $\bar A$, the fine row sums $y_\alpha = \sum_F A_{\alpha F}$, and the group
+labels (pure geometry). The row sums are needed only to {\em score} the result, not to build it.
+Both $\bar A$ and $y$ are computable in a single streaming pass, because the brute-force sweep
+of \S\ref{ssec:variance_map_bruteforce} already produces $A$ one input channel (one column) at a
+time: max-reduce each column into its groups as it appears, accumulate $y$, and discard the
+column. For a CHIME-shaped tree this is $1.0$ GiB of $\bar A$ instead of $64$ GiB of $A$; for
+CHORD, $5.4$ GiB instead of $1251$ GiB. Measured against a dense reduction on the $64$ GiB case,
+the streamed $\bar A$ is bit-identical, uses $1.9$ GiB of peak RSS against $128.5$ GiB, and is
+20\% faster.
+
+\paragraph*{Step 1: the dictionary (this is also the initialization).}
+We need an initial $W$, i.e.\ $K$ frequency vectors from which every group's row can be covered.
+Take the $N_\beta$ rows of $\bar A$, normalize each to unit sum,
+\begin{equation}
+\bar u_{\beta F} = \bar A_{\beta F} \Big/ \sum_{F'} \bar A_{\beta F'}
+\end{equation}
+and cluster them by greedy agglomerative merging: start with one cluster per group, and
+repeatedly merge the pair whose merge increases the objective least. The dictionary vector for
+cluster $c$ is the elementwise max over its members, $W_{Fc} = \max_{\beta \in c} \bar
+u_{\beta F}$.
+
+Two things about this are worth understanding rather than just implementing.
+
+{\em Why shapes and not rows.} If a group is assigned a single dictionary vector, it is always
+free to rescale it -- $q_\beta = s e_c$ costs nothing in rank -- and the optimal $s$ is
+$\max_F \bar A_{\beta F}/W_{Fc}$. Substituting it, the resulting $y^{\rm approx}_\beta /
+y^{\rm true}_\beta$ is invariant under $W \to cW$ and does not involve the row's overall
+normalization at all. So {\em once rescaling is allowed, only the shapes matter}, and clustering
+the raw rows optimizes the wrong thing -- visibly so, since it produces a non-monotone frontier
+in $K$. Clustering the unit-sum shapes instead is worth 3--20\% (typically 11--14\%) at no extra
+cost, and the argument is stronger for the full algorithm below, whose $q_\beta$ is exactly
+scale-invariant in each atom. Note this dictionary needs only $\bar A$ -- not even $y$.
+
+{\em Why this is a good enough starting point.} The initial $W$ is a max envelope, so the
+one-hot assignment $q_\beta = e_{c(\beta)}$ is feasible: the alternation starts from an
+admissible point with a known finite $D$, and every step below preserves feasibility. The
+dictionary also does not have to be optimal, only reasonable: building it from $\bar A$ at the
+same coarse-graining used for assignment is within 3.6\% of building it from a finer $\bar A$,
+and within 3.5\% of building it from the dense $A$. So there is no reason to keep a finer
+$\bar A$ around -- the memory footprint is set by the assignment alone.
+
+\paragraph*{Step 2: the Q-step (optimize the assignment, holding the dictionary fixed).}
+Let $s_c = \sum_F W_{Fc}$, so that a group's approximate row sum is $s \cdot q_\beta$. Since $f$
+in Eq.\ (\ref{eq:distance_function}) is strictly increasing, minimizing $D$ over $q_\beta$ is
+exactly minimizing the row sum, and the groups are independent. So the Q-step is, for each
+$\beta$ separately, the covering linear program
+\begin{equation}
+\min_{q_\beta \ge 0} \ s \cdot q_\beta
+\hspace{1.2cm}\mbox{subject to}\hspace{1.2cm}
+W q_\beta \ \ge \ \bar A_{\beta,:}
+\label{eq:varmap_qstep}
+\end{equation}
+with $K$ variables and $N_{\rm freq}$ constraints. Three remarks. It is {\em exact}, not a
+heuristic -- given $W$, no better assignment exists. It uses only that $f$ is increasing, so it
+is insensitive to the exact shape of the cost function. And it is embarrassingly parallel over
+groups. At $N_{\rm freq} = 16384$ it should be solved with constraint generation (start from a
+subset of channels, add violated ones, repeat); this is $8.7\times$ faster than handing the
+solver all the constraints and agrees with it to $10^{-9}$, and without it the method looks
+unaffordable when it is not.
+
+\paragraph*{Step 3: the W-step (optimize the dictionary, holding the assignment fixed).}
+This one needs a small trick, because the objective depends on $W$ through the column sums while
+the constraint depends on $W$ elementwise, so it does not decouple as written. Observe that $f$
+is concave:
+\begin{equation}
+f'(x) = \frac{1.1}{(1+x/10)^2} > 0,
+\hspace{1.5cm}
+f''(x) < 0
+\end{equation}
+For a concave $f$ the tangent at the current iterate is a global {\em upper} bound, $f(x) \le
+f(x_0) + f'(x_0)(x-x_0)$, so minimizing the tangent is a majorize-minimize step and is guaranteed
+not to increase the true objective. The majorizer is linear in $y$, hence linear in $W$: with
+weights $w_\alpha = f'(x_\alpha)/y^{\rm true}_\alpha$ evaluated at the current iterate, it is
+$\sum_{F,c} W_{Fc}\,(\sum_\alpha w_\alpha Q_{\alpha c})$, which {\em decouples over frequency
+channels}. So the W-step is, for each channel $F$ separately,
+\begin{equation}
+\min_{W_{F,:} \ge 0} \ g \cdot W_{F,:}
+\hspace{1.2cm}\mbox{subject to}\hspace{1.2cm}
+Q\,W_{F,:} \ \ge \ \bar A_{:,F},
+\hspace{1.2cm} g_c \equiv \sum_\alpha w_\alpha Q_{\alpha c}
+\label{eq:varmap_wstep}
+\end{equation}
+with $K$ variables and $N_\beta$ constraints. Again only $\bar A$ is touched.
+
+\paragraph*{Iteration schedule.}
+Feasibility is an invariant rather than a hope: after a W-step the current $q_\beta$ is still
+feasible for the next Q-step, and after a Q-step the current $W_{F,:}$ is still feasible for the
+next W-step. Starting from the admissible envelope of Step 1, every LP in every run we did was
+feasible.
+
+In practice, {\bf run three Q-steps and two W-steps and stop}. The first Q-step is 68--94\% of
+the total gain; the W-step is worth only a further 7--18\%, and {\em nothing at all} on a map
+with no detrender. Monotonicity was checked over 435 consecutive half-steps: the only increases
+were $\sim\!10^{-5}$ relative, all attributable to the admissibility repair below.
+
+\paragraph*{Numerical care (this is not optional).}
+An LP solution that is ``feasible'' to the solver can still violate $W q \ge \bar A$ enough to
+make $D$ infinite. The tolerance to budget for is {\em relative}, but a solver's tolerance is
+{\em absolute} -- HiGHS's default primal feasibility tolerance is $\sim\!10^{-7}$, which on a
+matrix element of $10^{-12}$ is meaningless. On one subbanded map the W-step set $W_{Fc} = 0$
+where $A^{\rm true} > 0$, which no rescaling can repair. Two fixes, both cheap:
+\begin{enumerate}
+\item {\bf Equilibrate every constraint to a right-hand side of 1}, i.e.\ rewrite $Mx \ge b$ as
+ $(M/b)x \ge 1$, dropping the $b=0$ rows (automatically satisfied since $M, x \ge 0$). The
+ solver's absolute tolerance is then a uniform relative one. This brought the worst violation
+ down to $1.3\times10^{-7}$ -- exactly the solver tolerance -- on every map.
+\item {\bf Repair exactly and locally afterwards}, rather than applying a blanket multiplicative
+ margin: scale row $\beta$ of $Q$ by $\max(1, \max_F \bar A_{\beta F}/(Wq_\beta)_F)$, and
+ similarly per channel after a W-step. Scaling one row of $Q$ touches only that row of the
+ product, so the repair cannot break anything else.
+\end{enumerate}
+With both in place, all 1944 approximations evaluated in the study were admissible with
+${\rm max\_r} = 1$ exactly.
+
+\paragraph*{Choosing the coarse-graining factor $L$.}
+There is a usable design rule. The {\em floor} $D_{\rm floor}(L)$ -- the plain max envelope of
+Eq.\ (\ref{eq:varmap_abar}) lifted back to $A$, with no LP at all -- is a hard lower bound for
+the whole coarse-assigned family at any rank, and it is cheap to evaluate. Empirically the
+achieved distance adds it in quadrature to the distance the same algorithm would reach with
+unlimited $L$:
+\begin{equation}
+D(L) \ \approx \ \sqrt{D_\infty^2 + D_{\rm floor}(L)^2}
+\label{eq:varmap_quadrature}
+\end{equation}
+which held to $-6$\%/$+11$\% over 25 predictions spanning five octaves of $2^{r-L}$. So: pick $L$
+such that $D_{\rm floor}(L) \lesssim D_{\rm target}/3$, which requires only a streamed $\bar A$
+and one envelope evaluation, and then the LP machinery is worth building.
+
+A second empirical law is useful for extrapolating between configurations. At fixed
+$n_{\rm dm,wt} \equiv 2^{r-L}$ (the {\em number} of coarse DM bins), $D$ varies by only
+$1.15$--$1.37\times$ over tree ranks 12 to 16, whereas at fixed $L$ it varies by 12--$142\times$.
+So $D$ is set by $n_{\rm dm,wt}$, not by $L$, and in the fine regime
+\begin{equation}
+D \ \approx \ C(r) \, n_{\rm dm,wt}^{-0.85},
+\hspace{1.2cm} C \approx 1.3 \ \mbox{to} \ 2.6 \ \mbox{for} \ r = 8 \ \mbox{to} \ 16
+\end{equation}
+The exponent is $0.85$ and not $1$; assuming $1$ under-predicts $D$ by roughly $2\times$ per
+four octaves of extrapolation. Because a fixed \verb|wt_dm_downsampling| is a {\em finer}
+fractional DM cut at higher rank, production is better off than any subscale measurement
+suggests.
+
+\paragraph*{Results.}
+All distances below are from \verb|class VarMapDistance| (\S\ref{ssec:distance_function}) and all
+approximations are admissible (${\rm max\_r} = 1$). ``Envelope'' is the best plain clustering we
+found, which is the same greedy agglomerative merge in shape space but with one-hot assignment.
+
+One quantity in the table needs defining first. Write ${\rm nnz}$ for the number of {\em nonzero}
+entries of $q_\beta$: how many of the $K$ dictionary vectors a group actually uses. It is a
+separate budget from the rank -- $K$ is the size of the {\em shared} dictionary, ${\rm nnz}$ is
+how much of it each group draws on -- and the two enter the cost differently (see below).
+The plain envelope is ${\rm nnz} = 1$ by construction, since each group is assigned one vector.
+The Q-step of Eq.\ (\ref{eq:varmap_qstep}) is {\em not} asked to be sparse and returns
+${\rm nnz} = 2$ to $3$ anyway. The ``${\rm nnz} \le 2$'' row is the variant where it is
+additionally constrained: keep the best admissible subset of size 2 of the LP's own support,
+then re-run the alternation with that support frozen.
+
+The cleanest measurement is at the real CHIME tree-0 geometry ($r{=}15$, $N{=}1$, $P{=}16$,
+$N_{\rm freq} = 16384$, $N_\alpha = 524288$, dense $|A| = 64$ GiB), coarse-grained at
+$L$ corresponding to the shipped \verb|wt_dm_downsampling| $=64$, i.e.\ $N_\beta = 8192$ groups.
+The {\tt Detrender2d} is the one used throughout this study: a single spline zone with
+$n_\phi = 2$, $n = 2$, time half-width $2$, $T = 2048$, $\eta = 10^{-3}$,
+$\epsilon = 3\times10^{-5}$, and a uniform knot vector giving 8 knot intervals across the band
+(hence $N_\phi = 10$ spline basis functions), held fixed as $N_{\rm freq}$ varies.
+{\bf Note the time half-width is 2, which is the pessimistic end of the range}: it is the
+setting that makes the low-DM rows hard, and the distances below would improve by roughly
+$2.8\times$ at half-width 8 (see the last bullet of ``what is not yet established'' below).
+The table is therefore a conservative operating point, not a tuned one.
+
+\begin{center}
+\begin{tabular}{lcccc}
+rank $K$ & 8 & 16 & 32 & 64 \\
+\hline
+(a) envelope (one-hot, ${\rm nnz} = 1$) & 0.0750 & 0.0504 & 0.0357 & 0.0261 \\
+(b) {\bf this algorithm} (${\rm nnz}$ unconstrained) & {\bf 0.0412} & {\bf 0.0277} & {\bf 0.0191} & {\bf 0.0136} \\
+(c) this algorithm, ${\rm nnz} \le 2$ & 0.0470 & 0.0331 & 0.0235 & 0.0182 \\
+\hline
+gain at equal rank, (a)/(b) & 1.82$\times$ & 1.82$\times$ & 1.87$\times$ & 1.92$\times$ \\
+gain at equal rank, (a)/(c) & 1.60$\times$ & 1.52$\times$ & 1.52$\times$ & 1.43$\times$ \\
+\end{tabular}
+\end{center}
+
+Every entry is a distance $D$, and all three rows are the same rank $K$: they differ only in how
+many dictionary vectors each group may use. Constraining ${\rm nnz}$ to 2 costs 14--34\% in $D$
+and is worth doing only when it buys more than that in cost, which at this geometry it does not
+-- see below.
+
+For reference, the coarse-graining alone -- one weight per group, i.e.\ rank $N_\beta = 8192$ and
+no factorization at all, which is what production currently computes -- gives $D = 0.0043$ on
+the same map. That is the floor $D_{\rm floor}(L)$ of Eq.\ (\ref{eq:varmap_quadrature}).
+
+{\bf The trade this exposes is the useful output.} Rank 8192 at $D = 0.0043$ costs
+$1.34\times10^8$ multiply-adds to apply; rank 32 with ${\rm nnz}=2$ at $D = 0.0235$ costs
+$5.4\times10^5$, i.e.\ {\em 248$\times$ cheaper to apply for 5.4$\times$ more $D$}; rank 8 is
+$910\times$ cheaper for $11\times$ more $D$. Which point on that curve is wanted is a science
+question -- how much conservative overestimation of the output variance the peak-finder's
+threshold can absorb -- not an algorithmic one, and this is the curve on which to answer it.
+
+At equal {\em apply cost} rather than equal rank, the factorization is $2.4$--$3.1\times$ better
+in $D$ than the envelope at this geometry. On subscale detrended maps the equal-rank gain is
+$1.23$--$1.55\times$, so nothing about the gain was an artefact of small maps -- it grows with
+scale. Restricting the algorithm to see only $\bar A$, rather than giving it dense per-row
+access, costs $0.93$--$1.06\times$: nothing, and occasionally better, since the coarse constraint
+acts as a mild regularizer.
+
+Two further points, which were not obvious to us in advance:
+
+\begin{itemize}
+
+\item {\bf It is cheaper to apply, not just more accurate.} Evaluating $y = Q(W^Tv)$ costs
+ $K N_{\rm freq} + N_\beta\,{\rm nnz}$ multiply-adds, where ${\rm nnz}$ is the number of dictionary
+ vectors a group actually uses (the LP returns 2--3, without being asked). At the CHIME tree-0
+ geometry this buys $2.4$--$3.1\times$ in $D$ at equal apply cost. Note the
+ saving comes from coarse assignment: with a {\em per-row} $q_\alpha$ the same factorization is
+ {\em worse} than the envelope at equal cost, because the $N_\alpha\,{\rm nnz}$ term dominates.
+ Whether to additionally cap ${\rm nnz}$ at 2 depends on which term dominates: cap when
+ $N_\beta \gtrsim K N_{\rm freq}/4$, which is true at $N_{\rm freq} = 400$ and false at
+ $N_{\rm freq} = 16384$.
+
+\item {\bf The output is the array the kernel already stores.} \verb|PeakFindingKernelParams|'
+ weight array has shape $(n_{\rm dm,wt}, n_{t,\rm wt}, P, N)$, i.e.\ one scalar per
+ coarse-graining group $\beta$ -- which is precisely Eq.\ (\ref{eq:varmap_coarse_assign}) with
+ ${\rm nnz} = 1$. So this algorithm's $Q$ is the object production already has, generalized from
+ one entry per group to two or three; ${\rm nnz} = 2$ means the peak-finder applies the existing
+ weight multiply twice and adds. A per-{\em row} assignment is not expressible in the current
+ kernel at all. The reduction is therefore not only cheaper, it is the only one of the two that
+ fits the hardware.
+
+\end{itemize}
+
+\paragraph*{Two ideas that did not work.}
+Recorded because both look attractive and both cost real effort to rule out.
+
+The {\bf ``give up on the hard rows''} strategy suggested by the saturation of $f$ does not pay.
+Abandoning a fraction $q$ of rows (sending them to $y \to \infty$) adds $10q$ to $D$ and removes
+the share of $D$ those rows carried, and empirically that share is only $\approx 5q$ -- the
+cost is broad, not concentrated. Break-even therefore needs $D \gtrsim 2$, and measured $D$ is
+below that everywhere; 71 of 72 direct tests lost. The related suggestion of inflating variance
+at low DM should be dropped for the same reason.
+
+{\bf Non-uniform DM cuts} (log, sqrt, inverse-log spacings) are no better than uniform ones.
+
+\paragraph*{What is not yet established.}
+\begin{itemize}
+\item The high-rank ladder ($r > 12$) is all $N=1$, because no compiled
+ {\tt GpuSbDedispersionKernel} exists for $N>1$ at {\tt dd\_rank} 7--8. The design rules above
+ are statements about the DM axis and are unaffected, but the {\em absolute} $D$ at a subbanded
+ production config is not measured; the subband ablation suggests it is $1.2$--$2.4\times$
+ higher.
+\item Nothing at CHORD scale has been measured. The streaming reduction removes the memory
+ obstacle, but scoring $D$ with \verb|VarMapDistance| still needs the dense $A$; a variant which
+ accepts $(\bar A, y, \mbox{labels})$ would close this, since for a coarse-assigned
+ approximation admissibility is a theorem rather than a measurement.
+\item Everything is single-tree with no early triggers, and no time-downsampled trees.
+\item The shape-space greedy dictionary is the one step that does not scale:
+ $O(N_\beta^{2.4} N_{\rm freq})$, extrapolating to days at CHORD's $N_\beta$. Everything else is linear
+ or better. It is a clustering, so a cheaper one would do, but the obvious substitutes
+ (k-means on log-shape) are erratic at group granularity.
+\item The {\tt Detrender2d} time half-width is a large and cheap lever on all of this: raising it
+ from 2 to 8 improves $D$ at fixed rank by $2.8\times$, removes the low-DM cost concentration
+ entirely, makes the SVD viable again, and costs $\sim$7\% more sweep time. Whether that
+ half-width is acceptable on detrending grounds is a separate question, not addressed here.
+\end{itemize}
+
+\subsubsection{Campaign 2 setup [human-authored]}
+
+This is really interesting progress!
+So far we've learned that:
+
+\begin{enumerate}
+
+\item Coarse-graining $A \rightarrow \bar A$ is a good approximation in practice (in the
+ sense that $D(A,\bar A)$ is small). It seems safe to assume that this should always be
+ the first step, and that further steps (such as $QW$-alternation) should operate on the
+ smaller $\bar A$ matrix for speed.
+
+\item $QW$-alternation is an interesting algorithm for optimizing $D(A^{\rm true}, A^{\rm approx})$, 
+ given a rank-$K$ initial guess for $A^{\rm approx}$. As currently formulated, $QW$-alternation
+ doesn't change the rank $K$.
+
+\item Truncating the SVD decomposition doesn't work on its own. (But I'd like to explore
+ using the SVD decomposition in combination with other ideas -- see below.)
+
+\end{enumerate}
+
+(Placeholder: more to come in this section.)
 
 \subsection{Brute-force computation of the variance map}
 \label{ssec:variance_map_bruteforce}
