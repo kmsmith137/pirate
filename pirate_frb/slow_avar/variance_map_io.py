@@ -8,6 +8,11 @@ The DedispersionConfig and Detrender2dParams that produced the map are stored as
 (the same trick DedispersionPlan.make_incomplete_plan_from_yaml uses to move a plan between
 processes), and are re-parsed on demand by VarianceMapFile.config / .detrender.
 
+Per-tree metadata includes the tree's RESTRICTED subband_counts, which is what makes the file
+self-describing: the config's toplevel subband vector is not the same thing, and recovering one
+from the other means reapplying the restriction rule (early trigger, then pf_rank). Storing it
+is what lets a reader decompose the multiplet index m into (subband, fine DM) with no plan.
+
 Arrays are stored uncompressed. That is not an oversight: uncompressed blocks are what let
 asdf memmap them, so a map far larger than RAM can be opened and sliced. Compressing would
 trade that away for a poor ratio on dense float64 data.
@@ -20,16 +25,42 @@ import numpy as np
 
 class VarianceMapTree:
     """Per-tree metadata from a variance-map file: enough to interpret A[itree] without a
-    DedispersionPlan (and so without a GPU). Read-only."""
+    DedispersionPlan (and so without a GPU). Read-only.
 
-    _FIELDS = ('itree', 'r', 'R', 'M', 'P', 'ndm_out', 'gamma', 'early_trigger_level', 'nfreq')
+    'subband_counts' is the tree's RESTRICTED subband vector (length R+1), not the toplevel
+    one from the config: it is what decomposes the multiplet index m into (subband, fine DM),
+    which is the one thing the other fields do not determine. Without it a reader has to
+    re-derive it from the config yaml, which needs the restriction rule and is easy to get
+    subtly wrong.
+    """
+
+    _INT_FIELDS = ('itree', 'r', 'R', 'M', 'P', 'ndm_out', 'gamma', 'early_trigger_level',
+                   'nfreq')
+    _FIELDS = _INT_FIELDS + ('subband_counts',)
 
     def __init__(self, d):
-        for f in self._FIELDS:
+        for f in self._INT_FIELDS:
             object.__setattr__(self, f, int(d[f]))
+
+        if 'subband_counts' not in d:
+            raise RuntimeError(
+                "variance-map file predates the 'subband_counts' field. Regenerate it with"
+                " 'pirate_frb variance_map', or migrate it (see"
+                " plans/varmap_subband_counts_migration.md).")
+
+        sbc = tuple(int(c) for c in d['subband_counts'])
+        if len(sbc) != self.R + 1:
+            raise RuntimeError(f'variance-map file: tree {self.itree} has subband_counts'
+                               f' {sbc} of length {len(sbc)}, expected R+1 = {self.R+1}')
+        object.__setattr__(self, 'subband_counts', sbc)
 
     def __setattr__(self, k, v):
         raise AttributeError(f'VarianceMapTree is read-only (tried to set {k!r})')
+
+    @property
+    def N(self):
+        """Number of frequency subbands (M counts multiplets, i.e. subband x fine DM)."""
+        return sum(self.subband_counts)
 
     def to_dict(self):
         return {f: getattr(self, f) for f in self._FIELDS}
@@ -166,7 +197,8 @@ def write_variance_map(filename, A, plan, detrender=None, device=None, overrides
         info = dict(itree=itree, r=r, R=R, M=int(t.frequency_subbands.M),
                     P=int(t.nprofiles), ndm_out=int(t.ndm_out),
                     gamma=int(t.primary_tree_index),
-                    early_trigger_level=int(t.early_trigger_level), nfreq=int(plan.nfreq))
+                    early_trigger_level=int(t.early_trigger_level), nfreq=int(plan.nfreq),
+                    subband_counts=[int(c) for c in t.frequency_subbands.subband_counts])
 
         a = np.ascontiguousarray(A[itree], dtype=np.float64)
         want = (info['ndm_out'], info['M'], info['P'], info['nfreq'])
@@ -226,7 +258,7 @@ def read_variance_map(filename, lazy=True):
     return VarianceMapFile(None, tree, lazy=False)
 
 
-def test_variance_map_io(toplevel_tree_rank=8, verbose=True):
+def test_variance_map_io(toplevel_tree_rank=8, num_early_triggers=0, verbose=True):
     """Round-trips a real sweep through an ASDF file: arrays, config, detrender and
     per-tree metadata must all survive, and a closed lazy read must raise rather than
     hand back a dangling memmap.
@@ -244,7 +276,8 @@ def test_variance_map_io(toplevel_tree_rank=8, verbose=True):
     from .brute_force import BruteForceVarianceMap, _make_test_config, _make_test_detrender
     from ..utils import atomic_print
 
-    config = _make_test_config(toplevel_tree_rank, [2, 2, 1])
+    config = _make_test_config(toplevel_tree_rank, [2, 2, 1],
+                               num_early_triggers=num_early_triggers)
     plan = DedispersionPlan(config, cdd2_kernel_required=False)
     dparams = _make_test_detrender(config)
     bf = BruteForceVarianceMap(plan, detrender=dparams)
@@ -265,6 +298,17 @@ def test_variance_map_io(toplevel_tree_rank=8, verbose=True):
                     assert (t.r, t.R, t.M, t.P) == (bf.tree_r[itree], bf.tree_R[itree],
                                                     bf.tree_M[itree], bf.tree_P[itree])
                     assert vm.matrix(itree).shape == (t.ndm_out * t.M * t.P, t.nfreq)
+
+                    # subband_counts is the tree's RESTRICTED vector, so it must match the
+                    # plan's rather than the config's -- the two differ whenever an early
+                    # trigger or a smaller pf_rank restricts it, which is exactly the case
+                    # this field exists to record.
+                    fs = plan.trees[itree].frequency_subbands
+                    assert t.subband_counts == tuple(int(c) for c in fs.subband_counts), \
+                        (itree, t.subband_counts, fs.subband_counts)
+                    assert len(t.subband_counts) == t.R + 1
+                    assert t.N == int(fs.N), (itree, t.N, fs.N)
+                    assert sum(c << l for l, c in enumerate(t.subband_counts)) == t.M
 
                 assert vm.ntime == bf.ntime and vm.nphases == bf.nphases
                 assert vm.nbeams == bf.nbeams and vm.device == 'cpu'
@@ -305,12 +349,27 @@ def test_variance_map_io(toplevel_tree_rank=8, verbose=True):
         except RuntimeError as e:
             assert 'variance_map' in str(e), str(e)
 
+        # A pre-migration file (no subband_counts) is rejected with a message that says what
+        # to do about it, rather than a bare KeyError from deep inside the reader.
+        with asdf.open(path, lazy_load=False, memmap=False) as af:
+            tree = {'variance_map': dict(af['variance_map'])}
+            tree['variance_map']['trees'] = [{k: v for k, v in d.items()
+                                              if k != 'subband_counts'}
+                                             for d in tree['variance_map']['trees']]
+            old = os.path.join(os.path.dirname(path), 'old_format.asdf')
+            asdf.AsdfFile(tree).write_to(old)
+        try:
+            read_variance_map(old)
+            raise AssertionError('read_variance_map accepted a pre-migration file')
+        except RuntimeError as e:
+            assert 'subband_counts' in str(e) and 'migrat' in str(e), str(e)
+
         nbytes = os.path.getsize(path)
     finally:
         import shutil
         shutil.rmtree(os.path.dirname(path), ignore_errors=True)
 
     if verbose:
-        atomic_print(f"    test_variance_map_io(r={toplevel_tree_rank}): {len(A)} tree(s)"
-                     f" round-tripped lazily and eagerly, {nbytes/2**20:.1f} MiB file,"
-                     f" memmap + use-after-close checked")
+        atomic_print(f"    test_variance_map_io(r={toplevel_tree_rank},"
+                     f" et={num_early_triggers}): {len(A)} tree(s) round-tripped lazily and"
+                     f" eagerly, {nbytes/2**20:.1f} MiB file, memmap + use-after-close checked")

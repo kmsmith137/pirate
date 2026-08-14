@@ -238,6 +238,9 @@ def test(args):
                 GpuBruteForceVarianceMap.test_vs_cpu(8, [2,2,1], num_early_triggers=1,
                                                      detrender=True, nfreq=200)
                 slow_avar.variance_map_io.test_variance_map_io(7)
+                # Again with an early trigger, which is where the stored per-tree
+                # subband_counts differs from the config's toplevel vector.
+                slow_avar.variance_map_io.test_variance_map_io(7, num_early_triggers=1)
 
             slow_avar.VarMapDistance.test_random()
             if i == 0:  # deterministic (fixed seed); run once
