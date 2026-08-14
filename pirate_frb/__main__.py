@@ -240,6 +240,8 @@ def test(args):
                 slow_avar.variance_map_io.test_variance_map_io(7)
 
             slow_avar.VarMapDistance.test_random()
+            if i == 0:  # deterministic (fixed seed); run once
+                slow_avar.varmap_eval.self_test()
 
         if run_all_tests or args.amax:
             tests.test_decode_argmax()

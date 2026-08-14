@@ -6,6 +6,8 @@ from .VarianceMap import VarianceMapBlock, VarianceMapBase
 from .VarianceMapExact import VarianceMapExact
 from .VarianceMapApproximation import VarianceMapApproximation
 from .VarMapDistance import VarMapDistance
+from .varmap_eval import (LowRankApprox, FactoredApprox, ClusterEnvelope, DenseApprox,
+                          evaluate, evaluate_reduced, reduce_map, frontier, row_distances)
 from .brute_force import BruteForceVarianceMap
 from .brute_force_gpu import GpuBruteForceVarianceMap
 from .variance_map_io import (VarianceMapFile, VarianceMapTree,
