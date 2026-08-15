@@ -44,6 +44,8 @@ name             caller-supplied label, or the approximation's own name
 rank             k, the number of factor columns -- taken from the FACTORED form, never
                  from a numerically computed rank of the dense product. None if unknown.
 nalpha, nfreq    shape of A_true
+nscored          rows that contributed to D0. Less than nalpha when A_true has outputs with
+                 no variance, which ``VarMapDistance`` ignores -- see its docstring.
 D, D0, max_r     as defined by ``VarMapDistance``
 argmax_r         (alpha, F) of the worst underestimate, in GLOBAL row indices
 admissible       True iff max_r <= 1, i.e. iff D is finite
@@ -85,7 +87,7 @@ import time
 
 import numpy as np
 
-from .VarMapDistance import VarMapDistance
+from .VarMapDistance import VarMapDistance, YTRUE_FLOOR
 from ..utils import atomic_print
 
 
@@ -268,18 +270,23 @@ def _block_rows(nfreq, block_rows):
 
 
 def _distance(A_true, approx, block_rows):
-    """(D, D0, max_r, argmax_r), computed by VarMapDistance one row block at a time.
+    """(D, D0, max_r, argmax_r, nscored), computed by VarMapDistance one row block at a time.
 
-    Combining blocks is exact: D0 is a mean over rows, so it is re-weighted by block size, and
-    max_r is a max. Tie-breaking for argmax_r matches the single-call case because both this
-    loop and VarMapDistance keep the first strict maximum.
+    Combining blocks is exact: D0 is a mean over SCORED rows, so it is re-weighted by each
+    block's scored count (not by the block size -- VarMapDistance ignores rows of A_true with
+    no variance, see its docstring), and max_r is a max. Tie-breaking for argmax_r matches the
+    single-call case because both this loop and VarMapDistance keep the first strict maximum.
+
+    Blocks are evaluated with allow_empty=True, since a block may legitimately contain only
+    ignored rows; the "nothing was scored" check is then applied to the whole matrix here.
     """
 
     nalpha, nfreq = A_true.shape
     nb = _block_rows(nfreq, block_rows)
 
     fsum = 0.0
-    max_r = -np.inf
+    nscored = 0
+    max_r = 0.0
     argmax_r = (0, 0)
 
     for start in range(0, nalpha, nb):
@@ -287,19 +294,28 @@ def _distance(A_true, approx, block_rows):
         rows_true = np.asarray(A_true[start:stop])
         rows_approx = approx.rows(start, stop)
         try:
-            d = VarMapDistance(rows_true, rows_approx)
+            d = VarMapDistance(rows_true, rows_approx, allow_empty=True)
         except RuntimeError as e:
             # VarMapDistance reports a row index within the block it was handed; make the
             # index global, since that is the one the caller can act on.
             raise RuntimeError(f'{e} [rows {start}:{stop} of the full matrix; add {start} to'
                                ' any row index in the message above]') from None
-        fsum += d.D0 * (stop - start)
+        if d.nscored > 0:
+            fsum += d.D0 * d.nscored
+            nscored += d.nscored
         if d.max_r > max_r:
             max_r = d.max_r
             argmax_r = (d.argmax_r[0] + start, d.argmax_r[1])
 
-    D0 = fsum / nalpha
-    return (D0 if (max_r <= 1.0) else np.inf), D0, max_r, argmax_r
+    if nscored == 0:
+        raise RuntimeError(
+            f'evaluate: all {nalpha} rows of A_true have no variance (row sums below'
+            f' {YTRUE_FLOOR}), so no row could be scored. A few such rows are expected'
+            ' (a W=0 Detrender2d annihilates the DM=0 output), but a map where every output'
+            ' has zero variance means a broken sweep or config.')
+
+    D0 = fsum / nscored
+    return (D0 if (max_r <= 1.0) else np.inf), D0, max_r, argmax_r, nscored
 
 
 def _inflate(distance_fn, approx, max_r):
@@ -348,7 +364,7 @@ def evaluate(A_true, approx, *, name=None, rank=None, inflate=True, block_rows=N
                            f' approx {approx.shape}')
 
     t0 = time.time()
-    D, D0, max_r, argmax_r = _distance(A_true, approx, block_rows)
+    D, D0, max_r, argmax_r, nscored = _distance(A_true, approx, block_rows)
 
     inflation, D_inflated = 1.0, D
     if (max_r > 1.0) and inflate:
@@ -358,6 +374,7 @@ def evaluate(A_true, approx, *, name=None, rank=None, inflate=True, block_rows=N
     r = dict(name=(name if (name is not None) else approx.name),
              rank=approx.rank,
              nalpha=int(A_true.shape[0]),
+             nscored=int(nscored),
              nfreq=int(A_true.shape[1]),
              D=float(D),
              D0=float(D0),
@@ -393,7 +410,7 @@ def _reduced_distance(Abar, y, labels, approx, block_rows):
         rows_true = np.asarray(Abar[start:stop])
         rows_approx = approx.rows(start, stop)
         try:
-            d = VarMapDistance(rows_true, rows_approx)
+            d = VarMapDistance(rows_true, rows_approx, allow_empty=True)
         except RuntimeError as e:
             raise RuntimeError(f'{e} [groups {start}:{stop} of Abar; add {start} to any row'
                                ' index in the message above]') from None
@@ -414,20 +431,30 @@ def _reduced_distance(Abar, y, labels, approx, block_rows):
     nalpha = labels.size
     nb2 = _block_rows(1, block_rows)
     fsum = 0.0
+    nscored = 0
 
     for start in range(0, nalpha, nb2):
         stop = min(start + nb2, nalpha)
         yt = np.asarray(y[start:stop], dtype=np.float64).reshape(-1, 1)
         ya = s[labels[start:stop]].reshape(-1, 1)
         try:
-            d = VarMapDistance(yt, ya)
+            d = VarMapDistance(yt, ya, allow_empty=True)
         except RuntimeError as e:
             raise RuntimeError(f'{e} [outputs {start}:{stop}; the "matrix" here is the column'
                                ' of true row sums y, so a "row" is one output alpha]') from None
-        fsum += d.D0 * (stop - start)
+        if d.nscored > 0:
+            fsum += d.D0 * d.nscored
+            nscored += d.nscored
 
-    D0 = fsum / nalpha
-    return (D0 if (max_r <= 1.0) else np.inf), D0, max_r, argmax_r
+    if nscored == 0:
+        raise RuntimeError(
+            f'evaluate_reduced: all {nalpha} outputs have no variance (y below {YTRUE_FLOOR}),'
+            ' so no output could be scored. A few such outputs are expected (a W=0 Detrender2d'
+            ' annihilates the DM=0 output), but a map where every output has zero variance'
+            ' means a broken sweep or config.')
+
+    D0 = fsum / nscored
+    return (D0 if (max_r <= 1.0) else np.inf), D0, max_r, argmax_r, nscored
 
 
 def evaluate_reduced(Abar, y, labels, approx, *, name=None, rank=None, inflate=True,
@@ -493,7 +520,7 @@ def evaluate_reduced(Abar, y, labels, approx, *, name=None, rank=None, inflate=T
         raise RuntimeError(f'evaluate_reduced: labels out of range [0,{Abar.shape[0]})')
 
     t0 = time.time()
-    D, D0, max_r, argmax_r = _reduced_distance(Abar, y, labels, approx, block_rows)
+    D, D0, max_r, argmax_r, nscored = _reduced_distance(Abar, y, labels, approx, block_rows)
 
     inflation, D_inflated = 1.0, D
     if (max_r > 1.0) and inflate:
@@ -503,6 +530,7 @@ def evaluate_reduced(Abar, y, labels, approx, *, name=None, rank=None, inflate=T
     r = dict(name=(name if (name is not None) else approx.name),
              rank=approx.rank,
              nalpha=int(labels.size),
+             nscored=int(nscored),
              nbeta=int(Abar.shape[0]),
              nfreq=int(Abar.shape[1]),
              reduced=True,
@@ -588,9 +616,13 @@ def frontier(A_true, algorithm, ranks, *, name=None, **kwargs):
 def row_distances(A_true, approx, block_rows=None):
     """Per-row f(y_approx/y_true), as an (nalpha,) array: which rows the distance is paid on.
 
-    This is the summand of D0, so ``row_distances(...).mean()`` is D0. Computed by calling
+    This is the summand of D0, so ``np.nanmean(row_distances(...))`` is D0. Computed by calling
     VarMapDistance once per row, which costs a few microseconds per row of python overhead --
     fine for analysis, not for an inner loop.
+
+    A row with no variance (see the ``VarMapDistance`` docstring) has no distance to report and
+    comes back as **nan**, not 0: it is excluded from D0 rather than contributing zero to it,
+    and a 0 here would understate the mean. Use ``np.nanmean`` / ``np.nanargmax``.
     """
 
     approx = as_approx(approx)
@@ -603,7 +635,10 @@ def row_distances(A_true, approx, block_rows=None):
         rows_true = np.asarray(A_true[start:stop])
         rows_approx = approx.rows(start, stop)
         for i in range(stop - start):
-            out[start+i] = VarMapDistance(rows_true[i:i+1], rows_approx[i:i+1]).D0
+            # allow_empty: a single ignored row is a call in which nothing was scored, which
+            # is a legitimate per-row outcome rather than the degenerate-map error.
+            out[start+i] = VarMapDistance(rows_true[i:i+1], rows_approx[i:i+1],
+                                          allow_empty=True).D0
 
     return out
 
@@ -761,18 +796,39 @@ def self_test(verbose=True):
     B[42] = A[42] * 4.0
     rd = row_distances(A, DenseApprox(B))
     r = evaluate(A, DenseApprox(B))
-    assert abs(rd.mean() - r['D0']) < 1.0e-12, (rd.mean(), r['D0'])
-    assert int(np.argmax(rd)) == 42, np.argmax(rd)
+    assert abs(np.nanmean(rd) - r['D0']) < 1.0e-12, (np.nanmean(rd), r['D0'])
+    assert int(np.nanargmax(rd)) == 42, np.nanargmax(rd)
 
-    # --- a zero row of A_true is rejected, with a GLOBAL row index in the message ---
+    # --- outputs with no variance are ignored, and the block weighting stays exact ---
+    # A W=0 Detrender2d annihilates the DM=0 output, so these rows occur in real maps. They
+    # must drop out of BOTH the D0 average and its denominator, and the blockwise combination
+    # must weight by scored rows rather than by block size -- otherwise the answer depends on
+    # the block size, which is the bug this checks for.
     Az = A.copy()
-    Az[150] = 0.0
+    Az[150] = 0.0                  # exactly zero
+    Az[151] = 1.0e-16              # float32 roundoff of zero, which is how they really arrive
+    ref = evaluate(A[[i for i in range(nalpha) if i not in (150, 151)]],
+                   DenseApprox(A[[i for i in range(nalpha) if i not in (150, 151)]] * 1.3))
+    for nb in (7, 64, 150, nalpha):
+        r = evaluate(Az, DenseApprox(Az * 1.3), block_rows=nb)
+        assert r['nscored'] == nalpha - 2, (nb, r['nscored'])
+        assert r['nalpha'] == nalpha, (nb, r)
+        assert abs(r['D0'] - ref['D0']) < 1.0e-12 * max(1.0, abs(ref['D0'])), (nb, r, ref)
+        assert np.isfinite(r['D']), (nb, r)
+        assert r['argmax_r'][0] not in (150, 151), (nb, r)
+
+    # row_distances reports nan there, and nanmean still reproduces D0.
+    rd = row_distances(Az, DenseApprox(Az * 1.3))
+    assert np.isnan(rd[150]) and np.isnan(rd[151]), rd[150:152]
+    assert abs(np.nanmean(rd) - ref['D0']) < 1.0e-12, (np.nanmean(rd), ref['D0'])
+
+    # A map in which EVERY output has no variance is an error, not a distance of zero.
+    Aall = np.full((32, nfreq), 1.0e-16)
     try:
-        evaluate(Az, DenseApprox(Az + 1.0), block_rows=64)
-        raise AssertionError('evaluate accepted a zero row of A_true')
+        evaluate(Aall, DenseApprox(Aall * 2.0), block_rows=8)
+        raise AssertionError('evaluate accepted a wholly degenerate map')
     except RuntimeError as e:
-        assert 'rows 128:192' in str(e), str(e)
-        assert 'row 22' in str(e), str(e)     # 150 - 128
+        assert 'no row could be scored' in str(e), str(e)
 
     # --- shape mismatch is caught here, not deep inside VarMapDistance ---
     try:
