@@ -344,12 +344,15 @@ is never ``materialized'' in GPU memory.
 
 \subsubsection{Peak-finding kernels}
 
-The kernels are organized into $\Lambda \equiv \max(\log_2 W_{\rm max},\,1)$ {\em levels} $0 \le \lambda < \Lambda$,\footnote{In the code these are denoted {\tt l} and {\tt L}; we use $\lambda$ and $\Lambda$ here to avoid ambiguity with the subband level $l$ in \S\ref{sec:subband_search}.} where
-$W_{\rm max}$ (a power of two) is the config parameter \verb|max_kernel_width|. The total number of
-profiles is
+There is always one profile ($p=0$) consisting of a single unsmoothed sample. The remaining
+kernels are organized into $\Lambda \equiv \log_2 W_{\rm max}$ {\em levels} $0 \le \lambda < \Lambda$,\footnote{We use $\lambda$ and $\Lambda$ here to avoid ambiguity with the subband level $l$ in \S\ref{sec:subband_search}. In the code, the level index appears as {\tt l} in {\tt PfVarianceConvolver.peak\_finding\_kernels()} and as {\tt lgw} in the kernel generator {\tt PeakFinder}.} where
+$W_{\rm max}$ (a power of two) is the config parameter \verb|max_kernel_width|, and each level
+contributes three profiles. The total number of profiles is therefore
 \begin{equation}
 P = 3 \log_2 W_{\rm max} + 1.
 \end{equation}
+The edge case $W_{\rm max}=1$ is allowed: there are then no levels, and the single sample
+$p=0$ is the only profile.
 The building block at level $\lambda$ is the {\em unnormalized running boxcar sum} of width $2^\lambda$,
 \begin{equation}
 b_\lambda[t] \equiv \sum_{i=0}^{2^\lambda - 1} x[t-i],
@@ -370,9 +373,11 @@ h_{\lambda,2} &= [\,\underbrace{\tfrac12,\dots}_{2^\lambda},\ \underbrace{1,\dot
 h_{\lambda,3} &= [\,\underbrace{\tfrac12,\dots}_{2^\lambda},\ \underbrace{1,\dots,\dots,1}_{2^{\lambda+1}},\ \underbrace{\tfrac12,\dots}_{2^\lambda}\,]
 \end{align}
 The profile index $0\le p < P$ is related to $(\lambda,q)$ by $p = 3\lambda + q$, with the special value $p = 0$ for
-$(\lambda,q) = (0,0)$. Thus level $0$ contributes profiles $p = 0,1,2,3$, and each level $\lambda > 0$ contributes
-$p = 3\lambda+1, 3\lambda+2, 3\lambda+3$ --- the single-boxcar kernel $h_{\lambda,0}$ is dropped for $\lambda>0$, since
-$h_{\lambda,0} = b_\lambda = h_{\lambda-1,1}$ would be redundant.
+$(\lambda,q) = (0,0)$. Thus level $\lambda$ contributes $p = 3\lambda+1, 3\lambda+2, 3\lambda+3$, and $p=0$ (i.e.\
+$h_{0,0} = [1]$, the single sample above) sits outside the levels. The single-boxcar kernel $h_{\lambda,0}$ never
+appears for $\lambda > 0$, since $h_{\lambda,0} = b_\lambda = h_{\lambda-1,1}$ would be redundant. So one may equally
+say that level $0$ contributes $p=0,1,2,3$ and each higher level contributes three profiles; the two descriptions
+agree except at $W_{\rm max}=1$, where there are no levels at all and $p=0$ is the only profile.
 
 \subsection{Time-downsampled trees and early triggers}
 \label{sec:downsampled_early}
