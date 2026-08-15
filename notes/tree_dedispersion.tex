@@ -4294,6 +4294,509 @@ resolved.
 
 \clearpage
 
+\section{Monotonicity of the variance map in the DM bits (no detrender)}
+\label{sec:dyadic_block}
+
+{\bf This appendix treats the no-detrender case only.} The linear operator is bare tree
+gridding $\to$ subbanded tree dedispersion $\to$ peak-finding convolution, as in
+\S\ref{sec:analytic_variance}, \S\ref{sec:avar_statement} -- {\em not} the detrended
+operator of \S\ref{ssec:variance_map_setup}, which includes a {\tt Detrender2d}.
+{\bf The result below is proved in that case only, and the restriction is not a
+technicality:} with a {\tt Detrender2d} in front of the dedisperser the property is not
+merely unproved but {\em false}, and badly so (\S\ref{ssec:dyadic_sharpness}).
+
+Fix one column of the variance map: a {\tt DedispersionTree}, a frequency subband, a
+peak-finding profile $p$, and a single input frequency channel $F$. What is left is a 1-d
+array $A[d_m]$ indexed by the subband's dispersion measure
+$d_m = 2^l d_{\rm hi} + d_{\rm lo}$ (\S\ref{sec:subband_search}). The purpose of this
+appendix is to prove that $A$ is {\em antitone in the binary digits of $d_m$}: writing
+$d \subseteq d'$ for the bitwise-subset partial order on DM indices (i.e.\ $d_b \le d'_b$
+for every bit $b$, equivalently $d \,\&\, d' = d$),
+\begin{equation}
+d \subseteq d' \hspace{5mm} \Longrightarrow \hspace{5mm} A[d'] \;\le\; A[d].
+\label{eq:bitwise_property}
+\end{equation}
+Equivalently: {\em setting a bit of the DM index never increases the variance},
+$A[d \,|\, 2^b] \le A[d]$. Two consequences are worth stating separately. First, taking
+$d = 0$, the DM index $d_m=0$ maximizes the column. Second, and more useful, the
+{\em dyadic-block property}: in every aligned dyadic block of $d_m$ indices, the {\em first}
+entry is the largest,
+\begin{equation}
+A\big[ 2^k j \big] \;=\; \max_{0 \le i < 2^k} A\big[ 2^k j + i \big]
+  \qquad \mbox{for every $k \ge 0$, $j \ge 0$ with indices in range,}
+\label{eq:dyadic_property}
+\end{equation}
+which follows from (\ref{eq:bitwise_property}) because $2^kj$ is the bitwise-minimal element
+of its own dyadic block ($2^kj$ and $i < 2^k$ have disjoint bits). The practical consequence
+is that an approximation to the variance map which resolves only the top DM bits, and which
+must never {\em under}estimate a variance (\S\ref{ssec:distance_function}), can simply be
+evaluated at the bottom of each dyadic DM block: no maximization over the block is needed,
+and the resulting bound is tight.
+
+Concretely, $A$ is a reindexing of the arrays {\tt PfAvarExact} produces: with
+$m = (\mbox{subband}, d_{\rm lo})$ and $d = d_{\rm hi}$, the per-multiplet variance
+$y_m[d,p]$ of \S\ref{ssec:svd_exact_map} is $A[2^l d_{\rm hi} + d_{\rm lo}]$, so a dyadic
+block of $A$ generally runs across several multiplets.
+
+Note that $A$ is {\em not} monotone in $d_m$ as an integer: it wanders up and down, but never
+above the value at any bitwise-subset index (\S\ref{ssec:dyadic_sharpness}).
+
+The proof splits into a statement about the lag function $L_r(f,d)$ (Lemmas 2--5: {\em the
+lag function is linear in the bits of $d$ with non-negative coefficients, so setting a DM bit
+can only spread the impulse response out}) and a statement about the peak-finding kernels
+(Lemma 6: {\em spreading out can only decrease the variance}). Both are needed;
+\S\ref{ssec:dyadic_sharpness} shows that neither hypothesis can be dropped, and that the
+bitwise-subset order is exactly the right partial order. {\bf The first hypothesis --
+non-negativity of the gridding weights -- is exactly what a detrender destroys, which is
+why the no-detrender assumption above cannot be relaxed.}
+
+\subsection{Setup}
+\label{ssec:dyadic_setup}
+
+We work in the no-detrender setting of \S\ref{sec:avar_statement}: the linear operator is
+(tree gridding) $\to$ (subbanded tree dedispersion) $\to$ (convolution with the peak-finding
+profile $h_p$), with no normalization to sigmas and no coarse-graining, and the dedisperser
+input has uncorrelated entries with per-channel variance $V_F$.
+
+Fix a {\tt DedispersionTree} with early-trigger level $e$ and primary-tree index $\gamma$,
+and write
+\begin{equation}
+\hat r \;\equiv\; r_{\rm top} - e
+\end{equation}
+for the rank of the dedispersion it performs: the tree dedisperses the lowest $2^{\hat r}$
+tree-freq channels of the band (\S\ref{sec:downsampled_early}). (In the code, {\tt tree\_r}
+is $\hat r$ for $\gamma = 0$ and $\hat r - 1$ for $\gamma > 0$, because the upper-DM-half
+restriction is folded into the rank.) Fix a subband $(l,s)$, $0 \le l \le R$, and let
+\begin{equation}
+K \;\equiv\; \hat r - R + l,
+  \hspace{1.5cm}
+a \;\equiv\; 2^{\hat r - R} \times (\mbox{index of the subband's first coarse-freq block}),
+\end{equation}
+so that the subband occupies the $2^K$ contiguous tree-freq channels $a \le f < a+2^K$
+(Eqs.\ \ref{eq:subband_l0}, \ref{eq:subband_l1}) and its DM index runs over
+$0 \le d_m < 2^K$. Finally let
+\begin{equation}
+w_u \;\equiv\; w_{(a+u)F} \;\ge\; 0
+  \hspace{1.5cm} (0 \le u < 2^K)
+\end{equation}
+be the tree-gridding weights (\S\ref{sec:gridding}) of input channel $F$ on the subband's
+channels. Non-negativity is the only property of them we use (they are overlap lengths; that
+their support is a short contiguous run is not needed).
+
+\medskip
+\par\noindent
+{\bf Lemma 1 (closed form).}
+{\em For a $\gamma=0$ tree, the variance-map column is}
+\begin{equation}
+A[d_m] \;=\; 2^{-K} \sum_{u=0}^{2^K-1} \sum_{v=0}^{2^K-1}
+   w_u \, w_v \; A_p\big( L_K(u,d_m) - L_K(v,d_m) \big),
+\label{eq:dyadic_closedform}
+\end{equation}
+{\em where $L_K$ is the lag function (\ref{eq:L_def}) and $A_p$ is the autocorrelation of the
+peak-finding kernel $h_p$. For a $\gamma>0$ tree, the exported array is the upper DM half of
+(\ref{eq:dyadic_closedform}): $A[d_m] = (\mbox{RHS evaluated at } d_m + 2^{K-1})$.}
+
+\medskip
+\par\noindent
+{\em Proof.} Both cases of subbanded dedispersion (\S\ref{sec:subband_search}) compute
+exactly $\DD(K)$ applied to the subband's $2^K$ tree-freq channels, followed by a time shift.
+In Case 1 ($l=0$ or even $s$) the subband output is read off the intermediate array after
+$K = \hat r - R + l$ dedispersion steps, whose coarse-freq block $f$ is $\DD(K)$ applied to
+tree-freq channels $2^K f \le \cdot < 2^K (f+1)$ (Observation 1 of
+\S\ref{app:nonrecursive_proof}). In Case 2 ($l>0$, odd $s$) the two adjacent level-$(K-1)$
+blocks $2f+1$ and $2f+2$ are combined by one further $\DDS$ step, in which block $2f+1$ plays
+the ``lower'' role and $2f+2$ the ``upper'' role. This pair is not aligned in the ambient
+tree, but the $\DDS$ formulas do not depend on the block index (Observation 1), so
+Eq.\ (\ref{eq:app_last_step}) applies to the pair verbatim: the result is $\DD(K)$ applied to
+their union, which is precisely the subband.
+
+In both cases the rank-$K$ DM index of that $\DD(K)$ is the subband DM index
+$d_m = 2^l d_{\rm hi} + d_{\rm lo}$. In Case 1 this is immediate ($d = d_{\rm hi}2^l +
+d_{\rm lo}$ in the notation of \S\ref{sec:subband_search}). In Case 2 the extra $\DDS$ step
+maps the level-$(K-1)$ index $d = d_{\rm hi}2^{l-1} + d_{\rm lo}$ to $2d + b$, i.e.\ to
+$2^l d_{\rm hi} + (2 d_{\rm lo} + b)$, and $2d_{\rm lo}+b$ is exactly the fine index of the
+multiplet which receives it.
+
+Therefore, by the non-recursive form (\ref{eq:DD_nonrecursive}) of $\DD(K)$ and the one-hot
+impulse response (\ref{eq:avar_impulse}), the impulse response of input channel $F$ in this
+subband is
+\begin{equation}
+G_{F,d_m}[t] \;=\; 2^{-K/2} \sum_u w_u \, \delta_{t,\, L_K(u,d_m) + T},
+\label{eq:dyadic_impulse}
+\end{equation}
+and Eqs.\ (\ref{eq:avar_master}), (\ref{eq:avar_autocorr}) give (\ref{eq:dyadic_closedform}),
+per unit input variance $V_F$. The subband extraction lag $T$ drops out because
+$\|h_p * g\|^2$ is translation invariant; note that this holds for {\em any} $T$, so the
+variance map is unchanged by the alternative time-lag convention discussed in the Remark of
+\S\ref{sec:subband_search}.
+
+For $\gamma>0$, the tree time-downsamples its input by $2^\gamma$ before dedispersing.
+Downsampling adds $2^\gamma$ samples and multiplies by $2^{-\gamma/2}$, so the downsampled
+array again has uncorrelated entries with per-channel variance $V_F$, and the argument above
+applies verbatim on the downsampled time grid. The only other difference is that the tree
+keeps just the upper half of the coarse DM range (\S\ref{sec:downsampled_early}): the top bit
+of $d_{\rm hi}$ is fixed to 1 and dropped, which is the DM range $d_m \ge 2^{K-1}$. $\square$
+
+\medskip
+\par\noindent
+Two remarks. First, early triggers have disappeared into the definition of $\hat r$: a tree
+with $e>0$ performs ordinary rank-$\hat r$ dedispersion on the first $2^{\hat r}$ tree-freq
+channels, i.e.\ the same statement with a truncated channel map (this is what
+{\tt PfAvarExact} does; cf.\ its {\tt cmap\_rank}). Second, only $w_u \ge 0$ is used below,
+so everything that follows holds for an arbitrary channel map and an arbitrary set of subband
+counts $C_l$, and -- summing (\ref{eq:dyadic_closedform}) against $V_F \ge 0$ -- for any
+non-negative combination of input channels.
+
+\subsection{Setting a DM bit spreads the impulse response out}
+\label{ssec:dyadic_lag}
+
+\par\noindent
+{\bf Lemma 2 (bitwise form of $L$).}
+{\em Write $d_m$ for bit $m$ of $d$. Then}
+\begin{equation}
+L_r(f,d) \;=\; \sum_{m=0}^{r-1} \big( 1 - f_{r-1-m} \big) \, c^{(m)}(d),
+  \hspace{1.2cm}
+c^{(m)}(d) \;\equiv\; \Big\lfloor \frac{d}{2^{m+1}} \Big\rfloor + d_m \;\ge\; 0,
+\label{eq:dyadic_bitwise}
+\end{equation}
+{\em and for every $0 \le m_0 < r$ (with $0 \le d < 2^r$),}
+\begin{equation}
+\sum_{m=m_0+1}^{r-1} c^{(m)}(d) \;=\; \Big\lfloor \frac{d}{2^{m_0+1}} \Big\rfloor
+  \;=\; c^{(m_0)}(d) - d_{m_0}.
+\label{eq:dyadic_telescope}
+\end{equation}
+{\em In particular $L_r(0,d) = d$ and $L_r(2^r-1,d) = 0$.}
+
+\medskip
+\par\noindent
+{\em Proof.} In the definition (\ref{eq:L_def}), the coefficient of $(1-f_i)$ is
+\begin{equation}
+\sum_{j=0}^{r-1} \Omega_{i+j-r} \, d_j
+ \;=\; \Omega_{-1} \, d_{r-1-i} + \sum_{j \ge r-i} 2^{i+j-r} d_j
+ \;=\; d_{r-1-i} + 2^{i-r} \cdot 2^{r-i} \Big\lfloor \frac{d}{2^{r-i}} \Big\rfloor
+ \;=\; d_m + \Big\lfloor \frac{d}{2^{m+1}} \Big\rfloor
+\end{equation}
+with $m \equiv r-1-i$, which is (\ref{eq:dyadic_bitwise}). For
+(\ref{eq:dyadic_telescope}), use $\lfloor d/2^m \rfloor = 2 \lfloor d/2^{m+1} \rfloor + d_m$
+to rewrite $c^{(m)}(d) = \lfloor d/2^m \rfloor - \lfloor d/2^{m+1} \rfloor$; the sum
+telescopes to $\lfloor d/2^{m_0+1} \rfloor - \lfloor d/2^r \rfloor$, and
+$\lfloor d/2^r \rfloor = 0$. Telescoping from $m=0$ instead gives
+$L_r(0,d) = \sum_m c^{(m)}(d) = d$, while $f = 2^r-1$ kills every term. $\square$
+
+\medskip
+\par\noindent
+{\bf Lemma 3 (monotonicity in frequency).}
+{\em For fixed $d$, the lag $L_r(f,d)$ is non-increasing in $f$. More precisely, if $f<f'$
+and $i_0$ is the highest bit in which they differ, then}
+\begin{equation}
+L_r(f,d) - L_r(f',d) \;\ge\; d_{\,r-1-i_0} \;\ge\; 0.
+\label{eq:dyadic_monotone}
+\end{equation}
+
+\medskip
+\par\noindent
+{\em Proof.} Write $m_0 = r-1-i_0$; since $f<f'$ we have $f_{i_0}=0$ and $f'_{i_0}=1$. In
+the difference of two copies of (\ref{eq:dyadic_bitwise}), terms with $i>i_0$ cancel, the
+$i=i_0$ term contributes $+c^{(m_0)}(d)$, and each term with $i<i_0$ (i.e.\ $m>m_0$)
+contributes at least $-c^{(m)}(d)$. Hence
+\begin{equation}
+L_r(f,d) - L_r(f',d) \;\ge\; c^{(m_0)}(d) - \sum_{m>m_0} c^{(m)}(d) \;=\; d_{m_0}
+\end{equation}
+by (\ref{eq:dyadic_telescope}). $\square$
+
+\medskip
+\par\noindent
+Lemma 3 is the algebraic form of an obvious physical statement: tree dedispersion delays the
+high tree-freq channels less than the low ones, the total spread being
+$L_r(0,d) - L_r(2^r-1,d) = d$. Note that the lag {\em difference} can vanish even when
+$f \ne f'$ (when $d_{m_0}=0$ and the lower bits conspire); this is the ``relative lags happen
+to cancel'' phenomenon which makes {\tt SparseTile}'s content bits sometimes a proper subset
+of the top $(i_0+1)$ bits (\S\ref{sec:avar_dbits}).
+
+\medskip
+\par\noindent
+{\bf Lemma 4 (the lag function is linear in the DM bits).}
+{\em For fixed $f$, the lag function is a non-negative linear form in the binary digits of
+$d$:}
+\begin{equation}
+L_r(f,d) \;=\; \sum_{b=0}^{r-1} d_b \; \lambda_b(f),
+  \hspace{1.2cm}
+\lambda_b(f) \;\equiv\; L_r\big(f, 2^b\big)
+  \;=\; \big(1 - f_{r-1-b}\big) + \sum_{m<b} \big(1-f_{r-1-m}\big) \, 2^{\,b-1-m} \;\ge\; 0.
+\label{eq:dyadic_bitlinear}
+\end{equation}
+{\em Equivalently, $L_r(f,\cdot)$ is additive on bitwise-disjoint DM indices: if
+$d \,\&\, e = 0$ then $L_r(f, d\,|\,e) = L_r(f,d) + L_r(f,e)$.}
+
+\medskip
+\par\noindent
+{\em Proof.} Expanding $\lfloor d/2^{m+1}\rfloor$ in binary,
+$c^{(m)}(d) = \lfloor d/2^{m+1}\rfloor + d_m = d_m + \sum_{j>m} 2^{\,j-m-1} d_j$,
+which is a linear form in the bits of $d$ with
+non-negative integer coefficients; substituting into (\ref{eq:dyadic_bitwise}) and exchanging
+the order of summation gives (\ref{eq:dyadic_bitlinear}), and evaluating it at $d = 2^b$
+identifies $\lambda_b(f)$. A linear form in the bits is additive whenever the bits add, i.e.\
+whenever the two arguments are bitwise disjoint. $\square$
+
+\medskip
+\par\noindent
+Physically: each DM {\em bit} contributes its own delay ramp $\lambda_b(\cdot)$ across the
+band, and a general DM index simply superposes the ramps of its set bits. (The lag is
+{\em not} linear in $d$ itself: $\lambda_b(f) \ne 2^b \lambda_0(f)$ in general, the difference
+being the rounding built into $\Omega_{-1}=1$.)
+
+\medskip
+\par\noindent
+{\bf Lemma 5 (bit spreading).}
+{\em Write $\Delta_{uv}(d) \equiv L_K(u,d) - L_K(v,d)$. Then for all $u \le v$ and all
+bitwise-disjoint $d, e$,}
+\begin{equation}
+\Delta_{uv}\big( d \,|\, e \big) \;=\; \Delta_{uv}(d) + \Delta_{uv}(e) \;\ge\; \Delta_{uv}(d)
+  \;\ge\; 0 .
+\label{eq:dyadic_spread}
+\end{equation}
+{\em Consequently $d \subseteq d'$ implies $\Delta_{uv}(d') \ge \Delta_{uv}(d) \ge 0$: setting
+DM bits can only increase every pairwise separation of the impulse response
+(\ref{eq:dyadic_impulse}).}
+
+\medskip
+\par\noindent
+{\em Proof.} The equality is Lemma 4 applied to $u$ and to $v$ and subtracted. Both
+inequalities are Lemma 3: $\Delta_{uv}(x) \ge 0$ for $u \le v$ and any $x$, applied to
+$x = e$ and to $x = d$. For the consequence, take $e = d' \setminus d$ (bitwise), so that
+$d' = d \,|\, e$ with $d \,\&\, e = 0$. $\square$
+
+\medskip
+\par\noindent
+Three remarks.
+
+First, {\em when is the increment zero?} By (\ref{eq:dyadic_bitwise}),
+$\Delta_{uv}(2^b) = \sum_{m \le b} \alpha_m c^{(m)}(2^b)$ with
+$\alpha_m = v_{K-1-m}-u_{K-1-m}$, since $c^{(m)}(2^b) = 0$ for $m > b$. If $i_0$ is the
+highest bit in which $u$ and $v$ differ and $m_0 = K-1-i_0$, then $\alpha_m = 0$ for $m<m_0$,
+so $\Delta_{uv}(2^b) = 0$ whenever $b < m_0$, while $\Delta_{uv}(2^{m_0}) \ge 1$ by
+(\ref{eq:dyadic_monotone}). (For $b > m_0$ the increment can also vanish accidentally, by the
+cancellation noted after Lemma 3.) So a low DM bit $b$ is felt only by pairs of channels lying
+in different coarse-frequency blocks of size $2^{K-b}$; a pair of nearby channels sees no
+change at all. This is why, numerically, most instances of (\ref{eq:bitwise_property}) are
+exact equalities, increasingly so for the low DM bits: the gridding weights $w_u$ of one input
+channel are supported on a short contiguous run of tree-freq channels.
+
+Second, Lemma 5 contains the ``dyadic'' statement that within an aligned dyadic block of DM
+indices every pairwise separation is smallest at the first index of the block: that is the
+case $(d,e) = (2^kj,\, i)$ with $0 \le i < 2^k$.
+
+Third, the same dyadic statement can be read off the lag-additivity identity
+(\ref{eq:lag_additivity}) with $r''=k$, $r'=K-k$: writing $u = 2^{K-k}\bar u + u'$,
+\begin{equation}
+L_K\big(u,\, 2^k j + i\big) \;=\; L_{K-k}(u', j) \;+\; \big(2^k - 1 - \bar u\big) \, j
+   \;+\; L_k(\bar u, i),
+\label{eq:dyadic_split}
+\end{equation}
+whose only $i$-dependent term $L_k(\bar u, i)$ depends on $u$ only through its coarse block
+index $\bar u$, and is non-increasing in $\bar u$ by Lemma 3. In words: the low DM bits
+perform a rank-$k$ dedispersion {\em of the coarse blocks}, sliding them apart while leaving
+the arrangement of channels within each block untouched. This is a useful picture, but it is
+not needed for the proof: Lemma 4 supersedes it.
+
+\subsection{Spreading out decreases the variance}
+\label{ssec:dyadic_kernel}
+
+\par\noindent
+{\bf Lemma 6 (kernel autocorrelations are unimodal).}
+{\em For every peak-finding profile $p$ (\S\ref{sec:peak_finding}), the autocorrelation
+$A_p[\delta] = \sum_t h_p[t] h_p[t+\delta]$ is even in $\delta$ and non-increasing in
+$|\delta|$.}
+
+\medskip
+\par\noindent
+{\em Proof.} Evenness is immediate. Write $B_n$ for the boxcar of length $n$ (all entries
+1). Each peak-finding kernel is a non-negative combination of boxcars which share a common
+center and whose lengths have a common parity: with $w = 2^\lambda$,
+\begin{equation}
+h_{\lambda,0} = B_w, \hspace{1cm}
+h_{\lambda,1} = B_{2w}, \hspace{1cm}
+h_{\lambda,2} = \tfrac12 B_{3w} + \tfrac12 B_w, \hspace{1cm}
+h_{\lambda,3} = \tfrac12 B_{4w} + \tfrac12 B_{2w},
+\end{equation}
+where in each case the boxcars are centered on the center of $h_{\lambda,q}$
+(e.g.\ $[\tfrac12, 1, \tfrac12] = \tfrac12 [1,1,1] + \tfrac12 [0,1,0]$). Hence $A_p$ is a
+non-negative combination of cross-correlations
+$\phi_{mn}[\delta] = \sum_t B_m[t] \, B_n[t+\delta]$ of co-centered boxcars, and for
+$m \equiv n$ (mod 2) and integer $\delta$,
+\begin{equation}
+\phi_{mn}[\delta] \;=\; \max\left( 0, \; \min\Big( m, \; n, \; \frac{m+n}{2} - |\delta| \Big) \right),
+\end{equation}
+which is even and non-increasing in $|\delta|$. A non-negative combination of such functions
+has the same property. $\square$
+
+\subsection{The theorem}
+\label{ssec:dyadic_theorem}
+
+\par\noindent
+{\bf Theorem 7.}
+{\em Let $K \ge 0$, let $w_u \ge 0$ for $0 \le u < 2^K$, and let
+$\phi : \mathbb{Z} \rightarrow \mathbb{R}$ be even and non-increasing on $\delta \ge 0$.
+Define}
+\begin{equation}
+A[d] \;=\; \sum_{u,v} w_u \, w_v \; \phi\big( L_K(u,d) - L_K(v,d) \big),
+  \hspace{1.5cm} 0 \le d < 2^K.
+\label{eq:dyadic_abstract}
+\end{equation}
+{\em Then $A[d'] \le A[d]$ whenever $d \subseteq d'$ bitwise. In particular
+$A[2^kj] \ge A[2^kj+i]$ for all $0 \le k \le K$, $0 \le j < 2^{K-k}$, $0 \le i < 2^k$, and
+$A[0] \ge A[d]$ for every $d$.}
+
+\medskip
+\par\noindent
+{\em Proof.} Let $d \subseteq d'$. By Lemma 5, for every pair $u \le v$ we have
+$0 \le \Delta_{uv}(d) \le \Delta_{uv}(d')$, whence $\phi(\Delta_{uv}(d)) \ge
+\phi(\Delta_{uv}(d'))$ because $\phi$ is even and non-increasing on non-negative arguments.
+Multiply by $w_uw_v \ge 0$ and sum over pairs (the sum over $u>v$ duplicates the sum over
+$u<v$, since $\phi$ is even and $\Delta_{vu} = -\Delta_{uv}$). The dyadic-block statement is
+the case $d = 2^kj$, $d' = 2^kj+i$, whose bits are disjoint. $\square$
+
+\medskip
+\par\noindent
+{\bf Corollary 8.}
+{\em The bitwise monotonicity (\ref{eq:bitwise_property}), and hence the dyadic-block property
+(\ref{eq:dyadic_property}), holds for every column of the variance map
+$A[d_m, \mbox{\rm subband}, p, F]$ of \S\ref{ssec:svd_exact_map}, in the no-detrender setting
+of \S\ref{ssec:dyadic_setup}, for every {\tt DedispersionTree} (any $\gamma$, any $e$), every
+subband (any pf\_level $l$, both the aligned Case 1 and the half-aligned Case 2), every
+profile $p$, and every input channel $F$.}
+
+\medskip
+\par\noindent
+{\em Proof.} Lemma 1 writes the column in the form (\ref{eq:dyadic_abstract}) with
+$w_u \ge 0$; Lemma 6 gives $\phi = A_p$ the required monotonicity; apply Theorem 7. For
+$\gamma>0$ the exported array is $A[d_m] = \tilde A[d_m + 2^{K-1}]$, where $\tilde A$
+satisfies the theorem; since $d_m \subseteq d'_m$ (with both $< 2^{K-1}$) implies
+$d_m + 2^{K-1} \subseteq d'_m + 2^{K-1}$, the property is inherited. $\square$
+
+\medskip
+\par\noindent
+Three extensions are immediate, because bitwise monotonicity is preserved by non-negative
+combinations and by pointwise maxima over a common DM index:
+\begin{itemize}
+\item {\bf Summing over frequency channels.} $y[d_m] = \sum_F V_F \, A[d_m,\cdot,\cdot,F]$
+has the property for any $V_F \ge 0$; this is the array {\tt PfAvarExact.tree\_variance}.
+\item {\bf Maximizing over profiles or multiplets.} Arrays which share the same $d_m$ index
+(e.g.\ the $P$ profiles) inherit the property under sums and pointwise maxima, since the
+maximizing index is common to all of them. The multiplets of one subband instead share the
+{\em coarse} DM index $d_{\rm hi}$, and the property passes to them too, because $d_{\rm hi}$
+and $d_{\rm lo}$ occupy disjoint bit ranges of $d_m = 2^l d_{\rm hi} + d_{\rm lo}$: each
+individual multiplet's array $d_{\rm hi} \mapsto A[2^l d_{\rm hi} + d_{\rm lo}]$ is bitwise
+monotone, since $d_{\rm hi} \subseteq d'_{\rm hi}$ implies
+$2^l d_{\rm hi} + d_{\rm lo} \subseteq 2^l d'_{\rm hi} + d_{\rm lo}$; and the array the
+peak-finder actually forms,
+$B[d_{\rm hi}] = \max_{d_{\rm lo}} A[2^l d_{\rm hi} + d_{\rm lo}]$, equals
+$A[2^l d_{\rm hi}]$ by Theorem 7 (as $0 \subseteq d_{\rm lo}$), i.e.\ it is the fine array
+sampled at multiples of $2^l$, and is therefore bitwise monotone in $d_{\rm hi}$. (Different
+subbands have different $l$ and hence different DM ranges, so a maximum over subbands only
+makes sense once they are put on a common DM grid; on such a grid it inherits the property
+as well.)
+\item {\bf Coarse-graining the DM axis.} If the DM axis is coarse-grained by a factor $2^c$
+using max (as in the dedispersion output arrays, \S\ref{ssec:dedispersion_output_arrays}),
+the coarse-grained array equals the fine array sampled at $d_m \equiv 0 \pmod {2^c}$, and
+$i \subseteq i'$ implies $2^c i \subseteq 2^c i'$, so the coarse array inherits the property.
+\end{itemize}
+The argument also covers the {\em approximate} variance arrays of {\tt PfAvarApproximation}
+(\S\ref{sec:variance_svd}): there each per-band contribution is again of the form
+(\ref{eq:dyadic_closedform}) (with $K$ the rank of the corresponding sub-block tile), and the
+reported variance is a non-negative average of such contributions over bands, all sharing one
+DM index.
+
+\subsection{Sharpness}
+\label{ssec:dyadic_sharpness}
+
+Neither hypothesis of Theorem 7 can be dropped.
+\begin{itemize}
+\item {\em Non-negative weights.} Take $K=1$, $h=[1]$ (profile $p=0$) and $w = (1,-1)$. Then
+$A[0]=0$ and $A[1]=2$, so even the two-element instance $0 \subseteq 1$ of
+(\ref{eq:bitwise_property}) fails. This is why the argument does not survive a
+{\tt Detrender2d} in front of the dedisperser: the effective per-channel response is no longer
+a non-negative weight times a single delta, so neither hypothesis of Theorem 7 survives. This
+is not a gap in the proof but a real failure: computing the detrended variance map by brute
+force (\S\ref{ssec:variance_map_bruteforce}) at rank 6 with {\tt subband\_counts}=[2,2,1],
+about half of all aligned dyadic blocks of $A[\cdot,\mbox{subband},p,F]$ are violated, with
+block maxima up to 5 times the block-bottom value for an $(n,W)=(2,4)$ detrender. For the
+$W=0$ detrender the failure is extreme and systematic: the detrender annihilates the zero-DM
+mode, so $A[0]$ is close to zero and is the block {\em minimum} rather than its maximum.
+\item {\em Unimodal kernel autocorrelation.} Take $K=3$, $w=(1,1,1,1,1,1,1,1)$ (a full-band,
+uniform gridding footprint) and the two-hump kernel $h = [1,0,0,0,1]$, whose autocorrelation
+$A_h = [2,0,0,0,1]$ is not monotone. Then $A = (128,64,48,32,30,32,26,24)$, which violates
+(\ref{eq:bitwise_property}) at $4 \subseteq 5$ ($A[5] = 32 > A[4] = 30$), and violates the
+dyadic-block property on the block $\{4,5\}$. All four current profile shapes are co-centered
+sums of boxcars, so Lemma 6 applies; but a future profile which is not (for example a matched
+filter for a scattered or multi-component pulse) would invalidate the conclusion, not merely
+the proof -- and, as this example shows, for perfectly ordinary gridding weights.
+\end{itemize}
+
+Nor can the bitwise-subset order be enlarged: it is exactly the set of pairs which the
+hypotheses of Theorem 7 constrain.
+
+\medskip
+\par\noindent
+{\bf Proposition 9 (the order is exactly right).}
+{\em Fix $K$ and $0 \le d, d' < 2^K$. The following are equivalent:}
+\begin{itemize}
+\item[(i)] $A[d'] \le A[d]$ for every $w \ge 0$ and every even, non-increasing $\phi$ in
+(\ref{eq:dyadic_abstract});
+\item[(ii)] $\Delta_{uv}(d') \ge \Delta_{uv}(d)$ for every $u \le v$;
+\item[(iii)] $d \subseteq d'$.
+\end{itemize}
+
+\medskip
+\par\noindent
+{\em Proof.} (iii)$\Rightarrow$(ii) is Lemma 5, and (ii)$\Rightarrow$(i) is the proof of
+Theorem 7.
+
+(i)$\Rightarrow$(ii): the case $u=v$ is trivial, so let $u<v$, and take the two-channel weight
+vector with $w_u = w_v = 1$ and all other entries zero, so that
+$A[x] = 2\phi(0) + 2\phi(\Delta_{uv}(x))$; take $\phi(\delta) = 1$ for $|\delta| \le t$ and
+$\phi(\delta) = 0$ otherwise, which is even and non-increasing on $\delta \ge 0$. If
+$\Delta_{uv}(d') < \Delta_{uv}(d)$, then $t = \Delta_{uv}(d')$ gives $A[d'] > A[d]$.
+
+(ii)$\Rightarrow$(iii): write $\epsilon_m = c^{(m)}(d') - c^{(m)}(d)$ and
+$D_m = \lfloor d'/2^m \rfloor - \lfloor d/2^m \rfloor$, so that $\epsilon_m = D_m - D_{m+1}$
+and $D_K = 0$ by (\ref{eq:dyadic_telescope}). By (\ref{eq:dyadic_bitwise}),
+$\Delta_{uv}(x) = \sum_m \alpha_m c^{(m)}(x)$ with $\alpha_m = v_{K-1-m} - u_{K-1-m}$; for a
+pair $u \le v$ whose highest differing bit is $i_0 = K-1-m_0$ we have $\alpha_m = 0$ for
+$m<m_0$, $\alpha_{m_0}=1$, and $\alpha_m \in \{-1,0,1\}$ arbitrary and independent for
+$m>m_0$ (the lower bits of $u$ and $v$ are unconstrained). Hence (ii) says exactly
+\begin{equation}
+\epsilon_{m_0} \;\ge\; \sum_{m>m_0} |\epsilon_m|
+  \hspace{1.5cm} \mbox{for every } 0 \le m_0 < K .
+\end{equation}
+Since the right side is $\ge 0$, every $\epsilon_m \ge 0$, so the constraint becomes
+$\epsilon_{m_0} \ge \sum_{m>m_0}\epsilon_m = D_{m_0+1}$, i.e.\ $D_{m_0} \ge 2 D_{m_0+1}$. But
+$D_{m} - 2D_{m+1} = d'_{m} - d_{m}$, so this says $d'_m \ge d_m$ for every $m$, which is
+$d \subseteq d'$. $\square$
+
+\medskip
+\par\noindent
+In particular $A$ need not be monotone in $d_m$ as an integer, and no weaker hypothesis on the
+DM indices will do. A minimal example within the hypotheses of Theorem 7, using a real
+peak-finding kernel: $K=2$, $w = (0,1,1,0)$, $h = B_2 = [1,1]$ (so $\phi = A_h = [2,1,0,\dots]$)
+gives $A = (8,6,8,6)$, which increases from $d=1$ to $d=2$. The reason is visible in
+(\ref{eq:dyadic_bitwise}): channels $u=1$ and $v=2$ have lags $(1,0)$ at $d=1$ but $(1,1)$ at
+$d=2$, so the pair is {\em less} spread out at the larger DM index -- while at $d=3 = 1|2$,
+which is above both in the subset order, the separation is back to 1. The same effect is easy
+to see in the real variance map: for instance in {\tt configs/dedispersion/toy.yml}, tree 0,
+subband $n=0$ ($l=1$, $\rho=9$), channel $F=328$, profile $p=0$, one finds
+$A[255] = 5.08\times10^{-4} < A[256] = 6.71\times10^{-4}$, with
+$A[255 \,\&\, 256] = A[0] = 9.77\times10^{-4}$ above both.
+
+Finally, the statement is about the {\em natural} (non-bit-reversed) DM index
+$d_m = 2^l d_{\rm hi} + d_{\rm lo}$, which is the convention used by {\tt PfAvarExact} and
+{\tt VarianceMapExact}. Under a bit-reversed DM index, aligned dyadic blocks become strided
+sets, and (\ref{eq:bitwise_property}) becomes bitwise monotonicity with respect to the
+reversed bit labelling (the subset order is preserved by any relabelling of the bits, so the
+theorem is convention-independent; only its ``dyadic block'' phrasing is not).
+
+\clearpage
+
 \section{{\tt PfAvarExact} and {\tt VarianceMapExact}}
 \label{sec:analytic_variance}
 
