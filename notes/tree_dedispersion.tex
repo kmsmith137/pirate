@@ -3312,7 +3312,7 @@ at low DM should be dropped for the same reason.
  half-width is acceptable on detrending grounds is a separate question, not addressed here.
 \end{itemize}
 
-\subsubsection{Campaign 2 setup [human-authored]}
+\subsubsection{Campaign 2 setup [mostly human-authored]}
 \label{ssec:campaign2_setup}
 
 This is really interesting progress!
@@ -3321,7 +3321,7 @@ So far we've learned that:
 \begin{enumerate}
 
 \item Coarse-graining $A \rightarrow \bar A$ is a good approximation in practice (in the
- sense that $D(A,\bar A)$ is small). It seems safe to assume that this should always be
+ sense that $D(A,\mbox{lift}(\bar A))$ is small). It seems safe to assume that this should always be
  the first step, and that further steps (such as $QW$-alternation) should operate on the
  smaller $\bar A$ matrix for speed.
 
@@ -3338,6 +3338,14 @@ So far we've learned that:
 In campaign 2, I'd like to explore the following directions:
 
 \begin{itemize}
+
+\item
+I realized that I never specified targets for the distance $D$ and the rank $K$, so
+the problem we're exploring isn't really well-posed.
+For now, let's consider rank $K=8,16,32,64,128$.
+For each of these ranks (and for each choice of dedispersion+detrender config),
+please explore different algorithms and try to find the smallest $D$ that you can.
+This will give us a sense of the ``Pareto frontier'' of distance versus rank.
 
 \item While I was discussing the campaign 1 results with an agent, it emerged that 
  the linear programs may have constraints that are not necessary.
@@ -3361,8 +3369,8 @@ In campaign 2, I'd like to explore the following directions:
 \item Given a rank-$K$ approximation $A^{\rm approx} = Q W^T$, and $K' < K$,
  I'd like to explore the following idea for obtaining a rank-$K'$ approximation.
  First, SVD-decompose $A^{\rm approx} = Q_0 \Lambda_0 W_0^T$, where $\Lambda_0$ is
- $K$-by-$K$ diagonal. Then, decrease the rank to $K'$ by by dropping the lowest 
- (least significant) SVD modes, obtaining $A^{\rm new} = Q_1 \Lambda_1 W_1$.
+ $K$-by-$K$ diagonal. Then, decrease the rank to $K'$ by dropping the lowest 
+ (least significant) SVD modes, obtaining $A^{\rm new} = Q_1 \Lambda_1 W_1^T$.
 
  As previously discussed, this may ruin the approximation, in the sense that
  $D(\bar A^{\rm true}, A^{\rm new})=\infty$. However, we can use the ``$Q$-step''
@@ -3375,7 +3383,7 @@ In campaign 2, I'd like to explore the following directions:
  update $W_1$ -- I'm not sure which variant works better.
 
  Note that before trying this idea, you may need to remove unnecessary
- positivity constraints from the LP (see first bullet point) above, since
+ positivity constraints from the LP (see first bullet point above), since
  SVD modes have arbitrary signs.
 
 \item Combining ideas from the previous two bullet points, we could also try 
@@ -3406,7 +3414,7 @@ In campaign 2, I'd like to explore the following directions:
 \item Another idea for initialization (in addition to the clustering algorithm or
  the SVD decomposition). Let $\bar A_0$ be the coarse-grained variance map with the
  detrender removed (but the dedispersion config unchanged). Using the algorithm in
- \S\ref{ssec:analytic_variance}, we have an exact low-rank decomposition $\bar A_0 = Q_0 W_0^T$.
+ \S\ref{sec:analytic_variance}, we have an exact low-rank decomposition $\bar A_0 = Q_0 W_0^T$.
  Suppose that we fix $W_0$ and use a $Q$-step to approximate $\bar A \approx Q_1 W_0^T$.
  Is this a useful starting point for obtaining a low-rank approximation?
 
@@ -3419,8 +3427,8 @@ In campaign 2, I'd like to explore the following directions:
  all constraints. If any constraints fail, then we add constraints and re-solve.
 
  Suppose that when we evaluate the constraints, we find that they only fail by
- a small amount (say $A^{\rm approx} \ge (1+\epsilon) A^{\rm true}$ everywhere).
- Then we could solve the constraints by simply rescaling the solution by $(1+\epsilon)$ --
+ a small amount (say $A^{\rm approx} \ge (1-\epsilon) A^{\rm true}$ everywhere).
+ Then we could solve the constraints by simply rescaling the solution by $(1-\epsilon)^{-1}$ --
  the only thing we lose is that the distance is slightly suboptimal.
  In early stages of an iterative algorithm (either $QW$-iteration or a larger iterative
  algorithm involving SVD decomposition and rank reduction) this may be a win -- it may
@@ -3438,6 +3446,80 @@ Note that $W=0$ implies $n=0$.
  As you explore the problem, new ideas may suggest themselves.
  Sometimes an experiment is useful if it improves general understanding of the problem domain,
  even if it doesn't immediately lead to a concrete improvement in the algorithm.
+
+\end{itemize}
+
+\par\noindent
+In addition, here are some directions to explore that were suggested by an agent:
+
+\begin{itemize}
+
+\item {\bf The {\tt Detrender2d} knot vector as a design variable.}
+ Campaign 1 found that the detrender does not merely perturb the structure of $A$, it
+ destroys it: with no detrender, 33\% of a subbanded $A$ is exactly zero (a multiplet gets
+ no contribution from channels outside its subband), and adding a single-zone detrender
+ takes that to 0.0\%. But a detrender whose spline zones are {\em aligned with the frequency
+ zones} keeps 25\% of the zeros. So the sparsity that a low-rank construction would exploit
+ is partly a {\em choice} (the knot vector), not a given.
+
+ This suggests a direction that changes the problem rather than the algorithm: are there
+ knot vectors which leave $A$ substantially more approximable at fixed rank, and what do
+ they cost in detrending quality? The time half-width $W$ is one detrender knob and is
+ already covered above; the knot vector is a second, independent one, and nothing has
+ explored it. If the cost is small this may be the cheapest available win.
+
+\item {\bf Rank reduction guided by $D$ rather than by singular value.}
+ This is the natural competitor to the SVD-truncation idea above, and the two should be
+ measured head to head in the same experiment. Instead of dropping the modes with the
+ smallest singular values, drop the column of $W$ whose removal -- followed by a $Q$-step --
+ increases $D$ least, repeating until the rank is $K'$ (a ``leave-one-out'' criterion).
+
+ The motivation is that a singular value measures a mode's contribution in Frobenius norm,
+ which is the wrong norm here: campaign 1 found that pruning a dictionary by column {\em
+ usage} was $2.1\times$ worse than simply rebuilding at the target rank, and diagnosed it as
+ keeping ``columns that supply mass, not columns that supply shapes nothing else covers''.
+ A singular value is also a mass-like criterion. A leave-one-out score is aligned with the
+ objective by construction. It costs $K$ $Q$-steps per removal, but those are independent
+ and each is cheap.
+
+\item {\bf Pivoted QR (or CUR) for choosing dictionary atoms.}
+ Campaign 1 tried using actual rows of $A$ as dictionary atoms, chosen worst-covered-first,
+ and found them $1.2$--$1.4\times$ worse than the greedy clustering. That may say more about
+ the selection rule than about the idea: a rank-revealing QR with column pivoting applied to
+ $\bar A^T$ chooses a well-conditioned subset of rows, which is the principled version of
+ the same construction.
+
+ It has several practical advantages worth testing: it is deterministic, it costs
+ $O(K N_\beta N_{\rm freq})$ rather than the $O(K_0^{2.4})$ of the agglomerative greedy, the
+ atoms stay nonnegative and interpretable (each is a real output's frequency response), and
+ the pivot order gives a natural nested sequence of dictionaries -- which is exactly what a
+ rank schedule wants.
+
+\item {\bf Warm-starting the linear programs.}
+ The $Q$-step solves $N_\beta$ independent LPs, and the whole thing is repeated across
+ alternations and again at every rank in a schedule. Consecutive solves differ only
+ slightly, so a dual-simplex warm start from the previous optimal basis should be a large
+ constant factor. Neighbouring groups are also similar to each other (adjacent coarse DMs
+ have similar rows), so one group's basis can seed the next.
+
+ This is complementary to the constraint-generation idea above rather than an alternative to
+ it, and it may well be the larger of the two effects. Worth measuring as LP wall clock per
+ $Q$-step, with and without.
+
+\item {\bf Does a dictionary transfer between trees and between configs?}
+ The dictionary build is the one step of the recommended algorithm that does not scale:
+ $O(K_0^{2.4} N_{\rm freq})$, which extrapolates to days at CHORD's $K_0$, while everything
+ else is linear or better. But a {\tt DedispersionPlan} has several trees, and production
+ needs weights for all of them.
+
+ So: does a dictionary built for one tree work for another (same $N_{\rm freq}$, different
+ rank or subband structure)? If it does, the expensive step amortizes over trees, and
+ possibly over configs. There is some reason for optimism -- campaign 1 found the dictionary
+ need only be {\em reasonable} rather than optimal (a cheap k-means dictionary matched the
+ greedy at $K=32$). Note the related question of transfer across {\em granularity} within one
+ tree is already settled: building the dictionary from $\bar A$ at the same $L$ used for
+ assignment is within a few percent of building it from a finer $\bar A$, so there is no
+ reason to keep a finer one around.
 
 \end{itemize}
 
