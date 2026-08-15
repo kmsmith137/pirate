@@ -3313,6 +3313,7 @@ at low DM should be dropped for the same reason.
 \end{itemize}
 
 \subsubsection{Campaign 2 setup [human-authored]}
+\label{ssec:campaign2_setup}
 
 This is really interesting progress!
 So far we've learned that:
@@ -3333,7 +3334,112 @@ So far we've learned that:
 
 \end{enumerate}
 
-(Placeholder: more to come in this section.)
+\par\noindent
+In campaign 2, I'd like to explore the following directions:
+
+\begin{itemize}
+
+\item While I was discussing the campaign 1 results with an agent, it emerged that 
+ the linear programs may have constraints that are not necessary.
+ For example, the $Q$-step (step 2) may currently have a constraint $q_\beta \ge 0$.
+ I don't think this is necessary (only the weaker constraint $W q_\beta \ge \bar A_{\beta,:}$).
+ Please investigate further and decide whether constraints can be dropped.
+ Does this significantly improve our results ($D$-values)?
+ What about the $W$-step?
+
+\item We have an analytic argument (\S\ref{sec:analytic_variance}) that $A$
+ has low rank if there is no detrender. If we didn't know about this analytic
+ argument, one way to ``discover'' the low rank empirically would be to compute
+ the SVD singular values, and find that most of them are zero (within roundoff).
+
+ This made me curious: what does the spectrum of singular values of $\bar A$ 
+ look like empirically, if there is a detrender? Do we find that the singular
+ values fall off quickly, and a low rank matrix is a good approximation (with 
+ respect to the Frobenius norm -- not necessarily with respect to our distance 
+ function).
+
+\item Given a rank-$K$ approximation $A^{\rm approx} = Q W^T$, and $K' < K$,
+ I'd like to explore the following idea for obtaining a rank-$K'$ approximation.
+ First, SVD-decompose $A^{\rm approx} = Q_0 \Lambda_0 W_0^T$, where $\Lambda_0$ is
+ $K$-by-$K$ diagonal. Then, decrease the rank to $K'$ by by dropping the lowest 
+ (least significant) SVD modes, obtaining $A^{\rm new} = Q_1 \Lambda_1 W_1$.
+
+ As previously discussed, this may ruin the approximation, in the sense that
+ $D(\bar A^{\rm true}, A^{\rm new})=\infty$. However, we can use the ``$Q$-step''
+ above to update $A^{\rm new} \rightarrow Q_1' W_1$, where $Q_1'$ is a new
+ matrix obtained by solving a linear program, and $W_1$ is unchanged.
+ Then, $D(\bar A^{\rm true}, A^{\rm new})$ will be finite (under mild assumptions
+ on $W_1$) and we can continue the $QW$-alternation algorithm from here.
+
+ Similarly, we could also keep $Q_1$ fixed and use the ``$W$-step'' to
+ update $W_1$ -- I'm not sure which variant works better.
+
+ Note that before trying this idea, you may need to remove unnecessary
+ positivity constraints from the LP (see first bullet point) above, since
+ SVD modes have arbitrary signs.
+
+\item Combining ideas from the previous two bullet points, we could also try 
+ initializing the low-rank decomposition $A^{\rm approx} = Q W^T$ using the
+ SVD decomposition of $\bar A$ (followed by $QW$-alternation), instead of the
+ clustering algorithm above (``Step 1: the dictionary'').
+
+ This could either be done by keeping $K$ singular values, where $K$ is the
+ desired rank, or following a ``schedule'' where a larger number of singular
+ values are kept, and we alternate between $QW$-alternation (to reduce the
+ distance) and reducing the rank (using the idea from the previous bullet point).
+
+\item I'm wondering whether the SVD decomposition is also useful for setting
+ up the LP problems in the $Q$-step and $W$-step. For example, suppose that
+ we have a decomposition $A^{\rm approx} = Q W^T$, and we want to do a $Q$-step.
+
+ Suppose we SVD decompose $A^{\rm approx} = Q_0 \Lambda_0 W_0^T$, where $W_0$
+ is semiorthogonal ($W_0^T W_0 = 1$), and then solve an LP to obtain 
+ $A^{\rm new} = Q_1 W_0^T$. Is this more numerically stable, because we
+ have orthogonalized columns of $W_0$ to avoid near-cancellations? Are
+ there other technical advantages, such as a more principled way to set
+ numerical thresholds in the LP? Please investigate.
+ 
+ Another idea: if we find empirically that some singular values in $\Lambda_0$ 
+ are very small, then it may make more sense to drop these modes (decreasing the rank),
+ since the extra modes aren't ``helping'' the approximation.
+
+\item Another idea for initialization (in addition to the clustering algorithm or
+ the SVD decomposition). Let $\bar A_0$ be the coarse-grained variance map with the
+ detrender removed (but the dedispersion config unchanged). Using the algorithm in
+ \S\ref{ssec:analytic_variance}, we have an exact low-rank decomposition $\bar A_0 = Q_0 W_0^T$.
+ Suppose that we fix $W_0$ and use a $Q$-step to approximate $\bar A \approx Q_1 W_0^T$.
+ Is this a useful starting point for obtaining a low-rank approximation?
+
+ More generally, if you have any other ``natural'' ideas for generating a $W$-matrix
+ (even if there is no obvious way to generate $Q$ beyond solving an LP), this could
+ be interesting to investigate.
+
+\item A small idea that may help speed up the LP solver.
+ Currently, we solve with a subset of the constraints for speed, then re-evaluate
+ all constraints. If any constraints fail, then we add constraints and re-solve.
+
+ Suppose that when we evaluate the constraints, we find that they only fail by
+ a small amount (say $A^{\rm approx} \ge (1+\epsilon) A^{\rm true}$ everywhere).
+ Then we could solve the constraints by simply rescaling the solution by $(1+\epsilon)$ --
+ the only thing we lose is that the distance is slightly suboptimal.
+ In early stages of an iterative algorithm (either $QW$-iteration or a larger iterative
+ algorithm involving SVD decomposition and rank reduction) this may be a win -- it may
+ be better to trade strict optimality for speed in the early stages.
+
+\item So far we haven't analyzed dedispersion configs with \verb|subband_counts|.
+Do our results (1 and 2 above) hold up in this case?
+Does the distance-rank ``frontier'' get worse in the presence of \verb|subband_counts|?
+
+\item Similarly, how do our results depend on $W$?
+So far, we've only analyzed $W=2$.
+Note that $W=0$ implies $n=0$.
+
+\item Please be creative and pursue your own ideas, or extend/generalize the ideas here.
+ As you explore the problem, new ideas may suggest themselves.
+ Sometimes an experiment is useful if it improves general understanding of the problem domain,
+ even if it doesn't immediately lead to a concrete improvement in the algorithm.
+
+\end{itemize}
 
 \subsection{Brute-force computation of the variance map}
 \label{ssec:variance_map_bruteforce}
