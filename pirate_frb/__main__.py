@@ -209,6 +209,7 @@ def test(args):
             PfVariance.test_add_truncate_upper_half()
             if i == 0:  # deterministic (no randomness); run once
                 PfVarianceConvolver.test_kernels_match_reference()
+                PfVarianceConvolver.test_unimodality()
 
             # fast_avar: C++ ports compared against the slow_avar python reference.
             test_fast_avar.test_cpp_convolver()

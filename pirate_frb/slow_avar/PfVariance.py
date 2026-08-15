@@ -124,6 +124,80 @@ class PfVarianceConvolver:
             assert np.allclose(pfv.variance(np.array([1.0]), P), var[:P]), P
 
     @staticmethod
+    def test_unimodality():
+        """Check that each kernel autocorrelation A_p[delta] is non-negative, and non-increasing in delta.
+
+        This property ("unimodality" of the kernel autocorrelations) is load-bearing, not a
+        curiosity: it is one of the two hypotheses of the variance-map monotonicity result in
+        notes/tree_dedispersion.tex, appendix "Monotonicity of the variance map in the DM bits
+        (no detrender)". It holds because every current profile is a co-centered, non-negative
+        sum of boxcars. A profile which is not -- say a matched filter for a scattered or
+        multi-component pulse -- would break that result itself, not merely its proof, so this
+        test exists to fail loudly (with an explanation) if the kernel bank ever changes that way.
+
+        Deterministic -- intended to run once, not every iteration.
+        """
+
+        pfv = PfVarianceConvolver()
+
+        # Where to send the reader of a failure. (Section titles, not numbers: the appendix has
+        # moved once already, and the lemma numbering is by hand.)
+        appendix = ('notes/tree_dedispersion.tex, appendix "Monotonicity of the variance map in\n'
+                    '  the DM bits (no detrender)"')
+
+        def fmt(h):
+            """Format a kernel for an error message (they can be thousands of samples long)."""
+            v = [float(x) for x in h]
+            if len(v) <= 12:
+                return str(v)
+            return f"(length {len(v)}) {v[:6]}...{v[-6:]}".replace("]...[", ", ..., ")
+
+        for p in range(pfv.Pmax):
+            # Row p of the autocorrelation table: A[p,delta] = sum_t h_p[t] h_p[t+delta], one-sided
+            # (A_p is even in delta), and zero-padded past len(h_p). The bank for any smaller
+            # max_kernel_width is a prefix of this one (see peak_finding_kernels()), so looping over
+            # all Pmax profiles covers every config.
+            a = pfv.A[p]
+
+            # The current kernel coefficients (halves and ones) are exactly representable, so their
+            # autocorrelations are exact. A future kernel with rounded coefficients could show O(eps)
+            # non-monotonicity, which is not the failure this test is looking for.
+            eps = 1e-12 * a[0]
+
+            rise = np.nonzero(np.diff(a) > eps)[0]
+            if len(rise) > 0:
+                d = int(rise[0])
+                raise RuntimeError(
+                    f"PfVarianceConvolver.test_unimodality: the autocorrelation of peak-finding\n"
+                    f"profile p={p} is not monotone: it decreases to A_p[{d}]={float(a[d])}, then rises\n"
+                    f"to A_p[{d+1}]={float(a[d+1])}. The kernel is h_{p} = {fmt(pfv.kernels[p])}.\n"
+                    f"\n"
+                    f"This breaks a hypothesis that downstream results depend on. See\n"
+                    f"  {appendix},\n"
+                    f"which proves that the variance map never increases when a bit of the DM index is\n"
+                    f"set (in particular, that the first entry of every aligned dyadic DM block is the\n"
+                    f"largest). Lemma 6 there is exactly the property this test checks, and the\n"
+                    f"'Sharpness' subsection gives an explicit two-hump counterexample: a kernel whose\n"
+                    f"autocorrelation rises again -- as this one does -- makes the conclusion FALSE, not\n"
+                    f"merely unproved, for ordinary gridding weights.\n"
+                    f"\n"
+                    f"So this is a design decision, not a test to relax: either keep the peak-finding\n"
+                    f"kernels co-centered non-negative sums of boxcars (see peak_finding_kernels()), or\n"
+                    f"revisit every place which assumes the variance map is DM-bit monotone.")
+
+            if np.min(a) < -eps:
+                d = int(np.argmin(a))
+                raise RuntimeError(
+                    f"PfVarianceConvolver.test_unimodality: the autocorrelation of peak-finding\n"
+                    f"profile p={p} is negative at lag {d}: A_p[{d}]={float(a[d])}. The kernel is\n"
+                    f"h_{p} = {fmt(pfv.kernels[p])}.\n"
+                    f"\n"
+                    f"Non-negativity of A_p is implied by the monotonicity checked above (A_p vanishes\n"
+                    f"past len(h_p)), so reaching this means the table itself is malformed, not just the\n"
+                    f"kernel shape. Either way it breaks the variance-map monotonicity result of\n"
+                    f"  {appendix}.")
+
+    @staticmethod
     def test_kernels_match_reference():
         """Check our kernels h_p against the ones ReferencePeakFindingKernel actually uses.
 
@@ -393,6 +467,13 @@ class PfAvarExact:
                        This is a "ragged" array (list of list of lists) since M is tree-dependent.
                        This is the variance map in factored per-channel form, and is what
                        slow_avar.VarianceMapExact consumes.
+
+                       Whether an entry is None depends on the multiplet's frequency subband,
+                       not on its fine DM: the 2^l multiplets of a given subband are either all
+                       None or all non-None, for a given (tree, ifreq). This is what makes the
+                       per-subband variance array A[dm] = per_tfm[t][ifreq][m(subband,dlo)][dhi],
+                       with dm = dhi*2^l + dlo, well-defined (see the appendix "Monotonicity of
+                       the variance map in the DM bits" in notes/tree_dedispersion.tex).
 
       per_tm:          (ntrees, M) ragged array of frequency-summed PfVariances (never None):
                        per_tm[t][m] = sum_ifreq freq_variances[ifreq] * per_tfm[t][ifreq][m].

@@ -790,9 +790,14 @@ void register_kernel_bindings(pybind11::module &m)
                },
                py::arg("buf"), py::arg("out") = py::none(),
                "Dedisperses buf in place, writes subbands to out.\n\n"
+               "Footgun: the two results use different DM orderings. The natural\n"
+               "(non-bit-reversed) DM ordering is a property of the subband array 'out',\n"
+               "not of the in-place buffer.\n\n"
                "Args:\n"
-               "    buf: Input/output array, shape (num_beams, 2^amb_rank, 2^dd_rank, ntime*nspec)\n"
-               "    out: Output array for subbands (optional if M=1)")
+               "    buf: Input/output array, shape (num_beams, 2^amb_rank, 2^dd_rank, ntime*nspec).\n"
+               "         On return, its DM axis is BIT-REVERSED.\n"
+               "    out: Output array for subbands, indexed by (beam, coarse DM, multiplet, time)\n"
+               "         with the DM axis in natural order (optional if M=1)")
           .def_static("test_basics", &ReferenceTree::test_basics, py::call_guard<py::gil_scoped_release>())
           .def_static("test_subbands", &ReferenceTree::test_subbands, py::call_guard<py::gil_scoped_release>())
     ;
