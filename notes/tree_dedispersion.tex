@@ -2990,7 +2990,7 @@ zone, which also destroys the exact zeros of $A$), and once it is switched on th
 every rank below $N_{\rm freq}$. The algorithm below is aimed at that case, since it is the one
 we run.
 
-\paragraph*{The shape of the approximation: coarse assignment.}
+\paragraph*{The shape of the approximation: a coarse-grained $Q$.}
 Partition the $N_\alpha \equiv 2^{r-R}MP$ output indices $\alpha$ into $N_\beta$ groups, indexed by
 $\beta$, and write $\beta(\alpha)$ for the group containing $\alpha$. Give each {\em group} a
 single coefficient vector $q_\beta \in \mathbb{R}^K_{\ge 0}$, and let every $\alpha$ in that
@@ -2999,14 +2999,14 @@ group share it:
 A^{\rm approx}_{\alpha F} = (W q_{\beta(\alpha)})_F
 \label{eq:varmap_coarse_assign}
 \end{equation}
-To fix the shapes: $W$ is $N_{\rm freq}$-by-$K$, so its $K$ columns are frequency vectors (the
-``dictionary''); $q_\beta$ is a column vector of $K$ nonnegative numbers; $W q_\beta$ is
+To fix the shapes: $W$ is $N_{\rm freq}$-by-$K$, so its $K$ columns are frequency vectors;
+$q_\beta$ is a column vector of $K$ nonnegative numbers; $W q_\beta$ is
 therefore an $N_{\rm freq}$-vector, and $(\cdot)_F$ takes its $F$-th component. In words,
 Eq.\ (\ref{eq:varmap_coarse_assign}) says {\em every output row in a group is the same
-nonnegative combination of the same $K$ dictionary vectors}.
+nonnegative combination of the same $K$ columns of $W$}.
 
 This is the notes' own coarse-graining of \S\ref{ssec:first_milestone} with one generalization:
-instead of assigning each group a single dictionary vector, we let it use a nonnegative
+instead of giving each group a single column of $W$, we let it use a nonnegative
 {\em combination} of them.
 
 {\bf Relation to $Q$, and the degrees of freedom.} Collect the $q_\beta$ as the rows of a
@@ -3060,20 +3060,20 @@ CHORD, $5.4$ GiB instead of $1251$ GiB. Measured against a dense reduction on th
 the streamed $\bar A$ is bit-identical, uses $1.9$ GiB of peak RSS against $128.5$ GiB, and is
 20\% faster.
 
-\paragraph*{Step 1: the dictionary (this is also the initialization).}
+\paragraph*{Step 1: constructing $W$ (this is also the initialization).}
 We need an initial $W$, i.e.\ $K$ frequency vectors from which every group's row can be covered.
 Take the $N_\beta$ rows of $\bar A$, normalize each to unit sum,
 \begin{equation}
 \bar u_{\beta F} = \bar A_{\beta F} \Big/ \sum_{F'} \bar A_{\beta F'}
 \end{equation}
 and cluster them by greedy agglomerative merging: start with one cluster per group, and
-repeatedly merge the pair whose merge increases the objective least. The dictionary vector for
+repeatedly merge the pair whose merge increases the objective least. The column of $W$ for
 cluster $c$ is the elementwise max over its members, $W_{Fc} = \max_{\beta \in c} \bar
 u_{\beta F}$.
 
 Two things about this are worth understanding rather than just implementing.
 
-{\em Why shapes and not rows.} If a group is assigned a single dictionary vector, it is always
+{\em Why shapes and not rows.} If a group is given a single column of $W$, it is always
 free to rescale it -- $q_\beta = s e_c$ costs nothing in rank -- and the optimal $s$ is
 $\max_F \bar A_{\beta F}/W_{Fc}$. Substituting it, the resulting $y^{\rm approx}_\beta /
 y^{\rm true}_\beta$ is invariant under $W \to cW$ and does not involve the row's overall
@@ -3081,17 +3081,17 @@ normalization at all. So {\em once rescaling is allowed, only the shapes matter}
 the raw rows optimizes the wrong thing -- visibly so, since it produces a non-monotone frontier
 in $K$. Clustering the unit-sum shapes instead is worth 3--20\% (typically 11--14\%) at no extra
 cost, and the argument is stronger for the full algorithm below, whose $q_\beta$ is exactly
-scale-invariant in each atom. Note this dictionary needs only $\bar A$ -- not even $y$.
+scale-invariant in each atom. Note this construction of $W$ needs only $\bar A$ -- not even $y$.
 
 {\em Why this is a good enough starting point.} The initial $W$ is a max envelope, so the
-one-hot assignment $q_\beta = e_{c(\beta)}$ is feasible: the alternation starts from an
+one-hot $q_\beta = e_{c(\beta)}$ is feasible: the alternation starts from an
 admissible point with a known finite $D$, and every step below preserves feasibility. The
-dictionary also does not have to be optimal, only reasonable: building it from $\bar A$ at the
-same coarse-graining used for assignment is within 3.6\% of building it from a finer $\bar A$,
+$W$ also does not have to be optimal, only reasonable: building it from $\bar A$ at the
+same coarse-graining used for $Q$ is within 3.6\% of building it from a finer $\bar A$,
 and within 3.5\% of building it from the dense $A$. So there is no reason to keep a finer
-$\bar A$ around -- the memory footprint is set by the assignment alone.
+$\bar A$ around -- the memory footprint is set by $Q$ alone.
 
-\paragraph*{Step 2: the Q-step (optimize the assignment, holding the dictionary fixed).}
+\paragraph*{Step 2: the Q-step (optimize $Q$, holding $W$ fixed).}
 Let $s_c = \sum_F W_{Fc}$, so that a group's approximate row sum is $s \cdot q_\beta$. Since $f$
 in Eq.\ (\ref{eq:distance_function}) is strictly increasing, minimizing $D$ over $q_\beta$ is
 exactly minimizing the row sum, and the groups are independent. So the Q-step is, for each
@@ -3103,14 +3103,14 @@ W q_\beta \ \ge \ \bar A_{\beta,:}
 \label{eq:varmap_qstep}
 \end{equation}
 with $K$ variables and $N_{\rm freq}$ constraints. Three remarks. It is {\em exact}, not a
-heuristic -- given $W$, no better assignment exists. It uses only that $f$ is increasing, so it
+heuristic -- given $W$, no better $Q$ exists. It uses only that $f$ is increasing, so it
 is insensitive to the exact shape of the cost function. And it is embarrassingly parallel over
 groups. At $N_{\rm freq} = 16384$ it should be solved with constraint generation (start from a
 subset of channels, add violated ones, repeat); this is $8.7\times$ faster than handing the
 solver all the constraints and agrees with it to $10^{-9}$, and without it the method looks
 unaffordable when it is not.
 
-\paragraph*{Step 3: the W-step (optimize the dictionary, holding the assignment fixed).}
+\paragraph*{Step 3: the W-step (optimize $W$, holding $Q$ fixed).}
 This one needs a small trick, because the objective depends on $W$ through the column sums while
 the constraint depends on $W$ elementwise, so it does not decouple as written. Observe that $f$
 is concave:
@@ -3167,7 +3167,7 @@ ${\rm max\_r} = 1$ exactly.
 \paragraph*{Choosing the coarse-graining factor $L$.}
 There is a usable design rule. The {\em floor} $D_{\rm floor}(L)$ -- the plain max envelope of
 Eq.\ (\ref{eq:varmap_abar}) lifted back to $A$, with no LP at all -- is a hard lower bound for
-the whole coarse-assigned family at any rank, and it is cheap to evaluate. Empirically the
+the whole coarse-grained-$Q$ family at any rank, and it is cheap to evaluate. Empirically the
 achieved distance adds it in quadrature to the distance the same algorithm would reach with
 unlimited $L$:
 \begin{equation}
@@ -3194,13 +3194,13 @@ suggests.
 \paragraph*{Results.}
 All distances below are from \verb|class VarMapDistance| (\S\ref{ssec:distance_function}) and all
 approximations are admissible (${\rm max\_r} = 1$). ``Envelope'' is the best plain clustering we
-found, which is the same greedy agglomerative merge in shape space but with one-hot assignment.
+found, which is the same greedy agglomerative merge in shape space but with one-hot $q_\beta$.
 
 One quantity in the table needs defining first. Write ${\rm nnz}$ for the number of {\em nonzero}
-entries of $q_\beta$: how many of the $K$ dictionary vectors a group actually uses. It is a
-separate budget from the rank -- $K$ is the size of the {\em shared} dictionary, ${\rm nnz}$ is
+entries of $q_\beta$: how many of the $K$ columns of $W$ a group actually uses. It is a
+separate budget from the rank -- $K$ is the number of {\em shared} columns of $W$, ${\rm nnz}$ is
 how much of it each group draws on -- and the two enter the cost differently (see below).
-The plain envelope is ${\rm nnz} = 1$ by construction, since each group is assigned one vector.
+The plain envelope is ${\rm nnz} = 1$ by construction, since each group uses one column of $W$.
 The Q-step of Eq.\ (\ref{eq:varmap_qstep}) is {\em not} asked to be sparse and returns
 ${\rm nnz} = 2$ to $3$ anyway. The ``${\rm nnz} \le 2$'' row is the variant where it is
 additionally constrained: keep the best admissible subset of size 2 of the LP's own support,
@@ -3232,7 +3232,7 @@ gain at equal rank, (a)/(c) & 1.60$\times$ & 1.52$\times$ & 1.52$\times$ & 1.43$
 \end{center}
 
 Every entry is a distance $D$, and all three rows are the same rank $K$: they differ only in how
-many dictionary vectors each group may use. Constraining ${\rm nnz}$ to 2 costs 14--34\% in $D$
+many columns of $W$ each group may use. Constraining ${\rm nnz}$ to 2 costs 14--34\% in $D$
 and is worth doing only when it buys more than that in cost, which at this geometry it does not
 -- see below.
 
@@ -3259,10 +3259,10 @@ Two further points, which were not obvious to us in advance:
 \begin{itemize}
 
 \item {\bf It is cheaper to apply, not just more accurate.} Evaluating $y = Q(W^Tv)$ costs
- $K N_{\rm freq} + N_\beta\,{\rm nnz}$ multiply-adds, where ${\rm nnz}$ is the number of dictionary
+ $K N_{\rm freq} + N_\beta\,{\rm nnz}$ multiply-adds, where ${\rm nnz}$ is the number of $W$-columns
  vectors a group actually uses (the LP returns 2--3, without being asked). At the CHIME tree-0
  geometry this buys $2.4$--$3.1\times$ in $D$ at equal apply cost. Note the
- saving comes from coarse assignment: with a {\em per-row} $q_\alpha$ the same factorization is
+ saving comes from coarse-graining $Q$: with a {\em per-row} $q_\alpha$ the same factorization is
  {\em worse} than the envelope at equal cost, because the $N_\alpha\,{\rm nnz}$ term dominates.
  Whether to additionally cap ${\rm nnz}$ at 2 depends on which term dominates: cap when
  $N_\beta \gtrsim K N_{\rm freq}/4$, which is true at $N_{\rm freq} = 400$ and false at
@@ -3273,7 +3273,7 @@ Two further points, which were not obvious to us in advance:
  coarse-graining group $\beta$ -- which is precisely Eq.\ (\ref{eq:varmap_coarse_assign}) with
  ${\rm nnz} = 1$. So this algorithm's $Q$ is the object production already has, generalized from
  one entry per group to two or three; ${\rm nnz} = 2$ means the peak-finder applies the existing
- weight multiply twice and adds. A per-{\em row} assignment is not expressible in the current
+ weight multiply twice and adds. A per-{\em row} $Q$ is not expressible in the current
  kernel at all. The reduction is therefore not only cheaper, it is the only one of the two that
  fits the hardware.
 
@@ -3300,10 +3300,10 @@ at low DM should be dropped for the same reason.
  higher.
 \item Nothing at CHORD scale has been measured. The streaming reduction removes the memory
  obstacle, but scoring $D$ with \verb|VarMapDistance| still needs the dense $A$; a variant which
- accepts $(\bar A, y, \mbox{labels})$ would close this, since for a coarse-assigned
+ accepts $(\bar A, y, \mbox{labels})$ would close this, since for a coarse-grained-$Q$
  approximation admissibility is a theorem rather than a measurement.
 \item Everything is single-tree with no early triggers, and no time-downsampled trees.
-\item The shape-space greedy dictionary is the one step that does not scale:
+\item The shape-space greedy construction of $W$ is the one step that does not scale:
  $O(N_\beta^{2.4} N_{\rm freq})$, extrapolating to days at CHORD's $N_\beta$. Everything else is linear
  or better. It is a clustering, so a cheaper one would do, but the obvious substitutes
  (k-means on log-shape) are erratic at group granularity.
@@ -3390,7 +3390,7 @@ This will give us a sense of the ``Pareto frontier'' of distance versus rank.
 \item Combining ideas from the previous two bullet points, we could also try 
  initializing the low-rank decomposition $A^{\rm approx} = Q W^T$ using the
  SVD decomposition of $\bar A$ (followed by $QW$-alternation), instead of the
- clustering algorithm above (``Step 1: the dictionary'').
+ clustering algorithm above (``Step 1: constructing $W$'').
 
  This could either be done by keeping $K$ singular values, where $K$ is the
  desired rank, or following a ``schedule'' where a larger number of singular
@@ -3476,15 +3476,15 @@ In addition, here are some directions to explore that were suggested by an agent
  increases $D$ least, repeating until the rank is $K'$ (a ``leave-one-out'' criterion).
 
  The motivation is that a singular value measures a mode's contribution in Frobenius norm,
- which is the wrong norm here: campaign 1 found that pruning a dictionary by column {\em
+ which is the wrong norm here: campaign 1 found that pruning $W$ by column {\em
  usage} was $2.1\times$ worse than simply rebuilding at the target rank, and diagnosed it as
  keeping ``columns that supply mass, not columns that supply shapes nothing else covers''.
  A singular value is also a mass-like criterion. A leave-one-out score is aligned with the
  objective by construction. It costs $K$ $Q$-steps per removal, but those are independent
  and each is cheap.
 
-\item {\bf Pivoted QR (or CUR) for choosing dictionary atoms.}
- Campaign 1 tried using actual rows of $A$ as dictionary atoms, chosen worst-covered-first,
+\item {\bf Pivoted QR (or CUR) for choosing the columns of $W$.}
+ Campaign 1 tried using actual rows of $A$ as columns of $W$, chosen worst-covered-first,
  and found them $1.2$--$1.4\times$ worse than the greedy clustering. That may say more about
  the selection rule than about the idea: a rank-revealing QR with column pivoting applied to
  $\bar A^T$ chooses a well-conditioned subset of rows, which is the principled version of
@@ -3493,7 +3493,7 @@ In addition, here are some directions to explore that were suggested by an agent
  It has several practical advantages worth testing: it is deterministic, it costs
  $O(K N_\beta N_{\rm freq})$ rather than the $O(K_0^{2.4})$ of the agglomerative greedy, the
  atoms stay nonnegative and interpretable (each is a real output's frequency response), and
- the pivot order gives a natural nested sequence of dictionaries -- which is exactly what a
+ the pivot order gives a natural nested sequence of $W$-matrices -- which is exactly what a
  rank schedule wants.
 
 \item {\bf Warm-starting the linear programs.}
@@ -3507,19 +3507,19 @@ In addition, here are some directions to explore that were suggested by an agent
  it, and it may well be the larger of the two effects. Worth measuring as LP wall clock per
  $Q$-step, with and without.
 
-\item {\bf Does a dictionary transfer between trees and between configs?}
- The dictionary build is the one step of the recommended algorithm that does not scale:
+\item {\bf Does a $W$-matrix transfer between trees and between configs?}
+ Building $W$ is the one step of the recommended algorithm that does not scale:
  $O(K_0^{2.4} N_{\rm freq})$, which extrapolates to days at CHORD's $K_0$, while everything
  else is linear or better. But a {\tt DedispersionPlan} has several trees, and production
  needs weights for all of them.
 
- So: does a dictionary built for one tree work for another (same $N_{\rm freq}$, different
+ So: does a $W$-matrix built for one tree work for another (same $N_{\rm freq}$, different
  rank or subband structure)? If it does, the expensive step amortizes over trees, and
- possibly over configs. There is some reason for optimism -- campaign 1 found the dictionary
- need only be {\em reasonable} rather than optimal (a cheap k-means dictionary matched the
+ possibly over configs. There is some reason for optimism -- campaign 1 found $W$
+ need only be {\em reasonable} rather than optimal (a cheap k-means $W$ matched the
  greedy at $K=32$). Note the related question of transfer across {\em granularity} within one
- tree is already settled: building the dictionary from $\bar A$ at the same $L$ used for
- assignment is within a few percent of building it from a finer $\bar A$, so there is no
+ tree is already settled: building $W$ from $\bar A$ at the same $L$ used for
+ $Q$ is within a few percent of building it from a finer $\bar A$, so there is no
  reason to keep a finer one around.
 
 \end{itemize}
@@ -3535,18 +3535,18 @@ bullet-point directions turned out to be dead ends and are reported as such.
 \paragraph{The recipe, as it now stands.}
 Three of the four steps of \S\ref{sssec:varmap_proposed} survive unchanged: coarse-grain
 $A \rightarrow \bar A$ by a max over structured groups, solve one covering LP per group for
-$q_\beta$, and alternate with the $W$-step. What changed is the {\em dictionary} and the
+$q_\beta$, and alternate with the $W$-step. What changed is how $W$ is built, and the
 {\em constraint set}:
 
 \begin{enumerate}
-\item {\bf The dictionary is now a truncated SVD of $\bar A$}, not an agglomerative clustering.
+\item {\bf $W$ is now a truncated SVD of $\bar A$}, not an agglomerative clustering.
  Use the SVD of the unit-sum {\em shape} matrix $S_{\beta F} = \bar A_{\beta F}/\sum_F \bar A_{\beta F}$
  for $K \gtrsim 32$ and of $\bar A$ itself below that. Only at $K \le 8$ does the clustering
  still win.
 \item {\bf The $Q$-step constraint $q_\beta \ge 0$ is dropped.} It was never implied by the
  problem -- admissibility constrains the {\em product} $W q_\beta \ge \bar A_{\beta,:}$, not the
  coefficients -- and dropping it is worth $1.4$--$3.9\times$ in $D$ at fixed rank, like for like.
- The $W$-step's $W \ge 0$ may be kept when the dictionary is nonnegative (it is inactive at the
+ The $W$-step's $W \ge 0$ may be kept when the initial $W$ is nonnegative (it is inactive at the
  optimum, worth $0$--$2.6\%$), but must {\em not} be imposed on top of a signed initializer,
  where it costs $8.8\times$.
 \end{enumerate}
@@ -3558,21 +3558,21 @@ answer is yes turns on a distinction the campaign took a long time to draw, and 
 stating plainly because it is the single most useful idea to come out of this work:
 
 \begin{quote}
-{\bf The SVD as an {\em approximation} and the SVD as a {\em dictionary} are different objects.}
+{\bf The SVD as an {\em approximation} and the SVD as a {\em $W$-matrix} are different objects.}
 A truncated SVD used directly as $A^{\rm approx}$ has an admissibility cliff: below $K \approx 32$
 it puts a non-positive value on a positive entry of $\bar A$, which no rescaling can repair, so
-$D = \infty$. The same truncation used as the {\em dictionary} $W$, with the LP free to choose
+$D = \infty$. The same truncation used as the {\em $W$-matrix}, with the LP free to choose
 $q$, has no cliff at all.
 \end{quote}
 
 \par\noindent
 These two are easy to conflate, and conflating them is why the winning algorithm was nearly
 abandoned: measurements of the first were repeatedly read as verdicts on the second. Note also
-that the two changes are coupled. A signed dictionary is unusable while $q_\beta \ge 0$ is
+that the two changes are coupled. A signed $W$ is unusable while $q_\beta \ge 0$ is
 imposed -- the sign convention of an SVD mode is arbitrary, and with $q$ constrained the LP was
 infeasible on $400$ of $400$ sampled rows. With $q$ free the problem is exactly invariant under
 $W_{:,c} \rightarrow -W_{:,c}$, $q_c \rightarrow -q_c$, so the sign convention stops mattering
-(measured: identical $D_0$ to 17 digits). Dropping the constraint is what made the SVD dictionary
+(measured: identical $D_0$ to 17 digits). Dropping the constraint is what made an SVD $W$-matrix
 available at all.
 
 \paragraph{The frontier.}
@@ -3596,7 +3596,7 @@ $D/D_{\rm floor}$      & 8.52   & 3.34    & 1.55    & 1.21    & {\bf 1.05} \\
 \par\noindent
 where $D_{\rm floor} = 0.00441$ is the coarse-graining floor: the covering constraint forces
 $y^{\rm approx}_\alpha \ge \sum_F \bar A_{\beta F}$ for every $\alpha \in \beta$, so {\em no}
-coarse-assigned approximation of {\em any} rank can beat the unrescaled max-envelope over the
+approximation with a coarse-grained $Q$, of {\em any} rank, can beat the unrescaled max-envelope over the
 $L_0$ groups. The last row is the important one.
 
 \paragraph{Rank is spent; the coarse-graining is the remaining lever.}
@@ -3620,7 +3620,7 @@ $2.10\times$ at $K = 64$, against at most $1.21\times$ available from {\em any} 
 crossed it: at $2\times$ storage from $(L_0, K) = (6, 32)$, buying rank wins $1.45\times$ to
 $1.26\times$; from $(6, 64)$, buying groups wins $2.10\times$ to $1.15\times$. Below
 $K \approx 29$ buying groups is a $3$--$7\times$ mistake. {\bf So: refine $L_0$ first, then buy
-rank} -- and the campaign was right to optimize rank until the new dictionary landed.
+rank} -- and the campaign was right to optimize rank until the new $W$-matrix landed.
 
 The axis is short, and the limit is in the shipped code rather than in the mathematics:
 {\tt DedispersionPlan} accepts {\tt wt\_dm\_downsampling} $= 64, 32, 16$ but fails an assertion at
@@ -3628,13 +3628,13 @@ $8$, because {\tt dm\_downsampling} defaults to $2^R$. Hence $L_0 \ge R$, giving
 refinements; after them $D/D_{\rm floor}$ is back to $2.3$ and rank binds again at $K \approx 75$.
 
 \paragraph{Cost: the one step that did not scale is gone.}
-The clustering dictionary was $O(N_\beta^{2.4} N_{\rm freq})$ and extrapolated to days at CHORD.
-The SVD dictionary is one Gram eigendecomposition: $34$~s against $\sim 2.5$~h at subscale, and
+The clustering construction of $W$ was $O(N_\beta^{2.4} N_{\rm freq})$ and extrapolated to days at
+CHORD. The SVD $W$ is one Gram eigendecomposition: $34$~s against $\sim 2.5$~h at subscale, and
 $120$--$730$~s against $\sim 44$~h at the production point. Everything else was already linear or
-better. Separately, the dictionary turns out not to need {\em fitting} at all: one $W$-step takes
-a dictionary built for a {\em different} tree, subband count or detrender to within $3$--$9\%$ of
+better. Separately, $W$ turns out not to need {\em fitting} at all: one $W$-step takes
+a $W$-matrix built for a {\em different} tree, subband count or detrender to within $3$--$9\%$ of
 a purpose-built one, and the analytic no-detrender factorization of \S\ref{sec:analytic_variance}
-costs only $1.0$--$1.8\times$ with no clustering whatever. A {\em random} dictionary costs
+costs only $1.0$--$1.8\times$ with no clustering whatever. A {\em random} $W$ costs
 $1.2$--$2.0\times$, so the choice still matters -- it just needs no expensive search.
 
 \paragraph{Dependence on the configuration.}
