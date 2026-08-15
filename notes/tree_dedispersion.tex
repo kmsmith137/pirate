@@ -3682,6 +3682,123 @@ and takes seconds; until it is in place, any number at $K \ge 128$ on a subbande
 treated as provisional. Beyond that: warm-starting the LPs was never attempted, and nothing has
 been measured at CHORD's channel count.
 
+\subsubsection{Campaign 3 setup [human + agent authored]}
+\label{ssec:campaign3_setup}
+
+Directions for the next campaign. (The rest of the campaign-2 leftovers -- the solver defect at
+$K \ge 128$, the exact $(L_0, K) = (4, 128)$ cell, LP warm starts, and CHORD's channel count --
+are tracked outside these notes.)
+
+The campaign 2 results look promising!
+The main things I'm worried about are {\bf scalability} and {\bf robustness}.
+Consider the CHORD scale config \verb|chord_sb2.yml| (primary tree 0 only), with
+$N_{\rm freq} = 28160$, rank $r=15$, and 25 subbands.
+Can we reach this scale in a reasonable amount of computing time (say $<1$ day on 32 cores)?
+Will our current algorithm run into numerical instability (e.g.\ in the LP solver) before
+reaching this scale?
+What rank-$D$ ``Pareto frontier'' will we see at CHORD scale?
+
+\begin{itemize}
+
+\item Instead of running \verb|chord_sb2.yml| directly, approach it via a sequence of
+ increasingly large-scale configs (e.g.\ increasing $r$ by 1 and/or doubling $N_{\rm freq}$,
+ and/or adding subbands. You may find that new issues emerge as the scale increases.
+
+\item Try to reach as large a scale as possible, within the time horizon of the ch-research
+ skill. In order to achieve this goal, consider carefully what set of parallel subagents will
+ make best use of our 32 cores and 2 GPUs. For example, if you're precomputing $A$-matrices
+ on the GPU and solving LPs on the CPU, you may want to precompute the next problem instance
+ in parallel with solving the current instance.
+
+\item You may not reach CHORD scale within the time horizon. In that case, please try to
+ find an empricial scaling law based on your subscale results, and predict what ``Pareto
+ frontier'' we might see at CHORD scale.
+
+\item This idea is cut-and-paste from an earlier section -- I'm including it again since
+ it may be more helpful at scale.
+
+ A small idea that may help speed up the LP solver.
+ Currently, we solve with a subset of the constraints for speed, then re-evaluate
+ all constraints. If any constraints fail, then we add constraints and re-solve.
+
+ Suppose that when we evaluate the constraints, we find that they only fail by
+ a small amount (say $A^{\rm approx} \ge (1-\epsilon) A^{\rm true}$ everywhere).
+ Then we could solve the constraints by simply rescaling the solution by $(1-\epsilon)^{-1}$ --
+ the only thing we lose is that the distance is slightly suboptimal.
+ In early stages of an iterative algorithm (either $QW$-iteration or a larger iterative
+ algorithm involving SVD decomposition and rank reduction) this may be a win -- it may
+ be better to trade strict optimality for speed in the early stages.
+
+\item {\bf Pin a nonnegative column in $W$, and exclude it from the $W$-step.}
+ Here's a minor suggestion that may be useful.
+
+ Campaign 2 dropped $q_\beta \ge 0$ entirely and, under the SVD recipe, dropped $W \ge 0$ as
+ well, so both factors are now sign-free. That is where the performance came from, but it
+ quietly removed something several parts of the algorithm still rely on: {\em the existence of
+ at least one all-positive column of $W$}. Three places currently hope for one rather than
+ requiring it -- the additive admissibility repair (which raises the product in every channel at
+ once only if the column it adds is nonnegative), the one-hot seed for the first $Q$-step, and
+ the argument that a covering LP is feasible at all. Today that hope is usually satisfied only
+ because the leading SVD mode of a nonnegative matrix is itself nonnegative (Perron--Frobenius),
+ which is a fact about {\em one} mode and is not guaranteed to survive truncation, shape
+ normalization, or a differently-constructed $W$.
+
+ The proposal is to stop relying on it: reserve one column of $W$, fix it to a nonnegative
+ vector, and exclude it from the $W$-step so it cannot drift. The cost is bounded by one unit of
+ rank, and is probably less -- see below.
+
+ {\em Which vector.} An all-ones column is the obvious choice and is the wrong one. It is
+ nonnegative and dominating, but its cost in the objective is $s_c = N_{\rm freq}$, so covering
+ a group whose largest entry is $m$ costs $m N_{\rm freq}$ against a true row sum of
+ $\sum_F \bar A_{\beta F}$ -- i.e.\ one pays the row's peak-to-mean ratio. On a subbanded map a
+ row is supported on roughly $1/N$ of the band, so at CHORD's $N = 25$ the all-ones column is
+ $\sim 25\times$ more expensive than the row it is covering, and the LP would never choose it
+ except in extremis. A better choice is the elementwise column max over groups,
+ \begin{equation}
+ W_{F,c_0} = \max_\beta \bar A_{\beta F}
+ \label{eq:varmap_pinned_column}
+ \end{equation}
+ which is nonnegative by construction, is positive in exactly the channels where some group
+ needs it, costs one streaming pass to build (the same pass that already produces $\bar A$), and
+ is the {\em tightest} single vector that dominates every group. It is also the rank-1 member of
+ campaign 1's envelope family, so unlike an all-ones column it is a vector the LP will actually
+ use on hard groups.
+
+ {\em What it guarantees.} With Eq.\ (\ref{eq:varmap_pinned_column}) pinned, $q_\beta = e_{c_0}$
+ is a certified feasible point for {\em every} group, with a nonnegative product, whatever the
+ other $K-1$ columns look like. We currently have no such certificate, which is why campaign 2
+ had to prove feasibility by hand to establish that the solver was reporting a feasible LP as
+ infeasible. It also means the one-hot seed can never fail to exist, and the additive repair can
+ never run out of usable columns.
+
+ {\em What it does not fix.} It does not prevent the product $W q_\beta$ from going negative in
+ channels where $\bar A_{\beta F} = 0$ -- that is what constraining every channel is for -- it
+ only makes such a case repairable. And it does not address the solver's rank-dependent failures
+ at $K \ge 128$, which are a conditioning problem, not a feasibility one. It is complementary to
+ both: a certified feasible point is exactly what one would hand the solver as a warm start.
+
+ {\em The measurement.} Compare the current recipe at rank $K$ against the pinned variant at the
+ same rank $K$ (so $K-1$ learned columns plus one pinned), on at least one subbanded and one
+ unsubbanded map, reporting $D$ and the LP failure counts. The interesting question is whether
+ the pinned column costs a full unit of rank or a fraction of one: the leading SVD mode is
+ already approximately the mean spectrum, so a pinned envelope may be largely reconstructing
+ something the truncation would have spent a mode on anyway.
+
+\item Does it help (e.g.\ with numerical instability at scale) to ``re-orthogonalize'' the
+ rank-$K$ approximation after each $Q$-step or $W$-step, by taking the SVD decomposition? 
+ (Note: if we decide to ``pin'' one or more all-positive columns, as suggested in the previous
+ bullet point, then we'd want to exclude pinned columns from the re-orthogonalization.
+
+\item Feel free to pursue any loose ends from campaigns 1 and 2 that weren't fully resolved,
+ or that you want to revisit. 
+ In particular, ideas that were abandoned previously in subscale instances may prove
+ to be useful at larger scale.
+
+\item
+As usual, please get creative and explore your own ideas!
+
+\end{itemize}
+
 \subsection{Brute-force computation of the variance map}
 \label{ssec:variance_map_bruteforce}
 
