@@ -374,7 +374,7 @@ def test_vs_brute_force(rng=None, verbose=True):
 def test_kernel_response(rng=None, verbose=True):
     """
     On a full mask, the equivalent kernel at zero lag must approach the closed form
-    h[0] = c_k/tau of notes/tree_dedispersion.tex, section "Time detrending
+    h[0] = c_k/tau of notes/detrending.tex, section "Time detrending
     algorithm 2: Kalman filter", subsection "Response and numerics".
 
     This is the strongest check in the file: the expected answer is analytic, so it

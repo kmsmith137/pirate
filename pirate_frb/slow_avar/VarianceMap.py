@@ -24,7 +24,7 @@ class VarianceMapBlock:
     equalizes the scale of the map's frequency columns before truncating (without it, input
     channels which barely overlap the block would be truncated away).
 
-    For the math, see notes/tree_dedispersion.tex, appendix "PfAvarExact and VarianceMapExact".
+    For the math, see notes/variance_map.tex, appendix "PfAvarExact and VarianceMapExact".
 
     Members
     -------

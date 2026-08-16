@@ -56,7 +56,7 @@ struct DedispersionConfig
     // Each "primary tree" searches a different DM range, ordered from low to high
     // (primary tree p downsamples the input in time by 2^p, see 'toplevel_tree_rank' above).
     // Each primary tree is expanded into (num_early_triggers+1) "dedispersion trees".
-    // See the tex notes for more info.
+    // See the dedispersion tex notes for more info.
     //
     // The remaining members configure peak-finding, and must be powers of two:
     //   max_width: max width of peak-finding kernel, in "tree" time samples

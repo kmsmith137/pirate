@@ -4,7 +4,7 @@ committed baseline at time t is E[f[t] | d[0..t+L]], so every output has its own
 right endpoint and nothing depends on where the chunk boundaries fall.
 
 The algorithm is specified in plans/detrend_1d_kalman.md and in
-notes/tree_dedispersion.tex, section "Time detrending algorithm 2: Kalman filter".  This is
+notes/detrending.tex, section "Time detrending algorithm 2: Kalman filter".  This is
 a second detrender, not a replacement for detrending_1d: the two are intended to run
 side by side and be compared.  Relative to the local polynomial fit it has no window
 and no per-window rank deficiency (the prior regularizes everything), a monotone

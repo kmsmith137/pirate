@@ -16,7 +16,7 @@ namespace pirate {
 
 // C++ port of pirate_frb/slow_avar/PfVariance.py (the subset reachable from PfAvarApproximation;
 // PfAvarExact and the test-only methods are not ported). See that file and
-// notes/tree_dedispersion.tex for the math.
+// notes/variance_map.tex for the math.
 
 
 // Converts time series to variances, after convolving with the first P peak-finding kernels.

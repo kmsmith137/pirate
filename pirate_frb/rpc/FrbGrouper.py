@@ -335,7 +335,7 @@ class FrbGrouperInjections:
         triggers), or slightly before the chunk start (finite peak-finder kernel widths
         shift the estimated pulse-center time earlier than the detection sample).
         For more info, see the grouper-specific parts of the sphinx docs, and/or the
-        tex notes.
+        dedispersion tex notes.
 
         The per-event arrays (itrees, ibeams, idm, itime, snr, argmax) must all be
         1-d cupy arrays of the same length -- one event per element. The 'argmax'

@@ -2,7 +2,14 @@
 
 An experimental GPU-based fast transient search for CHORD.
 
-- <a href="_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tree dedispersion tex notes (PDF)</a> -- mathematical details of the search.
+% Anchor (not a heading) for the sidebar's "Tex notes" dropdown, which links
+% here. A heading would pull the toctree below into a "Tex notes" section.
+(tex-notes)=
+Tex notes -- mathematical details of the search, in three parts:
+
+- <a href="_static/dedispersion.pdf" target="_blank" rel="noopener">Dedispersion (PDF)</a> -- tree gridding, tree dedispersion, subband search, peak-finding, downsampled trees and early triggers, and the GPU implementation.
+- <a href="_static/detrending.pdf" target="_blank" rel="noopener">Detrending (PDF)</a> -- the two 1-d time detrenders (local polynomial subtraction, Kalman filter) and the 2-d (frequency-time) detrender.
+- <a href="_static/variance_map.pdf" target="_blank" rel="noopener">Variance map (PDF)</a> -- the per-output variances used to normalize the peak-finder, exact and approximate.
 
 ```{toctree}
 ---

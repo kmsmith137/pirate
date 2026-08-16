@@ -581,7 +581,7 @@ extern std::ostream &operator<<(std::ostream &os, const PfOutputMicrokernel::Reg
 // GpuPfSquare: convolves with the peak-finding kernels h_p and accumulates sum_t (h_p * y)^2.
 //
 // This is for variance calculations (see the "variance map" section of
-// notes/tree_dedispersion.tex), not for the real-time search. Two differences from the
+// notes/variance_map.tex), not for the real-time search. Two differences from the
 // peak-finders above are essential rather than incidental:
 //
 //   - No weights, no max, no argmax, no coarse-graining. The output is the raw sum of

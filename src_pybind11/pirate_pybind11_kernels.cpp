@@ -213,7 +213,7 @@ void register_kernel_bindings(pybind11::module &m)
         "written as zero.\n\n"
         "(n, W, T) are compile-time parameters of the cuda kernel, so only the configurations\n"
         "listed in the constructor's error message exist; the number of rows M is runtime.\n\n"
-        "The algorithm is specified in notes/tree_dedispersion.tex, section 'Time detrending\n"
+        "The algorithm is specified in notes/detrending.tex, section 'Time detrending\n"
         "algorithm 1: local polynomial subtraction'. pirate_frb.detrending_1d is the\n"
         "pure-numpy reference that this kernel is validated against.");
 
@@ -356,7 +356,7 @@ void register_kernel_bindings(pybind11::module &m)
         "pipeline the 1-d time detrender runs first and leaves the data roughly zero-mean.\n\n"
         "THREAD SAFETY: an instance owns per-launch scratch arrays, so one instance must not\n"
         "be used concurrently from two streams.\n\n"
-        "The algorithm is specified in notes/tree_dedispersion.tex, section '2-d detrending'.\n"
+        "The algorithm is specified in notes/detrending.tex, section '2-d detrending'.\n"
         "pirate_frb.detrending_spline is the pure-numpy reference that this kernel is\n"
         "validated against.");
 

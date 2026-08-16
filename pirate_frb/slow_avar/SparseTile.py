@@ -10,7 +10,7 @@ class SparseTile:
     """Sparse representation of a tree-dedispersion intermediate array.
 
     During tree dedispersion, intermediate arrays have shape (2^(r-k), 2^k, ntime), 
-    where the axes are (coarse-freq, delay, time). See notes/tree_dedispersion.tex.
+    where the axes are (coarse-freq, delay, time). See notes/variance_map.tex.
     
     A SparseTile represents a subset of such an array, in a two-stage compressed
     representation as follows. First, we define the following members:

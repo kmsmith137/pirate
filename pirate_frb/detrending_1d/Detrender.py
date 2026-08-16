@@ -1,5 +1,5 @@
 """
-The chunked, block-scan 1-d detrender (see notes/tree_dedispersion.tex,
+The chunked, block-scan 1-d detrender (see notes/detrending.tex,
 section "Time detrending algorithm 1: local polynomial subtraction").
 
 Geometry.  The window is 2W+1 samples and the scan blocks are B = 2W samples, so
@@ -77,7 +77,7 @@ class Detrender:
         sample was masked, or if its window is too ill-conditioned to fit
         (rmin < eps).  Where mask_out is false the residual is meaningless and is
         set to zero -- note this differs from the in-place formulation in
-        notes/tree_dedispersion.tex, which leaves masked samples untouched.
+        notes/detrending.tex, which leaves masked samples untouched.
         """
         d_buf = np.asarray(d_buf)
         mask_buf = np.asarray(mask_buf)

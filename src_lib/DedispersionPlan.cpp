@@ -475,9 +475,9 @@ shared_ptr<DedispersionPlan> DedispersionPlan::make_incomplete_plan_from_yaml(
 // For a detailed specification (and the definitions of the output params), see the
 // doc-comment in DedispersionPlan.hpp. Background for the formulas below: the token
 // encoding and its time quantization are described in PeakFindingKernel.hpp, the
-// subband time-lag conventions in notes/tree_dedispersion.tex (subband search section)
+// subband time-lag conventions in notes/dedispersion.tex (subband search section)
 // and ReferenceTree.cpp, and the output-array indexing in the "Dedispersion output
-// arrays" section of the tex notes.
+// arrays" section of the dedispersion tex notes.
 
 void DedispersionPlan::decode_argmax(
     uint argmax_token,
@@ -735,13 +735,13 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
 
     if (verbose) {
         emitter << YAML::Newline << YAML::Newline << YAML::Comment(
-            "As explained in notes/tree_dedispersion.tex, the dedisperser consists of multiple \"trees\"\n"
+            "As explained in notes/dedispersion.tex, the dedisperser consists of multiple \"trees\"\n"
             "corresponding to pairs (primary_tree_index, early_trigger_level). Here, primary_tree_index\n"
             "(denoted p) selects the primary tree: the input is time-downsampled by 2^p before dedispersion,\n"
             "which controls the DM-range of the tree. If early_trigger_level > 0, then the tree has an\n"
             "\"early trigger\" and searches a subset of the frequency range (the level is the \"earliness\").\n"
             "\n"
-            "The details of the trees are nontrivial -- see notes/tree_dedispersion.tex for info/plots.");
+            "The details of the trees are nontrivial -- see notes/dedispersion.tex for info/plots.");
     }
 
     emitter << YAML::Newline << YAML::Newline

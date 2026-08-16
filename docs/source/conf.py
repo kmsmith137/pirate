@@ -25,10 +25,18 @@ for _f in glob.glob(os.path.join(_notes_src, '*.md')):
 # a save-to-disk instead of viewing.) Creating _static here also satisfies
 # html_static_path (otherwise Sphinx warns it does not exist). These PDFs are
 # gitignored and rebuilt before each Sphinx run by 'make docs' / docs/deploy.sh.
+#
+# Stale PDFs are pruned first: 'make docs' does not imply 'make docs-clean', so
+# after a .tex is renamed or deleted its PDF would otherwise sit in _static and
+# keep being copied into the built site forever.
 _static_dst = os.path.join(os.path.dirname(__file__), '_static')
 os.makedirs(_static_dst, exist_ok=True)
-for _f in glob.glob(os.path.join(_notes_src, '*.pdf')):
-    shutil.copy2(_f, _static_dst)
+_note_pdfs = {os.path.basename(_f) for _f in glob.glob(os.path.join(_notes_src, '*.pdf'))}
+for _f in glob.glob(os.path.join(_static_dst, '*.pdf')):
+    if os.path.basename(_f) not in _note_pdfs:
+        os.remove(_f)
+for _f in sorted(_note_pdfs):
+    shutil.copy2(os.path.join(_notes_src, _f), _static_dst)
 
 # Copy configs/ so that relative links from notes (e.g. ../configs/...) resolve.
 # For each .yml/.yaml file, also generate a rendered .md page so that links

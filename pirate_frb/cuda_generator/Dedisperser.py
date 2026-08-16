@@ -321,7 +321,7 @@ class Dedisperser:
         living in the register index and the required lag would become register-dependent;
         if larger, a level-0 subband would be narrower than one register. Neither is
         representable here. (For the derivation, including levels > 0, see the "subbanded
-        dedispersion" section of notes/tree_dedispersion.tex.)
+        dedispersion" section of notes/dedispersion.tex.)
 
         Multiplets are yielded in order of INCREASING m. That matters: PeakFinder builds
         its transposes incrementally and bails out via 'if (m & mbit) == 0: return', so it

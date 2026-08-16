@@ -440,7 +440,7 @@ def test_polynomial_exactness(rng=None, n=2, verbose=True):
     # {1, x^2, ..., x^(2*(n//2))}, i.e. iff D//2 <= n//2.
     #
     # For even n that admits D = n+1 -- the n=2 == n=3 degeneracy noted in
-    # tree_dedispersion.tex, asserted below rather than treated as a failure.
+    # detrending.tex, asserted below rather than treated as a failure.
     # For odd n it does not (at n=1 the even basis is just the constant), so
     # degree n+1 joins degree n+2 as a negative control.  Degree n+1 under an
     # *asymmetric* mask must fail at every n, since the decoupling is what the

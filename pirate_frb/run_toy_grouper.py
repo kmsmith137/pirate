@@ -120,7 +120,7 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
         # Events are identified by (snr, itree, ibeam, idm, itime, token) on the GPU. We copy this
         # data from the GPU to the CPU, and convert to "physical" quantities (DM, fpga_timestamp,
         # width, frequency subband) by decoding the out_argmax tokens. The math is explained in
-        # notes/tree_dedispersion.tex, and is implemented in a helper method
+        # notes/dedispersion.tex, and is implemented in a helper method
         # grouper.create_events(), which returns an FrbSifterEvents.
 
         ibeam = cp.nonzero(per_beam_max > snr_threshold)[0]   # global indices of above-threshold beams

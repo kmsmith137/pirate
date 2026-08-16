@@ -1,6 +1,6 @@
 """
 The state-space model behind the fixed-lag detrender (see plans/detrend_1d_kalman.md,
-section "The model", and notes/tree_dedispersion.tex,
+section "The model", and notes/detrending.tex,
 section "Time detrending algorithm 2: Kalman filter").
 
 The trend is a k-fold integrated random walk,

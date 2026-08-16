@@ -1,6 +1,6 @@
 """
 The chunked fixed-lag ("seam-free") Kalman detrender (see plans/detrend_1d_kalman.md,
-and notes/tree_dedispersion.tex,
+and notes/detrending.tex,
 section "Time detrending algorithm 2: Kalman filter").
 
 The committed baseline at time t is
@@ -286,7 +286,7 @@ class KalmanDetrender:
         The leverage (J^-1)_00 is not computed; see the discussion in
         LocalPolyFit.solve().  Unlike the local polynomial fit, a penalized
         estimator shrinks rather than projects, so Var(r) needs a second number
-        beyond the leverage anyway -- see notes/tree_dedispersion.tex, section
+        beyond the leverage anyway -- see notes/detrending.tex, section
         "Time detrending algorithm 2: Kalman filter", subsection "Outputs".
 
         The factorization is LocalPolyFit.cholesky() with J in place of the local

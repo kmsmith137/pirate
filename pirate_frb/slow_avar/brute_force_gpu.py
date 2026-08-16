@@ -2,7 +2,7 @@
 
 Runs the same sweep as BruteForceVarianceMap, but on the GPU: one cupy stream, kernels launched
 synchronously from python, no GpuDedisperser, no worker thread, no CudaEventRingbuf. The pipeline
-is (see notes/tree_dedispersion.tex and the plan):
+is (see notes/variance_map.tex and the plan):
 
     one-hots -> [Detrender2d] -> GpuTreeGriddingKernel -> GpuDedispersionKernel (stage 1)
              -> MegaRingbuf -> GpuSbDedispersionKernel (stage 2 + subbands)

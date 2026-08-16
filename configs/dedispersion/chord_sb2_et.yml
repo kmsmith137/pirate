@@ -22,7 +22,7 @@ dtype: float16
 time_samples_per_chunk: 2048
 
 # Frequency subbands are specified as an integer-valued array. This array
-# corresponds to 25 subbands. For details/plots, see notes/tree_dedispersion.tex.
+# corresponds to 25 subbands. For details/plots, see notes/dedispersion.tex.
 # Command line: pirate_frb make_subbands 300 1500 0.1 -r 4
 
 frequency_subband_counts: [5,9,7,3,1]
@@ -41,9 +41,9 @@ num_active_batches: 2
 #
 # Each "primary tree" searches a different DM range, ordered from low to high,
 # and has early triggers (if needed) starting at ~60 sec dispersion delay. See
-# the tex notes for detailed info.
+# the dedispersion tex notes for detailed info.
 #
-# The 'max_width' param is the max peak-finding width (see tex note),
+# The 'max_width' param is the max peak-finding width (see dedispersion tex notes),
 # in "time samples after downsampling by 2^(primary_tree_index)".
 # To get ~32 ms, we set max_width=[32,16,8,4] in each primary tree.
 #

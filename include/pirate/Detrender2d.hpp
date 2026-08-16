@@ -18,7 +18,7 @@ namespace pirate {
 
 // Detrender2d: the 2-d spline detrender, a regularized least-squares fit of a
 // B-spline in frequency times a local polynomial in time. The algorithm is specified
-// in notes/tree_dedispersion.tex, section "2-d detrending"; pirate_frb/detrending_spline
+// in notes/detrending.tex, section "2-d detrending"; pirate_frb/detrending_spline
 // is the pure-numpy reference that this kernel is validated against.
 //
 // Operates in place on a (data, mask) pair of shape (M, nfreq, nbuf). For each output

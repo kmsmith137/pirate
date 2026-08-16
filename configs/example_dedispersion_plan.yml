@@ -16,13 +16,13 @@ stage1_dd_rank: [8, 7, 7, 7]   # Active dedispersion rank of each stage1 tree
 stage1_amb_rank: [8, 8, 8, 8]  # Ambient rank of each stage1 tree (log2 of the number of coarse freq channels)
 ntrees: 10                     # Number of output trees (== length of the 'trees' sequence below)
 
-# As explained in notes/tree_dedispersion.tex, the dedisperser consists of multiple "trees"
+# As explained in notes/dedispersion.tex, the dedisperser consists of multiple "trees"
 # corresponding to pairs (primary_tree_index, early_trigger_level). Here, primary_tree_index
 # (denoted p) selects the primary tree: the input is time-downsampled by 2^p before dedispersion,
 # which controls the DM-range of the tree. If early_trigger_level > 0, then the tree has an
 # "early trigger" and searches a subset of the frequency range (the level is the "earliness").
 # 
-# The details of the trees are nontrivial -- see notes/tree_dedispersion.tex for info/plots.
+# The details of the trees are nontrivial -- see notes/dedispersion.tex for info/plots.
 
 trees:
 

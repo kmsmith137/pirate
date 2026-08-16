@@ -129,7 +129,7 @@ class PfVarianceConvolver:
 
         This property ("unimodality" of the kernel autocorrelations) is load-bearing, not a
         curiosity: it is one of the two hypotheses of the variance-map monotonicity result in
-        notes/tree_dedispersion.tex, appendix "Monotonicity of the variance map in the DM bits
+        notes/variance_map.tex, appendix "Monotonicity of the variance map in the DM bits
         (no detrender)". It holds because every current profile is a co-centered, non-negative
         sum of boxcars. A profile which is not -- say a matched filter for a scattered or
         multi-component pulse -- would break that result itself, not merely its proof, so this
@@ -142,7 +142,7 @@ class PfVarianceConvolver:
 
         # Where to send the reader of a failure. (Section titles, not numbers: the appendix has
         # moved once already, and the lemma numbering is by hand.)
-        appendix = ('notes/tree_dedispersion.tex, appendix "Monotonicity of the variance map in\n'
+        appendix = ('notes/variance_map.tex, appendix "Monotonicity of the variance map in\n'
                     '  the DM bits (no detrender)"')
 
         def fmt(h):
@@ -473,7 +473,7 @@ class PfAvarExact:
                        None or all non-None, for a given (tree, ifreq). This is what makes the
                        per-subband variance array A[dm] = per_tfm[t][ifreq][m(subband,dlo)][dhi],
                        with dm = dhi*2^l + dlo, well-defined (see the appendix "Monotonicity of
-                       the variance map in the DM bits" in notes/tree_dedispersion.tex).
+                       the variance map in the DM bits" in notes/variance_map.tex).
 
       per_tm:          (ntrees, M) ragged array of frequency-summed PfVariances (never None):
                        per_tm[t][m] = sum_ifreq freq_variances[ifreq] * per_tfm[t][ifreq][m].

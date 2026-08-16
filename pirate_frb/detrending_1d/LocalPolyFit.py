@@ -1,5 +1,5 @@
 """
-The per-window least-squares solve (see notes/tree_dedispersion.tex,
+The per-window least-squares solve (see notes/detrending.tex,
 section "Time detrending algorithm 1: local polynomial subtraction", subsection "The estimator").
 
 Given the moments of a window, we fit a degree-n polynomial in x = (u-c)/W to
@@ -125,7 +125,7 @@ def solve(ms, u_eval, mu):
     significance calculation.  Where the mask is locally constant the leverage is a
     known constant anyway (9/(8W) at n=2), i.e. a uniform rescaling of sigma that
     is degenerate with the overall normalization.  It remains defined in
-    notes/tree_dedispersion.tex, and equals the equivalent-kernel weight at zero
+    notes/detrending.tex, and equals the equivalent-kernel weight at zero
     lag, which is how the tests get at it without a separate code path.
     """
     dtype, W, n = ms.dtype, ms.W, ms.n

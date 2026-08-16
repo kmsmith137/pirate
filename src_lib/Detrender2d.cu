@@ -24,7 +24,7 @@ namespace pirate {
 //
 // Overview.
 //
-// Notation follows notes/tree_dedispersion.tex, section "2-d detrending"; the numpy
+// Notation follows notes/detrending.tex, section "2-d detrending"; the numpy
 // reference is pirate_frb/detrending_spline, and the two are compared by
 // test_gpu_kernel() in that package.
 //
@@ -1030,7 +1030,7 @@ void Detrender2d::Params::to_yaml(YAML::Emitter &emitter, bool verbose) const
         stringstream ss;
         ss << "Detrender2d: a regularized fit of a B-spline in frequency times a local\n";
         ss << "polynomial in time, subtracted from the data. See the class comment in\n";
-        ss << "Detrender2d.hpp, and notes/tree_dedispersion.tex section \"2-d detrending\".";
+        ss << "Detrender2d.hpp, and notes/detrending.tex section \"2-d detrending\".";
         emitter << YAML::Comment(ss.str()) << YAML::Newline << YAML::Newline;
     }
 

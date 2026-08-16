@@ -1526,7 +1526,7 @@ gpu_pf_square_kernel(
 
             if (pass) {
                 // Profiles at level 'lam' (S = 2^lam), from the "Peak-finding kernels"
-                // section of notes/tree_dedispersion.tex:
+                // section of notes/dedispersion.tex:
                 //
                 //   h_{lam,0} = [1]^S                   -> y = b_lam[u]
                 //   h_{lam,1} = [1]^2S                  -> y = b_{lam+1}[u]
@@ -1656,7 +1656,7 @@ void GpuPfSquare::allocate(BumpAllocator &allocator)
     long nbytes_before = allocator.get_nbytes_allocated();
 
     // Zero-initialized, which is the correct state for ichunk=0: it says that all samples
-    // preceding the stream are zero, matching the convention in the tex notes.
+    // preceding the stream are zero, matching the convention in the dedispersion tex notes.
     this->persistent_state = allocator.allocate_array<float> ({total_beams, ndm, tpad});
 
     long nbytes_allocated = allocator.get_nbytes_allocated() - nbytes_before;

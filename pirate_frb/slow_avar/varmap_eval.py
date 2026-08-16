@@ -7,7 +7,7 @@ function D.
 
 The distance is one-sided: D = infinity if ``A_approx[alpha,F] < A_true[alpha,F]`` anywhere,
 and otherwise ``D = D0 = mean_alpha f(y_approx/y_true)`` with ``f(x) = (x-1)/(1+x/10)`` and y
-the row sum. See the ``VarMapDistance`` docstring, and ``notes/tree_dedispersion.tex``
+the row sum. See the ``VarMapDistance`` docstring, and ``notes/variance_map.tex``
 (section "Distance function").
 
 **The low-rank approximation problem is not settled.** We are still exploring algorithms, and
@@ -199,7 +199,7 @@ class ClusterEnvelope(LowRankApprox):
                                f' expected ({self.nalpha},)')
 
         # Row extraction gathers whole rows, so keep a C-contiguous (k, nfreq) copy. W itself
-        # is (nfreq, k) because that is the convention of the tex notes and of factors().
+        # is (nfreq, k) because that is the convention of the variance map tex notes and of factors().
         self._Wt = np.ascontiguousarray(W.T)
 
     def rows(self, start, stop):
@@ -464,7 +464,7 @@ def evaluate_reduced(Abar, y, labels, approx, *, name=None, rank=None, inflate=T
     A coarse-assigned approximation partitions the outputs alpha into groups beta and gives
     every output in a group the same approximate row, i.e. ``A_approx[alpha,:] =
     approx.rows(beta, beta+1)`` where ``beta = labels[alpha]``. This is the construction of
-    ``notes/tree_dedispersion.tex`` (section "Proposed algorithm and initial results"), and it
+    ``notes/variance_map.tex`` (section "Proposed algorithm and initial results"), and it
     is also the shape of the production peak-finding weight array.
 
     For such an approximation the distance is computable from the coarse-grained map alone,

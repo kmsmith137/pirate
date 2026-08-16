@@ -4,17 +4,40 @@
   Furo's stock template is just the sidebar-tree div wrapping
   {{ furo_navigation_tree }}. We prepend a redundant "Home" link (in addition
   to the clickable project title in the sidebar header, which is easy to miss)
-  so there is always an obvious way back to the toplevel page, plus a "tex
-  notes" link to tree_dedispersion.pdf (also linked from the main page). These
-  sit above the first toctree caption ("User Guide"). We reuse furo's own
-  toctree-l1 / "reference internal" classes so they match the other nav items.
-  The PDF is a served static asset, so its link uses pathto(..., 1) (a raw URI,
-  not a doc lookup) and resolves relative to each page like the toctree entries.
+  so there is always an obvious way back to the toplevel page, plus a "Tex
+  notes" dropdown holding the three compiled PDFs (also linked from the main
+  page). These sit above the first toctree caption ("User Guide").
+
+  We reuse furo's own toctree-l1 / toctree-l2 / has-children markup so the
+  entries match the other nav items, including the expand/collapse arrow. That
+  arrow is pure CSS: furo styles the sibling '.toctree-checkbox~ul' as hidden
+  and ':checked~ul' as shown, so the <a>, <input>, <label>, <ul> order below
+  matters. The checkbox id must not collide with the "toctree-checkbox-N" ids
+  furo generates for the real toctree, hence the non-numeric suffix.
+
+  The PDFs are served static assets, so their links use pathto(..., 1) (a raw
+  URI, not a doc lookup) and resolve relative to each page like the toctree
+  entries. The parent link goes to the "tex-notes" anchor on the home page,
+  which lists the same three PDFs with a one-line description of each. On the
+  home page itself pathto(master_doc) is the bare "#", which would concatenate
+  into a broken "##tex-notes", so drop it in that one case.
 -#}
+{%- set tex_home = pathto(master_doc) %}
 <div class="sidebar-tree">
   <ul>
-    <li class="toctree-l1"><a class="reference internal" href="{{ pathto(master_doc) }}">Home</a></li>
-    <li class="toctree-l1"><a class="reference external" href="{{ pathto('_static/tree_dedispersion.pdf', 1) }}" target="_blank" rel="noopener">Tex notes</a></li>
+    <li class="toctree-l1"><a class="reference internal" href="{{ tex_home }}">Home</a></li>
+    <li class="toctree-l1 has-children">
+      <a class="reference internal" href="{{ '' if tex_home == '#' else tex_home }}#tex-notes">Tex notes</a>
+      <input aria-label="Toggle navigation of Tex notes" class="toctree-checkbox"
+             id="toctree-checkbox-texnotes" name="toctree-checkbox-texnotes"
+             role="switch" type="checkbox"/>
+      <label for="toctree-checkbox-texnotes"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label>
+      <ul>
+        <li class="toctree-l2"><a class="reference external" href="{{ pathto('_static/dedispersion.pdf', 1) }}" target="_blank" rel="noopener">Dedispersion</a></li>
+        <li class="toctree-l2"><a class="reference external" href="{{ pathto('_static/detrending.pdf', 1) }}" target="_blank" rel="noopener">Detrending</a></li>
+        <li class="toctree-l2"><a class="reference external" href="{{ pathto('_static/variance_map.pdf', 1) }}" target="_blank" rel="noopener">Variance map</a></li>
+      </ul>
+    </li>
   </ul>
   {{ furo_navigation_tree }}
 </div>

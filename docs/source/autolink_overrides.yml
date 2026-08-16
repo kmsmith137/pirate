@@ -37,9 +37,13 @@ aliases:
   # C++-only classes with no pybind11 binding (so no autoclass page is possible),
   # but with a notes page that IS their documentation.
   CudaEventRingbuf: notes/cuda_event_ringbuf
-  # Prose pointer to the compiled tex notes -> the served PDF (open decision 5b).
-  the tex notes: static:_static/tree_dedispersion.pdf
-  tex notes: static:_static/tree_dedispersion.pdf
+  # Prose pointers to the compiled tex notes -> the served PDFs (open decision
+  # 5b). The notes are three separate documents, so there is deliberately NO
+  # bare "tex notes" alias: prose must say which one it means, and an unlinked
+  # "tex notes" in a docstring or notes page is the signal to go fix it.
+  dedispersion tex notes: static:_static/dedispersion.pdf
+  detrending tex notes: static:_static/detrending.pdf
+  variance map tex notes: static:_static/variance_map.pdf
 
 # deny: suppress a keyword globally (no `page:`) or on one page. Add entries
 # here only when a match keeps recurring as a false positive.

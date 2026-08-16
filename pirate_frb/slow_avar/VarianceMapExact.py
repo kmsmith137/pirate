@@ -19,7 +19,7 @@ class VarianceMapExact(VarianceMapBase):
     want to recompute peak-finding weights whenever they are updated.
 
     The map is stored as one truncated SVD per (tree, multiplet) pair -- see VarianceMapBlock,
-    and notes/tree_dedispersion.tex, appendix "PfAvarExact and VarianceMapExact".
+    and notes/variance_map.tex, appendix "PfAvarExact and VarianceMapExact".
 
     Note that a VarianceMapExact keeps a reference to the PfAvarExact, which is usually the
     larger of the two objects (check() needs it, and the memory is already committed anyway).

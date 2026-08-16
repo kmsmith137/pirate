@@ -23,7 +23,7 @@ class VarianceMapApproximation(VarianceMapBase):
     algebra is identical, but the block index is the level-0 band 0 <= j < 2^R rather than the
     multiplet, the DM axis has 2^(r-L) entries rather than 2^(r-R), and eval_tree() applies the
     per-subband average which PfAvarApproximation applies to per_tf. See
-    notes/tree_dedispersion.tex, appendix "PfAvarApproximation, VarianceMapApproximation".
+    notes/variance_map.tex, appendix "PfAvarApproximation, VarianceMapApproximation".
 
     Unlike VarianceMapExact, this class is usable at CHIME/CHORD scale. Note however that it
     requires the python PfAvarApproximation: the C++ port drops per_tff, keeping only per_tf.

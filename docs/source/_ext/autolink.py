@@ -14,7 +14,7 @@ What becomes a link:
     (notes/foo.md), and CLI subcommands (`pirate_frb <name>`), each keyed on
     the generated page's docname;
   - curated aliases from autolink_overrides.yml (e.g. RPC method names -> their
-    .proto page, "tex notes" -> the compiled PDF).
+    .proto page, "dedispersion tex notes" -> the compiled PDF).
 
 Per-document policy: on notes/* pages we
 create ONLY the Sphinx-only links (classes, cli). A real-file mention (a

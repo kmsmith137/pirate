@@ -1,4 +1,4 @@
-# For documentation on this file format, see chord_sb2_et.yml, and the tex notes.
+# For documentation on this file format, see chord_sb2_et.yml, and the dedispersion tex notes.
 
 # Overrideable params: frequency channels, time sample length, number of beams.
 zone_nfreq: [16384]

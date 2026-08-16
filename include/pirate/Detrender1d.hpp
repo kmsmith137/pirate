@@ -13,7 +13,7 @@ namespace pirate {
 
 
 // Detrender1d: the 1-d time detrender, a masked, adaptively centered moving local
-// polynomial fit. The algorithm is specified in notes/tree_dedispersion.tex, section
+// polynomial fit. The algorithm is specified in notes/detrending.tex, section
 // "Time detrending algorithm 1: local polynomial subtraction"; pirate_frb/detrending_1d
 // is the pure-numpy reference that this kernel is validated against.
 //
@@ -43,7 +43,7 @@ struct Detrender1d
 
     // Mask-expansion threshold on the conditioning statistic rmin, and the NaN guard
     // used where rmin is below it. Neither is a regularizer: see the "Cholesky, and
-    // the conditioning statistic" discussion in notes/tree_dedispersion.tex.
+    // the conditioning statistic" discussion in notes/detrending.tex.
     //
     // Note eps is inert at n=1, where rmin is {0,1}-valued and mask expansion reduces
     // to "the window holds at least 2 valid samples".

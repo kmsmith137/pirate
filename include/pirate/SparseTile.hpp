@@ -14,7 +14,7 @@ namespace pirate {
 
 
 // C++ port of (a subset of) pirate_frb/slow_avar/SparseTile.py. See that file and
-// notes/tree_dedispersion.tex for the math. Only the methods reachable from
+// notes/variance_map.tex for the math. Only the methods reachable from
 // PfAvarApproximation (plus the test-only unpack()) are ported here.
 //
 // A SparseTile represents a subset of a (2^(r-k), 2^k, ntime) tree-dedispersion array

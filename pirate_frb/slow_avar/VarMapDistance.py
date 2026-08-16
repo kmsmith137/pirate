@@ -24,7 +24,7 @@ YTRUE_FLOOR = 1.0e-10
 class VarMapDistance:
     """Distance between a true variance map and a low-rank approximation to it.
 
-    Implements the distance function D(A_true, A_approx) of notes/tree_dedispersion.tex
+    Implements the distance function D(A_true, A_approx) of notes/variance_map.tex
     (section "Distance function"). Both arguments are (nalpha, nfreq) arrays, where alpha
     is the flattened (dm, multiplet, profile) output index and F is an input frequency
     channel.

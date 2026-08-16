@@ -389,7 +389,7 @@ extern std::ostream &operator<<(std::ostream &os, const GpuDedispersionKernel::R
 // second-stage rank, f is a coarse frequency and d' is a coarse DM. That is *identically*
 // the lag which ReferenceTree::final_lagbuf applies, namely (2^pf_rank - fhi(m)) * d',
 // provided pf_rank == rank1. See cuda_generator/Dedisperser.emit_subband_extraction() and
-// the "subbanded dedispersion" section of notes/tree_dedispersion.tex.
+// the "subbanded dedispersion" section of notes/dedispersion.tex.
 
 
 struct GpuSbDedispersionKernel

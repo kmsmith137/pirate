@@ -1,10 +1,10 @@
-"""Brute-force computation of the dense variance map A (see notes/tree_dedispersion.tex,
+"""Brute-force computation of the dense variance map A (see notes/variance_map.tex,
 section "Brute-force computation of the variance map").
 
 The variance map A of a DedispersionTree is defined by y_alpha = sum_F A[alpha,F] v_F, where
 v_F is the input variance of frequency channel F, and y_alpha is the variance of peak-finding
 output element alpha = (coarse DM, multiplet m, profile p). Writing the dedisperser's linear
-operator as L[alpha t, F t'], the tex notes show that
+operator as L[alpha t, F t'], the variance map tex notes show that
 
     A[alpha,F] = sum_{t'} L[alpha t, F t']^2 = sum_c sum_t (L e^{(F,t_c)})_alpha[t]^2
 
@@ -34,7 +34,7 @@ class BruteForceVarianceMap:
 
     A[itree] has shape (2^(r-R), M, P, nfreq), i.e. coarse DM slowest, matching the (ndm_out, M,
     nprofiles) layout of ReferencePeakFindingKernel's out_var. Flattening the first three axes
-    gives the matrix A of the tex notes. Note the transpose relative to PfAvarExact.tree_variance
+    gives the matrix A of the variance map tex notes. Note the transpose relative to PfAvarExact.tree_variance
     and VarianceMapExact.eval_tree(), which are (M, 2^(r-R), P).
     """
 
@@ -57,7 +57,7 @@ class BruteForceVarianceMap:
           detrender: a Detrender2dParams, or None for no Detrender2d in L. Its nfreq, M and T
             must match the plan, so that the same object also drives the GPU kernel.
           detrender_dtype: working precision of the numpy detrender. float64 by default (the
-            tex notes recommend it, and nothing downstream is more accurate); pass float32 to
+            variance map tex notes recommend it, and nothing downstream is more accurate); pass float32 to
             measure the detrender's own float32 penalty, or to match the GPU kernel.
         """
 
@@ -103,7 +103,7 @@ class BruteForceVarianceMap:
                                                     dtype=detrender_dtype)
 
         # Per-tree geometry. 'gamma' is the input time-downsampling exponent of the tree, and
-        # 'ddspread' is Delta_dd from the tex notes: the largest full-band delay searched by the
+        # 'ddspread' is Delta_dd from the variance map tex notes: the largest full-band delay searched by the
         # tree, in downsampled samples. (Per-subband lags do not add to this -- the output time
         # index is the arrival time extrapolated to the top of the tree's own band.)
         self.tree_gamma = []
@@ -150,7 +150,7 @@ class BruteForceVarianceMap:
 
         # Number of polyphase passes per input channel. With no detrender (W = 0) everything
         # upstream of the time-downsampler is instantaneous in time, so all 2^gamma phases give
-        # the same answer and one pass suffices (tex notes; checked by test_phase_collapse).
+        # the same answer and one pass suffices (variance map tex notes; checked by test_phase_collapse).
         self.nphases = (1 << gamma_max) if (self.W > 0) else 1
 
         # Weight applied to the sum over phases, per tree. Running 2^gamma_max phases visits each
@@ -429,7 +429,7 @@ class BruteForceVarianceMap:
     @staticmethod
     def test_phase_collapse(toplevel_tree_rank=8, verbose=True):
         """With no detrender, the 2^gamma polyphase passes of a time-downsampled tree must give
-        the same result (tex notes: everything upstream of the downsampler is instantaneous in
+        the same result (variance map tex notes: everything upstream of the downsampler is instantaneous in
         time). This is the sharpest available test of the polyphase logic, and of the single-pass
         shortcut that run() takes when there is no detrender.
 
@@ -485,7 +485,7 @@ class BruteForceVarianceMap:
         channel, i.e. more than a whole sweep, so it runs at toy scale on a few channels.
 
         Note that the sum over t' below runs over EVERY input time, with no phase weighting: the
-        polyphase decomposition of the tex notes is a way of organizing this sum, and summing it
+        polyphase decomposition of the variance map tex notes is a way of organizing this sum, and summing it
         directly is what makes this an independent check of that organization.
         """
 

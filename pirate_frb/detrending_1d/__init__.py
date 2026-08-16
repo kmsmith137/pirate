@@ -2,7 +2,7 @@
 Pure-numpy 1-d detrender: a masked, adaptively centered moving local polynomial
 fit, evaluated by a van Herk block decomposition over a moment monoid.
 
-The algorithm is specified in notes/tree_dedispersion.tex, section "Time
+The algorithm is specified in notes/detrending.tex, section "Time
 detrending algorithm 1: local polynomial subtraction", which also records the
 measurements behind the choices made here.  (Algorithm 2, in the section after
 it, is a fixed-lag Kalman filter -- a second, independent detrender, implemented

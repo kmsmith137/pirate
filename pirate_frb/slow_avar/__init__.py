@@ -1,5 +1,5 @@
 # Pure-Python "slow" reference implementations of the analytic-variance (avar) machinery
-# (see notes/tree_dedispersion.tex), plus file I/O for the variance maps they produce.
+# (see notes/variance_map.tex), plus file I/O for the variance maps they produce.
 from .SparseTile import SparseTile, SparseTileTriple, SparseTilePerM
 from .PfVariance import PfVarianceConvolver, PfVariance, PfAvarExact, PfAvarApproximation
 from .VarianceMap import VarianceMapBlock, VarianceMapBase

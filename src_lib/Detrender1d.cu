@@ -19,7 +19,7 @@ namespace pirate {
 //
 // Overview.
 //
-// Notation follows notes/tree_dedispersion.tex, section "Time detrending algorithm 1:
+// Notation follows notes/detrending.tex, section "Time detrending algorithm 1:
 // local polynomial subtraction". The moment monoid, the van Herk block decomposition,
 // and the per-window solve are all specified there; pirate_frb/detrending_1d is a
 // line-by-line numpy implementation of the same algorithm, and is the oracle this
@@ -103,7 +103,7 @@ static __device__ __forceinline__ float safe_rcp(float x)
 
 // -------------------------------------------------------------------------------------------------
 //
-// The moment monoid (notes/tree_dedispersion.tex, "The moment monoid"), for general
+// The moment monoid (notes/detrending.tex, "The moment monoid"), for general
 // degree NDEG. Everything here is degree-generic -- the change of origin is the only
 // degree-dependent arithmetic, and pascal_shift() below handles any degree -- which is
 // what makes adding a degree a matter of instantiating a template.

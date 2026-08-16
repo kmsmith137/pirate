@@ -106,7 +106,7 @@ class VarianceMapFile:
         return self._tree['A']
 
     def matrix(self, itree):
-        """A[itree] reshaped to (2^(r-R) * M * P, nfreq): the matrix A of the tex notes.
+        """A[itree] reshaped to (2^(r-R) * M * P, nfreq): the matrix A of the variance map tex notes.
 
         With a lazy read this is a view where possible, but numpy will copy if the memmap
         cannot be reshaped without one -- so for a large map, slice before reshaping.
