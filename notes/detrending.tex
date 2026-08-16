@@ -976,6 +976,25 @@ large fraction of the surviving channels.  Adding a small penalty makes the syst
 and converts a structural failure into a bounded bias.  The rest of the design is about what that penalty must
 be, what it costs, and how the residual ill-conditioning is detected.
 
+Some scientific context: empirically in CHIME, we find that a 2-d detrender seems to be needed,
+in order to remove {\em sudden}, {\em broadband} changes in total power prior to dedispersion.
+If we omit the 2-d detrender, then we find many false-positive FRBs.
+This is unfortunate, since the 2-d detrender produces a significant SNR penalty for some FRBs
+(the SNR penalty is a decreasing function of the DM-to-width ratio).
+
+We don't understand the underlying reason why these sudden, broadband changes in
+total power arise (or even whether they're instrumental, or related to the RFI environment).
+It's my hope that in the future, we can find a better way of dealing with them, and phase out
+the 2-d detrender.
+In the meantime, I don't want to ``design out'' the option of using the 2-d detrender, so it's
+implemented throughout the {\tt pirate} software.
+
+One consequence of this picture: it's hard to predict in advance what 2-d detrender
+parameters ($N_\phi$, $K$, $n$ etc, see below) we'll want to use.
+The choice of parameters is empirical, and may change in the future (if we deploy new hardware,
+or if the RFI environment changes).
+Therefore, we implement a flexible 2-d detrender, with a lot of parameters that can be varied.
+
 \subsection{Problem statement}
 \label{sec:sd_problem}
 

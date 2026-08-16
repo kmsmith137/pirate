@@ -1,5 +1,5 @@
 """Brute-force computation of the dense variance map A (see notes/variance_map.tex,
-section "Brute-force computation of the variance map").
+appendix "Brute-force computation of the variance map").
 
 The variance map A of a DedispersionTree is defined by y_alpha = sum_F A[alpha,F] v_F, where
 v_F is the input variance of frequency channel F, and y_alpha is the variance of peak-finding
