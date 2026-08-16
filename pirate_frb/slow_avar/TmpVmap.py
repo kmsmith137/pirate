@@ -1,16 +1,32 @@
+"""TmpVmapBlock, TmpVmapBase, TmpVmapExact, TmpVmapApproximation: a first pass at
+representing a variance map.
+
+These classes -- and the PfAvar* classes in PfVariance.py which they are built from -- were a
+first attempt at a variance-map representation, written before we settled on the VarianceMap
+representation (notes/variance_map.tex, section "The variance map"). They are left unchanged for
+now, and are deliberately not built on top of VarianceMap; the 'TmpVmap' prefix is the reminder
+that they sit outside it. We may revisit them later.
+
+TmpVmapExact and TmpVmapApproximation compress the variance map of a PfAvarExact and a
+PfAvarApproximation respectively, into a canonical low-rank (SVD) form, one TmpVmapBlock per
+block. The two differ only in what a block is, and in a per-subband average; everything else
+lives in TmpVmapBase.
+"""
+
 import numpy as np
 
+from .PfVariance import PfVariance
 from .SparseTile import SparseTile
 from ..utils import atomic_print
 
 
-####################################   class VarianceMapBlock   ####################################
+######################################   class TmpVmapBlock   ######################################
 
 
-class VarianceMapBlock:
+class TmpVmapBlock:
     """Truncated SVD of one block of a variance map.
 
-    Blocks are created by VarianceMapExact and VarianceMapApproximation (one per (tree, multiplet)
+    Blocks are created by TmpVmapExact and TmpVmapApproximation (one per (tree, multiplet)
     and per (tree, level-0 band) respectively); you'd only construct one directly when debugging
     a single block.
 
@@ -24,7 +40,7 @@ class VarianceMapBlock:
     equalizes the scale of the map's frequency columns before truncating (without it, input
     channels which barely overlap the block would be truncated away).
 
-    For the math, see notes/variance_map.tex, appendix "PfAvarExact and VarianceMapExact".
+    For the math, see notes/variance_map.tex, appendix "PfAvarExact and TmpVmapExact".
 
     Members
     -------
@@ -55,7 +71,7 @@ class VarianceMapBlock:
         An empty 'pvs' is allowed, and gives an all-zero block (K0 == 0). This would be a block
         which no input channel contributes to. We've never seen one -- every block spans a
         contiguous range of tree-freq channels, which always overlaps at least one input channel
-        -- but VarianceMapApproximation's caller can't rule it out structurally (see the
+        -- but TmpVmapApproximation's caller can't rule it out structurally (see the
         per_tf_nf docstring in PfVariance.py), so it's handled rather than asserted.
 
         If epsilon is None (the default), the truncation threshold is chosen from the block's
@@ -234,14 +250,14 @@ class VarianceMapBlock:
         return int(np.sum(s > epsilon * s[0]))
 
 
-####################################   class VarianceMapBase   #####################################
+######################################   class TmpVmapBase   #######################################
 
 
-class VarianceMapBase:
-    """Machinery shared by VarianceMapExact and VarianceMapApproximation (see those classes).
+class TmpVmapBase:
+    """Machinery shared by TmpVmapExact and TmpVmapApproximation (see those classes).
 
     Not constructed directly. A subclass calls _init_common() and then fills self.blocks with
-    VarianceMapBlocks, and implements two hooks:
+    TmpVmapBlocks, and implements two hooks:
 
       eval_tree(itree, freq_variances):  the low-rank evaluation, shaped like avar.tree_variance
       _reference(itree, freq_variances): the same quantity, recomputed directly from the PfAvar's
@@ -256,8 +272,8 @@ class VarianceMapBase:
       tree_r:       length-ntrees array, tree rank (= avar.tree_r).
       tree_R:       length-ntrees array, pf_rank (= avar.tree_R).
       tree_P:       length-ntrees array, nprofiles (= avar.tree_P).
-      epsilon:      the constructor's 'epsilon' arg (None means per-block, see VarianceMapBlock).
-      blocks:       ragged array (list of lists) of VarianceMapBlocks, indexed [itree][...].
+      epsilon:      the constructor's 'epsilon' arg (None means per-block, see TmpVmapBlock).
+      blocks:       ragged array (list of lists) of TmpVmapBlocks, indexed [itree][...].
     """
 
     def _init_common(self, avar, epsilon):
@@ -352,3 +368,249 @@ class VarianceMapBase:
         atomic_print(f"total: {tot_blocks} blocks, sum(Ktot)={tot_ktot}, sum(K0)={tot_k0}, "
                      f"{tot_nbytes/2**20:.1f} MiB vs {tot_dense/2**20:.1f} MiB dense "
                      f"({tot_dense/max(tot_nbytes,1):.1f}x)")
+
+
+######################################   class TmpVmapExact   ######################################
+
+
+class TmpVmapExact(TmpVmapBase):
+    """Low-rank (SVD) representation of the exact variance map of a PfAvarExact.
+
+    Constructed from an already-built PfAvarExact (see PfVariance.py). Whereas the PfAvarExact
+    computes the output variances for one specific input array 'freq_variances', a
+    TmpVmapExact represents the whole linear map (input variances) -> (output variances), in
+    a compressed form which can be re-evaluated cheaply for any input (see eval() below). This
+    matters because in operation the input variances drift (gain drift, RFI excision), and we
+    want to recompute peak-finding weights whenever they are updated.
+
+    The map is stored as one truncated SVD per (tree, multiplet) pair -- see TmpVmapBlock,
+    and notes/variance_map.tex, appendix "PfAvarExact and TmpVmapExact".
+
+    Note that a TmpVmapExact keeps a reference to the PfAvarExact, which is usually the
+    larger of the two objects (check() needs it, and the memory is already committed anyway).
+
+    Caveat: PfAvarExact is an exact-but-slow reference implementation which is only practical at
+    moderate ranks, so this class inherits that limitation. It is not usable at CHIME/CHORD
+    scale; TmpVmapApproximation is.
+
+    Members
+    -------
+      tree_M:       length-ntrees array, number of multiplets.
+      blocks:       (ntrees, M) ragged array (list of lists) of TmpVmapBlocks.
+
+    plus the members of TmpVmapBase (avar, ntrees, nfreq, tree_r, tree_R, tree_P, epsilon).
+    """
+
+    def __init__(self, avar, epsilon=None, progress=False):
+        """Build the low-rank representation of an (already constructed) PfAvarExact.
+
+        If epsilon is None (the default), each block chooses its own truncation threshold from
+        its matrix sizes; an explicit float applies to all blocks. If progress is set, print one
+        line per tree.
+        """
+
+        self._init_common(avar, epsilon)
+        self.tree_M = np.array([fs.M for fs in avar.tree_fs])
+
+        for itree in range(self.ntrees):
+            r, R, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_P[itree])
+            fs = avar.tree_fs[itree]
+            blocks = [ ]
+
+            for m in range(int(self.tree_M[itree])):
+                ifreq_lo = int(avar.per_tm_ifreq_lo[itree][m])
+                nf = int(avar.per_tm_nf[itree][m])
+                pvs = [avar.per_tfm[itree][ifreq_lo + i][m] for i in range(nf)]
+                label = f"tree {itree} m={m} (n={int(fs.m_to_n[m])})"
+                blocks.append(TmpVmapBlock(pvs, ifreq_lo, self.nfreq, r - R, P,
+                                               epsilon=epsilon, label=label))
+
+            self.blocks[itree] = blocks
+
+            if progress:
+                k0 = sum(len(b.sval) for b in blocks)
+                atomic_print(f"  TmpVmapExact tree {itree}/{self.ntrees}: "
+                             f"{len(blocks)} blocks, sum(K0)={k0}")
+
+
+    def eval_tree(self, itree, freq_variances):
+        """Return a shape (M, 2^{r-R}, P) array, comparable to avar.tree_variance[itree]."""
+
+        itree = int(itree)
+        r, R, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_P[itree])
+        blocks = self.blocks[itree]
+
+        out = np.zeros((len(blocks), 1 << (r - R), P))
+        for m, block in enumerate(blocks):
+            out[m, :, :] = block.eval(freq_variances)
+        return out
+
+
+    def _reference(self, itree, freq_variances):
+        """Recompute avar.tree_variance[itree] from avar.per_tfm, for arbitrary input variances.
+
+        This deliberately duplicates the frequency sum which PfAvarExact does at construction,
+        rather than reusing its result, so that check() can be run with input variances which
+        the PfAvarExact was not built with.
+        """
+
+        avar = self.avar
+        r, R, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_P[itree])
+        M = int(self.tree_M[itree])
+        all_dbits = (1 << (r - R)) - 1
+
+        out = np.zeros((M, 1 << (r - R), P))
+
+        for m in range(M):
+            ifreq_lo = int(avar.per_tm_ifreq_lo[itree][m])
+            nf = int(avar.per_tm_nf[itree][m])
+            pv = PfVariance(r - R, P)
+            for ifreq in range(ifreq_lo, ifreq_lo + nf):
+                pv.add(avar.per_tfm[itree][ifreq][m], scale=float(freq_variances[ifreq]))
+            out[m, :, :] = pv.unpack(all_dbits)
+
+        return out
+
+
+    def _tree_desc(self, itree):
+        return (f"r={int(self.tree_r[itree])} R={int(self.tree_R[itree])} "
+                f"P={int(self.tree_P[itree])} M={int(self.tree_M[itree])}")
+
+
+##################################   class TmpVmapApproximation   ##################################
+
+
+class TmpVmapApproximation(TmpVmapBase):
+    """Low-rank (SVD) representation of the approximate variance map of a PfAvarApproximation.
+
+    Constructed from an already-built slow_avar.PfAvarApproximation (see PfVariance.py). Whereas
+    the PfAvarApproximation computes the output variances for one specific input array
+    'freq_variances', a TmpVmapApproximation represents the whole linear map (input
+    variances) -> (output variances), in a compressed form which can be re-evaluated cheaply for
+    any input (see eval() below). This matters because in operation the input variances drift
+    (gain drift, RFI excision), and we want to recompute peak-finding weights whenever they are
+    updated.
+
+    This is the counterpart of TmpVmapExact for the approximate variance map: the linear
+    algebra is identical, but the block index is the level-0 band 0 <= j < 2^R rather than the
+    multiplet, the DM axis has 2^(r-L) entries rather than 2^(r-R), and eval_tree() applies the
+    per-subband average which PfAvarApproximation applies to per_tf. See
+    notes/variance_map.tex, appendix "PfAvarApproximation, TmpVmapApproximation".
+
+    Unlike TmpVmapExact, this class is usable at CHIME/CHORD scale. Note however that it
+    requires the python PfAvarApproximation: the C++ port drops per_tff, keeping only per_tf.
+
+    Note that a TmpVmapApproximation keeps a reference to the PfAvarApproximation, which is
+    usually the larger of the two objects (check() needs it, and the memory is already committed
+    anyway).
+
+    Members
+    -------
+      tree_L:       length-ntrees array, log2(wt_dm_downsampling) (= avar.tree_L).
+      tree_N:       length-ntrees array, number of frequency subbands.
+      blocks:       (ntrees, 2^R) ragged array (list of lists) of TmpVmapBlocks.
+
+    plus the members of TmpVmapBase (avar, ntrees, nfreq, tree_r, tree_R, tree_P, epsilon).
+    """
+
+    def __init__(self, avar, epsilon=None, progress=False):
+        """Build the low-rank representation of an (already constructed) PfAvarApproximation.
+
+        If epsilon is None (the default), each block chooses its own truncation threshold from
+        its matrix sizes; an explicit float applies to all blocks. If progress is set, print one
+        line per tree.
+        """
+
+        self._init_common(avar, epsilon)
+        self.tree_L = np.array(avar.tree_L)
+        self.tree_N = np.array([fs.N for fs in avar.tree_fs])
+
+        for itree in range(self.ntrees):
+            r, R, L = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree])
+            P = int(self.tree_P[itree])
+            blocks = [ ]
+
+            for j in range(1 << R):
+                ifreq_lo = int(avar.per_tf_ifreq_lo[itree][j])
+                nf = int(avar.per_tf_nf[itree][j])
+                pvs = [avar.per_tff[itree][ifreq_lo + i][j] for i in range(nf)]
+                blocks.append(TmpVmapBlock(pvs, ifreq_lo, self.nfreq, r - L, P,
+                                               epsilon=epsilon, label=f"tree {itree} j={j}"))
+
+            self.blocks[itree] = blocks
+
+            if progress:
+                k0 = sum(len(b.sval) for b in blocks)
+                atomic_print(f"  TmpVmapApproximation tree {itree}/{self.ntrees}: "
+                             f"{len(blocks)} blocks, sum(K0)={k0}")
+
+
+    def eval_band(self, itree, j, freq_variances):
+        """Return the shape (2^{r-L}, P) variance array of one level-0 band.
+
+        This is the primitive: eval_tree() below is a per-subband average of these.
+        """
+        return self.blocks[int(itree)][int(j)].eval(freq_variances)
+
+
+    def eval_tree(self, itree, freq_variances):
+        """Return a shape (N, 2^{r-L}, P) array, comparable to avar.tree_variance[itree].
+
+        Entry n is the mean of eval_band() over subband n's coarse-freq range, matching what
+        PfAvarApproximation does with per_tf.
+        """
+
+        itree = int(itree)
+        r, L, P = int(self.tree_r[itree]), int(self.tree_L[itree]), int(self.tree_P[itree])
+        fs = self.avar.tree_fs[itree]
+
+        # A level-0 band belongs to several subbands (and there can be more subbands than bands),
+        # so evaluate each band once and average, rather than evaluating per subband.
+        bands = [block.eval(freq_variances) for block in self.blocks[itree]]
+
+        out = np.zeros((fs.N, 1 << (r - L), P))
+        for n in range(fs.N):
+            flo, fhi = int(fs.n_to_flo[n]), int(fs.n_to_fhi[n])
+            for j in range(flo, fhi):
+                out[n, :, :] += bands[j]
+            out[n, :, :] /= (fhi - flo)
+
+        return out
+
+
+    def _reference(self, itree, freq_variances):
+        """Recompute avar.tree_variance[itree] from avar.per_tff, for arbitrary input variances.
+
+        This deliberately duplicates the frequency sum and per-subband average which
+        PfAvarApproximation does at construction, rather than reusing its result, so that check()
+        can be run with input variances which the PfAvarApproximation was not built with.
+        """
+
+        avar = self.avar
+        r, R, L = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree])
+        P, fs = int(self.tree_P[itree]), avar.tree_fs[itree]
+        all_dbits = (1 << (r - L)) - 1
+
+        bands = [ ]
+        for j in range(1 << R):
+            ifreq_lo = int(avar.per_tf_ifreq_lo[itree][j])
+            nf = int(avar.per_tf_nf[itree][j])
+            pv = PfVariance(r - L, P)
+            for ifreq in range(ifreq_lo, ifreq_lo + nf):
+                pv.add(avar.per_tff[itree][ifreq][j], scale=float(freq_variances[ifreq]))
+            bands.append(pv.unpack(all_dbits))
+
+        out = np.zeros((fs.N, 1 << (r - L), P))
+        for n in range(fs.N):
+            flo, fhi = int(fs.n_to_flo[n]), int(fs.n_to_fhi[n])
+            for j in range(flo, fhi):
+                out[n, :, :] += bands[j]
+            out[n, :, :] /= (fhi - flo)
+
+        return out
+
+
+    def _tree_desc(self, itree):
+        return (f"r={int(self.tree_r[itree])} R={int(self.tree_R[itree])} "
+                f"L={int(self.tree_L[itree])} P={int(self.tree_P[itree])} "
+                f"N={int(self.tree_N[itree])}")

@@ -17,6 +17,11 @@ namespace pirate {
 // C++ port of pirate_frb/slow_avar/PfVariance.py (the subset reachable from PfAvarApproximation;
 // PfAvarExact and the test-only methods are not ported). See that file and
 // notes/variance_map.tex for the math.
+//
+// NOTE: the PfAvar* classes, together with the python TmpVmap* classes built from them, were a
+// first pass at representing a variance map, written before we settled on the VarianceMap
+// representation (notes/variance_map.tex, section "The variance map"). They are left unchanged
+// for now, and are deliberately outside it. We may revisit them later.
 
 
 // Converts time series to variances, after convolving with the first P peak-finding kernels.

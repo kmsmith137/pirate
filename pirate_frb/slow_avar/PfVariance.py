@@ -443,6 +443,12 @@ class PfVariance:
 class PfAvarExact:
     """Exact analytic peak-finding variances for a DedispersionPlan (all DedispersionTrees).
 
+    NOTE: PfAvarExact and PfAvarApproximation, together with the TmpVmap* classes built from
+    them (see TmpVmap.py), were a first pass at representing a variance map, written before we
+    settled on the VarianceMap representation (notes/variance_map.tex, section "The variance
+    map"). They are left unchanged for now, and are deliberately outside it. We may revisit
+    them later.
+
     In PfAvarExact, each tree is processed "from scratch" (no reuse of computations across trees).
     Note that in PfAvarApprox (see below), we try to be efficient and reuse computations.
     Comparison between the two is a unit test of the reuse-logic in PfAvarApprox.
@@ -466,7 +472,7 @@ class PfAvarExact:
       per_tfm:         (ntrees, nfreq, M) array of (None or single-channel PfVariance).
                        This is a "ragged" array (list of list of lists) since M is tree-dependent.
                        This is the variance map in factored per-channel form, and is what
-                       slow_avar.VarianceMapExact consumes.
+                       slow_avar.TmpVmapExact consumes.
 
                        Whether an entry is None depends on the multiplet's frequency subband,
                        not on its fine DM: the 2^l multiplets of a given subband are either all
@@ -560,7 +566,7 @@ class PfAvarExact:
             # Multiplet m gets a contribution from channel ifreq iff ifreq's gridding footprint
             # overlaps m's frequency subband. The footprints are intervals which advance
             # monotonically with ifreq (the channel map is strictly decreasing), so the
-            # contributing channels form an interval. VarianceMapExact relies on this.
+            # contributing channels form an interval. TmpVmapExact relies on this.
             assert np.all(m_cnt >= 1), (itree, int(np.min(m_cnt)))
             assert np.all(m_cnt == m_hi - m_lo), (itree, list(m_cnt), list(m_hi - m_lo))
             self.per_tm_ifreq_lo[itree] = m_lo
@@ -580,6 +586,10 @@ class PfAvarExact:
 
 class PfAvarApproximation:
     """Approximate analytic peak-finding variances for a DedispersionPlan (all DedispersionTrees).
+
+    NOTE: see the PfAvarExact docstring above -- this class, and the TmpVmap* classes built from
+    it, were a first pass at representing a variance map, predating the VarianceMap
+    representation, and are deliberately outside it for now.
 
     For each tree, we divide the tree-freqs into 2^L bands, where 2^L = tree.pf.wt_dm_downsampling.
     We make the approximation that frequency channel overlaps between bands are negligible.
@@ -611,7 +621,7 @@ class PfAvarApproximation:
       per_tff:         (ntrees, nfreq, 2^R) array of (None or single-channel PfVariance).
                        This is a "ragged" array (list of list of lists) since 2^R is tree-dependent.
                        This is the variance map in factored per-channel form, and is what
-                       slow_avar.VarianceMapApproximation consumes.
+                       slow_avar.TmpVmapApproximation consumes.
 
       per_tf:          (ntrees, 2^R) ragged array of frequency-summed PfVariances (never None):
                        per_tf[t][f] = sum_ifreq freq_variances[ifreq] * per_tff[t][ifreq][f].
@@ -627,7 +637,7 @@ class PfAvarApproximation:
                        have a contributing channel; here the same assert is per subband, and a
                        subband averages over bands, so it does not rule out an empty band. (No
                        config we've tried produces one -- every band spans a contiguous tree-freq
-                       range, which overlaps at least one input channel -- but VarianceMapBlock
+                       range, which overlaps at least one input channel -- but TmpVmapBlock
                        handles nf == 0 rather than relying on that.)
 
       tree_variance:   For each tree, a shape (N,2^{r-L},P) array; entry n is per_tf averaged
@@ -714,7 +724,7 @@ class PfAvarApproximation:
             # Channel ifreq contributes to level-0 band f iff its gridding footprint overlaps f's
             # coarse-freq range. The footprints are intervals which advance monotonically with
             # ifreq (the channel map is strictly decreasing), so the contributing channels form an
-            # interval. VarianceMapApproximation relies on this. (A band with no contributing
+            # interval. TmpVmapApproximation relies on this. (A band with no contributing
             # channels is allowed -- see the per_tf_nf docstring -- and gets ifreq_lo = nf = 0.)
             lo, hi, cnt = self.per_tf_ifreq_lo[itree], self._per_tf_hi[itree], self._per_tf_cnt[itree]
             nf = np.where(cnt > 0, hi - lo, 0)

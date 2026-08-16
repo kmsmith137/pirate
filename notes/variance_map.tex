@@ -1635,7 +1635,7 @@ $A[255 \,\&\, 256] = A[0] = 9.77\times10^{-4}$ above both.
 
 Finally, the statement is about the {\em natural} (non-bit-reversed) DM index
 $d_m = 2^l d_{\rm hi} + d_{\rm lo}$, which is the convention used by {\tt PfAvarExact} and
-{\tt VarianceMapExact}. Under a bit-reversed DM index, aligned dyadic blocks become strided
+{\tt TmpVmapExact}. Under a bit-reversed DM index, aligned dyadic blocks become strided
 sets, and (\ref{eq:bitwise_property}) becomes bitwise monotonicity with respect to the
 reversed bit labelling (the subset order is preserved by any relabelling of the bits, so the
 theorem is convention-independent; only its ``dyadic block'' phrasing is not).
@@ -1888,8 +1888,14 @@ being lost to roundoff against the diagonal term.
 
 \clearpage
 
-\section{{\tt PfAvarExact} and {\tt VarianceMapExact}}
+\section{{\tt PfAvarExact} and {\tt TmpVmapExact}}
 \label{sec:analytic_variance}
+
+{\bf Status.} The four classes described in this appendix and in \S\ref{sec:variance_svd} --
+{\tt PfAvarExact}, {\tt TmpVmapExact}, {\tt PfAvarApproximation}, {\tt TmpVmapApproximation} --
+were a first pass at representing the variance map of \S\ref{sec:variance_map}, written before we
+settled on the {\tt VarianceMap} representation. They are left unchanged for now, and are
+deliberately outside it; the {\tt TmpVmap} prefix is the reminder. We may revisit them later.
 
 The second step of peak-finding (\ddnotes{Peak-finding}) normalizes its output to ``sigmas'',
 by applying weights which are the inverse square roots of the output variances.
@@ -1900,7 +1906,7 @@ This appendix describes the two classes which compute them, both in
 variance of the dedispersion outputs, given the per-channel variances of the dedisperser input
 array. In the language of \S\ref{sec:variance_map}, Eq.\ (\ref{eq:variance_map_def}), it
 evaluates the matrix-vector product $y = Av$ for one specific $v$, without ever forming $A$.
-\item \verb|VarianceMapExact| (\S\ref{ssec:svd_exact_map}--\S\ref{ssec:svd_exact_cost}) takes a
+\item \verb|TmpVmapExact| (\S\ref{ssec:svd_exact_map}--\S\ref{ssec:svd_exact_cost}) takes a
 \verb|PfAvarExact| and compresses the map $A$ itself into a canonical low-rank (SVD) form. This
 is worth doing because in operation $v$ drifts (gain drift, RFI excision), and we want to
 recompute the peak-finding variances cheaply whenever it is updated.
@@ -2208,7 +2214,7 @@ output channels which have reached steady state.
 
 \clearpage
 
-The rest of this appendix describes \verb|VarianceMapExact|, which compresses the variance map
+The rest of this appendix describes \verb|TmpVmapExact|, which compresses the variance map
 $A$ itself, instead of evaluating $y = Av$ for one input vector. From here on we drop the two
 simplifying assumptions made above: subbands are enabled, and the variance is resolved per
 multiplet, exactly as {\tt PfAvarExact} computes it.
@@ -2220,7 +2226,7 @@ frequency-channel overlaps between the $2^R$ level-0 bands are neglected, so the
 resolved per level-0 band $j$ and on only the $(r-L)$ highest DM bits; here it is resolved per
 multiplet $m$ and on the $(r-R)$ highest DM bits, with no approximation. One limitation does
 carry over from \S\ref{sec:avar_pfvariance}: {\tt PfAvarExact} is practical only at moderate
-rank, so {\tt VarianceMapExact} inherits that and cannot be run at CHIME/CHORD scale.
+rank, so {\tt TmpVmapExact} inherits that and cannot be run at CHIME/CHORD scale.
 
 \subsection{The variance map}
 \label{ssec:svd_exact_map}
@@ -2232,7 +2238,7 @@ profiles, and write
 \end{equation}
 for the number of coarse-DM bits and coarse DMs.\footnote{Code names: $r = {\tt tree\_r}$,
 $R = {\tt tree\_R}$, $P = {\tt tree\_P}$, $M = {\tt tree\_M}$, all members of
-{\tt VarianceMapExact}.}
+{\tt TmpVmapExact}.}
 Recall from \ddnotes{Subband search} that a {\em multiplet} $0 \le m < M$ is a
 (frequency subband, fine DM) pair. For each $m$, {\tt PfAvarExact} produces a variance array
 \begin{equation}
@@ -2405,7 +2411,7 @@ U_{\rm out}^T U_{\rm out} = U_{\rm freq}^T U_{\rm freq} = {\rm id}_{K_0},
 \label{eq:svdx_canonical}
 \end{equation}
 with $S_0$ sorted descending -- i.e.\ a genuine truncated SVD of $\bar A$, with $K_0$ its
-numerical rank. The three factors are the {\tt VarianceMapExact} block members {\tt sv\_out},
+numerical rank. The three factors are the {\tt TmpVmapExact} block members {\tt sv\_out},
 {\tt sval} and {\tt sv\_freq}, stored with the rank axis first.
 
 Given an updated $v$, reevaluating the variances is two small matrix-vector multiplies and two
@@ -2435,8 +2441,8 @@ therefore choose $\varepsilon$ per block from its largest matrix dimension,
 \label{eq:svdx_epsilon}
 \end{equation}
 and apply it to every SVD in that block. The factor 16 sits comfortably above the estimated
-floor while remaining far below any genuine component. (Both {\tt VarianceMapExact} and
-{\tt VarianceMapApproximation} take an {\tt epsilon} constructor argument which overrides this
+floor while remaining far below any genuine component. (Both {\tt TmpVmapExact} and
+{\tt TmpVmapApproximation} take an {\tt epsilon} constructor argument which overrides this
 default.)
 
 In practice the choice turns out not to matter much, because the spectra have clean cliffs:
@@ -2461,7 +2467,7 @@ $n_m$ from $159$ to $640$, $DP$ from $896$ to $6656$, $K_{\rm tot}$ from $90$ to
 to $18131$), and $K_0$ from $45$ to $178$ (summing to $9812$) -- so the canonical form buys a
 further factor $\sim\!1.9$ beyond the per-group SVDs. Total storage is $261$ MiB, versus $907$
 MiB for the dense $\bar A$'s, a factor $3.5$. Building {\tt PfAvarExact} takes $3.5$ sec and
-building {\tt VarianceMapExact} from it takes $11$ sec.
+building {\tt TmpVmapExact} from it takes $11$ sec.
 
 The compression factor is modest here only because {\tt toy.yml} is small in frequency: when
 $DP \gg n_m$, Eq.\ (\ref{eq:svdx_eval}) gives a storage ratio of $n_m DP / K_0(n_m + DP) \to
@@ -2474,7 +2480,7 @@ $\sim\!10^{-14}$ on small random configs, consistent with the threshold $\vareps
 that matters is done at an input vector $v$ which {\tt PfAvarExact} was {\em not} built with,
 recomputing the reference directly from {\tt per\_tfm}: this tests that we have captured the
 linear map, not merely its value at one input. It is available as
-{\tt VarianceMapExact.check()}.
+{\tt TmpVmapExact.check()}.
 
 Finally, a note on scale. At {\tt chord\_sb2\_et.yml} parameters ($r = 16$, $R = 4$,
 $DP = 65536$, $M = 91$, 10 trees, so $\sim\!910$ blocks), $U_{\rm out}$ alone would run to tens
@@ -2487,21 +2493,24 @@ rows) and the $C_\delta$, instead of $K_0 \cdot DP$ doubles.
 
 \clearpage
 
-\section{{\tt PfAvarApproximation}, {\tt VarianceMapApproximation} [deprecated]}
+\section{{\tt PfAvarApproximation}, {\tt TmpVmapApproximation} [deprecated]}
 \label{sec:variance_svd}
 
-This appendix documents a pair of classes ({\tt PfAvarApproximation}, {\tt VarianceMapApproximation})
-which implement a coarse-grained approximation to {\tt PfAvarExact}.
+This appendix documents a pair of classes ({\tt PfAvarApproximation}, {\tt TmpVmapApproximation})
+which implement a coarse-grained approximation to {\tt PfAvarExact}. The status note at the top of
+\S\ref{sec:analytic_variance} applies to them too: they were a first pass at representing the
+variance map, predating the {\tt VarianceMap} representation, and are deliberately outside it for
+now.
 These classes were written before the main body of these notes, and are inconsistent with it.
 In particular, the distance $D(A^{\rm true}, A^{\rm approx})$ is infinite, where $D$ is defined
 by Eq.\ (\ref{eq:distance_function}).
 I'll resolve these inconsistencies later -- for now, you should consider the classes
-{\tt PfAvarApproximation}, {\tt VarianceMapApproximation} to be a deprecated, temporary
+{\tt PfAvarApproximation}, {\tt TmpVmapApproximation} to be a deprecated, temporary
 kludge which is currently used in the real-time pipeline, but will be revised in the future.
 
 This appendix is the approximate counterpart of \S\ref{sec:analytic_variance}, and assumes it
 has been read: {\tt PfAvarApproximation} computes the peak-finding variances $y = Av$ for one
-input vector $v$, and {\tt VarianceMapApproximation} compresses the map $A$ itself into a
+input vector $v$, and {\tt TmpVmapApproximation} compresses the map $A$ itself into a
 canonical low-rank form. Both are in \verb|pirate_frb/slow_avar/|. The linear algebra is
 identical to \S\ref{ssec:svd_exact_stacking}--\S\ref{ssec:svd_exact_canonical} and is not
 repeated here; what follows is the delta.
@@ -2593,7 +2602,7 @@ work.
 \label{ssec:approx_results}
 
 For {\tt chord\_sb2\_et.yml} (10 trees, 136 $(\mbox{tree}, j)$ blocks), the python
-{\tt PfAvarApproximation} builds in 13 sec and {\tt VarianceMapApproximation} in a further
+{\tt PfAvarApproximation} builds in 13 sec and {\tt TmpVmapApproximation} in a further
 13 sec. Almost all channels produce exactly one term: 213 of the 174496 (channel, band) pairs
 produce two, the rest one. The number of distinct bitmasks $\delta$ per block runs from 7 to 32.
 We find $n_j$ from $270$ to $2823$, $2^{r-L}P$ from $448$ to $16384$, $K_{\rm tot}$ from $20$ to
@@ -2607,11 +2616,11 @@ runs into the thousands rather than being capped at {\tt toy.yml}'s 640. Reconst
 variances through the canonical form agrees with the directly-computed {\tt PfAvarApproximation}
 values to a relative accuracy of $6 \times 10^{-11}$, consistent with $\varepsilon$; as in
 \S\ref{ssec:svd_exact_cost}, the check that matters is run at an input vector which the
-{\tt PfAvarApproximation} was not built with ({\tt VarianceMapApproximation.check()}).
+{\tt PfAvarApproximation} was not built with ({\tt TmpVmapApproximation.check()}).
 
 Two practical notes. The C++ {\tt PfAvarApproximation} keeps only {\tt per\_tf} and
 {\tt tree\_variance}, dropping the per-channel {\tt per\_tff} which the compression needs, so
-{\tt VarianceMapApproximation} must be built from the python class; at 13 sec this is not
+{\tt TmpVmapApproximation} must be built from the python class; at 13 sec this is not
 currently a problem. And none of this is yet wired into the real-time pipeline.
 
 \end{document}

@@ -35,7 +35,7 @@ class BruteForceVarianceMap:
     A[itree] has shape (2^(r-R), M, P, nfreq), i.e. coarse DM slowest, matching the (ndm_out, M,
     nprofiles) layout of ReferencePeakFindingKernel's out_var. Flattening the first three axes
     gives the matrix A of the variance map tex notes. Note the transpose relative to PfAvarExact.tree_variance
-    and VarianceMapExact.eval_tree(), which are (M, 2^(r-R), P).
+    and TmpVmapExact.eval_tree(), which are (M, 2^(r-R), P).
     """
 
     def __init__(self, plan, detrender=None, detrender_dtype=np.float64):

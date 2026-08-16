@@ -108,7 +108,7 @@ ${\rm Var}(r) \rightarrow 0$ and the residual carries no information at all.
 None of that is computed.  It would matter if the peak-finder's normalization to sigmas
 (\ddnotes{Peak-finding}) divided by $\sigma\sqrt{1-\lambda[t]}$ rather than by $\sigma$, but there is no path
 by which a per-sample quantity could reach it: the peak-finding weights are built once at startup
-(\vmnotes{PfAvarExact and VarianceMapExact}) from per-zone input variances supplied by the X-engine metadata.  Two things
+(\vmnotes{PfAvarExact and TmpVmapExact}) from per-zone input variances supplied by the X-engine metadata.  Two things
 make that acceptable rather than merely expedient.  Where the mask is locally constant $\lambda$ is the known
 constant $9/8W$, i.e. a uniform $0.22\%$ rescaling of $\sigma$, degenerate with the overall normalization; and
 the {\em variation} about it is confined to a small tail -- measured over $2.4\times10^5$ samples at $W=512$,
