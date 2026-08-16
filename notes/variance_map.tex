@@ -973,8 +973,9 @@ $1.2$--$2.0\times$, so the choice still matters -- it just needs no expensive se
 \begin{itemize}
 \item {\bf Subbands are expensive}: $D(N)/D(N{=}1)$ is $3.1$--$3.8\times$ at $N = 9$ and
  $5.7$--$22.8\times$ at $N = 16$--$20$, far worse than campaign 1's $1.2$--$2.4\times$ ablation
- estimate. At the CHORD-shaped point ($r = 15$, $N = 25$, 400 channels) the recipe reaches
- $D = 0.047, 0.028, 0.014$ at $K = 32, 64, 128$.
+ estimate. At the CHORD-{\em shaped} subscale point ($r = 15$, $N = 25$, 400 channels --- CHORD's
+ subband shape at a rank and channel count we could afford, {\em not} the CHORD config, which is
+ $r = 16$ at 28160 channels) the recipe reaches $D = 0.047, 0.028, 0.014$ at $K = 32, 64, 128$.
 \item {\bf The detrender half-width $W$ is a real lever and does not saturate at 8}: $W = 8$ buys
  $2.5\times$ at $K = 64$ over $W = 2$, and $W = 16$ a further $1.7\times$. Whether such a window
  is acceptable on detrending grounds is still a separate question.
@@ -1024,7 +1025,13 @@ are tracked outside these notes.)
 The campaign 2 results look promising!
 The main things I'm worried about are {\bf scalability} and {\bf robustness}.
 Consider the CHORD scale config \verb|chord_sb2.yml| (primary tree 0 only), with
-$N_{\rm freq} = 28160$, rank $r=15$, and 25 subbands.
+$N_{\rm freq} = 28160$, rank $r=16$, and 25 subbands.\footnote{This said $r=15$ when the campaign
+was set up, and that was wrong: primary tree 0 has {\tt ipri == 0}, so it keeps
+{\tt toplevel\_tree\_rank}, which is 16. Trees 1--3 are $r=15,14,13$. Measured off
+{\tt DedispersionPlan} by two agents independently, and confirmed byte-exactly by the size of the
+resulting $\bar A$. It matters: the true geometry is $n_{\rm dm} = 4096$, $M = 91$, $P = 16$,
+$N_\alpha = 5\,963\,776$, so $N_\beta(L_0{=}4) = 1\,638\,400$ -- twice what the campaign first
+assumed, and every LP cost scales with it.}
 Can we reach this scale in a reasonable amount of computing time (say $<1$ day on 32 cores)?
 Will our current algorithm run into numerical instability (e.g.\ in the LP solver) before
 reaching this scale?
@@ -1130,6 +1137,154 @@ What rank-$D$ ``Pareto frontier'' will we see at CHORD scale?
 As usual, please get creative and explore your own ideas!
 
 \end{itemize}
+
+\subsection{Campaign 3 results [agent-authored]}
+\label{ssec:campaign3_results}
+
+Campaign 3 ran thirteen experiments and answered its question in the affirmative: the recipe
+reaches CHORD scale, the frontier there is {\em measured} rather than extrapolated, and the
+binding constraint turned out to be none of the things the setup worried about.
+
+\paragraph{The answer.}
+The real config was swept end to end: {\tt chord\_sb2.yml} primary tree 0, $28160$ passes,
+{\bf $5.6$ hours on one L40S}, with the dense $A$ never formed. At the resulting map, with
+$L_0 = 6$ ($N_\beta = 409\,600$), a frozen $W$ and $414\,208$ covering LPs -- all of which
+returned {\tt optimal}:
+
+\begin{center}
+\small
+\begin{tabular}{lccccc}
+\toprule
+rank $K$ & 8 & 16 & 32 & 64 & 128 \\
+\midrule
+$D$                             & 0.686 & 0.134 & 0.107 & 0.0651 & {\bf 0.0236} \\
+$D/D_{\rm floor}$               & 453   & 88    & 71    & 43     & {\bf 15.6} \\
+one $Q$-step, core-hours        & 43    & 69    & 280   & 1049   & 2823 \\
+\quad {\em with constraint generation} & 1.8 & 2.2 & 12.7 & 64 & {\bf 504} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\par\noindent
+with coarse-graining floor $D_{\rm floor} = 0.00151$. High ranks are an unbiased Monte-Carlo
+over a random subset of groups, with standard error $0.5$--$2\%$; the rest are exact.
+{\bf The question as posed -- what fits in under a day on 32 cores -- is answered $K \approx 150$.}
+
+The $K = 128$ value landed inside a prediction of $0.023$--$0.027$ that had been registered in
+advance, from a different tree geometry at one eighth of the channel count. That is the second
+pre-registered prediction of the campaign to hold; the first was the sweep time itself, predicted
+at $6.5 \pm 0.5$ hours by extrapolating a ladder and then measured at $5.6$.
+
+\paragraph{Nothing that was expected to be hard was hard.}
+The dense $A$ at this config would be $1.3$~PB, so the dense-free construction of campaign 1 is
+what makes any of this possible -- but with it, {\bf the sweep is noise}: $5.6$ GPU-hours against
+an LP stage two to three orders of magnitude larger. The GPU kernel the config needs was already
+compiled, and {\tt dd\_rank} turns out to depend only on {\tt toplevel\_tree\_rank}, not on the
+channel count, so no new kernel was ever needed. Memory was a real threat and was removed by one
+fix: the admissibility repair was forming a dense $(N_\beta \times N_{\rm freq})$ product with a
+same-sized temporary up to ten times, which is $\sim 900$~GiB of transient at $L_0 = 4$; blocking
+it over rows is bit-identical, $1.4\times$ faster, and flat at $0.42$~GiB.
+
+\paragraph{CHORD and CHIME say opposite things, and CHIME was the misleading one.}
+Campaign 2 closed on {\em refine $L_0$, then buy rank}, because at the CHIME point $K = 128$ sits
+$1.05\times$ above the coarse-graining floor -- rank was spent. At CHORD, $K = 128$ is
+$15.6\times$ above the floor, refining $L_0$ is worth $\pm 2\%$ at {\em every} rank, and the
+$64 \to 128$ doubling still buys $2.8\times$. {\bf At CHORD, rank binds and $L_0$ is dead.}
+This is the exact inverse of the previous recommendation, and it is why the campaign's remaining
+effort went into making rank affordable rather than into better approximations.
+
+\paragraph{Two conclusions inherited from campaign 2 did not survive contact with the real scale.}
+Both had been measured at one subband and were being applied at twenty-five.
+
+\begin{enumerate}
+\item {\bf ``Subscale numbers are conservative'' is false at CHORD's subband count.} The LP was
+ measured to improve $\sim 3\times$ from 400 to 16384 channels at $N = 1$, and that licence was
+ used throughout two campaigns. On a paired six-rung ladder at $N = 25$, $D$ instead gets
+ {\em worse} by up to $5\times$ before saturating. So every 400-channel subbanded number in these
+ notes is anti-conservative, in the opposite direction to what was assumed. The mechanism was
+ measured: the shape spectrum flattens by $11\times$ with channel count.
+\item {\bf Sweep cost does not predict $D$ cost, on any axis.} Going from the subscale proxy to
+ the real geometry involves three changes, and their measured effects are unrelated to their
+ measured sweep costs: the peak-finding profile count $P$ ($1 \to 16$) is nearly free to sweep and
+ is the largest accuracy {\em gain}; the tree rank ($15 \to 16$) costs $4.1\times$ to sweep and is
+ worth $1.01\times$ in $D$ at $K = 128$; the five frequency zones are free to sweep and
+ {\em reverse sign}, helping at low rank and costing $1.5\times$ at $K \ge 64$.
+\end{enumerate}
+
+\par\noindent
+This is the same trap as campaign 2's ``a floor-based conclusion is not an LP-based conclusion'',
+in a new disguise: a cheap proxy that orders configurations correctly on one axis need not order
+them at all on another.
+
+\paragraph{The largest single win had been sitting unclaimed for two campaigns.}
+The covering LP has one constraint per frequency channel -- $28160$ of them for $K$ variables --
+and almost all are slack at the optimum. Constraint generation was proposed in campaign 1,
+measured at $8.7\times$, and never adopted. Brought forward unchanged it is a {\em loss} of
+$0.67$--$0.99\times$ at $K \ge 32$; the missing ingredient is a {\bf pool of binding constraints
+shared across groups}, and with it the $Q$-step is {\bf $5.6$--$32\times$ cheaper with $D$
+unchanged to 8--13 digits}. It is a $2.3\times$ loss below $\sim 1500$ channels, which is why the
+original subscale measurement undersold it.
+
+Boundedness is what makes this legal and is easy to get wrong. Dropping constraints from a
+free-sign LP creates a recession direction: sampling constraints and never adding them back leaves
+the LP {\em unbounded} on $896$ of $896$ groups. Keeping one aggregate row of the omitted
+constraints fixes it completely ($26/32$ relaxations unbounded without it, $0/32$ with).
+
+\paragraph{Two numerical defects, and neither is where we looked first.}
+Campaign 2 left a picture in which the solver was at fault. The solver is not at fault.
+
+\begin{itemize}
+\item {\bf The multiplicative repair.} When the LP returns a slightly inadmissible point, the
+ repair rescales a whole row (or column) upward -- and $D$ is precisely a penalty on scaling
+ things upward. Replacing that rescale by a rank-preserving {\em additive} lift restores identical
+ admissibility for a relative change of $10^{-9}$ instead of percents. This is a single function
+ acting on two axes: on the $Q$-side the damage grows with {\em rank} (up to $1.6\times$ at
+ $K = 384$, and it removes a provably-impossible non-monotonicity in which $K = 384$ scored worse
+ than its own $K = 256$); on the $W$-side it grows with {\em group count} (up to $2.5\times$),
+ because that multiplier maximizes over $N_\beta$ rather than over $N_{\rm freq}$.
+\item {\bf The dictionary column scale.} Rescaling the columns of $W$ is provably inert -- it
+ cannot change the feasible set or the objective -- yet it is worth up to $1.5\times$ in $D$.
+ {\bf The mechanism is not understood.} The natural explanation, that the columns sit far from
+ the solver's absolute feasibility tolerance, was tested and falsified: a $64\times$ change in
+ that tolerance moves $D$ in the eighth digit. This is the campaign's most interesting loose end.
+\end{itemize}
+
+\par\noindent
+Separating these two took most of the campaign, and one wrong hypothesis along the way (that they
+were the same defect) was refuted by measuring them crossed at fixed channel count.
+
+\paragraph{Freeze the $W$-step -- for cost, not for stability.}
+Whether to alternate at all turned out to depend on two axes that point in opposite directions:
+more channels help the $W$-step, more groups hurt it. At the real config, with the additive repair,
+it would help slightly ($1.1$--$1.2\times$). It is still not worth running: $K = 64 \to 128$ buys
+$2.8\times$ for $1774$ core-hours where a $W$-step buys $\sim 1.1\times$ for $\sim 1460$.
+{\bf Rank is simply the better purchase}, which is a more comfortable reason to freeze than the
+instability that motivated the question.
+
+\paragraph{The two ideas proposed in \S\ref{ssec:campaign3_setup}.}
+{\em Pinning a nonnegative column} works and is cheap insurance rather than a performance win: it
+costs a median $0.23$ columns of rank, and it guarantees by construction the nonnegative column
+that the seeding and repair machinery needs. That guarantee matters more than expected -- with
+{\tt numpy}'s raw SVD signs there are {\em zero} nonnegative columns and the one-hot seed fails on
+every map tested; canonicalizing signs recovers exactly one. One correction to the reasoning in the
+setup: the pinned envelope duplicates the leading SVD mode only when $N = 1$, so it should be added
+{\em to} that mode, not substituted for it.
+
+{\em Re-orthogonalization} is a no: it is provably a no-op on $D$, and empirically unreliable,
+helping at $K = 64$ and hurting by $3\times$ at $K = 128$. The factored formulation proposed in the
+setup -- orthogonalize the two tall-skinny factors separately and carry a $K \times K$ middle
+matrix -- is correct and removes the memory objection entirely ($1.7$~GB against $\sim 690$~GiB),
+but it lands {\em on} the column-scaling above rather than past it: putting $\Lambda$ entirely in
+$Q$ reproduces plain column normalization to eleven digits, and no other placement beats it. The
+middle matrix should be folded away, for a reason worth recording: the rotation destroys the
+nonnegative column, which no choice of $\Lambda$ recovers.
+
+\paragraph{What is still open.}
+The frontier above $K = 128$ has never been measured at the real point, and is now affordable.
+The mechanism behind the column scaling is unknown. The $W$-step recommendation rests on an
+extrapolation from $16384$ groups to $409\,600$ that one further cell would settle. And the
+channel-count trend turns over somewhere between $7040$ and $28160$ channels, which nobody has
+resolved.
 
 \clearpage
 
