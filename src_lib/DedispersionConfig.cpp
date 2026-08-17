@@ -49,6 +49,18 @@ long DedispersionConfig::get_total_nfreq() const
 }
 
 
+// Must be kept consistent with the DedispersionTree constructor, which inverts this sum to
+// map 'itree' back to (primary_tree_index, early_trigger_level), and with the loop in the
+// DedispersionPlan constructor which is driven by it.
+long DedispersionConfig::num_dedispersion_trees() const
+{
+    long ret = 0;
+    for (const PrimaryTree &pt: primary_trees)
+        ret += pt.num_early_triggers + 1;
+    return ret;
+}
+
+
 double DedispersionConfig::frequency_to_index(double freq) const
 {
     // Allow small roundoff error at band edges.

@@ -1003,9 +1003,38 @@ void register_core_bindings(pybind11::module &m)
                py::arg("multiplier"), py::arg("fine_grained"))
     ;
 
-    // DedispersionTree: simple data class representing output of dedisperser
-    // for one choice of (primary tree, early trigger).
+    // DedispersionTree: data class representing output of dedisperser for one choice of
+    // (primary tree, early trigger). Constructible and yaml-serializable with no
+    // DedispersionPlan and no GPU -- see DedispersionTree.hpp.
     py::class_<DedispersionTree>(m, "DedispersionTree")
+          .def(py::init<const DedispersionConfig &, long, bool>(),
+               py::arg("config"), py::arg("itree"), py::arg("Dcore_from_cdd2_registry"),
+               "Construct tree 'itree' of 'config', where\n"
+               "0 <= itree < config.num_dedispersion_trees. Needs no DedispersionPlan and no\n"
+               "GPU, which is what lets archived variance maps be analyzed on a machine with\n"
+               "no CUDA device.\n\n"
+               "Trees are ordered by primary tree, then by DECREASING early-trigger level\n"
+               "(earliest trigger first, then the main early_trigger_level=0 tree).\n\n"
+               "Args:\n"
+               "    config: DedispersionConfig (must be validated)\n"
+               "    itree: tree index\n"
+               "    Dcore_from_cdd2_registry: if True, 'Dcore' is taken from the cdd2 kernel\n"
+               "        registry, and an exception is thrown if the kernel is missing from\n"
+               "        this build. If False, 'Dcore' gets the placeholder value\n"
+               "        pf.time_downsampling -- appropriate for callers which do not decode\n"
+               "        out_argmax tokens. Required (no default): DedispersionPlan and\n"
+               "        pirate_frb.varmap want opposite values.")
+          .def("to_yaml_string", &DedispersionTree::to_yaml_string,
+               py::arg("config"), py::arg("tree_index"), py::arg("verbose") = false,
+               "This tree's entry of the DedispersionPlan yaml, as a string.\n"
+               "'tree_index' is emitted as a yaml key (a tree does not know its own position\n"
+               "in plan.trees, so the caller supplies it).")
+          .def_static("from_yaml_string", &DedispersionTree::from_yaml_string,
+               py::arg("yaml_string"), py::arg("config"),
+               "Inverse of to_yaml_string(). A naive transcription: producer values are\n"
+               "adopted verbatim, with no consistency checks against re-derived ones. Note\n"
+               "that dm_min/dm_max/trigger_frequency round-trip lossily (~6 significant\n"
+               "digits); they are print/display values.")
           .def_readonly("primary_tree_index", &DedispersionTree::primary_tree_index)
           .def_readonly("early_trigger_level", &DedispersionTree::early_trigger_level)
           .def_readonly("amb_rank", &DedispersionTree::amb_rank)

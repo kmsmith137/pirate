@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from .VarianceMap import VarianceMap, _tree_geometries
+from .VarianceMap import VarianceMap
 
 
 class VarianceMultiMap:
@@ -59,7 +59,7 @@ class VarianceMultiMap:
 
         # A multimap must cover EVERY tree: that is what makes it the unit production and the
         # sweep both work in. A short list is a bug in whatever assembled it, not a subset.
-        ntrees = len(_tree_geometries(config))
+        ntrees = int(config.num_dedispersion_trees)
         if len(maps) != ntrees:
             raise RuntimeError(f'VarianceMultiMap: got {len(maps)} maps, but this config has'
                                f' {ntrees} dedispersion trees. A multimap holds one map per'

@@ -49,100 +49,49 @@ from .distance import YTRUE_FLOOR, f, AdmissibilityResult, DistanceEstimate
 
 ####################################   geometry   ####################################
 
-# The two helpers below replicate C++ logic in pure python, so that a VarianceMap can be
-# constructed, coarse-grained and scored on a machine with no working GPU. That is not a
-# nicety: DedispersionPlan's constructor calls cudaHostAlloc, and we want archived variance
-# maps to be analyzable anywhere.
+# The per-tree geometry comes straight from the C++ DedispersionTree, which is constructible
+# with no DedispersionPlan and no GPU. That matters because a DedispersionPlan cannot be
+# constructed without a CUDA device (its MegaRingbuf allocates page-locked host memory), and
+# archived variance maps must be analyzable anywhere.
 #
-# The price is a drift risk, and it is paid for in two places. _tree_geometries() is checked
-# against a real DedispersionPlan by the unit tests, and _subband_tables()' output is
-# additionally written to the map file and re-checked on read (a stored map library is
-# hundreds of GiB that cannot be regenerated cheaply, so a silent reinterpretation of the
-# multiplet ordering would be much worse than a loud mismatch).
+# Nothing here re-derives the geometry: a second implementation in python would drift from
+# the C++, and the ordering conventions it encodes are what every archived map is interpreted
+# through.
 
 
-def _subband_tables(subband_counts):
-    """(m_to_n, n_level, n_to_mbase) for a tree's RESTRICTED subband_counts.
+def make_tree(config, itree):
+    """The DedispersionTree for tree 'itree' of 'config'. Needs no plan and no GPU.
+
+    Dcore is deliberately NOT taken from the cdd2 kernel registry: varmap never reads it, and
+    requiring the registry would make an archived map unreadable on any build whose compiled
+    cdd2 kernel set does not cover that config. So a tree obtained here (and hence 'Dcore' in
+    any variance-map file) carries the placeholder pf.time_downsampling.
+    """
+    from ..pirate_pybind11 import DedispersionTree
+    return DedispersionTree(config, int(itree), Dcore_from_cdd2_registry=False)
+
+
+def _subband_tables(tree):
+    """(m_to_n, n_level, n_to_mbase) for a tree, from its FrequencySubbands.
 
     m_to_n is the frequency subband of each multiplet: the only part of the alpha -> beta map
-    that is not arithmetic. It is a pure function of subband_counts -- the C++
-    FrequencySubbands constructor takes nothing else, and walks levels 0..R assigning each
-    subband 2^level consecutive multiplets.
-
-    KEEP IN SYNC with pirate::FrequencySubbands (src_lib/FrequencySubbands.cpp) and with
-    pirate_frb.cuda_generator.FrequencySubbands, which are the other two implementations of
-    this ordering. The unit tests compare all of them.
+    that is not arithmetic. The other two are derived from it, and are what group_sizes() and
+    group_members() index through.
     """
 
-    m_to_n, n_level, n_to_mbase = [], [], []
-    nmult = 0
+    fs = tree.frequency_subbands
+    m_to_n = np.asarray(fs.m_to_n, dtype=np.int64)
 
-    for level, count in enumerate(subband_counts):
-        for _ in range(int(count)):
-            n_to_mbase.append(nmult)
-            m_to_n.extend([len(n_level)] * (1 << level))
-            n_level.append(level)
-            nmult += (1 << level)
+    # Subband n owns 2^level(n) consecutive multiplets, so its level and multiplet base fall
+    # out of a count and a cumulative sum.
+    counts = np.bincount(m_to_n, minlength=int(fs.N))
+    n_level = np.round(np.log2(counts)).astype(np.int64)
+    n_to_mbase = np.concatenate([[0], np.cumsum(counts)[:-1]]).astype(np.int64)
 
-    return (np.array(m_to_n, dtype=np.int64), np.array(n_level, dtype=np.int64),
-            np.array(n_to_mbase, dtype=np.int64))
-
-
-def _tree_geometries(config):
-    """List of per-tree geometry dicts for 'config', one per DedispersionTree, in plan order.
-
-    KEEP IN SYNC with the tree-enumeration loop of the DedispersionPlan constructor
-    (src_lib/DedispersionPlan.cpp): this is a transcription of it, minus everything that needs
-    a GPU or the compiled-kernel registry. The unit tests compare the two on random configs,
-    which is what makes the transcription safe to rely on.
-    """
-
-    from ..pirate_pybind11 import FrequencySubbands
-
-    counts = list(config.frequency_subband_counts)
-    nfreq = int(config.get_total_nfreq())
-    rtop = int(config.toplevel_tree_rank)
-    out = []
-
-    for ipri in range(int(config.num_primary_trees)):
-        primary_tree_rank = rtop - (1 if ipri else 0)
-        st1_dd_rank = primary_tree_rank // 2
-        st1_amb_rank = primary_tree_rank - st1_dd_rank
-        pt = config.primary_trees[ipri]
-
-        # Trees are ordered by DECREASING early-trigger level (earliest trigger first, then
-        # the main et_level = 0 tree), which is what fixes 'itree'.
-        for et_level in range(int(pt.num_early_triggers), -1, -1):
-            amb_rank = st1_dd_rank                 # note the amb <-> dd swap relative to stage 1
-            dd_rank = st1_amb_rank - et_level
-            tree_rank = amb_rank + dd_rank
-            pf_rank = (dd_rank + 1) // 2
-
-            # dm_downsampling may be left at 0 in the config, in which case it is auto-filled
-            # to 2^pf_rank. Any other value breaks nalpha == 2^(r-R) * M * P, so the caller is
-            # told about it in the constructor rather than here.
-            dm_downsampling = int(pt.dm_downsampling) or (1 << pf_rank)
-
-            sbc = list(FrequencySubbands.restrict_subband_counts(counts, et_level, pf_rank))
-            m_to_n, n_level, n_to_mbase = _subband_tables(sbc)
-
-            out.append(dict(
-                itree=len(out),
-                gamma=ipri,
-                early_trigger_level=et_level,
-                tree_rank=tree_rank,
-                pf_rank=pf_rank,
-                subband_counts=tuple(int(c) for c in sbc),
-                nmultiplets=int(m_to_n.size),
-                nsubbands=int(n_level.size),
-                nprofiles=1 + 3 * int(np.round(np.log2(int(pt.max_width)))),
-                ndm_out=(1 << tree_rank) // dm_downsampling,
-                nfreq=nfreq,
-                m_to_n=m_to_n,
-                n_level=n_level,
-                n_to_mbase=n_to_mbase))
-
-    return out
+    if not np.array_equal(counts, 1 << n_level):
+        raise RuntimeError(f'VarianceMap: per-subband multiplet counts {counts} are not all'
+                           ' powers of two, which the index convention requires')
+    return m_to_n, n_level, n_to_mbase
 
 
 ####################################   class VarianceMap   ####################################
@@ -174,8 +123,11 @@ class VarianceMap:
       variance maps to be analyzable anywhere. Use plan() when a plan is genuinely needed.
     - ``detrender`` -- the Detrender2dParams used, or None for "no Detrender2d".
     - ``itree`` (int) -- index of this tree in the plan.
+    - ``tree`` -- the ``DedispersionTree`` this map's geometry comes from, verbatim from the
+      C++. Constructed with no plan and no GPU. Its ``Dcore`` is a placeholder and is not
+      meaningful here -- see make_tree().
 
-    Geometry (all derived from the metadata, with no plan and no GPU; cached at construction):
+    Geometry (all read off ``tree`` at construction, with no plan and no GPU):
 
     - ``nfreq`` (int) -- number of input frequency channels.
     - ``tree_rank`` (int) -- r, the tree's total rank.
@@ -255,12 +207,16 @@ class VarianceMap:
                  Q=None, mid=None, W=None, y_true=None,
                  L=None, is_admissible=False, pinned_columns=None,
                  Q_is_semiorthogonal=False, W_is_semiorthogonal=False,
-                 history=None):
-        """Low-level constructor: validates every shape against the geometry derived from
-        (config, itree), and every flag against the arrays.
+                 history=None, tree=None):
+        """Low-level constructor: validates every shape against the geometry of tree 'itree'
+        of 'config', and every flag against the arrays.
 
         Prefer from_dense(), or the classmethods of VarianceMultiMap, over calling this
         directly. Exactly one of {A} and {Q, W} must be given.
+
+        'tree' is the DedispersionTree supplying the geometry. It defaults to
+        make_tree(config, itree); pass it explicitly to reuse one across transformations, or
+        to supply a tree read from a file rather than re-derived from the config.
         """
 
         if (Q is not None) or (W is not None) or (mid is not None):
@@ -276,23 +232,34 @@ class VarianceMap:
         if A is None:
             raise RuntimeError('VarianceMap: expected a dense matrix A')
 
-        geoms = _tree_geometries(config)
         itree = int(itree)
-        if not (0 <= itree < len(geoms)):
+        ntrees = int(config.num_dedispersion_trees)
+        if not (0 <= itree < ntrees):
             raise RuntimeError(f'VarianceMap: itree={itree} is out of range for this config,'
-                               f' which has {len(geoms)} dedispersion trees')
-        g = geoms[itree]
+                               f' which has {ntrees} dedispersion trees')
+
+        tree = make_tree(config, itree) if (tree is None) else tree
+        fs = tree.frequency_subbands
+        m_to_n, n_level, n_to_mbase = _subband_tables(tree)
 
         set_ = lambda k, v: object.__setattr__(self, k, v)
         set_('config', config)
         set_('itree', itree)
         set_('detrender', detrender)
+        set_('tree', tree)
 
-        for k in ('nfreq', 'tree_rank', 'pf_rank', 'nmultiplets', 'nsubbands', 'nprofiles',
-                  'gamma', 'early_trigger_level', 'subband_counts', 'm_to_n'):
-            set_(k, g[k])
-        set_('_n_level', g['n_level'])
-        set_('_n_to_mbase', g['n_to_mbase'])
+        set_('nfreq', int(config.get_total_nfreq()))
+        set_('tree_rank', int(tree.total_rank()))
+        set_('pf_rank', int(fs.pf_rank))
+        set_('nmultiplets', int(fs.M))
+        set_('nsubbands', int(fs.N))
+        set_('nprofiles', int(tree.nprofiles))
+        set_('gamma', int(tree.primary_tree_index))
+        set_('early_trigger_level', int(tree.early_trigger_level))
+        set_('subband_counts', tuple(int(c) for c in fs.subband_counts))
+        set_('m_to_n', m_to_n)
+        set_('_n_level', n_level)
+        set_('_n_to_mbase', n_to_mbase)
 
         r, R = self.tree_rank, self.pf_rank
 
@@ -300,9 +267,9 @@ class VarianceMap:
         # leaves dm_downsampling at 0 (auto-filled to 2^R). Any other value gives a map whose
         # rows are not the alpha of the module docstring, so it is refused up front rather
         # than silently reinterpreted.
-        if g['ndm_out'] != (1 << (r - R)):
+        if int(tree.ndm_out) != (1 << (r - R)):
             raise RuntimeError(
-                f"VarianceMap: tree {itree} has ndm_out={g['ndm_out']} != 2^(r-R)"
+                f'VarianceMap: tree {itree} has ndm_out={tree.ndm_out} != 2^(r-R)'
                 f' = {1 << (r-R)} (r={r}, R={R}). This means the config sets'
                 " 'dm_downsampling' explicitly; leave it at 0 (auto) for variance maps.")
 
@@ -417,9 +384,11 @@ class VarianceMap:
         so if you change A, say so.
         """
 
+        # The tree is carried across rather than rebuilt: it is a pure function of
+        # (config, itree), and replace() is on the hot path of an alternation schedule.
         args = dict(config=self.config, itree=self.itree, detrender=self.detrender,
                     A=self.A, y_true=self.y_true, L=self.L,
-                    is_admissible=self.is_admissible, history=self.history)
+                    is_admissible=self.is_admissible, history=self.history, tree=self.tree)
         args.update(kwargs)
 
         if history_record is not None:

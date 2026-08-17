@@ -3,12 +3,18 @@
 Two of these are load-bearing beyond the usual sense, because they are the only checks on
 properties the scalable path assumes and cannot verify at runtime:
 
-  - test_geometry() compares the pure-python geometry derivation against a real
-    DedispersionPlan. Everything else in varmap is built on those numbers, and they are a
-    transcription of C++ that no other test would notice drifting.
   - test_coarse_grain() compares the blockwise reduction against a dense one on a map small
     enough to form. At production scale the dense map is never built, so this is the only
     place the reduction is checked against something obviously correct.
+  - test_index_arithmetic() compares alpha_to_beta_block() -- which indexes through the C++
+    m_to_n -- against a label array derived independently in python. That is the tripwire on
+    the multiplet ordering convention, which lives in C++ and would silently reinterpret
+    every archived map if it changed.
+
+Note there is deliberately NO test of the per-tree geometry itself. It comes verbatim from
+the C++ DedispersionTree, which the DedispersionPlan constructor also uses, so any such test
+would compare the C++ to itself. The tree constructor and its yaml round-trip are tested in
+pirate_frb/tests/test_decode_argmax.py, where the plan-level yaml round-trip already lives.
 
 Several tests cross-check against pirate_frb.slow_avar (varmap_eval, VarMapDistance), which
 varmap supersedes. Those comparisons are deliberately temporary: they are what licenses
@@ -17,7 +23,7 @@ deleting the old code, and they go away with it.
 
 import numpy as np
 
-from .VarianceMap import VarianceMap, _tree_geometries, _subband_tables
+from .VarianceMap import VarianceMap, make_tree
 from .VarianceMultiMap import VarianceMultiMap
 from ..utils import atomic_print
 
@@ -70,7 +76,7 @@ def _obvious_labels(m, L):
 
     M, N, P, R = m.nmultiplets, m.nsubbands, m.nprofiles, m.pf_rank
 
-    # m -> (subband, fine DM), derived independently of _subband_tables().
+    # m -> (subband, fine DM), derived independently of the C++ FrequencySubbands.
     m_to_n, m_to_d, n_level = [], [], []
     for level, count in enumerate(m.subband_counts):
         for _ in range(int(count)):
@@ -112,56 +118,15 @@ def _random_map(config, itree, rng, *, nzero=0, dtype=np.float64):
     DM=0 output.
     """
 
-    g = _tree_geometries(config)[itree]
-    nalpha = (1 << (g['tree_rank'] - g['pf_rank'])) * g['nmultiplets'] * g['nprofiles']
-    A = rng.uniform(0.1, 2.0, size=(nalpha, g['nfreq'])).astype(dtype)
+    tree = make_tree(config, itree)
+    nalpha = tree.ndm_out * tree.frequency_subbands.M * tree.nprofiles
+    A = rng.uniform(0.1, 2.0, size=(nalpha, config.get_total_nfreq())).astype(dtype)
     if nzero > 0:
         A[rng.choice(nalpha, size=nzero, replace=False)] = 0.0
     return VarianceMap.from_dense(config, itree, A, y_true='row_sums', is_admissible=True)
 
 
 ####################################   tests   ####################################
-
-
-def test_geometry(niter=30):
-    """The pure-python geometry derivation against a real DedispersionPlan.
-
-    varmap derives every per-tree number from the DedispersionConfig alone, so that a map can
-    be constructed and scored on a machine with no GPU. That derivation is a transcription of
-    the DedispersionPlan constructor and of the FrequencySubbands constructor; this is what
-    keeps the transcription honest.
-    """
-
-    from ..pirate_pybind11 import DedispersionConfig, DedispersionPlan
-
-    nchecked = 0
-    for _ in range(niter):
-        config = DedispersionConfig.make_random()
-        plan = DedispersionPlan(config, False)   # cdd2_kernel_required=False: no registry
-        geoms = _tree_geometries(config)
-
-        assert len(geoms) == len(plan.trees), (len(geoms), len(plan.trees))
-
-        for (g, t) in zip(geoms, plan.trees):
-            fs = t.frequency_subbands
-            assert g['gamma'] == t.primary_tree_index, (g, t.primary_tree_index)
-            assert g['early_trigger_level'] == t.early_trigger_level
-            assert g['tree_rank'] == t.total_rank()
-            assert g['pf_rank'] == fs.pf_rank
-            assert g['subband_counts'] == tuple(fs.subband_counts)
-            assert g['nmultiplets'] == fs.M, (g['nmultiplets'], fs.M)
-            assert g['nsubbands'] == fs.N
-            assert g['nprofiles'] == t.nprofiles
-            assert g['ndm_out'] == t.ndm_out
-            assert g['nfreq'] == config.get_total_nfreq()
-
-            # The multiplet ordering: an ORDERING CONVENTION that lives in C++ and could
-            # drift. Every archived map would be silently reinterpreted if it did, which is
-            # why m_to_n is also written to the map file and re-checked on read.
-            assert np.array_equal(g['m_to_n'], np.asarray(fs.m_to_n))
-            nchecked += 1
-
-    atomic_print(f'    test_geometry(niter={niter}): pass ({nchecked} trees)')
 
 
 def test_index_arithmetic(r=8, subband_counts=(2,2,1), num_early_triggers=1):
@@ -171,7 +136,7 @@ def test_index_arithmetic(r=8, subband_counts=(2,2,1), num_early_triggers=1):
                                num_early_triggers=num_early_triggers)
     rng = np.random.default_rng(1)
 
-    for itree in range(len(_tree_geometries(config))):
+    for itree in range(config.num_dedispersion_trees):
         m = _random_map(config, itree, rng)
         R, N, P = m.pf_rank, m.nsubbands, m.nprofiles
 
@@ -216,47 +181,6 @@ def test_index_arithmetic(r=8, subband_counts=(2,2,1), num_early_triggers=1):
 
     atomic_print(f'    test_index_arithmetic(r={r}, subbands={list(subband_counts)}): pass')
 
-
-def test_subband_tables():
-    """_subband_tables() against the C++ FrequencySubbands, over the legal count vectors."""
-
-    from ..pirate_pybind11 import FrequencySubbands
-
-    ncases = 0
-    for pf_rank in range(0, 5):
-        for counts in _enumerate_subband_counts(pf_rank):
-            fs = FrequencySubbands(list(counts))
-            m_to_n, n_level, n_to_mbase = _subband_tables(counts)
-            assert np.array_equal(m_to_n, np.asarray(fs.m_to_n)), counts
-            assert m_to_n.size == fs.M and n_level.size == fs.N, counts
-            assert np.array_equal(n_to_mbase, np.asarray(fs.n_to_mbase)), counts
-            ncases += 1
-
-    atomic_print(f'    test_subband_tables(): pass ({ncases} count vectors)')
-
-
-def _enumerate_subband_counts(pf_rank, max_count=3):
-    """Legal subband_counts vectors of length pf_rank+1 (last element must be 1)."""
-
-    if pf_rank == 0:
-        yield (1,)
-        return
-
-    from ..pirate_pybind11 import FrequencySubbands
-
-    def rec(level, acc):
-        if level == pf_rank:
-            counts = tuple(acc) + (1,)
-            try:
-                FrequencySubbands.validate_subband_counts(list(counts))
-            except Exception:
-                return
-            yield counts
-            return
-        for c in range(0, max_count + 1):
-            yield from rec(level + 1, acc + [c])
-
-    yield from rec(0, [])
 
 
 def test_constructor_validation(r=7, subband_counts=(2,1)):
@@ -318,7 +242,7 @@ def test_coarse_grain(r=8, subband_counts=(2,2,1), num_early_triggers=1):
                                num_early_triggers=num_early_triggers)
     rng = np.random.default_rng(3)
 
-    for itree in range(len(_tree_geometries(config))):
+    for itree in range(config.num_dedispersion_trees):
         m = _random_map(config, itree, rng, nzero=2)
         R = m.pf_rank
 
@@ -589,7 +513,7 @@ def test_multimap(r=8, subband_counts=(2,1), num_primary_trees=2, num_early_trig
                                num_primary_trees=num_primary_trees,
                                num_early_triggers=num_early_triggers)
     rng = np.random.default_rng(8)
-    ntrees = len(_tree_geometries(config))
+    ntrees = int(config.num_dedispersion_trees)
     assert ntrees == num_primary_trees * (num_early_triggers + 1)
 
     maps = [_random_map(config, i, rng) for i in range(ntrees)]
@@ -640,11 +564,10 @@ def test_dense_float32(r=7, subband_counts=(1,)):
 ####################################   entry point   ####################################
 
 
-def run_all(niter_geometry=30):
-    """Everything, in dependency order: geometry first, since the rest is built on it."""
+def run_all():
+    """Everything, in dependency order: the index arithmetic first, since the rest is built
+    on it."""
 
-    test_subband_tables()
-    test_geometry(niter_geometry)
     test_index_arithmetic()
     test_constructor_validation()
     test_coarse_grain()

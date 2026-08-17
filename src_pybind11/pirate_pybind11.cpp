@@ -283,6 +283,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Each primary tree holds its peak-finding configuration and num_early_triggers.")
           .def_property_readonly("num_primary_trees", &DedispersionConfig::num_primary_trees,
                "Number of primary trees (= len(primary_trees))")
+          .def_property_readonly("num_dedispersion_trees", &DedispersionConfig::num_dedispersion_trees,
+               "Number of DedispersionTrees (= sum over primary trees of num_early_triggers+1).\n"
+               "Same as DedispersionPlan.ntrees, and the range of the 'itree' argument to the\n"
+               "DedispersionTree constructor -- but unlike DedispersionPlan, needs no GPU.")
           // GPU configuration
           .def_readwrite("beams_per_gpu", &DedispersionConfig::beams_per_gpu,
                "Number of beams processed per GPU")

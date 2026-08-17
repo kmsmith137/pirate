@@ -78,6 +78,11 @@ struct DedispersionConfig
     // Number of primary trees. (Not a member -- inferred from 'primary_trees'.)
     long num_primary_trees() const { return primary_trees.size(); }
 
+    // Number of DedispersionTrees, i.e. sum over primary trees of (num_early_triggers+1).
+    // This is the length of DedispersionPlan::trees, and the range of the 'itree' argument
+    // to the DedispersionTree constructor -- but unlike DedispersionPlan, it needs no GPU.
+    long num_dedispersion_trees() const;
+
     // GPU configuration.
     long beams_per_gpu = 0;
     long beams_per_batch = 0;

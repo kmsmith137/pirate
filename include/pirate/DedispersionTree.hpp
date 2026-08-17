@@ -1,8 +1,13 @@
 #ifndef _PIRATE_DEDISPERSION_TREE_HPP
 #define _PIRATE_DEDISPERSION_TREE_HPP
 
+#include <string>
+
 #include "DedispersionConfig.hpp"
 #include "FrequencySubbands.hpp"
+
+// Forward declarations, so that this header does not pull in yaml-cpp.
+namespace YAML { class Emitter; }
 
 namespace pirate {
 #if 0
@@ -10,14 +15,45 @@ namespace pirate {
 #endif
 
 
-// DedispersionTree: a simple "data" class (only trivial member functions).
-// Represents the output of the dedisperser, for one choice of (primary tree, early trigger).
+struct YamlFile;
+
+
+// DedispersionTree: a "data" class representing the output of the dedisperser, for one
+// choice of (primary tree, early trigger). Apart from construction and yaml I/O, its member
+// functions are trivial.
 //
 // A vector of DedispersionTrees is created in the DedispersionPlan constructor, and gets copied
 // into the dedisperser classes (GpuDedisperser, ReferenceDedisperser).
+//
+// Constructing trees needs NO DedispersionPlan and NO GPU. That matters because a
+// DedispersionPlan cannot be constructed without a CUDA device (its MegaRingbuf allocates
+// page-locked host memory), whereas the tree geometry is pure arithmetic -- and analysis code
+// such as pirate_frb.varmap wants the geometry on machines with no GPU.
 
 struct DedispersionTree
 {
+    // Default-constructed trees are field-filled by from_yaml(). Explicit because the
+    // (config, itree) constructor below would otherwise suppress it.
+    DedispersionTree() = default;
+
+    // Constructs tree 'itree' of 'config', where 0 <= itree < config.num_dedispersion_trees().
+    // Trees are ordered by primary tree, then by DECREASING early-trigger level (earliest
+    // trigger first, then the main early_trigger_level=0 tree).
+    //
+    // Dcore_from_cdd2_registry: if true, 'Dcore' is taken from the cdd2 kernel registry, and
+    // an exception is thrown if the kernel is missing from this build. If false, 'Dcore' is
+    // assigned the placeholder value pf.time_downsampling, which is ReferenceDedisperser's
+    // historical convention -- appropriate for callers which do not decode out_argmax tokens.
+    // There is deliberately no default value: DedispersionPlan and pirate_frb.varmap want
+    // opposite values, and the two ways of getting it wrong fail very differently (a caller
+    // which wrongly asks for the registry throws immediately; a caller which wrongly accepts
+    // the placeholder gets tokens that decode incorrectly, much later). Invoke it as
+    //
+    //   DedispersionTree(config, itree, /*Dcore_from_cdd2_registry=*/ true);
+    //
+    DedispersionTree(const DedispersionConfig &config, long itree,
+                     bool Dcore_from_cdd2_registry);
+
     int primary_tree_index = -1;   // Also identifies associated stage1 tree (input downsampled in time by 2^primary_tree_index).
     int early_trigger_level = -1;  // "Earliness" of trigger: 0 for the main tree, 1..num_early_triggers for early triggers.
     int amb_rank = 0;              // Ambient rank of this DedispersionTree (= dd_rank of associated stage1 tree)
@@ -56,6 +92,35 @@ struct DedispersionTree
     double dm_min = 0.0;
     double dm_max = 0.0;
     double trigger_frequency = 0.0f;
+
+    // Yaml I/O for one tree: the per-tree entry of the DedispersionPlan yaml. Both
+    // DedispersionPlan::to_yaml() and DedispersionPlan::make_incomplete_plan_from_yaml() go
+    // through these, so the emitted and parsed field lists cannot drift apart.
+    //
+    // 'config' supplies what is not on the tree: from_yaml() needs it to seed 'pf' and to
+    // reconstruct 'frequency_subbands', and to_yaml() uses it only for verbose comments.
+    //
+    // from_yaml() is a NAIVE transcription: producer values are adopted verbatim, with no
+    // consistency checks against re-derived ones. In particular 'Dcore' is the producer's,
+    // which is what makes DedispersionPlan::decode_argmax() correct for producer-generated
+    // tokens even if this process runs a different pirate_frb build. Note that
+    // dm_{min,max} and trigger_frequency round-trip LOSSILY (yaml-cpp emits doubles at ~6
+    // significant digits); they are print/display values, not used by decode_argmax*().
+    // 'tree_index' is emitted as a yaml key, and is not a member of this class (a tree does
+    // not know its own position in DedispersionPlan::trees), so the caller supplies it.
+    void to_yaml(YAML::Emitter &emitter, const DedispersionConfig &config,
+                 long tree_index, bool verbose) const;
+
+    static DedispersionTree from_yaml(const YamlFile &yt, const DedispersionConfig &config);
+
+    // String forms, for callers which store one tree's yaml on its own (rather than as an
+    // element of a DedispersionPlan yaml). Used by pirate_frb.varmap, which stores a tree
+    // yaml per tree in its variance-map files, and by the python bindings.
+    std::string to_yaml_string(const DedispersionConfig &config, long tree_index,
+                               bool verbose = false) const;
+
+    static DedispersionTree from_yaml_string(const std::string &yaml_string,
+                                             const DedispersionConfig &config);
 };
 
 

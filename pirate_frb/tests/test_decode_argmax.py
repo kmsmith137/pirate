@@ -30,7 +30,7 @@ token time-quantization formula (dt = min(Dcore, 2^level)) densely.
 import random
 import numpy as np
 
-from ..pirate_pybind11 import (DedispersionConfig, DedispersionPlan,
+from ..pirate_pybind11 import (DedispersionConfig, DedispersionPlan, DedispersionTree,
                                ReferenceDedisperser, ReferencePeakFindingKernel)
 from ..utils import atomic_print
 
@@ -41,6 +41,61 @@ from ..utils import atomic_print
 # LOAD-BEARING guard keeping the "dumb" yaml parser in sync with to_yaml(): the factory
 # transcribes members verbatim (no re-derivation, no consistency asserts), so any
 # to_yaml/parser drift must fail HERE, via member-by-member comparison.
+
+
+_TREE_INT_MEMBERS = ('primary_tree_index', 'early_trigger_level', 'amb_rank', 'dd_rank',
+                     'nt_ds', 'Dcore', 'nprofiles', 'ndm_out', 'ndm_wt', 'nt_out', 'nt_wt')
+_TREE_PF_MEMBERS = ('num_early_triggers', 'max_width', 'dm_downsampling', 'time_downsampling',
+                    'wt_dm_downsampling', 'wt_time_downsampling')
+
+
+def _test_tree_yaml(config):
+    """Round-trip test of DedispersionTree.to_yaml_string() / from_yaml_string().
+
+    Both DedispersionPlan.to_yaml() and make_incomplete_plan_from_yaml() go through these, so
+    this is the same load-bearing guard as _test_incomplete_plan() below, at the level of one
+    tree -- and it is the only test of the pair on its own, which is how pirate_frb.varmap
+    stores geometry.
+
+    Also checks that trees are constructible with no DedispersionPlan (hence, on a machine
+    with no GPU -- which this test cannot verify, but see the constructor's doc-comment).
+    """
+
+    ntrees = config.num_dedispersion_trees
+
+    for itree in range(ntrees):
+        # Dcore_from_cdd2_registry=False: this test is about geometry and yaml, and a random
+        # config's cdd2 kernel is generally not compiled into the build.
+        tree = DedispersionTree(config, itree, Dcore_from_cdd2_registry=False)
+        s = tree.to_yaml_string(config, itree)
+        t2 = DedispersionTree.from_yaml_string(s, config)
+
+        for f in _TREE_INT_MEMBERS:
+            assert getattr(tree, f) == getattr(t2, f), (itree, f)
+        for f in _TREE_PF_MEMBERS:
+            assert getattr(tree.pf, f) == getattr(t2.pf, f), (itree, 'pf.' + f)
+
+        # dm_min/dm_max/trigger_frequency round-trip LOSSILY: to_yaml() uses yaml-cpp's
+        # default ~6-significant-digit precision for doubles. They are print/display values.
+        for f in ('dm_min', 'dm_max', 'trigger_frequency'):
+            a, b = getattr(tree, f), getattr(t2, f)
+            assert abs(a-b) <= 1.0e-5 * max(1.0, abs(a)), (itree, f, a, b)
+
+        fs, fs2 = tree.frequency_subbands, t2.frequency_subbands
+        assert list(fs.subband_counts) == list(fs2.subband_counts), itree
+        assert np.array_equal(np.asarray(fs.m_to_n), np.asarray(fs2.m_to_n)), itree
+
+        # Re-emitting the parsed tree must reproduce the string exactly. This is what would
+        # catch a field emitted but not parsed (the parsed tree would carry a default).
+        assert t2.to_yaml_string(config, itree) == s, itree
+
+    # 'itree' is validated, rather than running off the end of the enumeration.
+    for bad in (-1, ntrees):
+        try:
+            DedispersionTree(config, bad, Dcore_from_cdd2_registry=False)
+            raise AssertionError(f'DedispersionTree accepted itree={bad} (ntrees={ntrees})')
+        except RuntimeError:
+            pass
 
 
 def _test_incomplete_plan(config, plan, tuples):
@@ -430,6 +485,7 @@ def test_decode_argmax():
     _test_pf_kernel_quantization()
 
     config = _make_random_config()
+    _test_tree_yaml(config)
     plan = DedispersionPlan(config)
     r_top = config.toplevel_tree_rank
     nt_in = plan.nt_in
