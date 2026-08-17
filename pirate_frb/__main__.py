@@ -62,6 +62,7 @@ def parse_test(subparsers):
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
     parser.add_argument('--avar', action='store_true', help='Runs tests related to analytic variance')
+    parser.add_argument('--varmap', action='store_true', help='Runs pirate_frb.varmap tests (VarianceMap geometry, coarse-graining, distance)')
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_{beamform,upchan}()')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
@@ -92,7 +93,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'avar', 'varmap', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -246,6 +247,12 @@ def test(args):
             slow_avar.VarMapDistance.test_random()
             if i == 0:  # deterministic (fixed seed); run once
                 slow_avar.varmap_eval.self_test()
+
+        if run_all_tests or args.varmap:
+            # Deterministic apart from test_geometry()'s random configs; once is enough.
+            if i == 0:
+                from .varmap import tests as varmap_tests
+                varmap_tests.run_all()
 
         if run_all_tests or args.amax:
             tests.test_decode_argmax()
