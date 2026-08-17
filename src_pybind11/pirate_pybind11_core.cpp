@@ -42,15 +42,28 @@ namespace pirate {
 // -------------------------------------------------------------------------------------------------
 //
 // Vectorized ("batch") decode_argmax*() helpers, bound as methods on both DedispersionPlan
-// (in pirate_pybind11.cpp, which declares these prototypes) and FrbGrouper (below, forwarding
-// to its internal incomplete_plan). Non-static, since the two class bindings live in
-// different source files.
+// (in pirate_pybind11.cpp, which declares these prototypes) and FrbGrouper (below). Non-static,
+// since the two class bindings live in different source files.
+//
+// They take (trees, config) rather than a DedispersionPlan: FrbGrouper holds the producer's
+// DedispersionTrees, deserialized at handshake, and never builds a plan.
 //
 // Inputs are 1-d contiguous nonempty host arrays, one event per element. (Python callers
 // should short-circuit the zero-event case: the Array -> numpy caster rejects zero-size
 // arrays.) Outputs are freshly-allocated numpy arrays. Implemented as loops over the scalar
-// DedispersionPlan methods, so per-element validation (index ranges, malformed tokens)
-// comes from decode_argmax() itself.
+// DedispersionTree methods, so per-element validation (malformed tokens, out-of-range dm/time
+// indices) comes from decode_argmax() itself; 'itree' is range-checked here, since that check
+// lived in the DedispersionPlan wrapper.
+
+
+static void _check_itree(const char *fname, long itree, size_t ntrees)
+{
+    if ((itree < 0) || (itree >= long(ntrees))) {
+        stringstream ss;
+        ss << fname << ": itree=" << itree << " is out of range [0, " << ntrees << ")";
+        throw runtime_error(ss.str());
+    }
+}
 
 
 template<typename T>
@@ -66,7 +79,8 @@ static void _check_batch_arg(const char *fname, const char *arg_name, const ksgp
 
 
 py::tuple _decode_argmax_batch(
-    const DedispersionPlan &plan, const Array<uint> &tokens,
+    const vector<DedispersionTree> &trees, const DedispersionConfig &config,
+    const Array<uint> &tokens,
     const Array<long> &itrees, const Array<long> &idms, const Array<long> &itimes)
 {
     const char *fname = "decode_argmax_batch";
@@ -87,16 +101,21 @@ py::tuple _decode_argmax_batch(
     Array<long> this_({n}, af_uhost);
     Array<long> ps({n}, af_uhost);
 
-    for (long i = 0; i < n; i++)
-        plan.decode_argmax(tokens.data[i], itrees.data[i], idms.data[i], itimes.data[i],
-                           fmins.data[i], fmaxs.data[i], tlos.data[i], this_.data[i], ps.data[i]);
+    for (long i = 0; i < n; i++) {
+        long itree = itrees.data[i];
+        _check_itree(fname, itree, trees.size());
+        trees[itree].decode_argmax(config, tokens.data[i], idms.data[i], itimes.data[i],
+                                   fmins.data[i], fmaxs.data[i], tlos.data[i],
+                                   this_.data[i], ps.data[i]);
+    }
 
     return py::make_tuple(fmins, fmaxs, tlos, this_, ps);
 }
 
 
 py::tuple _decode_argmax2_batch(
-    const DedispersionPlan &plan, const Array<long> &itrees,
+    const vector<DedispersionTree> &trees, const DedispersionConfig &config,
+    const Array<long> &itrees,
     const Array<long> &fmins, const Array<long> &fmaxs,
     const Array<long> &tlos, const Array<long> &this_, const Array<long> &ps)
 {
@@ -120,11 +139,14 @@ py::tuple _decode_argmax2_batch(
     Array<double> timestamps({n}, af_uhost);
     Array<double> widths({n}, af_uhost);
 
-    for (long i = 0; i < n; i++)
-        plan.decode_argmax2(itrees.data[i], fmins.data[i], fmaxs.data[i],
-                            tlos.data[i], this_.data[i], ps.data[i],
-                            freqs_lo.data[i], freqs_hi.data[i], dms.data[i],
-                            timestamps.data[i], widths.data[i]);
+    for (long i = 0; i < n; i++) {
+        long itree = itrees.data[i];
+        _check_itree(fname, itree, trees.size());
+        trees[itree].decode_argmax2(config, fmins.data[i], fmaxs.data[i],
+                                    tlos.data[i], this_.data[i], ps.data[i],
+                                    freqs_lo.data[i], freqs_hi.data[i], dms.data[i],
+                                    timestamps.data[i], widths.data[i]);
+    }
 
     return py::make_tuple(freqs_lo, freqs_hi, dms, timestamps, widths);
 }
@@ -1024,6 +1046,35 @@ void register_core_bindings(pybind11::module &m)
                "        pf.time_downsampling -- appropriate for callers which do not decode\n"
                "        out_argmax tokens. Required (no default): DedispersionPlan and\n"
                "        pirate_frb.varmap want opposite values.")
+          .def("decode_argmax",
+               [](const DedispersionTree &self, const DedispersionConfig &config, uint token,
+                  long idm_coarse, long itime_coarse) {
+                   long fmin, fmax, tlo, thi, p;
+                   self.decode_argmax(config, token, idm_coarse, itime_coarse,
+                                      fmin, fmax, tlo, thi, p);
+                   return py::make_tuple(fmin, fmax, tlo, thi, p);
+               },
+               py::arg("config"), py::arg("token"), py::arg("idm_coarse"), py::arg("itime_coarse"),
+               "Decode an out_argmax token into the winning trial parameters, for this tree.\n"
+               "Returns (fmin, fmax, tlo, thi, p); see DedispersionPlan.decode_argmax(), which\n"
+               "forwards here, for the full specification of the output params.")
+          .def("decode_argmax2",
+               [](const DedispersionTree &self, const DedispersionConfig &config,
+                  long fmin, long fmax, long tlo, long thi, long p) {
+                   double freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp;
+                   self.decode_argmax2(config, fmin, fmax, tlo, thi, p,
+                                       freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp);
+                   return py::make_tuple(freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp);
+               },
+               py::arg("config"), py::arg("fmin"), py::arg("fmax"), py::arg("tlo"),
+               py::arg("thi"), py::arg("p"),
+               "Convert decode_argmax() output to physical parameters, for this tree.\n"
+               "Returns (freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp); see\n"
+               "DedispersionPlan.decode_argmax2(), which forwards here.")
+          .def("compute_steady_state_it0", &DedispersionTree::compute_steady_state_it0,
+               py::arg("config"),
+               "Length-ndm_out array of the first steady-state output index per DM; see\n"
+               "DedispersionPlan.compute_steady_state_it0(), which forwards here.")
           .def("to_yaml_string", &DedispersionTree::to_yaml_string,
                py::arg("config"), py::arg("tree_index"), py::arg("verbose") = false,
                "This tree's entry of the DedispersionPlan yaml, as a string.\n"
@@ -1919,29 +1970,30 @@ void register_core_bindings(pybind11::module &m)
                "a per-batch slice (nbeams == beams_per_batch) of output_ringbuf.")
           .def("_release_output", &FrbGrouper::release_output, py::arg("seq_id"),
                "Record that the caller is done with 'seq_id' (emits CONSUMED).")
-          // Vectorized decode of out_argmax tokens, forwarding to the grouper's internal
-          // "incomplete" DedispersionPlan (deserialized at handshake). The plan's per-tree
-          // Dcore values come from the PRODUCER, so tokens decode correctly even if this
-          // process runs a different pirate_frb build. Valid only after the handshake.
+          // Vectorized decode of out_argmax tokens, using the producer's DedispersionTrees
+          // (deserialized at handshake). Their per-tree Dcore values come from the PRODUCER,
+          // so tokens decode correctly even if this process runs a different pirate_frb
+          // build. Valid only after the handshake.
           .def("decode_argmax_batch",
                [](const FrbGrouper &self, const Array<uint> &tokens, const Array<long> &itrees,
                   const Array<long> &idms, const Array<long> &itimes) {
-                   xassert(self.incomplete_plan);   // populated at handshake
-                   return _decode_argmax_batch(*self.incomplete_plan, tokens, itrees, idms, itimes);
+                   xassert(self.dedispersion_trees.size() > 0);   // populated at handshake
+                   return _decode_argmax_batch(self.dedispersion_trees, self.dedispersion_config,
+                                               tokens, itrees, idms, itimes);
                },
                py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
                "Vectorized decode of out_argmax tokens (see DedispersionPlan.decode_argmax\n"
                "for the scalar spec). Inputs are 1-d nonempty arrays, one event per element\n"
                "(tokens: uint32; itrees/idms/itimes: int64). Returns TOPLEVEL-relative\n"
                "(fmins, fmaxs, tlos, this, ps), each an int64 array. Uses the producer's\n"
-               "plan from the handshake; valid only after the handshake.")
+               "trees from the handshake; valid only after the handshake.")
           .def("decode_argmax2_batch",
                [](const FrbGrouper &self, const Array<long> &itrees, const Array<long> &fmins,
                   const Array<long> &fmaxs, const Array<long> &tlos, const Array<long> &this_,
                   const Array<long> &ps) {
-                   xassert(self.incomplete_plan);   // populated at handshake
-                   return _decode_argmax2_batch(*self.incomplete_plan, itrees, fmins, fmaxs,
-                                                tlos, this_, ps);
+                   xassert(self.dedispersion_trees.size() > 0);   // populated at handshake
+                   return _decode_argmax2_batch(self.dedispersion_trees, self.dedispersion_config,
+                                                itrees, fmins, fmaxs, tlos, this_, ps);
                },
                py::arg("itrees"), py::arg("fmins"), py::arg("fmaxs"),
                py::arg("tlos"), py::arg("this"), py::arg("ps"),

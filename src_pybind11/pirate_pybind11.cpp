@@ -42,13 +42,17 @@ namespace pirate {
     void register_utils_bindings(pybind11::module &m);
 
     // Vectorized decode_argmax*() helpers, defined in pirate_pybind11_core.cpp and bound
-    // as methods on both DedispersionPlan (below) and FrbGrouper (in core.cpp).
+    // as methods on both DedispersionPlan (below) and FrbGrouper (in core.cpp). They take
+    // (trees, config) rather than a DedispersionPlan, since FrbGrouper holds the producer's
+    // trees without building a plan.
     pybind11::tuple _decode_argmax_batch(
-        const DedispersionPlan &plan, const ksgpu::Array<uint> &tokens,
+        const std::vector<DedispersionTree> &trees, const DedispersionConfig &config,
+        const ksgpu::Array<uint> &tokens,
         const ksgpu::Array<long> &itrees, const ksgpu::Array<long> &idms,
         const ksgpu::Array<long> &itimes);
     pybind11::tuple _decode_argmax2_batch(
-        const DedispersionPlan &plan, const ksgpu::Array<long> &itrees,
+        const std::vector<DedispersionTree> &trees, const DedispersionConfig &config,
+        const ksgpu::Array<long> &itrees,
         const ksgpu::Array<long> &fmins, const ksgpu::Array<long> &fmaxs,
         const ksgpu::Array<long> &tlos, const ksgpu::Array<long> &this_,
         const ksgpu::Array<long> &ps);
@@ -414,19 +418,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    p is the winning peak-finding profile index. Throws on out-of-range\n"
                "    indices or a malformed token. See DedispersionPlan.hpp for the full\n"
                "    specification.")
-          .def_static("make_incomplete_plan_from_yaml",
-               &DedispersionPlan::make_incomplete_plan_from_yaml,
-               py::arg("config_yaml_str"), py::arg("plan_yaml_str"),
-               "An 'incomplete' DedispersionPlan does not initialize any of the low-level\n"
-               "data needed for compute kernels (especially the heavyweight MegaRingbuf) --\n"
-               "only the members needed by decode_argmax(). This is a footgun, and is only\n"
-               "used as a hack in FrbGrouper; it may go away in the future!\n\n"
-               "Args:\n"
-               "    config_yaml_str: producer's DedispersionConfig.to_yaml_string()\n"
-               "    plan_yaml_str: producer's DedispersionPlan.to_yaml_string()")
-          .def_property_readonly("is_incomplete",
-               [](const DedispersionPlan &self) { return self.params.is_incomplete; },
-               "True for plans built by make_incomplete_plan_from_yaml()")
           .def_property_readonly("cdd2_kernel_required",
                [](const DedispersionPlan &self) { return self.params.cdd2_kernel_required; },
                "False if the plan was constructed as DedispersionPlan(config,\n"
@@ -434,13 +425,25 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "kernel-registry values, so the plan cannot be used in a GpuDedisperser. It can\n"
                "still be used on the GPU without cdd2 (see slow_avar.GpuBruteForceVarianceMap),\n"
                "and in host-only contexts such as the 'pirate_frb show_dedisperser' CLI.")
-          .def("decode_argmax_batch", &_decode_argmax_batch,
+          .def("decode_argmax_batch",
+               [](const DedispersionPlan &self, const ksgpu::Array<uint> &tokens,
+                  const ksgpu::Array<long> &itrees, const ksgpu::Array<long> &idms,
+                  const ksgpu::Array<long> &itimes) {
+                   return _decode_argmax_batch(self.trees, self.config, tokens, itrees, idms, itimes);
+               },
                py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
                "Vectorized decode_argmax() over 1-d nonempty arrays (one event per element;\n"
                "tokens: uint32, itrees/idms/itimes: int64). Returns TOPLEVEL-relative\n"
                "(fmins, fmaxs, tlos, this, ps), each an int64 array. Per-element validation\n"
                "(index ranges, malformed tokens) is inherited from decode_argmax().")
-          .def("decode_argmax2_batch", &_decode_argmax2_batch,
+          .def("decode_argmax2_batch",
+               [](const DedispersionPlan &self, const ksgpu::Array<long> &itrees,
+                  const ksgpu::Array<long> &fmins, const ksgpu::Array<long> &fmaxs,
+                  const ksgpu::Array<long> &tlos, const ksgpu::Array<long> &this_,
+                  const ksgpu::Array<long> &ps) {
+                   return _decode_argmax2_batch(self.trees, self.config, itrees, fmins, fmaxs,
+                                                tlos, this_, ps);
+               },
                py::arg("itrees"), py::arg("fmins"), py::arg("fmaxs"),
                py::arg("tlos"), py::arg("this"), py::arg("ps"),
                "Vectorized decode_argmax2(): converts decode_argmax_batch() outputs to\n"

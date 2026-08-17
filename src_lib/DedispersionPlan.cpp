@@ -1,7 +1,6 @@
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/CoalescedDdKernel2.hpp"  // get_registry_dcore()
 #include "../include/pirate/MegaRingbuf.hpp"
-#include "../include/pirate/YamlFile.hpp"  // used in make_incomplete_plan_from_yaml()
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"  // align_up(), pow2(), print_kv(), Indent
 #include "../include/pirate/utils.hpp"    // bit_reverse_slow(), rb_lag()
@@ -30,15 +29,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
     config(config_), params(params_)
 {
     config.validate();
-
-    // Incomplete plans take their Dcore values from the producer's yaml, never from
-    // the local kernel registry (see Params doc-comment in DedispersionPlan.hpp).
-    xassert(!(params.is_incomplete && params.cdd2_kernel_required));
-
-    // Incomplete plans stop here: make_incomplete_plan_from_yaml() fills some (but not
-    // all) of the remaining members after the constructor returns.
-    if (params.is_incomplete)
-        return;
 
     this->dtype = config.dtype;
     this->nfreq = config.get_total_nfreq();
@@ -299,69 +289,10 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
 
 // ------------------------------------------------------------------------------------------------
 //
-// make_incomplete_plan_from_yaml() and helpers. See doc-comment in DedispersionPlan.hpp.
+// decode_argmax(), decode_argmax2() and compute_steady_state_it0() are thin forwarders to
+// the DedispersionTree methods of the same name; the per-tree logic and its derivations live
+// there. What stays here is the 'itree' bounds check, which is the only plan-level part.
 
-
-// Static member function.
-shared_ptr<DedispersionPlan> DedispersionPlan::make_incomplete_plan_from_yaml(
-    const string &config_yaml_str, const string &plan_yaml_str)
-{
-    // Parse the config first, so that the (const) 'config' member can be initialized
-    // in the constructor's init-list. (Note: from_yaml() calls config.validate().)
-    DedispersionConfig cfg = DedispersionConfig::from_yaml(
-        YamlFile::from_string(config_yaml_str, "dedispersion_config"));
-
-    // With is_incomplete=true, the constructor just sets 'config' and 'params'; the
-    // transcription below fills the rest. (cdd2_kernel_required=false: Dcore values are the
-    // PRODUCER's, adopted verbatim from the yaml, never from the local kernel registry.)
-    Params params;
-    params.cdd2_kernel_required = false;
-    params.is_incomplete = true;
-    shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan>(cfg, params);
-
-    // Everything below is a naive transcription of the plan yaml ("dumb" by design: no
-    // code shared with the normal constructor path, no consistency asserts against
-    // re-derived values, no kernel registry queries -- producer values are adopted
-    // verbatim). The "low-level data needed for compute kernels" (mega_ringbuf,
-    // kernel/buffer params, nelts_per_segment) is deliberately left uninitialized. The
-    // YamlFile accessors throw (naming the key/index) on a missing key or type mismatch;
-    // that strictness is what keeps to_yaml() and this function in sync (enforced by the
-    // round-trip unit test in test_decode_argmax.py).
-
-    YamlFile py = YamlFile::from_string(plan_yaml_str, "dedispersion_plan");
-
-    plan->dtype = ksgpu::Dtype::from_str(py.get_scalar<string>("dtype"));
-    plan->nfreq = py.get_scalar<long>("nfreq");
-    plan->nt_in = py.get_scalar<long>("nt_in");
-    plan->num_primary_trees = py.get_scalar<long>("num_primary_trees");
-    plan->beams_per_gpu = py.get_scalar<long>("beams_per_gpu");
-    plan->beams_per_batch = py.get_scalar<long>("beams_per_batch");
-    plan->num_active_batches = py.get_scalar<long>("num_active_batches");
-    plan->nbits = plan->dtype.nbits;
-    plan->stage1_dd_rank = py.get_vector<long>("stage1_dd_rank");
-    plan->stage1_amb_rank = py.get_vector<long>("stage1_amb_rank");
-    plan->ntrees = py.get_scalar<long>("ntrees");
-
-    YamlFile ytrees = py["trees"];
-    xassert(plan->ntrees > 0);
-    xassert_eq(plan->ntrees, ytrees.size());
-
-    for (long i = 0; i < plan->ntrees; i++)
-        plan->trees.push_back(DedispersionTree::from_yaml(ytrees[i], cfg));
-
-    return plan;
-}
-
-
-// ------------------------------------------------------------------------------------------------
-
-
-// For a detailed specification (and the definitions of the output params), see the
-// doc-comment in DedispersionPlan.hpp. Background for the formulas below: the token
-// encoding and its time quantization are described in PeakFindingKernel.hpp, the
-// subband time-lag conventions in notes/dedispersion.tex (subband search section)
-// and ReferenceTree.cpp, and the output-array indexing in the "Dedispersion output
-// arrays" section of the dedispersion tex notes.
 
 void DedispersionPlan::decode_argmax(
     uint argmax_token,
@@ -369,189 +300,31 @@ void DedispersionPlan::decode_argmax(
     long &fmin, long &fmax, long &tlo, long &thi, long &p) const
 {
     xassert((itree >= 0) && (itree < ntrees));
-    const DedispersionTree &tr = trees.at(itree);
-    const FrequencySubbands &fs = tr.frequency_subbands;
-
-    xassert((idm_coarse >= 0) && (idm_coarse < tr.ndm_out));
-    xassert((itime_coarse >= 0) && (itime_coarse < tr.nt_out));
-
-    long Dout = xdiv(tr.nt_ds, tr.nt_out);   // = tr.pf.time_downsampling
-    long Dcore = tr.Dcore;                   // token time granularity (see PeakFindingKernel.hpp)
-
-    // Parse token = (t) | (p << 8) | (m << 16).
-    long m = (argmax_token >> 16) & 0xffff;
-    p      = (argmax_token >> 8) & 0xff;
-    long t = argmax_token & 0xff;
-
-    xassert_lt(m, fs.M);           // m = multiplet (frequency subband, fine dm)
-    xassert_lt(p, tr.nprofiles);   // p = peak-finding profile
-    xassert_lt(t, Dout);           // t = fine time within coarse output bin
-
-    // The token's fine time is quantized: t = isamp * dt, where dt = min(Dcore, 2^lpf)
-    // and lpf is the peak-finding level (boxcar length 2^lpf) of profile p.
-    long lpf = p ? ((p-1)/3) : 0;
-    long dt = std::min(Dcore, pow2(lpf));
-    xassert_eq(t % dt, 0);
-
-    long n = fs.m_to_n.at(m);                 // frequency subband
-    long dfine = fs.m_to_d.at(m);             // fine dm within subband
-    long flo = fs.n_to_flo.at(n);             // subband range, in coarse-freq channels
-    long fhi = fs.n_to_fhi.at(n);
-    long lsb = integer_log2(fhi - flo);       // subband level
-
-    long ipri = tr.primary_tree_index;
-    long rr = tr.total_rank() + ((ipri > 0) ? 1 : 0);   // rank of underlying dedispersion
-    xassert_eq(rr, config.toplevel_tree_rank - tr.early_trigger_level);
-
-    // Frequency: the tree's channels ARE toplevel tree-freq channels (early triggers
-    // restrict the search to a prefix; time-downsampling leaves the freq axis alone).
-
-    long G = pow2(rr - fs.pf_rank);   // toplevel channels per coarse-freq channel
-    fmin = flo * G;
-    fmax = fhi * G - 1;
-
-    // Times, first in the tree's (time-downsampled) frame. The trailing pf-input sample
-    // read by the winning trial is Tpf. The pf input at time T sums channel f at time
-    // (T - Delta(f)), where Delta is exact at the subband edges: Delta(fmax) = Tlag
-    // (the extrapolate-to-band-top lag) and Delta(fmin) = Tlag + Dsub (Dsub = delay
-    // across the subband).
-
-    long dhi = idm_coarse + ((ipri > 0) ? tr.ndm_out : 0);   // coarse delay (downsampled trees search the upper half)
-    long Tpf = itime_coarse * Dout + t + dt - 1;
-    long thi_ds = Tpf - (pow2(fs.pf_rank) - fhi) * dhi;      // Tpf - Tlag
-    long tlo_ds = thi_ds - (dhi * pow2(lsb) + dfine);        // Tpf - Tlag - Dsub
-
-    // Convert to toplevel full-resolution samples. Downsampled sample T covers full-res
-    // samples [T*2^ipri, (T+1)*2^ipri - 1]. The reported trailing edge is EXCLUSIVE
-    // (one past the last full-res sample summed), i.e. the end boundary of the
-    // trailing bin.
-
-    thi = (thi_ds + 1) << ipri;
-    tlo = (tlo_ds + 1) << ipri;
+    trees.at(itree).decode_argmax(config, argmax_token, idm_coarse, itime_coarse,
+                                  fmin, fmax, tlo, thi, p);
 }
 
 
-// See DedispersionPlan.hpp for details of input/output params.
 void DedispersionPlan::decode_argmax2(
     long itree, long fmin, long fmax, long tlo, long thi, long p,
     double &freq_lo_MHz, double &freq_hi_MHz, double &dm,
     double &timestamp_samp, double &width_samp) const
 {
-    xassert_ge(itree, 0);
-    xassert_lt(itree, this->ntrees);
-    
-    long ntree = pow2(config.toplevel_tree_rank);  // note "toplevel"
-    long ipri = trees.at(itree).primary_tree_index;
-    
-    xassert_ge(fmin, 0);
-    xassert_lt(fmin, fmax);
-    xassert_lt(fmax, ntree);  // strict inequality
-    xassert_le(tlo, thi);
-    xassert_ge(p, 0);
-    xassert_lt(p, trees.at(itree).nprofiles);
-
-    // dispersion delay (in samples) per tree-freq
-    double dslope = double(thi-tlo) / double(fmax-fmin);
-
-    // The next block of code computes (based on peak-finding kernel index 0 <= p < P):
-    //
-    //  pf_width = nominal width of peak-finding kernel, in time samples (not sec or ms)
-    //  pf_shift = offset between pf-kernel center-of-mass and "trailing edge" of kernel
-    //
-    // Currently, we use an informal definition of pf_width, but pf_shift is unambiguous.
-    
-    long pdiv = p / 3;
-    long pmod = p - 3*pdiv;
-    double pf_width, pf_shift;
-
-    if (p == 0) {
-        // Boxcar of width 2^ipri.
-        pf_width = 1.0 * (1 << ipri);
-        pf_shift = 0.5 * (1 << ipri);
-    }
-    else if (pmod == 1) {
-        // Boxcar of width 2^{ipri+pdiv+1}
-        pf_width = 1.0 * (1 << (ipri+pdiv+1));
-        pf_shift = 0.5 * (1 << (ipri+pdiv+1));
-    }
-    else if (pmod == 2) {
-        // kernel = [0.5,1,0.5] upsampled by 2^{ipri+pdiv}.
-        pf_width = 2.0 * (1 << (ipri+pdiv));    // let's say pre-upsampled kernel has nomimal width 2
-        pf_shift = 1.5 * (1 << (ipri+pdiv));    // pre-upsampled kernel has pshift 1.5 (unambiguous)
-    }
-    else {
-        // kernel = [0.5,1,1,0.5] upsamled by 2^(ipri+pdiv-1)
-        pf_width = 3.0 * (1 << (ipri+pdiv-1));   // let's say "base" kernel has nominal width 3
-        pf_shift = 2.0 * (1 << (ipri+pdiv-1));   // pre-upsampled kernel has pshift 2.0 (unambiguous)
-    }
-
-    // Now we're ready to compute output params.
-    // Note that the DM is estimated by converting "dslope" to a full-band delay (ntree tree-freqs)
-    // The timestamp is computed as (thi + tdd - pf_shift), where
-    //   thi = (trailing-edge timesamp at tree-freq f = fmax + 0.5)
-    //   tdd = (dedispersion delay between f=ntree and f=fmax+0.5)
-    //   pf_shift = (offset between pulse center and trailing edge)
-    
-    freq_lo_MHz = config.delay_to_frequency(fmax+1);
-    freq_hi_MHz = config.delay_to_frequency(fmin);
-    dm = dslope * ntree * config.dm_per_unit_delay();
-    timestamp_samp = thi + dslope * (ntree-0.5-fmax) - pf_shift;
-    width_samp = pf_width;
+    xassert((itree >= 0) && (itree < ntrees));
+    trees.at(itree).decode_argmax2(config, fmin, fmax, tlo, thi, p,
+                                   freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp);
 }
 
 
-// See DedispersionPlan.hpp for the meaning of the returned array.
-//
-// Implementation: element (ichunk, idm, it) of tree 'itree' is unaffected by the
-// zero-padding before the start of the acquisition iff
-//
-//     n*T_ds >= d0 + (idm+1)*D_ds - 1 + 4*Wmax,    n = ichunk*nt_out + it
-//
-// in "tree" samples (= 2^p input samples; max_width has these units too), where
-// T_ds/D_ds are the tree's time/dm downsampling factors, and d0 = d_lo / 2^(e+p) is
-// the tree's lowest internal delay (d_lo = 0 for the base tree, 2^(r_top+p-1) for
-// downsampled trees). DM bin idm covers internal delays [d0 + idm*D_ds,
-// d0 + (idm+1)*D_ds): the dedispersion output at internal delay d and (trigger-freq)
-// time tau references input samples [tau - d, tau], subband multiplets reference
-// within that range, output time bin n starts at tree sample n*T_ds, and the causal
-// peak-finding kernels reach back up to 2*Wmax - 1 more samples (padded to 4*Wmax).
-// Solving for the smallest steady-state n (ceil division; exact for integer n) gives
-// the per-idm array below.
-//
-// Note: only uses members transcribed by make_incomplete_plan_from_yaml(), so this
-// works on "incomplete" plans (FrbGrouper::_compute_steady_state_it0() relies on this).
 Array<long> DedispersionPlan::compute_steady_state_it0(long itree) const
 {
     xassert((itree >= 0) && (itree < ntrees));
-    const DedispersionTree &tr = trees.at(itree);
-
-    long p = tr.primary_tree_index;
-    long e = tr.early_trigger_level;
-    long T_ds = tr.pf.time_downsampling;
-    long D_ds = tr.pf.dm_downsampling;
-    long Wmax = tr.pf.max_width;
-    long r_top = config.toplevel_tree_rank;
-
-    long d_lo = (p > 0) ? pow2(r_top + p - 1) : 0;   // lowest full-band delay searched by tree
-    long d0 = xdiv(d_lo, pow2(e + p));               // lowest internal delay
-
-    Array<long> ret({tr.ndm_out}, af_uhost);
-
-    for (long idm = 0; idm < tr.ndm_out; idm++) {
-        long dmax = d0 + (idm+1) * D_ds - 1;         // max internal delay in DM bin idm
-        ret.data[idm] = (dmax + 4*Wmax + T_ds - 1) / T_ds;
-    }
-
-    return ret;
+    return trees.at(itree).compute_steady_state_it0(config);
 }
 
 
 void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones) const
 {
-    // to_yaml() walks the mega_ringbuf, which an "incomplete" plan leaves uninitialized
-    // (see make_incomplete_plan_from_yaml()).
-    xassert(!params.is_incomplete);
-
     // Top-of-file header comment (verbose only). Note that the 'show_dedisperser' CLI
     // additionally prints a "# Created with: pirate_frb ..." line above this header,
     // recording the exact command line used to generate the file.

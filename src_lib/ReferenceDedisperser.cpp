@@ -54,7 +54,6 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
     xassert(plan);
     // Incomplete plans lack the buffer/kernel params used below. (cdd2_kernel_required=false
     // plans are fine here: reference dedispersion works with the default Dcore values.)
-    xassert(!plan->params.is_incomplete);
 
     this->config = plan->config;
     this->dtype = plan->dtype;

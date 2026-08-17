@@ -116,7 +116,7 @@ struct DedispersionConfig
 
     // Construct from a YAML string, i.e. the inverse of to_yaml_string(). Needed wherever a
     // config travels as a string rather than a file -- over the wire (see
-    // DedispersionPlan::make_incomplete_plan_from_yaml), or embedded in a container format
+    // DedispersionTree::from_yaml), or embedded in a container format
     // (see pirate_frb.slow_avar.write_variance_map).
     static DedispersionConfig from_yaml_string(const std::string &yaml_string);
 

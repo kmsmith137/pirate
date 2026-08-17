@@ -2,6 +2,7 @@
 #define _PIRATE_DEDISPERSION_TREE_HPP
 
 #include <string>
+#include <ksgpu/Array.hpp>
 
 #include "DedispersionConfig.hpp"
 #include "FrequencySubbands.hpp"
@@ -93,17 +94,40 @@ struct DedispersionTree
     double dm_max = 0.0;
     double trigger_frequency = 0.0f;
 
+    // Decoding peak-finder output for this tree. For a detailed specification, and the
+    // definitions of the output params, see the doc-comments on DedispersionPlan's
+    // same-named methods, which are thin forwarders to these.
+    //
+    // 'config' supplies what is not per-tree: the band geometry and the dispersion relation
+    // (delay_to_frequency(), dm_per_unit_delay()), which belong to the instrument rather
+    // than to one tree. decode_argmax() uses it only to cross-check this tree against the
+    // config -- a check with real teeth when the two were deserialized from separate yamls,
+    // as FrbGrouper does.
+    void decode_argmax(const DedispersionConfig &config, uint argmax_token,
+                       long idm_coarse, long itime_coarse,
+                       long &fmin, long &fmax, long &tlo, long &thi, long &p) const;
+
+    void decode_argmax2(const DedispersionConfig &config,
+                        long fmin, long fmax, long tlo, long thi, long p,
+                        double &freq_lo_MHz, double &freq_hi_MHz, double &dm,
+                        double &timestamp_samp, double &width_samp) const;
+
+    // Returns a length-ndm_out array; see DedispersionPlan::compute_steady_state_it0().
+    // Allocated in ordinary (unregistered) host memory, so this needs no CUDA device.
+    ksgpu::Array<long> compute_steady_state_it0(const DedispersionConfig &config) const;
+
     // Yaml I/O for one tree: the per-tree entry of the DedispersionPlan yaml. Both
-    // DedispersionPlan::to_yaml() and DedispersionPlan::make_incomplete_plan_from_yaml() go
-    // through these, so the emitted and parsed field lists cannot drift apart.
+    // DedispersionPlan::to_yaml() and FrbGrouper's handshake go through these, so the
+    // emitted and parsed field lists cannot drift apart.
     //
     // 'config' supplies what is not on the tree: from_yaml() needs it to seed 'pf' and to
     // reconstruct 'frequency_subbands', and to_yaml() uses it only for verbose comments.
     //
     // from_yaml() is a NAIVE transcription: producer values are adopted verbatim, with no
     // consistency checks against re-derived ones. In particular 'Dcore' is the producer's,
-    // which is what makes DedispersionPlan::decode_argmax() correct for producer-generated
-    // tokens even if this process runs a different pirate_frb build. Note that
+    // which is what makes decode_argmax() correct for producer-generated tokens even if this
+    // process runs a different pirate_frb build -- the reason FrbGrouper rebuilds trees this
+    // way rather than from its own config. Note that
     // dm_{min,max} and trigger_frequency round-trip LOSSILY (yaml-cpp emits doubles at ~6
     // significant digits); they are print/display values, not used by decode_argmax*().
     // 'tree_index' is emitted as a yaml key, and is not a member of this class (a tree does

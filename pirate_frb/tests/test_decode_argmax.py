@@ -29,6 +29,7 @@ token time-quantization formula (dt = min(Dcore, 2^level)) densely.
 
 import random
 import numpy as np
+import yaml
 
 from ..pirate_pybind11 import (DedispersionConfig, DedispersionPlan, DedispersionTree,
                                ReferenceDedisperser, ReferencePeakFindingKernel)
@@ -37,10 +38,11 @@ from ..utils import atomic_print
 
 ####################################################################################################
 #
-# Round-trip test of DedispersionPlan.make_incomplete_plan_from_yaml(). This is the
-# LOAD-BEARING guard keeping the "dumb" yaml parser in sync with to_yaml(): the factory
-# transcribes members verbatim (no re-derivation, no consistency asserts), so any
-# to_yaml/parser drift must fail HERE, via member-by-member comparison.
+# Round-trip test of the per-tree yaml, which is how FrbGrouper recovers the producer's
+# DedispersionTrees at handshake. This is the LOAD-BEARING guard keeping the "dumb" yaml
+# parser in sync with to_yaml(): DedispersionTree::from_yaml() transcribes members verbatim
+# (no re-derivation, no consistency asserts), so any to_yaml/parser drift must fail HERE, via
+# member-by-member comparison.
 
 
 _TREE_INT_MEMBERS = ('primary_tree_index', 'early_trigger_level', 'amb_rank', 'dd_rank',
@@ -52,10 +54,9 @@ _TREE_PF_MEMBERS = ('num_early_triggers', 'max_width', 'dm_downsampling', 'time_
 def _test_tree_yaml(config):
     """Round-trip test of DedispersionTree.to_yaml_string() / from_yaml_string().
 
-    Both DedispersionPlan.to_yaml() and make_incomplete_plan_from_yaml() go through these, so
-    this is the same load-bearing guard as _test_incomplete_plan() below, at the level of one
-    tree -- and it is the only test of the pair on its own, which is how pirate_frb.varmap
-    stores geometry.
+    Both DedispersionPlan.to_yaml() and FrbGrouper's handshake go through these, so
+    this is the same load-bearing guard as _test_grouper_tree_rebuild() below, on a
+    standalone tree yaml -- which is how pirate_frb.varmap stores geometry.
 
     Also checks that trees are constructible with no DedispersionPlan (hence, on a machine
     with no GPU -- which this test cannot verify, but see the constructor's doc-comment).
@@ -98,21 +99,30 @@ def _test_tree_yaml(config):
             pass
 
 
-def _test_incomplete_plan(config, plan, tuples):
+def _test_grouper_tree_rebuild(config, plan, tuples):
+    """Rebuild the producer's DedispersionTrees from the plan yaml, as FrbGrouper does.
+
+    FrbGrouper receives (config yaml, plan yaml) at handshake and reconstructs one
+    DedispersionTree per per-tree block of the plan yaml -- it never builds a
+    DedispersionPlan. This checks that route end to end: every member must survive, and
+    decoding through the rebuilt trees must match the freshly-built plan exactly. That is
+    the property token decoding on the consumer side rests on.
+
+    Distinct from _test_tree_yaml() above, which round-trips a STANDALONE tree yaml; here
+    the trees are extracted from a whole plan yaml, which is the shape FrbGrouper sees.
+    """
+
     cfg_yaml = config.to_yaml_string()
     plan_yaml = plan.to_yaml_string()
-    p2 = DedispersionPlan.make_incomplete_plan_from_yaml(cfg_yaml, plan_yaml)
 
-    assert p2.is_incomplete and not plan.is_incomplete
-    assert plan.cdd2_kernel_required and not p2.cdd2_kernel_required
+    cfg2 = DedispersionConfig.from_yaml_string(cfg_yaml)
+    doc = yaml.safe_load(plan_yaml)
+    assert doc['ntrees'] == plan.ntrees == cfg2.num_dedispersion_trees
 
-    for name in ['nfreq', 'nt_in', 'num_primary_trees', 'beams_per_gpu',
-                 'beams_per_batch', 'num_active_batches', 'nbits', 'ntrees']:
-        assert getattr(p2, name) == getattr(plan, name), name
-    assert list(p2.stage1_dd_rank) == list(plan.stage1_dd_rank)
-    assert list(p2.stage1_amb_rank) == list(plan.stage1_amb_rank)
+    trees = [DedispersionTree.from_yaml_string(yaml.safe_dump(tn), cfg2)
+             for tn in doc['trees']]
 
-    for itree, (t1, t2) in enumerate(zip(plan.trees, p2.trees)):
+    for itree, (t1, t2) in enumerate(zip(plan.trees, trees)):
         for name in ['primary_tree_index', 'early_trigger_level', 'amb_rank', 'dd_rank',
                      'nt_ds', 'Dcore', 'nprofiles', 'ndm_out', 'ndm_wt', 'nt_out', 'nt_wt']:
             assert getattr(t2, name) == getattr(t1, name), f"tree {itree}: {name}"
@@ -127,36 +137,30 @@ def _test_incomplete_plan(config, plan, tuples):
         assert list(fs2.subband_counts) == list(fs1.subband_counts), f"tree {itree}: subband_counts"
         assert (fs2.N, fs2.M) == (fs1.N, fs1.M), f"tree {itree}: fs.N/M"
 
-    # decode_argmax() must agree exactly with the full plan.
+    # Decoding through the rebuilt trees must agree exactly with the full plan.
     for (itree, token, idm, itout) in tuples:
-        assert p2.decode_argmax(token, itree, idm, itout) == plan.decode_argmax(token, itree, idm, itout)
+        assert (trees[itree].decode_argmax(cfg2, token, idm, itout)
+                == plan.decode_argmax(token, itree, idm, itout)), (itree, token)
 
-    # Negative test: a missing plan-yaml key must throw (naming the key).
-    bad_yaml = plan_yaml.replace('Dcore:', 'Dcore_renamed:')
-    assert bad_yaml != plan_yaml
+    # Negative test: a missing per-tree key must throw (naming the key).
+    bad = yaml.safe_load(plan_yaml)['trees'][0]
+    bad['Dcore_renamed'] = bad.pop('Dcore')
     try:
-        DedispersionPlan.make_incomplete_plan_from_yaml(cfg_yaml, bad_yaml)
-        raise AssertionError("make_incomplete_plan_from_yaml() should have thrown (missing Dcore)")
+        DedispersionTree.from_yaml_string(yaml.safe_dump(bad), cfg2)
+        raise AssertionError("DedispersionTree.from_yaml_string() should have thrown"
+                             " (missing Dcore)")
     except RuntimeError:
         pass
 
-    # Negative test: to_yaml_string() on an incomplete plan must throw (it walks
-    # the uninitialized mega_ringbuf).
-    try:
-        p2.to_yaml_string()
-        raise AssertionError("to_yaml_string() on an incomplete plan should have thrown")
-    except RuntimeError:
-        pass
-
-    return p2
+    return trees
 
 
-def _test_batch_decode(plan, p2, tuples):
+def _test_batch_decode(plan, trees, config, tuples):
     """Test the vectorized decode bindings.
 
-    decode_argmax_batch() must equal a loop over the scalar decode_argmax(); both
-    batch methods must agree between the full plan and the incomplete plan; basic
-    postconditions on the physical params."""
+    decode_argmax_batch() must equal a loop over the scalar decode_argmax(); the trees
+    rebuilt from the plan yaml must decode identically to the freshly-built plan (the
+    property FrbGrouper relies on); basic postconditions on the physical params."""
 
     itrees = np.array([t[0] for t in tuples], dtype=np.int64)
     tokens = np.array([t[1] for t in tuples], dtype=np.uint32)
@@ -173,13 +177,13 @@ def _test_batch_decode(plan, p2, tuples):
     assert (widths_samp > 0).all()
     assert np.isfinite(ts_samp).all()
 
-    # The incomplete plan must decode identically (batch path).
-    outs_b = p2.decode_argmax_batch(tokens, itrees, idms, itimes)
-    for a, b in zip(outs, outs_b):
-        assert (a == b).all()
-    outs2_b = p2.decode_argmax2_batch(itrees, *outs)
-    for a, b in zip((freqs_lo, freqs_hi, dms, ts_samp, widths_samp), outs2_b):
-        assert (a == b).all()
+    # The trees rebuilt from the plan yaml must decode identically. This is the consumer
+    # (FrbGrouper) path: producer values recovered from yaml, decoded without a plan.
+    for i, (it, tok, idm, ito) in enumerate(tuples):
+        assert trees[it].decode_argmax(config, tok, idm, ito) == \
+            tuple(int(a[i]) for a in outs), i
+        assert trees[it].decode_argmax2(config, *(int(a[i]) for a in outs)) == \
+            (freqs_lo[i], freqs_hi[i], dms[i], ts_samp[i], widths_samp[i]), i
 
     # Batch methods reject empty inputs (python callers short-circuit that case).
     empty = np.zeros(0, dtype=np.int64)
@@ -508,7 +512,7 @@ def test_decode_argmax():
 
     # cdd2_kernel_required=False: no registry query; default Dcore = pf.time_downsampling.
     p0 = DedispersionPlan(config, cdd2_kernel_required=False)
-    assert not p0.cdd2_kernel_required and not p0.is_incomplete
+    assert not p0.cdd2_kernel_required
     for tr in p0.trees:
         assert tr.Dcore == tr.pf.time_downsampling
 
@@ -543,8 +547,8 @@ def test_decode_argmax():
     tuples = _sample_tuples(plan, kinfo, interesting_ms, ntuples=2 * max(B // 3, 1))
     _probe_tuples(plan, r_top, C, tuples)
 
-    # Round-trip test of make_incomplete_plan_from_yaml() (reuses the sampled tuples).
-    p2 = _test_incomplete_plan(config, plan, tuples)
+    # Round-trip test of the per-tree yaml, as FrbGrouper does (reuses the sampled tuples).
+    trees = _test_grouper_tree_rebuild(config, plan, tuples)
 
     # Vectorized decode bindings (batch == scalar loop; full plan == incomplete plan).
-    _test_batch_decode(plan, p2, tuples)
+    _test_batch_decode(plan, trees, config, tuples)

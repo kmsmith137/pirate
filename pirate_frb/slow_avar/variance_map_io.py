@@ -5,7 +5,7 @@ without rebuilding a DedispersionPlan -- which matters because DedispersionPlan 
 calls cudaHostAlloc, so a plan cannot be built on a machine without a working GPU.
 
 The DedispersionConfig and Detrender2dParams that produced the map are stored as yaml strings
-(the same trick DedispersionPlan.make_incomplete_plan_from_yaml uses to move a plan between
+(the same trick the FrbGrouper handshake uses to move a config and its trees between
 processes), and are re-parsed on demand by VarianceMapFile.config / .detrender.
 
 Per-tree metadata includes the tree's RESTRICTED subband_counts, which is what makes the file

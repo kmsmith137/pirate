@@ -4,6 +4,7 @@
 #include "Dedisperser.hpp"          // GpuDedisperser::Outputs (+ ksgpu Array/Dtype)
 #include "XEngineMetadata.hpp"
 #include "DedispersionConfig.hpp"
+#include "DedispersionTree.hpp"
 #include "constants.hpp"            // FrbGrouperClient default timeouts
 
 #include <yaml-cpp/yaml.h>          // YAML::Node
@@ -129,12 +130,13 @@ struct FrbGrouper
     DedispersionConfig dedispersion_config;
     YAML::Node dedispersion_plan_yaml;      // NOT pybind-wrapped (see injections)
 
-    // "Incomplete" DedispersionPlan, deserialized from the handshake yamls -- see
-    // DedispersionPlan::make_incomplete_plan_from_yaml(). Supports decode_argmax*() and
-    // compute_steady_state_it0() (with the PRODUCER's per-tree Dcore values); its low-level
-    // members (MegaRingbuf, kernel/buffer params) are uninitialized. Internal hack --
-    // deliberately not pybind-wrapped.
-    std::shared_ptr<DedispersionPlan> incomplete_plan;
+    // The producer's DedispersionTrees, deserialized from the per-tree blocks of the
+    // handshake's plan yaml (DedispersionTree::from_yaml()). Supports decode_argmax*() and
+    // compute_steady_state_it0() with the PRODUCER's values -- in particular its per-tree
+    // Dcore, which is what makes token decoding correct even if this process runs a
+    // different pirate_frb build. No DedispersionPlan is built: the grouper needs per-tree
+    // data and a config, and nothing else a plan would provide.
+    std::vector<DedispersionTree> dedispersion_trees;
 
     std::string xengine_metadata_yaml_string;
     std::string dedispersion_config_yaml_string;
@@ -204,10 +206,10 @@ struct FrbGrouper
     // thread will emit CONSUMED(seq_id).
     void release_output(long seq_id);
 
-    // Forwards to DedispersionPlan::compute_steady_state_it0() on the producer's
-    // (incomplete) plan from the handshake -- see that method for the meaning of the
-    // returned array. (A forwarder is needed since 'incomplete_plan' is deliberately
-    // not pybind-wrapped.) Valid only after the handshake.
+    // Forwards to DedispersionTree::compute_steady_state_it0() on the producer's tree from
+    // the handshake -- see DedispersionPlan's method of the same name for the meaning of the
+    // returned array. (A forwarder is needed since 'dedispersion_trees' is deliberately not
+    // pybind-wrapped.) Valid only after the handshake.
     ksgpu::Array<long> _compute_steady_state_it0(long itree) const;
 
     bool is_stopped_pub();   // lock-protected read, for Python polling

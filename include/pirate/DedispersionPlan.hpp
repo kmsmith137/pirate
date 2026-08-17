@@ -49,17 +49,6 @@ struct DedispersionPlan
         // DedispersionConfig::make_random(), which restricts random configs to precompiled
         // cdd2 kernels.
         bool cdd2_kernel_required = true;
-
-        // is_incomplete: this is a hack, only used by make_incomplete_plan_from_yaml().
-        // If true, then the constructor just sets 'config' and 'params'. Some (but not all)
-        // remaining members are set by make_incomplete_plan_from_yaml() after the
-        // constructor returns (see below). Code which touches the "low-level data needed
-        // for compute kernels" should xassert(!params.is_incomplete) -- see e.g. to_yaml()
-        // and the GpuDedisperser/ReferenceDedisperser constructors.
-        //
-        // The constructor asserts !(is_incomplete && cdd2_kernel_required): incomplete plans take
-        // their Dcore values from the producer's yaml, never from the local kernel registry.
-        bool is_incomplete = false;
     };
 
     // The one-argument constructor delegates with default Params. (Two overloads rather
@@ -181,23 +170,6 @@ struct DedispersionPlan
     // are artificially low (warmup artifacts, not real triggers).
     ksgpu::Array<long> compute_steady_state_it0(long itree) const;
 
-
-    // An "incomplete" DedispersionPlan does not initialize any of the "low-level data needed
-    // for compute kernels", especially the heavyweight MegaRingbuf.  This is a footgun, and
-    // is only used as a hack in 'FrbGrouper' (where it is not externally visible).
-    // This hack may go away in the future!
-    //
-    // The arguments are the producer's DedispersionConfig::to_yaml_string() and
-    // DedispersionPlan::to_yaml_string() (as sent in the grouper Handshake). All members
-    // above this comment are naively transcribed from the yamls -- no code is shared with
-    // the normal constructor path, nothing is re-derived, and the kernel registry is not
-    // queried (in particular, trees[:].Dcore is the PRODUCER's value, which is what makes
-    // decode_argmax() correct for producer-generated tokens even if this process runs a
-    // different pirate_frb build).
-
-    static std::shared_ptr<DedispersionPlan> make_incomplete_plan_from_yaml(
-        const std::string &config_yaml_str,
-        const std::string &plan_yaml_str);
 
     // -------------------------------------------------------------------------------------------------
     //
