@@ -360,8 +360,8 @@ def parse_variance_map(subparsers):
 
 # Config keys that this tool overrides, with the value it forces. Each is safe to override
 # because none of them can change A: the analytic PfAvarExact computes the same matrix and
-# never reads Dcore or any downsampling factor. See plans/variance_map_io.md for the
-# argument, and BruteForceVarianceMap's constructor for why the tool needs these values.
+# never reads Dcore or any downsampling factor. See BruteForceVarianceMap's constructor for
+# why the tool needs these values.
 def _variance_map_override_config(config, nbeams=1):
     overrides = []
 
@@ -388,7 +388,8 @@ def variance_map(args):
     import numpy as np   # local: __main__ is otherwise numpy-free
     from .kernels import Detrender2dParams
 
-    # ---- Argument-level rejections (see plans/variance_map_io.md sec. 4.1).
+    # ---- Argument-level rejections. The detrender arguments can contradict each other or
+    # be absent, and both are worth catching before a config is even loaded.
     if args.no_detrender and (args.detrender_file is not None):
         raise RuntimeError("variance_map: --no-detrender was given together with"
                            f" '{args.detrender_file}'. These say opposite things; pass one or"
@@ -431,7 +432,7 @@ def variance_map(args):
                            + "\n  - ".join(errs))
 
     # ---- Overrides. One beam always: the beam axis carries passes, not beams, and
-    # measurement showed batching does not speed up a full sweep (plans/variance_map_io.md).
+    # measurement showed that batching does not speed up a full sweep.
     overrides = _variance_map_override_config(config, nbeams=1)
     if detrender is not None and int(detrender.M) != 1:
         overrides.append(f'detrender num_beams: {int(detrender.M)} -> 1')
