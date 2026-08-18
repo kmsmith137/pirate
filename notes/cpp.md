@@ -47,6 +47,13 @@ can slip in between).
   one process-global mutex). Each message is formatted in full, then
   emitted with a single `write(2)`.
 
+- `atomic_print()` takes a **`str`**, whereas `print()` took any object and
+  formatted it for you. So converting `print(x)` where `x` is not already a
+  string must become `atomic_print(str(x))` (or `repr(x)`); otherwise the
+  pybind11 binding raises `TypeError`, and only when that line actually runs.
+  This is easy to miss on a rarely-run path -- it is how
+  `test_pulse_upsampling.py`'s `atomic_print(self)` reached a commit.
+
 - The single syscall is what makes a line unsplittable across PROCESSES
   sharing an fd -- `run_toy_grouper` spawns one child per grouper address,
   all inheriting the parent's stdout, and no in-process lock can help

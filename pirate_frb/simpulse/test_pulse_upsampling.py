@@ -166,7 +166,7 @@ class upsampling_test_instance:
         d = np.sum((a0-a1)**2)**0.5 / t**0.25
         r = np.sum(a0*a1) / t**0.5
 
-        atomic_print(self)
+        atomic_print(repr(self))
         atomic_print("\n")
         atomic_print('(nupfreq, nupsample) = (%d, %d)' % (nupfreq, nupsample))
         atomic_print(f'Correlation coefficient: {r}  (expect ~1; original float64 threshold was |r-1| < 1e-5)')
