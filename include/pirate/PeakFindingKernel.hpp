@@ -117,7 +117,7 @@ struct PeakFindingKernelParams
     //
     // Dcore == 0 is invalid: validate() requires a power of two dividing (nt_in / nt_out).
     // DedispersionPlan fills stage2_pf_params[:].Dcore from DedispersionTree::Dcore (which
-    // the plan fills from the cdd2 registry if Params::cdd2_kernel_required -- the default -- and
+    // the plan fills from the cdd2 registry if cdd2_kernel_required -- the default -- and
     // otherwise sets to the default value time_downsampling).
     long Dcore = 0;
 

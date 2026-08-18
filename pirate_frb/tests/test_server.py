@@ -108,7 +108,7 @@ def _check_batch_decode(g):
     outs2 = g.decode_argmax2_batch(itrees, *outs)
 
     for i, (it, tok, idm, ito) in enumerate(ev):
-        assert tuple(int(a[i]) for a in outs) == trees[it].decode_argmax(config, tok, idm, ito), i
+        assert tuple(int(a[i]) for a in outs) == trees[it].decode_argmax(tok, idm, ito), i
         assert tuple(float(a[i]) for a in outs2) == \
             trees[it].decode_argmax2(config, *(int(a[i]) for a in outs)), i
 

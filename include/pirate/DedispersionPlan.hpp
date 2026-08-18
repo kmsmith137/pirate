@@ -32,33 +32,25 @@ namespace pirate {
 
 struct DedispersionPlan
 {
-    struct Params
-    {
-        // cdd2_kernel_required: if true, then Dcore values will be taken from the cdd2 kernel
-        // registry, and an exception will be thrown if a cdd2 kernel is missing. If false,
-        // then default Dcore values will be assigned (Dcore = pf.time_downsampling).
-        //
-        // Since the Dcore values are then not the compiled kernels' values, a false plan
-        // cannot be used in a GpuDedisperser. It is still perfectly usable on the GPU by
-        // callers that drive kernels themselves without going through cdd2 -- see
-        // slow_avar.GpuBruteForceVarianceMap, which runs GpuDedispersionKernel,
-        // GpuSbDedispersionKernel and GpuPfSquare -- as well as in host-only contexts such
-        // as the 'pirate_frb show_dedisperser' CLI.
-        //
-        // Not to be confused with the config-level 'gpu_valid' flag in
-        // DedispersionConfig::make_random(), which restricts random configs to precompiled
-        // cdd2 kernels.
-        bool cdd2_kernel_required = true;
-    };
-
-    // The one-argument constructor delegates with default Params. (Two overloads rather
-    // than a default argument: C++ forbids 'params = Params()' here, since the nested
-    // class's default member initializers are incomplete inside the enclosing class.)
-    DedispersionPlan(const DedispersionConfig &config, const Params &params);
-    explicit DedispersionPlan(const DedispersionConfig &config);
+    // cdd2_kernel_required: if true, then Dcore values will be taken from the cdd2 kernel
+    // registry, and an exception will be thrown if a cdd2 kernel is missing. If false,
+    // then default Dcore values will be assigned (Dcore = pf.time_downsampling).
+    //
+    // Since the Dcore values are then not the compiled kernels' values, a false plan
+    // cannot be used in a GpuDedisperser. It is still perfectly usable on the GPU by
+    // callers that drive kernels themselves without going through cdd2 -- see
+    // slow_avar.GpuBruteForceVarianceMap, which runs GpuDedispersionKernel,
+    // GpuSbDedispersionKernel and GpuPfSquare -- as well as in host-only contexts such
+    // as the 'pirate_frb show_dedisperser' CLI.
+    //
+    // Not to be confused with the config-level 'gpu_valid' flag in
+    // DedispersionConfig::make_random(), which restricts random configs to precompiled
+    // cdd2 kernels.
+    explicit DedispersionPlan(const DedispersionConfig &config,
+                              bool cdd2_kernel_required = true);
 
     const DedispersionConfig config;
-    const Params params;
+    const bool cdd2_kernel_required;
 
     // Some key members of DedispersionConfig, copied into DedispersionPlan for convenience.
     ksgpu::Dtype dtype;                  // same as config.dtype
@@ -79,6 +71,11 @@ struct DedispersionPlan
     // Stage2 trees. These trees contain the output of the dedispersion, and are useful "from outside".
     // There is a lot of per-tree data, so I defined a helper class 'DedispersionTree'.
     // The number of trees is (config.num_primary_trees() + total number of early triggers).
+    //
+    // Reminder: DedispersionTree defines the following methods (see DedispersionTree.hpp):
+    //    compute_steady_state_it0(config)
+    //    decode_argmax(argmax_token, ...)
+    //    decode_argmax2(config, ...)    
     long ntrees = 0;
     std::vector<DedispersionTree> trees;  // length ntrees
 
@@ -110,7 +107,7 @@ struct DedispersionPlan
     std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length ntrees
 
     // Note: stage2_pf_params[:].Dcore is copied from trees[:].Dcore (which the constructor
-    // fills from the cdd2 kernel registry if params.cdd2_kernel_required, else from a default; see
+    // fills from the cdd2 kernel registry if cdd2_kernel_required, else from a default; see
     // Part 1), so that peak-finders built from the plan (GPU or reference) agree on
     // out_argmax token granularity.
     std::vector<PeakFindingKernelParams> stage2_pf_params;          // length ntrees

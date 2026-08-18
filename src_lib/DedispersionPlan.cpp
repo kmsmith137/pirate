@@ -20,13 +20,9 @@ namespace pirate {
 #endif
 
 
-DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
-    DedispersionPlan(config_, Params())
-{ }
-
-
-DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Params &params_) :
-    config(config_), params(params_)
+DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_,
+                                   bool cdd2_kernel_required_) :
+    config(config_), cdd2_kernel_required(cdd2_kernel_required_)
 {
     config.validate();
 
@@ -74,7 +70,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
 
     for (long itree = 0; itree < this->ntrees; itree++)
         this->trees.push_back(DedispersionTree(config, itree,
-                                               /*Dcore_from_cdd2_registry=*/ params.cdd2_kernel_required));
+                                               /*Dcore_from_cdd2_registry=*/ cdd2_kernel_required));
     
     // Part 2:
     // Set up the MegaRingbuf, a central data structure that buffers data between kernels.

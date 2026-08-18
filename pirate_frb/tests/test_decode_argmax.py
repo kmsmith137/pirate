@@ -108,7 +108,7 @@ def _decode(plan, token, itree, idm_coarse, itime_coarse):
     """Scalar decode through the plan's tree. DedispersionPlan has no decode_argmax()
     method: decoding goes through DedispersionTree (here) or, vectorized, through
     FrbGrouper (see test_server.py)."""
-    return plan.trees[itree].decode_argmax(plan.config, token, idm_coarse, itime_coarse)
+    return plan.trees[itree].decode_argmax(token, idm_coarse, itime_coarse)
 
 
 def _test_grouper_tree_rebuild(config, plan, tuples):
@@ -151,7 +151,7 @@ def _test_grouper_tree_rebuild(config, plan, tuples):
 
     # Decoding through the rebuilt trees must agree exactly with the full plan.
     for (itree, token, idm, itout) in tuples:
-        assert (trees[itree].decode_argmax(cfg2, token, idm, itout)
+        assert (trees[itree].decode_argmax(token, idm, itout)
                 == _decode(plan, token, itree, idm, itout)), (itree, token)
 
     # Negative test: a missing per-tree key must throw (naming the key).

@@ -306,11 +306,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "    print(f'Plan has {plan.ntrees} trees')\n"
         "    for i, tree in enumerate(plan.trees):\n"
         "        print(f'Tree {i}: primary_tree_index={tree.primary_tree_index}, dm_range=[{tree.dm_min:.1f}, {tree.dm_max:.1f}]')")
-          .def(py::init([](const DedispersionConfig &config, bool cdd2_kernel_required) {
-                   DedispersionPlan::Params params;
-                   params.cdd2_kernel_required = cdd2_kernel_required;
-                   return std::make_shared<DedispersionPlan>(config, params);
-               }),
+          .def(py::init<const DedispersionConfig &, bool>(),
                py::arg("config"), py::arg("cdd2_kernel_required") = true,
                "Create a DedispersionPlan from a configuration.\n\n"
                "Args:\n"
@@ -379,8 +375,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    zones: Include the per-clag mega_ringbuf host/gpu zone breakdown\n\n"
                "Returns:\n"
                "    YAML string representation of the plan")
-          .def_property_readonly("cdd2_kernel_required",
-               [](const DedispersionPlan &self) { return self.params.cdd2_kernel_required; },
+          .def_readonly("cdd2_kernel_required", &DedispersionPlan::cdd2_kernel_required,
                "False if the plan was constructed as DedispersionPlan(config,\n"
                "cdd2_kernel_required=False): per-tree Dcore values are defaults rather than cdd2\n"
                "kernel-registry values, so the plan cannot be used in a GpuDedisperser. It can\n"

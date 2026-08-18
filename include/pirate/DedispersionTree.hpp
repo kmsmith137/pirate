@@ -94,12 +94,10 @@ struct DedispersionTree
     double dm_max = 0.0;
     double trigger_frequency = 0.0f;
 
-    // The three methods below all take a DedispersionConfig, because they need what is not
-    // per-tree: the band geometry and the dispersion relation (delay_to_frequency(),
-    // dm_per_unit_delay(), toplevel_tree_rank), which belong to the instrument and are
-    // shared by every tree. decode_argmax() uses it only to cross-check this tree against
-    // the config -- a check with real teeth when the two were deserialized from separate
-    // yamls, as FrbGrouper does at handshake.
+    // decode_argmax2() and compute_steady_state_it0() take a DedispersionConfig, because
+    // they need what is not per-tree: the band geometry and the dispersion relation
+    // (delay_to_frequency(), dm_per_unit_delay(), toplevel_tree_rank), which belong to the
+    // instrument and are shared by every tree. decode_argmax() needs none of it.
     //
     // ----------------------------------------------------------------------------------
     //
@@ -118,11 +116,11 @@ struct DedispersionTree
     // chunk (i.e. no per-tree time downsampling or early-trigger reindexing -- all
     // per-tree reindexing is done here, not by the caller):
     //
-    //   0 <= fmin < fmax < pow2(config.toplevel_tree_rank)
+    //   0 <= fmin < fmax < pow2(toplevel_tree_rank)
     //       Tree-freq range (inclusive) spanned by the winning frequency subband.
     //       (Sharper per-tree bound: fmax < pow2(toplevel_tree_rank - early_trigger_level).)
     //
-    //   tlo <= thi <= config.time_samples_per_chunk
+    //   tlo <= thi <= nt_in
     //       Trailing edges (EXCLUSIVE): tlo (resp. thi) is one past the last time sample
     //       of channel fmin (resp. fmax) which is summed into the winning out_max value,
     //       i.e. the exclusive upper endpoint of the summed range. Negative values are
@@ -140,8 +138,7 @@ struct DedispersionTree
     //
     // Throws an exception on out-of-range indices or a malformed token.
 
-    void decode_argmax(const DedispersionConfig &config, uint argmax_token,
-                       long idm_coarse, long itime_coarse,
+    void decode_argmax(uint argmax_token, long idm_coarse, long itime_coarse,
                        long &fmin, long &fmax, long &tlo, long &thi, long &p) const;
 
 

@@ -95,7 +95,7 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
     // A plan built without cdd2_kernel_required has default (non-registry) Dcore values,
     // which would not match the compiled cdd2 kernels. This also excludes incomplete plans
     // (which never set it), and those additionally lack the MegaRingbuf/kernel params below.
-    xassert(params.plan->params.cdd2_kernel_required);
+    xassert(params.plan->cdd2_kernel_required);
     xassert(params.stream_pool);
     xassert(params.cuda_device_id >= 0);
     xassert_eq(params.plan->num_active_batches, params.stream_pool->num_compute_streams);

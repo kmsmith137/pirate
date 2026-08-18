@@ -966,14 +966,14 @@ void register_core_bindings(pybind11::module &m)
                "        out_argmax tokens. Required (no default): DedispersionPlan and\n"
                "        pirate_frb.varmap want opposite values.")
           .def("decode_argmax",
-               [](const DedispersionTree &self, const DedispersionConfig &config, uint token,
+               [](const DedispersionTree &self, uint token,
                   long idm_coarse, long itime_coarse) {
                    long fmin, fmax, tlo, thi, p;
-                   self.decode_argmax(config, token, idm_coarse, itime_coarse,
+                   self.decode_argmax(token, idm_coarse, itime_coarse,
                                       fmin, fmax, tlo, thi, p);
                    return py::make_tuple(fmin, fmax, tlo, thi, p);
                },
-               py::arg("config"), py::arg("token"), py::arg("idm_coarse"), py::arg("itime_coarse"),
+               py::arg("token"), py::arg("idm_coarse"), py::arg("itime_coarse"),
                "Decode an out_argmax token into the winning trial parameters, for this tree.\n"
                "Returns (fmin, fmax, tlo, thi, p), TOPLEVEL-relative: tree-freq channels of the\n"
                "toplevel gridding, and full-resolution time samples with t=0 at the start of the\n"
@@ -1935,8 +1935,7 @@ void register_core_bindings(pybind11::module &m)
                    for (long i = 0; i < n; i++) {
                        long itree = itrees.data[i];
                        _check_itree(fname, itree, trees.size());
-                       trees[itree].decode_argmax(self.dedispersion_config, tokens.data[i],
-                                                  idms.data[i], itimes.data[i],
+                       trees[itree].decode_argmax(tokens.data[i], idms.data[i], itimes.data[i],
                                                   fmins.data[i], fmaxs.data[i], tlos.data[i],
                                                   this_.data[i], ps.data[i]);
                    }

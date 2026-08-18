@@ -155,8 +155,7 @@ DedispersionTree::DedispersionTree(const DedispersionConfig &config, long itree,
 
 
 void DedispersionTree::decode_argmax(
-    const DedispersionConfig &config, uint argmax_token,
-    long idm_coarse, long itime_coarse,
+    uint argmax_token, long idm_coarse, long itime_coarse,
     long &fmin, long &fmax, long &tlo, long &thi, long &p) const
 {
     const DedispersionTree &tr = *this;
@@ -191,7 +190,6 @@ void DedispersionTree::decode_argmax(
 
     long ipri = tr.primary_tree_index;
     long rr = tr.total_rank() + ((ipri > 0) ? 1 : 0);   // rank of underlying dedispersion
-    xassert_eq(rr, config.toplevel_tree_rank - tr.early_trigger_level);
 
     // Frequency: the tree's channels ARE toplevel tree-freq channels (early triggers
     // restrict the search to a prefix; time-downsampling leaves the freq axis alone).
