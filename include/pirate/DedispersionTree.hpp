@@ -94,6 +94,38 @@ struct DedispersionTree
     double dm_max = 0.0;
     double trigger_frequency = 0.0f;
 
+    // Throws if this tree disagrees with what 'config' implies.
+    //
+    // Intended for trees that were DESERIALIZED (from_yaml) rather than constructed, where
+    // the tree and the config travelled separately and could describe different instruments:
+    // FrbGrouper's handshake receives a config yaml and a plan yaml from the producer, and
+    // a variance-map file stores a config alongside per-tree records written at a different
+    // time. In both cases the tree is what SOME build derived from the config, so a
+    // disagreement means the deriving build and this one differ -- which no protocol-version
+    // check catches, since it is a change within a version.
+    //
+    // Compares every member the decode paths read: the ranks, nt_ds, nprofiles, ndm_out /
+    // ndm_wt / nt_out / nt_wt, the peak-finding downsampling factors, and the tree's
+    // (restricted) subband_counts.
+    //
+    // Two deliberate exclusions:
+    //
+    //   - 'Dcore' is NOT compared, because it is the producer's cdd2-registry value,
+    //     transcribed verbatim, and is exactly what lets decoding stay correct when the two
+    //     processes run different builds. A local rebuild would carry the placeholder
+    //     instead. Its standalone invariant IS checked (power of two dividing nt_ds/nt_out).
+    //   - dm_min / dm_max / trigger_frequency are display values, and round-trip lossily
+    //     through yaml, so an exact comparison would fail and a fuzzy one would prove
+    //     nothing.
+    //
+    // Note the FrequencySubbands tables (m_to_n, the n_to_* ranges, M, N) are not compared
+    // either: both sides rebuild them from subband_counts with the same code, so comparing
+    // them would test determinism rather than agreement. Comparing subband_counts is the
+    // meaningful check, since one side came off the wire and the other from the restriction
+    // rule.
+    void check_consistency(const DedispersionConfig &config) const;
+
+
     // decode_argmax2() and compute_steady_state_it0() take a DedispersionConfig, because
     // they need what is not per-tree: the band geometry and the dispersion relation
     // (delay_to_frequency(), dm_per_unit_delay(), toplevel_tree_rank), which belong to the

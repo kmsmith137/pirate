@@ -63,9 +63,9 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_,
     }
 
     // Per-tree geometry lives in the DedispersionTree constructor, which needs no plan and no
-    // GPU (see DedispersionTree.hpp). The trees are ordered by primary tree, then by
-    // decreasing early-trigger level; DedispersionConfig::num_dedispersion_trees() and the
-    // constructor's inverse mapping are the two halves of that enumeration.
+    // GPU (see DedispersionTree.hpp). The tree ORDERING is the config's -- see
+    // DedispersionConfig::num_dedispersion_trees() and its two companion mapping functions,
+    // which this loop and the tree constructor are the two users of.
     this->ntrees = config.num_dedispersion_trees();
 
     for (long itree = 0; itree < this->ntrees; itree++)

@@ -22,34 +22,6 @@ namespace pirate {
 // Constructor.
 
 
-// The DedispersionPlan constructor builds its trees by looping over primary trees, and within
-// each primary tree over DECREASING early-trigger level. This inverts that enumeration, so
-// that tree 'itree' can be built without building trees 0..itree-1.
-//
-// Must be kept consistent with DedispersionConfig::num_dedispersion_trees(), which is the
-// same sum without the inversion.
-static void _locate_tree(const DedispersionConfig &config, long itree,
-                         long *ipri_out, long *et_level_out)
-{
-    xassert_ge(itree, 0);
-
-    long i = itree;
-    for (long ipri = 0; ipri < config.num_primary_trees(); ipri++) {
-        long n = config.primary_trees.at(ipri).num_early_triggers + 1;
-        if (i < n) {
-            *ipri_out = ipri;
-            *et_level_out = n - 1 - i;   // et_level descends within a primary tree
-            return;
-        }
-        i -= n;
-    }
-
-    throw runtime_error("DedispersionTree: itree=" + to_string(itree) + " is out of range;"
-                        " this config has " + to_string(config.num_dedispersion_trees())
-                        + " dedispersion trees");
-}
-
-
 // Note: assumes config.validate() has been called (DedispersionPlan's constructor calls it,
 // and DedispersionConfig::from_yaml() calls it). Several asserts below -- in particular the
 // power-of-two checks on the peak-finding downsampling factors -- are only meaningful for a
@@ -58,7 +30,7 @@ DedispersionTree::DedispersionTree(const DedispersionConfig &config, long itree,
                                    bool Dcore_from_cdd2_registry)
 {
     long ipri, et_level;
-    _locate_tree(config, itree, &ipri, &et_level);
+    config.locate_dedispersion_tree(itree, &ipri, &et_level);
 
     // Note that stage1_dd_rank can be different for downsampled trees vs the
     // non-downsampled tree, but is the same for different downsampled trees.
@@ -135,6 +107,101 @@ DedispersionTree::DedispersionTree(const DedispersionConfig &config, long itree,
     this->dm_min = dm0 * ((ipri > 0) ? pow2(ipri-1) : 0);
     this->dm_max = dm0 * pow2(ipri);
     this->trigger_frequency = fmin;
+}
+
+
+// -------------------------------------------------------------------------------------------
+//
+// check_consistency(). See the doc-comment in DedispersionTree.hpp.
+
+
+void DedispersionTree::check_consistency(const DedispersionConfig &config) const
+{
+    const string where = "DedispersionTree::check_consistency";
+
+    long itree = config.dedispersion_tree_index(this->primary_tree_index,
+                                                this->early_trigger_level);
+    DedispersionTree ref(config, itree, /*Dcore_from_cdd2_registry=*/ false);
+
+    // Context prefix, so a failure names WHICH tree without the caller having to.
+    stringstream ctx;
+    ctx << where << ": tree " << itree << " (primary_tree_index=" << this->primary_tree_index
+        << ", early_trigger_level=" << this->early_trigger_level << "): ";
+
+    auto cmp = [&](const char *name, long got, long expected) {
+        if (got == expected)
+            return;
+        stringstream ss;
+        ss << ctx.str() << name << " is " << got << " from the deserialized tree but "
+           << expected << " when rebuilt from the config. The config and the tree describe"
+           " different instruments -- most likely the producer and this process are running"
+           " pirate_frb builds whose dedispersion-tree geometry differs, or mismatched"
+           " config/plan yamls were sent.";
+        throw runtime_error(ss.str());
+    };
+
+    cmp("amb_rank", this->amb_rank, ref.amb_rank);
+    cmp("dd_rank", this->dd_rank, ref.dd_rank);
+    cmp("nt_ds", this->nt_ds, ref.nt_ds);
+    cmp("nprofiles", this->nprofiles, ref.nprofiles);
+    cmp("ndm_out", this->ndm_out, ref.ndm_out);
+    cmp("ndm_wt", this->ndm_wt, ref.ndm_wt);
+    cmp("nt_out", this->nt_out, ref.nt_out);
+    cmp("nt_wt", this->nt_wt, ref.nt_wt);
+
+    // The peak-finding factors. Note {dm,time}_downsampling may be 0 in the config and are
+    // auto-filled by the tree constructor, so this is where a change to that rule surfaces.
+    cmp("pf.max_width", this->pf.max_width, ref.pf.max_width);
+    cmp("pf.dm_downsampling", this->pf.dm_downsampling, ref.pf.dm_downsampling);
+    cmp("pf.time_downsampling", this->pf.time_downsampling, ref.pf.time_downsampling);
+    cmp("pf.wt_dm_downsampling", this->pf.wt_dm_downsampling, ref.pf.wt_dm_downsampling);
+    cmp("pf.wt_time_downsampling", this->pf.wt_time_downsampling, ref.pf.wt_time_downsampling);
+
+    // The tree's RESTRICTED subband counts: restrict_subband_counts() is the most intricate
+    // derivation in the tree, and drift in it would silently reinterpret every subband.
+    // (The FrequencySubbands tables derived from these are deliberately not compared -- both
+    // sides rebuild them from the counts with the same code.)
+    const vector<long> &sc = this->frequency_subbands.subband_counts;
+    const vector<long> &sc_ref = ref.frequency_subbands.subband_counts;
+
+    if (sc != sc_ref) {
+        auto str = [](const vector<long> &v) {
+            stringstream ss;
+            ss << "[";
+            for (size_t i = 0; i < v.size(); i++)
+                ss << (i ? ", " : "") << v[i];
+            ss << "]";
+            return ss.str();
+        };
+        stringstream ss;
+        ss << ctx.str() << "frequency_subband_counts are " << str(sc) << " from the"
+           " deserialized tree but " << str(sc_ref) << " when rebuilt from the config"
+           " (FrequencySubbands::restrict_subband_counts of the config's toplevel counts)."
+           " The config and the tree describe different instruments -- most likely the"
+           " producer and this process are running pirate_frb builds whose subband"
+           " restriction rule differs, or mismatched config/plan yamls were sent.";
+        throw runtime_error(ss.str());
+    }
+
+    // 'Dcore' is deliberately NOT compared: it is the producer's cdd2-registry value, and
+    // 'ref' carries the placeholder. Check its standalone invariant instead -- it is
+    // otherwise the one member nothing constrains, and it sets the token time granularity
+    // (decode_argmax() uses dt = min(Dcore, 2^lpf) and requires t % dt == 0). See
+    // PeakFindingKernelParams::Dcore: a power of two dividing (nt_in / nt_out), where the
+    // kernel's nt_in is this tree's nt_ds.
+    long Dout = this->nt_ds / this->nt_out;
+
+    if ((this->nt_out <= 0) || (this->nt_ds != Dout * this->nt_out) ||
+        (this->Dcore <= 0) || !is_power_of_two(this->Dcore) || (Dout % this->Dcore != 0)) {
+        stringstream ss;
+        ss << ctx.str() << "Dcore=" << this->Dcore << " is not a power of two dividing"
+           << " nt_ds/nt_out = " << this->nt_ds << "/" << this->nt_out << ". Dcore is the"
+           " producer's cdd2-registry value and is adopted verbatim (it is not re-derived"
+           " here, which is what lets decoding work across builds), so this is the only"
+           " check on it -- and a wrong Dcore mis-decodes the fine-time field of every"
+           " out_argmax token.";
+        throw runtime_error(ss.str());
+    }
 }
 
 

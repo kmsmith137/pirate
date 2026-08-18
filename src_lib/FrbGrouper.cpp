@@ -553,6 +553,13 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
         nt_out.push_back(dedispersion_trees.at(t).nt_out);
     }
 
+    // The config yaml and the plan yaml arrive as separate strings, and from_yaml() adopts
+    // the producer's per-tree values verbatim without re-deriving anything -- so nothing so
+    // far has established that the two describe the same instrument. Check it once here,
+    // rather than per decoded event.
+    for (const DedispersionTree &t: dedispersion_trees)
+        t.check_consistency(dedispersion_config);
+
     // Geometry cross-checks (defensive).
     num_batch_slots = hs.num_batch_slots();
     initial_chunk = hs.initial_chunk();   // producer's GpuDedisperser::Params::initial_chunk

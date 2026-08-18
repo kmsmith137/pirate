@@ -275,6 +275,20 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Number of DedispersionTrees (= sum over primary trees of num_early_triggers+1).\n"
                "Same as DedispersionPlan.ntrees, and the range of the 'itree' argument to the\n"
                "DedispersionTree constructor -- but unlike DedispersionPlan, needs no GPU.")
+          .def("locate_dedispersion_tree",
+               [](const DedispersionConfig &self, long itree) {
+                   long ipri, et_level;
+                   self.locate_dedispersion_tree(itree, &ipri, &et_level);
+                   return py::make_tuple(ipri, et_level);
+               },
+               py::arg("itree"),
+               "Returns (primary_tree_index, early_trigger_level) for tree 'itree'. Trees are\n"
+               "ordered by primary tree, then by DECREASING early-trigger level. Throws if\n"
+               "itree is out of range.")
+          .def("dedispersion_tree_index", &DedispersionConfig::dedispersion_tree_index,
+               py::arg("primary_tree_index"), py::arg("early_trigger_level"),
+               "Inverse of locate_dedispersion_tree(): returns 'itree'. Throws if either\n"
+               "argument is out of range.")
           // GPU configuration
           .def_readwrite("beams_per_gpu", &DedispersionConfig::beams_per_gpu,
                "Number of beams processed per GPU")

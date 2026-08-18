@@ -149,6 +149,12 @@ def _test_grouper_tree_rebuild(config, plan, tuples):
         assert list(fs2.subband_counts) == list(fs1.subband_counts), f"tree {itree}: subband_counts"
         assert (fs2.N, fs2.M) == (fs1.N, fs1.M), f"tree {itree}: fs.N/M"
 
+    # Every rebuilt tree must agree with the config it travelled with. This is the check
+    # FrbGrouper runs at handshake; here it covers the passing path on random configs,
+    # without needing a server.
+    for t in trees:
+        t.check_consistency(cfg2)
+
     # Decoding through the rebuilt trees must agree exactly with the full plan.
     for (itree, token, idm, itout) in tuples:
         assert (trees[itree].decode_argmax(token, idm, itout)

@@ -965,6 +965,14 @@ void register_core_bindings(pybind11::module &m)
                "        pf.time_downsampling -- appropriate for callers which do not decode\n"
                "        out_argmax tokens. Required (no default): DedispersionPlan and\n"
                "        pirate_frb.varmap want opposite values.")
+          .def("check_consistency", &DedispersionTree::check_consistency, py::arg("config"),
+               "Throws if this tree disagrees with what 'config' implies.\n\n"
+               "For a tree that was DESERIALIZED (from_yaml_string) rather than constructed,\n"
+               "where the tree and the config travelled separately and could describe\n"
+               "different instruments. Compares every member the decode paths read; does NOT\n"
+               "compare 'Dcore' (the producer's cdd2-registry value, adopted verbatim) except\n"
+               "to check its standalone invariant, nor dm_min/dm_max/trigger_frequency (which\n"
+               "round-trip lossily through yaml).")
           .def("decode_argmax",
                [](const DedispersionTree &self, uint token,
                   long idm_coarse, long itime_coarse) {
