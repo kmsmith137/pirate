@@ -22,9 +22,16 @@ deleting the old code, and they go away with it.
 
 The test_factored_* tests establish that ``A = Q @ mid @ W.T`` is what the map reports
 through every accessor, and that the representation survives a file. They say NOTHING about
-whether a factorization is any good, and they deliberately do not check that
-``Q_is_semiorthogonal`` or ``pinned_columns`` are truthful -- VarianceMap carries those
-rather than enforcing them, since only the steps that establish them can verify them.
+whether a factorization is any good: a hand-built map may claim to be semiorthogonal or to have
+a pinned column and be neither, because the constructor carries those claims rather than
+verifying them.
+
+Whether a factorization is any good is what the test_svd / test_column_algebra /
+test_reorthogonalize / test_basis_constructors / test_map_steps group is for, and there the
+claims ARE checked -- numerically, against the matrices they describe, rather than read back
+out of the object that set them. test_map_steps additionally pins the map-level steps to
+varmap.lp bitwise, which is what makes lp.py's one-time equivalence gate a gate on the wrappers
+too.
 
 The test_lp_* tests check varmap.lp against things OTHER than itself wherever they can: the
 Q-step's optimality against brute-force vertex enumeration, the free LP against the bounded
@@ -1779,6 +1786,519 @@ def test_lp_building_blocks():
                  ' the majorizer accumulated per group')
 
 
+####################################   factorizations (section 8)   ####################################
+#
+# These check the methods that CHOOSE a factorization. Two things they are careful about:
+#
+#   - the semiorthogonality flags are CLAIMS, so the tests verify them numerically rather than
+#     reading them back. A flag the class sets and the tests only echo would be worth nothing.
+#   - the pinned column is checked for the property it exists for (it is nonnegative, and it
+#     dominates every group) rather than for its index, since every failure mode that has
+#     actually been seen is a lost or rotated column rather than a lost integer.
+
+
+def _basis_cell(r=6, subband_counts=(1, 1), L=None, seed=17, nzero=1):
+    """(coarse ref, fine map, rng) at a small but REAL geometry -- the label arithmetic and the
+    coarse-graining are half of what the steps have to get right."""
+
+    config = _make_test_config(r, list(subband_counts))
+    rng = np.random.default_rng(seed)
+    fine = _random_map(config, 0, rng, nzero=nzero)
+    L = (fine.pf_rank + 1) if (L is None) else L
+    return fine.coarse_grain(L), fine, rng
+
+
+def _decaying_map(r=6, subband_counts=(1, 1), K=8, seed=19):
+    """A coarse map whose spectrum DECAYS, built as a nonnegative low-rank product plus noise.
+
+    _random_map()'s iid matrix has a nearly flat spectrum, which is the worst case for any
+    low-rank method and tells a randomized range finder nothing. A real variance map is not
+    like that, so anything comparing an approximate SVD against an exact one needs this instead.
+    """
+
+    config = _make_test_config(r, list(subband_counts))
+    rng = np.random.default_rng(seed)
+    fine = _random_map(config, 0, rng)
+    nbeta, nfreq = fine.coarse_grain(fine.pf_rank + 1).shape
+
+    s = 2.0 ** (-np.arange(K))
+    A = (rng.uniform(0.2, 1.0, size=(nbeta, K)) * s) @ rng.uniform(0.2, 1.0, size=(K, nfreq))
+    A += 1e-6 * rng.uniform(0.0, 1.0, size=A.shape)
+    coarse = fine.coarse_grain(fine.pf_rank + 1)
+    return coarse.replace(A=A, history_record=dict(step='synthetic'))
+
+
+def test_svd(r=6, subband_counts=(1, 1), K=5):
+    """svd() and truncate(): the dense path against numpy, the factored path against the dense
+    one, and the flags against the matrices they describe."""
+
+    ref, fine, rng = _basis_cell(r, subband_counts)
+    A = np.asarray(ref.dense(), dtype=np.float64)
+    U, s, Vt = np.linalg.svd(A, full_matrices=False)
+
+    m = ref.svd(K)
+    assert m.is_factored and (m.factor_rank == K)
+    assert not m.is_admissible, 'a truncated SVD has an admissibility cliff and must say so'
+    assert np.allclose(m.dense(), U[:, :K] @ np.diag(s[:K]) @ Vt[:K])
+    # The flags are claims; verify them rather than echoing them.
+    assert m.Q_is_semiorthogonal and m.W_is_semiorthogonal
+    for X in (np.asarray(m.Q), np.asarray(m.W)):
+        assert np.max(np.abs(X.T @ X - np.eye(K))) < 1e-12
+    assert np.allclose(np.asarray(m.mid), np.diag(np.diag(np.asarray(m.mid))))
+
+    # 'eps' drops modes below a relative floor, and factor_rank and eps compose.
+    frac = s[K-1] / s[0]
+    assert ref.svd(K, eps=0.5 * frac).factor_rank == K
+    assert ref.svd(K, eps=1.5 * frac).factor_rank < K
+    assert ref.svd(eps=1.0e-13).factor_rank <= min(A.shape)
+    for bad in (lambda: ref.svd(), lambda: ref.svd(0)):
+        try:
+            bad()
+            raise AssertionError('svd() should refuse this')
+        except RuntimeError:
+            pass
+
+    # THE FACTORED PATH IS A DIFFERENT ALGORITHM -- two thin QRs and a K-by-K SVD, with no dense
+    # product anywhere -- so agreeing with the dense one is a real check and not a tautology.
+    # This is the rank-reduction path, and it is the reason svd() is a method at all.
+    hi = ref.svd(3 * K).canonicalize_signs()
+    dense_hi = hi.replace(A=hi.dense(), history_record=dict(step='densify'))
+    lo_f, lo_d = hi.svd(K), dense_hi.svd(K)
+    scale = float(np.abs(np.asarray(dense_hi.A)).max())
+    assert np.max(np.abs(lo_f.dense() - lo_d.dense())) < 1e-12 * scale
+    assert np.max(np.abs(np.asarray(lo_f.W).T @ np.asarray(lo_f.W) - np.eye(K))) < 1e-12
+
+    # shape_normalize decomposes the unit-sum SHAPES and folds the row sums back into Q, which
+    # is exactly why Q is then NOT semiorthogonal and truncate() refuses the result.
+    S = A / ref.row_sums()[:, None]
+    Us, ss, Vst = np.linalg.svd(S, full_matrices=False)
+    sn = ref.svd(K, shape_normalize=True)
+    assert np.allclose(sn.dense(), ref.row_sums()[:, None] * (Us[:, :K] @ np.diag(ss[:K])
+                                                             @ Vst[:K]))
+    assert (not sn.Q_is_semiorthogonal) and sn.W_is_semiorthogonal
+    # The default is 'choose by rank', at the measured crossover.
+    assert ref.svd(VarianceMap._SHAPE_NORMALIZE_RANK).history[-1]['shape_normalize']
+    assert not ref.svd(K).history[-1]['shape_normalize']
+
+    # The randomized range finder: three blocked passes, nothing of matrix size in memory. It is
+    # approximate, so it is checked on a map whose spectrum actually decays.
+    dec = _decaying_map(r, subband_counts)
+    ex = dec.svd(K, method='exact', shape_normalize=False)
+    rd = dec.svd(K, method='randomized', shape_normalize=False, rng=np.random.default_rng(5))
+    err = (np.linalg.norm(rd.dense() - ex.dense()) / np.linalg.norm(np.asarray(ex.dense())))
+    assert err < 1e-3, err
+    assert np.max(np.abs(np.asarray(rd.W).T @ np.asarray(rd.W) - np.eye(K))) < 1e-10
+
+    # truncate() is the SVD's own prefix, so it must agree with asking svd() for that rank.
+    t = m.truncate(2)
+    assert (t.factor_rank == 2) and (not t.is_admissible)
+    assert np.allclose(t.dense(), ref.svd(2, shape_normalize=False).dense())
+    assert t.Q_is_semiorthogonal and t.W_is_semiorthogonal
+
+    # ... and it refuses whenever "leading" is not a property of the column order, rather than
+    # quietly returning a prefix of an arbitrary basis.
+    for bad, needle in ((sn, 'semiorthogonal'),
+                        (m.replace(mid=np.asarray(m.mid) + 0.1,
+                                   Q_is_semiorthogonal=True, W_is_semiorthogonal=True),
+                         'not diagonal'),
+                        (m.replace(pinned_columns=[K-1], Q_is_semiorthogonal=True,
+                                   W_is_semiorthogonal=True), 'pinned column')):
+        try:
+            bad.truncate(2)
+            raise AssertionError(f'truncate() should have refused ({needle})')
+        except RuntimeError as e:
+            assert needle in str(e), str(e)
+
+    try:
+        ref.svd(K).replace(A=ref.dense()).truncate(2)
+        raise AssertionError('truncate() should refuse a dense map')
+    except RuntimeError as e:
+        assert 'dense' in str(e), str(e)
+
+    atomic_print(f'    test_svd(r={r}, K={K}): dense path matches numpy, factored path matches'
+                 f' the dense one to {np.max(np.abs(lo_f.dense() - lo_d.dense()))/scale:.2g},'
+                 f' randomized to {err:.2g} relative')
+
+
+def test_column_algebra(r=6, subband_counts=(1, 1), K=5):
+    """The column helpers, each against the property it exists for."""
+
+    from .basis import basis_envelope_column
+
+    ref, fine, rng = _basis_cell(r, subband_counts)
+    raw = ref.svd(K)
+    A0 = np.array(raw.dense())
+
+    # THE MEASURED FAILURE MODE: numpy's per-mode sign is arbitrary, so a raw SVD basis has zero
+    # nonnegative columns and everything that needs one fails. Canonicalization is exactly
+    # invariant -- a sign flip is exact in floating point -- so there is never a reason to skip
+    # it, and this asserts the invariance bitwise rather than to a tolerance.
+    can = raw.canonicalize_signs()
+    assert np.array_equal(can.dense(), A0), 'canonicalize_signs() is not bitwise invariant'
+    assert np.all(np.asarray(can.W).sum(axis=0) >= 0.0)
+    assert can.n_nonneg_cols() >= 1 and (raw.n_nonneg_cols() == 0)
+    assert can.Q_is_semiorthogonal and can.W_is_semiorthogonal
+    assert can.canonicalize_signs().history[-1]['n_flipped'] == 0, 'not idempotent'
+
+    # rescale_columns() is provably inert and is measured to be worth up to 1.49x anyway; what a
+    # test can check is the inertness and where the scale went.
+    rs = can.rescale_columns()
+    assert np.allclose(np.linalg.norm(np.asarray(rs.W), axis=0), 1.0)
+    assert np.max(np.abs(rs.dense() - A0)) < 1e-12 * np.abs(A0).max()
+    assert np.array_equal(np.asarray(rs.Q), np.asarray(can.Q)), 'the scale belongs in mid'
+    assert rs.Q_is_semiorthogonal and (not rs.W_is_semiorthogonal)
+    try:
+        can.rescale_columns(mode='sum')
+        raise AssertionError('rescale_columns() should refuse an unmeasured convention')
+    except RuntimeError as e:
+        assert 'not implemented' in str(e), str(e)
+
+    # A pinned column is a certificate: nonnegative, and dominating every group. Check the
+    # property, not the bookkeeping.
+    w = basis_envelope_column(ref)
+    assert np.all(np.asarray(ref.dense()) <= w[None, :] + 1e-15)
+    assert np.allclose(w, np.asarray(ref.dense()).max(axis=0))
+
+    pin = can.pin_column(w)
+    assert (pin.factor_rank == K) and (list(pin.pinned_columns) == [0])
+    assert np.array_equal(np.asarray(pin.W)[:, 0], w) and (pin.n_nonneg_cols() >= 1)
+    assert not pin.is_admissible, 'replacing a column changes the product'
+    grow = can.pin_column(w, replace_last=False)
+    assert (grow.factor_rank == K + 1) and np.array_equal(grow.dense(), A0), \
+        'appending a column with a zero coefficient must be bitwise inert'
+
+    for bad in (-np.abs(w), np.zeros_like(w), w[:-1]):
+        try:
+            can.pin_column(bad)
+            raise AssertionError('pin_column() should refuse this w')
+        except RuntimeError:
+            pass
+
+    # Pinned indices are REMAPPED, never carried: dropping a column shifts every index above it,
+    # and the resulting mis-pin is silent until a repair goes looking for its nonnegative column.
+    two = pin.pin_column(w, replace_last=False)              # pins at 0 and 1
+    assert list(two.pinned_columns) == [0, 1]
+    sel = two.select_columns([3, 1, 0])
+    assert (sel.factor_rank == 3) and (list(sel.pinned_columns) == [2, 1])
+    assert np.allclose(sel.dense(), np.asarray(two.Q)[:, [3, 1, 0]]
+                       @ np.asarray(two.mid)[np.ix_([3, 1, 0], [3, 1, 0])]
+                       @ np.asarray(two.W)[:, [3, 1, 0]].T)
+    assert not sel.is_admissible
+    try:
+        two.select_columns([1, 2, 3])
+        raise AssertionError('select_columns() should refuse to drop a pinned column')
+    except RuntimeError as e:
+        assert 'pinned column' in str(e), str(e)
+
+    # augment_basis() appends with zero coefficients, so the product is bitwise unchanged and
+    # an admissible map stays admissible; pinned indices need no remap, since appending shifts
+    # nothing.
+    base = can.replace(is_admissible=True).pin_column(w, replace_last=False)
+    assert base.is_admissible, 'a zero-coefficient append cannot break admissibility'
+    aug = base.augment_basis(np.asarray(can.W)[:, :2])
+    assert aug.factor_rank == base.factor_rank + 2
+    assert np.array_equal(aug.dense(), base.dense())
+    assert aug.is_admissible and (list(aug.pinned_columns) == [0])
+
+    # with_basis() takes a W from anywhere and hands back something ready for a qstep().
+    wb = ref.with_basis(np.asarray(can.W), pinned_columns=[0])
+    assert wb.is_factored and (not wb.is_admissible)
+    assert np.count_nonzero(np.asarray(wb.Q)) == 0
+    assert np.array_equal(np.asarray(wb.W), np.asarray(can.W))
+
+    atomic_print(f'    test_column_algebra(r={r}, K={K}): sign canonicalization bitwise inert'
+                 f' ({raw.n_nonneg_cols()} -> {can.n_nonneg_cols()} nonnegative columns),'
+                 ' column scaling inert, pinned indices remapped')
+
+
+def test_reorthogonalize(r=6, subband_counts=(1, 1), K=6):
+    """reorthogonalize(): the same matrix, a semiorthogonal W, and the pinned column intact.
+
+    The last is the whole reason for the ordered QR. A plain rotation destroys the nonnegative
+    column that the seed and the additive repair depend on, which is measured at 1.769x in D and
+    is reproduced here on purpose.
+    """
+
+    from .basis import basis_envelope_column
+
+    ref, fine, rng = _basis_cell(r, subband_counts)
+    w = basis_envelope_column(ref)
+    m = ref.svd(K).canonicalize_signs().pin_column(w).replace(is_admissible=True)
+    A0 = np.array(m.dense())
+    scale = float(np.abs(A0).max())
+
+    ro = m.reorthogonalize()
+    assert ro.factor_rank == K
+    assert np.max(np.abs(ro.dense() - A0)) < 1e-12 * scale, 'the re-expression must be exact'
+    assert ro.W_is_semiorthogonal and (not ro.Q_is_semiorthogonal)
+    Wr = np.asarray(ro.W)
+    assert np.max(np.abs(Wr.T @ Wr - np.eye(K))) < 1e-12
+    assert ro.is_admissible, 'nothing changed but the factorization'
+
+    # The first pinned column comes through as a POSITIVE multiple of itself -- so it is still
+    # nonnegative and q = c e_0 still certifies every group -- but it is rescaled to unit norm,
+    # so an equality test against the envelope column would fail and a direction test is right.
+    c0 = Wr[:, 0]
+    assert list(ro.pinned_columns) == [0]
+    assert np.max(np.abs(c0 / np.linalg.norm(c0) - w / np.linalg.norm(w))) < 1e-12
+    assert (c0.min() >= 0.0) and (ro.n_nonneg_cols() >= 1)
+
+    # The guarantee is about the ORDERING, so it has to be tested with the pin somewhere other
+    # than column 0, where a plain QR would preserve it by accident.
+    moved = m.select_columns([1, 2, 0, 3, 4, 5])
+    assert list(moved.pinned_columns) == [2]
+    kept = np.asarray(moved.reorthogonalize().W)[:, 0]
+    assert np.max(np.abs(kept/np.linalg.norm(kept) - w/np.linalg.norm(w))) < 1e-12
+
+    # keep_pinned=False is a plain rotation in the columns' own order. It DROPS the pinned set,
+    # and the pinned column does not survive it in any position -- which is the arm of the
+    # comparison that has never been measured, and the reason the flag exists at all.
+    plain = moved.reorthogonalize(keep_pinned=False)
+    assert plain.pinned_columns.size == 0
+    assert np.max(np.abs(plain.dense() - moved.dense())) < 1e-12 * scale
+    Wp = np.asarray(plain.W)
+    wn = w / np.linalg.norm(w)
+    assert not any(np.max(np.abs(Wp[:, c]/np.linalg.norm(Wp[:, c]) - wn)) < 1e-8
+                   for c in range(Wp.shape[1])), 'the plain rotation kept the pinned column'
+
+    atomic_print(f'    test_reorthogonalize(r={r}, K={K}): exact to'
+                 f' {np.max(np.abs(ro.dense()-A0))/scale:.2g}, pinned column preserved up to a'
+                 ' positive scale, and lost by the plain rotation')
+
+
+def test_basis_constructors(r=6, subband_counts=(1, 1), K=4):
+    """Every module-level basis constructor, through the one thing they are all for: a Q-step
+    against it produces an admissible map."""
+
+    from . import basis as vb
+
+    ref, fine, rng = _basis_cell(r, subband_counts)
+    A = np.asarray(ref.dense())
+
+    W_svd = vb.basis_svd(ref, K)
+    assert np.array_equal(W_svd, np.asarray(ref.svd(K).W))
+
+    tree = vb.greedy_envelope_tree(ref)
+    W_greedy = vb.basis_greedy_envelope(ref, K, tree=tree)
+    assert np.array_equal(W_greedy, vb.basis_greedy_envelope(ref, K)), 'tree reuse changed it'
+    # Every atom is a max-envelope of a set of the map's own rows, hence nonnegative and >= each
+    # of its members. At rank 1 there is only one cluster, so the atom is the envelope of the
+    # whole map -- of the unit-sum SHAPES by default, which is the difference 'on_shapes' makes
+    # and the reason it is the default (the Q-step is exactly scale-invariant in each atom).
+    assert W_greedy.min() >= 0.0
+    S = A / A.sum(axis=1)[:, None]
+    assert np.allclose(vb.basis_greedy_envelope(ref, 1, tree=tree)[:, 0], S.max(axis=0))
+    assert np.allclose(vb.basis_greedy_envelope(ref, 1, on_shapes=False)[:, 0], A.max(axis=0))
+
+    # THE REDUCED FORM'S WHOLE TRICK: the merge objective is summed over the FINE rows inside
+    # each cluster, so groups enter weighted by their SIZE. Getting that wrong -- one unit of
+    # weight per group -- is silent, since it still returns a plausible basis, so it is checked
+    # against the same clustering run group-blind. Group sizes differ by 2^l across subbands
+    # here, which is what makes the two answers differ at all.
+    A_sh = A / A.sum(axis=1)[:, None]
+    lab = ref.alpha_to_beta_block(0, ref.nalpha)
+    keep = np.asarray(ref.y_true) >= YTRUE_FLOOR
+    flat = vb._AgglomerativeEnvelope(A_sh, np.ones(ref.nbeta),
+                                     np.arange(ref.nbeta, dtype=np.int64))
+    sized = vb._AgglomerativeEnvelope(A_sh, np.ones(int(keep.sum())), lab[keep])
+    assert np.allclose(sized.basis(K), W_greedy), 'the default tree is not the sized one'
+    assert not np.allclose(flat.basis(K), W_greedy), \
+        'this cell no longer distinguishes size-weighted merging from group-blind merging'
+
+    W_qr = vb.basis_pivoted_qr(ref, K)
+    # Its atoms are literally rows of the map, which is where the nonnegativity comes from.
+    for c in range(K):
+        assert np.any(np.all(np.abs(A - W_qr[:, c][None, :]) < 1e-15, axis=1)), c
+
+    W_rand = vb.basis_random(ref, K, rng=np.random.default_rng(7))
+    assert (W_rand.shape == (ref.nfreq, K)) and (W_rand.min() >= 0.0)
+
+    D = {}
+    for name, W in (('svd', W_svd), ('greedy', W_greedy), ('pivoted_qr', W_qr),
+                    ('random', W_rand)):
+        m = ref.with_basis(W).canonicalize_signs().qstep(ref, workers=1)
+        assert m.is_admissible, name
+        assert m.measure_admissibility(ref).admissible, name
+        D[name] = m.get_distance()
+
+    # svd_init() is exactly the chain it documents, so it must reproduce it call for call.
+    chain = ref.svd(K).canonicalize_signs().rescale_columns().qstep(ref, workers=1)
+    made = vb.svd_init(ref, K, workers=1)
+    assert np.array_equal(np.asarray(made.Q), np.asarray(chain.Q))
+    assert np.array_equal(np.asarray(made.W), np.asarray(chain.W))
+    pinned = vb.svd_init(ref, K, pin_envelope=True, workers=1)
+    assert (pinned.factor_rank == K) and (list(pinned.pinned_columns) == [0])
+    assert pinned.is_admissible
+
+    # The cheap predictors, against their own definitions rather than against an LP.
+    assert vb.spectrum_effective_rank(ref, threshold=1.0) == 1
+    assert vb.spectrum_effective_rank(ref, threshold=0.0) >= 1
+    cover = vb.shape_cover_statistic(ref, ref)
+    # Every group covers itself exactly, so the self-cover is 1 and the statistic is calibrated.
+    assert np.allclose(cover, 1.0), cover.max()
+
+    atomic_print('    test_basis_constructors(K=%d): four bases, all admissible after a Q-step;'
+                 ' D = %s' % (K, ', '.join(f'{k} {v:.4g}' for k, v in D.items())))
+
+
+def test_map_steps(r=6, subband_counts=(1, 1), K=5):
+    """qstep() / wstep() / repair(): the wrappers against the array level they wrap.
+
+    The numerics are varmap.lp's and are tested there. What is tested here is everything the
+    wrapper adds and could get wrong: the reference matrix, the labels, folding 'mid', the
+    pinned set, and where is_admissible comes from.
+    """
+
+    from . import lp
+    from .basis import basis_envelope_column
+
+    ref, fine, rng = _basis_cell(r, subband_counts)
+    Abar = np.asarray(ref.dense(), dtype=np.float64)
+    init = (ref.svd(K).canonicalize_signs().pin_column(basis_envelope_column(ref)))
+    W0, Q0 = np.asarray(init.W, dtype=np.float64), np.asarray(init.Q, dtype=np.float64)
+
+    # The one-hot seed is admissible BY CONSTRUCTION, which is what makes it a usable fallback
+    # for a failed subproblem: one nonnegative atom per group, scaled until it dominates. It
+    # must not depend on where the scale is kept, so a non-identity mid gives the same map.
+    sd = init.seed_onehot(ref)
+    assert sd.is_admissible and sd.measure_admissibility(ref).admissible
+    assert np.all(np.count_nonzero(np.asarray(sd.Q), axis=1) == 1), 'not one-hot'
+    assert abs(init.rescale_columns().seed_onehot(ref).get_distance()
+               - sd.get_distance()) < 1e-12 * sd.get_distance()
+    try:
+        ref.svd(K).seed_onehot(ref)
+        raise AssertionError('seed_onehot() needs a nonnegative column')
+    except RuntimeError as e:
+        assert 'no nonnegative column' in str(e), str(e)
+
+    # BIT-IDENTICAL to the array level, which is what makes lp.py's equivalence gate a gate on
+    # this too. Anything the wrapper assembled wrongly -- the reference, the seed, the config --
+    # shows up here as a difference rather than as a plausible number.
+    cq = lp.LpConfig.for_qstep(nonneg=False)
+    m = init.qstep(ref, cfg=cq, workers=1)
+    Q, W, _ = lp.q_step(Abar, W0, cq, Q0=Q0, workers=1)
+    assert np.array_equal(np.asarray(m.Q), Q) and np.array_equal(np.asarray(m.W), W)
+    assert m.is_admissible and (m.factor_rank == K)
+    assert m._mid_is_identity(), 'the LP chooses the coefficients outright'
+    assert list(m.pinned_columns) == [0]
+    assert (not m.Q_is_semiorthogonal) and m.measure_admissibility(ref).admissible
+
+    rec = m.history[-1]
+    assert (rec['step'] == 'qstep') and (rec['config'] == cq)
+    assert abs(rec['D'] - m.get_distance()) < 1e-15
+
+    # 'mid' is folded into Q on the way down, since lp works in the mid-free convention. A map
+    # and its folded equivalent must therefore give the identical step.
+    scaled = init.rescale_columns()
+    assert not scaled._mid_is_identity()
+    folded = scaled.replace(Q=scaled._QM(), mid=None, W=np.asarray(scaled.W),
+                            history_record=dict(step='fold'))
+    assert np.array_equal(np.asarray(scaled.qstep(ref, cfg=cq, workers=1).Q),
+                          np.asarray(folded.qstep(ref, cfg=cq, workers=1).Q))
+
+    # is_admissible is INHERITED, not asserted: admissibility is transitive, so an uncertified
+    # reference certifies nothing however well the LP solved.
+    loose = ref.replace(is_admissible=False, history_record=dict(step='uncertify'))
+    assert not init.qstep(loose, cfg=cq, workers=1).is_admissible
+    assert not init.qstep(ref, cfg=cq, repair=False, workers=1).is_admissible
+
+    # ... and it must come from the CONFIG too, not from the repair= kwarg alone: the three
+    # repair stages are config fields, so a config selecting none of them repairs nothing
+    # however the kwarg is set, and a map claiming to dominate the reference after nothing was
+    # done to it is the one error the one-sided distance exists to prevent.
+    craw = lp.LpConfig.for_qstep(nonneg=False, rescale='none')
+    assert not init.qstep(ref, cfg=craw, workers=1).is_admissible
+    assert not init.qstep(ref, cfg=lp.LpConfig.for_qstep(nonneg=False,
+                                                        single_shot_repair=True),
+                          workers=1).is_admissible
+    try:
+        init.qstep(ref, cfg=cq, repair=False, workers=1).repair(ref, cfg=craw)
+        raise AssertionError('repair() should refuse a config that repairs nothing')
+    except RuntimeError as e:
+        assert 'no repair stage' in str(e), str(e)
+
+    # SOLVE ONCE, REPAIR SEVERAL WAYS, at map level: repairing the stored raw point with the
+    # step's own config reproduces the step's own output exactly.
+    raw = init.qstep(ref, cfg=cq, repair=False, workers=1)
+    assert np.array_equal(np.asarray(raw.repair(ref, cfg=cq).Q), np.asarray(m.Q))
+    assert raw.repair(ref, cfg=cq).is_admissible
+
+    # The additive stages are defined on the COLUMNS of W, so a wrapper holding a non-identity
+    # mid has to FOLD it; the multiplicative stage takes mid directly and leaves it in place.
+    # Both are exercised from the same inadmissible point, which carries a non-identity mid.
+    ca = lp.LpConfig.for_qstep(nonneg=False, additive_first=True, additive_last=True)
+    shrunk = m.rescale_columns().inflated(0.6)
+    assert not (shrunk._mid_is_identity() or shrunk.is_admissible)
+
+    add = shrunk.repair(ref, cfg=ca)
+    assert add._mid_is_identity(), 'the additive lift needs mid folded into Q'
+    assert add.is_admissible and add.measure_admissibility(ref).admissible
+
+    mul = shrunk.repair(ref, cfg=lp.LpConfig.for_qstep(nonneg=False))
+    assert not mul._mid_is_identity(), 'a multiplicative row scale commutes with mid'
+    # A multiplicative repair passes its OWN test -- every positive entry of the reference is
+    # dominated -- and is structurally blind to a product entry that went negative where the
+    # reference is zero. That is why the additive stage exists, and why only the arm above is
+    # asserted to be admissible elementwise.
+    P = np.asarray(mul.dense())
+    with np.errstate(divide='ignore', invalid='ignore'):
+        assert float(np.nanmax(np.where(Abar > 0, Abar / P, 0.0))) <= 1.0
+
+    # ... and it raises rather than silently falling back, which would look exactly like the
+    # additive repair not helping.
+    try:
+        ref.svd(K).replace(is_admissible=False).repair(ref, cfg=ca)
+        raise AssertionError('repair() should refuse an additive stage with no nonneg column')
+    except RuntimeError as e:
+        assert 'NONNEGATIVE column' in str(e), str(e)
+
+    # The W-step: same bit-identity, the pinned column held fixed, and the majorize-minimize
+    # guarantee its own objective has to satisfy.
+    cw = lp.LpConfig.for_wstep(nonneg=False)
+    labels = ref.alpha_to_beta_block(0, ref.nalpha)
+    m2 = m.wstep(ref, cfg=cw, workers=1)
+    Q2, W2, iw = lp.w_step(Abar, np.asarray(m.Q), np.asarray(ref.y_true), labels,
+                           np.asarray(m.W), cw, pinned=[0], workers=1)
+    assert np.array_equal(np.asarray(m2.W), W2) and np.array_equal(np.asarray(m2.Q), Q2)
+    assert m2.history[-1]['w_obj_raw'] <= m2.history[-1]['w_obj_before'] * (1 + 1e-9)
+    assert m2.is_admissible and (not m2.W_is_semiorthogonal)
+    # The 'cols' repair scales whole channels UP, so a pinned column stays nonnegative and still
+    # dominates every group: everything the pin buys survives a W-step.
+    assert np.all(np.asarray(m2.W)[:, 0] >= np.asarray(m.W)[:, 0] - 1e-12)
+
+    try:
+        m.wstep(ref.replace(y_true=None, history_record=dict(step='drop y')), cfg=cw, workers=1)
+        raise AssertionError('wstep() needs y_true')
+    except RuntimeError as e:
+        assert 'y_true' in str(e), str(e)
+
+    # An alternation written out at the call site, which is what there is instead of a driver.
+    # The Q-step is exactly optimal given W, so D cannot rise across one.
+    seq = [m.get_distance()]
+    cur = m
+    for _ in range(2):
+        cur = cur.wstep(ref, cfg=cw, workers=1).qstep(ref, cfg=cq, workers=1)
+        seq.append(cur.get_distance())
+    assert all(seq[i+1] <= seq[i] * (1 + 1e-9) for i in range(len(seq)-1)), seq
+
+    # Geometry mismatches are refused by name rather than being broadcast into nonsense.
+    for bad, needle in ((fine, 'shape mismatch'), (ref.coarse_grain(ref.L + 1), 'shape')):
+        try:
+            m.qstep(bad, cfg=cq, workers=1)
+            raise AssertionError('qstep() should have refused this ref')
+        except RuntimeError as e:
+            assert needle in str(e), str(e)
+    try:
+        ref.qstep(ref, cfg=cq, workers=1)
+        raise AssertionError('qstep() should refuse a dense self')
+    except RuntimeError as e:
+        assert 'dense' in str(e), str(e)
+
+    atomic_print(f'    test_map_steps(r={r}, K={K}): wrappers bit-identical to varmap.lp, mid'
+                 f' folded for the additive repair, D {seq[0]:.6g} -> {seq[-1]:.6g} over two'
+                 ' alternations')
+
+
 ####################################   entry point   ####################################
 
 
@@ -1809,3 +2329,8 @@ def run_all():
     test_lp_rescue()
     test_lp_negative_rhs()
     test_lp_building_blocks()
+    test_svd()
+    test_column_algebra()
+    test_reorthogonalize()
+    test_basis_constructors()
+    test_map_steps()

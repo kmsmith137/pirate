@@ -15,3 +15,6 @@ from .lp import (LpConfig, solve_covering_lps, q_step, w_step, covering_lp_data,
                  fix_nonneg, apply_repair, violation_stats, check_nonneg,
                  blocking_is_exact,
                  solve_cover_lp, solve_cover_lp_cuts)
+from .basis import (basis_svd, basis_envelope_column, basis_greedy_envelope,
+                    greedy_envelope_tree, basis_pivoted_qr, basis_random, svd_init,
+                    spectrum_effective_rank, shape_cover_statistic)

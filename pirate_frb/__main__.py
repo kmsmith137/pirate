@@ -62,7 +62,7 @@ def parse_test(subparsers):
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
     parser.add_argument('--avar', action='store_true', help='Runs tests related to analytic variance')
-    parser.add_argument('--varmap', action='store_true', help='Runs pirate_frb.varmap tests (VarianceMap geometry, coarse-graining, distance, the covering LPs)')
+    parser.add_argument('--varmap', action='store_true', help='Runs pirate_frb.varmap tests (VarianceMap geometry, coarse-graining, distance, the covering LPs, the low-rank factorizations)')
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_{beamform,upchan}()')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')

@@ -201,16 +201,23 @@ class VarianceMap:
     - ``W`` (ndarray) -- ``(nfreq, K)`` when factored, else None. Sign-free; its columns are
       frequency "atoms".
     - ``factor_rank`` (int) -- K, the number of columns of Q and W; None when dense.
-    - ``Q_is_semiorthogonal`` / ``W_is_semiorthogonal`` (bool) -- carried, NOT verified. This
-      class never checks them, and never sets either True on its own.
-    - ``pinned_columns`` (ndarray) -- int64 column indices of W held fixed by the steps;
-      empty by default, and None when dense. Likewise carried rather than interpreted.
+    - ``Q_is_semiorthogonal`` / ``W_is_semiorthogonal`` (bool) -- what the code that built the
+      factors knows, not a measurement. svd() and reorthogonalize() are the only things that
+      set one True, truncate() is the only thing that reads one, and everywhere else
+      replace()'s conservative False applies.
+    - ``pinned_columns`` (ndarray) -- int64 column indices of W held fixed by the steps; empty
+      by default, and None when dense. A pin exists to guarantee that W has a NONNEGATIVE
+      column, which the additive repair, the one-hot seed and the LP's feasibility certificate
+      all need. pin_column() checks the column it is given, and every method that drops or
+      reorders columns remaps the set rather than copying it.
 
-    ONLY THE STRUCTURE OF A FACTORIZATION IS ENFORCED HERE -- shapes, a consistent K, dtypes,
-    and column indices in range. Whether ``Q^T Q`` really is the identity, whether ``mid`` is
-    diagonal, whether a pinned column is nonnegative: none of that is checked, because those
-    invariants belong to the steps that establish them. A flag this class cannot check is one
-    it carries rather than enforces.
+    ONLY THE STRUCTURE OF A FACTORIZATION IS ENFORCED AT CONSTRUCTION -- shapes, a consistent
+    K, dtypes, and column indices in range. Whether ``Q^T Q`` really is the identity, whether
+    ``mid`` is diagonal, whether a pinned column is nonnegative: none of that is re-checked
+    here, because the methods that establish those invariants are the cheap place to know
+    them, and an O(nbeta*K^2) verification on every construction would be paid by every step
+    of an alternation. So a hand-built map can claim anything; one built through the methods
+    below cannot.
 
     How this map was produced:
 
@@ -242,6 +249,10 @@ class VarianceMap:
 
     # How many entries of 'worst_rows' measure_admissibility() reports.
     _N_WORST_ROWS = 16
+
+    # The factorization rank above which svd()'s unit-sum SHAPE matrix is the better W-matrix,
+    # and below which the raw matrix is. A measured crossover, not a round number.
+    _SHAPE_NORMALIZE_RANK = 32
 
 
     def __init__(self, config, itree, detrender=None, *, A=None,
@@ -1019,6 +1030,1017 @@ class VarianceMap:
 
         return self.replace(A=out, L=None, history_record=rec)
 
+
+    # ---------------- factorizations ----------------
+    #
+    # Everything above MOVES data; these CHOOSE or reshape a factorization, and they are what
+    # give the two carried claims their meaning:
+    #
+    #   - THE SEMIORTHOGONALITY FLAGS. svd() and reorthogonalize() are the only things that set
+    #     one True, truncate() is the only thing that reads one, and everywhere else replace()'s
+    #     conservative False applies. Nothing here verifies a flag numerically: the point of the
+    #     flags is to record what the code that built the factors knows, which is cheaper and
+    #     more reliable than an O(nbeta*K^2) re-check.
+    #   - pinned_columns. A pinned column is one the steps hold fixed, and it exists so that a
+    #     NONNEGATIVE column is guaranteed to be present: the additive repair, the one-hot seed
+    #     and the LP's feasibility certificate all need one, and a raw SVD basis has none
+    #     (numpy's per-mode sign is arbitrary, and a real subbanded map came back with mode 0
+    #     all-negative). So pin_column() checks the column it is handed, and every method that
+    #     drops or reorders columns REMAPS the set rather than copying it -- a stale index is
+    #     silent right up until a repair goes looking for its nonnegative column and finds an
+    #     arbitrary one.
+
+    def _require_factored(self, what):
+        if not self.is_factored:
+            raise RuntimeError(f'VarianceMap.{what}: this map is dense, and this operates on the'
+                               ' factorization A = Q mid W.T. Build one with with_basis() or'
+                               ' svd() first.')
+
+    def _mid_is_identity(self):
+        """True iff 'mid' is exactly the identity. O(K^2), and the answer is what decides
+        whether a caller has to fold mid into Q."""
+        return np.array_equal(np.asarray(self.mid), np.eye(self.factor_rank))
+
+    def _QM(self):
+        """``Q @ mid``, i.e. Q in the mid-free convention that varmap.lp works in.
+
+        Returns the stored Q itself when mid is the identity, so the common case costs a K^2
+        comparison and no matmul.
+        """
+        Q = np.asarray(self.Q, dtype=np.float64)
+        return Q if self._mid_is_identity() else (Q @ np.asarray(self.mid, dtype=np.float64))
+
+    @staticmethod
+    def _qr_posdiag(X):
+        """Thin QR with a NONNEGATIVE diagonal on R, which numpy does not guarantee.
+
+        The sign convention is what makes an ordered QR useful: with R[0,0] > 0, the first
+        column of the orthonormal factor is a POSITIVE multiple of the first input column, so a
+        nonnegative first column stays nonnegative.
+        """
+        Qf, R = np.linalg.qr(np.asarray(X, dtype=np.float64), mode='reduced')
+        sg = np.sign(np.diag(R))
+        sg = np.where(sg == 0.0, 1.0, sg)
+        return Qf * sg[None, :], R * sg[:, None]
+
+    def _pin_order(self, keep_pinned):
+        """(npin, order): the column permutation that puts the pinned columns first.
+
+        npin is 0 when there is nothing to preserve, in which case 'order' is the identity and
+        every caller's pinned path collapses to the plain one.
+        """
+        K = self.factor_rank
+        pin = np.asarray(self.pinned_columns, dtype=np.int64)
+        if (not keep_pinned) or (pin.size == 0):
+            return 0, np.arange(K, dtype=np.int64)
+        rest = np.setdiff1d(np.arange(K, dtype=np.int64), pin)
+        return int(pin.size), np.concatenate([pin, rest])
+
+    @staticmethod
+    def _svd_nkeep(s, factor_rank, eps):
+        """How many leading modes to keep: at most 'factor_rank', and none with
+        ``s < eps * s[0]``."""
+        n = s.size if (factor_rank is None) else min(int(factor_rank), s.size)
+        if (eps is not None) and (s.size > 0):
+            n = min(n, int(np.count_nonzero(s >= float(eps) * s[0])))
+        if n < 1:
+            raise RuntimeError(f'VarianceMap.svd: every mode was dropped (factor_rank='
+                               f'{factor_rank}, eps={eps}, {s.size} singular values, largest'
+                               f' {s[0] if s.size else 0.0:.6g}). A rank-0 map is not'
+                               ' representable.')
+        return n
+
+    def _shape_scale(self, use):
+        """The per-row divisor for 'shape_normalize', or None.
+
+        Rows that sum to zero are left alone rather than divided: their shape is undefined, and
+        a zero row is a zero row in either normalization.
+        """
+        if not use:
+            return None
+        rs = np.asarray(self.row_sums(), dtype=np.float64)
+        return np.where(rs > 0.0, rs, 1.0)
+
+    def _blocked_AM(self, M, rs):
+        """``diag(1/rs) A @ M`` for a DENSE self, in row blocks (rs=None means no scaling)."""
+        M = np.asarray(M, dtype=np.float64)
+        out = np.empty((self.nbeta, M.shape[1]))
+        nb = self.default_block_rows()
+        for start in range(0, self.nbeta, nb):
+            stop = min(start + nb, self.nbeta)
+            blk = self.rows(start, stop)
+            out[start:stop] = blk @ M
+            if rs is not None:
+                out[start:stop] /= rs[start:stop, None]
+        return out
+
+    def _blocked_AtY(self, Y, rs):
+        """``(diag(1/rs) A).T @ Y`` for a DENSE self, in row blocks."""
+        Y = np.asarray(Y, dtype=np.float64)
+        out = np.zeros((self.nfreq, Y.shape[1]))
+        nb = self.default_block_rows()
+        for start in range(0, self.nbeta, nb):
+            stop = min(start + nb, self.nbeta)
+            y = Y[start:stop] if (rs is None) else (Y[start:stop] / rs[start:stop, None])
+            out += self.rows(start, stop).T @ y
+        return out
+
+    def _svd_randomized(self, factor_rank, rs, rng, oversample):
+        """(U, s, V) of a dense self by a randomized range finder with one power iteration.
+
+        Three blocked passes over the matrix and nothing of matrix size in memory, which is what
+        makes an SVD basis reachable at a scale where the matrix is a file. It is APPROXIMATE
+        (accurate to a few digits in the leading modes, less in the trailing ones) and it depends
+        on the draw, so pass an explicit 'rng' for anything that has to be reproducible -- and
+        note that reproducibility does not survive a numpy version change, which is why the
+        campaign's own dictionaries were cached rather than rebuilt.
+        """
+        if factor_rank is None:
+            raise RuntimeError("VarianceMap.svd: method='randomized' needs an explicit"
+                               ' factor_rank -- it approximates a fixed number of modes, so'
+                               ' there is no full spectrum for eps to threshold.')
+
+        ell = int(min(int(factor_rank) + int(oversample), self.nfreq, self.nbeta))
+        rng = np.random.default_rng(0) if (rng is None) else rng
+
+        Y = self._blocked_AM(rng.standard_normal((self.nfreq, ell)), rs)
+        # One power iteration. Without it the trailing modes of a slowly-decaying spectrum leak
+        # badly, and a variance map's spectrum is exactly that.
+        Z, _ = self._qr_posdiag(self._blocked_AtY(np.linalg.qr(Y, mode='reduced')[0], rs))
+        Qy, R = self._qr_posdiag(self._blocked_AM(Z, rs))
+
+        # A Z = Qy R and A ~ (A Z) Z.T, so the small SVD of R carries both factors.
+        Ub, s, Vbt = np.linalg.svd(R, full_matrices=False)
+        return Qy @ Ub, s, Z @ Vbt.T
+
+    def _svd_dense(self, factor_rank, eps, shape_normalize, method, rng, oversample):
+        """(Q, mid, W, Q_is_semiorthogonal) for a truncated SVD of a DENSE self. 'method' is
+        already resolved to 'exact' or 'randomized'."""
+
+        rs = self._shape_scale(shape_normalize)
+
+        if method == 'exact':
+            B = self.rows(0, self.nbeta)
+            B = B if (rs is None) else (B / rs[:, None])
+            U, s, Vt = np.linalg.svd(B, full_matrices=False)
+            V = Vt.T
+        elif method == 'randomized':
+            U, s, V = self._svd_randomized(factor_rank, rs, rng, oversample)
+        else:
+            raise RuntimeError(f'VarianceMap.svd: method={method!r} is not one of'
+                               " 'auto'/'exact'/'randomized'")
+
+        n = self._svd_nkeep(s, factor_rank, eps)
+        Q = np.ascontiguousarray(U[:, :n])
+        if rs is not None:
+            Q *= rs[:, None]
+        return Q, np.diag(s[:n]), np.ascontiguousarray(V[:, :n]), (rs is None)
+
+    def _svd_factored(self, factor_rank, eps, shape_normalize, keep_pinned):
+        """(Q, mid, W, Q_is_semiorthogonal, npin) for a truncated SVD of a FACTORED self, with
+        no dense product anywhere: two thin QRs and one K-by-K SVD.
+
+        This is the rank-reduction path -- take an accurate high-rank factorization, drop modes,
+        and let a Q-step restore admissibility -- so its cost must depend on K and not on nfreq
+        times nbeta.
+        """
+
+        rs = self._shape_scale(shape_normalize)
+        Qm = self._QM()
+        Qm = Qm if (rs is None) else (Qm / rs[:, None])
+        W = np.asarray(self.W, dtype=np.float64)
+
+        npin, order = self._pin_order(keep_pinned)
+        if npin:
+            # An ordered QR of W with the pinned columns first, then SVD only what is left. The
+            # pinned columns come through as an orthonormal basis of their own span -- so the
+            # FIRST one is still a positive multiple of itself, and hence still nonnegative --
+            # while a plain SVD would rotate them together with everything else and destroy it.
+            Wq, R = self._qr_posdiag(W[:, order])
+            if R[0, 0] <= 0.0:
+                raise RuntimeError('VarianceMap.svd: the first pinned column of W is zero, so'
+                                   ' there is no nonnegative column to preserve. Re-pin with'
+                                   ' pin_column(), or pass keep_pinned=False.')
+            G = Qm[:, order] @ R.T
+            base_Q, base_W = G[:, :npin], Wq[:, :npin]
+            res_Q, res_W = G[:, npin:], Wq[:, npin:]
+        else:
+            base_Q = base_W = None
+            res_Q, res_W = Qm, W
+
+        # SVD of res_Q @ res_W.T through two thin QRs and one small SVD. In the pinned case
+        # res_W is already orthonormal AND orthogonal to base_W, so its rotation below stays
+        # orthogonal to the preserved columns and the result is semiorthogonal as a whole.
+        Qg, Rg = self._qr_posdiag(res_Q)
+        Wg, Rw = self._qr_posdiag(res_W)
+        Um, s, Vmt = np.linalg.svd(Rg @ Rw.T, full_matrices=False)
+
+        want = None if (factor_rank is None) else max(0, int(factor_rank) - npin)
+        if (want is not None) and (want < 1) and (s.size > 0):
+            raise RuntimeError(f'VarianceMap.svd: factor_rank={factor_rank} leaves no room for'
+                               f' any mode beside the {npin} pinned column(s). Ask for a rank'
+                               ' above the pin count, or pass keep_pinned=False.')
+        n = self._svd_nkeep(s, want, eps)
+
+        Q = Qg @ Um[:, :n]
+        W = Wg @ Vmt[:n].T
+        sing = s[:n]
+        if npin:
+            Q = np.ascontiguousarray(np.hstack([base_Q, Q]))
+            W = np.ascontiguousarray(np.hstack([base_W, W]))
+            # The preserved columns carry their coefficients in Q, so their entry in the
+            # diagonal middle matrix is 1 rather than a singular value.
+            sing = np.concatenate([np.ones(npin), sing])
+        if rs is not None:
+            Q = Q * rs[:, None]
+        # Q is orthonormal only when nothing was prepended and no row scale was folded back.
+        return (np.ascontiguousarray(Q), np.diag(sing), np.ascontiguousarray(W),
+                (npin == 0) and (rs is None), npin)
+
+    def svd(self, factor_rank=None, *, eps=None, shape_normalize=None, keep_pinned=True,
+            method='auto', max_bytes=1 << 31, rng=None, oversample=10):
+        """Return a factored VarianceMap holding a truncated SVD of self: ``Q = U``,
+        ``mid = diag(s)``, ``W = V``.
+
+        Keeps at most 'factor_rank' modes and drops any with ``s < eps * s[0]``; at least one of
+        the two must be given. Very small singular values are not helping the approximation and
+        are better dropped than carried.
+
+        THE RESULT HAS ``is_admissible = False``, AND THAT IS NOT A TECHNICALITY. A truncated SVD
+        used directly as an approximation has an admissibility cliff -- below K ~ 32 it puts a
+        non-positive value on a positive entry of the reference, which no rescaling repairs, so
+        D is infinite. The SAME truncation used as a W-MATRIX, with a Q-step free to choose the
+        coefficients, has no cliff at all. Conflating the two is the single most expensive
+        confusion available here, so this method is honest about which it produces: a
+        Frobenius-optimal truncation, usable as an approximation only when it happens to be
+        admissible and usable as a basis always. qstep() is what makes something admissible.
+
+        CALL canonicalize_signs() ON THE RESULT. numpy's per-mode sign is arbitrary, so a raw SVD
+        basis typically has ZERO nonnegative columns, and the additive repair, the one-hot seed
+        and the LP's feasibility certificate all need one.
+
+        Parameters
+        ----------
+        shape_normalize : bool or None
+            Decompose the unit-sum SHAPE matrix ``S[beta,F] = A[beta,F] / sum_F A[beta,F]``
+            instead of A, folding the row sums back into Q. The shape SVD is the better
+            W-matrix at rank >= 32 and A itself below it, so None means "choose by rank" at
+            that measured crossover. Because the row sums go into Q, the result is NOT
+            semiorthogonal on the Q side and truncate() will refuse it -- ask svd() for the
+            rank you want instead.
+        keep_pinned : bool
+            Only meaningful for a factored self that has pinned columns, where a plain SVD would
+            rotate all columns together and destroy the nonnegative column the seed and the
+            additive repair depend on. True preserves the pinned columns' span, with the same
+            guarantee and the same caveats as reorthogonalize(): the FIRST pinned column comes
+            through as a positive multiple of itself, the later ones are orthogonalized against
+            it and can go negative, and all of them are rescaled to unit norm. False drops the
+            pinned set outright, which is how a pinned-versus-not comparison is run.
+        method : str
+            'exact' is one ``np.linalg.svd`` of the whole matrix; 'randomized' is a range finder
+            with one power iteration, three blocked passes and nothing of matrix size in memory,
+            which is the only one of the two available once the matrix is a file. 'auto' picks
+            exact while the matrix fits in 'max_bytes'. Ignored for a factored self, which is
+            always exact and cheap.
+        rng, oversample
+            The randomized path's draw and its extra sample count.
+        """
+
+        if (factor_rank is None) and (eps is None):
+            raise RuntimeError('VarianceMap.svd: give factor_rank, or eps, or both -- with'
+                               ' neither there is nothing to truncate to.')
+        if (factor_rank is not None) and (int(factor_rank) < 1):
+            raise RuntimeError(f'VarianceMap.svd: factor_rank={factor_rank} must be >= 1')
+        if shape_normalize is None:
+            shape_normalize = ((factor_rank is not None)
+                               and (int(factor_rank) >= self._SHAPE_NORMALIZE_RANK))
+
+        # Resolved here rather than inside the dense path, so that the history says which
+        # algorithm actually ran -- 'auto' in a record is exactly the thing nobody can
+        # reconstruct later.
+        if self.is_factored:
+            method = 'factored'
+        elif method == 'auto':
+            method = ('exact' if (8 * self.nbeta * self.nfreq <= int(max_bytes))
+                      else 'randomized')
+
+        t0 = time.time()
+        if self.is_factored:
+            Q, mid, W, qflag, npin = self._svd_factored(factor_rank, eps, shape_normalize,
+                                                        keep_pinned)
+        else:
+            Q, mid, W, qflag = self._svd_dense(factor_rank, eps, shape_normalize, method,
+                                               rng, oversample)
+            npin = 0
+
+        rec = dict(step='svd', factor_rank=int(W.shape[1]), eps=eps, method=method,
+                   shape_normalize=bool(shape_normalize), n_pinned=int(npin),
+                   n_pinned_dropped=int(self.pinned_columns.size - npin
+                                        if self.is_factored else 0),
+                   seconds=time.time() - t0)
+        return self.replace(Q=Q, mid=mid, W=W, pinned_columns=np.arange(npin),
+                            Q_is_semiorthogonal=bool(qflag), W_is_semiorthogonal=True,
+                            is_admissible=False, history_record=rec)
+
+    def truncate(self, factor_rank):
+        """Drop all but the leading 'factor_rank' modes, and set ``is_admissible = False``.
+
+        Only meaningful straight after svd() or reorthogonalize(), i.e. while both factors are
+        semiorthogonal and mid is diagonal -- otherwise "leading" is not a property of the
+        column order and the truncation is not the Frobenius-optimal one. That is CHECKED, and
+        select_columns() is the unchecked primitive for keeping an arbitrary subset.
+
+        Dropping a pinned column raises rather than silently unpinning it.
+        """
+
+        self._require_factored('truncate')
+        K, K0 = int(factor_rank), self.factor_rank
+        if not (1 <= K <= K0):
+            raise RuntimeError(f'VarianceMap.truncate: factor_rank={K} is out of range'
+                               f' [1, {K0}]')
+        if not (self.Q_is_semiorthogonal and self.W_is_semiorthogonal):
+            raise RuntimeError(
+                'VarianceMap.truncate: this factorization does not claim semiorthogonal Q and'
+                ' W, so its columns are not ordered by singular value and keeping a prefix is'
+                ' not a truncated SVD. Use svd() to build one at the rank you want, or'
+                ' select_columns() to keep a subset with no such claim.')
+        mid = np.asarray(self.mid, dtype=np.float64)
+        if not np.array_equal(mid, np.diag(np.diag(mid))):
+            raise RuntimeError("VarianceMap.truncate: 'mid' is not diagonal, so the modes are"
+                               ' mixed and a prefix is not a truncation. See select_columns().')
+        pin = np.asarray(self.pinned_columns, dtype=np.int64)
+        if pin.size and (int(pin.max()) >= K):
+            raise RuntimeError(f'VarianceMap.truncate: pinned column {int(pin.max())} is'
+                               f' outside the kept prefix [0, {K}). Dropping a pinned column'
+                               ' loses the nonnegative column the additive repair needs, so'
+                               ' say so explicitly with select_columns() if that is intended.')
+
+        rec = dict(step='truncate', factor_rank=K, factor_rank_from=K0)
+        # A column subset of a semiorthogonal matrix is still semiorthogonal, so both claims
+        # survive verbatim.
+        return self.replace(Q=np.ascontiguousarray(np.asarray(self.Q)[:, :K]),
+                            mid=np.ascontiguousarray(mid[:K, :K]),
+                            W=np.ascontiguousarray(np.asarray(self.W)[:, :K]),
+                            Q_is_semiorthogonal=True, W_is_semiorthogonal=True,
+                            is_admissible=False, history_record=rec)
+
+    def reorthogonalize(self, *, keep_pinned=True):
+        """Re-express A as ``Q mid W.T`` with W semiorthogonal, at the same rank and with the
+        SAME matrix A -- exact, not an approximation. Nothing changes but the factorization and
+        the flags.
+
+        HOW THE PINNED COLUMNS SURVIVE, and why it is worth the trouble. A plain SVD-based
+        reorthogonalization rotates every column together, which destroys the nonnegative column
+        the seed and the additive repair depend on: measured at 1.769x in D, with no choice of
+        'mid' recovering it. So this reorthogonalizes by an ORDERED QR with the pinned columns
+        first, ``W = W' R`` with R upper triangular, and folds R into the other factor so the
+        product is exact. Because R is upper triangular with a positive diagonal, ``W'[:,0]`` is
+        a POSITIVE multiple of the first pinned column, so it is still nonnegative and the
+        feasibility certificate survives with ``q = c e_0`` for some c > 0.
+
+        Two consequences to know before relying on it:
+
+        - Only the FIRST pinned column is guaranteed to stay nonnegative. Later ones are
+          orthogonalized against the earlier ones and can go negative. With the single envelope
+          column that is the recommended pinning this is no limitation; with several it is.
+        - The preserved column is rescaled to unit norm, so it is no longer literally the
+          envelope over groups. The certificate is unaffected; an equality test against the
+          envelope column is not.
+
+        With ``keep_pinned=False`` the QR runs in the columns' own order and the pinned set is
+        DROPPED, since the columns it named no longer exist as such. (Whether any nonnegative
+        column happens to survive is then an accident of ordering -- column 0 always does --
+        which is exactly the point: the guarantee comes from the ordering, not from the QR.)
+        That is the right thing when there are no pinned columns, and it is also how the
+        pinned-versus-not comparison is run -- the one variant never measured, and the
+        experiment to run before concluding anything about reorthogonalization at all. As an
+        intervention it has not paid so far: it is provably a no-op on D by construction, and as
+        a preconditioner it helped 1.17x at rank 64 and HURT 3.08x at 128, in measurements taken
+        without pinning, where the rotation was destroying the nonnegative column at the same
+        time as it was changing the conditioning.
+        """
+
+        self._require_factored('reorthogonalize')
+        npin, order = self._pin_order(keep_pinned)
+        Qm = self._QM()[:, order]
+        Wq, R = self._qr_posdiag(np.asarray(self.W, dtype=np.float64)[:, order])
+        if npin and (R[0, 0] <= 0.0):
+            raise RuntimeError('VarianceMap.reorthogonalize: the first pinned column of W is'
+                               ' zero, so there is no nonnegative column to preserve. Re-pin'
+                               ' with pin_column(), or pass keep_pinned=False.')
+
+        ndropped = int(np.asarray(self.pinned_columns).size - npin)
+        rec = dict(step='reorthogonalize', n_pinned=int(npin), n_pinned_dropped=ndropped)
+        return self.replace(Q=np.ascontiguousarray(Qm @ R.T), mid=None, W=Wq,
+                            pinned_columns=np.arange(npin),
+                            Q_is_semiorthogonal=False, W_is_semiorthogonal=True,
+                            history_record=rec)
+
+    def with_basis(self, W, *, mid=None, pinned_columns=None):
+        """Return a factored map with the given W and an UNSET Q (all zero), ready for a
+        qstep(). ``is_admissible`` is False, since a zero Q covers nothing.
+
+        This is how a W-matrix built elsewhere enters the pipeline -- a different tree, a
+        different config, a random matrix, a column-subset selection. It is a first-class entry
+        point rather than a curiosity: a transplanted W starts out 3x-19x worse than a
+        purpose-built one, but ONE W-step brings it to within 3-9%, which is the cheapest known
+        route to a good basis at a new config. The one axis where transfer does not work is
+        channel count; treat a foreign nfreq as a seed rather than a transfer.
+        """
+
+        W = np.asarray(W, dtype=np.float64)
+        if (W.ndim != 2) or (W.shape[0] != self.nfreq):
+            raise RuntimeError(f'VarianceMap.with_basis: W has shape {W.shape}, expected'
+                               f' ({self.nfreq}, K) -- its rows are frequency channels')
+
+        K = int(W.shape[1])
+        rec = dict(step='with_basis', factor_rank=K,
+                   n_pinned=(0 if pinned_columns is None else len(list(pinned_columns))))
+        return self.replace(Q=np.zeros((self.nbeta, K)), mid=mid, W=W,
+                            pinned_columns=pinned_columns,
+                            Q_is_semiorthogonal=False, W_is_semiorthogonal=False,
+                            is_admissible=False, history_record=rec)
+
+    # ---------------- the column algebra ----------------
+
+    def canonicalize_signs(self):
+        """Flip each FREE column of W so that its entries sum to >= 0, compensating exactly in
+        the other factors so that A is bitwise unchanged.
+
+        Cheap, exactly invariant, and there is no reason not to call it on any freshly built
+        basis: the LP is invariant under a per-column sign flip when q is sign-free, but the
+        one-hot seed and the additive repair both search for a NONNEGATIVE column and numpy's
+        SVD sign convention is arbitrary. Without this a raw SVD basis has zero nonnegative
+        columns and the seed fails outright.
+
+        Pinned columns are left alone -- they are nonnegative by construction, and flipping one
+        would destroy the very certificate it was pinned for.
+        """
+
+        self._require_factored('canonicalize_signs')
+        W = np.asarray(self.W, dtype=np.float64)
+        sgn = np.where(W.sum(axis=0) < 0.0, -1.0, 1.0)
+        sgn[np.asarray(self.pinned_columns, dtype=np.int64)] = 1.0
+
+        nflip = int(np.count_nonzero(sgn < 0.0))
+        rec = dict(step='canonicalize_signs', n_flipped=nflip)
+        if nflip == 0:
+            return self.replace(history_record=rec)
+
+        # The symmetric conjugation Q -> Q D, W -> W D, mid -> D mid D with D = diag(+-1) leaves
+        # the product invariant to the last bit (a sign flip is exact), keeps mid diagonal with
+        # its diagonal untouched, and preserves both semiorthogonality claims.
+        return self.replace(Q=np.asarray(self.Q, dtype=np.float64) * sgn[None, :],
+                            mid=sgn[:, None] * np.asarray(self.mid, dtype=np.float64)
+                                * sgn[None, :],
+                            W=W * sgn[None, :],
+                            Q_is_semiorthogonal=self.Q_is_semiorthogonal,
+                            W_is_semiorthogonal=self.W_is_semiorthogonal,
+                            history_record=rec)
+
+    def n_nonneg_cols(self):
+        """How many columns of W are nonnegative and not identically zero.
+
+        The additive repair, the one-hot seed and the LP's feasibility certificate all need at
+        least one, and a raw SVD basis has ZERO until canonicalize_signs() has run. Cheap, and
+        worth asserting before a step that depends on it rather than discovering it inside a
+        repair.
+        """
+        self._require_factored('n_nonneg_cols')
+        W = np.asarray(self.W)
+        return int(((W.min(axis=0) >= 0.0) & (W.max(axis=0) > 0.0)).sum())
+
+    def rescale_columns(self, mode='unit'):
+        """Rescale the columns of W to unit 2-norm, absorbing the reciprocal into 'mid'.
+
+        WORTH UP TO 1.49x IN D, FOR REASONS NOBODY UNDERSTANDS, and that is why this is a step
+        with a name rather than a keyword on svd(). The transformation is provably inert: it
+        leaves the product unchanged and cannot change the feasible set or the objective of
+        either LP, since ``(W[:,c], q_c) -> (lambda W[:,c], q_c/lambda)`` is an exact symmetry
+        of both. It is nevertheless measured to be worth up to 1.49x at high rank.
+
+        The obvious explanation -- that the columns sit far from the solver's ABSOLUTE
+        feasibility tolerance -- was tested directly and FALSIFIED: a 64x change in the tolerance
+        moves D in the eighth digit, while the scale itself is worth 34%. So the mechanism is
+        unknown, and this may be a symptom of a bug elsewhere (in our own repair or
+        admissibility logic as easily as in the solver) rather than a feature. Anyone who
+        finds out should delete this paragraph and replace it with the reason.
+
+        Unit column norm is the best setting measured and every alternative placement of the
+        scale is worse, including the general middle-matrix form, so 'mode' is a single scalar
+        convention and 'unit' is the only value implemented.
+        """
+
+        self._require_factored('rescale_columns')
+        if mode != 'unit':
+            raise RuntimeError(f'VarianceMap.rescale_columns: mode={mode!r} is not implemented.'
+                               " 'unit' (unit column 2-norm) is the best setting measured and"
+                               ' every alternative placement of the scale was worse, so there is'
+                               ' nothing to check another convention against.')
+
+        W = np.asarray(self.W, dtype=np.float64)
+        lam = np.linalg.norm(W, axis=0)
+        lam = np.where(lam > 0.0, lam, 1.0)         # an all-zero column has no scale to fix
+
+        rec = dict(step='rescale_columns', mode=mode, scale_min=float(lam.min()),
+                   scale_max=float(lam.max()))
+        # Into 'mid', not into Q: that is what mid is for, and it makes this O(K^2) rather than
+        # O(nbeta*K). Q is untouched, so its semiorthogonality claim survives; W's does not.
+        return self.replace(mid=np.asarray(self.mid, dtype=np.float64) * lam[None, :],
+                            W=W / lam[None, :],
+                            Q_is_semiorthogonal=self.Q_is_semiorthogonal,
+                            W_is_semiorthogonal=False, history_record=rec)
+
+    def pin_column(self, w, *, replace_last=True):
+        """Add 'w' (typically basis_envelope_column(ref)) to W as a PINNED column, at index 0.
+
+        Index 0 is not cosmetic: the Q-step's prefix rescue re-solves a failed group on a PREFIX
+        of W, so a pin at index 0 is in every prefix and every rescue LP is feasible by the same
+        certificate as the full one.
+
+        'w' must be nonnegative and not identically zero, and that IS checked -- the whole
+        purpose of a pin is to guarantee a nonnegative column exists, and a pin that does not
+        buys nothing while making n_nonneg_cols() look answered. Pass an arbitrary held-fixed
+        column through with_basis(pinned_columns=...) if that is really what you want.
+
+        With replace_last (the default) the new column takes the place of the last FREE column,
+        so factor_rank is unchanged -- which is what makes "pinned versus not" a fair comparison
+        at equal rank. The dropped column's contribution is lost, so ``is_admissible`` becomes
+        False; with ``replace_last=False`` the rank grows by one, the product is bitwise
+        unchanged and the flag survives.
+        """
+
+        self._require_factored('pin_column')
+        w = np.asarray(w, dtype=np.float64).reshape(-1)
+        if w.shape != (self.nfreq,):
+            raise RuntimeError(f'VarianceMap.pin_column: w has {w.size} entries, expected'
+                               f' nfreq = {self.nfreq}')
+        if (w.min() < 0.0) or (w.max() <= 0.0):
+            raise RuntimeError('VarianceMap.pin_column: w must be nonnegative and not'
+                               ' identically zero. A pinned column exists to guarantee that the'
+                               ' additive repair, the one-hot seed and the LP certificate have'
+                               ' a nonnegative column to use.')
+
+        K = self.factor_rank
+        pin = np.asarray(self.pinned_columns, dtype=np.int64)
+        keep = np.arange(K, dtype=np.int64)
+        if replace_last:
+            free = np.setdiff1d(keep, pin)
+            if free.size == 0:
+                raise RuntimeError('VarianceMap.pin_column: every column of W is already'
+                                   ' pinned, so there is no free column to replace. Pass'
+                                   ' replace_last=False to grow the rank instead.')
+            keep = keep[keep != free[-1]]
+
+        Q, mid, W = (np.asarray(self.Q, dtype=np.float64),
+                     np.asarray(self.mid, dtype=np.float64),
+                     np.asarray(self.W, dtype=np.float64))
+        Knew = keep.size + 1
+        midn = np.zeros((Knew, Knew))
+        midn[0, 0] = 1.0
+        midn[1:, 1:] = mid[np.ix_(keep, keep)]
+
+        pos = {int(c): (i + 1) for i, c in enumerate(keep)}
+        rec = dict(step='pin_column', factor_rank=Knew, factor_rank_from=K,
+                   replace_last=bool(replace_last))
+        return self.replace(
+            Q=np.ascontiguousarray(np.hstack([np.zeros((self.nbeta, 1)), Q[:, keep]])),
+            mid=midn,
+            W=np.ascontiguousarray(np.hstack([w[:, None], W[:, keep]])),
+            pinned_columns=np.array([0] + [pos[int(c)] for c in pin], dtype=np.int64),
+            Q_is_semiorthogonal=False, W_is_semiorthogonal=False,
+            is_admissible=(self.is_admissible and not replace_last),
+            history_record=rec)
+
+    def select_columns(self, idx):
+        """Return a map keeping only these columns of W (and the matching columns of Q and rows
+        and columns of mid), at the reduced factor_rank. ``is_admissible`` becomes False.
+
+        pinned_columns is REMAPPED, not carried: it holds column INDICES, so dropping a column
+        shifts every index above it, and a naive copy leaves the pinned set pointing at the
+        wrong columns. That failure is silent -- the map stays admissible right up until the
+        additive repair looks for its nonnegative column and finds an arbitrary one -- so
+        dropping a pinned column raises instead.
+
+        This is the primitive for RANK REDUCTION BY PRUNING: drop one column, re-run a Q-step,
+        keep the drop that costs least D, repeat. That has never been measured against
+        rebuilding at the target rank, which is exactly why the primitive should exist rather
+        than the experiment being blocked on writing it.
+        """
+
+        self._require_factored('select_columns')
+        K = self.factor_rank
+        idx = np.asarray(idx, dtype=np.int64).reshape(-1)
+        if idx.size == 0:
+            raise RuntimeError('VarianceMap.select_columns: an empty column set leaves a rank-0'
+                               ' map, which is not representable')
+        if (idx.min() < 0) or (idx.max() >= K):
+            raise RuntimeError(f'VarianceMap.select_columns: column indices must lie in'
+                               f' [0, {K})')
+        if np.unique(idx).size != idx.size:
+            raise RuntimeError('VarianceMap.select_columns: duplicate column indices')
+
+        pin = np.asarray(self.pinned_columns, dtype=np.int64)
+        lost = np.setdiff1d(pin, idx)
+        if lost.size:
+            raise RuntimeError(f'VarianceMap.select_columns: this would drop pinned column(s)'
+                               f' {list(lost)}. A pinned column is what guarantees W has a'
+                               ' nonnegative one, so unpin it explicitly (replace(pinned_'
+                               'columns=...)) if the drop is intended.')
+
+        pos = {int(c): i for i, c in enumerate(idx)}
+        rec = dict(step='select_columns', factor_rank=int(idx.size), factor_rank_from=K)
+        # Selecting (or reordering) columns of a semiorthogonal matrix leaves it semiorthogonal,
+        # so both claims survive.
+        return self.replace(
+            Q=np.ascontiguousarray(np.asarray(self.Q)[:, idx]),
+            mid=np.ascontiguousarray(np.asarray(self.mid)[np.ix_(idx, idx)]),
+            W=np.ascontiguousarray(np.asarray(self.W)[:, idx]),
+            pinned_columns=np.array([pos[int(c)] for c in pin], dtype=np.int64),
+            Q_is_semiorthogonal=self.Q_is_semiorthogonal,
+            W_is_semiorthogonal=self.W_is_semiorthogonal,
+            is_admissible=False, history_record=rec)
+
+    def augment_basis(self, W_extra):
+        """Append columns to W, with zero coefficients in Q so that the product is bitwise
+        unchanged and ``is_admissible`` survives.
+
+        The counterpart of select_columns(), and the primitive for GREEDY FORWARD SELECTION of a
+        basis and for growing an existing approximation to a higher rank -- both posed and
+        neither measured. pinned_columns needs no remapping here, since appending shifts nothing.
+        """
+
+        self._require_factored('augment_basis')
+        We = np.asarray(W_extra, dtype=np.float64)
+        if We.ndim == 1:
+            We = We[:, None]
+        if (We.ndim != 2) or (We.shape[0] != self.nfreq):
+            raise RuntimeError(f'VarianceMap.augment_basis: W_extra has shape {We.shape},'
+                               f' expected ({self.nfreq}, E)')
+
+        K, E = self.factor_rank, int(We.shape[1])
+        midn = np.eye(K + E)
+        midn[:K, :K] = np.asarray(self.mid, dtype=np.float64)
+        rec = dict(step='augment_basis', factor_rank=K + E, factor_rank_from=K)
+        return self.replace(
+            Q=np.ascontiguousarray(np.hstack([np.asarray(self.Q, dtype=np.float64),
+                                              np.zeros((self.nbeta, E))])),
+            mid=midn,
+            W=np.ascontiguousarray(np.hstack([np.asarray(self.W, dtype=np.float64), We])),
+            Q_is_semiorthogonal=False, W_is_semiorthogonal=False, history_record=rec)
+
+    # ---------------- the steps ----------------
+    #
+    # There is deliberately NO run_schedule() / alternate() driver. A schedule is a sequence of
+    # these calls, and a caller writing them out is both clearer and strictly more flexible than
+    # any argument list a driver could grow:
+    #
+    #     m = ref.svd(factor_rank=K).canonicalize_signs().qstep(ref)   # the frozen arm
+    #     m = m.wstep(ref).qstep(ref)                                  # one alternation
+    #     m = m.wstep(ref).repair(ref)                                 # ... ending cheaply
+    #
+    # Each step appends a record to the returned map's 'history' (name, config, D, max_r, wall
+    # time, solver info), so the per-step log a driver would have returned is carried by the map
+    # itself and survives being written to a file.
+    #
+    # All three are WRAPPERS over varmap.lp, which owns the numerics and takes bare arrays. Four
+    # things belong here rather than there, and they are the reason the wrappers are not
+    # one-liners: the reference matrix and the group labels come from the geometry; 'mid' has to
+    # be folded into Q before an additive repair, which is defined on the columns of W;
+    # pinned_columns is what wstep() holds fixed; and is_admissible is inherited from 'ref'
+    # rather than asserted, since admissibility is transitive and an uncertified ref certifies
+    # nothing.
+
+    def _lp_reference(self, ref, what):
+        """The (nbeta, nfreq) float64 matrix of 'ref', after checking it against self.
+
+        A dense ref is handed over as a VIEW: the reference at production scale is a memmapped
+        coarse map, and copying it is what fails first. A FACTORED ref is materialized, which is
+        allowed and is a research direction in its own right -- a Q-step whose reference is
+        itself a high-rank factorization is how rank reduction is posed -- but it is the
+        non-default path, and a factored ref can be NEGATIVE where a streamed max-envelope
+        cannot, which every subproblem then feels: without a nonnegative column of W the LP is
+        infeasible everywhere.
+        """
+
+        if self.shape != ref.shape:
+            raise RuntimeError(f'VarianceMap.{what}: shape mismatch between self {self.shape}'
+                               f' and ref {ref.shape}')
+        if (self.is_coarse_grained != ref.is_coarse_grained) or (self.L != ref.L):
+            raise RuntimeError(
+                f'VarianceMap.{what}: self and ref must have the SAME coarse-graining (self:'
+                f' L={self.L}, ref: L={ref.L}). The covering constraint is elementwise between'
+                ' the two matrices, so mixing granularities is not a valid step.')
+        if ref.is_factored:
+            return np.asarray(ref.dense(force=True))
+        return np.asarray(ref.A, dtype=np.float64)
+
+    def _fine_labels(self):
+        """The group index of every fine alpha, as one (nalpha,) array.
+
+        Assembled blockwise to bound the temporaries. The W-step's majorization needs it because
+        its objective is a sum over FINE rows with Q row-duplicated.
+        """
+        out = np.empty(self.nalpha, dtype=np.int64)
+        for start in range(0, self.nalpha, self._ALPHA_BLOCK):
+            stop = min(start + self._ALPHA_BLOCK, self.nalpha)
+            out[start:stop] = self.alpha_to_beta_block(start, stop)
+        return out
+
+    @staticmethod
+    def _cfg_repairs(cfg, axis):
+        """True iff 'cfg' selects a repair stage that actually enforces domination.
+
+        A step's is_admissible cannot come from the ``repair=`` kwarg alone: the three repair
+        stages are config FIELDS, so a config with none of them selected repairs nothing however
+        the kwarg is set, and ``single_shot_repair`` produces knowingly inadmissible output by
+        design. The alternative -- trusting the kwarg -- would hand back a map claiming to
+        dominate the reference after doing nothing to it, which is the one error the one-sided
+        distance exists to prevent.
+        """
+        return bool((cfg.additive_first or cfg.additive_last
+                     or (cfg.resolved_rescale(axis) != 'none'))
+                    and not cfg.single_shot_repair)
+
+    def _step_result(self, name, ref, cfg, Q, mid, W, info, t0, repair, qflag, wflag):
+        """The new map a step returns, with its history record.
+
+        D is recorded when it can be computed at all, because the per-step distance is the whole
+        point of the log and it costs one contraction against the row sums that the caller is
+        about to pay for anyway.
+        """
+
+        elapsed = time.time() - t0
+        adm = bool(ref.is_admissible) if repair else False
+        out = self.replace(Q=Q, mid=mid, W=W, pinned_columns=self.pinned_columns,
+                           Q_is_semiorthogonal=bool(qflag), W_is_semiorthogonal=bool(wflag),
+                           is_admissible=adm)
+
+        D = float(out.get_distance()) if (adm and (out.y_true is not None)) else None
+        # The solver's own figures go in first and the wrapper's names win, because the two
+        # levels use different vocabularies for the same two keys: lp calls this step 'Q' and
+        # times only its own solve-and-repair. 'Q_raw' is dropped outright -- cfg.stash_raw puts
+        # the pre-repair LP point there, and an (nbeta, K) array in the history would be written
+        # into the FILE; the caller who asked for it already has it.
+        rec = {k: v for (k, v) in info.items() if k not in ('step', 'Q_raw', 'seconds')}
+        rec.update(step=name, config=cfg, D=D, seconds=elapsed,
+                   lp_step_seconds=info.get('seconds'), repaired=bool(repair))
+        return out.replace(history_record=rec)
+
+    def seed_onehot(self, ref, *, block_rows=None):
+        """Return a map whose Q is the best ADMISSIBLE ONE-HOT choice for this W: per group, the
+        single NONNEGATIVE column of W that covers it most cheaply, scaled just enough to
+        dominate. ``is_admissible = ref.is_admissible``, by construction rather than by
+        measurement.
+
+        Two jobs, and the second is the one that is easy to skip. It is a decent starting point
+        in its own right -- a rescaled envelope, which is the baseline the whole low-rank family
+        is trying to beat. And it is the FALLBACK a Q-step returns for any subproblem whose LP
+        fails: with_basis() leaves Q at zero, and a zero row survives a repair as a zero row, so
+        a step seeded from one turns a solver failure into a silently inadmissible group. One
+        failure per ~450 groups costs more D than an entire doubling of the rank.
+
+        Requires at least one nonnegative column of W -- see n_nonneg_cols() -- and raises if
+        some group is covered by no column, since a seed that is not feasible is not a seed.
+        """
+
+        self._require_factored('seed_onehot')
+        Abar = self._lp_reference(ref, 'seed_onehot')
+        # The atoms are the columns of W folded through mid, since that is what a one-hot Q
+        # actually multiplies. With the usual identity or positive-diagonal mid these are W's
+        # own columns and this agrees with n_nonneg_cols().
+        W = np.asarray(self.W, dtype=np.float64) @ np.asarray(self.mid, dtype=np.float64).T
+        cols = np.flatnonzero((W.min(axis=0) >= 0.0) & (W.max(axis=0) > 0.0))
+        if cols.size == 0:
+            raise RuntimeError('VarianceMap.seed_onehot: W has no nonnegative column, so no'
+                               ' single atom covers anything. Run canonicalize_signs(), or'
+                               ' pin_column(basis_envelope_column(ref)).')
+
+        t0 = time.time()
+        # The search forms an (nrow, ncol, nfreq) temporary, which is the one array here that is
+        # not bounded by the map's own size -- hence the row blocking.
+        Wt = np.ascontiguousarray(W[:, cols].T)
+        cost_of = W[:, cols].sum(axis=0)
+        nb = (max(1, (32 << 20) // (8 * max(1, cols.size * self.nfreq)))
+              if (block_rows is None) else int(block_rows))
+        Q = np.zeros((self.nbeta, self.factor_rank))
+
+        for start in range(0, self.nbeta, nb):
+            stop = min(start + nb, self.nbeta)
+            a = Abar[start:stop][:, None, :]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                # Where a column is zero and the reference is not, the ratio is +inf: that
+                # column cannot cover this group at any scale, which is what makes the argmin
+                # below a feasibility test as well as a choice.
+                r = np.where(a > 0, a / np.where(Wt[None] > 0.0, Wt[None], 0.0), 0.0).max(axis=2)
+            cost = np.where(np.isfinite(r), r * cost_of[None, :], np.inf)
+            c = np.argmin(cost, axis=1)
+            rows = np.arange(stop - start)
+            if not np.all(np.isfinite(cost[rows, c])):
+                bad = int(np.count_nonzero(~np.isfinite(cost[rows, c])))
+                raise RuntimeError(f'VarianceMap.seed_onehot: {bad} groups (first beta='
+                                   f'{start + int(np.argmin(np.isfinite(cost[rows, c])))}) are'
+                                   ' covered by no nonnegative column of W, so there is no'
+                                   ' feasible one-hot point. pin_column() an envelope column,'
+                                   ' which covers every group by construction.')
+            # The margin is what makes the seed DOMINATE rather than merely equal the reference
+            # in the channel that set the ratio, which is the difference between admissible and
+            # admissible-up-to-rounding.
+            Q[start + rows, cols[c]] = r[rows, c] * (1.0 + 1.0e-12)
+
+        rec = dict(step='seed_onehot', n_nonneg_cols=int(cols.size),
+                   seconds=time.time() - t0)
+        return self.replace(Q=Q, Q_is_semiorthogonal=False,
+                            W_is_semiorthogonal=self.W_is_semiorthogonal,
+                            is_admissible=bool(ref.is_admissible), history_record=rec)
+
+    def qstep(self, ref, *, cfg=None, repair=True, solve_fn=None, groups=None, q_lower=None,
+              workers=None, progress=False):
+        """One Q-step: hold W fixed and solve one covering LP per group for the rows of Q.
+
+        EXACT, not a heuristic: f is strictly increasing, so minimizing D over a group's
+        coefficients is exactly minimizing that group's row sum, and the groups are independent.
+        Given W, no better Q exists -- and it follows that the step is insensitive to the precise
+        shape of f.
+
+        'ref' supplies the right-hand sides, one row per group; it must have the same geometry
+        and coarse-graining as self, and may be dense or factored. A LOOSE ref is safe rather
+        than wrong: it makes the covering constraint stricter, so the result is admissible but
+        suboptimal.
+
+        The result has the same W, the same pinned columns, a new Q, an identity 'mid' (the LP
+        chooses the coefficients outright, so a middle matrix has nothing left to say), and
+
+            is_admissible = ref.is_admissible
+
+        -- NOT unconditionally True, and only when a repair really ran. The covering constraint
+        is exactly the statement ``self >= ref`` and the repair enforces it exactly, but
+        admissibility is transitive: ``self >= ref`` and ``ref >= A_true`` give the conclusion,
+        and an uncertified ref certifies nothing. With the usual streamed reference that is True
+        and the distinction never shows. The second condition is the config's, not the kwarg's:
+        the three repair stages are LpConfig fields, so a config selecting none of them repairs
+        nothing however ``repair=`` is set.
+
+        Parameters
+        ----------
+        cfg : LpConfig or None
+            None means LpConfig.for_qstep(), which is the research code's shipped settings and
+            NOT the best values known; LpConfig.recommended('q') is those. The W-step's config is
+            a genuinely different config, not this one with a flag.
+        repair : bool
+            Apply the admissibility repair before returning. True is the right default. False
+            returns the RAW LP point with ``is_admissible=False``, which is what to store when
+            several repairs may be tried on one expensive solve -- a Q-step at production scale
+            is hundreds of core-hours and a repair is a single blocked pass.
+        solve_fn : callable or None
+            An alternative to lp.solve_covering_lps with the same signature: the extension point
+            for a different solver, a heuristic or a warm start, without reimplementing the
+            plumbing that assembles the LPs, applies the repair and rebuilds the map.
+        groups : ndarray or None
+            Solve only this subset of beta, keeping the rest of Q. The rows of Q are independent
+            given W, so slices run in separate processes and combined with replace(Q=...) give
+            exactly the Q one process would have produced. Requires repair=False: the repair
+            must run AFTER merging, since per slice it loses the step's own violation accounting.
+        """
+
+        from . import lp
+        self._require_factored('qstep')
+        Abar = self._lp_reference(ref, 'qstep')
+        cfg = lp.LpConfig.for_qstep() if (cfg is None) else cfg
+
+        t0 = time.time()
+        Q, W, info = lp.q_step(Abar, np.asarray(self.W, dtype=np.float64), cfg, Q0=self._QM(),
+                               q_lower=q_lower, workers=workers, progress=progress,
+                               repair=repair, solve_fn=solve_fn, groups=groups)
+        return self._step_result('qstep', ref, cfg, Q, None, W, info, t0,
+                                 repair and self._cfg_repairs(cfg, 'rows'),
+                                 False, self.W_is_semiorthogonal)
+
+    def wstep(self, ref, *, cfg=None, repair=True, solve_fn=None, channels=None, workers=None,
+              progress=False):
+        """One W-step: hold Q fixed and solve one majorize-minimize LP per channel for the rows
+        of W.
+
+        Needs a majorization because the objective depends on W through column sums while the
+        constraint depends on it elementwise, so it does not decouple as written. f is concave,
+        so its tangent at the current iterate is a global UPPER bound; minimizing the tangent
+        cannot increase the true objective, and the tangent IS linear in W and does decouple over
+        channels. The tangent is taken at the FINE rows, which is why ref.y_true is required.
+
+        Columns listed in ``self.pinned_columns`` are excluded from the LP and left unchanged.
+
+        The result has the same Q (unless a repair arm charges the violation to it), a new W, an
+        identity 'mid', and ``is_admissible`` from ref and from whether the config repairs at
+        all -- see qstep(). 'channels' parallelizes exactly as qstep()'s 'groups' does, with the
+        same repair=False requirement.
+
+        cfg defaults to LpConfig.for_wstep(), which is NOT the Q-step's config: the relative
+        constraint floor is 400x worse in this direction, the prefix rescue helps nothing here,
+        and the repair's damage scales with group count rather than with rank.
+        """
+
+        from . import lp
+        self._require_factored('wstep')
+        Abar = self._lp_reference(ref, 'wstep')
+        if ref.y_true is None:
+            raise RuntimeError('VarianceMap.wstep: ref has no y_true, so the majorization has'
+                               ' nothing to linearize about. y_true is carried by every'
+                               ' transformation, so a reference without it came from somewhere'
+                               ' that never had it.')
+        cfg = lp.LpConfig.for_wstep() if (cfg is None) else cfg
+
+        midI = self._mid_is_identity()
+        Qm = self._QM()
+        t0 = time.time()
+        Q, W, info = lp.w_step(Abar, Qm, np.asarray(ref.y_true, dtype=np.float64),
+                               self._fine_labels(), np.asarray(self.W, dtype=np.float64), cfg,
+                               pinned=self.pinned_columns, workers=workers, progress=progress,
+                               repair=repair, solve_fn=solve_fn, channels=channels)
+
+        # This direction's repair normally scales W, but the 'rows' arm charges the violation to
+        # Q instead -- so Q's claim survives only when the array really did come back untouched.
+        qflag = self.Q_is_semiorthogonal and midI and np.array_equal(Q, Qm)
+        return self._step_result('wstep', ref, cfg, Q, None, W, info, t0,
+                                 repair and self._cfg_repairs(cfg, 'cols'), qflag, False)
+
+    def repair(self, ref, *, cfg=None, axis='rows'):
+        """Raise self until it dominates 'ref', with no LP at all. Returns a map with the same
+        factor_rank and ``is_admissible = ref.is_admissible``.
+
+        Two uses, and the second is the one worth knowing. First, it is the cheap replacement for
+        a TERMINAL Q-step: after a W-step the incumbent Q is stale but nearly right, and
+        repairing it against the new W costs 100x-2000x less than re-solving for 0-0.2% in D --
+        occasionally better, since the Q-step optimizes the LP objective, which bounds D rather
+        than being D. Second, it makes "solve once, repair several ways" a real workflow:
+        ``qstep(repair=False)`` stores the raw point, and each candidate repair is one blocked
+        pass over the product rather than another solve. Both matter because a surprising amount
+        of the achievable D lives in the repair -- up to 2.5x by itself -- and which repair wins
+        depends on the direction and the scale.
+
+        Parameters
+        ----------
+        cfg : LpConfig or None
+            Defaults to for_qstep() or for_wstep() according to 'axis'. ONLY its repair fields
+            are read, and they mean exactly what they mean inside qstep() and wstep(); the three
+            stages and why both additive ones are there are documented once, on LpConfig.
+        axis : str
+            Which factor the multiplicative stage scales when ``cfg.rescale`` is 'auto': 'rows'
+            scales rows of Q (the Q-step's axis), 'cols' scales rows of W. An argument rather
+            than a config field because a standalone repair has no step to infer the axis from.
+            It also selects WHICH additive routine runs -- the two directions genuinely differ
+            there, and 'rows' is the only one that lifts to a noise floor as well as to ref.
+
+        Requires a nonnegative column of W when either additive stage is on, and RAISES rather
+        than falling back to the multiplicative-only path, because a silent fallback looks
+        exactly like the additive repair simply not helping. See n_nonneg_cols(). It also
+        refuses a config that selects no repair stage at all, since returning the same map with
+        ``is_admissible`` newly set is the one thing this must never do -- a step's
+        ``repair=False`` is how you ask for the raw point.
+
+        There is no separate pass against the FINE map. For the usual reference -- the true map's
+        max-envelope -- the pivot identity makes one redundant: a row dominating ``ref[beta,:]``
+        dominates every fine row in the group, which is what makes scoring possible at CHORD
+        scale at all.
+        """
+
+        from . import lp
+        self._require_factored('repair')
+        if axis not in ('rows', 'cols'):
+            raise RuntimeError(f"VarianceMap.repair: axis must be 'rows' or 'cols', got"
+                               f' {axis!r}')
+        Abar = self._lp_reference(ref, 'repair')
+        cfg = ((lp.LpConfig.for_qstep() if (axis == 'rows') else lp.LpConfig.for_wstep())
+               if (cfg is None) else cfg)
+
+        if not self._cfg_repairs(cfg, axis):
+            raise RuntimeError(
+                f'VarianceMap.repair: cfg selects no repair stage ({cfg.repair_label!r}), so'
+                ' this would return the same map while claiming it dominates the reference.'
+                " If the raw point is what you want, that is what a step's repair=False"
+                ' returns.')
+
+        additive = bool(cfg.additive_first or cfg.additive_last)
+        if additive and (self.n_nonneg_cols() < 1):
+            raise RuntimeError(
+                'VarianceMap.repair: the additive stage adds a multiple of a NONNEGATIVE column'
+                ' of W and this map has none, so it has nothing to lift with. Run'
+                ' canonicalize_signs(), or pin_column(basis_envelope_column(ref)), or turn both'
+                ' additive stages off.')
+
+        Q, W = np.asarray(self.Q, dtype=np.float64), np.asarray(self.W, dtype=np.float64)
+        mid = None if self._mid_is_identity() else np.asarray(self.mid, dtype=np.float64)
+        folded = additive and (mid is not None)
+        if folded:
+            # The additive lift is defined on the COLUMNS of W, so it only raises the product
+            # when mid is the identity; the multiplicative stage handles mid exactly, since a row
+            # scale commutes with it.
+            Q, mid = Q @ mid, None
+
+        t0 = time.time()
+        Qn, Wn, info = lp.apply_repair(Q, W, mid, Abar, cfg, axis=axis)
+        qflag = self.Q_is_semiorthogonal and (not folded) and np.array_equal(Qn, Q)
+        wflag = self.W_is_semiorthogonal and np.array_equal(Wn, W)
+        return self._step_result('repair', ref, cfg, Qn, mid, Wn, info, t0, True, qflag, wflag)
 
     # ---------------- scoring ----------------
 
