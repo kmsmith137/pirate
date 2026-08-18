@@ -1546,6 +1546,77 @@ def test_lp_steps():
                  ' two alternations')
 
 
+def test_lp_rescue():
+    """The prefix rescue, including the branch that ACCEPTS a rescued row.
+
+    When a subproblem fails, the solver returns the caller's seed, and the step re-solves that
+    subproblem on a PREFIX of the same dictionary -- fewer columns, the same admissibility
+    argument, the rank unchanged -- keeping the result only if it is admissible AND its
+    objective beats the incumbent. It matters out of proportion to how often it fires: one
+    failure per ~450 groups costs more D than an entire doubling of the rank.
+
+    The failures are INJECTED through solve_fn rather than provoked. Provoking them needs a
+    numerically degenerate cell, and on every such cell found so far the prefix solves fail
+    too -- the rescue runs and accepts nothing, which exercises the machinery but never the
+    accept path. Injecting them leaves the rescue itself entirely real: it re-solves through
+    the ordinary solver, judges by its own admissibility and objective tests, and writes back
+    through the same code. It also exercises solve_fn, which is the documented extension point
+    for an agent swapping in a different solver.
+    """
+
+    from .lp import LpConfig, q_step, solve_covering_lps
+
+    Abar, y, labels, W, config, coarse = _lp_cell(K=12)
+    nbeta, K = Abar.shape[0], W.shape[1]
+    seed = np.zeros((nbeta, K))
+    seed[:, 0] = (Abar / np.maximum(W[:, 0], 1e-300)[None, :]).max(axis=1) * (1 + 1e-12)
+    assert _dominates(seed, W, Abar), 'the seed must be feasible for the incumbent to mean something'
+
+    hurt = np.array([0, 3, 7, 11])
+
+    def flaky(M, B, cost, cfg, **kw):
+        """solve_covering_lps, with a few subproblems reported as failed -- which is exactly
+        what the solver does when it cannot solve one: it returns the seed and says so."""
+        X, info = solve_covering_lps(M, B, cost, cfg, **kw)
+        X[hurt] = kw['x_seed'][hurt]
+        return X, dict(info, failed=[int(i) for i in hurt], n_failed=int(hurt.size))
+
+    cfg = LpConfig.for_qstep(nonneg=False)
+    Q, _, info = q_step(Abar, W, cfg, Q0=seed, repair=False, solve_fn=flaky)
+
+    assert info['rescue_rows'] == hurt.size, info
+    assert info['rescue_improved'] >= 1, ('the rescue accepted nothing, so its accept branch'
+                                          ' is still untested', info)
+
+    s = W.sum(axis=0)
+    changed = np.flatnonzero(np.any(Q[hurt] != seed[hurt], axis=1))
+    for j in changed:
+        i = hurt[j]
+        # Accepted rows are re-solved on a PREFIX, so the rank is unchanged and the columns
+        # past that prefix are exactly zero.
+        nz = np.flatnonzero(Q[i] != 0.0)
+        assert nz.size == 0 or (nz.max() + 1) in cfg.rescue_ladder, (i, nz)
+        # ... and accepted only because the objective strictly improved.
+        assert (s @ Q[i]) < (s @ seed[i]), (i, s @ Q[i], s @ seed[i])
+        # ... and only if the rescued row is itself admissible.
+        assert np.all((Q[i] @ W.T) >= Abar[i] - 1e-12), i
+
+    # Rows that were never touched are untouched.
+    keep = np.setdiff1d(np.arange(nbeta), hurt)
+    Qref, _, _ = q_step(Abar, W, cfg, Q0=seed, repair=False)
+    assert np.array_equal(Q[keep], Qref[keep])
+
+    # With the rescue off, a failed row keeps the seed and nothing re-solves it.
+    Qoff, _, ioff = q_step(Abar, W, LpConfig.for_qstep(nonneg=False, rescue=None), Q0=seed,
+                           repair=False, solve_fn=flaky)
+    assert 'rescue_rows' not in ioff
+    assert np.array_equal(Qoff[hurt], seed[hurt])
+
+    atomic_print(f'    test_lp_rescue(nbeta={nbeta}, K={K}): {info["rescue_improved"]} of'
+                 f' {info["rescue_rows"]} injected failures rescued on a prefix, rank'
+                 ' preserved, and none accepted without improving')
+
+
 def test_lp_negative_rhs():
     """The right-hand sides go NEGATIVE, which only a factored reference can make happen.
 
@@ -1708,5 +1779,6 @@ def run_all():
     test_lp_optimality()
     test_lp_repairs()
     test_lp_steps()
+    test_lp_rescue()
     test_lp_negative_rhs()
     test_lp_building_blocks()
