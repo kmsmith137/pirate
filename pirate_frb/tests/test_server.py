@@ -67,6 +67,71 @@ from .utils import make_random_subscale_config, pick_receiver_worker_counts
 from ..utils import atomic_print
 
 
+def _check_batch_decode(g):
+    """Check FrbGrouper's vectorized decode_argmax*() bindings, in the grouper child.
+
+    These are the bindings the production event path uses (pirate_frb.rpc.FrbGrouper's
+    create_events()), and this is the only place they can be tested: they need a
+    handshaken grouper, and DedispersionPlan has no batch-decode binding. So a change to
+    the vectorized helpers shows up HERE, under 'test --serv', not under '--amax'.
+
+    The scalar reference comes from trees rebuilt out of the handshake yamls -- the same
+    route the grouper itself uses, and the only one available, since
+    FrbGrouper.dedispersion_trees is deliberately not pybind-wrapped.
+    """
+
+    import numpy as np
+    import yaml as _yaml
+    from pirate_frb.pirate_pybind11 import DedispersionConfig, DedispersionTree
+
+    config = DedispersionConfig.from_yaml_string(g.dedispersion_config_yaml_string)
+    doc = _yaml.safe_load(g.dedispersion_plan_yaml_string)
+    trees = [DedispersionTree.from_yaml_string(_yaml.safe_dump(tn), config)
+             for tn in doc['trees']]
+    assert len(trees) == g.ntrees
+
+    # A few well-formed events per tree: token m=0/p=0/t=0 is always valid, and the
+    # (idm, itime) corners exercise the index arithmetic. Any valid input works -- this
+    # tests the vectorized wrapper (packing order, index bookkeeping), not the decode
+    # itself, which '--amax' covers exhaustively.
+    ev = [(it, 0, idm, ito)
+          for it in range(g.ntrees)
+          for idm in (0, trees[it].ndm_out - 1)
+          for ito in (0, trees[it].nt_out - 1)]
+
+    itrees = np.array([e[0] for e in ev], dtype=np.int64)
+    tokens = np.array([e[1] for e in ev], dtype=np.uint32)
+    idms = np.array([e[2] for e in ev], dtype=np.int64)
+    itimes = np.array([e[3] for e in ev], dtype=np.int64)
+
+    outs = g.decode_argmax_batch(tokens, itrees, idms, itimes)
+    outs2 = g.decode_argmax2_batch(itrees, *outs)
+
+    for i, (it, tok, idm, ito) in enumerate(ev):
+        assert tuple(int(a[i]) for a in outs) == trees[it].decode_argmax(config, tok, idm, ito), i
+        assert tuple(float(a[i]) for a in outs2) == \
+            trees[it].decode_argmax2(config, *(int(a[i]) for a in outs)), i
+
+    freqs_lo, freqs_hi, dms, ts_samp, widths_samp = outs2
+    assert (freqs_lo < freqs_hi).all() and (dms >= 0).all()
+    assert (widths_samp > 0).all() and np.isfinite(ts_samp).all()
+
+    # Range-checked, and empty inputs rejected (python callers short-circuit that case).
+    empty = np.zeros(0, dtype=np.int64)
+    for bad in (np.full(len(ev), -1, dtype=np.int64),
+                np.full(len(ev), g.ntrees, dtype=np.int64)):
+        try:
+            g.decode_argmax_batch(tokens, bad, idms, itimes)
+            raise AssertionError("decode_argmax_batch() should have thrown (itree out of range)")
+        except RuntimeError:
+            pass
+    try:
+        g.decode_argmax_batch(np.zeros(0, dtype=np.uint32), empty, empty, empty)
+        raise AssertionError("decode_argmax_batch() should have thrown on empty input")
+    except (RuntimeError, TypeError):
+        pass
+
+
 def _grouper_child_main(grouper_addr, nchunks, out_queue, shutdown_event):
     """Child-process main: the ad hoc grouper consumer.
 
@@ -91,6 +156,10 @@ def _grouper_child_main(grouper_addr, nchunks, out_queue, shutdown_event):
         # restore_cuda_device=False: this child process is a dedicated grouper
         # (same situation as run_toy_grouper; see FrbGrouper docstring).
         with FrbGrouper(grouper_addr, restore_cuda_device=False) as g:
+            # Before the first message: a failure here then reaches the parent as
+            # ('error', traceback) on its very first queue read, rather than racing the
+            # server's "grouper Session stream closed unexpectedly".
+            _check_batch_decode(g)
             out_queue.put(('handshake', g.nbatches, g.initial_chunk, g.ntrees))
             for ichunk in range(nchunks):
                 for ibatch in range(g.nbatches):

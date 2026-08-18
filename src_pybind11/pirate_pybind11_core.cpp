@@ -41,12 +41,14 @@ namespace pirate {
 
 // -------------------------------------------------------------------------------------------------
 //
-// Vectorized ("batch") decode_argmax*() helpers, bound as methods on both DedispersionPlan
-// (in pirate_pybind11.cpp, which declares these prototypes) and FrbGrouper (below). Non-static,
-// since the two class bindings live in different source files.
+// Vectorized ("batch") decode_argmax*() helpers, bound as FrbGrouper methods below. They
+// take (trees, config) because FrbGrouper holds the producer's DedispersionTrees,
+// deserialized at handshake, and never builds a DedispersionPlan.
 //
-// They take (trees, config) rather than a DedispersionPlan: FrbGrouper holds the producer's
-// DedispersionTrees, deserialized at handshake, and never builds a plan.
+// These are the bindings the production event path uses (pirate_frb.rpc.FrbGrouper's
+// create_events()), and there is no DedispersionPlan equivalent -- decoding through a plan
+// from python was only ever used by its own tests. They are covered by the batch-decode
+// assertions in pirate_frb/tests/test_server.py, i.e. by 'test --serv', NOT by '--amax'.
 //
 // Inputs are 1-d contiguous nonempty host arrays, one event per element. (Python callers
 // should short-circuit the zero-event case: the Array -> numpy caster rejects zero-size
@@ -78,7 +80,7 @@ static void _check_batch_arg(const char *fname, const char *arg_name, const ksgp
 }
 
 
-py::tuple _decode_argmax_batch(
+static py::tuple _decode_argmax_batch(
     const vector<DedispersionTree> &trees, const DedispersionConfig &config,
     const Array<uint> &tokens,
     const Array<long> &itrees, const Array<long> &idms, const Array<long> &itimes)
@@ -113,7 +115,7 @@ py::tuple _decode_argmax_batch(
 }
 
 
-py::tuple _decode_argmax2_batch(
+static py::tuple _decode_argmax2_batch(
     const vector<DedispersionTree> &trees, const DedispersionConfig &config,
     const Array<long> &itrees,
     const Array<long> &fmins, const Array<long> &fmaxs,

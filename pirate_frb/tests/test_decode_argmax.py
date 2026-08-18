@@ -1,5 +1,9 @@
 """
-Black-box tests of DedispersionPlan.decode_argmax() (run via 'test --amax').
+Black-box tests of decode_argmax() (run via 'test --amax').
+
+Note decoding from python goes through DedispersionTree; DedispersionPlan has no
+decode_argmax() binding. The VECTORIZED (batch) bindings live on FrbGrouper, which is what
+the production event path uses, and are tested in test_server.py ('test --serv').
 
 Strategy: for a FIXED token, eval_tokens() is a
 LINEAR functional of the input array -- the actual dedispersion + peak-finding
@@ -99,6 +103,13 @@ def _test_tree_yaml(config):
             pass
 
 
+def _decode(plan, token, itree, idm_coarse, itime_coarse):
+    """Scalar decode through the plan's tree. DedispersionPlan has no decode_argmax()
+    binding: decoding from python goes through DedispersionTree (here) or, vectorized,
+    through FrbGrouper (see test_server.py)."""
+    return plan.trees[itree].decode_argmax(plan.config, token, idm_coarse, itime_coarse)
+
+
 def _test_grouper_tree_rebuild(config, plan, tuples):
     """Rebuild the producer's DedispersionTrees from the plan yaml, as FrbGrouper does.
 
@@ -140,7 +151,7 @@ def _test_grouper_tree_rebuild(config, plan, tuples):
     # Decoding through the rebuilt trees must agree exactly with the full plan.
     for (itree, token, idm, itout) in tuples:
         assert (trees[itree].decode_argmax(cfg2, token, idm, itout)
-                == plan.decode_argmax(token, itree, idm, itout)), (itree, token)
+                == _decode(plan, token, itree, idm, itout)), (itree, token)
 
     # Negative test: a missing per-tree key must throw (naming the key).
     bad = yaml.safe_load(plan_yaml)['trees'][0]
@@ -153,45 +164,6 @@ def _test_grouper_tree_rebuild(config, plan, tuples):
         pass
 
     return trees
-
-
-def _test_batch_decode(plan, trees, config, tuples):
-    """Test the vectorized decode bindings.
-
-    decode_argmax_batch() must equal a loop over the scalar decode_argmax(); the trees
-    rebuilt from the plan yaml must decode identically to the freshly-built plan (the
-    property FrbGrouper relies on); basic postconditions on the physical params."""
-
-    itrees = np.array([t[0] for t in tuples], dtype=np.int64)
-    tokens = np.array([t[1] for t in tuples], dtype=np.uint32)
-    idms   = np.array([t[2] for t in tuples], dtype=np.int64)
-    itimes = np.array([t[3] for t in tuples], dtype=np.int64)
-
-    outs = plan.decode_argmax_batch(tokens, itrees, idms, itimes)
-    for i, (it, tok, idm, ito) in enumerate(tuples):
-        assert tuple(int(a[i]) for a in outs) == plan.decode_argmax(tok, it, idm, ito)
-
-    freqs_lo, freqs_hi, dms, ts_samp, widths_samp = plan.decode_argmax2_batch(itrees, *outs)
-    assert (freqs_lo < freqs_hi).all()
-    assert (dms >= 0).all()
-    assert (widths_samp > 0).all()
-    assert np.isfinite(ts_samp).all()
-
-    # The trees rebuilt from the plan yaml must decode identically. This is the consumer
-    # (FrbGrouper) path: producer values recovered from yaml, decoded without a plan.
-    for i, (it, tok, idm, ito) in enumerate(tuples):
-        assert trees[it].decode_argmax(config, tok, idm, ito) == \
-            tuple(int(a[i]) for a in outs), i
-        assert trees[it].decode_argmax2(config, *(int(a[i]) for a in outs)) == \
-            (freqs_lo[i], freqs_hi[i], dms[i], ts_samp[i], widths_samp[i]), i
-
-    # Batch methods reject empty inputs (python callers short-circuit that case).
-    empty = np.zeros(0, dtype=np.int64)
-    try:
-        plan.decode_argmax_batch(np.zeros(0, dtype=np.uint32), empty, empty, empty)
-        raise AssertionError("decode_argmax_batch() should have thrown on empty input")
-    except (RuntimeError, TypeError):
-        pass
 
 
 ####################################################################################################
@@ -334,7 +306,7 @@ def _probe_tuples(plan, r_top, C, tuples):
 
     for i0 in range(0, len(tuples), per_run):
         run_tuples = tuples[i0 : i0 + per_run]
-        dec = [plan.decode_argmax(tok, it, idm, ito) for (it, tok, idm, ito) in run_tuples]
+        dec = [_decode(plan, tok, it, idm, ito) for (it, tok, idm, ito) in run_tuples]
 
         # Global (multi-chunk) positions of the decoded trailing edges (EXCLUSIVE: the
         # last summed sample is tlo-1 / thi-1); the warmup formula in _num_chunks()
@@ -402,7 +374,7 @@ def _check_bad_tokens(plan, kinfo):
 
     def expect_throw(*args):
         try:
-            plan.decode_argmax(*args)
+            _decode(plan, *args)
         except RuntimeError:
             return
         raise AssertionError(f"decode_argmax{args} should have thrown")
@@ -418,7 +390,9 @@ def _check_bad_tokens(plan, kinfo):
             expect_throw((p << 8) | 1, itree, 0, 0)   # t not divisible by dt
             break
 
-    expect_throw(0, plan.ntrees, 0, 0)          # itree out of range
+    # (No itree-out-of-range case: DedispersionPlan has no decode_argmax() binding, so
+    # python indexes plan.trees directly and gets IndexError from the list. The C++
+    # range check on batch decode is covered in test_server.py.)
     expect_throw(0, itree, tree.ndm_out, 0)     # idm_coarse out of range
     expect_throw(0, itree, 0, tree.nt_out)      # itime_coarse out of range
 
@@ -527,7 +501,7 @@ def test_decode_argmax():
         M = kinfo[itree][0]
         first, last = {}, {}
         for m in range(M):
-            fmin, fmax, _, _, _ = plan.decode_argmax(m << 16, itree, 0, 0)
+            fmin, fmax, _, _, _ = _decode(plan, m << 16, itree, 0, 0)
             first.setdefault((fmin, fmax), m)
             last[(fmin, fmax)] = m
         tree_bands.append([(m << 16, fmn, fmx) for (fmn, fmx), m in first.items()])
@@ -548,7 +522,6 @@ def test_decode_argmax():
     _probe_tuples(plan, r_top, C, tuples)
 
     # Round-trip test of the per-tree yaml, as FrbGrouper does (reuses the sampled tuples).
-    trees = _test_grouper_tree_rebuild(config, plan, tuples)
+    _test_grouper_tree_rebuild(config, plan, tuples)
 
     # Vectorized decode bindings (batch == scalar loop; full plan == incomplete plan).
-    _test_batch_decode(plan, trees, config, tuples)

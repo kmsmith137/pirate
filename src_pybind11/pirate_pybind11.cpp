@@ -40,22 +40,6 @@ namespace pirate {
     void register_loose_ends_bindings(pybind11::module &m);
     void register_simpulse_bindings(pybind11::module &m);
     void register_utils_bindings(pybind11::module &m);
-
-    // Vectorized decode_argmax*() helpers, defined in pirate_pybind11_core.cpp and bound
-    // as methods on both DedispersionPlan (below) and FrbGrouper (in core.cpp). They take
-    // (trees, config) rather than a DedispersionPlan, since FrbGrouper holds the producer's
-    // trees without building a plan.
-    pybind11::tuple _decode_argmax_batch(
-        const std::vector<DedispersionTree> &trees, const DedispersionConfig &config,
-        const ksgpu::Array<uint> &tokens,
-        const ksgpu::Array<long> &itrees, const ksgpu::Array<long> &idms,
-        const ksgpu::Array<long> &itimes);
-    pybind11::tuple _decode_argmax2_batch(
-        const std::vector<DedispersionTree> &trees, const DedispersionConfig &config,
-        const ksgpu::Array<long> &itrees,
-        const ksgpu::Array<long> &fmins, const ksgpu::Array<long> &fmaxs,
-        const ksgpu::Array<long> &tlos, const ksgpu::Array<long> &this_,
-        const ksgpu::Array<long> &ps);
 }
 
 
@@ -395,29 +379,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    zones: Include the per-clag mega_ringbuf host/gpu zone breakdown\n\n"
                "Returns:\n"
                "    YAML string representation of the plan")
-          .def("decode_argmax",
-               [](const DedispersionPlan &self, uint token, long itree, long idm_coarse, long itime_coarse) {
-                   long fmin, fmax, tlo, thi, p;
-                   self.decode_argmax(token, itree, idm_coarse, itime_coarse, fmin, fmax, tlo, thi, p);
-                   return py::make_tuple(fmin, fmax, tlo, thi, p);
-               },
-               py::arg("token"), py::arg("itree"), py::arg("idm_coarse"), py::arg("itime_coarse"),
-               "Decode an out_argmax token into the winning trial parameters.\n\n"
-               "Args:\n"
-               "    token: uint32 token from trees[itree]'s out_argmax array\n"
-               "    itree: tree index, in [0, ntrees)\n"
-               "    idm_coarse: dm index in out_max/out_argmax, in [0, trees[itree].ndm_out)\n"
-               "    itime_coarse: time index in out_max/out_argmax, in [0, trees[itree].nt_out)\n\n"
-               "Returns:\n"
-               "    Tuple (fmin, fmax, tlo, thi, p), TOPLEVEL-relative: fmin/fmax are the\n"
-               "    (inclusive) tree-freq range of the winning subband, in channels of the\n"
-               "    rank-toplevel_tree_rank gridding (0 <= fmin < fmax < 2^toplevel_tree_rank).\n"
-               "    tlo/thi are the EXCLUSIVE trailing edges at channels fmin/fmax (one past\n"
-               "    the last-summed sample), in full-resolution samples with t=0 at chunk\n"
-               "    start (tlo <= thi <= nt_in; negative values refer to earlier chunks).\n"
-               "    p is the winning peak-finding profile index. Throws on out-of-range\n"
-               "    indices or a malformed token. See DedispersionPlan.hpp for the full\n"
-               "    specification.")
           .def_property_readonly("cdd2_kernel_required",
                [](const DedispersionPlan &self) { return self.params.cdd2_kernel_required; },
                "False if the plan was constructed as DedispersionPlan(config,\n"
@@ -425,32 +386,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "kernel-registry values, so the plan cannot be used in a GpuDedisperser. It can\n"
                "still be used on the GPU without cdd2 (see slow_avar.GpuBruteForceVarianceMap),\n"
                "and in host-only contexts such as the 'pirate_frb show_dedisperser' CLI.")
-          .def("decode_argmax_batch",
-               [](const DedispersionPlan &self, const ksgpu::Array<uint> &tokens,
-                  const ksgpu::Array<long> &itrees, const ksgpu::Array<long> &idms,
-                  const ksgpu::Array<long> &itimes) {
-                   return _decode_argmax_batch(self.trees, self.config, tokens, itrees, idms, itimes);
-               },
-               py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
-               "Vectorized decode_argmax() over 1-d nonempty arrays (one event per element;\n"
-               "tokens: uint32, itrees/idms/itimes: int64). Returns TOPLEVEL-relative\n"
-               "(fmins, fmaxs, tlos, this, ps), each an int64 array. Per-element validation\n"
-               "(index ranges, malformed tokens) is inherited from decode_argmax().")
-          .def("decode_argmax2_batch",
-               [](const DedispersionPlan &self, const ksgpu::Array<long> &itrees,
-                  const ksgpu::Array<long> &fmins, const ksgpu::Array<long> &fmaxs,
-                  const ksgpu::Array<long> &tlos, const ksgpu::Array<long> &this_,
-                  const ksgpu::Array<long> &ps) {
-                   return _decode_argmax2_batch(self.trees, self.config, itrees, fmins, fmaxs,
-                                                tlos, this_, ps);
-               },
-               py::arg("itrees"), py::arg("fmins"), py::arg("fmaxs"),
-               py::arg("tlos"), py::arg("this"), py::arg("ps"),
-               "Vectorized decode_argmax2(): converts decode_argmax_batch() outputs to\n"
-               "physical params. Returns (freqs_lo_MHz, freqs_hi_MHz, dms, timestamps_samp,\n"
-               "widths_samp), each a float64 array. Timestamps are CHUNK-RELATIVE toplevel\n"
-               "sample counts (extrapolated to the full-band lowest frequency); the caller\n"
-               "converts to absolute FPGA counts.")
           .def("compute_steady_state_it0", &DedispersionPlan::compute_steady_state_it0,
                py::arg("itree"),
                "Returns a 1-d int64 array of shape (trees[itree].ndm_out,). A dedispersion\n"
