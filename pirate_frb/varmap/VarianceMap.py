@@ -191,8 +191,26 @@ class VarianceMap:
       ``A = Q @ mid @ W.T``. A dense fine map is 64 GiB at CHIME tree-0 and 1.2 TiB at CHORD,
       so nothing here may materialize a temporary of its size, and every consumer walks it in
       row blocks (see rows() and default_block_rows()).
-    - ``A`` (ndarray) -- the ``(nbeta, nfreq)`` matrix when ``is_factored`` is False. May be a
-      numpy memmap, which the row-blocked access makes transparent.
+    - ``A`` (ndarray) -- the ``(nbeta, nfreq)`` matrix when ``is_factored`` is False, else
+      None. May be a numpy memmap, which the row-blocked access makes transparent.
+    - ``Q`` (ndarray) -- ``(nbeta, K)`` when factored, else None. Sign-free.
+    - ``mid`` (ndarray) -- ``(K, K)`` when factored, else None; the identity when unused. It
+      lets Q and W BOTH be semiorthogonal at once (an SVD is ``U diag(s) V^T``, and folding
+      s into either factor destroys one of the two properties), and makes rescaling O(K^2)
+      instead of O(nbeta*K).
+    - ``W`` (ndarray) -- ``(nfreq, K)`` when factored, else None. Sign-free; its columns are
+      frequency "atoms".
+    - ``factor_rank`` (int) -- K, the number of columns of Q and W; None when dense.
+    - ``Q_is_semiorthogonal`` / ``W_is_semiorthogonal`` (bool) -- carried, NOT verified. This
+      class never checks them, and never sets either True on its own.
+    - ``pinned_columns`` (ndarray) -- int64 column indices of W held fixed by the steps;
+      empty by default, and None when dense. Likewise carried rather than interpreted.
+
+    ONLY THE STRUCTURE OF A FACTORIZATION IS ENFORCED HERE -- shapes, a consistent K, dtypes,
+    and column indices in range. Whether ``Q^T Q`` really is the identity, whether ``mid`` is
+    diagonal, whether a pinned column is nonnegative: none of that is checked, because those
+    invariants belong to the steps that establish them. A flag this class cannot check is one
+    it carries rather than enforces.
 
     How this map was produced:
 
@@ -242,18 +260,25 @@ class VarianceMap:
         to supply a tree read from a file rather than re-derived from the config.
         """
 
-        if (Q is not None) or (W is not None) or (mid is not None):
-            raise RuntimeError('VarianceMap: the factored representation (Q, mid, W) is not'
-                               ' implemented yet -- only dense maps are supported so far.')
-        if pinned_columns:
-            raise RuntimeError('VarianceMap: pinned_columns is meaningless without a'
-                               ' factored representation, which is not implemented yet.')
-        if Q_is_semiorthogonal or W_is_semiorthogonal:
-            raise RuntimeError('VarianceMap: the semiorthogonality flags are meaningless'
-                               ' without a factored representation, which is not implemented'
-                               ' yet.')
-        if A is None:
-            raise RuntimeError('VarianceMap: expected a dense matrix A')
+        factored = (Q is not None) or (W is not None) or (mid is not None)
+
+        if factored and (A is not None):
+            raise RuntimeError('VarianceMap: got both a dense matrix A and factors; exactly'
+                               ' one of {A} and {Q, W} may be given.')
+        if factored and ((Q is None) or (W is None)):
+            missing = 'Q' if (Q is None) else 'W'
+            raise RuntimeError(f'VarianceMap: the factored representation needs BOTH Q and W'
+                               f' ({missing} is missing). Only "mid" is optional, and it'
+                               ' defaults to the identity.')
+        if (not factored) and (A is None):
+            raise RuntimeError('VarianceMap: expected either a dense matrix A, or factors'
+                               ' Q and W')
+        if (not factored) and (pinned_columns is not None):
+            raise RuntimeError('VarianceMap: pinned_columns indexes the columns of W, so it'
+                               ' is meaningless for a dense map.')
+        if (not factored) and (Q_is_semiorthogonal or W_is_semiorthogonal):
+            raise RuntimeError('VarianceMap: the semiorthogonality flags describe Q and W,'
+                               ' so they are meaningless for a dense map.')
 
         itree = int(itree)
         ntrees = int(config.num_dedispersion_trees)
@@ -314,17 +339,79 @@ class VarianceMap:
 
         # ---- the matrix ----
 
-        A = A if hasattr(A, 'shape') else np.asarray(A)
-        if A.ndim != 2:
-            raise RuntimeError(f'VarianceMap: expected a 2-d matrix A, got shape {A.shape}')
-        if A.shape != (nbeta, self.nfreq):
-            expect = 'coarse' if (L is not None) else 'fine'
-            raise RuntimeError(f'VarianceMap: A has shape {A.shape}, expected'
-                               f' ({nbeta}, {self.nfreq}) for a {expect} map'
-                               + (f' at L={L}' if (L is not None) else ''))
-        if A.dtype not in (np.float32, np.float64):
-            raise RuntimeError(f'VarianceMap: A has dtype {A.dtype}, expected float32/float64')
-        set_('A', _readonly(A) if isinstance(A, np.ndarray) else A)
+        def _check_dtype(x, name):
+            if x.dtype not in (np.float32, np.float64):
+                raise RuntimeError(f'VarianceMap: {name} has dtype {x.dtype}, expected'
+                                   ' float32/float64')
+
+        if not factored:
+            A = A if hasattr(A, 'shape') else np.asarray(A)
+            if A.ndim != 2:
+                raise RuntimeError(f'VarianceMap: expected a 2-d matrix A, got shape'
+                                   f' {A.shape}')
+            if A.shape != (nbeta, self.nfreq):
+                expect = 'coarse' if (L is not None) else 'fine'
+                raise RuntimeError(f'VarianceMap: A has shape {A.shape}, expected'
+                                   f' ({nbeta}, {self.nfreq}) for a {expect} map'
+                                   + (f' at L={L}' if (L is not None) else ''))
+            _check_dtype(A, 'A')
+            set_('A', _readonly(A) if isinstance(A, np.ndarray) else A)
+            for k in ('Q', 'mid', 'W', 'pinned_columns'):
+                set_(k, None)
+            set_('Q_is_semiorthogonal', False)
+            set_('W_is_semiorthogonal', False)
+        else:
+            # ONLY STRUCTURE IS CHECKED HERE: shapes, a consistent K, dtypes, and column
+            # indices in range. Whether Q^T Q is actually the identity, whether 'mid' is
+            # diagonal, whether a pinned column is nonnegative -- none of that is asserted.
+            # Those invariants belong to the steps that establish them, and a flag this
+            # class cannot check is one it should carry rather than enforce.
+            Q = Q if hasattr(Q, 'shape') else np.asarray(Q)
+            W = W if hasattr(W, 'shape') else np.asarray(W)
+            if (Q.ndim != 2) or (W.ndim != 2):
+                raise RuntimeError(f'VarianceMap: expected 2-d factors, got Q{Q.shape} and'
+                                   f' W{W.shape}')
+            if Q.shape[1] != W.shape[1]:
+                raise RuntimeError(f'VarianceMap: Q has {Q.shape[1]} columns and W has'
+                                   f' {W.shape[1]}; both are the factorization rank K, so'
+                                   ' they must agree')
+
+            K = int(Q.shape[1])
+            if Q.shape[0] != nbeta:
+                expect = 'coarse' if (L is not None) else 'fine'
+                raise RuntimeError(f'VarianceMap: Q has shape {Q.shape}, expected'
+                                   f' ({nbeta}, {K}) for a {expect} map'
+                                   + (f' at L={L}' if (L is not None) else ''))
+            if W.shape[0] != self.nfreq:
+                raise RuntimeError(f'VarianceMap: W has shape {W.shape}, expected'
+                                   f' ({self.nfreq}, {K}) -- its rows are frequency channels')
+
+            mid = np.eye(K) if (mid is None) else (mid if hasattr(mid, 'shape')
+                                                  else np.asarray(mid))
+            if mid.shape != (K, K):
+                raise RuntimeError(f'VarianceMap: mid has shape {mid.shape}, expected'
+                                   f' ({K}, {K})')
+
+            _check_dtype(Q, 'Q')
+            _check_dtype(mid, 'mid')
+            _check_dtype(W, 'W')
+
+            pc = (np.zeros(0, dtype=np.int64) if (pinned_columns is None)
+                  else np.asarray(pinned_columns, dtype=np.int64).reshape(-1))
+            if pc.size and ((pc.min() < 0) or (pc.max() >= K)):
+                raise RuntimeError(f'VarianceMap: pinned_columns {list(pc)} indexes the'
+                                   f' columns of W, so every entry must lie in [0, {K})')
+            if np.unique(pc).size != pc.size:
+                raise RuntimeError(f'VarianceMap: pinned_columns {list(pc)} contains'
+                                   ' duplicates')
+
+            set_('A', None)
+            set_('Q', _readonly(Q) if isinstance(Q, np.ndarray) else Q)
+            set_('mid', _readonly(mid) if isinstance(mid, np.ndarray) else mid)
+            set_('W', _readonly(W) if isinstance(W, np.ndarray) else W)
+            set_('pinned_columns', _readonly(pc))
+            set_('Q_is_semiorthogonal', bool(Q_is_semiorthogonal))
+            set_('W_is_semiorthogonal', bool(W_is_semiorthogonal))
 
         # ---- y_true ----
 
@@ -350,9 +437,10 @@ class VarianceMap:
     def __repr__(self):
         what = f'coarse at L={self.L}' if self.is_coarse_grained else 'fine'
         adm = 'admissible' if self.is_admissible else 'uncertified'
+        rep = f'factored K={self.factor_rank}' if self.is_factored else 'dense'
         return (f'VarianceMap(itree={self.itree}, r={self.tree_rank}, R={self.pf_rank},'
                 f' M={self.nmultiplets}, N={self.nsubbands}, P={self.nprofiles},'
-                f' shape={self.shape}, {what}, {adm})')
+                f' shape={self.shape}, {what}, {rep}, {adm})')
 
 
     # ---------------- construction ----------------
@@ -389,10 +477,18 @@ class VarianceMap:
 
 
     @classmethod
-    def from_factors(cls, config, itree, Q, W, *, mid=None, **kwargs):
-        """Wrap an existing factorization ``A = Q @ mid @ W.T``. Not implemented yet."""
-        raise RuntimeError('VarianceMap.from_factors: the factored representation is not'
-                           ' implemented yet -- only dense maps are supported so far.')
+    def from_factors(cls, config, itree, Q, W, *, mid=None, detrender=None, **kwargs):
+        """Wrap an existing factorization ``A = Q @ mid @ W.T``.
+
+        'mid' defaults to the identity. It exists so that Q and W can BOTH be semiorthogonal
+        at once (an SVD is ``U diag(s) V^T``, and folding s into either factor destroys one
+        of the two properties), and so that rescaling costs O(K^2) rather than O(nbeta*K).
+
+        Only structure is validated -- see the constructor. In particular this does NOT
+        check the semiorthogonality flags or anything about the pinned columns; it carries
+        what it is told.
+        """
+        return cls(config, itree, detrender, Q=Q, W=W, mid=mid, **kwargs)
 
 
     def replace(self, *, history_record=None, **kwargs):
@@ -405,14 +501,42 @@ class VarianceMap:
         ``history_record``, and a caller doing something they do not cover should pass one
         too rather than leaving a silent gap. A bare replace() copies history across
         unchanged, which is right for a relabelling and wrong for a change to the matrix --
-        so if you change A, say so.
+        so if you change A (or Q, mid, W), say so.
+
+        PASSING A MATRIX SWITCHES THE REPRESENTATION. ``replace(A=...)`` on a factored map
+        drops the factors, which is what makes coarse_grain() work on one: a max-envelope is
+        nonlinear, so it comes back dense. ``replace(Q=...)`` on a dense map does the
+        reverse. The alternative -- carrying both and erroring -- would make every such
+        transformation spell out what to clear.
+
+        Replacing Q or W CLEARS the matching semiorthogonality flag unless the call restates
+        it. That is not a semantic check (this class never verifies the flags); it is the
+        same conservative move inflated() makes with is_admissible, since False means "no
+        guarantee" and is always safe to assert.
         """
 
         # The tree is carried across rather than rebuilt: it is a pure function of
         # (config, itree), and replace() is on the hot path of an alternation schedule.
         args = dict(config=self.config, itree=self.itree, detrender=self.detrender,
-                    A=self.A, y_true=self.y_true, L=self.L,
+                    y_true=self.y_true, L=self.L,
                     is_admissible=self.is_admissible, history=self.history, tree=self.tree)
+
+        rep = dict(A=self.A, Q=self.Q, mid=self.mid, W=self.W,
+                   pinned_columns=self.pinned_columns,
+                   Q_is_semiorthogonal=self.Q_is_semiorthogonal,
+                   W_is_semiorthogonal=self.W_is_semiorthogonal)
+
+        if 'A' in kwargs:
+            rep = dict(A=None, Q=None, mid=None, W=None, pinned_columns=None,
+                       Q_is_semiorthogonal=False, W_is_semiorthogonal=False)
+        elif any(k in kwargs for k in ('Q', 'mid', 'W')):
+            rep['A'] = None
+            if ('Q' in kwargs) and ('Q_is_semiorthogonal' not in kwargs):
+                rep['Q_is_semiorthogonal'] = False
+            if ('W' in kwargs) and ('W_is_semiorthogonal' not in kwargs):
+                rep['W_is_semiorthogonal'] = False
+
+        args.update(rep)
         args.update(kwargs)
 
         if history_record is not None:
@@ -438,13 +562,23 @@ class VarianceMap:
 
     @property
     def is_factored(self):
-        """False: only the dense representation is implemented so far."""
-        return False
+        """True iff the matrix is stored as ``A = Q @ mid @ W.T`` rather than densely.
+
+        Equivalent to ``self.Q is not None``: the two are one fact, and deriving it means
+        they cannot disagree.
+        """
+        return self.Q is not None
 
     @property
     def factor_rank(self):
-        """K, the number of columns of W -- None for a dense map."""
-        return None
+        """K, the number of columns of Q and W -- None for a dense map.
+
+        This is the rank of the FACTORIZATION, which is an upper bound on the numerical rank
+        of the product and deliberately not the same thing. It is what gets reported, because
+        an approximation is a factorization we intend to evaluate as one, so the column count
+        is the honest cost.
+        """
+        return None if (self.Q is None) else int(self.Q.shape[1])
 
     @property
     def shape(self):
@@ -473,10 +607,18 @@ class VarianceMap:
         goes through it, so that nothing ever needs the dense product of a factored map.
         Blocked callers should size their blocks with default_block_rows().
 
-        The result is READ-ONLY, and is usually a view into the stored matrix rather than a
-        copy of it. Copy it if you need to modify it -- see _readonly().
+        The result is READ-ONLY. For a dense map it is usually a view into the stored matrix
+        rather than a copy of it; for a factored map it is freshly computed. Copy it if you
+        need to modify it -- see _readonly().
         """
-        return _readonly(np.asarray(self.A[int(start):int(stop)], dtype=np.float64))
+
+        start, stop = int(start), int(stop)
+        if not self.is_factored:
+            return _readonly(np.asarray(self.A[start:stop], dtype=np.float64))
+
+        Q = np.asarray(self.Q[start:stop], dtype=np.float64)
+        return _readonly((Q @ np.asarray(self.mid, dtype=np.float64))
+                         @ np.asarray(self.W, dtype=np.float64).T)
 
 
     def cols(self, start, stop):
@@ -487,10 +629,17 @@ class VarianceMap:
         C-order (nbeta, nfreq), so a column block is a strided gather. Size column blocks with
         default_block_cols(), which accounts for that.
 
-        The result is READ-ONLY, and is usually a view into the stored matrix rather than a
-        copy of it. Copy it if you need to modify it -- see _readonly().
+        The result is READ-ONLY. For a dense map it is usually a view into the stored matrix
+        rather than a copy of it; for a factored map it is freshly computed. Copy it if you
+        need to modify it -- see _readonly().
         """
-        return _readonly(np.asarray(self.A[:, int(start):int(stop)], dtype=np.float64))
+
+        start, stop = int(start), int(stop)
+        if not self.is_factored:
+            return _readonly(np.asarray(self.A[:, start:stop], dtype=np.float64))
+
+        QM = np.asarray(self.Q, dtype=np.float64) @ np.asarray(self.mid, dtype=np.float64)
+        return _readonly(QM @ np.asarray(self.W[start:stop], dtype=np.float64).T)
 
 
     def dense(self, *, force=False, max_bytes=1 << 31):
@@ -529,8 +678,13 @@ class VarianceMap:
         At our geometries the two constraints happen to agree; at a large nbeta the floor
         wins and the block exceeds target_bytes, which is the right trade -- it is still only
         a few hundred MiB, and the alternative is reading the file many times over.
+
+        For a FACTORED map neither consideration applies -- columns are computed, not read --
+        so the memory budget alone is used, with no floor.
         """
         budget = int(target_bytes) // (8 * self.nbeta)
+        if self.is_factored:
+            return max(1, min(self.nfreq, budget))
         return max(1, min(self.nfreq, max(budget, 512)))
 
 
@@ -542,6 +696,14 @@ class VarianceMap:
         if v.shape != (self.nfreq,):
             raise RuntimeError(f'VarianceMap.apply: expected a length-{self.nfreq} vector,'
                                f' got shape {v.shape}')
+
+        if self.is_factored:
+            # Q @ (mid @ (W.T @ v)) -- three small products, and A is never formed. This is
+            # the operation production actually performs, and the reason rank is the figure
+            # of merit rather than element count.
+            return (np.asarray(self.Q, dtype=np.float64)
+                    @ (np.asarray(self.mid, dtype=np.float64)
+                       @ (np.asarray(self.W, dtype=np.float64).T @ v)))
 
         out = np.empty(self.nbeta)
         nb = self.default_block_rows()
@@ -558,29 +720,40 @@ class VarianceMap:
         which is why get_distance() takes no reference argument.
         """
         if self._row_sums is None:
-            out = np.empty(self.nbeta)
-            nb = self.default_block_rows()
-            for start in range(0, self.nbeta, nb):
-                stop = min(start + nb, self.nbeta)
-                out[start:stop] = self.rows(start, stop).sum(axis=1)
+            if self.is_factored:
+                # One K-vector contraction, versus a pass over the whole matrix.
+                out = np.array(self.apply(np.ones(self.nfreq)))
+            else:
+                out = np.empty(self.nbeta)
+                nb = self.default_block_rows()
+                for start in range(0, self.nbeta, nb):
+                    stop = min(start + nb, self.nbeta)
+                    out[start:stop] = self.rows(start, stop).sum(axis=1)
             out.flags.writeable = False
             object.__setattr__(self, '_row_sums', out)
         return self._row_sums
 
 
     def apply_cost(self):
-        """Multiply-adds needed by apply(): ``nbeta * nfreq`` for a dense map.
+        """Multiply-adds needed by apply(): ``nbeta * nfreq`` dense, or
+        ``factor_rank * nfreq + factor_rank^2 + nnz(Q)`` factored.
 
         DESCRIPTIVE ONLY. The agreed figure of merit is RANK, not apply cost -- that was a
         deliberate decision, and it is why nothing here trades D away for a cheaper apply.
         Report this alongside D; do not optimize against it without saying so.
         """
-        return self.nbeta * self.nfreq
+        if not self.is_factored:
+            return self.nbeta * self.nfreq
+
+        K = self.factor_rank
+        return K * self.nfreq + K * K + int(np.count_nonzero(self.Q))
 
 
     def nbytes(self):
         """Bytes of matrix storage (excluding y_true)."""
-        return int(self.A.dtype.itemsize) * self.nbeta * self.nfreq
+        if not self.is_factored:
+            return int(self.A.dtype.itemsize) * self.nbeta * self.nfreq
+        return int(self.Q.nbytes) + int(self.mid.nbytes) + int(self.W.nbytes)
 
 
     # ---------------- geometry helpers ----------------
@@ -769,26 +942,55 @@ class VarianceMap:
 
         ``is_admissible`` is preserved only when ``factor >= 1``: scaling DOWN can break the
         covering property, and a flag that survived it would be a lie.
+
+        O(K^2) for a factored map, which stays factored: the scale goes into ``mid``, so
+        neither factor is touched and both semiorthogonality claims survive. O(nbeta*nfreq)
+        for a dense one.
         """
 
         factor = float(factor)
         rec = dict(step='inflated', factor=factor)
+        adm = self.is_admissible and (factor >= 1.0)
+
+        if self.is_factored:
+            return self.replace(mid=np.asarray(self.mid, dtype=np.float64) * factor,
+                                Q_is_semiorthogonal=self.Q_is_semiorthogonal,
+                                W_is_semiorthogonal=self.W_is_semiorthogonal,
+                                is_admissible=adm, history_record=rec)
+
         return self.replace(A=self.rows(0, self.nbeta) * factor,
-                            is_admissible=self.is_admissible and (factor >= 1.0),
-                            history_record=rec)
+                            is_admissible=adm, history_record=rec)
 
 
     def lift(self, *, max_bytes=1 << 31):
         """Return the equivalent NON-coarse-grained map, with each coarse row duplicated
         across its group.
 
-        Conceptually useful and used by tests; at production scale this is a memory disaster,
-        so it refuses above 'max_bytes'. Prefer to keep maps coarse and let get_distance() do
-        the lifting implicitly.
+        Conceptually useful and used by tests; for a DENSE map at production scale this is a
+        memory disaster, so it refuses above 'max_bytes'. Prefer to keep maps coarse and let
+        get_distance() do the lifting implicitly.
+
+        A FACTORED map lifts cheaply and stays factored: only the rows of Q are duplicated,
+        so the cost is ``nalpha * K`` rather than ``nalpha * nfreq``, and W and mid are
+        untouched.
         """
 
         if not self.is_coarse_grained:
             return self
+
+        rec = dict(step='lift', L_from=self.L)
+
+        if self.is_factored:
+            nbytes = 8 * self.nalpha * self.factor_rank
+            if nbytes > max_bytes:
+                raise RuntimeError(f'VarianceMap.lift(): the lifted Q would be'
+                                   f' {nbytes/(1<<30):.1f} GiB, over the'
+                                   f' {max_bytes/(1<<30):.1f} GiB limit.')
+            Q = np.asarray(self.Q)[self.alpha_to_beta_block(0, self.nalpha)]
+            return self.replace(Q=Q, L=None,
+                                Q_is_semiorthogonal=False,
+                                W_is_semiorthogonal=self.W_is_semiorthogonal,
+                                history_record=rec)
 
         nbytes = 8 * self.nalpha * self.nfreq
         if nbytes > max_bytes:
@@ -802,7 +1004,6 @@ class VarianceMap:
             stop = min(start + self._ALPHA_BLOCK, self.nalpha)
             out[start:stop] = self.A[self.alpha_to_beta_block(start, stop)]
 
-        rec = dict(step='lift', L_from=self.L)
         return self.replace(A=out, L=None, history_record=rec)
 
 

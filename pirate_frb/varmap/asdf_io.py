@@ -47,9 +47,11 @@ The tree
           pinned_columns:     (npinned,) int64
           y_true:             (nalpha,) float64 or None
 
-The factored fields are RESERVED, not optional: nothing writes them yet, and this reader
-refuses a file whose ``is_factored`` is True rather than misreading it as dense. They are
-named here so that adding the factored representation needs no format change.
+Exactly ONE of the two array groups is present in a tree block: ``A`` for a dense map, or
+``Q`` / ``mid`` / ``W`` and their descriptors for a factored one. ``is_factored`` says which,
+and the reader CHECKS it against the arrays rather than believing it -- a block carrying both
+groups, or neither, is refused by name, because that is the case where trusting the flag
+would silently reinterpret a matrix.
 
 Arrays live inside their tree's dict rather than in a parallel top-level list -- asdf
 memmaps nested ndarrays just as well, and it removes an index-alignment invariant that has
@@ -182,30 +184,41 @@ def _read_inputs(root):
 
 
 def _tree_dict(m):
-    """The per-tree block for one VarianceMap."""
+    """The per-tree block for one VarianceMap.
 
-    if m.is_factored:
-        raise RuntimeError('varmap.asdf_io: writing a FACTORED map is not implemented yet.'
-                           ' The format reserves Q / mid / W / factor_rank /'
-                           ' Q_is_semiorthogonal / W_is_semiorthogonal / pinned_columns for'
-                           ' it -- see this module docstring.')
+    Exactly one of the two array groups is written: `A` for a dense map, or
+    `Q`/`mid`/`W` plus their descriptors for a factored one. The reader refuses a block that
+    carries both or neither, so `is_factored` can never be believed over the arrays.
+    """
 
-    return dict(itree=int(m.itree),
-                tree_yaml=m.tree.to_yaml_string(m.config, m.itree),
-                m_to_n=np.ascontiguousarray(m.m_to_n, dtype=np.int64),
-                is_coarse_grained=bool(m.is_coarse_grained),
-                L=(int(m.L) if (m.L is not None) else None),
-                nbeta=int(m.nbeta),
-                is_admissible=bool(m.is_admissible),
-                is_factored=False,
-                history=[_plain(dict(h)) for h in m.history],
-                # A BASE-CLASS view, not the stored object: asdf refuses ndarray subclasses
-                # outright, and the scale path hands us an np.memmap (a map accumulated on
-                # disk, or one read back from open_multimap()). asarray() is free here --
-                # same dtype and order, so it is a view, not a copy of 344 GiB.
-                A=np.asarray(m.A),
-                y_true=(np.ascontiguousarray(m.y_true, dtype=np.float64)
-                        if (m.y_true is not None) else None))
+    d = dict(itree=int(m.itree),
+             tree_yaml=m.tree.to_yaml_string(m.config, m.itree),
+             m_to_n=np.ascontiguousarray(m.m_to_n, dtype=np.int64),
+             is_coarse_grained=bool(m.is_coarse_grained),
+             L=(int(m.L) if (m.L is not None) else None),
+             nbeta=int(m.nbeta),
+             is_admissible=bool(m.is_admissible),
+             is_factored=bool(m.is_factored),
+             history=[_plain(dict(h)) for h in m.history],
+             y_true=(np.ascontiguousarray(m.y_true, dtype=np.float64)
+                     if (m.y_true is not None) else None))
+
+    # Every array below goes out as a BASE-CLASS view, not the stored object: asdf refuses
+    # ndarray subclasses outright, and the scale path hands us an np.memmap (a matrix
+    # accumulated on disk, or one read back from open_multimap()). asarray() is free here --
+    # same dtype and order, so it is a view, not a copy of 344 GiB.
+    if not m.is_factored:
+        d['A'] = np.asarray(m.A)
+    else:
+        d['Q'] = np.asarray(m.Q)
+        d['mid'] = np.asarray(m.mid)
+        d['W'] = np.asarray(m.W)
+        d['factor_rank'] = int(m.factor_rank)
+        d['Q_is_semiorthogonal'] = bool(m.Q_is_semiorthogonal)
+        d['W_is_semiorthogonal'] = bool(m.W_is_semiorthogonal)
+        d['pinned_columns'] = np.ascontiguousarray(m.pinned_columns, dtype=np.int64)
+
+    return d
 
 
 def _write(maps, config, detrender, provenance, filename):
@@ -296,11 +309,6 @@ def _read_tree(d, config, detrender, filename):
 
     # ---- representation ----
 
-    if bool(d['is_factored']):
-        raise RuntimeError(f'{where}: holds a FACTORED map (Q, mid, W), which this build'
-                           ' cannot read -- only the dense representation is implemented so'
-                           ' far.')
-
     L = d.get('L')
     L = int(L) if (L is not None) else None
 
@@ -309,23 +317,56 @@ def _read_tree(d, config, detrender, filename):
                            ' The two are one fact, and a file where they disagree was written'
                            ' by something that did not treat them that way.')
 
-    A = d['A']
-    if int(d['nbeta']) != int(A.shape[0]):
-        raise RuntimeError(f"{where}: the stored nbeta is {d['nbeta']}, but A has"
-                           f' {A.shape[0]} rows.')
+    # The flag is checked AGAINST the arrays rather than believed. A block that carries both
+    # groups, or neither, is the case where trusting 'is_factored' would silently reinterpret
+    # a matrix, so it is refused by name.
+    is_factored = bool(d['is_factored'])
+    has_dense = (d.get('A') is not None)
+    has_factors = any(d.get(k) is not None for k in ('Q', 'mid', 'W'))
+
+    if has_dense and has_factors:
+        raise RuntimeError(f'{where}: carries BOTH a dense A and factors (Q/mid/W). Exactly'
+                           ' one group is written, and which one is what is_factored means.')
+    if is_factored and not has_factors:
+        raise RuntimeError(f'{where}: is_factored is True but the block carries no'
+                           ' Q/mid/W -- it holds'
+                           + (' a dense A.' if has_dense else ' no matrix at all.'))
+    if (not is_factored) and has_factors:
+        raise RuntimeError(f'{where}: is_factored is False but the block carries Q/mid/W.')
+    if (not is_factored) and (not has_dense):
+        raise RuntimeError(f'{where}: is_factored is False but the block carries no A.')
 
     y_true = d.get('y_true')
-
-    # A view into the memmapped block in the lazy case (no copy, and no asdf object left in
-    # the map); a materializing read in the eager one.
-    A = np.asarray(A)
     if y_true is not None:
         y_true = np.asarray(y_true)
 
-    return VarianceMap(config, itree, detrender, A=A, y_true=y_true, L=L,
-                       is_admissible=bool(d['is_admissible']),
-                       history=[dict(h) for h in d.get('history', [])],
-                       tree=tree)
+    common = dict(y_true=y_true, L=L, is_admissible=bool(d['is_admissible']),
+                  history=[dict(h) for h in d.get('history', [])], tree=tree)
+
+    # np.asarray() below is a view into the memmapped block in the lazy case (no copy, and no
+    # asdf object left in the map), and a materializing read in the eager one.
+    if not is_factored:
+        A = d['A']
+        if int(d['nbeta']) != int(A.shape[0]):
+            raise RuntimeError(f"{where}: the stored nbeta is {d['nbeta']}, but A has"
+                               f' {A.shape[0]} rows.')
+        return VarianceMap(config, itree, detrender, A=np.asarray(A), **common)
+
+    Q, mid, W = np.asarray(d['Q']), np.asarray(d['mid']), np.asarray(d['W'])
+    K = int(d['factor_rank'])
+
+    if int(d['nbeta']) != int(Q.shape[0]):
+        raise RuntimeError(f"{where}: the stored nbeta is {d['nbeta']}, but Q has"
+                           f' {Q.shape[0]} rows.')
+    if (Q.shape[1] != K) or (W.shape[1] != K) or (mid.shape != (K, K)):
+        raise RuntimeError(f"{where}: the stored factor_rank is {K}, but Q is {Q.shape},"
+                           f' mid is {mid.shape} and W is {W.shape}.')
+
+    return VarianceMap(config, itree, detrender, Q=Q, mid=mid, W=W,
+                       pinned_columns=np.asarray(d.get('pinned_columns'), dtype=np.int64),
+                       Q_is_semiorthogonal=bool(d.get('Q_is_semiorthogonal', False)),
+                       W_is_semiorthogonal=bool(d.get('W_is_semiorthogonal', False)),
+                       **common)
 
 
 def _multimap_from_root(root, filename):

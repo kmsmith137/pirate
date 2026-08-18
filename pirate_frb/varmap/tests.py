@@ -19,7 +19,15 @@ pirate_frb/tests/test_decode_argmax.py, where the plan-level yaml round-trip alr
 Several tests cross-check against pirate_frb.slow_avar (varmap_eval, VarMapDistance), which
 varmap supersedes. Those comparisons are deliberately temporary: they are what licenses
 deleting the old code, and they go away with it.
+
+The test_factored_* tests establish that ``A = Q @ mid @ W.T`` is what the map reports
+through every accessor, and that the representation survives a file. They say NOTHING about
+whether a factorization is any good, and they deliberately do not check that
+``Q_is_semiorthogonal`` or ``pinned_columns`` are truthful -- VarianceMap carries those
+rather than enforcing them, since only the steps that establish them can verify them.
 """
+
+import contextlib
 
 import numpy as np
 
@@ -594,6 +602,238 @@ class _eager_ctx:
         return False
 
 
+def _factored_map(config, itree, rng, K=5, *, L=None, mid='full', nbeta=None, **kwargs):
+    """A factored VarianceMap with random factors, and the dense product it stands for.
+
+    Signed on purpose: campaign 2 dropped the nonnegativity constraint, so a factored map is
+    routinely signed and nothing here may assume otherwise.
+    """
+
+    tree = make_tree(config, itree)
+    fs = tree.frequency_subbands
+    if nbeta is None:
+        nbeta = tree.ndm_out * fs.M * tree.nprofiles
+    nfreq = config.get_total_nfreq()
+
+    Q = rng.normal(size=(nbeta, K))
+    W = rng.normal(size=(nfreq, K))
+    M = np.eye(K) if (mid == 'identity') else rng.normal(size=(K, K))
+    m = VarianceMap.from_factors(config, itree, Q, W, mid=M, L=L, **kwargs)
+    return m, Q @ M @ W.T
+
+
+def test_factored_algebra(r=7, subband_counts=(2,1), K=5):
+    """The product identity, and every accessor that has a factored branch.
+
+    Nothing here is about whether a factorization is any GOOD -- only that
+    ``A = Q @ mid @ W.T`` is what the map reports through every route a consumer has.
+    """
+
+    config = _make_test_config(r, list(subband_counts))
+    rng = np.random.default_rng(20)
+
+    for mid_kind in ('identity', 'full'):
+        m, ref = _factored_map(config, 0, rng, K=K, mid=mid_kind)
+        assert m.is_factored and (m.factor_rank == K)
+        assert m.A is None and (m.shape == ref.shape)
+
+        # Ragged block boundaries on purpose, in both directions.
+        for nb in (1, 3, 7, 997, m.nbeta):
+            for start in range(0, m.nbeta, nb):
+                stop = min(start + nb, m.nbeta)
+                assert np.allclose(m.rows(start, stop), ref[start:stop]), (mid_kind, nb)
+        for nc in (1, 5, 13, m.nfreq):
+            for start in range(0, m.nfreq, nc):
+                stop = min(start + nc, m.nfreq)
+                assert np.allclose(m.cols(start, stop), ref[:, start:stop]), (mid_kind, nc)
+
+        assert np.allclose(m.dense(), ref)
+
+        # apply() must never form A, and row_sums() is one K-vector contraction. Both are
+        # different summation orders from the dense route, so the bar is a tolerance -- the
+        # same lesson as get_distance()'s block-size sensitivity.
+        #
+        # Scale the bar by the size of the TERMS, not of the result. A factored map is
+        # routinely signed (campaign 2 dropped the nonnegativity constraint), so a row sum
+        # can cancel to near zero, and a relative bar would then demand agreement to a
+        # precision neither route has.
+        scale = float(np.abs(ref).sum(axis=1).max())
+        v = rng.normal(size=m.nfreq)
+        assert np.max(np.abs(m.apply(v) - ref @ v)) <= 1e-12 * scale * np.abs(v).max()
+        assert np.max(np.abs(m.row_sums() - ref.sum(axis=1))) <= 1e-12 * scale
+
+        # Descriptive cost figures, and the block sizer that has no page-alignment floor
+        # because factored columns are computed rather than read.
+        assert m.nbytes() == 8 * (m.nbeta*K + K*K + m.nfreq*K)
+        assert m.apply_cost() == K*m.nfreq + K*K + np.count_nonzero(np.asarray(m.Q))
+        assert m.apply_cost() < m.nbeta * m.nfreq, 'K << nfreq should be cheaper than dense'
+        assert m.default_block_cols(1 << 10) == max(1, (1 << 10) // (8 * m.nbeta))
+
+    atomic_print(f'    test_factored_algebra(r={r}, K={K}): pass')
+
+
+def test_factored_equivalence(r=7, subband_counts=(2,1), K=4):
+    """A dense map and a factored map that densify to the SAME matrix must agree everywhere.
+
+    This is the cheapest way to catch a code path that still reaches for ``self.A``: every
+    consumer below goes through rows() / row_sums(), so any that did not would diverge here.
+    The factored map is genuinely rank-deficient, so the two representations are not
+    trivially the same object.
+    """
+
+    config = _make_test_config(r, list(subband_counts))
+    rng = np.random.default_rng(21)
+
+    # Nonnegative factors and a nonnegative 'mid', so the product is positive: the scoring
+    # paths below are about VARIANCES, and get_distance() is only meaningful on one. (The
+    # signed case is covered by test_factored_algebra, which touches no scoring.)
+    tree = make_tree(config, 0)
+    fs = tree.frequency_subbands
+    nbeta = tree.ndm_out * fs.M * tree.nprofiles
+    Q = rng.uniform(0.5, 1.5, size=(nbeta, K))
+    W = rng.uniform(0.5, 1.5, size=(config.get_total_nfreq(), K))
+    mid = np.eye(K) + rng.uniform(0.0, 0.2, size=(K, K))
+    ref = Q @ mid @ W.T
+    assert np.all(ref > 0), 'this test needs a positive matrix'
+
+    y = ref.sum(axis=1)
+    fac = VarianceMap.from_factors(config, 0, Q, W, mid=mid, y_true=y, is_admissible=True)
+    den = VarianceMap.from_dense(config, 0, ref, y_true=y, is_admissible=True)
+
+    assert fac.is_factored and (not den.is_factored)
+    assert np.allclose(fac.row_sums(), den.row_sums())
+    assert abs(fac.get_distance() - den.get_distance()) <= 1e-12
+
+    # Scoring and admissibility, factored-vs-dense in both roles.
+    for (a, b) in ((fac, den), (den, fac), (fac, fac)):
+        res = a.inflated(1.5).measure_admissibility(b)
+        assert res.admissible and (abs(res.max_r - 1/1.5) < 1e-9), res.max_r
+
+    # coarse_grain() of a factored map: a max-envelope is NONLINEAR, so the result is dense
+    # by construction and must equal the envelope of the densified original.
+    for L in range(fac.pf_rank, fac.tree_rank + 1):
+        cf, cd = fac.coarse_grain(L), den.coarse_grain(L)
+        assert not cf.is_factored, 'a max-envelope cannot stay factored'
+        assert np.allclose(np.asarray(cf.A), np.asarray(cd.A)), L
+
+    atomic_print(f'    test_factored_equivalence(r={r}, K={K}): pass')
+
+
+def test_factored_transformations(r=7, subband_counts=(2,1), K=4):
+    """inflated() and lift() keep the factorization; both agree with the dense answer."""
+
+    config = _make_test_config(r, list(subband_counts))
+    rng = np.random.default_rng(22)
+
+    m, ref = _factored_map(config, 0, rng, K=K, Q_is_semiorthogonal=True,
+                           W_is_semiorthogonal=True, pinned_columns=[1])
+
+    # inflated() scales 'mid', so neither factor is touched and both flags survive.
+    inf = m.inflated(2.5)
+    assert inf.is_factored and (inf.factor_rank == K)
+    assert np.allclose(inf.dense(), 2.5 * ref)
+    assert np.array_equal(np.asarray(inf.Q), np.asarray(m.Q))
+    assert np.array_equal(np.asarray(inf.W), np.asarray(m.W))
+    assert inf.Q_is_semiorthogonal and inf.W_is_semiorthogonal
+    assert np.array_equal(inf.pinned_columns, m.pinned_columns)
+
+    # lift() duplicates rows of Q: nalpha*K rather than nalpha*nfreq, and W is untouched.
+    L = m.pf_rank + 1
+    nb = (1 << (m.tree_rank - L)) * m.nsubbands * m.nprofiles
+    c, _ = _factored_map(config, 0, rng, K=K, L=L, nbeta=nb)
+    lifted = c.lift()
+    assert lifted.is_factored and (not lifted.is_coarse_grained)
+    assert np.allclose(lifted.dense(), c.dense()[c.alpha_to_beta_block(0, c.nalpha)])
+    assert np.array_equal(np.asarray(lifted.W), np.asarray(c.W))
+    # Duplicating rows destroys any column orthogonality Q had, so the flag must not survive.
+    assert not lifted.Q_is_semiorthogonal
+
+    # replace() switches representation, which is what lets coarse_grain() return a dense map
+    # from a factored one; and a replaced factor drops its unrestated semiorthogonality claim.
+    d = m.replace(A=m.dense())
+    assert (not d.is_factored) and (d.Q is None) and (d.pinned_columns is None)
+    assert np.allclose(np.asarray(d.A), ref)
+    assert d.replace(Q=np.asarray(m.Q), W=np.asarray(m.W), mid=np.asarray(m.mid)).is_factored
+
+    q2 = m.replace(Q=np.asarray(m.Q) * 2.0)
+    assert (not q2.Q_is_semiorthogonal) and q2.W_is_semiorthogonal
+    assert m.replace(Q=np.asarray(m.Q), Q_is_semiorthogonal=True).Q_is_semiorthogonal
+
+    atomic_print(f'    test_factored_transformations(r={r}, K={K}): pass')
+
+
+def test_factored_validation(r=7, subband_counts=(2,1), K=4):
+    """Constructor rejections, and read-only enforcement on the factors.
+
+    Only STRUCTURE is enforced -- shapes, a consistent K, dtypes, indices in range. The
+    semiorthogonality flags and the pinned set are carried, not verified, so a map that
+    claims them falsely is accepted here and is the steps' problem.
+    """
+
+    config = _make_test_config(r, list(subband_counts))
+    rng = np.random.default_rng(23)
+    m, _ = _factored_map(config, 0, rng, K=K)
+    Q, mid, W = np.asarray(m.Q), np.asarray(m.mid), np.asarray(m.W)
+    nb, nf = m.nbeta, m.nfreq
+
+    def expect_raise(fn, needle):
+        try:
+            fn()
+        except RuntimeError as e:
+            assert needle in str(e), (needle, str(e))
+            return
+        raise AssertionError(f'expected a RuntimeError mentioning {needle!r}')
+
+    F = lambda **kw: VarianceMap(config, 0, **kw)
+    expect_raise(lambda: F(A=m.dense(), Q=Q, W=W), 'exactly')
+    expect_raise(lambda: F(Q=Q), 'BOTH Q and W')
+    expect_raise(lambda: F(W=W), 'BOTH Q and W')
+    expect_raise(lambda: F(), 'either a dense matrix A')
+    expect_raise(lambda: F(Q=Q, W=W[:, :K-1]), 'both are the factorization rank')
+    expect_raise(lambda: F(Q=Q[:-1], W=W), 'Q has shape')
+    expect_raise(lambda: F(Q=Q, W=W[:-1]), 'W has shape')
+    expect_raise(lambda: F(Q=Q, W=W, mid=np.eye(K+1)), 'mid has shape')
+    expect_raise(lambda: F(Q=Q.astype(np.float16), W=W), 'dtype')
+    expect_raise(lambda: F(Q=Q, W=W, pinned_columns=[K]), 'must lie in')
+    expect_raise(lambda: F(Q=Q, W=W, pinned_columns=[-1]), 'must lie in')
+    expect_raise(lambda: F(Q=Q, W=W, pinned_columns=[1, 1]), 'duplicates')
+    expect_raise(lambda: F(A=m.dense(), pinned_columns=[0]), 'meaningless for a dense map')
+    expect_raise(lambda: F(A=m.dense(), Q_is_semiorthogonal=True), 'meaningless for a dense')
+
+    # 'mid' defaults to the identity, and an empty pinned set is the default.
+    plain = VarianceMap.from_factors(config, 0, Q, W)
+    assert np.array_equal(np.asarray(plain.mid), np.eye(K))
+    assert plain.pinned_columns.size == 0
+
+    # The factors are read-only, for the same reason A / y_true / m_to_n are: they may be
+    # views, and a write through one corrupts the map (or the mapped file).
+    for (what, arr) in [('Q', m.Q), ('mid', m.mid), ('W', m.W),
+                        ('pinned_columns', m.pinned_columns), ('rows', m.rows(0, 2))]:
+        try:
+            arr[0] = 0
+            raise AssertionError(f'VarianceMap.{what} is writable')
+        except ValueError:
+            pass
+
+    # Flags and pinned columns are DATA: a false claim is accepted, because verifying it is
+    # the business of the steps that establish it.
+    lying = VarianceMap.from_factors(config, 0, Q, W, Q_is_semiorthogonal=True,
+                                     pinned_columns=[0, 2])
+    assert lying.Q_is_semiorthogonal and (list(lying.pinned_columns) == [0, 2])
+
+    atomic_print(f'    test_factored_validation(r={r}, K={K}): pass')
+
+
+@contextlib.contextmanager
+def _open_one(path, itree):
+    """One tree of a memmapped read. VarianceMap has no open_asdf() of its own -- the scoped
+    opener lives on VarianceMultiMap -- and these test configs are single-tree, so going
+    through it is the same thing."""
+
+    with VarianceMultiMap.open_asdf(path) as vmm:
+        yield vmm[itree]
+
+
 def _corrupt(path, out, fn):
     """Copy the variance-map file at 'path' to 'out', with fn(root) applied to its
     'variance_multimap' block first.
@@ -783,10 +1023,11 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_tri
             'tree_yaml', root['trees'][0]['tree_yaml'].replace('nprofiles: ', 'nprofiles: 1')))
         expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'nprofiles')
 
-        # A factored file gets a clean refusal rather than being misread as dense. This is
-        # what lets the factored representation land without a format change.
+        # is_factored is checked AGAINST the arrays, never believed: a dense block that
+        # claims to be factored is refused rather than reinterpreted. (The factored round
+        # trip itself is test_asdf_factored().)
         _corrupt(path, bad, lambda root: root['trees'][0].__setitem__('is_factored', True))
-        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'FACTORED')
+        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'carries no')
 
         # Version and identity, so the next format change is an error and not a KeyError.
         _corrupt(path, bad, lambda root: root.__setitem__('format_version',
@@ -814,6 +1055,126 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_tri
                  ' eager + memmapped reads and every reader check exercised')
 
 
+def test_asdf_factored(r=7, subband_counts=(2,1), K=4):
+    """The factored half of the round trip, which completes the representation matrix:
+    factored x {fine, coarse} x {admissible, uncertified} x {y_true present, absent}, through
+    both readers.
+
+    Also the reader's flag-versus-arrays checks. is_factored is never BELIEVED -- a block
+    that carries both array groups or neither is refused by name, because that is exactly the
+    case where trusting the flag silently reinterprets a matrix.
+    """
+
+    import os
+    import shutil
+    import tempfile
+
+    from .asdf_io import ROOT_KEY
+
+    config = _make_test_config(r, list(subband_counts))
+    rng = np.random.default_rng(24)
+    tmp = tempfile.mkdtemp()
+
+    def expect_raise(fn, needle):
+        try:
+            fn()
+        except RuntimeError as e:
+            assert needle in str(e), (needle, str(e))
+            return
+        raise AssertionError(f'expected a RuntimeError mentioning {needle!r}')
+
+    try:
+        path = os.path.join(tmp, 'f.asdf')
+
+        tree = make_tree(config, 0)
+        fs = tree.frequency_subbands
+        Lc = int(fs.pf_rank) + 1
+        nb_coarse = (1 << (int(tree.total_rank()) - Lc)) * int(fs.N) * int(tree.nprofiles)
+
+        fine, _ = _factored_map(config, 0, rng, K=K)
+        coarse, _ = _factored_map(config, 0, rng, K=K, L=Lc, nbeta=nb_coarse)
+
+        # The remaining two axes are folded onto the two cases: fine + admissible + y_true +
+        # pinned columns + both flags set, and coarse + uncertified + no y_true + no pins.
+        y = np.abs(rng.normal(size=fine.nalpha)) + 1.0
+        cases = [fine.replace(y_true=y, is_admissible=True,
+                              Q_is_semiorthogonal=True, W_is_semiorthogonal=True,
+                              pinned_columns=[0, 2]),
+                 coarse.replace(y_true=None, is_admissible=False)]
+
+        for (i, m) in enumerate(cases):
+            m.write_asdf(path, provenance=dict(case=i))
+
+            for eager in (True, False):
+                ctx = (_eager_ctx(VarianceMap.from_asdf(path, 0)) if eager
+                       else _open_one(path, 0))
+                with ctx as g:
+                    assert g.is_factored and (g.factor_rank == K), i
+                    assert g.A is None
+                    assert np.array_equal(np.asarray(g.Q), np.asarray(m.Q)), i
+                    assert np.array_equal(np.asarray(g.mid), np.asarray(m.mid)), i
+                    assert np.array_equal(np.asarray(g.W), np.asarray(m.W)), i
+                    assert np.array_equal(g.pinned_columns, m.pinned_columns), i
+                    assert g.Q_is_semiorthogonal == m.Q_is_semiorthogonal, i
+                    assert g.W_is_semiorthogonal == m.W_is_semiorthogonal, i
+                    assert (g.L == m.L) and (g.is_admissible == m.is_admissible), i
+                    assert (g.y_true is None) == (m.y_true is None), i
+                    assert np.array_equal(g.dense(), m.dense()), i
+
+            # No dense matrix is written for a factored map.
+            import asdf
+            with asdf.open(path, lazy_load=False, memmap=False) as af:
+                blk = af[ROOT_KEY]['trees'][0]
+                assert blk.get('A') is None and (blk['is_factored'] is True), i
+                assert int(blk['factor_rank']) == K, i
+
+        # ---- the reader checks the flag against the arrays, in both directions ----
+        bad = os.path.join(tmp, 'bad.asdf')
+
+        _corrupt(path, bad, lambda root: root['trees'][0].__setitem__('is_factored', False))
+        expect_raise(lambda: VarianceMap.from_asdf(bad, 0), 'carries Q/mid/W')
+
+        def add_dense(root):
+            t = root['trees'][0]
+            t['A'] = np.zeros((int(t['nbeta']), config.get_total_nfreq()))
+        _corrupt(path, bad, add_dense)
+        expect_raise(lambda: VarianceMap.from_asdf(bad, 0), 'BOTH')
+
+        def drop_all(root):
+            t = root['trees'][0]
+            for k in ('Q', 'mid', 'W'):
+                t[k] = None
+        _corrupt(path, bad, drop_all)
+        expect_raise(lambda: VarianceMap.from_asdf(bad, 0), 'no matrix at all')
+
+        _corrupt(path, bad, lambda root: root['trees'][0].__setitem__('factor_rank', K + 1))
+        expect_raise(lambda: VarianceMap.from_asdf(bad, 0), 'stored factor_rank')
+
+        _corrupt(path, bad, lambda root: root['trees'][0].__setitem__('nbeta', 3))
+        expect_raise(lambda: VarianceMap.from_asdf(bad, 0), 'stored nbeta')
+
+        # A memmap-backed Q, the same regression the dense path has: asdf refuses ndarray
+        # subclasses, and an accumulated-on-disk Q is the obvious large case.
+        npy = os.path.join(tmp, 'Q.npy')
+        m = cases[1]
+        mm = np.lib.format.open_memmap(npy, mode='w+', dtype=np.float64,
+                                       shape=np.asarray(m.Q).shape)
+        mm[:] = np.asarray(m.Q)
+        mm.flush()
+        mmapped = m.replace(Q=np.lib.format.open_memmap(npy, mode='r'))
+        assert isinstance(mmapped.Q, np.memmap), type(mmapped.Q)
+        mpath = os.path.join(tmp, 'mm.asdf')
+        mmapped.write_asdf(mpath)
+        assert np.array_equal(np.asarray(VarianceMap.from_asdf(mpath, 0).Q), np.asarray(m.Q))
+
+        nbytes = os.path.getsize(path)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    atomic_print(f'    test_asdf_factored(r={r}, K={K}): {nbytes/2**10:.1f} KiB file,'
+                 ' fine + coarse round-tripped through both readers, flag-vs-arrays checked')
+
+
 ####################################   entry point   ####################################
 
 
@@ -831,3 +1192,8 @@ def run_all():
     test_multimap()
     test_dense_float32()
     test_asdf_io()
+    test_factored_algebra()
+    test_factored_equivalence()
+    test_factored_transformations()
+    test_factored_validation()
+    test_asdf_factored()
