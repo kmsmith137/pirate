@@ -256,27 +256,40 @@ class VarianceMap:
 
     # The randomized SVD's sampling defaults, and THEY ARE NOT THE TEXTBOOK ONES. The textbook
     # setting (one power iteration, ten extra samples) is chosen to get the RESIDUAL right, and
-    # it does: it lands within 2.5% of the optimal rank-K residual. But the basis it produces
-    # delivers a D that is 1.40x-1.45x worse than the exact SVD's, because D is paid on each
-    # group's worst channel while a residual is an RMS. The residual is therefore useless as a
-    # stopping criterion here -- it saturates at 1.000x optimal several settings before D does.
+    # it does: it lands within 2.5% of the optimal rank-K residual and its singular values agree
+    # to 0.4%. The basis it produces nevertheless delivers a D 1.32x-1.45x worse than the exact
+    # SVD's, because D is paid on each group's WORST channel while a residual is an RMS over the
+    # whole matrix. So THE RESIDUAL IS USELESS AS A STOPPING CRITERION HERE -- it saturates at
+    # 1.000x optimal several settings before D does, and anyone tuning this against it will
+    # conclude, wrongly, that the textbook defaults are fine.
     #
-    # Measured against the exact SVD, D as a ratio, on two real coarse maps (12800 x 3200):
+    # Measured on r2_nf3200 L6 (12800 x 3200), D as a ratio to the exact SVD's. Power
+    # iterations at ten extra samples, which is how the textbook spends its budget:
     #
-    #   power  oversample   passes    r2 L6 K=16   t16 L7 K=16   r2 L6 K=32
-    #     1        10          3        1.4014       1.4451        1.2554
-    #     2        10          5        1.0613       1.0653          --
-    #     2         K          5        1.0319       1.0325          --
-    #     2        2K          5        1.0008       1.0008        1.0001
-    #     3        10          7        1.0045       1.0049        1.0108
-    #     4        10          9        0.9999       0.9999          --
+    #        power iterations:     1       2       3       4
+    #             K = 16        1.4014  1.0613  1.0045  0.9999
+    #             K = 32        1.2554          1.0108
+    #             K = 128       1.3249  1.0929  1.0389
     #
-    # So OVERSAMPLING is the knob that pays, and power iterations are the expensive way to buy
-    # the same thing: 2K extra samples at two iterations beats four iterations at ten samples,
-    # in five passes rather than nine. That ordering is what production scale cares about, since
-    # a pass over the CHORD map is 344 GiB of reads while extra samples only widen a GEMM.
-    _SVD_OVERSAMPLE_MULT = 2        # oversample = max(_SVD_OVERSAMPLE_MIN, MULT * factor_rank)
-    _SVD_OVERSAMPLE_MIN = 10
+    # and then OVERSAMPLING at two power iterations, which is how this spends it:
+    #
+    #        extra samples:       16      24      32      48      64      96     128
+    #             K = 16       1.0312          1.0017  1.0002  1.0000
+    #             K = 32       1.0272  1.0130  1.0024  1.0005  1.0001
+    #             K = 128                      1.0276  1.0093  1.0020  1.0002  1.0000
+    #
+    # Two things fall out. OVERSAMPLING IS THE KNOB THAT PAYS: 48 extra samples at two
+    # iterations beats four iterations at ten, in five passes rather than nine -- which is the
+    # right ordering for production, since a pass over the CHORD map is 344 GiB of reads while
+    # extra samples only widen a GEMM. And THE REQUIRED OVERSAMPLE GROWS SUBLINEARLY IN K: 48
+    # suffices at both 16 and 32, and 96 at 128, so a rule proportional to K overpays at high
+    # rank exactly where a pass is most expensive.
+    #
+    # Hence max(48, K): every entry it selects is measured at 1.0005x or better, and at K = 128
+    # it asks for ell = 256 rather than the 384 a 2K rule would. All of it is one map, so treat
+    # the ROW SHAPE as the finding and the constants as fitted to it.
+    _SVD_OVERSAMPLE_MULT = 1        # oversample = max(_SVD_OVERSAMPLE_MIN, MULT * factor_rank)
+    _SVD_OVERSAMPLE_MIN = 48
     _SVD_POWER_ITERS = 2
 
 
