@@ -1546,6 +1546,96 @@ def test_lp_steps():
                  ' two alternations')
 
 
+def test_lp_negative_rhs():
+    """The right-hand sides go NEGATIVE, which only a factored reference can make happen.
+
+    A streamed Abar is a max over nonnegative entries, so its right-hand sides are >= 0 by
+    construction and nothing about this case arises. A FACTORED reference with a signed Q or
+    W -- which after campaign 2 is the normal case -- is negative wherever the true map is
+    zero or small, and it is the only thing that exercises the branch.
+
+    Three properties, and the second is the one worth knowing:
+
+      - the solve does not divide by a negative right-hand side (which would flip the
+        inequality). Rows with b <= 0 are normalized to unit max-abs instead, zero and
+        negative alike;
+      - so the constraint imposed where b < 0 is that the product be POSITIVE, which is
+        STRICTER than b. That is safe (it implies the true constraint) and it is useful: it
+        stops the product going negative in exactly the channels a later additive repair
+        would otherwise have to lift;
+      - and it has a sharp price. A dictionary with no nonnegative column cannot make the
+        product positive everywhere, so on a signed reference EVERY LP comes back infeasible.
+        That is what sign-canonicalizing a basis, or pinning a nonnegative column, is for.
+    """
+
+    from .lp import LpConfig, q_step, w_step, covering_lp_data, _clip_rhs
+
+    config = _make_test_config(6, [1, 1])
+    rng = np.random.default_rng(23)
+    tree = make_tree(config, 0)
+    r, R = tree.total_rank(), tree.frequency_subbands.pf_rank
+    L = R + 1
+    N, P = tree.frequency_subbands.N, tree.nprofiles
+    nbeta = (1 << (r - L)) * N * P
+    nfreq = config.get_total_nfreq()
+
+    ref = VarianceMap.from_factors(config, 0, rng.normal(size=(nbeta, 4)),
+                                   rng.normal(size=(nfreq, 4)), L=L)
+    Abar = np.array(ref.dense(), copy=True)
+    Abar /= np.abs(Abar).max()
+    frac_neg = float(np.mean(Abar < 0))
+    assert frac_neg > 0.3, ('this reference is meant to be genuinely signed and is not',
+                            frac_neg)
+
+    # A dictionary with a STRICTLY POSITIVE column, so that a feasible point exists by
+    # construction whatever the other columns do.
+    W = rng.normal(size=(nfreq, 5))
+    W[:, 0] = np.abs(W[:, 0]) + np.clip(Abar.max(axis=0), 0.0, None) + 0.1
+    seed = np.zeros((nbeta, 5))
+    seed[:, 0] = np.clip((Abar / W[:, 0][None, :]).max(axis=1), 0.0, None) * 1.1 + 1.0
+
+    # The building block hands back the negative right-hand sides unchanged.
+    _, _, b = covering_lp_data(ref.replace(Q=ref.Q, W=W[:, :4], mid=np.eye(4)), ref, 0)
+    assert np.any(b < 0), 'the reference row has no negative entries'
+
+    # THE Q DIRECTION DOES NOT REACH THIS CASE AT ITS DEFAULT: its relative constraint floor
+    # is 1e-8, and every negative entry is below that, so they are clipped to zero before the
+    # solver sees them. The W direction ships a floor of 0, so there the case is live.
+    assert np.all(_clip_rhs(np.array(Abar[0], copy=True), 1.0e-8) >= 0.0)
+    assert np.any(_clip_rhs(np.array(Abar[0], copy=True), 0.0) < 0.0)
+
+    Q, _, iq = q_step(Abar, W, LpConfig.for_qstep(nonneg=False, clip_rel=0.0), Q0=seed)
+    prod = Q @ W.T
+    assert iq['n_failed'] == 0, iq['status']
+    assert np.all(prod >= Abar), 'the result does not dominate the signed reference'
+    # The property the strict treatment buys: positive even where the reference is negative,
+    # so no additive repair is needed to rescue those channels.
+    assert prod.min() > 0.0, prod.min()
+
+    # The W-step reaches the same case at its OWN default, since its floor is 0.
+    labels = ref.alpha_to_beta_block(0, ref.nalpha)
+    y = np.abs(rng.random(ref.nalpha)) + 0.05
+    _, W2, iw = w_step(Abar, Q, y, labels, W, LpConfig.for_wstep(nonneg=False))
+    assert iw['n_failed'] == 0, iw['status']
+    assert np.all((Q @ W2.T) >= Abar)
+
+    # THE PRICE. With no nonnegative column the product cannot be made positive everywhere,
+    # so a signed reference makes every subproblem infeasible. Asserted rather than merely
+    # noted, because it is the tripwire on anybody "relaxing" the zero-rhs treatment: if this
+    # ever starts succeeding, the constraint that keeps the product nonnegative has been lost.
+    Wsigned = rng.normal(size=(nfreq, 5))
+    assert not np.any((Wsigned.min(axis=0) >= 0) & (Wsigned.max(axis=0) > 0))
+    _, _, ibad = q_step(Abar, Wsigned, LpConfig.for_qstep(nonneg=False, clip_rel=0.0),
+                        Q0=np.zeros((nbeta, 5)), repair=False)
+    assert ibad['n_failed'] == nbeta, ibad['status']
+    assert ibad['status'].get('infeasible') == nbeta, ibad['status']
+
+    atomic_print(f'    test_lp_negative_rhs(nbeta={nbeta}, nfreq={nfreq}):'
+                 f' {frac_neg:.0%} of the reference is negative; the product stays positive'
+                 f' there, and a dictionary with no nonnegative column is infeasible'
+                 f' {nbeta}/{nbeta}')
+
+
 def test_lp_building_blocks():
     """covering_lp_data() and majorizer_weights() against the direct computation."""
 
@@ -1618,4 +1708,5 @@ def run_all():
     test_lp_optimality()
     test_lp_repairs()
     test_lp_steps()
+    test_lp_negative_rhs()
     test_lp_building_blocks()

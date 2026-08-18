@@ -139,17 +139,29 @@ class LpConfig:
     zero_rhs_margin: float = 1.0e-7
     #   Every channel must be constrained, including the ones with a zero right-hand side. A
     #   row with b == 0 is NOT automatically satisfied once x is sign-free: the product can go
-    #   negative where Abar is zero, and dropping such rows makes the LP genuinely unbounded
-    #   (measured: 320 of 400 sampled LPs). A factored 'ref' can even give b < 0. So rows are
-    #   classified, never dropped:
-    #       b > 0   equilibrate to right-hand side 1
-    #       b == 0  keep as a plain M x >= 0 block, normalized to unit max-abs and given THIS
-    #               margin rather than 0, because HiGHS's primal tolerance is absolute and a
-    #               constraint '>= 0' is "satisfied" at -1e-7, which is a negative variance
-    #       b < 0   keep unscaled (dividing by b would flip the inequality)
-    #   The margin must exceed primal_tol. Its cost is zero_rhs_margin per zero channel added
-    #   to the row sum, i.e. ~1e-5 relative at the defaults, and it is re-measured afterwards
+    #   negative where the reference is zero, and dropping such rows makes the LP genuinely
+    #   unbounded (measured: 320 of 400 sampled LPs). So rows are classified, never dropped,
+    #   and there are exactly TWO classes:
+    #       b > 0    equilibrate to right-hand side 1
+    #       b <= 0   normalize the row to unit max-abs and give it THIS margin rather than 0,
+    #                because HiGHS's primal tolerance is absolute and a constraint '>= 0' is
+    #                "satisfied" at -1e-7, which is a negative variance
+    #   The margin must exceed primal_tol. Its cost is zero_rhs_margin per such channel added
+    #   to the row sum, ~1e-5 relative at the defaults, and it is re-measured afterwards
     #   rather than trusted.
+    #
+    #   NOTE WHAT THE SECOND CLASS DOES TO A NEGATIVE b, because it is not the obvious
+    #   treatment and it has a price. A negative right-hand side arises only from a FACTORED
+    #   reference (a streamed max-envelope is nonnegative by construction). Such a row is not
+    #   divided by its own b -- that would flip the inequality -- and it is not kept at its
+    #   true, negative right-hand side either. It is asked for a POSITIVE product, which is
+    #   STRICTER than b and therefore safe, and which is also what stops the product going
+    #   negative in exactly the channels an additive repair would otherwise have to lift.
+    #
+    #   The price is sharp: a dictionary with NO nonnegative column cannot make the product
+    #   positive everywhere, so against a signed reference every subproblem comes back
+    #   infeasible. Sign-canonicalizing the basis, or pinning a nonnegative column, is what
+    #   makes a factored reference usable at all.
 
     primal_tol: float = 1.0e-9
     #   HiGHS primal and dual feasibility tolerance.
@@ -1185,7 +1197,9 @@ def solve_cover_lp(cost, M, b, cfg, *, x_feasible=None, live=None, status=None,
     M : ndarray
         (n, K) constraint matrix.
     b : ndarray
-        (n,) right-hand side; may contain zeros, and may be negative when 'offset' is given.
+        (n,) right-hand side. May contain zeros, and may be NEGATIVE -- from a factored
+        reference, or from 'offset' -- in which case see LpConfig.zero_rhs_margin for what
+        happens to that row, which is not what it first looks like.
     x_feasible : ndarray or None
         Returned with ``ok=False`` if the solve fails. None RAISES instead, so a caller that
         has no fallback finds out rather than getting a silent zero.
