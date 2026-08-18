@@ -32,35 +32,76 @@ void register_simpulse_bindings(pybind11::module &m)
 
     py::class_<SinglePulse, std::shared_ptr<SinglePulse>>(m, "SinglePulse",
         "One dispersed, scattered FRB pulse, on a fixed frequency channelization and a fixed,\n"
-        "zero-based time sampling (dt = 1e-3 * time_sample_ms seconds; sample it spans\n"
-        "[it*dt, (it+1)*dt]).\n"
+        "zero-based time sampling.\n"
         "\n"
-        "The constructor precomputes the pulse as a SPARSE array of per-channel time samples\n"
-        "(freq_it0 / freq_nt / freq_sd_off / sparse_data); add_to_timestream() scatters it into a\n"
-        "dense (nfreq, out_nt) array. Frequency channels are ordered LOW to HIGH and may have UNEQUAL\n"
-        "widths (channel i spans ``[freq_edges_MHz[i], freq_edges_MHz[i+1]]``).\n"
+        "Time sample ``it`` spans ``[it*dt, (it+1)*dt]`` seconds, where\n"
+        "``dt = 1e-3 * time_sample_ms``. Sample indices may be negative, for a pulse whose\n"
+        "arrival extends to ``t < 0``. Frequency channels are ordered LOW to HIGH and may have\n"
+        "UNEQUAL widths: channel ``i`` spans ``[freq_edges_MHz[i], freq_edges_MHz[i+1]]``.\n"
         "\n"
-        "Attributes (read-only). Construction parameters:\n"
+        "The constructor precomputes the pulse as a SPARSE array of per-channel time samples,\n"
+        "and ``add_to_timestream()`` then scatters it into a dense ``(nfreq, out_nt)`` array.\n"
+        "The precompute is the expensive part (a per-channel inverse FFT), so a pulse is worth\n"
+        "reusing: ``shift_samples()`` retimes one without recomputing it.\n"
         "\n"
-        "- ``internal_nt`` (int) -- number of under-the-hood samples (a power of two). Default 1024.\n"
-        "- ``time_sample_ms`` (float) -- time-sample duration in ms (dt = 1e-3*time_sample_ms sec).\n"
-        "- ``freq_edges_MHz`` (array) -- sorted, length (nfreq+1); channel i spans edges[i]..edges[i+1].\n"
-        "- ``freq_variances`` (array) -- per-channel noise variance, length nfreq (all positive).\n"
-        "- ``dm`` (float) -- dispersion measure (pc cm^{-3}).\n"
-        "- ``sm`` (float) -- scattering measure (scattering time in ms at 1 GHz).\n"
-        "- ``intrinsic_width`` (float) -- frequency-independent Gaussian width in seconds.\n"
-        "- ``snr`` (float) -- target signal-to-noise (perfect matched filter); sets the normalization.\n"
-        "- ``spectral_index`` (float) -- exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha.\n"
-        "- ``undispersed_arrival_time_sec`` (float) -- arrival time as freq->infty, in seconds.\n"
-        "- ``subband_freq_lo_MHz`` / ``subband_freq_hi_MHz`` (float) -- restrict the pulse to channels\n"
-        "  overlapping this subband; defaults [0, 1e9] (no restriction).\n"
+        "Constructor::\n"
         "\n"
-        "Sample indices may be negative (a pulse whose arrival extends to t < 0).\n"
+        "    sp = pirate_frb.simpulse.SinglePulse(\n"
+        "        dm = 100.0,                           # pc cm^-3\n"
+        "        sm = 0.0,                             # scattering time (ms) at 1 GHz\n"
+        "        intrinsic_width = 2.0e-3,             # seconds\n"
+        "        spectral_index = 0.0,                 # alpha, in F(nu) ~ nu^alpha\n"
+        "        undispersed_arrival_time_sec = 0.05,\n"
+        "        time_sample_ms = 1.0,\n"
+        "        snr = 30.0,\n"
+        "        freq_edges_MHz = np.linspace(400., 800., nfreq+1),\n"
+        "        freq_variances = np.ones(nfreq))\n"
         "\n"
-        "Precomputed sparse representation (arrays): ``freq_it0`` / ``freq_nt`` / ``freq_sd_off``\n"
-        "(length nfreq, int) and ``sparse_data`` (float). Also ``it_start`` (= min freq_it0) and\n"
-        "``it_end`` (= max(freq_it0 + freq_nt)) bracketing the pulse's grid range, and the derived\n"
-        "``nfreq`` / ``freq_lo_MHz`` / ``freq_hi_MHz``.\n")
+        "Three more arguments are optional: ``subband_freq_lo_MHz`` (default 0) and\n"
+        "``subband_freq_hi_MHz`` (default 1e9), which restrict the pulse to channels\n"
+        "overlapping that subband, and ``internal_nt`` (default 1024). Every constructor\n"
+        "argument is readable afterwards as a same-named attribute.\n"
+        "\n"
+        "Attributes (read-only) -- the construction parameters:\n"
+        "\n"
+        "- ``dm`` (float) -- dispersion measure, in pc cm^-3.\n"
+        "- ``sm`` (float) -- scattering measure, defined here as the scattering time in\n"
+        "  MILLISECONDS (not seconds) at 1 GHz.\n"
+        "- ``intrinsic_width`` (float) -- frequency-independent Gaussian width, in seconds.\n"
+        "- ``spectral_index`` (float) -- the exponent alpha in\n"
+        "  ``F(nu) = F(nu_0) * (nu/nu_0)**alpha``.\n"
+        "- ``undispersed_arrival_time_sec`` (float) -- arrival time in the limit\n"
+        "  ``nu -> infinity``, in seconds. This is the one parameter that is not immutable:\n"
+        "  ``shift_samples()`` updates it.\n"
+        "- ``time_sample_ms`` (float) -- time-sample duration in ms, i.e. ``dt`` above.\n"
+        "- ``snr`` (float) -- target signal-to-noise assuming a perfect matched filter. Sets\n"
+        "  the overall normalization of ``sparse_data``.\n"
+        "- ``freq_edges_MHz`` (float array) -- channel edges, strictly increasing, of length\n"
+        "  ``nfreq+1``.\n"
+        "- ``freq_variances`` (float array) -- per-channel noise variance, length ``nfreq``,\n"
+        "  all positive. Enters the SNR normalization.\n"
+        "- ``subband_freq_lo_MHz``, ``subband_freq_hi_MHz`` (float) -- the pulse is restricted\n"
+        "  to channels overlapping this subband. Channels outside it are \"inactive\", with\n"
+        "  ``freq_nt == 0``.\n"
+        "- ``internal_nt`` (int) -- number of under-the-hood samples (a power of two).\n"
+        "\n"
+        "Attributes (read-only) -- the precomputed sparse representation, plus derived sizes:\n"
+        "\n"
+        "- ``freq_it0`` (int array, length ``nfreq``) -- first grid sample index of each\n"
+        "  channel's pulse.\n"
+        "- ``freq_nt`` (int array, length ``nfreq``) -- number of samples in each channel's\n"
+        "  pulse; 0 for an inactive channel.\n"
+        "- ``freq_sd_off`` (int array, length ``nfreq``) -- offset of each channel's samples\n"
+        "  into ``sparse_data``, i.e. the exclusive prefix sum of ``freq_nt``.\n"
+        "- ``sparse_data`` (float array, length ``sum(freq_nt)``) -- the packed samples, with\n"
+        "  the spectral weighting and the SNR normalization already applied.\n"
+        "- ``it_start``, ``it_end`` (int) -- grid range bracketing the pulse, namely\n"
+        "  ``min(freq_it0)`` and ``max(freq_it0 + freq_nt)`` over the ACTIVE channels. Every\n"
+        "  channel, inactive ones included, satisfies\n"
+        "  ``it_start <= freq_it0 <= freq_it0 + freq_nt <= it_end``.\n"
+        "- ``nfreq`` (int) -- number of frequency channels, ``len(freq_edges_MHz) - 1``.\n"
+        "- ``freq_lo_MHz``, ``freq_hi_MHz`` (float) -- first and last entries of\n"
+        "  ``freq_edges_MHz``.\n")
 
         .def(py::init([](double dm, double sm, double intrinsic_width, double spectral_index,
                          double undispersed_arrival_time_sec, double time_sample_ms, double snr,
@@ -91,7 +132,13 @@ void register_simpulse_bindings(pybind11::module &m)
              py::arg("internal_nt") = 1024,
              // Per-channel inverse FFTs + interpolation; body is pure C++ (copies
              // pre-converted Arrays into Params).
-             py::call_guard<py::gil_scoped_release>())
+             py::call_guard<py::gil_scoped_release>(),
+             // Sphinx does not render this docstring (autoclass_content is 'class', and
+             // autodoc cannot introspect a pybind __init__), which is why the class
+             // docstring carries the 'Constructor::' block. Kept for help() / repl users.
+             "Precompute one pulse. See the class docstring: every argument is documented\n"
+             "there, in the attribute list, since each is readable afterwards as a same-named\n"
+             "attribute.")
 
         // Read-only views of the construction parameters (SinglePulse::params).
         .def_property_readonly("internal_nt", [](const SinglePulse &s) { return s.params.internal_nt; })
@@ -123,18 +170,33 @@ void register_simpulse_bindings(pybind11::module &m)
         .def("add_to_timestream", &SinglePulse::add_to_timestream,
              py::arg("out"), py::arg("out_it0"), py::arg("weight") = 1.0f,
              py::call_guard<py::gil_scoped_release>(),   // O(pulse samples) CPU scatter
-             "Add the pulse to a 2-d (nfreq, out_nt) float32 array, in place, scaled by 'weight'.\n"
+             "Add the pulse into a dense 2-d array of (frequency, time) samples, in place.\n"
              "\n"
-             "Column it of 'out' represents grid sample index (out_it0 + it), i.e. 'out' spans sample\n"
-             "indices [out_it0, out_it0 + out_nt) (out_it0 may be negative). 'out' MUST span the pulse's\n"
-             "full range: a RuntimeError is raised unless out_it0 <= it_start and out_it0 + out_nt >=\n"
-             "it_end. 'out' must be a host (CPU) float32 array with contiguous time samples, ordered low\n"
-             "to high in frequency.")
+             "``out`` must be a host (CPU) float32 array of shape ``(nfreq, out_nt)``, ordered low\n"
+             "to high in frequency, with contiguous time samples (``out.strides[1] == 1``). Its\n"
+             "column ``it`` represents grid sample index ``out_it0 + it``, so ``out`` spans sample\n"
+             "indices ``[out_it0, out_it0 + out_nt)``.\n"
+             "\n"
+             "Args:\n"
+             "    out: array to add the pulse into, modified in place.\n"
+             "    out_it0: grid sample index of ``out``'s first column. May be negative.\n"
+             "    weight: scale factor applied to the pulse as it is added.\n"
+             "\n"
+             "Raises:\n"
+             "    RuntimeError: if ``out`` does not span the pulse's full time range, i.e. unless\n"
+             "        ``out_it0 <= it_start`` and ``out_it0 + out_nt >= it_end``.")
 
         .def("shift_samples", &SinglePulse::shift_samples, py::arg("delta_it"),
-             "Shift the pulse forward in time by delta_it samples (may be negative): adds delta_it to\n"
-             "every freq_it0 and to it_start/it_end, and (1e-3 * delta_it * time_sample_ms) to\n"
-             "undispersed_arrival_time_sec. sparse_data / freq_nt / freq_sd_off are unchanged.")
+             "Shift the pulse forward in time by ``delta_it`` samples (may be negative).\n"
+             "\n"
+             "Adds ``delta_it`` to every ``freq_it0`` and to ``it_start`` / ``it_end``, and adds\n"
+             "``1e-3 * delta_it * time_sample_ms`` to ``undispersed_arrival_time_sec``. The sample\n"
+             "VALUES are untouched (``sparse_data``, ``freq_nt`` and ``freq_sd_off`` are all\n"
+             "unchanged), so this is a cheap way to reuse one precomputed pulse at many arrival\n"
+             "times.\n"
+             "\n"
+             "Args:\n"
+             "    delta_it: number of grid samples to shift by.")
 
         .def("__repr__", &SinglePulse::str)
     ;

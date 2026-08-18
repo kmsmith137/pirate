@@ -34,6 +34,7 @@ classes/PrimaryTree
 classes/Receiver
 classes/ReferenceDedisperser
 classes/SimulatedFrameFactory
+classes/SinglePulse
 classes/SlabAllocator
 classes/ThreadAffinity
 classes/XEngineMetadata
