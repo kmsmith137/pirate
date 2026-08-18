@@ -169,11 +169,31 @@ class LpConfig:
     # ---- constraint generation ----
 
     cuts: bool = False
-    #   Solve on a working set, evaluate all rows, add the violated ones, repeat. Worth 5.6x
-    #   to 32x with D unchanged to 8-13 digits -- but only with BOTH ingredients below, and
-    #   the method is exact either way (the exit test is against every constraint, so the
-    #   working optimum is feasible for the full LP and, being a relaxation optimum, optimal
-    #   for it). recommended() turns this on.
+    #   Solve on a working set, evaluate ALL the rows, add the violated ones, repeat, and stop
+    #   when nothing outside the set is violated by more than cuts_tol. Exact up to that
+    #   tolerance: the exit test is against every constraint, so the working optimum is
+    #   feasible for the full LP to within cuts_tol and, being a relaxation optimum, optimal
+    #   for it. It needs BOTH ingredients below. recommended() turns it on.
+    #
+    #   WHAT IT IS WORTH DEPENDS STRONGLY ON THE SHAPE, and it can be a LOSS. Measured here at
+    #   nbeta ~ 10^4, one LP per group, against the same solve with cuts off:
+    #
+    #       nfreq     K    speed-up   pooled working rows
+    #        3200    16      1.6x       385 of  3200
+    #        6400    16      1.9x       550 of  6400
+    #       28160    16      2.3x      1076 of 28160
+    #       16384    16      4.0x       212 of 16384    (an UNSUBBANDED map -- see below)
+    #        3200    32      1.3x       652 of  3200
+    #        3200   128      0.8x      1536 of  3200    <-- A NET LOSS
+    #
+    #   Two things drive it. RANK: the initial working set is cuts_init*K rows, so at K = 128
+    #   it is already 1024 of 3200 before a single cut is added, and there is nothing left to
+    #   save. SUBBANDING: a map with 25 subbands spreads its binding channels, so the shared
+    #   pool accumulates 1076 rows where an unsubbanded map needs 212 -- which is why the
+    #   16384-channel row above beats the 28160-channel one.
+    #
+    #   cuts_min_rows therefore guards the wrong quantity: it gates on nfreq alone, and what
+    #   decides this is nfreq RELATIVE TO K. Measure before turning it on at high rank.
     cuts_min_rows: int = 2048       # below this many constraints, do not bother: 2.3x LOSS
     cuts_init: float = 8.0          # initial working set = max(cuts_init*K, 64) rows
     cuts_maxadd: float = 4.0        # add at most cuts_maxadd*K rows per round
@@ -183,6 +203,18 @@ class LpConfig:
     #   below HiGHS's own primal tolerance, or rows already in the working set would be
     #   re-added forever. Raising it stops the loop while the residual violation is small and
     #   lets the repair (which runs anyway) absorb it.
+    #
+    #   MEASURED, at nbeta = 12800, nfreq = 3200, K = 16, against the same solve with cuts off:
+    #
+    #       cuts_tol    D differs by    worst group's objective    wall time   rounds
+    #         1e-6        1.7e-4        8.2e-2 WORSE                 17.7 s     2.0
+    #         1e-9        2.1e-9        1.7e-9 worse                 17.5 s     2.1
+    #        1e-12        2.7e-13       1.7e-9 worse                 17.8 s     2.1
+    #
+    #   So TIGHTENING IT IS FREE -- same wall time, same round count, and D agrees to 13
+    #   digits instead of 9. The trade this knob was built for is the other direction, and
+    #   that direction is expensive: at 1e-6 the loop leaves violations for the repair, and
+    #   the repair charges whole groups for them.
     cuts_agg: bool = True
     #   The aggregate row: sum of the constraints NOT in the working set. It is a nonnegative
     #   combination of the omitted constraints, so it cuts off no feasible point, and it
@@ -439,8 +471,14 @@ class LpConfig:
         """The best values measured, as a preset rather than a default.
 
         Everything the field commentary says is worth something is turned on: constraint
-        generation with a pool (5.6x-32x), and both additive repair stages (up to 2.5x).
-        'direction' is 'q' or 'w', because several of these differ between the two.
+        generation with a pool, and both additive repair stages (up to 2.5x). 'direction' is
+        'q' or 'w', because several of these differ between the two.
+
+        MEASURE THE CUTS HALF BEFORE ADOPTING IT. Its benefit is strongly shape-dependent and
+        it is a NET LOSS at high rank on a narrow-band map -- 0.8x at nfreq = 3200, K = 128,
+        which is one of the campaign's own published geometries. See the LpConfig.cuts
+        commentary for the measured table. The additive half needs no such caution: it is
+        what every published cell already ran.
 
         THE W DIRECTION IS THE ONE TO BE CAREFUL WITH. Its shipped repair is a known-wrong
         default that should be the additive one, so the preset follows that -- but 'additive'
