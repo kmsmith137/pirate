@@ -41,21 +41,12 @@ namespace pirate {
 
 // -------------------------------------------------------------------------------------------------
 //
-// Vectorized ("batch") decode_argmax*() helpers, bound as FrbGrouper methods below. They
-// take (trees, config) because FrbGrouper holds the producer's DedispersionTrees,
-// deserialized at handshake, and never builds a DedispersionPlan.
+// Argument checkers shared by FrbGrouper's vectorized ("batch") decode_argmax*() bindings,
+// whose bodies are inlined at the binding site below.
 //
-// These are the bindings the production event path uses (pirate_frb.rpc.FrbGrouper's
-// create_events()), and there is no DedispersionPlan equivalent -- decoding through a plan
-// from python was only ever used by its own tests. They are covered by the batch-decode
-// assertions in pirate_frb/tests/test_server.py, i.e. by 'test --serv', NOT by '--amax'.
-//
-// Inputs are 1-d contiguous nonempty host arrays, one event per element. (Python callers
-// should short-circuit the zero-event case: the Array -> numpy caster rejects zero-size
-// arrays.) Outputs are freshly-allocated numpy arrays. Implemented as loops over the scalar
-// DedispersionTree methods, so per-element validation (malformed tokens, out-of-range dm/time
-// indices) comes from decode_argmax() itself; 'itree' is range-checked here, since that check
-// lived in the DedispersionPlan wrapper.
+// Batch inputs are 1-d contiguous nonempty host arrays, one event per element. (Python
+// callers should short-circuit the zero-event case: the Array -> numpy caster rejects
+// zero-size arrays.)
 
 
 static void _check_itree(const char *fname, long itree, size_t ntrees)
@@ -77,80 +68,6 @@ static void _check_batch_arg(const char *fname, const char *arg_name, const ksgp
            << " of length " << n << ", got shape " << a.shape_str();
         throw runtime_error(ss.str());
     }
-}
-
-
-static py::tuple _decode_argmax_batch(
-    const vector<DedispersionTree> &trees, const DedispersionConfig &config,
-    const Array<uint> &tokens,
-    const Array<long> &itrees, const Array<long> &idms, const Array<long> &itimes)
-{
-    const char *fname = "decode_argmax_batch";
-    long n = tokens.size;
-
-    if (n <= 0)
-        throw runtime_error("decode_argmax_batch: empty input arrays (callers should "
-                            "short-circuit the zero-event case)");
-
-    _check_batch_arg(fname, "tokens", tokens, n);
-    _check_batch_arg(fname, "itrees", itrees, n);
-    _check_batch_arg(fname, "idms", idms, n);
-    _check_batch_arg(fname, "itimes", itimes, n);
-
-    Array<long> fmins({n}, af_uhost);
-    Array<long> fmaxs({n}, af_uhost);
-    Array<long> tlos({n}, af_uhost);
-    Array<long> this_({n}, af_uhost);
-    Array<long> ps({n}, af_uhost);
-
-    for (long i = 0; i < n; i++) {
-        long itree = itrees.data[i];
-        _check_itree(fname, itree, trees.size());
-        trees[itree].decode_argmax(config, tokens.data[i], idms.data[i], itimes.data[i],
-                                   fmins.data[i], fmaxs.data[i], tlos.data[i],
-                                   this_.data[i], ps.data[i]);
-    }
-
-    return py::make_tuple(fmins, fmaxs, tlos, this_, ps);
-}
-
-
-static py::tuple _decode_argmax2_batch(
-    const vector<DedispersionTree> &trees, const DedispersionConfig &config,
-    const Array<long> &itrees,
-    const Array<long> &fmins, const Array<long> &fmaxs,
-    const Array<long> &tlos, const Array<long> &this_, const Array<long> &ps)
-{
-    const char *fname = "decode_argmax2_batch";
-    long n = itrees.size;
-
-    if (n <= 0)
-        throw runtime_error("decode_argmax2_batch: empty input arrays (callers should "
-                            "short-circuit the zero-event case)");
-
-    _check_batch_arg(fname, "itrees", itrees, n);
-    _check_batch_arg(fname, "fmins", fmins, n);
-    _check_batch_arg(fname, "fmaxs", fmaxs, n);
-    _check_batch_arg(fname, "tlos", tlos, n);
-    _check_batch_arg(fname, "this", this_, n);
-    _check_batch_arg(fname, "ps", ps, n);
-
-    Array<double> freqs_lo({n}, af_uhost);
-    Array<double> freqs_hi({n}, af_uhost);
-    Array<double> dms({n}, af_uhost);
-    Array<double> timestamps({n}, af_uhost);
-    Array<double> widths({n}, af_uhost);
-
-    for (long i = 0; i < n; i++) {
-        long itree = itrees.data[i];
-        _check_itree(fname, itree, trees.size());
-        trees[itree].decode_argmax2(config, fmins.data[i], fmaxs.data[i],
-                                    tlos.data[i], this_.data[i], ps.data[i],
-                                    freqs_lo.data[i], freqs_hi.data[i], dms.data[i],
-                                    timestamps.data[i], widths.data[i]);
-    }
-
-    return py::make_tuple(freqs_lo, freqs_hi, dms, timestamps, widths);
 }
 
 
@@ -1976,12 +1893,47 @@ void register_core_bindings(pybind11::module &m)
           // (deserialized at handshake). Their per-tree Dcore values come from the PRODUCER,
           // so tokens decode correctly even if this process runs a different pirate_frb
           // build. Valid only after the handshake.
+          //
+          // These two are what the production event path calls (pirate_frb.rpc.FrbGrouper's
+          // create_events()); DedispersionPlan has no batch-decode binding. They are covered
+          // by _check_batch_decode() in pirate_frb/tests/test_server.py, i.e. by
+          // 'test --serv' -- NOT by '--amax', which only reaches the scalar
+          // DedispersionTree methods these loop over.
           .def("decode_argmax_batch",
                [](const FrbGrouper &self, const Array<uint> &tokens, const Array<long> &itrees,
                   const Array<long> &idms, const Array<long> &itimes) {
-                   xassert(self.dedispersion_trees.size() > 0);   // populated at handshake
-                   return _decode_argmax_batch(self.dedispersion_trees, self.dedispersion_config,
-                                               tokens, itrees, idms, itimes);
+                   const char *fname = "decode_argmax_batch";
+                   const auto &trees = self.dedispersion_trees;
+                   xassert(trees.size() > 0);   // populated at handshake
+                   long n = tokens.size;
+
+                   if (n <= 0)
+                       throw runtime_error("decode_argmax_batch: empty input arrays (callers"
+                                           " should short-circuit the zero-event case)");
+
+                   _check_batch_arg(fname, "tokens", tokens, n);
+                   _check_batch_arg(fname, "itrees", itrees, n);
+                   _check_batch_arg(fname, "idms", idms, n);
+                   _check_batch_arg(fname, "itimes", itimes, n);
+
+                   Array<long> fmins({n}, af_uhost);
+                   Array<long> fmaxs({n}, af_uhost);
+                   Array<long> tlos({n}, af_uhost);
+                   Array<long> this_({n}, af_uhost);
+                   Array<long> ps({n}, af_uhost);
+
+                   // Per-element validation (malformed tokens, out-of-range dm/time indices)
+                   // comes from decode_argmax() itself; 'itree' is range-checked here.
+                   for (long i = 0; i < n; i++) {
+                       long itree = itrees.data[i];
+                       _check_itree(fname, itree, trees.size());
+                       trees[itree].decode_argmax(self.dedispersion_config, tokens.data[i],
+                                                  idms.data[i], itimes.data[i],
+                                                  fmins.data[i], fmaxs.data[i], tlos.data[i],
+                                                  this_.data[i], ps.data[i]);
+                   }
+
+                   return py::make_tuple(fmins, fmaxs, tlos, this_, ps);
                },
                py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
                "Vectorized decode of out_argmax tokens (see DedispersionPlan.decode_argmax\n"
@@ -1993,9 +1945,40 @@ void register_core_bindings(pybind11::module &m)
                [](const FrbGrouper &self, const Array<long> &itrees, const Array<long> &fmins,
                   const Array<long> &fmaxs, const Array<long> &tlos, const Array<long> &this_,
                   const Array<long> &ps) {
-                   xassert(self.dedispersion_trees.size() > 0);   // populated at handshake
-                   return _decode_argmax2_batch(self.dedispersion_trees, self.dedispersion_config,
-                                                itrees, fmins, fmaxs, tlos, this_, ps);
+                   const char *fname = "decode_argmax2_batch";
+                   const auto &trees = self.dedispersion_trees;
+                   xassert(trees.size() > 0);   // populated at handshake
+                   long n = itrees.size;
+
+                   if (n <= 0)
+                       throw runtime_error("decode_argmax2_batch: empty input arrays (callers"
+                                           " should short-circuit the zero-event case)");
+
+                   _check_batch_arg(fname, "itrees", itrees, n);
+                   _check_batch_arg(fname, "fmins", fmins, n);
+                   _check_batch_arg(fname, "fmaxs", fmaxs, n);
+                   _check_batch_arg(fname, "tlos", tlos, n);
+                   _check_batch_arg(fname, "this", this_, n);
+                   _check_batch_arg(fname, "ps", ps, n);
+
+                   Array<double> freqs_lo({n}, af_uhost);
+                   Array<double> freqs_hi({n}, af_uhost);
+                   Array<double> dms({n}, af_uhost);
+                   Array<double> timestamps({n}, af_uhost);
+                   Array<double> widths({n}, af_uhost);
+
+                   for (long i = 0; i < n; i++) {
+                       long itree = itrees.data[i];
+                       _check_itree(fname, itree, trees.size());
+                       trees[itree].decode_argmax2(self.dedispersion_config,
+                                                   fmins.data[i], fmaxs.data[i], tlos.data[i],
+                                                   this_.data[i], ps.data[i],
+                                                   freqs_lo.data[i], freqs_hi.data[i],
+                                                   dms.data[i], timestamps.data[i],
+                                                   widths.data[i]);
+                   }
+
+                   return py::make_tuple(freqs_lo, freqs_hi, dms, timestamps, widths);
                },
                py::arg("itrees"), py::arg("fmins"), py::arg("fmaxs"),
                py::arg("tlos"), py::arg("this"), py::arg("ps"),
