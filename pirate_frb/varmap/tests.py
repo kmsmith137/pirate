@@ -25,12 +25,21 @@ through every accessor, and that the representation survives a file. They say NO
 whether a factorization is any good, and they deliberately do not check that
 ``Q_is_semiorthogonal`` or ``pinned_columns`` are truthful -- VarianceMap carries those
 rather than enforcing them, since only the steps that establish them can verify them.
+
+The test_lp_* tests check varmap.lp against things OTHER than itself wherever they can: the
+Q-step's optimality against brute-force vertex enumeration, the free LP against the bounded
+one, the majorization against the same sum accumulated the other way round, and a blocked
+repair against an unblocked one over deliberately ragged tails. What they cannot check is
+that the port computes the same numbers as the research code it came from -- that is a
+one-time equivalence test living outside this repo, and it is what the defaults exist for.
 """
 
 import contextlib
+import dataclasses
 
 import numpy as np
 
+from .distance import YTRUE_FLOOR
 from .VarianceMap import VarianceMap, make_tree
 from .VarianceMultiMap import VarianceMultiMap
 from ..utils import atomic_print
@@ -1175,6 +1184,413 @@ def test_asdf_factored(r=7, subband_counts=(2,1), K=4):
                  ' fine + coarse round-tripped through both readers, flag-vs-arrays checked')
 
 
+####################################   the LP (varmap/lp.py)   ####################################
+
+
+def _lp_cell(r=6, subband_counts=(1, 1), L=None, K=5, seed=11, nzero=1):
+    """A small but REAL-geometry LP cell: (Abar, y, labels, W, config, coarse map).
+
+    Real geometry rather than a random matrix, because the label arithmetic and the
+    coarse-graining are half of what the steps have to get right.
+    """
+
+    config = _make_test_config(r, list(subband_counts))
+    rng = np.random.default_rng(seed)
+    fine = _random_map(config, 0, rng, nzero=nzero)
+    L = fine.pf_rank + 1 if (L is None) else L
+    coarse = fine.coarse_grain(L)
+
+    Abar = np.ascontiguousarray(coarse.dense(force=True))
+    scale = float(2.0 ** np.ceil(np.log2(float(Abar.max()))))    # exact in binary
+    Abar = np.ascontiguousarray(Abar / scale)
+    y = np.asarray(fine.y_true, dtype=np.float64) / scale
+    labels = coarse.alpha_to_beta_block(0, coarse.nalpha)
+
+    # A signed dictionary whose first column is nonnegative, which is what the additive
+    # repairs need and what an SVD basis does not provide on its own.
+    W = rng.normal(size=(coarse.nfreq, K))
+    W[:, 0] = np.abs(W[:, 0]) + Abar.max(axis=0)
+    return Abar, y, labels, np.ascontiguousarray(W), config, coarse
+
+
+def _dominates(Q, W, Abar):
+    """The elementwise admissibility test, done densely -- the tests here are small enough."""
+    return bool(np.all((Q @ W.T) >= Abar))
+
+
+def _max_ratio(Q, W, Abar):
+    """max over the entries with Abar > 0 of Abar/(Q W^T).
+
+    NOT the same test as _dominates(), and the difference is the whole reason the additive
+    repair exists: where the product is NEGATIVE this ratio is negative, so it loses to the
+    row's maximum and the multiplicative repair cannot see the violation at all.
+    """
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return float(np.nanmax(np.where(Abar > 0, Abar / (Q @ W.T), 0.0)))
+
+
+def test_lp_config():
+    """LpConfig: the presets, the repair label, and the fields that refuse rather than guess."""
+
+    from .lp import LpConfig
+
+    q, w = LpConfig.for_qstep(), LpConfig.for_wstep()
+
+    # The three families that are genuinely per-direction. Sharing them would make the two
+    # directions one config with a flag, which they are not.
+    assert (q.clip_rel, q.rescue, q.rescale) == (1.0e-8, 'prefix', 'rows')
+    assert (w.clip_rel, w.rescue, w.rescale) == (0.0, None, 'cols')
+    assert q.resolved_rescale('rows') == 'rows'
+    assert LpConfig().resolved_rescale('cols') == 'cols'          # 'auto' follows the axis
+
+    # The four-way choose-one repair knob maps onto the three fields without loss.
+    for tag, triple in (('cols', (False, False, 'cols')), ('rows', (False, False, 'rows')),
+                        ('additive', (False, True, 'none')), ('none', (False, False, 'none'))):
+        c = LpConfig.for_wstep(**dict(zip(('additive_first', 'additive_last', 'rescale'),
+                                          triple)))
+        assert (c.additive_first, c.additive_last, c.rescale) == triple, tag
+
+    assert LpConfig(additive_first=True, additive_last=True).repair_label == 'additive_first'
+    assert LpConfig(additive_last=True).repair_label == 'shipped'
+    assert LpConfig(rescale='none').repair_label == 'raw'
+    assert LpConfig(additive_first=True).repair_label not in ('additive_first', 'shipped', 'raw')
+
+    for d in ('q', 'w'):
+        rec = LpConfig.recommended(d)
+        assert rec.cuts and (rec.cuts_pool == 8192) and rec.cuts_agg
+        assert rec.additive_last
+    assert LpConfig.recommended('w').rescale == 'none'
+    assert LpConfig.recommended('q', threads=4).threads == 4
+
+    # Frozen, and serializable: a step stashes one of these in a map's history, and the file
+    # format can only write plain data.
+    try:
+        q.nonneg = True
+        raise AssertionError('LpConfig should be frozen')
+    except dataclasses.FrozenInstanceError:
+        pass
+    assert LpConfig(**dataclasses.asdict(q)) == q
+    # ... including after a file round trip, which turns the tuple field into a list. A step
+    # stashes its config in the map's history, and reading it back has to give the config the
+    # step ran under, not one that merely looks like it.
+    assert LpConfig(**dict(dataclasses.asdict(q), rescue_ladder=[64, 32, 16, 8])) == q
+
+    # Named but not implemented: these must raise rather than silently doing something else.
+    def expect_raise(fn, needle):
+        try:
+            fn()
+        except RuntimeError as e:
+            assert needle in str(e), (needle, str(e))
+            return
+        raise AssertionError(f'expected a RuntimeError mentioning {needle!r}')
+
+    for kw, needle in ((dict(equilibrate=False), 'unequilibrated'),
+                       (dict(slack=0.1), 'slack'), (dict(nnz_cap=2), 'nnz_cap')):
+        expect_raise(LpConfig(**kw)._check_implemented, needle)
+    expect_raise(lambda: LpConfig.recommended('x'), "'q' or 'w'")
+
+    atomic_print(f'    test_lp_config: {len(dataclasses.fields(q))} fields, both presets,'
+                 ' the four-way repair mapping, and the three refusals')
+
+
+def test_lp_primitive():
+    """solve_covering_lps() on problems whose answer is checkable by other means."""
+
+    from .lp import LpConfig, solve_covering_lps, solve_cover_lp
+
+    rng = np.random.default_rng(4)
+
+    # The free LP can never be worse than the bounded one: dropping x >= 0 enlarges the
+    # feasible set, and the covering constraint is on the PRODUCT, not on the coefficients.
+    M = np.abs(rng.random((60, 4))) + 0.2
+    b = np.abs(rng.random((60, 5)))
+    cost = M.sum(axis=0)
+    Xp, ip = solve_covering_lps(M, b, cost, LpConfig(nonneg=True))
+    Xf, iff = solve_covering_lps(M, b, cost, LpConfig(nonneg=False))
+    assert (ip['n_failed'] == 0) and (iff['n_failed'] == 0)
+    assert Xp.shape == (5, 4) and Xf.shape == (5, 4)
+    for j in range(5):
+        assert np.all((M @ Xp[j]) >= b[:, j] - 1e-7)
+        assert np.all((M @ Xf[j]) >= b[:, j] - 1e-7)
+        assert (cost @ Xf[j]) <= (cost @ Xp[j]) + 1e-9
+
+    # A zero right-hand side is NOT automatically satisfied once the matrix and the variable
+    # may be signed: the product can go negative exactly where Abar is zero. This is the one
+    # property the zero-rhs block exists for, so it is checked directly.
+    Ms = np.abs(rng.random((40, 5))) + 0.1
+    Ms[:, 3] *= -1.0
+    bs = np.abs(rng.random((40, 3)))
+    bs[::3] = 0.0
+    Xs, _ = solve_covering_lps(Ms, bs, Ms.sum(axis=0), LpConfig(nonneg=False))
+    for j in range(3):
+        v = Ms @ Xs[j]
+        assert np.all(v >= bs[:, j] - 1e-7), 'positive-rhs rows violated'
+        assert v.min() >= 0.0, f'the zero-rhs rows let the product go negative: {v.min()}'
+
+    # A column that appears in no constraint is dropped rather than repriced: with a free
+    # variable a positive price on it would send the LP to minus infinity.
+    Md = np.hstack([Ms, np.zeros((40, 1))])
+    Xd, idd = solve_covering_lps(Md, bs, np.append(Ms.sum(axis=0), 1.0), LpConfig(nonneg=False))
+    assert idd['dead_cols'] == 1
+    assert np.all(Xd[:, -1] == 0.0)
+
+    # Parallel execution changes no answer: the subproblems are independent.
+    Xw, _ = solve_covering_lps(Ms, bs, Ms.sum(axis=0), LpConfig(nonneg=False), workers=3)
+    assert np.array_equal(Xs, Xw), 'the worker count changed the answer'
+
+    # A failure with no fallback raises rather than returning a silent zero.
+    try:
+        solve_cover_lp(np.array([-1.0]), np.ones((2, 1)), np.array([1.0, 1.0]),
+                       LpConfig(nonneg=False))
+        raise AssertionError('an unbounded LP with no fallback should raise')
+    except RuntimeError as e:
+        assert 'no fallback' in str(e), str(e)
+
+    atomic_print('    test_lp_primitive: free <= bounded, zero-rhs rows keep the product'
+                 ' nonnegative, dead columns dropped, workers inert')
+
+
+def test_lp_optimality(K=3, nfreq=7):
+    """The Q-step is EXACT: its point is the LP optimum, checked by brute-force enumeration.
+
+    An optimum of ``min s.q  s.t.  W q >= b`` with no bounds sits at a vertex where K of the
+    constraints are active, so enumerating the K-subsets and keeping the feasible ones gives
+    the optimum outright. That is a genuinely independent answer rather than a second run of
+    the same solver.
+    """
+
+    import itertools
+
+    from .lp import LpConfig, q_step
+
+    rng = np.random.default_rng(7)
+    W = np.abs(rng.random((nfreq, K))) + 0.25
+    W[:, 1] *= -1.0                                  # signed, so the vertex argument is used
+    Abar = np.abs(rng.random((6, nfreq))) + 0.05     # every rhs positive: no zero-rhs block
+    s = W.sum(axis=0)
+
+    Q, _, _ = q_step(Abar, W, LpConfig.for_qstep(nonneg=False, clip_rel=0.0), repair=False,
+                     Q0=np.zeros((6, K)))
+    worst = 0.0
+    for i in range(Abar.shape[0]):
+        b = Abar[i]
+        best = np.inf
+        for rows in itertools.combinations(range(nfreq), K):
+            A = W[list(rows)]
+            if abs(np.linalg.det(A)) < 1e-12:
+                continue
+            q = np.linalg.solve(A, b[list(rows)])
+            if np.all(W @ q >= b - 1e-9 * max(1.0, np.abs(b).max())):
+                best = min(best, float(s @ q))
+        assert np.isfinite(best), 'the brute force found no feasible vertex'
+        worst = max(worst, abs(float(s @ Q[i]) - best) / max(abs(best), 1e-300))
+    assert worst < 1e-7, worst
+
+    atomic_print(f'    test_lp_optimality(K={K}, nfreq={nfreq}): the raw Q-step point matches'
+                 f' brute-force enumeration to {worst:.2g} relative')
+
+
+def test_lp_repairs():
+    """Every repair, against what it actually guarantees -- which is not the same for all four."""
+
+    from .lp import (LpConfig, repair_rows, repair_cols, repair_additive, fix_nonneg,
+                     violation_stats, check_nonneg, blocking_is_exact)
+
+    Abar, y, labels, W, config, coarse = _lp_cell(K=5)
+    nbeta, nfreq = Abar.shape
+    cfg = LpConfig.for_qstep()
+
+    # A well-conditioned inadmissible point: the feasible one-hot seed on W's nonnegative
+    # column, shrunk. The product is positive everywhere, so every repair has work to do and
+    # all four can finish it.
+    seed = (Abar / np.maximum(W[:, 0], 1e-300)[None, :]).max(axis=1)
+    Q = np.zeros((nbeta, W.shape[1]))
+    Q[:, 0] = 0.6 * seed
+    assert not _dominates(Q, W, Abar)
+    st0 = violation_stats(Q, W, None, Abar)
+    assert (st0['n_viol'] > 0) and (st0['max_ratio'] > 1.0)
+
+    for name, fn, factor in (('repair_rows', repair_rows, 'Q'),
+                             ('repair_cols', repair_cols, 'W'),
+                             ('repair_additive', repair_additive, 'Q'),
+                             ('fix_nonneg', fix_nonneg, 'Q')):
+        out, st = fn(Q, W, None, Abar, cfg)
+        Qn, Wn = (out, W) if (factor == 'Q') else (Q, out)
+        assert _dominates(Qn, Wn, Abar), name
+        assert Qn.shape == Q.shape and Wn.shape == W.shape, name    # rank-preserving
+        assert not np.shares_memory(out, Q if factor == 'Q' else W), f'{name} wrote in place'
+        assert check_nonneg(Qn, Wn)[0] == 0, name
+
+    # THE REASON THERE ARE TWO KINDS OF REPAIR. On a signed dictionary the product can go
+    # NEGATIVE where Abar is positive; a positive row scale makes such an entry more negative,
+    # and the ratio it works from cannot even see it. So the multiplicative repair reports
+    # success -- correctly, by its own test -- while the map is still inadmissible, and only
+    # an additive lift on a nonnegative column fixes it.
+    rng = np.random.default_rng(31)
+    Qbad = np.abs(rng.random((nbeta, W.shape[1]))) * 0.4
+    Qbad[:, 0] += 0.3
+    Qm, _ = repair_rows(Qbad, W, None, Abar, cfg)
+    assert _max_ratio(Qm, W, Abar) <= 1.0, 'the multiplicative repair failed its own test'
+    n_neg = check_nonneg(Qm, W)[0]
+    assert n_neg > 0 and not _dominates(Qm, W, Abar), \
+        'this case is meant to exercise the sign blind spot and no longer does'
+    Qa, _ = repair_additive(Qbad, W, None, Abar, cfg)
+    assert _dominates(Qa, W, Abar) and (check_nonneg(Qa, W)[0] == 0)
+
+    # The additive lift is defined on the COLUMNS of W, so it refuses a non-identity mid
+    # rather than quietly raising the wrong thing.
+    try:
+        fix_nonneg(Q, W, np.eye(W.shape[1]), Abar, cfg)
+        raise AssertionError('fix_nonneg should refuse a non-identity mid')
+    except RuntimeError as e:
+        assert 'mid' in str(e), str(e)
+
+    # Blocking is bit-identical, with a RAGGED tail forced: a splitter that bounds the block
+    # size but not the tail ends on a short block, and numpy changes gemm kernel there.
+    assert blocking_is_exact(nfreq), nfreq
+    # 15 and 37 leave a tail SHORTER than the 8-row floor at nbeta = 112, so they are what
+    # exercise the tail merge rather than just the block size.
+    base, _ = repair_rows(Qbad, W, None, Abar, cfg)
+    for block_rows in (8, 13, 15, 37):
+        c = LpConfig.for_qstep(block_bytes=int(block_rows * 1.5 * 8 * nfreq))
+        got, _ = repair_rows(Qbad, W, None, Abar, c)
+        assert np.array_equal(base, got), f'blocking changed the repair at {block_rows} rows'
+
+    # A subset repair touches only its rows -- which is what makes a partial step's repair
+    # meaningful at all.
+    rows = np.arange(0, nbeta, 3)
+    sub, _ = repair_rows(Q, W, None, Abar, cfg, rows=rows)
+    keep = np.setdiff1d(np.arange(nbeta), rows)
+    assert np.array_equal(sub[keep], Q[keep])
+    assert np.all((sub[rows] @ W.T) >= Abar[rows])
+
+    atomic_print(f'    test_lp_repairs(nbeta={nbeta}, nfreq={nfreq}): four repairs dominate,'
+                 f' the sign blind spot reproduced ({n_neg} entries) and fixed additively,'
+                 ' blocking exact over ragged tails')
+
+
+def test_lp_steps():
+    """q_step and w_step end to end on a real-geometry cell, and their contracts."""
+
+    from .lp import LpConfig, q_step, w_step, violation_stats, f as lp_f
+
+    Abar, y, labels, W0, config, coarse = _lp_cell(K=5)
+    nbeta, nfreq = Abar.shape
+    K = W0.shape[1]
+    Q0 = np.zeros((nbeta, K))
+    # The one-hot seed on the nonnegative column: feasible for every group by construction.
+    Q0[:, 0] = (Abar / np.maximum(W0[:, 0], 1e-300)[None, :]).max(axis=1) * (1 + 1e-12)
+    assert _dominates(Q0, W0, Abar)
+
+    cfgq = LpConfig.for_qstep(nonneg=False)
+    Q, W, iq = q_step(Abar, W0, cfgq, Q0=Q0)
+    assert np.array_equal(W, W0), 'a Q-step must not touch W'
+    assert _dominates(Q, W0, Abar), 'the repaired Q-step is not admissible'
+    assert iq['step'] == 'Q' and iq['n_lp'] == nbeta
+    # Exact given W, so it cannot be worse than the feasible seed it was handed.
+    s = W0.sum(axis=0)
+    assert float((Q @ s).sum()) <= float((Q0 @ s).sum()) * (1 + 1e-9)
+
+    # repair=False returns the RAW point. It is not usable as an approximation until
+    # repaired, which is exactly why it is worth storing rather than re-solving.
+    Qraw, _, ir = q_step(Abar, W0, cfgq, Q0=Q0, repair=False)
+    assert ir['repair_label'] == 'raw'
+    assert float((Qraw @ s).sum()) <= float((Q @ s).sum()) * (1 + 1e-9)
+
+    # groups= slices merge to exactly what one process would have produced.
+    lo = np.arange(0, nbeta // 2)
+    hi = np.arange(nbeta // 2, nbeta)
+    Qa, _, _ = q_step(Abar, W0, cfgq, Q0=Q0, repair=False, groups=lo)
+    Qb, _, _ = q_step(Abar, W0, cfgq, Q0=Q0, repair=False, groups=hi)
+    merged = np.vstack([Qa[lo], Qb[hi]])
+    assert np.array_equal(merged, Qraw), 'a sliced Q-step did not merge to the whole one'
+    try:
+        q_step(Abar, W0, cfgq, Q0=Q0, groups=lo)
+        raise AssertionError('groups= with repair=True should raise')
+    except RuntimeError as e:
+        assert 'after the slices are merged' in str(e), str(e)
+
+    # The W-step, and the majorize-minimize guarantee its objective must satisfy.
+    cfgw = LpConfig.for_wstep(nonneg=False)
+    Qw, W2, iw = w_step(Abar, Q, y, labels, W0, cfgw)
+    assert iw['step'] == 'W' and iw['n_lp'] == nfreq
+    assert _dominates(Qw, W2, Abar), 'the repaired W-step is not admissible'
+    assert iw['w_obj_raw'] <= iw['w_obj_before'] * (1 + 1e-9), \
+        'a correctly solved W-step cannot increase its own linear objective'
+
+    # A pinned column is excluded from the LP and can only be scaled UP by the 'cols' repair,
+    # so it stays nonnegative and still dominates every group -- which is what makes the
+    # additive repair's certificate survive a W-step.
+    Qp, Wp, ip = w_step(Abar, Q, y, labels, W0, cfgw, pinned=[0])
+    assert ip['n_pinned'] == 1
+    assert np.all(Wp[:, 0] >= W0[:, 0] - 1e-12) and (ip['pin_drift'] >= 1.0 - 1e-12)
+
+    # Monotonicity of an alternation, which is what the whole majorization is for. When this
+    # goes the wrong way it has twice been a real defect rather than a bad schedule.
+    scored = y >= YTRUE_FLOOR          # exactly the rows get_distance() scores
+
+    def D0(Q_, W_):
+        x = ((Q_ @ W_.sum(axis=0))[labels])[scored] / y[scored]
+        return float(np.mean(lp_f(x)))
+
+    d = [D0(Q, W0)]
+    Qi, Wi = Q, W0
+    for _ in range(2):
+        Qi, Wi, _ = w_step(Abar, Qi, y, labels, Wi, cfgw)
+        Qi, Wi, _ = q_step(Abar, Wi, cfgq, Q0=Qi)
+        d.append(D0(Qi, Wi))
+    assert all(d[i+1] <= d[i] * (1 + 1e-9) for i in range(len(d)-1)), d
+
+    atomic_print(f'    test_lp_steps(nbeta={nbeta}, nfreq={nfreq}, K={K}): both steps'
+                 f' admissible, slices merge exactly, D0 {d[0]:.6g} -> {d[-1]:.6g} over'
+                 ' two alternations')
+
+
+def test_lp_building_blocks():
+    """covering_lp_data() and majorizer_weights() against the direct computation."""
+
+    from .lp import LpConfig, covering_lp_data, majorizer_weights, fprime as lp_fprime
+
+    Abar, y, labels, W, config, coarse = _lp_cell(K=4)
+    rng = np.random.default_rng(17)
+    K = W.shape[1]
+    Q = np.abs(rng.random((coarse.nbeta, K))) + 0.1
+
+    vmap = VarianceMap.from_factors(config, 0, Q, W, L=coarse.L)
+    # _lp_cell rescales Abar and y by the same power of two, so the reference map has to
+    # carry the SCALED y_true: majorizer_weights reads it from the map, not from the caller.
+    ref = coarse.replace(A=Abar, y_true=y, history_record=dict(step='test'))
+
+    for ibeta in (0, 3, coarse.nbeta - 1):
+        cost, M, b = covering_lp_data(vmap, ref, ibeta)
+        assert np.array_equal(cost, W.sum(axis=0))
+        assert M is not None and np.array_equal(np.asarray(M), W)
+        assert np.array_equal(b, Abar[ibeta])
+    # The clip is applied when a config is given, and never in place on the reference.
+    _, _, bc = covering_lp_data(vmap, ref, 0, LpConfig.for_qstep(clip_rel=0.5))
+    assert np.any(bc == 0.0) and np.array_equal(ref.rows(0, 1)[0], Abar[0])
+
+    # The majorization weights are a sum over FINE alpha with Q row-duplicated. Getting the
+    # per-group accumulation wrong silently weights every group equally, so the reference
+    # here is built the other way round: fine first, group second. Rows the distance does not
+    # score carry weight ZERO -- unfloored, an output with no variance has weight ~1e14 and
+    # would own the objective outright.
+    g = majorizer_weights(vmap, ref)
+    y_app = (Q @ W.sum(axis=0))[labels]
+    scored = y >= YTRUE_FLOOR
+    w = np.zeros_like(y)
+    w[scored] = lp_fprime(y_app[scored] / y[scored]) / y[scored]
+    g_ref = Q.T @ np.bincount(labels, weights=w, minlength=coarse.nbeta)
+    assert not np.all(scored), 'this cell no longer exercises the y_true floor'
+    assert np.allclose(g, g_ref, rtol=1e-14, atol=0), np.abs(g - g_ref).max()
+    # ... and it is NOT the same as weighting every group equally, so the test has teeth.
+    g_flat = Q.T @ np.bincount(labels, minlength=coarse.nbeta).astype(float)
+    assert not np.allclose(g, g_flat, rtol=1e-3)
+
+    atomic_print(f'    test_lp_building_blocks: (cost, M, b) for {coarse.nbeta} groups, and'
+                 ' the majorizer accumulated per group')
+
+
 ####################################   entry point   ####################################
 
 
@@ -1197,3 +1613,9 @@ def run_all():
     test_factored_transformations()
     test_factored_validation()
     test_asdf_factored()
+    test_lp_config()
+    test_lp_primitive()
+    test_lp_optimality()
+    test_lp_repairs()
+    test_lp_steps()
+    test_lp_building_blocks()
