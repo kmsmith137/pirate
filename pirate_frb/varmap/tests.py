@@ -219,6 +219,24 @@ def test_constructor_validation(r=7, subband_counts=(2,1)):
     except AttributeError:
         pass
 
+    # ... and that extends to the arrays, which the accessors hand back as VIEWS. An in-place
+    # edit through one of these rewrites the map (or, for a memmapped read, the file) behind
+    # the flags' back, so they are read-only rather than merely documented as such. The Q-step
+    # applies a relative floor to the rows it is given, which is exactly the shape of code
+    # that would otherwise corrupt its own reference matrix.
+    for (what, arr) in [('rows', m.rows(0, 4)), ('cols', m.cols(0, 4)), ('dense', m.dense()),
+                        ('A', m.A), ('y_true', m.y_true), ('m_to_n', m.m_to_n),
+                        ('row_sums', m.row_sums())]:
+        try:
+            arr[0] = 0
+            raise AssertionError(f'VarianceMap.{what} is writable')
+        except ValueError:
+            pass
+
+    # The read-only wrapper must be idempotent, or replace() builds a chain of views and
+    # "the matrix was not copied" stops being checkable.
+    assert m.replace().A is m.A
+
     # is_coarse_grained and L are one fact; neither is derivable from nbeta.
     assert (m.L is None) and (not m.is_coarse_grained) and (m.nbeta == m.nalpha)
     c = m.coarse_grain(R)
@@ -561,6 +579,241 @@ def test_dense_float32(r=7, subband_counts=(1,)):
     atomic_print(f'    test_dense_float32(r={r}): pass')
 
 
+class _eager_ctx:
+    """Wraps an already-read object as a no-op context manager, so that the eager and
+    memmapped readers can be driven by the same test body (open_asdf() is a context manager;
+    from_asdf() is not)."""
+
+    def __init__(self, obj):
+        self.obj = obj
+
+    def __enter__(self):
+        return self.obj
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _corrupt(path, out, fn):
+    """Copy the variance-map file at 'path' to 'out', with fn(root) applied to its
+    'variance_multimap' block first.
+
+    This is how the reader's tripwires are tested: each one guards against a file written
+    by something that got a convention wrong, and the only way to produce such a file here
+    is to break a good one.
+    """
+
+    import asdf
+    from .asdf_io import ROOT_KEY
+
+    with asdf.open(path, lazy_load=False, memmap=False) as af:
+        root = dict(af[ROOT_KEY])
+        root['trees'] = [dict(d) for d in root['trees']]
+        fn(root)
+        asdf.AsdfFile({ROOT_KEY: root}).write_to(out)
+
+
+def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_triggers=1):
+    """The file format: every representation round-trips, and every tripwire fires.
+
+    The tripwires matter more than the round-trip. The archived library is hundreds of GiB
+    that cannot be regenerated cheaply, so a reader that silently reinterprets a file --
+    because the multiplet ordering convention drifted, or because a flag and the array it
+    describes disagree -- is the expensive failure mode, and each check below is one of
+    those turned into an exception.
+    """
+
+    import dataclasses
+    import os
+    import shutil
+    import tempfile
+
+    from .asdf_io import FORMAT_VERSION
+
+    config = _make_test_config(r, list(subband_counts),
+                               num_primary_trees=num_primary_trees,
+                               num_early_triggers=num_early_triggers)
+    rng = np.random.default_rng(10)
+    ntrees = int(config.num_dedispersion_trees)
+    tmp = tempfile.mkdtemp()
+
+    def expect_raise(fn, needle):
+        try:
+            fn()
+        except RuntimeError as e:
+            assert needle in str(e), (needle, str(e))
+            return
+        raise AssertionError(f'expected a RuntimeError mentioning {needle!r}')
+
+    try:
+        path = os.path.join(tmp, 'vm.asdf')
+
+        # Every representation the dense path can produce: fine/coarse, certified or not,
+        # y_true present or absent, float64 or float32. (The factored half of that product
+        # is not reachable yet; the reader's refusal of it is checked below.)
+        maps = [_random_map(config, i, rng, nzero=2) for i in range(ntrees)]
+        maps[1] = maps[1].coarse_grain(maps[1].pf_rank + 1)
+        maps[2] = maps[2].replace(is_admissible=False)
+        maps[3] = maps[3].replace(y_true=None, A=np.asarray(maps[3].A, dtype=np.float32))
+
+        prov = dict(algorithm='test', ntime=np.int64(1024), overrides=['a', 'b'],
+                    nested=dict(host='here', seconds=1.5))
+        vmm = VarianceMultiMap(config, maps, provenance=prov)
+        vmm.write_asdf(path)
+
+        for eager in (True, False):
+            ctx = (_eager_ctx(VarianceMultiMap.from_asdf(path)) if eager
+                   else VarianceMultiMap.open_asdf(path))
+            with ctx as v2:
+                assert len(v2) == ntrees
+                assert v2.provenance == {'algorithm': 'test', 'ntime': 1024,
+                                         'overrides': ['a', 'b'],
+                                         'nested': {'host': 'here', 'seconds': 1.5}}
+
+                # The inputs survive as yaml and re-parse into one shared object per file.
+                assert int(v2.config.toplevel_tree_rank) == r
+                assert all(m.config is v2.config for m in v2)
+                assert v2.detrender is None
+
+                for (i, m) in enumerate(v2):
+                    w = maps[i]
+                    assert m.itree == i and m.L == w.L
+                    assert m.is_coarse_grained == w.is_coarse_grained
+                    assert m.is_admissible == w.is_admissible
+                    assert m.shape == w.shape and m.nalpha == w.nalpha
+                    assert np.asarray(m.A).dtype == np.asarray(w.A).dtype, i
+                    assert np.array_equal(np.asarray(m.A), np.asarray(w.A)), i
+                    assert (m.y_true is None) == (w.y_true is None)
+                    if w.y_true is not None:
+                        assert np.array_equal(m.y_true, w.y_true), i
+                    assert m.history == w.history, i
+
+                    # The geometry comes off the file's tree yaml, not from re-deriving it.
+                    assert np.array_equal(m.m_to_n, w.m_to_n)
+                    assert (m.tree_rank, m.pf_rank, m.nmultiplets, m.nsubbands,
+                            m.nprofiles, m.gamma, m.early_trigger_level) == \
+                        (w.tree_rank, w.pf_rank, w.nmultiplets, w.nsubbands,
+                         w.nprofiles, w.gamma, w.early_trigger_level)
+
+                # Scoring works on a map that has been through the file, which is the point
+                # of storing y_true at fine granularity.
+                assert abs(v2[1].get_distance() - maps[1].get_distance()) <= 1.0e-14
+
+                if not eager:
+                    # Uncompressed blocks are what make this possible, and memmapping is the
+                    # scale path -- an asdf upgrade that changed its defaults would silently
+                    # turn every large read into a full materialization.
+                    chain, a = [], np.asarray(v2[0].A)
+                    while a is not None:
+                        chain.append(a)
+                        a = getattr(a, 'base', None)
+                    assert any(isinstance(x, np.memmap) for x in chain), \
+                        [type(x) for x in chain]
+
+        # A frozen dataclass in a history record -- which is how a step will carry the
+        # LpConfig it ran under. asdf cannot represent one, and the write it breaks is the
+        # write of the WHOLE map, so without the conversion a long run cannot save its
+        # result. The round trip is asymmetric on purpose: a dataclass out, a dict back.
+        @dataclasses.dataclass(frozen=True)
+        class _Cfg:
+            clip_rel: float = 1.0e-8
+            cuts: tuple = (1, 2, 3)
+
+        dpath = os.path.join(tmp, 'dc.asdf')
+        rec = dict(step='qstep', cfg=_Cfg(), D=np.float64(0.25), rows=np.int64(7))
+        maps[0].replace(history_record=rec).write_asdf(dpath)
+        got = VarianceMap.from_asdf(dpath, 0).history[-1]
+        assert got == {'step': 'qstep', 'cfg': {'clip_rel': 1.0e-8, 'cuts': [1, 2, 3]},
+                       'D': 0.25, 'rows': 7}, got
+
+        # A memmap-backed matrix. This is what a large write actually looks like -- a map
+        # accumulated on disk, or one read back from open_asdf() -- and asdf refuses ndarray
+        # SUBCLASSES outright, so without a base-class view the scale path fails at the one
+        # size where it matters and nowhere else.
+        npy = os.path.join(tmp, 'A.npy')
+        mm = np.lib.format.open_memmap(npy, mode='w+', dtype=np.float64, shape=maps[0].shape)
+        mm[:] = np.asarray(maps[0].A)
+        mm.flush()
+
+        mmapped = maps[0].replace(A=np.lib.format.open_memmap(npy, mode='r'))
+        assert isinstance(mmapped.A, np.memmap), type(mmapped.A)
+
+        mpath = os.path.join(tmp, 'mm.asdf')
+        mmapped.write_asdf(mpath)
+        assert np.array_equal(np.asarray(VarianceMap.from_asdf(mpath, 0).A),
+                              np.asarray(maps[0].A))
+
+        # A single-tree file: readable by VarianceMap.from_asdf(), and refused by the
+        # multimap reader, which covers every tree by definition.
+        one = os.path.join(tmp, 'one.asdf')
+        maps[1].write_asdf(one, provenance=dict(note='single'))
+        m1 = VarianceMap.from_asdf(one, 1)
+        assert m1.itree == 1 and np.array_equal(np.asarray(m1.A), np.asarray(maps[1].A))
+        expect_raise(lambda: VarianceMultiMap.from_asdf(one), 'covers EVERY tree')
+        expect_raise(lambda: VarianceMap.from_asdf(one, 0), 'trees present: [1]')
+
+        # ---- the tripwires ----
+
+        bad = os.path.join(tmp, 'bad.asdf')
+
+        # m_to_n is the one field with no independent witness in the file.
+        def break_m_to_n(root):
+            mn = np.array(root['trees'][0]['m_to_n'])
+            mn[-1] = 0 if (mn[-1] != 0) else 1
+            root['trees'][0]['m_to_n'] = mn
+        _corrupt(path, bad, break_m_to_n)
+        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'multiplet ordering convention')
+
+        # is_coarse_grained and L are one fact.
+        _corrupt(path, bad, lambda root: root['trees'][0].__setitem__('is_coarse_grained',
+                                                                      True))
+        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'are one fact')
+
+        # nbeta against the array it describes.
+        _corrupt(path, bad, lambda root: root['trees'][1].__setitem__('nbeta', 3))
+        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'stored nbeta')
+
+        # itree against the tree yaml's own (primary_tree_index, early_trigger_level), which
+        # is what stops a mislabelled entry from being read as a different tree.
+        _corrupt(path, bad, lambda root: root['trees'][0].__setitem__('itree', 1))
+        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), "'itree' field claims")
+
+        # A tree yaml describing a different instrument: check_consistency() names the member.
+        _corrupt(path, bad, lambda root: root['trees'][0].__setitem__(
+            'tree_yaml', root['trees'][0]['tree_yaml'].replace('nprofiles: ', 'nprofiles: 1')))
+        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'nprofiles')
+
+        # A factored file gets a clean refusal rather than being misread as dense. This is
+        # what lets the factored representation land without a format change.
+        _corrupt(path, bad, lambda root: root['trees'][0].__setitem__('is_factored', True))
+        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'FACTORED')
+
+        # Version and identity, so the next format change is an error and not a KeyError.
+        _corrupt(path, bad, lambda root: root.__setitem__('format_version',
+                                                          FORMAT_VERSION + 1))
+        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'format_version is')
+
+        _corrupt(path, bad, lambda root: root.pop('format_version'))
+        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'predates this format')
+
+        import asdf
+        asdf.AsdfFile({'something_else': 1}).write_to(bad)
+        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'not a variance-map file')
+
+        # An OLD-format file is named as such, since that is the one wrong file a user is
+        # likely to have in hand.
+        old = os.path.join(tmp, 'old.asdf')
+        asdf.AsdfFile({'variance_map': {'trees': []}}).write_to(old)
+        expect_raise(lambda: VarianceMultiMap.from_asdf(old), 'old-format file')
+
+        nbytes = os.path.getsize(path)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    atomic_print(f'    test_asdf_io(r={r}, ntrees={ntrees}): {nbytes/2**20:.1f} MiB file,'
+                 ' eager + memmapped reads and every reader check exercised')
+
+
 ####################################   entry point   ####################################
 
 
@@ -577,3 +830,4 @@ def run_all():
     test_check_ref_covers_y_true()
     test_multimap()
     test_dense_float32()
+    test_asdf_io()

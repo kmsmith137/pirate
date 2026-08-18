@@ -94,6 +94,29 @@ def _subband_tables(tree):
     return m_to_n, n_level, n_to_mbase
 
 
+def _readonly(a):
+    """A read-only VIEW of 'a', without touching the writeability of 'a' itself.
+
+    Flipping the flag in place would flip it on whatever the CALLER handed us -- np.asarray()
+    returns its argument unchanged when the dtype already matches -- so this always takes a
+    view first.
+
+    Used for the stored arrays and for every accessor that may hand back a window into them.
+    A VarianceMap is immutable, and that is what makes its flags trustworthy; without this,
+    an in-place edit through such a window rewrites the map behind the flags' back, and for a
+    memmapped read it rewrites the FILE. The two read paths used to differ on this -- a
+    memmapped matrix refused the write, an eagerly-read one accepted it silently -- which is
+    the worse of the two failures on the mode people develop against.
+    """
+
+    if not a.flags.writeable:
+        return a          # idempotent, so replace() does not build a chain of views
+
+    v = a.view()
+    v.flags.writeable = False
+    return v
+
+
 ####################################   class VarianceMap   ####################################
 
 
@@ -257,9 +280,10 @@ class VarianceMap:
         set_('gamma', int(tree.primary_tree_index))
         set_('early_trigger_level', int(tree.early_trigger_level))
         set_('subband_counts', tuple(int(c) for c in fs.subband_counts))
-        set_('m_to_n', m_to_n)
-        set_('_n_level', n_level)
-        set_('_n_to_mbase', n_to_mbase)
+        # Read-only: a silent edit to any of these reinterprets every index computation.
+        set_('m_to_n', _readonly(m_to_n))
+        set_('_n_level', _readonly(n_level))
+        set_('_n_to_mbase', _readonly(n_to_mbase))
 
         r, R = self.tree_rank, self.pf_rank
 
@@ -300,7 +324,7 @@ class VarianceMap:
                                + (f' at L={L}' if (L is not None) else ''))
         if A.dtype not in (np.float32, np.float64):
             raise RuntimeError(f'VarianceMap: A has dtype {A.dtype}, expected float32/float64')
-        set_('A', A)
+        set_('A', _readonly(A) if isinstance(A, np.ndarray) else A)
 
         # ---- y_true ----
 
@@ -310,7 +334,7 @@ class VarianceMap:
                 raise RuntimeError(f'VarianceMap: y_true has shape {y_true.shape}, expected'
                                    f' ({self.nalpha},) -- it is always at FINE granularity,'
                                    ' whether or not the map is coarse-grained')
-        set_('y_true', y_true)
+        set_('y_true', _readonly(y_true) if (y_true is not None) else None)
 
         set_('is_admissible', bool(is_admissible))
         set_('history', tuple(history) if (history is not None) else ())
@@ -449,9 +473,10 @@ class VarianceMap:
         goes through it, so that nothing ever needs the dense product of a factored map.
         Blocked callers should size their blocks with default_block_rows().
 
-        The result may be a VIEW into the stored matrix; do not modify it.
+        The result is READ-ONLY, and is usually a view into the stored matrix rather than a
+        copy of it. Copy it if you need to modify it -- see _readonly().
         """
-        return np.asarray(self.A[int(start):int(stop)], dtype=np.float64)
+        return _readonly(np.asarray(self.A[int(start):int(stop)], dtype=np.float64))
 
 
     def cols(self, start, stop):
@@ -462,13 +487,15 @@ class VarianceMap:
         C-order (nbeta, nfreq), so a column block is a strided gather. Size column blocks with
         default_block_cols(), which accounts for that.
 
-        The result may be a VIEW into the stored matrix; do not modify it.
+        The result is READ-ONLY, and is usually a view into the stored matrix rather than a
+        copy of it. Copy it if you need to modify it -- see _readonly().
         """
-        return np.asarray(self.A[:, int(start):int(stop)], dtype=np.float64)
+        return _readonly(np.asarray(self.A[:, int(start):int(stop)], dtype=np.float64))
 
 
     def dense(self, *, force=False, max_bytes=1 << 31):
-        """The full (nbeta, nfreq) matrix, as float64.
+        """The full (nbeta, nfreq) matrix, as float64, READ-ONLY (it is rows() over the whole
+        matrix, so the same view-not-copy caveat applies).
 
         Raises if it would exceed 'max_bytes', since forming it is almost always a mistake at
         production scale; force=True overrides. For tests and small maps.
@@ -1143,6 +1170,13 @@ class VarianceMap:
             ratio = np.where(ymax > 0, s / ymax, np.inf)
         i = int(np.argmin(ratio))
 
+        # The exact-arithmetic invariant is ratio >= 1, so the tolerance is not slack in the
+        # property -- it is roundoff in how the two sides are summed. sum_F ref[beta,F] adds
+        # nfreq terms in one order; y_true[alpha] added them in another, during the sweep that
+        # produced it. On the real CHORD map (nfreq = 28160) the tightest group comes out at
+        # 1 - 2.9e-14, so a bare '< 1.0' test would reject a correct map. Keep the margin: it
+        # is ~5 decades below the smallest real violation this is meant to catch, since a mean
+        # where a max was intended is off by a factor, not by ulps.
         if ratio[i] < 1.0 - 1.0e-9:
             raise RuntimeError(
                 f'VarianceMap.check_ref_covers_y_true: group beta={i} has row sum {s[i]:.6g},'
@@ -1152,3 +1186,30 @@ class VarianceMap:
                 ' index convention.')
 
         return float(ratio[i])
+
+
+    # ---------------- I/O ----------------
+    #
+    # The format itself lives in varmap/asdf_io.py, which these forward to. It is imported
+    # inside the methods rather than at module scope because it imports this module back.
+
+    def write_asdf(self, filename, *, provenance=None):
+        """Write this map to 'filename', as a variance-map file holding one tree.
+
+        Same format as VarianceMultiMap.write_asdf()'s, with a one-element tree list. Read
+        it back with ``VarianceMap.from_asdf(filename, itree)``; it is also a complete
+        multimap file when the config has a single dedispersion tree, and not otherwise.
+        """
+        from .asdf_io import write_map
+        write_map(self, filename, provenance=provenance)
+
+
+    @classmethod
+    def from_asdf(cls, filename, itree=0):
+        """Read one tree out of a variance-map file, eagerly.
+
+        Unlike VarianceMultiMap.from_asdf() this does not require the file to cover every
+        tree of its config.
+        """
+        from .asdf_io import read_map
+        return read_map(filename, itree)

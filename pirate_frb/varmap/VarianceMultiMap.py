@@ -141,6 +141,44 @@ class VarianceMultiMap:
         return [m.measure_admissibility(ref[i], **kwargs) for (i, m) in enumerate(self.maps)]
 
 
+    # ---------------- I/O ----------------
+    #
+    # The format itself lives in varmap/asdf_io.py, which these forward to. It is imported
+    # inside the methods rather than at module scope because it imports this module back.
+
+    def write_asdf(self, filename, *, provenance=None):
+        """Write this multimap to 'filename'. See varmap/asdf_io.py for the format."""
+        from .asdf_io import write_multimap
+        write_multimap(self, filename, provenance=provenance)
+
+
+    @classmethod
+    def from_asdf(cls, filename):
+        """Read a variance-map file EAGERLY: ordinary in-memory arrays, no open file
+        handle, no lifetime contract. This is the one to use unless you have a specific
+        reason not to.
+
+        The file must cover every tree of its config, since a multimap does; read a
+        single-tree file with ``VarianceMap.from_asdf(filename, itree)``.
+        """
+        from .asdf_io import read_multimap
+        return read_multimap(filename)
+
+
+    @classmethod
+    def open_asdf(cls, filename):
+        """Read a variance-map file with its arrays MEMMAPPED, as a context manager::
+
+            with VarianceMultiMap.open_asdf(path) as vmm:
+                ...
+
+        The arrays are views into an open file handle and are invalid once the with-block
+        exits. Only worth it for a file too large to hold.
+        """
+        from .asdf_io import open_multimap
+        return open_multimap(filename)
+
+
     # NOTE: there is deliberately no get_distance() here. D is defined per tree, and nothing
     # in notes/variance_map.tex defines a distance for a whole plan; any aggregate we invented
     # (an nalpha-weighted mean, say) would be a number with no agreed meaning, which is
