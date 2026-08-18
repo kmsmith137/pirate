@@ -718,6 +718,14 @@ class VarianceMap:
 
         This is y_approx, and it is the ONLY thing get_distance() needs from the matrix --
         which is why get_distance() takes no reference argument.
+
+        THE REPRESENTATION IS A SOURCE OF LAST-BIT DIFFERENCE HERE, and it is worth knowing
+        before chasing one. A factored map contracts K vectors; a dense map sums each row over
+        nfreq. Those group their additions differently, so a factored map and the dense map it
+        stands for return row sums differing by ~1e-13 relative -- and D inherits that. It is
+        the same order as the blocked-versus-unblocked difference the distance already has, so
+        D is reproducible to ~1e-13 and not bitwise, across representations as well as across
+        block sizes.
         """
         if self._row_sums is None:
             if self.is_factored:
@@ -741,6 +749,11 @@ class VarianceMap:
         DESCRIPTIVE ONLY. The agreed figure of merit is RANK, not apply cost -- that was a
         deliberate decision, and it is why nothing here trades D away for a cheaper apply.
         Report this alongside D; do not optimize against it without saying so.
+
+        NOT FREE, and not cached: the factored branch counts the nonzeros of Q, which is an
+        O(nbeta * K) pass -- 2e8 elements at CHORD's L = 4 with K = 128. That is nothing once
+        per cell of a results table, which is what this is for, and it is real money inside a
+        loop. Hoist it if you find yourself calling it per iteration.
         """
         if not self.is_factored:
             return self.nbeta * self.nfreq
