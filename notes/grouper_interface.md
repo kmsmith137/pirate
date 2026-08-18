@@ -252,14 +252,25 @@ Here are some details that are not obvious from the example code:
    "token" in an encoding that's convenient for the GPU kernel.
 
    `FrbGrouper.create_events()` decodes these tokens (via the vectorized
-   `decode_argmax_batch()` / `decode_argmax2_batch()` methods, which use the
-   producer's dedispersion plan from the handshake), so the per-event `dm`,
-   `fpga_timestamp`, `width_ms`, and frequency subband
+   `decode_argmax_batch()` / `decode_argmax2_batch()` methods), so the
+   per-event `dm`, `fpga_timestamp`, `width_ms`, and frequency subband
    (`subband_freq_{lo,hi}_MHz`) are the fine-grained "winning" trial
    parameters, not coarse-pixel centers. The grouper's job is to gather each
    selected peak's token on the GPU (inside the `get_output()` context
    manager, while the arrays are valid -- see the example code above) and pass
    it to `create_events()` via the `argmax` argument.
+
+   Decoding uses `DedispersionTree` objects deserialized from the handshake's
+   `dedispersion_plan_yaml` (item 3 above), rather than trees re-derived from
+   `dedispersion_config_yaml`. The reason is the per-tree `Dcore` field, which
+   sets the time granularity of the tokens: it is a property of whichever
+   peak-finding kernel the producer happens to have compiled, and is not
+   derivable from the config. A grouper built from a different `pirate`
+   revision would re-derive a different value and mis-decode every token, so
+   the producer's values are taken off the wire and adopted verbatim. Everything
+   else about the trees is cross-checked against the config at handshake time
+   (`DedispersionTree::check_consistency()`), which catches the case where the
+   two yamls describe different instruments.
 
 The `FrbGrouper` and `FrbSifterClient` classes aren't well-optimized at all.
 However, I find empirically that the "toy" grouper does not slow down a CHORD-scale search.

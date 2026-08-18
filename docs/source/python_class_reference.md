@@ -13,6 +13,7 @@ classes/AssembledFrameSet
 classes/BumpAllocator
 classes/DedispersionConfig
 classes/DedispersionPlan
+classes/DedispersionTree
 classes/FakeXEngine
 classes/FileSubscriber
 classes/FileWriter

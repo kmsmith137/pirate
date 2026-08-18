@@ -207,9 +207,9 @@ struct FrbGrouper
     void release_output(long seq_id);
 
     // Forwards to DedispersionTree::compute_steady_state_it0() on the producer's tree from
-    // the handshake -- see DedispersionPlan's method of the same name for the meaning of the
-    // returned array. (A forwarder is needed since 'dedispersion_trees' is deliberately not
-    // pybind-wrapped.) Valid only after the handshake.
+    // the handshake -- see DedispersionTree.hpp for the meaning of the returned array.
+    // (A forwarder is needed since 'dedispersion_trees' is deliberately not pybind-wrapped.)
+    // Valid only after the handshake.
     ksgpu::Array<long> _compute_steady_state_it0(long itree) const;
 
     bool is_stopped_pub();   // lock-protected read, for Python polling
