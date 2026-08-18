@@ -1510,6 +1510,33 @@ def test_lp_steps():
     except RuntimeError as e:
         assert 'after the slices are merged' in str(e), str(e)
 
+    # SOLVE ONCE, REPAIR SEVERAL WAYS. This is the workflow the repair is exposed for: a
+    # Q-step at production scale is hundreds of core-hours and a repair is one blocked pass,
+    # so trying a second repair must never mean re-solving.
+    from .lp import apply_repair
+    arms = {}
+    for label, kw in (('rows', dict(rescale='rows')),
+                      ('additive_first', dict(rescale='rows', additive_first=True,
+                                              additive_last=True)),
+                      ('additive_only', dict(rescale='none', additive_last=True))):
+        c = LpConfig.for_qstep(nonneg=False, **kw)
+        Qr, Wr, ri = apply_repair(Qraw, W0, None, Abar, c, axis='rows')
+        assert np.array_equal(Wr, W0), (label, 'a rows repair must not touch W')
+        assert _dominates(Qr, W0, Abar), (label, 'repaired but not admissible')
+        arms[label] = float((Qr @ s).sum())
+        assert ri['repair_label'] == c.repair_label, label
+    # Every arm starts from the SAME stored point, so they are comparable by construction --
+    # which is the entire reason for storing it. (On this cell the raw point is already
+    # nearly admissible, so the arms agree to ~1e-12; asserting that they DIFFER would be
+    # asserting a property of the cell rather than of the code.)
+    assert len(arms) == 3 and all(np.isfinite(v) for v in arms.values()), arms
+
+    # THE LOAD-BEARING ONE: repairing the stored raw point with the step's own settings
+    # reproduces the step's own output exactly. That is what makes "solve once, repair many
+    # ways" a valid comparison rather than an approximation of one.
+    Qsame, _, _ = apply_repair(Qraw, W0, None, Abar, cfgq, axis='rows')
+    assert np.array_equal(Qsame, Q), 'the standalone repair is not the step\'s own repair'
+
     # The W-step, and the majorize-minimize guarantee its objective must satisfy.
     cfgw = LpConfig.for_wstep(nonneg=False)
     Qw, W2, iw = w_step(Abar, Q, y, labels, W0, cfgw)

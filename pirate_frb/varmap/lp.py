@@ -1841,14 +1841,42 @@ def solve_covering_lps(M, B, cost, cfg, *, x_seed=None, live=None, lower=None,
 ####################################   the repair pipeline   ####################################
 
 
-def _apply_repair(Abar, Q, W, cfg, axis, info):
-    """Run the three-stage repair along 'axis' ('rows' or 'cols'), returning (Q, W).
+def apply_repair(Q, W, mid, Abar, cfg=None, *, axis='rows'):
+    """Run the whole three-stage repair, returning ``(Q, W, info)``. Neither factor is
+    modified in place.
+
+    This is the pipeline both steps end with, exposed because re-applying a repair to a
+    stored solution is a first-class operation: the repair is worth up to 2.5x in D by
+    itself, and re-solving to try a different one is a four-order-of-magnitude waste when a
+    repair is a single blocked pass over the product. Solve once with ``repair=False``, then
+    repair the stored point several ways and compare.
 
     The stages and what each is worth are documented once, on LpConfig, rather than restated
     here: a caller comparing a step's built-in repair against a re-application of it must not
-    have two vocabularies to reconcile. The two report under separate keys (``repair_pre_*``
-    and ``repair_post_*``) so that a change to one stays visible.
+    have two vocabularies to reconcile. The two additive stages report under separate keys
+    (``repair_pre_*`` and ``repair_post_*``) so that a change to one stays visible.
+
+    Parameters
+    ----------
+    axis : str
+        Which factor the multiplicative stage scales when cfg.rescale is 'auto': 'rows'
+        scales rows of Q, 'cols' scales rows of W. It is an argument rather than a config
+        field because a standalone repair has no step to infer the axis from. It also selects
+        which additive routine runs -- see LpConfig's repair commentary, since the two
+        directions genuinely differ there.
+    mid : ndarray or None
+        Passed through to the multiplicative stage, which handles it exactly (a row scale
+        commutes with it). The ADDITIVE stages refuse a non-identity mid by name, because the
+        lift is defined on the columns of W; fold it into Q first if a stage needs it.
     """
+    cfg = _cfg(cfg)
+    info = {}
+    Q, W = _apply_repair(Abar, Q, W, mid, cfg, axis, info)
+    return Q, W, info
+
+
+def _apply_repair(Abar, Q, W, mid, cfg, axis, info):
+    """apply_repair()'s body, with the step's own info dict updated in place."""
     rescale = cfg.resolved_rescale(axis)
     additive = fix_nonneg if (axis == 'rows') else repair_additive
     viol_raw = None
@@ -1861,14 +1889,14 @@ def _apply_repair(Abar, Q, W, cfg, axis, info):
         # its first pass would report a post-lift violation and the diagnostic would go blind
         # exactly where it is needed. Take the solver's own figures explicitly instead; it
         # costs one blocked pass, and only when this stage runs.
-        viol_raw = violation_stats(Q, W, None, Abar, cfg)
-        Q, st = additive(Q, W, None, Abar, cfg)
+        viol_raw = violation_stats(Q, W, mid, Abar, cfg)
+        Q, st = additive(Q, W, mid, Abar, cfg)
         info.update({f'repair_pre_{k}': v for k, v in st.items() if k != 'viol'})
 
     if rescale == 'rows':
-        Q, st = repair_rows(Q, W, None, Abar, cfg)
+        Q, st = repair_rows(Q, W, mid, Abar, cfg)
     elif rescale == 'cols':
-        W, st = repair_cols(Q, W, None, Abar, cfg)
+        W, st = repair_cols(Q, W, mid, Abar, cfg)
     elif rescale == 'none':
         st = {}                     # measured by the additive stage, or below
     else:
@@ -1877,7 +1905,7 @@ def _apply_repair(Abar, Q, W, cfg, axis, info):
     backoff, viol = st.get('backoff', {}), st.get('viol')
 
     if cfg.additive_last:
-        Q, st3 = additive(Q, W, None, Abar, cfg)
+        Q, st3 = additive(Q, W, mid, Abar, cfg)
         info.update({f'repair_post_{k}': v for k, v in st3.items() if k != 'viol'})
         # Its own first pass measured the same point, so take the figures from it rather than
         # paying for a second full pass over the product -- which at CHORD scale is 172 GiB of
@@ -1891,7 +1919,7 @@ def _apply_repair(Abar, Q, W, cfg, axis, info):
     if max_r is None:
         # Nothing above measured it: the raw point, with no repair selected at all. It is
         # still worth one pass, because "the solver said optimal" is not evidence.
-        rr, _, viol = _ratios_blocked(Abar, Q, W, None, cfg, want_rows=True, want_cols=False,
+        rr, _, viol = _ratios_blocked(Abar, Q, W, mid, cfg, want_rows=True, want_cols=False,
                                       stats=True)
         max_r, margin = float(np.nanmax(rr)), 0.0
 
@@ -2115,7 +2143,7 @@ def q_step(Abar, W, cfg=None, *, Q0=None, q_lower=None, workers=None, progress=F
     if cfg.stash_raw:
         info['Q_raw'] = Q.copy()
     if sel is None:
-        Q, W = _apply_repair(Abar, Q, W, cfg, 'rows', info)
+        Q, W = _apply_repair(Abar, Q, W, None, cfg, 'rows', info)
     info.update(n_neg=nneg, min_prod=min_prod, seconds=time.time()-t0)
     return Q, W, info
 
@@ -2285,7 +2313,7 @@ def w_step(Abar, Q, y_true, labels, W0, cfg=None, *, pinned=None, workers=None,
 
     nneg, min_prod = check_nonneg(Q, W, None, cfg)
     if sel is None:
-        Q, W = _apply_repair(Abar, Q, W, cfg, 'cols', info)
+        Q, W = _apply_repair(Abar, Q, W, None, cfg, 'cols', info)
 
     if lpinfo['n_failed'] and cfg.w_fail_warn:
         print(f'  varmap.lp w_step: {lpinfo["n_failed"]}/{nfreq} channel LPs FAILED and fell'

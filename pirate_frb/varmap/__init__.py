@@ -12,5 +12,6 @@ from .VarianceMap import VarianceMap
 from .VarianceMultiMap import VarianceMultiMap
 from .lp import (LpConfig, solve_covering_lps, q_step, w_step, covering_lp_data,
                  majorizer_weights, repair_rows, repair_cols, repair_additive,
-                 fix_nonneg, violation_stats, check_nonneg, blocking_is_exact,
+                 fix_nonneg, apply_repair, violation_stats, check_nonneg,
+                 blocking_is_exact,
                  solve_cover_lp, solve_cover_lp_cuts)
