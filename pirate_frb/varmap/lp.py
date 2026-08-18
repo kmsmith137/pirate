@@ -1561,8 +1561,16 @@ def solve_cover_lp_cuts(cost, M, b, cfg, *, x_feasible=None, live=None, status=N
 # The subproblems are independent, so they are farmed out to a FORK-based pool whose big
 # arrays are inherited rather than pickled. Two consequences the caller must know:
 #
-#   - a pool is created only when workers > 1. Do not use one in a process that has
-#     initialized CUDA; fork() after CUDA initialization is not supported by the driver.
+#   - a pool is created only when workers > 1, and THIS IS SAFE even when the caller has
+#     already initialized CUDA. The driver does not copy its mappings into the child, so the
+#     child inherits no context and fails only if it CALLS a CUDA API -- which nothing here
+#     does; it reads the numpy arrays it inherited and runs HiGHS. Measured on an L40S: with
+#     a live context and a device allocation in the parent, a 6-worker pool returns the
+#     identical answer, the parent's CUDA is still usable afterwards, and the child reads
+#     page-locked (af_rhost) host memory correctly -- that memory is registered rather than
+#     driver-allocated, so the child gets ordinary copy-on-write pages. A child that touched
+#     CUDA would get cudaErrorInitializationError, which is why anything that drives a GPU in
+#     a subprocess must use 'spawn' instead.
 #   - the pool falls back to SERIAL execution rather than hanging. When a container's pid
 #     limit is exhausted, fork() or a pthread_create inside HiGHS fails, the worker dies, and
 #     pool.map then blocks forever on a result that will never arrive. Serial is 10-50x
