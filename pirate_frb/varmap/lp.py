@@ -101,6 +101,17 @@ class LpConfig:
     ``slack > 0`` and ``nnz_cap``. They are named rather than omitted so that the vocabulary
     is complete, and they RAISE rather than guessing at an implementation, because there is
     nothing to check such an implementation against.
+
+    THERE IS DELIBERATELY NO FIELD FOR THE OBJECTIVE'S SCALE, and it is worth saying because
+    the question comes up with a measurement attached. The research recipe divides both the
+    reference and W by a power of two before solving; equilibration divides each constraint row
+    by its own right-hand side, so that pair leaves the equilibrated matrix IDENTICAL and
+    changes only this objective vector's magnitude -- and it is measured to be worth up to
+    3e-9 in D through HiGHS's dual side. Scaling ``cost`` alone reproduces it exactly,
+    including ``max_r`` to fifteen digits, with no copy of the reference. But free_lp has no
+    such global, so a field would be a capability invented rather than transcribed, which is
+    the property that makes this class checkable against published numbers. The route is
+    ``qstep(solve_fn=...)``, which is four lines and is what that hook is for.
     """
 
     # ---- the constraint set ----

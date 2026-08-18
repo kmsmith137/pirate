@@ -1119,7 +1119,11 @@ class VarianceMap:
         Qf, R = np.linalg.qr(np.asarray(X, dtype=np.float64), mode='reduced')
         sg = np.sign(np.diag(R))
         sg = np.where(sg == 0.0, 1.0, sg)
-        return Qf * sg[None, :], R * sg[:, None]
+        # In place on both: np.linalg.qr always returns fresh arrays, and Qf is the (nbeta, ell)
+        # one -- 3.1 GiB at CHORD with rank 128, which is worth not copying a third time.
+        Qf *= sg[None, :]
+        R *= sg[:, None]
+        return Qf, R
 
     def _pin_order(self, keep_pinned):
         """(npin, order): the column permutation that puts the pinned columns first.
@@ -2446,6 +2450,13 @@ class VarianceMap:
         sums and y_true. It is NECESSARY, NOT SUFFICIENT: the reduction can be wrong in ways
         this does not see, which is why coarse_grain() is also tested against a dense
         reduction on a config small enough to form one.
+
+        WHO SHOULD CALL IT: whatever BUILDS a reference, once, at the point it is built. Not
+        the steps -- they run in a loop, and this is a property of ref rather than of any step,
+        so a call inside qstep() would pay for it per iteration and still not cover a reference
+        that never reaches a step. A loose reference is safe by construction (it only makes the
+        covering constraint stricter); one that underestimates is the failure this exists to
+        catch, and nothing downstream can detect it.
 
         Raises on failure; returns the worst (smallest) ratio otherwise.
         """
