@@ -143,7 +143,7 @@ DedispersionTree::DedispersionTree(const DedispersionConfig &config, long itree,
 // Decoding peak-finder output. These need a DedispersionConfig for the band geometry and the
 // dispersion relation (delay_to_frequency(), dm_per_unit_delay()), which are properties of
 // the instrument rather than of one tree, so it is passed as an argument rather than copied
-// onto the tree. DedispersionPlan's same-named methods are thin forwarders.
+// onto the tree. See the doc-comments in DedispersionTree.hpp for the full specification.
 
 
 // For a detailed specification (and the definitions of the output params), see the

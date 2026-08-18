@@ -4,7 +4,7 @@ Feeds Gaussian noise (per-channel variance = freq_variances) through a Reference
 enable_variances=True, and compares its per-chunk variance estimates (out_var) to the analytic
 PfAvarExact.tree_variance.  A channel (tree, coarse-DM, multiplet m, profile p) is only compared
 once the *entire* chunk has reached statistical steady state for that channel, which we obtain by
-coarsening the grouper's per-element steady-state boundary (DedispersionPlan.compute_steady_state_it0)
+coarsening the grouper's per-element steady-state boundary (DedispersionTree.compute_steady_state_it0)
 to whole chunks.  Runs until
 KeyboardInterrupt (or max_chunks), printing summary statistics of epsilon = mc/analytic - 1 after
 each chunk, over all channels that have at least one steady-state estimate so far.
@@ -51,7 +51,7 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
         # steady-state boundary (compute_steady_state_it0, in output-time-bin units) to
         # whole chunks -- ichunk*nt_out >= it0 -- with a +1-chunk safety margin.
         nt_out = int(tree.nt_out)
-        it0 = plan.compute_steady_state_it0(itree)   # (ndm_out,) int64
+        it0 = tree.compute_steady_state_it0(plan.config)   # (ndm_out,) int64
         settle.append((it0 + nt_out - 1) // nt_out + 1)
         mc_sum.append(np.zeros_like(a))
         mc_sumsq.append(np.zeros_like(a))

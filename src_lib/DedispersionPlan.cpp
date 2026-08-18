@@ -287,42 +287,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
 }
 
 
-// ------------------------------------------------------------------------------------------------
-//
-// decode_argmax(), decode_argmax2() and compute_steady_state_it0() are thin forwarders to
-// the DedispersionTree methods of the same name; the per-tree logic and its derivations live
-// there. What stays here is the 'itree' bounds check, which is the only plan-level part.
-
-
-void DedispersionPlan::decode_argmax(
-    uint argmax_token,
-    long itree, long idm_coarse, long itime_coarse,
-    long &fmin, long &fmax, long &tlo, long &thi, long &p) const
-{
-    xassert((itree >= 0) && (itree < ntrees));
-    trees.at(itree).decode_argmax(config, argmax_token, idm_coarse, itime_coarse,
-                                  fmin, fmax, tlo, thi, p);
-}
-
-
-void DedispersionPlan::decode_argmax2(
-    long itree, long fmin, long fmax, long tlo, long thi, long p,
-    double &freq_lo_MHz, double &freq_hi_MHz, double &dm,
-    double &timestamp_samp, double &width_samp) const
-{
-    xassert((itree >= 0) && (itree < ntrees));
-    trees.at(itree).decode_argmax2(config, fmin, fmax, tlo, thi, p,
-                                   freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp);
-}
-
-
-Array<long> DedispersionPlan::compute_steady_state_it0(long itree) const
-{
-    xassert((itree >= 0) && (itree < ntrees));
-    return trees.at(itree).compute_steady_state_it0(config);
-}
-
-
 void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones) const
 {
     // Top-of-file header comment (verbose only). Note that the 'show_dedisperser' CLI

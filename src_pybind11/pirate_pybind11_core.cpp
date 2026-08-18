@@ -975,8 +975,11 @@ void register_core_bindings(pybind11::module &m)
                },
                py::arg("config"), py::arg("token"), py::arg("idm_coarse"), py::arg("itime_coarse"),
                "Decode an out_argmax token into the winning trial parameters, for this tree.\n"
-               "Returns (fmin, fmax, tlo, thi, p); see DedispersionPlan.decode_argmax(), which\n"
-               "forwards here, for the full specification of the output params.")
+               "Returns (fmin, fmax, tlo, thi, p), TOPLEVEL-relative: tree-freq channels of the\n"
+               "toplevel gridding, and full-resolution time samples with t=0 at the start of the\n"
+               "current chunk. tlo/thi are EXCLUSIVE trailing edges and are frequently negative\n"
+               "(dedispersion delays usually exceed the chunk length). Throws on out-of-range\n"
+               "indices or a malformed token. See DedispersionTree.hpp for the full spec.")
           .def("decode_argmax2",
                [](const DedispersionTree &self, const DedispersionConfig &config,
                   long fmin, long fmax, long tlo, long thi, long p) {
@@ -988,12 +991,17 @@ void register_core_bindings(pybind11::module &m)
                py::arg("config"), py::arg("fmin"), py::arg("fmax"), py::arg("tlo"),
                py::arg("thi"), py::arg("p"),
                "Convert decode_argmax() output to physical parameters, for this tree.\n"
-               "Returns (freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp); see\n"
-               "DedispersionPlan.decode_argmax2(), which forwards here.")
+               "Returns (freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp). The\n"
+               "timestamp is the pulse-center arrival time at the lowest radio frequency, in\n"
+               "toplevel samples with t=0 at the START OF THE CURRENT CHUNK (not fpga_seq=0),\n"
+               "and is not confined to [0, nt_in). See DedispersionTree.hpp for the full spec.")
           .def("compute_steady_state_it0", &DedispersionTree::compute_steady_state_it0,
                py::arg("config"),
-               "Length-ndm_out array of the first steady-state output index per DM; see\n"
-               "DedispersionPlan.compute_steady_state_it0(), which forwards here.")
+               "Returns a 1-d int64 array of shape (ndm_out,). A dedispersion output element\n"
+               "(ichunk, ibeam, idm, it) of this tree is \"steady-state\", i.e. unaffected by the\n"
+               "zero-padding before the start of the acquisition, iff\n"
+               "ichunk * nt_out + it >= compute_steady_state_it0(config)[idm]. Earlier elements\n"
+               "have artificially low out_max values (warmup artifacts, not real triggers).")
           .def("to_yaml_string", &DedispersionTree::to_yaml_string,
                py::arg("config"), py::arg("tree_index"), py::arg("verbose") = false,
                "This tree's entry of the DedispersionPlan yaml, as a string.\n"
@@ -1936,7 +1944,7 @@ void register_core_bindings(pybind11::module &m)
                    return py::make_tuple(fmins, fmaxs, tlos, this_, ps);
                },
                py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
-               "Vectorized decode of out_argmax tokens (see DedispersionPlan.decode_argmax\n"
+               "Vectorized decode of out_argmax tokens (see DedispersionTree.decode_argmax\n"
                "for the scalar spec). Inputs are 1-d nonempty arrays, one event per element\n"
                "(tokens: uint32; itrees/idms/itimes: int64). Returns TOPLEVEL-relative\n"
                "(fmins, fmaxs, tlos, this, ps), each an int64 array. Uses the producer's\n"
@@ -1989,7 +1997,7 @@ void register_core_bindings(pybind11::module &m)
                "converts to absolute FPGA counts. Valid only after the handshake.")
           .def("_compute_steady_state_it0", &FrbGrouper::_compute_steady_state_it0,
                py::arg("itree"),
-               "Forwards DedispersionPlan.compute_steady_state_it0(), using the producer's\n"
+               "Forwards DedispersionTree.compute_steady_state_it0(), using the producer's\n"
                "plan from the handshake (see the 'steady_state_it0' bullet in the FrbGrouper\n"
                "class docstring). Valid only after the handshake.")
           // Member docstrings are intentionally omitted here: each member is documented

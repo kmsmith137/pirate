@@ -386,13 +386,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "kernel-registry values, so the plan cannot be used in a GpuDedisperser. It can\n"
                "still be used on the GPU without cdd2 (see slow_avar.GpuBruteForceVarianceMap),\n"
                "and in host-only contexts such as the 'pirate_frb show_dedisperser' CLI.")
-          .def("compute_steady_state_it0", &DedispersionPlan::compute_steady_state_it0,
-               py::arg("itree"),
-               "Returns a 1-d int64 array of shape (trees[itree].ndm_out,). A dedispersion\n"
-               "output element (ichunk, ibeam, idm, it) of tree 'itree' is \"steady-state\",\n"
-               "i.e. unaffected by the zero-padding before the start of the acquisition, iff\n"
-               "ichunk * nt_out + it >= compute_steady_state_it0(itree)[idm]. Earlier elements\n"
-               "have artificially low out_max values (warmup artifacts, not real triggers).")
     ;
 
     // Returned by GpuDedisperser.acquire_output(). Must be registered

@@ -1,9 +1,10 @@
 """
 Black-box tests of decode_argmax() (run via 'test --amax').
 
-Note decoding from python goes through DedispersionTree; DedispersionPlan has no
-decode_argmax() binding. The VECTORIZED (batch) bindings live on FrbGrouper, which is what
-the production event path uses, and are tested in test_server.py ('test --serv').
+Note decode_argmax(), decode_argmax2() and compute_steady_state_it0() are DedispersionTree
+methods; DedispersionPlan has none of them. The VECTORIZED (batch) bindings live on
+FrbGrouper, which is what the production event path uses, and are tested in test_server.py
+('test --serv').
 
 Strategy: for a FIXED token, eval_tokens() is a
 LINEAR functional of the input array -- the actual dedispersion + peak-finding
@@ -105,8 +106,8 @@ def _test_tree_yaml(config):
 
 def _decode(plan, token, itree, idm_coarse, itime_coarse):
     """Scalar decode through the plan's tree. DedispersionPlan has no decode_argmax()
-    binding: decoding from python goes through DedispersionTree (here) or, vectorized,
-    through FrbGrouper (see test_server.py)."""
+    method: decoding goes through DedispersionTree (here) or, vectorized, through
+    FrbGrouper (see test_server.py)."""
     return plan.trees[itree].decode_argmax(plan.config, token, idm_coarse, itime_coarse)
 
 
@@ -390,9 +391,10 @@ def _check_bad_tokens(plan, kinfo):
             expect_throw((p << 8) | 1, itree, 0, 0)   # t not divisible by dt
             break
 
-    # (No itree-out-of-range case: DedispersionPlan has no decode_argmax() binding, so
-    # python indexes plan.trees directly and gets IndexError from the list. The C++
-    # range check on batch decode is covered in test_server.py.)
+    # (No itree-out-of-range case: decoding is a DedispersionTree method, so a caller
+    # indexes plan.trees directly and an out-of-range itree is an IndexError from the list
+    # rather than a decode error. The C++ range check on batch decode is covered in
+    # test_server.py.)
     expect_throw(0, itree, tree.ndm_out, 0)     # idm_coarse out of range
     expect_throw(0, itree, 0, tree.nt_out)      # itime_coarse out of range
 
