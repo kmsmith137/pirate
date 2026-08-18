@@ -254,6 +254,31 @@ class VarianceMap:
     # and below which the raw matrix is. A measured crossover, not a round number.
     _SHAPE_NORMALIZE_RANK = 32
 
+    # The randomized SVD's sampling defaults, and THEY ARE NOT THE TEXTBOOK ONES. The textbook
+    # setting (one power iteration, ten extra samples) is chosen to get the RESIDUAL right, and
+    # it does: it lands within 2.5% of the optimal rank-K residual. But the basis it produces
+    # delivers a D that is 1.40x-1.45x worse than the exact SVD's, because D is paid on each
+    # group's worst channel while a residual is an RMS. The residual is therefore useless as a
+    # stopping criterion here -- it saturates at 1.000x optimal several settings before D does.
+    #
+    # Measured against the exact SVD, D as a ratio, on two real coarse maps (12800 x 3200):
+    #
+    #   power  oversample   passes    r2 L6 K=16   t16 L7 K=16   r2 L6 K=32
+    #     1        10          3        1.4014       1.4451        1.2554
+    #     2        10          5        1.0613       1.0653          --
+    #     2         K          5        1.0319       1.0325          --
+    #     2        2K          5        1.0008       1.0008        1.0001
+    #     3        10          7        1.0045       1.0049        1.0108
+    #     4        10          9        0.9999       0.9999          --
+    #
+    # So OVERSAMPLING is the knob that pays, and power iterations are the expensive way to buy
+    # the same thing: 2K extra samples at two iterations beats four iterations at ten samples,
+    # in five passes rather than nine. That ordering is what production scale cares about, since
+    # a pass over the CHORD map is 344 GiB of reads while extra samples only widen a GEMM.
+    _SVD_OVERSAMPLE_MULT = 2        # oversample = max(_SVD_OVERSAMPLE_MIN, MULT * factor_rank)
+    _SVD_OVERSAMPLE_MIN = 10
+    _SVD_POWER_ITERS = 2
+
 
     def __init__(self, config, itree, detrender=None, *, A=None,
                  Q=None, mid=None, W=None, y_true=None,
@@ -1145,15 +1170,23 @@ class VarianceMap:
             out += self.rows(start, stop).T @ y
         return out
 
-    def _svd_randomized(self, factor_rank, rs, rng, oversample):
-        """(U, s, V) of a dense self by a randomized range finder with one power iteration.
+    def _svd_randomized(self, factor_rank, rs, rng, oversample, power_iters):
+        """(U, s, V) of a dense self by a randomized range finder, in ``1 + 2*power_iters``
+        blocked passes with nothing of matrix size in memory.
 
-        Three blocked passes over the matrix and nothing of matrix size in memory, which is what
-        makes an SVD basis reachable at a scale where the matrix is a file. It is APPROXIMATE
-        (accurate to a few digits in the leading modes, less in the trailing ones) and it depends
-        on the draw, so pass an explicit 'rng' for anything that has to be reproducible -- and
-        note that reproducibility does not survive a numpy version change, which is why the
-        campaign's own dictionaries were cached rather than rebuilt.
+        This is what makes an SVD basis reachable at a scale where the matrix is a file. It is
+        APPROXIMATE and it depends on the draw, so pass an explicit 'rng' for anything that has
+        to be reproducible -- and note that reproducibility does not survive a numpy version
+        change, which is why the campaign's own dictionaries were cached rather than rebuilt.
+
+        HOW ACCURATE IT HAS TO BE IS NOT THE TEXTBOOK QUESTION, and this is the one place where
+        taking the textbook defaults is wrong. Measured on a real coarse map at rank 16, the
+        standard setting (one power iteration, 10 extra samples) lands within 2.5% of the
+        optimal rank-K residual -- textbook-good -- and yet delivers D **1.40x worse** than the
+        exact SVD once the basis is handed to a Q-step. There is no contradiction: the residual
+        is an RMS over the whole matrix, while D is paid on each group's WORST channel, so a
+        few percent of misplaced Frobenius mass is a large covering error. The defaults set in
+        svd() are chosen against D, not against the residual.
         """
         if factor_rank is None:
             raise RuntimeError("VarianceMap.svd: method='randomized' needs an explicit"
@@ -1163,17 +1196,19 @@ class VarianceMap:
         ell = int(min(int(factor_rank) + int(oversample), self.nfreq, self.nbeta))
         rng = np.random.default_rng(0) if (rng is None) else rng
 
-        Y = self._blocked_AM(rng.standard_normal((self.nfreq, ell)), rs)
-        # One power iteration. Without it the trailing modes of a slowly-decaying spectrum leak
-        # badly, and a variance map's spectrum is exactly that.
-        Z, _ = self._qr_posdiag(self._blocked_AtY(np.linalg.qr(Y, mode='reduced')[0], rs))
-        Qy, R = self._qr_posdiag(self._blocked_AM(Z, rs))
+        Qy = np.linalg.qr(self._blocked_AM(rng.standard_normal((self.nfreq, ell)), rs),
+                          mode='reduced')[0]
+        Z = R = None
+        for _ in range(max(1, int(power_iters))):
+            Z, _ = self._qr_posdiag(self._blocked_AtY(Qy, rs))
+            Qy, R = self._qr_posdiag(self._blocked_AM(Z, rs))
 
         # A Z = Qy R and A ~ (A Z) Z.T, so the small SVD of R carries both factors.
         Ub, s, Vbt = np.linalg.svd(R, full_matrices=False)
         return Qy @ Ub, s, Z @ Vbt.T
 
-    def _svd_dense(self, factor_rank, eps, shape_normalize, method, rng, oversample):
+    def _svd_dense(self, factor_rank, eps, shape_normalize, method, rng, oversample,
+                   power_iters):
         """(Q, mid, W, Q_is_semiorthogonal) for a truncated SVD of a DENSE self. 'method' is
         already resolved to 'exact' or 'randomized'."""
 
@@ -1185,7 +1220,7 @@ class VarianceMap:
             U, s, Vt = np.linalg.svd(B, full_matrices=False)
             V = Vt.T
         elif method == 'randomized':
-            U, s, V = self._svd_randomized(factor_rank, rs, rng, oversample)
+            U, s, V = self._svd_randomized(factor_rank, rs, rng, oversample, power_iters)
         else:
             raise RuntimeError(f'VarianceMap.svd: method={method!r} is not one of'
                                " 'auto'/'exact'/'randomized'")
@@ -1258,7 +1293,8 @@ class VarianceMap:
                 (npin == 0) and (rs is None), npin)
 
     def svd(self, factor_rank=None, *, eps=None, shape_normalize=None, keep_pinned=True,
-            method='auto', max_bytes=1 << 31, rng=None, oversample=10):
+            method='auto', max_bytes=1 << 31, rng=None, oversample=None,
+            power_iters=None):
         """Return a factored VarianceMap holding a truncated SVD of self: ``Q = U``,
         ``mid = diag(s)``, ``W = V``.
 
@@ -1302,8 +1338,13 @@ class VarianceMap:
             which is the only one of the two available once the matrix is a file. 'auto' picks
             exact while the matrix fits in 'max_bytes'. Ignored for a factored self, which is
             always exact and cheap.
-        rng, oversample
-            The randomized path's draw and its extra sample count.
+        rng, oversample, power_iters
+            The randomized path's draw, its extra sample count and its number of power
+            iterations -- ``1 + 2*power_iters`` blocked passes. The defaults are measured
+            against D rather than against the residual, and are NOT the textbook ones; the
+            table is on ``_SVD_OVERSAMPLE_MULT``, and the short version is that oversampling
+            buys basis quality far more cheaply than power iterations do. Lower them only with
+            a measurement in hand.
         """
 
         if (factor_rank is None) and (eps is None):
@@ -1314,6 +1355,10 @@ class VarianceMap:
         if shape_normalize is None:
             shape_normalize = ((factor_rank is not None)
                                and (int(factor_rank) >= self._SHAPE_NORMALIZE_RANK))
+        if oversample is None:
+            oversample = max(self._SVD_OVERSAMPLE_MIN,
+                             self._SVD_OVERSAMPLE_MULT * int(factor_rank or 0))
+        power_iters = self._SVD_POWER_ITERS if (power_iters is None) else int(power_iters)
 
         # Resolved here rather than inside the dense path, so that the history says which
         # algorithm actually ran -- 'auto' in a record is exactly the thing nobody can
@@ -1330,11 +1375,17 @@ class VarianceMap:
                                                         keep_pinned)
         else:
             Q, mid, W, qflag = self._svd_dense(factor_rank, eps, shape_normalize, method,
-                                               rng, oversample)
+                                               rng, oversample, power_iters)
             npin = 0
 
         rec = dict(step='svd', factor_rank=int(W.shape[1]), eps=eps, method=method,
                    shape_normalize=bool(shape_normalize), n_pinned=int(npin),
+                   # Only meaningful for the randomized path, and recorded because it is what
+                   # nobody can reconstruct from the result: two runs at different sampling
+                   # give bases that look identical by every cheap measure and differ by 1.4x
+                   # in delivered D.
+                   oversample=(int(oversample) if (method == 'randomized') else None),
+                   power_iters=(int(power_iters) if (method == 'randomized') else None),
                    n_pinned_dropped=int(self.pinned_columns.size - npin
                                         if self.is_factored else 0),
                    seconds=time.time() - t0)

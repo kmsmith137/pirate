@@ -18,3 +18,4 @@ from .lp import (LpConfig, solve_covering_lps, q_step, w_step, covering_lp_data,
 from .basis import (basis_svd, basis_envelope_column, basis_greedy_envelope,
                     greedy_envelope_tree, basis_pivoted_qr, basis_random, svd_init,
                     spectrum_effective_rank, shape_cover_statistic)
+from .report import (row_dict, frontier, format_table, format_row, save_json, load_json)

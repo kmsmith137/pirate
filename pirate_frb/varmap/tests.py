@@ -1808,12 +1808,16 @@ def _basis_cell(r=6, subband_counts=(1, 1), L=None, seed=17, nzero=1):
     return fine.coarse_grain(L), fine, rng
 
 
-def _decaying_map(r=6, subband_counts=(1, 1), K=8, seed=19):
+def _decaying_map(r=6, subband_counts=(1, 1), K=8, seed=19, rate=0.5):
     """A coarse map whose spectrum DECAYS, built as a nonnegative low-rank product plus noise.
 
     _random_map()'s iid matrix has a nearly flat spectrum, which is the worst case for any
     low-rank method and tells a randomized range finder nothing. A real variance map is not
     like that, so anything comparing an approximate SVD against an exact one needs this instead.
+
+    'rate' is the geometric ratio between successive modes. A real variance map decays SLOWLY,
+    and that is the regime where a randomized range finder is hard and where its sampling
+    settings show up -- so a test about those settings has to ask for one.
     """
 
     config = _make_test_config(r, list(subband_counts))
@@ -1821,7 +1825,7 @@ def _decaying_map(r=6, subband_counts=(1, 1), K=8, seed=19):
     fine = _random_map(config, 0, rng)
     nbeta, nfreq = fine.coarse_grain(fine.pf_rank + 1).shape
 
-    s = 2.0 ** (-np.arange(K))
+    s = float(rate) ** np.arange(K)
     A = (rng.uniform(0.2, 1.0, size=(nbeta, K)) * s) @ rng.uniform(0.2, 1.0, size=(K, nfreq))
     A += 1e-6 * rng.uniform(0.0, 1.0, size=A.shape)
     coarse = fine.coarse_grain(fine.pf_rank + 1)
@@ -1880,14 +1884,34 @@ def test_svd(r=6, subband_counts=(1, 1), K=5):
     assert ref.svd(VarianceMap._SHAPE_NORMALIZE_RANK).history[-1]['shape_normalize']
     assert not ref.svd(K).history[-1]['shape_normalize']
 
-    # The randomized range finder: three blocked passes, nothing of matrix size in memory. It is
-    # approximate, so it is checked on a map whose spectrum actually decays.
-    dec = _decaying_map(r, subband_counts)
+    # The randomized range finder: 1 + 2*power_iters blocked passes, nothing of matrix size in
+    # memory. Checked on a SLOWLY decaying spectrum, which is what a real variance map has and
+    # the only regime where the sampling settings matter at all.
+    dec = _decaying_map(r, subband_counts, K=24, rate=0.85)
     ex = dec.svd(K, method='exact', shape_normalize=False)
+    scale = float(np.abs(np.asarray(ex.dense())).max())
+
+    def err_of(m):
+        """(RMS, WORST-CASE) error against the exact truncation. The second is the one that
+        matters: a basis at the textbook sampling passes an RMS test comfortably and still
+        costs 1.4x in delivered D, because D is paid on each group's worst channel."""
+        d = np.asarray(m.dense()) - np.asarray(ex.dense())
+        return (float(np.linalg.norm(d)) / float(np.linalg.norm(np.asarray(ex.dense()))),
+                float(np.max(np.abs(d))) / scale)
+
     rd = dec.svd(K, method='randomized', shape_normalize=False, rng=np.random.default_rng(5))
-    err = (np.linalg.norm(rd.dense() - ex.dense()) / np.linalg.norm(np.asarray(ex.dense())))
+    err, emax = err_of(rd)
     assert err < 1e-3, err
     assert np.max(np.abs(np.asarray(rd.W).T @ np.asarray(rd.W) - np.eye(K))) < 1e-10
+
+    # THE DEFAULTS ARE NOT THE TEXTBOOK ONES, deliberately, and this is what says so: the
+    # shipped sampling must beat one power iteration with ten extra samples by a clear margin
+    # on the worst-case bar. Without this, a well-meaning revert to the standard settings
+    # passes every other test in the suite and costs 1.4x in D on a real map.
+    tb_err, tb_emax = err_of(dec.svd(K, method='randomized', shape_normalize=False,
+                                     oversample=10, power_iters=1,
+                                     rng=np.random.default_rng(5)))
+    assert emax < tb_emax / 3.0, (emax, tb_emax)
 
     # truncate() is the SVD's own prefix, so it must agree with asking svd() for that rank.
     t = m.truncate(2)
@@ -1917,7 +1941,7 @@ def test_svd(r=6, subband_counts=(1, 1), K=5):
 
     atomic_print(f'    test_svd(r={r}, K={K}): dense path matches numpy, factored path matches'
                  f' the dense one to {np.max(np.abs(lo_f.dense() - lo_d.dense()))/scale:.2g},'
-                 f' randomized to {err:.2g} relative')
+                 f' randomized to {err:.2g} relative ({emax:.2g} worst-case)')
 
 
 def test_column_algebra(r=6, subband_counts=(1, 1), K=5):
@@ -2299,6 +2323,102 @@ def test_map_steps(r=6, subband_counts=(1, 1), K=5):
                  ' alternations')
 
 
+def test_report(r=6, subband_counts=(1, 1), K=4):
+    """varmap/report.py: the record is assembled from the map, and survives a json round trip.
+
+    The property worth testing is not the formatting -- it is that a record says what the map
+    says, since a results table that drifts from the map it describes is worse than no table.
+    """
+
+    import json
+    import os
+    import tempfile
+
+    from . import basis as vb
+    from . import report as vr
+
+    ref, fine, rng = _basis_cell(r, subband_counts)
+    m = vb.svd_init(ref, K, workers=1)
+
+    D = m.get_distance()
+    rec = vr.row_dict(m, D, name='svd_init')
+    for key, want in (('name', 'svd_init'), ('factor_rank', K), ('is_factored', True),
+                      ('nalpha', m.nalpha), ('nbeta', m.nbeta), ('nfreq', m.nfreq),
+                      ('is_coarse_grained', True), ('L', m.L), ('nscored', m.nscored),
+                      ('itree', m.itree), ('admissible', True),
+                      ('apply_cost', m.apply_cost())):
+        assert rec[key] == want, (key, rec[key], want)
+    assert abs(rec['D'] - D) < 1e-15
+    # Without a measurement, 'admissible' is the map's own FLAG and the elementwise fields are
+    # absent rather than guessed at.
+    assert 'max_r' not in rec
+
+    # With one, the measurement wins -- including when it CONTRADICTS the flag, which is the
+    # case the distinction exists for.
+    adm = m.measure_admissibility(ref, inflate=True)
+    rec2 = vr.row_dict(m, D, adm=adm)
+    assert rec2['admissible'] and (abs(rec2['max_r'] - adm.max_r) < 1e-15)
+    assert (len(rec2['argmax_r']) == 2) and (rec2['inflation'] is not None)
+
+    lying = m.inflated(0.5).replace(is_admissible=True,
+                                    history_record=dict(step='lie'))
+    bad = lying.measure_admissibility(ref, inflate=True)
+    liar = vr.row_dict(lying, np.inf, adm=bad)
+    assert liar['admissible'] is False, 'the measurement must override the flag'
+    assert (liar['max_r'] > 1.0) and np.isfinite(liar['D_inflated'])
+    assert liar['D_inflated'] > D, 'inflating to admissibility cannot improve D'
+
+    # 'extra' is where an experiment puts what nobody anticipated, and it takes numpy scalars
+    # straight from a step's info dict -- which is exactly what json.dump() refuses.
+    info = m.history[-1]
+    rec3 = vr.row_dict(m, D, extra=dict(max_r_raw=np.float64(info['max_r_raw']),
+                                        n_lp=np.int64(info['n_lp']), tag='x'))
+    assert isinstance(rec3['max_r_raw'], float) and isinstance(rec3['n_lp'], int)
+
+    # frontier(): one record per rank, K is what was ASKED for, and D falls with rank.
+    ranks = [2, 4, 6]
+    rows = vr.frontier(ref, lambda rf, K_: vb.svd_init(rf, K_, workers=1), ranks,
+                       name='svd', measure=True, inflate=True)
+    assert [r_['K'] for r_ in rows] == ranks
+    assert all(r_['factor_rank'] == r_['K'] for r_ in rows)
+    assert all(r_['admissible'] and (r_['algo_seconds'] > 0.0) for r_ in rows)
+    assert rows[-1]['D'] < rows[0]['D'], [r_['D'] for r_ in rows]
+
+    # An INADMISSIBLE map is reported with D = inf rather than raising, and 'inflate' is what
+    # tells "a rescale fixes this" from "hopeless". A raw SVD is exactly that case.
+    raw = vr.frontier(ref, lambda rf, K_: rf.svd(K_), [2], name='svd-raw',
+                      measure=True, inflate=True)[0]
+    assert (not raw['admissible']) and np.isinf(raw['D'])
+    assert raw['max_r'] > 1.0 and (raw['inflation'] > 1.0)
+
+    # The table prints every row, and the json round trip preserves the record INCLUDING the
+    # infinities, which is the one thing plain json.dump gets wrong.
+    tbl = vr.format_table(rows + [raw])
+    assert len(tbl.split('\n')) == len(rows) + 3, tbl      # 2 header lines + one per record
+    assert 'inf' in vr.format_table([raw])
+    assert 'D=inf' in vr.format_row(raw)
+    assert 'not measured' in vr.format_row(rec), vr.format_row(rec)
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, 'rows.json')
+        vr.save_json(rows + [raw, rec], path)
+        # PORTABLE json, which is the whole reason save_json() exists rather than json.dump():
+        # a bare dump writes 'Infinity', which python reads back and nothing else does. So the
+        # test is on the file's TEXT, not on whether python can reload it.
+        text = open(path).read()
+        assert 'Infinity' not in text, 'save_json wrote non-portable infinities'
+        assert '"inf"' in text
+        json.load(open(path))
+        back = vr.load_json(path)
+    assert len(back) == len(rows) + 2
+    assert np.isinf(back[-2]['D']) and (back[-2]['D'] > 0)
+    assert back[0] == rows[0], 'the round trip changed a record'
+
+    atomic_print(f'    test_report(r={r}, K={K}): record matches the map, measurement overrides'
+                 f' the flag, D {rows[0]["D"]:.4g} -> {rows[-1]["D"]:.4g} over ranks {ranks},'
+                 ' json round trip exact')
+
+
 ####################################   entry point   ####################################
 
 
@@ -2334,3 +2454,4 @@ def run_all():
     test_reorthogonalize()
     test_basis_constructors()
     test_map_steps()
+    test_report()

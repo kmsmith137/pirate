@@ -432,6 +432,7 @@ PYFILES = \
   pirate_frb/varmap/basis.py \
   pirate_frb/varmap/distance.py \
   pirate_frb/varmap/lp.py \
+  pirate_frb/varmap/report.py \
   pirate_frb/varmap/tests.py \
   pirate_frb/fast_avar/__init__.py \
   pirate_frb/fast_avar/test_fast_avar.py \
