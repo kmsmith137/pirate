@@ -25,12 +25,14 @@ compute_variance_multimap() and the dense A is never formed: at CHORD tree 0 the
 1.2 TiB, while the coarse map is 86 GiB at L = 6 and 344 GiB at L = 4. Leaving L at None keeps
 the dense fine map, which is only viable at subscale.
 
-The accumulator is TRANSPOSED, ``(nfreq, nrows)``, and transposed back once at the end. A
-column of the natural ``(nrows, nfreq)`` layout is a strided scatter -- at CHORD's row count
-that is one cache line touched per element, on an array of matrix size -- whereas a row of the
-transposed layout is contiguous. One tiled pass at the end costs minutes against the sweep's
-hours, which is what makes L = 4 reachable; see _transpose_into() for why that pass has to be
-tiled on both axes and not merely blocked by row.
+THE MAP IS PRODUCED BY COLUMN AND STORED BY ROW, and reconciling those cheaply is the other
+half of what makes CHORD reachable. Writing each column into the natural ``(nrows, nfreq)``
+layout as it arrives would touch one cache line per output row, on an array of matrix size. So
+the accumulator STAGES a small block of columns and transposes each full block into the output
+-- see _Accumulator, which also says why the block is small and why the transpose is tiled. The
+output is the only array of matrix size the sweep holds; accumulating a whole ``(nfreq, nrows)``
+transpose and turning it round at the end would need two, which is 688 GiB rather than 344 at
+CHORD's L = 4.
 """
 
 import os
@@ -86,11 +88,9 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
         column is zero -- so it is returned with ``y_true = None``, which is what stops
         anything downstream from scoring it. For timing a sweep before committing to it.
     scratch_dir : str, optional
-        Back the arrays of matrix size with on-disk memmaps rather than RAM. The fallback for
-        a config whose accumulator does not fit; see _alloc(). The accumulator's file is
-        unlinked as soon as it has been transposed, but the RESULT's file is what backs the
-        returned maps, so it is left in place -- do not delete 'scratch_dir' before writing
-        them out.
+        Back each tree's matrix with an on-disk memmap rather than RAM. The fallback for a
+        config that does not fit; see _alloc(). The files ARE the returned maps' storage, so
+        do not delete 'scratch_dir' before writing them out.
     provenance : dict, optional
         Merged into the multimap's provenance, after the sweep's own record. For the caller's
         bookkeeping -- the CLI puts its config overrides here.
@@ -760,11 +760,11 @@ class _GpuSweep(_SweepBase):
 def _alloc(shape, scratch_dir, tag):
     """The sweep's ONE allocation call for an array of matrix size. Returns (array, path).
 
-    RAM by default: the machines this runs on have 1.5 TiB against a 344 GiB accumulator at
-    CHORD's finest legal grouping, and coarse_grain() already assumes as much, allocating its
-    output with a plain np.full(). 'scratch_dir' switches to an on-disk np.memmap, which is
-    the fallback for a config that does not fit -- and keeping both behind this one call is
-    what makes that a one-line difference rather than a second code path.
+    RAM by default: the machines this runs on have 1.5 TiB against a 344 GiB map at CHORD's
+    finest legal grouping, and coarse_grain() already assumes as much, allocating its output
+    with a plain np.full(). 'scratch_dir' switches to an on-disk np.memmap, which is the
+    fallback for a config that does not fit -- and keeping both behind this one call is what
+    makes that a one-line difference rather than a second code path.
 
     mode='w+' creates a sparse zero-filled file, so the memmap starts at zero as the in-RAM
     branch does.
@@ -797,34 +797,59 @@ def _coarse_reduce(col, D, mbase, f, N, P):
     return x.reshape(-1)
 
 
-def _transpose_into(AT, out, *, tile_rows=4096, tile_freq=1024):
-    """``out[i, F] = AT[F, i]``, TWO-DIMENSIONALLY TILED. See the module docstring for why the
-    sweep accumulates transposed in the first place.
+def _flush_stage(stage, out, sel, n, nrows, *, tile_rows=4096):
+    """``out[:, sel] = stage[:n].T``, TILED OVER ROWS.
 
-    Tiling both axes, rather than just blocking the rows, is worth 2.1x -- measured, and it is
-    the difference between this pass being noise beside the sweep and being a visible fraction
-    of it. Blocking rows alone leaves the source side walking `nfreq` streams that are
-    `nrows*8` bytes apart (13 MiB at CHORD), so every element costs a TLB miss however good the
-    cache-line utilization is. A tile bounds the number of live streams instead: the defaults
-    read `tile_freq` runs of `tile_rows*8` bytes, a ~32 MiB working set on each side.
+    The tiling is not an optimization to skip. Without it the assignment walks all `nrows`
+    output rows at once, and they are `nfreq*8` bytes apart (220 KiB at CHORD), so the live
+    page set is the whole matrix and every element costs a TLB miss. A tile bounds it to
+    `tile_rows` pages instead. Measured 2.1x on the equivalent whole-matrix transpose.
+
+    'sel' is a slice when the staged channels are contiguous, which is every full sweep, and
+    an index array only for a scattered channel subset -- where the volume is tiny anyway.
     """
 
-    nfreq, nrows = AT.shape
-    tr, tf = min(int(tile_rows), nrows), min(int(tile_freq), nfreq)
-    for r0 in range(0, nrows, tr):
-        r1 = min(r0 + tr, nrows)
-        for f0 in range(0, nfreq, tf):
-            f1 = min(f0 + tf, nfreq)
-            out[r0:r1, f0:f1] = AT[f0:f1, r0:r1].T
+    for r0 in range(0, nrows, tile_rows):
+        r1 = min(r0 + tile_rows, nrows)
+        out[r0:r1, sel] = stage[:n, r0:r1].T
 
 
 class _Accumulator:
     """Turns the stream of columns into one VarianceMap per tree.
 
-    Holds, per tree, a TRANSPOSED ``(nfreq, nrows)`` matrix and the length-nalpha row-sum
-    vector y_true. 'nrows' is nalpha for a tree whose L is None and nbeta otherwise, and that
-    one difference is the whole of the dense-versus-streaming split.
+    THE OUTPUT IS THE ONLY ARRAY OF MATRIX SIZE THIS HOLDS, and that is the point. Each column
+    is reduced into a small ``(NSTAGE, nrows)`` staging buffer as it arrives, and a full buffer
+    is transposed into the output; the alternative -- accumulate a whole ``(nfreq, nrows)``
+    transpose and turn it round at the end -- needs both live at once, which at CHORD's L = 4
+    is 688 GiB rather than 344. Same total work, spread across the sweep instead of landing
+    after it -- which is a memory win, not a time one: nothing here runs concurrently.
+
+    Staging at all is what makes the write pattern affordable: the map is produced one COLUMN
+    at a time but stored row-major, so writing each column as it arrives would touch one cache
+    line per output row, on an array of matrix size.
+
+    'nrows' is nalpha for a tree whose L is None and nbeta otherwise, and that one difference
+    is the whole of the dense-versus-streaming split.
     """
+
+    # Columns held before a flush. MEASURED TO BE IMMATERIAL to speed, which is not what one
+    # would guess: it sets the length of the contiguous run each output row receives
+    # (NSTAGE*8 bytes), but sweeping it over 8..512 on an 85.9 GiB output moved the flush rate
+    # only between 0.73 and 0.96 GiB/s, with no trend and less spread than the run-to-run
+    # noise. EVERY flush spans the whole output address range whatever its width -- a thin
+    # column slice still touches all nrows rows -- so the pass is bandwidth-bound on scattered
+    # writes, and widening it trades fewer passes for proportionally more bytes each.
+    #
+    # So this is chosen for the BUFFER it costs, NSTAGE * nrows * 8: 0.8 GiB against a 344 GiB
+    # output at CHORD's L = 4, and 229 KiB on a test map.
+    #
+    # What staging as such costs, measured end to end at CHORD geometry: 61 s against 34 s for
+    # a single tiled transpose of a whole (nfreq, nrows) accumulator, per 85.9 GiB. The
+    # accumulator wins that pass because it can write each output row to completion before
+    # moving on; it loses the sweep, because it is a second array of matrix size. Trading 27 s
+    # per 86 GiB -- under 1% of a sweep that is hours of GPU -- for not doubling the peak is
+    # not a close call.
+    _NSTAGE = 64
 
     def __init__(self, geom, Ls, scratch_dir=None):
         self.geom = geom
@@ -833,9 +858,9 @@ class _Accumulator:
         self.seconds = 0.0
         self.transpose_seconds = 0.0
         self.gmin, self.gmax = np.inf, -np.inf
-        self._paths = []
 
-        self.AT, self.y, self.nrows, self.red = [], [], [], []
+        self.A, self.stage, self.y, self.nrows, self.red = [], [], [], [], []
+        self.staged = []       # input channels currently held in the buffers, in order
 
         for itree in range(geom.ntrees):
             # The tree the returned map will index through, which is NOT plan.trees[itree]:
@@ -878,16 +903,23 @@ class _Accumulator:
             self.nrows.append(nrows)
             self.red.append(red)
 
-            # Zero rather than the -inf coarse_grain() uses: A is a sum of squares, so the
+            # Zeroed, not -inf as coarse_grain() uses: A is a sum of squares, so the
             # max-reduction never sees a negative, and every group is occupied for
-            # R <= L <= r. add() enforces the first of those on every column.
-            AT, path = _alloc((geom.nfreq, nrows), scratch_dir, f'AT{itree}')
-            self.AT.append(AT)
-            self._paths.append(path)
+            # R <= L <= r. add() enforces the first of those on every column. An unswept
+            # column of a PARTIAL sweep is therefore left at zero rather than at -inf, which
+            # is what makes such a map merely incomplete instead of unreadable.
+            A, _ = _alloc((nrows, geom.nfreq), scratch_dir, f'A{itree}')
+            self.A.append(A)
+            self.stage.append(np.zeros((self._NSTAGE, nrows)))
             self.y.append(np.zeros(geom.tree_nalpha[itree]))
 
     def add(self, ifreq, cols):
-        """Fold one input channel's columns into the accumulator.
+        """Fold one input channel's columns into the staging buffers, flushing when full.
+
+        Channels must arrive in NON-DECREASING order, which both sweeps do: a channel's
+        staging row is closed as soon as the next one opens, so revisiting it later would
+        overwrite what was already flushed. With nphases > 1 the same channel arrives several
+        times in a row and its passes accumulate into the row it already owns.
 
         The structural checks live here rather than in a pass over the finished matrix, which
         is what makes them affordable when the finished matrix is 344 GiB: the column is
@@ -895,7 +927,21 @@ class _Accumulator:
         columns of channels a tree cannot reach must vanish identically.
         """
 
-        t0 = time.time()
+        # The flush is timed separately, so its share is taken back out below rather than
+        # counted in both places.
+        t0, t_flush = time.time(), self.transpose_seconds
+
+        fresh = (not self.staged) or (ifreq != self.staged[-1])
+        if fresh:
+            if self.staged and (ifreq < self.staged[-1]):
+                raise RuntimeError(f'_Accumulator: input channel {ifreq} arrived after'
+                                   f' {self.staged[-1]}; the sweep must yield channels in'
+                                   ' non-decreasing order')
+            if len(self.staged) == self._NSTAGE:
+                self._flush()
+            self.staged.append(ifreq)
+        k = len(self.staged) - 1
+
         for (itree, col) in enumerate(cols):
             cmin, cmax = float(col.min()), float(col.max())
 
@@ -915,16 +961,37 @@ class _Accumulator:
             self.y[itree] += col
 
             red = self.red[itree]
-            if red is None:
-                self.AT[itree][ifreq] += col
+            val = col if (red is None) else _coarse_reduce(col, *red)
+            row = self.stage[itree][k]
+            if fresh:
+                # ASSIGN, not accumulate: the buffer is reused across flushes, so a fresh row
+                # still holds the previous block's channel.
+                row[:] = val
+            elif red is None:
+                row += val
             else:
-                np.maximum(self.AT[itree][ifreq], _coarse_reduce(col, *red),
-                           out=self.AT[itree][ifreq])
-        self.seconds += time.time() - t0
+                np.maximum(row, val, out=row)
+
+        self.seconds += (time.time() - t0) - (self.transpose_seconds - t_flush)
+
+    def _flush(self):
+        """Write the staged columns into the output and empty the buffers."""
+
+        if not self.staged:
+            return
+
+        t0 = time.time()
+        lo, hi, n = self.staged[0], self.staged[-1], len(self.staged)
+        sel = slice(lo, hi + 1) if (hi - lo + 1 == n) else np.asarray(self.staged)
+        for itree in range(self.geom.ntrees):
+            _flush_stage(self.stage[itree], self.A[itree], sel, n,
+                         self.nrows[itree])
+        self.staged = []
+        self.transpose_seconds += time.time() - t0
 
     def finish(self, *, device, guard_chunk, sweep_seconds, progress=False, partial=False):
-        """Transpose each accumulator into its natural orientation and wrap it in a
-        VarianceMap. Returns the length-ntrees list.
+        """Flush what is left and wrap each matrix in a VarianceMap. Returns the length-ntrees
+        list.
 
         y_true is the streaming per-channel sum, in BOTH the dense and the coarse case. It is
         the same quantity a dense map's row_sums() computes, in a different summation order,
@@ -936,30 +1003,21 @@ class _Accumulator:
         missing value, and dropping it is what stops anything downstream from scoring the map.
         """
 
+        self._flush()
         g = self.geom
         maps = []
 
         for itree in range(g.ntrees):
-            t0 = time.time()
-            A, path = _alloc((self.nrows[itree], g.nfreq), self.scratch_dir, f'A{itree}')
-            _transpose_into(self.AT[itree], A)
-            if path is not None:
+            A = self.A[itree]
+            self.stage[itree] = None
+            if isinstance(A, np.memmap):
                 A.flush()      # so the file on disk matches the mapping, not just the pages
-            dt = time.time() - t0
-            self.transpose_seconds += dt
-
-            # Released as early as possible: the accumulator and its transpose are each of
-            # matrix size, so holding both past this point doubles the sweep's high-water mark
-            # for no reason.
-            self.AT[itree] = None
-            if self._paths[itree] is not None:
-                os.unlink(self._paths[itree])
 
             L = self.Ls[itree]
             rec = dict(step='brute_force', device=device, L=L, nphases=g.nphases,
                        nbeta=self.nrows[itree], guard_chunk=bool(guard_chunk),
                        partial=bool(partial), sweep_seconds=float(sweep_seconds),
-                       transpose_seconds=dt)
+                       transpose_seconds=self.transpose_seconds)
             m = VarianceMap.from_dense(g.config, itree, A, detrender=g.detrender,
                                        y_true=(None if partial else self.y[itree]),
                                        L=L, history=[rec])

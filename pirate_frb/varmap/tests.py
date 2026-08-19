@@ -2777,6 +2777,26 @@ def test_sweep_streaming_coarse(r=6, subband_counts=None, num_early_triggers=0,
             assert np.array_equal(got.y_true, m.y_true), (itree, L)
             nL += 1
 
+    # THE STAGING WIDTH MUST NOT BE ABLE TO CHANGE THE ANSWER. The accumulator holds a block
+    # of reduced columns and flushes it into the output, so the width is a locality knob --
+    # but it also decides where a block boundary falls, which is exactly what the
+    # fresh-row-versus-accumulate branch keys off. Widths that divide nfreq and widths that do
+    # not are both required to reproduce the default bit for bit.
+    from .brute_force import _Accumulator
+    ref = np.asarray(dense[0].A)
+    saved = _Accumulator._NSTAGE
+    try:
+        for nstage in (1, 3, 7, 2 * saved):
+            _Accumulator._NSTAGE = nstage
+            got = compute_variance_multimap(config, detrender=dparams, device='cpu')[0]
+            nd = int(np.count_nonzero(np.asarray(got.A) != ref))
+            if nd:
+                raise RuntimeError(f'test_sweep_streaming_coarse: staging width {nstage}'
+                                   f' changed {nd} entries of the map')
+            assert np.array_equal(got.y_true, dense[0].y_true), nstage
+    finally:
+        _Accumulator._NSTAGE = saved
+
     # A partial sweep is the one case where y_true would be a sum over the swept channels
     # only, so it is dropped rather than reported.
     chans = [0, dense[0].nfreq // 2, dense[0].nfreq - 1]
@@ -2792,7 +2812,8 @@ def test_sweep_streaming_coarse(r=6, subband_counts=None, num_early_triggers=0,
         atomic_print(f'    test_sweep_streaming_coarse(r={r}, subbands={subband_counts},'
                      f' net={num_early_triggers}, detrender={bool(detrender)}): the streaming'
                      f' reduction is bit-identical to coarse_grain() at all {nL} legal (tree,'
-                     f' L) pairs; a {len(chans)}-channel partial sweep reports no y_true')
+                     f' L) pairs; four staging widths agree bitwise; a {len(chans)}-channel'
+                     ' partial sweep reports no y_true')
 
 
 ####################################   entry point   ####################################
