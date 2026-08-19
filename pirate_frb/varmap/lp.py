@@ -82,8 +82,10 @@ class LpConfig:
     expensive way: a difference in output can no longer be told apart from a bug. The
     measured-better values are not lost -- they are recommended(), which is one line to adopt.
 
-    Be clear about what it costs: this configuration is the WORST one measured. Constraint
-    generation off is 5.6x-32x slower, and the additive repair off costs up to 2.5x in D.
+    Be clear about what it costs: the additive repair off costs up to 2.5x in D. Constraint
+    generation off costs less than it used to be thought to -- see the measured table under
+    `cuts`, which supersedes the 5.6x-32x this docstring used to quote, and which finds a net
+    LOSS at high rank on a narrow-band map.
 
     The field list is a TRANSCRIPTION of the research module's globals, not a curated
     selection, because a config missing even one knob cannot reproduce the old behaviour and
