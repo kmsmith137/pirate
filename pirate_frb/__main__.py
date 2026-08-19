@@ -20,6 +20,7 @@ from . import loose_ends
 from . import core
 from . import tests
 from . import slow_avar
+from . import varmap
 from .fast_avar import PfAvarApproximation, test_fast_avar
 
 from .slow_avar import (SparseTile, SparseTileTriple, SparseTilePerM, PfVarianceConvolver, PfVariance,
@@ -63,6 +64,7 @@ def parse_test(subparsers):
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
     parser.add_argument('--avar', action='store_true', help='Runs tests related to analytic variance')
     parser.add_argument('--varmap', action='store_true', help='Runs pirate_frb.varmap tests (VarianceMap geometry, coarse-graining, distance, the covering LPs, the low-rank factorizations)')
+    parser.add_argument('--vmbf', action='store_true', help='Runs the pirate_frb.varmap brute-force sweep tests (varmap/brute_force.py). Split from --varmap because these need a DedispersionPlan and a GPU, and each runs a full sweep over every input channel.')
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_{beamform,upchan}()')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
@@ -93,7 +95,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'avar', 'varmap', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'avar', 'varmap', 'vmbf', 'net', 'serv', 'sim', 'amax', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -254,6 +256,13 @@ def test(args):
                 from .varmap import tests as varmap_tests
                 varmap_tests.run_all()
 
+        if run_all_tests or args.vmbf:
+            # The brute-force sweep: deterministic (fixed configs, no randomness), and each
+            # test runs a full sweep over all input channels, so once is enough.
+            if i == 0:
+                from .varmap import tests as varmap_tests
+                varmap_tests.run_sweep_tests()
+
         if run_all_tests or args.amax:
             tests.test_decode_argmax()
 
@@ -339,7 +348,7 @@ def check_avar_mc(args):
 
 
 def parse_variance_map(subparsers):
-    help_text = "Compute the dense variance map A by brute force, and write it to an ASDF file"
+    help_text = "Compute the variance map A by brute force, and write it to an ASDF file"
     parser = subparsers.add_parser("variance_map", help=help_text, description=help_text)
     parser.add_argument('config_file', help="Path to dedispersion YAML config file")
     parser.add_argument('detrender_file', nargs='?', default=None,
@@ -350,12 +359,52 @@ def parse_variance_map(subparsers):
                         help="Run with no Detrender2d; 'detrender_file' must then be omitted")
     parser.add_argument('--cpu', action='store_true',
                         help="Force the CPU sweep (default: GPU)")
+    parser.add_argument('-L', '--coarse-grain', type=int, default=None, metavar='L',
+                        help="Coarse-grain each column AS IT IS SWEPT, at rank L, and never"
+                             " form the dense A. This is what makes a large config reachable:"
+                             " at CHORD tree 0 the dense map is 1.2 TiB and the coarse map is"
+                             " 344 GiB at L=4. Legal range is R <= L <= r per tree. Omit to"
+                             " write the dense fine map, which is only viable at subscale.")
+    parser.add_argument('--channels', default=None, metavar='SPEC',
+                        help="Sweep only these input channels, as a comma-separated list of"
+                             " indices or LO:HI[:STEP] slices. The result is a PARTIAL map"
+                             " whose other columns are zero, written with no y_true so that"
+                             " nothing downstream can score it. For timing a sweep before"
+                             " committing to the whole thing.")
+    parser.add_argument('--scratch-dir', default=None, metavar='DIR',
+                        help="Back the arrays of matrix size with memmaps under DIR instead"
+                             " of RAM. The fallback for a config whose accumulator does not"
+                             " fit; DIR must survive until the output file is written.")
     parser.add_argument('--no-guard-chunk', action='store_true',
                         help="Skip the per-pass guard chunk. The guard is what proves no part"
                              " of the impulse response was truncated, and an undersized sweep"
                              " silently UNDERESTIMATES A, so only use this on a config you"
                              " have already validated.")
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use (default 0)")
+
+
+def _parse_channel_spec(spec, nfreq):
+    """A --channels argument as a sorted list of input channel indices. Accepts a
+    comma-separated mix of bare indices and LO:HI[:STEP] slices."""
+
+    out = []
+    for part in spec.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        if ':' in part:
+            f = part.split(':')
+            if len(f) > 3:
+                raise RuntimeError(f"variance_map: --channels: '{part}' has too many colons")
+            lo = int(f[0]) if f[0] else 0
+            hi = int(f[1]) if (len(f) > 1 and f[1]) else nfreq
+            step = int(f[2]) if (len(f) > 2 and f[2]) else 1
+            out.extend(range(lo, hi, step))
+        else:
+            out.append(int(part))
+    if not out:
+        raise RuntimeError(f"variance_map: --channels={spec!r} selects no channels")
+    return sorted(set(out))
 
 
 # Config keys that this tool overrides, with the value it forces. Each is safe to override
@@ -385,7 +434,14 @@ def _variance_map_override_config(config, nbeams=1):
 
 
 def variance_map(args):
-    import numpy as np   # local: __main__ is otherwise numpy-free
+    """Sweep, and write a pirate_frb.varmap file.
+
+    NOTE THE OUTPUT FORMAT: this writes varmap/asdf_io.py's format, not the older
+    slow_avar/variance_map_io one. The two are not interchangeable and the new reader refuses
+    an old-format file by name rather than migrating it; existing old-format files stay
+    readable through slow_avar.variance_map_io.
+    """
+
     from .kernels import Detrender2dParams
 
     # ---- Argument-level rejections. The detrender arguments can contradict each other or
@@ -443,28 +499,26 @@ def variance_map(args):
 
     config.validate()
 
+    channels = (_parse_channel_spec(args.channels, int(config.get_total_nfreq()))
+                if (args.channels is not None) else None)
+
     # Before constructing the plan, not just before the GPU sweep: DedispersionPlan allocates
     # through cudaHostAlloc, so even the CPU path needs a cuda device selected.
     ksgpu.set_cuda_device(args.gpu)
-    plan = DedispersionPlan(config, cdd2_kernel_required=False)
-
-    bf = (slow_avar.BruteForceVarianceMap(plan, detrender=detrender) if args.cpu
-          else slow_avar.GpuBruteForceVarianceMap(plan, detrender=detrender))
 
     t0 = time.time()
-    A = bf.run(progress=True, guard_chunk=(not args.no_guard_chunk))
+    vmm = varmap.compute_variance_multimap(
+        config, detrender=detrender, device=('cpu' if args.cpu else 'gpu'),
+        L=args.coarse_grain, guard_chunk=(not args.no_guard_chunk), progress=True,
+        channels=channels, scratch_dir=args.scratch_dir,
+        provenance=dict(overrides=overrides, command=' '.join(sys.argv)))
     dt = time.time() - t0
 
-    geom = bf if args.cpu else bf.geom
-    slow_avar.write_variance_map(
-        args.output, A, plan, detrender=detrender, device=('cpu' if args.cpu else 'gpu'),
-        overrides=overrides, ntime=geom.ntime, nphases=geom.nphases,
-        ndata_chunks=geom.ndata_chunks, guard_chunk=(not args.no_guard_chunk),
-        nbeams=geom.nbeams)
+    vmm.write_asdf(args.output)
 
-    nbytes = sum(np.asarray(a).nbytes for a in A)
-    atomic_print(f"variance_map: swept {geom.npasses()} passes in {dt:.1f} s; wrote"
-                 f" {args.output} ({nbytes/2**20:.1f} MiB of float64 in {len(A)} tree(s))")
+    nbytes = sum(m.nbytes() for m in vmm)
+    atomic_print(f"variance_map: swept {vmm.provenance['npasses']} passes in {dt:.1f} s; wrote"
+                 f" {args.output} ({nbytes/2**20:.1f} MiB of float64 in {len(vmm)} tree(s))")
 
 
 #########################################   time command  ##########################################
