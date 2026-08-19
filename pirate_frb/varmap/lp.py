@@ -1354,6 +1354,13 @@ def solve_cover_lp(cost, M, b, cfg, *, x_feasible=None, live=None, status=None,
 # (A dropped row -- b_F = 0 with a structurally zero row -- contributes 0 to both sides, so
 # the identity used in (b) is exact.)
 #
+# AND IT IS THE REASON NOT TO BUILD AN LP WARM START, which is the other obvious way to make
+# these solves cheaper. scipy.optimize.linprog exposes no warm-start interface at all; scipy's
+# vendored HiGHS binding does, and it is worth 3.75x on the FULL LP -- but only 1.04x once
+# constraint generation has already shrunk the problem. The two are substitutes rather than
+# complements, and this is the one that wins. Recorded so that the 1.04x is not rediscovered
+# at the cost of an implementation.
+#
 # Hence the method is EXACT, by the textbook argument: solve the relaxation, test ALL the
 # constraints, add the violated ones, repeat. On exit no constraint is violated, so the
 # working optimum is feasible for the full LP and, being a relaxation optimum, optimal for it.
@@ -2088,8 +2095,9 @@ def q_step(Abar, W, cfg=None, *, Q0=None, q_lower=None, workers=None, progress=F
         setting the repair triple to (False, False, 'none'), so the two cannot disagree.
     solve_fn : callable or None
         An alternative to solve_covering_lps with the same signature -- the intended extension
-        point for a different solver, a heuristic or a warm-start scheme, without
-        reimplementing the plumbing that assembles the LPs, applies the repair and reports.
+        point for a different solver or a heuristic, without reimplementing the plumbing that
+        assembles the LPs, applies the repair and reports. (An LP warm start is the tempting
+        one and is a measured dead end -- see the constraint-generation block above.)
         The prefix rescue is NOT routed through it: it re-solves a handful of already-failed
         subproblems, and its job is to reproduce the exact solver's answer on them.
     groups : ndarray or None

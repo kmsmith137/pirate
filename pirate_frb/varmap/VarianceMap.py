@@ -22,7 +22,10 @@ There is no general grouping descriptor, no explicit label array, and no way to 
 any other axis. This is a measured restriction, not a shortcut -- merging frequency subbands
 costs 489x to 3174x in D, merging peak-finding profiles 11x to 175x, and non-uniform DM cuts
 up to 10.4x, while merging fine DM within a multiplet is nearly free (1.0x to 3.9x) and is
-therefore done unconditionally. The two shapes are those results written into the type, where
+therefore done unconditionally. The coarse DM axis is the one that is neither: collapsing it
+ENTIRELY costs 2.9x to 10.5x, but coarse-graining it by a practical factor costs only 1.0x to
+1.55x with no detrender and 1.10x to 2.80x with one -- which is why L is a useful knob rather
+than just a more expensive way of merging subbands. The two shapes are those results written into the type, where
 nobody can set them wrong.
 
 Two consequences worth stating explicitly:
@@ -200,7 +203,12 @@ class VarianceMap:
       row blocks (see rows() and default_block_rows()).
     - ``A`` (ndarray) -- the ``(nbeta, nfreq)`` matrix when ``is_factored`` is False, else
       None. May be a numpy memmap, which the row-blocked access makes transparent.
-    - ``Q`` (ndarray) -- ``(nbeta, K)`` when factored, else None. Sign-free.
+    - ``Q`` (ndarray) -- ``(nbeta, K)`` when factored, else None. Sign-free, and ALWAYS DENSE:
+      there is deliberately no second storage layout, and a Q whose support has been capped is
+      stored dense with zeros in it. Sizing, so the decision can be revisited on evidence: a
+      dense Q is 8 MiB at the CHIME tree-0 point (nbeta = 8192, K = 128), and W at
+      ``(nfreq, K)`` is the same order. Revisit only if a smaller L at CHORD makes nbeta large
+      enough to matter.
     - ``mid`` (ndarray) -- ``(K, K)`` when factored, else None; the identity when unused. It
       lets Q and W BOTH be semiorthogonal at once (an SVD is ``U diag(s) V^T``, and folding
       s into either factor destroys one of the two properties), and makes rescaling O(K^2)
@@ -1211,6 +1219,13 @@ class VarianceMap:
         is an RMS over the whole matrix, while D is paid on each group's WORST channel, so a
         few percent of misplaced Frobenius mass is a large covering error. The defaults set in
         svd() are chosen against D, not against the residual.
+
+        BUDGET IT AS A HANDFUL OF ``nbeta * (factor_rank + oversample) * 8`` BYTE ARRAYS and
+        nothing of matrix size; the peak is np.linalg.qr (which copies its input and carries
+        LAPACK workspace) plus the previous iterate still being live. A memory bar expressed as
+        a FRACTION OF THE MATRIX is the wrong denominator and silently becomes a different test
+        at a different rank -- 19 GiB at rank 128 is 5.5% of the matrix but 6.1x one work
+        array, and only the second number means anything.
         """
         if factor_rank is None:
             raise RuntimeError("VarianceMap.svd: method='randomized' needs an explicit"
