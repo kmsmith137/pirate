@@ -57,6 +57,13 @@ from .distance import YTRUE_FLOOR, f, AdmissibilityResult, DistanceEstimate
 # Nothing here re-derives the geometry: a second implementation in python would drift from
 # the C++, and the ordering conventions it encodes are what every archived map is interpreted
 # through.
+#
+# DO NOT EXTRACT THE INDEX ARITHMETIC INTO A GEOMETRY MODULE OR VALUE OBJECT. It is the
+# obvious tidy-up and it was considered and rejected: the fields such an object would carry
+# (r, R, M, N, P, subband_counts, nalpha, m_to_n) are ALREADY members of VarianceMap, so it
+# would be a second copy of data this class holds anyway, with the attendant risk of the two
+# disagreeing; and alpha_to_beta_block() / group_sizes() are two lines of arithmetic each
+# once the grouping is one integer, which belong next to the data they index.
 
 
 def make_tree(config, itree):

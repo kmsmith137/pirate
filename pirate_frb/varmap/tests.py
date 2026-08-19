@@ -43,6 +43,15 @@ out of the object that set them. test_map_steps additionally pins the map-level 
 varmap.lp bitwise, which is what makes lp.py's one-time equivalence gate a gate on the wrappers
 too.
 
+TWO BARS THAT ANY NEW TEST HERE SHOULD INHERIT, both of which cost something to learn.
+
+  - A UNIFORM SCALING IS WORTHLESS AS A CHECK ON THE INDEX CONVENTION. Scoring A * c gives
+    f(c) on every row under ANY permutation of the rows, so a test built on one passes with
+    the alpha -> beta map completely broken. A geometry spot-check has to be ROW-DEPENDENT.
+  - COMPARE ELEMENTWISE, NOT IN AGGREGATE, and prefer an EXACT bar to a tolerance wherever one
+    is available. Max is exact, so anything built on the coarse-graining reduction can be
+    required to agree to the last bit; a norm or a distance would hide a permutation.
+
 The test_lp_* tests check varmap.lp against things OTHER than itself wherever they can: the
 Q-step's optimality against brute-force vertex enumeration, the free LP against the bounded
 one, the majorization against the same sum accumulated the other way round, and a blocked

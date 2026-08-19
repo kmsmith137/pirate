@@ -18,6 +18,14 @@ is the elementwise scan that establishes the first.
 DO NOT CHANGE THE DEFINITION OF D SILENTLY. Its whole purpose is that numbers from different
 experiments are comparable; a change makes new numbers incomparable with every number recorded
 in notes/variance_map.tex. Propose changes in the research journal instead.
+
+In particular, if a number recorded before this package disagrees with get_distance(), suspect
+a known CONVENTION difference before suspecting a bug here. An early evaluation harness
+combined row blocks weighted by BLOCK SIZE with denominator nalpha, while the distance class it
+called already returned a mean over that block's SCORED rows. The two agree except on a map
+with degenerate rows (see YTRUE_FLOOR below), where they do not, and get_distance() implements
+the latter -- the same convention every later result used. Such a disagreement is not a reason
+to change D.
 """
 
 import numpy as np
