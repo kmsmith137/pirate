@@ -430,6 +430,7 @@ PYFILES = \
   pirate_frb/varmap/VarianceMultiMap.py \
   pirate_frb/varmap/asdf_io.py \
   pirate_frb/varmap/basis.py \
+  pirate_frb/varmap/brute_force.py \
   pirate_frb/varmap/distance.py \
   pirate_frb/varmap/lp.py \
   pirate_frb/varmap/report.py \

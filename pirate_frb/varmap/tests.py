@@ -1,11 +1,21 @@
-"""Unit tests for pirate_frb.varmap. Run with 'python -m pirate_frb test --varmap'.
+"""Unit tests for pirate_frb.varmap.
 
-Two of these are load-bearing beyond the usual sense, because they are the only checks on
+TWO ENTRY POINTS, and the split is deliberate. run_all() is 'python -m pirate_frb test
+--varmap': it needs no DedispersionPlan and no CUDA device, which is the same property that
+lets an archived map be analyzed anywhere, and it runs in seconds. run_sweep_tests() is
+'--vmbf': the brute-force sweep of varmap/brute_force.py, which is the one part of this
+package that does need a device, and which runs a full sweep over every input channel per
+test.
+
+Three of these are load-bearing beyond the usual sense, because they are the only checks on
 properties the scalable path assumes and cannot verify at runtime:
 
   - test_coarse_grain() compares the blockwise reduction against a dense one on a map small
     enough to form. At production scale the dense map is never built, so this is the only
     place the reduction is checked against something obviously correct.
+  - test_sweep_streaming_coarse() does the same for the sweep's own reduction, which is a
+    different algorithm again -- label-free, exploiting the two fixed shapes -- and is
+    required to agree with coarse_grain() to the last bit.
   - test_index_arithmetic() compares alpha_to_beta_block() -- which indexes through the C++
     m_to_n -- against a label array derived independently in python. That is the tripwire on
     the multiplet ordering convention, which lives in C++ and would silently reinterpret
@@ -2419,6 +2429,372 @@ def test_report(r=6, subband_counts=(1, 1), K=4):
                  ' json round trip exact')
 
 
+####################################   the brute-force sweep   ###################################
+#
+# These need a DedispersionPlan and (for the GPU sweep) a device, which the rest of this file
+# deliberately does not -- so they are dispatched separately, by run_sweep_tests(). They are
+# also minutes rather than seconds: each one runs at least one full sweep over every input
+# channel.
+
+
+def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3):
+    """A Detrender2dParams matching 'config', for the sweep tests."""
+
+    from ..pirate_pybind11 import Detrender2dParams
+    from ..detrending_spline.masks import zoned_knots
+
+    nfreq = int(config.get_total_nfreq())
+    kv = zoned_knots(n_phi, nfreq, nzone, kint)
+
+    return Detrender2dParams(nfreq=nfreq, knots=[int(x) for x in kv.knots], M=1, n_phi=n_phi,
+                             n=n, W=W, T=int(config.time_samples_per_chunk))
+
+
+def _abcd(m):
+    """A map's matrix as the (2^(r-R), M, P, nfreq) array the analytic references are indexed
+    by. The sweep's own (nalpha, nfreq) layout is that array with its first three axes
+    flattened, so this is a reshape and not a transpose."""
+
+    D = 1 << (m.tree_rank - m.pf_rank)
+    return np.asarray(m.A).reshape(D, m.nmultiplets, m.nprofiles, m.nfreq)
+
+
+def test_sweep_vs_per_tfm(r=7, subband_counts=None, num_primary_trees=1, num_early_triggers=0,
+                          verbose=True):
+    """The sweep, element by element, against PfAvarExact.per_tfm, which computes the same
+    matrix by propagating compressed sparse tiles and shares no code with the dedisperser.
+
+    This is the decisive correctness test, and it doubles as the float32 measurement: the
+    sweep runs the float32 ReferenceTree and ReferencePeakFindingKernel, while per_tfm is
+    float64 throughout. Only valid with no detrender (per_tfm cannot represent one).
+    """
+
+    from ..pirate_pybind11 import DedispersionPlan
+    from ..slow_avar.PfVariance import PfAvarExact
+    from .brute_force import compute_variance_multimap
+
+    subband_counts = [1] if (subband_counts is None) else subband_counts
+    config = _make_test_config(r, subband_counts, num_primary_trees=num_primary_trees,
+                               num_early_triggers=num_early_triggers)
+    vmm = compute_variance_multimap(config, device='cpu')
+
+    exact = PfAvarExact(DedispersionPlan(config, cdd2_kernel_required=False),
+                        np.ones(int(config.get_total_nfreq())))
+    worst, worst_where, eps = 0.0, None, []
+
+    for (itree, m) in enumerate(vmm):
+        A = _abcd(m)
+        D, P = A.shape[0], m.nprofiles
+        all_dbits = (1 << (m.tree_rank - m.pf_rank)) - 1
+        for ifreq in range(m.nfreq):
+            # per_tfm[itree][ifreq][mu] is None for multiplets this channel does not reach.
+            want = np.stack([pv.unpack(all_dbits) if (pv is not None) else np.zeros((D, P))
+                             for pv in exact.per_tfm[itree][ifreq]])       # (M, D, P)
+            want = want.transpose(1, 0, 2)                                 # (D, M, P)
+            got = A[:, :, :, ifreq]
+            assert got.shape == want.shape, (got.shape, want.shape)
+
+            nz = (want != 0.0)
+            if np.any(got[~nz] != 0.0):
+                raise RuntimeError(f'test_sweep_vs_per_tfm: tree {itree}, channel {ifreq}: the'
+                                   ' sweep is nonzero where per_tfm predicts an exact zero')
+            if not np.any(nz):
+                continue
+
+            e = got[nz] / want[nz] - 1.0
+            eps.append(e)
+            k = int(np.argmax(np.abs(e)))
+            if abs(float(e[k])) > worst:
+                worst, worst_where = abs(float(e[k])), (itree, ifreq, float(e[k]))
+
+    eps = np.concatenate(eps)
+    if verbose:
+        atomic_print(f'    test_sweep_vs_per_tfm(r={r}, subbands={subband_counts},'
+                     f' npri={num_primary_trees}, net={num_early_triggers}): {eps.size} nonzero'
+                     f' elements, eps = A_sweep/A_per_tfm - 1: mean {float(np.mean(eps)):+.3g},'
+                     f' range [{float(eps.min()):+.3g}, {float(eps.max()):+.3g}], worst |eps|'
+                     f' {worst:.3g} at (tree,ifreq)={worst_where[:2]}')
+
+    # Loose enough to pass, tight enough to catch anything but float32 roundoff: the
+    # dedispersion chain is float32, so relative errors of a few times 1e-7 are expected.
+    assert worst < 1.0e-5, (worst, worst_where)
+
+
+def test_sweep_phase_collapse(r=7, verbose=True):
+    """With no detrender, the 2^gamma polyphase passes of a time-downsampled tree must give
+    the same result (notes/variance_map.tex: everything upstream of the downsampler is
+    instantaneous in time). This is the sharpest available test of the polyphase logic, and of
+    the single-pass shortcut the sweep takes when there is no detrender.
+
+    Agreement is not bit-exact, even though the float32 output samples themselves are:
+    shifting the one-hot moves the response relative to the chunk boundaries, so the same set
+    of squared samples is accumulated into out_var in a different order. The tolerance below is
+    still six orders of magnitude below the float32 noise floor of the dedispersion chain.
+    """
+
+    from .brute_force import _CpuSweep, _SweepGeometry
+
+    # Three primary trees => gamma = 0, 1, 2, so the phase loop has something to collapse.
+    geom = _SweepGeometry(_make_test_config(r, [2, 2, 1], num_primary_trees=3))
+    assert geom.gamma_max == 2, geom.gamma_max
+
+    sweep = _CpuSweep(geom)
+    nphases = 1 << geom.gamma_max
+    rdd = sweep.make_dedisperser()
+    worst = 0.0
+
+    for (ipass, ifreq) in enumerate([0, geom.nfreq // 3, geom.nfreq - 1]):
+        ref = None
+        for iphase in range(nphases):
+            acc = sweep.run_pass(rdd, ifreq, iphase, ipass*nphases + iphase)
+            if ref is None:
+                ref = acc
+                continue
+            for itree in range(geom.ntrees):
+                # Phases c and c + 2^gamma are the same residue class mod 2^gamma, so they
+                # must agree for every tree; with W = 0 all 2^gamma_max phases do.
+                scale = float(np.abs(ref[itree]).max())
+                e = float(np.abs(acc[itree] - ref[itree]).max()) / scale if (scale > 0) else 0.0
+                if e > 1.0e-12:
+                    raise RuntimeError(f'test_sweep_phase_collapse: tree {itree}, channel'
+                                       f' {ifreq}: phase {iphase} differs from phase 0'
+                                       f' (relative {e:.4g})')
+                worst = max(worst, e)
+
+    if verbose:
+        atomic_print(f'    test_sweep_phase_collapse(r={r}): {nphases} phases agree for all'
+                     f' {geom.ntrees} trees, worst relative difference {worst:.3g}')
+
+
+def test_sweep_column_norms(r=6, subband_counts=None, num_primary_trees=1,
+                            num_early_triggers=0, detrender=True, nifreq=2, verbose=True):
+    """Evaluates the defining identity ``A[alpha,F] = sum_{t'} L[alpha t, F t']^2`` LITERALLY
+    -- one pass per input time t', reading the output of one fixed chunk -- and compares it to
+    what the sweep computes, which is instead a sum over output times for one input time.
+
+    This is the test of the core math: the row-norm/column-norm exchange, the polyphase sum
+    over 2^gamma phases, and the ntime/t0 sizing. It is also the only test that covers the
+    Detrender2d path, since no analytic oracle can. It costs (ntime + nt_in) passes per
+    channel, i.e. more than a whole sweep, so it runs at toy scale on a few channels.
+
+    Note that the sum over t' below runs over EVERY input time, with no phase weighting: the
+    polyphase decomposition is a way of organizing this sum, and summing it directly is what
+    makes this an independent check of that organization.
+    """
+
+    from .brute_force import _CpuSweep, _SweepGeometry, compute_variance_multimap
+
+    subband_counts = [2, 1] if (subband_counts is None) else subband_counts
+    config = _make_test_config(r, subband_counts, num_primary_trees=num_primary_trees,
+                               num_early_triggers=num_early_triggers)
+    dparams = _make_test_detrender(config) if detrender else None
+
+    vmm = compute_variance_multimap(config, detrender=dparams, device='cpu')
+    A = [_abcd(m) for m in vmm]
+
+    geom = _SweepGeometry(config, detrender=dparams)
+    sweep = _CpuSweep(geom)
+
+    # The probe chunk sits far enough into the stream that every t' able to reach it lies in
+    # [tlo, thi), and one chunk short of the end so that t' AFTER the probe chunk is covered
+    # too -- the detrender is not causal, and reaches W samples back. Both extremes of the
+    # range are asserted to contribute nothing, which is what makes the range wide enough.
+    nchunks = geom.ndata_chunks + 3
+    kprobe = nchunks - 2
+    tlo = kprobe*geom.nt_in - geom.ntime
+    thi = nchunks*geom.nt_in
+    assert tlo >= geom.W, (tlo, geom.W)
+
+    ifreqs = [(i * geom.nfreq) // nifreq + geom.nfreq // (2*nifreq) for i in range(nifreq)]
+    worst, worst_where = 0.0, None
+
+    for ifreq in ifreqs:
+        col = [np.zeros((geom.tree_D[i], geom.tree_M[i], geom.tree_P[i]))
+               for i in range(geom.ntrees)]
+        resp = geom.one_hot_response(ifreq)
+
+        for t_in in range(tlo, thi):
+            # A fresh dedisperser per t', rather than one continuous stream: a t' near the end
+            # of the interval would otherwise leak into the next one, and here correctness
+            # matters more than the (toy-scale) cost.
+            rdd = sweep.make_dedisperser()
+            edge = (t_in == tlo) or (t_in == thi-1)
+            for j in range(nchunks):
+                rdd.input_array[...] = 0.0
+                geom.write_one_hot(rdd.input_array, resp, t_in, j)
+                rdd.dedisperse(j, 0)
+                if j != kprobe:
+                    continue
+                for itree in range(geom.ntrees):
+                    # out_var is the MEAN over the chunk's nt_ds output times, each in steady
+                    # state and so each equal to the same column norm -- so summing out_var
+                    # over t' gives A directly, with no nt_ds factor (unlike run_pass(), which
+                    # needs one because it sums a single response over time).
+                    ov = np.asarray(rdd.out_var[itree])[0]
+                    col[itree] += ov
+                    if edge and np.any(ov != 0.0):
+                        raise RuntimeError(f"test_sweep_column_norms: input time t'={t_in}"
+                                           f' still reaches the probe chunk in tree {itree},'
+                                           " so the sum over t' is incomplete")
+
+        for itree in range(geom.ntrees):
+            want, got = A[itree][:, :, :, ifreq], col[itree]
+            scale = float(np.abs(want).max())
+            if scale == 0.0:
+                assert not np.any(got != 0.0), (itree, ifreq)
+                continue
+            e = float(np.abs(got - want).max()) / scale
+            if e > worst:
+                worst, worst_where = e, (itree, ifreq)
+
+    if verbose:
+        atomic_print(f'    test_sweep_column_norms(r={r}, subbands={subband_counts},'
+                     f' npri={num_primary_trees}, net={num_early_triggers},'
+                     f' detrender={bool(detrender)}): {len(ifreqs)} columns x {thi-tlo} input'
+                     f' times, worst relative difference {worst:.3g} at'
+                     f' (tree,ifreq)={worst_where}')
+
+    # float32 dedispersion, and the two sides accumulate different numbers of terms.
+    assert worst < 1.0e-5, (worst, worst_where)
+
+
+def test_sweep_detrender_fp32(r=8, nifreq=16, verbose=True):
+    """Measures the Detrender2d's own float32 penalty, by running the numpy detrender at
+    float32 and float64 on the same one-hots.
+
+    The sweep itself runs the detrender at float64 (the rest of the chain is float32, so that
+    is the accurate end), but the GPU Detrender2d is float32-only, so this is the error budget
+    the GPU sweep inherits from that stage. Reported as the signed relative error on the
+    squared norm of each detrended one-hot, which is what enters A.
+    """
+
+    from .brute_force import _SweepGeometry
+
+    config = _make_test_config(r, [1])
+    dparams = _make_test_detrender(config)
+    g64 = _SweepGeometry(config, detrender=dparams, detrender_dtype=np.float64)
+    g32 = _SweepGeometry(config, detrender=dparams, detrender_dtype=np.float32)
+
+    eps = []
+    for i in range(nifreq):
+        ifreq = (i * g64.nfreq) // nifreq + g64.nfreq // (2*nifreq)
+        r64 = g64.one_hot_response(ifreq).astype(np.float64)
+        r32 = g32.one_hot_response(ifreq).astype(np.float64)
+        eps.append(np.sum(r32**2) / np.sum(r64**2) - 1.0)
+
+    eps = np.array(eps)
+    if verbose:
+        atomic_print(f'    test_sweep_detrender_fp32(r={r}): {nifreq} channels, eps ='
+                     f' ||r_fp32||^2/||r_fp64||^2 - 1: mean {float(np.mean(eps)):+.3g}, range'
+                     f' [{float(eps.min()):+.3g}, {float(eps.max()):+.3g}]')
+
+    assert float(np.abs(eps).max()) < 1.0e-4, float(np.abs(eps).max())
+
+
+def test_sweep_gpu_vs_cpu(r=8, subband_counts=None, num_early_triggers=0, detrender=False,
+                          nbeams=1, nfreq=None, verbose=True):
+    """The GPU sweep against the CPU one, element by element, on the same config.
+
+    Both GPU kernels are separately validated against their reference implementations
+    ('pirate_frb test --sbdd' and '--pfsq'), so a discrepancy here points at the driver rather
+    than at a kernel. 'nfreq' defaults to 2^r, but is worth varying: that is the case where
+    the input channel count and the TREE channel count differ, and the buffers the GPU driver
+    allocates are sized by one or the other.
+    """
+
+    from .brute_force import compute_variance_multimap
+
+    subband_counts = [2, 2, 1] if (subband_counts is None) else subband_counts
+    config = _make_test_config(r, subband_counts, nfreq=nfreq,
+                               num_early_triggers=num_early_triggers)
+    dparams = _make_test_detrender(config) if detrender else None
+
+    cpu = compute_variance_multimap(config, detrender=dparams, device='cpu')
+
+    config.beams_per_gpu = config.beams_per_batch = nbeams
+    if dparams is not None:
+        dparams.M = nbeams
+    gpu = compute_variance_multimap(config, detrender=dparams, device='gpu')
+
+    worst, worst_where = 0.0, None
+    for itree in range(len(cpu)):
+        want, got = np.asarray(cpu[itree].A), np.asarray(gpu[itree].A)
+        assert got.shape == want.shape, (got.shape, want.shape)
+        scale = float(np.abs(want).max())
+        e = float(np.abs(got - want).max()) / scale if (scale > 0) else 0.0
+        if e > worst:
+            worst, worst_where = e, itree
+
+    if verbose:
+        atomic_print(f'    test_sweep_gpu_vs_cpu(r={r}, subbands={subband_counts},'
+                     f' net={num_early_triggers}, detrender={bool(detrender)},'
+                     f' nbeams={nbeams}, nfreq={cpu[0].nfreq}): worst relative difference'
+                     f' {worst:.3g} at tree {worst_where}')
+
+    # Both sides are float32 pipelines, but they are different float32 pipelines (the GPU tree
+    # is not the reference tree), so this is a float32-roundoff comparison.
+    assert worst < 1.0e-4, (worst, worst_where)
+
+
+def test_sweep_streaming_coarse(r=6, subband_counts=None, num_early_triggers=0,
+                                detrender=False, verbose=True):
+    """The streaming coarse-graining inside the sweep, against coarse_grain() of the dense map
+    -- at EVERY legal L, and required to be bit-identical.
+
+    This is the property the whole scalable path rests on and the one thing the runtime cannot
+    check for itself: above test scale the dense A is never formed, so there is nothing to
+    compare the streaming reduction against. The two are deliberately different algorithms --
+    coarse_grain() sorts a label array and reduces segments, while the sweep exploits the two
+    fixed shapes to reduce with no labels at all -- and max being exact is what makes bit
+    identity the right bar rather than a tolerance.
+
+    Also checks y_true, which the two paths accumulate identically (channel by channel), and
+    that a partial sweep declines to report one at all.
+    """
+
+    from .brute_force import compute_variance_multimap
+
+    subband_counts = [2, 1] if (subband_counts is None) else subband_counts
+    config = _make_test_config(r, subband_counts, num_early_triggers=num_early_triggers)
+    dparams = _make_test_detrender(config) if detrender else None
+    dense = compute_variance_multimap(config, detrender=dparams, device='cpu')
+
+    nL = 0
+    for (itree, m) in enumerate(dense):
+        R, rr = m.pf_rank, m.tree_rank
+        for L in range(R, rr + 1):
+            Ls = [None] * len(dense)
+            Ls[itree] = L
+            got = compute_variance_multimap(config, detrender=dparams,
+                                           device='cpu', L=Ls)[itree]
+            want = m.coarse_grain(L)
+            assert got.nbeta == want.nbeta, (itree, L, got.nbeta, want.nbeta)
+            nd = int(np.count_nonzero(np.asarray(got.A) != np.asarray(want.A)))
+            if nd != 0:
+                raise RuntimeError(f'test_sweep_streaming_coarse: tree {itree}, L={L}:'
+                                   f' {nd} of {got.nbeta * got.nfreq} entries differ from'
+                                   ' coarse_grain() of the dense map')
+            assert np.array_equal(got.y_true, m.y_true), (itree, L)
+            nL += 1
+
+    # A partial sweep is the one case where y_true would be a sum over the swept channels
+    # only, so it is dropped rather than reported.
+    chans = [0, dense[0].nfreq // 2, dense[0].nfreq - 1]
+    part = compute_variance_multimap(config, detrender=dparams, device='cpu', channels=chans)
+    assert part.provenance['partial'] is True
+    assert part[0].y_true is None, 'a partial sweep must not claim a y_true'
+    Ap, Af = np.asarray(part[0].A), np.asarray(dense[0].A)
+    assert np.array_equal(Ap[:, chans], Af[:, chans]), 'swept columns must match a full sweep'
+    unswept = [c for c in range(dense[0].nfreq) if c not in chans]
+    assert not np.any(Ap[:, unswept]), 'unswept columns must be identically zero'
+
+    if verbose:
+        atomic_print(f'    test_sweep_streaming_coarse(r={r}, subbands={subband_counts},'
+                     f' net={num_early_triggers}, detrender={bool(detrender)}): the streaming'
+                     f' reduction is bit-identical to coarse_grain() at all {nL} legal (tree,'
+                     f' L) pairs; a {len(chans)}-channel partial sweep reports no y_true')
+
+
 ####################################   entry point   ####################################
 
 
@@ -2455,3 +2831,30 @@ def run_all():
     test_basis_constructors()
     test_map_steps()
     test_report()
+
+
+def run_sweep_tests():
+    """The brute-force sweep (varmap/brute_force.py). Separate from run_all() because these
+    need a DedispersionPlan and a CUDA device, and take minutes rather than seconds."""
+
+    test_sweep_vs_per_tfm(7, [1])
+    test_sweep_vs_per_tfm(7, [2, 2, 1], num_early_triggers=1)
+    test_sweep_phase_collapse(7)
+    test_sweep_detrender_fp32(7)
+    # The Detrender2d path has no analytic oracle, so test_sweep_column_norms is what covers
+    # it -- and the polyphase sum, which is where it interacts with a time-downsampled tree.
+    test_sweep_column_norms(6, [2, 1], detrender=False)
+    test_sweep_column_norms(6, [2, 1], detrender=True)
+    test_sweep_column_norms(6, [2, 1], num_primary_trees=2, nifreq=1)
+    test_sweep_column_norms(6, [1], num_early_triggers=1, nifreq=1)
+    # The streaming reduction against the dense one, which is the only check on the property
+    # the scalable path assumes. Two subband layouts, because a ragged one (levels 1 and 0
+    # mixed) is where the multiplet decomposition can go wrong.
+    test_sweep_streaming_coarse(6, [2, 1])
+    test_sweep_streaming_coarse(6, [1], num_early_triggers=1)
+    test_sweep_streaming_coarse(6, [2, 1], detrender=True)
+    # The GPU sweep against the CPU one. Both GPU kernels are validated against their
+    # reference implementations by --sbdd and --pfsq, so this covers the python driver rather
+    # than the kernels.
+    test_sweep_gpu_vs_cpu(8, [2, 2, 1], nbeams=4)
+    test_sweep_gpu_vs_cpu(8, [2, 2, 1], num_early_triggers=1, detrender=True, nfreq=200)
