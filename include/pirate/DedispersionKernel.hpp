@@ -380,7 +380,8 @@ extern std::ostream &operator<<(std::ostream &os, const GpuDedispersionKernel::R
 //   - dd_rank >= 3 (the kernel needs the two-stage dedisperser, see below)
 //   - nspec == 1
 //   - apply_input_residual_lags == true
-//   - input_is_ringbuf == true, output_is_ringbuf == false
+//   - input_is_ringbuf == true
+//   - output_is_ringbuf == false
 //   - frequency_subbands.pf_rank <= dd_rank - (dd_rank/2)
 
 

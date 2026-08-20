@@ -28,31 +28,29 @@ struct DedispersionTree;   // defined in DedispersionTree.hpp
 // shape (ndm_out, M, ntime) subband array is never materialized in GPU memory. (Contrast
 // GpuSbDedispersionKernel, which does materialize it -- see DedispersionKernel.hpp.)
 //
-// Two constraints relate the peak-finding parameters to the dedispersion parameters.
-// Define rank1 = dd_rank - (dd_rank/2). This the GPU kernel's second-stage rank.
+// Constraints on dd_params and pf_params:
 //
-//   - fs.pf_rank <= rank1
-//   - pf_params.ndm_out == 2^(dd_rank + amb_rank - rank1). Note 'rank1' and not 'pf_rank':
-//     the output DM axis is one DM per warp of the second stage, whatever the subbands are.
+//   - dd_params.dd_rank >= 3 (the kernel needs the two-stage dedisperser)
+//   - dd_params.nspec == 1
+//   - dd_params.apply_input_residual_lags == true
+//   - dd_params.input_is_ringbuf == true
+//   - dd_params.output_is_ringbuf == false
+//   - pf_params.ndm_out == 2^(dd_rank + amb_rank - rank1)   [ NOTE rank1 not pf_rank]
+//   - pf_rank <= rank1
 //
-// If pf_rank < rank1, each warp computes 2^(rank1 - pf_rank) output DMs; call that index 'mu'.
-// They do NOT get their own rows of out_max/out_argmax. Instead 'mu' is folded into the
-// peak-finder's multiplet index, as
+// where:  pf_rank = pf_params.subband_counts.size()-1
+//         rank1 = (dd_params.dd_rank + 1) // 2
 //
-//    m_ext = (m << (rank1 - pf_rank)) | mu,     0 <= m_ext < 2^(rank1-pf_rank) * fs.M
+// If pf_rank < rank1, then the argmax "tokens" contain an extra index 0 <= mu < 2^K,
+// where K = (rank1 - pf_rank). See notes/dedispersion.tex for discussion. The token
+// format is:
 //
-// so the peak-finder max-reduces over 'mu' along with (multiplet, profile, time). That is
-// legitimate because the extraction leaves all 2^(rank1-pf_rank) trials referenced to the
-// same output time -- see cuda_generator/Dedisperser.emit_subband_extraction(). Two
-// consequences for callers:
+//   token = (t) | (p << 8) | (mu << 16) | (m << (16+K))
 //
-//   - The m-field of an 'out_argmax' token is m_ext, not m. DedispersionTree::decode_argmax()
-//     assumes m_ext == m, so it must be generalized before any tree uses pf_rank < rank1.
-//   - The peak-finding weights are unaffected: they are indexed by (dm_out, profile, subband),
-//     and 'mu' is below the weights' DM granularity by construction.
-//
-// When pf_rank == rank1 -- currently the only case any DedispersionTree asks for -- 'mu' is
-// empty and m_ext == m.
+//     where  0 <= t < (nt_in / nt_out)  indexes a fine-grained arrival time
+//            0 <= p < P                 indexes a peak-finding profile
+//            0 <= m < M                 indexes a "multiplet"
+//            0 <= mu < 2^K              indexes additional fine-grained DMs
 
 
 struct CoalescedDdKernel2

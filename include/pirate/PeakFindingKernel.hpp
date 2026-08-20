@@ -34,8 +34,8 @@ namespace pirate {
 // 
 // The 'out_argmax' array has the same shape (ndm_out, nt_out). Each element of the
 // out_argmax array is an uint32 "token" which indicates which element of the 4-d trial
-// array (from the previous paragraph) is responsible for the maximum SNR. 
-// The tokens are defined as follows:
+// array (from the previous paragraph) is responsible for the maximum SNR. The tokens
+// are defined as follows (see "Note 3" below for why this is simpler than cdd2):
 //
 //   token = (t) | (p << 8) | (m << 16);   // 8+8+16 bits
 //
@@ -84,14 +84,19 @@ namespace pirate {
 // for the GPU kernel. The helper class 'GpuPfWeightLayout' is intended to hide the
 // details of the GPU memory layout, by providing helper functions to convert from (*).
 //
-// Note 1: the peak-finding kernels (ReferencePeakFidningKernel, GpuPeakFindingKernel)
+// Note 1: the peak-finding kernels (ReferencePeakFindingKernel, GpuPeakFindingKernel)
 // don't define an explicit index 0 <= mu < 2^K (see notes/dedispersion.tex). This is
-// because the additional index can be "emulated" by prepending K zeroes to subband_counts.
+// because K > 0 can be "emulated" by prepending K zeroes to subband_counts.
 //
 // Note 2: in contrast, the cdd2 kernel does need to define the additional mu-index.
 // Prepending zeroes doesn't change the number of subbands, but does change which
 // frequency ranges they correspond to. The peak-finding kernels don't need this
 // extra information, whereas the cdd2 kernel does.
+//
+// Note 3: because K=0 in the peak-finding kernels, whereas K>=0 in the cdd2 kernel,
+// the peak-finding kernels use a simpler (but consistent) argmax-token representation.
+//  - Peak-finding kernels use:  token = (t) | (p << 8) | (m << 16)
+//  - cdd2 kernels use:          token = (t) | (p << 8) | (mu << 16) | (m << (16+K))
 
 
 struct PeakFindingKernelParams
