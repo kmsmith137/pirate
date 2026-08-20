@@ -70,7 +70,7 @@ def parse_test(subparsers):
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection and pulse-invariants tests')
     parser.add_argument('--amax', action='store_true', help='Runs DedispersionTree.decode_argmax() tests (black-box probe arrays)')
-    parser.add_argument('--sb', action='store_true', help='Runs frequency-subband tests (C++/python parity of the tree restriction rule, and the per-tree subband-set property)')
+    parser.add_argument('--sb', action='store_true', help='Runs frequency-subband tests (C++/python parity of the two FrequencySubbands implementations, and the per-tree subband-set property)')
     parser.add_argument('--aout', action='store_true', help='Runs the serialized-output test (atomic_print/AtomicPrint, C++ and python threads)')
     parser.add_argument('--dt1d', action='store_true', help='Runs pirate_frb.detrending_1d tests (pure-numpy 1-d detrender)')
     parser.add_argument('--dt1k', action='store_true', help='Runs pirate_frb.detrending_1d_kalman tests (pure-numpy fixed-lag Kalman detrender)')
@@ -268,7 +268,7 @@ def test(args):
             tests.test_decode_argmax()
 
         if run_all_tests or args.sb:
-            tests.test_restrict_parity()
+            tests.test_frequency_subbands_parity()
             tests.test_subband_property()
 
         if run_all_tests or args.aout:
