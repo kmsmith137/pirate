@@ -2360,6 +2360,21 @@ class VarianceMap:
         deliberate: scoring a SIGNED candidate is the main reason this method exists, and
         clipping it to zero first would be a modeling choice that changes the matrix.
 
+        NO YTRUE_FLOOR HERE, AND THAT IS DELIBERATE. get_distance() skips outputs whose
+        y_true falls below YTRUE_FLOOR; this method never looks at y_true at all. The two
+        rules belong in different places: the floor exists because y_approx/y_true is
+        UNDEFINED rather than large for an output with no variance, which is a property of
+        the distance, whereas admissibility is elementwise domination, where nothing divides
+        by y_true and a floor would only weaken the guarantee.
+
+        The consequence is a real difference from the superseded slow_avar.VarMapDistance,
+        which skipped a row below the floor for max_r as well as for D0. The two disagree on
+        exactly one case: a ref row that is positive but sums below the floor, where self is
+        zero. That needs an approximation that is exactly zero where ref is not, which a
+        covering LP does not produce -- and empirically does not: rescoring all 26 published
+        cells reproduced max_r bit-identically, on maps that do contain such rows. Do not
+        "fix" this by adding a floor here.
+
         WHAT 'ref' HAS TO BE, AND WHY THAT IS NOT CHECKED. The useful ref is the true map
         (fine case) or ``true_map.coarse_grain(L)`` (coarse case). A LOOSE ref -- admissible
         but not minimal -- is SAFE: self must then dominate something larger than A_true, so
