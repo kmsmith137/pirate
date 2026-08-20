@@ -32,7 +32,7 @@ from .FrequencySubbands import FrequencySubbands
 # run-length structure rather than a band set. In particular LEADING ZEROS ARE MEANINGFUL:
 # they multiply every run length by a power of two without changing N. CoalescedDdKernel2
 # uses exactly that -- its pf kernel's counts are the tree's counts with 'xdm_rank' zeros
-# prepended, so that the peak-finder's index is m_ext = (m << xdm_rank) | e and the extra DM
+# prepended, so that the peak-finder's index is m_ext = (m << xdm_rank) | mu and the extra DM
 # bits get max-reduced away. See cuda_generator/CoalescedDdKernel2.py.
 #
 # Constraints:

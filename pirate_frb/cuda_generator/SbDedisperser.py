@@ -122,8 +122,8 @@ class SbDedisperser:
         # (2^xdm_rank, M) output subarray owned by this warp. Note that it must be fully
         # consumed -- see its docstring, and the 'sbx_complete' assert below.
 
-        for rname, m, e in self.dd.emit_subband_extraction(k, self.frequency_subbands):
-            self._emit_store(k, rname, m, e)
+        for rname, m, mu in self.dd.emit_subband_extraction(k, self.frequency_subbands):
+            self._emit_store(k, rname, m, mu)
 
         assert self.dd.sbx_complete
 
@@ -159,7 +159,7 @@ class SbDedisperser:
             k.emit(f'//')
             k.emit(f'// Note that (blockDim.y * gridDim.x) is the number of WARPS, and each warp writes')
             k.emit(f"// {2**K} consecutive output DMs: the low {K} bits of the DM index are the \"extra DM\"")
-            k.emit(f"// 'e' (see Dedisperser.emit_subband_extraction).")
+            k.emit(f"// 'mu' (see Dedisperser.emit_subband_extraction).")
 
         k.emit(f'//')
         k.emit(f'// This is tricky because the block/warp indices correspond to bit-reversed DMs,')
@@ -180,7 +180,7 @@ class SbDedisperser:
 
         bd_out_expr = f'(bd_out << {K})' if (K > 0) else 'bd_out'
         after_shape = f'({2**K}, M, ntime), strides (M*ntime, ntime, 1)' if (K > 0) else '(M, ntime), strides (ntime, 1)'
-        elt_ix = f'(e*M + m)' if (K > 0) else 'm'
+        elt_ix = f'(mu*M + m)' if (K > 0) else 'm'
         m_max = f'{2**K} * M' if (K > 0) else 'M'
 
         k.emit(f'// Apply per-block + per-warp offset:')
@@ -202,7 +202,7 @@ class SbDedisperser:
         k.emit()
 
 
-    def _emit_store(self, k, rname, m, e):
+    def _emit_store(self, k, rname, m, mu):
         """Consumer of Dedisperser.emit_subband_extraction(): store one multiplet to global memory.
 
         Each store is a 32-bit instruction covering exactly one 128-byte cache line per warp.
@@ -217,11 +217,11 @@ class SbDedisperser:
         d = fs.m_to_nd[m][1]                 # fine-grained dm
         flo, fhi = fs.n_to_frange[n]         # coarse-freq range of the subband
 
-        # The (e,m) pair indexes a shape (2^xdm_rank, M) subarray -- see _apply_sb_out_offsets().
-        ix = e * self.M + m
-        estr = f', e={e}' if (self.xdm_rank > 0) else ''
+        # The (mu,m) pair indexes a shape (2^xdm_rank, M) subarray -- see _apply_sb_out_offsets().
+        ix = mu * self.M + m
+        mustr = f', mu={mu}' if (self.xdm_rank > 0) else ''
 
-        k.emit(f'sb_out[{ix} * m_stride] = {rname};   // m={m}{estr}: subband n={n} (coarse freqs [{flo},{fhi})), fine dm={d}')
+        k.emit(f'sb_out[{ix} * m_stride] = {rname};   // m={m}{mustr}: subband n={n} (coarse freqs [{flo},{fhi})), fine dm={d}')
 
 
     def emit_registration(self, k):

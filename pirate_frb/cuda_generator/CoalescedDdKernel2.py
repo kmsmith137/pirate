@@ -44,11 +44,11 @@ class CoalescedDdKernel2:
         self.xdm_rank = K = self.dd.xdm_rank(frequency_subbands)   # (dd.rank1 - fs.pf_rank)
 
         # The peak-finder sees one input per (multiplet, "extra DM") pair, indexed by
-        # m_ext = (m << xdm_rank) | e -- see Dedisperser.emit_subband_extraction(). Prepending
+        # m_ext = (m << xdm_rank) | mu -- see Dedisperser.emit_subband_extraction(). Prepending
         # 'xdm_rank' zeros to the subband counts gives a FrequencySubbands whose multiplet index
         # IS m_ext: same N, same band ordering, and each band owns a run of 2^xdm_rank times as
         # many consecutive multiplets. That is all the peak-finder layer uses, so it needs no
-        # notion of 'e' at all.
+        # notion of 'mu' at all.
         #
         # WARNING: the two FrequencySubbands objects describe different band sets. Only the
         # compact one is geometrically meaningful (prepending zeros turns the "unstaggered"
@@ -192,8 +192,8 @@ class CoalescedDdKernel2:
         # Note that it must be fully consumed -- see its docstring, and the 'sbx_complete'
         # assert below.
 
-        for rname, m, e in self.dd.emit_subband_extraction(k, self.frequency_subbands):
-            self.pf.process_pf_input(k, rname, (m << self.xdm_rank) | e)
+        for rname, m, mu in self.dd.emit_subband_extraction(k, self.frequency_subbands):
+            self.pf.process_pf_input(k, rname, (m << self.xdm_rank) | mu)
 
         assert self.dd.sbx_complete
 

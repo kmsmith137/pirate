@@ -357,21 +357,21 @@ lag at all.
 
 If $R < r_1$, write $K = r_1 - R$ and split the second stage once more,
 \begin{equation}
-\DD(r_1) = \big( \DD(R) \otimes 1 \big) \circ \LAG\big[ (2^R-1-F)\, e \big]
+\DD(r_1) = \big( \DD(R) \otimes 1 \big) \circ \LAG\big[ (2^R-1-F)\, \mu \big]
              \circ \big( 1 \otimes \DD(K) \big),
 \end{equation}
-where $0 \le e < 2^K$ is the delay produced by the inner $\DD(K)$, and the second stage's
+where $0 \le \mu < 2^K$ is the delay produced by the inner $\DD(K)$, and the second stage's
 frequency index $0 \le f_1 < 2^{r_1}$ splits as $f_1 = 2^K F + u$ with $0 \le u < 2^K$.
-The coarse delay is now $d_{\rm hi} = 2^K d' + e$, so the lag the extraction needs splits
+The coarse delay is now $d_{\rm hi} = 2^K d' + \mu$, so the lag the extraction needs splits
 into two pieces:
 \begin{equation}
 (2^R-1-F)\, d_{\rm hi} = \underbrace{2^K (2^R-1-F)\, d'}_{\rm free}
-                        + \underbrace{(2^R-1-F)\, e}_{\rm extra}.
+                        + \underbrace{(2^R-1-F)\, \mu}_{\rm extra}.
 \end{equation}
 The first piece is already applied by the $r=r_0+r_1$ split: that split's lag
 $(2^{r_1}-1-f_1)d'$ exceeds the inner split's $(2^K-1-u)d'$ by exactly $2^K(2^R-1-F)d'$,
 which is independent of $u$ and therefore commutes with $\DD(K)$. The second piece does not
-involve $d'$ at all, so it is one fixed lag per $(F,e)$ pair (a compile-time constant, in
+involve $d'$ at all, so it is one fixed lag per $(F,\mu)$ pair (a compile-time constant, in
 our GPU kernels). So $R < r_1$ costs a small extra lag on each second-stage register, and in
 exchange each unit of $d'$ yields $2^K$ values of $d_{\rm hi}$.
 
@@ -647,16 +647,16 @@ which encode the ``winning'' parameters, that are responsible for the max snr.
 Before writing down the token encoding, recall from \S\ref{sec:peak_finding}, \S\ref{ssec:dedispersion_output_arrays}
 that the DM downsampling factor of the form $D_{\rm ds} = 2^{R+K}$.
 The first $R$ bits are part of the ``multiplet'' $0 \le m < M$ (see Eq.\ (\ref{eq:multiplet_def})),
-and we introduce a new index $0\le e < 2^K$ for the remaining $K$t bits.
+and we introduce a new index $0\le \mu < 2^K$ for the remaining $K$t bits.
 
 In this notation, the token encoding is:
 \begin{equation}
 \big(\mbox{32-bit {\tt argmax\_token}}\big)
- = \, \mbox{\tt (t) | (p << 8) | (e << 16) | (m << (16+K))}
+ = \, \mbox{\tt (t) | (p << 8) | (mu << 16) | (m << (16+K))}
 \end{equation}
 where $0 \le t < T_{\rm ds}$ is an 8-bit fine-grained arrival time, $0 \le p < P$ is
 an 8-bit peak-finding profile index (encoding pulse width and profile shape),
-$0 \le e < 2^K$ is part of the fine-grained DM as defined in the previous paragraph,
+$0 \le \mu < 2^K$ is part of the fine-grained DM as defined in the previous paragraph,
 and $0 \le m < M \le 114$ is a ``multiplet'' (i.e.~(frequency subband, fine-grained DM) pair.
 The arrival time $t$ has a small $p$-dependent time shift applied (see code for details).
 

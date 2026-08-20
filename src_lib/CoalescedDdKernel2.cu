@@ -306,10 +306,10 @@ void CoalescedDdKernel2::launch(
 // Helper for CoalescedDdKernel2::test_random(). Reindexes the reference dedisperser's
 // subband array into the layout that the kernel's peak-finding half sees:
 //
-//    dst[b, dm_out, (m << xdm_rank) | e, t] = src[b, (dm_out << xdm_rank) | e, m, t]
+//    dst[b, dm_out, (m << xdm_rank) | mu, t] = src[b, (dm_out << xdm_rank) | mu, m, t]
 //
 // i.e. the low 'xdm_rank' bits of the DM index become the low bits of the multiplet index.
-// Both arrays are fully contiguous, so each (dm_out, m, e) is one memcpy along the time axis.
+// Both arrays are fully contiguous, so each (dm_out, m, mu) is one memcpy along the time axis.
 // (See cuda_generator/Dedisperser.emit_subband_extraction() for where the reindexing comes
 // from, and cuda_generator/CoalescedDdKernel2.py for why the peak-finder is happy with it.)
 static void _gather_m_ext(Array<float> &dst, const Array<float> &src, long xdm_rank)
@@ -330,9 +330,9 @@ static void _gather_m_ext(Array<float> &dst, const Array<float> &src, long xdm_r
     for (long b = 0; b < nbeams; b++) {
         for (long d = 0; d < ndm_out; d++) {
             for (long m = 0; m < M; m++) {
-                for (long e = 0; e < E; e++) {
-                    const float *p = src.data + ((((b*ndm_out + d)*E + e)*M) + m) * nt;
-                    float *q = dst.data + ((((b*ndm_out + d)*M + m)*E) + e) * nt;
+                for (long mu = 0; mu < E; mu++) {
+                    const float *p = src.data + ((((b*ndm_out + d)*E + mu)*M) + m) * nt;
+                    float *q = dst.data + ((((b*ndm_out + d)*M + m)*E) + mu) * nt;
                     memcpy(q, p, nt * sizeof(float));
                 }
             }
@@ -429,7 +429,7 @@ void CoalescedDdKernel2::test_random()
     // The reference peak-finder is a peak-finder-layer object, so it gets the same subband
     // counts as the GPU kernel's peak-finding half: 'xdm_rank' zeros prepended to the compact
     // counts. That FrequencySubbands has the same N and the same per-subband multiplet runs,
-    // but 2^xdm_rank times as many multiplets, indexed by m_ext = (m << xdm_rank) | e. (It is
+    // but 2^xdm_rank times as many multiplets, indexed by m_ext = (m << xdm_rank) | mu. (It is
     // NOT the same band set -- see cuda_generator/CoalescedDdKernel2.py -- but the peak-finder
     // never uses the band geometry.) The two kernels are otherwise identically parameterized.
     PeakFindingKernelParams ref_pf_params = pf_params;

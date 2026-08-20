@@ -35,13 +35,13 @@ struct DedispersionTree;   // defined in DedispersionTree.hpp
 //   - pf_params.ndm_out == 2^(dd_rank + amb_rank - rank1). Note 'rank1' and not 'pf_rank':
 //     the output DM axis is one DM per warp of the second stage, whatever the subbands are.
 //
-// If pf_rank < rank1, each warp computes 2^(rank1 - pf_rank) output DMs; call that index 'e'.
-// They do NOT get their own rows of out_max/out_argmax. Instead 'e' is folded into the
+// If pf_rank < rank1, each warp computes 2^(rank1 - pf_rank) output DMs; call that index 'mu'.
+// They do NOT get their own rows of out_max/out_argmax. Instead 'mu' is folded into the
 // peak-finder's multiplet index, as
 //
-//    m_ext = (m << (rank1 - pf_rank)) | e,     0 <= m_ext < 2^(rank1-pf_rank) * fs.M
+//    m_ext = (m << (rank1 - pf_rank)) | mu,     0 <= m_ext < 2^(rank1-pf_rank) * fs.M
 //
-// so the peak-finder max-reduces over 'e' along with (multiplet, profile, time). That is
+// so the peak-finder max-reduces over 'mu' along with (multiplet, profile, time). That is
 // legitimate because the extraction leaves all 2^(rank1-pf_rank) trials referenced to the
 // same output time -- see cuda_generator/Dedisperser.emit_subband_extraction(). Two
 // consequences for callers:
@@ -49,9 +49,9 @@ struct DedispersionTree;   // defined in DedispersionTree.hpp
 //   - The m-field of an 'out_argmax' token is m_ext, not m. DedispersionTree::decode_argmax()
 //     assumes m_ext == m, so it must be generalized before any tree uses pf_rank < rank1.
 //   - The peak-finding weights are unaffected: they are indexed by (dm_out, profile, subband),
-//     and 'e' is below the weights' DM granularity by construction.
+//     and 'mu' is below the weights' DM granularity by construction.
 //
-// When pf_rank == rank1 -- currently the only case any DedispersionTree asks for -- 'e' is
+// When pf_rank == rank1 -- currently the only case any DedispersionTree asks for -- 'mu' is
 // empty and m_ext == m.
 
 
