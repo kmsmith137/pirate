@@ -24,7 +24,15 @@ class Dedisperser:
         
         dtype = Dtype(dtype)
         assert isinstance(rank, int)
-        
+
+        # Same bound as DedispersionKernelParams::validate(), and the cap on max_rank in
+        # MultiDedisperser.emit_kernel(). It lives here so that the subbanded generators
+        # (SbDedisperser, CoalescedDdKernel2) inherit it, and so that an out-of-range rank is
+        # reported as one. Without it, rank 9 fails either in static_asserts() below (float32,
+        # on the shared memory control word) or much further downstream in the caller
+        # (float16, where the Dedisperser itself is legal but no kernel is emitted for it).
+        assert 1 <= rank <= 8
+
         self.dtype = dtype
         self.dt32 = dtype.simd32
         self.nbits = dtype.nbits
@@ -1164,7 +1172,7 @@ class MultiDedisperser:
         # This expression for the max rank derives from the requirement that shared
         # memory lags must be at most 255 32-bit registers.
         max_rank = 13 - utils.integer_log2(self.dtype.nbits * self.nspec)
-        max_rank = min(max_rank, 8)
+        max_rank = min(max_rank, 8)   # also Dedisperser's own bound on 'rank'
 
         # Compute the rank_list (all ranks from 1 to max_rank).
         rank_list = list(range(1, max_rank + 1))

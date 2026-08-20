@@ -382,7 +382,8 @@ The final stage of the dedispersion transform is {\em peak-finding}.
 For now, we give a partial description -- a future version of the notes will describe
 peak-finding in more detail.
 The input is the shape-$(2^{r-R}, M, N_{\rm time})$ array from the previous section.
-The output is a shape-$(2^{r-R}, N_{\rm time}/T_{\rm ds})$ array, where $T_{\rm ds}$ is a time downsampling factor.
+The output is a shape-$(2^{r-R-K}, N_{\rm time}/T_{\rm ds})$ array, where $T_{\rm ds}$ 
+is a time downsampling factor, and $K\ge 0$ allows additional DM downsampling.
 Conceptually, peak-finding is 3 steps:
 \begin{itemize}
 \item For each $(d_{\rm hi}, m)$, the input array is a 1-d time series.
@@ -391,13 +392,17 @@ obtain a shape $(2^{r-R}, M, N_{\rm time}, P)$ array.
 \item We apply weights that depend on $(d_{\rm hi}, m, p)$, to normalize the array 
 so that each array element has variance 1. (Thus, array elements are normalized to
 ``sigmas''.)
-\item We downsample the array to shape $(2^{r-R}, N_{\rm time}/T_{\rm ds})$.
+\item We downsample the array to shape $(2^{r-R-K}, N_{\rm time}/T_{\rm ds})$.
 Downsampling is done with ``max'' rather than addition, so each array element
 corresponds to max detection significance over all downsampled parameters.
 \end{itemize}
 In implementation, these 3 steps are coalesced into one GPU kernel for speed (and also
 coalesced with the final stages of tree dedispersion), e.g.\ the shape $(2^{r-R}, M, N_{\rm time}, P)$
-is never ``materialized'' in GPU memory.
+array is never ``materialized'' in GPU memory.\footnote{Another comment on implementation. The parameter $K$
+never appears explicitly as a kernel constructor argument. The reason depends on context. For
+a {\tt PeakFindingKernel}, the kernel itself assumes $K=0$, but $K>0$ can be emulated by prepending
+zeros to {\tt subband\_counts} (see comments in code). For a {\tt CoalescedDdKernel2}, the value of $K$
+is ``chosen'' by the kernel ($K = \mbox{\tt rank1} - R$, see comments in code), not the caller.}
 
 \subsubsection{Peak-finding kernels}
 
@@ -544,7 +549,7 @@ and the following per-tree parameters:
 \gamma &= {\tt primary\_tree\_index} & \mbox{ (primary tree index; input is time-downsampled by $2^\gamma$)} \nn \\
 e &= {\tt early\_trigger\_level}  & \mbox{ (``earliness'' of trigger)} \nn \\
 T_{\rm ds} &= {\tt time\_downsampling} & \mbox{ (time coarse-graining factor in peak-finding kernel)} \nn \\
-D_{\rm ds} &= {\tt dm\_downsampling}   & \mbox{ (dm coarse-graining factor in peak-finding kernel)} \nn
+D_{\rm ds} &= {\tt dm\_downsampling}   & \mbox{ (dm coarse-graining factor, denoted $2^{R+K}$ in \S\ref{sec:peak_finding})} \nn
 \end{align}
 These parameters can be inspected with \verb|pirate_frb show_dedisperser -v|, and are also
 passed from pirate to the grouper via the \verb|dedispersion_plan| yaml metadata.
@@ -639,15 +644,20 @@ a maximum over a certain set of parameters: frequency subbands, pulse widths, fi
 and fine-grained arrival times. The \verb|out_argmax| array consists of integer ``tokens''
 which encode the ``winning'' parameters, that are responsible for the max snr.
 
-For reference, the token encoding is:
+Before writing down the token encoding, recall from \S\ref{sec:peak_finding}, \S\ref{ssec:dedispersion_output_arrays}
+that the DM downsampling factor of the form $D_{\rm ds} = 2^{R+K}$.
+The first $R$ bits are part of the ``multiplet'' $0 \le m < M$ (see Eq.\ (\ref{eq:multiplet_def})),
+and we introduce a new index $0\le e < 2^K$ for the remaining $K$t bits.
+
+In this notation, the token encoding is:
 \begin{equation}
 \big(\mbox{32-bit {\tt argmax\_token}}\big)
- = \, \mbox{\tt (t) | (p << 8) | (m << 16)}
+ = \, \mbox{\tt (t) | (p << 8) | (e << 16) | (m << (16+K))}
 \end{equation}
 where $0 \le t < T_{\rm ds}$ is an 8-bit fine-grained arrival time, $0 \le p < P$ is
 an 8-bit peak-finding profile index (encoding pulse width and profile shape),
-and $0 \le m < M \le 114$ is a ``multiplet''
-(i.e.~(frequency subband, fine-grained DM) pair, see Eq.\ (\ref{eq:multiplet_def})).
+$0 \le e < 2^K$ is part of the fine-grained DM as defined in the previous paragraph,
+and $0 \le m < M \le 114$ is a ``multiplet'' (i.e.~(frequency subband, fine-grained DM) pair.
 The arrival time $t$ has a small $p$-dependent time shift applied (see code for details).
 
 In practice, you shouldn't need to know the details of the token encoding -- there are helper

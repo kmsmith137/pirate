@@ -104,6 +104,21 @@ struct PeakFindingKernelParams
     // Peak-finding input array has shape (beams_per_batch, ndm_out, fs.M, nt_in).
     // Output arrays have shape (beams_per_batch, ndm_out, nt_out).
     // Weight array has shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N).
+    //
+    // Note: it may be confusing that there is no member PeakFindingKernelParams::ndm_in!
+    // The reason for this depends on context:
+    //
+    //  - Case 1: PeakFindingKernelParams is used in a PeakFindingKernel. Then the kernel
+    //    input/output shapes are (nbeams, ndm_out, fs.M, nt_in) -> (nbeams, ndm_out, nt_out).
+    //    The DM axis is a pure spectator, and ndm_in == ndm_out.
+    //
+    //  - Case 2: PeakFindingKernelParams is used in a CoalescedDdKernel2. Then both ndm_in
+    //    and ndm_out are implicitly specified as:
+    //
+    //      ndm_in = pow2(amb_rank + dd_rank)    where amb_rank,dd_rank are in DedispersionKernelParams
+    //      ndm_out = ndm_in / pow2(rank1)       where rank1 = (dd_rank + 1) // 2
+    //
+    //    The kernel asserts that PeakFindingKernelParams::ndm_out is consistent.
 
     long ndm_out = 0;
     long ndm_wt = 0;
