@@ -123,7 +123,7 @@ struct PeakFindingKernelParams
     //    and ndm_out are implicitly specified as:
     //
     //      ndm_in = pow2(amb_rank + dd_rank)    where amb_rank,dd_rank are in DedispersionKernelParams
-    //      ndm_out = ndm_in / pow2(rank1)       where rank1 = (dd_rank + 1) // 2
+    //      ndm_out = ndm_in / pow2(dd_rank1)    where dd_rank1 = (dd_rank + 1) // 2
     //
     //    The kernel asserts that PeakFindingKernelParams::ndm_out is consistent.
 
@@ -305,6 +305,28 @@ struct ReferencePeakFindingKernel
     // Helper for eval_tokens()
     static std::runtime_error _bad_token(uint token, const char *why);
 };
+
+
+// gather_m_ext(): reindexes a "subband" array (the sb_out of a dedispersion kernel) into
+// the layout a peak-finding kernel reads, when the two disagree by 'xdm_rank' > 0 extra DM
+// bits:
+//
+//    dst[b, dm_out, (m << xdm_rank) | mu, t] = src[b, (dm_out << xdm_rank) | mu, m, t]
+//
+// i.e. the low 'xdm_rank' bits of the DM index become the low bits of the multiplet index.
+// The peak-finding kernel is then constructed with 'xdm_rank' zeros prepended to
+// subband_counts, so that its multiplet index is m_ext and its argmax tokens match a cdd2
+// kernel's (see "Note 1" at the top of this file, and CoalescedDdKernel2.hpp).
+//
+// This is what the CPU side has to do explicitly, because a cdd2 kernel does it implicitly:
+// it never materializes the subband array, and its peak-finding half reads the extra DMs
+// straight out of the dedisperser's registers. Callers are CoalescedDdKernel2::test_random()
+// and ReferenceDedisperser; keeping one implementation is what stops the two from drifting.
+//
+// Shapes: src is (nbeams, ndm_out << xdm_rank, M, nt), dst is (nbeams, ndm_out, M << xdm_rank, nt).
+// Only the time axis of each has to be contiguous.
+
+extern void gather_m_ext(ksgpu::Array<float> &dst, const ksgpu::Array<float> &src, long xdm_rank);
 
 
 // GpuPfWeightLayout: describes the layout of peak-finding weights on the GPU.

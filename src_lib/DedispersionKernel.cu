@@ -1108,12 +1108,12 @@ GpuSbDedispersionKernel::GpuSbDedispersionKernel(
     xassert(dd_params.consumer_id >= 0);
     xassert(dd_params.consumer_id < dd_params.mega_ringbuf->num_consumers);
 
-    // The peak-finding rank cannot exceed the dedisperser's second-stage rank 'rank1',
+    // The peak-finding rank cannot exceed the dedisperser's second-stage rank 'dd_rank1',
     // since a level-0 subband would then be narrower than one second-stage register.
     // (Without this check, the registry lookup below would just fail to find a kernel, with
     // a less informative error.) See DedispersionKernel.hpp.
-    long rank1 = dd_params.dd_rank - (dd_params.dd_rank / 2);
-    xassert_le(fs.pf_rank, rank1);
+    long dd_rank1 = dd_params.dd_rank - (dd_params.dd_rank / 2);
+    xassert_le(fs.pf_rank, dd_rank1);
 
     this->nsegments_per_beam = pow2(dd_params.dd_rank + dd_params.amb_rank) * xdiv(dd_params.ntime, dd_params.nt_per_segment);
     xassert_shape_eq(dd_params.mega_ringbuf->consumer_quadruples.at(dd_params.consumer_id), ({nsegments_per_beam,4}));
@@ -1128,10 +1128,10 @@ GpuSbDedispersionKernel::GpuSbDedispersionKernel(
     // Important: ensure that caller-specified 'nt_per_segment' matches GPU kernel.
     xassert_eq(dd_params.nt_per_segment, registry_value.nt_per_segment);
 
-    // Each warp writes a shape (2^(rank1-pf_rank), M) subarray of 'sb_out', which the kernel
+    // Each warp writes a shape (2^(dd_rank1-pf_rank), M) subarray of 'sb_out', which the kernel
     // indexes with 32-bit arithmetic (see 'm_stride' in the generated code). This is only
     // safe if the largest offset it computes fits in an int.
-    xassert_lt(pow2(rank1 - fs.pf_rank) * fs.M * dd_params.ntime, 1L << 31);
+    xassert_lt(pow2(dd_rank1 - fs.pf_rank) * fs.M * dd_params.ntime, 1L << 31);
 
     long B = dd_params.beams_per_batch;
     long A = pow2(dd_params.amb_rank);

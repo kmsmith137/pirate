@@ -701,6 +701,45 @@ void PeakFindingKernelParams::fill_host_weights(Array<float> &out, const Array<d
 
 // -------------------------------------------------------------------------------------------------
 //
+// gather_m_ext(). See the doc-comment in PeakFindingKernel.hpp.
+
+
+void gather_m_ext(Array<float> &dst, const Array<float> &src, long xdm_rank)
+{
+    xassert_ge(xdm_rank, 1);
+    xassert_eq(src.ndim, 4);
+
+    long nbeams = src.shape[0];
+    long E = pow2(xdm_rank);
+    long ndm_out = xdiv(src.shape[1], E);
+    long M = src.shape[2];
+    long nt = src.shape[3];
+
+    xassert_shape_eq(dst, ({ nbeams, ndm_out, M*E, nt }));
+
+    // Each (b, dm_out, m, mu) is one memcpy along the time axis. Note we do NOT require full
+    // contiguity: at sophistication 0 the ReferenceDedisperser passes a beam-strided slice of
+    // a larger array (it computes twice as many DMs in a downsampled tree, then drops the
+    // bottom half), so only the time axis is guaranteed contiguous.
+    xassert_eq(src.strides[3], 1);
+    xassert_eq(dst.strides[3], 1);
+
+    for (long b = 0; b < nbeams; b++) {
+        for (long d = 0; d < ndm_out; d++) {
+            for (long m = 0; m < M; m++) {
+                for (long mu = 0; mu < E; mu++) {
+                    const float *p = &src.at({ b, (d << xdm_rank) | mu, m, 0L });
+                    float *q = &dst.at({ b, d, (m << xdm_rank) | mu, 0L });
+                    memcpy(q, p, nt * sizeof(float));
+                }
+            }
+        }
+    }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // GpuPeakFindingKernel
 
 

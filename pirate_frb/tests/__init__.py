@@ -7,4 +7,5 @@ from .test_decode_argmax import test_decode_argmax
 from .test_network import test_network, test_slow_subscriber
 from .test_pulse_injection import test_pulse_injection, test_pulse_invariants
 from .test_server import test_server
+from .test_subbands import test_restrict_parity, test_subband_property
 

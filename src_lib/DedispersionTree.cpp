@@ -49,22 +49,29 @@ DedispersionTree::DedispersionTree(const DedispersionConfig &config, long itree,
     xassert_ge(this->dd_rank, 1);
 
     long tot_rank = this->total_rank();
-    long pf_rank = (this->dd_rank + 1) / 2;
+    long dd_rank1 = (this->dd_rank + 1) / 2;   // the GPU kernel's second-stage rank
 
     // Frequency range searched by tree, accounting for early trigger.
     long dmax = pow2(config.toplevel_tree_rank - et_level);
     double fmin = config.delay_to_frequency(dmax);
     double fmax = config.zone_freq_edges.back();
 
-    // Modify the subband_counts for the stage2 tree.
-    // (Accounts for early triggering, downsampling.)
-    vector<long> sc = FrequencySubbands::restrict_subband_counts(config.frequency_subband_counts, et_level, pf_rank);
+    // Restrict the config's subband_counts to this tree (accounts for early triggering).
+    // The result can have pf_rank < dd_rank1: an early trigger drops subband levels, and
+    // nothing puts them back. The kernel folds the difference K = dd_rank1 - pf_rank into
+    // its argmax tokens -- see xdm_rank() and CoalescedDdKernel2.hpp.
+    vector<long> sc = FrequencySubbands::restrict_subband_counts(config.frequency_subband_counts, et_level);
     this->frequency_subbands = FrequencySubbands(sc, fmin, fmax);
 
     this->pf = config.primary_trees.at(ipri);
 
-    if (this->pf.dm_downsampling == 0)
-        this->pf.dm_downsampling = pow2(pf_rank);
+    // NOT pow2(pf_rank): the coarse-grained DM axis is one DM per warp of the kernel's
+    // second dedispersion stage, whatever the subbands turn out to be. Pinning it to
+    // pow2(dd_rank1) is what holds ndm_out -- and every output array shape -- fixed as
+    // pf_rank drops. It is also what makes xdm_rank() recoverable from the tree.
+    //
+    // Unconditional: config.validate() requires the config's value to be 0.
+    this->pf.dm_downsampling = pow2(dd_rank1);
 
     if (this->pf.time_downsampling == 0)
         this->pf.time_downsampling = this->pf.dm_downsampling;
@@ -107,6 +114,47 @@ DedispersionTree::DedispersionTree(const DedispersionConfig &config, long itree,
     this->dm_min = dm0 * ((ipri > 0) ? pow2(ipri-1) : 0);
     this->dm_max = dm0 * pow2(ipri);
     this->trigger_frequency = fmin;
+}
+
+
+// -------------------------------------------------------------------------------------------
+//
+// Derived quantities. See the doc-comments in DedispersionTree.hpp.
+
+
+// Number of toplevel tree-freq channels spanned by one coarse-freq channel of 'tree'.
+//
+// This is the same for every tree of a config, including early-trigger trees: the early
+// trigger removes exactly as many subband levels as it removes tree rank (see
+// FrequencySubbands::restrict_subband_counts), so the channel width never moves. The
+// computation below deliberately does NOT rely on that -- it uses only the tree's own
+// members, so it stays correct for a tree considered on its own.
+static long _toplevel_channels_per_coarse_channel(const DedispersionTree &tree)
+{
+    // Rank of the underlying dedispersion, i.e. this tree searches the low 2^rr of the
+    // toplevel band. (Early triggers restrict the search to a prefix; time-downsampling
+    // leaves the freq axis alone.)
+    long rr = tree.toplevel_tree_rank() - tree.early_trigger_level;
+    return pow2(rr - tree.frequency_subbands.pf_rank);
+}
+
+
+long DedispersionTree::n_to_toplevel_flo(long n) const
+{
+    return this->frequency_subbands.n_to_flo.at(n) * _toplevel_channels_per_coarse_channel(*this);
+}
+
+
+long DedispersionTree::n_to_toplevel_fhi(long n) const
+{
+    return this->frequency_subbands.n_to_fhi.at(n) * _toplevel_channels_per_coarse_channel(*this);
+}
+
+
+long DedispersionTree::xdm_rank() const
+{
+    // The constructor pins pf.dm_downsampling = pow2(dd_rank1).
+    return integer_log2(this->pf.dm_downsampling) - this->frequency_subbands.pf_rank;
 }
 
 
@@ -215,7 +263,8 @@ void DedispersionTree::check_consistency(const DedispersionConfig &config) const
 
 // For a detailed specification (and the definitions of the output params), see the
 // doc-comment in DedispersionPlan.hpp. Background for the formulas below: the token
-// encoding and its time quantization are described in PeakFindingKernel.hpp, the
+// encoding and its time quantization are described in PeakFindingKernel.hpp and (for the
+// extra 'mu' field, which is what these tokens carry) CoalescedDdKernel2.hpp, the
 // subband time-lag conventions in notes/dedispersion.tex (subband search section)
 // and ReferenceTree.cpp, and the output-array indexing in the "Dedispersion output
 // arrays" section of the dedispersion tex notes.
@@ -234,11 +283,23 @@ void DedispersionTree::decode_argmax(
     long Dout = xdiv(tr.nt_ds, tr.nt_out);   // = tr.pf.time_downsampling
     long Dcore = tr.Dcore;                   // token time granularity (see PeakFindingKernel.hpp)
 
-    // Parse token = (t) | (p << 8) | (m << 16).
-    long m = (argmax_token >> 16) & 0xffff;
-    p      = (argmax_token >> 8) & 0xff;
-    long t = argmax_token & 0xff;
+    // Parse token = (t) | (p << 8) | (mu << 16) | (m << (16+K)).
+    //
+    // The tree's cdd2 kernel computes 2^K output DMs per warp of its second dedispersion
+    // stage, where K = xdm_rank(). Those extra DMs do NOT get their own rows of out_max /
+    // out_argmax: the index 'mu' is folded into the token's m-field as
+    // m_ext = (m << K) | mu, and the peak-finder max-reduces over it. See
+    // CoalescedDdKernel2.hpp. K is zero unless the tree has an early trigger.
 
+    long K = tr.xdm_rank();
+    long m_ext = (argmax_token >> 16) & 0xffff;
+    long mu    = m_ext & (pow2(K) - 1);
+    long m     = m_ext >> K;
+    p          = (argmax_token >> 8) & 0xff;
+    long t     = argmax_token & 0xff;
+
+    // Note (m < fs.M) is exactly the bound (m_ext < pow2(K) * fs.M), so 'mu' needs no
+    // separate range check.
     xassert_lt(m, fs.M);           // m = multiplet (frequency subband, fine dm)
     xassert_lt(p, tr.nprofiles);   // p = peak-finding profile
     xassert_lt(t, Dout);           // t = fine time within coarse output bin
@@ -256,14 +317,13 @@ void DedispersionTree::decode_argmax(
     long lsb = integer_log2(fhi - flo);       // subband level
 
     long ipri = tr.primary_tree_index;
-    long rr = tr.total_rank() + ((ipri > 0) ? 1 : 0);   // rank of underlying dedispersion
 
     // Frequency: the tree's channels ARE toplevel tree-freq channels (early triggers
     // restrict the search to a prefix; time-downsampling leaves the freq axis alone).
+    // Note n_to_toplevel_fhi() is exclusive, whereas the reported 'fmax' is inclusive.
 
-    long G = pow2(rr - fs.pf_rank);   // toplevel channels per coarse-freq channel
-    fmin = flo * G;
-    fmax = fhi * G - 1;
+    fmin = tr.n_to_toplevel_flo(n);
+    fmax = tr.n_to_toplevel_fhi(n) - 1;
 
     // Times, first in the tree's (time-downsampled) frame. The trailing pf-input sample
     // read by the winning trial is Tpf. The pf input at time T sums channel f at time
@@ -271,7 +331,16 @@ void DedispersionTree::decode_argmax(
     // (the extrapolate-to-band-top lag) and Delta(fmin) = Tlag + Dsub (Dsub = delay
     // across the subband).
 
-    long dhi = idm_coarse + ((ipri > 0) ? tr.ndm_out : 0);   // coarse delay (downsampled trees search the upper half)
+    // Coarse delay, at the pow2(fs.pf_rank) granularity that the lag formulas below assume:
+    // 'idm_coarse' indexes bins of width pow2(pf_rank + K), and 'mu' selects one of the 2^K
+    // sub-bins inside it. (Do not confuse 'mu' with 'dfine': 'mu' is the low K bits of the
+    // COARSE DM index, whereas 'dfine' is the multiplet's fine DM within its subband -- two
+    // different axes.) Downsampled trees search the upper half of a tree one rank larger.
+
+    long dhi = (idm_coarse << K) | mu;
+
+    if (ipri > 0)
+        dhi += (tr.ndm_out << K);
     long Tpf = itime_coarse * Dout + t + dt - 1;
     long thi_ds = Tpf - (pow2(fs.pf_rank) - fhi) * dhi;      // Tpf - Tlag
     long tlo_ds = thi_ds - (dhi * pow2(lsb) + dfine);        // Tpf - Tlag - Dsub

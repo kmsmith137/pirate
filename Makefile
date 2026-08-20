@@ -453,6 +453,7 @@ PYFILES = \
   pirate_frb/tests/test_network.py \
   pirate_frb/tests/test_pulse_injection.py \
   pirate_frb/tests/test_server.py \
+  pirate_frb/tests/test_subbands.py \
   pirate_frb/tests/utils.py \
   pirate_frb/utils.py \
   pirate_frb/rpc/__init__.py \

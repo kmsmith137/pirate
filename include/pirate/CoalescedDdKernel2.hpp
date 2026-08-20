@@ -35,14 +35,14 @@ struct DedispersionTree;   // defined in DedispersionTree.hpp
 //   - dd_params.apply_input_residual_lags == true
 //   - dd_params.input_is_ringbuf == true
 //   - dd_params.output_is_ringbuf == false
-//   - pf_params.ndm_out == 2^(dd_rank + amb_rank - rank1)   [ NOTE rank1 not pf_rank]
-//   - pf_rank <= rank1
+//   - pf_params.ndm_out == 2^(dd_rank + amb_rank - dd_rank1)   [ NOTE dd_rank1 not pf_rank]
+//   - pf_rank <= dd_rank1
 //
 // where:  pf_rank = pf_params.subband_counts.size()-1
-//         rank1 = (dd_params.dd_rank + 1) // 2
+//         dd_rank1 = (dd_params.dd_rank + 1) // 2
 //
-// If pf_rank < rank1, then the argmax "tokens" contain an extra index 0 <= mu < 2^K,
-// where K = (rank1 - pf_rank). See notes/dedispersion.tex for discussion. The token
+// If pf_rank < dd_rank1, then the argmax "tokens" contain an extra index 0 <= mu < 2^K,
+// where K = (dd_rank1 - pf_rank). See notes/dedispersion.tex for discussion. The token
 // format is:
 //
 //   token = (t) | (p << 8) | (mu << 16) | (m << (16+K))

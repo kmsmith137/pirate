@@ -89,51 +89,67 @@ class FrequencySubbands:
 
 
     @classmethod
-    def restrict_subband_counts(cls, subband_counts, early_trigger_level, new_pf_rank):
-        """"Restrict" top-level subband counts to a specific tree.
+    def can_early_trigger(cls, subband_counts, early_trigger_level):
+        """True if restrict_subband_counts() is well-defined for this pair.
 
-        The tree may have an early trigger (early_trigger_level > 0) or a different pf_rank.
+        Two conditions: the truncation must be in range (early_trigger_level <= pf_rank),
+        and the early-trigger tree's own full band must already be one of the config's
+        bands -- otherwise the early trigger would ADD a subband that the config never
+        asked to search.
+
+        Keep in sync with the C++ FrequencySubbands::can_early_trigger().
         """
-        
+
+        if early_trigger_level < 0:
+            raise RuntimeError("FrequencySubbands.can_early_trigger: early_trigger_level must be >= 0")
+
+        cls.validate_subband_counts(subband_counts)
+        pf_rank = len(subband_counts) - 1
+
+        if early_trigger_level > pf_rank:
+            return False
+
+        return subband_counts[pf_rank - early_trigger_level] >= 1
+
+
+    @classmethod
+    def restrict_subband_counts(cls, subband_counts, early_trigger_level):
+        """"Restrict" a config's toplevel subband counts to one tree of that config.
+
+        Truncates by 'early_trigger_level' levels (a no-op if it is zero), then clamps
+        each surviving level to the number of bands that fit in the smaller tree. The
+        result is always a SUBSET of the input band set. Note it can have
+        pf_rank < (dd_rank+1)//2, which is the case the "extra DM" kernels handle.
+
+        Keep in sync with the C++ FrequencySubbands::restrict_subband_counts(): this
+        function decides which kernels makefile_helper.py compiles, while the C++ one
+        decides which kernels a DedispersionTree asks for, and a divergence surfaces much
+        later as "Kernel not found in registry".
+        """
+
         if early_trigger_level < 0:
             raise RuntimeError("FrequencySubbands.restrict_subband_counts: early_trigger_level must be >= 0")
-        if new_pf_rank < 0:
-            raise RuntimeError("FrequencySubbands.restrict_subband_counts: new_pf_rank must be >= 0")
-        
+
         cls.validate_subband_counts(subband_counts)
-        
-        # Step 1: apply early trigger (early_trigger_level).
+        ret = list(subband_counts)
 
-        src_rank = len(subband_counts) - 1
-        early_rank = max(src_rank - early_trigger_level, 0)
-        
-        early_counts = [0] * (early_rank + 1)
-        early_counts[early_rank] = 1
-        
-        for pf_level in range(early_rank):
-            max_count = (2**(early_rank+1-pf_level) - 1) if (pf_level > 0) else 2**early_rank
-            early_counts[pf_level] = min(subband_counts[pf_level], max_count)
-        
-        # Step 2: apply new_pf_rank.
+        if early_trigger_level > 0:
+            if not cls.can_early_trigger(subband_counts, early_trigger_level):
+                raise RuntimeError(f"FrequencySubbands.restrict_subband_counts: early_trigger_level="
+                                   f"{early_trigger_level} is not usable with subband_counts={subband_counts}")
 
-        dst_counts = [0] * (new_pf_rank + 1)
-        dst_counts[new_pf_rank] = 1
-        
-        for pf_level in range(new_pf_rank):
-            src_level = pf_level - new_pf_rank + early_rank
-            
-            # Some awkward logic here, to account for pf_level==0 being "special".
-            if (src_level < 0) or (early_counts[src_level] == 0):
-                dst_counts[pf_level] = 0
-            elif (src_level == 0) and (pf_level > 0):
-                dst_counts[pf_level] = 2 * early_counts[src_level] - 1
-            elif (src_level > 0) and (pf_level == 0):
-                dst_counts[pf_level] = early_counts[src_level] // 2 + 1
-            else:
-                dst_counts[pf_level] = early_counts[src_level]
-        
-        cls.validate_subband_counts(dst_counts)
-        return dst_counts
+            del ret[len(ret) - early_trigger_level : ]
+            new_rank = len(ret) - 1
+
+            # Drop the bands that stick out past the early-trigger tree's narrowed range.
+            # Bands are enumerated from the low tree-freq end, which is the end an early
+            # trigger keeps, so the survivors are a prefix.
+            for level in range(new_rank + 1):
+                max_bands = (2**(new_rank+1-level) - 1) if (level > 0) else 2**new_rank
+                ret[level] = min(ret[level], max_bands)
+
+        cls.validate_subband_counts(ret)
+        return ret
     
     
     def max_bands_at_level(self, level):

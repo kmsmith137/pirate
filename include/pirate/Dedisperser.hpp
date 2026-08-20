@@ -461,7 +461,12 @@ struct ReferenceDedisperserBase
     std::vector<DedispersionTree> trees;   // same as params.plan->trees
 
     std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
-    std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;  // length ntrees
+
+    // Length ntrees. NOTE these are constructed with K = tree.xdm_rank() zeros prepended to
+    // the plan's subband_counts, so pf_kernels[itree].fs.M is (tree.frequency_subbands.M << K)
+    // and the multiplet index is m_ext = (m << K) | mu. This is what makes their out_argmax
+    // tokens identical to a cdd2 kernel's. K is zero except in early-trigger trees.
+    std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;
 
     // To process multiple chunks, call the dedisperse() method in a loop.
     // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
@@ -484,9 +489,42 @@ struct ReferenceDedisperserBase
     std::vector<ksgpu::Array<uint>> out_argmax;   // length ntrees
 
     // Per-chunk peak-finding variance, only allocated if Params::enable_variances (else empty).
-    // Shape is (beams_per_batch, t.ndm_out, t.frequency_subbands.M, t.nprofiles).
+    // Shape is (beams_per_batch, t.ndm_out, pf_kernels[itree]->fs.M, t.nprofiles).
     // OVERWRITTEN each dedisperse() call. See ReferencePeakFindingKernel::apply().
+    //
+    // FOOTGUN: the multiplet axis is m_ext, not m, in a tree with xdm_rank() > 0 -- it is the
+    // peak-finder's multiplet index, and the peak-finder here is the extended one (see
+    // 'pf_kernels' above). Callers which resolve this axis by (subband, fine dm) must shift
+    // by K; pirate_frb.varmap and pirate_frb.slow_avar currently do not.
     std::vector<ksgpu::Array<double>> out_var;    // length ntrees (elements empty if disabled)
+
+    // Allocates the subband ('sb_out') buffer for tree 'itree': the array that
+    // ReferenceDedispersionKernel writes and the peak-finder reads.
+    //
+    // 'ndm' is the DM count the caller wants at the peak-finder's output granularity --
+    // trees[itree].ndm_out, or twice that at sophistication 0, which computes twice as many
+    // DMs in a downsampled tree and then drops the bottom half. The returned array has shape
+    //
+    //   (beams_per_batch, ndm << K, trees[itree].frequency_subbands.M, trees[itree].nt_ds)
+    //
+    // with K = trees[itree].xdm_rank(), since the dedispersion kernel emits 2^K DM channels
+    // per peak-finder DM channel.
+    //
+    // Allocating here rather than at each call site is what keeps this buffer in step with
+    // the reindexing buffer that pf_input() fills, which is sized from the same K: the
+    // failure mode otherwise is one buffer sized with K = 0 and a gather that writes 2^K
+    // times as many rows.
+    ksgpu::Array<float> alloc_subband_buffer(long itree, long ndm);
+
+    // Converts a subband buffer into the array pf_kernels[itree] reads, by applying
+    // gather_m_ext(). Returns 'sb' unchanged when trees[itree].xdm_rank() is zero; otherwise
+    // returns a buffer owned by this object, which the next call for the same tree
+    // overwrites.
+    ksgpu::Array<float> pf_input(long itree, const ksgpu::Array<float> &sb);
+
+    // Scratch for pf_input(), length ntrees. Element itree is empty iff xdm_rank() is zero
+    // there. Allocated by alloc_subband_buffer().
+    std::vector<ksgpu::Array<float>> pf_in_bufs;
 
     // Factory function -- constructs ReferenceDedisperser of the sophistication in 'params'.
     static std::shared_ptr<ReferenceDedisperserBase> make(const Params &params);

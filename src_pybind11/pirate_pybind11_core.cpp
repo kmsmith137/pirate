@@ -818,17 +818,29 @@ void register_core_bindings(pybind11::module &m)
               self.show_compact(ss);
               return ss.str();
           })
-          .def("show_token", [](const FrequencySubbands &self, uint token) {
-              std::ostringstream os;
-              self.show_token(token, os);
-              return os.str();
-          }, py::arg("token"))
           .def("to_string", &FrequencySubbands::to_string)
           // Static methods
           .def_static("from_threshold", &FrequencySubbands::from_threshold,
                py::arg("fmin"), py::arg("fmax"), py::arg("threshold"), py::arg("pf_rank") = 4)
           .def_static("restrict_subband_counts", &FrequencySubbands::restrict_subband_counts,
-               py::arg("subband_counts"), py::arg("early_trigger_level"), py::arg("new_pf_rank"))
+               py::arg("subband_counts"), py::arg("early_trigger_level"),
+               "\"Restrict\" a config's toplevel subband counts to one tree of that config.\n\n"
+               "Truncates ``subband_counts`` by ``early_trigger_level`` levels (a no-op if it\n"
+               "is zero), then clamps each surviving level to the number of bands that fit in\n"
+               "the smaller tree. The result is always a SUBSET of the input band set.\n\n"
+               "Throws unless ``can_early_trigger(subband_counts, early_trigger_level)``.\n\n"
+               "Args:\n"
+               "    subband_counts: the config's toplevel ``frequency_subband_counts``.\n"
+               "    early_trigger_level: 0 for the main tree, 1 or more for early triggers.")
+          .def_static("can_early_trigger", &FrequencySubbands::can_early_trigger,
+               py::arg("subband_counts"), py::arg("early_trigger_level"),
+               "True if ``restrict_subband_counts()`` is well-defined for this pair.\n\n"
+               "Two conditions: the truncation must be in range\n"
+               "(``early_trigger_level <= pf_rank``), and the early-trigger tree's own full\n"
+               "band must already be one of the config's bands -- otherwise the early trigger\n"
+               "would ADD a subband that the config never asked to search.\n\n"
+               "``DedispersionConfig.validate()`` requires this for every early-trigger level\n"
+               "the config can produce, so a config which validates never trips it.")
           .def_static("validate_subband_counts", &FrequencySubbands::validate_subband_counts,
                py::arg("subband_counts"))
           .def_static("make_random_subband_counts",
@@ -1129,8 +1141,28 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("nt_ds", &DedispersionTree::nt_ds)
           .def("total_rank", &DedispersionTree::total_rank,
                "Total tree rank, ``amb_rank + dd_rank``. Equal to\n"
-               "``config.toplevel_tree_rank - early_trigger_level``, minus one more if\n"
+               "``toplevel_tree_rank() - early_trigger_level``, minus one more if\n"
                "``primary_tree_index > 0``.")
+          .def("toplevel_tree_rank", &DedispersionTree::toplevel_tree_rank,
+               "The ``toplevel_tree_rank`` of the config this tree came from, recovered from\n"
+               "the tree's own members.")
+          .def("xdm_rank", &DedispersionTree::xdm_rank,
+               "Number of \"extra DM\" bits that this tree's cdd2 kernel folds into the\n"
+               "m-field of its ``out_argmax`` tokens, i.e. ``K`` in\n"
+               "``token = t | (p << 8) | (mu << 16) | (m << (16+K))``.\n\n"
+               "Equal to ``dd_rank1 - frequency_subbands.pf_rank``, where\n"
+               "``dd_rank1 = (dd_rank+1)//2`` is the GPU kernel's second-stage rank. Zero\n"
+               "unless the tree has an early trigger: an early trigger drops subband levels\n"
+               "faster than it drops tree rank.")
+          .def("n_to_toplevel_flo", &DedispersionTree::n_to_toplevel_flo, py::arg("n"),
+               "Lowest toplevel tree-freq channel of subband ``n`` (INCLUSIVE).\n\n"
+               "Channels of the ``2**toplevel_tree_rank()`` gridding, so subbands of\n"
+               "different trees of one config are directly comparable.")
+          .def("n_to_toplevel_fhi", &DedispersionTree::n_to_toplevel_fhi, py::arg("n"),
+               "One past the highest toplevel tree-freq channel of subband ``n``\n"
+               "(EXCLUSIVE), matching ``FrequencySubbands.n_to_fhi``. Note\n"
+               "``decode_argmax()`` reports an inclusive ``fmax``, i.e.\n"
+               "``n_to_toplevel_fhi(n) - 1``.")
           .def_readonly("frequency_subbands", &DedispersionTree::frequency_subbands)
           .def_readonly("pf", &DedispersionTree::pf)
           .def_readonly("Dcore", &DedispersionTree::Dcore)

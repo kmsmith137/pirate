@@ -488,6 +488,33 @@ The integer $\gamma$ is called the {\em primary tree index}, and the integer $e$
 Conceptually, each {\tt DedispersionTree} just runs ``vanilla'' rank-$(r-e$) tree dedispersion on the first $2^{r-e}$ tree-freqs, downsampled in time by $2^\gamma$, and then drops the lower DM-half of the outputs if $\gamma > 0$.\footnote{This description suggests that each tree is an independent computation run ``from scratch''. There are a lot of tricks in the code that reuse computations between trees, i.e.\ the {\tt Dedisperser} is faster than running the constituent {\tt DedispersionTrees} independently.}
 For a more intuitive presentation of these trees, see Tab.\ \ref{tab:chord_sb2_et} and Figs.\ \ref{fig:early_triggers}, \ref{fig:tree_segments}.
 
+\subsubsection{Subbands in downsampled and early-trigger trees}
+\label{ssec:subbands_per_tree}
+
+The subbands of \S\ref{sec:subband_search} are declared once, in the config file, but not every tree searches all of them.
+Write ${\cal B}(\gamma,e)$ for the set of subbands searched by tree $(\gamma,e)$, with each subband expressed as a tree-freq range of the {\em top-level} ($2^r$-channel) gridding, so that trees of different rank can be compared.
+The rule is
+\begin{equation}
+{\cal B}(\gamma,e) \subseteq {\cal B}(\gamma,0) = {\cal B}(0,0).  \label{eq:subband_containment}
+\end{equation}
+That is: time downsampling neither adds nor removes subbands, whereas an early trigger may remove subbands, but never adds one.
+In the code, ${\cal B}$ is computed by {\tt FrequencySubbands::restrict\_subband\_counts()}, which truncates the counts array $C_0,\dots,C_R$ to $C_0,\dots,C_{R-e}$, then clamps each surviving $C_l$ to the largest value which fits in the narrowed band.
+
+Three remarks.
+First, the coarse-freq channel width $2^{r-R}$ of Eqs.\ (\ref{eq:subband_l0}), (\ref{eq:subband_l1}) is the {\em same} for every tree of a config: the early trigger truncates $e$ subband levels and removes $e$ bits of tree rank, and the two cancel exactly.
+This is what lets Eq.\ (\ref{eq:subband_containment}) be a statement about frequency ranges, rather than about index arrays which happen to look alike.
+
+Second, Eq.\ (\ref{eq:subband_containment}) constrains which configs are legal.
+Every tree searches its own full band, i.e.\ the range $[0, 2^{r-e})$ is always an element of ${\cal B}(\gamma,e)$.
+For $e>0$ that is a {\em strict} sub-range of the top-level band, so by Eq.\ (\ref{eq:subband_containment}) it must be a subband the config already declares, i.e.\ $C_{R-e} \ge 1$.
+A config which searches only the full band ($C_l = 0$ for all $l<R$) therefore cannot declare early triggers: it has to declare the sub-bands its early-trigger trees will search.
+{\tt DedispersionConfig::validate()} checks this, together with $R \ge e$ (so the truncation is in range) and $R \le r_1$ (\S\ref{sec:subband_search}) for every tree of the config.
+
+Third, each early-trigger level reduces $R$ by one, whereas the tree's second-stage rank $r_1 = \lceil {\tt dd\_rank}/2 \rceil$ only decreases every other level.
+So early-trigger trees are precisely where the case $R < r_1$ of \S\ref{sec:subband_search} arises, and $K$ grows with $e$.
+A config with no early triggers has $K = r_1 - R = 0$ in every tree.
+For {\tt chord\_sb2\_et.yml}, $K=0$ in the four $e=0$ trees, $K=1$ in five trees, and $K=2$ in the tree $(\gamma,e) = (3,3)$.
+
 \begin{table}[ht]
 \centering
 \begin{tabular}{c c c c c c}

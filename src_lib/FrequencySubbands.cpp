@@ -169,49 +169,56 @@ void FrequencySubbands::validate_subband_counts(const std::vector<long> &subband
 }
 
 // Static member function.
-// "Restricts" top-level subband counts to a specific tree.
-// The tree may have an early trigger (early_trigger_level > 0) or a different pf_rank.
-vector<long> FrequencySubbands::restrict_subband_counts(const vector<long> &subband_counts, long early_trigger_level, long new_pf_rank)
+// Keep in sync with the python twin, pirate_frb.cuda_generator.FrequencySubbands.
+// See the doc-comment in FrequencySubbands.hpp.
+bool FrequencySubbands::can_early_trigger(const vector<long> &subband_counts, long early_trigger_level)
 {
     validate_subband_counts(subband_counts);
     xassert(early_trigger_level >= 0);
-    xassert(new_pf_rank >= 0);
 
-    // Step 1: apply early trigger (early_trigger_level).
+    long pf_rank = subband_counts.size() - 1;
 
-    long src_rank = subband_counts.size() - 1;
-    long early_rank = max(src_rank - early_trigger_level, 0L);
+    if (early_trigger_level > pf_rank)
+        return false;
 
-    vector<long> early_counts(early_rank+1);
-    early_counts[early_rank] = 1;
+    return (subband_counts.at(pf_rank - early_trigger_level) >= 1);
+}
 
-    for (long pf_level = 0; pf_level < early_rank; pf_level++) {
-        long max_count = (pf_level > 0) ? (pow2(early_rank+1-pf_level)-1) : pow2(early_rank);
-        early_counts.at(pf_level) = min(subband_counts.at(pf_level), max_count);
+// Static member function.
+// Keep in sync with the python twin, pirate_frb.cuda_generator.FrequencySubbands
+// (makefile_helper.py uses it to decide which kernels to compile, and a divergence would
+// silently compile a kernel set that no DedispersionTree asks for).
+// See the doc-comment in FrequencySubbands.hpp.
+vector<long> FrequencySubbands::restrict_subband_counts(const vector<long> &subband_counts, long early_trigger_level)
+{
+    validate_subband_counts(subband_counts);
+    xassert(early_trigger_level >= 0);
+
+    vector<long> ret = subband_counts;
+
+    if (early_trigger_level > 0) {
+        // Defensive: unreachable from a config which passed DedispersionConfig::validate(),
+        // which checks can_early_trigger() for every early-trigger level the config can
+        // produce. Asserting here rather than manufacturing the missing band is what makes
+        // "a tree's bands are a subset of the config's bands" true.
+        xassert(can_early_trigger(subband_counts, early_trigger_level));
+
+        ret.resize(ret.size() - early_trigger_level);
+        long new_rank = ret.size() - 1;
+
+        // Drop the bands that stick out past the early-trigger tree's narrowed range. Bands
+        // are enumerated from the low tree-freq end, which is the end an early trigger
+        // keeps, so the survivors are a prefix and clamping the count is the right
+        // operation. Note the loop covers level new_rank too, where max_bands is 1 and the
+        // can_early_trigger() check above guarantees the count is already >= 1.
+        for (long level = 0; level <= new_rank; level++) {
+            long max_bands = (level > 0) ? (pow2(new_rank+1-level)-1) : pow2(new_rank);
+            ret.at(level) = min(ret.at(level), max_bands);
+        }
     }
 
-    // Step 2: apply new_pf_rank.
-
-    vector<long> dst_counts(new_pf_rank+1);
-    dst_counts[new_pf_rank] = 1;
-
-    for (long pf_level = 0; pf_level < new_pf_rank; pf_level++) {
-        long src_level = pf_level - new_pf_rank + early_rank;
-
-        // Some awkward logic here, to account for pf_level==0 being "special".
-
-        if ((src_level < 0) || (early_counts.at(src_level) == 0))
-            dst_counts.at(pf_level) = 0;
-        else if ((src_level == 0) && (pf_level > 0))
-            dst_counts.at(pf_level) = 2 * early_counts.at(src_level) - 1;
-        else if ((src_level > 0) && (pf_level == 0))
-            dst_counts.at(pf_level) = early_counts.at(src_level)/2 + 1;
-        else
-            dst_counts.at(pf_level) = early_counts.at(src_level);
-    }
-
-    validate_subband_counts(dst_counts);
-    return dst_counts;
+    validate_subband_counts(ret);
+    return ret;
 }
 
 // Static member function
@@ -242,28 +249,6 @@ FrequencySubbands FrequencySubbands::make_random()
 {
     vector<long> subband_counts = make_random_subband_counts();
     return FrequencySubbands(subband_counts);
-}
-
-
-void FrequencySubbands::show_token(uint token, ostream &os) const
-{
-    // (t) | (p << 8) | (m << 16)
-    uint t = (token) & 0xffu;
-    uint p = (token >> 8) & 0xffu;
-    uint m = (token >> 16);
-
-    os << " -> (t=" << t << ", p=" << p << ", m=" << m << ")";
-
-    if (m >= M) {
-        os << " -> BAD M-VALUE";
-        return;
-    }
-
-    long n = m_to_n.at(m);
-    long d = m_to_d.at(m);
-    long f0 = n_to_flo.at(n);
-    long f1 = n_to_fhi.at(n);
-    os << " -> (f0=" << f0 << ", f1=" << f1 << ", d=" << d << ")";
 }
 
 

@@ -55,25 +55,55 @@ struct DedispersionTree
     DedispersionTree(const DedispersionConfig &config, long itree,
                      bool Dcore_from_cdd2_registry);
     
-    // Note: DedispersionTree does not contain 'toplevel_rank', but it can be inferred as:
-    //   toplevel_rank = amb_rank + dd_rank + (primary_tree_index ? 1 : 0) + early_trigger_level
-    
     int primary_tree_index = -1;   // Also identifies associated stage1 tree (input downsampled in time by 2^primary_tree_index).
     int early_trigger_level = -1;  // "Earliness" of trigger: 0 for the main tree, 1..num_early_triggers for early triggers.
     int amb_rank = 0;              // Ambient rank of this DedispersionTree (= dd_rank of associated stage1 tree)
     int dd_rank = 0;               // Active rank of this DedispersionTree (= amb_rank of stage1 tree, minus early_trigger_level)
     int nt_ds = 0;                 // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(primary_tree_index))
 
-    // Total tree rank. Equal to (config.toplevel_tree_rank - early_trigger_level - (primary_tree_index ? 1 : 0)).
+    // Total tree rank. (For its relation to the config's toplevel rank, see
+    // toplevel_tree_rank() just below.)
     long total_rank() const { return amb_rank + dd_rank; }
+
+    // The toplevel_tree_rank of the DedispersionConfig this tree came from, recovered from
+    // the tree's own members. Named to match DedispersionConfig::toplevel_tree_rank.
+    //
+    // Note '(primary_tree_index > 0)' rather than a bare 'primary_tree_index': the member is
+    // -1 in a default-constructed tree, which the bare form would silently read as 1.
+    long toplevel_tree_rank() const {
+        return total_rank() + ((primary_tree_index > 0) ? 1 : 0) + early_trigger_level;
+    }
 
     // Subbands searched in this tree.
     // Can differ from DedispersionConfig::frequency_subbands, due to early triggers and downsampling.
     FrequencySubbands frequency_subbands;
 
+    // Toplevel-relative tree-freq range spanned by subband 'n', i.e. channels of the
+    // rank-toplevel_tree_rank() gridding. HALF-OPEN, matching FrequencySubbands::n_to_f{lo,hi},
+    // of which these are just a rescaling:
+    //
+    //     0 <= flo < fhi <= pow2(toplevel_tree_rank())
+    //
+    // with the sharper per-tree bound fhi <= pow2(toplevel_tree_rank() - early_trigger_level).
+    //
+    // NOTE decode_argmax() reports an INCLUSIVE upper channel, i.e. its 'fmax' output is
+    // n_to_toplevel_fhi(n) - 1.
+    long n_to_toplevel_flo(long n) const;
+    long n_to_toplevel_fhi(long n) const;
+
     // Contains members: num_early_triggers, max_width, {dm,time}_downsampling, wt_{dm,time}_downsampling.
     // Note that {dm,time}_downsampling can be 0 in the config, but are filled with nonzero values here.
     DedispersionConfig::PrimaryTree pf;
+
+    // K = dd_rank1 - frequency_subbands.pf_rank, where dd_rank1 = (dd_rank+1)/2 is the GPU
+    // kernel's second-stage rank: the number of "extra DM" bits that this tree's cdd2 kernel
+    // folds into the argmax token's m-field (see CoalescedDdKernel2.hpp). Zero unless the
+    // tree has an early trigger.
+    //
+    // Derived from pf.dm_downsampling (which the tree constructor pins to pow2(dd_rank1))
+    // rather than stored, so it is not one more field for check_consistency() and the yaml
+    // round-trip to keep honest.
+    long xdm_rank() const;
 
     // Internal time-downsampling ("core") factor of this tree's peak-finding kernel; sets
     // the time granularity of out_argmax tokens (see PeakFindingKernelParams::Dcore).
@@ -142,7 +172,9 @@ struct DedispersionTree
     //
     // Inputs:
     //
-    //   argmax_token = uint32 token from this tree's out_argmax array
+    //   argmax_token = uint32 token from this tree's out_argmax array. Format is
+    //       (t) | (p << 8) | (mu << 16) | (m << (16+K)) with K = xdm_rank(); see
+    //       CoalescedDdKernel2.hpp. Note the m-field is m_ext, not m, when K > 0.
     //   0 <= idm_coarse < ndm_out     (dm index in out_max/out_argmax)
     //   0 <= itime_coarse < nt_out    (time index in out_max/out_argmax)
     //

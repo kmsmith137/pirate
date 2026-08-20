@@ -439,9 +439,8 @@ void DedispersionConfig::validate() const
     xassert_ge(max_gpu_clag, 0);
     xassert_ge(future_write_max_samples, 0);
 
-    // Validate frequency_subband_counts.
-    // FIXME add check that pf_rank is not too large for tree_index=0.
-    // (Not sure yet what the exact constraint will be, after dust settles on all code.)
+    // Validate frequency_subband_counts. (Its interaction with the early triggers is
+    // checked after the primary_trees loop below, where num_early_triggers is known good.)
     FrequencySubbands::validate_subband_counts(frequency_subband_counts);
 
     // Validate primary_trees.
@@ -484,18 +483,105 @@ void DedispersionConfig::validate() const
             throw runtime_error(ss.str());
         }
 
-        // dm_downsampling and time_downsampling are optional (can be zero).
-        // If specified, they must be powers of two and <= wt_* counterparts.
+        // dm_downsampling is not settable: the DedispersionTree constructor pins it to
+        // pow2(dd_rank1), and dd_rank1 varies WITHIN a primary-tree family (early-trigger
+        // trees are smaller), so no single per-primary-tree value can be right for all of
+        // them. It also defines K = dd_rank1 - pf_rank, the number of extra DM bits in this
+        // tree's argmax tokens (see DedispersionTree::xdm_rank), so a wrong value would
+        // silently reinterpret every token rather than merely tripping a shape assert.
 
-        if (pt.dm_downsampling > 0) {
-            xassert(is_power_of_two(pt.dm_downsampling));
-            xassert(pt.wt_dm_downsampling >= pt.dm_downsampling);
+        if (pt.dm_downsampling != 0) {
+            stringstream ss;
+            ss << "DedispersionConfig: dm_downsampling[" << ipri << "]=" << pt.dm_downsampling
+               << " must be 0. This factor is not choosable in the config file: it is fixed"
+               << " by the GPU kernel's warp geometry, separately for each tree of the"
+               << " primary tree (early-trigger trees are smaller, and get a smaller factor).";
+            throw runtime_error(ss.str());
         }
+
+        // time_downsampling is optional (can be zero).
+        // If specified, it must be a power of two and <= its wt_* counterpart.
 
         if (pt.time_downsampling > 0) {
             xassert(is_power_of_two(pt.time_downsampling));
             xassert(pt.wt_time_downsampling >= pt.time_downsampling);
         }
+    }
+
+    // Constraints coupling frequency_subband_counts to the early triggers. These are
+    // config-authoring errors, so they throw with an explanatory message (following the
+    // wt_dm_downsampling precedent above) rather than a bare xassert.
+    //
+    // Placement: AFTER the loop, so num_early_triggers has been range-checked before
+    // 'max_net' is computed from it.
+
+    long pf_rank = long(frequency_subband_counts.size()) - 1;
+    long max_net = 0;
+
+    // Largest early_trigger_level any tree of this config will use. Note et_level runs over
+    // [0, num_early_triggers] INCLUSIVE, so the largest is max_net itself.
+    for (const PrimaryTree &pt: primary_trees)
+        max_net = std::max(max_net, pt.num_early_triggers);
+
+    // Check 1. An early-trigger tree at level L searches a band 2^L times narrower, and its
+    // subband levels are the config's truncated by L levels, so the truncation must be in
+    // range.
+    if (pf_rank < max_net) {
+        stringstream ss;
+        ss << "DedispersionConfig: frequency_subband_counts has pf_rank=" << pf_rank
+           << " (length " << frequency_subband_counts.size() << "), but some primary tree"
+           << " declares num_early_triggers=" << max_net << ". An early trigger at level L"
+           << " truncates the subband counts by L levels, so pf_rank >= num_early_triggers"
+           << " is required.";
+        throw runtime_error(ss.str());
+    }
+
+    // Check 2. Every tree needs pf_rank <= dd_rank1, where dd_rank1 = ceil(dd_rank/2) is the
+    // GPU kernel's second-stage rank -- otherwise a level-0 subband would be narrower than
+    // one second-stage register (see CoalescedDdKernel2.hpp).
+    //
+    // The minimum of dd_rank1 over the config is attained at early_trigger_level=0: the
+    // difference f(et) = dd_rank1(et) - pf_rank(et) is nondecreasing in et, since each step
+    // decreases dd_rank1 by 0 or 1 while the truncation decreases pf_rank by exactly 1. And
+    // over primary trees it is attained at ipri>0, where primary_tree_rank is one smaller.
+    // So the closed form below (= ceil(primary_tree_rank/4) at the smallest primary tree)
+    // covers every tree of the config.
+
+    long min_dd_rank1 = (toplevel_tree_rank + ((num_primary_trees() > 1) ? 2 : 3)) / 4;
+
+    if (pf_rank > min_dd_rank1) {
+        stringstream ss;
+        ss << "DedispersionConfig: frequency_subband_counts has pf_rank=" << pf_rank
+           << ", but the smallest dedispersion tree in this config has second-stage rank"
+           << " dd_rank1=" << min_dd_rank1 << ", and pf_rank <= dd_rank1 is required. Either"
+           << " shorten frequency_subband_counts, or increase toplevel_tree_rank (which is"
+           << " currently " << toplevel_tree_rank << ").";
+        throw runtime_error(ss.str());
+    }
+
+    // Check 3. The early-trigger tree at level L searches the band that
+    // frequency_subband_counts[pf_rank - L] provides, and that band is a strict sub-range of
+    // the toplevel band -- so it must already be one of the config's bands, or the early
+    // trigger would ADD a subband the config never asked to search. The et_level values used
+    // across all trees are exactly [0, max_net], so the levels truncation can land on are
+    // exactly [pf_rank - max_net, pf_rank]. (Level pf_rank itself needs no check:
+    // validate_subband_counts() already requires a count of 1 there.)
+    //
+    // Checks 1 and 3 together are exactly FrequencySubbands::can_early_trigger() for every
+    // et_level this config can produce.
+
+    for (long level = pf_rank - max_net; level < pf_rank; level++) {
+        if (frequency_subband_counts.at(level) >= 1)
+            continue;
+        stringstream ss;
+        ss << "DedispersionConfig: frequency_subband_counts[" << level << "]=0, but this"
+           << " config declares early triggers (largest num_early_triggers is " << max_net
+           << "). The early-trigger tree at early_trigger_level=" << (pf_rank - level)
+           << " searches exactly the band that frequency_subband_counts[" << level << "]"
+           << " would provide, so that count must be at least 1. (A config which searches"
+           << " only the full band cannot declare early triggers without also declaring the"
+           << " sub-bands its early-trigger trees will search.)";
+        throw runtime_error(ss.str());
     }
 }
 
@@ -599,6 +685,9 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
            << "To disable subbands and only search the full frequency band, set to [1].\n"
            << "For a tool for creating frequency_subband_counts, see 'python -m pirate_frb make_subbands --help'.\n"
            << "Note: these are the 'top-level' frequency subbands; fewer subbands may be searched in individual trees.\n"
+           << "If any primary tree declares early triggers, then the counts at the levels those triggers truncate to\n"
+           << "must be nonzero: an early-trigger tree searches a sub-band of the full band, and can only search bands\n"
+           << "which this config already declares.\n"
            << "In this config, there are " << fs.N << " top-level frequency subband(s):";
 
         fs.show_compact(ss);
@@ -621,13 +710,15 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             "(num_early_triggers+1) dedispersion trees: the main full-band tree, plus one\n"
             "early-trigger tree for each early_trigger_level = 1..num_early_triggers. Early triggers\n"
             "search a high-frequency subset of the band at reduced latency.\n"
-            "max_width and the four *_downsampling values must be powers of two (a *_downsampling\n"
-            "value of 0 means auto-select); num_early_triggers is an ordinary count.\n"
+            "max_width, time_downsampling and the two wt_* factors must be powers of two (a value of 0\n"
+            "means auto-select); num_early_triggers is an ordinary count.\n"
             "  num_early_triggers: number of early triggers (required, can be zero)\n"
             "  max_width: max width of peak-finding kernel, in \"tree\" time samples (required)\n"
-            "  dm_downsampling: downsampling factor of coarse-grained array, relative to tree (optional, 0 = auto-select 2^ceil(dd_rank/2) separately for each tree)\n"
+            "  dm_downsampling: must be 0. Not choosable: this factor is fixed by the GPU kernel's warp\n"
+            "    geometry, and differs between the trees of one primary tree (early-trigger trees are smaller).\n"
             "  time_downsampling: downsampling factor of coarse-grained array (optional, 0 = auto-select, matching the resolved dm_downsampling)\n"
-            "  wt_dm_downsampling: downsampling factor of weights array (required, must be >= dm_downsampling)\n"
+            "  wt_dm_downsampling: downsampling factor of weights array (required, must be >= the resolved\n"
+            "    dm_downsampling of every tree in this primary tree, i.e. >= 2^ceil(dd_rank/2) of its largest tree)\n"
             "  wt_time_downsampling: downsampling factor of weights array (required, must be >= time_downsampling)"
         ) << YAML::Newline << YAML::Newline;
     }
@@ -875,17 +966,11 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
             if (k.dd_rank > max_stage2_rank)
                 continue;
 
-            // Skip cdd2 kernels which no DedispersionConfig can ask for. We use the key's
-            // subband_counts as the config's frequency_subband_counts just below, and
-            // DedispersionTree then pins the stage-2 tree's pf_rank to rank1 = (dd_rank+1)/2
-            // and runs the counts through restrict_subband_counts() -- which is the identity
-            // only if they already have pf_rank == rank1. Kernels with pf_rank < rank1 (see
-            // xdm_cdd2_kernels() in makefile_helper.py) exist in the registry but are
-            // reachable only by constructing CoalescedDdKernel2 directly, as its
-            // test_random() does.
-            if (long(k.subband_counts.size()) != ((k.dd_rank + 1) / 2) + 1)
-                continue;
-
+            // Note: EVERY remaining key is reachable from a config. We use the key's
+            // subband_counts as the config's frequency_subband_counts just below, and the
+            // et_level=0 tree gets them verbatim (restrict_subband_counts() is the identity
+            // there), so a key with pf_rank < dd_rank1 -- see xdm_cdd2_kernels() in
+            // makefile_helper.py -- produces a config whose base tree matches it exactly.
             valid_keys.push_back(k);
         }
 
@@ -933,13 +1018,27 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     // Choose the number of primary trees (npri) and my_keys[1:].
 
     long ds_stage2_dd_rank = ret.toplevel_tree_rank / 2;
-    long ds_pf_rank = (ds_stage2_dd_rank + 1) / 2;
-    vector<long> ds_subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, 0, ds_pf_rank);
+
+    // The tree rule is the identity at early_trigger_level=0, so a downsampled primary
+    // tree's main (non-early-trigger) tree gets the config's counts verbatim.
+    const vector<long> &ds_subband_counts = ret.frequency_subband_counts;
+
+    // Check 2 of validate(): every tree needs pf_rank <= dd_rank1. The base primary tree
+    // satisfies it by construction, since its counts came from a cdd2 registry key and every
+    // registered key has pf_rank <= dd_rank1. A DOWNSAMPLED primary tree has one less rank to
+    // work with, so it can fail; when it does, the config must have a single primary tree.
+    //
+    // On the gpu_valid path this is nearly implied by the registry lookup just below (which
+    // would find no key), but the !gpu_valid path has no such lookup and can violate check 2
+    // outright -- so make the guard explicit and let it cover both.
+
+    long config_pf_rank = long(ret.frequency_subband_counts.size()) - 1;
+    bool ds_pri_ok = (config_pf_rank <= (ret.toplevel_tree_rank + 2) / 4);
 
     // May be overridden shortly.
     long npri = 1;
 
-    if (args.gpu_valid && (ds_stage2_dd_rank >= 1)) {
+    if (args.gpu_valid && ds_pri_ok && (ds_stage2_dd_rank >= 1)) {
         // All keys with correct (dtype, dd_rank, subband_counts).
         vector<Key2> valid_keys;
         for (const Key2 &k: all_keys)
@@ -956,7 +1055,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
             }
         }
     }
-    else if (!args.gpu_valid && (ds_stage2_dd_rank >= 1)) {
+    else if (!args.gpu_valid && ds_pri_ok && (ds_stage2_dd_rank >= 1)) {
         npri = rand_int(1,5);
 
         for (int ipri = 1; ipri < npri; ipri++) {
@@ -1021,21 +1120,20 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         long min_lg2_wtds = integer_log2(min_wtds);
         long max_lg2_wtds = (k.Tinner == 1) ? integer_log2(nt_ds) : min_lg2_wtds;
 
-        // Min/max log2(PrimaryTree::wt_dm_downsampling).
-        // FIXME: assuming default DM downsampling (PrimaryTree::dm_downsampling == 0) for now.
-        long min_lg2_wdds = (stage2_dd_rank + 1) / 2;  // same as pf_rank
+        // Min/max log2(PrimaryTree::wt_dm_downsampling). The lower bound is the resolved
+        // dm_downsampling of this family's largest tree, which the DedispersionTree
+        // constructor requires wt_dm_downsampling to be at least.
+        long min_lg2_wdds = (stage2_dd_rank + 1) / 2;  // = dd_rank1 of the et_level=0 tree
         long max_lg2_wdds = primary_tree_rank;
 
         xassert_eq(k.dd_rank, stage2_dd_rank);
         xassert_le(min_lg2_wdds, max_lg2_wdds);
         xassert_le(min_lg2_wtds, max_lg2_wtds);
 
-        // FIXME using default dm/time downsampling factors for now.
-
         PrimaryTree pt;
         pt.num_early_triggers = 0;   // assigned below
         pt.max_width = k.Wmax;
-        pt.dm_downsampling = 0;    // see above
+        pt.dm_downsampling = 0;    // not settable, see DedispersionConfig.hpp
         pt.time_downsampling = k.Dout;
         pt.wt_dm_downsampling = pow2(rand_int(min_lg2_wdds, max_lg2_wdds+1));
         pt.wt_time_downsampling = pow2(rand_int(min_lg2_wtds, max_lg2_wtds+1));
@@ -1057,14 +1155,22 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
             if (primary_tree_rank - et_level < min_et_rank)
                 break;
 
+            // Checks 1 and 3 of validate(): the subband counts must survive truncation by
+            // et_level levels. (make_random() must not emit a config that validate() would
+            // reject, and this fails often -- make_random_subband_counts() draws each count
+            // uniformly on [0, max_count], so a zero at the wrong level is common.)
+            if (!FrequencySubbands::can_early_trigger(ret.frequency_subband_counts, et_level))
+                break;
+
             if (args.gpu_valid) {
                 Key2 ds_key = k;
                 ds_key.dd_rank = stage2_dd_rank - et_level;
 
-                // Mimics the logic used in the DedispersionPlan constructor,
-                // to modify the subband_counts for the stage2 tree.
-                long pf_rank = (ds_key.dd_rank + 1) / 2;
-                ds_key.subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, et_level, pf_rank);
+                // Mimics the logic used in the DedispersionTree constructor, to modify the
+                // subband_counts for the stage2 tree. (Third transcription of the tree rule,
+                // after DedispersionTree's and makefile_helper.py's -- if the rule changes,
+                // all three move together.)
+                ds_key.subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, et_level);
 
                 // If there is no kernel in the registry for this (dd_rank, subband_counts),
                 // then this et_level (and all larger ones) is not supported.
