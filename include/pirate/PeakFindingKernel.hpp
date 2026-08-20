@@ -54,16 +54,9 @@ namespace pirate {
 //   FrequencySubband::N = number of distinct frequency subbands
 //   FrequencySubband::M = number of distinct multiplets (freq_subband, fine_dm)
 //
-// A note for callers who construct 'subband_counts': the peak-finding kernel uses only
-// (N, M, m_to_n) from FrequencySubbands. That is, it treats 'm' as an index carrying a
-// run-length structure ("which consecutive multiplets share a subband"), and never looks at
-// where a subband sits in frequency. CoalescedDdKernel2 exploits this to fold extra DM bits
-// into 'm' -- see CoalescedDdKernel2.hpp.
-//
 // The peak-finding profile 0 <= p < P indexes a trial profile (in time) which is
-// used to implement a (roughly) matched filter for a range of pulse widths. The
-// details of these profiles will be described later (FIXME), but for now we note
-// that the total number of profiles P is given by:
+// used to implement a (roughly) matched filter for a range of pulse widths.
+// See notes/dedispersion.tex for details. The total number of profiles P is given by:
 //
 //   P = 1 + 3 * log2(max_kernel_width)
 //
@@ -90,6 +83,15 @@ namespace pirate {
 // on the GPU we use a complicated, non-contiguous representation which is convenient
 // for the GPU kernel. The helper class 'GpuPfWeightLayout' is intended to hide the
 // details of the GPU memory layout, by providing helper functions to convert from (*).
+//
+// Note 1: the peak-finding kernels (ReferencePeakFidningKernel, GpuPeakFindingKernel)
+// don't define an explicit index 0 <= mu < 2^K (see notes/dedispersion.tex). This is
+// because the additional index can be "emulated" by prepending K zeroes to subband_counts.
+//
+// Note 2: in contrast, the cdd2 kernel does need to define the additional mu-index.
+// Prepending zeroes doesn't change the number of subbands, but does change which
+// frequency ranges they correspond to. The peak-finding kernels don't need this
+// extra information, whereas the cdd2 kernel does.
 
 
 struct PeakFindingKernelParams
@@ -164,7 +166,9 @@ struct PeakFindingKernelParams
 
 struct ReferencePeakFindingKernel
 {
-    // Parameters specified at construction.
+    // Parameters specified at construction. The ReferencePeakFinding kernel doesn't need
+    // to know "K" at construction, see "note 1" above.
+    
     PeakFindingKernelParams params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt, Dcore
     FrequencySubbands fs;             // pf_rank, N, M
     long Dcore = 0;            // = params.Dcore
@@ -375,6 +379,7 @@ struct GpuPfWeightLayout
 
 struct GpuPeakFindingKernel
 {
+    // The GpuPeakFinding kernel doesn't need to know "K" at construction, see "note 1" above.
     GpuPeakFindingKernel(const PeakFindingKernelParams &params);
 
     void allocate(BumpAllocator &allocator);

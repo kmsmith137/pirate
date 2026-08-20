@@ -382,21 +382,6 @@ extern std::ostream &operator<<(std::ostream &os, const GpuDedispersionKernel::R
 //   - apply_input_residual_lags == true
 //   - input_is_ringbuf == true, output_is_ringbuf == false
 //   - frequency_subbands.pf_rank <= dd_rank - (dd_rank/2)
-//
-// That last constraint deserves a word, since it is not arbitrary. Write
-// rank1 = dd_rank - dd_rank/2 for the dedisperser's second-stage rank. One register of the
-// second stage holds one coarse frequency channel out of 2^rank1, so a level-0 subband --
-// which is 2^-pf_rank of the band -- is representable only if pf_rank <= rank1.
-//
-// The equality case is the cheapest one: the per-subband time lag then comes "for free",
-// because the shared memory ring buffer of the two-stage dedisperser applies lag
-// d' * (2^rank1 - 1 - f), where f is a coarse frequency and d' is a coarse DM, which is
-// *identically* the lag applied by ReferenceTree::final_lagbuf, namely
-// (2^pf_rank - fhi(m)) * d'. When pf_rank < rank1, each warp instead writes
-// 2^(rank1 - pf_rank) consecutive DMs of 'sb_out', and the kernel makes up the difference
-// between the two lags with a small compile-time lag per register. See
-// cuda_generator/Dedisperser.emit_subband_extraction() and the "subbanded dedispersion"
-// section of notes/dedispersion.tex.
 
 
 struct GpuSbDedispersionKernel

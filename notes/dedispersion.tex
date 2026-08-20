@@ -645,9 +645,9 @@ and fine-grained arrival times. The \verb|out_argmax| array consists of integer 
 which encode the ``winning'' parameters, that are responsible for the max snr.
 
 Before writing down the token encoding, recall from \S\ref{sec:peak_finding}, \S\ref{ssec:dedispersion_output_arrays}
-that the DM downsampling factor of the form $D_{\rm ds} = 2^{R+K}$.
+that the DM downsampling factor is of the form $D_{\rm ds} = 2^{R+K}$.
 The first $R$ bits are part of the ``multiplet'' $0 \le m < M$ (see Eq.\ (\ref{eq:multiplet_def})),
-and we introduce a new index $0\le \mu < 2^K$ for the remaining $K$t bits.
+and we introduce a new index $0\le \mu < 2^K$ for the remaining $K$ bits.
 
 In this notation, the token encoding is:
 \begin{equation}
@@ -657,7 +657,7 @@ In this notation, the token encoding is:
 where $0 \le t < T_{\rm ds}$ is an 8-bit fine-grained arrival time, $0 \le p < P$ is
 an 8-bit peak-finding profile index (encoding pulse width and profile shape),
 $0 \le \mu < 2^K$ is part of the fine-grained DM as defined in the previous paragraph,
-and $0 \le m < M \le 114$ is a ``multiplet'' (i.e.~(frequency subband, fine-grained DM) pair.
+and $0 \le m < M \le 114$ is a ``multiplet'' (i.e.~(frequency subband, fine-grained DM) pair).
 The arrival time $t$ has a small $p$-dependent time shift applied (see code for details).
 
 In practice, you shouldn't need to know the details of the token encoding -- there are helper

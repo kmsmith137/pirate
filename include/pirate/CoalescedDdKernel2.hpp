@@ -28,10 +28,10 @@ struct DedispersionTree;   // defined in DedispersionTree.hpp
 // shape (ndm_out, M, ntime) subband array is never materialized in GPU memory. (Contrast
 // GpuSbDedispersionKernel, which does materialize it -- see DedispersionKernel.hpp.)
 //
-// Two constraints relate the peak-finding parameters to the dedispersion parameters. Write
-// rank1 = dd_rank - (dd_rank/2) for the dedisperser's second-stage rank.
+// Two constraints relate the peak-finding parameters to the dedispersion parameters.
+// Define rank1 = dd_rank - (dd_rank/2). This the GPU kernel's second-stage rank.
 //
-//   - fs.pf_rank <= rank1 (see DedispersionKernel.hpp for why).
+//   - fs.pf_rank <= rank1
 //   - pf_params.ndm_out == 2^(dd_rank + amb_rank - rank1). Note 'rank1' and not 'pf_rank':
 //     the output DM axis is one DM per warp of the second stage, whatever the subbands are.
 //

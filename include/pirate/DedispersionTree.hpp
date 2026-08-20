@@ -54,7 +54,10 @@ struct DedispersionTree
     //
     DedispersionTree(const DedispersionConfig &config, long itree,
                      bool Dcore_from_cdd2_registry);
-
+    
+    // Note: DedispersionTree does not contain 'toplevel_rank', but it can be inferred as:
+    //   toplevel_rank = amb_rank + dd_rank + (primary_tree_index ? 1 : 0) + early_trigger_level
+    
     int primary_tree_index = -1;   // Also identifies associated stage1 tree (input downsampled in time by 2^primary_tree_index).
     int early_trigger_level = -1;  // "Earliness" of trigger: 0 for the main tree, 1..num_early_triggers for early triggers.
     int amb_rank = 0;              // Ambient rank of this DedispersionTree (= dd_rank of associated stage1 tree)
