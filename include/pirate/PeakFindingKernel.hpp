@@ -54,6 +54,12 @@ namespace pirate {
 //   FrequencySubband::N = number of distinct frequency subbands
 //   FrequencySubband::M = number of distinct multiplets (freq_subband, fine_dm)
 //
+// A note for callers who construct 'subband_counts': the peak-finding kernel uses only
+// (N, M, m_to_n) from FrequencySubbands. That is, it treats 'm' as an index carrying a
+// run-length structure ("which consecutive multiplets share a subband"), and never looks at
+// where a subband sits in frequency. CoalescedDdKernel2 exploits this to fold extra DM bits
+// into 'm' -- see CoalescedDdKernel2.hpp.
+//
 // The peak-finding profile 0 <= p < P indexes a trial profile (in time) which is
 // used to implement a (roughly) matched filter for a range of pulse widths. The
 // details of these profiles will be described later (FIXME), but for now we note

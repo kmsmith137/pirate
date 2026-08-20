@@ -1108,11 +1108,12 @@ GpuSbDedispersionKernel::GpuSbDedispersionKernel(
     xassert(dd_params.consumer_id >= 0);
     xassert(dd_params.consumer_id < dd_params.mega_ringbuf->num_consumers);
 
-    // The kernel gets the per-subband time lag "for free" from the shared memory ring buffer
-    // of the two-stage dedisperser, which is only correct if the peak-finding rank equals the
-    // dedisperser's second-stage rank. (Without this check, the registry lookup below would
-    // just fail to find a kernel, with a less informative error.) See DedispersionKernel.hpp.
-    xassert_eq(fs.pf_rank, dd_params.dd_rank - (dd_params.dd_rank / 2));
+    // The peak-finding rank cannot exceed the dedisperser's second-stage rank 'rank1',
+    // since a level-0 subband would then be narrower than one second-stage register.
+    // (Without this check, the registry lookup below would just fail to find a kernel, with
+    // a less informative error.) See DedispersionKernel.hpp.
+    long rank1 = dd_params.dd_rank - (dd_params.dd_rank / 2);
+    xassert_le(fs.pf_rank, rank1);
 
     this->nsegments_per_beam = pow2(dd_params.dd_rank + dd_params.amb_rank) * xdiv(dd_params.ntime, dd_params.nt_per_segment);
     xassert_shape_eq(dd_params.mega_ringbuf->consumer_quadruples.at(dd_params.consumer_id), ({nsegments_per_beam,4}));
@@ -1127,9 +1128,10 @@ GpuSbDedispersionKernel::GpuSbDedispersionKernel(
     // Important: ensure that caller-specified 'nt_per_segment' matches GPU kernel.
     xassert_eq(dd_params.nt_per_segment, registry_value.nt_per_segment);
 
-    // The kernel indexes the m-axis of 'sb_out' with 32-bit arithmetic (see 'm_stride' in
-    // the generated code), which is only safe if the m-stride times M fits in an int.
-    xassert_lt(fs.M * dd_params.ntime, 1L << 31);
+    // Each warp writes a shape (2^(rank1-pf_rank), M) subarray of 'sb_out', which the kernel
+    // indexes with 32-bit arithmetic (see 'm_stride' in the generated code). This is only
+    // safe if the largest offset it computes fits in an int.
+    xassert_lt(pow2(rank1 - fs.pf_rank) * fs.M * dd_params.ntime, 1L << 31);
 
     long B = dd_params.beams_per_batch;
     long A = pow2(dd_params.amb_rank);
@@ -1368,7 +1370,7 @@ struct SbddRegistry : public GpuSbDedispersionKernel::Registry
         // (In the future, I may add more argument checking here.)
 
         xassert_ge(key.dd_rank, 3);
-        xassert_ge(key.subband_counts.size(), 3);   // pf_rank >= 2, since dd_rank >= 3
+        xassert_ge(key.subband_counts.size(), 1);   // pf_rank >= 0
 
         xassert(val.cuda_kernel != nullptr);
         xassert(val.shmem_nbytes >= 0);

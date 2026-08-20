@@ -46,7 +46,11 @@ class FrequencySubbands:
                 self.M += 2**level
                 self.N += 1
         
-        # For kernel/file names in code generator.
+        # For kernel/file names in code generator. Note that leading zeros are meaningful and
+        # are never stripped: 'n0_n0_n3_n2_n1' and 'n3_n2_n1' are different kernels. For a
+        # dedispersion kernel they are different band sets; for a peak-finding kernel, whose
+        # counts denote a multiplet run-length structure rather than a band set, k leading
+        # zeros mean 2^k times as many multiplets per band (see the top of PeakFinder.py).
         self.fstr = '_'.join(f'n{int(c)}' for c in self.subband_counts)
 
         

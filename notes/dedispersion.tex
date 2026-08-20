@@ -331,6 +331,50 @@ time index for every multiplet of its DM. That choice replaces the lags above by
 i.e.~the (floored) half-integer extrapolation, for which $T_0 \ne T_1$. We may switch the code to
 this convention in the future.
 
+\medskip
+\noindent{\bf Remark (extracting subbands from a split dedispersion).}
+Our GPU kernels do not dedisperse each subband from scratch, and they do not even run a
+monolithic $\DD(r)$. They split $\DD(r)$ with the splitting identity (\ref{eq:splitting})
+below, into a first stage of rank $r_0$ and a second stage of rank $r_1$ (where $r=r_0+r_1$),
+and extract the subbands from the intermediates of the second stage. A level-0 subband is one
+coarse channel of that stage, so this construction requires
+\begin{equation}
+R \le r_1.
+\end{equation}
+
+To see what the second stage needs, apply the splitting identity a second time, with the
+outer rank taken to be $R$ rather than $r_1$. Its $\LAG$ operator is then
+$\LAG\big[(2^R-1-F)\,d_{\rm hi}\big]$, where $0 \le F < 2^R$ indexes the $2^R$ coarse-freq
+channels seen by the subband extraction (it is the index called $f$ in case 1 at $l=0$), and
+$d_{\rm hi}$ is the coarse delay of the output array, as above. Given that lag, the $\DD(R)$
+which follows produces the $T$'s of cases 1 and 2 by itself, with no further lag logic.
+
+If $R = r_1$, then $d_{\rm hi} = d'$, the delay produced by the first stage, and
+$\LAG\big[(2^R-1-F)\,d'\big]$ is exactly the $\LAG$ operator of the $r=r_0+r_1$ split. In
+other words the subband lags come for free: an implementation which already applies the
+$r=r_0+r_1$ lag (in our kernels, a ring buffer in shared memory) needs no subband-specific
+lag at all.
+
+If $R < r_1$, write $K = r_1 - R$ and split the second stage once more,
+\begin{equation}
+\DD(r_1) = \big( \DD(R) \otimes 1 \big) \circ \LAG\big[ (2^R-1-F)\, e \big]
+             \circ \big( 1 \otimes \DD(K) \big),
+\end{equation}
+where $0 \le e < 2^K$ is the delay produced by the inner $\DD(K)$, and the second stage's
+frequency index $0 \le f_1 < 2^{r_1}$ splits as $f_1 = 2^K F + u$ with $0 \le u < 2^K$.
+The coarse delay is now $d_{\rm hi} = 2^K d' + e$, so the lag the extraction needs splits
+into two pieces:
+\begin{equation}
+(2^R-1-F)\, d_{\rm hi} = \underbrace{2^K (2^R-1-F)\, d'}_{\rm free}
+                        + \underbrace{(2^R-1-F)\, e}_{\rm extra}.
+\end{equation}
+The first piece is already applied by the $r=r_0+r_1$ split: that split's lag
+$(2^{r_1}-1-f_1)d'$ exceeds the inner split's $(2^K-1-u)d'$ by exactly $2^K(2^R-1-F)d'$,
+which is independent of $u$ and therefore commutes with $\DD(K)$. The second piece does not
+involve $d'$ at all, so it is one fixed lag per $(F,e)$ pair (a compile-time constant, in
+our GPU kernels). So $R < r_1$ costs a small extra lag on each second-stage register, and in
+exchange each unit of $d'$ yields $2^K$ values of $d_{\rm hi}$.
+
 \subsection{Peak-finding}
 \label{sec:peak_finding}
 

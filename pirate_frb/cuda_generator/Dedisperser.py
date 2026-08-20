@@ -278,17 +278,24 @@ class Dedisperser:
 
     
     def emit_subband_extraction(self, k, fs):
-        """Generator: emit the second stage of dedispersion, yielding one (rname, m) pair
-        per frequency subband multiplet.
+        """Generator: emit the second stage of dedispersion, yielding one (rname, m, e)
+        triple per (multiplet, "extra DM") pair.
 
         Used by cuda_generator.CoalescedDdKernel2 (whose consumer feeds the peak-finder)
         and cuda_generator.SbDedisperser (whose consumer stores to global memory).
 
         Args:
           k   Kernel, to emit into.
-          fs  FrequencySubbands. Requires fs.pf_rank == self.rank1 (see below).
+          fs  FrequencySubbands, with 0 <= fs.pf_rank <= self.rank1 (see xdm_rank()).
 
-        Yields (rname, m): the name of the register holding multiplet m, for 0 <= m < fs.M.
+        Yields (rname, m, e): the name of the register holding multiplet 0 <= m < fs.M at
+        "extra DM" 0 <= e < 2^K, where K = self.xdm_rank(fs). The subband array's DM index is
+
+            d_pf = d' * 2^K + e      (where 0 <= d' < 2^rank0 is the warp's coarse DM)
+
+        i.e. 'e' is the low K bits of the DM index of the shape (2^(rank-pf_rank), M, ntime)
+        subband array, and each warp produces 2^K output DMs rather than one. When K == 0
+        (fs.pf_rank == self.rank1), 'e' is always zero.
 
         THE GENERATOR MUST BE FULLY CONSUMED. It emits the remaining dedispersion passes
         *between* yields, so a consumer which breaks out early produces a kernel which
@@ -313,48 +320,121 @@ class Dedisperser:
 
         and each register f carries the shmem ringbuf lag d' * (2^rank1 - 1 - f).
 
-        Why fs.pf_rank must equal self.rank1: the subband time lag applied by
-        ReferenceTree::final_lagbuf is (2^pf_rank - fhi(m)) * d', where fhi(m) is the
-        subband's upper coarse-freq edge and d' is the coarse DM. When pf_rank == rank1
-        that is *identically* the shmem ringbuf lag above, so this method emits no lag
-        logic at all. If pf_rank were smaller, the output DM index would acquire bits
-        living in the register index and the required lag would become register-dependent;
-        if larger, a level-0 subband would be narrower than one register. Neither is
-        representable here. (For the derivation, including levels > 0, see the "subbanded
-        dedispersion" section of notes/dedispersion.tex.)
-
-        Multiplets are yielded in order of INCREASING m. That matters: PeakFinder builds
-        its transposes incrementally and bails out via 'if (m & mbit) == 0: return', so it
-        requires m to arrive in order (see PeakFinder.pfx_register_ready()). A consumer
-        which does not care (e.g. a plain store) could take the odd-pfs multiplets earlier,
-        in step 1 below, which would shorten the live range of the pfodd_* registers -- a
-        possible future optimization.
-
         POSTCONDITION: all rank1 dedispersion passes have been emitted, so dd0..dd{N-1}
         hold the full-band dedispersion output, with a bit-reversed fine DM in the register
         index.
+
+        THE THREE STEPS. Write R = fs.pf_rank and K = rank1 - R, and split the register index
+        as f = F * 2^K + u, where 0 <= F < 2^R is the "coarse-pf" frequency channel. Subband
+        extraction needs each register to carry the time lag that ReferenceTree::final_lagbuf
+        assigns, namely (2^R - fhi(m)) * d_pf, where fhi(m) is the subband's upper coarse-pf
+        edge. The shmem lag above supplies this for the d' part of d_pf = d'*2^K + e only, so
+        the second stage is emitted in three steps:
+
+          1. Dedispersion passes 0 .. K-1, i.e. DD(K) within each group of 2^K registers.
+             The shmem lag exceeds what DD(K) wants by 2^K * (2^R-1-F), which is independent
+             of u and therefore commutes with these passes. Afterwards register (F,e) of warp
+             d' holds coarse-pf channel F's own dedispersion output at DM index d_pf, lagged
+             by 2^K * (2^R-1-F) * d'.
+
+          2. Apply the compile-time lag
+
+                 lambda(F,e) = e * (2^R-1-F)
+
+             to each register. Step 1's leftover lag plus lambda is (2^R-1-F) * d_pf, which
+             is exactly the input contract of a rank-R second stage. (For K == 0 every
+             lambda is zero and this step emits nothing, which is why the pf_rank == rank1
+             kernel needs no lag logic at all.)
+
+          3. Run the ordinary rank-R subband extraction independently on each of the 2^K
+             register groups { i : (i & (2^K-1)) == bit_reverse(e,K) }. Its own dedispersion
+             passes then supply the (2^R - fhi) * d_pf subband lag for free.
+
+        Step 3's passes must use GROUP-LOCAL lags (_dedispersion_pass()'s 'group_lsb'
+        argument): the lag of group-local pass p is bit_reverse(j',p), computed from register
+        index bits [K, K+p), not the bit_reverse(j, K+p) that a plain pass would use. The two
+        agree at F = 2^R-1, so the full-band output -- and hence the POSTCONDITION above --
+        is the same either way; only the subband outputs need the distinction.
+
+        For the underlying math, see the "Subbanded dedispersion" and "The splitting
+        identity" sections of notes/dedispersion.tex.
+
+        REGISTER INDEX. After step 1's K passes plus l passes of step 3, the register holding
+        coarse frequency f_hi, fine DM 0 <= d_lo < 2^l, and extra DM e is
+
+            i = f_hi * 2^(l+K)  +  bit_reverse(d_lo,l) * 2^K  +  bit_reverse(e,K)
+
+        i.e. 'e' is bit-reversed in the register index, and plain everywhere else (lags, DM
+        indices, output array addresses).
+
+        YIELD ORDER is increasing ((m << K) | e): pf_level, then band, then fine DM, then e.
+        That matters: PeakFinder builds its transposes incrementally and bails out via
+        'if (m & mbit) == 0: return', so it requires its input index to arrive in order (see
+        PeakFinder.pfx_register_ready()). It is also availability order, since all 2^K
+        registers of a multiplet are ready at the same moment. A consumer which does not care
+        (e.g. a plain store) could take the odd-pfs multiplets earlier, in step 1 below, which
+        would shorten the live range of the pfodd_* registers -- a possible future
+        optimization.
         """
 
         assert self.two_stage
-        assert fs.pf_rank == self.rank1
+
+        R = fs.pf_rank      # subband granularity: the coarse-pf frequency axis has 2^R channels
+        K = self.xdm_rank(fs)   # "extra DM" bits (also asserts 0 <= fs.pf_rank <= self.rank1)
+        nxdm = 2**K         # number of "extra DM" values per multiplet
 
         self.sbx_complete = False   # see "MUST BE FULLY CONSUMED" above
 
+        def ddname(ig, e):
+            """Register holding group-local index 'ig' in the e-th register group."""
+            return f'dd{(ig << K) + utils.bit_reverse(e,K)}'
+
+        def pfodd_name(pf_level, pfs, pfd, e):
+            """Register holding an odd-'pfs' multiplet, computed one dedispersion step early."""
+            s = f'pfodd_l{pf_level}_s{pfs}_d{pfd}'
+            return (s + f'_e{e}') if (K > 0) else s
+
         # First half of the second stage: rank0 dedispersion passes, then the shared memory
-        # transpose. The remaining rank1 passes are emitted below, interleaved with the
-        # subband outputs.
+        # transpose. The remaining rank1 passes are emitted below (the first K in step 1, the
+        # rest interleaved with the subband outputs in step 3).
         self._two_stage_dedispersion_core(k, return_early=True)
 
         dt32 = self.dt32
         sc = fs.subband_counts
-        pf_rank = fs.pf_rank
         mcurr = 0
 
-        # ---------------- pf_level 0 ----------------
+        # ---------------- Step 1: dedispersion passes 0 .. K-1 ----------------
+        #
+        # Ordinary passes: their register pairs and their lags live entirely in the low K
+        # bits of the register index. (See "THE THREE STEPS" in the docstring.)
+
+        for i in range(K):
+            self._dedispersion_pass(k, i)
+
+        # ---------------- Step 2: the lambda(F,e) lags ----------------
+
+        lam = [ (F, e, e * (2**R - 1 - F)) for F in range(2**R) for e in range(nxdm) ]
+        lam = [ (F,e,lag) for (F,e,lag) in lam if (lag != 0) ]
+
+        if len(lam) > 0:
+            k.emit()
+            k.emit(f'// Apply the per-register lag lambda(F,e) = e * ({2**R-1} - F), where the')
+            k.emit(f'// register index is (F * {nxdm} + bit_reverse(e,{K})). This converts the shmem')
+            k.emit(f"// ringbuf lag, which is quantized in the warp's coarse DM d', into the lag")
+            k.emit(f'// wanted by the pf_rank={R} subband extraction below, which is quantized in the')
+            k.emit(f"// output DM d_pf = d'*{nxdm} + e. (See Dedisperser.emit_subband_extraction.)")
+            k.emit()
+
+            for F, e, lag in lam:
+                rname = ddname(F, e)
+                k.emit(f'// lambda: lag {rname} by {lag} time samples (F={F}, e={e})')
+                self._advance1(k, rname, lag)
+
+        # ---------------- Step 3, pf_level 0 ----------------
         #
         # Level 0 is a special case, because its bands are "unstaggered": each one is a
-        # single coarse-freq channel, i.e. exactly one register, with a single (trivial)
-        # fine DM. See the comments in FrequencySubbands.cpp.
+        # single coarse-pf channel, i.e. exactly one register per group, with a single
+        # (trivial) fine DM. See the comments in FrequencySubbands.cpp.
 
         k.emit()
         k.emit(f'// Create {sc[0]} subband output(s) at pf_level 0. This is a special case,')
@@ -363,17 +443,18 @@ class Dedisperser:
 
         for pfs in range(sc[0]):
             fs.check_m(mcurr, pfs, pfs+1, 0)     # (m, flo, fhi, fine_dm)
-            yield (f'dd{pfs}', mcurr)
+            for e in range(nxdm):
+                yield (ddname(pfs, e), mcurr, e)
             mcurr += 1
 
-        # ---------------- pf_level 1 .. pf_rank ----------------
+        # ---------------- Step 3, pf_level 1 .. R ----------------
         #
-        # On entry to iteration 'pf_level', the register index decomposes as
+        # On entry to iteration 'pf_level', the group-local register index decomposes as
         #
-        #     i = f_coarse * 2^(pf_level-1) + bit_reverse(fine_dm, pf_level-1)
+        #     ig = f_coarse * 2^(pf_level-1) + bit_reverse(fine_dm, pf_level-1)
         #
-        # i.e. (pf_level-1) dedispersion passes have been applied. A band at this level
-        # spans coarse-freq range [pfs, pfs+2) * 2^(pf_level-1), so:
+        # i.e. (pf_level-1) group-local dedispersion passes have been applied. A band at this
+        # level spans coarse-pf range [pfs, pfs+2) * 2^(pf_level-1), so:
         #
         #   - even pfs: the band is "aligned" -- it is the group f_coarse = pfs/2 AFTER one
         #     more dedispersion pass, so we get it for free from step 2.
@@ -381,7 +462,7 @@ class Dedisperser:
         #     one dedispersion step away from the registers we hold, so step 1 computes it
         #     into dedicated pfodd_* registers BEFORE the pass overwrites them.
 
-        for pf_level in range(1, pf_rank+1):
+        for pf_level in range(1, R+1):
             n_odd = len(range(1, sc[pf_level], 2))
 
             k.emit()
@@ -392,32 +473,38 @@ class Dedisperser:
 
             for pfs in range(1, sc[pf_level], 2):
                 for pfd2 in range(2**(pf_level-1)):
-                    # Generate the multiplet pair (pfs, 2*pfd2) and (pfs, 2*pfd2+1) from the
-                    # two half-bands, via one dedispersion step:
-                    #     out[2*d]   = (in[lo, t-d] + in[hi, t]) / sqrt(2)
-                    #     out[2*d+1] = (in[lo, t-d-1] + in[hi, t]) / sqrt(2)
-                    isrc = pfs * 2**(pf_level-1) + utils.bit_reverse(pfd2, pf_level-1)
-                    src0 = f'dd{isrc}'                       # lower half-band (needs the lag)
-                    src1 = f'dd{isrc + 2**(pf_level-1)}'     # upper half-band (defines t)
-                    dst0 = f'pfodd_l{pf_level}_s{pfs}_d{2*pfd2}'
-                    dst1 = f'pfodd_l{pf_level}_s{pfs}_d{2*pfd2+1}'
-                    lag = pfd2
+                    for e in range(nxdm):
+                        # Generate the multiplet pair (pfs, 2*pfd2) and (pfs, 2*pfd2+1) from the
+                        # two half-bands, via one dedispersion step:
+                        #     out[2*d]   = (in[lo, t-d] + in[hi, t]) / sqrt(2)
+                        #     out[2*d+1] = (in[lo, t-d-1] + in[hi, t]) / sqrt(2)
+                        isrc = pfs * 2**(pf_level-1) + utils.bit_reverse(pfd2, pf_level-1)
+                        src0 = ddname(isrc, e)                        # lower half-band (needs the lag)
+                        src1 = ddname(isrc + 2**(pf_level-1), e)      # upper half-band (defines t)
+                        dst0 = pfodd_name(pf_level, pfs, 2*pfd2, e)
+                        dst1 = pfodd_name(pf_level, pfs, 2*pfd2+1, e)
+                        lag = pfd2
 
-                    k.emit(f'// Sum with lag=({lag},{lag+1}): src=({src0},{src1}), dst=({dst0},{dst1})')
+                        k.emit(f'// Sum with lag=({lag},{lag+1}): src=({src0},{src1}), dst=({dst0},{dst1})')
 
-                    # _advance2() returns (src0 lagged by lag+1, src0 lagged by lag).
-                    # It behaves differently for float32 vs float16 (see _advance2).
-                    tmp0, tmp1 = self._advance2(k, src0, lag)
+                        # _advance2() returns (src0 lagged by lag+1, src0 lagged by lag).
+                        # It behaves differently for float32 vs float16 (see _advance2).
+                        tmp0, tmp1 = self._advance2(k, src0, lag)
 
-                    k.emit(f'{dt32} {dst0} = rsqrt2 * ({tmp1} + {src1});')
-                    k.emit(f'{dt32} {dst1} = rsqrt2 * ({tmp0} + {src1});')
+                        k.emit(f'{dt32} {dst0} = rsqrt2 * ({tmp1} + {src1});')
+                        k.emit(f'{dt32} {dst1} = rsqrt2 * ({tmp0} + {src1});')
 
             k.emit()
             k.emit(f'// pf_level {pf_level}: Step 2 -- one dedispersion pass. Afterwards the')
             k.emit(f'// register index is  f_coarse * 2^{pf_level} + bit_reverse(fine_dm, {pf_level}).')
+
+            if K > 0:
+                k.emit(f'// (That is the GROUP-LOCAL register index -- the full register index is')
+                k.emit(f'//  (group-local index) * {nxdm} + bit_reverse(e,{K}).)')
+
             k.emit()
 
-            self._dedispersion_pass(k, pf_level-1)
+            self._dedispersion_pass(k, pf_level-1, group_lsb=K)
 
             k.emit()
             k.emit(f'// pf_level {pf_level}: Step 3 -- yield every multiplet to the consumer,')
@@ -426,39 +513,71 @@ class Dedisperser:
 
             for pfs in range(sc[pf_level]):
                 for pfd in range(2**pf_level):
-                    if pfs % 2:
-                        name = f'pfodd_l{pf_level}_s{pfs}_d{pfd}'
-                    else:
-                        isrc = (pfs//2) * 2**pf_level + utils.bit_reverse(pfd, pf_level)
-                        name = f'dd{isrc}'
-
                     fs.check_m(mcurr, pfs * 2**(pf_level-1), (pfs+2) * 2**(pf_level-1), pfd)
-                    yield (name, mcurr)
+
+                    for e in range(nxdm):
+                        if pfs % 2:
+                            name = pfodd_name(pf_level, pfs, pfd, e)
+                        else:
+                            isrc = (pfs//2) * 2**pf_level + utils.bit_reverse(pfd, pf_level)
+                            name = ddname(isrc, e)
+
+                        yield (name, mcurr, e)
+
                     mcurr += 1
 
         assert mcurr == fs.M
         self.sbx_complete = True
 
 
-    def _dedispersion_pass(self, k, i):
-        assert 0 <= i < utils.integer_log2(self.ndd)
+    def xdm_rank(self, fs):
+        """Returns the number of "extra DM" bits in the second stage: (rank1 - fs.pf_rank).
+
+        Each warp of the subbanded kernels produces 2^xdm_rank output DMs, whose indices are
+        the low bits of the subband array's DM axis. See emit_subband_extraction() for the
+        full story, and for why xdm_rank must be >= 0.
+        """
+
+        assert self.two_stage
+        assert 0 <= fs.pf_rank <= self.rank1
+        return self.rank1 - fs.pf_rank
+
+
+    def _dedispersion_pass(self, k, i, group_lsb=0):
+        """Emit one dedispersion pass, pairing registers whose indices differ in bit (group_lsb+i).
+
+        If 'group_lsb' is nonzero, the low 'group_lsb' bits of the register index are
+        spectators: the pass acts independently on each of the 2^group_lsb interleaved
+        register groups, and the time lag comes from the group-local index bits
+        [group_lsb, group_lsb+i) alone. With group_lsb=0 this is an ordinary dedispersion
+        pass over all 2^rank1 registers. (See emit_subband_extraction(), the only caller
+        that passes group_lsb > 0, for why the group-local lag is the correct one.)
+        """
+
+        nreg = utils.integer_log2(self.ndd)
+        assert 0 <= group_lsb <= nreg
+        assert 0 <= i < (nreg - group_lsb)
+
+        gs = f' (group_lsb={group_lsb})' if (group_lsb > 0) else ''
 
         k.emit()
-        k.emit(f'// dedispersion_pass: pass {i} starts here')
-        
-        # Outer loop is a spectator index.
-        for s in range(0, self.ndd, 2**(i+1)):
-            for j in range(2**i):
-                x0 = f'dd{s+j}'
-                x1 = f'dd{s+j+2**i}'
-                lag = utils.bit_reverse(j,i)
-                
-                k.emit(f'// dedisperse {x0}, {x1} with time lag {lag} (not accounting for nbits, nspec)')
-                tmp0, tmp1 = self._advance2(k, x0, lag)
-                k.emit(f'{x0} = rsqrt2 * ({tmp1} + {x1});')
-                k.emit(f'{x1} = rsqrt2 * ({tmp0} + {x1});')
+        k.emit(f'// dedispersion_pass: pass {i}{gs} starts here')
 
-        k.emit(f'// dedispersion_pass: pass {i} ends here')
+        # Outer loop is a spectator index (register index bits above group_lsb+i).
+        # Inner loop is the other spectator index (register index bits below group_lsb).
+        for s in range(0, self.ndd, 2**(group_lsb+i+1)):
+            for j in range(2**i):
+                for g in range(2**group_lsb):
+                    x0 = f'dd{s + (j << group_lsb) + g}'
+                    x1 = f'dd{s + ((j + 2**i) << group_lsb) + g}'
+                    lag = utils.bit_reverse(j,i)
+
+                    k.emit(f'// dedisperse {x0}, {x1} with time lag {lag} (not accounting for nbits, nspec)')
+                    tmp0, tmp1 = self._advance2(k, x0, lag)
+                    k.emit(f'{x0} = rsqrt2 * ({tmp1} + {x1});')
+                    k.emit(f'{x1} = rsqrt2 * ({tmp0} + {x1});')
+
+        k.emit(f'// dedispersion_pass: pass {i}{gs} ends here')
 
 
     def _advance2(self, k, x0, lag):
@@ -479,6 +598,35 @@ class Dedisperser:
         
         return tmp0, tmp1
         
+
+    def _advance1(self, k, x0, lag):
+        """Apply a time lag to register 'x0', in place.
+
+        Single-register analogue of _advance2() (which applies a pair of consecutive lags, and
+        returns them in temporaries). Lag is in time samples, and does not account for nbits,
+        nspec.
+        """
+
+        if lag == 0:
+            return
+
+        lag32a = (lag * self.nbits * self.nspec) // 32
+        lag32b = (self.nbits * self.nspec) // 32
+
+        if (lag32b > 0) or ((lag % 2) == 0):
+            # Case 1: the lag is an integer number of 32-bit registers, either because one
+            # time sample is (lag32b > 0), or because the lag is an even number of float16
+            # half-samples.
+            assert (lag32b > 0) or ((self.dtype.scalar == '__half') and (self.nspec == 1))
+            self.rrb.advance(k, x0, lag32a)
+        else:
+            # Case 2 (contrary case): float16 with nspec==1, and an odd lag. The ring buffer
+            # can only lag by whole 32-bit registers (= 2 time samples), so we take the two
+            # neighboring lags and combine their halves, as in _advance2().
+            assert (self.dtype.scalar == '__half') and (self.nspec == 1)
+            tmp0, tmp1 = self.rrb.advance2(k, x0, lag32a, 1)   # lagged by (lag+1), (lag-1) samples
+            k.emit(f'{x0} = ksgpu::f16_align({tmp0}, {tmp1});')
+
 
     def _apply_input_residual_lags(self, k):
         if not self.apply_input_residual_lags:

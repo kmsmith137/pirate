@@ -870,9 +870,24 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
     if (args.gpu_valid) {
         vector<Key2> valid_keys;
-        for (const Key2 &k: all_keys)
-            if (k.dd_rank <= max_stage2_rank)
-                valid_keys.push_back(k);
+
+        for (const Key2 &k: all_keys) {
+            if (k.dd_rank > max_stage2_rank)
+                continue;
+
+            // Skip cdd2 kernels which no DedispersionConfig can ask for. We use the key's
+            // subband_counts as the config's frequency_subband_counts just below, and
+            // DedispersionTree then pins the stage-2 tree's pf_rank to rank1 = (dd_rank+1)/2
+            // and runs the counts through restrict_subband_counts() -- which is the identity
+            // only if they already have pf_rank == rank1. Kernels with pf_rank < rank1 (see
+            // xdm_cdd2_kernels() in makefile_helper.py) exist in the registry but are
+            // reachable only by constructing CoalescedDdKernel2 directly, as its
+            // test_random() does.
+            if (long(k.subband_counts.size()) != ((k.dd_rank + 1) / 2) + 1)
+                continue;
+
+            valid_keys.push_back(k);
+        }
 
         if (valid_keys.size() == 0) {
             stringstream ss;

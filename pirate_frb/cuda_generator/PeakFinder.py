@@ -25,6 +25,16 @@ from .FrequencySubbands import FrequencySubbands
 # Note that there is no 'ndm_in_per_out' parameter, since the "uncoalesced"
 # peak-finding kernel doesn't care about input DMs.
 #
+# A note on 'frequency_subbands': the peak-finder uses only (N, M, m_to_n), i.e. it treats
+# its input index as a multiplet index equipped with a run-length structure ("which
+# consecutive multiplets share a subband"), and never touches the band geometry
+# (n_to_flo/n_to_fhi/m_to_d). So a peak-finding kernel's subband_counts should be read as a
+# run-length structure rather than a band set. In particular LEADING ZEROS ARE MEANINGFUL:
+# they multiply every run length by a power of two without changing N. CoalescedDdKernel2
+# uses exactly that -- its pf kernel's counts are the tree's counts with 'xdm_rank' zeros
+# prepended, so that the peak-finder's index is m_ext = (m << xdm_rank) | e and the extra DM
+# bits get max-reduced away. See cuda_generator/CoalescedDdKernel2.py.
+#
 # Constraints:
 #
 #   - All of these must be a power of two, except nt_in

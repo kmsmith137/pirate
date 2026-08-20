@@ -8,6 +8,7 @@
 #include "../include/pirate/constants.hpp"     // cuda_max_static_shmem_bytes
 
 #include <mutex>
+#include <cstring>   // memcpy()
 #include <sstream>
 #include <iomanip>
 #include <unordered_map>
@@ -127,7 +128,13 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     xassert_eq(pf_params.beams_per_batch, dd_params.beams_per_batch);
     xassert_eq(pf_params.total_beams, dd_params.total_beams);
     xassert_eq(pf_params.nt_in, dd_params.ntime);
-    xassert_eq(pf_params.ndm_out, pow2(dd_params.dd_rank + dd_params.amb_rank - fs.pf_rank));
+
+    // One output DM per warp of the second dedispersion stage, hence 'rank1' here rather
+    // than fs.pf_rank. If pf_rank < rank1, the extra DM bits are folded into the
+    // peak-finder's multiplet index and max-reduced away. See CoalescedDdKernel2.hpp.
+    long rank1 = dd_params.dd_rank - (dd_params.dd_rank / 2);
+    xassert_le(fs.pf_rank, rank1);
+    xassert_eq(pf_params.ndm_out, pow2(dd_params.dd_rank + dd_params.amb_rank - rank1));
 
     // The initialization logic below is mostly cut-and-paste from either the
     // PeakFindingKernel or GpuDedispersionKernel constructor.
@@ -296,6 +303,44 @@ void CoalescedDdKernel2::launch(
 }
 
 
+// Helper for CoalescedDdKernel2::test_random(). Reindexes the reference dedisperser's
+// subband array into the layout that the kernel's peak-finding half sees:
+//
+//    dst[b, dm_out, (m << xdm_rank) | e, t] = src[b, (dm_out << xdm_rank) | e, m, t]
+//
+// i.e. the low 'xdm_rank' bits of the DM index become the low bits of the multiplet index.
+// Both arrays are fully contiguous, so each (dm_out, m, e) is one memcpy along the time axis.
+// (See cuda_generator/Dedisperser.emit_subband_extraction() for where the reindexing comes
+// from, and cuda_generator/CoalescedDdKernel2.py for why the peak-finder is happy with it.)
+static void _gather_m_ext(Array<float> &dst, const Array<float> &src, long xdm_rank)
+{
+    xassert_ge(xdm_rank, 1);
+    xassert_eq(src.ndim, 4);
+
+    long nbeams = src.shape[0];
+    long E = pow2(xdm_rank);
+    long ndm_out = xdiv(src.shape[1], E);
+    long M = src.shape[2];
+    long nt = src.shape[3];
+
+    xassert_shape_eq(dst, ({ nbeams, ndm_out, M*E, nt }));
+    xassert(src.is_fully_contiguous());
+    xassert(dst.is_fully_contiguous());
+
+    for (long b = 0; b < nbeams; b++) {
+        for (long d = 0; d < ndm_out; d++) {
+            for (long m = 0; m < M; m++) {
+                for (long e = 0; e < E; e++) {
+                    const float *p = src.data + ((((b*ndm_out + d)*E + e)*M) + m) * nt;
+                    float *q = dst.data + ((((b*ndm_out + d)*M + m)*E) + e) * nt;
+                    memcpy(q, p, nt * sizeof(float));
+                }
+            }
+        }
+    }
+}
+
+
 // Static member function: runs one randomized test iteration.
 void CoalescedDdKernel2::test_random()
 {
@@ -307,6 +352,11 @@ void CoalescedDdKernel2::test_random()
     long dd_rank = key.dd_rank;
     long Tinner = key.Tinner;
 
+    // The kernel's second-stage rank, and the number of "extra DM" bits it emits per warp.
+    // (See cuda_generator/Dedisperser.emit_subband_extraction().)
+    long rank1 = dd_rank - (dd_rank / 2);
+    long xdm_rank = rank1 - pf_rank;
+
     long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : ((32 * simd_width) << rand_int(0,3));
     long nt_in_divisor = max(32*simd_width, nt_in_per_wt);
 
@@ -317,7 +367,7 @@ void CoalescedDdKernel2::test_random()
     long num_batches = v[3];
     long total_beams = beams_per_batch * num_batches;
     long amb_rank = min(8L, long(log2(v[4] + 0.5)));
-    long lg_ndm_out = amb_rank + dd_rank - pf_rank;
+    long lg_ndm_out = amb_rank + dd_rank - rank1;   // one output DM per warp
     long lg_ndm_wt = rand_int(0, lg_ndm_out+1);
     bool is_downsampled_tree = rand_bool();
 
@@ -333,7 +383,7 @@ void CoalescedDdKernel2::test_random()
     //
     // *** YOU MUST ALSO UNCOMMENT THE NEXT TWO LINES ***
     // total_beams = beams_per_batch * num_batches;
-    // lg_ndm_out = amb_rank + dd_rank - pf_rank;
+    // lg_ndm_out = amb_rank + dd_rank - rank1;
 
     DedispersionKernelParams dd_params;
     dd_params.dtype = dtype;
@@ -375,11 +425,23 @@ void CoalescedDdKernel2::test_random()
     cdd2_kernel.allocate(allocator);
 
     ReferenceDedispersionKernel ref_dd_kernel(dd_params, pf_params.subband_counts);
-    ReferencePeakFindingKernel ref_pf_kernel(pf_params);
 
-    FrequencySubbands &fs = cdd2_kernel.fs;
+    // The reference peak-finder is a peak-finder-layer object, so it gets the same subband
+    // counts as the GPU kernel's peak-finding half: 'xdm_rank' zeros prepended to the compact
+    // counts. That FrequencySubbands has the same N and the same per-subband multiplet runs,
+    // but 2^xdm_rank times as many multiplets, indexed by m_ext = (m << xdm_rank) | e. (It is
+    // NOT the same band set -- see cuda_generator/CoalescedDdKernel2.py -- but the peak-finder
+    // never uses the band geometry.) The two kernels are otherwise identically parameterized.
+    PeakFindingKernelParams ref_pf_params = pf_params;
+    ref_pf_params.subband_counts.insert(ref_pf_params.subband_counts.begin(), xdm_rank, 0);
+    ReferencePeakFindingKernel ref_pf_kernel(ref_pf_params);
+
+    FrequencySubbands &fs = cdd2_kernel.fs;             // compact
+    const FrequencySubbands &fs_ext = ref_pf_kernel.fs; // extended (multiplet index is m_ext)
     GpuPfWeightLayout &wl = cdd2_kernel.pf_weight_layout;
     xassert(fs.pf_rank == pf_rank);
+    xassert_eq(fs_ext.M, pow2(xdm_rank) * fs.M);
+    xassert_eq(fs_ext.N, fs.N);
 
     // Print this monstrosity.
     cout << "CoalescedDdKernel2::test()\n"
@@ -387,6 +449,7 @@ void CoalescedDdKernel2::test_random()
          << "    dd_rank = " << dd_params.dd_rank << "\n"
          << "    amb_rank = " << dd_params.amb_rank << "\n"
          << "    pf_rank = " << pf_rank << "\n"
+         << "    xdm_rank = " << xdm_rank << "\n"
          << "    is_downsampled_tree = " << is_downsampled_tree << "\n"
          << "    subbands = " << ksgpu::tuple_str(key.subband_counts) << "\n"
          << "    Wmax = " << key.Wmax << "\n"
@@ -394,6 +457,7 @@ void CoalescedDdKernel2::test_random()
          << "    Dout = " << key.Dout << "\n"
          << "    Tinner = " << key.Tinner << "\n"
          << "    M = " << fs.M << "\n"
+         << "    M_ext = " << fs_ext.M << "\n"
          << "    N = " << fs.N << "\n"
          << "    num_profiles = " << ref_pf_kernel.nprofiles << "\n"
          << "    beams_per_batch = " << beams_per_batch << "\n"
@@ -427,31 +491,41 @@ void CoalescedDdKernel2::test_random()
     long T = nt_in_per_chunk;
     long D = pow2(dd_params.dd_rank);
     long M = fs.M;
-    long Dout = pow2(lg_ndm_out);
+    long ndm_out = pow2(lg_ndm_out);      // DM axis of out_max/out_argmax (one DM per warp)
+    long Dpf = ndm_out << xdm_rank;       // DM axis of the reference dedisperser's 'sb_out'
     long Tout = pf_params.nt_out;
 
-    Array<float> dd_cpu({B,A,D,T}, af_uhost);      // 'dd_out' for ref_dd_kernel
-    Array<float> sb_cpu({B,Dout,M,T}, af_uhost);   // 'sb_out' for ref_pf_kernel, input for ref_pf_kernel
-    xassert(Dout == ref_dd_kernel.Dpf);
+    Array<float> dd_cpu({B,A,D,T}, af_uhost);     // 'dd_out' for ref_dd_kernel
+    Array<float> sb_cpu({B,Dpf,M,T}, af_uhost);   // 'sb_out' from ref_dd_kernel
+    xassert(Dpf == ref_dd_kernel.Dpf);
 
-    Array<float> max_cpu({B,Dout,Tout}, af_uhost | af_zero);
-    Array<uint> argmax_cpu({B,Dout,Tout}, af_uhost | af_zero);
+    // Input to ref_pf_kernel: the same data as 'sb_cpu', reindexed by _gather_m_ext().
+    // The two arrays are the same object when xdm_rank == 0, and the gather is skipped.
+    Array<float> pf_in_cpu = (xdm_rank > 0)
+        ? Array<float> ({B, ndm_out, fs_ext.M, T}, af_uhost)
+        : sb_cpu;
 
-    Array<void> max_gpu(dtype, {B,Dout,Tout}, af_gpu | af_zero);
-    Array<uint> argmax_gpu({B,Dout,Tout}, af_gpu | af_zero);
+    Array<float> max_cpu({B,ndm_out,Tout}, af_uhost | af_zero);
+    Array<uint> argmax_cpu({B,ndm_out,Tout}, af_uhost | af_zero);
+
+    Array<void> max_gpu(dtype, {B,ndm_out,Tout}, af_gpu | af_zero);
+    Array<uint> argmax_gpu({B,ndm_out,Tout}, af_gpu | af_zero);
 
     Array<float> wt_cpu({B, pf_params.ndm_wt, pf_params.nt_wt, ref_pf_kernel.nprofiles, fs.N}, af_rhost | af_zero);
     
     // Tmp buffer for comparing "argmax" arrays, see below.
-    Array<float> max_x({B,Dout,Tout}, af_uhost | af_zero);
+    Array<float> max_x({B,ndm_out,Tout}, af_uhost | af_zero);
 
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         for (long ibatch = 0; ibatch < num_batches; ibatch++) {                
             ref_dd_kernel.apply(in_cpu, dd_cpu, sb_cpu, ichunk, ibatch);
             pf_params.fill_host_weights(wt_cpu, Array<double>(), /*randomize=*/true);
 
+            if (xdm_rank > 0)
+                _gather_m_ext(pf_in_cpu, sb_cpu, xdm_rank);
+
             Array<double> var_cpu;   // empty -> out_var feature disabled
-            ref_pf_kernel.apply(max_cpu, argmax_cpu, var_cpu, sb_cpu, wt_cpu, ibatch);
+            ref_pf_kernel.apply(max_cpu, argmax_cpu, var_cpu, pf_in_cpu, wt_cpu, ibatch);
 
             // CPU kernel done! Now run the GPU kernel.
             Array<void> wt_gpu = wl.to_gpu(wt_cpu);

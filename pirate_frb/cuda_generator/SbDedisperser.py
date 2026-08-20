@@ -20,9 +20,9 @@ class SbDedisperser:
         The kernel is the second dedispersion stage, writing the shape (ndm_out, M, ntime)
         subband array straight to global memory. It is float32-only, and assumes
         apply_input_residual_lags == input_is_ringbuf == True and nspec == 1, i.e. the same
-        constraints as CoalescedDdKernel2. It also assumes (fs.pf_rank == dd.rank1), which
-        is what makes the per-subband time lags free -- see the long docstring in
-        Dedisperser.emit_subband_extraction().
+        constraints as CoalescedDdKernel2. It requires (fs.pf_rank <= dd.rank1), and each
+        warp writes 2^(dd.rank1 - fs.pf_rank) consecutive output DMs -- see the long
+        docstring in Dedisperser.emit_subband_extraction().
         """
 
         assert isinstance(dd_rank, int)
@@ -44,13 +44,15 @@ class SbDedisperser:
             nspec = 1
         )
 
-        assert self.dd.two_stage                                # equivalent to (dd_rank >= 3)
-        assert frequency_subbands.pf_rank == self.dd.rank1      # see docstring above
+        assert self.dd.two_stage   # equivalent to (dd_rank >= 3)
 
         # From Dedisperser
         self.warps_per_threadblock = self.dd.warps_per_threadblock
         self.shmem_nbytes = self.dd.shmem_nbytes
         self.nt_per_segment = self.dd.nt_per_segment
+
+        # Asserts (0 <= fs.pf_rank <= dd.rank1). See docstring above.
+        self.xdm_rank = self.dd.xdm_rank(frequency_subbands)
 
         self.M = frequency_subbands.M
 
@@ -116,11 +118,12 @@ class SbDedisperser:
         self.dd._apply_input_residual_lags(k)
 
         # Dedisperser.emit_subband_extraction() emits the entire second stage, and yields one
-        # (register name, multiplet index) pair per frequency subband multiplet. Note that it
-        # must be fully consumed -- see its docstring, and the 'sbx_complete' assert below.
+        # (register name, multiplet index, "extra DM" index) triple per element of the shape
+        # (2^xdm_rank, M) output subarray owned by this warp. Note that it must be fully
+        # consumed -- see its docstring, and the 'sbx_complete' assert below.
 
-        for rname, m in self.dd.emit_subband_extraction(k, self.frequency_subbands):
-            self._emit_store(k, rname, m)
+        for rname, m, e in self.dd.emit_subband_extraction(k, self.frequency_subbands):
+            self._emit_store(k, rname, m, e)
 
         assert self.dd.sbx_complete
 
@@ -145,9 +148,19 @@ class SbDedisperser:
     def _apply_sb_out_offsets(self, k):
         """Emit per-block, per-warp and per-lane offsets for the 'sb_out' pointer."""
 
+        K = self.xdm_rank
+        ndm_out_expr = f'(blockDim.y * gridDim.x) << {K}' if (K > 0) else 'blockDim.y * gridDim.x'
+
         k.emit(f'// SbDedisperser._apply_sb_out_offsets() starts here.')
         k.emit(f"// 'sb_out' is a fully contiguous shape (beams, ndm_out, M, ntime) array, where")
-        k.emit(f'//   ndm_out = 2^(amb_rank + {self.dd.rank0}) = blockDim.y * gridDim.x.')
+        k.emit(f'//   ndm_out = 2^(amb_rank + {self.dd.rank0 + K}) = {ndm_out_expr}.')
+
+        if K > 0:
+            k.emit(f'//')
+            k.emit(f'// Note that (blockDim.y * gridDim.x) is the number of WARPS, and each warp writes')
+            k.emit(f"// {2**K} consecutive output DMs: the low {K} bits of the DM index are the \"extra DM\"")
+            k.emit(f"// 'e' (see Dedisperser.emit_subband_extraction).")
+
         k.emit(f'//')
         k.emit(f'// This is tricky because the block/warp indices correspond to bit-reversed DMs,')
         k.emit(f'// but the output array is not bit-reversed. (Same logic as')
@@ -165,26 +178,31 @@ class SbDedisperser:
         k.emit(f'long bd_out = (long(blockIdx.y) * ndm_out) + dm_out;       // (beam,dm), beam = blockIdx.y')
         k.emit()
 
+        bd_out_expr = f'(bd_out << {K})' if (K > 0) else 'bd_out'
+        after_shape = f'({2**K}, M, ntime), strides (M*ntime, ntime, 1)' if (K > 0) else '(M, ntime), strides (ntime, 1)'
+        elt_ix = f'(e*M + m)' if (K > 0) else 'm'
+        m_max = f'{2**K} * M' if (K > 0) else 'M'
+
         k.emit(f'// Apply per-block + per-warp offset:')
         k.emit(f'//   before: shape (beams, ndm_out, M, ntime), contiguous')
-        k.emit(f'//   after:  shape (M, ntime), strides (ntime, 1)')
-        k.emit(f'sb_out += bd_out * (long(M) * ntime);')
+        k.emit(f'//   after:  shape {after_shape}')
+        k.emit(f'sb_out += {bd_out_expr} * (long(M) * ntime);')
         k.emit()
 
         k.emit(f'// Apply per-lane offset. Afterwards, multiplet m at time (itime + laneId) is at')
-        k.emit(f'// sb_out[m * m_stride], where "itime" is folded in by the "sb_out += {self.nt_per_segment}"')
+        k.emit(f'// sb_out[{elt_ix} * m_stride], where "itime" is folded in by the "sb_out += {self.nt_per_segment}"')
         k.emit(f'// at the bottom of the time loop.')
         k.emit(f'sb_out += threadIdx.x;   // laneId')
         k.emit()
 
-        k.emit(f'// Caller (GpuSbDedispersionKernel constructor) guarantees (M * ntime) < 2^31,')
+        k.emit(f'// Caller (GpuSbDedispersionKernel constructor) guarantees ({m_max} * ntime) < 2^31,')
         k.emit(f'// so 32-bit index arithmetic is safe here.')
         k.emit(f'int m_stride = ntime;')
         k.emit(f'// SbDedisperser._apply_sb_out_offsets() ends here.')
         k.emit()
 
 
-    def _emit_store(self, k, rname, m):
+    def _emit_store(self, k, rname, m, e):
         """Consumer of Dedisperser.emit_subband_extraction(): store one multiplet to global memory.
 
         Each store is a 32-bit instruction covering exactly one 128-byte cache line per warp.
@@ -199,7 +217,11 @@ class SbDedisperser:
         d = fs.m_to_nd[m][1]                 # fine-grained dm
         flo, fhi = fs.n_to_frange[n]         # coarse-freq range of the subband
 
-        k.emit(f'sb_out[{m} * m_stride] = {rname};   // m={m}: subband n={n} (coarse freqs [{flo},{fhi})), fine dm={d}')
+        # The (e,m) pair indexes a shape (2^xdm_rank, M) subarray -- see _apply_sb_out_offsets().
+        ix = e * self.M + m
+        estr = f', e={e}' if (self.xdm_rank > 0) else ''
+
+        k.emit(f'sb_out[{ix} * m_stride] = {rname};   // m={m}{estr}: subband n={n} (coarse freqs [{flo},{fhi})), fine dm={d}')
 
 
     def emit_registration(self, k):

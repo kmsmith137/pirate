@@ -22,6 +22,39 @@ namespace pirate {
 struct DedispersionTree;   // defined in DedispersionTree.hpp
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// CoalescedDdKernel2: stage-2 tree dedispersion with peak-finding fused into it, so that the
+// shape (ndm_out, M, ntime) subband array is never materialized in GPU memory. (Contrast
+// GpuSbDedispersionKernel, which does materialize it -- see DedispersionKernel.hpp.)
+//
+// Two constraints relate the peak-finding parameters to the dedispersion parameters. Write
+// rank1 = dd_rank - (dd_rank/2) for the dedisperser's second-stage rank.
+//
+//   - fs.pf_rank <= rank1 (see DedispersionKernel.hpp for why).
+//   - pf_params.ndm_out == 2^(dd_rank + amb_rank - rank1). Note 'rank1' and not 'pf_rank':
+//     the output DM axis is one DM per warp of the second stage, whatever the subbands are.
+//
+// If pf_rank < rank1, each warp computes 2^(rank1 - pf_rank) output DMs; call that index 'e'.
+// They do NOT get their own rows of out_max/out_argmax. Instead 'e' is folded into the
+// peak-finder's multiplet index, as
+//
+//    m_ext = (m << (rank1 - pf_rank)) | e,     0 <= m_ext < 2^(rank1-pf_rank) * fs.M
+//
+// so the peak-finder max-reduces over 'e' along with (multiplet, profile, time). That is
+// legitimate because the extraction leaves all 2^(rank1-pf_rank) trials referenced to the
+// same output time -- see cuda_generator/Dedisperser.emit_subband_extraction(). Two
+// consequences for callers:
+//
+//   - The m-field of an 'out_argmax' token is m_ext, not m. DedispersionTree::decode_argmax()
+//     assumes m_ext == m, so it must be generalized before any tree uses pf_rank < rank1.
+//   - The peak-finding weights are unaffected: they are indexed by (dm_out, profile, subband),
+//     and 'e' is below the weights' DM granularity by construction.
+//
+// When pf_rank == rank1 -- currently the only case any DedispersionTree asks for -- 'e' is
+// empty and m_ext == m.
+
+
 struct CoalescedDdKernel2
 {
     CoalescedDdKernel2(
