@@ -19,6 +19,12 @@ extern/
 prompts/
 __pycache__/
 
+# NFS "silly rename" files: when a file is deleted or replaced while some process
+# still holds it open, the NFS client renames it to .nfsXXXXXXXX rather than
+# unlinking it, and it lingers until that process exits. Untracked and invisible
+# to 'ls', so it is easy to sweep one into a commit with 'git add -A'.
+.nfs*
+
 # GRPC
 grpc/*.pb.h
 grpc/*.pb.cc
