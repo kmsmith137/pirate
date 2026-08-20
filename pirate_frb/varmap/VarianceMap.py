@@ -2447,10 +2447,15 @@ class VarianceMap:
         inflation, D_inflated = None, None
         if inflate:
             inflation = float(max_r * (1.0 + 1.0e-12)) if (max_r > 1.0) else 1.0
-            # The inflated map dominates ref by construction, so it is admissible in the same
-            # sense the '.vmap' field is: with ref taken as the stand-in for A_true.
-            infl = self.inflated(inflation).replace(is_admissible=True)
-            D_inflated = infl.get_distance() if np.isfinite(inflation) else np.inf
+            if np.isfinite(inflation):
+                # The inflated map dominates ref by construction, so it is admissible in the
+                # same sense the '.vmap' field is: with ref taken as the stand-in for A_true.
+                D_inflated = self.inflated(inflation).replace(is_admissible=True).get_distance()
+            else:
+                # max_r = inf: a zero (or negative) self where ref is positive, which no
+                # rescaling repairs. Must not build the inflated map -- inf * 0 is nan, and
+                # the array would be discarded anyway.
+                D_inflated = np.inf
 
         return AdmissibilityResult(
             admissible=admissible, max_r=max_r, argmax_r=argmax_r, nviol=nviol,

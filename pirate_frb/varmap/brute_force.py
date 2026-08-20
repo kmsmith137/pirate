@@ -47,7 +47,8 @@ from .VarianceMultiMap import VarianceMultiMap
 
 def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
                               guard_chunk=True, progress=False, channels=None,
-                              scratch_dir=None, provenance=None):
+                              scratch_dir=None, provenance=None,
+                              detrender_dtype=np.float64):
     """Compute the variance map of every tree in 'config' by brute force, and return a
     VarianceMultiMap.
 
@@ -94,10 +95,15 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
     provenance : dict, optional
         Merged into the multimap's provenance, after the sweep's own record. For the caller's
         bookkeeping -- the CLI puts its config overrides here.
+    detrender_dtype : dtype
+        Working precision of the NUMPY detrender, i.e. of the CPU sweep. Ignored by the GPU
+        sweep, whose Detrender2d kernel is float32. Set it to float32 to compare the two
+        devices at matched detrender precision, which is what makes such a comparison a test
+        of the DRIVER rather than of the detrender.
     """
 
     t_start = time.time()
-    geom = _SweepGeometry(config, detrender)
+    geom = _SweepGeometry(config, detrender, detrender_dtype=detrender_dtype)
 
     Ls = [None]*geom.ntrees if (L is None) else (
         [int(L)]*geom.ntrees if np.isscalar(L)

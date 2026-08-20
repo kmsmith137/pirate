@@ -153,7 +153,22 @@ def _obvious_beta(m, L):
     return (dm_key * m.nsubbands + n) * m.nprofiles + p
 
 
-def _random_map(config, itree, rng, *, nzero=0, dtype=np.float64):
+def _slow_avar_eval():
+    """`slow_avar.varmap_eval` for the two temporary cross-checks, or None.
+
+    Returns None when VARMAP_NO_SLOW_AVAR is set in the environment, which is how the suite is
+    run to confirm it still stands on its own once slow_avar is deleted -- the cross-checks
+    below are the only thing in this file that reads the module being superseded, and the
+    answer wanted checking BEFORE the deletion rather than after.
+    """
+    import os
+    if os.environ.get('VARMAP_NO_SLOW_AVAR'):
+        return None
+    from ..slow_avar import varmap_eval as ve
+    return ve
+
+
+def _random_map(config, itree, rng, *, nzero=0, dtype=np.float64, **kwargs):
     """A fine VarianceMap with a random nonnegative matrix, standing in for A_true.
 
     'nzero' rows are set to zero, so that the YTRUE_FLOOR path (outputs with no variance) is
@@ -166,7 +181,8 @@ def _random_map(config, itree, rng, *, nzero=0, dtype=np.float64):
     A = rng.uniform(0.1, 2.0, size=(nalpha, config.get_total_nfreq())).astype(dtype)
     if nzero > 0:
         A[rng.choice(nalpha, size=nzero, replace=False)] = 0.0
-    return VarianceMap.from_dense(config, itree, A, y_true='row_sums', is_admissible=True)
+    return VarianceMap.from_dense(config, itree, A, y_true='row_sums', is_admissible=True,
+                                  **kwargs)
 
 
 ####################################   tests   ####################################
@@ -297,7 +313,7 @@ def test_coarse_grain(r=8, subband_counts=(2,2,1), num_early_triggers=1):
     production scale the dense map is never formed.
     """
 
-    from ..slow_avar import varmap_eval as ve      # temporary cross-check; see module docstring
+    ve = _slow_avar_eval()      # temporary cross-check; see module docstring
 
     config = _make_test_config(r, list(subband_counts),
                                num_early_triggers=num_early_triggers)
@@ -321,9 +337,11 @@ def test_coarse_grain(r=8, subband_counts=(2,2,1), num_early_triggers=1):
 
             # ... and against the old streaming reducer, which is what the published numbers
             # were computed from.
-            old_Abar, old_y = ve.reduce_map(np.asarray(m.A, dtype=np.float64), labels, nbeta)
-            assert np.array_equal(c.A, old_Abar), (itree, L)
-            assert np.array_equal(c.y_true, old_y), (itree, L)
+            if ve is not None:
+                old_Abar, old_y = ve.reduce_map(np.asarray(m.A, dtype=np.float64), labels,
+                                                nbeta)
+                assert np.array_equal(c.A, old_Abar), (itree, L)
+                assert np.array_equal(c.y_true, old_y), (itree, L)
 
             # y_true is the TRUE row sums at FINE granularity, carried unchanged.
             assert np.array_equal(c.y_true, m.y_true)
@@ -353,7 +371,7 @@ def test_coarse_grain(r=8, subband_counts=(2,2,1), num_early_triggers=1):
 def test_distance(r=8, subband_counts=(2,2,1)):
     """get_distance() against slow_avar.varmap_eval, in both the fine and the coarse case."""
 
-    from ..slow_avar import varmap_eval as ve      # temporary cross-check; see module docstring
+    ve = _slow_avar_eval()      # temporary cross-check; see module docstring
 
     config = _make_test_config(r, list(subband_counts))
     rng = np.random.default_rng(4)
@@ -369,8 +387,9 @@ def test_distance(r=8, subband_counts=(2,2,1)):
         approx = VarianceMap.from_dense(config, 0, A_approx, y_true=true.y_true,
                                         is_admissible=True)
         D = approx.get_distance()
-        D_old = ve.evaluate(A_true, ve.DenseApprox(A_approx), inflate=False)['D']
-        assert abs(D - D_old) <= 1.0e-12 * max(1.0, abs(D_old)), (D, D_old)
+        if ve is not None:
+            D_old = ve.evaluate(A_true, ve.DenseApprox(A_approx), inflate=False)['D']
+            assert abs(D - D_old) <= 1.0e-12 * max(1.0, abs(D_old)), (D, D_old)
 
         # The summand of D, materialized. Rows with no variance come back as nan, not 0: a 0
         # would understate the mean, and this is what pins that convention.
@@ -390,10 +409,11 @@ def test_distance(r=8, subband_counts=(2,2,1)):
         Dc = capprox.get_distance()
 
         labels = _obvious_beta(true, L)
-        Dc_old = ve.evaluate_reduced(np.asarray(ref.A), true.y_true, labels,
-                                     ve.DenseApprox(np.asarray(capprox.A)),
-                                     inflate=False)['D']
-        assert abs(Dc - Dc_old) <= 1.0e-12 * max(1.0, abs(Dc_old)), (Dc, Dc_old)
+        if ve is not None:
+            Dc_old = ve.evaluate_reduced(np.asarray(ref.A), true.y_true, labels,
+                                         ve.DenseApprox(np.asarray(capprox.A)),
+                                         inflate=False)['D']
+            assert abs(Dc - Dc_old) <= 1.0e-12 * max(1.0, abs(Dc_old)), (Dc, Dc_old)
 
         # Scoring the coarse map and scoring its lift are the same computation, and D is what
         # makes that true: y_approx is constant across a group.
@@ -499,6 +519,154 @@ def test_admissibility(r=8, subband_counts=(2,1)):
         assert 'coarse-graining' in str(e) or 'shape mismatch' in str(e)
 
     atomic_print(f'    test_admissibility(r={r}, subbands={list(subband_counts)}): pass')
+
+
+def test_distance_oracles(r=7, subband_counts=(2,1)):
+    """D and max_r against ORACLES WRITTEN OUT HERE, not against another varmap code path.
+
+    Everywhere else in this file D is checked for self-consistency: get_distance() against
+    get_row_distances(), the coarse map against its lift, one block size against another.
+    Those share row_sums() and distance.f, so none of them would notice if f itself, or the
+    ratio it is handed, were wrong. The one check that WOULD is a comparison against
+    slow_avar.varmap_eval -- and that is temporary (see the module docstring).
+
+    So this test writes the oracle out by hand. Each case is chosen because its answer is
+    known in closed form, or because it pins an index convention that a uniform scaling
+    cannot (see "A UNIFORM SCALING IS WORTHLESS" above).
+    """
+
+    config = _make_test_config(r, list(subband_counts))
+    rng = np.random.default_rng(17)
+    true = _random_map(config, 0, rng)
+    A = np.asarray(true.A, dtype=np.float64)
+
+    # --- 1. A UNIFORM overestimate by c has D = f(c) in closed form. Every row's ratio is
+    # exactly c, so this is the only case where D can be written down without summing
+    # anything, and it is the one anchor on the VALUE of f.
+    for c in (1.0, 1.25, 2.0, 7.5):
+        approx = true.replace(A=A*c, is_admissible=True, history_record=dict(step='test'))
+        D = approx.get_distance()
+        want = (c - 1.0) / (1.0 + c/10.0)
+        assert abs(D - want) <= 1.0e-12 * max(1.0, abs(want)), (c, D, want)
+
+    # ... and c = 1 is the exact-representation case: D is exactly zero, not nearly.
+    exact = true.replace(A=A.copy(), is_admissible=True, history_record=dict(step='test'))
+    assert exact.get_distance() == 0.0, exact.get_distance()
+    assert exact.measure_admissibility(true).max_r == 1.0
+
+    # --- 2. max_r and argmax_r against a dense elementwise reference, with a ROW-DEPENDENT
+    # perturbation. A uniform scale factor would pass this with the row index convention
+    # broken, so every row gets its own.
+    scale = rng.uniform(0.7, 1.9, size=(true.nalpha, 1))
+    cand = true.replace(A=A*scale, is_admissible=False, history_record=dict(step='test'))
+    res = cand.measure_admissibility(true)
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ratio = np.where(A > 0.0, A / np.where(A*scale > 0.0, A*scale, 1.0), 0.0)
+    want_max = float(ratio.max())
+    i = int(np.argmax(ratio.max(axis=1)))
+    assert abs(res.max_r - want_max) <= 1.0e-12 * want_max, (res.max_r, want_max)
+    assert res.argmax_r[0] == i, (res.argmax_r, i)
+    assert res.admissible == bool(np.all(A*scale >= A))
+
+    # --- 3. get_row_distances() must point at the row that PAYS. Its mean is checked
+    # elsewhere, and a mean is permutation-invariant: a per-row array with the right values
+    # attached to the wrong rows would pass that and fail this.
+    planted = A * 1.05
+    planted[42] = A[42] * 4.0
+    pm = true.replace(A=planted, is_admissible=True, history_record=dict(step='test'))
+    rd = pm.get_row_distances()
+    assert int(np.nanargmax(rd)) == 42, int(np.nanargmax(rd))
+    assert abs(rd[42] - (4.0 - 1.0)/(1.0 + 4.0/10.0)) <= 1.0e-12
+
+    # --- 4. A map whose outputs ALL have zero variance cannot be scored, and says so rather
+    # than returning 0 or nan. This is the tripwire for a broken sweep or config.
+    dead = np.full((true.nalpha, true.nfreq), 1.0e-16)
+    dm = VarianceMap.from_dense(config, 0, dead, y_true='row_sums', is_admissible=True)
+    assert dm.nscored == 0
+    try:
+        dm.get_distance()
+        raise AssertionError('get_distance() scored a map with no scorable output')
+    except RuntimeError as e:
+        assert 'could be scored' in str(e), str(e)
+
+    atomic_print(f'    test_distance_oracles(r={r}, subbands={list(subband_counts)}): pass')
+
+
+def test_inflation(r=7, subband_counts=(2,1)):
+    """The inflation path: what the factor IS, that it WORKS, and that it is skipped when
+    it is not needed.
+
+    measure_admissibility(inflate=True) rescales by max_r*(1+1e-12) and then ASSERTS the
+    result is admissible rather than re-measuring it. That is a deliberate shortcut -- the
+    rescale is exact by construction -- but it makes 'isfinite(D_inflated)' vacuous as a
+    check, so the interesting assertion is the one made here: feed the inflated map BACK
+    through the elementwise scan and require it really does dominate. The 1e-12 fudge exists
+    precisely because scaling by exactly max_r lands on the boundary in floating point, and
+    nothing else in this file would notice if it were deleted.
+    """
+
+    config = _make_test_config(r, list(subband_counts))
+    rng = np.random.default_rng(23)
+    true = _random_map(config, 0, rng, nzero=2)
+    ref = true.coarse_grain(true.pf_rank + 1)
+    base = ref.inflated(1.5)
+    D0 = base.get_distance()
+
+    # Many random planted underestimates rather than one hand-placed element: the fudge
+    # factor's job is at the rounding boundary, and one fixed case samples it once.
+    for trial in range(10):
+        A = np.array(base.A)
+        i = int(rng.integers(ref.nbeta))
+        j = int(rng.integers(ref.nfreq))
+        A[i, j] = ref.A[i, j] * float(rng.uniform(0.9, 0.999))
+        bad = base.replace(A=A, is_admissible=False, history_record=dict(step='test'))
+
+        res = bad.measure_admissibility(ref, inflate=True)
+        assert not res.admissible
+        # The factor IS max_r, up to the fudge. Nothing else pins these two together.
+        assert abs(res.inflation / res.max_r - 1.0) < 1.0e-9, (res.inflation, res.max_r)
+
+        # THE CHECK THAT MATTERS: re-measure, do not trust the flag.
+        again = bad.inflated(res.inflation).measure_admissibility(ref)
+        assert again.admissible, (trial, res.max_r, again.max_r)
+        assert again.max_r <= 1.0, (trial, again.max_r)
+
+        # D_inflated brackets D0 from above, and approaches it as max_r -> 1. The upper
+        # bound is what makes max_r usable as a triage number: max_r = 1.02 means "nearly
+        # usable" only if D cannot have moved much.
+        assert res.D_inflated >= D0 - 1.0e-12, (res.D_inflated, D0)
+        assert res.D_inflated <= D0 + 2.0*(res.max_r - 1.0), (res.D_inflated, D0, res.max_r)
+
+    # An ALREADY-admissible map is not touched: the factor is exactly 1 and D is unchanged.
+    ok = base.measure_admissibility(ref, inflate=True)
+    assert ok.admissible and (ok.inflation == 1.0), ok.inflation
+    assert ok.D_inflated == D0, (ok.D_inflated, D0)
+
+    # An underestimate that NO rescaling repairs (a zero where ref is positive) reports an
+    # infinite factor, and D_inflated follows it rather than being computed from inf*A.
+    z = np.array(base.A)
+    z[2, 5] = 0.0
+    zm = base.replace(A=z, is_admissible=False, history_record=dict(step='test'))
+    rz = zm.measure_admissibility(ref, inflate=True)
+    assert np.isinf(rz.max_r) and np.isinf(rz.inflation) and np.isinf(rz.D_inflated)
+
+    # --- The coarse/fine index correspondence, with a planted violation rather than a
+    # uniform scale. rc.max_r == rf.max_r in test_admissibility is measured on a uniform
+    # 1.5x inflation, where every element has the same ratio -- so it holds under ANY
+    # permutation of the rows and says nothing about the index convention. This does.
+    A = np.array(base.A)
+    A[11, 13] = ref.A[11, 13] * 0.8
+    bad = base.replace(A=A, is_admissible=False, history_record=dict(step='test'))
+    rc = bad.measure_admissibility(ref, inflate=True)
+    rf = bad.lift().measure_admissibility(true, inflate=True)
+    labels = _obvious_beta(true, true.pf_rank + 1)
+    assert rc.argmax_r[0] == labels[rf.argmax_r[0]], (rc.argmax_r, rf.argmax_r)
+    assert rc.argmax_r[1] == rf.argmax_r[1], (rc.argmax_r, rf.argmax_r)
+    assert rc.max_r == rf.max_r, (rc.max_r, rf.max_r)
+    assert abs(rc.D_inflated - rf.D_inflated) <= 1.0e-9 * abs(rf.D_inflated)
+
+    atomic_print(f'    test_inflation(r={r}, subbands={list(subband_counts)}): pass')
 
 
 def test_estimate_distance(r=8, subband_counts=(2,2,1)):
@@ -1088,6 +1256,57 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_tri
 
     atomic_print(f'    test_asdf_io(r={r}, ntrees={ntrees}): {nbytes/2**20:.1f} MiB file,'
                  ' eager + memmapped reads and every reader check exercised')
+
+
+def test_asdf_detrender(r=7, subband_counts=(2,1)):
+    """A Detrender2dParams survives the file round trip, field by field.
+
+    Every map the production CLI writes carries one (a variance map computed with a detrender
+    is meaningless without knowing which detrender), and asdf_io round-trips it through
+    to_yaml_string / from_yaml_string. Nothing else in this file writes a file with a
+    detrender at all, so a detrender that was never plumbed into the writer -- or a yaml
+    round trip that quietly dropped 'knots' -- would be invisible here and would only show
+    up as an unreadable archive.
+    """
+
+    import os
+    import tempfile
+
+    config = _make_test_config(r, list(subband_counts))
+    dparams = _make_test_detrender(config)
+    rng = np.random.default_rng(31)
+    tmp = tempfile.mkdtemp()
+
+    try:
+        path = os.path.join(tmp, 'det.asdf')
+        ntrees = int(config.num_dedispersion_trees)
+        maps = [_random_map(config, i, rng, detrender=dparams) for i in range(ntrees)]
+        VarianceMultiMap(config, maps, detrender=dparams).write_asdf(path)
+
+        for eager in (True, False):
+            if eager:
+                vmm = VarianceMultiMap.from_asdf(path)
+                d = vmm.detrender
+            else:
+                with VarianceMultiMap.open_asdf(path) as vmm:
+                    d = vmm.detrender
+
+            assert d is not None, eager
+            for field in ('nfreq', 'M', 'n_phi', 'n', 'W', 'T'):
+                assert getattr(d, field) == getattr(dparams, field), (eager, field)
+            assert list(d.knots) == list(dparams.knots), eager
+
+        # A file written with no detrender must come back None, not a default-constructed
+        # one -- 'no detrender' and 'some detrender' are different physics.
+        nodet = os.path.join(tmp, 'nodet.asdf')
+        plain = [_random_map(config, i, rng) for i in range(ntrees)]
+        VarianceMultiMap(config, plain).write_asdf(nodet)
+        assert VarianceMultiMap.from_asdf(nodet).detrender is None
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    atomic_print(f'    test_asdf_detrender(r={r}, subbands={list(subband_counts)}): pass')
 
 
 def test_asdf_factored(r=7, subband_counts=(2,1), K=4):
@@ -2109,6 +2328,67 @@ def test_reorthogonalize(r=6, subband_counts=(1, 1), K=6):
                  ' positive scale, and lost by the plain rotation')
 
 
+def test_greedy_bookkeeping(r=6, subband_counts=(1, 1)):
+    """The greedy merger's RUNNING objective against a distance recomputed from scratch.
+
+    _AgglomerativeEnvelope maintains cost[], Dlt[] and the best-merge pointers incrementally,
+    repairing stale entries after every merge. That bookkeeping is intricate and it decides
+    which merges are taken -- but basis(K) is rebuilt from the stored matrix, so a corrupted
+    cost table produces a basis that is merely SUBOPTIMAL, not wrong. Every other test here
+    would still pass.
+
+    So the check is on tree.objective[K], which is the incremental accounting's own answer,
+    against the same quantity computed from (Abar, y, labels) and the replayed merge tree with
+    no incremental state involved. This is what the deleted research self-test did, and it is
+    the only thing that ever validated the merge loop.
+    """
+
+    from .basis import greedy_envelope_tree
+    from .distance import f, YTRUE_FLOOR
+
+    ref, fine, _ = _basis_cell(r, subband_counts)
+
+    # on_shapes=False is the raw-space objective, where y is the fine row sums and the
+    # objective really is D0 of the max-envelope approximation. (The default normalizes the
+    # rows and sets y = 1, which is a different, deliberately scale-free objective.)
+    tree = greedy_envelope_tree(ref, on_shapes=False)
+
+    Abar = np.asarray(ref.A, dtype=np.float64)
+    y = np.asarray(fine.y_true, dtype=np.float64)
+    labels = ref.alpha_to_beta_block(0, fine.nalpha)
+    scored = y >= YTRUE_FLOOR
+    y, labels = y[scored], labels[scored]
+
+    checked = 0
+    for K in sorted(tree.objective):
+        root = tree.roots(K)
+        # The envelope of each surviving cluster, rebuilt from Abar alone.
+        S = np.zeros(tree.K0)
+        for c in np.unique(root):
+            S[c] = Abar[root == c].max(axis=0).sum()
+        want = float(np.mean(f(S[root[labels]] / y)))
+        got = tree.objective[K]
+        assert abs(got - want) <= 1.0e-9 * max(1.0, abs(want)), (K, got, want)
+        checked += 1
+
+    assert checked >= 4, checked
+
+    # At K0 clusters every COARSE row is its own envelope, so the approximation is the coarse
+    # map itself and the objective is the coarse-graining FLOOR at this L -- the best any
+    # coarse-assigned method could reach here, no matter how good the basis. (It is not zero:
+    # zero would be the fine map's own D0, and the max-envelope over each group is strictly
+    # above the fine rows inside it.) That makes it a second, independent handle on the same
+    # number, since get_distance() reaches it by a completely different route.
+    assert abs(tree.objective[tree.K0] - ref.get_distance()) <= 1.0e-12 * ref.get_distance()
+
+    # The frontier is monotone: merging can only ever raise the objective.
+    ks = sorted(tree.objective)
+    vals = [tree.objective[k] for k in ks]
+    assert all(vals[i] >= vals[i+1] - 1.0e-12 for i in range(len(vals)-1)), vals
+
+    atomic_print(f'    test_greedy_bookkeeping(r={r}, subbands={list(subband_counts)}): pass')
+
+
 def test_basis_constructors(r=6, subband_counts=(1, 1), K=4):
     """Every module-level basis constructor, through the one thing they are all for: a Q-step
     against it produces an admissible map."""
@@ -2718,7 +2998,12 @@ def test_sweep_gpu_vs_cpu(r=8, subband_counts=None, num_early_triggers=0, detren
                                num_early_triggers=num_early_triggers)
     dparams = _make_test_detrender(config) if detrender else None
 
-    cpu = compute_variance_multimap(config, detrender=dparams, device='cpu')
+    # The CPU reference is detrended at the GPU's precision, so that both sides run the same
+    # detrender and the bar below measures the DRIVER. Without this the detrender's own float32
+    # penalty -- which test_sweep_detrender_fp32 only bounds AT 1e-4 -- is folded into the same
+    # 1e-4 assertion, and a real driver error could be mistaken for it.
+    cpu = compute_variance_multimap(config, detrender=dparams, device='cpu',
+                                    detrender_dtype=np.float32)
 
     config.beams_per_gpu = config.beams_per_batch = nbeams
     if dparams is not None:
@@ -2837,11 +3122,14 @@ def run_all():
     test_coarse_grain()
     test_distance()
     test_admissibility()
+    test_distance_oracles()
+    test_inflation()
     test_estimate_distance()
     test_check_ref_covers_y_true()
     test_multimap()
     test_dense_float32()
     test_asdf_io()
+    test_asdf_detrender()
     test_factored_algebra()
     test_factored_equivalence()
     test_factored_transformations()
@@ -2859,6 +3147,7 @@ def run_all():
     test_column_algebra()
     test_reorthogonalize()
     test_basis_constructors()
+    test_greedy_bookkeeping()
     test_map_steps()
     test_report()
 
