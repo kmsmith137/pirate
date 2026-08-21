@@ -1542,6 +1542,235 @@ buys before paying for it at production.
 
 \appendix
 
+\section{Variance maps of a config's trees are row-restrictions of one another}
+\label{sec:tree_restrictions}
+
+Label the trees of one {\tt DedispersionConfig} by a pair $(\gamma, e)$: primary-tree index
+$\gamma$ (downsampling factor $2^\gamma$) and early-trigger level $e$. Each tree has its own
+variance map $A^{(\gamma,e)}$, a $(D_{\gamma,e} M_{\gamma,e} P)$-by-$N_{\rm freq}$ matrix. Say
+that $A'$ is a {\bf row-restriction} of $A$ if there is an injection from the rows of $A'$ to
+the rows of $A$ under which corresponding rows are equal as vectors in
+$\mathbb{R}^{N_{\rm freq}}$. We prove:
+\begin{enumerate}
+\item $A^{(\gamma,e)}$ is a row-restriction of $A^{(\gamma,0)}$, for every $\gamma$ and $e$.
+\item In the ``no-detrender'' case (i.e.\ if the linear operator $L$ does not include a
+ {\tt Detrender2d}), $A^{(\gamma,0)}$ is a row-restriction of $A^{(0,0)}$, for every $\gamma$.
+\end{enumerate}
+In both cases the injection is explicit and is given below, which is what makes the result
+usable rather than merely existential.
+
+\medskip
+\par\noindent
+{\bf Scope.} The two propositions need different hypotheses, and it is worth separating them.
+Proposition 1 holds whatever the upstream processing, and in particular for $L$
+exactly as defined in \S\ref{ssec:variance_map_setup}, {\tt Detrender2d} included: the two
+trees it compares have the same $\gamma$, so they are fed by one and the same upstream chain
+(\ddnotes{Time-downsampled trees and early triggers}), and the proof shows that their
+operators agree row by row -- which needs nothing about what produced their common input, nor
+about the statistics of that input. Proposition 2 compares trees fed by {\em differently}
+downsampled inputs, and is proved only in the no-detrender setting of
+\S\ref{sec:avar_statement} (tree gridding $\to$ subbanded tree dedispersion $\to$ peak-finding
+convolution).
+
+\subsection{Inputs}
+\label{ssec:restriction_inputs}
+
+Write $r_{\rm top}$ for the config's toplevel tree rank and $R$ for the pf\_rank of its
+toplevel subband counts. We use the following facts about how a config's trees are built
+(\ddnotes{Time-downsampled trees and early triggers}, \ddnotes{Subband search}).
+
+\medskip
+\par\noindent
+{\bf (F1) Ranks.} Tree $(\gamma,e)$ performs rank-$\hat r$ dedispersion, $\hat r \equiv
+r_{\rm top} - e$, on the lowest $2^{\hat r}$ tree-freq channels of its input array, and its
+pf\_rank is $R_e = R - e$ (an early trigger removes one subband level per level of trigger).
+Its exported coarse-DM index runs over $0 \le d < D_{\gamma,e} = 2^{{\tt tree\_r} - R_e}$,
+where ${\tt tree\_r} = \hat r$ for $\gamma = 0$ and $\hat r - 1$ for $\gamma > 0$; the trees
+with $\gamma > 0$ keep only the upper half of the coarse DM range.
+
+\medskip
+\par\noindent
+{\bf (F2) Subband sets.} Let $\mathcal{B}(\gamma,e)$ be the set of {\em toplevel} tree-freq
+ranges $[f_{\rm lo}, f_{\rm hi})$ searched by tree $(\gamma,e)$ -- in the code, the set of
+pairs $\big({\tt n\_to\_toplevel\_flo}(n), {\tt n\_to\_toplevel\_fhi}(n)\big)$ over its
+subbands $n$. Then
+\begin{equation}
+\mathcal{B}(\gamma, e) \;\subseteq\; \mathcal{B}(\gamma, 0) \;=\; \mathcal{B}(0,0)
+\qquad \mbox{for every $(\gamma,e)$.}
+\label{eq:subband_property}
+\end{equation}
+That is: {\em time downsampling does not change which bands are searched, and an early
+trigger may only remove bands, never add or alter one.} This is a property of the
+config-to-tree construction and is unit-tested directly ({\tt test\_subband\_property} in
+{\tt pirate\_frb/tests/test\_subbands.py}, run by {\tt python -m pirate\_frb test --sb}), over
+random configs and every shipped config; we take it as given here.
+
+\medskip
+\par\noindent
+{\bf (F3) Locality of a subband output.} Let $X$ be the array that tree $(\gamma,e)$
+dedisperses -- whatever the upstream chain produced -- and let $b \in \mathcal{B}(\gamma,e)$
+be a band at level $l$, occupying the $2^K$ tree-freq channels $a \le f < a + 2^K$ with
+$K \equiv \hat r - R_e + l$. Then, indexing the tree's multiplets as $m = (b,j)$ with
+$0 \le j < 2^l$ (\ddnotes{Subband search}), the tree's output at trial $(d,(b,j),p)$ is
+\begin{equation}
+h_p * \Big[\, \DD(K) \; X\big|_{[a,\;a+2^K)} \,\Big]_{\;2^l d \,+\, j \,+\, \sigma_\gamma 2^{K-1}}
+\;\;\mbox{(up to a time shift)},
+\hspace{0.8cm} \sigma_\gamma \equiv \begin{cases} 0 & \gamma = 0 \\ 1 & \gamma > 0, \end{cases}
+\label{eq:restriction_locality}
+\end{equation}
+where $\DD(K)$ is the rank-$K$ dedispersion transform and $h_p$ the peak-finding kernel. In
+particular the output depends on $X$ only through the $2^K$ channels of $b$, and the recipe --
+which channels, which rank-$K$ DM index, which profile -- does not refer to the ambient tree.
+This is the content of the first two paragraphs of the proof of Lemma 1 in
+\S\ref{sec:dyadic_block} (its Cases 1 and 2, and the identification of the rank-$K$ DM index
+with $2^l d_{\rm hi} + d_{\rm lo}$), together with the upper-half restriction of (F1); it is
+algebra about the dedispersion transform and uses nothing about $X$. The time shift is the
+subband extraction lag, which drops out of everything below.
+
+\medskip
+\par\noindent
+{\bf (F4) Closed form (no detrender only).} Lemma 1 of \S\ref{sec:dyadic_block} -- whose proof
+is independent of this appendix, so there is no circularity -- evaluates
+(\ref{eq:restriction_locality}) in the setting of \S\ref{sec:avar_statement}. With $b$, $l$,
+$a$, $K$ as in (F3) and an input channel $F$, put
+\begin{equation}
+\Phi_{b,p,F}(x) \;\equiv\; 2^{-K} \sum_{u=0}^{2^K-1} \sum_{v=0}^{2^K-1}
+   w_{(a+u)F} \, w_{(a+v)F} \; A_p\big( L_K(u,x) - L_K(v,x) \big),
+\label{eq:restriction_phi}
+\end{equation}
+where $w_{fF} \ge 0$ are the tree-gridding weights, $L_K$ is the lag function and $A_p$ is the
+autocorrelation of $h_p$. Then
+\begin{equation}
+A^{(\gamma,e)}_{(d,\,(b,j),\,p),\,F} \;=\; \Phi_{b,p,F}\big( 2^l d + j + \sigma_\gamma 2^{K-1} \big).
+\label{eq:restriction_closedform}
+\end{equation}
+
+\subsection{Two consequences of (F1) and (F2)}
+\label{ssec:restriction_bookkeeping}
+
+\par\noindent
+{\bf Observation.} {\em For every tree of the config,}
+\begin{equation}
+\hat r - R_e \;=\; (r_{\rm top} - e) - (R - e) \;=\; r_{\rm top} - R,
+\label{eq:restriction_invariant}
+\end{equation}
+{\em independent of $(\gamma,e)$. Consequently:}
+\begin{enumerate}
+\item[(a)] {\em One coarse-freq channel spans $2^{r_{\rm top}-R}$ toplevel tree-freq channels
+  in every tree. Hence a band $b \in \mathcal{B}(0,0)$ occupies $2^{l}\,2^{r_{\rm top}-R}$
+  toplevel channels in whichever tree searches it, so its level $l$, its multiplet count
+  $2^l$, its first channel $a$, and therefore $K = r_{\rm top} - R + l$, are attributes of $b$
+  alone and do not depend on which tree we are in.}
+\item[(b)] {\em $D_{\gamma,e}$ does not depend on $e$: $D_{\gamma,e} = D_\gamma$ with
+  $D_0 = 2^{r_{\rm top}-R}$ and $D_\gamma = 2^{r_{\rm top}-R-1}$ for $\gamma > 0$.}
+\end{enumerate}
+
+\medskip
+\par\noindent
+{\em Proof.} (\ref{eq:restriction_invariant}) is immediate from (F1). For (a), a level-$l$
+band spans $2^l$ coarse-freq channels by definition, and by (\ref{eq:restriction_invariant})
+a coarse-freq channel is $2^{\hat r - R_e} = 2^{r_{\rm top}-R}$ toplevel channels wide in
+every tree; since a tree's tree-freq channels are literally the lowest toplevel ones (F1),
+$a$ is the same integer read as a tree-freq or a toplevel index. The width therefore
+determines $l$, and $b$ determines $(l,a)$, in a tree-independent way. For (b), substitute
+(\ref{eq:restriction_invariant}) into $D_{\gamma,e} = 2^{{\tt tree\_r}-R_e}$, using
+${\tt tree\_r} - R_e = \hat r - R_e$ for $\gamma=0$ and $\hat r - R_e - 1$ for
+$\gamma>0$. $\square$
+
+\medskip
+\par\noindent
+Part (b) is the fact that makes statement 1 a restriction in the {\em multiplet} index only:
+an early trigger does not shorten the coarse-DM axis.
+
+\subsection{Statement 1: early triggers}
+\label{ssec:restriction_et}
+
+\par\noindent
+{\bf Proposition 1.} {\em Fix $\gamma$ and $e \ge 0$, and let the trees $(\gamma,e)$ and
+$(\gamma,0)$ be fed by a common upstream chain, which may be arbitrary. Then for every band
+$b \in \mathcal{B}(\gamma,e)$ at level $l$, every $0 \le j < 2^l$, every $0 \le d < D_\gamma$,
+every $p$ and every $F$,}
+\begin{equation}
+A^{(\gamma,e)}_{(d,\,(b,j),\,p),\,F} \;=\; A^{(\gamma,0)}_{(d,\,(b,j),\,p),\,F}.
+\label{eq:restriction_et}
+\end{equation}
+{\em Hence $A^{(\gamma,e)}$ is a row-restriction of $A^{(\gamma,0)}$: it is obtained by
+deleting the rows whose band lies in $\mathcal{B}(\gamma,0) \setminus \mathcal{B}(\gamma,e)$,
+with $(d,j,p)$ carried over unchanged.}
+
+\medskip
+\par\noindent
+{\em Proof.} We show the two trees' linear operators agree row by row; the statement about
+$A$ then follows, since $A_{\alpha F} = \sum_{t'} L[\alpha t, F t']^2$ (and, for $\gamma>0$, a
+sum over the $2^\gamma$ polyphase components, which is the same set for both trees because
+$\gamma$ is).
+
+By (F2), $b \in \mathcal{B}(\gamma,e) \subseteq \mathcal{B}(\gamma,0)$, so both sides of
+(\ref{eq:restriction_et}) are defined. By the Observation (b) both trees have the same
+coarse-DM range $0 \le d < D_\gamma$, and by (a) the band contributes multiplets $(b,j)$,
+$0 \le j < 2^l$, with the same $l$, the same $a$ and the same $K$ in both. Both carry the same
+$\sigma_\gamma$, since $\gamma$ is the same on both sides. Having the same $\gamma$, the two
+trees dedisperse the same array $X$ -- tree $(\gamma,e)$ using only its lowest $2^{\hat r}$
+channels, which do contain $b$, since $a + 2^K \le 2^{\hat r}$ whenever tree $(\gamma,e)$
+searches $b$. So (F3) applies to each side and returns the same expression
+(\ref{eq:restriction_locality}) in $X$. $\square$
+
+\medskip
+\par\noindent
+Note what the proof does {\em not} need: no relation between the two trees' DM grids has to be
+established, because by (b) they are the same grid; and nothing at all is assumed about $X$,
+which is why the detrended operator of \S\ref{ssec:variance_map_setup} is covered. Early
+triggers are a pure restriction in $m$.
+
+\subsection{Statement 2: time downsampling}
+\label{ssec:restriction_ds}
+
+\par\noindent
+{\bf Proposition 2.} {\em Work in the no-detrender setting of \S\ref{sec:avar_statement}, and
+fix $\gamma > 0$. For every band $b \in \mathcal{B}(0,0)$ at level $l$, every
+$0 \le j < 2^l$, every $0 \le d < D_\gamma$, every $p$ and every $F$,}
+\begin{equation}
+A^{(\gamma,0)}_{(d,\,(b,j),\,p),\,F} \;=\; A^{(0,0)}_{(d + D_0 - D_\gamma,\;(b,j),\;p),\,F},
+\hspace{1.2cm} D_0 - D_\gamma = \tfrac{1}{2} D_0 .
+\label{eq:restriction_ds}
+\end{equation}
+{\em Hence $A^{(\gamma,0)}$ is a row-restriction of $A^{(0,0)}$: it is the block of rows whose
+coarse-DM index lies in the upper half $D_0/2 \le d < D_0$, with $(m,p)$ carried over
+unchanged.}
+
+\medskip
+\par\noindent
+{\em Proof.} By (F2) with $e=0$, the two trees search the same band set
+$\mathcal{B}(\gamma,0) = \mathcal{B}(0,0)$, so by the Observation (a) they have the same
+multiplet set and the same $l$, $a$, $K$, hence the same $\Phi_{b,p,F}$ of
+(\ref{eq:restriction_phi}); in particular $M_{\gamma,0} = M_{0,0}$. By the Observation (b),
+$D_\gamma = D_0/2$, so $D_0 - D_\gamma = D_0/2$ and the map $d \mapsto d + D_0/2$ is an
+injection $[0,D_\gamma) \to [0,D_0)$.
+
+Apply (\ref{eq:restriction_closedform}) to each side. The left-hand side has $\gamma > 0$,
+hence $\sigma_\gamma = 1$:
+\begin{equation}
+A^{(\gamma,0)}_{(d,(b,j),p),F} \;=\; \Phi_{b,p,F}\big( 2^l d + j + 2^{K-1} \big).
+\end{equation}
+The right-hand side has $\gamma = 0$, hence $\sigma_0 = 0$, and coarse-DM index $d + D_0/2$:
+\begin{equation}
+A^{(0,0)}_{(d + D_0/2,\,(b,j),\,p),F} \;=\; \Phi_{b,p,F}\big( 2^l (d + D_0/2) + j \big)
+  \;=\; \Phi_{b,p,F}\big( 2^l d + j + 2^l D_0/2 \big).
+\end{equation}
+Finally $2^l D_0 / 2 = 2^l \, 2^{r_{\rm top}-R-1} = 2^{(r_{\rm top}-R+l)-1} = 2^{K-1}$ by the
+Observation (a), so the two arguments of $\Phi_{b,p,F}$ agree. $\square$
+
+\medskip
+\par\noindent
+Two remarks. First, in the no-detrender setting (\ref{eq:restriction_closedform}) depends on
+$\gamma$ only through $\sigma_\gamma \in \{0,1\}$, so {\em all} trees of a config with
+$\gamma > 0$ and the same $e$ have {\em identical} variance maps, not merely nested ones --
+the downsampling factor $2^\gamma$ itself never appears. Second, both propositions have been
+checked numerically against {\tt PfAvarExact} (float64) over random configs: the row
+identities (\ref{eq:restriction_et}) and (\ref{eq:restriction_ds}) hold to $0$ and one ulp
+respectively. Proposition 1 has additionally been checked with a {\tt Detrender2d} in front of
+the dedisperser, where it continues to hold and Proposition 2 fails outright.
+
 \section{Monotonicity of the variance map in the DM bits (no detrender)}
 \label{sec:dyadic_block}
 
