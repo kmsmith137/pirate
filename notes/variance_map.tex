@@ -134,14 +134,14 @@ where $N_\alpha = \sum_\alpha 1$ is the number of $\alpha$-values, and $f(x)$ is
 \begin{equation}
 f(x) \equiv \frac{x-1}{1+(x/10)}
 \end{equation}
-This is implemented by \verb|class VarMapDistance| (in \verb|pirate_frb/slow_avar/|),
+This is implemented by \verb|VarianceMap.get_distance()| (in \verb|pirate_frb/varmap/|),
 which should be used wherever a distance is reported, so that results are comparable.
-Besides $D$ itself, it exposes the quantity $D_0$ (the second branch above, evaluated
-unconditionally) and the worst per-element ratio
-$\max_{\alpha F} (A^{\rm true}_{\alpha F} / A^{\rm approx}_{\alpha F})$ together with the
-$(\alpha,F)$ where it occurs. These are more informative than $D$ alone: if the max ratio
-is only a little larger than $1$, then inflating $A^{\rm approx}$ slightly gives a finite
-distance close to $D_0$, so such an approximation is nearly usable -- whereas
+Its companion \verb|VarianceMap.measure_admissibility()| reports the worst per-element ratio
+$\max_{\alpha F} (A^{\rm true}_{\alpha F} / A^{\rm approx}_{\alpha F})$ (\verb|max_r|)
+together with the $(\alpha,F)$ where it occurs, and with \verb|inflate=True| also the distance
+\verb|D_inflated| of $A^{\rm approx}$ rescaled by that ratio. These are more informative than
+$D$ alone: if the max ratio is only a little larger than $1$, then inflating $A^{\rm approx}$
+slightly gives a finite distance, so such an approximation is nearly usable -- whereas
 $D = \infty$ by itself does not distinguish it from a hopeless one.
 
 This unusual distance function has the following properties:
@@ -220,13 +220,14 @@ Some practical notes, to get started:
 
 \item To compute an $A$-matrix, use \verb|pirate_frb variance_map <config> <detrender> -o A.asdf|
  (\S\ref{sec:variance_map_bruteforce}), and to read it back, use
- \verb|slow_avar.read_variance_map()|.
+ \verb|varmap.VarianceMultiMap.from_asdf()|.
 
-\item To evaluate the distance function, use \verb|class VarMapDistance| (in
- \verb|pirate_frb/slow_avar/|, see \S\ref{ssec:distance_function}). Please use it, rather than
+\item To evaluate the distance function, use \verb|VarianceMap.get_distance()| (in
+ \verb|pirate_frb/varmap/|, see \S\ref{ssec:distance_function}). Please use it, rather than
  reimplementing $D$, so that distances reported by different experiments are comparable.
- Besides \verb|D|, report \verb|D0| and \verb|max_r|, since these distinguish an approximation
- which is nearly usable from one which is hopeless.
+ Besides \verb|D|, report \verb|max_r| and \verb|D_inflated| from
+ \verb|measure_admissibility(inflate=True)|, since these distinguish an approximation which is
+ nearly usable from one which is hopeless.
 
 \item There is no subscale config in \verb|configs/dedispersion/| yet, so part of the task is to
  create a variety of them, exploring the {\tt DedispersionConfig} and {\tt Detrender2dParams}
@@ -524,7 +525,7 @@ fractional DM cut at higher rank, production is better off than any subscale mea
 suggests.
 
 \paragraph*{Results.}
-All distances below are from \verb|class VarMapDistance| (\S\ref{ssec:distance_function}) and all
+All distances below are from \verb|VarianceMap.get_distance()| (\S\ref{ssec:distance_function}) and all
 approximations are admissible (${\rm max\_r} = 1$). ``Envelope'' is the best plain clustering we
 found, which is the same greedy agglomerative merge in shape space but with one-hot $q_\beta$.
 
@@ -631,7 +632,7 @@ at low DM should be dropped for the same reason.
  production config is not measured; the subband ablation suggests it is $1.2$--$2.4\times$
  higher.
 \item Nothing at CHORD scale has been measured. The streaming reduction removes the memory
- obstacle, but scoring $D$ with \verb|VarMapDistance| still needs the dense $A$; a variant which
+ obstacle, but scoring $D$ against a fine reference still needs the dense $A$; a variant which
  accepts $(\bar A, y, \mbox{labels})$ would close this, since for a coarse-grained-$Q$
  approximation admissibility is a theorem rather than a measurement.
 \item Everything is single-tree with no early triggers, and no time-downsampled trees.
@@ -2614,9 +2615,9 @@ of $\|h_p * x\|^2$, and to the kernels which \verb|ReferencePeakFindingKernel| a
 
 End-to-end, the analytic variances are checked by Monte Carlo
 (\verb|pirate_frb check_avar_mc|): Gaussian noise with per-channel variance $V_F$ is fed through a
-\verb|ReferenceDedisperser| (with \verb|enable_variances=True| and peak-finding weights set to 1),
-and its empirical per-chunk variances are compared to the analytic prediction, restricted to
-output channels which have reached steady state.
+\verb|ReferenceDedisperser|, a \verb|ReferencePfSquare| is run over each tree's subband array
+(\verb|out_sb|), and the resulting empirical per-chunk variances are compared to the analytic
+prediction, restricted to output channels which have reached steady state.
 
 \clearpage
 

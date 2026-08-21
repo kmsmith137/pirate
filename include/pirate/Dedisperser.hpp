@@ -433,7 +433,6 @@ struct ReferenceDedisperserBase
     struct Params {
         std::shared_ptr<DedispersionPlan> plan;
         int sophistication = -1;        // 0, 1, or 2 (see above)
-        bool enable_variances = false;  // if true, allocate + fill out_var
 
         // If true, the tree gridding kernel is skipped: 'input_array' has shape
         // (beams_per_batch, pow2(toplevel_tree_rank), nt_in) and is interpreted as an
@@ -488,18 +487,26 @@ struct ReferenceDedisperserBase
     std::vector<ksgpu::Array<float>> out_max;     // length ntrees
     std::vector<ksgpu::Array<uint>> out_argmax;   // length ntrees
 
-    // Per-chunk peak-finding variance, only allocated if Params::enable_variances (else empty).
-    // Shape is (beams_per_batch, t.ndm_out, pf_kernels[itree]->fs.M, t.nprofiles).
-    // OVERWRITTEN each dedisperse() call. See ReferencePeakFindingKernel::apply().
+    // After dedisperse() completes, the subband array of tree 'itree' -- the dedispersion
+    // output that the peak-finder reads. Shape is
     //
-    // FOOTGUN: the multiplet axis is m_ext, not m, in a tree with xdm_rank() > 0 -- it is the
-    // peak-finder's multiplet index, and the peak-finder here is the extended one (see
-    // 'pf_kernels' above). Callers which resolve this axis by (subband, fine dm) must shift
-    // by K; pirate_frb.varmap and pirate_frb.slow_avar currently do not.
-    std::vector<ksgpu::Array<double>> out_var;    // length ntrees (elements empty if disabled)
+    //   (beams_per_batch, Dpf, t.frequency_subbands.M, t.nt_ds)   with t = trees[itree]
+    //
+    // where Dpf = (t.ndm_out << t.xdm_rank()) = 2^(r-R) is the tree's FULL coarse-DM count.
+    // This is the same layout as GpuSbDedispersionKernel's 'sb_out', which is what lets a CPU
+    // variance sweep mirror a GPU one line for line. Its row order (coarse dm, multiplet) does
+    // not depend on xdm_rank(), unlike the peak-finder's m_ext multiplet index -- which is why
+    // a variance calculation should run a ReferencePfSquare over THIS array rather than
+    // resolving anything by the peak-finder's convention.
+    //
+    // A view into internal storage, which the next dedisperse() overwrites. Note it is not
+    // LITERALLY the peak-finder's input when xdm_rank() > 0: the peak-finder reads a
+    // reindexed copy of it (see pf_input()), i.e. the same numbers in a different order.
+    std::vector<ksgpu::Array<float>> out_sb;      // length ntrees
 
     // Allocates the subband ('sb_out') buffer for tree 'itree': the array that
-    // ReferenceDedispersionKernel writes and the peak-finder reads.
+    // ReferenceDedispersionKernel writes and the peak-finder reads, and publishes the
+    // peak-finder's view of it as out_sb[itree].
     //
     // 'ndm' is the DM count the caller wants at the peak-finder's output granularity --
     // trees[itree].ndm_out, or twice that at sophistication 0, which computes twice as many
@@ -513,7 +520,8 @@ struct ReferenceDedisperserBase
     // Allocating here rather than at each call site is what keeps this buffer in step with
     // the reindexing buffer that pf_input() fills, which is sized from the same K: the
     // failure mode otherwise is one buffer sized with K = 0 and a gather that writes 2^K
-    // times as many rows.
+    // times as many rows -- and, for the same reason, with the out_sb[itree] view, which is
+    // the top (trees[itree].ndm_out << K) rows of the returned array.
     ksgpu::Array<float> alloc_subband_buffer(long itree, long ndm);
 
     // Converts a subband buffer into the array pf_kernels[itree] reads, by applying

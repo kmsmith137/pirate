@@ -261,7 +261,7 @@ void register_kernel_bindings(pybind11::module &m)
 
     // Detrender2d::Params. Unlike FakeXEngine (whose Params is deliberately not bound),
     // this one is: callers that configure a detrender without constructing it -- e.g.
-    // slow_avar.BruteForceVarianceMap, which needs the same parameters for both the GPU
+    // varmap.brute_force._SweepGeometry, which needs the same parameters for both the GPU
     // kernel and the numpy reference -- need the struct as a value.
     py::class_<Detrender2d::Params>(m, "Detrender2dParams",
         "Construction parameters for a Detrender2d (which see for what they mean).")
@@ -657,6 +657,51 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("test_random", &GpuPfSquare::test_random, py::call_guard<py::gil_scoped_release>())
     ;
 
+    py::class_<ReferencePfSquare>(m, "ReferencePfSquare",
+        "Reference (CPU) implementation of GpuPfSquare, with the same conventions::\n\n"
+        "    k = ReferencePfSquare(max_kernel_width, total_beams, beams_per_batch, ndm, nt_in)\n"
+        "    k.apply(acc, in_, ibatch)          # acc += sum_t (h_p * in)[t]^2\n\n"
+        "Unlike GpuPfSquare there is no allocate() (persistent state is allocated by the\n"
+        "constructor) and 'nt_in' need not be a multiple of 32.")
+          .def(py::init<long, long, long, long, long>(),
+               py::arg("max_kernel_width"), py::arg("total_beams"), py::arg("beams_per_batch"),
+               py::arg("ndm"), py::arg("nt_in"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Create a ReferencePfSquare.\n\n"
+               "Args:\n"
+               "    max_kernel_width: largest peak-finding boxcar, a power of two in\n"
+               "        [1, constants.max_pf_width]\n"
+               "    total_beams, beams_per_batch: beam geometry (total_beams must be a\n"
+               "        multiple of beams_per_batch)\n"
+               "    ndm: independent time series per beam. Any positive value -- it need not\n"
+               "        be a power of two, so a (Dpf, M) pair can simply be flattened.\n"
+               "    nt_in: time samples per chunk")
+          .def("apply", &ReferencePfSquare::apply,
+               py::arg("acc"), py::arg("in_"), py::arg("ibatch"),
+               py::call_guard<py::gil_scoped_release>(),   // heavy CPU loop, no python objects
+               "acc += sum_t (h_p * in_)[t]^2, over this chunk's time samples.\n\n"
+               "Args:\n"
+               "    acc: Array, shape (beams_per_batch, ndm, nprofiles), float64, on host.\n"
+               "        ACCUMULATED INTO (+=), never overwritten, so the caller zeroes it\n"
+               "        when a new accumulation starts.\n"
+               "    in_: Array, shape (beams_per_batch, ndm, nt_in), float32, on host.\n"
+               "    ibatch: 0 <= ibatch < nbatches. Calls must run 0, 1, ..., nbatches-1, 0,\n"
+               "        ... -- checked, since the kernel carries per-beam input history\n"
+               "        across chunks.")
+          .def_readonly("max_kernel_width", &ReferencePfSquare::max_kernel_width)
+          .def_readonly("total_beams", &ReferencePfSquare::total_beams)
+          .def_readonly("beams_per_batch", &ReferencePfSquare::beams_per_batch)
+          .def_readonly("ndm", &ReferencePfSquare::ndm)
+          .def_readonly("nt_in", &ReferencePfSquare::nt_in)
+          .def_readonly("nprofiles", &ReferencePfSquare::nprofiles,
+               "= 1 + 3*log2(max_kernel_width)")
+          .def_readonly("nbatches", &ReferencePfSquare::nbatches)
+          .def_readonly("tpad", &ReferencePfSquare::tpad,
+               "Input samples of history carried across chunks, = max(2*max_kernel_width, 32)")
+          .def_static("test_vs_peak_finder", &ReferencePfSquare::test_vs_peak_finder,
+               py::call_guard<py::gil_scoped_release>())
+    ;
+
     py::class_<GpuRingbufCopyKernel>(m, "GpuRingbufCopyKernel")
           .def_static("test_random", &GpuRingbufCopyKernel::test_random, py::call_guard<py::gil_scoped_release>())
     ;
@@ -833,27 +878,13 @@ void register_kernel_bindings(pybind11::module &m)
           .def_property_readonly("N", [](const ReferencePeakFindingKernel &self) { return self.fs.N; })
           .def_property_readonly("Dout", [](const ReferencePeakFindingKernel &self) { return self.Dout; })
           .def_property_readonly("Dcore", [](const ReferencePeakFindingKernel &self) { return self.Dcore; })
-          .def_readonly("samples_per_chunk", &ReferencePeakFindingKernel::samples_per_chunk,
-               "Length-nprofiles list: the count that apply() divides by to turn its sum of\n"
-               "squares into out_var. Multiply out_var by this to recover the raw sum of\n"
-               "squares. Equal to nt_in for every profile when Dcore == 1, and smaller\n"
-               "otherwise -- the peak-finder then evaluates on a sublattice of output times.")
           .def("apply",
                [](ReferencePeakFindingKernel &self, Array<float> &out_max, Array<uint> &out_argmax,
                   const Array<float> &in_, const Array<float> &wt, long ibatch) {
-                   Array<double> out_var;   // empty -> out_var feature disabled
-                   self.apply(out_max, out_argmax, out_var, in_, wt, ibatch);
+                   self.apply(out_max, out_argmax, in_, wt, ibatch);
                },
                py::arg("out_max"), py::arg("out_argmax"), py::arg("in_"),
                py::arg("wt"), py::arg("ibatch"),
-               py::call_guard<py::gil_scoped_release>())
-          .def("apply",
-               [](ReferencePeakFindingKernel &self, Array<float> &out_max, Array<uint> &out_argmax,
-                  const Array<float> &in_, const Array<float> &wt, long ibatch, Array<double> &out_var) {
-                   self.apply(out_max, out_argmax, out_var, in_, wt, ibatch);
-               },
-               py::arg("out_max"), py::arg("out_argmax"), py::arg("in_"),
-               py::arg("wt"), py::arg("ibatch"), py::arg("out_var"),
                py::call_guard<py::gil_scoped_release>())
           .def("eval_tokens",
                [](ReferencePeakFindingKernel &self, Array<float> &out,

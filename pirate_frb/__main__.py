@@ -23,8 +23,8 @@ from . import slow_avar
 from . import varmap
 from .fast_avar import PfAvarApproximation, test_fast_avar
 
-from .slow_avar import (SparseTile, SparseTileTriple, SparseTilePerM, PfVarianceConvolver, PfVariance,
-                        BruteForceVarianceMap, GpuBruteForceVarianceMap)
+from .slow_avar import (SparseTile, SparseTileTriple, SparseTilePerM, PfVarianceConvolver,
+                        PfVariance)
 
 from . import (
     DedispersionConfig,
@@ -50,7 +50,7 @@ def parse_test(subparsers):
     parser.add_argument('--rt', action='store_true', help='Runs ReferenceTree and ReferenceLagbuf tests')
     parser.add_argument('--pfwr', action='store_true', help='Runs PfWeightReaderMicrokernel.test_random()')
     parser.add_argument('--pfom', action='store_true', help='Runs PfOutputMicrokernel.test_random()')
-    parser.add_argument('--pfsq', action='store_true', help='Runs GpuPfSquare.test_random()')
+    parser.add_argument('--pfsq', action='store_true', help='Runs the PfSquare tests (GpuPfSquare + ReferencePfSquare)')
     parser.add_argument('--gldk', action='store_true', help='Runs GpuLaggedDownsamplingKernel.test_random()')
     parser.add_argument('--gddk', action='store_true', help='Runs GpuDedispersionKernel.test_random()')
     parser.add_argument('--gpfk', action='store_true', help='Runs GpuPeakFindingKernel.test_random()')
@@ -136,6 +136,10 @@ def test(args):
                 kernels.PfOutputMicrokernel.test_random()
         
         if run_all_tests or args.pfsq:
+            # test_vs_peak_finder() is the tree's only cross-family check: it links the
+            # peak-finding kernels to the squaring kernels, which --gpfk and
+            # GpuPfSquare.test_random() each cover only one side of.
+            kernels.ReferencePfSquare.test_vs_peak_finder()
             kernels.GpuPfSquare.test_random()
         
         if run_all_tests or args.gldk:
@@ -221,35 +225,6 @@ def test(args):
             test_fast_avar.test_cpp_pf_variance()
             if i == 0:  # end-to-end (builds a plan + runs the full python reference); run once
                 test_fast_avar.test_cpp_pf_avar_approximation()
-
-            # Brute-force variance map: deterministic (fixed configs, no randomness), and each
-            # test runs a full sweep over all input channels, so once is enough.
-            if i == 0:
-                BruteForceVarianceMap.test_vs_per_tfm(7, [1])
-                BruteForceVarianceMap.test_vs_per_tfm(7, [2,2,1], num_early_triggers=1)
-                BruteForceVarianceMap.test_phase_collapse(7)
-                BruteForceVarianceMap.test_detrender_fp32(7)
-                # The Detrender2d path has no analytic oracle, so test_column_norms is what
-                # covers it -- and the polyphase sum, which is where it interacts with a
-                # time-downsampled tree.
-                BruteForceVarianceMap.test_column_norms(6, [2,1], detrender=False)
-                BruteForceVarianceMap.test_column_norms(6, [2,1], detrender=True)
-                BruteForceVarianceMap.test_column_norms(6, [2,1], num_primary_trees=2, nifreq=1)
-                BruteForceVarianceMap.test_column_norms(6, [1], num_early_triggers=1, nifreq=1)
-                # The GPU sweep against the CPU one. Both GPU kernels are validated against
-                # their reference implementations by --sbdd and --pfsq, so this covers the
-                # python driver rather than the kernels.
-                GpuBruteForceVarianceMap.test_vs_cpu(8, [2,2,1], nbeams=4)
-                GpuBruteForceVarianceMap.test_vs_cpu(8, [2,2,1], num_early_triggers=1,
-                                                     detrender=True, nfreq=200)
-                slow_avar.variance_map_io.test_variance_map_io(7)
-                # Again with an early trigger, which is where the stored per-tree
-                # subband_counts differs from the config's toplevel vector.
-                slow_avar.variance_map_io.test_variance_map_io(7, num_early_triggers=1)
-
-            slow_avar.VarMapDistance.test_random()
-            if i == 0:  # deterministic (fixed seed); run once
-                slow_avar.varmap_eval.self_test()
 
         if run_all_tests or args.varmap:
             # Deterministic apart from test_geometry()'s random configs; once is enough.
@@ -412,10 +387,15 @@ def _parse_channel_spec(spec, nfreq):
     return sorted(set(out))
 
 
-# Config keys that this tool overrides, with the value it forces. Each is safe to override
-# because none of them can change A: the analytic PfAvarExact computes the same matrix and
-# never reads Dcore or any downsampling factor. See BruteForceVarianceMap's constructor for
-# why the tool needs these values.
+# Config keys that this tool overrides, with the value it forces, because the sweep requires
+# them (see varmap.brute_force._SweepGeometry). Each is safe to override because neither can
+# change A: the analytic PfAvarExact computes the same matrix and never reads any downsampling
+# factor.
+#
+# Note 'time_downsampling' is NOT forced. It sets the peak-finder's Dcore, which the sweep
+# never sees -- it ends in a PfSquare, which evaluates h_p at every time sample -- so leaving
+# it alone keeps the archived config faithful to the one the user asked about. That the swept
+# A is unchanged by it is checked, bitwise, by test_sweep_vs_per_tfm(time_downsampling=4).
 def _variance_map_override_config(config, nbeams=1):
     overrides = []
 
@@ -431,7 +411,6 @@ def _variance_map_override_config(config, nbeams=1):
 
     pts = list(config.primary_trees)
     for (i, pt) in enumerate(pts):
-        _set(pt, 'time_downsampling', 1, f'primary_trees[{i}].time_downsampling')
         _set(pt, 'dm_downsampling', 0, f'primary_trees[{i}].dm_downsampling')
     config.primary_trees = pts
 
@@ -441,10 +420,9 @@ def _variance_map_override_config(config, nbeams=1):
 def variance_map(args):
     """Sweep, and write a pirate_frb.varmap file.
 
-    NOTE THE OUTPUT FORMAT: this writes varmap/asdf_io.py's format, not the older
-    slow_avar/variance_map_io one. The two are not interchangeable and the new reader refuses
-    an old-format file by name rather than migrating it; existing old-format files stay
-    readable through slow_avar.variance_map_io.
+    NOTE THE OUTPUT FORMAT: this writes varmap/asdf_io.py's format. An older, incompatible
+    variance-map format existed; the reader refuses such a file by name rather than
+    misreading it, and nothing can read one any more.
     """
 
     from .kernels import Detrender2dParams

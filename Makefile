@@ -418,11 +418,6 @@ PYFILES = \
   pirate_frb/slow_avar/SparseTile.py \
   pirate_frb/slow_avar/PfVariance.py \
   pirate_frb/slow_avar/TmpVmap.py \
-  pirate_frb/slow_avar/VarMapDistance.py \
-  pirate_frb/slow_avar/varmap_eval.py \
-  pirate_frb/slow_avar/brute_force.py \
-  pirate_frb/slow_avar/brute_force_gpu.py \
-  pirate_frb/slow_avar/variance_map_io.py \
   pirate_frb/slow_avar/check_approximation.py \
   pirate_frb/slow_avar/check_mc.py \
   pirate_frb/varmap/__init__.py \

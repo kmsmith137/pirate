@@ -148,9 +148,9 @@ def _root(af, filename):
         old = ('variance_map' in af.tree)
         raise RuntimeError(
             f"{filename}: not a variance-map file (no {ROOT_KEY!r} key)."
-            + (" It IS an old-format file (top-level key 'variance_map', written by"
-               ' pirate_frb.slow_avar.variance_map_io). The two formats are incompatible and'
-               ' there is no migration path in the reader: convert the file instead.'
+            + (" It IS an old-format file (top-level key 'variance_map'), written before this"
+               ' format existed. The two are incompatible, nothing reads the old one any'
+               ' more, and this reader refuses it by name rather than misinterpreting it.'
                if old else '')) from None
 
     v = root.get('format_version')

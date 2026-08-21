@@ -1,13 +1,19 @@
 """Monte-Carlo check of analytic peak-finding variances against a ReferenceDedisperser.
 
-Feeds Gaussian noise (per-channel variance = freq_variances) through a ReferenceDedisperser run with
-enable_variances=True, and compares its per-chunk variance estimates (out_var) to the analytic
-PfAvarExact.tree_variance.  A channel (tree, coarse-DM, multiplet m, profile p) is only compared
-once the *entire* chunk has reached statistical steady state for that channel, which we obtain by
-coarsening the grouper's per-element steady-state boundary (DedispersionTree.compute_steady_state_it0)
-to whole chunks.  Runs until
-KeyboardInterrupt (or max_chunks), printing summary statistics of epsilon = mc/analytic - 1 after
-each chunk, over all channels that have at least one steady-state estimate so far.
+Feeds Gaussian noise (per-channel variance = freq_variances) through a ReferenceDedisperser, runs a
+ReferencePfSquare over each tree's subband array (out_sb) to get a per-chunk variance estimate, and
+compares that to the analytic PfAvarExact.tree_variance.  A channel (tree, coarse-DM, multiplet m,
+profile p) is only compared once the *entire* chunk has reached statistical steady state for that
+channel, which we obtain by coarsening the grouper's per-element steady-state boundary
+(DedispersionTree.compute_steady_state_it0) to whole chunks.  Runs until KeyboardInterrupt (or
+max_chunks), printing summary statistics of epsilon = mc/analytic - 1 after each chunk, over all
+channels that have at least one steady-state estimate so far.
+
+The estimate averages over EVERY time sample of the chunk, whereas the peak-finder proper evaluates
+its convolutions only on a sublattice of spacing min(Dcore, 2^lambda).  Both estimate the same
+per-element variance -- all output elements are equal by translation invariance -- so the central
+values are the same either way; what differs is the estimator's own variance, i.e. the error bars
+reported below, which are tighter than a Dcore > 1 sublattice would give.
 """
 
 import numpy as np
@@ -17,7 +23,9 @@ from ..utils import atomic_print
 
 
 def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, report_every=1):
-    from ..pirate_pybind11 import ReferenceDedisperser   # lazy: keep slow_avar import pybind-light
+    # Lazy imports: keep the slow_avar import pybind-light.
+    from ..pirate_pybind11 import ReferenceDedisperser
+    from ..kernels import ReferencePfSquare
 
     nfreq, nt_in, ntrees = int(plan.nfreq), int(plan.nt_in), int(plan.ntrees)
 
@@ -29,15 +37,15 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
     atomic_print("check_avar_mc: building PfAvarExact (analytic variances) ...")
     exact = PfAvarExact(plan, freq_variances, progress=True)
 
-    atomic_print(f"check_avar_mc: building ReferenceDedisperser(sophistication={sophistication}, "
-                 "enable_variances=True) ...")
-    rdd = ReferenceDedisperser(plan, sophistication, enable_variances=True)
+    atomic_print(f"check_avar_mc: building ReferenceDedisperser(sophistication={sophistication}) ...")
+    rdd = ReferenceDedisperser(plan, sophistication)
     assert int(rdd.beams_per_batch) == 1 and int(rdd.nbatches) == 1, "check_avar_mc requires nbeams==1"
 
-    # Per-tree: analytic variance aligned to (ndm_out, M, P); per-coarse-DM settling table; MC
-    # accumulators (sum and sum-of-squares of out_var, and per-coarse-DM steady-chunk count).
+    # Per-tree: analytic variance aligned to (ndm_out, M, P); the PfSquare that reads out_sb and
+    # its accumulator; per-coarse-DM settling table; MC accumulators (sum and sum-of-squares of
+    # the per-chunk variance estimate, and per-coarse-DM steady-chunk count).
     # (PfAvarExact asserts tree_variance > 0, so no positive-prediction mask is needed.)
-    analytic, settle, mc_sum, mc_sumsq, mc_count = [], [], [], [], []
+    analytic, pf_squares, mc_acc, settle, mc_sum, mc_sumsq, mc_count = [], [], [], [], [], [], []
     for itree in range(ntrees):
         tree = plan.trees[itree]
         r, R = int(exact.tree_r[itree]), int(exact.tree_R[itree])
@@ -47,6 +55,13 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
                                f"{1 << (r - R)} (dm_downsampling != 2^pf_rank is unsupported)")
         a = np.ascontiguousarray(exact.tree_variance[itree].transpose(1, 0, 2))   # (ndm_out, M, P)
         analytic.append(a)
+        # Every axis except time is a spectator to a PfSquare, so out_sb's (ndm_out, M) pair is
+        # flattened into its row count.  Note ndm_out == 2^(r-R) is checked just above, so this
+        # is the full coarse-DM axis of out_sb.
+        M, P = int(tree.frequency_subbands.M), int(tree.nprofiles)
+        pf_squares.append(ReferencePfSquare(int(tree.pf.max_width), 1, 1, ndm_out * M,
+                                            int(tree.nt_ds)))
+        mc_acc.append(np.zeros((1, ndm_out * M, P)))
         # First fully-steady chunk per coarse-DM bin: coarsen the grouper's per-element
         # steady-state boundary (compute_steady_state_it0, in output-time-bin units) to
         # whole chunks -- ichunk*nt_out >= it0 -- with a +1-chunk safety margin.
@@ -57,7 +72,8 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
         mc_sumsq.append(np.zeros_like(a))
         mc_count.append(np.zeros(ndm_out, dtype=np.int64))
 
-    # Peak-finding weights = 1, so out_var is directly comparable to PfAvarExact (which is unweighted).
+    # Peak-finding weights = 1.  They do not enter the estimate below (out_sb is upstream of them),
+    # but it keeps out_max meaningful if anyone looks at it.
     for w in rdd.wt_arrays:
         w[...] = 1.0
 
@@ -74,9 +90,13 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
             rdd.input_array[...] = sigma * rng.standard_normal(in_shape, dtype=np.float32)
             rdd.dedisperse(ichunk, 0)
             for itree in range(ntrees):
-                steady = ichunk >= settle[itree]            # (ndm_out,) bool
+                # Run the PfSquare on EVERY chunk, even one with no steady-state channels: it
+                # carries 'tpad' input samples across chunk boundaries, so skipping a chunk
+                # would leave the next one with stale history.
+                ov = _chunk_variance(rdd, pf_squares[itree], mc_acc[itree], itree,
+                                     analytic[itree].shape)   # (ndm_out, M, P)
+                steady = ichunk >= settle[itree]              # (ndm_out,) bool
                 if steady.any():
-                    ov = np.asarray(rdd.out_var[itree])[0]  # (ndm_out, M, P)
                     mc_sum[itree][steady] += ov[steady]
                     mc_sumsq[itree][steady] += ov[steady] ** 2
                     mc_count[itree][steady] += 1
@@ -89,6 +109,22 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
     if ichunk > 0:
         atomic_print("check_avar_mc: final summary:")
         _report(ichunk - 1, exact, analytic, mc_sum, mc_sumsq, mc_count)
+
+
+def _chunk_variance(rdd, pf_square, acc, itree, shape):
+    """The per-chunk variance estimate of tree 'itree', shape (ndm_out, M, P).
+
+    The PfSquare accumulates a sum of squares over the chunk's nt_ds time samples; dividing by
+    nt_ds turns it into the per-element mean square, which for mean-zero input is the variance.
+    'acc' must be zeroed here rather than accumulated across chunks: the caller wants one
+    independent estimate per chunk, so that it can report a spread over chunks.
+    """
+
+    sb = np.asarray(rdd.out_sb[itree])                     # (1, ndm_out, M, nt_ds)
+    nt_ds = sb.shape[3]
+    acc[...] = 0.0
+    pf_square.apply(acc, sb.reshape(1, -1, nt_ds), 0)
+    return acc[0].reshape(shape) / nt_ds
 
 
 def _spread(eps):
@@ -112,7 +148,7 @@ def _report(ichunk, exact, analytic, mc_sum, mc_sumsq, mc_count):
             continue
         n = cnt[ready].astype(np.float64)[:, None, None]        # (nready, 1, 1)
         a = analytic[itree][ready]                              # (nready, M, P)
-        s1 = mc_sum[itree][ready]                              # sum of out_var over steady chunks
+        s1 = mc_sum[itree][ready]                              # sum of the estimate over steady chunks
         eps = s1 / n / a - 1.0                                 # a_i: per-channel mean of eps over chunks
         all_eps.append(eps.ravel())
         line = (f"  tree {itree} [r={r} R={R} M={M}]: dm {int(ready.sum())}/{ndm_out} steady, "
@@ -126,7 +162,7 @@ def _report(ichunk, exact, analytic, mc_sum, mc_sumsq, mc_count):
             ne = n[elig]                                        # (nel, 1, 1)
             ae, s1e, s2e = a[elig], s1[elig], mc_sumsq[itree][ready][elig]
             ai = s1e / ne / ae - 1.0
-            var_ov = (s2e - s1e ** 2 / ne) / (ne - 1.0)        # unbiased Var(out_var) over chunks
+            var_ov = (s2e - s1e ** 2 / ne) / (ne - 1.0)        # unbiased Var(estimate) over chunks
             with np.errstate(divide="ignore", invalid="ignore"):
                 sigma = (s1e / ne - ae) / np.sqrt(var_ov / ne)  # = a_i / sqrt(v_i / n_i)
             k = int(np.argmax(np.abs(ai)))

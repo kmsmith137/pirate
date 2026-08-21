@@ -1,18 +1,14 @@
 # Low-rank representations of the variance map A of a DedispersionTree (notes/variance_map.tex).
 #
-# This package supersedes the variance-map half of pirate_frb.slow_avar (VarMapDistance,
-# varmap_eval, variance_map_io, brute_force*), and the 'pirate_frb variance_map' CLI now goes
-# through it. Those modules stay in place, unmodified, for as long as they are the reference
-# the new code is checked against; nothing here imports them, and the duplication with
-# slow_avar/brute_force*.py is deliberate for exactly that reason -- a shared implementation
-# would make "do the two agree" meaningless.
+# Everything to do with variance maps lives here: the representation, the distance function,
+# the brute-force sweep, the file format, and the 'pirate_frb variance_map' CLI.
+# pirate_frb.slow_avar now holds only the analytic (PfAvarExact / TmpVmap) machinery and the
+# SparseTile primitives it is built on; the only thing here that reaches into it is tests.py,
+# which uses PfAvarExact as an independent oracle for the sweep.
 #
-# NOTE THE FILE FORMAT CHANGE: asdf_io.py's format is not variance_map_io's, and the reader
-# refuses an old-format file by name rather than migrating it. Existing old-format files are
-# readable only through slow_avar.variance_map_io.
-#
-# Not superseded, and callable from here: slow_avar's SparseTile, PfVariance, TmpVmap and
-# check_* modules.
+# NOTE THE FILE FORMAT: asdf_io.py's format is not the older one that predates this package.
+# The reader refuses an old-format file by name rather than misreading it, and nothing can
+# read one any more.
 from .distance import YTRUE_FLOOR, f, fprime, AdmissibilityResult, DistanceEstimate
 from .VarianceMap import VarianceMap
 from .VarianceMultiMap import VarianceMultiMap

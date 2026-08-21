@@ -235,32 +235,20 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
         // time dt, and has length 2^l.
         tmp_iout[l] = xdiv(tpad + dt - pow2(l), dt);
     }
-
-    // Per-profile evaluation count (see the .hpp). Profile 0 lives at level 0; profiles
-    // 3l+1, 3l+2, 3l+3 live at level l.
-    this->samples_per_chunk.resize(nprofiles);
-    for (long ip = 0; ip < nprofiles; ip++) {
-        long l = (ip > 0) ? ((ip-1) / 3) : 0;
-        samples_per_chunk[ip] = p.nt_out * tmp_nout[l];
-    }
 }
 
 
-// helper for ReferencePeakFindingKernel::apply()
-// In addition to the (maxval, argmax) max-reduce, accumulate val^2 into 'sumsq'
-// (a running sum-of-squares, later normalized into out_var; see apply()).
-static inline void _update_pf(float &maxval, uint &argmax, double &sumsq, float val, uint token)
+// helper for ReferencePeakFindingKernel::apply(): the (maxval, argmax) max-reduce.
+static inline void _update_pf(float &maxval, uint &argmax, float val, uint token)
 {
     argmax = (val > maxval) ? token : argmax;
     maxval = std::max(maxval, val);
-    sumsq += double(val) * val;
 }
 
 
 void ReferencePeakFindingKernel::apply(
     ksgpu::Array<float> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
     ksgpu::Array<uint> &out_argmax,    // shape (beams_per_batch, ndm_out, nt_out)
-    ksgpu::Array<double> &out_var,     // shape (beams_per_batch, ndm_out, M, nprofiles), or empty
     const ksgpu::Array<float> &in,     // shape (beams_per_batch, ndm_out, M, nt_in)
     const ksgpu::Array<float> &wt,     // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, N)
     long ibatch, bool debug)
@@ -275,15 +263,6 @@ void ReferencePeakFindingKernel::apply(
     xassert(out_argmax.on_host());
     xassert(in.on_host());
     xassert(wt.on_host());
-
-    // Optional out_var: an empty array disables the feature; otherwise it is overwritten
-    // with per-chunk variances (see comments in PeakFindingKernel.hpp).
-    bool do_var = (out_var.size > 0);
-    if (do_var) {
-        xassert_shape_eq(out_var, ({p.beams_per_batch, p.ndm_out, fs.M, nprofiles}));
-        xassert(out_var.on_host());
-        xassert(out_var.is_fully_contiguous());
-    }
 
     xassert_eq(ibatch, expected_ibatch);
     expected_ibatch = (ibatch + 1) % nbatches;
@@ -363,13 +342,6 @@ void ReferencePeakFindingKernel::apply(
 
     for (long b = 0; b < B; b++) {
         for (long d = 0; d < D; d++) {
-            // out_var[b,d] is a contiguous (M,P) block, overwritten (zeroed, then accumulated
-            // across the tout loop below) so the caller always gets a single-chunk variance.
-            double *var_bd = do_var ? &out_var.at({b,d,0,0}) : nullptr;
-            if (do_var)
-                for (long i = 0; i < M*P; i++)
-                    var_bd[i] = 0.0;
-
             for (long tout = 0; tout < nt_out; tout++) {
                 const float *wp = &wt.at({b,d/Wds,tout/Tds,0,0});  // shape (P,N) contiguous
 
@@ -386,7 +358,6 @@ void ReferencePeakFindingKernel::apply(
                     int nsamp = tmp_nout[l];    // count
                     int S = tmp_sout[l];    // spacing
                     int I = tmp_iout[l];    // base
-                    double wvar = 1.0 / double(nt_out * nsamp);  // 1/count for level l (sum-of-squares -> variance)
 
                     for (int m = 0; m < M; m++) {
                         int n = fs.m_to_n[m];
@@ -394,9 +365,6 @@ void ReferencePeakFindingKernel::apply(
                         float w1 = wp[(3*l+1)*N + n];     // p = (3*l+1)
                         float w2 = wp[(3*l+2)*N + n];     // p = (3*l+2)
                         float w3 = wp[(3*l+3)*N + n];     // p = (3*l+3)
-
-                        double *var_m = do_var ? (var_bd + (long)m * P) : nullptr;  // out_var row, p=0..P-1
-                        double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;  // per-(tout,l,m) sum of squares
 
                         // Each iteration of the isamp-loop corresponds to one time sample in the
                         // tmp[l] array, or (dt) time samples in the original input array.
@@ -418,12 +386,12 @@ void ReferencePeakFindingKernel::apply(
                             float y3 = (0.5f*x0 + x1 + x2 + 0.5f*x3);
 
                             if (l == 0)
-                                _update_pf(maxval, argmax, s0, w0*y0, token0);
+                                _update_pf(maxval, argmax, w0*y0, token0);
 
                             if (P > 1) {
-                                _update_pf(maxval, argmax, s1, w1*y1, token1);
-                                _update_pf(maxval, argmax, s2, w2*y2, token2);
-                                _update_pf(maxval, argmax, s3, w3*y3, token3);
+                                _update_pf(maxval, argmax, w1*y1, token1);
+                                _update_pf(maxval, argmax, w2*y2, token2);
+                                _update_pf(maxval, argmax, w3*y3, token3);
                             }
 
                             if (debug && (b == 0) && (d==0) && (tout==2)) {
@@ -438,19 +406,6 @@ void ReferencePeakFindingKernel::apply(
                                     cout << "   p=" << (3*l+2) << " -> (w=" << w2 << ", y=" << y2 << ", w*y=" << (w2*y2) << endl;
                                     cout << "   p=" << (3*l+3) << " -> (w=" << w3 << ", y=" << y3 << ", w*y=" << (w3*y3) << endl;
                                 }
-                            }
-                        }
-
-                        // Fold this (tout,l,m) block's sum-of-squares into out_var, normalized by
-                        // wvar = 1/count(level l). The += accumulates across the tout loop; var_bd
-                        // was zeroed per (b,d), so out_var ends as the per-chunk variance estimate.
-                        if (do_var) {
-                            if (l == 0)
-                                var_m[0] += s0 * wvar;
-                            if (P > 1) {
-                                var_m[3*l+1] += s1 * wvar;
-                                var_m[3*l+2] += s2 * wvar;
-                                var_m[3*l+3] += s3 * wvar;
                             }
                         }
                     }
@@ -981,8 +936,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
  
     Array<float> cpu_out_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
     Array<uint> cpu_argmax_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
-    Array<double> cpu_var_large;  // empty -> out_var feature disabled
-    ref_kernel_large.apply(cpu_out_large, cpu_argmax_large, cpu_var_large, cpu_in_large, cpu_wt_large, 0);
+    ref_kernel_large.apply(cpu_out_large, cpu_argmax_large, cpu_in_large, cpu_wt_large, 0);
 
     // Use eval_tokens() to get a nontrivial test of the reference peak-finder.
     // (We haven't compared the reference and GPU peak-finders yet.)
@@ -1015,8 +969,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
 
             Array<float> cpu_out_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
             Array<uint> cpu_argmax_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
-            Array<double> cpu_var_small;  // empty -> out_var feature disabled
-            ref_kernel_small.apply(cpu_out_small, cpu_argmax_small, cpu_var_small, cpu_in_small, cpu_wt_small, ibatch);
+            ref_kernel_small.apply(cpu_out_small, cpu_argmax_small, cpu_in_small, cpu_wt_small, ibatch);
 
             // Use eval_tokens() to get a nontrivial test of the reference peak-finder.
             // (We haven't compared the reference and GPU peak-finders yet.)
@@ -1451,6 +1404,283 @@ void PfOutputMicrokernel::test_random()
 
 // -------------------------------------------------------------------------------------------------
 //
+// ReferencePfSquare
+
+
+ReferencePfSquare::ReferencePfSquare(long max_kernel_width_, long total_beams_, long beams_per_batch_,
+                                     long ndm_, long nt_in_) :
+    max_kernel_width(max_kernel_width_),
+    total_beams(total_beams_),
+    beams_per_batch(beams_per_batch_),
+    ndm(ndm_),
+    nt_in(nt_in_)
+{
+    xassert(max_kernel_width > 0);
+    xassert(is_power_of_two(max_kernel_width));
+    xassert_le(max_kernel_width, long(constants::max_pf_width));
+    xassert(total_beams > 0);
+    xassert(beams_per_batch > 0);
+    xassert_divisible(total_beams, beams_per_batch);
+    xassert(ndm > 0);
+    xassert(nt_in > 0);
+
+    // Note: unlike GpuPfSquare, there is no constraint relating nt_in to 32 or to tpad.
+    // See the class comment in PeakFindingKernel.hpp.
+
+    this->nprofiles = 3 * integer_log2(max_kernel_width) + 1;
+    this->nbatches = xdiv(total_beams, beams_per_batch);
+    this->nrows = beams_per_batch * ndm;
+    this->num_levels = max(integer_log2(max_kernel_width), 1);
+    this->tpad = max(2 * max_kernel_width, 32L);
+
+    // Zero-initialized, which is the correct state for ichunk=0: it says that all samples
+    // preceding the stream are zero, matching the convention in the dedispersion tex notes.
+    this->persistent_state = Array<float> ({total_beams, ndm, tpad}, af_uhost | af_zero);
+    this->boxcars = Array<float> ({num_levels+1, tpad + nt_in}, af_uhost | af_zero);
+}
+
+
+void ReferencePfSquare::apply(Array<double> &acc, const Array<float> &in, long ibatch)
+{
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert_eq(ibatch, expected_ibatch);
+    expected_ibatch = (ibatch + 1) % nbatches;
+
+    xassert_shape_eq(acc, ({ beams_per_batch, ndm, nprofiles }));
+    xassert_shape_eq(in, ({ beams_per_batch, ndm, nt_in }));
+    xassert(acc.on_host());
+    xassert(in.on_host());
+    xassert(acc.get_ncontig() >= 1);   // profile axis must be contiguous
+    xassert(in.get_ncontig() >= 1);    // time axis must be contiguous
+
+    const long L = num_levels;
+    const long nt = tpad + nt_in;
+    const long b0 = ibatch * beams_per_batch;
+    float *bcar0 = &boxcars.at({0,0});   // level 0 of the cascade, length nt
+
+    for (long b = 0; b < beams_per_batch; b++) {
+        for (long d = 0; d < ndm; d++) {
+            const float *src = &in.at({b,d,0});             // length nt_in
+            float *ps = &persistent_state.at({b0+b,d,0});   // length tpad
+
+            // Level 0: the samples preceding the chunk, followed by the chunk itself.
+
+            for (long t = 0; t < tpad; t++)
+                bcar0[t] = ps[t];
+            for (long t = 0; t < nt_in; t++)
+                bcar0[tpad+t] = src[t];
+
+            // Boxcar cascade b_{j+1}[u] = b_j[u] + b_j[u - 2^j], so that b_j[u] is the sum of
+            // the 2^j input samples ending at u. (A running sliding-window update would be
+            // cheaper, but its float32 error accumulates along the stream, whereas this
+            // recursion is a fresh balanced sum at every step -- and it is what the GPU
+            // kernel does, which is the comparison that matters.)
+            //
+            // Samples before the start of the buffer are taken to be zero. That cannot affect
+            // the output: the longest profile reaches (2*max_kernel_width - 1) <= (tpad-1)
+            // samples back, and the accumulation below starts at u = tpad.
+
+            for (long j = 0; j < L; j++) {
+                const float *bj = &boxcars.at({j,0});
+                float *bj1 = &boxcars.at({j+1,0});
+                long lag = pow2(j);
+
+                for (long t = 0; t < nt; t++)
+                    bj1[t] = bj[t] + ((t >= lag) ? bj[t-lag] : 0.0f);
+            }
+
+            // Profiles at level 'lam' (S = 2^lam), from the "Peak-finding kernels" section of
+            // notes/dedispersion.tex, written in terms of b_{lam+1} exactly as the GPU kernel
+            // writes them (see gpu_pf_square_kernel()):
+            //
+            //   h_{lam,0} = [1]^S                   -> y = b_lam[u]      (lam == 0 only)
+            //   h_{lam,1} = [1]^2S                  -> y = b_{lam+1}[u]
+            //   h_{lam,2} = [1/2]^S [1]^S [1/2]^S   -> y = (b_{lam+1}[u] + b_{lam+1}[u-S])/2
+            //   h_{lam,3} = [1/2]^S [1]^2S [1/2]^S  -> y = (b_{lam+1}[u] + b_{lam+1}[u-S]
+            //                                                + b_{lam+1}[u-2S])/2
+            //
+            // Profile index is p = 3*lam + q. Level 0 contributes q=0..3 and higher levels
+            // q=1..3, which the two conditionals below encode: q=0 exists only at lam==0, and
+            // (3*lam+3 < nprofiles) is false only in the degenerate case max_kernel_width==1,
+            // where nprofiles==1 and p=0 is the only profile.
+
+            double *a = &acc.at({b,d,0});   // length nprofiles
+
+            for (long lam = 0; lam < L; lam++) {
+                const float *bl = &boxcars.at({lam+1,0});
+                long S = pow2(lam);
+
+                for (long t = tpad; t < nt; t++) {
+                    if (lam == 0) {
+                        float y0 = bcar0[t];
+                        a[0] += double(y0) * y0;
+                    }
+
+                    if (3*lam + 3 < nprofiles) {
+                        float y1 = bl[t];
+                        float y2 = 0.5f * (bl[t] + bl[t-S]);
+                        float y3 = 0.5f * (bl[t] + bl[t-S] + bl[t-2*S]);
+
+                        a[3*lam+1] += double(y1) * y1;
+                        a[3*lam+2] += double(y2) * y2;
+                        a[3*lam+3] += double(y3) * y3;
+                    }
+                }
+            }
+
+            // Save the last 'tpad' samples of the stream, for the next chunk's history. These
+            // are read out of the level-0 buffer rather than out of 'src', which is what makes
+            // nt_in < tpad work: the tail of the new history is then part of the old one.
+
+            for (long t = 0; t < tpad; t++)
+                ps[t] = bcar0[nt_in + t];
+        }
+    }
+}
+
+
+// Static member function: the cross-family test.
+//
+// With weights = 1, Dcore = 1 and Dout = 1, the peak-finder's eval_tokens() at the token
+// (m, p, t=0) returns the LINEAR response y_{m,p}(tout) = (h_p * x_m)(tout), while a PfSquare
+// returns sum_t y_{m,p}(t)^2 over the same time grid. So the two agree iff
+//
+//   sum_tout eval_tokens(m,p)[b,d,tout]^2  ==  acc[b, d*M+m, p]
+//
+// for every (b,d,m,p). The identity is exact; the tolerance below is for float summation
+// order only.
+//
+// This is the ONLY test linking the peak-finding kernels to the squaring kernels. Together
+// with --gpfk and --pfsq it means every path from one family to the other crosses a tested
+// edge: if h_{lambda,q} diverged between the families this test fails, and if it diverged
+// between a reference and its GPU twin one of those two fails.
+//
+// Pushing random data through both full pipelines, rather than comparing extracted h_p
+// coefficients, is what makes this catch profile mis-ordering, an off-by-one in the boxcar
+// cascade, a wrong history length, and a multiplet-axis divergence.
+
+void ReferencePfSquare::test_vs_peak_finder()
+{
+    // pf_rank >= 1 gives M >= 2. M == 1 would make the multiplet axis a spectator on both
+    // sides, so a divergence along it would be invisible.
+    long pf_rank = rand_int(1, 4);
+    vector<long> subband_counts = FrequencySubbands::make_random_subband_counts(pf_rank);
+    FrequencySubbands fs(subband_counts);
+    long M = fs.M;
+
+    long Wmax = pow2(rand_int(0, integer_log2(constants::max_pf_width) + 1));
+    long D = pow2(rand_int(0, 3));
+    long nchunks = rand_int(1, 5);
+    long beams_per_batch = rand_int(1, 3);
+    long nbatches = rand_int(1, 3);
+    long total_beams = beams_per_batch * nbatches;
+
+    // PeakFindingKernelParams::validate() requires nt_in to be a multiple of 32 (for float32).
+    // Note that nt_in < tpad is reachable here, and is intentionally not excluded.
+    long nt_in = 32 * rand_int(1, 5);
+
+    // We take nt_wt = nt_in rather than 1, which lets nt_in be any multiple of 32 (the
+    // reference requires the ratio nt_out/nt_wt to be a power of two).
+
+    PeakFindingKernelParams pf_params;
+    pf_params.subband_counts = subband_counts;
+    pf_params.dtype = Dtype::native<float> ();
+    pf_params.max_kernel_width = Wmax;
+    pf_params.beams_per_batch = beams_per_batch;
+    pf_params.total_beams = total_beams;
+    pf_params.ndm_out = D;
+    pf_params.ndm_wt = 1;
+    pf_params.nt_out = nt_in;   // Dout = 1, i.e. no time coarse-graining
+    pf_params.nt_in = nt_in;
+    pf_params.nt_wt = nt_in;
+    pf_params.Dcore = 1;        // evaluate h_p at every time sample
+    pf_params.validate();
+
+    ReferencePeakFindingKernel pf(pf_params);
+    ReferencePfSquare sq(Wmax, total_beams, beams_per_batch, D*M, nt_in);
+
+    long P = pf.nprofiles;
+    long N = fs.N;
+    xassert_eq(sq.nprofiles, P);
+
+    // The identity is exact only if both objects carry at least the longest kernel's history,
+    // i.e. (2*Wmax) input samples. Both do by construction, but the two 'tpad' definitions are
+    // independent of each other, so check rather than assume.
+    xassert_ge(pf.tpad, 2*Wmax);
+    xassert_ge(sq.tpad, 2*Wmax);
+
+    cout << "\nReferencePfSquare::test_vs_peak_finder()\n"
+         << "    subband_counts = " << ksgpu::tuple_str(subband_counts) << "\n"
+         << "    max_kernel_width = " << Wmax << "\n"
+         << "    nprofiles = " << P << "\n"
+         << "    M = " << M << "\n"
+         << "    ndm_out = " << D << "\n"
+         << "    beams_per_batch = " << beams_per_batch << "\n"
+         << "    total_beams = " << total_beams << "\n"
+         << "    nt_in = " << nt_in << "\n"
+         << "    nchunks = " << nchunks << endl;
+
+    // Weights = 1, so the peak-finder's (w*y) is the raw linear response y.
+    Array<float> wt({beams_per_batch, 1L, nt_in, P, N}, af_uhost | af_zero);
+    for (long i = 0; i < wt.size; i++)
+        wt.data[i] = 1.0f;
+
+    // One accumulator per beam, so that batches don't overwrite each other.
+    Array<double> acc_sq({total_beams, D*M, P}, af_uhost | af_zero);
+    Array<double> acc_pf({total_beams, D*M, P}, af_uhost | af_zero);
+
+    Array<float> out_max({beams_per_batch, D, nt_in}, af_uhost | af_zero);
+    Array<uint> out_argmax({beams_per_batch, D, nt_in}, af_uhost | af_zero);
+    Array<uint> tokens({beams_per_batch, D, nt_in}, af_uhost | af_zero);
+    Array<float> out_tok({beams_per_batch, D, nt_in}, af_uhost | af_zero);
+
+    for (long ichunk = 0; ichunk < nchunks; ichunk++) {
+        for (long ibatch = 0; ibatch < nbatches; ibatch++) {
+            long b0 = ibatch * beams_per_batch;
+            Array<float> in({beams_per_batch, D, M, nt_in}, af_uhost | af_random);
+
+            // apply() both advances the peak-finder's persistent state and populates the
+            // 'tmp_arr' that eval_tokens() reads.
+            pf.apply(out_max, out_argmax, in, wt, ibatch);
+
+            for (long m = 0; m < M; m++) {
+                for (long p = 0; p < P; p++) {
+                    // Token format is (t) | (p << 8) | (m << 16), and with Dcore == 1 the only
+                    // legal fine time is t = 0.
+                    uint token = (uint(m) << 16) | (uint(p) << 8);
+                    for (long i = 0; i < tokens.size; i++)
+                        tokens.data[i] = token;
+
+                    pf.eval_tokens(out_tok, tokens, wt);
+
+                    for (long b = 0; b < beams_per_batch; b++) {
+                        for (long d = 0; d < D; d++) {
+                            double s = 0.0;
+                            for (long tout = 0; tout < nt_in; tout++) {
+                                float y = out_tok.at({b,d,tout});
+                                s += double(y) * y;
+                            }
+                            acc_pf.at({b0+b, d*M+m, p}) += s;
+                        }
+                    }
+                }
+            }
+
+            Array<float> in_sq = in.reshape({beams_per_batch, D*M, nt_in});
+            Array<double> acc_slice = acc_sq.slice(0, b0, b0 + beams_per_batch);
+            sq.apply(acc_slice, in_sq, ibatch);
+        }
+    }
+
+    // Tolerance: the two sides sum the same non-negative terms, but in different orders and
+    // through different (algebraically equivalent) float32 expressions for y.
+    double eps = 1.0e-5;
+    assert_arrays_equal(acc_pf, acc_sq, "acc_pf", "acc_sq", {"b","dm","p"}, eps, eps);
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // GpuPfSquare
 
 
@@ -1757,29 +1987,19 @@ void GpuPfSquare::launch(Array<double> &acc, const Array<float> &in, long ibatch
 
 // Static member function: runs one randomized test iteration.
 //
-// The reference is ReferencePeakFindingKernel's 'out_var' output, which is the per-chunk
-// MEAN square of the weighted peak-finder output w*y, resolved by (multiplet, profile).
-// Configured with weights = 1, Dcore = 1 and nt_out = nt_in, it computes
+// The reference is ReferencePfSquare, which has the same interface and computes the same
+// quantity, so nothing needs to be neutralized to make the comparison meaningful.
 //
-//   out_var[b,d,m,p] = (1/nt_in) sum_t (h_p * y)[t]^2
-//
-// which is exactly this kernel's output over nt_in. Setting Dcore=1 is the essential part:
-// at its production value the reference evaluates h_p only on a grid of spacing
-// min(Dcore, 2^lambda), which is not the quantity we want (see PeakFindingKernel.hpp).
-//
-// The two computations share no code, and the reference is a plain triple loop over
-// explicitly materialized boxcar arrays, so this is a real test of the shuffle-based
-// cascade rather than a restatement of it.
+// The two computations share no code -- the GPU side is a warp-shuffle cascade, the CPU side
+// a plain loop over explicitly materialized boxcar arrays -- so this is a real test of the
+// shuffle cascade rather than a restatement of it. What it does NOT test is whether the
+// PfSquare kernel bank h_{lambda,q} agrees with the one the peak-finders use; that is
+// ReferencePfSquare::test_vs_peak_finder().
 
 void GpuPfSquare::test_random()
 {
-    // The reference kernel requires ndm_out and (ndm_out/ndm_wt) to be powers of two, so
-    // 'ndm' is drawn as a power of two and we take ndm_wt = 1. We take nt_wt = nt_in rather
-    // than 1, which lets nt_in be any multiple of 32 (the reference requires the ratio
-    // nt_out/nt_wt to be a power of two).
-
     long Wmax = pow2(rand_int(0, integer_log2(constants::max_pf_width) + 1));
-    long ndm = pow2(rand_int(0, 7));
+    long ndm = rand_int(1, 65);   // a row count, so deliberately not always a power of two
     long nchunks = rand_int(1, 5);
 
     auto v = ksgpu::random_integers_with_bounded_product(3, std::max(2000/ndm, 8L));
@@ -1787,29 +2007,16 @@ void GpuPfSquare::test_random()
     long nbatches = v[1];
     long total_beams = beams_per_batch * nbatches;
 
-    // The kernel requires nt_in to be a multiple of 32, and at least tpad = max(2*Wmax,32).
+    // The GPU kernel requires nt_in to be a multiple of 32, and at least tpad = max(2*Wmax,32).
     // Both bounds are multiples of 32, so the max below is too.
     long nt_in = std::max(32 * v[2], std::max(2*Wmax, 32L));
 
     GpuPfSquare gpu_kernel(Wmax, total_beams, beams_per_batch, ndm, nt_in);
+    ReferencePfSquare ref_kernel(Wmax, total_beams, beams_per_batch, ndm, nt_in);
+
     long P = gpu_kernel.nprofiles;
-
-    PeakFindingKernelParams ref_params;
-    ref_params.subband_counts = {1};   // pf_rank=0, N=M=1
-    ref_params.dtype = Dtype::native<float> ();
-    ref_params.max_kernel_width = Wmax;
-    ref_params.beams_per_batch = beams_per_batch;
-    ref_params.total_beams = total_beams;
-    ref_params.ndm_out = ndm;
-    ref_params.ndm_wt = 1;
-    ref_params.nt_out = nt_in;   // Dout = 1, i.e. no time coarse-graining
-    ref_params.nt_in = nt_in;
-    ref_params.nt_wt = nt_in;
-    ref_params.Dcore = 1;        // evaluate h_p at every time sample
-    ref_params.validate();
-
-    ReferencePeakFindingKernel ref_kernel(ref_params);
     xassert_eq(ref_kernel.nprofiles, P);
+    xassert_eq(ref_kernel.tpad, gpu_kernel.tpad);
 
     cout << "\nGpuPfSquare::test_random()\n"
          << "    max_kernel_width = " << Wmax << "\n"
@@ -1825,19 +2032,9 @@ void GpuPfSquare::test_random()
     gpu_kernel.allocate(allocator);
 
     // One accumulator per beam, so that batches don't overwrite each other. Both kernels
-    // accumulate over all chunks; the reference's out_var is a per-chunk MEAN, so we undo
-    // its 1/nt_in here.
+    // accumulate over all chunks.
     Array<double> acc_gpu({total_beams, ndm, P}, af_gpu | af_zero);
     Array<double> acc_ref({total_beams, ndm, P}, af_uhost | af_zero);
-
-    // Weights = 1, so the reference's (w*y) is the raw y.
-    Array<float> wt({beams_per_batch, 1L, nt_in, P, 1L}, af_uhost | af_zero);
-    for (long i = 0; i < wt.size; i++)
-        wt.data[i] = 1.0f;
-
-    Array<float> out_max({beams_per_batch, ndm, nt_in}, af_uhost | af_zero);
-    Array<uint> out_argmax({beams_per_batch, ndm, nt_in}, af_uhost | af_zero);
-    Array<double> out_var({beams_per_batch, ndm, 1L, P}, af_uhost | af_zero);
 
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         for (long ibatch = 0; ibatch < nbatches; ibatch++) {
@@ -1845,17 +2042,12 @@ void GpuPfSquare::test_random()
 
             Array<float> in_cpu({beams_per_batch, ndm, nt_in}, af_uhost | af_random);
             Array<float> in_gpu = in_cpu.to_gpu();
-            Array<double> acc_slice = acc_gpu.slice(0, b0, b0 + beams_per_batch);
 
-            gpu_kernel.launch(acc_slice, in_gpu, ibatch, nullptr);   // null stream
+            Array<double> gpu_slice = acc_gpu.slice(0, b0, b0 + beams_per_batch);
+            gpu_kernel.launch(gpu_slice, in_gpu, ibatch, nullptr);   // null stream
 
-            Array<float> in_ref = in_cpu.reshape({beams_per_batch, ndm, 1L, nt_in});
-            ref_kernel.apply(out_max, out_argmax, out_var, in_ref, wt, ibatch);
-
-            for (long b = 0; b < beams_per_batch; b++)
-                for (long d = 0; d < ndm; d++)
-                    for (long p = 0; p < P; p++)
-                        acc_ref.at({b0+b, d, p}) += out_var.at({b,d,0,p}) * nt_in;
+            Array<double> ref_slice = acc_ref.slice(0, b0, b0 + beams_per_batch);
+            ref_kernel.apply(ref_slice, in_cpu, ibatch);
         }
     }
 

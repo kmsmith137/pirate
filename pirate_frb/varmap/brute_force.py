@@ -58,10 +58,11 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
     Parameters
     ----------
     config : DedispersionConfig
-        Three requirements, all checked up front and reported as one collected list: every
-        tree has ``Dcore == 1`` (set ``time_downsampling: 1``), ``beams_per_gpu ==
-        beams_per_batch``, and ``dm_downsampling`` left at 0 (auto-filled to 2^R, which is
-        what makes ``ndm_out == 2^(r-R)`` and hence makes the alpha index convention apply).
+        Two requirements, both checked up front and reported as one collected list:
+        ``beams_per_gpu == beams_per_batch``, and ``dm_downsampling`` left at 0 (auto-filled
+        to 2^R, which is what makes ``ndm_out == 2^(r-R)`` and hence makes the alpha index
+        convention apply). ``time_downsampling`` is unconstrained -- it sets the peak-finder's
+        Dcore, which neither sweep reads.
         The beam count comes from ``config.beams_per_batch``: on the GPU the beam axis is a
         pure spectator, so a batch of B beams runs B distinct passes concurrently. Measurement
         found that batching does not speed up a full sweep, so the CLI forces 1.
@@ -250,11 +251,12 @@ class _SweepGeometry:
             r, R = int(t.total_rank()), int(fs.pf_rank)
             gamma, ndm_out = int(t.primary_tree_index), int(t.ndm_out)
 
-            if int(t.Dcore) != 1:
-                errs.append(f'tree {itree} has Dcore = {int(t.Dcore)}, expected 1 (set'
-                            " 'time_downsampling: 1' in the config). With Dcore > 1 the"
-                            ' peak-finder evaluates its convolutions on a sublattice of'
-                            ' output times, which is silently wrong for a sum over all times.')
+            # Note there is deliberately NO constraint on Dcore (i.e. on the config's
+            # 'time_downsampling'). Both sweeps end in a PfSquare, which evaluates h_p at
+            # every time sample by construction, so nothing downstream of the dedisperser
+            # sees the peak-finder's Dcore sublattice at all. test_sweep_vs_per_tfm() runs a
+            # Dcore > 1 config against the analytic oracle, which is what makes that a checked
+            # property rather than an assumed one.
             if ndm_out != (1 << (r - R)):
                 errs.append(f'tree {itree} has ndm_out = {ndm_out} != 2^(r-R) ='
                             f' {1 << (r-R)}; leave \'dm_downsampling\' at 0 in the config')
@@ -416,8 +418,74 @@ class _SweepBase:
                      f' (eta {eta:.0f} s)')
 
 
+class _CpuChain:
+    """A ReferenceDedisperser plus the per-tree ReferencePfSquare kernels that read its
+    subband arrays -- the CPU counterpart of _GpuSweep's
+
+        GpuSbDedispersionKernel -> sb_out -> GpuPfSquare
+
+    tail. Both objects carry persistent state that has to line up with the same chunk stream,
+    so they are constructed and driven together, through dedisperse().
+
+    Peak-finding weights are set to 1. That does not affect anything here -- the subband
+    arrays are upstream of the weights -- but it keeps out_max meaningful for a caller that
+    also wants to look at it.
+    """
+
+    def __init__(self, geom):
+        from ..pirate_pybind11 import ReferenceDedisperser
+        from ..kernels import ReferencePfSquare
+
+        self.geom = g = geom
+        self.rdd = ReferenceDedisperser(g.plan, 1)
+        assert int(self.rdd.nbatches) == 1, int(self.rdd.nbatches)
+
+        for w in self.rdd.wt_arrays:
+            w[...] = 1.0
+
+        # Every axis except time is a spectator to a PfSquare, so the subband array's
+        # (Dpf, M) pair is simply flattened into its 'ndm' row count -- exactly as _GpuSweep
+        # does with sb_out.
+        self.pf_squares = [
+            ReferencePfSquare(int(g.plan.trees[i].pf.max_width), 1, 1,
+                              g.tree_D[i] * g.tree_M[i], g.tree_nt_ds[i])
+            for i in range(g.ntrees)]
+
+    @property
+    def input_array(self):
+        """The dedisperser's input buffer. Fill it before each dedisperse()."""
+        return self.rdd.input_array
+
+    def dedisperse(self, ichunk):
+        """Run one chunk, and return that chunk's ``sum_t y^2`` per tree, as a list of
+        ``(2^(r-R), M, P)`` float64 arrays.
+
+        Chunks must be supplied in order: both the dedisperser and the PfSquare kernels carry
+        state across chunk boundaries.
+        """
+
+        g = self.geom
+        self.rdd.dedisperse(ichunk, 0)
+        out = []
+
+        for itree in range(g.ntrees):
+            D, M, P = g.tree_D[itree], g.tree_M[itree], g.tree_P[itree]
+            acc = np.zeros((1, D*M, P))
+            sb = np.asarray(self.rdd.out_sb[itree])
+            self.pf_squares[itree].apply(acc, sb.reshape(1, D*M, g.tree_nt_ds[itree]), 0)
+            out.append(acc[0].reshape(D, M, P))
+
+        return out
+
+
 class _CpuSweep(_SweepBase):
-    """The sweep on the CPU, through ReferenceDedisperser.
+    """The sweep on the CPU, through a _CpuChain. The pipeline is
+
+        one-hots -> [numpy detrender] -> ReferenceDedisperser
+                 -> out_sb -> ReferencePfSquare -> float64 accumulator, one per tree
+
+    i.e. the same shape as _GpuSweep's, which is what makes test_sweep_gpu_vs_cpu a test of
+    this driver rather than of a convention that reconciles two different quantities.
 
     Needs ``beams_per_batch == 1``: the beam axis buys nothing here, and the reference
     dedisperser is slow enough that it is a correctness reference rather than a production
@@ -430,35 +498,16 @@ class _CpuSweep(_SweepBase):
             raise RuntimeError(f'_CpuSweep: needs beams_per_batch == 1 (got {geom.nbeams});'
                                ' the beam axis buys nothing on the CPU')
 
-    def make_dedisperser(self):
-        """A ReferenceDedisperser with unit peak-finding weights, so that its out_var is the
-        unnormalized sum of squares the variance map is defined in terms of."""
+    def make_chain(self):
+        """A _CpuChain on this sweep's geometry."""
+        return _CpuChain(self.geom)
 
-        from ..pirate_pybind11 import ReferenceDedisperser
-
-        g = self.geom
-        rdd = ReferenceDedisperser(g.plan, 1, enable_variances=True)
-        assert int(rdd.nbatches) == 1, int(rdd.nbatches)
-
-        for w in rdd.wt_arrays:
-            w[...] = 1.0
-
-        # out_var is a per-chunk MEAN; multiplying by samples_per_chunk recovers the raw sum
-        # of squares, which is what run_pass() accumulates. Every profile has the same count
-        # here, because Dcore == 1 (checked by _SweepGeometry); assert it rather than assume
-        # it, since a per-profile count would silently rescale part of the answer.
-        for itree in range(g.ntrees):
-            spc = list(rdd.pf_kernels[itree].samples_per_chunk)
-            assert spc == [g.tree_nt_ds[itree]] * len(spc), (itree, spc)
-
-        return rdd
-
-    def run_pass(self, rdd, ifreq, iphase, ipass, guard_chunk=True):
+    def run_pass(self, chain, ifreq, iphase, ipass, guard_chunk=True):
         """Apply L to the one-hot e^(F,t_c), and return ``[sum_t y^2]`` per tree, as a list of
         ``(2^(r-R), M, P)`` float64 arrays.
 
         Passes are laid end to end in one continuous stream (pass 'ipass' occupies chunks
-        ``[ipass*nchunks, (ipass+1)*nchunks)`` of 'rdd'), so no persistent state is ever
+        ``[ipass*nchunks, (ipass+1)*nchunks)`` of 'chain'), so no persistent state is ever
         reset: the guard chunk is what proves that one pass's response has died out before the
         next one's one-hot arrives.
         """
@@ -470,14 +519,12 @@ class _CpuSweep(_SweepBase):
         resp = g.one_hot_response(ifreq)
 
         for j in range(nchunks):
-            rdd.input_array[...] = 0.0
-            g.write_one_hot(rdd.input_array, resp, t0, j)
-            rdd.dedisperse(ipass * nchunks + j, 0)
+            chain.input_array[...] = 0.0
+            g.write_one_hot(chain.input_array, resp, t0, j)
+            sumsq = chain.dedisperse(ipass * nchunks + j)
 
             for itree in range(g.ntrees):
-                # out_var is a per-chunk mean square; the nt_ds factor turns it back into a
-                # raw sum of squares (see the samples_per_chunk assert in make_dedisperser).
-                ov = np.asarray(rdd.out_var[itree])[0] * g.tree_nt_ds[itree]
+                ov = sumsq[itree]
                 if j < g.ndata_chunks:
                     acc[itree] += ov
                 elif np.any(ov != 0.0):
@@ -492,7 +539,7 @@ class _CpuSweep(_SweepBase):
         g = self.geom
         chans = g.resolve_channels(channels)
         self.npasses = len(chans) * g.nphases
-        rdd = self.make_dedisperser()
+        chain = self.make_chain()
         report_every = max(1, self.npasses // 20)
 
         if progress:
@@ -506,7 +553,7 @@ class _CpuSweep(_SweepBase):
         for ifreq in chans:
             for iphase in range(g.nphases):
                 t0 = time.time()
-                acc = self.run_pass(rdd, ifreq, iphase, ipass, guard_chunk=guard_chunk)
+                acc = self.run_pass(chain, ifreq, iphase, ipass, guard_chunk=guard_chunk)
                 cols = [g.tree_phase_weight[i] * acc[i].reshape(-1) for i in range(g.ntrees)]
                 self.seconds += time.time() - t0
                 yield ifreq, cols

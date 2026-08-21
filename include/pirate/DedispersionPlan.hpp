@@ -39,7 +39,7 @@ struct DedispersionPlan
     // Since the Dcore values are then not the compiled kernels' values, a false plan
     // cannot be used in a GpuDedisperser. It is still perfectly usable on the GPU by
     // callers that drive kernels themselves without going through cdd2 -- see
-    // slow_avar.GpuBruteForceVarianceMap, which runs GpuDedispersionKernel,
+    // varmap.brute_force._GpuSweep, which runs GpuDedispersionKernel,
     // GpuSbDedispersionKernel and GpuPfSquare -- as well as in host-only contexts such
     // as the 'pirate_frb show_dedisperser' CLI.
     //

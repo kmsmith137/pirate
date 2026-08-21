@@ -1,10 +1,9 @@
 """Reporting for varmap: the experiment record, the rank frontier, and the table/json helpers.
 
-This is the reporting half of what pirate_frb.slow_avar.varmap_eval used to be, and the
-contract it existed to enforce comes with it: EVERY EXPERIMENT SHOULD REPORT ITS NUMBERS
-THROUGH ONE PLACE, so that results taken months apart are comparable. The other half of that
-contract -- that the distance function must not be changed silently -- lives on
-varmap/distance.py, where D is defined.
+One contract is what this module exists to enforce: EVERY EXPERIMENT SHOULD REPORT ITS
+NUMBERS THROUGH ONE PLACE, so that results taken months apart are comparable. Its companion
+-- that the distance function must not be changed silently -- lives on varmap/distance.py,
+where D is defined.
 
 The record is a plain DICT, and that is deliberate rather than lazy. A frontier is then a list
 of dicts, which prints as a table and serializes to json with no extra machinery, and an
@@ -64,9 +63,8 @@ def row_dict(vmap, D, *, name=None, adm=None, extra=None, apply_cost=True):
         Include apply_cost(), which counts the nonzeros of Q and is therefore an O(nbeta*K)
         pass. Once per row of a results table is what it is for; pass False in a loop.
 
-    Note 'factor_rank' is what varmap_eval called 'rank'. The name follows the map, since that
-    is where the number now comes from, and it is the FACTORIZATION's rank -- an upper bound on
-    the numerical rank of the product, and deliberately not the same thing.
+    Note 'factor_rank' is deliberately not called 'rank': it is the FACTORIZATION's rank, an
+    upper bound on the numerical rank of the product, and not the same thing.
     """
 
     r = dict(name=name,
@@ -168,9 +166,8 @@ def format_table(rows, columns=None):
 def format_row(r):
     """One-line summary of a single record.
 
-    The admissibility fields are OPTIONAL here, where varmap_eval's version could assume them:
-    measuring is now a separate pass that most rows do not pay for, so a row that skipped it
-    prints what it has rather than raising.
+    The admissibility fields are OPTIONAL: measuring is a separate pass that most rows do not
+    pay for, so a row that skipped it prints what it has rather than raising.
     """
 
     K = r.get('factor_rank')

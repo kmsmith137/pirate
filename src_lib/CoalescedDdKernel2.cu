@@ -486,8 +486,7 @@ void CoalescedDdKernel2::test_random()
             if (xdm_rank > 0)
                 gather_m_ext(pf_in_cpu, sb_cpu, xdm_rank);
 
-            Array<double> var_cpu;   // empty -> out_var feature disabled
-            ref_pf_kernel.apply(max_cpu, argmax_cpu, var_cpu, pf_in_cpu, wt_cpu, ibatch);
+            ref_pf_kernel.apply(max_cpu, argmax_cpu, pf_in_cpu, wt_cpu, ibatch);
 
             // CPU kernel done! Now run the GPU kernel.
             Array<void> wt_gpu = wl.to_gpu(wt_cpu);
