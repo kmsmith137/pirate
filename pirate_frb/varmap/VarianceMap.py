@@ -1375,8 +1375,11 @@ class VarianceMap:
             'exact' is one ``np.linalg.svd`` of the whole matrix; 'randomized' is a range finder
             with one power iteration, three blocked passes and nothing of matrix size in memory,
             which is the only one of the two available once the matrix is a file. 'auto' picks
-            exact while the matrix fits in 'max_bytes'. Ignored for a factored self, which is
-            always exact and cheap.
+            exact only when the matrix fits in 'max_bytes' AND ``min(nbeta, nfreq)`` is within
+            2x of ``factor_rank + oversample`` -- i.e. on predicted flops, not on size alone,
+            because exact is superlinear in the small dimension and randomized is not. An
+            eps-only truncation always takes exact, since randomized has no rank to work to.
+            Ignored for a factored self, which is always exact and cheap.
         rng, oversample, power_iters
             The randomized path's draw, its extra sample count and its number of power
             iterations -- ``1 + 2*power_iters`` blocked passes. The defaults are measured
@@ -1405,8 +1408,29 @@ class VarianceMap:
         if self.is_factored:
             method = 'factored'
         elif method == 'auto':
-            method = ('exact' if (8 * self.nbeta * self.nfreq <= int(max_bytes))
-                      else 'randomized')
+            # CHOOSE ON FLOPS, NOT ON BYTES. Exact costs O(nbeta * nfreq * min(nbeta, nfreq));
+            # randomized costs O(nbeta * nfreq * ell) with ell = factor_rank + oversample. So
+            # exact wins only while min(nbeta, nfreq) is comparable to ell -- and a pure memory
+            # test picks exact PRECISELY WHERE IT IS WORST, just under the byte bound where the
+            # matrix is largest. Measured at nbeta = 12800, K = 16, single-threaded: exact took
+            # 174 s at nfreq = 6400 and over 800 s (killed) at nfreq = 12800, against 5.0 s for
+            # randomized at nfreq = 28160. That is a 35x inversion, and it cost an agent a cell
+            # of a cost model before anyone noticed.
+            #
+            # The memory bound stays authoritative, and is tested FIRST: exact materializes the
+            # whole matrix, and when it does not fit there is no choice to make. Keeping that
+            # branch first also preserves the informative error for an eps-only truncation of a
+            # matrix that does not fit -- randomized raises there, saying it needs an explicit
+            # factor_rank, which is more useful than an out-of-memory kill from exact.
+            if 8 * self.nbeta * self.nfreq > int(max_bytes):
+                method = 'randomized'
+            elif factor_rank is None:
+                method = 'exact'      # randomized approximates a fixed number of modes; eps
+                                      # thresholds a full spectrum, and has no rank to give it.
+            else:
+                ell = int(factor_rank) + int(oversample)
+                method = ('exact' if (min(self.nbeta, self.nfreq) <= 2 * ell)
+                          else 'randomized')
 
         t0 = time.time()
         if self.is_factored:
@@ -1862,6 +1886,19 @@ class VarianceMap:
 
         elapsed = time.time() - t0
         adm = bool(ref.is_admissible) if repair else False
+
+        # A repair that RAN is not a repair that SUCCEEDED, and admissibility here was inferred
+        # from the first. lp's steps now report 'n_neg_after', a post-repair count of negative
+        # product entries; any of those is inadmissible outright, since Abar >= 0 makes P < 0 a
+        # violation even where Abar == 0. A repair triple with no additive stage -- which is
+        # what for_wstep() selects -- cannot clear one, because a positive row scale cannot
+        # change a sign. Without this the map would carry is_admissible = True and
+        # get_distance() would return a finite number for a map that underestimates the
+        # variance somewhere, which is the single failure the one-sided distance exists to
+        # prevent. Refusing the flag makes get_distance() raise instead, with its own message
+        # saying how to fix it.
+        if adm and int(info.get('n_neg_after', 0)) > 0:
+            adm = False
         out = self.replace(Q=Q, mid=mid, W=W, pinned_columns=self.pinned_columns,
                            Q_is_semiorthogonal=bool(qflag), W_is_semiorthogonal=bool(wflag),
                            is_admissible=adm)

@@ -82,7 +82,10 @@ class LpConfig:
     expensive way: a difference in output can no longer be told apart from a bug. The
     measured-better values are not lost -- they are recommended(), which is one line to adopt.
 
-    Be clear about what it costs: the additive repair off costs up to 2.5x in D. Constraint
+    Be clear about what it costs, and about where: the additive repair off costs up to 2.5x in
+    D at TEST SCALE, but the whole repair pipeline was measured worth only 0.087% at CHORD
+    (409600 x 28160, K = 128). The 2.5x is a small-geometry number and does not survive the
+    scale-up -- do not budget for it at production. Constraint
     generation off costs less than it used to be thought to -- see the measured table under
     `cuts`, which supersedes the 5.6x-32x this docstring used to quote, and which finds a net
     LOSS at high rank on a narrow-band map.
@@ -484,7 +487,9 @@ class LpConfig:
         """The best values measured, as a preset rather than a default.
 
         Everything the field commentary says is worth something is turned on: constraint
-        generation with a pool, and both additive repair stages (up to 2.5x). 'direction' is
+        generation with a pool, and both additive repair stages (up to 2.5x at test scale;
+        measured worth 0.087% at CHORD, so do not expect it to matter at production).
+        'direction' is
         'q' or 'w', because several of these differ between the two.
 
         MEASURE THE CUTS HALF BEFORE ADOPTING IT. Its benefit is strongly shape-dependent and
@@ -507,10 +512,39 @@ class LpConfig:
                                f" {direction!r}")
 
         common = dict(cuts=True, cuts_pool=8192, cuts_agg=True, cuts_min_rows=1500,
-                      cuts_rounds=200)
+                      cuts_rounds=200,
+                      # Campaign 4. The dataclass defaults stay at the values transcribed from
+                      # free_lp.py -- lpconfig_audit.py checks exactly that -- so the measured
+                      # improvements belong HERE, in the preset that exists to carry them.
+                      #
+                      # cuts_tol: free. Measured at 12800 x 3200, against the same solve with
+                      # cuts off, 1e-12 versus the shipped 1e-9 is the same wall time and the
+                      # same round count, and D agrees to 13 digits instead of 9. The knob was
+                      # built for the opposite trade and that direction is expensive.
+                      cuts_tol=1.0e-12,
+                      # cuts_pool_sample: removes a TRAP rather than buying speed. The chunk is
+                      # derived as n // (8*workers) and collapses to 1 LP on a subsampled run,
+                      # which turns the amortized cut cost into the cold-start cost -- measured
+                      # 6.4x. Every "measure on a subsample, then extrapolate" protocol was
+                      # biased pessimistic by it. Warming the pool over O(32) LPs makes a
+                      # subsample behave like a full run, and removes the first-chunk cold start
+                      # from a real run as well.
+                      cuts_pool_sample=32)
         if direction == 'q':
-            base = cls.for_qstep(**common, additive_first=True, additive_last=True)
+            # cuts_pool_window: 1026 -> 480 core-hours on the full CHORD K=128 Q-step, for a
+            # 1.3e-14 median change in the LP objective; at the shipped 0 that cell does not fit
+            # in a day. It is a HIGH-RANK knob, not a scale knob -- 2.149x at K=128, 1.044x at
+            # K=64, 1.00x at K <= 32 -- and never a loss, so the preset simply sets it. Both
+            # this code and free_lp.py ship 0, and both say in their own field commentary that 0
+            # is the losing value: the pool does not saturate, the working set leaks, and the
+            # speed-up decays.
+            base = cls.for_qstep(**common, additive_first=True, additive_last=True,
+                                 cuts_pool_window=4)
         else:
+            # No cuts_pool_window here: measured at production geometry, constraint generation
+            # never runs in this direction at all -- 0 of 48 sampled channels have a bounded
+            # first relaxation, so every LP falls back to the exact nbeta-row solve and the pool
+            # policy is moot. See the 'cuts' commentary.
             base = cls.for_wstep(**common, additive_last=True, rescale='none')
         return dataclasses.replace(base, **overrides) if overrides else base
 
@@ -1047,7 +1081,22 @@ def repair_additive(Q, W, mid, Abar, cfg=None, *, rows=None):
     raw = dict(n_pos=int(n_pos_tot), n_viol=int(n_viol_tot),
                frac_viol=float(n_viol_tot) / max(1, n_pos_tot),
                max_ratio=float(r0), tol=float(cfg.viol_tol))
-    if r0 <= 1.0:
+    # THE EXIT TEST IS THE DEFICIT, NOT THE RATIO, AND THE DIFFERENCE IS A CORRECTNESS BUG.
+    # r0 is max(Abar/P) over Abar > 0, which CANNOT SEE a product entry that is negative where
+    # Abar is positive: that entry's ratio is negative, so it loses to the row's max and r0
+    # comes out <= 1 while the row does not dominate. The lift computed above is driven by the
+    # DEFICIT max(Abar - P, 0), which does see it -- so returning here on the ratio alone threw
+    # away a lift that was already in hand, and left a map that reports is_admissible = True
+    # and a finite D while underestimating the variance. That is the one failure the one-sided
+    # distance exists to prevent. Measured at CHORD (409600 x 28160, K = 128): 120 such entries
+    # in the raw W point, against 1 at nbeta = 1600 -- the defect GROWS with scale.
+    #
+    # free_lp.py's repair_additive() gates on the deficit and has no ratio exit at all, so this
+    # restores parity with the implementation the port is checked against rather than diverging
+    # from it. The conjunction (rather than n_bad == 0 alone) keeps the existing behaviour when
+    # 'rows' is given and the only violation is in an unwanted row: n_bad is masked by 'want'
+    # while r0 is not, and that case must still fall through to the second multiplicative pass.
+    if r0 <= 1.0 and n_bad == 0:
         return Q, dict(mode='additive', max_ratio=r0, margin=float(margin), dy_rel=0.0,
                        n_rows=0, n_fallback=0, backoff={}, viol=raw)
 
@@ -1874,8 +1923,9 @@ def apply_repair(Q, W, mid, Abar, cfg=None, *, axis='rows'):
     modified in place.
 
     This is the pipeline both steps end with, exposed because re-applying a repair to a
-    stored solution is a first-class operation: the repair is worth up to 2.5x in D by
-    itself, and re-solving to try a different one is a four-order-of-magnitude waste when a
+    stored solution is a first-class operation: the repair is worth up to 2.5x in D by itself
+    at test scale (0.087% at CHORD -- the figure is strongly geometry-dependent), and
+    re-solving to try a different one is a four-order-of-magnitude waste when a
     repair is a single blocked pass over the product. Solve once with ``repair=False``, then
     repair the stored point several ways and compare.
 
@@ -2173,6 +2223,14 @@ def q_step(Abar, W, cfg=None, *, Q0=None, q_lower=None, workers=None, progress=F
         info['Q_raw'] = Q.copy()
     if sel is None:
         Q, W = _apply_repair(Abar, Q, W, None, cfg, 'rows', info)
+        # POST-repair, and that is the point: 'n_neg' above is the RAW count, which a repair is
+        # expected to clear, so it cannot answer "did the repair actually succeed?". A negative
+        # product entry is inadmissible unconditionally (Abar >= 0 everywhere, so P < 0 violates
+        # P >= Abar even where Abar == 0), and no repair triple WITHOUT an additive stage can
+        # fix one -- a positive row scale cannot change a sign. _step_result() reads this and
+        # refuses to mark such a map admissible. One extra product pass; at CHORD that is
+        # minutes against a Q-step's ~480 core-hours.
+        info['n_neg_after'] = int(check_nonneg(Q, W, None, cfg)[0])
     info.update(n_neg=nneg, min_prod=min_prod, seconds=time.time()-t0)
     return Q, W, info
 
@@ -2343,6 +2401,11 @@ def w_step(Abar, Q, y_true, labels, W0, cfg=None, *, pinned=None, workers=None,
     nneg, min_prod = check_nonneg(Q, W, None, cfg)
     if sel is None:
         Q, W = _apply_repair(Abar, Q, W, None, cfg, 'cols', info)
+        # See the matching comment in q_step: POST-repair, and it is what _step_result() reads
+        # to decide admissibility. This direction is where it bites -- for_wstep() selects NO
+        # additive stage, so its repair structurally cannot clear a negative product entry, and
+        # measured at CHORD the raw W point has 120 of them.
+        info['n_neg_after'] = int(check_nonneg(Q, W, None, cfg)[0])
 
     if lpinfo['n_failed'] and cfg.w_fail_warn:
         print(f'  varmap.lp w_step: {lpinfo["n_failed"]}/{nfreq} channel LPs FAILED and fell'

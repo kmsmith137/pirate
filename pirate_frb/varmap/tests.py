@@ -1682,6 +1682,19 @@ def test_lp_repairs():
     Qa, _ = repair_additive(Qbad, W, None, Abar, cfg)
     assert _dominates(Qa, W, Abar) and (check_nonneg(Qa, W)[0] == 0)
 
+    # AND THE RATIO CANNOT BE THE ADDITIVE STAGE'S EXIT TEST EITHER. Qm is that case already:
+    # its max ratio is <= 1 (asserted above) while n_neg > 0, so an exit test on the ratio
+    # returns early and throws away the lift the deficit had already computed, leaving a map
+    # that reports admissible and scores a finite D while underestimating the variance. That
+    # is what repair_additive did until 2026-08-21. NEITHER bit-identity gate covers it --
+    # equiv2_lp.py and equiv2_arms.py have no cell with a negative product entry at ratio <= 1
+    # -- which is how it survived the port, so the coverage has to live here. At CHORD the raw
+    # W point has 120 such entries, against 1 at nbeta = 1600: the defect grows with scale.
+    Qm2, stm = repair_additive(Qm, W, None, Abar, cfg)
+    assert _dominates(Qm2, W, Abar) and (check_nonneg(Qm2, W)[0] == 0), \
+        'repair_additive exited on the ratio and left a negative product entry'
+    assert stm['n_rows'] > 0, 'the additive stage reported no work on a point that needed it'
+
     # The additive lift is defined on the COLUMNS of W, so it refuses a non-identity mid
     # rather than quietly raising the wrong thing.
     try:
@@ -1710,8 +1723,9 @@ def test_lp_repairs():
     assert np.all((sub[rows] @ W.T) >= Abar[rows])
 
     atomic_print(f'    test_lp_repairs(nbeta={nbeta}, nfreq={nfreq}): four repairs dominate,'
-                 f' the sign blind spot reproduced ({n_neg} entries) and fixed additively,'
-                 ' blocking exact over ragged tails')
+                 f' the sign blind spot reproduced ({n_neg} entries) and fixed additively'
+                 ' from both sides (ratio > 1 and ratio <= 1), blocking exact over ragged'
+                 ' tails')
 
 
 def test_lp_steps():
