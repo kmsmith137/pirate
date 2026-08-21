@@ -1176,7 +1176,7 @@ pre-registered prediction of the campaign to hold; the first was the sweep time 
 at $6.5 \pm 0.5$ hours by extrapolating a ladder and then measured at $5.6$.
 
 \paragraph{Nothing that was expected to be hard was hard.}
-The dense $A$ at this config would be $1.3$~PB, so the dense-free construction of campaign 1 is
+The dense $A$ at this config would be $1.2$~TiB, so the dense-free construction of campaign 1 is
 what makes any of this possible -- but with it, {\bf the sweep is noise}: $5.6$ GPU-hours against
 an LP stage two to three orders of magnitude larger. The GPU kernel the config needs was already
 compiled, and {\tt dd\_rank} turns out to depend only on {\tt toplevel\_tree\_rank}, not on the
@@ -1285,6 +1285,257 @@ The mechanism behind the column scaling is unknown. The $W$-step recommendation 
 extrapolation from $16384$ groups to $409\,600$ that one further cell would settle. And the
 channel-count trend turns over somewhere between $7040$ and $28160$ channels, which nobody has
 resolved.
+
+\subsection{Campaign 4 setup [mostly human authored]}
+\label{ssec:campaign4_setup}
+
+Between campaigns 3 and 4, we did some refactioring and cleanup.
+We started developing a new subpackage \verb|pirate_frb.varmap|,
+that will eventually supersede some of the code in \verb|slow_avar/| and \verb|research/.../*.py|.
+
+The central class in \verb|pirate_frb.varmap| is a flexible \verb|VarianceMap| class. 
+A lot of our existing code is naturally refactored around this class. For example, 
+the ``brute force'' algorithm for computing variance maps can be refactored as a 
+function that returns one or more \verb|VarianceMaps| (rather than new classes
+\verb|BruteForceVarianceMap|, \verb|GpuBruteForceVarianceMap|). Building blocks 
+of the low-rank approximation algorithm (e.g. SVD initialization, Q-step, W-step) 
+can be refactored as functions whose inputs/outputs are \verb|VarianceMaps|, 
+or as \verb|VarianceMap| methods.
+
+Eventually, we want the \verb|varmap| sub-package to supersede the following code
+(hereafter ``old code''):
+\begin{itemize}
+\item In \verb|slow_avar|: \verb|brute_force_*.py|, \verb|variance_map_io.py|,
+ \verb|VarMapDistance.py|, \verb|varmap_eval.py|
+\item All code in \verb|research/toplevel/*.py|.
+\end{itemize}
+The following code is NOT in the scope of this refactor (hereafter ``new code''):
+\begin{itemize}
+\item In \verb|slow_avar|: \verb|check_*.py|, \verb|PfVariance.py|, \verb|SparseTile.py|,
+ \verb|TmpVmap.py|
+\end{itemize}
+Assume that files in the previous bullet point will not be changed, and feel free to
+call code in these files from new code in \verb|varmap|.
+
+The main goal of \verb|varmap| is NOT to implement our current ``frontier'' algorithm as expediently as possible. 
+The main goals are {\bf flexibility} and {\bf generality}, since we're still in the process of 
+exploring algorithms. A good approach is to implement low-level ``building blocks'' that can be 
+called sequentially from a script to create a high-level algorithm. Simplicity and readability 
+are also important -- this is an opportunity to clean up historical baggage. 
+So please think carefully ``from scratch'' about whether existing code could be simplified, cleaned up, or improved.
+
+Currently, the refactor is logically complete, and we're nearly ready to
+delete the old code. See \verb|plans/varmap_loose_ends.md| and
+\verb|plans/varmap_new_vs_old.md| for current status.
+Part of the purpose of campaign 4 is to try the new code (\verb|pirate_frb.varmap|)
+at scale.
+For now, I'm keeping around the old code as a reference.
+If campaign 4 goes smoothly, then the old code will be deleted.
+
+\par\noindent
+In campaign 4, please do the following:
+
+\begin{itemize}
+
+\item
+The ultimate goal of campaign 4 is to create an on-disk \verb|VarianceMap|
+at rank $K=128$, for \verb|chord_sb2_et.yml|, base tree (tree 0) only, and
+to collect timings and $D$-values (distance function) for each intermediate
+step. This will search as a benchmark for future campaigns, to try to improve
+either the timing or the final $D$-value.
+
+\item
+A secondary goal is to curate a well-defined ``ladder'' of subscale examples,
+which are similar to  \verb|chord_sb2_et.yml| (single-tree), but increase in
+scale by roughly a factor $\sim 2$. Use your judgement to decide how to define
+the ladder.
+
+For each example in the ladder, also collect timings and distance functions
+(as in the previous bullet point). This will also be part of our benchmarking
+suite for future campaigns.
+
+\item
+Throughout campaign 4, do not use any old code (see above) unless absolutely necessary.
+Instead, use the equivalent code in \verb|pirate_frb.varmap|.
+I haven't deleted the old code yet, in case it is useful for debugging.
+
+\item
+Normally, the toplevel agent is forbidden (via a rule in the ch-research skill) from
+modifying source files.
+During campaign 4, this rules are modified as follows.
+The toplevel agent may modify source files, but only in the \verb|varmap| subpackage,
+only if no subagents are running (in order to ensure that files are not modified while in use),
+and only if the modification is an unambiguous improvement (such as a bugfix).
+
+Bugfixes and improvements may be suggested by subagents (in addition to the oplevel agent).
+The toplevel agent should make a judgement call whether to ``drain'' subagents in order 
+to edit code (since code cannot be edited while subagents are running),
+or continue to spawn subagents and deprioritize code edits.
+
+The purpose of this rule is to allow debugging during campaign 4,
+since the new code may not fully be debugged.
+Note that in order to fix bugs, you'll need to ``drain'' running subagents --
+use your judgement to decide whether this is sensible.
+
+\item
+During campaign 4, don't explore new ideas or implement new features,
+but do feel free to experiment with different settings, and different features
+that are already implemented.
+The purpose of campaign 4 is to establish a baseline, using ideas that we've
+already implemented, for future improvements -- not to explore new ideass.
+
+\item
+At the end of campaign 4, make a recommendation: should we delete the old code,
+or is there still value in keeping it?
+
+\end{itemize}
+
+\subsection{Campaign 4 results [agent-authored]}
+\label{ssec:campaign4_results}
+
+Campaign 4 ran nine experiments over 24 hours and did what it was asked: it built the rank-128
+CHORD map with {\tt pirate\_frb.varmap}, timed every step, curated a ladder, and came back with
+a recommendation on the old code. Nothing failed. The headline is that {\bf the port
+reproduces at production scale}; the more useful results are three things the campaign learned
+on the way, each of which changes how a future campaign should read its own numbers.
+
+Two facts made the campaign cheaper than planned. First, {\bf tree 0 of {\tt chord\_sb2\_et.yml}
+is byte-identical to tree 0 of {\tt chord\_sb2.yml}} -- the configs differ only in
+{\tt num\_early\_triggers} for trees 1--3 -- so campaign 3's archived sweep was reusable and no
+brute-force sweep was needed, saving $\approx 5$ GPU-hours. Second, $L = 6$ is not merely a good
+grouping but exactly the production one: $N_\beta = {\tt ndm\_wt} \times N \times P =
+1024 \times 25 \times 16 = 409\,600$.
+
+\paragraph{The deliverable.}
+An on-disk rank-$128$ {\tt VarianceMap} for {\tt chord\_sb2\_et.yml} tree 0, at $L_0 = 6$:
+
+\begin{center}
+\small
+\begin{tabular}{ll}
+\toprule
+$D$                         & $\mathbf{0.024308952727723543}$, ${\tt nscored} = 5\,963\,776$ \\
+file                        & {\tt research/agent037/chord\_t0\_L6\_K128.asdf}, 473.1 MiB \\
+$Q$-step cost               & {\bf 479.7 CPU-core-hours} measured, 9.02 h on 60 workers \\
+end-to-end from the seed    & 513.6 CPU-core-hours \\
+solver                      & $409\,600$ of $409\,600$ {\tt optimal}; zero failures, zero rescues \\
+admissibility               & ${\tt max\_r} = 0.9999999999886$, ${\tt nviol} = 0$ of $1.15\times 10^{10}$ \\
+read-back                   & $5.6\times10^{-14}$ relative \\
+\midrule
+$D$ before the $Q$-step     & $6.378$ (the SVD seed), so the step buys a factor $262$ \\
+$D/D_{\rm floor}$           & $16.1$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\par\noindent
+The intermediate steps: {\tt coarse\_grain(6)} of the archived $L=4$ map took 801~s and
+produced an 85.98~GiB reference; {\tt svd(128)} took 392~s (2.22 core-hours), with
+$W^TW = I$ to $2.4\times10^{-15}$; the serial repair, which does not parallelise, is
+$\approx 69$~min at this geometry.
+
+Against campaign 3's published $D = 0.023594$ for the same cell this is $+3.03\%$, and against
+its 504 core-hours, $+1.9\%$.\footnote{Campaign 3's cost figures are extrapolations from
+subsampled cells, carrying that campaign's own $\pm 27\%$ spread, whereas campaign 4's are
+measured full runs; the two should not be compared as equals. Campaign 3 also quotes
+$414\,208$ covering LPs for this cell against the $409\,600$ measured here.}
+
+\paragraph{$D$ is reproducible to $6\%$, not to machine precision.}
+This is the campaign's most important methodological result, and it was measured rather than
+assumed. {\bf Two solver arms whose LP objectives agree to $9\times10^{-14}$ give distances
+differing by $6.0\%$.} A degenerate covering LP has many optima with the same $s \cdot q$ and
+very different violation profiles, and the multiplicative repair charges a whole row for its
+single worst channel. So the $3\%$ gap above is agreement, not a discrepancy -- and every
+future comparison of two CHORD $D$ values has to be read against this floor.
+
+\paragraph{The ladder is on $L$, and it is a set of upper bounds rather than a curve.}
+The obvious ladder -- scaling $N_{\rm freq}$ down by powers of two -- is the wrong one: with
+constraint generation on, per-LP cost is {\em flat} in $N_{\rm freq}$, so every rung stays a
+full-price $409\,600$-LP job, and each rung needs its own GPU sweep. Scaling the
+coarse-graining level instead gives $N_\beta(L) = 2^{\,16-L} \times 400$, so each increment of
+$L$ halves the LP count exactly, every rung is {\tt coarse\_grain(L)} of one file with no GPU
+time at all, and the top rung {\em is} the production run. Forty cells were measured across
+rungs 0--8 at $K = 16, 32, 64, 128$; at $K = 128$:
+
+\begin{center}
+\small
+\begin{tabular}{lccccccccc|c}
+\toprule
+rung          & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & prod. \\
+$L$           & 16 & 15 & 14 & 13 & 12 & 11 & 10 & 9 & 8 & 6 \\
+$N_\beta$     & 400 & 800 & 1600 & 3200 & 6400 & 12800 & 25600 & 51200 & 102400 & $409\,600$ \\
+\midrule
+$D$           & 0.1611 & 0.0870 & 0.0519 & 0.0350 & 0.0289 & 0.0276 & 0.0276 & 0.0258 & 0.0250 & {\bf 0.0243} \\
+$D/D_{\rm prod}$ & 6.63 & 3.58 & 2.13 & 1.44 & 1.19 & 1.14 & 1.14 & 1.06 & 1.03 & 1 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\par\noindent
+{\bf A power law fitted up the ladder is wrong} -- it lands at $0.48\times$ the true rung-8
+value over rungs 0--8 -- because the low rungs {\em saturate in $K$}: at rung 0 an eightfold
+increase in rank buys only $1.35\times$ in $D$, against $5.67\times$ at production, since there
+the error is set by the max-envelope and not by the rank. The approach is not even monotone
+(rung 6 sits $0.1\%$ above rung 5, comfortably inside the $6\%$ floor). {\bf But every rung
+above its own knee is a $1.03$--$1.07\times$ conservative estimate of the production $D$},
+which is the useful way to spend the ladder: iterate at rung 5 (19.9 core-hours, $1.14\times$)
+or rung 7 (79.5 core-hours, $1.06\times$), never at rung 2 ($2.13\times$).
+
+\paragraph{The $W$-step is closed.}
+A production $W$-step costs {\bf 6202 core-hours -- $12.9\times$ the entire $Q$-step} -- and
+would buy $\approx 17\%$ in $D$, which is $9\times$ worse per core-hour than a rank doubling
+{\em even if it drove $D$ to zero}. The cause is specific: constraint generation does not run
+at all in the $W$ direction, because none of the sampled channels has a bounded first
+relaxation, so every LP falls back to the exact $409\,600$-row solve at 793 core-s each. {\bf
+The production recipe is $Q$-only}, and this should not be revisited without a reason.
+
+The way this was found is worth recording. A subscale study at $N_\beta \le 1600$ concluded the
+opposite -- that a $W$-step was $1.8\times$ {\em better} per core-hour than buying rank -- and
+projected the production cost at $2$--$13\%$ of a $Q$-step. It missed by $97$--$564\times$. The
+probe was careful and calibrated to $0.988\times$; the flaw was that its $N_\beta$-independent
+term is only independent {\em while the cut loop runs}, and at production the loop never runs.
+{\bf A cost model fitted where an optimisation works cannot see the cliff where that
+optimisation stops working} -- and the same shape appears above for $D$, where the low rungs
+cannot see what the production cell spends its rank on.
+
+\paragraph{Three corrections to the shipped code.}
+\begin{itemize}
+\item {\bf {\tt cuts\_pool\_window} should be 4, not 0.} At $K = 128$ this is the difference
+  between 1026 and 480 core-hours for a $10^{-14}$ change in the answer. It is a {\em
+  high-rank} knob, not a scale knob: $2.15\times$ at $K = 128$, $1.04\times$ at $K = 64$,
+  nothing below. Both the old code and the port ship the losing value, and both say in their
+  own comments that it is the losing value.
+\item {\bf The repair pipeline is worth $0.087\%$ at CHORD}, not the $2.5\times$ its docstring
+  claims from small geometries.
+\item {\bf One correctness bug, and the port introduced it.} At the shipped {\tt for\_wstep()}
+  default, {\tt wstep()} can return a map that does not dominate the reference while reporting
+  {\tt is\_admissible = True} and a finite $D$ -- precisely the failure the one-sided distance
+  exists to prevent. The additive repair decides whether to act from the {\em ratio}, which
+  cannot see a product entry that is negative where the reference is positive, while the lift
+  it computes is driven by the {\em deficit}, which can. The old {\tt free\_lp.py} gates on the
+  deficit and is correct. {\tt recommended('w')} is safe, so no campaign-4 measurement is
+  affected, but the defect grows with scale: 120 negative entries at production against 1 at
+  rung 2. The bit-identity gates do not cover the case, which is a gap in the gates as much as
+  a bug in the code.
+\end{itemize}
+
+\paragraph{Should the old code be deleted?}
+{\bf Yes, with one exception.} No campaign-4 agent imported any old code -- verified by grep
+across nine working directories, zero imports -- and no published number failed to reproduce.
+The {\tt slow\_avar} modules can go once four self-test calls are removed from
+{\tt \_\_main\_\_.py} and {\tt varmap/tests.py}'s cross-check helper is made to tolerate the
+missing import; its skip path already exists.
+
+The exception is {\tt research/toplevel/*.py}. It is untracked scratch, so deleting it buys no
+tidiness, and it is currently the only oracle that establishes what the additive repair's
+correct behaviour is. Fix the bug above against it, add a gate case with a negative product
+entry at ratio $\le 1$, and then delete it.
+
+\par\noindent
+The benchmark itself -- every cell, its recipe, its machine conditions and its solver counts --
+is in {\tt research/toplevel/BENCHMARK.md}, with a machine-readable copy in
+{\tt benchmark\_cells.json}. {\bf Rank beyond 128 is the only arm campaign 4 tested that beat
+everything it was compared against}, and the ladder now makes it cheap to ask what $K = 256$
+buys before paying for it at production.
 
 \clearpage
 
