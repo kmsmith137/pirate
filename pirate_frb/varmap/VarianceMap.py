@@ -376,16 +376,6 @@ class VarianceMap:
 
         r, R = self.tree_rank, self.pf_rank
 
-        # The whole index convention rests on ndm_out == 2^(r-R), which holds iff the config
-        # leaves dm_downsampling at 0 (auto-filled to 2^R). Any other value gives a map whose
-        # rows are not the alpha of the module docstring, so it is refused up front rather
-        # than silently reinterpreted.
-        if int(tree.ndm_out) != (1 << (r - R)):
-            raise RuntimeError(
-                f'VarianceMap: tree {itree} has ndm_out={tree.ndm_out} != 2^(r-R)'
-                f' = {1 << (r-R)} (r={r}, R={R}). This means the config sets'
-                " 'dm_downsampling' explicitly; leave it at 0 (auto) for variance maps.")
-
         set_('nalpha', (1 << (r - R)) * self.nmultiplets * self.nprofiles)
 
         # ---- coarse-graining ----

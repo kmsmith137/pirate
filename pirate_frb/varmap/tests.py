@@ -63,6 +63,7 @@ one-time equivalence test living outside this repo, and it is what the defaults 
 
 import contextlib
 import dataclasses
+import inspect
 
 import numpy as np
 
@@ -77,8 +78,8 @@ from ..utils import atomic_print
 
 def _make_test_config(toplevel_tree_rank, subband_counts, num_primary_trees=1,
                       num_early_triggers=0, max_width=4, nfreq=None, time_downsampling=1):
-    """A small DedispersionConfig with 'dm_downsampling: 0' (auto), which is what makes
-    ndm_out == 2^(r-R) and hence makes the index convention apply.
+    """A small DedispersionConfig with 'dm_downsampling: 0' (auto), i.e. 2^R coarse DM
+    channels per multiplet, which is what the variance map's index convention assumes.
 
     'time_downsampling' sets the peak-finder's Dcore. The sweep does not read it (see
     _SweepGeometry), so the default of 1 is a convenience rather than a requirement, and
@@ -169,7 +170,8 @@ def _random_map(config, itree, rng, *, nzero=0, dtype=np.float64, **kwargs):
     """
 
     tree = make_tree(config, itree)
-    nalpha = tree.ndm_out * tree.frequency_subbands.M * tree.nprofiles
+    fs = tree.frequency_subbands
+    nalpha = (1 << (tree.total_rank() - fs.pf_rank)) * fs.M * tree.nprofiles
     A = rng.uniform(0.1, 2.0, size=(nalpha, config.get_total_nfreq())).astype(dtype)
     if nzero > 0:
         A[rng.choice(nalpha, size=nzero, replace=False)] = 0.0
@@ -794,7 +796,7 @@ def _factored_map(config, itree, rng, K=5, *, L=None, mid='full', nbeta=None, **
     tree = make_tree(config, itree)
     fs = tree.frequency_subbands
     if nbeta is None:
-        nbeta = tree.ndm_out * fs.M * tree.nprofiles
+        nbeta = (1 << (tree.total_rank() - fs.pf_rank)) * fs.M * tree.nprofiles
     nfreq = config.get_total_nfreq()
 
     Q = rng.normal(size=(nbeta, K))
@@ -871,7 +873,7 @@ def test_factored_equivalence(r=7, subband_counts=(2,1), K=4):
     # signed case is covered by test_factored_algebra, which touches no scoring.)
     tree = make_tree(config, 0)
     fs = tree.frequency_subbands
-    nbeta = tree.ndm_out * fs.M * tree.nprofiles
+    nbeta = (1 << (tree.total_rank() - fs.pf_rank)) * fs.M * tree.nprofiles
     Q = rng.uniform(0.5, 1.5, size=(nbeta, K))
     W = rng.uniform(0.5, 1.5, size=(config.get_total_nfreq(), K))
     mid = np.eye(K) + rng.uniform(0.0, 0.2, size=(K, K))
@@ -3135,9 +3137,51 @@ def test_sweep_streaming_coarse(r=6, subband_counts=None, num_early_triggers=0,
 ####################################   entry point   ####################################
 
 
+def _config_of(fn):
+    """The DedispersionConfig that a zero-argument call to test function 'fn' will build.
+
+    Read off fn's own defaults rather than repeated here. That is the whole point: a coverage
+    report which restates the arguments cannot notice when they change.
+    """
+
+    d = {k: v.default for k, v in inspect.signature(fn).parameters.items()
+         if v.default is not inspect.Parameter.empty}
+    return _make_test_config(d['r'], d['subband_counts'],
+                             num_primary_trees=d.get('num_primary_trees', 1),
+                             num_early_triggers=d.get('num_early_triggers', 0))
+
+
+def _report_xdm_coverage(where, configs):
+    """Print the per-tree K = xdm_rank() of 'configs', and assert that at least one is nonzero.
+
+    Nothing in varmap reads K: the subband array has 2^(r-R) coarse DM rows whatever K is.
+    But K > 0 is precisely where 2^(r-R) and tree.ndm_out diverge, so it is the only case in
+    which a row count taken from the wrong one is visible at all. That makes it worth
+    covering -- and the coverage is incidental, since it comes from whatever subband counts a
+    test happens to use, and adjusting those for an unrelated reason would quietly remove it
+    while leaving the suite green. So the suite says out loud what it covered, the way --dd
+    and --amax do.
+    """
+
+    ks = []
+    for config in configs:
+        ks.append([int(make_tree(config, i).xdm_rank())
+                   for i in range(int(config.num_dedispersion_trees))])
+
+    atomic_print(f'{where}: xdm_rank by tree = {ks}')
+    assert any(k for kk in ks for k in kk), \
+        f'{where}: every tree has xdm_rank 0, so the K > 0 path was not covered at all'
+
+
 def run_all():
     """Everything, in dependency order: the index arithmetic first, since the rest is built
     on it."""
+
+    # A sample of the configs the tests below build, taken from their own defaults, since
+    # run_all() calls every one of them with no arguments. See _report_xdm_coverage().
+    _report_xdm_coverage('run_all', [_config_of(f) for f in (
+        test_index_arithmetic, test_coarse_grain, test_admissibility,
+        test_distance_oracles, test_asdf_io, test_greedy_bookkeeping)])
 
     test_index_arithmetic()
     test_constructor_validation()
@@ -3178,6 +3222,13 @@ def run_sweep_tests():
     """The brute-force sweep (varmap/brute_force.py). Separate from run_all() because these
     need a DedispersionPlan and a CUDA device, and take minutes rather than seconds."""
 
+    # The sweeps below are called with explicit arguments, so unlike run_all() this mirrors
+    # them rather than reading defaults. Keep it in step with the calls. See
+    # _report_xdm_coverage().
+    _report_xdm_coverage('run_sweep_tests', [_make_test_config(7, [1]),
+                                             _make_test_config(6, [2, 1]),
+                                             _make_test_config(6, [1, 1], num_early_triggers=1)])
+
     test_sweep_vs_per_tfm(7, [1])
     test_sweep_vs_per_tfm(7, [2, 2, 1], num_early_triggers=1)
     # Dcore > 1: the sweep must give the same A, since it never sees the peak-finder's Dcore
@@ -3190,12 +3241,13 @@ def run_sweep_tests():
     test_sweep_column_norms(6, [2, 1], detrender=False)
     test_sweep_column_norms(6, [2, 1], detrender=True)
     test_sweep_column_norms(6, [2, 1], num_primary_trees=2, nifreq=1)
-    test_sweep_column_norms(6, [1], num_early_triggers=1, nifreq=1)
+    test_sweep_column_norms(6, [2, 1], num_early_triggers=1, nifreq=1)
     # The streaming reduction against the dense one, which is the only check on the property
-    # the scalable path assumes. Two subband layouts, because a ragged one (levels 1 and 0
-    # mixed) is where the multiplet decomposition can go wrong.
+    # the scalable path assumes. Two subband layouts, since levels 1 and 0 mixed in different
+    # proportions is where the multiplet decomposition can go wrong: [2,1] gives (M,N)=(4,3)
+    # and [1,1] gives (3,2).
     test_sweep_streaming_coarse(6, [2, 1])
-    test_sweep_streaming_coarse(6, [1], num_early_triggers=1)
+    test_sweep_streaming_coarse(6, [1, 1], num_early_triggers=1)
     test_sweep_streaming_coarse(6, [2, 1], detrender=True)
     # The GPU sweep against the CPU one. Both GPU kernels are validated against their
     # reference implementations by --sbdd and --pfsq, so this covers the python driver rather

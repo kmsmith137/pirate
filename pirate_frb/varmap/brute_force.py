@@ -60,9 +60,8 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
     config : DedispersionConfig
         Two requirements, both checked up front and reported as one collected list:
         ``beams_per_gpu == beams_per_batch``, and ``dm_downsampling`` left at 0 (auto-filled
-        to 2^R, which is what makes ``ndm_out == 2^(r-R)`` and hence makes the alpha index
-        convention apply). ``time_downsampling`` is unconstrained -- it sets the peak-finder's
-        Dcore, which neither sweep reads.
+        to 2^R). ``time_downsampling`` is unconstrained -- it sets the peak-finder's Dcore,
+        which neither sweep reads.
         The beam count comes from ``config.beams_per_batch``: on the GPU the beam axis is a
         pure spectator, so a batch of B beams runs B distinct passes concurrently. Measurement
         found that batching does not speed up a full sweep, so the CLI forces 1.
@@ -237,7 +236,7 @@ class _SweepGeometry:
         self.tree_M = []
         self.tree_N = []
         self.tree_P = []
-        self.tree_D = []        # 2^(r-R) = ndm_out
+        self.tree_D = []        # 2^(r-R), the number of coarse DM rows of the subband array
         self.tree_nalpha = []
         self.tree_nt_ds = []    # peak-finding input samples per chunk (= nt_in / 2^gamma)
         self.tree_ntime = []    # input samples needed per pass, for this tree alone
@@ -249,7 +248,7 @@ class _SweepGeometry:
             t = plan.trees[itree]
             fs = t.frequency_subbands
             r, R = int(t.total_rank()), int(fs.pf_rank)
-            gamma, ndm_out = int(t.primary_tree_index), int(t.ndm_out)
+            gamma = int(t.primary_tree_index)
 
             # Note there is deliberately NO constraint on Dcore (i.e. on the config's
             # 'time_downsampling'). Both sweeps end in a PfSquare, which evaluates h_p at
@@ -257,9 +256,10 @@ class _SweepGeometry:
             # sees the peak-finder's Dcore sublattice at all. test_sweep_vs_per_tfm() runs a
             # Dcore > 1 config against the analytic oracle, which is what makes that a checked
             # property rather than an assumed one.
-            if ndm_out != (1 << (r - R)):
-                errs.append(f'tree {itree} has ndm_out = {ndm_out} != 2^(r-R) ='
-                            f' {1 << (r-R)}; leave \'dm_downsampling\' at 0 in the config')
+            #
+            # Nor is there a constraint on xdm_rank. The subband array has 2^(r-R) coarse DM
+            # rows whatever K is; K only says how many of them the PEAK-FINDER max-reduces
+            # into one output row, and neither sweep runs a peak-finder.
 
             wmax = int(t.pf.max_width)
             ddspread = 1 << (int(config.toplevel_tree_rank) - int(t.early_trigger_level))
@@ -270,8 +270,8 @@ class _SweepGeometry:
             self.tree_M.append(int(fs.M))
             self.tree_N.append(int(fs.N))
             self.tree_P.append(int(t.nprofiles))
-            self.tree_D.append(ndm_out)
-            self.tree_nalpha.append(ndm_out * int(fs.M) * int(t.nprofiles))
+            self.tree_D.append(1 << (r - R))
+            self.tree_nalpha.append(self.tree_D[-1] * int(fs.M) * int(t.nprofiles))
             self.tree_nt_ds.append(int(t.nt_ds))
             # Eq. (bf_ntime) of notes/variance_map.tex, generalized to a stream shared by all
             # trees: the one-hot sits at t0 = 2W + c with 0 <= c < 2^gamma_max, and this tree
@@ -923,7 +923,7 @@ class _Accumulator:
             tree = make_tree(geom.config, itree)
             fs = tree.frequency_subbands
             r, R = int(tree.total_rank()), int(fs.pf_rank)
-            got = (int(fs.M), int(fs.N), int(tree.nprofiles), int(tree.ndm_out), r, R)
+            got = (int(fs.M), int(fs.N), int(tree.nprofiles), 1 << (r - R), r, R)
             want = (geom.tree_M[itree], geom.tree_N[itree], geom.tree_P[itree],
                     geom.tree_D[itree], geom.tree_r[itree], geom.tree_R[itree])
             if got != want:

@@ -49,10 +49,17 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
     for itree in range(ntrees):
         tree = plan.trees[itree]
         r, R = int(exact.tree_r[itree]), int(exact.tree_R[itree])
+        # KNOWINGLY restricted to K = tree.xdm_rank() == 0, which is what ndm_out == 2^(r-R)
+        # amounts to. This is NOT the same guard varmap used to carry: varmap was fixed to use
+        # 2^(r-R) throughout, and this file was deliberately left alone, because a later
+        # milestone replaces it with a CLI utility that reads an asdf-serialized VarianceMap and
+        # runs the Monte Carlo on the GPU. Several more K == 0 assumptions lurk below (the
+        # per-coarse-DM settling table and the analytic/MC alignment all index by ndm_out); they
+        # are unreachable only because this raise comes first. Do not delete it in isolation.
         ndm_out = int(tree.ndm_out)
         if ndm_out != (1 << (r - R)):
             raise RuntimeError(f"check_avar_mc: tree {itree} has ndm_out={ndm_out} != 2^(r-R)="
-                               f"{1 << (r - R)} (dm_downsampling != 2^pf_rank is unsupported)")
+                               f"{1 << (r - R)}; check_avar_mc only supports xdm_rank == 0 trees")
         a = np.ascontiguousarray(exact.tree_variance[itree].transpose(1, 0, 2))   # (ndm_out, M, P)
         analytic.append(a)
         # Every axis except time is a spectator to a PfSquare, so out_sb's (ndm_out, M) pair is
