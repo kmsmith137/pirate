@@ -290,6 +290,9 @@ void DedispersionTree::decode_argmax(
     // out_argmax: the index 'mu' is folded into the token's m-field as
     // m_ext = (m << K) | mu, and the peak-finder max-reduces over it. See
     // CoalescedDdKernel2.hpp. K is zero unless the tree has an early trigger.
+    //
+    // This is the only place that splits the m-field; every producer (cdd2 kernel,
+    // ReferencePeakFindingKernel) writes it whole.
 
     long K = tr.xdm_rank();
     long m_ext = (argmax_token >> 16) & 0xffff;

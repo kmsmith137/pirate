@@ -245,6 +245,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_,
         pf_params.beams_per_batch = beams_per_batch;
         pf_params.total_beams = beams_per_gpu;
         pf_params.ndm_out = tree.ndm_out;
+        pf_params.xdm_rank = tree.xdm_rank();
         pf_params.ndm_wt = tree.ndm_wt;
         pf_params.nt_out = tree.nt_out;
         pf_params.nt_wt = tree.nt_wt;

@@ -485,16 +485,15 @@ def test_decode_argmax():
     atomic_print(f"test_decode_argmax: r_top={r_top}, nt_in={nt_in}, ntrees={plan.ntrees}, "
                  f"nbeams={B}, nchunks={C}")
 
-    # Per-tree (M, P, Dout, Dcore), from a scout ReferenceDedisperser.
+    # Per-tree (M_ext, P, Dout, Dcore), from a scout ReferenceDedisperser.
     #
-    # NOTE 'M' here is the PEAK-FINDER's multiplet count, i.e. M_ext = (fs.M << K) with
-    # K = tree.xdm_rank(): a reference peak-finder is built with K zeros prepended to
-    # subband_counts, exactly as a cdd2 kernel's peak-finding half is. So the tokens built
-    # below from 0 <= m < M sweep the (multiplet, extra-DM) pairs m_ext = (m << K) | mu,
-    # which is precisely the token m-field decode_argmax() has to take apart -- and (M << 16)
-    # is its first out-of-range value, not (fs.M << 16).
+    # NOTE the first element is M_ext = (fs.M << K) with K = tree.xdm_rank(), i.e. the range
+    # of the argmax token's m-field, NOT the tree's multiplet count fs.M. The tokens built
+    # below from 0 <= m < M_ext sweep the (multiplet, extra-DM) pairs m_ext = (m << K) | mu,
+    # which is precisely what decode_argmax() has to take apart -- and (M_ext << 16) is the
+    # first out-of-range value, not (fs.M << 16).
     scout = ReferenceDedisperser(plan, sophistication=0, tree_domain_input=True)
-    kinfo = [(k.M, k.P, k.Dout, k.Dcore) for k in scout.pf_kernels]
+    kinfo = [(k.M_ext, k.P, k.Dout, k.Dcore) for k in scout.pf_kernels]
     del scout
 
     # Cross-check that relation, and report the per-tree K: a run which happened to generate

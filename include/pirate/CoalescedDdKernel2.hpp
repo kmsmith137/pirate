@@ -37,6 +37,7 @@ struct DedispersionTree;   // defined in DedispersionTree.hpp
 //   - dd_params.output_is_ringbuf == false
 //   - pf_params.ndm_out == 2^(dd_rank + amb_rank - dd_rank1)   [ NOTE dd_rank1 not pf_rank]
 //   - pf_rank <= dd_rank1
+//   - pf_params.xdm_rank == dd_rank1 - pf_rank
 //
 // where:  pf_rank = pf_params.subband_counts.size()-1
 //         dd_rank1 = (dd_params.dd_rank + 1) // 2

@@ -55,6 +55,11 @@ class CoalescedDdKernel2:
         # level-0 bands into half-overlapping level-K bands, so n_to_flo/n_to_fhi and m_to_d
         # both change). The dedisperser, the registry key and the C++ side all use the compact
         # one; only 'self.pf' uses the extended one.
+        #
+        # Note this is purely a codegen technique, invisible in any C++ interface: the C++
+        # peak-finding kernels take K as PeakFindingKernelParams::xdm_rank instead (they read
+        # a (ndm_out << K, M) input array and fold 'mu' in as they go), and the generated
+        # kernel is keyed on the compact counts either way.
         self.pf_frequency_subbands = FrequencySubbands([0]*K + list(frequency_subbands.subband_counts))
 
         self.pf = PeakFinder(

@@ -136,6 +136,12 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     xassert_le(fs.pf_rank, dd_rank1);
     xassert_eq(pf_params.ndm_out, pow2(dd_params.dd_rank + dd_params.amb_rank - dd_rank1));
 
+    // The number of extra DM bits is determined by the two ranks, so pf_params.xdm_rank is
+    // redundant here -- but a caller who fills it wrongly should be caught, not silently
+    // overridden, since the same params also configure a ReferencePeakFindingKernel whose
+    // tokens must match this kernel's.
+    xassert_eq(pf_params.xdm_rank, dd_rank1 - fs.pf_rank);
+
     // The initialization logic below is mostly cut-and-paste from either the
     // PeakFindingKernel or GpuDedispersionKernel constructor.
 
@@ -372,6 +378,7 @@ void CoalescedDdKernel2::test_random()
     pf_params.beams_per_batch = beams_per_batch;
     pf_params.total_beams = total_beams;
     pf_params.ndm_out = pow2(lg_ndm_out);
+    pf_params.xdm_rank = xdm_rank;
     pf_params.ndm_wt = pow2(lg_ndm_wt);
     pf_params.nt_out = xdiv(nt_in_per_chunk, key.Dout);
     pf_params.nt_in = nt_in_per_chunk;
@@ -388,22 +395,15 @@ void CoalescedDdKernel2::test_random()
 
     ReferenceDedispersionKernel ref_dd_kernel(dd_params, pf_params.subband_counts);
 
-    // The reference peak-finder is a peak-finder-layer object, so it gets the same subband
-    // counts as the GPU kernel's peak-finding half: 'xdm_rank' zeros prepended to the compact
-    // counts. That FrequencySubbands has the same N and the same per-subband multiplet runs,
-    // but 2^xdm_rank times as many multiplets, indexed by m_ext = (m << xdm_rank) | mu. (It is
-    // NOT the same band set -- see cuda_generator/CoalescedDdKernel2.py -- but the peak-finder
-    // never uses the band geometry.) The two kernels are otherwise identically parameterized.
-    PeakFindingKernelParams ref_pf_params = pf_params;
-    ref_pf_params.subband_counts.insert(ref_pf_params.subband_counts.begin(), xdm_rank, 0);
-    ReferencePeakFindingKernel ref_pf_kernel(ref_pf_params);
+    // The reference peak-finder is parameterized identically to the GPU kernel's peak-finding
+    // half, xdm_rank included, so it reads the same (ndm_out << xdm_rank, M) subband array and
+    // emits the same argmax tokens.
+    ReferencePeakFindingKernel ref_pf_kernel(pf_params);
 
-    FrequencySubbands &fs = cdd2_kernel.fs;             // compact
-    const FrequencySubbands &fs_ext = ref_pf_kernel.fs; // extended (multiplet index is m_ext)
+    FrequencySubbands &fs = cdd2_kernel.fs;
     GpuPfWeightLayout &wl = cdd2_kernel.pf_weight_layout;
     xassert(fs.pf_rank == pf_rank);
-    xassert_eq(fs_ext.M, pow2(xdm_rank) * fs.M);
-    xassert_eq(fs_ext.N, fs.N);
+    xassert_eq(ref_pf_kernel.M_ext, pow2(xdm_rank) * fs.M);
 
     // Print this monstrosity.
     cout << "CoalescedDdKernel2::test()\n"
@@ -419,7 +419,7 @@ void CoalescedDdKernel2::test_random()
          << "    Dout = " << key.Dout << "\n"
          << "    Tinner = " << key.Tinner << "\n"
          << "    M = " << fs.M << "\n"
-         << "    M_ext = " << fs_ext.M << "\n"
+         << "    M_ext = " << ref_pf_kernel.M_ext << "\n"
          << "    N = " << fs.N << "\n"
          << "    num_profiles = " << ref_pf_kernel.nprofiles << "\n"
          << "    beams_per_batch = " << beams_per_batch << "\n"
@@ -458,14 +458,8 @@ void CoalescedDdKernel2::test_random()
     long Tout = pf_params.nt_out;
 
     Array<float> dd_cpu({B,A,D,T}, af_uhost);     // 'dd_out' for ref_dd_kernel
-    Array<float> sb_cpu({B,Dpf,M,T}, af_uhost);   // 'sb_out' from ref_dd_kernel
+    Array<float> sb_cpu({B,Dpf,M,T}, af_uhost);   // 'sb_out' from ref_dd_kernel, and ref_pf_kernel's input
     xassert(Dpf == ref_dd_kernel.Dpf);
-
-    // Input to ref_pf_kernel: the same data as 'sb_cpu', reindexed by gather_m_ext().
-    // The two arrays are the same object when xdm_rank == 0, and the gather is skipped.
-    Array<float> pf_in_cpu = (xdm_rank > 0)
-        ? Array<float> ({B, ndm_out, fs_ext.M, T}, af_uhost)
-        : sb_cpu;
 
     Array<float> max_cpu({B,ndm_out,Tout}, af_uhost | af_zero);
     Array<uint> argmax_cpu({B,ndm_out,Tout}, af_uhost | af_zero);
@@ -483,10 +477,7 @@ void CoalescedDdKernel2::test_random()
             ref_dd_kernel.apply(in_cpu, dd_cpu, sb_cpu, ichunk, ibatch);
             pf_params.fill_host_weights(wt_cpu, Array<double>(), /*randomize=*/true);
 
-            if (xdm_rank > 0)
-                gather_m_ext(pf_in_cpu, sb_cpu, xdm_rank);
-
-            ref_pf_kernel.apply(max_cpu, argmax_cpu, pf_in_cpu, wt_cpu, ibatch);
+            ref_pf_kernel.apply(max_cpu, argmax_cpu, sb_cpu, wt_cpu, ibatch);
 
             // CPU kernel done! Now run the GPU kernel.
             Array<void> wt_gpu = wl.to_gpu(wt_cpu);

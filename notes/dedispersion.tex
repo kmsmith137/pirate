@@ -398,11 +398,11 @@ corresponds to max detection significance over all downsampled parameters.
 \end{itemize}
 In implementation, these 3 steps are coalesced into one GPU kernel for speed (and also
 coalesced with the final stages of tree dedispersion), e.g.\ the shape $(2^{r-R}, M, N_{\rm time}, P)$
-array is never ``materialized'' in GPU memory.\footnote{Another comment on implementation. The parameter $K$
-never appears explicitly as a kernel constructor argument. The reason depends on context. For
-a {\tt PeakFindingKernel}, the kernel itself assumes $K=0$, but $K>0$ can be emulated by prepending
-zeros to {\tt subband\_counts} (see comments in code). For a {\tt CoalescedDdKernel2}, the value of $K$
-is ``chosen'' by the kernel ($K = \mbox{\tt rank1} - R$, see comments in code), not the caller.}
+array is never ``materialized'' in GPU memory.\footnote{Another comment on implementation. A
+{\tt PeakFindingKernel} takes $K$ as the constructor argument {\tt PeakFindingKernelParams::xdm\_rank};
+it reads a $(2^{r-R}, M)$ array and reduces over the low $K$ bits of the first index itself.
+A {\tt CoalescedDdKernel2} instead ``chooses'' $K = \mbox{\tt rank1} - R$ from its own ranks,
+and asserts that the caller's {\tt xdm\_rank} agrees. See comments in code.}
 
 \subsubsection{Peak-finding kernels}
 

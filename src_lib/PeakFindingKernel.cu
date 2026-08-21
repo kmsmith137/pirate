@@ -30,6 +30,13 @@ void PeakFindingKernelParams::validate() const
 {
     FrequencySubbands::validate_subband_counts(subband_counts);
     
+    // The argmax token's m-field is 16 bits wide, and carries m_ext = (m << xdm_rank) | mu
+    // (see the top of PeakFindingKernel.hpp). validate_subband_counts() bounds fs.M on its own
+    // (max_peak_finding_rank = 4 gives M <= 114), but says nothing about xdm_rank, so the
+    // shifted value is what has to be checked here.
+    xassert_ge(xdm_rank, 0);
+    xassert_lt(FrequencySubbands(subband_counts).M << xdm_rank, 65536L);
+
     // Check that everything is initialized.
     xassert(max_kernel_width > 0);
     xassert(beams_per_batch > 0);
@@ -205,11 +212,16 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
     long Wmax = p.max_kernel_width;
     long M = fs.M;
 
+    this->K = p.xdm_rank;
+    this->E = pow2(K);
+    this->ndm_in = p.ndm_in();
+    this->M_ext = fs.M << K;
+
     this->nbatches = xdiv(p.total_beams, p.beams_per_batch);
     this->nprofiles = 3 * integer_log2(p.max_kernel_width) + 1;
     this->Dout = xdiv(p.nt_in, p.nt_out);
     this->tpad = max(2*Wmax, 4L);
-    this->pstate = Array<float> ({p.total_beams, p.ndm_out, fs.M, tpad}, af_uhost | af_zero); 
+    this->pstate = Array<float> ({p.total_beams, p.ndm_out, E*M, tpad}, af_uhost | af_zero);
     this->num_levels = max(integer_log2(Wmax), 1);
 
     // Note: Dcore range/divisibility checks are in params.validate().
@@ -229,7 +241,7 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
         tmp_nt[l] = nt;
         tmp_nout[l] = xdiv(Dout, dt);
         tmp_sout[l] = xdiv(pow2(l), dt);
-        tmp_arr[l] = Array<float> ({B,D,M,nt}, af_uhost | af_zero);
+        tmp_arr[l] = Array<float> ({B,D,E*M,nt}, af_uhost | af_zero);
 
         // To see that this is correct, note that the "base" time sample ends at
         // time dt, and has length 2^l.
@@ -249,14 +261,14 @@ static inline void _update_pf(float &maxval, uint &argmax, float val, uint token
 void ReferencePeakFindingKernel::apply(
     ksgpu::Array<float> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
     ksgpu::Array<uint> &out_argmax,    // shape (beams_per_batch, ndm_out, nt_out)
-    const ksgpu::Array<float> &in,     // shape (beams_per_batch, ndm_out, M, nt_in)
+    const ksgpu::Array<float> &in,     // shape (beams_per_batch, ndm_out << K, M, nt_in)
     const ksgpu::Array<float> &wt,     // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, N)
     long ibatch, bool debug)
 {
     const PeakFindingKernelParams &p = params;
     xassert_shape_eq(out_max, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
-    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, fs.M, p.nt_in}));
+    xassert_shape_eq(in, ({p.beams_per_batch, ndm_in, fs.M, p.nt_in}));
     xassert_shape_eq(wt, ({p.beams_per_batch, p.ndm_wt, p.nt_wt, nprofiles, fs.N}));
  
     xassert(out_max.on_host());
@@ -278,27 +290,34 @@ void ReferencePeakFindingKernel::apply(
     long t1 = min(tpad, nt_in);  // this part of 'pstate' is filled from 'in'
     long t0 = tpad - t1;         // this part of 'pstate' is filled from pstate
 
-    xassert_shape_eq(in, ({B,D,M,nt_in}));
     xassert(in.get_ncontig() >= 1);
 
-    // Fill l=0 (with 'in' + 'pstate' wraparound)
- 
+    // Fill l=0 (with 'in' + 'pstate' wraparound).
+    //
+    // This is also where the input's extra DM bits are folded into the multiplet axis: input
+    // DM row ((d << K) | mu) and multiplet m land at tmp_arr index em = mu*M + m. See the
+    // tmp_arr comment in PeakFindingKernel.hpp for why the ordering is (mu, m) and not
+    // (m, mu).
+
     for (long b = 0; b < B; b++) {
         for (long d = 0; d < D; d++) {
-            for (long m = 0; m < M; m++) {
-                float *dst = &tmp_arr[0].at({b,d,m,0});  // length (nt_in+tpad)
-                float *ps = &pstate.at({b0+b,d,m,0});    // length (tpad)
-                const float *src = &in.at({b,d,m,0});    // length (nt_in)
+            for (long mu = 0; mu < E; mu++) {
+                for (long m = 0; m < M; m++) {
+                    long em = mu*M + m;
+                    float *dst = &tmp_arr[0].at({b,d,em,0});          // length (nt_in+tpad)
+                    float *ps = &pstate.at({b0+b,d,em,0});            // length (tpad)
+                    const float *src = &in.at({b,(d << K)|mu,m,0});   // length (nt_in)
 
-                for (long t = 0; t < tpad; t++)
-                    dst[t] = ps[t];
-                for (long t = 0; t < nt_in; t++)
-                    dst[t + tpad] = src[t];
+                    for (long t = 0; t < tpad; t++)
+                        dst[t] = ps[t];
+                    for (long t = 0; t < nt_in; t++)
+                        dst[t + tpad] = src[t];
 
-                for (long t = 0; t < t0; t++)
-                    ps[t] = ps[t + nt_in];
-                for (long t = 0; t < t1; t++)
-                    ps[t + t0] = src[t + nt_in - t1];
+                    for (long t = 0; t < t0; t++)
+                        ps[t] = ps[t + nt_in];
+                    for (long t = 0; t < t1; t++)
+                        ps[t + t0] = src[t + nt_in - t1];
+                }
             }
         }
     }
@@ -313,11 +332,12 @@ void ReferencePeakFindingKernel::apply(
 
         xassert_eq(r*(ndst-1) + s, nsrc-1);
         
+        // The multiplet axis is a pure spectator here, so it can be looped over flat.
         for (long b = 0; b < B; b++) {
             for (long d = 0; d < D; d++) {
-                for (long m = 0; m < M; m++) {
-                    float *dst = &tmp_arr.at(l+1).at({b,d,m,0});
-                    float *src = &tmp_arr.at(l).at({b,d,m,0});
+                for (long em = 0; em < E*M; em++) {
+                    float *dst = &tmp_arr.at(l+1).at({b,d,em,0});
+                    float *src = &tmp_arr.at(l).at({b,d,em,0});
                     
                     for (long t = 0; t < ndst; t++)
                         dst[t] = src[r*t] + src[r*t + s];
@@ -359,8 +379,18 @@ void ReferencePeakFindingKernel::apply(
                     int S = tmp_sout[l];    // spacing
                     int I = tmp_iout[l];    // base
 
-                    for (int m = 0; m < M; m++) {
+                    // Four m-like quantities are live below, and they are not interchangeable:
+                    //   m     -- compact multiplet index; the weights are per subband, so this
+                    //            is what fs.m_to_n takes
+                    //   mu    -- extra-DM index, 0 <= mu < E
+                    //   em    -- index into tmp_arr's multiplet axis, = mu*M + m
+                    //   m_ext -- the argmax token's m-field, = (m << K) | mu
+
+                    for (int mu = 0; mu < E; mu++) {
+                      for (int m = 0; m < M; m++) {
+                        int em = mu*M + m;
                         int n = fs.m_to_n[m];
+                        uint m_ext = (uint(m) << K) | uint(mu);
                         float w0 = l ? 0.0f : wp[n];      // p = 0 (only for l=0)
                         float w1 = wp[(3*l+1)*N + n];     // p = (3*l+1)
                         float w2 = wp[(3*l+2)*N + n];     // p = (3*l+2)
@@ -370,12 +400,12 @@ void ReferencePeakFindingKernel::apply(
                         // tmp[l] array, or (dt) time samples in the original input array.
 
                         for (int isamp = 0; isamp < nsamp; isamp++) {
-                            float x0 = tmp_in[m*mstr + I + tout*nsamp + isamp - 3*S];
-                            float x1 = tmp_in[m*mstr + I + tout*nsamp + isamp - 2*S];
-                            float x2 = tmp_in[m*mstr + I + tout*nsamp + isamp - S];
-                            float x3 = tmp_in[m*mstr + I + tout*nsamp + isamp];
+                            float x0 = tmp_in[em*mstr + I + tout*nsamp + isamp - 3*S];
+                            float x1 = tmp_in[em*mstr + I + tout*nsamp + isamp - 2*S];
+                            float x2 = tmp_in[em*mstr + I + tout*nsamp + isamp - S];
+                            float x3 = tmp_in[em*mstr + I + tout*nsamp + isamp];
 
-                            uint token0 = (m << 16)| (isamp*dt);  // includes (m,isamp) but not p
+                            uint token0 = (m_ext << 16) | (isamp*dt);  // includes (m_ext,isamp) but not p
                             uint token1 = token0 | ((3*l+1) << 8);    // include p=3*l+1
                             uint token2 = token0 | ((3*l+2) << 8);    // include p=3*l+2
                             uint token3 = token0 | ((3*l+3) << 8);    // include p=3*l+3
@@ -396,7 +426,7 @@ void ReferencePeakFindingKernel::apply(
 
                             if (debug && (b == 0) && (d==0) && (tout==2)) {
                                 cout << "cpu peak-finder: b=" << b << ", d=" << d << ", tout=" << tout 
-                                     << ", level=" << l << ", m=" << m << ", isamp=" << isamp << "\n";
+                                     << ", level=" << l << ", m=" << m << ", mu=" << mu << ", isamp=" << isamp << "\n";
 
                                 if (l == 0)
                                     cout << "   p=0" << " -> (w=" << w0 << ", y=" << y0 << ", w*y=" << (w0*y0) << endl;
@@ -408,6 +438,7 @@ void ReferencePeakFindingKernel::apply(
                                 }
                             }
                         }
+                      }
                     }
                 }
 
@@ -447,18 +478,22 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                 uint token = in_tokens.at({b,d,tout});
 
                 // Token parsing starts here.
-                // Reminder: token = (t) | (p << 8) | (m << 16).
+                // Reminder: token = (t) | (p << 8) | (m_ext << 16), with m_ext = (m << K) | mu.
 
-                long m = (token >> 16) & 0xffffu;
+                long m_ext = (token >> 16) & 0xffffu;
                 long p = (token >> 8) & 0xffu;
                 long t = (token & 0xffu);
 
-                if ((m < 0) || (m >= M))
+                if ((m_ext < 0) || (m_ext >= M_ext))
                     throw _bad_token(token, "m out of range");
                 if ((p < 0) || (p >= P))
                     throw _bad_token(token, "p out of range");
                 if ((t < 0) || (t >= Dout))
                     throw _bad_token(token, "t out of range");
+
+                long m = m_ext >> K;
+                long mu = m_ext & (E - 1);
+                long em = mu*M + m;   // index into tmp_arr (see PeakFindingKernel.hpp)
 
                 // p = 3*l+q, where l is the "level".
                 long l = p ? ((p-1)/3) : 0;
@@ -471,7 +506,7 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                 if (t != isamp*dt)
                     throw _bad_token(token, "t is not divisible by dt");
 
-                // Token parsing (token -> (m,isamp,p)) ends here!
+                // Token parsing (token -> (m,mu,isamp,p)) ends here!
 
                 long n = fs.m_to_n.at(m);
                 float w = wt.at({b, d/Wds, tout/Tds, p, n});
@@ -480,10 +515,10 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                 int S = tmp_sout[l];       // spacing
                 int I = tmp_iout[l];       // base
 
-                float x0 = tmp_arr.at(l).at({b, d, m, I + tout*nsamp + isamp - 3*S});
-                float x1 = tmp_arr.at(l).at({b, d, m, I + tout*nsamp + isamp - 2*S});
-                float x2 = tmp_arr.at(l).at({b, d, m, I + tout*nsamp + isamp - S});
-                float x3 = tmp_arr.at(l).at({b, d, m, I + tout*nsamp + isamp});
+                float x0 = tmp_arr.at(l).at({b, d, em, I + tout*nsamp + isamp - 3*S});
+                float x1 = tmp_arr.at(l).at({b, d, em, I + tout*nsamp + isamp - 2*S});
+                float x2 = tmp_arr.at(l).at({b, d, em, I + tout*nsamp + isamp - S});
+                float x3 = tmp_arr.at(l).at({b, d, em, I + tout*nsamp + isamp});
 
                 if (q == 0)
                     out_max.at({b,d,tout}) = w * x3;
@@ -500,7 +535,7 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                 if ((b==0) && (d==0) && (tout==1)) {
                     cout << "\neval_tokens(): (b=" << b << ", d=" << d << ", tout=" << tout << ")"
                          << " -> " << hex_str(token)
-                         << " -> (m=" << m << ", p=" << p << ", t=" << t << ", l=" << l << ", q=" << q << ")"
+                         << " -> (m=" << m << ", mu=" << mu << ", p=" << p << ", t=" << t << ", l=" << l << ", q=" << q << ")"
                          << " -> (w=" << w << ", x0=" << x0 << ", x1=" << x1 << ", x2=" << x2 << ", x3=" << x3 << ")"
                          << " -> " << out_max.at({b,d,tout}) << endl;
 
@@ -508,8 +543,8 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                          << " = " << wt.at({b,d/Wds,tout/Tds,p,n}) << endl;
 
                     for (int i = 0; i < 4; i++)
-                        cout << "  tmp_arr.at(" << l << ").at(" << b << "," << d << "," << m << "," << (I + tout*nsamp + isamp + (i-3)*S) << ")"
-                             << " = " << tmp_arr.at(l).at({b, d, m, I + tout*nsamp + isamp + (i-3)*S}) << endl;
+                        cout << "  tmp_arr.at(" << l << ").at(" << b << "," << d << "," << em << "," << (I + tout*nsamp + isamp + (i-3)*S) << ")"
+                             << " = " << tmp_arr.at(l).at({b, d, em, I + tout*nsamp + isamp + (i-3)*S}) << endl;
 
                     cout << "    at level l: tpad=" << tpad << ", dt=" << tmp_dt.at(l) << ", nsamp=" << nsamp << ", S=" << S << ", I=" << I << endl;
                 }
@@ -529,15 +564,14 @@ std::runtime_error ReferencePeakFindingKernel::_bad_token(uint token, const char
 
 
 // Make a mean-zero input array for testing.
-// Returns shape (nbeams_per_batch, ndm_out, fs.M, nt_in)
+// Returns shape (nbeams_per_batch, ndm_out << K, fs.M, nt_in)
 Array<float> ReferencePeakFindingKernel::make_random_input_array()
 {
     long B = params.beams_per_batch;
-    long D = params.ndm_out;
     long T = params.nt_in;
     long M = fs.M;
 
-    Array<float> ret({B,D,M,T}, af_rhost);
+    Array<float> ret({B,ndm_in,M,T}, af_rhost);
     {
         std::mt19937 &rng = ksgpu::default_rng();
         for (long i = 0; i < ret.size; i++)
@@ -656,45 +690,6 @@ void PeakFindingKernelParams::fill_host_weights(Array<float> &out, const Array<d
 
 // -------------------------------------------------------------------------------------------------
 //
-// gather_m_ext(). See the doc-comment in PeakFindingKernel.hpp.
-
-
-void gather_m_ext(Array<float> &dst, const Array<float> &src, long xdm_rank)
-{
-    xassert_ge(xdm_rank, 1);
-    xassert_eq(src.ndim, 4);
-
-    long nbeams = src.shape[0];
-    long E = pow2(xdm_rank);
-    long ndm_out = xdiv(src.shape[1], E);
-    long M = src.shape[2];
-    long nt = src.shape[3];
-
-    xassert_shape_eq(dst, ({ nbeams, ndm_out, M*E, nt }));
-
-    // Each (b, dm_out, m, mu) is one memcpy along the time axis. Note we do NOT require full
-    // contiguity: at sophistication 0 the ReferenceDedisperser passes a beam-strided slice of
-    // a larger array (it computes twice as many DMs in a downsampled tree, then drops the
-    // bottom half), so only the time axis is guaranteed contiguous.
-    xassert_eq(src.strides[3], 1);
-    xassert_eq(dst.strides[3], 1);
-
-    for (long b = 0; b < nbeams; b++) {
-        for (long d = 0; d < ndm_out; d++) {
-            for (long m = 0; m < M; m++) {
-                for (long mu = 0; mu < E; mu++) {
-                    const float *p = &src.at({ b, (d << xdm_rank) | mu, m, 0L });
-                    float *q = &dst.at({ b, d, (m << xdm_rank) | mu, 0L });
-                    memcpy(q, p, nt * sizeof(float));
-                }
-            }
-        }
-    }
-}
-
-
-// -------------------------------------------------------------------------------------------------
-//
 // GpuPeakFindingKernel
 
 
@@ -729,6 +724,12 @@ GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params
     params(params_), fs(params_.subband_counts)
 {
     params.validate();
+
+    if (params.xdm_rank != 0)
+        throw runtime_error("GpuPeakFindingKernel: xdm_rank > 0 is not implemented -- a standalone"
+                            " GPU peak-finder does not do the extra-DM reduction. On the GPU, K > 0"
+                            " is handled by CoalescedDdKernel2, which folds the extra DMs in as it"
+                            " dedisperses.");
 
     registry_key = _make_registry_key(params);
     registry_value = registry().get(registry_key);
@@ -903,6 +904,18 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     params_large.validate();
 
     GpuPeakFindingKernel gpu_kernel(params_small);   // just test constructor for now
+
+    // Nothing else ever hands this class xdm_rank > 0, so its rejection of that case is
+    // checked here rather than left untested.
+    {
+        PeakFindingKernelParams p = params_small;
+        p.xdm_rank = 1;
+        bool threw = false;
+        try { GpuPeakFindingKernel rejected(p); }
+        catch (const std::exception &) { threw = true; }
+        xassert(threw);
+    }
+
     ReferencePeakFindingKernel ref_kernel_small(params_small);
     ReferencePeakFindingKernel ref_kernel_large(params_large);
 
@@ -1570,6 +1583,14 @@ void ReferencePfSquare::test_vs_peak_finder()
 
     long Wmax = pow2(rand_int(0, integer_log2(constants::max_pf_width) + 1));
     long D = pow2(rand_int(0, 3));
+
+    // K > 0 is where the peak-finder folds extra DM bits into its multiplet index. This test
+    // is the cheapest check of that bookkeeping: the PfSquare knows nothing about 'mu', so a
+    // (mu, m) mix-up shows up here with no dedispersion machinery in the way.
+    long K = rand_int(0, 3);
+    long E = pow2(K);
+    long Dpf = D << K;
+
     long nchunks = rand_int(1, 5);
     long beams_per_batch = rand_int(1, 3);
     long nbatches = rand_int(1, 3);
@@ -1594,14 +1615,21 @@ void ReferencePfSquare::test_vs_peak_finder()
     pf_params.nt_in = nt_in;
     pf_params.nt_wt = nt_in;
     pf_params.Dcore = 1;        // evaluate h_p at every time sample
+    pf_params.xdm_rank = K;
     pf_params.validate();
 
     ReferencePeakFindingKernel pf(pf_params);
-    ReferencePfSquare sq(Wmax, total_beams, beams_per_batch, D*M, nt_in);
+
+    // One PfSquare row per (coarse dm, multiplet) pair of the peak-finder's input array, in
+    // the input's own (dpf, m) order. The peak-finder's m_ext is a DIFFERENT ordering of the
+    // same rows, and translating between the two is what the test below checks.
+    ReferencePfSquare sq(Wmax, total_beams, beams_per_batch, Dpf*M, nt_in);
 
     long P = pf.nprofiles;
     long N = fs.N;
     xassert_eq(sq.nprofiles, P);
+    xassert_eq(pf.M_ext, M*E);
+    xassert_eq(pf.ndm_in, Dpf);
 
     // The identity is exact only if both objects carry at least the longest kernel's history,
     // i.e. (2*Wmax) input samples. Both do by construction, but the two 'tpad' definitions are
@@ -1614,6 +1642,7 @@ void ReferencePfSquare::test_vs_peak_finder()
          << "    max_kernel_width = " << Wmax << "\n"
          << "    nprofiles = " << P << "\n"
          << "    M = " << M << "\n"
+         << "    xdm_rank = " << K << "\n"
          << "    ndm_out = " << D << "\n"
          << "    beams_per_batch = " << beams_per_batch << "\n"
          << "    total_beams = " << total_beams << "\n"
@@ -1626,8 +1655,8 @@ void ReferencePfSquare::test_vs_peak_finder()
         wt.data[i] = 1.0f;
 
     // One accumulator per beam, so that batches don't overwrite each other.
-    Array<double> acc_sq({total_beams, D*M, P}, af_uhost | af_zero);
-    Array<double> acc_pf({total_beams, D*M, P}, af_uhost | af_zero);
+    Array<double> acc_sq({total_beams, Dpf*M, P}, af_uhost | af_zero);
+    Array<double> acc_pf({total_beams, Dpf*M, P}, af_uhost | af_zero);
 
     Array<float> out_max({beams_per_batch, D, nt_in}, af_uhost | af_zero);
     Array<uint> out_argmax({beams_per_batch, D, nt_in}, af_uhost | af_zero);
@@ -1637,17 +1666,20 @@ void ReferencePfSquare::test_vs_peak_finder()
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         for (long ibatch = 0; ibatch < nbatches; ibatch++) {
             long b0 = ibatch * beams_per_batch;
-            Array<float> in({beams_per_batch, D, M, nt_in}, af_uhost | af_random);
+            Array<float> in({beams_per_batch, Dpf, M, nt_in}, af_uhost | af_random);
 
             // apply() both advances the peak-finder's persistent state and populates the
             // 'tmp_arr' that eval_tokens() reads.
             pf.apply(out_max, out_argmax, in, wt, ibatch);
 
-            for (long m = 0; m < M; m++) {
+            for (long m_ext = 0; m_ext < M*E; m_ext++) {
+                long m = m_ext >> K;
+                long mu = m_ext & (E-1);
+
                 for (long p = 0; p < P; p++) {
-                    // Token format is (t) | (p << 8) | (m << 16), and with Dcore == 1 the only
-                    // legal fine time is t = 0.
-                    uint token = (uint(m) << 16) | (uint(p) << 8);
+                    // Token format is (t) | (p << 8) | (m_ext << 16), and with Dcore == 1 the
+                    // only legal fine time is t = 0.
+                    uint token = (uint(m_ext) << 16) | (uint(p) << 8);
                     for (long i = 0; i < tokens.size; i++)
                         tokens.data[i] = token;
 
@@ -1660,13 +1692,15 @@ void ReferencePfSquare::test_vs_peak_finder()
                                 float y = out_tok.at({b,d,tout});
                                 s += double(y) * y;
                             }
-                            acc_pf.at({b0+b, d*M+m, p}) += s;
+                            // Peak-finder output DM 'd' and token m-field m_ext = (m << K) | mu
+                            // read input DM row ((d << K) | mu), multiplet m.
+                            acc_pf.at({b0+b, ((d << K) | mu)*M + m, p}) += s;
                         }
                     }
                 }
             }
 
-            Array<float> in_sq = in.reshape({beams_per_batch, D*M, nt_in});
+            Array<float> in_sq = in.reshape({beams_per_batch, Dpf*M, nt_in});
             Array<double> acc_slice = acc_sq.slice(0, b0, b0 + beams_per_batch);
             sq.apply(acc_slice, in_sq, ibatch);
         }

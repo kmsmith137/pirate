@@ -854,7 +854,7 @@ void register_kernel_bindings(pybind11::module &m)
         "Reference (CPU, float32) peak-finding kernel; exposed for unit tests.")
           .def(py::init([](const std::vector<long> &subband_counts, long max_kernel_width,
                            long beams_per_batch, long total_beams, long ndm_out, long ndm_wt,
-                           long nt_out, long nt_in, long nt_wt, long Dcore) {
+                           long nt_out, long nt_in, long nt_wt, long Dcore, long xdm_rank) {
               PeakFindingKernelParams params;
               params.subband_counts = subband_counts;
               params.dtype = Dtype::native<float> ();
@@ -867,14 +867,19 @@ void register_kernel_bindings(pybind11::module &m)
               params.nt_in = nt_in;
               params.nt_wt = nt_wt;
               params.Dcore = Dcore;
+              params.xdm_rank = xdm_rank;
               return new ReferencePeakFindingKernel(params);
           }),
           py::arg("subband_counts"), py::arg("max_kernel_width"),
           py::arg("beams_per_batch"), py::arg("total_beams"),
           py::arg("ndm_out"), py::arg("ndm_wt"),
-          py::arg("nt_out"), py::arg("nt_in"), py::arg("nt_wt"), py::arg("Dcore"))
+          py::arg("nt_out"), py::arg("nt_in"), py::arg("nt_wt"), py::arg("Dcore"),
+          py::arg("xdm_rank") = 0)
           .def_property_readonly("P", [](const ReferencePeakFindingKernel &self) { return self.nprofiles; })
           .def_property_readonly("M", [](const ReferencePeakFindingKernel &self) { return self.fs.M; })
+          // M_ext = (M << xdm_rank) is the range of the argmax token's m-field, which is
+          // larger than M in an early-trigger tree.
+          .def_property_readonly("M_ext", [](const ReferencePeakFindingKernel &self) { return self.M_ext; })
           .def_property_readonly("N", [](const ReferencePeakFindingKernel &self) { return self.fs.N; })
           .def_property_readonly("Dout", [](const ReferencePeakFindingKernel &self) { return self.Dout; })
           .def_property_readonly("Dcore", [](const ReferencePeakFindingKernel &self) { return self.Dcore; })

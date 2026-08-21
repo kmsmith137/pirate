@@ -174,7 +174,8 @@ struct DedispersionTree
     //
     //   argmax_token = uint32 token from this tree's out_argmax array. Format is
     //       (t) | (p << 8) | (mu << 16) | (m << (16+K)) with K = xdm_rank(); see
-    //       CoalescedDdKernel2.hpp. Note the m-field is m_ext, not m, when K > 0.
+    //       CoalescedDdKernel2.hpp. Note the m-field is m_ext = (m << K) | mu, not m,
+    //       when K > 0 -- so do not decode it by hand, call this.
     //   0 <= idm_coarse < ndm_out     (dm index in out_max/out_argmax)
     //   0 <= itime_coarse < nt_out    (time index in out_max/out_argmax)
     //

@@ -35,13 +35,15 @@ namespace pirate {
 // The 'out_argmax' array has the same shape (ndm_out, nt_out). Each element of the
 // out_argmax array is an uint32 "token" which indicates which element of the 4-d trial
 // array (from the previous paragraph) is responsible for the maximum SNR. The tokens
-// are defined as follows (see "Note 3" below for why this is simpler than cdd2):
+// are defined as follows (see "Note 3" below for the cdd2 spelling of the same 32 bits):
 //
 //   token = (t) | (p << 8) | (m << 16);   // 8+8+16 bits
 //
 //     where  0 <= t < (nt_in / nt_out)  indexes a fine-grained arrival time
 //            0 <= p < P                 indexes a peak-finding profile (see below)
 //            0 <= m < M                 indexes a "multiplet" (see below)
+//
+// (the m-field is really m_ext, which equals m when xdm_rank == 0 -- see "Note 1" below)
 //
 // Note that 't' is quantized: for a profile at peak-finding level l (i.e. boxcar length
 // 2^l), 't' is a multiple of min(Dcore, 2^l), where Dcore is the kernel's internal
@@ -84,19 +86,25 @@ namespace pirate {
 // for the GPU kernel. The helper class 'GpuPfWeightLayout' is intended to hide the
 // details of the GPU memory layout, by providing helper functions to convert from (*).
 //
-// Note 1: the peak-finding kernels (ReferencePeakFindingKernel, GpuPeakFindingKernel)
-// don't define an explicit index 0 <= mu < 2^K (see notes/dedispersion.tex). This is
-// because K > 0 can be "emulated" by prepending K zeroes to subband_counts.
+// Note 1: a peak-finding kernel takes K = PeakFindingKernelParams::xdm_rank explicitly
+// (see notes/dedispersion.tex for what K is). Its input array has (ndm_out << K) DM rows;
+// it max-reduces over the low K bits of that index -- call them 0 <= mu < 2^K -- along with
+// the multiplet index, and its argmax tokens carry m_ext = (m << K) | mu in the m-field.
+// So the m-field above is really m_ext, and coincides with m only when K = 0.
 //
-// Note 2: in contrast, the cdd2 kernel does need to define the additional mu-index.
-// Prepending zeroes doesn't change the number of subbands, but does change which
-// frequency ranges they correspond to. The peak-finding kernels don't need this
-// extra information, whereas the cdd2 kernel does.
+// Note 2: what a peak-finding kernel does NOT know is the frequency ranges of its subbands.
+// That is why K enters here as a bare bit count rather than as extra subband_counts entries:
+// the peak-finder needs the multiplet COUNT and the weight lookup m -> n, both of which come
+// from the compact counts, and nothing about band geometry. The cdd2 kernel does need the
+// geometry, and computes it for itself.
 //
-// Note 3: because K=0 in the peak-finding kernels, whereas K>=0 in the cdd2 kernel,
-// the peak-finding kernels use a simpler (but consistent) argmax-token representation.
-//  - Peak-finding kernels use:  token = (t) | (p << 8) | (m << 16)
-//  - cdd2 kernels use:          token = (t) | (p << 8) | (mu << 16) | (m << (16+K))
+// Note 3: the cdd2 kernel documents its token format as
+//
+//   token = (t) | (p << 8) | (mu << 16) | (m << (16+K))
+//
+// which is the same 32 bits as above: (m << (16+K)) | (mu << 16) == (m_ext << 16). The two
+// spellings exist because a cdd2 caller thinks in (m, mu) and a peak-finder in m_ext.
+// DedispersionTree::decode_argmax() is the one place that splits the field back apart.
 
 
 struct PeakFindingKernelParams
@@ -108,30 +116,24 @@ struct PeakFindingKernelParams
     long beams_per_batch = 0;
     long total_beams = 0;
 
-    // Peak-finding input array has shape (beams_per_batch, ndm_out, fs.M, nt_in).
+    // Number of "extra DM" bits folded into the peak-finder's multiplet index. The input array
+    // has ndm_out << xdm_rank DM rows, which the kernel max-reduces down to ndm_out; the argmax
+    // token's m-field is m_ext = (m << xdm_rank) | mu, with mu the low xdm_rank bits of the
+    // input DM index. Zero unless the producing tree has pf_rank < dd_rank1.
+    long xdm_rank = 0;
+
+    // Peak-finding input array has shape (beams_per_batch, ndm_out << xdm_rank, fs.M, nt_in).
     // Output arrays have shape (beams_per_batch, ndm_out, nt_out).
     // Weight array has shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N).
-    //
-    // Note: it may be confusing that there is no member PeakFindingKernelParams::ndm_in!
-    // The reason for this depends on context:
-    //
-    //  - Case 1: PeakFindingKernelParams is used in a PeakFindingKernel. Then the kernel
-    //    input/output shapes are (nbeams, ndm_out, fs.M, nt_in) -> (nbeams, ndm_out, nt_out).
-    //    The DM axis is a pure spectator, and ndm_in == ndm_out.
-    //
-    //  - Case 2: PeakFindingKernelParams is used in a CoalescedDdKernel2. Then both ndm_in
-    //    and ndm_out are implicitly specified as:
-    //
-    //      ndm_in = pow2(amb_rank + dd_rank)    where amb_rank,dd_rank are in DedispersionKernelParams
-    //      ndm_out = ndm_in / pow2(dd_rank1)    where dd_rank1 = (dd_rank + 1) // 2
-    //
-    //    The kernel asserts that PeakFindingKernelParams::ndm_out is consistent.
 
     long ndm_out = 0;
     long ndm_wt = 0;
     long nt_out = 0;
     long nt_in = 0;
     long nt_wt = 0;
+
+    // DM axis of the peak-finding input array. Call this rather than open-coding the shift.
+    long ndm_in() const { return ndm_out << xdm_rank; }
 
     // Internal time-downsampling factor ("core" downsampling) of the peak-finder. This sets
     // the time granularity of the out_argmax tokens: at peak-finding level l, the token's
@@ -177,9 +179,9 @@ struct PeakFindingKernelParams
 
 struct ReferencePeakFindingKernel
 {
-    // Parameters specified at construction. The ReferencePeakFinding kernel doesn't need
-    // to know "K" at construction, see "note 1" above.
-    
+    // Parameters specified at construction. Note that 'fs' is built from the COMPACT
+    // subband_counts, so fs.M and fs.m_to_n are indexed by m, not by m_ext (see M_ext below).
+
     PeakFindingKernelParams params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt, Dcore
     FrequencySubbands fs;             // pf_rank, N, M
     long Dcore = 0;            // = params.Dcore
@@ -188,6 +190,10 @@ struct ReferencePeakFindingKernel
     long Dout = 0;             // = (nt_in/nt_out) = time downsampling factor of output array
     long nbatches = 0;         // = (total_beams / beams_per_batch)
     long nprofiles = 0;        // = (3 * log2(max_kernel_width) + 1)
+    long K = 0;                // = params.xdm_rank
+    long E = 0;                // = pow2(K), the number of input DMs per output DM
+    long ndm_in = 0;           // = (params.ndm_out << K) = DM axis of the input array
+    long M_ext = 0;            // = (fs.M << K), the range of the argmax token's m-field
 
     // Note that the reference kernel uses float32, regardless of what dtype is specified.
     // All arrays must be fully contiguous (this could be changed if needed).
@@ -202,7 +208,7 @@ struct ReferencePeakFindingKernel
     // row order is the caller's rather than the peak-finder's multiplet convention.
     void apply(ksgpu::Array<float> &out_max,     // shape (beams_per_batch, ndm_out, nt_out)
                ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
-               const ksgpu::Array<float> &in,    // shape (beams_per_batch, ndm_out, params.fs.M, nt_in)
+               const ksgpu::Array<float> &in,    // shape (beams_per_batch, ndm_out << K, fs.M, nt_in)
                const ksgpu::Array<float> &wt,    // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
                long ibatch,                      // 0 <= ibatch < nbatches
                bool debug = false);              // enables verbose debugging output
@@ -244,7 +250,7 @@ struct ReferencePeakFindingKernel
         const ksgpu::Array<float> &wt);         // input array, shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
 
     // Make a mean-zero input array for testing.
-    // Returns shape (nbeams_per_batch, ndm_out, params.fs.M, nt_in)
+    // Returns shape (nbeams_per_batch, ndm_out << K, fs.M, nt_in)
     ksgpu::Array<float> make_random_input_array();
 
     // Note: peak-finding weights are generated by PeakFindingKernelParams::fill_host_weights()
@@ -255,11 +261,17 @@ struct ReferencePeakFindingKernel
     //
     //  - tmp_dt[l]: step size (in time) of temp array
     //  - tmp_nt[l]: number of time samples in temp array
-    //  - tmp_arr[l]: array of shape is (B, D, M, tmp_nt[l]))
+    //  - tmp_arr[l]: array of shape is (B, D, E*M, tmp_nt[l]))
     //
-    // Array element tmp_arr[l][b,d,m,j] is obtained by summing:
+    // The multiplet axis of tmp_arr (and of pstate) is indexed by em = mu*M + m, NOT by
+    // m_ext = (m << K) | mu. This ordering is load-bearing: it matches the input array's
+    // (dpf, m) = (d, mu, m) memory order, which is what makes the fill from 'in' a straight
+    // copy per (d, mu, m) triple. The m_ext ordering would be equally self-consistent, pass
+    // every shape assert, and give wrong answers whenever E > 1.
     //
-    //    in[b,d,m, ilo:(ilo+2^l)]    where ilo = -tpad + j*tmp_dt[l]
+    // Array element tmp_arr[l][b,d,mu*M+m,j] is obtained by summing:
+    //
+    //    in[b, (d << K) | mu, m, ilo:(ilo+2^l)]    where ilo = -tpad + j*tmp_dt[l]
     //
     // We also compute the following members, for convenience in computing
     // "triggers":
@@ -276,10 +288,10 @@ struct ReferencePeakFindingKernel
     //   S = tmp_sout[l];   // spacing
     //
     //   for (isamp = 0; isamp < nsamp; isamp++) {
-    //       float x_0 = tmp_arr[l][b,d,m, I + tout*nsamp + isamp - (q-1)*S];
-    //       float x_1 = tmp_arr[l][b,d,m, I + tout*nsamp + isamp - (q-2)*S];
+    //       float x_0 = tmp_arr[l][b,d,em, I + tout*nsamp + isamp - (q-1)*S];
+    //       float x_1 = tmp_arr[l][b,d,em, I + tout*nsamp + isamp - (q-2)*S];
     //           ...
-    //       float x_end = tmp_arr[l][b,d,m, I + tout*nsamp + isamp];
+    //       float x_end = tmp_arr[l][b,d,em, I + tout*nsamp + isamp];
 
     long tpad = 0;  // prepadding (in "input time samples"), same for all levels
     long num_levels = 0;
@@ -290,38 +302,19 @@ struct ReferencePeakFindingKernel
     std::vector<long> tmp_iout;
     std::vector<long> tmp_nout;
     std::vector<long> tmp_sout;
-    std::vector<ksgpu::Array<float>> tmp_arr;   // shape (B, D, M, tmp_nt[l])
+    std::vector<ksgpu::Array<float>> tmp_arr;   // shape (B, D, E*M, tmp_nt[l])
 
     // The reference rl allocates persistent state in the constructor (not a separate
     // allocate() method). We just save the last (tpad) samples from the previous chunk.
 
-    ksgpu::Array<float> pstate;  // shape (total_beams, ndm_out, M, tpad)
+    ksgpu::Array<float> pstate;  // shape (total_beams, ndm_out, E*M, tpad)
 
     // Helper for eval_tokens()
     static std::runtime_error _bad_token(uint token, const char *why);
 };
 
 
-// gather_m_ext(): reindexes a "subband" array (the sb_out of a dedispersion kernel) into
-// the layout a peak-finding kernel reads, when the two disagree by 'xdm_rank' > 0 extra DM
-// bits:
-//
-//    dst[b, dm_out, (m << xdm_rank) | mu, t] = src[b, (dm_out << xdm_rank) | mu, m, t]
-//
-// i.e. the low 'xdm_rank' bits of the DM index become the low bits of the multiplet index.
-// The peak-finding kernel is then constructed with 'xdm_rank' zeros prepended to
-// subband_counts, so that its multiplet index is m_ext and its argmax tokens match a cdd2
-// kernel's (see "Note 1" at the top of this file, and CoalescedDdKernel2.hpp).
-//
-// This is what the CPU side has to do explicitly, because a cdd2 kernel does it implicitly:
-// it never materializes the subband array, and its peak-finding half reads the extra DMs
-// straight out of the dedisperser's registers. Callers are CoalescedDdKernel2::test_random()
-// and ReferenceDedisperser; keeping one implementation is what stops the two from drifting.
-//
-// Shapes: src is (nbeams, ndm_out << xdm_rank, M, nt), dst is (nbeams, ndm_out, M << xdm_rank, nt).
-// Only the time axis of each has to be contiguous.
-
-extern void gather_m_ext(ksgpu::Array<float> &dst, const ksgpu::Array<float> &src, long xdm_rank);
+// -------------------------------------------------------------------------------------------------
 
 
 // GpuPfWeightLayout: describes the layout of peak-finding weights on the GPU.
@@ -401,7 +394,9 @@ struct GpuPfWeightLayout
 
 struct GpuPeakFindingKernel
 {
-    // The GpuPeakFinding kernel doesn't need to know "K" at construction, see "note 1" above.
+    // Throws unless params.xdm_rank == 0: a standalone GPU peak-finder does not implement
+    // the extra-DM reduction (see "Note 1" above). CoalescedDdKernel2 is what handles K > 0
+    // on the GPU, and GpuDedisperser only ever instantiates that.
     GpuPeakFindingKernel(const PeakFindingKernelParams &params);
 
     void allocate(BumpAllocator &allocator);

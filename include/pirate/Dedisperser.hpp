@@ -461,10 +461,10 @@ struct ReferenceDedisperserBase
 
     std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
 
-    // Length ntrees. NOTE these are constructed with K = tree.xdm_rank() zeros prepended to
-    // the plan's subband_counts, so pf_kernels[itree].fs.M is (tree.frequency_subbands.M << K)
-    // and the multiplet index is m_ext = (m << K) | mu. This is what makes their out_argmax
-    // tokens identical to a cdd2 kernel's. K is zero except in early-trigger trees.
+    // Length ntrees, constructed from plan->stage2_pf_params verbatim. NOTE their argmax
+    // token m-field is m_ext = (m << K) | mu with K = tree.xdm_rank(), not the tree's own
+    // multiplet index m -- which is what makes the tokens identical to a cdd2 kernel's.
+    // K is zero except in early-trigger trees.
     std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;
 
     // To process multiple chunks, call the dedisperse() method in a loop.
@@ -499,9 +499,8 @@ struct ReferenceDedisperserBase
     // a variance calculation should run a ReferencePfSquare over THIS array rather than
     // resolving anything by the peak-finder's convention.
     //
-    // A view into internal storage, which the next dedisperse() overwrites. Note it is not
-    // LITERALLY the peak-finder's input when xdm_rank() > 0: the peak-finder reads a
-    // reindexed copy of it (see pf_input()), i.e. the same numbers in a different order.
+    // A view into internal storage, which the next dedisperse() overwrites. It IS the array
+    // handed to pf_kernels[itree] -- the peak-finder reads the extra DM bits in place.
     std::vector<ksgpu::Array<float>> out_sb;      // length ntrees
 
     // Allocates the subband ('sb_out') buffer for tree 'itree': the array that
@@ -517,22 +516,10 @@ struct ReferenceDedisperserBase
     // with K = trees[itree].xdm_rank(), since the dedispersion kernel emits 2^K DM channels
     // per peak-finder DM channel.
     //
-    // Allocating here rather than at each call site is what keeps this buffer in step with
-    // the reindexing buffer that pf_input() fills, which is sized from the same K: the
-    // failure mode otherwise is one buffer sized with K = 0 and a gather that writes 2^K
-    // times as many rows -- and, for the same reason, with the out_sb[itree] view, which is
-    // the top (trees[itree].ndm_out << K) rows of the returned array.
+    // Allocating here rather than at each call site is what lets the out_sb[itree] view --
+    // the top (trees[itree].ndm_out << K) rows of the returned array -- be published from the
+    // one place that knows the shape.
     ksgpu::Array<float> alloc_subband_buffer(long itree, long ndm);
-
-    // Converts a subband buffer into the array pf_kernels[itree] reads, by applying
-    // gather_m_ext(). Returns 'sb' unchanged when trees[itree].xdm_rank() is zero; otherwise
-    // returns a buffer owned by this object, which the next call for the same tree
-    // overwrites.
-    ksgpu::Array<float> pf_input(long itree, const ksgpu::Array<float> &sb);
-
-    // Scratch for pf_input(), length ntrees. Element itree is empty iff xdm_rank() is zero
-    // there. Allocated by alloc_subband_buffer().
-    std::vector<ksgpu::Array<float>> pf_in_bufs;
 
     // Factory function -- constructs ReferenceDedisperser of the sophistication in 'params'.
     static std::shared_ptr<ReferenceDedisperserBase> make(const Params &params);
