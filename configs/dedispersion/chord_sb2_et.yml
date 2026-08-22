@@ -43,9 +43,14 @@ num_active_batches: 2
 # and has early triggers (if needed) starting at ~60 sec dispersion delay. See
 # the dedispersion tex notes for detailed info.
 #
-# The 'max_width' param is the max peak-finding width (see dedispersion tex notes),
+# The 'max_width' param is the max peak-finding width (see dedispersion.tex),
 # in "time samples after downsampling by 2^(primary_tree_index)".
 # To get ~32 ms, we set max_width=[32,16,8,4] in each primary tree.
+#
+# If W1, W2 are the max_width params in consecutive primary trees, then:
+#   W1 = W2        => max_width is the same in "post-downsampled" time samples
+#   W1 = 2*W2      => max_width is the same in "pre-donwsampled" time samples
+#   anything else  => presumably unintentional, so an exception is raised.
 #
 # FIXME: the '*_downsampling' params are intended to control coarse-graining,
 # but are currently in a state of incomplete implementation. For now, set

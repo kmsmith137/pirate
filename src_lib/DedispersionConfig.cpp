@@ -508,6 +508,47 @@ void DedispersionConfig::validate() const
         }
     }
 
+    // Constraint coupling max_width across primary trees. Like the checks below, this is a
+    // config-authoring error, so it throws with an explanatory message (following the
+    // wt_dm_downsampling precedent above) rather than a bare xassert.
+    //
+    // Placement: AFTER the loop, which has already established that every max_width is a
+    // positive power of two -- so this check can compare them without re-validating. Note that
+    // if the predecessor's max_width is 1, the only legal successor is 1: halving would give 0,
+    // which the loop rejects.
+
+    for (long ipri = 1; ipri < num_primary_trees(); ipri++) {
+        long w = primary_trees.at(ipri).max_width;
+        long w_prev = primary_trees.at(ipri-1).max_width;
+
+        if ((w == w_prev) || (2*w == w_prev))
+            continue;
+
+        stringstream ss;
+        ss << "DedispersionConfig: primary tree " << ipri << " has max_width=" << w
+           << ", but primary tree " << (ipri-1) << " has max_width=" << w_prev << "."
+           << " A downsampled primary tree's max_width must either EQUAL its predecessor's"
+           << " or be HALF of it.\n\n"
+           << "max_width is in that primary tree's own time samples, so primary tree i searches"
+           << " boxcars up to (max_width * 2^i) input samples wide. The two legal choices are"
+           << " the two ways of scaling that window deliberately: an equal max_width holds the"
+           << " window fixed in POST-downsampling samples (so the physical window doubles per"
+           << " primary tree), and a halved max_width holds it fixed in PRE-downsampling"
+           << " samples (so the physical window is constant). Any other relation -- and an"
+           << " INCREASING max_width in particular -- is almost always a mis-transcribed config"
+           << " rather than an intent.\n\n"
+           << "It is also load-bearing. nprofiles = 1 + 3*log2(max_width), and the peak-finding"
+           << " kernel bank for a given max_width is a PREFIX of the bank for twice that width,"
+           << " so this rule is what makes every downsampled primary tree's profile set a"
+           << " subset of primary tree 0's. That containment is what lets a downsampled tree's"
+           << " variance map be obtained from tree 0's by selecting rows"
+           << " (notes/variance_map.tex, appendix \"Variance maps of a config's trees are"
+           << " row-restrictions of one another\", Proposition 2). With an increasing"
+           << " max_width, a downsampled tree would search profiles that tree 0 does not, and"
+           << " no such row selection would exist.";
+        throw runtime_error(ss.str());
+    }
+
     // Constraints coupling frequency_subband_counts to the early triggers. These are
     // config-authoring errors, so they throw with an explanatory message (following the
     // wt_dm_downsampling precedent above) rather than a bare xassert.
@@ -1047,21 +1088,49 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
         if (valid_keys.size() > 0) {
             npri = rand_int(1,5);
+
+            // validate() requires each downsampled primary tree's max_width to EQUAL its
+            // predecessor's or be HALF of it, so Wmax cannot be drawn independently per tree
+            // (Dout and Tinner still are, which is what exercises the kernels). Walk the chain,
+            // and at each step pick a key whose Wmax is one of the two legal successors.
+            long W = my_keys.at(0).Wmax;
+
             for (int ipri = 1; ipri < npri; ipri++) {
-                // For each downsampled primary tree, we choose independent (Dout, Tinner, Wmax).
-                // This is artificial, but does a good job of exercising kernels.
-                long ix = rand_int(0, valid_keys.size());
-                my_keys.push_back(valid_keys.at(ix));
+                // The registry pool is already filtered to (dtype, dd_rank, subband_counts), and
+                // may not contain either successor. Truncate the config rather than fail: an
+                // exception here would be a make_random() bug, not a caller error.
+                vector<Key2> wkeys;
+                for (const Key2 &k: valid_keys)
+                    if ((k.Wmax == W) || (2*k.Wmax == W))
+                        wkeys.push_back(k);
+
+                if (wkeys.size() == 0) {
+                    npri = ipri;
+                    break;
+                }
+
+                const Key2 &k = wkeys.at(rand_int(0, wkeys.size()));
+                W = k.Wmax;
+                my_keys.push_back(k);
             }
         }
     }
     else if (!args.gpu_valid && ds_pri_ok && (ds_stage2_dd_rank >= 1)) {
         npri = rand_int(1,5);
 
+        // Same max_width chain as the gpu_valid path above. There is no registry to satisfy
+        // here, so the chain never truncates: we overwrite the random key's Wmax, the same
+        // clobber already applied to subband_counts.
+        long W = my_keys.at(0).Wmax;
+
         for (int ipri = 1; ipri < npri; ipri++) {
-            // For each downsampled primary tree, we choose independent (Dout, Tinner, Wmax).
+            if ((W > 1) && rand_bool())
+                W /= 2;
+
+            // For each downsampled primary tree, we choose independent (Dout, Tinner).
             Key2 ds_key = _make_random_cdd2_key(ret.dtype, ds_stage2_dd_rank);
             ds_key.subband_counts = ds_subband_counts;  // clobber
+            ds_key.Wmax = W;                            // clobber
             my_keys.push_back(ds_key);
         }
     }

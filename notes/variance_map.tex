@@ -1547,9 +1547,9 @@ buys before paying for it at production.
 
 Label the trees of one {\tt DedispersionConfig} by a pair $(\gamma, e)$: primary-tree index
 $\gamma$ (downsampling factor $2^\gamma$) and early-trigger level $e$. Each tree has its own
-variance map $A^{(\gamma,e)}$, a $(D_{\gamma,e} M_{\gamma,e} P)$-by-$N_{\rm freq}$ matrix. Say
-that $A'$ is a {\bf row-restriction} of $A$ if there is an injection from the rows of $A'$ to
-the rows of $A$ under which corresponding rows are equal as vectors in
+variance map $A^{(\gamma,e)}$, a $(D_{\gamma,e} M_{\gamma,e} P_\gamma)$-by-$N_{\rm freq}$
+matrix. Say that $A'$ is a {\bf row-restriction} of $A$ if there is an injection from the rows
+of $A'$ to the rows of $A$ under which corresponding rows are equal as vectors in
 $\mathbb{R}^{N_{\rm freq}}$. We prove:
 \begin{enumerate}
 \item $A^{(\gamma,e)}$ is a row-restriction of $A^{(\gamma,0)}$, for every $\gamma$ and $e$.
@@ -1645,7 +1645,26 @@ A^{(\gamma,e)}_{(d,\,(b,j),\,p),\,F} \;=\; \Phi_{b,p,F}\big( 2^l d + j + \sigma_
 \label{eq:restriction_closedform}
 \end{equation}
 
-\subsection{Two consequences of (F1) and (F2)}
+\medskip
+\par\noindent
+{\bf (F5) Profiles and {\tt max\_width}.} The number of peak-finding profiles is
+$P = 1 + 3\log_2 {\tt max\_width}$, where {\tt max\_width} is the widest boxcar the peak-finder
+searches, measured in the tree's own time samples. Profile $p$ denotes the same filter $h_p$
+whatever {\tt max\_width} is: $p=0$ is the identity, and $p = 3l+q$ with $q \in \{1,2,3\}$ is
+one of three shapes built from length-$2^l$ boxcars, so {\tt max\_width} enters only through how
+many levels $l$ exist. The bank for {\tt max\_width} is therefore a {\em prefix} of the bank for
+$2\,{\tt max\_width}$: doubling the width appends one level, i.e.\ three profiles, at the end.
+Now, {\tt max\_width} is a per-{\em primary}-tree config field, which the {\tt DedispersionTree}
+constructor copies verbatim, so every tree of one family reads the same value; and
+{\tt DedispersionConfig::validate()} requires each downsampled primary tree's {\tt max\_width} to
+equal its predecessor's or be half of it. Hence
+\begin{equation}
+P_\gamma \;=\; 1 + 3\log_2 {\tt max\_width}_\gamma
+\qquad \mbox{is independent of $e$, and non-increasing in $\gamma$.}
+\label{eq:restriction_profiles}
+\end{equation}
+
+\subsection{Three consequences of (F1), (F2) and (F5)}
 \label{ssec:restriction_bookkeeping}
 
 \par\noindent
@@ -1682,6 +1701,25 @@ $\gamma>0$. $\square$
 Part (b) is the fact that makes statement 1 a restriction in the {\em multiplet} index only:
 an early trigger does not shorten the coarse-DM axis.
 
+\medskip
+\par\noindent
+{\bf (c) Profile ranges nest.} {\em $P$ is an attribute of the primary-tree family, so we may
+write $P_\gamma$ without an $e$; and $P_\gamma \le P_0$ for every $\gamma$, with equality iff
+the two families share a {\tt max\_width}. Since profile $p$ denotes the same filter in every
+tree, the profile index set $[0,P_\gamma)$ of any tree is contained in that of tree $(0,0)$, and
+an index the two trees share means the same thing in both.}
+
+\medskip
+\par\noindent
+{\em Proof.} Immediate from (F5): all trees of family $\gamma$ read one {\tt max\_width}, and
+(\ref{eq:restriction_profiles}) is non-increasing in $\gamma$. $\square$
+
+\medskip
+\par\noindent
+Part (c) is what makes statement 2 well-formed: without it, a downsampled tree could search
+profiles that tree $(0,0)$ does not, and the right-hand side of (\ref{eq:restriction_ds}) would
+be indexed out of range.
+
 \subsection{Statement 1: early triggers}
 \label{ssec:restriction_et}
 
@@ -1689,7 +1727,7 @@ an early trigger does not shorten the coarse-DM axis.
 {\bf Proposition 1.} {\em Fix $\gamma$ and $e \ge 0$, and let the trees $(\gamma,e)$ and
 $(\gamma,0)$ be fed by a common upstream chain, which may be arbitrary. Then for every band
 $b \in \mathcal{B}(\gamma,e)$ at level $l$, every $0 \le j < 2^l$, every $0 \le d < D_\gamma$,
-every $p$ and every $F$,}
+every $0 \le p < P_\gamma$ and every $F$,}
 \begin{equation}
 A^{(\gamma,e)}_{(d,\,(b,j),\,p),\,F} \;=\; A^{(\gamma,0)}_{(d,\,(b,j),\,p),\,F}.
 \label{eq:restriction_et}
@@ -1728,7 +1766,7 @@ triggers are a pure restriction in $m$.
 \par\noindent
 {\bf Proposition 2.} {\em Work in the no-detrender setting of \S\ref{sec:avar_statement}, and
 fix $\gamma > 0$. For every band $b \in \mathcal{B}(0,0)$ at level $l$, every
-$0 \le j < 2^l$, every $0 \le d < D_\gamma$, every $p$ and every $F$,}
+$0 \le j < 2^l$, every $0 \le d < D_\gamma$, every $0 \le p < P_\gamma$ and every $F$,}
 \begin{equation}
 A^{(\gamma,0)}_{(d,\,(b,j),\,p),\,F} \;=\; A^{(0,0)}_{(d + D_0 - D_\gamma,\;(b,j),\;p),\,F},
 \hspace{1.2cm} D_0 - D_\gamma = \tfrac{1}{2} D_0 .
@@ -1762,11 +1800,27 @@ Observation (a), so the two arguments of $\Phi_{b,p,F}$ agree. $\square$
 
 \medskip
 \par\noindent
+A word on the profile index. The right-hand side of (\ref{eq:restriction_ds}) is defined
+because $P_\gamma \le P_0$ by the Observation (c), and a profile index the two trees share
+denotes the same filter by (F5) -- which is why $p$ can be ``carried over unchanged'' between
+trees that do not have the same number of profiles. So Proposition 2's restriction is in the
+coarse-DM index {\em and} the profile index, whereas Proposition 1's is in the multiplet index
+alone. The profile restriction is not vacuous: $P_\gamma$ is often strictly less than $P_0$. In
+{\tt configs/dedispersion/chord\_sb2\_et.yml}, whose four primary trees have
+${\tt max\_width} = 32, 16, 8, 4$, the profile counts are $P = 16, 13, 10, 7$. Anything deriving
+$A^{(\gamma,0)}$ from $A^{(0,0)}$ must therefore select the rows with $p < P_\gamma$ rather than
+assume the profile axes match -- the array shapes look plausible either way.
+
+\medskip
+\par\noindent
 Two remarks. First, in the no-detrender setting (\ref{eq:restriction_closedform}) depends on
-$\gamma$ only through $\sigma_\gamma \in \{0,1\}$, so {\em all} trees of a config with
-$\gamma > 0$ and the same $e$ have {\em identical} variance maps, not merely nested ones --
-the downsampling factor $2^\gamma$ itself never appears. Second, both propositions have been
-checked numerically against {\tt PfAvarExact} (float64) over random configs: the row
+$\gamma$ only through $\sigma_\gamma \in \{0,1\}$ -- the downsampling factor $2^\gamma$ itself
+never appears. So any two trees of a config with $\gamma, \gamma' > 0$ and the same $e$ have
+{\em identical} rows at every profile index both of them have, i.e.\ for
+$0 \le p < \min(P_\gamma, P_{\gamma'})$. Their maps coincide outright when the two families
+share a {\tt max\_width}, and are nested otherwise: in {\tt chord\_sb2\_et.yml} the three
+downsampled families have $P = 13, 10, 7$, so there they are nested. Second, both propositions
+have been checked numerically against {\tt PfAvarExact} (float64) over random configs: the row
 identities (\ref{eq:restriction_et}) and (\ref{eq:restriction_ds}) hold to $0$ and one ulp
 respectively. Proposition 1 has additionally been checked with a {\tt Detrender2d} in front of
 the dedisperser, where it continues to hold and Proposition 2 fails outright.

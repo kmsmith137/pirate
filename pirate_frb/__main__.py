@@ -198,6 +198,7 @@ def test(args):
         if run_all_tests or args.dd:
             if i == 0:
                 # Catches errors in DedispersionConfig::make_random() or validate().
+                tests.test_max_width_monotone()
                 for _ in range(500):
                     c = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=4, gpu_valid=False)
                     c.test()
