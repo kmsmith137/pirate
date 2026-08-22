@@ -2834,13 +2834,17 @@ def _abcd_all(config, As):
 
 
 def test_sweep_vs_per_tfm(r=7, subband_counts=None, num_primary_trees=1, num_early_triggers=0,
-                          time_downsampling=1, verbose=True):
+                          time_downsampling=1, device='cpu', verbose=True):
     """The sweep, element by element, against PfAvarExact.per_tfm, which computes the same
     matrix by propagating compressed sparse tiles and shares no code with the dedisperser.
 
     This is the decisive correctness test, and it doubles as the float32 measurement: the
     sweep runs the float32 ReferenceTree and ReferencePeakFindingKernel, while per_tfm is
     float64 throughout. Only valid with no detrender (per_tfm cannot represent one).
+
+    'device' selects which sweep is checked. This is the ONLY test with an analytic oracle, so
+    a device='gpu' case is worth more than another GPU-vs-CPU comparison: it is the only thing
+    that would catch an error the two devices SHARE.
 
     'time_downsampling' > 1 gives the trees Dcore > 1, which is the one config property the
     sweep is free of BY CONSTRUCTION rather than by argument: it ends in a PfSquare, which
@@ -2860,7 +2864,7 @@ def test_sweep_vs_per_tfm(r=7, subband_counts=None, num_primary_trees=1, num_ear
                                time_downsampling=time_downsampling)
     # Raw per-tree arrays, not a VarianceMultiMap: this checks EVERY tree against the
     # analytic oracle, including the early-trigger trees a multimap no longer stores.
-    As = _abcd_all(config, sweep_all_trees_dense(config, device='cpu'))
+    As = _abcd_all(config, sweep_all_trees_dense(config, device=device))
 
     exact = PfAvarExact(DedispersionPlan(config, cdd2_kernel_required=False),
                         np.ones(int(config.get_total_nfreq())))
@@ -2894,7 +2898,7 @@ def test_sweep_vs_per_tfm(r=7, subband_counts=None, num_primary_trees=1, num_ear
     if verbose:
         atomic_print(f'    test_sweep_vs_per_tfm(r={r}, subbands={subband_counts},'
                      f' npri={num_primary_trees}, net={num_early_triggers},'
-                     f' tds={time_downsampling}): {eps.size} nonzero'
+                     f' tds={time_downsampling}, device={device}): {eps.size} nonzero'
                      f' elements, eps = A_sweep/A_per_tfm - 1: mean {float(np.mean(eps)):+.3g},'
                      f' range [{float(eps.min()):+.3g}, {float(eps.max()):+.3g}], worst |eps|'
                      f' {worst:.3g} at (tree,ifreq)={worst_where[:2]}')
@@ -3075,7 +3079,8 @@ def test_sweep_detrender_fp32(r=8, nifreq=16, verbose=True):
     assert float(np.abs(eps).max()) < 1.0e-4, float(np.abs(eps).max())
 
 
-def test_sweep_gpu_vs_cpu(r=8, subband_counts=None, num_early_triggers=0, detrender=False,
+def test_sweep_gpu_vs_cpu(r=8, subband_counts=None, num_primary_trees=1,
+                          num_early_triggers=0, detrender=False,
                           nbeams=1, nfreq=None, verbose=True):
     """The GPU sweep against the CPU one, element by element, on the same config.
 
@@ -3084,12 +3089,18 @@ def test_sweep_gpu_vs_cpu(r=8, subband_counts=None, num_early_triggers=0, detren
     than at a kernel. 'nfreq' defaults to 2^r, but is worth varying: that is the case where
     the input channel count and the TREE channel count differ, and the buffers the GPU driver
     allocates are sized by one or the other.
+
+    'num_primary_trees' > 1 is the time-downsampled case, which on the GPU brings in
+    GpuLaggedDownsamplingKernel and one stage-1 dedispersion per primary tree. Combine it with
+    nbeams > 1: the lds kernel reads and writes with a single beam stride, so a stride error
+    is invisible at nbeams == 1.
     """
 
     from .brute_force import compute_variance_multimap
 
     subband_counts = [2, 2, 1] if (subband_counts is None) else subband_counts
     config = _make_test_config(r, subband_counts, nfreq=nfreq,
+                               num_primary_trees=num_primary_trees,
                                num_early_triggers=num_early_triggers)
     dparams = _make_test_detrender(config) if detrender else None
 
@@ -3117,7 +3128,8 @@ def test_sweep_gpu_vs_cpu(r=8, subband_counts=None, num_early_triggers=0, detren
 
     if verbose:
         atomic_print(f'    test_sweep_gpu_vs_cpu(r={r}, subbands={subband_counts},'
-                     f' net={num_early_triggers}, detrender={bool(detrender)},'
+                     f' npri={num_primary_trees}, net={num_early_triggers},'
+                     f' detrender={bool(detrender)},'
                      f' nbeams={nbeams}, nfreq={cpu.primary_map(0).nfreq}): worst relative'
                      f' difference {worst:.3g} at primary tree {worst_where}')
 
@@ -3479,6 +3491,76 @@ def test_restriction_vs_sweep(r=6, subband_counts=(4,2,1), num_primary_trees=1,
                  f' {nontrivial} non-contiguous, worst relative difference {worst:.3g}')
 
 
+def test_lds_bindings(r=8, subband_counts=(2,2,1), num_primary_trees=3, nbeams=4):
+    """The GpuLaggedDownsamplingKernel / DedispersionBuffer bindings, without a sweep.
+
+    --gldk tests the KERNEL (against its reference implementation). This tests the BINDING:
+    that the plan's params reach python, that a DedispersionBuffer allocates the shapes those
+    params predict, and that launch() fills the downsampled buffers.
+
+    THE BEAM STRIDE IS THE POINT. The kernel reads its input and writes every output with a
+    SINGLE beam stride, so all of bufs[] must be sub-arrays of one allocation. That is why the
+    binding takes a DedispersionBuffer rather than a list of arrays, and it is invisible at
+    nbeams == 1 (where the stride is degenerate), so this runs at nbeams > 1.
+    """
+
+    import cupy as cp
+
+    from ..pirate_pybind11 import (DedispersionPlan, DedispersionBuffer,
+                                   GpuLaggedDownsamplingKernel)
+    from ..core import BumpAllocator
+
+    config = _make_test_config(r, subband_counts, num_primary_trees=num_primary_trees)
+    config.beams_per_gpu = config.beams_per_batch = nbeams
+    config.num_active_batches = 1
+    config.validate()
+
+    plan = DedispersionPlan(config, cdd2_kernel_required=False)
+    bp, lp = plan.stage1_dd_buf_params, plan.lds_params
+
+    npri = int(config.num_primary_trees)
+    assert int(bp.nbuf) == npri and int(lp.num_primary_trees) == npri
+    assert int(lp.input_toplevel_rank) == int(config.toplevel_tree_rank)
+
+    allocator = BumpAllocator('af_gpu | af_zero', -1)
+    buf = DedispersionBuffer(bp)
+    buf.allocate(allocator)
+    kernel = GpuLaggedDownsamplingKernel(lp)
+    kernel.allocate(allocator)
+    assert buf.is_allocated and kernel.is_allocated and buf.on_gpu()
+
+    # Shapes are the plan's, and every buffer shares ONE beam stride.
+    bstride = None
+    for ipri in range(npri):
+        b = buf.bufs[ipri]
+        want = (nbeams, 1 << int(bp.buf_rank[ipri]), int(bp.buf_ntime[ipri]))
+        assert tuple(b.shape) == want, (ipri, tuple(b.shape), want)
+        assert want[1] == (1 << (int(config.toplevel_tree_rank) - (1 if ipri else 0))), ipri
+        assert want[2] == int(config.time_samples_per_chunk) >> ipri, ipri
+        # Non-contiguous beam axis: the arrays are interleaved in one allocation.
+        assert b.strides[0] != b.shape[1] * b.shape[2] * 4, ipri
+        bstride = b.strides[0] if (bstride is None) else bstride
+        assert b.strides[0] == bstride, (ipri, b.strides[0], bstride)
+
+    # launch() reads bufs[0] and fills the rest.
+    rng = np.random.default_rng(4)
+    b0 = cp.asarray(buf.bufs[0])
+    b0[...] = cp.asarray(rng.normal(size=b0.shape).astype(np.float32))
+    for ipri in range(1, npri):
+        assert not bool((cp.asarray(buf.bufs[ipri]) != 0).any()), ipri
+
+    kernel.launch(buf, 0, 0, cp.cuda.get_current_stream().ptr)
+    cp.cuda.Stream.null.synchronize()
+
+    for ipri in range(1, npri):
+        assert bool((cp.asarray(buf.bufs[ipri]) != 0).any()), \
+            f'test_lds_bindings: launch() left bufs[{ipri}] all zero'
+
+    atomic_print(f'    test_lds_bindings(r={r}, npri={npri}, nbeams={nbeams}): shapes match the'
+                 f' plan, one beam stride ({bstride}) shared by all {npri} buffers, launch'
+                 ' fills the downsampled buffers')
+
+
 def _report_xdm_coverage(where, configs):
     """Print the per-tree K = xdm_rank() of 'configs', and assert that at least one is nonzero.
 
@@ -3565,6 +3647,11 @@ def run_sweep_tests():
     # Dcore > 1: the sweep must give the same A, since it never sees the peak-finder's Dcore
     # sublattice. This is what _SweepGeometry relies on in not constraining Dcore.
     test_sweep_vs_per_tfm(7, [2, 2, 1], time_downsampling=4)
+    # Time-downsampled trees against the analytic oracle, on both devices. The CPU case is
+    # new coverage in its own right (every other call here is npri=1); the GPU one is the only
+    # check on the GPU sweep that does not go through the CPU sweep.
+    test_sweep_vs_per_tfm(7, [2, 2, 1], num_primary_trees=2)
+    test_sweep_vs_per_tfm(7, [2, 2, 1], num_primary_trees=2, device='gpu')
     test_sweep_phase_collapse(7)
     test_sweep_detrender_fp32(7)
     # The Detrender2d path has no analytic oracle, so test_sweep_column_norms is what covers
@@ -3583,8 +3670,16 @@ def run_sweep_tests():
     # The GPU sweep against the CPU one. Both GPU kernels are validated against their
     # reference implementations by --sbdd and --pfsq, so this covers the python driver rather
     # than the kernels.
+    test_lds_bindings()
     test_sweep_gpu_vs_cpu(8, [2, 2, 1], nbeams=4)
     test_sweep_gpu_vs_cpu(8, [2, 2, 1], num_early_triggers=1, detrender=True, nfreq=200)
+    # Time-downsampled trees on the GPU: GpuLaggedDownsamplingKernel plus one stage-1
+    # dedispersion per primary tree. nbeams > 1 in the first case is not incidental -- the lds
+    # kernel uses one beam stride for input and output, so a stride error cannot show at
+    # nbeams == 1.
+    test_sweep_gpu_vs_cpu(8, [2, 2, 1], num_primary_trees=2, nbeams=4)
+    test_sweep_gpu_vs_cpu(8, [2, 2, 1], num_primary_trees=2, num_early_triggers=1,
+                          detrender=True, nfreq=200)
     # Proposition 1 of the appendix, against the sweep: an early-trigger tree's matrix IS a
     # row subset of its (primary_tree_index, 0) parent's. The detrender case is not
     # redundant -- Proposition 1 assumes nothing about the upstream chain, and that is the

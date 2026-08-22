@@ -376,6 +376,12 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "The MegaRingbuf: the ring buffer through which stage 1 feeds stage 2.")
           .def_readonly("tree_gridding_kernel_params", &DedispersionPlan::tree_gridding_kernel_params,
                "TreeGriddingKernelParams for the (single) tree gridding kernel.")
+          .def_readonly("lds_params", &DedispersionPlan::lds_params,
+               "LaggedDownsamplingKernelParams for this plan. Meaningful only when\n"
+               "num_primary_trees > 1, though it is filled (and valid) either way.")
+          .def_readonly("stage1_dd_buf_params", &DedispersionPlan::stage1_dd_buf_params,
+               "DedispersionBufferParams for the stage-1 input buffers: nbuf ==\n"
+               "num_primary_trees, with entry ipri the input of primary tree ipri.")
           .def_readonly("stage1_dd_kernel_params", &DedispersionPlan::stage1_dd_kernel_params,
                "List of DedispersionKernelParams, length num_primary_trees.")
           .def_readonly("stage2_dd_kernel_params", &DedispersionPlan::stage2_dd_kernel_params,

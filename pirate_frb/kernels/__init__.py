@@ -1,10 +1,13 @@
 # Import C++ kernel classes from pirate_pybind11
 from ..pirate_pybind11 import (
     CoalescedDdKernel2,
+    DedispersionBuffer,
+    DedispersionBufferParams,
     DedispersionKernelParams,
     Detrender2dParams,
     GpuDedispersionKernel,
     GpuLaggedDownsamplingKernel,
+    LaggedDownsamplingKernelParams,
     GpuPeakFindingKernel,
     GpuPfSquare,
     GpuRingbufCopyKernel,

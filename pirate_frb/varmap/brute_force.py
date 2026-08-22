@@ -661,19 +661,23 @@ class _GpuSweep(_SweepBase):
     """The sweep on the GPU: one cupy stream, kernels launched synchronously from python, no
     GpuDedisperser, no worker thread, no CudaEventRingbuf. The pipeline is
 
-        one-hots -> [Detrender2d] -> GpuTreeGriddingKernel -> GpuDedispersionKernel (stage 1)
-                 -> MegaRingbuf -> GpuSbDedispersionKernel (stage 2 + subbands)
+        one-hots -> [Detrender2d] -> GpuTreeGriddingKernel -> stage1_buf.bufs[0]
+                 -> [GpuLaggedDownsamplingKernel -> stage1_buf.bufs[1:]]
+                 -> GpuDedispersionKernel (stage 1, one per primary tree) -> MegaRingbuf
+                 -> GpuSbDedispersionKernel (stage 2 + subbands)
                  -> sb_out -> GpuPfSquare -> float64 accumulator, one per tree
 
-    Three requirements beyond _SweepGeometry's: a float32 config (GpuSbDedispersionKernel is
-    float32-only), ONE primary tree (a time-downsampled tree would need a
-    GpuLaggedDownsamplingKernel between the gridding kernel and stage 1, which is not bound to
-    python), and a compiled sbdd kernel for every tree's (dd_rank, subband_counts) pair. The
-    constructor builds all of them, so a missing one throws here rather than mid-sweep.
+    The lagged-downsampling step runs only when num_primary_trees > 1; at 1 there is nothing
+    to downsample and 'lds_kernel' is None.
+
+    Two requirements beyond _SweepGeometry's: a float32 config (GpuSbDedispersionKernel is
+    float32-only), and a compiled sbdd kernel for every tree's (dd_rank, subband_counts) pair.
+    The constructor builds all of them, so a missing one throws here rather than mid-sweep.
     """
 
     def __init__(self, geom):
-        from ..kernels import (Detrender2d, GpuDedispersionKernel, GpuPfSquare,
+        from ..kernels import (Detrender2d, GpuDedispersionKernel,
+                               GpuLaggedDownsamplingKernel, GpuPfSquare,
                                GpuSbDedispersionKernel, GpuTreeGriddingKernel)
 
         super().__init__(geom)
@@ -683,10 +687,6 @@ class _GpuSweep(_SweepBase):
         if np.dtype(plan.dtype) != np.float32:
             errs.append(f'config dtype is {np.dtype(plan.dtype)}, expected float32'
                         ' (GpuSbDedispersionKernel is float32-only)')
-        if int(plan.num_primary_trees) != 1:
-            errs.append(f'num_primary_trees = {int(plan.num_primary_trees)}, expected 1'
-                        ' (time-downsampled trees need a GpuLaggedDownsamplingKernel, which'
-                        ' is not bound to python)')
 
         rb = plan.mega_ringbuf
         if int(rb.host_global_nseg) != 0:
@@ -706,10 +706,21 @@ class _GpuSweep(_SweepBase):
             raise RuntimeError('_GpuSweep: the config is not usable by this tool:\n  - '
                                + '\n  - '.join(errs))
 
+        self.npri = int(plan.num_primary_trees)
         self.tg_kernel = GpuTreeGriddingKernel(plan.tree_gridding_kernel_params)
-        self.dd1_kernel = GpuDedispersionKernel(plan.stage1_dd_kernel_params[0])
-        self.rb_nelts = (int(rb.gpu_global_nseg)
-                         * int(plan.stage1_dd_kernel_params[0].nt_per_segment))
+
+        # One stage-1 dedispersion per primary tree, all writing into the same MegaRingbuf,
+        # plus the kernel that produces the downsampled trees' inputs. Note plan.lds_params is
+        # valid (and filled) even at npri == 1 -- but its output sequence has length npri-1,
+        # so there is nothing for it to do there.
+        self.dd1_kernels = [GpuDedispersionKernel(plan.stage1_dd_kernel_params[ipri])
+                            for ipri in range(self.npri)]
+        self.lds_kernel = (GpuLaggedDownsamplingKernel(plan.lds_params)
+                           if (self.npri > 1) else None)
+
+        # nelts_per_segment is a property of the plan's ring buffer, shared by every stage-1
+        # kernel; reading it from primary tree 0 alone would bake in the single-tree case.
+        self.rb_nelts = int(rb.gpu_global_nseg) * int(plan.nelts_per_segment)
 
         # Tree channels, which is NOT the input channel count: gridding rebins nfreq input
         # channels into nchan = 2^toplevel_tree_rank tree channels.
@@ -741,11 +752,15 @@ class _GpuSweep(_SweepBase):
 
         import cupy as cp
         from ..core import BumpAllocator
+        from ..kernels import DedispersionBuffer
 
         if allocator is None:
             allocator = BumpAllocator('af_gpu | af_zero', -1)
 
-        for k in [self.tg_kernel, self.dd1_kernel] + self.sb_kernels + self.pf_kernels:
+        kernels = [self.tg_kernel] + self.dd1_kernels + self.sb_kernels + self.pf_kernels
+        if self.lds_kernel is not None:
+            kernels.append(self.lds_kernel)
+        for k in kernels:
             k.allocate(allocator)
 
         g, B, nt_in = self.geom, self.geom.nbeams, self.geom.nt_in
@@ -759,10 +774,27 @@ class _GpuSweep(_SweepBase):
             self.det_mask = cp.ones((B, g.nfreq, nt_in + 2*W), dtype=np.uint8)
 
         self.stream_in = cp.zeros((B, g.nfreq, nt_in), dtype=np.float32)
-        p1 = g.plan.stage1_dd_kernel_params[0]
-        assert (1 << int(p1.amb_rank + p1.dd_rank)) == self.nchan, (p1.amb_rank, p1.dd_rank)
-        self.tree_in = cp.zeros((B, 1 << int(p1.amb_rank), 1 << int(p1.dd_rank), nt_in),
-                                dtype=np.float32)
+
+        # The stage-1 inputs live in ONE DedispersionBuffer rather than in per-tree cupy
+        # arrays: GpuLaggedDownsamplingKernel reads bufs[0] and writes bufs[1:] with a single
+        # beam stride, so they must be sub-arrays of one allocation. bufs[0] is also the
+        # gridding kernel's output, so nothing else needs a 'tree_in'.
+        self.stage1_buf = DedispersionBuffer(g.plan.stage1_dd_buf_params)
+        self.stage1_buf.allocate(allocator)
+
+        # Per primary tree, the (B, 2^amb_rank, 2^dd_rank, ntime) view of bufs[ipri] that the
+        # stage-1 kernel wants. Reshaping the INNER TWO axes only -- the beam axis is
+        # non-contiguous and must not be touched.
+        self.tree_in = []
+        for ipri in range(self.npri):
+            p1 = g.plan.stage1_dd_kernel_params[ipri]
+            b = cp.asarray(self.stage1_buf.bufs[ipri])
+            assert (1 << int(p1.amb_rank + p1.dd_rank)) == b.shape[1], (ipri, b.shape)
+            assert int(p1.ntime) == b.shape[2], (ipri, b.shape, int(p1.ntime))
+            self.tree_in.append(b.reshape(B, 1 << int(p1.amb_rank), 1 << int(p1.dd_rank),
+                                          b.shape[2]))
+
+        assert self.tree_in[0].shape[1] * self.tree_in[0].shape[2] == self.nchan
         self.ringbuf = cp.zeros(self.rb_nelts, dtype=np.float32)
 
         self.sb_out, self.acc = [], []
@@ -845,9 +877,15 @@ class _GpuSweep(_SweepBase):
         # The gridding kernel's output is (B, nchan, ntime), which reshapes to the
         # (B, 2^amb_rank, 2^dd_rank, ntime) that stage-1 dedispersion wants. Note nchan is the
         # TREE channel count, which need not equal the input channel count nfreq.
-        self.tg_kernel.launch(self.tree_in.reshape(B, self.nchan, g.nt_in), self.stream_in,
+        self.tg_kernel.launch(self.tree_in[0].reshape(B, self.nchan, g.nt_in), self.stream_in,
                               sptr)
-        self.dd1_kernel.launch(self.tree_in, self.ringbuf, ichunk, 0, sptr)
+
+        # Fill the downsampled trees' inputs from primary tree 0's, in place.
+        if self.lds_kernel is not None:
+            self.lds_kernel.launch(self.stage1_buf, ichunk, 0, sptr)
+
+        for ipri in range(self.npri):
+            self.dd1_kernels[ipri].launch(self.tree_in[ipri], self.ringbuf, ichunk, 0, sptr)
 
         for itree in range(g.ntrees):
             self.sb_kernels[itree].launch(self.sb_out[itree], self.ringbuf, ichunk, 0, sptr)

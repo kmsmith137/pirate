@@ -11,6 +11,7 @@
 
 #include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/CoalescedDdKernel2.hpp"
+#include "../include/pirate/DedispersionBuffer.hpp"
 #include "../include/pirate/DedispersionKernel.hpp"
 #include "../include/pirate/Detrender1d.hpp"
 #include "../include/pirate/Detrender2d.hpp"
@@ -585,7 +586,103 @@ void register_kernel_bindings(pybind11::module &m)
                "int4 values: low nibble = even index, high nibble = odd index.")
     ;
 
-    py::class_<GpuLaggedDownsamplingKernel>(m, "GpuLaggedDownsamplingKernel")
+    py::class_<LaggedDownsamplingKernelParams>(m, "LaggedDownsamplingKernelParams",
+        "Construction parameters for a (Reference|Gpu)LaggedDownsamplingKernel.\n\n"
+        "Not constructible from python: obtain one from DedispersionPlan.lds_params.\n\n"
+        "Valid even when num_primary_trees == 1, where the kernel has nothing to do (its\n"
+        "output sequence has length num_primary_trees-1). A caller should simply not build a\n"
+        "kernel in that case.")
+          .def_readonly("dtype", &LaggedDownsamplingKernelParams::dtype)
+          .def_readonly("input_toplevel_rank", &LaggedDownsamplingKernelParams::input_toplevel_rank,
+               "log2(input tree channels) = DedispersionConfig.toplevel_tree_rank")
+          .def_readonly("output_dd_rank", &LaggedDownsamplingKernelParams::output_dd_rank,
+               "dd_rank of the stage-1 transform applied to the outputs (same for every ipri)")
+          .def_readonly("num_primary_trees", &LaggedDownsamplingKernelParams::num_primary_trees)
+          .def_readonly("total_beams", &LaggedDownsamplingKernelParams::total_beams)
+          .def_readonly("beams_per_batch", &LaggedDownsamplingKernelParams::beams_per_batch)
+          .def_readonly("ntime", &LaggedDownsamplingKernelParams::ntime,
+               "Time samples per chunk, at the UNDOWNSAMPLED rate")
+          .def("validate", &LaggedDownsamplingKernelParams::validate,
+               "Raises RuntimeError if any parameter is invalid.")
+    ;
+
+    py::class_<DedispersionBufferParams>(m, "DedispersionBufferParams",
+        "Shape parameters for a DedispersionBuffer.\n\n"
+        "Not constructible from python: obtain one from DedispersionPlan.stage1_dd_buf_params\n"
+        "or .stage2_dd_buf_params.")
+          .def_readonly("dtype", &DedispersionBufferParams::dtype)
+          .def_readonly("beams_per_batch", &DedispersionBufferParams::beams_per_batch)
+          .def_readonly("nbuf", &DedispersionBufferParams::nbuf, "Number of arrays")
+          .def_readonly("buf_rank", &DedispersionBufferParams::buf_rank,
+               "Length nbuf: buf[i] has 2**buf_rank[i] tree channels")
+          .def_readonly("buf_ntime", &DedispersionBufferParams::buf_ntime,
+               "Length nbuf: buf[i] has buf_ntime[i] time samples")
+          .def("get_nelts", &DedispersionBufferParams::get_nelts,
+               "Total array elements (not bytes) for one batch of beams.")
+          .def("validate", &DedispersionBufferParams::validate,
+               "Raises RuntimeError if any parameter is invalid.")
+    ;
+
+    py::class_<DedispersionBuffer>(m, "DedispersionBuffer",
+        "A sequence of arrays with shape (beams_per_batch, 2**rank, ntime), sharing ONE\n"
+        "underlying allocation.\n\n"
+        "The shared allocation is the point, not an implementation detail:\n"
+        "GpuLaggedDownsamplingKernel reads its input and writes its outputs with a SINGLE beam\n"
+        "stride, so the arrays must be sub-arrays of one ambient array. That is why the kernel\n"
+        "takes a DedispersionBuffer rather than a list of arrays, and why the beam axis of\n"
+        "``bufs[i]`` is non-contiguous (unless nbuf == 1).\n\n"
+        "Usage::\n\n"
+        "    buf = DedispersionBuffer(plan.stage1_dd_buf_params)\n"
+        "    buf.allocate(bump_allocator)      # aflags must contain af_zero\n"
+        "    buf.bufs[0][...] = ...            # cupy/numpy views, per the allocator\n\n"
+        "For a stage-1 buffer, ``bufs[ipri]`` is primary tree ipri's input, with\n"
+        "``rank = toplevel_tree_rank - (ipri > 0)`` and ``ntime = time_samples_per_chunk >> ipri``.")
+          .def(py::init<const DedispersionBufferParams &>(), py::arg("params"))
+          .def_readonly("params", &DedispersionBuffer::params)
+          .def_readonly("is_allocated", &DedispersionBuffer::is_allocated)
+          .def_readonly("footprint_nbytes", &DedispersionBuffer::footprint_nbytes)
+          .def_readonly("bufs", &DedispersionBuffer::bufs,
+               "Length-nbuf list of arrays; empty until allocate() is called.")
+          .def("allocate", &DedispersionBuffer::allocate, py::arg("allocator"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Allocate (and zero) all arrays from a BumpAllocator, whose aflags must\n"
+               "contain af_zero. Raises on a second call.")
+          .def("on_host", &DedispersionBuffer::on_host)
+          .def("on_gpu", &DedispersionBuffer::on_gpu)
+    ;
+
+    py::class_<GpuLaggedDownsamplingKernel, std::shared_ptr<GpuLaggedDownsamplingKernel>>
+        (m, "GpuLaggedDownsamplingKernel",
+        "Lagged time-downsampling: produces the input of every time-downsampled primary tree\n"
+        "(1 <= ipri < num_primary_trees) from primary tree 0's input.\n\n"
+        "Usage::\n\n"
+        "    k = GpuLaggedDownsamplingKernel(plan.lds_params)\n"
+        "    k.allocate(bump_allocator)\n"
+        "    k.launch(stage1_buf, ichunk, ibatch)      # reads bufs[0], writes bufs[1:]\n\n"
+        "Only worth building when num_primary_trees > 1; at 1 there is nothing to downsample.")
+          .def(py::init([](const LaggedDownsamplingKernelParams &params) {
+              // The class is abstract (launch() is pure virtual), so construction goes
+              // through the static factory, which picks the dtype specialization.
+              return GpuLaggedDownsamplingKernel::make(params);
+          }), py::arg("params"), py::call_guard<py::gil_scoped_release>())
+          .def_readonly("params", &GpuLaggedDownsamplingKernel::params)
+          .def_readonly("is_allocated", &GpuLaggedDownsamplingKernel::is_allocated)
+          .def_readonly("nbatches", &GpuLaggedDownsamplingKernel::nbatches)
+          .def("allocate", &GpuLaggedDownsamplingKernel::allocate, py::arg("allocator"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Allocate (and zero) persistent state from a BumpAllocator. Must be called\n"
+               "before launch().")
+          .def("launch",
+               [](GpuLaggedDownsamplingKernel &self, DedispersionBuffer &buf,
+                  long ichunk, long ibatch, uintptr_t stream_ptr) {
+                   self.launch(buf, ichunk, ibatch,
+                               reinterpret_cast<cudaStream_t> (stream_ptr));
+               },
+               py::arg("buf"), py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"),
+               py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+               "GPU kernel launch (async, does not sync stream).\n\n"
+               "Reads buf.bufs[0] and writes buf.bufs[1:], in place. 'buf' must be an\n"
+               "allocated GPU DedispersionBuffer whose params match plan.stage1_dd_buf_params.")
           .def_static("test_random", &GpuLaggedDownsamplingKernel::test_random, py::call_guard<py::gil_scoped_release>())
           .def_static("time_selected", &GpuLaggedDownsamplingKernel::time_selected, py::call_guard<py::gil_scoped_release>())
     ;
