@@ -410,53 +410,103 @@ class SparseTile:
         return out
 
     @staticmethod
-    def test_predict_dbits():
-        """_predict_dbits() vs the dbits obtained by actually iterating a SparseTileTriple.
+    def _predict_dbits_slow(kmax, f0, nf):
+        """Brute-force reference for _predict_dbits(): same interface, but done by iterating.
 
-        Exhaustive rather than randomized: the state space is tiny and the property is exact.
-        Checks BOTH of _predict_dbits()'s claims -- clipped to one level-kmax tile it gives that
-        tile's dbits exactly, and over the whole f-range it gives the union of the tiles' dbits
-        -- at every level, not just at the level where the range collapses to one tile.
+        Builds a level-0 SparseTileTriple over [f0, f0+nf), applies DD(k) 'kmax' times, and
+        returns the union of the resulting tiles' dbits. Slow (it allocates and iterates real
+        tile data), so this exists to test _predict_dbits() and nothing else.
+
+        The tiles need a rank, which _predict_dbits() does not. 'r' only bounds how many
+        iterations are legal (SparseTileTriple.iterate() asserts k < r) and how wide the f-range
+        may be (f0 + nf <= 2^r) -- it does not affect the dbits. We fix it at
+        constants.max_tree_rank, so an argument triple is accepted here iff it is legal for a
+        real tree of the largest supported rank.
+
+        Cost is driven by 'nf', not by 'kmax': a narrow f-range stays cheap to iterate at every
+        level, while a wide one allocates (nf, 2^popcount(dbits), nt) of tile data per step.
         """
 
+        from ..pirate_pybind11 import constants   # lazy: keep this module's top level pybind-free
+
+        r = constants.max_tree_rank
+        assert 0 <= kmax <= r, (kmax, f0, nf)
+        assert f0 >= 0 and nf >= 1 and (f0 + nf) <= (1 << r), (kmax, f0, nf)
+
+        # The prediction does not look at the data, so any nonzero data will do (np.ones makes a
+        # failure easier to read).
+        triple = SparseTileTriple(
+            r, 0, f0, nf,
+            [SparseTile(r=r, k=0, f0=c0, nf=c1 - c0, nt=1, dbits=0,
+                        data=np.ones((c1 - c0, 1, 1)),
+                        tshifts=np.zeros(0, dtype=np.int64))
+             for (c0, c1) in SparseTileTriple._tile_bounds(f0, nf)])
+
+        for _ in range(kmax):
+            triple = triple.iterate()
+
+        acc = 0
+        for tile in triple.tiles:
+            acc |= tile.dbits
+        return acc
+
+    @staticmethod
+    def _random_predict_dbits_args(nf_max=256, sum_max=None):
+        """Draw one random (kmax, f0, nf) argument triple for the _predict_dbits() tests.
+
+        'nf' is drawn from [1, nf_max] and 'f0' so that f0 + nf <= sum_max. 'kmax' is uniform on
+        [0, constants.max_tree_rank] and needs no cap, since neither _predict_dbits() nor
+        _predict_dbits_slow() gets more expensive as it grows.
+
+        The DEFAULTS are sized for _predict_dbits_slow(), whose cost is driven by 'nf' and which
+        builds real tiles at r = constants.max_tree_rank (hence f0 + nf <= 2^r). A caller that
+        does not use that reference -- test_fast_avar.py's C++-vs-python test evaluates two
+        closed forms and allocates nothing -- should pass much wider bounds; _predict_dbits()
+        itself requires only 0 <= kmax <= max_tree_rank, f0 >= 0, nf >= 1. Do NOT tighten the
+        defaults on the assumption that every caller shares the reference's constraints.
+        """
+
+        from ..pirate_pybind11 import constants   # lazy: keep this module's top level pybind-free
+
+        r = constants.max_tree_rank
+        sum_max = (1 << r) if (sum_max is None) else int(sum_max)
+        assert 1 <= nf_max <= sum_max, (nf_max, sum_max)
+
+        kmax = int(np.random.randint(0, r + 1))
+        nf = int(np.random.randint(1, nf_max + 1))
+        f0 = int(np.random.randint(0, sum_max - nf + 1))
+        return kmax, f0, nf
+
+    @staticmethod
+    def test_random_predict_dbits():
+        """_predict_dbits() vs _predict_dbits_slow(), on random (kmax, f0, nf).
+
+        Randomized rather than exhaustive because the cases that matter are out of reach of any
+        exhaustive sweep: kmax runs up to constants.max_tree_rank and f0 anywhere in a rank-16
+        tree. The harness re-runs this every iteration (--niter defaults to 100), so one suite
+        run covers ~1000 fresh cases.
+        """
+
+        from ..pirate_pybind11 import constants   # lazy: keep this module's top level pybind-free
+        r = constants.max_tree_rank
+
         # Named cases, spelled out for the reader.
-        for kmax in range(0, 9):
-            assert SparseTile._predict_dbits(kmax, 17, 1) == 0                     # one channel
+        for kmax in range(0, r + 1):
+            assert SparseTile._predict_dbits(kmax, 17, 1) == 0                       # one channel
             assert SparseTile._predict_dbits(kmax, 0, 1 << kmax) == (1 << kmax) - 1  # full band
             # Two channels straddling a level-kmax boundary: one channel in each block, so
             # neither block resolves a delay, and the merge happens one step past the window.
             # An implementation that dropped the truncation would attempt a negative shift here.
             assert SparseTile._predict_dbits(kmax, (1 << kmax) - 1, 2) == 0
 
-        ntile_asserts = 0
-        for r in range(3, 7):
-            for f0 in range(0, 1 << r):
-                for nf in range(1, (1 << r) - f0 + 1):
-                    # Level-0 triple over [f0, f0+nf). The prediction does not look at the data,
-                    # so any nonzero data will do (np.ones makes a failure easier to read).
-                    triple = SparseTileTriple(
-                        r, 0, f0, nf,
-                        [SparseTile(r=r, k=0, f0=c0, nf=c1 - c0, nt=1, dbits=0,
-                                    data=np.ones((c1 - c0, 1, 1)),
-                                    tshifts=np.zeros(0, dtype=np.int64))
-                         for (c0, c1) in SparseTileTriple._tile_bounds(f0, nf)])
-
-                    for kmax in range(0, r + 1):
-                        acc = 0
-                        for tile in triple.tiles:
-                            # Clip the range to this tile's level-kmax block: exact, not a union.
-                            lo = max(f0, tile.f0 << kmax)
-                            hi = min(f0 + nf - 1, ((tile.f0 + 1) << kmax) - 1)
-                            got = SparseTile._predict_dbits(kmax, lo, hi - lo + 1)
-                            assert tile.dbits == got, (r, f0, nf, kmax, tile.f0, tile.dbits, got)
-                            acc |= tile.dbits
-                            ntile_asserts += 1
-                        got = SparseTile._predict_dbits(kmax, f0, nf)
-                        assert acc == got, (r, f0, nf, kmax, acc, got)
-                        if kmax < r:
-                            triple = triple.iterate()   # iterate() asserts k < r; not at kmax == r
-
-        assert ntile_asserts > 40000, ntile_asserts   # tripwire: the sweep must not silently shrink
+        # Default bounds: 'nf' capped to keep _predict_dbits_slow() cheap, 'kmax' uncapped
+        # because it costs nothing. Small kmax with large nf exercises the multi-tile union,
+        # large kmax the single-tile case.
+        for _ in range(10):
+            kmax, f0, nf = SparseTile._random_predict_dbits_args()
+            got = SparseTile._predict_dbits(kmax, f0, nf)
+            want = SparseTile._predict_dbits_slow(kmax, f0, nf)
+            assert got == want, (kmax, f0, nf, got, want)
 
     @staticmethod
     def test_random_remap_d():

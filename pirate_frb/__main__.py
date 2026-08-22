@@ -215,8 +215,8 @@ def test(args):
             PfVarianceConvolver.test_reduces_to_norms()
             PfVarianceConvolver.test_random_variance()
             PfVariance.test_add_truncate_upper_half()
+            SparseTile.test_random_predict_dbits()
             if i == 0:  # deterministic (no randomness); run once
-                SparseTile.test_predict_dbits()          # exhaustive sweep, a few seconds
                 PfVarianceConvolver.test_kernels_match_reference()
                 PfVarianceConvolver.test_unimodality()
 
@@ -224,7 +224,7 @@ def test(args):
             test_fast_avar.test_cpp_convolver()
             test_fast_avar.test_cpp_sparse_tile_triple()
             test_fast_avar.test_cpp_pf_variance()
-            if i == 0:  # deterministic (exhaustive sweep); run once
+            if i == 0:  # 57792-case exhaustive sweep + 10000 wide random draws; run once
                 test_fast_avar.test_cpp_predict_dbits()
             if i == 0:  # end-to-end (builds a plan + runs the full python reference); run once
                 test_fast_avar.test_cpp_pf_avar_approximation()

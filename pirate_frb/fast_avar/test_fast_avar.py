@@ -78,9 +78,18 @@ def test_cpp_sparse_tile_triple():
 def test_cpp_predict_dbits():
     """C++ SparseTile::predict_dbits() vs the python SparseTile._predict_dbits().
 
-    Exhaustive over a small (kmax, f0, nf) grid, and exact (both sides return an int, so there
-    is no tolerance). This test is only about the port: that the prediction agrees with the real
-    iteration is checked on the python side, by SparseTile.test_predict_dbits().
+    Two sweeps, both exact (integers in and out, so no tolerance). Neither side allocates or
+    iterates -- these are two closed forms -- so a case costs ~1us and we can afford both.
+
+      1. Exhaustive over a small grid. Complete agreement there, not a sample.
+      2. Random draws with much wider bounds. The C++ shifts left by up to 'kmax', and the
+         exhaustive grid only reaches kmax=6, so half the input domain would otherwise never
+         see the C++ at all. These bounds are far outside anything _predict_dbits_slow() could
+         build tiles for, which is exactly why this test can use them and the python-side test
+         cannot.
+
+    This test is only about the port: that the prediction agrees with the real iteration is
+    checked on the python side, by SparseTile.test_random_predict_dbits().
     """
     ncases = 0
     for kmax in range(0, 7):
@@ -91,6 +100,13 @@ def test_cpp_predict_dbits():
                 assert got == want, (kmax, f0, nf, got, want)
                 ncases += 1
     assert ncases == 57792, ncases     # tripwire: the sweep must not silently shrink
+
+    for _ in range(10000):
+        kmax, f0, nf = slow_avar.SparseTile._random_predict_dbits_args(nf_max=1 << 40,
+                                                                      sum_max=1 << 41)
+        got = SparseTile.predict_dbits(kmax, f0, nf)
+        want = slow_avar.SparseTile._predict_dbits(kmax, f0, nf)
+        assert got == want, (kmax, f0, nf, got, want)
 
 
 def _make_cpp_tile(t):
