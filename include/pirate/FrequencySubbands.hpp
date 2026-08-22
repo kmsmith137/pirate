@@ -66,6 +66,7 @@ struct FrequencySubbands
     std::vector<long> m_to_d;     // mapping (multiplet) -> fine_grained_dm
     std::vector<long> n_to_flo;   // mapping (frequency_subband) -> (coarse-freq index pair 0 <= flo < fhi <= 2^pf_rank)
     std::vector<long> n_to_fhi;   // mapping (frequency_subband) -> (coarse-freq index pair 0 <= flo < fhi <= 2^pf_rank)
+    std::vector<long> n_to_level; // mapping (frequency_subband) -> (pf_level, i.e. the index into subband_counts)
     std::vector<long> n_to_mbase; // mapping (frequency_subband) -> m-index range (mbase : mbase + 2^level)
 
     // f_to_freq: mapping (coarse-freq index 0 <= f <= 2^pf_rank) -> (physical frequency)

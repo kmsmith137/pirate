@@ -49,8 +49,13 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
                               guard_chunk=True, progress=False, channels=None,
                               scratch_dir=None, provenance=None,
                               detrender_dtype=np.float64):
-    """Compute the variance map of every tree in 'config' by brute force, and return a
-    VarianceMultiMap.
+    """Compute the variance map of every PRIMARY tree in 'config' by brute force, and return
+    a VarianceMultiMap.
+
+    Every tree is swept -- they share one dedisperser and one pass over the input channels --
+    but only the (gamma, 0) maps are kept, since an early-trigger tree's map is a row subset
+    of its parent's (see VarianceMultiMap). Use sweep_all_trees_dense() if you want the child
+    matrices themselves.
 
     A CUDA device must already be selected (``ksgpu.set_cuda_device()``), even for
     ``device='cpu'``: DedispersionPlan allocates through cudaHostAlloc.
@@ -70,14 +75,18 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
     device : {'gpu', 'cpu'}
         The CPU sweep additionally needs ``beams_per_batch == 1``; the GPU sweep needs a
         float32 config, one primary tree, and a compiled sbdd kernel per tree.
-    L : None, int, or length-ntrees sequence
+    L : None, int, or length-num_primary_trees sequence
         None: the returned maps are DENSE and FINE, with ``y_true`` set to their row sums.
         Otherwise: the sweep max-reduces each column into its groups AS THE COLUMN IS PRODUCED
         and the dense A is never formed, so the returned maps are the minimal coarse maps
         Abar. Requires ``nphases == 1`` -- with several passes summing into one column the
-        max-reduction cannot run until the sum is complete -- and each tree's L must satisfy
-        ``R <= L <= r``, which differs per tree, which is why the per-tree form exists. An
-        entry of the sequence may itself be None, leaving that one tree dense and fine.
+        max-reduction cannot run until the sum is complete -- and each map's L must satisfy
+        ``R <= L <= r``, which differs per primary tree, which is why the sequence form
+        exists. An entry may itself be None, leaving that one map dense and fine.
+
+        PER PRIMARY TREE, since that is what the returned multimap holds. The early-trigger
+        trees are swept (they share the dedisperser) but discarded, so they are always swept
+        fine -- a child never carries a coarse-graining rank of its own.
     guard_chunk : bool
         Run one extra all-zero chunk per pass and require its peak-finding output to be
         identically zero. This is the only check that the impulse response was fully emitted;
@@ -103,38 +112,37 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
     """
 
     t_start = time.time()
-    geom = _SweepGeometry(config, detrender, detrender_dtype=detrender_dtype)
 
-    Ls = [None]*geom.ntrees if (L is None) else (
-        [int(L)]*geom.ntrees if np.isscalar(L)
-        else [None if (x is None) else int(x) for x in L])
-    if len(Ls) != geom.ntrees:
-        raise RuntimeError(f'compute_variance_multimap: got {len(Ls)} values of L for'
-                           f' {geom.ntrees} trees')
-
-    if any(x is not None for x in Ls) and (geom.nphases != 1):
-        raise RuntimeError(
-            f'compute_variance_multimap: the streaming (coarse-grained) path needs nphases =='
-            f' 1, but this config gives nphases = {geom.nphases}. With several polyphase'
-            ' passes summing into one column, the max-reduction cannot run until the sum is'
-            ' complete. Sweep with L=None and coarse_grain() afterwards, or use a config with'
-            ' no detrender or no time-downsampled trees.')
-
-    if device == 'cpu':
-        sweep = _CpuSweep(geom)
-    elif device == 'gpu':
-        sweep = _GpuSweep(geom)
+    # 'L' is per PRIMARY tree, but the accumulator coarse-grains per tree, so spread it onto
+    # the (gamma, 0) trees and leave the children fine. Their matrices are discarded below.
+    npri = int(config.num_primary_trees)
+    if L is None:
+        Ls_tree = None
     else:
-        raise RuntimeError(f"compute_variance_multimap: device={device!r}, expected 'cpu'"
-                           " or 'gpu'")
+        Lp = ([int(L)] * npri if np.isscalar(L)
+              else [None if (x is None) else int(x) for x in L])
+        if len(Lp) != npri:
+            raise RuntimeError(f'compute_variance_multimap: got {len(Lp)} values of L for'
+                               f' {npri} primary trees')
+        Ls_tree = [None] * int(config.num_dedispersion_trees)
+        for g in range(npri):
+            Ls_tree[int(config.dedispersion_tree_index(g, 0))] = Lp[g]
 
-    acc = _Accumulator(geom, Ls, scratch_dir)
-    for (ifreq, cols) in sweep.columns(channels=channels, guard_chunk=guard_chunk,
-                                       progress=progress):
-        acc.add(ifreq, cols)
+    geom, sweep, acc = _run_sweep(config, detrender, device=device, L=Ls_tree,
+                                  guard_chunk=guard_chunk, progress=progress,
+                                  channels=channels, scratch_dir=scratch_dir,
+                                  detrender_dtype=detrender_dtype,
+                                  _caller='compute_variance_multimap')
 
     maps = acc.finish(device=device, guard_chunk=guard_chunk, sweep_seconds=sweep.seconds,
                       progress=progress, partial=(channels is not None))
+
+    # The sweep produces one matrix per TREE (they share a dedisperser, so the child trees
+    # cost no extra passes), but a VarianceMultiMap stores one map per PRIMARY tree: a child's
+    # map is a row subset of its parent's, so keeping it would be keeping a copy. Note the
+    # parent is the LAST tree of its family, not itree - e.
+    primary = [maps[int(config.dedispersion_tree_index(g, 0))]
+               for g in range(int(config.num_primary_trees))]
 
     prov = dict(algorithm='brute_force', device=device, nbeams=geom.nbeams,
                 nfreq=geom.nfreq, nphases=geom.nphases, ntime=geom.ntime,
@@ -148,7 +156,93 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
     if provenance:
         prov.update(provenance)
 
-    return VarianceMultiMap(config, maps, detrender=detrender, provenance=prov)
+    return VarianceMultiMap(config, primary, detrender=detrender, provenance=prov)
+
+
+def _run_sweep(config, detrender=None, *, device='gpu', L=None, guard_chunk=True,
+               progress=False, channels=None, scratch_dir=None,
+               detrender_dtype=np.float64, _caller='_run_sweep'):
+    """Configure and run one brute-force sweep; return (geometry, sweep, accumulator).
+
+    This is the DRIVER, shared by compute_variance_multimap() and sweep_all_trees_dense(), so
+    that a sweep is configured in exactly one place. It stops short of acc.finish(), which is
+    where the choice of representation lives and which the two callers make differently.
+    """
+
+    geom = _SweepGeometry(config, detrender, detrender_dtype=detrender_dtype)
+
+    Ls = [None]*geom.ntrees if (L is None) else (
+        [int(L)]*geom.ntrees if np.isscalar(L)
+        else [None if (x is None) else int(x) for x in L])
+    if len(Ls) != geom.ntrees:
+        raise RuntimeError(f'{_caller}: got {len(Ls)} values of L for {geom.ntrees} trees')
+
+    if any(x is not None for x in Ls) and (geom.nphases != 1):
+        raise RuntimeError(
+            f'{_caller}: the streaming (coarse-grained) path needs nphases =='
+            f' 1, but this config gives nphases = {geom.nphases}. With several polyphase'
+            ' passes summing into one column, the max-reduction cannot run until the sum is'
+            ' complete. Sweep with L=None and coarse_grain() afterwards, or use a config with'
+            ' no detrender or no time-downsampled trees.')
+
+    if device == 'cpu':
+        sweep = _CpuSweep(geom)
+    elif device == 'gpu':
+        sweep = _GpuSweep(geom)
+    else:
+        raise RuntimeError(f"{_caller}: device={device!r}, expected 'cpu' or 'gpu'")
+
+    acc = _Accumulator(geom, Ls, scratch_dir)
+    for (ifreq, cols) in sweep.columns(channels=channels, guard_chunk=guard_chunk,
+                                       progress=progress):
+        acc.add(ifreq, cols)
+
+    return geom, sweep, acc
+
+
+def sweep_all_trees_dense(config, detrender=None, *, device='cpu', guard_chunk=True,
+                          progress=False, scratch_dir=None, detrender_dtype=np.float64):
+    """Sweep every tree and return the RAW dense matrices: a length-ntrees list of
+    ``(nalpha, nfreq)`` ndarrays, indexed by itree.
+
+    For TESTS, and specifically for comparing an early-trigger tree's matrix against its
+    (primary_tree_index, 0) parent's -- which is what test_restriction_vs_sweep() does.
+    compute_variance_multimap() is what production calls.
+
+    Returns arrays rather than VarianceMaps ON PURPOSE. A VarianceMap is a PRIMARY tree's map
+    by convention, and manufacturing one for an early-trigger tree would make that convention
+    unenforceable: with arrays, a later change could assert in VarianceMap.__init__ that
+    'itree' names an early_trigger_level == 0 tree without anything here having to be
+    unpicked. It is also the honest signature -- a sweep produces numbers, and the choice of
+    representation (dense or factored, fine or coarse, with y_true and history) belongs to
+    compute_variance_multimap().
+
+    Two constraints, both consequences of what it is for:
+
+    - FINE only. There is no 'L' argument: with one set, acc.A[itree] would be coarse and have
+      nbeta rows rather than nalpha, and a matrix comparison wants fine matrices anyway.
+    - TEST SCALE only. It materializes every tree's dense matrix, including the early-trigger
+      trees that compute_variance_multimap() does not store. At CHORD the (3,3) child alone
+      is 12.0 GiB.
+
+    Note this deliberately bypasses acc.finish(), and with it y_true, the history record and
+    check_ref_covers_y_true(). That is fine for child matrices that nothing stores, but it is
+    why production must keep going through compute_variance_multimap().
+    """
+
+    _, _, acc = _run_sweep(config, detrender, device=device, L=None,
+                           guard_chunk=guard_chunk, progress=progress,
+                           scratch_dir=scratch_dir, detrender_dtype=detrender_dtype,
+                           _caller='sweep_all_trees_dense')
+    acc._flush()
+
+    out = []
+    for itree in range(acc.geom.ntrees):
+        A = acc.A[itree]
+        if isinstance(A, np.memmap):
+            A.flush()          # scratch_dir case: make the file match the mapping
+        out.append(np.asarray(A))
+    return out
 
 
 ####################################   sweep geometry   ####################################

@@ -1,5 +1,10 @@
 """The variance-map file format: one ASDF file per VarianceMultiMap.
 
+ONE ENTRY PER PRIMARY TREE, not per dedispersion tree: an early-trigger tree's variance map
+is a row subset of its (gamma, 0) parent's, so it is derived rather than stored (see
+VarianceMultiMap). That is what format_version 2 changed, and why a version-1 file is refused
+by name rather than migrated -- its 'trees' list would parse cleanly and mean something else.
+
 Reached through ``VarianceMap.write_asdf()`` / ``.from_asdf()`` and
 ``VarianceMultiMap.write_asdf()`` / ``.from_asdf()`` / ``.open_asdf()``; this module holds
 the format itself and is not normally imported directly.
@@ -22,13 +27,14 @@ The tree
 ::
 
     variance_multimap:
-      format_version:  1
+      format_version:  2
       created:         ISO8601 UTC string
       config_yaml:     str                 # DedispersionConfig.to_yaml_string()
       detrender_yaml:  str or None         # Detrender2dParams.to_yaml_string()
       provenance:      dict                # free-form; how the SWEEP was run
-      trees:
-        - itree:              int
+      trees:                                # ONE ENTRY PER PRIMARY TREE, keyed by 'gamma'
+        - gamma:              int          # primary_tree_index; the entry KEY
+          itree:              int          # = dedispersion_tree_index(gamma, 0); derived
           tree_yaml:          str          # DedispersionTree.to_yaml_string(config, itree)
           m_to_n:             (M,) int64
           is_coarse_grained:  bool
@@ -99,7 +105,7 @@ from .VarianceMap import VarianceMap
 from .VarianceMultiMap import VarianceMultiMap
 
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 # The top-level key. Deliberately NOT the old format's 'variance_map': the two are
 # incompatible, and a name collision would turn "wrong format" into a confusing field error.
@@ -158,8 +164,17 @@ def _root(af, filename):
         raise RuntimeError(f'{filename}: has a {ROOT_KEY!r} block with no'
                            " 'format_version', so it predates this format entirely.")
     if int(v) != FORMAT_VERSION:
+        extra = ''
+        if int(v) == 1:
+            # Refuse by name rather than migrate. A v1 'trees' list is one entry per
+            # DEDISPERSION tree; reinterpreting it as one per PRIMARY tree would parse
+            # cleanly and mean something else, which is the expensive failure.
+            extra = (" A version-1 file holds one entry per dedispersion tree, whereas"
+                     " version 2 holds one per PRIMARY tree (an early-trigger tree's map is"
+                     " a row subset of its parent's, so it is no longer stored). There is no"
+                     " converter: re-run the sweep.")
         raise RuntimeError(f'{filename}: format_version is {v}, but this build reads only'
-                           f' version {FORMAT_VERSION}.')
+                           f' version {FORMAT_VERSION}.{extra}')
     return root
 
 
@@ -191,7 +206,8 @@ def _tree_dict(m):
     carries both or neither, so `is_factored` can never be believed over the arrays.
     """
 
-    d = dict(itree=int(m.itree),
+    d = dict(gamma=int(m.tree.primary_tree_index),
+             itree=int(m.itree),
              tree_yaml=m.tree.to_yaml_string(m.config, m.itree),
              m_to_n=np.ascontiguousarray(m.m_to_n, dtype=np.int64),
              is_coarse_grained=bool(m.is_coarse_grained),
@@ -252,17 +268,17 @@ def write_multimap(vmm, filename, *, provenance=None):
     """
 
     prov = vmm.provenance if (provenance is None) else provenance
-    _write(list(vmm), vmm.config, vmm.detrender, prov, filename)
+    _write(list(vmm.maps), vmm.config, vmm.detrender, prov, filename)
 
 
 def write_map(m, filename, *, provenance=None):
-    """Write a single VarianceMap to 'filename', as a file holding one tree.
+    """Write a single VarianceMap to 'filename', as a file holding one primary tree.
 
-    The result is the same format as write_multimap()'s, with a one-element 'trees' list,
-    and is read back with ``VarianceMap.from_asdf(filename, m.itree)``. It is a complete
-    multimap file -- readable by ``VarianceMultiMap.from_asdf()`` -- only when the config
-    has a single dedispersion tree; otherwise that reader refuses it, since a multimap
-    covers every tree by definition.
+    The result is the same format as write_multimap()'s, with a one-element 'trees' list, and
+    is read back with ``VarianceMap.from_asdf(filename, gamma)``. It is a complete multimap
+    file -- readable by ``VarianceMultiMap.from_asdf()`` -- only when the config has a single
+    PRIMARY tree; otherwise that reader refuses it, since a multimap covers every primary tree
+    by definition.
     """
 
     _write([m], m.config, m.detrender, provenance, filename)
@@ -370,18 +386,23 @@ def _read_tree(d, config, detrender, filename):
 
 
 def _multimap_from_root(root, filename):
-    """A VarianceMultiMap from a root block, with every tree present and in order."""
+    """A VarianceMultiMap from a root block, with every primary tree present and in order."""
 
     config, detrender = _read_inputs(root)
     entries = list(root['trees'])
 
-    ntrees = int(config.num_dedispersion_trees)
-    if len(entries) != ntrees:
-        got = [int(e['itree']) for e in entries]
+    npri = int(config.num_primary_trees)
+    got = [int(e['gamma']) for e in entries]
+
+    # The entries are keyed by gamma, not by itree: itree is a derived quantity (and NOT
+    # gamma -- the parent is the last tree of its family), so it must not be the key.
+    if got != list(range(npri)):
         raise RuntimeError(
-            f'{filename}: holds {len(entries)} tree(s) {got}, but its config has {ntrees}'
-            ' dedispersion trees. A VarianceMultiMap covers EVERY tree by definition; read a'
-            ' single-tree file with VarianceMap.from_asdf(filename, itree) instead.')
+            f'{filename}: holds {len(entries)} entry(s) for primary trees {got}, but its'
+            f' config has {npri} primary trees and a file must hold exactly'
+            f' {list(range(npri))}. A VarianceMultiMap covers EVERY primary tree by'
+            ' definition; read a single-map file with VarianceMap.from_asdf(filename, gamma)'
+            ' instead.')
 
     maps = [_read_tree(d, config, detrender, filename) for d in entries]
     return VarianceMultiMap(config, maps, detrender=detrender,
@@ -423,24 +444,29 @@ def open_multimap(filename):
         af.close()
 
 
-def read_map(filename, itree=0):
-    """Read ONE tree out of a variance-map file, eagerly.
+def read_map(filename, gamma=0):
+    """Read ONE primary tree's map out of a variance-map file, eagerly.
 
-    Unlike read_multimap() this does not require the file to cover every tree, so it is how
-    a single-tree file (write_map()'s output) is read back.
+    Unlike read_multimap() this does not require the file to cover every primary tree, so it
+    is how a single-map file (write_map()'s output) is read back.
+
+    Takes GAMMA, not itree. A file's entries are primary trees, and there is no VarianceMap
+    for an early-triggered tree to return -- so an itree argument would either mislead
+    (silently returning the parent) or fail for most inputs.
     """
 
     import asdf
 
-    itree = int(itree)
+    gamma = int(gamma)
     with asdf.open(str(filename), lazy_load=False, memmap=False) as af:
         root = _root(af, filename)
         config, detrender = _read_inputs(root)
 
-        entries = [d for d in root['trees'] if int(d['itree']) == itree]
+        entries = [d for d in root['trees'] if int(d['gamma']) == gamma]
         if len(entries) != 1:
-            got = [int(d['itree']) for d in root['trees']]
-            raise RuntimeError(f'{filename}: asked for tree {itree}, but the file holds'
-                               f' {len(entries)} entries for it (trees present: {got}).')
+            got = [int(d['gamma']) for d in root['trees']]
+            raise RuntimeError(f'{filename}: asked for primary tree {gamma}, but the file'
+                               f' holds {len(entries)} entries for it (primary trees'
+                               f' present: {got}).')
 
         return _read_tree(entries[0], config, detrender, filename)

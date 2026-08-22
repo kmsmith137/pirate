@@ -717,43 +717,82 @@ def test_check_ref_covers_y_true(r=7, subband_counts=(2,1)):
 
 
 def test_multimap(r=8, subband_counts=(2,1), num_primary_trees=2, num_early_triggers=1):
-    """VarianceMultiMap: one map per tree, for every tree, sharing one config object."""
+    """VarianceMultiMap: one map per PRIMARY tree, sharing one config object, with apply()
+    covering every tree."""
 
     config = _make_test_config(r, list(subband_counts),
                                num_primary_trees=num_primary_trees,
                                num_early_triggers=num_early_triggers)
     rng = np.random.default_rng(8)
     ntrees = int(config.num_dedispersion_trees)
+    npri = int(config.num_primary_trees)
     assert ntrees == num_primary_trees * (num_early_triggers + 1)
+    assert npri == num_primary_trees
 
-    maps = [_random_map(config, i, rng) for i in range(ntrees)]
+    # itree is NOT gamma: early_trigger_level descends within a family, so the (gamma, 0)
+    # tree is the LAST of its block.
+    iparents = [int(config.dedispersion_tree_index(g, 0)) for g in range(npri)]
+    assert iparents != list(range(npri))
+
+    maps = [_random_map(config, i, rng) for i in iparents]
     vmm = VarianceMultiMap(config, maps, provenance=dict(algorithm='test'))
 
-    assert (len(vmm) == ntrees) and (vmm[0] is maps[0])
-    assert [m.itree for m in vmm] == list(range(ntrees))
+    assert (vmm.num_primary_trees == npri) and (vmm.ntrees == ntrees)
+    assert vmm.primary_map(0) is maps[0]
+    assert [m.itree for m in vmm.maps] == iparents
 
-    # The legal range R <= L <= r differs per tree, so L may be a per-tree sequence.
-    Ls = [m.pf_rank for m in vmm]
+    # The removed sequence protocol: these used to be indexed by itree, so a silent change
+    # of meaning would have been the worst outcome. Every call site must now say which it
+    # means.
+    for op in (lambda: len(vmm), lambda: vmm[0], lambda: list(iter(vmm))):
+        try:
+            op()
+            raise AssertionError('VarianceMultiMap still supports the sequence protocol')
+        except TypeError:
+            pass
+
+    # The legal range R <= L <= r differs per primary tree, so L may be a sequence.
+    Ls = [m.pf_rank for m in vmm.maps]
     cvmm = vmm.coarse_grain(Ls)
-    for (i, m) in enumerate(cvmm):
-        assert m.L == Ls[i] and np.array_equal(m.A, maps[i].coarse_grain(Ls[i]).A)
+    for (g, m) in enumerate(cvmm.maps):
+        assert m.L == Ls[g] and np.array_equal(m.A, maps[g].coarse_grain(Ls[g]).A)
 
     v = rng.uniform(0.5, 1.5, size=config.get_total_nfreq())
-    ys = vmm.apply(v)
+    ys = vmm.apply_fine(v)
     assert len(ys) == ntrees
-    assert np.allclose(ys[0], np.asarray(maps[0].A, dtype=np.float64) @ v)
+
+    # The parent entries are its own apply(), in (D, M, P) form.
+    for (g, ip) in enumerate(iparents):
+        want = np.asarray(maps[g].A, dtype=np.float64) @ v
+        assert np.allclose(ys[ip].reshape(-1), want)
+
+    # Every tree got an entry, with its own multiplet count.
+    for itree in range(ntrees):
+        tree = make_tree(config, itree)
+        fs = tree.frequency_subbands
+        D = 1 << (tree.total_rank() - fs.pf_rank)
+        assert ys[itree].shape == (D, int(fs.M), int(tree.nprofiles))
 
     res = cvmm.measure_admissibility(cvmm)
+    assert len(res) == npri
     assert all(x.admissible for x in res) and (max(x.max_r for x in res) <= 1.0)
 
     # A short list is a bug in whatever assembled it, not a subset.
     try:
         VarianceMultiMap(config, maps[:-1])
-        raise AssertionError('VarianceMultiMap accepted a partial tree list')
+        raise AssertionError('VarianceMultiMap accepted a partial list')
     except RuntimeError as e:
-        assert 'one map per tree' in str(e)
+        assert 'one map per PRIMARY tree' in str(e)
 
-    atomic_print(f'    test_multimap(r={r}, ntrees={ntrees}): pass')
+    # ... and so is a list of the wrong maps. No theorem covers this: it is a property of
+    # whatever did the assembling.
+    try:
+        VarianceMultiMap(config, [_random_map(config, 0, rng) for _ in range(npri)])
+        raise AssertionError('VarianceMultiMap accepted maps that are not the parents')
+    except RuntimeError as e:
+        assert 'early_trigger_level == 0' in str(e)
+
+    atomic_print(f'    test_multimap(r={r}, npri={npri}, ntrees={ntrees}): pass')
 
 
 def test_dense_float32(r=7, subband_counts=(1,)):
@@ -1009,13 +1048,13 @@ def test_factored_validation(r=7, subband_counts=(2,1), K=4):
 
 
 @contextlib.contextmanager
-def _open_one(path, itree):
-    """One tree of a memmapped read. VarianceMap has no open_asdf() of its own -- the scoped
-    opener lives on VarianceMultiMap -- and these test configs are single-tree, so going
-    through it is the same thing."""
+def _open_one(path, gamma):
+    """One primary tree's map from a memmapped read. VarianceMap has no open_asdf() of its
+    own -- the scoped opener lives on VarianceMultiMap -- and these test configs have a
+    single primary tree, so going through it is the same thing."""
 
     with VarianceMultiMap.open_asdf(path) as vmm:
-        yield vmm[itree]
+        yield vmm.primary_map(gamma)
 
 
 def _corrupt(path, out, fn):
@@ -1037,7 +1076,7 @@ def _corrupt(path, out, fn):
         asdf.AsdfFile({ROOT_KEY: root}).write_to(out)
 
 
-def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_triggers=1):
+def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=4, num_early_triggers=1):
     """The file format: every representation round-trips, and every tripwire fires.
 
     The tripwires matter more than the round-trip. The archived library is hundreds of GiB
@@ -1059,6 +1098,10 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_tri
                                num_early_triggers=num_early_triggers)
     rng = np.random.default_rng(10)
     ntrees = int(config.num_dedispersion_trees)
+    npri = int(config.num_primary_trees)
+    # itree is NOT gamma: the (gamma, 0) tree is the LAST of its family.
+    iparents = [int(config.dedispersion_tree_index(g, 0)) for g in range(npri)]
+    assert npri >= 4, 'test_asdf_io needs four primary trees, one per representation'
     tmp = tempfile.mkdtemp()
 
     def expect_raise(fn, needle):
@@ -1075,7 +1118,7 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_tri
         # Every representation the dense path can produce: fine/coarse, certified or not,
         # y_true present or absent, float64 or float32. (The factored half of that product
         # is not reachable yet; the reader's refusal of it is checked below.)
-        maps = [_random_map(config, i, rng, nzero=2) for i in range(ntrees)]
+        maps = [_random_map(config, i, rng, nzero=2) for i in iparents]
         maps[1] = maps[1].coarse_grain(maps[1].pf_rank + 1)
         maps[2] = maps[2].replace(is_admissible=False)
         maps[3] = maps[3].replace(y_true=None, A=np.asarray(maps[3].A, dtype=np.float32))
@@ -1089,19 +1132,19 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_tri
             ctx = (_eager_ctx(VarianceMultiMap.from_asdf(path)) if eager
                    else VarianceMultiMap.open_asdf(path))
             with ctx as v2:
-                assert len(v2) == ntrees
+                assert v2.num_primary_trees == npri and v2.ntrees == ntrees
                 assert v2.provenance == {'algorithm': 'test', 'ntime': 1024,
                                          'overrides': ['a', 'b'],
                                          'nested': {'host': 'here', 'seconds': 1.5}}
 
                 # The inputs survive as yaml and re-parse into one shared object per file.
                 assert int(v2.config.toplevel_tree_rank) == r
-                assert all(m.config is v2.config for m in v2)
+                assert all(m.config is v2.config for m in v2.maps)
                 assert v2.detrender is None
 
-                for (i, m) in enumerate(v2):
+                for (i, m) in enumerate(v2.maps):
                     w = maps[i]
-                    assert m.itree == i and m.L == w.L
+                    assert m.itree == iparents[i] and m.L == w.L
                     assert m.is_coarse_grained == w.is_coarse_grained
                     assert m.is_admissible == w.is_admissible
                     assert m.shape == w.shape and m.nalpha == w.nalpha
@@ -1121,13 +1164,13 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_tri
 
                 # Scoring works on a map that has been through the file, which is the point
                 # of storing y_true at fine granularity.
-                assert abs(v2[1].get_distance() - maps[1].get_distance()) <= 1.0e-14
+                assert abs(v2.primary_map(1).get_distance() - maps[1].get_distance()) <= 1.0e-14
 
                 if not eager:
                     # Uncompressed blocks are what make this possible, and memmapping is the
                     # scale path -- an asdf upgrade that changed its defaults would silently
                     # turn every large read into a full materialization.
-                    chain, a = [], np.asarray(v2[0].A)
+                    chain, a = [], np.asarray(v2.primary_map(0).A)
                     while a is not None:
                         chain.append(a)
                         a = getattr(a, 'base', None)
@@ -1143,10 +1186,10 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_tri
         escaped = None
         with VarianceMultiMap.open_asdf(path) as v3:
             escaped = v3
-            assert np.array_equal(np.asarray(v3[0].A), np.asarray(maps[0].A))
+            assert np.array_equal(np.asarray(v3.primary_map(0).A), np.asarray(maps[0].A))
 
         try:
-            after = np.array(np.asarray(escaped[0].A))   # copy out from under the mapping
+            after = np.array(np.asarray(escaped.primary_map(0).A))   # copy out from under the mapping
         except Exception:
             after = None                                 # an intelligible failure is fine
         assert (after is None) or np.array_equal(after, np.asarray(maps[0].A)), \
@@ -1186,14 +1229,15 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_tri
         assert np.array_equal(np.asarray(VarianceMap.from_asdf(mpath, 0).A),
                               np.asarray(maps[0].A))
 
-        # A single-tree file: readable by VarianceMap.from_asdf(), and refused by the
-        # multimap reader, which covers every tree by definition.
+        # A single-map file: readable by VarianceMap.from_asdf(), and refused by the multimap
+        # reader, which covers every PRIMARY tree by definition. Note both readers take GAMMA.
         one = os.path.join(tmp, 'one.asdf')
         maps[1].write_asdf(one, provenance=dict(note='single'))
         m1 = VarianceMap.from_asdf(one, 1)
-        assert m1.itree == 1 and np.array_equal(np.asarray(m1.A), np.asarray(maps[1].A))
-        expect_raise(lambda: VarianceMultiMap.from_asdf(one), 'covers EVERY tree')
-        expect_raise(lambda: VarianceMap.from_asdf(one, 0), 'trees present: [1]')
+        assert m1.itree == iparents[1] and np.array_equal(np.asarray(m1.A),
+                                                          np.asarray(maps[1].A))
+        expect_raise(lambda: VarianceMultiMap.from_asdf(one), 'covers EVERY primary tree')
+        expect_raise(lambda: VarianceMap.from_asdf(one, 0), 'primary trees present: [1]')
 
         # ---- the tripwires ----
 
@@ -1218,8 +1262,17 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_tri
 
         # itree against the tree yaml's own (primary_tree_index, early_trigger_level), which
         # is what stops a mislabelled entry from being read as a different tree.
-        _corrupt(path, bad, lambda root: root['trees'][0].__setitem__('itree', 1))
+        _corrupt(path, bad, lambda root: root['trees'][0].__setitem__('itree', 0))
         expect_raise(lambda: VarianceMultiMap.from_asdf(bad), "'itree' field claims")
+
+        # 'gamma' is the ENTRY KEY, so a file whose gamma list is not 0..npri-1 is refused
+        # before anything is read. Without this, dropping an entry would look like a file for
+        # a smaller config rather than a damaged one.
+        _corrupt(path, bad, lambda root: root['trees'][2].__setitem__('gamma', 0))
+        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'a file must hold exactly')
+
+        _corrupt(path, bad, lambda root: root.__setitem__('trees', root['trees'][:-1]))
+        expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'a file must hold exactly')
 
         # A tree yaml describing a different instrument: check_consistency() names the member.
         _corrupt(path, bad, lambda root: root['trees'][0].__setitem__(
@@ -1254,8 +1307,9 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=2, num_early_tri
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    atomic_print(f'    test_asdf_io(r={r}, ntrees={ntrees}): {nbytes/2**20:.1f} MiB file,'
-                 ' eager + memmapped reads and every reader check exercised')
+    atomic_print(f'    test_asdf_io(r={r}, npri={npri}, ntrees={ntrees}):'
+                 f' {nbytes/2**20:.1f} MiB file, eager + memmapped reads and every reader'
+                 ' check exercised')
 
 
 def test_asdf_detrender(r=7, subband_counts=(2,1)):
@@ -1279,8 +1333,9 @@ def test_asdf_detrender(r=7, subband_counts=(2,1)):
 
     try:
         path = os.path.join(tmp, 'det.asdf')
-        ntrees = int(config.num_dedispersion_trees)
-        maps = [_random_map(config, i, rng, detrender=dparams) for i in range(ntrees)]
+        npri = int(config.num_primary_trees)
+        iparents = [int(config.dedispersion_tree_index(g, 0)) for g in range(npri)]
+        maps = [_random_map(config, i, rng, detrender=dparams) for i in iparents]
         VarianceMultiMap(config, maps, detrender=dparams).write_asdf(path)
 
         for eager in (True, False):
@@ -1299,7 +1354,7 @@ def test_asdf_detrender(r=7, subband_counts=(2,1)):
         # A file written with no detrender must come back None, not a default-constructed
         # one -- 'no detrender' and 'some detrender' are different physics.
         nodet = os.path.join(tmp, 'nodet.asdf')
-        plain = [_random_map(config, i, rng) for i in range(ntrees)]
+        plain = [_random_map(config, i, rng) for i in iparents]
         VarianceMultiMap(config, plain).write_asdf(nodet)
         assert VarianceMultiMap.from_asdf(nodet).detrender is None
     finally:
@@ -2762,6 +2817,22 @@ def _abcd(m):
     return np.asarray(m.A).reshape(D, m.nmultiplets, m.nprofiles, m.nfreq)
 
 
+def _abcd_all(config, As):
+    """sweep_all_trees_dense()'s output in the same (D, M, P, nfreq) form, keyed by itree.
+
+    A VarianceMultiMap holds only the primary trees, so a test which wants to check EVERY
+    tree against a per-tree oracle sweeps raw arrays rather than going through it.
+    """
+
+    out = []
+    for (itree, A) in enumerate(As):
+        tree = make_tree(config, itree)
+        fs = tree.frequency_subbands
+        D = 1 << (int(tree.total_rank()) - int(fs.pf_rank))
+        out.append(np.asarray(A).reshape(D, int(fs.M), int(tree.nprofiles), A.shape[1]))
+    return out
+
+
 def test_sweep_vs_per_tfm(r=7, subband_counts=None, num_primary_trees=1, num_early_triggers=0,
                           time_downsampling=1, verbose=True):
     """The sweep, element by element, against PfAvarExact.per_tfm, which computes the same
@@ -2781,23 +2852,24 @@ def test_sweep_vs_per_tfm(r=7, subband_counts=None, num_primary_trees=1, num_ear
 
     from ..pirate_pybind11 import DedispersionPlan
     from ..slow_avar.PfVariance import PfAvarExact
-    from .brute_force import compute_variance_multimap
+    from .brute_force import sweep_all_trees_dense
 
     subband_counts = [1] if (subband_counts is None) else subband_counts
     config = _make_test_config(r, subband_counts, num_primary_trees=num_primary_trees,
                                num_early_triggers=num_early_triggers,
                                time_downsampling=time_downsampling)
-    vmm = compute_variance_multimap(config, device='cpu')
+    # Raw per-tree arrays, not a VarianceMultiMap: this checks EVERY tree against the
+    # analytic oracle, including the early-trigger trees a multimap no longer stores.
+    As = _abcd_all(config, sweep_all_trees_dense(config, device='cpu'))
 
     exact = PfAvarExact(DedispersionPlan(config, cdd2_kernel_required=False),
                         np.ones(int(config.get_total_nfreq())))
     worst, worst_where, eps = 0.0, None, []
 
-    for (itree, m) in enumerate(vmm):
-        A = _abcd(m)
-        D, P = A.shape[0], m.nprofiles
-        all_dbits = (1 << (m.tree_rank - m.pf_rank)) - 1
-        for ifreq in range(m.nfreq):
+    for (itree, A) in enumerate(As):
+        D, P, nfreq = A.shape[0], A.shape[2], A.shape[3]
+        all_dbits = D - 1
+        for ifreq in range(nfreq):
             # per_tfm[itree][ifreq][mu] is None for multiplets this channel does not reach.
             want = np.stack([pv.unpack(all_dbits) if (pv is not None) else np.zeros((D, P))
                              for pv in exact.per_tfm[itree][ifreq]])       # (M, D, P)
@@ -2894,15 +2966,14 @@ def test_sweep_column_norms(r=6, subband_counts=None, num_primary_trees=1,
     makes this an independent check of that organization.
     """
 
-    from .brute_force import _CpuSweep, _SweepGeometry, compute_variance_multimap
+    from .brute_force import _CpuSweep, _SweepGeometry, sweep_all_trees_dense
 
     subband_counts = [2, 1] if (subband_counts is None) else subband_counts
     config = _make_test_config(r, subband_counts, num_primary_trees=num_primary_trees,
                                num_early_triggers=num_early_triggers)
     dparams = _make_test_detrender(config) if detrender else None
 
-    vmm = compute_variance_multimap(config, detrender=dparams, device='cpu')
-    A = [_abcd(m) for m in vmm]
+    A = _abcd_all(config, sweep_all_trees_dense(config, dparams, device='cpu'))
 
     geom = _SweepGeometry(config, detrender=dparams)
     sweep = _CpuSweep(geom)
@@ -3035,19 +3106,20 @@ def test_sweep_gpu_vs_cpu(r=8, subband_counts=None, num_early_triggers=0, detren
     gpu = compute_variance_multimap(config, detrender=dparams, device='gpu')
 
     worst, worst_where = 0.0, None
-    for itree in range(len(cpu)):
-        want, got = np.asarray(cpu[itree].A), np.asarray(gpu[itree].A)
+    for gamma in range(cpu.num_primary_trees):
+        want = np.asarray(cpu.primary_map(gamma).A)
+        got = np.asarray(gpu.primary_map(gamma).A)
         assert got.shape == want.shape, (got.shape, want.shape)
         scale = float(np.abs(want).max())
         e = float(np.abs(got - want).max()) / scale if (scale > 0) else 0.0
         if e > worst:
-            worst, worst_where = e, itree
+            worst, worst_where = e, gamma
 
     if verbose:
         atomic_print(f'    test_sweep_gpu_vs_cpu(r={r}, subbands={subband_counts},'
                      f' net={num_early_triggers}, detrender={bool(detrender)},'
-                     f' nbeams={nbeams}, nfreq={cpu[0].nfreq}): worst relative difference'
-                     f' {worst:.3g} at tree {worst_where}')
+                     f' nbeams={nbeams}, nfreq={cpu.primary_map(0).nfreq}): worst relative'
+                     f' difference {worst:.3g} at primary tree {worst_where}')
 
     # Both sides are float32 pipelines, but they are different float32 pipelines (the GPU tree
     # is not the reference tree), so this is a float32-roundoff comparison.
@@ -3077,22 +3149,25 @@ def test_sweep_streaming_coarse(r=6, subband_counts=None, num_early_triggers=0,
     dparams = _make_test_detrender(config) if detrender else None
     dense = compute_variance_multimap(config, detrender=dparams, device='cpu')
 
+    npri = dense.num_primary_trees
     nL = 0
-    for (itree, m) in enumerate(dense):
+    # Per PRIMARY tree: L is a per-primary-tree quantity now, and a child tree never carries
+    # a coarse-graining rank of its own.
+    for (gamma, m) in enumerate(dense.maps):
         R, rr = m.pf_rank, m.tree_rank
         for L in range(R, rr + 1):
-            Ls = [None] * len(dense)
-            Ls[itree] = L
+            Ls = [None] * npri
+            Ls[gamma] = L
             got = compute_variance_multimap(config, detrender=dparams,
-                                           device='cpu', L=Ls)[itree]
+                                            device='cpu', L=Ls).primary_map(gamma)
             want = m.coarse_grain(L)
-            assert got.nbeta == want.nbeta, (itree, L, got.nbeta, want.nbeta)
+            assert got.nbeta == want.nbeta, (gamma, L, got.nbeta, want.nbeta)
             nd = int(np.count_nonzero(np.asarray(got.A) != np.asarray(want.A)))
             if nd != 0:
-                raise RuntimeError(f'test_sweep_streaming_coarse: tree {itree}, L={L}:'
-                                   f' {nd} of {got.nbeta * got.nfreq} entries differ from'
-                                   ' coarse_grain() of the dense map')
-            assert np.array_equal(got.y_true, m.y_true), (itree, L)
+                raise RuntimeError(f'test_sweep_streaming_coarse: primary tree {gamma},'
+                                   f' L={L}: {nd} of {got.nbeta * got.nfreq} entries differ'
+                                   ' from coarse_grain() of the dense map')
+            assert np.array_equal(got.y_true, m.y_true), (gamma, L)
             nL += 1
 
     # THE STAGING WIDTH MUST NOT BE ABLE TO CHANGE THE ANSWER. The accumulator holds a block
@@ -3101,29 +3176,31 @@ def test_sweep_streaming_coarse(r=6, subband_counts=None, num_early_triggers=0,
     # fresh-row-versus-accumulate branch keys off. Widths that divide nfreq and widths that do
     # not are both required to reproduce the default bit for bit.
     from .brute_force import _Accumulator
-    ref = np.asarray(dense[0].A)
+    ref = np.asarray(dense.primary_map(0).A)
     saved = _Accumulator._NSTAGE
     try:
         for nstage in (1, 3, 7, 2 * saved):
             _Accumulator._NSTAGE = nstage
-            got = compute_variance_multimap(config, detrender=dparams, device='cpu')[0]
+            got = compute_variance_multimap(config, detrender=dparams,
+                                            device='cpu').primary_map(0)
             nd = int(np.count_nonzero(np.asarray(got.A) != ref))
             if nd:
                 raise RuntimeError(f'test_sweep_streaming_coarse: staging width {nstage}'
                                    f' changed {nd} entries of the map')
-            assert np.array_equal(got.y_true, dense[0].y_true), nstage
+            assert np.array_equal(got.y_true, dense.primary_map(0).y_true), nstage
     finally:
         _Accumulator._NSTAGE = saved
 
     # A partial sweep is the one case where y_true would be a sum over the swept channels
     # only, so it is dropped rather than reported.
-    chans = [0, dense[0].nfreq // 2, dense[0].nfreq - 1]
+    d0 = dense.primary_map(0)
+    chans = [0, d0.nfreq // 2, d0.nfreq - 1]
     part = compute_variance_multimap(config, detrender=dparams, device='cpu', channels=chans)
     assert part.provenance['partial'] is True
-    assert part[0].y_true is None, 'a partial sweep must not claim a y_true'
-    Ap, Af = np.asarray(part[0].A), np.asarray(dense[0].A)
+    assert part.primary_map(0).y_true is None, 'a partial sweep must not claim a y_true'
+    Ap, Af = np.asarray(part.primary_map(0).A), np.asarray(d0.A)
     assert np.array_equal(Ap[:, chans], Af[:, chans]), 'swept columns must match a full sweep'
-    unswept = [c for c in range(dense[0].nfreq) if c not in chans]
+    unswept = [c for c in range(d0.nfreq) if c not in chans]
     assert not np.any(Ap[:, unswept]), 'unswept columns must be identically zero'
 
     if verbose:
@@ -3149,6 +3226,257 @@ def _config_of(fn):
     return _make_test_config(d['r'], d['subband_counts'],
                              num_primary_trees=d.get('num_primary_trees', 1),
                              num_early_triggers=d.get('num_early_triggers', 0))
+
+
+def test_apply_restriction(r=6, subband_counts=(4,2,1), num_primary_trees=2,
+                           num_early_triggers=2, L=None):
+    """The row map of Proposition 1, as apply() uses it: restricting a parent's FINE apply()
+    result to a child tree's rows.
+
+    This is NOT a test of Proposition 1 itself -- that is test_restriction_vs_sweep(), which
+    needs a sweep. Here the maps are RANDOM, so the only thing under test is the index
+    bookkeeping: restrict_fine_vector()'s reshape-and-gather, and (when L is set)
+    apply_fine()'s lift. That separation is the point -- a bug in either shows up here,
+    scale-free and with no dedisperser in the loop.
+
+    The row map is rebuilt in the test from toplevel band ranges, in the manner of
+    _obvious_beta(), so the production m_index_mapping() is not in the loop.
+
+    The default subband counts are chosen so that the multiplet map is NOT a contiguous
+    prefix -- [4,2,1] restricts to [2,1], giving m_map = [0,1,4,5], because the level-0 count
+    is clamped as well as the top level being dropped. With [2,2,1] every map is a prefix and
+    a wrong gather would pass unnoticed, so the assert below refuses a config that covers
+    nothing.
+
+    Run it FINE and COARSE. The coarse case is the one that matters: apply_fine()'s lift runs
+    nowhere else, and getting it wrong changes values without changing any shape, so a
+    fine-only test never executes it at all.
+    """
+
+    from .VarianceMultiMap import restrict_fine_vector
+
+    config = _make_test_config(r, subband_counts, num_primary_trees=num_primary_trees,
+                               num_early_triggers=num_early_triggers)
+    rng = np.random.default_rng(seed=(r, num_primary_trees, num_early_triggers, L is None))
+    nfreq = int(config.get_total_nfreq())
+    v = rng.uniform(0.5, 2.0, size=nfreq)
+
+    npri = int(config.num_primary_trees)
+    ncheck = nontrivial = 0
+
+    for gamma in range(npri):
+        iparent = int(config.dedispersion_tree_index(gamma, 0))
+        parent = make_tree(config, iparent)
+        pm = _random_map(config, iparent, rng)
+        if L is not None:
+            pm = pm.coarse_grain(L)
+
+        D = 1 << (parent.total_rank() - parent.frequency_subbands.pf_rank)
+        M_p, P = int(parent.frequency_subbands.M), int(parent.nprofiles)
+        y_fine = pm.apply_fine(v)
+        assert y_fine.shape == (D * M_p * P,)
+
+        for e in range(int(config.primary_trees[gamma].num_early_triggers) + 1):
+            child = make_tree(config, int(config.dedispersion_tree_index(gamma, e)))
+            fsc = child.frequency_subbands
+            M_c = int(fsc.M)
+
+            # The multiplet map, built here from toplevel band ranges rather than imported.
+            pband = {(parent.n_to_toplevel_flo(n), parent.n_to_toplevel_fhi(n)): n
+                     for n in range(int(parent.frequency_subbands.N))}
+            m_map = []
+            for mc in range(M_c):
+                nc = int(fsc.m_to_n[mc])
+                np_ = pband[(child.n_to_toplevel_flo(nc), child.n_to_toplevel_fhi(nc))]
+                m_map.append(int(parent.frequency_subbands.n_to_mbase[np_]) + int(fsc.m_to_d[mc]))
+
+            got = restrict_fine_vector(y_fine, parent, child)
+            assert got.shape == (D, M_c, P), (got.shape, (D, M_c, P))
+
+            want = np.empty((D, M_c, P))
+            for d in range(D):
+                for mc in range(M_c):
+                    for p in range(P):
+                        want[d, mc, p] = y_fine[(d * M_p + m_map[mc]) * P + p]
+            assert np.array_equal(got, want), f'gamma={gamma}, e={e}: row map disagrees'
+            if m_map != list(range(M_c)):
+                nontrivial += 1
+
+            # Independent check on the GRANULARITY of the lift, which is the thing a
+            # fine-only run never exercises. A parent coarse-grained at L induces, on the
+            # child's rows, exactly the child's own coarse-graining at rank (L - e): the
+            # child's pf_rank is R - e, so its full-resolution DM is the parent's shifted by
+            # e, and (dm_parent >> L) == (dm_child >> (L - e)). Production never computes
+            # that shift -- it lifts before it restricts -- so deriving it here is what would
+            # catch production getting it wrong.
+            if L is not None:
+                labels = _child_group_labels(child, L - e)
+                for key in np.unique(labels):
+                    vals = got.reshape(-1)[labels == key]
+                    assert np.all(vals == vals[0]), \
+                        f'gamma={gamma}, e={e}: the restricted vector is not constant on the' \
+                        f' child group {key}, so the lift used the wrong granularity'
+            ncheck += 1
+
+    assert nontrivial > 0, \
+        f'test_apply_restriction: every multiplet map was the contiguous prefix [0..M_c), so a' \
+        f' gather bug could not have been caught. Use subband counts whose level-0 count is' \
+        f' clamped by the restriction (see the docstring).'
+
+    atomic_print(f'    test_apply_restriction(r={r}, subbands={list(subband_counts)},'
+                 f' npri={num_primary_trees}, net={num_early_triggers},'
+                 f' L={L}): {ncheck} (parent, child) pairs,'
+                 f' {nontrivial} with a non-contiguous multiplet map')
+
+
+def _child_group_labels(tree, L):
+    """The coarse-graining labels of 'tree' at rank L, the long way round.
+
+    Same construction as _obvious_labels(), but from a DedispersionTree rather than a
+    VarianceMap, since a child tree has no VarianceMap of its own (that is the whole point of
+    the per-primary-tree representation).
+    """
+
+    fs = tree.frequency_subbands
+    R = int(fs.pf_rank)
+    M, N, P = int(fs.M), int(fs.N), int(tree.nprofiles)
+    D = 1 << (int(tree.total_rank()) - R)
+
+    n_level = []
+    for level, count in enumerate(fs.subband_counts):
+        n_level += [level] * int(count)
+    n_level = np.array(n_level, dtype=np.int64)
+
+    alpha = np.arange(D * M * P, dtype=np.int64)
+    p = alpha % P
+    mi = (alpha // P) % M
+    d = alpha // (P * M)
+    n = np.array(fs.m_to_n, dtype=np.int64)[mi]
+    dm_full = (d << R) + (np.array(fs.m_to_d, dtype=np.int64)[mi] << (R - n_level[n]))
+
+    return ((dm_full >> L) * N + n) * P + p
+
+
+def test_restriction_representation(r=6, subband_counts=(4,2,1), num_early_triggers=2, K=5):
+    """The restricted apply() result does not depend on how the PARENT is represented.
+
+    A factored parent contracts K vectors while the dense map it stands for sums each row over
+    nfreq, so the two group their additions differently -- ~1e-13 relative, the same order
+    row_sums()'s docstring documents. Nothing here should be bitwise.
+
+    Worth having because production stores factored maps and the tests mostly build dense
+    ones: this is the one check that the restriction path is exercised on both.
+    """
+
+    from .VarianceMultiMap import restrict_fine_vector
+
+    config = _make_test_config(r, subband_counts, num_early_triggers=num_early_triggers)
+    rng = np.random.default_rng(seed=91)
+    nfreq = int(config.get_total_nfreq())
+    v = rng.uniform(0.5, 2.0, size=nfreq)
+
+    iparent = int(config.dedispersion_tree_index(0, 0))
+    parent = make_tree(config, iparent)
+
+    fac, dense_A = _factored_map(config, iparent, rng, K=K)
+    dense = VarianceMap.from_dense(config, iparent, dense_A)
+
+    worst = 0.0
+    for e in range(int(config.primary_trees[0].num_early_triggers) + 1):
+        child = make_tree(config, int(config.dedispersion_tree_index(0, e)))
+        a = restrict_fine_vector(fac.apply_fine(v), parent, child)
+        b = restrict_fine_vector(dense.apply_fine(v), parent, child)
+        assert a.shape == b.shape
+        scale = max(np.max(np.abs(b)), 1e-300)
+        worst = max(worst, float(np.max(np.abs(a - b)) / scale))
+
+    assert worst < 1e-11, f'test_restriction_representation: worst relative difference {worst:.3g}'
+    atomic_print(f'    test_restriction_representation(r={r}, K={K}): factored and dense'
+                 f' parents agree to {worst:.3g} relative')
+
+
+def test_restriction_vs_sweep(r=6, subband_counts=(4,2,1), num_primary_trees=1,
+                              num_early_triggers=2, detrender=False):
+    """Proposition 1 itself, against the sweep.
+
+    The appendix "Variance maps of a config's trees are row-restrictions of one another" in
+    notes/variance_map.tex proves that the variance map of tree (gamma, e) is a subset of the
+    ROWS of the map of tree (gamma, 0). This sweeps every tree independently and checks that
+    element by element.
+
+    What makes this a test of the PROPOSITION rather than of the plumbing: the two sides are
+    computed by different trees -- different tree ranks, different subband tables, different
+    ReferenceTree and ReferencePfSquare instances -- and the multiplet map is rebuilt here
+    from toplevel band ranges, so no production row map is in the loop. (The two trees do
+    share an upstream chain, which is exactly what Proposition 1 assumes.)
+
+    Expect agreement at the float32 level, ~1e-6 relative, NOT bit-identity: the two
+    operators are equal, but the sweep evaluates them through different code paths at
+    different tree ranks, so the summation orders differ.
+
+    'detrender' exercises the part of the proposition that Proposition 2 does not have --
+    it assumes nothing about the upstream chain, so a Detrender2d must not disturb it.
+    """
+
+    from .brute_force import sweep_all_trees_dense
+
+    config = _make_test_config(r, subband_counts, num_primary_trees=num_primary_trees,
+                               num_early_triggers=num_early_triggers)
+    dparams = _make_test_detrender(config) if detrender else None
+    As = sweep_all_trees_dense(config, dparams, device='cpu')
+
+    worst, worst_where, npairs, nontrivial = 0.0, None, 0, 0
+
+    for gamma in range(int(config.num_primary_trees)):
+        iparent = int(config.dedispersion_tree_index(gamma, 0))
+        parent = make_tree(config, iparent)
+        fsp = parent.frequency_subbands
+        D = 1 << (parent.total_rank() - fsp.pf_rank)
+        M_p, P = int(fsp.M), int(parent.nprofiles)
+        nfreq = As[iparent].shape[1]
+        Ap = As[iparent].reshape(D, M_p, P, nfreq)
+
+        pband = {(parent.n_to_toplevel_flo(n), parent.n_to_toplevel_fhi(n)): n
+                 for n in range(int(fsp.N))}
+
+        for e in range(1, int(config.primary_trees[gamma].num_early_triggers) + 1):
+            ichild = int(config.dedispersion_tree_index(gamma, e))
+            child = make_tree(config, ichild)
+            fsc = child.frequency_subbands
+            M_c = int(fsc.M)
+            assert (1 << (child.total_rank() - fsc.pf_rank)) == D
+            assert int(child.nprofiles) == P
+            Ac = As[ichild].reshape(D, M_c, P, nfreq)
+
+            m_map = []
+            for mc in range(M_c):
+                nc = int(fsc.m_to_n[mc])
+                np_ = pband[(child.n_to_toplevel_flo(nc), child.n_to_toplevel_fhi(nc))]
+                m_map.append(int(fsp.n_to_mbase[np_]) + int(fsc.m_to_d[mc]))
+            if m_map != list(range(M_c)):
+                nontrivial += 1
+
+            for mc in range(M_c):
+                got, want = Ac[:, mc], Ap[:, m_map[mc]]
+                scale = max(float(np.max(np.abs(want))), 1e-300)
+                d = float(np.max(np.abs(got - want))) / scale
+                if d > worst:
+                    worst, worst_where = d, (gamma, e, mc)
+            npairs += 1
+
+    assert nontrivial > 0, \
+        'test_restriction_vs_sweep: every multiplet map was the contiguous prefix, so a wrong' \
+        ' row map could not have been caught (see test_apply_restriction for why)'
+
+    # Loose enough for float32 summation-order differences between two tree ranks, tight
+    # enough that a wrong row map (which mismatches whole bands) cannot pass.
+    assert worst < 1e-5, (f'test_restriction_vs_sweep: worst relative difference {worst:.3g}'
+                          f' at (gamma, e, m_child) = {worst_where}')
+
+    atomic_print(f'    test_restriction_vs_sweep(r={r}, subbands={list(subband_counts)},'
+                 f' npri={num_primary_trees}, net={num_early_triggers},'
+                 f' detrender={detrender}): {npairs} (parent, child) pairs,'
+                 f' {nontrivial} non-contiguous, worst relative difference {worst:.3g}')
 
 
 def _report_xdm_coverage(where, configs):
@@ -3214,6 +3542,9 @@ def run_all():
     test_reorthogonalize()
     test_basis_constructors()
     test_greedy_bookkeeping()
+    test_apply_restriction()
+    test_apply_restriction(L=3)
+    test_restriction_representation()
     test_map_steps()
     test_report()
 
@@ -3254,3 +3585,9 @@ def run_sweep_tests():
     # than the kernels.
     test_sweep_gpu_vs_cpu(8, [2, 2, 1], nbeams=4)
     test_sweep_gpu_vs_cpu(8, [2, 2, 1], num_early_triggers=1, detrender=True, nfreq=200)
+    # Proposition 1 of the appendix, against the sweep: an early-trigger tree's matrix IS a
+    # row subset of its (primary_tree_index, 0) parent's. The detrender case is not
+    # redundant -- Proposition 1 assumes nothing about the upstream chain, and that is the
+    # half of it Proposition 2 does not share.
+    test_restriction_vs_sweep(num_primary_trees=2)
+    test_restriction_vs_sweep(num_primary_trees=2, detrender=True)

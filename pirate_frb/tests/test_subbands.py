@@ -265,37 +265,54 @@ def test_frequency_subbands_parity(nrandom=200):
 ####################################################################################################
 #
 # Property (*): bands(ipri,iet) <= bands(ipri,0) == bands(0,0).
-
-
-def _tree_bands(tree):
-    """Set of (flo, fhi) toplevel tree-freq ranges searched by 'tree' (fhi EXCLUSIVE)."""
-
-    fs = tree.frequency_subbands
-    return { (tree.n_to_toplevel_flo(n), tree.n_to_toplevel_fhi(n)) for n in range(fs.N) }
+#
+# This is a property of the config-to-tree construction, and notes/variance_map.tex derives it
+# there (appendix "Variance maps of a config's trees are row-restrictions of one another",
+# fact (F2)), so the test is not establishing something that might have turned out otherwise.
+# What it checks is that DedispersionTree.{n,m}_index_mapping() -- which every caller of the
+# property goes through -- implement the containment correctly, in both directions, over a
+# wide spread of configs. The appendix cites this test as its witness, which is now
+# belt-and-braces rather than the only evidence.
 
 
 def _check_subband_property(config, label):
-    bands = {}
+    """Property (*), expressed through the index-mapping helpers.
+
+    m_index_mapping(parent, child) throws unless every band of 'child' is a band of 'parent'
+    (and unless matched bands have the same level), so a successful call IS the containment
+    assertion -- and a stricter one than a set comparison, which does not see levels.
+    """
+
+    trees = {}
 
     for itree in range(config.num_dedispersion_trees):
         # Dcore_from_cdd2_registry=False: subband geometry is pure arithmetic, and we do not
         # want to require that every tree's cdd2 kernel is compiled into this build.
         tree = DedispersionTree(config, itree, Dcore_from_cdd2_registry=False)
-        bands[(tree.primary_tree_index, tree.early_trigger_level)] = _tree_bands(tree)
+        trees[(tree.primary_tree_index, tree.early_trigger_level)] = tree
 
-    base = bands[(0,0)]
+    base = trees[(0,0)]
 
-    for (ipri, iet), b in sorted(bands.items()):
+    for (ipri, iet), t in sorted(trees.items()):
         if iet == 0:
-            assert b == base, \
-                f"{label}: tree (ipri={ipri}, iet=0) searches {sorted(b)}, but tree (0,0) " \
-                f"searches {sorted(base)}. Time-downsampling must not change the subband set."
+            # Set EQUALITY, which a single call cannot express: one call gives containment,
+            # so equality needs both argument orders. Both succeeding additionally shows the
+            # mapping is a bijection.
+            for (a, b, why) in [(base, t, f'tree (ipri={ipri}, iet=0) searches a band that tree (0,0) does not'),
+                                (t, base, f'tree (0,0) searches a band that tree (ipri={ipri}, iet=0) does not')]:
+                try:
+                    DedispersionTree.m_index_mapping(a, b)
+                except RuntimeError as e:
+                    raise AssertionError(f'{label}: {why}. Time-downsampling must not change'
+                                         f' the subband set.\n  {e}') from e
         else:
-            main = bands[(ipri,0)]
-            assert b <= main, \
-                f"{label}: tree (ipri={ipri}, iet={iet}) searches {sorted(b - main)}, which " \
-                f"tree (ipri={ipri}, iet=0) does not. An early trigger may remove subbands, " \
-                f"but must never add one."
+            try:
+                DedispersionTree.m_index_mapping(trees[(ipri,0)], t)
+            except RuntimeError as e:
+                raise AssertionError(f'{label}: tree (ipri={ipri}, iet={iet}) searches a band'
+                                     f' that tree (ipri={ipri}, iet=0) does not. An early'
+                                     f' trigger may remove subbands, but must never add'
+                                     f' one.\n  {e}') from e
 
 
 def test_subband_property(nrandom=8):

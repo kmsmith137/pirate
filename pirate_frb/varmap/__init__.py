@@ -8,10 +8,16 @@
 #
 # NOTE THE FILE FORMAT: asdf_io.py's format is not the older one that predates this package.
 # The reader refuses an old-format file by name rather than misreading it, and nothing can
-# read one any more.
+# read one any more. It is also at version 2, which holds one entry per PRIMARY tree; a
+# version-1 file (one entry per dedispersion tree) is likewise refused by name.
+#
+# A VarianceMap is a PRIMARY tree's map. An early-trigger tree's map is a subset of its
+# parent's ROWS, so it is derived rather than stored -- see VarianceMultiMap, and the
+# appendix "Variance maps of a config's trees are row-restrictions of one another" in
+# notes/variance_map.tex.
 from .distance import YTRUE_FLOOR, f, fprime, AdmissibilityResult, DistanceEstimate
 from .VarianceMap import VarianceMap
-from .VarianceMultiMap import VarianceMultiMap
+from .VarianceMultiMap import VarianceMultiMap, restrict_fine_vector
 from .lp import (LpConfig, solve_covering_lps, q_step, w_step, covering_lp_data,
                  majorizer_weights, repair_rows, repair_cols, repair_additive,
                  fix_nonneg, apply_repair, violation_stats, check_nonneg,

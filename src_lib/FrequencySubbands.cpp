@@ -45,6 +45,7 @@ FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_) :
 
             this->n_to_flo.push_back(b*s);
             this->n_to_fhi.push_back(b*s + pow2(level));
+            this->n_to_level.push_back(level);
             this->n_to_mbase.push_back(M);
 
             for (long d = 0; d < pow2(level); d++) {
@@ -59,6 +60,7 @@ FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_) :
 
     xassert_eq(m_to_n.size(), uint(M));
     xassert_eq(n_to_flo.size(), uint(N));
+    xassert_eq(n_to_level.size(), uint(N));
 }
 
 

@@ -251,6 +251,22 @@ struct DedispersionTree
     // Allocated in ordinary (unregistered) host memory, so this needs no CUDA device.
     ksgpu::Array<long> compute_steady_state_it0(const DedispersionConfig &config) const;
 
+    // These methods are intended for use in VarianceMap, but may be useful elsewhere.
+    //
+    // n_index_mapping(): length child.frequency_subbands.N. Entry n_c is the parent subband
+    //   searching the same toplevel band. Throws if the child's subbands are not a subset
+    //   of the parents's subbands.
+    //
+    // m_index_mapping(): length child.frequency_subbands.M. Entry m_c is the parent
+    //   multiplet with the same band and the same fine-DM index within it. Additionally
+    //   throws unless matched bands have the same subband level.
+
+    static std::vector<long> n_index_mapping(const DedispersionTree &parent,
+                                             const DedispersionTree &child);
+
+    static std::vector<long> m_index_mapping(const DedispersionTree &parent,
+                                             const DedispersionTree &child);
+
     // Yaml I/O for one tree: the per-tree entry of the DedispersionPlan yaml. Both
     // DedispersionPlan::to_yaml() and FrbGrouper's handshake go through these, so the
     // emitted and parsed field lists cannot drift apart.

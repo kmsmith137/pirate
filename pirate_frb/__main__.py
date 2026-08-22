@@ -440,18 +440,16 @@ def variance_map(args):
     config = DedispersionConfig.from_yaml(args.config_file)
     detrender = Detrender2dParams.from_yaml(args.detrender_file) if args.detrender_file else None
 
-    # ---- Config-level rejections. Collected rather than raised one at a time: no shipped
-    # config satisfies all of them, so a user editing a config would otherwise discover the
-    # requirements one run at a time.
+    # ---- Config-level rejections. Collected rather than raised one at a time, so that a
+    # user editing a config does not discover the requirements one run at a time.
+    #
+    # Only things the SWEEP cannot check for itself belong here. Device capabilities do not:
+    # _SweepGeometry and _GpuSweep check their own, and their messages name the kernel or the
+    # quantity at fault. A blanket rejection here drifts as those capabilities change -- this
+    # block used to refuse early triggers and num_primary_trees > 1 outright, which by the
+    # time it was removed was refusing configs that both sweeps handle (early triggers) and
+    # configs the CPU sweep handles (multiple primary trees).
     errs = []
-    if config.num_primary_trees > 1:
-        errs.append(f"num_primary_trees = {config.num_primary_trees}, expected 1 (this CLI"
-                    " does not support time-downsampled trees)")
-    for (i, pt) in enumerate(config.primary_trees):
-        if pt.num_early_triggers > 0:
-            errs.append(f"primary_trees[{i}].num_early_triggers ="
-                        f" {pt.num_early_triggers}, expected 0 (this CLI does not support"
-                        " early triggers)")
 
     if detrender is not None:
         # The two files carry three quantities in common. Beam counts are overridden rather
@@ -499,9 +497,10 @@ def variance_map(args):
 
     vmm.write_asdf(args.output)
 
-    nbytes = sum(m.nbytes() for m in vmm)
+    nbytes = sum(m.nbytes() for m in vmm.maps)
     atomic_print(f"variance_map: swept {vmm.provenance['npasses']} passes in {dt:.1f} s; wrote"
-                 f" {args.output} ({nbytes/2**20:.1f} MiB of float64 in {len(vmm)} tree(s))")
+                 f" {args.output} ({nbytes/2**20:.1f} MiB of float64 in"
+                 f" {vmm.num_primary_trees} primary tree(s), covering {vmm.ntrees} tree(s))")
 
 
 #########################################   time command  ##########################################

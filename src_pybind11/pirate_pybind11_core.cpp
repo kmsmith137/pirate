@@ -800,6 +800,7 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("m_to_d", &FrequencySubbands::m_to_d)
           .def_readonly("n_to_flo", &FrequencySubbands::n_to_flo)
           .def_readonly("n_to_fhi", &FrequencySubbands::n_to_fhi)
+          .def_readonly("n_to_level", &FrequencySubbands::n_to_level)
           .def_readonly("n_to_mbase", &FrequencySubbands::n_to_mbase)
           .def_readonly("f_to_freq", &FrequencySubbands::f_to_freq)
           .def_readonly("fmin", &FrequencySubbands::fmin)
@@ -1163,6 +1164,26 @@ void register_core_bindings(pybind11::module &m)
                "(EXCLUSIVE), matching ``FrequencySubbands.n_to_fhi``. Note\n"
                "``decode_argmax()`` reports an inclusive ``fmax``, i.e.\n"
                "``n_to_toplevel_fhi(n) - 1``.")
+          .def_static("n_index_mapping", &DedispersionTree::n_index_mapping,
+               py::arg("parent"), py::arg("child"),
+               "Subband index mapping between two trees of one config: a list of length\n"
+               "``child.frequency_subbands.N``, whose entry ``n_c`` is the ``parent``\n"
+               "subband searching the same toplevel band.\n\n"
+               "Bands are matched by toplevel range ``(n_to_toplevel_flo, n_to_toplevel_fhi)``,\n"
+               "so trees of different rank are comparable. Raises if ``child`` searches a band\n"
+               "``parent`` does not; the message says so if the arguments look reversed.\n\n"
+               "The usual pair is an early-trigger tree and its ``(primary_tree_index, 0)``\n"
+               "parent, but equal ``primary_tree_index`` is not required, and the identity\n"
+               "case ``(t, t)`` works. Calling both ways round tests set EQUALITY.")
+          .def_static("m_index_mapping", &DedispersionTree::m_index_mapping,
+               py::arg("parent"), py::arg("child"),
+               "As ``n_index_mapping()``, but over multiplets: a list of length\n"
+               "``child.frequency_subbands.M``, whose entry ``m_c`` is the ``parent``\n"
+               "multiplet with the same band and the same fine-DM index within it.\n\n"
+               "Additionally raises unless matched bands have the same subband level.\n\n"
+               "Does NOT check ``nprofiles`` or the coarse-DM count ``2**(total_rank -\n"
+               "pf_rank)``: those are not subband geometry, and a caller building a row map\n"
+               "over (dm, multiplet, profile) must check them itself.")
           .def_readonly("frequency_subbands", &DedispersionTree::frequency_subbands)
           .def_readonly("pf", &DedispersionTree::pf)
           .def_readonly("Dcore", &DedispersionTree::Dcore)

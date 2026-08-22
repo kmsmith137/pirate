@@ -767,6 +767,30 @@ class VarianceMap:
         return out
 
 
+    def apply_fine(self, freq_variances):
+        """apply(), lifted to FINE granularity: a length-nalpha array.
+
+        On a fine map this is apply() unchanged. On a coarse map it is apply() gathered by
+        alpha_to_beta_block(), i.e. every fine row takes its group's value -- the same
+        relation lift() expresses for the whole matrix, but on a vector, so it costs nalpha
+        rather than nalpha*nfreq and is safe at production scale.
+
+        This is what a caller wants when it will go on to select a SUBSET of the fine rows
+        (see VarianceMultiMap.apply()). Lifting first is what keeps a coarse-graining rank
+        for the subset from ever being needed.
+        """
+
+        y = self.apply(freq_variances)
+        if not self.is_coarse_grained:
+            return y
+
+        out = np.empty(self.nalpha)
+        for start in range(0, self.nalpha, self._ALPHA_BLOCK):
+            stop = min(start + self._ALPHA_BLOCK, self.nalpha)
+            out[start:stop] = y[self.alpha_to_beta_block(start, stop)]
+        return out
+
+
     def row_sums(self):
         """The length-nbeta vector ``sum_F A[.,F]``, i.e. ``apply(ones(nfreq))``. Cached.
 
@@ -2574,22 +2598,23 @@ class VarianceMap:
     # inside the methods rather than at module scope because it imports this module back.
 
     def write_asdf(self, filename, *, provenance=None):
-        """Write this map to 'filename', as a variance-map file holding one tree.
+        """Write this map to 'filename', as a variance-map file holding one primary tree.
 
         Same format as VarianceMultiMap.write_asdf()'s, with a one-element tree list. Read
-        it back with ``VarianceMap.from_asdf(filename, itree)``; it is also a complete
-        multimap file when the config has a single dedispersion tree, and not otherwise.
+        it back with ``VarianceMap.from_asdf(filename, gamma)``; it is also a complete
+        multimap file when the config has a single PRIMARY tree, and not otherwise.
         """
         from .asdf_io import write_map
         write_map(self, filename, provenance=provenance)
 
 
     @classmethod
-    def from_asdf(cls, filename, itree=0):
-        """Read one tree out of a variance-map file, eagerly.
+    def from_asdf(cls, filename, gamma=0):
+        """Read one primary tree's map out of a variance-map file, eagerly.
 
+        Takes GAMMA (primary_tree_index), not itree: a file's entries are primary trees.
         Unlike VarianceMultiMap.from_asdf() this does not require the file to cover every
-        tree of its config.
+        primary tree of its config.
         """
         from .asdf_io import read_map
-        return read_map(filename, itree)
+        return read_map(filename, gamma)

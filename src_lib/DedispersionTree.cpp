@@ -5,6 +5,7 @@
 #include "../include/pirate/utils.hpp"    // integer_log2()
 
 #include <sstream>
+#include <unordered_map>
 #include <ksgpu/xassert.hpp>
 #include <yaml-cpp/emitter.h>
 
@@ -148,6 +149,100 @@ long DedispersionTree::n_to_toplevel_flo(long n) const
 long DedispersionTree::n_to_toplevel_fhi(long n) const
 {
     return this->frequency_subbands.n_to_fhi.at(n) * _toplevel_channels_per_coarse_channel(*this);
+}
+
+
+// Helper for n_index_mapping()/m_index_mapping(): names a tree by the pair a caller thinks
+// in, for error messages.
+static string _tree_name(const DedispersionTree &t)
+{
+    stringstream ss;
+    ss << "(primary_tree_index=" << t.primary_tree_index
+       << ", early_trigger_level=" << t.early_trigger_level << ")";
+    return ss.str();
+}
+
+
+// Helper for n_index_mapping(): a tree's bands as toplevel (flo,fhi) pairs, packed into a
+// long. Both endpoints are bounded by pow2(constants::max_tree_rank), so the shift is safe.
+static std::unordered_map<long,long> _band_map(const DedispersionTree &t)
+{
+    std::unordered_map<long,long> ret;
+    for (long n = 0; n < t.frequency_subbands.N; n++)
+        ret[(t.n_to_toplevel_flo(n) << 32) | t.n_to_toplevel_fhi(n)] = n;
+    return ret;
+}
+
+
+// Static member function. See the doc-comment in DedispersionTree.hpp.
+vector<long> DedispersionTree::n_index_mapping(const DedispersionTree &parent, const DedispersionTree &child)
+{
+    std::unordered_map<long,long> pmap = _band_map(parent);
+    long Nc = child.frequency_subbands.N;
+    vector<long> ret(Nc);
+
+    for (long n = 0; n < Nc; n++) {
+        long flo = child.n_to_toplevel_flo(n);
+        long fhi = child.n_to_toplevel_fhi(n);
+        auto it = pmap.find((flo << 32) | fhi);
+
+        if (it == pmap.end()) {
+            // A two-argument function invites a swapped call, so check whether the reverse
+            // containment holds and say so if it does.
+            std::unordered_map<long,long> cmap = _band_map(child);
+            bool reversed = true;
+            for (const auto &kv : pmap)
+                reversed = reversed && (cmap.count(kv.first) > 0);
+
+            stringstream ss;
+            ss << "DedispersionTree::n_index_mapping(): child tree " << _tree_name(child)
+               << " searches toplevel band [" << flo << "," << fhi << "), which parent tree "
+               << _tree_name(parent) << " does not";
+            if (reversed)
+                ss << " (arguments may be reversed: every band of the parent IS a band of the child)";
+            throw runtime_error(ss.str());
+        }
+
+        ret[n] = it->second;
+    }
+
+    return ret;
+}
+
+
+// Static member function. See the doc-comment in DedispersionTree.hpp.
+vector<long> DedispersionTree::m_index_mapping(const DedispersionTree &parent, const DedispersionTree &child)
+{
+    const FrequencySubbands &fsp = parent.frequency_subbands;
+    const FrequencySubbands &fsc = child.frequency_subbands;
+
+    vector<long> nmap = n_index_mapping(parent, child);
+    vector<long> ret(fsc.M);
+
+    for (long m = 0; m < fsc.M; m++) {
+        long nc = fsc.m_to_n.at(m);
+        long np = nmap.at(nc);
+
+        // Bands are matched by toplevel range, so equal levels are a CONSEQUENCE (one
+        // coarse-freq channel is the same width in every tree of a config, so equal ranges
+        // force equal levels), not the matching criterion. This can never fire today; it is
+        // the tripwire for a future change that makes the channel width tree-dependent.
+        long lc = fsc.n_to_level.at(nc);
+        long lp = fsp.n_to_level.at(np);
+
+        if (lc != lp) {
+            stringstream ss;
+            ss << "DedispersionTree::m_index_mapping(): toplevel band ["
+               << child.n_to_toplevel_flo(nc) << "," << child.n_to_toplevel_fhi(nc)
+               << ") has subband level " << lc << " in child tree " << _tree_name(child)
+               << ", but level " << lp << " in parent tree " << _tree_name(parent);
+            throw runtime_error(ss.str());
+        }
+
+        ret[m] = fsp.n_to_mbase.at(np) + fsc.m_to_d.at(m);
+    }
+
+    return ret;
 }
 
 
