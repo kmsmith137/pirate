@@ -241,6 +241,9 @@ The output array has shape $(2^{r-R}, M, N_{\rm time})$, where $M$ is the number
 \begin{equation}
 M \equiv \sum_{l=0}^R 2^l C_l  \label{eq:multiplet_def}
 \end{equation}
+The code requires $R \le 4$ ({\tt constants::max\_peak\_finding\_rank}), so saturating the bounds
+on $C_l$ above gives $C_l = [16,15,7,3,1]$, and hence $N \le 42$ and $M \le 114$.
+
 Each subband $(l,s)$ ``owns'' a shape $(2^{r-R}, 2^l, N_{\rm time})$ subarray of the output.
 The first two axes correspond to $2^{r-R+l}$ dispersion delays across the subband, split into a ``coarse'' index
 $0 \le d_{\rm hi} < 2^{r-R}$ and a ``fine'' index  $0 \le d_{\rm lo} < 2^l$.
