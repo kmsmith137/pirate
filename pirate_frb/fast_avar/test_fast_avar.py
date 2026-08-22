@@ -75,6 +75,24 @@ def test_cpp_sparse_tile_triple():
         (cm.shape, ifreq, nsteps, float(np.abs(got - want).max()))
 
 
+def test_cpp_predict_dbits():
+    """C++ SparseTile::predict_dbits() vs the python SparseTile._predict_dbits().
+
+    Exhaustive over a small (kmax, f0, nf) grid, and exact (both sides return an int, so there
+    is no tolerance). This test is only about the port: that the prediction agrees with the real
+    iteration is checked on the python side, by SparseTile.test_predict_dbits().
+    """
+    ncases = 0
+    for kmax in range(0, 7):
+        for f0 in range(0, 1 << 7):
+            for nf in range(1, (1 << 7) - f0 + 1):
+                got = SparseTile.predict_dbits(kmax, f0, nf)     # bound under the C++ name
+                want = slow_avar.SparseTile._predict_dbits(kmax, f0, nf)
+                assert got == want, (kmax, f0, nf, got, want)
+                ncases += 1
+    assert ncases == 57792, ncases     # tripwire: the sweep must not silently shrink
+
+
 def _make_cpp_tile(t):
     # Build a C++ SparseTile equivalent to a python SparseTile 't'.
     return SparseTile(int(t.r), int(t.k), int(t.f0), int(t.nf), int(t.nt), int(t.dbits),

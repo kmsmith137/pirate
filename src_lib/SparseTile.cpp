@@ -117,6 +117,77 @@ void SparseTile::dd_tshifts(long k, long *out)
 }
 
 
+// Closed-form 'dbits' for an f-range, after 'kmax' iteration steps -- no iteration, no data.
+// C++ port of pirate_frb/slow_avar/SparseTile.py::_predict_dbits(); keep the two in sync (they
+// are compared by test_fast_avar.py::test_cpp_predict_dbits()).
+//
+// The function is TOTAL: there is no precondition relating 'kmax' to (f0, nf). When the range
+// collapses to a single level-kmax tile -- i.e. (f0 >> kmax) == ((f0+nf-1) >> kmax) -- the
+// return value is exactly that tile's dbits. Otherwise the range covers several level-kmax
+// tiles, whose dbits differ, and the return value is their UNION: the smallest pattern that
+// suffices for every f-index in the range. A caller who wants one specific tile F, rather than
+// the union, clips to that tile's block first:
+//
+//    long lo = std::max(f0, F << kmax);
+//    long hi = std::min(f0 + nf - 1, ((F+1) << kmax) - 1);
+//    long dbits_of_tile_F = predict_dbits(kmax, lo, hi - lo + 1);
+
+long SparseTile::predict_dbits(long kmax, long f0, long nf)
+{
+    // The upper bound on 'kmax' is not decoration: the return value shifts left by up to kmax,
+    // so an unbounded kmax would be a shift overflow (UB). The python twin asserts the same
+    // bound, even though python would not overflow, so that the two behave identically.
+    xassert(kmax >= 0 && kmax <= constants::max_tree_rank);
+    xassert(f0 >= 0);
+    xassert(nf >= 1);
+
+    // Iterating sets bits of 'dbits' one level at a time (iterate_aligned() saturates to all
+    // bits, iterate_singletons() sets bit 0 when both halves are present, and iterate_lower() /
+    // iterate_upper() just shift). Writing a = f0, b = f0+nf-1 and span(j) = (b>>j) - (a>>j),
+    // the recurrence is
+    //
+    //    span(j+1) = (span(j) + a_j) / 2,     a_j = bit j of f0
+    //
+    // and step j sets a bit iff the span strictly drops, i.e. iff span(j) > a_j. That gives
+    // three phases: span >= 2 drops at every step (since a_j <= 1); span == 1 drops iff
+    // a_j == 0, and that drop ends it (span goes to 0 and stays); span == 0 does nothing
+    // further. So 'dbits' is always a run of high bits plus one isolated lower bit -- never an
+    // arbitrary pattern.
+
+    long d = nf - 1;
+    if (d == 0)
+        return 0;                              // a single channel resolves no delays
+
+    // j1 = length of the leading run, i.e. the number of steps with span >= 2. With
+    // e = bit_length(d): for j <= e-2 we have span(j) >= d >= 2^(j+1) >= 2, and for j >= e we
+    // have span(j) <= 1 (since d <= 2^j). Only j == e-1 is undecided, and one comparison
+    // settles it. Beware: j1 genuinely depends on 'nf', so it CANNOT be read off f0's bit
+    // pattern alone (f0=1 gives j1=0 at b=2, but j1=1 at b=3).
+
+    long e = bit_length(d);                    // 2^(e-1) <= d < 2^e
+    long j1 = ((f0 & ((1L << (e-1)) - 1)) + d < (1L << e)) ? (e-1) : e;
+
+    // h = position of the isolated bit: the highest bit where the two ends of the range differ,
+    // hence the level at which they lie in adjacent blocks but share the block above
+    // (span(h) == 1 and span(h+1) == 0). Always h >= j1, since span == 1 throughout [j1, h] --
+    // so the run and the isolated bit never collide below.
+
+    long h = bit_length(f0 ^ (f0 + d)) - 1;
+
+    // A bit set at step j is left-shifted once per subsequent step, so after kmax steps it sits
+    // at position (kmax-1-j). A step j >= kmax HAS NOT HAPPENED YET, so its bit is simply
+    // absent: truncate the run at kmax, and include the isolated bit only when h < kmax. This
+    // truncation is what makes the function total, and it is also what makes the union come out
+    // right for a range straddling a level-kmax boundary.
+
+    j1 = std::min(j1, kmax);
+    long out = ((1L << j1) - 1) << (kmax - j1);
+    if (h < kmax)
+        out |= 1L << (kmax - 1 - h);
+    return out;
+}
+
+
 SparseTile SparseTile::iterate_aligned(const SparseTile &t)
 {
     long k = t.k;

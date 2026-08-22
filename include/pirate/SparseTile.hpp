@@ -72,6 +72,12 @@ struct SparseTile
     static long eval_tshifts(long d, long dbits, const long *tshifts);
     static void dd_tshifts(long k, long *out);    // out has length k+1
 
+    // 'dbits' after iterating the f-range [f0, f0+nf) for 'kmax' steps from level 0. Note that
+    // 'kmax' is a STEP COUNT, not a level index (elsewhere in this class, 'k' is the current
+    // level). If the range spans several level-kmax tiles, whose dbits differ, the return value
+    // is the union of their dbits; see the .cpp for the semantics and the derivation.
+    static long predict_dbits(long kmax, long f0, long nf);
+
     // Test-only: densify to a (nf, 2^k, ntime) array. Not used in production.
     ksgpu::Array<double> unpack(long ntime) const;
 

@@ -135,6 +135,81 @@ class SparseTile:
         """Returns the lower-half time shifts used in DD(k), as a 'tshift' array of length (k+1)."""
         return np.array([1] + [1 << (j - 1) for j in range(1, k + 1)], dtype=np.int64)
 
+    @staticmethod
+    def _predict_dbits(kmax, f0, nf):
+        """Returns the 'dbits' produced by iterating the f-range [f0, f0+nf) for 'kmax' steps.
+
+        Note that 'kmax' is a STEP COUNT, not a level index: the return value is the 'dbits'
+        of a tile with k == kmax, reached by starting at k == 0 and iterating kmax times.
+        (Everywhere else in this file, 'k' is the current level and 'r' is the rank.)
+
+        This is a closed form -- 'dbits' depends on the f-range and nothing else, so neither
+        iteration nor data is needed. It is total: there is no precondition relating 'kmax'
+        to (f0, nf).
+
+        If the range spans several level-kmax tiles, whose dbits differ, the return value is
+        the UNION (bitwise OR) of their dbits, i.e. the smallest pattern that suffices for
+        every f-index in the range. When the range collapses to a single level-kmax tile
+        (i.e. (f0 >> kmax) == ((f0+nf-1) >> kmax)), the answer is exactly that tile's dbits.
+        A caller who wants one specific tile F, rather than the union, clips to that tile's
+        block first:
+
+          lo = max(f0, F << kmax)
+          hi = min(f0 + nf - 1, ((F+1) << kmax) - 1)
+          dbits_of_tile_F = SparseTile._predict_dbits(kmax, lo, hi - lo + 1)
+        """
+
+        from ..pirate_pybind11 import constants   # lazy: keep this module's top level pybind-free
+
+        # The upper bound on kmax is not decoration: the return value shifts left by up to
+        # kmax, which in the C++ twin (SparseTile::predict_dbits) is a shift overflow. Python
+        # would not overflow, but the two implementations must behave identically -- see
+        # fast_avar/test_fast_avar.py:test_cpp_predict_dbits().
+        assert 0 <= kmax <= constants.max_tree_rank, (kmax, f0, nf)
+        assert f0 >= 0, (kmax, f0, nf)
+        assert nf >= 1, (kmax, f0, nf)
+
+        # Iterating sets bits of 'dbits' one level at a time (iterate_aligned() saturates to
+        # all bits, iterate_singletons() sets bit 0 when both halves are present, and
+        # _iterate_lower()/_iterate_upper() just shift). Writing a = f0, b = f0+nf-1 and
+        # span(j) = (b >> j) - (a >> j), the recurrence is
+        #
+        #    span(j+1) = (span(j) + a_j) // 2,     a_j = bit j of f0
+        #
+        # and step j sets a bit iff the span strictly drops, i.e. iff span(j) > a_j. That
+        # gives three phases: span >= 2 drops at every step (since a_j <= 1); span == 1 drops
+        # iff a_j == 0, and that drop ends it (span goes to 0 and stays); span == 0 does
+        # nothing further. So 'dbits' is always a run of high bits plus one isolated lower
+        # bit -- never an arbitrary pattern.
+        d = nf - 1
+        if d == 0:
+            return 0                              # a single channel resolves no delays
+
+        # j1 = length of the leading run, i.e. the number of steps with span >= 2. With
+        # e = bit_length(d): for j <= e-2 we have span(j) >= d >= 2^(j+1) >= 2, and for
+        # j >= e we have span(j) <= 1 (since d <= 2^j). Only j == e-1 is undecided, and one
+        # comparison settles it. Beware: j1 genuinely depends on 'nf', so it CANNOT be read
+        # off f0's bit pattern alone (f0=1 gives j1=0 at b=2, but j1=1 at b=3).
+        e = d.bit_length()                        # 2^(e-1) <= d < 2^e
+        j1 = (e - 1) if ((f0 & ((1 << (e - 1)) - 1)) + d < (1 << e)) else e
+
+        # h = position of the isolated bit: the highest bit where the two ends of the range
+        # differ, hence the level at which they lie in adjacent blocks but share the block
+        # above (span(h) == 1 and span(h+1) == 0). Always h >= j1, since span == 1 throughout
+        # [j1, h] -- so the run and the isolated bit never collide below.
+        h = (f0 ^ (f0 + d)).bit_length() - 1
+
+        # A bit set at step j is left-shifted once per subsequent step, so after kmax steps it
+        # sits at position (kmax-1-j). A step j >= kmax HAS NOT HAPPENED YET, so its bit is
+        # simply absent: truncate the run at kmax, and include the isolated bit only when
+        # h < kmax. This truncation is what makes the function total, and it is also what
+        # makes the union come out right for a range straddling a level-kmax boundary.
+        j1 = min(j1, kmax)
+        out = ((1 << j1) - 1) << (kmax - j1)
+        if h < kmax:
+            out |= 1 << (kmax - 1 - h)
+        return out
+
     # ----------------------------- tile-level DD(k) ops -----------------------------
 
     @staticmethod
@@ -333,6 +408,55 @@ class SparseTile:
             if sh < ntime:
                 out[:, dp, sh:] += rsqrt2 * dense_in[0::2, d, :ntime - sh]   # lower (2F), shift sh
         return out
+
+    @staticmethod
+    def test_predict_dbits():
+        """_predict_dbits() vs the dbits obtained by actually iterating a SparseTileTriple.
+
+        Exhaustive rather than randomized: the state space is tiny and the property is exact.
+        Checks BOTH of _predict_dbits()'s claims -- clipped to one level-kmax tile it gives that
+        tile's dbits exactly, and over the whole f-range it gives the union of the tiles' dbits
+        -- at every level, not just at the level where the range collapses to one tile.
+        """
+
+        # Named cases, spelled out for the reader.
+        for kmax in range(0, 9):
+            assert SparseTile._predict_dbits(kmax, 17, 1) == 0                     # one channel
+            assert SparseTile._predict_dbits(kmax, 0, 1 << kmax) == (1 << kmax) - 1  # full band
+            # Two channels straddling a level-kmax boundary: one channel in each block, so
+            # neither block resolves a delay, and the merge happens one step past the window.
+            # An implementation that dropped the truncation would attempt a negative shift here.
+            assert SparseTile._predict_dbits(kmax, (1 << kmax) - 1, 2) == 0
+
+        ntile_asserts = 0
+        for r in range(3, 7):
+            for f0 in range(0, 1 << r):
+                for nf in range(1, (1 << r) - f0 + 1):
+                    # Level-0 triple over [f0, f0+nf). The prediction does not look at the data,
+                    # so any nonzero data will do (np.ones makes a failure easier to read).
+                    triple = SparseTileTriple(
+                        r, 0, f0, nf,
+                        [SparseTile(r=r, k=0, f0=c0, nf=c1 - c0, nt=1, dbits=0,
+                                    data=np.ones((c1 - c0, 1, 1)),
+                                    tshifts=np.zeros(0, dtype=np.int64))
+                         for (c0, c1) in SparseTileTriple._tile_bounds(f0, nf)])
+
+                    for kmax in range(0, r + 1):
+                        acc = 0
+                        for tile in triple.tiles:
+                            # Clip the range to this tile's level-kmax block: exact, not a union.
+                            lo = max(f0, tile.f0 << kmax)
+                            hi = min(f0 + nf - 1, ((tile.f0 + 1) << kmax) - 1)
+                            got = SparseTile._predict_dbits(kmax, lo, hi - lo + 1)
+                            assert tile.dbits == got, (r, f0, nf, kmax, tile.f0, tile.dbits, got)
+                            acc |= tile.dbits
+                            ntile_asserts += 1
+                        got = SparseTile._predict_dbits(kmax, f0, nf)
+                        assert acc == got, (r, f0, nf, kmax, acc, got)
+                        if kmax < r:
+                            triple = triple.iterate()   # iterate() asserts k < r; not at kmax == r
+
+        assert ntile_asserts > 40000, ntile_asserts   # tripwire: the sweep must not silently shrink
 
     @staticmethod
     def test_random_remap_d():

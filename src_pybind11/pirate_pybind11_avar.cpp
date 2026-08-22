@@ -61,6 +61,8 @@ void register_avar_bindings(pybind11::module &m)
             return out;
         })
         .def("unpack", &SparseTile::unpack, py::arg("ntime"))
+        .def_static("predict_dbits", &SparseTile::predict_dbits,
+                    py::arg("kmax"), py::arg("f0"), py::arg("nf"))
     ;
 
     // ------------------------------------------------------------------------ SparseTileTriple
