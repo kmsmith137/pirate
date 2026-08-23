@@ -87,10 +87,23 @@ def _subband_tables(tree):
     m_to_n is the frequency subband of each multiplet: the only part of the alpha -> beta map
     that is not arithmetic. The other two are derived from it, and are what group_sizes() and
     group_members() index through.
+
+    BOTH DERIVED ARRAYS ASSUME m_to_n IS NON-DECREASING -- a count and a cumulative sum only
+    give the right multiplet base if each subband owns a contiguous run of multiplets IN
+    INCREASING SUBBAND ORDER. FrequencySubbands builds them that way, so the check below is a
+    tripwire on that C++ ordering rather than a real case; it is here rather than at the
+    consumers because it is this function's own precondition, and because a violation is
+    silent -- n_to_mbase would simply point at the wrong multiplets. coarse_grain_vector()
+    relies on it too.
     """
 
     fs = tree.frequency_subbands
     m_to_n = np.asarray(fs.m_to_n, dtype=np.int64)
+
+    if np.any(np.diff(m_to_n) < 0):
+        raise RuntimeError(f'VarianceMap: this tree has a non-monotone m_to_n ({list(m_to_n)}),'
+                           ' so a subband does not own a contiguous run of multiplets in'
+                           ' increasing order, which the index convention requires')
 
     # Subband n owns 2^level(n) consecutive multiplets, so its level and multiplet base fall
     # out of a count and a cumulative sum.
@@ -102,6 +115,62 @@ def _subband_tables(tree):
         raise RuntimeError(f'VarianceMap: per-subband multiplet counts {counts} are not all'
                            ' powers of two, which the index convention requires')
     return m_to_n, n_level, n_to_mbase
+
+
+def coarse_grain_vector(tree, y, L):
+    """Max-reduce a length-nalpha vector to the length-nbeta coarse groups at rank L.
+
+    ``out[beta] = max over alpha in beta of y[alpha]``, with the module docstring's index
+    conventions and ``R <= L <= r``. This is coarse_grain()'s reduction applied to a VECTOR:
+    use it for anything indexed by alpha that is not the matrix -- y_true, one column of A, a
+    per-row statistic.
+
+    Takes a ``tree`` rather than a VarianceMap because its callers have a tree and may not
+    have a map: the brute-force sweep reduces one column per input channel while the matrix
+    is still being built.
+
+    LABEL-FREE, which is why this is not simply alpha_to_beta_block() plus
+    np.maximum.reduceat. The two fixed shapes of the index convention make it a reshape and
+    two reductions: y is ``(D, M, P)`` in C order, subband n owns a CONTIGUOUS multiplet
+    range, and the coarse DM index is a dyadic block of d. The label form would cost a random
+    gather of nalpha elements, which is the dominant term at CHORD's row count and is paid
+    once per swept channel.
+
+    The price is an assumption STRONGER than alpha_to_beta_block()'s: multiplets must be
+    ordered BY SUBBAND, not merely grouped by it. That is _subband_tables()' own precondition
+    and is checked there, so a tree that violated it could not be used to build a VarianceMap
+    either.
+
+    TWO THINGS THIS DOES NOT DO, both of which coarse_grain() does:
+
+      - COARSE-TO-COARSER. The input is always indexed by alpha, never by beta.
+      - ROW BLOCKING. It reduces the whole vector at once, which is what makes it label-free.
+        That is cheaper in memory than the blocked label form anyway -- the only temporary is
+        the (D, N, P) intermediate, which is at most nbeta and is the output for L == R.
+    """
+
+    fs = tree.frequency_subbands
+    r, R = int(tree.total_rank()), int(fs.pf_rank)
+    N, M, P = int(fs.N), int(fs.M), int(tree.nprofiles)
+    D = 1 << (r - R)
+
+    L = int(L)
+    if not (R <= L <= r):
+        raise RuntimeError(f'coarse_grain_vector: L={L} is out of range [R, r] ='
+                           f' [{R}, {r}]')
+
+    y = np.asarray(y)
+    if y.shape != (D * M * P,):
+        raise RuntimeError(f'coarse_grain_vector: expected a length-{D * M * P} vector'
+                           f' (2^(r-R) * M * P, the FINE index), got shape {y.shape}')
+
+    _, _, mbase = _subband_tables(tree)                # also checks the multiplet ordering
+
+    x = np.maximum.reduceat(y.reshape(D, M, P), mbase, axis=1)          # (D, N, P)
+    f = 1 << (L - R)
+    if f > 1:
+        x = x.reshape(D // f, f, N, P).max(axis=1)                      # (2^(r-L), N, P)
+    return x.reshape(-1)
 
 
 def _readonly(a):
@@ -2587,14 +2656,7 @@ class VarianceMap:
             raise RuntimeError('VarianceMap.check_ref_covers_y_true: y_true is unavailable')
 
         s = self.row_sums()
-        ymax = np.zeros(self.nbeta)
-        for start in range(0, self.nalpha, self._ALPHA_BLOCK):
-            stop = min(start + self._ALPHA_BLOCK, self.nalpha)
-            lab = self.alpha_to_beta_block(start, stop)
-            order = np.argsort(lab, kind='stable')
-            uniq, first = np.unique(lab[order], return_index=True)
-            seg = np.maximum.reduceat(self.y_true[start:stop][order], first)
-            ymax[uniq] = np.maximum(ymax[uniq], seg)
+        ymax = coarse_grain_vector(self.tree, self.y_true, self.L)
 
         with np.errstate(divide='ignore', invalid='ignore'):
             ratio = np.where(ymax > 0, s / ymax, np.inf)

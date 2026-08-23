@@ -41,7 +41,7 @@ import time
 import numpy as np
 
 from ..utils import atomic_print
-from .VarianceMap import VarianceMap, make_tree, _subband_tables
+from .VarianceMap import VarianceMap, make_tree, coarse_grain_vector, _subband_tables
 from .VarianceMultiMap import VarianceMultiMap
 
 
@@ -962,26 +962,6 @@ def _alloc(shape, scratch_dir, tag):
     return np.memmap(path, dtype=np.float64, mode='w+', shape=shape), path
 
 
-def _coarse_reduce(col, D, mbase, f, N, P):
-    """One column's max-reduction into its coarse groups: ``(nalpha,) -> (nbeta,)``.
-
-    This is coarse_grain()'s reduction, done without a label array. The two fixed shapes of
-    the index convention are what make that possible: a column is ``(D, M, P)`` in C order,
-    subband n owns a CONTIGUOUS multiplet range, and the coarse DM index is a dyadic block of
-    d -- so the reduction is a reduceat over m followed by a max over a reshaped axis, with no
-    gather. That matters at scale: the label form costs a random gather of nalpha elements per
-    column, which is the dominant term at CHORD's row count.
-
-    Bit-identity with coarse_grain() is a unit test (test_sweep_streaming_coarse), and max
-    being exact is what makes it achievable at all.
-    """
-
-    x = np.maximum.reduceat(col.reshape(D, -1, P), mbase, axis=1)      # (D, N, P)
-    if f > 1:
-        x = x.reshape(D // f, f, N, P).max(axis=1)                     # (D/f, N, P)
-    return x.reshape(-1)
-
-
 def _flush_stage(stage, out, sel, n, nrows, *, tile_rows=4096):
     """``out[:, sel] = stage[:n].T``, TILED OVER ROWS.
 
@@ -1044,7 +1024,7 @@ class _Accumulator:
         self.transpose_seconds = 0.0
         self.gmin, self.gmax = np.inf, -np.inf
 
-        self.A, self.stage, self.y, self.nrows, self.red = [], [], [], [], []
+        self.A, self.stage, self.y, self.nrows, self.trees = [], [], [], [], []
         self.staged = []       # input channels currently held in the buffers, in order
 
         for itree in range(geom.ntrees):
@@ -1067,26 +1047,22 @@ class _Accumulator:
 
             L = self.Ls[itree]
             if L is None:
-                nrows, red = geom.tree_nalpha[itree], None
+                nrows = geom.tree_nalpha[itree]
             else:
+                # coarse_grain_vector() checks this too, but it is a CALLER error and a
+                # sweep is hours long, so it is worth catching before the loop rather than
+                # on the first column -- by which point __init__ has already allocated an
+                # accumulator per tree, and possibly scratch files.
                 if not (R <= L <= r):
                     raise RuntimeError(f'_Accumulator: tree {itree} was given L={L}, which is'
                                        f' out of range [R, r] = [{R}, {r}]')
                 nrows = (1 << (r - L)) * N * P
-                m_to_n, _, mbase = _subband_tables(tree)
-                # _coarse_reduce() reduces segments of the multiplet axis, so it needs each
-                # subband's multiplets to be contiguous AND in increasing subband order --
-                # a stronger assumption than alpha_to_beta_block()'s, which indexes m_to_n
-                # directly and would survive any ordering. Checked here, where it is made.
-                if np.any(np.diff(m_to_n) < 0):
-                    raise RuntimeError(
-                        f'_Accumulator: tree {itree} has a non-monotone m_to_n, so a subband'
-                        ' does not own a contiguous run of multiplets and the streaming'
-                        ' reduction would silently mix subbands. Sweep with L=None and'
-                        ' coarse_grain() afterwards.')
-                red = (D, mbase, 1 << (L - R), N, P)
+                # Called for its side effect: coarse_grain_vector() assumes this tree's
+                # multiplet ordering once per swept column, and this is where that assumption
+                # can still be reported cheaply.
+                _subband_tables(tree)
             self.nrows.append(nrows)
-            self.red.append(red)
+            self.trees.append(tree)
 
             # Zeroed, not -inf as coarse_grain() uses: A is a sum of squares, so the
             # max-reduction never sees a negative, and every group is occupied for
@@ -1145,14 +1121,14 @@ class _Accumulator:
             self.gmin, self.gmax = min(self.gmin, cmin), max(self.gmax, cmax)
             self.y[itree] += col
 
-            red = self.red[itree]
-            val = col if (red is None) else _coarse_reduce(col, *red)
+            L = self.Ls[itree]
+            val = col if (L is None) else coarse_grain_vector(self.trees[itree], col, L)
             row = self.stage[itree][k]
             if fresh:
                 # ASSIGN, not accumulate: the buffer is reused across flushes, so a fresh row
                 # still holds the previous block's channel.
                 row[:] = val
-            elif red is None:
+            elif L is None:
                 row += val
             else:
                 np.maximum(row, val, out=row)

@@ -19,7 +19,7 @@
 # appendix "Variance maps of a config's trees are row-restrictions of one another" in
 # notes/variance_map.tex.
 from .distance import YTRUE_FLOOR, f, fprime, AdmissibilityResult, DistanceEstimate
-from .VarianceMap import VarianceMap
+from .VarianceMap import VarianceMap, coarse_grain_vector
 from .VarianceMultiMap import VarianceMultiMap, restrict_fine_vector
 from .lp import (LpConfig, solve_covering_lps, q_step, w_step, covering_lp_data,
                  majorizer_weights, repair_rows, repair_cols, repair_additive,

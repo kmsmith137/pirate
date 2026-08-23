@@ -68,7 +68,7 @@ import inspect
 import numpy as np
 
 from .distance import YTRUE_FLOOR
-from .VarianceMap import VarianceMap, make_tree
+from .VarianceMap import VarianceMap, coarse_grain_vector, make_tree
 from .VarianceMultiMap import VarianceMultiMap
 from ..utils import atomic_print
 
@@ -229,10 +229,21 @@ def test_index_arithmetic(r=8, subband_counts=(2,2,1), num_early_triggers=1):
                 members = m.group_members(int(b), L)
                 assert np.array_equal(np.sort(members), np.flatnonzero(beta == b)), (L, b)
 
+            # coarse_grain_vector() is LABEL-FREE -- a reshape and two reductions, exploiting
+            # the two fixed shapes -- so 'beta' above is a genuinely independent oracle for
+            # it, derived from each row's full-resolution DM rather than from any arithmetic
+            # it shares. Requiring EXACT equality is legitimate here and elsewhere in this
+            # file: max is exact, so the reduction order cannot matter.
+            y = rng.uniform(0.5, 1.5, size=m.nalpha)
+            want = np.full(nbeta, -np.inf)
+            np.maximum.at(want, beta, y)
+            assert np.array_equal(coarse_grain_vector(m.tree, y, L), want), (itree, L)
+
         # A fine map's default is the identity, not "coarse at L = R".
         assert np.array_equal(m.alpha_to_beta_block(0, m.nalpha), np.arange(m.nalpha))
 
-    atomic_print(f'    test_index_arithmetic(r={r}, subbands={list(subband_counts)}): pass')
+    atomic_print(f'    test_index_arithmetic(r={r}, subbands={list(subband_counts)}): pass'
+                 ' (including coarse_grain_vector against the same label oracle)')
 
 
 def test_constructor_validation(r=7, subband_counts=(2,1)):
