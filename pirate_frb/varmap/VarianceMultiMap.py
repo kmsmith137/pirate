@@ -55,6 +55,66 @@ def restrict_fine_vector(y, parent_tree, child_tree):
     return y.reshape(D_p, M_p, P_p)[:, m_map, :]
 
 
+def expand_fine_vectors(config, per_primary, *, trees=None):
+    """Length-ntrees list of (D, M, P) arrays from one FINE vector per PRIMARY tree.
+
+    'per_primary' is one flat, length-nalpha array per primary tree, in gamma order; the
+    result is indexed by ITREE, and each entry is in its own tree's geometry. Every entry is
+    fresh: a parent's is a reshaped view of what the caller passed in, and a child's is a
+    copy.
+
+    THE CHILD TREES COME FROM PROPOSITION 1 of the appendix "Variance maps of a config's trees
+    are row-restrictions of one another" in notes/variance_map.tex: an early-trigger tree's
+    map is a subset of its parent's ROWS, and row selection commutes with A @ v, so its result
+    is the corresponding subset of the parent's. See restrict_fine_vector(), which is the row
+    map. Nothing here assumes anything about the upstream chain, so unlike Proposition 2 this
+    holds with a detrender too.
+
+    THE PARENT IS THE LAST TREE OF ITS FAMILY, not the first: early_trigger_level DESCENDS
+    within a family, so iparent is NOT itree - e. That trap is the reason this is one function
+    rather than a loop each caller writes.
+
+    'trees' is the per-ITREE DedispersionTree tuple, if the caller already has one;
+    None builds them, which costs 0.06 ms for chord_sb2_et's ten.
+    """
+
+    npri = int(config.num_primary_trees)
+    per_primary = list(per_primary)
+    if len(per_primary) != npri:
+        raise RuntimeError(f'expand_fine_vectors: got {len(per_primary)} vectors for {npri}'
+                           ' primary trees. One per PRIMARY tree is required, in gamma order'
+                           ' -- a short list would leave holes in the result.')
+
+    ntrees = int(config.num_dedispersion_trees)
+    if trees is None:
+        trees = [DedispersionTree(config, i, Dcore_from_cdd2_registry=False)
+                 for i in range(ntrees)]
+
+    out = [None] * ntrees
+
+    for gamma in range(npri):
+        # See the appendix's fact (a): every primary tree HAS an e == 0 tree, so this lookup
+        # cannot fail.
+        iparent = int(config.dedispersion_tree_index(gamma, 0))
+        parent = trees[iparent]
+        y = np.asarray(per_primary[gamma])
+
+        D = 1 << (int(parent.total_rank()) - int(parent.frequency_subbands.pf_rank))
+        M, P = int(parent.frequency_subbands.M), int(parent.nprofiles)
+        if y.shape != (D * M * P,):
+            raise RuntimeError(f'expand_fine_vectors: primary tree {gamma} needs a flat'
+                               f' length-{D*M*P} FINE vector, got shape {y.shape}')
+        out[iparent] = y.reshape(D, M, P)
+
+        net = int(config.primary_trees[gamma].num_early_triggers)
+        for e in range(1, net + 1):
+            ichild = int(config.dedispersion_tree_index(gamma, e))
+            out[ichild] = restrict_fine_vector(y, parent, trees[ichild])
+
+    assert all(x is not None for x in out)
+    return out
+
+
 class VarianceMultiMap:
     """One VarianceMap per PRIMARY tree of a DedispersionConfig.
 
@@ -244,33 +304,17 @@ class VarianceMultiMap:
 
         A child tree's entry is computed from its parent's WITHOUT ever forming a child
         matrix: apply the parent's map, lift the result to fine granularity, and select the
-        child's rows (Proposition 1; see restrict_fine_vector). At CHORD the (3,3) child's
-        dense matrix is 12.0 GiB while this result is 0.44 MiB.
+        child's rows. At CHORD the (3,3) child's dense matrix is 12.0 GiB while this result is
+        0.44 MiB. That last step is expand_fine_vectors(), which this shares with
+        compute_detrender_free_varfine() -- see it for Proposition 1 and for the
+        parent-is-the-last-tree trap.
 
         The lift comes BEFORE the restriction on purpose -- see coarse_grain().
         """
 
-        out = [None] * self.ntrees
-
-        for gamma in range(self.num_primary_trees):
-            # See the appendix's fact (a): every primary tree HAS an e == 0 tree, so this
-            # lookup cannot fail. Note iparent is not itree - e; early_trigger_level DESCENDS
-            # within a family, so the parent is the LAST tree of its block.
-            iparent = int(self.config.dedispersion_tree_index(gamma, 0))
-            parent = self.trees[iparent]
-            y = self.maps[gamma].apply_fine(freq_variances)
-
-            D = 1 << (int(parent.total_rank()) - int(parent.frequency_subbands.pf_rank))
-            out[iparent] = y.reshape(D, int(parent.frequency_subbands.M),
-                                     int(parent.nprofiles))
-
-            net = int(self.config.primary_trees[gamma].num_early_triggers)
-            for e in range(1, net + 1):
-                ichild = int(self.config.dedispersion_tree_index(gamma, e))
-                out[ichild] = restrict_fine_vector(y, parent, self.trees[ichild])
-
-        assert all(x is not None for x in out)
-        return out
+        return expand_fine_vectors(self.config,
+                                   [m.apply_fine(freq_variances) for m in self.maps],
+                                   trees=self.trees)
 
 
     def measure_admissibility(self, ref, **kwargs):

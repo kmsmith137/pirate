@@ -2983,7 +2983,7 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
     """
 
     from ..pirate_pybind11 import DedispersionConfig
-    from .detrender_free import build_sd_matrices, compute_detrender_free_base_map
+    from .detrender_free import SdPlan, compute_detrender_free_base_map
 
     # The factorization convention, checked directly on the per-group matrices rather than
     # only end-to-end. SdMatrix.factorize() stores dense_matrix.T ~= Q_factor @ W_factor.T,
@@ -2991,7 +2991,7 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
     # which is exactly the case a whole-map comparison is least likely to hit. So the config
     # here is chosen for having a square group at all -- most do not, and the count is
     # reported below so that a silent loss of that coverage is visible.
-    _, _, sd_matrices, _, _ = build_sd_matrices(_make_test_config(7, [2,2,1]))
+    sd_matrices = SdPlan(_make_test_config(7, [2,2,1])).sd_matrices
     worst_recon, n_square = 0.0, 0
     for sdm in sd_matrices.values():
         recon = sdm.Q_factor @ sdm.W_factor.T                     # (D*P, F)
@@ -3340,6 +3340,214 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=5, verbose=True):
                      f' {n_multi} multi-tree and {n_coarse} coarse builds,'
                      f' {n_varying} gamma maps with P_gamma < P_0,'
                      f' {ncmp} Q entries compared exactly')
+
+
+def _draw_varying_max_width(max_attempts=40, **kwargs):
+    """A random config whose primary trees do NOT all have the same max_width, or None.
+
+    _make_test_config() CANNOT build one -- it gives every primary tree the same max_width --
+    so P_gamma < P_0, which is the only thing that makes a profile bound anything other than a
+    no-op, comes only from make_random(). It comes at about 34% per draw (measured over 200 at
+    gpu_valid=False, after commit d8ac467 widened the cdd2 baseline rows), so a handful of
+    plain draws misses it about one run in eight. Drawing FOR it makes the coverage
+    deterministic without pinning a config: the geometry is still different every run, only
+    the property is guaranteed. 40 attempts miss with probability 1e-7, and a draw costs well
+    under a millisecond.
+    """
+
+    from ..pirate_pybind11 import DedispersionConfig
+
+    for _ in range(max_attempts):
+        config = DedispersionConfig.make_random(**kwargs)
+        P = [int(make_tree(config, int(config.dedispersion_tree_index(g, 0))).nprofiles)
+             for g in range(int(config.num_primary_trees))]
+        if len(set(P)) > 1:
+            return config
+    return None
+
+
+def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=5, verbose=True):
+    """detrender_free.compute_detrender_free_varfine(), three ways. No GPU.
+
+    THREE ASSERTIONS, in increasing order of what they cover and decreasing order of
+    sharpness. Each catches something the next one does not:
+
+      1. Against an INDEPENDENT oracle, base tree only. _base_varmap_reference() computes the
+         same (2^(r-R), M, P) array the other way round, through SparseTilePerM, which
+         detrender_free.py deliberately does not use. Both sides are UNTRUNCATED -- there is
+         no SVD anywhere in varfine -- so the bar is float64 roundoff rather than epsilon:
+         measured worst 4.0e-15 over ten runs of this config set. Bar 1e-13, the same as the
+         y_true bar in test_base_varmap_vs_analytic() and with the same ~25x of margin, which
+         is all that is on offer for a roundoff-limited quantity.
+      2. BITWISE against y_true, every primary tree. varfine(config, ones) must equal
+         compute_detrender_free_multi_map(config, L=None).maps[gamma].y_true to the last bit,
+         because the weight is a multiplication by an exact 1.0 on a path the two share.
+         This is the assertion that fails the moment that path stops being shared, which is
+         the specific regression the SdPlan refactor makes possible. It covers the
+         Proposition 2 slice too, since the gamma > 0 maps' y_true IS that slice.
+      3. Against the DEFINITION, every tree: VarianceMultiMap.apply_fine(). This is the only
+         assertion that reaches the early-trigger expansion (Proposition 1). Its bar is set by
+         the REFERENCE path's SVD truncation and not by varfine, which is untruncated and
+         therefore the more accurate of the two -- measured 3.6e-13 on toy.yml (which has the
+         widest dynamic range available) and 1.3e-14 worst over the small configs here.
+         Bar 1e-9, so over three decades of margin.
+
+    If either bar turns out to be tight in practice that is a signal something is wrong, not
+    a reason to loosen it.
+
+    Plus the two SdPlan properties that are SILENT when wrong: that the freq_variances weight
+    reaches sd_vectors and never the SdMatrix rows (invisible under the default, where the
+    weight is exactly 1.0), and that init_sd_matrices=False rejects Lmat and epsilon rather
+    than ignoring them.
+    """
+
+    from ..pirate_pybind11 import DedispersionConfig
+    from .detrender_free import (SdPlan, compute_detrender_free_multi_map,
+                                 compute_detrender_free_varfine)
+
+    configs = [
+        (_make_test_config(r, subband_counts, num_early_triggers=num_early_triggers),
+         f'({r}, {list(subband_counts)}, net={num_early_triggers})'),
+        (_make_test_config(7, [1]), '(7, [1]): R = 0, N = M = 1'),
+        (_make_test_config(7, [2,2,1], nfreq=50),
+         '(7, [2,2,1], nfreq=50): wide footprints'),
+        (_make_test_config(7, [2,2,1], num_primary_trees=3, num_early_triggers=1),
+         '(7, [2,2,1], npri=3, net=1)'),
+    ]
+
+    # make_random() takes no seed, so a random case that fails is not reproducible unless the
+    # config itself is printed. That is the whole cost of admitting randomness here.
+    draw = dict(max_toplevel_rank=9, max_early_triggers=2, gpu_valid=False)
+    for _ in range(nrandom):
+        configs.append((DedispersionConfig.make_random(**draw), 'random'))
+
+    # One draw made to have P_gamma < P_0, which no _make_test_config() can. See the helper.
+    varying = _draw_varying_max_width(**draw)
+    if varying is not None:
+        configs.append((varying, 'random, drawn for a varying max_width'))
+
+    rng = np.random.default_rng(31337)
+    worst_ref, worst_def = 0.0, 0.0
+    n_multi, n_varying, n_et, n_bitwise, ntrees = 0, 0, 0, 0, 0
+
+    for (config, label) in configs:
+        nfreq = int(config.get_total_nfreq())
+        npri = int(config.num_primary_trees)
+        itree0 = int(config.dedispersion_tree_index(0, 0))
+        v = rng.uniform(0.5, 1.5, size=nfreq)
+
+        # debug=True turns on SdPlan's planning-pass cross-checks, which is all of them in
+        # this mode -- there is no SdMatrix here to check a capacity or a duplicate row
+        # against. These configs are small enough to pay for them.
+        got = compute_detrender_free_varfine(config, v, debug=True)
+        assert len(got) == int(config.num_dedispersion_trees), (label, len(got))
+
+        # The returned arrays are ordinary writeable ones and MUST NOT ALIAS EACH OTHER, or a
+        # caller mutating one tree's result silently corrupts another's. The gamma > 0 slices
+        # of the base tree's vector are already contiguous whenever P_gamma == P_0 -- which is
+        # exactly the case np.ascontiguousarray() would NOT copy -- so this is the only thing
+        # standing between an ordinary-looking line and a shared buffer.
+        assert all(g.flags.writeable for g in got), label
+        for i in range(len(got)):
+            for j in range(i + 1, len(got)):
+                assert not np.shares_memory(got[i], got[j]), (label, i, j)
+
+        # ---- (1) the independent oracle, base tree only.
+        want = _base_varmap_reference(config, v)
+        assert got[itree0].shape == want.shape, (label, got[itree0].shape, want.shape)
+        e1 = float(np.abs(got[itree0] / want - 1.0).max())
+
+        mm = compute_detrender_free_multi_map(config, L=None)
+        P = [m.nprofiles for m in mm.maps]
+        n_multi += int(npri > 1)
+        n_varying += int(len(set(P)) > 1)
+        n_et += int(any(int(pt.num_early_triggers) > 0 for pt in config.primary_trees))
+
+        # ---- (2) bitwise against y_true, every primary tree.
+        ones = compute_detrender_free_varfine(config, np.ones(nfreq))
+        for gamma in range(npri):
+            it = int(config.dedispersion_tree_index(gamma, 0))
+            if not np.array_equal(ones[it].reshape(-1), np.asarray(mm.maps[gamma].y_true)):
+                atomic_print(f'test_varfine: FAILED on {label}: varfine(ones) is not BITWISE'
+                             f' equal to primary tree {gamma}\'s y_true, so the two no longer'
+                             f' share an accumulation path. The config'
+                             f' was:\n{config.to_yaml_string()}')
+                raise AssertionError((label, gamma))
+            n_bitwise += 1
+
+        # ---- (3) the definition, every tree. Sup-norm relative, for the reason
+        # _compare_maps() documents: an elementwise ratio has no floor and its tail is the
+        # map's dynamic range rather than its error.
+        ref = mm.apply_fine(v)
+        e3 = 0.0
+        for (itree, (g, w)) in enumerate(zip(got, ref)):
+            assert g.shape == w.shape, (label, itree, g.shape, w.shape)
+            scale = float(np.abs(w).max())
+            assert scale > 0.0, (label, itree)      # a tree with no variance at all
+            e3 = max(e3, float(np.abs(g - w).max()) / scale)
+            ntrees += 1
+
+        if (e1 >= 1.0e-13) or (e3 >= 1.0e-9):
+            atomic_print(f'test_varfine: FAILED on {label}, with oracle error {e1:.3g} and'
+                         f' definition error {e3:.3g}. The config'
+                         f' was:\n{config.to_yaml_string()}')
+            raise AssertionError((label, e1, e3))
+
+        worst_ref, worst_def = max(worst_ref, e1), max(worst_def, e3)
+
+    assert n_multi > 0, 'no config in this set had more than one primary tree'
+    assert n_varying > 0, ('no config in this set had a primary-tree-dependent max_width, so'
+                           ' the profile bound [:, :, :P_gamma] was a no-op everywhere and'
+                           ' proves nothing -- see _draw_varying_max_width()')
+    assert n_et > 0, ('no config in this set has an early trigger, so assertion 3 never'
+                      ' exercised the Proposition 1 expansion')
+
+    # ---- THE WEIGHT MUST NOT REACH THE SdMatrix ROWS. This is the one failure mode the
+    # default v = ones hides completely: with the weight folded into the rows as well, every
+    # assertion above still passes, and the FACTORIZATION -- whose W factor is indexed by
+    # input channel -- is silently of A diag(v) rather than of A.
+    config = _make_test_config(6, [2,2,1])
+    nfreq = int(config.get_total_nfreq())          # NOT the loop's last config
+    v = rng.uniform(0.5, 1.5, size=nfreq)
+    plain, weighted = SdPlan(config), SdPlan(config, freq_variances=v)
+    assert set(plain.sd_matrices) == set(weighted.sd_matrices)
+    for (key, sdm) in plain.sd_matrices.items():
+        assert np.array_equal(sdm.dense_matrix, weighted.sd_matrices[key].dense_matrix), key
+        assert np.array_equal(sdm.Q_factor, weighted.sd_matrices[key].Q_factor), key
+    # ... and it must reach sd_vectors, or the whole function is a no-op.
+    assert not np.array_equal(plain.lift_sd_vectors(), weighted.lift_sd_vectors())
+
+    # ---- the illegal-argument guard. Lmat and epsilon act on sd_matrices and on nothing
+    # else, so with init_sd_matrices=False there is nothing for either to do; accepting them
+    # silently would hand back a fine, untruncated result to a caller who asked otherwise.
+    for kwargs in [dict(Lmat=3), dict(epsilon=1.0e-9)]:
+        try:
+            SdPlan(config, init_sd_matrices=False, **kwargs)
+        except RuntimeError as e:
+            assert 'init_sd_matrices' in str(e), (kwargs, str(e))
+            continue
+        raise AssertionError(f'SdPlan(init_sd_matrices=False, {kwargs}) should have raised')
+
+    # ---- a wrong-length freq_variances must raise, and name the length it wanted. Unlike
+    # test_multimap_vs_base()'s L-ordering check there is no way to prove this ran BEFORE the
+    # tile pass (max_bytes=0 has no analogue here -- varfine allocates nothing worth a
+    # ceiling); the exception type and message are what is available. Without the check a
+    # short vector surfaces as an IndexError from inside the tile pass instead.
+    for bad in [nfreq - 1, nfreq + 1]:
+        try:
+            compute_detrender_free_varfine(config, np.ones(bad))
+        except RuntimeError as e:
+            assert f'({nfreq},)' in str(e), (bad, str(e))
+            continue
+        raise AssertionError(f'compute_detrender_free_varfine() accepted a length-{bad}'
+                             ' freq_variances')
+
+    if verbose:
+        atomic_print(f'    test_varfine({len(configs)} configs, {nrandom} random,'
+                     f' {ntrees} trees): {n_multi} with npri > 1, {n_varying} with a varying'
+                     f' max_width, {n_et} with early triggers; {n_bitwise} primary trees'
+                     f' bitwise equal to y_true; worst relative error: vs the oracle'
+                     f' {worst_ref:.3g}, vs apply_fine() {worst_def:.3g}')
 
 
 # Work-unit ceiling for the randomized part of test_multimap_vs_sweep(). The budget is in
@@ -4351,6 +4559,7 @@ def run_all():
     test_base_varmap_vs_analytic()
     test_base_varmap_admissible()
     test_multimap_vs_base()
+    test_varfine()
 
 
 def run_sweep_tests():

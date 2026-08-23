@@ -1,9 +1,10 @@
 # Low-rank representations of the variance map A of a DedispersionTree (notes/variance_map.tex).
 #
 # Everything to do with variance maps lives here: the representation, the distance function,
-# the brute-force sweep, the analytic (detrender-free) map of the base tree and the multimap
-# of every primary tree derived from it, the file format, and the 'pirate_frb variance_map'
-# CLI. pirate_frb.slow_avar now holds only the older analytic (PfAvarExact / TmpVmap)
+# the brute-force sweep, the analytic (detrender-free) map of the base tree, the multimap of
+# every primary tree derived from it, the map-free per-tree evaluation of A v that shares its
+# tile pass, the file format, and the 'pirate_frb variance_map' CLI.
+# pirate_frb.slow_avar now holds only the older analytic (PfAvarExact / TmpVmap)
 # machinery and the SparseTile primitives it is built on. Two things here reach into it:
 # detrender_free.py, which is built on the SparseTile primitives, and tests.py, which uses
 # PfAvarExact's inner loop as an independent oracle for both the sweep and
@@ -21,16 +22,18 @@
 # notes/variance_map.tex.
 from .distance import YTRUE_FLOOR, f, fprime, AdmissibilityResult, DistanceEstimate
 from .VarianceMap import VarianceMap, coarse_grain_vector
-from .VarianceMultiMap import VarianceMultiMap, restrict_fine_vector
+from .VarianceMultiMap import (VarianceMultiMap, restrict_fine_vector,
+                               expand_fine_vectors)
 from .lp import (LpConfig, solve_covering_lps, q_step, w_step, covering_lp_data,
                  majorizer_weights, repair_rows, repair_cols, repair_additive,
                  fix_nonneg, apply_repair, violation_stats, check_nonneg,
                  blocking_is_exact,
                  solve_cover_lp, solve_cover_lp_cuts)
 from .brute_force import compute_variance_multimap
-from .detrender_free import (SdMatrix, build_sd_matrices,
+from .detrender_free import (SdMatrix, SdPlan,
                              compute_detrender_free_base_map,
-                             compute_detrender_free_multi_map)
+                             compute_detrender_free_multi_map,
+                             compute_detrender_free_varfine)
 from .basis import (basis_svd, basis_envelope_column, basis_greedy_envelope,
                     greedy_envelope_tree, basis_pivoted_qr, basis_random, svd_init,
                     spectrum_effective_rank, shape_cover_statistic)
