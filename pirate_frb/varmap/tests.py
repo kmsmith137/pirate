@@ -454,6 +454,16 @@ def test_admissibility(r=8, subband_counts=(2,1)):
     assert rc.admissible and rf.admissible
     assert rc.max_r == rf.max_r, (rc.max_r, rf.max_r)
     assert rc.nviol == 0 and rf.nviol == 0
+
+    # max_diff does NOT transfer through the lift, and that is worth pinning rather than
+    # assuming. The pivot identity is about RATIOS: max(true/Abar) over a group is 1, attained
+    # at the group's argmax member, so scaling by 1.5 gives max_r = 1/1.5 on both sides. The
+    # difference has no such identity -- against the FINE map, a member whose true value is far
+    # below its group's max contributes |true - 1.5*Abar| ~ 1.5*Abar, not 0.5*Abar. So the
+    # coarse measurement reports the closed-form 0.5 while the lifted one reports ~1.5.
+    # Read max_diff against the reference it was measured with.
+    assert abs(rc.max_diff - 0.5) < 1.0e-12, rc.max_diff
+    assert rf.max_diff > rc.max_diff + 0.5, (rc.max_diff, rf.max_diff)
     assert rc.vmap.is_admissible and (rc.vmap.A is capprox.A)
 
     # A single planted underestimate: infinite D, but a small inflation fixes it, and that is
@@ -477,6 +487,11 @@ def test_admissibility(r=8, subband_counts=(2,1)):
     rn = neg.measure_admissibility(ref)
     assert np.isinf(rn.max_r) and (rn.argmax_r == (5, 2)) and (rn.nneg_self == 1)
 
+    # ... and max_diff stays FINITE there, which is the whole reason the two coexist: it is an
+    # accuracy figure and says nothing about repairability. A caller reading max_diff alone
+    # would call this map good.
+    assert np.isfinite(rn.max_diff) and (rn.max_diff > 0.0), rn.max_diff
+
     # ref <= 0 maps to ratio 0, so such an element can never become the argmax (0/0 included).
     zref = np.array(ref.A)
     zref[1, :] = 0.0
@@ -487,10 +502,16 @@ def test_admissibility(r=8, subband_counts=(2,1)):
     rz = zapp.measure_admissibility(zref)
     assert rz.admissible and (rz.argmax_r[0] != 1)
 
+    # An exact map: max_r is 1 (no inflation needed), max_diff is 0 (no error). The two
+    # sentinels differ, which is worth pinning -- they are different quantities.
+    same = ref.measure_admissibility(ref)
+    assert (same.max_r == 1.0) and (same.max_diff == 0.0), (same.max_r, same.max_diff)
+
     # Block size must not change the answer, including at a ragged tail.
     for nb in (1, 3, 7, ref.nbeta):
         r2 = capprox.measure_admissibility(ref, block_rows=nb)
         assert (r2.max_r, r2.argmax_r, r2.nviol) == (rc.max_r, rc.argmax_r, rc.nviol), nb
+        assert r2.max_diff == rc.max_diff, (nb, r2.max_diff, rc.max_diff)
 
     # Mixing granularities is not a valid test, and says so.
     try:
@@ -549,6 +570,22 @@ def test_distance_oracles(r=7, subband_counts=(2,1)):
     assert abs(res.max_r - want_max) <= 1.0e-12 * want_max, (res.max_r, want_max)
     assert res.argmax_r[0] == i, (res.argmax_r, i)
     assert res.admissible == bool(np.all(A*scale >= A))
+
+    # max_diff against the same dense reference. Written out rather than derived from max_r,
+    # because the point of having both is that neither determines the other: this candidate
+    # is scaled per row, so the ratio's worst element and the difference's worst element are
+    # different elements whenever the row scales and the row magnitudes disagree.
+    want_diff = float(np.abs(A - A*scale).max() / np.abs(A).max())
+    assert abs(res.max_diff - want_diff) <= 1.0e-12 * want_diff, (res.max_diff, want_diff)
+
+    # A uniform overestimate by c: max_r is exactly 1/c and max_diff is exactly (c-1), since
+    # the difference is largest where A is. Both in closed form, which is the anchor on the
+    # VALUE of each.
+    for c in (1.25, 2.0):
+        up = true.replace(A=A*c, is_admissible=True, history_record=dict(step='test'))
+        ru = up.measure_admissibility(true)
+        assert abs(ru.max_r - 1.0/c) <= 1.0e-12, (c, ru.max_r)
+        assert abs(ru.max_diff - (c - 1.0)) <= 1.0e-12, (c, ru.max_diff)
 
     # --- 3. get_row_distances() must point at the row that PAYS. Its mean is checked
     # elsewhere, and a mean is permutation-invariant: a per-row array with the right values
@@ -2719,13 +2756,14 @@ def test_report(r=6, subband_counts=(1, 1), K=4):
     assert abs(rec['D'] - D) < 1e-15
     # Without a measurement, 'admissible' is the map's own FLAG and the elementwise fields are
     # absent rather than guessed at.
-    assert 'max_r' not in rec
+    assert ('max_r' not in rec) and ('max_diff' not in rec)
 
     # With one, the measurement wins -- including when it CONTRADICTS the flag, which is the
     # case the distinction exists for.
     adm = m.measure_admissibility(ref, inflate=True)
     rec2 = vr.row_dict(m, D, adm=adm)
     assert rec2['admissible'] and (abs(rec2['max_r'] - adm.max_r) < 1e-15)
+    assert abs(rec2['max_diff'] - adm.max_diff) < 1e-15, (rec2['max_diff'], adm.max_diff)
     assert (len(rec2['argmax_r']) == 2) and (rec2['inflation'] is not None)
 
     lying = m.inflated(0.5).replace(is_admissible=True,

@@ -29,8 +29,8 @@ import numpy as np
 
 # The columns a results table shows by default, in this order, when the caller does not say.
 # Anything else in the record still reaches json; this is only what prints.
-_COLUMNS = ('name', 'K', 'factor_rank', 'D', 'max_r', 'D_inflated', 'admissible',
-            'algo_seconds')
+_COLUMNS = ('name', 'K', 'factor_rank', 'D', 'max_r', 'max_diff', 'D_inflated',
+            'admissible', 'algo_seconds')
 
 
 def _plain(v):
@@ -53,8 +53,8 @@ def row_dict(vmap, D, *, name=None, adm=None, extra=None, apply_cost=True):
         this function does not care, and does not check, which is why the caller passes it).
     adm : AdmissibilityResult or None
         The result of measure_admissibility(), when one was taken. It contributes 'max_r',
-        'argmax_r', 'nviol', 'viol_frac' and -- if it was taken with inflate=True --
-        'inflation' and 'D_inflated'. Without it the record's 'admissible' is the map's own
+        'max_diff', 'argmax_r', 'nviol', 'viol_frac' and -- if it was taken with inflate=True
+        -- 'inflation' and 'D_inflated'. Without it the record's 'admissible' is the map's own
         FLAG, which is a claim rather than a measurement; with it, it is the measurement.
     extra : dict or None
         Merged in last, for experiment bookkeeping (config name, timings, git hash). Numpy
@@ -87,6 +87,7 @@ def row_dict(vmap, D, *, name=None, adm=None, extra=None, apply_cost=True):
         # The measurement wins over the flag: that is the whole reason for taking one.
         r.update(admissible=bool(adm.admissible),
                  max_r=float(adm.max_r),
+                 max_diff=float(adm.max_diff),
                  argmax_r=[int(adm.argmax_r[0]), int(adm.argmax_r[1])],
                  nviol=int(adm.nviol),
                  viol_frac=float(adm.viol_frac))
@@ -177,6 +178,8 @@ def format_row(r):
     if r.get('max_r') is not None:
         a, f = r.get('argmax_r', (None, None))
         out.append(f"max_r={r['max_r']:.6g} argmax=(row={a},F={f})")
+        if r.get('max_diff') is not None:
+            out.append(f"max_diff={r['max_diff']:.6g}")
     else:
         out.append(f"admissible={r.get('admissible')} (flag, not measured)")
     if r.get('D_inflated') is not None:

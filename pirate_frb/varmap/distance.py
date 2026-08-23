@@ -87,11 +87,27 @@ class AdmissibilityResult:
       answer, and it is a separate member rather than ``max_r <= 1`` because the two can only
       be identified when both matrices are nonnegative.
     - ``max_r`` (float) -- max over (row, F) of ``ref/self``, with the sign conventions of
-      measure_admissibility(). A summary statistic: the factor ``self`` would have to be
-      inflated by. Infinite when ``self`` is non-positive somewhere ``ref`` is positive, which
-      is a real defect no rescaling can repair.
-    - ``argmax_r`` (tuple) -- the (row, F) pair attaining it. In the coarse case ``row`` is a
-      beta, not an alpha -- the caller needs to know which.
+      measure_admissibility(). THIS IS THE INFLATION FACTOR, not an accuracy measure: it is
+      exactly the number ``self`` must be scaled by for ``self >= ref`` to hold, which is why
+      inflate=True uses it and why it is infinite when ``self`` is non-positive somewhere
+      ``ref`` is positive (a real defect no rescaling can repair).
+
+      DO NOT READ IT AS "the error in self". It is a PER-ELEMENT RELATIVE quantity with no
+      floor, so on a matrix with wide dynamic range it is set by the smallest element
+      compared, not by how well the matrix is approximated. A map accurate to the float64
+      truncation floor in every absolute sense can report max_r - 1 = 2e-9 simply because the
+      worst element is two decades below the matrix maximum. ``max_diff`` is the number to
+      read for accuracy.
+    - ``max_diff`` (float) -- the sup-norm error, normalized by the sup-norm of the reference:
+      ``max over (row,F) of |ref - self|`` divided by ``max over (row,F) of |ref|``. Zero for
+      an exact map. Unlike ``max_r`` this is an ACCURACY measure and nothing more -- it says
+      nothing about admissibility, and in particular a map that is negative where ref is
+      positive (max_r = inf, unrepairable) can still have a small max_diff. Read the two
+      together: max_r for whether it can be used, max_diff for how good it is.
+    - ``argmax_r`` (tuple) -- the (row, F) pair attaining ``max_r``. In the coarse case
+      ``row`` is a beta, not an alpha -- the caller needs to know which. Note the two
+      statistics generally attain their maxima at DIFFERENT elements: ``max_r`` at a small
+      one, ``max_diff`` at a large one.
     - ``nviol`` (int) -- number of (row, F) pairs violating ``self >= ref`` by more than a
       relative tolerance, and
     - ``viol_frac`` (float) -- that count as a fraction of the elements compared.
@@ -123,10 +139,11 @@ class AdmissibilityResult:
     """
 
     def __init__(self, *, admissible, max_r, argmax_r, nviol, viol_frac, viol_rows,
-                 worst_rows, total_elements, nneg_self, vmap, inflation=None,
+                 worst_rows, total_elements, nneg_self, vmap, max_diff=0.0, inflation=None,
                  D_inflated=None, seconds=0.0):
         self.admissible = bool(admissible)
         self.max_r = float(max_r)
+        self.max_diff = float(max_diff)
         self.argmax_r = tuple(int(i) for i in argmax_r)
         self.nviol = int(nviol)
         self.viol_frac = float(viol_frac)
@@ -143,6 +160,7 @@ class AdmissibilityResult:
         row, F = self.argmax_r
         inf = '' if (self.D_inflated is None) else f', D_inflated={self.D_inflated:.6g}'
         return (f'AdmissibilityResult(admissible={self.admissible}, max_r={self.max_r:.6g},'
+                f' max_diff={self.max_diff:.6g},'
                 f' argmax_r=(row={row}, F={F}), nviol={self.nviol}'
                 f' ({self.viol_frac:.3g} of {self.total_elements}),'
                 f' viol_rows={self.viol_rows}, nneg_self={self.nneg_self}{inf})')

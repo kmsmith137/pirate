@@ -286,6 +286,10 @@ class VarianceMultiMap:
         iff every map is, so the aggregate ``max_r`` is the max over them. Returns the list of
         per-primary-tree AdmissibilityResults; aggregate with
         ``all(r.admissible for r in results)``.
+
+        ``max_diff`` does NOT aggregate that way: each map normalizes by its own ``max|ref|``,
+        so the max over trees is a max of per-tree relative errors rather than a global one.
+        Report it per tree.
         """
         npri = self.num_primary_trees
         ref_maps = ref.maps if isinstance(ref, VarianceMultiMap) else tuple(ref)

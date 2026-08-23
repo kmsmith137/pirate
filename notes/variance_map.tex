@@ -144,6 +144,24 @@ $D$ alone: if the max ratio is only a little larger than $1$, then inflating $A^
 slightly gives a finite distance, so such an approximation is nearly usable -- whereas
 $D = \infty$ by itself does not distinguish it from a hopeless one.
 
+Note that \verb|max_r| is an {\em inflation factor}, not an accuracy measure. It is a
+per-element {\em relative} quantity with no floor, so on a matrix with wide dynamic range it
+is set by the smallest element compared rather than by how well the matrix is approximated:
+a map accurate to the float64 noise floor in every absolute sense can report
+$\mbox{\tt max\_r}-1 \sim 10^{-9}$ simply because its worst element lies a couple of decades
+below the matrix maximum. The same method therefore also reports
+\begin{equation}
+{\tt max\_diff} \equiv \frac{\max_{\alpha F} \big| A^{\rm true}_{\alpha F}
+                                              - A^{\rm approx}_{\alpha F} \big|}
+                            {\max_{\alpha F} \big| A^{\rm true}_{\alpha F} \big|}
+\end{equation}
+which is the sup-norm accuracy of $A^{\rm approx}$ relative to $A^{\rm true}$'s own scale, and
+is zero for an exact map. The two answer different questions and generally attain their
+maxima at different elements: read \verb|max_r| for whether an approximation can be
+{\em used}, and \verb|max_diff| for how {\em good} it is. In particular an approximation which
+is negative somewhere $A^{\rm true}$ is positive has $\mbox{\tt max\_r} = \infty$ (no
+rescaling repairs it) while its \verb|max_diff| can be perfectly small.
+
 This unusual distance function has the following properties:
 \begin{enumerate}
 \item Underestimating any matrix element of $A$ is catastrophic -- the approximation
@@ -225,9 +243,10 @@ Some practical notes, to get started:
 \item To evaluate the distance function, use \verb|VarianceMap.get_distance()| (in
  \verb|pirate_frb/varmap/|, see \S\ref{ssec:distance_function}). Please use it, rather than
  reimplementing $D$, so that distances reported by different experiments are comparable.
- Besides \verb|D|, report \verb|max_r| and \verb|D_inflated| from
- \verb|measure_admissibility(inflate=True)|, since these distinguish an approximation which is
- nearly usable from one which is hopeless.
+ Besides \verb|D|, report \verb|max_r|, \verb|max_diff| and \verb|D_inflated| from
+ \verb|measure_admissibility(inflate=True)|: the first and third distinguish an approximation
+ which is nearly usable from one which is hopeless, and the second is the accuracy figure
+ (\verb|max_r| is an inflation factor, not an error -- see \S\ref{ssec:distance_function}).
 
 \item There is no subscale config in \verb|configs/dedispersion/| yet, so part of the task is to
  create a variety of them, exploring the {\tt DedispersionConfig} and {\tt Detrender2dParams}

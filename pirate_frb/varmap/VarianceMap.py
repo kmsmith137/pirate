@@ -193,7 +193,8 @@ class VarianceMap:
       GUARANTEE; it does not mean "known to violate". A truncated SVD (usually inadmissible)
       and a map that simply has not been checked are both False, because nothing acts
       differently on the two -- the measured fact lives in the result of
-      measure_admissibility(), which reports ``max_r``.
+      measure_admissibility(), which reports ``max_r`` (the inflation factor) and
+      ``max_diff`` (the accuracy).
 
     Matrix storage:
 
@@ -2384,8 +2385,17 @@ class VarianceMap:
 
 
     def measure_admissibility(self, ref, *, block_rows=None, inflate=False, viol_tol=1.0e-12):
-        """Test ``self >= ref`` elementwise, and summarize by
-        ``max_r = max over (row,F) of ref/self``. Returns an AdmissibilityResult.
+        """Test ``self >= ref`` elementwise, and summarize two ways. Returns an
+        AdmissibilityResult.
+
+        ``max_r = max over (row,F) of ref/self`` is the INFLATION FACTOR: the number self
+        must be scaled by to dominate ref. ``max_diff = max|ref-self| / max|ref|`` is the
+        sup-norm ACCURACY of self relative to ref's own scale. They answer different
+        questions and generally attain their maxima at different elements -- max_r at a small
+        one, since it is a per-element relative quantity with no floor, and max_diff at a
+        large one. A map accurate to the float64 noise floor can still report
+        max_r - 1 = 2e-9 if its worst element is two decades below the matrix maximum; that
+        is the dynamic range, not an error. See AdmissibilityResult.
 
         This is the expensive, elementwise half of D. It is separated from get_distance()
         because for anything built by a Q-step it is redundant -- admissibility is the
@@ -2468,6 +2478,11 @@ class VarianceMap:
         row_max_r = np.zeros(self.nbeta)
         admissible = True
 
+        # max_diff's two sup-norms, accumulated blockwise. Signed |ref - self|, not the
+        # one-sided shortfall: this is an accuracy figure, and an approximation that
+        # OVERestimates by a lot is not accurate either (admissible, but not close).
+        sup_diff, sup_ref = 0.0, 0.0
+
         for start in range(0, self.nbeta, nb):
             stop = min(start + nb, self.nbeta)
             S = self.rows(start, stop)
@@ -2500,6 +2515,15 @@ class VarianceMap:
             nviol += int(np.count_nonzero(bad))
             viol_rows += int(np.count_nonzero(bad.any(axis=1)))
 
+            if T.size:
+                sup_diff = max(sup_diff, float(np.abs(T - S).max()))
+                sup_ref = max(sup_ref, float(np.abs(T).max()))
+
+        # A ref that is identically zero has no scale to normalize by. Exact agreement is
+        # still exact; anything else is unboundedly wrong in relative terms.
+        max_diff = (sup_diff / sup_ref) if (sup_ref > 0.0) else (
+            0.0 if (sup_diff == 0.0) else np.inf)
+
         total_elements = self.nbeta * self.nfreq
         nworst = min(self._N_WORST_ROWS, self.nbeta)
         part = np.argpartition(row_max_r, -nworst)[-nworst:]
@@ -2508,7 +2532,8 @@ class VarianceMap:
         vmap = self.replace(is_admissible=admissible,
                             history_record=dict(step='measure_admissibility',
                                                 admissible=admissible, max_r=max_r,
-                                                nviol=nviol, seconds=time.time()-t0))
+                                                max_diff=max_diff, nviol=nviol,
+                                                seconds=time.time()-t0))
 
         inflation, D_inflated = None, None
         if inflate:
@@ -2524,7 +2549,8 @@ class VarianceMap:
                 D_inflated = np.inf
 
         return AdmissibilityResult(
-            admissible=admissible, max_r=max_r, argmax_r=argmax_r, nviol=nviol,
+            admissible=admissible, max_r=max_r, max_diff=max_diff, argmax_r=argmax_r,
+            nviol=nviol,
             viol_frac=(nviol / total_elements) if total_elements else 0.0,
             viol_rows=viol_rows, worst_rows=worst, total_elements=total_elements,
             nneg_self=nneg_self, vmap=vmap, inflation=inflation, D_inflated=D_inflated,
