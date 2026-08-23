@@ -226,6 +226,8 @@ struct DedispersionConfig
         int max_early_triggers = 5;  // set to zero to disable early triggers
         bool gpu_valid = true;
         bool verbose = false;
+        bool force_float32 = false;
+        bool no_host_mega_ringbuf = false;   // MegaRingbuf gpu-only, no host<->gpu copies
     };
     
     static DedispersionConfig make_random(const RandomArgs &args);

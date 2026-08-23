@@ -199,6 +199,7 @@ def test(args):
             if i == 0:
                 # Catches errors in DedispersionConfig::make_random() or validate().
                 tests.test_max_width_monotone()
+                tests.test_random_args_flags()
                 for _ in range(500):
                     c = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=4, gpu_valid=False)
                     c.test()
@@ -231,14 +232,16 @@ def test(args):
                 test_fast_avar.test_cpp_pf_avar_approximation()
 
         if run_all_tests or args.varmap:
-            # Deterministic apart from test_geometry()'s random configs; once is enough.
+            # Deterministic apart from test_base_varmap_vs_analytic()'s random configs,
+            # which it draws itself; once is enough.
             if i == 0:
                 from .varmap import tests as varmap_tests
                 varmap_tests.run_all()
 
         if run_all_tests or args.vmbf:
-            # The brute-force sweep: deterministic (fixed configs, no randomness), and each
-            # test runs a full sweep over all input channels, so once is enough.
+            # The brute-force sweep. Deterministic apart from test_base_varmap_vs_sweep()'s
+            # cost-budgeted random draws, which it makes itself; and each test runs a full
+            # sweep over all input channels, so once is enough.
             if i == 0:
                 from .varmap import tests as varmap_tests
                 varmap_tests.run_sweep_tests()

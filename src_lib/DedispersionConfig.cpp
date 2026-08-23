@@ -1002,9 +1002,19 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
     if (args.gpu_valid) {
         vector<Key2> valid_keys;
+        Dtype f32 = Dtype::from_str("float32");
 
         for (const Key2 &k: all_keys) {
             if (k.dd_rank > max_stage2_rank)
+                continue;
+
+            // args.force_float32 must FILTER THE KEYS, not patch ret.dtype afterwards. On this
+            // path the dtype IS the key's (see 'ret.dtype = my_keys.at(0).dtype' below), and
+            // later code re-derives quantities from the PAIR (key, dtype) -- min_wtds =
+            // xdiv(1024, k.Tinner * ret.dtype.nbits), and get_nelts_per_segment(). Overwriting
+            // ret.dtype would desynchronize the config from the key it was built from, and
+            // xdiv() asserts exact division.
+            if (args.force_float32 && (k.dtype != f32))
                 continue;
 
             // Note: EVERY remaining key is reachable from a config. We use the key's
@@ -1019,7 +1029,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
             stringstream ss;
             ss << "DedispersionConfig::make_random(): no precompiled cdd2 kernel is available "
                << "(max_toplevel_rank=" << args.max_toplevel_rank << ", max_stage2_rank=" << max_stage2_rank
-               << ")";
+               << ", force_float32=" << (args.force_float32 ? "true" : "false") << ")";
             throw runtime_error(ss.str());
         }
 
@@ -1027,7 +1037,8 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         my_keys.push_back(valid_keys.at(ix));
     }
     else {
-        Dtype dtype = rand_bool() ? Dtype::from_str("float32") : Dtype::from_str("float16");
+        Dtype dtype = (args.force_float32 || rand_bool()) ? Dtype::from_str("float32")
+                                                          : Dtype::from_str("float16");
         long dd_rank = rand_int(1, max_stage2_rank + 1);
 
         Key2 base_key = _make_random_cdd2_key(dtype, dd_rank);
@@ -1147,9 +1158,13 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     ret.num_active_batches = rand_int(1,v[2]+1);
 
     // GPU configuration.
-    long max_delay = pow2(ret.toplevel_tree_rank + npri - 1);
-    long max_clag = (max_delay / ret.time_samples_per_chunk) + 1;
-    ret.max_gpu_clag = rand_int(0, max_clag+1);
+    // The member's own default (10000) is the "no limit, pure-GPU ring buffer" value, so
+    // args.no_host_mega_ringbuf simply skips the draw.
+    if (!args.no_host_mega_ringbuf) {
+        long max_delay = pow2(ret.toplevel_tree_rank + npri - 1);
+        long max_clag = (max_delay / ret.time_samples_per_chunk) + 1;
+        ret.max_gpu_clag = rand_int(0, max_clag+1);
+    }
 
     // future_write_max_samples: zero 25% of the time (future writes disabled),
     // else uniform in [0, 4*time_samples_per_chunk] (i.e. up to ~4 chunks).

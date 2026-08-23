@@ -1,6 +1,6 @@
 """
-Tests of DedispersionConfig::validate() rules that random configs cannot exercise (run via
-'test --dd').
+Tests of DedispersionConfig::validate() and ::make_random() that random configs cannot
+exercise on their own (run via 'test --dd').
 
   - test_max_width_monotone(): a downsampled primary tree's max_width must equal its
     predecessor's or be half of it. The rule and its justification are in validate()'s
@@ -15,7 +15,15 @@ Tests of DedispersionConfig::validate() rules that random configs cannot exercis
     and test_subband_property() in test_subbands.py loads every shipped config, all nine of which
     are halving chains. What is left, and what this file is for, is the negative side: a config
     that breaks the rule must throw, and say which two primary trees disagree.
+
+  - test_random_args_flags(): make_random()'s force_float32 / no_host_mega_ringbuf really do
+    constrain what they promise. Both exist so that a random config is usable by the GPU
+    brute-force variance-map sweep, which lives two packages away and is dispatched by a
+    different flag -- so without this, a change to the key-selection logic could silently stop
+    honouring them and only --vmbf would notice.
 """
+
+import numpy as np
 
 from ..pirate_pybind11 import DedispersionConfig
 from ..utils import atomic_print
@@ -79,3 +87,27 @@ def test_max_width_monotone():
                              f" (max_width chain {widths})")
 
     atomic_print(f"test_max_width_monotone: 5 legal and {len(bad)} illegal max_width chains")
+
+
+def test_random_args_flags(ndraw=4):
+    """make_random()'s force_float32 and no_host_mega_ringbuf, on both draw paths."""
+
+    for gpu_valid in [True, False]:
+        for _ in range(ndraw):
+            config = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=2,
+                                                    gpu_valid=gpu_valid, force_float32=True,
+                                                    no_host_mega_ringbuf=True)
+            config.validate()
+
+            # force_float32 FILTERS the candidate cdd2 keys rather than patching ret.dtype
+            # afterwards, because later code re-derives quantities from the (key, dtype) pair.
+            # So a float16 config here means the filter was bypassed, not that a patch was
+            # missed -- and the validate() above is what would catch the desynchronization a
+            # patch would cause.
+            assert np.dtype(config.dtype) == np.float32, (gpu_valid, np.dtype(config.dtype))
+
+            # 10000 is the member's own default, i.e. "no limit, pure-GPU ring buffer".
+            assert config.max_gpu_clag == 10000, (gpu_valid, config.max_gpu_clag)
+
+    atomic_print(f'test_random_args_flags: {2*ndraw} draws, all float32 with'
+                 ' max_gpu_clag=10000')

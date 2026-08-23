@@ -704,12 +704,18 @@ class SparseTileTriple:
         raise IndexError(f"get_singleton: f={f} out of range [{self.f0}, {self.f0 + self.nf})")
     
     @staticmethod
-    def make_tree_gridding_output(channel_map, ifreq):
+    def make_tree_gridding_output(channel_map, ifreq, *, flo=None, fhi=None):
         """Return the TreeGriddingKernel output for a one-hot input, as a SparseTileTriple.
 
         Suppose the TreeGriddingKernel is called on a "one-hot" shape (nfreq,ntime) array
         whose (ifreq,0) entry is 1. The output is a shape (2^rank, 1, ntime) array which is
         mostly zeros. This method returns an equivalent SparseTileTriple.
+
+        If 'flo'/'fhi' are given, the footprint is clipped to [flo, fhi) before it is split
+        into the canonical one/two/three tiles. Clipping at the SOURCE (rather than slicing
+        the result) is what lets a caller iterate part of a channel's footprint without the
+        rest of the channel's weight leaking in through the aligned merges. The clip range
+        must meet the footprint, i.e. leave at least one f-index.
         """
         cm = np.ascontiguousarray(channel_map, dtype=np.float64)
         nchan = len(cm) - 1
@@ -724,6 +730,12 @@ class SparseTileTriple:
         f0 = max(f0, 0)
         f1 = min(f1, nchan)
         assert f0 < f1, "ifreq does not overlap any tree channel"
+
+        if flo is not None:
+            f0 = max(f0, int(flo))
+        if fhi is not None:
+            f1 = min(f1, int(fhi))
+        assert f0 < f1, f"clip range [{flo}, {fhi}) does not meet ifreq={ifreq}'s footprint"
 
         n = np.arange(f0, f1)
         w = np.minimum(cm[n], ifreq + 1.0) - np.maximum(cm[n + 1], float(ifreq))

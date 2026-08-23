@@ -157,24 +157,34 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                       "rather than a file, e.g. one embedded in a variance-map file by\n"
                       "pirate_frb.varmap.asdf_io.")
           .def_static("make_random",
-               [](int max_toplevel_rank, int max_early_triggers, bool gpu_valid, bool verbose) {
+               [](int max_toplevel_rank, int max_early_triggers, bool gpu_valid, bool verbose,
+                  bool force_float32, bool no_host_mega_ringbuf) {
                    DedispersionConfig::RandomArgs args;
                    args.max_toplevel_rank = max_toplevel_rank;
                    args.max_early_triggers = max_early_triggers;
                    args.gpu_valid = gpu_valid;
                    args.verbose = verbose;
+                   args.force_float32 = force_float32;
+                   args.no_host_mega_ringbuf = no_host_mega_ringbuf;
                    return DedispersionConfig::make_random(args);
                },
                py::arg("max_toplevel_rank") = 10,
                py::arg("max_early_triggers") = 5,
                py::arg("gpu_valid") = true,
                py::arg("verbose") = false,
+               py::arg("force_float32") = false,
+               py::arg("no_host_mega_ringbuf") = false,
                "Generate a random DedispersionConfig for testing.\n\n"
                "Args:\n"
                "    max_toplevel_rank: Bounds toplevel_tree_rank (default=10)\n"
                "    max_early_triggers: Max number of early triggers (0 to disable, default=5)\n"
                "    gpu_valid: Generate GPU-valid configuration (default=True)\n"
-               "    verbose: Print debug info (default=False)\n\n"
+               "    verbose: Print debug info (default=False)\n"
+               "    force_float32: Draw only float32 configs (default=False)\n"
+               "    no_host_mega_ringbuf: Leave max_gpu_clag at its default, keeping the\n"
+               "        MegaRingbuf pure-GPU (default=False)\n\n"
+               "The last two narrow the draw so that the config is usable by the GPU\n"
+               "brute-force variance-map sweep (pirate_frb.varmap.brute_force).\n\n"
                "Returns:\n"
                "    Randomly generated DedispersionConfig")
           .def("to_yaml_string", &DedispersionConfig::to_yaml_string,
