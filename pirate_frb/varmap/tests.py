@@ -2862,6 +2862,78 @@ def _base_varmap_reference(config, freq_variances):
     return want
 
 
+def _base_varmap_matrix(config):
+    """The base tree's variance map as a dense (nalpha, nfreq) array, plus its itree.
+
+    The matrix form of _base_varmap_reference(): that function's per-channel slab IS a COLUMN
+    of A, so storing the slabs instead of accumulating them gives the whole map in the same
+    single pass over channels.
+
+    For TESTS ONLY, and only on small configs -- this is nalpha*nfreq*8 bytes, which is 4 MB
+    for _make_test_config(6, [2,2,1]) and gigabytes at production scale. It exists because
+    test_base_varmap_admissible() needs an UNTRUNCATED reference, which a projection onto one
+    v cannot supply.
+    """
+
+    from ..slow_avar.SparseTile import SparseTilePerM
+    from ..slow_avar.PfVariance import PfVariance, PfVarianceConvolver
+
+    itree0 = int(config.dedispersion_tree_index(0, 0))
+    tree = make_tree(config, itree0)
+    fs = tree.frequency_subbands
+    r, R, P = int(tree.total_rank()), int(fs.pf_rank), int(tree.nprofiles)
+    ndm, M = 1 << (r - R), int(fs.M)
+    nfreq = int(config.get_total_nfreq())
+    cmap = np.asarray(config.make_channel_map(), dtype=np.float64)
+    conv = PfVarianceConvolver()
+
+    A = np.zeros((ndm, M, P, nfreq))
+    for ifreq in range(nfreq):
+        ssa = SparseTilePerM.make_dedispersion_output(cmap, ifreq, fs)
+        for (m, tile) in enumerate(ssa.per_m):
+            if tile is not None:
+                A[:, m, :, ifreq] = PfVariance.from_tile(tile, P, conv).unpack(ndm - 1)
+    return itree0, A.reshape(ndm * M * P, nfreq)
+
+
+def _compare_maps(got, ref, label):
+    """(elementwise relative, sup-norm relative) difference between two maps, in row blocks.
+
+    Returns BOTH because they answer different questions and the second is the one to put a
+    tight bar on. The elementwise figure ``max |got/ref - 1|`` is a per-element relative
+    quantity with NO FLOOR, so on a matrix with wide dynamic range it is set by the smallest
+    element compared rather than by how well the map is approximated -- the same effect
+    AdmissibilityResult documents for max_r. Measured over 40 random configs it has a median
+    of 6.2e-15 but a max of 5.3e-11, and toy.yml's dynamic range would put it near 2e-9. The
+    sup-norm figure ``max|got-ref| / max|ref|`` has no such tail: median 7.1e-16, max 5.6e-13
+    over the same draws.
+
+    Row-blocked so that neither map has to be densified: 'ref' is already dense (coarse_grain
+    returns a dense matrix), and materializing 'got' as well would double the peak.
+
+    Entries where ref is EXACTLY zero are required to be exactly zero in got, not merely
+    small. That is structural rather than lucky -- a channel absent from a group leaves that
+    group's rows of W at zero, and a subband absent from a group never has those columns
+    written into its rows of Q -- and it is an exact bar, which tests.py's preamble prefers.
+    """
+
+    assert got.shape == ref.shape, (label, got.shape, ref.shape)
+    worst_rel, worst_abs, scale = 0.0, 0.0, 0.0
+    nb = ref.default_block_rows()
+    for start in range(0, ref.nbeta, nb):
+        stop = min(start + nb, ref.nbeta)
+        a = np.asarray(got.rows(start, stop))
+        b = np.asarray(ref.rows(start, stop))
+        nz = (b != 0.0)
+        if np.any(nz):
+            worst_rel = max(worst_rel, float(np.abs(a[nz] / b[nz] - 1.0).max()))
+        if np.any(~nz) and np.any(a[~nz] != 0.0):
+            raise AssertionError(f'{label}: nonzero where the reference is exactly zero')
+        worst_abs = max(worst_abs, float(np.abs(a - b).max()))
+        scale = max(scale, float(np.abs(b).max()))
+    return worst_rel, (worst_abs / scale if (scale > 0.0) else 0.0)
+
+
 def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers=1,
                                  nrandom=5, verbose=True):
     """detrender_free.compute_detrender_free_base_map() against the analytic oracle. No GPU.
@@ -2889,6 +2961,14 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
     sits right at the boundary where footprints stop widening. The shipped configs are on the
     WIDE side (chord_sb2_et.yml grids 28160 channels onto 65536 tree-freqs), so nfreq < 2^r is
     the production-like regime and the list needs a member there.
+
+    THE COARSE PATH (L != None) IS CHECKED IN THE SAME LOOP, against the fine map's own
+    coarse_grain() -- which is the reference implementation of the max-envelope, and the thing
+    the direct construction has to agree with. Each fixed config is checked at EVERY L in
+    [R, r]; each random config at ONE L drawn from [R, r], since 'every L' on a rank-10 draw
+    is neither cheap nor more informative. Both boundaries can come up and both are
+    interesting: L = R leaves the DM axis alone and only merges M -> N, and L = r collapses
+    the DM axis entirely to nbeta = N*P.
     """
 
     from ..pirate_pybind11 import DedispersionConfig
@@ -2900,7 +2980,7 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
     # which is exactly the case a whole-map comparison is least likely to hit. So the config
     # here is chosen for having a square group at all -- most do not, and the count is
     # reported below so that a silent loss of that coverage is visible.
-    _, _, sd_matrices, _ = build_sd_matrices(_make_test_config(7, [2,2,1]))
+    _, _, sd_matrices, _, _ = build_sd_matrices(_make_test_config(7, [2,2,1]))
     worst_recon, n_square = 0.0, 0
     for sdm in sd_matrices.values():
         recon = sdm.Q_factor @ sdm.W_factor.T                     # (D*P, F)
@@ -2938,6 +3018,8 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
 
     rng = np.random.default_rng(4801)
     worst_apply, worst_ytrue, n_straddled, kmax = 0.0, 0.0, 0, 0
+    worst_coarse, worst_sup, worst_cytrue = 0.0, 0.0, 0.0
+    n_coarse, n_sliced = 0, 0
 
     for (config, label) in configs:
         nfreq = int(config.get_total_nfreq())
@@ -2969,18 +3051,166 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
         kmax = max(kmax, int(vmap.factor_rank))
         worst_apply, worst_ytrue = max(worst_apply, e), max(worst_ytrue, e1)
 
+        # ---- the coarse path, against the fine map's own coarse_grain().
+        R, rr = int(vmap.pf_rank), int(vmap.tree_rank)
+        Ls = range(R, rr + 1) if (label != 'random') else [int(rng.integers(R, rr + 1))]
+        for LL in Ls:
+            coarse = compute_detrender_free_base_map(config, L=LL)
+            ref = vmap.coarse_grain(LL)
+
+            assert coarse.is_coarse_grained and (coarse.L == LL), (LL, coarse.L)
+            ec, es = _compare_maps(coarse, ref, f'{label} L={LL}')
+            # y_true is FINE for both, and both are lifted from the same untruncated terms by
+            # the same code, so they really are the same numbers. Held to a tight bar rather
+            # than to exact equality, so that a future change to the accumulation order is not
+            # a test failure for no reason.
+            ey = float(np.abs(np.asarray(coarse.y_true) / w1 - 1.0).max())
+
+            # Two bars, because the two figures have very different tails (see
+            # _compare_maps). The sup-norm one is the sharp check and is 1800x inside its bar
+            # on the worst random draw measured; the elementwise one is deliberately loose,
+            # since its tail is dynamic range and not error. Slicing the dyadic block at the
+            # WRONG END -- taking [:, -1, :], a min-envelope -- moves LARGE elements, so the
+            # sup-norm bar is what catches it, along with check_ref_covers_y_true() below.
+            if (es >= 1.0e-9) or (ec >= 1.0e-6) or (ey >= 1.0e-13):
+                atomic_print(f'test_base_varmap_vs_analytic: FAILED on {label} at L={LL},'
+                             f' with sup-norm error {es:.3g}, elementwise error {ec:.3g} and'
+                             f' y_true error {ey:.3g}. The config'
+                             f' was:\n{config.to_yaml_string()}')
+                raise AssertionError((label, LL, es, ec, ey))
+
+            # The one runtime check on the property the whole coarse path rests on -- that
+            # the map does not UNDERestimate. It is exactly tight here (the group's max is
+            # attained at a row the map actually stores), so the returned ratio is 1 to
+            # roundoff, and the method's 1 - 1e-9 margin is what absorbs the truncation.
+            coarse.check_ref_covers_y_true()
+
+            n_sliced += int(coarse.history[0]['n_sliced'])
+            n_coarse += 1
+            worst_coarse, worst_sup = max(worst_coarse, ec), max(worst_sup, es)
+            worst_cytrue = max(worst_cytrue, ey)
+
     # The straddle branch is 1 row in 645 on toy.yml, so it is exactly the kind of thing that
     # can quietly stop being exercised when a config list is edited for an unrelated reason.
     assert n_straddled > 0, ('no config in this set has a half-aligned subband whose footprint'
                              ' straddles the subband midpoint, so the straddle branch was not'
                              ' covered at all')
 
+    # Same argument for the coarse slice. Where n_rm == 0 for every group the slice is a
+    # no-op, and taking the dyadic block's TOP instead of its bottom -- the one bug this
+    # construction plausibly invites -- would go unnoticed.
+    assert n_sliced > 0, ('no coarse map in this set actually removed a delay bit, so the'
+                          ' dyadic-block slice was a no-op everywhere and proves nothing')
+
     if verbose:
         atomic_print(f'    test_base_varmap_vs_analytic({len(configs)} configs,'
                      f' {nrandom} random): {n_straddled} straddled entries, max K {kmax},'
                      f' worst relative error: apply() {worst_apply:.3g},'
                      f' y_true {worst_ytrue:.3g}; per-group reconstruction {worst_recon:.3g}'
-                     f' over {len(sd_matrices)} groups ({n_square} of them square)')
+                     f' over {len(sd_matrices)} groups ({n_square} of them square);'
+                     f' {n_coarse} coarse maps ({n_sliced} sliced rows) vs coarse_grain():'
+                     f' sup-norm {worst_sup:.3g}, elementwise {worst_coarse:.3g},'
+                     f' y_true {worst_cytrue:.3g}')
+
+
+def test_base_varmap_admissible(r=6, subband_counts=(2,2,1), verbose=True):
+    """That compute_detrender_free_base_map()'s is_admissible=True is not a lie. No GPU.
+
+    The flag is set on both the fine and the coarse map, and before truncation both deserve
+    it: the fine map IS A_true, and the coarse map IS Abar, which dominates every member of
+    its group by construction. What is left is the SVD truncation, which is SIGNED -- so the
+    flag is a claim about how small that error is, and this test is what keeps it honest.
+
+    THE BAR IS SCALED BY epsilon, not absolute, so it keeps its meaning if the default
+    threshold ever changes. It is on max_diff and NOT on max_r, and that choice is the whole
+    design of this test. max_r would make it nearly worthless here: these configs discard only
+    exact rank deficiency (their groups have more rows than columns, so the tail is
+    structurally zero), so a max_r assertion runs at 7e-14 and would keep passing even if the
+    truncation were loosened by five orders. max_diff against 100*epsilon is a real check on
+    any config -- trivially satisfied where nothing is truncated, and tight to within about
+    13x on a config that truncates something real.
+
+    The reference is UNTRUNCATED, from _base_varmap_matrix(), which is why this test uses
+    small configs: it forms the dense (nalpha, nfreq) map.
+    """
+
+    from ..pirate_pybind11 import DedispersionConfig
+    from .detrender_free import compute_detrender_free_base_map
+
+    config = _make_test_config(r, subband_counts)
+    itree0, A_exact = _base_varmap_matrix(config)
+    truth = VarianceMap.from_dense(config, itree0, A_exact, y_true='row_sums')
+    R, rr = int(truth.pf_rank), int(truth.tree_rank)
+
+    worst_diff, worst_r, worst_ratio = 0.0, 0.0, 0.0
+    for L in [None] + list(range(R, rr + 1)):
+        got = compute_detrender_free_base_map(config, L=L)
+        assert got.is_admissible, L
+
+        eps_max = float(got.history[0]['eps_max'])
+        ref = truth if (L is None) else truth.coarse_grain(L)
+        res = got.measure_admissibility(ref)
+
+        assert res.max_diff < 100.0 * eps_max, (L, res.max_diff, eps_max)
+        worst_diff = max(worst_diff, float(res.max_diff))
+        worst_ratio = max(worst_ratio, float(res.max_diff) / eps_max)
+        if np.isfinite(res.max_r):
+            worst_r = max(worst_r, float(res.max_r) - 1.0)
+
+    # A case with teeth, cheap and deterministic. At a deliberately loose epsilon real
+    # components ARE discarded, the coarse map underestimates, and both of this test's
+    # admissibility checks have to notice. Note the FINE map does not move at all: it is
+    # coarse-graining that narrows the group matrices enough to give them a decaying spectrum
+    # in the first place, and a matrix with more rows than columns has a structurally zero
+    # tail that costs nothing to drop.
+    L_loose = min(R + 2, rr)
+    loose = compute_detrender_free_base_map(config, L=L_loose, epsilon=1.0e-3)
+    res = loose.measure_admissibility(truth.coarse_grain(L_loose))
+    assert res.max_r - 1.0 > 1.0e-4, ('a deliberately loose epsilon did not make the coarse'
+                                      f' map underestimate (max_r-1 = {res.max_r-1:.3g}), so'
+                                      ' neither admissibility check has teeth')
+    try:
+        loose.check_ref_covers_y_true()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('check_ref_covers_y_true() accepted a coarse map that'
+                             f' underestimates by {res.max_r-1:.3g}')
+
+    # One asdf round trip at L != None, since L is a stored field and the coarse path is new.
+    # The fine map's round trip (including its free-form history record) is covered by the
+    # milestone this extends; what is added here is L itself, the coarse shape, and a y_true
+    # that is FINE while the matrix is coarse.
+    import os
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, 'coarse.asdf')
+        coarse = compute_detrender_free_base_map(config, L=L_loose)
+        coarse.write_asdf(path)
+        back = VarianceMap.from_asdf(path)
+        assert (back.L, back.shape, back.is_admissible) == \
+            (coarse.L, coarse.shape, coarse.is_admissible)
+        assert back.y_true.shape == (coarse.nalpha,), back.y_true.shape
+        assert np.array_equal(np.asarray(back.y_true), np.asarray(coarse.y_true))
+        assert np.array_equal(np.asarray(back.Q), np.asarray(coarse.Q))
+        assert back.history == coarse.history
+
+    # Validation: L outside [R, r] must RAISE, and say both bounds.
+    for bad in [R - 1, rr + 1]:
+        try:
+            compute_detrender_free_base_map(config, L=bad)
+        except RuntimeError as e:
+            assert f'[{R}, {rr}]' in str(e), (bad, str(e))
+            continue
+        raise AssertionError(f'compute_detrender_free_base_map(L={bad}) should have raised')
+
+    if verbose:
+        atomic_print(f'    test_base_varmap_admissible(r={r}, subbands={list(subband_counts)}):'
+                     f' admissible at every L in [None, {R}..{rr}], worst max_diff'
+                     f' {worst_diff:.3g} ({worst_ratio:.3g} x epsilon), worst max_r - 1'
+                     f' {worst_r:.3g}; at epsilon=1e-3 and L={L_loose} the coarse map'
+                     f' underestimates by {res.max_r-1:.3g} and is caught')
 
 
 # Work-unit ceiling for the randomized part of test_base_varmap_vs_sweep(). The budget is in
@@ -3907,7 +4137,7 @@ def run_all():
     _report_xdm_coverage('run_all', [_config_of(f) for f in (
         test_index_arithmetic, test_coarse_grain, test_admissibility,
         test_distance_oracles, test_asdf_io, test_greedy_bookkeeping,
-        test_base_varmap_vs_analytic)])
+        test_base_varmap_vs_analytic, test_base_varmap_admissible)])
 
     test_index_arithmetic()
     test_constructor_validation()
@@ -3946,6 +4176,7 @@ def run_all():
     test_map_steps()
     test_report()
     test_base_varmap_vs_analytic()
+    test_base_varmap_admissible()
 
 
 def run_sweep_tests():

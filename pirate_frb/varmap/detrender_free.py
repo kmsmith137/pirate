@@ -20,15 +20,23 @@ The algorithm, in outline:
      convolutions than the per-multiplet route of slow_avar.PfAvarExact.
   2. Build one dense (capacity, D*P) matrix per group and SVD it, dropping small singular
      values.
-  3. Lift each group's factors into a global (nalpha, Ktot) / (nfreq, Ktot) pair.
+  3. Lift each group's factors into a global (nbeta, Ktot) / (nfreq, Ktot) pair.
 
 THE COST IS ALL IN STEP 3. Steps 1 and 2 run at full CHORD scale (chord_sb2_et.yml, nalpha =
 5.96e6) in 14 seconds and hold 17 MB of rows -- a scale at which PfAvarExact cannot be built
-at all. The lift then materializes a dense (nalpha, Ktot) Q, which is 0.36 GiB on
-toy.yml but 63.8 GiB at CHORD. compute_detrender_free_base_map() imposes no limit by
-default, but it reports the size before allocating, and takes an optional 'max_bytes'
-ceiling. The fix is a second, global SVD round that runs BEFORE the lift; the per-group
-factors that round needs are what build_sd_matrices() returns.
+at all. The lift then materializes a dense (nbeta, Ktot) Q, which for a FINE map (L = None)
+is 0.36 GiB on toy.yml but 63.8 GiB at CHORD.
+
+'L' IS WHAT GETS OVER THAT WALL, and it is nearly free here. With no detrender the
+coarse-grained map is not a max at all but a SLICE -- keep the bottom of each dyadic DM block
+-- so the coarse map is built directly rather than by building the fine one and reducing it.
+At chord_sb2_et.yml the lifted Q goes 63.8 GiB (fine) -> 17.5 (L = R = 4) -> 4.3 (L = 6) ->
+0.96 (L = 8). Almost all of that is the row count: Ktot only moves 1435 -> 1399 at L = 6, so
+what L buys is 14.6x SHORTER columns of Q, not more compressible groups. Steps 1 and 2 are
+unchanged by L by design -- it is the lift that goes away.
+
+The remaining scaling fix is a second, global SVD round that runs BEFORE the lift; the
+per-group factors that round needs are what build_sd_matrices() returns.
 
 TWO THINGS HERE ARE NON-OBVIOUS, and getting either wrong gives a wrong ANSWER rather than a
 crash. Both are derived at the code that implements them.
@@ -39,6 +47,11 @@ crash. Both are derived at the code that implements them.
   - Half-aligned subbands whose footprint straddles the subband midpoint need their own
     branch. See the straddle loop. Measured: omitting it moves apply() by 1.6e-3 on toy.yml
     -- rare (1 row of 645) but not negligible.
+
+A THIRD, for the L path: y_true is defined at FINE granularity whatever the map's
+coarse-graining rank (VarianceMap's class docstring is explicit about this), so it cannot be
+read off the coarse factors. It is accumulated separately, in the full delay-bit basis, in
+'sd_vectors' -- see build_sd_matrices().
 """
 
 import time
@@ -70,6 +83,21 @@ def _iter_subbands(sbits):
     return out
 
 
+def _coarsen_sdbits(sdbits, L):
+    """The group key after coarse-graining at rank L: clear the dbits below L, keep sbits.
+
+    L is None for a fine map, in which case this is the identity -- so the L = None path keys,
+    sizes and pools exactly as it did before L existed.
+
+    Both boundaries behave: L = 0 gives an empty mask (right, since coarse-graining at R = 0
+    removes no delay bits), and L = r clears every delay bit, leaving D == 1.
+    """
+    if L is None:
+        return sdbits
+    mask = (1 << (L + _SBITS_WIDTH)) - (1 << _SBITS_WIDTH)    # dbits 0..L-1, shifted into place
+    return sdbits & ~mask
+
+
 ####################################   class SdMatrix   ####################################
 
 
@@ -95,8 +123,12 @@ class SdMatrix:
       freq_indices  (capacity,) int64: the input channel of each row. DISTINCT within a
                     matrix, which is what makes the W lift a plain scatter.
       dense_matrix  (capacity, D*P) float64, the rows.
-      col_sums      (D*P,) float64, recorded by factorize() BEFORE truncation.
+      epsilon       the relative singular-value threshold factorize() actually used.
       is_factored, factor_rank, Q_factor (D*P, K), W_factor (F, K)
+
+    Note there is no row-sum member here. y_true is FINE whatever the coarse-graining rank,
+    so its terms are accumulated in the FULL delay-bit basis, in build_sd_matrices()'s
+    'sd_vectors' -- which this matrix's columns are a slice of once L is set.
     """
 
     def __init__(self, sdbits, capacity, D, P):
@@ -109,7 +141,7 @@ class SdMatrix:
         self.freq_indices = np.zeros(self.capacity, dtype=np.int64)
         self.dense_matrix = np.zeros((self.capacity, self.D * self.P), dtype=np.float64)
 
-        self.col_sums = None
+        self.epsilon = None
         self.is_factored = False
         self.factor_rank = None
         self.Q_factor = None
@@ -150,14 +182,10 @@ class SdMatrix:
         assert self.F == self.capacity, (self.F, self.capacity)
         assert not self.is_factored
 
-        # BEFORE truncating: these are the true map's row sums, which the lift turns into
-        # y_true. Taking them here (rather than at lift time) is also what would let
-        # dense_matrix be released, if its memory were ever wanted back.
-        self.col_sums = self.dense_matrix.sum(axis=0)
-
         eps = (self.default_epsilon(*self.dense_matrix.shape) if (epsilon is None)
                else float(epsilon))
         assert eps > 0.0, eps
+        self.epsilon = eps          # recorded: with epsilon=None it varies per group
 
         u, s, vh = np.linalg.svd(self.dense_matrix, full_matrices=False)
         K = int(np.sum(s > eps * s[0])) if ((s.size > 0) and (s[0] > 0.0)) else 0
@@ -206,12 +234,36 @@ def _subband_geometry(tree):
                 mbase=np.asarray(fs.n_to_mbase, dtype=np.int64))
 
 
-def build_sd_matrices(config, *, epsilon=None, progress=False, debug=False):
+def build_sd_matrices(config, *, L=None, epsilon=None, progress=False, debug=False):
     """Everything except the lift, for the base tree of 'config'.
 
-    Returns (tree, itree0, sd_matrices, stats), where 'sd_matrices' is a dict keyed by sdbits
-    and 'stats' carries n_entries, n_straddled, Ftot and Ktot. n_straddled is there because a
-    test cannot see from the returned VarianceMap whether the straddle branch ran at all.
+    Returns (tree, itree0, sd_matrices, sd_vectors, stats). THIS FUNCTION DOES NO LIFTING --
+    that is what its name promises, and y_true is a lift. It returns two parallel
+    accumulators and lets compute_detrender_free_base_map() consume both.
+
+    THE TWO DICTS DO NOT SHARE A KEY SPACE, and that is the one thing to get right here:
+
+      sd_matrices   COARSE sdbits -> SdMatrix, each (capacity, D_coarse * P)
+      sd_vectors    FULL   sdbits -> (D_full * P,) float64, the summed rows
+
+    At L = None the two key spaces COINCIDE, so indexing one with the other's key passes
+    every fine test. It is also a QUIET bug with L set: a coarse key is a syntactically valid
+    full key whenever the full dbits happened to have no bits below L, so the lookup can
+    succeed and return another group's data. Hence every use site names which key it is
+    using, and the sizing pass asserts len(sd_vectors) >= len(sd_matrices) -- coarsening can
+    only merge keys, never split them.
+
+    'stats' carries n_entries, n_straddled, n_sliced, Ftot, Ktot, n_matrices, L, nbeta and
+    eps_max. n_straddled and n_sliced are there because a test cannot see from the returned
+    VarianceMap whether the straddle branch or the coarse slice actually did anything.
+
+    'itree0' is in the return because IT IS NOT ALWAYS ZERO: early_trigger_level DESCENDS
+    within a primary-tree family, so the e = 0 tree is the LAST of its family. It is 0 for
+    every shipped config -- which is exactly what would make an assertion to that effect a
+    trap -- and 1 for _make_test_config(7, [2,2,1], num_early_triggers=1). DedispersionTree
+    does not carry its own index, so 'tree' cannot supply it, and having the caller recompute
+    config.dedispersion_tree_index(0, 0) would admit a silent inconsistency:
+    VarianceMap.from_factors(config, itree, ..., tree=tree) takes both at face value.
 
     'debug' turns on the O(F) and O(subbands) cross-checks: that no SdMatrix receives two rows
     from one input channel, and that every subband of an entry predicts the same dbits. Both
@@ -220,7 +272,7 @@ def build_sd_matrices(config, *, epsilon=None, progress=False, debug=False):
 
     This is split out from compute_detrender_free_base_map() because the per-group factors,
     not the lifted Q, are what a second (global) SVD round and a coarse-graining pass would
-    consume.
+    consume -- and those callers would otherwise be handed a y_true they have to discard.
     """
 
     from ..pirate_pybind11 import constants
@@ -236,6 +288,15 @@ def build_sd_matrices(config, *, epsilon=None, progress=False, debug=False):
     # The sdbits packing has exactly these two headrooms; see _SBITS_WIDTH.
     assert N <= _SBITS_WIDTH, (N, _SBITS_WIDTH)
     assert r <= constants.max_tree_rank, (r, constants.max_tree_rank)
+
+    if L is not None:
+        L = int(L)
+        # Same bounds and the same wording as VarianceMap.coarse_grain(), so the two read the
+        # same. L < R is meaningless because beta's definition uses dc = d >> (L-R); L > r is
+        # impossible because there are only 2^(r-R) coarse DMs to merge.
+        if not (R <= L <= r):
+            raise RuntimeError(f'build_sd_matrices: L={L} is out of range [R, r] ='
+                               f' [{R}, {r}] for this config\'s base tree')
 
     # The alpha convention assumes 2^R coarse DM channels per multiplet, which is what an
     # unset (auto) dm_downsampling gives. validate() already requires it, so this is a
@@ -361,25 +422,42 @@ def build_sd_matrices(config, *, epsilon=None, progress=False, debug=False):
     # from coinciding with an unstraddled one's (measured, it never does, but two dicts merged
     # with update() would silently drop a group).
 
-    sd_capacities = {}
+    sd_capacities = {}      # COARSE sdbits -> row count
+    sd_vectors = {}         # FULL   sdbits -> (D_full * P,) accumulator for y_true's terms
+
+    def count(sdbits):
+        # Keying sd_matrices by the COARSE sdbits is where the extra pooling comes from:
+        # entries whose full dbits differ only below L now share a matrix. Measured, that is
+        # worth 0.2% of Ktot at L = R and 26% at L = R+6 -- small at the interesting end, but
+        # free, and it is the natural key.
+        key = _coarsen_sdbits(sdbits, L)
+        sd_capacities[key] = sd_capacities.get(key, 0) + 1
+        if sdbits not in sd_vectors:
+            D_full = 1 << (sdbits >> _SBITS_WIDTH).bit_count()
+            sd_vectors[sdbits] = np.zeros(D_full * P)
+
     for (_, _, _, sdbits) in unstraddled_plan:
-        sd_capacities[sdbits] = sd_capacities.get(sdbits, 0) + 1
+        count(sdbits)
     for (_, n, sdbits) in straddled_plan:
         # A straddling subband always gets a row to itself, so the two fields of its sdbits
         # are redundant with each other -- and checkable.
         assert (sdbits & _SBITS_MASK) == (1 << n), (sdbits, n)
-        sd_capacities[sdbits] = sd_capacities.get(sdbits, 0) + 1
+        count(sdbits)
 
     sd_matrices = {}
     for (sdbits, capacity) in sd_capacities.items():
         dbits = sdbits >> _SBITS_WIDTH
         sd_matrices[sdbits] = SdMatrix(sdbits, capacity, 1 << dbits.bit_count(), P)
 
+    # Coarsening can only merge keys, never split them, so this holds always -- and fails
+    # loudly if the two dicts are ever indexed with each other's key. See the docstring.
+    assert len(sd_vectors) >= len(sd_matrices), (len(sd_vectors), len(sd_matrices))
+
     n_entries = len(unstraddled_plan) + len(straddled_plan)
     if progress:
-        atomic_print(f'  build_sd_matrices: r={r} R={R} N={N} M={M} P={P} nfreq={nfreq}:'
-                     f' {n_entries} entries ({len(straddled_plan)} straddled) ->'
-                     f' {len(sd_matrices)} SdMatrices,'
+        atomic_print(f'  build_sd_matrices: r={r} R={R} N={N} M={M} P={P} nfreq={nfreq}'
+                     f' L={L}: {n_entries} entries ({len(straddled_plan)} straddled) ->'
+                     f' {len(sd_matrices)} SdMatrices ({len(sd_vectors)} y_true groups),'
                      f' {n_entries/nfreq:.2f} rows per input channel')
 
     # ---- build the tiles and fill the rows. Two straight-line loops, one per plan.
@@ -388,6 +466,8 @@ def build_sd_matrices(config, *, epsilon=None, progress=False, debug=False):
     # planning loop above needed the UNCLIPPED footprint once per channel (cached in
     # 'footprint'), while these need a triple CLIPPED to the entry's own [lo, hi), which
     # cannot be hoisted. Its repeated searchsorted over cmap is negligible at these sizes.
+
+    n_sliced = 0        # rows whose coarse slice actually removed a delay bit (n_rm > 0)
 
     def emit(ifreq, tile, klev, sdbits):
         """The level-r normalization, then one row.
@@ -405,10 +485,17 @@ def build_sd_matrices(config, *, epsilon=None, progress=False, debug=False):
 
         The lift undoes the second line per subband, with a factor 2^(R-l[n]). It CANNOT be
         folded into the stored row: two subbands sharing a row have different l.
+
+        With L set, the row is then COARSE-GRAINED, which is a slice rather than a max -- see
+        the comment at the slice below.
         """
 
+        nonlocal n_sliced
+
         # This is the assert that closes the loop between the planning pass's closed form and
-        # the actual iteration, on both plans. Everything downstream -- the sizing, the shared
+        # the actual iteration, on both plans. It reads the FULL sdbits, as does every other
+        # assertion here -- plan entries carry the full mask whatever L is, and the coarse key
+        # is derived only where it is needed. Everything downstream -- the sizing, the shared
         # rows, the lift -- is built on that prediction being right.
         assert (tile.dbits << (r - klev)) == (sdbits >> _SBITS_WIDTH), \
             (ifreq, klev, tile.dbits, sdbits >> _SBITS_WIDTH)
@@ -416,10 +503,46 @@ def build_sd_matrices(config, *, epsilon=None, progress=False, debug=False):
         # scale**2 because variance is quadratic (this is what PfVariance.add_tile() does);
         # the [0] drops the length-1 nf axis. Omitting scale**2 is silently wrong wherever an
         # edge tile deferred its 1/sqrt(2).
-        var = (tile.scale ** 2) * convolver.variance(tile.data, P)[0]      # (D, P)
+        var = (tile.scale ** 2) * convolver.variance(tile.data, P)[0]      # (D_full, P)
         var *= 2.0 ** (-(r - klev))
 
-        sdm = sd_matrices[sdbits]
+        # y_true is FINE whatever L is, so its terms accumulate in the FULL dbits basis, under
+        # the FULL key, BEFORE the slice below.
+        sd_vectors[sdbits] += var.reshape(-1)
+
+        if L is not None:
+            # COARSE-GRAINING IS A SLICE, NOT A MAX, and this is where that is cashed in.
+            #
+            # Group beta = (dc, n, p) contains the fine rows whose subband DM index d_m runs
+            # over an aligned dyadic block of size 2^(L-R+l): d = dc*2^(L-R) + [0, 2^(L-R)),
+            # e = [0, 2^l). With NO DETRENDER the variance is antitone in the bits of d_m, so
+            # the max over an aligned dyadic block is attained at its BOTTOM -- see
+            # notes/variance_map.tex, appendix "Monotonicity of the variance map in the DM
+            # bits (no detrender)", eq:dyadic_property, which says in as many words that a map
+            # resolving only the top DM bits "can simply be evaluated at the bottom of each
+            # dyadic DM block: no maximization over the block is needed, and the resulting
+            # bound is tight".
+            #
+            # THE NO-DETRENDER HYPOTHESIS IS LOAD-BEARING. The same appendix shows the
+            # property is false with a Detrender2d in front, so the day someone adds a
+            # detrender path is the day this slice silently becomes wrong.
+            #
+            # In the level-r labelling the block bottom is "all bits below L zero", since
+            # d_full = d_m << (R-l) turns d_m's low (L-R+l) bits into d_full's low L. And
+            # _remap_d() packs selected bits in order, so those bits occupy the LOWEST n_rm
+            # packed positions, contiguously -- hence a reshape and a slice. Taking [:, -1, :]
+            # instead of [:, 0, :] would give a min-envelope, which is why the test set checks
+            # n_sliced > 0 and calls check_ref_covers_y_true().
+            #
+            # The max commutes with the group structure per column: at fixed F every alpha in
+            # beta gets its value from ONE plan entry (they share the subband, and each
+            # subband is assigned to exactly one entry per channel), so this may be done
+            # row-by-row, before any summation over channels and before the SVD.
+            n_rm = ((sdbits >> _SBITS_WIDTH) & ((1 << L) - 1)).bit_count()
+            n_sliced += int(n_rm > 0)
+            var = var.reshape(-1, 1 << n_rm, P)[:, 0, :]           # (D_coarse, P)
+
+        sdm = sd_matrices[_coarsen_sdbits(sdbits, L)]              # COARSE key
         assert sdm.F < sdm.capacity, (sdm.F, sdm.capacity)
         if debug:
             # Within one ifreq, distinct entries carry DISJOINT sbits -- each subband is
@@ -485,31 +608,47 @@ def build_sd_matrices(config, *, epsilon=None, progress=False, debug=False):
 
     Ftot = sum(sdm.F for sdm in sd_matrices.values())
     Ktot = sum(sdm.factor_rank for sdm in sd_matrices.values())
+    eps_max = max(sdm.epsilon for sdm in sd_matrices.values())
+    nbeta = ((1 << (r - R)) * M * P) if (L is None) else ((1 << (r - L)) * N * P)
 
     if progress:
         atomic_print(f'  build_sd_matrices: Ftot={Ftot} rows -> Ktot={Ktot}'
-                     f' ({Ftot/max(Ktot,1):.1f}x compression)')
+                     f' ({Ftot/max(Ktot,1):.1f}x compression), nbeta={nbeta},'
+                     f' eps_max={eps_max:.3g}, {n_sliced} rows sliced')
 
-    stats = dict(n_entries=n_entries, n_straddled=len(straddled_plan), Ftot=Ftot, Ktot=Ktot,
-                 n_matrices=len(sd_matrices))
-    return tree, itree0, sd_matrices, stats
+    stats = dict(n_entries=n_entries, n_straddled=len(straddled_plan), n_sliced=n_sliced,
+                 Ftot=Ftot, Ktot=Ktot, n_matrices=len(sd_matrices), L=L, nbeta=nbeta,
+                 eps_max=eps_max)
+    return tree, itree0, sd_matrices, sd_vectors, stats
 
 
-def compute_detrender_free_base_map(config, *, epsilon=None, max_bytes=None,
+def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=None,
                                     progress=False, debug=False):
     """Analytic variance map of 'config''s base tree (ipri = et_level = 0), factored.
 
-    No detrender, no coarse-graining, no DedispersionPlan and no GPU. See the module
-    docstring for the algorithm and for the scaling limit.
+    No detrender, no DedispersionPlan and no GPU. See the module docstring for the algorithm
+    and for the scaling limit.
 
     Parameters
     ----------
+    L : int or None
+        Coarse-graining rank, R <= L <= r, or None for a FINE map. The result equals
+        ``compute_detrender_free_base_map(config).coarse_grain(L)`` up to the SVD truncation
+        (measured, 8e-14 relative), and is very much cheaper: at chord_sb2_et.yml the lifted
+        Q goes from 63.8 GiB to 17.5 at L = R = 4, 4.3 at L = 6 and 0.96 at L = 8. See
+        VarianceMap's module docstring for the beta convention, and note L = R is NOT the
+        same as fine -- it leaves the DM axis alone but still merges M -> N, which is 3.6x at
+        chord_sb2_et.yml.
+
+        The whole optimization rests on the no-detrender monotonicity theorem
+        (notes/variance_map.tex, appendix "Monotonicity of the variance map in the DM bits"),
+        which makes the max-envelope a SLICE. See emit().
     epsilon : float or None
         Relative singular-value threshold, per group. None uses
         SdMatrix.default_epsilon().
     max_bytes : int or None
-        Ceiling on the lifted Q, which is the only large allocation here (63.8 GiB at
-        chord_sb2_et.yml scale). None means NO LIMIT; the size is reported before the
+        Ceiling on the lifted Q, which is the only large allocation here (63.8 GiB for a fine
+        map at chord_sb2_et.yml scale). None means NO LIMIT; the size is reported before the
         allocation either way, so a run that is about to fail says why rather than being
         killed by the OOM reaper.
     debug : bool
@@ -517,90 +656,143 @@ def compute_detrender_free_base_map(config, *, epsilon=None, max_bytes=None,
 
     Notes
     -----
-    The returned map's y_true is the PRE-TRUNCATION row sum, i.e. it is the TRUE map's rather
-    than the stored map's. row_sums() will therefore differ from it at the 1e-11 level, and
-    get_distance() will return ~1 + 1e-11 rather than exactly 1. That is normal and is exactly
-    what the distance machinery is built to measure -- it is not a bug to fix.
+    y_true IS FINE WHATEVER L IS -- a length-nalpha vector, per VarianceMap's convention --
+    so it is not the row sums of the returned (possibly coarse) matrix, and it cannot be read
+    off the coarse factors. It is accumulated separately; see build_sd_matrices().
 
-    is_admissible stays False (a truncated SVD guarantees nothing elementwise) and
-    pinned_columns stays empty; a caller who needs a nonnegative W column for the LP machinery
-    calls pin_column() afterwards.
+    It is also the PRE-TRUNCATION row sum, i.e. the TRUE map's rather than the stored map's.
+    row_sums() will therefore differ from it at the 1e-11 level, and get_distance() will
+    return ~1 + 1e-11 rather than exactly 1. That is normal and is exactly what the distance
+    machinery is built to measure -- it is not a bug to fix.
+
+    is_admissible is True, for both values of L. Before truncation the fine map IS A_true and
+    the coarse map IS Abar (the max-envelope dominates every member by construction), so both
+    qualify. What is left is the SVD truncation, which is SIGNED: admissibility can fail by
+    O(epsilon) in max_diff, where epsilon is the per-group threshold -- measured between 1.0
+    and 7.6 times epsilon across four decades. Tighten epsilon if a stricter guarantee is
+    needed. Do not read max_r for this: it is a per-element relative measure with no floor,
+    so on toy.yml it reports 2.0e-9 for the same 2.7e-11 error, amplified ~200x by the
+    matrix's dynamic range.
+
+    pinned_columns stays empty; a caller who needs a nonnegative W column for the LP
+    machinery calls pin_column() afterwards.
     """
 
     t0 = time.time()
 
-    tree, itree0, sd_matrices, stats = build_sd_matrices(
-        config, epsilon=epsilon, progress=progress, debug=debug)
+    tree, itree0, sd_matrices, sd_vectors, stats = build_sd_matrices(
+        config, L=L, epsilon=epsilon, progress=progress, debug=debug)
 
     fs = tree.frequency_subbands
     r, R = int(tree.total_rank()), int(fs.pf_rank)
-    M, P = int(fs.M), int(tree.nprofiles)
+    N, M, P = int(fs.N), int(fs.M), int(tree.nprofiles)
     nfreq = int(config.get_total_nfreq())
     ndm = 1 << (r - R)
     nalpha = ndm * M * P
-    Ktot = stats['Ktot']
+    Ktot, nbeta = stats['Ktot'], stats['nbeta']
+    L = stats['L']                             # int()-ed and range-checked by the callee
 
     g = _subband_geometry(tree)
     lev, mbase = g['l'], g['mbase']
 
-    nbytes = 8 * nalpha * Ktot
+    nbytes = 8 * nbeta * Ktot
     # Unconditional, not under 'progress': this is the number that makes an OOM diagnosable.
-    atomic_print(f'compute_detrender_free_base_map: lifting to Q ({nalpha} x {Ktot}),'
-                 f' {nbytes/(1<<30):.2f} GiB')
+    what = 'nalpha' if (L is None) else f'nbeta at L={L}'
+    atomic_print(f'compute_detrender_free_base_map: lifting to Q ({nbeta} x {Ktot}),'
+                 f' {nbytes/(1<<30):.2f} GiB ({what})')
 
     if (max_bytes is not None) and (nbytes > max_bytes):
         raise RuntimeError(f'compute_detrender_free_base_map: the lifted Q is'
-                           f' {nbytes/(1<<30):.1f} GiB (nalpha={nalpha}, Ktot={Ktot}), over'
-                           f' the caller-supplied max_bytes={max_bytes/(1<<30):.1f} GiB.')
+                           f' {nbytes/(1<<30):.1f} GiB ({what}={nbeta}, Ktot={Ktot}), over'
+                           f' the caller-supplied max_bytes={max_bytes/(1<<30):.1f} GiB.'
+                           + ('' if (L is not None) else
+                              ' Passing L would shrink it by 2^(L-R) * M/N.'))
 
-    # A 4-d view of Q, so the per-subband writes are natural. Reshaped to (nalpha, Ktot) at
-    # the end, which is a no-op: alpha = (d*M + m)*P + p is exactly this axis order.
-    Qtot = np.zeros((ndm, M, P, Ktot))
     Wtot = np.zeros((nfreq, Ktot))
-    ytrue = np.zeros((ndm, M, P))
 
-    k0 = 0
-    for sdm in sd_matrices.values():
-        K = sdm.factor_rank
-        Qg = sdm.Q_factor.reshape(sdm.D, P, K)
-        yg = sdm.col_sums.reshape(sdm.D, P)
-        dbits = sdm.sdbits >> _SBITS_WIDTH
+    # ---- the Q lift. Two branches; W is unchanged by L (coarse-graining acts on ROWS of A).
 
-        for n in _iter_subbands(sdm.sdbits & _SBITS_MASK):
-            ll, mb = int(lev[n]), int(mbase[n])
+    if L is None:
+        # A 4-d view of Q, so the per-subband writes are natural. Reshaped to (nalpha, Ktot)
+        # at the end, which is a no-op: alpha = (d*M + m)*P + p is exactly this axis order.
+        Qtot = np.zeros((ndm, M, P, Ktot))
+        k0 = 0
+        for sdm in sd_matrices.values():
+            K = sdm.factor_rank
+            Qg = sdm.Q_factor.reshape(sdm.D, P, K)
+            dbits = sdm.sdbits >> _SBITS_WIDTH
 
-            # Undo the level-r normalization for THIS subband (see emit()). Sanity: at l == R
-            # (a full-band subband) the factor is 2^0 = 1 and d_full = (d << R) | e is the
-            # honest r-bit index; at l == 0 the factor is 2^R, matching the fact that a
-            # level-0 subband sums 2^(r-R) tree-freqs with normalization 2^-((r-R)/2) while
-            # the level-r tile carries 2^-(r/2).
-            fac = 2.0 ** (R - ll)
+            for n in _iter_subbands(sdm.sdbits & _SBITS_MASK):
+                ll, mb = int(lev[n]), int(mbase[n])
 
-            # The virtual level-r delay index of multiplet (n, e) at coarse DM d. Its low R-l
-            # bits are zero, which is why dbits is required to have none there.
-            dfull = ((np.arange(ndm)[:, None] << R)
-                     | (np.arange(1 << ll)[None, :] << (R - ll)))
-            idx = SparseTile._remap_d(dfull, (1 << r) - 1, dbits)     # (ndm, 2^ll)
+                # Undo the level-r normalization for THIS subband (see emit()). Sanity: at
+                # l == R (a full-band subband) the factor is 2^0 = 1 and d_full = (d << R) | e
+                # is the honest r-bit index; at l == 0 the factor is 2^R, matching the fact
+                # that a level-0 subband sums 2^(r-R) tree-freqs with normalization
+                # 2^-((r-R)/2) while the level-r tile carries 2^-(r/2).
+                fac = 2.0 ** (R - ll)
 
-            # ASSIGN into Q (each group owns a disjoint column block, and within a group the
-            # subbands own disjoint multiplet ranges), ACCUMULATE into y_true (one alpha
-            # receives contributions from many groups).
-            Qtot[:, mb:mb + (1 << ll), :, k0:k0+K] = fac * Qg[idx]
-            ytrue[:, mb:mb + (1 << ll), :] += fac * yg[idx]
+                # The virtual level-r delay index of multiplet (n, e) at coarse DM d. Its low
+                # R-l bits are zero, which is why dbits is required to have none there.
+                dfull = ((np.arange(ndm)[:, None] << R)
+                         | (np.arange(1 << ll)[None, :] << (R - ll)))
+                idx = SparseTile._remap_d(dfull, (1 << r) - 1, dbits)     # (ndm, 2^ll)
 
-        Wtot[sdm.freq_indices, k0:k0+K] = sdm.W_factor
-        k0 += K
+                # ASSIGN: each group owns a disjoint column block, and within a group the
+                # subbands own disjoint multiplet ranges.
+                Qtot[:, mb:mb + (1 << ll), :, k0:k0+K] = fac * Qg[idx]
+
+            Wtot[sdm.freq_indices, k0:k0+K] = sdm.W_factor
+            k0 += K
+    else:
+        # The coarse lift is a simpler sibling: beta = (dc*N + n)*P + p has no fine-DM axis,
+        # and the delay index is dc << L -- the dyadic block's bottom (see emit()), which is
+        # l-INDEPENDENT. So 'idx' hoists out of the subband loop, which it cannot do above.
+        Qtot = np.zeros((1 << (r - L), N, P, Ktot))
+        dc_full = np.arange(1 << (r - L), dtype=np.int64) << L
+        k0 = 0
+        for sdm in sd_matrices.values():
+            K = sdm.factor_rank
+            Qg = sdm.Q_factor.reshape(sdm.D, P, K)
+            dbits = sdm.sdbits >> _SBITS_WIDTH                 # COARSE: no bits below L
+            idx = SparseTile._remap_d(dc_full, (1 << r) - 1, dbits)       # (2^(r-L),)
+
+            # The 2^(R-l[n]) factor is still per subband, and coarse-graining does not touch
+            # it -- it undoes the stored row's level-r normalization, which is orthogonal.
+            for n in _iter_subbands(sdm.sdbits & _SBITS_MASK):
+                Qtot[:, n, :, k0:k0+K] = (2.0 ** (R - int(lev[n]))) * Qg[idx]
+
+            Wtot[sdm.freq_indices, k0:k0+K] = sdm.W_factor
+            k0 += K
 
     assert k0 == Ktot, (k0, Ktot)
+
+    # ---- the y_true lift, which is FINE for both branches and therefore runs over the OTHER
+    # dict: sd_vectors, keyed by the FULL sdbits and holding untruncated row sums in the full
+    # delay-bit basis. Its body is the fine Q lift's index arithmetic, over one vector per
+    # group instead of one factor block. ACCUMULATE, not assign: one alpha receives
+    # contributions from many groups.
+
+    ytrue = np.zeros((ndm, M, P))
+    for (sdbits, yg) in sd_vectors.items():
+        dbits = sdbits >> _SBITS_WIDTH                          # FULL key
+        yg = yg.reshape(1 << dbits.bit_count(), P)
+        for n in _iter_subbands(sdbits & _SBITS_MASK):
+            ll, mb = int(lev[n]), int(mbase[n])
+            dfull = ((np.arange(ndm)[:, None] << R)
+                     | (np.arange(1 << ll)[None, :] << (R - ll)))
+            idx = SparseTile._remap_d(dfull, (1 << r) - 1, dbits)         # (ndm, 2^ll)
+            ytrue[:, mb:mb + (1 << ll), :] += (2.0 ** (R - ll)) * yg[idx]
 
     dt = time.time() - t0
     if progress:
         atomic_print(f'  compute_detrender_free_base_map: done in {dt:.2f} seconds')
 
     return VarianceMap.from_factors(
-        config, itree0, Qtot.reshape(nalpha, Ktot), Wtot, detrender=None,
-        y_true=ytrue.reshape(nalpha), tree=tree,
-        history=[dict(step='compute_detrender_free_base_map', time=dt, nalpha=nalpha,
-                      Ktot=Ktot, Q_nbytes=nbytes, n_matrices=stats['n_matrices'],
-                      n_entries=stats['n_entries'], n_straddled=stats['n_straddled'],
-                      Ftot=stats['Ftot'], epsilon=epsilon)])
+        config, itree0, Qtot.reshape(nbeta, Ktot), Wtot, detrender=None, L=L,
+        y_true=ytrue.reshape(nalpha), tree=tree, is_admissible=True,
+        history=[dict(step='compute_detrender_free_base_map', time=dt, L=L, nalpha=nalpha,
+                      nbeta=nbeta, Ktot=Ktot, Q_nbytes=nbytes,
+                      n_matrices=stats['n_matrices'], n_entries=stats['n_entries'],
+                      n_straddled=stats['n_straddled'], n_sliced=stats['n_sliced'],
+                      Ftot=stats['Ftot'], epsilon=epsilon, eps_max=stats['eps_max'])])
