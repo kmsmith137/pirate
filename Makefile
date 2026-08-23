@@ -414,6 +414,20 @@ PYFILES = \
   pirate_frb/detrending_1d_kalman/KalmanDetrender.py \
   pirate_frb/detrending_1d_kalman/brute_force.py \
   pirate_frb/detrending_1d_kalman/tests.py \
+  pirate_frb/detrending_spline/__init__.py \
+  pirate_frb/detrending_spline/SplineDetrender.py \
+  pirate_frb/detrending_spline/assemble.py \
+  pirate_frb/detrending_spline/basis.py \
+  pirate_frb/detrending_spline/expand.py \
+  pirate_frb/detrending_spline/knots.py \
+  pirate_frb/detrending_spline/masks.py \
+  pirate_frb/detrending_spline/moments.py \
+  pirate_frb/detrending_spline/reduce.py \
+  pirate_frb/detrending_spline/regulator.py \
+  pirate_frb/detrending_spline/solve.py \
+  pirate_frb/detrending_spline/timebasis.py \
+  pirate_frb/detrending_spline/reference.py \
+  pirate_frb/detrending_spline/tests.py \
   pirate_frb/slow_avar/__init__.py \
   pirate_frb/slow_avar/SparseTile.py \
   pirate_frb/slow_avar/PfVariance.py \
@@ -426,6 +440,7 @@ PYFILES = \
   pirate_frb/varmap/asdf_io.py \
   pirate_frb/varmap/basis.py \
   pirate_frb/varmap/brute_force.py \
+  pirate_frb/varmap/detrender_free.py \
   pirate_frb/varmap/distance.py \
   pirate_frb/varmap/lp.py \
   pirate_frb/varmap/report.py \
@@ -445,6 +460,7 @@ PYFILES = \
   pirate_frb/tests/test_assembled_frame_asdf.py \
   pirate_frb/tests/test_atomic_out.py \
   pirate_frb/tests/test_decode_argmax.py \
+  pirate_frb/tests/test_dedispersion_config.py \
   pirate_frb/tests/test_network.py \
   pirate_frb/tests/test_pulse_injection.py \
   pirate_frb/tests/test_server.py \
