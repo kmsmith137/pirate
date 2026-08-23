@@ -59,6 +59,7 @@ import time
 import numpy as np
 
 from .VarianceMap import VarianceMap, make_tree
+from .VarianceMultiMap import VarianceMultiMap
 from ..slow_avar.SparseTile import SparseTile, SparseTileTriple
 from ..slow_avar.PfVariance import PfVarianceConvolver
 from ..utils import atomic_print
@@ -796,3 +797,184 @@ def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=N
                       n_matrices=stats['n_matrices'], n_entries=stats['n_entries'],
                       n_straddled=stats['n_straddled'], n_sliced=stats['n_sliced'],
                       Ftot=stats['Ftot'], epsilon=epsilon, eps_max=stats['eps_max'])])
+
+
+####################################   the multimap   ####################################
+
+
+def _validate_multi_map_L(L, npri, r0, R):
+    """The legal range for 'L' is the DOWNSAMPLED trees', not the base tree's.
+
+    Left unchecked this still fails, but loudly and confusingly: VarianceMap.__init__ raises
+    "L=6 is out of range [R, r] = [2, 5]" from the CHILD's constructor, naming a rank the
+    caller never asked for -- and only AFTER the base map has been built, which can be
+    minutes and tens of GiB.
+    """
+
+    if L is None:
+        return
+    hi = r0 if (npri == 1) else (r0 - 1)      # a downsampled primary tree has rank r0 - 1
+    if not (R <= int(L) <= hi):
+        raise RuntimeError(
+            f'compute_detrender_free_multi_map: L={L} is out of range [R, r] = [{R}, {hi}].'
+            + (f' The upper bound is {r0-1} rather than the base tree\'s own {r0} because'
+               f' this config has num_primary_trees={npri}, and a downsampled primary tree'
+               f' has rank {r0-1}.' if (npri > 1) else ''))
+
+
+def _check_restriction(base, tree, gamma):
+    """The geometry Proposition 2 rests on, checked on the actual trees rather than assumed.
+
+    Cheap (O(N) per tree, once per gamma) and worth it: two of the three facts are properties
+    of how DedispersionTree derives its subbands rather than of config parameters, so
+    DedispersionConfig::validate() -- which runs before any tree exists -- is the wrong place
+    for them, and they are otherwise only covered by test_subband_property() in another file.
+    """
+
+    from ..pirate_pybind11 import DedispersionTree
+
+    fs = tree.frequency_subbands
+    M = int(base.tree.frequency_subbands.M)
+
+    # (F2) plus Observation (a): time downsampling does not change WHICH bands are searched,
+    # so the multiplet index is carried over UNCHANGED. m_index_mapping() raises unless every
+    # band of the second tree is a band of the first AT THE SAME LEVEL -- which a set
+    # comparison would not see -- so this is the containment check and the identity check in
+    # one. Measured: it is the identity for every gamma of toy, chime_sb2 and chord_sb2_et.
+    m_map = np.asarray(DedispersionTree.m_index_mapping(base.tree, tree), dtype=np.int64)
+    if not np.array_equal(m_map, np.arange(M)):
+        raise RuntimeError(f'compute_detrender_free_multi_map: primary tree {gamma} does not'
+                           f' carry the base tree\'s multiplet index over unchanged'
+                           f' (m_index_mapping is not the identity), so the slice below would'
+                           f' select the wrong rows.')
+
+    # (F1) and Observation (b): r_gamma = r_0 - 1 with R unchanged, hence D_gamma = D_0/2.
+    # Observation (c): P_gamma <= P_0, which validate()'s non-increasing max_width rule gives.
+    r_g, R_g, P_g = int(tree.total_rank()), int(fs.pf_rank), int(tree.nprofiles)
+    if (R_g, r_g) != (base.pf_rank, base.tree_rank - 1):
+        raise RuntimeError(f'compute_detrender_free_multi_map: primary tree {gamma} has'
+                           f' (r, R) = ({r_g}, {R_g}), expected'
+                           f' ({base.tree_rank - 1}, {base.pf_rank}) -- a downsampled primary'
+                           ' tree drops one tree rank and no subband levels.')
+    if P_g > base.nprofiles:
+        raise RuntimeError(f'compute_detrender_free_multi_map: primary tree {gamma} has'
+                           f' nprofiles={P_g}, more than the base tree\'s'
+                           f' {base.nprofiles}. DedispersionConfig::validate() requires'
+                           ' max_width to be non-increasing across primary trees, which is'
+                           ' what makes the profile axes nest.')
+    return P_g
+
+
+def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=None,
+                                     progress=False, debug=False):
+    """Analytic variance map of EVERY primary tree, as a VarianceMultiMap. No detrender.
+
+    Computes the base tree once with compute_detrender_free_base_map() and SLICES it for
+    every other primary tree, so the whole multimap costs one base-map computation plus some
+    array copies -- no second tile pass, no second SVD. Compare compute_variance_multimap(),
+    which runs one dedispersion pass per input channel.
+
+    Parameters are compute_detrender_free_base_map()'s, and mean the same thing, with two
+    differences:
+
+    L : int or None
+        The legal range is [R, r-1] when num_primary_trees > 1, since a downsampled primary
+        tree has rank r-1. Checked BEFORE the base map is computed.
+    max_bytes : int or None
+        Still bounds the BASE map's Q, which is roughly half of what this function
+        allocates. The multimap total is
+        ``(1 + 0.5 * sum over gamma>0 of P_gamma/P_0)`` times the base Q -- 1.94x at every
+        shipped CHORD/CHIME config, 1.65x at toy.yml -- and is reported before any slice is
+        taken.
+
+    Notes
+    -----
+    THE SLICE IS PROPOSITION 2 of notes/variance_map.tex, appendix "Variance maps of a
+    config's trees are row-restrictions of one another" (\\label{ssec:restriction_ds}), read
+    as an array operation. Every primary tree's map is the same slice of the base tree's on
+    three axes -- the upper half of the coarse-DM axis, every multiplet, and the first
+    P_gamma profiles -- with W and mid untouched, since the restriction acts on ROWS of A.
+
+    Early-trigger trees are not stored: they are Proposition 1, which
+    VarianceMultiMap.apply_fine() derives from the parent. See that class's docstring.
+    """
+
+    t0 = time.time()
+
+    # VALIDATE BEFORE COMPUTING: the base map can take minutes and tens of GiB, and raising
+    # afterwards for a reason knowable from the config alone is pure waste. make_tree() needs
+    # no plan, no GPU and no map.
+    npri = int(config.num_primary_trees)
+    itree0 = int(config.dedispersion_tree_index(0, 0))
+    tree0 = make_tree(config, itree0)
+    r0, R = int(tree0.total_rank()), int(tree0.frequency_subbands.pf_rank)
+    _validate_multi_map_L(L, npri, r0, R)
+
+    prov = dict(algorithm='detrender_free', L=L, epsilon=epsilon,
+                num_primary_trees=npri)
+
+    base = compute_detrender_free_base_map(config, L=L, epsilon=epsilon,
+                                           max_bytes=max_bytes, progress=progress,
+                                           debug=debug)
+    if npri == 1:
+        prov['total_seconds'] = time.time() - t0
+        return VarianceMultiMap(config, [base], detrender=None, provenance=prov)
+
+    N, M, P0 = base.nsubbands, base.nmultiplets, base.nprofiles
+    K = base.factor_rank
+    D0 = 1 << (r0 - R)
+
+    # Rows of Q are alpha = (d*M + m)*P + p when fine, and beta = (dc*N + n)*P + p when
+    # coarse, so the same 4-d view serves both with (D0, M) or (2^(r0-L), N) as the first two
+    # axes. y_true is FINE WHATEVER L IS (VarianceMap's convention), so its view is always the
+    # (D0, M, P0) one -- the single easiest thing to get wrong here.
+    nrow0, ax1 = ((1 << (r0 - L)), N) if (L is not None) else (D0, M)
+    Q4 = np.asarray(base.Q).reshape(nrow0, ax1, P0, K)
+    y3 = np.asarray(base.y_true).reshape(D0, M, P0)
+
+    # The coarse groups line up because dc_0 = d_0 >> (L-R) and d_0 = d_gamma + D0/2 give
+    # dc_0 = dc_gamma + 2^(r0-L-1) exactly, provided 2^(L-R) divides D0/2 = 2^(r0-R-1), i.e.
+    # L <= r0-1. That is not an extra assumption: it is exactly the L range validated above.
+
+    Ps = [_check_restriction(base, make_tree(config, int(config.dedispersion_tree_index(g, 0))), g)
+          for g in range(1, npri)]
+
+    nbytes = 8 * K * (base.nbeta + sum((base.nbeta // 2) * P // P0 for P in Ps))
+    atomic_print(f'compute_detrender_free_multi_map: {npri} primary trees, P='
+                 f'{[P0] + Ps}, total Q {nbytes/(1<<30):.2f} GiB'
+                 f' ({1 + 0.5*sum(P/P0 for P in Ps):.3f}x the base map)')
+
+    maps = [base]
+    for gamma in range(1, npri):
+        itree = int(config.dedispersion_tree_index(gamma, 0))
+        tree = make_tree(config, itree)
+        Pg = Ps[gamma - 1]
+
+        # THE NO-DETRENDER HYPOTHESIS IS THE WHOLE ARGUMENT, not a formality. Proposition 1
+        # (early triggers) holds whatever the upstream chain; Proposition 2 does NOT, and the
+        # appendix says so twice. Measured on _make_test_config(6, [2,2,1], num_primary_trees=2)
+        # against the brute-force sweep: 4.9e-7 without a detrender, and 2.1 WITH one -- a
+        # factor of two wrong, not a rounding difference. If a detrender path is ever added to
+        # this module, this function must not be part of it.
+        #
+        # np.ascontiguousarray because the sliced view is non-contiguous whenever Pg < P0;
+        # saying so marks the copy as intended rather than incidental.
+        maps.append(VarianceMap.from_factors(
+            config, itree,
+            np.ascontiguousarray(Q4[nrow0//2:, :, :Pg, :].reshape(-1, K)),
+            base.W, mid=base.mid, detrender=None, L=L, tree=tree,
+            y_true=np.ascontiguousarray(y3[D0//2:, :, :Pg].reshape(-1)),
+            # A row subset of a map that dominates A_true elementwise also dominates it, so
+            # whatever the base earned, each gamma earns. W and mid are SHARED objects rather
+            # than copies: they are identical across trees and VarianceMap stores them
+            # read-only, which saves npri copies of (nfreq, K).
+            is_admissible=base.is_admissible,
+            history=list(base.history) + [dict(step='restrict_to_primary_tree', gamma=gamma,
+                                               itree=itree, P=Pg, D=D0//2)]))
+
+    dt = time.time() - t0
+    prov['total_seconds'] = dt
+    if progress:
+        atomic_print(f'  compute_detrender_free_multi_map: {npri} maps in {dt:.2f} seconds')
+
+    return VarianceMultiMap(config, maps, detrender=None, provenance=prov)

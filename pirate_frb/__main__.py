@@ -239,7 +239,7 @@ def test(args):
                 varmap_tests.run_all()
 
         if run_all_tests or args.vmbf:
-            # The brute-force sweep. Deterministic apart from test_base_varmap_vs_sweep()'s
+            # The brute-force sweep. Deterministic apart from test_multimap_vs_sweep()'s
             # cost-budgeted random draws, which it makes itself; and each test runs a full
             # sweep over all input channels, so once is enough.
             if i == 0:

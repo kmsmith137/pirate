@@ -3224,7 +3224,125 @@ def test_base_varmap_admissible(r=6, subband_counts=(2,2,1), verbose=True):
                      f' underestimates by {res.max_r-1:.3g} and is caught')
 
 
-# Work-unit ceiling for the randomized part of test_base_varmap_vs_sweep(). The budget is in
+def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=5, verbose=True):
+    """compute_detrender_free_multi_map() against slices of its own base map. No GPU.
+
+    The cheap structural test, and the one that runs on every suite invocation. It compares
+    each gamma map against a slice of the BASE map taken here, which makes it an EXACT test
+    rather than a tolerance one -- both sides are literally the same floats, and the slice is
+    derived from each tree's own geometry rather than from the implementation. It catches an
+    off-by-one in the DM half, a missing profile bound, a wrong itree and a dropped W or mid;
+    what it cannot catch is whether Proposition 2 is TRUE, which is
+    test_multimap_vs_sweep()'s job.
+
+    _make_test_config() CANNOT produce the profile restriction P_gamma < P_0 -- it gives
+    every primary tree the same max_width, so the [:, :, :P_gamma, :] slice is a no-op there,
+    which is exactly the failure notes/variance_map.tex warns about ("the array shapes look
+    plausible either way"). The random draws are where that case comes from: measured at
+    gpu_valid=False, 60% have npri > 1 and 36% a non-uniform max_width. The report line below
+    says how many actually did, so a thin run is recognizable as thin.
+    """
+
+    from ..pirate_pybind11 import DedispersionConfig
+    from .detrender_free import compute_detrender_free_multi_map
+
+    configs = [
+        (_make_test_config(r, subband_counts), f'({r}, {list(subband_counts)}): npri = 1'),
+        (_make_test_config(r, subband_counts, num_primary_trees=2), 'npri = 2'),
+        (_make_test_config(7, [2,2,1], num_primary_trees=3, num_early_triggers=1),
+         'npri = 3, net = 1'),
+    ]
+    rng = np.random.default_rng(90210)
+    for _ in range(nrandom):
+        configs.append((DedispersionConfig.make_random(max_toplevel_rank=9,
+                                                       max_early_triggers=2,
+                                                       gpu_valid=False), 'random'))
+
+    n_multi, n_varying, n_coarse, ncmp = 0, 0, 0, 0
+
+    for (config, label) in configs:
+        npri = int(config.num_primary_trees)
+        tree0 = make_tree(config, int(config.dedispersion_tree_index(0, 0)))
+        r0, R = int(tree0.total_rank()), int(tree0.frequency_subbands.pf_rank)
+
+        # The legal range is the DOWNSAMPLED trees', not the base tree's: [R, r0] at npri == 1
+        # but [R, r0-1] otherwise, since a downsampled primary tree has rank r0-1.
+        hi = r0 if (npri == 1) else (r0 - 1)
+        for L in [None, int(rng.integers(R, hi + 1))]:
+            mm = compute_detrender_free_multi_map(config, L=L)
+            base = mm.maps[0]
+            assert len(mm.maps) == npri, (label, len(mm.maps), npri)
+            assert mm.provenance['algorithm'] == 'detrender_free'
+            assert mm.provenance['L'] == L
+
+            D0, M, N, P0 = 1 << (r0 - R), base.nmultiplets, base.nsubbands, base.nprofiles
+            K = base.factor_rank
+            nrow0, ax1 = ((1 << (r0 - L)), N) if (L is not None) else (D0, M)
+            Q4 = np.asarray(base.Q).reshape(nrow0, ax1, P0, K)
+            # y_true is FINE whatever L is, so its view is ALWAYS the (D0, M, P0) one. This is
+            # the single easiest thing to get wrong in the function under test.
+            y3 = np.asarray(base.y_true).reshape(D0, M, P0)
+
+            n_multi += int(npri > 1)
+            n_coarse += int(L is not None)
+
+            for (gamma, m) in enumerate(mm.maps):
+                itree = int(config.dedispersion_tree_index(gamma, 0))
+                assert m.itree == itree, (label, gamma, m.itree, itree)
+                assert m.config is config and m.detrender is None
+                assert m.is_admissible == base.is_admissible
+                if gamma == 0:
+                    continue
+
+                Pg = m.nprofiles
+                n_varying += int(Pg != P0)
+                tree = make_tree(config, itree)
+                assert (int(tree.total_rank()), int(tree.frequency_subbands.pf_rank)) \
+                    == (r0 - 1, R), (label, gamma)
+                nbeta = ((1 << (r0 - 1 - L)) * N * Pg) if (L is not None) \
+                    else ((D0 // 2) * M * Pg)
+                assert m.shape == (nbeta, m.nfreq), (label, gamma, m.shape, nbeta)
+
+                # EXACT: the slice is a copy of the same floats, so anything but equality is
+                # a bug rather than roundoff.
+                assert np.array_equal(np.asarray(m.Q),
+                                      Q4[nrow0//2:, :, :Pg, :].reshape(-1, K)), (label, gamma)
+                assert np.array_equal(np.asarray(m.y_true),
+                                      y3[D0//2:, :, :Pg].reshape(-1)), (label, gamma)
+                # W and mid are SHARED objects, not copies: identical across trees, stored
+                # read-only, and sharing saves npri copies of (nfreq, K).
+                assert m.W is base.W and m.mid is base.mid, (label, gamma)
+                ncmp += m.Q.size
+
+        # L = r0 with npri > 1 must raise, and must do so BEFORE the base map is computed --
+        # unchecked it still fails, but from the CHILD's constructor, naming a rank the caller
+        # never asked for, after minutes of work.
+        #
+        # max_bytes=0 is what makes the ORDERING checkable rather than a timing guess: it
+        # makes the base map raise too, so getting the L message back proves the L check ran
+        # first.
+        if npri > 1:
+            try:
+                compute_detrender_free_multi_map(config, L=r0, max_bytes=0)
+            except RuntimeError as e:
+                assert f'[{R}, {r0-1}]' in str(e), (label, str(e))
+                assert 'max_bytes' not in str(e), (label, 'L was checked after the base map')
+            else:
+                raise AssertionError(f'{label}: L={r0} should have raised at npri={npri}')
+
+    assert n_multi > 0, 'no config in this set had more than one primary tree'
+    assert n_varying > 0, ('no config in this set had a primary-tree-dependent max_width, so'
+                           ' the profile bound [:, :, :P_gamma, :] was a no-op everywhere and'
+                           ' proves nothing -- see the docstring')
+
+    if verbose:
+        atomic_print(f'    test_multimap_vs_base({len(configs)} configs, {nrandom} random):'
+                     f' {n_multi} multi-tree and {n_coarse} coarse builds,'
+                     f' {n_varying} gamma maps with P_gamma < P_0,'
+                     f' {ncmp} Q entries compared exactly')
+
+
+# Work-unit ceiling for the randomized part of test_multimap_vs_sweep(). The budget is in
 # WORK UNITS, not seconds, so that the same draws are accepted on every machine and a slow
 # machine runs the same test rather than a different one. The measured conversion is about
 # 2.0 ns per unit for the GPU sweep (72 ns for the CPU one), so this is a ~5-second ceiling
@@ -3248,12 +3366,20 @@ def _sweep_work(geom):
             * sum(1 << r for r in geom.tree_r))
 
 
-def test_base_varmap_vs_sweep(device='gpu', nrandom=5, verbose=True):
-    """compute_detrender_free_base_map() against the brute-force sweep. Needs a plan, and by
-    default a GPU.
+def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
+    """compute_detrender_free_multi_map() against the brute-force sweep, EVERY primary tree.
+    Needs a plan, and by default a GPU.
 
     This is the only check that ties the analytic map to the actual kernels;
     test_base_varmap_vs_analytic() is the tight one, and shares no code with the dedisperser.
+    It also covers Proposition 2 of notes/variance_map.tex against the sweep, which nothing
+    did before: test_restriction_vs_sweep() is Proposition 1 (early triggers) only, and says
+    so. mm.maps[0] IS compute_detrender_free_base_map(config), so the base map stays covered
+    by the same assertion it had when this test was named after it.
+
+    Widening from the base tree to every primary tree is nearly free: sweep_all_trees_dense()
+    already computes every tree -- they share one dedisperser -- so the per-tree matrices are
+    already sitting there and only the base tree's was being looked at.
 
     'device' selects which sweep is checked. The GPU sweep is the default because it is 36x
     faster, which is what lets the cost budget be large enough for the random sample to be
@@ -3262,16 +3388,37 @@ def test_base_varmap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     suspicion.
 
     Tolerance 1e-5, the same number and the same reason as test_sweep_vs_per_tfm(): the
-    dedispersion chain is float32. Measured, the two agree to 5.3e-7, so there is nearly two
-    orders of headroom.
+    dedispersion chain is float32. Measured over nine runs of this test, the worst agreement
+    across every primary tree ranged over 4.9e-7 to 1.3e-6, so there is roughly an order of
+    headroom -- and the spread is the random draws, not the restriction: a hand-built config
+    reproduces at 4.8e-7 every time.
+
+    RANDOM CONFIGS ONLY. Commit d8ac467 widened the cdd2 baseline rows so that make_random()
+    actually produces a primary-tree-dependent max_width, and with that the draws subsume the
+    fixed configs this test used to carry and cover three things neither of them did.
+    Measured over 250-400 draws from this test's exact distribution: npri > 1 in 53%, a
+    varying max_width (hence P_gamma < P_0) in 23-29%, R == 0 in 39%, nfreq < 2^r in 27%,
+    xdm_rank > 0 in 92%, and some primary tree with early triggers in 25%. The sampling is
+    deliberately left non-deterministic: a different config covers each case on each run,
+    which is worth more over many runs than one config pinned forever. 'nrandom' is the knob
+    if a single run's coverage ever needs to be denser.
+
+    ONE GAP, AND IT IS PRE-EXISTING. At max_toplevel_rank=9 the drawn R never exceeds 2
+    (measured histogram {0: 97, 1: 97, 2: 56} over 250 draws), because R <= dd_rank1 and a
+    small tree caps it. So the R = 3, 4 geometry of every shipped config is not swept here --
+    but the fixed configs did not cover it either, so this is a property of the whole sweep
+    tier rather than of the random draws.
+
+    The early-trigger trees the sweep also computes are NOT compared: they are Proposition 1,
+    a multimap does not store them, and test_restriction_vs_sweep() checks them element by
+    element.
     """
 
     from ..pirate_pybind11 import DedispersionConfig
     from .brute_force import sweep_all_trees_dense, _SweepGeometry
-    from .detrender_free import compute_detrender_free_base_map
+    from .detrender_free import compute_detrender_free_multi_map
 
-    configs = [(_make_test_config(7, [2,2,1], nfreq=50), '(7, [2,2,1], nfreq=50)'),
-               (_make_test_config(7, [1]), '(7, [1]): R = 0, xdm_rank = 2')]
+    configs = []
 
     # Random draws, cost-bounded. Four details here cost time to rediscover:
     #
@@ -3301,46 +3448,61 @@ def test_base_varmap_vs_sweep(device='gpu', nrandom=5, verbose=True):
                 break
         configs.append((config, 'random'))
 
-    worst, n_straddled = 0.0, 0
+    worst, n_straddled, ntrees = 0.0, 0, 0
+    n_multi, n_varying, n_r0, n_wide, n_et = 0, 0, 0, 0, 0
 
     for (config, label) in configs:
-        itree0 = int(config.dedispersion_tree_index(0, 0))
-        A = np.asarray(sweep_all_trees_dense(config, device=device)[itree0])
+        As = sweep_all_trees_dense(config, device=device)
+        mm = compute_detrender_free_multi_map(config)
 
-        vmap = compute_detrender_free_base_map(config)
-        # force=True: dense() guards against forming a production-scale matrix, but the sweep
-        # above has already materialized one of exactly this shape for EVERY tree, so the
-        # budget that matters was spent long before this line.
-        got = np.asarray(vmap.dense(force=True))
-        assert got.shape == A.shape, (got.shape, A.shape)
+        npri = int(config.num_primary_trees)
+        P = [m.nprofiles for m in mm.maps]
+        n_multi += int(npri > 1)
+        n_varying += int(len(set(P)) > 1)
+        n_r0 += int(mm.maps[0].pf_rank == 0)
+        n_wide += int(int(config.get_total_nfreq()) < (1 << mm.maps[0].tree_rank))
+        n_et += int(any(int(pt.num_early_triggers) > 0 for pt in config.primary_trees))
 
-        # The sweep's exact zeros are (channel, multiplet) pairs that do not overlap at all,
-        # and the analytic map reproduces them EXACTLY rather than at the truncation level --
-        # so this is an exact bar, not a tolerance. It is exact for a structural reason: a
-        # channel absent from a group leaves that group's rows of W untouched at zero, and a
-        # subband absent from a group never has those columns written into its rows of Q, so
-        # the product is 0.0 whichever of the two is missing. Measured over 12.2M zero entries
-        # across 20 random configs, every one was exactly 0.0. That makes this the check that
-        # would catch a W scatter landing on the wrong channels, which a relative comparison
-        # over the support would mostly hide.
-        nz = (A != 0.0)
-        assert np.any(nz)
-        e = float(np.abs(got[nz] / A[nz] - 1.0).max())
-        e0 = float(np.abs(got[~nz]).max()) if np.any(~nz) else 0.0
+        for (gamma, vmap) in enumerate(mm.maps):
+            A = np.asarray(As[int(config.dedispersion_tree_index(gamma, 0))])
+            # force=True: dense() guards against forming a production-scale matrix, but the
+            # sweep above has already materialized one of exactly this shape for EVERY tree,
+            # so the budget that matters was spent long before this line.
+            got = np.asarray(vmap.dense(force=True))
+            assert got.shape == A.shape, (label, gamma, got.shape, A.shape)
 
-        if (e >= 1.0e-5) or (e0 != 0.0):
-            atomic_print(f'test_base_varmap_vs_sweep: FAILED on {label}, with on-support'
-                         f' error {e:.3g} and off-support leakage {e0:.3g} (which must be'
-                         f' exactly zero). The config was:\n{config.to_yaml_string()}')
-            raise AssertionError((label, e, e0))
+            # The sweep's exact zeros are (channel, multiplet) pairs that do not overlap at
+            # all, and the analytic map reproduces them EXACTLY rather than at the truncation
+            # level -- so this is an exact bar, not a tolerance. It is exact for a structural
+            # reason: a channel absent from a group leaves that group's rows of W untouched at
+            # zero, and a subband absent from a group never has those columns written into its
+            # rows of Q, so the product is 0.0 whichever of the two is missing. Measured over
+            # 12.2M zero entries across 20 random configs, every one was exactly 0.0. That
+            # makes this the check that would catch a W scatter landing on the wrong channels,
+            # which a relative comparison over the support would mostly hide.
+            nz = (A != 0.0)
+            assert np.any(nz), (label, gamma)
+            e = float(np.abs(got[nz] / A[nz] - 1.0).max())
+            e0 = float(np.abs(got[~nz]).max()) if np.any(~nz) else 0.0
 
-        n_straddled += int(vmap.history[0]['n_straddled'])
-        worst = max(worst, e)
+            if (e >= 1.0e-5) or (e0 != 0.0):
+                atomic_print(f'test_multimap_vs_sweep: FAILED on {label}, primary tree'
+                             f' {gamma} of {npri} (P={P}), with on-support error {e:.3g} and'
+                             f' off-support leakage {e0:.3g} (which must be exactly zero).'
+                             f' The config was:\n{config.to_yaml_string()}')
+                raise AssertionError((label, gamma, e, e0))
+
+            worst = max(worst, e)
+            ntrees += 1
+
+        n_straddled += int(mm.maps[0].history[0]['n_straddled'])
 
     if verbose:
-        atomic_print(f'    test_base_varmap_vs_sweep(device={device}, {len(configs)} configs,'
-                     f' {nrandom} random): {n_straddled} straddled entries, worst relative'
-                     f' error {worst:.3g}')
+        atomic_print(f'    test_multimap_vs_sweep(device={device}, {len(configs)} random'
+                     f' configs, {ntrees} primary trees): {n_straddled} straddled entries,'
+                     f' worst relative error {worst:.3g}; coverage: {n_multi} npri>1,'
+                     f' {n_varying} varying max_width, {n_r0} R=0, {n_wide} wide-footprint,'
+                     f' {n_et} with early triggers')
 
 
 ####################################   the brute-force sweep   ###################################
@@ -4188,6 +4350,7 @@ def run_all():
     test_report()
     test_base_varmap_vs_analytic()
     test_base_varmap_admissible()
+    test_multimap_vs_base()
 
 
 def run_sweep_tests():
@@ -4246,7 +4409,8 @@ def run_sweep_tests():
     # half of it Proposition 2 does not share.
     test_restriction_vs_sweep(num_primary_trees=2)
     test_restriction_vs_sweep(num_primary_trees=2, detrender=True)
-    # The analytic map of varmap/detrender_free.py against the kernels. This is the only
-    # thing that ties the two together; test_base_varmap_vs_analytic() (--varmap) is the
-    # tight check, and shares no code with the dedisperser.
-    test_base_varmap_vs_sweep()
+    # The analytic map of varmap/detrender_free.py against the kernels, for EVERY primary
+    # tree. This is the only thing that ties the two together, and the only check on
+    # Proposition 2 against the sweep; test_base_varmap_vs_analytic() (--varmap) is the tight
+    # check, and shares no code with the dedisperser.
+    test_multimap_vs_sweep()
