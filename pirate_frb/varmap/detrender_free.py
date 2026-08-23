@@ -85,13 +85,19 @@ _SBITS_WIDTH = 42
 _SBITS_MASK = (1 << _SBITS_WIDTH) - 1
 
 
-def _iter_subbands(sbits):
-    """The set bits of 'sbits', ascending."""
+def _iter_bits(bits):
+    """The set bit positions of 'bits', ascending.
+
+    DELIBERATELY KNOWS NOTHING ABOUT THE sdbits PACKING. A caller iterating a group's subbands
+    passes 'sdbits & _SBITS_MASK' explicitly, so that the mask reads as the load-bearing step
+    it is: without it the delay bits would arrive as subband indices. Other callers pass a
+    plain subband mask, and a name promising to unpack an sdbits would be wrong for them.
+    """
     out = []
-    while sbits:
-        b = sbits & (-sbits)
+    while bits:
+        b = bits & (-bits)
         out.append(b.bit_length() - 1)
-        sbits ^= b
+        bits ^= b
     return out
 
 
@@ -212,40 +218,6 @@ class SdMatrix:
 ####################################   the algorithm   ####################################
 
 
-def _subband_geometry(tree):
-    """The length-N per-subband tables of the algorithm, as a dict of int64 arrays.
-
-    All in TOPLEVEL TREE-FREQ units: a coarse channel is 2^(r-R) tree-freqs wide, so subband
-    n occupies [I_lo[n], I_hi[n]), of width 2^c[n] with c[n] = r-R+l[n] its own tree depth.
-    """
-
-    fs = tree.frequency_subbands
-    r, R = int(tree.total_rank()), int(fs.pf_rank)
-
-    lev = np.asarray(fs.n_to_level, dtype=np.int64)
-    flo = np.asarray(fs.n_to_flo, dtype=np.int64)
-    fhi = np.asarray(fs.n_to_fhi, dtype=np.int64)
-
-    I_lo = flo << (r - R)
-    I_hi = fhi << (r - R)
-
-    # Case 1 (aligned): I_n is a node of the toplevel tree at level c, so ordinary aligned
-    # iteration reproduces the subband's merges. Case 2 (half-aligned, l > 0 and odd index):
-    # I_n starts at an odd multiple of 2^(c-1) and is NOT a node of the tree. See
-    # notes/dedispersion.tex, section "Subbanded dedispersion".
-    case1 = (flo & ((1 << lev) - 1)) == 0
-
-    # Exact: I_hi - I_lo = 2^c, and the only branch that reads I_mid has l >= 1 hence c >= 1,
-    # so I_mid = I_lo + 2^(c-1). Note the midpoint is generic -- a case-1 subband's top merge
-    # joins its two halves at the same point -- but for case 1 the halves are the ALIGNED
-    # pair, which SparseTileTriple.iterate() already merges correctly, so there is nothing to
-    # detect and I_mid is never consulted there.
-    I_mid = (I_lo + I_hi) // 2
-
-    return dict(l=lev, c=(r - R) + lev, I_lo=I_lo, I_hi=I_hi, I_mid=I_mid, case1=case1,
-                mbase=np.asarray(fs.n_to_mbase, dtype=np.int64))
-
-
 class SdPlan:
     """Everything except the lift, for the base tree of 'config'.
 
@@ -298,24 +270,36 @@ class SdPlan:
 
     Members
     -------
-      config, tree0, itree0        'tree0' says WHICH tree, and pairs with itree0. NOTE
-                                   itree0 IS NOT ALWAYS ZERO: early_trigger_level DESCENDS
-                                   within a primary-tree family, so the e = 0 tree is the
-                                   LAST of its family. It is 0 for every shipped config --
-                                   which is exactly what would make an assertion to that
-                                   effect a trap -- and 1 for _make_test_config(7, [2,2,1],
-                                   num_early_triggers=1).
-      r, R, N, M, P, nfreq         the base tree's geometry,
-      ndm, nalpha                  with ndm = 2^(r-R) and nalpha = ndm*M*P.
-      lev, c, I_lo, I_hi, I_mid,   _subband_geometry(), unpacked.
-      case1, mbase
-      cmap, convolver, footprint
-      Lmat, epsilon,               the constructor's arguments, kept. self.Lmat is the
-      freq_variances, debug        int()-ed, range-checked value and is what code should
-                                   read; stats mirrors it only for the record.
-      unstraddled, straddled       the two plans; see _plan_pass().
-      sd_matrices, sd_vectors      the two accumulators above.
-      stats                        dict, folded into VarianceMap.history by the caller.
+      config, itree0, tree0:
+          which tree this is a plan for. NOTE itree0 IS NOT ALWAYS ZERO: early_trigger_level
+          DESCENDS within a primary-tree family, so the e = 0 tree is the LAST of its family.
+          It is 0 for every shipped config -- which is exactly what would make an assertion
+          to that effect a trap -- and 1 for _make_test_config(7, [2,2,1],
+          num_early_triggers=1).
+
+      r, R, N, M, P, nfreq, ndm, nalpha:
+          the base tree's geometry, with ndm = 2^(r-R) and nalpha = ndm*M*P.
+
+      lev, c, I_lo, I_hi, I_mid, case1, mbase:
+          the length-N per-subband tables; see _subband_geometry().
+
+      Lmat, epsilon, freq_variances, debug:
+          the constructor's arguments, kept. Read self.Lmat rather than stats['Lmat']: it is
+          the int()-ed, range-checked value, and stats mirrors it only for the record.
+
+      cmap, convolver, footprint:
+          the (nfreq+1,) input-channel edges in tree-freq units, one shared
+          PfVarianceConvolver for the whole run, and each channel's UNCLIPPED [f0, f1) as
+          (nfreq, 2) int64. See _tile_pass() for why the footprint is worth caching.
+
+      unstraddled_plan, straddled_plan:
+          the two plans; see _plan_pass().
+
+      sd_matrices, sd_vectors:
+          the two accumulators above.
+
+      stats:
+          dict, which the caller folds into VarianceMap.history.
     """
 
     def __init__(self, config, *, Lmat=None, epsilon=None, freq_variances=None,
@@ -378,15 +362,12 @@ class SdPlan:
             raise RuntimeError(f'SdPlan: primary tree 0 has dm_downsampling={dmds}, but the'
                                " variance map's index convention needs the auto value 0")
 
-        g = _subband_geometry(self.tree0)
-        self.lev, self.c = g['l'], g['c']
-        self.I_lo, self.I_hi, self.I_mid = g['I_lo'], g['I_hi'], g['I_mid']
-        self.case1, self.mbase = g['case1'], g['mbase']
+        self._subband_geometry()
 
         self.cmap = np.asarray(config.make_channel_map(), dtype=np.float64)
         self.convolver = PfVarianceConvolver()     # ONE shared instance for the whole run
 
-        self.unstraddled, self.straddled = [], []
+        self.unstraddled_plan, self.straddled_plan = [], []
         self.footprint = np.zeros((self.nfreq, 2), dtype=np.int64)
         self.sd_matrices, self.sd_vectors = None, {}
         self.stats = {}
@@ -405,6 +386,40 @@ class SdPlan:
         return (f'SdPlan(itree0={self.itree0}, r={self.r}, R={self.R}, N={self.N},'
                 f' M={self.M}, P={self.P}, nfreq={self.nfreq},'
                 f' n_entries={self.stats["n_entries"]}, {what})')
+
+
+    def _subband_geometry(self):
+        """Set the length-N per-subband tables of the algorithm, as array members.
+
+        All in TOPLEVEL TREE-FREQ units: a coarse channel is 2^(r-R) tree-freqs wide, so
+        subband n occupies [I_lo[n], I_hi[n]), of width 2^c[n] with c[n] = r-R+l[n] its own
+        tree depth.
+        """
+
+        fs = self.tree0.frequency_subbands
+        r, R = self.r, self.R
+
+        self.lev = np.asarray(fs.n_to_level, dtype=np.int64)
+        self.c = (r - R) + self.lev
+        self.mbase = np.asarray(fs.n_to_mbase, dtype=np.int64)
+
+        flo = np.asarray(fs.n_to_flo, dtype=np.int64)
+        fhi = np.asarray(fs.n_to_fhi, dtype=np.int64)
+        self.I_lo = flo << (r - R)
+        self.I_hi = fhi << (r - R)
+
+        # Case 1 (aligned): I_n is a node of the toplevel tree at level c, so ordinary aligned
+        # iteration reproduces the subband's merges. Case 2 (half-aligned, l > 0 and odd
+        # index): I_n starts at an odd multiple of 2^(c-1) and is NOT a node of the tree. See
+        # notes/dedispersion.tex, section "Subbanded dedispersion".
+        self.case1 = (flo & ((1 << self.lev) - 1)) == 0
+
+        # Exact: I_hi - I_lo = 2^c, and the only branch that reads I_mid has l >= 1 hence
+        # c >= 1, so I_mid = I_lo + 2^(c-1). Note the midpoint is generic -- a case-1
+        # subband's top merge joins its two halves at the same point -- but for case 1 the
+        # halves are the ALIGNED pair, which SparseTileTriple.iterate() already merges
+        # correctly, so there is nothing to detect and I_mid is never consulted there.
+        self.I_mid = (self.I_lo + self.I_hi) // 2
 
 
     # ---------------- the four passes ----------------
@@ -443,8 +458,8 @@ class SdPlan:
         both tuples, not just the loop variable: the tile pass walks the flat plans and needs
         it to rebuild the channel's gridding triple and to write freq_indices.
 
-          unstraddled: (ifreq, lo, hi, sdbits)          the common path
-          straddled:   (ifreq, straddle_n, sdbits)      case-2 midpoint straddles
+          unstraddled_plan: (ifreq, lo, hi, sdbits)       the common path
+          straddled_plan:   (ifreq, straddle_n, sdbits)   case-2 midpoint straddles
 
         The straddled triple carries no (lo, hi) because (ifreq, straddle_n) already
         determines them, via the same intersect() the tile pass calls.
@@ -459,8 +474,15 @@ class SdPlan:
             j0, j1 = int(tri.f0), int(tri.f0 + tri.nf)
             self.footprint[ifreq] = (j0, j1)
 
-            local = {}                     # (lo, hi) -> sbits, unstraddled subbands only
-            u0, s0 = len(self.unstraddled), len(self.straddled)
+            # A LIST OF [lo, hi, sbits], NOT A DICT KEYED BY (lo, hi). It holds at most one
+            # entry per unstraddled subband seeing this channel, and measured it is almost
+            # always length 1 and never longer than 3 (at chord_sb2_et.yml, N = 25), so a
+            # linear scan beats hashing a composite key. Appending also makes the entry order
+            # explicit rather than a property of the container: entries come out in
+            # ascending-n order, which is the order they reach unstraddled_plan and therefore
+            # the row order of every dense_matrix.
+            local_unstraddled_plan = []
+            u0, s0 = len(self.unstraddled_plan), len(self.straddled_plan)
 
             for n in range(N):
                 lo, hi = self.intersect(j0, j1, n)
@@ -469,11 +491,16 @@ class SdPlan:
                 seen_subbands |= (1 << n)
                 if (not case1[n]) and (lo < I_mid[n] < hi):
                     dbits = self.predict_dbits_r(lo, hi, n)
-                    self.straddled.append((ifreq, n, (dbits << _SBITS_WIDTH) | (1 << n)))
+                    self.straddled_plan.append((ifreq, n, (dbits << _SBITS_WIDTH) | (1 << n)))
                 else:
-                    local[(lo, hi)] = local.get((lo, hi), 0) | (1 << n)
+                    for e in local_unstraddled_plan:
+                        if (e[0] == lo) and (e[1] == hi):
+                            e[2] |= (1 << n)
+                            break
+                    else:
+                        local_unstraddled_plan.append([lo, hi, 1 << n])
 
-            for ((lo, hi), sbits) in local.items():
+            for (lo, hi, sbits) in local_unstraddled_plan:
                 n0 = (sbits & -sbits).bit_length() - 1    # any subband of the entry will do
                 dbits = self.predict_dbits_r(lo, hi, n0)
 
@@ -487,10 +514,10 @@ class SdPlan:
                     # One shared row is legitimate only because every subband of the entry
                     # predicts the same dbits -- they may differ in l and in I_lo, and they
                     # all agree because they all agree with the global form above.
-                    for n in _iter_subbands(sbits):
+                    for n in _iter_bits(sbits):
                         assert self.predict_dbits_r(lo, hi, n) == dbits, (ifreq, lo, hi, n, n0)
 
-                self.unstraddled.append((ifreq, lo, hi, (dbits << _SBITS_WIDTH) | sbits))
+                self.unstraddled_plan.append((ifreq, lo, hi, (dbits << _SBITS_WIDTH) | sbits))
 
             if self.debug:
                 # NO SdMatrix EVER GETS TWO ROWS FROM ONE INPUT CHANNEL, which is what makes
@@ -505,15 +532,15 @@ class SdPlan:
                 # Lmat-free, cheap (a few entries per channel, not an O(F) scan), and true in
                 # the init_sd_matrices=False mode as well -- where a duplicate would silently
                 # DOUBLE-COUNT into sd_vectors rather than merely overwrite a row.
-                keys = [s for (_, _, _, s) in self.unstraddled[u0:]]
-                keys += [s for (_, _, s) in self.straddled[s0:]]
+                keys = [s for (_, _, _, s) in self.unstraddled_plan[u0:]]
+                keys += [s for (_, _, s) in self.straddled_plan[s0:]]
                 assert len(set(keys)) == len(keys), (ifreq, keys)
 
         # A subband seeing no channel at all would give identically-zero rows of A, which
         # breaks y_true and hence get_distance(). This is the analogue of PfAvarExact's
         # m_cnt >= 1 assert.
         assert seen_subbands == ((1 << N) - 1), \
-            f'subband(s) {_iter_subbands(((1 << N) - 1) & ~seen_subbands)} see no input channel'
+            f'subband(s) {_iter_bits(((1 << N) - 1) & ~seen_subbands)} see no input channel'
 
         # Every subband of an entry must have R - l[n] zero low bits in the entry's dbits,
         # since the lift's virtual level-r delay index (d << R) | (e << (R-l)) has none there.
@@ -534,9 +561,9 @@ class SdPlan:
         # branch taken explicitly the assertion now holds everywhere -- trivially so on that
         # branch, where the << (r - c) supplies R - l[n] zero low bits. Keep it: it is the
         # statement that makes the lift's index formula well defined.
-        for (_, _, _, sdbits) in self.unstraddled:
+        for (_, _, _, sdbits) in self.unstraddled_plan:
             dbits = sdbits >> _SBITS_WIDTH
-            for n in _iter_subbands(sdbits & _SBITS_MASK):
+            for n in _iter_bits(sdbits & _SBITS_MASK):
                 assert (dbits & ((1 << (R - int(lev[n]))) - 1)) == 0, (dbits, n, int(lev[n]))
 
 
@@ -568,9 +595,9 @@ class SdPlan:
 
         sd_capacities = {} if init_sd_matrices else None       # COARSE sdbits -> row count
 
-        for (_, _, _, sdbits) in self.unstraddled:
+        for (_, _, _, sdbits) in self.unstraddled_plan:
             self._count(sdbits, sd_capacities)
-        for (_, n, sdbits) in self.straddled:
+        for (_, n, sdbits) in self.straddled_plan:
             # A straddling subband always gets a row to itself, so the two fields of its
             # sdbits are redundant with each other -- and checkable.
             assert (sdbits & _SBITS_MASK) == (1 << n), (sdbits, n)
@@ -589,14 +616,14 @@ class SdPlan:
             assert len(self.sd_vectors) >= len(self.sd_matrices), \
                 (len(self.sd_vectors), len(self.sd_matrices))
 
-        n_entries = len(self.unstraddled) + len(self.straddled)
-        self.stats.update(n_entries=n_entries, n_straddled=len(self.straddled),
+        n_entries = len(self.unstraddled_plan) + len(self.straddled_plan)
+        self.stats.update(n_entries=n_entries, n_straddled=len(self.straddled_plan),
                           n_groups=len(self.sd_vectors), Lmat=self.Lmat)
 
         if progress:
             atomic_print(f'  SdPlan: r={self.r} R={self.R} N={self.N} M={self.M} P={self.P}'
                          f' nfreq={self.nfreq}: {n_entries} entries'
-                         f' ({len(self.straddled)} straddled) -> {len(self.sd_vectors)}'
+                         f' ({len(self.straddled_plan)} straddled) -> {len(self.sd_vectors)}'
                          f' y_true groups, {n_entries/self.nfreq:.2f} rows per input channel')
 
 
@@ -704,14 +731,14 @@ class SdPlan:
         cannot be hoisted. Its repeated searchsorted over cmap is negligible at these sizes.
         """
 
-        for (ifreq, lo, hi, sdbits) in self.unstraddled:
+        for (ifreq, lo, hi, sdbits) in self.unstraddled_plan:
             tri = SparseTileTriple.make_tree_gridding_output(self.cmap, ifreq, flo=lo, fhi=hi)
             for _ in range(self.r):
                 tri = tri.iterate()
             assert tri.nf == 1 and len(tri.tiles) == 1, (tri.nf, len(tri.tiles))
             self._emit(ifreq, tri.tiles[0], self.r, sdbits)
 
-        for (ifreq, n, sdbits) in self.straddled:
+        for (ifreq, n, sdbits) in self.straddled_plan:
             j0, j1 = int(self.footprint[ifreq, 0]), int(self.footprint[ifreq, 1])
             lo, hi = self.intersect(j0, j1, n)
             cc = int(self.c[n])
@@ -807,7 +834,7 @@ class SdPlan:
         for (sdbits, yg) in self.sd_vectors.items():
             dbits = sdbits >> _SBITS_WIDTH                          # FULL key
             yg = yg.reshape(1 << dbits.bit_count(), P)
-            for n in _iter_subbands(sdbits & _SBITS_MASK):
+            for n in _iter_bits(sdbits & _SBITS_MASK):
                 ll, mb = int(self.lev[n]), int(self.mbase[n])
                 dfull = ((np.arange(ndm)[:, None] << R)
                          | (np.arange(1 << ll)[None, :] << (R - ll)))
@@ -875,6 +902,12 @@ def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=N
 
     t0 = time.time()
 
+    # Cheap (const, microseconds) and worth doing before the tile pass and the lift. Note
+    # compute_detrender_free_multi_map() validates too and reaches this function afterwards,
+    # so the call runs twice on that path; that costs nothing and is better than either
+    # caller assuming the other did it.
+    config.validate()
+
     plan = SdPlan(config, Lmat=L, epsilon=epsilon, progress=progress, debug=debug)
 
     r, R, N, M, P = plan.r, plan.R, plan.N, plan.M, plan.P
@@ -911,7 +944,7 @@ def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=N
             Qg = sdm.Q_factor.reshape(sdm.D, P, K)
             dbits = sdm.sdbits >> _SBITS_WIDTH
 
-            for n in _iter_subbands(sdm.sdbits & _SBITS_MASK):
+            for n in _iter_bits(sdm.sdbits & _SBITS_MASK):
                 ll, mb = int(lev[n]), int(mbase[n])
 
                 # Undo the level-r normalization for THIS subband (see SdPlan._emit()).
@@ -949,7 +982,7 @@ def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=N
 
             # The 2^(R-l[n]) factor is still per subband, and coarse-graining does not touch
             # it -- it undoes the stored row's level-r normalization, which is orthogonal.
-            for n in _iter_subbands(sdm.sdbits & _SBITS_MASK):
+            for n in _iter_bits(sdm.sdbits & _SBITS_MASK):
                 Qtot[:, n, :, k0:k0+K] = (2.0 ** (R - int(lev[n]))) * Qg[idx]
 
             Wtot[sdm.freq_indices, k0:k0+K] = sdm.W_factor
@@ -978,74 +1011,6 @@ def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=N
 
 
 ####################################   the multimap   ####################################
-
-
-def _validate_multi_map_L(L, npri, r0, R):
-    """The legal range for 'L' is the DOWNSAMPLED trees', not the base tree's.
-
-    Left unchecked this still fails, but loudly and confusingly: VarianceMap.__init__ raises
-    "L=6 is out of range [R, r] = [2, 5]" from the CHILD's constructor, naming a rank the
-    caller never asked for -- and only AFTER the base map has been built, which can be
-    minutes and tens of GiB.
-    """
-
-    if L is None:
-        return
-    hi = r0 if (npri == 1) else (r0 - 1)      # a downsampled primary tree has rank r0 - 1
-    if not (R <= int(L) <= hi):
-        raise RuntimeError(
-            f'compute_detrender_free_multi_map: L={L} is out of range [R, r] = [{R}, {hi}].'
-            + (f' The upper bound is {r0-1} rather than the base tree\'s own {r0} because'
-               f' this config has num_primary_trees={npri}, and a downsampled primary tree'
-               f' has rank {r0-1}.' if (npri > 1) else ''))
-
-
-def _check_restriction(base_tree, tree, gamma, *, what):
-    """The geometry Proposition 2 rests on, checked on the actual trees rather than assumed.
-
-    Returns primary tree 'gamma''s nprofiles, which is the profile bound of the slice.
-
-    Cheap (O(N) per tree, once per gamma) and worth it: two of the three facts are properties
-    of how DedispersionTree derives its subbands rather than of config parameters, so
-    DedispersionConfig::validate() -- which runs before any tree exists -- is the wrong place
-    for them, and they are otherwise only covered by test_subband_property() in another file.
-
-    Takes TREES, not maps: it reads nothing a VarianceMap has and a DedispersionTree does
-    not, and compute_detrender_free_varfine() has no map to pass. 'what' is the caller's own
-    name, for the messages.
-    """
-
-    from ..pirate_pybind11 import DedispersionTree
-
-    fs = tree.frequency_subbands
-    M = int(base_tree.frequency_subbands.M)
-    R0, r0, P0 = (int(base_tree.frequency_subbands.pf_rank), int(base_tree.total_rank()),
-                  int(base_tree.nprofiles))
-
-    # (F2) plus Observation (a): time downsampling does not change WHICH bands are searched,
-    # so the multiplet index is carried over UNCHANGED. m_index_mapping() raises unless every
-    # band of the second tree is a band of the first AT THE SAME LEVEL -- which a set
-    # comparison would not see -- so this is the containment check and the identity check in
-    # one. Measured: it is the identity for every gamma of toy, chime_sb2 and chord_sb2_et.
-    m_map = np.asarray(DedispersionTree.m_index_mapping(base_tree, tree), dtype=np.int64)
-    if not np.array_equal(m_map, np.arange(M)):
-        raise RuntimeError(f'{what}: primary tree {gamma} does not carry the base tree\'s'
-                           f' multiplet index over unchanged (m_index_mapping is not the'
-                           f' identity), so the slice below would select the wrong rows.')
-
-    # (F1) and Observation (b): r_gamma = r_0 - 1 with R unchanged, hence D_gamma = D_0/2.
-    # Observation (c): P_gamma <= P_0, which validate()'s non-increasing max_width rule gives.
-    r_g, R_g, P_g = int(tree.total_rank()), int(fs.pf_rank), int(tree.nprofiles)
-    if (R_g, r_g) != (R0, r0 - 1):
-        raise RuntimeError(f'{what}: primary tree {gamma} has (r, R) = ({r_g}, {R_g}),'
-                           f' expected ({r0 - 1}, {R0}) -- a downsampled primary tree drops'
-                           ' one tree rank and no subband levels.')
-    if P_g > P0:
-        raise RuntimeError(f'{what}: primary tree {gamma} has nprofiles={P_g}, more than the'
-                           f' base tree\'s {P0}. DedispersionConfig::validate() requires'
-                           ' max_width to be non-increasing across primary trees, which is'
-                           ' what makes the profile axes nest.')
-    return P_g
 
 
 def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=None,
@@ -1085,22 +1050,57 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
     VarianceMultiMap.apply_fine() derives from the parent. See that class's docstring.
     """
 
+    from ..pirate_pybind11 import DedispersionTree
+
     t0 = time.time()
 
     # VALIDATE BEFORE COMPUTING: the base map can take minutes and tens of GiB, and raising
-    # afterwards for a reason knowable from the config alone is pure waste. make_tree() needs
-    # no plan, no GPU and no map, and _check_restriction() reads only trees for the same
-    # reason.
+    # afterwards for a reason knowable from the config alone is pure waste. validate() is
+    # const and costs microseconds, and make_tree() needs no plan, no GPU and no map.
+    config.validate()
+
     npri = int(config.num_primary_trees)
     itree0 = int(config.dedispersion_tree_index(0, 0))
     tree0 = make_tree(config, itree0)
     r0, R = int(tree0.total_rank()), int(tree0.frequency_subbands.pf_rank)
-    _validate_multi_map_L(L, npri, r0, R)
+
+    # THE LEGAL RANGE FOR 'L' IS THE DOWNSAMPLED TREES', NOT THE BASE TREE'S. Left unchecked
+    # this still fails, but loudly and confusingly: VarianceMap.__init__ raises "L=6 is out of
+    # range [R, r] = [2, 5]" from the CHILD's constructor, naming a rank the caller never
+    # asked for.
+    if L is not None:
+        hi = r0 if (npri == 1) else (r0 - 1)   # a downsampled primary tree has rank r0 - 1
+        if not (R <= int(L) <= hi):
+            raise RuntimeError(
+                f'compute_detrender_free_multi_map: L={L} is out of range [R, r] ='
+                f' [{R}, {hi}].'
+                + (f' The upper bound is {r0-1} rather than the base tree\'s own {r0}'
+                   f' because this config has num_primary_trees={npri}, and a downsampled'
+                   f' primary tree has rank {r0-1}.' if (npri > 1) else ''))
 
     itrees = [int(config.dedispersion_tree_index(g, 0)) for g in range(1, npri)]
     trees = [make_tree(config, i) for i in itrees]
-    Ps = [_check_restriction(tree0, t, g + 1, what='compute_detrender_free_multi_map')
-          for (g, t) in enumerate(trees)]
+    Ps = [int(t.nprofiles) for t in trees]
+
+    # THE ONE PRECONDITION OF THE SLICE THAT WOULD FAIL SILENTLY. Proposition 2 needs three
+    # facts, and the other two are already enforced where they would fail LOUDLY: r_gamma =
+    # r_0 - 1 with R unchanged, which VarianceMap.__init__'s shape check catches because the
+    # slice would then have the wrong row count; and P_gamma <= P_0, which is
+    # config.validate()'s non-increasing max_width rule above. This one is different -- if a
+    # primary tree carried the base tree's multiplet index over PERMUTED rather than
+    # unchanged, every shape would still match and the slice would simply select the wrong
+    # rows.
+    #
+    # It cannot happen today, and not because of anything validate() does: both trees get
+    # FrequencySubbands(restrict_subband_counts(counts, 0), fmin, fmax), and no argument
+    # there depends on the primary tree index (DedispersionTree.cpp). So this is a tripwire
+    # on that C++ rather than a check on the caller -- which is why it is an assert, and why
+    # it is the only one of the three left. Note test_subband_property() checks the weaker
+    # statement: m_index_mapping() in both argument orders gives set EQUALITY, not identity.
+    M0 = int(tree0.frequency_subbands.M)
+    for (g, t) in enumerate(trees):
+        m_map = DedispersionTree.m_index_mapping(tree0, t)
+        assert np.array_equal(m_map, np.arange(M0)), (g + 1, np.asarray(m_map))
 
     prov = dict(algorithm='detrender_free', L=L, epsilon=epsilon,
                 num_primary_trees=npri)
@@ -1224,10 +1224,14 @@ def compute_detrender_free_varfine(config, freq_variances, *, progress=False, de
     and no allocation worth a ceiling.
     """
 
+    from ..pirate_pybind11 import DedispersionTree
+
     t0 = time.time()
 
-    # Validate BEFORE building the plan: the tile pass is 13.5 seconds at CHORD, and a length
-    # mismatch is knowable from the config alone.
+    # Validate BEFORE building the plan: the tile pass is 13.5 seconds at CHORD, and both a
+    # bad config and a length mismatch are knowable without it.
+    config.validate()
+
     nfreq = int(config.get_total_nfreq())
     v = np.asarray(freq_variances, dtype=np.float64)
     if v.shape != (nfreq,):
@@ -1235,15 +1239,20 @@ def compute_detrender_free_varfine(config, freq_variances, *, progress=False, de
                            f' shape ({nfreq},), got {v.shape}')
 
     # Same argument for the restriction geometry: O(N) per tree, and it decides whether the
-    # slice below is legitimate at all. See _check_restriction(). SdPlan builds tree0 again a
-    # few lines down; that is microseconds, and building it here is what keeps both geometry
-    # checks ahead of the expensive pass.
+    # slice below is legitimate at all. SdPlan builds tree0 again a few lines down; that is
+    # microseconds, and building it here is what keeps the geometry ahead of the tile pass.
     npri = int(config.num_primary_trees)
     tree0 = make_tree(config, int(config.dedispersion_tree_index(0, 0)))
-    Ps = [_check_restriction(tree0,
-                             make_tree(config, int(config.dedispersion_tree_index(g, 0))),
-                             g, what='compute_detrender_free_varfine')
-          for g in range(1, npri)]
+    trees = [make_tree(config, int(config.dedispersion_tree_index(g, 0)))
+             for g in range(1, npri)]
+    Ps = [int(t.nprofiles) for t in trees]
+
+    # The slice's one silently-failing precondition; see compute_detrender_free_multi_map(),
+    # which explains why this is the only one of Proposition 2's three facts left as a check.
+    M0 = int(tree0.frequency_subbands.M)
+    for (g, t) in enumerate(trees):
+        m_map = DedispersionTree.m_index_mapping(tree0, t)
+        assert np.array_equal(m_map, np.arange(M0)), (g + 1, np.asarray(m_map))
 
     plan = SdPlan(config, freq_variances=v, init_sd_matrices=False,
                   progress=progress, debug=debug)
