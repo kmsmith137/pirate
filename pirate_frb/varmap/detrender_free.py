@@ -304,8 +304,16 @@ class SdPlan:
 
     def __init__(self, config, *, Lmat=None, epsilon=None, freq_variances=None,
                  init_sd_matrices=True, progress=False, debug=False):
+        """Calls config.validate(), so an invalid config raises here rather than deeper in."""
 
         from ..pirate_pybind11 import constants
+
+        # EVERY ENTRY POINT IN THIS MODULE GOES THROUGH HERE, so this is the one place the
+        # config is checked. const and microseconds. It also subsumes what would otherwise
+        # need its own tripwire below: the alpha convention assumes 2^R coarse DM channels
+        # per multiplet, which is what an unset (auto) dm_downsampling gives, and validate()
+        # requires the config's value to be 0 for every primary tree.
+        config.validate()
 
         self.config = config
         self.itree0 = int(config.dedispersion_tree_index(0, 0))
@@ -353,14 +361,6 @@ class SdPlan:
                 raise RuntimeError(f'SdPlan: expected freq_variances of shape'
                                    f' ({self.nfreq},), got'
                                    f' {self.freq_variances.shape}')
-
-        # The alpha convention assumes 2^R coarse DM channels per multiplet, which is what an
-        # unset (auto) dm_downsampling gives. validate() already requires it, so this is a
-        # tripwire rather than a check.
-        dmds = int(config.primary_trees[0].dm_downsampling)
-        if dmds != 0:
-            raise RuntimeError(f'SdPlan: primary tree 0 has dm_downsampling={dmds}, but the'
-                               " variance map's index convention needs the auto value 0")
 
         self._subband_geometry()
 
@@ -902,12 +902,6 @@ def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=N
 
     t0 = time.time()
 
-    # Cheap (const, microseconds) and worth doing before the tile pass and the lift. Note
-    # compute_detrender_free_multi_map() validates too and reaches this function afterwards,
-    # so the call runs twice on that path; that costs nothing and is better than either
-    # caller assuming the other did it.
-    config.validate()
-
     plan = SdPlan(config, Lmat=L, epsilon=epsilon, progress=progress, debug=debug)
 
     r, R, N, M, P = plan.r, plan.R, plan.N, plan.M, plan.P
@@ -1055,8 +1049,10 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
     t0 = time.time()
 
     # VALIDATE BEFORE COMPUTING: the base map can take minutes and tens of GiB, and raising
-    # afterwards for a reason knowable from the config alone is pure waste. validate() is
-    # const and costs microseconds, and make_tree() needs no plan, no GPU and no map.
+    # afterwards for a reason knowable from the config alone is pure waste. SdPlan validates
+    # too, but not until after the geometry below -- and P_gamma <= P_0, one of the three
+    # facts the slice needs, is validate()'s to enforce. make_tree() needs no plan, no GPU
+    # and no map.
     config.validate()
 
     npri = int(config.num_primary_trees)
@@ -1229,7 +1225,8 @@ def compute_detrender_free_varfine(config, freq_variances, *, progress=False, de
     t0 = time.time()
 
     # Validate BEFORE building the plan: the tile pass is 13.5 seconds at CHORD, and both a
-    # bad config and a length mismatch are knowable without it.
+    # bad config and a length mismatch are knowable without it. SdPlan validates too, but not
+    # until after the geometry below; see compute_detrender_free_multi_map().
     config.validate()
 
     nfreq = int(config.get_total_nfreq())
