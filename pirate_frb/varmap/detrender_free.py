@@ -44,7 +44,8 @@ dense group matrices, no SVD. That is compute_detrender_free_varfine(), and at
 chord_sb2_et.yml it delivers all ten trees in 16 seconds inside 0.49 GiB, against 63.8 GiB of
 Q for the base tree alone. The two functions share one code path (class SdPlan) and share it
 EXACTLY: compute_detrender_free_varfine(config, ones)[itree0].reshape(-1) is BITWISE equal to
-compute_detrender_free_base_map(config).y_true.
+compute_detrender_free_base_map(config).y_true. compute_detrender_free_varcoarse() is the
+same result reduced to the weights array's own granularity, which is what production stores.
 
 The remaining scaling fix for the MAP is a second, global SVD round that runs BEFORE the
 lift; the per-group factors that round needs are what SdPlan leaves behind.
@@ -69,11 +70,11 @@ import time
 
 import numpy as np
 
-from .VarianceMap import VarianceMap, make_tree
+from .VarianceMap import VarianceMap, coarse_grain_vector, make_tree
 from .VarianceMultiMap import VarianceMultiMap, expand_fine_vectors
 from ..slow_avar.SparseTile import SparseTile, SparseTileTriple
 from ..slow_avar.PfVariance import PfVarianceConvolver
-from ..utils import atomic_print
+from ..utils import atomic_print, integer_log2
 
 
 # The sdbits key is (dbits << _SBITS_WIDTH) | sbits. The split is chosen so the key would
@@ -1272,4 +1273,62 @@ def compute_detrender_free_varfine(config, freq_variances, *, progress=False, de
     if progress:
         atomic_print(f'  compute_detrender_free_varfine: {len(out)} trees in'
                      f' {time.time() - t0:.2f} seconds')
+    return out
+
+
+def compute_detrender_free_varcoarse(config, freq_variances, *, progress=False, debug=False):
+    """``A v`` for every tree of 'config', max-reduced to the WEIGHTS array's granularity.
+
+    Returns a length-ntrees list of ``(ndm_wt, N, P)`` float64 arrays INDEXED BY ITREE, i.e.
+    compute_detrender_free_varfine() followed by a per-tree coarse_grain_vector(). This is the
+    form production stores: the weights array resolves DM only to ``pf.wt_dm_downsampling``
+    and frequency only to SUBBANDS rather than multiplets, so one entry here is one variance
+    per weights-array element.
+
+    THE COARSE-GRAINING RANK IS THE TREE'S OWN, ``L = log2(pf.wt_dm_downsampling)``, and that
+    is what makes the result line up: ``2^(r-L)`` is exactly DedispersionTree::ndm_wt, checked
+    below. It is the same L that PfVariance.cpp's constructor computes, so the two agree by
+    construction rather than by coincidence. Note L is a property of the PRIMARY tree while r
+    is not, so L is constant within an early-trigger family and ndm_wt still varies across it.
+
+    THE REDUCTION IS A MAX, not a mean: a stored variance has to dominate every output it
+    covers. See coarse_grain_vector() for the reduction and VarianceMap's module docstring for
+    the alpha/beta index conventions.
+
+    Parameters are compute_detrender_free_varfine()'s and mean the same thing; 'progress' and
+    'debug' are forwarded to it. As there, the returned arrays are fresh and writeable, and
+    freq_variances is not required to be positive.
+
+    NOT THE SAME AS ``compute_detrender_free_base_map(config, L=...).apply(v)``, which is
+    ``sum_F max_alpha A[alpha,F] v_F`` and DOMINATES the ``max_alpha (A v)[alpha]`` computed
+    here -- that one maxes the MAP, this one maxes the ANSWER. See the note on 'L' in
+    compute_detrender_free_varfine().
+    """
+
+    t0 = time.time()
+
+    varfine = compute_detrender_free_varfine(config, freq_variances, progress=progress,
+                                             debug=debug)
+
+    out = []
+    for (itree, y) in enumerate(varfine):
+        tree = make_tree(config, itree)
+        fs = tree.frequency_subbands
+        L = integer_log2(tree.pf.wt_dm_downsampling)
+
+        # ndm_wt is computed by the DedispersionTree constructor as 2^r / wt_dm_downsampling,
+        # and L here comes from wt_dm_downsampling directly, so this ties the rank the
+        # reduction uses to the shape the weights array actually has. coarse_grain_vector()
+        # checks R <= L <= r itself; the tree constructor is what guarantees it
+        # (dm_downsampling <= wt_dm_downsampling <= 2^r, with pf_rank <= log2(dm_downsampling)
+        # -- the same bound PfVariance.cpp asserts).
+        ndm_wt = int(tree.ndm_wt)
+        assert (1 << (int(tree.total_rank()) - L)) == ndm_wt, (itree, L, ndm_wt)
+
+        yc = coarse_grain_vector(tree, y.reshape(-1), L)
+        out.append(yc.reshape(ndm_wt, int(fs.N), int(tree.nprofiles)))
+
+    if progress:
+        atomic_print(f'  compute_detrender_free_varcoarse: {len(out)} trees in'
+                     f' {time.time() - t0:.2f} seconds (including varfine)')
     return out
