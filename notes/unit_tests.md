@@ -22,11 +22,11 @@ Many of our tests depend on a large number of parameters. For example, many func
 
 The rest of this note is dedicated to exploring some of the nuances and design patterns that arise with randomized testing, using random DedispersionConfigs as a running example.
 
-1. Sometimes, randomization logic is complicated, and deserves its own helper function (especially if re-used in multiple places). For example, there is a static member function DedispersionConfig::make_random() which returns a random config. As you add tests, you may find that randomization logic starts being repeated. Look for opportunities to refactor into reuseable helper functions.
+1. Sometimes, randomization logic is complicated, and deserves its own helper function (especially if re-used in multiple places). For example, there is a static member function DedispersionConfig::make_random() which returns a random config. As you add tests, you may find that randomization logic starts being repeated. Look for opportunities to refactor into reusable helper functions.
 
 2. Feel free to implement randomization logic in either C++ or python -- whatever is more convenient, "feels" like good design, and leads to reasonable running time.
 
-3. Sometimes, reuseable randomization logic needs to be "tweaked" in specific tests. For example, DedispersionConfig has a `dtype` field which is randomly either float32, or float16. A few of the tests require float32, so we introduced a boolean flag `force_float32=false` in DedispersionConfig::make_random(). (Over time, make_random() has grown to have ~6 arguments of this type, that are now in their own struct DedispersionConfig::RandomArgs.)
+3. Sometimes, reusable randomization logic needs to be "tweaked" in specific tests. For example, DedispersionConfig has a `dtype` field which is randomly either float32, or float16. A few of the tests require float32, so we introduced a boolean flag `force_float32=false` in DedispersionConfig::make_random(). (Over time, make_random() has grown to have ~6 arguments of this type, that are now in their own struct DedispersionConfig::RandomArgs.)
 
    An alternative mechanism would be to "filter and retry", e.g.
    ```py
@@ -52,7 +52,7 @@ The rest of this note is dedicated to exploring some of the nuances and design p
     # choose a random probability 0 <= p <= 1, which is sometimes 0 or 1
     p = np.clip(np.random.uniform(-0.1,2), 0, 1)
 
-    # randomly zero data array elements with probability p
+    # randomly zero data array elements with probability (1-p)
     data *= (np.random.uniform(size=N) < p)
     ```
     Feel free to get creative, and design customized randomization logic to sample corner cases, with specific code paths in mind.
