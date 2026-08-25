@@ -314,11 +314,13 @@ def test(args):
                 test_fast_avar.test_cpp_pf_avar_approximation()
 
         if run_all_tests or args.varmap:
-            # Deterministic apart from test_base_varmap_vs_analytic()'s random configs,
-            # which it draws itself; once is enough.
+            from .varmap import tests as varmap_tests
+            # run_once() is the item-11 group: tests whose parameter space really is
+            # exhausted (fixed rejection lists, or no parameters at all). Everything else
+            # draws its own geometry and runs every iteration, so '-n 1000' explores.
             if i == 0:
-                from .varmap import tests as varmap_tests
-                varmap_tests.run_all()
+                varmap_tests.run_once()
+            varmap_tests.run_all()
 
         if run_all_tests or args.vmbf:
             # The brute-force sweep. Each test runs a full sweep over all input channels, so
@@ -326,6 +328,11 @@ def test(args):
             from .varmap import tests as varmap_tests
             if i == 0:
                 varmap_tests.run_sweep_tests()
+
+            # The two randomized sweep tests run every iteration: they are the only ones in
+            # the tier that draw their own configs, and together about 2 s.
+            varmap_tests.test_multimap_vs_sweep()
+            varmap_tests.test_restriction_vs_sweep(num_primary_trees=2, detrender=True)
 
             # ... with one exception. test_sweep_gpu_vs_cpu() is the only check on the GPU
             # sweep driver, and the four fixed calls inside run_sweep_tests() are 64% of the

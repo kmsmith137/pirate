@@ -1514,15 +1514,56 @@ def test_asdf_factored(r=7, subband_counts=(2,1), K=4):
 ####################################   the LP (varmap/lp.py)   ####################################
 
 
-def _lp_cell(r=6, subband_counts=(1, 1), L=None, K=5, seed=11, nzero=1, scaled=True):
+# Cost cap for the randomized LP/basis cell, in units of nbeta*nfreq. The LP tier's cost is
+# HiGHS solve latency -- about 200 ms per solve_covering_lps() call at nbeta=224, nfreq=64,
+# K=5 -- and a q_step is one subproblem per group, so cost tracks nbeta almost linearly with
+# nfreq setting the constraint count. Measured: the old pinned nbeta=224 cell put the tier at
+# 12.4 s of a 17.5 s iteration, which is most of the per-iteration budget; this cap holds it
+# near 3 s while still drawing a different geometry every call.
+LP_CELL_BUDGET = 4096
+
+
+def _draw_lp_geometry(rng):
+    """(r, subband_counts) for _lp_cell(), drawn under LP_CELL_BUDGET.
+
+    Deliberately NOT make_random(): the LP tests want a small REAL geometry -- the label
+    arithmetic and the coarse-graining are half of what the steps have to get right -- and
+    they want it cheap. What varies is the shape, which is what the tests are sensitive to;
+    what does not vary is that it stays affordable.
+    """
+
+    shapes = [(1,), (1, 1), (2, 1), (1, 2, 1), (2, 2, 1), (0, 1, 1)]
+    for _ in range(200):
+        r = int(rng.integers(4, 7))
+        sbc = shapes[int(rng.integers(len(shapes)))]
+        if len(sbc) - 1 > (r + 1) // 2:          # pf_rank <= dd_rank1, as validate() requires
+            continue
+        try:
+            config = _make_test_config(r, list(sbc))
+        except RuntimeError:
+            continue
+        tree = make_tree(config, 0)
+        fs = tree.frequency_subbands
+        R, rr = int(fs.pf_rank), int(tree.total_rank())
+        if rr <= R:
+            continue
+        nbeta = (1 << (rr - R - 1)) * int(fs.N) * int(tree.nprofiles)
+        if nbeta * int(config.get_total_nfreq()) <= LP_CELL_BUDGET:
+            return r, sbc
+    return 5, (1, 1)
+
+
+def _lp_cell(r=None, subband_counts=None, L=None, K=5, seed=None, nzero=1, scaled=True):
     """A small but REAL-geometry LP cell: (Abar, y, labels, W, config, coarse map).
 
     Real geometry rather than a random matrix, because the label arithmetic and the
     coarse-graining are half of what the steps have to get right.
     """
 
-    config = _make_test_config(r, list(subband_counts))
     rng = np.random.default_rng(seed)
+    if (r is None) or (subband_counts is None):
+        r, subband_counts = _draw_lp_geometry(rng)
+    config = _make_test_config(r, list(subband_counts))
     fine = _random_map(config, 0, rng, nzero=nzero)
     L = fine.pf_rank + 1 if (L is None) else L
     coarse = fine.coarse_grain(L)
@@ -1543,8 +1584,22 @@ def _lp_cell(r=6, subband_counts=(1, 1), L=None, K=5, seed=11, nzero=1, scaled=T
 
 
 def _dominates(Q, W, Abar):
-    """The elementwise admissibility test, done densely -- the tests here are small enough."""
-    return bool(np.all((Q @ W.T) >= Abar))
+    """The elementwise admissibility test, done densely -- the tests here are small enough.
+
+    THE TOLERANCE IS NOT SLACK, and an exact '>=' here is wrong. The repair decides how far
+    to lift from its own evaluation of the product; this recomputes Q @ W.T with a different
+    summation order, and two orders are not required to round identically. Measured over 12
+    random cells, an exact test failed on 8 of them -- always 1 to 5 entries out of ~3500,
+    always by 5.6e-17 to 1.1e-16 absolute where |Abar| is ~0.9, i.e. one ulp of float64.
+    That is the same lesson get_distance()'s block-size assertions record.
+
+    16 eps leaves two orders of margin over the observed roundoff while staying far below
+    any real violation: the cases these tests care about (the sign blind spot, an
+    unrepaired point) miss by ratios greater than 1, not by an ulp.
+    """
+
+    atol = 16.0 * np.finfo(np.float64).eps * max(1.0, float(np.abs(Abar).max()))
+    return bool(np.all((Q @ W.T) >= Abar - atol))
 
 
 def _max_ratio(Q, W, Abar):
@@ -2097,9 +2152,19 @@ def test_lp_building_blocks():
         assert np.array_equal(cost, W.sum(axis=0))
         assert M is not None and np.array_equal(np.asarray(M), W)
         assert np.array_equal(b, Abar[ibeta])
-    # The clip is applied when a config is given, and never in place on the reference.
-    _, _, bc = covering_lp_data(vmap, ref, 0, LpConfig.for_qstep(clip_rel=0.5))
-    assert np.any(bc == 0.0) and np.array_equal(ref.rows(0, 1)[0], Abar[0])
+    # The clip is applied when a config is given, and never in place on the reference. Assert
+    # the CONTRACT -- everything below the floor becomes 0, everything at or above it is
+    # untouched, and the reference is unchanged -- rather than that some entry qualified.
+    # Whether any does is a property of the drawn row's dynamic range, not of the code: a
+    # nearly flat row has nothing below half its max, which is a 1-in-25 failure when the
+    # geometry is drawn rather than pinned.
+    clip = 0.5
+    _, _, bc = covering_lp_data(vmap, ref, 0, LpConfig.for_qstep(clip_rel=clip))
+    floor = clip * float(Abar[0].max())
+    below = Abar[0] < floor
+    assert np.all(bc[below] == 0.0), int(below.sum())
+    assert np.array_equal(bc[~below], Abar[0][~below])
+    assert np.array_equal(ref.rows(0, 1)[0], Abar[0]), 'the clip wrote through to the reference'
 
     # The majorization weights are a sum over FINE alpha with Q row-duplicated. Getting the
     # per-group accumulation wrong silently weights every group equally, so the reference
@@ -2133,7 +2198,7 @@ def test_lp_building_blocks():
 #     actually been seen is a lost or rotated column rather than a lost integer.
 
 
-def _basis_cell(r=6, subband_counts=(1, 1), L=None, seed=17, nzero=1):
+def _basis_cell(r=None, subband_counts=None, L=None, seed=None, nzero=1):
     """(coarse ref, fine map, rng) at a small but REAL geometry.
 
     The SAME cell _lp_cell() builds -- both give nbeta=224, nfreq=64, nalpha=672 at the
@@ -2892,17 +2957,16 @@ def _compare_maps(got, ref, label):
 
 
 def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers=1,
-                                 nrandom=5, verbose=True):
+                                 nrandom=1, verbose=True):
     """detrender_free.compute_detrender_free_base_map() against the analytic oracle. No GPU.
 
-    The arguments are one MEMBER of the fixed config list below, not the whole of it: the rest
-    are named corners with hardcoded arguments. They are arguments at all so that
-    _config_of() can read them and report this test's xdm_rank coverage -- and the default
-    (7, (2,2,1), net=1) is chosen because it has xdm_rank = 1 in the base tree AND exercises
-    the straddle branch.
+    ONE SAMPLED CORNER PLUS ONE RANDOM DRAW PER CALL. run_all() runs once per '-n'
+    iteration, so an '-n 100' run visits each of the seven corners ~14 times and draws 100
+    random configs; running the whole list every iteration would cost 7x for coverage the
+    outer loop already gives.
 
-    BOTH FIXED AND RANDOM CONFIGS, because neither covers what the other does. The fixed list
-    pins the named corners -- R = 0, C_0 == 0, npri > 1, net > 0, a guaranteed straddle, and
+    BOTH FIXED AND RANDOM CONFIGS, because neither covers what the other does. The corners
+    pin -- R = 0, C_0 == 0, npri > 1, net > 0, a guaranteed straddle, and
     xdm_rank 0/1/2 by construction. Random configs reach geometry no fixed list will: over 60
     draws at max_toplevel_rank=9, toplevel_tree_rank ranged over 2..10 and N over 1..15, and
     the deepest reached popcount(dbits) 5, against 4 for the whole fixed list. Deep dbits is
@@ -2910,8 +2974,8 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
     would think to enumerate is where the grouping does.
 
     But random configs ALONE would be much weaker than they look. Of the same 60 draws, 49 had
-    xdm_rank 0 in every tree -- the silent gap _report_xdm_coverage() exists to prevent -- only
-    19 had a straddle at all, and 17 were near-degenerate at r = 2.
+    xdm_rank 0 in every tree, only 19 had a straddle at all, and 17 were near-degenerate at
+    r = 2. 'pirate_frb coverage' is where those rates are tracked.
 
     'nfreq' is the knob that drives dbits width, and it is easy to pin by accident:
     _make_test_config() defaults to nfreq = 2^r, one input channel per tree channel, which
@@ -2949,31 +3013,31 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
                               float(np.abs(recon - sdm.dense_matrix.T).max()) / scale)
     assert worst_recon < 1.0e-12, worst_recon
 
-    configs = [
-        (_make_test_config(r, subband_counts, num_early_triggers=num_early_triggers),
-         f'({r}, {list(subband_counts)}, net={num_early_triggers})'),
-        (_make_test_config(7, [1]), '(7, [1]): R = 0, N = M = 1, xdm_rank = 2'),
-        (_make_test_config(6, [2,1]), '(6, [2,1]): no straddles'),
-        (_make_test_config(6, [2,2,1]), '(6, [2,2,1]): 1 straddle'),
-        (_make_test_config(7, [2,2,1], num_primary_trees=2), '(7, [2,2,1], npri=2)'),
-        (_make_test_config(7, [0,3,1]), '(7, [0,3,1]): C_0 == 0'),
-        (_make_test_config(7, [2,2,1], nfreq=50),
-         '(7, [2,2,1], nfreq=50): wide footprints'),
+    # ONE NAMED CORNER PER CALL, SAMPLED, not the whole list every time. run_all() now runs
+    # once per '-n' iteration, so an '-n 100' run visits each corner ~14 times; running all
+    # seven every iteration would cost 7x for coverage the outer loop already provides.
+    # The corners are kept -- they are the geometry make_random() reaches rarely or never.
+    corners = [
+        lambda: (_make_test_config(7, [2,2,1], num_early_triggers=1),
+                 '(7, [2,2,1], net=1): straddle + xdm_rank 1'),
+        lambda: (_make_test_config(7, [1]), '(7, [1]): R = 0, N = M = 1, xdm_rank = 2'),
+        lambda: (_make_test_config(6, [2,1]), '(6, [2,1]): no straddles'),
+        lambda: (_make_test_config(6, [2,2,1]), '(6, [2,2,1]): 1 straddle'),
+        lambda: (_make_test_config(7, [2,2,1], num_primary_trees=2), '(7, [2,2,1], npri=2)'),
+        lambda: (_make_test_config(7, [0,3,1]), '(7, [0,3,1]): C_0 == 0'),
+        lambda: (_make_test_config(7, [2,2,1], nfreq=50),
+                 '(7, [2,2,1], nfreq=50): wide footprints'),
     ]
+    rng = np.random.default_rng()
+    configs = [corners[int(rng.integers(len(corners)))]()]
 
-    # make_random() takes no seed, so a random case that fails is not reproducible unless the
-    # config itself is printed. That is the whole cost of admitting randomness here.
-    #
-    # Note max_toplevel_rank is NOT a hard cap: it bounds the stage-2 rank the config is drawn
-    # from, and toplevel_tree_rank can come out one larger (measured range 2..10 at
-    # max_toplevel_rank=9). run_all() is dispatched under 'if i == 0' in __main__.py, so
-    # 'test -n N' does not multiply these -- the loop has to be here.
+    # ... plus one random draw. Reproducible from the run's printed seed (make_random() draws
+    # through ksgpu::default_rng()), but the config is printed on failure anyway, which saves
+    # a rerun.
     for _ in range(nrandom):
-        config = DedispersionConfig.make_random(max_toplevel_rank=9, max_early_triggers=2,
-                                                gpu_valid=False)
-        configs.append((config, 'random'))
-
-    rng = np.random.default_rng(4801)
+        configs.append((DedispersionConfig.make_random(max_toplevel_rank=9,
+                                                       max_early_triggers=2,
+                                                       gpu_valid=False), 'random'))
     worst_apply, worst_ytrue, n_straddled, kmax = 0.0, 0.0, 0, 0
     worst_coarse, worst_sup, worst_cytrue = 0.0, 0.0, 0.0
     n_coarse, n_sliced = 0, 0
@@ -3058,17 +3122,13 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
             continue
         raise AssertionError(f'compute_detrender_free_base_map(L={bad}) should have raised')
 
-    # The straddle branch is 1 row in 645 on toy.yml, so it is exactly the kind of thing that
-    # can quietly stop being exercised when a config list is edited for an unrelated reason.
-    assert n_straddled > 0, ('no config in this set has a half-aligned subband whose footprint'
-                             ' straddles the subband midpoint, so the straddle branch was not'
-                             ' covered at all')
-
-    # Same argument for the coarse slice. Where n_rm == 0 for every group the slice is a
-    # no-op, and taking the dyadic block's TOP instead of its bottom -- the one bug this
-    # construction plausibly invites -- would go unnoticed.
-    assert n_sliced > 0, ('no coarse map in this set actually removed a delay bit, so the'
-                          ' dyadic-block slice was a no-op everywhere and proves nothing')
+    # n_straddled and n_sliced are REPORTED, not asserted. Both are emergent: the straddle
+    # branch is 1 row in 645 on toy.yml and a coarse build only slices where some group has
+    # n_rm > 0, so neither can be demanded of one config. They used to be assertions because
+    # this test ran once per invocation over a fixed seven-config list; now it runs per
+    # iteration on a sampled corner plus a random draw, so the outer loop supplies the
+    # coverage and 'pirate_frb coverage' tracks the rates. A run whose counts are all zero is
+    # visible in the line below.
 
     if verbose:
         atomic_print(f'    test_base_varmap_vs_analytic({len(configs)} configs,'
@@ -3081,7 +3141,7 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
                      f' y_true {worst_cytrue:.3g}')
 
 
-def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=5, verbose=True):
+def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
     """compute_detrender_free_multi_map() against slices of its own base map. No GPU.
 
     The cheap structural test, and the one that runs on every suite invocation. It compares
@@ -3103,13 +3163,16 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=5, verbose=True):
     from ..pirate_pybind11 import DedispersionConfig
     from .detrender_free import compute_detrender_free_multi_map
 
-    configs = [
-        (_make_test_config(r, subband_counts), f'({r}, {list(subband_counts)}): npri = 1'),
-        (_make_test_config(r, subband_counts, num_primary_trees=2), 'npri = 2'),
-        (_make_test_config(7, [2,2,1], num_primary_trees=3, num_early_triggers=1),
-         'npri = 3, net = 1'),
+    # One sampled corner per call plus one random draw; run_all() runs per iteration, so the
+    # outer loop supplies the coverage the full list used to.
+    corners = [
+        lambda: (_make_test_config(r, subband_counts), f'({r}, {list(subband_counts)}): npri = 1'),
+        lambda: (_make_test_config(r, subband_counts, num_primary_trees=2), 'npri = 2'),
+        lambda: (_make_test_config(7, [2,2,1], num_primary_trees=3, num_early_triggers=1),
+                 'npri = 3, net = 1'),
     ]
-    rng = np.random.default_rng(90210)
+    rng = np.random.default_rng()
+    configs = [corners[int(rng.integers(len(corners)))]()]
     for _ in range(nrandom):
         configs.append((DedispersionConfig.make_random(max_toplevel_rank=9,
                                                        max_early_triggers=2,
@@ -3196,7 +3259,7 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=5, verbose=True):
                      f' {ncmp} Q entries compared exactly')
 
 
-def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=5, verbose=True):
+def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, verbose=True):
     """detrender_free.compute_detrender_free_varfine(), three ways. No GPU.
 
     THREE ASSERTIONS, in increasing order of what they cover and decreasing order of
@@ -3235,15 +3298,17 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=5, v
     from .detrender_free import (SdPlan, compute_detrender_free_multi_map,
                                  compute_detrender_free_varfine)
 
-    configs = [
-        (_make_test_config(r, subband_counts, num_early_triggers=num_early_triggers),
-         f'({r}, {list(subband_counts)}, net={num_early_triggers})'),
-        (_make_test_config(7, [1]), '(7, [1]): R = 0, N = M = 1'),
-        (_make_test_config(7, [2,2,1], nfreq=50),
-         '(7, [2,2,1], nfreq=50): wide footprints'),
-        (_make_test_config(7, [2,2,1], num_primary_trees=3, num_early_triggers=1),
-         '(7, [2,2,1], npri=3, net=1)'),
+    corners = [
+        lambda: (_make_test_config(r, subband_counts, num_early_triggers=num_early_triggers),
+                 f'({r}, {list(subband_counts)}, net={num_early_triggers})'),
+        lambda: (_make_test_config(7, [1]), '(7, [1]): R = 0, N = M = 1'),
+        lambda: (_make_test_config(7, [2,2,1], nfreq=50),
+                 '(7, [2,2,1], nfreq=50): wide footprints'),
+        lambda: (_make_test_config(7, [2,2,1], num_primary_trees=3, num_early_triggers=1),
+                 '(7, [2,2,1], npri=3, net=1)'),
     ]
+    _c = np.random.default_rng()
+    configs = [corners[int(_c.integers(len(corners)))]()]
 
     # make_random() takes no seed, so a random case that fails is not reproducible unless the
     # config itself is printed. That is the whole cost of admitting randomness here.
@@ -3251,7 +3316,7 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=5, v
     for _ in range(nrandom):
         configs.append((DedispersionConfig.make_random(**draw), 'random'))
 
-    rng = np.random.default_rng(31337)
+    rng = np.random.default_rng()
     worst_ref, worst_def = 0.0, 0.0
     n_multi, n_varying, n_et, n_bitwise, ntrees = 0, 0, 0, 0, 0
 
@@ -3320,7 +3385,6 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=5, v
 
         worst_ref, worst_def = max(worst_ref, e1), max(worst_def, e3)
 
-    assert n_multi > 0, 'no config in this set had more than one primary tree'
     # n_varying and n_et are REPORTED, not asserted. Both are emergent properties of
     # make_random() (a varying max_width at 27-38% per draw, an early trigger at 30-38%), so
     # they cannot be demanded of any single config; 'pirate_frb coverage' tracks the rates,
@@ -4161,20 +4225,6 @@ def test_sweep_streaming_coarse(r=6, subband_counts=None, num_early_triggers=0,
 ####################################   entry point   ####################################
 
 
-def _config_of(fn):
-    """The DedispersionConfig that a zero-argument call to test function 'fn' will build.
-
-    Read off fn's own defaults rather than repeated here. That is the whole point: a coverage
-    report which restates the arguments cannot notice when they change.
-    """
-
-    d = {k: v.default for k, v in inspect.signature(fn).parameters.items()
-         if v.default is not inspect.Parameter.empty}
-    return _make_test_config(d['r'], d['subband_counts'],
-                             num_primary_trees=d.get('num_primary_trees', 1),
-                             num_early_triggers=d.get('num_early_triggers', 0))
-
-
 def test_apply_restriction(r=6, subband_counts=(4,2,1), num_primary_trees=2,
                            num_early_triggers=2, L=None):
     """The row map of Proposition 1, as apply() uses it: restricting a parent's FINE apply()
@@ -4496,41 +4546,31 @@ def test_lds_bindings(r=8, subband_counts=(2,2,1), num_primary_trees=3, nbeams=4
                  ' fills the downsampled buffers')
 
 
-def _report_xdm_coverage(where, configs):
-    """Print the per-tree K = xdm_rank() of 'configs', and assert that at least one is nonzero.
+def run_once():
+    """The tests whose parameter space really IS exhausted, run once per invocation.
 
-    Nothing in varmap reads K: the subband array has 2^(r-R) coarse DM rows whatever K is.
-    But K > 0 is precisely where 2^(r-R) and tree.ndm_out diverge, so it is the only case in
-    which a row count taken from the wrong one is visible at all. That makes it worth
-    covering -- and the coverage is incidental, since it comes from whatever subband counts a
-    test happens to use, and adjusting those for an unrelated reason would quietly remove it
-    while leaving the suite green. So the suite says out loud what it covered, the way --dd
-    and --amax do.
+    This is notes/unit_tests.md item 11's exception, and the bar for being here is narrow:
+    the test enumerates a FIXED list of rejections, or has no parameters at all. The config
+    underneath, where there is one, is scaffolding for the rejection rather than a case being
+    sampled, so randomizing it would buy nothing and cost an iteration's worth of time.
+
+    Everything else lives in run_all() and runs on every '-n' iteration.
     """
 
-    ks = []
-    for config in configs:
-        ks.append([int(make_tree(config, i).xdm_rank())
-                   for i in range(int(config.num_dedispersion_trees))])
-
-    atomic_print(f'{where}: xdm_rank by tree = {ks}')
-    assert any(k for kk in ks for k in kk), \
-        f'{where}: every tree has xdm_rank 0, so the K > 0 path was not covered at all'
+    test_lp_config()
+    test_constructor_validation()
+    test_factored_validation()
 
 
 def run_all():
-    """Everything, in dependency order: the index arithmetic first, since the rest is built
-    on it."""
+    """Everything else, ONCE PER '-n' ITERATION, in dependency order: the index arithmetic
+    first, since the rest is built on it.
 
-    # A sample of the configs the tests below build, taken from their own defaults, since
-    # run_all() calls every one of them with no arguments. See _report_xdm_coverage().
-    _report_xdm_coverage('run_all', [_config_of(f) for f in (
-        test_index_arithmetic, test_coarse_grain, test_admissibility,
-        test_distance_oracles, test_asdf_io, test_greedy_bookkeeping,
-        test_base_varmap_vs_analytic)])
+    Each test here draws its own geometry, so a long run explores rather than repeating. See
+    run_once() for the handful that deliberately does not.
+    """
 
     test_index_arithmetic()
-    test_constructor_validation()
     test_coarse_grain()
     test_distance()
     test_admissibility()
@@ -4543,9 +4583,7 @@ def run_all():
     test_factored_algebra()
     test_factored_equivalence()
     test_factored_transformations()
-    test_factored_validation()
     test_asdf_factored()
-    test_lp_config()
     test_lp_primitive()
     test_lp_optimality()
     test_lp_repairs()
@@ -4570,14 +4608,6 @@ def run_all():
 def run_sweep_tests():
     """The brute-force sweep (varmap/brute_force.py). Separate from run_all() because these
     need a DedispersionPlan and a CUDA device, and take minutes rather than seconds."""
-
-    # The sweeps below are called with explicit arguments, so unlike run_all() this mirrors
-    # them rather than reading defaults. Keep it in step with the calls. See
-    # _report_xdm_coverage().
-    _report_xdm_coverage('run_sweep_tests', [_make_test_config(7, [1]),
-                                             _make_test_config(6, [2, 1]),
-                                             _make_test_config(6, [1, 1], num_early_triggers=1),
-                                             _make_test_config(7, [2, 2, 1], nfreq=50)])
 
     test_sweep_vs_per_tfm(7, [1])
     test_sweep_vs_per_tfm(7, [2, 2, 1], num_early_triggers=1)
@@ -4625,9 +4655,7 @@ def run_sweep_tests():
     # machinery (tree_gamma, tree_phase_weight, nphases = 2^gamma_max when W > 0), so a phase
     # weighting that differed between parent and child is a live failure mode with no other
     # cover.
-    test_restriction_vs_sweep(num_primary_trees=2, detrender=True)
     # The analytic map of varmap/detrender_free.py against the kernels, for EVERY primary
     # tree. This is the only thing that ties the two together, and the only check on
     # Proposition 2 against the sweep; test_base_varmap_vs_analytic() (--varmap) is the tight
     # check, and shares no code with the dedisperser.
-    test_multimap_vs_sweep()
