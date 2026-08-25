@@ -8,7 +8,7 @@
 ### Links to more rules
 
 - Before writing or modifying code in ANY language, read `notes/comments.md`
-  (guidelines for comment/docstring content).
+  (guidelines for comment/docstring content), and `notes/unit_tests.md` (randomized unit tests).
 - If a task involves `.hpp`, `.cpp`, or `.cu` files, then read `notes/cpp.md` into context.
 - If a task involves reviewing or editing gpu kernels, then read `notes/gpu_kernels.md` into context.
   This file is large, so only read it into context if you're reviewing/editing `__device__` or `__global__` functions.
