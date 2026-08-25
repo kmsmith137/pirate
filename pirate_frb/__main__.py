@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import time
+import itertools
 import shlex
 import random
 import textwrap
@@ -95,7 +96,11 @@ def parse_test(subparsers):
     help_text = "Run unit tests (use flags to select specific tests)"
     parser = subparsers.add_parser("test", help=help_text, description=help_text)
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
-    parser.add_argument('-n', '--niter', type=int, default=100, help="Number of unit test iterations (default 100)")
+    stop_group = parser.add_mutually_exclusive_group()
+    stop_group.add_argument('-n', '--niter', type=int, default=100,
+                            help="Number of unit test iterations (default 100)")
+    stop_group.add_argument('-t', '--time', type=float, metavar='SECONDS',
+                            help="Run for at least SECONDS instead of a fixed iteration count. The check is at the BOTTOM of the loop, so at least one FULL iteration always runs and the elapsed time will overshoot by up to one iteration. Note a -t run is not directly replayable, since the iteration count depends on machine speed; the count to replay with -n is printed at the end.")
 
     seed_group = parser.add_mutually_exclusive_group()
     seed_group.add_argument('-s', '--seed', type=int, default=DEFAULT_SEED, metavar='N',
@@ -158,7 +163,7 @@ def test(args):
     seed = draw_random_seed() if args.randomize_seed else args.seed
     seed_rngs(seed)
     atomic_print(f'RNG seed {seed} (replay with: --seed {seed}, the same test flags, and the'
-                 f' same -n)')
+                 f' same iteration count)')
 
     if run_all_tests or args.net or args.serv:
         # Said out loud rather than left to be rediscovered: these two spawn threads, and
@@ -173,8 +178,14 @@ def test(args):
     ksgpu.set_cuda_device(args.gpu)
     from . import utils   # local import (utils pulls in heavier deps)
 
-    for i in range(args.niter):
-        atomic_print(f'\nIteration {i+1}/{args.niter}\n\n')
+    t_start = time.time()
+
+    for i in itertools.count():
+        if args.time is not None:
+            atomic_print(f'\nIteration {i+1} ({time.time()-t_start:.0f} of {args.time:g} s)'
+                         f'\n\n')
+        else:
+            atomic_print(f'\nIteration {i+1}/{args.niter}\n\n')
         
         if run_all_tests or args.dt1d:
             from .detrending_1d import tests as dt1d_tests
@@ -339,6 +350,24 @@ def test(args):
 
         if run_all_tests or args.serv:
             tests.test_server()
+
+        # AT THE BOTTOM OF THE LOOP, so that '-t' always runs at least one FULL iteration.
+        # Two things follow, and both are deliberate: 'test -t 1' is a smoke test rather than
+        # a no-op, and the elapsed time overshoots the budget by up to one iteration -- which
+        # for a slow flag combination can be a lot, so -t bounds the START of the last
+        # iteration, not the end of the run.
+        if args.time is not None:
+            if (time.time() - t_start) >= args.time:
+                break
+        elif (i + 1) >= args.niter:
+            break
+
+    if args.time is not None:
+        # A -t run cannot be replayed with -t: the iteration count it reached depends on how
+        # fast this machine is. Print the count, so that the seed printed above is actually
+        # usable.
+        atomic_print(f'\nRan {i+1} iterations in {time.time()-t_start:.1f} s.'
+                     f' Replay with: --seed {seed} -n {i+1}\n')
 
 
 ######################################   test_simpulse command  #####################################
