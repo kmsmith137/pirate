@@ -80,7 +80,7 @@ The rest of this note is dedicated to exploring some of the nuances and design p
         # ...more tests follow
    ```
 
-10. Avoid redundant or unnecessary tests. They create "friction" when refactoring, and slow down the test suite. We often run the test suite for a fixed amount of time (not a fixed number of iterations), so unnecessary tests will make the test suite less powerful, by reducing the number of iterations.
+10. Avoid redundant or unnecessary tests. They create "friction" when refactoring, and slow down the test suite. We often run the test suite for a fixed amount of time (not a fixed number of iterations) with `pirate_frb test -t`, so unnecessary tests will make the test suite less powerful, by reducing the number of iterations.
 
 11. An exception to the above: occasionally, a test has a small enough parameter space that we can easily enumerate and "exhaust" the parameter space. (For example, some tests have no parameters.) In this case, it makes more sense to run the entire test in the first iteration:
     ```py

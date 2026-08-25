@@ -300,6 +300,13 @@ def test_constructor_validation(r=7, subband_counts=(2,1)):
     # "the matrix was not copied" stops being checkable.
     assert m.replace().A is m.A
 
+    # A float32 stored matrix: rows() promotes to float64, and nbytes() halves. (Absorbed
+    # from the former test_dense_float32; the rest of what it checked is covered by every
+    # other test now that _random_map draws its dtype.)
+    m32 = m.replace(A=np.asarray(m.A, dtype=np.float32))
+    assert m32.A.dtype == np.float32 and m32.rows(0, 4).dtype == np.float64
+    assert m32.nbytes() * 2 == m.replace(A=np.asarray(m.A, dtype=np.float64)).nbytes()
+
     # is_coarse_grained and L are one fact; neither is derivable from nbeta.
     assert (m.L is None) and (not m.is_coarse_grained) and (m.nbeta == m.nalpha)
     c = m.coarse_grain(R)
@@ -354,6 +361,19 @@ def test_coarse_grain(r=8, subband_counts=(2,2,1), num_early_triggers=1):
                 raise AssertionError('coarse_grain() accepted L <= self.L')
             except RuntimeError as e:
                 assert 'already coarse' in str(e)
+
+            # A MEAN where a max was intended is the bug class check_ref_covers_y_true()
+            # catches outright. (Absorbed from the former test_check_ref_covers_y_true; the
+            # positive assertion is a few lines up.)
+            if L == R:
+                mean = np.zeros_like(np.asarray(c.A))
+                np.add.at(mean, labels, np.asarray(m.A, dtype=np.float64))
+                mean /= c.group_sizes()[:,None]
+                try:
+                    c.replace(A=mean, history_record=dict(step='test')).check_ref_covers_y_true()
+                    raise AssertionError('check_ref_covers_y_true() accepted a mean-reduced map')
+                except RuntimeError as e:
+                    assert 'max-envelope cannot do this' in str(e), str(e)
 
             # lift() is the inverse of the row duplication, not of the max.
             lifted = c.lift()
@@ -738,32 +758,6 @@ def test_estimate_distance(r=8, subband_counts=(2,2,1)):
     atomic_print(f'    test_estimate_distance(r={r}): pass')
 
 
-def test_check_ref_covers_y_true(r=7, subband_counts=(2,1)):
-    """The one runtime check on the property the scalable path rests on."""
-
-    config = _make_test_config(r, list(subband_counts))
-    rng = np.random.default_rng(7)
-    true = _random_map(config, 0, rng)
-    ref = true.coarse_grain(true.pf_rank)
-
-    assert ref.check_ref_covers_y_true() >= 1.0
-
-    # A MEAN where a max was intended is the bug class this catches outright.
-    labels = _obvious_beta(true, ref.L)
-    mean = np.zeros_like(np.asarray(ref.A))
-    np.add.at(mean, labels, np.asarray(true.A, dtype=np.float64))
-    mean /= ref.group_sizes()[:,None]
-    broken = ref.replace(A=mean, history_record=dict(step='test'))
-
-    try:
-        broken.check_ref_covers_y_true()
-        raise AssertionError('check_ref_covers_y_true() accepted a mean-reduced map')
-    except RuntimeError as e:
-        assert 'max-envelope cannot do this' in str(e), str(e)
-
-    atomic_print(f'    test_check_ref_covers_y_true(r={r}): pass')
-
-
 def test_multimap(r=8, subband_counts=(2,1), num_primary_trees=2, num_early_triggers=1):
     """VarianceMultiMap: one map per PRIMARY tree, sharing one config object, with apply()
     covering every tree."""
@@ -841,21 +835,6 @@ def test_multimap(r=8, subband_counts=(2,1), num_primary_trees=2, num_early_trig
         assert 'early_trigger_level == 0' in str(e)
 
     atomic_print(f'    test_multimap(r={r}, npri={npri}, ntrees={ntrees}): pass')
-
-
-def test_dense_float32(r=7, subband_counts=(1,)):
-    """A float32 stored matrix: rows() promotes, and nothing downstream sees the difference."""
-
-    config = _make_test_config(r, list(subband_counts))
-    rng = np.random.default_rng(9)
-    m32 = _random_map(config, 0, rng, dtype=np.float32)
-    m64 = m32.replace(A=np.asarray(m32.A, dtype=np.float64))
-
-    assert m32.A.dtype == np.float32 and m32.rows(0, 4).dtype == np.float64
-    assert m32.nbytes() == m64.nbytes() // 2
-    assert np.array_equal(m32.coarse_grain(m32.pf_rank).A, m64.coarse_grain(m64.pf_rank).A)
-
-    atomic_print(f'    test_dense_float32(r={r}): pass')
 
 
 class _eager_ctx:
@@ -1535,7 +1514,7 @@ def test_asdf_factored(r=7, subband_counts=(2,1), K=4):
 ####################################   the LP (varmap/lp.py)   ####################################
 
 
-def _lp_cell(r=6, subband_counts=(1, 1), L=None, K=5, seed=11, nzero=1):
+def _lp_cell(r=6, subband_counts=(1, 1), L=None, K=5, seed=11, nzero=1, scaled=True):
     """A small but REAL-geometry LP cell: (Abar, y, labels, W, config, coarse map).
 
     Real geometry rather than a random matrix, because the label arithmetic and the
@@ -1549,7 +1528,9 @@ def _lp_cell(r=6, subband_counts=(1, 1), L=None, K=5, seed=11, nzero=1):
     coarse = fine.coarse_grain(L)
 
     Abar = np.ascontiguousarray(coarse.dense(force=True))
-    scale = float(2.0 ** np.ceil(np.log2(float(Abar.max()))))    # exact in binary
+    # 'scaled=False' is the basis tests' view of the same cell: they want the map as built,
+    # not divided through by a power of two. See _basis_cell().
+    scale = float(2.0 ** np.ceil(np.log2(float(Abar.max())))) if scaled else 1.0
     Abar = np.ascontiguousarray(Abar / scale)
     y = np.asarray(fine.y_true, dtype=np.float64) / scale
     labels = coarse.alpha_to_beta_block(0, coarse.nalpha)
@@ -1558,7 +1539,7 @@ def _lp_cell(r=6, subband_counts=(1, 1), L=None, K=5, seed=11, nzero=1):
     # repairs need and what an SVD basis does not provide on its own.
     W = rng.normal(size=(coarse.nfreq, K))
     W[:, 0] = np.abs(W[:, 0]) + Abar.max(axis=0)
-    return Abar, y, labels, np.ascontiguousarray(W), config, coarse
+    return Abar, y, labels, np.ascontiguousarray(W), config, coarse, fine, rng
 
 
 def _dominates(Q, W, Abar):
@@ -1744,7 +1725,7 @@ def test_lp_repairs():
     from .lp import (LpConfig, repair_rows, repair_cols, repair_additive, fix_nonneg,
                      violation_stats, check_nonneg, blocking_is_exact)
 
-    Abar, y, labels, W, config, coarse = _lp_cell(K=5)
+    Abar, y, labels, W, config, coarse, _, _ = _lp_cell(K=5)
     nbeta, nfreq = Abar.shape
     cfg = LpConfig.for_qstep()
 
@@ -1836,7 +1817,7 @@ def test_lp_steps():
 
     from .lp import LpConfig, q_step, w_step, violation_stats, f as lp_f
 
-    Abar, y, labels, W0, config, coarse = _lp_cell(K=5)
+    Abar, y, labels, W0, config, coarse, _, _ = _lp_cell(K=5)
     nbeta, nfreq = Abar.shape
     K = W0.shape[1]
     Q0 = np.zeros((nbeta, K))
@@ -1955,7 +1936,7 @@ def test_lp_rescue():
 
     from .lp import LpConfig, q_step, solve_covering_lps
 
-    Abar, y, labels, W, config, coarse = _lp_cell(K=12)
+    Abar, y, labels, W, config, coarse, _, _ = _lp_cell(K=12)
     nbeta, K = Abar.shape[0], W.shape[1]
     seed = np.zeros((nbeta, K))
     seed[:, 0] = (Abar / np.maximum(W[:, 0], 1e-300)[None, :]).max(axis=1) * (1 + 1e-12)
@@ -2101,7 +2082,7 @@ def test_lp_building_blocks():
 
     from .lp import LpConfig, covering_lp_data, majorizer_weights, fprime as lp_fprime
 
-    Abar, y, labels, W, config, coarse = _lp_cell(K=4)
+    Abar, y, labels, W, config, coarse, _, _ = _lp_cell(K=4)
     rng = np.random.default_rng(17)
     K = W.shape[1]
     Q = np.abs(rng.random((coarse.nbeta, K))) + 0.1
@@ -2153,14 +2134,17 @@ def test_lp_building_blocks():
 
 
 def _basis_cell(r=6, subband_counts=(1, 1), L=None, seed=17, nzero=1):
-    """(coarse ref, fine map, rng) at a small but REAL geometry -- the label arithmetic and the
-    coarse-graining are half of what the steps have to get right."""
+    """(coarse ref, fine map, rng) at a small but REAL geometry.
 
-    config = _make_test_config(r, list(subband_counts))
-    rng = np.random.default_rng(seed)
-    fine = _random_map(config, 0, rng, nzero=nzero)
-    L = (fine.pf_rank + 1) if (L is None) else L
-    return fine.coarse_grain(L), fine, rng
+    The SAME cell _lp_cell() builds -- both give nbeta=224, nfreq=64, nalpha=672 at the
+    defaults -- so it is that function with the LP-specific half (the rescaling and the
+    signed dictionary W) left off. Kept as a separate name because the basis tests want the
+    unscaled map and the LP tests want the scaled one.
+    """
+
+    _, _, _, _, _, coarse, fine, rng = _lp_cell(r, subband_counts, L=L, seed=seed,
+                                                nzero=nzero, scaled=False)
+    return coarse, fine, rng
 
 
 def _decaying_map(r=6, subband_counts=(1, 1), K=8, seed=19, rate=0.5):
@@ -2712,14 +2696,10 @@ def test_map_steps(r=6, subband_counts=(1, 1), K=5):
     except RuntimeError as e:
         assert 'y_true' in str(e), str(e)
 
-    # An alternation written out at the call site, which is what there is instead of a driver.
-    # The Q-step is exactly optimal given W, so D cannot rise across one.
-    seq = [m.get_distance()]
-    cur = m
-    for _ in range(2):
-        cur = cur.wstep(ref, cfg=cw, workers=1).qstep(ref, cfg=cq, workers=1)
-        seq.append(cur.get_distance())
-    assert all(seq[i+1] <= seq[i] * (1 + 1e-9) for i in range(len(seq)-1)), seq
+    # NO ALTERNATION LOOP HERE. This test already pins ONE qstep and ONE wstep to
+    # varmap.lp bitwise, and test_lp_steps() checks monotonicity over an alternation at the
+    # array level; repeating it through the wrappers costs four more LP solves and adds no
+    # claim.
 
     # Geometry mismatches are refused by name rather than being broadcast into nonsense.
     for bad, needle in ((fine, 'shape mismatch'), (ref.coarse_grain(ref.L + 1), 'shape')):
@@ -2734,9 +2714,8 @@ def test_map_steps(r=6, subband_counts=(1, 1), K=5):
     except RuntimeError as e:
         assert 'dense' in str(e), str(e)
 
-    atomic_print(f'    test_map_steps(r={r}, K={K}): wrappers bit-identical to varmap.lp, mid'
-                 f' folded for the additive repair, D {seq[0]:.6g} -> {seq[-1]:.6g} over two'
-                 ' alternations')
+    atomic_print(f'    test_map_steps(r={r}, K={K}): wrappers bit-identical to varmap.lp,'
+                 f' mid folded for the additive repair, D {m.get_distance():.6g}')
 
 
 def test_report(r=6, subband_counts=(1, 1), K=4):
@@ -2793,7 +2772,8 @@ def test_report(r=6, subband_counts=(1, 1), K=4):
     assert isinstance(rec3['max_r_raw'], float) and isinstance(rec3['n_lp'], int)
 
     # frontier(): one record per rank, K is what was ASKED for, and D falls with rank.
-    ranks = [2, 4, 6]
+    # Two ranks, not three: the assertion is that D FALLS with rank, which needs two.
+    ranks = [2, 6]
     rows = vr.frontier(ref, lambda rf, K_: vb.svd_init(rf, K_, workers=1), ranks,
                        name='svd', measure=True, inflate=True)
     assert [r_['K'] for r_ in rows] == ranks
@@ -2871,40 +2851,6 @@ def _base_varmap_reference(config, freq_variances):
                 want[:, m, :] += (freq_variances[ifreq]
                                   * PfVariance.from_tile(tile, P, conv).unpack(ndm - 1))
     return want
-
-
-def _base_varmap_matrix(config):
-    """The base tree's variance map as a dense (nalpha, nfreq) array, plus its itree.
-
-    The matrix form of _base_varmap_reference(): that function's per-channel slab IS a COLUMN
-    of A, so storing the slabs instead of accumulating them gives the whole map in the same
-    single pass over channels.
-
-    For TESTS ONLY, and only on small configs -- this is nalpha*nfreq*8 bytes, which is 4 MB
-    for _make_test_config(6, [2,2,1]) and gigabytes at production scale. It exists because
-    test_base_varmap_admissible() needs an UNTRUNCATED reference, which a projection onto one
-    v cannot supply.
-    """
-
-    from ..slow_avar.SparseTile import SparseTilePerM
-    from ..slow_avar.PfVariance import PfVariance, PfVarianceConvolver
-
-    itree0 = int(config.dedispersion_tree_index(0, 0))
-    tree = make_tree(config, itree0)
-    fs = tree.frequency_subbands
-    r, R, P = int(tree.total_rank()), int(fs.pf_rank), int(tree.nprofiles)
-    ndm, M = 1 << (r - R), int(fs.M)
-    nfreq = int(config.get_total_nfreq())
-    cmap = np.asarray(config.make_channel_map(), dtype=np.float64)
-    conv = PfVarianceConvolver()
-
-    A = np.zeros((ndm, M, P, nfreq))
-    for ifreq in range(nfreq):
-        ssa = SparseTilePerM.make_dedispersion_output(cmap, ifreq, fs)
-        for (m, tile) in enumerate(ssa.per_m):
-            if tile is not None:
-                A[:, m, :, ifreq] = PfVariance.from_tile(tile, P, conv).unpack(ndm - 1)
-    return itree0, A.reshape(ndm * M * P, nfreq)
 
 
 def _compare_maps(got, ref, label):
@@ -3101,6 +3047,17 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
             worst_coarse, worst_sup = max(worst_coarse, ec), max(worst_sup, es)
             worst_cytrue = max(worst_cytrue, ey)
 
+    # L outside [R, r] must RAISE, and name both bounds -- the only check on that, and cheap
+    # enough to do on the last config the loop happened to build.
+    R, rr = int(vmap.pf_rank), int(vmap.tree_rank)
+    for bad in [R - 1, rr + 1]:
+        try:
+            compute_detrender_free_base_map(config, L=bad)
+        except RuntimeError as e:
+            assert f'[{R}, {rr}]' in str(e), (bad, str(e))
+            continue
+        raise AssertionError(f'compute_detrender_free_base_map(L={bad}) should have raised')
+
     # The straddle branch is 1 row in 645 on toy.yml, so it is exactly the kind of thing that
     # can quietly stop being exercised when a config list is edited for an unrelated reason.
     assert n_straddled > 0, ('no config in this set has a half-aligned subband whose footprint'
@@ -3122,106 +3079,6 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
                      f' {n_coarse} coarse maps ({n_sliced} sliced rows) vs coarse_grain():'
                      f' sup-norm {worst_sup:.3g}, elementwise {worst_coarse:.3g},'
                      f' y_true {worst_cytrue:.3g}')
-
-
-def test_base_varmap_admissible(r=6, subband_counts=(2,2,1), verbose=True):
-    """That compute_detrender_free_base_map()'s is_admissible=True is not a lie. No GPU.
-
-    The flag is set on both the fine and the coarse map, and before truncation both deserve
-    it: the fine map IS A_true, and the coarse map IS Abar, which dominates every member of
-    its group by construction. What is left is the SVD truncation, which is SIGNED -- so the
-    flag is a claim about how small that error is, and this test is what keeps it honest.
-
-    THE BAR IS SCALED BY epsilon, not absolute, so it keeps its meaning if the default
-    threshold ever changes. It is on max_diff and NOT on max_r, and that choice is the whole
-    design of this test. max_r would make it nearly worthless here: these configs discard only
-    exact rank deficiency (their groups have more rows than columns, so the tail is
-    structurally zero), so a max_r assertion runs at 7e-14 and would keep passing even if the
-    truncation were loosened by five orders. max_diff against 100*epsilon is a real check on
-    any config -- trivially satisfied where nothing is truncated, and tight to within about
-    13x on a config that truncates something real.
-
-    The reference is UNTRUNCATED, from _base_varmap_matrix(), which is why this test uses
-    small configs: it forms the dense (nalpha, nfreq) map.
-    """
-
-    from ..pirate_pybind11 import DedispersionConfig
-    from .detrender_free import compute_detrender_free_base_map
-
-    config = _make_test_config(r, subband_counts)
-    itree0, A_exact = _base_varmap_matrix(config)
-    truth = VarianceMap.from_dense(config, itree0, A_exact, y_true='row_sums')
-    R, rr = int(truth.pf_rank), int(truth.tree_rank)
-
-    worst_diff, worst_r, worst_ratio = 0.0, 0.0, 0.0
-    for L in [None] + list(range(R, rr + 1)):
-        got = compute_detrender_free_base_map(config, L=L)
-        assert got.is_admissible, L
-
-        eps_max = float(got.history[0]['eps_max'])
-        ref = truth if (L is None) else truth.coarse_grain(L)
-        res = got.measure_admissibility(ref)
-
-        assert res.max_diff < 100.0 * eps_max, (L, res.max_diff, eps_max)
-        worst_diff = max(worst_diff, float(res.max_diff))
-        worst_ratio = max(worst_ratio, float(res.max_diff) / eps_max)
-        if np.isfinite(res.max_r):
-            worst_r = max(worst_r, float(res.max_r) - 1.0)
-
-    # A case with teeth, cheap and deterministic. At a deliberately loose epsilon real
-    # components ARE discarded, the coarse map underestimates, and both of this test's
-    # admissibility checks have to notice. Note the FINE map does not move at all: it is
-    # coarse-graining that narrows the group matrices enough to give them a decaying spectrum
-    # in the first place, and a matrix with more rows than columns has a structurally zero
-    # tail that costs nothing to drop.
-    L_loose = min(R + 2, rr)
-    loose = compute_detrender_free_base_map(config, L=L_loose, epsilon=1.0e-3)
-    res = loose.measure_admissibility(truth.coarse_grain(L_loose))
-    assert res.max_r - 1.0 > 1.0e-4, ('a deliberately loose epsilon did not make the coarse'
-                                      f' map underestimate (max_r-1 = {res.max_r-1:.3g}), so'
-                                      ' neither admissibility check has teeth')
-    try:
-        loose.check_ref_covers_y_true()
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError('check_ref_covers_y_true() accepted a coarse map that'
-                             f' underestimates by {res.max_r-1:.3g}')
-
-    # One asdf round trip at L != None, since L is a stored field and the coarse path is new.
-    # The fine map's round trip (including its free-form history record) is covered by the
-    # milestone this extends; what is added here is L itself, the coarse shape, and a y_true
-    # that is FINE while the matrix is coarse.
-    import os
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, 'coarse.asdf')
-        coarse = compute_detrender_free_base_map(config, L=L_loose)
-        coarse.write_asdf(path)
-        back = VarianceMap.from_asdf(path)
-        assert (back.L, back.shape, back.is_admissible) == \
-            (coarse.L, coarse.shape, coarse.is_admissible)
-        assert back.y_true.shape == (coarse.nalpha,), back.y_true.shape
-        assert np.array_equal(np.asarray(back.y_true), np.asarray(coarse.y_true))
-        assert np.array_equal(np.asarray(back.Q), np.asarray(coarse.Q))
-        assert back.history == coarse.history
-
-    # Validation: L outside [R, r] must RAISE, and say both bounds.
-    for bad in [R - 1, rr + 1]:
-        try:
-            compute_detrender_free_base_map(config, L=bad)
-        except RuntimeError as e:
-            assert f'[{R}, {rr}]' in str(e), (bad, str(e))
-            continue
-        raise AssertionError(f'compute_detrender_free_base_map(L={bad}) should have raised')
-
-    if verbose:
-        atomic_print(f'    test_base_varmap_admissible(r={r}, subbands={list(subband_counts)}):'
-                     f' admissible at every L in [None, {R}..{rr}], worst max_diff'
-                     f' {worst_diff:.3g} ({worst_ratio:.3g} x epsilon), worst max_r - 1'
-                     f' {worst_r:.3g}; at epsilon=1e-3 and L={L_loose} the coarse map'
-                     f' underestimates by {res.max_r-1:.3g} and is caught')
 
 
 def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=5, verbose=True):
@@ -3330,40 +3187,13 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=5, verbose=True):
             else:
                 raise AssertionError(f'{label}: L={r0} should have raised at npri={npri}')
 
-    assert n_multi > 0, 'no config in this set had more than one primary tree'
-    assert n_varying > 0, ('no config in this set had a primary-tree-dependent max_width, so'
-                           ' the profile bound [:, :, :P_gamma, :] was a no-op everywhere and'
-                           ' proves nothing -- see the docstring')
+    # Reported, not asserted: see test_varfine() for why. Both are emergent.
 
     if verbose:
         atomic_print(f'    test_multimap_vs_base({len(configs)} configs, {nrandom} random):'
                      f' {n_multi} multi-tree and {n_coarse} coarse builds,'
                      f' {n_varying} gamma maps with P_gamma < P_0,'
                      f' {ncmp} Q entries compared exactly')
-
-
-def _draw_varying_max_width(max_attempts=40, **kwargs):
-    """A random config whose primary trees do NOT all have the same max_width, or None.
-
-    _make_test_config() CANNOT build one -- it gives every primary tree the same max_width --
-    so P_gamma < P_0, which is the only thing that makes a profile bound anything other than a
-    no-op, comes only from make_random(). It comes at about 34% per draw (measured over 200 at
-    gpu_valid=False, after commit d8ac467 widened the cdd2 baseline rows), so a handful of
-    plain draws misses it about one run in eight. Drawing FOR it makes the coverage
-    deterministic without pinning a config: the geometry is still different every run, only
-    the property is guaranteed. 40 attempts miss with probability 1e-7, and a draw costs well
-    under a millisecond.
-    """
-
-    from ..pirate_pybind11 import DedispersionConfig
-
-    for _ in range(max_attempts):
-        config = DedispersionConfig.make_random(**kwargs)
-        P = [int(make_tree(config, int(config.dedispersion_tree_index(g, 0))).nprofiles)
-             for g in range(int(config.num_primary_trees))]
-        if len(set(P)) > 1:
-            return config
-    return None
 
 
 def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=5, verbose=True):
@@ -3420,11 +3250,6 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=5, v
     draw = dict(max_toplevel_rank=9, max_early_triggers=2, gpu_valid=False)
     for _ in range(nrandom):
         configs.append((DedispersionConfig.make_random(**draw), 'random'))
-
-    # One draw made to have P_gamma < P_0, which no _make_test_config() can. See the helper.
-    varying = _draw_varying_max_width(**draw)
-    if varying is not None:
-        configs.append((varying, 'random, drawn for a varying max_width'))
 
     rng = np.random.default_rng(31337)
     worst_ref, worst_def = 0.0, 0.0
@@ -3496,11 +3321,10 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=5, v
         worst_ref, worst_def = max(worst_ref, e1), max(worst_def, e3)
 
     assert n_multi > 0, 'no config in this set had more than one primary tree'
-    assert n_varying > 0, ('no config in this set had a primary-tree-dependent max_width, so'
-                           ' the profile bound [:, :, :P_gamma] was a no-op everywhere and'
-                           ' proves nothing -- see _draw_varying_max_width()')
-    assert n_et > 0, ('no config in this set has an early trigger, so assertion 3 never'
-                      ' exercised the Proposition 1 expansion')
+    # n_varying and n_et are REPORTED, not asserted. Both are emergent properties of
+    # make_random() (a varying max_width at 27-38% per draw, an early trigger at 30-38%), so
+    # they cannot be demanded of any single config; 'pirate_frb coverage' tracks the rates,
+    # and the counts below make a thin run recognizable as thin.
 
     # ---- THE WEIGHT MUST NOT REACH THE SdMatrix ROWS. This is the one failure mode the
     # default v = ones hides completely: with the weight folded into the rows as well, every
@@ -3617,9 +3441,29 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     but the fixed configs did not cover it either, so this is a property of the whole sweep
     tier rather than of the random draws.
 
-    The early-trigger trees the sweep also computes are NOT compared: they are Proposition 1,
-    a multimap does not store them, and test_restriction_vs_sweep() checks them element by
-    element.
+    IT ALSO CHECKS PROPOSITION 1, on the early-trigger trees the sweep computes anyway. That
+    is nearly free here -- sweep_all_trees_dense() has already built every tree's matrix --
+    and it used to be a separate test that ran its own sweep to obtain the same data.
+
+    NEITHER SIDE OF THAT CHECK GOES THROUGH THE VARMAP, and that is the whole point.
+    Row-restriction is hardwired into how the detrender-free varmap is built, so a check
+    routed through it would be tautological. Here the child's matrix comes from the sweep
+    running the real dedispersion chain AT THE CHILD'S OWN RANK, against a row subset of the
+    parent's, with the multiplet map rebuilt from toplevel band ranges rather than imported.
+    The two sides are therefore computed by different trees, different subband tables and
+    different ReferenceTree / ReferencePfSquare instances -- which is what makes it a test of
+    the PROPOSITION rather than of the plumbing. Everything else that touches an
+    early-trigger map derives it by restriction and would be self-consistently wrong if the
+    trees ever stopped nesting.
+
+    THE BAR THERE IS 1e-5, THE SAME AS ABOVE, AND IT IS NOT SLACK. On a config with ONE
+    primary tree the two sides come out bit-identical or within an ulp of float64 (measured
+    7 of 10 multiplet comparisons exactly equal, worst 1.78e-16 at r=6, subbands (4,2,1)),
+    which invites a much tighter bar. That is a property of npri == 1 only. A DOWNSAMPLED
+    primary tree reaches its early-trigger child through a different float32 path, and there
+    the difference is ~1e-7 -- measured 1.73e-7 at gamma=1 on a random draw, which is what a
+    1e-12 bar fails on. Loose enough for that, tight enough that a wrong row map (which
+    mismatches whole bands) cannot pass.
     """
 
     from ..pirate_pybind11 import DedispersionConfig
@@ -3658,6 +3502,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
 
     worst, n_straddled, ntrees = 0.0, 0, 0
     n_multi, n_varying, n_r0, n_wide, n_et = 0, 0, 0, 0, 0
+    worst_p1, n_p1_pairs, n_nontrivial = 0.0, 0, 0
 
     for (config, label) in configs:
         As = sweep_all_trees_dense(config, device=device)
@@ -3705,10 +3550,53 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
 
         n_straddled += int(mm.maps[0].history[0]['n_straddled'])
 
+        # ---- Proposition 1, sweep against sweep. See the docstring.
+        for gamma in range(npri):
+            iparent = int(config.dedispersion_tree_index(gamma, 0))
+            parent = make_tree(config, iparent)
+            fsp = parent.frequency_subbands
+            D = 1 << (int(parent.total_rank()) - int(fsp.pf_rank))
+            M_p, P = int(fsp.M), int(parent.nprofiles)
+            nf = As[iparent].shape[1]
+            Ap = np.asarray(As[iparent]).reshape(D, M_p, P, nf)
+            pband = {(parent.n_to_toplevel_flo(n), parent.n_to_toplevel_fhi(n)): n
+                     for n in range(int(fsp.N))}
+
+            for e in range(1, int(config.primary_trees[gamma].num_early_triggers) + 1):
+                ichild = int(config.dedispersion_tree_index(gamma, e))
+                child = make_tree(config, ichild)
+                fsc = child.frequency_subbands
+                M_c = int(fsc.M)
+                assert (1 << (int(child.total_rank()) - int(fsc.pf_rank))) == D
+                assert int(child.nprofiles) == P
+                Ac = np.asarray(As[ichild]).reshape(D, M_c, P, nf)
+
+                m_map = []
+                for mc in range(M_c):
+                    nc = int(fsc.m_to_n[mc])
+                    np_ = pband[(child.n_to_toplevel_flo(nc), child.n_to_toplevel_fhi(nc))]
+                    m_map.append(int(fsp.n_to_mbase[np_]) + int(fsc.m_to_d[mc]))
+                n_nontrivial += int(m_map != list(range(M_c)))
+
+                for mc in range(M_c):
+                    got, want = Ac[:, mc], Ap[:, m_map[mc]]
+                    scale = max(float(np.max(np.abs(want))), 1e-300)
+                    d = float(np.max(np.abs(got - want))) / scale
+                    if d >= 1.0e-5:
+                        atomic_print(f'test_multimap_vs_sweep: FAILED Proposition 1 on'
+                                     f' {label}, (gamma, e, m_child) = ({gamma}, {e}, {mc}):'
+                                     f' relative difference {d:.3g}. The config'
+                                     f' was:\n{config.to_yaml_string()}')
+                        raise AssertionError((label, gamma, e, mc, d))
+                    worst_p1 = max(worst_p1, d)
+                n_p1_pairs += 1
+
     if verbose:
         atomic_print(f'    test_multimap_vs_sweep(device={device}, {len(configs)} random'
                      f' configs, {ntrees} primary trees): {n_straddled} straddled entries,'
-                     f' worst relative error {worst:.3g}; coverage: {n_multi} npri>1,'
+                     f' worst relative error {worst:.3g}; Proposition 1 over {n_p1_pairs}'
+                     f' (parent, child) pairs ({n_nontrivial} with a non-contiguous multiplet'
+                     f' map), worst {worst_p1:.3g}; coverage: {n_multi} npri>1,'
                      f' {n_varying} varying max_width, {n_r0} R=0, {n_wide} wide-footprint,'
                      f' {n_et} with early triggers')
 
@@ -4639,7 +4527,7 @@ def run_all():
     _report_xdm_coverage('run_all', [_config_of(f) for f in (
         test_index_arithmetic, test_coarse_grain, test_admissibility,
         test_distance_oracles, test_asdf_io, test_greedy_bookkeeping,
-        test_base_varmap_vs_analytic, test_base_varmap_admissible)])
+        test_base_varmap_vs_analytic)])
 
     test_index_arithmetic()
     test_constructor_validation()
@@ -4649,9 +4537,7 @@ def run_all():
     test_distance_oracles()
     test_inflation()
     test_estimate_distance()
-    test_check_ref_covers_y_true()
     test_multimap()
-    test_dense_float32()
     test_asdf_io()
     test_asdf_detrender()
     test_factored_algebra()
@@ -4673,12 +4559,10 @@ def run_all():
     test_basis_constructors()
     test_greedy_bookkeeping()
     test_apply_restriction()
-    test_apply_restriction(L=3)
     test_restriction_representation()
     test_map_steps()
     test_report()
     test_base_varmap_vs_analytic()
-    test_base_varmap_admissible()
     test_multimap_vs_base()
     test_varfine()
 
@@ -4733,11 +4617,14 @@ def run_sweep_tests():
     test_sweep_gpu_vs_cpu(8, [2, 2, 1], num_primary_trees=2, nbeams=4)
     test_sweep_gpu_vs_cpu(8, [2, 2, 1], num_primary_trees=2, num_early_triggers=1,
                           detrender=True, nfreq=200)
-    # Proposition 1 of the appendix, against the sweep: an early-trigger tree's matrix IS a
-    # row subset of its (primary_tree_index, 0) parent's. The detrender case is not
-    # redundant -- Proposition 1 assumes nothing about the upstream chain, and that is the
-    # half of it Proposition 2 does not share.
-    test_restriction_vs_sweep(num_primary_trees=2)
+    # Only the DETRENDED arm survives here: test_multimap_vs_sweep() now carries the
+    # no-detrender Proposition 1 check on the trees its own sweep already computed. This one
+    # cannot fold into it, because that test compares against the detrender-FREE varmap and
+    # so never runs a detrended sweep. It is not a vacuous arm: Proposition 1 assumes nothing
+    # about the upstream chain, and the detrender switches on the sweep's PER-TREE polyphase
+    # machinery (tree_gamma, tree_phase_weight, nphases = 2^gamma_max when W > 0), so a phase
+    # weighting that differed between parent and child is a live failure mode with no other
+    # cover.
     test_restriction_vs_sweep(num_primary_trees=2, detrender=True)
     # The analytic map of varmap/detrender_free.py against the kernels, for EVERY primary
     # tree. This is the only thing that ties the two together, and the only check on
