@@ -456,6 +456,7 @@ PYFILES = \
   pirate_frb/kernels/GpuDequantizationKernel.py \
   pirate_frb/loose_ends/__init__.py \
   pirate_frb/tests/__init__.py \
+  pirate_frb/tests/coverage.py \
   pirate_frb/tests/test_assembled_frame_allocator.py \
   pirate_frb/tests/test_assembled_frame_asdf.py \
   pirate_frb/tests/test_atomic_out.py \

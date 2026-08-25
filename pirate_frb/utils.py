@@ -19,7 +19,7 @@ from .pirate_pybind11 import (get_thread_affinity, set_thread_affinity,
                               atomic_print, test_atomic_print,
                               test_avx2_simulate_4bit_noise, time_avx2_simulate_4bit_noise)
 
-__all__ = ['integer_log2', 'run_processes',
+__all__ = ['integer_log2', 'print_separator', 'run_processes',
            'ThreadAffinity', 'get_thread_affinity', 'set_thread_affinity',
            'GrouperHistogram', 'GpuGrouperHistogram',
            'time_cupy_dedisperser', 'show_asdf',
@@ -35,6 +35,7 @@ __all__ = ['integer_log2', 'run_processes',
 
 
 import subprocess
+import sys
 import time
 
 from .pirate_pybind11 import constants
@@ -49,6 +50,13 @@ def integer_log2(n):
     if n <= 0 or (n & (n - 1)) != 0:
         raise ValueError(f"integer_log2: argument {n} is not a positive power of two")
     return n.bit_length() - 1
+
+
+def print_separator(label, filler='-'):
+    """A labelled full-width rule, for a CLI command whose output has sections."""
+    t = filler * (50 - len(label)//2)
+    atomic_print(f'\n{t}  {label}  {t}\n\n')
+    sys.stdout.flush()
 
 
 def run_processes(multi_args):

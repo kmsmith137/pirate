@@ -36,7 +36,7 @@ from .Hardware import Hardware
 from .Hwtest import Hwtest
 from .HwtestSender import HwtestSender
 from .yaml_utils import indent_dedispersion_plan_comments, align_inline_comments
-from .utils import atomic_print
+from .utils import atomic_print, print_separator
 
 
 #########################################   test command  ##########################################
@@ -1025,12 +1025,6 @@ def show_xengine_metadata(args):
 ###################################   show_dedisperser command  ###################################
 
 
-def print_separator(label, filler='-'):
-    t = filler * (50 - len(label)//2)
-    atomic_print(f'\n{t}  {label}  {t}\n\n')
-    sys.stdout.flush()
-
-
 def parse_show_dedisperser(subparsers):
     help_text = "Parse a dedisperser .yml file and write info to stdout"
     parser = subparsers.add_parser("show_dedisperser", help=help_text, description=help_text)
@@ -1172,92 +1166,16 @@ def show_random_config(args):
         atomic_print(yaml_str)
 
 
-###################################   sample_configs command  ###################################
+######################################   coverage command  ######################################
 
 
-def parse_sample_configs(subparsers):
-    help_text = "For debugging: sample random DedispersionConfigs and report structural coverage"
-    parser = subparsers.add_parser("sample_configs", help=help_text, description=help_text)
-    parser.add_argument('-n', type=int, default=1000, metavar='NCONFIG',
-                        help='configs to sample per dtype (default 1000)')
-    parser.add_argument('-r', '--max-toplevel-rank', type=int, default=10, metavar='RANK',
-                        help='make_random() max_toplevel_rank (default 10)')
-    parser.add_argument('-e', '--max-early-triggers', type=int, default=5, metavar='NET',
-                        help='make_random() max_early_triggers (default 5)')
-    parser.add_argument('-a', action='store_true',
-                        help='sample arbitrary configs, without restricting to precompiled kernels')
+def parse_coverage(subparsers):
+    help_text = "Coverage analysis of randomization utils in unit tests"
+    subparsers.add_parser("coverage", help=help_text, description=help_text)
 
 
-def sample_configs(args):
-    """How often does make_random() produce the structures a unit test needs?
-
-    The number this exists for is the LAST row: a max_width chain that is not flat. Several
-    tests want a config whose profile count nprofiles = 1 + 3*log2(max_width) differs across
-    primary trees, and on the gpu_valid path that can only happen when the cdd2 registry
-    stocks two Wmax values for the DOWNSAMPLED tree's (dtype, dd_rank, subband_counts) --
-    see DedispersionConfig::make_random(). It is therefore a property of which kernels this
-    build compiled, not of the random draw, and it moves when makefile_helper.py changes.
-
-    Reported per dtype because the two halves of the registry are stocked differently.
-    """
-
-    import numpy as np      # local: __main__ is import-latency sensitive
-
-    gpu_valid = not args.a
-    atomic_print(f'sample_configs: {args.n} configs per dtype, gpu_valid={gpu_valid},'
-                 f' max_toplevel_rank={args.max_toplevel_rank},'
-                 f' max_early_triggers={args.max_early_triggers}\n')
-
-    # dtype is not an argument to make_random(): on the gpu_valid path it comes from the
-    # randomly chosen cdd2 registry key. force_float32 filters the key pool, and there is no
-    # 'force_float16', so we draw unfiltered and BIN by the dtype we got. That also reports
-    # the float32 fraction for free, which is the sanity check on the pool itself.
-    rows = {}
-    for _ in range(args.n * 2):
-        config = DedispersionConfig.make_random(max_toplevel_rank=args.max_toplevel_rank,
-                                                max_early_triggers=args.max_early_triggers,
-                                                gpu_valid=gpu_valid)
-        dtype = str(np.dtype(config.dtype))
-        rows.setdefault(dtype, []).append(config)
-
-    for dtype in sorted(rows):
-        configs = rows[dtype]
-        n = len(configs)
-        widths = [[int(pt.max_width) for pt in c.primary_trees] for c in configs]
-        nets = [max(int(pt.num_early_triggers) for pt in c.primary_trees) for c in configs]
-
-        multi = sum(1 for w in widths if len(w) > 1)
-        varying = sum(1 for w in widths if len(set(w)) > 1)
-        et = sum(1 for x in nets if x > 0)
-        ranks = sorted(set(int(c.toplevel_tree_rank) for c in configs))
-
-        print_separator(f'{dtype}  ({n} of {2*args.n} draws)')
-        _sample_configs_row('Multiple primary trees (npri > 1)', multi, n)
-        _sample_configs_row('Max_width is primary-tree-dependent (implies npri > 1)', varying, n)
-        _sample_configs_row('Some primary tree has early triggers', et, n)
-        atomic_print(f'    toplevel_tree_rank range: {ranks[0]}..{ranks[-1]}')
-        atomic_print(f'    npri histogram: {_sample_configs_hist([len(w) for w in widths])}')
-        atomic_print(f'    max_width chains seen: {_sample_configs_chains(widths)}\n')
-
-
-def _sample_configs_row(label, count, n):
-    atomic_print(f'    {label + ":":<58s} {100.0*count/n:5.1f}%   ({count}/{n})')
-
-
-def _sample_configs_hist(values):
-    from collections import Counter
-    return {k: v for (k, v) in sorted(Counter(values).items())}
-
-
-def _sample_configs_chains(widths, nshow=6):
-    """The most common max_width chains, longest-first, so a flat registry is visible."""
-    from collections import Counter
-    c = Counter(tuple(w) for w in widths if len(w) > 1)
-    if not c:
-        return 'none (every config had one primary tree)'
-    top = c.most_common(nshow)
-    out = ', '.join(f'{list(k)} x{v}' for (k, v) in top)
-    return out + (f', ... ({len(c)} distinct)' if len(c) > nshow else '')
+def coverage(args):
+    tests.report_coverage()
 
 
 ###################################   time_dedisperser command  ###################################
@@ -2202,7 +2120,7 @@ def get_parser():
     parse_variance_map(subparsers)
     parse_time(subparsers)
     parse_time_dedisperser(subparsers)
-    parse_sample_configs(subparsers)
+    parse_coverage(subparsers)
     
     parse_show_asdf(subparsers)
     parse_show_file_format(subparsers)
@@ -2297,8 +2215,8 @@ def main():
         show_dedisperser(args)
     elif args.command == "time_dedisperser":
         time_dedisperser(args)
-    elif args.command == "sample_configs":
-        sample_configs(args)
+    elif args.command == "coverage":
+        coverage(args)
     elif args.command == "show_random_config":
         show_random_config(args)
     elif args.command == "hwtest":
