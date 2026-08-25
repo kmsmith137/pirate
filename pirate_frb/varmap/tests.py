@@ -3722,12 +3722,23 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
 
 
 def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3):
-    """A Detrender2dParams matching 'config', for the sweep tests."""
+    """A Detrender2dParams matching 'config', for the sweep tests.
+
+    'nzone' and 'kint' are REQUESTS, not requirements. zoned_knots() needs nzone to divide
+    nfreq and each zone to be wide enough to hold kint interior knots, and a random config
+    satisfies neither in general -- its nfreq is odd about half the time. Both are reduced to
+    the largest legal value rather than raising, so that a caller which does not care about
+    the exact knot layout (every caller here does not) can hand this an arbitrary config.
+    Pinning them instead is what zoned_knots() is for, and its docstring says so.
+    """
 
     from ..pirate_pybind11 import Detrender2dParams
     from ..detrending_spline.masks import zoned_knots
 
     nfreq = int(config.get_total_nfreq())
+    kint = min(kint, max(nfreq - 1, 0))
+    nzone = max((z for z in range(1, nzone + 1)
+                 if (nfreq % z == 0) and (nfreq // z >= kint + 1)), default=1)
     kv = zoned_knots(n_phi, nfreq, nzone, kint)
 
     return Detrender2dParams(nfreq=nfreq, knots=[int(x) for x in kv.knots], M=1, n_phi=n_phi,
@@ -4005,9 +4016,110 @@ def test_sweep_detrender_fp32(r=8, nifreq=16, verbose=True):
     assert float(np.abs(eps).max()) < 1.0e-4, float(np.abs(eps).max())
 
 
+# Cost cap for the RANDOMIZED test_sweep_gpu_vs_cpu() draw, in the work units of
+# _sweep_work(). ~17x tighter than SWEEP_WORK_BUDGET, and for a specific reason: that budget
+# governs test_multimap_vs_sweep(), which runs a GPU sweep only, whereas this test runs a CPU
+# sweep as well -- and the CPU arm is 20-50x the GPU one, so it IS the cost.
+#
+# SET SO THAT THE WORST CASE IS ~10 s, WHICH MEANS THE DETRENDER CASE. Measured at 0.8-1.0x
+# of a 2.5e8 budget: det=False landed at 4.5 and 5.8 s, det=True at 12.2 and 15.9 s. So the
+# detrender costs about 2.5x MORE PER WORK UNIT than nphases alone predicts -- it does real
+# arithmetic beyond multiplying the pass count -- and a single budget cannot make both arms
+# land at 10 s. It is set for the expensive arm, so a no-detrender draw comes in around 4 s.
+# At this value the mean over draws is well under 2 s, since the work distribution is heavily
+# skewed and most draws are nowhere near the cap.
+#
+# THE COST MODEL MUST SEE THE DETRENDER, which is the one subtlety here. _SweepGeometry sets
+# nphases = 2^gamma_max only when W > 0: with no detrender every polyphase pass gives the
+# same answer and the sweep takes a single-pass shortcut (that identity is what
+# test_sweep_phase_collapse() checks). So a detrended config costs up to 2^gamma_max times as
+# much as the same config without one, and _sweep_work(_SweepGeometry(config)) -- no
+# detrender argument -- underestimates it by exactly that factor. Measured ratios of 2.0x and
+# 8.0x on npri=2 and npri=4 draws. That is why the draw below budgets the (config, detrender)
+# PAIR rather than the config, and why it must not be simplified to reuse
+# test_multimap_vs_sweep()'s call.
+#
+# Note the rank does most of the work here: toplevel_tree_rank explains 86% of the variance
+# in log(cost) (median cost rises ~8x per rank), so this cap is mostly, but not only, a rank
+# cap. The detrender axis is the part a rank cap cannot see.
+GPU_VS_CPU_WORK_BUDGET = 1.5e8
+
+
+def _draw_gpu_vs_cpu_case(max_attempts=500):
+    """A random (config, detrender, nbeams) for test_sweep_gpu_vs_cpu(), under the cost cap.
+
+    Returns None if no draw came in under budget, which the caller reports rather than
+    failing on: an empty draw is a coverage problem, not a bug in the code under test.
+
+    THE THREE AXES ARE DRAWN SEPARATELY BECAUSE ONLY ONE OF THEM IS A CONFIG PROPERTY.
+    'nbeams' and the detrender are arguments this test supplies -- a random config has
+    nothing to say about either -- and both matter: the lds kernel uses one beam stride for
+    input and output, so a stride error cannot show at nbeams == 1, and the detrender is what
+    turns the polyphase sum on. The two config-level properties the fixed calls cover come
+    free from the draw instead: npri > 1 (time-downsampled trees) and nfreq != 2^r, the
+    latter in essentially every draw since zone_nfreq is drawn per zone in [2^r/4, 2^r] over
+    1..5 zones.
+
+    The make_random() flags are test_multimap_vs_sweep()'s, for its reasons: all three beam
+    fields have to be set or validate() fails a C++ assertion, and the two flags are what
+    make a random config usable by the GPU sweep at all.
+    """
+
+    from ..pirate_pybind11 import DedispersionConfig
+    from .brute_force import _SweepGeometry
+
+    for _ in range(max_attempts):
+        config = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=2,
+                                                force_float32=True, no_host_mega_ringbuf=True)
+        config.beams_per_gpu = 1
+        config.beams_per_batch = 1
+        config.num_active_batches = 1
+        config.validate()
+
+        detrender = bool(np.random.randint(2))
+        nbeams = int(np.random.randint(1, 5))
+
+        # The test raises beams_per_{gpu,batch} to nbeams before the GPU sweep, so a draw
+        # whose config cannot carry that many is rejected here rather than midway through.
+        try:
+            config.beams_per_gpu = config.beams_per_batch = nbeams
+            config.validate()
+            config.beams_per_gpu = config.beams_per_batch = 1
+            config.validate()
+            dparams = _make_test_detrender(config) if detrender else None
+            geom = _SweepGeometry(config, detrender=dparams)
+        except RuntimeError:
+            continue
+
+        if _sweep_work(geom) <= GPU_VS_CPU_WORK_BUDGET:
+            return config, detrender, nbeams
+
+    return None
+
+
+def test_sweep_gpu_vs_cpu_random(verbose=True):
+    """test_sweep_gpu_vs_cpu() on a random (config, detrender, nbeams), under a cost cap.
+
+    Run once every ten iterations rather than once per run: the fixed calls in
+    run_sweep_tests() are 64% of that tier's cost, so running this every iteration is not
+    affordable, and running it once per invocation gives a single geometry however long the
+    run is. One draw per ten iterations amortizes to about 1 s per iteration and gives an
+    '-n 100' run ten independent geometries.
+    """
+
+    case = _draw_gpu_vs_cpu_case()
+    if case is None:
+        atomic_print('    test_sweep_gpu_vs_cpu_random: no draw came in under'
+                     f' GPU_VS_CPU_WORK_BUDGET={GPU_VS_CPU_WORK_BUDGET:.1e}; SKIPPED')
+        return
+
+    config, detrender, nbeams = case
+    test_sweep_gpu_vs_cpu(config=config, detrender=detrender, nbeams=nbeams, verbose=verbose)
+
+
 def test_sweep_gpu_vs_cpu(r=8, subband_counts=None, num_primary_trees=1,
                           num_early_triggers=0, detrender=False,
-                          nbeams=1, nfreq=None, verbose=True):
+                          nbeams=1, nfreq=None, verbose=True, config=None):
     """The GPU sweep against the CPU one, element by element, on the same config.
 
     Both GPU kernels are separately validated against their reference implementations
@@ -4024,10 +4136,14 @@ def test_sweep_gpu_vs_cpu(r=8, subband_counts=None, num_primary_trees=1,
 
     from .brute_force import compute_variance_multimap
 
-    subband_counts = [2, 2, 1] if (subband_counts is None) else subband_counts
-    config = _make_test_config(r, subband_counts, nfreq=nfreq,
-                               num_primary_trees=num_primary_trees,
-                               num_early_triggers=num_early_triggers)
+    # 'config' overrides the geometry arguments entirely, and is how the randomized caller
+    # (_draw_gpu_vs_cpu_case) hands in a drawn config. The arguments remain the interface for
+    # the fixed calls in run_sweep_tests().
+    if config is None:
+        subband_counts = [2, 2, 1] if (subband_counts is None) else subband_counts
+        config = _make_test_config(r, subband_counts, nfreq=nfreq,
+                                   num_primary_trees=num_primary_trees,
+                                   num_early_triggers=num_early_triggers)
     dparams = _make_test_detrender(config) if detrender else None
 
     # The CPU reference is detrended at the GPU's precision, so that both sides run the same
@@ -4053,8 +4169,13 @@ def test_sweep_gpu_vs_cpu(r=8, subband_counts=None, num_primary_trees=1,
             worst, worst_where = e, gamma
 
     if verbose:
-        atomic_print(f'    test_sweep_gpu_vs_cpu(r={r}, subbands={subband_counts},'
-                     f' npri={num_primary_trees}, net={num_early_triggers},'
+        # Read the geometry back from the CONFIG, not from the arguments: on a drawn config
+        # the arguments say nothing, and a report line that describes the wrong geometry is
+        # worse than none.
+        sbc = [int(x) for x in config.frequency_subband_counts]
+        net = max(int(pt.num_early_triggers) for pt in config.primary_trees)
+        atomic_print(f'    test_sweep_gpu_vs_cpu(r={int(config.toplevel_tree_rank)},'
+                     f' subbands={sbc}, npri={int(config.num_primary_trees)}, net={net},'
                      f' detrender={bool(detrender)},'
                      f' nbeams={nbeams}, nfreq={cpu.primary_map(0).nfreq}): worst relative'
                      f' difference {worst:.3g} at primary tree {worst_where}')
