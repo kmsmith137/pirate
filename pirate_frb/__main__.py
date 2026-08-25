@@ -39,6 +39,55 @@ from .yaml_utils import indent_dedispersion_plan_comments, align_inline_comments
 from .utils import atomic_print, print_separator
 
 
+############################################   seeding   ###########################################
+
+
+# Master seed for every RNG the tests draw from. Override with 'pirate_frb test --seed N',
+# or draw one from OS entropy with 'pirate_frb test -r'.
+DEFAULT_SEED = 137
+
+
+def seed_rngs(seed):
+    """Seeds every RNG the tests draw from, from one master seed.
+
+    THREE STREAMS, ONE NUMBER:
+
+      - ksgpu::default_rng(), the C++ side. Note this covers
+        DedispersionConfig::make_random(), which draws through ksgpu::rand_int().
+      - numpy's global RandomState (np.random.uniform() and friends).
+      - python's stdlib 'random', which tests/test_network.py and tests/test_server.py use.
+
+    The three are seeded from independent children of one SeedSequence rather than from the
+    master directly, so the streams are uncorrelated but the whole run replays from a single
+    pasteable integer.
+
+    SEEDED ONCE PER PROCESS, NOT PER TEST, and that is the point: iteration i of the 'test
+    -n' loop draws different values from iteration j (so a long run explores the parameter
+    space), while rerunning the same command replays the same sequence (so a failure at
+    iteration 700 is reproducible). Seeding per test would give up the first property, and
+    not seeding at all gives up the second.
+
+    Two things it does NOT buy, both of which need threads to be fixed and are postponed:
+    ksgpu::seed_default_rng() reseeds only the CALLING thread, so any C++ thread spawned
+    later self-seeds from std::random_device; and in python a seeded RNG fixes the sequence
+    of values drawn but not which thread draws which. See the note printed by test().
+    """
+
+    import numpy as np
+
+    s_np, s_ks, s_py = np.random.SeedSequence(seed).spawn(3)
+    np.random.seed(s_np.generate_state(4))
+    ksgpu.seed_default_rng(int(s_ks.generate_state(1, dtype=np.uint32)[0]))
+    random.seed(int(s_py.generate_state(1, dtype=np.uint32)[0]))
+
+
+def draw_random_seed():
+    """A master seed from OS entropy, for 'pirate_frb test -r'. Printed by the caller, since
+    a randomized run that does not say what it drew cannot be replayed."""
+
+    return int.from_bytes(os.urandom(4), 'little')
+
+
 #########################################   test command  ##########################################
 
 
@@ -47,6 +96,13 @@ def parse_test(subparsers):
     parser = subparsers.add_parser("test", help=help_text, description=help_text)
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
     parser.add_argument('-n', '--niter', type=int, default=100, help="Number of unit test iterations (default 100)")
+
+    seed_group = parser.add_mutually_exclusive_group()
+    seed_group.add_argument('-s', '--seed', type=int, default=DEFAULT_SEED, metavar='N',
+                            help=f"Master RNG seed (default {DEFAULT_SEED}). Seeds the ksgpu (C++), numpy and stdlib-random generators. Replaying a run needs the same seed AND the same test flags AND the same -n, since the streams are shared and consumed in test order.")
+    seed_group.add_argument('-r', '--randomize-seed', action='store_true',
+                            help="Draw the master RNG seed from OS entropy instead of using the default. The seed is printed, so a failing run can be replayed with --seed.")
+
     parser.add_argument('--rt', action='store_true', help='Runs ReferenceTree and ReferenceLagbuf tests')
     parser.add_argument('--pfwr', action='store_true', help='Runs PfWeightReaderMicrokernel.test_random()')
     parser.add_argument('--pfom', action='store_true', help='Runs PfOutputMicrokernel.test_random()')
@@ -98,7 +154,22 @@ def rrange(registry_class):
 def test(args):
     test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'avar', 'varmap', 'vmbf', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
-    
+
+    seed = draw_random_seed() if args.randomize_seed else args.seed
+    seed_rngs(seed)
+    atomic_print(f'RNG seed {seed} (replay with: --seed {seed}, the same test flags, and the'
+                 f' same -n)')
+
+    if run_all_tests or args.net or args.serv:
+        # Said out loud rather than left to be rediscovered: these two spawn threads, and
+        # neither RNG can be pinned across a thread boundary today. ksgpu::seed_default_rng()
+        # reseeds only the calling thread, so C++ threads spawned later self-seed from
+        # std::random_device; and on the python side a seeded RNG fixes WHICH VALUES are
+        # drawn but not WHICH THREAD draws them. Fixing either is nontrivial and postponed.
+        atomic_print('NOTE: --net and --serv are NOT reproducible from the seed. They spawn'
+                     ' threads, and neither the C++ nor the python RNG is pinned across a'
+                     ' thread boundary. Every other test is reproducible.')
+
     ksgpu.set_cuda_device(args.gpu)
     from . import utils   # local import (utils pulls in heavier deps)
 
@@ -2184,7 +2255,7 @@ def _install_atomic_hooks():
 
 def main():
     _install_atomic_hooks()
-    ksgpu.seed_default_rng(137)   # reproducible run; remove for full randomness
+    seed_rngs(DEFAULT_SEED)   # 'pirate_frb test' re-seeds from its own --seed / -r flags
 
     parser = get_parser()
     argcomplete.autocomplete(parser)
