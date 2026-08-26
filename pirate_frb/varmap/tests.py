@@ -1,11 +1,19 @@
 """Unit tests for pirate_frb.varmap.
 
-TWO ENTRY POINTS, and the split is deliberate. run_all() is 'python -m pirate_frb test
---varmap': it needs no DedispersionPlan and no CUDA device, which is the same property that
-lets an archived map be analyzed anywhere, and it runs in seconds. run_sweep_tests() is
-'--vmbf': the brute-force sweep of varmap/brute_force.py, which is the one part of this
-package that does need a device, and which runs a full sweep over every input channel per
-test.
+THREE ENTRY POINTS, and the split is deliberate.
+
+  - run_once() is the notes/unit_tests.md item-11 group: tests whose parameter space really
+    is exhausted (a fixed list of rejections, or no parameters at all). Once per invocation.
+  - run_all() is the rest of 'python -m pirate_frb test --varmap', ONCE PER '-n' ITERATION.
+    It needs no DedispersionPlan and no CUDA device -- the same property that lets an
+    archived map be analyzed anywhere -- and costs about 13 s per iteration.
+  - run_sweep_tests(iteration) is '--vmbf': the brute-force sweep of varmap/brute_force.py,
+    the one part of this package that does need a device. About 30 s. It takes the iteration
+    index and decides its own cadence; see its docstring.
+
+EVERY TEST OUTSIDE run_once() DRAWS ITS OWN GEOMETRY, from DedispersionConfig::make_random()
+via _random_config(). Nothing here pins a config or an RNG seed, so a long run explores
+rather than repeating, and the run's printed seed replays it.
 
 Four of these are load-bearing beyond the usual sense, because they are the only checks on
 something no other test and no runtime assertion can catch:
@@ -3931,9 +3939,9 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
 ####################################   the brute-force sweep   ###################################
 #
 # These need a DedispersionPlan and (for the GPU sweep) a device, which the rest of this file
-# deliberately does not -- so they are dispatched separately, by run_sweep_tests(). They are
-# also minutes rather than seconds: each one runs at least one full sweep over every input
-# channel.
+# deliberately does not -- so they are dispatched separately, by run_sweep_tests(). Each one
+# runs at least one full sweep over every input channel, which puts the tier at about 30 s;
+# run_sweep_tests() is where the per-iteration / every-tenth / once split is decided.
 
 
 def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3):
@@ -4867,9 +4875,36 @@ def run_all():
     test_varfine()
 
 
-def run_sweep_tests():
+def run_sweep_tests(iteration=0):
     """The brute-force sweep (varmap/brute_force.py). Separate from run_all() because these
-    need a DedispersionPlan and a CUDA device, and take minutes rather than seconds."""
+    need a DedispersionPlan and a CUDA device.
+
+    THREE CADENCES, and 'iteration' is what selects between them. Each test here runs at
+    least one full sweep over every input channel, so the tier costs about 30 s -- affordable
+    once, not affordable a hundred times.
+
+      - EVERY ITERATION: the two tests that draw their own configs. Together about 2 s, and
+        the only ones in this tier that explore rather than repeat.
+      - EVERY TENTH: test_sweep_gpu_vs_cpu on a cost-capped random draw. It is the only check
+        on the GPU sweep DRIVER, so leaving it at one geometry per run is a waste -- but the
+        four fixed calls below are 64% of the tier's cost, so it cannot run every iteration
+        either. See test_sweep_gpu_vs_cpu_random().
+      - ONCE (iteration 0): everything else. Fixed configs, each justified where it is
+        called.
+    """
+
+    # Every iteration.
+    test_multimap_vs_sweep()
+    test_restriction_vs_sweep(num_primary_trees=2, detrender=True)
+
+    # Every tenth, INCLUDING the first -- so even 'test --vmbf -n 1' gets one random driver
+    # geometry on top of the four fixed ones below.
+    if (iteration % 10) == 0:
+        test_sweep_gpu_vs_cpu_random()
+
+    if iteration != 0:
+        return
+
 
     test_sweep_vs_per_tfm(7, [1])
     test_sweep_vs_per_tfm(7, [2, 2, 1], num_early_triggers=1)

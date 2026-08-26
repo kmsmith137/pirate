@@ -323,24 +323,11 @@ def test(args):
             varmap_tests.run_all()
 
         if run_all_tests or args.vmbf:
-            # The brute-force sweep. Each test runs a full sweep over all input channels, so
-            # the tier as a whole runs once.
+            # The brute-force sweep. run_sweep_tests() decides for itself what runs on which
+            # iteration -- some of this tier is once-per-run and some is not -- so that
+            # '--vmbf' is described in one place rather than half here and half there.
             from .varmap import tests as varmap_tests
-            if i == 0:
-                varmap_tests.run_sweep_tests()
-
-            # The two randomized sweep tests run every iteration: they are the only ones in
-            # the tier that draw their own configs, and together about 2 s.
-            varmap_tests.test_multimap_vs_sweep()
-            varmap_tests.test_restriction_vs_sweep(num_primary_trees=2, detrender=True)
-
-            # ... with one exception. test_sweep_gpu_vs_cpu() is the only check on the GPU
-            # sweep driver, and the four fixed calls inside run_sweep_tests() are 64% of the
-            # tier's cost, so it can neither run every iteration nor be left at one geometry
-            # per run. As a compromise it runs once every ten iterations on a RANDOM config
-            # (not a deterministic one), under a cost cap -- see its docstring.
-            if (i % 10) == 0:
-                varmap_tests.test_sweep_gpu_vs_cpu_random()
+            varmap_tests.run_sweep_tests(i)
 
         if run_all_tests or args.amax:
             tests.test_decode_argmax()
