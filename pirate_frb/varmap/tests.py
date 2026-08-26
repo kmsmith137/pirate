@@ -4268,7 +4268,7 @@ def test_sweep_detrender_fp32(r=8, nifreq=16, verbose=True):
 GPU_VS_CPU_WORK_BUDGET = 1.5e8
 
 
-def _draw_gpu_vs_cpu_case(max_attempts=500):
+def _draw_gpu_vs_cpu_case(max_attempts=500, nbeams=None, detrender=None):
     """A random (config, detrender, nbeams) for test_sweep_gpu_vs_cpu(), under the cost cap.
 
     Returns None if no draw came in under budget, which the caller reports rather than
@@ -4299,38 +4299,40 @@ def _draw_gpu_vs_cpu_case(max_attempts=500):
         config.num_active_batches = 1
         config.validate()
 
-        detrender = bool(np.random.randint(2))
-        nbeams = int(np.random.randint(1, 5))
+        det = bool(np.random.randint(2)) if (detrender is None) else bool(detrender)
+        nb = int(np.random.randint(1, 5)) if (nbeams is None) else int(nbeams)
 
         # The test raises beams_per_{gpu,batch} to nbeams before the GPU sweep, so a draw
         # whose config cannot carry that many is rejected here rather than midway through.
         try:
-            config.beams_per_gpu = config.beams_per_batch = nbeams
+            config.beams_per_gpu = config.beams_per_batch = nb
             config.validate()
             config.beams_per_gpu = config.beams_per_batch = 1
             config.validate()
-            dparams = _make_test_detrender(config) if detrender else None
+            dparams = _make_test_detrender(config) if det else None
             geom = _SweepGeometry(config, detrender=dparams)
         except RuntimeError:
             continue
 
         if _sweep_work(geom) <= GPU_VS_CPU_WORK_BUDGET:
-            return config, detrender, nbeams
+            return config, det, nb
 
     return None
 
 
-def test_sweep_gpu_vs_cpu_random(verbose=True):
+def test_sweep_gpu_vs_cpu_random(verbose=True, nbeams=None, detrender=None):
     """test_sweep_gpu_vs_cpu() on a random (config, detrender, nbeams), under a cost cap.
 
-    Run once every ten iterations rather than once per run: the fixed calls in
-    run_sweep_tests() are 64% of that tier's cost, so running this every iteration is not
-    affordable, and running it once per invocation gives a single geometry however long the
-    run is. One draw per ten iterations amortizes to about 1 s per iteration and gives an
-    '-n 100' run ten independent geometries.
+    'nbeams' and 'detrender' PIN the two test-level knobs; None draws them. The config is
+    always drawn. That split is the point: neither knob is a property of a
+    DedispersionConfig -- this test supplies both -- so they can be covered deterministically
+    while the geometry underneath still varies from run to run.
+
+    Run every ten iterations, plus a pinned sweep of the knobs at iteration 0; see
+    run_sweep_tests().
     """
 
-    case = _draw_gpu_vs_cpu_case()
+    case = _draw_gpu_vs_cpu_case(nbeams=nbeams, detrender=detrender)
     if case is None:
         atomic_print('    test_sweep_gpu_vs_cpu_random: no draw came in under'
                      f' GPU_VS_CPU_WORK_BUDGET={GPU_VS_CPU_WORK_BUDGET:.1e}; SKIPPED')
@@ -4889,7 +4891,8 @@ def run_sweep_tests(iteration=0):
         on the GPU sweep DRIVER, so leaving it at one geometry per run is a waste -- but the
         four fixed calls below are 64% of the tier's cost, so it cannot run every iteration
         either. See test_sweep_gpu_vs_cpu_random().
-      - ONCE (iteration 0): everything else. Fixed configs, each justified where it is
+      - ONCE (iteration 0): a 2x2 sweep of test_sweep_gpu_vs_cpu's two TEST KNOBS on drawn
+        geometry, plus the tests that still take fixed configs -- each justified where it is
         called.
     """
 
@@ -4897,10 +4900,28 @@ def run_sweep_tests(iteration=0):
     test_multimap_vs_sweep()
     test_restriction_vs_sweep(num_primary_trees=2, detrender=True)
 
-    # Every tenth, INCLUDING the first -- so even 'test --vmbf -n 1' gets one random driver
-    # geometry on top of the four fixed ones below.
+    # Every tenth: one free draw, knobs and all.
     if (iteration % 10) == 0:
         test_sweep_gpu_vs_cpu_random()
+
+    if iteration == 0:
+        # THE KNOB SWEEP, which replaces four hardcoded test_sweep_gpu_vs_cpu() calls. Those
+        # covered four driver paths -- the lds kernel's single beam stride (invisible at
+        # nbeams == 1), the Detrender2d, time-downsampled trees, and nfreq != 2^r -- and cost
+        # 17.9 s, 64% of this tier.
+        #
+        # A drawn case reaches all four, but only probabilistically: measured over 400
+        # accepted draws, nbeams > 1 in 75%, a detrender in 43%, npri > 1 in 34%. Over an
+        # '-n 100' run that is near-certain; over ONE iteration it is not.
+        #
+        # So pin the two axes that are TEST KNOBS rather than config properties -- nbeams and
+        # the detrender -- and sweep their 2x2 product, leaving the geometry drawn. The
+        # guarantee is restored on every invocation, the config still varies from run to run,
+        # and it costs about a quarter as much. npri and nfreq stay emergent: neither is a
+        # knob this test supplies, and test_multimap_vs_sweep() reports both.
+        for _nb in (1, 4):
+            for _det in (False, True):
+                test_sweep_gpu_vs_cpu_random(nbeams=_nb, detrender=_det)
 
     if iteration != 0:
         return
@@ -4935,15 +4956,6 @@ def run_sweep_tests(iteration=0):
     # reference implementations by --sbdd and --pfsq, so this covers the python driver rather
     # than the kernels.
     test_lds_bindings()
-    test_sweep_gpu_vs_cpu(8, [2, 2, 1], nbeams=4)
-    test_sweep_gpu_vs_cpu(8, [2, 2, 1], num_early_triggers=1, detrender=True, nfreq=200)
-    # Time-downsampled trees on the GPU: GpuLaggedDownsamplingKernel plus one stage-1
-    # dedispersion per primary tree. nbeams > 1 in the first case is not incidental -- the lds
-    # kernel uses one beam stride for input and output, so a stride error cannot show at
-    # nbeams == 1.
-    test_sweep_gpu_vs_cpu(8, [2, 2, 1], num_primary_trees=2, nbeams=4)
-    test_sweep_gpu_vs_cpu(8, [2, 2, 1], num_primary_trees=2, num_early_triggers=1,
-                          detrender=True, nfreq=200)
     # Only the DETRENDED arm survives here: test_multimap_vs_sweep() now carries the
     # no-detrender Proposition 1 check on the trees its own sweep already computed. This one
     # cannot fold into it, because that test compares against the detrender-FREE varmap and
