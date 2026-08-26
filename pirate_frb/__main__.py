@@ -1594,10 +1594,15 @@ def parse_run_server(subparsers):
     parser = subparsers.add_parser("run_server", help=help_text, description=help_text)
     parser.add_argument('server_config', help='Path to FrbServer YAML config file')
     parser.add_argument('dedispersion_config', help='Path to DedispersionConfig YAML file')
-    parser.add_argument('-d', '--delay', type=float, default=0.0, metavar='SECONDS',
+    parser.add_argument('-p', '--processing-delay', type=float, default=0.0, metavar='SECONDS',
                         help='Artificial per-frame delay in the processing thread '
                              '(seconds; default 0). Used to simulate slow GPU work '
                              'for testing FakeXEngine pacing.')
+    parser.add_argument('-w', '--write-delay', type=float, default=0.0, metavar='SECONDS',
+                        help='Artificial delay (seconds; default 0) applied by the '
+                             'FileWriter to every SSD->NFS copy. Used to simulate a '
+                             'slow NFS mount, for testing the file-writing backlog '
+                             'seen by write_files / start_stream.')
     parser.add_argument('-G', '--no-grouper', action='store_true',
                         help='Disable FrbGrouper RPC even if grouper_ip_addrs '
                              'is set in the config (GpuDedisperser runs with '
@@ -1617,7 +1622,8 @@ def parse_run_server(subparsers):
 def run_server_command(args):
     from .run_server import run_server
     run_server(args.server_config, args.dedispersion_config,
-               processing_delay_sec=args.delay,
+               processing_delay_sec=args.processing_delay,
+               write_delay_sec=args.write_delay,
                no_grouper=args.no_grouper,
                no_dedispersion=args.no_dedispersion,
                quiet=args.quiet)

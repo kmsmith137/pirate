@@ -322,7 +322,7 @@ class RunServerHelper:
     """
 
     def __init__(self, server_config_filename, dedispersion_config_filename,
-                 processing_delay_sec=0.0, no_grouper=False,
+                 processing_delay_sec=0.0, write_delay_sec=0.0, no_grouper=False,
                  no_dedispersion=False, quiet=False):
         self.server_config_filename = server_config_filename
         self.config = _parse_config(server_config_filename)
@@ -336,6 +336,7 @@ class RunServerHelper:
         # concrete 'ip:port' strings.
         _resolve_ip_addrs(self.config, self.hw, server_config_filename)
         self.processing_delay_sec = processing_delay_sec
+        self.write_delay_sec = write_delay_sec
         # quiet: suppress the per-chunk "FrbServer: beamset=..." line (passed to
         # every FrbServer built below).
         self.quiet = quiet
@@ -380,6 +381,8 @@ class RunServerHelper:
         atomic_print(f"  use_hugepages = {self.config['use_hugepages']}")
         if self.processing_delay_sec > 0.0:
             atomic_print(f"  processing_delay_sec = {self.processing_delay_sec}  (artificial per-frame delay)")
+        if self.write_delay_sec > 0.0:
+            atomic_print(f"  write_delay_sec = {self.write_delay_sec}  (artificial per-file ssd->nfs delay)")
         if self.no_dedispersion:
             atomic_print(f"  no_dedispersion = True  (skip all GPU work; implies --no-grouper)")
 
@@ -559,6 +562,7 @@ class RunServerHelper:
                 self.nfs_dir,
                 num_ssd_threads=self.config['ssd_threads_per_server'],
                 num_nfs_threads=self.config['nfs_threads_per_server'],
+                write_delay_sec=self.write_delay_sec,
             )
             # Receivers: one per data IP address (matching the allocator's
             # num_consumers). No threads spawned in ctor.
@@ -663,13 +667,17 @@ class RunServerHelper:
 
 
 def run_server(server_config_filename, dedispersion_config_filename,
-               processing_delay_sec=0.0, no_grouper=False,
+               processing_delay_sec=0.0, write_delay_sec=0.0, no_grouper=False,
                no_dedispersion=False, quiet=False):
     """Main entry point for 'pirate_frb run_server'.
 
     processing_delay_sec (default 0): artificial per-frame delay (seconds)
     injected by the FrbServer processing thread. Used to simulate slow
     GPU work for testing the FakeXEngine pacing path.
+
+    write_delay_sec (default 0): artificial delay (seconds) applied by the
+    FileWriter to every SSD->NFS copy. Used to simulate a slow NFS mount,
+    for testing the file-writing backlog seen by WriteFiles / StartStream.
 
     no_grouper (default False): if True, disable the FrbGrouper RPC even when
     'grouper_ip_addrs' is set in the config (GpuDedisperser runs with
@@ -685,6 +693,7 @@ def run_server(server_config_filename, dedispersion_config_filename,
     """
     helper = RunServerHelper(server_config_filename, dedispersion_config_filename,
                              processing_delay_sec=processing_delay_sec,
+                             write_delay_sec=write_delay_sec,
                              no_grouper=no_grouper,
                              no_dedispersion=no_dedispersion,
                              quiet=quiet)

@@ -3,6 +3,7 @@
 #include "../include/pirate/file_utils.hpp"
 #include "../include/pirate/utils.hpp"          // AtomicPrint
 
+#include <chrono>
 #include <sstream>
 
 #include <ksgpu/xassert.hpp>
@@ -24,6 +25,7 @@ FileWriter::FileWriter(const Params &params_) : params(params_)
     xassert(params.nfs_root.is_absolute());
     xassert(params.num_ssd_threads > 0);
     xassert(params.num_nfs_threads > 0);
+    xassert(params.write_delay_sec >= 0.0);
     xassert(params.max_subscriber_backlog >= 1);
 
     // Create directories, if they don't already exist.
@@ -88,6 +90,7 @@ void FileWriter::stop(std::exception_ptr e) const
     ssd_cv.notify_all();
     nfs_cv.notify_all();
     ssd_clear_cv.notify_all();
+    write_delay_cv.notify_all();
 
     for (const auto &s: subscribers) {
         unique_lock<std::mutex> subscriber_lock(s->mutex);        
@@ -524,12 +527,39 @@ void FileWriter::_copy_from_ssd_to_nfs(const fs::path &path)
 {
     fs::path src_path = params.ssd_root / path;
     fs::path dst_path = params.nfs_root / path;
+
+    // Simulated slow NFS. Deliberately delays the whole operation (not just
+    // the copy syscall): the file must not appear under nfs_root, and the
+    // subscriber notification must not be emitted, until the delay elapses.
+    this->_apply_write_delay();
+
     pirate::create_directories(dst_path.parent_path());  // wraps fs::create_directories()
 
     // Write through temp file
     TmpFileGuard guard(dst_path);
     pirate::copy_file(src_path, guard.tmp_filename);  // wraps fs::copy_file()
     guard.commit();
+}
+
+
+// Serves out the artificial per-copy delay Params::write_delay_sec (no-op when
+// it is zero, which is the case outside testing). Called by an NFS thread with
+// no lock held.
+//
+// Unlike the real file I/O around it, this wait IS interruptible: it ends
+// early on stop(), so an artificial delay -- which can be set to many seconds,
+// precisely to build up a backlog -- never becomes a multi-second hang in
+// ~FileWriter(). A stop cuts the delay short but does not skip the copy; the
+// caller's inner loop makes the stop decision at its next is_stopped recheck.
+void FileWriter::_apply_write_delay()
+{
+    if (params.write_delay_sec <= 0.0)
+        return;
+
+    unique_lock<std::mutex> lock(mutex);
+    write_delay_cv.wait_for(lock,
+                            std::chrono::duration<double>(params.write_delay_sec),
+                            [this] { return this->is_stopped; });
 }
 
 
