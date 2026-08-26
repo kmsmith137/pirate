@@ -3589,7 +3589,9 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
     """
 
     from ..pirate_pybind11 import DedispersionConfig
+    from ..utils import integer_log2
     from .detrender_free import (SdPlan, compute_detrender_free_multi_map,
+                                 compute_detrender_free_varcoarse,
                                  compute_detrender_free_varfine)
 
     rng = np.random.default_rng()
@@ -3603,6 +3605,7 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
     rng = np.random.default_rng()
     worst_ref, worst_def = 0.0, 0.0
     n_multi, n_varying, n_et, n_bitwise, ntrees = 0, 0, 0, 0, 0
+    n_coarse = 0
 
     for (config, label) in configs:
         nfreq = int(config.get_total_nfreq())
@@ -3667,6 +3670,49 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
                          f' was:\n{config.to_yaml_string()}')
             raise AssertionError((label, e1, e3))
 
+        # ---- (4) compute_detrender_free_varcoarse(), which is varfine coarse-grained at the
+        # WEIGHT array's downsampling. Only the glue is new here -- varfine is checked three
+        # ways above and coarse_grain_vector() against an independent label oracle in
+        # test_index_arithmetic() -- so this checks exactly the two things the glue can get
+        # wrong, and does it without re-running the function.
+        #
+        # NOT by calling coarse_grain_vector() again, which would be circular. The grouping
+        # is rebuilt the long way by _child_group_labels(), from each row's FULL-RESOLUTION
+        # DM, and the max is taken here. EXACT equality is the right bar: max is exact, so
+        # the reduction order cannot matter.
+        #
+        # MEASURED TEETH, since two of the obvious mutations self-detect and it is worth
+        # saying which assertion earns its place. Mutating varcoarse:
+        #   - transpose the output to (ndm_wt, P, N)  -> caught by the SHAPE check below.
+        #   - coarse-grain with tree 0's geometry     -> coarse_grain_vector() raises on the
+        #                                                length itself; not this test.
+        #   - L off by one                            -> the function's own ndm_wt assert.
+        #   - flatten as y.transpose(0,2,1).reshape() -> shapes IDENTICAL, values permuted,
+        #                                                caught ONLY by the max check above.
+        # The last is why the max check is here rather than just a shape assertion.
+        #
+        # THE OTHER HALF IS THE SHAPE, and it is not cosmetic. L comes from
+        # tree.pf.wt_dm_downsampling -- a different quantity from any L a caller passes -- and
+        # a transposed reshape changes values without changing the total size. Reading
+        # ndm_wt/N/P back from the TREE is what makes this a check rather than a restatement:
+        # the tree is where the consumer of this array gets its own shape.
+        coarse = compute_detrender_free_varcoarse(config, v)
+        assert len(coarse) == len(got), (label, len(coarse), len(got))
+        for itree in range(len(got)):
+            tree = make_tree(config, itree)
+            fs = tree.frequency_subbands
+            L = integer_log2(int(tree.pf.wt_dm_downsampling))
+            want_shape = (int(tree.ndm_wt), int(fs.N), int(tree.nprofiles))
+            assert coarse[itree].shape == want_shape, (label, itree, coarse[itree].shape,
+                                                       want_shape)
+
+            labels = _child_group_labels(tree, L)
+            nbeta = int(labels.max()) + 1
+            want = np.full(nbeta, -np.inf)
+            np.maximum.at(want, labels, got[itree].reshape(-1))
+            assert np.array_equal(coarse[itree].reshape(-1), want), (label, itree)
+            n_coarse += 1
+
         worst_ref, worst_def = max(worst_ref, e1), max(worst_def, e3)
 
     # n_varying and n_et are REPORTED, not asserted. Both are emergent properties of
@@ -3722,7 +3768,8 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
         atomic_print(f'    test_varfine({len(configs)} configs, {nrandom} random,'
                      f' {ntrees} trees): {n_multi} with npri > 1, {n_varying} with a varying'
                      f' max_width, {n_et} with early triggers; {n_bitwise} primary trees'
-                     f' bitwise equal to y_true; worst relative error: vs the oracle'
+                     f' bitwise equal to y_true; {n_coarse} varcoarse arrays exactly equal'
+                     f' to an independently-grouped max; worst relative error: vs the oracle'
                      f' {worst_ref:.3g}, vs apply_fine() {worst_def:.3g}')
 
 
@@ -3961,7 +4008,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
 # run_sweep_tests() is where the per-iteration / every-tenth / once split is decided.
 
 
-def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3):
+def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3, rng=None):
     """A Detrender2dParams matching 'config', for the sweep tests.
 
     'nzone' and 'kint' are REQUESTS, not requirements. zoned_knots() needs nzone to divide
@@ -3975,13 +4022,27 @@ def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3):
     from ..pirate_pybind11 import Detrender2dParams
     from ..detrending_spline.masks import zoned_knots
 
+    # 'rng' randomizes the detrender itself, not just the config it is matched to. The
+    # ranges are the ones Detrender2dParams accepts and that the sweep can afford: W is the
+    # half-width in time samples and drives the polyphase pass count, so it stays small.
+    if rng is not None:
+        n_phi = int(rng.integers(0, 3))
+        n = int(rng.integers(0, 3))          # Detrender2d requires n in [0, 2]
+        W = int(rng.integers(1, 6))
+        nzone = int(rng.integers(1, 4))
+        kint = int(rng.integers(1, 5))
+
     nfreq = int(config.get_total_nfreq())
     kint = min(kint, max(nfreq - 1, 0))
     nzone = max((z for z in range(1, nzone + 1)
                  if (nfreq % z == 0) and (nfreq // z >= kint + 1)), default=1)
     kv = zoned_knots(n_phi, nfreq, nzone, kint)
 
-    return Detrender2dParams(nfreq=nfreq, knots=[int(x) for x in kv.knots], M=1, n_phi=n_phi,
+    # M IS THE BEAM COUNT and must equal the config's beams_per_batch -- _SweepGeometry
+    # checks it. Hardcoding 1 was fine while every caller used _make_test_config(), which
+    # sets all three beam fields to 1; a drawn config does not.
+    return Detrender2dParams(nfreq=nfreq, knots=[int(x) for x in kv.knots],
+                             M=int(config.beams_per_batch), n_phi=n_phi,
                              n=n, W=W, T=int(config.time_samples_per_chunk))
 
 
@@ -4131,8 +4192,61 @@ def test_sweep_phase_collapse(r=7, verbose=True):
                      f' {geom.ntrees} trees, worst relative difference {worst:.3g}')
 
 
+# Cost cap for the randomized test_sweep_column_norms() draw. Its cost model is NOT
+# _sweep_work(): that prices one sweep, while this test runs (ntime + nt_in) passes per
+# channel -- more than a whole sweep -- so it needs its own.
+#
+# The proxy is (ntime + nt_in) * (ndata_chunks + 3) * sum(2^r over trees): passes, times
+# chunks per pass, times the per-chunk chain work. Measured about 30 us per unit
+# (0.83 s at 3.6e4, 1.28 s at 4.4e4, 40.7 s at 8.6e5), so this cap is a ~3 s ceiling.
+# Measured acceptance 35%, i.e. ~3 draws per case, and a draw costs well under a millisecond.
+COLUMN_NORMS_BUDGET = 1.0e5
+
+
+def test_sweep_column_norms_random(verbose=True, max_attempts=500):
+    """test_sweep_column_norms() on a random config and a random detrender, under a cost cap.
+
+    Replaces four hardcoded calls that all used r=6, subbands=[2,1] -- so the core identity
+    this test checks had only ever been evaluated at ONE tree shape. Run once every ten
+    iterations: at ~3 s it is too expensive for every iteration, and one geometry per
+    invocation is what the fixed calls already gave.
+
+    THE DETRENDER IS A COIN FLIP, and when present its own parameters are drawn too. Half the
+    draws exercise the Detrender2d path -- the only independent check on it, since no
+    analytic oracle can represent a detrender -- and half exercise the plain chain. Over an
+    '-n 100' run that is about five of each, on ten different geometries.
+    """
+
+    from .brute_force import _SweepGeometry
+
+    rng = np.random.default_rng()
+    for _ in range(max_attempts):
+        config = _random_config(rng)
+        # The sweep requires all three beam fields to agree; make_random() does not.
+        config.beams_per_gpu = config.beams_per_batch = 1
+        config.num_active_batches = 1
+        detrender = bool(rng.random() < 0.5)
+        try:
+            config.validate()
+            dparams = _make_test_detrender(config, rng=rng) if detrender else None
+            geom = _SweepGeometry(config, detrender=dparams)
+        except RuntimeError:
+            continue
+
+        cost = ((geom.ntime + geom.nt_in) * (geom.ndata_chunks + 3)
+                * sum(1 << r for r in geom.tree_r))
+        if cost <= COLUMN_NORMS_BUDGET:
+            test_sweep_column_norms(config=config, detrender=detrender, nifreq=1,
+                                    verbose=verbose, rng=rng)
+            return
+
+    atomic_print('    test_sweep_column_norms_random: no draw came in under'
+                 f' COLUMN_NORMS_BUDGET={COLUMN_NORMS_BUDGET:.1e}; SKIPPED')
+
+
 def test_sweep_column_norms(r=6, subband_counts=None, num_primary_trees=1,
-                            num_early_triggers=0, detrender=True, nifreq=2, verbose=True):
+                            num_early_triggers=0, detrender=True, nifreq=2, verbose=True,
+                            config=None, rng=None):
     """Evaluates the defining identity ``A[alpha,F] = sum_{t'} L[alpha t, F t']^2`` LITERALLY
     -- one pass per input time t', reading the output of one fixed chunk -- and compares it to
     what the sweep computes, which is instead a sum over output times for one input time.
@@ -4149,10 +4263,13 @@ def test_sweep_column_norms(r=6, subband_counts=None, num_primary_trees=1,
 
     from .brute_force import _CpuSweep, _SweepGeometry, sweep_all_trees_dense
 
-    subband_counts = [2, 1] if (subband_counts is None) else subband_counts
-    config = _make_test_config(r, subband_counts, num_primary_trees=num_primary_trees,
-                               num_early_triggers=num_early_triggers)
-    dparams = _make_test_detrender(config) if detrender else None
+    # 'config' overrides the geometry arguments, and is how the randomized caller hands in a
+    # drawn config. 'rng', when given, also randomizes the detrender's own parameters.
+    if config is None:
+        subband_counts = [2, 1] if (subband_counts is None) else subband_counts
+        config = _make_test_config(r, subband_counts, num_primary_trees=num_primary_trees,
+                                   num_early_triggers=num_early_triggers)
+    dparams = _make_test_detrender(config, rng=rng) if detrender else None
 
     A = _abcd_all(config, sweep_all_trees_dense(config, dparams, device='cpu'))
 
@@ -4213,8 +4330,12 @@ def test_sweep_column_norms(r=6, subband_counts=None, num_primary_trees=1,
                 worst, worst_where = e, (itree, ifreq)
 
     if verbose:
-        atomic_print(f'    test_sweep_column_norms(r={r}, subbands={subband_counts},'
-                     f' npri={num_primary_trees}, net={num_early_triggers},'
+        # Read the geometry back from the CONFIG: on a drawn config the arguments say
+        # nothing, and a report line describing the wrong geometry is worse than none.
+        sbc = [int(x) for x in config.frequency_subband_counts]
+        net = max(int(pt.num_early_triggers) for pt in config.primary_trees)
+        atomic_print(f'    test_sweep_column_norms(r={int(config.toplevel_tree_rank)},'
+                     f' subbands={sbc}, npri={int(config.num_primary_trees)}, net={net},'
                      f' detrender={bool(detrender)}): {len(ifreqs)} columns x {thi-tlo} input'
                      f' times, worst relative difference {worst:.3g} at'
                      f' (tree,ifreq)={worst_where}')
@@ -4854,6 +4975,7 @@ def run_tests(iteration=0):
     # test_sweep_gpu_vs_cpu_random(), and run_once() for the knob sweep that complements it.
     if (iteration % 10) == 0:
         test_sweep_gpu_vs_cpu_random()
+        test_sweep_column_norms_random()
 
 
 def run_once():
@@ -4932,18 +5054,6 @@ def run_once():
     # reference at the GPU's precision, so its bar measures the DRIVER). This is the only
     # thing that bounds the penalty itself.
     test_sweep_detrender_fp32(7)
-
-    # WORTH RANDOMIZING, NOT YET DONE -- the strongest remaining candidate in this tier. The
-    # Detrender2d path has no analytic oracle, so this is what covers it, along with the
-    # polyphase sum where it interacts with a time-downsampled tree. 'detrender' and 'nifreq'
-    # are TEST KNOBS rather than config properties, so the treatment test_sweep_gpu_vs_cpu
-    # just got applies directly: pin the knobs, draw the geometry. Only the subband counts
-    # are genuinely pinned. Costs (ntime + nt_in) passes per channel -- more than a whole
-    # sweep -- so it runs at toy scale on a few channels.
-    test_sweep_column_norms(6, [2, 1], detrender=False)
-    test_sweep_column_norms(6, [2, 1], detrender=True)
-    test_sweep_column_norms(6, [2, 1], num_primary_trees=2, nifreq=1)
-    test_sweep_column_norms(6, [2, 1], num_early_triggers=1, nifreq=1)
 
     # EXHAUSTIVE ALREADY, so item 11 applies as written: every legal (tree, L) pair and four
     # staging widths, all required to be bit-identical. The two subband layouts are the one
