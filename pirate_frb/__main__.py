@@ -124,8 +124,7 @@ def parse_test(subparsers):
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
     parser.add_argument('--avar', action='store_true', help='Runs tests related to analytic variance')
-    parser.add_argument('--varmap', action='store_true', help='Runs pirate_frb.varmap tests (VarianceMap geometry, coarse-graining, distance, the covering LPs, the low-rank factorizations)')
-    parser.add_argument('--vmbf', action='store_true', help='Runs the pirate_frb.varmap brute-force sweep tests (varmap/brute_force.py). Split from --varmap because these need a DedispersionPlan and a GPU, and each runs a full sweep over every input channel.')
+    parser.add_argument('--varmap', action='store_true', help="pirate_frb.varmap. Two halves, both run by this flag: everything checkable WITHOUT a dedisperser (the VarianceMap class, the covering-LP and basis machinery, and the analytic map of detrender_free.py against a hand-written oracle), and the brute-force sweep, which pushes a one-hot through the REAL dedisperser once per input channel and checks the analytic map against what comes out. Needs a DedispersionPlan and a GPU for the second half.")
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_{beamform,upchan}()')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
@@ -157,7 +156,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'avar', 'varmap', 'vmbf', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'avar', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
 
     seed = draw_random_seed() if args.randomize_seed else args.seed
@@ -314,20 +313,11 @@ def test(args):
                 test_fast_avar.test_cpp_pf_avar_approximation()
 
         if run_all_tests or args.varmap:
+            # run_tests() owns the cadences -- which group runs once per invocation, which
+            # every iteration, which every tenth. That is a property of the tests, so it
+            # lives with them rather than here.
             from .varmap import tests as varmap_tests
-            # run_once() is the item-11 group: tests whose parameter space really is
-            # exhausted (fixed rejection lists, or no parameters at all). Everything else
-            # draws its own geometry and runs every iteration, so '-n 1000' explores.
-            if i == 0:
-                varmap_tests.run_once()
-            varmap_tests.run_all()
-
-        if run_all_tests or args.vmbf:
-            # The brute-force sweep. run_sweep_tests() decides for itself what runs on which
-            # iteration -- some of this tier is once-per-run and some is not -- so that
-            # '--vmbf' is described in one place rather than half here and half there.
-            from .varmap import tests as varmap_tests
-            varmap_tests.run_sweep_tests(i)
+            varmap_tests.run_tests(i)
 
         if run_all_tests or args.amax:
             tests.test_decode_argmax()

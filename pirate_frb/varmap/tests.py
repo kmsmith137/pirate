@@ -1,15 +1,32 @@
 """Unit tests for pirate_frb.varmap.
 
-THREE ENTRY POINTS, and the split is deliberate.
+TWO HALVES OF ONE JOB, both run by 'python -m pirate_frb test --varmap':
 
-  - run_once() is the notes/unit_tests.md item-11 group: tests whose parameter space really
-    is exhausted (a fixed list of rejections, or no parameters at all). Once per invocation.
-  - run_all() is the rest of 'python -m pirate_frb test --varmap', ONCE PER '-n' ITERATION.
-    It needs no DedispersionPlan and no CUDA device -- the same property that lets an
-    archived map be analyzed anywhere -- and costs about 13 s per iteration.
-  - run_sweep_tests(iteration) is '--vmbf': the brute-force sweep of varmap/brute_force.py,
-    the one part of this package that does need a device. About 30 s. It takes the iteration
-    index and decides its own cadence; see its docstring.
+  - IS THE VARIANCE-MAP CODE RIGHT? Everything checkable WITHOUT running a dedisperser: the
+    VarianceMap class (indexing, coarse-graining, distance, factorization, file format), the
+    covering-LP and basis machinery, and the ANALYTIC map of detrender_free.py against a
+    hand-written oracle. This is run_once() and run_all().
+  - IS THE ANALYTIC MAP TRUE? Push a one-hot through the REAL dedisperser once per input
+    channel, measure the variance that comes out, and compare. This is run_sweep_tests(),
+    and it is why the flag needs a DedispersionPlan and a GPU.
+
+Those two fail independently and are debugged differently, so the distinction is worth
+keeping in mind -- but it used to be two flags (--varmap and --vmbf) and that was one
+distinction too many to remember at a command line. Call run_all() or run_sweep_tests()
+directly from python to run one half while bisecting.
+
+ONE ENTRY POINT, THREE CADENCES. run_tests(iteration) is what '--varmap' calls, and it owns
+every cadence decision. The parts are named for WHEN they run, not for what they cover:
+
+  - run_once() runs once per invocation, for two distinct reasons -- an exhausted parameter
+    space (item 11), or too expensive to repeat. See its docstring; the reasons matter.
+  - run_all() runs on EVERY '-n' iteration. About 15 s.
+  - test_sweep_gpu_vs_cpu_random() runs every tenth iteration: the only check on the GPU
+    sweep driver, and the most expensive test here.
+
+Both halves above are spread across those three, deliberately -- "code or truth" is what a
+test is FOR, and "how often" is when it runs, and grouping by the second is what a runner
+needs. Each test's own docstring says which half it belongs to.
 
 EVERY TEST OUTSIDE run_once() DRAWS ITS OWN GEOMETRY, from DedispersionConfig::make_random()
 via _random_config(). Nothing here pins a config or an RNG seed, so a long run explores
@@ -4818,20 +4835,131 @@ def test_lds_bindings(r=8, subband_counts=(2,2,1), num_primary_trees=3, nbeams=4
                  ' fills the downsampled buffers')
 
 
-def run_once():
-    """The tests whose parameter space really IS exhausted, run once per invocation.
+def run_tests(iteration=0):
+    """Every pirate_frb.varmap test, at its cadence. This is what '--varmap' calls.
 
-    This is notes/unit_tests.md item 11's exception, and the bar for being here is narrow:
-    the test enumerates a FIXED list of rejections, or has no parameters at all. The config
+    THREE CADENCES, AND THEY ARE THE ONLY ORGANIZING PRINCIPLE HERE. The functions are named
+    for when they run, not for what they cover, because "when" is the only thing the caller
+    or this function has to decide; what each test covers is the business of its own
+    docstring.
+    """
+
+    if iteration == 0:
+        run_once()
+
+    run_all()
+
+    # test_sweep_gpu_vs_cpu is the only check on the GPU sweep DRIVER and the most expensive
+    # test in the package, so it runs every tenth iteration rather than every one. See
+    # test_sweep_gpu_vs_cpu_random(), and run_once() for the knob sweep that complements it.
+    if (iteration % 10) == 0:
+        test_sweep_gpu_vs_cpu_random()
+
+
+def run_once():
+    """Everything that runs ONCE PER INVOCATION, for one of two distinct reasons.
+
+    REASON 1: the parameter space really is exhausted -- notes/unit_tests.md item 11. The
+    test enumerates a FIXED list of rejections, or has no parameters at all. The config
     underneath, where there is one, is scaffolding for the rejection rather than a case being
     sampled, so randomizing it would buy nothing and cost an iteration's worth of time.
 
-    Everything else lives in run_all() and runs on every '-n' iteration.
+    REASON 2: too expensive to repeat. Each brute-force sweep test pushes a one-hot through
+    the real dedisperser once per input channel, which is ~15 s for the group. Those are
+    pinned or knob-swept rather than exhausted, and each says below why it is not randomized.
+
+    The two reasons are worth keeping distinct: a test here for reason 1 should stay here
+    forever, and a test here for reason 2 is a candidate to randomize if it ever gets cheap.
     """
 
+    # ---- reason 1: exhausted ----
     test_lp_config()
     test_constructor_validation()
     test_factored_validation()
+
+    # ---- reason 2: too expensive to repeat ----
+    # THE KNOB SWEEP, which replaces four hardcoded test_sweep_gpu_vs_cpu() calls. Those
+    # covered four driver paths -- the lds kernel's single beam stride (invisible at
+    # nbeams == 1), the Detrender2d, time-downsampled trees, and nfreq != 2^r -- and cost
+    # 17.9 s, 64% of this tier.
+    #
+    # A drawn case reaches all four, but only probabilistically: measured over 400
+    # accepted draws, nbeams > 1 in 75%, a detrender in 43%, npri > 1 in 34%. Over an
+    # '-n 100' run that is near-certain; over ONE iteration it is not.
+    #
+    # So pin the two axes that are TEST KNOBS rather than config properties -- nbeams and
+    # the detrender -- and sweep their 2x2 product, leaving the geometry drawn. The
+    # guarantee is restored on every invocation, the config still varies from run to run,
+    # and it costs about a quarter as much. npri and nfreq stay emergent: neither is a
+    # knob this test supplies, and test_multimap_vs_sweep() reports both.
+    for _nb in (1, 4):
+        for _det in (False, True):
+            test_sweep_gpu_vs_cpu_random(nbeams=_nb, detrender=_det)
+
+    # ---- ONCE PER INVOCATION, ON FIXED CONFIGS ----
+    #
+    # Everything below still pins its geometry, and each group says why. The rule this file
+    # now follows is that a test draws its config; these are the exceptions, and an exception
+    # needs a reason that is not "it was written that way".
+
+    # NOT WORTH RANDOMIZING: PfAvarExact is scheduled for removal and this is its only caller
+    # in this file, so the test dies with it. It is also the only test in the tier with an
+    # ANALYTIC oracle -- per_tfm propagates compressed sparse tiles and shares no code with
+    # the dedisperser -- and it doubles as the float32 measurement, since the sweep runs a
+    # float32 chain while per_tfm is float64 throughout. Only valid with NO detrender:
+    # per_tfm cannot represent one.
+    test_sweep_vs_per_tfm(7, [1])
+    test_sweep_vs_per_tfm(7, [2, 2, 1], num_early_triggers=1)
+    # Dcore > 1: the sweep must give the same A, since it never sees the peak-finder's Dcore
+    # sublattice. This is what _SweepGeometry relies on in not constraining Dcore.
+    test_sweep_vs_per_tfm(7, [2, 2, 1], time_downsampling=4)
+    # Time-downsampled trees against the analytic oracle, on both devices. The CPU case is
+    # new coverage in its own right (every other call here is npri=1); the GPU one is the
+    # only check on the GPU sweep that does not go through the CPU sweep, hence the only
+    # thing that would catch an error the two devices SHARE.
+    test_sweep_vs_per_tfm(7, [2, 2, 1], num_primary_trees=2)
+    test_sweep_vs_per_tfm(7, [2, 2, 1], num_primary_trees=2, device='gpu')
+
+    # STRUCTURALLY PINNED: it asserts gamma_max == 2, i.e. exactly three primary trees, so
+    # the phase loop has something to collapse. A drawn config gives npri > 1 about half the
+    # time and npri == 3 rather less, so randomizing this means a redraw loop around a 0.09 s
+    # test with one thing to say.
+    test_sweep_phase_collapse(7)
+
+    # A MEASUREMENT, NOT REALLY A TEST -- item 11's "informational print for a human". It
+    # reports the Detrender2d's own float32 penalty, which is the error budget the GPU sweep
+    # inherits and which test_sweep_gpu_vs_cpu deliberately factors OUT (it runs its CPU
+    # reference at the GPU's precision, so its bar measures the DRIVER). This is the only
+    # thing that bounds the penalty itself.
+    test_sweep_detrender_fp32(7)
+
+    # WORTH RANDOMIZING, NOT YET DONE -- the strongest remaining candidate in this tier. The
+    # Detrender2d path has no analytic oracle, so this is what covers it, along with the
+    # polyphase sum where it interacts with a time-downsampled tree. 'detrender' and 'nifreq'
+    # are TEST KNOBS rather than config properties, so the treatment test_sweep_gpu_vs_cpu
+    # just got applies directly: pin the knobs, draw the geometry. Only the subband counts
+    # are genuinely pinned. Costs (ntime + nt_in) passes per channel -- more than a whole
+    # sweep -- so it runs at toy scale on a few channels.
+    test_sweep_column_norms(6, [2, 1], detrender=False)
+    test_sweep_column_norms(6, [2, 1], detrender=True)
+    test_sweep_column_norms(6, [2, 1], num_primary_trees=2, nifreq=1)
+    test_sweep_column_norms(6, [2, 1], num_early_triggers=1, nifreq=1)
+
+    # EXHAUSTIVE ALREADY, so item 11 applies as written: every legal (tree, L) pair and four
+    # staging widths, all required to be bit-identical. The two subband layouts are the one
+    # place in this tier where a drawn config could plausibly LOSE something -- levels 1 and
+    # 0 mixed in different proportions is where the multiplet decomposition can go wrong, and
+    # [2,1] gives (M,N)=(4,3) while [1,1] gives (3,2) -- though a long run would regain it.
+    test_sweep_streaming_coarse(6, [2, 1])
+    test_sweep_streaming_coarse(6, [1, 1], num_early_triggers=1)
+    test_sweep_streaming_coarse(6, [2, 1], detrender=True)
+
+    # A BINDING CONTRACT, not a numerical one: that the plan's params reach python, that a
+    # DedispersionBuffer allocates the shapes they predict, and that launch() fills the
+    # downsampled buffers. THE BEAM STRIDE IS THE POINT -- the lds kernel reads and writes
+    # with a single beam stride, so a stride error is invisible at nbeams == 1. nbeams is a
+    # knob and could be drawn; npri >= 2 is not, and the test needs it to check anything.
+    test_lds_bindings()
 
 
 def run_all():
@@ -4876,95 +5004,8 @@ def run_all():
     test_multimap_vs_base()
     test_varfine()
 
-
-def run_sweep_tests(iteration=0):
-    """The brute-force sweep (varmap/brute_force.py). Separate from run_all() because these
-    need a DedispersionPlan and a CUDA device.
-
-    THREE CADENCES, and 'iteration' is what selects between them. Each test here runs at
-    least one full sweep over every input channel, so the tier costs about 30 s -- affordable
-    once, not affordable a hundred times.
-
-      - EVERY ITERATION: the two tests that draw their own configs. Together about 2 s, and
-        the only ones in this tier that explore rather than repeat.
-      - EVERY TENTH: test_sweep_gpu_vs_cpu on a cost-capped random draw. It is the only check
-        on the GPU sweep DRIVER, so leaving it at one geometry per run is a waste -- but the
-        four fixed calls below are 64% of the tier's cost, so it cannot run every iteration
-        either. See test_sweep_gpu_vs_cpu_random().
-      - ONCE (iteration 0): a 2x2 sweep of test_sweep_gpu_vs_cpu's two TEST KNOBS on drawn
-        geometry, plus the tests that still take fixed configs -- each justified where it is
-        called.
-    """
-
-    # Every iteration.
+    # The two brute-force sweep tests that draw their own configs -- the only ones in that
+    # group that explore rather than repeat, and about 2 s together. The rest of the sweep
+    # group is in run_once(); see this module's docstring for what the sweep half is FOR.
     test_multimap_vs_sweep()
     test_restriction_vs_sweep(num_primary_trees=2, detrender=True)
-
-    # Every tenth: one free draw, knobs and all.
-    if (iteration % 10) == 0:
-        test_sweep_gpu_vs_cpu_random()
-
-    if iteration == 0:
-        # THE KNOB SWEEP, which replaces four hardcoded test_sweep_gpu_vs_cpu() calls. Those
-        # covered four driver paths -- the lds kernel's single beam stride (invisible at
-        # nbeams == 1), the Detrender2d, time-downsampled trees, and nfreq != 2^r -- and cost
-        # 17.9 s, 64% of this tier.
-        #
-        # A drawn case reaches all four, but only probabilistically: measured over 400
-        # accepted draws, nbeams > 1 in 75%, a detrender in 43%, npri > 1 in 34%. Over an
-        # '-n 100' run that is near-certain; over ONE iteration it is not.
-        #
-        # So pin the two axes that are TEST KNOBS rather than config properties -- nbeams and
-        # the detrender -- and sweep their 2x2 product, leaving the geometry drawn. The
-        # guarantee is restored on every invocation, the config still varies from run to run,
-        # and it costs about a quarter as much. npri and nfreq stay emergent: neither is a
-        # knob this test supplies, and test_multimap_vs_sweep() reports both.
-        for _nb in (1, 4):
-            for _det in (False, True):
-                test_sweep_gpu_vs_cpu_random(nbeams=_nb, detrender=_det)
-
-    if iteration != 0:
-        return
-
-
-    test_sweep_vs_per_tfm(7, [1])
-    test_sweep_vs_per_tfm(7, [2, 2, 1], num_early_triggers=1)
-    # Dcore > 1: the sweep must give the same A, since it never sees the peak-finder's Dcore
-    # sublattice. This is what _SweepGeometry relies on in not constraining Dcore.
-    test_sweep_vs_per_tfm(7, [2, 2, 1], time_downsampling=4)
-    # Time-downsampled trees against the analytic oracle, on both devices. The CPU case is
-    # new coverage in its own right (every other call here is npri=1); the GPU one is the only
-    # check on the GPU sweep that does not go through the CPU sweep.
-    test_sweep_vs_per_tfm(7, [2, 2, 1], num_primary_trees=2)
-    test_sweep_vs_per_tfm(7, [2, 2, 1], num_primary_trees=2, device='gpu')
-    test_sweep_phase_collapse(7)
-    test_sweep_detrender_fp32(7)
-    # The Detrender2d path has no analytic oracle, so test_sweep_column_norms is what covers
-    # it -- and the polyphase sum, which is where it interacts with a time-downsampled tree.
-    test_sweep_column_norms(6, [2, 1], detrender=False)
-    test_sweep_column_norms(6, [2, 1], detrender=True)
-    test_sweep_column_norms(6, [2, 1], num_primary_trees=2, nifreq=1)
-    test_sweep_column_norms(6, [2, 1], num_early_triggers=1, nifreq=1)
-    # The streaming reduction against the dense one, which is the only check on the property
-    # the scalable path assumes. Two subband layouts, since levels 1 and 0 mixed in different
-    # proportions is where the multiplet decomposition can go wrong: [2,1] gives (M,N)=(4,3)
-    # and [1,1] gives (3,2).
-    test_sweep_streaming_coarse(6, [2, 1])
-    test_sweep_streaming_coarse(6, [1, 1], num_early_triggers=1)
-    test_sweep_streaming_coarse(6, [2, 1], detrender=True)
-    # The GPU sweep against the CPU one. Both GPU kernels are validated against their
-    # reference implementations by --sbdd and --pfsq, so this covers the python driver rather
-    # than the kernels.
-    test_lds_bindings()
-    # Only the DETRENDED arm survives here: test_multimap_vs_sweep() now carries the
-    # no-detrender Proposition 1 check on the trees its own sweep already computed. This one
-    # cannot fold into it, because that test compares against the detrender-FREE varmap and
-    # so never runs a detrended sweep. It is not a vacuous arm: Proposition 1 assumes nothing
-    # about the upstream chain, and the detrender switches on the sweep's PER-TREE polyphase
-    # machinery (tree_gamma, tree_phase_weight, nphases = 2^gamma_max when W > 0), so a phase
-    # weighting that differed between parent and child is a live failure mode with no other
-    # cover.
-    # The analytic map of varmap/detrender_free.py against the kernels, for EVERY primary
-    # tree. This is the only thing that ties the two together, and the only check on
-    # Proposition 2 against the sweep; test_base_varmap_vs_analytic() (--varmap) is the tight
-    # check, and shares no code with the dedisperser.

@@ -20,7 +20,7 @@ exercise on their own (run via 'test --dd').
     constrain what they promise. Both exist so that a random config is usable by the GPU
     brute-force variance-map sweep, which lives two packages away and is dispatched by a
     different flag -- so without this, a change to the key-selection logic could silently stop
-    honouring them and only --vmbf would notice.
+    honouring them and only the varmap sweep tests would notice.
 """
 
 import numpy as np
