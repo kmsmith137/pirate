@@ -1287,7 +1287,7 @@ def compute_detrender_free_varcoarse(config, freq_variances, *, progress=False, 
 
     THE COARSE-GRAINING RANK IS THE TREE'S OWN, ``L = log2(pf.wt_dm_downsampling)``, and that
     is what makes the result line up: ``2^(r-L)`` is exactly DedispersionTree::ndm_wt, checked
-    below. It is the same L that PfVariance.cpp's constructor computes, so the two agree by
+    below. It is the same L that varmap.cpp's PfAvarApproximation constructor computes, so the two agree by
     construction rather than by coincidence. Note L is a property of the PRIMARY tree while r
     is not, so L is constant within an early-trigger family and ndm_wt still varies across it.
 
@@ -1321,7 +1321,7 @@ def compute_detrender_free_varcoarse(config, freq_variances, *, progress=False, 
         # reduction uses to the shape the weights array actually has. coarse_grain_vector()
         # checks R <= L <= r itself; the tree constructor is what guarantees it
         # (dm_downsampling <= wt_dm_downsampling <= 2^r, with pf_rank <= log2(dm_downsampling)
-        # -- the same bound PfVariance.cpp asserts).
+        # -- the same bound varmap.cpp asserts).
         ndm_wt = int(tree.ndm_wt)
         assert (1 << (int(tree.total_rank()) - L)) == ndm_wt, (itree, L, ndm_wt)
 

@@ -2,7 +2,7 @@
 #include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
-#include "../include/pirate/PfVariance.hpp"   // PfVarianceConvolver
+#include "../include/pirate/varmap.hpp"   // PfVarianceConvolver
 
 #include <mutex>
 #include <sstream>

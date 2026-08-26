@@ -325,7 +325,6 @@ LIB_SRCFILES = \
   src_lib/LaggedDownsamplingKernelParams.cpp \
   src_lib/MegaRingbuf.cpp \
   src_lib/PeakFindingKernel.cu \
-  src_lib/PfVariance.cpp \
   src_lib/Receiver.cpp \
   src_lib/ReferenceDedisperser.cpp \
   src_lib/ReferenceLagbuf.cpp \
@@ -341,10 +340,10 @@ LIB_SRCFILES = \
   src_lib/network_utils.cpp \
   src_lib/scratch.cu \
   src_lib/SlabAllocator.cpp \
-  src_lib/SparseTile.cpp \
   src_lib/simpulse.cpp \
   src_lib/system_utils.cpp \
   src_lib/utils.cpp \
+  src_lib/varmap.cpp \
   src_lib/XEngineMetadata.cpp \
   src_lib/loose_ends/cpu_downsample.cpp \
   src_lib/loose_ends/gpu_downsample.cu \
@@ -525,7 +524,6 @@ HFILES = \
   include/pirate/MegaRingbuf.hpp \
   include/pirate/network_utils.hpp \
   include/pirate/PeakFindingKernel.hpp \
-  include/pirate/PfVariance.hpp \
   include/pirate/Receiver.hpp \
   include/pirate/ReferenceLagbuf.hpp \
   include/pirate/ReferenceTree.hpp \
@@ -533,11 +531,11 @@ HFILES = \
   include/pirate/RingbufCopyKernel.hpp \
   include/pirate/SimulatedFrameFactory.hpp \
   include/pirate/SlabAllocator.hpp \
-  include/pirate/SparseTile.hpp \
   include/pirate/simpulse.hpp \
   include/pirate/system_utils.hpp \
   include/pirate/TreeGriddingKernel.hpp \
   include/pirate/utils.hpp \
+  include/pirate/varmap.hpp \
   include/pirate/XEngineMetadata.hpp \
   include/pirate/YamlFile.hpp \
   include/pirate/loose_ends/avx256_downsample.hpp \

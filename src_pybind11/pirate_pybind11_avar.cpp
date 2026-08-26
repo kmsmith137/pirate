@@ -9,8 +9,7 @@
 #include <pybind11/stl.h>
 #include <ksgpu/pybind11.hpp>
 
-#include "../include/pirate/SparseTile.hpp"
-#include "../include/pirate/PfVariance.hpp"
+#include "../include/pirate/varmap.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
 
 using namespace std;

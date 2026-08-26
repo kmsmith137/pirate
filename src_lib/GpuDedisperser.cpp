@@ -9,7 +9,7 @@
 #include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/GpuDequantizationKernel.hpp"
 #include "../include/pirate/MegaRingbuf.hpp"
-#include "../include/pirate/PfVariance.hpp"
+#include "../include/pirate/varmap.hpp"
 #include "../include/pirate/constants.hpp"  // xdiv(), pow2()
 #include "../include/pirate/inlines.hpp"  // xdiv(), pow2()
 #include "../include/pirate/utils.hpp"    // safe_memcpy_*
