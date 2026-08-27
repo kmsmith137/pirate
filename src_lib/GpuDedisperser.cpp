@@ -1166,10 +1166,10 @@ void GpuDedisperser::_worker_main()
 
 
 // Fills every weight slot/beam with the SAME non-random analytic weights, computed from
-// a PfAvarApproximation. See Dedisperser.hpp.
+// compute_detrender_free_varcoarse(). See Dedisperser.hpp.
 //
 // Entry point: per the strict stoppable-class policy (notes/stoppable_class.md),
-// ANY exception from the body -- including PfAvarApproximation's argument
+// ANY exception from the body -- including compute_detrender_free_varcoarse()'s argument
 // validation and CUDA_CALL failures -- stops the GpuDedisperser.
 void GpuDedisperser::fill_analytic_weights(const Array<double> &freq_variances)
 {
@@ -1190,8 +1190,12 @@ void GpuDedisperser::_fill_analytic_weights(const Array<double> &freq_variances)
         _throw_if_unallocated("fill_analytic_weights");
     }
 
-    // Analytic per-(subband, dm, profile) variances for every tree (validates freq_variances).
-    PfAvarApproximation avar(plan, freq_variances);
+    // Analytic per-(dm, subband, profile) variances for every tree (validates freq_variances).
+    // Assumes no detrender!
+    std::vector<Array<double>> tree_variance =
+        compute_detrender_free_varcoarse(plan->config, freq_variances);
+    xassert_eq(long(tree_variance.size()), ntrees);
+
     const long nslots = params.nbatches_wt * beams_per_batch;
 
     for (long itree = 0; itree < ntrees; itree++) {
@@ -1206,10 +1210,9 @@ void GpuDedisperser::_fill_analytic_weights(const Array<double> &freq_variances)
         pf_params.beams_per_batch = 1;
         pf_params.total_beams = 1;
 
-        // Non-random weights from the analytic variances. avar.tree_variance[itree] already has
-        // the (N, ndm_wt, nprofiles) shape that fill_host_weights() expects.
+        // Non-random weights from the analytic variances.
         Array<float> host_weights({1, t.ndm_wt, t.nt_wt, t.nprofiles, N}, af_rhost | af_zero);
-        pf_params.fill_host_weights(host_weights, avar.tree_variance.at(itree), /*randomize=*/ false);
+        pf_params.fill_host_weights(host_weights, tree_variance.at(itree), /*randomize=*/ false);
 
         // Fill the first beam slot via to_gpu(), then duplicate it to all 'nslots' beam slots with
         // GPU->GPU memcopies. wt_arrays[itree] flattens its (nbatches_wt, beams_per_batch) axes into
@@ -1325,12 +1328,17 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     xassert(nbatches_out <= nchunks * nbatches);
     xassert(nbatches_wt > 0);   // GpuDedisperser ctor additionally checks nbatches_wt >= nstreams
 
-    Array<double> freq_variance({nfreq}, af_uhost | af_zero);  // for PfAvarApproximation
+    Array<double> freq_variance({nfreq}, af_uhost | af_zero);  // for the analytic variances below
     for (long ifreq = 0; ifreq < nfreq; ifreq++)
         freq_variance.data[ifreq] = 1.0f;
 
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
-    shared_ptr<PfAvarApproximation> avar = make_shared<PfAvarApproximation> (plan, freq_variance);
+
+    // Same source as _fill_analytic_weights() uses in production; see the long comment there.
+    // Per-tree shape (ndm_wt, N, nprofiles).
+    std::vector<Array<double>> tree_variance =
+        compute_detrender_free_varcoarse(config, freq_variance);
+
     shared_ptr<GpuDedisperser> gdd;
     long ntrees = plan->ntrees;
 
@@ -1442,7 +1450,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 CUDA_CALL(cudaDeviceSynchronize());
 
                 for (long itree = 0; itree < ntrees; itree++) {
-                    Array<double> variances = avar->tree_variance.at(itree);
+                    Array<double> variances = tree_variance.at(itree);
 
                     // Re-randomize the entire weight ring (all nbatches_wt slots), so every slot
                     // that any batch in this group might select (seq_id % nbatches_wt) is valid.

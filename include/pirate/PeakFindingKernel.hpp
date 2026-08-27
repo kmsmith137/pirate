@@ -153,20 +153,22 @@ struct PeakFindingKernelParams
 
     void validate() const;  // throws an exception if anything is wrong
 
-    // Fill 'out' with peak-finding weights. base_weights[d,n,p] = 1/sqrt(variances[n,d,p]) when
-    // 'variances' is non-empty (shape (fs.N, ndm_wt, nprofiles), double). When 'variances' is an
-    // EMPTY array, base_weights instead uses the "bare-kernel" unit-variance-input prescription
+    // Fill 'out' with peak-finding weights.
+    //
+    //   'out'          shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
+    //   'variances'    shape (ndm_wt, fs.N, nprofiles), or empty (see below)
+    //
+    // If 'variances' is non-empty, sets weights[d,n,p] = 1/sqrt(variances[d,n,p]).
+    //
+    // If 'variances' is EMPTY, uses the "bare-kernel" unit-variance-input prescription instead
     // (per-profile = 1/sqrt(zero-lag kernel autocorrelation), broadcast over subband/dm) --
     // appropriate for testing a bare peak-finding or cdd2 kernel.
     // randomize=true scales each weight by a sparse random factor (see the .cu); randomize=false
     // uses the base_weights directly (no random multiplier).
-    //   out array shape = (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)   (float)
     //
-    // This depends only on the params (subband_counts -> fs.N, max_kernel_width -> nprofiles, and
-    // beams_per_batch/ndm_wt/nt_wt), NOT on any ReferencePeakFindingKernel state, so it is a method
-    // of PeakFindingKernelParams. This matters: constructing a ReferencePeakFindingKernel just to
-    // generate weights would eagerly allocate its large (and here unused) apply()/eval_tokens()
-    // scratch buffers.
+    // Note: member of PeakFindingKernelParams, rather than ReferencePeakFindingKernel,
+    // since constructing a ReferencePeakFindingKernel just to generate weights would
+    // eagerly allocate large buffers.
     void fill_host_weights(ksgpu::Array<float> &out, const ksgpu::Array<double> &variances, bool randomize) const;
 };
 

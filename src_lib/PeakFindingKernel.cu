@@ -584,8 +584,8 @@ Array<float> ReferencePeakFindingKernel::make_random_input_array()
 
 // fill_host_weights(): build peak-finding weights. The per-(subband, dm, profile) base_weights
 // are set one of two ways:
-//   - 'variances' non-empty, shape (N, ndm_wt, nprofiles) (double):
-//         base_weights[d,n,p] = 1/sqrt(variances[n,d,p])   (note the N <-> ndm_wt transpose)
+//   - 'variances' non-empty, shape (ndm_wt, N, nprofiles) (double):
+//         base_weights[d,n,p] = 1/sqrt(variances[d,n,p])
 //   - 'variances' empty: "bare-kernel" weights for unit-variance input. Feed a single unit
 //         sample through the peak-finding convolver to get the per-profile output variance
 //         pf_var[p] (the zero-lag autocorrelation of kernel p), and broadcast over (n,d):
@@ -614,8 +614,9 @@ void PeakFindingKernelParams::fill_host_weights(Array<float> &out, const Array<d
     xassert_shape_eq(out, ({B,D,T,P,N}));
     xassert(out.on_host());
     xassert(out.is_fully_contiguous());
+    
     if (!bare) {
-        xassert_shape_eq(variances, ({N,D,P}));
+        xassert_shape_eq(variances, ({D,N,P}));
         xassert(variances.on_host());
         xassert(variances.is_fully_contiguous());
     }
@@ -637,21 +638,12 @@ void PeakFindingKernelParams::fill_host_weights(Array<float> &out, const Array<d
                     bp[(d*N + n)*P + p] = rsqrtf(pf_var[p]);
     }
     else {
-        // base_weights[d,n,p] = rsqrtf(variances[n,d,p]). (variances is double, (N,D,P);
-        // base_weights is float, (D,N,P) -- transpose the first two axes. rsqrtf() keeps the
-        // base-weight computation in float.)
-        const double *vp = variances.data;    // (N,D,P) contiguous, double
+        // base_weights[d,n,p] = rsqrtf(variances[d,n,p]).
+        const double *vp = variances.data;    // (D,N,P) contiguous, double
         float *bp = base_weights.data;        // (D,N,P) contiguous, float
-        for (long n = 0; n < N; n++) {
-            for (long d = 0; d < D; d++) {
-                const double *vrow = vp + (n*D + d)*P;  // variances[n,d,:]
-                float *brow = bp + (d*N + n)*P;         // base_weights[d,n,:]
-                for (long p = 0; p < P; p++) {
-                    double var = vrow[p];
-                    xassert(var > 0.0);
-                    brow[p] = rsqrtf(var);
-                }
-            }
+        for (long i = 0; i < D*N*P; i++) {
+            xassert(vp[i] > 0.0);
+            bp[i] = rsqrtf(vp[i]);
         }
     }
 

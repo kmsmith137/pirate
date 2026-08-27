@@ -247,7 +247,8 @@ struct GpuDedisperser
     void time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_allocator, long niterations);
 
     // Fills the peak-finding weight arrays (wt_arrays) with NON-random analytic weights,
-    // derived from a PfAvarApproximation built from (plan, freq_variances). All weight
+    // derived from compute_detrender_free_varcoarse(plan->config, freq_variances) -- which
+    // assumes NO DETRENDER; see the comment at _fill_analytic_weights(). All weight
     // slots and all beams get identical weights. Must be called after allocate(). Blocks
     // (calls cudaDeviceSynchronize) before returning, so the weights are in place on the
     // GPU when it returns. Entry point: throws on a stopped (or never-allocated)
