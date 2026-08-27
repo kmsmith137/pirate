@@ -657,22 +657,29 @@ class _CpuSweep(_SweepBase):
                     self._progress(ipass, self.npasses, t_wall)
 
 
-class _GpuSweep(_SweepBase):
-    """The sweep on the GPU: one cupy stream, kernels launched synchronously from python, no
-    GpuDedisperser, no worker thread, no CudaEventRingbuf. The pipeline is
+class _GpuPipeline:
+    """The GPU dedispersion + PfSquare pipeline, shared by the brute-force sweep (_GpuSweep)
+    and the Monte-Carlo check (varmap/mc.py). The pipeline is
 
-        one-hots -> [Detrender2d] -> GpuTreeGriddingKernel -> stage1_buf.bufs[0]
-                 -> [GpuLaggedDownsamplingKernel -> stage1_buf.bufs[1:]]
-                 -> GpuDedispersionKernel (stage 1, one per primary tree) -> MegaRingbuf
-                 -> GpuSbDedispersionKernel (stage 2 + subbands)
-                 -> sb_out -> GpuPfSquare -> float64 accumulator, one per tree
+        stream_in -> [Detrender2d] -> GpuTreeGriddingKernel -> stage1_buf
+                  -> [GpuLaggedDownsamplingKernel -> stage1_buf.bufs[1:]]
+                  -> GpuDedispersionKernel (stage 1, one per primary tree) -> MegaRingbuf
+                  -> GpuSbDedispersionKernel (stage 2 + subbands)
+                  -> sb_out -> GpuPfSquare -> float64 accumulator, one per tree
 
-    The lagged-downsampling step runs only when num_primary_trees > 1; at 1 there is nothing
-    to downsample and 'lds_kernel' is None.
+    one cupy stream, kernels launched synchronously from python, no GpuDedisperser, no worker
+    thread, no CudaEventRingbuf. The lagged-downsampling step runs only when
+    num_primary_trees > 1; at 1 there is nothing to downsample and 'lds_kernel' is None.
+
+    THIS CLASS KNOWS NOTHING ABOUT ITS CALLER. It owns the kernels and the buffers; the caller
+    fills stream_in (or fills det_data and calls detrend_into_stream()), calls run_chunk() once
+    per chunk IN ORDER, and reads or zeroes 'acc' itself. What distinguishes the two callers is
+    exactly that: the sweep puts one-hots in and accumulates over an interval, the MC puts
+    Gaussian noise in and zeroes 'acc' every chunk.
 
     Two requirements beyond _SweepGeometry's: a float32 config (GpuSbDedispersionKernel is
     float32-only), and a compiled sbdd kernel for every tree's (dd_rank, subband_counts) pair.
-    The constructor builds all of them, so a missing one throws here rather than mid-sweep.
+    The constructor builds all of them, so a missing one throws here rather than mid-run.
     """
 
     def __init__(self, geom):
@@ -680,7 +687,7 @@ class _GpuSweep(_SweepBase):
                                GpuLaggedDownsamplingKernel, GpuPfSquare,
                                GpuSbDedispersionKernel, GpuTreeGriddingKernel)
 
-        super().__init__(geom)
+        self.geom = geom
         plan = geom.plan
         errs = []
 
@@ -703,7 +710,7 @@ class _GpuSweep(_SweepBase):
                             ' raise toplevel_tree_rank or use fewer early triggers.')
 
         if errs:
-            raise RuntimeError('_GpuSweep: the config is not usable by this tool:\n  - '
+            raise RuntimeError('_GpuPipeline: the config is not usable by this tool:\n  - '
                                + '\n  - '.join(errs))
 
         self.npri = int(plan.num_primary_trees)
@@ -742,6 +749,7 @@ class _GpuSweep(_SweepBase):
         self.gpu_detrender = Detrender2d(geom.detrender) if (geom.detrender is not None) \
             else None
         self.is_allocated = False
+
 
     def allocate(self, allocator=None):
         """Allocate the kernels' persistent state and this class's GPU buffers.
@@ -808,6 +816,88 @@ class _GpuSweep(_SweepBase):
         self.is_allocated = True
         self._mask_checked = False   # see _make_input_stream()
 
+
+    def run_chunk(self, ichunk):
+        """Walk the pipeline for one chunk, from the gridding kernel to the per-tree
+        accumulators. The CALLER has already filled self.stream_in.
+
+        'ichunk' is the index in one continuous stream. Every kernel with inter-chunk state
+        (the lagged downsampler, the stage-1 kernels via the MegaRingbuf, and GpuPfSquare via
+        its persistent_state) is keyed on it, so chunks must be run in order and none may be
+        skipped.
+        """
+
+        import cupy as cp
+
+        g, B = self.geom, self.geom.nbeams
+        sptr = cp.cuda.get_current_stream().ptr
+
+        # The gridding kernel's output is (B, nchan, ntime), which reshapes to the
+        # (B, 2^amb_rank, 2^dd_rank, ntime) that stage-1 dedispersion wants. Note nchan is the
+        # TREE channel count, which need not equal the input channel count nfreq.
+        self.tg_kernel.launch(self.tree_in[0].reshape(B, self.nchan, g.nt_in), self.stream_in,
+                              sptr)
+
+        # Fill the downsampled trees' inputs from primary tree 0's, in place.
+        if self.lds_kernel is not None:
+            self.lds_kernel.launch(self.stage1_buf, ichunk, 0, sptr)
+
+        for ipri in range(self.npri):
+            self.dd1_kernels[ipri].launch(self.tree_in[ipri], self.ringbuf, ichunk, 0, sptr)
+
+        for itree in range(g.ntrees):
+            self.sb_kernels[itree].launch(self.sb_out[itree], self.ringbuf, ichunk, 0, sptr)
+            self.pf_kernels[itree].launch(
+                self.acc[itree],
+                self.sb_out[itree].reshape(B, g.tree_D[itree]*g.tree_M[itree],
+                                           g.tree_nt_ds[itree]),
+                0, sptr)
+
+
+    def detrend_into_stream(self):
+        """Run the Detrender2d over self.det_data and copy its emitted window to stream_in.
+
+        The CALLER has already filled det_data, shape (B, nfreq, nt_in + 2W). The detrender
+        overwrites only [W, W+nt_in), which is what lands in stream_in. Callers that do not
+        use a detrender fill stream_in directly and never call this.
+        """
+
+        g = self.geom
+        self.det_mask.fill(1)
+        self.gpu_detrender.launch(self.det_data, self.det_mask)
+
+        # Checked once, not once per launch: the Detrender2d's mask expansion is driven by
+        # r_min, which depends on the mask and the basis but not on the data, so an all-ones
+        # input mask either survives every time or never. If it did not survive, L would not
+        # be the linear operator the variance map assumes.
+        if not self._mask_checked:
+            if not bool((self.det_mask[:, :, g.W : g.W+g.nt_in] != 0).all()):
+                raise RuntimeError('_GpuPipeline: the Detrender2d dropped an ill-conditioned'
+                                   ' zone even with an all-ones input mask, so L is not the'
+                                   ' linear operator the variance map assumes.')
+            self._mask_checked = True
+
+        self.stream_in[...] = self.det_data[:, :, g.W : g.W+g.nt_in]
+
+
+class _GpuSweep(_SweepBase):
+    """The brute-force sweep on the GPU: push one-hots through a _GpuPipeline, one launch
+    group at a time, and read the per-tree accumulators once per interval.
+
+    Everything about the pipeline itself -- the kernels, the buffers, the config checks, the
+    per-chunk launches -- lives in _GpuPipeline, which the Monte-Carlo check
+    (varmap/mc.py) shares. What is here is sweep-specific: the one-hot input, the
+    pass/launch-group bookkeeping, and the interval accumulation.
+    """
+
+    def __init__(self, geom):
+        super().__init__(geom)
+        self.pipe = _GpuPipeline(geom)
+
+    def allocate(self, allocator=None):
+        """Allocate the pipeline's kernels and buffers; see _GpuPipeline.allocate()."""
+        self.pipe.allocate(allocator)
+
     def columns(self, *, channels=None, guard_chunk=True, progress=False):
         """Passes are laid end to end in a single continuous stream: pass k occupies input
         samples ``[k*nchunks*nt_in, (k+1)*nchunks*nt_in)``, which is long enough that pass k's
@@ -818,8 +908,8 @@ class _GpuSweep(_SweepBase):
 
         import cupy as cp
 
-        if not self.is_allocated:
-            self.allocate()
+        if not self.pipe.is_allocated:
+            self.pipe.allocate()
 
         g = self.geom
         chans = g.resolve_channels(channels)
@@ -844,7 +934,7 @@ class _GpuSweep(_SweepBase):
         for (igroup, group) in enumerate(groups):
             t0 = time.time()
             for itree in range(g.ntrees):
-                self.acc[itree].fill(0.0)
+                self.pipe.acc[itree].fill(0.0)
 
             for j in range(nchunks):
                 self._run_chunk(group, igroup*nchunks + j, j)
@@ -852,7 +942,7 @@ class _GpuSweep(_SweepBase):
             stream.synchronize()
 
             # (B, Dpf*M, P) -> (B, Dpf, M, P); beam b carried pass group[b].
-            a = [cp.asnumpy(self.acc[i]).reshape(g.nbeams, g.tree_D[i], g.tree_M[i],
+            a = [cp.asnumpy(self.pipe.acc[i]).reshape(g.nbeams, g.tree_D[i], g.tree_M[i],
                                                  g.tree_P[i])
                  for i in range(g.ntrees)]
             self.seconds += time.time() - t0
@@ -868,35 +958,11 @@ class _GpuSweep(_SweepBase):
         """Run one chunk of one launch group: fill the input stream, then walk the pipeline.
         'j' is the chunk's index within the interval (only chunk 0 carries a one-hot)."""
 
-        import cupy as cp
-
-        g, B = self.geom, self.geom.nbeams
-        sptr = cp.cuda.get_current_stream().ptr
         self._make_input_stream(group, j)
-
-        # The gridding kernel's output is (B, nchan, ntime), which reshapes to the
-        # (B, 2^amb_rank, 2^dd_rank, ntime) that stage-1 dedispersion wants. Note nchan is the
-        # TREE channel count, which need not equal the input channel count nfreq.
-        self.tg_kernel.launch(self.tree_in[0].reshape(B, self.nchan, g.nt_in), self.stream_in,
-                              sptr)
-
-        # Fill the downsampled trees' inputs from primary tree 0's, in place.
-        if self.lds_kernel is not None:
-            self.lds_kernel.launch(self.stage1_buf, ichunk, 0, sptr)
-
-        for ipri in range(self.npri):
-            self.dd1_kernels[ipri].launch(self.tree_in[ipri], self.ringbuf, ichunk, 0, sptr)
-
-        for itree in range(g.ntrees):
-            self.sb_kernels[itree].launch(self.sb_out[itree], self.ringbuf, ichunk, 0, sptr)
-            self.pf_kernels[itree].launch(
-                self.acc[itree],
-                self.sb_out[itree].reshape(B, g.tree_D[itree]*g.tree_M[itree],
-                                           g.tree_nt_ds[itree]),
-                0, sptr)
+        self.pipe.run_chunk(ichunk)
 
     def _make_input_stream(self, group, j):
-        """Fill self.stream_in (the tree gridding kernel's input) with the one-hots of this
+        """Fill the pipeline's stream_in (the gridding kernel's input) with the one-hots of this
         launch group, detrending them if a Detrender2d is configured.
 
         Only chunk 0 of an interval carries anything: L is linear, so the all-zero chunks that
@@ -906,37 +972,23 @@ class _GpuSweep(_SweepBase):
         geometry).
         """
 
-        g = self.geom
+        g, pipe = self.geom, self.pipe
 
         if j != 0:
-            self.stream_in.fill(0.0)
+            pipe.stream_in.fill(0.0)
             return
 
-        if self.gpu_detrender is None:
-            self.stream_in.fill(0.0)
+        if pipe.gpu_detrender is None:
+            pipe.stream_in.fill(0.0)
             for (b, (ifreq, iphase)) in enumerate(group):
-                self.stream_in[b, ifreq, 2*g.W + iphase] = 1.0
+                pipe.stream_in[b, ifreq, 2*g.W + iphase] = 1.0
             return
 
-        self.det_data.fill(0.0)
-        self.det_mask.fill(1)
+        pipe.det_data.fill(0.0)
         for (b, (ifreq, iphase)) in enumerate(group):
-            self.det_data[b, ifreq, g.W + (2*g.W + iphase)] = 1.0   # buffer index = W + t0
+            pipe.det_data[b, ifreq, g.W + (2*g.W + iphase)] = 1.0   # buffer index = W + t0
 
-        self.gpu_detrender.launch(self.det_data, self.det_mask)
-
-        # Checked once, not once per launch: the Detrender2d's mask expansion is driven by
-        # r_min, which depends on the mask and the basis but not on the data, so an all-ones
-        # input mask either survives every time or never. If it did not survive, L would not
-        # be the linear operator this tool assumes.
-        if not self._mask_checked:
-            if not bool((self.det_mask[:, :, g.W : g.W+g.nt_in] != 0).all()):
-                raise RuntimeError('_GpuSweep: the Detrender2d dropped an ill-conditioned zone'
-                                   ' even with an all-ones input mask, so L is not the linear'
-                                   ' operator this tool assumes.')
-            self._mask_checked = True
-
-        self.stream_in[...] = self.det_data[:, :, g.W : g.W+g.nt_in]
+        pipe.detrend_into_stream()
 
 
 ####################################   accumulation   ####################################

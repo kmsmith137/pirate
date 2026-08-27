@@ -428,10 +428,13 @@ def check_avar_mc(args):
 def parse_varmap(subparsers):
     """The 'varmap' group: compute a variance map A and write it to an ASDF file.
 
-    TWO ALGORITHMS, NOT TWO SPEEDS OF ONE. They produce different objects: 'bf' sweeps the
-    real dedisperser and returns A_true itself, carrying no domination certificate until
-    get_distance() scores it; 'df' is analytic and SVD-truncated, and its map DOMINATES
-    A_true by construction (is_admissible=True). And only 'bf' can take a detrender.
+    'bf' and 'df' COMPUTE a map; 'mc' CHECKS one that already exists.
+
+    The two that compute are not two speeds of one algorithm -- they produce different
+    objects. 'bf' sweeps the real dedisperser and returns A_true itself, carrying no
+    domination certificate until get_distance() scores it; 'df' is analytic and
+    SVD-truncated, and its map DOMINATES A_true by construction (is_admissible=True). Only
+    'bf' can take a detrender.
     """
     help_text = "Compute a variance map A and write it to an ASDF file"
     parser = subparsers.add_parser("varmap", help=help_text, description=help_text)
@@ -439,6 +442,7 @@ def parse_varmap(subparsers):
                                 parser_class=_PirateParser)
     parse_varmap_bf(sub)
     parse_varmap_df(sub)
+    parse_varmap_mc(sub)
 
 
 def varmap_command(args):
@@ -451,6 +455,8 @@ def varmap_command(args):
         varmap_bf(args)
     elif args.varmap_command == "df":
         varmap_df(args)
+    elif args.varmap_command == "mc":
+        varmap_mc(args)
     else:
         atomic_print(f"Command 'varmap {args.varmap_command}' not recognized", fd=2)
         sys.exit(2)
@@ -748,6 +754,145 @@ def varmap_df(args):
     atomic_print(f"varmap df: built {vmm.num_primary_trees} map(s) in {dt:.1f} s; wrote"
                  f" {args.output} ({nbytes/2**20:.1f} MiB of float64 in"
                  f" {vmm.num_primary_trees} primary tree(s), covering {vmm.ntrees} tree(s))")
+
+
+########################################   varmap mc command  #######################################
+
+
+def parse_varmap_mc(subparsers):
+    """Check a stored map against Monte-Carlo sims. Takes a MAP, not a config, so it shares
+    none of _add_varmap_common_args() -- there is no -o and no -L."""
+    help_text = ("Check a stored variance map against Monte-Carlo sims of its embedded config")
+    parser = subparsers.add_parser("mc", help=help_text, description=help_text)
+    parser.add_argument('map_file', help="Path to a .asdf variance-map file")
+    parser.add_argument('-v', '--freq-variances', default=None, metavar='PATH',
+                        help="Length-nfreq input-channel variances: a .npy file, or a text"
+                             " file of whitespace-separated floats. Default all ones. NOTE the"
+                             " result is a statement about THIS v; a map is admissible for all"
+                             " v >= 0, and one run checks one of them.")
+    parser.add_argument('-n', '--nchunks', type=int, default=None, metavar='N',
+                        help="Stop after N chunks (default: run until Ctrl-C)")
+    parser.add_argument('--report-every', type=int, default=1, metavar='N',
+                        help="Print the summary every N chunks (default 1)")
+    parser.add_argument('--cpu', action='store_true',
+                        help="Use ReferenceDedisperser instead of the GPU pipeline. Orders of"
+                             " magnitude slower; the path for a config the GPU pipeline"
+                             " refuses (stage-2 dd_rank < 3, or a missing sbdd kernel).")
+    parser.add_argument('-s', '--sophistication', type=int, default=1, metavar='N',
+                        help="ReferenceDedisperser sophistication (0, 1 or 2; default 1)."
+                             " --cpu only.")
+    parser.add_argument('-g', '--gpu', type=int, default=0,
+                        help="GPU to use (default 0). Needed on BOTH paths: DedispersionPlan"
+                             " allocates through cudaHostAlloc.")
+
+
+def _read_freq_variances(path, nfreq):
+    """A '-v' argument as a length-nfreq float64 array. .npy, else whitespace-separated text."""
+
+    import numpy as np
+
+    if path.endswith('.npy'):
+        v = np.load(path)
+    else:
+        v = np.loadtxt(path)
+    v = np.asarray(v, dtype=np.float64).reshape(-1)
+    if v.size != nfreq:
+        raise RuntimeError(f"varmap mc: {path}: got {v.size} variances, config has"
+                           f" nfreq={nfreq}")
+    return v
+
+
+# Config fields 'varmap mc' overrides, with why each is safe. Unlike varmap bf's list this one
+# also touches dtype, which is NOT provably A-preserving -- see the comment at its _set() call.
+def _varmap_mc_override_config(config):
+    import numpy as np
+
+    overrides = []
+
+    def _set(obj, field, want, label):
+        got = getattr(obj, field)
+        if str(got) != str(want):
+            setattr(obj, field, want)
+            overrides.append(f'{label}: {got} -> {want}')
+
+    # One beam. The beam axis is a pure spectator, so this cannot change A -- and for a fixed
+    # budget of beam-chunks, one beam wastes the least on warmup: B beams over N/B chunks give
+    # (N - B*S) steady samples against (N - S) for one beam, with S the settling chunk count.
+    _set(config, 'beams_per_gpu', 1, 'beams_per_gpu')
+    _set(config, 'beams_per_batch', 1, 'beams_per_batch')
+    _set(config, 'num_active_batches', 1, 'num_active_batches')
+
+    # A pure-GPU MegaRingbuf, which the GPU pipeline requires. This is a ring-buffer PLACEMENT
+    # decision -- where segments live, not what is computed -- so it cannot change A. The map's
+    # config is embedded in the asdf file, so without this a user would have to REGENERATE the
+    # map to check it.
+    _set(config, 'max_gpu_clag', 10000, 'max_gpu_clag')
+
+    # NO MC PATH IMPLEMENTS float16, on either device: GpuSbDedispersionKernel is float32-only,
+    # ReferenceDedispersionKernel "uses float32, regardless of what dtype is specified", and
+    # both PfSquares take float32. So there is no float16 MC to offer, and this is a conversion
+    # rather than a choice. What it does change: config.dtype drives the STAGE-1 kernel and the
+    # MegaRingbuf layout, which do support float16 -- so a float16 config would produce a ring
+    # buffer the float32-only stage-2 kernel cannot read.
+    # config.dtype is a numpy dtype on the python side, so compare and assign as one.
+    if np.dtype(config.dtype) != np.float32:
+        overrides.append(f'dtype: {np.dtype(config.dtype)} -> float32'
+                         ' (no MC path implements float16)')
+        config.dtype = np.float32
+
+    return overrides
+
+
+def varmap_mc(args):
+    """Monte-Carlo check of a stored variance map. See pirate_frb/varmap/mc.py."""
+
+    import numpy as np
+
+    if args.sophistication != 1 and not args.cpu:
+        raise RuntimeError("varmap mc: -s/--sophistication applies to ReferenceDedisperser,"
+                           " so it is meaningful only with --cpu.")
+
+    vmm = varmap.VarianceMultiMap.from_asdf(args.map_file)
+
+    # Collected rather than raised one at a time, as 'varmap bf' does.
+    errs = []
+    if vmm.provenance.get('partial'):
+        errs.append(f"{args.map_file} is a PARTIAL map (written by 'varmap bf --channels'):"
+                    " its unswept columns are zero and it carries no y_true, precisely so that"
+                    " nothing downstream scores it.")
+    if errs:
+        raise RuntimeError('varmap mc: this file cannot be checked:\n  - ' + '\n  - '.join(errs))
+
+    config = vmm.config
+    config.validate()
+    nfreq = int(config.get_total_nfreq())
+
+    v = (np.ones(nfreq) if (args.freq_variances is None)
+         else _read_freq_variances(args.freq_variances, nfreq))
+
+    overrides = _varmap_mc_override_config(config)
+
+    atomic_print(f"varmap mc: {args.map_file}: algorithm="
+                 f"{vmm.provenance.get('algorithm', '?')}, {vmm.num_primary_trees} primary"
+                 f" tree(s), {vmm.ntrees} tree(s)")
+    atomic_print(f"  freq_variances: {'all ones (pass -v to override)' if args.freq_variances is None else args.freq_variances}")
+    atomic_print(f"  detrender: {'none' if vmm.detrender is None else 'from the file'}")
+    for o in overrides:
+        atomic_print(f"  overriding {o}")
+    if any(o.startswith('dtype:') for o in overrides):
+        atomic_print("  NOTE: stage-1 dedispersion therefore runs in float32, where production"
+                     " would use\n        float16. Stages 2 and 3 are float32 either way, so"
+                     " that is the only\n        arithmetic that differs from production.")
+    atomic_print("  eps = MC/map - 1;  eps > 0 means the map UNDERESTIMATES"
+                 " (bad for an admissible map)")
+
+    # Before the plan is built, and needed even for --cpu: DedispersionPlan allocates through
+    # cudaHostAlloc.
+    ksgpu.set_cuda_device(args.gpu)
+
+    from .varmap.mc import run_mc
+    run_mc(vmm, v, device=('cpu' if args.cpu else 'gpu'), nchunks=args.nchunks,
+           report_every=args.report_every, sophistication=args.sophistication)
 
 
 #########################################   time command  ##########################################
