@@ -3,7 +3,7 @@
 # Everything to do with variance maps lives here: the representation, the distance function,
 # the brute-force sweep, the analytic (detrender-free) map of the base tree, the multimap of
 # every primary tree derived from it, the map-free per-tree evaluation of A v that shares its
-# tile pass, the file format, and the 'pirate_frb variance_map' CLI.
+# tile pass, the file format, and the 'pirate_frb varmap' CLI (subcommands 'bf' and 'df').
 # pirate_frb.slow_avar now holds only the older analytic (PfAvarExact / TmpVmap)
 # machinery and the SparseTile primitives it is built on. Two things here reach into it:
 # detrender_free.py, which is built on the SparseTile primitives, and tests.py, which uses

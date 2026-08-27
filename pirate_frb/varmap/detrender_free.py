@@ -1067,7 +1067,7 @@ def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=N
 
 
 def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=None,
-                                     progress=False, debug=False):
+                                     progress=False, debug=False, provenance=None):
     """Analytic variance map of EVERY primary tree, as a VarianceMultiMap. No detrender.
 
     Computes the base tree once with compute_detrender_free_base_map() and SLICES it for
@@ -1090,6 +1090,10 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
         ``(1 + 0.5 * sum over gamma>0 of P_gamma/P_0)`` times the base Q -- 1.94x at every
         shipped CHORD/CHIME config, 1.65x at toy.yml -- and is reported before any slice is
         taken.
+    provenance : dict, optional
+        Merged into the multimap's provenance, after this function's own record. Same
+        contract as compute_variance_multimap()'s, so the two algorithms' CLI paths can be
+        written the same way -- the CLI puts its command line here.
 
     Notes
     -----
@@ -1165,6 +1169,8 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
                                            debug=debug)
     if npri == 1:
         prov['total_seconds'] = time.time() - t0
+        if provenance:
+            prov.update(provenance)
         return VarianceMultiMap(config, [base], detrender=None, provenance=prov)
 
     N, M, P0 = base.nsubbands, base.nmultiplets, base.nprofiles
@@ -1219,6 +1225,8 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
 
     dt = time.time() - t0
     prov['total_seconds'] = dt
+    if provenance:
+        prov.update(provenance)
     if progress:
         atomic_print(f'  compute_detrender_free_multi_map: {npri} maps in {dt:.2f} seconds')
 

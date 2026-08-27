@@ -422,27 +422,69 @@ def check_avar_mc(args):
     slow_avar.check_avar_mc(plan, sophistication=args.sophistication, freq_variances=freq_variances)
 
 
-#################################   variance_map command  ###############################
+####################################   varmap subcommands  ##########################################
 
 
-def parse_variance_map(subparsers):
-    help_text = "Compute the variance map A by brute force, and write it to an ASDF file"
-    parser = subparsers.add_parser("variance_map", help=help_text, description=help_text)
+def parse_varmap(subparsers):
+    """The 'varmap' group: compute a variance map A and write it to an ASDF file.
+
+    TWO ALGORITHMS, NOT TWO SPEEDS OF ONE. They produce different objects: 'bf' sweeps the
+    real dedisperser and returns A_true itself, carrying no domination certificate until
+    get_distance() scores it; 'df' is analytic and SVD-truncated, and its map DOMINATES
+    A_true by construction (is_admissible=True). And only 'bf' can take a detrender.
+    """
+    help_text = "Compute a variance map A and write it to an ASDF file"
+    parser = subparsers.add_parser("varmap", help=help_text, description=help_text)
+    sub = parser.add_subparsers(dest="varmap_command", required=True, metavar="subcommand",
+                                parser_class=_PirateParser)
+    parse_varmap_bf(sub)
+    parse_varmap_df(sub)
+
+
+def varmap_command(args):
+    """Dispatch within the 'varmap' group; see main().
+
+    NOT named varmap(): this module does 'from . import varmap' at the top, and the package
+    is what the bodies below call into.
+    """
+    if args.varmap_command == "bf":
+        varmap_bf(args)
+    elif args.varmap_command == "df":
+        varmap_df(args)
+    else:
+        atomic_print(f"Command 'varmap {args.varmap_command}' not recognized", fd=2)
+        sys.exit(2)
+
+
+def _add_varmap_common_args(parser):
+    """The three arguments both subcommands take, so the two cannot drift apart.
+
+    NOTE '-g/--gpu' is NOT here -- it is bf-only. See parse_varmap_df().
+    """
     parser.add_argument('config_file', help="Path to dedispersion YAML config file")
-    parser.add_argument('detrender_file', nargs='?', default=None,
-                        help="Path to Detrender2dParams YAML file (omit with --no-detrender)")
     parser.add_argument('-o', '--output', required=True, metavar='PATH',
                         help="Output .asdf file (required)")
+    parser.add_argument('-L', '--coarse-grain', type=int, default=None, metavar='L',
+                        help="Coarse-grain at rank L rather than writing the dense fine map."
+                             " This is what makes a large config reachable: at CHORD tree 0"
+                             " the dense map is 1.2 TiB and the coarse map is 344 GiB at L=4."
+                             " Legal range is R <= L <= r per tree. Omit to write the dense"
+                             " fine map, which is only viable at subscale.")
+
+
+########################################   varmap bf command  #######################################
+
+
+def parse_varmap_bf(subparsers):
+    help_text = "Compute the variance map A by brute force (sweep), and write it to an ASDF file"
+    parser = subparsers.add_parser("bf", help=help_text, description=help_text)
+    _add_varmap_common_args(parser)
+    parser.add_argument('detrender_file', nargs='?', default=None,
+                        help="Path to Detrender2dParams YAML file (omit with --no-detrender)")
     parser.add_argument('--no-detrender', action='store_true',
                         help="Run with no Detrender2d; 'detrender_file' must then be omitted")
     parser.add_argument('--cpu', action='store_true',
                         help="Force the CPU sweep (default: GPU)")
-    parser.add_argument('-L', '--coarse-grain', type=int, default=None, metavar='L',
-                        help="Coarse-grain each column AS IT IS SWEPT, at rank L, and never"
-                             " form the dense A. This is what makes a large config reachable:"
-                             " at CHORD tree 0 the dense map is 1.2 TiB and the coarse map is"
-                             " 344 GiB at L=4. Legal range is R <= L <= r per tree. Omit to"
-                             " write the dense fine map, which is only viable at subscale.")
     parser.add_argument('--channels', default=None, metavar='SPEC',
                         help="Sweep only these input channels, as a comma-separated list of"
                              " indices or LO:HI[:STEP] slices. The result is a PARTIAL map"
@@ -461,8 +503,68 @@ def parse_variance_map(subparsers):
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use (default 0)")
 
 
+########################################   varmap df command  #######################################
+
+
+def parse_varmap_df(subparsers):
+    """The analytic, detrender-free map.
+
+    NO '-g/--gpu' FLAG, deliberately: this path runs no GPU kernel, so a device flag would
+    offer a choice that does not exist. It does still need a CUDA context -- see varmap_df().
+    """
+    help_text = ("Compute the variance map A by the fast detrender-free algorithm, and write"
+                 " it to an ASDF file")
+    parser = subparsers.add_parser("df", help=help_text, description=help_text)
+    _add_varmap_common_args(parser)
+    parser.add_argument('-e', '--epsilon', type=float, default=None, metavar='EPS',
+                        help="Relative singular-value threshold, applied per group. Omit for"
+                             " the per-group default max(1e-11, 16 * max(nrow,ncol) * eps_f64),"
+                             " which is the float64 noise floor on singular values at that"
+                             " group's size.")
+    parser.add_argument('-m', '--max-bytes', type=_parse_size, default=None, metavar='SIZE',
+                        help="Ceiling on the lifted Q, which is the only large allocation"
+                             " here (32.0 GiB for a fine map at chime_sb2_et.yml, 6.9 GiB at"
+                             " L=4). Accepts a K/M/G/T suffix, e.g. '64G'. Omit for no limit;"
+                             " the size is reported before the allocation either way, so a run"
+                             " that is about to fail says why rather than being killed by the"
+                             " OOM reaper.")
+    parser.add_argument('--debug', action='store_true',
+                        help="Turn on SdPlan's O(subbands) planning-pass cross-checks. Too"
+                             " expensive to leave on at production scale.")
+
+    # Accepted only so that varmap_df() can reject them with a message naming 'varmap bf'.
+    # Without these, argparse reports 'unrecognized arguments: det.yml' against the TOP-LEVEL
+    # usage line, which tells a user neither what went wrong nor where to go. SUPPRESS keeps
+    # them out of --help, so they are not offered as options.
+    parser.add_argument('detrender_file', nargs='?', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--no-detrender', action='store_true', help=argparse.SUPPRESS)
+
+
+def _parse_size(s):
+    """A '--max-bytes' argument as an integer number of bytes.
+
+    Accepts a bare integer, or a decimal with a binary K/M/G/T suffix ('64G' = 64*2^30,
+    '1.5T'). Case-insensitive. Raises argparse.ArgumentTypeError on anything else, so
+    argparse reports it as a bad argument rather than a traceback.
+    """
+    t = str(s).strip().upper()
+    mult = 1
+    if t and t[-1] in 'KMGT':
+        mult = 1 << (10 * (1 + 'KMGT'.index(t[-1])))
+        t = t[:-1]
+    try:
+        v = float(t)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{s!r} is not a size: expected an integer number of bytes, optionally with a"
+            " K/M/G/T suffix (e.g. 1048576, '512M', '64G', '1.5T')")
+    if v <= 0:
+        raise argparse.ArgumentTypeError(f"{s!r} must be positive")
+    return int(v * mult)
+
+
 def _parse_channel_spec(spec, nfreq):
-    """A --channels argument as a sorted list of input channel indices. Accepts a
+    """A 'varmap bf --channels' argument as a sorted list of input channel indices. Accepts a
     comma-separated mix of bare indices and LO:HI[:STEP] slices."""
 
     out = []
@@ -473,7 +575,7 @@ def _parse_channel_spec(spec, nfreq):
         if ':' in part:
             f = part.split(':')
             if len(f) > 3:
-                raise RuntimeError(f"variance_map: --channels: '{part}' has too many colons")
+                raise RuntimeError(f"varmap bf: --channels: '{part}' has too many colons")
             lo = int(f[0]) if f[0] else 0
             hi = int(f[1]) if (len(f) > 1 and f[1]) else nfreq
             step = int(f[2]) if (len(f) > 2 and f[2]) else 1
@@ -481,7 +583,7 @@ def _parse_channel_spec(spec, nfreq):
         else:
             out.append(int(part))
     if not out:
-        raise RuntimeError(f"variance_map: --channels={spec!r} selects no channels")
+        raise RuntimeError(f"varmap bf: --channels={spec!r} selects no channels")
     return sorted(set(out))
 
 
@@ -494,7 +596,7 @@ def _parse_channel_spec(spec, nfreq):
 # never sees -- it ends in a PfSquare, which evaluates h_p at every time sample -- so leaving
 # it alone keeps the archived config faithful to the one the user asked about. That the swept
 # A is unchanged by it is checked, bitwise, by test_sweep_vs_per_tfm(time_downsampling=4).
-def _variance_map_override_config(config, nbeams=1):
+def _varmap_bf_override_config(config, nbeams=1):
     overrides = []
 
     def _set(obj, field, want, label):
@@ -515,7 +617,7 @@ def _variance_map_override_config(config, nbeams=1):
     return overrides
 
 
-def variance_map(args):
+def varmap_bf(args):
     """Sweep, and write a pirate_frb.varmap file.
 
     NOTE THE OUTPUT FORMAT: this writes varmap/asdf_io.py's format. An older, incompatible
@@ -528,11 +630,11 @@ def variance_map(args):
     # ---- Argument-level rejections. The detrender arguments can contradict each other or
     # be absent, and both are worth catching before a config is even loaded.
     if args.no_detrender and (args.detrender_file is not None):
-        raise RuntimeError("variance_map: --no-detrender was given together with"
+        raise RuntimeError("varmap bf: --no-detrender was given together with"
                            f" '{args.detrender_file}'. These say opposite things; pass one or"
                            " the other.")
     if (not args.no_detrender) and (args.detrender_file is None):
-        raise RuntimeError("variance_map: no detrender specified. Pass a Detrender2dParams"
+        raise RuntimeError("varmap bf: no detrender specified. Pass a Detrender2dParams"
                            " yaml file, or --no-detrender to run without one.")
 
     config = DedispersionConfig.from_yaml(args.config_file)
@@ -563,18 +665,18 @@ def variance_map(args):
                         f" {int(config.time_samples_per_chunk)}")
 
     if errs:
-        raise RuntimeError("variance_map: the config is not usable by this tool:\n  - "
+        raise RuntimeError("varmap bf: the config is not usable by this tool:\n  - "
                            + "\n  - ".join(errs))
 
     # ---- Overrides. One beam always: the beam axis carries passes, not beams, and
     # measurement showed that batching does not speed up a full sweep.
-    overrides = _variance_map_override_config(config, nbeams=1)
+    overrides = _varmap_bf_override_config(config, nbeams=1)
     if detrender is not None and int(detrender.M) != 1:
         overrides.append(f'detrender num_beams: {int(detrender.M)} -> 1')
         detrender.M = 1
 
     for o in overrides:
-        atomic_print(f"variance_map: overriding {o}")
+        atomic_print(f"varmap bf: overriding {o}")
 
     config.validate()
 
@@ -596,7 +698,54 @@ def variance_map(args):
     vmm.write_asdf(args.output)
 
     nbytes = sum(m.nbytes() for m in vmm.maps)
-    atomic_print(f"variance_map: swept {vmm.provenance['npasses']} passes in {dt:.1f} s; wrote"
+    atomic_print(f"varmap bf: swept {vmm.provenance['npasses']} passes in {dt:.1f} s; wrote"
+                 f" {args.output} ({nbytes/2**20:.1f} MiB of float64 in"
+                 f" {vmm.num_primary_trees} primary tree(s), covering {vmm.ntrees} tree(s))")
+
+
+def varmap_df(args):
+    """Compute the analytic detrender-free map, and write a pirate_frb.varmap file.
+
+    NO set_cuda_device() CALL, and no -g flag: this path runs no GPU kernel. It does still
+    need a CUDA CONTEXT, because config.make_channel_map() returns a ksgpu::Array allocated
+    through cudaHostAlloc -- with no device visible at all it fails with 'cudaHostAlloc
+    returned 100 (no CUDA-capable device is detected)'. CUDA picks device 0 by default;
+    a caller who needs to steer that uses CUDA_VISIBLE_DEVICES.
+
+    NO CONFIG OVERRIDES either, unlike 'varmap bf'. Those exist because the SWEEP requires
+    them (beams_per_gpu, beams_per_batch, num_active_batches); this path runs no dedisperser
+    and reads none of them, and dm_downsampling == 0 is already validate()'s to enforce. So
+    the archived config is exactly the one the user wrote, which is better provenance.
+    """
+
+    # THE NO-DETRENDER HYPOTHESIS IS LOAD-BEARING here, not a missing feature: the step from
+    # the base tree to the other primary trees is Proposition 2, which is FALSE with a
+    # Detrender2d in front (measured against the brute-force sweep at 4.9e-7 without one and
+    # 2.1 WITH one). So this is a real guard, and it points at the tool that can do the job.
+    if args.detrender_file is not None:
+        raise RuntimeError(f"varmap df: got a second positional argument"
+                           f" '{args.detrender_file}'. This algorithm is detrender-free by"
+                           " construction and takes no detrender file; use 'varmap bf' for a"
+                           " map with a Detrender2d.")
+    if args.no_detrender:
+        raise RuntimeError("varmap df: --no-detrender is not accepted, because this algorithm"
+                           " never uses a detrender -- there is nothing to switch off. It is"
+                           " 'varmap bf' that requires you to say which you want.")
+
+    config = DedispersionConfig.from_yaml(args.config_file)
+    config.validate()
+
+    t0 = time.time()
+    vmm = varmap.compute_detrender_free_multi_map(
+        config, L=args.coarse_grain, epsilon=args.epsilon, max_bytes=args.max_bytes,
+        progress=True, debug=args.debug,
+        provenance=dict(command=' '.join(sys.argv)))
+    dt = time.time() - t0
+
+    vmm.write_asdf(args.output)
+
+    nbytes = sum(m.nbytes() for m in vmm.maps)
+    atomic_print(f"varmap df: built {vmm.num_primary_trees} map(s) in {dt:.1f} s; wrote"
                  f" {args.output} ({nbytes/2**20:.1f} MiB of float64 in"
                  f" {vmm.num_primary_trees} primary tree(s), covering {vmm.ntrees} tree(s))")
 
@@ -2244,7 +2393,7 @@ def get_parser():
     parse_test_simpulse(subparsers)
     parse_check_avar_approximation(subparsers)
     parse_check_avar_mc(subparsers)
-    parse_variance_map(subparsers)
+    parse_varmap(subparsers)
     parse_time(subparsers)
     parse_time_dedisperser(subparsers)
     parse_coverage(subparsers)
@@ -2326,8 +2475,8 @@ def main():
         check_avar_approximation(args)
     elif args.command == "check_avar_mc":
         check_avar_mc(args)
-    elif args.command == "variance_map":
-        variance_map(args)
+    elif args.command == "varmap":
+        varmap_command(args)
     elif args.command == "time":
         time_command(args)
     elif args.command == "show_hardware":
