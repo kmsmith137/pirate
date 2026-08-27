@@ -122,7 +122,7 @@ def _build_registry(app):
             member_by_name['%s.%s' % (parts[-2], parts[-1])] = (docname, node_id)
 
     page = {}             # keyword string -> target docname
-    cli_names = set()
+    cli_names = {}          # 'test' / 'rpc' / 'rpc/status'  ->  docname
     for docname in env.found_docs:
         if docname.startswith('configs/') and (docname.endswith('.yml') or docname.endswith('.yaml')):
             page[docname] = docname                       # 'configs/foo.yml'
@@ -132,7 +132,19 @@ def _build_registry(app):
         elif docname.startswith('notes/'):
             page[docname + '.md'] = docname               # 'notes/foo.md'
         elif docname.startswith('cli/'):
-            cli_names.add(docname.split('/', 1)[1])
+            # 'cli/test' -> 'test'; 'cli/rpc/status' -> 'rpc/status'. The key is the
+            # docname tail, and the 'cli' pattern built below produces the same key from
+            # the words a user types ('pirate_frb rpc status'). The two must stay in step:
+            # if they drift, mentions silently stop linking rather than erroring, and the
+            # only signal is 'unknown-cli' in docs/build/autolink_report.json.
+            rel = docname.split('/', 1)[1]
+            if rel.endswith('/index'):
+                # A GROUP's page. Key it on the bare group name, so a mention of
+                # 'pirate_frb rpc' on its own links to the group index -- note the key
+                # and the docname differ here, which is why this is a dict.
+                cli_names[rel[:-len('/index')]] = docname
+            else:
+                cli_names[rel] = docname
 
     overrides = _OVERRIDES or {}
     alias_targets = {k: _parse_alias_target(v) for k, v in (overrides.get('aliases') or {}).items()}
@@ -153,7 +165,12 @@ def _build_registry(app):
     parts = []
     if alias_alt:
         parts.append(r'(?<!\w)(?P<alias>' + alias_alt + r')(?!\w)')
-    parts.append(r'(?<!\w)(?P<cli>(?:python -m pirate_frb|pirate_frb)\s+(?P<cliname>[a-zA-Z_]\w*))')
+    # Two words are matched GREEDILY, so 'pirate_frb rpc status' is one link rather than
+    # a link on 'pirate_frb rpc' followed by stray text. The second word is optional, so
+    # flat subcommands and bare group mentions still match. The handler joins the words
+    # with '/' to form the cli_names key derived above.
+    parts.append(r'(?<!\w)(?P<cli>(?:python -m pirate_frb|pirate_frb)'
+                 r'\s+(?P<cliname>[a-zA-Z_]\w*)(?:\s+(?P<clisub>[a-zA-Z_]\w*))?)')
     parts.append(r'(?<!\w)(?P<pyfull>pirate_frb(?:\.\w+)+)')
     if class_alt:
         parts.append(r'(?P<member>(?P<mcls>' + class_alt + r')(?:\.|::)(?P<mname>\w+))(?:\(\))?')
@@ -199,12 +216,23 @@ def _scan(text, docname, allow_realfile, advisory, reg, denied_here, report):
             s, e = m.span('alias')
         elif m.group('cli') is not None:
             name = m.group('cliname')
+            sub = m.group('clisub')
             s, e = m.span('cli')
-            if name in reg['cli_names']:
-                target, keyword = ('doc', 'cli/' + name, None), 'pirate_frb ' + name
+            # Prefer the two-word reading ('rpc status'); fall back to one word, which
+            # covers a flat subcommand and a bare group mention. On the fallback the link
+            # must cover only the first word, so the span is trimmed -- otherwise a
+            # following ordinary word would be swallowed into the link text.
+            if sub is not None and f'{name}/{sub}' in reg['cli_names']:
+                key, words = f'{name}/{sub}', f'{name} {sub}'
+            elif name in reg['cli_names']:
+                key, words = name, name
+                if sub is not None:
+                    e = m.end('cliname')
             else:
                 _skip(report, docname, m.group('cli'), 'unknown-cli')
                 continue
+            target = ('doc', reg['cli_names'][key], None)
+            keyword = 'pirate_frb ' + words
         elif m.group('pyfull') is not None:
             tok = m.group('pyfull')
             s, e = m.span('pyfull')

@@ -33,25 +33,25 @@ pirate_frb run_fake_xengine -f -g 30 -s 127.0.0.1:7500 127.0.0.1:6000
 
 # Optional: in window 5, send RPC "status" requests to the server.
 # This will monitor connections, files written, and ring buffer state.
-pirate_frb rpc_status 127.0.0.1:6000
+pirate_frb rpc status 127.0.0.1:6000
 
 # Optional: in window 6, send RPC "start_stream" requests to the server.
 # Here, we dump beam_id=10 for 1000 seconds. (The wallclock time will be smaller,
 # since the toy server runs faster than real time.) Filenames will be printed in
-# the 'rpc_status' process (window 5) as they are written, and will look like:
+# the 'rpc status' process (window 5) as they are written, and will look like:
 #   ~/pirate_toy/toy_stream_{date}_{time}/frame_b{beam}_t{chunk}.asdf
-pirate_frb rpc_start_stream -b 10 -d 1000 -s toy_stream 127.0.0.1:6000
+pirate_frb rpc start_stream -b 10 -d 1000 -s toy_stream 127.0.0.1:6000
 
 # Optional: in window 7, send RPC "show_streams" requests to the server.
 # This will show the status of current streams, and the last 5 inactive streams.
-# Note: there is also a command 'pirate_frb rpc_cancel_stream'.
-pirate_frb rpc_show_streams 127.0.0.1:6000
+# Note: there is also a command 'pirate_frb rpc cancel_stream'.
+pirate_frb rpc show_streams 127.0.0.1:6000
 
 # Optional: in window 8, send RPC "write_files" requests to the server, for randomly
-# chosen beams/times. Filenames will be printed in the 'rpc_status' process (window 5)
+# chosen beams/times. Filenames will be printed in the 'rpc status' process (window 5)
 # as they are written, and will look like:
 #   ~/pirate_toy/rand_write_{date}_{time}/frame_b{beam}_t{chunk}.asdf
-pirate_frb rpc_rand_write 127.0.0.1:6000
+pirate_frb rpc rand_write 127.0.0.1:6000
 ```
 In this example, we simulated FRBs and sent two event streams to the sifter.
 One event stream is sent by the search code (via the grouper) and represents the outcome of the search.
@@ -97,24 +97,24 @@ pirate_frb run_fake_xengine -f -s 10.222.3.5:7500 10.222.3.5:6000 10.222.3.5:600
 
 # Optional: window 5 (either cf00 or cf05): send RPC "status" requests to the server.
 # This will monitor connections, files written, and ring buffer state.
-pirate_frb rpc_status 10.222.3.5:6000 10.222.3.5:6001
+pirate_frb rpc status 10.222.3.5:6000 10.222.3.5:6001
 
 # Optional: in window 6, send RPC "start_stream" requests to the server.
 # Here, we dump beam_id=100 for 1000 seconds. Filenames will be printed in
-# the 'rpc_status' process (window 5) as they are written, and will look like:
+# the 'rpc status' process (window 5) as they are written, and will look like:
 #   /mnt/cs00/data/{user}/prod_stream_{date}_{time}/frame_b{beam}_t{chunk}.asdf
-pirate_frb rpc_start_stream -b 100 -d 1000 -s prod_stream 10.222.3.5:6000 10.222.3.5:6001
+pirate_frb rpc start_stream -b 100 -d 1000 -s prod_stream 10.222.3.5:6000 10.222.3.5:6001
 
 # Optional: in window 7, send RPC "show_streams" requests to the server.
 # This will show the status of current streams, and the last 5 inactive streams.
-# Note: there is also a command 'pirate_frb rpc_cancel_stream'.
-pirate_frb rpc_show_streams 10.222.3.5:6000 10.222.3.5:6001
+# Note: there is also a command 'pirate_frb rpc cancel_stream'.
+pirate_frb rpc show_streams 10.222.3.5:6000 10.222.3.5:6001
 
 # Optional: in window 8, send RPC "write_files" requests to the server, for randomly
-# chosen beams/times. Filenames will be printed in the 'rpc_status' process (window 5)
+# chosen beams/times. Filenames will be printed in the 'rpc status' process (window 5)
 # as they are written, and will look like:
 #   /mnt/cs00/data/{user}/rand_write_{date}_{time}/frame_b{beam}_t{chunk}.asdf
-pirate_frb rpc_rand_write 10.222.3.5:6000 10.222.3.5:6001
+pirate_frb rpc rand_write 10.222.3.5:6000 10.222.3.5:6001
 ```
 See above for more info on the simulated FRB event streams, or on "short-circuting" the
 sequence of programs.

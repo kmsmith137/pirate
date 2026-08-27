@@ -632,10 +632,10 @@ class RunServerHelper:
     def _print_help_lines(self):
         rpc_addrs = ' '.join(self.config['rpc_ip_addrs'])
         atomic_print(f"\nTo send fake data to server(s):     pirate_frb run_fake_xengine {rpc_addrs}")
-        atomic_print(f"To monitor status:                    pirate_frb rpc_status {rpc_addrs}")
-        atomic_print(f"To write random data:                 pirate_frb rpc_rand_write {rpc_addrs}")
-        atomic_print(f"To stream data (all beams, 60 sec):   pirate_frb rpc_start_stream -B -d 60 {rpc_addrs}")
-        atomic_print(f"To show streams:                      pirate_frb rpc_show_streams {rpc_addrs}")
+        atomic_print(f"To monitor status:                    pirate_frb rpc status {rpc_addrs}")
+        atomic_print(f"To write random data:                 pirate_frb rpc rand_write {rpc_addrs}")
+        atomic_print(f"To stream data (all beams, 60 sec):   pirate_frb rpc start_stream -B -d 60 {rpc_addrs}")
+        atomic_print(f"To show streams:                      pirate_frb rpc show_streams {rpc_addrs}")
 
         atomic_print(f"\nReminder: the only way to interact with running server(s) is via RPC, see above.")
         atomic_print(f"All {self.n} server(s) started. Press Ctrl-C to stop.")

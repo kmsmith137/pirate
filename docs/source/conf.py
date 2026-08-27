@@ -128,16 +128,31 @@ import sys as _sys
 _sys.path.insert(0, _repo_root)
 from pirate_frb.__main__ import get_parser as _get_parser
 
-# Collect (name, one-line help, subparser) in parser-declaration order (this is
-# the order the table and the sidebar dropdown both use).
+# Collect the subcommand TREE in parser-declaration order (the order the table and
+# the sidebar dropdown both use). A node is (path, help, subparser, children), where
+# 'path' is the list of words a user types after 'pirate_frb' -- ['rpc', 'status']
+# for a nested leaf, ['test'] for a flat one -- and 'children' is [] for a leaf.
+#
+# Recursive because subcommands are now GROUPED: 'pirate_frb rpc status' is a
+# subparser of a subparser. Nothing here special-cases a group name, so adding a
+# second group needs no change to this file.
+def _walk_subcommands(parser, path=()):
+    out = []
+    subparsers = getattr(parser, '_subparsers', None)
+    if subparsers is None:
+        return out
+    for _action in subparsers._actions:
+        if not hasattr(_action, '_choices_actions'):
+            continue
+        for _choice in _action._choices_actions:
+            _name = _choice.dest
+            _sub = _action.choices[_name]
+            _kids = _walk_subcommands(_sub, path + (_name,))
+            out.append((path + (_name,), _choice.help or "", _sub, _kids))
+    return out
+
 _parser = _get_parser()
-_subcommands = []
-for _action in _parser._subparsers._actions:
-    if not hasattr(_action, '_choices_actions'):
-        continue
-    for _choice in _action._choices_actions:
-        _name = _choice.dest
-        _subcommands.append((_name, _choice.help or "", _action.choices[_name]))
+_subcommands = _walk_subcommands(_parser)
 
 # Per-subcommand pages live in docs/source/cli/ (gitignored; regenerated each
 # build, removed by 'make docs-clean').
@@ -155,23 +170,56 @@ os.makedirs(_cli_dst, exist_ok=True)
 # shifts it a few chars. The .cli-help pre pre-wrap CSS (_static/custom.css) is
 # the safety net for narrow viewports / wider fonts, so 90 can never scroll.
 # Saved/restored so the rest of the build is unperturbed.
+# A GROUP gets a directory with an index.md (its own table + toctree of its leaves);
+# a LEAF gets a single page. docname is '/'.join(path), so 'rpc status' lives at
+# cli/rpc/status -- which is the key _ext/autolink.py derives, and must stay in step
+# with the regex there.
+def _emit_leaf(node):
+    _path, _help, _subparser, _kids = node
+    _docname = '/'.join(_path)
+    _subparser.prog = 'pirate_frb ' + ' '.join(_path)
+    _help_text = _subparser.format_help()
+    _fname = os.path.join(_cli_dst, _docname + '.md')
+    os.makedirs(os.path.dirname(_fname), exist_ok=True)
+    with open(_fname, 'w') as _fout:
+        _fout.write(f'# {_path[-1]}\n\n')
+        if _help:
+            _fout.write(re.sub(r'(\w+_\w+)', r'`\1`', _help) + '\n\n')
+        # ':class: cli-help' is targeted by _static/custom.css, which wraps
+        # long lines (white-space: pre-wrap) instead of side-scrolling.
+        _fout.write('```{code-block} text\n:class: cli-help\n\n')
+        _fout.write(_help_text)
+        if not _help_text.endswith('\n'):
+            _fout.write('\n')
+        _fout.write('```\n')
+
+def _emit_group(node):
+    _path, _help, _subparser, _kids = node
+    _dirname = os.path.join(_cli_dst, *_path)
+    os.makedirs(_dirname, exist_ok=True)
+    with open(os.path.join(_dirname, 'index.md'), 'w') as _fout:
+        _fout.write(f'# {_path[-1]}\n\n')
+        if _help:
+            _fout.write(re.sub(r'(\w+_\w+)', r'`\1`', _help) + '\n\n')
+        _fout.write('| Subcommand | Description |\n|---|---|\n')
+        for _kp, _kh, _ksp, _kk in _kids:
+            _desc = re.sub(r'(\w+_\w+)', r'`\1`', _kh)
+            _fout.write(f'| [`{" ".join(_kp)}`]({_kp[-1]}.md) | {_desc} |\n')
+        _fout.write('\n```{toctree}\n:hidden:\n:maxdepth: 1\n\n')
+        for _kp, _kh, _ksp, _kk in _kids:
+            _fout.write(f'{_kp[-1]}\n')
+        _fout.write('```\n')
+    for _kid in _kids:
+        _emit(_kid)
+
+def _emit(node):
+    (_emit_group if node[3] else _emit_leaf)(node)
+
 _saved_columns = os.environ.get('COLUMNS')
 os.environ['COLUMNS'] = '90'
 try:
-    for _name, _help, _subparser in _subcommands:
-        _subparser.prog = f'pirate_frb {_name}'
-        _help_text = _subparser.format_help()
-        with open(os.path.join(_cli_dst, f'{_name}.md'), 'w') as _fout:
-            _fout.write(f'# {_name}\n\n')
-            if _help:
-                _fout.write(re.sub(r'(\w+_\w+)', r'`\1`', _help) + '\n\n')
-            # ':class: cli-help' is targeted by _static/custom.css, which wraps
-            # long lines (white-space: pre-wrap) instead of side-scrolling.
-            _fout.write('```{code-block} text\n:class: cli-help\n\n')
-            _fout.write(_help_text)
-            if not _help_text.endswith('\n'):
-                _fout.write('\n')
-            _fout.write('```\n')
+    for _node in _subcommands:
+        _emit(_node)
 finally:
     if _saved_columns is None:
         os.environ.pop('COLUMNS', None)
@@ -186,12 +234,21 @@ _cli_gen_path = os.path.join(os.path.dirname(__file__), '_cli_generated.md')
 with open(_cli_gen_path, 'w') as _fout:
     _fout.write('## Subcommands\n\n')
     _fout.write('| Subcommand | Description |\n|---|---|\n')
-    for _name, _help, _subparser in _subcommands:
+    for _path, _help, _subparser, _kids in _subcommands:
         _desc = re.sub(r'(\w+_\w+)', r'`\1`', _help)
-        _fout.write(f'| [`{_name}`](cli/{_name}.md) | {_desc} |\n')
-    _fout.write('\n```{toctree}\n:hidden:\n:maxdepth: 1\n\n')
-    for _name, _help, _subparser in _subcommands:
-        _fout.write(f'cli/{_name}\n')
+        _name = ' '.join(_path)
+        # A group's row links to its index page and says how many leaves it has, so the
+        # top-level table stays one row per group rather than expanding it inline.
+        if _kids:
+            _fout.write(f'| [`{_name}`](cli/{_name}/index.md) | {_desc}'
+                        f' ({len(_kids)} subcommands) |\n')
+        else:
+            _fout.write(f'| [`{_name}`](cli/{_name}.md) | {_desc} |\n')
+    # maxdepth 2, not 1: a group's leaves are one level below its index page, and
+    # maxdepth 1 would hide them from the sidebar entirely.
+    _fout.write('\n```{toctree}\n:hidden:\n:maxdepth: 2\n\n')
+    for _path, _help, _subparser, _kids in _subcommands:
+        _fout.write('cli/' + '/'.join(_path) + ('/index\n' if _kids else '\n'))
     _fout.write('```\n')
 
 # -- Project information -----------------------------------------------------

@@ -62,7 +62,7 @@ sifter     | waiting for grouper(s) to connect | 1 | 30 | pirate_frb run_toy_sif
 grouper    | waiting for FrbServer to connect  | 1 | 30 | pirate_frb run_toy_grouper -s 127.0.0.1:7500 127.0.0.1:7000
 server     | server(s) started                 | 1 | 90 | pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml
 xengine    | FakeXEngine(s) running            | 1 | 30 | pirate_frb run_fake_xengine -f -g 30 -s 127.0.0.1:7500 127.0.0.1:6000
-rpc_status | Running get_status                | 1 | 30 | pirate_frb rpc_status 127.0.0.1:6000
+rpc_status | Running get_status                | 1 | 30 | pirate_frb rpc status 127.0.0.1:6000
 EOF
 
 misc/ch_test/launch-pipeline.sh $S/toy.plan $S/logs &      # blocks; run in background

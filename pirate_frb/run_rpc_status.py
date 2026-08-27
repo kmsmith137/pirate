@@ -1,4 +1,4 @@
-"""Implementation of 'pirate_frb rpc_status' subcommand."""
+"""Implementation of 'pirate_frb rpc status' subcommand."""
 
 import sys
 import time

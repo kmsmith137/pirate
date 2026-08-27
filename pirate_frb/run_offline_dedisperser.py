@@ -2,7 +2,7 @@
 Toy offline dedispersion driver + rudimentary peak-finding over an acquisition directory.
 
 Reads a directory of acquired AssembledFrame ".asdf" files (one file per
-(beam, time chunk) -- as written by 'pirate_frb rpc_start_stream'). Beams and their
+(beam, time chunk) -- as written by 'pirate_frb rpc start_stream'). Beams and their
 time chunks are enumerated with pirate_frb.Acquisition. Each beam is
 processed independently: a fresh single-beam OfflineDedisperser (nbeams == 1) is
 built from scratch, and for each of that beam's time chunks the driver:

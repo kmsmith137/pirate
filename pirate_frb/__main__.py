@@ -1425,12 +1425,52 @@ def show_file_format(args):
         os.remove(filename)
 
 
-########################################   rpc_status command  ######################################
+#########################################   rpc subcommands  ########################################
+
+
+def parse_rpc(subparsers):
+    """The 'rpc' group: clients that talk to a running FrbServer over gRPC.
+
+    A NESTED subparser level, so these are 'pirate_frb rpc status' rather than a flat
+    'rpc_status'. parser_class=_PirateParser propagates the terse
+    invalid-choice errors down to the leaves; without it the leaves would revert to
+    argparse's default '(choose from ...)' wording.
+    """
+    help_text = "gRPC clients for a running FrbServer (status, streaming, writes)"
+    parser = subparsers.add_parser("rpc", help=help_text, description=help_text)
+    sub = parser.add_subparsers(dest="rpc_command", required=True, metavar="subcommand",
+                                parser_class=_PirateParser)
+
+    parse_rpc_status(sub)
+    parse_rpc_rand_write(sub)
+    parse_rpc_start_stream(sub)
+    parse_rpc_cancel_stream(sub)
+    parse_rpc_show_streams(sub)
+
+
+def rpc(args):
+    """Dispatch within the 'rpc' group; see main()."""
+    if args.rpc_command == "status":
+        rpc_status(args)
+    elif args.rpc_command == "rand_write":
+        rpc_rand_write(args)
+    elif args.rpc_command == "start_stream":
+        rpc_start_stream(args)
+    elif args.rpc_command == "cancel_stream":
+        rpc_cancel_stream(args)
+    elif args.rpc_command == "show_streams":
+        rpc_show_streams(args)
+    else:
+        atomic_print(f"Command 'rpc {args.rpc_command}' not recognized", fd=2)
+        sys.exit(2)
+
+
+########################################   rpc status command  ######################################
 
 
 def parse_rpc_status(subparsers):
     help_text = "Connect to FrbServer(s) and stream status + filenames"
-    parser = subparsers.add_parser("rpc_status", help=help_text, description=help_text)
+    parser = subparsers.add_parser("status", help=help_text, description=help_text)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS', help='Server address(es) (e.g. 127.0.0.1:6000)')
 
 
@@ -1439,12 +1479,12 @@ def rpc_status(args):
     run_rpc_status(args.server_addresses)
 
 
-######################################   rpc_rand_write command  ####################################
+######################################   rpc rand_write command  ####################################
 
 
 def parse_rpc_rand_write(subparsers):
     help_text = "Send write_files RPC to FrbServer(s) with random beams/time range"
-    parser = subparsers.add_parser("rpc_rand_write", help=help_text, description=help_text)
+    parser = subparsers.add_parser("rand_write", help=help_text, description=help_text)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS', help='Server address(es) (e.g. 127.0.0.1:6000)')
 
 
@@ -1567,7 +1607,7 @@ def _rpc_error_str(e):
 def parse_rpc_start_stream(subparsers):
     help_text = ("Send StartStream RPC to one or more FrbServers (write data to disk as it is "
                  "received). Multiple addresses act as one 'super-server'.")
-    parser = subparsers.add_parser("rpc_start_stream", help=help_text, description=help_text)
+    parser = subparsers.add_parser("start_stream", help=help_text, description=help_text)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
                         help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
     parser.add_argument('-s', '--stem', default='stream',
@@ -1672,13 +1712,13 @@ def rpc_start_stream(args):
             client.close()
 
 
-##################################   rpc_cancel_stream command  #####################################
+##################################   rpc cancel_stream command  #####################################
 
 
 def parse_rpc_cancel_stream(subparsers):
     help_text = ("Send CancelStream RPC to one or more FrbServers. Multiple addresses act as one "
                  "'super-server' (cancels loop over all servers).")
-    parser = subparsers.add_parser("rpc_cancel_stream", help=help_text, description=help_text)
+    parser = subparsers.add_parser("cancel_stream", help=help_text, description=help_text)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
                         help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
     parser.add_argument('-a', '--stream-name', default=None, metavar='STREAM_NAME',
@@ -1744,13 +1784,13 @@ def rpc_cancel_stream(args):
         sys.exit(1)
 
 
-###################################   rpc_show_streams command  #####################################
+###################################   rpc show_streams command  #####################################
 
 
 def parse_rpc_show_streams(subparsers):
     help_text = ("Send ShowStreams RPC to one or more FrbServers and print the responses. "
                  "Multiple addresses act as one 'super-server' (loops over all servers).")
-    parser = subparsers.add_parser("rpc_show_streams", help=help_text, description=help_text)
+    parser = subparsers.add_parser("show_streams", help=help_text, description=help_text)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
                         help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
 
@@ -2198,11 +2238,7 @@ def get_parser():
     parse_run_offline_dedisperser(subparsers)
     parse_run_toy_sifter(subparsers)
     parse_run_fake_xengine(subparsers)
-    parse_rpc_status(subparsers)
-    parse_rpc_rand_write(subparsers)
-    parse_rpc_start_stream(subparsers)
-    parse_rpc_cancel_stream(subparsers)
-    parse_rpc_show_streams(subparsers)
+    parse_rpc(subparsers)
     
     parse_test(subparsers)
     parse_test_simpulse(subparsers)
@@ -2322,16 +2358,10 @@ def main():
         show_asdf(args)
     elif args.command == "show_file_format":
         show_file_format(args)
-    elif args.command == "rpc_status":
-        rpc_status(args)
-    elif args.command == "rpc_rand_write":
-        rpc_rand_write(args)
-    elif args.command == "rpc_start_stream":
-        rpc_start_stream(args)
-    elif args.command == "rpc_cancel_stream":
-        rpc_cancel_stream(args)
-    elif args.command == "rpc_show_streams":
-        rpc_show_streams(args)
+    elif args.command == "rpc":
+        # Groups dispatch one level down; see rpc(). If a third group appears, this chain
+        # is worth replacing with parser.set_defaults(func=...) + args.func(args).
+        rpc(args)
     elif args.command == "run_server":
         run_server_command(args)
     elif args.command == "run_toy_grouper":
