@@ -47,6 +47,15 @@ EXACTLY: compute_detrender_free_varfine(config, ones)[itree0].reshape(-1) is BIT
 compute_detrender_free_base_map(config).y_true. compute_detrender_free_varcoarse() is the
 same result reduced to the weights array's own granularity, which is what production stores.
 
+THERE IS A C++ PORT OF THAT SECOND ROUTE, in src_lib/varmap.cpp, reachable as
+pirate_frb.fast_avar.compute_detrender_free_{varfine,varcoarse}. It is 27x faster at
+chord_sb2_et.yml (15.1 s -> 0.57 s) and agrees to 1.1e-14 relative. THIS FILE REMAINS THE
+REFERENCE: the C++ ports only the init_sd_matrices=False path (no SdMatrix, no per-group SVD,
+no Lmat, no 'debug' cross-checks), it is tested only by asserting agreement with this code,
+and the two 'debug' checks in _plan_pass() below are statements about the PLAN that cover the
+port as well -- so they are worth keeping on in varmap/tests.py even though nothing here needs
+them. If you change the algorithm, change it here first.
+
 The remaining scaling fix for the MAP is a second, global SVD round that runs BEFORE the
 lift; the per-group factors that round needs are what SdPlan leaves behind.
 
@@ -67,6 +76,7 @@ read off the coarse factors. It is accumulated separately, in the full delay-bit
 """
 
 import time
+import dataclasses
 
 import numpy as np
 
@@ -115,6 +125,52 @@ def _coarsen_sdbits(sdbits, L):
         return sdbits
     mask = (1 << (L + _SBITS_WIDTH)) - (1 << _SBITS_WIDTH)    # dbits 0..L-1, shifted into place
     return sdbits & ~mask
+
+
+####################################   the plan entries   ####################################
+
+
+@dataclasses.dataclass(slots=True)
+class _UnstraddledEntry:
+    """One (input channel, subband set) group on the common path of _plan_pass().
+
+    Mirrors C++ SdPlan::UnstraddledEntry. 'ifreq' is a field and not merely the loop variable
+    that produced it: the tile pass walks the flat plan and needs it to rebuild the channel's
+    gridding triple and to write freq_indices.
+
+    'sbits' inside 'sdbits' may have several bits set -- ONE tile computation and ONE
+    convolution serve every subband that sees the same [lo, hi).
+    """
+    ifreq: int
+    lo: int
+    hi: int
+    sdbits: int
+
+
+@dataclasses.dataclass(slots=True)
+class _StraddledEntry:
+    """A case-2 subband whose footprint straddles its own midpoint; see _tile_pass().
+
+    Mirrors C++ SdPlan::StraddledEntry. Carries no (lo, hi) because (ifreq, n) already
+    determines them, via the same intersect() the tile pass calls. A straddling subband always
+    gets a row to itself, so 'sdbits' has sbits == (1 << n) -- which _size_pass() asserts.
+    """
+    ifreq: int
+    n: int
+    sdbits: int
+
+
+@dataclasses.dataclass(slots=True)
+class _LocalEntry:
+    """One entry of _plan_pass()'s per-channel scratch list.
+
+    Mutated in place as later subbands sharing the same [lo, hi) are merged into 'sbits',
+    which is why this is not frozen. Never escapes _plan_pass(): the merged result becomes an
+    _UnstraddledEntry.
+    """
+    lo: int
+    hi: int
+    sbits: int
 
 
 ####################################   class SdMatrix   ####################################
@@ -294,7 +350,7 @@ class SdPlan:
           (nfreq, 2) int64. See _tile_pass() for why the footprint is worth caching.
 
       unstraddled_plan, straddled_plan:
-          the two plans; see _plan_pass().
+          the two plans, as lists of _UnstraddledEntry / _StraddledEntry; see _plan_pass().
 
       sd_matrices, sd_vectors:
           the two accumulators above.
@@ -455,15 +511,12 @@ class SdPlan:
     def _plan_pass(self):
         """Per input channel, which subbands see it, over what range, and with what dbits.
 
-        Two plans rather than one plan with a nullable discriminant. 'ifreq' is a member of
-        both tuples, not just the loop variable: the tile pass walks the flat plans and needs
-        it to rebuild the channel's gridding triple and to write freq_indices.
+        Two plans rather than one plan with a nullable discriminant:
 
-          unstraddled_plan: (ifreq, lo, hi, sdbits)       the common path
-          straddled_plan:   (ifreq, straddle_n, sdbits)   case-2 midpoint straddles
+          unstraddled_plan: list of _UnstraddledEntry     the common path
+          straddled_plan:   list of _StraddledEntry       case-2 midpoint straddles
 
-        The straddled triple carries no (lo, hi) because (ifreq, straddle_n) already
-        determines them, via the same intersect() the tile pass calls.
+        See those two classes for what each field is for.
         """
 
         r, R, N = self.r, self.R, self.N
@@ -492,16 +545,18 @@ class SdPlan:
                 seen_subbands |= (1 << n)
                 if (not case1[n]) and (lo < I_mid[n] < hi):
                     dbits = self.predict_dbits_r(lo, hi, n)
-                    self.straddled_plan.append((ifreq, n, (dbits << _SBITS_WIDTH) | (1 << n)))
+                    self.straddled_plan.append(
+                        _StraddledEntry(ifreq, n, (dbits << _SBITS_WIDTH) | (1 << n)))
                 else:
                     for e in local_unstraddled_plan:
-                        if (e[0] == lo) and (e[1] == hi):
-                            e[2] |= (1 << n)
+                        if (e.lo == lo) and (e.hi == hi):
+                            e.sbits |= (1 << n)
                             break
                     else:
-                        local_unstraddled_plan.append([lo, hi, 1 << n])
+                        local_unstraddled_plan.append(_LocalEntry(lo, hi, 1 << n))
 
-            for (lo, hi, sbits) in local_unstraddled_plan:
+            for e in local_unstraddled_plan:
+                lo, hi, sbits = e.lo, e.hi, e.sbits
                 n0 = (sbits & -sbits).bit_length() - 1    # any subband of the entry will do
                 dbits = self.predict_dbits_r(lo, hi, n0)
 
@@ -518,7 +573,8 @@ class SdPlan:
                     for n in _iter_bits(sbits):
                         assert self.predict_dbits_r(lo, hi, n) == dbits, (ifreq, lo, hi, n, n0)
 
-                self.unstraddled_plan.append((ifreq, lo, hi, (dbits << _SBITS_WIDTH) | sbits))
+                self.unstraddled_plan.append(
+                    _UnstraddledEntry(ifreq, lo, hi, (dbits << _SBITS_WIDTH) | sbits))
 
             if self.debug:
                 # NO SdMatrix EVER GETS TWO ROWS FROM ONE INPUT CHANNEL, which is what makes
@@ -533,8 +589,8 @@ class SdPlan:
                 # Lmat-free, cheap (a few entries per channel, not an O(F) scan), and true in
                 # the init_sd_matrices=False mode as well -- where a duplicate would silently
                 # DOUBLE-COUNT into sd_vectors rather than merely overwrite a row.
-                keys = [s for (_, _, _, s) in self.unstraddled_plan[u0:]]
-                keys += [s for (_, _, s) in self.straddled_plan[s0:]]
+                keys = [e.sdbits for e in self.unstraddled_plan[u0:]]
+                keys += [e.sdbits for e in self.straddled_plan[s0:]]
                 assert len(set(keys)) == len(keys), (ifreq, keys)
 
         # A subband seeing no channel at all would give identically-zero rows of A, which
@@ -562,9 +618,9 @@ class SdPlan:
         # branch taken explicitly the assertion now holds everywhere -- trivially so on that
         # branch, where the << (r - c) supplies R - l[n] zero low bits. Keep it: it is the
         # statement that makes the lift's index formula well defined.
-        for (_, _, _, sdbits) in self.unstraddled_plan:
-            dbits = sdbits >> _SBITS_WIDTH
-            for n in _iter_bits(sdbits & _SBITS_MASK):
+        for e in self.unstraddled_plan:
+            dbits = e.sdbits >> _SBITS_WIDTH
+            for n in _iter_bits(e.sdbits & _SBITS_MASK):
                 assert (dbits & ((1 << (R - int(lev[n]))) - 1)) == 0, (dbits, n, int(lev[n]))
 
 
@@ -596,13 +652,13 @@ class SdPlan:
 
         sd_capacities = {} if init_sd_matrices else None       # COARSE sdbits -> row count
 
-        for (_, _, _, sdbits) in self.unstraddled_plan:
-            self._count(sdbits, sd_capacities)
-        for (_, n, sdbits) in self.straddled_plan:
+        for e in self.unstraddled_plan:
+            self._count(e.sdbits, sd_capacities)
+        for e in self.straddled_plan:
             # A straddling subband always gets a row to itself, so the two fields of its
             # sdbits are redundant with each other -- and checkable.
-            assert (sdbits & _SBITS_MASK) == (1 << n), (sdbits, n)
-            self._count(sdbits, sd_capacities)
+            assert (e.sdbits & _SBITS_MASK) == (1 << e.n), (e.sdbits, e.n)
+            self._count(e.sdbits, sd_capacities)
 
         if init_sd_matrices:
             self.sd_matrices = {}
@@ -732,14 +788,16 @@ class SdPlan:
         cannot be hoisted. Its repeated searchsorted over cmap is negligible at these sizes.
         """
 
-        for (ifreq, lo, hi, sdbits) in self.unstraddled_plan:
-            tri = SparseTileTriple.make_tree_gridding_output(self.cmap, ifreq, flo=lo, fhi=hi)
+        for e in self.unstraddled_plan:
+            ifreq = e.ifreq
+            tri = SparseTileTriple.make_tree_gridding_output(self.cmap, ifreq, flo=e.lo, fhi=e.hi)
             for _ in range(self.r):
                 tri = tri.iterate()
             assert tri.nf == 1 and len(tri.tiles) == 1, (tri.nf, len(tri.tiles))
-            self._emit(ifreq, tri.tiles[0], self.r, sdbits)
+            self._emit(ifreq, tri.tiles[0], self.r, e.sdbits)
 
-        for (ifreq, n, sdbits) in self.straddled_plan:
+        for e in self.straddled_plan:
+            ifreq, n, sdbits = e.ifreq, e.n, e.sdbits
             j0, j1 = int(self.footprint[ifreq, 0]), int(self.footprint[ifreq, 1])
             lo, hi = self.intersect(j0, j1, n)
             cc = int(self.c[n])

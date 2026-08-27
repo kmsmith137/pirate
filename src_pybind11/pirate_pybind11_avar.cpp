@@ -11,6 +11,7 @@
 
 #include "../include/pirate/varmap.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/DedispersionConfig.hpp"
 
 using namespace std;
 using namespace ksgpu;
@@ -67,11 +68,15 @@ void register_avar_bindings(pybind11::module &m)
     // ------------------------------------------------------------------------ SparseTileTriple
 
     py::class_<SparseTileTriple>(m, "SparseTileTriple")
-        .def_static("make_tree_gridding_output", [](const Array<double> &cm, long ifreq) {
+        .def_static("make_tree_gridding_output", [](const Array<double> &cm, long ifreq,
+                                                    long flo, long fhi) {
                  xassert(cm.on_host());   // cm.data is dereferenced on the host
                  xassert(cm.is_fully_contiguous());
-                 return SparseTileTriple::make_tree_gridding_output(cm.data, cm.size, ifreq);
-             }, py::arg("channel_map"), py::arg("ifreq"))
+                 return SparseTileTriple::make_tree_gridding_output(cm.data, cm.size, ifreq, flo, fhi);
+             }, py::arg("channel_map"), py::arg("ifreq"),
+                // The python spells the no-upper-clip default 'None'; the C++ spells it -1, and
+                // this binding follows the C++ (a python caller who wants no clip just omits it).
+                py::arg("flo") = 0, py::arg("fhi") = -1)
         .def_readonly("r", &SparseTileTriple::r)
         .def_readonly("k", &SparseTileTriple::k)
         .def_readonly("f0", &SparseTileTriple::f0)
@@ -139,6 +144,32 @@ void register_avar_bindings(pybind11::module &m)
             return self.per_tf;
         })
     ;
+
+    // ------------------------------------------- detrender-free variance vectors
+
+    // The on_host() / is_fully_contiguous() checks belong here rather than in the C++ functions,
+    // for the reason given at the SparseTile constructor above: the host code dereferences
+    // freq_variances.data, so a cupy array would segfault. (SdPlan repeats them, since it is also
+    // reachable from C++.)
+    //
+    // gil_scoped_release: these are the longest pure-CPU calls in this module -- seconds at CHORD
+    // scale -- and neither touches a python object once it has the array.
+
+    m.def("compute_detrender_free_varfine",
+          [](const DedispersionConfig &config, const Array<double> &freq_variances) {
+              xassert(freq_variances.on_host());
+              xassert(freq_variances.is_fully_contiguous());
+              return compute_detrender_free_varfine(config, freq_variances);
+          }, py::arg("config"), py::arg("freq_variances"),
+             py::call_guard<py::gil_scoped_release>());
+
+    m.def("compute_detrender_free_varcoarse",
+          [](const DedispersionConfig &config, const Array<double> &freq_variances) {
+              xassert(freq_variances.on_host());
+              xassert(freq_variances.is_fully_contiguous());
+              return compute_detrender_free_varcoarse(config, freq_variances);
+          }, py::arg("config"), py::arg("freq_variances"),
+             py::call_guard<py::gil_scoped_release>());
 }
 
 }  // namespace pirate

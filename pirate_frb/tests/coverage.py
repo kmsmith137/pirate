@@ -45,8 +45,13 @@ def report_coverage():
                                       has populated levels ABOVE it; see point 3 of the long
                                       comment in makefile_helper.py. Was 0% on the gpu_valid
                                       path until (4,2,1) was stocked there.
-      a straddled entry               test_base_varmap_vs_analytic. The half-aligned branch
-                                      in SdPlan, 1 row in 645 on toy.yml.
+      a straddled entry               test_base_varmap_vs_analytic, and fast_avar's
+                                      test_cpp_detrender_free. The half-aligned branch in
+                                      SdPlan, 1 row in 645 on toy.yml and 13 in 14383 over
+                                      random draws -- so a C++ port that never took the
+                                      branch would move the answer by ~0.1% and could pass a
+                                      loose comparison. Measured 22% of draws have at least
+                                      one, which is what gives that test its teeth.
       xdm_rank > 0 in some tree       test_base_varmap_vs_analytic. Nothing in varmap READS
                                       K, but K > 0 is precisely where 2^(r-R) and ndm_out
                                       diverge, so it is the only case where a row count taken

@@ -5114,6 +5114,15 @@ def run_all():
     test_multimap_vs_base()
     test_varfine()
 
+    # The C++ port of compute_detrender_free_{varfine,varcoarse} (src_lib/varmap.cpp), checked
+    # against the python above. It lives in fast_avar with the other C++-vs-python comparisons,
+    # but it is dispatched from HERE rather than from '--avar' because the reference it guards is
+    # detrender_free.py: whoever edits that file runs '--varmap', and a port that has silently
+    # diverged is exactly what they need to be told about. Adds ~0.1 s per iteration, nearly all
+    # of it the python reference.
+    from ..fast_avar.test_fast_avar import test_cpp_detrender_free
+    test_cpp_detrender_free()
+
     # The two brute-force sweep tests that draw their own configs -- the only ones in that
     # group that explore rather than repeat, and about 2 s together. The rest of the sweep
     # group is in run_once(); see this module's docstring for what the sweep half is FOR.
