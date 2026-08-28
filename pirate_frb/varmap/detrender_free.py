@@ -17,14 +17,15 @@ The algorithm, in outline:
      range. Group those (channel, subband-set) entries by a key 'sdbits' which packs the
      delay-bit mask and the subband set, so that ONE tile computation and ONE convolution
      serve every subband seeing the same range. Measured, that is 2.9x to 5.7x fewer
-     convolutions than the per-multiplet route of slow_avar.PfAvarExact.
+     convolutions than a per-multiplet route (one tile per (channel, multiplet) pair), which
+     is how the superseded pirate_frb.slow_avar did it.
   2. Build one dense (capacity, D*P) matrix per group and SVD it, dropping small singular
      values.
   3. Lift each group's factors into a global (nbeta, Ktot) / (nfreq, Ktot) pair.
 
 THE COST IS ALL IN STEP 3. Steps 1 and 2 run at full CHORD scale (chord_sb2_et.yml, nalpha =
-5.96e6) in 14 seconds and hold 17 MB of rows -- a scale at which PfAvarExact cannot be built
-at all. The lift then materializes a dense (nbeta, Ktot) Q, which for a FINE map (L = None)
+5.96e6) in 14 seconds and hold 17 MB of rows -- a scale at which a per-multiplet route
+cannot be built at all. The lift then materializes a dense (nbeta, Ktot) Q, which for a FINE map (L = None)
 is 0.36 GiB on toy.yml but 63.8 GiB at CHORD.
 
 THERE ARE TWO WAYS OVER THAT WALL, and which one applies depends on what the caller needs.
@@ -48,7 +49,7 @@ compute_detrender_free_base_map(config).y_true. compute_detrender_free_varcoarse
 same result reduced to the weights array's own granularity, which is what production stores.
 
 THERE IS A C++ PORT OF THAT SECOND ROUTE, in src_lib/varmap.cpp, reachable as
-pirate_frb.fast_avar.compute_detrender_free_{varfine,varcoarse}. It is 27x faster at
+pirate_frb.fast_varmap.compute_detrender_free_{varfine,varcoarse}. It is 27x faster at
 chord_sb2_et.yml (15.1 s -> 0.57 s) and agrees to 1.1e-14 relative. THIS FILE REMAINS THE
 REFERENCE: the C++ ports only the init_sd_matrices=False path (no SdMatrix, no per-group SVD,
 no Lmat, no 'debug' cross-checks), it is tested only by asserting agreement with this code,
@@ -82,8 +83,8 @@ import numpy as np
 
 from .VarianceMap import VarianceMap, coarse_grain_vector, make_tree
 from .VarianceMultiMap import VarianceMultiMap, expand_fine_vectors
-from ..slow_avar.SparseTile import SparseTile, SparseTileTriple
-from ..slow_avar.PfVariance import PfVarianceConvolver
+from .SparseTile import SparseTile, SparseTileTriple
+from .PfVarianceConvolver import PfVarianceConvolver
 from ..utils import atomic_print, integer_log2
 
 
@@ -594,8 +595,8 @@ class SdPlan:
                 assert len(set(keys)) == len(keys), (ifreq, keys)
 
         # A subband seeing no channel at all would give identically-zero rows of A, which
-        # breaks y_true and hence get_distance(). This is the analogue of PfAvarExact's
-        # m_cnt >= 1 assert.
+        # breaks y_true and hence get_distance(). (The C++ twin asserts the same thing per
+        # subband rather than per multiplet; see SdPlan::plan_pass() in src_lib/varmap.cpp.)
         assert seen_subbands == ((1 << N) - 1), \
             f'subband(s) {_iter_bits(((1 << N) - 1) & ~seen_subbands)} see no input channel'
 
@@ -836,8 +837,8 @@ class SdPlan:
         ones. Nothing depends on row order -- the SVD does not, the W lift scatters by
         freq_indices, and y_true sums over rows -- but it is an easy thing to assume.
 
-        NO COLUMN PRECONDITIONER. slow_avar.TmpVmapExact divides by a per-channel scale before
-        its SVD, because it stacks CHANNELS AS COLUMNS of a per-multiplet matrix, where a
+        NO COLUMN PRECONDITIONER. The superseded slow_avar.TmpVmapExact divided by a per-channel
+        scale before its SVD, because it stacked CHANNELS AS COLUMNS of a per-multiplet matrix, where a
         barely-overlapping edge channel contributes an anomalously small column that a
         relative threshold would delete. Here channels are ROWS of a much more finely divided
         set of groups, and it is measured to make no difference. On toy.yml and chime_sb2.yml,
@@ -1353,7 +1354,7 @@ def compute_detrender_free_varcoarse(config, freq_variances, *, progress=False, 
 
     THE COARSE-GRAINING RANK IS THE TREE'S OWN, ``L = log2(pf.wt_dm_downsampling)``, and that
     is what makes the result line up: ``2^(r-L)`` is exactly DedispersionTree::ndm_wt, checked
-    below. It is the same L that varmap.cpp's PfAvarApproximation constructor computes, so the two agree by
+    below. It is the same L that varmap.cpp's SdPlan computes, so the two agree by
     construction rather than by coincidence. Note L is a property of the PRIMARY tree while r
     is not, so L is constant within an early-trigger family and ndm_wt still varies across it.
 
