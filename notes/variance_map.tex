@@ -1345,8 +1345,7 @@ are also important -- this is an opportunity to clean up historical baggage.
 So please think carefully ``from scratch'' about whether existing code could be simplified, cleaned up, or improved.
 
 Currently, the refactor is logically complete, and we're nearly ready to
-delete the old code. See \verb|plans/varmap_loose_ends.md| and
-\verb|plans/varmap_new_vs_old.md| for current status.
+delete the old code.
 Part of the purpose of campaign 4 is to try the new code (\verb|pirate_frb.varmap|)
 at scale.
 For now, I'm keeping around the old code as a reference.
@@ -1409,6 +1408,19 @@ At the end of campaign 4, make a recommendation: should we delete the old code,
 or is there still value in keeping it?
 
 \end{itemize}
+
+\par\noindent
+{\bf Update (after campaign 4).} The old code has been deleted. The
+\verb|pirate_frb.slow_avar| subpackage is gone, and with it \verb|PfVariance.py|'s
+\verb|PfVariance| / \verb|PfAvarExact| / \verb|PfAvarApproximation| classes,
+\verb|TmpVmap.py|, and the \verb|check_*.py| CLI entry points -- so the ``new code'' bullet
+above no longer describes anything on disk. Two pieces of it were kept, because they are
+substrate rather than an alternative route to the same answer, and both moved into
+\verb|varmap/|: \verb|SparseTile.py| (minus \verb|SparseTilePerM|, which had no consumer
+outside a test oracle) and \verb|PfVarianceConvolver|. On the C++ side,
+{\tt struct PfVariance} and {\tt class PfAvarApproximation} were removed from
+\verb|src_lib/varmap.cpp|, and the \verb|fast_avar| python subpackage was renamed
+\verb|fast_varmap|.
 
 \subsection{Campaign 4 results [agent-authored]}
 \label{ssec:campaign4_results}
@@ -2597,33 +2609,40 @@ being lost to roundoff against the diagonal term.
 
 \clearpage
 
-\section{{\tt PfAvarExact} and {\tt TmpVmapExact}}
+\section{Analytic variances from sparse tiles}
 \label{sec:analytic_variance}
-
-{\bf Status.} The four classes described in this appendix and in \S\ref{sec:variance_svd} --
-{\tt PfAvarExact}, {\tt TmpVmapExact}, {\tt PfAvarApproximation}, {\tt TmpVmapApproximation} --
-were a first pass at representing the variance map of \S\ref{sec:variance_map}, written before we
-settled on the {\tt VarianceMap} representation. They are left unchanged for now, and are
-deliberately outside it; the {\tt TmpVmap} prefix is the reminder. We may revisit them later.
 
 The second step of peak-finding (\ddnotes{Peak-finding}) normalizes its output to ``sigmas'',
 by applying weights which are the inverse square roots of the output variances.
-This appendix describes the two classes which compute them, both in
-\verb|pirate_frb/slow_avar/|:
+This appendix describes how those variances are computed analytically, without simulation:
+the compressed representation of a single input channel's impulse response through tree
+dedispersion (\verb|SparseTile|, \verb|SparseTileTriple|), and the autocorrelation table that
+turns such a response into a peak-finding output variance (\verb|PfVarianceConvolver|).
+Both live in \verb|pirate_frb/varmap/|, with a C++ port in \verb|src_lib/varmap.cpp|.
+
+{\bf Status of the code named below.} This appendix was originally written around a pair of
+classes, \verb|PfAvarExact| (which evaluated $y = Av$ for one $v$, per multiplet) and
+\verb|TmpVmapExact| (which compressed $A$ itself into a canonical low-rank form), together
+with their approximate counterparts in \S\ref{sec:variance_svd}. All four were a first pass at
+representing the variance map of \S\ref{sec:variance_map}, written before we settled on the
+\verb|VarianceMap| representation, and all four have since been DELETED along with the
+\verb|pirate_frb.slow_avar| subpackage that held them. What survives, and what the rest of this
+appendix should be read as describing, is:
 \begin{itemize}
-\item \verb|PfAvarExact| (\S\ref{sec:avar_statement}--\S\ref{sec:avar_validation}) computes the
-variance of the dedispersion outputs, given the per-channel variances of the dedisperser input
-array. In the language of \S\ref{sec:variance_map}, Eq.\ (\ref{eq:variance_map_def}), it
-evaluates the matrix-vector product $y = Av$ for one specific $v$, without ever forming $A$.
-\item \verb|TmpVmapExact| (\S\ref{ssec:svd_exact_map}--\S\ref{ssec:svd_exact_cost}) takes a
-\verb|PfAvarExact| and compresses the map $A$ itself into a canonical low-rank (SVD) form. This
-is worth doing because in operation $v$ drifts (gain drift, RFI excision), and we want to
-recompute the peak-finding variances cheaply whenever it is updated.
+\item \S\ref{sec:avar_statement}--\S\ref{sec:avar_pfvariance}: the math of the sparse-tile
+representation and of the variance evaluation. This is LIVE. It is what
+\verb|varmap/detrender_free.py| and its C++ port are built on, and it is what the real-time
+server runs, via \verb|compute_detrender_free_varcoarse()|.
+\item \S\ref{sec:avar_validation}: how the result is checked. Rewritten below to describe the
+checks that now exist.
+\item \S\ref{ssec:svd_exact_map}--\S\ref{ssec:svd_exact_cost} and \S\ref{sec:variance_svd}:
+the two compression schemes, and the two drivers that fed them. The code is gone; the sections
+are kept for the record, each behind a status note.
 \end{itemize}
-Both use the helper classes \verb|SparseTile|, \verb|SparseTileTriple|, \verb|PfVariance| and
-\verb|PfVarianceConvolver|.\footnote{This is an exact but slow reference
-implementation. Production uses a faster approximate algorithm ({\tt PfAvarApproximation},
-which is also ported to C++); see \S\ref{sec:variance_svd}.}
+The current route to $A$ is \S\ref{ssec:varmap_proposed}'s \verb|VarianceMap| built by
+\verb|varmap/detrender_free.py|, which groups channels by SUBBAND rather than by multiplet --
+measured, $2.9$ to $5.7$ times fewer convolutions -- and, unlike \verb|PfAvarExact|, is
+practical at CHIME/CHORD scale.
 
 One difference from \S\ref{ssec:variance_map_setup} applies throughout: there, the underlying
 linear operator includes a {\tt Detrender2d} before tree dedispersion, whereas here we consider
@@ -2908,20 +2927,45 @@ testing/reference implementation, rather than in production.
 \subsection{Validating the analytic variances}
 \label{sec:avar_validation}
 
-The pieces above are unit-tested against dense reference implementations
-(\verb|pirate_frb test --avar|): the \verb|SparseTile| operations are compared to a dense
-$\DDS(k)$ applied to randomly generated tiles, tree gridding is compared to
-\verb|ReferenceTreeGriddingKernel|, dedispersion of a one-hot input is compared to
-\verb|ReferenceTree|, and \verb|PfVarianceConvolver| is compared both to a brute-force evaluation
-of $\|h_p * x\|^2$, and to the kernels which \verb|ReferencePeakFindingKernel| actually uses.
+Everything below is run by \verb|pirate_frb test --varmap|. (There used to be a separate
+\verb|--avar| flag for the pieces in this appendix; it was folded into \verb|--varmap| when
+they moved into \verb|pirate_frb/varmap/|.)
 
-End-to-end, the analytic variances are checked by Monte Carlo
-(\verb|pirate_frb check_avar_mc|): Gaussian noise with per-channel variance $V_F$ is fed through a
-\verb|ReferenceDedisperser|, a \verb|ReferencePfSquare| is run over each tree's subband array
-(\verb|out_sb|), and the resulting empirical per-chunk variances are compared to the analytic
-prediction, restricted to output channels which have reached steady state.
+The pieces above are unit-tested against dense reference implementations: the
+\verb|SparseTile| operations are compared to a dense $\DDS(k)$ applied to randomly generated
+tiles, tree gridding is compared to \verb|ReferenceTreeGriddingKernel|, and
+\verb|PfVarianceConvolver| is compared both to a brute-force evaluation of $\|h_p * x\|^2$,
+and to the kernels which \verb|ReferencePeakFindingKernel| actually uses. The C++ port of each
+is compared to the python.
+
+End-to-end, the analytic variances are checked against the BRUTE-FORCE SWEEP of
+\S\ref{sec:variance_map_bruteforce}, which pushes a one-hot through the real dedisperser once
+per input channel and reads $A$ off the output column norms. That comparison
+(\verb|test_multimap_vs_sweep| in \verb|varmap/tests.py|) is elementwise over the full matrix,
+for every primary tree, on random configs; the two sides share no code, and agreement is at
+the float32 floor of the dedispersion chain, measured $5 \times 10^{-7}$ to
+$2 \times 10^{-6}$. It is the only numerical oracle for the analytic map, and it covers
+\verb|compute_detrender_free_varfine()| in the same loop.
+
+Separately, a stored \verb|VarianceMap| can be checked by Monte Carlo
+(\verb|pirate_frb varmap mc|): Gaussian noise with per-channel variance $V_F$ is fed through
+the dedisperser, a \verb|PfSquare| is run over each tree's subband array (\verb|out_sb|), and
+the resulting empirical per-chunk variances are compared to the map's prediction, restricted
+to output channels which have reached steady state. This supersedes the older
+\verb|check_avar_mc|, and unlike it, reports the worst UNDERestimate and the worst
+OVERestimate separately -- an admissible map may do the second but never the first.
 
 \clearpage
+
+\subsection*{[The code below has been deleted]}
+
+{\bf Status.} \verb|TmpVmapExact|, and the \verb|PfAvarExact| driver it was built on, were
+deleted with the \verb|pirate_frb.slow_avar| subpackage. Their role -- compressing $A$ into a
+low-rank form -- is filled by \verb|varmap/detrender_free.py| plus the covering LP of
+\S\ref{ssec:varmap_proposed}, which does it at CHIME/CHORD scale, where {\tt PfAvarExact}
+could not be built at all. The rest of this section is kept for the record: the per-group SVD
+and canonical form it describes are still the shape of what the current code does, and
+\S\ref{ssec:svd_exact_map} carries a definition that is referenced from earlier appendices.
 
 The rest of this appendix describes \verb|TmpVmapExact|, which compresses the variance map
 $A$ itself, instead of evaluating $y = Av$ for one input vector. From here on we drop the two
@@ -3202,20 +3246,26 @@ rows) and the $C_\delta$, instead of $K_0 \cdot DP$ doubles.
 
 \clearpage
 
-\section{{\tt PfAvarApproximation}, {\tt TmpVmapApproximation} [deprecated]}
+\section{{\tt PfAvarApproximation}, {\tt TmpVmapApproximation} [deleted]}
 \label{sec:variance_svd}
 
+{\bf Status: the code described here has been deleted.} {\tt PfAvarApproximation} and
+{\tt TmpVmapApproximation} went with the \verb|pirate_frb.slow_avar| subpackage, and the C++
+{\tt PfAvarApproximation} in \verb|src_lib/varmap.cpp| went with them. The real-time pipeline
+had already stopped using them: {\tt GpuDedisperser::\_fill\_analytic\_weights()} now calls
+\verb|compute_detrender_free_varcoarse()| instead, which is exact (no per-subband averaging)
+and is the C++ port of \verb|varmap/detrender_free.py|. That swap cost a factor $3$ in
+construction time at {\tt chord\_sb2\_et.yml} ($0.24$ s $\to$ $0.74$ s) and removed the
+approximation entirely, so the inconsistency recorded in the next paragraph is gone with it.
+The section is kept for the record.
+
 This appendix documents a pair of classes ({\tt PfAvarApproximation}, {\tt TmpVmapApproximation})
-which implement a coarse-grained approximation to {\tt PfAvarExact}. The status note at the top of
-\S\ref{sec:analytic_variance} applies to them too: they were a first pass at representing the
-variance map, predating the {\tt VarianceMap} representation, and are deliberately outside it for
-now.
+which implemented a coarse-grained approximation to {\tt PfAvarExact}. They were a first pass at
+representing the variance map, predating the {\tt VarianceMap} representation, and were
+deliberately outside it.
 These classes were written before the main body of these notes, and are inconsistent with it.
 In particular, the distance $D(A^{\rm true}, A^{\rm approx})$ is infinite, where $D$ is defined
 by Eq.\ (\ref{eq:distance_function}).
-I'll resolve these inconsistencies later -- for now, you should consider the classes
-{\tt PfAvarApproximation}, {\tt TmpVmapApproximation} to be a deprecated, temporary
-kludge which is currently used in the real-time pipeline, but will be revised in the future.
 
 This appendix is the approximate counterpart of \S\ref{sec:analytic_variance}, and assumes it
 has been read: {\tt PfAvarApproximation} computes the peak-finding variances $y = Av$ for one
@@ -3251,7 +3301,7 @@ where $[f_{\rm lo}(n), f_{\rm hi}(n))$ is subband $n$'s coarse-freq range
 
 The size of the error this introduces is not estimated here; it is measured directly, by
 comparing {\tt PfAvarExact} and {\tt PfAvarApproximation} tree by tree
-(\verb|pirate_frb check_avar_approximation|, which reports the distribution of
+(the deleted \verb|pirate_frb check_avar_approximation|, which reported the distribution of
 $\epsilon = {\rm var}_{\rm approx}/{\rm var}_{\rm exact} - 1$).
 
 \subsection{Computing it: reuse across trees}

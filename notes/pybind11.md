@@ -31,7 +31,7 @@ C++ class. This can be done with the class decorator `ksgpu.inject_methods`:
 
 Pybind11 code is in the following source files:
 ```
-   src_pybind11/pirate_pybind11_avar.cpp
+   src_pybind11/pirate_pybind11_varmap.cpp
    src_pybind11/pirate_pybind11_casm.cpp
    src_pybind11/pirate_pybind11_chime.cpp
    src_pybind11/pirate_pybind11_core.cpp

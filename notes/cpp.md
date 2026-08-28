@@ -166,9 +166,6 @@ Documented exceptions, all deliberate:
   from the vendorized output.
 - `pirate_frb/cuda_generator/`: build-time code generation, which must stay
   importable without the compiled extension it helps build.
-- `pirate_frb/slow_avar/PfVariance.py`: `print(..., end="")` progress dots.
-  Incremental partial-line output is fundamentally incompatible with
-  line-atomic emission, and the incremental feedback is the point.
 - Docstring usage examples still say `print(...)`, since they illustrate
   the API for a reader rather than executing.
 

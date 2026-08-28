@@ -26,7 +26,7 @@ documentation snapshots (do not edit them by hand; regenerate by running
     -- run GPU timing benchmarks.
 
   They are also the second positional argument to `run_server` (see below), and are
-  consumed by `run_offline_dedisperser`, `check_avar_approximation`, and `check_avar_mc`.
+  consumed by `run_offline_dedisperser` and `varmap mc`.
 
   `toy.yml` is a subscale config for quick testing; the remaining files are
   production-scale configs for CHIME and CHORD (with subband/early-trigger variants).
