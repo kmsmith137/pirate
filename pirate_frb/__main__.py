@@ -92,6 +92,7 @@ def draw_random_seed():
 def parse_test(subparsers):
     help_text = "Run unit tests (use flags to select specific tests)"
     parser = subparsers.add_parser("test", help=help_text, description=help_text)
+    parser.set_defaults(func=test)
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
     stop_group = parser.add_mutually_exclusive_group()
     stop_group.add_argument('-n', '--niter', type=int, default=100,
@@ -332,12 +333,13 @@ def test(args):
                      f' Replay with: --seed {seed} -n {i+1}\n')
 
 
-######################################   test_simpulse command  #####################################
+######################################   dev test_simpulse command  #####################################
 
 
 def parse_test_simpulse(subparsers):
     help_text = "Run simpulse tests (pulse-upsampling self-consistency) and write example plots to cwd"
     parser = subparsers.add_parser("test_simpulse", help=help_text, description=help_text)
+    parser.set_defaults(func=test_simpulse)
     parser.add_argument('-n', '--niter', type=int, default=100, help="Number of upsampling-test iterations (default 100)")
 
 
@@ -352,7 +354,7 @@ def test_simpulse(args):
 
 
 def parse_varmap(subparsers):
-    """The 'varmap' group: compute a variance map A and write it to an ASDF file.
+    """The 'varmap' group: utils for working with asdf-serialized variance maps.
 
     'bf' and 'df' COMPUTE a map; 'mc' CHECKS one that already exists.
 
@@ -362,30 +364,11 @@ def parse_varmap(subparsers):
     SVD-truncated, and its map DOMINATES A_true by construction (is_admissible=True). Only
     'bf' can take a detrender.
     """
-    help_text = "Compute a variance map A and write it to an ASDF file"
-    parser = subparsers.add_parser("varmap", help=help_text, description=help_text)
-    sub = parser.add_subparsers(dest="varmap_command", required=True, metavar="subcommand",
-                                parser_class=_PirateParser)
+    help_text = "Subcommand for working with asdf-serialized variance maps (see varmap --help)"
+    sub = _add_group(subparsers, "varmap", help_text)
     parse_varmap_bf(sub)
     parse_varmap_df(sub)
     parse_varmap_mc(sub)
-
-
-def varmap_command(args):
-    """Dispatch within the 'varmap' group; see main().
-
-    NOT named varmap(): this module does 'from . import varmap' at the top, and the package
-    is what the bodies below call into.
-    """
-    if args.varmap_command == "bf":
-        varmap_bf(args)
-    elif args.varmap_command == "df":
-        varmap_df(args)
-    elif args.varmap_command == "mc":
-        varmap_mc(args)
-    else:
-        atomic_print(f"Command 'varmap {args.varmap_command}' not recognized", fd=2)
-        sys.exit(2)
 
 
 def _add_varmap_common_args(parser):
@@ -410,6 +393,7 @@ def _add_varmap_common_args(parser):
 def parse_varmap_bf(subparsers):
     help_text = "Compute the variance map A by brute force (sweep), and write it to an ASDF file"
     parser = subparsers.add_parser("bf", help=help_text, description=help_text)
+    parser.set_defaults(func=varmap_bf)
     _add_varmap_common_args(parser)
     parser.add_argument('detrender_file', nargs='?', default=None,
                         help="Path to Detrender2dParams YAML file (omit with --no-detrender)")
@@ -447,6 +431,7 @@ def parse_varmap_df(subparsers):
     help_text = ("Compute the variance map A by the fast detrender-free algorithm, and write"
                  " it to an ASDF file")
     parser = subparsers.add_parser("df", help=help_text, description=help_text)
+    parser.set_defaults(func=varmap_df)
     _add_varmap_common_args(parser)
     parser.add_argument('-e', '--epsilon', type=float, default=None, metavar='EPS',
                         help="Relative singular-value threshold, applied per group. Omit for"
@@ -690,6 +675,7 @@ def parse_varmap_mc(subparsers):
     none of _add_varmap_common_args() -- there is no -o and no -L."""
     help_text = ("Check a stored variance map against Monte-Carlo sims of its embedded config")
     parser = subparsers.add_parser("mc", help=help_text, description=help_text)
+    parser.set_defaults(func=varmap_mc)
     parser.add_argument('map_file', help="Path to a .asdf variance-map file")
     parser.add_argument('-v', '--freq-variances', default=None, metavar='PATH',
                         help="Length-nfreq input-channel variances: a .npy file, or a text"
@@ -827,6 +813,7 @@ def varmap_mc(args):
 def parse_time(subparsers):
     help_text = "Run timings (use flags to select specific timings)"
     parser = subparsers.add_parser("time", help=help_text, description=help_text)
+    parser.set_defaults(func=time_command)
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for timing (default 0)")
     parser.add_argument('-t', '--nthreads', type=int, default=0, help="number of CPU threads (for time_cpu_downsample and time_avx2_simulate_4bit_noise)")
     parser.add_argument('--ncu', action='store_true', help="Just run a single kernel (intended for profiling with nvidia 'ncu')")
@@ -884,24 +871,26 @@ def time_command(args):
         utils.time_avx2_simulate_4bit_noise(nthreads)
 
 
-#####################################   show_hardware command  #####################################
+#####################################   show hardware command  #####################################
 
 
 def parse_show_hardware(subparsers):
     help_text = "Show hardware information, including cpu affinity"
-    subparsers.add_parser("show_hardware", help=help_text, description=help_text)
+    parser = subparsers.add_parser("hardware", help=help_text, description=help_text)
+    parser.set_defaults(func=show_hardware)
     
 def show_hardware(args):
     h = Hardware()
     h.show()
 
 
-######################################   show_kernels command  #####################################
+######################################   show kernels command  #####################################
 
 
 def parse_show_kernels(subparsers):
     help_text = "Show registered cuda kernels (use flags to select specific registries)"
-    parser = subparsers.add_parser("show_kernels", help=help_text, description=help_text)
+    parser = subparsers.add_parser("kernels", help=help_text, description=help_text)
+    parser.set_defaults(func=show_kernels)
     parser.add_argument('--pfom', action='store_true', help='Show PfOutputMicrokernel registry')
     parser.add_argument('--pfwr', action='store_true', help='Show PfWeightReaderMicrokernel registry')
     parser.add_argument('--gddk', action='store_true', help='Show GpuDedispersionKernel registry')
@@ -963,7 +952,7 @@ def show_kernels(args):
         kernels.GpuPeakFindingKernel.show_registry()
 
 
-######################################   make_subbands command  #####################################
+######################################   dev make_subbands command  #####################################
 
 
 def parse_make_subbands(subparsers):
@@ -978,14 +967,15 @@ def parse_make_subbands(subparsers):
         Example usage::
 
            # Specify frequency min, max, and threshold
-           python -m pirate_frb make_subbands 300 1500 0.2
-           python -m pirate_frb make_subbands 400 800 0.1 -r 4""")
+           python -m pirate_frb dev make_subbands 300 1500 0.2
+           python -m pirate_frb dev make_subbands 400 800 0.1 -r 4""")
     parser = subparsers.add_parser(
         "make_subbands",
         help = help_text,
         description = description,
         formatter_class = argparse.RawDescriptionHelpFormatter,
     )
+    parser.set_defaults(func=make_subbands)
 
     parser.add_argument('fmin', type=float, help='Minimum frequency (MHz)')
     parser.add_argument('fmax', type=float, help='Maximum frequency (MHz)')
@@ -1005,7 +995,7 @@ def make_subbands(args):
     atomic_print(fs.show())
 
 
-########################################   hwtest command  #########################################
+########################################   dev hwtest command  #########################################
 
 
 def parse_hwtest(subparsers):
@@ -1021,16 +1011,17 @@ def parse_hwtest(subparsers):
         Example networking-only run::
 
           # On cf00. The test will pause after "listening for TCP connections".
-          python -m pirate_frb hwtest configs/hwtest/cf00_net64.yml
+          python -m pirate_frb dev hwtest configs/hwtest/cf00_net64.yml
 
           # On cf05. Send to all four IP addresses on cf00.
-          python -m pirate_frb hwtest -s configs/hwtest/cf00_net64.yml
+          python -m pirate_frb dev hwtest -s configs/hwtest/cf00_net64.yml
 
         See configs/hwtest/*.yml for more examples.""")
     parser = subparsers.add_parser(
         "hwtest", help=help_text, description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.set_defaults(func=hwtest)
     parser.add_argument('config_file', help='Path to YAML config file')
     parser.add_argument('-t', '--time', type=float, default=20, help='Number of seconds to run test (default 20)')
     parser.add_argument('-s', '--send', action='store_true', help='Send data to test server (uses ip_addrs from config file)')
@@ -1206,19 +1197,20 @@ def hwtest_send_from_config(config):
             atomic_print("\nInterrupted, stopping...")
 
 
-######################################   scratch command  #######################################
+######################################   dev scratch command  #######################################
 
 
 def parse_scratch(subparsers):
     help_text = "For debugging: run whatever code is currently in src_lib/scratch.cu"
-    subparsers.add_parser("scratch", help=help_text, description=help_text)
+    parser = subparsers.add_parser("scratch", help=help_text, description=help_text)
+    parser.set_defaults(func=scratch)
 
 def scratch(args):
     # The scratch() function is defined in src_lib/scratch.cu.
     pirate_pybind11.scratch()
 
 
-####################################   revisit_512gb command  ####################################
+####################################   dev revisit_512gb command  ####################################
 
 
 def parse_revisit_512gb(subparsers):
@@ -1238,6 +1230,7 @@ def parse_revisit_512gb(subparsers):
     parser = subparsers.add_parser(
         "revisit_512gb", help=help_text, description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.set_defaults(func=revisit_512gb)
     parser.add_argument('-H', '--hugepages', action='store_true',
                         help='Use 2 MiB hugepages (default: 4 KiB regular pages).')
 
@@ -1317,12 +1310,13 @@ def revisit_512gb(args):
     atomic_print(bar)
 
 
-################################   show_xengine_metadata command  ##################################
+################################   show xengine_metadata command  ##################################
 
 
 def parse_show_xengine_metadata(subparsers):
     help_text = "Parse xengine_metadata yml file and write info to stdout"
-    parser = subparsers.add_parser("show_xengine_metadata", help=help_text, description=help_text)
+    parser = subparsers.add_parser("xengine_metadata", help=help_text, description=help_text)
+    parser.set_defaults(func=show_xengine_metadata)
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
 
@@ -1333,12 +1327,13 @@ def show_xengine_metadata(args):
     atomic_print(yaml_str)
 
 
-###################################   show_dedisperser command  ###################################
+###################################   show dedisperser command  ###################################
 
 
 def parse_show_dedisperser(subparsers):
     help_text = "Parse a dedisperser .yml file and write info to stdout"
-    parser = subparsers.add_parser("show_dedisperser", help=help_text, description=help_text)
+    parser = subparsers.add_parser("dedisperser", help=help_text, description=help_text)
+    parser.set_defaults(func=show_dedisperser)
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
     parser.add_argument('-c', '--config', action='store_true', help="Also print the DedispersionConfig, with a separator, before the plan (by default only the plan is printed, matching the dedispersion_plan_yaml sent to the grouper)")
@@ -1457,12 +1452,13 @@ def show_dedisperser(args):
         atomic_print('Test passed!')
 
 
-###################################   show_random_config command  ###################################
+###################################   show random_config command  ###################################
 
 
 def parse_show_random_config(subparsers):
     help_text = "For debugging: generate random DedispersionConfig(s) and print as YAML"
-    parser = subparsers.add_parser("show_random_config", help=help_text, description=help_text)
+    parser = subparsers.add_parser("random_config", help=help_text, description=help_text)
+    parser.set_defaults(func=show_random_config)
     parser.add_argument('-n', type=int, default=1, metavar='NCONFIG', help='generate multiple random configs')
     parser.add_argument('-a', action='store_true', help='generate arbitrary random config, without restricting to precompiled kernels')
     parser.add_argument('-v', action='store_true', help='verbose')
@@ -1480,12 +1476,13 @@ def show_random_config(args):
         atomic_print(yaml_str)
 
 
-######################################   coverage command  ######################################
+######################################   dev coverage command  ######################################
 
 
 def parse_coverage(subparsers):
     help_text = "Coverage analysis of randomization utils in unit tests"
-    subparsers.add_parser("coverage", help=help_text, description=help_text)
+    parser = subparsers.add_parser("coverage", help=help_text, description=help_text)
+    parser.set_defaults(func=coverage)
 
 
 def coverage(args):
@@ -1498,6 +1495,7 @@ def coverage(args):
 def parse_time_dedisperser(subparsers):
     help_text = "Run timing benchmarks from a dedisperser .yml file"
     parser = subparsers.add_parser("time_dedisperser", help=help_text, description=help_text)
+    parser.set_defaults(func=time_dedisperser)
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-n', '--niter', type=int, default=1000, help="Number of iterations for timing (default 1000)")
     parser.add_argument('-b', '--beams', type=int, help="Override config.beams_per_gpu with specified value")
@@ -1590,12 +1588,13 @@ def time_dedisperser(args):
     atomic_print('Timing complete!')
 
 
-###################################   show_asdf command  ###################################
+###################################   show asdf command  ###################################
 
 
 def parse_show_asdf(subparsers):
     help_text = "Print the YAML header of an ASDF file. (Note: 'asdftool --info' is also useful)"
-    parser = subparsers.add_parser("show_asdf", help=help_text, description=help_text)
+    parser = subparsers.add_parser("asdf", help=help_text, description=help_text)
+    parser.set_defaults(func=show_asdf)
     parser.add_argument('asdf_file', help="Path to ASDF file")
 
 
@@ -1604,12 +1603,13 @@ def show_asdf(args):
     _show_asdf(args.asdf_file)
 
 
-######################################   show_file_format command  ##################################
+######################################   show file_format command  ##################################
 
 
 def parse_show_file_format(subparsers):
     help_text = "Make an asdf file from an xengine_metadata YAML file, and write the header to stdout."
-    parser = subparsers.add_parser("show_file_format", help=help_text, description=help_text)
+    parser = subparsers.add_parser("file_format", help=help_text, description=help_text)
+    parser.set_defaults(func=show_file_format)
     parser.add_argument('metadata_yaml', help="Path to xengine_metadata YAML file")
     parser.add_argument('-n', '--non-verbose', action='store_true',
                         help="Emit the YAML header without the documentation comments (verbose=False).")
@@ -1648,44 +1648,91 @@ def show_file_format(args):
         os.remove(filename)
 
 
+####################################   subcommand groups   ##########################################
+#
+# Five groups -- rpc, varmap, run, show, dev -- each a NESTED subparser level, so a command is
+# 'pirate_frb run server' rather than a flat 'run_server'. _add_group() is the one place that
+# knows how to make one; each parse_<group>() below just names its leaves.
+#
+# EVERY LEAF CARRIES ITS OWN HANDLER, via parser.set_defaults(func=...), and main() ends in a
+# single args.func(args). That replaces what used to be a top-level if/elif chain over
+# args.command plus one hand-written dispatch function per group -- which the old code already
+# flagged as not scaling past three groups. The win is not brevity: a leaf's parser and its
+# handler are now named in the SAME place, so adding a subcommand cannot half-land.
+
+
+def _add_group(subparsers, name, help_text):
+    """Add a group parser and return the subparsers object its leaves attach to.
+
+    parser_class=_PirateParser propagates the terse invalid-choice errors down to the leaves;
+    without it the leaves revert to argparse's default '(choose from ...)' wording. dest is
+    per-group ('<name>_command') rather than shared, so a future group that wants to read its
+    own subcommand name still can, and two groups can never collide.
+    """
+    parser = subparsers.add_parser(name, help=help_text, description=help_text)
+    return parser.add_subparsers(dest=f"{name}_command", required=True, metavar="subcommand",
+                                 parser_class=_PirateParser)
+
+
+def parse_run(subparsers):
+    """The 'run' group: long-running processes -- the real server, and the toy/offline rigs."""
+    help_text = "Subcommand for running server/grouper/fake-xengine/etc (see run --help)"
+    sub = _add_group(subparsers, "run", help_text)
+    parse_run_server(sub)
+    parse_run_toy_grouper(sub)
+    parse_run_offline_dedisperser(sub)
+    parse_run_toy_sifter(sub)
+    parse_run_fake_xengine(sub)
+
+
+def parse_show(subparsers):
+    """The 'show' group: print something and exit. No side effects, no GPU work."""
+    help_text = "Subcommand for printing information about config files or kernel registry (see show --help)"
+    sub = _add_group(subparsers, "show", help_text)
+    parse_show_asdf(sub)
+    parse_show_file_format(sub)
+    parse_show_dedisperser(sub)
+    parse_show_hardware(sub)
+    parse_show_kernels(sub)
+    parse_show_random_config(sub)
+    parse_show_xengine_metadata(sub)
+
+
+def parse_dev(subparsers):
+    """The 'dev' group: tools for working ON pirate, rather than for running it.
+
+    The membership rule is "would an operator ever type this?" -- if not, it belongs here.
+    That covers the makefile_helper.py maintenance utilities (make_subbands,
+    random_kernels), the scratch/hardware-probe entry points (scratch, revisit_512gb,
+    hwtest), the unit-test coverage report, and test_simpulse, which is a plotting rig
+    rather than part of 'pirate_frb test'.
+
+    'pirate_frb test' is deliberately NOT here: it is the one thing in this list that a
+    non-developer is told to run, and it is the entry point every notes/*.md points at.
+    """
+    help_text = "Subcommand for developer utils: coverage, hardware probes, makefile helpers, scratch (see dev --help)"
+    sub = _add_group(subparsers, "dev", help_text)
+    parse_coverage(sub)
+    parse_hwtest(sub)
+    parse_scratch(sub)
+    parse_make_subbands(sub)
+    parse_random_kernels(sub)
+    parse_test_simpulse(sub)
+    parse_revisit_512gb(sub)
+
+
 #########################################   rpc subcommands  ########################################
 
 
 def parse_rpc(subparsers):
-    """The 'rpc' group: clients that talk to a running FrbServer over gRPC.
-
-    A NESTED subparser level, so these are 'pirate_frb rpc status' rather than a flat
-    'rpc_status'. parser_class=_PirateParser propagates the terse
-    invalid-choice errors down to the leaves; without it the leaves would revert to
-    argparse's default '(choose from ...)' wording.
-    """
-    help_text = "gRPC clients for a running FrbServer (status, streaming, writes)"
-    parser = subparsers.add_parser("rpc", help=help_text, description=help_text)
-    sub = parser.add_subparsers(dest="rpc_command", required=True, metavar="subcommand",
-                                parser_class=_PirateParser)
-
+    """The 'rpc' group: clients that talk to a running FrbServer over gRPC."""
+    help_text = "Subcommand for sending RPCs (e.g. status, file-writes) to a running FrbServer (see rpc --help)"
+    sub = _add_group(subparsers, "rpc", help_text)
     parse_rpc_status(sub)
     parse_rpc_rand_write(sub)
     parse_rpc_start_stream(sub)
     parse_rpc_cancel_stream(sub)
     parse_rpc_show_streams(sub)
-
-
-def rpc(args):
-    """Dispatch within the 'rpc' group; see main()."""
-    if args.rpc_command == "status":
-        rpc_status(args)
-    elif args.rpc_command == "rand_write":
-        rpc_rand_write(args)
-    elif args.rpc_command == "start_stream":
-        rpc_start_stream(args)
-    elif args.rpc_command == "cancel_stream":
-        rpc_cancel_stream(args)
-    elif args.rpc_command == "show_streams":
-        rpc_show_streams(args)
-    else:
-        atomic_print(f"Command 'rpc {args.rpc_command}' not recognized", fd=2)
-        sys.exit(2)
 
 
 ########################################   rpc status command  ######################################
@@ -1694,6 +1741,7 @@ def rpc(args):
 def parse_rpc_status(subparsers):
     help_text = "Connect to FrbServer(s) and stream status + filenames"
     parser = subparsers.add_parser("status", help=help_text, description=help_text)
+    parser.set_defaults(func=rpc_status)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS', help='Server address(es) (e.g. 127.0.0.1:6000)')
 
 
@@ -1708,6 +1756,7 @@ def rpc_status(args):
 def parse_rpc_rand_write(subparsers):
     help_text = "Send write_files RPC to FrbServer(s) with random beams/time range"
     parser = subparsers.add_parser("rand_write", help=help_text, description=help_text)
+    parser.set_defaults(func=rpc_rand_write)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS', help='Server address(es) (e.g. 127.0.0.1:6000)')
 
 
@@ -1831,6 +1880,7 @@ def parse_rpc_start_stream(subparsers):
     help_text = ("Send StartStream RPC to one or more FrbServers (write data to disk as it is "
                  "received). Multiple addresses act as one 'super-server'.")
     parser = subparsers.add_parser("start_stream", help=help_text, description=help_text)
+    parser.set_defaults(func=rpc_start_stream)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
                         help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
     parser.add_argument('-s', '--stem', default='stream',
@@ -1942,6 +1992,7 @@ def parse_rpc_cancel_stream(subparsers):
     help_text = ("Send CancelStream RPC to one or more FrbServers. Multiple addresses act as one "
                  "'super-server' (cancels loop over all servers).")
     parser = subparsers.add_parser("cancel_stream", help=help_text, description=help_text)
+    parser.set_defaults(func=rpc_cancel_stream)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
                         help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
     parser.add_argument('-a', '--stream-name', default=None, metavar='STREAM_NAME',
@@ -2014,6 +2065,7 @@ def parse_rpc_show_streams(subparsers):
     help_text = ("Send ShowStreams RPC to one or more FrbServers and print the responses. "
                  "Multiple addresses act as one 'super-server' (loops over all servers).")
     parser = subparsers.add_parser("show_streams", help=help_text, description=help_text)
+    parser.set_defaults(func=rpc_show_streams)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
                         help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
 
@@ -2107,12 +2159,13 @@ def rpc_show_streams(args):
         sys.exit(1)
 
 
-#####################################   random_kernels command  #####################################
+#####################################   dev random_kernels command  #####################################
 
 
 def parse_random_kernels(subparsers):
     help_text = "A utility for maintaining makefile_helper.py"
     parser = subparsers.add_parser("random_kernels", help=help_text, description=help_text)
+    parser.set_defaults(func=random_kernels)
     parser.add_argument('-n', type=int, default=20, help='Number of random kernels to print (default 20)')
     parser.add_argument('--pf', action='store_true', help='Print random PeakFinder kernel params')
     parser.add_argument('--cdd2', action='store_true', help='Print random CoalescedDdKernel2 kernel params')
@@ -2204,12 +2257,13 @@ def random_kernels(args):
             atomic_print(f"('fp{nbits}', {tuple(subband_counts)}, {2**Dcore_log}, {P}, {2**Tinner_log})")
 
 
-######################################  run_server command  #####################################
+######################################  run server command  #####################################
 
 
 def parse_run_server(subparsers):
     help_text = "Start FRB server(s) from an frb_server .yml file and a dedispersion .yml file"
-    parser = subparsers.add_parser("run_server", help=help_text, description=help_text)
+    parser = subparsers.add_parser("server", help=help_text, description=help_text)
+    parser.set_defaults(func=run_server_command)
     parser.add_argument('server_config', help='Path to FrbServer YAML config file')
     parser.add_argument('dedispersion_config', help='Path to DedispersionConfig YAML file')
     parser.add_argument('-d', '--delay', type=float, default=0.0, metavar='SECONDS',
@@ -2241,12 +2295,13 @@ def run_server_command(args):
                quiet=args.quiet)
 
 
-######################################  run_toy_grouper command  #####################################
+######################################  run toy_grouper command  #####################################
 
 
 def parse_run_toy_grouper(subparsers):
     help_text = "Toy FrbGrouper consumer(s): per-chunk peak SNR + argmax, optionally reported to a sifter"
-    parser = subparsers.add_parser("run_toy_grouper", help=help_text, description=help_text)
+    parser = subparsers.add_parser("toy_grouper", help=help_text, description=help_text)
+    parser.set_defaults(func=run_toy_grouper_command)
     parser.add_argument('grouper_addrs', nargs='+', metavar='grouper_addr',
                         help="FrbGrouper listen address(es) 'ip:port' (e.g. 127.0.0.1:7000). "
                              "With more than one, each grouper runs in its own child "
@@ -2306,12 +2361,13 @@ def run_toy_grouper_command(args):
         sys.exit(rc)
 
 
-######################################  run_offline_dedisperser command  #####################################
+######################################  run offline_dedisperser command  #####################################
 
 
 def parse_run_offline_dedisperser(subparsers):
     help_text = "Toy offline dedispersion: per-chunk peak SNR over an acqdir of .asdf frames"
-    parser = subparsers.add_parser("run_offline_dedisperser", help=help_text, description=help_text)
+    parser = subparsers.add_parser("offline_dedisperser", help=help_text, description=help_text)
+    parser.set_defaults(func=run_offline_dedisperser_command)
     parser.add_argument("acqdir",
                         help="acqdir of frame_b(BEAM)_t(CHUNK).asdf files")
     parser.add_argument("config",
@@ -2325,12 +2381,13 @@ def run_offline_dedisperser_command(args):
     run_offline_dedisperser(args.acqdir, args.config, max_chunks=args.max_chunks)
 
 
-######################################  run_toy_sifter command  #####################################
+######################################  run toy_sifter command  #####################################
 
 
 def parse_run_toy_sifter(subparsers):
     help_text = "Toy FrbSifter gRPC server: print a one-line summary of each received message"
-    parser = subparsers.add_parser("run_toy_sifter", help=help_text, description=help_text)
+    parser = subparsers.add_parser("toy_sifter", help=help_text, description=help_text)
+    parser.set_defaults(func=run_toy_sifter_command)
     parser.add_argument('addr', metavar='ADDR',
                         help="Listen address 'ip:port' for the sifter gRPC server "
                              "(e.g. 127.0.0.1:7100; use [::]:7100 or 0.0.0.0:7100 for all interfaces).")
@@ -2341,12 +2398,13 @@ def run_toy_sifter_command(args):
     run_toy_sifter(args.addr)
 
 
-######################################  run_fake_xengine command  #####################################
+######################################  run fake_xengine command  #####################################
 
 
 def parse_run_fake_xengine(subparsers):
     help_text = "Send fake X-engine data to one or more running FrbServers"
-    parser = subparsers.add_parser("run_fake_xengine", help=help_text, description=help_text)
+    parser = subparsers.add_parser("fake_xengine", help=help_text, description=help_text)
+    parser.set_defaults(func=run_fake_xengine_command)
     parser.add_argument('rpc_addrs', nargs='+', metavar='RPC_ADDR',
                         help='One or more "ip:port" strings (one per server, matching the config\'s rpc_ip_addrs)')
     parser.add_argument('-w', '--workers', type=int, default=128,
@@ -2456,33 +2514,18 @@ def get_parser():
     parser = _PirateParser(description="pirate_frb command-line driver (use --help for more info)")
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="command")
 
-    parse_run_server(subparsers)
-    parse_run_toy_grouper(subparsers)
-    parse_run_offline_dedisperser(subparsers)
-    parse_run_toy_sifter(subparsers)
-    parse_run_fake_xengine(subparsers)
+    # Declaration order here is what the reader of 'pirate_frb --help' sees, and what the
+    # docs build walks (docs/source/conf.py) to lay out the CLI reference. Groups first,
+    # then the handful of commands that are not in one.
+    parse_run(subparsers)
     parse_rpc(subparsers)
-    
-    parse_test(subparsers)
-    parse_test_simpulse(subparsers)
+    parse_show(subparsers)
     parse_varmap(subparsers)
+    parse_dev(subparsers)
+
+    parse_test(subparsers)
     parse_time(subparsers)
     parse_time_dedisperser(subparsers)
-    parse_coverage(subparsers)
-    
-    parse_show_asdf(subparsers)
-    parse_show_file_format(subparsers)
-    parse_show_dedisperser(subparsers)
-    parse_show_hardware(subparsers)
-    parse_show_kernels(subparsers)
-    parse_show_random_config(subparsers)
-    parse_show_xengine_metadata(subparsers)
-    
-    parse_hwtest(subparsers)
-    parse_make_subbands(subparsers)
-    parse_random_kernels(subparsers)
-    parse_scratch(subparsers)
-    parse_revisit_512gb(subparsers)
 
     return parser
 
@@ -2539,59 +2582,22 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "test":
-        test(args)
-    elif args.command == "test_simpulse":
-        test_simpulse(args)
-    elif args.command == "varmap":
-        varmap_command(args)
-    elif args.command == "time":
-        time_command(args)
-    elif args.command == "show_hardware":
-        show_hardware(args)
-    elif args.command == "show_kernels":
-        show_kernels(args)
-    elif args.command == "make_subbands":
-        make_subbands(args)
-    elif args.command == "show_xengine_metadata":
-        show_xengine_metadata(args)
-    elif args.command == "show_dedisperser":
-        show_dedisperser(args)
-    elif args.command == "time_dedisperser":
-        time_dedisperser(args)
-    elif args.command == "coverage":
-        coverage(args)
-    elif args.command == "show_random_config":
-        show_random_config(args)
-    elif args.command == "hwtest":
-        hwtest(args)
-    elif args.command == "scratch":
-        scratch(args)
-    elif args.command == "revisit_512gb":
-        revisit_512gb(args)
-    elif args.command == "random_kernels":
-        random_kernels(args)
-    elif args.command == "show_asdf":
-        show_asdf(args)
-    elif args.command == "show_file_format":
-        show_file_format(args)
-    elif args.command == "rpc":
-        # Groups dispatch one level down; see rpc(). If a third group appears, this chain
-        # is worth replacing with parser.set_defaults(func=...) + args.func(args).
-        rpc(args)
-    elif args.command == "run_server":
-        run_server_command(args)
-    elif args.command == "run_toy_grouper":
-        run_toy_grouper_command(args)
-    elif args.command == "run_offline_dedisperser":
-        run_offline_dedisperser_command(args)
-    elif args.command == "run_toy_sifter":
-        run_toy_sifter_command(args)
-    elif args.command == "run_fake_xengine":
-        run_fake_xengine_command(args)
-    else:
-        atomic_print(f"Command '{args.command}' not recognized", fd=2)
+    # Every leaf parser set its own handler (parser.set_defaults(func=...) in each parse_*),
+    # so there is no dispatch table to keep in step with the parsers. A group parser sets no
+    # 'func' of its own, but its subparsers are required=True, so argparse has already errored
+    # out before we get here if the user typed a bare group name.
+    #
+    # The getattr guard is for the one way this can go wrong: a new parse_*() that adds a
+    # subcommand but forgets its set_defaults(func=...). Without it that is a bare
+    # AttributeError on 'args.func' with no hint of the cause. It cannot be triggered by
+    # anything a USER types.
+    func = getattr(args, "func", None)
+    if func is None:
+        atomic_print(f"Internal error: subcommand '{parser.prog} {' '.join(sys.argv[1:])}'"
+                     " has no handler. Its parse_*() function is missing a"
+                     " parser.set_defaults(func=...) call.", fd=2)
         sys.exit(2)
+    func(args)
 
 
 if __name__ == '__main__':

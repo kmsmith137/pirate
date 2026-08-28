@@ -207,7 +207,7 @@ We require $C_R=1$, i.e.~we always search the full frequency band.
 The case $C_l=\{1\}$ (with $R=0$) corresponds to disabling subbands, and only searching the full band.
 \item The details of this scheme, including the ``specialness'' of level $l=0$, are
 dictated by convenience in the GPU kernel.
-\item To {\em interpret} the $C_l$ already in a config file, run \verb|pirate_frb show_dedisperser -cv|.
+\item To {\em interpret} the $C_l$ already in a config file, run \verb|pirate_frb show dedisperser -cv|.
 For example, for $C_l=[5,9,7,3,1]$ this prints:
 \begin{verbatim}
 # In this config, there are 25 top-level frequency subband(s):
@@ -219,8 +219,8 @@ For example, for $C_l=[5,9,7,3,1]$ this prints:
 #   pf_level=3: [416.0,1500.0], [344.1,566.9], [300.0,416.0]
 #   pf_level=4: [300.0,1500.0]
 \end{verbatim}
-\item To {\em create} a $C_l$ array with a given max $\Delta(\log \nu)$, run \verb|pirate_frb make_subbands|.
-For example, \verb|pirate_frb make_subbands 300 1500 0.1 -r 4| gives $C_l=[5,9,7,3,1]$.
+\item To {\em create} a $C_l$ array with a given max $\Delta(\log \nu)$, run \verb|pirate_frb dev make_subbands|.
+For example, \verb|pirate_frb dev make_subbands 300 1500 0.1 -r 4| gives $C_l=[5,9,7,3,1]$.
 These subbands are shown visually in Figure \ref{fig:subbands}.
 \end{itemize}
 \begin{figure}
@@ -581,7 +581,7 @@ e &= {\tt early\_trigger\_level}  & \mbox{ (``earliness'' of trigger)} \nn \\
 T_{\rm ds} &= {\tt time\_downsampling} & \mbox{ (time coarse-graining factor in peak-finding kernel)} \nn \\
 D_{\rm ds} &= {\tt dm\_downsampling}   & \mbox{ (dm coarse-graining factor, denoted $2^{R+K}$ in \S\ref{sec:peak_finding})} \nn
 \end{align}
-These parameters can be inspected with \verb|pirate_frb show_dedisperser -v|, and are also
+These parameters can be inspected with \verb|pirate_frb show dedisperser -v|, and are also
 passed from pirate to the grouper via the \verb|dedispersion_plan| yaml metadata.
 
 {\bf Warning.} Unfortunately, it's not currently possible to choose the coarse-graining factors

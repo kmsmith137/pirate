@@ -9,7 +9,7 @@ is framed near t=0 (via undispersed_arrival_time_sec) so the zero-based dense ar
 
 The test is APPROXIMATE and is not expected to pass to machine precision. It PRINTS the correlation
 coefficient and residual for the operator to interpret; it does not raise. Run it via
-'python -m pirate_frb test_simpulse'.
+'python -m pirate_frb dev test_simpulse'.
 """
 
 import numpy as np

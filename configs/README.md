@@ -8,10 +8,10 @@ documentation snapshots (do not edit them by hand; regenerate by running
 `make`):
 
 - `example_asdf_header.yml`
-  (`python -m pirate_frb show_file_format configs/xengine_metadata.yml`)
+  (`python -m pirate_frb show file_format configs/xengine_metadata.yml`)
   -- the verbose ASDF YAML header emitted by `AssembledFrame::write_asdf()`.
 - `example_dedispersion_plan.yml`
-  (`python -m pirate_frb show_dedisperser -v -a configs/dedispersion/chord_sb2_et.yml`)
+  (`python -m pirate_frb show dedisperser -v -a configs/dedispersion/chord_sb2_et.yml`)
   -- the dedispersion plan (`dedispersion_plan_yaml`) that the FRB search sends
   to the grouper at gRPC-handshake time. Use `-c` to also show the config and
   `-t` for plan-construction timing; the default output is reproducible.
@@ -20,13 +20,13 @@ documentation snapshots (do not edit them by hand; regenerate by running
   downsampling levels, peak-finding parameters, batching, etc.). Used by several
   subcommands, most directly:
 
-  - `pirate_frb show_dedisperser [-v] [-c] configs/dedispersion/chime.yml`
+  - `pirate_frb show dedisperser [-v] [-c] configs/dedispersion/chime.yml`
     -- parse and pretty-print the plan (add `-c` to also print the config).
   - `pirate_frb time_dedisperser [-n NITER] configs/dedispersion/chime.yml`
     -- run GPU timing benchmarks.
 
-  They are also the second positional argument to `run_server` (see below), and are
-  consumed by `run_offline_dedisperser` and `varmap mc`.
+  They are also the second positional argument to `pirate_frb run server` (see below), and
+  are consumed by `pirate_frb run offline_dedisperser` and `varmap mc`.
 
   `toy.yml` is a subscale config for quick testing; the remaining files are
   production-scale configs for CHIME and CHORD (with subband/early-trigger variants).
@@ -38,8 +38,8 @@ documentation snapshots (do not edit them by hand; regenerate by running
   host+GPU memory pools, ring buffer length, file-writing threads, SSD/NFS paths). Used by:
 
   ```
-  pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml   # start server
-  pirate_frb run_fake_xengine 127.0.0.1:6000   # send fake X-engine data
+  pirate_frb run server configs/frb_server/toy.yml configs/dedispersion/toy.yml   # start server
+  pirate_frb run fake_xengine 127.0.0.1:6000   # send fake X-engine data
   ```
 
   `toy.yml` runs a single server on loopback for local testing; `toy2.yml` is the
@@ -50,8 +50,8 @@ documentation snapshots (do not edit them by hand; regenerate by running
   (network I/O, SSD writes, GPU dedispersion, PCIe and memory bandwidth). Used by:
 
   ```
-  pirate_frb hwtest [-t SECONDS] configs/hwtest/cf00_all.yml    # receive side
-  pirate_frb hwtest -s configs/hwtest/cf00_all.yml               # send side
+  pirate_frb dev hwtest [-t SECONDS] configs/hwtest/cf00_all.yml    # receive side
+  pirate_frb dev hwtest -s configs/hwtest/cf00_all.yml               # send side
   ```
 
   Each file enables a different subset of loads (e.g. `cf00_net.yml` for
@@ -68,10 +68,10 @@ documentation snapshots (do not edit them by hand; regenerate by running
   1. It documents the metadata YAML string that each X-engine node sends at the
      start of a TCP stream to an FRB search node (see notes/network_protocol.md).
   2. It is the input from which the `example_asdf_header.yml` documentation
-     snapshot is generated (`pirate_frb show_file_format configs/xengine_metadata.yml`).
+     snapshot is generated (`pirate_frb show file_format configs/xengine_metadata.yml`).
 
   To inspect:
 
   ```
-  pirate_frb show_xengine_metadata [-v] configs/xengine_metadata.yml
+  pirate_frb show xengine_metadata [-v] configs/xengine_metadata.yml
   ```

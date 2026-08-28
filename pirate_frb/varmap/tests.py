@@ -113,7 +113,7 @@ def _random_config(rng=None, **kwargs):
     structural property -- it forwards to make_random() and returns whatever comes back. If a
     test needs a structure the draw does not always supply (an early trigger, a
     non-contiguous multiplet map, more than one primary tree), the fix is in the TEST -- guard
-    the assertion and report the count -- not here. 'pirate_frb coverage' is where those rates
+    the assertion and report the count -- not here. 'pirate_frb dev coverage' is where those rates
     are tracked. Adding constraint keywords to this function would put the filtering back and
     is the thing to resist.
 
@@ -861,7 +861,7 @@ def test_estimate_distance(r=8, subband_counts=(2,2,1)):
     # is a mean over FINE rows -- so a plain mean over sampled groups would be biased. That
     # only has teeth when the sizes actually differ, which needs N > 1 -- true in ~63% of
     # draws. GUARDED AND REPORTED rather than asserted: demanding it of a single drawn config
-    # is the tripwire pattern notes/unit_tests.md item 8 sends to 'pirate_frb coverage'.
+    # is the tripwire pattern notes/unit_tests.md item 8 sends to 'pirate_frb dev coverage'.
     sizes = approx.group_sizes()
     weighted = bool(sizes.min() != sizes.max())
 
@@ -2858,7 +2858,7 @@ def test_basis_constructors(r=None, subband_counts=None, K=4):
     assert np.allclose(sized.basis(K), W_greedy), 'the default tree is not the sized one'
     # 'sized differs from group-blind' has teeth only when the group sizes actually differ,
     # which needs a level > 0 subband (N > 1). GUARDED AND REPORTED: it is a property of the
-    # drawn geometry, not of the code, and 'pirate_frb coverage' tracks the rate.
+    # drawn geometry, not of the code, and 'pirate_frb dev coverage' tracks the rate.
     sized_matters = bool(ref.group_sizes().max() > ref.group_sizes().min())
     # ... and even then the two merges can coincide when the clustering is forced (few
     # groups, or a spectrum with no ties to break). Report rather than assert.
@@ -3278,7 +3278,7 @@ def test_base_varmap_coarse(r=7, subband_counts=(2,2,1), num_early_triggers=1,
     iteration, so an '-n 100' run draws 100 configs and 100 L values rather than revisiting
     a fixed seven. The geometry those corners pinned is drawn here at measured rates --
     _random_config() draws gpu_valid, which is what reaches R = 0 (True only) and
-    C_0 == 0 (False only) -- and 'pirate_frb coverage' tracks them.
+    C_0 == 0 (False only) -- and 'pirate_frb dev coverage' tracks them.
     """
 
     from ..pirate_pybind11 import DedispersionConfig
@@ -3377,7 +3377,7 @@ def test_base_varmap_coarse(r=7, subband_counts=(2,2,1), num_early_triggers=1,
     # n_rm > 0, so neither can be demanded of one config. They used to be assertions because
     # this test ran once per invocation over a fixed seven-config list; now it runs per
     # iteration on a sampled corner plus a random draw, so the outer loop supplies the
-    # coverage and 'pirate_frb coverage' tracks the rates. A run whose counts are all zero is
+    # coverage and 'pirate_frb dev coverage' tracks the rates. A run whose counts are all zero is
     # visible in the line below.
 
     if verbose:
@@ -3659,7 +3659,7 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
 
     # n_varying and n_et are REPORTED, not asserted. Both are emergent properties of
     # make_random() (a varying max_width at 27-38% per draw, an early trigger at 30-38%), so
-    # they cannot be demanded of any single config; 'pirate_frb coverage' tracks the rates,
+    # they cannot be demanded of any single config; 'pirate_frb dev coverage' tracks the rates,
     # and the counts below make a thin run recognizable as thin.
 
     # ---- THE WEIGHT MUST NOT REACH THE SdMatrix ROWS. This is the one failure mode the
@@ -4699,7 +4699,7 @@ def test_apply_restriction(r=6, subband_counts=(4,2,1), num_primary_trees=2,
     # 'nontrivial' is REPORTED, not asserted: a non-contiguous multiplet map needs the
     # restriction to clamp a level that still has populated levels above it, which is
     # emergent at ~10% per draw and cannot be demanded of one config. Over an '-n 100' run it
-    # is exercised ~10 times, and 'pirate_frb coverage' tracks the rate.
+    # is exercised ~10 times, and 'pirate_frb dev coverage' tracks the rate.
 
     atomic_print(f'    test_apply_restriction(npri={npri},'
                  f' npri={num_primary_trees}, net={num_early_triggers},'

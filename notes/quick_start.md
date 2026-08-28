@@ -16,20 +16,20 @@ To run the full sequence (fake X-engine) -> (FRB search) -> (grouper) -> (sifter
 run the following commands in separate terminal windows.
 ```
 # Window 1: start the sifter (waits for grouper to connect)
-pirate_frb run_toy_sifter 127.0.0.1:7500
+pirate_frb run toy_sifter 127.0.0.1:7500
 
 # Window 2: start the grouper (waits for search to connect)
-pirate_frb run_toy_grouper -s 127.0.0.1:7500 127.0.0.1:7000
+pirate_frb run toy_grouper -s 127.0.0.1:7500 127.0.0.1:7000
 
 # Window 3: start the search (waits for fake X-engine to connect)
-pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml
+pirate_frb run server configs/frb_server/toy.yml configs/dedispersion/toy.yml
 
 # Window 4: start the fake X-engine.
 # Data will start streaming through all 4 processes.
 # The -f flag randomly simulates FRBs.
 # The -g GAP_SEC flag puts a time gap between simulated FRBs.
 # The -s SIFTER_ADDR flag sends an event to the sifter for each simulated FRB.
-pirate_frb run_fake_xengine -f -g 30 -s 127.0.0.1:7500 127.0.0.1:6000
+pirate_frb run fake_xengine -f -g 30 -s 127.0.0.1:7500 127.0.0.1:6000
 
 # Optional: in window 5, send RPC "status" requests to the server.
 # This will monitor connections, files written, and ring buffer state.
@@ -62,7 +62,7 @@ These event streams are distinguished by the `from_simulator` flag
 
 Note that you don't need to run this entire sequence every time!
 The programs above have command-line args to "short-circuit" the downstream programs.
-(For example, `pirate_frb run_server --no-grouper` or `pirate_frb run_toy_grouper --no-sifter`.)
+(For example, `pirate_frb run server --no-grouper` or `pirate_frb run toy_grouper --no-sifter`.)
 
 To end a run, Ctrl-C the last process (in this case, the toy sifter).
 Errors will cascade backwards, and all processes will stop (with error messages).
@@ -77,13 +77,13 @@ are two grouper processes (one per GPU), each of which independently connects
 to the sifter.
 ```
 # Window 1 (cf05): start the sifter (waits for grouper to connect)
-pirate_frb run_toy_sifter 10.222.3.5:7500
+pirate_frb run toy_sifter 10.222.3.5:7500
 
 # Window 2 (cf05): start the grouper (waits for search to connect)
-pirate_frb run_toy_grouper -s 10.222.3.5:7500 127.0.0.1:7000 127.0.0.1:7001
+pirate_frb run toy_grouper -s 10.222.3.5:7500 127.0.0.1:7000 127.0.0.1:7001
 
 # Window 3 (cf05): start the search (waits for fake X-engine to connect)
-pirate_frb run_server configs/frb_server/cf05_production.yml configs/dedispersion/chord_sb2_et.yml
+pirate_frb run server configs/frb_server/cf05_production.yml configs/dedispersion/chord_sb2_et.yml
 
 # NOTE: you'll need to wait ~60 seconds before starting the fake x-engine,
 # while the production-scale server initializes. When it's ready, you'll see:
@@ -93,7 +93,7 @@ pirate_frb run_server configs/frb_server/cf05_production.yml configs/dedispersio
 # Data will start streaming through all 4 processes.
 # The -f flag randomly simulates FRBs.
 # The -s SIFTER_ADDR flag sends an event to the sifter for each simulated FRB.
-pirate_frb run_fake_xengine -f -s 10.222.3.5:7500 10.222.3.5:6000 10.222.3.5:6001
+pirate_frb run fake_xengine -f -s 10.222.3.5:7500 10.222.3.5:6000 10.222.3.5:6001
 
 # Optional: window 5 (either cf00 or cf05): send RPC "status" requests to the server.
 # This will monitor connections, files written, and ring buffer state.
@@ -126,12 +126,12 @@ Here are some example runs, based on `start_stream` acquisitions from the sectio
 (which included simulated FRBs):
 ```
 # Toy acquisition (note: your acqdir will be different)
-pirate_frb run_offline_dedisperser \
+pirate_frb run offline_dedisperser \
    ~/pirate_toy/toy_stream_26_07_07_123508 \
    configs/dedispersion/toy.yml
 
 # "Production" acquisition (note: your acqdir will be different)
-pirate_frb run_offline_dedisperser \
+pirate_frb run offline_dedisperser \
     /mnt/cs00/data/kmsmith/prod_stream_26_07_07_155938 \
     configs/dedispersion/chord_sb2.yml
 ```

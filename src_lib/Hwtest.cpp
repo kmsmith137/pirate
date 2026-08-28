@@ -557,7 +557,7 @@ struct TcpReceiver : Hwtest::Worker
 
     virtual void worker_accept_connections()
     {
-        AtomicPrint() << worker_name << ": listening for TCP connections. Reminder: use 'pirate_frb hwtest -s <config.yml>' to send data";
+        AtomicPrint() << worker_name << ": listening for TCP connections. Reminder: use 'pirate_frb dev hwtest -s <config.yml>' to send data";
 
         this->data_sockets.resize(num_tcp_connections);
         this->listening_socket.listen();

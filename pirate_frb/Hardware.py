@@ -15,7 +15,7 @@ class Hardware:
 
     Used when starting the real-time server, to decide which hardware to associate
     with each FrbServer instance. This is all currently done from python. To dump
-    what it discovers on the current machine, run 'pirate_frb show_hardware'.
+    what it discovers on the current machine, run 'pirate_frb show hardware'.
 
     The constructor takes no arguments and does no work: every accessor is cached
     (functools.cached_property for the no-argument ones, functools.cache for the

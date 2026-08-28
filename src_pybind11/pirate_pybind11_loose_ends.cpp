@@ -38,10 +38,10 @@ void register_loose_ends_bindings(pybind11::module &m)
     m.def("test_gpu_transpose", &test_gpu_transpose, py::call_guard<py::gil_scoped_release>());
     m.def("test_gpu_reduce2", &test_gpu_reduce2, py::call_guard<py::gil_scoped_release>());
 
-    // Called by 'python -m pirate_frb scratch'. Defined in src_lib/utils.cu.
+    // Called by 'python -m pirate_frb dev scratch'. Defined in src_lib/utils.cu.
     m.def("scratch", &scratch);
 
-    // Called by 'python -m pirate_frb revisit_512gb'. Defined in src_lib/utils.cpp.
+    // Called by 'python -m pirate_frb dev revisit_512gb'. Defined in src_lib/utils.cpp.
     m.def("revisit_512gb_inner", &revisit_512gb_inner,
           py::arg("nbytes"), py::arg("use_hugepages"),
           py::call_guard<py::gil_scoped_release>());   // minutes: mmap/prefault + cudaHostRegister

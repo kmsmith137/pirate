@@ -16,7 +16,7 @@ namespace pirate {
 #endif
 
 
-// Called by 'python -m pirate_frb scratch'. Intended for quick throwaway tests.
+// Called by 'python -m pirate_frb dev scratch'. Intended for quick throwaway tests.
 void scratch()
 {
     uint host_map[256];

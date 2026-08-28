@@ -230,7 +230,7 @@ void safe_memcpy_g2h_async(void *dst, const void *src, long nbytes,
 
 // -------------------------------------------------------------------------------------------------
 //
-// revisit_512gb_inner(): diagnostic for the 'pirate_frb revisit_512gb'
+// revisit_512gb_inner(): diagnostic for the 'pirate_frb dev revisit_512gb'
 // subcommand. mmap nbytes, prefault if 4 KiB pages, attempt a single
 // cudaHostRegister(), report. Returns true if the register call
 // succeeded.

@@ -36,7 +36,7 @@
 #     /proc/PID/stat is therefore treated as exited.
 #   - 'pgrep -f pirate' matches the watcher's own command line. Children are
 #     found via 'pgrep -P' (parent pid) instead, which cannot self-match --
-#     this is how the production run's two run_toy_grouper children, which
+#     this is how the production run's two 'run toy_grouper' children, which
 #     have no pidfile of their own, get tracked.
 #
 # Afterwards, checks that the resources actually came back (HugePages_Free
@@ -88,7 +88,7 @@ for pf in "$LOG"/*.pid; do
     [ -n "$p" ] || continue
     names+=("$n"); pids+=("$p")
 
-    # One level of children is enough for run_toy_grouper, but recurse anyway.
+    # One level of children is enough for 'run toy_grouper', but recurse anyway.
     kids=$(pgrep -P "$p" 2>/dev/null || true)
     depth=0
     while [ -n "$kids" ] && [ $depth -lt 4 ]; do

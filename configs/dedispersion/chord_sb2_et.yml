@@ -9,7 +9,7 @@
 
 # Overrideable params: frequency channels, time sample length, number of beams.
 # In a fully "production" context, these parameters get overridden by the real-time X-engine.
-# In testing contexts (e.g. fake X-engine, 'pirate_frb show_dedisperser' / 'time_dedisperser')
+# In testing contexts (e.g. fake X-engine, 'pirate_frb show dedisperser' / 'time_dedisperser')
 # these parameters are used "as is".
 
 zone_freq_edges: [300, 350, 450, 600, 800, 1500]
@@ -23,7 +23,7 @@ time_samples_per_chunk: 2048
 
 # Frequency subbands are specified as an integer-valued array. This array
 # corresponds to 25 subbands. For details/plots, see notes/dedispersion.tex.
-# Command line: pirate_frb make_subbands 300 1500 0.1 -r 4
+# Command line: pirate_frb dev make_subbands 300 1500 0.1 -r 4
 
 frequency_subband_counts: [5,9,7,3,1]
 

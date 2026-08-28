@@ -1,6 +1,6 @@
 """Coverage analysis of the randomization utilities the unit tests draw from.
 
-NOT A TEST: nothing here asserts. It is a diagnostic, reached as 'pirate_frb coverage', and
+NOT A TEST: nothing here asserts. It is a diagnostic, reached as 'pirate_frb dev coverage', and
 it answers one question -- how often does a randomized unit test actually get the structure
 it needs? Several tests in pirate_frb.varmap draw configs from
 DedispersionConfig::make_random() and REPORT rather than assert what they covered, precisely

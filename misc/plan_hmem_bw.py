@@ -8,7 +8,7 @@ def show_plan(dd_yml, nfreq, ts, nbeams, dd_hmem_bw):
     """
     
     ssd_bw = 6.5                # assumed throughout
-    ssd_hmem_bw = 5 * ssd_bw    # empirical, based on 'pirate_frb hwtest configs/hwtest/cf00_asdf.yml'
+    ssd_hmem_bw = 5 * ssd_bw    # empirical, based on 'pirate_frb dev hwtest configs/hwtest/cf00_asdf.yml'
 
     gsamples_per_sec = 1.0e-9 * nbeams * nfreq / ts
     net_gbps = gsamples_per_sec * (1056 / 256)   # 1056 bits per 256 time samples
@@ -24,7 +24,7 @@ def show_plan(dd_yml, nfreq, ts, nbeams, dd_hmem_bw):
     print(f'  {net_hmem_bw = :.02f}   # 5 read-write cycles assumed')
     print(f'  {ds_hmem_bw = :.02f}    # assumes telescoping ring buffer')
     print(f'  {dd_hmem_bw = :.02f}    # from "pirate_frb time_dedisperser {dd_yml}"')
-    print(f'  {ssd_hmem_bw = :.02f}   # empirical, based on "pirate_frb hwtest configs/hwtest/cf00_asdf.yml"')
+    print(f'  {ssd_hmem_bw = :.02f}   # empirical, based on "pirate_frb dev hwtest configs/hwtest/cf00_asdf.yml"')
     print(f'  {total_hmem_bw = :.02f}')
 
 

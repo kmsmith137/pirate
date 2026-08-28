@@ -326,7 +326,7 @@ void register_core_bindings(pybind11::module &m)
             "If verbose=True, emit comments throughout the YAML header. The\n"
             "comments are detailed enough that the header serves as self-\n"
             "contained documentation of the file format. Intended for use\n"
-            "with 'pirate_frb show_file_format'.")
+            "with 'pirate_frb show file_format'.")
         .def_static("make_uninitialized", &AssembledFrame::make_uninitialized,
             py::arg("xmd"), py::arg("ntime"), py::arg("beam_id"), py::arg("time_chunk_index"),
             py::call_guard<py::gil_scoped_release>(),   // pinned-host (cudaHostAlloc-scale) allocations
@@ -784,7 +784,7 @@ void register_core_bindings(pybind11::module &m)
         "    FrequencySubbands()                            # full-band only\n"
         "    FrequencySubbands(subband_counts)              # e.g. [5,9,7,3,1]\n"
         "    FrequencySubbands(subband_counts, fmin, fmax)  # optional fmin/fmax in MHz\n\n"
-        "    # Same subbands as 'pirate_frb make_subbands FMIN FMAX THRESH -r PF_RANK'\n"
+        "    # Same subbands as 'pirate_frb dev make_subbands FMIN FMAX THRESH -r PF_RANK'\n"
         "    FrequencySubbands.from_threshold(fmin, fmax, threshold, pf_rank=4)")
           // Constructors
           .def(py::init<>())  // default constructor
@@ -1320,7 +1320,7 @@ void register_core_bindings(pybind11::module &m)
     // Skipped methods: make_worker_metadata, worker_main, _worker_main, _send_all (private)
     py::class_<FakeXEngine, std::shared_ptr<FakeXEngine>>(m, "FakeXEngine",
         "Simulates multiple upstream X-engine nodes sending data to a receiver.\n\n"
-        "The command-line utility 'pirate_frb run_fake_xengine' is intended to be the\n"
+        "The command-line utility 'pirate_frb run fake_xengine' is intended to be the\n"
         "main interface to the fake X-engine code, and uses this class under the hood\n"
         "(paired with a SimulatedFrameFactory, which supplies the simulated data).\n"
         "Use the class directly only if you need something the CLI does not expose.\n\n"
@@ -1820,7 +1820,7 @@ void register_core_bindings(pybind11::module &m)
         "Includes network receive code, dedispersion, an RPC server for monitoring and\n"
         "file-writing callbacks, and the endpoint for communication with the downstream\n"
         "grouper. The grouper itself is a separate process, not part of the FrbServer.\n\n"
-        "The command-line utility 'pirate_frb run_server' is intended to be the main\n"
+        "The command-line utility 'pirate_frb run server' is intended to be the main\n"
         "interface to the FRB search server, and uses this class under the hood (it\n"
         "builds the allocator/Receiver constructor chain, then hands the pieces to\n"
         "FrbServer). Use the class directly only if you need something the CLI does\n"

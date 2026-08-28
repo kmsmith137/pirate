@@ -45,7 +45,7 @@ message ConfigMessage {
   uint32 protocol_version = 1;
 
   // Currently, we initialize all 5 of these fields in the main search, but when
-  // we send simulated events with 'pirate_frb run_fake_xengine -f -s ...', fields
+  // we send simulated events with 'pirate_frb run fake_xengine -f -s ...', fields
   // other than 'xengine_yaml' are empty strings (-> yaml null).
   
   string pirate_yaml = 2;

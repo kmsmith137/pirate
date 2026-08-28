@@ -55,7 +55,7 @@ can slip in between).
   `test_pulse_upsampling.py`'s `atomic_print(self)` reached a commit.
 
 - The single syscall is what makes a line unsplittable across PROCESSES
-  sharing an fd -- `run_toy_grouper` spawns one child per grouper address,
+  sharing an fd -- `pirate_frb run toy_grouper` spawns one child per grouper
   all inheriting the parent's stdout, and no in-process lock can help
   there. The mutex covers everything in-process.
 

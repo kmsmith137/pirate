@@ -47,7 +47,7 @@ struct FrequencySubbands
     //
     //   - To disable subbands, and only search the full frequency band, set subband_counts = {1}.
     //
-    //   - The command 'python -m pirate_frb make_subbands FMIN FMAX THRESHOLD [-r PF_RANK]'
+    //   - The command 'python -m pirate_frb dev make_subbands FMIN FMAX THRESHOLD [-r PF_RANK]'
     //     may be useful for constructing new subband_counts: it calls from_threshold()
     //     and prints the result via show().
     //

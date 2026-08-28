@@ -1,4 +1,4 @@
-"""Implementation of 'pirate_frb run_fake_xengine' subcommand."""
+"""Implementation of 'pirate_frb run fake_xengine' subcommand."""
 
 import time
 import threading
@@ -24,7 +24,7 @@ from .utils import atomic_print
 
 
 class RunFakeXEngineHelper:
-    """Encapsulates state and logic for 'pirate_frb run_fake_xengine'.
+    """Encapsulates state and logic for 'pirate_frb run fake_xengine'.
 
     Constructed once per invocation; call .run() to drive the full
     lifecycle (Phase 1: per-receiver GetConfig + FakeXEngine; Phase 2:
@@ -578,7 +578,7 @@ class RunFakeXEngineHelper:
 def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, normalized=True,
                      gaussian=True, send_junk=False, simulate_frbs=False, sifter_addr=None,
                      frb_gap_sec=0.0, frb_snr=30.0):
-    """Main entry point for 'pirate_frb run_fake_xengine'.
+    """Main entry point for 'pirate_frb run fake_xengine'.
 
     For each rpc_addr in rpc_addrs, sends a GetConfig RPC, synthesizes an
     XEngineMetadata, runs the MTU + NIC-CPU consistency checks, and spawns

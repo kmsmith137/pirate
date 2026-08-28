@@ -3,10 +3,10 @@
 # See cf05_production.yml for more info on file format.
 #
 # To start the server (SSD/NFS dirs are created automatically):
-#   pirate_frb run_server configs/frb_server/toy2.yml configs/dedispersion/toy.yml
+#   pirate_frb run server configs/frb_server/toy2.yml configs/dedispersion/toy.yml
 #
 # To send fake X-engine data (in a separate terminal):
-#   pirate_frb run_fake_xengine 127.0.0.1:6000
+#   pirate_frb run fake_xengine 127.0.0.1:6000
 
 
 ########################################  General config  ########################################
@@ -35,7 +35,7 @@ rpc_ip_addrs:
 
 # FrbGrouper address (one per server). The FrbServer is the gRPC *client*; the
 # grouper (downstream consumer) is the server. Must be loopback (CUDA IPC
-# requires same node/GPU). Run with 'run_server -G' to disable.
+# requires same node/GPU). Run with 'pirate_frb run server -G' to disable.
 grouper_ip_addrs:
   - '127.0.0.1:7000'
 

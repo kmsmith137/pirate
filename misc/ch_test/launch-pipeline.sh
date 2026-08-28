@@ -24,7 +24,7 @@
 #   marker   substring to wait for in THIS process's log before launching
 #            the next one (fixed string, not a regex)
 #   count    how many times the marker must appear (2 for a two-grouper
-#            production run, where run_toy_grouper forks one child per
+#            production run, where 'run toy_grouper' forks one child per
 #            address; 1 otherwise)
 #   timeout  seconds to wait for the marker before giving up (the
 #            production server needs ~60 s to allocate its memory pools)
@@ -32,11 +32,11 @@
 #
 # Blank lines and lines starting with '#' are ignored. Example:
 #
-#   sifter  | waiting for grouper(s) to connect | 1 |  30 | pirate_frb run_toy_sifter 127.0.0.1:7500
-#   grouper | waiting for FrbServer to connect  | 1 |  30 | pirate_frb run_toy_grouper -s 127.0.0.1:7500 127.0.0.1:7000
-#   server  | server(s) started                 | 1 |  90 | pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml
-#   xengine | FakeXEngine(s) running            | 1 |  30 | pirate_frb run_fake_xengine -f -g 30 -s 127.0.0.1:7500 127.0.0.1:6000
-#   rpc_status | Running get_status             | 1 |  30 | pirate_frb rpc_status 127.0.0.1:6000
+#   sifter  | waiting for grouper(s) to connect | 1 |  30 | pirate_frb run toy_sifter 127.0.0.1:7500
+#   grouper | waiting for FrbServer to connect  | 1 |  30 | pirate_frb run toy_grouper -s 127.0.0.1:7500 127.0.0.1:7000
+#   server  | server(s) started                 | 1 |  90 | pirate_frb run server configs/frb_server/toy.yml configs/dedispersion/toy.yml
+#   xengine | FakeXEngine(s) running            | 1 |  30 | pirate_frb run fake_xengine -f -g 30 -s 127.0.0.1:7500 127.0.0.1:6000
+#   rpc_status | Running get_status             | 1 |  30 | pirate_frb rpc status 127.0.0.1:6000
 #
 # While waiting for any marker, EVERY log in LOGDIR is watched for errors, so
 # a startup failure is reported immediately instead of hanging the poll until

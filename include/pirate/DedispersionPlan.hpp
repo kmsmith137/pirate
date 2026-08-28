@@ -41,7 +41,7 @@ struct DedispersionPlan
     // callers that drive kernels themselves without going through cdd2 -- see
     // varmap.brute_force._GpuSweep, which runs GpuDedispersionKernel,
     // GpuSbDedispersionKernel and GpuPfSquare -- as well as in host-only contexts such
-    // as the 'pirate_frb show_dedisperser' CLI.
+    // as the 'pirate_frb show dedisperser' CLI.
     //
     // Not to be confused with the config-level 'gpu_valid' flag in
     // DedispersionConfig::make_random(), which restricts random configs to precompiled

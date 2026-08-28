@@ -3,7 +3,7 @@
 ## Creating a grpc server
 
 Checklist for ANY new grpc server, C++ or python (all three existing servers --
-FrbServer's RPC service, FrbGrouper, run_toy_sifter -- follow it):
+FrbServer's RPC service, FrbGrouper, `pirate_frb run toy_sifter` -- follow it):
 
 1. **Disable SO_REUSEPORT.** grpc's default on Linux is ON, which lets two grpc
    servers bind the SAME port: both binds "succeed", and the kernel silently

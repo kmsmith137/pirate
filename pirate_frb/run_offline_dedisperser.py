@@ -15,7 +15,7 @@ built from scratch, and for each of that beam's time chunks the driver:
 
 and prints the peak SNR of each chunk (one beam+chunk pair per line).
 
-Run via: python -m pirate_frb run_offline_dedisperser ACQDIR CONFIG [--max-chunks N]
+Run via: python -m pirate_frb run offline_dedisperser ACQDIR CONFIG [--max-chunks N]
 """
 from .utils import atomic_print
 

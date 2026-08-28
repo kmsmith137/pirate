@@ -1,4 +1,4 @@
-"""Implementation of 'pirate_frb run_server' subcommand."""
+"""Implementation of 'pirate_frb run server' subcommand."""
 
 import os
 import re
@@ -314,7 +314,7 @@ def _validate_hardware(config, hw):
 
 
 class RunServerHelper:
-    """Encapsulates state and logic for 'pirate_frb run_server'.
+    """Encapsulates state and logic for 'pirate_frb run server'.
 
     Constructed once per invocation; call .run() to drive the full
     lifecycle (config parsing happens in __init__; hardware checks,
@@ -441,7 +441,7 @@ class RunServerHelper:
                 # _print_help_lines omits the grouper line -- once the servers are
                 # running, the grouper is necessarily already up), then re-raise.
                 grouper_addrs = ' '.join(self.config['grouper_ip_addrs'])
-                atomic_print(f"\nTo start toy grouper(s):  pirate_frb run_toy_grouper (-s SIFTER_ADDR | -S) {grouper_addrs}\n\n")
+                atomic_print(f"\nTo start toy grouper(s):  pirate_frb run toy_grouper (-s SIFTER_ADDR | -S) {grouper_addrs}\n\n")
                 raise
 
         # Phase 2: wait for all 2 * num_servers async BumpAllocators to
@@ -631,7 +631,7 @@ class RunServerHelper:
 
     def _print_help_lines(self):
         rpc_addrs = ' '.join(self.config['rpc_ip_addrs'])
-        atomic_print(f"\nTo send fake data to server(s):     pirate_frb run_fake_xengine {rpc_addrs}")
+        atomic_print(f"\nTo send fake data to server(s):     pirate_frb run fake_xengine {rpc_addrs}")
         atomic_print(f"To monitor status:                    pirate_frb rpc status {rpc_addrs}")
         atomic_print(f"To write random data:                 pirate_frb rpc rand_write {rpc_addrs}")
         atomic_print(f"To stream data (all beams, 60 sec):   pirate_frb rpc start_stream -B -d 60 {rpc_addrs}")
@@ -665,7 +665,7 @@ class RunServerHelper:
 def run_server(server_config_filename, dedispersion_config_filename,
                processing_delay_sec=0.0, no_grouper=False,
                no_dedispersion=False, quiet=False):
-    """Main entry point for 'pirate_frb run_server'.
+    """Main entry point for 'pirate_frb run server'.
 
     processing_delay_sec (default 0): artificial per-frame delay (seconds)
     injected by the FrbServer processing thread. Used to simulate slow

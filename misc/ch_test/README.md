@@ -58,10 +58,10 @@ S=/tmp/sweep                       # scratch; anything untracked
 mkdir -p $S/logs && touch $S/sweep-start
 
 cat > $S/toy.plan <<'EOF'
-sifter     | waiting for grouper(s) to connect | 1 | 30 | pirate_frb run_toy_sifter 127.0.0.1:7500
-grouper    | waiting for FrbServer to connect  | 1 | 30 | pirate_frb run_toy_grouper -s 127.0.0.1:7500 127.0.0.1:7000
-server     | server(s) started                 | 1 | 90 | pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml
-xengine    | FakeXEngine(s) running            | 1 | 30 | pirate_frb run_fake_xengine -f -g 30 -s 127.0.0.1:7500 127.0.0.1:6000
+sifter     | waiting for grouper(s) to connect | 1 | 30 | pirate_frb run toy_sifter 127.0.0.1:7500
+grouper    | waiting for FrbServer to connect  | 1 | 30 | pirate_frb run toy_grouper -s 127.0.0.1:7500 127.0.0.1:7000
+server     | server(s) started                 | 1 | 90 | pirate_frb run server configs/frb_server/toy.yml configs/dedispersion/toy.yml
+xengine    | FakeXEngine(s) running            | 1 | 30 | pirate_frb run fake_xengine -f -g 30 -s 127.0.0.1:7500 127.0.0.1:6000
 rpc_status | Running get_status                | 1 | 30 | pirate_frb rpc status 127.0.0.1:6000
 EOF
 
@@ -72,7 +72,7 @@ misc/ch_test/launch-pipeline.sh $S/toy.plan $S/logs &      # blocks; run in back
 
 misc/ch_test/check-cascade.sh $S/logs sifter
 misc/ch_test/check-logs.py --logdir $S/logs --cascade --acqdir toy_stream_...
-pirate_frb run_offline_dedisperser ~/pirate_toy/toy_stream_... configs/dedispersion/toy.yml > $S/dedisp.log
+pirate_frb run offline_dedisperser ~/pirate_toy/toy_stream_... configs/dedispersion/toy.yml > $S/dedisp.log
 misc/ch_test/check-truth.py --xengine-log $S/logs/xengine.log --dedisp-log $S/dedisp.log \
                             --beam 10 --freq-lo 400 --freq-hi 800
 ```

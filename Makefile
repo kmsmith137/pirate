@@ -619,13 +619,13 @@ build_sdist: sdist_files.txt
 # Auto-generated snapshot of the verbose ASDF YAML header emitted by
 # AssembledFrame::write_asdf(). Checked into git and included in the Sphinx docs.
 configs/example_asdf_header.yml: configs/xengine_metadata.yml $(PIRATE_PYEXT) $(PIRATE_LIB) $(GRPC_PYFILES)
-	$(PYTHON) -m pirate_frb show_file_format $< > $@
+	$(PYTHON) -m pirate_frb show file_format $< > $@
 
 # Auto-generated snapshot of 'show_dedisperser -v -a' run on a representative
 # dedispersion config. Checked into git and included in the Sphinx docs.
 # (-a: emit the authoritative registry Dcore values, not host-only defaults.)
 configs/example_dedispersion_plan.yml: configs/dedispersion/chord_sb2_et.yml $(PIRATE_PYEXT) $(PIRATE_LIB) $(GRPC_PYFILES)
-	$(PYTHON) -m pirate_frb show_dedisperser -v -a $< > $@
+	$(PYTHON) -m pirate_frb show dedisperser -v -a $< > $@
 
 # Symlink {include,lib} into python directory 'pirate_frb'.
 pirate_frb/include:

@@ -63,7 +63,7 @@ struct constants
     // Timeouts.
     //
     //   - poll_cadence: low-level polling (e.g. for catching control-C)
-    //   - print_cadence: monitoring print-statements (e.g. pirate_frb run_rpc_status)
+    //   - print_cadence: monitoring print-statements (e.g. pirate_frb rpc status)
     //   - shutdown_timeout: joining threads/processes, waiting for SIGTERM/SIGKILL
     //   - grpc_reconnect_backoff: client-side reconnection cadence
     //   - grpc_forced_shutdown_deadline: server-side shutdown time (recommend short)

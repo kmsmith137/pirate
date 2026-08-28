@@ -342,7 +342,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "        GpuDedisperser -- but it is still usable on the GPU by callers that drive\n"
                "        kernels themselves without going through cdd2 (see\n"
                "        varmap.brute_force._GpuSweep), and in host-only contexts such as\n"
-               "        the 'pirate_frb show_dedisperser' CLI.")
+               "        the 'pirate_frb show dedisperser' CLI.")
           .def_readonly("config", &DedispersionPlan::config,
                "The DedispersionConfig used to create this plan")
           .def_readonly("dtype", &DedispersionPlan::dtype,
@@ -410,7 +410,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "cdd2_kernel_required=False): per-tree Dcore values are defaults rather than cdd2\n"
                "kernel-registry values, so the plan cannot be used in a GpuDedisperser. It can\n"
                "still be used on the GPU without cdd2 (see varmap.brute_force._GpuSweep),\n"
-               "and in host-only contexts such as the 'pirate_frb show_dedisperser' CLI.")
+               "and in host-only contexts such as the 'pirate_frb show dedisperser' CLI.")
     ;
 
     // Returned by GpuDedisperser.acquire_output(). Must be registered

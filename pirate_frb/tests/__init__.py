@@ -1,6 +1,6 @@
 # Unit tests for pirate_frb
 
-# Not a test -- a diagnostic, reached as 'pirate_frb coverage'. See its module docstring.
+# Not a test -- a diagnostic, reached as 'pirate_frb dev coverage'. See its module docstring.
 from .coverage import report_coverage
 
 from .test_assembled_frame_allocator import test_assembled_frame_allocator

@@ -49,7 +49,7 @@ struct DedispersionConfig
     //
     // Note: these are the 'top-level' frequency subbands; fewer subbands may be searched in 
     // individual trees. To see which subbands are searched in which trees, use the command
-    // 'python -m pirate_frb show_dedisperser --verbose <config.yml>'.
+    // 'python -m pirate_frb show dedisperser --verbose <config.yml>'.
 
     std::vector<long> frequency_subband_counts;
 
@@ -212,7 +212,7 @@ struct DedispersionConfig
     // Test that frequency_to_index/index_to_frequency and delay_to_frequency/frequency_to_delay
     // are inverses of each other, by sampling random values and checking endpoints.
     // Called by 'python -m pirate_frb test --dd' (special iteration-0 logic in __main__.py).
-    // Also called by 'python -m pirate_frb show_dedisperser ...'.
+    // Also called by 'python -m pirate_frb show dedisperser ...'.
     void test() const;
 
     // Emit C++ code to initialize this DedispersionConfig.

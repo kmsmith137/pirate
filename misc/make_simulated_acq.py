@@ -6,7 +6,7 @@ Generates a single-beam sequence of AssembledFrames (one per time chunk), fills
 each with calibrated Gaussian noise plus a simulated FRB whose parameters you
 specify, and writes them as '.asdf' files in the acqdir layout that
 pirate_frb.Acquisition expects. The output can be fed straight to
-'pirate_frb run_offline_dedisperser'.
+'pirate_frb run offline_dedisperser'.
 
 The frame geometry -- frequency channelization, timekeeping, and per-zone noise
 variance -- comes from an xengine_metadata yaml (e.g. configs/xengine_metadata.yml),
