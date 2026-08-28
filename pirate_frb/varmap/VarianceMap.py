@@ -324,7 +324,7 @@ class VarianceMap:
       without it. None means "unavailable", and get_distance() raises rather than guessing.
 
     Note that this class is deliberately NOT built on the ``PfAvar*`` / ``TmpVmap*`` classes
-    of pirate_frb.slow_avar, which were a first pass at the same idea.
+    of the deleted pirate_frb.slow_avar, which were a first pass at the same idea.
     """
 
     # Rows per block for the 1-d walks over alpha (y_true, row labels, per-row distances).
@@ -2497,7 +2497,7 @@ class VarianceMap:
         the distance, whereas admissibility is elementwise domination, where nothing divides
         by y_true and a floor would only weaken the guarantee.
 
-        The consequence is a real difference from the superseded slow_avar.VarMapDistance,
+        The consequence is a real difference from the superseded VarMapDistance,
         which skipped a row below the floor for max_r as well as for D0. The two disagree on
         exactly one case: a ref row that is positive but sums below the floor, where self is
         zero. That needs an approximation that is exactly zero where ref is not, which a

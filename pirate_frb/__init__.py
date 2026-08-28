@@ -27,7 +27,6 @@ from . import casm
 from . import kernels
 from . import loose_ends
 from . import core
-from . import slow_avar
 from . import varmap
 from . import rpc  # noqa: F401  (RPC client/server classes; also applies FrbGrouper injections)
 

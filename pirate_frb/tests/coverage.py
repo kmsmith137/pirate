@@ -45,20 +45,25 @@ def report_coverage():
                                       has populated levels ABOVE it; see point 3 of the long
                                       comment in makefile_helper.py. Was 0% on the gpu_valid
                                       path until (4,2,1) was stocked there.
-      a straddled entry               test_base_varmap_vs_analytic, and fast_avar's
+      a straddled entry               test_multimap_vs_sweep, and fast_varmap's
                                       test_cpp_detrender_free. The half-aligned branch in
                                       SdPlan, 1 row in 645 on toy.yml and 13 in 14383 over
                                       random draws -- so a C++ port that never took the
                                       branch would move the answer by ~0.1% and could pass a
                                       loose comparison. Measured 22% of draws have at least
-                                      one, which is what gives that test its teeth.
-      xdm_rank > 0 in some tree       test_base_varmap_vs_analytic. Nothing in varmap READS
+                                      one, which is what gives that test its teeth. In the
+                                      python the branch cannot be skipped silently at all:
+                                      detrender_free.py's unconditional 'assert dbits ==
+                                      SparseTile._predict_dbits(...)' fires first, which is
+                                      what that assert is there for.
+      xdm_rank > 0 in some tree       test_multimap_vs_sweep. Nothing in varmap READS
                                       K, but K > 0 is precisely where 2^(r-R) and ndm_out
                                       diverge, so it is the only case where a row count taken
                                       from the wrong one is visible.
-      R == 0                          test_base_varmap_vs_analytic. Degenerate subband
-                                      geometry: N = M = 1, no coarse DM axis to speak of.
-      nfreq < 2^r                     test_base_varmap_vs_analytic. The production-like
+      R == 0                          test_multimap_vs_sweep, test_base_varmap_coarse.
+                                      Degenerate subband geometry: N = M = 1, no coarse DM
+                                      axis to speak of.
+      nfreq < 2^r                     test_multimap_vs_sweep. The production-like
                                       regime -- chord_sb2_et.yml grids 28160 channels onto
                                       65536 tree-freqs -- and the one that widens footprints.
       N > 1 (group sizes differ)      test_estimate_distance, test_basis_constructors. D is a

@@ -1,16 +1,21 @@
-"""Tests comparing the fast_avar C++ ports against their python references.
+"""Tests comparing the fast_varmap C++ ports against their python references.
 
-TWO REFERENCES, because the C++ in src_lib/varmap.cpp ports two things -- and they are dispatched
-from DIFFERENT test flags, each one next to the python it guards:
+TWO LAYERS, both ported in src_lib/varmap.cpp, both dispatched from 'pirate_frb test --varmap'
+next to the python they guard:
 
-  - pirate_frb.slow_avar, under 'test --avar' (see pirate_frb/__main__.py): the convolver, the
-    gridding+iterate sweep (which exercises SparseTile), a direct PfVariance check, and the
-    end-to-end PfAvarApproximation.tree_variance. A few key methods, not every method, per the
-    design.
-  - pirate_frb.varmap.detrender_free, under 'test --varmap' (see varmap/tests.py run_all(), which
-    is where the call lives): compute_detrender_free_varfine() and _varcoarse(). The python is
-    fully tested in its own right by test_varfine(), so the ONLY thing needed on this side is that
-    the two agree -- and whoever edits detrender_free.py, the reference, runs '--varmap'.
+  - the primitives of pirate_frb/varmap/{SparseTile,PfVarianceConvolver}.py: the convolver and
+    the gridding+iterate sweep (which exercises SparseTile), plus predict_dbits. A few key
+    methods, not every method, per the design. Dispatched by varmap/tests.py's
+    run_primitive_tests().
+  - pirate_frb.varmap.detrender_free: compute_detrender_free_varfine() and _varcoarse(). The
+    python is tested in its own right by test_varfine() and against the brute-force sweep by
+    test_multimap_vs_sweep(), so the ONLY thing needed on this side is that the two agree.
+    Dispatched from varmap/tests.py's run_all().
+
+BOTH SIDES OF EVERY COMPARISON HERE ARE LIVE CODE. The python primitives are what
+detrender_free.py runs (and hence what 'pirate_frb varmap df' runs, since
+compute_detrender_free_base_map() has no C++ equivalent); the C++ is what the real-time server
+runs via GpuDedisperser::_fill_analytic_weights(). This is not an old-vs-new comparison.
 
 Tolerances: cross-language float results are NOT bit-exact (numpy uses pairwise/vectorized
 summation, and BLAS for matmuls; the C++ uses sequential loops), so we use np.allclose tolerances
@@ -19,9 +24,10 @@ what it measures.
 """
 import numpy as np
 
-from .. import slow_avar
+from ..varmap import SparseTile as py_SparseTile
+from ..varmap import SparseTileTriple as py_SparseTileTriple
+from ..varmap import PfVarianceConvolver as py_PfVarianceConvolver
 from . import (SparseTile, SparseTileTriple, PfVarianceConvolver,
-               PfVariance, PfAvarApproximation,
                compute_detrender_free_varfine, compute_detrender_free_varcoarse)
 
 
@@ -33,7 +39,7 @@ def _allclose(a, b, rtol=1e-9, atol=1e-12):
 
 def test_cpp_convolver():
     """C++ PfVarianceConvolver vs python: Pmax, Tmax, A table, and variance(x, P)."""
-    py = slow_avar.PfVarianceConvolver()
+    py = py_PfVarianceConvolver()
     cpp = PfVarianceConvolver()
 
     assert cpp.Pmax == py.Pmax, (cpp.Pmax, py.Pmax)
@@ -65,10 +71,10 @@ def test_cpp_sparse_tile_triple():
     Exercises make_tree_gridding_output, slice, iterate_aligned, iterate_singletons (+lower/upper),
     remap_d, eval_tshifts transitively.
     """
-    cm, ifreq = slow_avar.SparseTileTriple.random_channel_map()
+    cm, ifreq = py_SparseTileTriple.random_channel_map()
     cm = np.ascontiguousarray(cm, dtype=np.float64)
 
-    py = slow_avar.SparseTileTriple.make_tree_gridding_output(cm, ifreq)
+    py = py_SparseTileTriple.make_tree_gridding_output(cm, ifreq)
     cpp = SparseTileTriple.make_tree_gridding_output(cm, ifreq)
     r = py.r
     nsteps = int(np.random.randint(0, r + 1))
@@ -107,82 +113,17 @@ def test_cpp_predict_dbits():
         for f0 in range(0, 1 << 7):
             for nf in range(1, (1 << 7) - f0 + 1):
                 got = SparseTile.predict_dbits(kmax, f0, nf)     # bound under the C++ name
-                want = slow_avar.SparseTile._predict_dbits(kmax, f0, nf)
+                want = py_SparseTile._predict_dbits(kmax, f0, nf)
                 assert got == want, (kmax, f0, nf, got, want)
                 ncases += 1
     assert ncases == 57792, ncases     # tripwire: the sweep must not silently shrink
 
     for _ in range(10000):
-        kmax, f0, nf = slow_avar.SparseTile._random_predict_dbits_args(nf_max=1 << 40,
+        kmax, f0, nf = py_SparseTile._random_predict_dbits_args(nf_max=1 << 40,
                                                                       sum_max=1 << 41)
         got = SparseTile.predict_dbits(kmax, f0, nf)
-        want = slow_avar.SparseTile._predict_dbits(kmax, f0, nf)
+        want = py_SparseTile._predict_dbits(kmax, f0, nf)
         assert got == want, (kmax, f0, nf, got, want)
-
-
-def _make_cpp_tile(t):
-    # Build a C++ SparseTile equivalent to a python SparseTile 't'.
-    return SparseTile(int(t.r), int(t.k), int(t.f0), int(t.nf), int(t.nt), int(t.dbits),
-                      np.ascontiguousarray(t.data, dtype=np.float64),
-                      np.ascontiguousarray(t.tshifts, dtype=np.int64),
-                      int(t.t0), float(t.scale))
-
-
-def test_cpp_pf_variance():
-    """C++ PfVariance vs python: from_tile + unpack, and add() with scale / upper_half."""
-    py_conv = slow_avar.PfVarianceConvolver()
-    cpp_conv = PfVarianceConvolver()
-    Pmax = py_conv.Pmax
-
-    k = int(np.random.randint(1, 6))                  # k >= 1 for the upper-half case
-    t = slow_avar.SparseTile.make_random(k, k, 0, 1)  # singleton, rank k
-    ct = _make_cpp_tile(t)
-    P = int(np.random.randint(1, Pmax + 1))
-
-    py_pv = slow_avar.PfVariance.from_tile(t, P, py_conv)
-    cpp_pv = PfVariance.from_tile(ct, P, cpp_conv)
-    assert _allclose(cpp_pv.unpack(int(t.dbits)), py_pv.unpack(int(t.dbits))), "from_tile mismatch"
-
-    # add() with profile-truncation + scale (no upper_half).
-    P1 = int(np.random.randint(1, P + 1))
-    c = float(np.random.uniform(0.5, 2.0))
-    py_a = slow_avar.PfVariance(k, P1); py_a.add(py_pv, scale=c)
-    cpp_a = PfVariance(k, P1);          cpp_a.add(cpp_pv, scale=c)
-    db = py_a.get_all_dbits()
-    assert _allclose(cpp_a.unpack(db), py_a.unpack(db)), "add(scale) mismatch"
-
-    # add() with upper_half: rank k -> k-1.
-    py_b = slow_avar.PfVariance(k - 1, P1); py_b.add(py_pv, upper_half=True, scale=c)
-    cpp_b = PfVariance(k - 1, P1);          cpp_b.add(cpp_pv, upper_half=True, scale=c)
-    db = py_b.get_all_dbits()
-    assert _allclose(cpp_b.unpack(db), py_b.unpack(db)), "add(upper_half) mismatch"
-
-
-def test_cpp_pf_avar_approximation():
-    """End-to-end: C++ PfAvarApproximation.tree_variance vs python, on a small random plan.
-
-    Run once (it builds a plan and runs the full python reference sweep), not every iteration.
-    """
-    from ..pirate_pybind11 import DedispersionConfig, DedispersionPlan
-
-    # gpu_valid=False / cdd2_kernel_required=False: PfAvarApproximation is pure-CPU (tree
-    # structure + channel map only), so neither the config nor the plan needs a precompiled
-    # cdd2 kernel for the rank.
-    config = DedispersionConfig.make_random(max_toplevel_rank=5, max_early_triggers=2, gpu_valid=False)
-    config.validate()
-    plan = DedispersionPlan(config, cdd2_kernel_required=False)
-    fv = np.asarray(config.make_random_freq_variances(noisy=True), dtype=np.float64)
-
-    py = slow_avar.PfAvarApproximation(plan, fv)
-    cpp = PfAvarApproximation(plan, fv)
-
-    assert cpp.ntrees == plan.ntrees, (cpp.ntrees, plan.ntrees)
-    for itree in range(plan.ntrees):
-        got = np.asarray(cpp.tree_variance[itree])
-        want = py.tree_variance[itree]
-        assert got.shape == want.shape, (itree, got.shape, want.shape)
-        assert _allclose(got, want, rtol=1e-9, atol=1e-12), \
-            (itree, got.shape, float(np.abs(got - want).max()))
 
 
 def test_cpp_detrender_free(verbose=False):

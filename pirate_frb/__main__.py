@@ -20,12 +20,9 @@ from . import kernels
 from . import loose_ends
 from . import core
 from . import tests
-from . import slow_avar
 from . import varmap
-from .fast_avar import PfAvarApproximation, test_fast_avar
+from .fast_varmap import compute_detrender_free_varcoarse
 
-from .slow_avar import (SparseTile, SparseTileTriple, SparseTilePerM, PfVarianceConvolver,
-                        PfVariance)
 
 from . import (
     DedispersionConfig,
@@ -123,7 +120,6 @@ def parse_test(subparsers):
     parser.add_argument('--casm', action='store_true', help='Runs some casm tests')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
-    parser.add_argument('--avar', action='store_true', help='Runs tests related to analytic variance')
     parser.add_argument('--varmap', action='store_true', help="pirate_frb.varmap. Two halves, both run by this flag: everything checkable WITHOUT a dedisperser (the VarianceMap class, the covering-LP and basis machinery, and the analytic map of detrender_free.py against a hand-written oracle), and the brute-force sweep, which pushes a one-hot through the REAL dedisperser once per input channel and checks the analytic map against what comes out. Needs a DedispersionPlan and a GPU for the second half.")
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_{beamform,upchan}()')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
@@ -156,7 +152,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'avar', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
 
     seed = draw_random_seed() if args.randomize_seed else args.seed
@@ -287,31 +283,6 @@ def test(args):
             for _ in rrange(kernels.CoalescedDdKernel2):
                 GpuDedisperser.test_random()
         
-        if run_all_tests or args.avar:
-            SparseTileTriple.test_random_tree_gridding()
-            SparseTile.test_random_iterate_aligned()
-            SparseTile.test_random_iterate_singletons()
-            SparseTile.test_random_specialize_dbits()
-            SparseTile.test_random_remap_d()
-            SparseTile.test_random_scale()
-            SparseTilePerM.test_random_subbanded_dedispersion()
-            PfVarianceConvolver.test_reduces_to_norms()
-            PfVarianceConvolver.test_random_variance()
-            PfVariance.test_add_truncate_upper_half()
-            SparseTile.test_random_predict_dbits()
-            if i == 0:  # deterministic (no randomness); run once
-                PfVarianceConvolver.test_kernels_match_reference()
-                PfVarianceConvolver.test_unimodality()
-
-            # fast_avar: C++ ports compared against the slow_avar python reference.
-            test_fast_avar.test_cpp_convolver()
-            test_fast_avar.test_cpp_sparse_tile_triple()
-            test_fast_avar.test_cpp_pf_variance()
-            if i == 0:  # 57792-case exhaustive sweep + 10000 wide random draws; run once
-                test_fast_avar.test_cpp_predict_dbits()
-            if i == 0:  # end-to-end (builds a plan + runs the full python reference); run once
-                test_fast_avar.test_cpp_pf_avar_approximation()
-
         if run_all_tests or args.varmap:
             # run_tests() owns the cadences -- which group runs once per invocation, which
             # every iteration, which every tenth. That is a property of the tests, so it
@@ -375,51 +346,6 @@ def test_simpulse(args):
     from .simpulse import test_pulse_upsampling, plot_pulses
     test_pulse_upsampling.run_tests(args.niter)
     plot_pulses.make_plots()
-
-
-#################################   check_avar_approximation command  ###############################
-
-
-def parse_check_avar_approximation(subparsers):
-    help_text = "Compare exact vs approximate analytic peak-finding variance for a config"
-    parser = subparsers.add_parser("check_avar_approximation", help=help_text, description=help_text)
-    parser.add_argument('config_file', help="Path to dedispersion YAML config file")
-    parser.add_argument('-r', '--random-variances', action='store_true',
-                        help="Use random per-channel variances (config.make_random_freq_variances) instead of all-ones")
-
-
-def check_avar_approximation(args):
-    config = DedispersionConfig.from_yaml(args.config_file)
-    config.validate()
-    plan = DedispersionPlan(config)
-    freq_variances = config.make_random_freq_variances(noisy=True) if args.random_variances else None
-    slow_avar.check_approximation(plan, freq_variances)
-
-
-#################################   check_avar_mc command  ###############################
-
-
-def parse_check_avar_mc(subparsers):
-    help_text = "Monte-Carlo check of analytic peak-finding variance vs a ReferenceDedisperser"
-    parser = subparsers.add_parser("check_avar_mc", help=help_text, description=help_text)
-    parser.add_argument('config_file', help="Path to dedispersion YAML config file")
-    parser.add_argument('-r', '--random-variances', action='store_true',
-                        help="Use random per-channel input variances (config.make_random_freq_variances) instead of all-ones")
-    parser.add_argument('-s', '--sophistication', type=int, default=1,
-                        help="ReferenceDedisperser sophistication (0, 1, or 2; default 1)")
-
-
-def check_avar_mc(args):
-    config = DedispersionConfig.from_yaml(args.config_file)
-    atomic_print(f"check_avar_mc: forcing nbeams=1 (config had beams_per_gpu={config.beams_per_gpu}, "
-                 f"beams_per_batch={config.beams_per_batch})")
-    config.beams_per_gpu = 1
-    config.beams_per_batch = 1
-    config.num_active_batches = 1
-    config.validate()
-    plan = DedispersionPlan(config)
-    freq_variances = config.make_random_freq_variances(noisy=True) if args.random_variances else None
-    slow_avar.check_avar_mc(plan, sophistication=args.sophistication, freq_variances=freq_variances)
 
 
 ####################################   varmap subcommands  ##########################################
@@ -595,8 +521,8 @@ def _parse_channel_spec(spec, nfreq):
 
 # Config keys that this tool overrides, with the value it forces, because the sweep requires
 # them (see varmap.brute_force._SweepGeometry). Each is safe to override because neither can
-# change A: the analytic PfAvarExact computes the same matrix and never reads any downsampling
-# factor.
+# change A: the analytic route (varmap.detrender_free) computes the same matrix and never
+# reads any downsampling factor.
 #
 # Note 'time_downsampling' is NOT forced. It sets the peak-finder's Dcore, which the sweep
 # never sees -- it ends in a PfSquare, which evaluates h_p at every time sample -- so leaving
@@ -1416,7 +1342,7 @@ def parse_show_dedisperser(subparsers):
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
     parser.add_argument('-c', '--config', action='store_true', help="Also print the DedispersionConfig, with a separator, before the plan (by default only the plan is printed, matching the dedispersion_plan_yaml sent to the grouper)")
-    parser.add_argument('-t', '--time', action='store_true', help="Also print how long DedispersionPlan and C++ PfAvarApproximation construction took (non-deterministic lines; off by default so the output is reproducible)")
+    parser.add_argument('-t', '--time', action='store_true', help="Also print how long DedispersionPlan construction and the C++ compute_detrender_free_varcoarse() took (non-deterministic lines; off by default so the output is reproducible)")
     parser.add_argument('-z', '--zones', action='store_true', help="Include the per-clag mega_ringbuf host/gpu zone breakdown (independent of -v, which controls comments)")
     parser.add_argument('-s', '--streams', type=int, help="Override config.num_active_batches with specified value")
     parser.add_argument('-b', '--beams', type=int, help="Override config.beams_per_gpu with specified value")
@@ -1474,14 +1400,17 @@ def show_dedisperser(args):
     plan_dt = time.time() - t0
     if args.time:
         atomic_print(f'# DedispersionPlan construction took {plan_dt:.3f} seconds\n\n')
-        # Also time the C++ PfAvarApproximation build from the plan (uses unit input variances;
-        # the construction time is independent of the variance values).
+        # Also time the C++ compute_detrender_free_varcoarse(). This is what the real-time
+        # server pays on every weight update: GpuDedisperser::_fill_analytic_weights() calls
+        # it, so the number below is the one that matters operationally. (Uses unit input
+        # variances -- the running time does not depend on the values. Note it takes the
+        # CONFIG, not the plan.)
         import numpy as np
         freq_variances = np.ones(int(plan.nfreq), dtype=np.float64)
         t0 = time.time()
-        PfAvarApproximation(plan, freq_variances)
+        compute_detrender_free_varcoarse(config, freq_variances)
         avar_dt = time.time() - t0
-        atomic_print(f'# C++ PfAvarApproximation construction took {avar_dt:.3f} seconds\n\n')
+        atomic_print(f'# C++ compute_detrender_free_varcoarse() took {avar_dt:.3f} seconds\n\n')
     plan_yaml = plan.to_yaml_string(args.verbose, args.zones)
     if args.verbose:
         plan_yaml = indent_dedispersion_plan_comments(plan_yaml)
@@ -2536,8 +2465,6 @@ def get_parser():
     
     parse_test(subparsers)
     parse_test_simpulse(subparsers)
-    parse_check_avar_approximation(subparsers)
-    parse_check_avar_mc(subparsers)
     parse_varmap(subparsers)
     parse_time(subparsers)
     parse_time_dedisperser(subparsers)
@@ -2616,10 +2543,6 @@ def main():
         test(args)
     elif args.command == "test_simpulse":
         test_simpulse(args)
-    elif args.command == "check_avar_approximation":
-        check_avar_approximation(args)
-    elif args.command == "check_avar_mc":
-        check_avar_mc(args)
     elif args.command == "varmap":
         varmap_command(args)
     elif args.command == "time":

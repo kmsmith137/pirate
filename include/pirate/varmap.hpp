@@ -18,34 +18,34 @@ namespace pirate {
 #endif
 
 
-// C++ port of (a subset of) pirate_frb/slow_avar/SparseTile.py and
-// pirate_frb/slow_avar/PfVariance.py. See those files and notes/variance_map.tex for the math.
-// Only the subset reachable from PfAvarApproximation is ported (plus the test-only unpack()
-// methods); PfAvarExact and the test-only python methods are not.
+// C++ port of (a subset of) pirate_frb/varmap/. See those files and notes/variance_map.tex,
+// appendix "Analytic variances from sparse tiles", for the math.
 //
 // Contents, in dependency order:
 //
-//    SparseTile, SparseTileTriple        (port of slow_avar/SparseTile.py)
-//    PfVarianceConvolver, PfVariance     (port of slow_avar/PfVariance.py)
-//    PfAvarApproximation                 (port of slow_avar/PfVariance.py)
+//    SparseTile, SparseTileTriple        (port of varmap/SparseTile.py)
+//    PfVarianceConvolver                 (port of varmap/PfVarianceConvolver.py)
 //    SdPlan, compute_detrender_free_*    (port of varmap/detrender_free.py, and of the two
 //                                         free functions it needs from varmap/VarianceMap.py
 //                                         and varmap/VarianceMultiMap.py)
 //
-// SO THE FILE HOLDS TWO LAYERS, and they are at different stages of the same story.
+// SO THE FILE HOLDS TWO LAYERS, and the lower one is what the upper is built on: SdPlan's tile
+// pass is SparseTileTriple::iterate(), and its rows come from PfVarianceConvolver::variance().
 //
-// The PfAvar* classes, together with the python TmpVmap* classes built from them, were a first
-// pass at representing a variance map, written before we settled on the VarianceMap
-// representation (notes/variance_map.tex, section "The variance map"). They are left unchanged
-// for now, and are deliberately outside it. We may revisit them later.
+// compute_detrender_free_varfine() / compute_detrender_free_varcoarse() give the analytic,
+// detrender-free variance vector of every tree of a config, ported from pirate_frb/varmap/ for
+// speed (roughly 15.9 seconds -> under a second at chord_sb2_et.yml). varcoarse() is what the
+// real-time server runs, from GpuDedisperser::_fill_analytic_weights().
 //
-// SdPlan and compute_detrender_free_varfine() / compute_detrender_free_varcoarse() are the
-// current path: the analytic, detrender-free variance vector of every tree of a config, ported
-// from pirate_frb/varmap/ for speed (roughly 15.9 seconds -> under a second at
-// chord_sb2_et.yml). The python is the reference, and stays so -- pirate_frb.varmap keeps the
-// python implementation, pirate_frb.fast_avar exposes this one, and a unit test asserts they
-// agree. The lower layer is what the upper one is built on: SdPlan's tile pass is
-// SparseTileTriple::iterate(), and its rows come from PfVarianceConvolver::variance().
+// THE PYTHON IS THE REFERENCE, AND STAYS SO. pirate_frb.varmap keeps the python
+// implementation -- which is not merely a reference: compute_detrender_free_base_map(), the
+// 'pirate_frb varmap df' path, has no C++ equivalent -- pirate_frb.fast_varmap exposes this
+// one, and pirate_frb/fast_varmap/test_fast_varmap.py asserts the two agree.
+//
+// Only the subset the above needs is ported, plus the test-only unpack() methods. Not ported:
+// SparseTilePerM, SparseTile::specialize_dbits(), the python's own test helpers, and (as of the
+// pirate_frb.slow_avar deletion) the PfVariance / PfAvarExact / PfAvarApproximation classes,
+// which were an older analytic route to the same numbers.
 
 
 // -------------------------------------------------------------------------------------------------
@@ -123,7 +123,7 @@ struct SparseTile
 };
 
 
-// C++ port of (a subset of) pirate_frb/slow_avar/SparseTile.py's SparseTileTriple. Represents a
+// C++ port of (a subset of) pirate_frb/varmap/SparseTile.py's SparseTileTriple. Represents a
 // (2^(r-k), 2^k, ntime) array over a contiguous f-range [f0, f0+nf) as 1..3 SparseTiles (the first
 // and last f-index can carry a smaller sparsity pattern than the bulk).
 
@@ -169,7 +169,7 @@ struct SparseTileTriple
 
 // -------------------------------------------------------------------------------------------------
 //
-// PfVarianceConvolver, PfVariance, PfAvarApproximation
+// PfVarianceConvolver
 
 
 // Converts time series to variances, after convolving with the first P peak-finding kernels.
@@ -188,86 +188,6 @@ struct PfVarianceConvolver
     // (1,S,nt), squeezed). d = min(nt, Tmax[P-1]). The python variance() is more general (arbitrary
     // spectator dims); this is the specialized 2-D form (fast: bare pointers, stack temporary).
     void variance(const double *x, long S, long nt, long P, double *out) const;
-};
-
-
-// Represents a variance array var[d, p] (delay 0 <= d < 2^rank, profile 0 <= p < P), stored as a
-// small sum of terms each depending on d through only a few bits. Mirrors python PfVariance.
-
-struct PfVariance
-{
-    long rank = 0;
-    long P = 0;
-
-    // A term: an (2^popcount(dbits), P) row-major array keyed by the bitmask 'dbits'.
-    struct Term {
-        long dbits;
-        std::vector<double> arr;
-    };
-    std::vector<Term> terms;      // few entries; looked up by linear scan (python uses a dict)
-
-    PfVariance() = default;
-    PfVariance(long rank, long P);
-
-    long get_all_dbits() const;                       // bitwise-OR of all term keys
-
-    // Expand every term to (2^popcount(dbits), P) and return their sum. 'dbits' must be a superset
-    // of every term's dbits. Used in production (the PfAvarApproximation final reduction).
-    ksgpu::Array<double> unpack(long dbits) const;
-
-    // Compute the variance of a singleton SparseTile and accumulate it into this object.
-    void add_tile(const SparseTile &t, const PfVarianceConvolver &conv);
-
-    // Accumulate (scale * src) into this object. If upper_half, accumulate src's upper delay-half
-    // (fix the top delay bit to 1 and drop it). Requires src.rank == rank + (upper_half?1:0) and
-    // src.P >= P (extra profiles in src are discarded).
-    void add(const PfVariance &src, bool upper_half = false, double scale = 1.0);
-
-    static PfVariance from_tile(const SparseTile &t, long P, const PfVarianceConvolver &conv);
-
-    // Accumulate scale * src[row_off + i, 0:P] into term[dbits][i, 0:P] for i in [0, nrows).
-    // src is row-major with row stride src_P (>= P). nrows must equal 2^popcount(dbits).
-    void accumulate(long dbits, const double *src, long row_off, long nrows, long src_P, double scale);
-};
-
-
-// Approximate analytic peak-finding variances for a DedispersionPlan (all DedispersionTrees).
-// Mirrors python PfAvarApproximation, but computes ONLY the tree_variance[] arrays (per_tff is
-// dropped; per_tf is kept as a member). See the python docstring for the approximation.
-
-class PfAvarApproximation
-{
-public:
-    long nfreq = 0;
-    long ntrees = 0;
-
-    // Output: one array per tree, tree_variance[itree] has shape (N, 2^(r-L), P), where:
-    //    r = tree rank = config.toplevel_tree_rank - et_level - (ipri>0 ? 1 : 0)
-    //    2^L = tree.pf.wt_dm_downsampling
-    //    N = frequency_subbands.N
-    // Note that the shape can also be written as (N, tree.ndm_wt, P).
-    std::vector<ksgpu::Array<double>> tree_variance;
-
-    // Per-frequency-summed accumulators, kept as a member (per python request).
-    // per_tf[itree][f] is a rank-(r-L) PfVariance, f in [0, 2^R).
-    std::vector<std::vector<PfVariance>> per_tf;
-
-    PfAvarApproximation(const std::shared_ptr<DedispersionPlan> &plan, const ksgpu::Array<double> &freq_variances);
-
-private:
-    PfVarianceConvolver convolver;     // shared full kernel bank; sliced per-tree by P
-
-    // Per-tree scalars (length ntrees).
-    std::vector<long> tree_r, tree_R, tree_L, tree_P, tree_ipri, tree_N, tree_klevel;
-    std::vector<std::vector<long>> tree_n_to_flo, tree_n_to_fhi;
-
-    std::vector<double> freq_variances_vec;   // (nfreq,)
-    std::vector<double> channel_map;          // plan.config.make_channel_map(), length 2^toplevel_tree_rank+1
-
-    long max_klevel = 0;
-    std::vector<long> klevel_Pmax, klevel_Lmax;   // max P (or L) among trees at a given klevel
-
-    void process_klevel(const SparseTileTriple &sarr, long k, long ifreq);
 };
 
 
@@ -290,7 +210,7 @@ private:
 //
 // The python remains the reference implementation and is fully tested (varmap/tests.py,
 // test_varfine()). The only test on this side asserts that the two agree; see
-// pirate_frb/fast_avar/test_fast_avar.py.
+// pirate_frb/fast_varmap/test_fast_varmap.py.
 
 
 // Everything except the lift, for the base tree of 'config'. Mirrors python class SdPlan.
@@ -321,8 +241,8 @@ public:
     // 'ifreq' is a field and not merely the loop variable that produced it: the tile pass walks the
     // flat plan and needs it to rebuild the channel's gridding triple. The sbits half of 'sdbits'
     // may have several bits set -- ONE tile computation and ONE convolution serve every subband
-    // that sees the same [lo, hi), which is where this algorithm's advantage over the
-    // per-multiplet route of PfAvarApproximation comes from.
+    // that sees the same [lo, hi), which is where this algorithm's advantage over a
+    // per-multiplet route comes from.
     struct UnstraddledEntry {
         long ifreq;
         long lo, hi;          // tree-freq range, already intersected with the subband

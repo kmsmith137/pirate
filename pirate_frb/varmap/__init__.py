@@ -4,12 +4,12 @@
 # the brute-force sweep, the analytic (detrender-free) map of the base tree, the multimap of
 # every primary tree derived from it, the map-free per-tree evaluation of A v that shares its
 # tile pass, the file format, and the 'pirate_frb varmap' CLI (subcommands 'bf' and 'df').
-# pirate_frb.slow_avar now holds only the older analytic (PfAvarExact / TmpVmap)
-# machinery and the SparseTile primitives it is built on. Two things here reach into it:
-# detrender_free.py, which is built on the SparseTile primitives, and tests.py, which uses
-# PfAvarExact's inner loop as an independent oracle for both the sweep and
-# detrender_free.py. Both import from the LEAF modules rather than the slow_avar package,
-# to avoid dragging in check_mc / check_approximation.
+# SparseTile.py and PfVarianceConvolver.py are the low-level primitives detrender_free.py
+# is built on: the compressed representation of a one-hot's dedispersion output, and the
+# table that turns a time series into peak-finding output variances. They came from the
+# deleted pirate_frb.slow_avar, which held an older analytic route (PfAvarExact / TmpVmap*)
+# to the same numbers; see notes/variance_map.tex, "Analytic variances from sparse tiles",
+# and src_lib/varmap.cpp for the C++ port that production runs.
 #
 # NOTE THE FILE FORMAT: asdf_io.py's format is not the older one that predates this package.
 # The reader refuses an old-format file by name rather than misreading it, and nothing can
@@ -20,6 +20,8 @@
 # parent's ROWS, so it is derived rather than stored -- see VarianceMultiMap, and the
 # appendix "Variance maps of a config's trees are row-restrictions of one another" in
 # notes/variance_map.tex.
+from .SparseTile import SparseTile, SparseTileTriple
+from .PfVarianceConvolver import PfVarianceConvolver
 from .distance import YTRUE_FLOOR, f, fprime, AdmissibilityResult, DistanceEstimate
 from .VarianceMap import VarianceMap, coarse_grain_vector
 from .VarianceMultiMap import (VarianceMultiMap, restrict_fine_vector,

@@ -4,11 +4,15 @@ TWO HALVES OF ONE JOB, both run by 'python -m pirate_frb test --varmap':
 
   - IS THE VARIANCE-MAP CODE RIGHT? Everything checkable WITHOUT running a dedisperser: the
     VarianceMap class (indexing, coarse-graining, distance, factorization, file format), the
-    covering-LP and basis machinery, and the ANALYTIC map of detrender_free.py against a
-    hand-written oracle. This is run_once() and run_all().
+    covering-LP and basis machinery, and the STRUCTURE of the analytic map of
+    detrender_free.py -- its per-group factorization, its coarse construction against
+    coarse_grain(), and its internal consistency. This is run_once() and run_all().
   - IS THE ANALYTIC MAP TRUE? Push a one-hot through the REAL dedisperser once per input
     channel, measure the variance that comes out, and compare. This is run_sweep_tests(),
-    and it is why the flag needs a DedispersionPlan and a GPU.
+    and it is why the flag needs a DedispersionPlan and a GPU. Since pirate_frb.slow_avar
+    was deleted this is the ONLY numerical oracle for the analytic map and for
+    compute_detrender_free_varfine(); test_multimap_vs_sweep() is where both comparisons
+    live.
 
 Those two fail independently and are debugged differently, so the distinction is worth
 keeping in mind -- but it used to be two flags (--varmap and --vmbf) and that was one
@@ -160,8 +164,10 @@ def _make_test_config(toplevel_tree_rank, subband_counts, num_primary_trees=1,
     channels per multiplet, which is what the variance map's index convention assumes.
 
     'time_downsampling' sets the peak-finder's Dcore. The sweep does not read it (see
-    _SweepGeometry), so the default of 1 is a convenience rather than a requirement, and
-    test_sweep_vs_per_tfm() deliberately passes something else.
+    _SweepGeometry), so the default of 1 is a convenience rather than a requirement. Nothing
+    here needs to pass something else: make_random() draws time_downsampling >= 4 in every
+    primary tree (measured histogram over 673 drawn trees: {4: 60, 8: 55, 16: 558}), so
+    test_multimap_vs_sweep()'s draws cover Dcore > 1 on every single config.
     """
 
     from ..pirate_pybind11 import DedispersionConfig, PrimaryTree
@@ -3201,40 +3207,6 @@ def test_report(r=None, subband_counts=None, K=4):
 ####################################   varmap/detrender_free.py   ################################
 
 
-def _base_varmap_reference(config, freq_variances):
-    """``y = A v`` for the BASE tree, as a (2^(r-R), M, P) array, computed the other way round.
-
-    This is PfAvarExact's inner loop for one tree, written out here rather than called: it
-    needs no DedispersionPlan and no CUDA device, which is what lets it sit in run_all().
-
-    It is a genuinely different route from detrender_free.py's, and that is the point. It goes
-    through SparseTilePerM's per-multiplet extraction, which detrender_free.py deliberately
-    does not use, so what it tests is precisely the new bookkeeping -- the (channel, subband)
-    grouping, the level-r labelling, the 2^(R-l) per-subband factor, the half-aligned straddle
-    branch and the lift. The sparse-tile machinery underneath is shared, and is covered
-    against the reference dedisperser by --avar.
-    """
-
-    from ..slow_avar.SparseTile import SparseTilePerM
-    from ..slow_avar.PfVariance import PfVariance, PfVarianceConvolver
-
-    tree = make_tree(config, int(config.dedispersion_tree_index(0, 0)))
-    fs = tree.frequency_subbands
-    r, R, P = int(tree.total_rank()), int(fs.pf_rank), int(tree.nprofiles)
-    ndm, M = 1 << (r - R), int(fs.M)
-    cmap = np.asarray(config.make_channel_map(), dtype=np.float64)
-    conv = PfVarianceConvolver()
-
-    want = np.zeros((ndm, M, P))
-    for ifreq in range(int(config.get_total_nfreq())):
-        ssa = SparseTilePerM.make_dedispersion_output(cmap, ifreq, fs)
-        for (m, tile) in enumerate(ssa.per_m):
-            if tile is not None:
-                want[:, m, :] += (freq_variances[ifreq]
-                                  * PfVariance.from_tile(tile, P, conv).unpack(ndm - 1))
-    return want
-
-
 def _compare_maps(got, ref, label):
     """(elementwise relative, sup-norm relative) difference between two maps, in row blocks.
 
@@ -3273,39 +3245,40 @@ def _compare_maps(got, ref, label):
     return worst_rel, (worst_abs / scale if (scale > 0.0) else 0.0)
 
 
-def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers=1,
-                                 nrandom=1, verbose=True):
-    """detrender_free.compute_detrender_free_base_map() against the analytic oracle. No GPU.
+def test_base_varmap_coarse(r=7, subband_counts=(2,2,1), num_early_triggers=1,
+                            nrandom=1, verbose=True):
+    """detrender_free.compute_detrender_free_base_map(), structurally. No GPU.
 
-    ONE SAMPLED CORNER PLUS ONE RANDOM DRAW PER CALL. run_all() runs once per '-n'
-    iteration, so an '-n 100' run visits each of the seven corners ~14 times and draws 100
-    random configs; running the whole list every iteration would cost 7x for coverage the
-    outer loop already gives.
+    NOT A NUMERICAL CHECK ON THE MAP -- that is test_multimap_vs_sweep(), which compares
+    mm.maps[0] (which IS compute_detrender_free_base_map(config)) against the brute-force
+    sweep, element by element over the full matrix, on five random draws per iteration at
+    max_toplevel_rank=9. This test is what remains once the numerical check lives there: the
+    three properties of the construction that no comparison against another map would catch,
+    plus the coarse path against the fine map's own coarse_grain().
 
-    BOTH FIXED AND RANDOM CONFIGS, because neither covers what the other does. The corners
-    pin -- R = 0, C_0 == 0, npri > 1, net > 0, a guaranteed straddle, and
-    xdm_rank 0/1/2 by construction. Random configs reach geometry no fixed list will: over 60
-    draws at max_toplevel_rank=9, toplevel_tree_rank ranged over 2..10 and N over 1..15, and
-    the deepest reached popcount(dbits) 5, against 4 for the whole fixed list. Deep dbits is
-    where the lift's packed gather has the most room to be wrong, and a subband vector nobody
-    would think to enumerate is where the grouping does.
+      1. THE PER-GROUP FACTORIZATION CONVENTION, checked on the SdMatrix objects rather than
+         end-to-end. SdMatrix.factorize() stores dense_matrix.T ~= Q_factor @ W_factor.T, and
+         a transpose slip there is SILENT whenever D*P == F, since the shapes still match --
+         exactly the case a whole-map comparison is least likely to hit. The count of square
+         groups is reported below, so a silent loss of that coverage is visible.
+      2. THE COARSE PATH against coarse_grain(), which is the reference implementation of the
+         max-envelope and the thing the direct construction has to agree with. Each fixed
+         config is checked at EVERY L in [R, r]; each random config at ONE L drawn from
+         [R, r], since 'every L' on a rank-10 draw is neither cheap nor more informative.
+         Both boundaries can come up and both are interesting: L = R leaves the DM axis alone
+         and only merges M -> N, and L = r collapses it entirely to nbeta = N*P.
+         check_ref_covers_y_true() rides along -- the one runtime check on the property the
+         whole coarse path rests on, that the map does not UNDERestimate.
+      3. L OUTSIDE [R, r] MUST RAISE, and name both bounds. Nothing else checks that.
 
-    But random configs ALONE would be much weaker than they look. Of the same 60 draws, 49 had
-    xdm_rank 0 in every tree, only 19 had a straddle at all, and 17 were near-degenerate at
-    r = 2. 'pirate_frb coverage' is where those rates are tracked.
-
-    'nfreq' is the knob that drives dbits width. make_random() draws zone_nfreq per zone in
-    [2^r/4, 2^r] over 1..5 zones, so nfreq != 2^r in essentially every draw and nfreq < 2^r
-    -- the production-like regime, since chord_sb2_et.yml grids 28160 channels onto 65536
-    tree-freqs -- comes up about a quarter of the time.
-
-    THE COARSE PATH (L != None) IS CHECKED IN THE SAME LOOP, against the fine map's own
-    coarse_grain() -- which is the reference implementation of the max-envelope, and the thing
-    the direct construction has to agree with. Each fixed config is checked at EVERY L in
-    [R, r]; each random config at ONE L drawn from [R, r], since 'every L' on a rank-10 draw
-    is neither cheap nor more informative. Both boundaries can come up and both are
-    interesting: L = R leaves the DM axis alone and only merges M -> N, and L = r collapses
-    the DM axis entirely to nbeta = N*P.
+    'nrandom' DRAWN CONFIGS PER CALL, one L each, and NO fixed corners. An earlier version
+    carried a seven-config corner list, sampled one per call; the list was removed before
+    this commit and only its comments survived, so the 'label != random' branch below had
+    been dead. What replaces it is the outer loop: run_all() runs this once per '-n'
+    iteration, so an '-n 100' run draws 100 configs and 100 L values rather than revisiting
+    a fixed seven. The geometry those corners pinned is drawn here at measured rates --
+    _random_config() draws gpu_valid, which is what reaches R = 0 (True only) and
+    C_0 == 0 (False only) -- and 'pirate_frb coverage' tracks them.
     """
 
     from ..pirate_pybind11 import DedispersionConfig
@@ -3330,55 +3303,27 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
                               float(np.abs(recon - sdm.dense_matrix.T).max()) / scale)
     assert worst_recon < 1.0e-12, worst_recon
 
-    # ONE NAMED CORNER PER CALL, SAMPLED, not the whole list every time. run_all() now runs
-    # once per '-n' iteration, so an '-n 100' run visits each corner ~14 times; running all
-    # seven every iteration would cost 7x for coverage the outer loop already provides.
-    # The corners are kept -- they are the geometry make_random() reaches rarely or never.
-    configs = []
-
-    # ... plus one random draw. Reproducible from the run's printed seed (make_random() draws
-    # through ksgpu::default_rng()), but the config is printed on failure anyway, which saves
-    # a rerun.
-    for _ in range(nrandom):
-        configs.append((_random_config(rng), 'random'))
-    worst_apply, worst_ytrue, n_straddled, kmax = 0.0, 0.0, 0, 0
+    # Reproducible from the run's printed seed (make_random() draws through
+    # ksgpu::default_rng()), but the config is printed on failure anyway, which saves a rerun.
+    configs = [(_random_config(rng), 'random') for _ in range(nrandom)]
+    n_straddled, kmax = 0, 0
     worst_coarse, worst_sup, worst_cytrue = 0.0, 0.0, 0.0
     n_coarse, n_sliced = 0, 0
 
     for (config, label) in configs:
-        nfreq = int(config.get_total_nfreq())
-        v = rng.uniform(0.5, 1.5, size=nfreq)
-
         # debug=True turns on the O(F) cross-checks: that no SdMatrix gets two rows from one
         # input channel, and that every subband of an entry predicts the same dbits. Both are
         # statements the shared-row pooling depends on, and these configs are small enough to
         # pay for them.
         vmap = compute_detrender_free_base_map(config, debug=True)
-        want = _base_varmap_reference(config, v).reshape(-1)
-        got = np.asarray(vmap.apply(v))
-        assert got.shape == want.shape, (got.shape, want.shape)
-
-        e = float(np.abs(got / want - 1.0).max())
-        # y_true is PRE-truncation, so it can be held to float64 roundoff rather than to the
-        # SVD threshold. That makes it the sharper of the two checks on the lift's indexing.
-        w1 = _base_varmap_reference(config, np.ones(nfreq)).reshape(-1)
-        e1 = float(np.abs(np.asarray(vmap.y_true) / w1 - 1.0).max())
-
-        if (e >= 1.0e-9) or (e1 >= 1.0e-13):
-            atomic_print(f'test_base_varmap_vs_analytic: FAILED on {label}, with'
-                         f' apply() error {e:.3g} and y_true error {e1:.3g}. The config'
-                         f' was:\n{config.to_yaml_string()}')
-            raise AssertionError((label, e, e1))
 
         hist = vmap.history[0]
         n_straddled += int(hist['n_straddled'])
         kmax = max(kmax, int(vmap.factor_rank))
-        worst_apply, worst_ytrue = max(worst_apply, e), max(worst_ytrue, e1)
 
         # ---- the coarse path, against the fine map's own coarse_grain().
         R, rr = int(vmap.pf_rank), int(vmap.tree_rank)
-        Ls = range(R, rr + 1) if (label != 'random') else [int(rng.integers(R, rr + 1))]
-        for LL in Ls:
+        for LL in [int(rng.integers(R, rr + 1))]:
             coarse = compute_detrender_free_base_map(config, L=LL)
             ref = vmap.coarse_grain(LL)
 
@@ -3387,8 +3332,10 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
             # y_true is FINE for both, and both are lifted from the same untruncated terms by
             # the same code, so they really are the same numbers. Held to a tight bar rather
             # than to exact equality, so that a future change to the accumulation order is not
-            # a test failure for no reason.
-            ey = float(np.abs(np.asarray(coarse.y_true) / w1 - 1.0).max())
+            # a test failure for no reason. (It used to be compared against the deleted
+            # SparseTilePerM oracle; against the fine map it is the same assertion, and it is
+            # the one the comment above always described.)
+            ey = float(np.abs(np.asarray(coarse.y_true) / np.asarray(vmap.y_true) - 1.0).max())
 
             # Two bars, because the two figures have very different tails (see
             # _compare_maps). The sup-norm one is the sharp check and is 1800x inside its bar
@@ -3397,7 +3344,7 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
             # WRONG END -- taking [:, -1, :], a min-envelope -- moves LARGE elements, so the
             # sup-norm bar is what catches it, along with check_ref_covers_y_true() below.
             if (es >= 1.0e-9) or (ec >= 1.0e-6) or (ey >= 1.0e-13):
-                atomic_print(f'test_base_varmap_vs_analytic: FAILED on {label} at L={LL},'
+                atomic_print(f'test_base_varmap_coarse: FAILED on {label} at L={LL},'
                              f' with sup-norm error {es:.3g}, elementwise error {ec:.3g} and'
                              f' y_true error {ey:.3g}. The config'
                              f' was:\n{config.to_yaml_string()}')
@@ -3434,14 +3381,12 @@ def test_base_varmap_vs_analytic(r=7, subband_counts=(2,2,1), num_early_triggers
     # visible in the line below.
 
     if verbose:
-        atomic_print(f'    test_base_varmap_vs_analytic({len(configs)} configs,'
-                     f' {nrandom} random): {n_straddled} straddled entries, max K {kmax},'
-                     f' worst relative error: apply() {worst_apply:.3g},'
-                     f' y_true {worst_ytrue:.3g}; per-group reconstruction {worst_recon:.3g}'
-                     f' over {len(sd_matrices)} groups ({n_square} of them square);'
-                     f' {n_coarse} coarse maps ({n_sliced} sliced rows) vs coarse_grain():'
-                     f' sup-norm {worst_sup:.3g}, elementwise {worst_coarse:.3g},'
-                     f' y_true {worst_cytrue:.3g}')
+        atomic_print(f'    test_base_varmap_coarse({len(configs)} random configs):'
+                     f' {n_straddled} straddled entries, max K {kmax}; per-group'
+                     f' reconstruction {worst_recon:.3g} over {len(sd_matrices)} groups'
+                     f' ({n_square} of them square); {n_coarse} coarse maps'
+                     f' ({n_sliced} sliced rows) vs coarse_grain(): sup-norm {worst_sup:.3g},'
+                     f' elementwise {worst_coarse:.3g}, y_true {worst_cytrue:.3g}')
 
 
 def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
@@ -3556,28 +3501,32 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
 def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, verbose=True):
     """detrender_free.compute_detrender_free_varfine(), three ways. No GPU.
 
+    EVERYTHING HERE IS INTERNAL TO detrender_free.py, DELIBERATELY. varfine's comparison
+    against something outside it lives in test_multimap_vs_sweep(), which checks it against
+    the brute-force sweep -- i.e. against the real kernels -- for every tree. That is the
+    correctness check; these are the consistency checks, and they are sharper because both
+    sides are float64.
+
     THREE ASSERTIONS, in increasing order of what they cover and decreasing order of
     sharpness. Each catches something the next one does not:
 
-      1. Against an INDEPENDENT oracle, base tree only. _base_varmap_reference() computes the
-         same (2^(r-R), M, P) array the other way round, through SparseTilePerM, which
-         detrender_free.py deliberately does not use. Both sides are UNTRUNCATED -- there is
-         no SVD anywhere in varfine -- so the bar is float64 roundoff rather than epsilon:
-         measured worst 4.0e-15 over ten runs of this config set. Bar 1e-13, the same as the
-         y_true bar in test_base_varmap_vs_analytic() and with the same ~25x of margin, which
-         is all that is on offer for a roundoff-limited quantity.
-      2. BITWISE against y_true, every primary tree. varfine(config, ones) must equal
+      1. BITWISE against y_true, every primary tree. varfine(config, ones) must equal
          compute_detrender_free_multi_map(config, L=None).maps[gamma].y_true to the last bit,
          because the weight is a multiplication by an exact 1.0 on a path the two share.
          This is the assertion that fails the moment that path stops being shared, which is
          the specific regression the SdPlan refactor makes possible. It covers the
          Proposition 2 slice too, since the gamma > 0 maps' y_true IS that slice.
-      3. Against the DEFINITION, every tree: VarianceMultiMap.apply_fine(). This is the only
+      2. Against the DEFINITION, every tree: VarianceMultiMap.apply_fine(). This is the only
          assertion that reaches the early-trigger expansion (Proposition 1). Its bar is set by
          the REFERENCE path's SVD truncation and not by varfine, which is untruncated and
          therefore the more accurate of the two -- measured 3.6e-13 on toy.yml (which has the
          widest dynamic range available) and 1.3e-14 worst over the small configs here.
          Bar 1e-9, so over three decades of margin.
+
+         It is also the assertion that catches an error in the LIFT, which assertion 1
+         cannot (both sides of a bitwise comparison move together). Measured: mutating the
+         lift's per-subband 2^(R-l) factor fails this on 6 of 6 random draws.
+      3. varcoarse against an independently-rebuilt grouping; see below.
 
     If either bar turns out to be tight in practice that is a signal something is wrong, not
     a reason to loosen it.
@@ -3603,14 +3552,13 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
         configs.append((_random_config(rng), 'random'))
 
     rng = np.random.default_rng()
-    worst_ref, worst_def = 0.0, 0.0
+    worst_def = 0.0
     n_multi, n_varying, n_et, n_bitwise, ntrees = 0, 0, 0, 0, 0
     n_coarse = 0
 
     for (config, label) in configs:
         nfreq = int(config.get_total_nfreq())
         npri = int(config.num_primary_trees)
-        itree0 = int(config.dedispersion_tree_index(0, 0))
         v = rng.uniform(0.5, 1.5, size=nfreq)
 
         # debug=True turns on SdPlan's planning-pass cross-checks, which is all of them in
@@ -3629,18 +3577,13 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
             for j in range(i + 1, len(got)):
                 assert not np.shares_memory(got[i], got[j]), (label, i, j)
 
-        # ---- (1) the independent oracle, base tree only.
-        want = _base_varmap_reference(config, v)
-        assert got[itree0].shape == want.shape, (label, got[itree0].shape, want.shape)
-        e1 = float(np.abs(got[itree0] / want - 1.0).max())
-
         mm = compute_detrender_free_multi_map(config, L=None)
         P = [m.nprofiles for m in mm.maps]
         n_multi += int(npri > 1)
         n_varying += int(len(set(P)) > 1)
         n_et += int(any(int(pt.num_early_triggers) > 0 for pt in config.primary_trees))
 
-        # ---- (2) bitwise against y_true, every primary tree.
+        # ---- (1) bitwise against y_true, every primary tree.
         ones = compute_detrender_free_varfine(config, np.ones(nfreq))
         for gamma in range(npri):
             it = int(config.dedispersion_tree_index(gamma, 0))
@@ -3652,7 +3595,7 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
                 raise AssertionError((label, gamma))
             n_bitwise += 1
 
-        # ---- (3) the definition, every tree. Sup-norm relative, for the reason
+        # ---- (2) the definition, every tree. Sup-norm relative, for the reason
         # _compare_maps() documents: an elementwise ratio has no floor and its tail is the
         # map's dynamic range rather than its error.
         ref = mm.apply_fine(v)
@@ -3664,13 +3607,12 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
             e3 = max(e3, float(np.abs(g - w).max()) / scale)
             ntrees += 1
 
-        if (e1 >= 1.0e-13) or (e3 >= 1.0e-9):
-            atomic_print(f'test_varfine: FAILED on {label}, with oracle error {e1:.3g} and'
-                         f' definition error {e3:.3g}. The config'
-                         f' was:\n{config.to_yaml_string()}')
-            raise AssertionError((label, e1, e3))
+        if e3 >= 1.0e-9:
+            atomic_print(f'test_varfine: FAILED on {label}, with definition error'
+                         f' {e3:.3g}. The config was:\n{config.to_yaml_string()}')
+            raise AssertionError((label, e3))
 
-        # ---- (4) compute_detrender_free_varcoarse(), which is varfine coarse-grained at the
+        # ---- (3) compute_detrender_free_varcoarse(), which is varfine coarse-grained at the
         # WEIGHT array's downsampling. Only the glue is new here -- varfine is checked three
         # ways above and coarse_grain_vector() against an independent label oracle in
         # test_index_arithmetic() -- so this checks exactly the two things the glue can get
@@ -3713,7 +3655,7 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
             assert np.array_equal(coarse[itree].reshape(-1), want), (label, itree)
             n_coarse += 1
 
-        worst_ref, worst_def = max(worst_ref, e1), max(worst_def, e3)
+        worst_def = max(worst_def, e3)
 
     # n_varying and n_et are REPORTED, not asserted. Both are emergent properties of
     # make_random() (a varying max_width at 27-38% per draw, an early trigger at 30-38%), so
@@ -3769,8 +3711,8 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
                      f' {ntrees} trees): {n_multi} with npri > 1, {n_varying} with a varying'
                      f' max_width, {n_et} with early triggers; {n_bitwise} primary trees'
                      f' bitwise equal to y_true; {n_coarse} varcoarse arrays exactly equal'
-                     f' to an independently-grouped max; worst relative error: vs the oracle'
-                     f' {worst_ref:.3g}, vs apply_fine() {worst_def:.3g}')
+                     f' to an independently-grouped max; worst relative error vs'
+                     f' apply_fine() {worst_def:.3g}')
 
 
 # Work-unit ceiling for the randomized part of test_multimap_vs_sweep(). The budget is in
@@ -3801,8 +3743,24 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     """compute_detrender_free_multi_map() against the brute-force sweep, EVERY primary tree.
     Needs a plan, and by default a GPU.
 
-    This is the only check that ties the analytic map to the actual kernels;
-    test_base_varmap_vs_analytic() is the tight one, and shares no code with the dedisperser.
+    THE ONLY NUMERICAL CHECK ON THE ANALYTIC MAP AGAINST ANYTHING OUTSIDE
+    detrender_free.py, and the only one that ties it to the actual kernels. It used to share
+    that job with test_base_varmap_vs_analytic(), which compared against a second ANALYTIC
+    route (SparseTilePerM / PfAvarExact) at a float64 bar; that route was deleted along with
+    the rest of pirate_frb.slow_avar, on the grounds that this test's oracle is both more
+    independent (the sweep shares no code with detrender_free.py, whereas the sparse-tile
+    route shared SparseTile with it) and wider (drawn at max_toplevel_rank=9 against
+    _random_config()'s 7).
+
+    THE 1e-5 BAR IS ENOUGH TO HAVE TAKEN OVER FROM THAT 1e-9 ONE, and it was measured rather
+    than assumed. Deliberately breaking detrender_free.py, on a config with r=8, R=2,
+    subbands (2,2,1), npri=3 and one straddled entry: scaling the straddled rows by 1.001 --
+    the ~0.1% that pirate_frb/tests/coverage.py attributes to a port that never takes the
+    half-aligned branch -- moves this comparison to 1.0e-3, 100x the bar; dropping _emit()'s
+    scale**2 moves it to 255; perturbing ONE input channel of 575 by 1e-4 moves it to 1.0e-4.
+    The floor is between 1e-6 and 1e-4 on a single-channel error, and nothing structural
+    lives in that band. If the bars here are ever revisited, redo that measurement.
+
     It also covers Proposition 2 of notes/variance_map.tex against the sweep, which nothing
     did before: test_restriction_vs_sweep() is Proposition 1 (early triggers) only, and says
     so. mm.maps[0] IS compute_detrender_free_base_map(config), so the base map stays covered
@@ -3818,8 +3776,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     -- keep it reachable, since it is the fallback if the GPU sweep is ever the thing under
     suspicion.
 
-    Tolerance 1e-5, the same number and the same reason as test_sweep_vs_per_tfm(): the
-    dedispersion chain is float32. Measured over nine runs of this test, the worst agreement
+    Tolerance 1e-5, because the dedispersion chain is float32. Measured over nine runs of this test, the worst agreement
     across every primary tree ranged over 4.9e-7 to 1.3e-6, so there is roughly an order of
     headroom -- and the spread is the random draws, not the restriction: a hand-built config
     reproduces at 4.8e-7 every time.
@@ -3867,7 +3824,8 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
 
     from ..pirate_pybind11 import DedispersionConfig
     from .brute_force import sweep_all_trees_dense, _SweepGeometry
-    from .detrender_free import compute_detrender_free_multi_map
+    from .detrender_free import (compute_detrender_free_multi_map,
+                                 compute_detrender_free_varfine)
 
     configs = []
 
@@ -3902,6 +3860,8 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     worst, n_straddled, ntrees = 0.0, 0, 0
     n_multi, n_varying, n_r0, n_wide, n_et = 0, 0, 0, 0, 0
     worst_p1, n_p1_pairs, n_nontrivial = 0.0, 0, 0
+    worst_vf, n_vf = 0.0, 0
+    rng = np.random.default_rng()
 
     for (config, label) in configs:
         As = sweep_all_trees_dense(config, device=device)
@@ -3949,6 +3909,46 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
 
         n_straddled += int(mm.maps[0].history[0]['n_straddled'])
 
+        # ---- compute_detrender_free_varfine() against the sweep, EVERY tree.
+        #
+        # varfine is what PRODUCTION computes: GpuDedisperser::_fill_analytic_weights() calls
+        # the C++ port of varcoarse, which is varfine plus a max-reduction. It reaches the
+        # same numbers by a different route from the map above -- no SdMatrix, no SVD, no
+        # truncation -- and test_varfine() only ever compares it against y_true and
+        # apply_fine(), both of which are inside detrender_free.py. So this is its one
+        # comparison against ground truth, and it costs a matvec against a matrix the sweep
+        # has already materialized.
+        #
+        # NOT A SUBSTITUTE FOR THE MAP COMPARISON ABOVE, which is per-channel. This one
+        # compares A v, so an error confined to one input channel is diluted by that
+        # channel's share of the sum: measured, perturbing 1 channel of 575 by 1e-4 moves the
+        # map comparison by 1.0e-4 and this one by 3.7e-7. What this catches is an error in
+        # the LIFT, which is not per-channel -- measured, mutating the lift's per-subband
+        # 2^(R-l) factor moves this by a factor of 3 and the map comparison not at all.
+        #
+        # 'v' is drawn rather than all-ones so that a weight reaching the wrong rows is
+        # visible. Same 1e-5 / exact-zero bars as the map comparison, and the same reason.
+        v = rng.uniform(0.5, 1.5, size=int(config.get_total_nfreq()))
+        yf = compute_detrender_free_varfine(config, v)
+        for itree in range(int(config.num_dedispersion_trees)):
+            A = np.asarray(As[itree])
+            want = A @ v
+            got = np.asarray(yf[itree]).reshape(-1)
+            assert got.shape == want.shape, (label, itree, got.shape, want.shape)
+            nz = (want != 0.0)
+            assert np.any(nz), (label, itree)
+            e = float(np.abs(got[nz] / want[nz] - 1.0).max())
+            e0 = float(np.abs(got[~nz]).max()) if np.any(~nz) else 0.0
+            if (e >= 1.0e-5) or (e0 != 0.0):
+                atomic_print(f'test_multimap_vs_sweep: FAILED varfine on {label}, tree'
+                             f' {itree} of {int(config.num_dedispersion_trees)}, with'
+                             f' on-support error {e:.3g} and off-support leakage {e0:.3g}'
+                             f' (which must be exactly zero). The config'
+                             f' was:\n{config.to_yaml_string()}')
+                raise AssertionError((label, itree, e, e0))
+            worst_vf = max(worst_vf, e)
+            n_vf += 1
+
         # ---- Proposition 1, sweep against sweep. See the docstring.
         for gamma in range(npri):
             iparent = int(config.dedispersion_tree_index(gamma, 0))
@@ -3993,7 +3993,8 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     if verbose:
         atomic_print(f'    test_multimap_vs_sweep(device={device}, {len(configs)} random'
                      f' configs, {ntrees} primary trees): {n_straddled} straddled entries,'
-                     f' worst relative error {worst:.3g}; Proposition 1 over {n_p1_pairs}'
+                     f' worst relative error {worst:.3g}; varfine over {n_vf} trees, worst'
+                     f' {worst_vf:.3g}; Proposition 1 over {n_p1_pairs}'
                      f' (parent, child) pairs ({n_nontrivial} with a non-contiguous multiplet'
                      f' map), worst {worst_p1:.3g}; coverage: {n_multi} npri>1,'
                      f' {n_varying} varying max_width, {n_r0} R=0, {n_wide} wide-footprint,'
@@ -4069,81 +4070,6 @@ def _abcd_all(config, As):
         D = 1 << (int(tree.total_rank()) - int(fs.pf_rank))
         out.append(np.asarray(A).reshape(D, int(fs.M), int(tree.nprofiles), A.shape[1]))
     return out
-
-
-def test_sweep_vs_per_tfm(r=7, subband_counts=None, num_primary_trees=1, num_early_triggers=0,
-                          time_downsampling=1, device='cpu', verbose=True):
-    """The sweep, element by element, against PfAvarExact.per_tfm, which computes the same
-    matrix by propagating compressed sparse tiles and shares no code with the dedisperser.
-
-    This is the decisive correctness test, and it doubles as the float32 measurement: the
-    sweep runs the float32 ReferenceTree and ReferencePeakFindingKernel, while per_tfm is
-    float64 throughout. Only valid with no detrender (per_tfm cannot represent one).
-
-    'device' selects which sweep is checked. This is the ONLY test with an analytic oracle, so
-    a device='gpu' case is worth more than another GPU-vs-CPU comparison: it is the only thing
-    that would catch an error the two devices SHARE.
-
-    'time_downsampling' > 1 gives the trees Dcore > 1, which is the one config property the
-    sweep is free of BY CONSTRUCTION rather than by argument: it ends in a PfSquare, which
-    evaluates h_p at every time sample, so the peak-finder's Dcore sublattice never reaches
-    it. per_tfm is Dcore-independent too, so it stays a valid oracle and A must come out
-    unchanged -- which is what makes this the check that licenses _SweepGeometry not
-    constraining Dcore.
-    """
-
-    from ..pirate_pybind11 import DedispersionPlan
-    from ..slow_avar.PfVariance import PfAvarExact
-    from .brute_force import sweep_all_trees_dense
-
-    subband_counts = [1] if (subband_counts is None) else subband_counts
-    config = _make_test_config(r, subband_counts, num_primary_trees=num_primary_trees,
-                               num_early_triggers=num_early_triggers,
-                               time_downsampling=time_downsampling)
-    # Raw per-tree arrays, not a VarianceMultiMap: this checks EVERY tree against the
-    # analytic oracle, including the early-trigger trees a multimap no longer stores.
-    As = _abcd_all(config, sweep_all_trees_dense(config, device=device))
-
-    exact = PfAvarExact(DedispersionPlan(config, cdd2_kernel_required=False),
-                        np.ones(int(config.get_total_nfreq())))
-    worst, worst_where, eps = 0.0, None, []
-
-    for (itree, A) in enumerate(As):
-        D, P, nfreq = A.shape[0], A.shape[2], A.shape[3]
-        all_dbits = D - 1
-        for ifreq in range(nfreq):
-            # per_tfm[itree][ifreq][mu] is None for multiplets this channel does not reach.
-            want = np.stack([pv.unpack(all_dbits) if (pv is not None) else np.zeros((D, P))
-                             for pv in exact.per_tfm[itree][ifreq]])       # (M, D, P)
-            want = want.transpose(1, 0, 2)                                 # (D, M, P)
-            got = A[:, :, :, ifreq]
-            assert got.shape == want.shape, (got.shape, want.shape)
-
-            nz = (want != 0.0)
-            if np.any(got[~nz] != 0.0):
-                raise RuntimeError(f'test_sweep_vs_per_tfm: tree {itree}, channel {ifreq}: the'
-                                   ' sweep is nonzero where per_tfm predicts an exact zero')
-            if not np.any(nz):
-                continue
-
-            e = got[nz] / want[nz] - 1.0
-            eps.append(e)
-            k = int(np.argmax(np.abs(e)))
-            if abs(float(e[k])) > worst:
-                worst, worst_where = abs(float(e[k])), (itree, ifreq, float(e[k]))
-
-    eps = np.concatenate(eps)
-    if verbose:
-        atomic_print(f'    test_sweep_vs_per_tfm(r={r}, subbands={subband_counts},'
-                     f' npri={num_primary_trees}, net={num_early_triggers},'
-                     f' tds={time_downsampling}, device={device}): {eps.size} nonzero'
-                     f' elements, eps = A_sweep/A_per_tfm - 1: mean {float(np.mean(eps)):+.3g},'
-                     f' range [{float(eps.min()):+.3g}, {float(eps.max()):+.3g}], worst |eps|'
-                     f' {worst:.3g} at (tree,ifreq)={worst_where[:2]}')
-
-    # Loose enough to pass, tight enough to catch anything but float32 roundoff: the
-    # dedispersion chain is float32, so relative errors of a few times 1e-7 are expected.
-    assert worst < 1.0e-5, (worst, worst_where)
 
 
 def test_sweep_phase_collapse(r=7, verbose=True):
@@ -4633,6 +4559,51 @@ def test_sweep_streaming_coarse(r=6, subband_counts=None, num_early_triggers=0,
                      ' partial sweep reports no y_true')
 
 
+####################   varmap/SparseTile.py, varmap/PfVarianceConvolver.py   ####################
+#
+# The low-level primitives, and the C++ port of them in src_lib/varmap.cpp. These used to be
+# dispatched from a separate 'pirate_frb test --avar' flag, back when they lived in the
+# deleted pirate_frb.slow_avar; the flag is gone, because everything it named is now a varmap
+# primitive and whoever edits one runs '--varmap'.
+#
+# The tests themselves stay as staticmethods on the classes they test, where their docstrings
+# are. Only the cadence decision lives here, and it is the same split the classes document:
+# the randomized ones every iteration, the deterministic ones once.
+#
+# Each compares LIVE code against something outside it -- a dense reference, or a production
+# kernel (ReferenceTreeGriddingKernel, ReferencePeakFindingKernel) -- so none of this is the
+# old-vs-new comparison that the slow_avar deletion was about. Cost: ~0.07 s per iteration,
+# measured, against this file's ~28 s.
+
+
+def run_primitive_tests(once):
+    """SparseTile / SparseTileTriple / PfVarianceConvolver, and their C++ ports."""
+
+    from .SparseTile import SparseTile, SparseTileTriple
+    from .PfVarianceConvolver import PfVarianceConvolver
+    from ..fast_varmap import test_fast_varmap
+
+    SparseTileTriple.test_random_tree_gridding()
+    SparseTile.test_random_iterate_aligned()
+    SparseTile.test_random_iterate_singletons()
+    SparseTile.test_random_remap_d()
+    SparseTile.test_random_scale()
+    SparseTile.test_random_predict_dbits()
+    PfVarianceConvolver.test_reduces_to_norms()
+    PfVarianceConvolver.test_random_variance()
+
+    test_fast_varmap.test_cpp_convolver()
+    test_fast_varmap.test_cpp_sparse_tile_triple()
+
+    if once:
+        # All three are run_once()'s "reason 1": the parameter space is exhausted, not merely
+        # expensive. Both convolver tests are deterministic (they say so), and
+        # test_cpp_predict_dbits is a 57792-case exhaustive sweep plus 10000 wide random draws.
+        PfVarianceConvolver.test_kernels_match_reference()
+        PfVarianceConvolver.test_unimodality()
+        test_fast_varmap.test_cpp_predict_dbits()
+
+
 ####################################   entry point   ####################################
 
 
@@ -4995,6 +4966,7 @@ def run_once():
     """
 
     # ---- reason 1: exhausted ----
+    run_primitive_tests(once=True)
     test_lp_config()
     test_constructor_validation()
     test_factored_validation()
@@ -5023,24 +4995,6 @@ def run_once():
     # Everything below still pins its geometry, and each group says why. The rule this file
     # now follows is that a test draws its config; these are the exceptions, and an exception
     # needs a reason that is not "it was written that way".
-
-    # NOT WORTH RANDOMIZING: PfAvarExact is scheduled for removal and this is its only caller
-    # in this file, so the test dies with it. It is also the only test in the tier with an
-    # ANALYTIC oracle -- per_tfm propagates compressed sparse tiles and shares no code with
-    # the dedisperser -- and it doubles as the float32 measurement, since the sweep runs a
-    # float32 chain while per_tfm is float64 throughout. Only valid with NO detrender:
-    # per_tfm cannot represent one.
-    test_sweep_vs_per_tfm(7, [1])
-    test_sweep_vs_per_tfm(7, [2, 2, 1], num_early_triggers=1)
-    # Dcore > 1: the sweep must give the same A, since it never sees the peak-finder's Dcore
-    # sublattice. This is what _SweepGeometry relies on in not constraining Dcore.
-    test_sweep_vs_per_tfm(7, [2, 2, 1], time_downsampling=4)
-    # Time-downsampled trees against the analytic oracle, on both devices. The CPU case is
-    # new coverage in its own right (every other call here is npri=1); the GPU one is the
-    # only check on the GPU sweep that does not go through the CPU sweep, hence the only
-    # thing that would catch an error the two devices SHARE.
-    test_sweep_vs_per_tfm(7, [2, 2, 1], num_primary_trees=2)
-    test_sweep_vs_per_tfm(7, [2, 2, 1], num_primary_trees=2, device='gpu')
 
     # STRUCTURALLY PINNED: it asserts gamma_max == 2, i.e. exactly three primary trees, so
     # the phase loop has something to collapse. A drawn config gives npri > 1 about half the
@@ -5080,6 +5034,7 @@ def run_all():
     run_once() for the handful that deliberately does not.
     """
 
+    run_primitive_tests(once=False)
     test_index_arithmetic()
     test_coarse_grain()
     test_distance()
@@ -5110,17 +5065,17 @@ def run_all():
     test_restriction_representation()
     test_map_steps()
     test_report()
-    test_base_varmap_vs_analytic()
+    test_base_varmap_coarse()
     test_multimap_vs_base()
     test_varfine()
 
     # The C++ port of compute_detrender_free_{varfine,varcoarse} (src_lib/varmap.cpp), checked
-    # against the python above. It lives in fast_avar with the other C++-vs-python comparisons,
+    # against the python above. It lives in fast_varmap with the other C++-vs-python comparisons,
     # but it is dispatched from HERE rather than from '--avar' because the reference it guards is
     # detrender_free.py: whoever edits that file runs '--varmap', and a port that has silently
     # diverged is exactly what they need to be told about. Adds ~0.1 s per iteration, nearly all
     # of it the python reference.
-    from ..fast_avar.test_fast_avar import test_cpp_detrender_free
+    from ..fast_varmap.test_fast_varmap import test_cpp_detrender_free
     test_cpp_detrender_free()
 
     # The two brute-force sweep tests that draw their own configs -- the only ones in that

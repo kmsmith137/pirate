@@ -28,7 +28,7 @@ inline long pow2(int n)
 }
 
 // Bit-twiddling helpers (gcc builtins; C++17 has no <bit>). These mirror the python
-// int methods used in pirate_frb/slow_avar: popcount() == int.bit_count(),
+// int methods used in pirate_frb/varmap: popcount() == int.bit_count(),
 // bit_length() == int.bit_length(), bit_floor() == (1 << (bit_length-1)) == highest set bit.
 
 inline int popcount(long x)

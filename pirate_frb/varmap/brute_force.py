@@ -13,7 +13,7 @@ time-downsampled tree, and collapses to a single pass when the part of L upstrea
 downsampler is instantaneous in time (no detrender).
 
 This treats L as a black box -- it runs the shipped dedisperser -- so unlike the analytic
-slow_avar.PfAvarExact it needs no per-stage analysis, and it is the only algorithm we have
+route of detrender_free.py it needs no per-stage analysis, and it is the only algorithm we have
 that can handle a Detrender2d. It is also very slow: one full dedispersion pass per
 (input channel, polyphase) pair.
 

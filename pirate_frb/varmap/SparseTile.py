@@ -164,7 +164,7 @@ class SparseTile:
         # The upper bound on kmax is not decoration: the return value shifts left by up to
         # kmax, which in the C++ twin (SparseTile::predict_dbits) is a shift overflow. Python
         # would not overflow, but the two implementations must behave identically -- see
-        # fast_avar/test_fast_avar.py:test_cpp_predict_dbits().
+        # fast_varmap/test_fast_varmap.py:test_cpp_predict_dbits().
         assert 0 <= kmax <= constants.max_tree_rank, (kmax, f0, nf)
         assert f0 >= 0, (kmax, f0, nf)
         assert nf >= 1, (kmax, f0, nf)
@@ -329,57 +329,6 @@ class SparseTile:
         tshifts_out = np.concatenate(([0], upper.tshifts)).astype(np.int64)
         return SparseTile(upper.r, k + 1, upper.f0 // 2, 1, upper.nt, upper.dbits << 1, upper.data,
                           tshifts_out, t0=upper.t0, scale = upper.scale / np.sqrt(2.0))
-    
-
-    def specialize_dbits(self, value, nbits, *, low):
-        """Specialize this singleton tile's level-k DM (delay) index.
-
-        Fixes 'nbits' of
-        its delay bits to the value 'value' (0 <= value < 2^nbits), keeping the other (k-nbits)
-        bits. Collapses to a standalone fully-iterated rank-(k-nbits) SparseTile (r == k == rho,
-        f0 == 0, nf == 1). The boolean 'low' argument indicates whether the lowest or highest
-        bits are specialized.
-        """
-        
-        assert self.nf == 1
-        assert 0 <= nbits <= self.k
-        assert 0 <= value < (1 << nbits)
-        
-        if low:
-            rbits = (1 << nbits) - 1               # all bits to remove (whether in self.dbits or not)
-            low_dbits = self.dbits & rbits         # selected bits in [0, nbits)
-            high_dbits = self.dbits & ~rbits       # selected bits in [nbits, k)
-            
-            idx = SparseTile._remap_d(value, rbits, low_dbits)
-            new_data = self.data.reshape(1, 1 << high_dbits.bit_count(), 1 << low_dbits.bit_count(), self.nt)
-            new_data = new_data[:, :, idx, :]      # keep high bits, discard low bits
-            new_dbits = high_dbits >> nbits
-            new_tshifts = self.tshifts[nbits:]
-        
-        else:
-            rbits = (1 << self.k) - (1 << (self.k - nbits))  # all bits to remove (whether in self.dbits or not)
-            low_dbits = self.dbits & ~rbits        # selected bits in [0, k-nbits)
-            high_dbits = self.dbits & rbits        # selected bits in [k-nbits, k)
-            
-            idx = SparseTile._remap_d(value, rbits, high_dbits)
-            new_data = self.data.reshape(1, 1 << high_dbits.bit_count(), 1 << low_dbits.bit_count(), self.nt)
-            new_data = new_data[:, idx, :, :]      # keep low bits, discard high bits
-            new_dbits = low_dbits
-            new_tshifts = self.tshifts[:(self.k-nbits)]
-        
-        return SparseTile(
-            r = self.k - nbits,
-            k = self.k - nbits,
-            f0 = 0, nf = 1,
-            nt = self.nt,
-            dbits = new_dbits,
-            data = np.ascontiguousarray(new_data),
-            tshifts = np.array(new_tshifts, dtype=np.int64),
-            t0 = self.t0 + int(SparseTile._eval_tshifts(value, rbits, self.tshifts)),
-            scale = self.scale,
-        )
-
-    # ------------------------------- test utilities -------------------------------
 
     @staticmethod
     def make_random(r, k, f0, nf):
@@ -460,7 +409,7 @@ class SparseTile:
 
         The DEFAULTS are sized for _predict_dbits_slow(), whose cost is driven by 'nf' and which
         builds real tiles at r = constants.max_tree_rank (hence f0 + nf <= 2^r). A caller that
-        does not use that reference -- test_fast_avar.py's C++-vs-python test evaluates two
+        does not use that reference -- test_fast_varmap.py's C++-vs-python test evaluates two
         closed forms and allocates nothing -- should pass much wider bounds; _predict_dbits()
         itself requires only 0 <= kmax <= max_tree_rank, f0 >= 0, nf >= 1. Do NOT tighten the
         defaults on the assumption that every caller shares the reference's constraints.
@@ -579,39 +528,18 @@ class SparseTile:
         ksgpu.assert_arrays_equal(ref, got, "ref", "got", ["f", "delay", "time"], epsabs=0.0)
 
     @staticmethod
-    def test_random_specialize_dbits():
-        """Test specialize_dbits() against a brute-force reference.
-
-        Compares specialize_dbits(value, nbits, low) vs. brute-force 'fix nbits of the
-        delay to value', for both low=True (fix the low nbits bits) and low=False (fix
-        the high nbits bits)."""
-        import ksgpu
-        r = int(np.random.randint(2, 8))
-        k = int(np.random.randint(1, r + 1))                # 1 <= k <= r
-        f0 = int(np.random.randint(0, 1 << (r - k)))        # singleton coarse-freq index
-        tile = SparseTile.make_random(r, k, f0, 1)
-        nbits = int(np.random.randint(0, k + 1))            # 0 <= nbits <= k bits fixed
-        rho = k - nbits                                     # number of kept (delay-axis) bits
-        ntime = tile.nt + tile.t0 + int(tile.tshifts.sum()) + 8
-        full = tile.unpack(ntime)[0]                        # (2^k, ntime)
-        for low in (False, True):
-            for value in range(1 << nbits):                # the fixed bits are set to 'value'
-                got = tile.specialize_dbits(value, nbits, low=low).unpack(ntime)[0]   # (2^rho, ntime)
-                tgt = np.zeros((1 << rho, ntime), dtype=np.float64)
-                for j in range(1 << rho):                  # j indexes the kept bits
-                    # low=True fixes the low nbits bits; low=False fixes the high nbits bits.
-                    D = (j << nbits) | value if low else (value << rho) | j
-                    tgt[j] = full[D]
-                ksgpu.assert_arrays_equal(got, tgt, "got", "tgt", ["kept_d", "time"], epsabs=0.0)
-
-    @staticmethod
     def test_random_scale():
-        """Test the scale member.
+        """Test the scale member: unpack multiplies data by scale, and iterate_aligned folds
+        it into its output (scale_out == 1) rather than dropping it.
 
-        unpack multiplies data by scale, iterate_aligned folds it (scale_out=1),
-        and PfVariance.add_tile picks up scale^2 (variance is quadratic in the data)."""
+        The third property scale has -- that a scale-s singleton contributes s^2 to a
+        VARIANCE, since variance is quadratic in the data -- used to be checked here against
+        PfVariance.add_tile(). That class is gone; the factor is now applied by
+        SdPlan._emit() (varmap/detrender_free.py, and its C++ twin in src_lib/varmap.cpp),
+        where it is covered end-to-end by test_varfine() and test_multimap_vs_sweep().
+        Measured: dropping it moves both by a factor of ~250.
+        """
         import ksgpu
-        from .PfVariance import PfVarianceConvolver, PfVariance
         s = float(np.random.uniform(0.25, 4.0))
 
         # unpack scales the data; iterate_aligned folds the scale into its output (vs dense DD).
@@ -629,16 +557,6 @@ class SparseTile:
         ref = SparseTile._dense_dd(scaled.unpack(ntime), k)
         got = SparseTile.iterate_aligned(scaled).unpack(ntime)
         ksgpu.assert_arrays_equal(ref, got, "ref", "got", ["f", "delay", "time"], epsabs=0.0)
-
-        # PfVariance.add_tile: a scale-s singleton gives s^2 times the unscaled variance.
-        kk = int(np.random.randint(1, 6))
-        b1 = SparseTile.make_random(kk, kk, 0, 1)               # singleton, scale == 1
-        s1 = SparseTile(kk, kk, 0, 1, b1.nt, b1.dbits, b1.data, b1.tshifts, t0=b1.t0, scale=s)
-        conv = PfVarianceConvolver()
-        pv1 = PfVariance.from_tile(b1, conv.Pmax, conv)
-        pvs = PfVariance.from_tile(s1, conv.Pmax, conv)
-        ksgpu.assert_arrays_equal(pvs.unpack(b1.dbits), (s ** 2) * pv1.unpack(b1.dbits),
-                                  "pvs", "s^2*pv1", ["d", "p"], epsabs=0.0)
 
 
 ####################################   class SparseTileTriple   ####################################
@@ -838,196 +756,3 @@ class SparseTileTriple:
     def test_random_tree_gridding():
         cm, ifreq = SparseTileTriple.random_channel_map()
         SparseTileTriple.test_one_tree_gridding(cm, ifreq)
-
-
-#####################################   class SparseTilePerM   #####################################
-
-
-class SparseTilePerM:
-    """Sparse representation of a SUBBANDED tree-dedisperser's output.
-
-    For a one-hot input.
-    The dense output has shape (2^(r-R), M, ntime) (notes Section "Subbanded
-    dedispersion"), held as a length-M list 'per_m'. Each entry is either a rank-(r-R),
-    fully-iterated (k == r-R), nf==1 SparseTile carrying that multiplet's 2^(r-R) coarse
-    delays, or None for a multiplet whose subband does not overlap the input frequency channel.
-
-    Members
-    -------
-      r, R:            tree rank and pf_rank (per_m tiles will have rank rho = r-R)
-      subband_counts:  the length-(R+1) C_l array.
-      per_m:           length-M list whose entries are a SparseTile (with r == k == rho)
-                       or None (multiplet outside the gridding footprint).
-    """
-
-    def __init__(self, r, R, subband_counts, per_m):
-        self.r, self.R = r, R
-        self.subband_counts = [int(c) for c in subband_counts]
-        self.per_m = list(per_m)
-        self._check_invariants()
-
-    def _check_invariants(self):
-        assert 0 <= self.R <= self.r
-        rho = self.r - self.R
-        M = sum((1 << l) * c for l, c in enumerate(self.subband_counts))
-        assert len(self.per_m) == M, (len(self.per_m), M)
-        for t in self.per_m:
-            if t is None:
-                continue
-            assert isinstance(t, SparseTile)
-            assert (t.r, t.k, t.nf) == (rho, rho, 1), (t.r, t.k, t.nf, rho)
-
-    def unpack(self, ntime):
-        """Return the dense (2^(r-R), M, ntime) output array.
-
-        Multiplets with no overlap (per_m[m] is None) are left as zeros."""
-        rho = self.r - self.R
-        out = np.zeros((1 << rho, len(self.per_m), ntime), dtype=np.float64)
-        for m, tile in enumerate(self.per_m):
-            if tile is not None:
-                out[:, m, :] = tile.unpack(ntime)[0]
-        return out
-
-    @staticmethod
-    def _emit(per_m, mbase, l, tile, C, upper_half_only=False):
-        # Fill the 2^l multiplets of one subband into per_m. A None tile (subband outside
-        # the gridding footprint) leaves those multiplets as None. The extraction lag C*d_hi
-        # (the subband's per-coarse-delay time shift) is folded into each multiplet's tshifts
-        # here: adding C*2^j to coarse bit j gives a total forward shift of C*d_hi.
-        # If upper_half_only, also drop the top coarse-DM bit (keep the upper DM-half), AFTER the
-        # lag so that the dropped bit's lag+DD shift fold into t0.
-        if tile is None:
-            for e in range(1 << l):
-                per_m[mbase + e] = None
-        else:
-            lag = C * (1 << np.arange(tile.k - l, dtype=np.int64))   # coarse bit j -> C*2^j
-            for e in range(1 << l):
-                t = tile.specialize_dbits(e, l, low=True)
-                t = SparseTile(t.r, t.k, t.f0, t.nf, t.nt, t.dbits, t.data, t.tshifts + lag,
-                               t0=t.t0, scale=t.scale)
-                if upper_half_only:
-                    t = t.specialize_dbits(1, 1, low=False)   # keep upper DM-half (top bit == 1)
-                per_m[mbase + e] = t
-
-    @staticmethod
-    def make_dedispersion_output(channel_map, ifreq, fs, upper_half_only=False):
-        """Return the subbanded dedispersion output for a one-hot input.
-
-        Suppose TreeGriddingKernel -> (subbanded tree dedispersion) is applied to a one-hot
-        shape (nfreq, ntime) input whose (ifreq, 0) entry is 1. The output is a mostly-zero
-        shape (2^(r-R), M, ntime) array; this returns an equivalent SparseTilePerM.
-        We assume non-bit-reversed coarse-delay (d_hi) and multiplet (m) indices.
-
-        'fs' is a FrequencySubbands object defining the subband scheme.
-
-        If upper_half_only, only the upper half of the coarse-DM range is kept (the top d_hi bit
-        is fixed to 1 and dropped), so the result has rank (r-R-1) instead of (r-R). This is what
-        a downsampled tree (primary_tree_index > 0) keeps.
-
-        Implementation (notes Section "Subbanded dedispersion"): iterate a single
-        under-the-hood SparseTileTriple (the full-band gridding footprint) and extract per-
-        multiplet outputs "on the fly". Case 1 (aligned, l=0 or even s) reads the
-        level-(r-R+l) singleton f directly; Case 2 (half-aligned, l>0 odd s) merges the
-        level-(r-R+l-1) pair (2f+1, 2f+2) via iterate_singletons().
-        
-        Each extraction is then split into its 2^l multiplets (specialize_dbits, low=True).
-        """
-        sc = [int(c) for c in fs.subband_counts]
-        sarr = SparseTileTriple.make_tree_gridding_output(channel_map, ifreq)
-        r = sarr.r
-        R = fs.pf_rank
-        assert 0 <= R <= r, (R, r)
-        per_m = [None] * fs.M
-
-        # Per subband: (l, f_blk, case1, mbase), derived from its coarse f-range [flo, fhi).
-        subs = []
-        for n in range(fs.N):
-            flo, fhi = int(fs.n_to_flo[n]), int(fs.n_to_fhi[n])
-            l = integer_log2(fhi - flo)                    # band width is 2^l
-            f_blk = flo >> l                               # coarse block index
-            case1 = (flo & ((1 << l) - 1)) == 0            # aligned (always true for l==0)
-            subs.append((l, f_blk, case1, int(fs.n_to_mbase[n])))
-
-        for k in range(0, r + 1):
-            for (l, f_blk, case1, mbase) in subs:
-                if case1 and (r - R + l) == k:                  # Case 1: read level k
-                    tile = sarr.get_singleton(f_blk, allow_none=True)
-                    C = (1 << l) * ((1 << (R - l)) - 1 - f_blk)
-                    SparseTilePerM._emit(per_m, mbase, l, tile, C, upper_half_only)
-                elif (not case1) and (r - R + l - 1) == k:      # Case 2: read level r-R+l-1
-                    lo = sarr.get_singleton(2 * f_blk + 1, allow_none=True)
-                    up = sarr.get_singleton(2 * f_blk + 2, allow_none=True)
-                    C = (1 << (l - 1)) * ((1 << (R - l + 1)) - 2 * f_blk - 3)
-                    if lo is None and up is None:
-                        tile = None
-                    else:
-                        tile = SparseTile.iterate_singletons(lo, up)
-                    SparseTilePerM._emit(per_m, mbase, l, tile, C, upper_half_only)
-            if k < r:
-                sarr = sarr.iterate()
-
-        return SparseTilePerM(r - (1 if upper_half_only else 0), R, sc, per_m)
-
-    # ------------------------------- test utilities -------------------------------
-
-    @staticmethod
-    def test_one_subbanded_dedispersion(channel_map, ifreq, subband_counts, upper_half_only=False):
-        """Test one subbanded dedispersion against the reference implementation.
-
-        Compare SparseTilePerM.make_dedispersion_output(...).unpack() against
-        ReferenceTreeGriddingKernel -> ReferenceTree(subband_counts) on a one-hot input.
-        With upper_half_only, compares against the upper coarse-DM half of the reference.
-        """
-        import ksgpu
-        from ..kernels import ReferenceTree
-        from ..pirate_pybind11 import FrequencySubbands
-
-        cm = np.ascontiguousarray(channel_map, dtype=np.float64)
-        ntree = len(cm) - 1
-        r = integer_log2(ntree)
-        sc = [int(c) for c in subband_counts]
-        R = len(sc) - 1
-        assert R <= r
-        rho = r - R
-        upper_half_only = upper_half_only and (rho >= 1)   # need a coarse-DM bit to drop
-        fs = FrequencySubbands(sc)
-        M = fs.M
-        # ntime: multiple of 32 (gridding) and comfortably > 2^(r+1) so the largest
-        # (delay + lag) fits one non-incremental ReferenceTree chunk with no wraparound.
-        ntime = (((3 << r) + 128) // 32 + 1) * 32
-
-        grid = SparseTileTriple._reference_gridding(cm, ifreq, ntime)    # (1, ntree, ntime) f32
-        buf = np.ascontiguousarray(grid.reshape(1, 1, ntree, ntime))   # (1,1,ntree,ntime) f32
-        out_rt = np.zeros((1, 1 << rho, M, ntime), dtype=np.float32)
-        ReferenceTree(num_beams=1, amb_rank=0, dd_rank=r, ntime=ntime,
-                      nspec=1, subband_counts=sc).dedisperse(buf, out_rt)  # natural (d_hi, m)
-
-        ssa = SparseTilePerM.make_dedispersion_output(cm, ifreq, fs, upper_half_only=upper_half_only)
-        got = ssa.unpack(ntime)                                         # (2^rho_out, M, ntime) f64
-        rho_out = rho - (1 if upper_half_only else 0)
-        ref = out_rt[0][1 << rho_out:] if upper_half_only else out_rt[0]   # upper coarse-DM half
-        assert got.shape == (1 << rho_out, M, ntime)
-        ksgpu.assert_arrays_equal(ref, got, "reftree", "got", ["d_hi", "m", "time"], epsabs=0.0)
-
-        # "Headline compactness" structural check: when ifreq's gridding footprint is a
-        # single tree channel, iterating to k==r keeps the tile maximally compact -- nf==1
-        # and dbits==0 at every level. (This single-channel case occurs often under
-        # random_channel_map; its dedispersion correctness is already covered above, since
-        # a single-channel footprint grids to weight 1.0.)
-        s = SparseTileTriple.make_tree_gridding_output(cm, ifreq)
-        if s.nf == 1:
-            while s.k < s.r:
-                s = s.iterate()
-                assert s.nf == 1, (s.k, s.nf)
-                for t in s.tiles:
-                    assert t.dbits == 0, (s.k, t.dbits)
-
-    @staticmethod
-    def test_random_subbanded_dedispersion():
-        from ..pirate_pybind11 import FrequencySubbands
-        cm, ifreq = SparseTileTriple.random_channel_map()
-        r = integer_log2(len(cm) - 1)
-        R = int(np.random.randint(0, min(r, 4) + 1))    # pf_rank <= min(r, 4)
-        sc = [int(c) for c in FrequencySubbands.make_random_subband_counts(R)]
-        upper = bool(np.random.randint(0, 2))
-        SparseTilePerM.test_one_subbanded_dedispersion(cm, ifreq, sc, upper_half_only=upper)
