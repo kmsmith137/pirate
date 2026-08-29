@@ -1634,6 +1634,112 @@ class VarianceMap:
                             Q_is_semiorthogonal=False, W_is_semiorthogonal=True,
                             history_record=rec)
 
+    def svd_optimize(self, *, rtol=None):
+        """Re-express A at the SMALLEST rank that represents it exactly, and return the result.
+
+        The stored rank K0 is the sum of the per-group ranks the factorization was assembled
+        from, and nothing made those columns independent ACROSS groups. This finds the true
+        rank K1 <= K0 and rebuilds the factorization there. Measured on the analytic map, K1 is
+        24% smaller at toy.yml, 54-57% at CHIME and 59-60% at CHORD.
+
+        EXACT, not an approximation: only modes that are numerically zero are dropped. Measured
+        worst relative change in A over a 4000-row sample, 1.1e-12 at toy.yml and 1e-13 to
+        1e-14 at the CHIME/CHORD configs -- four orders inside the 1-1e-9 margin that
+        check_ref_covers_y_true() allows, which is why 'is_admissible' survives. Returns SELF
+        unchanged (no copy, no history record) when there is nothing to remove.
+
+        The procedure. Take thin SVDs Q = Q'R and W = W'S, so Q' and W' are semiorthogonal and
+
+            A = Q mid W^T = Q' (R mid S^T) W'^T,
+
+        SVD the K0-by-K0 middle as U diag(s) V^T, and keep the s above the cutoff:
+
+            Q1 = Q' U,   mid1 = diag(s),   W1 = W' V.
+
+        Q1 and W1 are both semiorthogonal, which is what 'mid' exists for. Nothing else about
+        the map changes -- in particular y_true is untouched, and A is the same matrix.
+
+        SVDs THROUGHOUT, DELIBERATELY, and this is measured rather than assumed. The cheap
+        alternative is to get R from the Gram matrix (Q^T Q, eigh, R = Lambda^(1/2) V^T), which
+        needs no M-by-K0 temporary and ran 4-10x faster. It is also 7-8 orders of magnitude less
+        accurate -- relative error 3.3e-06 (toy.yml), 7.4e-08 (chime_sb1), 5.0e-05
+        (chime_sb2_et), against 1e-12 to 1e-13 here -- because forming the Gram matrix squares
+        the condition number, and these spectra span 11 decades. Worse, it reported a SMALLER K1
+        in every case (266 vs 274, 191 vs 194, 371 vs 381): it silently over-truncates, throwing
+        away real content. A rank-revealing step is exactly where a non-SVD factorization cannot
+        be trusted, so do not "optimize" this into a QR or a Gram matrix.
+
+        Cost: two thin SVDs plus two (M, K0) x (K0, K1) matmuls. np.linalg.svd allocates its own
+        (M, K0) U, so PEAK MEMORY IS ABOUT TWICE Q -- see compute_detrender_free_base_map(),
+        whose max_bytes check accounts for it.
+
+        Parameters
+        ----------
+        rtol : float or None
+            Modes with s < rtol * s[0] are dropped. Default K0 * eps, numpy's matrix_rank
+            convention applied to the K0-by-K0 matrix actually being ranked. The default is
+            stable rather than delicately placed: moving it to 1e-12 changes K1 by at most 1
+            over the shipped configs. It is NOT a lossy knob -- that is 'epsilon', which
+            truncates each group's SVD before assembly. A deliberately lossy rtol works
+            (1e-8 buys another 5-8% of rank at ~1e-8 relative error), but that is a different
+            feature and this default is not it.
+        """
+
+        self._require_factored('svd_optimize')
+
+        # We have not thought through how svd-optimization should combine with a pinned
+        # nonnegative column. The rotation mixes every column, so the pinned column does not
+        # survive as such -- reorthogonalize() solves the same problem with an ORDERED QR, and
+        # there is no SVD analogue of that trick. No code path reaches here with a pinning
+        # today (the analytic map pins nothing), so this is an assert rather than a designed
+        # branch: if it ever fires, that is the signal to go and think about it.
+        assert np.asarray(self.pinned_columns).size == 0, \
+            ('VarianceMap.svd_optimize: pinned columns are not supported; see the comment'
+             ' above this assert.')
+
+        K0 = self.factor_rank
+        rtol = (K0 * np.finfo(np.float64).eps) if (rtol is None) else float(rtol)
+
+        Q = np.asarray(self.Q, dtype=np.float64)
+        W = np.asarray(self.W, dtype=np.float64)
+        Uq, sq, Vqt = np.linalg.svd(Q, full_matrices=False)
+        Uw, sw, Vwt = np.linalg.svd(W, full_matrices=False)
+
+        # Z = R mid S^T, with R = diag(sq) Vqt and S = diag(sw) Vwt.
+        #
+        # NOT ALWAYS K0-BY-K0: with full_matrices=False, an (M, K0) input with M < K0 gives
+        # back M columns, not K0. So Z is (min(nbeta,K0), min(nfreq,K0)) and len(sz) can be
+        # less than K0 -- which is the ordinary case for a small config, where nfreq < K0. The
+        # algebra is unaffected (Uq is (nbeta, Kq), Uz is (Kq, K1), so Q1 is (nbeta, K1) as
+        # intended); only the indexing below has to allow for it.
+        Z = (sq[:, None] * Vqt) @ np.asarray(self.mid, dtype=np.float64) @ (Vwt.T * sw)
+        Uz, sz, Vzt = np.linalg.svd(Z)
+
+        K1 = int((sz > rtol * sz[0]).sum()) if (sz[0] > 0.0) else 0
+        if K1 >= K0:
+            return self          # the early exit: this factorization cannot be improved
+
+        if K1 == 0:
+            raise RuntimeError('VarianceMap.svd_optimize: every singular value is below the'
+                               f' cutoff (s[0]={sz[0]:.3g}), i.e. A is numerically zero.')
+
+        # Reported so a later reader can see whether the cut fell in a clean gap. It does at
+        # CHIME (a 1e4 ratio) but not always: at toy.yml the two straddling values differ by
+        # only 2.6x. That is not a stability problem -- everything near the cut is at 1e-13 of
+        # s[0] -- but it is the number to look at before trusting a particular K1.
+        # sigma_dropped is 0.0 when the cut is at the end of the spectrum -- which happens
+        # whenever min(nbeta, nfreq) < K0, since then Z has fewer than K0 singular values and
+        # the modes past that are absent rather than small.
+        rec = dict(step='svd_optimize', factor_rank=K1, factor_rank_from=K0, rtol=rtol,
+                   sigma_kept=float(sz[K1-1] / sz[0]),
+                   sigma_dropped=float(sz[K1] / sz[0]) if (K1 < sz.size) else 0.0)
+
+        return self.replace(Q=np.ascontiguousarray(Uq @ Uz[:, :K1]),
+                            mid=np.ascontiguousarray(np.diag(sz[:K1])),
+                            W=np.ascontiguousarray(Uw @ Vzt[:K1].T),
+                            Q_is_semiorthogonal=True, W_is_semiorthogonal=True,
+                            history_record=rec)
+
     def with_basis(self, W, *, mid=None, pinned_columns=None):
         """Return a factored map with the given W and an UNSET Q (all zero), ready for a
         qstep(). ``is_admissible`` is False, since a zero Q covers nothing.

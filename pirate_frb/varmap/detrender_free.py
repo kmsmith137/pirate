@@ -905,7 +905,7 @@ class SdPlan:
 
 
 def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=None,
-                                    progress=False, debug=False):
+                                    svd_optimize=True, progress=False, debug=False):
     """Analytic variance map of 'config''s base tree (ipri = et_level = 0), factored.
 
     No detrender, no DedispersionPlan and no GPU. See the module docstring for the algorithm
@@ -930,9 +930,16 @@ def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=N
         SdMatrix.default_epsilon().
     max_bytes : int or None
         Ceiling on the lifted Q, which is the only large allocation here (63.8 GiB for a fine
-        map at chord_sb2_et.yml scale). None means NO LIMIT; the size is reported before the
-        allocation either way, so a run that is about to fail says why rather than being
-        killed by the OOM reaper.
+        map at chord_sb2_et.yml scale), PLUS the svd-optimization scratch when that is on --
+        np.linalg.svd allocates its own (nbeta, Ktot) U, so the peak is about twice the Q.
+        None means NO LIMIT; the size is reported before the allocation either way, so a run
+        that is about to fail says why rather than being killed by the OOM reaper.
+    svd_optimize : bool
+        Rebuild the returned factorization at its true rank (VarianceMap.svd_optimize()).
+        Exact, and measured to remove 24% of the rank at toy.yml, 54-57% at CHIME and 59-60%
+        at CHORD. It is NOT free: it dominates this function's cost at scale (26 s to build
+        the map at chord_sb2_et.yml, 854 s to optimize it) and doubles the peak memory, which
+        is why it is a knob rather than unconditional.
     debug : bool
         Turn on SdPlan's planning-pass cross-checks.
 
@@ -977,12 +984,23 @@ def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=N
     atomic_print(f'compute_detrender_free_base_map: lifting to Q ({nbeta} x {Ktot}),'
                  f' {nbytes/(1<<30):.2f} GiB ({what})')
 
-    if (max_bytes is not None) and (nbytes > max_bytes):
+    # THE PEAK IS TWICE Q WHEN svd_optimize IS ON, not Q: np.linalg.svd(Q,
+    # full_matrices=False) allocates an (nbeta, Ktot) U of its own before the old Q can be
+    # freed. Checking only the lift would let a caller validate a budget and then need double
+    # it -- discovered, at CHORD scale, some minutes into a run that had already passed its
+    # own check.
+    peak = 2 * nbytes if svd_optimize else nbytes
+    if (max_bytes is not None) and (peak > max_bytes):
         raise RuntimeError(f'compute_detrender_free_base_map: the lifted Q is'
-                           f' {nbytes/(1<<30):.1f} GiB ({what}={nbeta}, Ktot={Ktot}), over'
-                           f' the caller-supplied max_bytes={max_bytes/(1<<30):.1f} GiB.'
+                           f' {nbytes/(1<<30):.1f} GiB ({what}={nbeta}, Ktot={Ktot})'
+                           + (f', and svd_optimize=True needs about twice that'
+                              f' ({peak/(1<<30):.1f} GiB peak)' if svd_optimize else '')
+                           + f', over the caller-supplied'
+                             f' max_bytes={max_bytes/(1<<30):.1f} GiB.'
                            + ('' if (L is not None) else
-                              ' Passing L would shrink it by 2^(L-R) * M/N.'))
+                              ' Passing L would shrink it by 2^(L-R) * M/N.')
+                           + (' Passing svd_optimize=False would halve the peak, at the cost'
+                              ' of a larger factor_rank.' if svd_optimize else ''))
 
     Wtot = np.zeros((nfreq, Ktot))
 
@@ -1054,7 +1072,7 @@ def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=N
     if progress:
         atomic_print(f'  compute_detrender_free_base_map: done in {dt:.2f} seconds')
 
-    return VarianceMap.from_factors(
+    vmap = VarianceMap.from_factors(
         config, plan.itree0, Qtot.reshape(nbeta, Ktot), Wtot, detrender=None, L=L,
         y_true=ytrue.reshape(nalpha), tree=plan.tree0, is_admissible=True,
         history=[dict(step='compute_detrender_free_base_map', time=dt, L=L, nalpha=nalpha,
@@ -1063,12 +1081,33 @@ def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=N
                       n_straddled=stats['n_straddled'], n_sliced=stats['n_sliced'],
                       Ftot=stats['Ftot'], epsilon=epsilon, eps_max=stats['eps_max'])])
 
+    if not svd_optimize:
+        return vmap
+
+    # Ktot is the SUM of the per-group ranks, and nothing made those columns independent
+    # ACROSS groups, so the assembled factorization is routinely far from minimal. This
+    # rebuilds it at its true rank, exactly. Unconditional print (like the lift's above): at
+    # chord_sb2_et.yml this is 854 seconds against the map's own 26, so a silent step here
+    # would be the least explicable part of a long run.
+    t1 = time.time()
+    vmap = vmap.svd_optimize()
+    dt1 = time.time() - t1
+    K1 = vmap.factor_rank
+    if K1 < Ktot:
+        atomic_print(f'compute_detrender_free_base_map: svd-optimized, rank {Ktot} -> {K1}'
+                     f' ({100*(Ktot-K1)/Ktot:.1f}% smaller), {dt1:.2f} sec')
+    else:
+        atomic_print(f'compute_detrender_free_base_map: svd-optimized, rank {Ktot}'
+                     f' (no reduction available), {dt1:.2f} sec')
+    return vmap
+
 
 ####################################   the multimap   ####################################
 
 
 def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=None,
-                                     progress=False, debug=False, provenance=None):
+                                     svd_optimization_level=2, progress=False, debug=False,
+                                     provenance=None):
     """Analytic variance map of EVERY primary tree, as a VarianceMultiMap. No detrender.
 
     Computes the base tree once with compute_detrender_free_base_map() and SLICES it for
@@ -1091,6 +1130,30 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
         ``(1 + 0.5 * sum over gamma>0 of P_gamma/P_0)`` times the base Q -- 1.94x at every
         shipped CHORD/CHIME config, 1.65x at toy.yml -- and is reported before any slice is
         taken.
+    svd_optimization_level : int
+        How much of the factorization to rebuild at its true rank (see
+        VarianceMap.svd_optimize()):
+
+          0  none;
+          1  the base tree only, i.e. compute_detrender_free_base_map(svd_optimize=True);
+          2  the base tree, and then EVERY higher tree again after the row restriction.
+
+        The base pass is where the rank goes: measured 24% off at toy.yml, 54-57% at CHIME,
+        59-60% at CHORD. The second pass adds 0.8% to 3.6% -- toy.yml 274 -> 266 and 264,
+        chime_sb1 194 -> 190, chime_sb2_et 381 -> 378. It is worth knowing WHY it is small:
+        on both CHIME configs every gamma lands on the SAME rank whatever P_gamma is, so what
+        the second pass recovers is the upper-DM-half restriction, not the profile
+        truncation, and the DM half is where the map's content is.
+
+        LEVEL 2 COSTS ONE SVD PER TREE and gives every tree its own W and mid, where levels
+        0 and 1 SHARE one (nfreq, K) pair across all of them. The extra storage is small
+        (0.06 GiB per tree at CHORD); the time is not (roughly half the base map's SVD per
+        tree, so ~1300 s on top of 854 s at chord_sb2_et.yml).
+
+        Note level 2 is not "level 1 plus a bit": running the base pass first costs the
+        children NOTHING. Measured, restricting the RAW base map and optimizing gives exactly
+        the same rank as restricting the ALREADY-OPTIMIZED base and optimizing again (266 and
+        264 at toy.yml, 190 at chime_sb1, 378 at chime_sb2_et, both ways round).
     provenance : dict, optional
         Merged into the multimap's provenance, after this function's own record. Same
         contract as compute_variance_multimap()'s, so the two algorithms' CLI paths can be
@@ -1162,12 +1225,19 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
         m_map = DedispersionTree.m_index_mapping(tree0, t)
         assert np.array_equal(m_map, np.arange(M0)), (g + 1, np.asarray(m_map))
 
+    if int(svd_optimization_level) not in (0, 1, 2):
+        raise RuntimeError('compute_detrender_free_multi_map: svd_optimization_level='
+                           f'{svd_optimization_level} is not one of 0 (none), 1 (base tree'
+                           ' only) or 2 (base tree + higher trees).')
+    svd_optimization_level = int(svd_optimization_level)
+
     prov = dict(algorithm='detrender_free', L=L, epsilon=epsilon,
-                num_primary_trees=npri)
+                num_primary_trees=npri, svd_optimization_level=svd_optimization_level)
 
     base = compute_detrender_free_base_map(config, L=L, epsilon=epsilon,
                                            max_bytes=max_bytes, progress=progress,
-                                           debug=debug)
+                                           debug=debug,
+                                           svd_optimize=(svd_optimization_level >= 1))
     if npri == 1:
         prov['total_seconds'] = time.time() - t0
         if provenance:
@@ -1219,10 +1289,22 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
             # A row subset of a map that dominates A_true elementwise also dominates it, so
             # whatever the base earned, each gamma earns. W and mid are SHARED objects rather
             # than copies: they are identical across trees and VarianceMap stores them
-            # read-only, which saves npri copies of (nfreq, K).
+            # read-only, which saves npri copies of (nfreq, K). At
+            # svd_optimization_level=2 the sharing ends on the next line, since each tree's
+            # optimization gives it its own W and mid.
             is_admissible=base.is_admissible,
             history=list(base.history) + [dict(step='restrict_to_primary_tree', gamma=gamma,
                                                itree=itree, P=Pg, D=D0//2)]))
+
+        # THE ROW RESTRICTION CAN LOWER THE RANK: a column of Q whose support lay entirely in
+        # the discarded rows -- the lower DM half, or a profile past P_gamma -- is zero in the
+        # child. Measured, this is worth 0.8% to 3.6%; see the svd_optimization_level docstring
+        # for why it is not more.
+        if svd_optimization_level >= 2:
+            K_g = maps[-1].factor_rank
+            maps[-1] = maps[-1].svd_optimize()
+            atomic_print(f'compute_detrender_free_multi_map: svd-optimized primary tree'
+                         f' {gamma}, rank {K_g} -> {maps[-1].factor_rank}')
 
     dt = time.time() - t0
     prov['total_seconds'] = dt

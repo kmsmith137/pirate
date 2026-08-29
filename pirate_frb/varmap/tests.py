@@ -2758,6 +2758,98 @@ def test_reorthogonalize(r=None, subband_counts=None, K=6):
                  ' positive scale, and lost by the plain rotation')
 
 
+def test_svd_optimize(r=None, subband_counts=None, K=5, j=3):
+    """VarianceMap.svd_optimize() against a factorization with KNOWN redundancy.
+
+    The point of the method is to find the TRUE rank of a factorization assembled from
+    per-group pieces that were never made independent of each other, so the test builds
+    exactly that: a rank-K pair (Q, W), then j extra columns on each side that are random
+    linear combinations of the first K. The stored rank is K+j and the true rank is K, and
+    nothing about the construction tells the method which is which.
+
+    An SVD-based rank test is the whole point of the method (a Gram-matrix or QR shortcut
+    over-truncates on these spectra -- see the method's docstring), so the bar on the
+    recovered rank is EXACT: K, not "about K".
+
+    Also checks the two claims the method makes about its output, since they are what
+    downstream code reads and neither is verified by the constructor: that both factors are
+    numerically semiorthogonal, and that 'mid' really is diagonal. And the early exit -- a
+    full-rank input must come back as the SAME OBJECT, so a caller can use it in a loop
+    without accumulating history records or copies.
+    """
+
+    rng = np.random.default_rng()
+    config = _random_config(rng)
+    # _nalpha_of() takes the TREE INDEX, and the base tree is not always index 0 -- with early
+    # triggers dedispersion_tree_index(0, 0) can be anything. Passing a literal 0 here built Q
+    # at another tree's row count and VarianceMap rejected it, on the draws where they differ.
+    itree = int(config.dedispersion_tree_index(0, 0))
+    nbeta, nfreq = _nalpha_of(config, itree), int(config.get_total_nfreq())
+
+    Q = rng.standard_normal((nbeta, K))
+    W = rng.standard_normal((nfreq, K))
+    Qx = np.hstack([Q, Q @ rng.standard_normal((K, j))])
+    Wx = np.hstack([W, W @ rng.standard_normal((K, j))])
+
+    vmap = VarianceMap.from_factors(config, itree, Qx, Wx)
+    assert vmap.factor_rank == K + j, (vmap.factor_rank, K, j)
+
+    opt = vmap.svd_optimize()
+    assert opt.factor_rank == K, (opt.factor_rank, K)
+
+    # A is unchanged. apply() and rows() go through different code (a three-factor product
+    # against a materialized block), so check both rather than assuming they agree.
+    v = rng.uniform(0.5, 1.5, size=nfreq)
+    a0, a1 = np.asarray(vmap.apply(v)), np.asarray(opt.apply(v))
+    e_apply = float(np.abs(a1 - a0).max() / np.abs(a0).max())
+    nb = min(vmap.nbeta, 512)
+    r0, r1 = np.asarray(vmap.rows(0, nb)), np.asarray(opt.rows(0, nb))
+    e_rows = float(np.abs(r1 - r0).max() / np.abs(r0).max())
+    assert e_apply < 1.0e-12, e_apply
+    assert e_rows < 1.0e-12, e_rows
+
+    # The two claims the flags make, checked against the matrices rather than read back out
+    # of the object that set them.
+    assert opt.Q_is_semiorthogonal and opt.W_is_semiorthogonal
+    Qo, Wo, I = np.asarray(opt.Q), np.asarray(opt.W), np.eye(K)
+    e_q = float(np.abs(Qo.T @ Qo - I).max())
+    e_w = float(np.abs(Wo.T @ Wo - I).max())
+    assert e_q < 1.0e-12, e_q
+    assert e_w < 1.0e-12, e_w
+    mid = np.asarray(opt.mid)
+    assert np.array_equal(mid, np.diag(np.diag(mid))), 'mid is not diagonal'
+
+    # The early exit, and that it is the same OBJECT rather than an equal one.
+    assert opt.svd_optimize() is opt, 'a full-rank factorization was not returned unchanged'
+
+    # nfreq < K0, where the thin SVD of W returns fewer than K0 columns and Z comes out
+    # RECTANGULAR. Found by a random draw rather than by design -- the reporting index in
+    # svd_optimize() ran off the end of the singular-value array -- so it is pinned here
+    # rather than left to chance. The recovered rank is capped by nfreq, not by K.
+    wide = VarianceMap.from_factors(config, itree,
+                                    rng.standard_normal((nbeta, nfreq + 4)),
+                                    rng.standard_normal((nfreq, nfreq + 4)))
+    wopt = wide.svd_optimize()
+    assert wopt.factor_rank == min(nfreq, nbeta), (wopt.factor_rank, nfreq, nbeta)
+    vw = rng.uniform(0.5, 1.5, size=nfreq)
+    b0, b1 = np.asarray(wide.apply(vw)), np.asarray(wopt.apply(vw))
+    assert float(np.abs(b1 - b0).max() / np.abs(b0).max()) < 1.0e-12
+
+    # Pinned columns are not supported; the method asserts rather than silently unpinning.
+    # (See the comment at that assert -- no production path reaches it today.)
+    pinned = VarianceMap.from_factors(config, itree, Qx, Wx, pinned_columns=[0])
+    try:
+        pinned.svd_optimize()
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError('svd_optimize() accepted a map with a pinned column')
+
+    atomic_print(f'    test_svd_optimize(nbeta={nbeta}, nfreq={nfreq}): rank'
+                 f' {K+j} -> {opt.factor_rank} (true rank {K}); A unchanged to'
+                 f' {max(e_apply, e_rows):.3g}; Q^T Q - I {e_q:.3g}, W^T W - I {e_w:.3g}')
+
+
 def test_greedy_bookkeeping(r=None, subband_counts=None):
     """The greedy merger's RUNNING objective against a distance recomputed from scratch.
 
@@ -3211,13 +3303,14 @@ def _compare_maps(got, ref, label):
     """(elementwise relative, sup-norm relative) difference between two maps, in row blocks.
 
     Returns BOTH because they answer different questions and the second is the one to put a
-    tight bar on. The elementwise figure ``max |got/ref - 1|`` is a per-element relative
-    quantity with NO FLOOR, so on a matrix with wide dynamic range it is set by the smallest
-    element compared rather than by how well the map is approximated -- the same effect
-    AdmissibilityResult documents for max_r. Measured over 40 random configs it has a median
-    of 6.2e-15 but a max of 5.3e-11, and toy.yml's dynamic range would put it near 2e-9. The
-    sup-norm figure ``max|got-ref| / max|ref|`` has no such tail: median 7.1e-16, max 5.6e-13
-    over the same draws.
+    tight bar on. The elementwise figure is ``max |got-ref| / (|ref| + 1e-6 * max|ref|)`` --
+    a relative error where the element is large enough for one to be meaningful, and an
+    absolute one below that. The floor is not decoration: WITHOUT it the figure is set by the
+    smallest element compared rather than by how well the map is approximated (the same
+    effect AdmissibilityResult documents for max_r), and with svd_optimize() rotating both
+    sides it reached 173 on a random draw whose sup-norm error was 1.7e-14. The sup-norm
+    figure ``max|got-ref| / max|ref|`` has no such tail: median 7.1e-16, max 5.6e-13 over 40
+    random configs.
 
     Row-blocked so that neither map has to be densified: 'ref' is already dense (coarse_grain
     returns a dense matrix), and materializing 'got' as well would double the peak.
@@ -3229,19 +3322,40 @@ def _compare_maps(got, ref, label):
     """
 
     assert got.shape == ref.shape, (label, got.shape, ref.shape)
-    worst_rel, worst_abs, scale = 0.0, 0.0, 0.0
     nb = ref.default_block_rows()
-    for start in range(0, ref.nbeta, nb):
-        stop = min(start + nb, ref.nbeta)
+    blocks = [(st, min(st + nb, ref.nbeta)) for st in range(0, ref.nbeta, nb)]
+
+    # FIRST PASS for the scale, over 'ref' only. It is needed BEFORE the elementwise figure
+    # can be formed (see the floor below), and ref is the dense side, so this pass is cheap --
+    # it is materializing 'got' that the blocking exists to avoid.
+    scale = 0.0
+    for (start, stop) in blocks:
+        scale = max(scale, float(np.abs(np.asarray(ref.rows(start, stop))).max()))
+
+    # THE FLOOR IS WHAT MAKES THE ELEMENTWISE FIGURE MEAN ANYTHING once svd_optimize() is in
+    # the picture. Both sides now carry an SVD rotation's roundoff, ~1e-14 of max|A| in
+    # ABSOLUTE terms, and a bare max|a/b - 1| divides that by |b| -- so one element sixteen
+    # decades below the max sends the figure to 173 while the sup-norm sits at 1.7e-14
+    # (measured, on a random draw). Dividing by (|b| + floor*scale) instead reports a relative
+    # error where the element is big enough for one to be meaningful and an absolute one
+    # below that. At floor=1e-6 the same draw reports 1.7e-8.
+    #
+    # Elements below floor*scale are not unchecked: the sup-norm figure covers them, to
+    # 1e-9 of the max.
+    floor = 1.0e-6 * scale
+    worst_rel, worst_abs = 0.0, 0.0
+    for (start, stop) in blocks:
         a = np.asarray(got.rows(start, stop))
         b = np.asarray(ref.rows(start, stop))
         nz = (b != 0.0)
-        if np.any(nz):
-            worst_rel = max(worst_rel, float(np.abs(a[nz] / b[nz] - 1.0).max()))
         if np.any(~nz) and np.any(a[~nz] != 0.0):
             raise AssertionError(f'{label}: nonzero where the reference is exactly zero')
+        if floor > 0.0:
+            worst_rel = max(worst_rel,
+                            float((np.abs(a - b) / (np.abs(b) + floor)).max()))
+        elif np.any(nz):
+            worst_rel = max(worst_rel, float(np.abs(a[nz] / b[nz] - 1.0).max()))
         worst_abs = max(worst_abs, float(np.abs(a - b).max()))
-        scale = max(scale, float(np.abs(b).max()))
     return worst_rel, (worst_abs / scale if (scale > 0.0) else 0.0)
 
 
@@ -3309,6 +3423,7 @@ def test_base_varmap_coarse(r=7, subband_counts=(2,2,1), num_early_triggers=1,
     n_straddled, kmax = 0, 0
     worst_coarse, worst_sup, worst_cytrue = 0.0, 0.0, 0.0
     n_coarse, n_sliced = 0, 0
+    n_opt, svd_frac = 0, 0.0
 
     for (config, label) in configs:
         # debug=True turns on the O(F) cross-checks: that no SdMatrix gets two rows from one
@@ -3320,6 +3435,19 @@ def test_base_varmap_coarse(r=7, subband_counts=(2,2,1), num_early_triggers=1,
         hist = vmap.history[0]
         n_straddled += int(hist['n_straddled'])
         kmax = max(kmax, int(vmap.factor_rank))
+
+        # svd_optimize() is on by default, so the returned rank is the TRUE rank of the
+        # assembled factorization and is normally well below the Ktot the lift produced. The
+        # sharp check on it is test_svd_optimize(); here we only pin the direction and record
+        # what it bought, since that is config-dependent (24% at toy.yml, 54-60% at
+        # CHIME/CHORD) and worth seeing in the line below.
+        opt = [h for h in vmap.history if h['step'] == 'svd_optimize']
+        assert len(opt) <= 1, [h['step'] for h in vmap.history]
+        if opt:
+            assert opt[0]['factor_rank'] == vmap.factor_rank < opt[0]['factor_rank_from']
+            n_opt += 1
+            svd_frac = max(svd_frac, 1.0 - opt[0]['factor_rank'] / opt[0]['factor_rank_from'])
+        assert vmap.Q_is_semiorthogonal and vmap.W_is_semiorthogonal
 
         # ---- the coarse path, against the fine map's own coarse_grain().
         R, rr = int(vmap.pf_rank), int(vmap.tree_rank)
@@ -3382,7 +3510,8 @@ def test_base_varmap_coarse(r=7, subband_counts=(2,2,1), num_early_triggers=1,
 
     if verbose:
         atomic_print(f'    test_base_varmap_coarse({len(configs)} random configs):'
-                     f' {n_straddled} straddled entries, max K {kmax}; per-group'
+                     f' {n_straddled} straddled entries, max K {kmax}'
+                     f' ({n_opt} svd-optimized, up to {100*svd_frac:.0f}% off); per-group'
                      f' reconstruction {worst_recon:.3g} over {len(sd_matrices)} groups'
                      f' ({n_square} of them square); {n_coarse} coarse maps'
                      f' ({n_sliced} sliced rows) vs coarse_grain(): sup-norm {worst_sup:.3g},'
@@ -3405,6 +3534,22 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
     max_width -- exactly the failure notes/variance_map.tex warns about ("the array shapes
     look plausible either way"). make_random() supplies it at 27-38% per draw. The report
     line below says how many actually did, so a thin run is recognizable as thin.
+
+    RUNS AT svd_optimization_level=1, NOT THE DEFAULT 2, and the distinction is the whole
+    reason this test can be exact. The slice IS the child map only up to the point where
+    level 2 re-optimizes each child, which rebuilds its Q in a rotated basis and gives it its
+    own W and mid -- after that, neither the array equality nor the ``m.W is base.W`` object
+    identity below means anything. Level 1 is therefore what "the multimap is slices of its
+    base" is a statement about. Level 2 is checked separately at the end, where the claim is
+    the weaker and correct one: the rank does not go up and A does not change.
+
+    THE LEVEL-2 RANK DROP DOES NOT FIRE ON THESE DRAWS, and the report line says so rather
+    than leaving it to be assumed: at _random_config()'s max_toplevel_rank=7 the restricted
+    child is essentially always already full-rank, so the count is 0. The drop is a
+    production-scale effect -- toy.yml 274 -> 266 and 264, chime_sb1 194 -> 190,
+    chime_sb2_et 381 -> 378. So what this arm guards is the DIRECTION (a child's rank must
+    never go up) and exactness, not the size of the win, and the counter is what would show
+    if a future draw distribution started reaching the interesting case.
     """
 
     from ..pirate_pybind11 import DedispersionConfig
@@ -3418,6 +3563,7 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
         configs.append((_random_config(rng), 'random'))
 
     n_multi, n_varying, n_coarse, ncmp = 0, 0, 0, 0
+    n_opt2, worst_opt2 = 0, 0.0
 
     for (config, label) in configs:
         npri = int(config.num_primary_trees)
@@ -3428,7 +3574,7 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
         # but [R, r0-1] otherwise, since a downsampled primary tree has rank r0-1.
         hi = r0 if (npri == 1) else (r0 - 1)
         for L in [None, int(rng.integers(R, hi + 1))]:
-            mm = compute_detrender_free_multi_map(config, L=L)
+            mm = compute_detrender_free_multi_map(config, L=L, svd_optimization_level=1)
             base = mm.maps[0]
             assert len(mm.maps) == npri, (label, len(mm.maps), npri)
             assert mm.provenance['algorithm'] == 'detrender_free'
@@ -3473,6 +3619,22 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
                 assert m.W is base.W and m.mid is base.mid, (label, gamma)
                 ncmp += m.Q.size
 
+            # ---- level 2, where the children are re-optimized after the slice. The exact
+            # statements above no longer hold; these two do, and they are what level 2
+            # actually promises: the rank never goes UP, and A is unchanged.
+            if npri > 1:
+                mm2 = compute_detrender_free_multi_map(config, L=L,
+                                                       svd_optimization_level=2)
+                v2 = rng.uniform(0.5, 1.5, size=int(config.get_total_nfreq()))
+                for (gamma, (m1, m2)) in enumerate(zip(mm.maps, mm2.maps)):
+                    assert m2.factor_rank <= m1.factor_rank, (label, gamma,
+                                                              m2.factor_rank, m1.factor_rank)
+                    n_opt2 += int(m2.factor_rank < m1.factor_rank)
+                    a1, a2 = np.asarray(m1.apply(v2)), np.asarray(m2.apply(v2))
+                    e2 = float(np.abs(a2 - a1).max() / np.abs(a1).max())
+                    assert e2 < 1.0e-12, (label, gamma, e2)
+                    worst_opt2 = max(worst_opt2, e2)
+
         # L = r0 with npri > 1 must raise, and must do so BEFORE the base map is computed --
         # unchecked it still fails, but from the CHILD's constructor, naming a rank the caller
         # never asked for, after minutes of work.
@@ -3495,7 +3657,9 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
         atomic_print(f'    test_multimap_vs_base({len(configs)} configs, {nrandom} random):'
                      f' {n_multi} multi-tree and {n_coarse} coarse builds,'
                      f' {n_varying} gamma maps with P_gamma < P_0,'
-                     f' {ncmp} Q entries compared exactly')
+                     f' {ncmp} Q entries compared exactly;'
+                     f' at level 2, {n_opt2} maps dropped rank, A unchanged to'
+                     f' {worst_opt2:.3g}')
 
 
 def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, verbose=True):
@@ -3861,6 +4025,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     n_multi, n_varying, n_r0, n_wide, n_et = 0, 0, 0, 0, 0
     worst_p1, n_p1_pairs, n_nontrivial = 0.0, 0, 0
     worst_vf, n_vf = 0.0, 0
+    worst_leak = 0.0
     rng = np.random.default_rng()
 
     for (config, label) in configs:
@@ -3884,27 +4049,40 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
             assert got.shape == A.shape, (label, gamma, got.shape, A.shape)
 
             # The sweep's exact zeros are (channel, multiplet) pairs that do not overlap at
-            # all, and the analytic map reproduces them EXACTLY rather than at the truncation
-            # level -- so this is an exact bar, not a tolerance. It is exact for a structural
-            # reason: a channel absent from a group leaves that group's rows of W untouched at
-            # zero, and a subband absent from a group never has those columns written into its
-            # rows of Q, so the product is 0.0 whichever of the two is missing. Measured over
-            # 12.2M zero entries across 20 random configs, every one was exactly 0.0. That
-            # makes this the check that would catch a W scatter landing on the wrong channels,
-            # which a relative comparison over the support would mostly hide.
+            # all. This bar is what catches a W scatter landing on the wrong channels, which
+            # a relative comparison over the support would mostly hide.
+            #
+            # IT USED TO BE AN EXACT ZERO, and that was justified structurally: a channel
+            # absent from a group left that group's rows of W untouched at zero, and a subband
+            # absent from a group never had those columns written into its rows of Q, so the
+            # product was 0.0 whichever of the two was missing -- measured over 12.2M zero
+            # entries across 20 random configs, every one exactly 0.0.
+            #
+            # svd_optimize() ENDS THAT. It rotates the factorization into its true rank, so
+            # every column of the new W is a combination of all the old ones and the
+            # block-sparsity the argument rested on is gone. The zeros are now zero only to
+            # float64 roundoff. Measured over 4 random configs at svd_optimization_level=2:
+            # worst leakage 3.35e-14 relative to max|A|, against exactly 0.0 at level 0. The
+            # bar below is 1e-10 of max|A| -- four decades over what was measured, and still
+            # tiny against the O(1) relative leak a misdirected scatter would produce.
+            #
+            # The varfine arm further down KEEPS its exact-zero bar: it does not go through
+            # the map, so the structural argument still holds there.
             nz = (A != 0.0)
             assert np.any(nz), (label, gamma)
             e = float(np.abs(got[nz] / A[nz] - 1.0).max())
-            e0 = float(np.abs(got[~nz]).max()) if np.any(~nz) else 0.0
+            scale = float(np.abs(A).max())
+            e0 = (float(np.abs(got[~nz]).max()) / scale) if np.any(~nz) else 0.0
 
-            if (e >= 1.0e-5) or (e0 != 0.0):
+            if (e >= 1.0e-5) or (e0 >= 1.0e-10):
                 atomic_print(f'test_multimap_vs_sweep: FAILED on {label}, primary tree'
                              f' {gamma} of {npri} (P={P}), with on-support error {e:.3g} and'
-                             f' off-support leakage {e0:.3g} (which must be exactly zero).'
+                             f' off-support leakage {e0:.3g} (relative to max|A|).'
                              f' The config was:\n{config.to_yaml_string()}')
                 raise AssertionError((label, gamma, e, e0))
 
             worst = max(worst, e)
+            worst_leak = max(worst_leak, e0)
             ntrees += 1
 
         n_straddled += int(mm.maps[0].history[0]['n_straddled'])
@@ -3993,7 +4171,8 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     if verbose:
         atomic_print(f'    test_multimap_vs_sweep(device={device}, {len(configs)} random'
                      f' configs, {ntrees} primary trees): {n_straddled} straddled entries,'
-                     f' worst relative error {worst:.3g}; varfine over {n_vf} trees, worst'
+                     f' worst relative error {worst:.3g} (off-support leak'
+                     f' {worst_leak:.3g}); varfine over {n_vf} trees, worst'
                      f' {worst_vf:.3g}; Proposition 1 over {n_p1_pairs}'
                      f' (parent, child) pairs ({n_nontrivial} with a non-contiguous multiplet'
                      f' map), worst {worst_p1:.3g}; coverage: {n_multi} npri>1,'
@@ -5061,6 +5240,7 @@ def run_all():
     test_reorthogonalize()
     test_basis_constructors()
     test_greedy_bookkeeping()
+    test_svd_optimize()
     test_apply_restriction()
     test_restriction_representation()
     test_map_steps()

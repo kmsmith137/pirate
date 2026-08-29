@@ -441,10 +441,23 @@ def parse_varmap_df(subparsers):
     parser.add_argument('-m', '--max-bytes', type=_parse_size, default=None, metavar='SIZE',
                         help="Ceiling on the lifted Q, which is the only large allocation"
                              " here (32.0 GiB for a fine map at chime_sb2_et.yml, 6.9 GiB at"
-                             " L=4). Accepts a K/M/G/T suffix, e.g. '64G'. Omit for no limit;"
-                             " the size is reported before the allocation either way, so a run"
-                             " that is about to fail says why rather than being killed by the"
-                             " OOM reaper.")
+                             " L=4), doubled when svd-optimization is on (-s 1 or 2), since"
+                             " the SVD allocates a second array of the same shape. Accepts a"
+                             " K/M/G/T suffix, e.g. '64G'. Omit for no limit; the size is"
+                             " reported before the allocation either way, so a run that is"
+                             " about to fail says why rather than being killed by the OOM"
+                             " reaper.")
+    parser.add_argument('-s', '--svd-optimization-level', type=int, default=2, metavar='N',
+                        choices=(0, 1, 2),
+                        help="How much of the factorization to rebuild at its true rank:"
+                             " 0 = none, 1 = the base tree only, 2 = the base tree and every"
+                             " higher tree again after the row restriction (default)."
+                             " Exact, not an approximation. The base pass is where the rank"
+                             " goes -- measured 24%% off at toy.yml, 54-57%% at CHIME and"
+                             " 59-60%% at CHORD -- and the second pass adds 0.8-3.6%%. Use 0"
+                             " if you are short of memory or in a hurry: at"
+                             " chord_sb2_et.yml the map builds in 26 s and the base"
+                             " optimization takes 854 s.")
     parser.add_argument('--debug', action='store_true',
                         help="Turn on SdPlan's O(subbands) planning-pass cross-checks. Too"
                              " expensive to leave on at production scale.")
@@ -655,6 +668,7 @@ def varmap_df(args):
     t0 = time.time()
     vmm = varmap.compute_detrender_free_multi_map(
         config, L=args.coarse_grain, epsilon=args.epsilon, max_bytes=args.max_bytes,
+        svd_optimization_level=args.svd_optimization_level,
         progress=True, debug=args.debug,
         provenance=dict(command=' '.join(sys.argv)))
     dt = time.time() - t0
@@ -662,8 +676,9 @@ def varmap_df(args):
     vmm.write_asdf(args.output)
 
     nbytes = sum(m.nbytes() for m in vmm.maps)
-    atomic_print(f"varmap df: built {vmm.num_primary_trees} map(s) in {dt:.1f} s; wrote"
-                 f" {args.output} ({nbytes/2**20:.1f} MiB of float64 in"
+    ranks = [m.factor_rank for m in vmm.maps]
+    atomic_print(f"varmap df: built {vmm.num_primary_trees} map(s) in {dt:.1f} s at rank(s)"
+                 f" {ranks}; wrote {args.output} ({nbytes/2**20:.1f} MiB of float64 in"
                  f" {vmm.num_primary_trees} primary tree(s), covering {vmm.ntrees} tree(s))")
 
 
