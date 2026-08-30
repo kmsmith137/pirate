@@ -877,78 +877,43 @@ In our GPU kernels, we use coalescing tricks to avoid
 writing these temporary arrays to global GPU memory (the temporaries exist only in registers).
 In this section, we work out the details.
 
-First, where do the subband outputs sit in a split dedispersion? Recall from
-\S\ref{sssec:subbanded_dedispersion} that a level-$l$ subband is read off the array after
-$r-R+l$ dedispersion steps $\DDS$ in case 1, and one step earlier (plus an explicit merge of
-the two blocks either side of the subband midpoint) in case 2. Writing the outermost split of
-Eq.\ (\ref{eq:splitting})
-as $r = r_0 + r_1$, the first stage performs steps $0, \ldots, r_0-1$ and the second stage
-performs the rest.\footnote{$r_0$ and $r_1$ are the $r'$ and $r''$ of
-\S\ref{ssec:splitting_identity}. We rename them because a tree's $r_1$ is a fixed property of
-the implementation ($r_1 = \lceil {\tt dd\_rank}/2 \rceil$) rather than a free parameter of an
-identity, and \S\ref{ssec:subbands_per_tree} refers to it by that name.} So every subband
-output appears in the {\em second} stage provided every one of those step counts is at least
-$r_0$. The binding one is the earliest -- case 1 at $l=0$, and equivalently case 2 at $l=1$ --
-which gives $r-R \ge r_0$, i.e.
-\begin{equation}
-R \le r_1.
-\end{equation}
-This is the whole reason the extraction is cheap. The second stage is one kernel (for
-$r \le 8$, one threadblock), so its intermediates are already in registers or shared memory,
-and reading a subband off one of them costs no global-memory traffic.
+\S\ref{sssec:subbanded_dedispersion} states the construction for a monolithic $\DD(r)$. This
+section says what changes when $\DD(r)$ is split as $r = r_0+r_1$ (Eq.\ \ref{eq:splitting},
+whose $r',r''$ these are), and is meant to orient a reader before the kernel code.
 
-{\bf The case $R = r_1$.} Suppose first that the second stage has exactly rank $R$. Then the
-pipeline is
-\begin{equation}
-(f,t) \xrightarrow{\rm Reshape} (f_1, f_0, t)
- \xrightarrow{1 \otimes \DD(r_0)} (f_1, d', t)
- \xrightarrow{\rm LAG} (f_1, d', t)
- \xrightarrow{\DD(R) \otimes 1} (d'', d', t)
-\end{equation}
-and the subband outputs are simply the intermediates of that final $\DD(R)$: in case 1 the
-level-$l$ subbands are its array after $l$ of its $R$ steps, so the level-0 subbands are its
-{\em input} and the full band ($l=R$) is its output. (Case 2 reads the array one step earlier
-and merges by hand, as above.)
+{\bf Where the subbands are.} A level-$l$ subband is the array after $r-R+l$ steps $\DDS$ in
+case 1, or one step earlier plus an explicit merge across the subband midpoint in case 2. The
+first stage performs steps $0,\ldots,r_0-1$, so every subband lands in the second stage iff
+$R \le r_1$, which {\tt DedispersionConfig::validate()} enforces (its ``Check 2''). Equivalently:
+put a $\DD(R)$ at the outside of the second stage, and the level-$l$ subbands are its
+intermediates, level $0$ being its input and the full band its output. Being intermediates of a
+single stage is what keeps them in registers.
 
-Now compare the lags. The delay index feeding the final $\DD(R)$ is $d'$, which is exactly the
-output array's coarse delay $d_{\rm hi}$, and the frequency index feeding it is
-$0 \le f_1 < 2^R$ -- the index called $f$ in case 1 of \S\ref{sssec:subbanded_dedispersion} at
-$l=0$. Reading the splitting identity with outer rank $R$, the lag sitting in front of that
-$\DD(R)$ is
+{\bf What lag it needs.} The extraction needs
 \begin{equation}
-\LAG\big[ (2^R - 1 - f_1) \, d_{\rm hi} \big]
-\label{eq:subband_lag}
+\LAG\big[ (2^R-1-F)\, d_{\rm hi} \big]
 \end{equation}
-and this is exactly the $\LAG$ of the $r = r_0 + r_1$ split we were going to apply anyway.
-Given it, the $\DD(R)$ which follows generates the $T$'s of cases 1 and 2 by itself. So the
-subband lags cost nothing at all: an implementation that already applies the split's lag (in
-our kernels, a ring buffer in shared memory) needs no subband-specific lag.
+where $0 \le F < 2^R$ is the coarse-freq index (the $f$ of case 1 at $l=0$) and $d_{\rm hi}$ is
+the output coarse delay. Given that lag, the $\DD(R)$ which follows produces the $T$'s of cases
+1 and 2 by itself, with no further lag logic.
 
-{\bf The general case $R < r_1$.} Now the second stage is deeper than $R$, so the final
-$\DD(R)$ is not the whole of it. Write $K = r_1 - R$ and split the second stage once more, so
-that a $\DD(R)$ again sits at the outside:
+Let $K \equiv r_1 - R$. If $K=0$ the lag above is exactly the $\LAG$ of the $r_0+r_1$ split,
+which the implementation applies anyway (a ring buffer in shared memory), so the subband lags
+cost nothing. If $K>0$ then $d_{\rm hi} = 2^K d' + \mu$, where $d'$ is the first stage's delay
+and $0 \le \mu < 2^K$ comes from an inner $\DD(K)$, and the lag splits as
 \begin{equation}
-\DD(r_1) = \big( \DD(R) \otimes 1 \big) \circ \LAG\big[ (2^R-1-F)\, \mu \big]
-             \circ \big( 1 \otimes \DD(K) \big),
+(2^R-1-F)\, d_{\rm hi} = \underbrace{2^K (2^R-1-F)\, d'}_{\mbox{\footnotesize already applied by the $r_0+r_1$ split}}
+                        + \underbrace{(2^R-1-F)\, \mu}_{\mbox{\footnotesize one constant per $(F,\mu)$}}
 \end{equation}
-Here $0 \le \mu < 2^K$ is the delay produced by the inner $\DD(K)$, and the second stage's
-frequency index splits as $f_1 = 2^K F + u$ with $0 \le F < 2^R$ and $0 \le u < 2^K$. The
-delay feeding the outer $\DD(R)$ is now $d_{\rm hi} = 2^K d' + \mu$ rather than $d'$, so the
-lag (\ref{eq:subband_lag}) that the extraction needs splits into two pieces:
-\begin{equation}
-(2^R-1-F)\, d_{\rm hi} = \underbrace{2^K (2^R-1-F)\, d'}_{\rm free}
-                        + \underbrace{(2^R-1-F)\, \mu}_{\rm extra}.
-\end{equation}
-The first piece is free because the $r = r_0+r_1$ split over-applies lag relative to the inner
-split, by exactly this amount: its lag is $(2^{r_1}-1-f_1)d'$, the inner split's is
-$(2^K-1-u)d'$, and substituting $f_1 = 2^K F + u$ makes the difference $2^K(2^R-1-F)d'$, which
-is independent of $u$ and therefore commutes with $\DD(K)$.
+So $K>0$ costs one compile-time-constant lag per second-stage register, and buys $2^K$ values
+of $d_{\rm hi}$ per unit of $d'$.
 
-The second piece does not involve $d'$ at all, so it is one fixed lag per $(F,\mu)$ pair -- a
-compile-time constant in our kernels, not a ring buffer. So $R < r_1$ costs a small extra lag
-on each second-stage register, and buys $2^K$ values of $d_{\rm hi}$ per unit of $d'$.
-(\S\ref{ssec:subbands_per_tree} records which trees of a config land in which case: $K=0$
-whenever there are no early triggers.)
+{\bf Names in the code.} $r_1$ is {\tt dd\_rank1} $= \lceil {\tt dd\_rank}/2 \rceil$, and $K$ is
+{\tt DedispersionTree::xdm\_rank()}, the count of ``extra DM'' bits folded into the argmax
+token. The kernel is emitted by {\tt cuda\_generator/SbDedisperser.py} and registered by
+{\tt GpuSbDedispersionKernel} ({\tt include/pirate/DedispersionKernel.hpp});
+{\tt ReferenceTree} is the CPU reference. \S\ref{ssec:subbands_per_tree} says which trees of a
+config have $K>0$ (only early-trigger ones).
 
 \subsection{Alignment constraints and the MegaRingbuf}
 \label{ssec:dd_alignment}
