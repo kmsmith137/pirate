@@ -57,8 +57,10 @@ and the two 'debug' checks in _plan_pass() below are statements about the PLAN t
 port as well -- so they are worth keeping on in varmap/tests.py even though nothing here needs
 them. If you change the algorithm, change it here first.
 
-The remaining scaling fix for the MAP is a second, global SVD round that runs BEFORE the
-lift; the per-group factors that round needs are what SdPlan leaves behind.
+A second, global SVD round reduces the rank further, and is now applied by default: Ktot is
+the SUM of the per-group ranks and nothing made those columns independent across groups, so
+the stacked factorization is routinely far from minimal. See VarianceMap.svd_optimize(),
+which runs AFTER the lift and removes 24% (toy.yml) to 60% (CHORD) of the rank, exactly.
 
 TWO THINGS HERE ARE NON-OBVIOUS, and getting either wrong gives a wrong ANSWER rather than a
 crash. Both are derived at the code that implements them.

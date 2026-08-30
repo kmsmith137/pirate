@@ -239,7 +239,7 @@ output a coarse-grained variance map.
  or construct a low-rank approximation $A^{\rm approx} \approx A^{\rm true}$, we retain
  the {\em true, fine-grained} vector $y^{\rm true}_\alpha$ defined in Eq.\ (\ref{eq:ytrue_def}).
  We also retain a boolean flag \verb|is_admissible| which keeps track of whether the constraint
- $A^{\rm approx}_{\alpha F} \le A^{\rm true}_{\alpha F}$ is satisfied.
+ $A^{\rm approx}_{\alpha F} \ge A^{\rm true}_{\alpha F}$ is satisfied.
  Together, these two pieces of data suffice to compute $D(A^{\rm true}, A^{\rm approx})$, and
  thereby gauge the quality of the approximation (including coarse-graining distance penalty).
 
@@ -1897,9 +1897,9 @@ never appears. So any two trees of a config with $\gamma, \gamma' > 0$ and the s
 $0 \le p < \min(P_\gamma, P_{\gamma'})$. Their maps coincide outright when the two families
 share a {\tt max\_width}, and are nested otherwise: in {\tt chord\_sb2\_et.yml} the three
 downsampled families have $P = 13, 10, 7$, so there they are nested. Second, both propositions
-have been checked numerically against {\tt PfAvarExact} (float64) over random configs: the row
-identities (\ref{eq:restriction_et}) and (\ref{eq:restriction_ds}) hold to $0$ and one ulp
-respectively. Proposition 1 has additionally been checked with a {\tt Detrender2d} in front of
+have been checked numerically over random configs, against maps computed in float64 by the
+algorithm of \S\ref{sec:analytic_variance}: the row identities (\ref{eq:restriction_et}) and
+(\ref{eq:restriction_ds}) hold to $0$ and one ulp respectively. Proposition 1 has additionally been checked with a {\tt Detrender2d} in front of
 the dedisperser, where it continues to hold and Proposition 2 fails outright.
 
 \section{Monotonicity of the variance map in the DM bits (no detrender)}
@@ -1941,10 +1941,11 @@ must never {\em under}estimate a variance (\S\ref{ssec:distance_function}), can 
 evaluated at the bottom of each dyadic DM block: no maximization over the block is needed,
 and the resulting bound is tight.
 
-Concretely, $A$ is a reindexing of the arrays {\tt PfAvarExact} produces: with
-$m = (\mbox{subband}, d_{\rm lo})$ and $d = d_{\rm hi}$, the per-multiplet variance
-$y_m[d,p]$ of \S\ref{ssec:svd_exact_map} is $A[2^l d_{\rm hi} + d_{\rm lo}]$, so a dyadic
-block of $A$ generally runs across several multiplets.
+Concretely, $A$ here is a reindexing of the variance map of
+Eq.\ (\ref{eq:variance_map_def}): with $m = (\mbox{subband}, d_{\rm lo})$ and $d = d_{\rm hi}$
+as in \S\ref{ssec:avar_map_indices}, the per-multiplet variance $A_{\alpha F}$ at
+$\alpha = (d_{\rm hi}, m, p)$ is $A[2^l d_{\rm hi} + d_{\rm lo}]$, so a dyadic block of $A$
+generally runs across several multiplets.
 
 Note that $A$ is {\em not} monotone in $d_m$ as an integer: it wanders up and down, but never
 above the value at any bitwise-subset index (\S\ref{ssec:dyadic_sharpness}).
@@ -2052,8 +2053,8 @@ of $d_{\rm hi}$ is fixed to 1 and dropped, which is the DM range $d_m \ge 2^{K-1
 \par\noindent
 Two remarks. First, early triggers have disappeared into the definition of $\hat r$: a tree
 with $e>0$ performs ordinary rank-$\hat r$ dedispersion on the first $2^{\hat r}$ tree-freq
-channels, i.e.\ the same statement with a truncated channel map (this is what
-{\tt PfAvarExact} does; cf.\ its {\tt cmap\_rank}). Second, only $w_u \ge 0$ is used below,
+channels, i.e.\ the same statement with a truncated channel map. Second, only
+$w_u \ge 0$ is used below,
 so everything that follows holds for an arbitrary channel map and an arbitrary set of subband
 counts $C_l$, and -- summing (\ref{eq:dyadic_closedform}) against $V_F \ge 0$ -- for any
 non-negative combination of input channels.
@@ -2273,7 +2274,7 @@ the case $d = 2^kj$, $d' = 2^kj+i$, whose bits are disjoint. $\square$
 {\bf Corollary 8.}
 {\em The bitwise monotonicity (\ref{eq:bitwise_property}), and hence the dyadic-block property
 (\ref{eq:dyadic_property}), holds for every column of the variance map
-$A[d_m, \mbox{\rm subband}, p, F]$ of \S\ref{ssec:svd_exact_map}, in the no-detrender setting
+$A[d_m, \mbox{\rm subband}, p, F]$ of \S\ref{ssec:avar_map_indices}, in the no-detrender setting
 of \S\ref{ssec:dyadic_setup}, for every {\tt DedispersionTree} (any $\gamma$, any $e$), every
 subband (any pf\_level $l$, both the aligned Case 1 and the half-aligned Case 2), every
 profile $p$, and every input channel $F$.}
@@ -2292,7 +2293,7 @@ Three extensions are immediate, because bitwise monotonicity is preserved by non
 combinations and by pointwise maxima over a common DM index:
 \begin{itemize}
 \item {\bf Summing over frequency channels.} $y[d_m] = \sum_F V_F \, A[d_m,\cdot,\cdot,F]$
-has the property for any $V_F \ge 0$; this is the array {\tt PfAvarExact.tree\_variance}.
+has the property for any $V_F \ge 0$; this is the vector $Av$ of \S\ref{ssec:df_varfine}.
 \item {\bf Maximizing over profiles or multiplets.} Arrays which share the same $d_m$ index
 (e.g.\ the $P$ profiles) inherit the property under sums and pointwise maxima, since the
 maximizing index is common to all of them. The multiplets of one subband instead share the
@@ -2313,12 +2314,6 @@ using max (as in the dedispersion output arrays, \ddnotes{Dedispersion output ar
 the coarse-grained array equals the fine array sampled at $d_m \equiv 0 \pmod {2^c}$, and
 $i \subseteq i'$ implies $2^c i \subseteq 2^c i'$, so the coarse array inherits the property.
 \end{itemize}
-The argument also covers the {\em approximate} variance arrays of {\tt PfAvarApproximation}
-(\S\ref{sec:variance_svd}): there each per-band contribution is again of the form
-(\ref{eq:dyadic_closedform}) (with $K$ the rank of the corresponding sub-block tile), and the
-reported variance is a non-negative average of such contributions over bands, all sharing one
-DM index.
-
 \subsection{Sharpness}
 \label{ssec:dyadic_sharpness}
 
@@ -2401,8 +2396,8 @@ $A[255] = 5.08\times10^{-4} < A[256] = 6.71\times10^{-4}$, with
 $A[255 \,\&\, 256] = A[0] = 9.77\times10^{-4}$ above both.
 
 Finally, the statement is about the {\em natural} (non-bit-reversed) DM index
-$d_m = 2^l d_{\rm hi} + d_{\rm lo}$, which is the convention used by {\tt PfAvarExact} and
-{\tt TmpVmapExact}. Under a bit-reversed DM index, aligned dyadic blocks become strided
+$d_m = 2^l d_{\rm hi} + d_{\rm lo}$, which is the convention of
+\S\ref{ssec:avar_map_indices}. Under a bit-reversed DM index, aligned dyadic blocks become strided
 sets, and (\ref{eq:bitwise_property}) becomes bitwise monotonicity with respect to the
 reversed bit labelling (the subset order is preserved by any relabelling of the bits, so the
 theorem is convention-independent; only its ``dyadic block'' phrasing is not).
@@ -2610,9 +2605,8 @@ Each pass costs one full evaluation of $L$ on an $(N_{\rm freq}, N_{\rm time})$ 
 $N_{\rm freq} 2^\gamma$ passes are needed per tree ($N_{\rm freq}$ passes if $W=0$). For a
 CHORD-sized config that is $28160$ passes per tree, each dedispersing $\sim\!10^5$ downsampled time
 samples at rank $r=16$: hopelessly slow. Brute force is a small-config reference implementation,
-not a production algorithm -- and not even a practical replacement for
-\S\ref{sec:analytic_variance}, which is itself described there as too slow for production. Two
-things make it less bad than it looks: passes for different $F$ can be batched along the
+not a production algorithm, and not a practical substitute for \S\ref{sec:analytic_variance},
+which runs at full CHIME/CHORD scale. Two things make it less bad than it looks: passes for different $F$ can be batched along the
 dedisperser's spectator beam axis, and almost all of the work in each pass is on identically-zero
 data, which a specialized implementation could skip. Skipping it systematically is precisely what
 \S\ref{sec:avar_sparsetile} does.
@@ -2628,11 +2622,11 @@ same forward machinery, but replaces the random ensemble by the deterministic st
 $\{e^{(F,t_0)}\}$ -- so the result is exact rather than noisy, and it yields the full matrix $A$
 rather than a single product $Av$.
 
-\item {\bf It should agree with {\tt PfAvarExact}} wherever both apply. With the detrender
-disabled, $\gamma=0$, and subbands disabled, Eq.\ (\ref{eq:bf_master}) must reproduce
-Eq.\ (\ref{eq:avar_master}) column by column: indeed $A_{(d,p),F} = \|h_p * G_{Fd}\|^2$ is exactly
-the statement that the two agree. This is a strong end-to-end test, since the two computations
-share no code.
+\item {\bf It should agree with \S\ref{sec:analytic_variance}} wherever both apply. With the
+detrender disabled, Eq.\ (\ref{eq:bf_master}) must reproduce Eq.\ (\ref{eq:avar_master}) column
+by column: indeed $A_{(d,p),F} = \|h_p * G_{Fd}\|^2$ is exactly the statement that the two agree.
+This is the strongest end-to-end test we have, since the two computations share no code, and
+\S\ref{sec:avar_validation} describes how it is run.
 
 \item {\bf It is the only algorithm we have which handles the detrender.} The efficiency of
 \S\ref{sec:avar_sparsetile} rests on the gridding footprint ${\mathcal S}_F$ being a contiguous
@@ -2655,55 +2649,40 @@ being lost to roundoff against the diagonal term.
 
 \clearpage
 
-\section{Analytic variances from sparse tiles}
+\section{Detrender-free computation of the variance map}
 \label{sec:analytic_variance}
 
-The second step of peak-finding (\ddnotes{Peak-finding}) normalizes its output to ``sigmas'',
-by applying weights which are the inverse square roots of the output variances.
-This appendix describes how those variances are computed analytically, without simulation:
-the compressed representation of a single input channel's impulse response through tree
-dedispersion (\verb|SparseTile|, \verb|SparseTileTriple|), and the autocorrelation table that
-turns such a response into a peak-finding output variance (\verb|PfVarianceConvolver|).
-Both live in \verb|pirate_frb/varmap/|, with a C++ port in \verb|src_lib/varmap.cpp|.
+This appendix documents \verb|pirate_frb/varmap/detrender_free.py|, which computes the
+variance map $A$ of Eq.\ (\ref{eq:variance_map_def}) analytically -- no dedisperser is run, no
+{\tt DedispersionPlan} is built, and no GPU is used -- and returns it directly in low-rank
+form $A = QW^T$. It is the algorithm behind {\tt pirate\_frb varmap df}.
 
-{\bf Status of the code named below.} This appendix was originally written around a pair of
-classes, \verb|PfAvarExact| (which evaluated $y = Av$ for one $v$, per multiplet) and
-\verb|TmpVmapExact| (which compressed $A$ itself into a canonical low-rank form), together
-with their approximate counterparts in \S\ref{sec:variance_svd}. All four were a first pass at
-representing the variance map of \S\ref{sec:variance_map}, written before we settled on the
-\verb|VarianceMap| representation, and all four have since been DELETED along with the
-\verb|pirate_frb.slow_avar| subpackage that held them. What survives, and what the rest of this
-appendix should be read as describing, is:
+{\bf The no-detrender hypothesis is load-bearing, not a missing feature.} Throughout this
+appendix the linear operator $L$ of \S\ref{ssec:variance_map_setup} is taken with the
+{\tt Detrender2d} step omitted, so ``$A$'' here means the $A$ of
+Eq.\ (\ref{eq:variance_map_def}) for bare tree dedispersion. Three separate steps below are
+false with a detrender in front, and each says so where it is used: the sparse propagation of
+\S\ref{sec:avar_sparsetile} (whose efficiency needs a contiguous, narrow gridding footprint),
+the coarse-graining slice of \S\ref{ssec:df_coarse}, and the row restriction of
+\S\ref{ssec:df_multimap}. The brute-force algorithm of \S\ref{sec:variance_map_bruteforce} is
+the one that handles a detrender, at enormously greater cost.
+
+There are three entry points, and they differ in what they materialize:
 \begin{itemize}
-\item \S\ref{sec:avar_statement}--\S\ref{sec:avar_pfvariance}: the math of the sparse-tile
-representation and of the variance evaluation. This is LIVE. It is what
-\verb|varmap/detrender_free.py| and its C++ port are built on, and it is what the real-time
-server runs, via \verb|compute_detrender_free_varcoarse()|.
-\item \S\ref{sec:avar_validation}: how the result is checked. Rewritten below to describe the
-checks that now exist.
-\item \S\ref{ssec:svd_exact_map}--\S\ref{ssec:svd_exact_cost} and \S\ref{sec:variance_svd}:
-the two compression schemes, and the two drivers that fed them. The code is gone; the sections
-are kept for the record, each behind a status note.
+\item \verb|compute_detrender_free_base_map(config)| returns the map $A$ of the base tree, as
+a \verb|VarianceMap| in factored form. This is the most expensive of the three, because it is
+the only one that materializes $Q$.
+\item \verb|compute_detrender_free_multi_map(config)| returns a \verb|VarianceMultiMap|
+covering every tree of the config, by computing the base map once and slicing it
+(\S\ref{ssec:df_multimap}).
+\item \verb|compute_detrender_free_varfine(config, v)| and its coarse-grained sibling
+\verb|compute_detrender_free_varcoarse()| return the {\em vector} $Av$ for given input-channel
+variances $v_F$, for every tree, without ever forming $A$ (\S\ref{ssec:df_varfine}). This is
+what the real-time server consumes, and it has a C++ port
+(\verb|src_lib/varmap.cpp|) which is what actually runs in production.
 \end{itemize}
-The current route to $A$ is \S\ref{ssec:varmap_proposed}'s \verb|VarianceMap| built by
-\verb|varmap/detrender_free.py|, which groups channels by SUBBAND rather than by multiplet --
-measured, $2.9$ to $5.7$ times fewer convolutions -- and, unlike \verb|PfAvarExact|, is
-practical at CHIME/CHORD scale.
-
-One difference from \S\ref{ssec:variance_map_setup} applies throughout: there, the underlying
-linear operator includes a {\tt Detrender2d} before tree dedispersion, whereas here we consider
-``bare'' tree dedispersion. So the matrix called $A$ in this appendix is the $A$ of
-Eq.\ (\ref{eq:variance_map_def}) with the detrending step omitted; extending the construction to
-include the detrender is future work.
-
-To keep the presentation manageable, \S\ref{sec:avar_statement}--\S\ref{sec:avar_validation}
-make two simplifying assumptions: we consider
-only the ``base tree'' (no time downsampling and no early triggers, \ddnotes{Time-downsampled trees and early triggers}),
-and we disable subbands (i.e.\ $R=0$ and $C_l = \{1\}$, \ddnotes{Subband search}).
-Then there is a single multiplet ($M=1$), and the output of the calculation is a shape $(2^r,P)$
-array, indexed by delay $0 \le d < 2^r$ and peak-finding profile $0 \le p < P$, where
-$r = {\tt toplevel\_tree\_rank}$. These assumptions are expositional only -- the code handles the
-general case -- and \S\ref{ssec:svd_exact_map} onwards drops them.
+The three share one implementation, the class \verb|SdPlan|, whose four passes are
+\S\ref{ssec:df_passes}.
 
 \subsection{Statement of the problem}
 \label{sec:avar_statement}
@@ -2715,8 +2694,6 @@ time:
 \big\langle {\tt in}[F,t] \, {\tt in}[F',t'] \big\rangle = V_F \, \delta_{FF'} \, \delta_{tt'}
   \label{eq:avar_input}
 \end{equation}
-(In the code, the length-$N_{\rm freq}$ array $V_F$ is the constructor argument
-\verb|freq_variances|.)
 The three stages downstream -- tree gridding (\ddnotes{Tree gridding kernel}), tree dedispersion
 (\ddnotes{Tree dedispersion}), and convolution with the peak-finding kernels $h_p$
 (\ddnotes{Peak-finding}) -- are all linear, and are all time-translation invariant, so their
@@ -2738,8 +2715,13 @@ variance.\footnote{This is a steady-state statement. Near the beginning of a run
 have a {\em smaller} variance, since part of the impulse response reaches back to times before the
 start of the stream (recall from \ddnotes{Tree dedispersion} that ${\tt in}[\cdots,t]$ is
 defined to be zero for $t<0$). The {\tt DedispersionPlan} knows when each DM row reaches steady
-state ({\tt compute\_steady\_state\_it0}), and the Monte Carlo check of \S\ref{sec:avar_validation}
-uses this.}
+state ({\tt compute\_steady\_state\_it0}), and the Monte Carlo check of
+\S\ref{sec:avar_validation} uses this.}
+Comparing with Eq.\ (\ref{eq:variance_map_def}), the matrix element of the variance map is
+\begin{equation}
+A_{\alpha F} = \big\| h_p * G_{Fd} \big\|^2
+\end{equation}
+so computing $A$ is exactly computing $\|h_p * G_{Fd}\|^2$ for every $(F, d, p)$.
 
 We can make Eq.\ (\ref{eq:avar_master}) completely explicit. Recall from
 \ddnotes{Non-recursive formulation of tree dedispersion} that $\DD(r)$ maps a one-hot
@@ -2764,7 +2746,6 @@ Eqs.\ (\ref{eq:avar_master}), (\ref{eq:avar_impulse}) are a complete specificati
 However, evaluating them directly, for each $(F,d)$ pair, would be too slow
 ($N_{\rm freq} 2^r \approx 2 \times 10^9$ pairs in the CHORD config), and would also be wasteful:
 we will see that the $2^r$ delays give rise to far fewer than $2^r$ distinct answers.
-The rest of this section describes the algorithm which is actually used.
 
 \subsection{Variance from autocorrelations}
 \label{sec:avar_convolver}
@@ -2801,6 +2782,13 @@ contraction.
 need each impulse response {\em up to an arbitrary time shift}. This is the key to the
 compression in \S\ref{sec:avar_dbits}--\ref{sec:avar_sparsetile}: most of the $d$-dependence of
 $G_{Fd}$ is a pure time shift, and can simply be discarded.
+
+One consequence is worth stating early, because two later steps depend on it. The kernel
+autocorrelations $A_p[\delta]$ are non-negative and non-increasing in $\delta$, which holds
+because every profile is a co-centered non-negative sum of boxcars. That is a hypothesis of the
+monotonicity theorem of \S\ref{sec:dyadic_block}, which \S\ref{ssec:df_coarse} uses, so it is
+not a curiosity: it is checked by a unit test which fails with an explanation if the kernel bank
+ever stops having the property.
 \end{itemize}
 
 \subsection{Which delay bits matter}
@@ -2841,12 +2829,16 @@ footprint straddles a boundary between two ``coarse'' frequency channels of widt
 the last dedispersion step which
 combines two nonzero halves of the footprint with each other. There are only $2^{r-i}$ such
 boundaries in the band, and each one is straddled by at most one input channel, so at most
-$O(2^{r-i})$ input channels have $i_0 \ge i$: large $i_0(F)$ is rare, but (as we will see)
-expensive.
+$O(2^{r-i})$ input channels have $i_0 \ge i$: large $i_0(F)$ is rare, but expensive.
 
-The algorithm below never computes $i_0(F)$ explicitly. Instead, it discovers the same structure
--- and sometimes a strictly smaller set of relevant bits, when relative lags happen to cancel --
-while propagating the impulse response through the dedispersion steps.
+This bit set is central to the algorithm, and the code carries it as a bitmask called
+{\tt dbits}, with $|{\tt dbits}|$ its popcount. Two properties are used repeatedly. First, it can
+be computed in closed form from $(f_0, f_1)$ alone, with no iteration and no data
+(\verb|SparseTile._predict_dbits()|); the planning pass of \S\ref{ssec:df_passes} runs on that
+closed form. Second, the closed form is an upper bound which the actual propagation of
+\S\ref{sec:avar_sparsetile} can improve on, since relative lags sometimes cancel. The two are
+reconciled by an assertion at the point where the two meet, which is what makes the plan and the
+data agree by construction rather than by hope.
 
 \subsection{Sparse propagation of the impulse response}
 \label{sec:avar_sparsetile}
@@ -2859,7 +2851,6 @@ following members:
 \item $f_0, n_f$: the array vanishes outside coarse-freq channels $f_0 \le f < f_0 + n_f$.
 \item $n_t$: the stored data vanishes outside time samples $0 \le t < n_t$.
 \item {\tt dbits}: a bitmask selecting a subset of the $k$ delay bits (the ``content bits'').
-We write $|{\tt dbits}|$ for its popcount.
 \item {\tt data}: an array of shape $(n_f, 2^{|{\tt dbits}|}, n_t)$.
 \item $t_0$ and $\tau_0, \cdots, \tau_{k-1}$: a constant time shift, and one time shift per delay bit.
 \item $s$: a scalar multiplier.
@@ -2930,502 +2921,393 @@ can have a missing half. The class \verb|SparseTileTriple| exploits this by spli
 into (at most) three tiles: first channel, bulk, last channel. The two edge tiles can then take
 the cheap single-leg cases, while the bulk is processed with the both-halves case uniformly.
 
-After $r$ dedispersion steps, only one coarse-freq channel is left, and the resulting tile
-($k=r$, $n_f=1$) is an exact, compressed representation of the impulse response $G_{Fd}$ of
-Eq.\ (\ref{eq:avar_impulse}). Its content bits are always a subset of the top $(i_0(F)+1)$ bits
-predicted in \S\ref{sec:avar_dbits}, and are sometimes a proper subset, since the merge rule above
-only marks a bit when the two legs' residual shifts actually differ.
+After enough dedispersion steps only one coarse-freq channel is left, and the resulting tile
+($n_f=1$) is an exact, compressed representation of the impulse response. Its content bits are
+always a subset of the bits predicted in \S\ref{sec:avar_dbits}, and are sometimes a proper
+subset, since the merge rule above only marks a bit when the two legs' residual shifts actually
+differ.
 
-\subsection{Accumulating over frequency}
-\label{sec:avar_pfvariance}
-
-Let ${\tt data}$, {\tt dbits} and $s$ be the members of the final ($k=r$) tile for input channel
-$F$. Since $\|h_p * g\|^2$ is invariant under time translation, the shifts $T(d)$ in
+Finally, since $\|h_p * g\|^2$ is invariant under time translation, the shifts $T(d)$ in
 Eq.\ (\ref{eq:avar_tile}) drop out of the variance entirely, leaving
 \begin{equation}
 \big\| h_p * G_{Fd} \big\|^2 = s^2 \, \big\| h_p * {\tt data}[0, \, d|_{\tt dbits}, \, \cdot] \big\|^2
   \label{eq:avar_tile_variance}
 \end{equation}
-So we simply run each of the $2^{|{\tt dbits}|}$ stored rows through Eq.\ (\ref{eq:avar_autocorr}).
-The result is a shape $(2^{|{\tt dbits}|}, P)$ array containing the entire contribution of input
-channel $F$ to Eq.\ (\ref{eq:avar_master}).
+So we run each of the $2^{|{\tt dbits}|}$ stored rows through Eq.\ (\ref{eq:avar_autocorr}), and
+obtain a shape $(2^{|{\tt dbits}|}, P)$ array which is the entire contribution of one input
+channel to Eq.\ (\ref{eq:avar_master}), for one subband. The factor $s^2$ is easy to overlook and
+is not optional: an edge tile defers its $1/\sqrt2$ into $s$ rather than touching data, so
+dropping $s^2$ is silently wrong exactly where the single-leg cases fire.
 
-The frequency sum in Eq.\ (\ref{eq:avar_master}) is then accumulated in factored form. A
-\verb|PfVariance| object is a small dictionary which maps a bitmask to an array of shape
-$(2^{|{\tt dbits}|}, P)$, and represents
+\subsection{Index conventions, and what a group holds}
+\label{ssec:avar_map_indices}
+
+So far we have suppressed subbands. Reinstating them, the output of a tree is indexed by a
+multiplet $0 \le m < M$ and a coarse DM $0 \le d < 2^{r-R}$, and a multiplet is a
+(subband, fine DM) pair: subband $0 \le n < N$ has a level $l_n$, occupies $2^{l_n}$ consecutive
+multiplets starting at $m_{\rm base}(n)$, and spans $2^{c_n}$ tree-freq channels with
+$c_n \equiv r - R + l_n$ (\ddnotes{Subband search}). So
 \begin{equation}
-{\rm Var}[d,p] = \sum_{\rm terms} {\tt arr}^{({\tt dbits})}\big[ d|_{\tt dbits}, \, p \big]
-  \label{eq:avar_terms}
+m = m_{\rm base}(n) + e, \hspace{1.2cm} 0 \le e < 2^{l_n}
 \end{equation}
-Accumulating channel $F$ means scaling its array by $V_F$, and adding it to the term with the same
-bitmask (creating a new term if there is none). Only at the very end is
-Eq.\ (\ref{eq:avar_terms}) ``unpacked'' into the dense shape $(2^r,P)$ output array. Note that the
-largest object ever materialized is a single channel's tile: the full
-$(N_{\rm freq}, 2^r, N_{\rm time})$ impulse response never exists in memory.
+and the flattened row index of \S\ref{ssec:variance_map_setup} is
+$\alpha = (d M + m) P + p$.
 
-The cost is dominated by input channels with large $i_0(F)$, whose final tile has $O(2^{i_0})$
-stored rows, each of length $n_t = O(2^{i_0})$. As noted in \S\ref{sec:avar_dbits}, such channels
-are rare -- at most $O(2^{r-i})$ input channels have $i_0 \ge i$ -- but the few channels which
-straddle a high-level boundary (e.g.\ the middle of the band) are expensive enough that this exact
-calculation is only practical at moderate ranks. This is the main reason that it is used as a
-testing/reference implementation, rather than in production.
-
-\subsection{Validating the analytic variances}
-\label{sec:avar_validation}
-
-Everything below is run by \verb|pirate_frb test --varmap|. (There used to be a separate
-\verb|--avar| flag for the pieces in this appendix; it was folded into \verb|--varmap| when
-they moved into \verb|pirate_frb/varmap/|.)
-
-The pieces above are unit-tested against dense reference implementations: the
-\verb|SparseTile| operations are compared to a dense $\DDS(k)$ applied to randomly generated
-tiles, tree gridding is compared to \verb|ReferenceTreeGriddingKernel|, and
-\verb|PfVarianceConvolver| is compared both to a brute-force evaluation of $\|h_p * x\|^2$,
-and to the kernels which \verb|ReferencePeakFindingKernel| actually uses. The C++ port of each
-is compared to the python.
-
-End-to-end, the analytic variances are checked against the BRUTE-FORCE SWEEP of
-\S\ref{sec:variance_map_bruteforce}, which pushes a one-hot through the real dedisperser once
-per input channel and reads $A$ off the output column norms. That comparison
-(\verb|test_multimap_vs_sweep| in \verb|varmap/tests.py|) is elementwise over the full matrix,
-for every primary tree, on random configs; the two sides share no code, and agreement is at
-the float32 floor of the dedispersion chain, measured $5 \times 10^{-7}$ to
-$2 \times 10^{-6}$. It is the only numerical oracle for the analytic map, and it covers
-\verb|compute_detrender_free_varfine()| in the same loop.
-
-Separately, a stored \verb|VarianceMap| can be checked by Monte Carlo
-(\verb|pirate_frb varmap mc|): Gaussian noise with per-channel variance $V_F$ is fed through
-the dedisperser, a \verb|PfSquare| is run over each tree's subband array (\verb|out_sb|), and
-the resulting empirical per-chunk variances are compared to the map's prediction, restricted
-to output channels which have reached steady state. This supersedes the older
-\verb|check_avar_mc|, and unlike it, reports the worst UNDERestimate and the worst
-OVERestimate separately -- an admissible map may do the second but never the first.
-
-\clearpage
-
-\subsection*{[The code below has been deleted]}
-
-{\bf Status.} \verb|TmpVmapExact|, and the \verb|PfAvarExact| driver it was built on, were
-deleted with the \verb|pirate_frb.slow_avar| subpackage. Their role -- compressing $A$ into a
-low-rank form -- is filled by \verb|varmap/detrender_free.py| plus the covering LP of
-\S\ref{ssec:varmap_proposed}, which does it at CHIME/CHORD scale, where {\tt PfAvarExact}
-could not be built at all. The rest of this section is kept for the record: the per-group SVD
-and canonical form it describes are still the shape of what the current code does, and
-\S\ref{ssec:svd_exact_map} carries a definition that is referenced from earlier appendices.
-
-The rest of this appendix describes \verb|TmpVmapExact|, which compresses the variance map
-$A$ itself, instead of evaluating $y = Av$ for one input vector. From here on we drop the two
-simplifying assumptions made above: subbands are enabled, and the variance is resolved per
-multiplet, exactly as {\tt PfAvarExact} computes it.
-
-\S\ref{sec:variance_svd} is the counterpart of what follows for the {\em approximate} variance
-map ({\tt PfAvarApproximation}). The linear algebra is the same in both cases; the differences
-are which variance array is compressed, and how finely it resolves the DM axis. There, the
-frequency-channel overlaps between the $2^R$ level-0 bands are neglected, so the variance is
-resolved per level-0 band $j$ and on only the $(r-L)$ highest DM bits; here it is resolved per
-multiplet $m$ and on the $(r-R)$ highest DM bits, with no approximation. One limitation does
-carry over from \S\ref{sec:avar_pfvariance}: {\tt PfAvarExact} is practical only at moderate
-rank, so {\tt TmpVmapExact} inherits that and cannot be run at CHIME/CHORD scale.
-
-\subsection{The variance map}
-\label{ssec:svd_exact_map}
-
-Fix a {\tt DedispersionTree} with rank $r$, peak-finding rank $R$, and $P$ peak-finding
-profiles, and write
+The delay bits of \S\ref{sec:avar_dbits} refer to a subband's own dedispersion tree, which has
+depth $c_n$, not $r$. Rows coming from subbands of {\em different} levels have to be stored in a
+common labelling, and the one the code uses is {\bf level $r$}: the level-$r$ delay index of the
+output element $(d, m, p)$ with $m = m_{\rm base}(n) + e$ is
 \begin{equation}
-\rho = r-R, \hspace{1.5cm} D = 2^\rho
+d_{\rm full} = (d \ll R) \; | \; (e \ll (R - l_n))
+  \label{eq:df_dfull}
 \end{equation}
-for the number of coarse-DM bits and coarse DMs.\footnote{Code names: $r = {\tt tree\_r}$,
-$R = {\tt tree\_R}$, $P = {\tt tree\_P}$, $M = {\tt tree\_M}$, all members of
-{\tt TmpVmapExact}.}
-Recall from \ddnotes{Subband search} that a {\em multiplet} $0 \le m < M$ is a
-(frequency subband, fine DM) pair. For each $m$, {\tt PfAvarExact} produces a variance array
+Lifting a tile from its own level $c_n$ to level $r$ is $r - c_n = R - l_n$ single-leg
+dedispersion steps, and by the first two cases of \S\ref{sec:avar_sparsetile} such a step leaves
+{\tt data} untouched, shifts {\tt dbits} left by one, and multiplies $s$ by $1/\sqrt2$. Hence
 \begin{equation}
-y_m[d,p], \hspace{1.5cm} 0 \le d < D, \quad 0 \le p < P,
+{\tt dbits}(\mbox{level } r) = {\tt dbits}(\mbox{level } c_n) \ll (R - l_n),
+  \hspace{1.2cm}
+{\rm var}(\mbox{level } r) = {\rm var}(\mbox{level } c_n) \cdot 2^{-(R - l_n)}
+  \label{eq:df_levelr}
 \end{equation}
-(the array {\tt tree\_variance[itree][m]}), which we flatten to a length-$DP$ column vector
-using the index $\alpha = dP + p$ of \S\ref{ssec:variance_map_setup}. Then, for each
-$(\mbox{tree}, m)$, the map $v \mapsto y_m$ is linear:
+Every row is stored with the level-$r$ normalization of the second equation, and the factor
+$2^{R-l_n}$ is undone per subband at the very end (\S\ref{ssec:df_lift}). It cannot be folded
+into the stored row, precisely because two subbands sharing a row have different $l_n$. Omitting
+it is not a subtle error: measured on {\tt toy.yml} it moves the answer by $75\%$.
+
+\subsection{Grouping: entries, the {\tt sdbits} key, and straddled subbands}
+\label{ssec:df_groups}
+
+The central efficiency idea is that one tile computation and one convolution should serve as many
+output elements as possible. Fix an input channel $F$ with (unclipped) footprint $[j_0, j_1)$ in
+tree-freq units. For each subband $n$, the part of the footprint that subband sees is the
+intersection
 \begin{equation}
-y_m = A^{(m)} v, \hspace{1.5cm} A^{(m)}_{\alpha F} = \mbox{(contribution of channel $F$ to $y_m[d,p]$
-per unit input variance)},
-\label{eq:svdx_map}
+[{\rm lo}, {\rm hi}) = [j_0, j_1) \cap [I_{\rm lo}(n), I_{\rm hi}(n))
 \end{equation}
-which is the matrix of Eq.\ (\ref{eq:variance_map_def}), restricted to one multiplet: rows index
-outputs, columns index input channels.
+and the subband contributes nothing if this is empty. The observation is that two subbands seeing
+the {\em same} range $[{\rm lo}, {\rm hi})$ produce the {\em same} tile and therefore the same
+variance row, up to the per-subband normalization of Eq.\ (\ref{eq:df_levelr}) which is applied
+later. So the algorithm pools them: an {\bf entry} is a (channel, set-of-subbands) pair sharing
+one range, and it produces exactly one tile and one convolution.
 
-Only a contiguous range of input channels contributes,
+Measured, this is $2.9$ to $5.7$ times fewer convolutions than computing one tile per
+(channel, multiplet) pair.
+
+Entries are keyed by a single integer, {\tt sdbits}, which packs two fields:
 \begin{equation}
-F_{\rm lo} \le F < F_{\rm lo} + n_m,
-\label{eq:svdx_support}
+{\tt sdbits} = ({\tt dbits} \ll 42) \; | \; {\tt sbits}
 \end{equation}
-namely those whose gridding footprint ${\mathcal S}_F$ (\S\ref{sec:avar_statement}) intersects
-the coarse-freq range of $m$'s frequency subband.\footnote{Code names: $F_{\rm lo} =
-{\tt per\_tm\_ifreq\_lo}$, $n_m = {\tt per\_tm\_nf}$, both members of {\tt PfAvarExact}.}
-Contiguity holds because the channel map is strictly decreasing, so the ${\mathcal S}_F$ are
-intervals which advance monotonically with $F$, and the set of $F$ whose interval meets a fixed
-interval is itself an interval. ({\tt PfAvarExact} asserts this at construction.) We restrict
-$A^{(m)}$ to those columns from here on, so it is a $(DP) \times n_m$ matrix; it is never
-materialized.
+where {\tt dbits} is the level-$r$ delay-bit mask and {\tt sbits} has bit $n$ set iff subband $n$
+is served. The split at 42 is chosen so the key fits a {\tt uint64} in the C++ port: $N \le 42$
+subbands and $r \le 16$, and both bounds are asserted up front, since exceeding either would
+corrupt keys silently rather than fail. Entries sharing a key are pooled into one {\bf group},
+which is what the SVD of \S\ref{ssec:df_lift} acts on.
 
-Channels at the two ends of the range (\ref{eq:svdx_support}) may overlap the subband only
-slightly, and would contribute anomalously small columns to $A^{(m)}$; a fixed relative SVD
-threshold would silently truncate them away. We precondition this away with a diagonal matrix
-$\Lambda = {\rm diag}(\lambda)$, where $\lambda_F > 0$ is the mean variance contributed by
-channel $F$ (defined precisely in the next subsection), and write
-\begin{equation}
-\bar A = A^{(m)} \Lambda^{-1},
-\hspace{1.5cm}
-y_m = \bar A \, \Lambda \, v,
-\label{eq:svdx_abar}
-\end{equation}
-so that $\bar A$ has columns of comparable scale. Diagonal scaling is invertible, so this does
-not change matrix ranks; its only purpose is to make a fixed relative threshold mean the same
-thing for every channel.
+{\bf Half-aligned subbands need their own branch.} A subband is {\em aligned} (Case 1) if
+$I_{\rm lo}(n)$ is a multiple of $2^{c_n}$, so that the subband is a node of the toplevel
+dedispersion tree and ordinary aligned iteration reproduces its merges. A subband can instead be
+{\em half-aligned} (Case 2, \ddnotes{Subbanded dedispersion}), starting at an odd multiple of
+$2^{c_n - 1}$. Then the subband's own top merge joins the two blocks either side of its midpoint
+$I_{\rm mid}(n)$, and those are {\em not} an aligned pair of the toplevel tree: ordinary
+iteration would merge each with its absent neighbour instead. When such a subband's footprint
+{\em straddles} its own midpoint (${\rm lo} < I_{\rm mid}(n) < {\rm hi}$), the entry is put on a
+separate {\em straddled plan}, iterated only $c_n - 1$ times, and finished with an explicit merge
+of the two blocks indexed off the midpoint.
 
-\subsection{Factored structure of single-channel variances}
-\label{ssec:svd_exact_factored}
+Two remarks. First, a straddling subband always gets a row to itself, so the two fields of its
+{\tt sdbits} are redundant with each other -- which the code checks. Second, the branch is rare
+but not negligible: on {\tt toy.yml} it is $1$ row in $645$, and omitting it moves the answer by
+$1.6\times 10^{-3}$. It is also the reason the delay bits of \S\ref{sec:avar_dbits} are computed
+in {\em subband-local} coordinates $f - I_{\rm lo}(n)$: subtracting $I_{\rm lo}(n)$ (a multiple of
+$2^{c_n-1}$ in every case) preserves the block structure at every level below $c_n$, so in local
+coordinates a subband's dedispersion tree is the ordinary aligned tree, in Case 2 as much as in
+Case 1.
 
-{\tt PfAvarExact} already holds the variance contribution of a single channel in a factored
-form: {\tt per\_tfm[itree][F][m]} is a {\tt PfVariance} of rank $\rho$
-(\S\ref{sec:avar_pfvariance}), i.e.\ a small set of {\em terms}, each keyed by a bitmask $\delta$
-over the $\rho$ DM bits (``{\tt dbits}'') and holding an array of shape
-$(2^{{\rm popc}(\delta)}, P)$, with
-\begin{equation}
-y^{(F)}_m[d, p] = \sum_{(\delta, a) \,\in\, {\rm terms}(F,m)} a\big[ {\rm sel}(d, \delta),\, p \big],
-\hspace{1.5cm}
-y_m = \sum_F v_F \, y^{(F)}_m,
-\label{eq:svdx_terms}
-\end{equation}
-where ${\rm sel}(d, \delta)$ packs the bits of $d$ selected by $\delta$ into an integer
-$0 \le {\rm sel}(d, \delta) < 2^{{\rm popc}(\delta)}$ (the function
-\verb|SparseTile._remap_d|). That is, a term depends on the DM index $d$ only through the few
-bits in $\delta$. Note that the entries of $a$ are variances $\|h_p * g\|^2$, hence
-non-negative.
+\subsection{The four passes}
+\label{ssec:df_passes}
 
-Compared with \S\ref{sec:variance_svd}, the masks $\delta$ here are drawn from the $\rho = r-R$
-resolved DM bits rather than $r-L$, and satisfy
-${\rm popc}(\delta) \le \min(i_0(F)+1, \rho)$ with $i_0(F)$ as in \S\ref{sec:avar_dbits}. More
-channels therefore carry multi-bit masks, and more distinct masks occur per $(\mbox{tree},m)$
-pair -- 12 to 25 in {\tt toy.yml}, where the approximation sees only a handful.
+The class \verb|SdPlan| computes everything except the final lift, in four passes over the input
+channels. The split exists because the sizes of all the accumulators are known before any data is
+touched, so nothing has to grow.
 
-The preconditioner in Eq.\ (\ref{eq:svdx_abar}) is defined in terms of the factored form:
-\begin{equation}
-\lambda_F = \sum_{(\delta, a) \,\in\, {\rm terms}(F,m)} {\rm mean}(a) \; \ge \; 0,
-\label{eq:svdx_lambda}
-\end{equation}
-where the mean is taken over all entries of the term array $a$. A low-overlap edge channel shows
-up as a small value of $\lambda_F$. Since the entries of $a$ are non-negative, $\lambda_F = 0$
-happens only if channel $F$'s contribution vanishes identically; the code drops such channels
-rather than dividing by zero (their columns of $\bar A$, and rows of $U_{\rm freq}$ below, are
-zero).
+\begin{enumerate}
+\item {\bf Planning.} For each channel and each subband it sees, compute
+$[{\rm lo}, {\rm hi})$ and the level-$r$ {\tt dbits} from the closed form of
+\S\ref{sec:avar_dbits}, classify the entry as straddled or not, and pool subbands sharing a range
+into one entry. This pass touches no data at all: it is pure integer arithmetic on footprints.
+\item {\bf Sizing.} Count how many rows each group will receive, and allocate one dense
+$({\rm capacity}, D\cdot P)$ matrix per group, where $D = 2^{|{\tt dbits}|}$. Because the
+planning pass is exact, capacity is a count and not an upper bound.
+\item {\bf Tiles.} Walk both plans, build each entry's tile by the propagation of
+\S\ref{sec:avar_sparsetile}, convert it to variances with Eq.\ (\ref{eq:avar_autocorr}), apply
+the level-$r$ normalization of Eq.\ (\ref{eq:df_levelr}), and write one row into the group's
+matrix. This is where essentially all the arithmetic happens.
+\item {\bf Factorization.} SVD each group's matrix and truncate (\S\ref{ssec:df_lift},
+\S\ref{ssec:df_epsilon}).
+\end{enumerate}
 
-Now group the (channel, term) pairs by $\delta$. Since a {\tt PfVariance}'s terms are keyed by
-$\delta$, a channel contributes at most one term to each group -- but a two-term channel appears
-in two groups, which is why the groups' channel sets can overlap. For each $\delta$, stack the
-flattened term arrays as the {\em columns} of a matrix $A_\delta$ of shape
-$(2^{{\rm popc}(\delta)} P,\ n_{m\delta})$, dividing the column of channel $F$ by $\lambda_F$,
-where $n_{m\delta}$ is the number of (channel, term) pairs in the group, and let $v_\delta,
-\lambda_\delta$ denote the corresponding slices of $v, \lambda$. Then
-\begin{equation}
-y_m = \sum_\delta E_\delta \, A_\delta \, (v_\delta \odot \lambda_\delta),
-\label{eq:svdx_group_sum}
-\end{equation}
-where $\odot$ denotes elementwise multiplication, and $E_\delta$ is the
-$(DP) \times (2^{{\rm popc}(\delta)} P)$ zero/one ``expansion'' matrix which replicates the
-packed DM axis over the unselected bits, i.e.\ copies packed entry $({\rm sel}(d,\delta), p)$ to
-entry $(d, p)$. (In the code, $E_\delta$ is an index gather, not a materialized matrix.)
-
-\subsection{Per-group SVD and stacking}
-\label{ssec:svd_exact_stacking}
-
-Each $A_\delta$ turns out to be numerically low-rank (variances vary smoothly with channel).
-We compute the truncated SVD
-\begin{equation}
-A_\delta = W_\delta \, {\rm diag}(S_\delta) \, Q_\delta^T,
-\end{equation}
-where $W_\delta$ is $(2^{{\rm popc}(\delta)}P) \times K_\delta$ and $Q_\delta$ is
-$n_{m\delta} \times K_\delta$, both with orthonormal columns, keeping the $K_\delta$ singular
-values with $S > \varepsilon S_{\rm max}$ (\S\ref{ssec:svd_exact_threshold}).
-
-Let $K_{\rm tot} = \sum_\delta K_\delta$. Substituting the truncated SVDs into
-Eq.\ (\ref{eq:svdx_group_sum}) and stacking the per-group factors along the rank axis, we obtain
-\begin{equation}
-\bar A = \bar W \, {\rm diag}(\bar S) \, \bar Q^T,
-\label{eq:svdx_stacked}
-\end{equation}
-where:
+Two accumulators are filled in parallel, and they do {\em not} share a key space, which is the
+one thing to get right when reading the code:
 \begin{itemize}
-\item $\bar W$ ($DP \times K_{\rm tot}$) concatenates the expanded left factors
-$E_\delta W_\delta$ horizontally;
-\item $\bar S$ (length $K_{\rm tot}$) concatenates the $S_\delta$;
-\item $\bar Q$ ($n_m \times K_{\rm tot}$) concatenates the $Q_\delta$ horizontally, with each
-group's rows scattered into its channel positions (zero-padded elsewhere).
+\item {\tt sd\_matrices}, the per-group dense matrices, keyed by the {\em coarse} {\tt sdbits}
+(\S\ref{ssec:df_coarse}) and holding the possibly-sliced, {\em unweighted} rows;
+\item {\tt sd\_vectors}, keyed by the {\em full} {\tt sdbits} and holding the row {\em sums},
+weighted by $V_F$. These are what produce $y^{\rm true}$, which is defined at fine granularity
+whatever the map's coarse-graining rank (\S\ref{ssec:df_coarse}), and they are also the whole of
+the map-free route of \S\ref{ssec:df_varfine}.
 \end{itemize}
-This eliminates the sum over $\delta$, but the columns of $\bar W, \bar Q$ are {\em not}
-orthonormal ($\bar Q^T \bar Q \ne {\rm id}$): different groups' channel sets overlap (via the
-two-term channels), and the expanded columns $E_\delta W_\delta$ are not orthogonal across
-groups -- nor even unit norm, since
-$\|E_\delta w\|^2 = 2^{\rho-{\rm popc}(\delta)}\|w\|^2$. So $\bar S$ is not yet a set of
-singular values of anything.
+At coarse-graining rank $L = R$ the two key spaces coincide, so indexing one with the other's key
+would pass every test that does not set $L$ -- and with $L$ set it is a quiet wrong answer rather
+than a crash, since a coarse key is a syntactically valid full key. Hence the code names which
+key it is using at every use site, and asserts that the full key space is never smaller than the
+coarse one.
 
-\subsection{Canonical form}
-\label{ssec:svd_exact_canonical}
+\subsection{Per-group SVD, and the lift to $Q$ and $W$}
+\label{ssec:df_lift}
 
-Finally, we reduce the stacked representation to a genuine truncated SVD of $\bar A$, without
-materializing any $\bar A$-sized matrix. Take thin SVDs of the two stacked factors:
+Each group holds a dense matrix whose rows are input channels and whose columns are
+(delay, profile) pairs -- that is, the {\em transpose} of the corresponding block of $A$. The map
+is numerically low-rank because the variance varies smoothly with input channel: two neighbouring
+channels have nearly the same footprint and hence nearly the same impulse response. So we take a
+truncated SVD in the transposed convention
 \begin{equation}
-\bar W = W_1 \, {\rm diag}(W_2) \, W_3^T, \hspace{1.5cm} \bar Q = Q_1 \, {\rm diag}(Q_2) \, Q_3^T,
+{\tt dense\_matrix}^T \; \approx \; Q_{\rm grp} \, W_{\rm grp}^T
+  \label{eq:df_group_svd}
 \end{equation}
-where $W_1$ ($DP \times k_W$), $Q_1$ ($n_m \times k_Q$), $W_3$ ($K_{\rm tot} \times k_W$) and
-$Q_3$ ($K_{\rm tot} \times k_Q$) have orthonormal columns, with
-$k_W = \min(DP,\, K_{\rm tot})$ and $k_Q = \min(n_m,\, K_{\rm tot})$. Then
-\begin{equation}
-\bar A = W_1 \, M \, Q_1^T,
-\hspace{1.5cm}
-M \equiv {\rm diag}(W_2) \, W_3^T \, {\rm diag}(\bar S) \, Q_3 \, {\rm diag}(Q_2),
-\label{eq:svdx_M}
-\end{equation}
-where $M$ is a small $(k_W \times k_Q)$ matrix. Eq.\ (\ref{eq:svdx_M}) is an identity, not an
-approximation -- the only error so far is the per-group truncation. It holds even if $\bar W$ or
-$\bar Q$ is rank deficient: a near-null direction shows up as a roundoff-sized entry of $W_2$ or
-$Q_2$, which multiplies the corresponding row or column of $M$ and thereby kills the (arbitrary)
-direction in $W_1$ or $Q_1$. Using $\min$ shapes means that no assumption such as
-$K_{\rm tot} \le n_m$ is needed.
+with $Q_{\rm grp}$ of shape $(DP, K)$ and $W_{\rm grp}$ of shape $(F, K)$, splitting
+$\sqrt{\sigma_k}$ between the two factors. (Neither factor is semiorthogonal afterwards, which
+costs nothing here: the globally stacked factors are not orthogonal anyway, since different
+groups overlap in their rows of $A$.) A transpose slip in Eq.\ (\ref{eq:df_group_svd}) is silent
+whenever $DP = F$, since the shapes still match, so it is checked by a test rather than left to
+inspection.
 
-Since the columns of $W_1, Q_1$ are orthonormal, the singular values of $M$ are exactly the
-singular values of $\bar A$. SVD-decompose $M = X \, {\rm diag}(S_M) \, Y^T$, let $K_0$ be the
-number of singular values above the same relative threshold $\varepsilon$, and absorb the
-factors into $W_1, Q_1$:
+The groups are then stacked. Each group owns a disjoint block of $K$ columns, so
+$K_{\rm tot} = \sum_{\rm groups} K$, and:
+\begin{itemize}
+\item {\bf $W$ is a scatter.} $W[\,{\tt freq\_indices}, \, k_0{:}k_0{+}K\,] = W_{\rm grp}$. This
+is a plain scatter because the input channels within one group are distinct -- a property of the
+plan, which the planning pass checks in its debug mode.
+\item {\bf $Q$ is a gather, with the per-subband factor.} For each subband $n$ served by the
+group, and each $(d, e)$, the level-$r$ index $d_{\rm full}$ of Eq.\ (\ref{eq:df_dfull}) is
+mapped through the group's {\tt dbits} to pick the stored row, and the result is multiplied by
+$2^{R - l_n}$ to undo Eq.\ (\ref{eq:df_levelr}):
 \begin{equation}
-S_0 = (S_M)_{[:K_0]}, \hspace{1cm}
-U_{\rm out} = W_1 \, X_{[:,\,:K_0]}, \hspace{1cm}
-U_{\rm freq} = Q_1 \, Y_{[:,\,:K_0]},
+Q\big[ (d, \, m_{\rm base}(n) + e, \, p), \; k_0{+}k \big]
+  = 2^{R-l_n} \; Q_{\rm grp}\big[ (d_{\rm full}|_{\tt dbits}, \, p), \; k \big]
 \end{equation}
-where $[:,:K_0]$ denotes the first $K_0$ columns. This gives the canonical representation
-\begin{equation}
-\bar A = U_{\rm out} \, {\rm diag}(S_0) \, U_{\rm freq}^T + O(\varepsilon \|\bar A\|_2),
-\hspace{1.5cm}
-U_{\rm out}^T U_{\rm out} = U_{\rm freq}^T U_{\rm freq} = {\rm id}_{K_0},
-\label{eq:svdx_canonical}
-\end{equation}
-with $S_0$ sorted descending -- i.e.\ a genuine truncated SVD of $\bar A$, with $K_0$ its
-numerical rank. The three factors are the {\tt TmpVmapExact} block members {\tt sv\_out},
-{\tt sval} and {\tt sv\_freq}, stored with the rank axis first.
+These writes are assignments rather than accumulations: each group owns a disjoint column block,
+and within a group the subbands own disjoint multiplet ranges.
+\end{itemize}
+The result is $A \approx Q W^T$ with $Q$ of shape $(n_\beta, K_{\rm tot})$ and $W$ of shape
+$(N_{\rm freq}, K_{\rm tot})$, which is returned as a \verb|VarianceMap|.
 
-Given an updated $v$, reevaluating the variances is two small matrix-vector multiplies and two
-diagonal scalings,
-\begin{equation}
-y_m = U_{\rm out} \, \big( S_0 \odot ( U_{\rm freq}^T \, \Lambda \, v ) \big),
-\label{eq:svdx_eval}
-\end{equation}
-i.e.\ $O\big(K_0 (n_m + DP)\big)$ flops per $(\mbox{tree}, m)$; likewise the storage (the
-factors $U_{\rm out}, S_0, U_{\rm freq}$ plus the length-$n_m$ vector $\lambda$) is
-$O\big(K_0 (n_m + DP)\big)$, instead of $O(n_m \cdot DP)$ for a dense $\bar A$.
+{\bf The lift is where the memory goes.} The per-group matrices are small -- at
+{\tt chord\_sb2\_et.yml} the first three passes run in $14$ seconds and hold $17$ MB of rows --
+but $Q$ is dense and $O(n_\beta K_{\rm tot})$, which is $63.8$ GiB for a fine map at that config.
+\S\ref{ssec:df_coarse} and \S\ref{ssec:df_varfine} are the two ways around that, and they are the
+reason \verb|SdPlan| is a class whose constructor does {\em not} lift: a caller who wants only
+the per-group factors, or only $Av$, would otherwise be handed an $O(n_\alpha)$ array to discard.
 
 \subsection{Truncation threshold}
-\label{ssec:svd_exact_threshold}
+\label{ssec:df_epsilon}
 
-Truncating at $\varepsilon S_{\rm max}$ perturbs the reconstruction at the $\varepsilon$ level
-relative to $\|\bar A\|_2$, so $\varepsilon$ is an accuracy knob -- but it is only meaningful
-above the double-precision noise floor on singular values, which numpy's {\tt matrix\_rank}
-estimates as $\max(\mbox{shape}) \cdot \epsilon_{\rm f64} \cdot S_{\rm max}$.
-A fixed threshold is therefore not safe in general. An earlier prototype of this construction
-used $\varepsilon = 10^{-11}$, which sits above the floor at the sizes it was run at, but the exact
-map's output axis $DP = 2^{r-R}P$ is larger than the approximation's $2^{r-L}P$ by $2^{L-R}$,
-and at $DP = 65536$ the floor is $\approx 1.5 \times 10^{-11}$, i.e.\ {\em above} $10^{-11}$. We
-therefore choose $\varepsilon$ per block from its largest matrix dimension,
+The per-group SVD keeps singular values above $\varepsilon \sigma_{\rm max}$. Truncating there
+perturbs the reconstruction at the $\varepsilon$ level, so $\varepsilon$ is an accuracy knob --
+but it is only meaningful above the float64 noise floor on singular values, which for an
+$(n_{\rm row}, n_{\rm col})$ matrix is of order $\max(n_{\rm row}, n_{\rm col}) \, \epsilon_{64}
+\, \sigma_{\rm max}$. At these matrices' sizes that floor can exceed the $10^{-11}$ which is safe
+for smaller ones, so the default takes whichever is larger,
 \begin{equation}
-\varepsilon = \max\Big( 10^{-11}, \;\; 16 \cdot \max(DP,\, n_m) \cdot \epsilon_{\rm f64} \Big),
-\label{eq:svdx_epsilon}
+\varepsilon = \max\Big( 10^{-11}, \; 16 \max(n_{\rm row}, n_{\rm col}) \, \epsilon_{64} \Big)
+  \label{eq:df_epsilon}
 \end{equation}
-and apply it to every SVD in that block. The factor 16 sits comfortably above the estimated
-floor while remaining far below any genuine component. (Both {\tt TmpVmapExact} and
-{\tt TmpVmapApproximation} take an {\tt epsilon} constructor argument which overrides this
-default.)
+and is computed per group, since the groups differ widely in shape. The CLI exposes it as
+{\tt varmap df -e}.
 
-In practice the choice turns out not to matter much, because the spectra have clean cliffs:
-on {\tt chord\_sb2\_et.yml}, where the two rules differ by a factor $\sim\!6$
-($5.8\times10^{-11}$ against $10^{-11}$), the approximate map's total rank
-$\sum K_0 = 4969$ is {\em identical} under both, and $\sum K_{\rm tot}$ differs by 2 out of
-$\sim\!11300$. The shape-aware rule is used because it degrades gracefully as the matrices grow,
-not because it changes today's answers.
+\subsection{Coarse-graining is a slice, not a maximization}
+\label{ssec:df_coarse}
 
-That $K_0$ is a genuine numerical rank, rather than an artifact of where the threshold is put,
-can be checked directly: for a representative {\tt toy.yml} block ($n_m = 640$,
-$DP = 6656$), $K_0 = 175$ or $176$ for every $\varepsilon$ from $10^{-8}$ down to $10^{-12}$ --
-the spectrum has a clean cliff, with the last retained singular value at
-$4 \times 10^{-11} S_{\rm max}$ and the next one below $10^{-12} S_{\rm max}$. Loosening to
-$\varepsilon = 10^{-6}$ gives $K_0 = 135$.
+Recall the coarse-grained map of Eq.\ (\ref{eq:coarse_grain_def}): $\bar A_{\beta F} =
+\max_{\alpha \in \beta} A_{\alpha F}$, where $\beta = (d_c, n, p)$ with
+$0 \le d_c < 2^{r-L}$ ranges over coarse DM and {\em subband} rather than multiplet. Computing
+this by building $A$ and reducing it would defeat the purpose, since building $A$ is the
+expensive step. With no detrender it is unnecessary:
 
-\subsection{Cost, storage and validation}
-\label{ssec:svd_exact_cost}
+\begin{quote}
+The group $\beta$ consists of the fine rows whose subband DM index runs over an {\em aligned
+dyadic block}, and by the monotonicity theorem of \S\ref{sec:dyadic_block} the variance is
+antitone in the bits of that index. So the maximum over the block is attained at its
+{\em bottom}, and Eq.\ (\ref{eq:coarse_grain_def}) is evaluated by a slice rather than a
+reduction (Eq.\ \ref{eq:dyadic_property} says exactly this).
+\end{quote}
 
-For {\tt toy.yml} ($N_{\rm freq} = 640$, 6 trees, 110 $(\mbox{tree},m)$ pairs), we find
-$n_m$ from $159$ to $640$, $DP$ from $896$ to $6656$, $K_{\rm tot}$ from $90$ to $294$ (summing
-to $18131$), and $K_0$ from $45$ to $178$ (summing to $9812$) -- so the canonical form buys a
-further factor $\sim\!1.9$ beyond the per-group SVDs. Total storage is $261$ MiB, versus $907$
-MiB for the dense $\bar A$'s, a factor $3.5$. Building {\tt PfAvarExact} takes $3.5$ sec and
-building {\tt TmpVmapExact} from it takes $11$ sec.
+This is cashed in at the point where a row is written, before any summation over channels and
+before the SVD. In the level-$r$ labelling the bottom of the block is ``all bits below $L$ are
+zero'', since Eq.\ (\ref{eq:df_dfull}) puts the low bits of the subband DM index into the low $L$
+bits of $d_{\rm full}$; and since the bit-packing of Eq.\ (\ref{eq:avar_tile}) preserves bit
+order, those bits occupy the lowest packed positions contiguously. So the slice is a reshape and
+an index. Taking the {\em top} of the block instead would produce a min-envelope, which is why
+the tests check both that some rows were actually sliced and that the resulting map still
+dominates $y^{\rm true}$.
 
-The compression factor is modest here only because {\tt toy.yml} is small in frequency: when
-$DP \gg n_m$, Eq.\ (\ref{eq:svdx_eval}) gives a storage ratio of $n_m DP / K_0(n_m + DP) \to
-n_m / K_0$, which is $\sim\!3.6$ at $n_m = 640$. Configs with more input channels compress
-better, since $K_0$ grows much more slowly than $n_m$.
+The maximization commutes with the group structure per column, which is what licenses doing it
+row by row: at fixed $F$ every $\alpha \in \beta$ takes its value from one plan entry, since the
+subbands within a group are disjoint and each subband is assigned to exactly one entry per
+channel.
 
-Reconstructing the variances through Eq.\ (\ref{eq:svdx_eval}) agrees with the directly-computed
-{\tt PfAvarExact} values to a relative accuracy of $4 \times 10^{-12}$ on {\tt toy.yml}, and
-$\sim\!10^{-14}$ on small random configs, consistent with the threshold $\varepsilon$. The check
-that matters is done at an input vector $v$ which {\tt PfAvarExact} was {\em not} built with,
-recomputing the reference directly from {\tt per\_tfm}: this tests that we have captured the
-linear map, not merely its value at one input. It is available as
-{\tt TmpVmapExact.check()}.
+{\bf The no-detrender hypothesis is load-bearing here.} The same appendix shows the monotonicity
+property is false with a {\tt Detrender2d} in front, so the day a detrender path is added is the
+day this slice silently becomes wrong.
 
-Finally, a note on scale. At {\tt chord\_sb2\_et.yml} parameters ($r = 16$, $R = 4$,
-$DP = 65536$, $M = 91$, 10 trees, so $\sim\!910$ blocks), $U_{\rm out}$ alone would run to tens
-of GB. This is moot, however, since {\tt PfAvarExact} cannot be built at that scale in the first
-place (\S\ref{sec:avar_pfvariance}). Should storage become the binding constraint at some
-intermediate scale, the lever is to stop materializing the expanded output-side factor: writing
-$U_{\rm out} = \sum_\delta E_\delta W_\delta C_\delta$ for small $C_\delta$ of shape
-$K_\delta \times K_0$, a block would store the packed $W_\delta$ (with $2^{{\rm popc}(\delta)}P$
-rows) and the $C_\delta$, instead of $K_0 \cdot DP$ doubles.
+Coarse-graining is nearly free, and it is the main lever on cost. At {\tt chord\_sb2\_et.yml} the
+lifted $Q$ goes $63.8$ GiB (fine) $\rightarrow 17.5$ ($L = R = 4$) $\rightarrow 4.3$ ($L=6$)
+$\rightarrow 0.96$ ($L=8$). Almost all of that is the row count: $K_{\rm tot}$ only moves
+$1435 \rightarrow 1399$ at $L=6$, so what $L$ buys is columns of $Q$ that are $14.6$ times
+shorter, not groups that compress better. The first three passes are unchanged by $L$ by design.
 
-\clearpage
+One asymmetry is worth stating because it is easy to assume away: $y^{\rm true}$ of
+Eq.\ (\ref{eq:ytrue_def}) is {\em fine} whatever the map's coarse-graining rank, so it cannot be
+read off the coarse factors. It is accumulated separately, in the full delay-bit basis -- which is
+the second accumulator of \S\ref{ssec:df_passes}.
 
-\section{{\tt PfAvarApproximation}, {\tt TmpVmapApproximation} [deleted]}
-\label{sec:variance_svd}
+\subsection{Reducing the rank: global svd-optimization}
+\label{ssec:df_svdopt}
 
-{\bf Status: the code described here has been deleted.} {\tt PfAvarApproximation} and
-{\tt TmpVmapApproximation} went with the \verb|pirate_frb.slow_avar| subpackage, and the C++
-{\tt PfAvarApproximation} in \verb|src_lib/varmap.cpp| went with them. The real-time pipeline
-had already stopped using them: {\tt GpuDedisperser::\_fill\_analytic\_weights()} now calls
-\verb|compute_detrender_free_varcoarse()| instead, which is exact (no per-subband averaging)
-and is the C++ port of \verb|varmap/detrender_free.py|. That swap cost a factor $3$ in
-construction time at {\tt chord\_sb2\_et.yml} ($0.24$ s $\to$ $0.74$ s) and removed the
-approximation entirely, so the inconsistency recorded in the next paragraph is gone with it.
-The section is kept for the record.
-
-This appendix documents a pair of classes ({\tt PfAvarApproximation}, {\tt TmpVmapApproximation})
-which implemented a coarse-grained approximation to {\tt PfAvarExact}. They were a first pass at
-representing the variance map, predating the {\tt VarianceMap} representation, and were
-deliberately outside it.
-These classes were written before the main body of these notes, and are inconsistent with it.
-In particular, the distance $D(A^{\rm true}, A^{\rm approx})$ is infinite, where $D$ is defined
-by Eq.\ (\ref{eq:distance_function}).
-
-This appendix is the approximate counterpart of \S\ref{sec:analytic_variance}, and assumes it
-has been read: {\tt PfAvarApproximation} computes the peak-finding variances $y = Av$ for one
-input vector $v$, and {\tt TmpVmapApproximation} compresses the map $A$ itself into a
-canonical low-rank form. Both are in \verb|pirate_frb/slow_avar/|. The linear algebra is
-identical to \S\ref{ssec:svd_exact_stacking}--\S\ref{ssec:svd_exact_canonical} and is not
-repeated here; what follows is the delta.
-
-\subsection{The approximation}
-\label{ssec:approx_def}
-
-Let $2^L$ be the tree's DM downsampling factor for peak-finding weights, where
-$0 \le R \le L \le r$.\footnote{Code names: $2^L = {\tt wt\_dm\_downsampling}$,
-$L = {\tt tree\_L}$.} Divide the tree-freqs into the $2^R$ {\em level-0 bands} (the aligned
-blocks of $2^{r-R}$ tree-freqs appearing as subbands $(0,s)$ in \ddnotes{Subband search}), and
-{\bf neglect the frequency-channel overlaps between them}. Two consequences:
-\begin{itemize}
-\item The variance depends on the DM index only through its $(r-L)$ highest bits -- the same DM
-resolution as the peak-finding weights array. Writing a multiplet as (subband $n$, fine DM), the
-variance then depends on $n$ but not on the fine DM.
-\item The per-tree variance can be computed once as a $(2^{r-L}, 2^R, P)$ array and reduced
-afterwards, either to $(2^{r-L}, N, P)$ by averaging the level-0 bands covered by each subband,
-or to $(2^{r-L}, M, P)$ by the one-to-many subband-to-multiplet map.
-\end{itemize}
-So the natural object is the per-band variance array $y_j[d,p]$, $0 \le j < 2^R$,
-$0 \le d < 2^{r-L}$, and {\tt tree\_variance} is the per-subband average
+$K_{\rm tot}$ is the {\em sum} of the per-group ranks, and nothing in the construction makes
+columns from different groups independent of each other. So the stacked factorization is
+routinely far from minimal, and a global pass can reduce it, {\em exactly}. Given $A = Q\,{\rm
+mid}\,W^T$ at rank $K_0$, take thin SVDs $Q = Q'R$ and $W = W'S$ with $Q', W'$ semiorthogonal, so
+that
 \begin{equation}
-Y_n \;=\; \frac{1}{f_{\rm hi}(n) - f_{\rm lo}(n)} \sum_{j\,=\,f_{\rm lo}(n)}^{f_{\rm hi}(n)-1} y_j ,
-\label{eq:approx_subband_avg}
+A = Q' \big( R \, {\rm mid} \, S^T \big) W'^T
 \end{equation}
-where $[f_{\rm lo}(n), f_{\rm hi}(n))$ is subband $n$'s coarse-freq range
-({\tt n\_to\_flo}, {\tt n\_to\_fhi}).
+SVD the $K_0 \times K_0$ middle as $U {\rm diag}(\sigma) V^T$, and keep the $K_1$ singular values
+above a numerical cutoff. Then
+\begin{equation}
+Q_1 = Q'U, \hspace{1cm} {\rm mid}_1 = {\rm diag}(\sigma), \hspace{1cm} W_1 = W'V
+\end{equation}
+is a rank-$K_1$ factorization of the same matrix, with both factors semiorthogonal. If no
+singular value is below the cutoff the factorization cannot be improved and the map is returned
+unchanged.
 
-The size of the error this introduces is not estimated here; it is measured directly, by
-comparing {\tt PfAvarExact} and {\tt PfAvarApproximation} tree by tree
-(the deleted \verb|pirate_frb check_avar_approximation|, which reported the distribution of
-$\epsilon = {\rm var}_{\rm approx}/{\rm var}_{\rm exact} - 1$).
+Measured, this removes $24\%$ of the rank at {\tt toy.yml}, $54$--$57\%$ at the CHIME configs and
+$59$--$60\%$ at the CHORD configs, at a relative change in $A$ of $10^{-12}$ or below -- far
+inside the margin that the admissibility bookkeeping of \S\ref{ssec:distance_function} allows, so
+the {\tt is\_admissible} flag survives.
 
-\subsection{Computing it: reuse across trees}
-\label{ssec:approx_algorithm}
+Two implementation notes. The cutoff is {\em numerical}, not an accuracy knob: it is
+$K_0 \epsilon_{64}$ relative to the largest singular value, and only removes modes that are
+numerically absent. (The accuracy knob is $\varepsilon$ of \S\ref{ssec:df_epsilon}, applied per
+group before this.) And the semiorthogonalization must be done with SVDs, not with the faster
+Gram-matrix or QR routes: forming $Q^TQ$ squares the condition number, and on these spectra --
+which span eleven decades -- that was measured to lose seven to eight digits and, worse, to
+{\em over}-truncate, reporting a smaller $K_1$ and discarding real content. A rank-revealing step
+is exactly where a non-SVD factorization cannot be trusted.
 
-The approximation also makes the calculation much cheaper than
-\S\ref{sec:avar_sparsetile}, in two ways.
+One cost to be aware of: the thin SVD of $Q$ allocates a second array of the same shape, so the
+peak memory of the map path is about twice the $Q$ of \S\ref{ssec:df_lift} when this is on. That
+is accounted for in the {\tt max\_bytes} ceiling, which fails early and says so rather than
+letting a caller validate a budget and then need double it.
 
-First, the expensive part of the exact algorithm is gone. There, the cost was dominated by the
-few input channels whose gridding footprint straddles a high-level coarse-freq boundary, whose
-final tile has $O(2^{i_0})$ stored rows of length $O(2^{i_0})$. Neglecting inter-band overlaps
-means we never merge across those boundaries: we stop iterating at the level where a coarse-freq
-channel {\em is} a level-0 band, and read off one {\tt PfVariance} per (channel, band).
+The CLI exposes this as {\tt varmap df -s}, with level $0$ (off), $1$ (base tree) or $2$ (base
+tree and, after the restriction of \S\ref{ssec:df_multimap}, every other tree).
 
-Second, the work is shared across trees. For each input channel we iterate a single
-{\tt SparseTileTriple} through $k = 0, 1, 2, \ldots$, and a tree consumes it at its own
-{\em k-level} $k = r - L + [\,{\rm ipri} > 0\,]$, at which point a singleton tile is converted to
-a {\tt PfVariance} (rank $r-L$) and accumulated. Since many trees share a k-level, the loop is
-ordered with $k$ outermost and the trees at that $k$ innermost, so the tile iteration and the
-tile-to-variance conversion are each done once and reused. Trees with different $P$ share the
-conversion by building it at the largest $P$ at that k-level and truncating on accumulation; a
-downsampled tree (${\rm ipri} > 0$) takes the upper DM-half of the shared result.
-The accumulation itself is the same two-array structure as \S\ref{sec:avar_pfvariance}:
-{\tt per\_tff[t][ifreq][j]} holds one channel's contribution to band $j$, and
-{\tt per\_tf[t][j]} its $v$-weighted sum over channels.
+\subsection{The other trees are row restrictions of the base tree}
+\label{ssec:df_multimap}
 
-\subsection{The variance map, per level-0 band}
-\label{ssec:approx_map}
+Everything above computes the map of the {\em base} tree, i.e.\ the tree with
+(primary\_tree\_index, early\_trigger\_level) $= (0,0)$. That suffices for the whole config,
+because with no detrender every other tree's map is a subset of the base tree's {\em rows}, as
+proved in \S\ref{sec:tree_restrictions}. \verb|compute_detrender_free_multi_map()| cashes this in:
+it computes the base map once and slices it.
 
-The compression of \S\ref{ssec:svd_exact_map}--\S\ref{ssec:svd_exact_cost} now applies almost
-verbatim, under two substitutions:
-\begin{center}
-\begin{tabular}{ll}
-\S\ref{sec:analytic_variance} (exact) & this appendix (approximate) \\
-\hline
-block index: multiplet $m$            & block index: level-0 band $j$, $0 \le j < 2^R$ \\
-DM bits $\rho = r-R$                  & DM bits $\rho = r-L$ \\
-\end{tabular}
-\end{center}
-So a block is the $(2^{r-L}P) \times n_j$ matrix $A^{(j)}$ with $y_j = A^{(j)} v$, where the
-contributing channels again form a contiguous range $F_{\rm lo} \le F < F_{\rm lo} + n_j$
-(same argument as \S\ref{ssec:svd_exact_map}; asserted in the code).\footnote{Code names:
-$F_{\rm lo} = {\tt per\_tf\_ifreq\_lo}$, $n_j = {\tt per\_tf\_nf}$, members of
-{\tt PfAvarApproximation}.} Everything from there on -- the preconditioner
-$\Lambda$, the grouping by {\tt dbits}, the per-group SVDs, the stacking, the canonical form
-$\bar A = U_{\rm out}\,{\rm diag}(S_0)\,U_{\rm freq}^T$, and the threshold
-(\ref{eq:svdx_epsilon}) -- is unchanged.
+For a downsampled primary tree $\gamma > 0$ (Proposition 2, \S\ref{ssec:restriction_ds}) the
+slice keeps the upper half of the coarse-DM axis, every multiplet, and the first $P_\gamma$
+profiles, with $W$ untouched -- the restriction acts on rows of $A$, not columns. Early-trigger
+trees (Proposition 1) are not stored at all: they are derived from their parent on demand by
+\verb|VarianceMultiMap|.
 
-The one new ingredient is Eq.\ (\ref{eq:approx_subband_avg}). It is linear, so it composes
-trivially with the blocks: {\tt eval\_tree()} evaluates each of the $2^R$ blocks once and then
-averages. This is also why the block index is the band $j$ and not the subband $n$: a band
-belongs to several subbands, and there can be more subbands than bands (for
-{\tt chord\_sb2\_et.yml} tree 0, $N = 25$ against $2^R = 16$), so blocking by $n$ would repeat
-work.
+Since a row subset of a map that dominates $A^{\rm true}$ elementwise also dominates it, each
+tree inherits whatever the base map earned, and the {\tt is\_admissible} flag carries over.
 
-\subsection{Results}
-\label{ssec:approx_results}
+The restriction can lower the rank: a column of $Q$ whose support lay entirely in the discarded
+rows is identically zero in the child. Re-running \S\ref{ssec:df_svdopt} on each child recovers
+that, and measured it is worth a further $0.8\%$ to $3.6\%$. It is worth knowing why it is
+small: on the CHIME configs every $\gamma$ lands on the same rank whatever $P_\gamma$ is, so what
+the second pass recovers is the DM-half restriction and not the profile truncation.
 
-For {\tt chord\_sb2\_et.yml} (10 trees, 136 $(\mbox{tree}, j)$ blocks), the python
-{\tt PfAvarApproximation} builds in 13 sec and {\tt TmpVmapApproximation} in a further
-13 sec. Almost all channels produce exactly one term: 213 of the 174496 (channel, band) pairs
-produce two, the rest one. The number of distinct bitmasks $\delta$ per block runs from 7 to 32.
-We find $n_j$ from $270$ to $2823$, $2^{r-L}P$ from $448$ to $16384$, $K_{\rm tot}$ from $20$ to
-$160$ (summing to $11299$), and $K_0$ from $12$ to $69$ (summing to $4969$) -- so the canonical
-form buys a further factor $\sim\!2.3$ beyond the per-group SVDs. Total storage is $241$ MiB
-against $7807$ MiB for the dense $\bar A$'s, a factor $32$.
+Proposition 2 is false with a detrender, and by a wide margin rather than marginally: measured
+against the brute-force sweep on a small config, agreement is $5 \times 10^{-7}$ without a
+detrender and $2.1$ with one.
 
-That compression factor is much better than the $3.5$ of \S\ref{ssec:svd_exact_cost}, and for
-the reason given there: the ratio tends to $n_j/K_0$ when $2^{r-L}P \gg n_j$, and $n_j$ here
-runs into the thousands rather than being capped at {\tt toy.yml}'s 640. Reconstructing the
-variances through the canonical form agrees with the directly-computed {\tt PfAvarApproximation}
-values to a relative accuracy of $6 \times 10^{-11}$, consistent with $\varepsilon$; as in
-\S\ref{ssec:svd_exact_cost}, the check that matters is run at an input vector which the
-{\tt PfAvarApproximation} was not built with ({\tt TmpVmapApproximation.check()}).
+\subsection{$Av$ without the map}
+\label{ssec:df_varfine}
 
-Two practical notes. The C++ {\tt PfAvarApproximation} keeps only {\tt per\_tf} and
-{\tt tree\_variance}, dropping the per-channel {\tt per\_tff} which the compression needs, so
-{\tt TmpVmapApproximation} must be built from the python class; at 13 sec this is not
-currently a problem. And none of this is yet wired into the real-time pipeline.
+Production does not need $A$. What it needs, given the current input-channel variances $v_F$, is
+the single vector $y = Av$ per tree, from which the peak-finder's weights are the inverse square
+roots. That can be had by skipping the lift of \S\ref{ssec:df_lift} entirely: put the weight
+$v_F$ on the row {\em sums} -- the second accumulator of \S\ref{ssec:df_passes} -- and lift
+those. There is no $Q$, there are no dense group matrices, and there is no SVD.
+
+This is \verb|compute_detrender_free_varfine()|, and the saving is dramatic: at
+{\tt chord\_sb2\_et.yml} it delivers all ten trees in $16$ seconds within $0.49$ GiB, against
+$63.8$ GiB of $Q$ for the base tree alone.
+
+\verb|compute_detrender_free_varcoarse()| is the same result reduced to the granularity the
+weights array actually has, namely $L = \log_2({\tt wt\_dm\_downsampling})$ in DM and subbands
+rather than multiplets in frequency. The reduction is a {\em max}, because a stored variance has
+to dominate every output it covers. Note this is not the same thing as coarse-graining the map:
+$\bar A v$ maxes the map and then applies it, and dominates $\max_\alpha (Av)_\alpha$, which is
+what is computed here.
+
+The two routes share one code path, and share it exactly rather than approximately:
+\verb|compute_detrender_free_varfine(config, ones)| for the base tree is {\em bitwise} equal to
+the base map's $y^{\rm true}$. That is a deliberate property -- the weight is applied as a
+multiplication by exactly $1.0$ on a path the two share -- and it is asserted by a test, because
+it is what fails the moment the two paths stop being shared.
+
+This route, and only this route, is ported to C++ (\verb|src_lib/varmap.cpp|, exposed as
+\verb|pirate_frb.fast_varmap|). The port is $27$ times faster at {\tt chord\_sb2\_et.yml}
+($15.1$ s $\rightarrow 0.57$ s) and agrees with the python to $1.1 \times 10^{-14}$ relative.
+The python remains the reference implementation: the C++ ports only the map-free path, and is
+tested by asserting that it agrees with the python.
+
+\subsection{Validation}
+\label{sec:avar_validation}
+
+Everything here is run by \verb|pirate_frb test --varmap|.
+
+The building blocks are unit-tested against dense reference implementations: the
+\verb|SparseTile| operations are compared to a dense $\DDS(k)$ applied to randomly generated
+tiles, tree gridding is compared to \verb|ReferenceTreeGriddingKernel|, and
+\verb|PfVarianceConvolver| is compared both to a brute-force evaluation of $\|h_p * x\|^2$ and to
+the kernels which \verb|ReferencePeakFindingKernel| actually uses. The C++ port of each is
+compared to the python.
+
+End-to-end, the map is checked against the brute-force sweep of
+\S\ref{sec:variance_map_bruteforce}, which pushes a one-hot through the real dedisperser once per
+input channel and reads $A$ off the output column norms. The comparison is elementwise over the
+full matrix, for every primary tree, on random configs. The two sides share no code -- one is
+this appendix's analysis, the other is the shipped dedisperser -- so this is the only numerical
+oracle for the algorithm, and it is what licenses everything above. Agreement is at the float32
+floor of the dedispersion chain, measured $5 \times 10^{-7}$ to $2 \times 10^{-6}$. The same test
+covers \verb|compute_detrender_free_varfine()| against the same swept matrices, and covers
+Proposition 1 of \S\ref{sec:tree_restrictions} by comparing each early-trigger tree's swept matrix
+against a row subset of its parent's.
+
+Several properties which no comparison against another map would catch are tested separately:
+that the coarse construction of \S\ref{ssec:df_coarse} agrees with an explicit reduction of the
+fine map, that the resulting map still dominates $y^{\rm true}$, that the per-group
+factorization convention of Eq.\ (\ref{eq:df_group_svd}) is not transposed, and that
+\S\ref{ssec:df_svdopt} recovers the exactly-correct rank on a factorization with known
+redundancy.
+
+Finally, a stored \verb|VarianceMap| can be checked by Monte Carlo
+({\tt pirate\_frb varmap mc}): Gaussian noise with per-channel variance $V_F$ is fed through the
+dedisperser, a {\tt PfSquare} is run over each tree's subband array, and the resulting empirical
+per-chunk variances are compared to the map's prediction, restricted to output channels which
+have reached steady state. It reports the worst {\em under}-estimate and the worst
+{\em over}-estimate separately, since an admissible map may do the second but never the first.
 
 \end{document}
