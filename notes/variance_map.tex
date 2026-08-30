@@ -119,6 +119,7 @@ $y^{\rm true}_{\alpha}$, $y^{\rm approx}_{\alpha}$ by:
 y^{\rm true}_{\alpha} \equiv \sum_F A^{\rm true}_{\alpha F}
   \hspace{1.5cm}
 y^{\rm approx}_{\alpha} \equiv \sum_F A^{\rm approx}_{\alpha F}
+\label{eq:ytrue_def}
 \end{equation}
 Then we define:
 \begin{equation}
@@ -190,22 +191,65 @@ but this is a statistical concern, not a hard constraint.
 Because it's a statistical concern, our cost function focuses on the typical case where
 all channels have similar variance, not per-matrix-element analysis.
 
-\subsection{Current status}
+\subsection{Tools and current status}
 
 \begin{itemize}
 
-\item If we simplify the problem by removing the {\tt Detrender2d}, then
- there is an exact low-rank representation for $A$, and an approximation which
- is fast to compute (see the appendices). This is all implemented and tested.
- I don't know if it's a useful starting point -- it's not clear whether the
- approach can be generalized to include the {\tt Detrender2d}.
+\item The \verb|pirate_frb.varmap| subpackage contains tools for working with variance
+ maps. The central object is a \verb|VarianceMap| class which represents a variance map $A$,
+ in a flexible sense: $A$ can be either exact or approximate, can be either dense or low-rank,
+ and can be coarse-grained (in the sense defined by Eq.\ (\ref{eq:coarse_grain_def}) below).
+ The \verb|VarianceMap| class has methods that can manipulate a variance map (e.g.\ saving
+ to an asdf file).
 
-\item We have code to compute the $A$-matrix in dense form (\S\ref{sec:variance_map_bruteforce}),
- given a {\tt DedispersionConfig} and a {\tt Detrender2dParams}. (See \verb|variance_map| in \verb|__main__.py|.)
+\item There is a ``brute-force'' algorithm to compute the variance map $A$ in dense form 
+ (\S\ref{sec:variance_map_bruteforce}), for any linear operator $L$ which commutes
+ with time translations. In our case of interest, where $L$ is defined by a {\tt Detrender2dParams}
+ and a {\tt DedispersionConfig}, this algorithm is implemented (CLI: {\tt pirate\_frb varmap bf}).
  This may be a useful ``crutch'' for initial exploration, although in the long run it won't
- scale to CHIME/CHORD. For example, we could compute the full SVD decomposition of the $A$-matrix,
- as a starting point for finding low-rank approximations. It would be a significant milestone
+ scale to CHIME/CHORD. It would be a significant milestone
  to develop an algorithm which works well starting from a dense representation of $A$.
+
+\item In the ``detrender-free'' special case, there is a theorem that $A$ does not have
+ full rank (in general), and an algorithm for computing $A$ in low-rank form, without
+ computing a dense matrix as an intermedate.
+ This algorithm is implemented as {\tt pirate\_frb varmap df}.
+ Unfortunately, this algorithm does not generalize to the case where a {\tt Detrender2d}
+ is specified.
+
+\item There is a general notion of coarse-graining the variance map $A_{\alpha F}$.
+Recall that $0 \le \alpha < (2^{r-R}MP)$ is a ``flattened'' index. 
+Let $0\le \beta < (2^{r-L}NP)$ be a coarser ``flattened''
+index obtained by coarse-graining DM. Here, $L \ge R$ is a coarse-graining factor, 
+and $N \le M$ is the number of frequency subbands (a multiplet is a subband plus
+a fine-grained DM). Define the coarse-grained variance map $\bar A$ by:
+\begin{equation}
+\bar A_{\beta F} = \max_{\alpha\in\beta} A_{\alpha F}
+\label{eq:coarse_grain_def}
+\end{equation}
+Conversely, $\bar A$ (or a low-rank approximation to $\bar A$) can be ``lifted''
+to an approximation of $A$.
+At CHIME/CHORD scale, and with $L=6$ (say), working with $\bar A_{\beta F}$ is much
+more feasible than working with $A$, and the distance penalty due to the ``lift''
+turns out to be small.
+The {\tt varmap bf} and {\tt varmap df} CLI commands have a {\tt -L} flag to
+output a coarse-grained variance map.
+
+\item One detail: when we either coarse-grain a map $A_{\alpha F} \rightarrow \bar A_{\beta F}$,
+ or construct a low-rank approximation $A^{\rm approx} \approx A^{\rm true}$, we retain
+ the {\em true, fine-grained} vector $y^{\rm true}_\alpha$ defined in Eq.\ (\ref{eq:ytrue_def}).
+ We also retain a boolean flag \verb|is_admissible| which keeps track of whether the constraint
+ $A^{\rm approx}_{\alpha F} \le A^{\rm true}_{\alpha F}$ is satisfied.
+ Together, these two pieces of data suffice to compute $D(A^{\rm true}, A^{\rm approx})$, and
+ thereby gauge the quality of the approximation (including coarse-graining distance penalty).
+
+\item In the general case (i.e.\ including a {\tt Detrender2d}), we're currently in the
+ process of exploring algorithms which start from the ``brute-force'' dense $A$, and
+ obtain a low-rank approximation, using a sequence of steps (e.g.\ coarse-graining,
+ SVD decomposition, linear programming).
+ Since this is work in progress and the details are still evolving,
+ I haven't written up the details in the tex -- see {\tt misc/varmap\_ladder/README.md}
+ for current status.
 
 \end{itemize}
 
@@ -296,7 +340,6 @@ and $N \le M$ is the number of frequency subbands (a multiplet is a subband plus
 a fine-grained DM). Define the coarse-grained variance map $\bar A$ by:
 \begin{equation}
 \bar A_{\beta F} = \max_{\alpha\in\beta} A_{\alpha F}
-\label{eq:coarse_graining}
 \end{equation}
 One approach to controlling rank/cost is to find a low-rank approximation to $\bar A$, 
 and ``lift'' it to a low-rank approximation to $A$. (Note that our current ``production''
