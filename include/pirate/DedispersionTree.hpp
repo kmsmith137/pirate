@@ -91,16 +91,31 @@ struct DedispersionTree
     long n_to_toplevel_flo(long n) const;
     long n_to_toplevel_fhi(long n) const;
 
-    // Contains members: num_early_triggers, max_width, {dm,time}_downsampling, wt_{dm,time}_downsampling.
-    // Note that {dm,time}_downsampling can be 0 in the config, but are filled with nonzero values here.
+    // Contains members: num_early_triggers, max_width, time_downsampling, wt_{dm,time}_downsampling.
+    // Note that time_downsampling can be 0 in the config, but is filled with a nonzero value here.
     DedispersionConfig::PrimaryTree pf;
 
-    // K = dd_rank1 - frequency_subbands.pf_rank, where dd_rank1 = (dd_rank+1)/2 is the GPU
-    // kernel's second-stage rank: the number of "extra DM" bits that this tree's cdd2 kernel
-    // folds into the argmax token's m-field (see CoalescedDdKernel2.hpp). Zero unless the
-    // tree has an early trigger.
+    // The GPU kernel's second-stage rank: the constructor pins dm_downsampling to
+    // pow2(dd_rank1), and it is what xdm_rank() is measured against.
+    long dd_rank1() const { return (dd_rank + 1) / 2; }
+
+    // DM downsampling factor of the coarse-grained array, relative to this tree. NOT a
+    // config field: it is fixed by the GPU kernel's warp geometry (one coarse DM per warp
+    // of the second dedispersion stage), and dd_rank1 varies WITHIN a primary-tree family,
+    // so no single per-primary-tree value could be right for all of its trees.
     //
-    // Derived from pf.dm_downsampling (which the tree constructor pins to pow2(dd_rank1))
+    // STORED rather than derived, even though it equals pow2(dd_rank1()). That is the
+    // opposite convention from xdm_rank() just below, and the choice is deliberate:
+    // from_yaml() transcribes members verbatim with no re-derivation, which is the property
+    // the round-trip test in pirate_frb/tests/test_decode_argmax.py is built on. Do not
+    // "fix" the inconsistency by making this an accessor without moving that test too.
+    long dm_downsampling = 0;
+
+    // K = dd_rank1() - frequency_subbands.pf_rank: the number of "extra DM" bits that this
+    // tree's cdd2 kernel folds into the argmax token's m-field (see CoalescedDdKernel2.hpp).
+    // Zero unless the tree has an early trigger.
+    //
+    // Derived from dm_downsampling (which the tree constructor pins to pow2(dd_rank1()))
     // rather than stored, so it is not one more field for check_consistency() and the yaml
     // round-trip to keep honest.
     long xdm_rank() const;

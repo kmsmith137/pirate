@@ -870,16 +870,15 @@ void register_core_bindings(pybind11::module &m)
         "Constructed either with default (zero) values::\n\n"
         "    pt = PrimaryTree()\n\n"
         "or with all six members::\n\n"
-        "    pt = PrimaryTree(num_early_triggers, max_width, dm_downsampling,\n"
-        "                     time_downsampling, wt_dm_downsampling, wt_time_downsampling)")
+        "    pt = PrimaryTree(num_early_triggers, max_width, time_downsampling,\n"
+        "                     wt_dm_downsampling, wt_time_downsampling)")
           .def(py::init<>(),
                "Create a PrimaryTree with default (zero) values.")
-          .def(py::init([](long num_early_triggers, long max_width, long dm_downsampling,
+          .def(py::init([](long num_early_triggers, long max_width,
                           long time_downsampling, long wt_dm_downsampling, long wt_time_downsampling) {
                    DedispersionConfig::PrimaryTree pt;
                    pt.num_early_triggers = num_early_triggers;
                    pt.max_width = max_width;
-                   pt.dm_downsampling = dm_downsampling;
                    pt.time_downsampling = time_downsampling;
                    pt.wt_dm_downsampling = wt_dm_downsampling;
                    pt.wt_time_downsampling = wt_time_downsampling;
@@ -887,7 +886,6 @@ void register_core_bindings(pybind11::module &m)
                }),
                py::arg("num_early_triggers"),
                py::arg("max_width"),
-               py::arg("dm_downsampling"),
                py::arg("time_downsampling"),
                py::arg("wt_dm_downsampling"),
                py::arg("wt_time_downsampling"),
@@ -895,27 +893,23 @@ void register_core_bindings(pybind11::module &m)
                "Args:\n"
                "    num_early_triggers: Number of early triggers (early_trigger_level = 1..num_early_triggers)\n"
                "    max_width: Maximum width of peak-finding kernel (in tree time samples)\n"
-               "    dm_downsampling: DM downsampling factor relative to tree\n"
                "    time_downsampling: Time downsampling factor relative to tree\n"
-               "    wt_dm_downsampling: DM downsampling factor for weights (>= dm_downsampling)\n"
+               "    wt_dm_downsampling: DM downsampling factor for weights (>= the tree's dm_downsampling)\n"
                "    wt_time_downsampling: Time downsampling for weights (>= time_downsampling)")
           .def_readwrite("num_early_triggers", &DedispersionConfig::PrimaryTree::num_early_triggers,
                "Number of early triggers (early_trigger_level = 1..num_early_triggers, can be zero)")
           .def_readwrite("max_width", &DedispersionConfig::PrimaryTree::max_width,
                "Maximum width of peak-finding kernel (in tree time samples)")
-          .def_readwrite("dm_downsampling", &DedispersionConfig::PrimaryTree::dm_downsampling,
-               "DM downsampling factor of coarse-grained array relative to tree")
           .def_readwrite("time_downsampling", &DedispersionConfig::PrimaryTree::time_downsampling,
                "Time downsampling factor of coarse-grained array relative to tree")
           .def_readwrite("wt_dm_downsampling", &DedispersionConfig::PrimaryTree::wt_dm_downsampling,
-               "DM downsampling factor of weights array (must be >= dm_downsampling)")
+               "DM downsampling factor of weights array (must be >= the tree's dm_downsampling)")
           .def_readwrite("wt_time_downsampling", &DedispersionConfig::PrimaryTree::wt_time_downsampling,
                "Time downsampling factor of weights array (must be >= time_downsampling)")
           .def("__repr__", [](const DedispersionConfig::PrimaryTree &self) {
                std::ostringstream os;
                os << "PrimaryTree(num_early_triggers=" << self.num_early_triggers
                   << ", max_width=" << self.max_width
-                  << ", dm_downsampling=" << self.dm_downsampling
                   << ", time_downsampling=" << self.time_downsampling
                   << ", wt_dm_downsampling=" << self.wt_dm_downsampling
                   << ", wt_time_downsampling=" << self.wt_time_downsampling << ")";
@@ -1186,6 +1180,16 @@ void register_core_bindings(pybind11::module &m)
                "over (dm, multiplet, profile) must check them itself.")
           .def_readonly("frequency_subbands", &DedispersionTree::frequency_subbands)
           .def_readonly("pf", &DedispersionTree::pf)
+          .def("dd_rank1", &DedispersionTree::dd_rank1,
+               "The GPU kernel's second-stage rank, ``(dd_rank+1)//2``. This tree's\n"
+               "``dm_downsampling`` is ``2**dd_rank1()``, and ``xdm_rank()`` is measured\n"
+               "against it.")
+          .def_readonly("dm_downsampling", &DedispersionTree::dm_downsampling,
+               "DM downsampling factor of the coarse-grained array, relative to this tree\n"
+               "(``= 2**dd_rank1()``).\n\n"
+               "NOT a config field: it is fixed by the GPU kernel's warp geometry, and\n"
+               "``dd_rank1`` varies within a primary-tree family, so no single\n"
+               "per-primary-tree value could be right for all of its trees.")
           .def_readonly("Dcore", &DedispersionTree::Dcore)
           .def_readonly("nprofiles", &DedispersionTree::nprofiles)
           .def_readonly("ndm_out", &DedispersionTree::ndm_out)

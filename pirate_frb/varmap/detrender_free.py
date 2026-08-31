@@ -369,10 +369,12 @@ class SdPlan:
         from ..pirate_pybind11 import constants
 
         # EVERY ENTRY POINT IN THIS MODULE GOES THROUGH HERE, so this is the one place the
-        # config is checked. const and microseconds. It also subsumes what would otherwise
-        # need its own tripwire below: the alpha convention assumes 2^R coarse DM channels
-        # per multiplet, which is what an unset (auto) dm_downsampling gives, and validate()
-        # requires the config's value to be 0 for every primary tree.
+        # config is checked. const and microseconds.
+        #
+        # The alpha convention assumes 2^R coarse DM channels per multiplet. That needs no
+        # tripwire: DedispersionTree.dm_downsampling is pinned to 2^dd_rank1 by the tree
+        # constructor and is not a config field at all, so no config can ask for anything
+        # else.
         config.validate()
 
         self.config = config

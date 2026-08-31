@@ -51,8 +51,9 @@ from ..utils import atomic_print
 
 
 _TREE_INT_MEMBERS = ('primary_tree_index', 'early_trigger_level', 'amb_rank', 'dd_rank',
-                     'nt_ds', 'Dcore', 'nprofiles', 'ndm_out', 'ndm_wt', 'nt_out', 'nt_wt')
-_TREE_PF_MEMBERS = ('num_early_triggers', 'max_width', 'dm_downsampling', 'time_downsampling',
+                     'nt_ds', 'dm_downsampling', 'Dcore', 'nprofiles', 'ndm_out', 'ndm_wt',
+                     'nt_out', 'nt_wt')
+_TREE_PF_MEMBERS = ('num_early_triggers', 'max_width', 'time_downsampling',
                     'wt_dm_downsampling', 'wt_time_downsampling')
 
 
@@ -136,9 +137,10 @@ def _test_grouper_tree_rebuild(config, plan, tuples):
 
     for itree, (t1, t2) in enumerate(zip(plan.trees, trees)):
         for name in ['primary_tree_index', 'early_trigger_level', 'amb_rank', 'dd_rank',
-                     'nt_ds', 'Dcore', 'nprofiles', 'ndm_out', 'ndm_wt', 'nt_out', 'nt_wt']:
+                     'nt_ds', 'dm_downsampling', 'Dcore', 'nprofiles', 'ndm_out', 'ndm_wt',
+                     'nt_out', 'nt_wt']:
             assert getattr(t2, name) == getattr(t1, name), f"tree {itree}: {name}"
-        for name in ['max_width', 'dm_downsampling', 'time_downsampling',
+        for name in ['max_width', 'time_downsampling',
                      'wt_dm_downsampling', 'wt_time_downsampling', 'num_early_triggers']:
             assert getattr(t2.pf, name) == getattr(t1.pf, name), f"tree {itree}: pf.{name}"
         for name in ['dm_min', 'dm_max', 'trigger_frequency']:

@@ -50,7 +50,7 @@ DedispersionTree::DedispersionTree(const DedispersionConfig &config, long itree,
     xassert_ge(this->dd_rank, 1);
 
     long tot_rank = this->total_rank();
-    long dd_rank1 = (this->dd_rank + 1) / 2;   // the GPU kernel's second-stage rank
+    long dd_rank1 = this->dd_rank1();   // the GPU kernel's second-stage rank
 
     // Frequency range searched by tree, accounting for early trigger.
     long dmax = pow2(config.toplevel_tree_rank - et_level);
@@ -71,29 +71,29 @@ DedispersionTree::DedispersionTree(const DedispersionConfig &config, long itree,
     // pow2(dd_rank1) is what holds ndm_out -- and every output array shape -- fixed as
     // pf_rank drops. It is also what makes xdm_rank() recoverable from the tree.
     //
-    // Unconditional: config.validate() requires the config's value to be 0.
-    this->pf.dm_downsampling = pow2(dd_rank1);
+    // Not a config field at all: see the doc-comment in DedispersionTree.hpp.
+    this->dm_downsampling = pow2(dd_rank1);
 
     if (this->pf.time_downsampling == 0)
-        this->pf.time_downsampling = this->pf.dm_downsampling;
+        this->pf.time_downsampling = this->dm_downsampling;
 
     // All four downsampling factors are now powers of two: the wt factors and any
-    // explicitly-set dm/time factors are checked by config.validate(); the dm/time factors
-    // left at 0 (which validate() leaves unchecked) are pow2() by the auto-fill just above.
-    // Assert all four here -- where the resolved values are first established and much
-    // downstream code assumes the property.
-    xassert(is_power_of_two(this->pf.dm_downsampling));
+    // explicitly-set time factor are checked by config.validate(); dm_downsampling and a
+    // time_downsampling left at 0 (which validate() leaves unchecked) are pow2() by the
+    // assignments just above. Assert all four here -- where the resolved values are first
+    // established and much downstream code assumes the property.
+    xassert(is_power_of_two(this->dm_downsampling));
     xassert(is_power_of_two(this->pf.time_downsampling));
     xassert(is_power_of_two(this->pf.wt_dm_downsampling));
     xassert(is_power_of_two(this->pf.wt_time_downsampling));
 
-    xassert_le(this->pf.dm_downsampling, this->pf.wt_dm_downsampling);
+    xassert_le(this->dm_downsampling, this->pf.wt_dm_downsampling);
     xassert_le(this->pf.wt_dm_downsampling, pow2(tot_rank));
     xassert_le(this->pf.time_downsampling, this->pf.wt_time_downsampling);
     xassert_le(this->pf.wt_time_downsampling, this->nt_ds);
 
     this->nprofiles = 1 + 3 * integer_log2(this->pf.max_width);
-    this->ndm_out = xdiv(pow2(tot_rank), this->pf.dm_downsampling);
+    this->ndm_out = xdiv(pow2(tot_rank), this->dm_downsampling);
     this->ndm_wt = xdiv(pow2(tot_rank), this->pf.wt_dm_downsampling);
     this->nt_out = xdiv(this->nt_ds, this->pf.time_downsampling);
     this->nt_wt = xdiv(this->nt_ds, this->pf.wt_time_downsampling);
@@ -248,8 +248,8 @@ vector<long> DedispersionTree::m_index_mapping(const DedispersionTree &parent, c
 
 long DedispersionTree::xdm_rank() const
 {
-    // The constructor pins pf.dm_downsampling = pow2(dd_rank1).
-    return integer_log2(this->pf.dm_downsampling) - this->frequency_subbands.pf_rank;
+    // The constructor pins dm_downsampling = pow2(dd_rank1()).
+    return integer_log2(this->dm_downsampling) - this->frequency_subbands.pf_rank;
 }
 
 
@@ -292,10 +292,11 @@ void DedispersionTree::check_consistency(const DedispersionConfig &config) const
     cmp("nt_out", this->nt_out, ref.nt_out);
     cmp("nt_wt", this->nt_wt, ref.nt_wt);
 
-    // The peak-finding factors. Note {dm,time}_downsampling may be 0 in the config and are
-    // auto-filled by the tree constructor, so this is where a change to that rule surfaces.
+    // The peak-finding factors. Note dm_downsampling is not a config field at all, and
+    // time_downsampling may be 0 in the config and is auto-filled by the tree constructor,
+    // so this is where a change to either rule surfaces.
     cmp("pf.max_width", this->pf.max_width, ref.pf.max_width);
-    cmp("pf.dm_downsampling", this->pf.dm_downsampling, ref.pf.dm_downsampling);
+    cmp("dm_downsampling", this->dm_downsampling, ref.dm_downsampling);
     cmp("pf.time_downsampling", this->pf.time_downsampling, ref.pf.time_downsampling);
     cmp("pf.wt_dm_downsampling", this->pf.wt_dm_downsampling, ref.pf.wt_dm_downsampling);
     cmp("pf.wt_time_downsampling", this->pf.wt_time_downsampling, ref.pf.wt_time_downsampling);
@@ -543,7 +544,7 @@ Array<long> DedispersionTree::compute_steady_state_it0(const DedispersionConfig 
     long p = tr.primary_tree_index;
     long e = tr.early_trigger_level;
     long T_ds = tr.pf.time_downsampling;
-    long D_ds = tr.pf.dm_downsampling;
+    long D_ds = tr.dm_downsampling;
     long Wmax = tr.pf.max_width;
     long r_top = config.toplevel_tree_rank;
 
@@ -640,10 +641,10 @@ void DedispersionTree::to_yaml(YAML::Emitter &emitter, const DedispersionConfig 
         emitter << YAML::Comment(ss.str());
     }
 
-    emitter << YAML::Key << "dm_downsampling" << YAML::Value << tree.pf.dm_downsampling;
+    emitter << YAML::Key << "dm_downsampling" << YAML::Value << tree.dm_downsampling;
     if (verbose && (tree.primary_tree_index > 0)) {
         stringstream ss;
-        ss << (tree.pf.dm_downsampling * ds_factor) << " before downsampling";
+        ss << (tree.dm_downsampling * ds_factor) << " before downsampling";
         emitter << YAML::Comment(ss.str());
     }
 
@@ -731,14 +732,16 @@ DedispersionTree DedispersionTree::from_yaml(const YamlFile &yt, const Dedispers
     tree.dm_max = yt.get_scalar<double>("dm_max");
     tree.trigger_frequency = yt.get_scalar<double>("trigger_frequency");
 
-    // 'pf' is seeded from the config's PrimaryTree (for num_early_triggers), then
-    // the per-tree values are overwritten from the yaml. Note that the config's
-    // {dm,time}_downsampling can be 0 (= "choose for me"), but the yaml carries the
-    // post-auto-fill values -- the auto-fill rule is deliberately not reimplemented here.
+    // 'dm_downsampling' is a tree member, not a config field. 'pf' is seeded from the
+    // config's PrimaryTree (for num_early_triggers), then the per-tree values are
+    // overwritten from the yaml. Note that the config's time_downsampling can be 0
+    // (= "choose for me"), but the yaml carries the post-auto-fill value -- the auto-fill
+    // rule is deliberately not reimplemented here.
+    tree.dm_downsampling = yt.get_scalar<long>("dm_downsampling");
+
     xassert((tree.primary_tree_index >= 0) && (tree.primary_tree_index < long(cfg.primary_trees.size())));
     tree.pf = cfg.primary_trees.at(tree.primary_tree_index);
     tree.pf.max_width = yt.get_scalar<long>("max_width");
-    tree.pf.dm_downsampling = yt.get_scalar<long>("dm_downsampling");
     tree.pf.time_downsampling = yt.get_scalar<long>("time_downsampling");
     tree.pf.wt_dm_downsampling = yt.get_scalar<long>("wt_dm_downsampling");
     tree.pf.wt_time_downsampling = yt.get_scalar<long>("wt_time_downsampling");

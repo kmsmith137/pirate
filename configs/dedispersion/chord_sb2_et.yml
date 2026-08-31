@@ -51,25 +51,14 @@ num_active_batches: 2
 #   W1 = W2        => max_width is the same in "post-downsampled" time samples
 #   W1 = 2*W2      => max_width is the same in "pre-donwsampled" time samples
 #   anything else  => presumably unintentional, so an exception is raised.
-#
-# FIXME: the '*_downsampling' params are intended to control coarse-graining,
-# but are currently in a state of incomplete implementation. For now, set
-# dm_downsampling = time_downsampling = 0 to auto-select coarse-graining factors.
-# The dedisperser will "choose them for you", and they need not be the same in
-# all trees. The values chosen by the dedisperser will show up in the dedispersion
-# plan yaml ('dm_downsampling' and 'time_downsampling', see example_dedispersion_plan.yml).
-#
-# If your downstream code depends on how they're chosen, then you should put asserts
-# in your code, in case the values change in the future. This is something I hope
-# to improve soon!
 
 toplevel_tree_rank: 16
 
 primary_trees:
-  - {num_early_triggers: 0, max_width: 32, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
-  - {num_early_triggers: 1, max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
-  - {num_early_triggers: 2, max_width:  8, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
-  - {num_early_triggers: 3, max_width:  4, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 0, max_width: 32, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 1, max_width: 16, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 2, max_width:  8, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 3, max_width:  4, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
 
 # A WriteFiles request may extend into the future, by a bounded amount.
 # In this config, early triggers may extend 448*1024 samples into the future.

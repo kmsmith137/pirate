@@ -518,14 +518,13 @@ def _parse_channel_spec(spec, nfreq):
 
 
 # Config keys that this tool overrides, with the value it forces, because the sweep requires
-# them (see varmap.brute_force._SweepGeometry). Each is safe to override because neither can
+# them (see varmap.brute_force._SweepGeometry). Each is safe to override because none can
 # change A: the analytic route (varmap.detrender_free) computes the same matrix and never
 # reads any downsampling factor.
 #
 # Note 'time_downsampling' is NOT forced. It sets the peak-finder's Dcore, which the sweep
 # never sees -- it ends in a PfSquare, which evaluates h_p at every time sample -- so leaving
-# it alone keeps the archived config faithful to the one the user asked about. That the swept
-# A is unchanged by it is checked, bitwise, by test_sweep_vs_per_tfm(time_downsampling=4).
+# it alone keeps the archived config faithful to the one the user asked about.
 def _varmap_bf_override_config(config, nbeams=1):
     overrides = []
 
@@ -538,11 +537,6 @@ def _varmap_bf_override_config(config, nbeams=1):
     _set(config, 'beams_per_gpu', nbeams, 'beams_per_gpu')
     _set(config, 'beams_per_batch', nbeams, 'beams_per_batch')
     _set(config, 'num_active_batches', 1, 'num_active_batches')
-
-    pts = list(config.primary_trees)
-    for (i, pt) in enumerate(pts):
-        _set(pt, 'dm_downsampling', 0, f'primary_trees[{i}].dm_downsampling')
-    config.primary_trees = pts
 
     return overrides
 
@@ -644,8 +638,8 @@ def varmap_df(args):
 
     NO CONFIG OVERRIDES either, unlike 'varmap bf'. Those exist because the SWEEP requires
     them (beams_per_gpu, beams_per_batch, num_active_batches); this path runs no dedisperser
-    and reads none of them, and dm_downsampling == 0 is already validate()'s to enforce. So
-    the archived config is exactly the one the user wrote, which is better provenance.
+    and reads none of them. So the archived config is exactly the one the user wrote, which
+    is better provenance.
     """
 
     # THE NO-DETRENDER HYPOTHESIS IS LOAD-BEARING here, not a missing feature: the step from

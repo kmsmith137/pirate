@@ -62,7 +62,10 @@ struct DedispersionConfig
     //   max_width: max width of peak-finding kernel, in "tree" time samples
     //   time_downsampling: downsampling factor of coarse-grained array, relative to tree
     //   wt_{dm,time}_downsampling: downsampling factors of weights array, relative to tree.
-    // (dm_downsampling is NOT settable -- see below.)
+    //
+    // The DM downsampling factor of the coarse-grained array is NOT here: it is fixed by
+    // the GPU kernel's warp geometry, separately for each tree, and lives on the tree as
+    // DedispersionTree::dm_downsampling.
 
     struct PrimaryTree
     {
@@ -73,18 +76,11 @@ struct DedispersionConfig
         long num_early_triggers = 0;    // required (can be zero)
         long max_width = 0;             // required
 
-        // Must be ZERO: this factor is not settable in the config file. The DedispersionTree
-        // constructor pins it to pow2(dd_rank1), separately for each tree -- and dd_rank1
-        // varies WITHIN a primary-tree family, since early-trigger trees are smaller, so no
-        // single value here could be right for all of them. It survives as a member because
-        // DedispersionTree::pf is a copy of this struct, and holds the RESOLVED value.
-        long dm_downsampling = 0;
+        long time_downsampling = 0;     // optional (default = "use the tree's dm_downsampling")
 
-        long time_downsampling = 0;     // optional (default = "use resolved dm_downsampling")
-
-        // Must be >= the RESOLVED dm_downsampling of every tree in this family, i.e. >=
+        // Must be >= DedispersionTree::dm_downsampling of every tree in this family, i.e. >=
         // pow2(dd_rank1) of its early_trigger_level=0 tree. Checked in the DedispersionTree
-        // constructor, which is where the resolved value is known.
+        // constructor, which is where the tree's value is known.
         long wt_dm_downsampling = 0;    // required
 
         long wt_time_downsampling = 0;  // required (must be >= time_downsampling)

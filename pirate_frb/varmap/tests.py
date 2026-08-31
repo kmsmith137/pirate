@@ -160,8 +160,9 @@ def _random_config(rng=None, **kwargs):
 
 def _make_test_config(toplevel_tree_rank, subband_counts, num_primary_trees=1,
                       num_early_triggers=0, max_width=4, nfreq=None, time_downsampling=1):
-    """A small DedispersionConfig with 'dm_downsampling: 0' (auto), i.e. 2^R coarse DM
-    channels per multiplet, which is what the variance map's index convention assumes.
+    """A small DedispersionConfig. Every tree gets 2^R coarse DM channels per multiplet
+    (DedispersionTree.dm_downsampling, not a config field), which is what the variance map's
+    index convention assumes.
 
     'time_downsampling' sets the peak-finder's Dcore. The sweep does not read it (see
     _SweepGeometry), so the default of 1 is a convenience rather than a requirement. Nothing
@@ -185,7 +186,7 @@ def _make_test_config(toplevel_tree_rank, subband_counts, num_primary_trees=1,
     config.time_samples_per_chunk = nt_in
     config.frequency_subband_counts = subband_counts
     config.primary_trees = [
-        PrimaryTree(num_early_triggers, max_width, 0, time_downsampling,
+        PrimaryTree(num_early_triggers, max_width, time_downsampling,
                     1 << min_total_rank, nt_in >> ipri)
         for ipri in range(num_primary_trees)
     ]
