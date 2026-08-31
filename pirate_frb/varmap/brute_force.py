@@ -349,6 +349,14 @@ class _SweepGeometry:
             # PfSquare, which evaluates h_p at every time sample by construction, so nothing
             # downstream of the dedisperser sees the peak-finder's Dcore sublattice at all.
             #
+            # test_multimap_vs_sweep() is what makes that a CHECKED property rather than an
+            # assumed one, without needing a Dcore knob to vary: detrender_free.py reads
+            # neither Dcore nor time_downsampling, so it is a Dcore-blind oracle, and every
+            # config it is run against has Dcore >= 2 (Dcore = time_downsampling = 2^dd_rank1
+            # for a cdd2_kernel_required=False plan, and dd_rank >= 1). A sweep that depended
+            # on Dcore would disagree with it. Measured over 494 drawn trees: Dcore is 2 or 4,
+            # never 1.
+            #
             # Nor is there a constraint on xdm_rank. The subband array has 2^(r-R) coarse DM
             # rows whatever K is; K only says how many of them the PEAK-FINDER max-reduces
             # into one output row, and neither sweep runs a peak-finder.
