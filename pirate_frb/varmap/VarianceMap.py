@@ -75,7 +75,7 @@ def make_tree(config, itree):
     Dcore is deliberately NOT taken from the cdd2 kernel registry: varmap never reads it, and
     requiring the registry would make an archived map unreadable on any build whose compiled
     cdd2 kernel set does not cover that config. So a tree obtained here (and hence 'Dcore' in
-    any variance-map file) carries the placeholder pf.time_downsampling.
+    any variance-map file) carries the placeholder DedispersionTree.time_downsampling.
     """
     from ..pirate_pybind11 import DedispersionTree
     return DedispersionTree(config, int(itree), Dcore_from_cdd2_registry=False)

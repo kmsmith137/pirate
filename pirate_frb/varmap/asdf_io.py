@@ -89,7 +89,7 @@ without it is rejected by name.
 'Dcore' in a variance-map file is NEVER authoritative
 -----------------------------------------------------
 The tree yaml carries a ``Dcore``, and it is always the placeholder
-``pf.time_downsampling``: varmap builds trees with ``Dcore_from_cdd2_registry=False`` (see
+``DedispersionTree.time_downsampling``: varmap builds trees with ``Dcore_from_cdd2_registry=False`` (see
 VarianceMap.make_tree), and the brute-force sweep runs with the cdd2 kernel not required.
 Do not decode peak-finder tokens with it -- the authoritative value is the producer's, and
 it travels in the FrbGrouper handshake, not here.

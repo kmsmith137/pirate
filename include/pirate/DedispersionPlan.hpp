@@ -34,7 +34,7 @@ struct DedispersionPlan
 {
     // cdd2_kernel_required: if true, then Dcore values will be taken from the cdd2 kernel
     // registry, and an exception will be thrown if a cdd2 kernel is missing. If false,
-    // then default Dcore values will be assigned (Dcore = pf.time_downsampling).
+    // then default Dcore values will be assigned (Dcore = DedispersionTree::time_downsampling).
     //
     // Since the Dcore values are then not the compiled kernels' values, a false plan
     // cannot be used in a GpuDedisperser. It is still perfectly usable on the GPU by

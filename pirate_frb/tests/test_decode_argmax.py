@@ -51,9 +51,9 @@ from ..utils import atomic_print
 
 
 _TREE_INT_MEMBERS = ('primary_tree_index', 'early_trigger_level', 'amb_rank', 'dd_rank',
-                     'nt_ds', 'dm_downsampling', 'Dcore', 'nprofiles', 'ndm_out', 'ndm_wt',
-                     'nt_out', 'nt_wt')
-_TREE_PF_MEMBERS = ('num_early_triggers', 'max_width', 'time_downsampling',
+                     'nt_ds', 'dm_downsampling', 'time_downsampling', 'Dcore', 'nprofiles',
+                     'ndm_out', 'ndm_wt', 'nt_out', 'nt_wt')
+_TREE_PF_MEMBERS = ('num_early_triggers', 'max_width',
                     'wt_dm_downsampling', 'wt_time_downsampling')
 
 
@@ -137,10 +137,10 @@ def _test_grouper_tree_rebuild(config, plan, tuples):
 
     for itree, (t1, t2) in enumerate(zip(plan.trees, trees)):
         for name in ['primary_tree_index', 'early_trigger_level', 'amb_rank', 'dd_rank',
-                     'nt_ds', 'dm_downsampling', 'Dcore', 'nprofiles', 'ndm_out', 'ndm_wt',
-                     'nt_out', 'nt_wt']:
+                     'nt_ds', 'dm_downsampling', 'time_downsampling', 'Dcore', 'nprofiles',
+                     'ndm_out', 'ndm_wt', 'nt_out', 'nt_wt']:
             assert getattr(t2, name) == getattr(t1, name), f"tree {itree}: {name}"
-        for name in ['max_width', 'time_downsampling',
+        for name in ['max_width',
                      'wt_dm_downsampling', 'wt_time_downsampling', 'num_early_triggers']:
             assert getattr(t2.pf, name) == getattr(t1.pf, name), f"tree {itree}: pf.{name}"
         for name in ['dm_min', 'dm_max', 'trigger_frequency']:
@@ -512,11 +512,11 @@ def test_decode_argmax():
     for itree in range(plan.ntrees):
         assert plan.trees[itree].Dcore == kinfo[itree][3]
 
-    # cdd2_kernel_required=False: no registry query; default Dcore = pf.time_downsampling.
+    # cdd2_kernel_required=False: no registry query; default Dcore = tree.time_downsampling.
     p0 = DedispersionPlan(config, cdd2_kernel_required=False)
     assert not p0.cdd2_kernel_required
     for tr in p0.trees:
-        assert tr.Dcore == tr.pf.time_downsampling
+        assert tr.Dcore == tr.time_downsampling
 
     _check_bad_tokens(plan, kinfo)
 

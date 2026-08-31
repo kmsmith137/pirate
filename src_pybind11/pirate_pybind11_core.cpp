@@ -870,47 +870,43 @@ void register_core_bindings(pybind11::module &m)
         "Constructed either with default (zero) values::\n\n"
         "    pt = PrimaryTree()\n\n"
         "or with all six members::\n\n"
-        "    pt = PrimaryTree(num_early_triggers, max_width, time_downsampling,\n"
+        "    pt = PrimaryTree(num_early_triggers, max_width,\n"
         "                     wt_dm_downsampling, wt_time_downsampling)")
           .def(py::init<>(),
                "Create a PrimaryTree with default (zero) values.")
           .def(py::init([](long num_early_triggers, long max_width,
-                          long time_downsampling, long wt_dm_downsampling, long wt_time_downsampling) {
+                          long wt_dm_downsampling, long wt_time_downsampling) {
                    DedispersionConfig::PrimaryTree pt;
                    pt.num_early_triggers = num_early_triggers;
                    pt.max_width = max_width;
-                   pt.time_downsampling = time_downsampling;
                    pt.wt_dm_downsampling = wt_dm_downsampling;
                    pt.wt_time_downsampling = wt_time_downsampling;
                    return pt;
                }),
                py::arg("num_early_triggers"),
                py::arg("max_width"),
-               py::arg("time_downsampling"),
                py::arg("wt_dm_downsampling"),
                py::arg("wt_time_downsampling"),
                "Create a PrimaryTree.\n\n"
                "Args:\n"
                "    num_early_triggers: Number of early triggers (early_trigger_level = 1..num_early_triggers)\n"
                "    max_width: Maximum width of peak-finding kernel (in tree time samples)\n"
-               "    time_downsampling: Time downsampling factor relative to tree\n"
-               "    wt_dm_downsampling: DM downsampling factor for weights (>= the tree's dm_downsampling)\n"
-               "    wt_time_downsampling: Time downsampling for weights (>= time_downsampling)")
+               "    wt_dm_downsampling: DM downsampling factor for weights\n"
+               "    wt_time_downsampling: Time downsampling factor for weights\n\n"
+               "Both wt_* factors must be >= the tree's own {dm,time}_downsampling, which are\n"
+               "not config fields (see DedispersionTree).")
           .def_readwrite("num_early_triggers", &DedispersionConfig::PrimaryTree::num_early_triggers,
                "Number of early triggers (early_trigger_level = 1..num_early_triggers, can be zero)")
           .def_readwrite("max_width", &DedispersionConfig::PrimaryTree::max_width,
                "Maximum width of peak-finding kernel (in tree time samples)")
-          .def_readwrite("time_downsampling", &DedispersionConfig::PrimaryTree::time_downsampling,
-               "Time downsampling factor of coarse-grained array relative to tree")
           .def_readwrite("wt_dm_downsampling", &DedispersionConfig::PrimaryTree::wt_dm_downsampling,
                "DM downsampling factor of weights array (must be >= the tree's dm_downsampling)")
           .def_readwrite("wt_time_downsampling", &DedispersionConfig::PrimaryTree::wt_time_downsampling,
-               "Time downsampling factor of weights array (must be >= time_downsampling)")
+               "Time downsampling factor of weights array (must be >= the tree's time_downsampling)")
           .def("__repr__", [](const DedispersionConfig::PrimaryTree &self) {
                std::ostringstream os;
                os << "PrimaryTree(num_early_triggers=" << self.num_early_triggers
                   << ", max_width=" << self.max_width
-                  << ", time_downsampling=" << self.time_downsampling
                   << ", wt_dm_downsampling=" << self.wt_dm_downsampling
                   << ", wt_time_downsampling=" << self.wt_time_downsampling << ")";
                return os.str();
@@ -997,7 +993,7 @@ void register_core_bindings(pybind11::module &m)
         "- ``Dcore`` (int) -- internal time-downsampling of this tree's peak-finding kernel,\n"
         "  which sets the time granularity of ``out_argmax`` tokens. A property of the\n"
         "  compiled cdd2 kernel rather than of the config, so it is NOT derivable from\n"
-        "  ``config`` alone; it equals ``pf.time_downsampling`` when that kernel is absent\n"
+        "  ``config`` alone; it equals ``time_downsampling`` when that kernel is absent\n"
         "  from this build.\n"
         "- ``nprofiles`` (int) -- number of peak-finder time profiles, equal to\n"
         "  ``1 + 3*log2(pf.max_width)``.\n"
@@ -1026,7 +1022,7 @@ void register_core_bindings(pybind11::module &m)
                "    Dcore_from_cdd2_registry: if True, ``Dcore`` is taken from the cdd2 kernel\n"
                "        registry, and an exception is thrown if that kernel is missing from\n"
                "        this build. If False, ``Dcore`` gets the placeholder value\n"
-               "        ``pf.time_downsampling`` -- appropriate for callers which do not\n"
+               "        ``time_downsampling`` -- appropriate for callers which do not\n"
                "        decode ``out_argmax`` tokens.")
           .def("check_consistency", &DedispersionTree::check_consistency, py::arg("config"),
                "Throws if this tree disagrees with what ``config`` implies.\n\n"
@@ -1190,6 +1186,13 @@ void register_core_bindings(pybind11::module &m)
                "NOT a config field: it is fixed by the GPU kernel's warp geometry, and\n"
                "``dd_rank1`` varies within a primary-tree family, so no single\n"
                "per-primary-tree value could be right for all of its trees.")
+          .def_readonly("time_downsampling", &DedispersionTree::time_downsampling,
+               "Time downsampling factor of the coarse-grained array, relative to this tree.\n"
+               "Equal to ``dm_downsampling``, and likewise not a config field.\n\n"
+               "This value is the cdd2 registry key's ``Dout`` (``nt_out = nt_ds /\n"
+               "time_downsampling``), so pinning it to ``2**dd_rank1()`` is also a statement\n"
+               "about which GPU kernels are compiled -- see the Dout invariant in\n"
+               "makefile_helper.autogenerated_cdd2_kernels().")
           .def_readonly("Dcore", &DedispersionTree::Dcore)
           .def_readonly("nprofiles", &DedispersionTree::nprofiles)
           .def_readonly("ndm_out", &DedispersionTree::ndm_out)

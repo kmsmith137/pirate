@@ -49,16 +49,16 @@ num_active_batches: 2
 #
 # If W1, W2 are the max_width params in consecutive primary trees, then:
 #   W1 = W2        => max_width is the same in "post-downsampled" time samples
-#   W1 = 2*W2      => max_width is the same in "pre-donwsampled" time samples
+#   W1 = 2*W2      => max_width is the same in "pre-downsampled" time samples
 #   anything else  => presumably unintentional, so an exception is raised.
 
 toplevel_tree_rank: 16
 
 primary_trees:
-  - {num_early_triggers: 0, max_width: 32, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
-  - {num_early_triggers: 1, max_width: 16, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
-  - {num_early_triggers: 2, max_width:  8, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
-  - {num_early_triggers: 3, max_width:  4, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 0, max_width: 32, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 1, max_width: 16, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 2, max_width:  8, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 3, max_width:  4, wt_dm_downsampling: 64, wt_time_downsampling: 64}
 
 # A WriteFiles request may extend into the future, by a bounded amount.
 # In this config, early triggers may extend 448*1024 samples into the future.

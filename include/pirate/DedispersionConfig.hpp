@@ -60,12 +60,12 @@ struct DedispersionConfig
     //
     // The remaining members configure peak-finding, and must be powers of two:
     //   max_width: max width of peak-finding kernel, in "tree" time samples
-    //   time_downsampling: downsampling factor of coarse-grained array, relative to tree
     //   wt_{dm,time}_downsampling: downsampling factors of weights array, relative to tree.
     //
-    // The DM downsampling factor of the coarse-grained array is NOT here: it is fixed by
-    // the GPU kernel's warp geometry, separately for each tree, and lives on the tree as
-    // DedispersionTree::dm_downsampling.
+    // The coarse-grained OUTPUT array's downsampling factors are NOT here, in either axis.
+    // Both are fixed by the GPU kernel's warp geometry, separately for each tree, and live
+    // on the tree as DedispersionTree::{dm,time}_downsampling -- both equal to
+    // pow2(dd_rank1). Only the WEIGHTS array's coarse-graining is choosable.
 
     struct PrimaryTree
     {
@@ -76,14 +76,12 @@ struct DedispersionConfig
         long num_early_triggers = 0;    // required (can be zero)
         long max_width = 0;             // required
 
-        long time_downsampling = 0;     // optional (default = "use the tree's dm_downsampling")
-
-        // Must be >= DedispersionTree::dm_downsampling of every tree in this family, i.e. >=
-        // pow2(dd_rank1) of its early_trigger_level=0 tree. Checked in the DedispersionTree
-        // constructor, which is where the tree's value is known.
+        // Both must be >= DedispersionTree::{dm,time}_downsampling of every tree in this
+        // family, i.e. >= pow2(dd_rank1) of its early_trigger_level=0 tree. Checked in
+        // validate(), and again in the DedispersionTree constructor where the tree's own
+        // values are known.
         long wt_dm_downsampling = 0;    // required
-
-        long wt_time_downsampling = 0;  // required (must be >= time_downsampling)
+        long wt_time_downsampling = 0;  // required
     };
 
     std::vector<PrimaryTree> primary_trees;  // one entry per DM range searched

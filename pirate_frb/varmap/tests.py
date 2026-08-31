@@ -159,16 +159,15 @@ def _random_config(rng=None, **kwargs):
 
 
 def _make_test_config(toplevel_tree_rank, subband_counts, num_primary_trees=1,
-                      num_early_triggers=0, max_width=4, nfreq=None, time_downsampling=1):
+                      num_early_triggers=0, max_width=4, nfreq=None):
     """A small DedispersionConfig. Every tree gets 2^R coarse DM channels per multiplet
     (DedispersionTree.dm_downsampling, not a config field), which is what the variance map's
     index convention assumes.
 
-    'time_downsampling' sets the peak-finder's Dcore. The sweep does not read it (see
-    _SweepGeometry), so the default of 1 is a convenience rather than a requirement. Nothing
-    here needs to pass something else: make_random() draws time_downsampling >= 4 in every
-    primary tree (measured histogram over 673 drawn trees: {4: 60, 8: 55, 16: 558}), so
-    test_multimap_vs_sweep()'s draws cover Dcore > 1 on every single config.
+    The peak-finder's Dcore is likewise not selectable: it follows DedispersionTree.
+    time_downsampling = 2^dd_rank1. The sweep does not read it (see _SweepGeometry), so this
+    matters only in that these configs now run at Dcore > 1 rather than the Dcore = 1 that a
+    'time_downsampling: 1' config used to give.
     """
 
     from ..pirate_pybind11 import DedispersionConfig, PrimaryTree
@@ -186,7 +185,7 @@ def _make_test_config(toplevel_tree_rank, subband_counts, num_primary_trees=1,
     config.time_samples_per_chunk = nt_in
     config.frequency_subband_counts = subband_counts
     config.primary_trees = [
-        PrimaryTree(num_early_triggers, max_width, time_downsampling,
+        PrimaryTree(num_early_triggers, max_width,
                     1 << min_total_rank, nt_in >> ipri)
         for ipri in range(num_primary_trees)
     ]

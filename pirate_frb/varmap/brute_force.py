@@ -63,10 +63,11 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
     Parameters
     ----------
     config : DedispersionConfig
-        One requirement, checked up front: ``beams_per_gpu == beams_per_batch``. The DM
-        coarse-graining needs no check -- ``DedispersionTree.dm_downsampling`` is 2^R by
-        construction and is not a config field. ``time_downsampling`` is unconstrained --
-        it sets the peak-finder's Dcore, which neither sweep reads.
+        One requirement, checked up front: ``beams_per_gpu == beams_per_batch``. The
+        output-array coarse-graining needs no check -- ``DedispersionTree``'s
+        ``dm_downsampling`` and ``time_downsampling`` are both 2^dd_rank1 by construction
+        and neither is a config field. The latter sets the peak-finder's Dcore, which
+        neither sweep reads.
         The beam count comes from ``config.beams_per_batch``: on the GPU the beam axis is a
         pure spectator, so a batch of B beams runs B distinct passes concurrently. Measurement
         found that batching does not speed up a full sweep, so the CLI forces 1.
@@ -344,10 +345,9 @@ class _SweepGeometry:
             r, R = int(t.total_rank()), int(fs.pf_rank)
             gamma = int(t.primary_tree_index)
 
-            # Note there is deliberately NO constraint on Dcore (i.e. on the config's
-            # 'time_downsampling'). Both sweeps end in a PfSquare, which evaluates h_p at
-            # every time sample by construction, so nothing downstream of the dedisperser
-            # sees the peak-finder's Dcore sublattice at all.
+            # Note there is deliberately NO constraint on Dcore. Both sweeps end in a
+            # PfSquare, which evaluates h_p at every time sample by construction, so nothing
+            # downstream of the dedisperser sees the peak-finder's Dcore sublattice at all.
             #
             # Nor is there a constraint on xdm_rank. The subband array has 2^(r-R) coarse DM
             # rows whatever K is; K only says how many of them the PEAK-FINDER max-reduces
