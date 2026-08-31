@@ -61,11 +61,6 @@ struct DedispersionConfig
     // The remaining members configure peak-finding, and must be powers of two:
     //   max_width: max width of peak-finding kernel, in "tree" time samples
     //   wt_{dm,time}_downsampling: downsampling factors of weights array, relative to tree.
-    //
-    // The coarse-grained OUTPUT array's downsampling factors are NOT here, in either axis.
-    // Both are fixed by the GPU kernel's warp geometry, separately for each tree, and live
-    // on the tree as DedispersionTree::{dm,time}_downsampling -- both equal to
-    // pow2(dd_rank1). Only the WEIGHTS array's coarse-graining is choosable.
 
     struct PrimaryTree
     {
