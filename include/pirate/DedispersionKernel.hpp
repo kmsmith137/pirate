@@ -76,7 +76,7 @@ struct DedispersionKernelParams
     long amb_rank = -1;   // satisfies 0 <= amb_rank <= 8
     long total_beams = 0;
     long beams_per_batch = 0;
-    long ntime = 0;       // includes downsampling factor, if any
+    long ntime = 0;       // after dividing by downsampling factor 2^(ds_level), if any
     long nspec = 0;       // "inner" spectator index
 
     // Input/output buffer types.

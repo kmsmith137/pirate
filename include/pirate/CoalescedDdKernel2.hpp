@@ -56,6 +56,11 @@ struct DedispersionTree;   // defined in DedispersionTree.hpp
 
 struct CoalescedDdKernel2
 {
+    // Note: the constructor args (dd_params, pf_params) implicitly determine
+    // dm/time coarse-graining factors:
+    //   dm_downsampling = pow2(dd_params.tree_rank) / pf_params.ndm_out
+    //   time_downsampling = pf_params.nt_out / pf_params.nt_in
+    
     CoalescedDdKernel2(
         const DedispersionKernelParams &dd_params,   // dedispersion
         const PeakFindingKernelParams &pf_params     // peak-finding
@@ -106,10 +111,10 @@ struct CoalescedDdKernel2
     long Dcore = 0;                         // internal downsampling factor
 
     // Derived parameters, computed in constructor.
-    ksgpu::Dtype dtype;        // = params.dtype
-    long Dout = 0;             // = (nt_in/nt_out) = time downsampling factor of output array 
-    long nbatches = 0;         // = (total_beams / beams_per_batch)
-    long nprofiles = 0;        // = (3 * log2(max_kernel_width) + 1)
+    ksgpu::Dtype dtype;                     // = params.dtype
+    long time_downsampling = 0;             // = (nt_in / nt_out)
+    long nbatches = 0;                      // = (total_beams / beams_per_batch)
+    long nprofiles = 0;                     // = (3 * log2(max_kernel_width) + 1)
 
     // All rates are "per call to launch()".
     ResourceTracker resource_tracker;
@@ -132,7 +137,6 @@ struct CoalescedDdKernel2
         ksgpu::Dtype dtype;   // either float16 or float32
         long dd_rank = -1;
         long Tinner = 0;      // for weights
-        long Dout = 0;
         long Wmax = 0;
 
         std::vector<long> subband_counts;  // length (pf_rank+1)
@@ -171,6 +175,11 @@ struct CoalescedDdKernel2
         int pstate32_per_small_tree = -1;  // see 'persistent_state' array dims above
         int nt_per_segment = 0;            // value of 'nt_per_segment' assumed by dd-kernel
         long Dcore = 0;                    // internal downsampling factor, chosen by pf-kernel
+
+        // The coarse-graining factors this kernel was COMPILED with, reported so that the
+        // pipeline can cross-check them against DedispersionTree::{dm,time}_downsampling.
+        long dm_downsampling = 0;
+        long time_downsampling = 0;
     };
 
     // Non-static members for interacting with the kernel registry.
@@ -182,15 +191,10 @@ struct CoalescedDdKernel2
     // Static member function to access registry.
     static Registry &registry();
 
-    // Peeks the registry for the Dcore of the (unique) cdd2 kernel matching
-    // (dtype, tree), throwing if no matching kernel is compiled into this build.
-    // Metadata-only: does not touch the GPU (safe in GPU-less contexts). Used at
-    // DedispersionPlan-construction time (Part 1) to fill tree.Dcore; plans that
-    // must be constructible without compiled kernels use
-    // DedispersionPlan(config, cdd2_kernel_required=false), which skips this query
-    // entirely. (Key-building helpers are file-local in CoalescedDdKernel2.cu.)
-    static long get_registry_dcore(const ksgpu::Dtype &dtype,
-                                   const DedispersionTree &tree);
+    // Peeks the registry for the Dcore of the (unique) cdd2 kernel matching (dtype, tree).
+    // Throws if no matching kernel is compiled into this build, or if the kernel's
+    // compile-time {dm,time}_downsampling don't match the tree's.
+    static long get_registry_dcore(const ksgpu::Dtype &dtype, const DedispersionTree &tree);
 };
 
 // Defined in CoalescedDdKernel2.cu

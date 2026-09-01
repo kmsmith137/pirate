@@ -18,5 +18,11 @@ from .PeakFinder import \
     PfWeightReader, \
     PfOutput
 
-from .CoalescedDdKernel2 import CoalescedDdKernel2
+from .CoalescedDdKernel2 import \
+    CoalescedDdKernel2, \
+    cdd2_dout, \
+    cdd2_dcore, \
+    max_cdd2_tinner, \
+    check_cdd2_params, \
+    check_cdd2_row
 from .SbDedisperser import SbDedisperser
