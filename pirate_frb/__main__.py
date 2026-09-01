@@ -10,6 +10,18 @@ import argparse
 import threading
 import traceback
 
+# BLAS THREAD COUNT, for 'pirate_frb test' only, and set HERE because OpenBLAS reads these
+# once, when numpy is first imported -- which the next line does, transitively. The unit tests
+# do thousands of SMALL linear-algebra calls (varmap's run_all() alone does ~280 SVDs), and an
+# unbounded thread pool spends more time synchronizing than computing: measured on this
+# 64-core host, varmap's run_all() takes 10.5 s at the default and 6.5 s at 4 threads. The
+# PRODUCTION paths want the full pool -- varmap at CHORD scale factorizes matrices of billions
+# of entries -- so this is scoped to the 'test' command, and it is a setdefault, so
+# 'OMP_NUM_THREADS=64 pirate_frb test ...' still gets the old behaviour.
+if (len(sys.argv) > 1) and (sys.argv[1] == 'test'):
+    for _blas_var in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'):
+        os.environ.setdefault(_blas_var, '4')
+
 import argcomplete
 import ksgpu
 
