@@ -1732,9 +1732,22 @@ def _default_workers(workers):
     return max(1, int(workers))
 
 
+# Below this projected serial cost, a fork pool is not worth building. Measured: a 32-worker
+# pool of an interpreter with numpy (and, under 'pirate_frb test', CUDA) loaded takes 0.5-1.8 s
+# to create, while a family of small LPs solves outright in milliseconds -- so the pool was
+# costing 40x its own work on the unit tests, ~9 s per '--varmap' iteration. See _map_chunks().
+POOL_MIN_SECONDS = 2.0
+
+
 def _map_chunks(fn, n, shared, workers, cfg, chunk=None, progress=False):
     """Run fn over [0, n) in chunks, in a fork pool, falling back to serial execution in the
-    parent if the pool cannot be created or stops producing results."""
+    parent if the pool cannot be created or stops producing results.
+
+    THE POOL IS NOT ALWAYS BUILT. The crossover between "fork 32 workers" and "just solve
+    them here" depends on the LP size, the solver and the machine, so it is measured rather
+    than guessed: the FIRST chunk runs in the parent, and the pool is built only if the
+    remaining chunks are projected to cost more than POOL_MIN_SECONDS at that rate.
+    """
     if chunk is None:
         chunk = max(1, min(256, n // (8*max(workers, 1)) or 1))
     bounds = [(i, min(i+chunk, n)) for i in range(0, n, chunk)]
@@ -1757,6 +1770,22 @@ def _map_chunks(fn, n, shared, workers, cfg, chunk=None, progress=False):
     if workers <= 1:
         return serial()
 
+    # The probe (see the docstring). One chunk in the parent, then decide. _init_worker() with
+    # set_env=False is exactly what serial() does, and the pool's own initializer repopulates
+    # _SHARED in each child, so running it here first changes nothing for the pool path.
+    _init_worker(shared, set_env=False)
+    t0 = time.time()
+    first = fn(bounds[0])
+    if (len(bounds) - 1) * (time.time() - t0) < POOL_MIN_SECONDS:
+        out = [first]
+        for i, bd in enumerate(bounds[1:]):
+            out.append(fn(bd))
+            if progress and ((i+2) % max(1, len(bounds)//20) == 0):
+                report(i+2, t0)
+        return out
+
+    rest = bounds[1:]
+
     import multiprocessing as mp
     try:
         ctx = mp.get_context('fork')
@@ -1766,10 +1795,10 @@ def _map_chunks(fn, n, shared, workers, cfg, chunk=None, progress=False):
         return serial()
 
     try:
-        it = pool.imap_unordered(fn, bounds, chunksize=1)
-        out = []
+        it = pool.imap_unordered(fn, rest, chunksize=1)
+        out = [first]
         t0 = time.time()
-        for i in range(len(bounds)):
+        for i in range(len(rest)):
             out.append(it.next(timeout=float(cfg.chunk_timeout)))
             if progress and ((i+1) % max(1, len(bounds)//20) == 0):
                 report(i+1, t0)
