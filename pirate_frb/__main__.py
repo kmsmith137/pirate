@@ -2251,8 +2251,19 @@ def random_kernels(args):
             # subband_counts is a CONFIG's frequency_subband_counts, so it must satisfy
             # pf_rank <= dd_rank1 at the SMALLEST dd_rank of the row (every larger one is
             # implied), and must survive restriction by every et_level emitted.
+            #
+            # DRAW pf_rank, rather than always taking the maximum. A kernel with
+            # pf_rank < dd_rank1 emits (dd_rank1 - pf_rank) "extra DM" bits per warp, and
+            # taking the maximum here means that code path is only ever reached via early
+            # triggers -- so xdm_rank 3 and 4 were unreachable, and half the kernels drawn
+            # had xdm_rank 0. (Short subband_counts became legal after this function was
+            # written, and it was never updated.)
+            #
+            # Safe at every early-trigger level: restrict_subband_counts() drops pf_rank by
+            # one per level while dd_rank1 = ceil(dd_rank/2) drops by one every OTHER level,
+            # so pf_rank <= dd_rank1 at et_level 0 implies it everywhere above.
             dd_rank1_min = (dd_rank_min + 1) // 2
-            subband_counts = core.FrequencySubbands.make_random_subband_counts(dd_rank1_min)
+            subband_counts = core.FrequencySubbands.make_random_subband_counts(randi(0, dd_rank1_min + 1))
 
             for dd_rank in range(dd_rank_min, dd_rank_max+1):
                 # The early-trigger levels of a row are 0..num_early_triggers, CONTIGUOUS,
