@@ -2231,7 +2231,7 @@ def random_kernels(args):
         # rows it consumes. Do not re-derive a bound here; ask cuda_generator for it.
         from .cuda_generator import max_cdd2_tinner, check_cdd2_row
 
-        atomic_print("# (dtype, dd_rank, Wmax, Tinner, subband_counts, et_levels)")
+        atomic_print("# (dtype, dd_rank, Wmax, Tinner, subband_counts, num_early_triggers)")
 
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
@@ -2255,21 +2255,28 @@ def random_kernels(args):
             subband_counts = core.FrequencySubbands.make_random_subband_counts(dd_rank1_min)
 
             for dd_rank in range(dd_rank_min, dd_rank_max+1):
-                et_candidates = [
-                    e for e in range(1, dd_rank-3+1)
-                    if core.FrequencySubbands.can_early_trigger(list(subband_counts), e)
-                ]
+                # The early-trigger levels of a row are 0..num_early_triggers, CONTIGUOUS,
+                # exactly as for a DedispersionConfig primary tree. So find the largest N
+                # for which every level up to N is usable, by walking up and stopping at the
+                # first failure -- the same thing DedispersionConfig::make_random() does.
+                # (restrict_subband_counts() is not monotone in et_level, so this is not the
+                # same as the largest individually-usable level.)
+                net_max = 0
+                while (net_max + 1 <= dd_rank - 3) and \
+                      core.FrequencySubbands.can_early_trigger(list(subband_counts), net_max + 1):
+                    net_max += 1
 
-                ncand = randi(0, len(et_candidates)+1)
-                et_levels = [0] + random.sample(et_candidates, ncand)
+                num_early_triggers = randi(0, net_max + 1)
 
                 # Belt and braces: the draws above are meant to guarantee this, so a failure
                 # here is a bug in them rather than a bad roll.
-                err = check_cdd2_row(dtype, dd_rank, Wmax, Tinner, list(subband_counts), et_levels)
+                err = check_cdd2_row(dtype, dd_rank, Wmax, Tinner, list(subband_counts),
+                                     num_early_triggers)
                 assert err is None, f'random_kernels --cdd2 generated an unbuildable row: {err}'
 
                 s = '     # continuation' if (dd_rank > dd_rank_min) else ''
-                atomic_print(f"('{dtype}', {dd_rank}, {Wmax}, {Tinner}, {list(subband_counts)}, {et_levels}),{s}")
+                atomic_print(f"('{dtype}', {dd_rank}, {Wmax}, {Tinner}, {list(subband_counts)},"
+                             f" {num_early_triggers}),{s}")
 
     if args.pfwr:
         atomic_print('# (dtype, subband_counts, Dcore, P, Tinner)')

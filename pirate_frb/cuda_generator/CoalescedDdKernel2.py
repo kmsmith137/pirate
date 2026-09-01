@@ -113,18 +113,24 @@ def check_cdd2_params(dtype, dd_rank, subband_counts, Wmax, Tinner):
     return None
 
 
-def check_cdd2_row(dtype, dd_rank, Wmax, Tinner, subband_counts, et_levels):
+def check_cdd2_row(dtype, dd_rank, Wmax, Tinner, subband_counts, num_early_triggers):
     """As check_cdd2_params(), for a whole makefile_helper.py row.
 
-    Checks every early-trigger level: 'subband_counts' here is a CONFIG's
-    frequency_subband_counts, and et_level e yields a kernel at dd_rank - e whose vector is
-    restrict_subband_counts(subband_counts, e). Both the restriction and the resulting
-    pf_rank can fail.
+    Checks every early-trigger level 0..num_early_triggers, matching a DedispersionConfig
+    primary tree: 'subband_counts' here is a CONFIG's frequency_subband_counts, and et_level
+    e yields a kernel at dd_rank - e whose vector is restrict_subband_counts(subband_counts,
+    e). Both the restriction and the resulting pf_rank can fail.
+
+    Note the levels are CONTIGUOUS, as they are for a config (DedispersionConfig::validate()
+    allows et_level in [0, num_early_triggers], and make_random() stops at the first
+    unusable level). That matters because restrict_subband_counts() is not monotone in
+    et_level -- a vector with an interior zero can accept level 2 but not level 1 -- so
+    "the largest usable level" is not the same as "how many levels are usable".
     """
 
     sc = tuple(subband_counts)
 
-    for et_level in et_levels:
+    for et_level in range(num_early_triggers + 1):
         try:
             rsc = FrequencySubbands.restrict_subband_counts(list(sc), et_level)
         except Exception as e:
