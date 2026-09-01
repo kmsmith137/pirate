@@ -105,6 +105,31 @@ from ..utils import atomic_print
 ####################################   helpers   ####################################
 
 
+def _rng(seed=None):
+    """A fresh numpy Generator for one test, seeded from the master --seed.
+
+    Every test here calls this rather than numpy's zero-argument default_rng(), which is
+    what they used to call and which seeds itself from OS ENTROPY. That put the whole varmap
+    suite outside __main__.seed_rngs(), so a failing draw could not be replayed from the
+    printed seed -- the property this file's docstring claims. The C++ side was covered:
+    DedispersionConfig::make_random() draws through the seeded ksgpu::default_rng(), so what
+    was unpinned was everything numpy drew, INCLUDING _random_config()'s gpu_valid coin flip.
+
+    Seeded from numpy's global RandomState, which seed_rngs() pins, so successive calls still
+    differ (a long run explores) while the whole sequence replays from one integer.
+
+    An explicit 'seed' is passed straight through, for the helpers that pin one. Take the
+    seed argument through here rather than calling default_rng(seed) directly: seed=None is
+    the DEFAULT for those helpers, and default_rng(None) is the unseeded case again -- which
+    is exactly how _lp_cell() stayed outside the master seed after the zero-argument calls
+    were converted.
+    """
+
+    if seed is not None:
+        return np.random.default_rng(seed)
+    return np.random.default_rng(np.random.randint(0, 1 << 32))
+
+
 def _random_config(rng=None, **kwargs):
     """A random DedispersionConfig for the tests here: DedispersionConfig::make_random(), with
     this file's standard draw settings filled in.
@@ -132,7 +157,7 @@ def _random_config(rng=None, **kwargs):
       vectors the cdd2 registry stocks.
     """
 
-    rng = np.random.default_rng() if (rng is None) else rng
+    rng = _rng() if (rng is None) else rng
     from ..pirate_pybind11 import DedispersionConfig
 
     kwargs.setdefault('max_toplevel_rank', 7)
@@ -278,7 +303,7 @@ def _random_map(config, itree, rng, *, nzero=0, dtype=np.float64, **kwargs):
 def test_index_arithmetic(r=8, subband_counts=(2,2,1), num_early_triggers=1):
     """alpha_to_beta_block() and group_sizes(), against label arrays built the long way."""
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
 
     for itree in range(config.num_dedispersion_trees):
@@ -342,7 +367,7 @@ def test_index_arithmetic(r=8, subband_counts=(2,2,1), num_early_triggers=1):
 def test_constructor_validation(r=7, subband_counts=(2,1)):
     """The constructor's shape and flag checks, and immutability."""
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
     m = _random_map(config, 0, rng)
     R = m.pf_rank
@@ -355,16 +380,25 @@ def test_constructor_validation(r=7, subband_counts=(2,1)):
             return
         raise AssertionError(f'expected a RuntimeError mentioning {needle!r}')
 
+    # The granularity checks below need a coarse map whose row count actually DIFFERS from
+    # the fine one, and L = R does not always give one: coarse-at-L is 2^(r-L) * N * P against
+    # the fine 2^(r-R) * M * P, so the two coincide exactly when N == M -- i.e. when
+    # pf_rank == 0, which is 30% of draws, and where a fine matrix genuinely IS a valid coarse
+    # one. Going up one level always separates them, since each level halves the coarse count.
+    Lc = R if (m.nmultiplets != m.nsubbands) else R + 1
+    assert Lc <= m.tree_rank, (R, m.tree_rank, m.nmultiplets, m.nsubbands)
+
     # L out of range, and L set on an array that is not the coarse shape.
-    Abar = m.coarse_grain(R).A
+    Abar = m.coarse_grain(Lc).A
+    assert Abar.shape != m.A.shape, (Lc, Abar.shape)
     expect_raise(lambda: VarianceMap.from_dense(config, 0, Abar, L=R-1), 'out of range')
     expect_raise(lambda: VarianceMap.from_dense(config, 0, Abar, L=m.tree_rank+1),
                  'out of range')
-    expect_raise(lambda: VarianceMap.from_dense(config, 0, m.A, L=R), 'expected')
+    expect_raise(lambda: VarianceMap.from_dense(config, 0, m.A, L=Lc), 'expected')
     expect_raise(lambda: VarianceMap.from_dense(config, 0, Abar), 'expected')
     expect_raise(lambda: VarianceMap.from_dense(config, 0, m.A, y_true=np.zeros(3)),
                  'FINE granularity')
-    expect_raise(lambda: VarianceMap.from_dense(config, 0, Abar, L=R, y_true='row_sums'),
+    expect_raise(lambda: VarianceMap.from_dense(config, 0, Abar, L=Lc, y_true='row_sums'),
                  'not valid for a')
     expect_raise(lambda: VarianceMap.from_dense(config, 99, m.A), 'out of range')
 
@@ -418,7 +452,7 @@ def test_coarse_grain(r=8, subband_counts=(2,2,1), num_early_triggers=1):
     external oracle: its group labels are built independently by _obvious_beta().
     """
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
 
     for itree in range(config.num_dedispersion_trees):
@@ -457,13 +491,22 @@ def test_coarse_grain(r=8, subband_counts=(2,2,1), num_early_triggers=1):
             # A MEAN where a max was intended is the bug class check_ref_covers_y_true()
             # catches outright. (Absorbed from the former test_check_ref_covers_y_true; the
             # positive assertion is a few lines up.)
-            # ... and only where some group has more than one member. Where every group is a
-            # singleton the mean IS the max, so the reduction is honest and the reader is
-            # right to accept it. M == N (no level > 0 subbands) is exactly that case.
-            if (L == R) and (int(c.group_sizes().max()) > 1):
+            # ... and only where the mean is actually BELOW the max, which is the property
+            # rather than a proxy for it. A multi-member group is not enough: '_random_map'
+            # zeroes 'nzero' rows, and a group whose members are ALL zeroed has mean == max,
+            # so the reader is right to accept it. Measured, seed 3126070166 draws exactly
+            # that -- nalpha=3 with 2 zeroed rows, one 2-member group holding both of them,
+            # and max - mean identically 0 over all 24 entries. The old guard (max group size
+            # > 1) was true there and the assertion below fired on an honest map.
+            #
+            # The two guards agree on ordinary draws: over 328 (config, tree) cases at L=R
+            # both were true 241 times, and the check REJECTED all 241.
+            mean = None
+            if L == R:
                 mean = np.zeros_like(np.asarray(c.A))
                 np.add.at(mean, labels, np.asarray(m.A, dtype=np.float64))
                 mean /= c.group_sizes()[:,None]
+            if (mean is not None) and np.any(mean < np.asarray(c.A)):
                 try:
                     c.replace(A=mean, history_record=dict(step='test')).check_ref_covers_y_true()
                     raise AssertionError('check_ref_covers_y_true() accepted a mean-reduced map')
@@ -488,7 +531,7 @@ def test_distance(r=8, subband_counts=(2,2,1)):
     test_distance_oracles()'s job, and that is the only thing in this file that does it.
     """
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
 
     for nzero in (0, 3):
@@ -564,7 +607,7 @@ def test_distance(r=8, subband_counts=(2,2,1)):
 def test_admissibility(r=8, subband_counts=(2,1)):
     """measure_admissibility(): the coarse/fine theorem, the sign conventions, and inflation."""
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
 
     true = _random_map(config, 0, rng, nzero=2)
@@ -592,10 +635,21 @@ def test_admissibility(r=8, subband_counts=(2,1)):
     assert rf.max_diff > rc.max_diff + 0.5, (rc.max_diff, rf.max_diff)
     assert rc.vmap.is_admissible and (rc.vmap.A is capprox.A)
 
+    # THE PLANTED DEFECTS BELOW MUST LAND WHERE ref IS POSITIVE, so draw from those entries
+    # rather than uniformly. _random_map() zeroes rows and coarse_grain() carries whole zero
+    # rows into 'ref', so a uniform (row, col) draw lands on one every so often -- and there
+    # neither defect is a defect: planting 0.9*ref plants 0.0 into a place the map is already
+    # 0.0 (rb.nviol would be 0), and planting -1.0 is not "non-positive where ref is
+    # POSITIVE", so max_r stays finite. That is what used to fail at seed 1341684269, with
+    # max_r 0.667 and argmax_r (0,2) against a planted (18,17).
+    pos = np.flatnonzero(np.asarray(ref.A) > 0.0)
+    assert pos.size >= 2, 'the drawn reference has no positive entries to plant a defect in'
+    shape = np.asarray(ref.A).shape
+
     # A single planted underestimate: infinite D, but a small inflation fixes it, and that is
     # the number that distinguishes "nearly usable" from "hopeless".
     # Drawn, not literal: on a drawn geometry a hardcoded (row, col) is out of bounds.
-    ib, jb = int(rng.integers(capprox.nbeta)), int(rng.integers(capprox.nfreq))
+    ib, jb = (int(x) for x in np.unravel_index(int(rng.choice(pos)), shape))
     bad = np.array(capprox.A)
     bad[ib, jb] = ref.A[ib, jb] * 0.9
     bad = capprox.replace(A=bad, is_admissible=False, history_record=dict(step='test'))
@@ -609,7 +663,7 @@ def test_admissibility(r=8, subband_counts=(2,1)):
     # SIGNS. A non-positive entry where ref is positive is an underestimate NO rescaling
     # repairs, and is reported as max_r = inf rather than raised on: scoring a signed
     # candidate is the main reason this method exists.
-    i_n, j_n = int(rng.integers(capprox.nbeta)), int(rng.integers(capprox.nfreq))
+    i_n, j_n = (int(x) for x in np.unravel_index(int(rng.choice(pos)), shape))
     neg = np.array(capprox.A)
     neg[i_n, j_n] = -1.0
     neg = capprox.replace(A=neg, is_admissible=False, history_record=dict(step='test'))
@@ -670,7 +724,7 @@ def test_distance_oracles(r=7, subband_counts=(2,1)):
     cannot (see "A UNIFORM SCALING IS WORTHLESS" above).
     """
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
     true = _random_map(config, 0, rng)
     A = np.asarray(true.A, dtype=np.float64)
@@ -758,7 +812,7 @@ def test_inflation(r=7, subband_counts=(2,1)):
     nothing else in this file would notice if it were deleted.
     """
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
     true = _random_map(config, 0, rng, nzero=2)
     ref = true.coarse_grain(true.pf_rank + 1)
@@ -834,7 +888,7 @@ def test_inflation(r=7, subband_counts=(2,1)):
 def test_estimate_distance(r=8, subband_counts=(2,2,1)):
     """estimate_distance(): exact at frac=1, and unbiased (not group-weighted) below it."""
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
 
     # nzero must leave something scorable: get_distance() is a mean over scored rows, and a
@@ -865,19 +919,38 @@ def test_estimate_distance(r=8, subband_counts=(2,2,1)):
     sizes = approx.group_sizes()
     weighted = bool(sizes.min() != sizes.max())
 
-    # A subsample lands within a few standard errors, over many draws.
-    # A subsample lands within a few standard errors, over many draws. THE BAR NEEDS ENOUGH
-    # SAMPLED GROUPS FOR stderr TO MEAN ANYTHING: it is a normal-approximation interval, and
-    # at frac=0.2 on a 20-group map that is 4 groups, where the interval is meaningless and
-    # 13/40 draws fall outside it. Take frac large enough for ~30 groups, capped at 1.
+    # A subsample lands within a few standard errors -- AS AN AGGREGATE, not per draw.
+    #
+    # Counting draws outside 4 sigma is not a property of this estimator and cannot be made
+    # one by taking frac larger. 'stderr' is a normal-approximation interval on a mean over
+    # sampled groups, and the per-group values are heavy-tailed: a subsample that misses an
+    # outlier group underestimates BOTH the mean and the spread, so its z is large. Measured
+    # on the config that used to fail this (seed 2912858340, nbeta=64, frac=0.47, and with
+    # every group the same size, so weighting is not the cause): over 400 subsamples, 19.5%
+    # land outside 4 sigma and the worst is 7.5 -- while the true spread of (e.D - D) is
+    # 0.004415 against a mean reported stderr of 0.003988, i.e. the SCALE is right to 11%.
+    #
+    # So check the scale and the typical draw, both of which are stable across configs.
+    # Measured over 129 drawn configs: the spread/stderr ratio spans [0.72, 1.33] (median
+    # 0.97) and median |z| spans [0.33, 1.42] (median 0.68). The bars below sit a factor of
+    # ~2 outside both. They keep the teeth that matter: a stderr that ignored the group-size
+    # weighting, or was off by any constant factor, moves the ratio directly.
     frac = min(1.0, max(0.2, 30.0 / max(approx.nbeta, 1)))
-    nbad = 0
+    devs, ses = [], []
     for _ in range(40):
         e = approx.estimate_distance(frac=frac, rng=rng)
-        if abs(e.D - D) > 4.0 * e.stderr + 1.0e-12:
-            nbad += 1
-    assert nbad <= 2, (f'{nbad}/40 subsamples were more than 4 sigma from the exact D'
-                       f' (nbeta={approx.nbeta}, frac={frac:.2f})')
+        devs.append(e.D - D)
+        ses.append(e.stderr)
+    devs, ses = np.array(devs), np.array(ses)
+
+    # frac == 1.0 (a map with fewer than 30 groups) samples everything, so the estimate is
+    # exact and stderr is 0; there is nothing to score.
+    ratio = med_z = None
+    if float(ses.mean()) > 0.0:
+        ratio = float(devs.std(ddof=1) / ses.mean())
+        med_z = float(np.median(np.abs(devs / np.maximum(ses, 1.0e-300))))
+        assert 0.3 < ratio < 3.0, (ratio, approx.nbeta, frac)
+        assert med_z < 2.5, (med_z, approx.nbeta, frac)
 
     # Passing 'groups' back is what makes a PAIRED comparison possible: two arms on the same
     # subset have a far better determined ratio than either value.
@@ -885,7 +958,9 @@ def test_estimate_distance(r=8, subband_counts=(2,2,1)):
     e2 = approx.inflated(1.01).replace(is_admissible=True).estimate_distance(groups=e1.groups)
     assert np.array_equal(e1.groups, e2.groups) and (e2.D > e1.D)
 
-    atomic_print(f'    test_estimate_distance(nbeta={approx.nbeta}): pass'
+    scored = ('exact (frac=1)' if (ratio is None)
+              else f'spread/stderr {ratio:.2f}, median |z| {med_z:.2f}')
+    atomic_print(f'    test_estimate_distance(nbeta={approx.nbeta}): pass, {scored}'
                  f' (group-size weighting {"exercised" if weighted else "NOT exercised:"
                  " every group the same size"})')
 
@@ -894,7 +969,7 @@ def test_multimap(r=8, subband_counts=(2,1), num_primary_trees=2, num_early_trig
     """VarianceMultiMap: one map per PRIMARY tree, sharing one config object, with apply()
     covering every tree."""
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
     ntrees = int(config.num_dedispersion_trees)
     npri = int(config.num_primary_trees)
@@ -1016,7 +1091,7 @@ def test_factored_algebra(r=7, subband_counts=(2,1), K=5):
     ``A = Q @ mid @ W.T`` is what the map reports through every route a consumer has.
     """
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
 
     for mid_kind in ('identity', 'full'):
@@ -1073,7 +1148,7 @@ def test_factored_equivalence(r=7, subband_counts=(2,1), K=4):
     trivially the same object.
     """
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
 
     # Nonnegative factors and a nonnegative 'mid', so the product is positive: the scoring
@@ -1114,7 +1189,7 @@ def test_factored_equivalence(r=7, subband_counts=(2,1), K=4):
 def test_factored_transformations(r=7, subband_counts=(2,1), K=4):
     """inflated() and lift() keep the factorization; both agree with the dense answer."""
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
 
     m, ref = _factored_map(config, 0, rng, K=K, Q_is_semiorthogonal=True,
@@ -1162,7 +1237,7 @@ def test_factored_validation(r=7, subband_counts=(2,1), K=4):
     claims them falsely is accepted here and is the steps' problem.
     """
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
     m, _ = _factored_map(config, 0, rng, K=K)
     Q, mid, W = np.asarray(m.Q), np.asarray(m.mid), np.asarray(m.W)
@@ -1262,7 +1337,7 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=4, num_early_tri
 
     from .asdf_io import FORMAT_VERSION
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
     ntrees = int(config.num_dedispersion_trees)
     npri = int(config.num_primary_trees)
@@ -1531,7 +1606,7 @@ def test_asdf_detrender(r=7, subband_counts=(2,1)):
     import os
     import tempfile
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
     dparams = _make_test_detrender(config)
     tmp = tempfile.mkdtemp()
@@ -1585,7 +1660,7 @@ def test_asdf_factored(r=7, subband_counts=(2,1), K=4):
 
     from .asdf_io import ROOT_KEY
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
     tmp = tempfile.mkdtemp()
 
@@ -1753,7 +1828,7 @@ def _lp_cell(r=None, subband_counts=None, L=None, K=5, seed=None, nzero=1, scale
     coarse-graining are half of what the steps have to get right.
     """
 
-    rng = np.random.default_rng(seed)
+    rng = _rng(seed)
     config = (_draw_lp_cell_config(rng) if (r is None)
               else _make_test_config(r, list(subband_counts)))
     fine = _random_map(config, 0, rng, nzero=nzero)
@@ -1874,7 +1949,7 @@ def test_lp_primitive():
 
     from .lp import LpConfig, solve_covering_lps, solve_cover_lp
 
-    rng = np.random.default_rng()
+    rng = _rng()
 
     # The free LP can never be worse than the bounded one: dropping x >= 0 enlarges the
     # feasible set, and the covering constraint is on the PRODUCT, not on the coefficients.
@@ -1939,7 +2014,7 @@ def test_lp_optimality(K=3, nfreq=7):
 
     from .lp import LpConfig, q_step
 
-    rng = np.random.default_rng()
+    rng = _rng()
     W = np.abs(rng.random((nfreq, K))) + 0.25
     W[:, 1] *= -1.0                                  # signed, so the vertex argument is used
     Abar = np.abs(rng.random((6, nfreq))) + 0.05     # every rhs positive: no zero-rhs block
@@ -2002,7 +2077,7 @@ def test_lp_repairs():
     # and the ratio it works from cannot even see it. So the multiplicative repair reports
     # success -- correctly, by its own test -- while the map is still inadmissible, and only
     # an additive lift on a nonnegative column fixes it.
-    rng = np.random.default_rng()
+    rng = _rng()
     Qbad = np.abs(rng.random((nbeta, W.shape[1]))) * 0.4
     Qbad[:, 0] += 0.3
     Qm, _ = repair_rows(Qbad, W, None, Abar, cfg)
@@ -2272,14 +2347,16 @@ def test_lp_negative_rhs():
         STRICTER than b. That is safe (it implies the true constraint) and it is useful: it
         stops the product going negative in exactly the channels a later additive repair
         would otherwise have to lift;
-      - and it has a sharp price. A dictionary with no nonnegative column cannot make the
-        product positive everywhere, so on a signed reference EVERY LP comes back infeasible.
-        That is what sign-canonicalizing a basis, or pinning a nonnegative column, is for.
+      - and it has a sharp price. A dictionary that cannot make the product positive
+        everywhere makes EVERY LP on a signed reference come back infeasible. That is what
+        sign-canonicalizing a basis, or pinning a nonnegative column, is for. Note the
+        condition is on what the dictionary can REACH, not on its columns one at a time --
+        see the construction below.
     """
 
     from .lp import LpConfig, q_step, w_step, covering_lp_data, _clip_rhs
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _draw_lp_cell_config(rng)
     tree = make_tree(config, 0)
     r, R = tree.total_rank(), tree.frequency_subbands.pf_rank
@@ -2331,19 +2408,31 @@ def test_lp_negative_rhs():
     # so a signed reference makes every subproblem infeasible. Asserted rather than merely
     # noted, because it is the tripwire on anybody "relaxing" the zero-rhs treatment: if this
     # ever starts succeeding, the constraint that keeps the product nonnegative has been lost.
+    # A DICTIONARY THAT CANNOT COVER, CONSTRUCTED RATHER THAN DRAWN. "No nonnegative column"
+    # is NOT the condition that forces infeasibility and does not imply it: the coefficients
+    # here are free (nonneg=False), so a SIGNED combination of signed columns can be positive
+    # everywhere -- and a drawn dictionary sometimes is exactly that. Measured, the span of a
+    # random (nfreq, 5) gaussian contains a strictly positive vector in 6.3% of draws at
+    # nfreq=16, 1.5% at 20, 0.25% at 24, and _draw_lp_cell_config() draws nfreq from 16 up.
+    # That is what used to fail this assertion every few dozen iterations, with all nbeta
+    # subproblems coming back 'optimal' (seed 3975277362 reproduces it).
+    #
+    # So force the condition rather than hoping for it: give two channels OPPOSITE rows. Then
+    # (W x)[1] = -(W x)[0] for every x, signed or not, so the two cannot both be positive and
+    # no choice of coefficients rescues it. No column is nonnegative either, which is the
+    # weaker property the assert below still records.
     Wsigned = rng.normal(size=(nfreq, 5))
+    Wsigned[1] = -Wsigned[0]
     assert not np.any((Wsigned.min(axis=0) >= 0) & (Wsigned.max(axis=0) > 0))
+
     _, _, ibad = q_step(Abar, Wsigned, LpConfig.for_qstep(nonneg=False, clip_rel=0.0),
                         Q0=np.zeros((nbeta, 5)), repair=False)
-    # Every subproblem must FAIL; the solver may classify a few as 'numerical' rather than
-    # 'infeasible', which is the same outcome for this test's purpose.
-    # EVERY subproblem must fail -- but only where the reference really is signed enough that
-    # no nonnegative product covers it. On a draw with few negative entries the LP can
-    # succeed, which is correct rather than a regression.
-    if frac_neg > 0.3:
-        assert ibad['n_failed'] == nbeta, ibad['status']
-        assert ibad['status'].get('infeasible', 0) + ibad['status'].get('numerical', 0) \
-            == nbeta, ibad['status']
+    # Every subproblem must FAIL, unconditionally now that the dictionary is built to make
+    # them fail. The solver may classify a few as 'numerical' rather than 'infeasible', which
+    # is the same outcome for this test's purpose.
+    assert ibad['n_failed'] == nbeta, ibad['status']
+    assert ibad['status'].get('infeasible', 0) + ibad['status'].get('numerical', 0) \
+        == nbeta, ibad['status']
 
     atomic_print(f'    test_lp_negative_rhs(nbeta={nbeta}, nfreq={nfreq}):'
                  f' {frac_neg:.0%} of the reference is negative; the product stays positive'
@@ -2357,7 +2446,7 @@ def test_lp_building_blocks():
     from .lp import LpConfig, covering_lp_data, majorizer_weights, fprime as lp_fprime
 
     Abar, y, labels, W, config, coarse, _, _ = _lp_cell(K=4)
-    rng = np.random.default_rng()
+    rng = _rng()
     K = W.shape[1]
     Q = np.abs(rng.random((coarse.nbeta, K))) + 0.1
 
@@ -2443,7 +2532,7 @@ def _decaying_map(r=6, subband_counts=(1, 1), K=8, seed=19, rate=0.5):
     settings show up -- so a test about those settings has to ask for one.
     """
 
-    rng = np.random.default_rng(seed)
+    rng = _rng(seed)
     config = _random_config(rng)
     fine = _random_map(config, 0, rng)
     nbeta, nfreq = fine.coarse_grain(fine.pf_rank + 1).shape
@@ -2499,7 +2588,24 @@ def test_svd(r=None, subband_counts=None, K=5):
     dense_hi = hi.replace(A=hi.dense(), history_record=dict(step='densify'))
     lo_f, lo_d = hi.svd(K), dense_hi.svd(K)
     scale = float(np.abs(np.asarray(dense_hi.A)).max())
-    assert np.max(np.abs(lo_f.dense() - lo_d.dense())) < 1e-12 * scale
+
+    # THE BAR IS SCALED BY THE SPECTRAL GAP AT THE CUT, because that is what sets how far two
+    # correct algorithms may differ. When s[K-1] and s[K] are nearly equal the rank-K subspace
+    # is ill-conditioned and the two routes -- two thin QRs here, a dense SVD there -- pick
+    # slightly different mixtures of the degenerate modes. A max-envelope of iid entries has
+    # exactly that spectrum (one large mode, then a dense near-flat continuum), so the cut
+    # usually lands inside a cluster: measured over 150 drawn cells the relative gap
+    # (s[K-1] - s[K]) / s[0] has median 2.6e-3 and 1st percentile 4.3e-4.
+    #
+    # The product d = max|lo_f - lo_d| / scale tracks 1/gap as perturbation theory says, and
+    # tightly: over those 150 cells d itself spans 1e-15 to 8.4e-14 while d * gap stays inside
+    # [., 1.6e-16], p99 1.3e-16. The old fixed 1e-12 bar passed 150/150 there but failed on a
+    # draw whose gap was 7.0e-5 (seed 3984097999, d = 1.5e-12) -- the bar was measuring
+    # degeneracy, not correctness. 1e-14 below leaves ~60x on the measured constant, and the
+    # 1e-12 floor keeps the old bar wherever the spectrum is well separated.
+    gap = float((s[K-1] - s[K]) / s[0]) if (len(s) > K) else 1.0
+    bar = max(1.0e-12, 1.0e-14 / max(gap, 1.0e-12)) * scale
+    assert np.max(np.abs(lo_f.dense() - lo_d.dense())) < bar, (gap, bar / scale)
     assert np.max(np.abs(np.asarray(lo_f.W).T @ np.asarray(lo_f.W) - np.eye(K))) < 1e-12
 
     # shape_normalize decomposes the unit-sum SHAPES and folds the row sums back into Q, which
@@ -2778,7 +2884,7 @@ def test_svd_optimize(r=None, subband_counts=None, K=5, j=3):
     without accumulating history records or copies.
     """
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
     # _nalpha_of() takes the TREE INDEX, and the base tree is not always index 0 -- with early
     # triggers dedispersion_tree_index(0, 0) can be anything. Passing a literal 0 here built Q
@@ -2791,11 +2897,19 @@ def test_svd_optimize(r=None, subband_counts=None, K=5, j=3):
     Qx = np.hstack([Q, Q @ rng.standard_normal((K, j))])
     Wx = np.hstack([W, W @ rng.standard_normal((K, j))])
 
+    # THE TRUE RANK IS CAPPED BY THE MATRIX SHAPES, not just by K. Qx spans the column space
+    # of an (nbeta, K) gaussian and Wx that of an (nfreq, K) one, so the product's rank is
+    # min(K, nbeta, nfreq) -- and a drawn config gives nfreq < K in 5% of draws (nfreq is as
+    # low as 1, since zone_nfreq is drawn in [2^r/4, 2^r] and r goes down to 2). The bar stays
+    # EXACT, it is just the right number; the same cap is spelled out for the 'wide' case
+    # below. Reported on the summary line so a degenerate draw is visible rather than silent.
+    Krank = min(K, nbeta, nfreq)
+
     vmap = VarianceMap.from_factors(config, itree, Qx, Wx)
     assert vmap.factor_rank == K + j, (vmap.factor_rank, K, j)
 
     opt = vmap.svd_optimize()
-    assert opt.factor_rank == K, (opt.factor_rank, K)
+    assert opt.factor_rank == Krank, (opt.factor_rank, Krank, K, nbeta, nfreq)
 
     # A is unchanged. apply() and rows() go through different code (a three-factor product
     # against a materialized block), so check both rather than assuming they agree.
@@ -2811,7 +2925,7 @@ def test_svd_optimize(r=None, subband_counts=None, K=5, j=3):
     # The two claims the flags make, checked against the matrices rather than read back out
     # of the object that set them.
     assert opt.Q_is_semiorthogonal and opt.W_is_semiorthogonal
-    Qo, Wo, I = np.asarray(opt.Q), np.asarray(opt.W), np.eye(K)
+    Qo, Wo, I = np.asarray(opt.Q), np.asarray(opt.W), np.eye(Krank)
     e_q = float(np.abs(Qo.T @ Qo - I).max())
     e_w = float(np.abs(Wo.T @ Wo - I).max())
     assert e_q < 1.0e-12, e_q
@@ -2846,7 +2960,7 @@ def test_svd_optimize(r=None, subband_counts=None, K=5, j=3):
         raise AssertionError('svd_optimize() accepted a map with a pinned column')
 
     atomic_print(f'    test_svd_optimize(nbeta={nbeta}, nfreq={nfreq}): rank'
-                 f' {K+j} -> {opt.factor_rank} (true rank {K}); A unchanged to'
+                 f' {K+j} -> {opt.factor_rank} (true rank {Krank}); A unchanged to'
                  f' {max(e_apply, e_rows):.3g}; Q^T Q - I {e_q:.3g}, W^T W - I {e_w:.3g}')
 
 
@@ -3347,9 +3461,19 @@ def _compare_maps(got, ref, label):
     for (start, stop) in blocks:
         a = np.asarray(got.rows(start, stop))
         b = np.asarray(ref.rows(start, stop))
+        # OFF-SUPPORT: small relative to the matrix, not bit-exact. This used to demand an
+        # exact 0.0 and that is not a property either side has once svd_optimize() rotates the
+        # factorization -- the same reason the floor above exists. Measured on the draw that
+        # first failed it (seed 2678119351): the reference had 3 exact zeros out of 2943360
+        # entries, and 'got' carried 5.5e-18 there, i.e. 3.5e-17 of max|A|. The bar below is
+        # five decades above that and still 1000x tighter than the sup-norm bar the caller
+        # applies, so a scatter landing where it should not is still caught here first.
         nz = (b != 0.0)
-        if np.any(~nz) and np.any(a[~nz] != 0.0):
-            raise AssertionError(f'{label}: nonzero where the reference is exactly zero')
+        if np.any(~nz):
+            leak = float(np.abs(a[~nz]).max()) / max(scale, np.finfo(float).tiny)
+            if leak >= 1.0e-12:
+                raise AssertionError(f'{label}: {leak:.3g} of max|A| where the reference is'
+                                     ' exactly zero')
         if floor > 0.0:
             worst_rel = max(worst_rel,
                             float((np.abs(a - b) / (np.abs(b) + floor)).max()))
@@ -3404,7 +3528,7 @@ def test_base_varmap_coarse(r=7, subband_counts=(2,2,1), num_early_triggers=1,
     # which is exactly the case a whole-map comparison is least likely to hit. So the config
     # here is chosen for having a square group at all -- most do not, and the count is
     # reported below so that a silent loss of that coverage is visible.
-    rng = np.random.default_rng()
+    rng = _rng()
     sd_matrices = SdPlan(_random_config(rng)).sd_matrices
     worst_recon, n_square = 0.0, 0
     for sdm in sd_matrices.values():
@@ -3443,8 +3567,11 @@ def test_base_varmap_coarse(r=7, subband_counts=(2,2,1), num_early_triggers=1,
         # CHIME/CHORD) and worth seeing in the line below.
         opt = [h for h in vmap.history if h['step'] == 'svd_optimize']
         assert len(opt) <= 1, [h['step'] for h in vmap.history]
+        # '<=' not '<': svd_optimize() also rebuilds a factorization that is already full
+        # rank but not in SVD form, at the same rank, so that its postcondition (the assert
+        # below) holds on every return path. That is the common case on a small draw.
         if opt:
-            assert opt[0]['factor_rank'] == vmap.factor_rank < opt[0]['factor_rank_from']
+            assert opt[0]['factor_rank'] == vmap.factor_rank <= opt[0]['factor_rank_from']
             n_opt += 1
             svd_frac = max(svd_frac, 1.0 - opt[0]['factor_rank'] / opt[0]['factor_rank_from'])
         assert vmap.Q_is_semiorthogonal and vmap.W_is_semiorthogonal
@@ -3557,7 +3684,7 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
 
     # One sampled corner per call plus one random draw; run_all() runs per iteration, so the
     # outer loop supplies the coverage the full list used to.
-    rng = np.random.default_rng()
+    rng = _rng()
     configs = []
     for _ in range(nrandom):
         configs.append((_random_config(rng), 'random'))
@@ -3707,7 +3834,7 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
                                  compute_detrender_free_varcoarse,
                                  compute_detrender_free_varfine)
 
-    rng = np.random.default_rng()
+    rng = _rng()
     configs = []
 
     # make_random() takes no seed, so a random case that fails is not reproducible unless the
@@ -3715,7 +3842,7 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
     for _ in range(nrandom):
         configs.append((_random_config(rng), 'random'))
 
-    rng = np.random.default_rng()
+    rng = _rng()
     worst_def = 0.0
     n_multi, n_varying, n_et, n_bitwise, ntrees = 0, 0, 0, 0, 0
     n_coarse = 0
@@ -4026,7 +4153,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     worst_p1, n_p1_pairs, n_nontrivial = 0.0, 0, 0
     worst_vf, n_vf = 0.0, 0
     worst_leak = 0.0
-    rng = np.random.default_rng()
+    rng = _rng()
 
     for (config, label) in configs:
         As = sweep_all_trees_dense(config, device=device)
@@ -4070,8 +4197,25 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
             # the map, so the structural argument still holds there.
             nz = (A != 0.0)
             assert np.any(nz), (label, gamma)
-            e = float(np.abs(got[nz] / A[nz] - 1.0).max())
             scale = float(np.abs(A).max())
+
+            # THE DENOMINATOR IS FLOORED AT 1e-2 OF max|A|, and it has to be. A plain relative
+            # comparison over every nonzero entry is not well posed against a float32 sweep:
+            # A spans several decades within one tree, and an entry at 1e-7 of the maximum is
+            # not known to any relative precision at all. Measured on the draw that first
+            # failed this bar: worst relative error 4.9e-05, at an entry with A = 1.1e-07 of
+            # max, where the two maps differed by 8.3e-13 OF max|A| -- i.e. the bar was
+            # measuring the sweep's inability to resolve that entry, not a disagreement.
+            #
+            # So the score is |got - A| / max(|A|, 1e-2*max|A|): a true relative error on the
+            # entries that carry the matrix, and an absolute one in units of max|A| below
+            # that. It costs no teeth -- a misdirected scatter moves an entry by O(max|A|),
+            # which is 1e2 in these units, and even wholly losing an entry at 1e-4 of max
+            # scores 1e-2 against a 1e-5 bar. It touches few entries: measured over 22 trees,
+            # 0.2% of nonzero entries lie below the floor (worst tree 0.9%). Measured worst
+            # score over those trees is 6.7e-07, so the bar keeps ~15x headroom.
+            denom = np.maximum(np.abs(A[nz]), 1.0e-2 * scale)
+            e = float((np.abs(got[nz] - A[nz]) / denom).max())
             e0 = (float(np.abs(got[~nz]).max()) / scale) if np.any(~nz) else 0.0
 
             if (e >= 1.0e-5) or (e0 >= 1.0e-10):
@@ -4115,7 +4259,14 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
             assert got.shape == want.shape, (label, itree, got.shape, want.shape)
             nz = (want != 0.0)
             assert np.any(nz), (label, itree)
-            e = float(np.abs(got[nz] / want[nz] - 1.0).max())
+            # Same floored denominator as the map arm above, for the same reason. This arm
+            # has not been seen to fail on a tiny entry -- it compares A v, whose entries are
+            # sums over channels and are far better conditioned (measured smallest |want| is
+            # 2.1e-05 of max, against 1.1e-07 for a single matrix entry) -- but the hazard is
+            # identical in kind and the guard costs nothing here either.
+            sc = float(np.abs(want).max())
+            e = float((np.abs(got[nz] - want[nz])
+                       / np.maximum(np.abs(want[nz]), 1.0e-2 * sc)).max())
             e0 = float(np.abs(got[~nz]).max()) if np.any(~nz) else 0.0
             if (e >= 1.0e-5) or (e0 != 0.0):
                 atomic_print(f'test_multimap_vs_sweep: FAILED varfine on {label}, tree'
@@ -4171,7 +4322,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     if verbose:
         atomic_print(f'    test_multimap_vs_sweep(device={device}, {len(configs)} random'
                      f' configs, {ntrees} primary trees): {n_straddled} straddled entries,'
-                     f' worst relative error {worst:.3g} (off-support leak'
+                     f' worst floored-relative error {worst:.3g} (off-support leak'
                      f' {worst_leak:.3g}); varfine over {n_vf} trees, worst'
                      f' {worst_vf:.3g}; Proposition 1 over {n_p1_pairs}'
                      f' (parent, child) pairs ({n_nontrivial} with a non-contiguous multiplet'
@@ -4324,7 +4475,7 @@ def test_sweep_column_norms_random(verbose=True, max_attempts=500):
 
     from .brute_force import _SweepGeometry
 
-    rng = np.random.default_rng()
+    rng = _rng()
     for _ in range(max_attempts):
         config = _random_config(rng)
         # The sweep requires all three beam fields to agree; make_random() does not.
@@ -4813,7 +4964,7 @@ def test_apply_restriction(r=6, subband_counts=(4,2,1), num_primary_trees=2,
 
     from .VarianceMultiMap import restrict_fine_vector
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
     nfreq = int(config.get_total_nfreq())
     v = rng.uniform(0.5, 2.0, size=nfreq)
@@ -4927,7 +5078,7 @@ def test_restriction_representation(r=6, subband_counts=(4,2,1), num_early_trigg
 
     from .VarianceMultiMap import restrict_fine_vector
 
-    rng = np.random.default_rng()
+    rng = _rng()
     config = _random_config(rng)
     nfreq = int(config.get_total_nfreq())
     v = rng.uniform(0.5, 2.0, size=nfreq)
@@ -5088,7 +5239,7 @@ def test_lds_bindings(r=8, subband_counts=(2,2,1), num_primary_trees=3, nbeams=4
         assert b.strides[0] == bstride, (ipri, b.strides[0], bstride)
 
     # launch() reads bufs[0] and fills the rest.
-    rng = np.random.default_rng()
+    rng = _rng()
     b0 = cp.asarray(buf.bufs[0])
     b0[...] = cp.asarray(rng.normal(size=b0.shape).astype(np.float32))
     for ipri in range(1, npri):

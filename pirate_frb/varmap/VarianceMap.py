@@ -1646,7 +1646,10 @@ class VarianceMap:
         worst relative change in A over a 4000-row sample, 1.1e-12 at toy.yml and 1e-13 to
         1e-14 at the CHIME/CHORD configs -- four orders inside the 1-1e-9 margin that
         check_ref_covers_y_true() allows, which is why 'is_admissible' survives. Returns SELF
-        unchanged (no copy, no history record) when there is nothing to remove.
+        unchanged (no copy, no history record) when there is nothing to do -- i.e. when the
+        rank cannot be reduced AND the factorization is already in SVD form. A full-rank
+        input that is not in SVD form is still rebuilt, at the same rank, because the
+        POSTCONDITION below is what callers act on.
 
         The procedure. Take thin SVDs Q = Q'R and W = W'S, so Q' and W' are semiorthogonal and
 
@@ -1658,6 +1661,10 @@ class VarianceMap:
 
         Q1 and W1 are both semiorthogonal, which is what 'mid' exists for. Nothing else about
         the map changes -- in particular y_true is untouched, and A is the same matrix.
+
+        THE POSTCONDITION, which holds on every return path: the result has semiorthogonal Q
+        and W and a diagonal 'mid'. truncate() refuses a factorization that does not claim
+        that, so it is a promise rather than an incidental property.
 
         SVDs THROUGHOUT, DELIBERATELY, and this is measured rather than assumed. The cheap
         alternative is to get R from the Gram matrix (Q^T Q, eigh, R = Lambda^(1/2) V^T), which
@@ -1712,12 +1719,26 @@ class VarianceMap:
         # less than K0 -- which is the ordinary case for a small config, where nfreq < K0. The
         # algebra is unaffected (Uq is (nbeta, Kq), Uz is (Kq, K1), so Q1 is (nbeta, K1) as
         # intended); only the indexing below has to allow for it.
-        Z = (sq[:, None] * Vqt) @ np.asarray(self.mid, dtype=np.float64) @ (Vwt.T * sw)
+        mid0 = np.asarray(self.mid, dtype=np.float64)
+        Z = (sq[:, None] * Vqt) @ mid0 @ (Vwt.T * sw)
         Uz, sz, Vzt = np.linalg.svd(Z)
 
         K1 = int((sz > rtol * sz[0]).sum()) if (sz[0] > 0.0) else 0
-        if K1 >= K0:
-            return self          # the early exit: this factorization cannot be improved
+
+        # THE EARLY EXIT IS ABOUT THE POSTCONDITION, NOT ONLY THE RANK. Returning self when
+        # K1 == K0 is correct only if self ALREADY satisfies what this method promises --
+        # semiorthogonal Q and W with a diagonal 'mid' -- because callers act on that promise:
+        # truncate() REFUSES a factorization that does not claim it. An assembled per-group
+        # factorization is full rank on 2.4% of drawn configs (measured, max_toplevel_rank=7)
+        # and is never semiorthogonal, so a rank-only test returned a map whose flags said
+        # False immediately after an svd_optimize() that reported success, and which
+        # truncate() then rejected. Rebuild in that case instead: both SVDs above are already
+        # paid for, so the extra cost is two matmuls, and at production scale K1 < K0 anyway
+        # (54-60% smaller at CHIME/CHORD), so this branch is not on the expensive path.
+        already_svd = (self.Q_is_semiorthogonal and self.W_is_semiorthogonal
+                       and np.array_equal(mid0, np.diag(np.diag(mid0))))
+        if (K1 >= K0) and already_svd:
+            return self          # the early exit: nothing to remove, and nothing to rotate
 
         if K1 == 0:
             raise RuntimeError('VarianceMap.svd_optimize: every singular value is below the'
