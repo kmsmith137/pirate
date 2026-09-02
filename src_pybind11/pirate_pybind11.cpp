@@ -755,7 +755,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "pass its ``Dcores``: the GPU values are compiled into the cdd2 kernels and cannot\n"
         "be predicted from the plan.\n"
         "\n"
-        "FOOTGUN: in a tree with K = ``trees[itree].xdm_rank`` > 0, the fourth byte of an\n"
+        "FOOTGUN: in a tree with K = ``pf_kernels[itree].xdm_rank`` > 0, the fourth byte of an\n"
         "``out_argmax[itree]`` token is an extra-DM index mu, and the winning input DM row is\n"
         "(d << K) | mu rather than the output row d. That is how the tokens are made identical\n"
         "to a GpuDedisperser's. K is zero except in early-trigger trees, so code which\n"

@@ -13,7 +13,7 @@ if a line no longer has a test behind it, delete it.
 import numpy as np
 
 from ..pirate_pybind11 import DedispersionConfig, DedispersionPlan
-from ..utils import atomic_print, print_separator
+from ..utils import atomic_print, integer_log2, print_separator
 
 
 def report_coverage():
@@ -129,7 +129,9 @@ def report_coverage():
             n_wide += int(nfreq < (1 << r))
             n_multi_sub += int(int(fs.N) > 1)
             n_blk += int(nfreq % 8 == 0)
-            n_xdm += int(any(int(t.xdm_rank) > 0 for t in trees))
+            # K = the peak-finder's xdm_rank, from dm_downsampling = 2^(pf_rank + K).
+            n_xdm += int(any((integer_log2(t.dm_downsampling) - int(t.frequency_subbands.pf_rank)) > 0
+                             for t in trees))
             if max(nets) == 0:
                 continue
             n_early += 1

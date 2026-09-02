@@ -980,6 +980,8 @@ void register_kernel_bindings(pybind11::module &m)
           .def_property_readonly("N", [](const ReferencePeakFindingKernel &self) { return self.fs.N; })
           .def_property_readonly("Dout", [](const ReferencePeakFindingKernel &self) { return self.Dout; })
           .def_property_readonly("Dcore", [](const ReferencePeakFindingKernel &self) { return self.Dcore; })
+          .def_property_readonly("xdm_rank", [](const ReferencePeakFindingKernel &self) { return self.K; },
+               "Number of extra-DM bits this kernel max-reduces over (the ctor's ``xdm_rank``).")
           .def("apply",
                [](ReferencePeakFindingKernel &self, Array<float> &out_max, Array<uint> &out_argmax,
                   const Array<float> &in_, const Array<float> &wt, long ibatch) {

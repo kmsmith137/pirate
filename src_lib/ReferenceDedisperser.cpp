@@ -132,8 +132,11 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
 Array<float> ReferenceDedisperserBase::alloc_subband_buffer(long itree, long ndm)
 {
     const DedispersionTree &tree = trees.at(itree);
-    long K = tree.xdm_rank;
     long M = tree.frequency_subbands.M;
+
+    // The peak-finder's extra-DM bits: this array is what pf_kernels[itree] reads, so its DM
+    // axis is (ndm << K) rows for that kernel's K.
+    long K = pf_kernels.at(itree)->K;
 
     // See the doc-comment: 'ndm' is either the tree's peak-finding DM count, or twice that in
     // a downsampled tree at sophistication 0.
@@ -395,8 +398,8 @@ ReferenceDedisperser1::ReferenceDedisperser1(const Params &params) :
     }
     
     // Initialize stage2_subband_bufs. (See alloc_subband_buffer() for the shape, which is
-    // not just (beams_per_batch, ndm_out, M, nt_in) -- the DM axis carries the tree's
-    // xdm_rank extra bits.)
+    // not just (beams_per_batch, ndm_out, M, nt_in) -- the DM axis carries the peak-finder's
+    // K extra bits.)
 
     this->stage2_subband_bufs.resize(ntrees);
 

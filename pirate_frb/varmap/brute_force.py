@@ -352,9 +352,10 @@ class _SweepGeometry:
             # Dcore sublattice at all -- and a sweep never builds a peak-finding kernel, so
             # it never chooses a Dcore in the first place.
             #
-            # Nor is there a constraint on xdm_rank. The subband array has 2^(r-R) coarse DM
-            # rows whatever K is; K only says how many of them the PEAK-FINDER max-reduces
-            # into one output row, and neither sweep runs a peak-finder.
+            # Nor on the peak-finder's K (its extra-DM bits, dm_downsampling / 2^R). The
+            # subband array has 2^(r-R) coarse DM rows whatever K is; K only says how many of
+            # them the PEAK-FINDER max-reduces into one output row, and neither sweep runs a
+            # peak-finder.
 
             wmax = int(t.primary_tree.max_width)
             ddspread = 1 << (int(config.toplevel_tree_rank) - int(t.early_trigger_level))

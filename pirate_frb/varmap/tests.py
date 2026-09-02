@@ -4092,10 +4092,10 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     fixed configs this test used to carry and cover three things neither of them did.
     Measured over 250-400 draws from this test's exact distribution: npri > 1 in 53%, a
     varying max_width (hence P_gamma < P_0) in 23-29%, R == 0 in 39%, nfreq < 2^r in 27%,
-    xdm_rank > 0 in 92%, and some primary tree with early triggers in 25%. The sampling is
-    deliberately left non-deterministic: a different config covers each case on each run,
-    which is worth more over many runs than one config pinned forever. 'nrandom' is the knob
-    if a single run's coverage ever needs to be denser.
+    K > 0 (dm_downsampling > 2^R) in 92%, and some primary tree with early triggers in 25%.
+    The sampling is deliberately left non-deterministic: a different config covers each case
+    on each run, which is worth more over many runs than one config pinned forever.
+    'nrandom' is the knob if a single run's coverage ever needs to be denser.
 
     ONE GAP, AND IT IS PRE-EXISTING. At max_toplevel_rank=9 the drawn R never exceeds 2
     (measured histogram {0: 97, 1: 97, 2: 56} over 250 draws), because R <= dd_rank1 and a

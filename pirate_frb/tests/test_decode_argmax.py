@@ -303,8 +303,8 @@ def _sample_tuples(plan, kinfo, interesting_ms, ntuples):
 
     Biases m toward subband/fine-dm extremes, p and t toward their extremes, cells
     toward corners. Note 'm' here is the tree's LINEAR multiplet index m_ext = (m << K) | mu
-    (K = xdm_rank), so sweeping it sweeps the extra-DM index too; _m_fields() splits it into
-    the token's two byte fields."""
+    (K = the peak-finder's xdm_rank), so sweeping it sweeps the extra-DM index too;
+    _m_fields() splits it into the token's two byte fields."""
 
     def _pick(lo_hi_n):
         return random.choice(lo_hi_n)
@@ -312,7 +312,7 @@ def _sample_tuples(plan, kinfo, interesting_ms, ntuples):
     tuples = []
     for _ in range(ntuples):
         itree = random.randrange(plan.ntrees)
-        M, P, Dout, Dcore = kinfo[itree]
+        M, P, Dout, Dcore, K = kinfo[itree]
         tree = plan.trees[itree]
 
         m = random.choice(interesting_ms[itree] + [random.randrange(M)])
@@ -321,7 +321,7 @@ def _sample_tuples(plan, kinfo, interesting_ms, ntuples):
         dt = min(Dcore, 2 ** lpf)
         nsamp = Dout // dt
         t = _pick([0, nsamp - 1, random.randrange(nsamp)]) * dt
-        token = _m_fields(m, int(tree.xdm_rank)) | (p << 8) | t
+        token = _m_fields(m, K) | (p << 8) | t
 
         idm = _pick([0, tree.ndm_out - 1, random.randrange(tree.ndm_out)])
         itout = _pick([0, tree.nt_out - 1, random.randrange(tree.nt_out)])
@@ -403,7 +403,7 @@ def _check_bad_tokens(plan, kinfo):
     """decode_argmax() must throw on malformed tokens and out-of-range indices."""
 
     itree = random.randrange(plan.ntrees)
-    M, P, Dout, Dcore = kinfo[itree]
+    M, P, Dout, Dcore, K = kinfo[itree]
     tree = plan.trees[itree]
 
     def expect_throw(*args):
@@ -416,7 +416,7 @@ def _check_bad_tokens(plan, kinfo):
     # m and mu have a byte each, so each has its own smallest out-of-range value. Note the
     # m-field's bound is the TREE's fs.M, not the peak-finder's M_ext -- which is the
     # simplification the two-byte format buys: a reader no longer needs K to parse a token.
-    fsM, K = int(tree.frequency_subbands.M), int(tree.xdm_rank)
+    fsM = int(tree.frequency_subbands.M)
     expect_throw(fsM << 16, itree, Dcore, 0, 0)        # m out of range
     expect_throw((1 << K) << 24, itree, Dcore, 0, 0)   # mu out of range
     expect_throw(P << 8, itree, Dcore, 0, 0)           # p out of range
@@ -516,26 +516,32 @@ def test_decode_argmax():
     atomic_print(f"test_decode_argmax: r_top={r_top}, nt_in={nt_in}, ntrees={plan.ntrees}, "
                  f"nbeams={B}, nchunks={C}")
 
-    # Per-tree (M_ext, P, Dout, Dcore), from a scout ReferenceDedisperser.
+    # Per-tree (M_ext, P, Dout, Dcore, K), from a scout ReferenceDedisperser.
     #
-    # NOTE the first element is M_ext = (fs.M << K) with K = tree.xdm_rank, i.e. the number
+    # NOTE the first element is M_ext = (fs.M << K) with K = the peak-finder's xdm_rank (the
+    # last element: the kernel that emits the tokens is the authority on K), i.e. the number
     # of legal (m, mu) pairs, NOT the tree's multiplet count fs.M. The tokens built below
     # enumerate 0 <= m_ext < M_ext and repack each into the token's two byte fields via
     # _m_fields(), so they sweep the (multiplet, extra-DM) pairs decode_argmax() has to take
     # apart. (The out-of-range checks are per field: see _check_bad_tokens().)
     dcores = _draw_dcores(plan)
     scout = ReferenceDedisperser(plan, sophistication=0, tree_domain_input=True, Dcores=dcores)
-    kinfo = [(k.M_ext, k.P, k.Dout, k.Dcore) for k in scout.pf_kernels]
+    kinfo = [(k.M_ext, k.P, k.Dout, k.Dcore, k.xdm_rank) for k in scout.pf_kernels]
     del scout
     atomic_print(f'test_decode_argmax: Dcore by tree = {dcores}')
 
-    # Cross-check that relation, and report the per-tree K: a run which happened to generate
-    # no K > 0 tree covers strictly less, and that should be visible rather than silent.
+    # Cross-check that relation, and check the kernel's K against the tree's own statement of
+    # it, dm_downsampling = 2^(pf_rank + K) -- this is where the plan -> kernel-params
+    # conversion is tested. Also report the per-tree K: a run which happened to generate no
+    # K > 0 tree covers strictly less, and that should be visible rather than silent.
     xdm_ranks = []
     for itree in range(plan.ntrees):
         tree = plan.trees[itree]
-        xdm_ranks.append(tree.xdm_rank)
-        assert kinfo[itree][0] == (tree.frequency_subbands.M << tree.xdm_rank)
+        fs = tree.frequency_subbands
+        K = kinfo[itree][4]
+        xdm_ranks.append(K)
+        assert kinfo[itree][0] == (int(fs.M) << K)
+        assert (1 << (K + int(fs.pf_rank))) == int(tree.dm_downsampling), (itree, K)
     atomic_print(f'test_decode_argmax: xdm_rank by tree = {xdm_ranks}')
 
     # The Dcores argument must reach the peak-finding kernels: everything below decodes
@@ -553,8 +559,7 @@ def test_decode_argmax():
     tree_bands = []
     interesting_ms = []
     for itree in range(plan.ntrees):
-        M = kinfo[itree][0]
-        K = int(plan.trees[itree].xdm_rank)
+        M, K = kinfo[itree][0], kinfo[itree][4]
         first, last = {}, {}
         for m in range(M):
             tok = _m_fields(m, K)

@@ -128,14 +128,13 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
             tree.tree_rank = primary_tree_rank - et_level;
             tree.amb_rank = stage1_dd_rank.at(ipri);                 // note amb <-> dd swap
             tree.dd_rank = stage1_amb_rank.at(ipri) - et_level;      // note amb <-> dd swap
-            tree.dd_rank1 = (tree.dd_rank + 1) / 2;                  // mirroring gpu kernel
-            tree.xdm_rank = tree.dd_rank1 - tree.frequency_subbands.pf_rank;
             tree.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ipri));
 
-            // Mirroring GPU kernel. (Note that when GPU kernels are constructed, an assert will
-            // verify that these "runtime" values match the kernel "compile-time" values.)
-            tree.dm_downsampling = pow2(tree.dd_rank1);
-            tree.time_downsampling = pow2(tree.dd_rank1);
+            // Mirroring GPU kernel. (Note that when GPU kernels are constructed, an assert
+            // verifies that these "runtime" values match the kernel "compile-time" values.)
+            long dd_rank1 = (tree.dd_rank + 1) / 2;
+            tree.dm_downsampling = pow2(dd_rank1);
+            tree.time_downsampling = pow2(dd_rank1);
 
             // Array shapes for peak-finding and related kernels.
             tree.nprofiles = 1 + 3 * integer_log2(tree.primary_tree.max_width);
@@ -151,6 +150,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
 
             xassert_ge(tree.dd_rank, 1);
             xassert_eq(tree.tree_rank, tree.amb_rank + tree.dd_rank);
+            xassert_ge(tree.dm_downsampling, pow2(tree.frequency_subbands.pf_rank));  // K >= 0
 
             // All four downsampling factors are powers of two: the wt factors are checked by
             // config.validate(), and the two output factors are pow2() by the assignments
@@ -356,7 +356,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
         pf_params.beams_per_batch = beams_per_batch;
         pf_params.total_beams = beams_per_gpu;
         pf_params.ndm_out = tree.ndm_out;
-        pf_params.xdm_rank = tree.xdm_rank;
+        pf_params.xdm_rank = integer_log2(tree.dm_downsampling) - tree.frequency_subbands.pf_rank;  // K
         pf_params.ndm_wt = tree.ndm_wt;
         pf_params.nt_out = tree.nt_out;
         pf_params.nt_wt = tree.nt_wt;
@@ -895,15 +895,10 @@ void DedispersionPlan::decode_argmax(
     long Dout = xdiv(tr.nt_ds, tr.nt_out);   // = tr.time_downsampling
     validate_dcore(Dcore, Dout);             // caller-supplied; see DedispersionPlan.hpp
 
-    // Parse token = (t) | (p << 8) | (m << 16) | (mu << 24).
-    //
-    // 'mu' indexes the extra DMs: the tree's cdd2 kernel computes 2^K output DMs per warp of
-    // its second dedispersion stage, where K = xdm_rank. Those extra DMs do NOT get their own
-    // rows of out_max / out_argmax -- the peak-finder max-reduces over mu along with the
-    // multiplet index, and reports the winner in the token. See CoalescedDdKernel2.hpp.
-    // K is zero unless the tree has an early trigger, and mu is then always zero.
+    // Recall that K = log2(dm_downsampling) - pf_rank, the number of "extra" DM bits.
+    long pow2_K = tr.dm_downsampling >> tr.frequency_subbands.pf_rank;  // 2^K
 
-    long K = tr.xdm_rank;
+    // Parse token = (t) | (p << 8) | (m << 16) | (mu << 24).
     long m  = (argmax_token >> 16) & 0xff;
     long mu = (argmax_token >> 24) & 0xff;
     p       = (argmax_token >> 8) & 0xff;
@@ -912,7 +907,7 @@ void DedispersionPlan::decode_argmax(
     // Each field is bounded on its own: unlike a packed (m << K) | mu field, 'm' being in
     // range says nothing about 'mu'.
     xassert_lt(m, fs.M);           // m = multiplet (frequency subband, fine dm)
-    xassert_lt(mu, pow2(K));       // mu = extra dm within the coarse-dm bin
+    xassert_lt(mu, pow2_K);        // mu = extra dm within the coarse-dm bin
     xassert_lt(p, tr.nprofiles);   // p = peak-finding profile
     xassert_lt(t, Dout);           // t = fine time within coarse output bin
 
@@ -944,15 +939,16 @@ void DedispersionPlan::decode_argmax(
     // across the subband).
 
     // Coarse delay, at the pow2(fs.pf_rank) granularity that the lag formulas below assume:
-    // 'idm_coarse' indexes bins of width pow2(pf_rank + K), and 'mu' selects one of the 2^K
-    // sub-bins inside it. (Do not confuse 'mu' with 'dfine': 'mu' is the low K bits of the
-    // COARSE DM index, whereas 'dfine' is the multiplet's fine DM within its subband -- two
-    // different axes.) Downsampled trees search the upper half of a tree one rank larger.
+    // 'idm_coarse' indexes bins of width pow2(pf_rank + K) = dm_downsampling, and 'mu'
+    // selects one of the 2^K sub-bins inside it. (Do not confuse 'mu' with 'dfine': 'mu' is
+    // the low K bits of the COARSE DM index, whereas 'dfine' is the multiplet's fine DM
+    // within its subband -- two different axes.) Downsampled trees search the upper half of
+    // a tree one rank larger.
 
-    long dhi = (idm_coarse << K) | mu;
-
+    long dhi = (idm_coarse * pow2_K) | mu;
     if (ipri > 0)
-        dhi += (tr.ndm_out << K);
+        dhi += (tr.ndm_out * pow2_K);
+
     long Tpf = itime_coarse * Dout + t + dt - 1;
     long thi_ds = Tpf - (pow2(fs.pf_rank) - fhi) * dhi;      // Tpf - Tlag
     long tlo_ds = thi_ds - (dhi * pow2(lsb) + dfine);        // Tpf - Tlag - Dsub

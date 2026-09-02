@@ -37,13 +37,11 @@ struct DedispersionTree
     long tree_rank = 0;             // = primary_tree_rank - early_trigger_level
     long amb_rank = 0;              // Ambient rank of this DedispersionTree (= stage1_dd_rank)
     long dd_rank = 0;               // Active rank of this DedispersionTree (= stage1_amb_rank - et_level)
-    long dd_rank1 = 0;              // = (dd_rank+1)/2, mirroring GPU kernel
-    long xdm_rank = 0;              // K = dd_rank1 - frequency_subbands.pf_rank
     long nt_ds = 0;                 // = config.time_samples_per_chunk / pow2(primary_tree_index)
 
     // Downsampling factors in coarse-grained dedispersion output.
-    long dm_downsampling = 0;       // = pow2(dd_rank1), mirroring GPU kernel
-    long time_downsampling = 0;     // = pow2(dd_rank1), mirroring GPU kernel
+    long dm_downsampling = 0;       // = 2^ceil(dd_rank/2), mirroring GPU kernel
+    long time_downsampling = 0;     // = 2^ceil(dd_rank/2), mirroring GPU kernel
 
     // Array shapes for peak-finding and related kernels.
     // 'wt' array shape is (beams_per_batch, ndm_wt, nt_wt, nprofiles, frequency_subbands.N).

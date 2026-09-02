@@ -475,9 +475,9 @@ struct ReferenceDedisperserBase
     std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
 
     // Length ntrees, constructed from plan->stage2_pf_params verbatim. NOTE their argmax
-    // tokens carry an extra-DM index 'mu' (K = tree.xdm_rank bits, in the token's fourth
-    // byte) alongside the tree's own multiplet index m -- which is what makes the tokens
-    // identical to a cdd2 kernel's. K is zero except in early-trigger trees.
+    // tokens carry an extra-DM index 'mu' (K = pf_kernels[itree]->K bits, in the token's
+    // fourth byte) alongside the tree's own multiplet index m -- which is what makes the
+    // tokens identical to a cdd2 kernel's. K is zero except in early-trigger trees.
     std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;
 
     // To process multiple chunks, call the dedisperse() method in a loop.
@@ -505,12 +505,12 @@ struct ReferenceDedisperserBase
     //
     //   (beams_per_batch, Dpf, t.frequency_subbands.M, t.nt_ds)   with t = trees[itree]
     //
-    // where Dpf = (t.ndm_out << t.xdm_rank) = 2^(r-R) is the tree's FULL coarse-DM count.
-    // This is the same layout as GpuSbDedispersionKernel's 'sb_out', which is what lets a CPU
-    // variance sweep mirror a GPU one line for line. Its row order (coarse dm, multiplet) does
-    // not depend on xdm_rank, unlike the peak-finder's m_ext multiplet index -- which is why
-    // a variance calculation should run a ReferencePfSquare over THIS array rather than
-    // resolving anything by the peak-finder's convention.
+    // where Dpf = (t.ndm_out << K) = 2^(r-R) is the tree's FULL coarse-DM count, with
+    // K = pf_kernels[itree]->K. This is the same layout as GpuSbDedispersionKernel's 'sb_out',
+    // which is what lets a CPU variance sweep mirror a GPU one line for line. Its row order
+    // (coarse dm, multiplet) does not depend on K, unlike the peak-finder's m_ext multiplet
+    // index -- which is why a variance calculation should run a ReferencePfSquare over THIS
+    // array rather than resolving anything by the peak-finder's convention.
     //
     // A view into internal storage, which the next dedisperse() overwrites. It IS the array
     // handed to pf_kernels[itree] -- the peak-finder reads the extra DM bits in place.
@@ -526,8 +526,9 @@ struct ReferenceDedisperserBase
     //
     //   (beams_per_batch, ndm << K, trees[itree].frequency_subbands.M, trees[itree].nt_ds)
     //
-    // with K = trees[itree].xdm_rank, since the dedispersion kernel emits 2^K DM channels
-    // per peak-finder DM channel.
+    // with K = pf_kernels[itree]->K (the peak-finder's extra-DM bits; at the tree level the
+    // same fact reads dm_downsampling = 2^(pf_rank + K)), since the dedispersion kernel emits
+    // 2^K DM channels per peak-finder DM channel.
     //
     // Allocating here rather than at each call site is what lets the out_sb[itree] view --
     // the top (trees[itree].ndm_out << K) rows of the returned array -- be published from the

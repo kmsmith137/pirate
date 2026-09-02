@@ -44,7 +44,7 @@ import time
 
 import numpy as np
 
-from ..utils import atomic_print
+from ..utils import atomic_print, integer_log2
 
 
 # Only flag the worst channel among those with at least this many steady-state chunks: a
@@ -83,13 +83,16 @@ def run_mc(vmm, freq_variances, *, device='gpu', nchunks=None, report_every=1,
 
     # Per-tree accumulators, all indexed by the FINE alpha = (d, m, p) with d over
     # Dpf = 2^(r-R) -- which is exactly the (Dpf, M, P) layout of the subband array. See
-    # Dedisperser.hpp's out_sb comment: that layout does NOT depend on xdm_rank, which is why
-    # this works for K > 0 and why nothing here resolves the peak-finder's m_ext convention.
+    # Dedisperser.hpp's out_sb comment: that layout does NOT depend on K, which is why this
+    # works for K > 0 and why nothing here resolves the peak-finder's m_ext convention.
     settle, mc_sum, mc_sumsq, mc_count, shapes = [], [], [], [], []
     for itree in range(ntrees):
         tree = geom.plan.trees[itree]
         D, M, P = geom.tree_D[itree], geom.tree_M[itree], geom.tree_P[itree]
-        K = int(tree.xdm_rank)
+        # The peak-finder's extra-DM bits, from dm_downsampling = 2^(pf_rank + K). Derived
+        # from the tree rather than read from a kernel, so that the it0 check below compares
+        # two independent sources.
+        K = integer_log2(tree.dm_downsampling) - int(tree.frequency_subbands.pf_rank)
         nt_out = int(tree.nt_out)
 
         if y[itree].size != D * M * P:

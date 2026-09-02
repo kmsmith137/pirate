@@ -55,8 +55,8 @@ struct CoalescedDdKernel2
 {
     // Note: the constructor args (dd_params, pf_params) implicitly determine
     // dm/time coarse-graining factors:
-    //   dm_downsampling = pow2(dd_params.tree_rank) / pf_params.ndm_out
-    //   time_downsampling = pf_params.nt_out / pf_params.nt_in
+    //   dm_downsampling = pow2(dd_params.dd_rank + dd_params.amb_rank) / pf_params.ndm_out
+    //   time_downsampling = pf_params.nt_in / pf_params.nt_out
     
     CoalescedDdKernel2(
         const DedispersionKernelParams &dd_params,   // dedispersion

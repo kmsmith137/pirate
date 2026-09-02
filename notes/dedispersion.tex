@@ -892,8 +892,9 @@ So $K>0$ costs one compile-time-constant lag per second-stage register, and buys
 of $d_{\rm hi}$ per unit of $d'$.
 
 {\bf Names in the code.} $r_1$ is {\tt dd\_rank1} $= \lceil {\tt dd\_rank}/2 \rceil$, and $K$ is
-{\tt DedispersionTree::xdm\_rank()}, the count of ``extra DM'' bits folded into the argmax
-token. The kernel is emitted by {\tt cuda\_generator/SbDedisperser.py} and registered by
+{\tt PeakFindingKernelParams::xdm\_rank}, the count of ``extra DM'' bits folded into the argmax
+token; a {\tt DedispersionTree} carries it only through {\tt dm\_downsampling} $= 2^{R+K}$.
+The kernel is emitted by {\tt cuda\_generator/SbDedisperser.py} and registered by
 {\tt GpuSbDedispersionKernel} ({\tt include/pirate/DedispersionKernel.hpp});
 {\tt ReferenceTree} is the CPU reference.
 
