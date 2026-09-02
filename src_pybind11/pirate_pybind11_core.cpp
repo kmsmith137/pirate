@@ -976,6 +976,8 @@ void register_core_bindings(pybind11::module &m)
         "- ``amb_rank`` (int) -- ambient rank of this tree (the dd_rank of the associated\n"
         "  stage1 tree).\n"
         "- ``dd_rank`` (int) -- active dedispersion rank of this tree.\n"
+        "- ``primary_tree_rank`` (int) -- rank of this tree's primary-tree family, from which\n"
+        "  its early triggers count down.\n"
         "- ``nt_ds`` (int) -- downsampled time samples per chunk, i.e.\n"
         "  ``config.time_samples_per_chunk`` divided by ``2**primary_tree_index``.\n"
         "- ``frequency_subbands`` (FrequencySubbands) -- the subbands searched in this tree.\n"
@@ -1002,12 +1004,16 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("amb_rank", &DedispersionTree::amb_rank)
           .def_readonly("dd_rank", &DedispersionTree::dd_rank)
           .def_readonly("nt_ds", &DedispersionTree::nt_ds)
-          .def_readonly("total_rank", &DedispersionTree::total_rank,
-               "Total tree rank, ``amb_rank + dd_rank``. Equal to\n"
-               "``toplevel_tree_rank - early_trigger_level``, minus one more if\n"
-               "``primary_tree_index > 0``.")
+          .def_readonly("tree_rank", &DedispersionTree::tree_rank,
+               "This tree's own rank, ``amb_rank + dd_rank``. Equal to\n"
+               "``primary_tree_rank - early_trigger_level``.")
           .def_readonly("toplevel_tree_rank", &DedispersionTree::toplevel_tree_rank,
                "The ``toplevel_tree_rank`` of the config this tree came from.")
+          .def_readonly("primary_tree_rank", &DedispersionTree::primary_tree_rank,
+               "Rank of this tree's primary-tree family, ``toplevel_tree_rank`` minus one if\n"
+               "``primary_tree_index > 0`` (a downsampled primary tree gives up one rank).\n"
+               "The family's early triggers then run from this rank down: ``tree_rank =\n"
+               "primary_tree_rank - early_trigger_level``.")
           .def_readonly("dd_rank1", &DedispersionTree::dd_rank1,
                "The GPU kernel's second-stage rank, ``(dd_rank+1)//2``. This tree's\n"
                "``dm_downsampling`` is ``2**dd_rank1``, and ``xdm_rank`` is measured\n"

@@ -176,7 +176,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
     // In downsampled trees, we compute twice as many DMs as necessary, then drop the bottom half.
     // Each early trigger is computed in an independent tree, by disregarding some input channels.
     // Outer vector length is nout, inner shape is (beams_per_batch, 2^ref_rank, input_nt / pow2(ipri)),
-    //   where ref_rank = tree.total_rank + (is_downsampled ? 1 : 0) is the rank of the
+    //   where ref_rank = tree.tree_rank + (is_downsampled ? 1 : 0) is the rank of the
     //   one-stage reference tree.
     
     vector<Array<float>> dedispersion_buffers;  // length ntrees
@@ -210,7 +210,7 @@ ReferenceDedisperser0::ReferenceDedisperser0(const Params &params) :
 
         long out_ntime = tree.nt_ds;
         bool is_downsampled = (tree.primary_tree_index > 0);
-        long ref_rank = tree.total_rank + (is_downsampled ? 1 : 0);
+        long ref_rank = tree.tree_rank + (is_downsampled ? 1 : 0);
         long ndm_out = tree.ndm_out * (is_downsampled ? 2 : 1);
 
         this->dedispersion_buffers.at(itree) = Array<float> ({ beams_per_batch, pow2(ref_rank), out_ntime }, af_uhost | af_zero);
@@ -265,7 +265,7 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
         long out_ntime = tree.nt_ds;
         long ipri = tree.primary_tree_index;
         bool is_downsampled = (ipri > 0);
-        long ref_rank = tree.total_rank + (is_downsampled ? 1 : 0);
+        long ref_rank = tree.tree_rank + (is_downsampled ? 1 : 0);
 
         Array<float> in = downsampled_inputs.at(ipri).slice(1, 0, pow2(ref_rank));
         Array<float> dd = dedispersion_buffers.at(itree);
@@ -366,7 +366,7 @@ ReferenceDedisperser1::ReferenceDedisperser1(const Params &params) :
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = trees.at(itree);
 
-        long rank = tree.total_rank;
+        long rank = tree.tree_rank;
         long ntime = tree.nt_ds;
         long ipri = tree.primary_tree_index;
         bool is_downsampled = (ipri > 0);
@@ -437,7 +437,7 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = trees.at(itree);
 
-        long rank = tree.total_rank;
+        long rank = tree.tree_rank;
         long ipri = tree.primary_tree_index;
 
         Array<void> src = stage1_dd_buf.bufs.at(ipri);  // shape (beams_per_batch, 2^rank_ambient, ntime)

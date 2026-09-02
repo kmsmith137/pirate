@@ -35,8 +35,8 @@ def restrict_fine_vector(y, plan, iparent, ichild):
     trees = plan.trees          # one list build; plan.trees copies on every access
     parent_tree, child_tree = trees[iparent], trees[ichild]
 
-    D_p = 1 << (int(parent_tree.total_rank) - int(parent_tree.frequency_subbands.pf_rank))
-    D_c = 1 << (int(child_tree.total_rank) - int(child_tree.frequency_subbands.pf_rank))
+    D_p = 1 << (int(parent_tree.tree_rank) - int(parent_tree.frequency_subbands.pf_rank))
+    D_c = 1 << (int(child_tree.tree_rank) - int(child_tree.frequency_subbands.pf_rank))
     P_p, P_c = int(parent_tree.nprofiles), int(child_tree.nprofiles)
 
     if D_c != D_p:
@@ -99,7 +99,7 @@ def expand_fine_vectors(plan, per_primary):
         parent = trees[iparent]
         y = np.asarray(per_primary[gamma])
 
-        D = 1 << (int(parent.total_rank) - int(parent.frequency_subbands.pf_rank))
+        D = 1 << (int(parent.tree_rank) - int(parent.frequency_subbands.pf_rank))
         M, P = int(parent.frequency_subbands.M), int(parent.nprofiles)
         if y.shape != (D * M * P,):
             raise RuntimeError(f'expand_fine_vectors: primary tree {gamma} needs a flat'

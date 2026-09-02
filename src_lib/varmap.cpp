@@ -647,7 +647,7 @@ SdPlan::SdPlan(const DedispersionPlan &plan, const Array<double> &freq_variances
     this->tree0 = plan.trees.at(itree0);
 
     const FrequencySubbands &fs = tree0.frequency_subbands;
-    this->r = tree0.total_rank;
+    this->r = tree0.tree_rank;
     this->R = fs.pf_rank;
     this->N = fs.N;
     this->M = fs.M;
@@ -1072,7 +1072,7 @@ Array<double> SdPlan::lift_sd_vectors() const
 Array<double> coarse_grain_vector(const DedispersionTree &tree, const double *y, long ylen, long L)
 {
     const FrequencySubbands &fs = tree.frequency_subbands;
-    long r = tree.total_rank, R = fs.pf_rank;
+    long r = tree.tree_rank, R = fs.pf_rank;
     long N = fs.N, M = fs.M, P = tree.nprofiles;
     long D = 1L << (r - R);
 
@@ -1145,8 +1145,8 @@ static Array<double> restrict_fine_vector(const double *y, long ylen,
     const DedispersionTree &parent = plan.trees.at(iparent);
     const DedispersionTree &child = plan.trees.at(ichild);
 
-    long D_p = 1L << (parent.total_rank - parent.frequency_subbands.pf_rank);
-    long D_c = 1L << (child.total_rank - child.frequency_subbands.pf_rank);
+    long D_p = 1L << (parent.tree_rank - parent.frequency_subbands.pf_rank);
+    long D_c = 1L << (child.tree_rank - child.frequency_subbands.pf_rank);
     long P_p = parent.nprofiles, P_c = child.nprofiles;
 
     // Both are equal for every tree of a primary-tree family -- see the appendix's Observation (b)
@@ -1196,7 +1196,7 @@ expand_fine_vectors(const DedispersionPlan &plan, const std::vector<Array<double
         long iparent = plan.dedispersion_tree_index(gamma, 0);
         const DedispersionTree &parent = plan.trees.at(iparent);
 
-        long D = 1L << (parent.total_rank - parent.frequency_subbands.pf_rank);
+        long D = 1L << (parent.tree_rank - parent.frequency_subbands.pf_rank);
         long M = parent.frequency_subbands.M, P = parent.nprofiles;
 
         const Array<double> &y = per_primary[gamma];
@@ -1250,7 +1250,7 @@ compute_detrender_free_varfine(const DedispersionPlan &plan, const Array<double>
     long itree0 = plan.dedispersion_tree_index(0, 0);
     const DedispersionTree &tree0 = plan.trees.at(itree0);
     long M0 = tree0.frequency_subbands.M;
-    long D0 = 1L << (tree0.total_rank - tree0.frequency_subbands.pf_rank);
+    long D0 = 1L << (tree0.tree_rank - tree0.frequency_subbands.pf_rank);
     long P0 = tree0.nprofiles;
 
     std::vector<long> Ps;
@@ -1323,7 +1323,7 @@ compute_detrender_free_varcoarse(const DedispersionPlan &plan, const Array<doubl
         // to the shape the weights array actually has. coarse_grain_vector() checks R <= L <= r
         // itself; the plan constructor is what guarantees it.
         long ndm_wt = tree.ndm_wt;
-        long ndm_from_L = 1L << (tree.total_rank - L);
+        long ndm_from_L = 1L << (tree.tree_rank - L);
         xassert_eq(ndm_from_L, ndm_wt);
 
         const Array<double> &y = varfine[itree];

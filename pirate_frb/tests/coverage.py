@@ -123,7 +123,7 @@ def report_coverage():
             trees = plan.trees
             t0 = trees[int(plan.dedispersion_tree_index(0, 0))]
             fs = t0.frequency_subbands
-            R, r = int(fs.pf_rank), int(t0.total_rank)
+            R, r = int(fs.pf_rank), int(t0.tree_rank)
             nfreq = int(config.get_total_nfreq())
             n_r0 += int(R == 0)
             n_wide += int(nfreq < (1 << r))

@@ -548,7 +548,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "``trees[ichild].frequency_subbands.M``, whose entry ``m_c`` is the parent\n"
                "multiplet with the same band and the same fine-DM index within it.\n\n"
                "Additionally raises unless matched bands have the same subband level.\n\n"
-               "Does NOT check ``nprofiles`` or the coarse-DM count ``2**(total_rank -\n"
+               "Does NOT check ``nprofiles`` or the coarse-DM count ``2**(tree_rank -\n"
                "pf_rank)``: those are not subband geometry, and a caller building a row map\n"
                "over (dm, multiplet, profile) must check them itself.")
     ;

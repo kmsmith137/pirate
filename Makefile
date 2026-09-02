@@ -310,7 +310,6 @@ LIB_SRCFILES = \
   src_lib/DedispersionConfig.cpp \
   src_lib/DedispersionKernel.cu \
   src_lib/DedispersionPlan.cpp \
-  src_lib/DedispersionTree.cpp \
   src_lib/Detrender1d.cu \
   src_lib/Detrender2d.cu \
   src_lib/Hwtest.cpp \

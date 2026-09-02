@@ -149,7 +149,7 @@ def coarse_grain_vector(tree, y, L):
     """
 
     fs = tree.frequency_subbands
-    r, R = int(tree.total_rank), int(fs.pf_rank)
+    r, R = int(tree.tree_rank), int(fs.pf_rank)
     N, M, P = int(fs.N), int(fs.M), int(tree.nprofiles)
     D = 1 << (r - R)
 
@@ -432,7 +432,7 @@ class VarianceMap:
         set_('tree', tree)
 
         set_('nfreq', int(config.get_total_nfreq()))
-        set_('tree_rank', int(tree.total_rank))
+        set_('tree_rank', int(tree.tree_rank))
         set_('pf_rank', int(fs.pf_rank))
         set_('nmultiplets', int(fs.M))
         set_('nsubbands', int(fs.N))

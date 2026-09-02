@@ -343,7 +343,7 @@ class _SweepGeometry:
         for itree in range(self.ntrees):
             t = plan.trees[itree]
             fs = t.frequency_subbands
-            r, R = int(t.total_rank), int(fs.pf_rank)
+            r, R = int(t.tree_rank), int(fs.pf_rank)
             gamma = int(t.primary_tree_index)
 
             # Note there is deliberately NO constraint on the peak-finder's Dcore. Both
@@ -1089,7 +1089,7 @@ class _Accumulator:
         for itree in range(geom.ntrees):
             tree = self.trees[itree]
             fs = tree.frequency_subbands
-            r, R = int(tree.total_rank), int(fs.pf_rank)
+            r, R = int(tree.tree_rank), int(fs.pf_rank)
 
             L = self.Ls[itree]
             if L is None:
