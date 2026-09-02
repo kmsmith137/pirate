@@ -895,27 +895,24 @@ void DedispersionPlan::decode_argmax(
     long Dout = xdiv(tr.nt_ds, tr.nt_out);   // = tr.time_downsampling
     validate_dcore(Dcore, Dout);             // caller-supplied; see DedispersionPlan.hpp
 
-    // Parse token = (t) | (p << 8) | (mu << 16) | (m << (16+K)).
+    // Parse token = (t) | (p << 8) | (m << 16) | (mu << 24).
     //
-    // The tree's cdd2 kernel computes 2^K output DMs per warp of its second dedispersion
-    // stage, where K = xdm_rank. Those extra DMs do NOT get their own rows of out_max /
-    // out_argmax: the index 'mu' is folded into the token's m-field as
-    // m_ext = (m << K) | mu, and the peak-finder max-reduces over it. See
-    // CoalescedDdKernel2.hpp. K is zero unless the tree has an early trigger.
-    //
-    // This is the only place that splits the m-field; every producer (cdd2 kernel,
-    // ReferencePeakFindingKernel) writes it whole.
+    // 'mu' indexes the extra DMs: the tree's cdd2 kernel computes 2^K output DMs per warp of
+    // its second dedispersion stage, where K = xdm_rank. Those extra DMs do NOT get their own
+    // rows of out_max / out_argmax -- the peak-finder max-reduces over mu along with the
+    // multiplet index, and reports the winner in the token. See CoalescedDdKernel2.hpp.
+    // K is zero unless the tree has an early trigger, and mu is then always zero.
 
     long K = tr.xdm_rank;
-    long m_ext = (argmax_token >> 16) & 0xffff;
-    long mu    = m_ext & (pow2(K) - 1);
-    long m     = m_ext >> K;
-    p          = (argmax_token >> 8) & 0xff;
-    long t     = argmax_token & 0xff;
+    long m  = (argmax_token >> 16) & 0xff;
+    long mu = (argmax_token >> 24) & 0xff;
+    p       = (argmax_token >> 8) & 0xff;
+    long t  = argmax_token & 0xff;
 
-    // Note (m < fs.M) is exactly the bound (m_ext < pow2(K) * fs.M), so 'mu' needs no
-    // separate range check.
+    // Each field is bounded on its own: unlike a packed (m << K) | mu field, 'm' being in
+    // range says nothing about 'mu'.
     xassert_lt(m, fs.M);           // m = multiplet (frequency subband, fine dm)
+    xassert_lt(mu, pow2(K));       // mu = extra dm within the coarse-dm bin
     xassert_lt(p, tr.nprofiles);   // p = peak-finding profile
     xassert_lt(t, Dout);           // t = fine time within coarse output bin
 

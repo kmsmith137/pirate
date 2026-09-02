@@ -287,12 +287,24 @@ def _membership_sweep(plan, dcores, tree_bands, C, chans):
 # P1/P2/P3 probes for sampled (itree, token, idm, itout) tuples.
 
 
+def _m_fields(m_ext, K):
+    """Pack a tree's linear multiplet index into the token's two multiplet fields: m at
+    bit 16 and mu at bit 24, with m_ext = (m << K) | mu.
+
+    The sweeps below enumerate m_ext rather than the two fields separately, because
+    0 <= m_ext < M_ext is exactly the set of legal (m, mu) pairs -- so this is a repacking
+    of the old sweep, not a narrower one. Mirrors PeakFinder._m_field_expr() in the cuda
+    generator and _m_fields() in PeakFindingKernel.cu."""
+    return ((m_ext >> K) << 16) | ((m_ext & ((1 << K) - 1)) << 24)
+
+
 def _sample_tuples(plan, kinfo, interesting_ms, ntuples):
     """Return stratified-ish random tuples.
 
     Biases m toward subband/fine-dm extremes, p and t toward their extremes, cells
-    toward corners. Note 'm' here is the token's m-field, i.e. m_ext = (m << K) | mu when
-    the tree has xdm_rank = K > 0, so sweeping it sweeps the extra-DM index too."""
+    toward corners. Note 'm' here is the tree's LINEAR multiplet index m_ext = (m << K) | mu
+    (K = xdm_rank), so sweeping it sweeps the extra-DM index too; _m_fields() splits it into
+    the token's two byte fields."""
 
     def _pick(lo_hi_n):
         return random.choice(lo_hi_n)
@@ -309,7 +321,7 @@ def _sample_tuples(plan, kinfo, interesting_ms, ntuples):
         dt = min(Dcore, 2 ** lpf)
         nsamp = Dout // dt
         t = _pick([0, nsamp - 1, random.randrange(nsamp)]) * dt
-        token = (m << 16) | (p << 8) | t
+        token = _m_fields(m, int(tree.xdm_rank)) | (p << 8) | t
 
         idm = _pick([0, tree.ndm_out - 1, random.randrange(tree.ndm_out)])
         itout = _pick([0, tree.nt_out - 1, random.randrange(tree.nt_out)])
@@ -401,9 +413,12 @@ def _check_bad_tokens(plan, kinfo):
             return
         raise AssertionError(f"decode_argmax{args} should have thrown")
 
-    # M is the peak-finder's M_ext (see test_decode_argmax), so this is the smallest
-    # out-of-range m-field, not (fs.M << 16), which is a VALID token when xdm_rank > 0.
-    expect_throw(M << 16, itree, Dcore, 0, 0)          # m out of range
+    # m and mu have a byte each, so each has its own smallest out-of-range value. Note the
+    # m-field's bound is the TREE's fs.M, not the peak-finder's M_ext -- which is the
+    # simplification the two-byte format buys: a reader no longer needs K to parse a token.
+    fsM, K = int(tree.frequency_subbands.M), int(tree.xdm_rank)
+    expect_throw(fsM << 16, itree, Dcore, 0, 0)        # m out of range
+    expect_throw((1 << K) << 24, itree, Dcore, 0, 0)   # mu out of range
     expect_throw(P << 8, itree, Dcore, 0, 0)           # p out of range
     if Dout < 256:
         expect_throw(Dout, itree, Dcore, 0, 0)         # t out of range
@@ -539,12 +554,14 @@ def test_decode_argmax():
     interesting_ms = []
     for itree in range(plan.ntrees):
         M = kinfo[itree][0]
+        K = int(plan.trees[itree].xdm_rank)
         first, last = {}, {}
         for m in range(M):
-            fmin, fmax, _, _, _ = _decode(plan, m << 16, itree, dcores[itree], 0, 0)
+            tok = _m_fields(m, K)
+            fmin, fmax, _, _, _ = _decode(plan, tok, itree, dcores[itree], 0, 0)
             first.setdefault((fmin, fmax), m)
             last[(fmin, fmax)] = m
-        tree_bands.append([(m << 16, fmn, fmx) for (fmn, fmx), m in first.items()])
+        tree_bands.append([(_m_fields(m, K), fmn, fmx) for (fmn, fmx), m in first.items()])
         interesting_ms.append(sorted(set(first.values()) | set(last.values())))
 
     # Membership sweep channels: subband edges +-1 (off-by-one killers) + a few random.

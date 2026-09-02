@@ -30,12 +30,14 @@ void PeakFindingKernelParams::validate() const
 {
     FrequencySubbands::validate_subband_counts(subband_counts);
     
-    // The argmax token's m-field is 16 bits wide, and carries m_ext = (m << xdm_rank) | mu
-    // (see the top of PeakFindingKernel.hpp). validate_subband_counts() bounds fs.M on its own
-    // (max_peak_finding_rank = 4 gives M <= 114), but says nothing about xdm_rank, so the
-    // shifted value is what has to be checked here.
+    // The argmax token gives 'm' and 'mu' a byte each (see the top of PeakFindingKernel.hpp),
+    // so each needs its own bound. This is the only place the token's bit budget is stated in
+    // code. Both have room to spare: validate_subband_counts() already bounds fs.M by 114
+    // (max_peak_finding_rank = 4), and xdm_rank cannot exceed 4 either, since the peak-finder
+    // a cdd2 kernel builds has pf_rank = dd_rank1 = pf_rank_tree + xdm_rank.
     xassert_ge(xdm_rank, 0);
-    xassert_lt(FrequencySubbands(subband_counts).M << xdm_rank, 65536L);
+    xassert_lt(FrequencySubbands(subband_counts).M, 256L);
+    xassert_lt(xdm_rank, 8L);
 
     // Check that everything is initialized.
     xassert(max_kernel_width > 0);
@@ -203,6 +205,19 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src) const
 // -------------------------------------------------------------------------------------------------
 //
 // ReferencePeakFindingKernel
+
+
+// The argmax token carries the two halves of this class's multiplet index in separate bytes:
+// m = (m_ext >> K) at bit 16, and mu = (m_ext & (2^K - 1)) at bit 24. This helper is the
+// whole of that convention on the reference side; the generated GPU kernels emit the same
+// layout (see PeakFinder._m_field_expr() in the cuda generator), and
+// DedispersionPlan::decode_argmax() reads it. (eval_tokens() below reads the two fields
+// directly, since it range-checks them separately.)
+
+static inline uint _m_fields(long m_ext, long K)
+{
+    return (uint((m_ext >> K) & 0xff) << 16) | (uint(m_ext & ((1L << K) - 1)) << 24);
+}
 
 
 ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelParams &params_,
@@ -409,7 +424,7 @@ void ReferencePeakFindingKernel::apply(
                             float x2 = tmp_in[em*mstr + I + tout*nsamp + isamp - S];
                             float x3 = tmp_in[em*mstr + I + tout*nsamp + isamp];
 
-                            uint token0 = (m_ext << 16) | (isamp*dt);  // includes (m_ext,isamp) but not p
+                            uint token0 = _m_fields(m_ext, K) | (isamp*dt);  // (m,mu,isamp), not p
                             uint token1 = token0 | ((3*l+1) << 8);    // include p=3*l+1
                             uint token2 = token0 | ((3*l+2) << 8);    // include p=3*l+2
                             uint token3 = token0 | ((3*l+3) << 8);    // include p=3*l+3
@@ -482,21 +497,25 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                 uint token = in_tokens.at({b,d,tout});
 
                 // Token parsing starts here.
-                // Reminder: token = (t) | (p << 8) | (m_ext << 16), with m_ext = (m << K) | mu.
+                // Reminder: token = (t) | (p << 8) | (m << 16) | (mu << 24), and this class's
+                // own multiplet index is m_ext = (m << K) | mu.
 
-                long m_ext = (token >> 16) & 0xffffu;
+                long m  = (token >> 16) & 0xffu;
+                long mu = (token >> 24) & 0xffu;
                 long p = (token >> 8) & 0xffu;
                 long t = (token & 0xffu);
 
-                if ((m_ext < 0) || (m_ext >= M_ext))
+                // m and mu are independently bounded now that they occupy separate bytes:
+                // neither range check implies the other.
+                if (m >= M)
                     throw _bad_token(token, "m out of range");
+                if (mu >= E)
+                    throw _bad_token(token, "mu out of range");
                 if ((p < 0) || (p >= P))
                     throw _bad_token(token, "p out of range");
                 if ((t < 0) || (t >= Dout))
                     throw _bad_token(token, "t out of range");
 
-                long m = m_ext >> K;
-                long mu = m_ext & (E - 1);
                 long em = mu*M + m;   // index into tmp_arr (see PeakFindingKernel.hpp)
 
                 // p = 3*l+q, where l is the "level".
@@ -1660,9 +1679,11 @@ void ReferencePfSquare::test_vs_peak_finder()
                 long mu = m_ext & (E-1);
 
                 for (long p = 0; p < P; p++) {
-                    // Token format is (t) | (p << 8) | (m_ext << 16), and with Dcore == 1 the
-                    // only legal fine time is t = 0.
-                    uint token = (uint(m_ext) << 16) | (uint(p) << 8);
+                    // Token format is (t) | (p << 8) | (m << 16) | (mu << 24), and with
+                    // Dcore == 1 the only legal fine time is t = 0. This test draws K > 0
+                    // most of the time, so it is the one place a (m, mu) field mix-up shows
+                    // up with no dedispersion machinery in the way.
+                    uint token = _m_fields(m_ext, K) | (uint(p) << 8);
                     for (long i = 0; i < tokens.size; i++)
                         tokens.data[i] = token;
 

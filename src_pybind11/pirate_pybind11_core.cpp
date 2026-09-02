@@ -1021,7 +1021,7 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("xdm_rank", &DedispersionTree::xdm_rank,
                "Number of \"extra DM\" bits that this tree's cdd2 kernel folds into the\n"
                "m-field of its ``out_argmax`` tokens, i.e. ``K`` in\n"
-               "``token = t | (p << 8) | (mu << 16) | (m << (16+K))``.\n\n"
+               "``token = t | (p << 8) | (m << 16) | (mu << 24)``.\n\n"
                "Equal to ``dd_rank1 - frequency_subbands.pf_rank``. Zero unless the tree has\n"
                "an early trigger: an early trigger drops subband levels faster than it drops\n"
                "tree rank.")

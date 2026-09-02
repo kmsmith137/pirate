@@ -35,15 +35,14 @@ namespace pirate {
 // The 'out_argmax' array has the same shape (ndm_out, nt_out). Each element of the
 // out_argmax array is an uint32 "token" which indicates which element of the 4-d trial
 // array (from the previous paragraph) is responsible for the maximum SNR. The tokens
-// are defined as follows (see "Note 3" below for the cdd2 spelling of the same 32 bits):
+// are defined as follows:
 //
-//   token = (t) | (p << 8) | (m << 16);   // 8+8+16 bits
+//   token = (t) | (p << 8) | (m << 16) | (mu << 24);   // four bytes
 //
 //     where  0 <= t < (nt_in / nt_out)  indexes a fine-grained arrival time
 //            0 <= p < P                 indexes a peak-finding profile (see below)
 //            0 <= m < M                 indexes a "multiplet" (see below)
-//
-// (the m-field is really m_ext, which equals m when xdm_rank == 0 -- see "Note 1" below)
+//            0 <= mu < 2^xdm_rank       indexes an "extra DM" (see "Note 1" below)
 //
 // Note that 't' is quantized: for a profile at peak-finding level l (i.e. boxcar length
 // 2^l), 't' is a multiple of min(Dcore, 2^l), where Dcore is the kernel's internal
@@ -88,9 +87,10 @@ namespace pirate {
 //
 // Note 1: a peak-finding kernel takes K = PeakFindingKernelParams::xdm_rank explicitly
 // (see notes/dedispersion.tex for what K is). Its input array has (ndm_out << K) DM rows;
-// it max-reduces over the low K bits of that index -- call them 0 <= mu < 2^K -- along with
-// the multiplet index, and its argmax tokens carry m_ext = (m << K) | mu in the m-field.
-// So the m-field above is really m_ext, and coincides with m only when K = 0.
+// it max-reduces over the low K bits of that index -- 0 <= mu < 2^K, the token's fourth
+// byte -- along with the multiplet index. Internally the kernel works with the combined
+// index m_ext = (m << K) | mu; the token splits it back into its two fields, so a reader of
+// a token never needs to know K. K = 0 means mu is always zero.
 //
 // Note 2: what a peak-finding kernel does NOT know is the frequency ranges of its subbands.
 // That is why K enters here as a bare bit count rather than as extra subband_counts entries:
@@ -98,13 +98,10 @@ namespace pirate {
 // from the compact counts, and nothing about band geometry. The cdd2 kernel does need the
 // geometry, and computes it for itself.
 //
-// Note 3: the cdd2 kernel documents its token format as
-//
-//   token = (t) | (p << 8) | (mu << 16) | (m << (16+K))
-//
-// which is the same 32 bits as above: (m << (16+K)) | (mu << 16) == (m_ext << 16). The two
-// spellings exist because a cdd2 caller thinks in (m, mu) and a peak-finder in m_ext.
-// DedispersionPlan::decode_argmax() is the one place that splits the field back apart.
+// Note 3: DedispersionPlan::decode_argmax() is the intended reader of a token. It needs the
+// tree in order to turn (m, mu, p, t) into physical parameters, but no longer needs K in
+// order to PARSE one -- which is the reason the two multiplet fields are separate bytes
+// rather than one K-dependent bit split.
 
 
 struct PeakFindingKernelParams

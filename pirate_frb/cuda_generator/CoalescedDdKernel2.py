@@ -208,7 +208,8 @@ class CoalescedDdKernel2:
             Dcore = self.Dcore,
             Dout = self.Dout,
             Tinner = Tinner,
-            ringbuf = self.rb   # note that ringbuf is shared between Dedisperser and PeakFinder
+            ringbuf = self.rb,  # note that ringbuf is shared between Dedisperser and PeakFinder
+            xdm_rank = K        # so the peak-finder can split its index into the token's (m, mu)
         )
 
         # These restrictions may be relaxed in the future.

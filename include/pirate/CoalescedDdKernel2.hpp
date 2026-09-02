@@ -43,7 +43,7 @@ namespace pirate {
 // where K = (dd_rank1 - pf_rank). See notes/dedispersion.tex for discussion. The token
 // format is:
 //
-//   token = (t) | (p << 8) | (mu << 16) | (m << (16+K))
+//   token = (t) | (p << 8) | (m << 16) | (mu << 24)
 //
 //     where  0 <= t < (nt_in / nt_out)  indexes a fine-grained arrival time
 //            0 <= p < P                 indexes a peak-finding profile

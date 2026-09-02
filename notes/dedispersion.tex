@@ -618,12 +618,14 @@ and we introduce a new index $0\le \mu < 2^K$ for the remaining $K$ bits.
 In this notation, the token encoding is:
 \begin{equation}
 \big(\mbox{32-bit {\tt argmax\_token}}\big)
- = \, \mbox{\tt (t) | (p << 8) | (mu << 16) | (m << (16+K))}
+ = \, \mbox{\tt (t) | (p << 8) | (m << 16) | (mu << 24)}
 \end{equation}
-where $0 \le t < T_{\rm ds}$ is an 8-bit fine-grained arrival time, $0 \le p < P$ is
-an 8-bit peak-finding profile index (encoding pulse width and profile shape),
-$0 \le \mu < 2^K$ is part of the fine-grained DM as defined in the previous paragraph,
-and $0 \le m < M \le 114$ is a ``multiplet'' (i.e.~(frequency subband, fine-grained DM) pair).
+i.e.~one byte per field, where $0 \le t < T_{\rm ds}$ is a fine-grained arrival time,
+$0 \le p < P$ is a peak-finding profile index (encoding pulse width and profile shape),
+$0 \le m < M \le 114$ is a ``multiplet'' (i.e.~(frequency subband, fine-grained DM) pair),
+and $0 \le \mu < 2^K \le 16$ is part of the fine-grained DM as defined in the previous
+paragraph. Note that $m$ and $\mu$ occupy separate bytes, so decoding a token does not
+require knowing $K$.
 The arrival time $t$ has a small $p$-dependent time shift applied (see code for details).
 
 In practice, you shouldn't need to know the details of the token encoding -- there are helper

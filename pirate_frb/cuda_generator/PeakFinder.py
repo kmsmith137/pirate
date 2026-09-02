@@ -32,7 +32,7 @@ from .FrequencySubbands import FrequencySubbands
 # run-length structure rather than a band set. In particular LEADING ZEROS ARE MEANINGFUL:
 # they multiply every run length by a power of two without changing N. CoalescedDdKernel2
 # uses exactly that -- its pf kernel's counts are the tree's counts with 'xdm_rank' zeros
-# prepended, so that the peak-finder's index is m_ext = (m << xdm_rank) | mu and the extra DM
+# prepended, so that the peak-finder's index is (m << xdm_rank) | mu and the extra DM
 # bits get max-reduced away. See cuda_generator/CoalescedDdKernel2.py.
 #
 # Constraints:
@@ -68,13 +68,25 @@ from .FrequencySubbands import FrequencySubbands
 
 
 class PeakFinder:
-    def __init__(self, dtype, frequency_subbands, Wmax, Dcore, Dout, Tinner, ringbuf=None):
+    def __init__(self, dtype, frequency_subbands, Wmax, Dcore, Dout, Tinner, ringbuf=None,
+                 xdm_rank=0):
         self.dtype = dtype = Dtype(dtype)
         self.frequency_subbands = frequency_subbands                                            
         self.Tinner = Tinner
         self.Dcore = Dcore
         self.Dout = Dout
         self.Wmax = Wmax
+
+        # 'xdm_rank' (K) splits this kernel's multiplet index into the two fields the argmax
+        # token carries separately: m = (index >> K) and mu = (index & (2^K - 1)). The caller
+        # supplies it because the split is not visible here -- CoalescedDdKernel2 builds the
+        # extended subband_counts by prepending K zeros, and the leading zeros are not
+        # distinguishable from a tree whose own subband_counts[0] is zero.
+        #
+        # K = 0 (the default, and what a standalone peak-finder always uses) means mu is
+        # always zero, and the emitted token arithmetic is then identical to the K > 0 case
+        # with the mu term dropped.
+        self.xdm_rank = xdm_rank
 
         self.dt32 = dtype.simd32
         self.SW = dtype.simd_width
@@ -98,6 +110,11 @@ class PeakFinder:
         self.output = PfOutput(dtype, Dout)
         
         self.M = self.weight_reader.M
+        # M is the EXTENDED multiplet count, so it factors as 2^K times the caller's own
+        # multiplet count. (The extended subband_counts are the caller's with K zeros
+        # prepended, which multiplies every level's 2^level by 2^K.)
+        assert xdm_rank >= 0
+        assert (self.M % (1 << xdm_rank)) == 0
         self.Mouter = self.weight_reader.Mouter
         self.Minner = self.weight_reader.Minner
         self.Pouter = self.weight_layout.Pouter
@@ -602,6 +619,24 @@ class PeakFinder:
             self.pfz_register_ready(k, m, 3*lgw+3)
 
     
+    def _m_field_comment(self):
+        return '(m << 16) | (mu << 24)' if self.xdm_rank else '(m << 16)'
+
+
+    def _m_field_expr(self, v):
+        """C++ expression packing this kernel's multiplet index 'v' into the token's two
+        multiplet fields, m at bit 16 and mu at bit 24 (see pfz_register_ready()).
+
+        At K == 0 this is the bare (v << 16), so a kernel with no extra DMs emits exactly the
+        arithmetic it did before the fields were split."""
+
+        K = self.xdm_rank
+        if K == 0:
+            return f'({v} << 16)'
+        E = 1 << K
+        return f'(({v} >> {K}) << 16) | (({v} & {E-1}) << 24)'
+
+
     def pfz_register_ready(self, k, m, p):
         """
         Called when the following vars are ready:
@@ -620,14 +655,16 @@ class PeakFinder:
         Thus, each call to pfz_register_ready() processes (32*SW) times, (Dcore) m-values,
         and 1 p-value.
 
-        Recall that tokens are formatted as (t) | (p << 8) | (m << 16).
-        To convert a minitoken to a token, we do something like this:
+        Recall that tokens are formatted as (t) | (p << 8) | (m << 16) | (mu << 24),
+        where this kernel's multiplet index 'mfull' splits as m = (mfull >> K) and
+        mu = (mfull & (2^K - 1)), with K = self.xdm_rank (zero unless the caller is a cdd2
+        kernel with extra DMs). To convert a minitoken to a token, we do something like this:
 
             tfull = minitoken | ((threadIdx.x * simd_width) & (Dout-Dcore));
             mfull = m | (threadIdx.x & (Minner-1));
-            mfull = min(m, M-1);   // may be needed on some threads
-            assert (p < P);      // p is the same on all threads
-            token = tfull | (p << 8) | (mfull << 16);
+            mfull = min(mfull, M-1);   // may be needed on some threads
+            assert (p < P);            // p is the same on all threads
+            token = tfull | (p << 8) | _emit_m_fields(mfull);
         """
 
         Dcore, M, Minner, P = self.Dcore, self.M, self.Minner, self.P
@@ -638,20 +675,26 @@ class PeakFinder:
 
         # "Base" registers (p == 0).
 
+        # Note the min() clamps the LINEAR multiplet index, before _m_field_expr() splits
+        # it: the clamp exists because the last m-group can overhang M, which is a property
+        # of the lane layout rather than of the token format.
+
         if (self.dtype == 'float') and (p == 0):
-            k.emit(f'// token_m{m}_base = (m << 16) | (t & (Dout-Dcore))')
+            k.emit(f'// token_m{m}_base = {self._m_field_comment()} | (t & (Dout-Dcore))')
             k.emit(f'uint token_m{m}_base = {m} | (threadIdx.x & (Minner-1));  // m + mi')
             if m + Minner >= M:
                 k.emit(f'token_m{m}_base = min(token_m{m}_base, M-1);')
-            k.emit(f'token_m{m}_base = (token_m{m}_base << 16) | (threadIdx.x & (Dout-Dcore));')     
+            mf = self._m_field_expr(f'token_m{m}_base')
+            k.emit(f'token_m{m}_base = {mf} | (threadIdx.x & (Dout-Dcore));')
         
         elif (self.dtype == '__half') and (p == 1):
             for mm in [ m, (m+Minner) ]:
-                k.emit(f'// token_m{mm}_base = (m << 16) | (t & (Dout-Dcore))')
+                k.emit(f'// token_m{mm}_base = {self._m_field_comment()} | (t & (Dout-Dcore))')
                 k.emit(f'uint token_m{mm}_base = {mm} | (threadIdx.x & (Minner-1));  // m + mi')
                 if mm + Minner >= M:
                     k.emit(f'token_m{mm}_base = min(token_m{mm}_base, M-1);')
-                k.emit(f'token_m{mm}_base = (token_m{mm}_base << 16) | ((threadIdx.x << 1) & (Dout-Dcore));')
+                mf = self._m_field_expr(f'token_m{mm}_base')
+                k.emit(f'token_m{mm}_base = {mf} | ((threadIdx.x << 1) & (Dout-Dcore));')
 
         # Now the update code (p >= 0).
 
