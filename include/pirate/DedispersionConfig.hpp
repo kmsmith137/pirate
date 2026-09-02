@@ -84,25 +84,6 @@ struct DedispersionConfig
     // Number of primary trees. (Not a member -- inferred from 'primary_trees'.)
     long num_primary_trees() const { return primary_trees.size(); }
 
-    // The DedispersionTree enumeration. Trees are ordered by primary tree, then by
-    // DECREASING early-trigger level (earliest trigger first, then the main
-    // early_trigger_level=0 tree), so 'itree' is a prefix sum over
-    // primary_trees[].num_early_triggers. These three are the size, the forward map and the
-    // inverse map of that enumeration. They are how a caller with no plan in hand names a
-    // tree, and the DedispersionPlan constructor asserts its own loop against them.
-
-    // Number of DedispersionTrees, i.e. sum over primary trees of (num_early_triggers+1).
-    // Equal to DedispersionPlan::ntrees.
-    long num_dedispersion_trees() const;
-
-    // itree -> (primary_tree_index, early_trigger_level). Throws if itree is out of range.
-    void locate_dedispersion_tree(long itree, long *primary_tree_index,
-                                  long *early_trigger_level) const;
-
-    // (primary_tree_index, early_trigger_level) -> itree. The inverse of
-    // locate_dedispersion_tree(); throws if either argument is out of range.
-    long dedispersion_tree_index(long primary_tree_index, long early_trigger_level) const;
-
     // GPU configuration.
     long beams_per_gpu = 0;
     long beams_per_batch = 0;

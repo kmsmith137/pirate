@@ -121,7 +121,7 @@ def report_coverage():
             nets = [int(pt.num_early_triggers) for pt in config.primary_trees]
             plan = _plan(config)
             trees = plan.trees
-            t0 = trees[int(config.dedispersion_tree_index(0, 0))]
+            t0 = trees[int(plan.dedispersion_tree_index(0, 0))]
             fs = t0.frequency_subbands
             R, r = int(fs.pf_rank), int(t0.total_rank())
             nfreq = int(config.get_total_nfreq())
@@ -135,9 +135,9 @@ def report_coverage():
             n_early += 1
             found = False
             for g in range(int(config.num_primary_trees)):
-                iparent = int(config.dedispersion_tree_index(g, 0))
+                iparent = int(plan.dedispersion_tree_index(g, 0))
                 for e in range(1, nets[g] + 1):
-                    ichild = int(config.dedispersion_tree_index(g, e))
+                    ichild = int(plan.dedispersion_tree_index(g, e))
                     m_map = np.asarray(plan.m_index_mapping(iparent, ichild))
                     n_pairs += 1
                     if not np.array_equal(m_map, np.arange(m_map.size)):

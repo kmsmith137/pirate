@@ -325,24 +325,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Each primary tree holds its peak-finding configuration and num_early_triggers.")
           .def_property_readonly("num_primary_trees", &DedispersionConfig::num_primary_trees,
                "Number of primary trees (= len(primary_trees))")
-          .def_property_readonly("num_dedispersion_trees", &DedispersionConfig::num_dedispersion_trees,
-               "Number of DedispersionTrees (= sum over primary trees of num_early_triggers+1).\n"
-               "Same as DedispersionPlan.ntrees, and the range of every 'itree' argument -- but\n"
-               "computable from the config alone, with no plan.")
-          .def("locate_dedispersion_tree",
-               [](const DedispersionConfig &self, long itree) {
-                   long ipri, et_level;
-                   self.locate_dedispersion_tree(itree, &ipri, &et_level);
-                   return py::make_tuple(ipri, et_level);
-               },
-               py::arg("itree"),
-               "Returns (primary_tree_index, early_trigger_level) for tree 'itree'. Trees are\n"
-               "ordered by primary tree, then by DECREASING early-trigger level. Throws if\n"
-               "itree is out of range.")
-          .def("dedispersion_tree_index", &DedispersionConfig::dedispersion_tree_index,
-               py::arg("primary_tree_index"), py::arg("early_trigger_level"),
-               "Inverse of locate_dedispersion_tree(): returns 'itree'. Throws if either\n"
-               "argument is out of range.")
           // GPU configuration
           .def_readwrite("beams_per_gpu", &DedispersionConfig::beams_per_gpu,
                "Number of beams processed per GPU")
@@ -435,7 +417,16 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Number of bits per element (same as config.dtype.nbits)")
           .def_readonly("trees", &DedispersionPlan::trees,
                "Vector of DedispersionTree objects representing stage2 output trees.\n"
-               "Length is ntrees. Each tree corresponds to one (primary tree, early trigger) pair.")
+               "Length is ntrees. Each tree is one (primary tree, early trigger) pair.\n"
+               "Ordered by primary tree, then by DECREASING early-trigger level.\n"
+               "\n"
+               "Note this is a fresh list of COPIES on every attribute access, so code that\n"
+               "needs one tree repeatedly should cache it.")
+          .def("dedispersion_tree_index", &DedispersionPlan::dedispersion_tree_index,
+               py::arg("primary_tree_index"), py::arg("early_trigger_level"),
+               "Returns the 'itree' of the tree with this (primary_tree_index,\n"
+               "early_trigger_level) pair, i.e. the inverse of reading those two members of\n"
+               "trees[itree]. Throws if either argument is out of range.")
           .def_readonly("stage1_dd_rank", &DedispersionPlan::stage1_dd_rank,
                "Active dedispersion rank of each stage1 tree.\n"
                "Vector of length num_primary_trees. Stage1 trees are internal to dedispersion.")

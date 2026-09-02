@@ -8,7 +8,7 @@
 
 #include <sstream>
 #include <iomanip>
-#include <algorithm>   // std::min
+#include <algorithm>   // std::min, std::max
 #include <unordered_map>
 #include <ksgpu/xassert.hpp>
 #include <yaml-cpp/emitter.h>   // YAML::Emitter, used in to_yaml()
@@ -100,9 +100,14 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
         this->stage1_amb_rank.at(ipri) = primary_tree_rank - st1_dd_rank;
     }
 
-    // The tree ORDERING is the config's: primary tree, then DECREASING early-trigger level.
-    // See DedispersionConfig::num_dedispersion_trees() and its two companion mapping
-    // functions, which are how a caller with no plan in hand names a tree.
+    // The loop order below IS the tree enumeration: primary tree, then DECREASING
+    // early-trigger level. This is the only place it is defined, and it is not free to
+    // change -- an 'itree' is a bare integer in the plan yaml and in variance-map files, so
+    // a different order would silently reinterpret every archived index. (A producer and
+    // consumer that disagree do fail loudly: _verify_tree_yaml() checks each tree's
+    // primary_tree_index and early_trigger_level against its position in the yaml.)
+    //
+    // DedispersionPlan::dedispersion_tree_index() is the inverse map.
 
     for (long ipri = 0; ipri < num_primary_trees; ipri++) {
         long net = config.primary_trees.at(ipri).num_early_triggers;
@@ -200,19 +205,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
     }
 
     this->ntrees = trees.size();
-
-    // Tripwire: 'trees' must agree with DedispersionConfig's tree enumeration. Callers with
-    // no plan index trees through DedispersionConfig::locate_dedispersion_tree() and its two
-    // companions, so if the loop above and those functions ever drift, every such caller
-    // silently reads the wrong tree.
-    xassert_eq(this->ntrees, config.num_dedispersion_trees());
-
-    for (long itree = 0; itree < this->ntrees; itree++) {
-        long ipri, et_level;
-        config.locate_dedispersion_tree(itree, &ipri, &et_level);
-        xassert_eq(this->trees.at(itree).primary_tree_index, ipri);
-        xassert_eq(this->trees.at(itree).early_trigger_level, et_level);
-    }
 
     if (!params.mega_ringbuf)
         return;
@@ -885,9 +877,46 @@ shared_ptr<DedispersionPlan> DedispersionPlan::from_yaml_string(const Dedispersi
 
 // -------------------------------------------------------------------------------------------
 //
-// Interpreting the dedisperser's output: decode_argmax(), decode_argmax2(),
+// Naming and interpreting trees: dedispersion_tree_index(), decode_argmax(), decode_argmax2(),
 // compute_steady_state_it0(), n_index_mapping(), m_index_mapping().
 // See the doc-comments in DedispersionPlan.hpp for the full specifications.
+
+
+long DedispersionPlan::dedispersion_tree_index(long primary_tree_index,
+                                               long early_trigger_level) const
+{
+    for (long itree = 0; itree < this->ntrees; itree++) {
+        const DedispersionTree &t = this->trees.at(itree);
+        if ((t.primary_tree_index == primary_tree_index)
+            && (t.early_trigger_level == early_trigger_level))
+            return itree;
+    }
+
+    // Not found. Recover the valid ranges from 'trees' so the message can say WHICH argument
+    // is wrong and what its bound is. (Callers usually pass a computed index, so "no such
+    // tree" on its own would not be enough to debug from.) This is an error path, so the
+    // second pass over 'trees' costs nothing in practice.
+
+    long npri = config.num_primary_trees();
+
+    if ((primary_tree_index < 0) || (primary_tree_index >= npri)) {
+        stringstream ss;
+        ss << "DedispersionPlan::dedispersion_tree_index: primary_tree_index="
+           << primary_tree_index << " is out of range [0, " << npri << ")";
+        throw runtime_error(ss.str());
+    }
+
+    long net = 0;
+    for (const DedispersionTree &t: this->trees)
+        if (t.primary_tree_index == primary_tree_index)
+            net = std::max(net, long(t.early_trigger_level));
+
+    stringstream ss;
+    ss << "DedispersionPlan::dedispersion_tree_index: early_trigger_level="
+       << early_trigger_level << " is out of range [0, " << net << "] for primary tree "
+       << primary_tree_index;
+    throw runtime_error(ss.str());
+}
 
 
 // Helper for the five methods below: range-checks an 'itree' argument and returns the tree.

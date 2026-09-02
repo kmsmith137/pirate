@@ -379,7 +379,7 @@ class SdPlan:
 
         self.config = config
         self.plan = make_plan(config)
-        self.itree0 = int(config.dedispersion_tree_index(0, 0))
+        self.itree0 = int(self.plan.dedispersion_tree_index(0, 0))
         self.tree0 = self.plan.trees[self.itree0]
         fs = self.tree0.frequency_subbands
 
@@ -1188,7 +1188,7 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
     trees = plan.trees          # one list build; plan.trees copies on every access
 
     npri = int(config.num_primary_trees)
-    itree0 = int(config.dedispersion_tree_index(0, 0))
+    itree0 = int(plan.dedispersion_tree_index(0, 0))
     tree0 = trees[itree0]
     r0, R = int(tree0.total_rank()), int(tree0.frequency_subbands.pf_rank)
 
@@ -1206,7 +1206,7 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
                    f' because this config has num_primary_trees={npri}, and a downsampled'
                    f' primary tree has rank {r0-1}.' if (npri > 1) else ''))
 
-    itrees = [int(config.dedispersion_tree_index(g, 0)) for g in range(1, npri)]
+    itrees = [int(plan.dedispersion_tree_index(g, 0)) for g in range(1, npri)]
     Ps = [int(trees[i].nprofiles) for i in itrees]
 
     # THE ONE PRECONDITION OF THE SLICE THAT WOULD FAIL SILENTLY. Proposition 2 needs three
@@ -1394,8 +1394,8 @@ def compute_detrender_free_varfine(config, freq_variances, *, progress=False, de
     dd_plan = make_plan(config)
     trees = dd_plan.trees        # one list build; plan.trees copies on every access
 
-    itree0 = int(config.dedispersion_tree_index(0, 0))
-    itrees = [int(config.dedispersion_tree_index(g, 0)) for g in range(1, npri)]
+    itree0 = int(dd_plan.dedispersion_tree_index(0, 0))
+    itrees = [int(dd_plan.dedispersion_tree_index(g, 0)) for g in range(1, npri)]
     tree0 = trees[itree0]
     Ps = [int(trees[i].nprofiles) for i in itrees]
 

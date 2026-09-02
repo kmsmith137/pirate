@@ -184,4 +184,4 @@ def test_cpp_detrender_free(verbose=False):
     if verbose:
         from ..utils import atomic_print
         atomic_print(f'    test_cpp_detrender_free(nfreq={nfreq},'
-                     f' {int(config.num_dedispersion_trees)} trees): ok\n')
+                     f' {int(plan.ntrees)} trees): ok\n')

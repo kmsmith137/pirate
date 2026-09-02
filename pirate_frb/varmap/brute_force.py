@@ -117,6 +117,8 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
     # 'L' is per PRIMARY tree, but the accumulator coarse-grains per tree, so spread it onto
     # the (gamma, 0) trees and leave the children fine. Their matrices are discarded below.
     npri = int(config.num_primary_trees)
+    plan = make_plan(config)   # needed to name trees; the sweep builds its own
+
     if L is None:
         Ls_tree = None
     else:
@@ -125,9 +127,9 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
         if len(Lp) != npri:
             raise RuntimeError(f'compute_variance_multimap: got {len(Lp)} values of L for'
                                f' {npri} primary trees')
-        Ls_tree = [None] * int(config.num_dedispersion_trees)
+        Ls_tree = [None] * int(plan.ntrees)
         for g in range(npri):
-            Ls_tree[int(config.dedispersion_tree_index(g, 0))] = Lp[g]
+            Ls_tree[int(plan.dedispersion_tree_index(g, 0))] = Lp[g]
 
     geom, sweep, acc = _run_sweep(config, detrender, device=device, L=Ls_tree,
                                   guard_chunk=guard_chunk, progress=progress,
@@ -142,8 +144,7 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
     # cost no extra passes), but a VarianceMultiMap stores one map per PRIMARY tree: a child's
     # map is a row subset of its parent's, so keeping it would be keeping a copy. Note the
     # parent is the LAST tree of its family, not itree - e.
-    primary = [maps[int(config.dedispersion_tree_index(g, 0))]
-               for g in range(int(config.num_primary_trees))]
+    primary = [maps[int(plan.dedispersion_tree_index(g, 0))] for g in range(npri)]
 
     prov = dict(algorithm='brute_force', device=device, nbeams=geom.nbeams,
                 nfreq=geom.nfreq, nphases=geom.nphases, ntime=geom.ntime,

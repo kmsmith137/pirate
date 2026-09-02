@@ -84,11 +84,15 @@ struct DedispersionPlan
     // There is a lot of per-tree data, so I defined a helper class 'DedispersionTree'.
     // The number of trees is (config.num_primary_trees() + total number of early triggers).
     //
-    // Trees are indexed in the order defined by DedispersionConfig::locate_dedispersion_tree()
-    // and its two companions -- so a caller can compute an 'itree' from a
-    // (primary_tree_index, early_trigger_level) pair without a plan in hand.
+    // Trees are ordered by primary tree, then by DECREASING early-trigger level (earliest
+    // trigger first, then the main early_trigger_level=0 tree).
     long ntrees = 0;
     std::vector<DedispersionTree> trees;  // length ntrees
+
+    // (primary_tree_index, early_trigger_level) -> itree, i.e. the inverse of reading
+    // trees[itree].{primary_tree_index, early_trigger_level}. Throws if either argument is
+    // out of range. Available on a Params::minimal() plan, i.e. with no GPU.
+    long dedispersion_tree_index(long primary_tree_index, long early_trigger_level) const;
 
     // 'verbose' controls explanatory comments; 'zones' independently controls
     // whether the mega_ringbuf per-clag host/gpu zone breakdown is emitted.

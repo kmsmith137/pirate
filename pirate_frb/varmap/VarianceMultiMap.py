@@ -95,7 +95,7 @@ def expand_fine_vectors(plan, per_primary):
     for gamma in range(npri):
         # See the appendix's fact (a): every primary tree HAS an e == 0 tree, so this lookup
         # cannot fail.
-        iparent = int(config.dedispersion_tree_index(gamma, 0))
+        iparent = int(plan.dedispersion_tree_index(gamma, 0))
         parent = trees[iparent]
         y = np.asarray(per_primary[gamma])
 
@@ -108,7 +108,7 @@ def expand_fine_vectors(plan, per_primary):
 
         net = int(config.primary_trees[gamma].num_early_triggers)
         for e in range(1, net + 1):
-            ichild = int(config.dedispersion_tree_index(gamma, e))
+            ichild = int(plan.dedispersion_tree_index(gamma, e))
             out[ichild] = restrict_fine_vector(y, plan, iparent, ichild)
 
     assert all(x is not None for x in out)
@@ -171,6 +171,7 @@ class VarianceMultiMap:
             raise RuntimeError('VarianceMultiMap: expected at least one per-primary-tree map')
 
         npri = int(config.num_primary_trees)
+        plan = make_plan(config) if (plan is None) else plan
 
         # A multimap must cover EVERY primary tree: that is what makes it the unit production
         # and the sweep both work in. A short list is a bug in whatever assembled it, not a
@@ -189,7 +190,7 @@ class VarianceMultiMap:
 
             # No theorem covers this: it is a property of whatever assembled the list, not of
             # the config, and restricting FROM the wrong map would be silent.
-            want = int(config.dedispersion_tree_index(gamma, 0))
+            want = int(plan.dedispersion_tree_index(gamma, 0))
             if m.itree != want:
                 raise RuntimeError(f'VarianceMultiMap: maps[{gamma}].itree = {m.itree}, but'
                                    f' primary tree {gamma} has its early_trigger_level == 0'
@@ -206,7 +207,6 @@ class VarianceMultiMap:
                 raise RuntimeError(f'VarianceMultiMap: maps[{gamma}] holds a different'
                                    ' Detrender2dParams than the multimap')
 
-        plan = make_plan(config) if (plan is None) else plan
         ntrees = int(plan.ntrees)
 
         object.__setattr__(self, 'config', config)
@@ -234,7 +234,7 @@ class VarianceMultiMap:
     def primary_map(self, gamma):
         """The stored VarianceMap of primary tree 'gamma'.
 
-        Its ``itree`` is ``config.dedispersion_tree_index(gamma, 0)``, which is NOT gamma.
+        Its ``itree`` is ``plan.dedispersion_tree_index(gamma, 0)``, which is NOT gamma.
         """
         npri = self.num_primary_trees
         if not (0 <= gamma < npri):

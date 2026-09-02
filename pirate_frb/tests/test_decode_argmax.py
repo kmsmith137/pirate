@@ -79,7 +79,7 @@ def _test_plan_yaml(config):
     # A minimal plan has no MegaRingbuf, so its yaml is the plan yaml minus that one key.
     doc = yaml.safe_load(s)
     assert 'mega_ringbuf' not in doc
-    assert doc['ntrees'] == p.ntrees == config.num_dedispersion_trees
+    assert doc['ntrees'] == p.ntrees
 
     p2 = DedispersionPlan.from_yaml_string(config, s)
     assert p2.to_yaml_string() == s

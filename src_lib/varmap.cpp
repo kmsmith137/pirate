@@ -639,7 +639,7 @@ SdPlan::SdPlan(const DedispersionPlan &plan, const Array<double> &freq_variances
     // constructor and is not a config field at all, so no config can ask for anything else.
     config.validate();
 
-    this->itree0 = config.dedispersion_tree_index(0, 0);
+    this->itree0 = plan.dedispersion_tree_index(0, 0);
 
     // A COPY of the plan's tree, not the plan itself: a DedispersionPlan has const members and so
     // is not assignable, a reference would dangle, and copying a complete plan would drag along
@@ -1193,7 +1193,7 @@ expand_fine_vectors(const DedispersionPlan &plan, const std::vector<Array<double
 
     for (long gamma = 0; gamma < npri; gamma++) {
         // See the appendix's fact (a): every primary tree HAS an e == 0 tree, so this cannot fail.
-        long iparent = config.dedispersion_tree_index(gamma, 0);
+        long iparent = plan.dedispersion_tree_index(gamma, 0);
         const DedispersionTree &parent = plan.trees.at(iparent);
 
         long D = 1L << (parent.total_rank() - parent.frequency_subbands.pf_rank);
@@ -1212,7 +1212,7 @@ expand_fine_vectors(const DedispersionPlan &plan, const std::vector<Array<double
 
         long net = config.primary_trees.at(gamma).num_early_triggers;
         for (long e = 1; e <= net; e++) {
-            long ichild = config.dedispersion_tree_index(gamma, e);
+            long ichild = plan.dedispersion_tree_index(gamma, e);
             out[ichild] = restrict_fine_vector(y.data, y.size, plan, iparent, ichild);
         }
     }
@@ -1247,7 +1247,7 @@ compute_detrender_free_varfine(const DedispersionPlan &plan, const Array<double>
     // Same argument for the restriction geometry: O(N) per tree, and it decides whether the slice
     // below is legitimate at all.
     long npri = config.num_primary_trees();
-    long itree0 = config.dedispersion_tree_index(0, 0);
+    long itree0 = plan.dedispersion_tree_index(0, 0);
     const DedispersionTree &tree0 = plan.trees.at(itree0);
     long M0 = tree0.frequency_subbands.M;
     long D0 = 1L << (tree0.total_rank() - tree0.frequency_subbands.pf_rank);
@@ -1255,13 +1255,13 @@ compute_detrender_free_varfine(const DedispersionPlan &plan, const Array<double>
 
     std::vector<long> Ps;
     for (long g = 1; g < npri; g++)
-        Ps.push_back(plan.trees.at(config.dedispersion_tree_index(g, 0)).nprofiles);
+        Ps.push_back(plan.trees.at(plan.dedispersion_tree_index(g, 0)).nprofiles);
 
     // The slice's one silently-failing precondition, and the only one of Proposition 2's three
     // facts left as a check: the other primary trees must see the same multiplets in the same
     // order, or the slice below is taking the wrong rows.
     for (long g = 1; g < npri; g++) {
-        std::vector<long> m_map = plan.m_index_mapping(itree0, config.dedispersion_tree_index(g, 0));
+        std::vector<long> m_map = plan.m_index_mapping(itree0, plan.dedispersion_tree_index(g, 0));
         xassert_eq(long(m_map.size()), M0);
         for (long m = 0; m < M0; m++)
             xassert_eq(m_map[m], m);

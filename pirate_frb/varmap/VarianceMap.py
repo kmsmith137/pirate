@@ -417,12 +417,13 @@ class VarianceMap:
                                ' so they are meaningless for a dense map.')
 
         itree = int(itree)
-        ntrees = int(config.num_dedispersion_trees)
+        plan = make_plan(config) if (plan is None) else plan
+
+        ntrees = int(plan.ntrees)
         if not (0 <= itree < ntrees):
             raise RuntimeError(f'VarianceMap: itree={itree} is out of range for this config,'
                                f' which has {ntrees} dedispersion trees')
 
-        plan = make_plan(config) if (plan is None) else plan
         tree = plan.trees[itree]
         fs = tree.frequency_subbands
         m_to_n, n_level, n_to_mbase = _subband_tables(tree)

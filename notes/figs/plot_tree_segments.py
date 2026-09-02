@@ -23,7 +23,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from pirate_frb import DedispersionConfig
+from pirate_frb import DedispersionConfig, DedispersionPlan
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(_HERE, "..", "..", "configs", "dedispersion", "chord_sb2_et.yml")
@@ -35,21 +35,29 @@ ET_COLORS = ["#1f4e8c", "#2e8b3d", "#c44e1f", "#8a4fbf"]
 
 def build_trees(config):
     """Return list of per-tree dicts (p, e, dm_lo/hi, lat_lo/hi), and the
-    DM octave boundaries. Mirrors the DedispersionPlan tree construction."""
-    r = config.toplevel_tree_rank
+    DM octave boundaries.
+
+    The trees come from a DedispersionPlan, which is the only place the tree geometry
+    is defined. The only thing computed here is the triggering LATENCY, which the plan
+    does not carry: a tree at early-trigger level e triggers after 2^-e of the
+    full-band dispersion delay of the burst.
+    """
     dt = config.time_sample_ms / 1000.0          # seconds per (un-downsampled) sample
     dpud = config.dm_per_unit_delay()
 
+    # Params.minimal(): the plan is wanted only for its trees, and this needs no GPU.
+    plan = DedispersionPlan(config, DedispersionPlan.Params.minimal())
+
     trees = []
-    for p, pt in enumerate(config.primary_trees):
-        d_lo = 0 if p == 0 else 2 ** (r + p - 1)  # full-band delay range (samples)
-        d_hi = 2 ** (r + p)
-        for e in range(pt.num_early_triggers, -1, -1):   # earliest trigger first
-            f = 2.0 ** (-e)                       # sub-band / full-band delay ratio
-            trees.append(dict(
-                p=p, e=e,
-                dm_lo=d_lo * dpud, dm_hi=d_hi * dpud,
-                lat_lo=f * d_lo * dt, lat_hi=f * d_hi * dt))
+    for t in plan.trees:
+        e = int(t.early_trigger_level)
+        f = 2.0 ** (-e)                          # sub-band / full-band delay ratio
+        trees.append(dict(
+            p=int(t.primary_tree_index), e=e,
+            dm_lo=t.dm_min, dm_hi=t.dm_max,
+            lat_lo=f * (t.dm_min / dpud) * dt, lat_hi=f * (t.dm_max / dpud) * dt))
+
+    r = config.toplevel_tree_rank
     octaves = [2 ** (r + p) * dpud for p in range(config.num_primary_trees)]
     return trees, octaves
 

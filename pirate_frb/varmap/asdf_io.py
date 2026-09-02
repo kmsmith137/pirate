@@ -39,7 +39,7 @@ The tree
       provenance:      dict                # free-form; how the SWEEP was run
       trees:                                # ONE ENTRY PER PRIMARY TREE, keyed by 'gamma'
         - gamma:              int          # primary_tree_index; the entry KEY
-          itree:              int          # = dedispersion_tree_index(gamma, 0); derived
+          itree:              int          # = plan.dedispersion_tree_index(gamma, 0); derived
           m_to_n:             (M,) int64
           is_coarse_grained:  bool
           L:                  int or None

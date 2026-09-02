@@ -111,6 +111,19 @@ def _tree(config, itree):
     return make_plan(config).trees[int(itree)]
 
 
+def _itree(config, primary_tree_index, early_trigger_level=0):
+    """The 'itree' of one tree of 'config', named by (primary_tree_index,
+    early_trigger_level). Same throwaway-plan convention as _tree() above: library code
+    should hold the plan and call DedispersionPlan.dedispersion_tree_index() on it."""
+    return int(make_plan(config).dedispersion_tree_index(primary_tree_index,
+                                                        early_trigger_level))
+
+
+def _ntrees(config):
+    """The number of dedispersion trees of 'config' (= plan.ntrees). See _tree() above."""
+    return int(make_plan(config).ntrees)
+
+
 def _rng(seed=None):
     """A fresh numpy Generator for one test, seeded from the master --seed.
 
@@ -311,7 +324,7 @@ def test_index_arithmetic(r=8, subband_counts=(2,2,1), num_early_triggers=1):
     rng = _rng()
     config = _random_config(rng)
 
-    for itree in range(config.num_dedispersion_trees):
+    for itree in range(_ntrees(config)):
         m = _random_map(config, itree, rng)
         R, N, P = m.pf_rank, m.nsubbands, m.nprofiles
 
@@ -460,7 +473,7 @@ def test_coarse_grain(r=8, subband_counts=(2,2,1), num_early_triggers=1):
     rng = _rng()
     config = _random_config(rng)
 
-    for itree in range(config.num_dedispersion_trees):
+    for itree in range(_ntrees(config)):
         m = _random_map(config, itree, rng, nzero=2)
         R = m.pf_rank
 
@@ -976,7 +989,7 @@ def test_multimap(r=8, subband_counts=(2,1), num_primary_trees=2, num_early_trig
 
     rng = _rng()
     config = _random_config(rng)
-    ntrees = int(config.num_dedispersion_trees)
+    ntrees = _ntrees(config)
     npri = int(config.num_primary_trees)
     nets = [int(pt.num_early_triggers) for pt in config.primary_trees]
     # COMPUTED from the config, not from arguments: make_random() gives each primary tree its
@@ -987,7 +1000,7 @@ def test_multimap(r=8, subband_counts=(2,1), num_primary_trees=2, num_early_trig
     # itree is NOT gamma: early_trigger_level descends within a family, so the (gamma, 0)
     # tree is the LAST of its block. That is only VISIBLE when some family has an early
     # trigger; with none, itree and gamma coincide and there is nothing to distinguish.
-    iparents = [int(config.dedispersion_tree_index(g, 0)) for g in range(npri)]
+    iparents = [_itree(config, g) for g in range(npri)]
     assert (max(nets) == 0) or (iparents != list(range(npri)))
 
     maps = [_random_map(config, i, rng) for i in iparents]
@@ -1344,10 +1357,10 @@ def test_asdf_io(r=8, subband_counts=(2,2,1), num_primary_trees=4, num_early_tri
 
     rng = _rng()
     config = _random_config(rng)
-    ntrees = int(config.num_dedispersion_trees)
+    ntrees = _ntrees(config)
     npri = int(config.num_primary_trees)
     # itree is NOT gamma: the (gamma, 0) tree is the LAST of its family.
-    iparents = [int(config.dedispersion_tree_index(g, 0)) for g in range(npri)]
+    iparents = [_itree(config, g) for g in range(npri)]
     # NO npri REQUIREMENT. The four representation axes below are drawn PER MAP rather than
     # assigned one-per-tree, which is what used to need four primary trees. Measured over 120
     # fully random configs (58 of them npri == 1), that round-trips 120/120 and reaches all
@@ -1620,7 +1633,7 @@ def test_asdf_detrender(r=7, subband_counts=(2,1)):
     try:
         path = os.path.join(tmp, 'det.asdf')
         npri = int(config.num_primary_trees)
-        iparents = [int(config.dedispersion_tree_index(g, 0)) for g in range(npri)]
+        iparents = [_itree(config, g) for g in range(npri)]
         maps = [_random_map(config, i, rng, detrender=dparams) for i in iparents]
         VarianceMultiMap(config, maps, detrender=dparams).write_asdf(path)
 
@@ -1683,7 +1696,7 @@ def test_asdf_factored(r=7, subband_counts=(2,1), K=4):
 
         # itree 0 is NOT gamma 0's parent when the config has early triggers -- the (gamma,
         # 0) tree is the LAST of its family -- and a single-map file is keyed by gamma.
-        itree0 = int(config.dedispersion_tree_index(0, 0))
+        itree0 = _itree(config, 0)
         tree = _tree(config, itree0)
         fs = tree.frequency_subbands
         Lc = int(fs.pf_rank) + 1
@@ -2893,9 +2906,9 @@ def test_svd_optimize(r=None, subband_counts=None, K=5, j=3):
     rng = _rng()
     config = _random_config(rng)
     # _nalpha_of() takes the TREE INDEX, and the base tree is not always index 0 -- with early
-    # triggers dedispersion_tree_index(0, 0) can be anything. Passing a literal 0 here built Q
+    # triggers the (gamma=0, e=0) tree can be at any index. Passing a literal 0 here built Q
     # at another tree's row count and VarianceMap rejected it, on the draws where they differ.
-    itree = int(config.dedispersion_tree_index(0, 0))
+    itree = _itree(config, 0)
     nbeta, nfreq = _nalpha_of(config, itree), int(config.get_total_nfreq())
 
     Q = rng.standard_normal((nbeta, K))
@@ -3700,7 +3713,7 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
 
     for (config, label) in configs:
         npri = int(config.num_primary_trees)
-        tree0 = _tree(config, int(config.dedispersion_tree_index(0, 0)))
+        tree0 = _tree(config, _itree(config, 0))
         r0, R = int(tree0.total_rank()), int(tree0.frequency_subbands.pf_rank)
 
         # The legal range is the DOWNSAMPLED trees', not the base tree's: [R, r0] at npri == 1
@@ -3725,7 +3738,7 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
             n_coarse += int(L is not None)
 
             for (gamma, m) in enumerate(mm.maps):
-                itree = int(config.dedispersion_tree_index(gamma, 0))
+                itree = _itree(config, gamma)
                 assert m.itree == itree, (label, gamma, m.itree, itree)
                 assert m.config is config and m.detrender is None
                 assert m.is_admissible == base.is_admissible
@@ -3862,7 +3875,7 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
         # this mode -- there is no SdMatrix here to check a capacity or a duplicate row
         # against. These configs are small enough to pay for them.
         got = compute_detrender_free_varfine(config, v, debug=True)
-        assert len(got) == int(config.num_dedispersion_trees), (label, len(got))
+        assert len(got) == _ntrees(config), (label, len(got))
 
         # The returned arrays are ordinary writeable ones and MUST NOT ALIAS EACH OTHER, or a
         # caller mutating one tree's result silently corrupts another's. The gamma > 0 slices
@@ -3883,7 +3896,7 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
         # ---- (1) bitwise against y_true, every primary tree.
         ones = compute_detrender_free_varfine(config, np.ones(nfreq))
         for gamma in range(npri):
-            it = int(config.dedispersion_tree_index(gamma, 0))
+            it = _itree(config, gamma)
             if not np.array_equal(ones[it].reshape(-1), np.asarray(mm.maps[gamma].y_true)):
                 atomic_print(f'test_varfine: FAILED on {label}: varfine(ones) is not BITWISE'
                              f' equal to primary tree {gamma}\'s y_true, so the two no longer'
@@ -3979,7 +3992,7 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
     # silently would hand back a fine, untruncated result to a caller who asked otherwise.
     # Lmat drawn from the config's own legal range: a literal can be outside [R, r], and then
     # SdPlan raises for that reason instead of the one under test.
-    _t = _tree(config, int(config.dedispersion_tree_index(0, 0)))
+    _t = _tree(config, _itree(config, 0))
     _Lmat = int(_t.frequency_subbands.pf_rank)
     for kwargs in [dict(Lmat=_Lmat), dict(epsilon=1.0e-9)]:
         try:
@@ -4174,7 +4187,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
         n_et += int(any(int(pt.num_early_triggers) > 0 for pt in config.primary_trees))
 
         for (gamma, vmap) in enumerate(mm.maps):
-            A = np.asarray(As[int(config.dedispersion_tree_index(gamma, 0))])
+            A = np.asarray(As[_itree(config, gamma)])
             # force=True: dense() guards against forming a production-scale matrix, but the
             # sweep above has already materialized one of exactly this shape for EVERY tree,
             # so the budget that matters was spent long before this line.
@@ -4258,7 +4271,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
         # visible. Same 1e-5 / exact-zero bars as the map comparison, and the same reason.
         v = rng.uniform(0.5, 1.5, size=int(config.get_total_nfreq()))
         yf = compute_detrender_free_varfine(config, v)
-        for itree in range(int(config.num_dedispersion_trees)):
+        for itree in range(_ntrees(config)):
             A = np.asarray(As[itree])
             want = A @ v
             got = np.asarray(yf[itree]).reshape(-1)
@@ -4276,7 +4289,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
             e0 = float(np.abs(got[~nz]).max()) if np.any(~nz) else 0.0
             if (e >= 1.0e-5) or (e0 != 0.0):
                 atomic_print(f'test_multimap_vs_sweep: FAILED varfine on {label}, tree'
-                             f' {itree} of {int(config.num_dedispersion_trees)}, with'
+                             f' {itree} of {_ntrees(config)}, with'
                              f' on-support error {e:.3g} and off-support leakage {e0:.3g}'
                              f' (which must be exactly zero). The config'
                              f' was:\n{config.to_yaml_string()}')
@@ -4286,7 +4299,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
 
         # ---- Proposition 1, sweep against sweep. See the docstring.
         for gamma in range(npri):
-            iparent = int(config.dedispersion_tree_index(gamma, 0))
+            iparent = _itree(config, gamma)
             parent = _tree(config, iparent)
             fsp = parent.frequency_subbands
             D = 1 << (int(parent.total_rank()) - int(fsp.pf_rank))
@@ -4297,7 +4310,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
                      for n in range(int(fsp.N))}
 
             for e in range(1, int(config.primary_trees[gamma].num_early_triggers) + 1):
-                ichild = int(config.dedispersion_tree_index(gamma, e))
+                ichild = _itree(config, gamma, e)
                 child = _tree(config, ichild)
                 fsc = child.frequency_subbands
                 M_c = int(fsc.M)
@@ -4979,7 +4992,7 @@ def test_apply_restriction(r=6, subband_counts=(4,2,1), num_primary_trees=2,
     ncheck = nontrivial = 0
 
     for gamma in range(npri):
-        iparent = int(config.dedispersion_tree_index(gamma, 0))
+        iparent = _itree(config, gamma)
         parent = _tree(config, iparent)
         pm = _random_map(config, iparent, rng)
         if L is not None:
@@ -4991,7 +5004,8 @@ def test_apply_restriction(r=6, subband_counts=(4,2,1), num_primary_trees=2,
         assert y_fine.shape == (D * M_p * P,)
 
         for e in range(int(config.primary_trees[gamma].num_early_triggers) + 1):
-            child = _tree(config, int(config.dedispersion_tree_index(gamma, e)))
+            ichild = _itree(config, gamma, e)
+            child = _tree(config, ichild)
             fsc = child.frequency_subbands
             M_c = int(fsc.M)
 
@@ -5004,8 +5018,7 @@ def test_apply_restriction(r=6, subband_counts=(4,2,1), num_primary_trees=2,
                 np_ = pband[(child.n_to_toplevel_flo(nc), child.n_to_toplevel_fhi(nc))]
                 m_map.append(int(parent.frequency_subbands.n_to_mbase[np_]) + int(fsc.m_to_d[mc]))
 
-            got = restrict_fine_vector(y_fine, make_plan(config), iparent,
-                                       int(config.dedispersion_tree_index(gamma, e)))
+            got = restrict_fine_vector(y_fine, make_plan(config), iparent, ichild)
             assert got.shape == (D, M_c, P), (got.shape, (D, M_c, P))
 
             want = np.empty((D, M_c, P))
@@ -5091,14 +5104,14 @@ def test_restriction_representation(r=6, subband_counts=(4,2,1), num_early_trigg
     v = rng.uniform(0.5, 2.0, size=nfreq)
 
     plan = make_plan(config)
-    iparent = int(config.dedispersion_tree_index(0, 0))
+    iparent = int(plan.dedispersion_tree_index(0, 0))
 
     fac, dense_A = _factored_map(config, iparent, rng, K=K)
     dense = VarianceMap.from_dense(config, iparent, dense_A)
 
     worst = 0.0
     for e in range(int(config.primary_trees[0].num_early_triggers) + 1):
-        ichild = int(config.dedispersion_tree_index(0, e))
+        ichild = int(plan.dedispersion_tree_index(0, e))
         a = restrict_fine_vector(fac.apply_fine(v), plan, iparent, ichild)
         b = restrict_fine_vector(dense.apply_fine(v), plan, iparent, ichild)
         assert a.shape == b.shape
@@ -5143,7 +5156,7 @@ def test_restriction_vs_sweep(r=6, subband_counts=(4,2,1), num_primary_trees=1,
     worst, worst_where, npairs, nontrivial = 0.0, None, 0, 0
 
     for gamma in range(int(config.num_primary_trees)):
-        iparent = int(config.dedispersion_tree_index(gamma, 0))
+        iparent = _itree(config, gamma)
         parent = _tree(config, iparent)
         fsp = parent.frequency_subbands
         D = 1 << (parent.total_rank() - fsp.pf_rank)
@@ -5155,7 +5168,7 @@ def test_restriction_vs_sweep(r=6, subband_counts=(4,2,1), num_primary_trees=1,
                  for n in range(int(fsp.N))}
 
         for e in range(1, int(config.primary_trees[gamma].num_early_triggers) + 1):
-            ichild = int(config.dedispersion_tree_index(gamma, e))
+            ichild = _itree(config, gamma, e)
             child = _tree(config, ichild)
             fsc = child.frequency_subbands
             M_c = int(fsc.M)
