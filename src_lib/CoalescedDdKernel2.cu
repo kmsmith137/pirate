@@ -66,7 +66,7 @@ static CoalescedDdKernel2::RegistryKey _make_registry_key(
 static CoalescedDdKernel2::RegistryKey _make_tree_key(
     const Dtype &dtype, const DedispersionTree &tree)
 {
-    return _make_key(dtype, tree.dd_rank, tree.pf.max_width,
+    return _make_key(dtype, tree.dd_rank, tree.primary_tree.max_width,
                      tree.nt_ds, tree.nt_wt,
                      tree.frequency_subbands.subband_counts);
 }

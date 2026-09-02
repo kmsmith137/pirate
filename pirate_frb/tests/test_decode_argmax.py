@@ -199,7 +199,7 @@ def _num_chunks(plan, r_top, nt_in):
     """
     depth = 0
     for tree in plan.trees:
-        wmax = tree.pf.max_width
+        wmax = tree.primary_tree.max_width
         tpad = max(2 * wmax, 4)
         ds = 2 ** (r_top - tree.early_trigger_level) + 4 * wmax + tpad   # downsampled samples
         depth = max(depth, ds * 2 ** tree.primary_tree_index)            # full-res samples
@@ -292,7 +292,7 @@ def _sample_tuples(plan, kinfo, interesting_ms, ntuples):
 
     Biases m toward subband/fine-dm extremes, p and t toward their extremes, cells
     toward corners. Note 'm' here is the token's m-field, i.e. m_ext = (m << K) | mu when
-    the tree has xdm_rank() = K > 0, so sweeping it sweeps the extra-DM index too."""
+    the tree has xdm_rank = K > 0, so sweeping it sweeps the extra-DM index too."""
 
     def _pick(lo_hi_n):
         return random.choice(lo_hi_n)
@@ -402,7 +402,7 @@ def _check_bad_tokens(plan, kinfo):
         raise AssertionError(f"decode_argmax{args} should have thrown")
 
     # M is the peak-finder's M_ext (see test_decode_argmax), so this is the smallest
-    # out-of-range m-field, not (fs.M << 16), which is a VALID token when xdm_rank() > 0.
+    # out-of-range m-field, not (fs.M << 16), which is a VALID token when xdm_rank > 0.
     expect_throw(M << 16, itree, Dcore, 0, 0)          # m out of range
     expect_throw(P << 8, itree, Dcore, 0, 0)           # p out of range
     if Dout < 256:
@@ -503,7 +503,7 @@ def test_decode_argmax():
 
     # Per-tree (M_ext, P, Dout, Dcore), from a scout ReferenceDedisperser.
     #
-    # NOTE the first element is M_ext = (fs.M << K) with K = tree.xdm_rank(), i.e. the range
+    # NOTE the first element is M_ext = (fs.M << K) with K = tree.xdm_rank, i.e. the range
     # of the argmax token's m-field, NOT the tree's multiplet count fs.M. The tokens built
     # below from 0 <= m < M_ext sweep the (multiplet, extra-DM) pairs m_ext = (m << K) | mu,
     # which is precisely what decode_argmax() has to take apart -- and (M_ext << 16) is the
@@ -519,8 +519,8 @@ def test_decode_argmax():
     xdm_ranks = []
     for itree in range(plan.ntrees):
         tree = plan.trees[itree]
-        xdm_ranks.append(tree.xdm_rank())
-        assert kinfo[itree][0] == (tree.frequency_subbands.M << tree.xdm_rank())
+        xdm_ranks.append(tree.xdm_rank)
+        assert kinfo[itree][0] == (tree.frequency_subbands.M << tree.xdm_rank)
     atomic_print(f'test_decode_argmax: xdm_rank by tree = {xdm_ranks}')
 
     # The Dcores argument must reach the peak-finding kernels: everything below decodes
@@ -532,7 +532,7 @@ def test_decode_argmax():
 
     # Per tree: one token per distinct decoded band (fmin, fmax), i.e. per subband. (Several
     # m-field values map to one band -- the fine dms of a multiplet run, and with
-    # xdm_rank() > 0 the extra-DM index as well -- so the dict dedupes them.)
+    # xdm_rank > 0 the extra-DM index as well -- so the dict dedupes them.)
     # Also collect the first/last m-field value of each band, used to bias the P1/P2/P3
     # tuple sampling toward the extremes.
     tree_bands = []

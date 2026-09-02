@@ -475,7 +475,7 @@ struct ReferenceDedisperserBase
     std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
 
     // Length ntrees, constructed from plan->stage2_pf_params verbatim. NOTE their argmax
-    // token m-field is m_ext = (m << K) | mu with K = tree.xdm_rank(), not the tree's own
+    // token m-field is m_ext = (m << K) | mu with K = tree.xdm_rank, not the tree's own
     // multiplet index m -- which is what makes the tokens identical to a cdd2 kernel's.
     // K is zero except in early-trigger trees.
     std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;
@@ -505,10 +505,10 @@ struct ReferenceDedisperserBase
     //
     //   (beams_per_batch, Dpf, t.frequency_subbands.M, t.nt_ds)   with t = trees[itree]
     //
-    // where Dpf = (t.ndm_out << t.xdm_rank()) = 2^(r-R) is the tree's FULL coarse-DM count.
+    // where Dpf = (t.ndm_out << t.xdm_rank) = 2^(r-R) is the tree's FULL coarse-DM count.
     // This is the same layout as GpuSbDedispersionKernel's 'sb_out', which is what lets a CPU
     // variance sweep mirror a GPU one line for line. Its row order (coarse dm, multiplet) does
-    // not depend on xdm_rank(), unlike the peak-finder's m_ext multiplet index -- which is why
+    // not depend on xdm_rank, unlike the peak-finder's m_ext multiplet index -- which is why
     // a variance calculation should run a ReferencePfSquare over THIS array rather than
     // resolving anything by the peak-finder's convention.
     //
@@ -526,7 +526,7 @@ struct ReferenceDedisperserBase
     //
     //   (beams_per_batch, ndm << K, trees[itree].frequency_subbands.M, trees[itree].nt_ds)
     //
-    // with K = trees[itree].xdm_rank(), since the dedispersion kernel emits 2^K DM channels
+    // with K = trees[itree].xdm_rank, since the dedispersion kernel emits 2^K DM channels
     // per peak-finder DM channel.
     //
     // Allocating here rather than at each call site is what lets the out_sb[itree] view --

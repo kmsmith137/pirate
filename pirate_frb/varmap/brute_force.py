@@ -343,7 +343,7 @@ class _SweepGeometry:
         for itree in range(self.ntrees):
             t = plan.trees[itree]
             fs = t.frequency_subbands
-            r, R = int(t.total_rank()), int(fs.pf_rank)
+            r, R = int(t.total_rank), int(fs.pf_rank)
             gamma = int(t.primary_tree_index)
 
             # Note there is deliberately NO constraint on the peak-finder's Dcore. Both
@@ -356,7 +356,7 @@ class _SweepGeometry:
             # rows whatever K is; K only says how many of them the PEAK-FINDER max-reduces
             # into one output row, and neither sweep runs a peak-finder.
 
-            wmax = int(t.pf.max_width)
+            wmax = int(t.primary_tree.max_width)
             ddspread = 1 << (int(config.toplevel_tree_rank) - int(t.early_trigger_level))
 
             self.tree_gamma.append(gamma)
@@ -542,7 +542,7 @@ class _CpuChain:
         # (Dpf, M) pair is simply flattened into its 'ndm' row count -- exactly as _GpuSweep
         # does with sb_out.
         self.pf_squares = [
-            ReferencePfSquare(int(g.plan.trees[i].pf.max_width), 1, 1,
+            ReferencePfSquare(int(g.plan.trees[i].primary_tree.max_width), 1, 1,
                               g.tree_D[i] * g.tree_M[i], g.tree_nt_ds[i])
             for i in range(g.ntrees)]
 
@@ -741,7 +741,7 @@ class _GpuPipeline:
                 GpuSbDedispersionKernel(p2, plan.trees[itree].frequency_subbands))
             # Every axis except time is a spectator to GpuPfSquare, so sb_out's (Dpf, M) pair
             # is simply flattened into its 'ndm' row count.
-            self.pf_kernels.append(GpuPfSquare(int(plan.trees[itree].pf.max_width),
+            self.pf_kernels.append(GpuPfSquare(int(plan.trees[itree].primary_tree.max_width),
                                                geom.nbeams, geom.nbeams,
                                                geom.tree_D[itree] * geom.tree_M[itree],
                                                geom.tree_nt_ds[itree]))
@@ -1089,7 +1089,7 @@ class _Accumulator:
         for itree in range(geom.ntrees):
             tree = self.trees[itree]
             fs = tree.frequency_subbands
-            r, R = int(tree.total_rank()), int(fs.pf_rank)
+            r, R = int(tree.total_rank), int(fs.pf_rank)
 
             L = self.Ls[itree]
             if L is None:

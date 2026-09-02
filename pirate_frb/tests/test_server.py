@@ -631,7 +631,7 @@ class ServerTester:
         prec = {np.dtype(np.float16): 1.0e-3,
                 np.dtype(np.float32): 1.0e-6,
                 np.dtype(np.float64): 1.0e-15}[p['config'].dtype]
-        self.eps = [ 5.0 * prec * math.sqrt(tr.primary_tree_index + tr.total_rank() + 2) for tr in trees ]
+        self.eps = [ 5.0 * prec * math.sqrt(tr.primary_tree_index + tr.total_rank + 2) for tr in trees ]
 
         # First child message: the handshake echo (arrives once the producer's
         # handshake completes; the queue orders it before any outputs).

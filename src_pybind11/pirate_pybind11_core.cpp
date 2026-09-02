@@ -981,11 +981,12 @@ void register_core_bindings(pybind11::module &m)
         "- ``frequency_subbands`` (FrequencySubbands) -- the subbands searched in this tree.\n"
         "  Can be a strict subset of the config's subbands: early triggers and downsampling\n"
         "  restrict which ones a given tree searches.\n"
-        "- ``pf`` (PrimaryTree) -- an exact copy of ``config.primary_trees[primary_tree_index]``\n"
+        "- ``primary_tree`` (PrimaryTree) -- an exact copy of\n"
+        "  ``config.primary_trees[primary_tree_index]``\n"
         "  (nothing is resolved into it -- the resolved factors are ``dm_downsampling`` and\n"
         "  ``time_downsampling`` below).\n"
         "- ``nprofiles`` (int) -- number of peak-finder time profiles, equal to\n"
-        "  ``1 + 3*log2(pf.max_width)``.\n"
+        "  ``1 + 3*log2(primary_tree.max_width)``.\n"
         "- ``ndm_out``, ``nt_out`` (int) -- this tree's ``out_max`` and ``out_argmax`` arrays\n"
         "  have shape ``(beams_per_batch, ndm_out, nt_out)``.\n"
         "- ``ndm_wt``, ``nt_wt`` (int) -- this tree's weights array has shape\n"
@@ -1001,24 +1002,26 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("amb_rank", &DedispersionTree::amb_rank)
           .def_readonly("dd_rank", &DedispersionTree::dd_rank)
           .def_readonly("nt_ds", &DedispersionTree::nt_ds)
-          .def("total_rank", &DedispersionTree::total_rank,
+          .def_readonly("total_rank", &DedispersionTree::total_rank,
                "Total tree rank, ``amb_rank + dd_rank``. Equal to\n"
-               "``toplevel_tree_rank() - early_trigger_level``, minus one more if\n"
+               "``toplevel_tree_rank - early_trigger_level``, minus one more if\n"
                "``primary_tree_index > 0``.")
-          .def("toplevel_tree_rank", &DedispersionTree::toplevel_tree_rank,
-               "The ``toplevel_tree_rank`` of the config this tree came from, recovered from\n"
-               "the tree's own members.")
-          .def("xdm_rank", &DedispersionTree::xdm_rank,
+          .def_readonly("toplevel_tree_rank", &DedispersionTree::toplevel_tree_rank,
+               "The ``toplevel_tree_rank`` of the config this tree came from.")
+          .def_readonly("dd_rank1", &DedispersionTree::dd_rank1,
+               "The GPU kernel's second-stage rank, ``(dd_rank+1)//2``. This tree's\n"
+               "``dm_downsampling`` is ``2**dd_rank1``, and ``xdm_rank`` is measured\n"
+               "against it.")
+          .def_readonly("xdm_rank", &DedispersionTree::xdm_rank,
                "Number of \"extra DM\" bits that this tree's cdd2 kernel folds into the\n"
                "m-field of its ``out_argmax`` tokens, i.e. ``K`` in\n"
                "``token = t | (p << 8) | (mu << 16) | (m << (16+K))``.\n\n"
-               "Equal to ``dd_rank1 - frequency_subbands.pf_rank``, where\n"
-               "``dd_rank1 = (dd_rank+1)//2`` is the GPU kernel's second-stage rank. Zero\n"
-               "unless the tree has an early trigger: an early trigger drops subband levels\n"
-               "faster than it drops tree rank.")
+               "Equal to ``dd_rank1 - frequency_subbands.pf_rank``. Zero unless the tree has\n"
+               "an early trigger: an early trigger drops subband levels faster than it drops\n"
+               "tree rank.")
           .def("n_to_toplevel_flo", &DedispersionTree::n_to_toplevel_flo, py::arg("n"),
                "Lowest toplevel tree-freq channel of subband ``n`` (INCLUSIVE).\n\n"
-               "Channels of the ``2**toplevel_tree_rank()`` gridding, so subbands of\n"
+               "Channels of the ``2**toplevel_tree_rank`` gridding, so subbands of\n"
                "different trees of one config are directly comparable.")
           .def("n_to_toplevel_fhi", &DedispersionTree::n_to_toplevel_fhi, py::arg("n"),
                "One past the highest toplevel tree-freq channel of subband ``n``\n"
@@ -1026,14 +1029,10 @@ void register_core_bindings(pybind11::module &m)
                "``DedispersionPlan.decode_argmax()`` reports an inclusive ``fmax``, i.e.\n"
                "``n_to_toplevel_fhi(n) - 1``.")
           .def_readonly("frequency_subbands", &DedispersionTree::frequency_subbands)
-          .def_readonly("pf", &DedispersionTree::pf)
-          .def("dd_rank1", &DedispersionTree::dd_rank1,
-               "The GPU kernel's second-stage rank, ``(dd_rank+1)//2``. This tree's\n"
-               "``dm_downsampling`` is ``2**dd_rank1()``, and ``xdm_rank()`` is measured\n"
-               "against it.")
+          .def_readonly("primary_tree", &DedispersionTree::primary_tree)
           .def_readonly("dm_downsampling", &DedispersionTree::dm_downsampling,
                "DM downsampling factor of the coarse-grained array, relative to this tree\n"
-               "(``= 2**dd_rank1()``).\n\n"
+               "(``= 2**dd_rank1``).\n\n"
                "NOT a config field: it is fixed by the GPU kernel's warp geometry, and\n"
                "``dd_rank1`` varies within a primary-tree family, so no single\n"
                "per-primary-tree value could be right for all of its trees.")
@@ -1041,7 +1040,7 @@ void register_core_bindings(pybind11::module &m)
                "Time downsampling factor of the coarse-grained array, relative to this tree.\n"
                "Equal to ``dm_downsampling``, and likewise not a config field.\n\n"
                "This value is the cdd2 registry key's ``Dout`` (``nt_out = nt_ds /\n"
-               "time_downsampling``), so pinning it to ``2**dd_rank1()`` is also a statement\n"
+               "time_downsampling``), so pinning it to ``2**dd_rank1`` is also a statement\n"
                "about which GPU kernels are compiled -- see the Dout invariant in\n"
                "makefile_helper.autogenerated_cdd2_kernels().")
           .def_readonly("nprofiles", &DedispersionTree::nprofiles)

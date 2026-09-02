@@ -383,7 +383,7 @@ class SdPlan:
         self.tree0 = self.plan.trees[self.itree0]
         fs = self.tree0.frequency_subbands
 
-        self.r, self.R = int(self.tree0.total_rank()), int(fs.pf_rank)
+        self.r, self.R = int(self.tree0.total_rank), int(fs.pf_rank)
         self.N, self.M, self.P = int(fs.N), int(fs.M), int(self.tree0.nprofiles)
         self.nfreq = int(config.get_total_nfreq())
         self.ndm = 1 << (self.r - self.R)
@@ -1190,7 +1190,7 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
     npri = int(config.num_primary_trees)
     itree0 = int(plan.dedispersion_tree_index(0, 0))
     tree0 = trees[itree0]
-    r0, R = int(tree0.total_rank()), int(tree0.frequency_subbands.pf_rank)
+    r0, R = int(tree0.total_rank), int(tree0.frequency_subbands.pf_rank)
 
     # THE LEGAL RANGE FOR 'L' IS THE DOWNSAMPLED TREES', NOT THE BASE TREE'S. Left unchecked
     # this still fails, but loudly and confusingly: VarianceMap.__init__ raises "L=6 is out of
@@ -1470,7 +1470,7 @@ def compute_detrender_free_varcoarse(config, freq_variances, *, progress=False, 
     for (itree, y) in enumerate(varfine):
         tree = trees[itree]
         fs = tree.frequency_subbands
-        L = integer_log2(tree.pf.wt_dm_downsampling)
+        L = integer_log2(tree.primary_tree.wt_dm_downsampling)
 
         # ndm_wt is computed by the DedispersionPlan constructor as 2^r / wt_dm_downsampling,
         # and L here comes from wt_dm_downsampling directly, so this ties the rank the
@@ -1479,7 +1479,7 @@ def compute_detrender_free_varcoarse(config, freq_variances, *, progress=False, 
         # (dm_downsampling <= wt_dm_downsampling <= 2^r, with pf_rank <= log2(dm_downsampling)
         # -- the same bound varmap.cpp asserts).
         ndm_wt = int(tree.ndm_wt)
-        assert (1 << (int(tree.total_rank()) - L)) == ndm_wt, (itree, L, ndm_wt)
+        assert (1 << (int(tree.total_rank) - L)) == ndm_wt, (itree, L, ndm_wt)
 
         yc = coarse_grain_vector(tree, y.reshape(-1), L)
         out.append(yc.reshape(ndm_wt, int(fs.N), int(tree.nprofiles)))

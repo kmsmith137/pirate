@@ -11,8 +11,8 @@ namespace pirate {
 
 
 // DedispersionTree: a "data" class representing the output of the dedisperser, for one
-// choice of (primary tree, early trigger). Its member functions are all trivial derived
-// quantities.
+// choice of (primary tree, early trigger). Every member is filled by the DedispersionPlan
+// constructor; the only member functions are the two toplevel-channel accessors below.
 //
 // Trees are created in the DedispersionPlan constructor, which is the only place the geometry
 // is implemented, and get copied out of DedispersionPlan::trees by the dedisperser classes
@@ -30,30 +30,35 @@ struct DedispersionTree
     int dd_rank = 0;               // Active rank of this DedispersionTree (= amb_rank of stage1 tree, minus early_trigger_level)
     int nt_ds = 0;                 // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(primary_tree_index))
 
-    // Total tree rank. (For its relation to the config's toplevel rank, see
-    // toplevel_tree_rank() just below.)
-    long total_rank() const { return amb_rank + dd_rank; }
+    // The three ranks below, and 'xdm_rank' further down, are derived from the members
+    // above and are filled by the DedispersionPlan constructor. They are deliberately NOT
+    // emitted in the plan yaml: each is a function of fields that ARE emitted, so
+    // DedispersionPlan::from_yaml() recovers them by rebuilding the plan from its config.
 
-    // The toplevel_tree_rank of the DedispersionConfig this tree came from, recovered from
-    // the tree's own members. Named to match DedispersionConfig::toplevel_tree_rank.
-    //
-    // Note '(primary_tree_index > 0)' rather than a bare 'primary_tree_index': the member is
-    // -1 in a default-constructed tree, which the bare form would silently read as 1.
-    long toplevel_tree_rank() const {
-        return total_rank() + ((primary_tree_index > 0) ? 1 : 0) + early_trigger_level;
-    }
+    // Total tree rank (= amb_rank + dd_rank). For its relation to the config's toplevel
+    // rank, see toplevel_tree_rank just below.
+    long total_rank = 0;
+
+    // The toplevel_tree_rank of the DedispersionConfig this tree came from. Named to match
+    // DedispersionConfig::toplevel_tree_rank.
+    // (= total_rank + 1 if primary_tree_index > 0, plus early_trigger_level.)
+    long toplevel_tree_rank = 0;
+
+    // The GPU kernel's second-stage rank (= (dd_rank+1)/2). The DedispersionPlan constructor
+    // pins dm_downsampling to pow2(dd_rank1), and it is what xdm_rank is measured against.
+    long dd_rank1 = 0;
 
     // Subbands searched in this tree.
     // Can differ from DedispersionConfig::frequency_subbands, due to early triggers and downsampling.
     FrequencySubbands frequency_subbands;
 
     // Toplevel-relative tree-freq range spanned by subband 'n', i.e. channels of the
-    // rank-toplevel_tree_rank() gridding. HALF-OPEN, matching FrequencySubbands::n_to_f{lo,hi},
+    // rank-toplevel_tree_rank gridding. HALF-OPEN, matching FrequencySubbands::n_to_f{lo,hi},
     // of which these are just a rescaling:
     //
-    //     0 <= flo < fhi <= pow2(toplevel_tree_rank())
+    //     0 <= flo < fhi <= pow2(toplevel_tree_rank)
     //
-    // with the sharper per-tree bound fhi <= pow2(toplevel_tree_rank() - early_trigger_level).
+    // with the sharper per-tree bound fhi <= pow2(toplevel_tree_rank - early_trigger_level).
     //
     // NOTE DedispersionPlan::decode_argmax() reports an INCLUSIVE upper channel, i.e. its
     // 'fmax' output is n_to_toplevel_fhi(n) - 1.
@@ -63,30 +68,23 @@ struct DedispersionTree
     // Contains members: num_early_triggers, max_width, wt_{dm,time}_downsampling. An EXACT
     // copy of config.primary_trees[primary_tree_index]: the DedispersionPlan constructor
     // resolves nothing into it (the resolved factors are the tree members just below).
-    DedispersionConfig::PrimaryTree pf;
-
-    // The GPU kernel's second-stage rank: the DedispersionPlan constructor pins
-    // dm_downsampling to pow2(dd_rank1), and it is what xdm_rank() is measured against.
-    long dd_rank1() const { return (dd_rank + 1) / 2; }
+    DedispersionConfig::PrimaryTree primary_tree;
 
     // DM downsampling factor of the coarse-grained array, relative to this tree.
-    // Currently "hardwired" to pow2(dd_rank1()).
+    // Currently "hardwired" to pow2(dd_rank1).
     long dm_downsampling = 0;
 
     // Time downsampling factor of the coarse-grained array, relative to this tree.
-    // Currently "hardwired" to pow2(dd_rank1())  [= dm_downsampling]
+    // Currently "hardwired" to pow2(dd_rank1)  [= dm_downsampling]
     long time_downsampling = 0;
 
-    // K = dd_rank1() - frequency_subbands.pf_rank: the number of "extra DM" bits that this
+    // K = dd_rank1 - frequency_subbands.pf_rank: the number of "extra DM" bits that this
     // tree's cdd2 kernel folds into the argmax token's m-field (see CoalescedDdKernel2.hpp).
     // Zero unless the tree has an early trigger.
-    //
-    // Derived from dm_downsampling (which the DedispersionPlan constructor pins to
-    // pow2(dd_rank1())) rather than stored, so it is not one more field for the plan yaml
-    // and its verifier to keep honest.
-    long xdm_rank() const;
+    long xdm_rank = 0;
 
-    // Number of time profiles used in peak-finder. (Equal to 1 + 3*log2(pf.max_width).)
+    // Number of time profiles used in peak-finder.
+    // (Equal to 1 + 3*log2(primary_tree.max_width).)
     long nprofiles = 0;
 
     // For peak-finding array shapes.

@@ -290,7 +290,7 @@ def _nalpha_of(config, itree):
 
     tree = _tree(config, itree)
     fs = tree.frequency_subbands
-    return (1 << (int(tree.total_rank()) - int(fs.pf_rank))) * int(fs.M) * int(tree.nprofiles)
+    return (1 << (int(tree.total_rank) - int(fs.pf_rank))) * int(fs.M) * int(tree.nprofiles)
 
 
 def _random_map(config, itree, rng, *, nzero=0, dtype=np.float64, **kwargs):
@@ -303,7 +303,7 @@ def _random_map(config, itree, rng, *, nzero=0, dtype=np.float64, **kwargs):
 
     tree = _tree(config, itree)
     fs = tree.frequency_subbands
-    nalpha = (1 << (tree.total_rank() - fs.pf_rank)) * fs.M * tree.nprofiles
+    nalpha = (1 << (tree.total_rank - fs.pf_rank)) * fs.M * tree.nprofiles
     A = rng.uniform(0.1, 2.0, size=(nalpha, config.get_total_nfreq())).astype(dtype)
     if nzero > 0:
         A[rng.choice(nalpha, size=nzero, replace=False)] = 0.0
@@ -1035,7 +1035,7 @@ def test_multimap(r=8, subband_counts=(2,1), num_primary_trees=2, num_early_trig
     for itree in range(ntrees):
         tree = _tree(config, itree)
         fs = tree.frequency_subbands
-        D = 1 << (tree.total_rank() - fs.pf_rank)
+        D = 1 << (tree.total_rank - fs.pf_rank)
         assert ys[itree].shape == (D, int(fs.M), int(tree.nprofiles))
 
     res = cvmm.measure_admissibility(cvmm)
@@ -1088,7 +1088,7 @@ def _factored_map(config, itree, rng, K=5, *, L=None, mid='full', nbeta=None, **
     tree = _tree(config, itree)
     fs = tree.frequency_subbands
     if nbeta is None:
-        nbeta = (1 << (tree.total_rank() - fs.pf_rank)) * fs.M * tree.nprofiles
+        nbeta = (1 << (tree.total_rank - fs.pf_rank)) * fs.M * tree.nprofiles
     nfreq = config.get_total_nfreq()
 
     Q = rng.normal(size=(nbeta, K))
@@ -1170,7 +1170,7 @@ def test_factored_equivalence(r=7, subband_counts=(2,1), K=4):
     # signed case is covered by test_factored_algebra, which touches no scoring.)
     tree = _tree(config, 0)
     fs = tree.frequency_subbands
-    nbeta = (1 << (tree.total_rank() - fs.pf_rank)) * fs.M * tree.nprofiles
+    nbeta = (1 << (tree.total_rank - fs.pf_rank)) * fs.M * tree.nprofiles
     Q = rng.uniform(0.5, 1.5, size=(nbeta, K))
     W = rng.uniform(0.5, 1.5, size=(config.get_total_nfreq(), K))
     mid = np.eye(K) + rng.uniform(0.0, 0.2, size=(K, K))
@@ -1696,7 +1696,7 @@ def test_asdf_factored(r=7, subband_counts=(2,1), K=4):
         tree = _tree(config, itree0)
         fs = tree.frequency_subbands
         Lc = int(fs.pf_rank) + 1
-        nb_coarse = (1 << (int(tree.total_rank()) - Lc)) * int(fs.N) * int(tree.nprofiles)
+        nb_coarse = (1 << (int(tree.total_rank) - Lc)) * int(fs.N) * int(tree.nprofiles)
 
         fine, _ = _factored_map(config, itree0, rng, K=K)
         coarse, _ = _factored_map(config, itree0, rng, K=K, L=Lc, nbeta=nb_coarse)
@@ -1826,7 +1826,7 @@ def _draw_lp_cell_config(rng):
         config = _random_config(rng, max_toplevel_rank=6, min_nalpha=0)
         tree = _tree(config, 0)
         fs = tree.frequency_subbands
-        R, rr = int(fs.pf_rank), int(tree.total_rank())
+        R, rr = int(fs.pf_rank), int(tree.total_rank)
         if rr <= R:
             continue
         nbeta = (1 << (rr - R - 1)) * int(fs.N) * int(tree.nprofiles)
@@ -2374,7 +2374,7 @@ def test_lp_negative_rhs():
     rng = _rng()
     config = _draw_lp_cell_config(rng)
     tree = _tree(config, 0)
-    r, R = tree.total_rank(), tree.frequency_subbands.pf_rank
+    r, R = tree.total_rank, tree.frequency_subbands.pf_rank
     L = R + 1
     N, P = tree.frequency_subbands.N, tree.nprofiles
     nbeta = (1 << (r - L)) * N * P
@@ -3710,7 +3710,7 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
     for (config, label) in configs:
         npri = int(config.num_primary_trees)
         tree0 = _tree(config, _itree(config, 0))
-        r0, R = int(tree0.total_rank()), int(tree0.frequency_subbands.pf_rank)
+        r0, R = int(tree0.total_rank), int(tree0.frequency_subbands.pf_rank)
 
         # The legal range is the DOWNSAMPLED trees', not the base tree's: [R, r0] at npri == 1
         # but [R, r0-1] otherwise, since a downsampled primary tree has rank r0-1.
@@ -3744,7 +3744,7 @@ def test_multimap_vs_base(r=6, subband_counts=(2,2,1), nrandom=1, verbose=True):
                 Pg = m.nprofiles
                 n_varying += int(Pg != P0)
                 tree = _tree(config, itree)
-                assert (int(tree.total_rank()), int(tree.frequency_subbands.pf_rank)) \
+                assert (int(tree.total_rank), int(tree.frequency_subbands.pf_rank)) \
                     == (r0 - 1, R), (label, gamma)
                 nbeta = ((1 << (r0 - 1 - L)) * N * Pg) if (L is not None) \
                     else ((D0 // 2) * M * Pg)
@@ -3940,16 +3940,16 @@ def test_varfine(r=7, subband_counts=(2,2,1), num_early_triggers=1, nrandom=1, v
         # The last is why the max check is here rather than just a shape assertion.
         #
         # THE OTHER HALF IS THE SHAPE, and it is not cosmetic. L comes from
-        # tree.pf.wt_dm_downsampling -- a different quantity from any L a caller passes -- and
-        # a transposed reshape changes values without changing the total size. Reading
-        # ndm_wt/N/P back from the TREE is what makes this a check rather than a restatement:
-        # the tree is where the consumer of this array gets its own shape.
+        # tree.primary_tree.wt_dm_downsampling -- a different quantity from any L a caller
+        # passes -- and a transposed reshape changes values without changing the total size.
+        # Reading ndm_wt/N/P back from the TREE is what makes this a check rather than a
+        # restatement: the tree is where the consumer of this array gets its own shape.
         coarse = compute_detrender_free_varcoarse(config, v)
         assert len(coarse) == len(got), (label, len(coarse), len(got))
         for itree in range(len(got)):
             tree = _tree(config, itree)
             fs = tree.frequency_subbands
-            L = integer_log2(int(tree.pf.wt_dm_downsampling))
+            L = integer_log2(int(tree.primary_tree.wt_dm_downsampling))
             want_shape = (int(tree.ndm_wt), int(fs.N), int(tree.nprofiles))
             assert coarse[itree].shape == want_shape, (label, itree, coarse[itree].shape,
                                                        want_shape)
@@ -4298,7 +4298,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
             iparent = _itree(config, gamma)
             parent = _tree(config, iparent)
             fsp = parent.frequency_subbands
-            D = 1 << (int(parent.total_rank()) - int(fsp.pf_rank))
+            D = 1 << (int(parent.total_rank) - int(fsp.pf_rank))
             M_p, P = int(fsp.M), int(parent.nprofiles)
             nf = As[iparent].shape[1]
             Ap = np.asarray(As[iparent]).reshape(D, M_p, P, nf)
@@ -4310,7 +4310,7 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
                 child = _tree(config, ichild)
                 fsc = child.frequency_subbands
                 M_c = int(fsc.M)
-                assert (1 << (int(child.total_rank()) - int(fsc.pf_rank))) == D
+                assert (1 << (int(child.total_rank) - int(fsc.pf_rank))) == D
                 assert int(child.nprofiles) == P
                 Ac = np.asarray(As[ichild]).reshape(D, M_c, P, nf)
 
@@ -4412,7 +4412,7 @@ def _abcd_all(config, As):
     for (itree, A) in enumerate(As):
         tree = _tree(config, itree)
         fs = tree.frequency_subbands
-        D = 1 << (int(tree.total_rank()) - int(fs.pf_rank))
+        D = 1 << (int(tree.total_rank) - int(fs.pf_rank))
         out.append(np.asarray(A).reshape(D, int(fs.M), int(tree.nprofiles), A.shape[1]))
     return out
 
@@ -4994,7 +4994,7 @@ def test_apply_restriction(r=6, subband_counts=(4,2,1), num_primary_trees=2,
         if L is not None:
             pm = pm.coarse_grain(L)
 
-        D = 1 << (parent.total_rank() - parent.frequency_subbands.pf_rank)
+        D = 1 << (parent.total_rank - parent.frequency_subbands.pf_rank)
         M_p, P = int(parent.frequency_subbands.M), int(parent.nprofiles)
         y_fine = pm.apply_fine(v)
         assert y_fine.shape == (D * M_p * P,)
@@ -5064,7 +5064,7 @@ def _child_group_labels(tree, L):
     fs = tree.frequency_subbands
     R = int(fs.pf_rank)
     M, N, P = int(fs.M), int(fs.N), int(tree.nprofiles)
-    D = 1 << (int(tree.total_rank()) - R)
+    D = 1 << (int(tree.total_rank) - R)
 
     n_level = []
     for level, count in enumerate(fs.subband_counts):
@@ -5155,7 +5155,7 @@ def test_restriction_vs_sweep(r=6, subband_counts=(4,2,1), num_primary_trees=1,
         iparent = _itree(config, gamma)
         parent = _tree(config, iparent)
         fsp = parent.frequency_subbands
-        D = 1 << (parent.total_rank() - fsp.pf_rank)
+        D = 1 << (parent.total_rank - fsp.pf_rank)
         M_p, P = int(fsp.M), int(parent.nprofiles)
         nfreq = As[iparent].shape[1]
         Ap = As[iparent].reshape(D, M_p, P, nfreq)
@@ -5168,7 +5168,7 @@ def test_restriction_vs_sweep(r=6, subband_counts=(4,2,1), num_primary_trees=1,
             child = _tree(config, ichild)
             fsc = child.frequency_subbands
             M_c = int(fsc.M)
-            assert (1 << (child.total_rank() - fsc.pf_rank)) == D
+            assert (1 << (child.total_rank - fsc.pf_rank)) == D
             assert int(child.nprofiles) == P
             Ac = As[ichild].reshape(D, M_c, P, nfreq)
 

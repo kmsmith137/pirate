@@ -122,8 +122,15 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
 
             xassert_ge(tree.dd_rank, 1);
 
-            long tot_rank = tree.total_rank();
-            long dd_rank1 = tree.dd_rank1();   // the GPU kernel's second-stage rank
+            // Ranks derived from the members just above. ('(ipri > 0) ? 1 : 0' rather
+            // than a bare ipri: a downsampled primary tree gives up exactly one rank,
+            // whatever its index in the family.)
+            tree.total_rank = tree.amb_rank + tree.dd_rank;
+            tree.toplevel_tree_rank = tree.total_rank + ((ipri > 0) ? 1 : 0) + et_level;
+            tree.dd_rank1 = (tree.dd_rank + 1) / 2;
+
+            long tot_rank = tree.total_rank;
+            long dd_rank1 = tree.dd_rank1;   // the GPU kernel's second-stage rank
 
             // Frequency range searched by tree, accounting for early trigger.
             long dmax = pow2(config.toplevel_tree_rank - et_level);
@@ -134,18 +141,18 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
             // triggering). The result can have pf_rank < dd_rank1: an early trigger drops
             // subband levels, and nothing puts them back. The kernel folds the difference
             // K = dd_rank1 - pf_rank into its argmax tokens -- see
-            // DedispersionTree::xdm_rank() and CoalescedDdKernel2.hpp.
+            // DedispersionTree::xdm_rank and CoalescedDdKernel2.hpp.
             vector<long> sc = FrequencySubbands::restrict_subband_counts(
                 config.frequency_subband_counts, et_level);
             tree.frequency_subbands = FrequencySubbands(sc, fmin, fmax);
 
-            tree.pf = config.primary_trees.at(ipri);
+            tree.primary_tree = config.primary_trees.at(ipri);
 
             // NOT pow2(pf_rank): the coarse-grained DM axis is one DM per warp of the
             // kernel's second dedispersion stage, whatever the subbands turn out to be.
             // Pinning it to pow2(dd_rank1) is what holds ndm_out -- and every output array
-            // shape -- fixed as pf_rank drops. It is also what makes
-            // DedispersionTree::xdm_rank() recoverable from the tree.
+            // shape -- fixed as pf_rank drops, and it is what makes
+            // DedispersionTree::xdm_rank (just below) the kernel's K.
             //
             // Not config fields at all: see the doc-comments in DedispersionTree.hpp. Note
             // time_downsampling is what becomes the cdd2 registry key's Dout, so this line
@@ -154,30 +161,35 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
             tree.dm_downsampling = pow2(dd_rank1);
             tree.time_downsampling = pow2(dd_rank1);
 
+            // The extra-DM bits the cdd2 kernel folds into its argmax tokens. Written in
+            // terms of dm_downsampling rather than dd_rank1 so that the identity it depends
+            // on -- dm_downsampling == pow2(dd_rank1) -- is visible at this line.
+            tree.xdm_rank = integer_log2(tree.dm_downsampling) - tree.frequency_subbands.pf_rank;
+
             // All four downsampling factors are powers of two: the wt factors are checked by
             // config.validate(), and the two output factors are pow2() by the assignments
             // just above. Assert all four here -- where the resolved values are first
             // established and much downstream code assumes the property.
             xassert(is_power_of_two(tree.dm_downsampling));
             xassert(is_power_of_two(tree.time_downsampling));
-            xassert(is_power_of_two(tree.pf.wt_dm_downsampling));
-            xassert(is_power_of_two(tree.pf.wt_time_downsampling));
+            xassert(is_power_of_two(tree.primary_tree.wt_dm_downsampling));
+            xassert(is_power_of_two(tree.primary_tree.wt_time_downsampling));
 
             // The two wt_* lower bounds are also checked by config.validate() (with a message
             // that names the offending primary tree), so these asserts are a backstop on the
             // per-tree values rather than the user-facing check. The time bound is what makes
             // the xdiv() below exact: time_downsampling <= wt_time_downsampling <= nt_ds, all
             // powers of two.
-            xassert_le(tree.dm_downsampling, tree.pf.wt_dm_downsampling);
-            xassert_le(tree.pf.wt_dm_downsampling, pow2(tot_rank));
-            xassert_le(tree.time_downsampling, tree.pf.wt_time_downsampling);
-            xassert_le(tree.pf.wt_time_downsampling, tree.nt_ds);
+            xassert_le(tree.dm_downsampling, tree.primary_tree.wt_dm_downsampling);
+            xassert_le(tree.primary_tree.wt_dm_downsampling, pow2(tot_rank));
+            xassert_le(tree.time_downsampling, tree.primary_tree.wt_time_downsampling);
+            xassert_le(tree.primary_tree.wt_time_downsampling, tree.nt_ds);
 
-            tree.nprofiles = 1 + 3 * integer_log2(tree.pf.max_width);
+            tree.nprofiles = 1 + 3 * integer_log2(tree.primary_tree.max_width);
             tree.ndm_out = xdiv(pow2(tot_rank), tree.dm_downsampling);
-            tree.ndm_wt = xdiv(pow2(tot_rank), tree.pf.wt_dm_downsampling);
+            tree.ndm_wt = xdiv(pow2(tot_rank), tree.primary_tree.wt_dm_downsampling);
             tree.nt_out = xdiv(tree.nt_ds, tree.time_downsampling);
-            tree.nt_wt = xdiv(tree.nt_ds, tree.pf.wt_time_downsampling);
+            tree.nt_wt = xdiv(tree.nt_ds, tree.primary_tree.wt_time_downsampling);
 
             double dm0 = config.dm_per_unit_delay() * pow2(config.toplevel_tree_rank);
             tree.dm_min = dm0 * ((ipri > 0) ? pow2(ipri-1) : 0);
@@ -211,7 +223,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
 
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = trees.at(itree);
-        long nquads = pow2(tree.total_rank()) * xdiv(tree.nt_ds, nelts_per_segment);
+        long nquads = pow2(tree.total_rank) * xdiv(tree.nt_ds, nelts_per_segment);
         mrb_params.consumer_nquads.push_back(nquads);
     }
 
@@ -358,18 +370,18 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
         kparams.consumer_id = itree;
         kparams.validate();
         
-        stage2_dd_buf_params.buf_rank.push_back(tree.total_rank());
+        stage2_dd_buf_params.buf_rank.push_back(tree.total_rank);
         stage2_dd_buf_params.buf_ntime.push_back(tree.nt_ds);
         stage2_dd_kernel_params.push_back(kparams);
 
         PeakFindingKernelParams pf_params;
         pf_params.subband_counts = tree.frequency_subbands.subband_counts;  // not config.frequency_subband_counts
         pf_params.dtype = dtype;
-        pf_params.max_kernel_width = tree.pf.max_width;
+        pf_params.max_kernel_width = tree.primary_tree.max_width;
         pf_params.beams_per_batch = beams_per_batch;
         pf_params.total_beams = beams_per_gpu;
         pf_params.ndm_out = tree.ndm_out;
-        pf_params.xdm_rank = tree.xdm_rank();
+        pf_params.xdm_rank = tree.xdm_rank;
         pf_params.ndm_wt = tree.ndm_wt;
         pf_params.nt_out = tree.nt_out;
         pf_params.nt_wt = tree.nt_wt;
@@ -481,10 +493,10 @@ static void _tree_to_yaml(YAML::Emitter &emitter, const DedispersionTree &tree,
     if (verbose)
         emitter << YAML::Comment("Downsampled time samples per chunk (= nt_in / 2^primary_tree_index)");
 
-    emitter << YAML::Key << "max_width" << YAML::Value << tree.pf.max_width;
+    emitter << YAML::Key << "max_width" << YAML::Value << tree.primary_tree.max_width;
     if (verbose) {
         stringstream ss;
-        ss << (tree.pf.max_width * ds_factor * time_sample_ms) << " ms";
+        ss << (tree.primary_tree.max_width * ds_factor * time_sample_ms) << " ms";
         emitter << YAML::Comment(ss.str());
     }
 
@@ -506,17 +518,17 @@ static void _tree_to_yaml(YAML::Emitter &emitter, const DedispersionTree &tree,
     if (verbose)
         emitter << YAML::Comment("Number of peak-finding profiles (= 1 + 3*log2(max_width))");
 
-    emitter << YAML::Key << "wt_dm_downsampling" << YAML::Value << tree.pf.wt_dm_downsampling;
+    emitter << YAML::Key << "wt_dm_downsampling" << YAML::Value << tree.primary_tree.wt_dm_downsampling;
     if (verbose && (tree.primary_tree_index > 0)) {
         stringstream ss;
-        ss << (tree.pf.wt_dm_downsampling * ds_factor) << " before downsampling";
+        ss << (tree.primary_tree.wt_dm_downsampling * ds_factor) << " before downsampling";
         emitter << YAML::Comment(ss.str());
     }
 
-    emitter << YAML::Key << "wt_time_downsampling" << YAML::Value << tree.pf.wt_time_downsampling;
+    emitter << YAML::Key << "wt_time_downsampling" << YAML::Value << tree.primary_tree.wt_time_downsampling;
     if (verbose && (tree.primary_tree_index > 0)) {
         stringstream ss;
-        ss << (tree.pf.wt_time_downsampling * ds_factor) << " before downsampling";
+        ss << (tree.primary_tree.wt_time_downsampling * ds_factor) << " before downsampling";
         emitter << YAML::Comment(ss.str());
     }
 
@@ -757,12 +769,14 @@ static void _verify_tree_yaml(const YamlFile &yt, long itree, const Dedispersion
     _cmp<long>(ctx, "amb_rank", yt.get_scalar<long>("amb_rank"), ref.amb_rank);
     _cmp<long>(ctx, "dd_rank", yt.get_scalar<long>("dd_rank"), ref.dd_rank);
     _cmp<long>(ctx, "nt_ds", yt.get_scalar<long>("nt_ds"), ref.nt_ds);
-    _cmp<long>(ctx, "max_width", yt.get_scalar<long>("max_width"), ref.pf.max_width);
+    _cmp<long>(ctx, "max_width", yt.get_scalar<long>("max_width"), ref.primary_tree.max_width);
     _cmp<long>(ctx, "dm_downsampling", yt.get_scalar<long>("dm_downsampling"), ref.dm_downsampling);
     _cmp<long>(ctx, "time_downsampling", yt.get_scalar<long>("time_downsampling"), ref.time_downsampling);
     _cmp<long>(ctx, "nprofiles", yt.get_scalar<long>("nprofiles"), ref.nprofiles);
-    _cmp<long>(ctx, "wt_dm_downsampling", yt.get_scalar<long>("wt_dm_downsampling"), ref.pf.wt_dm_downsampling);
-    _cmp<long>(ctx, "wt_time_downsampling", yt.get_scalar<long>("wt_time_downsampling"), ref.pf.wt_time_downsampling);
+    _cmp<long>(ctx, "wt_dm_downsampling", yt.get_scalar<long>("wt_dm_downsampling"),
+               ref.primary_tree.wt_dm_downsampling);
+    _cmp<long>(ctx, "wt_time_downsampling", yt.get_scalar<long>("wt_time_downsampling"),
+               ref.primary_tree.wt_time_downsampling);
     _cmp<long>(ctx, "ndm_wt", yt.get_scalar<long>("ndm_wt"), ref.ndm_wt);
     _cmp<long>(ctx, "nt_wt", yt.get_scalar<long>("nt_wt"), ref.nt_wt);
     _cmp<long>(ctx, "ndm_out", yt.get_scalar<long>("ndm_out"), ref.ndm_out);
@@ -909,7 +923,7 @@ void DedispersionPlan::decode_argmax(
     // Parse token = (t) | (p << 8) | (mu << 16) | (m << (16+K)).
     //
     // The tree's cdd2 kernel computes 2^K output DMs per warp of its second dedispersion
-    // stage, where K = xdm_rank(). Those extra DMs do NOT get their own rows of out_max /
+    // stage, where K = xdm_rank. Those extra DMs do NOT get their own rows of out_max /
     // out_argmax: the index 'mu' is folded into the token's m-field as
     // m_ext = (m << K) | mu, and the peak-finder max-reduces over it. See
     // CoalescedDdKernel2.hpp. K is zero unless the tree has an early trigger.
@@ -917,7 +931,7 @@ void DedispersionPlan::decode_argmax(
     // This is the only place that splits the m-field; every producer (cdd2 kernel,
     // ReferencePeakFindingKernel) writes it whole.
 
-    long K = tr.xdm_rank();
+    long K = tr.xdm_rank;
     long m_ext = (argmax_token >> 16) & 0xffff;
     long mu    = m_ext & (pow2(K) - 1);
     long m     = m_ext >> K;
@@ -1072,7 +1086,7 @@ Array<long> DedispersionPlan::compute_steady_state_it0(long itree) const
     long e = tr.early_trigger_level;
     long T_ds = tr.time_downsampling;
     long D_ds = tr.dm_downsampling;
-    long Wmax = tr.pf.max_width;
+    long Wmax = tr.primary_tree.max_width;
     long r_top = config.toplevel_tree_rank;
 
     long d_lo = (p > 0) ? pow2(r_top + p - 1) : 0;   // lowest full-band delay searched by tree

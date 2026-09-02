@@ -756,7 +756,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "be predicted from the plan.\n"
         "\n"
         "FOOTGUN: the m-field of ``out_argmax[itree]`` is m_ext = (m << K) | mu, where\n"
-        "K = ``trees[itree].xdm_rank()``, not the tree's own multiplet index m. That is how\n"
+        "K = ``trees[itree].xdm_rank``, not the tree's own multiplet index m. That is how\n"
         "the tokens are made identical to a GpuDedisperser's. K is zero except in\n"
         "early-trigger trees, so code which predates early triggers can look correct and not\n"
         "be. Use ``plan.decode_argmax()`` rather than splitting the field by hand.\n"

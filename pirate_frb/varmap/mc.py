@@ -89,7 +89,7 @@ def run_mc(vmm, freq_variances, *, device='gpu', nchunks=None, report_every=1,
     for itree in range(ntrees):
         tree = geom.plan.trees[itree]
         D, M, P = geom.tree_D[itree], geom.tree_M[itree], geom.tree_P[itree]
-        K = int(tree.xdm_rank())
+        K = int(tree.xdm_rank)
         nt_out = int(tree.nt_out)
 
         if y[itree].size != D * M * P:
@@ -225,7 +225,7 @@ class _CpuRunner:
             # Every axis except time is a spectator to a PfSquare, so (Dpf, M) flattens into
             # the row count.
             self.pf_squares.append(
-                ReferencePfSquare(int(geom.plan.trees[itree].pf.max_width), 1, 1,
+                ReferencePfSquare(int(geom.plan.trees[itree].primary_tree.max_width), 1, 1,
                                   D * M, geom.tree_nt_ds[itree]))
             self.acc.append(np.zeros((1, D * M, P)))
 
