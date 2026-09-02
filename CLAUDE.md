@@ -35,6 +35,62 @@
 - When planning code, always think carefully about race conditions and corner cases.
 - When planning code, always check carefully to make sure that comments stay up-to-date with code.
 
+### Writing comments (IMPORTANT)
+
+Humans and LLMs use comments differently. These rules are intended to help an LLM
+write comments which are more "human-friendly".
+
+Humans read comments BEFORE reading the implementation, as a way of orienting
+themselves before diving into the code. LLMs tend to use comments as a compressed
+representation of implementation details, and can be hard for a human to understand
+without reading and understanding the code first. (From a human perspective, this
+defeats the purpose of the comment.)
+
+It's critical for human-friendly comments to be SELF-CONTAINED. Comments should be
+understandable by a reader who is only familiar with the "local context" of the
+comment. The meaning of "local context" needs some interpretation -- for example,
+a comment in `X.cpp` could assume that the reader has read `X.hpp`, but not vice
+versa. It's helpful to "resolve references", e.g. write `Y::some_method()` instead
+of simply `some_method()`, so that a reader with only "local context" knows what
+source files they need to look at.
+
+LLM-generated comments tend to be both too long and too dense for humans.
+Conciseness is always a goal, but this statement needs discussion. Avoid making
+comments concise by making them cryptic, denser, or less self-contained (e.g.
+using undefined jaron). This makes the comment less human-friendly and is
+counterproductive.
+
+Instead, try to make comments concise by intentionally choosing what information
+to present. For example, try to separate implementation details (which are best
+understood by reading code, not comments) from high-level information which is
+useful for orienting the reader. Humans are deep thinkers but slow readers, and
+don't want to read dense blocks of text unless there is a good reason.
+
+Writing human-friendly comments is harder than it seems, since there is a nontrivial
+tradeoff between too little and too much information. Some offhand examples:
+
+ - In cases where the it's not obvious why a class or function exists, or it's
+   not obvious what a function does without reading the code, a comment would
+   be very helpful to "orient" the reader. A concise comment usually suffices,
+   but avoid making the comment "human-unfriendly" by rehashing details of the
+   implementation.
+
+ - Comments can be useful for sharing "need-to-know" information before a
+   function is called. (E.g. documenting non-obvious "footguns", or simple
+   things like "call f() with lock held".)
+   
+ - Comments can be useful for explaining things that are "hidden between the
+   lines" in implementation. For example, suppose that code has to be written
+   in a particular way in order to address a particular corner case, and the
+   corner case isn't obvious from reading the code. A concise comment stating
+   the existence of the corner case would probably be very helpful, but a long
+   comment describing the mechanics of the code would probably not be helpful.
+
+Avoid comments whose purpose is to "record history", e.g. "Note that this
+function used to have a 'counts' argument, but we removed it because..."
+These comments create noise, and are usually more confusing than helpful,
+in the future when details of old versions of the code have been forgotten.
+
 ### Markdown style
 
 - Use ASCII characters only in markdown files (plans, docs). No Unicode
