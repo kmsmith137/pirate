@@ -130,8 +130,9 @@ struct FrbGrouper
 
     // The producer's plan, rebuilt from the handshake's two yamls by
     // DedispersionPlan::from_yaml_string(). Supports decode_argmax*() and
-    // compute_steady_state_it0() with the PRODUCER's per-tree Dcore, which is what makes
-    // token decoding correct even if this process runs a different pirate_frb build.
+    // compute_steady_state_it0(). The one decode input it does NOT carry is the producer's
+    // per-tree Dcore, which is a property of the producer's compiled kernels rather than of
+    // the plan -- see 'dcores' below.
     //
     // A DedispersionPlan::Params::minimal() plan, so it needs no GPU. Held by pointer
     // because a plan has const members, hence cannot be assigned into a by-value member

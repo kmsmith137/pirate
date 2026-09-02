@@ -518,11 +518,11 @@ def test_decode_argmax():
 
     # Per-tree (M_ext, P, Dout, Dcore), from a scout ReferenceDedisperser.
     #
-    # NOTE the first element is M_ext = (fs.M << K) with K = tree.xdm_rank, i.e. the range
-    # of the argmax token's m-field, NOT the tree's multiplet count fs.M. The tokens built
-    # below from 0 <= m < M_ext sweep the (multiplet, extra-DM) pairs m_ext = (m << K) | mu,
-    # which is precisely what decode_argmax() has to take apart -- and (M_ext << 16) is the
-    # first out-of-range value, not (fs.M << 16).
+    # NOTE the first element is M_ext = (fs.M << K) with K = tree.xdm_rank, i.e. the number
+    # of legal (m, mu) pairs, NOT the tree's multiplet count fs.M. The tokens built below
+    # enumerate 0 <= m_ext < M_ext and repack each into the token's two byte fields via
+    # _m_fields(), so they sweep the (multiplet, extra-DM) pairs decode_argmax() has to take
+    # apart. (The out-of-range checks are per field: see _check_bad_tokens().)
     dcores = _draw_dcores(plan)
     scout = ReferenceDedisperser(plan, sophistication=0, tree_domain_input=True, Dcores=dcores)
     kinfo = [(k.M_ext, k.P, k.Dout, k.Dcore) for k in scout.pf_kernels]

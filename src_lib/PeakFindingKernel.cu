@@ -1696,8 +1696,8 @@ void ReferencePfSquare::test_vs_peak_finder()
                                 float y = out_tok.at({b,d,tout});
                                 s += double(y) * y;
                             }
-                            // Peak-finder output DM 'd' and token m-field m_ext = (m << K) | mu
-                            // read input DM row ((d << K) | mu), multiplet m.
+                            // Peak-finder output DM 'd' and token fields (m, mu) read input
+                            // DM row ((d << K) | mu), multiplet m.
                             acc_pf.at({b0+b, ((d << K) | mu)*M + m, p}) += s;
                         }
                     }

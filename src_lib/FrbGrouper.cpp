@@ -531,7 +531,8 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
     // Rebuild the producer's plan. The config yaml and the plan yaml arrive as separate
     // strings, so nothing so far has established that the two describe the same instrument;
     // DedispersionPlan::from_yaml_string() is where that gets checked (once, here, rather
-    // than per decoded event), and where the producer's per-tree Dcore is adopted.
+    // than per decoded event). Nothing is adopted from the plan yaml; the producer's
+    // per-tree Dcore travels as its own handshake field, read into 'dcores' below.
     dedispersion_plan = DedispersionPlan::from_yaml_string(dedispersion_config,
                                                           dedispersion_plan_yaml_string);
 

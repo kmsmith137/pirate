@@ -475,9 +475,9 @@ struct ReferenceDedisperserBase
     std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
 
     // Length ntrees, constructed from plan->stage2_pf_params verbatim. NOTE their argmax
-    // token m-field is m_ext = (m << K) | mu with K = tree.xdm_rank, not the tree's own
-    // multiplet index m -- which is what makes the tokens identical to a cdd2 kernel's.
-    // K is zero except in early-trigger trees.
+    // tokens carry an extra-DM index 'mu' (K = tree.xdm_rank bits, in the token's fourth
+    // byte) alongside the tree's own multiplet index m -- which is what makes the tokens
+    // identical to a cdd2 kernel's. K is zero except in early-trigger trees.
     std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;
 
     // To process multiple chunks, call the dedisperse() method in a loop.

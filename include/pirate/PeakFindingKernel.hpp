@@ -115,8 +115,9 @@ struct PeakFindingKernelParams
 
     // Number of "extra DM" bits folded into the peak-finder's multiplet index. The input array
     // has ndm_out << xdm_rank DM rows, which the kernel max-reduces down to ndm_out; the argmax
-    // token's m-field is m_ext = (m << xdm_rank) | mu, with mu the low xdm_rank bits of the
-    // input DM index. Zero unless the producing tree has pf_rank < dd_rank1.
+    // token reports the winner's extra-DM index mu -- the low xdm_rank bits of the input DM
+    // index -- in its own byte, next to the multiplet index m (see the token format above).
+    // Zero unless the producing tree has pf_rank < dd_rank1.
     long xdm_rank = 0;
 
     // Peak-finding input array has shape (beams_per_batch, ndm_out << xdm_rank, fs.M, nt_in).
@@ -189,7 +190,7 @@ struct ReferencePeakFindingKernel
     long K = 0;                // = params.xdm_rank
     long E = 0;                // = pow2(K), the number of input DMs per output DM
     long ndm_in = 0;           // = (params.ndm_out << K) = DM axis of the input array
-    long M_ext = 0;            // = (fs.M << K), the range of the argmax token's m-field
+    long M_ext = 0;            // = (fs.M << K), this kernel's own (extended) multiplet count
 
     // Note that the reference kernel uses float32, regardless of what dtype is specified.
     // All arrays must be fully contiguous (this could be changed if needed).
