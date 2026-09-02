@@ -235,7 +235,6 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
 
     this->K = p.xdm_rank;
     this->E = pow2(K);
-    this->ndm_in = p.ndm_in();
     this->M_ext = fs.M << K;
 
     this->nbatches = xdiv(p.total_beams, p.beams_per_batch);
@@ -287,7 +286,7 @@ void ReferencePeakFindingKernel::apply(
     const PeakFindingKernelParams &p = params;
     xassert_shape_eq(out_max, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
-    xassert_shape_eq(in, ({p.beams_per_batch, ndm_in, fs.M, p.nt_in}));
+    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out << K, fs.M, p.nt_in}));
     xassert_shape_eq(wt, ({p.beams_per_batch, p.ndm_wt, p.nt_wt, nprofiles, fs.N}));
  
     xassert(out_max.on_host());
@@ -591,10 +590,11 @@ std::runtime_error ReferencePeakFindingKernel::_bad_token(uint token, const char
 Array<float> ReferencePeakFindingKernel::make_random_input_array()
 {
     long B = params.beams_per_batch;
+    long D = params.ndm_out << K;
     long T = params.nt_in;
     long M = fs.M;
 
-    Array<float> ret({B,ndm_in,M,T}, af_rhost);
+    Array<float> ret({B,D,M,T}, af_rhost);
     {
         std::mt19937 &rng = ksgpu::default_rng();
         for (long i = 0; i < ret.size; i++)
@@ -1631,7 +1631,7 @@ void ReferencePfSquare::test_vs_peak_finder()
     long N = fs.N;
     xassert_eq(sq.nprofiles, P);
     xassert_eq(pf.M_ext, M*E);
-    xassert_eq(pf.ndm_in, Dpf);
+    xassert_eq(D << pf.K, Dpf);
 
     // The identity is exact only if both objects carry at least the longest kernel's history,
     // i.e. (2*Wmax) input samples. Both do by construction, but the two 'tpad' definitions are

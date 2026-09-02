@@ -130,9 +130,6 @@ struct PeakFindingKernelParams
     long nt_in = 0;
     long nt_wt = 0;
 
-    // DM axis of the peak-finding input array. Call this rather than open-coding the shift.
-    long ndm_in() const { return ndm_out << xdm_rank; }
-
     void validate() const;  // throws an exception if anything is wrong
 
     // Fill 'out' with peak-finding weights.
@@ -180,8 +177,8 @@ struct ReferencePeakFindingKernel
     // subband_counts, so fs.M and fs.m_to_n are indexed by m, not by m_ext (see M_ext below).
 
     PeakFindingKernelParams params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
-    FrequencySubbands fs;             // pf_rank, N, M
-    long Dcore = 0;            // constructor argument (see validate_dcore())
+    FrequencySubbands fs;            // pf_rank, N, M
+    long Dcore = 0;                  // constructor argument (see validate_dcore())
 
     // Derived parameters, computed in constructor.
     long Dout = 0;             // = (nt_in/nt_out) = time downsampling factor of output array
@@ -189,7 +186,6 @@ struct ReferencePeakFindingKernel
     long nprofiles = 0;        // = (3 * log2(max_kernel_width) + 1)
     long K = 0;                // = params.xdm_rank
     long E = 0;                // = pow2(K), the number of input DMs per output DM
-    long ndm_in = 0;           // = (params.ndm_out << K) = DM axis of the input array
     long M_ext = 0;            // = (fs.M << K), this kernel's own (extended) multiplet count
 
     // Note that the reference kernel uses float32, regardless of what dtype is specified.
@@ -478,8 +474,7 @@ struct GpuPeakFindingKernel
         // Layout of peak-finding weights in GPU memory, expected by the kernel.
         GpuPfWeightLayout pf_weight_layout;
 
-        long Dcore = 0;   // internal downsamplingq
-        //  factor (see discussion above)
+        long Dcore = 0;   // internal downsampling factor (see discussion above)
         long PW32 = -1;   // number of 32-bit registers per warp (= "one pf_rank")
     };
 
