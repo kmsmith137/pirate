@@ -267,12 +267,17 @@ Here are some details that are not obvious from the example code:
    `dedispersion_plan_yaml` against it, which catches the case where the two
    yamls describe different instruments.
 
-   Exactly one field is ADOPTED from the wire rather than checked: the per-tree
-   `Dcore`, which sets the time granularity of the tokens. It is a property of
-   whichever peak-finding kernel the producer happens to have compiled, and is
-   not derivable from the config. A grouper built from a different `pirate`
-   revision would re-derive a different value and mis-decode every token, so the
-   producer's values are taken off the wire and adopted verbatim.
+   Nothing is adopted from `dedispersion_plan_yaml`: a plan is a pure function of
+   its config, so the rebuilt plan is authoritative and the yaml is only checked
+   against it.
+
+   The one thing a consumer needs that is NOT in either yaml is the producer's
+   per-tree `Dcore`, which sets the time granularity of the out_argmax tokens. It
+   is a property of whichever peak-finding kernel the producer happens to have
+   compiled, so it travels as its own handshake field, `dcores`, surfaced as
+   `FrbGrouper::dcores`. A grouper built from a different `pirate` revision
+   cannot re-derive it and would mis-decode every token without it: pass
+   `dcores[itree]` to `DedispersionPlan::decode_argmax()`.
 
 The `FrbGrouper` and `FrbSifterClient` classes aren't well-optimized at all.
 However, I find empirically that the "toy" grouper does not slow down a CHORD-scale search.

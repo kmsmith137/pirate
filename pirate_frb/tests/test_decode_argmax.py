@@ -46,7 +46,7 @@ from ..utils import atomic_print
 # Yaml tests. DedispersionPlan::from_yaml() is how FrbGrouper recovers the producer's geometry
 # at handshake, and how a variance-map file recovers the geometry it was written with. Unlike
 # a naive parser it does not transcribe: it rebuilds the plan from the config and CHECKS the
-# yaml against it, adopting only the producer's per-tree Dcore.
+# yaml against it, adopting nothing.
 
 
 _TREE_INT_MEMBERS = ('primary_tree_index', 'early_trigger_level', 'amb_rank', 'dd_rank',
@@ -83,7 +83,14 @@ def _test_plan_yaml(config):
 
     p2 = DedispersionPlan.from_yaml_string(config, s)
     assert p2.to_yaml_string() == s
-    assert not p2.params.dcore_from_cdd2_registry
+
+    # A plan is a pure function of its config, so a COMPLETE plan's 'trees' must be identical
+    # to this minimal one's. In particular the plan yaml does not depend on which cdd2
+    # kernels this build compiled, which is what lets a GPU-less writer and a GPU reader
+    # exchange one. (Only 'trees' is compared: a complete plan's yaml also has a
+    # mega_ringbuf section. test_decode_argmax's configs always admit a complete plan.)
+    full = yaml.safe_load(DedispersionPlan(config).to_yaml_string())
+    assert full['trees'] == doc['trees']
 
     def expect_throw(bad_doc, what):
         try:
@@ -109,12 +116,6 @@ def _test_plan_yaml(config):
         bad['trees'][0][key] = int(bad['trees'][0][key]) + 1
         expect_throw(bad, key)
 
-    # 'Dcore' is ADOPTED rather than compared, so only its standalone invariant (a power of
-    # two dividing nt_ds/nt_out) is checked. A non-power-of-two must still be caught.
-    bad = yaml.safe_load(s)
-    bad['trees'][0]['Dcore'] = 3
-    expect_throw(bad, 'Dcore')
-
     bad = yaml.safe_load(s)
     bad['trees'][0]['frequency_subband_counts'][0] += 1
     expect_throw(bad, 'frequency_subband_counts')
@@ -128,14 +129,13 @@ def _test_plan_yaml(config):
         expect_throw(bad, key)
 
 
-def _test_grouper_plan_rebuild(config, plan, tuples):
+def _test_grouper_plan_rebuild(config, plan, dcores, tuples):
     """Rebuild the producer's plan from its yaml, as FrbGrouper does at handshake.
 
-    Distinct from _test_plan_yaml() above in the one way that matters here: the plan is a
-    COMPLETE one, so its yaml carries a mega_ringbuf section (which from_yaml() ignores), and
-    its Dcore values are the cdd2 registry's. Dcore is the one field ADOPTED from the yaml,
-    and adopting it is what makes decoding correct on a consumer running a different build --
-    so this checks that it survives, and that decoding through the rebuilt plan agrees.
+    Distinct from _test_plan_yaml() above in one way: the plan is a COMPLETE one, so its yaml
+    carries a mega_ringbuf section (which from_yaml() ignores). Decoding through the rebuilt
+    plan must agree with decoding through the original -- with the SAME 'dcores', since those
+    do not travel in the yaml (the grouper gets them from their own handshake field).
     """
 
     cfg2 = DedispersionConfig.from_yaml_string(config.to_yaml_string())
@@ -145,31 +145,30 @@ def _test_grouper_plan_rebuild(config, plan, tuples):
     p2 = DedispersionPlan.from_yaml_string(cfg2, plan_yaml)
     assert p2.ntrees == plan.ntrees
 
-    trees, trees2 = plan.trees, p2.trees
-    for itree in range(plan.ntrees):
-        assert trees2[itree].Dcore == trees[itree].Dcore, f'tree {itree}: Dcore'
-
     for (itree, token, idm, itout) in tuples:
-        assert (p2.decode_argmax(token, itree, idm, itout)
-                == _decode(plan, token, itree, idm, itout)), (itree, token)
+        assert (p2.decode_argmax(token, itree, dcores[itree], idm, itout)
+                == _decode(plan, token, itree, dcores[itree], idm, itout)), (itree, token)
 
     # Negative test: a missing per-tree key must throw (naming the key).
     bad = yaml.safe_load(plan_yaml)
-    bad['trees'][0]['Dcore_renamed'] = bad['trees'][0].pop('Dcore')
+    bad['trees'][0]['nt_out_renamed'] = bad['trees'][0].pop('nt_out')
     try:
         DedispersionPlan.from_yaml_string(cfg2, yaml.safe_dump(bad))
         raise AssertionError("DedispersionPlan.from_yaml_string() should have thrown"
-                             " (missing Dcore)")
+                             " (missing nt_out)")
     except RuntimeError:
         pass
 
     return p2
 
 
-def _decode(plan, token, itree, idm_coarse, itime_coarse):
+def _decode(plan, token, itree, dcore, idm_coarse, itime_coarse):
     """Scalar decode. Decoding is a DedispersionPlan method; the vectorized form lives on
-    FrbGrouper (see test_server.py)."""
-    return plan.decode_argmax(token, itree, idm_coarse, itime_coarse)
+    FrbGrouper (see test_server.py).
+
+    'dcore' is the producing peak-finding kernel's core factor, not a plan property -- here
+    it is the value the scout ReferenceDedisperser was built with."""
+    return plan.decode_argmax(token, itree, dcore, idm_coarse, itime_coarse)
 
 
 ####################################################################################################
@@ -207,9 +206,24 @@ def _num_chunks(plan, r_top, nt_in):
     return depth // nt_in + 2
 
 
-def _fresh_rdd(plan):
-    """ReferenceDedisperser in tree-domain-input mode, with all pf weights = 1."""
-    rdd = ReferenceDedisperser(plan, sophistication=0, tree_domain_input=True)
+def _draw_dcores(plan):
+    """Per-tree peak-finder core factors: a random power of two dividing each tree's Dout.
+
+    DRAWN rather than taken from the cdd2 registry, which pins Dcore = min(Dout, 8) and so
+    differs from Dout only at dd_rank >= 7. Dcore is a property of the peak-finding kernel,
+    and a ReferencePeakFindingKernel accepts any legal value, so drawing it exercises the
+    token time-quantization rule dt = min(Dcore, 2^level) at every Dcore a kernel could have.
+    """
+    return [2 ** random.randrange(int(tree.time_downsampling).bit_length())
+            for tree in plan.trees]
+
+
+def _fresh_rdd(plan, dcores):
+    """ReferenceDedisperser in tree-domain-input mode, with all pf weights = 1.
+
+    'dcores' must be the same vector the scout was built with, or its tokens would quantize
+    time differently from the ones _decode() is checked against."""
+    rdd = ReferenceDedisperser(plan, sophistication=0, tree_domain_input=True, Dcores=dcores)
     for w in rdd.wt_arrays:
         w[...] = 1.0
     return rdd
@@ -239,14 +253,14 @@ def _eval_tokens(rdd, plan, itree, tokens_by_beam):
 # channel validates fmin/fmax for all tokens and all (idm, itout) cells simultaneously.
 
 
-def _membership_sweep(plan, tree_bands, C, chans):
+def _membership_sweep(plan, dcores, tree_bands, C, chans):
     B = plan.beams_per_batch
     nt_in = plan.nt_in
 
     for i0 in range(0, len(chans), B):
         batch = chans[i0 : i0 + B]
 
-        rdd = _fresh_rdd(plan)
+        rdd = _fresh_rdd(plan, dcores)
         ia = rdd.input_array
         for c in range(C):
             ia[...] = 0.0
@@ -304,7 +318,7 @@ def _sample_tuples(plan, kinfo, interesting_ms, ntuples):
     return tuples
 
 
-def _probe_tuples(plan, r_top, C, tuples):
+def _probe_tuples(plan, dcores, r_top, C, tuples):
     B = plan.beams_per_batch
     nt_in = plan.nt_in
     nchan = 2 ** r_top
@@ -313,7 +327,8 @@ def _probe_tuples(plan, r_top, C, tuples):
 
     for i0 in range(0, len(tuples), per_run):
         run_tuples = tuples[i0 : i0 + per_run]
-        dec = [_decode(plan, tok, it, idm, ito) for (it, tok, idm, ito) in run_tuples]
+        dec = [_decode(plan, tok, it, dcores[it], idm, ito)
+               for (it, tok, idm, ito) in run_tuples]
 
         # Global (multi-chunk) positions of the decoded trailing edges (EXCLUSIVE: the
         # last summed sample is tlo-1 / thi-1); the warmup formula in _num_chunks()
@@ -323,7 +338,7 @@ def _probe_tuples(plan, r_top, C, tuples):
             assert tlo <= thi <= nt_in
             assert c_eval * nt_in + tlo - 1 >= 0, "test bug: warmup depth insufficient"
 
-        rdd = _fresh_rdd(plan)
+        rdd = _fresh_rdd(plan, dcores)
         ia = rdd.input_array
         for c in range(C):
             ia[...] = 0.0
@@ -388,20 +403,25 @@ def _check_bad_tokens(plan, kinfo):
 
     # M is the peak-finder's M_ext (see test_decode_argmax), so this is the smallest
     # out-of-range m-field, not (fs.M << 16), which is a VALID token when xdm_rank() > 0.
-    expect_throw(M << 16, itree, 0, 0)          # m out of range
-    expect_throw(P << 8, itree, 0, 0)           # p out of range
+    expect_throw(M << 16, itree, Dcore, 0, 0)          # m out of range
+    expect_throw(P << 8, itree, Dcore, 0, 0)           # p out of range
     if Dout < 256:
-        expect_throw(Dout, itree, 0, 0)         # t out of range
+        expect_throw(Dout, itree, Dcore, 0, 0)         # t out of range
 
     for p in range(P):
         lpf = (p - 1) // 3 if p else 0
         if min(Dcore, 2 ** lpf) > 1:
-            expect_throw((p << 8) | 1, itree, 0, 0)   # t not divisible by dt
+            expect_throw((p << 8) | 1, itree, Dcore, 0, 0)   # t not divisible by dt
             break
 
-    expect_throw(0, plan.ntrees, 0, 0)          # itree out of range
-    expect_throw(0, itree, tree.ndm_out, 0)     # idm_coarse out of range
-    expect_throw(0, itree, 0, tree.nt_out)      # itime_coarse out of range
+    expect_throw(0, plan.ntrees, Dcore, 0, 0)          # itree out of range
+    expect_throw(0, itree, Dcore, tree.ndm_out, 0)     # idm_coarse out of range
+    expect_throw(0, itree, Dcore, 0, tree.nt_out)      # itime_coarse out of range
+
+    # Dcore is a caller-supplied kernel property, so decode_argmax() range-checks it too:
+    # it must be a power of two dividing Dout.
+    expect_throw(0, itree, 3, 0, 0)                    # Dcore not a power of two
+    expect_throw(0, itree, 2 * Dout, 0, 0)             # Dcore does not divide Dout
 
 
 def _test_pf_kernel_quantization(ntrials=8):
@@ -488,9 +508,11 @@ def test_decode_argmax():
     # below from 0 <= m < M_ext sweep the (multiplet, extra-DM) pairs m_ext = (m << K) | mu,
     # which is precisely what decode_argmax() has to take apart -- and (M_ext << 16) is the
     # first out-of-range value, not (fs.M << 16).
-    scout = ReferenceDedisperser(plan, sophistication=0, tree_domain_input=True)
+    dcores = _draw_dcores(plan)
+    scout = ReferenceDedisperser(plan, sophistication=0, tree_domain_input=True, Dcores=dcores)
     kinfo = [(k.M_ext, k.P, k.Dout, k.Dcore) for k in scout.pf_kernels]
     del scout
+    atomic_print(f'test_decode_argmax: Dcore by tree = {dcores}')
 
     # Cross-check that relation, and report the per-tree K: a run which happened to generate
     # no K > 0 tree covers strictly less, and that should be visible rather than silent.
@@ -501,16 +523,10 @@ def test_decode_argmax():
         assert kinfo[itree][0] == (tree.frequency_subbands.M << tree.xdm_rank())
     atomic_print(f'test_decode_argmax: xdm_rank by tree = {xdm_ranks}')
 
-    # Cross-check: tree.Dcore (the decode-facing copy) must match the reference
-    # peak-finders' Dcore (which flows through stage2_pf_params).
+    # The Dcores argument must reach the peak-finding kernels: everything below decodes
+    # tokens with 'dcores' and compares against what these kernels actually emitted.
     for itree in range(plan.ntrees):
-        assert plan.trees[itree].Dcore == kinfo[itree][3]
-
-    # dcore_from_cdd2_registry=False: no registry query; placeholder Dcore = tree.time_downsampling.
-    p0 = DedispersionPlan(config, DedispersionPlan.Params(dcore_from_cdd2_registry=False))
-    assert not p0.params.dcore_from_cdd2_registry
-    for tr in p0.trees:
-        assert tr.Dcore == tr.time_downsampling
+        assert kinfo[itree][3] == dcores[itree], itree
 
     _check_bad_tokens(plan, kinfo)
 
@@ -525,7 +541,7 @@ def test_decode_argmax():
         M = kinfo[itree][0]
         first, last = {}, {}
         for m in range(M):
-            fmin, fmax, _, _, _ = _decode(plan, m << 16, itree, 0, 0)
+            fmin, fmax, _, _, _ = _decode(plan, m << 16, itree, dcores[itree], 0, 0)
             first.setdefault((fmin, fmax), m)
             last[(fmin, fmax)] = m
         tree_bands.append([(m << 16, fmn, fmx) for (fmn, fmx), m in first.items()])
@@ -539,11 +555,11 @@ def test_decode_argmax():
     chans.update(random.sample(range(nchan), min(4, nchan)))
     if len(chans) > 2 * B:   # cap at 2 pipeline runs; random subsampling covers the rest across iterations
         chans = random.sample(sorted(chans), 2 * B)
-    _membership_sweep(plan, tree_bands, C, sorted(chans))
+    _membership_sweep(plan, dcores, tree_bands, C, sorted(chans))
 
     # P1/P2/P3 probes on sampled tuples (2 pipeline runs).
     tuples = _sample_tuples(plan, kinfo, interesting_ms, ntuples=2 * max(B // 3, 1))
-    _probe_tuples(plan, r_top, C, tuples)
+    _probe_tuples(plan, dcores, r_top, C, tuples)
 
     # Rebuild the plan from its yaml, as FrbGrouper does (reuses the sampled tuples).
-    _test_grouper_plan_rebuild(config, plan, tuples)
+    _test_grouper_plan_rebuild(config, plan, dcores, tuples)

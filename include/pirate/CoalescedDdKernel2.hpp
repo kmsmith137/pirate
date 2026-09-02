@@ -19,9 +19,6 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-struct DedispersionTree;   // defined in DedispersionTree.hpp
-
-
 // -------------------------------------------------------------------------------------------------
 //
 // CoalescedDdKernel2: stage-2 tree dedispersion with peak-finding fused into it, so that the
@@ -190,11 +187,6 @@ struct CoalescedDdKernel2
 
     // Static member function to access registry.
     static Registry &registry();
-
-    // Peeks the registry for the Dcore of the (unique) cdd2 kernel matching (dtype, tree).
-    // Throws if no matching kernel is compiled into this build, or if the kernel's
-    // compile-time {dm,time}_downsampling don't match the tree's.
-    static long get_registry_dcore(const ksgpu::Dtype &dtype, const DedispersionTree &tree);
 };
 
 // Defined in CoalescedDdKernel2.cu

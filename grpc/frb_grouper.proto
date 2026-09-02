@@ -169,7 +169,9 @@ enum ProtocolVersion {
   PROTOCOL_VERSION_UNSPECIFIED = 0;
   // Bumped to 2 when the Handshake field numbers were made sequential and
   // rpc_ip_addr was added (an incompatible wire-format change vs version 1).
-  PROTOCOL_VERSION_CURRENT = 2;
+  // Bumped to 3 when Handshake.dcores was added and the per-tree Dcore key was
+  // dropped from dedispersion_plan_yaml.
+  PROTOCOL_VERSION_CURRENT = 3;
 }
 
 // First producer -> consumer message. Conveys everything the consumer needs to
@@ -262,6 +264,14 @@ message Handshake {
 
   // DedispersionPlan::to_yaml_string()
   string dedispersion_plan_yaml = 13;
+
+  // Per-tree peak-finder core factors of the producer's cdd2 kernels
+  // (GpuDedisperser::Dcores), length num_trees. Dcore sets the time granularity
+  // of the out_argmax tokens. It is compiled into the producer's kernels and is
+  // NOT derivable from the yamls above, so the consumer must use these values --
+  // they are what it passes to DedispersionPlan::decode_argmax(), and they are
+  // correct even when the consumer runs a different pirate_frb build.
+  repeated int64 dcores = 14;
 }
 
 // First consumer -> producer message, sent in response to the Handshake.

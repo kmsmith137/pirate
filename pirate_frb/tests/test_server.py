@@ -104,7 +104,8 @@ def _check_batch_decode(g):
     outs2 = g.decode_argmax2_batch(itrees, *outs)
 
     for i, (it, tok, idm, ito) in enumerate(ev):
-        assert tuple(int(a[i]) for a in outs) == plan.decode_argmax(tok, it, idm, ito), i
+        assert tuple(int(a[i]) for a in outs) == \
+            plan.decode_argmax(tok, it, g.dcores[it], idm, ito), i
         assert tuple(float(a[i]) for a in outs2) == \
             plan.decode_argmax2(it, *(int(a[i]) for a in outs)), i
 
@@ -156,7 +157,8 @@ def _grouper_child_main(grouper_addr, nchunks, out_queue, shutdown_event):
             # ('error', traceback) on its very first queue read, rather than racing the
             # server's "grouper Session stream closed unexpectedly".
             _check_batch_decode(g)
-            out_queue.put(('handshake', g.nbatches, g.initial_chunk, g.ntrees))
+            out_queue.put(('handshake', g.nbatches, g.initial_chunk, g.ntrees,
+                           list(g.dcores)))
             for ichunk in range(nchunks):
                 for ibatch in range(g.nbatches):
                     with g.get_output(ichunk, ibatch) as out:
@@ -603,9 +605,9 @@ class ServerTester:
             dd.fill_all_weights(t, w)
             self.wt.append(w)
 
-        # Reference chain. The per-tree Dcore values come from the plan (filled from
-        # the cdd2 registry), so the reference peak-finder mimics the GPU exactly.
-        self.rdd = ReferenceDedisperser(plan, sophistication=2)
+        # Reference chain. Dcores are the GPU cdd2 kernels' own, so the reference
+        # peak-finder emits exactly the same out_argmax tokens.
+        self.rdd = ReferenceDedisperser(plan, sophistication=2, Dcores=dd.Dcores)
         self.rdqk = ReferenceDequantizationKernel(self.B, p['total_nfreq'],
                                                   p['time_samples_per_chunk'])
         self.pf_kernels = self.rdd.pf_kernels
@@ -635,10 +637,15 @@ class ServerTester:
         # handshake completes; the queue orders it before any outputs).
         msg = self._queue_get()
         assert msg[0] == 'handshake', f"expected handshake message, got {msg[0]!r}"
-        _, g_nbatches, g_initial_chunk, g_ntrees = msg
+        _, g_nbatches, g_initial_chunk, g_ntrees, g_dcores = msg
         assert g_nbatches == self.nbatches
         assert g_initial_chunk == self.c0
         assert g_ntrees == self.ntrees
+
+        # The end-to-end statement that the producer's KERNEL properties crossed the wire:
+        # the grouper's dcores must be the GPU cdd2 kernels' own values. Nothing else checks
+        # this -- a wrong Dcore is a legal value that silently mis-decodes token fine times.
+        assert g_dcores == list(dd.Dcores), (g_dcores, list(dd.Dcores))
 
     # ---- Compare ----
 

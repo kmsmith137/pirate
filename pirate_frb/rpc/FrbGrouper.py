@@ -68,6 +68,9 @@ class FrbGrouperInjections:
     - ``ntrees`` (int) -- number of dedispersion trees.
     - ``ndm_out`` (list of int) -- per-tree output DM-channel counts (length ntrees).
     - ``nt_out`` (list of int) -- per-tree output time-sample counts (length ntrees).
+    - ``dcores`` (list of int) -- per-tree peak-finder core factors of the PRODUCER's cdd2
+      kernels (length ntrees), from the handshake. Sets the time granularity of the
+      out_argmax tokens; pass ``dcores[itree]`` to ``dedispersion_plan.decode_argmax()``.
     - ``dedispersion_config`` (DedispersionConfig) -- producer's dedispersion config (from the handshake).
     - ``dedispersion_plan`` (DedispersionPlan) -- producer's dedispersion plan, rebuilt from
       the two handshake yamls by ``DedispersionPlan.from_yaml_string()``. A

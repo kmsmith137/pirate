@@ -46,15 +46,9 @@ struct DedispersionPlan
         // and gpu_kernels=true, then an exception will be raised.
         bool gpu_kernels = true;
 
-        // If true, then Dcore values will be taken from the cdd2 kernel registry, and an
-        // exception will be thrown if a cdd2 kernel is missing from this build. If false,
-        // then the placeholder Dcore = DedispersionTree::time_downsampling is used
-        // (except in a plan made by from_yaml(), where Dcore is the producer's).
-        bool dcore_from_cdd2_registry = true;
-
-        // All three false: config-derived scalars, stage1 ranks and 'trees' only. Needs no
-        // CUDA device and no compiled cdd2 kernels -- this is the plan that GPU-less
-        // consumers (pirate_frb.varmap, FrbGrouper) build in order to get at the trees.
+        // Both false: config-derived scalars, stage1 ranks and 'trees' only. Needs no CUDA
+        // device -- this is the plan that GPU-less consumers (pirate_frb.varmap,
+        // FrbGrouper) build in order to get at the trees.
         static Params minimal();
     };
 
@@ -107,16 +101,13 @@ struct DedispersionPlan
     // grouper handshake), rebuilt for a consumer that may be running a different pirate_frb
     // build.
     //
-    // Returns a Params::minimal() plan built from 'config', with every yaml field
-    // cross-checked against the rebuilt plan and exactly one field ADOPTED from the yaml:
-    // trees[:].Dcore, the producer's cdd2-registry value. Dcore is not derivable from the
-    // config, and adopting it is what makes decode_argmax() correct for the producer's
-    // tokens. A disagreement throws, naming the field and both values.
+    // Returns a Params::minimal() plan built from 'config', cross-checked field by field
+    // against the yaml; a disagreement throws, naming the field and both values. Nothing is
+    // adopted from the yaml: a plan is a pure function of its config.
     //
-    // Consequence worth knowing: the returned plan has
-    // params.dcore_from_cdd2_registry=false, but its Dcore values are the producer's, not
-    // the placeholder. (No code infers the Dcore value from the flag; GpuDedisperser simply
-    // rejects any plan whose flag is false.)
+    // Note that decoding the producer's out_argmax tokens needs one thing this plan does
+    // NOT carry, because it is a property of the producer's compiled kernels rather than of
+    // the plan: their per-tree Dcore. See decode_argmax() below, and FrbGrouper::dcores.
     static std::shared_ptr<DedispersionPlan> from_yaml(const DedispersionConfig &config,
                                                        const YamlFile &plan_yaml);
 
@@ -138,9 +129,16 @@ struct DedispersionPlan
     // Inputs (see notes/dedispersion.tex for details of the out_argmax token format):
     //
     //   argmax_token = uint32 token from trees[itree]'s out_argmax array.
+    //   Dcore = the PRODUCING kernel's internal time-downsampling factor (see below)
     //   0 <= itree < ntrees
     //   0 <= idm_coarse < trees[itree].ndm_out     (dm index in out_max/out_argmax)
     //   0 <= itime_coarse < trees[itree].nt_out    (time index in out_max/out_argmax)
+    //
+    // 'Dcore' sets the time granularity of the token's fine-time field, and is a property of
+    // the peak-finding kernel that WROTE the token rather than of this plan. Take it from:
+    //    - GpuDedisperser::Dcores[itree] for GPU tokens,
+    //    - ReferenceDedisperserBase::Dcores[itree] for reference tokens
+    //    - FrbGrouper::dcores[itree] on the consumer side of a grouper handshake
     //
     // Outputs are TOPLEVEL-relative: tree-freq channels of the rank-toplevel_tree_rank
     // gridding, and full-resolution time samples with t=0 at the start of the current
@@ -169,7 +167,8 @@ struct DedispersionPlan
     //
     // Throws an exception on out-of-range indices or a malformed token.
 
-    void decode_argmax(uint argmax_token, long itree, long idm_coarse, long itime_coarse,
+    void decode_argmax(uint argmax_token, long itree, long Dcore,
+                       long idm_coarse, long itime_coarse,
                        long &fmin, long &fmax, long &tlo, long &thi, long &p) const;
 
 
@@ -251,10 +250,6 @@ struct DedispersionPlan
     std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length num_primary_trees
     std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length ntrees
 
-    // Note: stage2_pf_params[:].Dcore is copied from trees[:].Dcore (which the constructor
-    // fills from the cdd2 kernel registry if params.dcore_from_cdd2_registry, else from a
-    // placeholder; see Part 1), so that peak-finders built from the plan (GPU or reference)
-    // agree on out_argmax token granularity.
     std::vector<PeakFindingKernelParams> stage2_pf_params;          // length ntrees
 
     // Only needed if early triggers are used.

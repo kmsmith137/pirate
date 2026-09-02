@@ -445,7 +445,7 @@ struct GpuSbDedispersionKernel
     struct RegistryKey
     {
         // Note: no 'dtype' (the kernel is float32-only), and none of the peak-finding
-        // parameters (Wmax, Dcore, Dout, Tinner) which appear in CoalescedDdKernel2's key.
+        // parameters (Wmax, Tinner) which appear in CoalescedDdKernel2's key.
         // If a float16 variant is ever added, a dtype must be added here AND to the
         // generated filename (see cuda_generator/SbDedisperser.py).
 

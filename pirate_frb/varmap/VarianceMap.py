@@ -72,10 +72,6 @@ from .distance import YTRUE_FLOOR, f, AdmissibilityResult, DistanceEstimate
 def make_plan(config):
     """The Params.minimal() DedispersionPlan of 'config'. Needs no GPU.
 
-    Its trees' Dcore is the placeholder time_downsampling, never a cdd2-registry value:
-    varmap never reads Dcore, and requiring the registry would make an archived map
-    unreadable on any build whose compiled kernel set does not cover that config.
-
     Note that ``plan.trees`` is a fresh python list of COPIES on every attribute access
     (pybind11's std::vector caster), so code that needs one tree repeatedly should cache
     ``tree = plan.trees[itree]`` rather than re-indexing in a loop.
@@ -229,7 +225,7 @@ class VarianceMap:
     - ``detrender`` -- the Detrender2dParams used, or None for "no Detrender2d".
     - ``itree`` (int) -- index of this tree in the plan.
     - ``tree`` -- ``plan.trees[itree]``, cached: that list is rebuilt on every attribute
-      access. Its ``Dcore`` is a placeholder and is not meaningful here -- see make_plan().
+      access.
 
     Geometry (all read off ``tree`` at construction, and needing no GPU):
 

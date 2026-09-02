@@ -174,6 +174,13 @@ struct FrbGrouper
     std::vector<long> ndm_out;    // length ntrees, from dedispersion_plan->trees[:].ndm_out
     std::vector<long> nt_out;     // length ntrees, from dedispersion_plan->trees[:].nt_out
 
+    // Per-tree peak-finder core factors (length ntrees), from the handshake. These are a
+    // property of the PRODUCER's compiled cdd2 kernels rather than of the plan, so they are
+    // adopted from the wire rather than recomputed here -- which is what makes token
+    // decoding correct even if this process runs a different pirate_frb build. Pass
+    // dcores[itree] to DedispersionPlan::decode_argmax().
+    std::vector<long> dcores;
+
     // ----- Lifecycle (entry points) -----
     //
     // Teardown is RAII-safe: the Session handler holds a bare back-pointer,

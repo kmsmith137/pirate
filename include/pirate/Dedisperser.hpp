@@ -46,9 +46,8 @@ struct GpuDedisperser
 {
     struct Params
     {
-        // The plan must be complete, i.e. built with all three DedispersionPlan::Params
-        // flags true: the constructor asserts it, since it reads the plan's kernel params
-        // and needs Dcore values that match the compiled cdd2 kernels.
+        // The plan must be complete, i.e. built with both DedispersionPlan::Params flags
+        // true: the constructor asserts it, since it reads the plan's kernel params.
         std::shared_ptr<DedispersionPlan> plan;
         std::shared_ptr<CudaStreamPool> stream_pool;
 
@@ -309,6 +308,14 @@ public:
     std::shared_ptr<GpuTreeGriddingKernel> tree_gridding_kernel;
     std::vector<std::shared_ptr<GpuDedispersionKernel>> stage1_dd_kernels;
     std::vector<std::shared_ptr<CoalescedDdKernel2>> cdd2_kernels;
+
+    // Per-tree peak-finder core factors, = cdd2_kernels[i]->Dcore (length ntrees). These are
+    // compiled into the cdd2 kernels and cannot be predicted from the plan, so they are what
+    // a consumer of this dedisperser's out_argmax tokens needs in order to decode them:
+    // pass Dcores[itree] to DedispersionPlan::decode_argmax(). Filled by the constructor, so
+    // it is readable before allocate().
+    std::vector<long> Dcores;
+
     std::shared_ptr<GpuLaggedDownsamplingKernel> lds_kernel;
     std::shared_ptr<GpuRingbufCopyKernel> g2g_copy_kernel;
     std::shared_ptr<CpuRingbufCopyKernel> h2h_copy_kernel;
@@ -424,11 +431,6 @@ public:
 //
 //   - As close to GPU implementation as possible!
 //
-// Note on Dcore: the per-tree peak-finding Dcore values come from the plan
-// (plan->stage2_pf_params[:].Dcore, filled from the cdd2 kernel registry), so the
-// reference peak-finders mimic the GPU kernels whenever the corresponding cdd2 kernels
-// are compiled into the build. See PeakFindingKernelParams::Dcore for details.
-
 struct ReferenceDedisperserBase
 {
     struct Params {
@@ -440,6 +442,13 @@ struct ReferenceDedisperserBase
         // already-gridded toplevel tree-domain array. Used by unit tests that need to
         // inject probes into specific tree-freq channels (see test_decode_argmax).
         bool tree_domain_input = false;
+
+        // Per-tree peak-finder core factors (length ntrees), or empty for the default
+        // Dcores[i] = trees[i].time_downsampling, i.e. one profile evaluation per output
+        // bin at the coarsest level. To make this dedisperser's out_argmax tokens identical
+        // to a GpuDedisperser's, pass its Dcores: the GPU value is a property of the
+        // compiled cdd2 kernel and cannot be predicted from the plan.
+        std::vector<long> Dcores;
     };
 
     // Constructor not intended to be called directly -- use make() below, which
@@ -459,6 +468,9 @@ struct ReferenceDedisperserBase
     long nbatches = 0;                     // = (total_beams / beams_per_batch)
     long ntrees = 0;                       // same as params.plan->ntrees
     std::vector<DedispersionTree> trees;   // same as params.plan->trees
+
+    // Resolved Params::Dcores: either the caller's vector, or the default described there.
+    std::vector<long> Dcores;              // length ntrees
 
     std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
 

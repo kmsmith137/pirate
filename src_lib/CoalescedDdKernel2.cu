@@ -1,7 +1,7 @@
 #include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"  // used in CoalescedDdKernel2::time()
 #include "../include/pirate/DedispersionPlan.hpp"    // used in CoalescedDdKernel2::time()
-#include "../include/pirate/DedispersionTree.hpp"    // used in get_registry_dcore(dtype, tree)
+#include "../include/pirate/DedispersionTree.hpp"    // used in _make_tree_key(dtype, tree)
 #include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
@@ -26,7 +26,7 @@ namespace pirate {
 #endif
 
 
-// Shared core of _make_registry_key() and get_registry_dcore() below -- keeps the
+// Shared core of _make_registry_key() and _make_tree_key() below -- keeps the
 // Tinner formula and key-field mapping in one place.
 static CoalescedDdKernel2::RegistryKey _make_key(
     const Dtype &dtype, long dd_rank, long max_kernel_width,
@@ -51,22 +51,18 @@ static CoalescedDdKernel2::RegistryKey _make_key(
 }
 
 
-// File-local. Warning: a RegistryKey contains no Dcore, so registry().get() may return
-// a kernel whose Dcore does not match PeakFindingKernelParams::Dcore. (The
-// CoalescedDdKernel2 constructor checks this by hand.)
+// File-local. Note this does not call pf_params.validate(): test_random() builds a key from
+// params whose nt_out is not filled in yet (it comes from the kernel this key looks up).
 static CoalescedDdKernel2::RegistryKey _make_registry_key(
     const DedispersionKernelParams &dd_params, const PeakFindingKernelParams &pf_params)
 {
-    // Note: does not call pf_params.validate(), since test_random() calls this function
-    // (to peek the registry Dcore) while pf_params.Dcore is still unset.
-
     return _make_key(pf_params.dtype, dd_params.dd_rank, pf_params.max_kernel_width,
                      pf_params.nt_in, pf_params.nt_wt, pf_params.subband_counts);
 }
 
 
 // File-local. Maps a DedispersionTree to the registry key of the cdd2 kernel which
-// implements it. Shared by get_registry_dcore() and _all_kernels_registered().
+// implements it. Used by _all_kernels_registered() below.
 static CoalescedDdKernel2::RegistryKey _make_tree_key(
     const Dtype &dtype, const DedispersionTree &tree)
 {
@@ -76,34 +72,13 @@ static CoalescedDdKernel2::RegistryKey _make_tree_key(
 }
 
 
-// Static member function. See doc-comment in CoalescedDdKernel2.hpp.
-long CoalescedDdKernel2::get_registry_dcore(
-    const ksgpu::Dtype &dtype, const DedispersionTree &tree)
-{
-    RegistryValue val = registry().get(_make_tree_key(dtype,tree), /*init_kernel=*/ false);
-
-    // Check that the compile-time downsampling factors in the kernel agree
-    // with the expected downsampling factors in the DedispersionTree.
-    xassert_eq(val.dm_downsampling, tree.dm_downsampling);
-    xassert_eq(val.time_downsampling, tree.time_downsampling);
-
-    return val.Dcore;
-}
-
-
 // File-local. Returns true if every tree in 'plan' has a cdd2 kernel compiled into this
 // build. Called by time_one(), which uses it to skip (rather than throw) when kernels are
 // missing: makefile_helper.py only emits the "production" cdd2 kernels when its
 // 'production_kernels' flag is set, and even then only for the (dtype, subband_counts, ...)
 // combinations listed there.
-//
-// The 'plan' argument must have been constructed with
-// DedispersionPlan::Params::dcore_from_cdd2_registry=false, since a true plan queries the
-// registry itself (and throws on a missing kernel).
 static bool _all_kernels_registered(const Dtype &dtype, const DedispersionPlan &plan)
 {
-    xassert(!plan.params.dcore_from_cdd2_registry);
-
     for (const DedispersionTree &tree: plan.trees)
         if (!CoalescedDdKernel2::registry().has_key(_make_tree_key(dtype,tree)))
             return false;
@@ -166,16 +141,12 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     this->expected_wt_strides = pf_weight_layout.get_strides(pf_params.beams_per_batch, pf_params.ndm_wt, pf_params.nt_wt);
     this->Dcore = registry_value.Dcore;
 
-    // Caller-specified Dcore (e.g. from DedispersionPlan) must match the compiled kernel.
-    xassert_eq(pf_params.Dcore, Dcore);
-
     // The compile-time coarse-graining factors must match what the caller's array shapes
-    // imply. These are the params-side counterpart of the tree-side check in
-    // get_registry_dcore(): together they cover both producers of nt_out and ndm_out, and
-    // they are what replaced 'Dout' as a RegistryKey field.
+    // imply. This is what replaced 'Dout' as a RegistryKey field: the key no longer pins
+    // the factors, so the kernel checks them against the params instead.
     //
     // The DM identity is 'one output DM per warp of the second dedispersion stage':
-    // ndm_out * dm_downsampling == 2^(amb_rank + dd_rank). Nothing checked it before.
+    // ndm_out * dm_downsampling == 2^(amb_rank + dd_rank).
     xassert_eq(this->time_downsampling, registry_value.time_downsampling);
     xassert_eq(pf_params.ndm_out * registry_value.dm_downsampling,
                pow2(dd_params.amb_rank + dd_params.dd_rank));
@@ -401,9 +372,9 @@ void CoalescedDdKernel2::test_random()
     pf_params.nt_in = nt_in_per_chunk;
     pf_params.nt_wt = xdiv(nt_in_per_chunk, nt_in_per_wt);
 
-    // Dcore and the time downsampling factor are properties of the compiled GPU kernel
-    // (registry values, not part of the key). Metadata-only peek: init_kernel=false skips
-    // GPU/kernel initialization.
+    // The time downsampling factor is a property of the compiled GPU kernel (a registry
+    // value, not part of the key). Metadata-only peek: init_kernel=false skips GPU/kernel
+    // initialization.
     //
     // NOTE THE KEY IS REBUILT FROM 'pf_params' rather than reusing the 'key' drawn above.
     // That is deliberate: if _make_registry_key()'s field mapping disagreed with the drawn
@@ -418,7 +389,6 @@ void CoalescedDdKernel2::test_random()
                                        /*init_kernel=*/ false);
 
     pf_params.nt_out = xdiv(nt_in_per_chunk, val.time_downsampling);
-    pf_params.Dcore = val.Dcore;
 
     CoalescedDdKernel2 cdd2_kernel(dd_params, pf_params);
     BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
@@ -429,7 +399,7 @@ void CoalescedDdKernel2::test_random()
     // The reference peak-finder is parameterized identically to the GPU kernel's peak-finding
     // half, xdm_rank included, so it reads the same (ndm_out << xdm_rank, M) subband array and
     // emits the same argmax tokens.
-    ReferencePeakFindingKernel ref_pf_kernel(pf_params);
+    ReferencePeakFindingKernel ref_pf_kernel(pf_params, cdd2_kernel.Dcore);
 
     FrequencySubbands &fs = cdd2_kernel.fs;
     GpuPfWeightLayout &wl = cdd2_kernel.pf_weight_layout;

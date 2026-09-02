@@ -63,16 +63,20 @@ void PeakFindingKernelParams::validate() const
     xassert(is_power_of_two(xdiv(nt_in, nt_out)));
     xassert(is_power_of_two(xdiv(nt_out, nt_wt)));
 
-    // Dcore == 0 (unset) is invalid -- see comment in PeakFindingKernel.hpp.
-    xassert(Dcore > 0);
-    xassert(is_power_of_two(Dcore));
-    xassert_divisible(xdiv(nt_in, nt_out), Dcore);
-
     // Kernels currently assume that the input spans an integer number
     // of GPU cache lines.
 
     long simd_width = xdiv(32, dtype.nbits);
     xassert_divisible(nt_in, 32 * simd_width);
+}
+
+
+// See the declaration in PeakFindingKernel.hpp for what Dcore means and who owns it.
+void validate_dcore(long Dcore, long Dout)
+{
+    xassert(Dcore > 0);
+    xassert(is_power_of_two(Dcore));
+    xassert_divisible(Dout, Dcore);
 }
 
 
@@ -201,10 +205,12 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src) const
 // ReferencePeakFindingKernel
 
 
-ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelParams &params_) :
-    params(params_), fs(params_.subband_counts), Dcore(params_.Dcore)
+ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelParams &params_,
+                                                       long Dcore_) :
+    params(params_), fs(params_.subband_counts), Dcore(Dcore_)
 {
     params.validate();
+    validate_dcore(Dcore, xdiv(params.nt_in, params.nt_out));
 
     const PeakFindingKernelParams &p = params;
     long B = p.beams_per_batch;
@@ -223,8 +229,6 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
     this->tpad = max(2*Wmax, 4L);
     this->pstate = Array<float> ({p.total_beams, p.ndm_out, E*M, tpad}, af_uhost | af_zero);
     this->num_levels = max(integer_log2(Wmax), 1);
-
-    // Note: Dcore range/divisibility checks are in params.validate().
 
     this->tmp_dt.resize(num_levels);
     this->tmp_nt.resize(num_levels);
@@ -685,14 +689,9 @@ void PeakFindingKernelParams::fill_host_weights(Array<float> &out, const Array<d
 // GpuPeakFindingKernel
 
 
-// File-local. Warning: a RegistryKey contains no Dcore, so registry().get() may return
-// a kernel whose Dcore does not match PeakFindingKernelParams::Dcore. (The
-// GpuPeakFindingKernel constructor checks this by hand.)
+// File-local.
 static GpuPeakFindingKernel::RegistryKey _make_registry_key(const PeakFindingKernelParams &pf_params)
 {
-    // Note: does not call pf_params.validate(), since test_random() calls this function
-    // (to peek the registry Dcore) while pf_params.Dcore is still unset.
-
     GpuPeakFindingKernel::RegistryKey key;
     key.dtype = pf_params.dtype;
     key.subband_counts = pf_params.subband_counts;
@@ -730,10 +729,6 @@ GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params
     expected_wt_shape = pf_weight_layout.get_shape(params.beams_per_batch, params.ndm_wt, params.nt_wt);
     expected_wt_strides = pf_weight_layout.get_strides(params.beams_per_batch, params.ndm_wt, params.nt_wt);
     Dcore = registry_value.Dcore;
-
-    // Caller-specified Dcore (e.g. from DedispersionPlan) must match the compiled kernel.
-    xassert_eq(params.Dcore, Dcore);
-
     dtype = params.dtype;
     Dout = xdiv(params.nt_in, params.nt_out);
     nbatches = xdiv(params.total_beams, params.beams_per_batch);
@@ -875,10 +870,6 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     params_small.nt_out = nt_out_per_chunk;
     params_small.nt_wt = nt_wt_per_chunk;
 
-    // Dcore is a property of the compiled GPU kernel (registry value, not part of the
-    // key). Metadata-only peek: init_kernel=false skips GPU/kernel initialization.
-    params_small.Dcore = registry().get(_make_registry_key(params_small),
-                                        /*init_kernel=*/ false).Dcore;
     params_small.validate();
 
     PeakFindingKernelParams params_large;
@@ -892,7 +883,6 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     params_large.nt_in = nchunks * nt_in_per_chunk;
     params_large.nt_out = nchunks * nt_out_per_chunk;
     params_large.nt_wt = nchunks * nt_wt_per_chunk;
-    params_large.Dcore = params_small.Dcore;   // same registry key (nchunks scales nt_* together)
     params_large.validate();
 
     GpuPeakFindingKernel gpu_kernel(params_small);   // just test constructor for now
@@ -908,8 +898,10 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
         xassert(threw);
     }
 
-    ReferencePeakFindingKernel ref_kernel_small(params_small);
-    ReferencePeakFindingKernel ref_kernel_large(params_large);
+    // The reference kernels must emit the same tokens as the GPU kernel, so they take its
+    // compiled-in Dcore. (params_large has the same registry key: nchunks scales nt_* together.)
+    ReferencePeakFindingKernel ref_kernel_small(params_small, gpu_kernel.Dcore);
+    ReferencePeakFindingKernel ref_kernel_large(params_large, gpu_kernel.Dcore);
 
     cout << "GpuPeakFindingKernel::test():"
          << " dtype=" << key.dtype.str() 
@@ -1606,11 +1598,10 @@ void ReferencePfSquare::test_vs_peak_finder()
     pf_params.nt_out = nt_in;   // Dout = 1, i.e. no time coarse-graining
     pf_params.nt_in = nt_in;
     pf_params.nt_wt = nt_in;
-    pf_params.Dcore = 1;        // evaluate h_p at every time sample
     pf_params.xdm_rank = K;
     pf_params.validate();
 
-    ReferencePeakFindingKernel pf(pf_params);
+    ReferencePeakFindingKernel pf(pf_params, /*Dcore=*/ 1);   // evaluate h_p at every time sample
 
     // One PfSquare row per (coarse dm, multiplet) pair of the peak-finder's input array, in
     // the input's own (dpf, m) order. The peak-finder's m_ext is a DIFFERENT ordering of the

@@ -86,12 +86,6 @@ struct DedispersionTree
     // and its verifier to keep honest.
     long xdm_rank() const;
 
-    // Internal time-downsampling ("core") factor of this tree's peak-finding kernel; sets
-    // the time granularity of out_argmax tokens (see PeakFindingKernelParams::Dcore).
-    // A property of the compiled cdd2 kernel (registry value), NOT derivable from the
-    // config; equals time_downsampling (just above) if the kernel is not in this build.
-    long Dcore = 0;
-
     // Number of time profiles used in peak-finder. (Equal to 1 + 3*log2(pf.max_width).)
     long nprofiles = 0;
 

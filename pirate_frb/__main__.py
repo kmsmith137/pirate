@@ -534,9 +534,9 @@ def _parse_channel_spec(spec, nfreq):
 # change A: the analytic route (varmap.detrender_free) computes the same matrix and never
 # reads any downsampling factor.
 #
-# The peak-finder's Dcore is not among them, and could not be: it follows the tree's own
-# time_downsampling, which is not a config field. The sweep never sees it -- it ends in a
-# PfSquare, which evaluates h_p at every time sample.
+# The peak-finder's Dcore is not among them, and could not be: it is a property of a
+# peak-finding kernel, not of the config. The sweep never sees it -- it ends in a PfSquare,
+# which evaluates h_p at every time sample.
 def _varmap_bf_override_config(config, nbeams=1):
     overrides = []
 
@@ -1364,7 +1364,6 @@ def parse_show_dedisperser(subparsers):
     parser.add_argument('-b', '--beams', type=int, help="Override config.beams_per_gpu with specified value")
     parser.add_argument('-g', '--max-gpu-clag', type=int, help="Override config.max_gpu_clag with specified value")
     parser.add_argument('--channel-map', action='store_true', help="Show channel map tree->freq (warning: produces long output!)")
-    parser.add_argument('-a', '--authoritative', action='store_true', help="guarantees consistency with GPU kernels (kernels must be precompiled)")
     parser.add_argument('-r', '--resources', action='store_true', help="Show resource tracking (all kernels must be precompiled)")
     parser.add_argument('-R', '--fine-grained-resources', action='store_true', help="Like -r, but shows fine-grained per-kernel info")
     parser.add_argument('--test', action='store_true', help="Run GpuDedisperser.test_one() with config")
@@ -1405,15 +1404,8 @@ def show_dedisperser(args):
         atomic_print(config_yaml)
         print_separator('DedispersionPlan starts here')
 
-    # Take Dcore from the cdd2 registry iff some flag needs consistency with the compiled
-    # cdd2 kernels: -a requests it explicitly; -r/-R construct a GpuDedisperser from this
-    # plan. Otherwise the plan is displayable even in a build without the config's cdd2
-    # kernels, at the cost of showing placeholder (non-registry) Dcore values.
-    dcore_from_cdd2_registry = args.authoritative or args.resources or args.fine_grained_resources
-
     t0 = time.time()
-    plan_params = DedispersionPlan.Params(dcore_from_cdd2_registry=dcore_from_cdd2_registry)
-    plan = DedispersionPlan(config, plan_params)
+    plan = DedispersionPlan(config)
     plan_dt = time.time() - t0
     if args.time:
         atomic_print(f'# DedispersionPlan construction took {plan_dt:.3f} seconds\n\n')

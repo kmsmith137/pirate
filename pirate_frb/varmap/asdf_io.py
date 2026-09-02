@@ -90,14 +90,6 @@ silently reinterpreted map rather than an error:
 ``format_version`` exists from the start, so the next format change gets a clean error
 rather than a KeyError from deep inside the reader. There is no migration path: a file
 without it is rejected by name.
-
-'Dcore' in a variance-map file is NEVER authoritative
------------------------------------------------------
-The plan yaml carries a per-tree ``Dcore``, and it is always the placeholder
-``DedispersionTree.time_downsampling``: varmap builds its plans with
-``Params.dcore_from_cdd2_registry=False`` (see VarianceMap.make_plan), and the brute-force
-sweep does too. Do not decode peak-finder tokens with it -- the authoritative value is the
-producer's, and it travels in the FrbGrouper handshake, not here.
 """
 
 import contextlib

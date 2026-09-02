@@ -963,9 +963,8 @@ void register_kernel_bindings(pybind11::module &m)
               params.nt_out = nt_out;
               params.nt_in = nt_in;
               params.nt_wt = nt_wt;
-              params.Dcore = Dcore;
               params.xdm_rank = xdm_rank;
-              return new ReferencePeakFindingKernel(params);
+              return new ReferencePeakFindingKernel(params, Dcore);
           }),
           py::arg("subband_counts"), py::arg("max_kernel_width"),
           py::arg("beams_per_batch"), py::arg("total_beams"),

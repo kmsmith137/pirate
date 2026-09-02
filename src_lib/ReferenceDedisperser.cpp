@@ -53,8 +53,7 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
     const auto &plan = params.plan;   // local alias -- keeps the plan->... body below unchanged
     xassert(plan);
     // The plan must have DedispersionPlan::Params::gpu_kernels set: the buffer/kernel params
-    // read below are only filled then. (dcore_from_cdd2_registry=false plans are fine here:
-    // reference dedispersion works with the placeholder Dcore values.)
+    // read below are only filled then.
     xassert(plan->params.gpu_kernels);
 
     this->config = plan->config;
@@ -73,11 +72,28 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
     if (!params.tree_domain_input)
         this->tree_gridding_kernel = make_shared<ReferenceTreeGriddingKernel> (plan->tree_gridding_kernel_params);
 
-    // Peak-finding kernels, from the plan's params verbatim -- including pf_params.Dcore and
-    // pf_params.xdm_rank, which is what makes their out_argmax tokens identical to a cdd2
-    // kernel's.
+    // Resolve Params::Dcores (see its doc-comment in Dedisperser.hpp for the default and
+    // for why a caller who wants GPU-identical tokens has to pass the GpuDedisperser's).
+    // Validated here rather than left to the per-tree ReferencePeakFindingKernel
+    // constructors, so a bad vector is reported before any of them is built.
+    if (params.Dcores.empty()) {
+        for (long itree = 0; itree < ntrees; itree++)
+            this->Dcores.push_back(trees.at(itree).time_downsampling);
+    }
+    else {
+        xassert_eq(long(params.Dcores.size()), ntrees);
+        this->Dcores = params.Dcores;
+    }
+
     for (long itree = 0; itree < ntrees; itree++)
-        this->pf_kernels.push_back(make_shared<ReferencePeakFindingKernel> (plan->stage2_pf_params.at(itree)));
+        validate_dcore(Dcores.at(itree), trees.at(itree).time_downsampling);
+
+    // Peak-finding kernels. Their pf_params come from the plan verbatim -- including
+    // pf_params.xdm_rank, which is part of what makes their out_argmax tokens identical to a
+    // cdd2 kernel's; the other part is Dcores (above).
+    for (long itree = 0; itree < ntrees; itree++)
+        this->pf_kernels.push_back(make_shared<ReferencePeakFindingKernel> (plan->stage2_pf_params.at(itree),
+                                                                           Dcores.at(itree)));
 
     this->out_sb.resize(ntrees);       // elements filled by alloc_subband_buffer()
 

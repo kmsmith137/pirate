@@ -207,10 +207,6 @@ def _make_test_config(toplevel_tree_rank, subband_counts, num_primary_trees=1,
     """A small DedispersionConfig. Every tree gets 2^R coarse DM channels per multiplet
     (DedispersionTree.dm_downsampling, not a config field), which is what the variance map's
     index convention assumes.
-
-    The peak-finder's Dcore is likewise not selectable: it follows
-    DedispersionTree.time_downsampling = 2^dd_rank1. The sweep does not read it (see
-    _SweepGeometry), so this matters only in that these configs run at Dcore > 1.
     """
 
     from ..pirate_pybind11 import DedispersionConfig, PrimaryTree
@@ -5231,7 +5227,7 @@ def test_lds_bindings(r=8, subband_counts=(2,2,1), num_primary_trees=3, nbeams=4
     config.num_active_batches = 1
     config.validate()
 
-    plan = DedispersionPlan(config, DedispersionPlan.Params(dcore_from_cdd2_registry=False))
+    plan = DedispersionPlan(config)
     bp, lp = plan.stage1_dd_buf_params, plan.lds_params
 
     npri = int(config.num_primary_trees)

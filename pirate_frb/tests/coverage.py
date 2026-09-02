@@ -186,9 +186,8 @@ def _straddle_rate(configs):
 
 
 def _plan(config):
-    """A DedispersionPlan, with Dcore NOT taken from the cdd2 registry -- the multiplet map
-    does not depend on it, and requiring the registry would make this report depend on which
-    kernels the build compiled in a second, unrelated way."""
+    """A Params.minimal() DedispersionPlan: this report only needs the trees, and a
+    minimal plan needs no GPU."""
 
     return DedispersionPlan(config, DedispersionPlan.Params.minimal())
 

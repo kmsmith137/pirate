@@ -66,8 +66,7 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
         One requirement, checked up front: ``beams_per_gpu == beams_per_batch``. The
         output-array coarse-graining needs no check -- ``DedispersionTree``'s
         ``dm_downsampling`` and ``time_downsampling`` are both ``2^dd_rank1`` by construction
-        and neither is a config field. The latter sets the peak-finder's Dcore, which
-        neither sweep reads.
+        and neither is a config field.
         The beam count comes from ``config.beams_per_batch``: on the GPU the beam axis is a
         pure spectator, so a batch of B beams runs B distinct passes concurrently. Measurement
         found that batching does not speed up a full sweep, so the CLI forces 1.
@@ -275,8 +274,7 @@ class _SweepGeometry:
         from ..pirate_pybind11 import DedispersionPlan
 
         self.config = config
-        params = DedispersionPlan.Params(dcore_from_cdd2_registry=False)
-        self.plan = plan = DedispersionPlan(config, params)
+        self.plan = plan = DedispersionPlan(config)
         self.nfreq = int(plan.nfreq)
         self.nt_in = int(plan.nt_in)
         self.ntrees = int(plan.ntrees)
@@ -348,17 +346,11 @@ class _SweepGeometry:
             r, R = int(t.total_rank()), int(fs.pf_rank)
             gamma = int(t.primary_tree_index)
 
-            # Note there is deliberately NO constraint on Dcore. Both sweeps end in a
-            # PfSquare, which evaluates h_p at every time sample by construction, so nothing
-            # downstream of the dedisperser sees the peak-finder's Dcore sublattice at all.
-            #
-            # test_multimap_vs_sweep() is what makes that a CHECKED property rather than an
-            # assumed one, without needing a Dcore knob to vary: detrender_free.py reads
-            # neither Dcore nor time_downsampling, so it is a Dcore-blind oracle, and every
-            # config it is run against has Dcore >= 2 (Dcore = time_downsampling = 2^dd_rank1
-            # for a dcore_from_cdd2_registry=False plan, and dd_rank >= 1). A sweep that depended
-            # on Dcore would disagree with it. Measured over 494 drawn trees: Dcore is 2 or 4,
-            # never 1.
+            # Note there is deliberately NO constraint on the peak-finder's Dcore. Both
+            # sweeps end in a PfSquare, which evaluates h_p at every time sample by
+            # construction, so nothing downstream of the dedisperser sees the peak-finder's
+            # Dcore sublattice at all -- and a sweep never builds a peak-finding kernel, so
+            # it never chooses a Dcore in the first place.
             #
             # Nor is there a constraint on xdm_rank. The subband array has 2^(r-R) coarse DM
             # rows whatever K is; K only says how many of them the PEAK-FINDER max-reduces

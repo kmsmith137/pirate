@@ -92,12 +92,10 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
 {
     xassert(params.plan);
 
-    // The plan must be a COMPLETE one (DedispersionPlan::Params all true): the kernel and
-    // buffer params used below are only filled in a gpu_kernels plan, and the Dcore values
-    // have to be the compiled cdd2 kernels' rather than the placeholder.
+    // The plan must be a COMPLETE one (both DedispersionPlan::Params flags true): the
+    // kernel and buffer params used below are only filled in a gpu_kernels plan.
     xassert(params.plan->params.mega_ringbuf);
     xassert(params.plan->params.gpu_kernels);
-    xassert(params.plan->params.dcore_from_cdd2_registry);
     xassert(params.stream_pool);
     xassert(params.cuda_device_id >= 0);
     xassert_eq(params.plan->num_active_batches, params.stream_pool->num_compute_streams);
@@ -204,6 +202,7 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
         auto cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);
         this->resource_tracker += cdd2_kernel->resource_tracker;
         this->cdd2_kernels.push_back(cdd2_kernel);
+        this->Dcores.push_back(cdd2_kernel->Dcore);
     }
 
     // Set up the output ringbuf shape metadata (output_ringbuf.allocate() uses
@@ -1379,14 +1378,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         gdd->allocate(gpu_allocator, host_allocator);
     }
 
-    // Reference dedispersers take their per-tree Dcore from plan->stage2_pf_params, which
-    // the plan filled from the cdd2 registry -- so the reference peak-finders mimic the GPU
-    // kernels. (This assert is redundant with one in the CoalescedDdKernel2 constructor,
-    // but cheap documentation.)
-    if (!host_only)
-        for (long itree = 0; itree < ntrees; itree++)
-            xassert_eq(plan->stage2_pf_params.at(itree).Dcore, gdd->cdd2_kernels.at(itree)->Dcore);
-
     // pf_tmp: used to store output from ReferencePeakFindingKernel::eval_tokens().
     vector<Array<float>> pf_tmp(ntrees);
     for (long itree = 0; itree < ntrees; itree++) {
@@ -1397,6 +1388,12 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     // Create ReferenceDedispersers.
     ReferenceDedisperserBase::Params rdd_params;
     rdd_params.plan = plan;
+
+    // Give the reference peak-finders the GPU kernels' compiled-in Dcores, so the two sides
+    // emit identical out_argmax tokens. In host_only mode there is no GpuDedisperser to take
+    // them from, and nothing compares tokens across the two, so the default is fine.
+    if (!host_only)
+        rdd_params.Dcores = gdd->Dcores;
     rdd_params.sophistication = 0;  shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(rdd_params);
     rdd_params.sophistication = 1;  shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(rdd_params);
     rdd_params.sophistication = 2;  shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(rdd_params);

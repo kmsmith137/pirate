@@ -1,5 +1,7 @@
 #include "../include/pirate/FrbGrouper.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"  // DedispersionPlan::from_yaml_string()
+#include "../include/pirate/PeakFindingKernel.hpp" // validate_dcore()
+#include "../include/pirate/inlines.hpp"           // xdiv()
 #include "../include/pirate/network_utils.hpp"    // parse_ip_address, is_loopback_address
 #include "../include/pirate/utils.hpp"            // AtomicPrint
 
@@ -546,6 +548,16 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
     for (long t = 0; t < ntrees; t++) {
         ndm_out.push_back(dedispersion_plan->trees.at(t).ndm_out);
         nt_out.push_back(dedispersion_plan->trees.at(t).nt_out);
+    }
+
+    // The producer's per-tree peak-finder core factors (see the member's doc-comment in
+    // FrbGrouper.hpp). Checked here, once, rather than per decoded event.
+    dcores.clear();
+    xassert_eq(hs.dcores_size(), int(ntrees));
+    for (long t = 0; t < ntrees; t++) {
+        const DedispersionTree &tree = dedispersion_plan->trees.at(t);
+        dcores.push_back(hs.dcores(t));
+        validate_dcore(dcores.at(t), xdiv(tree.nt_ds, tree.nt_out));
     }
 
     // Geometry cross-checks (defensive).
