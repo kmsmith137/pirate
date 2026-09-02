@@ -52,8 +52,10 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
 {
     const auto &plan = params.plan;   // local alias -- keeps the plan->... body below unchanged
     xassert(plan);
-    // Incomplete plans lack the buffer/kernel params used below. (cdd2_kernel_required=false
-    // plans are fine here: reference dedispersion works with the default Dcore values.)
+    // The plan must have DedispersionPlan::Params::gpu_kernels set: the buffer/kernel params
+    // read below are only filled then. (dcore_from_cdd2_registry=false plans are fine here:
+    // reference dedispersion works with the placeholder Dcore values.)
+    xassert(plan->params.gpu_kernels);
 
     this->config = plan->config;
     this->dtype = plan->dtype;

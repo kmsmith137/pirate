@@ -92,10 +92,12 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
 {
     xassert(params.plan);
 
-    // A plan built without cdd2_kernel_required has default (non-registry) Dcore values,
-    // which would not match the compiled cdd2 kernels. This also excludes incomplete plans
-    // (which never set it), and those additionally lack the MegaRingbuf/kernel params below.
-    xassert(params.plan->cdd2_kernel_required);
+    // The plan must be a COMPLETE one (DedispersionPlan::Params all true): the kernel and
+    // buffer params used below are only filled in a gpu_kernels plan, and the Dcore values
+    // have to be the compiled cdd2 kernels' rather than the placeholder.
+    xassert(params.plan->params.mega_ringbuf);
+    xassert(params.plan->params.gpu_kernels);
+    xassert(params.plan->params.dcore_from_cdd2_registry);
     xassert(params.stream_pool);
     xassert(params.cuda_device_id >= 0);
     xassert_eq(params.plan->num_active_batches, params.stream_pool->num_compute_streams);
@@ -1193,7 +1195,7 @@ void GpuDedisperser::_fill_analytic_weights(const Array<double> &freq_variances)
     // Analytic per-(dm, subband, profile) variances for every tree (validates freq_variances).
     // Assumes no detrender!
     std::vector<Array<double>> tree_variance =
-        compute_detrender_free_varcoarse(plan->config, freq_variances);
+        compute_detrender_free_varcoarse(*plan, freq_variances);
     xassert_eq(long(tree_variance.size()), ntrees);
 
     const long nslots = params.nbatches_wt * beams_per_batch;
@@ -1337,7 +1339,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     // Same source as _fill_analytic_weights() uses in production; see the long comment there.
     // Per-tree shape (ndm_wt, N, nprofiles).
     std::vector<Array<double>> tree_variance =
-        compute_detrender_free_varcoarse(config, freq_variance);
+        compute_detrender_free_varcoarse(*plan, freq_variance);
 
     shared_ptr<GpuDedisperser> gdd;
     long ntrees = plan->ntrees;

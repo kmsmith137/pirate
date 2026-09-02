@@ -153,6 +153,7 @@ def test_cpp_detrender_free(verbose=False):
     from ..pirate_pybind11 import DedispersionConfig
     from ..varmap import (compute_detrender_free_varfine as py_varfine,
                           compute_detrender_free_varcoarse as py_varcoarse)
+    from ..varmap.VarianceMap import make_plan
     # _random_config() is what every randomized varmap test draws from, and pirate_frb/tests/
     # coverage.py reports its rates. Drawing here from a fresh make_random() instead would let this
     # test's population drift away from the one the coverage rows describe.
@@ -165,10 +166,14 @@ def test_cpp_detrender_free(verbose=False):
     # require it either -- so let make_random_freq_variances() do whatever it does.
     v = np.asarray(config.make_random_freq_variances(noisy=True), dtype=np.float64)
 
+    # The C++ entry points take a plan and the python ones take a config: every C++ caller
+    # holds a plan, whereas the python package's public surface is config-keyed throughout.
+    plan = make_plan(config)
+
     for (label, py_f, cpp_f) in [('varfine', py_varfine, compute_detrender_free_varfine),
                                  ('varcoarse', py_varcoarse, compute_detrender_free_varcoarse)]:
         want = py_f(config, v)
-        got = cpp_f(config, v)
+        got = cpp_f(plan, v)
         assert len(got) == len(want), (label, len(got), len(want))
         for itree in range(len(want)):
             g, w = np.asarray(got[itree]), np.asarray(want[itree])

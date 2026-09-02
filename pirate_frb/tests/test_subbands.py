@@ -7,7 +7,7 @@ Two tests:
     (pirate_frb.cuda_generator.FrequencySubbands) must agree, in every respect that both
     implementations compute. They are two transcriptions of one specification, and the split
     is load-bearing: makefile_helper.py uses the python one at BUILD time to decide which
-    kernels to compile, while DedispersionConfig/DedispersionTree use the C++ one at RUN
+    kernels to compile, while DedispersionConfig/DedispersionPlan use the C++ one at RUN
     time to decide which kernel to ask for. A divergence is silent when it happens, and
     surfaces much later -- as "Kernel not found in registry" for some config, or as a
     compiled kernel whose load-time self-check throws.
@@ -35,7 +35,7 @@ import glob
 import random
 import itertools
 
-from ..pirate_pybind11 import DedispersionConfig, DedispersionTree, FrequencySubbands
+from ..pirate_pybind11 import DedispersionConfig, DedispersionPlan, FrequencySubbands
 from ..cuda_generator import FrequencySubbands as PyFrequencySubbands
 from ..utils import atomic_print
 
@@ -233,9 +233,9 @@ def _sweep(subband_counts, seen):
         restricted = _compare_restrict(subband_counts, et_level)
         n += 1
 
-        # The restricted counts are what a DedispersionTree actually constructs a
-        # FrequencySubbands from, so compare their tables too. Deduped: the same restricted
-        # vector comes up over and over across the sweep.
+        # The restricted counts are what a tree's FrequencySubbands is actually built from
+        # (in the DedispersionPlan constructor), so compare their tables too. Deduped: the
+        # same restricted vector comes up over and over across the sweep.
         if (restricted is not None) and (tuple(restricted) not in seen):
             seen.add(tuple(restricted))
             _compare_tables(restricted)
@@ -269,7 +269,7 @@ def test_frequency_subbands_parity(nrandom=200):
 # This is a property of the config-to-tree construction, and notes/variance_map.tex derives it
 # there (appendix "Variance maps of a config's trees are row-restrictions of one another",
 # fact (F2)), so the test is not establishing something that might have turned out otherwise.
-# What it checks is that DedispersionTree.{n,m}_index_mapping() -- which every caller of the
+# What it checks is that DedispersionPlan.{n,m}_index_mapping() -- which every caller of the
 # property goes through -- implement the containment correctly, in both directions, over a
 # wide spread of configs. The appendix cites this test as its witness, which is now
 # belt-and-braces rather than the only evidence.
@@ -283,31 +283,31 @@ def _check_subband_property(config, label):
     assertion -- and a stricter one than a set comparison, which does not see levels.
     """
 
-    trees = {}
+    # Params.minimal(): subband geometry is pure arithmetic, and we do not want to require
+    # that every tree's cdd2 kernel is compiled into this build.
+    plan = DedispersionPlan(config, DedispersionPlan.Params.minimal())
 
-    for itree in range(config.num_dedispersion_trees):
-        # Dcore_from_cdd2_registry=False: subband geometry is pure arithmetic, and we do not
-        # want to require that every tree's cdd2 kernel is compiled into this build.
-        tree = DedispersionTree(config, itree, Dcore_from_cdd2_registry=False)
-        trees[(tree.primary_tree_index, tree.early_trigger_level)] = tree
+    itrees = {}
+    for (itree, tree) in enumerate(plan.trees):
+        itrees[(tree.primary_tree_index, tree.early_trigger_level)] = itree
 
-    base = trees[(0,0)]
+    ibase = itrees[(0,0)]
 
-    for (ipri, iet), t in sorted(trees.items()):
+    for (ipri, iet), itree in sorted(itrees.items()):
         if iet == 0:
             # Set EQUALITY, which a single call cannot express: one call gives containment,
             # so equality needs both argument orders. Both succeeding additionally shows the
             # mapping is a bijection.
-            for (a, b, why) in [(base, t, f'tree (ipri={ipri}, iet=0) searches a band that tree (0,0) does not'),
-                                (t, base, f'tree (0,0) searches a band that tree (ipri={ipri}, iet=0) does not')]:
+            for (a, b, why) in [(ibase, itree, f'tree (ipri={ipri}, iet=0) searches a band that tree (0,0) does not'),
+                                (itree, ibase, f'tree (0,0) searches a band that tree (ipri={ipri}, iet=0) does not')]:
                 try:
-                    DedispersionTree.m_index_mapping(a, b)
+                    plan.m_index_mapping(a, b)
                 except RuntimeError as e:
                     raise AssertionError(f'{label}: {why}. Time-downsampling must not change'
                                          f' the subband set.\n  {e}') from e
         else:
             try:
-                DedispersionTree.m_index_mapping(trees[(ipri,0)], t)
+                plan.m_index_mapping(itrees[(ipri,0)], itree)
             except RuntimeError as e:
                 raise AssertionError(f'{label}: tree (ipri={ipri}, iet={iet}) searches a band'
                                      f' that tree (ipri={ipri}, iet=0) does not. An early'

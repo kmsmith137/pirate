@@ -94,19 +94,19 @@ void register_varmap_bindings(pybind11::module &m)
     // scale -- and neither touches a python object once it has the array.
 
     m.def("compute_detrender_free_varfine",
-          [](const DedispersionConfig &config, const Array<double> &freq_variances) {
+          [](const DedispersionPlan &plan, const Array<double> &freq_variances) {
               xassert(freq_variances.on_host());
               xassert(freq_variances.is_fully_contiguous());
-              return compute_detrender_free_varfine(config, freq_variances);
-          }, py::arg("config"), py::arg("freq_variances"),
+              return compute_detrender_free_varfine(plan, freq_variances);
+          }, py::arg("plan"), py::arg("freq_variances"),
              py::call_guard<py::gil_scoped_release>());
 
     m.def("compute_detrender_free_varcoarse",
-          [](const DedispersionConfig &config, const Array<double> &freq_variances) {
+          [](const DedispersionPlan &plan, const Array<double> &freq_variances) {
               xassert(freq_variances.on_host());
               xassert(freq_variances.is_fully_contiguous());
-              return compute_detrender_free_varcoarse(config, freq_variances);
-          }, py::arg("config"), py::arg("freq_variances"),
+              return compute_detrender_free_varcoarse(plan, freq_variances);
+          }, py::arg("plan"), py::arg("freq_variances"),
              py::call_guard<py::gil_scoped_release>());
 }
 

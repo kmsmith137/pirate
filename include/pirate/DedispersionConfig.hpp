@@ -73,7 +73,7 @@ struct DedispersionConfig
 
         // Both must be >= DedispersionTree::{dm,time}_downsampling of every tree in this
         // family, i.e. >= pow2(dd_rank1) of its early_trigger_level=0 tree. Checked in
-        // validate(), and again in the DedispersionTree constructor where the tree's own
+        // validate(), and again in the DedispersionPlan constructor where the tree's own
         // values are known.
         long wt_dm_downsampling = 0;    // required
         long wt_time_downsampling = 0;  // required
@@ -88,9 +88,8 @@ struct DedispersionConfig
     // DECREASING early-trigger level (earliest trigger first, then the main
     // early_trigger_level=0 tree), so 'itree' is a prefix sum over
     // primary_trees[].num_early_triggers. These three are the size, the forward map and the
-    // inverse map of that enumeration; the DedispersionPlan constructor and the
-    // DedispersionTree constructor both go through them, and unlike DedispersionPlan they
-    // need no GPU.
+    // inverse map of that enumeration. They are how a caller with no plan in hand names a
+    // tree, and the DedispersionPlan constructor asserts its own loop against them.
 
     // Number of DedispersionTrees, i.e. sum over primary trees of (num_early_triggers+1).
     // Equal to DedispersionPlan::ntrees.
@@ -136,8 +135,8 @@ struct DedispersionConfig
     static DedispersionConfig from_yaml(const YamlFile &file);
 
     // Construct from a YAML string, i.e. the inverse of to_yaml_string(). Needed wherever a
-    // config travels as a string rather than a file -- over the wire (see
-    // DedispersionTree::from_yaml), or embedded in a container format
+    // config travels as a string rather than a file -- over the wire (see the grouper
+    // handshake in FrbGrouper.cpp), or embedded in a container format
     // (see pirate_frb.varmap.asdf_io).
     static DedispersionConfig from_yaml_string(const std::string &yaml_string);
 

@@ -123,8 +123,8 @@ class FrequencySubbands:
 
         Keep in sync with the C++ FrequencySubbands::restrict_subband_counts(): this
         function decides which kernels makefile_helper.py compiles, while the C++ one
-        decides which kernels a DedispersionTree asks for, and a divergence surfaces much
-        later as "Kernel not found in registry".
+        decides which kernels a DedispersionPlan's trees ask for, and a divergence surfaces
+        much later as "Kernel not found in registry".
         """
 
         if early_trigger_level < 0:

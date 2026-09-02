@@ -83,7 +83,7 @@ import dataclasses
 
 import numpy as np
 
-from .VarianceMap import VarianceMap, coarse_grain_vector, make_tree
+from .VarianceMap import VarianceMap, coarse_grain_vector, make_plan
 from .VarianceMultiMap import VarianceMultiMap, expand_fine_vectors
 from .SparseTile import SparseTile, SparseTileTriple
 from .PfVarianceConvolver import PfVarianceConvolver
@@ -372,14 +372,15 @@ class SdPlan:
         # config is checked. const and microseconds.
         #
         # The alpha convention assumes 2^R coarse DM channels per multiplet. That needs no
-        # tripwire: DedispersionTree.dm_downsampling is pinned to 2^dd_rank1 by the tree
-        # constructor and is not a config field at all, so no config can ask for anything
-        # else.
+        # tripwire: DedispersionTree.dm_downsampling is pinned to 2^dd_rank1 by the
+        # DedispersionPlan constructor and is not a config field at all, so no config can ask
+        # for anything else.
         config.validate()
 
         self.config = config
+        self.plan = make_plan(config)
         self.itree0 = int(config.dedispersion_tree_index(0, 0))
-        self.tree0 = make_tree(config, self.itree0)
+        self.tree0 = self.plan.trees[self.itree0]
         fs = self.tree0.frequency_subbands
 
         self.r, self.R = int(self.tree0.total_rank()), int(fs.pf_rank)
@@ -1078,7 +1079,7 @@ def compute_detrender_free_base_map(config, *, L=None, epsilon=None, max_bytes=N
 
     vmap = VarianceMap.from_factors(
         config, plan.itree0, Qtot.reshape(nbeta, Ktot), Wtot, detrender=None, L=L,
-        y_true=ytrue.reshape(nalpha), tree=plan.tree0, is_admissible=True,
+        y_true=ytrue.reshape(nalpha), plan=plan.plan, is_admissible=True,
         history=[dict(step='compute_detrender_free_base_map', time=dt, L=L, nalpha=nalpha,
                       nbeta=nbeta, Ktot=Ktot, Q_nbytes=nbytes,
                       n_matrices=stats['n_matrices'], n_entries=stats['n_entries'],
@@ -1175,20 +1176,20 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
     VarianceMultiMap.apply_fine() derives from the parent. See that class's docstring.
     """
 
-    from ..pirate_pybind11 import DedispersionTree
-
     t0 = time.time()
 
     # VALIDATE BEFORE COMPUTING: the base map can take minutes and tens of GiB, and raising
     # afterwards for a reason knowable from the config alone is pure waste. SdPlan validates
     # too, but not until after the geometry below -- and P_gamma <= P_0, one of the three
-    # facts the slice needs, is validate()'s to enforce. make_tree() needs no plan, no GPU
-    # and no map.
+    # facts the slice needs, is validate()'s to enforce. make_plan() needs no GPU and no map.
     config.validate()
+
+    plan = make_plan(config)
+    trees = plan.trees          # one list build; plan.trees copies on every access
 
     npri = int(config.num_primary_trees)
     itree0 = int(config.dedispersion_tree_index(0, 0))
-    tree0 = make_tree(config, itree0)
+    tree0 = trees[itree0]
     r0, R = int(tree0.total_rank()), int(tree0.frequency_subbands.pf_rank)
 
     # THE LEGAL RANGE FOR 'L' IS THE DOWNSAMPLED TREES', NOT THE BASE TREE'S. Left unchecked
@@ -1206,8 +1207,7 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
                    f' primary tree has rank {r0-1}.' if (npri > 1) else ''))
 
     itrees = [int(config.dedispersion_tree_index(g, 0)) for g in range(1, npri)]
-    trees = [make_tree(config, i) for i in itrees]
-    Ps = [int(t.nprofiles) for t in trees]
+    Ps = [int(trees[i].nprofiles) for i in itrees]
 
     # THE ONE PRECONDITION OF THE SLICE THAT WOULD FAIL SILENTLY. Proposition 2 needs three
     # facts, and the other two are already enforced where they would fail LOUDLY: r_gamma =
@@ -1220,13 +1220,13 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
     #
     # It cannot happen today, and not because of anything validate() does: both trees get
     # FrequencySubbands(restrict_subband_counts(counts, 0), fmin, fmax), and no argument
-    # there depends on the primary tree index (DedispersionTree.cpp). So this is a tripwire
+    # there depends on the primary tree index (DedispersionPlan.cpp). So this is a tripwire
     # on that C++ rather than a check on the caller -- which is why it is an assert, and why
     # it is the only one of the three left. Note test_subband_property() checks the weaker
     # statement: m_index_mapping() in both argument orders gives set EQUALITY, not identity.
     M0 = int(tree0.frequency_subbands.M)
-    for (g, t) in enumerate(trees):
-        m_map = DedispersionTree.m_index_mapping(tree0, t)
+    for (g, itree) in enumerate(itrees):
+        m_map = plan.m_index_mapping(itree0, itree)
         assert np.array_equal(m_map, np.arange(M0)), (g + 1, np.asarray(m_map))
 
     if int(svd_optimization_level) not in (0, 1, 2):
@@ -1246,7 +1246,7 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
         prov['total_seconds'] = time.time() - t0
         if provenance:
             prov.update(provenance)
-        return VarianceMultiMap(config, [base], detrender=None, provenance=prov)
+        return VarianceMultiMap(config, [base], detrender=None, plan=plan, provenance=prov)
 
     N, M, P0 = base.nsubbands, base.nmultiplets, base.nprofiles
     K = base.factor_rank
@@ -1271,7 +1271,7 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
 
     maps = [base]
     for gamma in range(1, npri):
-        itree, tree, Pg = itrees[gamma - 1], trees[gamma - 1], Ps[gamma - 1]
+        itree, Pg = itrees[gamma - 1], Ps[gamma - 1]
 
         # THE NO-DETRENDER HYPOTHESIS IS THE WHOLE ARGUMENT, not a formality. Proposition 1
         # (early triggers) holds whatever the upstream chain; Proposition 2 does NOT, and the
@@ -1288,7 +1288,7 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
         maps.append(VarianceMap.from_factors(
             config, itree,
             np.ascontiguousarray(Q4[nrow0//2:, :, :Pg, :].reshape(-1, K)),
-            base.W, mid=base.mid, detrender=None, L=L, tree=tree,
+            base.W, mid=base.mid, detrender=None, L=L, plan=plan,
             y_true=np.ascontiguousarray(y3[D0//2:, :, :Pg].reshape(-1)),
             # A row subset of a map that dominates A_true elementwise also dominates it, so
             # whatever the base earned, each gamma earns. W and mid are SHARED objects rather
@@ -1317,7 +1317,7 @@ def compute_detrender_free_multi_map(config, *, L=None, epsilon=None, max_bytes=
     if progress:
         atomic_print(f'  compute_detrender_free_multi_map: {npri} maps in {dt:.2f} seconds')
 
-    return VarianceMultiMap(config, maps, detrender=None, provenance=prov)
+    return VarianceMultiMap(config, maps, detrender=None, plan=plan, provenance=prov)
 
 
 ####################################   A v, without A   ####################################
@@ -1374,8 +1374,6 @@ def compute_detrender_free_varfine(config, freq_variances, *, progress=False, de
     and no allocation worth a ceiling.
     """
 
-    from ..pirate_pybind11 import DedispersionTree
-
     t0 = time.time()
 
     # Validate BEFORE building the plan: the tile pass is 13.5 seconds at CHORD, and both a
@@ -1390,19 +1388,22 @@ def compute_detrender_free_varfine(config, freq_variances, *, progress=False, de
                            f' shape ({nfreq},), got {v.shape}')
 
     # Same argument for the restriction geometry: O(N) per tree, and it decides whether the
-    # slice below is legitimate at all. SdPlan builds tree0 again a few lines down; that is
-    # microseconds, and building it here is what keeps the geometry ahead of the tile pass.
+    # slice below is legitimate at all. SdPlan builds a plan again a few lines down; that is
+    # microseconds, and building one here is what keeps the geometry ahead of the tile pass.
     npri = int(config.num_primary_trees)
-    tree0 = make_tree(config, int(config.dedispersion_tree_index(0, 0)))
-    trees = [make_tree(config, int(config.dedispersion_tree_index(g, 0)))
-             for g in range(1, npri)]
-    Ps = [int(t.nprofiles) for t in trees]
+    dd_plan = make_plan(config)
+    trees = dd_plan.trees        # one list build; plan.trees copies on every access
+
+    itree0 = int(config.dedispersion_tree_index(0, 0))
+    itrees = [int(config.dedispersion_tree_index(g, 0)) for g in range(1, npri)]
+    tree0 = trees[itree0]
+    Ps = [int(trees[i].nprofiles) for i in itrees]
 
     # The slice's one silently-failing precondition; see compute_detrender_free_multi_map(),
     # which explains why this is the only one of Proposition 2's three facts left as a check.
     M0 = int(tree0.frequency_subbands.M)
-    for (g, t) in enumerate(trees):
-        m_map = DedispersionTree.m_index_mapping(tree0, t)
+    for (g, itree) in enumerate(itrees):
+        m_map = dd_plan.m_index_mapping(itree0, itree)
         assert np.array_equal(m_map, np.arange(M0)), (g + 1, np.asarray(m_map))
 
     plan = SdPlan(config, freq_variances=v, init_sd_matrices=False,
@@ -1421,7 +1422,7 @@ def compute_detrender_free_varfine(config, freq_variances, *, progress=False, de
     per_primary += [y0[D0//2:, :, :Pg].copy().reshape(-1) for Pg in Ps]
 
     # Proposition 1 (early triggers), which is the same expansion apply_fine() does.
-    out = expand_fine_vectors(config, per_primary)
+    out = expand_fine_vectors(dd_plan, per_primary)
 
     if progress:
         atomic_print(f'  compute_detrender_free_varfine: {len(out)} trees in'
@@ -1439,7 +1440,7 @@ def compute_detrender_free_varcoarse(config, freq_variances, *, progress=False, 
     per weights-array element.
 
     THE COARSE-GRAINING RANK IS THE TREE'S OWN, ``L = log2(pf.wt_dm_downsampling)``, and that
-    is what makes the result line up: ``2^(r-L)`` is exactly DedispersionTree::ndm_wt, checked
+    is what makes the result line up: ``2^(r-L)`` is exactly DedispersionTree.ndm_wt, checked
     below. It is the same L that varmap.cpp's SdPlan computes, so the two agree by
     construction rather than by coincidence. Note L is a property of the PRIMARY tree while r
     is not, so L is constant within an early-trigger family and ndm_wt still varies across it.
@@ -1463,16 +1464,18 @@ def compute_detrender_free_varcoarse(config, freq_variances, *, progress=False, 
     varfine = compute_detrender_free_varfine(config, freq_variances, progress=progress,
                                              debug=debug)
 
+    trees = make_plan(config).trees   # one list build; plan.trees copies on every access
+
     out = []
     for (itree, y) in enumerate(varfine):
-        tree = make_tree(config, itree)
+        tree = trees[itree]
         fs = tree.frequency_subbands
         L = integer_log2(tree.pf.wt_dm_downsampling)
 
-        # ndm_wt is computed by the DedispersionTree constructor as 2^r / wt_dm_downsampling,
+        # ndm_wt is computed by the DedispersionPlan constructor as 2^r / wt_dm_downsampling,
         # and L here comes from wt_dm_downsampling directly, so this ties the rank the
         # reduction uses to the shape the weights array actually has. coarse_grain_vector()
-        # checks R <= L <= r itself; the tree constructor is what guarantees it
+        # checks R <= L <= r itself; the plan constructor is what guarantees it
         # (dm_downsampling <= wt_dm_downsampling <= 2^r, with pf_rank <= log2(dm_downsampling)
         # -- the same bound varmap.cpp asserts).
         ndm_wt = int(tree.ndm_wt)

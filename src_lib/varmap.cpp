@@ -627,22 +627,24 @@ void SdPlan::iter_bits(uint64_t bits, std::vector<long> &out)
 }
 
 
-SdPlan::SdPlan(const DedispersionConfig &config, const Array<double> &freq_variances)
+SdPlan::SdPlan(const DedispersionPlan &plan, const Array<double> &freq_variances)
 {
+    const DedispersionConfig &config = plan.config;
+
     // EVERY ENTRY POINT ON THIS PATH GOES THROUGH HERE, so this is the one place the config is
     // checked. const and microseconds.
     //
     // The alpha convention assumes 2^R coarse DM channels per multiplet. That needs no tripwire:
-    // DedispersionTree::dm_downsampling is pinned to pow2(dd_rank1) by the tree constructor and is
-    // not a config field at all, so no config can ask for anything else.
+    // DedispersionTree::dm_downsampling is pinned to pow2(dd_rank1) by the DedispersionPlan
+    // constructor and is not a config field at all, so no config can ask for anything else.
     config.validate();
 
     this->itree0 = config.dedispersion_tree_index(0, 0);
 
-    // Dcore_from_cdd2_registry=false: varmap never reads Dcore, and requiring the registry would
-    // make this fail on any build whose compiled cdd2 kernel set does not cover the config. Same
-    // choice as python make_tree().
-    this->tree0 = DedispersionTree(config, itree0, /*Dcore_from_cdd2_registry=*/ false);
+    // A COPY of the plan's tree, not the plan itself: a DedispersionPlan has const members and so
+    // is not assignable, a reference would dangle, and copying a complete plan would drag along
+    // every kernel-params vector for no benefit.
+    this->tree0 = plan.trees.at(itree0);
 
     const FrequencySubbands &fs = tree0.frequency_subbands;
     this->r = tree0.total_rank();
@@ -1137,9 +1139,12 @@ Array<double> coarse_grain_vector(const DedispersionTree &tree, const double *y,
 // with a matrix-vector product -- if A_child = A_parent[rows] then A_child @ v == (A_parent @ v)
 // [rows] -- which is what lets a caller restrict the small vector rather than the large matrix.
 static Array<double> restrict_fine_vector(const double *y, long ylen,
-                                          const DedispersionTree &parent,
-                                          const DedispersionTree &child)
+                                          const DedispersionPlan &plan,
+                                          long iparent, long ichild)
 {
+    const DedispersionTree &parent = plan.trees.at(iparent);
+    const DedispersionTree &child = plan.trees.at(ichild);
+
     long D_p = 1L << (parent.total_rank() - parent.frequency_subbands.pf_rank);
     long D_c = 1L << (child.total_rank() - child.frequency_subbands.pf_rank);
     long P_p = parent.nprofiles, P_c = child.nprofiles;
@@ -1155,7 +1160,7 @@ static Array<double> restrict_fine_vector(const double *y, long ylen,
     long M_c = child.frequency_subbands.M;
     xassert_eq(ylen, D_p * M_p * P_p);
 
-    std::vector<long> m_map = DedispersionTree::m_index_mapping(parent, child);
+    std::vector<long> m_map = plan.m_index_mapping(iparent, ichild);
     xassert_eq(long(m_map.size()), M_c);
 
     Array<double> out({D_p, M_c, P_p}, af_uhost);
@@ -1171,8 +1176,9 @@ static Array<double> restrict_fine_vector(const double *y, long ylen,
 
 
 std::vector<Array<double>>
-expand_fine_vectors(const DedispersionConfig &config, const std::vector<Array<double>> &per_primary)
+expand_fine_vectors(const DedispersionPlan &plan, const std::vector<Array<double>> &per_primary)
 {
+    const DedispersionConfig &config = plan.config;
     long npri = config.num_primary_trees();
     if (long(per_primary.size()) != npri) {
         stringstream ss;
@@ -1182,18 +1188,13 @@ expand_fine_vectors(const DedispersionConfig &config, const std::vector<Array<do
         throw runtime_error(ss.str());
     }
 
-    long ntrees = config.num_dedispersion_trees();
-    std::vector<DedispersionTree> trees;
-    trees.reserve(ntrees);
-    for (long i = 0; i < ntrees; i++)
-        trees.push_back(DedispersionTree(config, i, /*Dcore_from_cdd2_registry=*/ false));
-
+    long ntrees = plan.ntrees;
     std::vector<Array<double>> out(ntrees);
 
     for (long gamma = 0; gamma < npri; gamma++) {
         // See the appendix's fact (a): every primary tree HAS an e == 0 tree, so this cannot fail.
         long iparent = config.dedispersion_tree_index(gamma, 0);
-        const DedispersionTree &parent = trees[iparent];
+        const DedispersionTree &parent = plan.trees.at(iparent);
 
         long D = 1L << (parent.total_rank() - parent.frequency_subbands.pf_rank);
         long M = parent.frequency_subbands.M, P = parent.nprofiles;
@@ -1212,7 +1213,7 @@ expand_fine_vectors(const DedispersionConfig &config, const std::vector<Array<do
         long net = config.primary_trees.at(gamma).num_early_triggers;
         for (long e = 1; e <= net; e++) {
             long ichild = config.dedispersion_tree_index(gamma, e);
-            out[ichild] = restrict_fine_vector(y.data, y.size, parent, trees[ichild]);
+            out[ichild] = restrict_fine_vector(y.data, y.size, plan, iparent, ichild);
         }
     }
 
@@ -1224,9 +1225,11 @@ expand_fine_vectors(const DedispersionConfig &config, const std::vector<Array<do
 
 
 std::vector<Array<double>>
-compute_detrender_free_varfine(const DedispersionConfig &config, const Array<double> &freq_variances)
+compute_detrender_free_varfine(const DedispersionPlan &plan, const Array<double> &freq_variances)
 {
-    // Validate BEFORE building the plan: the tile pass is seconds at CHORD, and both a bad config
+    const DedispersionConfig &config = plan.config;
+
+    // Validate BEFORE building the SdPlan: the tile pass is seconds at CHORD, and both a bad config
     // and a length mismatch are knowable without it. SdPlan validates too, but not until after the
     // geometry below.
     config.validate();
@@ -1244,30 +1247,28 @@ compute_detrender_free_varfine(const DedispersionConfig &config, const Array<dou
     // Same argument for the restriction geometry: O(N) per tree, and it decides whether the slice
     // below is legitimate at all.
     long npri = config.num_primary_trees();
-    DedispersionTree tree0(config, config.dedispersion_tree_index(0, 0), false);
+    long itree0 = config.dedispersion_tree_index(0, 0);
+    const DedispersionTree &tree0 = plan.trees.at(itree0);
     long M0 = tree0.frequency_subbands.M;
     long D0 = 1L << (tree0.total_rank() - tree0.frequency_subbands.pf_rank);
     long P0 = tree0.nprofiles;
 
-    std::vector<DedispersionTree> trees;
     std::vector<long> Ps;
-    for (long g = 1; g < npri; g++) {
-        trees.push_back(DedispersionTree(config, config.dedispersion_tree_index(g, 0), false));
-        Ps.push_back(trees.back().nprofiles);
-    }
+    for (long g = 1; g < npri; g++)
+        Ps.push_back(plan.trees.at(config.dedispersion_tree_index(g, 0)).nprofiles);
 
     // The slice's one silently-failing precondition, and the only one of Proposition 2's three
     // facts left as a check: the other primary trees must see the same multiplets in the same
     // order, or the slice below is taking the wrong rows.
-    for (const DedispersionTree &t : trees) {
-        std::vector<long> m_map = DedispersionTree::m_index_mapping(tree0, t);
+    for (long g = 1; g < npri; g++) {
+        std::vector<long> m_map = plan.m_index_mapping(itree0, config.dedispersion_tree_index(g, 0));
         xassert_eq(long(m_map.size()), M0);
         for (long m = 0; m < M0; m++)
             xassert_eq(m_map[m], m);
     }
 
-    SdPlan plan(config, freq_variances);
-    Array<double> y0 = plan.lift_sd_vectors();          // (ndm, M, P0) == A_base @ v
+    SdPlan sd_plan(plan, freq_variances);
+    Array<double> y0 = sd_plan.lift_sd_vectors();       // (ndm, M, P0) == A_base @ v
     xassert_eq(y0.size, D0 * M0 * P0);
 
     // Proposition 2 as an array operation: the map of primary tree gamma > 0 is the UPPER DM half
@@ -1297,30 +1298,30 @@ compute_detrender_free_varfine(const DedispersionConfig &config, const Array<dou
     }
 
     // Proposition 1 (early triggers).
-    return expand_fine_vectors(config, per_primary);
+    return expand_fine_vectors(plan, per_primary);
 }
 
 
 std::vector<Array<double>>
-compute_detrender_free_varcoarse(const DedispersionConfig &config, const Array<double> &freq_variances)
+compute_detrender_free_varcoarse(const DedispersionPlan &plan, const Array<double> &freq_variances)
 {
-    std::vector<Array<double>> varfine = compute_detrender_free_varfine(config, freq_variances);
+    std::vector<Array<double>> varfine = compute_detrender_free_varfine(plan, freq_variances);
 
-    long ntrees = config.num_dedispersion_trees();
+    long ntrees = plan.ntrees;
     xassert_eq(long(varfine.size()), ntrees);
 
     std::vector<Array<double>> out;
     out.reserve(ntrees);
 
     for (long itree = 0; itree < ntrees; itree++) {
-        DedispersionTree tree(config, itree, /*Dcore_from_cdd2_registry=*/ false);
+        const DedispersionTree &tree = plan.trees.at(itree);
         const FrequencySubbands &fs = tree.frequency_subbands;
         long L = integer_log2(tree.pf.wt_dm_downsampling);
 
-        // ndm_wt is computed by the DedispersionTree constructor as 2^r / wt_dm_downsampling, and
+        // ndm_wt is computed by the DedispersionPlan constructor as 2^r / wt_dm_downsampling, and
         // L here comes from wt_dm_downsampling directly, so this ties the rank the reduction uses
         // to the shape the weights array actually has. coarse_grain_vector() checks R <= L <= r
-        // itself; the tree constructor is what guarantees it.
+        // itself; the plan constructor is what guarantees it.
         long ndm_wt = tree.ndm_wt;
         long ndm_from_L = 1L << (tree.total_rank() - L);
         xassert_eq(ndm_from_L, ndm_wt);

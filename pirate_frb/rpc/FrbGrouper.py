@@ -69,6 +69,10 @@ class FrbGrouperInjections:
     - ``ndm_out`` (list of int) -- per-tree output DM-channel counts (length ntrees).
     - ``nt_out`` (list of int) -- per-tree output time-sample counts (length ntrees).
     - ``dedispersion_config`` (DedispersionConfig) -- producer's dedispersion config (from the handshake).
+    - ``dedispersion_plan`` (DedispersionPlan) -- producer's dedispersion plan, rebuilt from
+      the two handshake yamls by ``DedispersionPlan.from_yaml_string()``. A
+      ``Params.minimal()`` plan carrying the producer's per-tree ``Dcore``; the batch decoders
+      below go through it.
     - ``xengine_metadata`` (XEngineMetadata) -- X-engine metadata (from the handshake).
     - ``xengine_metadata_yaml_string`` (str) -- X-engine metadata as a YAML string.
     - ``dedispersion_config_yaml_string`` (str) -- dedispersion config as a YAML string.
@@ -282,8 +286,8 @@ class FrbGrouperInjections:
         self._seq_per_sample   = int(xmd.seq_per_frb_time_sample)
 
         # Per-tree steady-state boundary (see class docstring), computed in C++
-        # (_compute_steady_state_it0() forwards DedispersionTree.compute_steady_state_it0()
-        # on the producer's trees from the handshake), then moved to the GPU: it is
+        # (_compute_steady_state_it0() forwards DedispersionPlan.compute_steady_state_it0()
+        # on the producer's plan from the handshake), then moved to the GPU: it is
         # consumed on the GPU once per tree per chunk by steady_state_mask(), and
         # keeping it GPU-resident avoids a host->GPU copy on every call. (__enter__
         # has already selected the grouper's CUDA device at this point.)

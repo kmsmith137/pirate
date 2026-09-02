@@ -138,7 +138,7 @@ def parse_test(subparsers):
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection and pulse-invariants tests')
-    parser.add_argument('--amax', action='store_true', help='Runs DedispersionTree.decode_argmax() tests (black-box probe arrays)')
+    parser.add_argument('--amax', action='store_true', help='Runs DedispersionPlan.decode_argmax() tests (black-box probe arrays)')
     parser.add_argument('--sb', action='store_true', help='Runs frequency-subband tests (C++/python parity of the two FrequencySubbands implementations, and the per-tree subband-set property)')
     parser.add_argument('--aout', action='store_true', help='Runs the serialized-output test (atomic_print/AtomicPrint, C++ and python threads)')
     parser.add_argument('--dt1d', action='store_true', help='Runs pirate_frb.detrending_1d tests (pure-numpy 1-d detrender)')
@@ -1405,26 +1405,26 @@ def show_dedisperser(args):
         atomic_print(config_yaml)
         print_separator('DedispersionPlan starts here')
 
-    # cdd2_kernel_required iff some flag needs consistency with the compiled cdd2 kernels:
-    # -a requests it explicitly; -r/-R construct a GpuDedisperser from this plan.
-    # Otherwise the plan is displayable even in a build without the config's cdd2
-    # kernels, at the cost of showing default (non-registry) Dcore values.
-    cdd2_kernel_required = args.authoritative or args.resources or args.fine_grained_resources
+    # Take Dcore from the cdd2 registry iff some flag needs consistency with the compiled
+    # cdd2 kernels: -a requests it explicitly; -r/-R construct a GpuDedisperser from this
+    # plan. Otherwise the plan is displayable even in a build without the config's cdd2
+    # kernels, at the cost of showing placeholder (non-registry) Dcore values.
+    dcore_from_cdd2_registry = args.authoritative or args.resources or args.fine_grained_resources
 
     t0 = time.time()
-    plan = DedispersionPlan(config, cdd2_kernel_required=cdd2_kernel_required)
+    plan_params = DedispersionPlan.Params(dcore_from_cdd2_registry=dcore_from_cdd2_registry)
+    plan = DedispersionPlan(config, plan_params)
     plan_dt = time.time() - t0
     if args.time:
         atomic_print(f'# DedispersionPlan construction took {plan_dt:.3f} seconds\n\n')
         # Also time the C++ compute_detrender_free_varcoarse(). This is what the real-time
         # server pays on every weight update: GpuDedisperser::_fill_analytic_weights() calls
         # it, so the number below is the one that matters operationally. (Uses unit input
-        # variances -- the running time does not depend on the values. Note it takes the
-        # CONFIG, not the plan.)
+        # variances -- the running time does not depend on the values.)
         import numpy as np
         freq_variances = np.ones(int(plan.nfreq), dtype=np.float64)
         t0 = time.time()
-        compute_detrender_free_varcoarse(config, freq_variances)
+        compute_detrender_free_varcoarse(plan, freq_variances)
         avar_dt = time.time() - t0
         atomic_print(f'# C++ compute_detrender_free_varcoarse() took {avar_dt:.3f} seconds\n\n')
     plan_yaml = plan.to_yaml_string(args.verbose, args.zones)

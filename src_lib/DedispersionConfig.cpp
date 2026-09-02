@@ -51,9 +51,9 @@ long DedispersionConfig::get_total_nfreq() const
 
 // The three functions below are the size, forward map and inverse map of the
 // DedispersionTree enumeration (see the doc-comment in DedispersionConfig.hpp). They are one
-// prefix sum expressed three ways, and are kept adjacent so that they cannot drift; the
-// DedispersionPlan constructor's loop is driven by the first, and the DedispersionTree
-// constructor by the second.
+// prefix sum expressed three ways, and are kept adjacent so that they cannot drift. The
+// DedispersionPlan constructor asserts its own tree loop against all three; every other
+// caller uses them to name a tree without holding a plan.
 
 
 long DedispersionConfig::num_dedispersion_trees() const
@@ -484,16 +484,16 @@ void DedispersionConfig::validate() const
         }
 
         // NOTE there is no {dm,time}_downsampling here. Neither is a config field: the
-        // DedispersionTree constructor pins both to pow2(dd_rank1), and dd_rank1 varies
+        // DedispersionPlan constructor pins both to pow2(dd_rank1), and dd_rank1 varies
         // WITHIN a primary-tree family (early-trigger trees are smaller), so no single
         // per-primary-tree value could be right for all of them. See
         // DedispersionTree::dm_downsampling and ::time_downsampling.
 
         // wt_time_downsampling has the same lower bound as wt_dm_downsampling, for the same
-        // reason: the tree's own time_downsampling is pow2(dd_rank1), and the tree
-        // constructor requires wt_time_downsampling to be at least that.
+        // reason: the tree's own time_downsampling is pow2(dd_rank1), and the
+        // DedispersionPlan constructor requires wt_time_downsampling to be at least that.
         //
-        // This is NOT only a range check. DedispersionTree computes
+        // This is NOT only a range check. The plan constructor computes
         // nt_out = xdiv(nt_ds, time_downsampling), and what makes that division exact is the
         // chain time_downsampling <= wt_time_downsampling <= nt_ds with all three powers of
         // two. Without this rule a bad config dies inside xdiv() with a bare assert.
@@ -1003,8 +1003,8 @@ static CoalescedDdKernel2::RegistryKey _make_random_cdd2_key(Dtype dtype, long d
     // so the pool must satisfy Dout <= min_wtds. (This replaces the old 'i+j <= 5' coupling,
     // which bought the same property when Dout was drawn independently.)
     //
-    // This is the one place outside DedispersionTree where pow2(dd_rank1) is re-derived in
-    // C++. It is load-bearing rather than a tripwire: without it, min_lg2_wtds can exceed
+    // This is the one place outside the DedispersionPlan constructor where pow2(dd_rank1) is
+    // re-derived in C++. It is load-bearing rather than a tripwire: without it, min_lg2_wtds can exceed
     // max_lg2_wtds below and the xassert_le fires instead of the key being skipped.
     long dd_rank1 = (dd_rank + 1) / 2;
     long max_Tinner = xdiv(1024, dtype.nbits) / pow2(dd_rank1);
@@ -1251,7 +1251,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
         // Min/max log2(PrimaryTree::wt_dm_downsampling). The lower bound is
         // DedispersionTree::dm_downsampling of this family's largest tree, which the
-        // DedispersionTree constructor requires wt_dm_downsampling to be at least.
+        // DedispersionPlan constructor requires wt_dm_downsampling to be at least.
         long min_lg2_wdds = (stage2_dd_rank + 1) / 2;  // = dd_rank1 of the et_level=0 tree
         long max_lg2_wdds = primary_tree_rank;
 
@@ -1293,10 +1293,10 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
                 Key2 ds_key = k;
                 ds_key.dd_rank = stage2_dd_rank - et_level;
 
-                // Mimics the logic used in the DedispersionTree constructor, to modify the
+                // Mimics the logic used in the DedispersionPlan constructor, to modify the
                 // subband_counts for the stage2 tree. (Third transcription of the tree rule,
-                // after DedispersionTree's and makefile_helper.py's -- if the rule changes,
-                // all three move together.)
+                // after the plan constructor's and makefile_helper.py's -- if the rule
+                // changes, all three move together.)
                 ds_key.subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, et_level);
 
                 // If there is no kernel in the registry for this (dd_rank, subband_counts),

@@ -75,19 +75,15 @@ def _check_batch_decode(g):
     handshaken grouper, and DedispersionPlan has no batch-decode binding. So a change to
     the vectorized helpers shows up HERE, under 'test --serv', not under '--amax'.
 
-    The scalar reference comes from trees rebuilt out of the handshake yamls -- the same
-    route the grouper itself uses, and the only one available, since
-    FrbGrouper.dedispersion_trees is deliberately not pybind-wrapped.
+    The scalar reference is the grouper's own DedispersionPlan, rebuilt from the handshake
+    yamls -- so a mismatch here is a bug in the vectorized wrapper, not a disagreement
+    between two reconstructions of the producer's geometry.
     """
 
     import numpy as np
-    import yaml as _yaml
-    from pirate_frb.pirate_pybind11 import DedispersionConfig, DedispersionTree
 
-    config = DedispersionConfig.from_yaml_string(g.dedispersion_config_yaml_string)
-    doc = _yaml.safe_load(g.dedispersion_plan_yaml_string)
-    trees = [DedispersionTree.from_yaml_string(_yaml.safe_dump(tn), config)
-             for tn in doc['trees']]
+    plan = g.dedispersion_plan
+    trees = plan.trees
     assert len(trees) == g.ntrees
 
     # A few well-formed events per tree: token m=0/p=0/t=0 is always valid, and the
@@ -108,9 +104,9 @@ def _check_batch_decode(g):
     outs2 = g.decode_argmax2_batch(itrees, *outs)
 
     for i, (it, tok, idm, ito) in enumerate(ev):
-        assert tuple(int(a[i]) for a in outs) == trees[it].decode_argmax(tok, idm, ito), i
+        assert tuple(int(a[i]) for a in outs) == plan.decode_argmax(tok, it, idm, ito), i
         assert tuple(float(a[i]) for a in outs2) == \
-            trees[it].decode_argmax2(config, *(int(a[i]) for a in outs)), i
+            plan.decode_argmax2(it, *(int(a[i]) for a in outs)), i
 
     freqs_lo, freqs_hi, dms, ts_samp, widths_samp = outs2
     assert (freqs_lo < freqs_hi).all() and (dms >= 0).all()

@@ -260,17 +260,19 @@ Here are some details that are not obvious from the example code:
    manager, while the arrays are valid -- see the example code above) and pass
    it to `create_events()` via the `argmax` argument.
 
-   Decoding uses `DedispersionTree` objects deserialized from the handshake's
-   `dedispersion_plan_yaml` (item 3 above), rather than trees re-derived from
-   `dedispersion_config_yaml`. The reason is the per-tree `Dcore` field, which
-   sets the time granularity of the tokens: it is a property of whichever
-   peak-finding kernel the producer happens to have compiled, and is not
-   derivable from the config. A grouper built from a different `pirate`
-   revision would re-derive a different value and mis-decode every token, so
-   the producer's values are taken off the wire and adopted verbatim. Everything
-   else about the trees is cross-checked against the config at handshake time
-   (`DedispersionTree::check_consistency()`), which catches the case where the
-   two yamls describe different instruments.
+   Decoding goes through a `DedispersionPlan` that the grouper rebuilds at
+   handshake time from the two yamls, via
+   `DedispersionPlan::from_yaml_string()`. That function builds the plan from
+   `dedispersion_config_yaml` and then cross-checks every field of
+   `dedispersion_plan_yaml` against it, which catches the case where the two
+   yamls describe different instruments.
+
+   Exactly one field is ADOPTED from the wire rather than checked: the per-tree
+   `Dcore`, which sets the time granularity of the tokens. It is a property of
+   whichever peak-finding kernel the producer happens to have compiled, and is
+   not derivable from the config. A grouper built from a different `pirate`
+   revision would re-derive a different value and mis-decode every token, so the
+   producer's values are taken off the wire and adopted verbatim.
 
 The `FrbGrouper` and `FrbSifterClient` classes aren't well-optimized at all.
 However, I find empirically that the "toy" grouper does not slow down a CHORD-scale search.

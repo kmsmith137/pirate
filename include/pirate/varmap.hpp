@@ -213,7 +213,7 @@ struct PfVarianceConvolver
 // pirate_frb/fast_varmap/test_fast_varmap.py.
 
 
-// Everything except the lift, for the base tree of 'config'. Mirrors python class SdPlan.
+// Everything except the lift, for the base tree of a plan's config. Mirrors python class SdPlan.
 //
 // The constructor runs the three passes -- planning, sizing, tiles -- and leaves one accumulator,
 // 'sd_vectors'. THE CONSTRUCTOR DOES NO LIFTING; lift_sd_vectors() is a separate, opt-in step, for
@@ -273,14 +273,17 @@ public:
         long j0, j1;
     };
 
-    // Runs the three passes. Calls config.validate(), so an invalid config throws here rather than
-    // deeper in.
+    // Runs the three passes. Calls plan.config.validate(), so an invalid config throws here
+    // rather than deeper in.
+    //
+    // 'plan' may have any completeness: only 'config' and 'trees' are read, so a
+    // DedispersionPlan::Params::minimal() plan (no GPU needed) is enough.
     //
     // 'freq_variances' is the length-nfreq vector of input-channel variances. NOT required to be
     // positive: this is defined against VarianceMap.apply(), which does not require it either. The
     // length and the dtype are checked, nothing more. Unlike the python there is no all-ones
     // default, because every C++ caller supplies one.
-    SdPlan(const DedispersionConfig &config, const ksgpu::Array<double> &freq_variances);
+    SdPlan(const DedispersionPlan &plan, const ksgpu::Array<double> &freq_variances);
 
     // The FINE (ndm, M, P) vector that sd_vectors' per-group terms add up to, i.e. A v. It is
     // UNTRUNCATED -- no SVD is involved anywhere on this path -- which is why it is more accurate
@@ -293,7 +296,7 @@ public:
     // so the e == 0 tree is the LAST of its family. It is 0 for every shipped config -- which is
     // exactly what would make an assertion to that effect a trap.
     long itree0 = 0;
-    DedispersionTree tree0;
+    DedispersionTree tree0;   // a copy of plan.trees[itree0]
 
     // Geometry, with ndm = 2^(r-R) and nalpha = ndm*M*P.
     long r = 0, R = 0, N = 0, M = 0, P = 0, nfreq = 0, ndm = 0, nalpha = 0;
@@ -390,11 +393,11 @@ extern ksgpu::Array<double> coarse_grain_vector(const DedispersionTree &tree,
 // each other -- compute_detrender_free_varfine() copies rather than slices for exactly this
 // reason, and the python says the same thing about ascontiguousarray().
 extern std::vector<ksgpu::Array<double>>
-expand_fine_vectors(const DedispersionConfig &config,
+expand_fine_vectors(const DedispersionPlan &plan,
                     const std::vector<ksgpu::Array<double>> &per_primary);
 
 
-// 'A v' at FINE granularity for EVERY tree of 'config'. No detrender, no map formed.
+// 'A v' at FINE granularity for EVERY tree of 'plan'. No detrender, no map formed.
 //
 // Returns a length-ntrees vector of (2^(r-R), M, P) arrays INDEXED BY ITREE, each in its own tree's
 // geometry. Mirrors python compute_detrender_free_varfine(); see it for why this is more accurate
@@ -405,11 +408,11 @@ expand_fine_vectors(const DedispersionConfig &config,
 // brute-force sweep: 4.9e-7 without one, 2.1 with). A future detrender path must not be routed
 // through this function.
 extern std::vector<ksgpu::Array<double>>
-compute_detrender_free_varfine(const DedispersionConfig &config,
+compute_detrender_free_varfine(const DedispersionPlan &plan,
                                const ksgpu::Array<double> &freq_variances);
 
 
-// 'A v' for every tree of 'config', max-reduced to the WEIGHTS array's granularity.
+// 'A v' for every tree of 'plan', max-reduced to the WEIGHTS array's granularity.
 //
 // Returns a length-ntrees vector of (ndm_wt, N, P) arrays INDEXED BY ITREE, i.e.
 // compute_detrender_free_varfine() followed by a per-tree coarse_grain_vector(). This is the form
@@ -425,7 +428,7 @@ compute_detrender_free_varfine(const DedispersionConfig &config,
 // is sum_F max_alpha A[alpha,F] v_F and DOMINATES the max_alpha (A v)[alpha] computed here -- that
 // one maxes the MAP, this one maxes the ANSWER.
 extern std::vector<ksgpu::Array<double>>
-compute_detrender_free_varcoarse(const DedispersionConfig &config,
+compute_detrender_free_varcoarse(const DedispersionPlan &plan,
                                  const ksgpu::Array<double> &freq_variances);
 
 

@@ -43,136 +43,133 @@ from ..utils import atomic_print
 
 ####################################################################################################
 #
-# Round-trip test of the per-tree yaml, which is how FrbGrouper recovers the producer's
-# DedispersionTrees at handshake. This is the LOAD-BEARING guard keeping the "dumb" yaml
-# parser in sync with to_yaml(): DedispersionTree::from_yaml() transcribes members verbatim
-# (no re-derivation, no consistency asserts), so any to_yaml/parser drift must fail HERE, via
-# member-by-member comparison.
+# Yaml tests. DedispersionPlan::from_yaml() is how FrbGrouper recovers the producer's geometry
+# at handshake, and how a variance-map file recovers the geometry it was written with. Unlike
+# a naive parser it does not transcribe: it rebuilds the plan from the config and CHECKS the
+# yaml against it, adopting only the producer's per-tree Dcore.
 
 
 _TREE_INT_MEMBERS = ('primary_tree_index', 'early_trigger_level', 'amb_rank', 'dd_rank',
-                     'nt_ds', 'dm_downsampling', 'time_downsampling', 'Dcore', 'nprofiles',
+                     'nt_ds', 'dm_downsampling', 'time_downsampling', 'nprofiles',
                      'ndm_out', 'ndm_wt', 'nt_out', 'nt_wt')
-_TREE_PF_MEMBERS = ('num_early_triggers', 'max_width',
-                    'wt_dm_downsampling', 'wt_time_downsampling')
+_TREE_PF_MEMBERS = ('max_width', 'wt_dm_downsampling', 'wt_time_downsampling')
+
+# The plan-level scalars the perturbation loop below bumps. (Not every key to_yaml() emits:
+# 'dtype' is a string, and the two rank vectors are handled separately.)
+_PLAN_INT_KEYS = ('ntrees', 'nfreq', 'nt_in', 'toplevel_tree_rank', 'num_primary_trees',
+                  'beams_per_gpu', 'beams_per_batch', 'num_active_batches')
 
 
-def _test_tree_yaml(config):
-    """Round-trip test of DedispersionTree.to_yaml_string() / from_yaml_string().
+def _test_plan_yaml(config):
+    """Round-trip of a Params.minimal() plan's yaml, which needs no GPU.
 
-    Both DedispersionPlan.to_yaml() and FrbGrouper's handshake go through these, so
-    this is the same load-bearing guard as _test_grouper_tree_rebuild() below, on a
-    standalone tree yaml -- which is how pirate_frb.varmap stores geometry.
-
-    Also checks that trees are constructible with no DedispersionPlan (hence, on a machine
-    with no GPU -- which this test cannot verify, but see the constructor's doc-comment).
+    This is the variance-map file's route: a GPU-less process writes plan.to_yaml_string()
+    and a reader recovers it with from_yaml_string(). WHAT THIS CAN AND CANNOT SHOW:
+    from_yaml_string() builds its trees from the config, so comparing the rebuilt plan's
+    trees to the original's would compare the constructor to itself. The three meaningful
+    checks are (i) the yaml is ACCEPTED, in particular by the loose comparison on the lossy
+    display doubles; (ii) it re-emits byte-identically; and (iii) the perturbation loop,
+    which is what proves the verifier actually reads every field -- a field emitted but never
+    checked would pass (i) and (ii) both.
     """
 
-    ntrees = config.num_dedispersion_trees
+    p = DedispersionPlan(config, DedispersionPlan.Params.minimal())
+    s = p.to_yaml_string()
 
-    for itree in range(ntrees):
-        # Dcore_from_cdd2_registry=False: this test is about geometry and yaml, and a random
-        # config's cdd2 kernel is generally not compiled into the build.
-        tree = DedispersionTree(config, itree, Dcore_from_cdd2_registry=False)
-        s = tree.to_yaml_string(config, itree)
-        t2 = DedispersionTree.from_yaml_string(s, config)
+    # A minimal plan has no MegaRingbuf, so its yaml is the plan yaml minus that one key.
+    doc = yaml.safe_load(s)
+    assert 'mega_ringbuf' not in doc
+    assert doc['ntrees'] == p.ntrees == config.num_dedispersion_trees
 
-        for f in _TREE_INT_MEMBERS:
-            assert getattr(tree, f) == getattr(t2, f), (itree, f)
-        for f in _TREE_PF_MEMBERS:
-            assert getattr(tree.pf, f) == getattr(t2.pf, f), (itree, 'pf.' + f)
+    p2 = DedispersionPlan.from_yaml_string(config, s)
+    assert p2.to_yaml_string() == s
+    assert not p2.params.dcore_from_cdd2_registry
 
-        # dm_min/dm_max/trigger_frequency round-trip LOSSILY: to_yaml() uses yaml-cpp's
-        # default ~6-significant-digit precision for doubles. They are print/display values.
-        for f in ('dm_min', 'dm_max', 'trigger_frequency'):
-            a, b = getattr(tree, f), getattr(t2, f)
-            assert abs(a-b) <= 1.0e-5 * max(1.0, abs(a)), (itree, f, a, b)
-
-        fs, fs2 = tree.frequency_subbands, t2.frequency_subbands
-        assert list(fs.subband_counts) == list(fs2.subband_counts), itree
-        assert np.array_equal(np.asarray(fs.m_to_n), np.asarray(fs2.m_to_n)), itree
-
-        # Re-emitting the parsed tree must reproduce the string exactly. This is what would
-        # catch a field emitted but not parsed (the parsed tree would carry a default).
-        assert t2.to_yaml_string(config, itree) == s, itree
-
-    # 'itree' is validated, rather than running off the end of the enumeration.
-    for bad in (-1, ntrees):
+    def expect_throw(bad_doc, what):
         try:
-            DedispersionTree(config, bad, Dcore_from_cdd2_registry=False)
-            raise AssertionError(f'DedispersionTree accepted itree={bad} (ntrees={ntrees})')
-        except RuntimeError:
-            pass
+            DedispersionPlan.from_yaml_string(config, yaml.safe_dump(bad_doc))
+        except RuntimeError as e:
+            assert what in str(e), (what, str(e))
+            return
+        raise AssertionError(f'from_yaml_string() should have thrown ({what})')
+
+    # Perturb one field at a time and require the verifier to notice, naming the field.
+    for key in _PLAN_INT_KEYS:
+        bad = yaml.safe_load(s)
+        bad[key] = int(bad[key]) + 1
+        expect_throw(bad, key)
+
+    for key in ('stage1_dd_rank', 'stage1_amb_rank'):
+        bad = yaml.safe_load(s)
+        bad[key][0] = int(bad[key][0]) + 1
+        expect_throw(bad, key)
+
+    for key in ('tree_index',) + _TREE_INT_MEMBERS + _TREE_PF_MEMBERS:
+        bad = yaml.safe_load(s)
+        bad['trees'][0][key] = int(bad['trees'][0][key]) + 1
+        expect_throw(bad, key)
+
+    # 'Dcore' is ADOPTED rather than compared, so only its standalone invariant (a power of
+    # two dividing nt_ds/nt_out) is checked. A non-power-of-two must still be caught.
+    bad = yaml.safe_load(s)
+    bad['trees'][0]['Dcore'] = 3
+    expect_throw(bad, 'Dcore')
+
+    bad = yaml.safe_load(s)
+    bad['trees'][0]['frequency_subband_counts'][0] += 1
+    expect_throw(bad, 'frequency_subband_counts')
+
+    # The display doubles are compared at 1e-4 relative tolerance (yaml-cpp emits ~6
+    # significant digits). '2x + 1' is the perturbation because it exceeds the tolerance for
+    # any value, including dm_min = 0 on a primary_tree_index == 0 tree.
+    for key in ('dm_min', 'dm_max', 'trigger_frequency'):
+        bad = yaml.safe_load(s)
+        bad['trees'][0][key] = 2.0 * float(bad['trees'][0][key]) + 1.0
+        expect_throw(bad, key)
 
 
-def _decode(plan, token, itree, idm_coarse, itime_coarse):
-    """Scalar decode through the plan's tree. DedispersionPlan has no decode_argmax()
-    method: decoding goes through DedispersionTree (here) or, vectorized, through
-    FrbGrouper (see test_server.py)."""
-    return plan.trees[itree].decode_argmax(token, idm_coarse, itime_coarse)
+def _test_grouper_plan_rebuild(config, plan, tuples):
+    """Rebuild the producer's plan from its yaml, as FrbGrouper does at handshake.
 
-
-def _test_grouper_tree_rebuild(config, plan, tuples):
-    """Rebuild the producer's DedispersionTrees from the plan yaml, as FrbGrouper does.
-
-    FrbGrouper receives (config yaml, plan yaml) at handshake and reconstructs one
-    DedispersionTree per per-tree block of the plan yaml -- it never builds a
-    DedispersionPlan. This checks that route end to end: every member must survive, and
-    decoding through the rebuilt trees must match the freshly-built plan exactly. That is
-    the property token decoding on the consumer side rests on.
-
-    Distinct from _test_tree_yaml() above, which round-trips a STANDALONE tree yaml; here
-    the trees are extracted from a whole plan yaml, which is the shape FrbGrouper sees.
+    Distinct from _test_plan_yaml() above in the one way that matters here: the plan is a
+    COMPLETE one, so its yaml carries a mega_ringbuf section (which from_yaml() ignores), and
+    its Dcore values are the cdd2 registry's. Dcore is the one field ADOPTED from the yaml,
+    and adopting it is what makes decoding correct on a consumer running a different build --
+    so this checks that it survives, and that decoding through the rebuilt plan agrees.
     """
 
-    cfg_yaml = config.to_yaml_string()
+    cfg2 = DedispersionConfig.from_yaml_string(config.to_yaml_string())
     plan_yaml = plan.to_yaml_string()
+    assert 'mega_ringbuf' in yaml.safe_load(plan_yaml)
 
-    cfg2 = DedispersionConfig.from_yaml_string(cfg_yaml)
-    doc = yaml.safe_load(plan_yaml)
-    assert doc['ntrees'] == plan.ntrees == cfg2.num_dedispersion_trees
+    p2 = DedispersionPlan.from_yaml_string(cfg2, plan_yaml)
+    assert p2.ntrees == plan.ntrees
 
-    trees = [DedispersionTree.from_yaml_string(yaml.safe_dump(tn), cfg2)
-             for tn in doc['trees']]
+    trees, trees2 = plan.trees, p2.trees
+    for itree in range(plan.ntrees):
+        assert trees2[itree].Dcore == trees[itree].Dcore, f'tree {itree}: Dcore'
 
-    for itree, (t1, t2) in enumerate(zip(plan.trees, trees)):
-        for name in ['primary_tree_index', 'early_trigger_level', 'amb_rank', 'dd_rank',
-                     'nt_ds', 'dm_downsampling', 'time_downsampling', 'Dcore', 'nprofiles',
-                     'ndm_out', 'ndm_wt', 'nt_out', 'nt_wt']:
-            assert getattr(t2, name) == getattr(t1, name), f"tree {itree}: {name}"
-        for name in ['max_width',
-                     'wt_dm_downsampling', 'wt_time_downsampling', 'num_early_triggers']:
-            assert getattr(t2.pf, name) == getattr(t1.pf, name), f"tree {itree}: pf.{name}"
-        for name in ['dm_min', 'dm_max', 'trigger_frequency']:
-            x1, x2 = getattr(t1, name), getattr(t2, name)
-            # Lossy yaml round-trip (to_yaml uses ~6-significant-digit doubles).
-            assert abs(x2 - x1) <= 1.0e-4 * max(abs(x1), 1.0), f"tree {itree}: {name}"
-        fs1, fs2 = t1.frequency_subbands, t2.frequency_subbands
-        assert list(fs2.subband_counts) == list(fs1.subband_counts), f"tree {itree}: subband_counts"
-        assert (fs2.N, fs2.M) == (fs1.N, fs1.M), f"tree {itree}: fs.N/M"
-
-    # Every rebuilt tree must agree with the config it travelled with. This is the check
-    # FrbGrouper runs at handshake; here it covers the passing path on random configs,
-    # without needing a server.
-    for t in trees:
-        t.check_consistency(cfg2)
-
-    # Decoding through the rebuilt trees must agree exactly with the full plan.
     for (itree, token, idm, itout) in tuples:
-        assert (trees[itree].decode_argmax(token, idm, itout)
+        assert (p2.decode_argmax(token, itree, idm, itout)
                 == _decode(plan, token, itree, idm, itout)), (itree, token)
 
     # Negative test: a missing per-tree key must throw (naming the key).
-    bad = yaml.safe_load(plan_yaml)['trees'][0]
-    bad['Dcore_renamed'] = bad.pop('Dcore')
+    bad = yaml.safe_load(plan_yaml)
+    bad['trees'][0]['Dcore_renamed'] = bad['trees'][0].pop('Dcore')
     try:
-        DedispersionTree.from_yaml_string(yaml.safe_dump(bad), cfg2)
-        raise AssertionError("DedispersionTree.from_yaml_string() should have thrown"
+        DedispersionPlan.from_yaml_string(cfg2, yaml.safe_dump(bad))
+        raise AssertionError("DedispersionPlan.from_yaml_string() should have thrown"
                              " (missing Dcore)")
     except RuntimeError:
         pass
 
-    return trees
+    return p2
+
+
+def _decode(plan, token, itree, idm_coarse, itime_coarse):
+    """Scalar decode. Decoding is a DedispersionPlan method; the vectorized form lives on
+    FrbGrouper (see test_server.py)."""
+    return plan.decode_argmax(token, itree, idm_coarse, itime_coarse)
 
 
 ####################################################################################################
@@ -402,10 +399,7 @@ def _check_bad_tokens(plan, kinfo):
             expect_throw((p << 8) | 1, itree, 0, 0)   # t not divisible by dt
             break
 
-    # (No itree-out-of-range case: decoding is a DedispersionTree method, so a caller
-    # indexes plan.trees directly and an out-of-range itree is an IndexError from the list
-    # rather than a decode error. The C++ range check on batch decode is covered in
-    # test_server.py.)
+    expect_throw(0, plan.ntrees, 0, 0)          # itree out of range
     expect_throw(0, itree, tree.ndm_out, 0)     # idm_coarse out of range
     expect_throw(0, itree, 0, tree.nt_out)      # itime_coarse out of range
 
@@ -476,7 +470,7 @@ def test_decode_argmax():
     _test_pf_kernel_quantization()
 
     config = _make_random_config()
-    _test_tree_yaml(config)
+    _test_plan_yaml(config)
     plan = DedispersionPlan(config)
     r_top = config.toplevel_tree_rank
     nt_in = plan.nt_in
@@ -512,9 +506,9 @@ def test_decode_argmax():
     for itree in range(plan.ntrees):
         assert plan.trees[itree].Dcore == kinfo[itree][3]
 
-    # cdd2_kernel_required=False: no registry query; default Dcore = tree.time_downsampling.
-    p0 = DedispersionPlan(config, cdd2_kernel_required=False)
-    assert not p0.cdd2_kernel_required
+    # dcore_from_cdd2_registry=False: no registry query; placeholder Dcore = tree.time_downsampling.
+    p0 = DedispersionPlan(config, DedispersionPlan.Params(dcore_from_cdd2_registry=False))
+    assert not p0.params.dcore_from_cdd2_registry
     for tr in p0.trees:
         assert tr.Dcore == tr.time_downsampling
 
@@ -551,7 +545,5 @@ def test_decode_argmax():
     tuples = _sample_tuples(plan, kinfo, interesting_ms, ntuples=2 * max(B // 3, 1))
     _probe_tuples(plan, r_top, C, tuples)
 
-    # Round-trip test of the per-tree yaml, as FrbGrouper does (reuses the sampled tuples).
-    _test_grouper_tree_rebuild(config, plan, tuples)
-
-    # Vectorized decode bindings (batch == scalar loop; full plan == incomplete plan).
+    # Rebuild the plan from its yaml, as FrbGrouper does (reuses the sampled tuples).
+    _test_grouper_plan_rebuild(config, plan, tuples)

@@ -12,7 +12,7 @@ if a line no longer has a test behind it, delete it.
 
 import numpy as np
 
-from ..pirate_pybind11 import DedispersionConfig, DedispersionTree
+from ..pirate_pybind11 import DedispersionConfig, DedispersionPlan
 from ..utils import atomic_print, print_separator
 
 
@@ -119,7 +119,9 @@ def report_coverage():
         n_r0, n_wide, n_multi_sub, n_blk, n_xdm = 0, 0, 0, 0, 0
         for config in configs:
             nets = [int(pt.num_early_triggers) for pt in config.primary_trees]
-            t0 = _tree(config, config.dedispersion_tree_index(0, 0))
+            plan = _plan(config)
+            trees = plan.trees
+            t0 = trees[int(config.dedispersion_tree_index(0, 0))]
             fs = t0.frequency_subbands
             R, r = int(fs.pf_rank), int(t0.total_rank())
             nfreq = int(config.get_total_nfreq())
@@ -127,17 +129,16 @@ def report_coverage():
             n_wide += int(nfreq < (1 << r))
             n_multi_sub += int(int(fs.N) > 1)
             n_blk += int(nfreq % 8 == 0)
-            n_xdm += int(any(int(_tree(config, i).xdm_rank()) > 0
-                             for i in range(int(config.num_dedispersion_trees))))
+            n_xdm += int(any(int(t.xdm_rank()) > 0 for t in trees))
             if max(nets) == 0:
                 continue
             n_early += 1
             found = False
             for g in range(int(config.num_primary_trees)):
-                parent = _tree(config, config.dedispersion_tree_index(g, 0))
+                iparent = int(config.dedispersion_tree_index(g, 0))
                 for e in range(1, nets[g] + 1):
-                    child = _tree(config, config.dedispersion_tree_index(g, e))
-                    m_map = np.asarray(DedispersionTree.m_index_mapping(parent, child))
+                    ichild = int(config.dedispersion_tree_index(g, e))
+                    m_map = np.asarray(plan.m_index_mapping(iparent, ichild))
                     n_pairs += 1
                     if not np.array_equal(m_map, np.arange(m_map.size)):
                         n_nc_pairs += 1
@@ -184,12 +185,12 @@ def _straddle_rate(configs):
     return n, len(configs)
 
 
-def _tree(config, itree):
-    """A DedispersionTree, with Dcore NOT taken from the cdd2 registry -- the multiplet map
+def _plan(config):
+    """A DedispersionPlan, with Dcore NOT taken from the cdd2 registry -- the multiplet map
     does not depend on it, and requiring the registry would make this report depend on which
     kernels the build compiled in a second, unrelated way."""
 
-    return DedispersionTree(config, int(itree), Dcore_from_cdd2_registry=False)
+    return DedispersionPlan(config, DedispersionPlan.Params.minimal())
 
 
 def _row(label, count, n):

@@ -104,7 +104,7 @@ namespace pirate {
 //
 // which is the same 32 bits as above: (m << (16+K)) | (mu << 16) == (m_ext << 16). The two
 // spellings exist because a cdd2 caller thinks in (m, mu) and a peak-finder in m_ext.
-// DedispersionTree::decode_argmax() is the one place that splits the field back apart.
+// DedispersionPlan::decode_argmax() is the one place that splits the field back apart.
 
 
 struct PeakFindingKernelParams
@@ -147,8 +147,8 @@ struct PeakFindingKernelParams
     //
     // Dcore == 0 is invalid: validate() requires a power of two dividing (nt_in / nt_out).
     // DedispersionPlan fills stage2_pf_params[:].Dcore from DedispersionTree::Dcore (which
-    // the plan fills from the cdd2 registry if cdd2_kernel_required -- the default -- and
-    // otherwise sets to the default value DedispersionTree::time_downsampling).
+    // it takes from the cdd2 registry if Params::dcore_from_cdd2_registry -- the default --
+    // and otherwise sets to the placeholder DedispersionTree::time_downsampling).
     long Dcore = 0;
 
     void validate() const;  // throws an exception if anything is wrong

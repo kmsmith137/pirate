@@ -41,7 +41,7 @@ import time
 import numpy as np
 
 from ..utils import atomic_print
-from .VarianceMap import VarianceMap, make_tree, coarse_grain_vector, _subband_tables
+from .VarianceMap import VarianceMap, make_plan, coarse_grain_vector, _subband_tables
 from .VarianceMultiMap import VarianceMultiMap
 
 
@@ -65,7 +65,7 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
     config : DedispersionConfig
         One requirement, checked up front: ``beams_per_gpu == beams_per_batch``. The
         output-array coarse-graining needs no check -- ``DedispersionTree``'s
-        ``dm_downsampling`` and ``time_downsampling`` are both 2^dd_rank1 by construction
+        ``dm_downsampling`` and ``time_downsampling`` are both ``2^dd_rank1`` by construction
         and neither is a config field. The latter sets the peak-finder's Dcore, which
         neither sweep reads.
         The beam count comes from ``config.beams_per_batch``: on the GPU the beam axis is a
@@ -157,7 +157,8 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
     if provenance:
         prov.update(provenance)
 
-    return VarianceMultiMap(config, primary, detrender=detrender, provenance=prov)
+    return VarianceMultiMap(config, primary, detrender=detrender, plan=acc.plan,
+                            provenance=prov)
 
 
 def _run_sweep(config, detrender=None, *, device='gpu', L=None, guard_chunk=True,
@@ -273,7 +274,8 @@ class _SweepGeometry:
         from ..pirate_pybind11 import DedispersionPlan
 
         self.config = config
-        self.plan = plan = DedispersionPlan(config, cdd2_kernel_required=False)
+        params = DedispersionPlan.Params(dcore_from_cdd2_registry=False)
+        self.plan = plan = DedispersionPlan(config, params)
         self.nfreq = int(plan.nfreq)
         self.nt_in = int(plan.nt_in)
         self.ntrees = int(plan.ntrees)
@@ -353,7 +355,7 @@ class _SweepGeometry:
             # assumed one, without needing a Dcore knob to vary: detrender_free.py reads
             # neither Dcore nor time_downsampling, so it is a Dcore-blind oracle, and every
             # config it is run against has Dcore >= 2 (Dcore = time_downsampling = 2^dd_rank1
-            # for a cdd2_kernel_required=False plan, and dd_rank >= 1). A sweep that depended
+            # for a dcore_from_cdd2_registry=False plan, and dd_rank >= 1). A sweep that depended
             # on Dcore would disagree with it. Measured over 494 drawn trees: Dcore is 2 or 4,
             # never 1.
             #
@@ -1082,26 +1084,19 @@ class _Accumulator:
         self.transpose_seconds = 0.0
         self.gmin, self.gmax = np.inf, -np.inf
 
-        self.A, self.stage, self.y, self.nrows, self.trees = [], [], [], [], []
+        self.A, self.stage, self.y, self.nrows = [], [], [], []
         self.staged = []       # input channels currently held in the buffers, in order
 
+        # The plan the returned maps index through, which is NOT geom.plan: that one drives
+        # GPU kernels, so it holds a MegaRingbuf's pinned host memory, which a map handed back
+        # to a caller must not keep alive. Same geometry either way -- one constructor.
+        self.plan = plan = make_plan(geom.config)
+        self.trees = plan.trees   # one list build; plan.trees copies on every access
+
         for itree in range(geom.ntrees):
-            # The tree the returned map will index through, which is NOT plan.trees[itree]:
-            # varmap builds its trees with Dcore_from_cdd2_registry=False. The geometry must
-            # agree all the same, and a mismatch would silently reinterpret every row, so it
-            # is checked rather than assumed.
-            tree = make_tree(geom.config, itree)
+            tree = self.trees[itree]
             fs = tree.frequency_subbands
             r, R = int(tree.total_rank()), int(fs.pf_rank)
-            got = (int(fs.M), int(fs.N), int(tree.nprofiles), 1 << (r - R), r, R)
-            want = (geom.tree_M[itree], geom.tree_N[itree], geom.tree_P[itree],
-                    geom.tree_D[itree], geom.tree_r[itree], geom.tree_R[itree])
-            if got != want:
-                raise RuntimeError(
-                    f'_Accumulator: tree {itree} of the DedispersionPlan and of'
-                    f' VarianceMap.make_tree() disagree about the geometry: (M,N,P,D,r,R) ='
-                    f' {want} vs {got}')
-            M, N, P, D = got[:4]
 
             L = self.Ls[itree]
             if L is None:
@@ -1114,13 +1109,12 @@ class _Accumulator:
                 if not (R <= L <= r):
                     raise RuntimeError(f'_Accumulator: tree {itree} was given L={L}, which is'
                                        f' out of range [R, r] = [{R}, {r}]')
-                nrows = (1 << (r - L)) * N * P
+                nrows = (1 << (r - L)) * int(fs.N) * int(tree.nprofiles)
                 # Called for its side effect: coarse_grain_vector() assumes this tree's
                 # multiplet ordering once per swept column, and this is where that assumption
                 # can still be reported cheaply.
                 _subband_tables(tree)
             self.nrows.append(nrows)
-            self.trees.append(tree)
 
             # Zeroed, not -inf as coarse_grain() uses: A is a sum of squares, so the
             # max-reduction never sees a negative, and every group is occupied for
@@ -1239,7 +1233,7 @@ class _Accumulator:
                        transpose_seconds=self.transpose_seconds)
             m = VarianceMap.from_dense(g.config, itree, A, detrender=g.detrender,
                                        y_true=(None if partial else self.y[itree]),
-                                       L=L, history=[rec])
+                                       L=L, plan=self.plan, history=[rec])
 
             # The one runtime guard on the property the whole scalable path assumes -- that
             # the reference does not UNDERESTIMATE A_true. Called wherever a coarse map is

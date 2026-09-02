@@ -1713,8 +1713,8 @@ whatever {\tt max\_width} is: $p=0$ is the identity, and $p = 3l+q$ with $q \in 
 one of three shapes built from length-$2^l$ boxcars, so {\tt max\_width} enters only through how
 many levels $l$ exist. The bank for {\tt max\_width} is therefore a {\em prefix} of the bank for
 $2\,{\tt max\_width}$: doubling the width appends one level, i.e.\ three profiles, at the end.
-Now, {\tt max\_width} is a per-{\em primary}-tree config field, which the {\tt DedispersionTree}
-constructor copies verbatim, so every tree of one family reads the same value; and
+Now, {\tt max\_width} is a per-{\em primary}-tree config field, which the {\tt DedispersionPlan}
+constructor copies verbatim onto each tree, so every tree of one family reads the same value; and
 {\tt DedispersionConfig::validate()} requires each downsampled primary tree's {\tt max\_width} to
 equal its predecessor's or be half of it. Hence
 \begin{equation}
@@ -2635,9 +2635,11 @@ being lost to roundoff against the diagonal term.
 \label{sec:analytic_variance}
 
 This appendix documents \verb|pirate_frb/varmap/detrender_free.py|, which computes the
-variance map $A$ of Eq.\ (\ref{eq:variance_map_def}) analytically -- no dedisperser is run, no
-{\tt DedispersionPlan} is built, and no GPU is used -- and returns it directly in low-rank
-form $A = QW^T$. It is the algorithm behind {\tt pirate\_frb varmap df}.
+variance map $A$ of Eq.\ (\ref{eq:variance_map_def}) analytically -- no dedisperser is run and
+no GPU is used -- and returns it directly in low-rank form $A = QW^T$. (It does build a
+{\tt DedispersionPlan}, but a {\tt Params::minimal()} one, which is pure arithmetic: no
+ring buffer, no kernel params, no CUDA device. That is the only way to get at a config's
+{\tt DedispersionTree}s.) It is the algorithm behind {\tt pirate\_frb varmap df}.
 
 {\bf The no-detrender hypothesis is load-bearing, not a missing feature.} Throughout this
 appendix the linear operator $L$ of \S\ref{ssec:variance_map_setup} is taken with the

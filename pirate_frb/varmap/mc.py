@@ -105,7 +105,7 @@ def run_mc(vmm, freq_variances, *, device='gpu', nchunks=None, report_every=1,
         # GETTING THIS BACKWARDS IS SILENT AND LOOKS LIKE A PASS: warmup samples would be
         # admitted on the wrong rows, biasing variances DOWNWARD, which reads as the map
         # overestimating.
-        it0 = np.asarray(geom.plan.trees[itree].compute_steady_state_it0(config), dtype=np.int64)
+        it0 = np.asarray(geom.plan.compute_steady_state_it0(itree), dtype=np.int64)
         if it0.size * (1 << K) != D:
             raise RuntimeError(f'varmap mc: tree {itree}: it0 has {it0.size} rows, '
                                f'K={K}, but Dpf={D}')

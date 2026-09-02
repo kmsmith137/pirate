@@ -4,10 +4,7 @@
 #include "Dedisperser.hpp"          // GpuDedisperser::Outputs (+ ksgpu Array/Dtype)
 #include "XEngineMetadata.hpp"
 #include "DedispersionConfig.hpp"
-#include "DedispersionTree.hpp"
 #include "constants.hpp"            // FrbGrouperClient default timeouts
-
-#include <yaml-cpp/yaml.h>          // YAML::Node
 
 #include <chrono>
 #include <condition_variable>
@@ -127,16 +124,19 @@ struct FrbGrouper
 
     // ----- Metadata sent by the RPC client (populated at handshake) -----
     std::shared_ptr<XEngineMetadata> xengine_metadata;
-    DedispersionConfig dedispersion_config;
-    YAML::Node dedispersion_plan_yaml;      // NOT pybind-wrapped (see injections)
 
-    // The producer's DedispersionTrees, deserialized from the per-tree blocks of the
-    // handshake's plan yaml (DedispersionTree::from_yaml()). Supports decode_argmax*() and
-    // compute_steady_state_it0() with the PRODUCER's values -- in particular its per-tree
-    // Dcore, which is what makes token decoding correct even if this process runs a
-    // different pirate_frb build. No DedispersionPlan is built: the grouper needs per-tree
-    // data and a config, and nothing else a plan would provide.
-    std::vector<DedispersionTree> dedispersion_trees;
+    // Same as dedispersion_plan->config; kept as a separate member for convenience.
+    DedispersionConfig dedispersion_config;
+
+    // The producer's plan, rebuilt from the handshake's two yamls by
+    // DedispersionPlan::from_yaml_string(). Supports decode_argmax*() and
+    // compute_steady_state_it0() with the PRODUCER's per-tree Dcore, which is what makes
+    // token decoding correct even if this process runs a different pirate_frb build.
+    //
+    // A DedispersionPlan::Params::minimal() plan, so it needs no GPU. Held by pointer
+    // because a plan has const members, hence cannot be assigned into a by-value member
+    // (the grouper is constructed long before the handshake).
+    std::shared_ptr<DedispersionPlan> dedispersion_plan;
 
     std::string xengine_metadata_yaml_string;
     std::string dedispersion_config_yaml_string;
@@ -170,9 +170,9 @@ struct FrbGrouper
                                   //   index of the first dedispersion output relative to
                                   //   FPGA seq 0; used to set Outputs::ichunk_fpga_based.
 
-    long ntrees = 0;              // = dedispersion_plan_yaml['ntrees']
-    std::vector<long> ndm_out;    // length ntrees, from dedispersion_plan_yaml['trees'][:]['ndm_out']
-    std::vector<long> nt_out;     // length ntrees, from dedispersion_plan_yaml['trees'][:]['nt_out']
+    long ntrees = 0;              // = dedispersion_plan->ntrees
+    std::vector<long> ndm_out;    // length ntrees, from dedispersion_plan->trees[:].ndm_out
+    std::vector<long> nt_out;     // length ntrees, from dedispersion_plan->trees[:].nt_out
 
     // ----- Lifecycle (entry points) -----
     //
@@ -206,9 +206,8 @@ struct FrbGrouper
     // thread will emit CONSUMED(seq_id).
     void release_output(long seq_id);
 
-    // Forwards to DedispersionTree::compute_steady_state_it0() on the producer's tree from
-    // the handshake -- see DedispersionTree.hpp for the meaning of the returned array.
-    // (A forwarder is needed since 'dedispersion_trees' is deliberately not pybind-wrapped.)
+    // Forwards to DedispersionPlan::compute_steady_state_it0() on the producer's plan from
+    // the handshake -- see DedispersionPlan.hpp for the meaning of the returned array.
     // Valid only after the handshake.
     ksgpu::Array<long> _compute_steady_state_it0(long itree) const;
 

@@ -5,15 +5,19 @@ is a row subset of its (gamma, 0) parent's, so it is derived rather than stored 
 VarianceMultiMap). That is what format_version 2 changed, and why a version-1 file is refused
 by name rather than migrated -- its 'trees' list would parse cleanly and mean something else.
 
+Version 3 replaced the per-tree 'tree_yaml' blocks with one top-level 'plan_yaml': trees are
+only ever built by a DedispersionPlan, so the file stores the plan the maps were made with,
+once, and the reader verifies it against the config in one call.
+
 Reached through ``VarianceMap.write_asdf()`` / ``.from_asdf()`` and
 ``VarianceMultiMap.write_asdf()`` / ``.from_asdf()`` / ``.open_asdf()``; this module holds
 the format itself and is not normally imported directly.
 
 What the format has to do
 -------------------------
-1. Be readable with NO DedispersionPlan, hence on a machine with no GPU. That is why the
-   config is stored as a yaml string and the per-tree geometry is stored explicitly rather
-   than re-derived.
+1. Be readable on a machine with NO GPU. That is why the config and the plan are stored as
+   yaml strings and the geometry is stored explicitly rather than re-derived. The stored plan
+   is a ``DedispersionPlan.Params.minimal()`` one, which allocates nothing.
 2. Support every representation: dense or factored, coarse or fine, certified or not.
 3. Store y_true, at FINE granularity -- the only part of A_true that survives
    coarse-graining and low-rank approximation, and the one thing D cannot be computed
@@ -27,15 +31,15 @@ The tree
 ::
 
     variance_multimap:
-      format_version:  2
+      format_version:  3
       created:         ISO8601 UTC string
       config_yaml:     str                 # DedispersionConfig.to_yaml_string()
+      plan_yaml:       str                 # DedispersionPlan.to_yaml_string(), Params.minimal()
       detrender_yaml:  str or None         # Detrender2dParams.to_yaml_string()
       provenance:      dict                # free-form; how the SWEEP was run
       trees:                                # ONE ENTRY PER PRIMARY TREE, keyed by 'gamma'
         - gamma:              int          # primary_tree_index; the entry KEY
           itree:              int          # = dedispersion_tree_index(gamma, 0); derived
-          tree_yaml:          str          # DedispersionTree.to_yaml_string(config, itree)
           m_to_n:             (M,) int64
           is_coarse_grained:  bool
           L:                  int or None
@@ -72,11 +76,12 @@ The reader is deliberately paranoid, because the archived library is hundreds of
 cannot be regenerated cheaply, and every failure mode below would otherwise surface as a
 silently reinterpreted map rather than an error:
 
-- ``DedispersionTree.check_consistency(config)``, which rebuilds the tree from the config
-  and compares every geometry member. This catches a file written by a build whose
-  dedispersion-tree geometry differs from this one's.
+- ``DedispersionPlan.from_yaml_string(config, plan_yaml)``, once per file, which rebuilds
+  the plan from the config and compares every field of the stored yaml against it. This
+  catches a file written by a build whose dedispersion-tree geometry differs from this
+  one's.
 - ``m_to_n`` against the table rebuilt from the tree's ``frequency_subband_counts``. This
-  is the one field with no independent witness -- the tree yaml stores the counts, and
+  is the one field with no independent witness -- the plan yaml stores the counts, and
   FrequencySubbands rebuilds m_to_n from them on read -- so a silent change to the
   multiplet ordering convention would reinterpret every archived map. Stored as a tripwire.
 - ``is_coarse_grained`` against ``L``, ``nbeta`` against the array, and ``itree`` against
@@ -88,11 +93,11 @@ without it is rejected by name.
 
 'Dcore' in a variance-map file is NEVER authoritative
 -----------------------------------------------------
-The tree yaml carries a ``Dcore``, and it is always the placeholder
-``DedispersionTree.time_downsampling``: varmap builds trees with ``Dcore_from_cdd2_registry=False`` (see
-VarianceMap.make_tree), and the brute-force sweep runs with the cdd2 kernel not required.
-Do not decode peak-finder tokens with it -- the authoritative value is the producer's, and
-it travels in the FrbGrouper handshake, not here.
+The plan yaml carries a per-tree ``Dcore``, and it is always the placeholder
+``DedispersionTree.time_downsampling``: varmap builds its plans with
+``Params.dcore_from_cdd2_registry=False`` (see VarianceMap.make_plan), and the brute-force
+sweep does too. Do not decode peak-finder tokens with it -- the authoritative value is the
+producer's, and it travels in the FrbGrouper handshake, not here.
 """
 
 import contextlib
@@ -105,7 +110,7 @@ from .VarianceMap import VarianceMap
 from .VarianceMultiMap import VarianceMultiMap
 
 
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 
 # The top-level key. Deliberately NOT the old format's 'variance_map': the two are
 # incompatible, and a name collision would turn "wrong format" into a confusing field error.
@@ -173,26 +178,36 @@ def _root(af, filename):
                      " version 2 holds one per PRIMARY tree (an early-trigger tree's map is"
                      " a row subset of its parent's, so it is no longer stored). There is no"
                      " converter: re-run the sweep.")
+        if int(v) == 2:
+            extra = (" A version-2 file stores a per-tree 'tree_yaml' block, which this build"
+                     " no longer reads (a tree is only ever built by a DedispersionPlan, so"
+                     " version 3 stores one 'plan_yaml' instead). There is no converter:"
+                     " re-run the sweep.")
         raise RuntimeError(f'{filename}: format_version is {v}, but this build reads only'
                            f' version {FORMAT_VERSION}.{extra}')
     return root
 
 
 def _read_inputs(root):
-    """(config, detrender) from the root block's yaml strings.
+    """(config, detrender, plan) from the root block's yaml strings.
 
-    Both are re-parsed here rather than stored per tree: they are metadata of the whole
+    All three are re-parsed here rather than stored per tree: they are metadata of the whole
     file, and the multimap requires every per-tree map to hold the SAME objects.
+
+    Rebuilding the plan is also where the file's geometry gets verified -- from_yaml_string()
+    builds the plan from 'config' and cross-checks every stored field against it, raising if
+    the writing build's dedispersion-tree geometry differs from this one's.
     """
 
-    from ..pirate_pybind11 import DedispersionConfig, Detrender2dParams
+    from ..pirate_pybind11 import DedispersionConfig, DedispersionPlan, Detrender2dParams
 
     config = DedispersionConfig.from_yaml_string(root['config_yaml'])
+    plan = DedispersionPlan.from_yaml_string(config, root['plan_yaml'])
 
     dy = root.get('detrender_yaml')
     detrender = Detrender2dParams.from_yaml_string(dy) if (dy is not None) else None
 
-    return config, detrender
+    return config, detrender, plan
 
 
 ####################################   writing   ####################################
@@ -208,7 +223,6 @@ def _tree_dict(m):
 
     d = dict(gamma=int(m.tree.primary_tree_index),
              itree=int(m.itree),
-             tree_yaml=m.tree.to_yaml_string(m.config, m.itree),
              m_to_n=np.ascontiguousarray(m.m_to_n, dtype=np.int64),
              is_coarse_grained=bool(m.is_coarse_grained),
              L=(int(m.L) if (m.L is not None) else None),
@@ -237,7 +251,7 @@ def _tree_dict(m):
     return d
 
 
-def _write(maps, config, detrender, provenance, filename):
+def _write(maps, config, detrender, plan, provenance, filename):
     """Assemble the root block and write it.
 
     The matrices are handed to asdf as they are, so a memmapped or otherwise on-disk-backed
@@ -250,6 +264,7 @@ def _write(maps, config, detrender, provenance, filename):
     root = {'format_version': FORMAT_VERSION,
             'created': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             'config_yaml': config.to_yaml_string(),
+            'plan_yaml': plan.to_yaml_string(),
             'detrender_yaml': (detrender.to_yaml_string()
                                if (detrender is not None) else None),
             'provenance': _plain(dict(provenance or {})),
@@ -268,7 +283,7 @@ def write_multimap(vmm, filename, *, provenance=None):
     """
 
     prov = vmm.provenance if (provenance is None) else provenance
-    _write(list(vmm.maps), vmm.config, vmm.detrender, prov, filename)
+    _write(list(vmm.maps), vmm.config, vmm.detrender, vmm.plan, prov, filename)
 
 
 def write_map(m, filename, *, provenance=None):
@@ -281,35 +296,39 @@ def write_map(m, filename, *, provenance=None):
     by definition.
     """
 
-    _write([m], m.config, m.detrender, provenance, filename)
+    _write([m], m.config, m.detrender, m.plan, provenance, filename)
 
 
 ####################################   reading   ####################################
 
 
-def _read_tree(d, config, detrender, filename):
-    """One VarianceMap from a per-tree block. See the module docstring for what is checked."""
+def _read_tree(d, config, detrender, plan, filename):
+    """One VarianceMap from a per-tree block. See the module docstring for what is checked.
 
-    from ..pirate_pybind11 import DedispersionTree
+    The plan-level geometry check already happened in _read_inputs(); what is left here is
+    per-block.
+    """
 
     itree = int(d['itree'])
     where = f'{filename}: tree {itree}'
 
     # ---- geometry, and the three checks on it ----
 
-    tree = DedispersionTree.from_yaml_string(d['tree_yaml'], config)
+    if not (0 <= itree < int(plan.ntrees)):
+        raise RuntimeError(f"{where}: the stored 'itree' is out of range for this config,"
+                           f' which has {int(plan.ntrees)} dedispersion trees.')
 
-    # Compares every geometry member against a tree rebuilt from the config, and raises
-    # naming the member that disagrees.
-    tree.check_consistency(config)
+    tree = plan.trees[itree]
 
-    ir = int(config.dedispersion_tree_index(tree.primary_tree_index,
-                                            tree.early_trigger_level))
-    if ir != itree:
-        raise RuntimeError(f"{where}: the stored tree yaml is tree {ir} of this config"
-                           f" (primary_tree_index={tree.primary_tree_index},"
-                           f" early_trigger_level={tree.early_trigger_level}), not tree"
-                           f" {itree} as the 'itree' field claims.")
+    # A stored map is a PRIMARY tree's, so 'itree' must name an early_trigger_level == 0
+    # tree, and 'gamma' -- the entry key -- must be that tree's primary_tree_index.
+    if (int(tree.early_trigger_level) != 0) or (int(tree.primary_tree_index) != int(d['gamma'])):
+        raise RuntimeError(f"{where}: the stored 'itree' names tree {itree} of this config,"
+                           f' which is (primary_tree_index={tree.primary_tree_index},'
+                           f' early_trigger_level={tree.early_trigger_level}) -- not the'
+                           f" early_trigger_level == 0 tree of primary tree"
+                           f" {int(d['gamma'])} that the block's 'gamma' claims. (A stored"
+                           " map is always a PRIMARY tree's.)")
 
     stored = np.asarray(d['m_to_n'], dtype=np.int64)
     rebuilt = np.asarray(tree.frequency_subbands.m_to_n, dtype=np.int64)
@@ -357,7 +376,7 @@ def _read_tree(d, config, detrender, filename):
         y_true = np.asarray(y_true)
 
     common = dict(y_true=y_true, L=L, is_admissible=bool(d['is_admissible']),
-                  history=[dict(h) for h in d.get('history', [])], tree=tree)
+                  history=[dict(h) for h in d.get('history', [])], plan=plan)
 
     # np.asarray() below is a view into the memmapped block in the lazy case (no copy, and no
     # asdf object left in the map), and a materializing read in the eager one.
@@ -388,7 +407,7 @@ def _read_tree(d, config, detrender, filename):
 def _multimap_from_root(root, filename):
     """A VarianceMultiMap from a root block, with every primary tree present and in order."""
 
-    config, detrender = _read_inputs(root)
+    config, detrender, plan = _read_inputs(root)
     entries = list(root['trees'])
 
     npri = int(config.num_primary_trees)
@@ -404,8 +423,8 @@ def _multimap_from_root(root, filename):
             ' definition; read a single-map file with VarianceMap.from_asdf(filename, gamma)'
             ' instead.')
 
-    maps = [_read_tree(d, config, detrender, filename) for d in entries]
-    return VarianceMultiMap(config, maps, detrender=detrender,
+    maps = [_read_tree(d, config, detrender, plan, filename) for d in entries]
+    return VarianceMultiMap(config, maps, detrender=detrender, plan=plan,
                             provenance=dict(root.get('provenance') or {}))
 
 
@@ -460,7 +479,7 @@ def read_map(filename, gamma=0):
     gamma = int(gamma)
     with asdf.open(str(filename), lazy_load=False, memmap=False) as af:
         root = _root(af, filename)
-        config, detrender = _read_inputs(root)
+        config, detrender, plan = _read_inputs(root)
 
         entries = [d for d in root['trees'] if int(d['gamma']) == gamma]
         if len(entries) != 1:
@@ -469,4 +488,4 @@ def read_map(filename, gamma=0):
                                f' holds {len(entries)} entries for it (primary trees'
                                f' present: {got}).')
 
-        return _read_tree(entries[0], config, detrender, filename)
+        return _read_tree(entries[0], config, detrender, plan, filename)

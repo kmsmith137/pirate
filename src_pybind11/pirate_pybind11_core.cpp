@@ -49,16 +49,6 @@ namespace pirate {
 // zero-size arrays.)
 
 
-static void _check_itree(const char *fname, long itree, size_t ntrees)
-{
-    if ((itree < 0) || (itree >= long(ntrees))) {
-        stringstream ss;
-        ss << fname << ": itree=" << itree << " is out of range [0, " << ntrees << ")";
-        throw runtime_error(ss.str());
-    }
-}
-
-
 template<typename T>
 static void _check_batch_arg(const char *fname, const char *arg_name, const ksgpu::Array<T> &a, long n)
 {
@@ -958,14 +948,17 @@ void register_core_bindings(pybind11::module &m)
         "Output geometry of the dedisperser, for one (primary tree, early trigger) pair.\n"
         "\n"
         "This is what a downstream consumer needs in order to interpret dedispersion\n"
-        "outputs: the output array shapes, the frequency subbands searched, and the methods\n"
-        "which decode ``out_argmax`` tokens into physical (dm, arrival time, width, subband)\n"
-        "values. A DedispersionPlan holds one per tree, as ``plan.trees``.\n"
+        "outputs: the output array shapes and the frequency subbands searched. The methods\n"
+        "which INTERPRET a tree -- decoding ``out_argmax`` tokens, the subband index\n"
+        "mappings -- are DedispersionPlan methods taking an ``itree``.\n"
         "\n"
-        "Constructing a tree needs no DedispersionPlan and no GPU: the geometry is pure\n"
-        "arithmetic, whereas a plan cannot be built without a CUDA device (it allocates\n"
-        "page-locked host memory). This is what lets archived variance maps be analyzed on a\n"
-        "machine with no GPU.\n"
+        "A tree is not constructible on its own: trees come from ``plan.trees``, and the\n"
+        "DedispersionPlan constructor is the only implementation of the geometry. Use\n"
+        "``DedispersionPlan(config, DedispersionPlan.Params.minimal())`` to get at them with\n"
+        "no GPU -- which is what lets archived variance maps be analyzed anywhere.\n"
+        "\n"
+        "Note ``plan.trees`` is a fresh list of COPIES on every attribute access, so code\n"
+        "that needs one tree repeatedly should cache it.\n"
         "\n"
         "Trees are enumerated by primary tree, then by DECREASING early-trigger level\n"
         "(earliest trigger first, then the main ``early_trigger_level=0`` tree). Use\n"
@@ -988,8 +981,9 @@ void register_core_bindings(pybind11::module &m)
         "- ``frequency_subbands`` (FrequencySubbands) -- the subbands searched in this tree.\n"
         "  Can be a strict subset of the config's subbands: early triggers and downsampling\n"
         "  restrict which ones a given tree searches.\n"
-        "- ``pf`` (PrimaryTree) -- this tree's peak-finding parameters. Unlike the config's\n"
-        "  copy, the downsampling fields here are always nonzero (config defaults resolved).\n"
+        "- ``pf`` (PrimaryTree) -- an exact copy of ``config.primary_trees[primary_tree_index]``\n"
+        "  (nothing is resolved into it -- the resolved factors are ``dm_downsampling`` and\n"
+        "  ``time_downsampling`` below).\n"
         "- ``Dcore`` (int) -- internal time-downsampling of this tree's peak-finding kernel,\n"
         "  which sets the time granularity of ``out_argmax`` tokens. A property of the\n"
         "  compiled cdd2 kernel rather than of the config, so it is NOT derivable from\n"
@@ -1007,124 +1001,6 @@ void register_core_bindings(pybind11::module &m)
         "``dm_min``, ``dm_max`` and ``trigger_frequency`` are display values only: they\n"
         "round-trip lossily through yaml (~6 significant digits), and no decode path reads\n"
         "them.")
-          .def(py::init<const DedispersionConfig &, long, bool>(),
-               py::arg("config"), py::arg("itree"), py::arg("Dcore_from_cdd2_registry"),
-               "Construct tree ``itree`` of ``config``, where\n"
-               "``0 <= itree < config.num_dedispersion_trees()``.\n\n"
-               "``Dcore_from_cdd2_registry`` deliberately has no default, because\n"
-               "DedispersionPlan and pirate_frb.varmap want opposite values, and the two ways\n"
-               "of getting it wrong fail very differently: wrongly asking for the registry\n"
-               "throws immediately, whereas wrongly accepting the placeholder yields tokens\n"
-               "that decode incorrectly, much later.\n\n"
-               "Args:\n"
-               "    config: DedispersionConfig (must be validated).\n"
-               "    itree: tree index; see the class docstring for the enumeration order.\n"
-               "    Dcore_from_cdd2_registry: if True, ``Dcore`` is taken from the cdd2 kernel\n"
-               "        registry, and an exception is thrown if that kernel is missing from\n"
-               "        this build. If False, ``Dcore`` gets the placeholder value\n"
-               "        ``time_downsampling`` -- appropriate for callers which do not\n"
-               "        decode ``out_argmax`` tokens.")
-          .def("check_consistency", &DedispersionTree::check_consistency, py::arg("config"),
-               "Throws if this tree disagrees with what ``config`` implies.\n\n"
-               "Intended for a tree that was DESERIALIZED (``from_yaml_string()``) rather than\n"
-               "constructed, where the tree and the config travelled separately and could\n"
-               "describe different instruments. Compares every member the decode paths read.\n\n"
-               "Two members are deliberately not compared: ``Dcore`` (the producer's\n"
-               "cdd2-registry value, adopted verbatim -- only its standalone invariant is\n"
-               "checked), and the display values ``dm_min`` / ``dm_max`` /\n"
-               "``trigger_frequency``, which round-trip lossily through yaml.\n\n"
-               "Args:\n"
-               "    config: the DedispersionConfig this tree should agree with.")
-          .def("decode_argmax",
-               [](const DedispersionTree &self, uint token,
-                  long idm_coarse, long itime_coarse) {
-                   long fmin, fmax, tlo, thi, p;
-                   self.decode_argmax(token, idm_coarse, itime_coarse,
-                                      fmin, fmax, tlo, thi, p);
-                   return py::make_tuple(fmin, fmax, tlo, thi, p);
-               },
-               py::arg("token"), py::arg("idm_coarse"), py::arg("itime_coarse"),
-               "Decode an ``out_argmax`` token into the winning trial parameters, i.e. the\n"
-               "(subband, peak-finding profile, fine-grained dm, fine-grained arrival time)\n"
-               "responsible for the coarse-grained maximum in this tree's ``out_max``.\n\n"
-               "Throws on out-of-range indices or a malformed token. See DedispersionTree.hpp\n"
-               "for the full spec.\n\n"
-               "Args:\n"
-               "    token: uint32 token from this tree's ``out_argmax`` array.\n"
-               "    idm_coarse: dm index into ``out_max`` / ``out_argmax``, in\n"
-               "        ``[0, ndm_out)``.\n"
-               "    itime_coarse: time index into ``out_max`` / ``out_argmax``, in\n"
-               "        ``[0, nt_out)``.\n\n"
-               "Returns:\n"
-               "    The tuple ``(fmin, fmax, tlo, thi, p)``, all TOPLEVEL-relative. ``fmin``\n"
-               "    and ``fmax`` are tree-freq channels of the toplevel gridding, spanning the\n"
-               "    winning frequency subband. ``tlo`` and ``thi`` are full-resolution time\n"
-               "    samples with ``t=0`` at the start of the current chunk; they are EXCLUSIVE\n"
-               "    trailing edges, and are frequently negative, since dedispersion delays\n"
-               "    usually exceed the chunk length (they then refer to earlier chunks). ``p``\n"
-               "    is the winning peak-finding profile index.")
-          .def("decode_argmax2",
-               [](const DedispersionTree &self, const DedispersionConfig &config,
-                  long fmin, long fmax, long tlo, long thi, long p) {
-                   double freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp;
-                   self.decode_argmax2(config, fmin, fmax, tlo, thi, p,
-                                       freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp);
-                   return py::make_tuple(freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp);
-               },
-               py::arg("config"), py::arg("fmin"), py::arg("fmax"), py::arg("tlo"),
-               py::arg("thi"), py::arg("p"),
-               "Convert ``decode_argmax()`` output to physical parameters, for this tree.\n\n"
-               "The arguments ``fmin``, ``fmax``, ``tlo``, ``thi``, ``p`` are the tuple\n"
-               "returned by ``decode_argmax()`` on this same tree. ``config`` supplies what is\n"
-               "not per-tree -- the band geometry and the dispersion relation, which belong to\n"
-               "the instrument and are shared by every tree. See DedispersionTree.hpp for the\n"
-               "full spec.\n\n"
-               "Returns:\n"
-               "    The tuple ``(freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp)`` --\n"
-               "    the low/high radio frequency of the winning subband, the dispersion measure\n"
-               "    in pc/cm^3, the arrival time, and the winning peak-finder width in toplevel\n"
-               "    time samples. ``timestamp_samp`` is the estimated arrival time of the pulse\n"
-               "    center at the lowest radio frequency, in toplevel samples with ``t=0`` at\n"
-               "    the START OF THE CURRENT CHUNK (not at ``fpga_seq=0``); the caller adds the\n"
-               "    chunk's absolute FPGA start. It is NOT confined to ``[0, nt_in)`` -- an\n"
-               "    early-trigger tree extrapolates to the band bottom, so the time can lie past\n"
-               "    the chunk end, and the finite peak-finder kernel width can push an event\n"
-               "    detected near the chunk start slightly before it.")
-          .def("compute_steady_state_it0", &DedispersionTree::compute_steady_state_it0,
-               py::arg("config"),
-               "Time index at which each of this tree's DM channels becomes \"steady-state\".\n\n"
-               "A dedispersion output element ``(ichunk, ibeam, idm, it)`` of this tree is\n"
-               "steady-state, i.e. unaffected by the zero-padding before the start of the\n"
-               "acquisition, iff ``ichunk*nt_out + it >= result[idm]``. Earlier elements are\n"
-               "computed from sums whose footprint extends past the start of the acquisition,\n"
-               "so their ``out_max`` values are artificially low -- warmup artifacts, not real\n"
-               "triggers.\n\n"
-               "Args:\n"
-               "    config: DedispersionConfig (the one this tree belongs to).\n\n"
-               "Returns:\n"
-               "    A 1-d int64 array of shape ``(ndm_out,)``, in host memory. Needs no CUDA\n"
-               "    device.")
-          .def("to_yaml_string", &DedispersionTree::to_yaml_string,
-               py::arg("config"), py::arg("tree_index"), py::arg("verbose") = false,
-               "This tree's entry of the DedispersionPlan yaml, as a string.\n\n"
-               "Args:\n"
-               "    config: supplies what is not on the tree (used here only for the verbose\n"
-               "        comments).\n"
-               "    tree_index: emitted as a yaml key. A tree does not know its own position\n"
-               "        in ``plan.trees``, so the caller supplies it.\n"
-               "    verbose: if True, include explanatory comments on each field.")
-          .def_static("from_yaml_string", &DedispersionTree::from_yaml_string,
-               py::arg("yaml_string"), py::arg("config"),
-               "Inverse of ``to_yaml_string()``.\n\n"
-               "A NAIVE transcription: the stored values are adopted verbatim, with no\n"
-               "consistency checks against ones re-derived from ``config`` (for that, call\n"
-               "``check_consistency()`` afterwards). Adopting ``Dcore`` verbatim is the point:\n"
-               "it is what makes ``decode_argmax()`` correct for tokens generated by a process\n"
-               "running a different pirate_frb build.\n\n"
-               "Args:\n"
-               "    yaml_string: one tree's yaml, as produced by ``to_yaml_string()``.\n"
-               "    config: supplies what is not stored on the tree, namely the seed for\n"
-               "        ``pf`` and the data to reconstruct ``frequency_subbands``.")
           .def_readonly("primary_tree_index", &DedispersionTree::primary_tree_index)
           .def_readonly("early_trigger_level", &DedispersionTree::early_trigger_level)
           .def_readonly("amb_rank", &DedispersionTree::amb_rank)
@@ -1152,28 +1028,8 @@ void register_core_bindings(pybind11::module &m)
           .def("n_to_toplevel_fhi", &DedispersionTree::n_to_toplevel_fhi, py::arg("n"),
                "One past the highest toplevel tree-freq channel of subband ``n``\n"
                "(EXCLUSIVE), matching ``FrequencySubbands.n_to_fhi``. Note\n"
-               "``decode_argmax()`` reports an inclusive ``fmax``, i.e.\n"
+               "``DedispersionPlan.decode_argmax()`` reports an inclusive ``fmax``, i.e.\n"
                "``n_to_toplevel_fhi(n) - 1``.")
-          .def_static("n_index_mapping", &DedispersionTree::n_index_mapping,
-               py::arg("parent"), py::arg("child"),
-               "Subband index mapping between two trees of one config: a list of length\n"
-               "``child.frequency_subbands.N``, whose entry ``n_c`` is the ``parent``\n"
-               "subband searching the same toplevel band.\n\n"
-               "Bands are matched by toplevel range ``(n_to_toplevel_flo, n_to_toplevel_fhi)``,\n"
-               "so trees of different rank are comparable. Raises if ``child`` searches a band\n"
-               "``parent`` does not; the message says so if the arguments look reversed.\n\n"
-               "The usual pair is an early-trigger tree and its ``(primary_tree_index, 0)``\n"
-               "parent, but equal ``primary_tree_index`` is not required, and the identity\n"
-               "case ``(t, t)`` works. Calling both ways round tests set EQUALITY.")
-          .def_static("m_index_mapping", &DedispersionTree::m_index_mapping,
-               py::arg("parent"), py::arg("child"),
-               "As ``n_index_mapping()``, but over multiplets: a list of length\n"
-               "``child.frequency_subbands.M``, whose entry ``m_c`` is the ``parent``\n"
-               "multiplet with the same band and the same fine-DM index within it.\n\n"
-               "Additionally raises unless matched bands have the same subband level.\n\n"
-               "Does NOT check ``nprofiles`` or the coarse-DM count ``2**(total_rank -\n"
-               "pf_rank)``: those are not subband geometry, and a caller building a row map\n"
-               "over (dm, multiplet, profile) must check them itself.")
           .def_readonly("frequency_subbands", &DedispersionTree::frequency_subbands)
           .def_readonly("pf", &DedispersionTree::pf)
           .def("dd_rank1", &DedispersionTree::dd_rank1,
@@ -2065,22 +1921,21 @@ void register_core_bindings(pybind11::module &m)
                "a per-batch slice (nbeams == beams_per_batch) of output_ringbuf.")
           .def("_release_output", &FrbGrouper::release_output, py::arg("seq_id"),
                "Record that the caller is done with 'seq_id' (emits CONSUMED).")
-          // Vectorized decode of out_argmax tokens, using the producer's DedispersionTrees
-          // (deserialized at handshake). Their per-tree Dcore values come from the PRODUCER,
-          // so tokens decode correctly even if this process runs a different pirate_frb
-          // build. Valid only after the handshake.
+          // Vectorized decode of out_argmax tokens, through the producer's DedispersionPlan
+          // (rebuilt at handshake). Its per-tree Dcore values come from the PRODUCER, so
+          // tokens decode correctly even if this process runs a different pirate_frb build.
+          // Valid only after the handshake.
           //
           // These two are what the production event path calls (pirate_frb.rpc.FrbGrouper's
-          // create_events()); DedispersionPlan has no batch-decode binding. They are covered
-          // by _check_batch_decode() in pirate_frb/tests/test_server.py, i.e. by
+          // create_events()); DedispersionPlan has no batch-decode binding of its own. They
+          // are covered by _check_batch_decode() in pirate_frb/tests/test_server.py, i.e. by
           // 'test --serv' -- NOT by '--amax', which only reaches the scalar
-          // DedispersionTree methods these loop over.
+          // DedispersionPlan methods these loop over.
           .def("decode_argmax_batch",
                [](const FrbGrouper &self, const Array<uint> &tokens, const Array<long> &itrees,
                   const Array<long> &idms, const Array<long> &itimes) {
                    const char *fname = "decode_argmax_batch";
-                   const auto &trees = self.dedispersion_trees;
-                   xassert(trees.size() > 0);   // populated at handshake
+                   const DedispersionPlan &plan = *self.dedispersion_plan;   // set at handshake
                    long n = tokens.size;
 
                    if (n <= 0)
@@ -2098,31 +1953,28 @@ void register_core_bindings(pybind11::module &m)
                    Array<long> this_({n}, af_uhost);
                    Array<long> ps({n}, af_uhost);
 
-                   // Per-element validation (malformed tokens, out-of-range dm/time indices)
-                   // comes from decode_argmax() itself; 'itree' is range-checked here.
+                   // Per-element validation (out-of-range itree, malformed tokens,
+                   // out-of-range dm/time indices) all comes from decode_argmax() itself.
                    for (long i = 0; i < n; i++) {
-                       long itree = itrees.data[i];
-                       _check_itree(fname, itree, trees.size());
-                       trees[itree].decode_argmax(tokens.data[i], idms.data[i], itimes.data[i],
-                                                  fmins.data[i], fmaxs.data[i], tlos.data[i],
-                                                  this_.data[i], ps.data[i]);
+                       plan.decode_argmax(tokens.data[i], itrees.data[i], idms.data[i], itimes.data[i],
+                                          fmins.data[i], fmaxs.data[i], tlos.data[i],
+                                          this_.data[i], ps.data[i]);
                    }
 
                    return py::make_tuple(fmins, fmaxs, tlos, this_, ps);
                },
                py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
-               "Vectorized decode of out_argmax tokens (see DedispersionTree.decode_argmax\n"
+               "Vectorized decode of out_argmax tokens (see DedispersionPlan.decode_argmax\n"
                "for the scalar spec). Inputs are 1-d nonempty arrays, one event per element\n"
                "(tokens: uint32; itrees/idms/itimes: int64). Returns TOPLEVEL-relative\n"
                "(fmins, fmaxs, tlos, this, ps), each an int64 array. Uses the producer's\n"
-               "trees from the handshake; valid only after the handshake.")
+               "plan from the handshake; valid only after the handshake.")
           .def("decode_argmax2_batch",
                [](const FrbGrouper &self, const Array<long> &itrees, const Array<long> &fmins,
                   const Array<long> &fmaxs, const Array<long> &tlos, const Array<long> &this_,
                   const Array<long> &ps) {
                    const char *fname = "decode_argmax2_batch";
-                   const auto &trees = self.dedispersion_trees;
-                   xassert(trees.size() > 0);   // populated at handshake
+                   const DedispersionPlan &plan = *self.dedispersion_plan;   // set at handshake
                    long n = itrees.size;
 
                    if (n <= 0)
@@ -2143,14 +1995,12 @@ void register_core_bindings(pybind11::module &m)
                    Array<double> widths({n}, af_uhost);
 
                    for (long i = 0; i < n; i++) {
-                       long itree = itrees.data[i];
-                       _check_itree(fname, itree, trees.size());
-                       trees[itree].decode_argmax2(self.dedispersion_config,
-                                                   fmins.data[i], fmaxs.data[i], tlos.data[i],
-                                                   this_.data[i], ps.data[i],
-                                                   freqs_lo.data[i], freqs_hi.data[i],
-                                                   dms.data[i], timestamps.data[i],
-                                                   widths.data[i]);
+                       plan.decode_argmax2(itrees.data[i],
+                                           fmins.data[i], fmaxs.data[i], tlos.data[i],
+                                           this_.data[i], ps.data[i],
+                                           freqs_lo.data[i], freqs_hi.data[i],
+                                           dms.data[i], timestamps.data[i],
+                                           widths.data[i]);
                    }
 
                    return py::make_tuple(freqs_lo, freqs_hi, dms, timestamps, widths);
@@ -2164,8 +2014,8 @@ void register_core_bindings(pybind11::module &m)
                "converts to absolute FPGA counts. Valid only after the handshake.")
           .def("_compute_steady_state_it0", &FrbGrouper::_compute_steady_state_it0,
                py::arg("itree"),
-               "Forwards DedispersionTree.compute_steady_state_it0(), using the producer's\n"
-               "trees from the handshake (see the 'steady_state_it0' bullet in the FrbGrouper\n"
+               "Forwards DedispersionPlan.compute_steady_state_it0(), using the producer's\n"
+               "plan from the handshake (see the 'steady_state_it0' bullet in the FrbGrouper\n"
                "class docstring). Valid only after the handshake.")
           // Member docstrings are intentionally omitted here: each member is documented
           // in the bullet list in the class docstring, which lives in the Python injector
@@ -2193,6 +2043,7 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("ndm_out", &FrbGrouper::ndm_out)
           .def_readonly("nt_out", &FrbGrouper::nt_out)
           .def_readonly("dedispersion_config", &FrbGrouper::dedispersion_config)
+          .def_readonly("dedispersion_plan", &FrbGrouper::dedispersion_plan)
           .def_readonly("xengine_metadata", &FrbGrouper::xengine_metadata)
           .def_readonly("xengine_metadata_yaml_string", &FrbGrouper::xengine_metadata_yaml_string)
           .def_readonly("dedispersion_config_yaml_string", &FrbGrouper::dedispersion_config_yaml_string)

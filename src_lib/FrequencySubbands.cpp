@@ -189,7 +189,7 @@ bool FrequencySubbands::can_early_trigger(const vector<long> &subband_counts, lo
 // Static member function.
 // Keep in sync with the python twin, pirate_frb.cuda_generator.FrequencySubbands
 // (makefile_helper.py uses it to decide which kernels to compile, and a divergence would
-// silently compile a kernel set that no DedispersionTree asks for).
+// silently compile a kernel set that no tree of a DedispersionPlan asks for).
 // See the doc-comment in FrequencySubbands.hpp.
 vector<long> FrequencySubbands::restrict_subband_counts(const vector<long> &subband_counts, long early_trigger_level)
 {

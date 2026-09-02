@@ -1,5 +1,5 @@
 #include "../include/pirate/FrbGrouper.hpp"
-#include "../include/pirate/YamlFile.hpp"          // DedispersionTree::from_yaml()
+#include "../include/pirate/DedispersionPlan.hpp"  // DedispersionPlan::from_yaml_string()
 #include "../include/pirate/network_utils.hpp"    // parse_ip_address, is_loopback_address
 #include "../include/pirate/utils.hpp"            // AtomicPrint
 
@@ -525,7 +525,13 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
         XEngineMetadata::from_yaml_string(xengine_metadata_yaml_string));
 
     dedispersion_config = DedispersionConfig::from_yaml_string(dedispersion_config_yaml_string);
-    dedispersion_plan_yaml = YAML::Load(dedispersion_plan_yaml_string);
+
+    // Rebuild the producer's plan. The config yaml and the plan yaml arrive as separate
+    // strings, so nothing so far has established that the two describe the same instrument;
+    // DedispersionPlan::from_yaml_string() is where that gets checked (once, here, rather
+    // than per decoded event), and where the producer's per-tree Dcore is adopted.
+    dedispersion_plan = DedispersionPlan::from_yaml_string(dedispersion_config,
+                                                          dedispersion_plan_yaml_string);
 
     // Convenience accessors from the config.
     dtype           = dedispersion_config.dtype;
@@ -534,31 +540,13 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
     beams_per_batch = dedispersion_config.beams_per_batch;
     xassert_divisible(total_beams, beams_per_batch);
     nbatches        = total_beams / beams_per_batch;   // beam-batches per chunk (NOT num_batch_slots)
-    ntrees          = dedispersion_config.num_dedispersion_trees();
+    ntrees          = dedispersion_plan->ntrees;
 
-    // Rebuild the producer's DedispersionTrees from the per-tree blocks of the handshake's
-    // plan yaml. No DedispersionPlan is constructed: the grouper needs per-tree data and a
-    // config, and nothing else a plan would provide. Note the trees carry the PRODUCER's
-    // per-tree Dcore, which is what makes decode_argmax*() correct for producer-generated
-    // tokens even if this process runs a different pirate_frb build.
-    YamlFile plan_yf = YamlFile::from_string(dedispersion_plan_yaml_string, "dedispersion_plan");
-    YamlFile ytrees = plan_yf["trees"];
-    xassert_eq(ntrees, long(ytrees.size()));
-
-    dedispersion_trees.clear();
     ndm_out.clear(); nt_out.clear();
     for (long t = 0; t < ntrees; t++) {
-        dedispersion_trees.push_back(DedispersionTree::from_yaml(ytrees[t], dedispersion_config));
-        ndm_out.push_back(dedispersion_trees.at(t).ndm_out);
-        nt_out.push_back(dedispersion_trees.at(t).nt_out);
+        ndm_out.push_back(dedispersion_plan->trees.at(t).ndm_out);
+        nt_out.push_back(dedispersion_plan->trees.at(t).nt_out);
     }
-
-    // The config yaml and the plan yaml arrive as separate strings, and from_yaml() adopts
-    // the producer's per-tree values verbatim without re-deriving anything -- so nothing so
-    // far has established that the two describe the same instrument. Check it once here,
-    // rather than per decoded event.
-    for (const DedispersionTree &t: dedispersion_trees)
-        t.check_consistency(dedispersion_config);
 
     // Geometry cross-checks (defensive).
     num_batch_slots = hs.num_batch_slots();
@@ -826,8 +814,8 @@ void FrbGrouper::release_output(long seq_id)
 // Forwards to the producer's plan (see FrbGrouper.hpp for rationale).
 Array<long> FrbGrouper::_compute_steady_state_it0(long itree) const
 {
-    xassert((itree >= 0) && (itree < long(dedispersion_trees.size())));   // populated at handshake
-    return dedispersion_trees.at(itree).compute_steady_state_it0(dedispersion_config);
+    xassert(dedispersion_plan);   // populated at handshake
+    return dedispersion_plan->compute_steady_state_it0(itree);
 }
 
 

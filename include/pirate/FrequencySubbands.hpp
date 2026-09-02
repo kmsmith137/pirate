@@ -95,7 +95,7 @@ struct FrequencySubbands
     // The result is always a SUBSET of the input band set: a tree never searches a band the
     // config did not ask for. (Both trees grid the band identically, because truncating one
     // subband level per early-trigger level is exactly what keeps the coarse-freq channel
-    // width fixed -- see DedispersionTree.cpp.)
+    // width fixed -- see DedispersionTree.cpp's _toplevel_channels_per_coarse_channel().)
     //
     // Note the returned counts can have pf_rank < (dd_rank+1)/2, in which case the tree's
     // cdd2 kernel folds the difference into its argmax tokens (see DedispersionTree::xdm_rank).

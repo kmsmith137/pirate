@@ -52,10 +52,10 @@ from .distance import YTRUE_FLOOR, f, AdmissibilityResult, DistanceEstimate
 
 ####################################   geometry   ####################################
 
-# The per-tree geometry comes straight from the C++ DedispersionTree, which is constructible
-# with no DedispersionPlan and no GPU. That matters because a DedispersionPlan cannot be
-# constructed without a CUDA device (its MegaRingbuf allocates page-locked host memory), and
-# archived variance maps must be analyzable anywhere.
+# The per-tree geometry comes straight from the C++ DedispersionTrees of a DedispersionPlan.
+# Trees are only ever constructed by the plan, so varmap builds a Params.minimal() plan (see
+# make_plan() below), which needs no CUDA device -- archived variance maps must be analyzable
+# anywhere.
 #
 # Nothing here re-derives the geometry: a second implementation in python would drift from
 # the C++, and the ordering conventions it encodes are what every archived map is interpreted
@@ -69,16 +69,19 @@ from .distance import YTRUE_FLOOR, f, AdmissibilityResult, DistanceEstimate
 # once the grouping is one integer, which belong next to the data they index.
 
 
-def make_tree(config, itree):
-    """The DedispersionTree for tree 'itree' of 'config'. Needs no plan and no GPU.
+def make_plan(config):
+    """The Params.minimal() DedispersionPlan of 'config'. Needs no GPU.
 
-    Dcore is deliberately NOT taken from the cdd2 kernel registry: varmap never reads it, and
-    requiring the registry would make an archived map unreadable on any build whose compiled
-    cdd2 kernel set does not cover that config. So a tree obtained here (and hence 'Dcore' in
-    any variance-map file) carries the placeholder DedispersionTree.time_downsampling.
+    Its trees' Dcore is the placeholder time_downsampling, never a cdd2-registry value:
+    varmap never reads Dcore, and requiring the registry would make an archived map
+    unreadable on any build whose compiled kernel set does not cover that config.
+
+    Note that ``plan.trees`` is a fresh python list of COPIES on every attribute access
+    (pybind11's std::vector caster), so code that needs one tree repeatedly should cache
+    ``tree = plan.trees[itree]`` rather than re-indexing in a loop.
     """
-    from ..pirate_pybind11 import DedispersionTree
-    return DedispersionTree(config, int(itree), Dcore_from_cdd2_registry=False)
+    from ..pirate_pybind11 import DedispersionPlan
+    return DedispersionPlan(config, DedispersionPlan.Params.minimal())
 
 
 def _subband_tables(tree):
@@ -220,16 +223,15 @@ class VarianceMap:
 
     Metadata (enough to re-run the brute-force sweep that produced this map):
 
-    - ``config`` -- the DedispersionConfig. NOT a DedispersionPlan: plan construction calls
-      cudaHostAlloc, so a plan cannot be built on a machine with no working GPU, and we want
-      variance maps to be analyzable anywhere. Use plan() when a plan is genuinely needed.
+    - ``config`` -- the DedispersionConfig.
+    - ``plan`` -- the DedispersionPlan the geometry comes from. Params.minimal(), which
+      allocates nothing and needs no GPU -- variance maps must be analyzable anywhere.
     - ``detrender`` -- the Detrender2dParams used, or None for "no Detrender2d".
     - ``itree`` (int) -- index of this tree in the plan.
-    - ``tree`` -- the ``DedispersionTree`` this map's geometry comes from, verbatim from the
-      C++. Constructed with no plan and no GPU. Its ``Dcore`` is a placeholder and is not
-      meaningful here -- see make_tree().
+    - ``tree`` -- ``plan.trees[itree]``, cached: that list is rebuilt on every attribute
+      access. Its ``Dcore`` is a placeholder and is not meaningful here -- see make_plan().
 
-    Geometry (all read off ``tree`` at construction, with no plan and no GPU):
+    Geometry (all read off ``tree`` at construction, and needing no GPU):
 
     - ``nfreq`` (int) -- number of input frequency channels.
     - ``tree_rank`` (int) -- r, the tree's total rank.
@@ -382,16 +384,16 @@ class VarianceMap:
                  Q=None, mid=None, W=None, y_true=None,
                  L=None, is_admissible=False, pinned_columns=None,
                  Q_is_semiorthogonal=False, W_is_semiorthogonal=False,
-                 history=None, tree=None):
+                 history=None, plan=None):
         """Low-level constructor: validates every shape against the geometry of tree 'itree'
         of 'config', and every flag against the arrays.
 
         Prefer from_dense(), or the classmethods of VarianceMultiMap, over calling this
         directly. Exactly one of {A} and {Q, W} must be given.
 
-        'tree' is the DedispersionTree supplying the geometry. It defaults to
-        make_tree(config, itree); pass it explicitly to reuse one across transformations, or
-        to supply a tree read from a file rather than re-derived from the config.
+        'plan' is the DedispersionPlan supplying the geometry. It defaults to
+        make_plan(config); pass it explicitly to reuse one across transformations or across
+        the maps of a multimap, since building one is not free.
         """
 
         factored = (Q is not None) or (W is not None) or (mid is not None)
@@ -420,7 +422,8 @@ class VarianceMap:
             raise RuntimeError(f'VarianceMap: itree={itree} is out of range for this config,'
                                f' which has {ntrees} dedispersion trees')
 
-        tree = make_tree(config, itree) if (tree is None) else tree
+        plan = make_plan(config) if (plan is None) else plan
+        tree = plan.trees[itree]
         fs = tree.frequency_subbands
         m_to_n, n_level, n_to_mbase = _subband_tables(tree)
 
@@ -428,6 +431,7 @@ class VarianceMap:
         set_('config', config)
         set_('itree', itree)
         set_('detrender', detrender)
+        set_('plan', plan)
         set_('tree', tree)
 
         set_('nfreq', int(config.get_total_nfreq()))
@@ -551,7 +555,6 @@ class VarianceMap:
         set_('history', tuple(history) if (history is not None) else ())
 
         set_('_row_sums', None)
-        set_('_plan', None)
 
 
     def __setattr__(self, k, v):
@@ -571,7 +574,7 @@ class VarianceMap:
 
     @classmethod
     def from_dense(cls, config, itree, A, *, detrender=None, y_true=None,
-                   L=None, is_admissible=False, history=None):
+                   L=None, is_admissible=False, history=None, plan=None):
         """Wrap an existing (nbeta, nfreq) array.
 
         Parameters
@@ -597,7 +600,7 @@ class VarianceMap:
             y_true = np.asarray(A, dtype=np.float64).sum(axis=1)
 
         return cls(config, itree, detrender, A=A, y_true=y_true, L=L,
-                   is_admissible=is_admissible, history=history)
+                   is_admissible=is_admissible, history=history, plan=plan)
 
 
     @classmethod
@@ -639,11 +642,12 @@ class VarianceMap:
         guarantee" and is always safe to assert.
         """
 
-        # The tree is carried across rather than rebuilt: it is a pure function of
-        # (config, itree), and replace() is on the hot path of an alternation schedule.
+        # The plan is carried across rather than rebuilt: replace() is on the hot path of an
+        # alternation schedule, and building a plan is not free. (The constructor then
+        # re-indexes plan.trees, which is a copy but a cheap one.)
         args = dict(config=self.config, itree=self.itree, detrender=self.detrender,
                     y_true=self.y_true, L=self.L,
-                    is_admissible=self.is_admissible, history=self.history, tree=self.tree)
+                    is_admissible=self.is_admissible, history=self.history, plan=self.plan)
 
         rep = dict(A=self.A, Q=self.Q, mid=self.mid, W=self.W,
                    pinned_columns=self.pinned_columns,
@@ -918,17 +922,6 @@ class VarianceMap:
 
 
     # ---------------- geometry helpers ----------------
-
-    def plan(self, **kwargs):
-        """Build (and cache) a DedispersionPlan from self.config.
-
-        Needs a working CUDA device; everything else in this class does not.
-        """
-        if self._plan is None:
-            from ..pirate_pybind11 import DedispersionPlan
-            object.__setattr__(self, '_plan', DedispersionPlan(self.config, **kwargs))
-        return self._plan
-
 
     def alpha_to_beta_block(self, start, stop, L=None):
         """The group index beta for each FINE index alpha in [start, stop), as an int array of

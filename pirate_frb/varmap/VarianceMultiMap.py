@@ -2,16 +2,16 @@
 
 import numpy as np
 
-from ..pirate_pybind11 import DedispersionTree
-from .VarianceMap import VarianceMap
+from .VarianceMap import VarianceMap, make_plan
 
 
-def restrict_fine_vector(y, parent_tree, child_tree):
-    """Restrict a parent tree's FINE (length-nalpha) vector to a child tree's rows.
+def restrict_fine_vector(y, plan, iparent, ichild):
+    """Restrict tree 'iparent''s FINE (length-nalpha) vector to tree 'ichild''s rows.
 
     'y' is indexed by ``alpha = (d*M_parent + m)*P + p`` -- the convention documented in the
     VarianceMap module docstring -- and the return value is the child's ``(D, M_child, P)``
-    array, i.e. the same convention with the multiplet axis restricted.
+    array, i.e. the same convention with the multiplet axis restricted. 'plan' may have any
+    completeness: only its trees are read.
 
     This is the row map of Proposition 1 of the appendix "Variance maps of a config's trees
     are row-restrictions of one another" in notes/variance_map.tex: the child's variance map
@@ -27,10 +27,13 @@ def restrict_fine_vector(y, parent_tree, child_tree):
     This is the only place that turns the subband mapping into a row map, and the only place
     that checks the two quantities m_index_mapping() deliberately does not: the coarse-DM
     count and the profile count. Both are equal for every tree of a primary-tree family --
-    see the appendix's Observation (b) for D, and DedispersionTree's copy of
-    config.primary_trees[ipri] for nprofiles -- so these are tripwires against a future change
+    see the appendix's Observation (b) for D, and DedispersionTree.pf (an exact copy of
+    config.primary_trees[ipri]) for nprofiles -- so these are tripwires against a future change
     to the tree construction, not validation of the caller.
     """
+
+    trees = plan.trees          # one list build; plan.trees copies on every access
+    parent_tree, child_tree = trees[iparent], trees[ichild]
 
     D_p = 1 << (int(parent_tree.total_rank()) - int(parent_tree.frequency_subbands.pf_rank))
     D_c = 1 << (int(child_tree.total_rank()) - int(child_tree.frequency_subbands.pf_rank))
@@ -51,11 +54,11 @@ def restrict_fine_vector(y, parent_tree, child_tree):
         raise RuntimeError(f'restrict_fine_vector: expected a length-{D_p*M_p*P_p} FINE vector'
                            f' for the parent tree, got shape {y.shape}')
 
-    m_map = DedispersionTree.m_index_mapping(parent_tree, child_tree)
+    m_map = plan.m_index_mapping(iparent, ichild)
     return y.reshape(D_p, M_p, P_p)[:, m_map, :]
 
 
-def expand_fine_vectors(config, per_primary, *, trees=None):
+def expand_fine_vectors(plan, per_primary):
     """Length-ntrees list of (D, M, P) arrays from one FINE vector per PRIMARY tree.
 
     'per_primary' is one flat, length-nalpha array per primary tree, in gamma order; the
@@ -74,10 +77,10 @@ def expand_fine_vectors(config, per_primary, *, trees=None):
     within a family, so iparent is NOT itree - e. That trap is the reason this is one function
     rather than a loop each caller writes.
 
-    'trees' is the per-ITREE DedispersionTree tuple, if the caller already has one;
-    None builds them, which costs 0.06 ms for chord_sb2_et's ten.
+    'plan' may have any completeness -- only its config and trees are read.
     """
 
+    config = plan.config
     npri = int(config.num_primary_trees)
     per_primary = list(per_primary)
     if len(per_primary) != npri:
@@ -85,11 +88,8 @@ def expand_fine_vectors(config, per_primary, *, trees=None):
                            ' primary trees. One per PRIMARY tree is required, in gamma order'
                            ' -- a short list would leave holes in the result.')
 
-    ntrees = int(config.num_dedispersion_trees)
-    if trees is None:
-        trees = [DedispersionTree(config, i, Dcore_from_cdd2_registry=False)
-                 for i in range(ntrees)]
-
+    ntrees = int(plan.ntrees)
+    trees = plan.trees          # one list build; plan.trees copies on every access
     out = [None] * ntrees
 
     for gamma in range(npri):
@@ -109,7 +109,7 @@ def expand_fine_vectors(config, per_primary, *, trees=None):
         net = int(config.primary_trees[gamma].num_early_triggers)
         for e in range(1, net + 1):
             ichild = int(config.dedispersion_tree_index(gamma, e))
-            out[ichild] = restrict_fine_vector(y, parent, trees[ichild])
+            out[ichild] = restrict_fine_vector(y, plan, iparent, ichild)
 
     assert all(x is not None for x in out)
     return out
@@ -137,19 +137,14 @@ class VarianceMultiMap:
 
     - ``config`` -- the DedispersionConfig. The SAME object every stored map holds a
       reference to, so the two cannot drift.
+    - ``plan`` -- the Params.minimal() DedispersionPlan the geometry comes from. Likewise
+      shared with the stored maps. See VarianceMap.make_plan().
     - ``detrender`` -- the Detrender2dParams, or None. Likewise shared.
     - ``num_primary_trees`` (int) -- number of stored maps.
     - ``ntrees`` (int) -- number of DEDISPERSION trees, i.e. the length of apply_fine()'s
       result.
       Generally larger than num_primary_trees.
     - ``maps`` (tuple) -- the stored VarianceMaps, in gamma order. Prefer primary_map(gamma).
-    - ``trees`` (tuple) -- the DedispersionTree of every tree, indexed by ITREE (not by
-      gamma). Held rather than rebuilt because apply_fine() needs a (child, parent) pair for every
-      tree; building all ten of chord_sb2_et's costs 0.06 ms.
-
-      Note VarianceMap deliberately extracts scalars from its tree and does not keep it, and
-      argues against a geometry value object. This does not contradict that: a
-      DedispersionTree is the AUTHORITATIVE source of the geometry, not a third copy of it.
     - ``provenance`` (dict) -- free-form, describing how the SWEEP was run: algorithm name,
       config overrides applied, device, sweep geometry, wall times, host. Carried into the
       file verbatim. Distinct from ``VarianceMap.history``, which is a per-tree list of the
@@ -162,11 +157,13 @@ class VarianceMultiMap:
     the tree-specific geometry. There is no per-tree config.
     """
 
-    def __init__(self, config, maps, *, detrender=None, provenance=None):
+    def __init__(self, config, maps, *, detrender=None, provenance=None, plan=None):
         """'maps' is one VarianceMap per primary tree, in gamma order.
 
         Checks that every map has the same config object, the same detrender, and an ``itree``
         naming the ``early_trigger_level == 0`` tree of its own gamma.
+
+        'plan' defaults to make_plan(config); pass one to reuse it (the file reader does).
         """
 
         maps = tuple(maps)
@@ -209,14 +206,13 @@ class VarianceMultiMap:
                 raise RuntimeError(f'VarianceMultiMap: maps[{gamma}] holds a different'
                                    ' Detrender2dParams than the multimap')
 
-        ntrees = int(config.num_dedispersion_trees)
-        trees = tuple(DedispersionTree(config, i, Dcore_from_cdd2_registry=False)
-                      for i in range(ntrees))
+        plan = make_plan(config) if (plan is None) else plan
+        ntrees = int(plan.ntrees)
 
         object.__setattr__(self, 'config', config)
+        object.__setattr__(self, 'plan', plan)
         object.__setattr__(self, 'detrender', detrender)
         object.__setattr__(self, 'maps', maps)
-        object.__setattr__(self, 'trees', trees)
         object.__setattr__(self, 'num_primary_trees', npri)
         object.__setattr__(self, 'ntrees', ntrees)
         object.__setattr__(self, 'provenance', dict(provenance) if provenance else {})
@@ -260,7 +256,7 @@ class VarianceMultiMap:
         loop: the loop is one line, and it is where the caller sees which map gets which
         reference and which rank.
         """
-        return type(self)(self.config, maps, detrender=self.detrender,
+        return type(self)(self.config, maps, detrender=self.detrender, plan=self.plan,
                           provenance=(self.provenance if provenance is None else provenance))
 
 
@@ -312,9 +308,8 @@ class VarianceMultiMap:
         The lift comes BEFORE the restriction on purpose -- see coarse_grain().
         """
 
-        return expand_fine_vectors(self.config,
-                                   [m.apply_fine(freq_variances) for m in self.maps],
-                                   trees=self.trees)
+        return expand_fine_vectors(self.plan,
+                                   [m.apply_fine(freq_variances) for m in self.maps])
 
 
     def measure_admissibility(self, ref, **kwargs):

@@ -13,8 +13,8 @@
 #
 # NOTE THE FILE FORMAT: asdf_io.py's format is not the older one that predates this package.
 # The reader refuses an old-format file by name rather than misreading it, and nothing can
-# read one any more. It is also at version 2, which holds one entry per PRIMARY tree; a
-# version-1 file (one entry per dedispersion tree) is likewise refused by name.
+# read one any more. It is at version 3, which holds one entry per PRIMARY tree plus one
+# top-level plan yaml; version-1 and version-2 files are likewise refused by name.
 #
 # A VarianceMap is a PRIMARY tree's map. An early-trigger tree's map is a subset of its
 # parent's ROWS, so it is derived rather than stored -- see VarianceMultiMap, and the
