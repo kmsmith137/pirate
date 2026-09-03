@@ -70,6 +70,10 @@ def run_processes(multi_args):
 
     Returns 0 if every child that had exited did so cleanly (exit code 0), else 1.
     In status messages, each child is labelled by its command string.
+
+    Children may do real work on the way out (the toy grouper writes and plots its
+    --histogram files from a 'finally'), so on Ctrl-C they get a bounded chance to
+    finish before this function starts signalling. See _wait_children().
     """
     procs = []   # list of (label, Popen)
     rc = 0
@@ -80,7 +84,8 @@ def run_processes(multi_args):
             procs.append((" ".join(argv), subprocess.Popen(argv)))
         rc = _monitor_children(procs)
     except KeyboardInterrupt:
-        atomic_print("run_processes: interrupted; stopping all processes")
+        atomic_print("run_processes: interrupted; waiting for children to shut down")
+        _wait_children(procs)
     finally:
         _terminate_children(procs)
     return rc
@@ -99,6 +104,29 @@ def _monitor_children(procs):
                              f"stopping the other processes")
             return 0 if all(p.returncode == 0 for _, p in dead) else 1
         time.sleep(constants.default_poll_cadence_ms / 1000)
+
+
+def _wait_children(procs, grace_sec=constants.default_shutdown_timeout_sec):
+    """Wait (grace_sec, total) for children to exit on their own. Survivors are the
+    caller's problem -- _terminate_children() runs next either way.
+
+    Why the wait exists: a terminal Ctrl-C is delivered to the whole foreground
+    process group, so by the time we see KeyboardInterrupt the children have had
+    their own SIGINT for the same instant, and are already running their shutdown
+    paths. Signalling them right now would cut that short -- python's default
+    SIGTERM handler exits WITHOUT unwinding, so 'finally' blocks never run and
+    whatever a child writes on the way out is silently lost.
+
+    A second Ctrl-C during the wait propagates, and the caller's 'finally' then
+    signals immediately -- which is the behavior an impatient user expects.
+
+    'procs' is a list of (label, Popen) pairs."""
+    deadline = time.monotonic() + grace_sec
+    for _, p in procs:
+        try:
+            p.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def _terminate_children(procs, grace_sec=constants.default_shutdown_timeout_sec):
