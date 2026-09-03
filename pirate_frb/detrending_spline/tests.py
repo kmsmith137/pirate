@@ -100,6 +100,19 @@ def _expansion_2d_str():
         for k, d in sorted(_EXPANSION_2D.items()))
 
 
+def _log_uniform_nfreq(rng, lo, hi):
+    """A channel count drawn LOG-uniformly on [lo, hi].
+
+    Use this wherever the SIZE of the frequency axis is the thing being varied.  A
+    uniform draw over a range like (600, 2500) puts essentially no weight on the
+    small-nfreq regime -- zones a few channels wide, and a single PARTIAL
+    CHANNEL_BLOCK in reduce.accumulate()'s stride loop -- which is where the loop
+    bounds and the basis clamping are degenerate.  Log-uniform over the same span
+    reaches it on an order-one fraction of calls and costs less, not more.
+    """
+    return int(round(float(np.exp(rng.uniform(np.log(lo), np.log(hi))))))
+
+
 def _default_rng(rng):
     return np.random.default_rng() if rng is None else rng
 
@@ -280,9 +293,19 @@ def test_chunk_invariance(rng, verbose=True):
 
     The frequency reduction is the thing at risk: numpy blocks its pairwise sum by
     stride, so the grouping over frequency would otherwise change with ntime.
+
+    THE SINGLE PARTIAL CHANNEL BLOCK is the case to keep reachable, and is why
+    nfreq is drawn log-uniformly from 64 rather than uniformly from 600.
+    accumulate() walks frequency in CHANNEL_BLOCK strides and tree_sum() reduces
+    each block; one short block is the degenerate case of both, and it is exactly
+    where a grouping that depended on the block count would stop being caught.
+    The block range is REPORTED below, not asserted: it is a property of the draw.
     """
+    nblocks = []
     for _ in range(6):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(600, 2500)))
+        kv = msk.random_knots(rng, n_phi=N_PHI,
+                              nfreq=_log_uniform_nfreq(rng, 64, 2500))
+        nblocks.append(-(-kv.nfreq // CHANNEL_BLOCK))
         det = SplineDetrender(kv, dtype=np.float32)
         M_ax, ntime = 2, 12
         mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
@@ -303,9 +326,9 @@ def test_chunk_invariance(rng, verbose=True):
         r1, _, _ = det.detrend_chunk(d[:1], mask[:1])
         assert np.array_equal(r1, r0[:1])
 
-    assert kv.nfreq > CHANNEL_BLOCK, 'test never exercised multi-block accumulation'
     if verbose:
-        print('    test_chunk_invariance: pass')
+        print(f'    test_chunk_invariance: pass  [{min(nblocks)}-{max(nblocks)} blocks '
+              f'of {CHANNEL_BLOCK} channels]')
 
 
 # ---------------------------------------------------------------- T6
@@ -363,6 +386,48 @@ def test_solve(rng, verbose=True):
 
 # ---------------------------------------------------------------- T7, T8
 
+def _assert_not_removed(rng, dtype, n=0, W=0, nfreq_lo=512, nfreq_hi=2048):
+    """The NEGATIVE CONTROL for the exactness tests: a signal outside the model
+    must SURVIVE.  Returns the fraction of it that did, for reporting.
+
+    Every exactness assertion in this file is an upper bound on |r|, and a
+    detrender that returned zeros would satisfy all of them.  This is the other
+    direction, and one such check is enough for the whole file: what it pins is
+    that detrend_chunk() writes the residual at all.
+
+    THE SIGNAL IS AN ALTERNATING +-1 IN FREQUENCY, i.e. at the Nyquist scale of
+    the channel axis.  A spline has at most a few dozen coefficients over these
+    hundreds of channels, so no degree and no knot placement can represent it, and
+    the residual must come back at essentially full amplitude.  Deliberately NOT a
+    polynomial in time of degree n+1: over a SYMMETRIC window the odd part of the
+    fit vanishes at the window centre, so a degree-(n+1) polynomial of the wrong
+    parity IS reproduced exactly there, and a control written that way would
+    depend on the drawn mask being asymmetric.  detrending_1d's
+    test_polynomial_exactness() handles that case explicitly and is where to look
+    for the time-direction statement.
+
+    The mask is ALL-VALID, also deliberately.  The control's job is to show the
+    residual is nonzero, not to survive an adversarial mask: on a drawn mask a
+    zone with as many live channels as coefficients is fitted exactly, and the
+    residual there is legitimately zero.
+    """
+    kv = msk.random_knots(rng, n_phi=N_PHI,
+                          nfreq=_log_uniform_nfreq(rng, nfreq_lo, nfreq_hi))
+    det = SplineDetrender(kv, n=n, W=W, dtype=dtype, eps=EPS_FLOAT64)
+    ntime = 3
+    nbuf = ntime + 2*W
+    osc = 1.0 - 2.0*(np.arange(kv.nfreq) % 2)                 # +-1, alternating
+    d = np.broadcast_to(osc[None, :, None], (1, kv.nfreq, nbuf)).astype(dtype)
+    r, mk, _ = det.detrend_chunk(d, np.ones(d.shape, dtype=bool))
+
+    assert mk.any(), 'the negative control lost every zone on an all-valid mask'
+    kept = float(np.abs(r[mk]).max())
+    assert kept > 0.5, \
+        (f'negative control: a channel-scale oscillation was removed '
+         f'(|r|max = {kept:.3e}, nfreq={kv.nfreq}, n_phi={N_PHI}, n={n}, W={W})')
+    return kept
+
+
 def test_flat_baseline_exact(rng, verbose=True):
     """
     A constant baseline is removed EXACTLY, for every mask and every eta.
@@ -377,6 +442,10 @@ def test_flat_baseline_exact(rng, verbose=True):
     A fixed tolerance would either be too loose to catch a real regression or --
     since the mask generator deliberately produces badly conditioned cases -- fail
     at random when it happened to draw one.
+
+    THE NEGATIVE CONTROL AT THE END IS WHAT MAKES THE REST MEAN ANYTHING.  Every
+    assertion above is an upper bound on |r|, so all of them would pass if
+    detrend_chunk() returned zeros; see _assert_not_removed().
     """
     worst = 0.0
     for _ in range(25):
@@ -406,9 +475,12 @@ def test_flat_baseline_exact(rng, verbose=True):
         assert np.abs(r).max() < 50 * np.finfo(np.float64).eps / \
             (float(live.min()) if live.size else 1.0) * float(lv.max())
 
+    kept = _assert_not_removed(rng, np.float64)
+
     if verbose:
         print(f'    test_flat_baseline_exact: pass  '
-              f'[worst residual {worst:.2f} x the roundoff bound]')
+              f'[worst residual {worst:.2f} x the roundoff bound; negative control '
+              f'kept {kept:.2f} of the unrepresentable signal]')
 
 
 def test_shrinkage_bias_bounded(rng, verbose=True):
@@ -886,6 +958,9 @@ def test_2d_flat_baseline_exact(rng, verbose=True):
     degree <= n in TIME is removed to roundoff, at any eta.  Both halves matter --
     the frequency half is D_1's null space, the time half is that the model can
     represent any degree-n polynomial exactly.
+
+    Same negative control as the 1-d test, run through the 2-d assembly at every
+    (n, W): see _assert_not_removed().
     """
     worst = 0.0
     for _ in range(6):
@@ -905,9 +980,14 @@ def test_2d_flat_baseline_exact(rng, verbose=True):
             tol = 200*np.finfo(np.float64).eps/rmin*max(1.0, np.abs(d).max())
             worst = max(worst, float(np.abs(r).max())/max(tol, 1e-300))
             assert np.abs(r).max() < tol, (n, W, float(np.abs(r).max()), tol)
+
+    worst_kept = 1e300
+    for n, W in NW_CASES:
+        worst_kept = min(worst_kept, _assert_not_removed(rng, np.float64, n=n, W=W))
     if verbose:
         print(f'    test_2d_flat_baseline_exact: pass  '
-              f'[worst {worst:.2f} x the roundoff bound]')
+              f'[worst {worst:.2f} x the roundoff bound; negative control kept at '
+              f'least {worst_kept:.2f} at every (n, W)]')
 
 
 def test_n1_degeneracy(rng, verbose=True):
@@ -978,9 +1058,15 @@ def test_2d_chunk_invariance(rng, verbose=True):
     The stencil sums the same 2W+1 buffer samples in the same order for every
     output regardless of the chunk length, so this holds by construction; the
     test is here to catch anyone replacing it with something shape-dependent.
+
+    'nfreq' is log-uniform for test_chunk_invariance's reason: the single partial
+    CHANNEL_BLOCK has to stay reachable on the 2-d path too.
     """
+    nblocks = []
     for _ in range(5):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(600, 1600)))
+        kv = msk.random_knots(rng, n_phi=N_PHI,
+                              nfreq=_log_uniform_nfreq(rng, 64, 1600))
+        nblocks.append(-(-kv.nfreq // CHANNEL_BLOCK))
         n, W = NW_CASES[int(rng.integers(0, len(NW_CASES)))]
         det = SplineDetrender(kv, n=n, W=W, dtype=np.float32)
         T = 12
@@ -1000,7 +1086,8 @@ def test_2d_chunk_invariance(rng, verbose=True):
         # M remains a pure spectator even though T no longer is.
         assert np.array_equal(det.detrend_chunk(d[:1], m[:1])[0], r0[:1])
     if verbose:
-        print('    test_2d_chunk_invariance: pass')
+        print(f'    test_2d_chunk_invariance: pass  [{min(nblocks)}-{max(nblocks)} blocks '
+              f'of {CHANNEL_BLOCK} channels]')
 
 
 def test_2d_conditioning(rng, verbose=True):

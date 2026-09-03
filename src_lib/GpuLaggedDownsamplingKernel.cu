@@ -959,7 +959,13 @@ struct TestInstanceLDS
         ti.params.dtype = (rand_uniform() < 0.5) ? Dtype::native<float>() : Dtype::native<__half>();
         ti.params.output_dd_rank = rand_int(1,8);  // GpuLaggedDownsamplingKernel needs 1 <= output_dd_rank <= 7
         ti.params.input_toplevel_rank = ti.params.output_dd_rank + rand_int(1,5);
-        ti.params.num_primary_trees = rand_int(1, constants::max_primary_trees);  // no +1 here
+        // AT LEAST 2, and up to max_primary_trees inclusive. One primary tree is legal but
+        // vacuous here: both GpuLaggedDownsamplingKernel::launch() and
+        // ReferenceLaggedDownsamplingKernel::apply() return immediately at npri <= 1, and
+        // test_random()'s comparison loop runs over ipri = 1 .. npri-1, so such an iteration
+        // asserts nothing at all. The upper end is inclusive because validate() allows
+        // max_primary_trees and nothing else in the suite draws it.
+        ti.params.num_primary_trees = rand_int(2, constants::max_primary_trees+1);
 
         auto v = ksgpu::random_integers_with_bounded_product(2,10);
         ti.params.total_beams = v[0] * v[1];

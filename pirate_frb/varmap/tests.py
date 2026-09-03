@@ -1982,6 +1982,57 @@ def test_lp_primitive():
     Xw, _ = solve_covering_lps(Ms, bs, Ms.sum(axis=0), LpConfig(nonneg=False), workers=3)
     assert np.array_equal(Xs, Xw), 'the worker count changed the answer'
 
+    # ---- CONSTRAINT GENERATION, i.e. LpConfig(cuts=True) ----
+    #
+    # This is what LpConfig.recommended() turns on, so it is what production solves with, and
+    # nothing else in the suite reaches solve_cover_lp_cuts() at all: test_lp_config() checks
+    # that recommended() SETS the flag, never that a solve with it works.
+    #
+    # WHAT MAKES IT CHECKABLE IS ITS OWN EXIT CONDITION. The loop stops when no row outside
+    # the working set is violated by more than cuts_tol, so the point it returns is feasible
+    # for the FULL row set -- and a relaxation optimum that is feasible for the original
+    # problem is the original problem's optimum. Both halves are asserted below, against the
+    # same solve with cuts off.
+    #
+    # cuts_min_rows IS LOWERED EXPLICITLY, and that is the whole reason this block needs its
+    # own matrix. It defaults to 2048, i.e. it gates on a channel count no varmap test cell
+    # comes near, so a cuts=True config on the LP cell takes the ordinary path and the cut
+    # loop never runs. The shape below is chosen so that the loop reliably needs MORE THAN ONE
+    # round: 800 rows against an initial working set of max(cuts_init*K, 64) = 64, at K = 6.
+    # Measured over 40 draws, the mean round count spans 1.75 to 2.88 and the working set 44
+    # to 56 rows. It costs about 90 ms.
+    ncon, Kc, nsub = 800, 6, 8
+    Mc = np.abs(rng.random((ncon, Kc))) + 0.2
+    bc = np.abs(rng.random((ncon, nsub)))
+    costc = Mc.sum(axis=0)
+    # nonneg=False is the interesting sign convention: dropping rows from a free-sign LP
+    # creates a recession direction, which is what cuts_agg's aggregate row exists to close.
+    cut_cfg = LpConfig(nonneg=False, cuts=True, cuts_min_rows=64)
+    Xc, ic = solve_covering_lps(Mc, bc, costc, cut_cfg)
+    Xn, inn = solve_covering_lps(Mc, bc, costc, LpConfig(nonneg=False))
+
+    # The loop RAN, on a working set that is a strict subset of the rows, and never fell back
+    # to the ordinary solver -- without these, 'cuts=True' can be true and inert while
+    # everything below still passes. The ROUND COUNT is reported rather than asserted: it is a
+    # property of the draw, and the structural facts are the three below.
+    assert ic.get('cuts') and ('cuts' not in inn), (ic.get('cuts'), inn.get('cuts'))
+    assert ic['cuts_rows_mean'] < ncon, (ic['cuts_rows_mean'], ncon)
+    assert ic['cuts_fallback'] == 0, ic['cuts_fallback']
+    assert (ic['n_failed'] == 0) and (inn['n_failed'] == 0)
+
+    worst_slack, worst_obj = 0.0, 0.0
+    for j in range(nsub):
+        # Feasible for EVERY row, not just the working set. The bar is 1e-6 relative against a
+        # cuts_tol of 1e-9, so it cannot flake on the exit tolerance itself.
+        scale = max(1.0, float(bc[:, j].max()))
+        slack = float(((Mc @ Xc[j]) - bc[:, j]).min()) / scale
+        worst_slack = min(worst_slack, slack)
+        assert slack >= -1.0e-6, (j, slack)
+        # ... and optimal, to the same kind of bar.
+        oc, on = float(costc @ Xc[j]), float(costc @ Xn[j])
+        worst_obj = max(worst_obj, abs(oc - on) / max(1.0, abs(on)))
+        assert abs(oc - on) <= 1.0e-6 * max(1.0, abs(on)), (j, oc, on)
+
     # A failure with no fallback raises rather than returning a silent zero.
     try:
         solve_cover_lp(np.array([-1.0]), np.ones((2, 1)), np.array([1.0, 1.0]),
@@ -1991,7 +2042,10 @@ def test_lp_primitive():
         assert 'no fallback' in str(e), str(e)
 
     atomic_print('    test_lp_primitive: free <= bounded, zero-rhs rows keep the product'
-                 ' nonnegative, dead columns dropped, workers inert')
+                 ' nonnegative, dead columns dropped, workers inert; cuts agree with no-cuts'
+                 f' (worst slack {worst_slack:.1e}, worst objective {worst_obj:.1e},'
+                 f" {ic['cuts_rounds_mean']:.1f} rounds on"
+                 f" {ic['cuts_rows_mean']:.0f} of {ncon} rows)")
 
 
 def test_lp_optimality(K=3, nfreq=7):
@@ -4883,7 +4937,7 @@ def run_primitive_tests(once):
 ####################################   entry point   ####################################
 
 
-def test_apply_restriction(L=None):
+def test_apply_restriction():
     """The row map of Proposition 1, as apply() uses it: restricting a parent's FINE apply()
     result to a child tree's rows.
 
@@ -4902,9 +4956,11 @@ def test_apply_restriction(L=None):
     IS a prefix, a wrong gather passes unnoticed. The draw supplies it about 10% of the time,
     so the count is REPORTED rather than demanded; see the note above the report line.
 
-    Run it FINE and COARSE. The coarse case is the one that matters: apply_fine()'s lift runs
-    nowhere else, and getting it wrong changes values without changing any shape, so a
-    fine-only test never executes it at all.
+    FINE OR COARSE, DRAWN PER PRIMARY TREE, and the coarse arm is the one that matters:
+    VarianceMap.apply_fine()'s lift runs nowhere else in the package -- every other call site
+    is fine-only -- and getting it wrong changes values without changing any shape, so a
+    fine-only run never executes it at all. L is drawn from [R, r], both endpoints included:
+    R leaves the DM axis alone and only merges M -> N, r collapses it entirely.
     """
 
     from .VarianceMultiMap import restrict_fine_vector
@@ -4917,10 +4973,18 @@ def test_apply_restriction(L=None):
     npri = int(config.num_primary_trees)
     ncheck = nontrivial = 0
 
+    Ls = []
     for gamma in range(npri):
         iparent = _itree(config, gamma)
         parent = _tree(config, iparent)
         pm = _random_map(config, iparent, rng)
+
+        # Half fine, half coarse. Per PRIMARY TREE rather than per call, so one invocation
+        # covers both arms even at npri == 1 over a few iterations, and the legal range is
+        # the parent's own [R, r].
+        R, rr = int(parent.frequency_subbands.pf_rank), int(parent.tree_rank)
+        L = None if (rng.random() < 0.5) else int(rng.integers(R, rr + 1))
+        Ls.append(L)
         if L is not None:
             pm = pm.coarse_grain(L)
 
@@ -4978,9 +5042,10 @@ def test_apply_restriction(L=None):
     # is exercised ~10 times, and 'pirate_frb dev coverage' tracks the rate.
 
     nets = [int(pt.num_early_triggers) for pt in config.primary_trees]
-    atomic_print(f'    test_apply_restriction(npri={npri}, nets={nets}, L={L}):'
+    atomic_print(f'    test_apply_restriction(npri={npri}, nets={nets}, L={Ls}):'
                  f' {ncheck} (parent, child) pairs,'
-                 f' {nontrivial} with a non-contiguous multiplet map')
+                 f' {nontrivial} with a non-contiguous multiplet map,'
+                 f' {sum(x is not None for x in Ls)} lifted')
 
 
 def _child_group_labels(tree, L):
