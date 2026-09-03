@@ -4234,6 +4234,12 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     #    configs it happens to accept would bias it toward exactly the geometry already best
     #    covered elsewhere. With them, 60 of 60 draws were usable.
     #  - Redraw rather than downscale: an over-budget config is discarded whole.
+    #  - DO NOT REPLACE THE THREE ASSIGNMENTS WITH make_random(single_beam=True). That flag
+    #    exists and does exactly what the three lines do, but it also gives the whole chunk
+    #    budget to time_samples_per_chunk instead of splitting it three ways: measured, the
+    #    median goes 256 -> ~4000, P(ndata_chunks == 1) goes 0.28 -> 0.89, and the predicted
+    #    sweep work goes up 4x. Streaming across chunk boundaries is most of what the sweep
+    #    comparisons check, so the short chunk is the corner worth sampling here.
     for _ in range(nrandom):
         while True:
             config = DedispersionConfig.make_random(max_toplevel_rank=9, max_early_triggers=2,

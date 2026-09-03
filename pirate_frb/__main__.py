@@ -63,7 +63,8 @@ def seed_rngs(seed):
     THREE STREAMS, ONE NUMBER:
 
       - ksgpu::default_rng(), the C++ side. Note this covers
-        DedispersionConfig::make_random(), which draws through ksgpu::rand_int().
+        DedispersionConfig::make_random(), which draws through ksgpu::rand_int(), and
+        avx2_simulate_4bit_noise(), whose per-thread xoshiro is seeded from it on first use.
       - numpy's global RandomState (np.random.uniform() and friends).
       - python's stdlib 'random', which tests/test_network.py and tests/test_server.py use.
 
@@ -71,16 +72,24 @@ def seed_rngs(seed):
     master directly, so the streams are uncorrelated but the whole run replays from a single
     pasteable integer.
 
+    NOTHING DRAWS FROM A FOURTH, UNSEEDED STREAM, and that is a rule rather than an accident.
+    A numpy Generator (np.random.default_rng) built with no argument seeds itself from OS
+    entropy and is therefore outside all of this; the suites that want one -- varmap and the
+    three detrending packages -- derive its seed from the global RandomState above, so
+    successive calls still differ while the run as a whole replays. See varmap/tests.py's
+    _rng() and each detrending package's _default_rng().
+
     SEEDED ONCE PER PROCESS, NOT PER TEST, and that is the point: iteration i of the 'test
     -n' loop draws different values from iteration j (so a long run explores the parameter
     space), while rerunning the same command replays the same sequence (so a failure at
     iteration 700 is reproducible). Seeding per test would give up the first property, and
     not seeding at all gives up the second.
 
-    Two things it does NOT buy, both of which need threads to be fixed and are postponed:
+    WHAT IT DOES NOT BUY is anything drawn on a thread other than this one:
     ksgpu::seed_default_rng() reseeds only the CALLING thread, so any C++ thread spawned
     later self-seeds from std::random_device; and in python a seeded RNG fixes the sequence
-    of values drawn but not which thread draws which. See the note printed by test().
+    of values drawn but not which thread draws which. That affects --net and --serv only, and
+    test() prints exactly which parts of those two replay and which do not.
     """
 
     import numpy as np
@@ -175,14 +184,31 @@ def test(args):
                  f' same iteration count)')
 
     if run_all_tests or args.net or args.serv:
-        # Said out loud rather than left to be rediscovered: these two spawn threads, and
-        # neither RNG can be pinned across a thread boundary today. ksgpu::seed_default_rng()
-        # reseeds only the calling thread, so C++ threads spawned later self-seed from
-        # std::random_device; and on the python side a seeded RNG fixes WHICH VALUES are
-        # drawn but not WHICH THREAD draws them. Fixing either is nontrivial and postponed.
-        atomic_print('NOTE: --net and --serv are NOT reproducible from the seed. They spawn'
-                     ' threads, and neither the C++ nor the python RNG is pinned across a'
-                     ' thread boundary. Every other test is reproducible.')
+        # Said out loud rather than left to be rediscovered, and split into what replays and
+        # what does not, because "not reproducible" is too blunt to act on -- a --net failure
+        # IS worth rerunning at the same seed, since the config and the frame data come back.
+        #
+        # What replays: the config and every drawn parameter (python's global RandomState,
+        # stdlib random, and ksgpu::default_rng() are all pinned on the main thread), and
+        # --net's frame data -- randomize(normalize=False, gaussian=False) at
+        # test_network.py:495,760 runs on the main thread and takes AssembledFrame::randomize's
+        # seeded mt19937 branch, not avx2_simulate_4bit_noise().
+        #
+        # What does not, in rough order of how much it matters:
+        #   - The SCRIPT --net issues. _maybe_issue_write() reads live rb_start/rb_processed/
+        #     rb_streamed and can return without drawing, so how many values the seeded python
+        #     RNG is asked for depends on server timing, and the stream diverges from turn one.
+        #     Pre-drawing the script would fix it.
+        #   - --serv's frame data, from FakeXEngine's two randomizer threads
+        #     (test_server.py:489). ksgpu::seed_default_rng() reseeds only the CALLING thread,
+        #     so a thread spawned later self-seeds from std::random_device.
+        #   - The short-read pattern in Socket::_misbehave_maxbytes() (network_utils.cpp:611),
+        #     drawn on the reader thread, same reason.
+        atomic_print('NOTE: --net and --serv replay only PARTLY from the seed. The config, all'
+                     ' drawn parameters, and --net\'s frame data do replay; the sequence of'
+                     ' operations --net issues does not (it depends on live server state), nor'
+                     ' does anything drawn on a spawned thread (--serv\'s frame data, the'
+                     ' short-read pattern). Every other test replays in full.')
 
     ksgpu.set_cuda_device(args.gpu)
     from . import utils   # local import (utils pulls in heavier deps)

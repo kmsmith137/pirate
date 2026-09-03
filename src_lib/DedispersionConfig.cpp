@@ -951,11 +951,74 @@ static CoalescedDdKernel2::RegistryKey _make_random_cdd2_key(Dtype dtype, long d
     return ret;
 }
 
+// The most primary trees DedispersionConfig::make_random() will draw. NOT
+// constants::max_primary_trees (which is what a hand-written config may have) -- this is the
+// ceiling of make_random()'s own draw, and args.min_primary_trees is checked against it.
+static constexpr long max_random_npri = 4;
+
+
+// Helper for DedispersionConfig::make_random(): the toplevel_tree_rank range that a base cdd2
+// key of the given dd_rank admits. Factored out because make_random() needs it twice -- once to
+// draw the rank, and once (when args.min_primary_trees > 1) to ask, BEFORE committing to a key,
+// whether any rank in the range leaves room for more than one primary tree.
+static std::pair<long,long> _toplevel_rank_range(long dd_rank, int max_toplevel_rank)
+{
+    return { std::max(2*dd_rank - 1, 2L), std::min(2*dd_rank, long(max_toplevel_rank)) };
+}
+
+
+// Helper for DedispersionConfig::make_random(): the part of "can this config have more than one
+// primary tree?" that holds on both the gpu_valid and !gpu_valid paths. 'config_pf_rank' is
+// frequency_subband_counts.size()-1, and R is toplevel_tree_rank.
+static bool _ds_pri_ok(long config_pf_rank, long R)
+{
+    return (config_pf_rank <= (R + 2) / 4) && ((R / 2) >= 1);
+}
+
+
+// Helper for DedispersionConfig::make_random(): can a config built from base key 'base', with
+// toplevel_tree_rank R, have MORE THAN ONE primary tree?
+//
+// This mirrors the guards on the npri draw in make_random(), and the two MUST stay in step --
+// args.min_primary_trees is honoured by construction, which means the key and rank draws are
+// filtered through here and then the npri draw is simply trusted. An xassert at the end of
+// make_random() is the tripwire if they ever diverge.
+//
+// On the gpu_valid path the downsampled trees' keys come from the registry, so there has to be
+// one with the config's (dtype, subband_counts) at the downsampled dd_rank, which is also a
+// legal FIRST step of the max_width chain (Wmax equal to the base key's, or half of it). Only
+// the first step can truncate the chain: whatever key it picks has Wmax == W, so every later
+// step's pool contains at least that key.
+static bool _multi_pri_possible(const vector<CoalescedDdKernel2::RegistryKey> &all_keys,
+                                const CoalescedDdKernel2::RegistryKey &base, long R, bool gpu_valid)
+{
+    long config_pf_rank = long(base.subband_counts.size()) - 1;
+
+    if (!_ds_pri_ok(config_pf_rank, R))
+        return false;
+    if (!gpu_valid)
+        return true;   // no registry to satisfy: _make_random_cdd2_key() invents a key
+
+    long ds_stage2_dd_rank = R / 2;
+
+    for (const CoalescedDdKernel2::RegistryKey &k: all_keys)
+        if ((k.dtype == base.dtype) && (k.dd_rank == ds_stage2_dd_rank)
+            && (k.subband_counts == base.subband_counts)
+            && (pow2((k.dd_rank + 1) / 2) <= xdiv(1024, k.Tinner * k.dtype.nbits))
+            && ((k.Wmax == base.Wmax) || (2 * k.Wmax == base.Wmax)))
+            return true;
+
+    return false;
+}
+
+
 // static member function
 DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 {
     xassert(args.max_toplevel_rank >= 2);
     xassert(args.max_early_triggers >= 0);
+    xassert_ge(args.min_primary_trees, 1);
+    xassert_le(args.min_primary_trees, max_random_npri);
     long max_stage2_rank = (args.max_toplevel_rank + 1) / 2;
 
     using Key2 = CoalescedDdKernel2::RegistryKey;  // (dtype, dd_rank, Tinner, Wmax, subband_counts)
@@ -991,6 +1054,20 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
             if (pow2((k.dd_rank + 1) / 2) > xdiv(1024, k.Tinner * k.dtype.nbits))
                 continue;
 
+            // args.min_primary_trees > 1 has to FILTER THE KEYS, not just raise the npri
+            // draw further down. Whether a base key can carry a second primary tree depends
+            // on the key (through dtype, subband_counts and Wmax) and on toplevel_tree_rank,
+            // which is drawn from a range the key's dd_rank fixes -- so ask here whether ANY
+            // rank in that range works, and drop the key if none does.
+            if (args.min_primary_trees > 1) {
+                auto [rlo, rhi] = _toplevel_rank_range(k.dd_rank, args.max_toplevel_rank);
+                bool ok = false;
+                for (long R = rlo; (R <= rhi) && !ok; R++)
+                    ok = _multi_pri_possible(all_keys, k, R, true);
+                if (!ok)
+                    continue;
+            }
+
             // Note: EVERY remaining key is reachable from a config. We use the key's
             // subband_counts as the config's frequency_subband_counts just below, and the
             // et_level=0 tree gets them verbatim (restrict_subband_counts() is the identity
@@ -1003,7 +1080,8 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
             stringstream ss;
             ss << "DedispersionConfig::make_random(): no precompiled cdd2 kernel is available "
                << "(max_toplevel_rank=" << args.max_toplevel_rank << ", max_stage2_rank=" << max_stage2_rank
-               << ", force_float32=" << (args.force_float32 ? "true" : "false") << ")";
+               << ", force_float32=" << (args.force_float32 ? "true" : "false")
+               << ", min_primary_trees=" << args.min_primary_trees << ")";
             throw runtime_error(ss.str());
         }
 
@@ -1013,7 +1091,30 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     else {
         Dtype dtype = (args.force_float32 || rand_bool()) ? Dtype::from_str("float32")
                                                           : Dtype::from_str("float16");
-        long dd_rank = rand_int(1, max_stage2_rank + 1);
+
+        // dd_rank is drawn from the values that admit args.min_primary_trees, for the same
+        // reason the key pool is filtered above. There is no registry on this path, so the
+        // only constraint is _ds_pri_ok(), which depends on the key only through
+        // subband_counts.size() -- and _make_random_cdd2_key() always returns pf_rank+1 of
+        // them with pf_rank = (dd_rank+1)/2. So the pool can be built before the draw.
+        vector<long> dd_ranks;
+        for (long d = 1; d <= max_stage2_rank; d++) {
+            bool ok = (args.min_primary_trees <= 1);
+            auto [rlo, rhi] = _toplevel_rank_range(d, args.max_toplevel_rank);
+            for (long R = rlo; (R <= rhi) && !ok; R++)
+                ok = _ds_pri_ok((d+1)/2, R);
+            if (ok)
+                dd_ranks.push_back(d);
+        }
+
+        if (dd_ranks.size() == 0) {
+            stringstream ss;
+            ss << "DedispersionConfig::make_random(): no dd_rank admits min_primary_trees="
+               << args.min_primary_trees << " (max_toplevel_rank=" << args.max_toplevel_rank << ")";
+            throw runtime_error(ss.str());
+        }
+
+        long dd_rank = dd_ranks.at(rand_int(0, dd_ranks.size()));
 
         Key2 base_key = _make_random_cdd2_key(dtype, dd_rank);
         my_keys.push_back(base_key);
@@ -1026,9 +1127,32 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
     // Toplevel tree rank. (Locals named *_min/*_max to avoid confusion with
     // args.max_toplevel_rank, the caller-specified bound.)
-    long toplevel_rank_min = max(2 * my_keys.at(0).dd_rank - 1, 2L);
-    long toplevel_rank_max = (2 * my_keys.at(0).dd_rank);
-    ret.toplevel_tree_rank = rand_int(toplevel_rank_min, toplevel_rank_max+1);
+    //
+    // THE CLAMP BY args.max_toplevel_rank IS LOAD-BEARING, even though max_stage2_rank
+    // already bounds the key's dd_rank. For ODD max_toplevel_rank = m, the key pool is
+    // bounded by (m+1)/2, so 2*dd_rank can reach m+1 -- which both violates the documented
+    // "bounds toplevel_tree_rank" and makes make_random(m) and make_random(m+1) the same
+    // distribution. Without it, callers asking for an odd bound silently get the next even
+    // one (and pay for it: the cost of nearly everything downstream is 2^toplevel_tree_rank).
+    //
+    // min <= max still holds: the clamp binds only when 2*dd_rank > m, which for m odd needs
+    // dd_rank = (m+1)/2, and then toplevel_rank_min = 2*dd_rank-1 = m as well.
+    auto [toplevel_rank_min, toplevel_rank_max] =
+        _toplevel_rank_range(my_keys.at(0).dd_rank, args.max_toplevel_rank);
+    xassert_le(toplevel_rank_min, toplevel_rank_max);
+
+    if (args.min_primary_trees <= 1)
+        ret.toplevel_tree_rank = rand_int(toplevel_rank_min, toplevel_rank_max+1);
+    else {
+        // Only the ranks that leave room for args.min_primary_trees. The key draw above has
+        // already guaranteed there is at least one.
+        vector<long> ranks;
+        for (long R = toplevel_rank_min; R <= toplevel_rank_max; R++)
+            if (_multi_pri_possible(all_keys, my_keys.at(0), R, args.gpu_valid))
+                ranks.push_back(R);
+        xassert(ranks.size() > 0);
+        ret.toplevel_tree_rank = ranks.at(rand_int(0, ranks.size()));
+    }
 
     // Frequency zones.
     long nzones = rand_int(1,6);
@@ -1073,7 +1197,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
                 valid_keys.push_back(k);
 
         if (valid_keys.size() > 0) {
-            npri = rand_int(1,5);
+            npri = rand_int(args.min_primary_trees, max_random_npri+1);
 
             // validate() requires each downsampled primary tree's max_width to EQUAL its
             // predecessor's or be HALF of it, so Wmax cannot be drawn independently per tree
@@ -1102,7 +1226,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         }
     }
     else if (!args.gpu_valid && ds_pri_ok && (ds_stage2_dd_rank >= 1)) {
-        npri = rand_int(1,5);
+        npri = rand_int(args.min_primary_trees, max_random_npri+1);
 
         // Same max_width chain as the gpu_valid path above. There is no registry to satisfy
         // here, so the chain never truncates: we overwrite the random key's Wmax, the same
@@ -1123,14 +1247,24 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
     // Time_samples_per_chunk, beam configuration.
 
+    // THE TRIPWIRE ON args.min_primary_trees. Everything above is arranged so that npri can
+    // reach it -- the base key, toplevel_tree_rank and (on the gpu_valid path) the max_width
+    // chain are all filtered through _multi_pri_possible(). If that reasoning ever drifts out
+    // of step with the draw, this fires instead of the caller silently getting fewer trees.
+    xassert_ge(npri, long(args.min_primary_trees));
+
     long nt_divisor = ret.get_nelts_per_segment() * pow2(npri-1);
     long n = xdiv(8192, nt_divisor);
-    auto v = ksgpu::random_integers_with_bounded_product(3, n);
+
+    // ONE BUDGET, split three ways or spent entirely on the chunk length. Under single_beam
+    // the two beam factors are gone, so drawing them and overwriting them afterwards would
+    // just shrink time_samples_per_chunk by their product for nothing.
+    auto v = ksgpu::random_integers_with_bounded_product(args.single_beam ? 1 : 3, n);
 
     ret.time_samples_per_chunk = v[0] * nt_divisor;
-    ret.beams_per_batch = v[1];
-    ret.beams_per_gpu = v[1] * v[2];
-    ret.num_active_batches = rand_int(1,v[2]+1);
+    ret.beams_per_batch = args.single_beam ? 1 : v[1];
+    ret.beams_per_gpu = args.single_beam ? 1 : (v[1] * v[2]);
+    ret.num_active_batches = args.single_beam ? 1 : rand_int(1,v[2]+1);
 
     // GPU configuration.
     // The member's own default (10000) is the "no limit, pure-GPU ring buffer" value, so

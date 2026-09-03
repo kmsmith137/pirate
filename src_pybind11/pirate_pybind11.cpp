@@ -179,11 +179,14 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                       "rather than a file, e.g. one embedded in a variance-map file by\n"
                       "pirate_frb.varmap.asdf_io.")
           .def_static("make_random",
-               [](int max_toplevel_rank, int max_early_triggers, bool gpu_valid, bool verbose,
+               [](int max_toplevel_rank, int max_early_triggers, int min_primary_trees,
+                  bool single_beam, bool gpu_valid, bool verbose,
                   bool force_float32, bool no_host_mega_ringbuf) {
                    DedispersionConfig::RandomArgs args;
                    args.max_toplevel_rank = max_toplevel_rank;
                    args.max_early_triggers = max_early_triggers;
+                   args.min_primary_trees = min_primary_trees;
+                   args.single_beam = single_beam;
                    args.gpu_valid = gpu_valid;
                    args.verbose = verbose;
                    args.force_float32 = force_float32;
@@ -192,6 +195,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                },
                py::arg("max_toplevel_rank") = 10,
                py::arg("max_early_triggers") = 5,
+               py::arg("min_primary_trees") = 1,
+               py::arg("single_beam") = false,
                py::arg("gpu_valid") = true,
                py::arg("verbose") = false,
                py::arg("force_float32") = false,
@@ -200,6 +205,15 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Args:\n"
                "    max_toplevel_rank: Bounds toplevel_tree_rank (default=10)\n"
                "    max_early_triggers: Max number of early triggers (0 to disable, default=5)\n"
+               "    min_primary_trees: Lower bound on len(primary_trees), 1 to 4 (default=1).\n"
+               "        Honoured by construction, so a caller that needs more than one\n"
+               "        primary tree does not have to redraw. For an EXACT count, ask for it\n"
+               "        as a minimum and truncate primary_trees -- validate() only gets\n"
+               "        easier to satisfy as trees are dropped.\n"
+               "    single_beam: Set beams_per_gpu = beams_per_batch = num_active_batches = 1,\n"
+               "        and give the whole budget to time_samples_per_chunk (default=False).\n"
+               "        Use this instead of overwriting the beam fields after the draw, which\n"
+               "        leaves time_samples_per_chunk systematically small.\n"
                "    gpu_valid: Generate GPU-valid configuration (default=True)\n"
                "    verbose: Print debug info (default=False)\n"
                "    force_float32: Draw only float32 configs (default=False)\n"

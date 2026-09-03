@@ -36,23 +36,25 @@ def _config_with_widths(widths):
     pirate_frb, and a negative test should not be best-effort. gpu_valid=False because no
     kernels are launched, and because the chain we install would not match a registry key
     anyway.
+
+    ASKED FOR AS A MINIMUM AND THEN TRUNCATED, rather than drawn and rejected. make_random()
+    honours min_primary_trees by construction, so this returns on the first draw; the old
+    rejection loop wanted an exact count, which the unconstrained draw supplies about 16% of
+    the time for len(widths) == 3. Truncation is safe because validate() only gets EASIER to
+    satisfy as trees are dropped -- its 'min_nt' divisor falls by a factor of two per dropped
+    tree, and dropping to a single tree relaxes the pf_rank bound rather than tightening it.
     """
 
-    for _ in range(400):
-        config = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=2,
-                                                gpu_valid=False)
-        if len(config.primary_trees) != len(widths):
-            continue
+    npri = len(widths)
+    config = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=2,
+                                            gpu_valid=False, min_primary_trees=npri)
 
-        # config.primary_trees converts to a fresh python list, so mutate and assign back.
-        pts = list(config.primary_trees)
-        for (pt, w) in zip(pts, widths):
-            pt.max_width = int(w)
-        config.primary_trees = pts
-        return config
-
-    raise RuntimeError(f"test_dedispersion_config: make_random() produced no config with"
-                       f" {len(widths)} primary trees in 400 attempts")
+    # config.primary_trees converts to a fresh python list, so mutate and assign back.
+    pts = list(config.primary_trees)[:npri]
+    for (pt, w) in zip(pts, widths):
+        pt.max_width = int(w)
+    config.primary_trees = pts
+    return config
 
 
 def test_max_width_monotone():

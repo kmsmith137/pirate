@@ -10,6 +10,7 @@
 
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>   // CUDA_PEEK
+#include <ksgpu/rand_utils.hpp>   // rand_int(), random_integers_with_bounded_product()
 #include <ksgpu/KernelTimer.hpp>
 #include <ksgpu/test_utils.hpp>   // assert_arrays_equal
 
@@ -867,9 +868,11 @@ void test_chime_frb_beamform()
 
     // map: (F,256) uint, random values in [0, 512)
     // (In the unit test, we use a random map instead of a realistic map.)
+    // Drawn through ksgpu::rand_int() rather than the C library's rand(), so that the map
+    // replays from 'pirate_frb test --seed'. Every other draw in this file already does.
     Array<uint> map_cpu({F, 256}, af_rhost);
     for (long i = 0; i < F * 256; i++)
-        map_cpu.data[i] = rand() % 512;
+        map_cpu.data[i] = ksgpu::rand_int(0, 512);
     Array<uint> map_gpu = map_cpu.to_gpu();
 
     // co: (F,4,4,2) float

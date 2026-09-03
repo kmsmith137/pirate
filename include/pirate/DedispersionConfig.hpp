@@ -194,6 +194,34 @@ struct DedispersionConfig
     {
         int max_toplevel_rank = 10;  // bounds toplevel_tree_rank
         int max_early_triggers = 5;  // set to zero to disable early triggers
+
+        // Lower bound on num_primary_trees(), in 1..constants::max_primary_trees. Honoured BY
+        // CONSTRUCTION -- the base cdd2 key and toplevel_tree_rank are drawn only from those
+        // that admit this many primary trees -- so a caller who needs a multi-tree config gets
+        // one on every call, instead of rejection-sampling at the ~35-50% rate the
+        // unconstrained draw gives. To get an EXACT tree count, ask for it as a minimum and
+        // truncate 'primary_trees': validate()'s two dependences on the count both weaken
+        // under truncation (see the comments at its 'min_nt' and 'min_dd_rank1' checks).
+        int min_primary_trees = 1;
+
+        // If true, beams_per_gpu = beams_per_batch = num_active_batches = 1, and the whole
+        // (8192 / nt_divisor) budget goes to time_samples_per_chunk.
+        //
+        // FOR CALLERS WHO WOULD OTHERWISE OVERWRITE THE BEAM FIELDS AFTER THE DRAW. Doing that
+        // by hand has a trap -- overwrite only beams_per_gpu and beams_per_batch, and
+        // num_active_batches keeps a value validate() then rejects on 55% of draws -- and it
+        // leaves time_samples_per_chunk conditioned on a beam draw that no longer exists: one
+        // factor of a three-way bounded product, so its median is ~n^(1/3) rather than ~n/2.
+        //
+        // BUT NOT FOR THE VARIANCE-MAP SWEEP TESTS, which is worth saying because they are the
+        // obvious candidates and the choice was measured. They overwrite the beam fields, and
+        // moving them to this flag raises their median time_samples_per_chunk from 256 to
+        // ~4000 -- which collapses the number of CHUNKS the sweep streams (P(ndata_chunks == 1)
+        // goes from 0.28 to 0.89), and multiplies the predicted sweep work by 4x to 15x. Chunk
+        // boundaries are most of what those tests exist to check, so for them the short chunk
+        // is the useful corner and the three-way split is doing them a favour by accident.
+        bool single_beam = false;
+
         bool gpu_valid = true;
         bool verbose = false;
         bool force_float32 = false;

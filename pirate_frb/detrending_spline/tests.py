@@ -114,7 +114,21 @@ def _log_uniform_nfreq(rng, lo, hi):
 
 
 def _default_rng(rng):
-    return np.random.default_rng() if rng is None else rng
+    """A fresh numpy Generator for one test, seeded from the master --seed.
+
+    NEVER call numpy's zero-argument default_rng() here.  It seeds itself from OS
+    ENTROPY, which puts every draw in this file outside __main__.seed_rngs(): a
+    failing draw then cannot be replayed, and 'test' prints a seed that does not
+    cover these suites.  Seeded instead from numpy's global RandomState, which
+    seed_rngs() pins -- so successive calls still differ (a long run explores
+    different data) while the whole sequence replays from one integer.  This is the
+    same rule, for the same reason, as varmap/tests.py's _rng().
+
+    run_all() prints the entropy of the generator it makes, which reproduces THIS
+    SUITE on its own without re-running anything else: pass
+    np.random.default_rng(<entropy>) back in as 'rng'.
+    """
+    return np.random.default_rng(np.random.randint(0, 1 << 32)) if rng is None else rng
 
 
 def _smooth_baseline(kv, rng, M_ax, ntime, dtype=np.float64):
