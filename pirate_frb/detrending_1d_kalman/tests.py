@@ -43,7 +43,8 @@ def _draw_geometry(rng, L, nsamp, s_max):
     return random_stream_geometry(rng, nsamp, s_max, lag=L)
 
 
-# Default small geometry.  L/ell = 5.7 here, so exp(-L/ell) = 3e-3.
+# Scaffolding geometry, for the handful of places that need A detrender rather than a
+# particular one (the constructor-rejection probes).  L/ell = 5.7 here.
 K, TAU, LAG, TC = 2, 4.0, 32, 64
 
 
@@ -54,6 +55,32 @@ def _det(**kw):
     kw.setdefault('chunk_size', TC)
     kw.setdefault('dtype', np.float64)
     return KalmanDetrender(**kw)
+
+
+def _draw_tau_L(rng, nl_lo=0.5, nl_hi=10.0, tau_lo=2.0, tau_hi=16.0):
+    """Draw (tau, L) with L/ell log-uniform in [nl_lo, nl_hi].  Returns (tau, L, ell).
+
+    L/ell IS THE NUMBER THAT SAYS HOW APPROXIMATE THIS ESTIMATOR IS, and it is the axis to
+    randomize on.  The smoother has an intrinsic correlation length ell = tau/sin(pi/2k),
+    which is sqrt(2)*tau at k=2; producing the output at sample t from data up to t+L instead
+    of from the whole future costs an error of order exp(-L/ell).  So L/ell near 1 is the
+    regime where the fixed-lag truncation genuinely bites and the backward pass carries the
+    most weight, and L/ell above ~6 is the regime where it is numerically absent.
+
+    Both are drawn because both are real: the shipped detrender is sized from
+    from_equivalent_W(), which puts L at n_ell = 4 ell by default, but nothing in
+    KalmanDetrender requires it -- L >= 1 is the only constraint.
+
+    'tau' is drawn too, log-uniformly, since it sets the absolute scale that ell and the
+    per-sample arithmetic both inherit.
+
+    Callers that need a LARGE L/ell pass nl_lo: see test_kernel_response(), which measures a
+    limit that only exists as L -> infinity, and test_polynomial_exactness()'s second arm.
+    """
+    tau = float(np.exp(rng.uniform(np.log(tau_lo), np.log(tau_hi))))
+    ell = tau / np.sin(np.pi / (2*K))
+    nl = float(np.exp(rng.uniform(np.log(nl_lo), np.log(nl_hi))))
+    return tau, max(1, int(round(nl * ell))), ell
 
 
 # --------------------------------------------------------------------- T1. model
@@ -157,17 +184,25 @@ def test_recursions_vs_dense(rng=None, niter=3, verbose=True):
     factor is a likelihood, not a distribution, so it has no clean dense analogue).
     """
     rng = _default_rng(rng)
-    k, tau, L = 2, 4.0, 12
+    k = K
+    # The dense oracle inverts an (n x n) matrix per probe, with n up to t+L+1, so tau is
+    # capped well below the file's usual range.
+    tau, L, _ell = _draw_tau_L(rng, tau_hi=6.0)
     C = _state_from_samples(k)
     worst_f, worst_c = 0.0, 0.0
     nchecked = 0
 
+    # The probes sit at fixed fractions of the stream, and the combined comparison reads
+    # [0, t+L], so T HAS TO SCALE WITH L.  A constant T is safe only while L is a constant
+    # too: the deepest probe needs T > max(probes) + L + 1.
+    T = 3*L + 12
+    probes = (T//8, T//4, T//2)
+
     for _ in range(niter):
-        T = 40
         mask = random_mask(6, T, L, rng)[0]
         d = rng.normal(size=(6, T))
         for s in range(6):
-            for t in (5, 12, 20):
+            for t in probes:
                 m_row, d_row = mask[s].astype(float), d[s]
                 (Jf, ef), _, (J, e) = _run_recursions(d_row, m_row, t, k, tau, L)
 
@@ -219,7 +254,10 @@ def test_polynomial_exactness(rng=None, verbose=True):
     results = []
 
     for dtype, tol in ((np.float64, 1e-10), (np.float32, 1e-4)):
-        for tau, L, nsamp, s_max in ((4.0, 32, 1536, 8), (16.0, 128, 2048, 4)):
+        for nsamp, s_max in ((1536, 8), (2048, 4)):
+            # Exact for any L: f = P zeroes both terms of chi^2, so the whole L/ell range is
+            # in scope here and nothing below is a tolerance on the truncation.
+            tau, L, _ell = _draw_tau_L(rng)
             Tc, nchunk, S_ax, T = _draw_geometry(rng, L, nsamp, s_max)
             worst, lbl = 0.0, '-'
             mask, labels = random_mask(S_ax, T, L, rng)
@@ -233,17 +271,25 @@ def test_polynomial_exactness(rng=None, verbose=True):
                 e = float(np.max(np.abs(resid[s][mko[s]])))
                 if e > worst:
                     worst, lbl = e, labels[s]
-                assert e < tol, (f'T3 [{np.dtype(dtype).name} tau={tau} mask={labels[s]}]: '
+                assert e < tol, (f'T3 [{np.dtype(dtype).name} tau={tau:.3g} L={L} mask={labels[s]}]: '
                                  f'deg<=k-1 residual {e:.3e} > {tol:.1e}')
-            results.append((np.dtype(dtype).name, tau, worst, lbl))
+            results.append((np.dtype(dtype).name, tau, L/_ell, worst, lbl))
 
     # (E2) two-sided at deg = 2k-1, on a fully valid mask so the only endpoint is the
-    # array's.  L/ell = 8 here, so the interior residual should be ~1e-3 of the
-    # start-of-stream one.
-    tau, nl = 8.0, 8.0
-    ell = tau/np.sin(np.pi/(2*k))
-    L = int(round(nl*ell))
-    Tc = 4*L
+    # array's.
+    #
+    # THIS ARM NEEDS A LARGE L/ell AND THE OTHER ONE DOES NOT.  What it asserts is that the
+    # interior residual is suppressed by exp(-L/ell) relative to the head; at L/ell ~ 1 that
+    # factor is 0.4, the measured ratio is ~0.6, and the assertion is satisfied by arithmetic
+    # rather than by the estimator being right (the interior residual cannot exceed the head
+    # one by much in any case).  Drawn in [4, 10], where exp(-L/ell) is 1.8e-2 down to 4.5e-5
+    # and the bound has teeth.
+    tau, L, ell = _draw_tau_L(rng, nl_lo=4.0, tau_hi=8.0)
+    nl = L / ell
+    # THE INTERIOR WINDOW IS MEASURED IN ell AND THE STREAM IN L, so the chunk has to be long
+    # enough in BOTH units or the window below starts past the end of the output (length
+    # T - L).  12*ell is the smallest that leaves the window non-empty at nl = 4.
+    Tc = max(4*L, int(12*ell))
     T = 2*Tc + L
     det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
     P = random_polynomial(rng, 1, T, 2*k-1, tau, np.float64)
@@ -260,8 +306,8 @@ def test_polynomial_exactness(rng=None, verbose=True):
     ratio = interior/max(head, 1e-300)
 
     if verbose:
-        for name, tau_, w, lbl in results:
-            print(f'    T3 test_polynomial_exactness [{name} tau={tau_}]: '
+        for name, tau_, nl_, w, lbl in results:
+            print(f'    T3 test_polynomial_exactness [{name} tau={tau_:.3g} L/ell={nl_:.1f}]: '
                   f'max|resid| = {w:.2e} ({lbl})')
         print(f'      deg={2*k-1} two-sided: head {head:.2e}, interior {interior:.2e}, '
               f'ratio {ratio:.2e} vs exp(-L/ell) = {decay:.2e}')
@@ -282,7 +328,8 @@ def test_seam_free(rng=None, verbose=True):
     something false.
     """
     rng = _default_rng(rng)
-    k, tau, L = K, TAU, LAG
+    k = K
+    tau, L, _ell = _draw_tau_L(rng)
     # nout is a multiple of 8 so that the four decompositions below are exact; the
     # spectator count and the stream length are otherwise free.
     S_ax, nblk = random_spectator_shape(rng, 192, first_max=8)
@@ -323,12 +370,20 @@ def test_seam_free(rng=None, verbose=True):
 
 def test_vs_brute_force(rng=None, verbose=True):
     rng = _default_rng(rng)
-    k, tau, L, Tc = K, TAU, 16, 32
+    k = K
+    # THE ORACLE IS O(S_ax * nout * T^3): it inverts an (n x n) matrix for every (row, output
+    # sample) pair, with n running up to T.  So T is what has to be bounded here, not L --
+    # and since T = 2*Tc + L, bounding T is what bounds the draw.  BUDGET is that product,
+    # at about what (S_ax, L, Tc) = (6, 16, 32) costs.
+    BUDGET = 6 * 64 * 80**3
+    tau, L, _ell = _draw_tau_L(rng, tau_hi=8.0)
+    Tc = max(2*k, int(rng.integers(L, 3*L + 1)))
     T = 2*Tc + L
     worst_r, worst_l, name = 0.0, 0.0, ''
 
     for _ in range(2):
-        S_ax = int(rng.integers(1, 7))
+        S_ax = max(1, min(6, int(BUDGET // ((T - L) * T**3))))
+        S_ax = int(rng.integers(1, S_ax + 1))
         mask, labels = random_mask(S_ax, T, L, rng)
         d = rng.normal(size=(S_ax, T)) + 2.0
         det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
@@ -370,6 +425,13 @@ def test_kernel_response(rng=None, verbose=True):
     sample and the lag ahead of it must be several ell = tau/sin(pi/2k), or the
     forward filter is still spinning up and the deviation is dominated by that
     instead -- hence Tc and L scale with tau below.
+
+    THE ONE TEST HERE THAT DOES NOT DRAW ITS L/ell, and deliberately: c_k/tau is the
+    INFINITE-lag limit, so a small L is exactly what stops h[0] reaching it.  Measured over
+    the fixed tau sweep below, |h[0]/(c_k/tau) - 1| at L/ell = 0.5, 1, 2, 4 is
+    (0.76, 1.08, 0.95), (0.22, 0.17, 0.20), (0.100, 0.090, 0.080), (0.031, 0.008, 0.003):
+    below L/ell = 4 the deviation is not even monotone in tau, and the O(tau^-2) assertion
+    fails outright.  L/ell = 11 and 23 here.  See _draw_tau_L() for the tests that do draw.
     """
     k = K
     c_k = 1.0 / (2*k*np.sin(np.pi/(2*k)))
@@ -409,7 +471,10 @@ def test_psd_and_finite(rng=None, verbose=True):
     semidefiniteness of J.
     """
     rng = _default_rng(rng)
-    k, tau, L = K, TAU, LAG
+    k = K
+    # Scale-free: symmetry, PSD and beta >= 1/q hold at any lag, so the full L/ell range
+    # is in scope.
+    tau, L, _ell = _draw_tau_L(rng)
     worst_asym, min_beta_ratio = 0.0, np.inf
     nstep = 0
 
@@ -448,12 +513,12 @@ def test_psd_and_finite(rng=None, verbose=True):
 
     # The full path, over the zoo, must also be finite everywhere.
     for dtype in (np.float64, np.float32):
-        Tc, nchunk, S_ax, T = _draw_geometry(rng, LAG, 3456, 24)
-        det = _det(dtype=dtype, chunk_size=Tc)
-        mask, _ = random_mask(S_ax, T, LAG, rng)
+        Tc, nchunk, S_ax, T = _draw_geometry(rng, L, 3456, 24)
+        det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
+        mask, _ = random_mask(S_ax, T, L, rng)
         d = (rng.normal(size=(S_ax, T)) + 3.0).astype(dtype)
         outs = det.detrend_stream(d, mask)
-        _EXPANSION.note(None, mask[:, :T-LAG], outs[1])
+        _EXPANSION.note(None, mask[:, :T-L], outs[1])
         for nm, x in zip(('residual', 'mask_out', 'rmin'), outs):
             assert np.all(np.isfinite(np.asarray(x, dtype=np.float64))), \
                 f'T7: non-finite {nm} ({np.dtype(dtype).name})'
@@ -482,7 +547,9 @@ def test_masked_data_unused(rng=None, verbose=True):
     checked = 0
 
     for dtype in (np.float32, np.float64):
-        for tau, L, nsamp in ((4.0, 32, 2304), (16.0, 64, 3072)):
+        for nsamp in (2304, 3072):
+            # Bit-identity under poisoning holds at any lag.
+            tau, L, _ell = _draw_tau_L(rng)
             Tc, nchunk, S_ax, T = _draw_geometry(rng, L, nsamp, 12)
             mask, _ = random_mask(S_ax, T, L, rng)
             clean = rng.normal(size=(S_ax, T)) + rng.uniform(0.0, 1e3)
@@ -503,12 +570,12 @@ def test_masked_data_unused(rng=None, verbose=True):
             (oc, sc), (op, sp) = run(clean), run(poison)
             for nm, x, y in zip(('residual', 'mask_out', 'rmin'), oc, op):
                 assert np.array_equal(x, y), \
-                    f'T8: {nm} changed under poisoning ({np.dtype(dtype).name}, tau={tau})'
+                    f'T8: {nm} changed under poisoning ({np.dtype(dtype).name}, tau={tau:.3g})'
                 checked += 1
             for nm, x, y in ((f'state.J', sc.J, sp.J), ('state.eta', sc.eta, sp.eta),
                              ('state.kappa', sc.kappa, sp.kappa)):
                 assert np.array_equal(x, y), \
-                    f'T8: {nm} changed under poisoning ({np.dtype(dtype).name}, tau={tau})'
+                    f'T8: {nm} changed under poisoning ({np.dtype(dtype).name}, tau={tau:.3g})'
                 checked += 1
 
     if verbose:
@@ -537,7 +604,8 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
     worst, worst_name, worst_rmin = 0.0, '', 0.0
     drift = []
 
-    for tau, L, nsamp, s_max in ((4.0, 32, 3072, 12), (16.0, 128, 3072, 4)):
+    for nsamp, s_max in ((3072, 12), (3072, 4)):
+        tau, L, _ell = _draw_tau_L(rng)
         for _ in range(2):
             Tc, nchunk, S_ax, T = _draw_geometry(rng, L, nsamp, s_max)
             mask, labels = random_mask(S_ax, T, L, rng)
@@ -560,13 +628,15 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
                     continue
                 e = _maxdiff(r32[s][both[s]], r64[s][both[s]])
                 if e > worst:
-                    worst, worst_name = e, f'tau={tau} {labels[s]} offset={offset:.3g}'
+                    worst, worst_name = e, f'tau={tau:.3g} L/ell={L/_ell:.1f} {labels[s]} offset={offset:.3g}'
 
     # Does the error grow with time?  Split a long stream into thirds and compare the
     # worst discrepancy in each.
-    # Pinned, unlike the draws above: the point is a LONG stream cut into many
-    # chunks, so that the three thirds are far enough apart for growth to show.
-    tau, L, Tc, nchunk, S_ax = 4.0, 32, 64, 24, 8
+    # The LAG is drawn like everything else, but the stream geometry is pinned: the point
+    # is a long stream cut into many chunks, so that the three thirds are far enough apart
+    # for growth to show.
+    tau, L, _ell = _draw_tau_L(rng)
+    Tc, nchunk, S_ax = 64, 24, 8
     T = nchunk*Tc + L
     mask = np.ones((S_ax, T), dtype=bool)
     d64 = rng.normal(size=(S_ax, T)) + rng.uniform(0.0, 1e3)
