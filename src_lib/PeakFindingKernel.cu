@@ -1575,7 +1575,20 @@ void ReferencePfSquare::test_vs_peak_finder()
     FrequencySubbands fs(subband_counts);
     long M = fs.M;
 
-    long Wmax = pow2(rand_int(0, integer_log2(constants::max_pf_width) + 1));
+    // nt_in < tpad -- a chunk SHORTER than the history the peak-finder carries between
+    // chunks -- is legal here and illegal for GpuPfSquare, which is why this test is the only
+    // place in the tree that can reach it at all (see the class comment in
+    // PeakFindingKernel.hpp on why ReferencePfSquare omits the multiple-of-32 requirement).
+    //
+    // It arises at EXACTLY ONE grid point. tpad = max(2*Wmax, 32) and nt_in must be a
+    // multiple of 32, so nt_in < tpad needs tpad > 32, i.e. Wmax = max_pf_width, and then
+    // nt_in = 32. Drawing Wmax and nt_in independently gives 1/6 * 1/4 = 4.2% (measured 4.11%
+    // over 200k draws), which is thin for the only coverage a case has. Ask for it outright
+    // on one draw in nine and the rate lands near 15%.
+    bool want_short_chunk = (rand_uniform() < 0.115);
+
+    long Wmax = want_short_chunk ? long(constants::max_pf_width)
+                                 : pow2(rand_int(0, integer_log2(constants::max_pf_width) + 1));
     long D = pow2(rand_int(0, 3));
 
     // K > 0 is where the peak-finder folds extra DM bits into its multiplet index. This test
@@ -1591,8 +1604,7 @@ void ReferencePfSquare::test_vs_peak_finder()
     long total_beams = beams_per_batch * nbatches;
 
     // PeakFindingKernelParams::validate() requires nt_in to be a multiple of 32 (for float32).
-    // Note that nt_in < tpad is reachable here, and is intentionally not excluded.
-    long nt_in = 32 * rand_int(1, 5);
+    long nt_in = want_short_chunk ? 32L : (32 * rand_int(1, 5));
 
     // We take nt_wt = nt_in rather than 1, which lets nt_in be any multiple of 32 (the
     // reference requires the ratio nt_out/nt_wt to be a power of two).

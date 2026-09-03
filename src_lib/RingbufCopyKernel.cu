@@ -279,11 +279,16 @@ static vector<TestRingbuf> make_ringbufs(int nbuf, long beams_per_batch)
     vector<TestRingbuf> ret(nbuf);
 
     for (int i = 0; i < nbuf; i++) {
-        do {
-            auto v = ksgpu::random_integers_with_bounded_product(2,10000);
-            ret[i].num_frames = v[0];
-            ret[i].segments_per_frame = v[1];
-        } while (ret[i].num_frames < beams_per_batch);
+        // num_frames >= beams_per_batch is a REQUIREMENT of the caller's frame indexing, so
+        // ASK FOR IT rather than redrawing until it happens (notes/unit_tests.md point 3): a
+        // redraw loop discards exactly the small-num_frames draws, which is the end of the
+        // range worth sampling. Drawing (num_frames - beams_per_batch + 1) keeps every
+        // integer >= beams_per_batch reachable, and keeps the total segment count under
+        // 10000, since beams_per_batch * (10000/beams_per_batch) <= 10000.
+        long budget = max(1L, 10000 / beams_per_batch);
+        auto v = ksgpu::random_integers_with_bounded_product(2, budget);
+        ret[i].num_frames = beams_per_batch + v[0] - 1;
+        ret[i].segments_per_frame = v[1];
     }
 
     return ret;
@@ -351,8 +356,19 @@ void GpuRingbufCopyKernel::test_random()
         nseg_tot += rb->num_frames * rb->segments_per_frame;
     }
 
+    // AN EMPTY WORK LIST IS A CASE, not an accident: the kernel has an explicit early exit
+    // for noctuples == 0 (see the launch path), the parameter check has a size-zero branch,
+    // and production reaches it whenever a chunk schedules no cross-buffer copies. The loop
+    // below cannot produce one -- it pushes an entry with probability 1/2 per (dst ringbuf,
+    // segment), so emptiness needs every one of many coin flips to come up empty; simulated
+    // over 20000 draws it happened 0 times, against a median of 3259 entries. So skip the
+    // loop outright, some of the time.
     vector<TestLocationPair> lpairs;
+    bool empty_worklist = (rand_uniform() < 0.1);
+
     for (TestRingbuf &rb_dst: dst_ringbufs) {
+        if (empty_worklist)
+            break;
         for (long sdst = 0; sdst < rb_dst.segments_per_frame; sdst++) {
             long nf_dst = rb_dst.num_frames;
             long fdst = rand_int(0, nf_dst);
