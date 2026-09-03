@@ -32,6 +32,7 @@ from .SplineDetrender import SplineDetrender, ETA_DEFAULT, EPS_FLOAT32, EPS_FLOA
 from .timebasis import TimeBasis
 from .assemble import bandwidth
 from .reduce import band_to_dense as _b2d
+from ..utils import random_nfreq
 
 NW_CASES = [(0, 0), (0, 1), (0, 3), (1, 1), (1, 2), (2, 1), (2, 2), (2, 4)]
 
@@ -98,19 +99,6 @@ def _expansion_2d_str():
         f"n_phi={k[0]},{k[1]}: {d['expanded']}/{d['valid_in']} = "
         f"{(d['expanded']/d['valid_in'] if d['valid_in'] else 0.0):.3e}"
         for k, d in sorted(_EXPANSION_2D.items()))
-
-
-def _log_uniform_nfreq(rng, lo, hi):
-    """A channel count drawn LOG-uniformly on [lo, hi].
-
-    Use this wherever the SIZE of the frequency axis is the thing being varied.  A
-    uniform draw over a range like (600, 2500) puts essentially no weight on the
-    small-nfreq regime -- zones a few channels wide, and a single PARTIAL
-    CHANNEL_BLOCK in reduce.accumulate()'s stride loop -- which is where the loop
-    bounds and the basis clamping are degenerate.  Log-uniform over the same span
-    reaches it on an order-one fraction of calls and costs less, not more.
-    """
-    return int(round(float(np.exp(rng.uniform(np.log(lo), np.log(hi))))))
 
 
 def _default_rng(rng):
@@ -318,7 +306,7 @@ def test_chunk_invariance(rng, verbose=True):
     nblocks = []
     for _ in range(6):
         kv = msk.random_knots(rng, n_phi=N_PHI,
-                              nfreq=_log_uniform_nfreq(rng, 64, 2500))
+                              nfreq=random_nfreq(rng, 2500, lo=64))
         nblocks.append(-(-kv.nfreq // CHANNEL_BLOCK))
         det = SplineDetrender(kv, dtype=np.float32)
         M_ax, ntime = 2, 12
@@ -426,7 +414,7 @@ def _assert_not_removed(rng, dtype, n=0, W=0, nfreq_lo=512, nfreq_hi=2048):
     residual there is legitimately zero.
     """
     kv = msk.random_knots(rng, n_phi=N_PHI,
-                          nfreq=_log_uniform_nfreq(rng, nfreq_lo, nfreq_hi))
+                          nfreq=random_nfreq(rng, nfreq_hi, lo=nfreq_lo))
     det = SplineDetrender(kv, n=n, W=W, dtype=dtype, eps=EPS_FLOAT64)
     ntime = 3
     nbuf = ntime + 2*W
@@ -1087,7 +1075,7 @@ def test_2d_chunk_invariance(rng, verbose=True):
     nblocks = []
     for _ in range(5):
         kv = msk.random_knots(rng, n_phi=N_PHI,
-                              nfreq=_log_uniform_nfreq(rng, 64, 1600))
+                              nfreq=random_nfreq(rng, 1600, lo=64))
         nblocks.append(-(-kv.nfreq // CHANNEL_BLOCK))
         n, W = NW_CASES[int(rng.integers(0, len(NW_CASES)))]
         det = SplineDetrender(kv, n=n, W=W, dtype=np.float32)

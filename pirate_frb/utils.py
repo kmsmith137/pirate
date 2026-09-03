@@ -148,6 +148,38 @@ def _terminate_children(procs, grace_sec=constants.default_shutdown_timeout_sec)
 
 ####################################################################################################
 #
+# Helpers for drawing array shapes in randomized unit tests.
+#
+# The other half of this job is ksgpu.random_integers_with_bounded_product(n, bound), which
+# draws n factors of a bounded product -- use it when a test needs a random SHAPE whose cost
+# is capped. Note it draws from ksgpu::default_rng() rather than from a numpy Generator; see
+# its docstring.
+
+
+import numpy as np
+
+
+def random_nfreq(rng, hi, lo=32):
+    """A frequency-channel count drawn LOG-uniformly on [lo, hi].
+
+    Use this wherever the SIZE of the frequency axis is the thing being varied. A
+    uniform draw over a range like (600, 2500) puts essentially no weight on the
+    small-nfreq regime -- zones a few channels wide, one partial block in a strided
+    loop -- and that is where loop bounds and clamping are degenerate. Log-uniform
+    over the same span reaches it on an order-one fraction of calls, and costs less
+    rather than more.
+
+    'rng' is a numpy Generator, so the draw replays with everything else the caller
+    takes from it.
+    """
+    lo, hi = int(lo), int(hi)
+    if not (1 <= lo <= hi):
+        raise ValueError(f'random_nfreq: need 1 <= lo <= hi, got lo={lo}, hi={hi}')
+    return int(round(float(np.exp(rng.uniform(np.log(lo), np.log(hi))))))
+
+
+####################################################################################################
+#
 # former utils/ThreadAffinity.py -- context manager for temporarily setting thread CPU affinity.
 
 
