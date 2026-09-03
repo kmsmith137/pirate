@@ -171,13 +171,6 @@ struct DedispersionConfig
 
     ksgpu::Array<double> make_channel_map() const;
 
-    // make_random_freq_variances(): for testing/debugging (its caller is
-    // pirate_frb/fast_varmap/test_fast_varmap.py). Assigns one random variance in [0,1] to
-    // each frequency zone, and returns a length-nfreq array of per-channel variances
-    // (constant within each zone).
-    // If 'noisy' is true, prints the length-nzones per-zone array.
-    ksgpu::Array<double> make_random_freq_variances(bool noisy=false) const;
-
     // Test that frequency_to_index/index_to_frequency and delay_to_frequency/frequency_to_delay
     // are inverses of each other, by sampling random values and checking endpoints.
     // Called by 'python -m pirate_frb test --dd' (special iteration-0 logic in __main__.py).

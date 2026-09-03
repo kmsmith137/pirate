@@ -126,6 +126,48 @@ def test_cpp_predict_dbits():
         assert got == want, (kmax, f0, nf, got, want)
 
 
+def random_freq_variances(config, rng, verbose=False):
+    """Random per-channel input variances, length nfreq, for test_cpp_detrender_free().
+
+    THE QUANTITY UNDER TEST IS LINEAR IN THIS VECTOR, which is what makes its randomization
+    worth thinking about: a linear map that agrees with its reference on a SUBSPACE says
+    nothing about the complement. So the draw has to span all nfreq dimensions. Note what
+    that rules out: one random level PER ZONE, broadcast to the channels of that zone, spans
+    at most five dimensions (make_random() draws 1 to 5 zones) out of several hundred, and a
+    port whose channel indexing is wrong in any way that is constant within a zone would
+    agree with its reference exactly.
+
+    Three ingredients, in decreasing order of how much they matter:
+
+      - PER-CHANNEL JITTER, log-normal about the zone level. This is the part that makes the
+        draw full-rank; without it nothing below matters.
+      - A per-zone level, log-uniform over a drawn 0 to 4 decades. Realistic (zones really do
+        have different noise levels) and it puts the vector's dynamic range on the axis where
+        an equilibration or a relative tolerance would show up.
+      - EXACT ZEROS on a drawn fraction of channels. varmap.hpp says the variances are "NOT
+        required to be positive" and a dead channel is exactly a zero, but a uniform draw
+        never produces one. A third of calls have none, so the all-positive case stays common.
+    """
+    zone_nfreq = [int(z) for z in config.zone_nfreq]
+    nfreq = sum(zone_nfreq)
+
+    span = float(rng.uniform(0.0, 4.0))                       # decades across zones
+    levels = np.exp(rng.uniform(-span*np.log(10.0), 0.0, size=len(zone_nfreq)))
+    v = np.repeat(levels, zone_nfreq)
+    v = v * np.exp(rng.normal(0.0, float(rng.uniform(0.0, 1.5)), size=nfreq))
+
+    pzero = 0.0 if (rng.random() < 1/3) else float(rng.uniform(0.0, 0.3))
+    v[rng.random(nfreq) < pzero] = 0.0
+
+    if verbose:
+        from ..utils import atomic_print
+        nz = int(np.count_nonzero(v))
+        rng_str = (f'{v[v > 0].min():.2e} to {v.max():.2e}' if nz else 'all zero')
+        atomic_print(f'    random_freq_variances: {len(zone_nfreq)} zones, {nfreq} channels,'
+                     f' {nfreq - nz} zeroed, positive entries span {rng_str}')
+    return v
+
+
 def test_cpp_detrender_free(verbose=False):
     """C++ compute_detrender_free_{varfine,varcoarse}() vs python, on a random config.
 
@@ -157,14 +199,12 @@ def test_cpp_detrender_free(verbose=False):
     # _random_config() is what every randomized varmap test draws from, and pirate_frb/tests/
     # coverage.py reports its rates. Drawing here from a fresh make_random() instead would let this
     # test's population drift away from the one the coverage rows describe.
-    from ..varmap.tests import _random_config
+    from ..varmap.tests import _random_config, _rng
 
-    config = _random_config()
+    rng = _rng()
+    config = _random_config(rng)
     nfreq = int(config.get_total_nfreq())
-
-    # NOT required to be positive -- this is defined against VarianceMap.apply(), which does not
-    # require it either -- so let make_random_freq_variances() do whatever it does.
-    v = np.asarray(config.make_random_freq_variances(noisy=True), dtype=np.float64)
+    v = random_freq_variances(config, rng, verbose=verbose)
 
     # The C++ entry points take a plan and the python ones take a config: every C++ caller
     # holds a plan, whereas the python package's public surface is config-keyed throughout.

@@ -250,28 +250,6 @@ Array<double> DedispersionConfig::make_channel_map() const
 }
 
 
-Array<double> DedispersionConfig::make_random_freq_variances(bool noisy) const
-{
-    long nzones = zone_nfreq.size();
-    long nfreq = this->get_total_nfreq();
-    Array<double> ret({nfreq}, af_rhost);
-
-    vector<double> zone_var(nzones);   // per-zone variances (also used by the 'noisy' print)
-    long ifreq = 0;
-    for (long z = 0; z < nzones; z++) {
-        zone_var[z] = rand_uniform(0.0, 1.0);
-        for (long i = 0; i < zone_nfreq[z]; i++)
-            ret.data[ifreq++] = zone_var[z];
-    }
-    xassert_eq(ifreq, nfreq);
-
-    if (noisy)
-        cout << "make_random_freq_variances: per-zone variances = " << tuple_str(zone_var) << endl;
-
-    return ret;
-}
-
-
 void DedispersionConfig::test() const
 {
     this->validate();
