@@ -137,7 +137,7 @@ class VarianceMultiMap:
 
     - ``config`` -- the DedispersionConfig. The SAME object every stored map holds a
       reference to, so the two cannot drift.
-    - ``plan`` -- the Params.minimal() DedispersionPlan the geometry comes from. Likewise
+    - ``plan`` -- the "minimal" DedispersionPlan the geometry comes from. Likewise
       shared with the stored maps. See VarianceMap.make_plan().
     - ``detrender`` -- the Detrender2dParams, or None. Likewise shared.
     - ``num_primary_trees`` (int) -- number of stored maps.

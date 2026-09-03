@@ -45,8 +45,8 @@ def build_trees(config):
     dt = config.time_sample_ms / 1000.0          # seconds per (un-downsampled) sample
     dpud = config.dm_per_unit_delay()
 
-    # Params.minimal(): the plan is wanted only for its trees, and this needs no GPU.
-    plan = DedispersionPlan(config, DedispersionPlan.Params.minimal())
+    # A "minimal" plan: it is wanted only for its trees, and this needs no GPU.
+    plan = DedispersionPlan(config, mega_ringbuf=False, gpu_kernels=False)
 
     trees = []
     for t in plan.trees:

@@ -192,10 +192,10 @@ def _straddle_rate(configs):
 
 
 def _plan(config):
-    """A Params.minimal() DedispersionPlan: this report only needs the trees, and a
+    """A "minimal" DedispersionPlan: this report only needs the trees, and a
     minimal plan needs no GPU."""
 
-    return DedispersionPlan(config, DedispersionPlan.Params.minimal())
+    return DedispersionPlan(config, mega_ringbuf=False, gpu_kernels=False)
 
 
 def _row(label, count, n):

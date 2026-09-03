@@ -53,7 +53,7 @@ from .distance import YTRUE_FLOOR, f, AdmissibilityResult, DistanceEstimate
 ####################################   geometry   ####################################
 
 # The per-tree geometry comes straight from the C++ DedispersionTrees of a DedispersionPlan.
-# Trees are only ever constructed by the plan, so varmap builds a Params.minimal() plan (see
+# Trees are only ever constructed by the plan, so varmap builds a "minimal" plan (see
 # make_plan() below), which needs no CUDA device -- archived variance maps must be analyzable
 # anywhere.
 #
@@ -70,14 +70,15 @@ from .distance import YTRUE_FLOOR, f, AdmissibilityResult, DistanceEstimate
 
 
 def make_plan(config):
-    """The Params.minimal() DedispersionPlan of 'config'. Needs no GPU.
+    """The "minimal" DedispersionPlan of 'config' (mega_ringbuf=False, gpu_kernels=False).
+    Needs no GPU.
 
     Note that ``plan.trees`` is a fresh python list of COPIES on every attribute access
     (pybind11's std::vector caster), so code that needs one tree repeatedly should cache
     ``tree = plan.trees[itree]`` rather than re-indexing in a loop.
     """
     from ..pirate_pybind11 import DedispersionPlan
-    return DedispersionPlan(config, DedispersionPlan.Params.minimal())
+    return DedispersionPlan(config, mega_ringbuf=False, gpu_kernels=False)
 
 
 def _subband_tables(tree):
@@ -220,7 +221,7 @@ class VarianceMap:
     Metadata (enough to re-run the brute-force sweep that produced this map):
 
     - ``config`` -- the DedispersionConfig.
-    - ``plan`` -- the DedispersionPlan the geometry comes from. Params.minimal(), which
+    - ``plan`` -- the DedispersionPlan the geometry comes from. A "minimal" plan, which
       allocates nothing and needs no GPU -- variance maps must be analyzable anywhere.
     - ``detrender`` -- the Detrender2dParams used, or None for "no Detrender2d".
     - ``itree`` (int) -- index of this tree in the plan.

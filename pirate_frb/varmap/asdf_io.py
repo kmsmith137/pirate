@@ -17,7 +17,7 @@ What the format has to do
 -------------------------
 1. Be readable on a machine with NO GPU. That is why the config and the plan are stored as
    yaml strings and the geometry is stored explicitly rather than re-derived. The stored plan
-   is a ``DedispersionPlan.Params.minimal()`` one, which allocates nothing.
+   is a "minimal" one (``mega_ringbuf=False, gpu_kernels=False``), which allocates nothing.
 2. Support every representation: dense or factored, coarse or fine, certified or not.
 3. Store y_true, at FINE granularity -- the only part of A_true that survives
    coarse-graining and low-rank approximation, and the one thing D cannot be computed
@@ -34,7 +34,7 @@ The tree
       format_version:  3
       created:         ISO8601 UTC string
       config_yaml:     str                 # DedispersionConfig.to_yaml_string()
-      plan_yaml:       str                 # DedispersionPlan.to_yaml_string(), Params.minimal()
+      plan_yaml:       str                 # DedispersionPlan.to_yaml_string(), "minimal" plan
       detrender_yaml:  str or None         # Detrender2dParams.to_yaml_string()
       provenance:      dict                # free-form; how the SWEEP was run
       trees:                                # ONE ENTRY PER PRIMARY TREE, keyed by 'gamma'

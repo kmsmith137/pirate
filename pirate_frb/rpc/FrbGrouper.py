@@ -74,7 +74,7 @@ class FrbGrouperInjections:
     - ``dedispersion_config`` (DedispersionConfig) -- producer's dedispersion config (from the handshake).
     - ``dedispersion_plan`` (DedispersionPlan) -- producer's dedispersion plan, rebuilt from
       the two handshake yamls by ``DedispersionPlan.from_yaml_string()``. A
-      ``Params.minimal()`` plan carrying the producer's per-tree ``Dcore``; the batch decoders
+      "minimal" plan carrying the producer's per-tree ``Dcore``; the batch decoders
       below go through it.
     - ``xengine_metadata`` (XEngineMetadata) -- X-engine metadata (from the handshake).
     - ``xengine_metadata_yaml_string`` (str) -- X-engine metadata as a YAML string.

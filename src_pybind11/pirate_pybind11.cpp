@@ -44,17 +44,6 @@ namespace pirate {
 }
 
 
-// Keyword constructor for DedispersionPlan.Params (a plain struct with default member
-// initializers, so pybind11 needs a factory to turn keywords into one).
-static DedispersionPlan::Params _make_plan_params(bool mega_ringbuf, bool gpu_kernels)
-{
-    DedispersionPlan::Params ret;
-    ret.mega_ringbuf = mega_ringbuf;
-    ret.gpu_kernels = gpu_kernels;
-    return ret;
-}
-
-
 // The two decode methods return their results through reference arguments, which python
 // wants as a tuple.
 static py::tuple _plan_decode_argmax(const DedispersionPlan &plan, uint token, long itree,
@@ -73,15 +62,6 @@ static py::tuple _plan_decode_argmax2(const DedispersionPlan &plan, long itree,
     plan.decode_argmax2(itree, fmin, fmax, tlo, thi, p,
                         freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp);
     return py::make_tuple(freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp);
-}
-
-
-static string _plan_params_repr(const DedispersionPlan::Params &p)
-{
-    stringstream ss;
-    ss << "DedispersionPlan.Params(mega_ringbuf=" << (p.mega_ringbuf ? "True" : "False")
-       << ", gpu_kernels=" << (p.gpu_kernels ? "True" : "False") << ")";
-    return ss.str();
 }
 
 
@@ -343,8 +323,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "Most of a plan is low-level GPU data (kernel params, buffer layouts, the ring\n"
         "buffer), which python callers rarely touch. The exception is ``trees``, the\n"
         "per-(primary tree, early trigger) output geometry, and the decoding methods built\n"
-        "on it -- and those are available with no GPU, by passing\n"
-        "``DedispersionPlan.Params.minimal()``. See the Params docstring.\n\n"
+        "on it -- and those are available with no GPU, from a \"minimal\" plan::\n\n"
+        "    plan = DedispersionPlan(config, mega_ringbuf=False, gpu_kernels=False)\n\n"
+        "Both constructor flags default to True, which builds a complete plan and needs a\n"
+        "CUDA device; see the constructor docstring for what each one turns off.\n\n"
         "The plan is immutable once constructed and is shared between dedisperser instances.\n\n"
         "Example::\n\n"
         "    config = DedispersionConfig.from_yaml('config.yaml')\n"
@@ -353,38 +335,34 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "    for i, tree in enumerate(plan.trees):\n"
         "        print(f'Tree {i}: primary_tree_index={tree.primary_tree_index}, dm_range=[{tree.dm_min:.1f}, {tree.dm_max:.1f}]')");
 
-    // DedispersionPlan.Params. Registered before the plan's __init__ is bound below, so
-    // that the C++ default argument Params() can be converted at binding time.
-    py::class_<DedispersionPlan::Params>(plan_cls, "Params",
-        "Selects how much of a DedispersionPlan gets initialized.\n\n"
-        "The default (both flags True) is a 'complete' plan. Turning a flag off leaves\n"
-        "members uninitialized, in exchange for a plan that is cheaper -- and, with\n"
-        "``mega_ringbuf=False``, constructible with no CUDA device at all. See minimal().")
-          .def(py::init(&_make_plan_params),
-               py::arg("mega_ringbuf") = true,
-               py::arg("gpu_kernels") = true)
-          .def_readwrite("mega_ringbuf", &DedispersionPlan::Params::mega_ringbuf,
-               "If False, then DedispersionPlan.mega_ringbuf is None. (Constructing a\n"
-               "MegaRingbuf allocates page-locked host memory, so it needs a CUDA device;\n"
-               "this is the flag that decides whether a plan can be built without one.)")
-          .def_readwrite("gpu_kernels", &DedispersionPlan::Params::gpu_kernels,
-               "If False, then all gpu kernel params (tree_gridding_kernel_params ...\n"
-               "h2h_copy_kernel_params) are uninitialized. Requires mega_ringbuf=True.")
-          .def_static("minimal", &DedispersionPlan::Params::minimal,
-               "Both flags False: config-derived scalars, stage1 ranks and 'trees' only.\n"
-               "Needs no CUDA device, and is how GPU-less code (pirate_frb.varmap, the\n"
-               "grouper) gets at the dedispersion trees.")
-          .def("__repr__", &_plan_params_repr)
-    ;
-
     plan_cls
-          .def(py::init<const DedispersionConfig &, const DedispersionPlan::Params &>(),
-               py::arg("config"), py::arg("params") = DedispersionPlan::Params(),
+          // The C++ constructor takes a DedispersionPlan::Params, but that struct has only
+          // two members, so python spells them as keyword arguments instead of wrapping it.
+          .def(py::init([](const DedispersionConfig &config, bool mega_ringbuf, bool gpu_kernels) {
+              DedispersionPlan::Params params;
+              params.mega_ringbuf = mega_ringbuf;
+              params.gpu_kernels = gpu_kernels;
+              return new DedispersionPlan(config, params);
+          }),
+               py::arg("config"), py::arg("mega_ringbuf") = true, py::arg("gpu_kernels") = true,
                "Create a DedispersionPlan from a configuration.\n\n"
+               "The two flags select how much of the plan gets initialized. The default\n"
+               "(both True) is a 'complete' plan, which needs a CUDA device. Turning a flag\n"
+               "off leaves members uninitialized, in exchange for a plan that is cheaper --\n"
+               "and, with ``mega_ringbuf=False``, constructible with no CUDA device at all.\n\n"
+               "Both flags False gives a \"minimal\" plan: config-derived scalars, stage1\n"
+               "ranks and ``trees`` only. This is how GPU-less code (``pirate_frb.varmap``,\n"
+               "the grouper) gets at the dedispersion trees::\n\n"
+               "    plan = DedispersionPlan(config, mega_ringbuf=False, gpu_kernels=False)   # \"minimal\" plan\n\n"
                "Args:\n"
                "    config: DedispersionConfig object (must be validated)\n"
-               "    params: DedispersionPlan.Params, selecting how much of the plan to build.\n"
-               "        Defaults to a complete plan, which needs a CUDA device.")
+               "    mega_ringbuf: if False, then ``DedispersionPlan.mega_ringbuf`` is None.\n"
+               "        (Constructing a MegaRingbuf allocates page-locked host memory, so it\n"
+               "        needs a CUDA device; this is the flag that decides whether a plan can\n"
+               "        be built without one.)\n"
+               "    gpu_kernels: if False, then all gpu kernel params\n"
+               "        (``tree_gridding_kernel_params`` ... ``h2h_copy_kernel_params``) are\n"
+               "        uninitialized. Requires ``mega_ringbuf=True``.")
           .def_readonly("config", &DedispersionPlan::config,
                "The DedispersionConfig used to create this plan")
           .def_readonly("dtype", &DedispersionPlan::dtype,
@@ -456,16 +434,14 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    zones: Include the per-clag mega_ringbuf host/gpu zone breakdown\n\n"
                "Returns:\n"
                "    YAML string representation of the plan")
-          .def_readonly("params", &DedispersionPlan::params,
-               "The DedispersionPlan.Params this plan was constructed with.")
           .def_static("from_yaml_string", &DedispersionPlan::from_yaml_string,
                py::arg("config"), py::arg("plan_yaml"),
                "Rebuild a producer's plan, for a consumer that may be running a different\n"
                "pirate_frb build.\n\n"
-               "Returns a ``Params.minimal()`` plan built from ``config``, cross-checked\n"
-               "field by field against the yaml; a disagreement raises, naming the field and\n"
-               "both values. Nothing is adopted from the yaml: a plan is a pure function of\n"
-               "its config.\n\n"
+               "Returns a \"minimal\" plan (see the constructor) built from ``config``,\n"
+               "cross-checked field by field against the yaml; a disagreement raises, naming\n"
+               "the field and both values. Nothing is adopted from the yaml: a plan is a pure\n"
+               "function of its config.\n\n"
                "Decoding the producer's out_argmax tokens additionally needs its per-tree\n"
                "Dcore, which is a property of its compiled kernels rather than of the plan\n"
                "and travels as its own handshake field (see FrbGrouper.dcores).\n\n"

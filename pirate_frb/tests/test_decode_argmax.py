@@ -61,7 +61,7 @@ _PLAN_INT_KEYS = ('ntrees', 'nfreq', 'nt_in', 'toplevel_tree_rank', 'num_primary
 
 
 def _test_plan_yaml(config):
-    """Round-trip of a Params.minimal() plan's yaml, which needs no GPU.
+    """Round-trip of a "minimal" plan's yaml, which needs no GPU.
 
     This is the variance-map file's route: a GPU-less process writes plan.to_yaml_string()
     and a reader recovers it with from_yaml_string(). WHAT THIS CAN AND CANNOT SHOW:
@@ -73,7 +73,7 @@ def _test_plan_yaml(config):
     checked would pass (i) and (ii) both.
     """
 
-    p = DedispersionPlan(config, DedispersionPlan.Params.minimal())
+    p = DedispersionPlan(config, mega_ringbuf=False, gpu_kernels=False)
     s = p.to_yaml_string()
 
     # A minimal plan has no MegaRingbuf, so its yaml is the plan yaml minus that one key.

@@ -283,9 +283,9 @@ def _check_subband_property(config, label):
     assertion -- and a stricter one than a set comparison, which does not see levels.
     """
 
-    # Params.minimal(): subband geometry is pure arithmetic, and we do not want to require
+    # A "minimal" plan: subband geometry is pure arithmetic, and we do not want to require
     # that every tree's cdd2 kernel is compiled into this build.
-    plan = DedispersionPlan(config, DedispersionPlan.Params.minimal())
+    plan = DedispersionPlan(config, mega_ringbuf=False, gpu_kernels=False)
 
     itrees = {}
     for (itree, tree) in enumerate(plan.trees):
