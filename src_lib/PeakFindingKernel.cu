@@ -839,8 +839,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     long simd_width = xdiv(32, key.dtype.nbits);
     long Tinner = key.Tinner;
 
-    long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : ((32 * simd_width) << rand_int(0,3));
-    long nt_in_divisor = max(32*simd_width, nt_in_per_wt);
+    auto [nt_in_per_wt, nt_in_divisor] = random_nt_in_granularity(simd_width, Tinner);
 
     // THE BUDGET IS ON THE INPUT ARRAY IN ELEMENTS, not on the shape product. The reference
     // kernel's arrays are (shape product) x E x M elements -- cpu_in_large below is
@@ -851,15 +850,17 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     // magnitude from key to key.
     constexpr long input_element_budget = 4*1000*1000;   // ~16 MB of float32 input, ~4x that in all
     FrequencySubbands fs_key(key.subband_counts);
-    long budget = max(input_element_budget / (nt_in_divisor * pow2(K) * fs_key.M), 1L);
+    long budget = input_element_budget / (nt_in_divisor * pow2(K) * fs_key.M);
 
-    auto v = ksgpu::random_integers_with_bounded_product(6, budget);
-    long nchunks = v[0];
-    long nt_in_per_chunk = nt_in_divisor * v[1];
-    long beams_per_batch = v[2];
-    long total_beams = v[2] * v[3];
-    long ndm_wt = round_down_to_power_of_two(v[4]);
-    long ndm_out = ndm_wt * round_down_to_power_of_two(v[5]);
+    // Two extra factors of the same product: the weight-array DM count and the ratio by
+    // which the output DM count exceeds it. Both index arrays the budget has to cover.
+    RandomKernelShape shape = random_kernel_shape(budget, nt_in_divisor, /*nextra=*/ 2);
+    long nchunks = shape.nchunks;
+    long nt_in_per_chunk = shape.nt_in_per_chunk;
+    long beams_per_batch = shape.beams_per_batch;
+    long total_beams = shape.total_beams;
+    long ndm_wt = round_down_to_power_of_two(shape.extra[0]);
+    long ndm_out = ndm_wt * round_down_to_power_of_two(shape.extra[1]);
 
     long nt_out_per_chunk = xdiv(nt_in_per_chunk, key.Dout);
     long nt_wt_per_chunk = xdiv(nt_in_per_chunk, nt_in_per_wt);

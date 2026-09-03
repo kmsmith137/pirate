@@ -350,20 +350,55 @@ inline long ReferenceTree::dedisperse_1d(
 // ReferenceTree::test_basics()
 
 
+// The six numbers both tests below draw, from ONE bounded product so that the total array
+// size is capped however the draw splits it -- which is the property each test needs and
+// neither can get from six independent draws.
+//
+// Shared because a v[] index means nothing on its own: with the mapping written out in each
+// test, the two could drift into covering different shapes with nothing to make that
+// visible. The last two come back as RANKS (log2 of the drawn factor), which is what both
+// callers want; the CLAMP stays at the call site, since the two tests bound their ranks
+// differently and for different reasons.
+struct RandomTreeShape
+{
+    long nchunks;
+    long nbeams;
+    long ntime;      // time samples per chunk
+    long nspec;      // "inner" spectator indices
+    long amb_rank;
+    long ds_rank;    // the caller's downsampling rank, before any offset it adds
+};
+
+
+static RandomTreeShape _random_tree_shape(long bound)
+{
+    vector<long> v = ksgpu::random_integers_with_bounded_product(6, bound);
+
+    RandomTreeShape s;
+    s.nchunks = v[0];
+    s.nbeams = v[1];
+    s.ntime = v[2];
+    s.nspec = v[3];
+    s.amb_rank = long(log2(v[4]) + 0.5);
+    s.ds_rank = long(log2(v[5]) + 0.5);
+    return s;
+}
+
+
 // Static member function
 void ReferenceTree::test_basics()
 {
-    vector<long> v = ksgpu::random_integers_with_bounded_product(6, 300000);
+    RandomTreeShape s = _random_tree_shape(300000);
 
-    long N = v[0];   // number of chunks
-    long B = v[1];   // number of beams
-    long T = v[2];   // number of time samples per chunk
-    long S = v[3];   // number of "inner" spectator indices
-    long amb_rank = long(log2(v[4]) + 0.5);
-    long dd_rank = long(log2(v[5]) + 0.5);
+    long N = s.nchunks;
+    long B = s.nbeams;
+    long T = s.ntime;
+    long S = s.nspec;
 
-    amb_rank = min(amb_rank, 8L);
-    dd_rank = min(dd_rank, 8L);
+    // Clamped at 8: the reference implementation is O(2^rank) per chunk in both ranks, and
+    // the bounded product alone would let one of them eat the whole budget.
+    long amb_rank = min(s.amb_rank, 8L);
+    long dd_rank = min(s.ds_rank, 8L);
 
     long A = pow2(amb_rank);
     long D = pow2(dd_rank);
@@ -471,14 +506,17 @@ void ReferenceTree::test_basics()
 void ReferenceTree::test_subbands()
 {
     FrequencySubbands fs = FrequencySubbands::make_random();
-    auto v = ksgpu::random_integers_with_bounded_product(6, 100000/fs.M);
+    RandomTreeShape s = _random_tree_shape(100000/fs.M);
 
-    long nchunks = v[0];
-    long B = v[1];  // number of beams
-    long T = v[2];  // time samples per chunk
-    long S = v[3];  // spectator indices
-    long amb_rank = long(log2(v[4]) + 0.5);
-    long dd_rank = fs.pf_rank + long(log2(v[5]) + 0.5);
+    long nchunks = s.nchunks;
+    long B = s.nbeams;
+    long T = s.ntime;
+    long S = s.nspec;
+    long amb_rank = s.amb_rank;
+
+    // The drawn rank is the DOWNSAMPLING rank; the subband tree needs pf_rank on top of it,
+    // or the subtrees below have nothing to dedisperse.
+    long dd_rank = fs.pf_rank + s.ds_rank;
 
     // Strides for shape (B,A,Din,T*S) dd array, and shape (B,Dpf,M,T*S) output array.
     // Reminder: make_random_strides() is defined in ksgpu/test_utils.hpp.

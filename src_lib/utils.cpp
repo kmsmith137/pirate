@@ -688,4 +688,42 @@ string hex_str(uint x)
 }
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// Shape draws shared by the kernel test_random()s. See utils.hpp for what these are for.
+
+
+RandomKernelShape random_kernel_shape(long budget, long nt_in_divisor, int nextra)
+{
+    xassert_ge(nt_in_divisor, 1L);
+    xassert_ge(nextra, 0);
+
+    // At least 1, so that a budget too small for even the minimum shape still returns a
+    // legal one rather than throwing. The caller who cares about that has already scaled
+    // its budget by the per-key factors; this is the floor underneath.
+    long b = max(budget, 1L);
+    vector<long> v = ksgpu::random_integers_with_bounded_product(4 + nextra, b);
+
+    RandomKernelShape ret;
+    ret.nchunks = v[0];
+    ret.nt_in_per_chunk = nt_in_divisor * v[1];
+    ret.beams_per_batch = v[2];
+    ret.num_batches = v[3];
+    ret.total_beams = v[2] * v[3];
+    ret.extra.assign(v.begin() + 4, v.end());
+    return ret;
+}
+
+
+std::pair<long,long> random_nt_in_granularity(long simd_width, long Tinner)
+{
+    xassert_ge(simd_width, 1L);
+    xassert_ge(Tinner, 1L);
+
+    long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width, Tinner)
+                                     : ((32 * simd_width) << rand_int(0,3));
+    return { nt_in_per_wt, max(32*simd_width, nt_in_per_wt) };
+}
+
+
 }  // namespace pirate

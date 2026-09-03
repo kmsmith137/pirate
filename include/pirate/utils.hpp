@@ -2,6 +2,8 @@
 #define _PIRATE_UTILS_HPP
 
 #include <string>
+#include <vector>
+#include <utility>
 #include <sstream>
 #include <string_view>
 #include <cuda_runtime.h>   // cudaStream_t
@@ -189,6 +191,51 @@ extern void dedisperse_non_incremental(ksgpu::Array<float> &arr, long nspec);
 extern long dedispersion_delay(int rank, long freq, long dm_brev);
 
 extern std::string hex_str(uint x);
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Shape draws shared by the kernel test_random()s.
+
+
+// The streaming shape that every kernel test_random() needs: how many chunks, how long a
+// chunk, how many beams per batch, how many batches. All of it comes out of ONE bounded
+// product, so the total array footprint stays under 'budget' however the draw splits it --
+// which is the property each of these tests needs and none can get from four independent
+// draws.
+//
+// Shared because a v[] index means nothing on its own -- three kernel tests need the same
+// index-to-meaning mapping, and a private copy of it in each would let them drift into
+// covering different shapes with nothing to make that visible.
+//
+// 'nt_in_divisor' is the granularity nt_in_per_chunk must be a multiple of -- 32 for a
+// float32 segment, or whatever random_nt_in_granularity() returned. 'nextra' asks for that
+// many further factors OF THE SAME PRODUCT, returned in 'extra': a caller uses them for the
+// per-kernel quantities that also have to fit inside the budget (an ambient rank, a
+// weight-array DM count), and taking them from the same product is what keeps the budget a
+// budget.
+struct RandomKernelShape
+{
+    long nchunks = 0;
+    long nt_in_per_chunk = 0;      // a multiple of the caller's nt_in_divisor
+    long beams_per_batch = 0;
+    long num_batches = 0;
+    long total_beams = 0;          // = beams_per_batch * num_batches
+    std::vector<long> extra;       // 'nextra' more factors of the same bounded product
+};
+
+extern RandomKernelShape random_kernel_shape(long budget, long nt_in_divisor, int nextra = 0);
+
+
+// The input-time granularity the peak-finding and cdd2 kernels impose, as
+// {nt_in_per_wt, nt_in_divisor}.
+//
+// nt_in_per_wt is the number of input samples one weight-array entry covers. A kernel with
+// Tinner > 1 has no freedom there -- the weight stride is fixed by the register layout -- so
+// the only randomized case is Tinner == 1, where the kernel accepts any power-of-two multiple
+// of a segment and the draw picks one. nt_in_divisor is then the granularity
+// PeakFindingKernelParams::validate() requires of nt_in.
+extern std::pair<long,long> random_nt_in_granularity(long simd_width, long Tinner);
 
 
 }  // namespace pirate

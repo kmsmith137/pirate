@@ -1257,14 +1257,17 @@ void GpuSbDedispersionKernel::test_random()
     // was drawn from the registry.
 
     long m_factor = std::max(1L, fs.M / pow2(pf_rank));
-    auto v = ksgpu::random_integers_with_bounded_product(5, 30000 / (pow2(dd_rank) * m_factor));
 
-    long nchunks = v[0];
-    long nt_in_per_chunk = 32 * v[1];   // multiple of nt_per_segment
-    long beams_per_batch = v[2];
-    long num_batches = v[3];
-    long total_beams = beams_per_batch * num_batches;
-    long amb_rank = min(8L, long(bit_length(v[4]) - 1));   // = floor(log2(v[4]))
+    // One extra factor of the same product for the ambient rank; nt_in_divisor is 32, the
+    // float32 segment length.
+    RandomKernelShape shape = random_kernel_shape(30000 / (pow2(dd_rank) * m_factor),
+                                                  /*nt_in_divisor=*/ 32, /*nextra=*/ 1);
+    long nchunks = shape.nchunks;
+    long nt_in_per_chunk = shape.nt_in_per_chunk;
+    long beams_per_batch = shape.beams_per_batch;
+    long num_batches = shape.num_batches;
+    long total_beams = shape.total_beams;
+    long amb_rank = min(8L, long(bit_length(shape.extra[0]) - 1));   // = floor(log2(...))
     bool is_downsampled_tree = rand_bool();
 
     // Uncomment one or more lines below, to make the test instance smaller.

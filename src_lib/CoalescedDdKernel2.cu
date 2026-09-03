@@ -311,16 +311,18 @@ void CoalescedDdKernel2::test_random()
     long dd_rank1 = dd_rank - (dd_rank / 2);
     long K = dd_rank1 - pf_rank;
 
-    long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : ((32 * simd_width) << rand_int(0,3));
-    long nt_in_divisor = max(32*simd_width, nt_in_per_wt);
+    auto [nt_in_per_wt, nt_in_divisor] = random_nt_in_granularity(simd_width, Tinner);
 
-    auto v = ksgpu::random_integers_with_bounded_product(5, 30000 / pow2(dd_rank));
-    long nchunks = v[0];
-    long nt_in_per_chunk = nt_in_divisor * v[1];
-    long beams_per_batch = v[2];
-    long num_batches = v[3];
-    long total_beams = beams_per_batch * num_batches;
-    long amb_rank = min(8L, long(bit_length(v[4]) - 1));   // = floor(log2(v[4]))
+    // One extra factor of the same product for the ambient rank, so that a large ambient
+    // axis costs the draw the same as a long chunk would.
+    RandomKernelShape shape = random_kernel_shape(30000 / pow2(dd_rank), nt_in_divisor,
+                                                  /*nextra=*/ 1);
+    long nchunks = shape.nchunks;
+    long nt_in_per_chunk = shape.nt_in_per_chunk;
+    long beams_per_batch = shape.beams_per_batch;
+    long num_batches = shape.num_batches;
+    long total_beams = shape.total_beams;
+    long amb_rank = min(8L, long(bit_length(shape.extra[0]) - 1));   // = floor(log2(...))
     long lg_ndm_out = amb_rank + dd_rank - dd_rank1;   // one output DM per warp
     long lg_ndm_wt = rand_int(0, lg_ndm_out+1);
     bool is_downsampled_tree = rand_bool();
