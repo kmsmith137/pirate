@@ -1570,11 +1570,27 @@ void GpuDedisperser::test_random()
     
     long ntree = pow2(config.toplevel_tree_rank);
     long nt_chunk = config.time_samples_per_chunk;
-    long min_nchunks = (ntree / nt_chunk) + 2;
+
+    // min_nchunks IS A FLOOR ON THE DRAW, not just on the range. It is the number of chunks
+    // the DEEPEST tree lag needs to propagate all the way through the ring buffer, so a
+    // shorter run ends with the deepest signal still in flight: every assertion still holds,
+    // but the pipeline being checked is shallower than the one the test was sized for.
+    // Drawing from 1 left that to chance -- measured, the floor was reached on 46% of
+    // configs on average, and on under 20% of the worst tenth.
+    //
+    // THE DEEPEST LAG IS 2^(toplevel_tree_rank + npri - 1), not 2^toplevel_tree_rank:
+    // primary tree p is time-downsampled by 2^p, so its delay in FULL-RESOLUTION samples
+    // (which is what nt_chunk counts) carries that factor. Same 2^(npri-1) that appears in
+    // DedispersionConfig::make_random()'s nt_divisor, for the same reason.
+    long deepest_lag = pow2(config.toplevel_tree_rank + config.num_primary_trees() - 1);
+    long min_nchunks = (deepest_lag / nt_chunk) + 2;
+
+    // A MEMORY budget, and it loses to the floor when the two disagree: a test that does not
+    // reach the deepest lag is not worth running cheaply.
     long max_nchunks = (1024*1024) / (ntree * nt_chunk * config.beams_per_gpu);
     max_nchunks = max(min_nchunks, max_nchunks);
 
-    long nchunks = ksgpu::rand_int(1, max_nchunks+1);
+    long nchunks = ksgpu::rand_int(min_nchunks, max_nchunks+1);
 
     long nfreq = config.get_total_nfreq();
     long beams_per_batch = config.beams_per_batch;
