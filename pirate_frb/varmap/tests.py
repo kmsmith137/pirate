@@ -1367,7 +1367,7 @@ def test_factored_validation(K=None):
 
     rng = _rng()
     config = _random_config(rng)
-    K = _draw_K(rng, lo=2) if K is None else K      # the rejections below perturb a column
+    K = _draw_K(rng, lo=3) if K is None else K      # pinned_columns=[1, 1] and [0, 2] below
     m, _ = _factored_map(config, 0, rng, K=K)
     Q, mid, W = np.asarray(m.Q), np.asarray(m.mid), np.asarray(m.W)
     nb, nf = m.nbeta, m.nfreq
@@ -4280,13 +4280,10 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
                                  compute_detrender_free_varfine)
 
     configs = []
+    rng = _rng()
 
     # Random draws, cost-bounded. Four details here cost time to rediscover:
     #
-    #  - ALL THREE beam fields have to be set. The sweep requires beams_per_gpu ==
-    #    beams_per_batch, but setting only those two leaves num_active_batches at its random
-    #    value and validate() then fails a C++ assertion. Measured: with only the two beam
-    #    fields set, 55% of draws are rejected and every rejection is that assertion.
     #  - LEAVE gpu_valid AT ITS DEFAULT True. _GpuSweep has a third requirement the two flags
     #    below do not cover -- every tree needs stage-2 dd_rank >= 3 -- and a config drawn from
     #    the cdd2 registry satisfies it for free. With gpu_valid=False it fails on 80% of draws.
@@ -4295,24 +4292,16 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     #    and by the MegaRingbuf host-segment count), and filtering the sample down to the
     #    configs it happens to accept would bias it toward exactly the geometry already best
     #    covered elsewhere. With them, 60 of 60 draws were usable.
-    #  - Redraw rather than downscale: an over-budget config is discarded whole.
-    #  - DO NOT REPLACE THE THREE ASSIGNMENTS WITH make_random(single_beam=True). That flag
-    #    exists and does exactly what the three lines do, but it also gives the whole chunk
-    #    budget to time_samples_per_chunk instead of splitting it three ways: measured, the
-    #    median goes 256 -> ~4000, P(ndata_chunks == 1) goes 0.28 -> 0.89, and the predicted
-    #    sweep work goes up 4x. Streaming across chunk boundaries is most of what the sweep
-    #    comparisons check, so the short chunk is the corner worth sampling here.
+    #  - The beam fields, the redraw-whole rule and why this is NOT single_beam=True are all
+    #    in _draw_sweep_case(). Measured acceptance here: 0.86, at 1.9 ms per attempt.
     for _ in range(nrandom):
-        while True:
-            config = DedispersionConfig.make_random(max_toplevel_rank=9, max_early_triggers=2,
-                                                    force_float32=(device == 'gpu'),
-                                                    no_host_mega_ringbuf=(device == 'gpu'))
-            config.beams_per_gpu = 1
-            config.beams_per_batch = 1
-            config.num_active_batches = 1
-            config.validate()
-            if _sweep_work(_SweepGeometry(config)) <= SWEEP_WORK_BUDGET:
-                break
+        config, _dp, _n = _draw_sweep_case(
+            rng,
+            lambda r: DedispersionConfig.make_random(max_toplevel_rank=9, max_early_triggers=2,
+                                                     force_float32=(device == 'gpu'),
+                                                     no_host_mega_ringbuf=(device == 'gpu')),
+            lambda geom, cfg: _sweep_work(geom), SWEEP_WORK_BUDGET,
+            label='test_multimap_vs_sweep')
         configs.append((config, 'random'))
 
     worst, n_straddled, ntrees = 0.0, 0, 0
@@ -4320,7 +4309,6 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     worst_p1, n_p1_pairs, n_nontrivial = 0.0, 0, 0
     worst_vf, n_vf = 0.0, 0
     worst_leak = 0.0
-    rng = _rng()
 
     for (config, label) in configs:
         As = sweep_all_trees_dense(config, device=device)
@@ -4497,6 +4485,73 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
 # run_once() are where the per-iteration / every-tenth / once split is decided.
 
 
+def _draw_sweep_case(rng, draw_config, cost, budget, *, detrender=False, accept=None,
+                     max_attempts=500, label='_draw_sweep_case'):
+    """Draw a (config, detrender) pair for one of the sweep tests, under a cost cap.
+
+    THE FOUR SWEEP TESTS ALL NEED THE SAME LOOP. What varies between them is genuinely
+    per-test -- the make_random() settings, the cost model, the budget, whether there is a
+    detrender, and what structural property the test needs -- so those are arguments; the
+    loop, the beam-field boilerplate, the RuntimeError handling and the exhaustion report are
+    not, and live here.
+
+    Returns (config, dparams, nattempts). RAISES on exhaustion rather than looping, with the
+    implied acceptance bound in the message: a filter that has quietly gone to zero is worth
+    a message rather than a hang.
+
+    Arguments:
+
+      draw_config(rng) -> config.  Each caller's own make_random() settings; see each.
+
+      cost(geom, config) -> number, compared against 'budget'.  Evaluated on the geometry
+        THIS FUNCTION built, with the detrender it drew, so the number the budget sees is the
+        one the test will pay.
+
+      detrender: False = never build one, True = always, None = coin flip.  When one is built
+        its own parameters are drawn too (see _make_test_detrender).
+
+      accept(config) -> bool, optional.  A structural property make_random() cannot be asked
+        for -- an early trigger, a non-contiguous multiplet map -- checked after the beam
+        fields are set and before the (more expensive) geometry is built.
+
+    ALL THREE BEAM FIELDS ARE SET TO 1 HERE.  The sweep requires beams_per_gpu ==
+    beams_per_batch, and setting only those two leaves num_active_batches at its drawn value,
+    which fails a C++ assertion inside validate() -- measured, on 55% of draws.  Note this is
+    NOT make_random(single_beam=True): that flag does the same three assignments but also
+    gives the whole chunk budget to time_samples_per_chunk, which takes the median from 256 to
+    ~4000, P(ndata_chunks == 1) from 0.28 to 0.89, and the predicted sweep work up 4x.
+    Streaming across chunk boundaries is most of what these comparisons check, so the short
+    chunk is the corner worth keeping.
+
+    Rejection is REDRAW-WHOLE, not downscale: an over-budget config is discarded outright.
+    """
+    from .brute_force import _SweepGeometry
+
+    for nattempt in range(1, int(max_attempts) + 1):
+        config = draw_config(rng)
+        config.beams_per_gpu = 1
+        config.beams_per_batch = 1
+        config.num_active_batches = 1
+        config.validate()
+
+        if (accept is not None) and not accept(config):
+            continue
+
+        want_det = (rng.random() < 0.5) if (detrender is None) else bool(detrender)
+        try:
+            dparams = _make_test_detrender(config, rng=rng) if want_det else None
+            geom = _SweepGeometry(config, detrender=dparams)
+        except RuntimeError:
+            continue      # e.g. nt_in too small to hold the detrended one-hot in one chunk
+
+        if cost(geom, config) <= budget:
+            return config, dparams, nattempt
+
+    raise RuntimeError(f'{label}: no draw met the budget in {max_attempts} attempts '
+                       f'(acceptance rate is below {1.0/max_attempts:.1e}; the filters or the '
+                       f'budget have drifted)')
+
+
 def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3, rng=None):
     """A Detrender2dParams matching 'config', for the sweep tests.
 
@@ -4629,34 +4684,18 @@ def test_sweep_column_norms_random(verbose=True, max_attempts=500):
     '-n 100' run that is about five of each, on ten different geometries.
     """
 
-    from .brute_force import _SweepGeometry
-
     rng = _rng()
-    for _ in range(max_attempts):
-        config = _random_config(rng)
-        # The sweep requires all three beam fields to agree; make_random() does not.
-        config.beams_per_gpu = config.beams_per_batch = 1
-        config.num_active_batches = 1
-        detrender = bool(rng.random() < 0.5)
-        try:
-            config.validate()
-            dparams = _make_test_detrender(config, rng=rng) if detrender else None
-            geom = _SweepGeometry(config, detrender=dparams)
-        except RuntimeError:
-            continue
 
-        cost = ((geom.ntime + geom.nt_in) * (geom.ndata_chunks + 3)
+    def _cost(geom, config):
+        return ((geom.ntime + geom.nt_in) * (geom.ndata_chunks + 3)
                 * sum(1 << r for r in geom.tree_r))
-        if cost <= COLUMN_NORMS_BUDGET:
-            # 'dparams', not the coin flip: the cost above is priced on this exact
-            # detrender, and the detrender is drawn -- so letting the test build a second one
-            # would run a geometry the budget never saw.
-            test_sweep_column_norms(config=config, detrender=dparams, nifreq=1,
-                                    verbose=verbose)
-            return
 
-    atomic_print('    test_sweep_column_norms_random: no draw came in under'
-                 f' COLUMN_NORMS_BUDGET={COLUMN_NORMS_BUDGET:.1e}; SKIPPED')
+    # detrender=None is the coin flip. Measured acceptance 0.34, at 1.2 ms per attempt.
+    config, dparams, _n = _draw_sweep_case(
+        rng, _random_config, _cost, COLUMN_NORMS_BUDGET, detrender=None,
+        max_attempts=max_attempts, label='test_sweep_column_norms_random')
+
+    test_sweep_column_norms(config=config, detrender=dparams, nifreq=1, verbose=verbose)
 
 
 def test_sweep_column_norms(config, detrender=None, nifreq=2, verbose=True):
@@ -4821,10 +4860,7 @@ GPU_VS_CPU_WORK_BUDGET = 1.5e8
 def _draw_gpu_vs_cpu_case(max_attempts=500, nbeams=None, detrender=None, rng=None):
     """A random (config, detrender, nbeams) for test_sweep_gpu_vs_cpu(), under the cost cap.
 
-    Returns None if no draw came in under budget, which the caller reports rather than
-    failing on: an empty draw is a coverage problem, not a bug in the code under test.
-
-    THE THREE AXES ARE DRAWN SEPARATELY BECAUSE ONLY ONE OF THEM IS A CONFIG PROPERTY.
+    Returns (config, dparams, nbeams). THE THREE AXES ARE DRAWN SEPARATELY BECAUSE ONLY ONE OF THEM IS A CONFIG PROPERTY.
     'nbeams' and the detrender are arguments this test supplies -- a random config has
     nothing to say about either -- and both matter: the lds kernel uses one beam stride for
     input and output, so a stride error cannot show at nbeams == 1, and the detrender is what
@@ -4833,47 +4869,42 @@ def _draw_gpu_vs_cpu_case(max_attempts=500, nbeams=None, detrender=None, rng=Non
     latter in essentially every draw since zone_nfreq is drawn per zone in [2^r/4, 2^r] over
     1..5 zones.
 
-    The make_random() flags are test_multimap_vs_sweep()'s, for its reasons: all three beam
-    fields have to be set or validate() fails a C++ assertion, and the two flags are what
-    make a random config usable by the GPU sweep at all.
+    The make_random() flags are test_multimap_vs_sweep()'s, for its reasons: the two flags
+    are what make a random config usable by the GPU sweep at all. Measured acceptance 0.73, at
+    0.35 ms per attempt.
+
+    THE DETRENDER IS RETURNED, not rebuilt by the caller: _draw_sweep_case() prices the cost
+    model on the exact object it built, and since the detrender is drawn, a second
+    _make_test_detrender() call would give a different one and the test would run a geometry
+    the budget never saw.
     """
 
     from ..pirate_pybind11 import DedispersionConfig
-    from .brute_force import _SweepGeometry
 
     rng = _rng() if rng is None else rng
+    nb = int(rng.integers(1, 5)) if (nbeams is None) else int(nbeams)
 
-    for _ in range(max_attempts):
-        config = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=2,
-                                                force_float32=True, no_host_mega_ringbuf=True)
-        config.beams_per_gpu = 1
-        config.beams_per_batch = 1
-        config.num_active_batches = 1
-        config.validate()
-
-        det = bool(np.random.randint(2)) if (detrender is None) else bool(detrender)
-        nb = int(np.random.randint(1, 5)) if (nbeams is None) else int(nbeams)
-
+    def _accept(config):
         # The test raises beams_per_{gpu,batch} to nbeams before the GPU sweep, so a draw
         # whose config cannot carry that many is rejected here rather than midway through.
         try:
             config.beams_per_gpu = config.beams_per_batch = nb
             config.validate()
-            config.beams_per_gpu = config.beams_per_batch = 1
-            config.validate()
-            dparams = _make_test_detrender(config, rng=rng) if det else None
-            geom = _SweepGeometry(config, detrender=dparams)
         except RuntimeError:
-            continue
+            return False
+        finally:
+            config.beams_per_gpu = config.beams_per_batch = 1
+        config.validate()
+        return True
 
-        if _sweep_work(geom) <= GPU_VS_CPU_WORK_BUDGET:
-            # THE DETRENDER IS RETURNED, not rebuilt by the caller. The cost model above is
-            # priced on this exact object, and the detrender is drawn -- so a second
-            # _make_test_detrender() call would give a different one, and the test would run
-            # a geometry the budget never saw.
-            return config, dparams, nb
-
-    return None
+    config, dparams, _n = _draw_sweep_case(
+        rng,
+        lambda r: DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=2,
+                                                 force_float32=True, no_host_mega_ringbuf=True),
+        lambda geom, cfg: _sweep_work(geom), GPU_VS_CPU_WORK_BUDGET,
+        detrender=detrender, accept=_accept, max_attempts=max_attempts,
+        label='_draw_gpu_vs_cpu_case')
+    return config, dparams, nb
 
 
 def test_sweep_gpu_vs_cpu_random(verbose=True, nbeams=None, detrender=None):
@@ -4888,13 +4919,7 @@ def test_sweep_gpu_vs_cpu_random(verbose=True, nbeams=None, detrender=None):
     (run_once()).
     """
 
-    case = _draw_gpu_vs_cpu_case(nbeams=nbeams, detrender=detrender)
-    if case is None:
-        atomic_print('    test_sweep_gpu_vs_cpu_random: no draw came in under'
-                     f' GPU_VS_CPU_WORK_BUDGET={GPU_VS_CPU_WORK_BUDGET:.1e}; SKIPPED')
-        return
-
-    config, dparams, nbeams = case
+    config, dparams, nbeams = _draw_gpu_vs_cpu_case(nbeams=nbeams, detrender=detrender)
     test_sweep_gpu_vs_cpu(config=config, detrender=dparams, nbeams=nbeams, verbose=verbose)
 
 
@@ -5301,41 +5326,28 @@ def _draw_restriction_config(rng):
 
     FILTER-AND-RETRY rather than arguments (notes/unit_tests.md point 3), because
     make_random() has a max_early_triggers and no minimum, and nothing anywhere can ask for a
-    non-contiguous multiplet map -- it is an emergent property of the subband tables. The
-    loop is cheap next to the sweep it is protecting: a draw plus a plan is well under a
-    millisecond, against a second for the sweep itself.
+    non-contiguous multiplet map -- it is an emergent property of the subband tables.
+
+    THE TIGHTEST FILTER IN THE FILE, and worth knowing before touching it: measured
+    acceptance is 0.025, i.e. a mean of 39 draws per case (median 22, max 272 over 25 calls)
+    at 0.40 ms each. That is still ~16 ms against the ~1 s sweep it protects, so the cost is
+    not the concern; the cap in _draw_sweep_case() is, since a tightening elsewhere could
+    plausibly drive this filter to zero.
     """
-
-    from .brute_force import _SweepGeometry
-
     # THROUGH _random_config(), so that gpu_valid is drawn. It matters more here than
     # anywhere: the gpu_valid=True path can only draw subband vectors the cdd2 registry
     # stocks, and every accepted config then has subband_counts (4,2,1) and one primary tree.
     # With gpu_valid drawn the accepted population spans six subband vectors, toplevel ranks
     # 5 to 8, and one or two primary trees. Nothing here needs a GPU: this is the CPU sweep.
-    for ndraw in itertools.count(1):
-        config = _random_config(rng, max_toplevel_rank=8)
-
-        # The sweep runs one pass per input channel over a single batch of beams; all three
-        # beam fields have to agree or validate() fails a C++ assertion. See the same note in
-        # test_multimap_vs_sweep().
-        config.beams_per_gpu = 1
-        config.beams_per_batch = 1
-        config.num_active_batches = 1
-        config.validate()
-
+    def _accept(config):
         pairs = _restriction_pairs(config)
-        if not any(m_map != list(range(len(m_map))) for (_, _, _, _, m_map) in pairs):
-            continue
+        return any(m_map != list(range(len(m_map))) for (_, _, _, _, m_map) in pairs)
 
-        dparams = _make_test_detrender(config, rng=rng)
-        try:
-            geom = _SweepGeometry(config, dparams)
-        except RuntimeError:
-            continue      # e.g. nt_in too small to hold the detrended one-hot in one chunk
-
-        if _sweep_work(geom) <= RESTRICTION_SWEEP_BUDGET:
-            return config, dparams, ndraw
+    return _draw_sweep_case(
+        rng, lambda r: _random_config(r, max_toplevel_rank=8),
+        lambda geom, cfg: _sweep_work(geom), RESTRICTION_SWEEP_BUDGET,
+        detrender=True, accept=_accept, max_attempts=2000,
+        label='_draw_restriction_config')
 
 
 def test_restriction_vs_sweep(verbose=True):
