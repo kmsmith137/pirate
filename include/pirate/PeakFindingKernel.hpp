@@ -64,7 +64,10 @@ namespace pirate {
 // Note on K: K = log2(dm_downsampling) - pf_rank is the number of DM bits below the
 // multiplet's resolution that the peak-finder max-reduces over. Its input array has
 // (ndm_out << K) DM rows, and the low K bits of that index -- 0 <= mu < 2^K, the token's
-// fourth byte -- are reduced along with the multiplet index.
+// fourth byte -- are reduced along with the multiplet index. All three peak-finders accept
+// any K >= 0: the reference kernel and the standalone GpuPeakFindingKernel read the extra
+// DMs from the (ndm_out << K, M) input array, and CoalescedDdKernel2 folds them in as it
+// dedisperses.
 //
 // It's convenient to combine the (frequency_subband, fine-grained DM) axes into
 // a single axis, indexed by a "multiplet" 0 <= m < M. The FrequencySubband helper
@@ -376,14 +379,12 @@ struct GpuPfWeightLayout
 // CoalescedDdKernel2, which can be unit-tested in isolation. (When I was first
 // writing all this code, passing unit tests for GpuPeakFindingKernel took a
 // while, and CoalescedDdKernel2 was smooth sailing afterwards.)
-//
-// NOTE: GpuPeakFindingKernel only implements K==0 (i.e. dm_downsampling == 2^pf_rank).
-// (CoalescedDdKernel2 is what handles K > 0 on the GPU.) This could easily be fixed
-// if needed, but currently GpuPeakFindingKernel is only used in testing, so it didn't
-// seem worth the extra code complexity.
 
 struct GpuPeakFindingKernel
 {
+    // Takes the same params as ReferencePeakFindingKernel, K > 0 included. The registry key
+    // is (dtype, subband_counts, K, Tinner, Dout, Wmax); a combination that was not compiled
+    // fails in the registry lookup.
     GpuPeakFindingKernel(const PeakFindingKernelParams &params);
 
     void allocate(BumpAllocator &allocator);
@@ -394,7 +395,7 @@ struct GpuPeakFindingKernel
 
     void launch(ksgpu::Array<void> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
                 ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
-                const ksgpu::Array<void> &in,     // shape (beams_per_batch, ndm_out, M, nt_in)
+                const ksgpu::Array<void> &in,     // shape (beams_per_batch, ndm_out << K, M, nt_in)
                 const ksgpu::Array<void> &wt,     // see comment above
                 long ibatch,                      // 0 <= ibatch < nbatches
                 cudaStream_t stream);             // NULL stream is allowed, but is not the default);
@@ -417,6 +418,7 @@ struct GpuPeakFindingKernel
     // Derived parameters, computed in constructor.
     ksgpu::Dtype dtype;        // = params.dtype
     long Dout = 0;             // = params.time_downsampling
+    long K = 0;                // = log2(params.dm_downsampling) - fs.pf_rank, see the note on K above
     long nbatches = 0;         // = (total_beams / beams_per_batch)
     long nprofiles = 0;        // = (3 * log2(max_kernel_width) + 1)
 
@@ -435,6 +437,7 @@ struct GpuPeakFindingKernel
     {
         ksgpu::Dtype dtype;   // either float16 or float32
         std::vector<long> subband_counts;  // length (rank+1)
+        long K = 0;           // extra-DM bits, see the note on K above
         long Tinner = 0;      // for weights
         long Dout = 0;
         long Wmax = 0;
@@ -444,7 +447,7 @@ struct GpuPeakFindingKernel
     {
         // cuda_kernel(const void *in, void *out_max, uint *out_argmax, const void *wt, void *pstate, uint nt_in, uint ndm_out_per_wt, uint nt_in_per_wt)
         //
-        // in: shape (B*W, M, nt_in)
+        // in: shape (B*W, 2^K, M, nt_in), i.e. one (mu, m) block of (2^K * M) rows per warp
         // out_max: shape (B*W, nt_in/Dout)
         // out_argmax: shape (B*W, nt_in/Dout)
         // wt: complicated format (from class PfWeightLayout, see below)
@@ -509,6 +512,7 @@ struct PfWeightReaderMicrokernel
     {
         ksgpu::Dtype dtype;     // either float16 or float32
         std::vector<long> subband_counts;  // length (rank+1)
+        long K = 0;             // extra-DM bits: the kernel reads for the peak-finder's pair index, 2^K per multiplet
         long Dcore = 0;
         long Tinner = 0;
         long P = 0;

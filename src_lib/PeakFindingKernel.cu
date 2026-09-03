@@ -685,9 +685,12 @@ void PeakFindingKernelParams::fill_host_weights(Array<float> &out, const Array<d
 // File-local.
 static GpuPeakFindingKernel::RegistryKey _make_registry_key(const PeakFindingKernelParams &pf_params)
 {
+    long pf_rank = pf_params.subband_counts.size() - 1;
+
     GpuPeakFindingKernel::RegistryKey key;
     key.dtype = pf_params.dtype;
     key.subband_counts = pf_params.subband_counts;
+    key.K = integer_log2(pf_params.dm_downsampling) - pf_rank;   // validate() makes this >= 0
     key.Dout = pf_params.time_downsampling;
     key.Wmax = pf_params.max_kernel_width;
 
@@ -710,16 +713,9 @@ GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params
 {
     params.validate();
 
-    if (params.dm_downsampling != pow2(fs.pf_rank))
-        throw runtime_error(
-             "FATAL: GpuPeakFindingKernel only implements K==0 (i.e. dm_downsampling == 2^pf_rank)."
-             " (CoalescedDdKernel2 is what handles K > 0 on the GPU.) This could easily be fixed"
-             " if needed, but currently GpuPeakFindingKernel is only used in testing, so it didn't"
-             " seem worth the extra code complexity."
-        );
-
     registry_key = _make_registry_key(params);
     registry_value = registry().get(registry_key);
+    K = registry_key.K;
 
     pf_weight_layout = registry_value.pf_weight_layout;
     expected_wt_shape = pf_weight_layout.get_shape(params.beams_per_batch, params.ndm_wt, params.nt_wt);
@@ -782,7 +778,7 @@ void GpuPeakFindingKernel::launch(
     long nt_in = p.nt_out * p.time_downsampling;
     xassert_shape_eq(out_max, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
-    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, fs.M, nt_in}));
+    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out << K, fs.M, nt_in}));
 
     // Validate 'wt' array. These checks will pass if 'wt' is the output of GpuPfWeightLayout::to_gpu().
 
@@ -839,6 +835,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
 {
     RegistryKey key = registry().get_random_key();
     long pf_rank = key.subband_counts.size() - 1;
+    long K = key.K;
     long simd_width = xdiv(32, key.dtype.nbits);
     long Tinner = key.Tinner;
 
@@ -862,7 +859,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     params_small.max_kernel_width = key.Wmax;
     params_small.beams_per_batch = beams_per_batch;
     params_small.total_beams = total_beams;
-    params_small.dm_downsampling = 1 << pf_rank;  // K=0
+    params_small.dm_downsampling = pow2(pf_rank + K);   // the kernel's K
     params_small.time_downsampling = key.Dout;
     params_small.ndm_out = ndm_out;
     params_small.ndm_wt = ndm_wt;
@@ -877,7 +874,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     params_large.max_kernel_width = key.Wmax;
     params_large.beams_per_batch = total_beams;
     params_large.total_beams = total_beams;
-    params_large.dm_downsampling = 1 << pf_rank;  // K=0
+    params_large.dm_downsampling = pow2(pf_rank + K);   // the kernel's K
     params_large.time_downsampling = key.Dout;
     params_large.ndm_out = ndm_out;
     params_large.ndm_wt = ndm_wt;
@@ -886,17 +883,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     params_large.validate();
 
     GpuPeakFindingKernel gpu_kernel(params_small);   // just test constructor for now
-
-    // Nothing else ever hands this class K > 0, so its rejection of that case is
-    // checked here rather than left untested.
-    {
-        PeakFindingKernelParams p = params_small;
-        p.dm_downsampling *= 2;  // K=0 -> K=1
-        bool threw = false;
-        try { GpuPeakFindingKernel rejected(p); }
-        catch (const std::exception &) { threw = true; }
-        xassert(threw);
-    }
+    xassert_eq(gpu_kernel.K, K);
 
     // The reference kernels must emit the same tokens as the GPU kernel, so they take its
     // compiled-in Dcore. (params_large has the same registry key: nchunks scales nt_* together.)
@@ -910,6 +897,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
          << ", Dcore=" << gpu_kernel.Dcore
          << ", Dout=" << key.Dout
          << ", Tinner=" << key.Tinner
+         << ", K=" << K
          << ", M=" << gpu_kernel.fs.M
          << ", beams_per_batch=" << beams_per_batch
          << ", total_beams=" << total_beams
@@ -926,7 +914,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     long M = gpu_kernel.fs.M;
 
     Array<float> cpu_in_large = ref_kernel_large.make_random_input_array();
-    xassert_shape_eq(cpu_in_large, ({total_beams, ndm_out, M, nchunks * nt_in_per_chunk}));
+    xassert_shape_eq(cpu_in_large, ({total_beams, ndm_out << K, M, nchunks * nt_in_per_chunk}));
 
     Array<float> cpu_wt_large({total_beams, ndm_wt, nchunks * nt_wt_per_chunk, P, N}, af_rhost | af_zero);
     params_large.fill_host_weights(cpu_wt_large, Array<double>(), /*randomize=*/true);
@@ -1031,6 +1019,7 @@ struct GpuPfRegistry : public GpuPeakFindingKernel::Registry
 
         xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
         xassert_ge(key.subband_counts.size(), 1);
+        xassert_ge(key.K, 0);
         xassert(key.Tinner > 0);
         xassert(key.Dout > 0);
         xassert(key.Wmax > 0);
@@ -1067,6 +1056,7 @@ bool operator==(const GpuPeakFindingKernel::RegistryKey &k1, const GpuPeakFindin
 {
     return (k1.dtype == k2.dtype)
         && (k1.subband_counts == k2.subband_counts)
+        && (k1.K == k2.K)
         && (k1.Tinner == k2.Tinner)
         && (k1.Dout == k2.Dout)
         && (k1.Wmax == k2.Wmax);
@@ -1079,11 +1069,13 @@ ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryKey &k)
     os << "GpuPeakFindingKernel(dtype=" << k.dtype
        << ", rank=" << fs.pf_rank
        << ", subband_counts=" << ksgpu::tuple_str(k.subband_counts)
+       << ", K=" << k.K
        << ", Tinner=" << k.Tinner
        << ", Dout=" << k.Dout
        << ", Wmax=" << k.Wmax
        << ", N=" << fs.N
        << ", M=" << fs.M
+       << ", M_pairs=" << (fs.M << k.K)
        << ")";
 
     return os;
@@ -1113,6 +1105,7 @@ struct PfWeightReaderMicrokernelRegistry : public PfWeightReaderMicrokernel::Reg
 
         xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
         xassert_ge(key.subband_counts.size(), 1);
+        xassert_ge(key.K, 0);
         xassert_ge(key.Dcore, 0);
         xassert_ge(key.Tinner, 0);
         xassert_ge(key.P, 0);
@@ -1149,6 +1142,7 @@ bool operator==(const PfWeightReaderMicrokernel::RegistryKey &k1, const PfWeight
 {
     return (k1.dtype == k2.dtype)
         && (k1.subband_counts == k2.subband_counts)
+        && (k1.K == k2.K)
         && (k1.Dcore == k2.Dcore)
         && (k1.Tinner == k2.Tinner)
         && (k1.P == k2.P);
@@ -1161,11 +1155,13 @@ ostream &operator<<(ostream &os, const PfWeightReaderMicrokernel::RegistryKey &k
     os << "PfWeightReaderMicrokernel(dtype=" << k.dtype
        << ", rank=" << fs.pf_rank
        << ", subband_counts=" << ksgpu::tuple_str(k.subband_counts)
+       << ", K=" << k.K
        << ", Dcore=" << k.Dcore
        << ", Tinner=" << k.Tinner
        << ", P=" << k.P
        << ", N=" << fs.N
        << ", M=" << fs.M
+       << ", M_pairs=" << (fs.M << k.K)
        << ")";
 
     return os;
@@ -1189,7 +1185,8 @@ void PfWeightReaderMicrokernel::test_random()
     int SW = xdiv(32, dtype.nbits);   // simd width
 
     int N = fs.N;
-    int M = fs.M;
+    int K = key.K;
+    int M = fs.M << K;   // pair count: the index the kernel reads weights for is (m << K) | mu
     int P = wl.P;
     int Dcore = key.Dcore;
     int Tinner = key.Tinner;
@@ -1204,6 +1201,7 @@ void PfWeightReaderMicrokernel::test_random()
 
     cout << "test_pf_weight_reader_microkernel: dtype=" << dtype
          << ", subband_counts=" << ksgpu::tuple_str(key.subband_counts)
+         << ", K=" << K
          << ", Dcore=" << key.Dcore
          << ", P=" << key.P
          << ", Tinner=" << Tinner
@@ -1226,8 +1224,8 @@ void PfWeightReaderMicrokernel::test_random()
     for (int tw = 0; tw < nt_wt; tw++) {
         for (int tout = tw*Tspec; tout < (tw+1)*Tspec; tout++) {
             for (int mpad = 0; mpad < Mpad; mpad++) {
-                int m = min(mpad, M-1);
-                int n = fs.m_to_n.at(m);
+                int m = min(mpad, M-1);          // pair index
+                int n = fs.m_to_n.at(m >> K);    // 2^K consecutive pair indices share a subband
 
                 for (int ppad = 0; ppad < Ppad; ppad++) {
                     int p = min(ppad, P-1);

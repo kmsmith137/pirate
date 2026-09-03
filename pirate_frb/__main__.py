@@ -2201,7 +2201,7 @@ def random_kernels(args):
     randi = lambda *a: int(numpy.random.randint(*a))
 
     if args.pf:
-        atomic_print('# (dtype, subband_counts, Wmax, Dcore, Dout, Tinner)')
+        atomic_print('# (dtype, subband_counts, K, Wmax, Dcore, Dout, Tinner)')
 
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
@@ -2220,7 +2220,8 @@ def random_kernels(args):
             
             Wmax = 2**randi(5)
             subband_counts = core.FrequencySubbands.make_random_subband_counts()
-            atomic_print(f"('fp{nbits}', {list(subband_counts)}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
+            K = randi(5)   # extra-DM bits; the standalone kernel accepts any K >= 0
+            atomic_print(f"('fp{nbits}', {list(subband_counts)}, {K}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
 
     if args.cdd2:
         # NOTE no Dcore/Dout: a cdd2 kernel's Dout is pinned to 2^dd_rank1 and its Dcore to
@@ -2294,7 +2295,7 @@ def random_kernels(args):
                              f" {num_early_triggers}),{s}")
 
     if args.pfwr:
-        atomic_print('# (dtype, subband_counts, Dcore, P, Tinner)')
+        atomic_print('# (dtype, subband_counts, K, Dcore, P, Tinner)')
         
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
@@ -2303,7 +2304,8 @@ def random_kernels(args):
             Dcore_log = randi(6-Tinner_log) + (32//nbits) - 1
             P = randi(1,15)
             subband_counts = core.FrequencySubbands.make_random_subband_counts()
-            atomic_print(f"('fp{nbits}', {tuple(subband_counts)}, {2**Dcore_log}, {P}, {2**Tinner_log})")
+            K = randi(5)   # extra-DM bits
+            atomic_print(f"('fp{nbits}', {tuple(subband_counts)}, {K}, {2**Dcore_log}, {P}, {2**Tinner_log})")
 
 
 ######################################  run server command  #####################################

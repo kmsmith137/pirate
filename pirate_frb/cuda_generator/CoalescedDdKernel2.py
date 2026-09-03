@@ -229,14 +229,11 @@ class CoalescedDdKernel2:
             nspec = self.dd.nspec
         )
 
-        # A standalone K = 0 peak-finder over the band set [0]*K + counts has the same pair
-        # count and the same weight runs as this kernel's peak-finding half (only the token
-        # packing differs), so it is compiled alongside: GpuPeakFindingKernel::test_random()
-        # tests that register structure in isolation, with no dedispersion in the way.
-        twin = PeakFinder(dtype, FrequencySubbands([0]*K + list(frequency_subbands.subband_counts)),
-                          Wmax, self.Dcore, self.Dout, Tinner)   # K = 0
-
-        self.all_kernel_basenames = [ self.kernel_basename, mdd.kernel_basename ] + twin.all_kernel_basenames
+        # The peak-finding half of this kernel is also compiled as a standalone
+        # GpuPeakFindingKernel with the same (subband counts, K), together with its weight-reader
+        # and output microkernels, so that the tests can exercise that register structure in
+        # isolation, with no dedispersion in the way.
+        self.all_kernel_basenames = [ self.kernel_basename, mdd.kernel_basename ] + self.pf.all_kernel_basenames
 
 
     def emit_kernel(self, k):
