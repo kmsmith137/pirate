@@ -202,11 +202,11 @@ def test(args):
 
         if run_all_tests or args.dt1k:
             from .detrending_1d_kalman import tests as dt1k_tests
-            dt1k_tests.run_all()
+            dt1k_tests.run_all(iteration=i)
 
         if run_all_tests or args.dts:
             from .detrending_spline import tests as dts_tests
-            dts_tests.run_all()
+            dts_tests.run_all(iteration=i)
 
         if run_all_tests or args.dt2g:
             from .detrending_spline import tests as dts_tests
@@ -279,7 +279,12 @@ def test(args):
             casm.CasmReferenceBeamformer.test_cuda_python_equivalence(linkage='pybind11')
             
         if run_all_tests or args.chime:
-            chime.test_chime_frb_beamform()
+            # test_chime_frb_beamform()'s CPU reference is a brute-force 512-point DFT per
+            # (time, freq, pol, ew), which is ~1.7 s on an average draw and the most
+            # expensive thing under --chime by a wide margin. Every tenth iteration keeps it
+            # randomized (its shape is drawn) without paying for it every time.
+            if (i % 10) == 0:
+                chime.test_chime_frb_beamform()
             chime.test_chime_frb_upchan()
 
         if run_all_tests or args.zomb:
@@ -293,10 +298,24 @@ def test(args):
             if i == 0:
                 # Catches errors in DedispersionConfig::make_random() or validate().
                 tests.test_max_width_monotone()
-                tests.test_random_args_flags()
-                for _ in range(500):
-                    c = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=4, gpu_valid=False)
-                    c.test()
+
+            # BOTH OF THESE ARE RANDOMIZED, so they run every iteration rather than once:
+            # pinned to i == 0, a 1000-iteration overnight run saw exactly the same draws as
+            # a 5-iteration smoke test. Ten configs an iteration reaches 500 by '-n 50' and
+            # keeps going.
+            #
+            # The loop is really two checks. make_random() re-derives validate()'s rules in
+            # three places, so "make_random() never emits a config validate() rejects" is
+            # the one with content; config.test() adds the frequency_to_index round trip on
+            # top of it. gpu_valid alternates because the True path has a key chain to get
+            # right (DedispersionConfig.cpp) and the False path is the only one this loop
+            # ever exercised.
+            tests.test_random_args_flags()
+            for j in range(10):
+                c = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=4,
+                                                   gpu_valid=bool(j % 2))
+                c.test()
+
             for _ in rrange(kernels.CoalescedDdKernel2):
                 GpuDedisperser.test_random()
         
@@ -311,13 +330,18 @@ def test(args):
             tests.test_decode_argmax()
 
         if run_all_tests or args.sb:
-            tests.test_frequency_subbands_parity()
-            tests.test_subband_property()
+            # Each of these has a deterministic half that says the same thing every time --
+            # the exhaustive pf_rank <= 3 sweep, and the shipped-config re-parses -- and a
+            # randomized half. Run the deterministic halves once and the randomized halves
+            # every iteration; see each test's docstring.
+            tests.test_frequency_subbands_parity(sweep_low_ranks=(i == 0))
+            tests.test_subband_property(shipped=(i == 0))
 
         if run_all_tests or args.aout:
-            # Output-funnel test is deterministic and fast; once is enough.
-            if i == 0:
-                tests.test_atomic_out()
+            # NOT deterministic: it is a concurrency test, and one call samples one thread
+            # schedule. It draws its own thread counts, line counts and line length, and
+            # costs 5-20 ms, so it runs every iteration.
+            tests.test_atomic_out()
 
         if run_all_tests or args.util:
             # Integer/bit helpers: one call exhausts the interesting inputs, so once
@@ -326,9 +350,14 @@ def test(args):
                 utils.test_utils()
 
         if run_all_tests or args.net:
-            # Network/allocator tests only need to run once (not niter times)
+            # test_assembled_frame_allocator() hardcodes its cases, so once is enough until
+            # it is randomized.
             if i == 0:
                 tests.test_assembled_frame_allocator()
+            # test_slow_subscriber() DOES draw its parameters (NetworkTester), so pinning it
+            # to i == 0 meant a 1000-iteration run tested one draw. It is ~1 s, which is
+            # most of a --net iteration, so every tenth rather than every one.
+            if (i % 10) == 0:
                 tests.test_slow_subscriber()
             tests.test_assembled_frame_asdf()
             tests.test_network()

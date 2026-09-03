@@ -108,17 +108,18 @@ AtomicPrint::~AtomicPrint()
 }
 
 
-void test_atomic_print(int fd, long nthreads, long nlines)
+void test_atomic_print(int fd, long nthreads, long nlines, long line_pad)
 {
     xassert_ge(fd, 0);
     xassert_gt(nthreads, 0);
     xassert_gt(nlines, 0);
+    xassert_gt(line_pad, 0);
 
     vector<std::thread> threads;
     threads.reserve(nthreads);
 
     for (long t = 0; t < nthreads; t++) {
-        threads.emplace_back([fd,nlines,t]() {
+        threads.emplace_back([fd,nlines,line_pad,t]() {
             for (long i = 0; i < nlines; i++) {
                 // Rotate through all three call styles, so the test exercises
                 // the one-liner form, the multi-line block form, and a direct
@@ -127,19 +128,19 @@ void test_atomic_print(int fd, long nthreads, long nlines)
                 switch (i % 3) {
                 case 0:
                     AtomicPrint(fd) << "cpp t=" << t << " i=" << i << " oneliner "
-                                  << string(200, 'x');
+                                  << string(line_pad, 'x');
                     break;
 
                 case 1: {
                     AtomicPrint a(fd);
-                    a << "cpp t=" << t << " i=" << i << " block1 " << string(200, 'y') << "\n";
-                    a << "cpp t=" << t << " i=" << i << " block2 " << string(200, 'y') << "\n";
+                    a << "cpp t=" << t << " i=" << i << " block1 " << string(line_pad, 'y') << "\n";
+                    a << "cpp t=" << t << " i=" << i << " block2 " << string(line_pad, 'y') << "\n";
                     break;
                 }
 
                 default: {
                     stringstream ss;
-                    ss << "cpp t=" << t << " i=" << i << " direct " << string(200, 'z');
+                    ss << "cpp t=" << t << " i=" << i << " direct " << string(line_pad, 'z');
                     atomic_print(ss.str(), fd);
                     break;
                 }

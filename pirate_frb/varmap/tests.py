@@ -23,9 +23,10 @@ every cadence decision. The parts are named for WHEN they run, not for what they
 
   - run_once() runs once per invocation, for two distinct reasons -- an exhausted parameter
     space (item 11), or too expensive to repeat. See its docstring; the reasons matter.
-  - run_all() runs on EVERY '-n' iteration. About 15 s.
-  - test_sweep_gpu_vs_cpu_random() runs every tenth iteration: the only check on the GPU
-    sweep driver, and the most expensive test here.
+  - run_all() runs on EVERY '-n' iteration. About 12 s.
+  - EVERY TENTH ITERATION: test_sweep_gpu_vs_cpu_random(), the only check on the GPU sweep
+    driver and the most expensive test here, and test_restriction_vs_sweep(), which runs a
+    CPU sweep and so buys a much smaller config per second.
 
 Both halves above are spread across those three, deliberately -- "code or truth" is what a
 test is FOR, and "how often" is when it runs, and grouping by the second is what a runner
@@ -92,6 +93,7 @@ one-time equivalence test living outside this repo, and it is what the defaults 
 import contextlib
 import dataclasses
 import inspect
+import itertools
 
 import numpy as np
 
@@ -121,6 +123,47 @@ def _itree(config, primary_tree_index, early_trigger_level=0):
 def _ntrees(config):
     """The number of dedispersion trees of 'config' (= plan.ntrees). See _tree() above."""
     return int(make_plan(config).ntrees)
+
+
+def _restriction_pairs(config):
+    """Every (parent, child) pair of 'config', with the child's multiplet map into the parent.
+
+    Returns a list of (gamma, e, iparent, ichild, m_map), one entry per early-trigger tree,
+    where m_map[mc] is the parent multiplet that child multiplet mc restricts to. The list is
+    empty when no primary tree has an early trigger.
+
+    THE ROW MAP IS REBUILT HERE from toplevel band ranges, not taken from a production index
+    mapping, and that is what makes its two callers tests of Proposition 1 (see
+    notes/variance_map.tex) rather than tests of the plumbing. A map that is not the
+    contiguous prefix 0, 1, ... is where a wrong row map would show up at all, so a caller
+    that cares reports how many of its pairs have one.
+    """
+
+    plan = make_plan(config)
+    trees = plan.trees           # a fresh list of copies per access; take it once
+    out = []
+
+    for gamma in range(int(config.num_primary_trees)):
+        iparent = int(plan.dedispersion_tree_index(gamma, 0))
+        parent = trees[iparent]
+        fsp = parent.frequency_subbands
+        pband = {(parent.n_to_toplevel_flo(n), parent.n_to_toplevel_fhi(n)): n
+                 for n in range(int(fsp.N))}
+
+        for e in range(1, int(config.primary_trees[gamma].num_early_triggers) + 1):
+            ichild = int(plan.dedispersion_tree_index(gamma, e))
+            child = trees[ichild]
+            fsc = child.frequency_subbands
+
+            m_map = []
+            for mc in range(int(fsc.M)):
+                nc = int(fsc.m_to_n[mc])
+                n_p = pband[(child.n_to_toplevel_flo(nc), child.n_to_toplevel_fhi(nc))]
+                m_map.append(int(fsp.n_to_mbase[n_p]) + int(fsc.m_to_d[mc]))
+
+            out.append((gamma, e, iparent, ichild, m_map))
+
+    return out
 
 
 def _rng(seed=None):
@@ -466,69 +509,80 @@ def test_coarse_grain():
     rng = _rng()
     config = _random_config(rng)
 
-    for itree in range(_ntrees(config)):
-        m = _random_map(config, itree, rng, nzero=2)
-        R = m.pf_rank
+    # ONE DRAWN TREE PER CALL, not every tree of the config. The property is per (tree, L),
+    # and what distinguishes the trees of one config -- rank and subband table -- is already
+    # what _random_config() varies from call to call. Looping them multiplied a full dense
+    # reduction, which is O(nalpha * nfreq) and reaches ~100 MB, by ntrees for cases a long
+    # run reaches anyway.
+    itree = int(rng.integers(_ntrees(config)))
 
-        for L in range(R, m.tree_rank + 1):
-            labels = _obvious_beta(m, L)
-            nbeta = (1 << (m.tree_rank - L)) * m.nsubbands * m.nprofiles
+    m = _random_map(config, itree, rng, nzero=2)
+    R = m.pf_rank
 
-            # Dense reference, built the obvious way.
-            ref = np.zeros((nbeta, m.nfreq))
-            np.maximum.at(ref, labels, np.asarray(m.A, dtype=np.float64))
+    for L in range(R, m.tree_rank + 1):
+        labels = _obvious_beta(m, L)
+        nbeta = (1 << (m.tree_rank - L)) * m.nsubbands * m.nprofiles
 
-            c = m.coarse_grain(L)
-            assert c.shape == (nbeta, m.nfreq)
-            assert np.array_equal(c.A, ref), (itree, L)
+        # Dense reference, built the obvious way.
+        ref = np.zeros((nbeta, m.nfreq))
+        np.maximum.at(ref, labels, np.asarray(m.A, dtype=np.float64))
 
-            # y_true is the TRUE row sums at FINE granularity, carried unchanged.
-            assert np.array_equal(c.y_true, m.y_true)
-            assert c.is_admissible == m.is_admissible
-            assert c.check_ref_covers_y_true() >= 1.0
+        c = m.coarse_grain(L)
+        assert c.shape == (nbeta, m.nfreq)
+        assert np.array_equal(c.A, ref), (itree, L)
 
-            # Coarsening is nested, so coarse-to-coarser must agree with fine-to-coarse. This
-            # is what lets a sweep run once at the finest L that fits and coarsen down.
-            for L2 in range(L+1, m.tree_rank + 1):
-                assert np.array_equal(c.coarse_grain(L2).A, m.coarse_grain(L2).A), (L, L2)
+        # y_true is the TRUE row sums at FINE granularity, carried unchanged.
+        assert np.array_equal(c.y_true, m.y_true)
+        assert c.is_admissible == m.is_admissible
+        assert c.check_ref_covers_y_true() >= 1.0
 
-            # ... and cannot go the other way.
+        # Coarsening is nested, so coarse-to-coarser must agree with fine-to-coarse. This
+        # is what lets a sweep run once at the finest L that fits and coarsen down.
+        # ONE DRAWN L2 rather than all of them: the statement is per (L, L2) pair and
+        # costs two more full reductions, so enumerating made this loop quadratic in
+        # (r - R) for pairs that successive calls sample anyway.
+        if L < m.tree_rank:
+            L2 = int(rng.integers(L+1, m.tree_rank + 1))
+            assert np.array_equal(c.coarse_grain(L2).A, m.coarse_grain(L2).A), (L, L2)
+
+        # ... and cannot go the other way.
+        try:
+            c.coarse_grain(L)
+            raise AssertionError('coarse_grain() accepted L <= self.L')
+        except RuntimeError as e:
+            assert 'already coarse' in str(e)
+
+        # A MEAN where a max was intended is the bug class check_ref_covers_y_true()
+        # catches outright (the positive assertion is a few lines up).
+        # ... and only where the mean is actually BELOW the max, which is the property
+        # rather than a proxy for it. A multi-member group is not enough: '_random_map'
+        # zeroes 'nzero' rows, and a group whose members are ALL zeroed has mean == max,
+        # so the reader is right to accept it. Measured, seed 3126070166 draws exactly
+        # that -- nalpha=3 with 2 zeroed rows, one 2-member group holding both of them,
+        # and max - mean identically 0 over all 24 entries. The old guard (max group size
+        # > 1) was true there and the assertion below fired on an honest map.
+        #
+        # The two guards agree on ordinary draws: over 328 (config, tree) cases at L=R
+        # both were true 241 times, and the check REJECTED all 241.
+        mean = None
+        if L == R:
+            mean = np.zeros_like(np.asarray(c.A))
+            np.add.at(mean, labels, np.asarray(m.A, dtype=np.float64))
+            mean /= c.group_sizes()[:,None]
+        if (mean is not None) and np.any(mean < np.asarray(c.A)):
             try:
-                c.coarse_grain(L)
-                raise AssertionError('coarse_grain() accepted L <= self.L')
+                c.replace(A=mean, history_record=dict(step='test')).check_ref_covers_y_true()
+                raise AssertionError('check_ref_covers_y_true() accepted a mean-reduced map')
             except RuntimeError as e:
-                assert 'already coarse' in str(e)
+                assert 'max-envelope cannot do this' in str(e), str(e)
 
-            # A MEAN where a max was intended is the bug class check_ref_covers_y_true()
-            # catches outright (the positive assertion is a few lines up).
-            # ... and only where the mean is actually BELOW the max, which is the property
-            # rather than a proxy for it. A multi-member group is not enough: '_random_map'
-            # zeroes 'nzero' rows, and a group whose members are ALL zeroed has mean == max,
-            # so the reader is right to accept it. Measured, seed 3126070166 draws exactly
-            # that -- nalpha=3 with 2 zeroed rows, one 2-member group holding both of them,
-            # and max - mean identically 0 over all 24 entries. The old guard (max group size
-            # > 1) was true there and the assertion below fired on an honest map.
-            #
-            # The two guards agree on ordinary draws: over 328 (config, tree) cases at L=R
-            # both were true 241 times, and the check REJECTED all 241.
-            mean = None
-            if L == R:
-                mean = np.zeros_like(np.asarray(c.A))
-                np.add.at(mean, labels, np.asarray(m.A, dtype=np.float64))
-                mean /= c.group_sizes()[:,None]
-            if (mean is not None) and np.any(mean < np.asarray(c.A)):
-                try:
-                    c.replace(A=mean, history_record=dict(step='test')).check_ref_covers_y_true()
-                    raise AssertionError('check_ref_covers_y_true() accepted a mean-reduced map')
-                except RuntimeError as e:
-                    assert 'max-envelope cannot do this' in str(e), str(e)
+        # lift() is the inverse of the row duplication, not of the max.
+        lifted = c.lift()
+        assert (not lifted.is_coarse_grained) and lifted.shape == (m.nalpha, m.nfreq)
+        assert np.array_equal(lifted.A, c.A[labels])
 
-            # lift() is the inverse of the row duplication, not of the max.
-            lifted = c.lift()
-            assert (not lifted.is_coarse_grained) and lifted.shape == (m.nalpha, m.nfreq)
-            assert np.array_equal(lifted.A, c.A[labels])
-
-    atomic_print(f'    test_coarse_grain(nalpha={_nalpha_of(config, 0)}): pass')
+    atomic_print(f'    test_coarse_grain(itree={itree} of {_ntrees(config)},'
+                 f' nalpha={_nalpha_of(config, itree)}, L={R}..{m.tree_rank}): pass')
 
 
 def test_distance():
@@ -1516,6 +1570,23 @@ def test_asdf_io():
             assert VarianceMultiMap.from_asdf(one).num_primary_trees == 1
 
         # ---- the tripwires ----
+        #
+        # ON A SECOND, TINY FILE, and that is the only reason it exists. Every check below is
+        # about METADATA -- m_to_n, the is_coarse_grained/L pair, nbeta, itree and gamma, the
+        # plan yaml, is_factored, format_version -- while each _corrupt() call is a full
+        # non-lazy read plus a full rewrite. Run against the file above, the eleven of them
+        # serialize its matrices eleven more times for nothing. Coarse-graining every map to
+        # L = tree_rank leaves all of that metadata in place, and each map's nbeta with it,
+        # at 2^(r-R) fewer rows.
+
+        def coarsest(m):
+            r = int(m.tree_rank)
+            have = int(m.L) if m.is_coarse_grained else int(m.pf_rank)
+            return m.coarse_grain(r) if (r > have) else m
+
+        small = os.path.join(tmp, 'small.asdf')
+        VarianceMultiMap(config, [coarsest(m) for m in maps],
+                         provenance=prov).write_asdf(small)
 
         bad = os.path.join(tmp, 'bad.asdf')
 
@@ -1524,12 +1595,12 @@ def test_asdf_io():
             mn = np.array(root['trees'][0]['m_to_n'])
             mn[-1] = 0 if (mn[-1] != 0) else 1
             root['trees'][0]['m_to_n'] = mn
-        _corrupt(path, bad, break_m_to_n)
+        _corrupt(small, bad, break_m_to_n)
         expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'multiplet ordering convention')
 
         # is_coarse_grained and L are one fact. FLIP it rather than setting True: the draw
         # above may already have coarse-grained this map, and then True is the truth.
-        _corrupt(path, bad, lambda root: root['trees'][0].__setitem__(
+        _corrupt(small, bad, lambda root: root['trees'][0].__setitem__(
             'is_coarse_grained', not bool(root['trees'][0]['is_coarse_grained'])))
         expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'are one fact')
 
@@ -1537,7 +1608,7 @@ def test_asdf_io():
         # +1 rather than a literal: on a drawn geometry a literal can BE the real nbeta,
         # and then the reader is right not to complain.
         _k = min(1, npri - 1)
-        _corrupt(path, bad, lambda root: root['trees'][_k].__setitem__(
+        _corrupt(small, bad, lambda root: root['trees'][_k].__setitem__(
             'nbeta', int(root['trees'][_k]['nbeta']) + 1))
         expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'stored nbeta')
 
@@ -1545,7 +1616,7 @@ def test_asdf_io():
         # what stops a mislabelled entry from being read as a different tree.
         # +1 rather than 0: at npri == 1 with no early triggers the real itree IS 0, and
         # then setting 0 corrupts nothing.
-        _corrupt(path, bad, lambda root: root['trees'][0].__setitem__(
+        _corrupt(small, bad, lambda root: root['trees'][0].__setitem__(
             'itree', int(root['trees'][0]['itree']) + 1))
         expect_raise(lambda: VarianceMultiMap.from_asdf(bad), "stored 'itree'")
 
@@ -1555,30 +1626,30 @@ def test_asdf_io():
         # A DUPLICATE gamma, which needs two entries to construct. At npri == 1 there is
         # nothing to duplicate and the file is already correct, so the case is skipped.
         if npri > 1:
-            _corrupt(path, bad, lambda root: root['trees'][npri-1].__setitem__('gamma', 0))
+            _corrupt(small, bad, lambda root: root['trees'][npri-1].__setitem__('gamma', 0))
             expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'a file must hold exactly')
 
-        _corrupt(path, bad, lambda root: root.__setitem__('trees', root['trees'][:-1]))
+        _corrupt(small, bad, lambda root: root.__setitem__('trees', root['trees'][:-1]))
         expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'a file must hold exactly')
 
         # A plan yaml describing a different instrument: DedispersionPlan.from_yaml_string()
         # names the member that disagrees.
-        _corrupt(path, bad, lambda root: root.__setitem__(
+        _corrupt(small, bad, lambda root: root.__setitem__(
             'plan_yaml', root['plan_yaml'].replace('nprofiles: ', 'nprofiles: 1')))
         expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'nprofiles')
 
         # is_factored is checked AGAINST the arrays, never believed: a dense block that
         # claims to be factored is refused rather than reinterpreted. (The factored round
         # trip itself is test_asdf_factored().)
-        _corrupt(path, bad, lambda root: root['trees'][0].__setitem__('is_factored', True))
+        _corrupt(small, bad, lambda root: root['trees'][0].__setitem__('is_factored', True))
         expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'carries no')
 
         # Version and identity, so the next format change is an error and not a KeyError.
-        _corrupt(path, bad, lambda root: root.__setitem__('format_version',
+        _corrupt(small, bad, lambda root: root.__setitem__('format_version',
                                                           FORMAT_VERSION + 1))
         expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'format_version is')
 
-        _corrupt(path, bad, lambda root: root.pop('format_version'))
+        _corrupt(small, bad, lambda root: root.pop('format_version'))
         expect_raise(lambda: VarianceMultiMap.from_asdf(bad), 'predates this format')
 
         import asdf
@@ -1592,12 +1663,13 @@ def test_asdf_io():
         expect_raise(lambda: VarianceMultiMap.from_asdf(old), 'old-format file')
 
         nbytes = os.path.getsize(path)
+        nbytes_small = os.path.getsize(small)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
     atomic_print(f'    test_asdf_io(npri={npri}, ntrees={ntrees}):'
                  f' {nbytes/2**20:.1f} MiB file, eager + memmapped reads and every reader'
-                 ' check exercised')
+                 f' check exercised (tripwires on a {nbytes_small/2**20:.2f} MiB copy)')
 
 
 def test_asdf_detrender():
@@ -4305,45 +4377,37 @@ def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
             n_vf += 1
 
         # ---- Proposition 1, sweep against sweep. See the docstring.
-        for gamma in range(npri):
-            iparent = _itree(config, gamma)
-            parent = _tree(config, iparent)
-            fsp = parent.frequency_subbands
+        # The row map comes from _restriction_pairs(), which rebuilds it from toplevel band
+        # ranges; test_restriction_vs_sweep() checks the same proposition on a config drawn
+        # to GUARANTEE a non-contiguous map, which the five draws here reach about 45% of
+        # the time.
+        p1_trees = make_plan(config).trees
+        for (gamma, e, iparent, ichild, m_map) in _restriction_pairs(config):
+            parent, child = p1_trees[iparent], p1_trees[ichild]
+            fsp, fsc = parent.frequency_subbands, child.frequency_subbands
             D = 1 << (int(parent.tree_rank) - int(fsp.pf_rank))
-            M_p, P = int(fsp.M), int(parent.nprofiles)
+            M_p, M_c, P = int(fsp.M), int(fsc.M), int(parent.nprofiles)
             nf = As[iparent].shape[1]
+
+            assert (1 << (int(child.tree_rank) - int(fsc.pf_rank))) == D
+            assert int(child.nprofiles) == P
+
             Ap = np.asarray(As[iparent]).reshape(D, M_p, P, nf)
-            pband = {(parent.n_to_toplevel_flo(n), parent.n_to_toplevel_fhi(n)): n
-                     for n in range(int(fsp.N))}
+            Ac = np.asarray(As[ichild]).reshape(D, M_c, P, nf)
+            n_nontrivial += int(m_map != list(range(M_c)))
 
-            for e in range(1, int(config.primary_trees[gamma].num_early_triggers) + 1):
-                ichild = _itree(config, gamma, e)
-                child = _tree(config, ichild)
-                fsc = child.frequency_subbands
-                M_c = int(fsc.M)
-                assert (1 << (int(child.tree_rank) - int(fsc.pf_rank))) == D
-                assert int(child.nprofiles) == P
-                Ac = np.asarray(As[ichild]).reshape(D, M_c, P, nf)
-
-                m_map = []
-                for mc in range(M_c):
-                    nc = int(fsc.m_to_n[mc])
-                    np_ = pband[(child.n_to_toplevel_flo(nc), child.n_to_toplevel_fhi(nc))]
-                    m_map.append(int(fsp.n_to_mbase[np_]) + int(fsc.m_to_d[mc]))
-                n_nontrivial += int(m_map != list(range(M_c)))
-
-                for mc in range(M_c):
-                    got, want = Ac[:, mc], Ap[:, m_map[mc]]
-                    scale = max(float(np.max(np.abs(want))), 1e-300)
-                    d = float(np.max(np.abs(got - want))) / scale
-                    if d >= 1.0e-5:
-                        atomic_print(f'test_multimap_vs_sweep: FAILED Proposition 1 on'
-                                     f' {label}, (gamma, e, m_child) = ({gamma}, {e}, {mc}):'
-                                     f' relative difference {d:.3g}. The config'
-                                     f' was:\n{config.to_yaml_string()}')
-                        raise AssertionError((label, gamma, e, mc, d))
-                    worst_p1 = max(worst_p1, d)
-                n_p1_pairs += 1
+            for mc in range(M_c):
+                got, want = Ac[:, mc], Ap[:, m_map[mc]]
+                scale = max(float(np.max(np.abs(want))), 1e-300)
+                d = float(np.max(np.abs(got - want))) / scale
+                if d >= 1.0e-5:
+                    atomic_print(f'test_multimap_vs_sweep: FAILED Proposition 1 on'
+                                 f' {label}, (gamma, e, m_child) = ({gamma}, {e}, {mc}):'
+                                 f' relative difference {d:.3g}. The config'
+                                 f' was:\n{config.to_yaml_string()}')
+                    raise AssertionError((label, gamma, e, mc, d))
+                worst_p1 = max(worst_p1, d)
+            n_p1_pairs += 1
 
     if verbose:
         atomic_print(f'    test_multimap_vs_sweep(device={device}, {len(configs)} random'
@@ -5114,8 +5178,73 @@ def test_restriction_representation(K=5):
                  f' parents agree to {worst:.3g} relative')
 
 
-def test_restriction_vs_sweep(r=6, subband_counts=(4,2,1), num_primary_trees=1,
-                              num_early_triggers=2, detrender=False):
+# Work-unit ceiling for test_restriction_vs_sweep()'s CPU sweep, in the same units as
+# SWEEP_WORK_BUDGET (see there for what a work unit is and why a budget is not optional).
+# MEASURED END TO END, not derived: at this ceiling the test costs a mean of 0.9 s and a
+# worst case of about 2.5 s (the CPU sweep with a Detrender2d runs at 79-187 ns per work
+# unit, and the accepted population's mean work is well below the ceiling). The test runs
+# every tenth iteration, so that is ~0.1 s per iteration of run_tests(). Changing this
+# changes a running time, not a property: nothing asserted below depends on it.
+RESTRICTION_SWEEP_BUDGET = 2.5e7
+
+
+def _draw_restriction_config(rng):
+    """A drawn config for test_restriction_vs_sweep(), with the detrender that matches it.
+
+    Returns (config, dparams, ndraw). THREE FILTERS, and each one is there because a config
+    that fails it makes the test say nothing or cost too much:
+
+      - AT LEAST ONE EARLY TRIGGER. Without one the config has no (parent, child) pairs at
+        all and the whole comparison loop is empty. Measured over 1200 draws, 31% have one.
+      - AT LEAST ONE NON-CONTIGUOUS MULTIPLET MAP. This is the property the comparison has
+        teeth against: where the map IS the contiguous prefix 0, 1, ..., a wrong row map
+        would agree with the right one. Only 11% of draws have one, which is why this is the
+        one place in the file that guarantees it -- test_multimap_vs_sweep() checks the same
+        proposition on five drawn configs an iteration and reaches a non-contiguous map about
+        45% of the time.
+      - THE CPU SWEEP FITS RESTRICTION_SWEEP_BUDGET, evaluated with the detrender in place,
+        since the detrender is most of the cost.
+
+    FILTER-AND-RETRY rather than arguments (notes/unit_tests.md point 3), because
+    make_random() has a max_early_triggers and no minimum, and nothing anywhere can ask for a
+    non-contiguous multiplet map -- it is an emergent property of the subband tables. The
+    loop is cheap next to the sweep it is protecting: a draw plus a plan is well under a
+    millisecond, against a second for the sweep itself.
+    """
+
+    from .brute_force import _SweepGeometry
+
+    # THROUGH _random_config(), so that gpu_valid is drawn. It matters more here than
+    # anywhere: the gpu_valid=True path can only draw subband vectors the cdd2 registry
+    # stocks, and every accepted config then has subband_counts (4,2,1) and one primary tree.
+    # With gpu_valid drawn the accepted population spans six subband vectors, toplevel ranks
+    # 5 to 8, and one or two primary trees. Nothing here needs a GPU: this is the CPU sweep.
+    for ndraw in itertools.count(1):
+        config = _random_config(rng, max_toplevel_rank=8)
+
+        # The sweep runs one pass per input channel over a single batch of beams; all three
+        # beam fields have to agree or validate() fails a C++ assertion. See the same note in
+        # test_multimap_vs_sweep().
+        config.beams_per_gpu = 1
+        config.beams_per_batch = 1
+        config.num_active_batches = 1
+        config.validate()
+
+        pairs = _restriction_pairs(config)
+        if not any(m_map != list(range(len(m_map))) for (_, _, _, _, m_map) in pairs):
+            continue
+
+        dparams = _make_test_detrender(config, rng=rng)
+        try:
+            geom = _SweepGeometry(config, dparams)
+        except RuntimeError:
+            continue      # e.g. nt_in too small to hold the detrended one-hot in one chunk
+
+        if _sweep_work(geom) <= RESTRICTION_SWEEP_BUDGET:
+            return config, dparams, ndraw
+
+
+def test_restriction_vs_sweep(verbose=True):
     """Proposition 1 itself, against the sweep.
 
     The appendix "Variance maps of a config's trees are row-restrictions of one another" in
@@ -5125,77 +5254,75 @@ def test_restriction_vs_sweep(r=6, subband_counts=(4,2,1), num_primary_trees=1,
 
     What makes this a test of the PROPOSITION rather than of the plumbing: the two sides are
     computed by different trees -- different tree ranks, different subband tables, different
-    ReferenceTree and ReferencePfSquare instances -- and the multiplet map is rebuilt here
-    from toplevel band ranges, so no production row map is in the loop. (The two trees do
-    share an upstream chain, which is exactly what Proposition 1 assumes.)
+    ReferenceTree and ReferencePfSquare instances -- and the multiplet map is rebuilt by
+    _restriction_pairs() from toplevel band ranges, so no production row map is in the loop.
+    (The two trees do share an upstream chain, which is exactly what Proposition 1 assumes.)
 
-    Expect agreement at the float32 level, ~1e-6 relative, NOT bit-identity: the two
-    operators are equal, but the sweep evaluates them through different code paths at
-    different tree ranks, so the summation orders differ.
+    THE CONFIG IS DRAWN, and _draw_restriction_config() says what it has to satisfy. The
+    DETRENDER IS NOT A CHOICE HERE: a Detrender2d assumes nothing about the upstream chain,
+    so Proposition 1 has to survive one, and that arm is the only part of the proposition
+    that test_multimap_vs_sweep() does not already cover on drawn configs every iteration --
+    it sweeps without a detrender, because its own comparison is against a detrender-free
+    map, and giving it one would mean a second sweep per config.
 
-    'detrender' exercises the part of the proposition that Proposition 2 does not have --
-    it assumes nothing about the upstream chain, so a Detrender2d must not disturb it.
+    Expect agreement at the float64 level here, not float32. The two sides differ only in
+    summation order, and the CPU sweep accumulates in float64, so the measured worst case is
+    a few times 1e-16. The bar below is nevertheless 1e-5: it is sized for a WRONG ROW MAP,
+    which mismatches whole bands, and it has to hold on any drawn geometry rather than on the
+    one that happened to be measured.
     """
 
     from .brute_force import sweep_all_trees_dense
 
-    config = _make_test_config(r, subband_counts, num_primary_trees=num_primary_trees,
-                               num_early_triggers=num_early_triggers)
-    dparams = _make_test_detrender(config) if detrender else None
+    rng = _rng()
+    config, dparams, ndraw = _draw_restriction_config(rng)
     As = sweep_all_trees_dense(config, dparams, device='cpu')
 
     worst, worst_where, npairs, nontrivial = 0.0, None, 0, 0
+    plan = make_plan(config)
+    trees = plan.trees
 
-    for gamma in range(int(config.num_primary_trees)):
-        iparent = _itree(config, gamma)
-        parent = _tree(config, iparent)
-        fsp = parent.frequency_subbands
-        D = 1 << (parent.tree_rank - fsp.pf_rank)
-        M_p, P = int(fsp.M), int(parent.nprofiles)
+    for (gamma, e, iparent, ichild, m_map) in _restriction_pairs(config):
+        parent, child = trees[iparent], trees[ichild]
+        fsp, fsc = parent.frequency_subbands, child.frequency_subbands
+        D = 1 << (int(parent.tree_rank) - int(fsp.pf_rank))
+        M_p, M_c, P = int(fsp.M), int(fsc.M), int(parent.nprofiles)
         nfreq = As[iparent].shape[1]
-        Ap = As[iparent].reshape(D, M_p, P, nfreq)
 
-        pband = {(parent.n_to_toplevel_flo(n), parent.n_to_toplevel_fhi(n)): n
-                 for n in range(int(fsp.N))}
+        assert (1 << (int(child.tree_rank) - int(fsc.pf_rank))) == D
+        assert int(child.nprofiles) == P
 
-        for e in range(1, int(config.primary_trees[gamma].num_early_triggers) + 1):
-            ichild = _itree(config, gamma, e)
-            child = _tree(config, ichild)
-            fsc = child.frequency_subbands
-            M_c = int(fsc.M)
-            assert (1 << (child.tree_rank - fsc.pf_rank)) == D
-            assert int(child.nprofiles) == P
-            Ac = As[ichild].reshape(D, M_c, P, nfreq)
+        Ap = np.asarray(As[iparent]).reshape(D, M_p, P, nfreq)
+        Ac = np.asarray(As[ichild]).reshape(D, M_c, P, nfreq)
 
-            m_map = []
-            for mc in range(M_c):
-                nc = int(fsc.m_to_n[mc])
-                np_ = pband[(child.n_to_toplevel_flo(nc), child.n_to_toplevel_fhi(nc))]
-                m_map.append(int(fsp.n_to_mbase[np_]) + int(fsc.m_to_d[mc]))
-            if m_map != list(range(M_c)):
-                nontrivial += 1
+        if m_map != list(range(M_c)):
+            nontrivial += 1
 
-            for mc in range(M_c):
-                got, want = Ac[:, mc], Ap[:, m_map[mc]]
-                scale = max(float(np.max(np.abs(want))), 1e-300)
-                d = float(np.max(np.abs(got - want))) / scale
-                if d > worst:
-                    worst, worst_where = d, (gamma, e, mc)
-            npairs += 1
+        for mc in range(M_c):
+            got, want = Ac[:, mc], Ap[:, m_map[mc]]
+            scale = max(float(np.max(np.abs(want))), 1e-300)
+            d = float(np.max(np.abs(got - want))) / scale
+            if d > worst:
+                worst, worst_where = d, (gamma, e, mc)
+        npairs += 1
 
+    # Guaranteed by the draw rather than hoped for -- see _draw_restriction_config(). Kept as
+    # an assertion because it is the filter that is being checked, not the geometry.
     assert nontrivial > 0, \
         'test_restriction_vs_sweep: every multiplet map was the contiguous prefix, so a wrong' \
         ' row map could not have been caught (see test_apply_restriction for why)'
 
-    # Loose enough for float32 summation-order differences between two tree ranks, tight
-    # enough that a wrong row map (which mismatches whole bands) cannot pass.
     assert worst < 1e-5, (f'test_restriction_vs_sweep: worst relative difference {worst:.3g}'
                           f' at (gamma, e, m_child) = {worst_where}')
 
-    atomic_print(f'    test_restriction_vs_sweep(r={r}, subbands={list(subband_counts)},'
-                 f' npri={num_primary_trees}, net={num_early_triggers},'
-                 f' detrender={detrender}): {npairs} (parent, child) pairs,'
-                 f' {nontrivial} non-contiguous, worst relative difference {worst:.3g}')
+    if verbose:
+        nets = [int(pt.num_early_triggers) for pt in config.primary_trees]
+        atomic_print(f'    test_restriction_vs_sweep(r={int(config.toplevel_tree_rank)},'
+                     f' subbands={[int(x) for x in config.frequency_subband_counts]},'
+                     f' nfreq={int(config.get_total_nfreq())}, npri={len(nets)},'
+                     f' nets={nets}, W={int(dparams.W)}, {ndraw} draws):'
+                     f' {npairs} (parent, child) pairs, {nontrivial} non-contiguous,'
+                     f' worst relative difference {worst:.3g}')
 
 
 def test_lds_bindings(r=8, subband_counts=(2,2,1), num_primary_trees=3, nbeams=4):
@@ -5285,9 +5412,15 @@ def run_tests(iteration=0):
     # test_sweep_gpu_vs_cpu is the only check on the GPU sweep DRIVER and the most expensive
     # test in the package, so it runs every tenth iteration rather than every one. See
     # test_sweep_gpu_vs_cpu_random(), and run_once() for the knob sweep that complements it.
+    #
+    # test_restriction_vs_sweep() is here for a different reason: it runs a CPU sweep, which
+    # is ~36x slower per work unit than the GPU one, so its cost budget buys a much smaller
+    # config per second. Its own budget puts it at a mean of 0.9 s per call, i.e. ~0.1 s per
+    # iteration at this cadence.
     if (iteration % 10) == 0:
         test_sweep_gpu_vs_cpu_random()
         test_sweep_column_norms_random()
+        test_restriction_vs_sweep()
 
 
 def run_once():
@@ -5416,8 +5549,8 @@ def run_all():
     from ..fast_varmap.test_fast_varmap import test_cpp_detrender_free
     test_cpp_detrender_free()
 
-    # The two brute-force sweep tests that draw their own configs -- the only ones in that
-    # group that explore rather than repeat, and about 2 s together. The rest of the sweep
-    # group is in run_once(); see this module's docstring for what the sweep half is FOR.
+    # The brute-force sweep test that draws its own config and is cheap enough to run every
+    # iteration -- about 1.4 s. The rest of the sweep group is in run_once() (pinned or knob
+    # swept) or in run_tests()'s every-tenth tier; see this module's docstring for what the
+    # sweep half is FOR.
     test_multimap_vs_sweep()
-    test_restriction_vs_sweep(num_primary_trees=2, detrender=True)

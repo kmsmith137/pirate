@@ -244,22 +244,32 @@ def _sweep(subband_counts, seen):
     return n
 
 
-def test_frequency_subbands_parity(nrandom=200):
-    """C++ vs python FrequencySubbands: validate, the constructor tables, and the tree rule."""
+def test_frequency_subbands_parity(nrandom=400, sweep_low_ranks=True):
+    """C++ vs python FrequencySubbands: validate, the constructor tables, and the tree rule.
+
+    TWO HALVES AT TWO CADENCES. The pf_rank <= 3 sweep is exhaustive and therefore identical
+    on every call, so the caller runs it once per invocation (notes/unit_tests.md point 11)
+    and spends the freed budget on 'nrandom'. At pf_rank == 4 the space is 8704 vectors, so
+    doubling nrandom to 400 takes the fraction never seen over 100 iterations from
+    exp(-200*100/8704) = 10% to 1%.
+    """
 
     ncmp = 0
     seen = set()
 
     # Exhaustive at pf_rank <= 3 (312 counts vectors).
-    for pf_rank in range(4):
-        for subband_counts in _all_counts(pf_rank):
-            ncmp += _sweep(subband_counts, seen)
+    if sweep_low_ranks:
+        for pf_rank in range(4):
+            for subband_counts in _all_counts(pf_rank):
+                ncmp += _sweep(subband_counts, seen)
 
     # Sampled at pf_rank == 4 (8704 counts vectors, too many to sweep every iteration).
     for _ in range(nrandom):
         ncmp += _sweep(_random_counts(4), seen)
 
-    atomic_print(f'test_frequency_subbands_parity: {ncmp} comparisons agree')
+    atomic_print(f'test_frequency_subbands_parity: {ncmp} comparisons agree'
+                 f' ({nrandom} random pf_rank=4 vectors'
+                 f'{", plus the exhaustive pf_rank <= 3 sweep" if sweep_low_ranks else ""})')
 
 
 ####################################################################################################
@@ -315,8 +325,13 @@ def _check_subband_property(config, label):
                                      f' one.\n  {e}') from e
 
 
-def test_subband_property(nrandom=8):
-    """Property (*) on random configs, plus the shipped configs if they are reachable."""
+def test_subband_property(nrandom=8, shipped=True):
+    """Property (*) on random configs, plus the shipped configs if they are reachable.
+
+    The shipped-config half re-parses nine fixed yaml files and rebuilds nine fixed plans,
+    so it says exactly the same thing on every call and the caller runs it once per
+    invocation. The random half runs every iteration.
+    """
 
     # gpu_valid=False: this test needs no kernels, and the !gpu_valid path generates deeper
     # early-trigger ladders (it is not filtered by which cdd2 kernels happen to be compiled),
@@ -327,7 +342,7 @@ def test_subband_property(nrandom=8):
 
     # The shipped configs, when the test is run from a source checkout. (pirate_frb does not
     # package configs/, so this is best-effort extra coverage rather than a requirement.)
-    paths = sorted(glob.glob('configs/dedispersion/*.yml'))
+    paths = sorted(glob.glob('configs/dedispersion/*.yml')) if shipped else []
 
     for path in paths:
         config = DedispersionConfig.from_yaml(path)

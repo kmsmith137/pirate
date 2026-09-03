@@ -110,7 +110,12 @@ protected:
 // Spawns 'nthreads' threads which each emit 'nlines' lines to 'fd', mixing the
 // one-liner and block forms of AtomicPrint with direct atomic_print() calls.
 // The caller checks the resulting fd for spliced or missing lines.
-extern void test_atomic_print(int fd, long nthreads, long nlines);
+//
+// 'line_pad' is the length of each line's filler run, and is a parameter because
+// message length is what the atomicity property turns on: one write(2) per message
+// is unsplittable up to PIPE_BUF, and only beyond it does a short write become a
+// possibility at all. The caller draws it.
+extern void test_atomic_print(int fd, long nthreads, long nlines, long line_pad = 200);
 
 
 // safe_memcpy_{h2g,g2h}_{sync,async}(): wrappers around

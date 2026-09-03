@@ -618,16 +618,26 @@ _STAGE1 = [test_model_algebra, test_recursions_vs_dense, test_polynomial_exactne
            test_seam_free, test_vs_brute_force, test_kernel_response, test_psd_and_finite,
            test_masked_data_unused]
 
+# T1 and T6 have no parameters: T1 enumerates a fixed (k, tau) grid and T6 a fixed sweep, and
+# neither draws anything -- so a second call says exactly what the first one did, and
+# notes/unit_tests.md point 11 puts them on iteration 0. Skipping them does not perturb the
+# shared generator, since neither touches it.
+_EXHAUSTIVE = (test_model_algebra, test_kernel_response)
 
-def run_all(verbose=True, rng=None):
+
+def run_all(verbose=True, rng=None, iteration=0):
     """
     T1-T8 first, then T9.  All share one generator, so printing its entropy makes the
     whole run reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
+
+    'iteration' is the index of the caller's test loop; the two parameterless tests run
+    only at 0.  See _EXHAUSTIVE.
     """
     rng = _default_rng(rng)
     print(f'  detrending_1d_kalman tests (rng entropy {rng.bit_generator.seed_seq.entropy})')
     for fn in _STAGE1:
-        fn(rng, verbose=verbose)
+        if (iteration == 0) or (fn not in _EXHAUSTIVE):
+            fn(rng, verbose=verbose)
     test_dtype_agreement(rng, verbose=verbose)
     print(f'  detrending_1d_kalman tests passed   '
           f'[cumulative mask expansion: {_expansion_str()}]')

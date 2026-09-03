@@ -842,7 +842,18 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : ((32 * simd_width) << rand_int(0,3));
     long nt_in_divisor = max(32*simd_width, nt_in_per_wt);
 
-    auto v = ksgpu::random_integers_with_bounded_product(6, 200000 / (nt_in_divisor));
+    // THE BUDGET IS ON THE INPUT ARRAY IN ELEMENTS, not on the shape product. The reference
+    // kernel's arrays are (shape product) x E x M elements -- cpu_in_large below is
+    // {beams, ndm_out*E, M, nt_in}, and ReferencePeakFindingKernel::tmp_arr is a comparable
+    // stack -- and both E and M are fixed by the registry key, so they belong in the budget
+    // rather than being discovered afterwards. Over the 88 keys E*M runs from 4 to 91, so a
+    // budget on the shape product alone lets the footprint vary by more than an order of
+    // magnitude from key to key.
+    constexpr long input_element_budget = 4*1000*1000;   // ~16 MB of float32 input, ~4x that in all
+    FrequencySubbands fs_key(key.subband_counts);
+    long budget = max(input_element_budget / (nt_in_divisor * pow2(K) * fs_key.M), 1L);
+
+    auto v = ksgpu::random_integers_with_bounded_product(6, budget);
     long nchunks = v[0];
     long nt_in_per_chunk = nt_in_divisor * v[1];
     long beams_per_batch = v[2];
@@ -916,16 +927,16 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     Array<float> cpu_in_large = ref_kernel_large.make_random_input_array();
     xassert_shape_eq(cpu_in_large, ({total_beams, ndm_out << K, M, nchunks * nt_in_per_chunk}));
 
-    Array<float> cpu_wt_large({total_beams, ndm_wt, nchunks * nt_wt_per_chunk, P, N}, af_rhost | af_zero);
+    Array<float> cpu_wt_large({total_beams, ndm_wt, nchunks * nt_wt_per_chunk, P, N}, af_uhost | af_zero);
     params_large.fill_host_weights(cpu_wt_large, Array<double>(), /*randomize=*/true);
 
-    Array<float> cpu_out_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
-    Array<uint> cpu_argmax_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
+    Array<float> cpu_out_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_uhost | af_zero);
+    Array<uint> cpu_argmax_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_uhost | af_zero);
     ref_kernel_large.apply(cpu_out_large, cpu_argmax_large, cpu_in_large, cpu_wt_large, 0);
 
     // Use eval_tokens() to get a nontrivial test of the reference peak-finder.
     // (We haven't compared the reference and GPU peak-finders yet.)
-    Array<float> cpu_out2_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
+    Array<float> cpu_out2_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_uhost | af_zero);
     ref_kernel_large.eval_tokens(cpu_out2_large, cpu_argmax_large, cpu_wt_large);
     assert_arrays_equal(cpu_out_large, cpu_out2_large, "cpu_out_large", "cpu_out2_large", {"b","d","tout"});
 
@@ -952,13 +963,13 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
             cpu_wt_small = cpu_wt_small.slice(2, tw0, tw1);
             cpu_wt_small = cpu_wt_small.clone();  // contiguous deep copy
 
-            Array<float> cpu_out_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
-            Array<uint> cpu_argmax_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
+            Array<float> cpu_out_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_uhost | af_zero);
+            Array<uint> cpu_argmax_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_uhost | af_zero);
             ref_kernel_small.apply(cpu_out_small, cpu_argmax_small, cpu_in_small, cpu_wt_small, ibatch);
 
             // Use eval_tokens() to get a nontrivial test of the reference peak-finder.
             // (We haven't compared the reference and GPU peak-finders yet.)
-            Array<float> cpu_out2_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
+            Array<float> cpu_out2_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_uhost | af_zero);
             ref_kernel_small.eval_tokens(cpu_out2_small, cpu_argmax_small, cpu_wt_small);
             assert_arrays_equal(cpu_out_small, cpu_out2_small, "cpu_out_small", "cpu_out2_small", {"b","d","tout"});
 
@@ -992,7 +1003,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
             //    assert_arrays_equal(cpu_out, gpu_out2)
 
             gpu_argmax = gpu_argmax.to_host();
-            Array<float> gpu_out2({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
+            Array<float> gpu_out2({beams_per_batch, ndm_out, nt_out_per_chunk}, af_uhost | af_zero);
             ref_kernel_small.eval_tokens(gpu_out2, gpu_argmax, cpu_wt_small);
 
             double eps = 5.0 * key.dtype.precision();

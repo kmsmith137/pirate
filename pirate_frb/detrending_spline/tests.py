@@ -791,11 +791,19 @@ def test_dtype_agreement(rng, verbose=True):
         both = m64 & m64l
         assert np.array_equal(np.where(both, r64, 0), np.where(both, r64l, 0))
 
-        # (b) monotone in eps.
-        for eps_a, eps_b in ((EPS_FLOAT64, 1e-5), (1e-5, EPS_FLOAT32), (EPS_FLOAT32, 1e-3)):
-            ma = SplineDetrender(kv, dtype=np.float64, eps=eps_a).detrend_chunk(d, mask)[1]
-            mb = SplineDetrender(kv, dtype=np.float64, eps=eps_b).detrend_chunk(d, mask)[1]
-            assert np.all(mb <= ma), 'kept set grew when eps increased'
+        # (b) The kept set IS (input mask) AND (zone whose r_min clears eps), zone by zone.
+        #     That is the statement the docstring's "monotone in eps" rests on: (a) has
+        #     just established that r_min does not depend on eps, so once the mask is this
+        #     function of it, raising eps can only flag more zones.  Checking it on the two
+        #     runs already in hand says strictly more than re-running the detrender at four
+        #     more eps values did, and at nfreq up to 30000 those runs were two thirds of
+        #     the cost of this test.
+        for (pp, mm, eps) in ((p64, m64, EPS_FLOAT64), (p64l, m64l, EPS_FLOAT32)):
+            want = np.zeros_like(mm)
+            for (z, (lo, hi)) in enumerate(zone_channel_ranges(kv)):
+                want[:, lo:hi, :] = mask[:, lo:hi, :] & (pp[:, :, z] >= eps)[:, None, :]
+            assert np.array_equal(mm, want), \
+                'the kept set is not (input mask) AND (r_min >= eps)'
 
         # (c) decisions agree away from the threshold band.
         band = (p64 > EPS_FLOAT32 / 3) & (p64 < 3 * EPS_FLOAT32)
@@ -1757,10 +1765,15 @@ def test_params_yaml(rng=None, verbose=True):
               f'the file path, retired-key and unknown-key rejection]')
 
 
-def run_all(verbose=True, rng=None, n_phi=None):
+def run_all(verbose=True, rng=None, n_phi=None, iteration=0):
     """
     All tests share one generator, so printing its entropy makes the whole run
     reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
+
+    'iteration' is the index of the caller's test loop.  Only test_time_basis()
+    reads it: that one enumerates a fixed 23-element (n, W) grid, draws nothing
+    and does not read N_PHI, so a second call repeats the first exactly and
+    notes/unit_tests.md point 11 puts it at iteration 0.
 
     The spline degree is drawn from {0,1,2,3} per call rather than fixed, so a
     multi-iteration run covers all four; pass n_phi explicitly to pin it.  This
@@ -1794,7 +1807,8 @@ def run_all(verbose=True, rng=None, n_phi=None):
     test_conditioning(rng, verbose=verbose)
     test_zone_expansion(rng, verbose=verbose)
     test_dtype_agreement(rng, verbose=verbose)
-    test_time_basis(rng, verbose=verbose)
+    if iteration == 0:
+        test_time_basis(rng, verbose=verbose)
     test_bandwidth(rng, verbose=verbose)
     test_2d_reference_agreement(rng, verbose=verbose)
     test_2d_flat_baseline_exact(rng, verbose=verbose)
