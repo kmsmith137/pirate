@@ -335,18 +335,75 @@ def _nalpha_of(config, itree):
     return (1 << (int(tree.tree_rank) - int(fs.pf_rank))) * int(fs.M) * int(tree.nprofiles)
 
 
-def _random_map(config, itree, rng, *, nzero=0, dtype=np.float64, **kwargs):
+def expect_raise(fn, needle):
+    """Call 'fn' and require a RuntimeError whose message mentions 'needle'.
+
+    THE NEEDLE IS THE POINT. Five tests here check constructor and reader rejections, and what
+    each one is pinning is that the RIGHT rejection fired -- a bare "it raised" would pass when
+    an unrelated error happened first, which is exactly how a rejection test rots.
+    """
+    try:
+        fn()
+    except RuntimeError as e:
+        assert needle in str(e), (needle, str(e))
+        return
+    raise AssertionError(f'expected a RuntimeError mentioning {needle!r}')
+
+
+def _draw_K(rng, lo=1, hi=8):
+    """A factorization rank for one test.
+
+    A DRAW rather than a pinned rank, for the twelve tests that take one. The value worth
+    reaching on purpose is K = 1: 'mid' is then 1x1 and the map is a rank-one outer product,
+    where every loop over modes runs once and a transposed mode index has nothing to
+    disagree with.
+
+    The ceiling is well under the cell floor -- _draw_lp_cell_config() guarantees nbeta and
+    nfreq are both >= 16 -- so a factorization always has room for K modes and NO
+    'K = min(K, nbeta, nfreq)' cap is needed at the call sites. Pass 'lo' where a small K
+    makes an assertion vacuous; each caller that does says which one.
+    """
+    return int(rng.integers(int(lo), int(hi) + 1))
+
+
+def _random_map(config, itree, rng, *, nzero=None, dtype=np.float64, **kwargs):
     """A fine VarianceMap with a random nonnegative matrix, standing in for A_true.
+
+    THE ENTRIES ARE LOG-UNIFORM OVER A DRAWN NUMBER OF DECADES, not uniform over one. A real
+    variance-map row spans about 1e14 (LpConfig.clip_rel says so, and says what it costs), and
+    everything that only bites on a wide dynamic range is invisible on a matrix whose entries
+    all sit within a factor of 20 of each other: AdmissibilityResult.max_r is a PER-ELEMENT
+    RELATIVE quantity with no floor, so it is set by the smallest element compared;
+    check_ref_covers_y_true()'s margin is relative for the same reason; and the LP's row
+    equilibration exists precisely because the solver's own tolerance is absolute. The span is
+    drawn rather than pinned wide so that both regimes are sampled.
 
     'nzero' rows are set to zero, so that the YTRUE_FLOOR path (outputs with no variance) is
     exercised -- it is not an edge case in practice, since a W=0 Detrender2d annihilates the
-    DM=0 output.
+    DM=0 output. AS A FRACTION, NOT A COUNT (notes/unit_tests.md point 6): a fixed count of 2
+    or 3 puts YTRUE_FLOOR on 0.3% of rows at a median nalpha of ~900, and never reaches the
+    regime where most outputs are dead. Pass an explicit integer where a test needs an exact
+    number of dead rows. At least one row always survives, since several callers score the
+    map and a fully dead map has nothing to score.
     """
 
     tree = _tree(config, itree)
     fs = tree.frequency_subbands
     nalpha = (1 << (tree.tree_rank - fs.pf_rank)) * fs.M * tree.nprofiles
-    A = rng.uniform(0.1, 2.0, size=(nalpha, config.get_total_nfreq())).astype(dtype)
+
+    hi = 2.0
+    lo = hi * 10.0 ** (-float(rng.uniform(0.5, 6.0)))
+    A = np.exp(rng.uniform(np.log(lo), np.log(hi),
+                           size=(nalpha, config.get_total_nfreq()))).astype(dtype)
+
+    if nzero is None:
+        # A third of draws have no dead rows at all (the common case in production), and the
+        # rest draw a rate log-uniformly, so both "a handful" and "most of them" are reached.
+        pzero = 0.0 if (rng.random() < 1/3) else float(np.exp(rng.uniform(np.log(1e-3),
+                                                                         np.log(0.5))))
+        nzero = int(rng.binomial(nalpha, pzero))
+    nzero = min(int(nzero), max(nalpha - 1, 0))
+
     if nzero > 0:
         A[rng.choice(nalpha, size=nzero, replace=False)] = 0.0
     return VarianceMap.from_dense(config, itree, A, y_true='row_sums', is_admissible=True,
@@ -427,14 +484,6 @@ def test_constructor_validation():
     config = _random_config(rng)
     m = _random_map(config, 0, rng)
     R = m.pf_rank
-
-    def expect_raise(fn, needle):
-        try:
-            fn()
-        except RuntimeError as e:
-            assert needle in str(e), (needle, str(e))
-            return
-        raise AssertionError(f'expected a RuntimeError mentioning {needle!r}')
 
     # The granularity checks below need a coarse map whose row count actually DIFFERS from
     # the fine one, and L = R does not always give one: coarse-at-L is 2^(r-L) * N * P against
@@ -598,7 +647,9 @@ def test_distance():
     rng = _rng()
     config = _random_config(rng)
 
-    for nzero in (0, 3):
+    # An EXACT count, because the assertions below count nan rows; drawn rather than
+    # written out, and capped so something stays scorable.
+    for nzero in (0, int(rng.integers(1, max(2, min(9, _nalpha_of(config, 0)))))):
         true = _random_map(config, 0, rng, nzero=nzero)
         A_true = np.asarray(true.A, dtype=np.float64)
 
@@ -680,7 +731,7 @@ def test_admissibility():
     rng = _rng()
     config = _random_config(rng)
 
-    true = _random_map(config, 0, rng, nzero=2)
+    true = _random_map(config, 0, rng)
     L = true.pf_rank + 1
     ref = true.coarse_grain(L)
 
@@ -820,11 +871,18 @@ def test_admissibility():
         # by itself, and on a small drawn map one row is a big share of a mean over rows -- so
         # bracketing against D0 confounds the planting with the inflation and fails by a few
         # times 1e-3.
+        #
+        # The upper bound is RELATIVE to D_planted, not an absolute offset. Inflation scales
+        # the whole map by 'inflation', and D is a mean of per-row ratios, so the gap it opens
+        # is proportional to D itself; an absolute "+2*(max_r-1)" only held while the drawn
+        # entries spanned one decade and D stayed near 1. The factor of 2 is the slack: the
+        # exact statement would be D_inflated = inflation * D_planted, and the point being
+        # made is that a max_r near 1 bounds the movement, not that it predicts it.
         D_planted = planted.replace(is_admissible=True,
                                     history_record=dict(step='test')).get_distance()
         assert res.D_inflated >= D_planted - 1.0e-12, (res.D_inflated, D_planted)
-        assert res.D_inflated <= D_planted + 2.0*(res.max_r - 1.0), (res.D_inflated, D_planted,
-                                                                    res.max_r)
+        assert res.D_inflated <= D_planted * (1.0 + 2.0*(res.max_r - 1.0)) + 1.0e-12, \
+            (res.D_inflated, D_planted, res.max_r)
 
     # An ALREADY-admissible map is not touched: the factor is exactly 1 and D is unchanged.
     ok = capprox.measure_admissibility(ref, inflate=True)
@@ -925,7 +983,12 @@ def test_distance_oracles():
     # --- 3. get_row_distances() must point at the row that PAYS. Its mean is checked
     # elsewhere, and a mean is permutation-invariant: a per-row array with the right values
     # attached to the wrong rows would pass that and fail this.
-    ip = int(rng.integers(A.shape[0]))
+    # Planted on a SCORED row. A row whose y_true is below YTRUE_FLOOR is skipped -- its row
+    # distance is nan -- so planting on one would leave nanargmax pointing at whichever row
+    # happens to be worst among the rest, and the assertion would be about nothing.
+    scored = np.flatnonzero(np.asarray(true.y_true, dtype=np.float64) >= YTRUE_FLOOR)
+    assert scored.size > 0
+    ip = int(scored[rng.integers(scored.size)])
     planted = A * 1.05
     planted[ip] = A[ip] * 4.0
     pm = true.replace(A=planted, is_admissible=True, history_record=dict(step='test'))
@@ -1146,7 +1209,7 @@ def _factored_map(config, itree, rng, K=5, *, L=None, mid='full', nbeta=None, **
     return m, Q @ M @ W.T
 
 
-def test_factored_algebra(K=5):
+def test_factored_algebra(K=None):
     """The product identity, and every accessor that has a factored branch.
 
     Nothing here is about whether a factorization is any GOOD -- only that
@@ -1155,6 +1218,7 @@ def test_factored_algebra(K=5):
 
     rng = _rng()
     config = _random_config(rng)
+    K = _draw_K(rng) if K is None else K
 
     for mid_kind in ('identity', 'full'):
         m, ref = _factored_map(config, 0, rng, K=K, mid=mid_kind)
@@ -1201,7 +1265,7 @@ def test_factored_algebra(K=5):
     atomic_print(f'    test_factored_algebra(nbeta={m.nbeta}, K={K}): pass')
 
 
-def test_factored_equivalence(K=4):
+def test_factored_equivalence(K=None):
     """A dense map and a factored map that densify to the SAME matrix must agree everywhere.
 
     This is the cheapest way to catch a code path that still reaches for ``self.A``: every
@@ -1212,6 +1276,7 @@ def test_factored_equivalence(K=4):
 
     rng = _rng()
     config = _random_config(rng)
+    K = _draw_K(rng) if K is None else K
 
     # Nonnegative factors and a nonnegative 'mid', so the product is positive: the scoring
     # paths below are about VARIANCES, and get_distance() is only meaningful on one. (The
@@ -1248,11 +1313,12 @@ def test_factored_equivalence(K=4):
     atomic_print(f'    test_factored_equivalence(nbeta={nbeta}, K={K}): pass')
 
 
-def test_factored_transformations(K=4):
+def test_factored_transformations(K=None):
     """inflated() and lift() keep the factorization; both agree with the dense answer."""
 
     rng = _rng()
     config = _random_config(rng)
+    K = _draw_K(rng, lo=2) if K is None else K      # pinned_columns=[1] needs two columns
 
     m, ref = _factored_map(config, 0, rng, K=K, Q_is_semiorthogonal=True,
                            W_is_semiorthogonal=True, pinned_columns=[1])
@@ -1291,7 +1357,7 @@ def test_factored_transformations(K=4):
     atomic_print(f'    test_factored_transformations(nbeta={m.nbeta}, K={K}): pass')
 
 
-def test_factored_validation(K=4):
+def test_factored_validation(K=None):
     """Constructor rejections, and read-only enforcement on the factors.
 
     Only STRUCTURE is enforced -- shapes, a consistent K, dtypes, indices in range. The
@@ -1301,17 +1367,10 @@ def test_factored_validation(K=4):
 
     rng = _rng()
     config = _random_config(rng)
+    K = _draw_K(rng, lo=2) if K is None else K      # the rejections below perturb a column
     m, _ = _factored_map(config, 0, rng, K=K)
     Q, mid, W = np.asarray(m.Q), np.asarray(m.mid), np.asarray(m.W)
     nb, nf = m.nbeta, m.nfreq
-
-    def expect_raise(fn, needle):
-        try:
-            fn()
-        except RuntimeError as e:
-            assert needle in str(e), (needle, str(e))
-            return
-        raise AssertionError(f'expected a RuntimeError mentioning {needle!r}')
 
     F = lambda **kw: VarianceMap(config, 0, **kw)
     expect_raise(lambda: F(A=m.dense(), Q=Q, W=W), 'exactly')
@@ -1412,14 +1471,6 @@ def test_asdf_io():
     # of the product are reached.
     tmp = tempfile.mkdtemp()
 
-    def expect_raise(fn, needle):
-        try:
-            fn()
-        except RuntimeError as e:
-            assert needle in str(e), (needle, str(e))
-            return
-        raise AssertionError(f'expected a RuntimeError mentioning {needle!r}')
-
     try:
         path = os.path.join(tmp, 'vm.asdf')
 
@@ -1428,7 +1479,7 @@ def test_asdf_io():
         # is not reachable yet; the reader's refusal of it is checked below.)
         maps = []
         for i in iparents:
-            m = _random_map(config, i, rng, nzero=2)
+            m = _random_map(config, i, rng)
             R_m, r_m = int(m.pf_rank), int(m.tree_rank)
             if (r_m > R_m) and (rng.random() < 0.5):
                 m = m.coarse_grain(int(rng.integers(R_m + 1, r_m + 1)))
@@ -1688,7 +1739,10 @@ def test_asdf_detrender():
 
     rng = _rng()
     config = _random_config(rng)
-    dparams = _make_test_detrender(config)
+    # rng=rng, so the detrender is drawn rather than fixed: n_phi = 0, n = 0 and W = 0 are
+    # exactly the values a yaml round trip is most likely to drop (they are falsy), and the
+    # fixed detrender never produced any of them.
+    dparams = _make_test_detrender(config, rng=rng)
     tmp = tempfile.mkdtemp()
 
     try:
@@ -1724,7 +1778,7 @@ def test_asdf_detrender():
     atomic_print(f'    test_asdf_detrender(nalpha={_nalpha_of(config, 0)}): pass')
 
 
-def test_asdf_factored(K=4):
+def test_asdf_factored(K=None):
     """The factored half of the round trip, which completes the representation matrix:
     factored x {fine, coarse} x {admissible, uncertified} x {y_true present, absent}, through
     both readers.
@@ -1742,15 +1796,8 @@ def test_asdf_factored(K=4):
 
     rng = _rng()
     config = _random_config(rng)
+    K = _draw_K(rng, lo=3) if K is None else K   # pinned_columns=[0, 2] below
     tmp = tempfile.mkdtemp()
-
-    def expect_raise(fn, needle):
-        try:
-            fn()
-        except RuntimeError as e:
-            assert needle in str(e), (needle, str(e))
-            return
-        raise AssertionError(f'expected a RuntimeError mentioning {needle!r}')
 
     try:
         path = os.path.join(tmp, 'f.asdf')
@@ -1884,7 +1931,12 @@ def _draw_lp_cell_config(rng):
         nfreq = int(config.get_total_nfreq())
         if (nbeta >= 16) and (nfreq >= 16) and (nbeta * nfreq <= LP_CELL_BUDGET):
             return config
-    return config
+
+    # RAISE rather than returning the last draw. The floor is what lets every caller treat
+    # K <= 8 as always fitting the cell (see _draw_K); a silent fallback to a config that
+    # misses it would turn that into a rare, confusing failure somewhere else.
+    raise RuntimeError('_draw_lp_cell_config: no config met the LP-cell floor in 400 draws '
+                       f'(need nbeta >= 16, nfreq >= 16, nbeta*nfreq <= {LP_CELL_BUDGET})')
 
 
 def _lp_cell(L=None, K=5, seed=None, nzero=1, scaled=True):
@@ -1992,14 +2044,6 @@ def test_lp_config():
     assert LpConfig(**dict(dataclasses.asdict(q), rescue_ladder=[64, 32, 16, 8])) == q
 
     # Named but not implemented: these must raise rather than silently doing something else.
-    def expect_raise(fn, needle):
-        try:
-            fn()
-        except RuntimeError as e:
-            assert needle in str(e), (needle, str(e))
-            return
-        raise AssertionError(f'expected a RuntimeError mentioning {needle!r}')
-
     for kw, needle in ((dict(equilibrate=False), 'unequilibrated'),
                        (dict(slack=0.1), 'slack'), (dict(nnz_cap=2), 'nnz_cap')):
         expect_raise(LpConfig(**kw)._check_implemented, needle)
@@ -2638,7 +2682,7 @@ def _basis_cell(L=None, seed=None, nzero=1):
     return coarse, fine, rng
 
 
-def _decaying_map(K=8, seed=19, rate=0.5):
+def _decaying_map(K=8, seed=None, rate=0.5):
     """A coarse map whose spectrum DECAYS, built as a nonnegative low-rank product plus noise.
 
     _random_map()'s iid matrix has a nearly flat spectrum, which is the worst case for any
@@ -2648,10 +2692,20 @@ def _decaying_map(K=8, seed=19, rate=0.5):
     'rate' is the geometric ratio between successive modes. A real variance map decays SLOWLY,
     and that is the regime where a randomized range finder is hard and where its sampling
     settings show up -- so a test about those settings has to ask for one.
+
+    DO NOT PIN 'seed'. Everything numpy draws below then repeats forever, including
+    _random_config()'s gpu_valid coin flip -- so half the config space becomes invisible to
+    the caller no matter how long the run. That failure hides well: the C++ half of
+    make_random() draws through ksgpu::default_rng() and keeps varying, so the config still
+    changes from run to run and only the one bit is frozen. Pass a seed only to reproduce a
+    specific cell by hand.
     """
 
     rng = _rng(seed)
-    config = _random_config(rng)
+    # _draw_lp_cell_config(), not _random_config(): the cell has to have ROOM for the modes
+    # the caller asks about, and an unconstrained config coarse-grains to as few as one
+    # column.
+    config = _draw_lp_cell_config(rng)
     fine = _random_map(config, 0, rng)
     nbeta, nfreq = fine.coarse_grain(fine.pf_rank + 1).shape
 
@@ -2662,15 +2716,16 @@ def _decaying_map(K=8, seed=19, rate=0.5):
     return coarse.replace(A=A, history_record=dict(step='synthetic'))
 
 
-def test_svd(K=5):
+def test_svd(K=None):
     """svd() and truncate(): the dense path against numpy, the factored path against the dense
     one, and the flags against the matrices they describe."""
 
     ref, fine, rng = _basis_cell()
+    # lo=3 for two separate reasons: the eps assertions compare mode K-1 against mode 0,
+    # which at K = 1 is the same mode; and the truncate(2) rejection below pins column K-1
+    # and requires it to fall OUTSIDE the kept prefix [0, 2), which needs K-1 >= 2.
+    K = _draw_K(rng, lo=3) if K is None else K
     A = np.asarray(ref.dense(), dtype=np.float64)
-    # K CANNOT EXCEED min(nbeta, nfreq): a truncated SVD has at most that many modes, so
-    # svd(K) returns fewer and 'factor_rank == K' is false. The cell is drawn, so cap it.
-    K = min(K, ref.nbeta, ref.nfreq)
     U, s, Vt = np.linalg.svd(A, full_matrices=False)
 
     # method='exact' EXPLICITLY. This block compares the dense path against numpy, and 'auto'
@@ -2809,15 +2864,15 @@ def test_svd(K=5):
                  f' randomized to {err:.2g} relative ({emax:.2g} worst-case)')
 
 
-def test_column_algebra(K=5):
+def test_column_algebra(K=None):
     """The column helpers, each against the property it exists for."""
 
     from .basis import basis_envelope_column
 
     ref, fine, rng = _basis_cell()
-    # K, and K+1 for the append below, must fit the DRAWN cell: a factorization has at most
-    # min(nbeta, nfreq) modes, and pin_column(replace_last=False) asks for one more.
-    K = min(K, ref.nbeta - 1, ref.nfreq - 1)
+    # lo=2 because pin_column() REPLACES the last column by default, and at K = 1 that
+    # leaves the map with nothing but the pinned column.
+    K = _draw_K(rng, lo=2) if K is None else K
     raw = ref.svd(K, method='exact')
     A0 = np.array(raw.dense())
 
@@ -2883,8 +2938,8 @@ def test_column_algebra(K=5):
     # and the resulting mis-pin is silent until a repair goes looking for its nonnegative column.
     two = pin.pin_column(w, replace_last=False)              # pins at 0 and 1
     assert list(two.pinned_columns) == [0, 1]
-    # A permutation that KEEPS both pinned columns (0 and 1) and drops the rest, built from
-    # the actual rank: [3,1,0] assumes K >= 4.
+    # A permutation that KEEPS both pinned columns (0 and 1), reorders them, and drops the
+    # rest. Built from the actual rank rather than written out, since K is drawn.
     pick = [two.factor_rank - 1, 1, 0]
     sel = two.select_columns(pick)
     assert (sel.factor_rank == 3) and (list(sel.pinned_columns) == [2, 1])
@@ -2893,7 +2948,7 @@ def test_column_algebra(K=5):
                        @ np.asarray(two.W)[:, pick].T)
     assert not sel.is_admissible
     try:
-        two.select_columns([1, 2, 3])
+        two.select_columns(list(range(1, two.factor_rank)))    # drops pinned column 0
         raise AssertionError('select_columns() should refuse to drop a pinned column')
     except RuntimeError as e:
         assert 'pinned column' in str(e), str(e)
@@ -2923,7 +2978,7 @@ def test_column_algebra(K=5):
                  ' column scaling inert, pinned indices remapped')
 
 
-def test_reorthogonalize(K=6):
+def test_reorthogonalize(K=None):
     """reorthogonalize(): the same matrix, a semiorthogonal W, and the pinned column intact.
 
     The last is the whole reason for the ordered QR. A plain rotation destroys the nonnegative
@@ -2934,7 +2989,9 @@ def test_reorthogonalize(K=6):
     from .basis import basis_envelope_column
 
     ref, fine, rng = _basis_cell()
-    K = min(K, ref.nbeta, ref.nfreq)
+    # lo=3 for the permutation below: it moves the pinned column off index 0, which needs
+    # three columns to be a permutation a plain QR would not preserve by accident.
+    K = _draw_K(rng, lo=3) if K is None else K
     w = basis_envelope_column(ref)
     m = ref.svd(K, method='exact').canonicalize_signs().pin_column(w).replace(is_admissible=True)
     A0 = np.array(m.dense())
@@ -2960,7 +3017,7 @@ def test_reorthogonalize(K=6):
     # than column 0, where a plain QR would preserve it by accident.
     # A drawn permutation that puts the pinned column somewhere other than 0, which is
     # where a plain QR would preserve it by accident.
-    perm = [1, 2, 0] + list(range(3, K)) if K >= 3 else list(range(K))[::-1]
+    perm = [1, 2, 0] + list(range(3, K))
     moved = m.select_columns(perm)
     assert list(moved.pinned_columns) == [perm.index(0)]
     kept = np.asarray(moved.reorthogonalize().W)[:, 0]
@@ -2982,7 +3039,7 @@ def test_reorthogonalize(K=6):
                  ' positive scale, and lost by the plain rotation')
 
 
-def test_svd_optimize(K=5, j=3):
+def test_svd_optimize(K=None, j=None):
     """VarianceMap.svd_optimize() against a factorization with KNOWN redundancy.
 
     The point of the method is to find the TRUE rank of a factorization assembled from
@@ -3004,6 +3061,8 @@ def test_svd_optimize(K=5, j=3):
 
     rng = _rng()
     config = _random_config(rng)
+    K = _draw_K(rng) if K is None else K
+    j = int(rng.integers(1, 5)) if j is None else j   # the redundant columns, >= 1 by design
     # _nalpha_of() takes the TREE INDEX, and the base tree is not always index 0 -- with early
     # triggers the (gamma=0, e=0) tree can be at any index. Passing a literal 0 here built Q
     # at another tree's row count and VarianceMap rejected it, on the draws where they differ.
@@ -3143,14 +3202,16 @@ def test_greedy_bookkeeping():
     atomic_print(f'    test_greedy_bookkeeping(nbeta={ref.nbeta}): pass')
 
 
-def test_basis_constructors(K=4):
+def test_basis_constructors(K=None):
     """Every module-level basis constructor, through the one thing they are all for: a Q-step
     against it produces an admissible map."""
 
     from . import basis as vb
 
     ref, fine, rng = _basis_cell()
-    K = min(K, ref.nbeta, ref.nfreq)
+    # lo=2: the K = 1 constructors are checked explicitly below, against the whole-map
+    # envelope, so the drawn K is there to cover the multi-atom case.
+    K = _draw_K(rng, lo=2) if K is None else K
     A = np.asarray(ref.dense())
 
     W_svd = vb.basis_svd(ref, K)
@@ -3247,7 +3308,7 @@ def test_basis_constructors(K=4):
                     ', '.join(f'{k} {v:.4g}' for k, v in D.items())))
 
 
-def test_map_steps(K=5):
+def test_map_steps(K=None):
     """qstep() / wstep() / repair(): the wrappers against the array level they wrap.
 
     The numerics are varmap.lp's and are tested there. What is tested here is everything the
@@ -3259,7 +3320,8 @@ def test_map_steps(K=5):
     from .basis import basis_envelope_column
 
     ref, fine, rng = _basis_cell()
-    K = max(2, min(K, ref.nbeta, ref.nfreq))
+    # lo=2: seed_onehot() needs a nonnegative column besides the pinned one.
+    K = _draw_K(rng, lo=2) if K is None else K
     Abar = np.asarray(ref.dense(), dtype=np.float64)
     # canonicalize_signs BEFORE pinning, and pin by APPENDING rather than replacing: pinning
     # over the last column can leave no nonnegative column when K is small and the remaining
@@ -3425,7 +3487,7 @@ def test_map_steps(K=5):
                  f' mid folded for the additive repair, D {m.get_distance():.6g}')
 
 
-def test_report(K=4):
+def test_report(K=None):
     """varmap/report.py: the record is assembled from the map, and survives a json round trip.
 
     The property worth testing is not the formatting -- it is that a record says what the map
@@ -3440,7 +3502,7 @@ def test_report(K=4):
     from . import report as vr
 
     ref, fine, rng = _basis_cell()
-    K = min(K, ref.nbeta, ref.nfreq)
+    K = _draw_K(rng) if K is None else K
     m = vb.svd_init(ref, K, workers=1)
 
     D = m.get_distance()
@@ -4452,10 +4514,15 @@ def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3, rng=None):
     # 'rng' randomizes the detrender itself, not just the config it is matched to. The
     # ranges are the ones Detrender2dParams accepts and that the sweep can afford: W is the
     # half-width in time samples and drives the polyphase pass count, so it stays small.
+    #
+    # W = 0 IS REACHED ON PURPOSE, and is not just the small end of a range: _SweepGeometry
+    # keys the entire polyphase shortcut off W > 0, so W = 0 is the other branch of that
+    # decision and nothing drew it before. It forces n = 0 with it, since a degree-n fit
+    # needs 2W+1 >= n+1 samples in the window.
     if rng is not None:
         n_phi = int(rng.integers(0, 3))
-        n = int(rng.integers(0, 3))          # Detrender2d requires n in [0, 2]
-        W = int(rng.integers(1, 6))
+        W = 0 if (rng.random() < 0.2) else int(rng.integers(1, 6))
+        n = 0 if (W == 0) else int(rng.integers(0, 3))   # Detrender2d requires n in [0, 2]
         nzone = int(rng.integers(1, 4))
         kint = int(rng.integers(1, 5))
 
@@ -4581,15 +4648,18 @@ def test_sweep_column_norms_random(verbose=True, max_attempts=500):
         cost = ((geom.ntime + geom.nt_in) * (geom.ndata_chunks + 3)
                 * sum(1 << r for r in geom.tree_r))
         if cost <= COLUMN_NORMS_BUDGET:
-            test_sweep_column_norms(config=config, detrender=detrender, nifreq=1,
-                                    verbose=verbose, rng=rng)
+            # 'dparams', not the coin flip: the cost above is priced on this exact
+            # detrender, and the detrender is drawn -- so letting the test build a second one
+            # would run a geometry the budget never saw.
+            test_sweep_column_norms(config=config, detrender=dparams, nifreq=1,
+                                    verbose=verbose)
             return
 
     atomic_print('    test_sweep_column_norms_random: no draw came in under'
                  f' COLUMN_NORMS_BUDGET={COLUMN_NORMS_BUDGET:.1e}; SKIPPED')
 
 
-def test_sweep_column_norms(config, detrender=True, nifreq=2, verbose=True, rng=None):
+def test_sweep_column_norms(config, detrender=None, nifreq=2, verbose=True):
     """Evaluates the defining identity ``A[alpha,F] = sum_{t'} L[alpha t, F t']^2`` LITERALLY
     -- one pass per input time t', reading the output of one fixed chunk -- and compares it to
     what the sweep computes, which is instead a sum over output times for one input time.
@@ -4606,8 +4676,9 @@ def test_sweep_column_norms(config, detrender=True, nifreq=2, verbose=True, rng=
 
     from .brute_force import _CpuSweep, _SweepGeometry, sweep_all_trees_dense
 
-    # 'rng', when given, also randomizes the detrender's own parameters.
-    dparams = _make_test_detrender(config, rng=rng) if detrender else None
+    # 'detrender' IS the Detrender2dParams (or None), supplied by the caller along with the
+    # config. See the note at test_sweep_column_norms_random()'s call.
+    dparams = detrender
 
     A = _abcd_all(config, sweep_all_trees_dense(config, dparams, device='cpu'))
 
@@ -4682,7 +4753,7 @@ def test_sweep_column_norms(config, detrender=True, nifreq=2, verbose=True, rng=
     assert worst < 1.0e-5, (worst, worst_where)
 
 
-def test_sweep_detrender_fp32(r=8, nifreq=16, verbose=True):
+def test_sweep_detrender_fp32(r=8, nifreq=16, verbose=True, rng=None):
     """Measures the Detrender2d's own float32 penalty, by running the numpy detrender at
     float32 and float64 on the same one-hots.
 
@@ -4694,8 +4765,11 @@ def test_sweep_detrender_fp32(r=8, nifreq=16, verbose=True):
 
     from .brute_force import _SweepGeometry
 
+    # The GEOMETRY is pinned (this is a measurement at one config) but the DETRENDER is
+    # drawn: the fp32 penalty is a property of the detrender, so a fixed one bounds the
+    # penalty of that detrender and says nothing about the others the GPU sweep may run.
     config = _make_test_config(r, [1])
-    dparams = _make_test_detrender(config)
+    dparams = _make_test_detrender(config, rng=_rng(None) if rng is None else rng)
     g64 = _SweepGeometry(config, detrender=dparams, detrender_dtype=np.float64)
     g32 = _SweepGeometry(config, detrender=dparams, detrender_dtype=np.float32)
 
@@ -4744,7 +4818,7 @@ def test_sweep_detrender_fp32(r=8, nifreq=16, verbose=True):
 GPU_VS_CPU_WORK_BUDGET = 1.5e8
 
 
-def _draw_gpu_vs_cpu_case(max_attempts=500, nbeams=None, detrender=None):
+def _draw_gpu_vs_cpu_case(max_attempts=500, nbeams=None, detrender=None, rng=None):
     """A random (config, detrender, nbeams) for test_sweep_gpu_vs_cpu(), under the cost cap.
 
     Returns None if no draw came in under budget, which the caller reports rather than
@@ -4767,6 +4841,8 @@ def _draw_gpu_vs_cpu_case(max_attempts=500, nbeams=None, detrender=None):
     from ..pirate_pybind11 import DedispersionConfig
     from .brute_force import _SweepGeometry
 
+    rng = _rng() if rng is None else rng
+
     for _ in range(max_attempts):
         config = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=2,
                                                 force_float32=True, no_host_mega_ringbuf=True)
@@ -4785,13 +4861,17 @@ def _draw_gpu_vs_cpu_case(max_attempts=500, nbeams=None, detrender=None):
             config.validate()
             config.beams_per_gpu = config.beams_per_batch = 1
             config.validate()
-            dparams = _make_test_detrender(config) if det else None
+            dparams = _make_test_detrender(config, rng=rng) if det else None
             geom = _SweepGeometry(config, detrender=dparams)
         except RuntimeError:
             continue
 
         if _sweep_work(geom) <= GPU_VS_CPU_WORK_BUDGET:
-            return config, det, nb
+            # THE DETRENDER IS RETURNED, not rebuilt by the caller. The cost model above is
+            # priced on this exact object, and the detrender is drawn -- so a second
+            # _make_test_detrender() call would give a different one, and the test would run
+            # a geometry the budget never saw.
+            return config, dparams, nb
 
     return None
 
@@ -4814,27 +4894,31 @@ def test_sweep_gpu_vs_cpu_random(verbose=True, nbeams=None, detrender=None):
                      f' GPU_VS_CPU_WORK_BUDGET={GPU_VS_CPU_WORK_BUDGET:.1e}; SKIPPED')
         return
 
-    config, detrender, nbeams = case
-    test_sweep_gpu_vs_cpu(config=config, detrender=detrender, nbeams=nbeams, verbose=verbose)
+    config, dparams, nbeams = case
+    test_sweep_gpu_vs_cpu(config=config, detrender=dparams, nbeams=nbeams, verbose=verbose)
 
 
-def test_sweep_gpu_vs_cpu(config, detrender=False, nbeams=1, verbose=True):
+def test_sweep_gpu_vs_cpu(config, detrender=None, nbeams=1, verbose=True):
     """The GPU sweep against the CPU one, element by element, on the same config.
 
     Both GPU kernels are separately validated against their reference implementations
     ('pirate_frb test --sbdd' and '--pfsq'), so a discrepancy here points at the driver rather
     than at a kernel.
 
-    The config is always supplied by the caller; _draw_gpu_vs_cpu_case() draws it, and says
-    there which geometries matter and which of them come free from the draw. 'nbeams' is the
-    one knob this test supplies that a config has nothing to say about, and it is worth
-    raising: the lds kernel reads and writes with a single beam stride, so a stride error is
-    invisible at nbeams == 1.
+    The config and the detrender are both supplied by the caller; _draw_gpu_vs_cpu_case()
+    draws them together, and says there which geometries matter and which of them come free
+    from the draw. 'nbeams' is the one knob this test supplies that a config has nothing to
+    say about, and it is worth raising: the lds kernel reads and writes with a single beam
+    stride, so a stride error is invisible at nbeams == 1.
     """
 
     from .brute_force import compute_variance_multimap
 
-    dparams = _make_test_detrender(config) if detrender else None
+    # 'detrender' IS THE Detrender2dParams (or None), not a flag saying to build one. It has
+    # to be, because the detrender is drawn: _draw_gpu_vs_cpu_case() prices the case on one
+    # particular detrender, and building a second here would run a geometry its cost model
+    # never saw.
+    dparams = detrender
 
     # The CPU reference is detrended at the GPU's precision, so that both sides run the same
     # detrender and the bar below measures the DRIVER. Without this the detrender's own float32
@@ -4895,7 +4979,10 @@ def test_sweep_streaming_coarse(r=6, subband_counts=None, num_early_triggers=0,
 
     subband_counts = [2, 1] if (subband_counts is None) else subband_counts
     config = _make_test_config(r, subband_counts, num_early_triggers=num_early_triggers)
-    dparams = _make_test_detrender(config) if detrender else None
+    # 'detrender' stays a knob (the callers sweep it on/off), but the detrender it turns on
+    # is drawn: what this test asserts is bit-identity between two reductions, which holds
+    # for any detrender, so pinning one bought nothing.
+    dparams = _make_test_detrender(config, rng=_rng()) if detrender else None
     dense = compute_variance_multimap(config, detrender=dparams, device='cpu')
 
     npri = dense.num_primary_trees
@@ -5146,7 +5233,7 @@ def _child_group_labels(tree, L):
     return ((dm_full >> L) * N + n) * P + p
 
 
-def test_restriction_representation(K=5):
+def test_restriction_representation(K=None):
     """The restricted apply() result does not depend on how the PARENT is represented.
 
     A factored parent contracts K vectors while the dense map it stands for sums each row over
@@ -5161,6 +5248,7 @@ def test_restriction_representation(K=5):
 
     rng = _rng()
     config = _random_config(rng)
+    K = _draw_K(rng) if K is None else K
     nfreq = int(config.get_total_nfreq())
     v = rng.uniform(0.5, 2.0, size=nfreq)
 
