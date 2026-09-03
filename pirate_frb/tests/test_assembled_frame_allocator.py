@@ -2,11 +2,11 @@
 Unit tests for AssembledFrameAllocator.
 
 Tests covered:
-  - Test 3: Frame set allocation and properties (metadata, data shape, initialization)
-  - Test 4: Sequence ordering (set / beam cycling, time chunks)
-  - Test 5: Multi-consumer scenarios (set/frame identity, independent progress)
-  - Test 6 (partial): Set recycling
-  - Test 7: throw_exception_if_empty (startup burst, fail-fast get_frame_set)
+  - Frame set allocation and properties (metadata, data shape, initialization)
+  - Sequence ordering (set / beam cycling, time chunks)
+  - Multi-consumer scenarios (set/frame identity, independent progress)
+  - Set recycling
+  - throw_exception_if_empty (startup burst, fail-fast get_frame_set)
 
 get_frame_set(time_chunk_index) returns the AssembledFrameSet (= nbeams
 frames) for one time chunk; each chunk must be requested exactly
@@ -63,7 +63,7 @@ def _test_metadata(nfreq, beam_ids):
 
 def test_frame_properties():
     """
-    Test 3: Frame set + frame allocation and properties.
+    Frame set + frame allocation and properties.
 
     Verifies:
       - Set metadata (nfreq, ntime, nbeams, time_chunk_index, len(frames))
@@ -124,74 +124,47 @@ def test_frame_properties():
 
 def test_sequence_ordering():
     """
-    Test 4: Sequence ordering.
+    Sequence ordering.
 
     Verifies that get_frame_set(chunk_idx) returns the set for exactly that
     chunk index, and that each set contains frames in metadata.beam_ids order.
+
+    Run at nbeams > 1 and at nbeams == 1: a one-frame set is the edge case
+    where a per-beam indexing error has nothing to disagree with.
     """
     atomic_print("  test_sequence_ordering()...")
 
-    nfreq = 64
     time_samples_per_chunk = 256
-    beam_ids = [5, 15, 25]
-    num_chunks = 4
 
-    slab = make_slab_allocator()
-    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk, throw_exception_if_empty=False)
-    alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
-    alloc.initialize_initial_chunk(0)
+    for (nfreq, beam_ids, num_chunks) in [(64, [5, 15, 25], 4), (32, [42], 5)]:
+        slab = make_slab_allocator()
+        alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk, throw_exception_if_empty=False)
+        alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
+        alloc.initialize_initial_chunk(0)
 
-    # Verify allocator state after initialization.
-    assert alloc.nfreq == nfreq
-    assert alloc.time_samples_per_chunk == time_samples_per_chunk
-    assert list(alloc.beam_ids) == beam_ids
+        # Verify allocator state after initialization.
+        assert alloc.nfreq == nfreq
+        assert alloc.time_samples_per_chunk == time_samples_per_chunk
+        assert list(alloc.beam_ids) == beam_ids
 
-    # Walk through num_chunks sets and verify each.
-    for chunk_idx in range(num_chunks):
-        fset = alloc.get_frame_set(chunk_idx)
-        assert fset.time_chunk_index == chunk_idx, \
-            f"Set {chunk_idx}: expected time_chunk_index={chunk_idx}, got {fset.time_chunk_index}"
-        assert len(fset.frames) == len(beam_ids)
+        # Walk through num_chunks sets and verify each.
+        for chunk_idx in range(num_chunks):
+            fset = alloc.get_frame_set(chunk_idx)
+            assert fset.time_chunk_index == chunk_idx, \
+                f"Set {chunk_idx}: expected time_chunk_index={chunk_idx}, got {fset.time_chunk_index}"
+            assert len(fset.frames) == len(beam_ids)
 
-        for beam_idx, frame in enumerate(fset.frames):
-            assert frame.beam_id == beam_ids[beam_idx], \
-                f"Chunk {chunk_idx}, frame {beam_idx}: expected beam_id={beam_ids[beam_idx]}, got {frame.beam_id}"
-            assert frame.time_chunk_index == chunk_idx
-
-    atomic_print("    PASSED")
-
-
-def test_single_beam_sequence():
-    """
-    Test 4 (edge case): Single beam sequence.
-
-    Each set has exactly one frame; chunk indices 0..4 requested in order.
-    """
-    atomic_print("  test_single_beam_sequence()...")
-
-    nfreq = 32
-    time_samples_per_chunk = 256
-    beam_ids = [42]
-
-    slab = make_slab_allocator()
-    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk, throw_exception_if_empty=False)
-    alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
-    alloc.initialize_initial_chunk(0)
-
-    for chunk_idx in range(5):
-        fset = alloc.get_frame_set(chunk_idx)
-        assert fset.time_chunk_index == chunk_idx
-        assert len(fset.frames) == 1
-        frame = fset.frames[0]
-        assert frame.beam_id == 42
-        assert frame.time_chunk_index == chunk_idx
+            for beam_idx, frame in enumerate(fset.frames):
+                assert frame.beam_id == beam_ids[beam_idx], \
+                    f"Chunk {chunk_idx}, frame {beam_idx}: expected beam_id={beam_ids[beam_idx]}, got {frame.beam_id}"
+                assert frame.time_chunk_index == chunk_idx
 
     atomic_print("    PASSED")
 
 
 def test_multi_consumer_frame_identity():
     """
-    Test 5: Multi-consumer set+frame identity.
+    Multi-consumer set+frame identity.
 
     Verifies that multiple consumers requesting the same chunk index receive
     the exact same set object (and therefore the exact same frame objects
@@ -242,7 +215,7 @@ def test_multi_consumer_frame_identity():
 
 def test_multi_consumer_independent_progress():
     """
-    Test 5: Multi-consumer independent progress.
+    Multi-consumer independent progress.
 
     Verifies that consumers can progress at different rates (in chunk units),
     each receiving the correct sequence of AssembledFrameSets.
@@ -289,7 +262,7 @@ def test_multi_consumer_independent_progress():
 
 def test_frame_recycling():
     """
-    Test 6 (partial): Set recycling.
+    Set recycling.
 
     Verifies that frame sets are returned to the pool when all consumers have
     received and released them. Uses a small slab allocator to force recycling.
@@ -361,7 +334,7 @@ def test_frame_recycling():
 
 def test_frame_recycling_with_held_reference():
     """
-    Test 6 (partial): Set recycling with held reference.
+    Set recycling with held reference.
 
     Verifies that:
     - Sets are recycled when all consumers have received them AND no Python
@@ -447,7 +420,7 @@ def test_frame_recycling_with_held_reference():
 
 def test_throw_exception_if_empty():
     """
-    Test 7: throw_exception_if_empty=True (startup burst + fail-fast get_frame_set).
+    throw_exception_if_empty=True (startup burst + fail-fast get_frame_set).
 
     Verifies:
       (a) the worker's startup burst pre-allocates
@@ -539,22 +512,12 @@ def test_assembled_frame_allocator():
     """
     atomic_print("Testing AssembledFrameAllocator...")
 
-    # Test 3: Frame allocation and properties
     test_frame_properties()
-
-    # Test 4: Sequence ordering
     test_sequence_ordering()
-    test_single_beam_sequence()
-
-    # Test 5: Multi-consumer scenarios
     test_multi_consumer_frame_identity()
     test_multi_consumer_independent_progress()
-
-    # Test 6 (partial): Set recycling
     test_frame_recycling()
     test_frame_recycling_with_held_reference()
-
-    # Test 7: throw_exception_if_empty (startup burst + fail-fast)
     test_throw_exception_if_empty()
 
     atomic_print("All AssembledFrameAllocator tests PASSED!")

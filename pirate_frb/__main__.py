@@ -226,9 +226,12 @@ def test(args):
                 kernels.PfOutputMicrokernel.test_random()
         
         if run_all_tests or args.pfsq:
-            # test_vs_peak_finder() is the tree's only cross-family check: it links the
-            # peak-finding kernels to the squaring kernels, which --gpfk and
-            # GpuPfSquare.test_random() each cover only one side of.
+            # test_vs_peak_finder() is the only link between the peak-finding kernels and
+            # the squaring kernels, which --gpfk and GpuPfSquare.test_random() each cover only
+            # one side of. What it uniquely protects is the STREAMING comparison -- chunk
+            # boundaries, tpad history, batch ordering, and (dpf, m) row order. (The
+            # peak-finder's h_p coefficients are also reached from the other side by
+            # PfVarianceConvolver.test_kernels_match_reference(), one impulse at a time.)
             kernels.ReferencePfSquare.test_vs_peak_finder()
             kernels.GpuPfSquare.test_random()
         

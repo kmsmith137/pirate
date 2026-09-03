@@ -6,8 +6,8 @@ over (channel, window offset) pairs and numpy's own dense solve, one (beam, time
 sample at a time.  It shares no code with the fast path below the level of
 knots.py, basis.py and timebasis.py -- in particular it never forms window
 moments, never uses the banded layout, and never touches the coefficient-major
-index order -- so test_reference_agreement() is a genuine cross-check of the
-moment stencil, the block assembly and the banded factorization rather than a
+index order -- so tests.test_2d_reference_agreement() is a genuine cross-check of
+the moment stencil, the block assembly and the banded factorization rather than a
 restatement of them.
 
 Not for production use: it materializes a ((2W+1) nfreq, N_phi(n+1)) design

@@ -267,7 +267,7 @@ def test_polynomial_exactness(rng=None, verbose=True):
     T = 2*Tc + L
     det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
     P = _poly_stream(rng, 1, T, 2*k-1, tau, np.float64)
-    r3, mk3, _ = det.detrend_stream(P, np.ones((1, T), dtype=bool))
+    r3, _, _ = det.detrend_stream(P, np.ones((1, T), dtype=bool))
     head = float(np.max(np.abs(r3[0, :int(2*ell)])))
     interior = float(np.max(np.abs(r3[0, int(8*ell):])))
 
@@ -388,7 +388,7 @@ def test_kernel_response(rng=None, verbose=True):
     forward filter is still spinning up and the deviation is dominated by that
     instead -- hence Tc and L scale with tau below.
     """
-    k, Tc0 = K, 32
+    k = K
     c_k = 1.0 / (2*k*np.sin(np.pi/(2*k)))
     devs = []
 
@@ -439,11 +439,11 @@ def test_psd_and_finite(rng=None, verbose=True):
     for dtype in (np.float64, np.float32):
         mo = StateSpaceModel(k, tau, dtype=dtype)
         T = 96
-        mask, labels = random_mask(24, T, L, rng)
+        mask, _ = random_mask(24, T, L, rng)
         d = (rng.normal(size=(24, T)) + 3.0).astype(dtype)
         m = mask.astype(dtype)
 
-        for name, step, init in (('forward', forward_step, None), ('backward', backward_step, None)):
+        for name, step in (('forward', forward_step), ('backward', backward_step)):
             J = np.zeros((24, k, k), dtype=dtype)
             eta = np.zeros((24, k), dtype=dtype)
             for u in range(T):
@@ -619,7 +619,7 @@ _STAGE1 = [test_model_algebra, test_recursions_vs_dense, test_polynomial_exactne
            test_masked_data_unused]
 
 
-def run_all(verbose=True, rng=None, stage1_only=False):
+def run_all(verbose=True, rng=None):
     """
     T1-T8 first, then T9.  All share one generator, so printing its entropy makes the
     whole run reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
@@ -628,7 +628,6 @@ def run_all(verbose=True, rng=None, stage1_only=False):
     print(f'  detrending_1d_kalman tests (rng entropy {rng.bit_generator.seed_seq.entropy})')
     for fn in _STAGE1:
         fn(rng, verbose=verbose)
-    if not stage1_only:
-        test_dtype_agreement(rng, verbose=verbose)
+    test_dtype_agreement(rng, verbose=verbose)
     print(f'  detrending_1d_kalman tests passed   '
           f'[cumulative mask expansion: {_expansion_str()}]')

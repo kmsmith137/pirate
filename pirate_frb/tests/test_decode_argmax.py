@@ -1,8 +1,8 @@
 """
 Black-box tests of decode_argmax() (run via 'test --amax').
 
-Note decode_argmax(), decode_argmax2() and compute_steady_state_it0() are DedispersionTree
-methods; DedispersionPlan has none of them. The VECTORIZED (batch) bindings live on
+Note decode_argmax(), decode_argmax2() and compute_steady_state_it0() are DedispersionPlan
+methods; DedispersionTree has none of them. The VECTORIZED (batch) bindings live on
 FrbGrouper, which is what the production event path uses, and are tested in test_server.py
 ('test --serv').
 

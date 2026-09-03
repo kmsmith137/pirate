@@ -31,11 +31,10 @@ Goals of the network test:
      via SubscribeFiles with empty stream_name), and the future part is
      truncated at future_write_max_samples (rounded up to a chunk).
 
-NOTE: "stream" (StartStream/ShowStreams/CancelStream RPC) testing was
-temporarily removed from this test on 2026-07-10: it had race conditions
-that were a recurring source of spurious failures. Recover the removed
-code from git history when reinstating (it was introduced around commit
-9b0fd91, and removed in the commit that added this note).
+ - NOT YET COVERED: "streams" (StartStream/ShowStreams/CancelStream RPC).
+     The obstacle is that stream lifecycle events race the processing
+     thread, so a test needs a deterministic way to order the two against
+     each other; without one it fails spuriously rather than usefully.
 
 Run via: python -m pirate_frb test --net
 """

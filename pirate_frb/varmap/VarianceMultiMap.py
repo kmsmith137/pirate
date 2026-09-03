@@ -381,5 +381,5 @@ class VarianceMultiMap:
     # in notes/variance_map.tex defines a distance for a whole plan; any aggregate we invented
     # (an nalpha-weighted mean, say) would be a number with no agreed meaning, which is
     # exactly what the distance function's comparability contract exists to prevent. Write
-    # [m.get_distance() for m in vmm] and aggregate at the call site, where the choice is
+    # [m.get_distance() for m in vmm.maps] and aggregate at the call site, where the choice is
     # visible.

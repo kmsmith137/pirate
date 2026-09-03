@@ -558,7 +558,7 @@ struct PfWeightReaderMicrokernel
     static void test_random();
 };
 
-// Defined in GpuPeakFindingKernel.cu
+// Defined in PeakFindingKernel.cu
 extern bool operator==(const PfWeightReaderMicrokernel::RegistryKey &k1, const PfWeightReaderMicrokernel::RegistryKey &k2);
 extern std::ostream &operator<<(std::ostream &os, const PfWeightReaderMicrokernel::RegistryKey &k);
 extern std::ostream &operator<<(std::ostream &os, const PfWeightReaderMicrokernel::RegistryValue &v);
@@ -578,8 +578,8 @@ struct PfOutputMicrokernel
     {
         // cuda_kernel(void *zout, uint *aout, void *zin, uint *ain, uint nt_in)
         //
-        // zout: shape (nt_in//Dout) == (nt_in//4)
-        // aout: shape (nt_in//Dout) == (nt_in//4)
+        // zout: shape (nt_in//Dout)
+        // aout: shape (nt_in//Dout)
         // zin: shape (4, nt_in)
         // ain: shape (4, nt_in)
         // nt_in: number of input time samples
@@ -603,7 +603,7 @@ struct PfOutputMicrokernel
     static void test_random();
 };
 
-// Defined in GpuPeakFindingKernel.cu
+// Defined in PeakFindingKernel.cu
 extern bool operator==(const PfOutputMicrokernel::RegistryKey &k1, const PfOutputMicrokernel::RegistryKey &k2);
 extern std::ostream &operator<<(std::ostream &os, const PfOutputMicrokernel::RegistryKey &k);
 extern std::ostream &operator<<(std::ostream &os, const PfOutputMicrokernel::RegistryValue &v);

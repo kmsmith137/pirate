@@ -18,8 +18,8 @@ is the elementwise scan that establishes the first.
 DO NOT CHANGE THE DEFINITION OF D SILENTLY. Its whole purpose is that numbers from different
 experiments are comparable; a change makes new numbers incomparable with every number recorded
 in notes/variance_map.tex. Propose changes in the research journal instead. varmap/tests.py's
-test_distance() pins golden values of D, so an accidental change fails there rather than
-quietly producing new numbers.
+test_distance_oracles() pins the VALUE of D against oracles written out by hand, so an
+accidental change fails there rather than quietly producing new numbers.
 
 In particular, if a number recorded before this package disagrees with get_distance(), suspect
 a known CONVENTION difference before suspecting a bug here. An early evaluation harness

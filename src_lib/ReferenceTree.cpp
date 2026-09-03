@@ -555,7 +555,8 @@ void ReferenceTree::test_subbands()
     shared_ptr<ReferenceLagbuf> lb = tree_with_subbands.final_lagbuf;
     shared_ptr<ReferenceLagbuf> local_lagbuf = make_shared<ReferenceLagbuf> (lb->lags, lb->ntime);
 
-    // FIXME should test strides! ('buf' and 'out' only)
+    // 'buf' and 'out' carry randomized strides (see dd_strides / out_strides above); 'in'
+    // is contiguous, since it is only the source that 'buf' is filled from.
     Array<float> in({B,A,Din,T*S}, af_uhost | af_zero);
     Array<float> buf({B,A,Din,T*S}, dd_strides, af_uhost | af_zero);
     Array<float> out({B,Dpf,M,T*S}, out_strides, af_uhost | af_zero);

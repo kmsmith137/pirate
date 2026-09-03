@@ -76,8 +76,9 @@ _worst_rmin = [np.inf]
 # a sane rate -- a single iteration is far too small a sample to judge from.
 #
 # Keyed by (n_phi, dtype-eps), because the two precisions use different eps
-# (1e-4 vs 1e-7) and therefore expand at different rates BY CONSTRUCTION; pooling
-# them would make the number uninterpretable.  n_phi is in the key because at
+# (EPS_FLOAT32 = 3e-5 vs EPS_FLOAT64 = 1e-7) and therefore expand at different
+# rates BY CONSTRUCTION; pooling them would make the number uninterpretable.
+# n_phi is in the key because at
 # n_phi = 0 the regulator is identically zero and r_min is exactly 1, so
 # expansion can never fire there and a pooled rate would be diluted by it.
 _EXPANSION_2D = {}
@@ -387,7 +388,7 @@ def test_flat_baseline_exact(rng, verbose=True):
             mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
             level = rng.uniform(0.5, 2.0)
             d = np.full((M_ax, kv.nfreq, ntime), level, dtype=dtype)
-            r, mo, p = det.detrend_chunk(d, mask)
+            r, _, p = det.detrend_chunk(d, mask)
             live = p[p > 0]
             rmin = float(live.min()) if live.size else 1.0
             tol = 50 * np.finfo(dtype).eps / rmin
@@ -426,7 +427,7 @@ def test_shrinkage_bias_bounded(rng, verbose=True):
         det = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT64)
         d, _ = _smooth_baseline(kv, rng, 1, 6)
         mask = msk.random_mask((1, kv.nfreq, 6), kv, rng, det.eta)
-        r, mo, _ = det.detrend_chunk(d, mask)
+        r, _, _ = det.detrend_chunk(d, mask)
         amp = np.abs(d).max()
         rel = np.abs(r).max() / amp
         worst = max(worst, rel)
@@ -533,14 +534,14 @@ def test_conditioning(rng, verbose=True, heavy=False):
     to see when eta, eps or n_phi change.
 
     nfreq = 30000 IS RUN BY DEFAULT, and deliberately so: 3.0x is the worst margin
-    over eps anywhere in the parameter study, it is the number the constants block
-    in SplineDetrender.py quotes to justify eta and eps, and until it was promoted
-    here nothing verified it -- an offline sweep is not a test.  It costs about
-    0.3 s, so there was never a real reason for it to sit behind 'heavy'.
+    over eps anywhere in the parameter study, and it is the number the constants
+    block in SplineDetrender.py quotes to justify eta and eps.  Nothing else
+    verifies it -- an offline sweep is not a test -- and it costs about 0.3 s.
 
-    'heavy' still adds the remaining large-F configurations from the parameter
-    study.  They probe the same regime and are redundant with the pinned pair, so
-    they are not run by default.
+    'heavy' adds the remaining large-F configurations from the parameter study.
+    They probe the same regime and are redundant with the pinned pair, so they are
+    not run by default and no caller here passes the flag; it is for a direct call
+    from python when the margin itself is under investigation.
     """
     eta, eps = ETA_DEFAULT, EPS_FLOAT32
     worst, worst_cfg = np.inf, None
@@ -582,7 +583,7 @@ def test_conditioning(rng, verbose=True, heavy=False):
             mask = w[None, :, None]
             d = rng.standard_normal((1, kv.nfreq, 1))
             G, U = accumulate(d, mask, table)
-            a, rmin, bad = solve_normal_equations(G, U, kv, D1, eta, eps)
+            _, rmin, bad = solve_normal_equations(G, U, kv, D1, eta, eps)
 
             for z, (lo, hi) in enumerate(zone_slices(kv)):
                 alive = np.diag(band_to_dense(G)[0, 0])[lo:hi].sum() > 0
@@ -636,7 +637,6 @@ def test_zone_expansion(rng, verbose=True):
         assert not m2[:, lo:hi, :].any()
         assert np.all(r2[:, lo:hi, :] == 0)
         if len(ranges) > 1:
-            lo2, hi2 = ranges[1]
             assert np.array_equal(p2[:, :, 1], p[:, :, 1]), 'zones are not independent'
 
     # Fully masked input: everything zero, nothing raised.
@@ -652,34 +652,10 @@ def test_zone_expansion(rng, verbose=True):
 
 # ---------------------------------------------------------------- T13
 
-def test_reference_agreement(rng, verbose=True):
-    for _ in range(10):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 500)))
-        eta, eps = ETA_DEFAULT, EPS_FLOAT32
-        det = SplineDetrender(kv, dtype=np.float64, eta=eta, eps=eps)
-        M_ax, ntime = 2, 5
-        mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, eta)
-        base, _ = _smooth_baseline(kv, rng, M_ax, ntime)
-        d = base + 0.05 * rng.standard_normal(base.shape)
-
-        r0, m0, p0 = det.detrend_chunk(d, mask)
-        r1, m1, p1 = detrend_reference(d, mask, kv, n=0, W=0, eta=eta, eps=eps,
-                                       dtype=np.float64)
-
-        assert np.array_equal(m0, m1), 'expansion decisions differ from the reference'
-        assert np.abs(p0 - p1).max() < 1e-9 * max(1.0, np.abs(p1).max())
-        scale = max(1.0, np.abs(d).max())
-        assert np.abs(r0 - r1).max() < 1e-8 * scale, np.abs(r0 - r1).max()
-
-    if verbose:
-        print('    test_reference_agreement: pass')
-
-
-# ---------------------------------------------------------------- T14
-
 def test_dtype_agreement(rng, verbose=True):
     """
-    float32 at (eta, eps) = (3e-3, 1e-4) against float64 at (3e-3, 1e-7).
+    float32 at (eta, eps) = (ETA_DEFAULT, EPS_FLOAT32) = (1e-3, 3e-5) against
+    float64 at (ETA_DEFAULT, EPS_FLOAT64) = (1e-3, 1e-7).
 
     The two runs differ in BOTH dtype and eps, so the assertions separate those
     effects rather than lumping them:
@@ -776,8 +752,8 @@ def test_dtype_agreement(rng, verbose=True):
         # zone is masked anyway and the value is irrelevant.  Measured, the
         # absolute error sits at about 13*eps_mach across four decades of r_min
         # while the relative error spans 1.8e-7 to 8.0e-3.  Asserting on the
-        # relative figure would need recalibration every time eps moves, which is
-        # exactly how this test broke when eps went from 1e-4 to 3e-5.
+        # relative figure would need recalibration every time eps moves, which
+        # is why the bar below is stated in absolute terms.
         ok = p64 > 0
         if ok.any():
             ae = np.abs(p32.astype(np.float64) - p64)[ok]
@@ -870,14 +846,26 @@ def test_bandwidth(rng, verbose=True):
 
 
 def test_2d_reference_agreement(rng, verbose=True):
+    """
+    The detrender against detrend_reference(), over NW_CASES -- which includes
+    (n, W) = (0, 0), i.e. the pure 1-d detrender, so this is the only place either
+    is checked against the reference implementation.
+
+    'eps' is DRAWN from the two shipped values rather than pinned at EPS_FLOAT64.
+    Both runs are float64, so eps here is not a precision setting: it is the
+    threshold that decides which zones get expanded, and the loose value is where
+    the expansion path actually fires.
+    """
     worst = 0.0
     for _ in range(4):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 300)))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 500)))
+        eps = EPS_FLOAT32 if (rng.random() < 0.5) else EPS_FLOAT64
+        M_ax = 2
         for n, W in NW_CASES:
-            det = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eps=EPS_FLOAT64)
+            det = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eps=eps)
             T = 4
-            m = msk.random_mask_2d((1, kv.nfreq, T + 2*W), kv, rng, det.eta, n=n, W=W)
-            base, _ = _smooth_baseline(kv, rng, 1, T + 2*W)
+            m = msk.random_mask_2d((M_ax, kv.nfreq, T + 2*W), kv, rng, det.eta, n=n, W=W)
+            base, _ = _smooth_baseline(kv, rng, M_ax, T + 2*W)
             d = base + 0.05*rng.standard_normal(base.shape)
             r0, m0, p0 = det.detrend_chunk(d, m)
             r1, m1, p1 = detrend_reference(d, m, kv, n=n, W=W, eta=det.eta,
@@ -911,7 +899,7 @@ def test_2d_flat_baseline_exact(rng, verbose=True):
             level = sum(coef[q]*tt**q for q in range(n+1))       # degree-n in time
             d = np.broadcast_to(level[None, None, :], (1, kv.nfreq, nbuf)).copy()
             m = msk.random_mask_2d((1, kv.nfreq, nbuf), kv, rng, det.eta, n=n, W=W)
-            r, mo, p = det.detrend_chunk(d, m)
+            r, _, p = det.detrend_chunk(d, m)
             live = p[p > 0]
             rmin = float(live.min()) if live.size else 1.0
             tol = 200*np.finfo(np.float64).eps/rmin*max(1.0, np.abs(d).max())
@@ -1022,7 +1010,7 @@ def test_2d_conditioning(rng, verbose=True):
     multiply, and an orthogonal time basis makes T = I.  This is the test that
     justifies keeping eps unchanged from the 1-d detrender.
     """
-    worst_ratio, worst_abs = np.inf, np.inf
+    worst_abs = np.inf
     for _ in range(8):
         kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(200, 800)))
         for n, W in NW_CASES:
@@ -1171,7 +1159,7 @@ def test_production_geometry(rng, verbose=True):
     coef = rng.standard_normal(n+1)
     level = sum(coef[q]*tt**q for q in range(n+1))
     dflat = np.broadcast_to(level[None, None, :], (M_ax, kv.nfreq, nbuf)).astype(np.float32)
-    rf, mf, pf = det32.detrend_chunk(dflat, m)
+    rf, _, pf = det32.detrend_chunk(dflat, m)
     livef = pf[pf > 0]
     rminf = float(livef.min()) if livef.size else 1.0
     tolf = np.finfo(np.float32).eps/rminf*max(1.0, float(np.abs(dflat).max()))
@@ -1415,7 +1403,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
         # reduces to "the zone holds no unmasked channel", i.e. the 1-d dead-zone test.
         m_rank = msk.random_mask_2d((M_ax, nfreq, nbuf), kv, rng, det.eta, n=n, W=W,
                                     time_kind='n_live_offsets', perturb=False)
-        rr_d, rr_m = run(det, d32, m_rank)
+        _, rr_m = run(det, d32, m_rank)
         p_rank = ref.detrend_chunk(d64, m_rank)[2]
         dead = (p_rank == 0.0)
         nrank = int(dead.sum())
@@ -1528,7 +1516,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
              'n_live_offsets', 'dead_zone', None)
 
     worst_ratio, worst_rmin, ndraw, nflag = 0.0, np.inf, 0, 0
-    nsecond = [0]         # draws that tripped the screen and needed the float32 reference
+    nsecond = 0           # draws that tripped the screen and needed the float32 reference
     for nf, kind, Ws, ns, ps in sweep:
         kvs = msk.random_knots(rng, n_phi=ps, nfreq=nf, kind=kind)
         dets = Detrender2d(nfreq=kvs.nfreq, knots=[int(x) for x in kvs.knots], M=1,
@@ -1582,7 +1570,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
                         eps=dets.eps).detrend_chunk(ds, ms)
                     jj = m32ref[:, :, :] & ms64
                     enp = float(np.abs(r32.astype(np.float64) - rs64)[jj].max()) if jj.any() else 0.0
-                    nsecond[0] += 1
+                    nsecond += 1
                     assert es < 10*enp, \
                         f'{tag}: GPU resid {es:.3e} vs numpy-float32 {enp:.3e} ' \
                         f'(r_min {rmin_s:.2e}, eps_mach/r_min bound {tol_s:.3e})'
@@ -1600,7 +1588,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
         print(f'      sweep: {ndraw} draws over (nfreq, knots, n_phi, n, W, mask kind), '
               f'worst resid {worst_ratio:.3f} x eps_mach/r_min, '
               f'worst r_min {worst_rmin:.2e}, {nflag} zone-samples flagged, '
-              f'{nsecond[0]} checked against numpy-float32')
+              f'{nsecond} checked against numpy-float32')
 
 
 # ----------------------------------------------------------------
@@ -1682,7 +1670,7 @@ def test_params_yaml(rng=None, verbose=True):
               f'the file path, retired-key and unknown-key rejection]')
 
 
-def run_all(verbose=True, rng=None, heavy=False, n_phi=None, gpu=False):
+def run_all(verbose=True, rng=None, n_phi=None):
     """
     All tests share one generator, so printing its entropy makes the whole run
     reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
@@ -1693,10 +1681,10 @@ def run_all(verbose=True, rng=None, heavy=False, n_phi=None, gpu=False):
     half-bandwidth 1 regardless of n_phi, so its off-diagonal band outlives the
     data bands) is invisible at n_phi = 2.
 
-    'heavy' turns on some extra large-nfreq conditioning configurations.  It is no
-    longer where the eps margin is probed -- the configurations that reach 3x eps
-    are pinned and run by default (see test_conditioning) -- so leaving it off does
-    not weaken the suite.
+    test_gpu_kernel() is NOT run from here: it needs cupy and a compiled kernel, and
+    '--dt2g' dispatches it on its own.  test_conditioning()'s 'heavy' configurations are
+    likewise left to a direct call; the configurations that reach 3x eps are pinned and
+    run by default, so the default sweep is not weakened by leaving them out.
     """
     global N_PHI
     rng = _default_rng(rng)
@@ -1716,9 +1704,8 @@ def run_all(verbose=True, rng=None, heavy=False, n_phi=None, gpu=False):
     test_shrinkage_bias_bounded(rng, verbose=verbose)
     test_masked_data_unused(rng, verbose=verbose)
     test_spectator_axes(rng, verbose=verbose)
-    test_conditioning(rng, verbose=verbose, heavy=heavy)
+    test_conditioning(rng, verbose=verbose)
     test_zone_expansion(rng, verbose=verbose)
-    test_reference_agreement(rng, verbose=verbose)
     test_dtype_agreement(rng, verbose=verbose)
     test_time_basis(rng, verbose=verbose)
     test_bandwidth(rng, verbose=verbose)
@@ -1731,8 +1718,6 @@ def run_all(verbose=True, rng=None, heavy=False, n_phi=None, gpu=False):
     test_2d_dtype_agreement(rng, verbose=verbose)
     test_production_geometry(rng, verbose=verbose)
     test_params_yaml(rng, verbose=verbose)
-    if gpu:
-        test_gpu_kernel(rng, verbose=verbose)
     print(f'  detrending_spline tests passed   '
           f'[cumulative worst r_min: {_worst_rmin[0]:.3e}, '
           f'{_worst_rmin[0]/EPS_FLOAT32:.1f} x eps]')

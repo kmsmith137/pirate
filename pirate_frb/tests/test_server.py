@@ -619,7 +619,7 @@ class ServerTester:
         # Comparison threshold, per tree -- same formula as test_one, but with
         # coefficient 5 instead of 3:
         #   eps = 5 * prec * sqrt(n+2),
-        #   n = ds_level + amb_rank + early_dd_rank.
+        #   n = primary_tree_index + tree_rank.
         # The 3-sigma-style bound was flaky in this end-to-end test (~1-in-3
         # runs failed on a single element, with |delta| up to ~1.45x the
         # threshold, at a random position with a random config each time).

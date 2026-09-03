@@ -882,7 +882,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     params_large.nt_wt = nchunks * nt_wt_per_chunk;
     params_large.validate();
 
-    GpuPeakFindingKernel gpu_kernel(params_small);   // just test constructor for now
+    GpuPeakFindingKernel gpu_kernel(params_small);
     xassert_eq(gpu_kernel.K, K);
 
     // The reference kernels must emit the same tokens as the GPU kernel, so they take its

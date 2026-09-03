@@ -995,8 +995,8 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
             // Note: EVERY remaining key is reachable from a config. We use the key's
             // subband_counts as the config's frequency_subband_counts just below, and the
             // et_level=0 tree gets them verbatim (restrict_subband_counts() is the identity
-            // there), so a key with pf_rank < dd_rank1 -- see xdm_cdd2_kernels() in
-            // makefile_helper.py -- produces a config whose base tree matches it exactly.
+            // there), so a key with pf_rank < dd_rank1 produces a config whose base tree
+            // matches it exactly.
             valid_keys.push_back(k);
         }
 

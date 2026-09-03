@@ -20,9 +20,10 @@ def make_random_subscale_config(max_toplevel_rank=6, max_beams=8):
       - time_samples_per_chunk % 256 == 0 (network protocol cadence)
       - beams_per_gpu <= max_beams (keep frame count manageable for the test)
 
-    max_toplevel_rank=6 is the smallest value compatible with the precompiled
-    cdd2 kernel registry (which has dd_rank in {3,4,5}, requiring
-    max_stage2_rank = (max_toplevel_rank+1)/2 >= 3, i.e. max_toplevel_rank >= 5).
+    max_toplevel_rank=6 is a SIZE CAP: these are loopback tests, and the config only has
+    to be buildable. The floor it has to clear is 5 -- make_random() needs
+    max_stage2_rank = (max_toplevel_rank+1)/2 to reach the smallest dd_rank the precompiled
+    cdd2 registry stocks, which is 3.
     """
     for _ in range(200):
         config = DedispersionConfig.make_random(max_toplevel_rank=max_toplevel_rank)

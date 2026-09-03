@@ -73,7 +73,11 @@ def report_coverage():
                                       then.
       nfreq a multiple of 8           test_lp_repairs. blocking_is_exact(): a row-blocked
                                       pass is bit-identical to an unblocked one only there,
-                                      so the blocking check runs only on those draws.
+                                      so the blocking check runs only on those draws. The
+                                      rate is measured on _random_config(), whereas that test
+                                      draws through _draw_lp_cell_config(), which keeps only
+                                      cells under LP_CELL_BUDGET -- so read it as indicative
+                                      of the draw, not as that test's own rate.
 
     Two structural diagnostics that carry no assertion but explain a rate when it moves: the
     npri histogram, and the number of DISTINCT subband_counts drawn. The second is the
