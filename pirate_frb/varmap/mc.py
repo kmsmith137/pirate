@@ -102,7 +102,7 @@ def run_mc(vmm, freq_variances, *, device='gpu', nchunks=None, report_every=1,
         # compute_steady_state_it0() is indexed by the PEAK-FINDER's coarse DM (length
         # ndm_out), but the subband array has Dpf = ndm_out << K rows. The peak-finder reads
         # sb_out at row ((d << K) | mu) -- see PeakFindingKernel.cu, ReferencePeakFindingKernel
-        # ("input DM row ((d << K) | mu) ... land at tmp_arr index em = mu*M + m") -- so full
+        # ("input DM row ((d << K) | mu), multiplet m is tmp_arr[0][b,d,mu,m,:]") -- so full
         # row 'df' belongs to peak-finder row (df >> K), and np.repeat is the broadcast.
         #
         # GETTING THIS BACKWARDS IS SILENT AND LOOKS LIKE A PASS: warmup samples would be

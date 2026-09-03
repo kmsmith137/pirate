@@ -245,7 +245,7 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
     this->nprofiles = 3 * integer_log2(p.max_kernel_width) + 1;
     this->nt_in = p.nt_out * p.time_downsampling;
     this->tpad = max(2*Wmax, 4L);
-    this->pstate = Array<float> ({p.total_beams, p.ndm_out, E*M, tpad}, af_uhost | af_zero);
+    this->pstate = Array<float> ({p.total_beams, p.ndm_out, E, M, tpad}, af_uhost | af_zero);
     this->num_levels = max(integer_log2(Wmax), 1);
 
     this->tmp_dt.resize(num_levels);
@@ -263,7 +263,7 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
         tmp_nt[l] = nt;
         tmp_nout[l] = xdiv(p.time_downsampling, dt);
         tmp_sout[l] = xdiv(pow2(l), dt);
-        tmp_arr[l] = Array<float> ({B,D,E*M,nt}, af_uhost | af_zero);
+        tmp_arr[l] = Array<float> ({B,D,E,M,nt}, af_uhost | af_zero);
 
         // To see that this is correct, note that the "base" time sample ends at
         // time dt, and has length 2^l.
@@ -313,20 +313,15 @@ void ReferencePeakFindingKernel::apply(
 
     xassert(in.get_ncontig() >= 1);
 
-    // Fill l=0 (with 'in' + 'pstate' wraparound).
-    //
-    // This is also where the input's extra DM bits are folded into the multiplet axis: input
-    // DM row ((d << K) | mu) and multiplet m land at tmp_arr index em = mu*M + m. See the
-    // tmp_arr comment in PeakFindingKernel.hpp for why the ordering is (mu, m) and not
-    // (m, mu).
+    // Fill l=0 (with 'in' + 'pstate' wraparound). Input DM row ((d << K) | mu), multiplet m
+    // is tmp_arr[0][b,d,mu,m,:] -- see the tmp_arr comment in PeakFindingKernel.hpp.
 
     for (long b = 0; b < B; b++) {
         for (long d = 0; d < D; d++) {
             for (long mu = 0; mu < E; mu++) {
                 for (long m = 0; m < M; m++) {
-                    long em = mu*M + m;
-                    float *dst = &tmp_arr[0].at({b,d,em,0});          // length (nt_in+tpad)
-                    float *ps = &pstate.at({b0+b,d,em,0});            // length (tpad)
+                    float *dst = &tmp_arr[0].at({b,d,mu,m,0});        // length (nt_in+tpad)
+                    float *ps = &pstate.at({b0+b,d,mu,m,0});          // length (tpad)
                     const float *src = &in.at({b,(d << K)|mu,m,0});   // length (nt_in)
 
                     for (long t = 0; t < tpad; t++)
@@ -353,15 +348,17 @@ void ReferencePeakFindingKernel::apply(
 
         xassert_eq(r*(ndst-1) + s, nsrc-1);
         
-        // The multiplet axis is a pure spectator here, so it can be looped over flat.
+        // The (mu, m) axes are pure spectators here.
         for (long b = 0; b < B; b++) {
             for (long d = 0; d < D; d++) {
-                for (long em = 0; em < E*M; em++) {
-                    float *dst = &tmp_arr.at(l+1).at({b,d,em,0});
-                    float *src = &tmp_arr.at(l).at({b,d,em,0});
-                    
-                    for (long t = 0; t < ndst; t++)
-                        dst[t] = src[r*t] + src[r*t + s];
+                for (long mu = 0; mu < E; mu++) {
+                    for (long m = 0; m < M; m++) {
+                        float *dst = &tmp_arr.at(l+1).at({b,d,mu,m,0});
+                        float *src = &tmp_arr.at(l).at({b,d,mu,m,0});
+
+                        for (long t = 0; t < ndst; t++)
+                            dst[t] = src[r*t] + src[r*t + s];
+                    }
                 }
             }
         }
@@ -393,23 +390,21 @@ void ReferencePeakFindingKernel::apply(
                 uint argmax = ~0u;  // token
 
                 for (long l = 0; l < num_levels; l++) {
-                    float *tmp_in = &tmp_arr.at(l).at({b,d,0,0});
-                    int mstr = tmp_nt[l];   // m-stride of input array
                     int dt = tmp_dt[l];     // used below when computing tokens
                     int nsamp = tmp_nout[l];    // count
                     int S = tmp_sout[l];    // spacing
                     int I = tmp_iout[l];    // base
 
-                    // Four m-like quantities are live below, and they are not interchangeable:
+                    // Three m-like quantities are live below, and they are not interchangeable:
                     //   m     -- compact multiplet index; the weights are per subband, so this
                     //            is what fs.m_to_n takes
                     //   mu    -- extra-DM index, 0 <= mu < E
-                    //   em    -- index into tmp_arr's multiplet axis, = mu*M + m
-                    //   m_ext -- the argmax token's m-field, = (m << K) | mu
+                    //   m_ext -- this kernel's linear multiplet index, = (m << K) | mu, which
+                    //            _m_fields() splits into the token's m and mu bytes
 
                     for (int mu = 0; mu < E; mu++) {
                       for (int m = 0; m < M; m++) {
-                        int em = mu*M + m;
+                        const float *row = &tmp_arr.at(l).at({b,d,mu,m,0});   // length tmp_nt[l]
                         int n = fs.m_to_n[m];
                         uint m_ext = (uint(m) << K) | uint(mu);
                         float w0 = l ? 0.0f : wp[n];      // p = 0 (only for l=0)
@@ -421,10 +416,10 @@ void ReferencePeakFindingKernel::apply(
                         // tmp[l] array, or (dt) time samples in the original input array.
 
                         for (int isamp = 0; isamp < nsamp; isamp++) {
-                            float x0 = tmp_in[em*mstr + I + tout*nsamp + isamp - 3*S];
-                            float x1 = tmp_in[em*mstr + I + tout*nsamp + isamp - 2*S];
-                            float x2 = tmp_in[em*mstr + I + tout*nsamp + isamp - S];
-                            float x3 = tmp_in[em*mstr + I + tout*nsamp + isamp];
+                            float x0 = row[I + tout*nsamp + isamp - 3*S];
+                            float x1 = row[I + tout*nsamp + isamp - 2*S];
+                            float x2 = row[I + tout*nsamp + isamp - S];
+                            float x3 = row[I + tout*nsamp + isamp];
 
                             uint token0 = _m_fields(m_ext, K) | (isamp*dt);  // (m,mu,isamp), not p
                             uint token1 = token0 | ((3*l+1) << 8);    // include p=3*l+1
@@ -518,8 +513,6 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                 if ((t < 0) || (t >= params.time_downsampling))
                     throw _bad_token(token, "t out of range");
 
-                long em = mu*M + m;   // index into tmp_arr (see PeakFindingKernel.hpp)
-
                 // p = 3*l+q, where l is the "level".
                 long l = p ? ((p-1)/3) : 0;
                 long q = p - 3*l;
@@ -540,10 +533,10 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                 int S = tmp_sout[l];       // spacing
                 int I = tmp_iout[l];       // base
 
-                float x0 = tmp_arr.at(l).at({b, d, em, I + tout*nsamp + isamp - 3*S});
-                float x1 = tmp_arr.at(l).at({b, d, em, I + tout*nsamp + isamp - 2*S});
-                float x2 = tmp_arr.at(l).at({b, d, em, I + tout*nsamp + isamp - S});
-                float x3 = tmp_arr.at(l).at({b, d, em, I + tout*nsamp + isamp});
+                float x0 = tmp_arr.at(l).at({b, d, mu, m, I + tout*nsamp + isamp - 3*S});
+                float x1 = tmp_arr.at(l).at({b, d, mu, m, I + tout*nsamp + isamp - 2*S});
+                float x2 = tmp_arr.at(l).at({b, d, mu, m, I + tout*nsamp + isamp - S});
+                float x3 = tmp_arr.at(l).at({b, d, mu, m, I + tout*nsamp + isamp});
 
                 if (q == 0)
                     out_max.at({b,d,tout}) = w * x3;
@@ -568,8 +561,8 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                          << " = " << wt.at({b,d/Wds,tout/Tds,p,n}) << endl;
 
                     for (int i = 0; i < 4; i++)
-                        cout << "  tmp_arr.at(" << l << ").at(" << b << "," << d << "," << em << "," << (I + tout*nsamp + isamp + (i-3)*S) << ")"
-                             << " = " << tmp_arr.at(l).at({b, d, em, I + tout*nsamp + isamp + (i-3)*S}) << endl;
+                        cout << "  tmp_arr.at(" << l << ").at(" << b << "," << d << "," << mu << "," << m << "," << (I + tout*nsamp + isamp + (i-3)*S) << ")"
+                             << " = " << tmp_arr.at(l).at({b, d, mu, m, I + tout*nsamp + isamp + (i-3)*S}) << endl;
 
                     cout << "    at level l: tpad=" << tpad << ", dt=" << tmp_dt.at(l) << ", nsamp=" << nsamp << ", S=" << S << ", I=" << I << endl;
                 }
@@ -740,11 +733,12 @@ GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params
     params.validate();
 
     if (params.dm_downsampling != pow2(fs.pf_rank))
-        throw runtime_error("GpuPeakFindingKernel: dm_downsampling > 2^pf_rank (K > 0) is not"
-                            " implemented -- a standalone GPU peak-finder does not do the extra-DM"
-                            " reduction. On the GPU, K > 0"
-                            " is handled by CoalescedDdKernel2, which folds the extra DMs in as it"
-                            " dedisperses.");
+        throw runtime_error(
+             "FATAL: GpuPeakFindingKernel only implements K==0 (i.e. dm_downsampling == 2^pf_rank)."
+             " (CoalescedDdKernel2 is what handles K > 0 on the GPU.) This could easily be fixed"
+             " if needed, but currently GpuPeakFindingKernel is only used in testing, so it didn't"
+             " seem worth the extra code complexity."
+        );
 
     registry_key = _make_registry_key(params);
     registry_value = registry().get(registry_key);

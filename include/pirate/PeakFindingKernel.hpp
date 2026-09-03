@@ -256,15 +256,14 @@ struct ReferencePeakFindingKernel
     //
     //  - tmp_dt[l]: step size (in time) of temp array
     //  - tmp_nt[l]: number of time samples in temp array
-    //  - tmp_arr[l]: array of shape is (B, D, E*M, tmp_nt[l]))
+    //  - tmp_arr[l]: array of shape (B, D, E, M, tmp_nt[l])
     //
-    // The multiplet axis of tmp_arr (and of pstate) is indexed by em = mu*M + m, NOT by
-    // m_ext = (m << K) | mu. This ordering is load-bearing: it matches the input array's
-    // (dpf, m) = (d, mu, m) memory order, which is what makes the fill from 'in' a straight
-    // copy per (d, mu, m) triple. The m_ext ordering would be equally self-consistent, pass
-    // every shape assert, and give wrong answers whenever E > 1.
+    // The (E, M) axes are the input array's own structure: tmp_arr[l][b,d,mu,m,:] is the
+    // downsampled input row ((d << K) | mu), multiplet m, so the fill from 'in' is a straight
+    // copy per (d, mu, m) triple. (The token's linear multiplet index m_ext = (m << K) | mu
+    // is a different ordering of the same pairs, and never indexes these arrays.)
     //
-    // Array element tmp_arr[l][b,d,mu*M+m,j] is obtained by summing:
+    // Array element tmp_arr[l][b,d,mu,m,j] is obtained by summing:
     //
     //    in[b, (d << K) | mu, m, ilo:(ilo+2^l)]    where ilo = -tpad + j*tmp_dt[l]
     //
@@ -283,10 +282,10 @@ struct ReferencePeakFindingKernel
     //   S = tmp_sout[l];   // spacing
     //
     //   for (isamp = 0; isamp < nsamp; isamp++) {
-    //       float x_0 = tmp_arr[l][b,d,em, I + tout*nsamp + isamp - (q-1)*S];
-    //       float x_1 = tmp_arr[l][b,d,em, I + tout*nsamp + isamp - (q-2)*S];
+    //       float x_0 = tmp_arr[l][b,d,mu,m, I + tout*nsamp + isamp - (q-1)*S];
+    //       float x_1 = tmp_arr[l][b,d,mu,m, I + tout*nsamp + isamp - (q-2)*S];
     //           ...
-    //       float x_end = tmp_arr[l][b,d,em, I + tout*nsamp + isamp];
+    //       float x_end = tmp_arr[l][b,d,mu,m, I + tout*nsamp + isamp];
 
     long tpad = 0;  // prepadding (in "input time samples"), same for all levels
     long num_levels = 0;
@@ -297,12 +296,12 @@ struct ReferencePeakFindingKernel
     std::vector<long> tmp_iout;
     std::vector<long> tmp_nout;
     std::vector<long> tmp_sout;
-    std::vector<ksgpu::Array<float>> tmp_arr;   // shape (B, D, E*M, tmp_nt[l])
+    std::vector<ksgpu::Array<float>> tmp_arr;   // shape (B, D, E, M, tmp_nt[l])
 
     // The reference rl allocates persistent state in the constructor (not a separate
     // allocate() method). We just save the last (tpad) samples from the previous chunk.
 
-    ksgpu::Array<float> pstate;  // shape (total_beams, ndm_out, E*M, tpad)
+    ksgpu::Array<float> pstate;  // shape (total_beams, ndm_out, E, M, tpad)
 
     // Helper for eval_tokens()
     static std::runtime_error _bad_token(uint token, const char *why);
@@ -386,13 +385,14 @@ struct GpuPfWeightLayout
 // CoalescedDdKernel2, which can be unit-tested in isolation. (When I was first
 // writing all this code, passing unit tests for GpuPeakFindingKernel took a
 // while, and CoalescedDdKernel2 was smooth sailing afterwards.)
+//
+// NOTE: GpuPeakFindingKernel only implements K==0 (i.e. dm_downsampling == 2^pf_rank).
+// (CoalescedDdKernel2 is what handles K > 0 on the GPU.) This could easily be fixed
+// if needed, but currently GpuPeakFindingKernel is only used in testing, so it didn't
+// seem worth the extra code complexity.
 
 struct GpuPeakFindingKernel
 {
-    // Throws unless params.dm_downsampling == 2^pf_rank, i.e. K == 0: a standalone GPU
-    // peak-finder does not implement the extra-DM reduction (see the note on K above).
-    // CoalescedDdKernel2 is what handles K > 0 on the GPU, and GpuDedisperser only ever
-    // instantiates that.
     GpuPeakFindingKernel(const PeakFindingKernelParams &params);
 
     void allocate(BumpAllocator &allocator);
