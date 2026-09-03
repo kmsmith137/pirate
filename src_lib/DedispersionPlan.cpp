@@ -106,6 +106,10 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
         // and consumer that disagree do fail loudly: _verify_tree_yaml() checks each tree's
         // primary_tree_index and early_trigger_level against its position in the yaml.)
         //
+        // FIXME(?): ordering by decreasing early_trigger_level is awkward (increasing would be more
+        // natural), but arises because of a technical issue in MegaRingbuf (per-segment mapping
+        // consumer_id -> chunk_lag must be monotone increasing). See MegaRingbuf.cpp for more info.
+        //
         // DedispersionPlan::dedispersion_tree_index() is the inverse map.
 
         for (long et_level = primary_tree.num_early_triggers; et_level >= 0; et_level--) {

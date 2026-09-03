@@ -80,6 +80,11 @@ struct DedispersionPlan
     //
     // Trees are ordered by primary tree, then by DECREASING early-trigger level (earliest
     // trigger first, then the main early_trigger_level=0 tree).
+    //
+    // FIXME(?): ordering by decreasing early_trigger_level is awkward (increasing would be more
+    // natural), but arises because of a technical issue in MegaRingbuf (per-segment mapping
+    // consumer_id -> chunk_lag must be monotone increasing). See MegaRingbuf.cpp for more info.
+    
     long ntrees = 0;
     std::vector<DedispersionTree> trees;  // length ntrees
 
