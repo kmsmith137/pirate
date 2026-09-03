@@ -174,21 +174,32 @@ def _decode(plan, token, itree, dcore, idm_coarse, itime_coarse):
 ####################################################################################################
 
 
-def _make_random_config(max_toplevel_rank=6, nbeams=6):
-    """Random config with nbatches == 1 and enough beams to pack P1/P2/P3 probes."""
+def _make_random_config():
+    """Random config with nbatches == 1 and enough beams to pack P1/P2/P3 probes.
 
-    for _ in range(200):
-        config = DedispersionConfig.make_random(max_toplevel_rank=max_toplevel_rank)
-        config.beams_per_gpu = nbeams
-        config.beams_per_batch = nbeams
-        config.num_active_batches = 1
-        try:
-            config.validate()
-        except RuntimeError:
-            continue
-        return config
+    THE THREE BEAM ASSIGNMENTS ARE ALWAYS ACCEPTED, so this draws once rather than
+    retrying: validate() asks only that num_active_batches * beams_per_batch <=
+    beams_per_gpu, which (nbeams, nbeams, 1) satisfies by construction. Measured over
+    4500 draws spanning max_toplevel_rank 6-10 and nbeams 3-12, the acceptance rate is
+    exactly 1.
 
-    raise RuntimeError("test_decode_argmax: failed to generate a valid config in 200 attempts")
+    nbeams is how many probes one pipeline run can carry -- three per tuple, so
+    _probe_tuples() packs floor(nbeams/3) tuples into a run. Drawing it small makes the
+    test slower, not weaker.
+
+    max_toplevel_rank matters more than it looks, because make_random() ties the toplevel
+    rank to the cdd2 base key it picked: R lies in [2*dd_rank - 1, 2*dd_rank], so a cap of
+    6 admits dd_rank = 3 AND NOTHING ELSE -- 12 of the registry's 106 keys, every one of
+    them with subband_counts (1,) or (2,1), so a cap of 6 cannot produce a tree with a wide
+    subband split at all. 7-8 brings in dd_rank = 4, 9-10 dd_rank = 5.
+    """
+    nbeams = random.randint(3, 12)
+    config = DedispersionConfig.make_random(max_toplevel_rank=random.randint(6, 10))
+    config.beams_per_gpu = nbeams
+    config.beams_per_batch = nbeams
+    config.num_active_batches = 1
+    config.validate()
+    return config
 
 
 def _num_chunks(plan, r_top, nt_in):
@@ -430,7 +441,7 @@ def _check_bad_tokens(plan, kinfo):
     expect_throw(0, itree, 2 * Dout, 0, 0)             # Dcore does not divide Dout
 
 
-def _test_pf_kernel_quantization(ntrials=8):
+def _test_pf_kernel_quantization(ntrials=None):
     """Kernel-level sweep of the token time-quantization formula, with arbitrary Dcore.
 
     A bare ReferencePeakFindingKernel (no dedispersion, single full-band multiplet) has
@@ -444,8 +455,13 @@ def _test_pf_kernel_quantization(ntrials=8):
     wmax = random.choice([1, 2, 4, 8, 16, 32])
     dout = random.choice([4, 8, 16, 32])
     dcore = 2 ** random.randrange(dout.bit_length())    # power of two <= Dout
-    nt_in = 512                                         # multiple of 32 (fp32) and of Dout
+    # A multiple of 32 (the fp32 segment length) is automatically a multiple of Dout <= 32,
+    # so one draw satisfies both. Drawn rather than pinned at 512 mainly for nt_out: at
+    # Dout = 32 the low end of this range is a two-cell output array, which is where an
+    # off-by-one in the tout arithmetic has somewhere to go.
+    nt_in = 32 * random.randint(2, 32)
     nt_out = nt_in // dout
+    ntrials = random.randint(4, 12) if ntrials is None else ntrials
     P = (3 * wmax.bit_length() - 2) if wmax > 1 else 1  # = 3*log2(Wmax) + 1
 
     wt = np.ones((1, 1, nt_out, P, 1), dtype=np.float32)
@@ -567,7 +583,10 @@ def test_decode_argmax():
     _membership_sweep(plan, dcores, tree_bands, C, sorted(chans))
 
     # P1/P2/P3 probes on sampled tuples (2 pipeline runs).
-    tuples = _sample_tuples(plan, kinfo, interesting_ms, ntuples=2 * max(B // 3, 1))
+    # One "pipeline run" carries floor(B/3) tuples (three probe beams each); the run count
+    # is drawn, since it is a cost knob rather than a property of the geometry.
+    tuples = _sample_tuples(plan, kinfo, interesting_ms,
+                            ntuples=random.randint(1, 4) * max(B // 3, 1))
     _probe_tuples(plan, dcores, r_top, C, tuples)
 
     # Rebuild the plan from its yaml, as FrbGrouper does (reuses the sampled tuples).

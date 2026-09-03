@@ -376,10 +376,10 @@ def test(args):
                 utils.test_utils()
 
         if run_all_tests or args.net:
-            # test_assembled_frame_allocator() hardcodes its cases, so once is enough until
-            # it is randomized.
-            if i == 0:
-                tests.test_assembled_frame_allocator()
+            # Every one of its seven tests draws nfreq, time_samples_per_chunk, the beam
+            # ids and the consumer count, so a multi-iteration run covers more than a single
+            # one; it is host memory only and costs ~50 ms.
+            tests.test_assembled_frame_allocator()
             # test_slow_subscriber() DOES draw its parameters (NetworkTester), so pinning it
             # to i == 0 meant a 1000-iteration run tested one draw. It is ~1 s, which is
             # most of a --net iteration, so every tenth rather than every one.

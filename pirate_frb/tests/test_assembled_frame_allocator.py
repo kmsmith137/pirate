@@ -14,8 +14,15 @@ num_consumers times in total (the set is evicted on its last receipt).
 Frame identity within a set is determined by the allocator --
 frames[i].beam_id == metadata.beam_ids[i].
 
+Every test draws its geometry from _random_alloc_params(); read that first, since
+what it pins and what it draws is most of what these tests cover.  Three of the
+seven pin nbeams = 1 so that one frame set is one slab, which is what lets them
+size a pool in sets and reason about recycling.
+
 Run via: python -m pirate_frb test --net
 """
+
+import random
 
 import numpy as np
 from ..core import AssembledFrameAllocator, BumpAllocator, SlabAllocator, XEngineMetadata
@@ -23,12 +30,40 @@ from ..pirate_pybind11 import constants
 from ..utils import atomic_print
 
 
-def make_slab_allocator(capacity=4*1024*1024, aflags='af_rhost'):
-    """Create a host-memory SlabAllocator.
+def _random_alloc_params(nbeams=None, min_consumers=1, max_mpc=4):
+    """Draw (nfreq, time_samples_per_chunk, beam_ids, num_consumers) for one test.
 
-    Backed by a dedicated BumpAllocator of the given capacity; slabs are carved
-    on demand."""
-    bump = BumpAllocator(aflags, capacity)
+    DRAWING time_samples_per_chunk IS MOST OF WHAT THIS IS FOR.  256 is the value a
+    hand-written test naturally picks, and it is the degenerate point of the slab
+    layout: mpc == 1, so the scales_offsets array is one row per channel and its
+    cache-line padding is exactly zero.  Every larger multiple of 256 exercises the
+    two-array layout properly.
+
+    BEAM IDS ARE DRAWN NON-CONTIGUOUS AND UNSORTED.  The allocator's contract is
+    frames[i].beam_id == metadata.beam_ids[i], IN THE CALLER'S ORDER, and a monotone
+    list cannot distinguish that from an implementation that sorts or renumbers the
+    beams -- only an unsorted one can.
+
+    'nbeams' is pinned by the three callers whose slab arithmetic assumes one slab
+    per set; 'min_consumers' by the ones that need at least two consumers to have
+    anything to check.
+    """
+    nfreq = random.choice([16, 32, 64, 96, 128])
+    tspc = 256 * random.randint(1, max_mpc)
+    nb = random.randint(1, 4) if nbeams is None else nbeams
+    return nfreq, tspc, random.sample(range(1000), nb), random.randint(min_consumers, 3)
+
+
+def make_slab_allocator(nfreq, time_samples_per_chunk, nbeams, nsets=16, aflags='af_rhost'):
+    """Create a host-memory SlabAllocator large enough for 'nsets' frame sets.
+
+    Backed by a dedicated BumpAllocator; slabs are carved on demand.  The capacity is
+    derived from the drawn geometry rather than fixed, since a set costs nbeams slabs
+    and a slab grows with both nfreq and time_samples_per_chunk.  'nsets' has to cover
+    the worker's startup burst (constants.assembled_frame_allocator_initial_size) plus
+    whatever the caller holds, or the worker parks in a blocking get_slab()."""
+    slab = _align_up_128(AssembledFrameAllocator.slab_nbytes(nfreq, time_samples_per_chunk))
+    bump = BumpAllocator(aflags, nsets * nbeams * slab)
     return SlabAllocator(bump)
 
 
@@ -40,16 +75,21 @@ def _align_up_128(n):
     return -(-n // 128) * 128
 
 
-def _make_counted_slab_allocator(slab_size, num_slabs_requested):
+def _make_counted_slab_allocator(nfreq, time_samples_per_chunk, num_slabs_requested):
     """Helper for tests that need to know the EXACT slab count.
 
     Returns (slab_allocator, num_slabs).
+
+    The slab size comes from AssembledFrameAllocator.slab_nbytes() rather than from a
+    formula written out here: the layout cache-line-aligns the data array after the
+    scales_offsets array, and that padding is zero at mpc = 1 but not in general.
 
     The BumpAllocator rounds its capacity up to a page multiple, so simply
     requesting num_slabs_requested * slab_size bytes can yield extra slabs.
     Derive the actual count from bump.capacity (the rounded value) instead
     of assuming."""
-    aligned_slab = _align_up_128(slab_size)
+    aligned_slab = _align_up_128(
+        AssembledFrameAllocator.slab_nbytes(nfreq, time_samples_per_chunk))
     bump = BumpAllocator('af_rhost', num_slabs_requested * aligned_slab)
     num_slabs = bump.capacity // aligned_slab
     assert num_slabs >= num_slabs_requested
@@ -73,11 +113,9 @@ def test_frame_properties():
     """
     atomic_print("  test_frame_properties()...")
 
-    nfreq = 128
-    time_samples_per_chunk = 256
-    beam_ids = [10, 20, 30]
+    nfreq, time_samples_per_chunk, beam_ids, _ = _random_alloc_params()
 
-    slab = make_slab_allocator()
+    slab = make_slab_allocator(nfreq, time_samples_per_chunk, len(beam_ids))
     alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk, throw_exception_if_empty=False)
     alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
     alloc.initialize_initial_chunk(0)
@@ -112,9 +150,9 @@ def test_frame_properties():
     np.asarray(fset.frames[0].data)[0, 0] = 0x12
     assert np.asarray(fset.frames[0].data)[0, 0] == 0x12
 
-    # get_frame(ibeam) accessor should match frames[ibeam].
-    assert fset.get_frame(0) is fset.frames[0]
-    assert fset.get_frame(2) is fset.frames[2]
+    # get_frame(ibeam) accessor should match frames[ibeam], at every index.
+    for ibeam in range(len(beam_ids)):
+        assert fset.get_frame(ibeam) is fset.frames[ibeam]
 
     # validate() should not throw on a freshly-allocated set.
     fset.validate()
@@ -130,14 +168,15 @@ def test_sequence_ordering():
     chunk index, and that each set contains frames in metadata.beam_ids order.
 
     Run at nbeams > 1 and at nbeams == 1: a one-frame set is the edge case
-    where a per-beam indexing error has nothing to disagree with.
+    where a per-beam indexing error has nothing to disagree with.  nbeams is the one
+    thing pinned here; everything else is drawn (see _random_alloc_params).
     """
     atomic_print("  test_sequence_ordering()...")
 
-    time_samples_per_chunk = 256
-
-    for (nfreq, beam_ids, num_chunks) in [(64, [5, 15, 25], 4), (32, [42], 5)]:
-        slab = make_slab_allocator()
+    for nbeams in (random.randint(2, 4), 1):
+        nfreq, time_samples_per_chunk, beam_ids, _ = _random_alloc_params(nbeams=nbeams)
+        num_chunks = random.randint(2, 6)
+        slab = make_slab_allocator(nfreq, time_samples_per_chunk, nbeams)
         alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk, throw_exception_if_empty=False)
         alloc.initialize_metadata(_test_metadata(nfreq, beam_ids))
         alloc.initialize_initial_chunk(0)
@@ -172,12 +211,9 @@ def test_multi_consumer_frame_identity():
     """
     atomic_print("  test_multi_consumer_frame_identity()...")
 
-    nfreq = 64
-    time_samples_per_chunk = 256
-    beam_ids = [1, 2]
-    num_consumers = 3
+    nfreq, time_samples_per_chunk, beam_ids, num_consumers = _random_alloc_params(min_consumers=2)
 
-    slab = make_slab_allocator()
+    slab = make_slab_allocator(nfreq, time_samples_per_chunk, len(beam_ids))
     alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk, throw_exception_if_empty=False)
 
     # Initialize the allocator (one initialize_metadata call is enough, but
@@ -222,12 +258,11 @@ def test_multi_consumer_independent_progress():
     """
     atomic_print("  test_multi_consumer_independent_progress()...")
 
-    nfreq = 32
-    time_samples_per_chunk = 256
-    beam_ids = [100, 200]
+    # Exactly two consumers: the test walks one ahead of the other by hand.
+    nfreq, time_samples_per_chunk, beam_ids, _ = _random_alloc_params()
     num_consumers = 2
 
-    slab = make_slab_allocator()
+    slab = make_slab_allocator(nfreq, time_samples_per_chunk, len(beam_ids))
     alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk, throw_exception_if_empty=False)
 
     for _ in range(num_consumers):
@@ -277,20 +312,14 @@ def test_frame_recycling():
     """
     atomic_print("  test_frame_recycling()...")
 
-    nfreq = 64
-    time_samples_per_chunk = 256
-    beam_ids = [1]  # Single beam: one slab per set.
+    # nbeams = 1 is pinned, not drawn: one set is then one slab, which is what makes
+    # the pool size below a set count.
+    nfreq, time_samples_per_chunk, beam_ids, _ = _random_alloc_params(nbeams=1)
     num_consumers = 2
-
-    # Per-frame slab size; with nbeams=1, also the per-set slab footprint.
-    # Each slab holds scales_offsets (nfreq, mpc, 2) float16 = nfreq*mpc*4 bytes
-    # plus int4 data (nfreq, tspc) = nfreq*tspc/2 bytes.
-    mpc = time_samples_per_chunk // 256
-    slab_size = nfreq * mpc * 4 + (nfreq * time_samples_per_chunk) // 2
 
     # Small pool (~3 slabs = 3 sets); the exact count is derived from the
     # page-rounded BumpAllocator capacity, not assumed.
-    slab, num_slabs = _make_counted_slab_allocator(slab_size, 3)
+    slab, num_slabs = _make_counted_slab_allocator(nfreq, time_samples_per_chunk, 3)
     alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk, throw_exception_if_empty=False)
 
     for _ in range(num_consumers):
@@ -344,17 +373,13 @@ def test_frame_recycling_with_held_reference():
     """
     atomic_print("  test_frame_recycling_with_held_reference()...")
 
-    nfreq = 64
-    time_samples_per_chunk = 256
-    beam_ids = [1]  # Single beam: one slab per set.
+    # nbeams = 1 for test_frame_recycling's reason: one set is one slab.
+    nfreq, time_samples_per_chunk, beam_ids, _ = _random_alloc_params(nbeams=1)
     num_consumers = 2
 
-    # See test_frame_recycling for slab_size derivation. Small pool (~4
-    # slabs); the exact count is derived from the page-rounded BumpAllocator
-    # capacity, not assumed.
-    mpc = time_samples_per_chunk // 256
-    slab_size = nfreq * mpc * 4 + (nfreq * time_samples_per_chunk) // 2
-    slab, num_slabs = _make_counted_slab_allocator(slab_size, 4)
+    # Small pool (~4 slabs); the exact count is derived from the page-rounded
+    # BumpAllocator capacity, not assumed.
+    slab, num_slabs = _make_counted_slab_allocator(nfreq, time_samples_per_chunk, 4)
     alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk, throw_exception_if_empty=False)
 
     for _ in range(num_consumers):
@@ -435,20 +460,16 @@ def test_throw_exception_if_empty():
     """
     atomic_print("  test_throw_exception_if_empty()...")
 
-    nfreq = 64
-    time_samples_per_chunk = 256
-    beam_ids = [1]  # Single beam: one slab per set.
+    # nbeams = 1 for test_frame_recycling's reason: one set is one slab.
+    nfreq, time_samples_per_chunk, beam_ids, _ = _random_alloc_params(nbeams=1)
     initial_size = constants.assembled_frame_allocator_initial_size
 
-    mpc = time_samples_per_chunk // 256
-    slab_size = nfreq * mpc * 4 + (nfreq * time_samples_per_chunk) // 2
-
-    # (a) + (b): pool sized for exactly the burst. The determinism of (b)
-    # below relies on the pool having NO slabs beyond the burst (the worker
-    # would otherwise carve extras in its main loop, racing our frontier
-    # request); page rounding happens not to add any at this slab_size, and
-    # this assert makes it loud if that ever changes.
-    slab, num_slabs = _make_counted_slab_allocator(slab_size, initial_size)
+    # (a) + (b): pool sized for exactly the burst.  The determinism of (b) below relies
+    # on the pool having NO slabs beyond it -- the worker would otherwise carve an extra
+    # in its main loop and race our frontier request.  Page rounding happens to add none
+    # at any geometry _random_alloc_params() can draw, and this assert makes it loud if
+    # that ever stops being true.
+    slab, num_slabs = _make_counted_slab_allocator(nfreq, time_samples_per_chunk, initial_size)
     assert num_slabs == initial_size, \
         f"page rounding added slabs ({num_slabs} != {initial_size}); test needs adjusting"
     alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk,
@@ -480,7 +501,7 @@ def test_throw_exception_if_empty():
     # (c) Pool too small for the burst: the worker's fail-fast error
     # surfaces from get_frame_set() (which waits on the queue_initialized
     # latch, wakes on the stop, and rethrows the saved burst error).
-    slab, num_slabs = _make_counted_slab_allocator(slab_size, 2)
+    slab, num_slabs = _make_counted_slab_allocator(nfreq, time_samples_per_chunk, 2)
     assert num_slabs < initial_size   # else the burst would succeed
     alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk,
                                     throw_exception_if_empty=True)
