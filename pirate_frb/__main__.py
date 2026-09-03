@@ -77,7 +77,7 @@ def seed_rngs(seed):
     entropy and is therefore outside all of this; the suites that want one -- varmap and the
     three detrending packages -- derive its seed from the global RandomState above, so
     successive calls still differ while the run as a whole replays. See varmap/tests.py's
-    _rng() and each detrending package's _default_rng().
+    _rng() and detrending_testutils.default_rng(), which the three detrending suites share.
 
     SEEDED ONCE PER PROCESS, NOT PER TEST, and that is the point: iteration i of the 'test
     -n' loop draws different values from iteration j (so a long run explores the parameter

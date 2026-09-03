@@ -23,55 +23,29 @@ from .Detrender import Detrender
 from .reference import detrend_reference
 from .masks import random_mask
 from . import LocalPolyFit
+from ..detrending_testutils import (ExpansionTally, default_rng as _default_rng,
+                                    maxdiff as _maxdiff, poison_masked,
+                                    random_polynomial, random_spectator_shape,
+                                    random_stream_geometry)
 
 
 # ------------------------------------------------------------------ utilities
 
-# Cumulative mask-expansion accounting, for visual inspection.  Deliberately
-# module-level and never reset: under 'test --dt1d -n N' each iteration draws
-# fresh masks, and the running total across iterations is what tells us whether
-# expansion is firing at a sane rate.
 # Keyed by polynomial degree, because the two degrees expand at rates that differ
 # by about an order of magnitude (at n=1 the only windows rmin can reject are
 # nv <= 1), and pooling them would make the number uninterpretable.
-_EXPANSION = {}
+_EXPANSION = ExpansionTally(lambda n: f'n={n}')
 
 
-def _note_expansion(n, mask_in, mask_out):
-    """mask_in restricted to the output range, and the detrender's mask_out."""
-    d = _EXPANSION.setdefault(n, {'valid_in': 0, 'expanded': 0})
-    d['valid_in'] += int(mask_in.sum())
-    d['expanded'] += int((mask_in & ~mask_out).sum())
+def _draw_geometry(rng, W, nsamp, s_max):
+    """Draw (Tc, nchunk, S_ax, T) for one streaming test at half-width W.
 
-
-def _expansion_str():
-    return '  '.join(f"n={n}: {d['expanded']}/{d['valid_in']} = "
-                     f"{(d['expanded']/d['valid_in'] if d['valid_in'] else 0.0):.3e}"
-                     for n, d in sorted(_EXPANSION.items()))
-
-
-def _default_rng(rng):
-    """A fresh numpy Generator for one test, seeded from the master --seed.
-
-    NEVER call numpy's zero-argument default_rng() here.  It seeds itself from OS
-    ENTROPY, which puts every draw in this file outside __main__.seed_rngs(): a
-    failing draw then cannot be replayed, and 'test' prints a seed that does not
-    cover these suites.  Seeded instead from numpy's global RandomState, which
-    seed_rngs() pins -- so successive calls still differ (a long run explores
-    different data) while the whole sequence replays from one integer.  This is the
-    same rule, for the same reason, as varmap/tests.py's _rng().
-
-    run_all() prints the entropy of the generator it makes, which reproduces THIS
-    SUITE on its own without re-running anything else: pass
-    np.random.default_rng(<entropy>) back in as 'rng'.
+    chunk_size must be a multiple of the scan block B = 2W, and the buffer carries W
+    samples of padding at each end -- the two facts random_stream_geometry() needs.
+    The draw reaches Tc = B, where Detrender.nblocks is 2 and the tree scan is at its
+    shallowest.
     """
-    return np.random.default_rng(np.random.randint(0, 1 << 32)) if rng is None else rng
-
-
-def _maxdiff(a, b):
-    a = np.asarray(a, dtype=np.float64)
-    b = np.asarray(b, dtype=np.float64)
-    return float(np.max(np.abs(a-b))) if a.size else 0.0
+    return random_stream_geometry(rng, nsamp, s_max, lag=2*W, block=2*W)
 
 
 def _ms_maxdiff(a, b):
@@ -115,7 +89,9 @@ def test_monoid(rng=None, n=2, niter=8, verbose=True):
     worst = dict(merge=0.0, assoc=0.0, comm=0.0, ident=0.0, s1=0.0, shift=0.0, empty=0.0)
 
     for _ in range(niter):
-        S_ax, L = 8, 40
+        # L >= 4 so the three-way split below has two distinct interior cut points.
+        S_ax, L = random_spectator_shape(rng, 320, first_max=8)
+        L = max(L, 4)
         u, m, md = _random_set(rng, S_ax, L, W, dtype, offset=100.0)
 
         # merge of a two-way split == direct moments of the whole set
@@ -177,7 +153,7 @@ def test_vanherk(rng=None, n=2, niter=4, verbose=True):
         B, nblocks = 2*W, 3
         T = nblocks*B
         for _ in range(niter):
-            S_ax = 8
+            S_ax = int(rng.integers(1, 9))
             m = random_mask(S_ax, T, W, rng)[0].astype(dtype)
             d = rng.normal(size=(S_ax, T)).astype(dtype)
             u = np.broadcast_to(np.arange(T, dtype=dtype), (S_ax, T))
@@ -248,7 +224,7 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
 
     # (a) against np.linalg.lstsq on well-determined windows
     for _ in range(niter):
-        S_ax = 16
+        S_ax = int(rng.integers(1, 17))
         u = np.broadcast_to(np.arange(L, dtype=dtype), (S_ax, L))
         m = random_mask(S_ax, L, W, rng)[0].astype(dtype)
         d = rng.normal(size=(S_ax, L)).astype(dtype)
@@ -393,17 +369,6 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
 
 # ---------------------------------------------------- 4. polynomial exactness
 
-def _poly_stream(rng, S_ax, T, deg, W, dtype):
-    """P(t) with |P| = O(1) across the buffer; built in fp64, then cast."""
-    x = (np.arange(T, dtype=np.float64) - T/2) / max(W, 1)
-    coef = rng.normal(size=(S_ax, deg+1))
-    P = np.zeros((S_ax, T), dtype=np.float64)
-    for j in range(deg+1):
-        P += coef[:, j:j+1] * (x**j)[None, :]
-    P /= max(float(np.max(np.abs(P))), 1e-300)
-    return P.astype(dtype)
-
-
 def test_polynomial_exactness(rng=None, n=2, verbose=True):
     """
     Feed d[t] = P(t) for a polynomial of degree <= n with an arbitrary mask and
@@ -419,16 +384,16 @@ def test_polynomial_exactness(rng=None, n=2, verbose=True):
     results = []
 
     for dtype, tol in ((np.float64, 1e-11), (np.float32, 3e-5)):
-        for W, Tc, nchunk, S_ax, ndraw in ((16, 64, 3, 16, 2), (512, 2048, 2, 6, 1)):
-            T = nchunk*Tc + 2*W
+        for W, budget, s_max, ndraw in ((16, 3072, 16, 2), (512, 24576, 6, 1)):
             worst_ok, nflag, worst_lbl = 0.0, 0, '-'
             for _ in range(ndraw):
+                Tc, nchunk, S_ax, T = _draw_geometry(rng, W, budget, s_max)
                 mask, labels = random_mask(S_ax, T, W, rng)
-                P = _poly_stream(rng, S_ax, T, n, W, dtype)
+                P = random_polynomial(rng, S_ax, T, n, W, dtype)
                 det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype)
                 resid, mko, _ = det.detrend_stream(P, mask)
                 min_ = mask[:, W:T-W]
-                _note_expansion(n, min_, mko)
+                _EXPANSION.note(n, min_, mko)
                 nflag += int((min_ & ~mko).sum())
                 # No regularizer means no shrinkage bias, so exactness holds at
                 # *every* surviving sample -- there is no carve-out to make.
@@ -462,7 +427,7 @@ def test_polynomial_exactness(rng=None, n=2, verbose=True):
     asym = np.ones((2, T), dtype=bool)
     asym[:, ::3] = False          # breaks the within-window symmetry
 
-    P1 = _poly_stream(rng, 2, T, n+1, W, np.float64)
+    P1 = random_polynomial(rng, 2, T, n+1, W, np.float64)
     r1, _, _ = det.detrend_stream(P1, allvalid)
     w1 = float(np.max(np.abs(r1)))
     if (n+1)//2 <= n//2:
@@ -479,7 +444,7 @@ def test_polynomial_exactness(rng=None, n=2, verbose=True):
     assert float(np.max(np.abs(r2[mo]))) > 1e-6, \
         'degree n+1 was reproduced even under an asymmetric mask'
 
-    P2 = _poly_stream(rng, 2, T, n+2, W, np.float64)
+    P2 = random_polynomial(rng, 2, T, n+2, W, np.float64)
     r3, _, _ = det.detrend_stream(P2, allvalid)
     assert float(np.max(np.abs(r3))) > 1e-6, \
         'negative control: a degree-(n+2) polynomial was reproduced exactly'
@@ -498,15 +463,15 @@ def test_detrender_vs_reference(rng=None, n=2, verbose=True):
     worst = 0.0
     worst_name = ''
 
-    for W, Tc, nchunk, S_ax, ndraw in ((16, 64, 3, 16, 2), (128, 512, 2, 8, 1)):
-        T = nchunk*Tc + 2*W
+    for W, budget, s_max, ndraw in ((16, 3072, 16, 2), (128, 8192, 8, 1)):
         for _ in range(ndraw):
+            Tc, nchunk, S_ax, T = _draw_geometry(rng, W, budget, s_max)
             mask, labels = random_mask(S_ax, T, W, rng)
             d = (rng.normal(size=(S_ax, T)) + 3.0).astype(dtype)
             det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype)
             got, gmk, grm = det.detrend_stream(d, mask)
             want, wmk, wrm = detrend_reference(d, mask, W, n=n, dtype=dtype)
-            _note_expansion(n, mask[:, W:T-W], gmk)
+            _EXPANSION.note(n, mask[:, W:T-W], gmk)
             scale = max(1.0, float(np.max(np.abs(d))))
             for s in range(S_ax):
                 e = _maxdiff(got[s], want[s]) / scale
@@ -551,9 +516,9 @@ def test_dtype_agreement(rng=None, n=2, tol=1e-3, verbose=True):
     worst_name = ''
     worst_rmin = 0.0
 
-    for W, Tc, nchunk, S_ax, ndraw in ((16, 64, 3, 16, 4), (512, 2048, 2, 6, 2)):
-        T = nchunk*Tc + 2*W
+    for W, budget, s_max, ndraw in ((16, 3072, 16, 4), (512, 24576, 6, 2)):
         for _ in range(ndraw):
+            Tc, nchunk, S_ax, T = _draw_geometry(rng, W, budget, s_max)
             mask, labels = random_mask(S_ax, T, W, rng)
             offset = rng.uniform(0.0, 1e3)
             d64 = rng.normal(size=(S_ax, T)) + offset
@@ -564,7 +529,7 @@ def test_dtype_agreement(rng=None, n=2, tol=1e-3, verbose=True):
                                       dtype=np.float32).detrend_stream(d32, mask)
             r64, m64, q64 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps64,
                                       dtype=np.float64).detrend_stream(dref, mask)
-            _note_expansion(n, mask[:, W:T-W], m32)
+            _EXPANSION.note(n, mask[:, W:T-W], m32)
 
             both = m32 & m64
             worst_rmin = max(worst_rmin, _maxdiff(q32, q64))
@@ -615,16 +580,11 @@ def test_masked_data_unused(rng=None, n=2, verbose=True):
     rng = _default_rng(rng)
     checked = 0
 
-    for W, Tc, nchunk, S_ax in ((16, 64, 3, 16), (512, 2048, 2, 4)):
-        T = nchunk*Tc + 2*W
+    for W, budget, s_max in ((16, 3072, 16), (512, 16384, 4)):
+        Tc, nchunk, S_ax, T = _draw_geometry(rng, W, budget, s_max)
         mask, _ = random_mask(S_ax, T, W, rng)
         clean = rng.normal(size=(S_ax, T)) + rng.uniform(0.0, 1e3)
-        junk = rng.uniform(-1e10, 1e10, size=(S_ax, T))
-        pick = rng.integers(0, 4, size=(S_ax, T))
-        junk = np.where(pick == 1, np.inf, junk)
-        junk = np.where(pick == 2, -np.inf, junk)
-        junk = np.where(pick == 3, np.nan, junk)
-        poison = np.where(mask, clean, junk)
+        poison = poison_masked(rng, clean, mask)
 
         for dtype in (np.float32, np.float64):
             det = lambda d: Detrender(W=W, n=n, chunk_size=Tc,
@@ -703,7 +663,7 @@ def test_gpu_kernel(rng=None, n=2, tol=1e-3, rmin_tol=1e-4, verbose=True):
 def _test_gpu_kernel_1(rng, det, cp, eps32, eps64, ndraw, tol, rmin_tol, verbose):
     """One configuration of test_gpu_kernel(); see its docstring."""
     n, W, T, nbuf = det.n, det.W, det.T, det.nbuf
-    S_ax = 8
+    S_ax = int(rng.integers(1, 9))
 
     worst_gpu, worst_cpu, worst_name = 0.0, 0.0, ''
     ndisagree, worst_slack = 0, 0.0
@@ -733,7 +693,7 @@ def _test_gpu_kernel_1(rng, det, cp, eps32, eps64, ndraw, tol, rmin_tol, verbose
         r_ref, m_ref, rmin = detrend_reference(dref, mask, W, n=n, eps=eps64,
                                               dtype=np.float64,
                                               max_outputs_per_pass=512)
-        _note_expansion(n, mask[:, W:W+T], m_gpu)
+        _EXPANSION.note(n, mask[:, W:W+T], m_gpu)
 
         bad = (m_gpu != (mask[:, W:W+T] & (rmin >= eps32)))
         if bad.any():
@@ -789,4 +749,4 @@ def run_all(verbose=True, rng=None, n=None):
     test_dtype_agreement(rng, n=n, verbose=verbose)
     test_masked_data_unused(rng, n=n, verbose=verbose)
     test_gpu_kernel(rng, n=n, verbose=verbose)
-    print(f'  detrending_1d tests passed   [cumulative mask expansion: {_expansion_str()}]')
+    print(f'  detrending_1d tests passed   [cumulative mask expansion: {_EXPANSION}]')

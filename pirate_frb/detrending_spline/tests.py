@@ -33,8 +33,12 @@ from .timebasis import TimeBasis
 from .assemble import bandwidth
 from .reduce import band_to_dense as _b2d
 from ..utils import random_nfreq
+from ..detrending_testutils import (ExpansionTally, default_rng as _default_rng,
+                                    poison_masked, random_spectator_shape)
 
-NW_CASES = [(0, 0), (0, 1), (0, 3), (1, 1), (1, 2), (2, 1), (2, 2), (2, 4)]
+# How many (n, W) pairs each 2-d test draws per knot vector.  Eight is what the
+# per-iteration cost of these tests is budgeted for.
+NW_PER_KV = 8
 
 # Spline degree under test.  Rebound by run_all() rather than fixed, so that a
 # multi-iteration run ('test --dts -n 8') covers 0..3; every test reads it, in
@@ -70,53 +74,34 @@ RMIN_ABS_TOL_EPS = 1000
 # can print the measured margin over eps.
 _worst_rmin = [np.inf]
 
-# Cumulative mask-expansion accounting for test_2d_dtype_agreement(), in the
-# style of detrending_1d.tests.  Deliberately module-level and never reset:
-# under 'test --dts -n N' each iteration draws fresh knots and masks, and the
-# running total across iterations is what tells us whether expansion is firing at
-# a sane rate -- a single iteration is far too small a sample to judge from.
-#
 # Keyed by (n_phi, dtype-eps), because the two precisions use different eps
 # (EPS_FLOAT32 = 3e-5 vs EPS_FLOAT64 = 1e-7) and therefore expand at different
-# rates BY CONSTRUCTION; pooling them would make the number uninterpretable.
-# n_phi is in the key because at
-# n_phi = 0 the regulator is identically zero and r_min is exactly 1, so
-# expansion can never fire there and a pooled rate would be diluted by it.
-_EXPANSION_2D = {}
+# rates BY CONSTRUCTION.  n_phi is in the key because at n_phi = 0 the regulator is
+# identically zero and r_min is exactly 1, so expansion can never fire there and a
+# pooled rate would be diluted by it.
+_EXPANSION_2D = ExpansionTally(lambda k: f'n_phi={k[0]},{k[1]}')
 
 
-def _note_expansion_2d(key, mask_in, mask_out):
-    """mask_in restricted to the output range, and the detrender's mask_out."""
-    d = _EXPANSION_2D.setdefault(key, {'valid_in': 0, 'expanded': 0})
-    d['valid_in'] += int(mask_in.sum())
-    d['expanded'] += int((mask_in & ~mask_out).sum())
+def _draw_nW(rng, wmin=0, wmax=8):
+    """A random (n, W) for the detrender's time stencil.
 
+    A DRAW RATHER THAN A TABLE, which every 2-d test here uses.  A fixed table of
+    (n, W) pairs costs the same per iteration and covers strictly less: any table short
+    enough to write down has a ceiling on W and gaps in the middle, and a 100-iteration
+    run walks it a hundred times instead of exploring.
 
-def _expansion_2d_str():
-    if not _EXPANSION_2D:
-        return 'none recorded'
-    return '  '.join(
-        f"n_phi={k[0]},{k[1]}: {d['expanded']}/{d['valid_in']} = "
-        f"{(d['expanded']/d['valid_in'] if d['valid_in'] else 0.0):.3e}"
-        for k, d in sorted(_EXPANSION_2D.items()))
-
-
-def _default_rng(rng):
-    """A fresh numpy Generator for one test, seeded from the master --seed.
-
-    NEVER call numpy's zero-argument default_rng() here.  It seeds itself from OS
-    ENTROPY, which puts every draw in this file outside __main__.seed_rngs(): a
-    failing draw then cannot be replayed, and 'test' prints a seed that does not
-    cover these suites.  Seeded instead from numpy's global RandomState, which
-    seed_rngs() pins -- so successive calls still differ (a long run explores
-    different data) while the whole sequence replays from one integer.  This is the
-    same rule, for the same reason, as varmap/tests.py's _rng().
-
-    run_all() prints the entropy of the generator it makes, which reproduces THIS
-    SUITE on its own without re-running anything else: pass
-    np.random.default_rng(<entropy>) back in as 'rng'.
+    The rules are n in {0, 1, 2}, which is what SplineDetrender builds, and
+    2W + 1 >= n + 1, so the window can hold the fit.  W = 0 is given weight of its
+    own rather than being left to the tail of a uniform draw: it is the pure 1-d
+    detrender, with no time stencil at all, and test_2d_reference_agreement is the
+    only place that case is checked against detrend_reference().  Pass wmin=1 where
+    W = 0 is degenerate for the test rather than interesting.
     """
-    return np.random.default_rng(np.random.randint(0, 1 << 32)) if rng is None else rng
+    n = int(rng.integers(0, 3))
+    lo = max(int(wmin), (n + 1) // 2)
+    if (lo == 0) and (rng.random() < 0.25):
+        return n, 0
+    return n, int(rng.integers(max(lo, 1), int(wmax) + 1))
 
 
 def _smooth_baseline(kv, rng, M_ax, ntime, dtype=np.float64):
@@ -255,10 +240,10 @@ def test_regulator(rng, verbose=True):
 
 def test_reduce(rng, verbose=True):
     for _ in range(20):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 600)))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 600))
         table = BasisTable(kv, dtype=np.float64)
         Phi = table.dense()
-        M_ax, ntime = int(rng.integers(1, 3)), int(rng.integers(1, 4))
+        M_ax, ntime = random_spectator_shape(rng, 6, first_max=3)
         mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, ETA_DEFAULT)
         d = rng.standard_normal((M_ax, kv.nfreq, ntime))
 
@@ -305,16 +290,15 @@ def test_chunk_invariance(rng, verbose=True):
     """
     nblocks = []
     for _ in range(6):
-        kv = msk.random_knots(rng, n_phi=N_PHI,
-                              nfreq=random_nfreq(rng, 2500, lo=64))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 2500))
         nblocks.append(-(-kv.nfreq // CHANNEL_BLOCK))
         det = SplineDetrender(kv, dtype=np.float32)
-        M_ax, ntime = 2, 12
+        M_ax, ntime = random_spectator_shape(rng, 24, first_max=4)
         mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
         d = rng.standard_normal((M_ax, kv.nfreq, ntime)).astype(np.float32)
 
         r0, m0, p0 = det.detrend_chunk(d, mask)
-        for chunk in (1, 3, 5, 12):
+        for chunk in (1, 3, 5, ntime):
             rs, ms, ps = [], [], []
             for lo in range(0, ntime, chunk):
                 hi = min(lo + chunk, ntime)
@@ -337,12 +321,12 @@ def test_chunk_invariance(rng, verbose=True):
 
 def test_solve(rng, verbose=True):
     for _ in range(25):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 800)))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 800))
         table = BasisTable(kv, dtype=np.float64)
         D1 = d1_banded(kv)
         Rd = d1_dense(kv)
         eta, eps = ETA_DEFAULT, EPS_FLOAT64
-        M_ax, ntime = 1, 6
+        M_ax, ntime = random_spectator_shape(rng, 6, first_max=3)
         mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, eta)
         d = rng.standard_normal((M_ax, kv.nfreq, ntime))
 
@@ -372,10 +356,11 @@ def test_solve(rng, verbose=True):
     # r_min and the flag must be invariant under rescaling the DATA (the matrix
     # scale changes but the equilibrated pivot does not).  Rescaling eta would of
     # course change things: it is a physical parameter, not a unit.
-    kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=512)
+    kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 1024, lo=64))
     det = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT64)
-    mask = msk.random_mask((1, kv.nfreq, 8), kv, rng, det.eta)
-    d = rng.standard_normal((1, kv.nfreq, 8))
+    M_ax, ntime = random_spectator_shape(rng, 8, first_max=3)
+    mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
+    d = rng.standard_normal((M_ax, kv.nfreq, ntime))
     _, m0, p0 = det.detrend_chunk(d, mask)
     for scale in (2.0**40, 2.0**-40):
         _, m1, p1 = det.detrend_chunk(d * scale, mask)
@@ -451,11 +436,11 @@ def test_flat_baseline_exact(rng, verbose=True):
     """
     worst = 0.0
     for _ in range(25):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 10001)),
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 10000),
                               kind='no_interior' if rng.random() < 0.3 else None)
         for dtype in (np.float64, np.float32):
             det = SplineDetrender(kv, dtype=dtype, eps=EPS_FLOAT64)
-            M_ax, ntime = 1, 8
+            M_ax, ntime = random_spectator_shape(rng, 8, first_max=3)
             mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
             level = rng.uniform(0.5, 2.0)
             d = np.full((M_ax, kv.nfreq, ntime), level, dtype=dtype)
@@ -469,9 +454,10 @@ def test_flat_baseline_exact(rng, verbose=True):
 
         # Also exact for a different constant per (beam, time) sample.
         det = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT64)
-        lv = rng.uniform(0.5, 2.0, size=(1, 1, 8))
-        d = np.broadcast_to(lv, (1, kv.nfreq, 8)).copy()
-        mask = msk.random_mask((1, kv.nfreq, 8), kv, rng, det.eta)
+        nt2 = int(rng.integers(1, 9))
+        lv = rng.uniform(0.5, 2.0, size=(1, 1, nt2))
+        d = np.broadcast_to(lv, (1, kv.nfreq, nt2)).copy()
+        mask = msk.random_mask((1, kv.nfreq, nt2), kv, rng, det.eta)
         r, _, p = det.detrend_chunk(d, mask)
         live = p[p > 0]
         assert np.abs(r).max() < 50 * np.finfo(np.float64).eps / \
@@ -497,10 +483,11 @@ def test_shrinkage_bias_bounded(rng, verbose=True):
     """
     worst = 0.0
     for _ in range(20):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 700)))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 700))
         det = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT64)
-        d, _ = _smooth_baseline(kv, rng, 1, 6)
-        mask = msk.random_mask((1, kv.nfreq, 6), kv, rng, det.eta)
+        M_ax, ntime = random_spectator_shape(rng, 6, first_max=3)
+        d, _ = _smooth_baseline(kv, rng, M_ax, ntime)
+        mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
         r, _, _ = det.detrend_chunk(d, mask)
         amp = np.abs(d).max()
         rel = np.abs(r).max() / amp
@@ -515,9 +502,10 @@ def test_shrinkage_bias_bounded(rng, verbose=True):
     # leaks to unmasked channels, so on a masked configuration the bias saturates
     # and a proportionality assertion would flake -- measured, a 16x reduction in
     # eta bought only 2.1x on one random mask.
-    kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=512)
-    d, _ = _smooth_baseline(kv, rng, 1, 4)
-    mask = np.ones((1, kv.nfreq, 4), dtype=bool)
+    kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 1024, lo=64))
+    ntime = int(rng.integers(1, 5))
+    d, _ = _smooth_baseline(kv, rng, 1, ntime)
+    mask = np.ones((1, kv.nfreq, ntime), dtype=bool)
     biases = []
     for eta in (ETA_DEFAULT, ETA_DEFAULT/4, ETA_DEFAULT/16):
         det = SplineDetrender(kv, dtype=np.float64, eta=eta, eps=EPS_FLOAT64)
@@ -544,17 +532,15 @@ def test_shrinkage_bias_bounded(rng, verbose=True):
 
 def test_masked_data_unused(rng, verbose=True):
     for _ in range(15):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 700)))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 700))
         for dtype in (np.float32, np.float64):
             det = SplineDetrender(kv, dtype=dtype, eps=EPS_FLOAT64)
-            M_ax, ntime = 2, 5
+            M_ax, ntime = random_spectator_shape(rng, 10, first_max=3)
             mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
             d = rng.standard_normal((M_ax, kv.nfreq, ntime)).astype(dtype)
             r0, m0, p0 = det.detrend_chunk(d, mask)
 
-            poison = d.copy()
-            junk = np.array([np.inf, -np.inf, np.nan, 1e30, -1e30], dtype=dtype)
-            poison[~mask] = junk[rng.integers(0, len(junk), size=int((~mask).sum()))]
+            poison = poison_masked(rng, d, mask)
             r1, m1, p1 = det.detrend_chunk(poison, mask)
 
             assert np.array_equal(m0, m1)
@@ -569,9 +555,9 @@ def test_masked_data_unused(rng, verbose=True):
 def test_spectator_axes(rng, verbose=True):
     """At (n,W) = (0,0) both M and T are spectators: no coupling, either direction."""
     for _ in range(8):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 600)))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 600))
         det = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT64)
-        M_ax, ntime = 3, 7
+        M_ax, ntime = random_spectator_shape(rng, 21, first_max=4)
         mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
         d = rng.standard_normal((M_ax, kv.nfreq, ntime))
         r, mo, p = det.detrend_chunk(d, mask)
@@ -620,7 +606,7 @@ def test_conditioning(rng, verbose=True, heavy=False):
     eta, eps = ETA_DEFAULT, EPS_FLOAT32
     worst, worst_cfg = np.inf, None
 
-    cfgs = [(int(rng.integers(200, 10001)), None) for _ in range(10)]
+    cfgs = [(random_nfreq(rng, 10000, lo=64), None) for _ in range(10)]
     # The two profiles that approach eps are not reachable by chance, so pin them
     # at the top of the nfreq range rather than hoping the draw produces them.
     # h_max, not nfreq, is what conditioning turns on, so the 30000-channel entries
@@ -683,11 +669,11 @@ def test_conditioning(rng, verbose=True, heavy=False):
 def test_zone_expansion(rng, verbose=True):
     """Flagging is per zone, all-or-nothing, and never touches a neighbour."""
     for _ in range(20):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(128, 900)))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 900, lo=64))
         # A large eps makes the flag fire often, which is the only practical way to
         # exercise this path: at the production eps it essentially never fires.
         det = SplineDetrender(kv, dtype=np.float64, eps=0.2)
-        M_ax, ntime = 1, 8
+        M_ax, ntime = random_spectator_shape(rng, 8, first_max=3)
         mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
         d = rng.standard_normal((M_ax, kv.nfreq, ntime))
         r, mo, p = det.detrend_chunk(d, mask)
@@ -714,7 +700,7 @@ def test_zone_expansion(rng, verbose=True):
             assert np.array_equal(p2[:, :, 1], p[:, :, 1]), 'zones are not independent'
 
     # Fully masked input: everything zero, nothing raised.
-    kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=256)
+    kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 512, lo=64))
     det = SplineDetrender(kv, dtype=np.float32)
     d = rng.standard_normal((1, kv.nfreq, 3)).astype(np.float32)
     r, mo, p = det.detrend_chunk(d, np.zeros((1, kv.nfreq, 3), dtype=bool))
@@ -764,9 +750,12 @@ def test_dtype_agreement(rng, verbose=True):
         # top of the range -- where the float32/float64 comparison is the thing
         # that would actually catch a problem.  Confined to this test because a
         # 30000-channel accumulate is not worth paying for in the other twenty.
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(128, 30001)),
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 30000, lo=64),
                               kind='no_interior' if rng.random() < 0.4 else None)
-        M_ax, ntime = 1, 10
+        # M_ax stays 1: the mask below is stacked one time-slice at a time, and the
+        # spectator axis is not what this test is about.  ntime is capped by the
+        # length of 'kinds'.
+        M_ax, ntime = 1, int(rng.integers(1, 11))
         # Cycle the extremal kinds explicitly rather than letting random_mask draw
         # them.  At large h_max the conditioning extremum is reached only by
         # 'adversarial' and 'one_run', and a random draw finds neither reliably --
@@ -906,8 +895,9 @@ def test_bandwidth(rng, verbose=True):
     producing a wrong answer, but only at n_phi = 0.
     """
     for _ in range(6):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(200, 600)))
-        for n, W in NW_CASES:
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 600))
+        for _ in range(NW_PER_KV):
+            n, W = _draw_nW(rng)
             det = SplineDetrender(kv, n=n, W=W, dtype=np.float64)
             d = rng.standard_normal((1, kv.nfreq, 3 + 2*W))
             m = msk.random_mask_2d((1, kv.nfreq, 3 + 2*W), kv, rng, det.eta,
@@ -929,9 +919,10 @@ def test_bandwidth(rng, verbose=True):
 
 def test_2d_reference_agreement(rng, verbose=True):
     """
-    The detrender against detrend_reference(), over NW_CASES -- which includes
+    The detrender against detrend_reference(), over drawn (n, W) -- including
     (n, W) = (0, 0), i.e. the pure 1-d detrender, so this is the only place either
-    is checked against the reference implementation.
+    is checked against the reference implementation.  _draw_nW() gives W = 0 weight
+    of its own for exactly that reason.
 
     'eps' is DRAWN from the two shipped values rather than pinned at EPS_FLOAT64.
     Both runs are float64, so eps here is not a precision setting: it is the
@@ -940,12 +931,12 @@ def test_2d_reference_agreement(rng, verbose=True):
     """
     worst = 0.0
     for _ in range(4):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 500)))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 500))
         eps = EPS_FLOAT32 if (rng.random() < 0.5) else EPS_FLOAT64
-        M_ax = 2
-        for n, W in NW_CASES:
+        for _ in range(NW_PER_KV):
+            n, W = _draw_nW(rng)
+            M_ax, T = random_spectator_shape(rng, 8, first_max=3)
             det = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eps=eps)
-            T = 4
             m = msk.random_mask_2d((M_ax, kv.nfreq, T + 2*W), kv, rng, det.eta, n=n, W=W)
             base, _ = _smooth_baseline(kv, rng, M_ax, T + 2*W)
             d = base + 0.05*rng.standard_normal(base.shape)
@@ -974,10 +965,11 @@ def test_2d_flat_baseline_exact(rng, verbose=True):
     """
     worst = 0.0
     for _ in range(6):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 500)))
-        for n, W in NW_CASES:
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 500))
+        for _ in range(NW_PER_KV):
+            n, W = _draw_nW(rng)
             det = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eps=EPS_FLOAT64)
-            T = 6
+            T = int(rng.integers(1, 7))
             nbuf = T + 2*W
             tt = np.arange(nbuf, dtype=np.float64) - (nbuf-1)/2.0
             coef = rng.standard_normal(n+1)
@@ -992,7 +984,8 @@ def test_2d_flat_baseline_exact(rng, verbose=True):
             assert np.abs(r).max() < tol, (n, W, float(np.abs(r).max()), tol)
 
     worst_kept = 1e300
-    for n, W in NW_CASES:
+    for _ in range(NW_PER_KV):
+        n, W = _draw_nW(rng)
         worst_kept = min(worst_kept, _assert_not_removed(rng, np.float64, n=n, W=W))
     if verbose:
         print(f'    test_2d_flat_baseline_exact: pass  '
@@ -1008,8 +1001,8 @@ def test_n1_degeneracy(rng, verbose=True):
     """
     same, diff = 0.0, 0.0
     for _ in range(8):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 400)))
-        W, T = int(rng.integers(1, 5)), 4
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 400))
+        W, T = int(rng.integers(1, 9)), int(rng.integers(1, 7))
         d0 = SplineDetrender(kv, n=0, W=W, dtype=np.float64, eps=EPS_FLOAT64)
         d1 = SplineDetrender(kv, n=1, W=W, dtype=np.float64, eps=EPS_FLOAT64)
         base, _ = _smooth_baseline(kv, rng, 1, T + 2*W)
@@ -1042,7 +1035,7 @@ def test_time_rank_deficiency(rng, verbose=True):
     that do carry data, and the zone must be flagged.
     """
     for _ in range(8):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(64, 400)))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 400))
         for n, W in ((1, 2), (2, 2), (2, 3)):
             det = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eps=EPS_FLOAT64)
             nbuf = 1 + 2*W
@@ -1074,15 +1067,14 @@ def test_2d_chunk_invariance(rng, verbose=True):
     """
     nblocks = []
     for _ in range(5):
-        kv = msk.random_knots(rng, n_phi=N_PHI,
-                              nfreq=random_nfreq(rng, 1600, lo=64))
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 1600))
         nblocks.append(-(-kv.nfreq // CHANNEL_BLOCK))
-        n, W = NW_CASES[int(rng.integers(0, len(NW_CASES)))]
+        n, W = _draw_nW(rng)
         det = SplineDetrender(kv, n=n, W=W, dtype=np.float32)
-        T = 12
+        M_ax, T = random_spectator_shape(rng, 24, first_max=3)
         nbuf = T + 2*W
-        m = msk.random_mask_2d((2, kv.nfreq, nbuf), kv, rng, det.eta, n=n, W=W)
-        d = rng.standard_normal((2, kv.nfreq, nbuf)).astype(np.float32)
+        m = msk.random_mask_2d((M_ax, kv.nfreq, nbuf), kv, rng, det.eta, n=n, W=W)
+        d = rng.standard_normal((M_ax, kv.nfreq, nbuf)).astype(np.float32)
         r0, m0, p0 = det.detrend_chunk(d, m)
         for chunk in (1, 2, 5, T):
             rs, ms, ps = [], [], []
@@ -1109,10 +1101,11 @@ def test_2d_conditioning(rng, verbose=True):
     """
     worst_abs = np.inf
     for _ in range(8):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(200, 800)))
-        for n, W in NW_CASES:
-            if W == 0:
-                continue
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 800))
+        for _ in range(NW_PER_KV):
+            # W = 0 is excluded rather than skipped: at W = 0 there is no time
+            # stencil, so "2-d r_min equals 1-d r_min" is a tautology.
+            n, W = _draw_nW(rng, wmin=1)
             det2 = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eps=EPS_FLOAT64)
             det1 = SplineDetrender(kv, n=0, W=0, dtype=np.float64, eps=EPS_FLOAT64)
             nbuf = 1 + 2*W
@@ -1160,12 +1153,13 @@ def test_2d_dtype_agreement(rng, verbose=True):
     worst = 0.0
     iter_counts = {}
     for _ in range(4):
-        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=int(rng.integers(128, 800)))
-        for n, W in NW_CASES:
-            T = 5
+        kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 800))
+        for _ in range(NW_PER_KV):
+            n, W = _draw_nW(rng)
+            M_ax, T = random_spectator_shape(rng, 5, first_max=2)
             nbuf = T + 2*W
-            m = msk.random_mask_2d((1, kv.nfreq, nbuf), kv, rng, ETA_DEFAULT, n=n, W=W)
-            base, _ = _smooth_baseline(kv, rng, 1, nbuf)
+            m = msk.random_mask_2d((M_ax, kv.nfreq, nbuf), kv, rng, ETA_DEFAULT, n=n, W=W)
+            base, _ = _smooth_baseline(kv, rng, M_ax, nbuf)
             d = base + 0.05*rng.standard_normal(base.shape)
             a32 = SplineDetrender(kv, n=n, W=W, dtype=np.float32)
             a64 = SplineDetrender(kv, n=n, W=W, dtype=np.float64)
@@ -1176,7 +1170,7 @@ def test_2d_dtype_agreement(rng, verbose=True):
             # measured against; the halo is never emitted.
             m_in = (m[:, :, W:W+T] != 0)
             for tag, mo in (('f32', m32), ('f64', m64)):
-                _note_expansion_2d((N_PHI, tag), m_in, mo)
+                _EXPANSION_2D.note((N_PHI, tag), m_in, mo)
                 c = iter_counts.setdefault(tag, [0, 0])
                 c[0] += int((m_in & ~mo).sum())
                 c[1] += int(m_in.sum())
@@ -1193,7 +1187,7 @@ def test_2d_dtype_agreement(rng, verbose=True):
                          for t, c in sorted(iter_counts.items()))
         print(f'    test_2d_dtype_agreement: pass  [resid {worst:.2e}]')
         print(f'      mask expansion this iteration: {this}')
-        print(f'      cumulative:                    {_expansion_2d_str()}')
+        print(f'      cumulative:                    {_EXPANSION_2D}')
 
 
 def test_production_geometry(rng, verbose=True):
@@ -1203,7 +1197,7 @@ def test_production_geometry(rng, verbose=True):
     W = 4, M = 2.
 
     Everything else in this file sweeps; this one deliberately does not.  It pins
-    n_phi, n and W rather than reading N_PHI and NW_CASES, because the point is to
+    n_phi, n and W rather than reading N_PHI or drawing them, because the point is to
     exercise the one configuration that gets compiled, and to leave measured
     numbers behind -- worst r_min, and the float32-vs-float64 residual -- that a
     kernel's tolerances can be set from.
@@ -1599,7 +1593,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
         ns = int(rng.integers(0, 3))
         # 2W+1 >= n+1 is the algebraic minimum, so W = 0 is legal only at n = 0.
         Wok = [w for w in (0, 1, 2, 4, 8) if 2*w + 1 >= ns + 1]
-        sweep.append((int(round(np.exp(rng.uniform(np.log(128), np.log(30000))))),
+        sweep.append((random_nfreq(rng, 30000, lo=128),
                       None if rng.random() < 0.6 else 'no_interior',
                       int(rng.choice(Wok)),
                       ns,

@@ -21,46 +21,26 @@ from .InfoFilter import forward_step, backward_step
 from .KalmanDetrender import KalmanDetrender
 from .brute_force import (kalman_brute_force, impulse_kernel, difference_matrix,
                           _state_from_samples)
+from ..detrending_testutils import (ExpansionTally, default_rng as _default_rng,
+                                    maxdiff as _maxdiff, poison_masked,
+                                    random_polynomial, random_spectator_shape,
+                                    random_stream_geometry)
 
 
-# Cumulative mask-expansion accounting, kept separate from detrending_1d's: the two
-# detrenders expand for different reasons and at wildly different rates, so a pooled
-# number would describe neither.
-_EXPANSION = {'valid_in': 0, 'expanded': 0}
+# Kept separate from detrending_1d's tally: the two detrenders expand for different
+# reasons and at wildly different rates, so a pooled number would describe neither.
+# One bucket, since nothing here splits the population the way the polynomial degree
+# splits detrending_1d's.
+_EXPANSION = ExpansionTally(lambda _: '')
 
 
-def _note_expansion(mask_in, mask_out):
-    _EXPANSION['valid_in'] += int(mask_in.sum())
-    _EXPANSION['expanded'] += int((mask_in & ~mask_out).sum())
+def _draw_geometry(rng, L, nsamp, s_max):
+    """Draw (Tc, nchunk, S_ax, T) for one streaming test at lookahead L.
 
-
-def _expansion_str():
-    v, e = _EXPANSION['valid_in'], _EXPANSION['expanded']
-    return f'{e}/{v} = {(e/v if v else 0.0):.3e}'
-
-
-def _default_rng(rng):
-    """A fresh numpy Generator for one test, seeded from the master --seed.
-
-    NEVER call numpy's zero-argument default_rng() here.  It seeds itself from OS
-    ENTROPY, which puts every draw in this file outside __main__.seed_rngs(): a
-    failing draw then cannot be replayed, and 'test' prints a seed that does not
-    cover these suites.  Seeded instead from numpy's global RandomState, which
-    seed_rngs() pins -- so successive calls still differ (a long run explores
-    different data) while the whole sequence replays from one integer.  This is the
-    same rule, for the same reason, as varmap/tests.py's _rng().
-
-    run_all() prints the entropy of the generator it makes, which reproduces THIS
-    SUITE on its own without re-running anything else: pass
-    np.random.default_rng(<entropy>) back in as 'rng'.
+    The detrender imposes no relation between chunk_size and L, so the chunk is drawn
+    freely; the buffer is chunk_size + L.  See random_stream_geometry().
     """
-    return np.random.default_rng(np.random.randint(0, 1 << 32)) if rng is None else rng
-
-
-def _maxdiff(a, b):
-    a = np.asarray(a, dtype=np.float64)
-    b = np.asarray(b, dtype=np.float64)
-    return float(np.max(np.abs(a-b))) if a.size else 0.0
+    return random_stream_geometry(rng, nsamp, s_max, lag=L)
 
 
 # Default small geometry.  L/ell = 5.7 here, so exp(-L/ell) = 3e-3.
@@ -223,17 +203,6 @@ def test_recursions_vs_dense(rng=None, niter=3, verbose=True):
 
 # --------------------------------------------------- T3. polynomial exactness
 
-def _poly_stream(rng, S_ax, T, deg, scale, dtype):
-    """P(t) with O(1) coefficients in units where the trend moves by ~1 per 'scale'."""
-    x = (np.arange(T, dtype=np.float64) - T/2) / scale
-    coef = rng.normal(size=(S_ax, deg+1))
-    P = np.zeros((S_ax, T), dtype=np.float64)
-    for j in range(deg+1):
-        P += coef[:, j:j+1] * (x**j)[None, :]
-    P /= max(float(np.max(np.abs(P))), 1e-300)
-    return P.astype(dtype)
-
-
 def test_polynomial_exactness(rng=None, verbose=True):
     """
     Degree <= k-1 is annihilated exactly, for any mask and any position, because
@@ -250,14 +219,14 @@ def test_polynomial_exactness(rng=None, verbose=True):
     results = []
 
     for dtype, tol in ((np.float64, 1e-10), (np.float32, 1e-4)):
-        for tau, L, Tc, nchunk, S_ax in ((4.0, 32, 64, 3, 8), (16.0, 128, 256, 2, 4)):
-            T = nchunk*Tc + L
+        for tau, L, nsamp, s_max in ((4.0, 32, 1536, 8), (16.0, 128, 2048, 4)):
+            Tc, nchunk, S_ax, T = _draw_geometry(rng, L, nsamp, s_max)
             worst, lbl = 0.0, '-'
             mask, labels = random_mask(S_ax, T, L, rng)
-            P = _poly_stream(rng, S_ax, T, k-1, tau, dtype)
+            P = random_polynomial(rng, S_ax, T, k-1, tau, dtype)
             det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
             resid, mko, _ = det.detrend_stream(P, mask)
-            _note_expansion(mask[:, :T-L], mko)
+            _EXPANSION.note(None, mask[:, :T-L], mko)
             for s in range(S_ax):
                 if not mko[s].any():
                     continue
@@ -277,7 +246,7 @@ def test_polynomial_exactness(rng=None, verbose=True):
     Tc = 4*L
     T = 2*Tc + L
     det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
-    P = _poly_stream(rng, 1, T, 2*k-1, tau, np.float64)
+    P = random_polynomial(rng, 1, T, 2*k-1, tau, np.float64)
     r3, _, _ = det.detrend_stream(P, np.ones((1, T), dtype=bool))
     head = float(np.max(np.abs(r3[0, :int(2*ell)])))
     interior = float(np.max(np.abs(r3[0, int(8*ell):])))
@@ -314,7 +283,10 @@ def test_seam_free(rng=None, verbose=True):
     """
     rng = _default_rng(rng)
     k, tau, L = K, TAU, LAG
-    nout, S_ax = 192, 8
+    # nout is a multiple of 8 so that the four decompositions below are exact; the
+    # spectator count and the stream length are otherwise free.
+    S_ax, nblk = random_spectator_shape(rng, 192, first_max=8)
+    nout = 8 * max(nblk, 1)
     T = nout + L
     mask, _ = random_mask(S_ax, T, L, rng)
     d = rng.normal(size=(S_ax, T)) + 5.0
@@ -329,7 +301,7 @@ def test_seam_free(rng=None, verbose=True):
             out = det.detrend_stream(d, mask)
             if ref is None:
                 ref = out
-                _note_expansion(mask[:, :nout], out[1])
+                _EXPANSION.note(None, mask[:, :nout], out[1])
                 continue
             for j, nm in ((1, 'mask_out'), (2, 'rmin')):
                 assert np.array_equal(out[j], ref[j]), \
@@ -356,13 +328,13 @@ def test_vs_brute_force(rng=None, verbose=True):
     worst_r, worst_l, name = 0.0, 0.0, ''
 
     for _ in range(2):
-        S_ax = 6
+        S_ax = int(rng.integers(1, 7))
         mask, labels = random_mask(S_ax, T, L, rng)
         d = rng.normal(size=(S_ax, T)) + 2.0
         det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
         r, mk, rmn = det.detrend_stream(d, mask)
         br, bmk, brmn = kalman_brute_force(d, mask, k, tau, L, eps=det.eps)
-        _note_expansion(mask[:, :T-L], mk)
+        _EXPANSION.note(None, mask[:, :T-L], mk)
 
         assert np.array_equal(mk, bmk), (
             f'T5: mask_out differs from the oracle on '
@@ -449,14 +421,15 @@ def test_psd_and_finite(rng=None, verbose=True):
 
     for dtype in (np.float64, np.float32):
         mo = StateSpaceModel(k, tau, dtype=dtype)
-        T = 96
-        mask, _ = random_mask(24, T, L, rng)
-        d = (rng.normal(size=(24, T)) + 3.0).astype(dtype)
+        # The per-sample python loop below is O(T), so the budget is spent on rows.
+        S_ax, T = random_spectator_shape(rng, 2304, first_max=48)
+        mask, _ = random_mask(S_ax, T, L, rng)
+        d = (rng.normal(size=(S_ax, T)) + 3.0).astype(dtype)
         m = mask.astype(dtype)
 
         for name, step in (('forward', forward_step), ('backward', backward_step)):
-            J = np.zeros((24, k, k), dtype=dtype)
-            eta = np.zeros((24, k), dtype=dtype)
+            J = np.zeros((S_ax, k, k), dtype=dtype)
+            eta = np.zeros((S_ax, k), dtype=dtype)
             for u in range(T):
                 beta = J[:, k-1, k-1] + mo.invq
                 min_beta_ratio = min(min_beta_ratio, float((beta/mo.invq).min()))
@@ -475,12 +448,12 @@ def test_psd_and_finite(rng=None, verbose=True):
 
     # The full path, over the zoo, must also be finite everywhere.
     for dtype in (np.float64, np.float32):
-        det = _det(dtype=dtype, chunk_size=64)
-        T = 2*64 + LAG
-        mask, _ = random_mask(24, T, LAG, rng)
-        d = (rng.normal(size=(24, T)) + 3.0).astype(dtype)
+        Tc, nchunk, S_ax, T = _draw_geometry(rng, LAG, 3456, 24)
+        det = _det(dtype=dtype, chunk_size=Tc)
+        mask, _ = random_mask(S_ax, T, LAG, rng)
+        d = (rng.normal(size=(S_ax, T)) + 3.0).astype(dtype)
         outs = det.detrend_stream(d, mask)
-        _note_expansion(mask[:, :T-LAG], outs[1])
+        _EXPANSION.note(None, mask[:, :T-LAG], outs[1])
         for nm, x in zip(('residual', 'mask_out', 'rmin'), outs):
             assert np.all(np.isfinite(np.asarray(x, dtype=np.float64))), \
                 f'T7: non-finite {nm} ({np.dtype(dtype).name})'
@@ -509,17 +482,11 @@ def test_masked_data_unused(rng=None, verbose=True):
     checked = 0
 
     for dtype in (np.float32, np.float64):
-        for tau, L, Tc, nchunk in ((4.0, 32, 64, 3), (16.0, 64, 128, 2)):
-            T = nchunk*Tc + L
-            S_ax = 12
+        for tau, L, nsamp in ((4.0, 32, 2304), (16.0, 64, 3072)):
+            Tc, nchunk, S_ax, T = _draw_geometry(rng, L, nsamp, 12)
             mask, _ = random_mask(S_ax, T, L, rng)
             clean = rng.normal(size=(S_ax, T)) + rng.uniform(0.0, 1e3)
-            junk = rng.uniform(-1e10, 1e10, size=(S_ax, T))
-            pick = rng.integers(0, 4, size=(S_ax, T))
-            junk = np.where(pick == 1, np.inf, junk)
-            junk = np.where(pick == 2, -np.inf, junk)
-            junk = np.where(pick == 3, np.nan, junk)
-            poison = np.where(mask, clean, junk)
+            poison = poison_masked(rng, clean, mask)
 
             def run(x):
                 det = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
@@ -570,9 +537,9 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
     worst, worst_name, worst_rmin = 0.0, '', 0.0
     drift = []
 
-    for tau, L, Tc, nchunk, S_ax in ((4.0, 32, 64, 4, 12), (16.0, 128, 256, 3, 4)):
-        T = nchunk*Tc + L
+    for tau, L, nsamp, s_max in ((4.0, 32, 3072, 12), (16.0, 128, 3072, 4)):
         for _ in range(2):
+            Tc, nchunk, S_ax, T = _draw_geometry(rng, L, nsamp, s_max)
             mask, labels = random_mask(S_ax, T, L, rng)
             offset = rng.uniform(0.0, 1e3)
             d64 = rng.normal(size=(S_ax, T)) + offset
@@ -585,7 +552,7 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
             r64, m64, q64 = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
                                             dtype=np.float64, eps=eps64
                                             ).detrend_stream(dref, mask)
-            _note_expansion(mask[:, :T-L], m32)
+            _EXPANSION.note(None, mask[:, :T-L], m32)
             both = m32 & m64
             worst_rmin = max(worst_rmin, _maxdiff(q32, q64))
             for s in range(S_ax):
@@ -597,6 +564,8 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
 
     # Does the error grow with time?  Split a long stream into thirds and compare the
     # worst discrepancy in each.
+    # Pinned, unlike the draws above: the point is a LONG stream cut into many
+    # chunks, so that the three thirds are far enough apart for growth to show.
     tau, L, Tc, nchunk, S_ax = 4.0, 32, 64, 24, 8
     T = nchunk*Tc + L
     mask = np.ones((S_ax, T), dtype=bool)
@@ -651,4 +620,4 @@ def run_all(verbose=True, rng=None, iteration=0):
             fn(rng, verbose=verbose)
     test_dtype_agreement(rng, verbose=verbose)
     print(f'  detrending_1d_kalman tests passed   '
-          f'[cumulative mask expansion: {_expansion_str()}]')
+          f'[cumulative mask expansion: {_EXPANSION}]')
