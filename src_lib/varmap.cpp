@@ -1,6 +1,6 @@
 #include "../include/pirate/varmap.hpp"
 #include "../include/pirate/DedispersionTree.hpp"
-#include "../include/pirate/utils.hpp"    // integer_log2()
+#include "../include/pirate/inlines.hpp"  // integer_log2()
 
 #include <cmath>      // M_SQRT1_2, ldexp
 #include <cstring>    // memcpy

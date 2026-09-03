@@ -47,6 +47,9 @@ void register_utils_bindings(pybind11::module &m)
           py::arg("fd"), py::arg("nthreads"), py::arg("nlines"),
           py::call_guard<py::gil_scoped_release>());
 
+    // Integer/bit-helper test (see 'python -m pirate_frb test --util').
+    m.def("test_utils", &test_utils, py::call_guard<py::gil_scoped_release>());
+
     // avx2_simulate_4bit_noise() test + timing (see 'python -m pirate_frb test/time --sim').
     m.def("test_avx2_simulate_4bit_noise", &test_avx2_simulate_4bit_noise, py::call_guard<py::gil_scoped_release>());
     m.def("time_avx2_simulate_4bit_noise", &time_avx2_simulate_4bit_noise, py::arg("nthreads"), py::call_guard<py::gil_scoped_release>());

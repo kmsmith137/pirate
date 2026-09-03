@@ -130,7 +130,7 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
 
     this->dtype = dd_params.dtype;
     this->nbatches = xdiv(dd_params.total_beams, dd_params.beams_per_batch);
-    this->nprofiles = 3 * log2(pf_params.max_kernel_width) + 1;
+    this->nprofiles = 3 * integer_log2(pf_params.max_kernel_width) + 1;
 
     this->registry_key = _make_registry_key(dd_params, pf_params);
     this->registry_value = registry().get(registry_key);
@@ -320,7 +320,7 @@ void CoalescedDdKernel2::test_random()
     long beams_per_batch = v[2];
     long num_batches = v[3];
     long total_beams = beams_per_batch * num_batches;
-    long amb_rank = min(8L, long(log2(v[4] + 0.5)));
+    long amb_rank = min(8L, long(bit_length(v[4]) - 1));   // = floor(log2(v[4]))
     long lg_ndm_out = amb_rank + dd_rank - dd_rank1;   // one output DM per warp
     long lg_ndm_wt = rand_int(0, lg_ndm_out+1);
     bool is_downsampled_tree = rand_bool();

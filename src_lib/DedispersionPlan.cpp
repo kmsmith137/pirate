@@ -3,8 +3,8 @@
 #include "../include/pirate/PeakFindingKernel.hpp"  // validate_dcore()
 #include "../include/pirate/YamlFile.hpp"  // used in from_yaml()
 #include "../include/pirate/constants.hpp"
-#include "../include/pirate/inlines.hpp"  // pow2(), xdiv(), is_power_of_two()
-#include "../include/pirate/utils.hpp"    // rb_lag(), integer_log2()
+#include "../include/pirate/inlines.hpp"  // pow2(), xdiv(), is_power_of_two(), integer_log2()
+#include "../include/pirate/utils.hpp"    // rb_lag()
 
 #include <sstream>
 #include <iomanip>

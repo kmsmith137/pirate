@@ -1,5 +1,5 @@
 #include "../include/pirate/utils.hpp"
-#include "../include/pirate/inlines.hpp"    // pow2(), xdiv()
+#include "../include/pirate/inlines.hpp"    // pow2(), xdiv(), integer_log2()
 #include "../include/pirate/constants.hpp"  // constants::max_tree_rank
 
 #include <algorithm>
@@ -12,6 +12,7 @@
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <limits>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -23,6 +24,7 @@
 
 #include <ksgpu/cuda_utils.hpp>   // CUDA_CALL
 #include <ksgpu/xassert.hpp>
+#include <ksgpu/rand_utils.hpp>  // rand_int()
 
 using namespace std;
 using namespace ksgpu;
@@ -326,15 +328,225 @@ int bit_reverse_slow(int i, int nbits)
 }
 
 
-int integer_log2(long n)
-{
-    float f = (n > 0) ? (1.414f * n) : 1.0f;
-    int p = log2f(f);
+// -------------------------------------------------------------------------------------------------
+//
+// test_utils(): unit test for bit_reverse_slow() above, and for the integer/bit helpers in
+// inlines.hpp. Dispatched from 'python -m pirate_frb test --util'.
+//
+// The helpers are piecewise-constant between consecutive powers of two, so the test sweeps a
+// dense range of small values plus a window around every binade boundary, rather than sampling
+// uniformly. That is the point: an off-by-one binade AT a boundary is the failure mode these
+// helpers are prone to, and uniform sampling essentially never lands on one. Some random values
+// are swept too, in case that reasoning is incomplete.
+//
+// Each helper is checked against a reference below. The references are written as obvious loops,
+// so that they share no logic with the shift-and-mask implementations they check.
 
-    // If this fails, then n is not a power of 2.
-    xassert(n == (1L << p));
+
+static int ref_popcount(long x)
+{
+    int n = 0;
+    for (int i = 0; i < 64; i++)
+        n += (x >> i) & 1;
+    return n;
+}
+
+
+static int ref_bit_length(long x)
+{
+    xassert(x >= 0);
+
+    int n = 0;
+    while (x) {
+        n++;
+        x >>= 1;
+    }
+
+    return n;
+}
+
+
+// Largest power of two <= x, or 0 if x < 1.
+static long ref_bit_floor(long x)
+{
+    if (x < 1)
+        return 0;
+
+    long p = 1;
+    while (p <= x/2)   // "p <= x/2", not "2*p <= x", so that the loop cannot overflow
+        p *= 2;
 
     return p;
+}
+
+
+// Smallest power of two >= x, or 1 if x <= 1.
+static long ref_bit_ceil(long x)
+{
+    xassert_le(x, 1L << 62);   // otherwise the answer is not representable
+
+    long p = 1;
+    while (p < x)
+        p *= 2;
+
+    return p;
+}
+
+
+// Places bit b of 'i' at position (nbits-1-b), rather than shifting bits out of one
+// word and into another as bit_reverse_slow() does.
+static int ref_bit_reverse(int i, int nbits)
+{
+    int j = 0;
+    for (int b = 0; b < nbits; b++)
+        if ((i >> b) & 1)
+            j |= 1 << (nbits-1-b);
+
+    return j;
+}
+
+
+// Checks that f() throws, i.e. that it lands on one of the xasserts in the helper under test.
+template<typename F>
+static void check_throws(F f, const string &what)
+{
+    try {
+        f();
+    }
+    catch (const std::exception &) {
+        return;
+    }
+
+    throw runtime_error("test_utils: expected an exception from " + what + ", but none was thrown");
+}
+
+
+void test_utils()
+{
+    // Values swept below. All are nonnegative: the helpers take a 'long', but are only
+    // meaningful on nonnegative arguments (e.g. bit_floor(-1) would shift into the sign bit).
+
+    vector<long> vals;
+
+    for (long n = 0; n <= 4096; n++)
+        vals.push_back(n);
+
+    for (int k = 12; k <= 62; k++)
+        for (long d = -2; d <= 2; d++)
+            vals.push_back((1L << k) + d);
+
+    for (int i = 0; i < 1000; i++)
+        vals.push_back(rand_int(0, 1L << 62));
+
+    // is_power_of_two(), popcount(), bit_length(), bit_floor().
+
+    for (long n: vals) {
+        long bf = ref_bit_floor(n);
+        xassert_eq(is_power_of_two(n), ((n >= 1) && (bf == n)));
+        xassert_eq(popcount(n), ref_popcount(n));
+        xassert_eq(bit_length(n), ref_bit_length(n));
+        xassert_eq(bit_floor(n), bf);
+    }
+
+    // round_up_to_power_of_two(), round_down_to_power_of_two().
+    // Note that round_up_to_power_of_two() is only defined for n <= 2^62.
+
+    for (long n: vals) {
+        if (n <= (1L << 62))
+            xassert_eq(round_up_to_power_of_two(n), ref_bit_ceil(n));
+        if (n >= 1)
+            xassert_eq(round_down_to_power_of_two(n), ref_bit_floor(n));
+    }
+
+    for (long n: { 0L, -1L, numeric_limits<long>::min() })
+        check_throws([n]() { round_down_to_power_of_two(n); },
+                     "round_down_to_power_of_two(" + to_string(n) + ")");
+
+    // integer_log2(), on its domain (exact powers of two) and off it. The off-domain list
+    // includes both neighbours of every binade boundary, since "one away from a power of
+    // two" is the input most likely to be mistaken for a power of two.
+
+    for (int k = 0; k <= 62; k++)
+        xassert_eq(integer_log2(1L << k), k);
+
+    vector<long> non_powers = { 0, -1, -2, 3, 5, 6, 7, 9, 100,
+                                numeric_limits<long>::min(), numeric_limits<long>::max() };
+
+    for (int k = 2; k <= 62; k++) {
+        non_powers.push_back((1L << k) - 1);
+        non_powers.push_back((1L << k) + 1);
+        non_powers.push_back(-(1L << k));
+    }
+
+    for (long n: non_powers)
+        check_throws([n]() { integer_log2(n); }, "integer_log2(" + to_string(n) + ")");
+
+    // pow2().
+
+    for (int k = 0; k <= 32; k++) {
+        long p = 1;
+        for (int j = 0; j < k; j++)
+            p *= 2;
+        xassert_eq(pow2(k), p);
+    }
+
+    check_throws([]() { pow2(-1); }, "pow2(-1)");
+    check_throws([]() { pow2(33); }, "pow2(33)");
+
+    // align_up(). The reference uses a remainder, rather than align_up()'s bitmask.
+
+    for (int k = 0; k <= 20; k++) {
+        long a = 1L << k;
+        for (long n = 0; n <= 1025; n++) {
+            long r = n % a;
+            xassert_eq(align_up(n,a), (r ? (n+a-r) : n));
+        }
+    }
+
+    check_throws([]() { align_up(-1, 8); }, "align_up(-1,8)");
+    check_throws([]() { align_up(8, 0); }, "align_up(8,0)");
+    check_throws([]() { align_up(8, 6); }, "align_up(8,6)");   // nalign not a power of two
+
+    // xdiv(), xmod().
+
+    for (long m = 0; m <= 100; m++) {
+        for (long n = 1; n <= 20; n++) {
+            xassert_eq(xmod(m,n), m % n);
+            if ((m % n) == 0)
+                xassert_eq(xdiv(m,n), m/n);
+            else
+                check_throws([m,n]() { xdiv(m,n); },
+                             "xdiv(" + to_string(m) + "," + to_string(n) + ")");
+        }
+    }
+
+    check_throws([]() { xdiv(-4, 2); }, "xdiv(-4,2)");
+    check_throws([]() { xdiv(4, 0); }, "xdiv(4,0)");
+    check_throws([]() { xmod(-4, 2); }, "xmod(-4,2)");
+    check_throws([]() { xmod(4, 0); }, "xmod(4,0)");
+
+    // bit_reverse_slow(): exhaustive for nbits <= 14, checked both against ref_bit_reverse()
+    // and against the property that reversing twice is the identity.
+
+    long nrev = 0;
+
+    for (int nbits = 0; nbits <= 14; nbits++) {
+        for (int i = 0; i < (1 << nbits); i++) {
+            int j = bit_reverse_slow(i, nbits);
+            xassert_eq(j, ref_bit_reverse(i, nbits));
+            xassert_eq(bit_reverse_slow(j, nbits), i);
+            nrev++;
+        }
+    }
+
+    check_throws([]() { bit_reverse_slow(0, -1); }, "bit_reverse_slow(0,-1)");
+    check_throws([]() { bit_reverse_slow(0, 31); }, "bit_reverse_slow(0,31)");
+    check_throws([]() { bit_reverse_slow(-1, 4); }, "bit_reverse_slow(-1,4)");
+    check_throws([]() { bit_reverse_slow(16, 4); }, "bit_reverse_slow(16,4)");
+
+    AtomicPrint() << "test_utils: " << vals.size() << " values swept through the inlines.hpp"
+                  << " integer helpers, " << nrev << " bit_reverse_slow() calls exhausted"
+                  << " (nbits <= 14)";
 }
 
 

@@ -1,7 +1,6 @@
 #include "../include/pirate/FrequencySubbands.hpp"
 #include "../include/pirate/constants.hpp"  // constants::max_peak_finding_rank
-#include "../include/pirate/inlines.hpp"  // pow2()
-#include "../include/pirate/utils.hpp"    // integer_log2()
+#include "../include/pirate/inlines.hpp"  // pow2(), integer_log2()
 
 #include <cmath>
 #include <iomanip>    // std::fixed, std::setprecision

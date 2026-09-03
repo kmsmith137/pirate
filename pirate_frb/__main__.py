@@ -141,6 +141,7 @@ def parse_test(subparsers):
     parser.add_argument('--amax', action='store_true', help='Runs DedispersionPlan.decode_argmax() tests (black-box probe arrays)')
     parser.add_argument('--sb', action='store_true', help='Runs frequency-subband tests (C++/python parity of the two FrequencySubbands implementations, and the per-tree subband-set property)')
     parser.add_argument('--aout', action='store_true', help='Runs the serialized-output test (atomic_print/AtomicPrint, C++ and python threads)')
+    parser.add_argument('--util', action='store_true', help='Runs test_utils() (integer/bit helpers in inlines.hpp, plus bit_reverse_slow())')
     parser.add_argument('--dt1d', action='store_true', help='Runs pirate_frb.detrending_1d tests (pure-numpy 1-d detrender)')
     parser.add_argument('--dt1k', action='store_true', help='Runs pirate_frb.detrending_1d_kalman tests (pure-numpy fixed-lag Kalman detrender)')
     parser.add_argument('--dts', action='store_true', help='Runs pirate_frb.detrending_spline tests (pure-numpy regularized spline detrender)')
@@ -165,7 +166,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'util', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
 
     seed = draw_random_seed() if args.randomize_seed else args.seed
@@ -317,6 +318,12 @@ def test(args):
             # Output-funnel test is deterministic and fast; once is enough.
             if i == 0:
                 tests.test_atomic_out()
+
+        if run_all_tests or args.util:
+            # Integer/bit helpers: one call exhausts the interesting inputs, so once
+            # is enough (see notes/unit_tests.md, "exhaust the parameter space").
+            if i == 0:
+                utils.test_utils()
 
         if run_all_tests or args.net:
             # Network/allocator tests only need to run once (not niter times)

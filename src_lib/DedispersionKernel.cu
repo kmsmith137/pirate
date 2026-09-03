@@ -885,7 +885,7 @@ void GpuDedispersionKernel::test_random()
     pmax = min(pmax, 42L);
     
     auto s = ksgpu::random_integers_with_bounded_product(4, pmax);
-    params.amb_rank = int(log2(s[0]) + 0.99999);  // round up
+    params.amb_rank = bit_length(s[0] - 1);   // = ceil(log2(s[0]))
     params.total_beams = s[1] * s[2];
     params.beams_per_batch = s[2];
 
@@ -1264,7 +1264,7 @@ void GpuSbDedispersionKernel::test_random()
     long beams_per_batch = v[2];
     long num_batches = v[3];
     long total_beams = beams_per_batch * num_batches;
-    long amb_rank = min(8L, long(log2(v[4] + 0.5)));
+    long amb_rank = min(8L, long(bit_length(v[4]) - 1));   // = floor(log2(v[4]))
     bool is_downsampled_tree = rand_bool();
 
     // Uncomment one or more lines below, to make the test instance smaller.

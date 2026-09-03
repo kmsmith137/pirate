@@ -4,7 +4,6 @@
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/string_utils.hpp>  // ksgpu::nbytes_to_str()
 
-#include <cmath>
 #include <string>
 #include <iostream>
 #include <algorithm>
@@ -46,6 +45,13 @@ inline long bit_floor(long x)
     return x ? (1L << (bit_length(x) - 1)) : 0;
 }
 
+// If n = 2^r, returns r. Throws an exception if n is not a power of two.
+inline int integer_log2(long n)
+{
+    xassert(is_power_of_two(n));
+    return __builtin_ctzll((unsigned long)n);
+}
+
 inline long align_up(long n, long nalign)
 {
     xassert(n >= 0);
@@ -58,15 +64,13 @@ inline long round_up_to_power_of_two(long n)
 {
     if (n <= 1)
         return 1;
-    double x = log2(n - 0.5);
-    return 1L << (int(x) + 1);
+    return 1L << bit_length(n-1);
 }
 
 inline long round_down_to_power_of_two(long n)
 {
     xassert(n >= 1);
-    double x = log2(n + 0.5);
-    return 1L << int(x);
+    return bit_floor(n);
 }
 
 inline long xdiv(long m, long n)
@@ -94,6 +98,10 @@ inline bool is_empty_string(const std::string &s)
 {
     return s.size() == 0;
 }
+
+// Note: STRICT monotonicity is required -- adjacent elements which are equal return
+// false. This differs from std::is_sorted(), which accepts them, so don't assume the
+// std semantics from the name.
 
 template<typename T>
 inline bool is_sorted(const std::vector<T> &v, bool reversed=false)

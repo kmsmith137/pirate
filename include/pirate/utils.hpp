@@ -145,11 +145,20 @@ extern bool revisit_512gb_inner(long nbytes, bool use_hugepages);
 
 
 // Arguments must satisfy 0 <= i < pow2(nbits).
+// Note: we haven't bothered writing a fast bit_reverse function, since we don't
+// currently need bit-reversal in any critical paths. The "_slow" name is intended to
+// remind the caller that we could write a fast one if needed.
 extern int bit_reverse_slow(int i, int nbits);
 
-// If n=2^r, returns value of r.
-// If n is not a power of 2, throws an exception.
-extern int integer_log2(long n);
+// test_utils(): unit test for bit_reverse_slow() above, and for the integer/bit
+// helpers in inlines.hpp (is_power_of_two(), pow2(), popcount(), bit_length(),
+// bit_floor(), integer_log2(), align_up(), round_{up,down}_to_power_of_two(),
+// xdiv(), xmod()). Throws an exception on failure.
+//
+// Called from 'python -m pirate_frb test --util'. It exhausts the interesting
+// part of its parameter space in one call and takes milliseconds, so the caller
+// runs it once per invocation rather than once per test iteration.
+extern void test_utils();
 
 // rb_lag(): returns lag needed for two-stage dedispersion.
 // The index 0 <= freq_coarse < pow2(stage2_rank) represents a coarse frequency.
