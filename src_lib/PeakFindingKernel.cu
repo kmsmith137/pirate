@@ -1075,7 +1075,7 @@ ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryKey &k)
        << ", Wmax=" << k.Wmax
        << ", N=" << fs.N
        << ", M=" << fs.M
-       << ", M_pairs=" << (fs.M << k.K)
+       << ", M_ext=" << (fs.M << k.K)
        << ")";
 
     return os;
@@ -1161,7 +1161,7 @@ ostream &operator<<(ostream &os, const PfWeightReaderMicrokernel::RegistryKey &k
        << ", P=" << k.P
        << ", N=" << fs.N
        << ", M=" << fs.M
-       << ", M_pairs=" << (fs.M << k.K)
+       << ", M_ext=" << (fs.M << k.K)
        << ")";
 
     return os;
@@ -1186,7 +1186,7 @@ void PfWeightReaderMicrokernel::test_random()
 
     int N = fs.N;
     int K = key.K;
-    int M = fs.M << K;   // pair count: the index the kernel reads weights for is (m << K) | mu
+    int M_ext = fs.M << K;   // pair count: the index the kernel reads weights for is m_ext = (m << K) | mu
     int P = wl.P;
     int Dcore = key.Dcore;
     int Tinner = key.Tinner;
@@ -1224,8 +1224,8 @@ void PfWeightReaderMicrokernel::test_random()
     for (int tw = 0; tw < nt_wt; tw++) {
         for (int tout = tw*Tspec; tout < (tw+1)*Tspec; tout++) {
             for (int mpad = 0; mpad < Mpad; mpad++) {
-                int m = min(mpad, M-1);          // pair index
-                int n = fs.m_to_n.at(m >> K);    // 2^K consecutive pair indices share a subband
+                int m_ext = min(mpad, M_ext-1);      // pair index
+                int n = fs.m_to_n.at(m_ext >> K);    // 2^K consecutive pair indices share a subband
 
                 for (int ppad = 0; ppad < Ppad; ppad++) {
                     int p = min(ppad, P-1);

@@ -199,7 +199,7 @@ class CoalescedDdKernel2:
         # These restrictions may be relaxed in the future.
         assert self.dd.two_stage
         assert frequency_subbands.pf_rank <= self.dd.rank1
-        assert self.pf.M == (frequency_subbands.M << K)
+        assert self.pf.M_ext == (frequency_subbands.M << K)
 
         # From Dedisperser
         self.warps_per_threadblock = self.dd.warps_per_threadblock
@@ -208,7 +208,7 @@ class CoalescedDdKernel2:
 
         # From PeakFinder
         self.P = self.pf.P
-        self.M = self.pf.M       # pair count = 2^K * fs.M (emitted as 'constexpr int M', see emit_kernel)
+        self.M_ext = self.pf.M_ext   # pair count = 2^K * fs.M (emitted as 'constexpr int M_ext', see emit_kernel)
         self.Minner = self.pf.Minner
         self.weight_layout = self.pf.weight_layout
 
@@ -278,7 +278,7 @@ class CoalescedDdKernel2:
         k.emit(f'    ulong nt_cumul, bool is_downsampled_tree,              // dedisperser')
         k.emit(f'    uint ndm_out_per_wt, uint nt_in_per_wt)                // peak-finder')
         k.emit('{')
-        k.emit(f'constexpr int M = {self.M};')
+        k.emit(f'constexpr int M_ext = {self.M_ext};')
         k.emit(f'constexpr int Dout = {self.Dout};')
         k.emit(f'constexpr int Dcore = {self.Dcore};')
         k.emit(f'constexpr int Minner = {self.Minner};')
