@@ -404,7 +404,7 @@ void CoalescedDdKernel2::test_random()
     FrequencySubbands &fs = cdd2_kernel.fs;
     GpuPfWeightLayout &wl = cdd2_kernel.pf_weight_layout;
     xassert(fs.pf_rank == pf_rank);
-    xassert_eq(ref_pf_kernel.M_ext, pow2(K) * fs.M);
+    xassert_eq(ref_pf_kernel.K, K);   // the reference derives K from pf_params.dm_downsampling
 
     // Print this monstrosity.
     cout << "CoalescedDdKernel2::test()\n"
@@ -420,7 +420,6 @@ void CoalescedDdKernel2::test_random()
          << "    Dout = " << cdd2_kernel.time_downsampling << "\n"
          << "    Tinner = " << key.Tinner << "\n"
          << "    M = " << fs.M << "\n"
-         << "    M_ext = " << ref_pf_kernel.M_ext << "\n"
          << "    N = " << fs.N << "\n"
          << "    num_profiles = " << ref_pf_kernel.nprofiles << "\n"
          << "    beams_per_batch = " << beams_per_batch << "\n"

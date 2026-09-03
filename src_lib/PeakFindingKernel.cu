@@ -124,7 +124,7 @@ vector<long> GpuPfWeightLayout::get_strides(long nbeams, long ndm_wt, long nt_wt
 void GpuPfWeightLayout::to_gpu(Array<void> &dst, const Array<float> &src) const
 {
     this->validate();
-    
+
     if (src.ndim != 5) {
         stringstream ss;
         ss << "GpuPfWeightLayout::to_gpu(): expected shape (nbeams, ndm_wt, nt_wt, P, N), got " << src.shape_str();
@@ -138,7 +138,7 @@ void GpuPfWeightLayout::to_gpu(Array<void> &dst, const Array<float> &src) const
     long ndm_wt = src.shape[1];
     long nt_wt = src.shape[2];
     long Touter = xdiv(nt_wt, Tinner);   // must divide evenly
-    
+
     vector<long> shape = this->get_shape(nbeams, ndm_wt, nt_wt);
     vector<long> strides = this->get_strides(nbeams, ndm_wt, nt_wt);
 
@@ -181,7 +181,7 @@ void GpuPfWeightLayout::to_gpu(Array<void> &dst, const Array<float> &src) const
 Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src) const
 {
     this->validate();
-    
+
     if (src.ndim != 5) {
         stringstream ss;
         ss << "GpuPfWeightLayout::to_gpu(): expected shape (nbeams, ndm_wt, nt_wt, P, N), got " << src.shape_str();
@@ -194,7 +194,7 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src) const
     long nbeams = src.shape[0];
     long ndm_wt = src.shape[1];
     long nt_wt = src.shape[2];
-    
+
     vector<long> shape = this->get_shape(nbeams, ndm_wt, nt_wt);
     vector<long> strides = this->get_strides(nbeams, ndm_wt, nt_wt);
 
@@ -209,19 +209,6 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src) const
 // -------------------------------------------------------------------------------------------------
 //
 // ReferencePeakFindingKernel
-
-
-// The argmax token carries the two halves of this class's multiplet index in separate bytes:
-// m = (m_ext >> K) at bit 16, and mu = (m_ext & (2^K - 1)) at bit 24. This helper is the
-// whole of that convention on the reference side; the generated GPU kernels emit the same
-// layout (see PeakFinder._m_field_expr() in the cuda generator), and
-// DedispersionPlan::decode_argmax() reads it. (eval_tokens() below reads the two fields
-// directly, since it range-checks them separately.)
-
-static inline uint _m_fields(long m_ext, long K)
-{
-    return (uint((m_ext >> K) & 0xff) << 16) | (uint(m_ext & ((1L << K) - 1)) << 24);
-}
 
 
 ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelParams &params_,
@@ -239,7 +226,6 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
 
     this->E = params.dm_downsampling >> fs.pf_rank;  // 2^K
     this->K = integer_log2(E);
-    this->M_ext = fs.M << K;
 
     this->nbatches = xdiv(p.total_beams, p.beams_per_batch);
     this->nprofiles = 3 * integer_log2(p.max_kernel_width) + 1;
@@ -254,7 +240,7 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
     this->tmp_nout.resize(num_levels);
     this->tmp_sout.resize(num_levels);
     this->tmp_arr.resize(num_levels);
-    
+
     for (long l = 0; l < num_levels; l++) {
         long dt = min(Dcore, pow2(l));
         long nt = xdiv(nt_in + tpad - pow2(l), dt) + 1;
@@ -292,7 +278,7 @@ void ReferencePeakFindingKernel::apply(
     xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out << K, fs.M, nt_in}));
     xassert_shape_eq(wt, ({p.beams_per_batch, p.ndm_wt, p.nt_wt, nprofiles, fs.N}));
- 
+
     xassert(out_max.on_host());
     xassert(out_argmax.on_host());
     xassert(in.on_host());
@@ -347,7 +333,7 @@ void ReferencePeakFindingKernel::apply(
         long s = xdiv(pow2(l), tmp_dt[l]);      // spacing between logically contiguous samples in source
 
         xassert_eq(r*(ndst-1) + s, nsrc-1);
-        
+
         // The (mu, m) axes are pure spectators here.
         for (long b = 0; b < B; b++) {
             for (long d = 0; d < D; d++) {
@@ -395,18 +381,10 @@ void ReferencePeakFindingKernel::apply(
                     int S = tmp_sout[l];    // spacing
                     int I = tmp_iout[l];    // base
 
-                    // Three m-like quantities are live below, and they are not interchangeable:
-                    //   m     -- compact multiplet index; the weights are per subband, so this
-                    //            is what fs.m_to_n takes
-                    //   mu    -- extra-DM index, 0 <= mu < E
-                    //   m_ext -- this kernel's linear multiplet index, = (m << K) | mu, which
-                    //            _m_fields() splits into the token's m and mu bytes
-
                     for (int mu = 0; mu < E; mu++) {
                       for (int m = 0; m < M; m++) {
                         const float *row = &tmp_arr.at(l).at({b,d,mu,m,0});   // length tmp_nt[l]
                         int n = fs.m_to_n[m];
-                        uint m_ext = (uint(m) << K) | uint(mu);
                         float w0 = l ? 0.0f : wp[n];      // p = 0 (only for l=0)
                         float w1 = wp[(3*l+1)*N + n];     // p = (3*l+1)
                         float w2 = wp[(3*l+2)*N + n];     // p = (3*l+2)
@@ -421,10 +399,11 @@ void ReferencePeakFindingKernel::apply(
                             float x2 = row[I + tout*nsamp + isamp - S];
                             float x3 = row[I + tout*nsamp + isamp];
 
-                            uint token0 = _m_fields(m_ext, K) | (isamp*dt);  // (m,mu,isamp), not p
-                            uint token1 = token0 | ((3*l+1) << 8);    // include p=3*l+1
-                            uint token2 = token0 | ((3*l+2) << 8);    // include p=3*l+2
-                            uint token3 = token0 | ((3*l+3) << 8);    // include p=3*l+3
+                            // Token format is (t) | (p << 8) | (m << 16) | (mu << 24)
+                            uint token0 = (isamp*dt) | (m << 16) | (mu << 24);  // p=0
+                            uint token1 = token0 | ((3*l+1) << 8);              // include p=3*l+1
+                            uint token2 = token0 | ((3*l+2) << 8);              // include p=3*l+2
+                            uint token3 = token0 | ((3*l+3) << 8);              // include p=3*l+3
 
                             float y0 = x3;
                             float y1 = (x2 + x3);
@@ -441,12 +420,12 @@ void ReferencePeakFindingKernel::apply(
                             }
 
                             if (debug && (b == 0) && (d==0) && (tout==2)) {
-                                cout << "cpu peak-finder: b=" << b << ", d=" << d << ", tout=" << tout 
+                                cout << "cpu peak-finder: b=" << b << ", d=" << d << ", tout=" << tout
                                      << ", level=" << l << ", m=" << m << ", mu=" << mu << ", isamp=" << isamp << "\n";
 
                                 if (l == 0)
                                     cout << "   p=0" << " -> (w=" << w0 << ", y=" << y0 << ", w*y=" << (w0*y0) << endl;
-                                
+
                                 if (P > 1) {
                                     cout << "   p=" << (3*l+1) << " -> (w=" << w1 << ", y=" << y1 << ", w*y=" << (w1*y1) << endl;
                                     cout << "   p=" << (3*l+2) << " -> (w=" << w2 << ", y=" << y2 << ", w*y=" << (w2*y2) << endl;
@@ -494,8 +473,7 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                 uint token = in_tokens.at({b,d,tout});
 
                 // Token parsing starts here.
-                // Reminder: token = (t) | (p << 8) | (m << 16) | (mu << 24), and this class's
-                // own multiplet index is m_ext = (m << K) | mu.
+                // Reminder: token = (t) | (p << 8) | (m << 16) | (mu << 24).
 
                 long m  = (token >> 16) & 0xffu;
                 long mu = (token >> 24) & 0xffu;
@@ -633,7 +611,7 @@ void PeakFindingKernelParams::fill_host_weights(Array<float> &out, const Array<d
     xassert_shape_eq(out, ({B,D,T,P,N}));
     xassert(out.on_host());
     xassert(out.is_fully_contiguous());
-    
+
     if (!bare) {
         xassert_shape_eq(variances, ({D,N,P}));
         xassert(variances.on_host());
@@ -847,7 +825,7 @@ void GpuPeakFindingKernel::launch(
     long nt_in_per_wt = xdiv(nt_in, p.nt_wt);
 
     // cuda_kernel(const void *in, void *out_max, uint *out_argmax, const void *wt, void *pstate, uint nt_in, uint ndm_out_per_wt, uint nt_in_per_wt)
-    registry_value.cuda_kernel <<< nblocks, nthreads, 0, stream >>> 
+    registry_value.cuda_kernel <<< nblocks, nthreads, 0, stream >>>
        (in.data, out_max.data, out_argmax.data, wt.data, pstate, nt_in, ndm_out_per_wt, nt_in_per_wt);
 
     CUDA_PEEK("pf kernel launch");
@@ -855,7 +833,7 @@ void GpuPeakFindingKernel::launch(
 
 
 // Static member function.
-// If short_circuit=true, then we run some ReferencePeakFindingKernel tests, 
+// If short_circuit=true, then we run some ReferencePeakFindingKernel tests,
 // but don't test the GPU peak-finder.
 void GpuPeakFindingKernel::test_random(bool short_circuit)
 {
@@ -926,7 +904,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     ReferencePeakFindingKernel ref_kernel_large(params_large, gpu_kernel.Dcore);
 
     cout << "GpuPeakFindingKernel::test():"
-         << " dtype=" << key.dtype.str() 
+         << " dtype=" << key.dtype.str()
          << ", subbands=" << ksgpu::tuple_str(key.subband_counts)
          << ", Wmax=" << key.Wmax
          << ", Dcore=" << gpu_kernel.Dcore
@@ -942,7 +920,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
          << ", nt_wt_per_chunk=" << nt_wt_per_chunk
          << ", nchunks=" << nchunks
          << endl;
-    
+
     long P = gpu_kernel.nprofiles;
     long N = gpu_kernel.fs.N;
     long M = gpu_kernel.fs.M;
@@ -952,7 +930,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
 
     Array<float> cpu_wt_large({total_beams, ndm_wt, nchunks * nt_wt_per_chunk, P, N}, af_rhost | af_zero);
     params_large.fill_host_weights(cpu_wt_large, Array<double>(), /*randomize=*/true);
- 
+
     Array<float> cpu_out_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
     Array<uint> cpu_argmax_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
     ref_kernel_large.apply(cpu_out_large, cpu_argmax_large, cpu_in_large, cpu_wt_large, 0);
@@ -1050,19 +1028,19 @@ struct GpuPfRegistry : public GpuPeakFindingKernel::Registry
     {
         // Just check that all members have been initialized.
         // (In the future, I may add more argument checking here.)
-        
+
         xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
         xassert_ge(key.subband_counts.size(), 1);
         xassert(key.Tinner > 0);
         xassert(key.Dout > 0);
         xassert(key.Wmax > 0);
-        
+
         xassert(val.cuda_kernel != nullptr);
         xassert(val.Dcore > 0);
         xassert(val.PW32 >= 0);
-        
+
         val.pf_weight_layout.validate();
-        
+
         // Call add() in base class.
         GpuPeakFindingKernel::Registry::add(key, val, debug);
     }
@@ -1080,7 +1058,7 @@ GpuPeakFindingKernel::Registry &GpuPeakFindingKernel::registry()
     // This kludge is necessary because the registry is accessed at library initialization
     // time, by callers in other source files, and source files are executed in an
     // arbitrary order.
-    
+
     static GpuPfRegistry reg;
     return reg;  // note: thread-safe (as of c++11)
 }
@@ -1097,7 +1075,7 @@ bool operator==(const GpuPeakFindingKernel::RegistryKey &k1, const GpuPeakFindin
 ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryKey &k)
 {
     FrequencySubbands fs(k.subband_counts);
-    
+
     os << "GpuPeakFindingKernel(dtype=" << k.dtype
        << ", rank=" << fs.pf_rank
        << ", subband_counts=" << ksgpu::tuple_str(k.subband_counts)
@@ -1107,7 +1085,7 @@ ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryKey &k)
        << ", N=" << fs.N
        << ", M=" << fs.M
        << ")";
-    
+
     return os;
 }
 
@@ -1132,19 +1110,19 @@ struct PfWeightReaderMicrokernelRegistry : public PfWeightReaderMicrokernel::Reg
     {
         // Just check that all members have been initialized.
         // (In the future, I may add more argument checking here.)
-        
+
         xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
         xassert_ge(key.subband_counts.size(), 1);
         xassert_ge(key.Dcore, 0);
         xassert_ge(key.Tinner, 0);
         xassert_ge(key.P, 0);
-        
+
         xassert(val.cuda_kernel != nullptr);
         xassert(val.Mouter > 0);
         xassert(val.Minner > 0);
-        
+
         val.pf_weight_layout.validate();
-        
+
         // Call add() in base class.
         PfWeightReaderMicrokernel::Registry::add(key, val, debug);
     }
@@ -1162,7 +1140,7 @@ PfWeightReaderMicrokernel::Registry &PfWeightReaderMicrokernel::registry()
     // This kludge is necessary because the registry is accessed at library initialization
     // time, by callers in other source files, and source files are executed in an
     // arbitrary order.
-    
+
     static PfWeightReaderMicrokernelRegistry reg;
     return reg;  // note: thread-safe (as of c++11)
 }
@@ -1179,7 +1157,7 @@ bool operator==(const PfWeightReaderMicrokernel::RegistryKey &k1, const PfWeight
 ostream &operator<<(ostream &os, const PfWeightReaderMicrokernel::RegistryKey &k)
 {
     FrequencySubbands fs(k.subband_counts);
-    
+
     os << "PfWeightReaderMicrokernel(dtype=" << k.dtype
        << ", rank=" << fs.pf_rank
        << ", subband_counts=" << ksgpu::tuple_str(k.subband_counts)
@@ -1189,7 +1167,7 @@ ostream &operator<<(ostream &os, const PfWeightReaderMicrokernel::RegistryKey &k
        << ", N=" << fs.N
        << ", M=" << fs.M
        << ")";
-    
+
     return os;
 }
 
@@ -1206,20 +1184,20 @@ void PfWeightReaderMicrokernel::test_random()
 
     FrequencySubbands fs(key.subband_counts);
     GpuPfWeightLayout &wl = val.pf_weight_layout;
-    
+
     Dtype dtype = key.dtype;
     int SW = xdiv(32, dtype.nbits);   // simd width
-    
+
     int N = fs.N;
     int M = fs.M;
     int P = wl.P;
     int Dcore = key.Dcore;
     int Tinner = key.Tinner;
-    
+
     // Choose nt_in_per_wt, nt_in.
     // If Tinner > 1, then nt_in_per_wt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
     // If Tinner == 1, then nt_in_per_wt must be a multiple of (32*SW), and Tin must be a multiple of nt_in_per_wt.
-    
+
     auto v = ksgpu::random_integers_with_bounded_product(2, 20);
     int nt_in_per_wt = (Tinner > 1) ? xdiv(32*SW,Tinner) : (32*SW*v[0]);
     int nt_in = (Tinner > 1) ? (32*SW*v[0]*v[1]) : (nt_in_per_wt*v[1]);  // number of tree samples (not used for anything)
@@ -1231,13 +1209,13 @@ void PfWeightReaderMicrokernel::test_random()
          << ", Tinner=" << Tinner
          << ", nt_in_per_wt=" << nt_in_per_wt
          << ", nt_in=" << nt_in << endl;
-    
+
     int nt_wt = xdiv(nt_in, nt_in_per_wt);     // number of time samples in weights array (input array to test kernel)
     int nt_out = xdiv(nt_in, Dcore);   // number of time samples in output array of test kernel
     int Tspec = xdiv(nt_out, nt_wt);  // number of "spectator" time samples in test kernel
     int Mpad = val.Mouter * val.Minner;
-    int Ppad = wl.Pouter * wl.Pinner;    
-    
+    int Ppad = wl.Pouter * wl.Pinner;
+
     // Input array: (1,1,nt_wt,P,N), where the length-1 axes are beams and DMs.
     Array<float> in_cpu({1,1,nt_wt,P,N}, af_rhost | af_random);
 
@@ -1250,7 +1228,7 @@ void PfWeightReaderMicrokernel::test_random()
             for (int mpad = 0; mpad < Mpad; mpad++) {
                 int m = min(mpad, M-1);
                 int n = fs.m_to_n.at(m);
-                
+
                 for (int ppad = 0; ppad < Ppad; ppad++) {
                     int p = min(ppad, P-1);
                     out_cpu.at({tout,mpad,ppad}) = in_cpu.at({0,0,tw,p,n});
@@ -1287,7 +1265,7 @@ struct PfOutputMicrokernelRegistry : public PfOutputMicrokernel::Registry
     {
         // Just check that all members have been initialized.
         // (In the future, I may add more argument checking here.)
-        
+
         xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
         xassert(key.Dout > 0);
         xassert(val.cuda_kernel != nullptr);
@@ -1308,7 +1286,7 @@ PfOutputMicrokernel::Registry &PfOutputMicrokernel::registry()
     // This kludge is necessary because the registry is accessed at library initialization
     // time, by callers in other source files, and source files are executed in an
     // arbitrary order.
-    
+
     static PfOutputMicrokernelRegistry reg;
     return reg;  // note: thread-safe (as of c++11)
 }
@@ -1333,12 +1311,12 @@ ostream &operator<<(ostream &os, const PfOutputMicrokernel::RegistryValue &v)
 void PfOutputMicrokernel::test_random()
 {
     PfOutputMicrokernel::RegistryKey key = PfOutputMicrokernel::registry().get_random_key();
-    
+
     Dtype dtype = key.dtype;
     uint Dout = key.Dout;
     uint nt_in = xdiv(1024, dtype.nbits) * rand_int(1, 100);
     uint nt_out = xdiv(nt_in, Dout);
-    
+
     cout << "test_pf_output_microkernel: dtype=" << dtype << ", Dout=" << Dout << ", nt_in=" << nt_in << endl;
 
     Array<float> zin_cpu({4,nt_in}, af_uhost | af_random);
@@ -1389,7 +1367,7 @@ void PfOutputMicrokernel::test_random()
 
     zout_gpu = zout_gpu.to_host();
     aout_gpu = aout_gpu.to_host();
-    
+
     // The 'zout_gpu' array can be directly compared to the 'zout_cpu' array.
     // However, 'aout_gpu' cannot be directly compared to a CPU reference implementation,
     // because of (near-)ties. Therefore, we compute 'za_gpu', by evaluating the
@@ -1401,7 +1379,7 @@ void PfOutputMicrokernel::test_random()
 
     for (uint tout = 0; tout < nt_out; tout++) {
         uint token = aout_gpu.at({tout});
-        
+
         auto it = token_mapping.find(token);
         if (token_mapping.find(token) == token_mapping.end())
             throw runtime_error("aout_gpu contains invalid token?!");
@@ -1626,14 +1604,12 @@ void ReferencePfSquare::test_vs_peak_finder()
     ReferencePeakFindingKernel pf(pf_params, /*Dcore=*/ 1);   // evaluate h_p at every time sample
 
     // One PfSquare row per (coarse dm, multiplet) pair of the peak-finder's input array, in
-    // the input's own (dpf, m) order. The peak-finder's m_ext is a DIFFERENT ordering of the
-    // same rows, and translating between the two is what the test below checks.
+    // the input's own (dpf, m) order.
     ReferencePfSquare sq(Wmax, total_beams, beams_per_batch, Dpf*M, nt_in);
 
     long P = pf.nprofiles;
     long N = fs.N;
     xassert_eq(sq.nprofiles, P);
-    xassert_eq(pf.M_ext, M*E);
     xassert_eq(D << pf.K, Dpf);
 
     // The identity is exact only if both objects carry at least the longest kernel's history,
@@ -1677,31 +1653,30 @@ void ReferencePfSquare::test_vs_peak_finder()
             // 'tmp_arr' that eval_tokens() reads.
             pf.apply(out_max, out_argmax, in, wt, ibatch);
 
-            for (long m_ext = 0; m_ext < M*E; m_ext++) {
-                long m = m_ext >> K;
-                long mu = m_ext & (E-1);
+            for (long mu = 0; mu < E; mu++) {
+                for (long m = 0; m < M; m++) {
+                    for (long p = 0; p < P; p++) {
+                        // Token format is (t) | (p << 8) | (m << 16) | (mu << 24), and with
+                        // Dcore == 1 the only legal fine time is t = 0. This test draws K > 0
+                        // most of the time, so it is the one place a (m, mu) field mix-up shows
+                        // up with no dedispersion machinery in the way.
+                        uint token = (uint(p) << 8) | (m << 16) | (mu << 24);
+                        for (long i = 0; i < tokens.size; i++)
+                            tokens.data[i] = token;
 
-                for (long p = 0; p < P; p++) {
-                    // Token format is (t) | (p << 8) | (m << 16) | (mu << 24), and with
-                    // Dcore == 1 the only legal fine time is t = 0. This test draws K > 0
-                    // most of the time, so it is the one place a (m, mu) field mix-up shows
-                    // up with no dedispersion machinery in the way.
-                    uint token = _m_fields(m_ext, K) | (uint(p) << 8);
-                    for (long i = 0; i < tokens.size; i++)
-                        tokens.data[i] = token;
+                        pf.eval_tokens(out_tok, tokens, wt);
 
-                    pf.eval_tokens(out_tok, tokens, wt);
-
-                    for (long b = 0; b < beams_per_batch; b++) {
-                        for (long d = 0; d < D; d++) {
-                            double s = 0.0;
-                            for (long tout = 0; tout < nt_in; tout++) {
-                                float y = out_tok.at({b,d,tout});
-                                s += double(y) * y;
+                        for (long b = 0; b < beams_per_batch; b++) {
+                            for (long d = 0; d < D; d++) {
+                                double s = 0.0;
+                                for (long tout = 0; tout < nt_in; tout++) {
+                                    float y = out_tok.at({b,d,tout});
+                                    s += double(y) * y;
+                                }
+                                // Peak-finder output DM 'd' and token fields (m, mu) read input
+                                // DM row ((d << K) | mu), multiplet m.
+                                acc_pf.at({b0+b, ((d << K) | mu)*M + m, p}) += s;
                             }
-                            // Peak-finder output DM 'd' and token fields (m, mu) read input
-                            // DM row ((d << K) | mu), multiplet m.
-                            acc_pf.at({b0+b, ((d << K) | mu)*M + m, p}) += s;
                         }
                     }
                 }

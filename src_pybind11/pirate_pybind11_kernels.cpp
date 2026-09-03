@@ -977,10 +977,10 @@ void register_kernel_bindings(pybind11::module &m)
           "``nt_out * time_downsampling`` time samples.")
           .def_property_readonly("P", [](const ReferencePeakFindingKernel &self) { return self.nprofiles; })
           .def_property_readonly("M", [](const ReferencePeakFindingKernel &self) { return self.fs.M; })
-          // M_ext = (M << K) is the peak-finder's own (extended) multiplet count, larger than
-          // M in an early-trigger tree. (The token carries m and mu as separate bytes, so
-          // neither field ranges over M_ext.)
-          .def_property_readonly("M_ext", [](const ReferencePeakFindingKernel &self) { return self.M_ext; })
+          // M_ext = (M << K) is the number of legal (m, mu) pairs, which is how the tests
+          // enumerate tokens. (The token carries m and mu as separate bytes, so neither field
+          // ranges over M_ext, and the C++ class has no such member.)
+          .def_property_readonly("M_ext", [](const ReferencePeakFindingKernel &self) { return self.fs.M << self.K; })
           .def_property_readonly("N", [](const ReferencePeakFindingKernel &self) { return self.fs.N; })
           .def_property_readonly("Dout", [](const ReferencePeakFindingKernel &self) { return self.params.time_downsampling; },
                "The ctor's ``time_downsampling``, under the kernel-registry name.")

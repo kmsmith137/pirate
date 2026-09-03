@@ -64,12 +64,7 @@ namespace pirate {
 // Note on K: K = log2(dm_downsampling) - pf_rank is the number of DM bits below the
 // multiplet's resolution that the peak-finder max-reduces over. Its input array has
 // (ndm_out << K) DM rows, and the low K bits of that index -- 0 <= mu < 2^K, the token's
-// fourth byte -- are reduced along with the multiplet index. Internally the kernel works with
-// the combined index m_ext = (m << K) | mu; the token splits it back into two bytes, so a
-// reader of a token (DedispersionPlan::decode_argmax()) never needs K to parse one. K = 0
-// means mu is always zero. A standalone GpuPeakFindingKernel requires K = 0; on the GPU,
-// K > 0 is handled by CoalescedDdKernel2, which folds the extra DMs in as it dedisperses.
-// See notes/dedispersion.tex for what K is.
+// fourth byte -- are reduced along with the multiplet index.
 //
 // It's convenient to combine the (frequency_subband, fine-grained DM) axes into
 // a single axis, indexed by a "multiplet" 0 <= m < M. The FrequencySubband helper
@@ -175,9 +170,7 @@ extern void validate_dcore(long Dcore, long Dout);
 
 struct ReferencePeakFindingKernel
 {
-    // Parameters specified at construction. Note that 'fs' is built from the COMPACT
-    // subband_counts, so fs.M and fs.m_to_n are indexed by m, not by m_ext (see M_ext below).
-
+    // Parameters specified at construction.
     PeakFindingKernelParams params;  // beams_per_batch, total_beams, {dm,time}_downsampling, {ndm,nt}_{out,wt}
     FrequencySubbands fs;            // pf_rank, N, M
     long Dcore = 0;                  // constructor argument (see validate_dcore())
@@ -188,7 +181,6 @@ struct ReferencePeakFindingKernel
     long nt_in = 0;            // = (nt_out * time_downsampling)
     long K = 0;                // = log2(dm_downsampling) - fs.pf_rank, see the note on K above
     long E = 0;                // = pow2(K), the number of input DMs per output DM
-    long M_ext = 0;            // = (fs.M << K), this kernel's own (extended) multiplet count
 
     // Note that the reference kernel uses float32, regardless of what dtype is specified.
     // All arrays must be fully contiguous (this could be changed if needed).
@@ -260,8 +252,7 @@ struct ReferencePeakFindingKernel
     //
     // The (E, M) axes are the input array's own structure: tmp_arr[l][b,d,mu,m,:] is the
     // downsampled input row ((d << K) | mu), multiplet m, so the fill from 'in' is a straight
-    // copy per (d, mu, m) triple. (The token's linear multiplet index m_ext = (m << K) | mu
-    // is a different ordering of the same pairs, and never indexes these arrays.)
+    // copy per (d, mu, m) triple.
     //
     // Array element tmp_arr[l][b,d,mu,m,j] is obtained by summing:
     //
