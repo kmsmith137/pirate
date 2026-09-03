@@ -130,7 +130,6 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
 
     this->dtype = dd_params.dtype;
     this->nbatches = xdiv(dd_params.total_beams, dd_params.beams_per_batch);
-    this->time_downsampling = pf_params.time_downsampling;
     this->nprofiles = 3 * log2(pf_params.max_kernel_width) + 1;
 
     this->registry_key = _make_registry_key(dd_params, pf_params);
@@ -268,6 +267,7 @@ void CoalescedDdKernel2::launch(
     long rb_frame0 = (ichunk * dd_params.total_beams) + (ibatch * dd_params.beams_per_batch);
     long ndm_out_per_wt = xdiv(pf_params.ndm_out, pf_params.ndm_wt);
     long nt_out_per_wt = xdiv(pf_params.nt_out, pf_params.nt_wt);
+    long nt_in_per_wt = nt_out_per_wt * pf_params.time_downsampling;
 
     // Output beam-strides (axis 0), expressed as multiples of 32 bits. We compute these directly
     // from Array::strides, as if the output arrays could be non-contiguous, even though the
@@ -289,7 +289,7 @@ void CoalescedDdKernel2::launch(
          out_max_bstride32, out_argmax_bstride32,             // uint out_max_bstride32, uint out_argmax_bstride32,
          pstate.data, dd_params.ntime,                        // void *pstate_, int ntime,
          nt_cumul, dd_params.input_is_downsampled_tree,       // ulong nt_cumul, bool input_is_downsampled_tree,
-         ndm_out_per_wt, nt_out_per_wt * time_downsampling);  // uint ndm_out_per_wt, uint nt_in_per_wt
+         ndm_out_per_wt, nt_in_per_wt);                       // uint ndm_out_per_wt, uint nt_in_per_wt
 
     CUDA_PEEK("coalesced_dd_kernel2 launch");
 }
@@ -417,7 +417,7 @@ void CoalescedDdKernel2::test_random()
          << "    subbands = " << ksgpu::tuple_str(key.subband_counts) << "\n"
          << "    Wmax = " << key.Wmax << "\n"
          << "    Dcore = " << cdd2_kernel.Dcore << "\n"
-         << "    Dout = " << cdd2_kernel.time_downsampling << "\n"
+         << "    Dout = " << cdd2_kernel.pf_params.time_downsampling << "\n"
          << "    Tinner = " << key.Tinner << "\n"
          << "    M = " << fs.M << "\n"
          << "    N = " << fs.N << "\n"

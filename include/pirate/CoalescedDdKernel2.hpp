@@ -111,7 +111,6 @@ struct CoalescedDdKernel2
 
     // Derived parameters, computed in constructor.
     ksgpu::Dtype dtype;                     // = params.dtype
-    long time_downsampling = 0;             // = pf_params.time_downsampling
     long nbatches = 0;                      // = (total_beams / beams_per_batch)
     long nprofiles = 0;                     // = (3 * log2(max_kernel_width) + 1)
 
