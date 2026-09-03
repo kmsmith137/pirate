@@ -1343,17 +1343,17 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     shared_ptr<GpuDedisperser> gdd;
     long ntrees = plan->ntrees;
 
-    // Per-tree (primary_tree_index, early_trigger_level, xdm_rank). Not an assertion --
-    // coverage reporting. K = stage2_pf_params[itree].xdm_rank is nonzero only in
-    // early-trigger trees, and a random config which happens to produce K = 0 everywhere
-    // exercises neither the cdd2 kernel's extra-DM path nor the reference peak-finder's m_ext
-    // reindexing. That should be visible in the log rather than silent.
+    // Per-tree (primary_tree_index, early_trigger_level, K). Not an assertion -- coverage
+    // reporting. K = log2(dm_downsampling) - pf_rank, the peak-finder's extra-DM bit count,
+    // is nonzero only in early-trigger trees, and a random config which happens to produce
+    // K = 0 everywhere exercises neither the cdd2 kernel's extra-DM path nor the reference
+    // peak-finder's m_ext reindexing. That should be visible in the log rather than silent.
     {
-        cout << "    trees (ipri,et_level,xdm_rank) =";
+        cout << "    trees (ipri,et_level,K) =";
         for (long itree = 0; itree < ntrees; itree++) {
             const DedispersionTree &t = plan->trees.at(itree);
-            cout << " (" << t.primary_tree_index << "," << t.early_trigger_level
-                 << "," << plan->stage2_pf_params.at(itree).xdm_rank << ")";
+            long K = integer_log2(t.dm_downsampling) - t.frequency_subbands.pf_rank;
+            cout << " (" << t.primary_tree_index << "," << t.early_trigger_level << "," << K << ")";
         }
         cout << endl;
     }

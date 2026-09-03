@@ -29,47 +29,51 @@ namespace pirate {
 void PeakFindingKernelParams::validate() const
 {
     FrequencySubbands::validate_subband_counts(subband_counts);
-    
-    // The argmax token gives 'm' and 'mu' a byte each (see the top of PeakFindingKernel.hpp),
-    // so each needs its own bound. This is the only place the token's bit budget is stated in
-    // code. Both have room to spare: validate_subband_counts() already bounds fs.M by 114
-    // (max_peak_finding_rank = 4), and xdm_rank cannot exceed 4 either, since the peak-finder
-    // a cdd2 kernel builds has pf_rank = dd_rank1 = pf_rank_tree + xdm_rank.
-    xassert_ge(xdm_rank, 0);
-    xassert_lt(FrequencySubbands(subband_counts).M, 256L);
-    xassert_lt(xdm_rank, 8L);
+    long pf_rank = subband_counts.size() - 1;
 
     // Check that everything is initialized.
     xassert(max_kernel_width > 0);
     xassert(beams_per_batch > 0);
     xassert(total_beams > 0);
+    xassert(dm_downsampling > 0);
+    xassert(time_downsampling > 0);
     xassert(ndm_out > 0);
     xassert(ndm_wt > 0);
     xassert(nt_out > 0);
-    xassert(nt_in > 0);
     xassert(nt_wt > 0);
 
+    xassert(is_power_of_two(dm_downsampling));
+    xassert(is_power_of_two(time_downsampling));
     xassert(is_power_of_two(max_kernel_width));
     xassert(is_power_of_two(ndm_out));
     xassert(is_power_of_two(ndm_wt));
 
+    xassert_divisible(dm_downsampling, 1 << pf_rank);
     xassert_divisible(total_beams, beams_per_batch);
     xassert_divisible(ndm_out, ndm_wt);
-    xassert_divisible(nt_in, nt_out);
     xassert_divisible(nt_out, nt_wt);
 
     // The nt_* members don't need to be powers of two, but the downsampling
     // factors which relate them do need to be power of two.
 
     xassert(is_power_of_two(xdiv(ndm_out, ndm_wt)));
-    xassert(is_power_of_two(xdiv(nt_in, nt_out)));
     xassert(is_power_of_two(xdiv(nt_out, nt_wt)));
 
     // Kernels currently assume that the input spans an integer number
     // of GPU cache lines.
 
     long simd_width = xdiv(32, dtype.nbits);
+    long nt_in = nt_out * time_downsampling;
     xassert_divisible(nt_in, 32 * simd_width);
+
+    // The argmax token gives each of (t, p, m, mu) one byte (see the top of
+    // PeakFindingKernel.hpp): t < time_downsampling, p < 3*log2(max_kernel_width) + 1,
+    // m < M, and mu < 2^K <= dm_downsampling. This is the only place the token's bit budget
+    // is stated in code.
+    xassert_le(dm_downsampling, 256L);
+    xassert_le(time_downsampling, 256L);
+    xassert_le(max_kernel_width, constants::max_pf_width);
+    xassert_le(FrequencySubbands(subband_counts).M, 256L);
 }
 
 
@@ -225,7 +229,7 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
     params(params_), fs(params_.subband_counts), Dcore(Dcore_)
 {
     params.validate();
-    validate_dcore(Dcore, xdiv(params.nt_in, params.nt_out));
+    validate_dcore(Dcore, params.time_downsampling);
 
     const PeakFindingKernelParams &p = params;
     long B = p.beams_per_batch;
@@ -233,13 +237,13 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
     long Wmax = p.max_kernel_width;
     long M = fs.M;
 
-    this->K = p.xdm_rank;
-    this->E = pow2(K);
+    this->E = params.dm_downsampling >> fs.pf_rank;  // 2^K
+    this->K = integer_log2(E);
     this->M_ext = fs.M << K;
 
     this->nbatches = xdiv(p.total_beams, p.beams_per_batch);
     this->nprofiles = 3 * integer_log2(p.max_kernel_width) + 1;
-    this->Dout = xdiv(p.nt_in, p.nt_out);
+    this->nt_in = p.nt_out * p.time_downsampling;
     this->tpad = max(2*Wmax, 4L);
     this->pstate = Array<float> ({p.total_beams, p.ndm_out, E*M, tpad}, af_uhost | af_zero);
     this->num_levels = max(integer_log2(Wmax), 1);
@@ -253,11 +257,11 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
     
     for (long l = 0; l < num_levels; l++) {
         long dt = min(Dcore, pow2(l));
-        long nt = xdiv(p.nt_in + tpad - pow2(l), dt) + 1;
+        long nt = xdiv(nt_in + tpad - pow2(l), dt) + 1;
 
         tmp_dt[l] = dt;
         tmp_nt[l] = nt;
-        tmp_nout[l] = xdiv(Dout, dt);
+        tmp_nout[l] = xdiv(p.time_downsampling, dt);
         tmp_sout[l] = xdiv(pow2(l), dt);
         tmp_arr[l] = Array<float> ({B,D,E*M,nt}, af_uhost | af_zero);
 
@@ -286,7 +290,7 @@ void ReferencePeakFindingKernel::apply(
     const PeakFindingKernelParams &p = params;
     xassert_shape_eq(out_max, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
-    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out << K, fs.M, p.nt_in}));
+    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out << K, fs.M, nt_in}));
     xassert_shape_eq(wt, ({p.beams_per_batch, p.ndm_wt, p.nt_wt, nprofiles, fs.N}));
  
     xassert(out_max.on_host());
@@ -299,7 +303,6 @@ void ReferencePeakFindingKernel::apply(
 
     // ---- _init_tmp_arrays() logic starts here ----
 
-    long nt_in = params.nt_in;
     long B = params.beams_per_batch;
     long D = params.ndm_out;
     long b0 = ibatch * B;
@@ -512,7 +515,7 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                     throw _bad_token(token, "mu out of range");
                 if ((p < 0) || (p >= P))
                     throw _bad_token(token, "p out of range");
-                if ((t < 0) || (t >= Dout))
+                if ((t < 0) || (t >= params.time_downsampling))
                     throw _bad_token(token, "t out of range");
 
                 long em = mu*M + m;   // index into tmp_arr (see PeakFindingKernel.hpp)
@@ -591,7 +594,7 @@ Array<float> ReferencePeakFindingKernel::make_random_input_array()
 {
     long B = params.beams_per_batch;
     long D = params.ndm_out << K;
-    long T = params.nt_in;
+    long T = nt_in;
     long M = fs.M;
 
     Array<float> ret({B,D,M,T}, af_rhost);
@@ -714,7 +717,7 @@ static GpuPeakFindingKernel::RegistryKey _make_registry_key(const PeakFindingKer
     GpuPeakFindingKernel::RegistryKey key;
     key.dtype = pf_params.dtype;
     key.subband_counts = pf_params.subband_counts;
-    key.Dout = xdiv(pf_params.nt_in, pf_params.nt_out);
+    key.Dout = pf_params.time_downsampling;
     key.Wmax = pf_params.max_kernel_width;
 
     // Recall the definition of Tinner (used for weight layout, see comments in
@@ -723,7 +726,8 @@ static GpuPeakFindingKernel::RegistryKey _make_registry_key(const PeakFindingKer
     //   Tinner = max(32*SW/nt_in_per_wt, 1)
 
     long SW = xdiv(32, pf_params.dtype.nbits);      // simd width
-    long nt_in_per_wt = xdiv(pf_params.nt_in, pf_params.nt_wt);
+    long nt_out_per_wt = xdiv(pf_params.nt_out, pf_params.nt_wt);
+    long nt_in_per_wt = nt_out_per_wt * pf_params.time_downsampling;
     key.Tinner = (nt_in_per_wt < 32*SW) ? xdiv(32*SW, nt_in_per_wt) : 1;
 
     return key;
@@ -735,9 +739,10 @@ GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params
 {
     params.validate();
 
-    if (params.xdm_rank != 0)
-        throw runtime_error("GpuPeakFindingKernel: xdm_rank > 0 is not implemented -- a standalone"
-                            " GPU peak-finder does not do the extra-DM reduction. On the GPU, K > 0"
+    if (params.dm_downsampling != pow2(fs.pf_rank))
+        throw runtime_error("GpuPeakFindingKernel: dm_downsampling > 2^pf_rank (K > 0) is not"
+                            " implemented -- a standalone GPU peak-finder does not do the extra-DM"
+                            " reduction. On the GPU, K > 0"
                             " is handled by CoalescedDdKernel2, which folds the extra DMs in as it"
                             " dedisperses.");
 
@@ -749,7 +754,7 @@ GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params
     expected_wt_strides = pf_weight_layout.get_strides(params.beams_per_batch, params.ndm_wt, params.nt_wt);
     Dcore = registry_value.Dcore;
     dtype = params.dtype;
-    Dout = xdiv(params.nt_in, params.nt_out);
+    Dout = params.time_downsampling;
     nbatches = xdiv(params.total_beams, params.beams_per_batch);
     nprofiles = pf_weight_layout.P;
 
@@ -802,9 +807,10 @@ void GpuPeakFindingKernel::launch(
     xassert(in.dtype == dtype);
     xassert(wt.dtype == dtype);
 
+    long nt_in = p.nt_out * p.time_downsampling;
     xassert_shape_eq(out_max, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
-    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, fs.M, p.nt_in}));
+    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, fs.M, nt_in}));
 
     // Validate 'wt' array. These checks will pass if 'wt' is the output of GpuPfWeightLayout::to_gpu().
 
@@ -844,11 +850,11 @@ void GpuPeakFindingKernel::launch(
     dim3 nthreads = { 32, 1, 1 };
 
     long ndm_out_per_wt = xdiv(p.ndm_out, p.ndm_wt);
-    long nt_in_per_wt = xdiv(p.nt_in, p.nt_wt);
+    long nt_in_per_wt = xdiv(nt_in, p.nt_wt);
 
     // cuda_kernel(const void *in, void *out_max, uint *out_argmax, const void *wt, void *pstate, uint nt_in, uint ndm_out_per_wt, uint nt_in_per_wt)
     registry_value.cuda_kernel <<< nblocks, nthreads, 0, stream >>> 
-       (in.data, out_max.data, out_argmax.data, wt.data, pstate, p.nt_in, ndm_out_per_wt, nt_in_per_wt);
+       (in.data, out_max.data, out_argmax.data, wt.data, pstate, nt_in, ndm_out_per_wt, nt_in_per_wt);
 
     CUDA_PEEK("pf kernel launch");
 }
@@ -860,6 +866,7 @@ void GpuPeakFindingKernel::launch(
 void GpuPeakFindingKernel::test_random(bool short_circuit)
 {
     RegistryKey key = registry().get_random_key();
+    long pf_rank = key.subband_counts.size() - 1;
     long simd_width = xdiv(32, key.dtype.nbits);
     long Tinner = key.Tinner;
 
@@ -883,9 +890,10 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     params_small.max_kernel_width = key.Wmax;
     params_small.beams_per_batch = beams_per_batch;
     params_small.total_beams = total_beams;
+    params_small.dm_downsampling = 1 << pf_rank;  // K=0
+    params_small.time_downsampling = key.Dout;
     params_small.ndm_out = ndm_out;
     params_small.ndm_wt = ndm_wt;
-    params_small.nt_in = nt_in_per_chunk;
     params_small.nt_out = nt_out_per_chunk;
     params_small.nt_wt = nt_wt_per_chunk;
 
@@ -897,20 +905,21 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     params_large.max_kernel_width = key.Wmax;
     params_large.beams_per_batch = total_beams;
     params_large.total_beams = total_beams;
+    params_large.dm_downsampling = 1 << pf_rank;  // K=0
+    params_large.time_downsampling = key.Dout;
     params_large.ndm_out = ndm_out;
     params_large.ndm_wt = ndm_wt;
-    params_large.nt_in = nchunks * nt_in_per_chunk;
     params_large.nt_out = nchunks * nt_out_per_chunk;
     params_large.nt_wt = nchunks * nt_wt_per_chunk;
     params_large.validate();
 
     GpuPeakFindingKernel gpu_kernel(params_small);   // just test constructor for now
 
-    // Nothing else ever hands this class xdm_rank > 0, so its rejection of that case is
+    // Nothing else ever hands this class K > 0, so its rejection of that case is
     // checked here rather than left untested.
     {
         PeakFindingKernelParams p = params_small;
-        p.xdm_rank = 1;
+        p.dm_downsampling *= 2;  // K=0 -> K=1
         bool threw = false;
         try { GpuPeakFindingKernel rejected(p); }
         catch (const std::exception &) { threw = true; }
@@ -1612,12 +1621,12 @@ void ReferencePfSquare::test_vs_peak_finder()
     pf_params.max_kernel_width = Wmax;
     pf_params.beams_per_batch = beams_per_batch;
     pf_params.total_beams = total_beams;
+    pf_params.dm_downsampling = pow2(pf_rank + K);
+    pf_params.time_downsampling = 1;   // no time coarse-graining
     pf_params.ndm_out = D;
     pf_params.ndm_wt = 1;
     pf_params.nt_out = nt_in;   // Dout = 1, i.e. no time coarse-graining
-    pf_params.nt_in = nt_in;
     pf_params.nt_wt = nt_in;
-    pf_params.xdm_rank = K;
     pf_params.validate();
 
     ReferencePeakFindingKernel pf(pf_params, /*Dcore=*/ 1);   // evaluate h_p at every time sample
@@ -1644,7 +1653,7 @@ void ReferencePfSquare::test_vs_peak_finder()
          << "    max_kernel_width = " << Wmax << "\n"
          << "    nprofiles = " << P << "\n"
          << "    M = " << M << "\n"
-         << "    xdm_rank = " << K << "\n"
+         << "    K = " << K << "\n"
          << "    ndm_out = " << D << "\n"
          << "    beams_per_batch = " << beams_per_batch << "\n"
          << "    total_beams = " << total_beams << "\n"

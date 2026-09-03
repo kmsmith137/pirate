@@ -1033,9 +1033,9 @@ void register_core_bindings(pybind11::module &m)
                "``ceil(dd_rank/2)`` varies within a primary-tree family, so no single\n"
                "per-primary-tree value could be right for all of its trees.\n\n"
                "The peak-finder's extra-DM bit count is ``K = log2(dm_downsampling) -\n"
-               "frequency_subbands.pf_rank`` (``PeakFindingKernelParams.xdm_rank``,\n"
-               "``ReferencePeakFindingKernel.xdm_rank``): the width of the ``mu`` byte of an\n"
-               "``out_argmax`` token. It is zero unless the tree has an early trigger.")
+               "frequency_subbands.pf_rank`` (``ReferencePeakFindingKernel.xdm_rank``): the\n"
+               "width of the ``mu`` byte of an ``out_argmax`` token. It is zero unless the\n"
+               "tree has an early trigger.")
           .def_readonly("time_downsampling", &DedispersionTree::time_downsampling,
                "Time downsampling factor of the coarse-grained array, relative to this tree.\n"
                "Equal to ``dm_downsampling``, and likewise not a config field.\n\n"

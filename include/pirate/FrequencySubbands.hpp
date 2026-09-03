@@ -98,7 +98,8 @@ struct FrequencySubbands
     // width fixed -- see DedispersionPlan.cpp's _toplevel_channels_per_coarse_channel().)
     //
     // Note the returned counts can have pf_rank < (dd_rank+1)/2, in which case the tree's
-    // cdd2 kernel folds the difference into its argmax tokens (see PeakFindingKernelParams::xdm_rank).
+    // cdd2 kernel folds the difference into its argmax tokens (see the note on K in
+    // PeakFindingKernel.hpp).
     //
     // Requires can_early_trigger(subband_counts, early_trigger_level); throws otherwise. Any
     // config which passed DedispersionConfig::validate() satisfies this for every tree it

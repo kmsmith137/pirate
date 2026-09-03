@@ -471,8 +471,8 @@ def _test_pf_kernel_quantization(ntrials=8):
         for tail_probe in (False, True):
             kern = ReferencePeakFindingKernel(
                 subband_counts=[1], max_kernel_width=wmax,
-                beams_per_batch=1, total_beams=1, ndm_out=1, ndm_wt=1,
-                nt_out=nt_out, nt_in=nt_in, nt_wt=nt_out, Dcore=dcore)
+                beams_per_batch=1, total_beams=1, dm_downsampling=1, time_downsampling=dout,
+                ndm_out=1, ndm_wt=1, nt_out=nt_out, nt_wt=nt_out, Dcore=dcore)
             assert (kern.P, kern.Dout, kern.Dcore) == (P, dout, dcore)
 
             inp = np.zeros((1, 1, 1, nt_in), dtype=np.float32)

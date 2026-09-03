@@ -57,7 +57,8 @@ static CoalescedDdKernel2::RegistryKey _make_registry_key(
     const DedispersionKernelParams &dd_params, const PeakFindingKernelParams &pf_params)
 {
     return _make_key(pf_params.dtype, dd_params.dd_rank, pf_params.max_kernel_width,
-                     pf_params.nt_in, pf_params.nt_wt, pf_params.subband_counts);
+                     pf_params.nt_out * pf_params.time_downsampling,   // nt_in
+                     pf_params.nt_wt, pf_params.subband_counts);
 }
 
 
@@ -109,7 +110,7 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     xassert_eq(pf_params.dtype, dd_params.dtype);
     xassert_eq(pf_params.beams_per_batch, dd_params.beams_per_batch);
     xassert_eq(pf_params.total_beams, dd_params.total_beams);
-    xassert_eq(pf_params.nt_in, dd_params.ntime);
+    xassert_eq(pf_params.nt_out * pf_params.time_downsampling, dd_params.ntime);
 
     // One output DM per warp of the second dedispersion stage, hence 'dd_rank1' here rather
     // than fs.pf_rank. If pf_rank < dd_rank1, the extra DM bits are folded into the
@@ -118,18 +119,18 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     xassert_le(fs.pf_rank, dd_rank1);
     xassert_eq(pf_params.ndm_out, pow2(dd_params.dd_rank + dd_params.amb_rank - dd_rank1));
 
-    // The number of extra DM bits is determined by the two ranks, so pf_params.xdm_rank is
-    // redundant here -- but a caller who fills it wrongly should be caught, not silently
-    // overridden, since the same params also configure a ReferencePeakFindingKernel whose
-    // tokens must match this kernel's.
-    xassert_eq(pf_params.xdm_rank, dd_rank1 - fs.pf_rank);
+    // The DM coarse-graining is fixed by the kernel's own ranks (one output DM per warp of the
+    // second stage), so pf_params.dm_downsampling is redundant here -- but a caller who fills
+    // it wrongly should be caught, not silently overridden, since the same params also
+    // configure a ReferencePeakFindingKernel whose tokens must match this kernel's.
+    xassert_eq(pf_params.dm_downsampling, pow2(dd_rank1));
 
     // The initialization logic below is mostly cut-and-paste from either the
     // PeakFindingKernel or GpuDedispersionKernel constructor.
 
     this->dtype = dd_params.dtype;
     this->nbatches = xdiv(dd_params.total_beams, dd_params.beams_per_batch);
-    this->time_downsampling = xdiv(pf_params.nt_in, pf_params.nt_out);
+    this->time_downsampling = pf_params.time_downsampling;
     this->nprofiles = 3 * log2(pf_params.max_kernel_width) + 1;
 
     this->registry_key = _make_registry_key(dd_params, pf_params);
@@ -141,15 +142,11 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     this->expected_wt_strides = pf_weight_layout.get_strides(pf_params.beams_per_batch, pf_params.ndm_wt, pf_params.nt_wt);
     this->Dcore = registry_value.Dcore;
 
-    // The compile-time coarse-graining factors must match what the caller's array shapes
-    // imply. This is what replaced 'Dout' as a RegistryKey field: the key no longer pins
-    // the factors, so the kernel checks them against the params instead.
-    //
-    // The DM identity is 'one output DM per warp of the second dedispersion stage':
-    // ndm_out * dm_downsampling == 2^(amb_rank + dd_rank).
-    xassert_eq(this->time_downsampling, registry_value.time_downsampling);
-    xassert_eq(pf_params.ndm_out * registry_value.dm_downsampling,
-               pow2(dd_params.amb_rank + dd_params.dd_rank));
+    // The coarse-graining factors the kernel was COMPILED with must match the caller's
+    // pf_params. They are not RegistryKey fields, so the key cannot pin them; the kernel
+    // checks them against the params instead.
+    xassert_eq(pf_params.dm_downsampling, registry_value.dm_downsampling);
+    xassert_eq(pf_params.time_downsampling, registry_value.time_downsampling);
 
     // Important: ensure that caller-specified 'nt_per_segment' matches GPU kernel.
     xassert_eq(dd_params.nt_per_segment, registry_value.nt_per_segment);
@@ -270,7 +267,7 @@ void CoalescedDdKernel2::launch(
     ulong nt_cumul = ichunk * dd_params.ntime;
     long rb_frame0 = (ichunk * dd_params.total_beams) + (ibatch * dd_params.beams_per_batch);
     long ndm_out_per_wt = xdiv(pf_params.ndm_out, pf_params.ndm_wt);
-    long nt_in_per_wt = xdiv(pf_params.nt_in, pf_params.nt_wt);
+    long nt_out_per_wt = xdiv(pf_params.nt_out, pf_params.nt_wt);
 
     // Output beam-strides (axis 0), expressed as multiples of 32 bits. We compute these directly
     // from Array::strides, as if the output arrays could be non-contiguous, even though the
@@ -287,12 +284,12 @@ void CoalescedDdKernel2::launch(
     dim3 block_dims = { 32, uint(registry_value.warps_per_threadblock), 1 };
 
     registry_value.cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
-        (in.data, gpu_ringbuf_quadruples.data, rb_frame0,  // void *grb_base_, uint *grb_quads_, long grb_frame0,
-         out_max.data, out_argmax.data, wt.data,           // void *out_max_, uint *out_argmax, const void *wt_,
-         out_max_bstride32, out_argmax_bstride32,          // uint out_max_bstride32, uint out_argmax_bstride32,
-         pstate.data, dd_params.ntime,                     // void *pstate_, int ntime,
-         nt_cumul, dd_params.input_is_downsampled_tree,    // ulong nt_cumul, bool input_is_downsampled_tree,
-         ndm_out_per_wt, nt_in_per_wt);                    // uint ndm_out_per_wt, uint nt_in_per_wt
+        (in.data, gpu_ringbuf_quadruples.data, rb_frame0,     // void *grb_base_, uint *grb_quads_, long grb_frame0,
+         out_max.data, out_argmax.data, wt.data,              // void *out_max_, uint *out_argmax, const void *wt_,
+         out_max_bstride32, out_argmax_bstride32,             // uint out_max_bstride32, uint out_argmax_bstride32,
+         pstate.data, dd_params.ntime,                        // void *pstate_, int ntime,
+         nt_cumul, dd_params.input_is_downsampled_tree,       // ulong nt_cumul, bool input_is_downsampled_tree,
+         ndm_out_per_wt, nt_out_per_wt * time_downsampling);  // uint ndm_out_per_wt, uint nt_in_per_wt
 
     CUDA_PEEK("coalesced_dd_kernel2 launch");
 }
@@ -312,7 +309,7 @@ void CoalescedDdKernel2::test_random()
     // The kernel's second-stage rank, and the number of "extra DM" bits it emits per warp.
     // (See cuda_generator/Dedisperser.emit_subband_extraction().)
     long dd_rank1 = dd_rank - (dd_rank / 2);
-    long xdm_rank = dd_rank1 - pf_rank;
+    long K = dd_rank1 - pf_rank;
 
     long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : ((32 * simd_width) << rand_int(0,3));
     long nt_in_divisor = max(32*simd_width, nt_in_per_wt);
@@ -366,14 +363,14 @@ void CoalescedDdKernel2::test_random()
     pf_params.max_kernel_width = key.Wmax;
     pf_params.beams_per_batch = beams_per_batch;
     pf_params.total_beams = total_beams;
+    pf_params.dm_downsampling = pow2(dd_rank1);
+    pf_params.time_downsampling = pow2(dd_rank1);
     pf_params.ndm_out = pow2(lg_ndm_out);
-    pf_params.xdm_rank = xdm_rank;
     pf_params.ndm_wt = pow2(lg_ndm_wt);
-    pf_params.nt_in = nt_in_per_chunk;
+    pf_params.nt_out = xdiv(nt_in_per_chunk, pf_params.time_downsampling);
     pf_params.nt_wt = xdiv(nt_in_per_chunk, nt_in_per_wt);
 
-    // The time downsampling factor is a property of the compiled GPU kernel (a registry
-    // value, not part of the key). Metadata-only peek: init_kernel=false skips GPU/kernel
+    // Metadata-only peek at the compiled kernel: init_kernel=false skips GPU/kernel
     // initialization.
     //
     // NOTE THE KEY IS REBUILT FROM 'pf_params' rather than reusing the 'key' drawn above.
@@ -382,13 +379,16 @@ void CoalescedDdKernel2::test_random()
     // params -> key -> same-kernel round-trip check. Do not "simplify" it to
     // registry().get(key).
     //
-    // nt_out is set AFTER the lookup, since it is no longer needed to build the key -- and
-    // taking it from the kernel rather than deriving it here is what makes the constructor's
-    // time_downsampling assert meaningful on this path.
+    // The {dm,time}_downsampling above were DERIVED (2^dd_rank1 for both), because the key
+    // needs nt_in = nt_out * time_downsampling before the kernel can be looked up. That is
+    // the Dout invariant of the cdd2 build (makefile_helper.autogenerated_cdd2_kernels()),
+    // checked here so that a violation points at this test's assumption rather than at the
+    // constructor's params-vs-kernel assert.
     RegistryValue val = registry().get(_make_registry_key(dd_params, pf_params),
                                        /*init_kernel=*/ false);
 
-    pf_params.nt_out = xdiv(nt_in_per_chunk, val.time_downsampling);
+    xassert_eq(val.dm_downsampling, pf_params.dm_downsampling);
+    xassert_eq(val.time_downsampling, pf_params.time_downsampling);
 
     CoalescedDdKernel2 cdd2_kernel(dd_params, pf_params);
     BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
@@ -397,14 +397,14 @@ void CoalescedDdKernel2::test_random()
     ReferenceDedispersionKernel ref_dd_kernel(dd_params, pf_params.subband_counts);
 
     // The reference peak-finder is parameterized identically to the GPU kernel's peak-finding
-    // half, xdm_rank included, so it reads the same (ndm_out << xdm_rank, M) subband array and
+    // half, K included, so it reads the same (ndm_out << K, M) subband array and
     // emits the same argmax tokens.
     ReferencePeakFindingKernel ref_pf_kernel(pf_params, cdd2_kernel.Dcore);
 
     FrequencySubbands &fs = cdd2_kernel.fs;
     GpuPfWeightLayout &wl = cdd2_kernel.pf_weight_layout;
     xassert(fs.pf_rank == pf_rank);
-    xassert_eq(ref_pf_kernel.M_ext, pow2(xdm_rank) * fs.M);
+    xassert_eq(ref_pf_kernel.M_ext, pow2(K) * fs.M);
 
     // Print this monstrosity.
     cout << "CoalescedDdKernel2::test()\n"
@@ -412,7 +412,7 @@ void CoalescedDdKernel2::test_random()
          << "    dd_rank = " << dd_params.dd_rank << "\n"
          << "    amb_rank = " << dd_params.amb_rank << "\n"
          << "    pf_rank = " << pf_rank << "\n"
-         << "    xdm_rank = " << xdm_rank << "\n"
+         << "    K = " << K << "\n"
          << "    is_downsampled_tree = " << is_downsampled_tree << "\n"
          << "    subbands = " << ksgpu::tuple_str(key.subband_counts) << "\n"
          << "    Wmax = " << key.Wmax << "\n"
@@ -455,7 +455,7 @@ void CoalescedDdKernel2::test_random()
     long D = pow2(dd_params.dd_rank);
     long M = fs.M;
     long ndm_out = pow2(lg_ndm_out);      // DM axis of out_max/out_argmax (one DM per warp)
-    long Dpf = ndm_out << xdm_rank;       // DM axis of the reference dedisperser's 'sb_out'
+    long Dpf = ndm_out << K;              // DM axis of the reference dedisperser's 'sb_out'
     long Tout = pf_params.nt_out;
 
     Array<float> dd_cpu({B,A,D,T}, af_uhost);     // 'dd_out' for ref_dd_kernel

@@ -229,8 +229,8 @@ class PfVarianceConvolver:
         for Wmax in [1, 2, 4, 8, 16, 32]:
             ker = ReferencePeakFindingKernel(
                 subband_counts=[1], max_kernel_width=Wmax,
-                beams_per_batch=1, total_beams=1, ndm_out=J, ndm_wt=1,
-                nt_out=nt_out, nt_in=nt_in, nt_wt=1, Dcore=Dcore)
+                beams_per_batch=1, total_beams=1, dm_downsampling=1, time_downsampling=Dout,
+                ndm_out=J, ndm_wt=1, nt_out=nt_out, nt_wt=1, Dcore=Dcore)
             P = ker.P
 
             # "Identity" of impulses: DM row j carries a unit impulse at time j.

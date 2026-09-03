@@ -358,10 +358,11 @@ corresponds to max detection significance over all downsampled parameters.
 In implementation, these 3 steps are coalesced into one GPU kernel for speed (and also
 coalesced with the final stages of tree dedispersion), e.g.\ the shape $(2^{r-R}, M, N_{\rm time}, P)$
 array is never ``materialized'' in GPU memory.\footnote{Another comment on implementation. A
-{\tt PeakFindingKernel} takes $K$ as the constructor argument {\tt PeakFindingKernelParams::xdm\_rank};
-it reads a $(2^{r-R}, M)$ array and reduces over the low $K$ bits of the first index itself.
-A {\tt CoalescedDdKernel2} instead ``chooses'' $K = \mbox{\tt rank1} - R$ from its own ranks,
-and asserts that the caller's {\tt xdm\_rank} agrees. See comments in code.}
+{\tt PeakFindingKernel} takes $D_{\rm ds} = 2^{R+K}$ as the constructor argument
+{\tt PeakFindingKernelParams::dm\_downsampling}; it reads a $(2^{r-R}, M)$ array and reduces
+over the low $K$ bits of the first index itself. A {\tt CoalescedDdKernel2} instead fixes
+$2^{R+K} = 2^{\tt rank1}$ from its own ranks, and asserts that the caller's
+{\tt dm\_downsampling} agrees. See comments in code.}
 
 \subsubsection{Peak-finding kernels}
 
@@ -892,8 +893,9 @@ So $K>0$ costs one compile-time-constant lag per second-stage register, and buys
 of $d_{\rm hi}$ per unit of $d'$.
 
 {\bf Names in the code.} $r_1$ is {\tt dd\_rank1} $= \lceil {\tt dd\_rank}/2 \rceil$, and $K$ is
-{\tt PeakFindingKernelParams::xdm\_rank}, the count of ``extra DM'' bits folded into the argmax
-token; a {\tt DedispersionTree} carries it only through {\tt dm\_downsampling} $= 2^{R+K}$.
+the count of ``extra DM'' bits folded into the argmax token. The pipeline carries it only
+through {\tt dm\_downsampling} $= 2^{R+K}$ ({\tt DedispersionTree} and
+{\tt PeakFindingKernelParams}); {\tt ReferencePeakFindingKernel::K} derives it.
 The kernel is emitted by {\tt cuda\_generator/SbDedisperser.py} and registered by
 {\tt GpuSbDedispersionKernel} ({\tt include/pirate/DedispersionKernel.hpp});
 {\tt ReferenceTree} is the CPU reference.

@@ -89,8 +89,8 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
         validate_dcore(Dcores.at(itree), trees.at(itree).time_downsampling);
 
     // Peak-finding kernels. Their pf_params come from the plan verbatim -- including
-    // pf_params.xdm_rank, which is part of what makes their out_argmax tokens identical to a
-    // cdd2 kernel's; the other part is Dcores (above).
+    // pf_params.dm_downsampling (hence K), which is part of what makes their out_argmax
+    // tokens identical to a cdd2 kernel's; the other part is Dcores (above).
     for (long itree = 0; itree < ntrees; itree++)
         this->pf_kernels.push_back(make_shared<ReferencePeakFindingKernel> (plan->stage2_pf_params.at(itree),
                                                                            Dcores.at(itree)));

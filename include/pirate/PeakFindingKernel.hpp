@@ -26,6 +26,19 @@ namespace pirate {
 // The array shape is (ndm_out, nt_out), where ndm_out and nt_out are members of 
 // struct PeakFindingKernelParams.
 //
+// The PeakFindingKernelParams also carry the two downsampling factors of the output arrays,
+// relative to the dedispersion output that feeds the peak-finder:
+//
+//   dm_downsampling = 2^(R+K)     where R = frequency_subbands.pf_rank, and K >= 0 is the
+//                                 number of "extra DM" bits (see the note on K below)
+//   time_downsampling = Tds
+//
+// Dedispersion and peak-finding have the following input/output shapes:
+//
+//   (nbeams, ndm_out * 2^(R+K), nt_out * Tds)               tree dedispersion output (all DMs)
+//      -> (nbeams, ndm_out * 2^K, fs.M, nt_out * Tds)       subband array = peak-finding input
+//      -> (nbeams, ndm_out, nt_out)                         peak-finding output
+//
 // Each element of the 'out_max' array is a detection significance in "sigmas". Conceptually,
 // it is obtained by taking a maximum over a 4-D "trial array" indexed by (frequency subband, 
 // fine-grained DM, fine-grained arrival time, peak-finding profile). The purpose of
@@ -39,14 +52,24 @@ namespace pirate {
 //
 //   token = (t) | (p << 8) | (m << 16) | (mu << 24);   // four bytes
 //
-//     where  0 <= t < (nt_in / nt_out)  indexes a fine-grained arrival time
-//            0 <= p < P                 indexes a peak-finding profile (see below)
-//            0 <= m < M                 indexes a "multiplet" (see below)
-//            0 <= mu < 2^xdm_rank       indexes an "extra DM" (see "Note 1" below)
+//     where  0 <= t < time_downsampling  indexes a fine-grained arrival time
+//            0 <= p < P                  indexes a peak-finding profile (see below)
+//            0 <= m < M                  indexes a "multiplet" (see below)
+//            0 <= mu < 2^K               indexes an "extra DM" (see the note on K below)
 //
 // Note that 't' is quantized: for a profile at peak-finding level l (i.e. boxcar length
 // 2^l), 't' is a multiple of min(Dcore, 2^l), where Dcore is the kernel's internal
 // time-downsampling factor (see validate_dcore() below).
+//
+// Note on K: K = log2(dm_downsampling) - pf_rank is the number of DM bits below the
+// multiplet's resolution that the peak-finder max-reduces over. Its input array has
+// (ndm_out << K) DM rows, and the low K bits of that index -- 0 <= mu < 2^K, the token's
+// fourth byte -- are reduced along with the multiplet index. Internally the kernel works with
+// the combined index m_ext = (m << K) | mu; the token splits it back into two bytes, so a
+// reader of a token (DedispersionPlan::decode_argmax()) never needs K to parse one. K = 0
+// means mu is always zero. A standalone GpuPeakFindingKernel requires K = 0; on the GPU,
+// K > 0 is handled by CoalescedDdKernel2, which folds the extra DMs in as it dedisperses.
+// See notes/dedispersion.tex for what K is.
 //
 // It's convenient to combine the (frequency_subband, fine-grained DM) axes into
 // a single axis, indexed by a "multiplet" 0 <= m < M. The FrequencySubband helper
@@ -76,32 +99,12 @@ namespace pirate {
 //
 //   (ndm_wt, nt_wt, P, N)    (*)
 //
-// where (ndm_wt, nt_wt) are obtained by applying downsampling factors to (ndm_in, nt_in).
-// These "weights" downsampling factors are independent of the downsampling factors used
-// to obtain (ndm_out, nt_in), and are specified in DedispersionConfig.
+// where (ndm_wt, nt_wt) divide evenly into (ndm_out, nt_out).
 //
 // On the CPU, the weights array is represented as a 4-d array with shape (*), but
 // on the GPU we use a complicated, non-contiguous representation which is convenient
 // for the GPU kernel. The helper class 'GpuPfWeightLayout' is intended to hide the
 // details of the GPU memory layout, by providing helper functions to convert from (*).
-//
-// Note 1: a peak-finding kernel takes K = PeakFindingKernelParams::xdm_rank explicitly
-// (see notes/dedispersion.tex for what K is). Its input array has (ndm_out << K) DM rows;
-// it max-reduces over the low K bits of that index -- 0 <= mu < 2^K, the token's fourth
-// byte -- along with the multiplet index. Internally the kernel works with the combined
-// index m_ext = (m << K) | mu; the token splits it back into its two fields, so a reader of
-// a token never needs to know K. K = 0 means mu is always zero.
-//
-// Note 2: what a peak-finding kernel does NOT know is the frequency ranges of its subbands.
-// That is why K enters here as a bare bit count rather than as extra subband_counts entries:
-// the peak-finder needs the multiplet COUNT and the weight lookup m -> n, both of which come
-// from the compact counts, and nothing about band geometry. The cdd2 kernel does need the
-// geometry, and computes it for itself.
-//
-// Note 3: DedispersionPlan::decode_argmax() is the intended reader of a token. It needs the
-// tree in order to turn (m, mu, p, t) into physical parameters, but no longer needs K in
-// order to PARSE one -- which is the reason the two multiplet fields are separate bytes
-// rather than one K-dependent bit split.
 
 
 struct PeakFindingKernelParams
@@ -113,21 +116,20 @@ struct PeakFindingKernelParams
     long beams_per_batch = 0;
     long total_beams = 0;
 
-    // Number of "extra DM" bits folded into the peak-finder's multiplet index. The input array
-    // has ndm_out << xdm_rank DM rows, which the kernel max-reduces down to ndm_out; the argmax
-    // token reports the winner's extra-DM index mu -- the low xdm_rank bits of the input DM
-    // index -- in its own byte, next to the multiplet index m (see the token format above).
-    // Zero unless the producing tree has pf_rank < dd_rank1.
-    long xdm_rank = 0;
+    // Downsampling factors of the output arrays, see the comment at the top of this file.
+    // Both are powers of two, and dm_downsampling is a multiple of 2^pf_rank (the quotient
+    // is 2^K).
+    long dm_downsampling = 0;
+    long time_downsampling = 0;
 
-    // Peak-finding input array has shape (beams_per_batch, ndm_out << xdm_rank, fs.M, nt_in).
+    // Peak-finding input array has shape (beams_per_batch, ndm_out << K, fs.M, nt_in),
+    // where nt_in = nt_out * time_downsampling.
     // Output arrays have shape (beams_per_batch, ndm_out, nt_out).
     // Weight array has shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N).
 
     long ndm_out = 0;
     long ndm_wt = 0;
     long nt_out = 0;
-    long nt_in = 0;
     long nt_wt = 0;
 
     void validate() const;  // throws an exception if anything is wrong
@@ -176,15 +178,15 @@ struct ReferencePeakFindingKernel
     // Parameters specified at construction. Note that 'fs' is built from the COMPACT
     // subband_counts, so fs.M and fs.m_to_n are indexed by m, not by m_ext (see M_ext below).
 
-    PeakFindingKernelParams params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
+    PeakFindingKernelParams params;  // beams_per_batch, total_beams, {dm,time}_downsampling, {ndm,nt}_{out,wt}
     FrequencySubbands fs;            // pf_rank, N, M
     long Dcore = 0;                  // constructor argument (see validate_dcore())
 
     // Derived parameters, computed in constructor.
-    long Dout = 0;             // = (nt_in/nt_out) = time downsampling factor of output array
     long nbatches = 0;         // = (total_beams / beams_per_batch)
     long nprofiles = 0;        // = (3 * log2(max_kernel_width) + 1)
-    long K = 0;                // = params.xdm_rank
+    long nt_in = 0;            // = (nt_out * time_downsampling)
+    long K = 0;                // = log2(dm_downsampling) - fs.pf_rank, see the note on K above
     long E = 0;                // = pow2(K), the number of input DMs per output DM
     long M_ext = 0;            // = (fs.M << K), this kernel's own (extended) multiplet count
 
@@ -387,9 +389,10 @@ struct GpuPfWeightLayout
 
 struct GpuPeakFindingKernel
 {
-    // Throws unless params.xdm_rank == 0: a standalone GPU peak-finder does not implement
-    // the extra-DM reduction (see "Note 1" above). CoalescedDdKernel2 is what handles K > 0
-    // on the GPU, and GpuDedisperser only ever instantiates that.
+    // Throws unless params.dm_downsampling == 2^pf_rank, i.e. K == 0: a standalone GPU
+    // peak-finder does not implement the extra-DM reduction (see the note on K above).
+    // CoalescedDdKernel2 is what handles K > 0 on the GPU, and GpuDedisperser only ever
+    // instantiates that.
     GpuPeakFindingKernel(const PeakFindingKernelParams &params);
 
     void allocate(BumpAllocator &allocator);
@@ -411,8 +414,8 @@ struct GpuPeakFindingKernel
 
     // ------------------------  Members  ------------------------
 
-    PeakFindingKernelParams params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
-    FrequencySubbands fs;             // pf_rank, N, M
+    PeakFindingKernelParams params;  // beams_per_batch, total_beams, {dm,time}_downsampling, {ndm,nt}_{out,wt}
+    FrequencySubbands fs;            // pf_rank, N, M
 
     // Derived parameters chosen by the kernel.
     GpuPfWeightLayout pf_weight_layout;     // layout of peak-finding weights in GPU memory
@@ -422,7 +425,7 @@ struct GpuPeakFindingKernel
 
     // Derived parameters, computed in constructor.
     ksgpu::Dtype dtype;        // = params.dtype
-    long Dout = 0;             // = (nt_in/nt_out) = time downsampling factor of output array 
+    long Dout = 0;             // = params.time_downsampling
     long nbatches = 0;         // = (total_beams / beams_per_batch)
     long nprofiles = 0;        // = (3 * log2(max_kernel_width) + 1)
 

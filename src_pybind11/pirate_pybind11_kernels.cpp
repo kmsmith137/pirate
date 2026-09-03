@@ -950,38 +950,44 @@ void register_kernel_bindings(pybind11::module &m)
     py::class_<ReferencePeakFindingKernel, std::shared_ptr<ReferencePeakFindingKernel>>(m, "ReferencePeakFindingKernel",
         "Reference (CPU, float32) peak-finding kernel; exposed for unit tests.")
           .def(py::init([](const std::vector<long> &subband_counts, long max_kernel_width,
-                           long beams_per_batch, long total_beams, long ndm_out, long ndm_wt,
-                           long nt_out, long nt_in, long nt_wt, long Dcore, long xdm_rank) {
+                           long beams_per_batch, long total_beams,
+                           long dm_downsampling, long time_downsampling,
+                           long ndm_out, long ndm_wt, long nt_out, long nt_wt, long Dcore) {
               PeakFindingKernelParams params;
               params.subband_counts = subband_counts;
               params.dtype = Dtype::native<float> ();
               params.max_kernel_width = max_kernel_width;
               params.beams_per_batch = beams_per_batch;
               params.total_beams = total_beams;
+              params.dm_downsampling = dm_downsampling;
+              params.time_downsampling = time_downsampling;
               params.ndm_out = ndm_out;
               params.ndm_wt = ndm_wt;
               params.nt_out = nt_out;
-              params.nt_in = nt_in;
               params.nt_wt = nt_wt;
-              params.xdm_rank = xdm_rank;
               return new ReferencePeakFindingKernel(params, Dcore);
           }),
           py::arg("subband_counts"), py::arg("max_kernel_width"),
           py::arg("beams_per_batch"), py::arg("total_beams"),
-          py::arg("ndm_out"), py::arg("ndm_wt"),
-          py::arg("nt_out"), py::arg("nt_in"), py::arg("nt_wt"), py::arg("Dcore"),
-          py::arg("xdm_rank") = 0)
+          py::arg("dm_downsampling"), py::arg("time_downsampling"),
+          py::arg("ndm_out"), py::arg("ndm_wt"), py::arg("nt_out"), py::arg("nt_wt"),
+          py::arg("Dcore"),
+          "``dm_downsampling`` is ``2**(pf_rank + K)``, i.e. ``2**pf_rank`` for a kernel with\n"
+          "no extra-DM bits; the input array then has ``ndm_out << K`` DM rows and\n"
+          "``nt_out * time_downsampling`` time samples.")
           .def_property_readonly("P", [](const ReferencePeakFindingKernel &self) { return self.nprofiles; })
           .def_property_readonly("M", [](const ReferencePeakFindingKernel &self) { return self.fs.M; })
-          // M_ext = (M << xdm_rank) is the peak-finder's own (extended) multiplet count,
-          // larger than M in an early-trigger tree. (The token carries m and mu as separate
-          // bytes, so neither field ranges over M_ext.)
+          // M_ext = (M << K) is the peak-finder's own (extended) multiplet count, larger than
+          // M in an early-trigger tree. (The token carries m and mu as separate bytes, so
+          // neither field ranges over M_ext.)
           .def_property_readonly("M_ext", [](const ReferencePeakFindingKernel &self) { return self.M_ext; })
           .def_property_readonly("N", [](const ReferencePeakFindingKernel &self) { return self.fs.N; })
-          .def_property_readonly("Dout", [](const ReferencePeakFindingKernel &self) { return self.Dout; })
+          .def_property_readonly("Dout", [](const ReferencePeakFindingKernel &self) { return self.params.time_downsampling; },
+               "The ctor's ``time_downsampling``, under the kernel-registry name.")
           .def_property_readonly("Dcore", [](const ReferencePeakFindingKernel &self) { return self.Dcore; })
           .def_property_readonly("xdm_rank", [](const ReferencePeakFindingKernel &self) { return self.K; },
-               "Number of extra-DM bits this kernel max-reduces over (the ctor's ``xdm_rank``).")
+               "Number of extra-DM bits this kernel max-reduces over,\n"
+               "``K = log2(dm_downsampling) - pf_rank``.")
           .def("apply",
                [](ReferencePeakFindingKernel &self, Array<float> &out_max, Array<uint> &out_argmax,
                   const Array<float> &in_, const Array<float> &wt, long ibatch) {

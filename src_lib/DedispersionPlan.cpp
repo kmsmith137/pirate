@@ -355,12 +355,12 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_, const Para
         pf_params.max_kernel_width = tree.primary_tree.max_width;
         pf_params.beams_per_batch = beams_per_batch;
         pf_params.total_beams = beams_per_gpu;
+        pf_params.dm_downsampling = tree.dm_downsampling;
+        pf_params.time_downsampling = tree.time_downsampling;
         pf_params.ndm_out = tree.ndm_out;
-        pf_params.xdm_rank = integer_log2(tree.dm_downsampling) - tree.frequency_subbands.pf_rank;  // K
         pf_params.ndm_wt = tree.ndm_wt;
         pf_params.nt_out = tree.nt_out;
         pf_params.nt_wt = tree.nt_wt;
-        pf_params.nt_in = tree.nt_ds;
         pf_params.validate();
 
         stage2_pf_params.push_back(pf_params);
