@@ -180,42 +180,26 @@ class CoalescedDdKernel2:
             ringbuf = self.rb   # note that ringbuf is shared between Dedisperser and PeakFinder
         )
 
-        self.xdm_rank = K = self.dd.xdm_rank(frequency_subbands)   # (dd.rank1 - fs.pf_rank)
+        self.K = K = self.dd.extra_dm_bits(frequency_subbands)   # (dd.rank1 - fs.pf_rank)
 
-        # The peak-finder sees one input per (multiplet, "extra DM") pair, indexed by
-        # m_ext = (m << xdm_rank) | mu -- see Dedisperser.emit_subband_extraction(). Prepending
-        # 'xdm_rank' zeros to the subband counts gives a FrequencySubbands whose multiplet index
-        # IS m_ext: same N, same band ordering, and each band owns a run of 2^xdm_rank times as
-        # many consecutive multiplets. That is all the peak-finder layer uses, so it needs no
-        # notion of 'mu' at all.
-        #
-        # WARNING: the two FrequencySubbands objects describe different band sets. Only the
-        # compact one is geometrically meaningful (prepending zeros turns the "unstaggered"
-        # level-0 bands into half-overlapping level-K bands, so n_to_flo/n_to_fhi and m_to_d
-        # both change). The dedisperser, the registry key and the C++ side all use the compact
-        # one; only 'self.pf' uses the extended one.
-        #
-        # Note this is purely a codegen technique, invisible in any C++ interface: the C++
-        # peak-finding kernels take K as PeakFindingKernelParams::xdm_rank instead (they read
-        # a (ndm_out << K, M) input array and fold 'mu' in as they go), and the generated
-        # kernel is keyed on the compact counts either way.
-        self.pf_frequency_subbands = FrequencySubbands([0]*K + list(frequency_subbands.subband_counts))
-
+        # The peak-finder searches (multiplet, extra DM) pairs. It takes the tree's own band
+        # set plus K, and owns the pair index (see the PeakFinder class docstring); this class
+        # never forms one.
         self.pf = PeakFinder(
             dtype = dtype,
-            frequency_subbands = self.pf_frequency_subbands,
+            frequency_subbands = frequency_subbands,
             Wmax = Wmax,
             Dcore = self.Dcore,
             Dout = self.Dout,
             Tinner = Tinner,
             ringbuf = self.rb,  # note that ringbuf is shared between Dedisperser and PeakFinder
-            xdm_rank = K        # so the peak-finder can split its index into the token's (m, mu)
+            K = K
         )
 
         # These restrictions may be relaxed in the future.
         assert self.dd.two_stage
-        assert self.frequency_subbands.pf_rank <= self.dd.rank1
-        assert self.pf_frequency_subbands.pf_rank == self.dd.rank1
+        assert frequency_subbands.pf_rank <= self.dd.rank1
+        assert self.pf.M == (frequency_subbands.M << K)
 
         # From Dedisperser
         self.warps_per_threadblock = self.dd.warps_per_threadblock
@@ -224,7 +208,7 @@ class CoalescedDdKernel2:
 
         # From PeakFinder
         self.P = self.pf.P
-        self.M_ext = self.pf.M   # = 2^xdm_rank * fs.M (emitted as 'constexpr int M', see emit_kernel)
+        self.M = self.pf.M       # pair count = 2^K * fs.M (emitted as 'constexpr int M', see emit_kernel)
         self.Minner = self.pf.Minner
         self.weight_layout = self.pf.weight_layout
 
@@ -245,7 +229,14 @@ class CoalescedDdKernel2:
             nspec = self.dd.nspec
         )
 
-        self.all_kernel_basenames = [ self.kernel_basename, mdd.kernel_basename ] + self.pf.all_kernel_basenames
+        # A standalone K = 0 peak-finder over the band set [0]*K + counts has the same pair
+        # count and the same weight runs as this kernel's peak-finding half (only the token
+        # packing differs), so it is compiled alongside: GpuPeakFindingKernel::test_random()
+        # tests that register structure in isolation, with no dedispersion in the way.
+        twin = PeakFinder(dtype, FrequencySubbands([0]*K + list(frequency_subbands.subband_counts)),
+                          Wmax, self.Dcore, self.Dout, Tinner)   # K = 0
+
+        self.all_kernel_basenames = [ self.kernel_basename, mdd.kernel_basename ] + twin.all_kernel_basenames
 
 
     def emit_kernel(self, k):
@@ -290,7 +281,7 @@ class CoalescedDdKernel2:
         k.emit(f'    ulong nt_cumul, bool is_downsampled_tree,              // dedisperser')
         k.emit(f'    uint ndm_out_per_wt, uint nt_in_per_wt)                // peak-finder')
         k.emit('{')
-        k.emit(f'constexpr int M = {self.M_ext};')
+        k.emit(f'constexpr int M = {self.M};')
         k.emit(f'constexpr int Dout = {self.Dout};')
         k.emit(f'constexpr int Dcore = {self.Dcore};')
         k.emit(f'constexpr int Minner = {self.Minner};')
@@ -314,7 +305,7 @@ class CoalescedDdKernel2:
         self.dd._init_srb(k)
 
         # PfWeightReader.top() is currently a placeholder that does not emit any code.
-        self.pf.pf_weight_reader.top(k, 'wt')
+        self.pf.weight_reader.top(k, 'wt')
 
         # Save splice, for code to load pstate.
         # This code must be emitted near the end, after the ring buffer layout is finalized.
@@ -339,14 +330,14 @@ class CoalescedDdKernel2:
         # assert below.
 
         for rname, m, mu in self.dd.emit_subband_extraction(k, self.frequency_subbands):
-            self.pf.process_pf_input(k, rname, (m << self.xdm_rank) | mu)
+            self.pf.process_pf_input(k, rname, m, mu)
 
         assert self.dd.sbx_complete
 
         # No call to self.dd._save_output_data() in coalesced kernel.
-        # Instead, call self.pf.process_pf_outputs()
-        self.pf.pf_output.apply_outer(k, 'out_max', 'out_argmax', 'itime', 'ntime')
-        self.pf.pf_weight_reader.bottom(k, 'itime', 'nt_in_per_wt')
+        # Instead, run the peak-finder's output stage.
+        self.pf.output.apply_outer(k, 'out_max', 'out_argmax', 'itime', 'ntime')
+        self.pf.weight_reader.bottom(k, 'itime', 'nt_in_per_wt')
 
         self.dd._advance_rrb(k)
         self.dd._advance_srb(k)      # no-ops if (self.two_stage) is False

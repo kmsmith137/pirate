@@ -287,24 +287,16 @@ def _membership_sweep(plan, dcores, tree_bands, C, chans):
 # P1/P2/P3 probes for sampled (itree, token, idm, itout) tuples.
 
 
-def _m_fields(m_ext, K):
-    """Pack a tree's linear multiplet index into the token's two multiplet fields: m at
-    bit 16 and mu at bit 24, with m_ext = (m << K) | mu.
-
-    The sweeps below enumerate m_ext rather than the two fields separately, because
-    0 <= m_ext < M_ext is exactly the set of legal (m, mu) pairs -- so this is a repacking
-    of the old sweep, not a narrower one. Mirrors PeakFinder._m_field_expr() in the cuda
-    generator and _m_fields() in PeakFindingKernel.cu."""
-    return ((m_ext >> K) << 16) | ((m_ext & ((1 << K) - 1)) << 24)
+def _token(m, mu, p=0, t=0):
+    """An argmax token, (t) | (p << 8) | (m << 16) | (mu << 24); see PeakFindingKernel.hpp."""
+    return t | (p << 8) | (m << 16) | (mu << 24)
 
 
 def _sample_tuples(plan, kinfo, interesting_ms, ntuples):
     """Return stratified-ish random tuples.
 
-    Biases m toward subband/fine-dm extremes, p and t toward their extremes, cells
-    toward corners. Note 'm' here is the tree's LINEAR multiplet index m_ext = (m << K) | mu
-    (K = the peak-finder's xdm_rank), so sweeping it sweeps the extra-DM index too;
-    _m_fields() splits it into the token's two byte fields."""
+    Biases (m, mu) toward subband/fine-dm extremes, p and t toward their extremes, cells
+    toward corners."""
 
     def _pick(lo_hi_n):
         return random.choice(lo_hi_n)
@@ -315,13 +307,13 @@ def _sample_tuples(plan, kinfo, interesting_ms, ntuples):
         M, P, Dout, Dcore, K = kinfo[itree]
         tree = plan.trees[itree]
 
-        m = random.choice(interesting_ms[itree] + [random.randrange(M)])
+        m, mu = random.choice(interesting_ms[itree] + [(random.randrange(M), random.randrange(1 << K))])
         p = _pick([0, P - 1, random.randrange(P)])
         lpf = (p - 1) // 3 if p else 0
         dt = min(Dcore, 2 ** lpf)
         nsamp = Dout // dt
         t = _pick([0, nsamp - 1, random.randrange(nsamp)]) * dt
-        token = _m_fields(m, K) | (p << 8) | t
+        token = _token(m, mu, p, t)
 
         idm = _pick([0, tree.ndm_out - 1, random.randrange(tree.ndm_out)])
         itout = _pick([0, tree.nt_out - 1, random.randrange(tree.nt_out)])
@@ -413,9 +405,8 @@ def _check_bad_tokens(plan, kinfo):
             return
         raise AssertionError(f"decode_argmax{args} should have thrown")
 
-    # m and mu have a byte each, so each has its own smallest out-of-range value. Note the
-    # m-field's bound is the TREE's fs.M, not the peak-finder's M_ext -- which is the
-    # simplification the two-byte format buys: a reader no longer needs K to parse a token.
+    # m and mu have a byte each, so each has its own smallest out-of-range value: m < fs.M
+    # and mu < 2^K, checked separately -- a reader never needs K to parse a token.
     fsM = int(tree.frequency_subbands.M)
     expect_throw(fsM << 16, itree, Dcore, 0, 0)        # m out of range
     expect_throw((1 << K) << 24, itree, Dcore, 0, 0)   # mu out of range
@@ -516,31 +507,27 @@ def test_decode_argmax():
     atomic_print(f"test_decode_argmax: r_top={r_top}, nt_in={nt_in}, ntrees={plan.ntrees}, "
                  f"nbeams={B}, nchunks={C}")
 
-    # Per-tree (M_ext, P, Dout, Dcore, K), from a scout ReferenceDedisperser.
-    #
-    # NOTE the first element is M_ext = (fs.M << K) with K = the peak-finder's xdm_rank (the
-    # last element: the kernel that emits the tokens is the authority on K), i.e. the number
-    # of legal (m, mu) pairs, NOT the tree's multiplet count fs.M. The tokens built below
-    # enumerate 0 <= m_ext < M_ext and repack each into the token's two byte fields via
-    # _m_fields(), so they sweep the (multiplet, extra-DM) pairs decode_argmax() has to take
-    # apart. (The out-of-range checks are per field: see _check_bad_tokens().)
+    # Per-tree (M, P, Dout, Dcore, K), from a scout ReferenceDedisperser: the kernels that
+    # emit the tokens are the authority on Dcore and K. The sweeps below enumerate every
+    # (m, mu) pair, 0 <= m < M and 0 <= mu < 2^K, which is exactly the set of legal token
+    # multiplet fields. (The out-of-range checks are per field: see _check_bad_tokens().)
     dcores = _draw_dcores(plan)
     scout = ReferenceDedisperser(plan, sophistication=0, tree_domain_input=True, Dcores=dcores)
-    kinfo = [(k.M_ext, k.P, k.Dout, k.Dcore, k.xdm_rank) for k in scout.pf_kernels]
+    kinfo = [(k.M, k.P, k.Dout, k.Dcore, k.xdm_rank) for k in scout.pf_kernels]
     del scout
     atomic_print(f'test_decode_argmax: Dcore by tree = {dcores}')
 
-    # Cross-check that relation, and check the kernel's K against the tree's own statement of
-    # it, dm_downsampling = 2^(pf_rank + K) -- this is where the plan -> kernel-params
-    # conversion is tested. Also report the per-tree K: a run which happened to generate no
-    # K > 0 tree covers strictly less, and that should be visible rather than silent.
+    # Check the kernel's K against the tree's own statement of it, dm_downsampling =
+    # 2^(pf_rank + K) -- this is where the plan -> kernel-params conversion is tested. Also
+    # report the per-tree K: a run which happened to generate no K > 0 tree covers strictly
+    # less, and that should be visible rather than silent.
     xdm_ranks = []
     for itree in range(plan.ntrees):
         tree = plan.trees[itree]
         fs = tree.frequency_subbands
         K = kinfo[itree][4]
         xdm_ranks.append(K)
-        assert kinfo[itree][0] == (int(fs.M) << K)
+        assert kinfo[itree][0] == int(fs.M)
         assert (1 << (K + int(fs.pf_rank))) == int(tree.dm_downsampling), (itree, K)
     atomic_print(f'test_decode_argmax: xdm_rank by tree = {xdm_ranks}')
 
@@ -552,9 +539,9 @@ def test_decode_argmax():
     _check_bad_tokens(plan, kinfo)
 
     # Per tree: one token per distinct decoded band (fmin, fmax), i.e. per subband. (Several
-    # m-field values map to one band -- the fine dms of a multiplet run, and with
-    # xdm_rank > 0 the extra-DM index as well -- so the dict dedupes them.)
-    # Also collect the first/last m-field value of each band, used to bias the P1/P2/P3
+    # (m, mu) pairs map to one band -- the fine dms of a multiplet run, and every extra-DM
+    # index mu -- so the dict dedupes them.)
+    # Also collect the first/last (m, mu) pair of each band, used to bias the P1/P2/P3
     # tuple sampling toward the extremes.
     tree_bands = []
     interesting_ms = []
@@ -562,11 +549,11 @@ def test_decode_argmax():
         M, K = kinfo[itree][0], kinfo[itree][4]
         first, last = {}, {}
         for m in range(M):
-            tok = _m_fields(m, K)
-            fmin, fmax, _, _, _ = _decode(plan, tok, itree, dcores[itree], 0, 0)
-            first.setdefault((fmin, fmax), m)
-            last[(fmin, fmax)] = m
-        tree_bands.append([(_m_fields(m, K), fmn, fmx) for (fmn, fmx), m in first.items()])
+            for mu in range(1 << K):
+                fmin, fmax, _, _, _ = _decode(plan, _token(m, mu), itree, dcores[itree], 0, 0)
+                first.setdefault((fmin, fmax), (m, mu))
+                last[(fmin, fmax)] = (m, mu)
+        tree_bands.append([(_token(m, mu), fmn, fmx) for (fmn, fmx), (m, mu) in first.items()])
         interesting_ms.append(sorted(set(first.values()) | set(last.values())))
 
     # Membership sweep channels: subband edges +-1 (off-by-one killers) + a few random.

@@ -52,7 +52,7 @@ class SbDedisperser:
         self.nt_per_segment = self.dd.nt_per_segment
 
         # Asserts (0 <= fs.pf_rank <= dd.rank1). See docstring above.
-        self.xdm_rank = self.dd.xdm_rank(frequency_subbands)
+        self.K = self.dd.extra_dm_bits(frequency_subbands)
 
         self.M = frequency_subbands.M
 
@@ -119,7 +119,7 @@ class SbDedisperser:
 
         # Dedisperser.emit_subband_extraction() emits the entire second stage, and yields one
         # (register name, multiplet index, "extra DM" index) triple per element of the shape
-        # (2^xdm_rank, M) output subarray owned by this warp. Note that it must be fully
+        # (2^K, M) output subarray owned by this warp. Note that it must be fully
         # consumed -- see its docstring, and the 'sbx_complete' assert below.
 
         for rname, m, mu in self.dd.emit_subband_extraction(k, self.frequency_subbands):
@@ -148,7 +148,7 @@ class SbDedisperser:
     def _apply_sb_out_offsets(self, k):
         """Emit per-block, per-warp and per-lane offsets for the 'sb_out' pointer."""
 
-        K = self.xdm_rank
+        K = self.K
         ndm_out_expr = f'(blockDim.y * gridDim.x) << {K}' if (K > 0) else 'blockDim.y * gridDim.x'
 
         k.emit(f'// SbDedisperser._apply_sb_out_offsets() starts here.')
@@ -217,9 +217,9 @@ class SbDedisperser:
         d = fs.m_to_nd[m][1]                 # fine-grained dm
         flo, fhi = fs.n_to_frange[n]         # coarse-freq range of the subband
 
-        # The (mu,m) pair indexes a shape (2^xdm_rank, M) subarray -- see _apply_sb_out_offsets().
+        # The (mu,m) pair indexes a shape (2^K, M) subarray -- see _apply_sb_out_offsets().
         ix = mu * self.M + m
-        mustr = f', mu={mu}' if (self.xdm_rank > 0) else ''
+        mustr = f', mu={mu}' if (self.K > 0) else ''
 
         k.emit(f'sb_out[{ix} * m_stride] = {rname};   // m={m}{mustr}: subband n={n} (coarse freqs [{flo},{fhi})), fine dm={d}')
 

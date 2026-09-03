@@ -294,10 +294,10 @@ class Dedisperser:
 
         Args:
           k   Kernel, to emit into.
-          fs  FrequencySubbands, with 0 <= fs.pf_rank <= self.rank1 (see xdm_rank()).
+          fs  FrequencySubbands, with 0 <= fs.pf_rank <= self.rank1 (see extra_dm_bits()).
 
         Yields (rname, m, mu): the name of the register holding multiplet 0 <= m < fs.M at
-        "extra DM" 0 <= mu < 2^K, where K = self.xdm_rank(fs). The subband array's DM index is
+        "extra DM" 0 <= mu < 2^K, where K = self.extra_dm_bits(fs). The subband array's DM index is
 
             d_pf = d' * 2^K + mu      (where 0 <= d' < 2^rank0 is the warp's coarse DM)
 
@@ -375,20 +375,20 @@ class Dedisperser:
         i.e. 'mu' is bit-reversed in the register index, and plain everywhere else (lags, DM
         indices, output array addresses).
 
-        YIELD ORDER is increasing ((m << K) | mu): pf_level, then band, then fine DM, then mu.
-        That matters: PeakFinder builds its transposes incrementally and bails out via
-        'if (m & mbit) == 0: return', so it requires its input index to arrive in order (see
-        PeakFinder.pfx_register_ready()). It is also availability order, since all 2^K
-        registers of a multiplet are ready at the same moment. A consumer which does not care
-        (e.g. a plain store) could take the odd-pfs multiplets earlier, in step 1 below, which
-        would shorten the live range of the pfodd_* registers -- a possible future
+        YIELD ORDER is lexicographic in (m, mu), mu fastest: pf_level, then band, then fine
+        DM, then mu. That is availability order, since all 2^K registers of a multiplet are
+        ready at the same moment. PeakFinder requires its inputs in increasing pair index
+        (it builds its transposes incrementally, see PeakFinder.process_pf_input()), and
+        defines its pair index so that this order is increasing. A consumer which does not
+        care (e.g. a plain store) could take the odd-pfs multiplets earlier, in step 1 below,
+        which would shorten the live range of the pfodd_* registers -- a possible future
         optimization.
         """
 
         assert self.two_stage
 
         R = fs.pf_rank      # subband granularity: the coarse-pf frequency axis has 2^R channels
-        K = self.xdm_rank(fs)   # "extra DM" bits (also asserts 0 <= fs.pf_rank <= self.rank1)
+        K = self.extra_dm_bits(fs)   # "extra DM" bits (also asserts 0 <= fs.pf_rank <= self.rank1)
         nxdm = 2**K         # number of "extra DM" values per multiplet
 
         self.sbx_complete = False   # see "MUST BE FULLY CONSUMED" above
@@ -538,12 +538,13 @@ class Dedisperser:
         self.sbx_complete = True
 
 
-    def xdm_rank(self, fs):
-        """Returns the number of "extra DM" bits in the second stage: (rank1 - fs.pf_rank).
+    def extra_dm_bits(self, fs):
+        """Returns K, the number of "extra DM" bits in the second stage: (rank1 - fs.pf_rank).
 
-        Each warp of the subbanded kernels produces 2^xdm_rank output DMs, whose indices are
-        the low bits of the subband array's DM axis. See emit_subband_extraction() for the
-        full story, and for why xdm_rank must be >= 0.
+        Each warp of the subbanded kernels produces 2^K output DMs, whose indices are the low
+        bits of the subband array's DM axis. See emit_subband_extraction() for the full story,
+        and for why K must be >= 0. (The C++ side carries K only through
+        PeakFindingKernelParams::dm_downsampling = 2^(pf_rank + K).)
         """
 
         assert self.two_stage

@@ -17,7 +17,7 @@ from .FrequencySubbands import FrequencySubbands
 #  - Dcore               (compile-time)
 #  - Dout                (compile-time, also denoted nt_in_per_out)
 #  - Wmax                (compile-time, max kernel width)
-#  - frequency_subbands  (compile-time)
+#  - K                   (compile-time, extra-DM bits; 0 for a standalone kernel)
 #  - nt_in               (runtime)
 #  - ndm_out_per_wt      (runtime)
 #  - nt_in_per_wt        (combination, see below)
@@ -25,15 +25,9 @@ from .FrequencySubbands import FrequencySubbands
 # Note that there is no 'ndm_in_per_out' parameter, since the "uncoalesced"
 # peak-finding kernel doesn't care about input DMs.
 #
-# A note on 'frequency_subbands': the peak-finder uses only (N, M, m_to_n), i.e. it treats
-# its input index as a multiplet index equipped with a run-length structure ("which
-# consecutive multiplets share a subband"), and never touches the band geometry
-# (n_to_flo/n_to_fhi/m_to_d). So a peak-finding kernel's subband_counts should be read as a
-# run-length structure rather than a band set. In particular LEADING ZEROS ARE MEANINGFUL:
-# they multiply every run length by a power of two without changing N. CoalescedDdKernel2
-# uses exactly that -- its pf kernel's counts are the tree's counts with 'xdm_rank' zeros
-# prepended, so that the peak-finder's index is (m << xdm_rank) | mu and the extra DM
-# bits get max-reduced away. See cuda_generator/CoalescedDdKernel2.py.
+# A note on 'frequency_subbands' and K: the peak-finder searches (multiplet, extra DM)
+# pairs, and indexes them by a single "pair index" j. See the PeakFinder class docstring for
+# the definition of j and for what the class uses from frequency_subbands.
 #
 # Constraints:
 #
@@ -68,25 +62,46 @@ from .FrequencySubbands import FrequencySubbands
 
 
 class PeakFinder:
-    def __init__(self, dtype, frequency_subbands, Wmax, Dcore, Dout, Tinner, ringbuf=None,
-                 xdm_rank=0):
+    """Generates the peak-finding half of a GPU kernel, standalone or fused into a cdd2 kernel.
+
+    INDICES. The peak-finder searches (multiplet, extra DM) pairs:
+
+        m    compact multiplet index, 0 <= m < frequency_subbands.M (the tree's own band set)
+        mu   extra-DM index, 0 <= mu < 2^K, where K = log2(dm_downsampling) - pf_rank
+        j    this class's PAIR index, j = (m << K) | mu, 0 <= j < M, with M = fs.M << K
+
+    Registers and lanes are a flat resource, so the register-level methods below (pfx_*,
+    pfy_*, pfz_*, the weight reads) work with j throughout, and the 'm' in their parameter
+    names and in the emitted register names (pfx_m{j}..., pfz_m{j}_p{p}, token_m{j}_base) IS
+    the pair index j. Only two places know that j is a pair:
+
+      - process_pf_input(k, expr, m, mu) packs (m, mu) into j;
+      - _m_field_expr() unpacks j into the argmax token's two bytes, m at bit 16 and mu at
+        bit 24 (see PeakFindingKernel.hpp for the token format).
+
+    mu is the fast index because that is the order in which the second-stage dedisperser's
+    registers become available (all 2^K registers of a multiplet are ready together, see
+    Dedisperser.emit_subband_extraction()), and pfx_register_ready() requires its inputs in
+    increasing j.
+
+    What the class uses from frequency_subbands is N, M and m_to_n: weights are per subband,
+    so a run of 2^K consecutive j -- the 2^K extra DMs of one multiplet -- share a weight,
+    n(j) = fs.m_to_n[j >> K]. The band geometry (n_to_flo/n_to_fhi/m_to_d) is never touched.
+    See __init__ for how that run structure reaches the weight reader.
+
+    K = 0 (the default, and the only value a standalone kernel supports -- see
+    GpuPeakFindingKernel) means j = m and mu is always zero.
+    """
+
+    def __init__(self, dtype, frequency_subbands, Wmax, Dcore, Dout, Tinner, ringbuf=None, K=0):
         self.dtype = dtype = Dtype(dtype)
-        self.frequency_subbands = frequency_subbands                                            
+        self.frequency_subbands = frequency_subbands   # compact band set, see the class docstring
         self.Tinner = Tinner
         self.Dcore = Dcore
         self.Dout = Dout
         self.Wmax = Wmax
-
-        # 'xdm_rank' (K) splits this kernel's multiplet index into the two fields the argmax
-        # token carries separately: m = (index >> K) and mu = (index & (2^K - 1)). The caller
-        # supplies it because the split is not visible here -- CoalescedDdKernel2 builds the
-        # extended subband_counts by prepending K zeros, and the leading zeros are not
-        # distinguishable from a tree whose own subband_counts[0] is zero.
-        #
-        # K = 0 (the default, and what a standalone peak-finder always uses) means mu is
-        # always zero, and the emitted token arithmetic is then identical to the K > 0 case
-        # with the mu term dropped.
-        self.xdm_rank = xdm_rank
+        self.K = K
+        assert K >= 0
 
         self.dt32 = dtype.simd32
         self.SW = dtype.simd_width
@@ -105,16 +120,19 @@ class PeakFinder:
 
         self.P = 3 * utils.integer_log2(Wmax) + 1   # number of peak-finding profiles
         self.pf_rank = frequency_subbands.pf_rank
-        self.weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, self.P, Tinner)
-        self.weight_layout = self.weight_reader.weight_layout
+        self.M = frequency_subbands.M << K          # PAIR count, see the class docstring
+
+        # The weight reader sees the pair index j, and needs only "which consecutive j share
+        # a subband": prepending K zero counts makes every band's run 2^K times longer, which
+        # is exactly the run structure of j = (m << K) | mu. This extended band set is an
+        # internal detail of the weight reader -- its geometry (n_to_flo/fhi, m_to_d) is
+        # meaningless, and nothing else sees it.
+        wr_fs = FrequencySubbands([0]*K + list(frequency_subbands.subband_counts)) if (K > 0) else frequency_subbands
+        self.weight_reader = PfWeightReader(wr_fs, dtype, Dcore, self.P, Tinner)
+        self.weight_layout = self.weight_reader.weight_layout   # depends only on (N, P, Tinner, dtype)
         self.output = PfOutput(dtype, Dout)
         
-        self.M = self.weight_reader.M
-        # M is the EXTENDED multiplet count, so it factors as 2^K times the caller's own
-        # multiplet count. (The extended subband_counts are the caller's with K zeros
-        # prepended, which multiplies every level's 2^level by 2^K.)
-        assert xdm_rank >= 0
-        assert (self.M % (1 << xdm_rank)) == 0
+        assert self.M == self.weight_reader.M
         self.Mouter = self.weight_reader.Mouter
         self.Minner = self.weight_reader.Minner
         self.Pouter = self.weight_layout.Pouter
@@ -127,9 +145,7 @@ class PeakFinder:
         self.pfz_decl = set()
 
         self.rb = ringbuf if (ringbuf) is not None else Ringbuf(self.dt32)
-        self.pf_output = PfOutput(dtype, Dout)
-        self.pf_weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, self.P, Tinner)
-        
+
         # Typical kernel name: pf_fp32_f11_f6_f3_f1_W16_Dcore8_Dout16_Tinner1
         self.kernel_name = f'pf_{dtype.fname}_{frequency_subbands.fstr}_W{Wmax}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
         self.kernel_basename = self.kernel_name + '.cu'
@@ -148,6 +164,10 @@ class PeakFinder:
         return f'({var} >> {utils.integer_log2(n)})' if (n != 1) else var
         
     def emit_kernel(self, k):
+        assert self.K == 0, ("a standalone peak-finding kernel is K = 0 only: the global-memory"
+                             " read loop below does not permute the (mu, m) input rows, and"
+                             " GpuPeakFindingKernel rejects K > 0 (see PeakFindingKernel.hpp)")
+
         dt32, SW, Dcore, Dout, M = self.dt32, self.dtype.simd_width, self.Dcore, self.Dout, self.M
 
         k.emit('// Autogenerated by pirate_frb.cuda_generator')
@@ -235,7 +255,7 @@ class PeakFinder:
             k.emit()
 
         # PfWeightReader.top() is currently a placeholder that does not emit any code.
-        self.pf_weight_reader.top(k, 'wt')
+        self.weight_reader.top(k, 'wt')
         
         # Code to load ring buffer pstate will be spliced in here.
         self.kps = k.splice()
@@ -249,13 +269,13 @@ class PeakFinder:
 
             k.emit()
             k.emit(f'// Read {m=} from global memory')
-            self.process_pf_input(k, t, m)
+            self.process_pf_input(k, t, m, 0)
 
-        # Bottom of tin-loop 1: process pf_output.
-        self.pf_output.apply_outer(k, 'out_max', 'out_argmax', 'tin', 'nt_in')
+        # Bottom of tin-loop 1: process output.
+        self.output.apply_outer(k, 'out_max', 'out_argmax', 'tin', 'nt_in')
 
         # bottom of tin-loop 2: advance weight_reader.
-        self.pf_weight_reader.bottom(k, 'tin', 'nt_in_per_wt')
+        self.weight_reader.bottom(k, 'tin', 'nt_in_per_wt')
         
         # Bottom of tin-loop 3: advance ringbuf.
         self.rb.advance_outer(k)
@@ -338,20 +358,30 @@ class PeakFinder:
         k.emit('}   // namespace pirate')
 
         
-    def process_pf_input(self, k, expr, m):
-        """Called in main loop of emit_kernel()."""
+    def process_pf_input(self, k, expr, m, mu):
+        """Consume one peak-finder input register: multiplet 'm' at extra DM 'mu'.
+
+        'expr' is a C++ expression for the register (a global-memory read in the standalone
+        kernel, a dedisperser register in a cdd2 kernel). This is the ONE place that packs
+        (m, mu) into the pair index j = (m << K) | mu (see the class docstring); calls must
+        arrive in increasing j, since pfx_register_ready() builds its transposes incrementally.
+        """
+
+        assert 0 <= m < self.frequency_subbands.M
+        assert 0 <= mu < (1 << self.K)
+        j = (m << self.K) | mu
 
         M = self.M
         Mpad = utils.align_up(M, self.Dcore)
-        
+
         b = tuple(('t',i) for i in range(self.pfx_nb))
         l = tuple(('t',i+self.pfx_nb) for i in range(self.pfx_nl))
-        var = self.pfx_name(m, 0, b, l)
-        
-        k.emit(f'{self.dt32} {var} = {expr};')        
-        self.pfx_register_ready(k, m, 0, b, l)
+        var = self.pfx_name(j, 0, b, l)
 
-        if (m == M-1) and (M < Mpad):
+        k.emit(f'{self.dt32} {var} = {expr};')
+        self.pfx_register_ready(k, j, 0, b, l)
+
+        if (j == M-1) and (M < Mpad):
             k.emit()
             k.emit(f'// FIXME: creating dummy pfx registers for M <= m < Mpad, where {M=} and {Mpad=}.')
             k.emit(f'// FIXME: this is suboptimal but convenient!')
@@ -505,12 +535,12 @@ class PeakFinder:
         
         if self.dtype == 'float':
             assert Dcore == Minner
-            self.pf_weight_reader.read_weights(k, m, p)
+            self.weight_reader.read_weights(k, m, p)
         
         elif self.dtype == '__half' and ((p % 2) == 0):
             assert Dcore == 2*Minner
-            self.pf_weight_reader.read_weights(k, m, p)
-            self.pf_weight_reader.read_weights(k, m+Minner, p)
+            self.weight_reader.read_weights(k, m, p)
+            self.weight_reader.read_weights(k, m+Minner, p)
                 
         elif self.dtype != '__half':
             raise RuntimeError('should never get here')
@@ -620,17 +650,18 @@ class PeakFinder:
 
     
     def _m_field_comment(self):
-        return '(m << 16) | (mu << 24)' if self.xdm_rank else '(m << 16)'
+        return '(m << 16) | (mu << 24)' if self.K else '(m << 16)'
 
 
     def _m_field_expr(self, v):
-        """C++ expression packing this kernel's multiplet index 'v' into the token's two
-        multiplet fields, m at bit 16 and mu at bit 24 (see pfz_register_ready()).
+        """C++ expression unpacking a pair index 'v' (a C++ expression) into the token's two
+        multiplet bytes, m = (v >> K) at bit 16 and mu = (v & (2^K - 1)) at bit 24. The
+        inverse of process_pf_input()'s packing, and the only other place that knows j is a
+        pair (see the class docstring).
 
-        At K == 0 this is the bare (v << 16), so a kernel with no extra DMs emits exactly the
-        arithmetic it did before the fields were split."""
+        At K == 0 this is the bare (v << 16)."""
 
-        K = self.xdm_rank
+        K = self.K
         if K == 0:
             return f'({v} << 16)'
         E = 1 << K
@@ -646,25 +677,24 @@ class PeakFinder:
           - pfiz_m{m}_p{p}: store "mini-tokens" 0 <= t < Dcore.
             Mini-tokens are always declared 'uint', but are secretly either u32 or u16x2.
 
-        Register assignment here is (where K = log2(Minner) and L=log2(Dcore))
-        
-           simd <->  (m_K or None)                       float16 or float32
-           Minner lanes <-> m_0 ... m_{K-1}              K = log2(Minner)
+        Register assignment here is (where Lm = log2(Minner) and L = log2(Dcore); 'm' is
+        the pair index j, see the class docstring)
+
+           simd <->  (m_Lm or None)                      float16 or float32
+           Minner lanes <-> m_0 ... m_{Lm-1}             Lm = log2(Minner)
            32/Minner lanes <-> t_L t_{L+1} ...           note: coarse-grained over Dcore times
 
         Thus, each call to pfz_register_ready() processes (32*SW) times, (Dcore) m-values,
         and 1 p-value.
 
-        Recall that tokens are formatted as (t) | (p << 8) | (m << 16) | (mu << 24),
-        where this kernel's multiplet index 'mfull' splits as m = (mfull >> K) and
-        mu = (mfull & (2^K - 1)), with K = self.xdm_rank (zero unless the caller is a cdd2
-        kernel with extra DMs). To convert a minitoken to a token, we do something like this:
+        Recall that tokens are formatted as (t) | (p << 8) | (m << 16) | (mu << 24). To
+        convert a minitoken to a token, we do something like this:
 
             tfull = minitoken | ((threadIdx.x * simd_width) & (Dout-Dcore));
-            mfull = m | (threadIdx.x & (Minner-1));
-            mfull = min(mfull, M-1);   // may be needed on some threads
-            assert (p < P);            // p is the same on all threads
-            token = tfull | (p << 8) | _emit_m_fields(mfull);
+            j = m | (threadIdx.x & (Minner-1));   // this lane's pair index
+            j = min(j, M-1);                      // the last lane group can overhang M
+            assert (p < P);                       // p is the same on all threads
+            token = tfull | (p << 8) | _m_field_expr(j);
         """
 
         Dcore, M, Minner, P = self.Dcore, self.M, self.Minner, self.P
@@ -675,9 +705,9 @@ class PeakFinder:
 
         # "Base" registers (p == 0).
 
-        # Note the min() clamps the LINEAR multiplet index, before _m_field_expr() splits
-        # it: the clamp exists because the last m-group can overhang M, which is a property
-        # of the lane layout rather than of the token format.
+        # Note the min() clamps the pair index j, before _m_field_expr() splits it into the
+        # token's two bytes: the clamp exists because the last lane group can overhang M,
+        # which is a property of the lane layout rather than of the token format.
 
         if (self.dtype == 'float') and (p == 0):
             k.emit(f'// token_m{m}_base = {self._m_field_comment()} | (t & (Dout-Dcore))')
@@ -701,7 +731,7 @@ class PeakFinder:
         if self.dtype == 'float':
             k.emit(f'pfz_m{m}_p{p} *= pfw_m{m}_p{p};')
             k.emit(f'uint token_m{m}_p{p} = token_m{m}_base | ({p} << 8) | pfiz_m{m}_p{p};')
-            self.pf_output.apply_inner(k, f'pfz_m{m}_p{p}', [ f'token_m{m}_p{p}' ])
+            self.output.apply_inner(k, f'pfz_m{m}_p{p}', [ f'token_m{m}_p{p}' ])
 
         elif (self.dtype == '__half') and ((p % 2) == 0) and (p < (P-1)):
             k.emit(f'// This is a no-op (need to wait for p={P+1}).')
@@ -734,8 +764,8 @@ class PeakFinder:
             k.emit(f'uint token_m{m1}_p{p0} = token_m{m1}_base | ({min(p0,P-1)} << 8) | ((pfiz_m{m0}_p{p0} >> 16) & 0xff);')
             k.emit(f'uint token_m{m1}_p{p1} = token_m{m1}_base | ({min(p1,P-1)} << 8) | ((pfiz_m{m0}_p{p1} >> 16) & 0xff);')
             
-            self.pf_output.apply_inner(k, pfu0, [ f'token_m{m0}_p{p0}', f'token_m{m0}_p{p1}' ])
-            self.pf_output.apply_inner(k, pfu1, [ f'token_m{m1}_p{p0}', f'token_m{m1}_p{p1}' ])
+            self.output.apply_inner(k, pfu0, [ f'token_m{m0}_p{p0}', f'token_m{m0}_p{p1}' ])
+            self.output.apply_inner(k, pfu1, [ f'token_m{m1}_p{p0}', f'token_m{m1}_p{p1}' ])
 
         else:
             raise RuntimeError('should never get here')
