@@ -2,6 +2,7 @@
 
 #include <cstring>                 // strlen()
 #include <algorithm>               // std::sort()
+#include <numeric>                 // std::gcd()
 #include <iomanip>                 // std::fixed, std::setprecision
 
 #include <ksgpu/Dtype.hpp>
@@ -1019,6 +1020,11 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     xassert(args.max_early_triggers >= 0);
     xassert_ge(args.min_primary_trees, 1);
     xassert_le(args.min_primary_trees, max_random_npri);
+    xassert_ge(args.tspc_multiple, 1L);
+    xassert_ge(args.max_beams_per_gpu, 0L);
+    xassert_ge(args.min_batch_slots, 1);
+    // single_beam pins beams_per_gpu to 1, which leaves room for exactly one batch slot.
+    xassert(!args.single_beam || (args.min_batch_slots == 1));
     long max_stage2_rank = (args.max_toplevel_rank + 1) / 2;
 
     using Key2 = CoalescedDdKernel2::RegistryKey;  // (dtype, dd_rank, Tinner, Wmax, subband_counts)
@@ -1253,18 +1259,87 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     // of step with the draw, this fires instead of the caller silently getting fewer trees.
     xassert_ge(npri, long(args.min_primary_trees));
 
+    // ONE BUDGET, split three ways or spent entirely on the chunk length:
+    //
+    //    (time_samples_per_chunk / nt_divisor) * beams_per_batch * nbatch  <=  8192 / nt_divisor,
+    //
+    // where nbatch = beams_per_gpu / beams_per_batch. It bounds time_samples_per_chunk *
+    // beams_per_gpu, i.e. the per-GPU footprint, which is why the three factors have to compete
+    // for one number rather than being drawn independently.
+    //
+    // args.tspc_multiple and args.min_batch_slots are folded in as a CHANGE OF VARIABLE below
+    // (w, not v), and args.max_beams_per_gpu as a two-stage draw. Under the defaults every
+    // substitution is the identity and the draw is exactly the plain three-way product.
     long nt_divisor = ret.get_nelts_per_segment() * pow2(npri-1);
     long n = xdiv(8192, nt_divisor);
 
-    // ONE BUDGET, split three ways or spent entirely on the chunk length. Under single_beam
-    // the two beam factors are gone, so drawing them and overwriting them afterwards would
-    // just shrink time_samples_per_chunk by their product for nothing.
-    auto v = ksgpu::random_integers_with_bounded_product(args.single_beam ? 1 : 3, n);
+    // time_samples_per_chunk = v0 * nt_divisor is a multiple of nt_divisor for free, so
+    // tspc_multiple only has to be enforced through the part nt_divisor does not already cover.
+    // This is where the bias came from that the fields exist to remove: nt_divisor grows with
+    // npri and is twice as large for float16, so at high npri the constraint is free and at
+    // npri == 1 it costs a factor of 8.
+    long tspc_step = args.tspc_multiple / std::gcd(args.tspc_multiple, nt_divisor);
 
-    ret.time_samples_per_chunk = v[0] * nt_divisor;
-    ret.beams_per_batch = args.single_beam ? 1 : v[1];
-    ret.beams_per_gpu = args.single_beam ? 1 : (v[1] * v[2]);
-    ret.num_active_batches = args.single_beam ? 1 : rand_int(1,v[2]+1);
+    // Reserving min_batch_slots slots per active batch is what makes the guarantee hold by
+    // construction: with nbatch = slots*w2 and num_active_batches drawn from [1, w2],
+    // beams_per_gpu = beams_per_batch * slots * w2 >= slots * num_active_batches * beams_per_batch.
+    long slots = args.single_beam ? 1 : long(args.min_batch_slots);
+    long budget = n / (tspc_step * slots);
+
+    if (budget < 1) {
+        stringstream ss;
+        ss << "DedispersionConfig::make_random(): no config can satisfy tspc_multiple="
+           << args.tspc_multiple << " and min_batch_slots=" << args.min_batch_slots
+           << " here: num_primary_trees=" << npri << " and dtype=" << ret.dtype.str()
+           << " give nt_divisor=" << nt_divisor << ", leaving a budget of " << n;
+        throw runtime_error(ss.str());
+    }
+
+    vector<long> w;
+
+    if (args.single_beam || (args.max_beams_per_gpu <= 0))
+        w = ksgpu::random_integers_with_bounded_product(args.single_beam ? 1 : 3, budget);
+    else {
+        // BEAMS FIRST when they are capped, so that the cap is what sizes them and the chunk
+        // length takes what is left. Drawn as one three-way product and then rejected, the cap
+        // instead selects the draws that happened to leave the beams small -- and since the
+        // three factors compete, that means selecting for a LONG chunk, hence for high npri
+        // and float16. Same bias, arrived at from the other side.
+        long beam_budget = std::min(args.max_beams_per_gpu / slots, budget);
+
+        if (beam_budget < 1) {
+            stringstream ss;
+            ss << "DedispersionConfig::make_random(): max_beams_per_gpu="
+               << args.max_beams_per_gpu << " is too small for min_batch_slots="
+               << args.min_batch_slots;
+            throw runtime_error(ss.str());
+        }
+
+        vector<long> wb = ksgpu::random_integers_with_bounded_product(2, beam_budget);
+        long left = budget / (wb[0] * wb[1]);       // >= 1, since wb[0]*wb[1] <= beam_budget <= budget
+        xassert_ge(left, 1L);
+
+        w = { ksgpu::random_integers_with_bounded_product(1, left).at(0), wb[0], wb[1] };
+    }
+
+    ret.time_samples_per_chunk = tspc_step * w[0] * nt_divisor;
+
+    if (args.single_beam) {
+        ret.beams_per_batch = 1;
+        ret.beams_per_gpu = 1;
+        ret.num_active_batches = 1;
+    }
+    else {
+        ret.beams_per_batch = w[1];
+        ret.beams_per_gpu = w[1] * slots * w[2];
+        ret.num_active_batches = rand_int(1, w[2]+1);
+    }
+
+    // The three fields are honoured by construction; these are tripwires on the arithmetic
+    // above, not on the caller.
+    xassert((ret.time_samples_per_chunk % args.tspc_multiple) == 0);
+    xassert(!args.max_beams_per_gpu || (ret.beams_per_gpu <= args.max_beams_per_gpu));
+    xassert_le(args.min_batch_slots * ret.num_active_batches * ret.beams_per_batch, ret.beams_per_gpu);
 
     // GPU configuration.
     // The member's own default (10000) is the "no limit, pure-GPU ring buffer" value, so

@@ -5,37 +5,39 @@ import random
 from ..pirate_pybind11 import DedispersionConfig
 
 
-def make_random_subscale_config(max_toplevel_rank=6, max_beams=8):
+def make_random_subscale_config(min_batch_slots=1):
     """Return one random "subscale" DedispersionConfig for the loopback tests.
 
-    The DedispersionConfig is built FIRST (via make_random + rejection
-    sampling for test-friendly constraints), and the rest of the test
-    params are derived from it. This way, the four metadata-dependent
-    members of the config (zone_nfreq, zone_freq_edges, time_sample_ms,
-    beams_per_gpu) that the FrbServer's processing thread overwrites
-    with XMD-derived values land on values that match the random
-    config -- so config_postfilled.validate() trivially succeeds.
+    "Subscale" is a size cap plus two protocol constraints, and this is the one
+    place they are written down; test --net and test --serv both come here.
 
-    Rejection-sample constraints:
-      - time_samples_per_chunk % 256 == 0 (network protocol cadence)
-      - beams_per_gpu <= max_beams (keep frame count manageable for the test)
+      - max_toplevel_rank=6.  These are loopback tests, so the config only has to
+        be buildable.  The FLOOR is 5, not 1: make_random() needs
+        max_stage2_rank = (max_toplevel_rank+1)/2 to reach 3, the smallest dd_rank
+        the precompiled cdd2 registry stocks.
+      - time_samples_per_chunk a multiple of 256, the network protocol's cadence.
+      - beams_per_gpu <= 8, to keep the frame count manageable.
 
-    max_toplevel_rank=6 is a SIZE CAP: these are loopback tests, and the config only has
-    to be buildable. The floor it has to clear is 5 -- make_random() needs
-    max_stage2_rank = (max_toplevel_rank+1)/2 to reach the smallest dd_rank the precompiled
-    cdd2 registry stocks, which is 3.
+    'min_batch_slots' is the one knob a caller varies: pass 2 for a
+    grouper-enabled FrbServer, which needs
+    beams_per_gpu >= 2 * num_active_batches * beams_per_batch.
+
+    All four are ARGUMENTS TO THE DRAW, not conditions checked afterwards, and
+    that distinction matters more than it looks: they correlate with
+    num_primary_trees and dtype, so a caller that drew and retried would silently
+    end up testing a narrow slice of configs.  See RandomArgs in
+    include/pirate/DedispersionConfig.hpp for the numbers.
+
+    The config is built FIRST and the rest of the test params derived from it, so
+    that the four metadata-dependent members (zone_nfreq, zone_freq_edges,
+    time_sample_ms, beams_per_gpu) that the FrbServer's processing thread
+    overwrites with XMD-derived values land on values matching the random config
+    -- so config_postfilled.validate() trivially succeeds.
     """
-    for _ in range(200):
-        config = DedispersionConfig.make_random(max_toplevel_rank=max_toplevel_rank)
-        if config.time_samples_per_chunk % 256 != 0:
-            continue
-        if config.beams_per_gpu > max_beams:
-            continue
-        return config
-    raise RuntimeError(
-        f"make_random_subscale_config: failed to generate a random DedispersionConfig "
-        f"satisfying (tsc%256==0 and beams_per_gpu<={max_beams}) in 200 attempts"
-    )
+    return DedispersionConfig.make_random(max_toplevel_rank = 6,
+                                          tspc_multiple     = 256,
+                                          max_beams_per_gpu = 8,
+                                          min_batch_slots   = min_batch_slots)
 
 
 def pick_receiver_worker_counts(total_nfreq):

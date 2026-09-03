@@ -197,21 +197,13 @@ class ServerTester:
         test --net (see tests/utils.py); no_dedispersion/pacing are never used
         here, and a grouper is always configured.
 
-        Extra rejection constraint vs test --net: a grouper-enabled FrbServer
-        builds its dedisperser with nbatches_out = 2*num_active_batches, and
-        FrbGrouper requires the output ring to fit within one chunk
-        (num_batch_slots * beams_per_batch <= total_beams; FrbGrouper.cpp) --
-        so require 2 * num_active_batches * beams_per_batch <= beams_per_gpu.
+        min_batch_slots=2 is the one thing this needs beyond test --net: a
+        grouper-enabled FrbServer builds its dedisperser with
+        nbatches_out = 2*num_active_batches, and FrbGrouper requires that output
+        ring to fit within one chunk (num_batch_slots * beams_per_batch <=
+        total_beams; FrbGrouper.cpp).
         """
-        for _ in range(200):
-            config = make_random_subscale_config()
-            if 2 * config.num_active_batches * config.beams_per_batch <= config.beams_per_gpu:
-                break
-        else:
-            raise RuntimeError(
-                "test_server: failed to generate a random DedispersionConfig with "
-                "2*num_active_batches*beams_per_batch <= beams_per_gpu in 200 attempts"
-            )
+        config = make_random_subscale_config(min_batch_slots=2)
         total_nfreq = sum(config.zone_nfreq)
         num_receivers, nworkers = pick_receiver_worker_counts(total_nfreq)
         nab = config.num_active_batches

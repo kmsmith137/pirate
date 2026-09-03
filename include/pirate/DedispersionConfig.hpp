@@ -222,6 +222,31 @@ struct DedispersionConfig
         // is the useful corner and the three-way split is doing them a favour by accident.
         bool single_beam = false;
 
+        // The next three exist so that a caller with a hard requirement can ASK FOR IT, rather
+        // than drawing configs and discarding the ones that miss. That is not just a saving on
+        // draws: all three correlate strongly with num_primary_trees and dtype (both feed
+        // nt_divisor below), so filtering afterwards silently reshapes the population under
+        // test. Measured on the loopback tests before this existed, requiring
+        // time_samples_per_chunk % 256 == 0 together with beams_per_gpu <= 8 took
+        // P(one primary tree) from 61% to 16% and P(toplevel_tree_rank == 5) from 49% to 13%.
+
+        // Draw time_samples_per_chunk as a multiple of this. 1 = no constraint. Used by the
+        // loopback tests, whose network protocol sends in units of 256 time samples.
+        long tspc_multiple = 1;
+
+        // Upper bound on beams_per_gpu. 0 = no bound. When set, the beam geometry is drawn
+        // FIRST, on its own scale, and the chunk length takes what is left of the budget.
+        long max_beams_per_gpu = 0;
+
+        // Reserve this many of the GPU's batch slots per ACTIVE batch, i.e. guarantee
+        //
+        //    beams_per_gpu >= min_batch_slots * num_active_batches * beams_per_batch.
+        //
+        // 1 (the default) is what make_random() gives anyway. 2 is what a grouper-enabled
+        // FrbServer needs: it builds its dedisperser with nbatches_out = 2*num_active_batches,
+        // and FrbGrouper requires that output ring to fit within one chunk.
+        int min_batch_slots = 1;
+
         bool gpu_valid = true;
         bool verbose = false;
         bool force_float32 = false;

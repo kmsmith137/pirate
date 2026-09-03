@@ -180,13 +180,17 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                       "pirate_frb.varmap.asdf_io.")
           .def_static("make_random",
                [](int max_toplevel_rank, int max_early_triggers, int min_primary_trees,
-                  bool single_beam, bool gpu_valid, bool verbose,
+                  bool single_beam, long tspc_multiple, long max_beams_per_gpu,
+                  int min_batch_slots, bool gpu_valid, bool verbose,
                   bool force_float32, bool no_host_mega_ringbuf) {
                    DedispersionConfig::RandomArgs args;
                    args.max_toplevel_rank = max_toplevel_rank;
                    args.max_early_triggers = max_early_triggers;
                    args.min_primary_trees = min_primary_trees;
                    args.single_beam = single_beam;
+                   args.tspc_multiple = tspc_multiple;
+                   args.max_beams_per_gpu = max_beams_per_gpu;
+                   args.min_batch_slots = min_batch_slots;
                    args.gpu_valid = gpu_valid;
                    args.verbose = verbose;
                    args.force_float32 = force_float32;
@@ -197,6 +201,9 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("max_early_triggers") = 5,
                py::arg("min_primary_trees") = 1,
                py::arg("single_beam") = false,
+               py::arg("tspc_multiple") = 1,
+               py::arg("max_beams_per_gpu") = 0,
+               py::arg("min_batch_slots") = 1,
                py::arg("gpu_valid") = true,
                py::arg("verbose") = false,
                py::arg("force_float32") = false,
@@ -214,6 +221,14 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "        and give the whole budget to time_samples_per_chunk (default=False).\n"
                "        Use this instead of overwriting the beam fields after the draw, which\n"
                "        leaves time_samples_per_chunk systematically small.\n"
+               "    tspc_multiple: Draw time_samples_per_chunk as a multiple of this\n"
+               "        (default=1, i.e. no constraint).\n"
+               "    max_beams_per_gpu: Upper bound on beams_per_gpu (default=0, no bound).\n"
+               "    min_batch_slots: Guarantee beams_per_gpu >= min_batch_slots *\n"
+               "        num_active_batches * beams_per_batch (default=1, which holds anyway).\n"
+               "        The last three are honoured BY CONSTRUCTION. Ask for them rather than\n"
+               "        drawing and retrying: all three correlate with num_primary_trees and\n"
+               "        dtype, so filtering afterwards reshapes the population under test.\n"
                "    gpu_valid: Generate GPU-valid configuration (default=True)\n"
                "    verbose: Print debug info (default=False)\n"
                "    force_float32: Draw only float32 configs (default=False)\n"
