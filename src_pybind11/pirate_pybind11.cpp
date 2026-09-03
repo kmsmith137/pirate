@@ -691,6 +691,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("nchunks"),
                py::arg("nbatches_out") = 0,
                py::arg("nbatches_wt") = 0,
+               py::arg("num_consumers") = 1,
                py::arg("host_only") = false,
                py::call_guard<py::gil_scoped_release>())
           .def("time", &GpuDedisperser::time,

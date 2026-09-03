@@ -236,7 +236,8 @@ struct GpuDedisperser
     // Static member function: do one test run with specified configuration.
     // nbatches_out=0 defaults to nstreams; nbatches_wt=0 defaults to nbatches_out.
     static void test_one(const DedispersionConfig &config, long nchunks,
-                         long nbatches_out=0, long nbatches_wt=0, bool host_only=false);
+                         long nbatches_out=0, long nbatches_wt=0, long num_consumers=1,
+                         bool host_only=false);
 
     // Run timing benchmark (C++ version). Entry point: throws on a stopped
     // (or never-allocated) instance; any throw stops the GpuDedisperser.

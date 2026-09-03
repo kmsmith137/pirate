@@ -1296,7 +1296,7 @@ void GpuDedisperser::_fill_all_weights(long itree, const Array<float> &pf_weight
 
 
 // Static member function.
-void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, long nbatches_out, long nbatches_wt, bool host_only)
+void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, long nbatches_out, long nbatches_wt, long num_consumers, bool host_only)
 {
     cout << "\n" << "GpuDedisperser::test()" << endl;
     config.emit_cpp();
@@ -1310,11 +1310,28 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     long nfreq = config.get_total_nfreq();
     std::mt19937 &rng = ksgpu::default_rng();
 
+    xassert_ge(num_consumers, 0L);
+
     cout << "    nchunks = " << nchunks << ";\n"
          << "    nbatches_out = " << nbatches_out << ";"
          << "       // nstreams = " << nstreams << ", (chunks * batches) = " << (nchunks*nbatches) << "\n"
          << "    nbatches_wt = " << nbatches_wt << ";\n"
+         << "    num_consumers = " << num_consumers << ";\n"
          << "    host_only = " << host_only << ";" << endl;
+
+    // PER-CONSUMER OUTPUT CURSORS, and the schedule they follow is the whole point of drawing
+    // num_consumers > 1. Consumer c lags consumer 0 by c batches, so the cdd2 kernel's
+    // back-pressure wait resolves against the SLOWEST consumer instead of the only one; at
+    // num_consumers == 1 the loop below does exactly what it always did, and at 0 there is no
+    // output-side back-pressure at all (which is what FrbServer builds when it has no
+    // grouper). Consumer 0 stays at the front so the array comparisons still happen at
+    // 'seq_id' with no lookahead.
+    //
+    // EVERY CONSUMER MUST RECEIVE EVERY BATCH, exactly once: the cdd2 event ring is
+    // constructed with (num_consumers + 3) consumers, so an acquire_output() that never
+    // arrives leaves its event pinned forever. Hence the two drains below.
+    vector<long> consumer_cursor(max(num_consumers, 0L), 0);
+    long max_consumer_lag = 0;   // reported below: how far apart the cursors actually got
 
     if (host_only)
          cout << "    !!! Host-only test, GPU code will not be run !!!" << endl;
@@ -1368,7 +1385,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         params.stream_pool = CudaStreamPool::create(nstreams, compute_stream_priority);
         params.nbatches_out = nbatches_out;
         params.nbatches_wt = nbatches_wt;
-        params.num_consumers = 1;
+        params.num_consumers = num_consumers;
         params.cuda_device_id = 0;
         params.initial_chunk = 0;   // test harness: outputs are zero-based
 
@@ -1419,6 +1436,24 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         for (long ibatch = 0; ibatch < nbatches; ibatch++) {
             long seq_id = ichunk * nbatches + ibatch;
             long seq_base = (seq_id / nbatches_out) * nbatches_out;
+
+            // DRAIN THE LAGGING CONSUMERS BEFORE THIS GROUP'S KERNELS ARE QUEUED, not after.
+            // _launch_cdd2() waits on every consumer's release of (seq_id - nbatches_out)
+            // with blocking=true, which blocks the HOST -- so queueing group g requires every
+            // consumer to have released all of group g-1, and a consumer lagging further than
+            // nbatches_out behind the launch cursor would deadlock this loop. That is not a
+            // defensive worry: measured over 4000 draws, nbatches_out is 1 on 20% of configs
+            // and 2 on another 18%, so this drain is load-bearing.
+            if (!host_only && (seq_id == seq_base)) {
+                for (long c = 1; c < num_consumers; c++) {
+                    max_consumer_lag = max(max_consumer_lag, consumer_cursor[0] - consumer_cursor[c]);
+                    while (consumer_cursor[c] < seq_base) {
+                        long q = consumer_cursor[c]++;
+                        gdd->acquire_output(c, q, nullptr, /*sync=*/false, /*noreturn=*/true);
+                        gdd->release_output(c, q, nullptr);
+                    }
+                }
+            }
 
             // Every (nbatches_out) batches, we do a large computation, to simulate
             // dd_in and pf_wt arrays, copy to the GPU, and launch all GPU compute.
@@ -1519,8 +1554,20 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
             rdd2->input_array.fill(dd_in);
             rdd2->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
             
-            if (!host_only)
+            if (!host_only && (num_consumers > 0))
                 gdd->acquire_output(0, seq_id, nullptr, /*sync=*/false, /*noreturn=*/true);
+            else if (!host_only) {
+                // With no consumers there is no acquire_output() to order the host reads
+                // below against the cdd2 kernel. This is the TEST's read ordering, not part
+                // of what num_consumers == 0 exercises.
+                //
+                // The ONE stream that produced this seq_id, not cudaDeviceSynchronize(): a
+                // device-wide sync would also drain the other streams, which is exactly the
+                // overlap the loop above is built to stress (see its "intended to be fast"
+                // comment).
+                CUDA_CALL(cudaStreamSynchronize(
+                    gdd->stream_pool->compute_streams.at(seq_id % nstreams)));
+            }
 
             for (long itree = 0; itree < ntrees; itree++) {
                 const DedispersionTree &tree = plan->trees.at(itree);
@@ -1554,11 +1601,57 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"}, eps, eps);
             }
 
-            if (!host_only)
+            if (!host_only && (num_consumers > 0)) {
                 gdd->release_output(0, seq_id, nullptr);
+                consumer_cursor[0] = seq_id + 1;
+
+                // The lagging consumers: consumer c handles (seq_id - c).
+                for (long c = 1; c < num_consumers; c++) {
+                    long q = seq_id - c;
+                    if ((q >= 0) && (q >= consumer_cursor[c])) {
+                        consumer_cursor[c] = q + 1;
+                        gdd->acquire_output(c, q, nullptr, /*sync=*/false, /*noreturn=*/true);
+                        gdd->release_output(c, q, nullptr);
+                    }
+                }
+            }
         }
     }
-    
+
+    // The tail of the lag: every consumer catches up to the end of the stream.
+    if (!host_only) {
+        long nseq = nchunks * nbatches;
+        for (long c = 1; c < num_consumers; c++) {
+            max_consumer_lag = max(max_consumer_lag, consumer_cursor[0] - consumer_cursor[c]);
+            while (consumer_cursor[c] < nseq) {
+                long q = consumer_cursor[c]++;
+                gdd->acquire_output(c, q, nullptr, /*sync=*/false, /*noreturn=*/true);
+                gdd->release_output(c, q, nullptr);
+            }
+        }
+    }
+
+    // REPORTED, not asserted: it is a property of the draw. A zero here at num_consumers > 1
+    // means the cursors never separated -- which happens legitimately at nbatches_out == 1,
+    // where the output slot is reused immediately and no consumer can fall behind -- and a
+    // zero at EVERY draw would mean the schedule above had stopped doing anything.
+    if (!host_only && (num_consumers > 1))
+        cout << "    max consumer lag = " << max_consumer_lag << " batches" << endl;
+
+    // Both output entry points range-check consumer_id. ONE probe, and it is the last thing
+    // done with this instance: acquire_output() stops the GpuDedisperser on any throw, so
+    // whichever of the two out-of-range values is drawn, nothing usable survives it.
+    if (!host_only) {
+        long bad = ksgpu::rand_bool() ? -1L : num_consumers;
+        bool threw = false;
+        try {
+            gdd->acquire_output(bad, 0, nullptr, /*sync=*/false, /*noreturn=*/true);
+        } catch (const std::exception &e) {
+            threw = (string(e.what()).find("out of range") != string::npos);
+        }
+        xassert_msg(threw, "acquire_output() accepted an out-of-range consumer_id");
+    }
+
     cout << endl;
 }
 
@@ -1607,7 +1700,15 @@ void GpuDedisperser::test_random()
     // GpuDedisperser ctor requires nbatches_wt >= num_active_batches.
     long nbatches_wt = ksgpu::rand_int(min_nbatches_out, 2*nbatches_out);
 
-    GpuDedisperser::test_one(config, nchunks, nbatches_out, nbatches_wt);
+    // num_consumers is DRAWN. Pinned at 1, the per-consumer release cursors, the per-consumer
+    // event rings and _launch_cdd2()'s "wait on ALL N of them" loop all run exactly once, so
+    // "wait for the slowest of several" was never exercised. 0 is reachable in production
+    // (FrbServer builds it when there is no grouper) and means no output-side back-pressure;
+    // 2 and 3 are not reachable in production yet, and are covered here so that the machinery
+    // is not mistaken for tested when a second consumer arrives.
+    long num_consumers = ksgpu::rand_int(0, 4);
+
+    GpuDedisperser::test_one(config, nchunks, nbatches_out, nbatches_wt, num_consumers);
 }
 
 
