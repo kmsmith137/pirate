@@ -46,6 +46,7 @@ from .Hardware import Hardware
 from .Hwtest import Hwtest
 from .HwtestSender import HwtestSender
 from .yaml_utils import indent_dedispersion_plan_comments, align_inline_comments
+from . import utils
 from .utils import atomic_print, print_separator
 
 
@@ -211,7 +212,6 @@ def test(args):
                      ' short-read pattern). Every other test replays in full.')
 
     ksgpu.set_cuda_device(args.gpu)
-    from . import utils   # local import (utils pulls in heavier deps)
 
     t_start = time.time()
 
@@ -928,8 +928,7 @@ def time_command(args):
         
     ksgpu.set_cuda_device(args.gpu)
     nthreads = args.nthreads if (args.nthreads > 0) else os.cpu_count()
-    from . import utils   # local import (utils pulls in heavier deps)
-        
+
     if run_all_timings or args.gldk:
         kernels.GpuLaggedDownsamplingKernel.time_selected()
     if run_all_timings or args.gddk:
@@ -1085,7 +1084,6 @@ def make_subbands(args):
 
 
 def parse_hwtest(subparsers):
-    import argparse, textwrap
     help_text = "Run hardware test from a hwtest YAML config file (use -s to send data instead of receiving)"
     description = textwrap.dedent("""\
         Run hardware test using YAML config file (use -s to send data instead of receiving).
@@ -1595,7 +1593,6 @@ def parse_time_dedisperser(subparsers):
 
 
 def time_dedisperser(args):
-    from . import utils
     from .run_server import compute_async_bump_nthreads
 
     # Pin thread to first CPU (for consistent timing on dual-CPU systems)
@@ -2257,23 +2254,14 @@ def parse_random_kernels(subparsers):
     parser = subparsers.add_parser("random_kernels", help=help_text, description=help_text)
     parser.set_defaults(func=random_kernels)
     parser.add_argument('-n', type=int, default=20, help='Number of random kernels to print (default 20)')
-    parser.add_argument('--pf', action='store_true', help='Print random PeakFinder kernel params')
-    parser.add_argument('--cdd2', action='store_true', help='Print random CoalescedDdKernel2 kernel params')
-    parser.add_argument('--pfwr', action='store_true', help='Print random PfWeightReader kernel params')
+    kind = parser.add_mutually_exclusive_group(required=True)
+    kind.add_argument('--pf', action='store_true', help='Print random PeakFinder kernel params')
+    kind.add_argument('--cdd2', action='store_true', help='Print random CoalescedDdKernel2 kernel params')
+    kind.add_argument('--pfwr', action='store_true', help='Print random PfWeightReader kernel params')
 
 
 def random_kernels(args):
     import numpy
-    
-    flags = [ 'pf', 'cdd2', 'pfwr' ]
-    nflags = sum(1 if getattr(args, x) else 0 for x in flags)
-    
-    if nflags != 1:
-        atomic_print("Error: precisely one of --pf, --cdd2, --pfwr must be specified", fd=2)
-        atomic_print("  --pf     Print random PeakFinder kernel params", fd=2)
-        atomic_print("  --cdd2   Print random CoalescedDdKernel2 kernel params", fd=2)
-        atomic_print("  --pfwr   Print random PfWeightReader kernel params", fd=2)
-        sys.exit(2)
 
     randi = lambda *a: int(numpy.random.randint(*a))
 
