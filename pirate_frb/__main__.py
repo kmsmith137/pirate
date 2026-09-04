@@ -1561,10 +1561,22 @@ def parse_coverage(subparsers):
     help_text = "Coverage analysis of randomization utils in unit tests"
     parser = subparsers.add_parser("coverage", help=help_text, description=help_text)
     parser.set_defaults(func=coverage)
+    parser.add_argument('--config', action='store_true',
+                        help='DedispersionConfig::make_random(), at each setting its callers use')
+    parser.add_argument('--reg', action='store_true',
+                        help='Kernel registry marginals (what this build compiled, not a draw)')
+    parser.add_argument('--varmap', action='store_true',
+                        help='varmap draws: _random_config(), the LP cell, the sweep loops')
+    parser.add_argument('--dt', action='store_true',
+                        help='Detrending draws: random_knots(), random_nfreq(), the 2-d masks')
+    parser.add_argument('-s', '--scale', type=float, default=1.0, metavar='X',
+                        help='Multiply every draw count by X (default 1). Scale up when a rate'
+                             ' is near a band edge and you want to know whether it moved.')
 
 
 def coverage(args):
-    tests.report_coverage()
+    flags = [f for f in ('config', 'reg', 'varmap', 'dt') if getattr(args, f)]
+    tests.report_coverage(select=flags, scale=args.scale)
 
 
 ###################################   time_dedisperser command  ###################################

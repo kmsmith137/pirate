@@ -4860,7 +4860,8 @@ GPU_VS_CPU_WORK_BUDGET = 1.5e8
 def _draw_gpu_vs_cpu_case(max_attempts=500, nbeams=None, detrender=None, rng=None):
     """A random (config, detrender, nbeams) for test_sweep_gpu_vs_cpu(), under the cost cap.
 
-    Returns (config, dparams, nbeams). THE THREE AXES ARE DRAWN SEPARATELY BECAUSE ONLY ONE OF THEM IS A CONFIG PROPERTY.
+    Returns (config, dparams, nbeams, nattempts). THE THREE AXES ARE DRAWN SEPARATELY,
+    BECAUSE ONLY ONE OF THEM IS A CONFIG PROPERTY.
     'nbeams' and the detrender are arguments this test supplies -- a random config has
     nothing to say about either -- and both matter: the lds kernel uses one beam stride for
     input and output, so a stride error cannot show at nbeams == 1, and the detrender is what
@@ -4897,14 +4898,17 @@ def _draw_gpu_vs_cpu_case(max_attempts=500, nbeams=None, detrender=None, rng=Non
         config.validate()
         return True
 
-    config, dparams, _n = _draw_sweep_case(
+    config, dparams, nattempt = _draw_sweep_case(
         rng,
         lambda r: DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=2,
                                                  force_float32=True, no_host_mega_ringbuf=True),
         lambda geom, cfg: _sweep_work(geom), GPU_VS_CPU_WORK_BUDGET,
         detrender=detrender, accept=_accept, max_attempts=max_attempts,
         label='_draw_gpu_vs_cpu_case')
-    return config, dparams, nb
+
+    # 'nattempt' is returned, not discarded, so that 'pirate_frb dev coverage' can report this
+    # loop's acceptance rate. _draw_restriction_config() returns it for the same reason.
+    return config, dparams, nb, nattempt
 
 
 def test_sweep_gpu_vs_cpu_random(verbose=True, nbeams=None, detrender=None):
@@ -4919,7 +4923,7 @@ def test_sweep_gpu_vs_cpu_random(verbose=True, nbeams=None, detrender=None):
     (run_once()).
     """
 
-    config, dparams, nbeams = _draw_gpu_vs_cpu_case(nbeams=nbeams, detrender=detrender)
+    config, dparams, nbeams, _n = _draw_gpu_vs_cpu_case(nbeams=nbeams, detrender=detrender)
     test_sweep_gpu_vs_cpu(config=config, detrender=dparams, nbeams=nbeams, verbose=verbose)
 
 
