@@ -2476,7 +2476,7 @@ def run_toy_grouper_command(args):
     from .utils import run_processes
     # Re-pass exactly one of the (mutually-exclusive, required) sifter flags.
     sifter_flag = ['--sifter', args.sifter] if (args.sifter is not None) else ['--no-sifter']
-    base = [sys.executable, '-m', 'pirate_frb', 'run_toy_grouper', *sifter_flag,
+    base = [sys.executable, '-m', 'pirate_frb', 'run', 'toy_grouper', *sifter_flag,
             '--delay', str(args.delay), '--snr-threshold', str(args.snr_threshold)]
     # Each child gets a distinct histogram stem (STEM1, STEM2, ...), so the
     # '<stem>.pkl' output filenames don't collide.
