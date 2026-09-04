@@ -46,6 +46,10 @@
 #   "ALL READY"       every process launched and ready
 #   "STARTUP FAILED"  a marker timed out, or an error appeared in some log
 #
+# On a startup failure, every process this script already launched is torn down
+# (SIGINT, then SIGKILL for anything still alive after 30 s) before it exits, so
+# a retry is not blocked by an orphan still holding a port or the hugepage pool.
+#
 # Exit status: 0 if the pipeline came up and later exited; 1 on startup
 # failure; 2 on usage error.
 
@@ -115,6 +119,51 @@ if [ ${#names[@]} -eq 0 ]; then
     exit 2
 fi
 
+# Processes this script has started, in launch order.
+launched_pids=()
+launched_names=()
+
+# Tear down everything launched so far. Called when a startup fails partway
+# through: the processes already up are still holding their ports -- and, for a
+# production server, the entire hugepage pool and both GPUs -- so leaving them
+# behind makes the NEXT attempt fail with an address-in-use (or an out-of-memory)
+# that looks unrelated to the actual failure.
+#
+# SIGINT rather than SIGKILL, so each process runs its normal shutdown path; the
+# shim above is what makes that work on a backgrounded job. A process that has
+# exited but not been reaped stays visible in /proc as a zombie and still answers
+# kill(pid, 0), so 'Z' in /proc/PID/stat counts as gone.
+cleanup_launched() {
+    [ ${#launched_pids[@]} -gt 0 ] || return 0
+    sup "cleaning up ${#launched_pids[@]} launched process(es)"
+
+    local i pid state alive tick
+
+    for pid in "${launched_pids[@]}"; do
+        kill -INT "$pid" 2>/dev/null
+    done
+
+    # Up to 30 s: a production server spends ~25 s releasing hugepages and GPU memory.
+    for tick in $(seq 1 60); do
+        alive=0
+        for pid in "${launched_pids[@]}"; do
+            state=$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null)
+            [ -n "$state" ] && [ "$state" != "Z" ] && alive=$((alive + 1))
+        done
+        [ "$alive" -eq 0 ] && break
+        sleep 0.5
+    done
+
+    for i in "${!launched_pids[@]}"; do
+        pid=${launched_pids[$i]}
+        state=$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null)
+        if [ -n "$state" ] && [ "$state" != "Z" ]; then
+            sup "  ${launched_names[$i]} (pid $pid) ignored SIGINT; sending SIGKILL"
+            kill -KILL "$pid" 2>/dev/null
+        fi
+    done
+}
+
 # Poll $LOG/name.log until the marker has appeared $need times. Returns 1 on
 # timeout, or as soon as any log shows an error.
 waitmark() {
@@ -149,9 +198,14 @@ for i in "${!names[@]}"; do
 
     python3 -c "$SHIM_PY" "${argv[@]}" > "$LOG/$name.log" 2>&1 &
     echo $! > "$LOG/$name.pid"
+    launched_pids+=("$!")
+    launched_names+=("$name")
     sup "launched $name pid=$! : ${cmds[$i]}"
 
-    waitmark "$name" "${markers[$i]}" "${counts[$i]}" "${timeouts[$i]}" || exit 1
+    if ! waitmark "$name" "${markers[$i]}" "${counts[$i]}" "${timeouts[$i]}"; then
+        cleanup_launched
+        exit 1
+    fi
 
     # Settle: the marker means "listening", but the process may still be
     # finishing setup its peer will immediately exercise.
