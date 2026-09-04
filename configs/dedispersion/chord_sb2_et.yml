@@ -51,6 +51,17 @@ num_active_batches: 2
 #   W1 = W2        => max_width is the same in "post-downsampled" time samples
 #   W1 = 2*W2      => max_width is the same in "pre-downsampled" time samples
 #   anything else  => presumably unintentional, so an exception is raised.
+#
+# The 'wt_dm_downsampling' and 'wt_time_downsampling' params are used internally,
+# for the weights array used to normalize dedispersion SNR. These members each
+# satisfy the same (W1,W2) constraint as above (for similar reasons).
+#
+# The 'num_early_triggers' param is the number of early-triggered trees (for
+# each primary tree). If E1, E2 are the num_early_triggers params in consecutive
+# primary trees, then:
+#   E2 = E1        => number of early triggers is the same
+#   E2 = E1+1      => triggering latency is the same
+#   anything else  => presumably unintentional, so an exception is raised.
 
 toplevel_tree_rank: 16
 

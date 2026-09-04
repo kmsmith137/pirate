@@ -873,15 +873,30 @@ def test_admissibility():
         # times 1e-3.
         #
         # The upper bound is RELATIVE to D_planted, not an absolute offset. Inflation scales
-        # the whole map by 'inflation', and D is a mean of per-row ratios, so the gap it opens
-        # is proportional to D itself; an absolute "+2*(max_r-1)" only held while the drawn
-        # entries spanned one decade and D stayed near 1. The factor of 2 is the slack: the
-        # exact statement would be D_inflated = inflation * D_planted, and the point being
-        # made is that a max_r near 1 bounds the movement, not that it predicts it.
+        # the whole map by 'inflation', so the gap it opens is proportional to D itself; an
+        # absolute "+k*(max_r-1)" only held while the drawn entries spanned one decade and D
+        # stayed near 1.
+        #
+        # THE CONSTANT IS EMPIRICAL, NOT A THEOREM, and D_inflated is NOT inflation*D_planted.
+        # D is a mean of f(y_approx/y_true) with f(x) = (x-1)/(1 + x/10), and inflating by r
+        # sends x -> r*x, so the per-row ratio is
+        #
+        #     f(r*x)/f(x) = (r*x - 1)(1 + x/10) / [(x - 1)(1 + r*x/10)],
+        #
+        # which DIVERGES as x -> 1+. A draw whose D is carried by rows close to x = 1 can
+        # therefore move by much more than r. Measured over 700 draws, the smallest constant k
+        # for which D_inflated <= D_planted*(1 + k*(max_r-1)) held was 2.23, so k = 2 failed on
+        # about 0.6% of draws (which is a flake once every ~150 iterations of 'test --varmap').
+        # k = 4 leaves most of a factor of two above the worst draw seen. Raise it, or derive
+        # the bound from f, if this ever fires again -- do not read a failure here as a bug in
+        # measure_admissibility() without first checking the per-row x distribution.
+        #
+        # The point being made is that a max_r near 1 bounds the movement, not that it
+        # predicts it.
         D_planted = planted.replace(is_admissible=True,
                                     history_record=dict(step='test')).get_distance()
         assert res.D_inflated >= D_planted - 1.0e-12, (res.D_inflated, D_planted)
-        assert res.D_inflated <= D_planted * (1.0 + 2.0*(res.max_r - 1.0)) + 1.0e-12, \
+        assert res.D_inflated <= D_planted * (1.0 + 4.0*(res.max_r - 1.0)) + 1.0e-12, \
             (res.D_inflated, D_planted, res.max_r)
 
     # An ALREADY-admissible map is not touched: the factor is exactly 1 and D is unchanged.

@@ -189,7 +189,7 @@ def _plan(config):
 #
 #   npri > 1              The multi-tree paths. test_asdf_io's duplicate-gamma tripwire and
 #                         its "covers EVERY primary tree" rejection, test_multimap's
-#                         short-list rejection, test_max_width_monotone's chains.
+#                         short-list rejection, test_primary_tree_chains' four chains.
 #   max_width varies      Makes the profile restriction P_gamma < P_0 something other than a
 #                         no-op (test_multimap_vs_base, test_varfine). On the gpu_valid path
 #                         it needs the cdd2 registry to stock two Wmax for the DOWNSAMPLED
@@ -226,6 +226,9 @@ def _plan(config):
 _DEFAULT_BANDS = {
     'npri':    (20, 90),
     'maxw':    (5, 70),
+    'wdds':    (5, 70),
+    'wtds':    (2, 70),
+    'nets':    (2, 70),
     'early':   (5, 80),
     'r0':      (0, 70),
     'wide':    (5, 80),
@@ -243,7 +246,15 @@ def _draw_config_rows(rep, configs, consumer, bands=None):
 
     npri, ranks, wtds, mw, pfr = [], [], [], [], []
     n_vary = n_early = n_r0 = n_wide = n_multi = n_f32 = n_K = 0
+    n_vary_wdds = n_vary_wtds = n_vary_nets = 0
     mib, sbc = [], set()
+
+    def _steps(pts, attr):
+        """True if the per-primary-tree chain of 'attr' is not flat. validate() constrains each
+        of the four chains to a single step size, so "does it vary" is the same question as
+        "does this chain ever take its step" -- and a flat chain is the degenerate case, the one
+        a consumer of per-tree variation sees nothing from."""
+        return len(set(int(getattr(pt, attr)) for pt in pts)) > 1
 
     for c in configs:
         pts = c.primary_trees
@@ -251,7 +262,10 @@ def _draw_config_rows(rep, configs, consumer, bands=None):
         ranks.append(int(c.toplevel_tree_rank))
         wtds.extend(int(pt.wt_time_downsampling) for pt in pts)
         mw.extend(int(pt.max_width) for pt in pts)
-        n_vary += int(len(set(int(pt.max_width) for pt in pts)) > 1)
+        n_vary += int(_steps(pts, 'max_width'))
+        n_vary_wdds += int(_steps(pts, 'wt_dm_downsampling'))
+        n_vary_wtds += int(_steps(pts, 'wt_time_downsampling'))
+        n_vary_nets += int(_steps(pts, 'num_early_triggers'))
         n_early += int(max(int(pt.num_early_triggers) for pt in pts) > 0)
         n_f32 += int(np.dtype(c.dtype) == np.float32)
         sbc.add(tuple(int(x) for x in c.frequency_subband_counts))
@@ -275,6 +289,9 @@ def _draw_config_rows(rep, configs, consumer, bands=None):
 
     rep.rate('npri > 1', sum(1 for x in npri if x > 1), n, b['npri'], consumer)
     rep.rate('max_width varies across primary trees', n_vary, n, b['maxw'], consumer)
+    rep.rate('wt_dm_downsampling varies across primary trees', n_vary_wdds, n, b['wdds'], consumer)
+    rep.rate('wt_time_downsampling varies across primary trees', n_vary_wtds, n, b['wtds'], consumer)
+    rep.rate('num_early_triggers varies across primary trees', n_vary_nets, n, b['nets'], consumer)
     rep.rate('some primary tree has early triggers', n_early, n, b['early'], consumer)
     rep.rate('R == 0 (N = M = 1)', n_r0, n, b['r0'], consumer)
     rep.rate('nfreq < 2^r (wide footprints)', n_wide, n, b['wide'], consumer)
@@ -305,7 +322,8 @@ _SETTING_NOTES = {
         'rank at 5 or 6 against a stage-1 dd_rank of 3, leaving no room for one. The loopback',
         'tests do not need one -- they check assembly and transport, not the tree -- but it',
         'does mean test --net and test --serv never carry an early-trigger tree, and neither',
-        'does anything downstream of them.',
+        'does anything downstream of them. The zero on the num_early_triggers chain row is',
+        'the same fact seen from the other side: a chain pinned at 0 cannot step.',
     ],
 }
 
@@ -323,7 +341,7 @@ _MAKE_RANDOM_SETTINGS = [
      dict(max_toplevel_rank=6, tspc_multiple=256, max_beams_per_gpu=8),
      'test --net, test --serv (tests/utils.py:make_random_subscale_config)',
      'test --net, --serv',
-     dict(early=(0, 80))),
+     dict(early=(0, 80), nets=(0, 70))),
     ('max_toplevel_rank drawn in 6..10', None, None,
      'test --amax (test_decode_argmax._make_random_config)', 'test --amax',
      dict()),

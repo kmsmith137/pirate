@@ -238,6 +238,19 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "brute-force variance-map sweep (pirate_frb.varmap.brute_force).\n\n"
                "Returns:\n"
                "    Randomly generated DedispersionConfig")
+          .def_static("make_mini_chord", &DedispersionConfig::make_mini_chord,
+               py::arg("dtype"),
+               "A fixed, production-shaped config: toplevel_tree_rank=16, four primary\n"
+               "trees, 28160 frequency channels, no early triggers or subbands. Modelled\n"
+               "on configs/dedispersion/chord_sb0.yml, with the beam counts cut so that\n"
+               "the MegaRingbuf fits on one L40S.\n\n"
+               "Unlike the files in configs/, this one IS packaged with pirate_frb, so a\n"
+               "test that needs a valid production-scale config (rather than a random one)\n"
+               "can rely on it.\n\n"
+               "Args:\n"
+               "    dtype: float32 or float16\n\n"
+               "Returns:\n"
+               "    DedispersionConfig")
           .def("to_yaml_string", &DedispersionConfig::to_yaml_string,
                py::arg("verbose") = false,
                "Convert configuration to YAML string.\n\n"

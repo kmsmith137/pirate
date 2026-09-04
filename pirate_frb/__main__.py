@@ -323,7 +323,7 @@ def test(args):
         if run_all_tests or args.dd:
             if i == 0:
                 # Catches errors in DedispersionConfig::make_random() or validate().
-                tests.test_max_width_monotone()
+                tests.test_primary_tree_chains()
 
             # BOTH OF THESE ARE RANDOMIZED, so they run every iteration rather than once:
             # pinned to i == 0, a 1000-iteration overnight run saw exactly the same draws as

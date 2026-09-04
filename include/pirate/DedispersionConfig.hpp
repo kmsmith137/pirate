@@ -61,6 +61,19 @@ struct DedispersionConfig
     // The remaining members configure peak-finding, and must be powers of two:
     //   max_width: max width of peak-finding kernel, in "tree" time samples
     //   wt_{dm,time}_downsampling: downsampling factors of weights array, relative to tree.
+    //
+    // FOUR OF THE FIVE MEMBERS ARE CHAINED ACROSS PRIMARY TREES, so they cannot be chosen
+    // independently per tree (validate() rejects any other relation, with an explanation):
+    //
+    //   max_width, wt_dm_downsampling, wt_time_downsampling
+    //       each EQUALS its predecessor's, or is HALF of it
+    //   num_early_triggers
+    //       EQUALS its predecessor's, or is ONE MORE
+    //
+    // All four are quantities in a primary tree's OWN (2^i-downsampled) units, so in each case
+    // the two legal steps are the two deliberate ways to scale the underlying physical
+    // quantity, and anything else is a mis-transcribed config. See configs/dedispersion/
+    // chord_sb2_et.yml for the config-file-level statement of the same rules.
 
     struct PrimaryTree
     {
@@ -74,7 +87,7 @@ struct DedispersionConfig
         // Both must be >= DedispersionTree::{dm,time}_downsampling of every tree in this
         // family, i.e. >= pow2(dd_rank1) of its early_trigger_level=0 tree. Checked in
         // validate(), and again in the DedispersionPlan constructor where the tree's own
-        // values are known.
+        // values are known. Both are also chained across primary trees (see above).
         long wt_dm_downsampling = 0;    // required
         long wt_time_downsampling = 0;  // required
     };
