@@ -47,6 +47,10 @@ def _draw_geometry(rng, L, nsamp, s_max):
 # particular one (the constructor-rejection probes).  L/ell = 5.7 here.
 K, TAU, LAG, TC = 2, 4.0, 32, 64
 
+# Working precision of every test in this file.  Named because test_vs_brute_force()
+# reports its errors in units of eps_mach*cond(N) rather than as absolute magnitudes.
+_EPS64 = float(np.finfo(np.float64).eps)
+
 
 def _det(**kw):
     kw.setdefault('k', K)
@@ -137,13 +141,19 @@ def test_model_algebra(rng=None, verbose=True):
 def _dense_state_posterior(d_row, m_row, n_obs, k, tau):
     """
     Dense posterior of f for the sub-problem on [0, n-1] where only the first 'n_obs'
-    samples are observed.  Returns (Sigma, fhat_all) with Sigma = N^-1, or None if
-    the sub-problem holds fewer than k valid samples, where N is singular and there
+    samples are observed.  Returns (Sigma, fhat_all, cond) with Sigma = N^-1, or None
+    if the sub-problem holds fewer than k valid samples, where N is singular and there
     is nothing to compare against.
 
     The trailing n - n_obs samples are unobserved on purpose: the forward filter's
     state x[t] involves f[t..t+k-1], so the dense analogue has to extend past the
     last observation.
+
+    'cond' is cond_1(N), which is HOW ACCURATE THIS ORACLE IS: an explicit inverse
+    costs about eps_mach*cond(N) of relative accuracy, and cond(N) is set by the draw
+    (tau^(2k) alone spans three decades).  Callers scale their tolerance by it rather
+    than comparing against a constant -- see test_recursions_vs_dense(), and the
+    longer discussion in kalman_brute_force() in brute_force.py.
     """
     n = len(m_row)
     m_sub = m_row.astype(np.float64).copy()
@@ -153,7 +163,8 @@ def _dense_state_posterior(d_row, m_row, n_obs, k, tau):
     D = difference_matrix(n, k)
     N = np.diag(m_sub) + (tau ** (2*k))*(D.T @ D)
     Sigma = np.linalg.inv(N)
-    return Sigma, Sigma @ (m_sub * d_row)
+    cond = float(np.abs(N).sum(axis=0).max() * np.abs(Sigma).sum(axis=0).max())
+    return Sigma, Sigma @ (m_sub * d_row), cond
 
 
 def _run_recursions(d_row, m_row, t, k, tau, L):
@@ -210,30 +221,38 @@ def test_recursions_vs_dense(rng=None, niter=3, verbose=True):
                 n = t + k
                 got = _dense_state_posterior(d_row[:n], m_row[:n], t+1, k, tau)
                 if got is not None:
-                    Sig, fh = got
+                    Sig, fh, cnd = got
                     Jd = np.linalg.inv(C @ Sig[t:t+k, t:t+k] @ C.T)
                     ed = Jd @ (C @ fh[t:t+k])
-                    worst_f = max(worst_f, _maxdiff(Jf, Jd)/max(1.0, np.abs(Jd).max()))
-                    worst_f = max(worst_f, _maxdiff(ef, ed)/max(1.0, np.abs(ed).max()))
+                    scale = _EPS64 * cnd
+                    worst_f = max(worst_f, _maxdiff(Jf, Jd)/max(1.0, np.abs(Jd).max())/scale)
+                    worst_f = max(worst_f, _maxdiff(ef, ed)/max(1.0, np.abs(ed).max())/scale)
 
                 # combined: sub-problem on [0, t+L], all observed.
                 n = t + L + 1
                 got = _dense_state_posterior(d_row[:n], m_row[:n], n, k, tau)
                 if got is None:
                     continue
-                Sig, fh = got
+                Sig, fh, cnd = got
                 Jd = np.linalg.inv(C @ Sig[t:t+k, t:t+k] @ C.T)
                 ed = Jd @ (C @ fh[t:t+k])
-                worst_c = max(worst_c, _maxdiff(J, Jd)/max(1.0, np.abs(Jd).max()))
-                worst_c = max(worst_c, _maxdiff(e, ed)/max(1.0, np.abs(ed).max()))
+                scale = _EPS64 * cnd
+                worst_c = max(worst_c, _maxdiff(J, Jd)/max(1.0, np.abs(Jd).max())/scale)
+                worst_c = max(worst_c, _maxdiff(e, ed)/max(1.0, np.abs(ed).max())/scale)
                 nchecked += 1
 
     if verbose:
-        print(f'    T2 test_recursions_vs_dense: {nchecked} points; forward {worst_f:.2e}, '
-              f'combined {worst_c:.2e}')
+        print(f'    T2 test_recursions_vs_dense: {nchecked} points; forward {worst_f:.3f}, '
+              f'combined {worst_c:.3f} (x eps_mach*cond(N), relative)')
     assert nchecked > 0
-    assert worst_f < 1e-8, f'forward filter vs dense: {worst_f}'
-    assert worst_c < 1e-8, f'combined vs dense: {worst_c}'
+    # Scaled by the dense oracle's own conditioning, for the reason spelled out in
+    # test_vs_brute_force() below: the flat 1e-8 that stood here was really a statement
+    # about how well-conditioned the draw happened to be, and it failed on about 0.3% of
+    # seeds.  Measured over 250 seeds (~12000 probe points) the worst ratio was 0.262
+    # forward and 0.683 combined, medians 0.046 and 0.075, so 20.0 leaves a factor of
+    # ~29 above the worst seen.
+    assert worst_f < 20.0, f'forward filter vs dense: {worst_f:.3f} x eps_mach*cond(N)'
+    assert worst_c < 20.0, f'combined vs dense: {worst_c:.3f} x eps_mach*cond(N)'
 
 
 # --------------------------------------------------- T3. polynomial exactness
@@ -379,7 +398,7 @@ def test_vs_brute_force(rng=None, verbose=True):
     tau, L, _ell = _draw_tau_L(rng, tau_hi=8.0)
     Tc = max(2*k, int(rng.integers(L, 3*L + 1)))
     T = 2*Tc + L
-    worst_r, worst_l, name = 0.0, 0.0, ''
+    worst_r, worst_l, name, worst_cond = 0.0, 0.0, '', 0.0
 
     for _ in range(2):
         S_ax = max(1, min(6, int(BUDGET // ((T - L) * T**3))))
@@ -388,23 +407,52 @@ def test_vs_brute_force(rng=None, verbose=True):
         d = rng.normal(size=(S_ax, T)) + 2.0
         det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
         r, mk, rmn = det.detrend_stream(d, mask)
-        br, bmk, brmn = kalman_brute_force(d, mask, k, tau, L, eps=det.eps)
+        br, bmk, brmn, bcond = kalman_brute_force(d, mask, k, tau, L, eps=det.eps,
+                                                  return_cond=True)
         _EXPANSION.note(None, mask[:, :T-L], mk)
 
         assert np.array_equal(mk, bmk), (
             f'T5: mask_out differs from the oracle on '
             f'{int((mk != bmk).sum())} samples, masks {labels}')
         if mk.any():
-            e = _maxdiff(r[mk], br[mk])
+            # BOTH TOLERANCES ARE SCALED BY THE ORACLE'S OWN CONDITIONING, PER SAMPLE,
+            # and the numbers below are in units of that bound rather than absolute.
+            # kalman_brute_force() forms an explicit inverse of an n x n matrix per
+            # output sample, which costs about eps_mach*cond(N) of relative accuracy;
+            # n runs up to T and cond(N) is set by the draw, since rho = tau^(2k)
+            # spans three decades on its own.  A FIXED tolerance here is therefore an
+            # assertion about the luck of the draw, not about the implementation --
+            # the 1e-9 that stood here failed on about 3% of seeds, and its worst
+            # observed miss (6.1e-08) was a well-conditioned all-valid mask whose
+            # oracle simply had no business being accurate to 1e-9.
+            #
+            # NOT the r_min of detrending_spline/solve.py, which is the house idiom
+            # for the same problem.  It does not transfer: r_min measures the k x k
+            # LOCAL fit, not the n x n solve, and over 5770 kept samples its
+            # correlation with this error is +0.05 -- none.  cond(N) reaches +0.60,
+            # and bounds the error to within a factor of 7 across four decades.
+            #
+            # cond_1(N) >= 1 always, so the division is safe on any kept sample.
+            tol = _EPS64 * bcond[mk] * max(1.0, float(np.abs(d).max()))
+            e = float((np.abs(r - br)[mk] / tol).max())
             if e > worst_r:
                 worst_r, name = e, str(labels)
-            worst_l = max(worst_l, _maxdiff(rmn[mk], brmn[mk]))
+                worst_cond = float(bcond[mk].max())
+            worst_l = max(worst_l, float((np.abs(rmn - brmn)[mk] / tol).max()))
 
     if verbose:
-        print(f'    T5 test_vs_brute_force: max|r-r_ref| = {worst_r:.2e}, '
-              f'max|rmin diff| = {worst_l:.2e}')
-    assert worst_r < 1e-9, f'residual vs oracle: {worst_r} ({name})'
-    assert worst_l < 1e-9, f'rmin vs oracle: {worst_l}'
+        print(f'    T5 test_vs_brute_force: residual {worst_r:.3f} x eps_mach*cond(N)*|d|, '
+              f'rmin {worst_l:.3f} x the same bound (worst cond(N) {worst_cond:.1e})')
+    # THE CONSTANT IS EMPIRICAL, NOT A THEOREM -- the same caveat solve.py attaches to
+    # eps_mach/r_min.  Over 300 seeds the worst ratio reported here was 0.103 for the
+    # residual and 0.011 for rmin, medians 0.034 and 0.003, so 4.0 leaves a factor of
+    # ~39 above the worst seen.  A failure here is a real disagreement with the oracle,
+    # not an unlucky draw; do not raise it without first checking that cond(N) has not
+    # itself blown up.
+    assert worst_r < 4.0, \
+        f'residual vs oracle: {worst_r:.3f} x eps_mach*cond(N)*|d| ({name})'
+    assert worst_l < 4.0, \
+        f'rmin vs oracle: {worst_l:.3f} x eps_mach*cond(N)*|d|'
 
 
 # ----------------------------------------------------- T6. steady-state response

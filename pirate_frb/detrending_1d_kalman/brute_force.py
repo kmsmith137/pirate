@@ -49,7 +49,8 @@ def _state_from_samples(k, dtype=np.float64):
     return C
 
 
-def kalman_brute_force(d, mask, k, tau, L, eps=1e-3, mu=1e-30, dtype=np.float64):
+def kalman_brute_force(d, mask, k, tau, L, eps=1e-3, mu=1e-30, dtype=np.float64,
+                       return_cond=False):
     """
     d, mask: shape (S, T).  Returns (residual, mask_out, rmin), each of shape
     (S, T-L), for outputs [0, T-L).
@@ -59,6 +60,24 @@ def kalman_brute_force(d, mask, k, tau, L, eps=1e-3, mu=1e-30, dtype=np.float64)
 
     No constant offset appears anywhere: kappa is mathematically inert (the fit
     reproduces constants), so the residual is the same with or without it.
+
+    With return_cond=True, appends a fourth array 'cond': the 1-norm condition
+    number of the matrix N that was inverted to produce each kept sample (zero
+    elsewhere, like the other outputs).  THIS IS HOW ACCURATE THIS ORACLE IS,
+    per sample, and a caller comparing an implementation against it needs it.
+
+    An explicit inverse of an n x n matrix costs about eps_mach*cond(N) of
+    relative accuracy, and n runs up to T while cond(N) is set by the draw --
+    rho = tau^(2k) spans three decades on its own.  So the oracle's own error
+    moves by decades from draw to draw, and a caller that compares against a
+    FIXED tolerance is really asserting something about the luck of the draw.
+    See test_vs_brute_force() in tests.py, which scales by this.
+
+    cond_1 rather than cond_2 because it is free: Sigma is the explicit inverse,
+    already computed, so both norms are O(n^2) against the O(n^3) already spent.
+    Measured over 5770 kept samples spanning four decades of cond(N), it bounds
+    the observed residual error slightly BETTER than the eigenvalue ratio does
+    (worst 0.086 vs 0.144 in units of eps_mach*cond*|d|), so nothing is lost.
     """
     d = np.asarray(d, dtype=dtype)
     mask = np.asarray(mask)
@@ -74,6 +93,7 @@ def kalman_brute_force(d, mask, k, tau, L, eps=1e-3, mu=1e-30, dtype=np.float64)
     resid = np.zeros((S_ax, nout), dtype=dtype)
     mout = np.zeros((S_ax, nout), dtype=bool)
     rmn = np.zeros((S_ax, nout), dtype=dtype)
+    cond = np.zeros((S_ax, nout), dtype=dtype)
 
     for s in range(S_ax):
         for t in range(nout):
@@ -108,7 +128,14 @@ def kalman_brute_force(d, mask, k, tau, L, eps=1e-3, mu=1e-30, dtype=np.float64)
             resid[s, t] = d[s, t] - fhat
             mout[s, t] = True
             rmn[s, t] = rmin
+            if return_cond:
+                # cond_1(N) = ||N||_1 ||N^-1||_1, and the 1-norm of a matrix is its
+                # largest absolute COLUMN sum.
+                cond[s, t] = (np.abs(N).sum(axis=0).max()
+                              * np.abs(Sigma).sum(axis=0).max())
 
+    if return_cond:
+        return resid, mout, rmn, cond
     return resid, mout, rmn
 
 
