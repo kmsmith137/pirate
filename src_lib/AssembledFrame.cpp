@@ -120,10 +120,11 @@ static long _read_int(const shared_ptr<ASDF::group> &grp, const string &key)
 }
 
 
-// Accept either a float YAML scalar or an int YAML scalar: yaml-cpp's emitter
-// strips the trailing ".0" from whole-number doubles, so a double like 400.0
-// round-trips through ASDF as the int_entry `400`. Every int64 is exactly
-// representable as a double, so the widening is lossless.
+// Accept either a float YAML scalar or an int YAML scalar. A whole-valued
+// double can reach us spelled as a bare int (`400` rather than `400.0`):
+// hand-written YAML does it, and so does any writer that lets yaml-cpp strip
+// the trailing ".0". Every int64 is exactly representable as a double, so the
+// widening is lossless.
 static double _read_float(const shared_ptr<ASDF::group> &grp, const string &key)
 {
     auto e = grp->at(key);
@@ -499,9 +500,14 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync, bool ver
             throw runtime_error("AssembledFrame::write_asdf(): couldn't open " + filename
                                 + " for writing: " + string(strerror(errno)));
 
-        ASDF::writer w(os, map<string, string>());
+        // asdf-cxx 8.0.0 takes the ASDF standard version here, and every core tag
+        // (including the ndarray tag) follows from it. 1.6.0 is the earliest version
+        // whose core/ndarray schema allows float16, which 'scales_offsets' below is;
+        // declaring anything older makes the file fail python-asdf's schema validation.
+        ASDF::writer w(os, map<string, string>(),
+                       ASDF::standard_info(ASDF::version_t(1,6,0)));
 
-        w << YAML::LocalTag("core/asdf-1.1.0");
+        w << YAML::LocalTag(w.standard().asdf_tag);
         w << YAML::Indent(4);    // 4-space (not yaml-cpp default 2-space) indent throughout
         w << YAML::BeginMap;
 

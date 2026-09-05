@@ -280,17 +280,21 @@ PIRATE_PYEXT := pirate_frb/pirate_pybind11$(PYEXT_SUFFIX)
 # Note: .cpp files are pure C++ (or C++ using only CUDA runtime API), compiled by nvcc forwarding to host compiler.
 # Note: .cu files contain actual CUDA kernels (__global__ functions) and must be compiled by nvcc's CUDA frontend.
 
-# asdf-cxx source files (Erik Schnetter's ASDF library, compiled directly into libpirate.so)
-ASDF_CXX_SRCFILES = \
-  asdf-cxx/src/asdf.cxx \
-  asdf-cxx/src/byteorder.cxx \
-  asdf-cxx/src/config.cxx \
-  asdf-cxx/src/datatype.cxx \
-  asdf-cxx/src/entry.cxx \
-  asdf-cxx/src/io.cxx \
-  asdf-cxx/src/ndarray.cxx \
-  asdf-cxx/src/reference.cxx \
-  asdf-cxx/src/table.cxx
+# asdf-cxx source files (Erik Schnetter's ASDF library, compiled directly into libpirate.so).
+# Wildcarded rather than listed: upstream's CMakeLists builds exactly src/*.cxx, and the set
+# changes between releases (8.0.0 dropped table.cxx and added error.cxx and version.cxx).
+ASDF_CXX_SRCFILES := $(wildcard asdf-cxx/src/*.cxx)
+
+# A wildcard over an uninitialized submodule expands to nothing, which would otherwise
+# build a libpirate.so that links but is missing every ASDF symbol. Fail here instead.
+ifneq ($(MAKECMDGOALS),help)
+ifneq ($(MAKECMDGOALS),clean)
+  ifeq ($(ASDF_CXX_SRCFILES),)
+    $(error no asdf-cxx/src/*.cxx: the asdf-cxx submodule is not initialized. \
+            Run 'git submodule update --init asdf-cxx')
+  endif
+endif
+endif
 
 # asdf-cxx headers, shipped in the sdist so the .cxx files can compile from a source build.
 # config.hxx is excluded: it is generated at build time from misc/asdf_cxx_config.hxx.
