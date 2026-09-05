@@ -64,10 +64,10 @@ This section asks how well that works.  The data are pure noise and the mask is 
 how far can the variance of a peak-finder output stray from its unmasked value?  The answer turns on an
 exact identity (\S\ref{sec:ip_identity}): the second pass cannot repair any variance the {\em first} pass
 removed from valid samples, so every large deviation is a leverage effect of the masked detrender, and
-it is always a deficit.  Two refinements that enlarge the mask where the leverage is high are then
-analyzed.  \S\ref{sec:ip_setup} sets up the problem, \S\ref{sec:ip_algorithms} states the candidate
-algorithms, \S\ref{sec:ip_results} summarizes every result (saying which are theorems and which are
-numerical), and Appendix \ref{app:ip} contains the proofs and details.
+for plain inpainting it is always a deficit.  Two refinements that enlarge the mask where the leverage is
+high are then analyzed.  \S\ref{sec:ip_setup} sets up the problem, \S\ref{sec:ip_algorithms} states the
+candidate algorithms, \S\ref{sec:ip_results} summarizes every result (saying which are theorems and which
+are numerical), and Appendix \ref{app:ip} contains the proofs and details.
 
 \subsection{Problem statement and notation}
 \label{sec:ip_setup}
@@ -85,7 +85,7 @@ $\sigma$, so we set $\sigma = 1$.
 filter}; the objects used here are
 \begin{align}
 k &= \mbox{order of the integrated random walk ($k=2$ throughout)} \nn \\
-\tau &= \mbox{smoothing timescale in samples ($\tau = 512$ throughout)} \nn \\
+\tau &= \mbox{smoothing timescale in samples ($\tau = 64$ throughout; \S\ref{sec:ip_tau} for other values)} \nn \\
 \rho &= \tau^{2k} = \tau^4 \qquad \mbox{(penalty weight, $\rho = \sigma^2/q$)} \nn \\
 M &= {\rm diag}(m), \qquad D = D_2 = \mbox{the $(T-2) \times T$ second-difference matrix} \nn \\
 {\cal N}_m &= M + \rho D^TD \qquad \mbox{(normal matrix of the masked fit)} \nn \\
@@ -107,7 +107,8 @@ c_h = \frac{3}{8\sqrt2} = 0.265 .
 \label{eq:ip_constants}
 \end{equation}
 $c_2$ is the flux-loss constant $c_k$ of \dtnotes{The model} at $k = 2$; both constants are derived in
-\S\ref{sec:ip_constants}.
+\S\ref{sec:ip_constants}, where the discrete values at $\tau = 64$ are shown to agree with them to
+$3 \times 10^{-5}$.
 
 {\bf Peak-finding kernels.}  The reader is assumed to know \ddnotes{Peak-finding}.  For
 $W_{\rm max} = 32$ there are $P = 3\log_2 W_{\rm max} + 1 = 16$ profiles: $p = 0$ is the single sample
@@ -127,7 +128,12 @@ y_p[t] &= \textstyle\sum_i k_p[i]\, x[t-i] \qquad \mbox{(the convolution of a re
 Only variances are asked for, so the alignment convention of the convolution is immaterial.  The three
 kernels quoted most often below are $p = 0$ (``p0''), the width-32 boxcar $p = 13$ (``box32'',
 $W_{\rm eff} = 32$) and the widest tapered kernel $p = 15$ (``w64'', $W = 64$, $W_{\rm eff} = 57.6$).
-All widths satisfy $W \ll \tau$, and every deficit found below is first order in $W_{\rm eff}/\tau$.
+The kernels are {\em not} narrow compared with the smoother: $W_{\rm eff}/\tau$ runs from $1/64$ (p0)
+through $1/8$ (box8) to $0.5$ (box32) and $0.9$ (w64).  Several results below have a simple form to
+first order in $W_{\rm eff}/\tau$; those leading-order formulas are quoted for orientation only, and an
+exact number is given for every kernel.  At this $\tau$ the unmasked detrender by itself already removes
+a large part of the wide kernels' variance: $U_p/\|k_p\|^2 = 0.78$ (box32) and $0.63$ (w64)
+(Table \ref{tab:ip_Up}).
 
 {\bf The quantities.}  For a fixed mask, averaging over the noise (and over any simulated noise the
 algorithm draws),
@@ -139,6 +145,44 @@ V'_p(t) &= {\rm Var}\big(y_p[t]\big) \mbox{ with the mask and } x = r' \qquad \m
 \end{align}
 The question is how far $V'_p(t)/U_p$ can be from 1 when the mask and $(p,t)$ are chosen adversarially.
 Since $k_{p,t}$ is a vector, everything is a quadratic form; e.g.\ $U_p = \|(I - S_0)k_{p,t}\|^2$.
+
+Table \ref{tab:ip_Up} gives $U_p$ for all 16 kernels, both as defined and normalized by its value at
+$\tau = \infty$.  At $\tau = \infty$ the smoother subtracts only a global straight line (the null space
+of $D$), which has no effect on a compact kernel far from the ends, so $U_p(\tau{=}\infty) = \|k_p\|^2$,
+and the normalized value $U_p/U_p(\tau{=}\infty)$ is the fraction of the kernel's variance that the
+unmasked detrender leaves: the fractional impact of detrending on $U_p$, before any mask is applied.
+
+\begin{table}[ht]
+\centering\small
+\begin{tabular}{c l c c c c}
+\toprule
+$p$ & name & $W_p$ & $U_p(\tau{=}\infty) = \|k_p\|^2$ & $U_p$ & $U_p/U_p(\tau{=}\infty)$ \\
+\midrule
+0 & p0 & 1 & 1 & 0.993 & 0.993 \\
+1 & box2 & 2 & 2 & 1.972 & 0.986 \\
+2 & w3 & 3 & 1.5 & 1.472 & 0.982 \\
+3 & w4 & 4 & 2.5 & 2.438 & 0.975 \\
+4 & box4 & 4 & 4 & 3.890 & 0.972 \\
+5 & w6 & 6 & 3 & 2.890 & 0.963 \\
+6 & w8 & 8 & 5 & 4.752 & 0.950 \\
+7 & box8 & 8 & 8 & 7.559 & 0.945 \\
+8 & w12 & 12 & 6 & 5.559 & 0.927 \\
+9 & w16 & 16 & 10 & 9.011 & 0.901 \\
+10 & box16 & 16 & 16 & 14.24 & 0.890 \\
+11 & w24 & 24 & 12 & 10.25 & 0.854 \\
+12 & w32 & 32 & 20 & 16.10 & 0.805 \\
+13 & box32 & 32 & 32 & 25.10 & 0.784 \\
+14 & w48 & 48 & 24 & 17.22 & 0.717 \\
+15 & w64 & 64 & 40 & 25.13 & 0.628 \\
+\bottomrule
+\end{tabular}
+\caption{The unmasked variance $U_p = \|(I - S_0)k_p\|^2$ of (\ref{eq:ip_quantities}) for the 16
+peak-finding kernels at $k = 2$, $\tau = 64$, $W_{\rm max} = 32$ (``w$n$'' is the tapered kernel of
+width $n$, ``box$n$'' the boxcar; $W_p$ is the support width).  At $\tau = \infty$ the detrender has no
+effect on a compact kernel, $U_p(\tau{=}\infty) = \|k_p\|^2$, so the last column is the fraction of the
+kernel's variance that the unmasked detrender leaves.  Note that w64 and box32 have nearly the same $U_p$ at this $\tau$.}
+\label{tab:ip_Up}
+\end{table}
 
 \subsection{Algorithms}
 \label{sec:ip_algorithms}
@@ -164,8 +208,8 @@ m_2[t] = m[t] \;\wedge\; \big(\lambda[t] \le \lambda_{\rm thr}\big), \qquad
 \label{eq:ip_enlarge}
 \end{equation}
       The threshold is a multiple $\mu$ of the interior leverage $h[0] = c_2/\tau$: $\mu = 1$ is the
-      leverage in an unmasked stretch, $\mu = 4$ the leverage at the edge of a semi-infinite gap, and
-      $\mu = \infty$ drops nothing.
+      leverage in an unmasked stretch, $\mu = 4$ the leverage at the edge of a semi-infinite gap (to
+      $1\%$: $3.96$ at $\tau = 64$), and $\mu = \infty$ drops nothing.
 \item Draw $n'[t] \sim {\cal N}(0,\sigma^2)$ i.i.d., independent of $d$, and form
       $d' = M_2 d + (I - M_2)(\hat f + n')$: samples valid in $m_2$ keep their data; samples masked in
       $m_2$, whether originally masked or dropped in step 2, get the {\em first-pass} baseline plus
@@ -202,9 +246,10 @@ baseline.  It is strictly worse than A and C; see \S\ref{sec:ip_remarks}.)
 \subsection{Summary of results}
 \label{sec:ip_results}
 
-Numbers are for $\tau = 512$; each is labelled as a theorem (proved below) or as
+Numbers are for $\tau = 64$; each is labelled as a theorem (proved below) or as
 numerical (exact linear algebra for a given mask, with adversarial masks found by simulated annealing,
-so ``worst found'' rather than ``worst possible'').
+so ``worst found'' rather than ``worst possible'').  Expressions to first order in $W_{\rm eff}/\tau$
+are quoted for orientation only (\S\ref{sec:ip_setup}); every quoted number is exact for the kernel named.
 
 \begin{enumerate}
 
@@ -226,56 +271,78 @@ V_p(t) = \|R_m k\|^2, \qquad U_p = \|(I - S_0)k\|^2 \qquad (k = k_{p,t}) .
 \end{equation}
 
 \item {\bf Upper side} (theorem, \S\ref{sec:ip_upper}).  For algorithms 0 and C and every mask,
-$V'_p/U_p \le 1 + 2c_2 W_{\rm eff}/\tau + O(W^2/\tau^2)$ ($1.045$ for box32, $1.082$ for w64); for A the
-constant is $2c_2 + c_h$.  These are not attained: the largest value found by annealing (algorithm 0) is
-$1 + 0.043\,W_{\rm eff}/\tau$, i.e.\ $1.0027$ (box32) and $1.0049$ (w64), from a sparse comb around the
-kernel.  The upper side is negligible.
+$V'_p/U_p \le B_{1,p}/U_p$ with $B_{1,p} = \sum_s \max(k_s^2, (k_s - (S_0k)_s)^2)$: $1.404$ for box32,
+$1.804$ for w64, $1.011$ for p0; for A the bound adds $\|S_0k\|^2/U_p$ ($0.17$, $0.37$, $0.004$).  The
+leading-order form $1 + 2c_2 W_{\rm eff}/\tau$ ($1.354$, $1.636$) no longer even bounds the exact one.
+The bound is not approached: the largest value found by annealing (algorithm 0) is
+$1 + 0.050\,W_{\rm eff}/\tau = 1.025$ (box32), $1 + 0.056\,W_{\rm eff}/\tau = 1.051$ (w64) and $1.0003$
+(p0), from a sparse comb around the kernel plus a masked annulus.  The upper side of plain inpainting is
+thus a few percent, an order of magnitude below the bound.  With enlargement it is larger: algorithm C
+exceeds 1 by $12\%$ (box32) and $19\%$ (w64) for a kernel on a kept run beside enlarged samples
+(\S\ref{sec:ip_bterm}; confirmed by Monte Carlo), and a dedicated maximization (\S\ref{sec:ip_fom}) finds
+larger values at small $\mu$: $V'/U - 1$ up to $0.083$ / $0.18$ at $\mu = 2$ and $0.136$ / $0.28$ at
+$\mu = 1.2$ for box32 / w64, still inside the bound.
 
 \item {\bf Lower side of algorithm 0} (numerical, \S\ref{sec:ip_lower0}).  With at most $B$ masked samples
-near the kernel, the worst found is
+near the kernel (``window'' = the whole $\pm 24\tau$ search window, $3073$ samples), the worst found is
 \begin{center}\small
-\begin{tabular}{lccccccc}
+\begin{tabular}{lccccccccc}
 \toprule
-$B$ & $\le 512$ & 1024 & 2048 & 4096 & 8192 & 16384 & unbounded \\
+$B$ & 32 & 64 & 128 & 256 & 512 & 1024 & 2048 & window & unbounded \\
 \midrule
-box32 & 0.984 & 0.966 & 0.870 & 0.562 & 0.142 & 0.025 & 0.017 \\
-w64   & 0.971 & 0.941 & 0.796 & 0.451 & 0.183 & 0.138 & 0.135 \\
-p0    & 0.9995 & -- & 0.995 & -- & 0.884 & 0.503 & 0.0005 \\
+box32 & 0.871 & 0.871 & 0.802 & 0.515 & 0.225 & 0.140 & 0.130 & 0.130 & 0.129 \\
+w64   & 0.946 & 0.788 & 0.774 & 0.556 & 0.390 & 0.306 & 0.296 & 0.296 & 0.295 \\
+p0    & 0.9959 & 0.9959 & 0.991 & 0.964 & 0.844 & 0.451 & 0.066 & 0.015 & 0.0042 \\
 \bottomrule
 \end{tabular}
 \end{center}
-Up to $B \approx 1.5\tau$ the worst case is the kernel exactly filling a gap of its own width,
-$V'/U = 1 - c_h W_{\rm eff}/\tau$; beyond that it is an {\em island}, the kernel's support left valid
-with gaps of $B/2$ on each side, whose mean the first pass absorbs.  Half the variance is lost at gaps of
-about $2900$ samples ($1100$ if the gap on one side is much longer), and the floors are
-$c_h W/\tau$ for boxcars and $0.135$ for the tapered kernels.  Kernels next to a long gap lose $7\%$
-(box32) to $12\%$ (w64) from the enhanced edge leverage.  Random masks that leave every valid run long
-compared with $\tau$ are harmless.
+Up to $B \approx 1.5\tau$ ($2\tau$ for w64) the worst case is the kernel exactly filling a gap of its own
+width, $V'/U = 0.871$ (box32), $0.788$ (w64), $0.996$ (p0) (leading order $1 - c_h W_{\rm eff}/\tau$:
+$0.867$, $0.761$, $0.996$); beyond that it is an {\em island}, the kernel's support left valid with gaps
+of $B/2$ on each side, whose mean the first pass absorbs.  Half the leverage ($V'/U = 0.56$) is reached at
+two-sided gaps of $117$ samples around the 32-sample support, and a kernel simply touching a free gap is
+already there ($V'/U = 0.60$ for box32, $0.57$ for w64, i.e.\ a $40$--$43\%$ loss; $0.86$ for box8,
+$0.98$ for p0).  The floors are $0.129$ (box32; $c_h W/\tau = 0.133$), $0.295$ (w64: a new structure, the
+32-sample unit-weight core left valid with the shoulders masked; $0.371$ if the whole support is left
+valid) and $0.0042$ (p0).  Random masks that leave every valid run long compared with $\tau$ are
+harmless, where ``long'' now means $\gtrsim 4\tau$.
 
 \item {\bf Lower side with enlargement.}  For algorithm C the leverage threshold gives a rigorous bound
-(theorem, \S\ref{sec:ip_lowerC}):
+(theorem, \S\ref{sec:ip_lowerC}), for every mask,
 \begin{equation}
-\frac{V'_p(t)}{U_p} \;\ge\; {\rm LB}_p(\mu) = 1 - \big[\, 2(\mu - 1)\, c_2 + c_h \,\big]\frac{W_{{\rm eff},p}}{\tau}
-   + O\!\left(\frac{W^2}{\tau^2}\right) \qquad \mbox{for every mask,}
+\frac{V'_p(t)}{U_p} \;\ge\; {\rm LB}_p(\mu)
+   \;=\; 1 - \big[\, 2(\mu - 1)\, c_2 + c_h \,\big]\frac{W_{{\rm eff},p}}{\tau}
+   + O\!\left(\frac{W^2}{\tau^2}\right) ,
 \label{eq:ip_LB}
 \end{equation}
-attained to within a few percent by a tuned island.  For algorithm A there is no bound of this form: the
-term $S_0(M - M_2)r$ in (\ref{eq:ip_identities}) costs about $0.4\,W_{\rm eff}/\tau$ for a kernel on a
-kept run beside enlarged samples, independently of $\mu$ (\S\ref{sec:ip_bterm}), so A crosses below
-(\ref{eq:ip_LB}) for $\mu \lesssim 1.15$, and its worst cases are numerical only.  Table
-\ref{tab:ip_summary} gives the worst found for both, with the bound and the cost of the enlargement.
+where ${\rm LB}_p(\mu)$ is the exact expression (\ref{eq:ip_LB_exact}) and the expansion is for
+orientation only (it is off by up to $0.12$ and goes negative for box32 at $\mu \ge 3.5$, w64 at
+$\mu \ge 2.4$).  Exactly, at $\mu = 1.2$, $1.5$, $2$, $3$, $4$, ${\rm LB}$ is $0.791$, $0.688$,
+$0.533$, $0.281$, $0.109$ for box32 and $0.608$, $0.435$, $0.211$, $0.003$, $0$ for w64, and the bound vanishes
+identically once $\mu c_2 W_{\rm eff}/\tau \ge 1$ (w64 at $\mu \ge 3.14$, box32 at $\mu \ge 5.66$).  It
+is weak: the worst masks found are $0.08$--$0.42$ above it.  For algorithm A there is no bound of this
+form: the term $S_0(M - M_2)r$ in (\ref{eq:ip_identities}) costs about $0.5\,W_{\rm eff}/\tau$ ($0.25$
+for box32, $0.35$ for w64) for a kernel on a kept run between enlarged zones, independently of $\mu$ up to
+$\mu \approx 2$ (\S\ref{sec:ip_bterm}).  A nevertheless stays above ${\rm LB}(\mu)$ in every run (by
+$\ge 0.05$): the $b$-term is present at full strength, but on those masks the $a$-part
+$\|R_m M_2 k\|^2$ is far from the extremal value the bound assumes.  Its worst cases are numerical only.
+Table \ref{tab:ip_summary} gives the worst found for both, with the bound and the cost of the
+enlargement.
 
 \item {\bf Cost of the enlargement} (numerical, \S\ref{sec:ip_overmask}).  On an isolated gap the rule
-masks extra samples on each side, out to where the leverage falls below threshold: for a $16384$-sample
-gap, $576$/$401$/$251$/$80$/$0$ samples per side at $\mu = 1.2$/$1.5$/$2$/$3$/$4$, and nothing for gaps
-up to $1024$ once $\mu \ge 2$.  A region of valid density $n$ has leverage $\approx n^{-3/4}\,c_2/\tau$,
-so everything below density $\mu^{-4/3}$ is masked wholesale ($0.78$/$0.58$/$0.40$/$0.23$/$0.16$).  On a
-random mask of gaps with log-uniform lengths covering $10\%$ of the samples, $5.9$/$2.7$/$0.9$/$0.06$/$0\%$
-of the valid samples are lost.
+masks extra samples on each side, out to where the leverage falls below threshold: for a $2048$-sample
+gap ($32\tau$), $72$/$50$/$31$/$10$/$0$ samples per side at $\mu = 1.2$/$1.5$/$2$/$3$/$4$ (a free end:
+$72$/$51$/$33$/$13$/$0$), nothing for gaps up to $128$ once $\mu \ge 2$, up to $512$ once $\mu \ge 3$,
+and nothing at all for $\mu \ge 4$.  A region of valid density $n$ has leverage
+$\approx n^{-3/4}\,c_2/\tau$ (to $0.3\%$ in the mean), so everything below density $\mu^{-4/3}$ is masked
+wholesale ($0.78$/$0.58$/$0.40$/$0.23$/$0.16$).  On a random mask of gaps with lengths log-uniform in
+$[1, 512]$ covering $10\%$ of the samples, $6.3$/$2.8$/$0.9$/$0.02$/$0.01\%$ of the valid samples are lost
+($1.5$/$0.8$/$0.4$/$0.08$/$0\%$ for lengths in $[1, 4096]$).
 
 \item {\bf Verification} (\S\ref{sec:ip_numerics}).  Every formula was checked against a Monte Carlo of
-the literal procedure; at $\tau = 512$ the main check compared $6.6 \times 10^5$ (kernel, position) pairs
-over ten masks, with normally distributed pulls.
+the literal procedure at $\tau = 64$: for algorithm 0, $143632$ (kernel, position) pairs over eleven
+masks, with normally distributed pulls; for A and C, $128$ (kernel, variant) pairs on the four worst
+masks at $\mu = 2$.
 
 \end{enumerate}
 
@@ -288,36 +355,137 @@ over ten masks, with normally distributed pulls.
 \cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}\cmidrule(lr){11-13}
 $\mu$ & box32 & w64 & p0 & box32 & w64 & p0 & box32 & w64 & p0 & edge & $n <$ & RFI \\
 \midrule
-1.2 & 0.976$^*$ & 0.958 & 0.9993 & 0.984 & 0.971 & 0.9995 & 0.975 & 0.954 & 0.9992 & 576 & 0.78 & 5.9\% \\
-1.5 & 0.970 & 0.947 & 0.9991 & 0.984 & 0.971 & 0.9995 & 0.961 & 0.930 & 0.9988 & 401 & 0.58 & 2.7\% \\
-2   & 0.957 & 0.924 & 0.9987 & 0.975 & 0.954 & 0.9992 & 0.939 & 0.891 & 0.9981 & 251 & 0.40 & 0.9\% \\
-3   & 0.933 & 0.882 & 0.9980 & 0.940 & 0.893 & 0.9981 & 0.897 & 0.816 & 0.9967 & 80 & 0.23 & 0.06\% \\
-4   & 0.903 & 0.827 & 0.9970 & 0.903 & 0.827 & 0.9970 & 0.855 & 0.744 & 0.9953 & 0 & 0.16 & 0 \\
-$\infty$ & 0.017 & 0.135 & 0.0005 & 0.017 & 0.135 & 0.0005 & -- & -- & -- & 0 & -- & 0 \\
+1.2 & 0.842 & 0.793 & 0.9940 & 0.871 & 0.789 & 0.9959 & 0.791 & 0.608 & 0.9936 & 72 & 0.78 & 6.3\% \\
+1.5 & 0.789 & 0.723 & 0.9926 & 0.871 & 0.788 & 0.9959 & 0.688 & 0.435 & 0.9903 & 50 & 0.58 & 2.8\% \\
+2   & 0.701 & 0.594 & 0.9894 & 0.781 & 0.629 & 0.9937 & 0.533 & 0.211 & 0.9848 & 31 & 0.40 & 0.9\% \\
+3   & 0.514 & 0.386 & 0.9828 & 0.522 & 0.388 & 0.9851 & 0.281 & 0.003 & 0.9739 & 10 & 0.23 & 0.02\% \\
+4   & 0.313 & 0.360 & 0.9755 & 0.309 & 0.360 & 0.9756 & 0.109 & 0 & 0.9629 & 0 & 0.16 & 0.01\% \\
+$\infty$ & 0.130 & 0.296 & 0.0148 & 0.130 & 0.296 & 0.0148 & -- & -- & -- & 0 & -- & 0 \\
 \bottomrule
 \end{tabular}
-\caption{Worst-case $V'_p(t)/U_p$ at $\tau = 512$ as a function of the enlargement threshold $\mu$
+\caption{Worst-case $V'_p(t)/U_p$ at $\tau = 64$ as a function of the enlargement threshold $\mu$
 (eq.\ \ref{eq:ip_enlarge}), found by simulated annealing over masks within $\pm 24\tau$ of the kernel
-(\S\ref{sec:ip_numerics}); the rigorous bound (\ref{eq:ip_LB}) in its exact form for algorithm C; and
-the cost of the enlargement on benign masks: extra samples masked on each side of a $16384$-sample gap,
-the valid density below which a random mask is masked wholesale, and the fraction of valid samples lost on
-a random RFI-like mask covering $10\%$ of the timestream (\S\ref{sec:ip_overmask}).  $\mu = \infty$ is
-algorithm 0.  $^*$Found at $\tau = 64$ with $W/\tau = 1/16$; the best mask found directly at $\tau = 512$
-gives $0.979$.}
+(\S\ref{sec:ip_numerics}); the rigorous bound (\ref{eq:ip_LB_exact}) in its exact form for algorithm C;
+and the cost of the enlargement on benign masks: extra samples masked on each side of a $2048$-sample
+($32\tau$) gap (a free end expands by $72$/$51$/$33$/$13$/$0$ instead), the valid density below which a
+random mask is masked wholesale, and the fraction of valid samples lost on a random RFI-like mask with
+gap lengths log-uniform in $[1, 512]$ covering $10\%$ of the timestream (\S\ref{sec:ip_overmask}).
+$\mu = \infty$ is algorithm 0, at its window-limited value (the unbounded floors are
+$0.129$/$0.295$/$0.0042$).}
 \label{tab:ip_summary}
 \end{table}
 
-{\bf Bottom line.}  Plain inpainting fixes exactly the problem it was designed for (kernels inside gaps
-come back to $1 - c_h W_{\rm eff}/\tau$) and nothing else; an adversary who can mask a few thousand
-samples around a kernel drives its variance to a few percent of the unmasked value.  A per-sample leverage
-threshold removes that catastrophe.  With $\mu = 3$--$4$ it costs nothing on benign masks and guarantees
-$0.90$--$0.94$ (box32); with $\mu = 2$ it costs $\sim 250$ samples per long-gap edge and all data below
-density $0.4$, and gives $0.957$ (A) or $0.975$ (C).  Below $\mu \approx 1.5$ nothing more is gained:
-algorithm C is already at inpainting's own floor $1 - c_h W_{\rm eff}/\tau$ ($0.984$/$0.971$), and A
-saturates slightly lower because of its $S_0(M-M_2)r$ term.  All residual deficits scale as
-$W_{\rm eff}/\tau$, so they are four times smaller at $\tau = 2048$ or for 8-wide kernels.  A guarantee
-closer to 1 would need the exact per-$(p,t)$ variance, used to renormalize rather than to mask
-(\S\ref{sec:ip_remarks}).
+{\bf Bottom line.}  At $\tau = 64$ with $W_{\rm max} = 32$, plain inpainting no longer even fixes the
+problem it was designed for: a kernel filling a gap of its own width comes back to $0.87$ (box32) or
+$0.79$ (w64), a $13$--$21\%$ deficit, and a kernel beside a long gap is at $0.60$.  An adversary needs only
+a few hundred masked samples ($B = 256$, gaps of $2\tau$) to halve the variance of box32, and about
+$2000$ to drive it to $13\%$.  A per-sample leverage threshold lifts the floor, but not to a useful
+level for the wide kernels.  With $\mu = 3$--$4$ it costs nothing on benign masks and raises the floor
+from $0.13$/$0.30$ to $0.31$--$0.52$ (box32) / $0.36$--$0.39$ (w64); with $\mu = 2$ it costs $31$ samples
+per long-gap edge and all data below density $0.4$, and gives $0.70$ (A) or $0.78$ (C) for box32 and
+$0.59$/$0.63$ for w64; below $\mu \approx 1.5$ nothing more is gained (C is at the gap-filling floor
+$0.871$/$0.788$, A saturates at $0.84$/$0.79$ because of its $S_0(M-M_2)r$ term) while the cost doubles.
+No threshold reaches $0.90$ for box32 or w64.  Across the 16 kernels (\S\ref{sec:ip_lowerC}), a
+guarantee of $0.95$ from algorithm C is available only for $W \le 8$ (box8 at $\mu \le 2$; w12 only at
+$\mu \le 1.2$), and $0.90$ up to $W = 16$ at $\mu \le 2$ (box16/w16 at $\mu \le 1.9$/$2.1$; w24, w32 and
+w48 only at $\mu \le 1.7$, $1.6$ and $1.4$); for A subtract the $b$-term, so $0.95$ needs $W \le 8$ at
+$\mu \lesssim 1.5$ and $0.90$ holds for $W \le 12$ at $\mu \le 2$.  The deficits are no longer small
+multiples of $W_{\rm eff}/\tau$: they are order one, and even in those units the coefficients of the
+$\tau = 512$ baseline survive only for box32 (to $10$--$20\%$), not for w64 (\S\ref{sec:ip_tau}).  The
+route to a real guarantee is the exact per-$(p,t)$ variance, used to renormalize rather than to mask
+(\S\ref{sec:ip_remarks}); and the ratio $W_{\rm max}/\tau$ itself deserves scrutiny, since the unmasked
+detrender already removes $22$--$37\%$ of the wide kernels' variance ($U_p/\|k_p\|^2 = 0.78$/$0.63$)
+before any mask is applied.  These are pointwise statements; under the chunk-averaged figure of merit of
+\S\ref{ssec:weaker_fom} the lower side shrinks by an order of magnitude and the ranking of A and C reverses.
+
+\subsection{A weaker figure of merit?}
+\label{ssec:weaker_fom}
+
+Given an inpainting algorithm, consider two figures of merit:
+\begin{align}
+X_{\rm hi}(p) &\equiv \max_{m,t} \mbox{ReLU} \left( \frac{V'_p(t)}{U_p} - 1 \right) \nn \\
+X_{\rm lo}(p) &\equiv \max_{m,t} \mbox{ReLU} \left( 1 -  \frac{V'_p(t)}{U_p} \right)
+\label{eq:Xhl_def}
+\end{align}
+where ${\rm ReLU}(x) \equiv \max(x,0)$ as usual.
+Intuitively, $X_{\rm hi}$ tells us how much $V'_p$ can ``overshoot'' $U_p$, and $X_{\rm lo}$ tells us how much $V'_p$ can ``undershoot'' $U_p$, if the mask $m$ and time $t$ are chosen adversarially.
+
+Previous work has explored the values of $(X_{\rm hi}, X_{\rm lo})$ for inpainting algorithms 0,A,B,C, and for varying choices of the $\mu$-parameter. So far, we're finding that it's (comparatively) easier to make $X_{\rm hi}$ small, and harder to make $X_{\rm lo}$ small. 
+
+Next, I'd like to explore the following question: suppose we leave the definition of $X_{\rm hi}$ unchanged, but weaken the definition of $X_{\rm lo}$ as follows:
+\begin{equation}
+\tilde X_{\rm lo}(p) \equiv \max_{m,t} \mbox{ReLU} \left( 1 - \frac{1}{T_cU_p} \sum_{t'=t}^{t+T_c-1} V'_p(t') \right)
+\end{equation}
+That is, instead of evaluating $V'_p$ at an adversarially chosen time $t$, we average it over an adversarially chosen time window $[t,t+T_c)$, where the ``chunk size'' $T_c=1024$.
+
+Please analogously explore values of $(X_{\rm hi}, \tilde X_{\rm lo})$ for inpainting algorithms 0,A,C, and for varying choices of the $\mu$-parameter.
+
+{\bf Results.}  Table \ref{tab:ip_fom} gives the answer for the two widest kernels; every
+entry is the best found by simulated annealing (exact for the mask exhibited, a lower bound on the true
+maximum), with $\tilde X_{\rm lo}$ seeded by an exact scan over periodic masks.  All narrow kernels are
+unproblematic under either figure: for $W \le 8$ every entry of the corresponding table is below $0.03$
+for every algorithm and $\mu$ (box8: $X_{\rm hi} \le 0.006$ for algorithms 0 and A, $\le 0.033$ for C;
+$\tilde X_{\rm lo} \le 0.029$), and p0 is below $0.005$ throughout.  The six-kernel version is Table
+\ref{tab:ip_fom_full}, and the evaluator, the searches, the worst-mask structures, the Monte Carlo checks
+and the caveats are in \S\ref{sec:ip_fom}.
+
+\begin{center}\small
+\begin{tabular}{ll ccc ccc}
+\toprule
+ & & \multicolumn{3}{c}{box32} & \multicolumn{3}{c}{w64} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+alg.\ & $\mu$ & $X_{\rm hi}$ & $X_{\rm lo}$ & $\tilde X_{\rm lo}$ & $X_{\rm hi}$ & $X_{\rm lo}$ & $\tilde X_{\rm lo}$ \\
+\midrule
+0 & $\infty$ & 0.025 & 0.87 & 0.086 & 0.050 & 0.70 & 0.123 \\
+\midrule
+A & 1.2 & 0.021 & 0.16 & 0.035 & 0.042 & 0.21 & 0.047 \\
+A & 1.5 & 0.022 & 0.21 & 0.047 & 0.045 & 0.28 & 0.068 \\
+A & 2   & 0.023 & 0.30 & 0.069 & 0.048 & 0.41 & 0.100 \\
+A & 3   & 0.024 & 0.49 & 0.077 & 0.050 & 0.61 & 0.118 \\
+A & 4   & 0.025 & 0.69 & 0.083 & 0.050 & 0.64 & 0.123 \\
+\midrule
+C & 1.2 & 0.136 & 0.13 & 0.013 & 0.280 & 0.21 & 0.009 \\
+C & 1.5 & 0.111 & 0.13 & 0.044 & 0.218 & 0.21 & 0.060 \\
+C & 2   & 0.083 & 0.22 & 0.068 & 0.180 & 0.37 & 0.098 \\
+C & 3   & 0.057 & 0.48 & 0.077 & 0.109 & 0.61 & 0.117 \\
+C & 4   & 0.043 & 0.69 & 0.083 & 0.087 & 0.64 & 0.123 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\noindent Table \refstepcounter{table}\thetable\label{tab:ip_fom}: the figures of merit at $\tau = 64$,
+$T_c = 1024$, for algorithm 0 and for A and C at five thresholds $\mu$ (eq.\ \ref{eq:ip_enlarge}).
+$X_{\rm lo}$ is the pointwise figure ($1 -$ the worst $V'/U$ of Table \ref{tab:ip_summary}), shown for
+comparison with its windowed replacement $\tilde X_{\rm lo}$.
+
+\medskip\noindent What the table says:
+\begin{enumerate}
+\item {\bf Averaging over a chunk does most of the work.}  For algorithm 0, $\tilde X_{\rm lo}$ is
+$0.086$ (box32) and $0.12$ (w64) against $X_{\rm lo} = 0.87$ and $0.70$.  A masked stretch comes back at
+$V' = U$ exactly (\S\ref{sec:ip_identity}), so the thousands of masked samples the pointwise adversary
+uses to isolate a kernel count as $1$ in the average; the windowed adversary is left with ``sparse
+islands'' (valid runs of $1$--$1.5\,W$ separated by gaps of $2$--$3\tau$, valid fraction $\sim 0.2$),
+trading the depth of the deficit against the fraction of the window it occupies.
+\item {\bf The leverage rule helps the windowed figure only modestly.}  It masks everything below
+valid density $\mu^{-4/3}$ wholesale, so the windowed adversary keeps its density just above that, where
+nothing is enlarged and A, C and algorithm 0 coincide.  At $\mu = 2$ the gain is $20\%$
+($0.086 \rightarrow 0.069$ for box32); at $\mu \ge 3$ it is nil; at $\mu = 1.2$ it is larger
+($0.035$ for A, $0.013$ for C), at the overmasking cost of Table \ref{tab:ip_summary}.
+\item {\bf On the upper side A is as good as algorithm 0 and C is not.}  $X_{\rm hi}$ of A is
+$0.02$--$0.025$ (box32) and $0.04$--$0.05$ (w64) for every $\mu$, because its extra term is a negative
+cross-covariance.  A dedicated maximization for C finds $0.08$ / $0.18$ at $\mu = 2$ and $0.14$ / $0.28$
+at $\mu = 1.2$ (a short kept run inside the support with everything around it enlarged;
+\S\ref{sec:ip_fom}), far above the $12$--$19\%$ noted incidentally in \S\ref{sec:ip_results}.
+\item {\bf Verdict.}  Under $(X_{\rm hi}, \tilde X_{\rm lo})$, A dominates C: equal or within $0.01$ on
+the lower side for $\mu \ge 1.5$, and $3$--$6\times$ smaller on the upper side.  A at $\mu = 1.5$--$2$
+gives $(0.022,\ 0.05$--$0.07)$ for box32 and $(0.045,\ 0.07$--$0.10)$ for w64, i.e.\ both sides at the
+few-percent level, for $31$--$50$ extra masked samples per long-gap edge and $1$--$3\%$ of the valid
+samples on the RFI-like mask of Table \ref{tab:ip_summary}.  C's small $\tilde X_{\rm lo}$ at $\mu = 1.2$
+is bought with a $14$--$28\%$ overshoot.
+\item {\bf Caveats.}  The values are lower bounds on the true maxima (annealing).  $T_c$ matters
+little: for the periodic family the algorithm-0 maximum is $0.101$, $0.076$, $0.069$, $0.068$ (box32) at
+$T_c = 256$, $1024$, $4096$, $\infty$, so $T_c = 1024$ is within $10\%$ of the large-$T_c$ limit and the
+reduction is the averaging itself, not the chunk size.
+\end{enumerate}
 
 \appendix
 
@@ -334,7 +502,7 @@ notation of \S\ref{sec:ip_setup}.
 algorithm 2: Kalman filter} are used in the proofs:
 \begin{align}
 L_m &= M {\cal N}_m^{-1} M \qquad \mbox{(masked hat matrix, so that $R_m = M - L_m$)} \nn \\
-\ell &= \sqrt2\,\tau = 724 \qquad \mbox{(correlation length: entries of ${\cal N}_m^{-1}$ decay as $e^{-|t-t'|/\ell}$)} .
+\ell &= \sqrt2\,\tau = 90.5 \qquad \mbox{(correlation length: entries of ${\cal N}_m^{-1}$ decay as $e^{-|t-t'|/\ell}$)} .
 \label{eq:ip_notation2}
 \end{align}
 $L_m$ is the hat matrix $H = {\cal N}_m^{-1}M$ of \dtnotes{Outputs} restricted to the valid samples, made
@@ -348,9 +516,14 @@ Far from the ends, $S_0$ is Toeplitz with spectrum $s(\omega) = 1/(1 + \rho\,(2 
 for $\omega\tau \ll 1$ is $1/(1 + (\omega\tau)^4)$.  Then
 $h[0] = \int \frac{d\omega}{2\pi}\, s = \frac{1}{\tau}\frac{1}{2\pi}\frac{\pi}{\sqrt2} = \frac{c_2}{\tau}$ and
 $\sum_s h[s]^2 = \int \frac{d\omega}{2\pi}\, s^2 = \frac{1}{\tau}\frac{1}{2\pi}\frac{3\pi}{4\sqrt2} = \frac{c_h}{\tau}$,
-which is (\ref{eq:ip_constants}); the discrete values at $\tau = 512$ agree to $5 \times 10^{-5}$.
-$h$ is positive and decreasing out to $|s| \approx 2.4\,\ell$, beyond which it has negligible negative lobes.  For a
-kernel with $W \ll \tau$ the smoothed kernel is flat across the support, $(S_0 k)_s \approx h[0]\sum k$, so
+which is (\ref{eq:ip_constants}); the discrete values at $\tau = 64$ agree to $3 \times 10^{-5}$ ($h[0]$)
+and $1 \times 10^{-5}$ ($\sum h^2$), and at $\tau = 512$ to $5 \times 10^{-7}$.  In units of $\ell$ the
+shape of $h$ is scale-invariant: it is positive and decreasing out to $|s| = 2.36\,\ell$ ($3.3\tau$),
+with $h(\ell)/h[0] = 0.51$ and $h(2\ell)/h[0] = 0.067$, beyond which comes a first negative lobe of depth
+$4.3\%$ of $h[0]$ (at $3.1\,\ell$) and integrated mass $-0.07$ of the total.  For a kernel narrow compared
+with $\ell$ the smoothed kernel is flat across the support, $(S_0 k)_s \approx h[0]\sum k$; at
+$\tau = 64$ it is flat to $2.4\%$ (box32) and $8.7\%$ (w64), and $h[0]\sum k$ overestimates its maximum
+by $1\%$ and $2.7\%$.  To leading order in $W/\tau$,
 \begin{equation}
 \langle k, S_0 k\rangle \approx \frac{c_2 (\sum k)^2}{\tau}, \qquad
 \|S_0 k\|^2 \approx \frac{c_h (\sum k)^2}{\tau}, \qquad
@@ -358,7 +531,10 @@ U_p = \|k\|^2 - 2\langle k, S_0 k\rangle + \|S_0 k\|^2 \approx \|k\|^2\Big(1 - 0
 \label{eq:ip_Up}
 \end{equation}
 This is why $W_{\rm eff} = (\sum k)^2/\|k\|^2$, and not the support width, is the parameter that
-appears everywhere.  Exact values at $\tau = 512$:
+appears everywhere.  The leading-order $U_p$ is accurate to $0.1\%$ up to box16 and is $0.7\%$ (box32),
+$1.7\%$ (w48) and $4.3\%$ (w64) low (the $O(W^2/\tau^2)$ term is positive); the exact $U_p$ of every
+kernel, and its ratio to $\|k\|^2$, are in Table \ref{tab:ip_Up}.  The kernel constants that enter
+(\ref{eq:ip_Up}) are:
 \begin{center}\small
 \begin{tabular}{lcccccccc}
 \toprule
@@ -366,13 +542,11 @@ appears everywhere.  Exact values at $\tau = 512$:
 \midrule
 $\|k\|^2$ & 1 & 2 & 1.5 & 2.5 & 4 & 3 & 5 & 8 \\
 $W_{\rm eff}$ & 1 & 2 & 2.67 & 3.6 & 4 & 5.33 & 7.2 & 8 \\
-$U_p$ & 0.999 & 1.997 & 1.497 & 2.492 & 3.986 & 2.986 & 4.969 & 7.945 \\
 \midrule
 & w12 & w16 & box16 & w24 & w32 & box32 & w48 & w64 \\
 \midrule
 $\|k\|^2$ & 6 & 10 & 16 & 12 & 20 & 32 & 24 & 40 \\
 $W_{\rm eff}$ & 10.7 & 14.4 & 16 & 21.3 & 28.8 & 32 & 42.7 & 57.6 \\
-$U_p$ & 5.945 & 9.876 & 15.78 & 11.78 & 19.50 & 31.12 & 23.12 & 38.01 \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -434,36 +608,55 @@ $u = Mv$.  So $v^TL_mv \le v^TMv$ for every $v$.  (At $v = e_t$ this is the $\la
 \dtnotes{Outputs}.)  $\square$
 
 {\bf Algorithm 0.}  By the lemma $\|R_m k\|^2 = k^TR_m^2k \le k^TMk = \|Mk\|^2$, so
-\begin{equation}
-V'_p(t) \le \|Mk\|^2 + \|(I - M)(k - S_0 k)\|^2 = \sum_s \Big[ m_s k_s^2 + (1 - m_s)\big(k_s - (S_0k)_s\big)^2 \Big]
-   \le \sum_s \max\!\Big( k_s^2,\ \big(k_s - (S_0k)_s\big)^2 \Big) .
+\begin{align}
+V'_p(t) &\le \|Mk\|^2 + \|(I - M)(k - S_0 k)\|^2 = \sum_s \Big[ m_s k_s^2 + (1 - m_s)\big(k_s - (S_0k)_s\big)^2 \Big] \nn \\
+   &\le \sum_s \max\!\Big( k_s^2,\ \big(k_s - (S_0k)_s\big)^2 \Big) =: B_{1,p} .
 \label{eq:ip_B1}
-\end{equation}
-On the support $0 \le (S_0k)_s \le h[0]\sum k \le 0.033 < 2k_s$, so the maximum is $k_s^2$ there; off the
-support it is $(S_0k)_s^2$.  Hence $V'_p \le \|k\|^2 + \|S_0k\|^2$, and with (\ref{eq:ip_Up})
+\end{align}
+On the support $0 \le (S_0k)_s \le 0.258 \le k_s < 2k_s$ (the maximum of $(S_0k)_s$ over all $s$ lies on
+the support for every kernel, and is $0.258$ for w64 against $k_s \ge \tfrac12$: the condition holds for
+all 16 kernels, with little room to spare), so the maximum is $k_s^2$ there; off the support it is
+$(S_0k)_s^2$.  Hence $B_{1,p} \le \|k\|^2 + \|S_0k\|^2$, and with (\ref{eq:ip_Up})
 \begin{equation}
-\frac{V'_p(t)}{U_p} \;\le\; 1 + \frac{2\langle k, S_0k\rangle}{U_p} \;=\; 1 + 2c_2\,\frac{W_{\rm eff}}{\tau} + O\!\Big(\frac{W^2}{\tau^2}\Big) .
+\frac{V'_p(t)}{U_p} \;\le\; \frac{B_{1,p}}{U_p} \;\le\; 1 + \frac{2\langle k, S_0k\rangle}{U_p} \;=\; 1 + 2c_2\,\frac{W_{\rm eff}}{\tau} + O\!\Big(\frac{W^2}{\tau^2}\Big) .
 \label{eq:ip_upper}
 \end{equation}
-Exactly: $1.045$ (box32), $1.082$ (w64), $1.0014$ (p0).  A tighter bound, $1 + c_2 W_{\rm eff}/\tau$,
-follows from $\|R_mk\|^2 \le k^TR_mk = \|Mk\|^2 - (Mk)^T{\cal N}_m^{-1}(Mk)$ and ${\cal N}_m^{-1} \ge S_0$
-(more mask, larger inverse), {\em provided} the resulting mask-dependent expression is maximized by the
-all-valid support; that was verified by local search over masks but not proved.  Neither bound is
+Exactly, $B_{1,p}/U_p = 1.404$ (box32), $1.804$ (w64), $1.011$ (p0); the loosened form
+$1 + 2\langle k, S_0k\rangle/U_p$ is $1.443$, $1.964$, $1.011$; and the leading-order expression
+$1 + 2c_2W_{\rm eff}/\tau$ is $1.354$, $1.636$, $1.011$, {\em below} the exact bound by $4$--$17\%$ (the
+$O(W^2/\tau^2)$ term is $+0.05$ for box32 and $+0.17$ for w64), so at $\tau = 64$ only the exact form is
+the content of the theorem.  A tighter bound, $1 + c_2 W_{\rm eff}/\tau$ at leading order, follows from
+$\|R_mk\|^2 \le k^TR_mk = \|Mk\|^2 - (Mk)^T{\cal N}_m^{-1}(Mk)$ and ${\cal N}_m^{-1} \ge S_0$ (more mask,
+larger inverse), {\em provided} the resulting mask-dependent expression
+$B_2 = \max_m [\|Mk\|^2 - (Mk)^TS_0(Mk) + \|(I - M)(k - S_0k)\|^2]$ is attained by the all-valid support.
+At $\tau = 64$ that proviso is false for the ten kernels of width $\ge 12$: masking $1$--$24$ support
+samples (the half-weight shoulders of the tapered kernels, edge samples of the boxcars) raises the
+expression by up to $10^{-2}$ in the ratio.  The maximum found by local search over support masks is
+$B_2/U_p = 1.184$ (box32), $1.352$ (w64), $1.0055$ (p0), a numerical statement only.  Neither bound is
 approachable: saturating them needs zero leverage on the kernel and every sample outside the support
 masked, and the second makes the support an island, whose mean mode has leverage near 1.
 
 {\bf Algorithms A and C.}  For C the first term is $\|R_m M_2 k\|^2 \le \|M_2 k\|^2$ and the same
 argument gives (\ref{eq:ip_upper}) unchanged.  For A, $\|R_m\tilde k\|^2 \le \|\tilde k\|^2 =
 \|M_2k\|^2 + \|(M - M_2)S_0k\|^2 \le \|M_2k\|^2 + \|S_0k\|^2$ (the two pieces of $\tilde k$ have disjoint
-supports), which adds $c_h W_{\rm eff}/\tau$ to the constant.
+supports), which adds $\|S_0k\|^2/U_p$ to the bound: $0.17$ (box32), $0.37$ (w64), $0.004$ (p0), i.e.\
+$c_h W_{\rm eff}/\tau$ at leading order.
 
-{\bf What is actually reached.}  Annealing on algorithm 0 (\S\ref{sec:ip_numerics}) finds at most
-$1 + 0.043\,W_{\rm eff}/\tau$: a sparse comb (valid fraction $\sim 1/4$--$1/3$) within $2\tau$ of the
-kernel, a fully masked annulus from $2\tau$ to $6\tau$ where the smoother's autocorrelation $(h*h)/h$
-exceeds 1, and a valid patch beyond it.  The comb alone gives $1 + 0.442\,n(1 - n^{1/4})\,W_{\rm eff}/\tau$
-for valid density $n$ ($\le 1 + 0.036\,W_{\rm eff}/\tau$ at $n = 0.41$), an analytic consequence of the
-homogenized smoother of \S\ref{sec:ip_lower0}; the annulus adds the rest.  The maximum with enlargement
-switched on was not searched; the theorems cover it.
+{\bf What is actually reached.}  Annealing on algorithm 0 (\S\ref{sec:ip_numerics}; 7 seeds of $90000$
+steps per kernel, agreeing to $3 \times 10^{-4}$) finds at most $1 + 0.050\,W_{\rm eff}/\tau = 1.025$
+(box32), $1 + 0.056\,W_{\rm eff}/\tau = 1.051$ (w64) and $1.0003$ (p0): an irregular sparse comb of
+$1$--$6$-sample valid runs (valid fraction $0.3$--$0.5$) within $\sim 1.5\tau$ of the kernel, a fully
+masked annulus from $\sim 2\tau$ to $\sim 6\tau$ where the smoother's autocorrelation $(h*h)/h$ exceeds 1,
+and a valid patch of $\sim 0.9\tau$ beyond it (for p0 the annulus alone).  The comb alone gives $1.022$
+(box32) and $1.045$ (w64) in a sweep over periods $2$--$128$ and densities $1/8$--$7/8$ (the maximum is at
+$n = 3/8$); the homogenized-smoother formula $1 + 0.442\,n(1 - n^{1/4})\,W_{\rm eff}/\tau$ of
+\S\ref{sec:ip_lower0} ($\le 1 + 0.036\,W_{\rm eff}/\tau$ at $n = 0.41$, i.e.\ $1.018$/$1.032$) is
+$20$--$40\%$ low at $\tau = 64$, where it was good to $10^{-4}$ at $\tau = 512$; the annulus adds the rest
+(for box32 the near part alone gives $1.022$, the annulus alone $1.006$).  With enlargement switched on,
+algorithm C reaches $1.12$ (box32) and $1.19$ (w64) on the structured run and edge masks of
+\S\ref{sec:ip_bterm}, inside the theorem; a dedicated maximization (\S\ref{sec:ip_fom}) finds larger
+values at small $\mu$, $1.083$ / $1.18$ at $\mu = 2$ and $1.136$ / $1.28$ at $\mu = 1.2$ for box32 / w64 (a
+short kept run inside the support with everything within $3$--$4\tau$ enlarged), still inside the bound.
 
 \subsection{Plain inpainting: the lower side}
 \label{sec:ip_lower0}
@@ -473,11 +666,15 @@ $\|R_mk\|^2 = \|Mk\|^2 - 2k^TL_mk + \|L_mk\|^2$: the masked first pass shrinks t
 baseline, and the kernel loses whatever part of itself the baseline can follow.  Writing
 $\lambda_k = k^TL_mk/\|Mk\|^2$ for the leverage on the kernel, $\|R_mk\|^2/\|Mk\|^2 = 1 - 2\lambda_k +
 \nu_k$ with $\nu_k = \|L_mk\|^2/\|Mk\|^2 \le \lambda_k$, the kernel-level version of the residual variance
-of \dtnotes{Outputs}.  In every configuration examined, $\lambda_k = W_{\rm eff}\,\bar\lambda$ to $0.1\%$,
-with $\bar\lambda$ the per-sample leverage under the kernel ($L_m$ is flat on scales $\ll \ell$), so the
-per-sample leverage of \dtnotes{Outputs} is the first-order quantity; what separates benign from harmful
-configurations at equal leverage is the recovery term $\nu_k$.  The rest of this subsection is
-numerical (exact linear algebra at $\tau = 512$ unless stated).
+of \dtnotes{Outputs}.  With $\bar\lambda$ the per-sample leverage averaged under the kernel,
+$\lambda_k = W_{\rm eff}\,\bar\lambda$ to $0.1\%$ for $W \le 8$ in every configuration examined; for
+box32 $\lambda_k$ is $1$--$2\%$ below $W_{\rm eff}\bar\lambda$ and for w64 $5$--$9\%$ below, because
+$L_m$ is no longer flat on the scale of the kernel ($0.35$--$0.7\,\ell$ wide).  The per-sample leverage
+of \dtnotes{Outputs} is still the first-order quantity; what separates benign from harmful
+configurations at equal leverage is the recovery term $\nu_k$, which is $0.68$--$0.90$ of $\lambda_k$ in
+the configurations examined ($0.76$ in the unmasked interior for box32), far from the
+$L_mk = \lambda k$ idealization ($\nu = \lambda^2$).  The rest of this subsection is numerical (exact
+linear algebra at $\tau = 64$ unless stated).
 
 {\bf Islands.}  Let the kernel's support be valid, with gaps $G_1 \le G_2$ on either side and valid data
 beyond.  For $G \gg W$ the baseline inside a gap is a cubic (the smoother reproduces cubics), the penalty
@@ -490,40 +687,81 @@ mode fitted with leverage
 \label{eq:ip_island}
 \end{equation}
 where the $+\ell$ is an empirical correction (the valid data clamp the baseline about $\ell$ inside
-their edge, not at it) that makes the fitted $c$ a universal function of $G/\tau$, identical at
-$\tau = 16$, $32$ and $512$.  For the boxcar matched to the island, $L_mk = \lambda_A k$, so
-$V_p = W(1 - \lambda_A)^2$ and $V'_p/U_p \approx (1 - \lambda_A)^2(1 + 0.442\,W/\tau) + c_h W/\tau$.
-Half the leverage is reached at $G_{1/2} = (c\rho/A)^{1/3} - \ell$: numerically $2921$ (two-sided) and
-$1093$ (one-sided) for $A = 32$, $11048$ and $5148$ for $A = 1$.  As $G \rightarrow \infty$ the floor is the
-simulated-noise term, $c_h W/\tau$ ($0.0165$ for box32, $0.0005$ for p0).  For the tapered kernels the
-island absorbs only the constant part of the kernel and the shoulders survive: the floor is
-$(\|k\|^2 - (\sum k)^2/W)/U_p + c_h W/\tau = 0.105 + 0.030 = 0.135$ for w64.  A kernel narrower than its
-island loses only the fraction $W/A$ of its variance, and the isolation length scales as
-$\tau^{4/3}A^{-1/3}$ rather than as $\tau$.
+their edge, not at it) that makes the fitted $c$ a universal function of $G/\tau$: for $A = 1$ the fitted
+values at $\tau = 64$ ($1.21$, $4.20$, $9.31$, $14.6$, $18.6$, $21.1$ at $G/\tau = 1, 2, \ldots, 32$) are
+those at $\tau = 512$, and the law is exact.  For $A = 32$ and $64$ ($A/\tau = \tfrac12$, $1$) it
+under-estimates the leverage by $10$--$20\%$ for $G \lesssim 8\tau$ (at $G = 2\tau$: $0.53$ exact against
+$0.45$ for $A = 32$, $0.73$ against $0.62$ for $A = 64$; at $G = 4\tau$, $0.80$ against $0.77$ and $0.90$
+against $0.87$) and is exact for $G \ge 16\tau$; the excess is the finite width of the island relative to
+$\ell$ (the beam's point load is wrong), not the slope mode, whose leverage stays below $0.05$ for
+$A = 32$ but reaches $0.15$--$0.41$ for $A = 64$ at $G \ge 16\tau$, where it matters for the w64 floor.
+For the boxcar matched to the island, $L_mk \approx \lambda_A k$ would give $V_p \approx W(1 - \lambda_A)^2$
+and $V'_p/U_p \approx (1 - \lambda_A)^2(1 + 0.442\,W/\tau) + c_h W/\tau$; at $\tau = 64$ this
+underestimates $V'/U$ by $0.02$ ($A = 1$) to $0.18$ ($A = 64$) at $\lambda_A \approx \tfrac12$, since
+$\nu_k = 0.34$ against $\lambda_k^2 = 0.25$ on the tuned 32-island.  Half the leverage is reached at
+$G_{1/2} = (c\rho/A)^{1/3} - \ell$ for $A = 1$ ($647$ two-sided, $277$ one-sided; the formula gives $648$
+and $279$) but not for $A = 32$: numerically $G_{1/2} = 117$ two-sided (formula $142$), and one-sided
+about one sample (formula $26$), because the 32-kernel simply touching a free gap already has
+$\lambda_A = 0.50$, so the one-sided island {\em is} the valid-side edge case below.  Two-sided scan
+for box32 on its own support ($V'/U$): $0.930$, $0.802$, $0.560$, $0.515$, $0.225$, $0.140$, $0.130$,
+$0.129$ at $G = 32$, $64$, $117$, $128$, $256$, $512$, $1024$, $2048$; for p0, $0.964$, $0.844$, $0.451$,
+$0.279$, $0.066$, $0.007$ at $G = 128$, $256$, $512$, $647$, $1024$, $2048$.  As $G \rightarrow \infty$
+the floor is the simulated-noise term: $0.129$ for box32 ($c_h W/\tau = 0.133$ is $2.4\%$ high, the
+support part of $\|S_0k\|^2$ no longer being negligible), $0.033$ (box8), $0.066$ (box16), $0.0042$ for
+p0 ($c_h/\tau$ to $0.1\%$).  For the tapered kernels the island absorbs only the constant part of the
+kernel and the shoulders survive: the floor is $(\|k\|^2 - (\sum k)^2/W)/U_p + \mbox{($n'$-term)} =
+0.159 + 0.212 = 0.371$ for w64 on its full support ($0.317$ for w48) --- but a worse structure exists:
+leaving only the 32 unit-weight core samples valid, with the shoulders masked along with the gaps, gives
+$0.295$ (found by annealing at $B \ge 512$; at $B \le 256$ the full-support island is still worse for the
+kernel).  A kernel narrower than its island: the rule that it loses only the fraction $W/A$ of its
+variance fails at $\tau = 64$ for $A \ge 48$, since an island wider than $\sim\tau$ supports many
+low-leverage modes; box32 centred on an island of $A = 48$, $64$, $128$ samples (gaps $4096$) has
+$V'/U = 0.54$, $0.73$, $0.97$ ($W/A$ rule: $0.45$, $0.59$, $0.79$), and exceeds 1 at $A = 8\tau$.  The
+isolation length scales as $\tau^{4/3}A^{-1/3}$ rather than as $\tau$.
 
 {\bf Sparse periodic masks} (valid runs $A$, gaps $B$, density $n = A/(A+B)$, period $\ll \tau$).
 For modes smooth on the period, ${\cal N}_m \approx nI + \rho D^TD$: the masked smoother is the unmasked
 one with $\tau_{\rm eff} = \tau n^{-1/4}$, and the per-sample leverage is $c_2 n^{-3/4}/\tau$.  A kernel on
-one run has $V'/U = 1 - (W/\tau)[0.442(n^{-3/4} - 1) - 0.265(1 - n)]$, accurate to $1\%$ down to
-$V'/U \approx 0.4$; for $W = A = 32$ the deficit reaches $10\%$ at $n = 0.12$ and $50\%$ at $n = 0.02$.
-A kernel spanning many periods sees the comb regime, $V'/U = 1 + 0.442\,n(1 - n^{1/4})W_{\rm eff}/\tau \ge 1$.
+one run has, to leading order, $V'/U = 1 - (W/\tau)[0.442(n^{-3/4} - 1) - 0.265(1 - n)]$; at $\tau = 64$
+this is off by $0.02$--$0.08$ for $n \ge 1/5$ and meaningless below $n \approx 1/8$ (the exact values
+saturate at the island floor $0.129$ while the formula goes negative).  Exactly, for $W = A = 32$:
+$0.894$, $0.756$, $0.624$, $0.505$, $0.265$, $0.137$ at $n = \tfrac12$, $\tfrac13$, $\tfrac14$,
+$\tfrac15$, $\tfrac18$, $\tfrac1{16}$; the deficit reaches $10\%$ already at $n = 0.51$ (every other
+32-run masked) and $50\%$ at $n = 0.20$ (gaps of $2\tau$).  For w64 on 64-runs, $10\%$ at $n = 0.65$ and
+$50\%$ at $n = 0.29$, floor $0.371$.  A kernel spanning many periods sees the comb regime,
+$V'/U = 1 + 0.442\,n(1 - n^{1/4})W_{\rm eff}/\tau \ge 1$ at leading order: the excess is real for every
+$W \ge 2$ (p0 is below 1, $0.9976$ at $n = \tfrac12$), but the formula is $20$--$40\%$ low, e.g.\ the
+every-other-sample comb gives $1.021$ (box32), $1.043$ (w64), $1.0046$ (box8) against $1.018$, $1.032$,
+$1.0044$.
 
-{\bf Gap edges.}  The leverage at the edge of a semi-infinite gap is $4c_2/\tau$ and the corresponding
-$\nu$ is $4c_h/\tau$, both four times the interior value (numerically to $0.2\%$ at $\tau = 512$, with
-the $1/\tau$ scaling confirmed from $\tau = 32$ to $512$); the excess decays into the valid data over
-$2$--$4\tau$.  A kernel on the valid side, touching the gap, has $V'/U = 1 - 1.1\,W_{\rm eff}/\tau$:
-$0.929$ (box32), $0.879$ (w64), and inpainting does not help since nothing under the kernel is masked.  Edge
-leverage for finite gaps, in units of $c_2/\tau$: $1.02$, $1.10$, $1.42$, $1.82$, $2.38$, $2.96$, $3.67$ at
-$G = 32$, $128$, $512$, $1024$, $2048$, $4096$, $16384$.  A kernel exactly filling a gap of its own width
-has $V = 0$ but $V'/U = 1 - \sum_{\rm valid}(S_0k)_s^2/U_p \approx 1 - c_h W_{\rm eff}/\tau$ ($0.984$,
-$0.971$): the simulated noise restores everything except the smoothing leakage.
+{\bf Gap edges.}  The leverage at the edge of a semi-infinite gap is $3.96\,c_2/\tau$ at $\tau = 64$
+($4c_2/\tau$ with a $1\%$ finite-$\tau$ correction) and the corresponding $\nu$ is $3.97\,c_h/\tau$; the
+excess decays into the valid data over $2$--$4\tau$ ($50\%$ of its edge value at $0.34\tau$, $10\%$ at
+$\tau$, $1\%$ at $3.2\tau$), and the profile in units of $\tau$ is the same to three digits as at
+$\tau = 512$.  A 32-wide kernel at the edge covers leverage from $3.96$ down to $2.0\,c_2/\tau$, so its
+kernel-averaged edge leverage is $2.9\,c_2/\tau$.  A kernel on the valid side, touching a free gap, has
+$V'/U = 0.599$ (box32), $0.568$ (w64; $0.556$ at its worst position, 16 samples into the gap), $0.865$
+(box8), $0.982$ (p0), and inpainting does not help since nothing under the kernel is masked; the
+leading-order $1 - 1.1\,W_{\rm eff}/\tau$ is valid only for $W_{\rm eff}/\tau \lesssim 0.15$ ($0.863$
+for box8) and would give $0.45$/$0.01$ for box32/w64.  The deficit recovers over $\sim\tau/2$ as the
+kernel moves away from the edge ($0.60$, $0.72$, $0.82$, $0.93$, $1.001$ at distance $0$, $8$, $16$, $32$,
+$64$ for box32), with a $-1\%$ dip at $2\tau$ from the annulus of \S\ref{sec:ip_upper}.  Edge leverage
+for finite gaps, in units of $c_2/\tau$: $1.02$, $1.10$, $1.42$, $1.81$, $2.37$, $2.94$, $3.64$ at
+$G = 4$, $16$, $64$, $128$, $256$, $512$, $2048$ (scale-invariant: the $\tau = 512$ values at $8\times$
+the gap); box32 touching a gap of $G = 64$/$256$/$1024$ is at $0.943$/$0.780$/$0.656$.  A kernel exactly
+filling a gap of its own width has $V = 0$ but $V'/U = 1 - \sum_{\rm valid}(S_0k)_s^2/U_p = 0.871$
+(box32), $0.788$ (w64), $0.967$ (box8), $0.996$ (p0) (leading order $1 - c_h W_{\rm eff}/\tau$: $0.867$,
+$0.761$): the simulated noise restores everything except the smoothing leakage.  A kernel at the edge of
+a long gap, inside it, is at $0.935$ (box32) / $0.894$ (w64), and one width further in at $0.967$/$0.982$.
 
 {\bf Adversarial search.}  Annealing over masks within $\pm 24\tau$ of the kernel with a bound $B$ on the
 number of masked samples (\S\ref{sec:ip_numerics}) found nothing beyond these structures: for
-$B \lesssim 1.5\tau$ the optimum is the gap of width $W$, beyond that the symmetric island with gaps $B/2$
-(one-sided or asymmetric islands and sparse periodic masks are always worse for the adversary), and the
-optimum matches the best analytic candidate to $10^{-5}$ at every budget.  This is the table in
-\S\ref{sec:ip_results}, item 3.
+$B \lesssim 1.5\tau$ ($2\tau$ for w64) the optimum is the gap of width $W$ (for w64 at $B = 32 < W$, a
+sub-support gap over its 32 unit-weight core samples, $0.946$), beyond that the symmetric island with
+gaps $B/2$ (one-sided or asymmetric islands and sparse periodic masks are always worse for the
+adversary), and the optimum matches the best analytic candidate to $10^{-5}$ at every budget, except
+that for w64 at $B \ge 512$ the annealer found the core-only island, $0.02$--$0.08$ below the
+full-support island.  This is the table in \S\ref{sec:ip_results}, item 3.
 
 \subsection{Algorithm C: the lower bound}
 \label{sec:ip_lowerC}
@@ -538,9 +776,11 @@ V'_p(t) \;\ge\; \min_{{\cal A} \subseteq {\rm supp}}
 \label{eq:ip_LB_exact}
 \end{equation}
 where $k_{\cal A}$ is $k$ restricted to ${\cal A}$ and $W_{\rm eff}(k_{\cal A}) = (\sum k_{\cal A})^2/\|k_{\cal A}\|^2$.
-For every one of the 16 kernels and every $\mu \ge 1$ the minimizer is ${\cal A} = {\rm supp}$, and then
-${\rm LB}_p(\mu) = \|k\|^2(1 - \mu c_2 W_{\rm eff}/\tau)^2/U_p = 1 - [2(\mu - 1)c_2 + c_h]W_{\rm eff}/\tau + O(W^2/\tau^2)$,
-which is (\ref{eq:ip_LB}).
+For every one of the 16 kernels and every $\mu \ge 1$ the minimizer is ${\cal A} = {\rm supp}$ (by
+enumeration at $\tau = 64$), and then
+${\rm LB}_p(\mu) = \|k\|^2(1 - \mu c_2 W_{\rm eff}/\tau)_+^2/U_p$, whose expansion is (\ref{eq:ip_LB}).
+Where $\mu c_2 W_{\rm eff}/\tau \ge 1$ the bound is identically zero: w64 for $\mu \ge 3.14$, w48 for
+$\mu \ge 4.24$, box32 for $\mu \ge 5.66$.
 
 {\em Proof.}  By (\ref{eq:ip_variances}), $V'_C = \|R_m k_{\cal A}\|^2 + \sum_{s \notin m_2}(k_s - (S_0k)_s)^2$,
 since $M_2 k = k_{\cal A}$.
@@ -554,26 +794,77 @@ and $(1 - \lambda)^2$ decreases on $[0,1]$.
 supported on kept samples, all of which have $\lambda_s \le \lambda_{\rm thr}$,
 $v^TL_mv \le \big(\sum_s v_s\sqrt{\lambda_s}\big)^2 \le \lambda_{\rm thr}(\sum_s v_s)^2$, i.e.\
 $\lambda_v \le \lambda_{\rm thr}W_{\rm eff}(v)$.  With (i), $\|R_mk_{\cal A}\|^2 \ge \|k_{\cal A}\|^2(1 - \lambda_{\rm thr}W_{\rm eff}(k_{\cal A}))_+^2$.
-(iii) For $s \in {\rm supp}\setminus{\cal A}$, $(S_0k)_s = \sum_i h[s-i]k_i \le h[0]\sum k \le 0.033 \le k_s$, and
+(iii) For $s \in {\rm supp}\setminus{\cal A}$, $(S_0k)_s = \sum_i h[s-i]k_i \le h[0]\sum k \le 0.265 \le \tfrac12 \le k_s$
+(the first inequality since $h$ is positive over the support; the numbers are those of w64, and there
+is no slack for a wider kernel), and
 $x \mapsto (k_s - x)^2$ decreases on $[0, k_s]$, so $(k_s - (S_0k)_s)^2 \ge (k_s - h[0]\sum k)^2$ (if the
 negative lobes of $h$ make $(S_0k)_s < 0$ the term only grows).  Masked samples outside the support
 contribute $\ge 0$.  Summing gives (\ref{eq:ip_LB_exact}).
 (iv) For a boxcar and $a = |{\cal A}|$ the bracket is $g(a) = a(1 - \lambda_{\rm thr}a)^2 + (W - a)(1 - Wh[0])^2$,
-with $g'' = -5\lambda_{\rm thr} + 9\lambda_{\rm thr}^2 a < 0$ on $[0, W]$ (since $\lambda_{\rm thr}W \ll 1$), so
-the minimum is at an endpoint, and $g(W) - g(0) = W[(1 - \mu Wh[0])^2 - (1 - Wh[0])^2] \le 0$ for
-$\mu \ge 1$.  For the tapered kernels the bracket depends only on how many unit- and half-weight samples
-are kept, and enumeration gives the same conclusion.  $\square$
+with $g'' = -4\lambda_{\rm thr} + 6\lambda_{\rm thr}^2 a < 0$ for $a < 2/(3\lambda_{\rm thr}) = 2\tau/(3\mu c_2)$,
+which covers $[0, W]$ for every boxcar at $\mu \le 3$ (at $\tau = 64$, $a < 40$ at $\mu = 3$); then the
+minimum is at an endpoint, and $g(W) - g(0) = W[(1 - \mu Wh[0])^2 - (1 - Wh[0])^2] \le 0$ for $\mu \ge 1$.
+Beyond that (box32 at $\mu \ge 3.8$: $a \ge 31$ at $\mu = 4$, $a \ge 21$ at $\mu = 6$) concavity fails on
+part of the range, and direct enumeration over $a = 0, \ldots, W$ gives the same conclusion.  For the tapered kernels the
+bracket depends only on how many unit- and half-weight samples are kept, and enumeration gives the same
+conclusion for every kernel and every $\mu \ge 1$ (at $\mu = 1$ exactly, $g(0) = g(W)$ to
+$3 \times 10^{-5}$).  $\square$
 
 {\bf Remarks.}  The bound cannot use the recovery term $\|L_mk\|^2$ (per-sample leverage bounds the hat
-matrix from above, not below), which is why ${\rm LB}(1) = 1 - c_h W_{\rm eff}/\tau$ rather than 1; it
-happens to coincide with inpainting's gap-filling floor.  Tightness: the tuned island (support valid, gaps
-chosen so that $\lambda_A/A$ sits just below $\lambda_{\rm thr}$) gives $0.975$/$0.940$/$0.903$ for box32 at
-$\mu = 2$/$3$/$4$ against ${\rm LB} = 0.939$/$0.897$/$0.855$; the slack is the recovery term, and at
-$\mu = 4$ nothing is enlarged and A, C and the un-enlarged algorithm coincide.  The annealed worst cases for
-C (Table \ref{tab:ip_summary}) are $\min({\rm gap} = W \mbox{ floor}, \mbox{tuned island})$ at every $\mu$,
-$0.9$--$5\%$ above the bound.  Exact-form values of ${\rm LB}_p(\mu)$ for all kernels: at $\mu = 2$,
-$0.9962$ (box2), $0.9848$ (box8), $0.9697$ (box16), $0.9395$ (box32), $0.8915$ (w64); at $\mu = 4$,
-$0.9907$, $0.9629$, $0.9264$, $0.8546$, $0.7441$.
+matrix from above, not below), which is why ${\rm LB}(1) = 1 - c_h W_{\rm eff}/\tau$ at leading order
+rather than 1; it lies just below inpainting's gap-filling floor ($0.864$ against $0.871$ for box32,
+$0.740$ against $0.788$ for w64).  The leading-order form of (\ref{eq:ip_LB}) is within $10^{-4}$ of the
+exact ${\rm LB}$ for $W \le 8$, but for box32 it is $3.5\%$ low at $\mu = 2$ and meaningless at
+$\mu \ge 3$, and for w64 $40\%$ low at $\mu = 2$.  Exact values for all 16 kernels:
+\begin{center}\small
+\begin{tabular}{lcccccccc}
+\toprule
+$\mu$ & p0 & box2 & w3 & w4 & box4 & w6 & w8 & box8 \\
+\midrule
+1   & 0.9959 & 0.9917 & 0.9890 & 0.9851 & 0.9834 & 0.9779 & 0.9702 & 0.9669 \\
+1.2 & 0.9936 & 0.9873 & 0.9831 & 0.9771 & 0.9746 & 0.9661 & 0.9542 & 0.9491 \\
+1.5 & 0.9903 & 0.9807 & 0.9742 & 0.9652 & 0.9614 & 0.9485 & 0.9304 & 0.9227 \\
+2   & 0.9848 & 0.9697 & 0.9596 & 0.9455 & 0.9395 & 0.9195 & 0.8915 & 0.8795 \\
+3   & 0.9739 & 0.9479 & 0.9307 & 0.9068 & 0.8966 & 0.8628 & 0.8161 & 0.7963 \\
+4   & 0.9629 & 0.9264 & 0.9022 & 0.8688 & 0.8546 & 0.8079 & 0.7441 & 0.7173 \\
+6   & 0.9413 & 0.8840 & 0.8466 & 0.7954 & 0.7738 & 0.7036 & 0.6099 & 0.5715 \\
+\midrule
+$\mu$ & w12 & w16 & box16 & w24 & w32 & box32 & w48 & w64 \\
+\midrule
+1   & 0.9558 & 0.9403 & 0.9335 & 0.9108 & 0.8785 & 0.8639 & 0.8143 & 0.7400 \\
+1.2 & 0.9320 & 0.9080 & 0.8976 & 0.8628 & 0.8133 & 0.7913 & 0.7169 & 0.6083 \\
+1.5 & 0.8969 & 0.8607 & 0.8452 & 0.7932 & 0.7202 & 0.6883 & 0.5825 & 0.4349 \\
+2   & 0.8399 & 0.7848 & 0.7612 & 0.6837 & 0.5775 & 0.5327 & 0.3895 & 0.2105 \\
+3   & 0.7314 & 0.6433 & 0.6066 & 0.4891 & 0.3395 & 0.2812 & 0.1196 & 0.0033 \\
+4   & 0.6305 & 0.5159 & 0.4694 & 0.3270 & 0.1643 & 0.1094 & 0.0046 & 0 \\
+6   & 0.4510 & 0.3032 & 0.2478 & 0.1004 & 0.0026 & 0 & 0 & 0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+(The exact form depends on the kernel only through $\lambda_{\rm thr}W_{\rm eff}$ and $h[0]\sum k$, up
+to the normalization by $U_p$, so the $\tau = 512$ value for a kernel reappears at $\tau = 64$ for the
+kernel with one eighth of its $W_{\rm eff}$: box32 at $\tau = 512$ read $0.9395$/$0.8546$ at $\mu = 2$/$4$,
+which is box4 here.)  The bound reaches $0.95$ only for $\mu \le 1.19$ (box8), $1.76$ (box4), $2.90$
+(box2), $5.2$ (p0), never for $W \ge 16$; and $0.90$ for $\mu \le 1.76$ (box8), $1.18$ (box16), never for
+box32 or w64.  Tightness: the tuned island (support valid, gaps chosen so that the per-sample leverage on
+the support sits just below $\lambda_{\rm thr}$; $G = 68$/$125$/$195 = 1.1$/$2$/$3\tau$ for box32) gives
+$0.784$/$0.527$/$0.315$ for box32 at $\mu = 2$/$3$/$4$ against ${\rm LB} = 0.533$/$0.281$/$0.109$, and
+$0.634$/$0.394$/$0.371$ for w64 against $0.211$/$0.003$/$0$; the slack is the recovery term, which is now
+larger than the bound itself; and at $\mu = 4$ nothing is enlarged and A, C and the un-enlarged algorithm
+coincide.  The annealed worst cases for C (Table \ref{tab:ip_summary}) are
+$\min({\rm gap} = W \mbox{ floor}, \mbox{tuned island})$ to $7 \times 10^{-3}$ at every $\mu$ --- the
+island gains that much from additional far gaps at $1$--$8\tau$ that lower the recovery term --- except
+for w64 at $\mu = 1.2$, where the 64-gap's edge leverage ($1.42\,c_2/\tau$) makes the rule enlarge its
+edges, disabling the gap $= W$, and the worst case is instead a 15-sample gap inside the support plus
+scattered single samples that push the whole support above threshold ($0.789$: the $n'$-term of a fully
+inpainted support).  They are $0.08$--$0.42$ above the bound, which nothing approaches at $\tau = 64$.
+Under a budget $B$ on the original mask (annealing, as in \S\ref{sec:ip_lower0}), the rule changes
+nothing for $B \le 2\tau$ --- the worst masks there are the gap $= W$ and the $B/2$-island, neither of
+which is enlarged at $\mu \ge 2$ since a 64-gap's edge leverage is below threshold --- and from
+$B = 4\tau$ on it holds the island at its tuned isolation: $0.78$ ($\mu = 2$) and $0.52$ ($\mu = 3$) for
+box32, $0.63$ and $0.39$ for w64, against $0.13$ and $0.30$ without the rule.  For algorithm A at
+$\mu = 2$ a comb-island built from $4\tau$ masked samples is already within $0.045$ (box32) and $0.03$
+(w64) of the unconstrained worst case of Table \ref{tab:ip_summary}.
 
 \subsection{Algorithm A: the $b$-term}
 \label{sec:ip_bterm}
@@ -590,24 +881,43 @@ removed their common local mean.  Algorithm A drops the data of the enlarged sam
 imprint on $\hat f$, so the second pass re-adds a smoothed copy of their residuals to the kernel's own
 residual, with negative covariance.  With $b_s \approx h[0]\sum k$ on the enlarged samples within $\sim\ell$ of
 the kernel, the cross term is of order $-(\sum k)^2 h[0] \times$ (fraction of the $L_m$ row mass on enlarged
-samples), i.e.\ first order in $W_{\rm eff}/\tau$ and independent of $\mu$; numerically $-0.4\,W_{\rm eff}/\tau$
-($-0.023$ to $-0.026$ for box32 from $\mu = 1.1$ to $3$) when the kernel's run is enlarged on both sides,
-and about half that for one side.  Per-sample leverage gives no handle on it: $b$ lives on samples
-{\em above} threshold, and its effect is a cross-covariance.  Consequences:
+samples), i.e.\ first order in $W_{\rm eff}/\tau$ and independent of $\mu$; numerically
+$-0.5\,W_{\rm eff}/\tau$ when the kernel's run is enlarged on both sides ($-0.25$ for box32 from
+$\mu = 1.1$ to $2$, $-0.21$ at $\mu = 3$, $-0.13$ at $\mu = 4$; $-0.34$ for w64 up to $\mu = 2$) and
+$-0.25\,W_{\rm eff}/\tau$ for one side ($-0.12$ box32, $-0.18$ w64, at the new edge of a long gap):
+independent of $\mu$ up to $\mu \approx 2$ and gone by $\mu = 4$, where the rule enlarges nothing beside a
+long gap.  On the same masks $V'_C$ is {\em above} 1 by $6$--$19\%$ (the kept run's residual plus the
+high-passed $n'$ on its enlarged neighbours), which is the upper-side remark of \S\ref{sec:ip_upper}; a
+dedicated maximization finds larger values at small $\mu$, $1.083$ / $1.18$ at $\mu = 2$ and $1.136$ /
+$1.28$ at $\mu = 1.2$ for box32 / w64 (\S\ref{sec:ip_fom}).
+Per-sample leverage gives no handle on the $b$-term: $b$ lives on samples {\em above} threshold, and its
+effect is a cross-covariance.  Consequences:
 \begin{itemize}
-\item A's guarantee saturates as $\mu \rightarrow 1$ at about $1 - 0.65\,W_{\rm eff}/\tau$ ($0.98$ box32,
-$0.965$ w64), below ${\rm LB}(\mu)$ for $\mu \lesssim 1.15$; making the rule more aggressive stops helping
-below $\mu \approx 1.5$ while its cost keeps growing.
+\item A's worst case saturates as $\mu \rightarrow 1$ at $0.84$ (box32) and $0.79$ (w64) at $\mu = 1.2$,
+i.e.\ $1 - 0.32$ and $1 - 0.23\,W_{\rm eff}/\tau$, limited by the comb-island below, while C is at the
+gap-filling floor $0.871$/$0.789$; making the rule more aggressive stops helping below $\mu \approx 1.5$
+while its cost keeps growing.  A does not cross below the exact-form ${\rm LB}(\mu)$ at any
+$\mu \ge 1.2$ (margin $\ge 0.05$ for box32, $\ge 0.18$ for w64): the $b$-term is at full strength on its
+worst masks, but their $a$-part $\|R_ma\|^2$ is far from the extremal value the bound assumes, and the
+bound is much weaker than every found worst case.
 \item The enlargement is counter-productive for a kernel on the kept run next to an enlarged zone
-($V'_A$ is below the un-enlarged value at that position at every $\mu$), while it is what fixes the
-kernels inside the zone; the net worst case still improves ($0.936 \rightarrow 0.96$--$0.99$ at a long-gap
-edge for box32).
-\item The annealed worst cases for A at $\mu \le 3$ are all $b$-term configurations.  The worst is a
-``comb-island'': the support kept at exactly threshold leverage, surrounded over $1$--$4\tau$ by an
-irregular above-threshold comb that the rule enlarges entirely, so that $m_2$ is a bare island inside a
-masked neighbourhood ($0.957$ at $\mu = 2$ for box32).  Close behind are a valid run between two long gaps
-just longer than twice the expansion radius ($0.960$) and the first kept samples at the new edge of a
-long gap ($0.970$).
+($V'_A$ is below the un-enlarged value at that position at every $\mu$; on the comb-island masks below
+the un-enlarged algorithm gives $0.84$/$0.94$/$0.99$ against A's $0.84$/$0.79$/$0.70$ at
+$\mu = 1.2$/$1.5$/$2$ for box32), while it is what fixes the kernels inside the zone; the net worst case
+at a long-gap edge still improves ($0.628$ un-enlarged $\rightarrow$ $0.836$/$0.899$/$0.935$ at the new
+edge for $\mu = 2$/$1.5$/$1.2$, box32).
+\item The annealed worst cases for A at $\mu \le 2$ are all $b$-term configurations, and all
+``comb-islands'': the support kept at exactly threshold leverage, surrounded over $1$--$4\tau$ by an
+irregular above-threshold comb of $1$--$6$-sample valid runs that the rule enlarges entirely, so that
+$m_2$ is a bare island inside a masked neighbourhood ($0.701$ at $\mu = 2$ for box32, where C on the same
+mask gives $1.084$ and the un-enlarged algorithm $0.99$: the $b$-term, $-0.24 = -0.48\,W_{\rm eff}/\tau$,
+is the whole effect).  Behind it at $\mu = 2$ are a kept run between two long gaps ($0.755$), the island
+beside an above-threshold comb ($0.731$), the tuned island ($0.784$) and the first kept samples at the
+new edge of a long gap ($0.836$).  At $\mu = 3$ the box32 optimum is a weak comb-island ($0.514$,
+$b = -0.08$) while for w64 it is already the bare island ($b = 0$); at $\mu = 4$ both are bare islands
+with nothing enlarged (box32: the tuned island, $0.313$; w64: a partial-support island keeping the core
+and one shoulder, $0.360$), and A and C coincide.  For p0 the comb-island holds up to $\mu = 3$
+($b = -0.009 \approx -0.6\,W_{\rm eff}/\tau$).
 \end{itemize}
 What the bound can say for A is only $\|R_m(a + b)\| \ge \|R_ma\| - \|b\|$ with $\|b\|^2 \le \|S_0k\|^2$, a loss
 of order $\sqrt{W_{\rm eff}/\tau}$, which is useless.  For algorithm C the whole question disappears.
@@ -616,91 +926,595 @@ of order $\sqrt{W_{\rm eff}/\tau}$, which is useless.  For algorithm C the whole
 \label{sec:ip_overmask}
 
 {\bf Isolated gap of length $G$.}  Extra samples masked on {\em each} side of the gap (where
-$\lambda > \mu c_2/\tau$):
+$\lambda > \mu c_2/\tau$), with valid data of $10\,\ell$ on both sides; ``free'' is a mask extending to
+the end of the stream:
 \begin{center}\small
 \begin{tabular}{lcccccccc}
 \toprule
 $G$ & $\mu = 1.05$ & 1.1 & 1.2 & 1.5 & 2 & 3 & 4 & 6 \\
 \midrule
-32    & 0   & 0   & 0   & 0   & 0   & 0  & 0 & 0 \\
-128   & 422 & 0   & 0   & 0   & 0   & 0  & 0 & 0 \\
-512   & 753 & 578 & 358 & 0   & 0   & 0  & 0 & 0 \\
-1024  & 808 & 665 & 497 & 212 & 0   & 0  & 0 & 0 \\
-2048  & 820 & 695 & 553 & 330 & 119 & 0  & 0 & 0 \\
-4096  & 821 & 700 & 571 & 376 & 202 & 0  & 0 & 0 \\
-16384 & 844 & 701 & 576 & 401 & 251 & 80 & 0 & 0 \\
+4     & 0   & 0  & 0  & 0  & 0  & 0  & 0 & 0 \\
+16    & 53  & 0  & 0  & 0  & 0  & 0  & 0 & 0 \\
+64    & 94  & 72 & 45 & 0  & 0  & 0  & 0 & 0 \\
+128   & 101 & 83 & 62 & 26 & 0  & 0  & 0 & 0 \\
+256   & 103 & 87 & 69 & 41 & 15 & 0  & 0 & 0 \\
+512   & 103 & 88 & 71 & 47 & 25 & 0  & 0 & 0 \\
+2048  & 106 & 88 & 72 & 50 & 31 & 10 & 0 & 0 \\
+free  & 112 & 88 & 72 & 51 & 33 & 13 & 0 & 0 \\
 \bottomrule
 \end{tabular}
 \end{center}
-The excess leverage decays over $1$--$2\tau$ with a long tail ($3\%$ above interior at $2\tau$ for
-$G = 16384$), which is why small $\mu$ masks so much; at $\mu \ge 4$ nothing is expanded, since even a
-$16384$-sample gap has edge leverage $3.67\,c_2/\tau$ (a truly free end, $4c_2/\tau$, would lose a handful).
+The table is scale-invariant: it is the $\tau = 512$ table at $8\times$ the gap, divided by $8$.  The
+excess leverage decays over $1$--$2\tau$ with a long tail ($3\%$ above interior at $2.7$--$3.2\tau$ for
+$G = 2048$ and a free end), which is why small $\mu$ masks so much; nothing is expanded for gaps up to
+$128$ once $\mu \ge 2$ and up to $512$ once $\mu \ge 3$, and at $\mu \ge 4$ nothing at all, since even a
+free end has edge leverage $3.96\,c_2/\tau$ (it expands by $6$/$0$/$0$/$1$/$2$/$3$ samples more than the
+$2048$-gap at $\mu = 1.05$--$3$).
 
-{\bf Random masks.}  For Bernoulli masks of valid density $n$ the leverage is $c_2 n^{-3/4}/\tau$ with
-$\pm1\%$ scatter, so the rule is a step: everything with $n < \mu^{-4/3}$ is masked ($0.88$, $0.78$,
-$0.58$, $0.40$, $0.23$, $0.16$, $0.09$ at $\mu = 1.1$, $1.2$, $1.5$, $2$, $3$, $4$, $6$), nothing above it,
-with a transition width of $\sim 0.04$ in $\mu$.  Periodic short gaps behave the same way through their
-density (e.g.\ 8 masked of every 64, $n = 0.875$, is masked wholesale at $\mu = 1.1$ and untouched at
-$1.2$).  For a random mask of gaps with lengths log-uniform in $[1, 4096]$ covering $10\%$ ($20\%$) of a
-$2^{18}$-sample stream, the fraction of valid samples lost is $9.2$ ($20.9$), $5.9$ ($14.1$), $2.7$ ($6.5$),
-$0.9$ ($2.2$), $0.06$ ($0.16$), $0$ ($0.04$)\% at $\mu = 1.1$, $1.2$, $1.5$, $2$, $3$, $4$.
+{\bf Random masks.}  For Bernoulli masks of valid density $n$ the mean leverage is $c_2 n^{-3/4}/\tau$
+to $0.3\%$, with a per-sample scatter of $\pm 4\%$ ($n = 0.9$) to $\pm 8\%$ ($n = 0.5$) (it was $\pm 1\%$
+at $\tau = 512$: the homogenization averages over $\ell = 90$ samples rather than $724$), so the rule is a
+step: everything with $n < \mu^{-4/3}$ is masked ($0.94$, $0.88$, $0.78$, $0.58$, $0.40$, $0.23$, $0.16$,
+$0.09$ at $\mu = 1.05$, $1.1$, $1.2$, $1.5$, $2$, $3$, $4$, $6$), nothing above it, with a transition
+width of $0.03$ ($n = 0.95$) to $0.2$ ($n = 0.5$) in $\mu$.  Periodic short gaps behave the same way
+through their density while the period is $\ll \tau$ (e.g.\ 1 masked of every 8, or 8 of every 64,
+$n = 0.875$, is masked wholesale at $\mu = 1.1$ and untouched at $1.2$); for periods $\ge 2\tau$ only the
+samples near each gap are above threshold ($70$/$45$/$32\%$ of the valid samples at $\mu = 1.1$ for
+$16$ of $128$, $32$ of $256$, $64$ of $512$).  For random masks of gaps with log-uniform lengths on a
+$2^{18}$-sample stream, the fraction of valid samples lost is
+\begin{center}\small
+\begin{tabular}{lccccccccc}
+\toprule
+lengths & cover & $\mu = 1.05$ & 1.1 & 1.2 & 1.5 & 2 & 3 & 4 & 6 \\
+\midrule
+$[1, 512]$  & 10\% & 13.4\% & 9.7\% & 6.3\% & 2.8\% & 0.87\% & 0.02\% & 0.01\% & 0.01\% \\
+$[1, 512]$  & 20\% & 26.9\% & 20.2\% & 13.6\% & 6.4\% & 2.2\% & 0.16\% & 0.07\% & 0.01\% \\
+$[1, 4096]$ & 10\% & 2.6\% & 2.0\% & 1.5\% & 0.84\% & 0.40\% & 0.08\% & 0 & 0 \\
+$[1, 4096]$ & 20\% & 6.1\% & 4.6\% & 3.4\% & 1.9\% & 0.94\% & 0.21\% & 0.01\% & 0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+The $[1, 512]$ distribution is the $\tau = 512$ baseline's $[1, 4096]$ distribution scaled by $1/8$ and
+reproduces its losses; with lengths up to $4096$ the gaps are mostly $\gg \tau$, with edges already at
+$\sim 3.6\,c_2/\tau$, and the loss in fraction is smaller.
 
 \subsection{Numerical methods and validation}
 \label{sec:ip_numerics}
 
 {\bf Exact evaluation.}  For a given mask, (\ref{eq:ip_variances}) needs ${\cal N}_m^{-1}$ applied to a
-few vectors, and $\lambda[t]$ needs its diagonal.  ${\cal N}_m$ is pentadiagonal but has condition number
-$10^{12}$--$10^{16}$ at $\tau = 512$ (largest eigenvalue $16\rho$, smallest set by the smoothest modes), so a
-plain banded Cholesky loses the smooth modes; three steps of iterative refinement recover them, and the
-result was validated against an information-form two-filter smoother (the forward and backward recursions of
-\dtnotes{Time detrending algorithm 2: Kalman filter}, run over the whole timestream) to $10^{-6}$ even with $30000$-sample gaps, and
-both against dense algebra at $\tau \le 64$ to $10^{-10}$.  The leverage was computed by the same
-two-filter recursion, $\lambda[t] = ((J_f + J_b)^{-1})_{00}$.
+few vectors, and $\lambda[t]$ needs its diagonal.  ${\cal N}_m$ is pentadiagonal but ill-conditioned:
+its largest eigenvalue is $16\rho$ and its smallest is set by the smoothest modes, giving a condition
+number of $3 \times 10^8$ for benign masks and up to $10^{13}$ for a free end (the free modes of a long
+masked tail) at $\tau = 64$, against $10^{12}$--$10^{16}$ at $\tau = 512$.  Dense algebra
+($T \le 4521$) is adequate at $\tau = 64$ except for the free-end masks, where a dense LU loses
+$\sim 10^{-5}$ in the masked tail; a plain banded Cholesky loses the smooth modes, three steps of
+iterative refinement recover them, and the refined banded solver agrees with an information-form
+two-filter smoother (the forward and backward recursions of \dtnotes{Time detrending algorithm 2: Kalman
+filter}, run over the whole timestream) to $9 \times 10^{-14}$ on every mask, including the free ends
+(and to $10^{-6}$ with $30000$-sample gaps at $\tau = 512$).  The banded solver with refinement was used
+everywhere (annealing, exact tables, Monte Carlo), the information-form smoother for the leverage
+diagonal $\lambda[t] = ((J_f + J_b)^{-1})_{00}$ and as the cross-check of every annealed optimum
+(agreement $10^{-6}$), and dense algebra for the eigenvalues and the solver cross-checks.
 
 {\bf Adversarial search.}  Simulated annealing on $\pm\log(V'/U)$ over masks in a window of half-width
 $24\tau$ around the kernel (valid clamps of $8\ell$ beyond), with single-sample flips, masking or
 unmasking of random intervals, count-preserving transfers, boundary shifts and imposed periodic patterns,
-optionally under a budget on the number of masked samples; 5--6 seeds per problem including the analytic
-candidates, followed by a deterministic single-flip descent.  At fixed $W/\tau$ every length in the
-problem scales with $\tau$ except the island isolation length ($\tau^{4/3}$), so the searches were run at
-$\tau = 64$ ($W = 4$) and $\tau = 128$ ($W = 8$), agreeing to $10^{-5}$, and the optimal masks transplanted
-to $\tau = 512$ ($W = 32$) and re-polished there; comb structures, which do not scale, were searched at
-$\tau = 512$ directly.  Every reported optimum is locally optimal under all single flips.  Annealing cannot
-certify a global optimum; the evidence is the agreement of independent seeds and the fact that no run ever
-went below the best analytic candidate.
+optionally under a budget on the number of masked samples, followed by a deterministic single-flip
+descent.  For algorithm 0, $7$--$15$ seeds per problem including the analytic candidates,
+$60000$--$90000$ steps, $353$ runs; for A and C, with the rule inside the loop, $11$ seeds per problem
+(including the algorithm-0 worst masks), $40000$ steps plus a two-pass descent over the whole window,
+$776$ runs over the unconstrained and budgeted problems.  Everything was run natively at $\tau = 64$ with
+the real kernels.  At fixed $W/\tau$ every length in the problem scales with $\tau$ except the island
+isolation length ($\tau^{4/3}$), so a search at another $\tau$ with the same $W/\tau$ would transfer;
+but the problem depends on $W/\tau$, and nothing was transplanted from the $\tau = 512$ baseline
+($W/\tau = 1/16$) or from narrower kernels.  Every reported optimum is locally optimal under all single
+flips.  Annealing cannot certify a global optimum; the evidence is the agreement of independent seeds
+and the fact that no run ever went below the best analytic candidate by more than the amounts stated in
+\S\ref{sec:ip_lower0} and \S\ref{sec:ip_lowerC}.
 
-{\bf Monte Carlo.}  The literal procedures (two or three smoother passes, then the 16 convolutions) were
-simulated at $\tau = 512$ with $10^5$--$6 \times 10^5$ noise realizations per mask for ten masks covering
-every family above, giving $655616$ (kernel, position) comparisons with the exact formulas: pull r.m.s.\
-$0.98$--$1.07$, maximum $|{\rm pull}|$ $4.8$, $1871$ beyond $3\sigma$ against $1770$ expected.  The comb
-excess above 1 was resolved at $11\sigma$ (box32) and $17\sigma$ (w64).  For the enlarged algorithms the
-formulas were confirmed at $\tau = 8$ (three-pass simulation, four thresholds) and at $\tau = 512$ for the
-worst masks at $\mu = 2$ ($8 \times 10^4$ realizations; e.g.\ box32: $0.9563 \pm 0.0048$ vs $0.9569$ for A,
-$0.9741 \pm 0.0051$ vs $0.9746$ for C).
+{\bf Monte Carlo.}  The literal two-pass procedure (masked smoother, inpainting, unmasked smoother,
+then the 16 convolutions; nothing uses the identity or the variance formulas) was simulated at
+$\tau = 64$ with $10^5$--$6 \times 10^5$ noise realizations per mask for eleven masks covering every
+family above (gap $= W$, free and finite long-gap edges, the $G_{1/2}$ island, the adversarial island, a
+sparse periodic mask, the comb, and the two annealed maximizing masks), all 16 kernels at every position
+of a $\pm 256$ scan, giving $143632$ (kernel, position) comparisons with the exact formulas: pull r.m.s.\
+$0.93$--$1.05$, maximum $|{\rm pull}|$ $4.7$, $443$ beyond $3\sigma$ against $388$ expected (the two
+short-gap masks have slightly heavy tails), mean pull $-0.05$ from the shared realizations.  The comb
+excess above 1 was resolved at $61\sigma$ (box32: $1.02100 \pm 0.00034$) and $89\sigma$ (w64), and for
+every kernel of width $\ge 2$, while p0 is below 1 ($0.99752 \pm 0.00010$); the annealed maxima were
+confirmed at $12\sigma$ (box32) and $25\sigma$ (w64) above 1.  For the enlarged algorithms the literal
+three-pass procedure was simulated at $\tau = 64$ on the four worst masks at $\mu = 2$ ($2 \times 10^5$
+realizations each; e.g.\ box32: $0.6996 \pm 0.0022$ vs $0.7009$ for A, $0.7797 \pm 0.0024$ vs $0.7805$
+for C; w64: $0.5934 \pm 0.0018$ vs $0.5943$ and $0.6289 \pm 0.0020$ vs $0.6293$), $128$ (kernel, variant)
+comparisons with pull r.m.s.\ $0.87$ and maximum $2.2$; among them $V'_C/U = 1.040$ for w64 on the
+box32 comb-island mask, C above 1 at $12\sigma$.
 
 \subsection{Remarks: algorithm B, fixed lag, renormalization}
 \label{sec:ip_remarks}
 
 {\bf Algorithm B} (re-run the first pass with $m_2$) has no $b$-term but its kept samples carry the
 residual of the {\em smaller} mask, whose leverage is higher near the new edges and on any short kept run.
-At the new edge of a long gap it reproduces the un-enlarged edge value ($0.936$ for box32) at every $\mu$,
+At the new edge of a long gap it reproduces the un-enlarged edge value ($0.628$ for box32) at every $\mu$,
 because masking the edge just moves the $4\times$ edge leverage to the new edge; on a kept run between
-two enlarged zones it turns the run into an island ($V'/U = 0.13$--$0.46$).  Iterating the rule to
-self-consistency does not help: for $\mu < 3.7$ each iteration creates a new above-threshold edge and the
-expansion eats the whole timestream.
+two enlarged zones it turns the run into an island, at or near the island floors of
+\S\ref{sec:ip_lower0}.  Iterating the rule to self-consistency does not help: for $\mu$ below the
+long-gap edge leverage ($3.6$--$4$) each iteration creates a new above-threshold edge and the expansion
+eats the whole timestream.
 
-{\bf Fixed lag.}  With the production fixed-lag estimator ($L = 4\ell \approx 2900$ at $\tau = 512$) the
+{\bf Fixed lag.}  With the production fixed-lag estimator ($L = 4\ell = 363$ at $\tau = 64$) the
 identities (\ref{eq:ip_identities}) no longer hold exactly, since neither pass is a whole-timestream
 solve.  An exact fixed-lag computation (an information-form engine validated against the python reference
-{\tt KalmanDetrender}) shows the edge cases unchanged and the island cases moving by several points, e.g.\
-the 32-island with $2048$-sample gaps from $0.562$ to $0.504$ (box32), because the far data no longer
-clamp the baseline on the lookahead side.  The conclusions of this section are qualitative in that
-setting; the bound (\ref{eq:ip_LB}) is not.
+{\tt KalmanDetrender}) shows that for algorithm 0 nothing moves by more than $3 \times 10^{-3}$: the
+free-edge values are reproduced to $2 \times 10^{-4}$, the 32-island at $G_{1/2}$ (gaps $117 \ll L$,
+with $2.7\,\ell$ of valid data inside the lookahead beyond them) moves from $0.560$ to $0.558$, and a
+finite gap longer than $L$ ($G = 2048$) behaves as a free gap ($0.599$ instead of $0.628$), because the
+far data no longer clamp the baseline on the lookahead side.  For algorithms A and C the rule is
+sensitive to which leverage it uses: on the whole-stream worst masks at $\mu = 2$, tuned to the
+threshold to $10^{-3}$, the fixed-lag leverage on the support is $0.1$--$4.6\%$ higher ($2.07$--$2.09$
+against $2.00\,c_2/\tau$ on the comb-islands), so the fixed-lag rule drops part or all of the support
+and the values jump (the box32 comb-island: A from $0.70$ to $1.006$, with the whole support inpainted).
+These are not fixed-lag worst cases --- an adversary tuning to the fixed-lag leverage would rebuild the
+same structures $1$--$5\%$ more isolated.  The conclusions of this section are qualitative in that
+setting; the bound (\ref{eq:ip_LB_exact}) is not.
 
 {\bf Renormalization.}  $V'_p(t)$ is a deterministic function of the mask, so the principled route to a
 guarantee near 1 is not to mask more but to compute it and divide: the kernel-level
 $1 - 2\lambda_k + \nu_k$ needs the $W$-band of ${\cal N}_m^{-1}$ and of ${\cal N}_m^{-1}M{\cal N}_m^{-1}$
 (the $\nu$ of \dtnotes{Outputs} extended to lags up to $W$), roughly $O(W)$ $2 \times 2$ operations per
 sample on top of the filter.  This has not been pursued.
+
+\subsection{Dependence on $\tau$}
+\label{sec:ip_tau}
+
+The problem depends on the kernel and the smoother only through $W_{\rm eff}/\tau$ (and $A/\tau$ for an
+island of $A$ valid samples).  At fixed $W/\tau$ every length scales with $\tau$ --- the edge-leverage
+profiles, the expansion radii of \S\ref{sec:ip_overmask} and the comb structures at $\tau = 64$ are the
+$\tau = 512$ ones at one eighth of the distance, and the fitted island constant $c$ of
+(\ref{eq:ip_island}) is the same function of $G/\tau$ --- except the island isolation length, which
+scales as $\tau^{4/3}A^{-1/3}$ ($G_{1/2} = 647$ for $A = 1$ at $\tau = 64$ against $11048$ at
+$\tau = 512$, a factor $17 = 8^{4/3}$).  The previous baseline of these notes was $\tau = 512$ with the
+same 16 kernels ($W_{\rm eff}/\tau = 1/16$ for box32), where the headline numbers were: plain-inpainting
+worst cases $0.984$ (kernel filling a gap of its own width) and $0.929$ (kernel beside a long gap) for
+box32, floors $0.017$ (box32) and $0.135$ (w64) reached at isolation gaps of $\sim 2900$ samples; worst
+found for A and C at $\mu = 2$ of $0.957$ and $0.975$ (box32); largest excess above 1 of $1.0027$
+(box32).  The $\tau = 64$ deficits are not those numbers times $8$: for box32 the valid-side edge deficit
+goes from $0.071$ to $0.401$ ($5.6\times$), the gap $= W$ deficit from $0.0165$ to $0.129$ ($7.8\times$)
+and the comb excess from $0.0023$ to $0.021$ ($9\times$), because the leading-order regime, in which every
+deficit is a fixed multiple of $W_{\rm eff}/\tau$, ends around $W_{\rm eff}/\tau \approx 0.15$ (box8 at
+$\tau = 64$ is still inside it: the linear edge formula gives $0.863$ against $0.865$ exact).  In units of
+$W_{\rm eff}/\tau$ the worst-case deficit coefficients of Table \ref{tab:ip_summary} survive from
+$\tau = 512$ to $\tau = 64$ for box32 to $10$--$20\%$ (for C, exactly), but not for w64, whose deficit
+saturates at its core-island floor; and the exact-form bounds of \S\ref{sec:ip_upper} and
+\S\ref{sec:ip_lowerC}, which depend on the kernel only through $\lambda_{\rm thr}W_{\rm eff}$ and
+$h[0]\sum k$, transfer between a kernel at one $\tau$ and the kernel with $W_{\rm eff}$ scaled at the
+other.
+
+\subsection{The windowed figure of merit}
+\label{sec:ip_fom}
+
+This subsection contains the details behind \S\ref{ssec:weaker_fom}: the evaluation of the window
+average, the searches for $X_{\rm hi}$ and $\tilde X_{\rm lo}$, the full per-kernel tables, the $T_c$
+dependence, the Monte Carlo checks and the caveats.  Everything is at $\tau = 64$ with $T_c = 1024$, in
+the setting of \S\ref{sec:ip_setup}.  Labels are as in \S\ref{sec:ip_results}: ``exact'' means exact
+linear algebra for the mask named; ``exact scan'' the maximum over a finite family of masks, each
+evaluated exactly; ``annealing'' or ``best found'' a value found by simulated annealing, exact for the
+mask exhibited but not certified as the maximum; ``Monte Carlo'' a simulation of the literal procedure.
+
+{\bf The windowed evaluator.}  $\tilde X_{\rm lo}$ needs $V'_p(t)$ at every position of a window
+$[t_0, t_0 + T_c)$ for every kernel, $16 \times 1024$ quadratic forms per mask.  For algorithm 0, let
+$S = [t_0 - 32, t_0 + T_c + 32)$ be the samples any kernel in the window touches and
+$Z = {\cal N}_m^{-1}ME_S$ (one banded solve with $|S|$ right-hand sides; the masked columns are zero and
+are skipped).  The $S$-block of $R_m^2 = M - 2L_m + L_m^2$ is $M_S - 2\,{\rm diag}(m_S)Z_S + Z^TMZ$, of
+which only the band $|s - s'| < W_{\rm max}$ is needed, since it is contracted with $kk^T$; the band of
+$Z^TMZ$ is computed blockwise (cost $T \times |S| \times 128$ instead of $T \times |S|^2$), and
+$\|R_mk_{p,t}\|^2$ at every $t$ is a strided quadratic form on the band.  The $n'$-term
+$\|(I - M)(k - S_0k)\|^2$ is the correlation of $1 - m$ with the squared impulse response of
+$(I - S_0)$ applied to $k$ (kept to $\pm 2560$ samples, $e^{-2560/\ell} \sim 5 \times 10^{-13}$).  For A
+and C the vectors $M_2k_{p,t}$ and, for A, $(M - M_2)S_0k_{p,t}$ are formed for every $t$ in the window
+and solved in one banded solve with $T_c$ right-hand sides per (kernel, variant), using
+$\|R_mv\|^2 = \|v\|^2 - 2v^Tw + \sum_s m_sw_s^2$ with $w = {\cal N}_m^{-1}v$ for $v$ supported on valid
+samples; the leverage $\lambda[t]$ that the rule needs at every $t$ comes from the banded Cholesky
+factor by the Takahashi recursion (the band of ${\cal N}_m^{-1}$ from the factor, $O(T)$).  The banded
+Cholesky with iterative refinement of \S\ref{sec:ip_numerics} is used throughout; in the clamped
+geometry below the refinement changes nothing ($4 \times 10^{-10}$).  Cost at $T = 3072$: $0.1$--$0.2$ s
+per mask for all 16 kernels (algorithm 0), $0.1$ s per (mask, kernel, variant) for A and C.  A pointwise
+evaluator (one or two right-hand sides, $\sim 1$ ms) drives the $X_{\rm hi}$ annealing.
+
+{\em Validation.}  The evaluator reproduces every reference number of
+\S\ref{sec:ip_constants}--\S\ref{sec:ip_overmask} to the digits given there: the constants of the
+smoother, $U_p$ (Table \ref{tab:ip_Up}), the gap $= W$, free-edge, finite-gap-edge, island, comb and
+sparse-periodic values of \S\ref{sec:ip_lower0} (e.g.\ the two-sided island scan $0.930 \ldots 0.129$,
+including $0.560$ at $G = 117$), $B_{1,p}/U_p$, the isolated-gap expansion table of \S\ref{sec:ip_overmask}
+entry by entry, the density threshold, the tuned islands $0.784$/$0.527$/$0.315$ and $0.634$/$0.394$/$0.371$
+of \S\ref{sec:ip_lowerC}, the new-edge values $0.835$/$0.900$/$0.936$ of \S\ref{sec:ip_bterm}, and Table
+\ref{tab:ip_summary} to $0.001$--$0.006$ for $28$ of its $30$ entries (the two C entries at $\mu = 1.2$
+were seed-limited by $0.005$/$0.015$ in the re-run).  Against dense algebra (dense ${\cal N}_m^{-1}$, $R_m$
+and a finite-$T$ $S_0$ at $T = 2048$ on structured random masks) the windowed evaluator agrees to
+$1.2 \times 10^{-8}$ (algorithm 0, 16 kernels at 29 positions; the dense solve's own rounding at
+$\kappa \sim 10^8$), $2.4 \times 10^{-7}$ (A) and $4.6 \times 10^{-8}$ (C), the Takahashi leverage to
+$8 \times 10^{-9}$, and the pointwise and windowed evaluators agree to $2 \times 10^{-10}$; $m \equiv 1$
+gives $V' = U$ at every position to $6 \times 10^{-11}$, $m \equiv 0$ to $8 \times 10^{-15}$, and at
+$\mu = \infty$ A $=$ C $=$ algorithm 0 to $4 \times 10^{-10}$.  Monte Carlo of the literal procedure on one
+structured mask, $32000$ realizations, all 16 kernels at all 1024 window positions: pull r.m.s.\ $1.011$
+and maximum $|{\rm pull}|$ $3.9$ over $16384$ (kernel, position) pairs for algorithm 0, and $1.02$ / $4.65$
+for each of A and C at $\mu = 2$.
+
+{\em Geometry.}  For $\tilde X_{\rm lo}$ the window is $[1024, 2048)$ of a $T = 3072$ stream; the mask is
+free on the window plus $8\tau = 512$ margins on each side ($2048$ free samples) and all valid beyond
+(clamps of $512$ against $2048$ change the window average by $6 \times 10^{-10}$).  The rule is applied to
+the whole stream, so its ends expand as in \S\ref{sec:ip_overmask}; they are $\ge 11\ell$ from the window.
+For $X_{\rm hi}$ the mask is free within $\pm 24\tau$ of the kernel for algorithm 0 (as in
+\S\ref{sec:ip_numerics}) and within $\pm 12\tau$ for A and C (the maximizing structures live within
+$\sim 6\tau$, and an enlarged sample beyond $8\tau$ enters only through the $b$-term, at
+$< 3 \times 10^{-3}$ relative), with valid clamps of $8\ell$ beyond.
+
+{\bf Algorithm 0: exact scan over periodic masks.}  Valid runs of length $A$ and gaps of length $B$
+(the sparse periodic masks of \S\ref{sec:ip_lower0}), with $A$ in \{1, 2, 3, 4, 6, 8, 12, 16, 24,
+32, 48, 64, 96, 128, 192, 256\} and $B$ in \{1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112,
+128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768\} ($448$ pairs), every mask evaluated exactly for all 16 kernels in two variants:
+{\em periodic} over the whole stream, with the window average maximized over the phase exactly (a
+sliding window of $T_c$ over $V'$ on $T_c + P$ positions), and {\em clamped}, periodic only over the
+window and its margins with valid data beyond (the search space of the annealing), at 8 phases.  The
+two agree to $10^{-4}$ for every kernel.  Table \ref{tab:ip_fom_scan0} gives the maximum over the grid
+(label: exact scan) with the worst $(A, B)$, the best member of three sub-families --- the island of the
+kernel's own width, the kernel filling a gap of its own width, and the dense combs ($A, B \le 8$) --- and
+the pointwise deficit $1 - \min_t V'/U$ on the worst mask, which shows what the average does to it.
+
+\begin{table}[ht]
+\centering\small
+\begin{tabular}{l c c c c c c}
+\toprule
+kernel & worst $(A, B)$ & $\tilde X_{\rm lo}$ & island $A = W$ & gap $= W$ & comb & $1 - \min_t V'/U$ \\
+\midrule
+p0    & (16, 128) & 0.0035 & (1, 6)\ \ 0.0033    & (1, 1)\ \ 0.0024   & (1, 6)\ \ 0.0033 & 0.025 \\
+box2  & (16, 128) & 0.0068 & (2, 16)\ \ 0.0045   & (3, 2)\ \ 0.0019   & (4, 8)\ \ 0.0047 & 0.051 \\
+w3    & (16, 128) & 0.0090 & (3, 32)\ \ 0.0061   & (4, 3)\ \ 0.0025   & (4, 8)\ \ 0.0054 & 0.068 \\
+w4    & (16, 128) & 0.0119 & (4, 40)\ \ 0.0082   & (6, 4)\ \ 0.0032   & (4, 8)\ \ 0.0058 & 0.092 \\
+box4  & (16, 128) & 0.0130 & (4, 56)\ \ 0.0084   & (6, 4)\ \ 0.0028   & (4, 8)\ \ 0.0054 & 0.103 \\
+w6    & (32, 160) & 0.0168 & (6, 96)\ \ 0.0120   & (8, 6)\ \ 0.0044   & (4, 8)\ \ 0.0043 & 0.082 \\
+w8    & (32, 160) & 0.0224 & (8, 160)\ \ 0.0169  & (12, 8)\ \ 0.0061  & (4, 8)\ \ 0.0016 & 0.112 \\
+box8  & (32, 160) & 0.0246 & (8, 160)\ \ 0.0174  & (16, 8)\ \ 0.0052  & (4, 8)\ \ $-0.0007$ & 0.126 \\
+w12   & (32, 160) & 0.0320 & (12, 112)\ \ 0.0254 & (16, 12)\ \ 0.0088 & $< 0$ & 0.170 \\
+w16   & (32, 160) & 0.0419 & (16, 128)\ \ 0.0359 & (24, 16)\ \ 0.0126 & $< 0$ & 0.235 \\
+box16 & (32, 160) & 0.0452 & (16, 128)\ \ 0.0366 & (32, 16)\ \ 0.0110 & $< 0$ & 0.264 \\
+w24   & (32, 160) & 0.0568 & (24, 224)\ \ 0.0522 & (32, 24)\ \ 0.0193 & $< 0$ & 0.366 \\
+w32   & (48, 192) & 0.0715 & (32, 160)\ \ 0.0703 & (48, 32)\ \ 0.0285 & $< 0$ & 0.350 \\
+box32 & (48, 192) & 0.0758 & (32, 160)\ \ 0.0715 & (48, 32)\ \ 0.0253 & $< 0$ & 0.399 \\
+w48   & (48, 192) & 0.0931 & (48, 192)\ \ 0.0931 & (64, 48)\ \ 0.0453 & $< 0$ & 0.576 \\
+w64   & (64, 128) & 0.1113 & (64, 128)\ \ 0.1113 & (64, 64)\ \ 0.0641 & $< 0$ & 0.440 \\
+\bottomrule
+\end{tabular}
+\caption{Algorithm 0, exact scan over periodic masks (valid runs $A$, gaps $B$) at $T_c = 1024$: the
+maximum of the window deficit over the grid and the mask attaining it; the best member of the island
+$A = W$, gap $= W$ and dense-comb ($A, B \le 8$) sub-families, as $(A, B)$ and value; and the pointwise
+deficit on the worst mask.  Each entry is exact for its mask, with the phase maximized exactly.}
+\label{tab:ip_fom_scan0}
+\end{table}
+
+The worst periodic family is the sparse island: valid runs of about $1$--$1.5\,W$ (for $W \ge 16$;
+$16$--$32$ samples for the narrower kernels) separated by gaps of $2$--$3\tau$, valid fraction $\sim 0.2$.
+The landscape is smooth and the optimum broad (box32 is within $0.004$ of its maximum over $A = 32$--$64$,
+$B = 96$--$224$), and the phase matters at the $0.003$--$0.009$ level for periods of $200$--$300$
+($T_c/P$ not an integer).  The gap $= W$ family, the pointwise worst case at small budgets ($0.871$ for
+box32), is $3\times$ weaker in the average, because only one position per gap is at the minimum and the
+masked positions around it are restored to $\sim 1$; dense combs give a negative deficit (the comb excess
+of \S\ref{sec:ip_upper}); and for the tapered kernels the island of the full support beats the core-only
+island in the average (w64: $0.1113$ against $\le 0.084$), the opposite of the pointwise ordering of
+\S\ref{sec:ip_lower0}.  The last column is the point: on the worst periodic mask the pointwise minimum
+is $0.40$ (box32) and $0.44$ (w64) while the average deficit is $0.076$ and $0.111$.  The finer grid
+used for A and C below raises the algorithm-0 maximum by up to $0.003$ for the wide kernels (box32
+$0.0785$ at $(48, 150)$, w48 $0.0952$ at $(48, 150)$, w64 $0.1146$ at $(64, 177)$).
+
+{\bf Algorithm 0: annealing.}  Simulated annealing on the window average with the moves of
+\S\ref{sec:ip_numerics} (single flips $45\%$; masking or unmasking of an interval of log-uniform length
+$1$--$512$, $20\%$; an imposed periodic pattern of period $2$--$768$ and duty cycle $0.05$--$0.95$ on a
+random interval, $20\%$; run-boundary shifts of $1$--$16$ samples, $15\%$), a geometric temperature
+schedule from $2 \times 10^{-3}$ to $2 \times 10^{-6}$, $4000$ steps (each one multi-right-hand-side solve)
+plus a single-flip descent at $600$ random positions; six kernels, six seeds each (the best and
+second-best periodic masks of the clamped scan at the phase of their minimum, the best gap $= W$ and
+island $A = W$ patterns, Bernoulli($0.5$), and random log-uniform gaps covering $30\%$).  Label: annealing
+(best found).
+\begin{center}\small
+\begin{tabular}{l c c c l l}
+\toprule
+kernel & annealing & 6 seeds & exact scan & islands in the window & gaps \\
+\midrule
+p0    & 0.0040 & 0.0039--0.0040 & 0.0035 & single samples (runs $1$--$11$, median 1) & $1$--$60$, median $3$--$4$ \\
+box8  & 0.0281 & 0.0267--0.0281 & 0.0246 & $9 \times (19$--$29)$, $\sim 3W$ & $85$--$131$ \\
+box16 & 0.0505 & 0.0488--0.0505 & 0.0452 & $7 \times (31$--$37)$, $\sim 2W$ & $114$--$145$ \\
+box32 & 0.0858 & 0.0816--0.0858 & 0.0758 & $6 \times (41$--$50)$, $\sim 1.4W$ & $111$--$167$ \\
+w48   & 0.1046 & 0.0982--0.1046 & 0.0931 & $6 \times (47$--$55)$, $\sim 1.1W$ & $127$--$154$ \\
+w64   & 0.1225 & 0.1203--0.1225 & 0.1113 & $6 \times (53$--$59)$, core $+$ part of the shoulders & $107$--$136$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The annealer converges to the scan's structure from every seed (the Bernoulli and random-gap seeds
+start at negative or tiny deficits) and improves it by $10$--$15\%$ in two ways: it masks the margins
+entirely (gaps of $512$--$570$ flanking the window, so that the kernels near the window edges also see a
+free-edge deficit and the islands lose the clamps' support), and it detunes the periods and gap lengths
+slightly (each island's isolation against its neighbours; p0 ends as an irregular sparse comb at valid
+fraction $0.09$--$0.16$).  The seeds are within $0.002$--$0.006$ of each other, i.e.\ not fully converged
+at $4000$ steps; a longer run would probably add $\sim 0.002$--$0.005$.  The best box32 mask, as run
+lengths (m $=$ masked, V $=$ valid): m517 V41 m158 V48 m167 V50 m143 V46 m167 V47 m111 V41 m512.
+
+{\bf Comparison with $X_{\rm lo}$, and the $T_c$ dependence.}  Against the pointwise $X_{\rm lo}$ of
+algorithm 0 --- the unbounded island floors of \S\ref{sec:ip_lower0}, $0.996$, $0.967$, $0.934$, $0.871$,
+$0.683$, $0.705$ for p0, box8, box16, box32, w48, w64 (core-only for w64) --- the annealed
+$\tilde X_{\rm lo}$ is $0.004$, $0.03$, $0.05$, $0.10$, $0.15$, $0.17$ of it.  (The island floors of the
+other kernels, computed the same way --- support valid, gaps of $2048$ on each side, core-only for the
+tapered kernels --- are $0.991$ (box2), $0.875$ (w3), $0.882$ (w4), $0.983$ (box4), $0.862$ (w6), $0.865$
+(w8), $0.836$ (w12), $0.831$ (w16), $0.785$ (w24), $0.762$ (w32); these are the best analytic candidates
+for $X_{\rm lo}$, not annealed.)  The pointwise adversary drives one kernel position to $0.13$--$0.30$
+with $\sim 2000$ masked samples around an island; in the average those samples are restored to $\sim 1$,
+and the optimum is $\sim 20\%$ valid at a per-island deficit of $0.4$--$0.6$, i.e.\ $0.08$--$0.12$.  Table
+\ref{tab:ip_fom_Tc} gives the exact, phase-maximized window average of the fully periodic masks that are
+worst at $T_c = 1024$ and at $T_c = 256$, for $T_c = 256$, $1024$, $4096$ and $T_c \rightarrow \infty$
+(the period average).
+
+\begin{table}[ht]
+\centering\small
+\begin{tabular}{l c cccc c}
+\toprule
+kernel & $(A, B)$ & $T_c = 256$ & $1024$ & $4096$ & $\infty$ & $1 - \min_t V'/U$ \\
+\midrule
+p0    & (16, 128)  & 0.0035 & 0.0035 & 0.0032 & 0.0032 & 0.025 \\
+p0    & (16, 224)  & 0.0051 & 0.0033 & 0.0030 & 0.0028 & 0.039 \\
+box8  & (32, 160)  & 0.0312 & 0.0246 & 0.0229 & 0.0224 & 0.126 \\
+box8  & (32, 192)  & 0.0342 & 0.0231 & 0.0221 & 0.0214 & 0.143 \\
+box16 & (32, 160)  & 0.0570 & 0.0452 & 0.0422 & 0.0413 & 0.264 \\
+box16 & (32, 192)  & 0.0627 & 0.0427 & 0.0408 & 0.0396 & 0.300 \\
+box32 & (48, 192)  & 0.0885 & 0.0758 & 0.0693 & 0.0680 & 0.399 \\
+box32 & (128, 768) & 0.1009 & 0.0467 & 0.0331 & 0.0302 & 0.389 \\
+w48   & (48, 192)  & 0.1085 & 0.0931 & 0.0852 & 0.0836 & 0.576 \\
+w48   & (128, 768) & 0.1297 & 0.0603 & 0.0428 & 0.0391 & 0.399 \\
+w64   & (64, 128)  & 0.1307 & 0.1113 & 0.1064 & 0.1048 & 0.440 \\
+w64   & (128, 768) & 0.1669 & 0.0776 & 0.0557 & 0.0509 & 0.427 \\
+\bottomrule
+\end{tabular}
+\caption{Algorithm 0: dependence of the window deficit on the chunk length $T_c$, for the periodic mask
+worst at $T_c = 1024$ (first row of each kernel) and the one worst at $T_c = 256$ (second row); exact,
+phase maximized; $T_c = \infty$ is the period average.  The last column is the pointwise deficit on the
+mask.}
+\label{tab:ip_fom_Tc}
+\end{table}
+
+The periodic-family maximum goes $0.101 \rightarrow 0.076 \rightarrow 0.069 \rightarrow 0.068$ (box32)
+and $0.167 \rightarrow 0.111 \rightarrow 0.106 \rightarrow 0.105$ (w64) for
+$T_c = 256 \rightarrow 1024 \rightarrow 4096 \rightarrow \infty$: at $T_c = 1024$ the value is within
+$\sim 10\%$ of the limit, while $T_c = 256$ ($4\tau$) lets the adversary use a single large island with
+long gaps ($A = 128$, $B = 768$: a $4\tau$ window sitting on $2\tau$ of valid data flanked by $12\tau$
+gaps).  For the annealed masks the maximum over $256$-sample sub-windows of the $1024$ window is
+$0.0049$ / $0.0358$ / $0.0606$ / $0.1139$ / $0.1318$ / $0.1580$ (p0 / box8 / box16 / box32 / w48 / w64), and
+tiling the $2048$-sample free pattern with period $2048$ gives a diluted $0.0025$ / $0.0148$ / $0.0286$ /
+$0.0460$ / $0.0563$ / $0.0659$ at $T_c = 4096$ (not re-optimized: at $T_c = 4096$ the adversary would use the
+periodic values of the table).  So the reduction from $X_{\rm lo}$ to $\tilde X_{\rm lo}$ is the
+averaging itself, not the particular chunk length; $T_c$ enters through the boundary term (kernels near
+the window edges beside long gaps, $O(\tau/T_c)$), which is what the annealer exploits at $T_c = 1024$ for
+its $10$--$15\%$ over the periodic masks.
+
+{\bf Algorithms A and C: exact scan.}  The same grid plus, for each $\mu$, $14$ run lengths $\times$ $12$
+densities around $\mu^{-4/3}$ ($900$ pairs in all); the mask is periodic over the whole stream, the rule
+is applied to it (so $V'$ is periodic and one period is evaluated), and the window average is maximized
+over the phase exactly.  Table \ref{tab:ip_fom_scanAC} gives the maximum over the grid for all 16 kernels
+(label: exact scan).
+
+\begin{table}[ht]
+\centering\small
+{\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l c ccccc ccccc}
+\toprule
+ & alg.\ 0 & \multicolumn{5}{c}{algorithm A} & \multicolumn{5}{c}{algorithm C} \\
+\cmidrule(lr){3-7}\cmidrule(lr){8-12}
+kernel & & $\mu = 1.2$ & 1.5 & 2 & 3 & 4 & $\mu = 1.2$ & 1.5 & 2 & 3 & 4 \\
+\midrule
+p0    & 0.0035 & 0.0015 & 0.0020 & 0.0028 & 0.0033 & 0.0034 & 0.0011 & 0.0020 & 0.0028 & 0.0033 & 0.0034 \\
+box2  & 0.0068 & 0.0029 & 0.0039 & 0.0054 & 0.0065 & 0.0067 & 0.0020 & 0.0039 & 0.0054 & 0.0065 & 0.0067 \\
+w3    & 0.0090 & 0.0039 & 0.0052 & 0.0072 & 0.0085 & 0.0088 & 0.0026 & 0.0052 & 0.0072 & 0.0085 & 0.0088 \\
+w4    & 0.0119 & 0.0052 & 0.0069 & 0.0096 & 0.0114 & 0.0118 & 0.0035 & 0.0069 & 0.0096 & 0.0114 & 0.0118 \\
+box4  & 0.0130 & 0.0057 & 0.0076 & 0.0106 & 0.0126 & 0.0130 & 0.0038 & 0.0076 & 0.0106 & 0.0126 & 0.0130 \\
+w6    & 0.0168 & 0.0076 & 0.0100 & 0.0140 & 0.0166 & 0.0170 & 0.0050 & 0.0099 & 0.0140 & 0.0166 & 0.0170 \\
+w8    & 0.0224 & 0.0101 & 0.0133 & 0.0187 & 0.0220 & 0.0227 & 0.0065 & 0.0130 & 0.0187 & 0.0220 & 0.0227 \\
+box8  & 0.0246 & 0.0111 & 0.0146 & 0.0205 & 0.0241 & 0.0248 & 0.0070 & 0.0141 & 0.0205 & 0.0241 & 0.0248 \\
+w12   & 0.0320 & 0.0144 & 0.0190 & 0.0268 & 0.0313 & 0.0323 & 0.0089 & 0.0179 & 0.0268 & 0.0313 & 0.0323 \\
+w16   & 0.0419 & 0.0188 & 0.0248 & 0.0351 & 0.0407 & 0.0422 & 0.0111 & 0.0233 & 0.0351 & 0.0407 & 0.0422 \\
+box16 & 0.0452 & 0.0203 & 0.0266 & 0.0383 & 0.0441 & 0.0455 & 0.0115 & 0.0254 & 0.0383 & 0.0441 & 0.0455 \\
+w24   & 0.0568 & 0.0255 & 0.0340 & 0.0496 & 0.0571 & 0.0572 & 0.0131 & 0.0325 & 0.0496 & 0.0571 & 0.0572 \\
+w32   & 0.0715 & 0.0320 & 0.0441 & 0.0645 & 0.0741 & 0.0741 & 0.0137 & 0.0415 & 0.0645 & 0.0741 & 0.0741 \\
+box32 & 0.0758 & 0.0338 & 0.0469 & 0.0684 & 0.0785 & 0.0785 & 0.0125 & 0.0435 & 0.0684 & 0.0785 & 0.0785 \\
+w48   & 0.0931 & 0.0407 & 0.0575 & 0.0838 & 0.0952 & 0.0952 & 0.0117 & 0.0515 & 0.0838 & 0.0952 & 0.0952 \\
+w64   & 0.1113 & 0.0464 & 0.0677 & 0.0987 & 0.1146 & 0.1146 & 0.0080 & 0.0579 & 0.0987 & 0.1146 & 0.1146 \\
+\bottomrule
+\end{tabular}}
+\caption{Algorithms A and C, exact scan over periodic masks with the rule applied, $T_c = 1024$: the
+maximum of the window deficit over the grid ($900$ $(A, B)$ pairs per $\mu$), exact for every mask with
+the phase maximized exactly.  The algorithm-0 column is the $448$-pair grid of Table
+\ref{tab:ip_fom_scan0}; where the worst mask is not enlarged (all of $\mu = 3$ and $4$ for $W \ge 2$) the
+A and C entries are algorithm-0 values too, and exceed that column by up to $0.003$ where the finer
+grid found a slightly worse mask.}
+\label{tab:ip_fom_scanAC}
+\end{table}
+
+The worst $(A, B)$ are nearly independent of the kernel.  At $\mu = 2$ they are $(16, 24)$ for p0,
+$(48, 73)$ up to w12 and $(64, 97)$ from w16 on, valid fraction $0.40$, for A and C alike; at $\mu = 3$ and
+$4$, $(32, 106)$ to $(64, 177)$, valid fraction $0.16$--$0.27$; at $\mu = 1.5$, $(48, 34)$ to $(96, 69)$ for A
+and $(48, 34)$ to $(128, 72)$ for C, valid fraction $0.58$--$0.64$; at $\mu = 1.2$, $(96, 26)$ and
+$(128, 35)$ for A (valid $0.79$) against $(48, 13)$ to $(96, 24)$ and, for box32, w48 and w64, the
+gap $= W$ pattern $(192, 32)$ for C (valid $0.79$--$0.86$).  Three things follow.  (i) The rule pushes
+the periodic adversary to the density threshold: everything with valid density below $\mu^{-4/3}$
+($0.78$ / $0.58$ / $0.40$ / $0.23$ / $0.16$) is enlarged wholesale and comes back at $V' = U$ (C) or above
+it (A), so the worst masks sit at density just above $\mu^{-4/3}$ with nothing enlarged (box32 at
+$\mu = 2$: $(64, 97)$, $n = 0.398$ against $0.397$), where A $=$ C $=$ algorithm 0 exactly.  At $\mu = 4$
+the algorithm-0 optimum ($n = 0.20$--$0.33$) is untouched; at $\mu = 3$ the sparse islands at $n = 0.2$
+are removed but the $(48, 150)$ island at $n = 0.24$ is nearly as bad; at $\mu = 2$ the density must be
+$\ge 0.40$ and the deficit drops to $0.068$ (box32) / $0.099$ (w64); at $\mu = 1.5$ to $0.044$--$0.047$ /
+$0.058$--$0.068$; at $\mu = 1.2$ to $0.013$--$0.034$ / $0.008$--$0.046$.  (ii) A's $b$-term matters only at
+$\mu \le 1.5$, where the rule can enlarge part of a run: the worst A masks there have fewer kept than
+valid samples (box32 at $\mu = 1.2$: $(128, 35)$, valid $0.79$, kept $0.49$; at $\mu = 1.5$: $(96, 69)$,
+valid $0.58$, kept $0.44$) --- the rule drops the edges of every run, A re-adds their smoothed residuals
+with negative covariance on the kept centre, and A's window deficit is $2.7\times$ ($\mu = 1.2$) and
+$1.08\times$ ($\mu = 1.5$) C's.  (iii) Wholesale enlargement of a dense comb gives a {\em negative}
+deficit for A (e.g.\ $(32, 160)$ at $\mu \le 3$: $-0.004$, while C is $0$ exactly): the comb excess
+reappears as an overshoot, which is $X_{\rm hi}$'s business.
+
+{\bf Algorithms A and C: annealing.}  The same objective with the rule inside the loop.  Seed
+candidates per (variant, $\mu$, kernel): the best three periodic masks of the scan in the clamped
+geometry (four phases each, with and without the margins masked), algorithm 0's annealed worst mask, and
+a Bernoulli mask at density $1.1\,\mu^{-4/3}$; the best two candidates were annealed for $1200$ steps plus
+$100$ descent flips (six kernels, five $\mu$, two variants).  Label: annealing (best found).  The results
+are the $\tilde X_{\rm lo}$ block of Table \ref{tab:ip_fom_full}.  The annealer adds only $0.000$--$0.005$ to
+the scan (box32: $0.0688$ against $0.0684$ at $\mu = 2$, $0.0349$ against $0.0338$ at $\mu = 1.2$), against
+the $+0.010$ it added for algorithm 0: the margin-masking trick is disabled by the rule (the first kept
+samples beside a long gap are dropped, $31$ per side at $\mu = 2$), and ``margins masked'' seeds are
+$0.01$--$0.02$ worse than the periodic mask with valid margins for $\mu \le 3$.  At $\mu = 4$, where
+nothing beside a long gap is enlarged, algorithm 0's worst masks are recovered for w48 and w64
+($0.1046$, $0.1225$) and nearly for box32 ($0.0826$--$0.0831$ against $0.0858$ in $1200$ steps: algorithm 0's
+box32 mask is partly enlarged at $\mu = 4$, its $41$-sample islands with $158$--$167$ gaps sitting just
+above $4c_2/\tau$, and gives $0.0779$ / $0.0738$ for A / C).
+
+{\em Structures.}  For $\mu \ge 2$ the worst windows contain no enlarged samples (in every case but A,
+box32, $\mu = 2$, with $3$ of $439$), and A $=$ C $=$ algorithm 0 on them to $\le 0.002$: the adversary
+sidesteps the rule by keeping the density just above $\mu^{-4/3}$, at the price of a $3$--$5\times$
+smaller per-island deficit than algorithm 0's sparse islands (box32 at $\mu = 2$: the per-island deficit
+falls from $0.6$ to $0.16$ while the valid fraction rises from $0.24$ to $0.40$; the pointwise minima on
+the worst masks are $0.81$--$0.91$ for $\mu \le 2$ and $0.43$--$0.67$ for $\mu \ge 3$).  What is enlarged
+lies in the margins ($204$ of $375$ margin samples for A, box32, $\mu = 2$), which for C are simply masked
+and for A add a $b$-term at the window edges (on that mask A $= 0.9312$, C $= 0.9332$,
+algorithm 0 $= 0.9318$).  For $\mu \le 1.5$ partial enlargement of run edges is possible and the $b$-term
+separates A from C: the $(128, 35)$ family at $\mu = 1.2$ has $268$ of $817$ window samples enlarged (the
+edges of every $128$-run, leaving $1$--$2$-sample gaps in the runs), with A $= 0.965$ against C $= 1.0016$
+and algorithm 0 $= 0.982$ on the same mask --- the $b$-term costs A $0.035$ in the average, while C's
+overshoot beside the enlarged edges lifts its average above 1.  Because the overshooting positions
+beside every enlarged zone are part of the average, alternating zones and kept runs cost A only $0.035$
+and not the pointwise $0.16$--$0.30$ of \S\ref{sec:ip_bterm}.  C's overshoot never helps the adversary on
+the lower side (it can only raise the average); C's worst masks at $\mu = 1.2$ are the gap $= W$ family
+(box32, $0.013$) and, for w64, a $(192, 32)$ pattern whose window is entirely enlarged ($V'_C = U$ there),
+with a deficit only from the kernels at the window edges ($0.009$).
+
+{\bf The upper side, $X_{\rm hi}$.}  Pointwise annealing on $V'_p(t)/U_p$.  Algorithm 0: four seeds per
+kernel (all valid; Bernoulli($0.5$) within $\pm 3\tau$; a comb of density $0.4$ within $\pm 2\tau$; the comb
+plus a masked annulus at $2$--$6\tau$), $60000$ steps plus two full single-flip descent passes; the seeds
+agree to $6 \times 10^{-4}$ for every kernel and reproduce the $7$-seed optima of \S\ref{sec:ip_upper}
+($1.0247$, $1.0504$, $1.00027$).  All 16 kernels (annealing, best found):
+\begin{center}\small
+\begin{tabular}{lcccccccc}
+\toprule
+& p0 & box2 & w3 & w4 & box4 & w6 & w8 & box8 \\
+\midrule
+$X_{\rm hi}$ & 0.0003 & 0.0013 & 0.0017 & 0.0024 & 0.0026 & 0.0036 & 0.0048 & 0.0054 \\
+\midrule
+& w12 & w16 & box16 & w24 & w32 & box32 & w48 & w64 \\
+\midrule
+$X_{\rm hi}$ & 0.0073 & 0.0101 & 0.0114 & 0.0156 & 0.0219 & 0.0247 & 0.0349 & 0.0504 \\
+\bottomrule
+\end{tabular}
+\end{center}
+i.e.\ $X_{\rm hi} \approx 0.050$--$0.056\,W_{\rm eff}/\tau$ throughout ($0.049$ box32, $0.056$ w64, $0.043$
+box8), with the structure of \S\ref{sec:ip_upper}: a sparse irregular comb of $1$--$3$-sample valid runs
+at valid fraction $0.2$--$0.35$ on the support and out to $\tau$, $\sim 0.7$ in the $1$--$2\tau$ shell, a
+fully masked annulus from $2\tau$ to $\sim 6\tau$, a valid patch of $\sim\tau$ at $6$--$8\tau$ and
+essentially masked beyond (for p0, the support and its $\pm 1.5\tau$ neighbourhood valid and the annulus
+alone).
+
+For A and C: five seeds (all valid; algorithm 0's maximizer; the kernel on a kept run between two
+above-threshold combs; the first kept samples at the new edge of a long gap; a comb of density
+$1.1\,\mu^{-4/3}$ with the support valid), $20000$ steps plus two descent passes, rule inside the loop;
+the results are the $X_{\rm hi}$ block of Table \ref{tab:ip_fom_full}.  {\em Algorithm A never overshoots more
+than algorithm 0.}  The seeds agree to $\le 0.003$, and the maximizer is algorithm 0's comb plus annulus
+with the comb thinned to stay below threshold ($11$--$19$ of the $32$ support samples valid for box32) and
+nothing enlarged within $\tau$ of the kernel: the $b$-term, a negative cross-covariance, can only lower
+the variance wherever the rule enlarges something near the kernel, so $X_{\rm hi}$ rises monotonically
+with $\mu$ to algorithm 0's value ($0.0205 \rightarrow 0.0246$ for box32, $0.0418 \rightarrow 0.0502$ for
+w64).  {\em Algorithm C overshoots by much more than the incidental values of \S\ref{sec:ip_bterm}}:
+$0.136$ / $0.111$ / $0.083$ / $0.057$ / $0.043$ for box32 and $0.280$ / $0.218$ / $0.180$ / $0.109$ / $0.087$
+for w64 at $\mu = 1.2$ / $1.5$ / $2$ / $3$ / $4$ (box16 $0.066$--$0.020$, box8 $0.032$--$0.010$, p0
+$0.003$--$0.0003$).  The structure is the kernel on a short kept run --- box32: $7$--$22$ of the $32$
+support samples valid and kept; w64 at $\mu \le 2$: the whole support valid but only $20$--$32$ of $64$
+kept, the rest enlarged --- with everything else within $3$--$4\tau$ enlarged (above-threshold combs) or
+masked: the kept samples return their first-pass residual, the enlarged support samples get fresh noise
+at nearly full variance, and the negative covariance between the kept and the dropped residuals, which
+holds algorithm 0 (and A, through the $b$-term) down, is removed.  On the same masks A is at
+$0.93$--$0.99$ and algorithm 0 at $0.75$--$1.03$; the $1.084$ of \S\ref{sec:ip_bterm} (C on A's comb-island
+at $\mu = 2$) is a special case, and the $1.18$ of w64 at $\mu = 2$ is this maximum.  The C seeds spread
+by $0.01$--$0.04$ for w48 and w64, so those entries are lower bounds; at $\mu = 1.2$ the values $1.136$ /
+$1.280$ are still well inside the bound $B_{1,p}/U_p = 1.404$ / $1.804$ of \S\ref{sec:ip_upper}.
+
+{\bf Monte Carlo.}  The literal two-pass (algorithm 0) and three-pass (A and C: masked smoother,
+leverage from the same factor, enlargement, inpainting, unmasked smoother, for C the subtraction of
+$S_0u$) procedures were simulated on the worst masks, nothing using the identities or the variance
+formulas; errors are the scatter of independent workers.  Algorithm 0, $10^5$ realizations per mask,
+both box32 and w64 on each of four masks (the scan-best periodic $(48, 192)$ and $(64, 128)$, clamped, and
+the two annealed worst masks): the window means agree with the exact values to $10^{-3}$ --- e.g.\ box32 on
+its annealed mask $0.91469 \pm 0.00067$ against $0.91417$, w64 on its $0.87709 \pm 0.00093$ against
+$0.87754$ --- the eight differences being $-0.5$ to $+1.8\sigma$ (mean pull $+0.6$); pointwise over the
+$1024$ positions, pull r.m.s.\ $0.97$--$1.13$ and maximum $|{\rm pull}|$ $2.9$--$3.8$ (e.g.\ box32 on an island
+$512$ samples into the window: $0.5997$ against $0.6008$).  A and C at $\mu = 2$, $30000$ realizations per
+mask, six masks (the four annealed worst masks and the scan-best $(64, 97)$ mask), both variants and both
+kernels on each, $24$ comparisons: e.g.\ A on its box32 worst mask $0.93251 \pm 0.00110$ against $0.93124$,
+on its w64 worst mask $0.90190 \pm 0.00149$ against $0.90001$; all within $0.6$--$1.4\sigma$ (all positive,
+the six masks sharing their realizations), pointwise pull r.m.s.\ $0.84$--$1.07$, maximum $3.5$.  The C worst
+masks and the scan-best mask are the same structure (nothing enlarged in the window) and give the same
+numbers.
+
+{\bf What is verified and what is best found.}  Exact, or confirmed by Monte Carlo: the evaluators and
+the rule (the reference numbers above, the dense algebra, $V' = U$ for $m \equiv 1$, and, directly from
+(\ref{eq:ip_variances}), $V'_C = U$ and $V'_A = U + \|R_mS_0k\|^2 \ge U$ when nothing is kept, so a wholly
+enlarged window contributes nothing to $\tilde X_{\rm lo}$); the scan values (exact for every mask on
+the grid, phase maximized exactly); the window averages of the ten Monte Carlo masks.  Best found, not
+certified: $X_{\rm hi}$ (algorithm 0: 4 seeds to $6 \times 10^{-4}$, reproducing the 7-seed optima; A, and C
+at $W \le 16$: 5 seeds to $\le 0.003$; C at w48 and w64: seeds spread $0.01$--$0.04$, so $X_{\rm hi}({\rm C})$
+may be somewhat larger); $\tilde X_{\rm lo}$ from annealing (algorithm 0: 6 seeds within
+$0.002$--$0.006$ at $4000$ steps, all converging to the scan's island structure, so the true value is
+probably within $\sim 0.005$ of the one given, but a different structure cannot be excluded; A and C:
+2 seeds $\times$ $1200$ steps agreeing to $\le 0.005$, the annealer barely improving the scan, the
+$\mu = 4$ box32 value $0.083$ below algorithm 0's $0.086$ for lack of steps, and the $\mu \le 1.5$ A
+values, where partial enlargement matters, the least certain).  The island floors quoted as $X_{\rm lo}$
+for the kernels outside Table \ref{tab:ip_summary} are analytic candidates, not annealed.
+
+\begin{table}[ht]
+\centering\small
+\begin{tabular}{ll cccccc}
+\toprule
+alg.\ & $\mu$ & p0 & box8 & box16 & box32 & w48 & w64 \\
+\midrule
+\multicolumn{8}{l}{$X_{\rm hi}$ (annealing, best found)} \\
+0 & $\infty$ & 0.0003 & 0.0054 & 0.0114 & 0.0247 & 0.0349 & 0.0504 \\
+A & 1.2 & 0.0003 & 0.0045 & 0.0095 & 0.0205 & 0.0288 & 0.0418 \\
+A & 1.5 & 0.0003 & 0.0048 & 0.0102 & 0.0218 & 0.0308 & 0.0450 \\
+A & 2   & 0.0003 & 0.0050 & 0.0106 & 0.0232 & 0.0329 & 0.0478 \\
+A & 3   & 0.0003 & 0.0053 & 0.0111 & 0.0244 & 0.0343 & 0.0498 \\
+A & 4   & 0.0003 & 0.0054 & 0.0113 & 0.0246 & 0.0348 & 0.0502 \\
+C & 1.2 & 0.0034 & 0.0323 & 0.0657 & 0.1361 & 0.1928 & 0.2797 \\
+C & 1.5 & 0.0020 & 0.0252 & 0.0561 & 0.1107 & 0.1691 & 0.2179 \\
+C & 2   & 0.0009 & 0.0187 & 0.0407 & 0.0826 & 0.1114 & 0.1799 \\
+C & 3   & 0.0003 & 0.0130 & 0.0259 & 0.0573 & 0.0796 & 0.1085 \\
+C & 4   & 0.0003 & 0.0101 & 0.0196 & 0.0430 & 0.0663 & 0.0866 \\
+\midrule
+\multicolumn{8}{l}{$\tilde X_{\rm lo}$, $T_c = 1024$ (annealing, best found)} \\
+0 & $\infty$ & 0.0040 & 0.0281 & 0.0505 & 0.0858 & 0.1046 & 0.1225 \\
+A & 1.2 & 0.0015 & 0.0111 & 0.0206 & 0.0349 & 0.0416 & 0.0474 \\
+A & 1.5 & 0.0021 & 0.0152 & 0.0277 & 0.0473 & 0.0574 & 0.0677 \\
+A & 2   & 0.0028 & 0.0207 & 0.0383 & 0.0688 & 0.0844 & 0.1000 \\
+A & 3   & 0.0033 & 0.0241 & 0.0445 & 0.0774 & 0.0954 & 0.1181 \\
+A & 4   & 0.0035 & 0.0249 & 0.0466 & 0.0826 & 0.1046 & 0.1225 \\
+C & 1.2 & 0.0011 & 0.0071 & 0.0118 & 0.0133 & 0.0116 & 0.0091 \\
+C & 1.5 & 0.0020 & 0.0141 & 0.0255 & 0.0440 & 0.0525 & 0.0596 \\
+C & 2   & 0.0028 & 0.0204 & 0.0380 & 0.0681 & 0.0834 & 0.0984 \\
+C & 3   & 0.0033 & 0.0241 & 0.0436 & 0.0765 & 0.0945 & 0.1171 \\
+C & 4   & 0.0034 & 0.0249 & 0.0486 & 0.0831 & 0.1047 & 0.1225 \\
+\midrule
+\multicolumn{2}{l}{$X_{\rm lo}$, algorithm 0 (pointwise)} & 0.996 & 0.967 & 0.934 & 0.871 & 0.683 & 0.705 \\
+\bottomrule
+\end{tabular}
+\caption{The figures of merit of \S\ref{ssec:weaker_fom} at $\tau = 64$ for algorithm 0
+($\mu = \infty$) and for algorithms A and C at five thresholds, for six kernels; Table \ref{tab:ip_fom} in \S\ref{ssec:weaker_fom} shows box32 and w64 side by side with the pointwise $X_{\rm lo}$.
+Every entry is the best found by simulated annealing (this appendix): $X_{\rm hi}$ by pointwise
+annealing, $\tilde X_{\rm lo}$ by annealing on the window average seeded with the exact scan over
+periodic masks, which is within $0.012$ below the values shown.  At $\mu = 4$ the worst windows
+contain nothing enlarged, so the A and C rows there are algorithm 0's values up to annealing noise
+(box32: $0.083$ against $0.086$ for lack of steps).  The last row is the pointwise $X_{\rm lo}$ of
+algorithm 0 (the unbounded island floors of \S\ref{sec:ip_lower0}; Table \ref{tab:ip_summary} has A and C),
+for comparison with $\tilde X_{\rm lo}$.}
+\label{tab:ip_fom_full}
+\end{table}
 
 \end{document}
