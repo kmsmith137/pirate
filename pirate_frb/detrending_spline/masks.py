@@ -33,6 +33,7 @@ h_max directly instead of hoping a random draw produces a wide interval.
 
 import numpy as np
 
+from ..utils import random_nfreq
 from .knots import KnotVector
 from .basis import BasisTable
 from .regulator import d1_dense
@@ -63,7 +64,13 @@ def random_knots(rng, n_phi=2, nfreq=None, kind=None):
     r_min does not -- see solve.py on why r_min is the statistic we threshold.
     """
     if nfreq is None:
-        nfreq = int(rng.integers(64, 10001))
+        # LOG-uniform, not uniform: nfreq is a SIZE axis, and a uniform draw over
+        # [64, 10000] puts a tenth of its weight below 1050 and essentially none in
+        # the few-hundred-channel regime, where a zone is a handful of channels wide
+        # and the basis support is clamped at both ends.  See random_nfreq() in
+        # pirate_frb/utils.py for the general argument.  A caller that wants a
+        # different span should pass nfreq itself, as most of them do.
+        nfreq = random_nfreq(rng, 10000, lo=64)
     if kind is None:
         kind = str(rng.choice(['uniform', 'graded', 'one_wide', 'random',
                                'no_interior']))

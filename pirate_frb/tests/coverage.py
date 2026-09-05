@@ -679,11 +679,14 @@ def _sec_detrending(rep, ndraw):
     rep.rate('K == 1 (one knot interval, h_max = nfreq)',
              sum(1 for x in kinds if x <= 2), ndraw, (2, 60),
              'test_conditioning, test_dtype_agreement: the h_max extreme')
-    # BANDED TO FLAG, deliberately. random_knots()'s own default is still uniform on
-    # [64, 10001), while 22 of its 25 call sites now pass a log-uniform random_nfreq(). The
-    # three that do not -- test_knots, test_basis, test_regulator -- therefore never see a
-    # small band, which is exactly the regime where zones are a few channels wide and the
-    # basis support is clamped at both ends. One-line fix at each call site.
+    # A REGRESSION GUARD rather than a to-do. random_knots() now draws its own default
+    # nfreq log-uniformly, which is what puts p10 near 100 instead of the ~1050 a uniform
+    # draw over the same [64, 10000] gives; this row fails if that is ever reverted. What
+    # rides on it is the three call sites that do NOT pass an nfreq of their own -- and
+    # they are the low-level construction tests, so a uniform default would leave the
+    # knot, basis and regulator code never seeing a band a few hundred channels wide:
+    # the regime where a zone is a handful of channels and the basis support is clamped
+    # at both ends.
     rep.dist("nfreq (random_knots' own default draw)", nfr, ('p10', 32, 600),
              'test_knots, test_basis, test_regulator (the 3 call sites that omit nfreq)',
              fmt='{:.0f}')
