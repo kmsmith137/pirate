@@ -494,23 +494,44 @@ def test_shrinkage_bias_bounded(rng, verbose=True):
         worst = max(worst, rel)
         assert rel < 60 * det.eta, rel
 
-    # Lowering eta must lower the bias, and on a NON-DEGENERATE mask it does so
-    # proportionally.  The mask here is fully unmasked deliberately.  Where G has
-    # null directions the bias does NOT vanish as eta -> 0: on those directions
-    # (G + eta D_1)^-1 -> (eta D_1)^-1, so the eta prefactor cancels and the
-    # coefficient is set by the regulator alone at any strength.  Some of that
-    # leaks to unmasked channels, so on a masked configuration the bias saturates
-    # and a proportionality assertion would flake -- measured, a 16x reduction in
-    # eta bought only 2.1x on one random mask.
+    # Lowering eta must lower the bias, and where G is NON-DEGENERATE it does so
+    # proportionally.  Where G has null directions the bias does NOT vanish as
+    # eta -> 0: on those directions (G + eta D_1)^-1 -> (eta D_1)^-1, so the eta
+    # prefactor cancels and the coefficient is set by the regulator alone at any
+    # strength.  The bias then SATURATES and the proportionality below is false.
+    #
+    # AN UNMASKED MASK DOES NOT BUY A NON-DEGENERATE G, which is the trap here.
+    # A dead channel is only one way to starve a coefficient; the KNOT VECTOR is
+    # another, and random_knots() draws one freely against an nfreq as low as 64,
+    # so a zone can hold fewer live channels than it has coefficients however
+    # complete the mask is.
+    #
+    # So gate on the thing that actually reports degeneracy: rmin, the detrender's
+    # own minimum relative pivot, read at the SMALLEST eta because that is where
+    # the regulator props up the pivots least.
+    #
+    # NUMBERS BELOW ARE OVER THE n_phi DRAW run_all() MAKES, not the module default:
+    # it reassigns the N_PHI global per call from {0,1,2,3} (see its docstring), so a
+    # calibration run at the import-time N_PHI = 2 describes a quarter of the
+    # population and is worth nothing here.  Over 800 such draws, 195 (24%) took the
+    # no-regulator arm below and 605 reached this one, of which 0.66% saturate --
+    # ratios as low as 1.45 against the 4 asserted.  All of them sit at rmin <= 0.02,
+    # and rmin has no draw at all between 0.028 and 0.175, so 0.1 is a gap rather
+    # than a tuned edge.  Above it the worst ratio seen was 12.0, leaving the
+    # assertion a factor of 3 of headroom; below it the check is skipped and says so,
+    # which happened on 3.5% of the draws that reach it.  Saturation showed up at
+    # n_phi = 2 and 3 and never at n_phi = 1.
     kv = msk.random_knots(rng, n_phi=N_PHI, nfreq=random_nfreq(rng, 1024, lo=64))
     ntime = int(rng.integers(1, 5))
     d, _ = _smooth_baseline(kv, rng, 1, ntime)
     mask = np.ones((1, kv.nfreq, ntime), dtype=bool)
-    biases = []
+    biases, rmins = [], []
     for eta in (ETA_DEFAULT, ETA_DEFAULT/4, ETA_DEFAULT/16):
         det = SplineDetrender(kv, dtype=np.float64, eta=eta, eps=EPS_FLOAT64)
-        r, _, _ = det.detrend_chunk(d, mask)
+        r, _, pivots = det.detrend_chunk(d, mask)
         biases.append(np.abs(r).max())
+        live = pivots[pivots > 0]
+        rmins.append(float(live.min()) if live.size else 0.0)
     if np.abs(d1_dense(kv)).max() == 0:
         # Degree 0: every interior knot has multiplicity n_phi+1 = 1, so every
         # coefficient is its own zone, D_1 has no intra-zone difference left to
@@ -519,13 +540,26 @@ def test_shrinkage_bias_bounded(rng, verbose=True):
         # any eta, and asserting monotonicity would be asserting that roundoff is
         # monotone.  Assert the stronger thing instead.
         assert max(biases) < 1e-12 * np.abs(d).max(), biases
+        arm = 'no regulator (D_1 == 0), bias asserted exact'
     else:
+        # Monotonicity holds even where the bias saturates (0 violations across the
+        # same 605 draws, every degree), so it is asserted unconditionally and only
+        # the RATIO is gated.
         assert biases[0] > biases[1] > biases[2], biases
-        assert biases[0] / max(biases[2], 1e-300) > 4, biases
+        if rmins[-1] > 0.1:
+            ratio = biases[0] / max(biases[2], 1e-300)
+            assert ratio > 4, (biases, rmins[-1])
+            arm = f'16x eta bought {ratio:.1f}x bias'
+        else:
+            arm = f'proportionality skipped, G degenerate (rmin {rmins[-1]:.1e})'
 
     if verbose:
+        # The three arms are named apart on purpose: 'no regulator' is the pre-existing
+        # degree-0 / no-interior case, which asserts something STRONGER, while
+        # 'proportionality skipped' is the degenerate-G gate, which asserts something
+        # weaker.  Reporting both as one skip hides which coverage was actually lost.
         print(f'    test_shrinkage_bias_bounded: pass  '
-              f'[worst bias/amplitude {worst:.2e}, eta {ETA_DEFAULT:g}]')
+              f'[worst bias/amplitude {worst:.2e}, eta {ETA_DEFAULT:g}; {arm}]')
 
 
 # ---------------------------------------------------------------- T9, T10
