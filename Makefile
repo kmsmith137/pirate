@@ -77,7 +77,7 @@ help:
 #
 # The three sources below are the three parts of one set of notes, but they are
 # genuinely independent documents: a pointer from one into another names the
-# target section in prose (the \ddnotes / \dtnotes / \vmnotes macros in each
+# target section in prose (the \ddnotes / \dtnotes / \vmnotes / \ipnotes macros in each
 # preamble) rather than using \ref, so no .tex reads another's .aux and the PDFs
 # can be built in any order, or one at a time.
 #
@@ -86,7 +86,7 @@ help:
 # mirrors notes/*.md, which are only rendered if listed in the docs toctree
 # (docs/source/index.md). The 'tex' recipe warns about any stray .tex on disk
 # that isn't listed here.
-TEX_SRCS := notes/dedispersion.tex notes/detrending.tex notes/variance_map.tex
+TEX_SRCS := notes/dedispersion.tex notes/detrending.tex notes/variance_map.tex notes/inpainting.tex
 TEX_PDFS := $(TEX_SRCS:.tex=.pdf)
 
 # notes/*.tex present on disk but not listed in TEX_SRCS (e.g. scratch files).

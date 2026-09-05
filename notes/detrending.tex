@@ -20,18 +20,20 @@
 \def\LAG{{\rm LAG}}
 \def\nn{\nonumber}
 
-% These notes are split across three PDFs, compiled independently from
-% notes/dedispersion.tex, notes/detrending.tex, notes/variance_map.tex.
-% Everything above this comment is deliberately IDENTICAL in all three sources,
+% These notes are split across four PDFs, compiled independently from
+% notes/dedispersion.tex, notes/detrending.tex, notes/variance_map.tex,
+% notes/inpainting.tex.
+% Everything above this comment is deliberately IDENTICAL in all four sources,
 % so that a section can be moved between them without touching the preamble.
 %
 % A \ref cannot cross documents, so a pointer into a companion PDF names its
 % section in prose instead: \ddnotes{Subband search} renders as
 % [dedispersion.pdf, "Subband search"]. Each source defines the macros for the
-% other two documents (either may be unused at any given moment). The argument
+% other three documents (any may be unused at any given moment). The argument
 % must reproduce a section or subsection title of the companion verbatim.
 \newcommand{\ddnotes}[1]{{\em dedispersion.pdf}, ``#1''}
 \newcommand{\vmnotes}[1]{{\em variance\_map.pdf}, ``#1''}
+\newcommand{\ipnotes}[1]{{\em inpainting.pdf}, ``#1''}
 
 \title{Notes on the ``pirate'' dedisperser: detrending}
 \author{Kendrick Smith}
