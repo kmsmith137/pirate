@@ -183,7 +183,7 @@ struct ReferencePeakFindingKernel
     long nprofiles = 0;        // = (3 * log2(max_kernel_width) + 1)
     long nt_in = 0;            // = (nt_out * time_downsampling)
     long K = 0;                // = log2(dm_downsampling) - fs.pf_rank, see the note on K above
-    long E = 0;                // = pow2(K), the number of input DMs per output DM
+    long pow2_K = 0;           // = pow2(K), the number of input DMs per output DM
 
     // Note that the reference kernel uses float32, regardless of what dtype is specified.
     // All arrays must be fully contiguous (this could be changed if needed).
@@ -251,9 +251,9 @@ struct ReferencePeakFindingKernel
     //
     //  - tmp_dt[l]: step size (in time) of temp array
     //  - tmp_nt[l]: number of time samples in temp array
-    //  - tmp_arr[l]: array of shape (B, D, E, M, tmp_nt[l])
+    //  - tmp_arr[l]: array of shape (B, D, pow2_K, M, tmp_nt[l])
     //
-    // The (E, M) axes are the input array's own structure: tmp_arr[l][b,d,mu,m,:] is the
+    // The (pow2_K, M) axes are the input array's own structure: tmp_arr[l][b,d,mu,m,:] is the
     // downsampled input row ((d << K) | mu), multiplet m, so the fill from 'in' is a straight
     // copy per (d, mu, m) triple.
     //
@@ -290,12 +290,12 @@ struct ReferencePeakFindingKernel
     std::vector<long> tmp_iout;
     std::vector<long> tmp_nout;
     std::vector<long> tmp_sout;
-    std::vector<ksgpu::Array<float>> tmp_arr;   // shape (B, D, E, M, tmp_nt[l])
+    std::vector<ksgpu::Array<float>> tmp_arr;   // shape (B, D, pow2_K, M, tmp_nt[l])
 
     // The reference rl allocates persistent state in the constructor (not a separate
     // allocate() method). We just save the last (tpad) samples from the previous chunk.
 
-    ksgpu::Array<float> pstate;  // shape (total_beams, ndm_out, E, M, tpad)
+    ksgpu::Array<float> pstate;  // shape (total_beams, ndm_out, pow2_K, M, tpad)
 
     // Helper for eval_tokens()
     static std::runtime_error _bad_token(uint token, const char *why);

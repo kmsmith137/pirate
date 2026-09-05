@@ -224,14 +224,14 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
     long Wmax = p.max_kernel_width;
     long M = fs.M;
 
-    this->E = params.dm_downsampling >> fs.pf_rank;  // 2^K
-    this->K = integer_log2(E);
+    this->pow2_K = params.dm_downsampling >> fs.pf_rank;  // 2^K
+    this->K = integer_log2(pow2_K);
 
     this->nbatches = xdiv(p.total_beams, p.beams_per_batch);
     this->nprofiles = 3 * integer_log2(p.max_kernel_width) + 1;
     this->nt_in = p.nt_out * p.time_downsampling;
     this->tpad = max(2*Wmax, 4L);
-    this->pstate = Array<float> ({p.total_beams, p.ndm_out, E, M, tpad}, af_uhost | af_zero);
+    this->pstate = Array<float> ({p.total_beams, p.ndm_out, pow2_K, M, tpad}, af_uhost | af_zero);
     this->num_levels = max(integer_log2(Wmax), 1);
 
     this->tmp_dt.resize(num_levels);
@@ -249,7 +249,7 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
         tmp_nt[l] = nt;
         tmp_nout[l] = xdiv(p.time_downsampling, dt);
         tmp_sout[l] = xdiv(pow2(l), dt);
-        tmp_arr[l] = Array<float> ({B,D,E,M,nt}, af_uhost | af_zero);
+        tmp_arr[l] = Array<float> ({B,D,pow2_K,M,nt}, af_uhost | af_zero);
 
         // To see that this is correct, note that the "base" time sample ends at
         // time dt, and has length 2^l.
@@ -304,7 +304,7 @@ void ReferencePeakFindingKernel::apply(
 
     for (long b = 0; b < B; b++) {
         for (long d = 0; d < D; d++) {
-            for (long mu = 0; mu < E; mu++) {
+            for (long mu = 0; mu < pow2_K; mu++) {
                 for (long m = 0; m < M; m++) {
                     float *dst = &tmp_arr[0].at({b,d,mu,m,0});        // length (nt_in+tpad)
                     float *ps = &pstate.at({b0+b,d,mu,m,0});          // length (tpad)
@@ -337,7 +337,7 @@ void ReferencePeakFindingKernel::apply(
         // The (mu, m) axes are pure spectators here.
         for (long b = 0; b < B; b++) {
             for (long d = 0; d < D; d++) {
-                for (long mu = 0; mu < E; mu++) {
+                for (long mu = 0; mu < pow2_K; mu++) {
                     for (long m = 0; m < M; m++) {
                         float *dst = &tmp_arr.at(l+1).at({b,d,mu,m,0});
                         float *src = &tmp_arr.at(l).at({b,d,mu,m,0});
@@ -381,7 +381,7 @@ void ReferencePeakFindingKernel::apply(
                     int S = tmp_sout[l];    // spacing
                     int I = tmp_iout[l];    // base
 
-                    for (int mu = 0; mu < E; mu++) {
+                    for (int mu = 0; mu < pow2_K; mu++) {
                       for (int m = 0; m < M; m++) {
                         const float *row = &tmp_arr.at(l).at({b,d,mu,m,0});   // length tmp_nt[l]
                         int n = fs.m_to_n[m];
@@ -484,7 +484,7 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                 // neither range check implies the other.
                 if (m >= M)
                     throw _bad_token(token, "m out of range");
-                if (mu >= E)
+                if (mu >= pow2_K)
                     throw _bad_token(token, "mu out of range");
                 if ((p < 0) || (p >= P))
                     throw _bad_token(token, "p out of range");
@@ -842,10 +842,10 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     auto [nt_in_per_wt, nt_in_divisor] = random_nt_in_granularity(simd_width, Tinner);
 
     // THE BUDGET IS ON THE INPUT ARRAY IN ELEMENTS, not on the shape product. The reference
-    // kernel's arrays are (shape product) x E x M elements -- cpu_in_large below is
-    // {beams, ndm_out*E, M, nt_in}, and ReferencePeakFindingKernel::tmp_arr is a comparable
-    // stack -- and both E and M are fixed by the registry key, so they belong in the budget
-    // rather than being discovered afterwards. Over the 88 keys E*M runs from 4 to 91, so a
+    // kernel's arrays are (shape product) x pow2_K x M elements -- cpu_in_large below is
+    // {beams, ndm_out*pow2_K, M, nt_in}, and ReferencePeakFindingKernel::tmp_arr is a comparable
+    // stack -- and both pow2_K and M are fixed by the registry key, so they belong in the budget
+    // rather than being discovered afterwards. Over the 88 keys pow2_K*M runs from 4 to 91, so a
     // budget on the shape product alone lets the footprint vary by more than an order of
     // magnitude from key to key.
     constexpr long input_element_budget = 4*1000*1000;   // ~16 MB of float32 input, ~4x that in all
@@ -1595,7 +1595,7 @@ void ReferencePfSquare::test_vs_peak_finder()
     // is the cheapest check of that bookkeeping: the PfSquare knows nothing about 'mu', so a
     // (mu, m) mix-up shows up here with no dedispersion machinery in the way.
     long K = rand_int(0, 3);
-    long E = pow2(K);
+    long pow2_K = pow2(K);
     long Dpf = D << K;
 
     long nchunks = rand_int(1, 5);
@@ -1675,7 +1675,7 @@ void ReferencePfSquare::test_vs_peak_finder()
             // 'tmp_arr' that eval_tokens() reads.
             pf.apply(out_max, out_argmax, in, wt, ibatch);
 
-            for (long mu = 0; mu < E; mu++) {
+            for (long mu = 0; mu < pow2_K; mu++) {
                 for (long m = 0; m < M; m++) {
                     for (long p = 0; p < P; p++) {
                         // Token format is (t) | (p << 8) | (m << 16) | (mu << 24), and with
