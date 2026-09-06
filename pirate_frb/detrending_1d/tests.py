@@ -14,6 +14,8 @@ rmin collapses to a valid-sample count and several of the controls below flip
 sign.  Those places are marked.
 """
 
+import math
+
 import numpy as np
 
 from .MomentSet import MomentSet, merge, pascal_shift, _binom_table
@@ -369,6 +371,19 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
 
 # ---------------------------------------------------- 4. polynomial exactness
 
+def _top_coeff(P, deg, W):
+    """|c_deg| for a degree-'deg' polynomial P, in the fit's own length unit x = t/W.
+
+    Exact, not a fit: the deg-th finite difference of a degree-deg polynomial on a
+    unit grid is the constant deg! * c_deg / W^deg, so one np.diff recovers the
+    coefficient to roundoff.  P is whatever random_polynomial() returned, which is
+    normalized to max|P| = 1, so this is the coefficient AFTER that normalization --
+    which is the quantity the residual is proportional to.
+    """
+    d = np.diff(P, n=deg, axis=1)
+    return float(np.max(np.abs(d))) * (W ** deg) / math.factorial(deg)
+
+
 def test_polynomial_exactness(rng=None, n=2, verbose=True):
     """
     Feed d[t] = P(t) for a polynomial of degree <= n with an arbitrary mask and
@@ -427,7 +442,37 @@ def test_polynomial_exactness(rng=None, n=2, verbose=True):
     asym = np.ones((2, T), dtype=bool)
     asym[:, ::3] = False          # breaks the within-window symmetry
 
+    # THE NEGATIVE CONTROLS BELOW ARE SCALED BY THE DRAWN POLYNOMIAL'S TOP
+    # COEFFICIENT, not compared against a flat constant.  Each of these residuals is
+    # EXACTLY a fixed constant times that coefficient -- measured over 400 draws the
+    # ratio is constant to between 5e-12 and 5e-9 -- so the residual inherits all of
+    # the coefficient's spread and none of its own.
+    #
+    # A flat floor cannot work here, and the old 1e-6 demonstrably did not.
+    # random_polynomial() normalizes max|P| = 1 while x = (t - T/2)/W spans +-5, so a
+    # degree-D polynomial's top coefficient is divided by 5^D before it reaches the
+    # residual: at n = 2 the deg-3 and deg-4 controls sit only ~140x above 1e-6
+    # (median 1.4e-4) against ~12600x at n = 1, and both were measured failing on
+    # about 2.1e-6 of draws -- roughly one run of 'pirate_frb test' in 240000.
+    # Reproducers, if this ever needs re-checking: np.random.default_rng(314118) for
+    # the deg-(n+2) control and 817053 for the asymmetric one, both at n = 2.
+    #
+    # The floor is one constant for all three because it only has to sit below the
+    # SMALLEST of the exact ratios.  Measured at this block's fixed W = 16:
+    #
+    #     n=1  deg 2, all-valid   0.354167 = (W+1)/(3W)
+    #     n=1  deg 2, asymmetric  0.35156
+    #     n=1  deg 3, all-valid   4.2500
+    #     n=2  deg 3, asymmetric  0.019654     <- the binding one
+    #     n=2  deg 4, all-valid   0.096052
+    #
+    # so 0.005 keeps a factor of 3.9 under the tightest case and far more elsewhere.
+    # Calibrated for n in {1,2} and W = 16, which is all this block draws; re-measure
+    # if either changes, since the ratios fall steeply with n.
+    ctrl_floor = 0.005
+
     P1 = random_polynomial(rng, 2, T, n+1, W, np.float64)
+    curv1 = _top_coeff(P1, n+1, W)
     r1, _, _ = det.detrend_stream(P1, allvalid)
     w1 = float(np.max(np.abs(r1)))
     if (n+1)//2 <= n//2:
@@ -435,19 +480,25 @@ def test_polynomial_exactness(rng=None, n=2, verbose=True):
             (f'degree n+1 should be reproduced exactly on a fully valid window '
              f'(checkerboard degeneracy, n={n}), got {w1:.3e}')
     else:
-        assert w1 > 1e-6, \
+        assert w1 > ctrl_floor * curv1, \
             (f'degree n+1 was reproduced on a fully valid window at n={n}, where '
-             f'the even basis functions cannot span its even part')
+             f'the even basis functions cannot span its even part: '
+             f'{w1:.3e} vs {ctrl_floor:g} x curvature {curv1:.3e}')
 
     r2, mk2, _ = det.detrend_stream(P1, asym)
     mo = mk2
-    assert float(np.max(np.abs(r2[mo]))) > 1e-6, \
-        'degree n+1 was reproduced even under an asymmetric mask'
+    w2 = float(np.max(np.abs(r2[mo])))
+    assert w2 > ctrl_floor * curv1, \
+        (f'degree n+1 was reproduced even under an asymmetric mask: '
+         f'{w2:.3e} vs {ctrl_floor:g} x curvature {curv1:.3e}')
 
     P2 = random_polynomial(rng, 2, T, n+2, W, np.float64)
+    curv2 = _top_coeff(P2, n+2, W)
     r3, _, _ = det.detrend_stream(P2, allvalid)
-    assert float(np.max(np.abs(r3))) > 1e-6, \
-        'negative control: a degree-(n+2) polynomial was reproduced exactly'
+    w3 = float(np.max(np.abs(r3)))
+    assert w3 > ctrl_floor * curv2, \
+        (f'negative control: a degree-(n+2) polynomial was reproduced exactly: '
+         f'{w3:.3e} vs {ctrl_floor:g} x curvature {curv2:.3e}')
 
     if verbose:
         for name, W, wok, nf, lbl in results:

@@ -1147,6 +1147,43 @@ def test_2d_chunk_invariance(rng, n_phi=None, verbose=True):
               f'of {CHANNEL_BLOCK} channels]')
 
 
+# Exact infimum of the time-varying r_min in test_2d_conditioning(), as
+# C[n][W] / nfreq, obtained by enumerating the (n+1)-offset supports and live-count
+# patterns rather than by sampling.  The extremal geometry is three ADJACENT live
+# offsets at the window edge with live counts (1, 1, L), L the widest zone's channel
+# count; the binding direction is (a frequency direction) tensored with the degree-n
+# time polynomial that vanishes at every well-populated offset.
+#
+# Note the floor falls steeply with W and n, and scales as 1/nfreq -- so it is
+# coupled to the cap in random_nfreq(rng, 800) below.  RAISING THAT CAP LOWERS THE
+# FLOOR PROPORTIONALLY.  That coupling is exactly what a flat constant cannot track,
+# and is why this table exists.
+_2D_RMIN_C = {
+    1: {1: 0.9988, 2: 0.2496, 3: 0.1109,  4: 0.0624,
+        5: 0.0399, 6: 0.0277, 7: 0.0204,  8: 0.0156},
+    2: {1: 4.486,  2: 0.1249, 3: 0.02939, 4: 0.00918,
+        5: 0.00355, 6: 0.00165, 7: 0.000869, 8: 0.0004996},
+}
+
+# At n = 0 the time stencil cannot produce the vanishing-polynomial direction above,
+# and the pivot stays orders of magnitude higher: the measured minimum was 4.6e-3
+# over 187k draws.  A flat floor is right here, but 1e-4 rather than the measured
+# 4.6e-3 because that measurement's raw data was lost to a machine reboot and was
+# never re-taken -- it is still 100x more teeth than the 1e-6 it replaces.
+# RE-MEASURE BEFORE TIGHTENING.
+_2D_RMIN_N0_FLOOR = 1.0e-4
+
+# Slack under the enumerated infimum.  Over 6.31M draws the smallest observed
+# v/floor was 1.005 -- the bound is TIGHT, and attained -- so 0.3 leaves 3.35x.
+_2D_RMIN_MARGIN = 0.3
+
+# The eta branch: at n >= 1 the regulator D_1 annihilates the zone-constant, so the
+# pivot in that direction is eta*(regulator energy)/(data diagonal), exactly linear
+# in eta (measured slope +0.98 to +1.00 over a 100x ladder).  Whichever of the two
+# mechanisms is weaker sets the floor.  Coefficient 1.0 from min(v*nfreq/eta) = 1.05.
+_2D_RMIN_ETA_C = 1.0
+
+
 def test_2d_conditioning(rng, n_phi=None, verbose=True):
     """
     r_min must not degrade going from 1-d to 2-d.  For a window-constant mask it
@@ -1180,8 +1217,23 @@ def test_2d_conditioning(rng, n_phi=None, verbose=True):
                                     time_kind='bernoulli')
             pv = det2.detrend_chunk(d, mv)[2]
             if (pv > 0).any():
-                worst_abs = min(worst_abs, float(pv[pv > 0].min()))
-    assert worst_abs > 1e-6, worst_abs
+                v = float(pv[pv > 0].min())
+                worst_abs = min(worst_abs, v)
+                # ASSERTED PER DRAW AND KEYED TO THE DRAW'S GEOMETRY.  The flat 1e-6
+                # that stood here (outside the loop, on the running min) was not
+                # merely tight: it sat ABOVE the enumerated infimum of 6.2447e-07,
+                # and the mask generator was observed reaching 6.276e-07 -- 1.005x
+                # that infimum -- so no flat value at this scale is defensible.
+                #
+                # Being a running MIN it also got worse with more draws, unlike the
+                # running-max controls elsewhere in this file: ~54 of the 64 draws
+                # per call reach it, so a default 100-iteration run exposed ~5400.
+                floor = (_2D_RMIN_N0_FLOOR if n == 0 else
+                         min(_2D_RMIN_C[n][W], _2D_RMIN_ETA_C * det2.eta) / kv.nfreq)
+                assert v > _2D_RMIN_MARGIN * floor, \
+                    (f'time-varying r_min {v:.3e} below {_2D_RMIN_MARGIN:g} x floor '
+                     f'{floor:.3e} at n={n}, W={W}, nfreq={kv.nfreq}, '
+                     f'n_phi={n_phi}')
     if verbose:
         print(f'    test_2d_conditioning: pass  [window-constant r_min preserved '
               f'exactly; worst time-varying r_min {worst_abs:.3e}]')
