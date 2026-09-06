@@ -4,7 +4,7 @@ from ..pirate_pybind11 import (
     DedispersionBuffer,
     DedispersionBufferParams,
     DedispersionKernelParams,
-    Detrender2dParams,
+    DetrenderLps2dParams,
     GpuDedispersionKernel,
     GpuLaggedDownsamplingKernel,
     LaggedDownsamplingKernelParams,
@@ -27,7 +27,7 @@ from ..pirate_pybind11 import (
 # These classes have method injections, which live in kernels/<ClassName>.py.
 # Each of those modules both applies the injections (as an import side effect) and
 # re-exports the class.
-from .Detrender1d import Detrender1d
-from .Detrender2d import Detrender2d
 from .GpuDequantizationKernel import GpuDequantizationKernel
+from .GpuDetrenderLps1d import GpuDetrenderLps1d
+from .GpuDetrenderLps2d import GpuDetrenderLps2d
 

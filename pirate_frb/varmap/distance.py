@@ -34,7 +34,7 @@ import numpy as np
 
 
 # Rows of A_true whose sum falls below this are IGNORED: they are outputs with genuinely zero
-# variance, for which y_approx/y_true is undefined rather than large. A Detrender2d with time
+# variance, for which y_approx/y_true is undefined rather than large. A GpuDetrenderLps2d with time
 # half-width W = 0 removes the frequency-constant mode exactly, and the DM = 0 dedispersion
 # output is precisely the unlagged sum over all channels, so that output has identically zero
 # variance. In floating point such a row sums to ~1e-14 rather than 0, which is why the test is

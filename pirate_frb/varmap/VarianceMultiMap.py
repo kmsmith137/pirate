@@ -139,7 +139,7 @@ class VarianceMultiMap:
       reference to, so the two cannot drift.
     - ``plan`` -- the "minimal" DedispersionPlan the geometry comes from. Likewise
       shared with the stored maps. See VarianceMap.make_plan().
-    - ``detrender`` -- the Detrender2dParams, or None. Likewise shared.
+    - ``detrender`` -- the DetrenderLps2dParams, or None. Likewise shared.
     - ``num_primary_trees`` (int) -- number of stored maps.
     - ``ntrees`` (int) -- number of DEDISPERSION trees, i.e. the length of apply_fine()'s
       result.
@@ -205,7 +205,7 @@ class VarianceMultiMap:
                                    ' must be the same object, so that they cannot drift.')
             if m.detrender is not detrender:
                 raise RuntimeError(f'VarianceMultiMap: maps[{gamma}] holds a different'
-                                   ' Detrender2dParams than the multimap')
+                                   ' DetrenderLps2dParams than the multimap')
 
         ntrees = int(plan.ntrees)
 

@@ -7,12 +7,12 @@ is O(T*W) and slow, and is the ground truth for the tests that need one.
 
 What this does and does not check.  It is an independent implementation of the
 *block decomposition and scans* only -- it shares solve(), MomentSet.direct() and
-the offset convention with Detrender, so a bug in any of those would appear in
+the offset convention with ReferenceDetrenderLps1d, so a bug in any of those would appear in
 both and the comparison would not catch it.  Those are covered instead by
 test_solve and test_polynomial_exactness, whose expected answers do not come from
 another implementation.  The small duplication of the masked-mean below is
 deliberate for the same reason: it costs five lines and keeps the offset
-convention verifiable by eye against Detrender.
+convention verifiable by eye against ReferenceDetrenderLps1d.
 
 Note that test_polynomial_exactness() does *not* need it -- its expected answer
 is known analytically -- which is why it can run before this module is trusted.
@@ -24,13 +24,13 @@ from .MomentSet import MomentSet
 from . import LocalPolyFit
 
 
-def detrend_reference(d, mask, W, n=2, eps=1e-3, mu=1e-30, dtype=np.float64,
+def detrend_brute_force(d, mask, W, n=2, eps=1e-3, mu=1e-30, dtype=np.float64,
                       subtract_offset=True, kappa=None, max_outputs_per_pass=4096):
     """
     d, mask: shape (S, T).  Returns (residual, mask_out, rmin), each of shape
     (S, T - 2W), for output samples [W, T-W).
 
-    Unlike Detrender, this has no chunk structure at all, so it also serves as
+    Unlike ReferenceDetrenderLps1d, this has no chunk structure at all, so it also serves as
     the check that chunking introduces nothing.
     """
     d = np.asarray(d)
@@ -47,7 +47,7 @@ def detrend_reference(d, mask, W, n=2, eps=1e-3, mu=1e-30, dtype=np.float64,
 
     if kappa is None:
         if subtract_offset:
-            # np.where rather than m*d: see the note in Detrender._masked_mean.
+            # np.where rather than m*d: see the note in ReferenceDetrenderLps1d._masked_mean.
             nv = m.sum(axis=1)
             safe = nv > 0
             tot = np.where(m > 0, d, 0).sum(axis=1)

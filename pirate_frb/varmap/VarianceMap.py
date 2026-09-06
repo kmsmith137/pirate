@@ -223,7 +223,7 @@ class VarianceMap:
     - ``config`` -- the DedispersionConfig.
     - ``plan`` -- the DedispersionPlan the geometry comes from. A "minimal" plan, which
       allocates nothing and needs no GPU -- variance maps must be analyzable anywhere.
-    - ``detrender`` -- the Detrender2dParams used, or None for "no Detrender2d".
+    - ``detrender`` -- the DetrenderLps2dParams used, or None for "no detrender".
     - ``itree`` (int) -- index of this tree in the plan.
     - ``tree`` -- ``plan.trees[itree]``, cached: that list is rebuilt on every attribute
       access.
@@ -2437,7 +2437,7 @@ class VarianceMap:
             raise RuntimeError(
                 f'VarianceMap.get_distance: all {self.nalpha} outputs have no variance'
                 f' (y_true below {YTRUE_FLOOR}), so no output could be scored. A few such'
-                ' outputs are expected (a W=0 Detrender2d annihilates the DM=0 output), but a'
+                ' outputs are expected (a W=0 detrender annihilates the DM=0 output), but a'
                 ' map where every output has zero variance means a broken sweep or config.')
 
         return fsum / nscored

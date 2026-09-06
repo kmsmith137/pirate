@@ -14,7 +14,7 @@ downsampler is instantaneous in time (no detrender).
 
 This treats L as a black box -- it runs the shipped dedisperser -- so unlike the analytic
 route of detrender_free.py it needs no per-stage analysis, and it is the only algorithm we have
-that can handle a Detrender2d. It is also very slow: one full dedispersion pass per
+that can handle a GpuDetrenderLps2d. It is also very slow: one full dedispersion pass per
 (input channel, polyphase) pair.
 
 ONE COLUMN AT A TIME, WHICH IS WHAT MAKES CHORD REACHABLE
@@ -70,8 +70,8 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
         The beam count comes from ``config.beams_per_batch``: on the GPU the beam axis is a
         pure spectator, so a batch of B beams runs B distinct passes concurrently. Measurement
         found that batching does not speed up a full sweep, so the CLI forces 1.
-    detrender : Detrender2dParams, optional
-        None for no Detrender2d in L. Its nfreq, M and T must match the config.
+    detrender : DetrenderLps2dParams, optional
+        None for no GpuDetrenderLps2d in L. Its nfreq, M and T must match the config.
     device : {'gpu', 'cpu'}
         The CPU sweep additionally needs ``beams_per_batch == 1``; the GPU sweep needs a
         float32 config, one primary tree, and a compiled sbdd kernel per tree.
@@ -106,7 +106,7 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
         bookkeeping -- the CLI puts its config overrides here.
     detrender_dtype : dtype
         Working precision of the NUMPY detrender, i.e. of the CPU sweep. Ignored by the GPU
-        sweep, whose Detrender2d kernel is float32. Set it to float32 to compare the two
+        sweep, whose GpuDetrenderLps2d kernel is float32. Set it to float32 to compare the two
         devices at matched detrender precision, which is what makes such a comparison a test
         of the DRIVER rather than of the detrender.
     """
@@ -295,10 +295,10 @@ class _SweepGeometry:
                         ' the plan')
 
         if detrender is None:
-            self.W = 0    # Detrender2d time half-width (0 = no detrender)
+            self.W = 0    # GpuDetrenderLps2d time half-width (0 = no detrender)
             self.spline_detrender = None
         else:
-            from ..detrending_spline import KnotVector, SplineDetrender
+            from ..detrending.lps2d import KnotVector, ReferenceDetrenderLps2d
 
             detrender.validate()
             if int(detrender.nfreq) != self.nfreq:
@@ -316,10 +316,10 @@ class _SweepGeometry:
             self.W = int(detrender.W)
             kv = KnotVector(np.asarray(detrender.knots, dtype=np.int64),
                             int(detrender.n_phi), self.nfreq)
-            self.spline_detrender = SplineDetrender(kv, n=int(detrender.n), W=self.W,
-                                                    eta=float(detrender.eta),
-                                                    eps=float(detrender.eps),
-                                                    dtype=detrender_dtype)
+            self.spline_detrender = ReferenceDetrenderLps2d(kv, n=int(detrender.n), W=self.W,
+                                                            eta=float(detrender.eta),
+                                                            eps=float(detrender.eps),
+                                                            dtype=detrender_dtype)
 
         # Per-tree geometry. 'gamma' is the input time-downsampling exponent of the tree, and
         # 'ddspread' is Delta_dd from notes/variance_map.tex: the largest full-band delay
@@ -435,7 +435,7 @@ class _SweepGeometry:
         """The first channel of the detrender spline zone containing channel 'ifreq' (or
         nfreq if ifreq is out of range)."""
 
-        from ..detrending_spline import zone_channel_ranges
+        from ..detrending.lps2d import zone_channel_ranges
 
         for (lo, hi) in zone_channel_ranges(self.spline_detrender.kv):
             if lo <= ifreq < hi:
@@ -472,7 +472,7 @@ class _SweepGeometry:
 
         residual, mask_out, _ = self.spline_detrender.detrend_chunk(buf, mask)
         if not np.all(mask_out):
-            raise RuntimeError('_SweepGeometry: the Detrender2d dropped an ill-conditioned'
+            raise RuntimeError('_SweepGeometry: the GpuDetrenderLps2d dropped an ill-conditioned'
                                ' zone even with an all-ones input mask, so L is not the linear'
                                ' operator this tool assumes. Lower "eps", or use more/wider'
                                ' zones.')
@@ -663,7 +663,7 @@ class _GpuPipeline:
     """The GPU dedispersion + PfSquare pipeline, shared by the brute-force sweep (_GpuSweep)
     and the Monte-Carlo check (varmap/mc.py). The pipeline is
 
-        stream_in -> [Detrender2d] -> GpuTreeGriddingKernel -> stage1_buf
+        stream_in -> [GpuDetrenderLps2d] -> GpuTreeGriddingKernel -> stage1_buf
                   -> [GpuLaggedDownsamplingKernel -> stage1_buf.bufs[1:]]
                   -> GpuDedispersionKernel (stage 1, one per primary tree) -> MegaRingbuf
                   -> GpuSbDedispersionKernel (stage 2 + subbands)
@@ -685,7 +685,7 @@ class _GpuPipeline:
     """
 
     def __init__(self, geom):
-        from ..kernels import (Detrender2d, GpuDedispersionKernel,
+        from ..kernels import (GpuDedispersionKernel, GpuDetrenderLps2d,
                                GpuLaggedDownsamplingKernel, GpuPfSquare,
                                GpuSbDedispersionKernel, GpuTreeGriddingKernel)
 
@@ -748,7 +748,7 @@ class _GpuPipeline:
                                                geom.tree_nt_ds[itree]))
 
         # detrender.M is checked against beams_per_batch by _SweepGeometry.
-        self.gpu_detrender = Detrender2d(geom.detrender) if (geom.detrender is not None) \
+        self.gpu_detrender = GpuDetrenderLps2d(geom.detrender) if (geom.detrender is not None) \
             else None
         self.is_allocated = False
 
@@ -776,7 +776,7 @@ class _GpuPipeline:
         g, B, nt_in = self.geom, self.geom.nbeams, self.geom.nt_in
         W = g.W
 
-        # Detrender2d reads (B, nfreq, nt_in+2W) and overwrites only [W, W+nt_in); the
+        # GpuDetrenderLps2d reads (B, nfreq, nt_in+2W) and overwrites only [W, W+nt_in); the
         # gridding kernel wants a contiguous (B, nfreq, nt_in), so the two are separate arrays.
         self.det_data, self.det_mask = None, None
         if self.gpu_detrender is not None:
@@ -857,7 +857,7 @@ class _GpuPipeline:
 
 
     def detrend_into_stream(self):
-        """Run the Detrender2d over self.det_data and copy its emitted window to stream_in.
+        """Run the GpuDetrenderLps2d over self.det_data and copy its emitted window to stream_in.
 
         The CALLER has already filled det_data, shape (B, nfreq, nt_in + 2W). The detrender
         overwrites only [W, W+nt_in), which is what lands in stream_in. Callers that do not
@@ -868,13 +868,13 @@ class _GpuPipeline:
         self.det_mask.fill(1)
         self.gpu_detrender.launch(self.det_data, self.det_mask)
 
-        # Checked once, not once per launch: the Detrender2d's mask expansion is driven by
+        # Checked once, not once per launch: the GpuDetrenderLps2d's mask expansion is driven by
         # r_min, which depends on the mask and the basis but not on the data, so an all-ones
         # input mask either survives every time or never. If it did not survive, L would not
         # be the linear operator the variance map assumes.
         if not self._mask_checked:
             if not bool((self.det_mask[:, :, g.W : g.W+g.nt_in] != 0).all()):
-                raise RuntimeError('_GpuPipeline: the Detrender2d dropped an ill-conditioned'
+                raise RuntimeError('_GpuPipeline: the GpuDetrenderLps2d dropped an ill-conditioned'
                                    ' zone even with an all-ones input mask, so L is not the'
                                    ' linear operator the variance map assumes.')
             self._mask_checked = True
@@ -965,7 +965,7 @@ class _GpuSweep(_SweepBase):
 
     def _make_input_stream(self, group, j):
         """Fill the pipeline's stream_in (the gridding kernel's input) with the one-hots of this
-        launch group, detrending them if a Detrender2d is configured.
+        launch group, detrending them if a GpuDetrenderLps2d is configured.
 
         Only chunk 0 of an interval carries anything: L is linear, so the all-zero chunks that
         follow map to zero, and running the detrender on them would be pure cost. The

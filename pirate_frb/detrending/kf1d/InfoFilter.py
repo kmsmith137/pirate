@@ -1,8 +1,7 @@
 """
 The two information-filter recursions of the fixed-lag detrender (see
-plans/detrend_1d_kalman.md, sections "Forward information filter" and "Backward
-information filter", and notes/detrending.tex,
-section "Time detrending algorithm 2: Kalman filter", eq (kf_fwd) and (kf_bwd)).
+notes/detrending.tex, section "Time detrending algorithm 2: Kalman filter",
+eq (kf_fwd) and (kf_bwd)).
 
 A Gaussian is carried in *information* form: the pair (J, eta) represents
 
@@ -22,7 +21,7 @@ The two recursions are mirror images: measure, rank-one downdate, then a congrue
 by A^-T going forwards or A^T going backwards.  Both are division-safe: the only
 divide is by beta = g^T (.) g + 1/q with the left term >= 0 by positive
 semidefiniteness, so beta >= 1/q > 0 always.  There is no guarded divide and no
-empty-set rule anywhere here, in contrast to the moment monoid of detrending_1d.
+empty-set rule anywhere here, in contrast to the moment monoid of detrending.lps1d.
 
 Both entry points are batched over arbitrary leading axes, which is what lets the
 same code serve the forward pass (batch (S,), sequential in t) and the vectorized
@@ -39,7 +38,7 @@ def _measure(J, eta, m, d, k):
     Masked samples are SELECTED away rather than multiplied by m.  A masked sample
     may hold anything at all -- a dropped packet can leave NaN or Inf behind -- and
     0*inf is NaN, which would poison the carried state permanently.  This is the
-    same discipline as detrending_1d, and test_masked_data_unused() checks it by
+    same discipline as detrending.lps1d, and test_masked_data_unused() checks it by
     bit-identity under poisoning.
     """
     mf = (m != 0)

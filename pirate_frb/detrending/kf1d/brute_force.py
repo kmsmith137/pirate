@@ -3,9 +3,9 @@ Dense, definitional oracle for the fixed-lag Kalman detrender.
 
 No state space and no recursions: for each output t, the sub-problem on [0, t+L] is
 assembled as an explicit matrix and solved with np.linalg.  This is the ground truth
-that validates KalmanDetrender -- which is itself the python reference implementation
+that validates ReferenceDetrenderKf1d -- which is itself the python reference implementation
 that a GPU production kernel would eventually be validated against, in the same
-relation that detrending_1d has to src_lib/Detrender1d.cu.
+relation that detrending.lps1d has to src_lib/DetrenderLps1d.cu.
 
 The estimator is the minimizer of
 
@@ -22,7 +22,7 @@ inverse and there from the two information recursions.
 
 import numpy as np
 
-from ..detrending_1d import LocalPolyFit
+from ..lps1d import LocalPolyFit
 
 
 def difference_matrix(n, k, dtype=np.float64):
@@ -49,13 +49,13 @@ def _state_from_samples(k, dtype=np.float64):
     return C
 
 
-def kalman_brute_force(d, mask, k, tau, L, eps=1e-3, mu=1e-30, dtype=np.float64,
+def detrend_brute_force(d, mask, k, tau, L, eps=1e-3, mu=1e-30, dtype=np.float64,
                        return_cond=False):
     """
     d, mask: shape (S, T).  Returns (residual, mask_out, rmin), each of shape
     (S, T-L), for outputs [0, T-L).
 
-    Matches KalmanDetrender.detrend_stream()'s contract, including setting both
+    Matches ReferenceDetrenderKf1d.detrend_stream()'s contract, including setting both
     residual and rmin to zero wherever mask_out is false.
 
     No constant offset appears anywhere: kappa is mathematically inert (the fit

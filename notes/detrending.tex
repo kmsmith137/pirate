@@ -148,7 +148,7 @@ $\epsilon$ & mask-expansion threshold on $r_{\rm min}$ & $10^{-3}$ \\
 \bottomrule
 \end{tabular}
 \end{center}
-The values are those the kernel is compiled at ({\tt include/pirate/Detrender1d.hpp}); everything below is
+The values are those the kernel is compiled at ({\tt include/pirate/Detrender.hpp}); everything below is
 written for general $(n, W, T_c)$ and the numpy reference is parameterized by them.  An earlier draft of this
 section used $W = 512$, and the {\em measured} numbers quoted below were taken there unless stated otherwise;
 the analytic ones have been recomputed at $W = 256$.
@@ -459,7 +459,7 @@ within the window, so we start at $n=2$ and measure whether it matters near mask
 One consequence of $n=3$ is worth flagging in advance, because it is structural rather than a matter of
 flops: {\bf the kernel's division-free mask test does not survive it}.  At $n=2$, $G_{01} = 0$ gives
 $p_0 = G_{00}$ and $p_1 = G_{11}$ exactly, so $r_0 = r_1 = 1$ and $r_{\rm min}$ collapses to the single ratio
-$p_2/G_{22} = \det G/(G_{00}G_{11}G_{22})$.  That is what lets {\tt Detrender1d.cu} evaluate the fit through
+$p_2/G_{22} = \det G/(G_{00}G_{11}G_{22})$.  That is what lets {\tt DetrenderLps1d.cu} evaluate the fit through
 the adjugate and test {\tt det >= eps*N*A*C} with no square roots.  At $n=3$ we still have $r_0 = r_1 = 1$,
 but $r_2$ and $r_3$ both bind, and $\min(p_2/G_{22},\, p_3/G_{33})$ cannot be recovered from $\det G$ alone --
 it needs the leading principal minors, i.e.~the factorization.  So $n=3$ means an unrolled Cholesky in the
@@ -919,7 +919,7 @@ than persisting, and tree depth is not load-bearing -- only parallelism is.
 \subsection{Validation}
 \label{sec:kf_validation}
 
-Implemented in {\tt pirate\_frb/detrending\_1d\_kalman} and run by {\tt python -m pirate\_frb test --dt1k}.
+Implemented in {\tt pirate\_frb/detrending/kf1d} and run by {\tt python -m pirate\_frb test --dtk1}.
 The checks worth keeping as regressions:
 \begin{itemize}
 \item {\bf Against a dense oracle}: for each output, assemble (\ref{eq:kf_normal}) on $[0,t+L]$ explicitly and
@@ -959,8 +959,8 @@ The detrenders of \S\ref{sec:time_detrending} and \S\ref{sec:kalman_detrending} 
 a time, so by construction they cannot see structure {\em along} the frequency axis: bandpass ripple, coarse
 channel edges, gain steps at the boundary of an RFI-flagged region.  This section describes a third detrender
 which fits both axes at once -- a B-spline in frequency whose coefficients are allowed to drift as a low-order
-polynomial in time -- and subtracts it.  It is implemented in {\tt pirate\_frb/detrending\_spline} and run by
-{\tt python -m pirate\_frb test --dts}.
+polynomial in time -- and subtracts it.  It is implemented in {\tt pirate\_frb/detrending/lps2d} and run by
+{\tt python -m pirate\_frb test --dtl2}.
 
 It is meant to run {\em after} one of the 1-d time detrenders and before the tree gridding kernel
 (\ddnotes{Tree gridding kernel}).  The ordering is deliberate: this detrender is {\em regularized}, so unlike
@@ -1579,7 +1579,7 @@ banded factor, right-hand side and equilibration scales are $11 N_\phi^{\rm zone
 bytes in float32 at $n_\phi = n = 2$ with six basis functions per zone.  That is past per-thread registers --
 and registers are unavailable in any case, since arbitrary runtime knots make the dimension a runtime quantity
 and the loops therefore unrollable -- so one thread per (beam, zone, time sample) is workable provided the
-working set lives in {\em shared} memory, which is what \texttt{Detrender2d} does.
+working set lives in {\em shared} memory, which is what \texttt{GpuDetrenderLps2d} does.
 
 \subsection{Validation}
 \label{sec:sd_validation}

@@ -13,8 +13,7 @@
 #include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/DedispersionBuffer.hpp"
 #include "../include/pirate/DedispersionKernel.hpp"
-#include "../include/pirate/Detrender1d.hpp"
-#include "../include/pirate/Detrender2d.hpp"
+#include "../include/pirate/Detrender.hpp"
 #include "../include/pirate/GpuDequantizationKernel.hpp"
 #include "../include/pirate/LaggedDownsamplingKernel.hpp"
 #include "../include/pirate/MegaRingbuf.hpp"
@@ -253,9 +252,9 @@ void register_kernel_bindings(pybind11::module &m)
           }, registry_keys_doc)
     ;
 
-    // Detrender1d: Python injections in pirate_frb/kernels/Detrender1d.py:
+    // GpuDetrenderLps1d: Python injections in pirate_frb/kernels/GpuDetrenderLps1d.py:
     //   - launch: converts stream=None to current cupy stream
-    py::class_<Detrender1d> detrender_1d(m, "Detrender1d",
+    py::class_<GpuDetrenderLps1d> detrender_lps1d(m, "GpuDetrenderLps1d",
         "The 1-d time detrender: a masked, adaptively centered moving local polynomial fit.\n\n"
         "For each output sample t, a degree-n polynomial is fit to the valid samples of the\n"
         "window [t-W, t+W] and evaluated back at t; the fit is subtracted from the data, and\n"
@@ -269,15 +268,15 @@ void register_kernel_bindings(pybind11::module &m)
         "(n, W, T) are compile-time parameters of the cuda kernel, so only the configurations\n"
         "listed in the constructor's error message exist; the number of rows M is runtime.\n\n"
         "The algorithm is specified in notes/detrending.tex, section 'Time detrending\n"
-        "algorithm 1: local polynomial subtraction'. pirate_frb.detrending_1d is the\n"
+        "algorithm 1: local polynomial subtraction'. pirate_frb.detrending.lps1d is the\n"
         "pure-numpy reference that this kernel is validated against.");
 
-    detrender_1d.attr("eps") = Detrender1d::eps;
+    detrender_lps1d.attr("eps") = GpuDetrenderLps1d::eps;
 
-    detrender_1d
+    detrender_lps1d
           .def(py::init<long, long, long>(),
                py::arg("n"), py::arg("W"), py::arg("T") = 2048,
-               "Create a Detrender1d.\n\n"
+               "Create a GpuDetrenderLps1d.\n\n"
                "Args:\n"
                "    n: polynomial degree\n"
                "    W: window half-width (the window is 2W+1 samples)\n"
@@ -285,19 +284,19 @@ void register_kernel_bindings(pybind11::module &m)
                "Raises:\n"
                "    RuntimeError: if no kernel is compiled for (n, W, T). The message lists\n"
                "        the available configurations.")
-          .def_readonly("n", &Detrender1d::n, "Polynomial degree")
-          .def_readonly("W", &Detrender1d::W, "Window half-width (the window is 2W+1 samples)")
-          .def_readonly("T", &Detrender1d::T, "Output samples per row (chunk size)")
-          .def_readonly("nbuf", &Detrender1d::nbuf, "Buffer samples per row, = T + 2W")
-          .def_static("configs", &Detrender1d::configs,
+          .def_readonly("n", &GpuDetrenderLps1d::n, "Polynomial degree")
+          .def_readonly("W", &GpuDetrenderLps1d::W, "Window half-width (the window is 2W+1 samples)")
+          .def_readonly("T", &GpuDetrenderLps1d::T, "Output samples per row (chunk size)")
+          .def_readonly("nbuf", &GpuDetrenderLps1d::nbuf, "Buffer samples per row, = T + 2W")
+          .def_static("configs", &GpuDetrenderLps1d::configs,
                "The compiled (n, W, T) configurations, i.e. the arguments the constructor\n"
                "accepts. Returned as a list of (n, W, T) tuples.")
-          .def_static("time_selected", &Detrender1d::time_selected,
+          .def_static("time_selected", &GpuDetrenderLps1d::time_selected,
                py::call_guard<py::gil_scoped_release>(),
                "Run timing benchmarks, for every compiled configuration "
-               "(called via 'python -m pirate_frb time --dt1d')")
+               "(called via 'python -m pirate_frb time --dtl1')")
           .def("launch",
-               [](const Detrender1d &self, Array<float> &data, Array<unsigned char> &mask,
+               [](const GpuDetrenderLps1d &self, Array<float> &data, Array<unsigned char> &mask,
                   uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                    self.launch(data, mask, stream);
@@ -314,15 +313,15 @@ void register_kernel_bindings(pybind11::module &m)
                "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
     ;
 
-    // Detrender2d::Params. Unlike FakeXEngine (whose Params is deliberately not bound),
+    // DetrenderLps2dParams. Unlike FakeXEngine (whose Params is deliberately not bound),
     // this one is: callers that configure a detrender without constructing it -- e.g.
     // varmap.brute_force._SweepGeometry, which needs the same parameters for both the GPU
     // kernel and the numpy reference -- need the struct as a value.
-    py::class_<Detrender2d::Params>(m, "Detrender2dParams",
-        "Construction parameters for a Detrender2d (which see for what they mean).")
+    py::class_<DetrenderLps2dParams>(m, "DetrenderLps2dParams",
+        "Construction parameters for a GpuDetrenderLps2d (which see for what they mean).")
           .def(py::init([](long nfreq, const std::vector<long> &knots, long M, long n_phi,
                            long n, long W, long T, double eta, double eps) {
-              Detrender2d::Params params;
+              DetrenderLps2dParams params;
               params.nfreq = nfreq;
               params.knots = knots;
               params.M = M;
@@ -337,27 +336,27 @@ void register_kernel_bindings(pybind11::module &m)
           py::arg("nfreq"), py::arg("knots"), py::arg("M"),
           py::arg("n_phi") = 2, py::arg("n") = 2, py::arg("W") = 4, py::arg("T") = 2048,
           py::arg("eta") = 1.0e-3, py::arg("eps") = 3.0e-5)
-          .def_readwrite("nfreq", &Detrender2d::Params::nfreq, "Number of frequency channels")
-          .def_readwrite("knots", &Detrender2d::Params::knots,
+          .def_readwrite("nfreq", &DetrenderLps2dParams::nfreq, "Number of frequency channels")
+          .def_readwrite("knots", &DetrenderLps2dParams::knots,
                "Non-decreasing list of channel indices, running from 0 to nfreq, with the\n"
                "first and last values repeated exactly n_phi+1 times and no interior value\n"
                "repeated more than n_phi+1 times. An interior value repeated exactly n_phi+1\n"
                "times is a zone boundary.")
-          .def_readwrite("M", &Detrender2d::Params::M, "Number of spectator (beam) rows")
-          .def_readwrite("n_phi", &Detrender2d::Params::n_phi, "Spline degree in frequency")
-          .def_readwrite("n", &Detrender2d::Params::n, "Degree of the time polynomial")
-          .def_readwrite("W", &Detrender2d::Params::W,
+          .def_readwrite("M", &DetrenderLps2dParams::M, "Number of spectator (beam) rows")
+          .def_readwrite("n_phi", &DetrenderLps2dParams::n_phi, "Spline degree in frequency")
+          .def_readwrite("n", &DetrenderLps2dParams::n, "Degree of the time polynomial")
+          .def_readwrite("W", &DetrenderLps2dParams::W,
                "Window half-width (the window is 2W+1 samples)")
-          .def_readwrite("T", &Detrender2d::Params::T, "Output samples per row (chunk size)")
-          .def_readwrite("eta", &Detrender2d::Params::eta, "Regularization strength")
-          .def_readwrite("eps", &Detrender2d::Params::eps, "Mask-expansion threshold on r_min")
-          .def("validate", &Detrender2d::Params::validate,
-               "Raises RuntimeError if any parameter is invalid; see the Detrender2d\n"
+          .def_readwrite("T", &DetrenderLps2dParams::T, "Output samples per row (chunk size)")
+          .def_readwrite("eta", &DetrenderLps2dParams::eta, "Regularization strength")
+          .def_readwrite("eps", &DetrenderLps2dParams::eps, "Mask-expansion threshold on r_min")
+          .def("validate", &DetrenderLps2dParams::validate,
+               "Raises RuntimeError if any parameter is invalid; see the GpuDetrenderLps2d\n"
                "constructor, which calls this.")
           .def_static("from_yaml",
-               static_cast<Detrender2d::Params (*)(const std::string &)> (&Detrender2d::Params::from_yaml),
+               static_cast<DetrenderLps2dParams (*)(const std::string &)> (&DetrenderLps2dParams::from_yaml),
                py::arg("filename"),
-               "Load Detrender2dParams from a YAML file.\n\n"
+               "Load DetrenderLps2dParams from a YAML file.\n\n"
                "The yaml keys are spelled out rather than matching the member names:\n"
                "num_beams (M), spline_degree_freq (n_phi), poly_degree_time (n),\n"
                "time_halfwidth (W), time_samples_per_chunk (T),\n"
@@ -367,24 +366,24 @@ void register_kernel_bindings(pybind11::module &m)
                "Raises:\n"
                "    RuntimeError: on a missing/unknown key, or if the parameters are\n"
                "        invalid (validate() is called before returning).")
-          .def_static("from_yaml_string", &Detrender2d::Params::from_yaml_string,
+          .def_static("from_yaml_string", &DetrenderLps2dParams::from_yaml_string,
                py::arg("yaml_string"),
-               "Load Detrender2dParams from a YAML string: the inverse of to_yaml_string().\n"
+               "Load DetrenderLps2dParams from a YAML string: the inverse of to_yaml_string().\n"
                "Same keys and same errors as from_yaml(); use this when the yaml travels as\n"
                "a string rather than a file, e.g. one embedded in a variance-map file.")
-          .def("to_yaml_string", &Detrender2d::Params::to_yaml_string,
+          .def("to_yaml_string", &DetrenderLps2dParams::to_yaml_string,
                py::arg("verbose") = false,
                "Convert to a YAML string. If 'verbose', include explanatory comments and\n"
                "the derived basis-function and zone counts.")
     ;
 
-    // Detrender2d: Python injections in pirate_frb/kernels/Detrender2d.py:
+    // GpuDetrenderLps2d: Python injections in pirate_frb/kernels/GpuDetrenderLps2d.py:
     //   - launch: converts stream=None to current cupy stream
-    py::class_<Detrender2d> detrender_2d(m, "Detrender2d",
+    py::class_<GpuDetrenderLps2d> detrender_lps2d(m, "GpuDetrenderLps2d",
         "The 2-d spline detrender: a regularized fit of a B-spline in frequency times a\n"
         "local polynomial in time, subtracted from the data.\n\n"
-        "Constructed either from a Detrender2dParams, or from the same fields as kwargs::\n\n"
-        "    det = Detrender2d(nfreq=4096, knots=knots, M=1, W=4, T=2048)\n\n"
+        "Constructed either from a DetrenderLps2dParams, or from the same fields as kwargs::\n\n"
+        "    det = GpuDetrenderLps2d(nfreq=4096, knots=knots, M=1, W=4, T=2048)\n\n"
         "For each output sample t, the baseline over a window of 2W+1 time samples is\n"
         "modelled as sum_{jq} alpha_jq phi_j(f) p_q(s), with {phi_j} the B-spline basis of\n"
         "the caller's knot vector and {p_q} orthonormal polynomials on the window. It is\n"
@@ -412,12 +411,12 @@ void register_kernel_bindings(pybind11::module &m)
         "THREAD SAFETY: an instance owns per-launch scratch arrays, so one instance must not\n"
         "be used concurrently from two streams.\n\n"
         "The algorithm is specified in notes/detrending.tex, section '2-d detrending'.\n"
-        "pirate_frb.detrending_spline is the pure-numpy reference that this kernel is\n"
+        "pirate_frb.detrending.lps2d is the pure-numpy reference that this kernel is\n"
         "validated against.");
 
-    detrender_2d
-          .def(py::init<const Detrender2d::Params &>(), py::arg("params"),
-               "Create a Detrender2d from a Detrender2dParams.\n\n"
+    detrender_lps2d
+          .def(py::init<const DetrenderLps2dParams &>(), py::arg("params"),
+               "Create a GpuDetrenderLps2d from a DetrenderLps2dParams.\n\n"
                "Raises:\n"
                "    RuntimeError: if no kernel is compiled for n_phi, if T is not a positive\n"
                "        multiple of 32, if n is outside [0,2], if W is outside [0,16] or\n"
@@ -425,7 +424,7 @@ void register_kernel_bindings(pybind11::module &m)
                "        which.")
           .def(py::init([](long nfreq, const std::vector<long> &knots, long M, long n_phi,
                            long n, long W, long T, double eta, double eps) {
-              Detrender2d::Params params;
+              DetrenderLps2dParams params;
               params.nfreq = nfreq;
               params.knots = knots;
               params.M = M;
@@ -435,12 +434,12 @@ void register_kernel_bindings(pybind11::module &m)
               params.T = T;
               params.eta = eta;
               params.eps = eps;
-              return new Detrender2d(params);
+              return new GpuDetrenderLps2d(params);
           }),
                py::arg("nfreq"), py::arg("knots"), py::arg("M"),
                py::arg("n_phi") = 2, py::arg("n") = 2, py::arg("W") = 4, py::arg("T") = 2048,
                py::arg("eta") = 1.0e-3, py::arg("eps") = 3.0e-5,
-               "Create a Detrender2d, from the Detrender2dParams fields as kwargs.\n\n"
+               "Create a GpuDetrenderLps2d, from the DetrenderLps2dParams fields as kwargs.\n\n"
                "Args:\n"
                "    nfreq: number of frequency channels\n"
                "    knots: non-decreasing list of channel indices, running from 0 to nfreq,\n"
@@ -455,33 +454,33 @@ void register_kernel_bindings(pybind11::module &m)
                "    eta: regularization strength (dimensionless)\n"
                "    eps: mask-expansion threshold on r_min\n\n"
                "Raises:\n"
-               "    RuntimeError: see the Detrender2dParams overload.")
-          .def_readonly("params", &Detrender2d::params, "The Detrender2dParams used to create this")
-          .def_property_readonly("nfreq", [](const Detrender2d &d) { return d.params.nfreq; })
-          .def_property_readonly("M", [](const Detrender2d &d) { return d.params.M; })
-          .def_property_readonly("n_phi", [](const Detrender2d &d) { return d.params.n_phi; })
-          .def_property_readonly("n", [](const Detrender2d &d) { return d.params.n; })
-          .def_property_readonly("W", [](const Detrender2d &d) { return d.params.W; })
-          .def_property_readonly("T", [](const Detrender2d &d) { return d.params.T; })
-          .def_property_readonly("eta", [](const Detrender2d &d) { return d.params.eta; })
-          .def_property_readonly("eps", [](const Detrender2d &d) { return d.params.eps; })
-          .def_readonly("nbuf", &Detrender2d::nbuf, "Buffer samples per row, = T + 2W")
-          .def_readonly("N_phi", &Detrender2d::N_phi, "Number of B-spline basis functions")
-          .def_readonly("nzone", &Detrender2d::nzone, "Number of zones")
-          .def_readonly("nfrange", &Detrender2d::nfrange, "Number of internal freq-ranges")
-          .def_readonly("channels_per_range", &Detrender2d::channels_per_range,
+               "    RuntimeError: see the DetrenderLps2dParams overload.")
+          .def_readonly("params", &GpuDetrenderLps2d::params, "The DetrenderLps2dParams used to create this")
+          .def_property_readonly("nfreq", [](const GpuDetrenderLps2d &d) { return d.params.nfreq; })
+          .def_property_readonly("M", [](const GpuDetrenderLps2d &d) { return d.params.M; })
+          .def_property_readonly("n_phi", [](const GpuDetrenderLps2d &d) { return d.params.n_phi; })
+          .def_property_readonly("n", [](const GpuDetrenderLps2d &d) { return d.params.n; })
+          .def_property_readonly("W", [](const GpuDetrenderLps2d &d) { return d.params.W; })
+          .def_property_readonly("T", [](const GpuDetrenderLps2d &d) { return d.params.T; })
+          .def_property_readonly("eta", [](const GpuDetrenderLps2d &d) { return d.params.eta; })
+          .def_property_readonly("eps", [](const GpuDetrenderLps2d &d) { return d.params.eps; })
+          .def_readonly("nbuf", &GpuDetrenderLps2d::nbuf, "Buffer samples per row, = T + 2W")
+          .def_readonly("N_phi", &GpuDetrenderLps2d::N_phi, "Number of B-spline basis functions")
+          .def_readonly("nzone", &GpuDetrenderLps2d::nzone, "Number of zones")
+          .def_readonly("nfrange", &GpuDetrenderLps2d::nfrange, "Number of internal freq-ranges")
+          .def_readonly("channels_per_range", &GpuDetrenderLps2d::channels_per_range,
                "Internal freq-range width, derived from (nfreq, knots, T). It is part of the\n"
                "frequency summation order, which is why results are bit-reproducible across\n"
                "chunkings at a fixed T but only to roundoff across different T.")
-          .def_static("configs", &Detrender2d::configs,
+          .def_static("configs", &GpuDetrenderLps2d::configs,
                "The compiled n_phi values. n, W and T are not among them: all three are\n"
                "runtime arguments. Returned as a list of ints.")
-          .def_static("time_selected", &Detrender2d::time_selected,
+          .def_static("time_selected", &GpuDetrenderLps2d::time_selected,
                py::call_guard<py::gil_scoped_release>(),
                "Run timing benchmarks, for every compiled configuration "
-               "(called via 'python -m pirate_frb time --dt2d')")
+               "(called via 'python -m pirate_frb time --dtl2')")
           .def("launch",
-               [](const Detrender2d &self, Array<float> &data, Array<unsigned char> &mask,
+               [](const GpuDetrenderLps2d &self, Array<float> &data, Array<unsigned char> &mask,
                   uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                    self.launch(data, mask, stream);

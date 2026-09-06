@@ -379,7 +379,7 @@ def _random_map(config, itree, rng, *, nzero=None, dtype=np.float64, **kwargs):
     drawn rather than pinned wide so that both regimes are sampled.
 
     'nzero' rows are set to zero, so that the YTRUE_FLOOR path (outputs with no variance) is
-    exercised -- it is not an edge case in practice, since a W=0 Detrender2d annihilates the
+    exercised -- it is not an edge case in practice, since a W=0 GpuDetrenderLps2d annihilates the
     DM=0 output. AS A FRACTION, NOT A COUNT (notes/unit_tests.md point 6): a fixed count of 2
     or 3 puts YTRUE_FLOOR on 0.3% of rows at a median nalpha of ~900, and never reaches the
     regime where most outputs are dead. Pass an explicit integer where a test needs an exact
@@ -1739,7 +1739,7 @@ def test_asdf_io():
 
 
 def test_asdf_detrender():
-    """A Detrender2dParams survives the file round trip, field by field.
+    """A DetrenderLps2dParams survives the file round trip, field by field.
 
     Every map the production CLI writes carries one (a variance map computed with a detrender
     is meaningless without knowing which detrender), and asdf_io round-trips it through
@@ -4568,7 +4568,7 @@ def _draw_sweep_case(rng, draw_config, cost, budget, *, detrender=False, accept=
 
 
 def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3, rng=None):
-    """A Detrender2dParams matching 'config', for the sweep tests.
+    """A DetrenderLps2dParams matching 'config', for the sweep tests.
 
     'nzone' and 'kint' are REQUESTS, not requirements. zoned_knots() needs nzone to divide
     nfreq and each zone to be wide enough to hold kint interior knots, and a random config
@@ -4578,11 +4578,11 @@ def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3, rng=None):
     Pinning them instead is what zoned_knots() is for, and its docstring says so.
     """
 
-    from ..pirate_pybind11 import Detrender2dParams
-    from ..detrending_spline.masks import zoned_knots
+    from ..pirate_pybind11 import DetrenderLps2dParams
+    from ..detrending.lps2d.masks import zoned_knots
 
     # 'rng' randomizes the detrender itself, not just the config it is matched to. The
-    # ranges are the ones Detrender2dParams accepts and that the sweep can afford: W is the
+    # ranges are the ones DetrenderLps2dParams accepts and that the sweep can afford: W is the
     # half-width in time samples and drives the polyphase pass count, so it stays small.
     #
     # W = 0 IS REACHED ON PURPOSE, and is not just the small end of a range: _SweepGeometry
@@ -4592,7 +4592,7 @@ def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3, rng=None):
     if rng is not None:
         n_phi = int(rng.integers(0, 3))
         W = 0 if (rng.random() < 0.2) else int(rng.integers(1, 6))
-        n = 0 if (W == 0) else int(rng.integers(0, 3))   # Detrender2d requires n in [0, 2]
+        n = 0 if (W == 0) else int(rng.integers(0, 3))   # GpuDetrenderLps2d requires n in [0, 2]
         nzone = int(rng.integers(1, 4))
         kint = int(rng.integers(1, 5))
 
@@ -4605,7 +4605,7 @@ def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3, rng=None):
     # M IS THE BEAM COUNT and must equal the config's beams_per_batch -- _SweepGeometry
     # checks it. Hardcoding 1 was fine while every caller used _make_test_config(), which
     # sets all three beam fields to 1; a drawn config does not.
-    return Detrender2dParams(nfreq=nfreq, knots=[int(x) for x in kv.knots],
+    return DetrenderLps2dParams(nfreq=nfreq, knots=[int(x) for x in kv.knots],
                              M=int(config.beams_per_batch), n_phi=n_phi,
                              n=n, W=W, T=int(config.time_samples_per_chunk))
 
@@ -4694,7 +4694,7 @@ def test_sweep_column_norms_random(verbose=True, max_attempts=500):
     expensive for every one.
 
     THE DETRENDER IS A COIN FLIP, and when present its own parameters are drawn too. Half the
-    draws exercise the Detrender2d path -- the only independent check on it, since no
+    draws exercise the GpuDetrenderLps2d path -- the only independent check on it, since no
     analytic oracle can represent a detrender -- and half exercise the plain chain. Over an
     '-n 100' run that is about five of each, on ten different geometries.
     """
@@ -4720,7 +4720,7 @@ def test_sweep_column_norms(config, detrender=None, nifreq=2, verbose=True):
 
     This is the test of the core math: the row-norm/column-norm exchange, the polyphase sum
     over 2^gamma phases, and the ntime/t0 sizing. It is also the only test that covers the
-    Detrender2d path, since no analytic oracle can. It costs (ntime + nt_in) passes per
+    GpuDetrenderLps2d path, since no analytic oracle can. It costs (ntime + nt_in) passes per
     channel, i.e. more than a whole sweep, so it runs at toy scale on a few channels.
 
     Note that the sum over t' below runs over EVERY input time, with no phase weighting: the
@@ -4730,7 +4730,7 @@ def test_sweep_column_norms(config, detrender=None, nifreq=2, verbose=True):
 
     from .brute_force import _CpuSweep, _SweepGeometry, sweep_all_trees_dense
 
-    # 'detrender' IS the Detrender2dParams (or None), supplied by the caller along with the
+    # 'detrender' IS the DetrenderLps2dParams (or None), supplied by the caller along with the
     # config. See the note at test_sweep_column_norms_random()'s call.
     dparams = detrender
 
@@ -4808,11 +4808,11 @@ def test_sweep_column_norms(config, detrender=None, nifreq=2, verbose=True):
 
 
 def test_sweep_detrender_fp32(r=8, nifreq=16, verbose=True, rng=None):
-    """Measures the Detrender2d's own float32 penalty, by running the numpy detrender at
+    """Measures the GpuDetrenderLps2d's own float32 penalty, by running the numpy detrender at
     float32 and float64 on the same one-hots.
 
     The sweep itself runs the detrender at float64 (the rest of the chain is float32, so that
-    is the accurate end), but the GPU Detrender2d is float32-only, so this is the error budget
+    is the accurate end), but the GPU GpuDetrenderLps2d is float32-only, so this is the error budget
     the GPU sweep inherits from that stage. Reported as the signed relative error on the
     squared norm of each detrended one-hot, which is what enters A.
     """
@@ -4958,7 +4958,7 @@ def test_sweep_gpu_vs_cpu(config, detrender=None, nbeams=1, verbose=True):
 
     from .brute_force import compute_variance_multimap
 
-    # 'detrender' IS THE Detrender2dParams (or None), not a flag saying to build one. It has
+    # 'detrender' IS THE DetrenderLps2dParams (or None), not a flag saying to build one. It has
     # to be, because the detrender is drawn: _draw_gpu_vs_cpu_case() prices the case on one
     # particular detrender, and building a second here would run a geometry its cost model
     # never saw.
@@ -5319,7 +5319,7 @@ def test_restriction_representation(K=None):
 # Work-unit ceiling for test_restriction_vs_sweep()'s CPU sweep, in the same units as
 # SWEEP_WORK_BUDGET (see there for what a work unit is and why a budget is not optional).
 # MEASURED END TO END, not derived: at this ceiling the test costs a mean of 0.9 s and a
-# worst case of about 2.5 s (the CPU sweep with a Detrender2d runs at 79-187 ns per work
+# worst case of about 2.5 s (the CPU sweep with a GpuDetrenderLps2d runs at 79-187 ns per work
 # unit, and the accepted population's mean work is well below the ceiling). The test runs
 # every tenth iteration, so that is ~0.1 s per iteration of run_tests(). Changing this
 # changes a running time, not a property: nothing asserted below depends on it.
@@ -5384,7 +5384,7 @@ def test_restriction_vs_sweep(verbose=True):
     (The two trees do share an upstream chain, which is exactly what Proposition 1 assumes.)
 
     THE CONFIG IS DRAWN, and _draw_restriction_config() says what it has to satisfy. The
-    DETRENDER IS NOT A CHOICE HERE: a Detrender2d assumes nothing about the upstream chain,
+    DETRENDER IS NOT A CHOICE HERE: a GpuDetrenderLps2d assumes nothing about the upstream chain,
     so Proposition 1 has to survive one, and that arm is the only part of the proposition
     that test_multimap_vs_sweep() does not already cover on drawn configs every iteration --
     it sweeps without a detrender, because its own comparison is against a detrender-free
@@ -5572,7 +5572,7 @@ def run_once():
 
     # ---- reason 2: too expensive to repeat ----
     # THE KNOB SWEEP. Four driver paths have to be covered here -- the lds kernel's single
-    # beam stride (invisible at nbeams == 1), the Detrender2d, time-downsampled trees, and
+    # beam stride (invisible at nbeams == 1), the GpuDetrenderLps2d, time-downsampled trees, and
     # nfreq != 2^r -- and a drawn case reaches all four, but only probabilistically: measured
     # over 400 accepted draws, nbeams > 1 in 75%, a detrender in 43%, npri > 1 in 34%. Over an
     # '-n 100' run that is near-certain; over ONE iteration it is not.
@@ -5599,7 +5599,7 @@ def run_once():
     test_sweep_phase_collapse(7)
 
     # A MEASUREMENT, NOT REALLY A TEST -- item 11's "informational print for a human". It
-    # reports the Detrender2d's own float32 penalty, which is the error budget the GPU sweep
+    # reports the GpuDetrenderLps2d's own float32 penalty, which is the error budget the GPU sweep
     # inherits and which test_sweep_gpu_vs_cpu deliberately factors OUT (it runs its CPU
     # reference at the GPU's precision, so its bar measures the DRIVER). This is the only
     # thing that bounds the penalty itself.

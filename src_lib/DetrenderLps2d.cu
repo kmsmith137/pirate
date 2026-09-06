@@ -1,4 +1,4 @@
-#include "../include/pirate/Detrender2d.hpp"
+#include "../include/pirate/Detrender.hpp"
 
 #include <cmath>
 #include <sstream>
@@ -25,7 +25,7 @@ namespace pirate {
 // Overview.
 //
 // Notation follows notes/detrending.tex, section "2-d detrending"; the numpy
-// reference is pirate_frb/detrending_spline, and the two are compared by
+// reference is pirate_frb/detrending/lps2d, and the two are compared by
 // test_gpu_kernel() in that package.
 //
 // Three kernels, in stream order. The split is forced by the shape of the problem: the
@@ -103,7 +103,7 @@ static constexpr int MAX_NPAIR_T = (MAX_NDEG+1)*(MAX_NDEG+2)/2;
 
 // Largest TIME polynomial degree we are willing to RUN, as opposed to the largest the
 // arrays are sized for. The two differ on purpose. The numpy reference
-// (pirate_frb/detrending_spline) rejects n > 2, so n = 3 would be a configuration no test
+// (pirate_frb/detrending/lps2d) rejects n > 2, so n = 3 would be a configuration no test
 // can validate -- and the parts of this kernel that n touches are exactly the parts a
 // test would need to check: the (q,r) assembly loops, the moment stencils, and the
 // Theta = I structure of the regulator. Refusing it is better than shipping an
@@ -739,7 +739,7 @@ static int solve_blocks_per_sm(long n_phi, long threads, long shmem)
         case 2: return solve_blocks_per_sm_t<2>(threads, shmem);
         case 3: return solve_blocks_per_sm_t<3>(threads, shmem);
     }
-    throw runtime_error("Detrender2d: internal error in solve_blocks_per_sm()");
+    throw runtime_error("GpuDetrenderLps2d: internal error in solve_blocks_per_sm()");
 }
 
 static void solve_permit_shmem(long n_phi, long bytes)
@@ -750,7 +750,7 @@ static void solve_permit_shmem(long n_phi, long bytes)
         case 2: solve_permit_shmem_t<2>(bytes); return;
         case 3: solve_permit_shmem_t<3>(bytes); return;
     }
-    throw runtime_error("Detrender2d: internal error in solve_permit_shmem()");
+    throw runtime_error("GpuDetrenderLps2d: internal error in solve_permit_shmem()");
 }
 
 
@@ -758,9 +758,9 @@ static void solve_permit_shmem(long n_phi, long bytes)
 // launch(). T is deliberately NOT part of a configuration -- it is a runtime kernel
 // argument (see the glossary at the top), so a caller may pick any chunk length without
 // a recompile, and test_gpu_kernel() uses a small one to keep its numpy oracle cheap.
-struct Detrender2dConfig { long n_phi; };
+struct GpuDetrenderLps2dConfig { long n_phi; };
 
-static constexpr Detrender2dConfig detrender_2d_configs[] = {
+static constexpr GpuDetrenderLps2dConfig detrender_2d_configs[] = {
     { 0 },
     { 1 },
     { 2 },
@@ -771,17 +771,17 @@ static constexpr Detrender2dConfig detrender_2d_configs[] = {
 static string config_list_str()
 {
     stringstream ss;
-    for (const Detrender2dConfig &c: detrender_2d_configs)
+    for (const GpuDetrenderLps2dConfig &c: detrender_2d_configs)
         ss << ((&c == &detrender_2d_configs[0]) ? "" : ", ")
            << "(n_phi=" << c.n_phi << ")";
     return ss.str();
 }
 
 
-vector<long> Detrender2d::configs()
+vector<long> GpuDetrenderLps2d::configs()
 {
     vector<long> ret;
-    for (const Detrender2dConfig &c: detrender_2d_configs)
+    for (const GpuDetrenderLps2dConfig &c: detrender_2d_configs)
         ret.push_back(c.n_phi);
     return ret;
 }
@@ -892,16 +892,16 @@ static void fill_stencils(TimeStencils &tb, const vector<double> &P, int n_deg, 
 }
 
 
-void Detrender2d::Params::validate() const
+void DetrenderLps2dParams::validate() const
 {
     bool found = false;
-    for (const Detrender2dConfig &c: detrender_2d_configs)
+    for (const GpuDetrenderLps2dConfig &c: detrender_2d_configs)
         if (c.n_phi == n_phi)
             found = true;
 
     if (!found) {
         stringstream ss;
-        ss << "Detrender2d: no kernel is compiled for n_phi=" << n_phi
+        ss << "DetrenderLps2dParams: no kernel is compiled for n_phi=" << n_phi
            << "; available configurations are " << config_list_str();
         throw runtime_error(ss.str());
     }
@@ -910,9 +910,9 @@ void Detrender2d::Params::validate() const
     // could execute; see MAX_ORACLE_NDEG.
     if ((n < 0) || (n > MAX_ORACLE_NDEG)) {
         stringstream ss;
-        ss << "Detrender2d: n=" << n << " must be in [0, " << MAX_ORACLE_NDEG << "]. "
+        ss << "DetrenderLps2dParams: n=" << n << " must be in [0, " << MAX_ORACLE_NDEG << "]. "
            << "(The kernel's arrays are sized up to n = " << MAX_NDEG << ", but the numpy "
-           << "reference pirate_frb.detrending_spline.SplineDetrender rejects n > "
+           << "reference pirate_frb.detrending.ReferenceDetrenderLps2d rejects n > "
            << MAX_ORACLE_NDEG << ", so a larger n would be a configuration that no test "
            << "validates. To raise this, extend the reference first, then this check. "
            << "Note this is the TIME polynomial degree; the spline degree n_phi = 3 is "
@@ -925,12 +925,12 @@ void Detrender2d::Params::validate() const
     // stencil struct a compile-time size.
     if ((W < 0) || (W > MAX_W)) {
         stringstream ss;
-        ss << "Detrender2d: W=" << W << " must be in [0, " << MAX_W << "]";
+        ss << "DetrenderLps2dParams: W=" << W << " must be in [0, " << MAX_W << "]";
         throw runtime_error(ss.str());
     }
     if (2*W + 1 < n + 1) {
         stringstream ss;
-        ss << "Detrender2d: a degree-" << n << " fit in time needs 2W+1 >= n+1, but W="
+        ss << "DetrenderLps2dParams: a degree-" << n << " fit in time needs 2W+1 >= n+1, but W="
            << W << " gives a " << (2*W+1) << "-sample window";
         throw runtime_error(ss.str());
     }
@@ -941,18 +941,18 @@ void Detrender2d::Params::validate() const
     // length satisfies it.
     if ((T <= 0) || (T % 32 != 0)) {
         stringstream ss;
-        ss << "Detrender2d: T=" << T << " must be a positive multiple of 32";
+        ss << "DetrenderLps2dParams: T=" << T << " must be a positive multiple of 32";
         throw runtime_error(ss.str());
     }
 
     if (nfreq < 1)
-        throw runtime_error("Detrender2d: nfreq must be >= 1");
+        throw runtime_error("DetrenderLps2dParams: nfreq must be >= 1");
     if (M < 1)
-        throw runtime_error("Detrender2d: M must be >= 1");
+        throw runtime_error("DetrenderLps2dParams: M must be >= 1");
     if (eta <= 0.0)
-        throw runtime_error("Detrender2d: eta must be > 0");
+        throw runtime_error("DetrenderLps2dParams: eta must be > 0");
     if (eps <= 0.0)
-        throw runtime_error("Detrender2d: eps must be > 0");
+        throw runtime_error("DetrenderLps2dParams: eps must be > 0");
 
     // ---- Validate the knot vector.
     //
@@ -965,13 +965,13 @@ void Detrender2d::Params::validate() const
     // fit to the constant 1 is off by 0.99).
     const vector<long> &kn = knots;
     if (long(kn.size()) < n_phi + 2)
-        throw runtime_error("Detrender2d: knot vector is too short");
+        throw runtime_error("DetrenderLps2dParams: knot vector is too short");
     for (size_t i = 1; i < kn.size(); i++)
         if (kn[i] < kn[i-1])
-            throw runtime_error("Detrender2d: knots must be non-decreasing");
+            throw runtime_error("DetrenderLps2dParams: knots must be non-decreasing");
     if ((kn.front() != 0) || (kn.back() != nfreq)) {
         stringstream ss;
-        ss << "Detrender2d: knots must run from 0 to nfreq=" << nfreq
+        ss << "DetrenderLps2dParams: knots must run from 0 to nfreq=" << nfreq
            << ", got [" << kn.front() << ", " << kn.back() << "]";
         throw runtime_error(ss.str());
     }
@@ -983,7 +983,7 @@ void Detrender2d::Params::validate() const
                 mult++;
         if (mult != n_phi + 1) {
             stringstream ss;
-            ss << "Detrender2d: the " << (which ? "last" : "first") << " knot (" << val
+            ss << "DetrenderLps2dParams: the " << (which ? "last" : "first") << " knot (" << val
                << ") has multiplicity " << mult << ", expected exactly n_phi+1 = "
                << (n_phi+1) << ". Clamped ends are what put the constant function in the"
                << " span and make the basis complete on the whole band.";
@@ -992,7 +992,7 @@ void Detrender2d::Params::validate() const
     }
 
     if (long(kn.size()) - n_phi - 1 < 1)
-        throw runtime_error("Detrender2d: N_phi = len(knots)-n_phi-1 must be >= 1");
+        throw runtime_error("DetrenderLps2dParams: N_phi = len(knots)-n_phi-1 must be >= 1");
 
     // Interior multiplicities. A multiplicity of exactly n_phi+1 is a zone boundary and is
     // allowed (see the constructor); above that, the basis would be discontinuous.
@@ -1002,7 +1002,7 @@ void Detrender2d::Params::validate() const
             j++;
         if ((kn[i] > 0) && (kn[i] < nfreq) && (j - i > n_phi + 1)) {
             stringstream ss;
-            ss << "Detrender2d: interior knot " << kn[i] << " has multiplicity "
+            ss << "DetrenderLps2dParams: interior knot " << kn[i] << " has multiplicity "
                << (j - i) << ", above n_phi+1 = " << (n_phi+1);
             throw runtime_error(ss.str());
         }
@@ -1020,7 +1020,7 @@ void Detrender2d::Params::validate() const
 // below, and the key should read as English.
 
 
-void Detrender2d::Params::to_yaml(YAML::Emitter &emitter, bool verbose) const
+void DetrenderLps2dParams::to_yaml(YAML::Emitter &emitter, bool verbose) const
 {
     this->validate();
 
@@ -1028,9 +1028,10 @@ void Detrender2d::Params::to_yaml(YAML::Emitter &emitter, bool verbose) const
 
     if (verbose) {
         stringstream ss;
-        ss << "Detrender2d: a regularized fit of a B-spline in frequency times a local\n";
-        ss << "polynomial in time, subtracted from the data. See the class comment in\n";
-        ss << "Detrender2d.hpp, and notes/detrending.tex section \"2-d detrending\".";
+        ss << "DetrenderLps2dParams: the parameters of a 2-d spline detrender, which fits a\n";
+        ss << "B-spline in frequency times a local polynomial in time and subtracts it. See\n";
+        ss << "the class comments in Detrender.hpp, and notes/detrending.tex section\n";
+        ss << "\"2-d detrending\".";
         emitter << YAML::Comment(ss.str()) << YAML::Newline << YAML::Newline;
     }
 
@@ -1067,7 +1068,7 @@ void Detrender2d::Params::to_yaml(YAML::Emitter &emitter, bool verbose) const
 
     if (verbose) {
         // Derived quantities, so a reader can sanity-check a knot vector without doing the
-        // arithmetic. Recomputed here rather than taken from a Detrender2d, since a Params
+        // arithmetic. Recomputed here rather than taken from a GpuDetrenderLps2d, since a DetrenderLps2dParams
         // can be written without ever constructing one.
         long nzone = 1;
         for (long i = 0; i < long(knots.size()); ) {
@@ -1098,7 +1099,7 @@ void Detrender2d::Params::to_yaml(YAML::Emitter &emitter, bool verbose) const
 }
 
 
-string Detrender2d::Params::to_yaml_string(bool verbose) const
+string DetrenderLps2dParams::to_yaml_string(bool verbose) const
 {
     YAML::Emitter emitter;
     this->to_yaml(emitter, verbose);
@@ -1107,36 +1108,36 @@ string Detrender2d::Params::to_yaml_string(bool verbose) const
 
 
 // static member function
-Detrender2d::Params Detrender2d::Params::from_yaml(const string &filename)
+DetrenderLps2dParams DetrenderLps2dParams::from_yaml(const string &filename)
 {
     YamlFile f = YamlFile::from_file(filename);
-    return Detrender2d::Params::from_yaml(f);
+    return DetrenderLps2dParams::from_yaml(f);
 }
 
 
 // static member function
-Detrender2d::Params Detrender2d::Params::from_yaml_string(const string &yaml_string)
+DetrenderLps2dParams DetrenderLps2dParams::from_yaml_string(const string &yaml_string)
 {
     YamlFile f = YamlFile::from_string(yaml_string, "<detrender params string>");
-    return Detrender2d::Params::from_yaml(f);
+    return DetrenderLps2dParams::from_yaml(f);
 }
 
 
 // static member function
-Detrender2d::Params Detrender2d::Params::from_yaml(const YamlFile &f)
+DetrenderLps2dParams DetrenderLps2dParams::from_yaml(const YamlFile &f)
 {
     // 'channels_per_range' was a constructor argument before it became a derived member.
     // A file carrying it was written against an interface where it could be requested, so
     // silently ignoring it would silently change the caller's meaning.
     if (f.has_key("channels_per_range")) {
         stringstream ss;
-        ss << f.name << ": key 'channels_per_range' is no longer part of Detrender2d's"
+        ss << f.name << ": key 'channels_per_range' is no longer part of GpuDetrenderLps2d's"
            << " interface -- it is always derived from (nfreq, knots,"
            << " time_samples_per_chunk). Remove the key.";
         throw runtime_error(ss.str());
     }
 
-    Params p;
+    DetrenderLps2dParams p;
     p.nfreq = f.get_scalar<long> ("nfreq");
     p.M = f.get_scalar<long> ("num_beams");
     p.n_phi = f.get_scalar<long> ("spline_degree_freq");
@@ -1145,8 +1146,8 @@ Detrender2d::Params Detrender2d::Params::from_yaml(const YamlFile &f)
     p.T = f.get_scalar<long> ("time_samples_per_chunk");
 
     // Tuning parameters: optional, defaulting to the member initializers.
-    p.eta = f.get_scalar<double> ("regularization_strength", Params().eta);
-    p.eps = f.get_scalar<double> ("conditioning_threshold", Params().eps);
+    p.eta = f.get_scalar<double> ("regularization_strength", DetrenderLps2dParams().eta);
+    p.eps = f.get_scalar<double> ("conditioning_threshold", DetrenderLps2dParams().eps);
 
     p.knots = f.get_vector<long> ("knots");
 
@@ -1159,7 +1160,7 @@ Detrender2d::Params Detrender2d::Params::from_yaml(const YamlFile &f)
 // -------------------------------------------------------------------------------------------------
 
 
-Detrender2d::Detrender2d(const Params &params_) :
+GpuDetrenderLps2d::GpuDetrenderLps2d(const DetrenderLps2dParams &params_) :
     params(params_), nbuf(params_.T + 2*params_.W)
 {
     params.validate();
@@ -1373,7 +1374,7 @@ Detrender2d::Detrender2d(const Params &params_) :
     }
     if (solve_threads == 0) {
         stringstream ss;
-        ss << "Detrender2d: the largest zone has " << nphi_zone_max << " basis functions,"
+        ss << "GpuDetrenderLps2d: the largest zone has " << nphi_zone_max << " basis functions,"
            << " which needs more shared memory than this GPU offers (" << shmem_max
            << " bytes) even at 8 threads per block. Use more zone boundaries, i.e."
            << " interior knots of multiplicity n_phi+1, to split the frequency band.";
@@ -1388,7 +1389,7 @@ Detrender2d::Detrender2d(const Params &params_) :
 }
 
 
-Detrender2d::~Detrender2d()
+GpuDetrenderLps2d::~GpuDetrenderLps2d()
 {
     delete reinterpret_cast<TimeStencils *>(tb_blob);
     tb_blob = nullptr;
@@ -1396,7 +1397,7 @@ Detrender2d::~Detrender2d()
 
 
 template<int NPHI>
-static void _launch(const Detrender2d &d, float *data, unsigned char *mask,
+static void _launch(const GpuDetrenderLps2d &d, float *data, unsigned char *mask,
                     float *gu, float *acoef, float *rmin,
                     const float *phi_tab, const float *prod_tab,
                     const int *fr_desc, const int *zone_desc,
@@ -1455,7 +1456,7 @@ static void _launch(const Detrender2d &d, float *data, unsigned char *mask,
 }
 
 
-void Detrender2d::launch(Array<float> &data, Array<unsigned char> &mask, cudaStream_t stream) const
+void GpuDetrenderLps2d::launch(Array<float> &data, Array<unsigned char> &mask, cudaStream_t stream) const
 {
     xassert_eq(data.ndim, 3);
     xassert_shape_eq(data, ({params.M, params.nfreq, nbuf}));
@@ -1480,13 +1481,13 @@ void Detrender2d::launch(Array<float> &data, Array<unsigned char> &mask, cudaStr
     else if (params.n_phi == 3)
         _DT2D_DISPATCH(3);
     else
-        throw runtime_error("Detrender2d::launch: internal error, unhandled configuration");
+        throw runtime_error("GpuDetrenderLps2d::launch: internal error, unhandled configuration");
 
     #undef _DT2D_DISPATCH
 }
 
 
-void Detrender2d::time_selected()
+void GpuDetrenderLps2d::time_selected()
 {
     // The timing configuration: 2 beams, 30000 channels, 4 equal zones with 3 equally
     // spaced simple interior knots each.
@@ -1495,7 +1496,7 @@ void Detrender2d::time_selected()
     const long nzone = 4;
     const long kint = 3;
 
-    for (const Detrender2dConfig &c: detrender_2d_configs) {
+    for (const GpuDetrenderLps2dConfig &c: detrender_2d_configs) {
         const long n_phi = c.n_phi;
 
         vector<long> knots;
@@ -1513,7 +1514,7 @@ void Detrender2d::time_selected()
         for (long i = 0; i <= n_phi; i++)
             knots.push_back(nfreq);
 
-        Detrender2d::Params p;
+        DetrenderLps2dParams p;
         p.nfreq = nfreq;
         p.knots = knots;
         p.M = M;
@@ -1521,7 +1522,7 @@ void Detrender2d::time_selected()
         p.n = 2;
         p.W = 4;
         p.T = 2048;
-        Detrender2d det(p);
+        GpuDetrenderLps2d det(p);
 
         // Global memory traffic: kernel 1 reads the whole buffer, kernel 3 reads and
         // writes the output region. Every byte of an ideal implementation is touched
@@ -1537,7 +1538,7 @@ void Detrender2d::time_selected()
         Array<unsigned char> mask({M, nfreq, det.nbuf}, af_gpu);
         CUDA_CALL(cudaMemset(mask.data, 1, M*nfreq*det.nbuf));
 
-        cout << "\nDetrender2d::time_selected()\n"
+        cout << "\nGpuDetrenderLps2d::time_selected()\n"
              << "    (n_phi, n, W, T) = (" << p.n_phi << ", " << p.n << ", " << p.W
              << ", " << p.T << "), M = " << M << ", nfreq = " << nfreq << "\n"
              << "    N_phi = " << det.N_phi << ", nzone = " << det.nzone

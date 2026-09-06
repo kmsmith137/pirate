@@ -1,7 +1,7 @@
 """
 Unit tests for the 1-d detrender.  Dispatched from pirate_frb/__main__.py:
 
-    python -m pirate_frb test --dt1d
+    python -m pirate_frb test --dtl1
 
 Most tests run at a small size (W=16, B=32, Tc=64) for speed -- the algorithm is
 size-parameterized, so small sizes exercise the same code paths -- plus a
@@ -21,14 +21,14 @@ import numpy as np
 from .MomentSet import MomentSet, merge, pascal_shift, _binom_table
 from . import scan as scan_mod
 from .scan import tree_prefix_scan, tree_suffix_scan
-from .Detrender import Detrender
-from .reference import detrend_reference
-from .masks import random_mask
+from .ReferenceDetrenderLps1d import ReferenceDetrenderLps1d
+from .brute_force import detrend_brute_force
+from ..time_masks import random_mask
 from . import LocalPolyFit
-from ..detrending_testutils import (ExpansionTally, default_rng as _default_rng,
-                                    maxdiff as _maxdiff, poison_masked,
-                                    random_polynomial, random_spectator_shape,
-                                    random_stream_geometry)
+from ..testutils import (ExpansionTally, default_rng as _default_rng,
+                         maxdiff as _maxdiff, poison_masked, random_polynomial,
+                         random_spectator_shape, random_stream_geometry)
+from ...kernels import GpuDetrenderLps1d
 
 
 # ------------------------------------------------------------------ utilities
@@ -44,7 +44,7 @@ def _draw_geometry(rng, W, nsamp, s_max):
 
     chunk_size must be a multiple of the scan block B = 2W, and the buffer carries W
     samples of padding at each end -- the two facts random_stream_geometry() needs.
-    The draw reaches Tc = B, where Detrender.nblocks is 2 and the tree scan is at its
+    The draw reaches Tc = B, where the detrender's nblocks is 2 and the tree scan is at its
     shallowest.
     """
     return random_stream_geometry(rng, nsamp, s_max, lag=2*W, block=2*W)
@@ -260,7 +260,7 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
 
     # (b) the estimator is an orthogonal projection: kappa[0] = sum_s kappa[s]^2,
     #     where kappa is the equivalent kernel of the fit, obtained by impulses
-    #     through the FULL Detrender path.  Both sides equal the leverage H_tt,
+    #     through the FULL ReferenceDetrenderLps1d path.  Both sides equal the leverage H_tt,
     #     but the identity is checked from the kernel alone, so it needs nothing
     #     the solve does not already produce.  Note kappa[i] = 0 automatically at
     #     a masked i, since a masked sample is never read, so the sum restricts
@@ -271,7 +271,7 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
     #     position), and the centre sample must be valid, so we draw one random
     #     row and force m[W] = True.
     Tc = 2*W
-    det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype, eps=eps, mu=mu,
+    det = ReferenceDetrenderLps1d(W=W, n=n, chunk_size=Tc, dtype=dtype, eps=eps, mu=mu,
                     subtract_offset=False)
     Tbuf = det.buflen
     S_ax = 2*W + 1
@@ -307,7 +307,7 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
     cont_c = {1: 1.0, 2: 2.25}[n]
     devs = []
     for Wbig in (16, 128, 512):
-        det = Detrender(W=Wbig, n=n, chunk_size=2*Wbig, dtype=np.float64,
+        det = ReferenceDetrenderLps1d(W=Wbig, n=n, chunk_size=2*Wbig, dtype=np.float64,
                         eps=eps, mu=mu, subtract_offset=False)
         dd = np.zeros((1, det.buflen)); dd[0, Wbig] = 1.0
         mm = np.ones((1, det.buflen), dtype=bool)
@@ -325,7 +325,7 @@ def test_solve(rng=None, n=2, niter=4, verbose=True):
         f'continuum limit {cont_c}/(2W) not approached: {devs}'
 
     # (d) degenerate windows
-    det = Detrender(W=W, n=n, chunk_size=2*W, dtype=dtype, eps=eps, mu=mu,
+    det = ReferenceDetrenderLps1d(W=W, n=n, chunk_size=2*W, dtype=dtype, eps=eps, mu=mu,
                     subtract_offset=False)
     Tbuf = det.buflen
     dvals = np.arange(Tbuf, dtype=dtype) + 0.5
@@ -405,7 +405,7 @@ def test_polynomial_exactness(rng=None, n=2, verbose=True):
                 Tc, nchunk, S_ax, T = _draw_geometry(rng, W, budget, s_max)
                 mask, labels = random_mask(S_ax, T, W, rng)
                 P = random_polynomial(rng, S_ax, T, n, W, dtype)
-                det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype)
+                det = ReferenceDetrenderLps1d(W=W, n=n, chunk_size=Tc, dtype=dtype)
                 resid, mko, _ = det.detrend_stream(P, mask)
                 min_ = mask[:, W:T-W]
                 _EXPANSION.note(n, min_, mko)
@@ -437,7 +437,7 @@ def test_polynomial_exactness(rng=None, n=2, verbose=True):
     # symmetry was buying.
     W, Tc = 16, 64
     T = 2*Tc + 2*W
-    det = Detrender(W=W, n=n, chunk_size=Tc, dtype=np.float64)
+    det = ReferenceDetrenderLps1d(W=W, n=n, chunk_size=Tc, dtype=np.float64)
     allvalid = np.ones((2, T), dtype=bool)
     asym = np.ones((2, T), dtype=bool)
     asym[:, ::3] = False          # breaks the within-window symmetry
@@ -519,9 +519,9 @@ def test_detrender_vs_reference(rng=None, n=2, verbose=True):
             Tc, nchunk, S_ax, T = _draw_geometry(rng, W, budget, s_max)
             mask, labels = random_mask(S_ax, T, W, rng)
             d = (rng.normal(size=(S_ax, T)) + 3.0).astype(dtype)
-            det = Detrender(W=W, n=n, chunk_size=Tc, dtype=dtype)
+            det = ReferenceDetrenderLps1d(W=W, n=n, chunk_size=Tc, dtype=dtype)
             got, gmk, grm = det.detrend_stream(d, mask)
-            want, wmk, wrm = detrend_reference(d, mask, W, n=n, dtype=dtype)
+            want, wmk, wrm = detrend_brute_force(d, mask, W, n=n, dtype=dtype)
             _EXPANSION.note(n, mask[:, W:T-W], gmk)
             scale = max(1.0, float(np.max(np.abs(d))))
             for s in range(S_ax):
@@ -576,9 +576,9 @@ def test_dtype_agreement(rng=None, n=2, tol=1e-3, verbose=True):
             d32 = d64.astype(np.float32)
             dref = d32.astype(np.float64)     # bit-identical inputs
 
-            r32, m32, q32 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps32,
+            r32, m32, q32 = ReferenceDetrenderLps1d(W=W, n=n, chunk_size=Tc, eps=eps32,
                                       dtype=np.float32).detrend_stream(d32, mask)
-            r64, m64, q64 = Detrender(W=W, n=n, chunk_size=Tc, eps=eps64,
+            r64, m64, q64 = ReferenceDetrenderLps1d(W=W, n=n, chunk_size=Tc, eps=eps64,
                                       dtype=np.float64).detrend_stream(dref, mask)
             _EXPANSION.note(n, mask[:, W:T-W], m32)
 
@@ -638,7 +638,7 @@ def test_masked_data_unused(rng=None, n=2, verbose=True):
         poison = poison_masked(rng, clean, mask)
 
         for dtype in (np.float32, np.float64):
-            det = lambda d: Detrender(W=W, n=n, chunk_size=Tc,
+            det = lambda d: ReferenceDetrenderLps1d(W=W, n=n, chunk_size=Tc,
                                       dtype=dtype).detrend_stream(d.astype(dtype), mask)
             for nm, x, y in zip(('residual', 'mask_out', 'rmin'),
                                 det(clean), det(poison)):
@@ -648,10 +648,10 @@ def test_masked_data_unused(rng=None, n=2, verbose=True):
                 checked += 1
 
         for nm, x, y in zip(('residual', 'mask_out', 'rmin'),
-                            detrend_reference(clean, mask, W, n=n),
-                            detrend_reference(poison, mask, W, n=n)):
+                            detrend_brute_force(clean, mask, W, n=n),
+                            detrend_brute_force(poison, mask, W, n=n)):
             assert np.array_equal(x, y), \
-                f'detrend_reference: {nm} changed when masked samples were poisoned (W={W})'
+                f'detrend_brute_force: {nm} changed when masked samples were poisoned (W={W})'
             checked += 1
 
     if verbose:
@@ -662,7 +662,7 @@ def test_masked_data_unused(rng=None, n=2, verbose=True):
 
 def test_gpu_kernel(rng=None, n=2, tol=1e-3, rmin_tol=1e-4, verbose=True):
     """
-    Compare pirate.Detrender1d (the GPU kernel) to detrend_reference().
+    Compare GpuDetrenderLps1d (the GPU kernel) to detrend_brute_force().
 
     Structured like test_dtype_agreement(): the GPU runs in float32 at
     eps = 1e-3 and the reference in float64 at eps = 1e-6, so the two do not
@@ -672,9 +672,9 @@ def test_gpu_kernel(rng=None, n=2, tol=1e-3, rmin_tol=1e-4, verbose=True):
     ~ U(0, 1e3) is added on each draw, which is what catches a broken
     constant-offset subtraction (the kernel uses a per-BLOCK kappa rather than
     the reference's per-buffer one, which is exact in principle but has its own
-    ways to go wrong -- see the comments in src_lib/Detrender1d.cu).
+    ways to go wrong -- see the comments in src_lib/DetrenderLps1d.cu).
 
-    The float32 CPU Detrender is run on the same data at the same parameters
+    The float32 CPU reference is run on the same data at the same parameters
     and reported alongside, so the two implementations' numerical stability can
     be compared directly.  Do not expect them to agree closely: they sum in
     completely different orders.
@@ -692,22 +692,27 @@ def test_gpu_kernel(rng=None, n=2, tol=1e-3, rmin_tol=1e-4, verbose=True):
     (the kernel does not have to be built for every degree the numpy reference
     supports) the test is a no-op and says so.
     """
-    from ..kernels import Detrender1d   # local import: this package is otherwise numpy-only
-    import cupy as cp
-
     rng = _default_rng(rng)
-    cfgs = [c for c in Detrender1d.configs() if c[0] == n]
+
+    try:
+        import cupy as cp
+    except ImportError:
+        if verbose:
+            print('    test_gpu_kernel: cupy not available, skipped')
+        return
+
+    cfgs = [c for c in GpuDetrenderLps1d.configs() if c[0] == n]
     if not cfgs:
         if verbose:
             print(f'    test_gpu_kernel: no kernel compiled at n={n}, skipped '
-                  f'(have {Detrender1d.configs()})')
+                  f'(have {GpuDetrenderLps1d.configs()})')
         return
 
-    eps32, eps64 = Detrender1d.eps, 1e-6
+    eps32, eps64 = GpuDetrenderLps1d.eps, 1e-6
     ndraw = 2
 
     for (_n, W, T) in cfgs:
-        _test_gpu_kernel_1(rng, Detrender1d(n=n, W=W, T=T), cp, eps32, eps64,
+        _test_gpu_kernel_1(rng, GpuDetrenderLps1d(n=n, W=W, T=T), cp, eps32, eps64,
                            ndraw, tol, rmin_tol, verbose)
 
 
@@ -739,9 +744,9 @@ def _test_gpu_kernel_1(rng, det, cp, eps32, eps64, ndraw, tol, rmin_tol, verbose
             assert np.array_equal(out_m[:, lo:hi], mask[:, lo:hi]), f'{what} mask modified'
 
         r_gpu, m_gpu = out_d[:, W:W+T], out_m[:, W:W+T].astype(bool)
-        r_cpu, m_cpu, _ = Detrender(W=W, n=n, chunk_size=T, eps=eps32,
+        r_cpu, m_cpu, _ = ReferenceDetrenderLps1d(W=W, n=n, chunk_size=T, eps=eps32,
                                     dtype=np.float32).detrend_stream(d32, mask)
-        r_ref, m_ref, rmin = detrend_reference(dref, mask, W, n=n, eps=eps64,
+        r_ref, m_ref, rmin = detrend_brute_force(dref, mask, W, n=n, eps=eps64,
                                               dtype=np.float64,
                                               max_outputs_per_pass=512)
         _EXPANSION.note(n, mask[:, W:W+T], m_gpu)
@@ -764,7 +769,7 @@ def _test_gpu_kernel_1(rng, det, cp, eps32, eps64, ndraw, tol, rmin_tol, verbose
 
     if verbose:
         print(f'    test_gpu_kernel [n={n} W={W} T={T}]: max |r_gpu-r_ref| = {worst_gpu:.3e} sigma  ({worst_name})')
-        print(f'      same data through the float32 CPU Detrender: {worst_cpu:.3e} sigma')
+        print(f'      same data through the float32 CPU reference: {worst_cpu:.3e} sigma')
         print(f'      mask expansion disagreements: {ndisagree} '
               f'(worst |rmin-eps| = {worst_slack:.3e}, tolerated below {rmin_tol:.0e})')
 
@@ -782,7 +787,7 @@ def run_all(verbose=True, rng=None, n=None):
     run reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
 
     The polynomial degree is drawn from {1, 2} per call rather than fixed, so a
-    multi-iteration run ('test --dt1d -n 100') covers both.  Pass n explicitly to
+    multi-iteration run ('test --dtl1 -n 100') covers both.  Pass n explicitly to
     pin it.  test_gpu_kernel follows the same degree, and skips itself if no
     kernel is compiled for it; it is also the only test that needs a GPU (and the
     compiled extension), the other seven being pure numpy.
@@ -791,7 +796,7 @@ def run_all(verbose=True, rng=None, n=None):
     ent = rng.bit_generator.seed_seq.entropy
     if n is None:
         n = int(rng.integers(1, 3))
-    print(f'  detrending_1d tests (n={n}, rng entropy {ent})')
+    print(f'  detrending.lps1d tests (n={n}, rng entropy {ent})')
     test_monoid(rng, n=n, verbose=verbose)
     test_vanherk(rng, n=n, verbose=verbose)
     test_solve(rng, n=n, verbose=verbose)
@@ -800,4 +805,4 @@ def run_all(verbose=True, rng=None, n=None):
     test_dtype_agreement(rng, n=n, verbose=verbose)
     test_masked_data_unused(rng, n=n, verbose=verbose)
     test_gpu_kernel(rng, n=n, verbose=verbose)
-    print(f'  detrending_1d tests passed   [cumulative mask expansion: {_EXPANSION}]')
+    print(f'  detrending.lps1d tests passed   [cumulative mask expansion: {_EXPANSION}]')

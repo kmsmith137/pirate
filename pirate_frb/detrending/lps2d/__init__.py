@@ -42,9 +42,9 @@ from .reduce import tree_sum, accumulate, evaluate, band_to_dense, dense_to_band
 from .solve import (equilibrate, forward_subst, backward_subst,
                     solve_normal_equations, solve_banded, zone_slices)
 from .expand import expand_mask, zone_channel_ranges
-from .SplineDetrender import (SplineDetrender, ETA_DEFAULT, EPS_FLOAT32,
+from .ReferenceDetrenderLps2d import (ReferenceDetrenderLps2d, ETA_DEFAULT, EPS_FLOAT32,
                               EPS_FLOAT64, default_eps)
-from .reference import detrend_reference
+from .brute_force import detrend_brute_force
 from .timebasis import TimeBasis
 from .moments import window_moments, zone_live_counts
 from .assemble import assemble, commit, bandwidth

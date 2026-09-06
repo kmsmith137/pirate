@@ -1,5 +1,9 @@
 """
-Randomized mask generation for the detrender tests.
+Randomized TIME-axis mask generation, shared by every detrending test suite.
+
+Masks along the time axis are what all three detrenders consume, so this module sits
+beside the three algorithm subpackages rather than inside one of them.  (lps2d also
+draws masks along FREQUENCY; that is a different job, and lives in lps2d/masks.py.)
 
 random_mask() draws a shape (M,T) boolean mask by choosing a base *type*
 independently for each of the M rows, randomizing that type's parameters, and
@@ -42,8 +46,10 @@ def _loguniform_int(rng, lo, hi):
 
 
 # ---------------------------------------------------------------- type builders
-# Each returns a 1-d bool array of length T.  W is the window half-width, so the
-# scan block length is B = 2W.
+# Each returns a 1-d bool array of length T.  'W' is the caller's own length scale, in
+# samples: the window half-width for the local polynomial fit (lps1d), the lookahead L
+# for the Kalman filter (kf1d).  Gap lengths and the like are drawn relative to it, so
+# that each suite gets masks whose features are the size its detrender cares about.
 
 def _all_valid(T, W, rng):
     return np.ones(T, dtype=bool)
@@ -120,7 +126,7 @@ def _bimodal(T, W, rng):
 
 def _masked_blocks(T, W, rng):
     """One or more whole scan blocks masked -- the NaN trap for the empty-set rule
-    in MomentSet.merge.  Absolute block boundaries in the stream fall at multiples
+    in lps1d.MomentSet.merge.  Absolute block boundaries in the stream fall at multiples
     of B (the lattice is anchored at chunk_start - W and Tc is a multiple of B),
     so half the time we align to one and half the time we deliberately do not."""
     B = 2*W
@@ -203,6 +209,8 @@ def random_mask(M, T, W, rng):
     Returns (mask, labels): mask of shape (M,T) dtype bool, and a length-M list
     of the type name used for each row, so that a failing test can report which
     geometry produced it.
+
+    'W' is the caller's length scale in samples; see the type-builder comment above.
     """
     picks = rng.choice(len(MASK_TYPES), size=M, p=_PROBS)
     mask = np.empty((M, T), dtype=bool)

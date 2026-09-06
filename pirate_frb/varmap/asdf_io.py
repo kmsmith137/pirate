@@ -35,7 +35,7 @@ The tree
       created:         ISO8601 UTC string
       config_yaml:     str                 # DedispersionConfig.to_yaml_string()
       plan_yaml:       str                 # DedispersionPlan.to_yaml_string(), "minimal" plan
-      detrender_yaml:  str or None         # Detrender2dParams.to_yaml_string()
+      detrender_yaml:  str or None         # DetrenderLps2dParams.to_yaml_string()
       provenance:      dict                # free-form; how the SWEEP was run
       trees:                                # ONE ENTRY PER PRIMARY TREE, keyed by 'gamma'
         - gamma:              int          # primary_tree_index; the entry KEY
@@ -191,13 +191,13 @@ def _read_inputs(root):
     the writing build's dedispersion-tree geometry differs from this one's.
     """
 
-    from ..pirate_pybind11 import DedispersionConfig, DedispersionPlan, Detrender2dParams
+    from ..pirate_pybind11 import DedispersionConfig, DedispersionPlan, DetrenderLps2dParams
 
     config = DedispersionConfig.from_yaml_string(root['config_yaml'])
     plan = DedispersionPlan.from_yaml_string(config, root['plan_yaml'])
 
     dy = root.get('detrender_yaml')
-    detrender = Detrender2dParams.from_yaml_string(dy) if (dy is not None) else None
+    detrender = DetrenderLps2dParams.from_yaml_string(dy) if (dy is not None) else None
 
     return config, detrender, plan
 

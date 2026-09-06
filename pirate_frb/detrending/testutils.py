@@ -1,5 +1,5 @@
 """
-Helpers shared by the three detrending test suites (--dt1d, --dt1k, --dts).
+Helpers shared by the three detrending test suites (--dtl1, --dtk1, --dtl2).
 
 Everything here was duplicated two or three times before, in copies that had
 already started to drift apart.  A helper belongs here when all three suites want

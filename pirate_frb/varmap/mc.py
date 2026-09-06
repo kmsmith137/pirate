@@ -269,7 +269,7 @@ class _CpuRunner:
         mask = np.ones(buf.shape, dtype=bool)
         residual, mask_out, _ = g.spline_detrender.detrend_chunk(buf, mask)
         if not np.all(mask_out):
-            raise RuntimeError('varmap mc: the Detrender2d dropped an ill-conditioned zone even'
+            raise RuntimeError('varmap mc: the GpuDetrenderLps2d dropped an ill-conditioned zone even'
                                ' with an all-ones input mask, so L is not the linear operator'
                                ' the variance map assumes.')
         return residual[:, :, W:W+nt_in].astype(np.float32)

@@ -1,4 +1,4 @@
-#include "../include/pirate/Detrender1d.hpp"
+#include "../include/pirate/Detrender.hpp"
 
 #include <sstream>
 #include <iostream>
@@ -21,7 +21,7 @@ namespace pirate {
 //
 // Notation follows notes/detrending.tex, section "Time detrending algorithm 1:
 // local polynomial subtraction". The moment monoid, the van Herk block decomposition,
-// and the per-window solve are all specified there; pirate_frb/detrending_1d is a
+// and the per-window solve are all specified there; pirate_frb/detrending/lps1d is a
 // line-by-line numpy implementation of the same algorithm, and is the oracle this
 // kernel is tested against.
 //
@@ -72,7 +72,7 @@ namespace pirate {
 // for scans that do not carry their own centroid.
 //
 // Everything below is templated on (NDEG, W, T) and instantiated by the dispatch switch
-// in Detrender1d::launch(). The moment monoid itself depends only on NDEG: the centroid
+// in GpuDetrenderLps1d::launch(). The moment monoid itself depends only on NDEG: the centroid
 // is carried in units of W (see struct Canon), which is exact since W is a power of two,
 // and that removes W from all the monoid arithmetic.
 
@@ -80,8 +80,8 @@ namespace pirate {
 static constexpr int WARPS_PER_BLOCK = 4;
 static constexpr unsigned int ALL_LANES = 0xffffffffU;
 
-static constexpr float EPS = Detrender1d::eps;
-static constexpr float MU = Detrender1d::mu;
+static constexpr float EPS = GpuDetrenderLps1d::eps;
+static constexpr float MU = GpuDetrenderLps1d::mu;
 
 // The Makefile compiles everything with --use_fast_math, which turns '/' into an
 // unrefined MUFU.RCP (~2^-22 relative). That is not good enough in two places, so both
@@ -797,9 +797,9 @@ detrend_1d_kernel(float *data, unsigned char *mask, int M)
 // The compiled configurations. To add one: add a row here, and a line to the dispatch in
 // launch(). Nothing else needs to change, provided Cfg's static_asserts are satisfied and
 // solve_and_test() handles the degree.
-struct Detrender1dConfig { long n, W, T; };
+struct GpuDetrenderLps1dConfig { long n, W, T; };
 
-static constexpr Detrender1dConfig detrender_1d_configs[] = {
+static constexpr GpuDetrenderLps1dConfig detrender_1d_configs[] = {
     { 1, 128, 2048 },
     { 2, 256, 2048 },
 };
@@ -808,17 +808,17 @@ static constexpr Detrender1dConfig detrender_1d_configs[] = {
 static string config_list_str()
 {
     stringstream ss;
-    for (const Detrender1dConfig &c: detrender_1d_configs)
+    for (const GpuDetrenderLps1dConfig &c: detrender_1d_configs)
         ss << ((&c == &detrender_1d_configs[0]) ? "" : ", ")
            << "(n=" << c.n << ", W=" << c.W << ", T=" << c.T << ")";
     return ss.str();
 }
 
 
-vector<tuple<long,long,long>> Detrender1d::configs()
+vector<tuple<long,long,long>> GpuDetrenderLps1d::configs()
 {
     vector<tuple<long,long,long>> ret;
-    for (const Detrender1dConfig &c: detrender_1d_configs)
+    for (const GpuDetrenderLps1dConfig &c: detrender_1d_configs)
         ret.push_back({ c.n, c.W, c.T });
     return ret;
 }
@@ -826,15 +826,15 @@ vector<tuple<long,long,long>> Detrender1d::configs()
 
 // The constructor is where an unsupported configuration is rejected, so that a caller
 // finds out at construction rather than at launch.
-Detrender1d::Detrender1d(long n_, long W_, long T_) :
+GpuDetrenderLps1d::GpuDetrenderLps1d(long n_, long W_, long T_) :
     n(n_), W(W_), T(T_), nbuf(T_ + 2*W_)
 {
-    for (const Detrender1dConfig &c: detrender_1d_configs)
+    for (const GpuDetrenderLps1dConfig &c: detrender_1d_configs)
         if ((c.n == n_) && (c.W == W_) && (c.T == T_))
             return;
 
     stringstream ss;
-    ss << "Detrender1d: no kernel is compiled for (n=" << n_ << ", W=" << W_
+    ss << "GpuDetrenderLps1d: no kernel is compiled for (n=" << n_ << ", W=" << W_
        << ", T=" << T_ << "); available configurations are " << config_list_str();
     throw runtime_error(ss.str());
 }
@@ -851,7 +851,7 @@ static void _launch(float *data, unsigned char *mask, long M, cudaStream_t strea
 }
 
 
-void Detrender1d::launch(Array<float> &data, Array<unsigned char> &mask, cudaStream_t stream) const
+void GpuDetrenderLps1d::launch(Array<float> &data, Array<unsigned char> &mask, cudaStream_t stream) const
 {
     xassert_eq(data.ndim, 2);
     xassert_eq(data.shape[1], nbuf);
@@ -877,16 +877,16 @@ void Detrender1d::launch(Array<float> &data, Array<unsigned char> &mask, cudaStr
     else if ((n == 2) && (W == 256) && (T == 2048))
         _launch<2,256,2048> (data.data, mask.data, M, stream);
     else
-        throw runtime_error("Detrender1d::launch: internal error, unhandled configuration");
+        throw runtime_error("GpuDetrenderLps1d::launch: internal error, unhandled configuration");
 }
 
 
-void Detrender1d::time_selected()
+void GpuDetrenderLps1d::time_selected()
 {
     long M = 64*1024;
 
-    for (const Detrender1dConfig &c: detrender_1d_configs) {
-        Detrender1d det(c.n, c.W, c.T);
+    for (const GpuDetrenderLps1dConfig &c: detrender_1d_configs) {
+        GpuDetrenderLps1d det(c.n, c.W, c.T);
 
         // Global memory traffic: the whole buffer is read, and the T-sample output window
         // is written. Every byte is touched exactly once, so this is also the DRAM traffic
@@ -901,7 +901,7 @@ void Detrender1d::time_selected()
         Array<unsigned char> mask({M, det.nbuf}, af_gpu);
         CUDA_CALL(cudaMemset(mask.data, 1, M*det.nbuf));
 
-        cout << "\nDetrender1d::time_selected()\n"
+        cout << "\nGpuDetrenderLps1d::time_selected()\n"
              << "    (n, W, T) = (" << det.n << ", " << det.W << ", " << det.T << "), M = " << M << "\n"
              << "    data = " << (double(M)*det.nbuf*4 / 1.0e9) << " GB, "
              << "mask = " << (double(M)*det.nbuf / 1.0e9) << " GB\n"

@@ -12,7 +12,7 @@ There is no regularizer.  Instead the solve reports a conditioning statistic
 
     rmin = min_i (p_i / G_ii),   rmin = 0 if any G_ii = 0,
 
-and Detrender masks the output sample when rmin falls below a threshold.  rmin
+and ReferenceDetrenderLps1d masks the output sample when rmin falls below a threshold.  rmin
 lies in [0,1] and is the smallest relative Cholesky pivot, so the equilibrated
 condition number of G is roughly 1/rmin.
 
@@ -33,7 +33,7 @@ below 1.  What that leaves depends on the degree:
     line through two points has leverage 1, hence Var(r) = 0.
 
 Note p_0 is never modified for nv >= 1, which is what makes constant-offset
-subtraction exact -- see Detrender.
+subtraction exact -- see ReferenceDetrenderLps1d.
 """
 
 import numpy as np

@@ -1,7 +1,7 @@
 """
 A dense, deliberately naive reference implementation.
 
-Same mathematics as SplineDetrender, expressed with an explicit design matrix
+Same mathematics as ReferenceDetrenderLps2d, expressed with an explicit design matrix
 over (channel, window offset) pairs and numpy's own dense solve, one (beam, time)
 sample at a time.  It shares no code with the fast path below the level of
 knots.py, basis.py and timebasis.py -- in particular it never forms window
@@ -22,10 +22,10 @@ from .timebasis import TimeBasis
 from .solve import zone_slices
 
 
-def detrend_reference(d_buf, mask_buf, kv, n=0, W=0, eta=3e-3, eps=1e-7,
+def detrend_brute_force(d_buf, mask_buf, kv, n=0, W=0, eta=3e-3, eps=1e-7,
                       dtype=np.float64, orthogonal_time=True):
     """
-    Signature and return values match SplineDetrender.detrend_chunk(); see that
+    Signature and return values match ReferenceDetrenderLps2d.detrend_chunk(); see that
     docstring.  Everything is computed in 'dtype'.
     """
     dtype = np.dtype(dtype)

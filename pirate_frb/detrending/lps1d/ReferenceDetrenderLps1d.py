@@ -21,7 +21,7 @@ by construction.
 
 Moment state is never carried across chunks; each chunk's scans are built from
 scratch, and the constant offset is recomputed from the buffer in hand, so
-detrend_chunk() is a pure function of its arguments.  A Detrender therefore holds
+detrend_chunk() is a pure function of its arguments.  A ReferenceDetrenderLps1d therefore holds
 no mutable state at all: results are reproducible on replay, chunks may be
 processed in any order, and detrend_chunk() can be tested in isolation.
 """
@@ -33,7 +33,7 @@ from .scan import tree_prefix_scan, tree_suffix_scan
 from . import LocalPolyFit
 
 
-class Detrender:
+class ReferenceDetrenderLps1d:
     def __init__(self, W, n=2, chunk_size=2048, dtype=np.float32,
                  eps=1e-3, mu=1e-30, subtract_offset=True):
         # eps is a masking threshold on rmin (see LocalPolyFit), not a
@@ -154,7 +154,7 @@ class Detrender:
 
         This is the path that exercises chunk stitching.  Because the block
         lattice is chunk-invariant, the result should agree sample-by-sample
-        with detrend_reference() applied to the whole stream at once.
+        with detrend_brute_force() applied to the whole stream at once.
         """
         d = np.asarray(d)
         mask = np.asarray(mask)

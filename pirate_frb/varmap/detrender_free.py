@@ -758,7 +758,7 @@ class SdPlan:
             # bound is tight".
             #
             # THE NO-DETRENDER HYPOTHESIS IS LOAD-BEARING. The same appendix shows the
-            # property is false with a Detrender2d in front, so the day someone adds a
+            # property is false with a GpuDetrenderLps2d in front, so the day someone adds a
             # detrender path is the day this slice silently becomes wrong.
             #
             # In the level-r labelling the block bottom is "all bits below Lmat zero", since
@@ -1362,7 +1362,7 @@ def compute_detrender_free_varfine(config, freq_variances, *, progress=False, de
 
     THE NO-DETRENDER HYPOTHESIS IS LOAD-BEARING, for the same reason it is in
     compute_detrender_free_multi_map(): the step from the base tree to the other PRIMARY trees
-    is Proposition 2, which is false with a Detrender2d in front (measured against the
+    is Proposition 2, which is false with a GpuDetrenderLps2d in front (measured against the
     brute-force sweep: 4.9e-7 without one, 2.1 with). A future detrender path must not be
     routed through this function.
 

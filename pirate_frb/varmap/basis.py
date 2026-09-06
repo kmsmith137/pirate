@@ -28,7 +28,7 @@ TWO CONSTRUCTORS THAT ARE NAMED IN THE DESIGN AND ARE NOT HERE, so that their ab
 mistaken for an oversight:
 
   - the ANALYTIC no-detrender basis, i.e. the exact low-rank factorization that exists once the
-    Detrender2d is removed. It is the best cheap starting point known (1.0x-1.8x against a
+    GpuDetrenderLps2d is removed. It is the best cheap starting point known (1.0x-1.8x against a
     purpose-built basis with no clustering at all), and it needs the analytic-variance
     machinery of notes/variance_map.tex evaluated with the detrender off, which nothing in this
     package can do yet. Its natural home is next to the sweep.

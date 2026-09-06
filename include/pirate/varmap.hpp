@@ -404,7 +404,7 @@ expand_fine_vectors(const DedispersionPlan &plan,
 // than the expression that defines it, and for the two propositions it rests on.
 //
 // THE NO-DETRENDER HYPOTHESIS IS LOAD-BEARING. The step from the base tree to the other PRIMARY
-// trees is Proposition 2, which is FALSE with a Detrender2d in front (measured against the
+// trees is Proposition 2, which is FALSE with a GpuDetrenderLps2d in front (measured against the
 // brute-force sweep: 4.9e-7 without one, 2.1 with). A future detrender path must not be routed
 // through this function.
 extern std::vector<ksgpu::Array<double>>

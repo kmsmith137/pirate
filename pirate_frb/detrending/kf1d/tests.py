@@ -1,7 +1,7 @@
 """
 Unit tests for the fixed-lag Kalman detrender.  Dispatched from pirate_frb/__main__.py:
 
-    python -m pirate_frb test --dt1k
+    python -m pirate_frb test --dtk1
 
 T1-T8 are debugging tests: each has an oracle or an analytic answer, so a failure
 points at a specific line.  T9 (test_dtype_agreement) is different in kind -- it is a
@@ -15,22 +15,21 @@ size-parameterized, so small sizes exercise the same code paths.
 
 import numpy as np
 
-from ..detrending_1d.masks import random_mask
+from ..time_masks import random_mask
 from .model import StateSpaceModel, tau_from_equivalent_W
 from .InfoFilter import forward_step, backward_step
-from .KalmanDetrender import KalmanDetrender
-from .brute_force import (kalman_brute_force, impulse_kernel, difference_matrix,
+from .ReferenceDetrenderKf1d import ReferenceDetrenderKf1d
+from .brute_force import (detrend_brute_force, impulse_kernel, difference_matrix,
                           _state_from_samples)
-from ..detrending_testutils import (ExpansionTally, default_rng as _default_rng,
-                                    maxdiff as _maxdiff, poison_masked,
-                                    random_polynomial, random_spectator_shape,
-                                    random_stream_geometry)
+from ..testutils import (ExpansionTally, default_rng as _default_rng,
+                         maxdiff as _maxdiff, poison_masked, random_polynomial,
+                         random_spectator_shape, random_stream_geometry)
 
 
-# Kept separate from detrending_1d's tally: the two detrenders expand for different
+# Kept separate from detrending.lps1d's tally: the two detrenders expand for different
 # reasons and at wildly different rates, so a pooled number would describe neither.
 # One bucket, since nothing here splits the population the way the polynomial degree
-# splits detrending_1d's.
+# splits detrending.lps1d's.
 _EXPANSION = ExpansionTally(lambda _: '')
 
 
@@ -58,7 +57,7 @@ def _det(**kw):
     kw.setdefault('L', LAG)
     kw.setdefault('chunk_size', TC)
     kw.setdefault('dtype', np.float64)
-    return KalmanDetrender(**kw)
+    return ReferenceDetrenderKf1d(**kw)
 
 
 def _draw_tau_L(rng, nl_lo=0.5, nl_hi=10.0, tau_lo=2.0, tau_hi=16.0):
@@ -73,7 +72,7 @@ def _draw_tau_L(rng, nl_lo=0.5, nl_hi=10.0, tau_lo=2.0, tau_hi=16.0):
 
     Both are drawn because both are real: the shipped detrender is sized from
     from_equivalent_W(), which puts L at n_ell = 4 ell by default, but nothing in
-    KalmanDetrender requires it -- L >= 1 is the only constraint.
+    ReferenceDetrenderKf1d requires it -- L >= 1 is the only constraint.
 
     'tau' is drawn too, log-uniformly, since it sets the absolute scale that ell and the
     per-sample arithmetic both inherit.
@@ -129,7 +128,7 @@ def test_model_algebra(rng=None, verbose=True):
         except ValueError:
             pass
         else:
-            raise AssertionError(f'KalmanDetrender accepted k={bad}')
+            raise AssertionError(f'ReferenceDetrenderKf1d accepted k={bad}')
 
     if verbose:
         print(f'    T1 test_model_algebra: A, A^-1, A^s exact; params round-trip to {worst:.2e}')
@@ -153,7 +152,7 @@ def _dense_state_posterior(d_row, m_row, n_obs, k, tau):
     costs about eps_mach*cond(N) of relative accuracy, and cond(N) is set by the draw
     (tau^(2k) alone spans three decades).  Callers scale their tolerance by it rather
     than comparing against a constant -- see test_recursions_vs_dense(), and the
-    longer discussion in kalman_brute_force() in brute_force.py.
+    longer discussion in detrend_brute_force() in brute_force.py.
     """
     n = len(m_row)
     m_sub = m_row.astype(np.float64).copy()
@@ -169,7 +168,7 @@ def _dense_state_posterior(d_row, m_row, n_obs, k, tau):
 
 def _run_recursions(d_row, m_row, t, k, tau, L):
     """Forward filter to t, backward over [t+1,t+L], and their sum -- one row, plain
-    python, so the test does not depend on KalmanDetrender's chunking."""
+    python, so the test does not depend on ReferenceDetrenderKf1d's chunking."""
     mo = StateSpaceModel(k, tau, dtype=np.float64)
     J = np.zeros((k, k))
     eta = np.zeros(k)
@@ -281,7 +280,7 @@ def test_polynomial_exactness(rng=None, verbose=True):
             worst, lbl = 0.0, '-'
             mask, labels = random_mask(S_ax, T, L, rng)
             P = random_polynomial(rng, S_ax, T, k-1, tau, dtype)
-            det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
+            det = ReferenceDetrenderKf1d(k=k, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
             resid, mko, _ = det.detrend_stream(P, mask)
             _EXPANSION.note(None, mask[:, :T-L], mko)
             for s in range(S_ax):
@@ -310,7 +309,7 @@ def test_polynomial_exactness(rng=None, verbose=True):
     # T - L).  12*ell is the smallest that leaves the window non-empty at nl = 4.
     Tc = max(4*L, int(12*ell))
     T = 2*Tc + L
-    det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
+    det = ReferenceDetrenderKf1d(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
     P = random_polynomial(rng, 1, T, 2*k-1, tau, np.float64)
     r3, _, _ = det.detrend_stream(P, np.ones((1, T), dtype=bool))
     hw, iw = int(2*ell), int(8*ell)
@@ -393,7 +392,7 @@ def test_seam_free(rng=None, verbose=True):
     for offs in (False, True):
         ref = None
         for Tc in sizes:
-            det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc,
+            det = ReferenceDetrenderKf1d(k=k, tau=tau, L=L, chunk_size=Tc,
                                   dtype=np.float64, subtract_offset=offs)
             out = det.detrend_stream(d, mask)
             if ref is None:
@@ -436,9 +435,9 @@ def test_vs_brute_force(rng=None, verbose=True):
         S_ax = int(rng.integers(1, S_ax + 1))
         mask, labels = random_mask(S_ax, T, L, rng)
         d = rng.normal(size=(S_ax, T)) + 2.0
-        det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
+        det = ReferenceDetrenderKf1d(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
         r, mk, rmn = det.detrend_stream(d, mask)
-        br, bmk, brmn, bcond = kalman_brute_force(d, mask, k, tau, L, eps=det.eps,
+        br, bmk, brmn, bcond = detrend_brute_force(d, mask, k, tau, L, eps=det.eps,
                                                   return_cond=True)
         _EXPANSION.note(None, mask[:, :T-L], mk)
 
@@ -448,7 +447,7 @@ def test_vs_brute_force(rng=None, verbose=True):
         if mk.any():
             # BOTH TOLERANCES ARE SCALED BY THE ORACLE'S OWN CONDITIONING, PER SAMPLE,
             # and the numbers below are in units of that bound rather than absolute.
-            # kalman_brute_force() forms an explicit inverse of an n x n matrix per
+            # detrend_brute_force() forms an explicit inverse of an n x n matrix per
             # output sample, which costs about eps_mach*cond(N) of relative accuracy;
             # n runs up to T and cond(N) is set by the draw, since rho = tau^(2k)
             # spans three decades on its own.  A FIXED tolerance here is therefore an
@@ -457,7 +456,7 @@ def test_vs_brute_force(rng=None, verbose=True):
             # observed miss (6.1e-08) was a well-conditioned all-valid mask whose
             # oracle simply had no business being accurate to 1e-9.
             #
-            # NOT the r_min of detrending_spline/solve.py, which is the house idiom
+            # NOT the r_min of detrending.lps2d/solve.py, which is the house idiom
             # for the same problem.  It does not transfer: r_min measures the k x k
             # LOCAL fit, not the n x n solve, and over 5770 kept samples its
             # correlation with this error is +0.05 -- none.  cond(N) reaches +0.60,
@@ -519,7 +518,7 @@ def test_kernel_response(rng=None, verbose=True):
     for tau in (2.0, 4.0, 8.0):
         # ell = sqrt(2) tau at k=2; 64 samples is 11 ell at tau=8, 23 at tau=4.
         n = int(64 * max(1.0, tau/4.0))
-        det = KalmanDetrender(k=k, tau=tau, L=n, chunk_size=n, dtype=np.float64,
+        det = ReferenceDetrenderKf1d(k=k, tau=tau, L=n, chunk_size=n, dtype=np.float64,
                               subtract_offset=False)
         base = np.ones(det.buflen, dtype=bool)
         t_out = n - 1                    # deepest into the chunk, so J_f is in steady state
@@ -593,7 +592,7 @@ def test_psd_and_finite(rng=None, verbose=True):
     # The full path, over the zoo, must also be finite everywhere.
     for dtype in (np.float64, np.float32):
         Tc, nchunk, S_ax, T = _draw_geometry(rng, L, 3456, 24)
-        det = KalmanDetrender(k=k, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
+        det = ReferenceDetrenderKf1d(k=k, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
         mask, _ = random_mask(S_ax, T, L, rng)
         d = (rng.normal(size=(S_ax, T)) + 3.0).astype(dtype)
         outs = det.detrend_stream(d, mask)
@@ -618,7 +617,7 @@ def test_psd_and_finite(rng=None, verbose=True):
 def test_masked_data_unused(rng=None, verbose=True):
     """
     Masked samples must never be read.  Checked by poisoning them and requiring every
-    output to be BIT-IDENTICAL -- and, unlike detrending_1d, the carried state too: a
+    output to be BIT-IDENTICAL -- and, unlike detrending.lps1d, the carried state too: a
     NaN reaching the state would destroy every subsequent output of that row forever,
     which is the one failure mode this estimator has and the local fit does not.
     """
@@ -635,7 +634,7 @@ def test_masked_data_unused(rng=None, verbose=True):
             poison = poison_masked(rng, clean, mask)
 
             def run(x):
-                det = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
+                det = ReferenceDetrenderKf1d(k=K, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
                 st = det.initial_state(S_ax)
                 outs = None
                 for i in range(nchunk):
@@ -693,10 +692,10 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
             d32 = d64.astype(np.float32)
             dref = d32.astype(np.float64)          # bit-identical inputs
 
-            r32, m32, q32 = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
+            r32, m32, q32 = ReferenceDetrenderKf1d(k=K, tau=tau, L=L, chunk_size=Tc,
                                             dtype=np.float32, eps=eps32
                                             ).detrend_stream(d32, mask)
-            r64, m64, q64 = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
+            r64, m64, q64 = ReferenceDetrenderKf1d(k=K, tau=tau, L=L, chunk_size=Tc,
                                             dtype=np.float64, eps=eps64
                                             ).detrend_stream(dref, mask)
             _EXPANSION.note(None, mask[:, :T-L], m32)
@@ -720,9 +719,9 @@ def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
     mask = np.ones((S_ax, T), dtype=bool)
     d64 = rng.normal(size=(S_ax, T)) + rng.uniform(0.0, 1e3)
     d32 = d64.astype(np.float32)
-    r32, m32, _ = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
+    r32, m32, _ = ReferenceDetrenderKf1d(k=K, tau=tau, L=L, chunk_size=Tc,
                                   dtype=np.float32).detrend_stream(d32, mask)
-    r64, m64, _ = KalmanDetrender(k=K, tau=tau, L=L, chunk_size=Tc,
+    r64, m64, _ = ReferenceDetrenderKf1d(k=K, tau=tau, L=L, chunk_size=Tc,
                                   dtype=np.float64).detrend_stream(
                                       d32.astype(np.float64), mask)
     nout = T - L
@@ -763,10 +762,10 @@ def run_all(verbose=True, rng=None, iteration=0):
     only at 0.  See _EXHAUSTIVE.
     """
     rng = _default_rng(rng)
-    print(f'  detrending_1d_kalman tests (rng entropy {rng.bit_generator.seed_seq.entropy})')
+    print(f'  detrending.kf1d tests (rng entropy {rng.bit_generator.seed_seq.entropy})')
     for fn in _STAGE1:
         if (iteration == 0) or (fn not in _EXHAUSTIVE):
             fn(rng, verbose=verbose)
     test_dtype_agreement(rng, verbose=verbose)
-    print(f'  detrending_1d_kalman tests passed   '
+    print(f'  detrending.kf1d tests passed   '
           f'[cumulative mask expansion: {_EXPANSION}]')

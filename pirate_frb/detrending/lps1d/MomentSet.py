@@ -74,7 +74,7 @@ def pascal_shift(v, delta, binom):
 class MomentSet:
     """
     Batched monoid elements.  Leading axes are batch; moments are on the last
-    array axis.  Inside Detrender the batch shape is (S, nblocks, B), where S is
+    array axis.  Inside ReferenceDetrenderLps1d the batch shape is (S, nblocks, B), where S is
     the spectator axis (one entry per (beam,freq) pair).
 
     Fields:

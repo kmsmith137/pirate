@@ -68,8 +68,8 @@ Consider a linear operator $L$, whose input is an $(N_{\rm freq}, N_{\rm time})$
 and whose output is a $(2^{r-R}, M, P, N_{\rm time}/2^\gamma)$ array defined by the
 following sequence of steps:
 \begin{enumerate}
-\item Apply a {\tt Detrender2d} to the $(N_{\rm freq}, N_{\rm time})$ array
-  in-place with {\bf no mask}. The parameters of the {\tt Detrender2d} are
+\item Apply a {\tt GpuDetrenderLps2d} to the $(N_{\rm freq}, N_{\rm time})$ array
+  in-place with {\bf no mask}. The parameters of the {\tt GpuDetrenderLps2d} are
   part of the problem specification -- we might ``warm up'' with a simple
   case (e.g.\ $n=W=0$).
 \item Apply tree dedispersion, including peak-finding convolution for each $0 \le p < P$, 
@@ -186,7 +186,7 @@ all channels have similar variance, not per-matrix-element analysis.
 
 \item There is a ``brute-force'' algorithm to compute the variance map $A$ in dense form 
  (\S\ref{sec:variance_map_bruteforce}), for any linear operator $L$ which commutes
- with time translations. In our case of interest, where $L$ is defined by a {\tt Detrender2dParams}
+ with time translations. In our case of interest, where $L$ is defined by a {\tt DetrenderLps2dParams}
  and a {\tt DedispersionConfig}, this algorithm is implemented (CLI: {\tt pirate\_frb varmap bf}).
  This may be a useful ``crutch'' for initial exploration, although in the long run it won't
  scale to CHIME/CHORD. It would be a significant milestone
@@ -196,7 +196,7 @@ all channels have similar variance, not per-matrix-element analysis.
  full rank (in general), and an algorithm for computing $A$ in low-rank form, without
  computing a dense matrix as an intermedate.
  This algorithm is implemented as {\tt pirate\_frb varmap df}.
- Unfortunately, this algorithm does not generalize to the case where a {\tt Detrender2d}
+ Unfortunately, this algorithm does not generalize to the case where a {\tt GpuDetrenderLps2d}
  is specified.
 
 \item There is a general notion of coarse-graining the variance map $A_{\alpha F}$.
@@ -225,7 +225,7 @@ output a coarse-grained variance map.
  Together, these two pieces of data suffice to compute $D(A^{\rm true}, A^{\rm approx})$, and
  thereby gauge the quality of the approximation (including coarse-graining distance penalty).
 
-\item In the general case (i.e.\ including a {\tt Detrender2d}), we're currently in the
+\item In the general case (i.e.\ including a {\tt GpuDetrenderLps2d}), we're currently in the
  process of exploring algorithms which start from the ``brute-force'' dense $A$, and
  obtain a low-rank approximation, using a sequence of steps (e.g.\ coarse-graining,
  SVD decomposition, linear programming).
@@ -251,7 +251,7 @@ agent-authored sections usually report results (after running a ``campaign'' via
 
 Let's start by considering the following question.
 Suppose that we've precomputed the variance map $A$, given a {\tt DedispersionConfig} 
-and a {\tt Detrender2dParams}, and written it to disk.
+and a {\tt DetrenderLps2dParams}, and written it to disk.
 What are some interesting algorithms for finding a low-rank approximation with
 small $D(A^{\rm true}, A^{\rm approx})$?
 
@@ -278,7 +278,7 @@ Some practical notes, to get started:
  (\verb|max_r| is an inflation factor, not an error -- see \S\ref{ssec:distance_function}).
 
 \item There is no subscale config in \verb|configs/dedispersion/| yet, so part of the task is to
- create a variety of them, exploring the {\tt DedispersionConfig} and {\tt Detrender2dParams}
+ create a variety of them, exploring the {\tt DedispersionConfig} and {\tt DetrenderLps2dParams}
  parameter space. We are more interested in {\em typical} cases than in adversarial or edge
  cases: the goal is an algorithm that works well on the configs we would actually run, not one
  that survives a worst case we will never encounter.
@@ -299,7 +299,7 @@ I encourage you to propose new ideas and directions:
  be able to solve the multi-tree case.
 
 \item To start out, let's also disable frequency subbands, so that the
- main parameters to explore are the frequency zones, and the {\tt Detrender2d}.
+ main parameters to explore are the frequency zones, and the {\tt GpuDetrenderLps2d}.
  Let's also use subscale instances (say rank-10 and $\sim$400 frequency channels).
  Later, we can scale up, and add frequency subbands.
 
@@ -346,7 +346,7 @@ production peak-finding kernel already stores.
 
 Throughout, $Q$ and $W$ are the factors of $A^{\rm approx} = QW^T$ as in
 \S\ref{ssec:variance_map_setup}: $W$ is $N_{\rm freq}$-by-$K$ and $Q$ is $(2^{r-R}MP)$-by-$K$.
-Note the symbol clash with the {\tt Detrender2d} time half-width $W$ of \dtnotes{2-d detrending};
+Note the symbol clash with the {\tt GpuDetrenderLps2d} time half-width $W$ of \dtnotes{2-d detrending};
 below, the detrender's half-width is always named in words, never as $W$.
 
 \paragraph*{Why not least squares.}
@@ -361,10 +361,10 @@ inadmissible ($D = \infty$); the first admissible one is rank 128, and it scores
 where a rank-128 envelope scores $0.054$. Least-squares accuracy is close to irrelevant here,
 and at low rank it is actively misleading.
 
-The exception is instructive. With {\em no} {\tt Detrender2d}, $A$ really is close to low rank
+The exception is instructive. With {\em no} {\tt GpuDetrenderLps2d}, $A$ really is close to low rank
 -- numerically ${\rm rank}(A) = 54$ to $138$ on our maps -- and a clipped, inflated rank-16 SVD
 reaches $D \approx 10^{-6}$, four orders of magnitude better than any clustering at the same
-rank. Frequency subbands alone do not break this. It is the {\tt Detrender2d} that destroys the
+rank. Frequency subbands alone do not break this. It is the {\tt GpuDetrenderLps2d} that destroys the
 algebraic structure (\dtnotes{2-d detrending}: it smears every one-hot across its whole spline
 zone, which also destroys the exact zeros of $A$), and once it is switched on the SVD is dead at
 every rank below $N_{\rm freq}$. The algorithm below is aimed at that case, since it is the one
@@ -589,7 +589,7 @@ then re-run the alternation with that support frozen.
 The cleanest measurement is at the real CHIME tree-0 geometry ($r{=}15$, $N{=}1$, $P{=}16$,
 $N_{\rm freq} = 16384$, $N_\alpha = 524288$, dense $|A| = 64$ GiB), coarse-grained at
 $L$ corresponding to the shipped \verb|wt_dm_downsampling| $=64$, i.e.\ $N_\beta = 8192$ groups.
-The {\tt Detrender2d} is the one used throughout this study: a single spline zone with
+The {\tt GpuDetrenderLps2d} is the one used throughout this study: a single spline zone with
 $n_\phi = 2$, $n = 2$, time half-width $2$, $T = 2048$, $\eta = 10^{-3}$,
 $\epsilon = 3\times10^{-5}$, and a uniform knot vector giving 8 knot intervals across the band
 (hence $N_\phi = 10$ spline basis functions), held fixed as $N_{\rm freq}$ varies.
@@ -687,7 +687,7 @@ at low DM should be dropped for the same reason.
  $O(N_\beta^{2.4} N_{\rm freq})$, extrapolating to days at CHORD's $N_\beta$. Everything else is linear
  or better. It is a clustering, so a cheaper one would do, but the obvious substitutes
  (k-means on log-shape) are erratic at group granularity.
-\item The {\tt Detrender2d} time half-width is a large and cheap lever on all of this: raising it
+\item The {\tt GpuDetrenderLps2d} time half-width is a large and cheap lever on all of this: raising it
  from 2 to 8 improves $D$ at fixed rank by $2.8\times$, removes the low-DM cost concentration
  entirely, makes the SVD viable again, and costs $\sim$7\% more sweep time. Whether that
  half-width is acceptable on detrending grounds is a separate question, not addressed here.
@@ -835,7 +835,7 @@ In addition, here are some directions to explore that were suggested by an agent
 
 \begin{itemize}
 
-\item {\bf The {\tt Detrender2d} knot vector as a design variable.}
+\item {\bf The {\tt GpuDetrenderLps2d} knot vector as a design variable.}
  Campaign 1 found that the detrender does not merely perturb the structure of $A$, it
  destroys it: with no detrender, 33\% of a subbanded $A$ is exactly zero (a multiplet gets
  no contribution from channels outside its subband), and adding a single-zone detrender
@@ -1613,7 +1613,7 @@ $\mathbb{R}^{N_{\rm freq}}$. We prove:
 \begin{enumerate}
 \item $A^{(\gamma,e)}$ is a row-restriction of $A^{(\gamma,0)}$, for every $\gamma$ and $e$.
 \item In the ``no-detrender'' case (i.e.\ if the linear operator $L$ does not include a
- {\tt Detrender2d}), $A^{(\gamma,0)}$ is a row-restriction of $A^{(0,0)}$, for every $\gamma$.
+ {\tt GpuDetrenderLps2d}), $A^{(\gamma,0)}$ is a row-restriction of $A^{(0,0)}$, for every $\gamma$.
 \end{enumerate}
 In both cases the injection is explicit and is given below, which is what makes the result
 usable rather than merely existential.
@@ -1622,7 +1622,7 @@ usable rather than merely existential.
 \par\noindent
 {\bf Scope.} The two propositions need different hypotheses, and it is worth separating them.
 Proposition 1 holds whatever the upstream processing, and in particular for $L$
-exactly as defined in \S\ref{ssec:variance_map_setup}, {\tt Detrender2d} included: the two
+exactly as defined in \S\ref{ssec:variance_map_setup}, {\tt GpuDetrenderLps2d} included: the two
 trees it compares have the same $\gamma$, so they are fed by one and the same upstream chain
 (\ddnotes{Time-downsampled trees and early triggers}), and the proof shows that their
 operators agree row by row -- which needs nothing about what produced their common input, nor
@@ -1881,7 +1881,7 @@ share a {\tt max\_width}, and are nested otherwise: in {\tt chord\_sb2\_et.yml} 
 downsampled families have $P = 13, 10, 7$, so there they are nested. Second, both propositions
 have been checked numerically over random configs, against maps computed in float64 by the
 algorithm of \S\ref{sec:analytic_variance}: the row identities (\ref{eq:restriction_et}) and
-(\ref{eq:restriction_ds}) hold to $0$ and one ulp respectively. Proposition 1 has additionally been checked with a {\tt Detrender2d} in front of
+(\ref{eq:restriction_ds}) hold to $0$ and one ulp respectively. Proposition 1 has additionally been checked with a {\tt GpuDetrenderLps2d} in front of
 the dedisperser, where it continues to hold and Proposition 2 fails outright.
 
 \section{Monotonicity of the variance map in the DM bits (no detrender)}
@@ -1890,9 +1890,9 @@ the dedisperser, where it continues to hold and Proposition 2 fails outright.
 {\bf This appendix treats the no-detrender case only.} The linear operator is bare tree
 gridding $\to$ subbanded tree dedispersion $\to$ peak-finding convolution, as in
 \S\ref{sec:analytic_variance}, \S\ref{sec:avar_statement} -- {\em not} the detrended
-operator of \S\ref{ssec:variance_map_setup}, which includes a {\tt Detrender2d}.
+operator of \S\ref{ssec:variance_map_setup}, which includes a {\tt GpuDetrenderLps2d}.
 {\bf The result below is proved in that case only, and the restriction is not a
-technicality:} with a {\tt Detrender2d} in front of the dedisperser the property is not
+technicality:} with a {\tt GpuDetrenderLps2d} in front of the dedisperser the property is not
 merely unproved but {\em false}, and badly so (\S\ref{ssec:dyadic_sharpness}).
 
 Fix one column of the variance map: a {\tt DedispersionTree}, a frequency subband, a
@@ -2304,7 +2304,7 @@ Neither hypothesis of Theorem 7 can be dropped.
 \item {\em Non-negative weights.} Take $K=1$, $h=[1]$ (profile $p=0$) and $w = (1,-1)$. Then
 $A[0]=0$ and $A[1]=2$, so even the two-element instance $0 \subseteq 1$ of
 (\ref{eq:bitwise_property}) fails. This is why the argument does not survive a
-{\tt Detrender2d} in front of the dedisperser: the effective per-channel response is no longer
+{\tt GpuDetrenderLps2d} in front of the dedisperser: the effective per-channel response is no longer
 a non-negative weight times a single delta, so neither hypothesis of Theorem 7 survives. This
 is not a gap in the proof but a real failure: computing the detrended variance map by brute
 force (\S\ref{sec:variance_map_bruteforce}) at rank 6 with {\tt subband\_counts}=[2,2,1],
@@ -2395,13 +2395,13 @@ $L$ to ``one-hot'' input arrays. This appendix works out that brute-force algori
 
 It is very slow, but it treats every stage of $L$ as a black box, so it needs no new analysis to
 handle subbands, time-downsampled trees, early triggers, or -- most importantly -- the
-{\tt Detrender2d}, which the machinery of \S\ref{sec:analytic_variance} cannot currently handle at
+{\tt GpuDetrenderLps2d}, which the machinery of \S\ref{sec:analytic_variance} cannot currently handle at
 all. In fact the relationship is closer than that: \S\ref{sec:analytic_variance} {\em is} this
 algorithm, executed sparsely (propagating the one-hot impulse response through the dedispersion
 steps in compressed form) instead of densely. The brute-force version is the dense reference that
 the sparse version should be tested against.
 
-Besides the parameters of \S\ref{ssec:variance_map_setup}, we will need the {\tt Detrender2d} time
+Besides the parameters of \S\ref{ssec:variance_map_setup}, we will need the {\tt GpuDetrenderLps2d} time
 half-width $W$ (\dtnotes{2-d detrending}) and the max peak-finding kernel width $W_{\rm max}$
 (\ddnotes{Peak-finding}).
 
@@ -2440,7 +2440,7 @@ $\gamma=0$ and $\gamma>0$, which is the one place where the algorithm needs care
 
 \subsection{Undownsampled trees ($\gamma=0$)}
 
-Every stage of $L$ is time-translation invariant. The {\tt Detrender2d} run with no mask is a fixed
+Every stage of $L$ is time-translation invariant. The {\tt GpuDetrenderLps2d} run with no mask is a fixed
 FIR filter along time: with no mask its normal equations, and hence its mask expansion and its
 conditioning cuts, depend on neither the data nor $t$, so $L$ really is both linear and
 shift-invariant. Tree gridding acts only on the frequency axis, and tree dedispersion and the
@@ -2489,7 +2489,7 @@ Any representative $t_c$ of each residue class will do; e.g.\ $t_c = t_0 + c$ wi
 of $2^\gamma$.
 
 There is one important special case. If the part of $L$ upstream of $\TDS(\gamma)$ is
-{\em instantaneous} in time -- no detrender at all, or a {\tt Detrender2d} with $W=0$, which fits
+{\em instantaneous} in time -- no detrender at all, or a {\tt GpuDetrenderLps2d} with $W=0$, which fits
 each time sample independently and is therefore a pure frequency-axis operator -- then
 $\TDS(\gamma)$ maps $e^{(F, 2^\gamma s + c)}$ to the {\em same} downsampled array for every $c$,
 the $2^\gamma$ phases coincide, and one pass suffices:
@@ -2512,7 +2512,7 @@ of squares, and the result is an underestimate with no error indication. Three c
 
 \begin{itemize}
 
-\item {\bf Detrender padding.} The {\tt Detrender2d} is handed a length-$(T+2W)$ buffer and
+\item {\bf Detrender padding.} The {\tt GpuDetrenderLps2d} is handed a length-$(T+2W)$ buffer and
 overwrites only samples $[W, W+T)$ with the residual (\dtnotes{2-d detrending}). A one-hot at buffer
 index $t_0$ produces a detrended response on $[t_0-W,\, t_0+W]$, all of which must lie in the
 emitted region, so we need $t_0 \ge 2W$.
@@ -2612,7 +2612,7 @@ This is the strongest end-to-end test we have, since the two computations share 
 
 \item {\bf It is the only algorithm we have which handles the detrender.} The efficiency of
 \S\ref{sec:avar_sparsetile} rests on the gridding footprint ${\mathcal S}_F$ being a contiguous
-range of a few tree-freq channels. A {\tt Detrender2d} destroys this: the detrended response to a
+range of a few tree-freq channels. A {\tt GpuDetrenderLps2d} destroys this: the detrended response to a
 one-hot in channel $F$ is spread over every channel of $F$'s spline zone (\dtnotes{2-d detrending}),
 so the {\tt SparseTile} representation would degrade towards a dense one. Brute force is completely
 insensitive to it. Note also that these off-diagonal responses are individually small but not
@@ -2643,7 +2643,7 @@ ring buffer, no kernel params, no CUDA device. That is the only way to get at a 
 
 {\bf The no-detrender hypothesis is load-bearing, not a missing feature.} Throughout this
 appendix the linear operator $L$ of \S\ref{ssec:variance_map_setup} is taken with the
-{\tt Detrender2d} step omitted, so ``$A$'' here means the $A$ of
+{\tt GpuDetrenderLps2d} step omitted, so ``$A$'' here means the $A$ of
 Eq.\ (\ref{eq:variance_map_def}) for bare tree dedispersion. Three separate steps below are
 false with a detrender in front, and each says so where it is used: the sparse propagation of
 \S\ref{sec:avar_sparsetile} (whose efficiency needs a contiguous, narrow gridding footprint),
@@ -3141,7 +3141,7 @@ subbands within a group are disjoint and each subband is assigned to exactly one
 channel.
 
 {\bf The no-detrender hypothesis is load-bearing here.} The same appendix shows the monotonicity
-property is false with a {\tt Detrender2d} in front, so the day a detrender path is added is the
+property is false with a {\tt GpuDetrenderLps2d} in front, so the day a detrender path is added is the
 day this slice silently becomes wrong.
 
 Coarse-graining is nearly free, and it is the main lever on cost. At {\tt chord\_sb2\_et.yml} the

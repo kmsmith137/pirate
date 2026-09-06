@@ -62,7 +62,7 @@ def default_eps(dtype):
     return EPS_FLOAT32 if np.dtype(dtype) == np.dtype(np.float32) else EPS_FLOAT64
 
 
-class SplineDetrender:
+class ReferenceDetrenderLps2d:
     """
     Fits a masked B-spline in frequency times a local polynomial in time, and
     subtracts it.
@@ -121,11 +121,11 @@ class SplineDetrender:
                  orthogonal_time=True):
         n, W = int(n), int(W)
         if n not in (0, 1, 2):
-            raise ValueError(f'SplineDetrender: n={n} must be 0, 1 or 2')
+            raise ValueError(f'ReferenceDetrenderLps2d: n={n} must be 0, 1 or 2')
         if W < 0:
-            raise ValueError(f'SplineDetrender: W={W} must be >= 0')
+            raise ValueError(f'ReferenceDetrenderLps2d: W={W} must be >= 0')
         if 2*W + 1 < n + 1:
-            raise ValueError(f'SplineDetrender: a degree-{n} fit in time needs '
+            raise ValueError(f'ReferenceDetrenderLps2d: a degree-{n} fit in time needs '
                              f'2W+1 >= n+1, but W={W} gives a {2*W+1}-sample window')
 
         self.kv = kv
@@ -134,11 +134,11 @@ class SplineDetrender:
         self.dtype = np.dtype(dtype)
         self.eps = float(default_eps(self.dtype) if eps is None else eps)
         if self.eta <= 0:
-            raise ValueError(f'SplineDetrender: eta={eta} must be > 0')
+            raise ValueError(f'ReferenceDetrenderLps2d: eta={eta} must be > 0')
         if self.eps <= 0:
-            raise ValueError(f'SplineDetrender: eps={eps} must be > 0')
+            raise ValueError(f'ReferenceDetrenderLps2d: eps={eps} must be > 0')
         if self.dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
-            raise ValueError(f'SplineDetrender: dtype must be float32 or float64, '
+            raise ValueError(f'ReferenceDetrenderLps2d: dtype must be float32 or float64, '
                              f'got {self.dtype.name}')
 
         self.table = BasisTable(kv, dtype=self.dtype)
@@ -147,7 +147,7 @@ class SplineDetrender:
         self.nband = bandwidth(kv, n)
 
     def __repr__(self):
-        return (f'SplineDetrender(nfreq={self.kv.nfreq}, n_phi={self.kv.n_phi}, '
+        return (f'ReferenceDetrenderLps2d(nfreq={self.kv.nfreq}, n_phi={self.kv.n_phi}, '
                 f'N_phi={self.kv.N_phi}, nzone={self.kv.nzone}, n={self.n}, '
                 f'W={self.W}, eta={self.eta:g}, eps={self.eps:g}, '
                 f'dtype={self.dtype.name})')
@@ -175,18 +175,18 @@ class SplineDetrender:
         d_buf = np.asarray(d_buf)
         mask_buf = np.asarray(mask_buf)
         if d_buf.ndim != 3:
-            raise ValueError(f'SplineDetrender.detrend_chunk: expected 3-d '
+            raise ValueError(f'ReferenceDetrenderLps2d.detrend_chunk: expected 3-d '
                              f'(M,nfreq,ntime+2W), got shape {d_buf.shape}')
         if d_buf.shape != mask_buf.shape:
-            raise ValueError(f'SplineDetrender.detrend_chunk: d.shape {d_buf.shape} '
+            raise ValueError(f'ReferenceDetrenderLps2d.detrend_chunk: d.shape {d_buf.shape} '
                              f'!= mask.shape {mask_buf.shape}')
         if d_buf.shape[1] != self.kv.nfreq:
-            raise ValueError(f'SplineDetrender.detrend_chunk: expected '
+            raise ValueError(f'ReferenceDetrenderLps2d.detrend_chunk: expected '
                              f'{self.kv.nfreq} channels, got {d_buf.shape[1]}')
         W = self.W
         ntime = d_buf.shape[2] - 2*W
         if ntime < 1:
-            raise ValueError(f'SplineDetrender.detrend_chunk: buffer has '
+            raise ValueError(f'ReferenceDetrenderLps2d.detrend_chunk: buffer has '
                              f'{d_buf.shape[2]} samples, needs more than 2W={2*W}')
 
         G, U = accumulate(d_buf, mask_buf, self.table)

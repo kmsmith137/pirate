@@ -6,11 +6,12 @@ The algorithm is specified in notes/detrending.tex, section "Time
 detrending algorithm 1: local polynomial subtraction", which also records the
 measurements behind the choices made here.  (Algorithm 2, in the section after
 it, is a fixed-lag Kalman filter -- a second, independent detrender, implemented
-in detrending_1d_kalman.)
+in detrending.kf1d.)
 
-This package is the reference implementation that validates the GPU kernel in
-src_lib/Detrender1d.cu.  Everything is parameterized by dtype (float32 or float64) so that
-the same instance can be run twice and the results compared.
+This package holds ReferenceDetrenderLps1d, the reference implementation that
+validates the GPU kernel GpuDetrenderLps1d (src_lib/DetrenderLps1d.cu).  Everything
+is parameterized by dtype (float32 or float64) so that the same instance can be run
+twice and the results compared.
 
 Deliberate divergences from the eventual GPU version (not bugs):
 
@@ -27,6 +28,5 @@ Deliberate divergences from the eventual GPU version (not bugs):
 from .MomentSet import MomentSet, merge, pascal_shift
 from .scan import tree_prefix_scan, tree_suffix_scan
 from .LocalPolyFit import solve, gram, cholesky
-from .Detrender import Detrender
-from .reference import detrend_reference
-from .masks import random_mask, MASK_TYPES
+from .ReferenceDetrenderLps1d import ReferenceDetrenderLps1d
+from .brute_force import detrend_brute_force

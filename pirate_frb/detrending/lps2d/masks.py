@@ -33,7 +33,7 @@ h_max directly instead of hoping a random draw produces a wide interval.
 
 import numpy as np
 
-from ..utils import random_nfreq
+from ...utils import random_nfreq
 from .knots import KnotVector
 from .basis import BasisTable
 from .regulator import d1_dense
@@ -542,7 +542,7 @@ def _b_frozen(kv, rng, eta, nt, n, W):
 def _b_separable(kv, rng, eta, nt, n, W):
     """
     m[f,t] = m_f[f] & m_t[t], the frequency half from this package's zoo and the
-    TIME half from detrending_1d's zoo -- which already knows about scan-block
+    TIME half from detrending.lps1d's zoo -- which already knows about scan-block
     alignment, long gaps, one-sided windows and narrow off-centre clusters.
 
     NOT the same as window-constant, and the difference matters.  Here
@@ -557,7 +557,7 @@ def _b_separable(kv, rng, eta, nt, n, W):
     yields few distinct conditioning tests -- which is why it is drawn
     deliberately at a modest weight rather than arising by accident.
     """
-    from ..detrending_1d.masks import random_mask as _rm1d
+    from ..time_masks import random_mask as _rm1d
     mf = random_mask_1d(kv, rng, eta)
     mt = _rm1d(1, nt, max(W, 1), rng)[0][0]
     return mf[:, None] & mt[None, :]

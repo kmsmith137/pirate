@@ -3,9 +3,9 @@ Pure-numpy fixed-lag ("seam-free") Kalman detrender: a masked 1-d detrender whos
 committed baseline at time t is E[f[t] | d[0..t+L]], so every output has its own
 right endpoint and nothing depends on where the chunk boundaries fall.
 
-The algorithm is specified in plans/detrend_1d_kalman.md and in
-notes/detrending.tex, section "Time detrending algorithm 2: Kalman filter".  This is
-a second detrender, not a replacement for detrending_1d: the two are intended to run
+The algorithm is specified in notes/detrending.tex, section "Time detrending
+algorithm 2: Kalman filter".  This is
+a second detrender, not a replacement for detrending.lps1d: the two are intended to run
 side by side and be compared.  Relative to the local polynomial fit it has no window
 and no per-window rank deficiency (the prior regularizes everything), a monotone
 1-H(omega) with no stopband ripple, and no seam; against that it needs roughly twice
@@ -29,5 +29,5 @@ Deliberate divergences from any future GPU version (not bugs):
 
 from .model import StateSpaceModel, tau_from_equivalent_W
 from .InfoFilter import forward_step, backward_step
-from .KalmanDetrender import KalmanDetrender, KalmanState
-from .brute_force import kalman_brute_force, impulse_kernel, difference_matrix
+from .ReferenceDetrenderKf1d import ReferenceDetrenderKf1d, KalmanState
+from .brute_force import detrend_brute_force, impulse_kernel, difference_matrix

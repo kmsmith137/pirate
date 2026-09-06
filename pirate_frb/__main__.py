@@ -78,7 +78,7 @@ def seed_rngs(seed):
     entropy and is therefore outside all of this; the suites that want one -- varmap and the
     three detrending packages -- derive its seed from the global RandomState above, so
     successive calls still differ while the run as a whole replays. See varmap/tests.py's
-    _rng() and detrending_testutils.default_rng(), which the three detrending suites share.
+    _rng() and detrending.testutils.default_rng(), which the three detrending suites share.
 
     SEEDED ONCE PER PROCESS, NOT PER TEST, and that is the point: iteration i of the 'test
     -n' loop draws different values from iteration j (so a long run explores the parameter
@@ -152,10 +152,9 @@ def parse_test(subparsers):
     parser.add_argument('--sb', action='store_true', help='Runs frequency-subband tests (C++/python parity of the two FrequencySubbands implementations, and the per-tree subband-set property)')
     parser.add_argument('--aout', action='store_true', help='Runs the serialized-output test (atomic_print/AtomicPrint, C++ and python threads)')
     parser.add_argument('--util', action='store_true', help='Runs test_utils() (integer/bit helpers in inlines.hpp, plus bit_reverse_slow())')
-    parser.add_argument('--dt1d', action='store_true', help='Runs pirate_frb.detrending_1d tests (pure-numpy 1-d detrender)')
-    parser.add_argument('--dt1k', action='store_true', help='Runs pirate_frb.detrending_1d_kalman tests (pure-numpy fixed-lag Kalman detrender)')
-    parser.add_argument('--dts', action='store_true', help='Runs pirate_frb.detrending_spline tests (pure-numpy regularized spline detrender)')
-    parser.add_argument('--dt2g', action='store_true', help='Runs pirate_frb.detrending_spline.tests.test_gpu_kernel() (Detrender2d GPU kernel vs the numpy reference)')
+    parser.add_argument('--dtl1', action='store_true', help='Runs pirate_frb.detrending.lps1d tests (1-d local-polynomial detrender: the numpy reference, plus GpuDetrenderLps1d against it)')
+    parser.add_argument('--dtk1', action='store_true', help='Runs pirate_frb.detrending.kf1d tests (fixed-lag Kalman detrender; numpy only, there is no GPU kernel yet)')
+    parser.add_argument('--dtl2', action='store_true', help='Runs pirate_frb.detrending.lps2d tests (2-d spline detrender: the numpy reference, plus GpuDetrenderLps2d against it)')
 
 
 def rrange(registry_class):
@@ -176,7 +175,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'util', 'dt1d', 'dt1k', 'dts', 'dt2g' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'util', 'dtl1', 'dtk1', 'dtl2' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
 
     seed = draw_random_seed() if args.randomize_seed else args.seed
@@ -222,22 +221,17 @@ def test(args):
         else:
             atomic_print(f'\nIteration {i+1}/{args.niter}\n\n')
         
-        if run_all_tests or args.dt1d:
-            from .detrending_1d import tests as dt1d_tests
-            dt1d_tests.run_all()
+        if run_all_tests or args.dtl1:
+            from .detrending.lps1d import tests as lps1d_tests
+            lps1d_tests.run_all()
 
-        if run_all_tests or args.dt1k:
-            from .detrending_1d_kalman import tests as dt1k_tests
-            dt1k_tests.run_all(iteration=i)
+        if run_all_tests or args.dtk1:
+            from .detrending.kf1d import tests as kf1d_tests
+            kf1d_tests.run_all(iteration=i)
 
-        if run_all_tests or args.dts:
-            from .detrending_spline import tests as dts_tests
-            dts_tests.run_all(iteration=i)
-
-        if run_all_tests or args.dt2g:
-            from .detrending_spline import tests as dts_tests
-            print('  detrending_spline: Detrender2d GPU kernel vs the numpy reference')
-            dts_tests.test_gpu_kernel(None)
+        if run_all_tests or args.dtl2:
+            from .detrending.lps2d import tests as lps2d_tests
+            lps2d_tests.run_all(iteration=i)
 
         if run_all_tests or args.rt:
             kernels.ReferenceLagbuf.test_random()
@@ -473,9 +467,9 @@ def parse_varmap_bf(subparsers):
     parser.set_defaults(func=varmap_bf)
     _add_varmap_common_args(parser)
     parser.add_argument('detrender_file', nargs='?', default=None,
-                        help="Path to Detrender2dParams YAML file (omit with --no-detrender)")
+                        help="Path to DetrenderLps2dParams YAML file (omit with --no-detrender)")
     parser.add_argument('--no-detrender', action='store_true',
-                        help="Run with no Detrender2d; 'detrender_file' must then be omitted")
+                        help="Run with no detrender; 'detrender_file' must then be omitted")
     parser.add_argument('--cpu', action='store_true',
                         help="Force the CPU sweep (default: GPU)")
     parser.add_argument('--channels', default=None, metavar='SPEC',
@@ -626,7 +620,7 @@ def varmap_bf(args):
     misreading it, and nothing can read one any more.
     """
 
-    from .kernels import Detrender2dParams
+    from .kernels import DetrenderLps2dParams
 
     # ---- Argument-level rejections. The detrender arguments can contradict each other or
     # be absent, and both are worth catching before a config is even loaded.
@@ -635,11 +629,11 @@ def varmap_bf(args):
                            f" '{args.detrender_file}'. These say opposite things; pass one or"
                            " the other.")
     if (not args.no_detrender) and (args.detrender_file is None):
-        raise RuntimeError("varmap bf: no detrender specified. Pass a Detrender2dParams"
+        raise RuntimeError("varmap bf: no detrender specified. Pass a DetrenderLps2dParams"
                            " yaml file, or --no-detrender to run without one.")
 
     config = DedispersionConfig.from_yaml(args.config_file)
-    detrender = Detrender2dParams.from_yaml(args.detrender_file) if args.detrender_file else None
+    detrender = DetrenderLps2dParams.from_yaml(args.detrender_file) if args.detrender_file else None
 
     # ---- Config-level rejections. Collected rather than raised one at a time, so that a
     # user editing a config does not discover the requirements one run at a time.
@@ -721,13 +715,13 @@ def varmap_df(args):
 
     # THE NO-DETRENDER HYPOTHESIS IS LOAD-BEARING here, not a missing feature: the step from
     # the base tree to the other primary trees is Proposition 2, which is FALSE with a
-    # Detrender2d in front (measured against the brute-force sweep at 4.9e-7 without one and
+    # GpuDetrenderLps2d in front (measured against the brute-force sweep at 4.9e-7 without one and
     # 2.1 WITH one). So this is a real guard, and it points at the tool that can do the job.
     if args.detrender_file is not None:
         raise RuntimeError(f"varmap df: got a second positional argument"
                            f" '{args.detrender_file}'. This algorithm is detrender-free by"
                            " construction and takes no detrender file; use 'varmap bf' for a"
-                           " map with a Detrender2d.")
+                           " map with a GpuDetrenderLps2d.")
     if args.no_detrender:
         raise RuntimeError("varmap df: --no-detrender is not accepted, because this algorithm"
                            " never uses a detrender -- there is nothing to switch off. It is"
@@ -912,11 +906,11 @@ def parse_time(subparsers):
     parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.time_selected()')
     parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.time_selected()')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() timing')
-    parser.add_argument('--dt1d', action='store_true', help='Runs Detrender1d.time_selected() (1-d detrender kernel)')
-    parser.add_argument('--dt2d', action='store_true', help='Runs Detrender2d.time_selected() (2-d spline detrender kernel)')
+    parser.add_argument('--dtl1', action='store_true', help='Runs GpuDetrenderLps1d.time_selected() (1-d local-polynomial detrender kernel)')
+    parser.add_argument('--dtl2', action='store_true', help='Runs GpuDetrenderLps2d.time_selected() (2-d spline detrender kernel)')
 
 def time_command(args):
-    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim', 'dt1d', 'dt2d' ]
+    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim', 'dtl1', 'dtl2' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
     if args.ncu:
@@ -948,10 +942,10 @@ def time_command(args):
         kernels.GpuDequantizationKernel.time_selected()
     if run_all_timings or args.gtgk:
         kernels.GpuTreeGriddingKernel.time_selected()
-    if run_all_timings or args.dt1d:
-        kernels.Detrender1d.time_selected()
-    if run_all_timings or args.dt2d:
-        kernels.Detrender2d.time_selected()
+    if run_all_timings or args.dtl1:
+        kernels.GpuDetrenderLps1d.time_selected()
+    if run_all_timings or args.dtl2:
+        kernels.GpuDetrenderLps2d.time_selected()
     if run_all_timings or args.sim:
         utils.time_avx2_simulate_4bit_noise(nthreads)
 

@@ -2268,7 +2268,7 @@ def _majorizer(Q, s, y_true, labels, nbeta):
     """The W-step objective ``g_c = sum_alpha w_alpha Q[labels[alpha],c]``, with
     ``w_alpha = f'(y_approx/y_true)/y_true`` and w = 0 on the rows D does not score.
 
-    THE FLOOR IS NOT OPTIONAL. An output with genuinely zero variance -- a Detrender2d with
+    THE FLOOR IS NOT OPTIONAL. An output with genuinely zero variance -- a GpuDetrenderLps2d with
     time half-width 0 annihilates the DM = 0 output exactly -- has y_true ~ 1e-14 rather than
     0 in floating point, and 1/y_true is then ~1e14: such a row would dominate this objective
     entirely, while contributing NOTHING to the distance, which ignores it by definition. So

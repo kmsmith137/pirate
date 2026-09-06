@@ -1,6 +1,5 @@
 """
-The chunked fixed-lag ("seam-free") Kalman detrender (see plans/detrend_1d_kalman.md,
-and notes/detrending.tex,
+The chunked fixed-lag ("seam-free") Kalman detrender (see notes/detrending.tex,
 section "Time detrending algorithm 2: Kalman filter").
 
 The committed baseline at time t is
@@ -18,7 +17,7 @@ addition:
 
     J = J_f + J_b,   eta = eta_f + eta_b,   fhat[t] = (J^-1 eta)_0.
 
-Contrast with detrending_1d, whose Detrender holds no state at all:
+Contrast with detrending.lps1d, whose ReferenceDetrenderLps1d holds no state at all:
 
   - this class HAS state.  The forward filter runs once through the stream and
     carries (J_f, eta_f, kappa) per row across chunk boundaries, so chunks must be
@@ -36,13 +35,13 @@ every subsequent output of that row is NaN, forever.  There is no guard here,
 deliberately -- one would cost a per-sample branch to defend against something
 upstream already guarantees -- so if that guarantee ever weakens, the fix is an
 isfinite() check on the state at chunk boundaries with a reset to
-initial_state().  Contrast detrending_1d, which holds no state and where the
+initial_state().  Contrast detrending.lps1d, which holds no state and where the
 same poison would be confined to a single buffer.
 """
 
 import numpy as np
 
-from ..detrending_1d import LocalPolyFit
+from ..lps1d import LocalPolyFit
 from .model import StateSpaceModel, tau_from_equivalent_W
 from .InfoFilter import forward_step, backward_step
 
@@ -82,7 +81,7 @@ def _tri_backward(L, y):
     return a
 
 
-class KalmanDetrender:
+class ReferenceDetrenderKf1d:
     def __init__(self, k, tau, L, chunk_size=2048, dtype=np.float32,
                  subtract_offset=True, eps=1e-3, mu=1e-30):
         """
@@ -106,12 +105,12 @@ class KalmanDetrender:
         No relation is required between chunk_size and L.
         """
         if k != 2:
-            raise ValueError(f'KalmanDetrender: k={k} but only k=2 is supported '
-                             f'(see plans/detrend_1d_kalman.md, D8)')
+            raise ValueError(f'ReferenceDetrenderKf1d: k={k} but only k=2 is supported '
+                             f'(see the package docstring in kf1d/__init__.py for why)')
         if L < 1:
-            raise ValueError(f'KalmanDetrender: L={L} must be >= 1')
+            raise ValueError(f'ReferenceDetrenderKf1d: L={L} must be >= 1')
         if chunk_size < 1:
-            raise ValueError(f'KalmanDetrender: chunk_size={chunk_size} must be >= 1')
+            raise ValueError(f'ReferenceDetrenderKf1d: chunk_size={chunk_size} must be >= 1')
 
         self.k = k
         self.L = int(L)
@@ -132,7 +131,7 @@ class KalmanDetrender:
         Construct with tau matched to a local polynomial fit of half-width W (see
         model.tau_from_equivalent_W), and L = ceil(n_ell * ell).
 
-        This is the entry point to use when comparing against detrending_1d: matching
+        This is the entry point to use when comparing against detrending.lps1d: matching
         on tau alone is not a fair comparison, since the flux loss c_k/tau carries a
         k-dependent constant.
         """
@@ -141,7 +140,7 @@ class KalmanDetrender:
         return cls(k, tau, int(np.ceil(n_ell*ell)), **kwargs)
 
     def __repr__(self):
-        return (f'KalmanDetrender(k={self.k}, tau={self.tau:g}, L={self.L}, '
+        return (f'ReferenceDetrenderKf1d(k={self.k}, tau={self.tau:g}, L={self.L}, '
                 f'ell={self.ell:.4g}, chunk_size={self.chunk_size}, '
                 f'dtype={self.dtype.name})')
 
@@ -199,7 +198,7 @@ class KalmanDetrender:
         # numbers of size |d - kappa| rather than |d|, since the residual is a
         # cancelling difference of two |d|-sized quantities.
         #
-        # Unlike detrending_1d, kappa cannot simply be recomputed per buffer and
+        # Unlike detrending.lps1d, kappa cannot simply be recomputed per buffer and
         # forgotten: the state is expressed relative to it.  Shifting the data by
         # Delta shifts the trend, hence the level component of the state, so the mean
         # goes mu -> mu - Delta e_0 with J untouched, i.e. eta -> eta - Delta J e_0.
@@ -292,7 +291,7 @@ class KalmanDetrender:
         The factorization is LocalPolyFit.cholesky() with J in place of the local
         fit's Gram matrix: same algorithm, same mu pivot guard, and the same
         conditioning statistic rmin = min_i p_i/J_ii, which is what the mask
-        expansion thresholds on.  The adjugate form used by src_lib/Detrender1d.cu is
+        expansion thresholds on.  The adjugate form used by src_lib/DetrenderLps1d.cu is
         deliberately not used here -- it is 0/0 on a degenerate window, and its
         division-free mask test relies on G_01 = 0, which has no analogue for J.
         """

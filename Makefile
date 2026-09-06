@@ -314,8 +314,8 @@ LIB_SRCFILES = \
   src_lib/DedispersionConfig.cpp \
   src_lib/DedispersionKernel.cu \
   src_lib/DedispersionPlan.cpp \
-  src_lib/Detrender1d.cu \
-  src_lib/Detrender2d.cu \
+  src_lib/DetrenderLps1d.cu \
+  src_lib/DetrenderLps2d.cu \
   src_lib/Hwtest.cpp \
   src_lib/FakeXEngine.cpp \
   src_lib/FileWriter.cpp \
@@ -402,34 +402,36 @@ PYFILES = \
   pirate_frb/core/GpuDedisperserOutputs.py \
   pirate_frb/core/SimulatedFrameFactory.py \
   pirate_frb/core/SlabAllocator.py \
-  pirate_frb/detrending_1d/__init__.py \
-  pirate_frb/detrending_1d/MomentSet.py \
-  pirate_frb/detrending_1d/scan.py \
-  pirate_frb/detrending_1d/LocalPolyFit.py \
-  pirate_frb/detrending_1d/Detrender.py \
-  pirate_frb/detrending_1d/reference.py \
-  pirate_frb/detrending_1d/masks.py \
-  pirate_frb/detrending_1d/tests.py \
-  pirate_frb/detrending_1d_kalman/__init__.py \
-  pirate_frb/detrending_1d_kalman/model.py \
-  pirate_frb/detrending_1d_kalman/InfoFilter.py \
-  pirate_frb/detrending_1d_kalman/KalmanDetrender.py \
-  pirate_frb/detrending_1d_kalman/brute_force.py \
-  pirate_frb/detrending_1d_kalman/tests.py \
-  pirate_frb/detrending_spline/__init__.py \
-  pirate_frb/detrending_spline/SplineDetrender.py \
-  pirate_frb/detrending_spline/assemble.py \
-  pirate_frb/detrending_spline/basis.py \
-  pirate_frb/detrending_spline/expand.py \
-  pirate_frb/detrending_spline/knots.py \
-  pirate_frb/detrending_spline/masks.py \
-  pirate_frb/detrending_spline/moments.py \
-  pirate_frb/detrending_spline/reduce.py \
-  pirate_frb/detrending_spline/regulator.py \
-  pirate_frb/detrending_spline/solve.py \
-  pirate_frb/detrending_spline/timebasis.py \
-  pirate_frb/detrending_spline/reference.py \
-  pirate_frb/detrending_spline/tests.py \
+  pirate_frb/detrending/__init__.py \
+  pirate_frb/detrending/testutils.py \
+  pirate_frb/detrending/time_masks.py \
+  pirate_frb/detrending/lps1d/__init__.py \
+  pirate_frb/detrending/lps1d/MomentSet.py \
+  pirate_frb/detrending/lps1d/scan.py \
+  pirate_frb/detrending/lps1d/LocalPolyFit.py \
+  pirate_frb/detrending/lps1d/ReferenceDetrenderLps1d.py \
+  pirate_frb/detrending/lps1d/brute_force.py \
+  pirate_frb/detrending/lps1d/tests.py \
+  pirate_frb/detrending/kf1d/__init__.py \
+  pirate_frb/detrending/kf1d/model.py \
+  pirate_frb/detrending/kf1d/InfoFilter.py \
+  pirate_frb/detrending/kf1d/ReferenceDetrenderKf1d.py \
+  pirate_frb/detrending/kf1d/brute_force.py \
+  pirate_frb/detrending/kf1d/tests.py \
+  pirate_frb/detrending/lps2d/__init__.py \
+  pirate_frb/detrending/lps2d/ReferenceDetrenderLps2d.py \
+  pirate_frb/detrending/lps2d/assemble.py \
+  pirate_frb/detrending/lps2d/basis.py \
+  pirate_frb/detrending/lps2d/expand.py \
+  pirate_frb/detrending/lps2d/knots.py \
+  pirate_frb/detrending/lps2d/masks.py \
+  pirate_frb/detrending/lps2d/moments.py \
+  pirate_frb/detrending/lps2d/reduce.py \
+  pirate_frb/detrending/lps2d/regulator.py \
+  pirate_frb/detrending/lps2d/solve.py \
+  pirate_frb/detrending/lps2d/timebasis.py \
+  pirate_frb/detrending/lps2d/brute_force.py \
+  pirate_frb/detrending/lps2d/tests.py \
   pirate_frb/varmap/__init__.py \
   pirate_frb/varmap/PfVarianceConvolver.py \
   pirate_frb/varmap/SparseTile.py \
@@ -450,8 +452,8 @@ PYFILES = \
   pirate_frb/simpulse/test_pulse_upsampling.py \
   pirate_frb/simpulse/plot_pulses.py \
   pirate_frb/kernels/__init__.py \
-  pirate_frb/kernels/Detrender1d.py \
-  pirate_frb/kernels/Detrender2d.py \
+  pirate_frb/kernels/GpuDetrenderLps1d.py \
+  pirate_frb/kernels/GpuDetrenderLps2d.py \
   pirate_frb/kernels/GpuDequantizationKernel.py \
   pirate_frb/loose_ends/__init__.py \
   pirate_frb/tests/__init__.py \
@@ -508,8 +510,7 @@ HFILES = \
   include/pirate/DedispersionKernel.hpp \
   include/pirate/DedispersionPlan.hpp \
   include/pirate/DedispersionTree.hpp \
-  include/pirate/Detrender1d.hpp \
-  include/pirate/Detrender2d.hpp \
+  include/pirate/Detrender.hpp \
   include/pirate/Hwtest.hpp \
   include/pirate/FakeXEngine.hpp \
   include/pirate/file_utils.hpp \

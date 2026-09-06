@@ -28,7 +28,7 @@ CHUNK INVARIANCE is free here and does NOT need the binary tree that reduce.py
 uses over frequency.  Output t always sums the same 2W+1 buffer samples in the
 same fixed order, whatever the chunk length, so the result is bit-identical
 across chunkings provided the caller supplies consistent padding -- which is the
-caller's contract (see SplineDetrender.detrend_chunk).
+caller's contract (see ReferenceDetrenderLps2d.detrend_chunk).
 """
 
 import numpy as np

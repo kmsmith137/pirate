@@ -653,14 +653,14 @@ def _sec_sweep(rep, ncase):
 
 
 def _sec_detrending(rep, ndraw):
-    from ..detrending_spline import masks as msk
-    from ..detrending_spline.SplineDetrender import ETA_DEFAULT
-    from ..detrending_spline.reduce import CHANNEL_BLOCK
+    from ..detrending.lps2d import masks as msk
+    from ..detrending.lps2d.ReferenceDetrenderLps2d import ETA_DEFAULT
+    from ..detrending.lps2d.reduce import CHANNEL_BLOCK
     from ..utils import random_nfreq
 
-    rep.section('detrending_spline.masks.random_knots()',
+    rep.section('detrending.lps2d.masks.random_knots()',
                 subtitle=f'{ndraw} knot vectors, n_phi from masks.draw_n_phi(), as the tests do',
-                consumer='test --dts: every test in the spline suite')
+                consumer='test --dtl2: every test in the spline suite')
 
     rng = np.random.default_rng()
     kvs, nz, nfr, kinds = [], [], [], []
@@ -700,7 +700,7 @@ def _sec_detrending(rep, ndraw):
     # is what the suite actually sees -- reported at one representative cap.
     rep.section('utils.random_nfreq(rng, hi)',
                 subtitle=f'{ndraw} draws at hi=2500, the cap test_chunk_invariance uses',
-                consumer='test --dts, --dt1d, --dt1k: 22 spline call sites and the'
+                consumer='test --dtl2, --dtl1, --dtk1: 22 spline call sites and the'
                          ' detrending shape draws')
     v = [random_nfreq(rng, 2500) for _ in range(ndraw)]
     rep.dist('nfreq', v, ('p10', 32, 300),
@@ -713,9 +713,9 @@ def _sec_detrending(rep, ndraw):
     # mask_distribution() already computes exactly the right numbers and is called from
     # NOWHERE; its output is frozen in a comment block in masks.py, which is where a measured
     # number goes stale. This is its consumer.
-    rep.section('detrending_spline.masks.random_mask_2d()',
+    rep.section('detrending.lps2d.masks.random_mask_2d()',
                 subtitle='via masks.mask_distribution(), on 3 drawn knot vectors',
-                consumer='test --dts: test_time_rank_deficiency, test_n1_degeneracy,'
+                consumer='test --dtl2: test_time_rank_deficiency, test_n1_degeneracy,'
                          ' test_2d_conditioning')
     for kv in kvs[:3]:
         d = msk.mask_distribution(kv, rng, ETA_DEFAULT, n=1, W=2, ntime=9, ndraw=60)

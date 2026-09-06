@@ -1,7 +1,8 @@
 """
 Unit tests for the regularized spline detrender.
 
-Run with 'python -m pirate_frb test --dts'.  All tests are pure numpy.
+Run with 'python -m pirate_frb test --dtl2'.  All tests are pure numpy except
+test_gpu_kernel(), which compares GpuDetrenderLps2d against ReferenceDetrenderLps2d.
 
 Two of them carry more weight than the rest and are worth knowing about before
 changing anything here:
@@ -24,17 +25,18 @@ from . import masks as msk
 from .basis import BasisTable
 from .knots import KnotVector
 from .reduce import accumulate, evaluate, band_to_dense, tree_sum, CHANNEL_BLOCK
-from .reference import detrend_reference
+from .brute_force import detrend_brute_force
 from .regulator import d1_banded, d1_dense
 from .solve import solve_normal_equations, zone_slices
 from .expand import zone_channel_ranges
-from .SplineDetrender import SplineDetrender, ETA_DEFAULT, EPS_FLOAT32, EPS_FLOAT64
+from .ReferenceDetrenderLps2d import ReferenceDetrenderLps2d, ETA_DEFAULT, EPS_FLOAT32, EPS_FLOAT64
 from .timebasis import TimeBasis
 from .assemble import bandwidth
 from .reduce import band_to_dense as _b2d
-from ..utils import random_nfreq
-from ..detrending_testutils import (ExpansionTally, default_rng as _default_rng,
-                                    poison_masked, random_spectator_shape)
+from ...utils import random_nfreq
+from ...kernels import DetrenderLps2dParams, GpuDetrenderLps2d
+from ..testutils import (ExpansionTally, default_rng as _default_rng,
+                         poison_masked, random_spectator_shape)
 
 # How many (n, W) pairs each 2-d test draws per knot vector.  Eight is what the
 # per-iteration cost of these tests is budgeted for.
@@ -59,7 +61,7 @@ NW_PER_KV = 8
 # ABSOLUTE terms whatever r_min itself is.  The TYPICAL value is small and the TAIL
 # is heavy: measured over 120 seeds, median 13, p90 55, p99 153, max 274.  The
 # previous bound of 100 was therefore exceeded on 3.3% of draws, which under the
-# default 'test --dts -n 100' is a spurious failure in essentially every run.
+# default 'test --dtl2 -n 100' is a spurious failure in essentially every run.
 #
 # 1000 is set from the mechanism rather than from the sample maximum: errors
 # propagate through a banded factorization of dimension N with half-bandwidth n_b,
@@ -91,11 +93,11 @@ def _draw_nW(rng, wmin=0, wmax=8):
     enough to write down has a ceiling on W and gaps in the middle, and a 100-iteration
     run walks it a hundred times instead of exploring.
 
-    The rules are n in {0, 1, 2}, which is what SplineDetrender builds, and
+    The rules are n in {0, 1, 2}, which is what ReferenceDetrenderLps2d builds, and
     2W + 1 >= n + 1, so the window can hold the fit.  W = 0 is given weight of its
     own rather than being left to the tail of a uniform draw: it is the pure 1-d
     detrender, with no time stencil at all, and test_2d_reference_agreement is the
-    only place that case is checked against detrend_reference().  Pass wmin=1 where
+    only place that case is checked against detrend_brute_force().  Pass wmin=1 where
     W = 0 is degenerate for the test rather than interesting.
     """
     n = int(rng.integers(0, 3))
@@ -113,7 +115,7 @@ def _smooth_baseline(kv, rng, M_ax, ntime, dtype=np.float64):
     residual of an unregularized fit would be exactly zero and the only thing left
     is the shrinkage bias.  Amplitude is O(1) deliberately: without offset
     subtraction, a large DC level would consume float32 mantissa for nothing (see
-    the SplineDetrender docstring).
+    the ReferenceDetrenderLps2d docstring).
     """
     a = rng.standard_normal((M_ax, ntime, kv.N_phi)) * 0.3
     a += rng.standard_normal((M_ax, ntime, 1))
@@ -298,7 +300,7 @@ def test_chunk_invariance(rng, n_phi=None, verbose=True):
     for _ in range(6):
         kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 2500))
         nblocks.append(-(-kv.nfreq // CHANNEL_BLOCK))
-        det = SplineDetrender(kv, dtype=np.float32)
+        det = ReferenceDetrenderLps2d(kv, dtype=np.float32)
         M_ax, ntime = random_spectator_shape(rng, 24, first_max=4)
         mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
         d = rng.standard_normal((M_ax, kv.nfreq, ntime)).astype(np.float32)
@@ -364,7 +366,7 @@ def test_solve(rng, n_phi=None, verbose=True):
     # scale changes but the equilibrated pivot does not).  Rescaling eta would of
     # course change things: it is a physical parameter, not a unit.
     kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 1024, lo=64))
-    det = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT64)
+    det = ReferenceDetrenderLps2d(kv, dtype=np.float64, eps=EPS_FLOAT64)
     M_ax, ntime = random_spectator_shape(rng, 8, first_max=3)
     mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
     d = rng.standard_normal((M_ax, kv.nfreq, ntime))
@@ -396,7 +398,7 @@ def _assert_not_removed(rng, n_phi, dtype, n=0, W=0, nfreq_lo=512, nfreq_hi=2048
     polynomial in time of degree n+1: over a SYMMETRIC window the odd part of the
     fit vanishes at the window centre, so a degree-(n+1) polynomial of the wrong
     parity IS reproduced exactly there, and a control written that way would
-    depend on the drawn mask being asymmetric.  detrending_1d's
+    depend on the drawn mask being asymmetric.  detrending.lps1d's
     test_polynomial_exactness() handles that case explicitly and is where to look
     for the time-direction statement.
 
@@ -407,7 +409,7 @@ def _assert_not_removed(rng, n_phi, dtype, n=0, W=0, nfreq_lo=512, nfreq_hi=2048
     """
     kv = msk.random_knots(rng, n_phi=n_phi,
                           nfreq=random_nfreq(rng, nfreq_hi, lo=nfreq_lo))
-    det = SplineDetrender(kv, n=n, W=W, dtype=dtype, eps=EPS_FLOAT64)
+    det = ReferenceDetrenderLps2d(kv, n=n, W=W, dtype=dtype, eps=EPS_FLOAT64)
     ntime = 3
     nbuf = ntime + 2*W
     osc = 1.0 - 2.0*(np.arange(kv.nfreq) % 2)                 # +-1, alternating
@@ -447,7 +449,7 @@ def test_flat_baseline_exact(rng, n_phi=None, verbose=True):
         kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 10000),
                               kind='no_interior' if rng.random() < 0.3 else None)
         for dtype in (np.float64, np.float32):
-            det = SplineDetrender(kv, dtype=dtype, eps=EPS_FLOAT64)
+            det = ReferenceDetrenderLps2d(kv, dtype=dtype, eps=EPS_FLOAT64)
             M_ax, ntime = random_spectator_shape(rng, 8, first_max=3)
             mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
             level = rng.uniform(0.5, 2.0)
@@ -461,7 +463,7 @@ def test_flat_baseline_exact(rng, n_phi=None, verbose=True):
                 (dtype, float(np.abs(r).max()), rmin, tol * level)
 
         # Also exact for a different constant per (beam, time) sample.
-        det = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT64)
+        det = ReferenceDetrenderLps2d(kv, dtype=np.float64, eps=EPS_FLOAT64)
         nt2 = int(rng.integers(1, 9))
         lv = rng.uniform(0.5, 2.0, size=(1, 1, nt2))
         d = np.broadcast_to(lv, (1, kv.nfreq, nt2)).copy()
@@ -493,7 +495,7 @@ def test_shrinkage_bias_bounded(rng, n_phi=None, verbose=True):
     worst = 0.0
     for _ in range(20):
         kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 700))
-        det = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT64)
+        det = ReferenceDetrenderLps2d(kv, dtype=np.float64, eps=EPS_FLOAT64)
         M_ax, ntime = random_spectator_shape(rng, 6, first_max=3)
         d, _ = _smooth_baseline(kv, rng, M_ax, ntime)
         mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
@@ -537,7 +539,7 @@ def test_shrinkage_bias_bounded(rng, n_phi=None, verbose=True):
     mask = np.ones((1, kv.nfreq, ntime), dtype=bool)
     biases, rmins = [], []
     for eta in (ETA_DEFAULT, ETA_DEFAULT/4, ETA_DEFAULT/16):
-        det = SplineDetrender(kv, dtype=np.float64, eta=eta, eps=EPS_FLOAT64)
+        det = ReferenceDetrenderLps2d(kv, dtype=np.float64, eta=eta, eps=EPS_FLOAT64)
         r, _, pivots = det.detrend_chunk(d, mask)
         biases.append(np.abs(r).max())
         live = pivots[pivots > 0]
@@ -579,7 +581,7 @@ def test_masked_data_unused(rng, n_phi=None, verbose=True):
     for _ in range(15):
         kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 700))
         for dtype in (np.float32, np.float64):
-            det = SplineDetrender(kv, dtype=dtype, eps=EPS_FLOAT64)
+            det = ReferenceDetrenderLps2d(kv, dtype=dtype, eps=EPS_FLOAT64)
             M_ax, ntime = random_spectator_shape(rng, 10, first_max=3)
             mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
             d = rng.standard_normal((M_ax, kv.nfreq, ntime)).astype(dtype)
@@ -602,7 +604,7 @@ def test_spectator_axes(rng, n_phi=None, verbose=True):
     n_phi = msk.draw_n_phi(rng) if n_phi is None else n_phi
     for _ in range(8):
         kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 600))
-        det = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT64)
+        det = ReferenceDetrenderLps2d(kv, dtype=np.float64, eps=EPS_FLOAT64)
         M_ax, ntime = random_spectator_shape(rng, 21, first_max=4)
         mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
         d = rng.standard_normal((M_ax, kv.nfreq, ntime))
@@ -641,7 +643,7 @@ def test_conditioning(rng, n_phi=None, verbose=True, heavy=False):
 
     nfreq = 30000 IS RUN BY DEFAULT, and deliberately so: 3.0x is the worst margin
     over eps anywhere in the parameter study, and it is the number the constants
-    block in SplineDetrender.py quotes to justify eta and eps.  Nothing else
+    block in ReferenceDetrenderLps2d.py quotes to justify eta and eps.  Nothing else
     verifies it -- an offline sweep is not a test -- and it costs about 0.3 s.
 
     'heavy' adds the remaining large-F configurations from the parameter study.
@@ -675,7 +677,7 @@ def test_conditioning(rng, n_phi=None, verbose=True, heavy=False):
     kvs.append(msk.zoned_knots(n_phi, 30000, 4, 3))
 
     for kv in kvs:
-        det = SplineDetrender(kv, dtype=np.float64, eta=eta, eps=eps)
+        det = ReferenceDetrenderLps2d(kv, dtype=np.float64, eta=eta, eps=eps)
         table = det.table
         D1 = d1_banded(kv)
         # Cycle the two extremal families explicitly rather than drawing kinds at
@@ -720,7 +722,7 @@ def test_zone_expansion(rng, n_phi=None, verbose=True):
         kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 900, lo=64))
         # A large eps makes the flag fire often, which is the only practical way to
         # exercise this path: at the production eps it essentially never fires.
-        det = SplineDetrender(kv, dtype=np.float64, eps=0.2)
+        det = ReferenceDetrenderLps2d(kv, dtype=np.float64, eps=0.2)
         M_ax, ntime = random_spectator_shape(rng, 8, first_max=3)
         mask = msk.random_mask((M_ax, kv.nfreq, ntime), kv, rng, det.eta)
         d = rng.standard_normal((M_ax, kv.nfreq, ntime))
@@ -749,7 +751,7 @@ def test_zone_expansion(rng, n_phi=None, verbose=True):
 
     # Fully masked input: everything zero, nothing raised.
     kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 512, lo=64))
-    det = SplineDetrender(kv, dtype=np.float32)
+    det = ReferenceDetrenderLps2d(kv, dtype=np.float32)
     d = rng.standard_normal((1, kv.nfreq, 3)).astype(np.float32)
     r, mo, p = det.detrend_chunk(d, np.zeros((1, kv.nfreq, 3), dtype=bool))
     assert np.all(p == 0) and not mo.any() and np.all(r == 0)
@@ -818,9 +820,9 @@ def test_dtype_agreement(rng, n_phi=None, verbose=True):
         d = base + 0.05 * rng.standard_normal(base.shape)
         d32 = d.astype(np.float32)
 
-        det32 = SplineDetrender(kv, dtype=np.float32, eps=EPS_FLOAT32)
-        det64 = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT64)
-        det64_loose = SplineDetrender(kv, dtype=np.float64, eps=EPS_FLOAT32)
+        det32 = ReferenceDetrenderLps2d(kv, dtype=np.float32, eps=EPS_FLOAT32)
+        det64 = ReferenceDetrenderLps2d(kv, dtype=np.float64, eps=EPS_FLOAT64)
+        det64_loose = ReferenceDetrenderLps2d(kv, dtype=np.float64, eps=EPS_FLOAT32)
 
         r32, m32, p32 = det32.detrend_chunk(d32, mask)
         r64, m64, p64 = det64.detrend_chunk(d, mask)
@@ -948,7 +950,7 @@ def test_bandwidth(rng, n_phi=None, verbose=True):
         kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 600))
         for _ in range(NW_PER_KV):
             n, W = _draw_nW(rng)
-            det = SplineDetrender(kv, n=n, W=W, dtype=np.float64)
+            det = ReferenceDetrenderLps2d(kv, n=n, W=W, dtype=np.float64)
             d = rng.standard_normal((1, kv.nfreq, 3 + 2*W))
             m = msk.random_mask_2d((1, kv.nfreq, 3 + 2*W), kv, rng, det.eta,
                                    time_kind='bernoulli')
@@ -969,7 +971,7 @@ def test_bandwidth(rng, n_phi=None, verbose=True):
 
 def test_2d_reference_agreement(rng, n_phi=None, verbose=True):
     """
-    The detrender against detrend_reference(), over drawn (n, W) -- including
+    The detrender against detrend_brute_force(), over drawn (n, W) -- including
     (n, W) = (0, 0), i.e. the pure 1-d detrender, so this is the only place either
     is checked against the reference implementation.  _draw_nW() gives W = 0 weight
     of its own for exactly that reason.
@@ -987,12 +989,12 @@ def test_2d_reference_agreement(rng, n_phi=None, verbose=True):
         for _ in range(NW_PER_KV):
             n, W = _draw_nW(rng)
             M_ax, T = random_spectator_shape(rng, 8, first_max=3)
-            det = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eps=eps)
+            det = ReferenceDetrenderLps2d(kv, n=n, W=W, dtype=np.float64, eps=eps)
             m = msk.random_mask_2d((M_ax, kv.nfreq, T + 2*W), kv, rng, det.eta, n=n, W=W)
             base, _ = _smooth_baseline(kv, rng, M_ax, T + 2*W)
             d = base + 0.05*rng.standard_normal(base.shape)
             r0, m0, p0 = det.detrend_chunk(d, m)
-            r1, m1, p1 = detrend_reference(d, m, kv, n=n, W=W, eta=det.eta,
+            r1, m1, p1 = detrend_brute_force(d, m, kv, n=n, W=W, eta=det.eta,
                                            eps=det.eps, dtype=np.float64)
             assert np.array_equal(m0, m1), (n, W)
             assert np.abs(p0 - p1).max() < 1e-9*max(1.0, np.abs(p1).max()), (n, W)
@@ -1020,7 +1022,7 @@ def test_2d_flat_baseline_exact(rng, n_phi=None, verbose=True):
         kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 500))
         for _ in range(NW_PER_KV):
             n, W = _draw_nW(rng)
-            det = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eps=EPS_FLOAT64)
+            det = ReferenceDetrenderLps2d(kv, n=n, W=W, dtype=np.float64, eps=EPS_FLOAT64)
             T = int(rng.integers(1, 7))
             nbuf = T + 2*W
             tt = np.arange(nbuf, dtype=np.float64) - (nbuf-1)/2.0
@@ -1056,8 +1058,8 @@ def test_n1_degeneracy(rng, n_phi=None, verbose=True):
     for _ in range(8):
         kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 400))
         W, T = int(rng.integers(1, 9)), int(rng.integers(1, 7))
-        d0 = SplineDetrender(kv, n=0, W=W, dtype=np.float64, eps=EPS_FLOAT64)
-        d1 = SplineDetrender(kv, n=1, W=W, dtype=np.float64, eps=EPS_FLOAT64)
+        d0 = ReferenceDetrenderLps2d(kv, n=0, W=W, dtype=np.float64, eps=EPS_FLOAT64)
+        d1 = ReferenceDetrenderLps2d(kv, n=1, W=W, dtype=np.float64, eps=EPS_FLOAT64)
         base, _ = _smooth_baseline(kv, rng, 1, T + 2*W)
         d = base + 0.05*rng.standard_normal(base.shape)
 
@@ -1091,7 +1093,7 @@ def test_time_rank_deficiency(rng, n_phi=None, verbose=True):
     for _ in range(8):
         kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 400))
         for n, W in ((1, 2), (2, 2), (2, 3)):
-            det = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eps=EPS_FLOAT64)
+            det = ReferenceDetrenderLps2d(kv, n=n, W=W, dtype=np.float64, eps=EPS_FLOAT64)
             nbuf = 1 + 2*W
             d = rng.standard_normal((1, kv.nfreq, nbuf))
             for nlive in range(0, min(n+3, nbuf)+1):
@@ -1125,7 +1127,7 @@ def test_2d_chunk_invariance(rng, n_phi=None, verbose=True):
         kv = msk.random_knots(rng, n_phi=n_phi, nfreq=random_nfreq(rng, 1600))
         nblocks.append(-(-kv.nfreq // CHANNEL_BLOCK))
         n, W = _draw_nW(rng)
-        det = SplineDetrender(kv, n=n, W=W, dtype=np.float32)
+        det = ReferenceDetrenderLps2d(kv, n=n, W=W, dtype=np.float32)
         M_ax, T = random_spectator_shape(rng, 24, first_max=3)
         nbuf = T + 2*W
         m = msk.random_mask_2d((M_ax, kv.nfreq, nbuf), kv, rng, det.eta, n=n, W=W)
@@ -1199,8 +1201,8 @@ def test_2d_conditioning(rng, n_phi=None, verbose=True):
             # W = 0 is excluded rather than skipped: at W = 0 there is no time
             # stencil, so "2-d r_min equals 1-d r_min" is a tautology.
             n, W = _draw_nW(rng, wmin=1)
-            det2 = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eps=EPS_FLOAT64)
-            det1 = SplineDetrender(kv, n=0, W=0, dtype=np.float64, eps=EPS_FLOAT64)
+            det2 = ReferenceDetrenderLps2d(kv, n=n, W=W, dtype=np.float64, eps=EPS_FLOAT64)
+            det1 = ReferenceDetrenderLps2d(kv, n=0, W=0, dtype=np.float64, eps=EPS_FLOAT64)
             nbuf = 1 + 2*W
             d = rng.standard_normal((1, kv.nfreq, nbuf))
             m = msk.random_mask_2d((1, kv.nfreq, nbuf), kv, rng, det2.eta,
@@ -1270,8 +1272,8 @@ def test_2d_dtype_agreement(rng, n_phi=None, verbose=True):
             m = msk.random_mask_2d((M_ax, kv.nfreq, nbuf), kv, rng, ETA_DEFAULT, n=n, W=W)
             base, _ = _smooth_baseline(kv, rng, M_ax, nbuf)
             d = base + 0.05*rng.standard_normal(base.shape)
-            a32 = SplineDetrender(kv, n=n, W=W, dtype=np.float32)
-            a64 = SplineDetrender(kv, n=n, W=W, dtype=np.float64)
+            a32 = ReferenceDetrenderLps2d(kv, n=n, W=W, dtype=np.float32)
+            a64 = ReferenceDetrenderLps2d(kv, n=n, W=W, dtype=np.float64)
             r32, m32, _ = a32.detrend_chunk(d.astype(np.float32), m)
             r64, m64, _ = a64.detrend_chunk(d, m)
 
@@ -1325,8 +1327,8 @@ def test_production_geometry(rng, verbose=True):
     kv = msk.zoned_knots(n_phi, 30000, 4, 3)
     assert (kv.nzone, kv.N_phi) == (4, 24), (kv.nzone, kv.N_phi)
 
-    det32 = SplineDetrender(kv, n=n, W=W, dtype=np.float32)
-    det64 = SplineDetrender(kv, n=n, W=W, dtype=np.float64)
+    det32 = ReferenceDetrenderLps2d(kv, n=n, W=W, dtype=np.float32)
+    det64 = ReferenceDetrenderLps2d(kv, n=n, W=W, dtype=np.float64)
 
     m = msk.random_mask_2d((M_ax, kv.nfreq, nbuf), kv, rng, ETA_DEFAULT, n=n, W=W)
     base, _ = _smooth_baseline(kv, rng, M_ax, nbuf)
@@ -1379,9 +1381,9 @@ def test_production_geometry(rng, verbose=True):
 
 def test_gpu_kernel(rng=None, verbose=True, nfreq=1024, M_ax=2):
     """
-    Compare pirate.Detrender2d (the GPU kernel) to SplineDetrender.
+    Compare GpuDetrenderLps2d (the GPU kernel) to ReferenceDetrenderLps2d.
 
-    Structured like detrending_1d.tests.test_gpu_kernel(): the GPU runs in float32 and
+    Structured like detrending.lps1d.tests.test_gpu_kernel(): the GPU runs in float32 and
     the reference in float64, so the two do not produce identical masks and residuals
     are compared on the intersection.  Data is generated in fp64, cast to fp32, then
     cast back for the reference, so both see bit-identical inputs.
@@ -1400,7 +1402,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
         bit-identical to the input; two runs on one input must be bit-identical (the
         cheapest race detector there is, and it only works because the reduction is
         deterministic -- no atomics, see the "chunk invariance" comment in
-        Detrender2d.cu); the same output sample computed at two chunk lengths must be
+        DetrenderLps2d.cu); the same output sample computed at two chunk lengths must be
         bit-identical; and poisoning the masked samples with nan/inf must not change the
         output at all.  None of those get stronger by varying the knot vector, which is
         why one is enough here.  (Two of the eight, the residual comparison and the
@@ -1443,9 +1445,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
             print('    test_gpu_kernel: cupy not available, skipped')
         return
 
-    from ..kernels import Detrender2d      # local import: this package is otherwise numpy-only
-
-    cfgs = Detrender2d.configs()
+    cfgs = GpuDetrenderLps2d.configs()
     if not cfgs:
         if verbose:
             print('    test_gpu_kernel: no kernel compiled, skipped')
@@ -1500,14 +1500,14 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
 
         kv = msk.zoned_knots(n_phi, nfreq, 4, 3)
         knots = [int(x) for x in kv.knots]
-        det = Detrender2d(nfreq=nfreq, knots=knots, M=M_ax, n_phi=n_phi, n=n, W=W, T=T)
+        det = GpuDetrenderLps2d(nfreq=nfreq, knots=knots, M=M_ax, n_phi=n_phi, n=n, W=W, T=T)
 
         m_in = msk.random_mask_2d((M_ax, nfreq, nbuf), kv, rng, det.eta, n=n, W=W)
         base, _ = _smooth_baseline(kv, rng, M_ax, nbuf)
         d32 = (base + 0.05*rng.standard_normal(base.shape)).astype(np.float32)
         d64 = d32.astype(np.float64)               # bit-identical inputs
 
-        ref = SplineDetrender(kv, n=n, W=W, dtype=np.float64, eta=det.eta, eps=det.eps)
+        ref = ReferenceDetrenderLps2d(kv, n=n, W=W, dtype=np.float64, eta=det.eta, eps=det.eps)
         r64, m64, p64 = ref.detrend_chunk(d64, m_in)
 
         out_d, out_m = run(det, d32, m_in)
@@ -1546,7 +1546,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
         m2 = msk.random_mask_2d((M_ax, nfreq, nb2), kv, rng, det.eta, n=n, W=W)
         b2, _ = _smooth_baseline(kv, rng, M_ax, nb2)
         d2 = (b2 + 0.05*rng.standard_normal(b2.shape)).astype(np.float32)
-        big = Detrender2d(nfreq=nfreq, knots=knots, M=M_ax, n_phi=n_phi, n=n, W=W, T=Tbig)
+        big = GpuDetrenderLps2d(nfreq=nfreq, knots=knots, M=M_ax, n_phi=n_phi, n=n, W=W, T=Tbig)
         # Bit-exactness across chunk lengths holds only if the two instances derive the
         # same channels_per_range, since that is part of the frequency summation order.
         # The derivation depends on T, but at nfreq=1024 both T's land on the CPR_MIN
@@ -1633,9 +1633,9 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
     cnfreq, cT, cW, cn = 2048, 128, 4, 2
     cnbuf = cT + 2*cW
     ckv = msk.zoned_knots(n_phis[-1], cnfreq, 4, 3)
-    cdet = Detrender2d(nfreq=cnfreq, knots=[int(x) for x in ckv.knots], M=1,
+    cdet = GpuDetrenderLps2d(nfreq=cnfreq, knots=[int(x) for x in ckv.knots], M=1,
                        n_phi=n_phis[-1], n=cn, W=cW, T=cT)
-    cref = SplineDetrender(ckv, n=cn, W=cW, dtype=np.float64, eta=cdet.eta, eps=cdet.eps)
+    cref = ReferenceDetrenderLps2d(ckv, n=cn, W=cW, dtype=np.float64, eta=cdet.eta, eps=cdet.eps)
     cbase, _ = _smooth_baseline(ckv, rng, 1, cnbuf)
     cd = (cbase + 0.05*rng.standard_normal(cbase.shape)).astype(np.float32)
 
@@ -1719,9 +1719,10 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
     nsecond = 0           # draws that tripped the screen and needed the float32 reference
     for nf, kind, Ws, ns, ps in sweep:
         kvs = msk.random_knots(rng, n_phi=ps, nfreq=nf, kind=kind)
-        dets = Detrender2d(nfreq=kvs.nfreq, knots=[int(x) for x in kvs.knots], M=1,
+        dets = GpuDetrenderLps2d(nfreq=kvs.nfreq, knots=[int(x) for x in kvs.knots], M=1,
                            n_phi=ps, n=ns, W=Ws, T=Tsweep)
-        refs = SplineDetrender(kvs, n=ns, W=Ws, dtype=np.float64, eta=dets.eta, eps=dets.eps)
+        refs = ReferenceDetrenderLps2d(kvs, n=ns, W=Ws, dtype=np.float64,
+                                      eta=dets.eta, eps=dets.eps)
         nbs = Tsweep + 2*Ws
 
         for kind_t in kinds:
@@ -1765,7 +1766,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
                 # float32 errors runs 0.2 to 3.0, so 10x is a wide margin.  The second
                 # reference costs a float32 detrend_chunk, paid on ~4% of draws.
                 if es >= 50*tol_s:
-                    r32, m32ref, _ = SplineDetrender(
+                    r32, m32ref, _ = ReferenceDetrenderLps2d(
                         kvs, n=ns, W=Ws, dtype=np.float32, eta=dets.eta,
                         eps=dets.eps).detrend_chunk(ds, ms)
                     jj = m32ref[:, :, :] & ms64
@@ -1795,7 +1796,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
 
 def test_params_yaml(rng=None, verbose=True):
     """
-    Detrender2dParams round-trips through yaml: from_yaml_string(to_yaml_string(p)) == p,
+    DetrenderLps2dParams round-trips through yaml: from_yaml_string(to_yaml_string(p)) == p,
     plus one case through a real file to cover from_yaml().
 
     Skips itself if the extension is not built.  The knot geometries are drawn rather
@@ -1804,13 +1805,6 @@ def test_params_yaml(rng=None, verbose=True):
     exactly what a serialization bug would violate.
     """
     rng = _default_rng(rng)
-
-    try:
-        from ..kernels import Detrender2dParams
-    except ImportError:
-        if verbose:
-            print('    test_params_yaml: extension not built, skipped')
-        return
 
     def _check_equal(p, q):
         for field in ('nfreq', 'M', 'n_phi', 'n', 'W', 'T', 'eta', 'eps'):
@@ -1835,10 +1829,10 @@ def test_params_yaml(rng=None, verbose=True):
                 if explicit_tuning:
                     kw = dict(eta=float(rng.uniform(1e-4, 1e-2)),
                               eps=float(rng.uniform(1e-6, 1e-4)))
-                p = Detrender2dParams(nfreq=nfreq, knots=knots, M=int(rng.integers(1, 4)),
+                p = DetrenderLps2dParams(nfreq=nfreq, knots=knots, M=int(rng.integers(1, 4)),
                                       n_phi=n_phi, n=n, W=W, T=32*int(rng.integers(1, 8)), **kw)
 
-                _check_equal(p, Detrender2dParams.from_yaml_string(
+                _check_equal(p, DetrenderLps2dParams.from_yaml_string(
                     p.to_yaml_string(verbose=explicit_tuning)))
                 ncase += 1
 
@@ -1850,7 +1844,7 @@ def test_params_yaml(rng=None, verbose=True):
         fh.write(p.to_yaml_string())
         path = fh.name
     try:
-        _check_equal(p, Detrender2dParams.from_yaml(path))
+        _check_equal(p, DetrenderLps2dParams.from_yaml(path))
     finally:
         os.unlink(path)
 
@@ -1860,7 +1854,7 @@ def test_params_yaml(rng=None, verbose=True):
     for (extra, want) in ((f'\nchannels_per_range: 256\n', 'channels_per_range'),
                           (f'\nnot_a_real_key: 7\n', '')):
         try:
-            Detrender2dParams.from_yaml_string(p.to_yaml_string() + extra)
+            DetrenderLps2dParams.from_yaml_string(p.to_yaml_string() + extra)
             raise AssertionError(f'from_yaml_string accepted {extra.strip()!r}')
         except RuntimeError as e:
             assert want in str(e), (want, str(e))
@@ -1886,16 +1880,26 @@ def run_all(verbose=True, rng=None, n_phi=None, iteration=0):
     half-bandwidth 1 regardless of n_phi, so its off-diagonal band outlives the
     data bands) is invisible at n_phi = 2.
 
-    test_gpu_kernel() is NOT run from here: it needs cupy and a compiled kernel, and
-    '--dt2g' dispatches it on its own.  test_conditioning()'s 'heavy' configurations are
-    likewise left to a direct call; the configurations that reach 3x eps are pinned and
-    run by default, so the default sweep is not weakened by leaving them out.
+    Four of the calls below do not take the drawn degree, and that is deliberate rather
+    than an oversight.  test_time_basis() has no degree at all; test_production_geometry()
+    and test_params_yaml() pin their own; and test_gpu_kernel() sweeps every n_phi the
+    cuda kernel was compiled for, read back from GpuDetrenderLps2d.configs().  So
+    '--dtl2 --seed X' pins everything EXCEPT which degrees the GPU comparison covers,
+    which is a property of the build.
+
+    test_gpu_kernel() runs last, since it is the only test here that needs a GPU.  It
+    skips itself with a message if cupy is missing or if no kernel was compiled, so this
+    suite still runs end-to-end on a machine without either.
+
+    test_conditioning()'s 'heavy' configurations are left to a direct call; the
+    configurations that reach 3x eps are pinned and run by default, so the default sweep
+    is not weakened by leaving them out.
     """
     rng = _default_rng(rng)
     if n_phi is None:
         n_phi = msk.draw_n_phi(rng)
     ent = rng.bit_generator.seed_seq.entropy
-    print(f'  detrending_spline tests (n_phi={n_phi}, eta={ETA_DEFAULT:g}, '
+    print(f'  detrending.lps2d tests (n_phi={n_phi}, eta={ETA_DEFAULT:g}, '
           f'eps={EPS_FLOAT32:g}, rng entropy {ent})')
     test_knots(rng, n_phi, verbose=verbose)
     test_basis(rng, n_phi, verbose=verbose)
@@ -1922,6 +1926,7 @@ def run_all(verbose=True, rng=None, n_phi=None, iteration=0):
     test_2d_dtype_agreement(rng, n_phi, verbose=verbose)
     test_production_geometry(rng, verbose=verbose)
     test_params_yaml(rng, verbose=verbose)
-    print(f'  detrending_spline tests passed   '
+    test_gpu_kernel(rng, verbose=verbose)
+    print(f'  detrending.lps2d tests passed   '
           f'[cumulative worst r_min: {_worst_rmin[0]:.3e}, '
           f'{_worst_rmin[0]/EPS_FLOAT32:.1f} x eps]')
