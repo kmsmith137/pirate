@@ -44,6 +44,24 @@ MASK_TYPES = ['adversarial', 'one_run', 'replicated_runs', 'dead_run', 'tiny',
 
 # ---------------------------------------------------------------- knot vectors
 
+def draw_n_phi(rng):
+    """The spline degree, drawn the way the test suite sweeps it: 0..3 inclusive.
+
+    ONE definition, because the sweep is a property of the suite rather than of any
+    one test, and a second copy of `rng.integers(0, 4)` elsewhere silently stops
+    agreeing the day the range changes.  'pirate_frb dev coverage' draws from here
+    too, so its reported distribution is the tests' own by construction.
+
+    Degree 0 is not a rounding error in the coverage: there, interior-knot
+    multiplicity n_phi+1 is 1, so EVERY interior knot is a zone boundary, the median
+    zone count goes from 1 to 5, and the regulator D_1 is identically zero (a zone is
+    a single coefficient, so there are no intra-zone differences to penalize) -- the
+    unregularized limit, reached legitimately.  An assembly bug confined to n_phi = 0
+    is invisible at any other degree.
+    """
+    return int(rng.integers(0, 4))
+
+
 def random_knots(rng, n_phi=2, nfreq=None, kind=None):
     """
     A random KnotVector.  'kind' selects the width profile; None draws one.

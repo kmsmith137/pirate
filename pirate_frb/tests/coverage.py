@@ -659,13 +659,13 @@ def _sec_detrending(rep, ndraw):
     from ..utils import random_nfreq
 
     rep.section('detrending_spline.masks.random_knots()',
-                subtitle=f'{ndraw} knot vectors, n_phi drawn in 0..3 as run_all() does',
+                subtitle=f'{ndraw} knot vectors, n_phi from masks.draw_n_phi(), as the tests do',
                 consumer='test --dts: every test in the spline suite')
 
     rng = np.random.default_rng()
     kvs, nz, nfr, kinds = [], [], [], []
     for _ in range(ndraw):
-        n_phi = int(rng.integers(0, 4))
+        n_phi = msk.draw_n_phi(rng)
         kv = msk.random_knots(rng, n_phi=n_phi)
         kvs.append(kv)
         nz.append(int(kv.nzone))
