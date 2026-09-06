@@ -1661,4 +1661,218 @@ interval -- including the $K=1$ case where the whole band is a single knot inter
 
 \clearpage
 
+\appendix
+
+\section{Fourier-space response of the detrenders}
+\label{sec:appendix_response}
+
+This appendix collects, in one place and in closed form, the frequency response of the detrenders described
+above, together with CHIME's --- and explains why the last of those needs two functions rather than one.
+Figure \ref{fig:detrender_response} plots all five.  The script that draws it,
+{\tt notes/figs/plot\_detrender\_response.py}, evaluates only the formulas below and imports nothing from
+{\tt pirate\_frb}.
+
+\subsection{Definition, for a stationary detrender}
+\label{sec:ar_stationary}
+
+Write the detrender's output as the residual $r = d - \hat f$.  For a fixed mask the estimator is linear
+(\S\ref{sec:time_detrending}), $\hat f = Hd$, so $r = (I - H)d$.  On a {\em fully valid} mask, and away from
+the ends of the array, both 1-d detrenders in these notes are additionally time-invariant: $H$ is then a
+convolution with an {\em equivalent kernel} $h$, $\hat f[t] = \sum_s h[s]\,d[t-s]$, and everything about the
+detrender is contained in one function of frequency,
+\begin{equation}
+\hat r(\omega) = F(\omega)\,\hat d(\omega),
+\qquad
+F(\omega) = 1 - H(\omega),
+\qquad
+H(\omega) = \sum_s h[s]\,e^{-i\omega s} .
+\label{eq:ar_F}
+\end{equation}
+The time coordinate is the full integer line, so $-\pi \le \omega \le \pi$.
+
+Note the sign convention, which is the opposite of the one usually wanted for a smoother: $F$ is the response
+of the {\em detrender}, so it is a high-pass.  $F = 1$ means a sinusoid at that frequency passes through
+untouched; $F = 0$ means it is entirely absorbed into the baseline and does not reach the search.  Every
+detrender here reproduces constants exactly, so $\sum_s h[s] = 1$ and $F(0) = 0$.
+
+Two properties follow immediately from the kernel.  $h[0]$ is the leverage
+(\ref{eq:dt_leverage_def}) of the fully-valid window, so the flux a narrow pulse loses to the baseline is
+$h[0]$ and the variance the detrender removes is $h[0]$.  And if $h$ is symmetric then $F$ is real: the two
+local polynomial fits evaluate at the center of a symmetric window, so they have exactly zero phase.  The
+fixed-lag Kalman filter does not --- truncating the future at lag $L$ breaks the symmetry --- but the effect
+is small, under $1.3^\circ$ wherever $|F| > 0.1$ at $L = 384$.
+
+\subsection{Closed forms}
+\label{sec:ar_formulas}
+
+{\bf Local polynomial subtraction.}  At the center of a fully valid window of $2W+1$ samples the fit is
+$\hat f[t] = \sum_s h[s] d[t+s]$ with $h[s] = \sum_j (M^{-1})_{0j}\,s^j$ on $|s| \le W$, where
+$M_{jl} = \sum_{s=-W}^{W} s^{j+l}$ is the unweighted moment matrix of (\ref{eq:dt_moments}).  Odd moments
+vanish, so $M$ decouples into even and odd blocks and the kernel is even.  Writing $N = 2W+1$,
+$P = W(W+1)$, and
+\begin{equation}
+D_W(\omega) \;=\; \sum_{s=-W}^{W} e^{-i\omega s} \;=\; \frac{\sin(N\omega/2)}{\sin(\omega/2)}
+\end{equation}
+for the Dirichlet kernel (with $D_W(0) = N$):
+
+\begin{itemize}
+\item $n = 1$: the odd basis function contributes nothing at the window center, so the equivalent kernel is
+{\em exactly} the boxcar, $h[s] = 1/N$.  ($n=0$ and $n=1$ therefore have the same kernel on a full mask, and
+differ only once a mask makes the window asymmetric.)  Hence
+\begin{equation}
+F(\omega) = 1 - \frac{D_W(\omega)}{N}
+\;=\; \frac{W(W+1)}{6}\,\omega^2 + O(\omega^4) .
+\label{eq:ar_lps1}
+\end{equation}
+
+\item $n = 2$: the kernel is $h[s] = a + b s^2$ with
+\begin{equation}
+a = \frac{3(3P-1)}{N(4P-3)}, \qquad b = \frac{-15}{N(4P-3)},
+\qquad\text{so}\qquad
+h[0] = a \;\rightarrow\; \frac{9}{8W} ,
+\end{equation}
+which is the leverage (\ref{eq:dt_leverage}) of a fully valid window, as it must be.  With
+$S_W(\omega) = \sum_s s^2 e^{-i\omega s} = -D_W''(\omega)$, evaluated as
+\begin{equation}
+S_W(\omega) = \frac{N^2+1}{4}\,D_W(\omega)
+   + \frac{N\cos(N\omega/2)\cos(\omega/2) - D_W(\omega)}{2\sin^2(\omega/2)} ,
+\end{equation}
+the response is
+\begin{equation}
+F(\omega) = 1 - a\,D_W(\omega) - b\,S_W(\omega)
+\;=\; \frac{(W-1)W(W+1)(W+2)}{280}\,\omega^4 + O(\omega^6) .
+\label{eq:ar_lps2}
+\end{equation}
+\end{itemize}
+
+\noindent
+The two low-frequency limits are the useful summary: a degree-$n$ fit reproduces polynomials of degree
+$\le n$, and by symmetry also degree $n+1$ when $n$ is even, so $F$ vanishes as $\omega^{2}$ at $n=1$ and
+$\omega^{4}$ at $n=2$.  A steeper rolloff attenuates {\em harder} below the corner frequency: at
+$\omega = 10^{-3}$ the $n=1$ curve of Figure \ref{fig:detrender_response} sits two orders of magnitude above
+the $n=2$ one, meaning it is the {\em weaker} high-pass and leaves correspondingly more trend behind.
+
+{\bf Kalman filter.}  Already derived as (\ref{eq:kf_transfer}): in the two-sided limit the normal equations
+diagonalize in Fourier space, giving
+\begin{equation}
+F(\omega) = \frac{\rho\,(2\sin(\omega/2))^{2k}}{1 + \rho\,(2\sin(\omega/2))^{2k}},
+\qquad \rho = \tau^{2k} ,
+\label{eq:ar_kf}
+\end{equation}
+which is $(\tau\omega)^{2k}$ at low frequency and, unlike the local fits, is monotone in $|\omega|$ with no
+stopband ripple.  Figure \ref{fig:detrender_response} plots this $L \rightarrow \infty$ form.  At the finite
+lookahead actually used, $L = 384 = 4.2\,\ell$, the true response differs from it by at most
+$6\times10^{-3}$ in absolute value and about $4\%$ in the passband --- invisible at the scale of the plot.
+
+\subsection{The CHIME detrender, for which $F$ is not one function}
+\label{sec:ar_chime}
+
+CHIME's real-time pipeline detrends in time with the {\tt polynomial\_detrender} of {\tt rf\_pipelines},
+configured in {\tt ch\_frb\_l1} as {\tt polydeg=4}, {\tt nt\_chunk=1024}, {\tt axis=AXIS\_TIME}.  It fits
+Legendre polynomials $P_0 \ldots P_4$ by weighted least squares over each disjoint $n_t = 1024$ sample block
+of a {\em fixed} lattice, and subtracts the fit in place.  Take uniform weights, ignore the conditioning cut
+that masks a badly conditioned block, and apply it once; then
+\begin{equation}
+R \;=\; I - \Pi , \qquad \Pi = \bigoplus_{\rm blocks} QQ^T ,
+\end{equation}
+with $Q$ an orthonormal basis for degree $\le 4$ on one block.  $\Pi$ and hence $R$ are {\em orthogonal
+projections}: $R^2 = R$ and $R^T = R$.  Neither detrender of these notes has that property --- a sliding
+window fit is a projection row by row but not globally, and a penalized estimator shrinks rather than
+projects.
+
+The difficulty is that $R$ commutes with a shift by $n_t$ but not by one sample.  It is linear
+{\em periodically} time-varying, not time-invariant, so (\ref{eq:ar_F}) does not apply: an operator that is
+block-diagonal in time is dense in frequency, and a sinusoid comes back as a comb,
+\begin{equation}
+R\,e_\omega \;=\; \sum_{k=0}^{n_t-1} A_k(\omega)\; e_{\omega + 2\pi k/n_t},
+\qquad e_\omega[t] \equiv e^{i\omega t} .
+\label{eq:ar_harmonic}
+\end{equation}
+The complete description is the two-index object $A_k(\omega)$, and any scalar $F(\omega)$ is a projection of
+it onto one index --- so choosing a definition means choosing a question.
+
+The block lattice is set by the acquisition clock and has nothing to do with when a burst arrives, which
+makes it natural to average over its phase.  Doing so restores stationarity, and leaves exactly two
+second-order summaries: $\mathbb{E}[R]$ is time-invariant with symbol $A_0(\omega)$, and $\mathbb{E}[R^TR]$
+is time-invariant with symbol $\sum_k |A_k(\omega)|^2$.  Hence
+\begin{equation}
+F_{\rm coh}(\omega) = |A_0(\omega)| ,
+\qquad
+F_{\rm pow}(\omega) = \Big(\sum\nolimits_k |A_k(\omega)|^2\Big)^{1/2} .
+\label{eq:ar_twoF}
+\end{equation}
+$F_{\rm coh}$ is the amplitude that survives {\em at the input frequency}, which is what a narrowband filter
+at $\omega$ would see coherently; $F_{\rm pow}$ is the total surviving power, at any frequency.  Their
+difference,
+\begin{equation}
+F_{\rm scat} = \big(F_{\rm pow}^2 - F_{\rm coh}^2\big)^{1/2} ,
+\end{equation}
+is power the detrender moves to a {\em different} frequency, and is identically zero for any time-invariant
+detrender: it exists only because of the block seams.
+
+Both reduce to a single block, which is what makes them cheap to evaluate.  Writing $u[n] = e^{i\omega n}$
+on $n = 0 \ldots n_t - 1$ and matching (\ref{eq:ar_harmonic}) block by block gives
+$A_k(\omega) = {\rm FFT}_k\big( ((I-\Pi)u)[n]\,e^{-i\omega n} \big)/n_t$, hence
+\begin{equation}
+F_{\rm coh}(\omega) = 1 - \frac{\|Q^Tu\|^2}{n_t} ,
+\qquad
+F_{\rm pow}(\omega)^2 = \frac{\|(I-\Pi)u\|^2}{n_t} .
+\label{eq:ar_chime_eval}
+\end{equation}
+These are what the script evaluates: one $n_t \times 5$ product per frequency, exact at any $\omega$.
+
+The two are not independent.  Because $R$ is an orthogonal projection, $R^TR = R^2 = R$, so
+\begin{equation}
+F_{\rm pow}^2 = \frac{u^\dagger R^\dagger R\,u}{n_t} = \frac{u^\dagger R\,u}{n_t} = F_{\rm coh},
+\qquad\text{and therefore}\qquad
+F_{\rm scat} = \sqrt{F_{\rm coh}(1 - F_{\rm coh})} \;\le\; \tfrac12 .
+\label{eq:ar_identity}
+\end{equation}
+So there is really one function and a square, which is a happier situation than it first appears: one does
+not have to adjudicate between the two definitions, only to say which is being quoted.  Three consequences
+are worth recording.  The worst-case scattering is exactly $1/2$ in amplitude and occurs exactly at the
+coherent half-power point, which for this configuration is $\omega = 0.0122$ (a period of $516$ samples);
+there, half the input amplitude emerges somewhere else.  That scattered power is not a smooth smear but a
+comb of spacing $2\pi/n_t = 0.0061$, comparable to the corner frequency itself.  And because squaring doubles
+a slope on a log-log plot, the two curves diverge badly in the passband: a degree-4 fit reproduces
+$t^0 \ldots t^4$, so $F_{\rm pow} \propto \omega^5$ while $F_{\rm coh} \propto \omega^{10}$.
+
+\subsection{What the figure shows}
+\label{sec:ar_figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.85\textwidth]{figs/detrender_response.pdf}
+\caption{Fourier-space response $F(\omega)$ of five detrender configurations, all on a fully valid mask.
+$F$ is the response of the {\em residual}: $F = 1$ means a sinusoid survives untouched, $F = 0$ means it is
+absorbed into the baseline.  The three stationary curves are (\ref{eq:ar_lps1}), (\ref{eq:ar_lps2}) and
+(\ref{eq:ar_kf}); the Kalman curve is the $L \rightarrow \infty$ limit, which at the $L=384$ actually used is
+accurate to $6\times10^{-3}$.  The CHIME detrender is not time-invariant, so it contributes two curves,
+(\ref{eq:ar_twoF}): $F_{\rm coh}$, the amplitude surviving at the input frequency, and $F_{\rm pow}$, the
+total surviving power at any frequency.  They are related by $F_{\rm coh} = F_{\rm pow}^2$,
+(\ref{eq:ar_identity}).  Generated by {\tt notes/figs/plot\_detrender\_response.py}.}
+\label{fig:detrender_response}
+\end{figure}
+
+The three configurations plotted are matched at their half-power points, $\omega_* = 0.0148$, $0.0156$ and
+$0.0156$ respectively, which is the only way a comparison of this kind means anything.  Two features are
+worth reading off.
+
+The $n=2$ fit and the Kalman filter are nearly the {\em same filter} over the whole band, despite arriving
+there by quite different routes; both roll off as $\omega^4$, so matching them anywhere in the passband
+nearly matches them everywhere in it.  Where they differ is the stopband: the local fit is a truncated
+polynomial kernel and rings, reaching $|F| = 1.24$ near $\omega \approx 2.2\pi/W$ --- a band in which it
+{\em amplifies} --- while the Kalman response is monotone by inspection of (\ref{eq:ar_kf}).  The $n=1$ fit
+is a different animal: matched at the same half-power point, its shallower $\omega^2$ rolloff leaves it an
+order of magnitude higher through the passband.
+
+For CHIME, no single number can be quoted as ``the response'' in the passband.  At a period of $1500$
+samples the two definitions differ by a factor of $81$, and they fall on {\em opposite sides} of the $n=2$
+curve: $F_{\rm coh} = 1.5\times10^{-4}$, the local fit $4.6\times10^{-3}$, $F_{\rm pow} = 1.2\times10^{-2}$.
+The half-power point moves too, from $\omega = 0.0122$ under $F_{\rm coh}$ to $0.0105$ under $F_{\rm pow}$,
+a ratio of $1.16$.  A block detrender is simply not summarized by a transfer function the way a sliding one
+is, and the gap between these two curves is a fair measure of how much is being left out.
+
+\clearpage
+
 \end{document}
