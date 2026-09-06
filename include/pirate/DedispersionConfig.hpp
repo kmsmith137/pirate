@@ -62,32 +62,21 @@ struct DedispersionConfig
     //   max_width: max width of peak-finding kernel, in "tree" time samples
     //   wt_{dm,time}_downsampling: downsampling factors of weights array, relative to tree.
     //
-    // FOUR OF THE FIVE MEMBERS ARE CHAINED ACROSS PRIMARY TREES, so they cannot be chosen
-    // independently per tree (validate() rejects any other relation, with an explanation):
-    //
-    //   max_width, wt_dm_downsampling, wt_time_downsampling
-    //       each EQUALS its predecessor's, or is HALF of it
-    //   num_early_triggers
-    //       EQUALS its predecessor's, or is ONE MORE
-    //
-    // All four are quantities in a primary tree's OWN (2^i-downsampled) units, so in each case
-    // the two legal steps are the two deliberate ways to scale the underlying physical
-    // quantity, and anything else is a mis-transcribed config. See configs/dedispersion/
-    // chord_sb2_et.yml for the config-file-level statement of the same rules.
+    // Members are chained across primary trees, and validate() rejects any other relation
+    // (see configs/dedispersion/chord_sb2_et.yml):
 
     struct PrimaryTree
     {
-        // Member ORDER is load-bearing: operator<<(ostream&, const PrimaryTree&) emits an
+        // Member order is load-bearing: operator<<(ostream&, const PrimaryTree&) emits an
         // aggregate-initializer brace list in this order, which DedispersionConfig::emit_cpp()
         // pastes into generated C++. Reordering silently misassigns those fields.
 
         long num_early_triggers = 0;    // required (can be zero)
         long max_width = 0;             // required
 
-        // Both must be >= DedispersionTree::{dm,time}_downsampling of every tree in this
-        // family, i.e. >= pow2(dd_rank1) of its early_trigger_level=0 tree. Checked in
-        // validate(), and again in the DedispersionPlan constructor where the tree's own
-        // values are known. Both are also chained across primary trees (see above).
+        // Both must be >= pow2(dd_rank1) of this family's early_trigger_level=0 tree, checked
+        // in validate() and again in the DedispersionPlan constructor. Also chained across
+        // primary trees (see above).
         long wt_dm_downsampling = 0;    // required
         long wt_time_downsampling = 0;  // required
     };
@@ -129,9 +118,8 @@ struct DedispersionConfig
     static DedispersionConfig from_yaml(const YamlFile &file);
 
     // Construct from a YAML string, i.e. the inverse of to_yaml_string(). Needed wherever a
-    // config travels as a string rather than a file -- over the wire (see the grouper
-    // handshake in FrbGrouper.cpp), or embedded in a container format
-    // (see pirate_frb.varmap.asdf_io).
+    // config travels as a string rather than a file (e.g. the grouper handshake in
+    // FrbGrouper.cpp).
     static DedispersionConfig from_yaml_string(const std::string &yaml_string);
 
     // Note: rather than calling this function directly, you probably want the
@@ -158,16 +146,13 @@ struct DedispersionConfig
     // equal to one time sample.
     double dm_per_unit_delay() const;
 
-    // Returns the largest DM (pc cm^{-3}) searched by any dedispersion tree. Mirrors the
-    // per-tree dm_max = dm_per_unit_delay() * 2^toplevel_tree_rank * 2^p computed in the
-    // DedispersionPlan constructor; this is monotonic in the primary tree index p and
-    // independent of early_trigger_level, so the maximum is at p = num_primary_trees()-1.
-    // (Depends only on pre-metadata config fields, so it is valid on config_prefilled.)
+    // Returns the largest DM (pc cm^{-3}) searched by any dedispersion tree, which is the
+    // value at the last primary tree. Depends only on pre-metadata config fields, so it is
+    // valid on config_prefilled.
     double max_dm_of_all_trees() const;
 
-    // Returns the peak-finding kernel max_width of the base (non-downsampled, p=0)
-    // tree, in time samples. At p=0 the tree's time sampling equals the native
-    // (frame) time sampling, so this is a number of frame time samples (NOT milliseconds).
+    // Returns the peak-finding kernel max_width of the base (non-downsampled, p=0) tree, in
+    // FRAME time samples (not milliseconds): at p=0 the tree's time sampling is the native one.
     long max_width_of_base_tree() const;
 
     // Returns sum of zone_nfreq (i.e. total number of frequency channels across all zones).
@@ -186,8 +171,6 @@ struct DedispersionConfig
 
     // Test that frequency_to_index/index_to_frequency and delay_to_frequency/frequency_to_delay
     // are inverses of each other, by sampling random values and checking endpoints.
-    // Called by 'python -m pirate_frb test --dd' (special iteration-0 logic in __main__.py).
-    // Also called by 'python -m pirate_frb show dedisperser ...'.
     void test() const;
 
     // Emit C++ code to initialize this DedispersionConfig.
@@ -201,40 +184,15 @@ struct DedispersionConfig
         int max_toplevel_rank = 10;  // bounds toplevel_tree_rank
         int max_early_triggers = 5;  // set to zero to disable early triggers
 
-        // Lower bound on num_primary_trees(), in 1..constants::max_primary_trees. Honoured BY
-        // CONSTRUCTION -- the base cdd2 key and toplevel_tree_rank are drawn only from those
-        // that admit this many primary trees -- so a caller who needs a multi-tree config gets
-        // one on every call, instead of rejection-sampling at the ~35-50% rate the
-        // unconstrained draw gives. To get an EXACT tree count, ask for it as a minimum and
-        // truncate 'primary_trees': validate()'s two dependences on the count both weaken
-        // under truncation (see the comments at its 'min_nt' and 'min_dd_rank1' checks).
+        // Lower bound on num_primary_trees(), in 1..constants::max_primary_trees. Honoured by
+        // construction, so a caller who needs a multi-tree config gets one on every call.
+        // For an EXACT count, ask for it as a minimum and truncate 'primary_trees':
+        // validate()'s two dependences on the count both weaken under truncation.
         int min_primary_trees = 1;
 
         // If true, beams_per_gpu = beams_per_batch = num_active_batches = 1, and the whole
         // (8192 / nt_divisor) budget goes to time_samples_per_chunk.
-        //
-        // FOR CALLERS WHO WOULD OTHERWISE OVERWRITE THE BEAM FIELDS AFTER THE DRAW. Doing that
-        // by hand has a trap -- overwrite only beams_per_gpu and beams_per_batch, and
-        // num_active_batches keeps a value validate() then rejects on 55% of draws -- and it
-        // leaves time_samples_per_chunk conditioned on a beam draw that no longer exists: one
-        // factor of a three-way bounded product, so its median is ~n^(1/3) rather than ~n/2.
-        //
-        // BUT NOT FOR THE VARIANCE-MAP SWEEP TESTS, which is worth saying because they are the
-        // obvious candidates and the choice was measured. They overwrite the beam fields, and
-        // moving them to this flag raises their median time_samples_per_chunk from 256 to
-        // ~4000 -- which collapses the number of CHUNKS the sweep streams (P(ndata_chunks == 1)
-        // goes from 0.28 to 0.89), and multiplies the predicted sweep work by 4x to 15x. Chunk
-        // boundaries are most of what those tests exist to check, so for them the short chunk
-        // is the useful corner and the three-way split is doing them a favour by accident.
         bool single_beam = false;
-
-        // The next three exist so that a caller with a hard requirement can ASK FOR IT, rather
-        // than drawing configs and discarding the ones that miss. That is not just a saving on
-        // draws: all three correlate strongly with num_primary_trees and dtype (both feed
-        // nt_divisor below), so filtering afterwards silently reshapes the population under
-        // test. Measured on the loopback tests before this existed, requiring
-        // time_samples_per_chunk % 256 == 0 together with beams_per_gpu <= 8 took
-        // P(one primary tree) from 61% to 16% and P(toplevel_tree_rank == 5) from 49% to 13%.
 
         // Draw time_samples_per_chunk as a multiple of this. 1 = no constraint. Used by the
         // loopback tests, whose network protocol sends in units of 256 time samples.
@@ -245,12 +203,7 @@ struct DedispersionConfig
         long max_beams_per_gpu = 0;
 
         // Reserve this many of the GPU's batch slots per ACTIVE batch, i.e. guarantee
-        //
-        //    beams_per_gpu >= min_batch_slots * num_active_batches * beams_per_batch.
-        //
-        // 1 (the default) is what make_random() gives anyway. 2 is what a grouper-enabled
-        // FrbServer needs: it builds its dedisperser with nbatches_out = 2*num_active_batches,
-        // and FrbGrouper requires that output ring to fit within one chunk.
+        //   beams_per_gpu >= min_batch_slots * num_active_batches * beams_per_batch.
         int min_batch_slots = 1;
 
         bool gpu_valid = true;
