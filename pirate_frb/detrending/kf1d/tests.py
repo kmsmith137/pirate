@@ -139,10 +139,11 @@ def test_model_algebra(rng=None, verbose=True):
 
 def _dense_state_posterior(d_row, m_row, n_obs, k, tau):
     """
-    Dense posterior of f for the sub-problem on [0, n-1] where only the first 'n_obs'
-    samples are observed.  Returns (Sigma, fhat_all, cond) with Sigma = N^-1, or None
-    if the sub-problem holds fewer than k valid samples, where N is singular and there
-    is nothing to compare against.
+    Dense posterior of f on [0, n-1], where only the first 'n_obs' samples are observed.
+
+    Returns (Sigma, fhat_all, cond) with Sigma = N^-1, or None if the sub-problem
+    holds fewer than k valid samples, where N is singular and there is nothing to
+    compare against.
 
     The trailing n - n_obs samples are unobserved on purpose: the forward filter's
     state x[t] involves f[t..t+k-1], so the dense analogue has to extend past the
@@ -167,8 +168,10 @@ def _dense_state_posterior(d_row, m_row, n_obs, k, tau):
 
 
 def _run_recursions(d_row, m_row, t, k, tau, L):
-    """Forward filter to t, backward over [t+1,t+L], and their sum -- one row, plain
-    python, so the test does not depend on ReferenceDetrenderKf1d's chunking."""
+    """Forward filter to t, backward over [t+1,t+L], and their sum.
+
+    One row, in plain python, so the test does not depend on ReferenceDetrenderKf1d's
+    chunking."""
     mo = StateSpaceModel(k, tau, dtype=np.float64)
     J = np.zeros((k, k))
     eta = np.zeros(k)
@@ -258,6 +261,8 @@ def test_recursions_vs_dense(rng=None, niter=3, verbose=True):
 
 def test_polynomial_exactness(rng=None, verbose=True):
     """
+    Checks which polynomial trends the estimator annihilates, and how exactly.
+
     Degree <= k-1 is annihilated exactly, for any mask and any position, because
     f = P zeroes BOTH terms of chi^2.  That is the analytic, tolerance-free test.
 
@@ -369,12 +374,13 @@ def test_polynomial_exactness(rng=None, verbose=True):
 
 def test_seam_free(rng=None, verbose=True):
     """
-    The headline test.  Because J_f and J_b are driven by the input mask alone,
-    mask_out and rmin are bit-identical across chunk decompositions
-    unconditionally.  The residual is bit-identical only when kappa is held fixed:
-    with a per-buffer kappa the decompositions see different buffers, so the residual
-    differs by pure rounding.  Asserting bit-identity there would be asserting
-    something false.
+    The headline test: the outputs must not depend on how the stream is split into chunks.
+
+    Because J_f and J_b are driven by the input mask alone, mask_out and rmin are
+    bit-identical across chunk decompositions unconditionally.  The residual is
+    bit-identical only when kappa is held fixed: with a per-buffer kappa the
+    decompositions see different buffers, so the residual differs by pure rounding.
+    Asserting bit-identity there would be asserting something false.
     """
     rng = _default_rng(rng)
     k = K
@@ -489,8 +495,9 @@ def test_vs_brute_force(rng=None, verbose=True):
 
 def test_kernel_response(rng=None, verbose=True):
     """
-    On a full mask, the equivalent kernel at zero lag must approach the closed form
-    h[0] = c_k/tau of notes/detrending.tex, section "Time detrending
+    On a full mask, the equivalent kernel at zero lag must approach h[0] = c_k/tau.
+
+    The closed form is from notes/detrending.tex, section "Time detrending
     algorithm 2: Kalman filter", subsection "Response and numerics".
 
     This is the strongest check in the file: the expected answer is analytic, so it
@@ -543,9 +550,10 @@ def test_kernel_response(rng=None, verbose=True):
 
 def test_psd_and_finite(rng=None, verbose=True):
     """
-    The recursions must stay symmetric, PSD and finite under every mask in the zoo,
-    including all-masked rows and rows with a single valid sample, and the only
-    divide must never approach zero: beta >= 1/q always, by positive
+    The recursions must stay symmetric, PSD and finite under every mask in the zoo.
+
+    "Every mask" includes all-masked rows and rows with a single valid sample.  The
+    only divide must never approach zero: beta >= 1/q always, by positive
     semidefiniteness of J.
     """
     rng = _default_rng(rng)
@@ -616,10 +624,12 @@ def test_psd_and_finite(rng=None, verbose=True):
 
 def test_masked_data_unused(rng=None, verbose=True):
     """
-    Masked samples must never be read.  Checked by poisoning them and requiring every
-    output to be BIT-IDENTICAL -- and, unlike detrending.lps1d, the carried state too: a
-    NaN reaching the state would destroy every subsequent output of that row forever,
-    which is the one failure mode this estimator has and the local fit does not.
+    Masked samples must never be read.
+
+    Checked by poisoning them and requiring every output to be BIT-IDENTICAL -- and,
+    unlike detrending.lps1d, the carried state too: a NaN reaching the state would
+    destroy every subsequent output of that row forever, which is the one failure
+    mode this estimator has and the local fit does not.
     """
     rng = _default_rng(rng)
     checked = 0
@@ -665,10 +675,12 @@ def test_masked_data_unused(rng=None, verbose=True):
 
 def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
     """
-    fp32 against fp64 through the whole pipeline, with a constant offset ~ U(0,1e3)
-    to exercise the kappa path, plus a long stream to check that the discrepancy does
-    NOT grow with time -- which is the direct test of whether the forward filter's
-    exponential forgetting really bounds the accumulated state error.
+    Compares fp32 against fp64 through the whole pipeline.
+
+    A constant offset ~ U(0,1e3) exercises the kappa path, and a long stream checks
+    that the discrepancy does NOT grow with time -- which is the direct test of
+    whether the forward filter's exponential forgetting really bounds the
+    accumulated state error.
 
     The two runs use different eps (1e-3 fp32, 1e-6 fp64) so that the test exercises
     samples whose rmin roundoff could move them across the threshold; residuals are
@@ -755,6 +767,8 @@ _EXHAUSTIVE = (test_model_algebra, test_kernel_response)
 
 def run_all(verbose=True, rng=None, iteration=0):
     """
+    Runs the detrending.kf1d test suite.
+
     T1-T8 first, then T9.  All share one generator, so printing its entropy makes the
     whole run reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
 

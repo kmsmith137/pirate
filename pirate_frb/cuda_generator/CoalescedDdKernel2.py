@@ -66,8 +66,10 @@ def max_cdd2_tinner(dtype, dd_rank):
 
 
 def check_cdd2_params(dtype, dd_rank, subband_counts, Wmax, Tinner):
-    """Returns None if a CoalescedDdKernel2 with these parameters can be BUILT and is
-    REACHABLE from a DedispersionConfig; otherwise a one-line string saying why not.
+    """Checks whether a CoalescedDdKernel2 with these parameters is legal.
+
+    Returns None if the kernel can be BUILT and is REACHABLE from a DedispersionConfig;
+    otherwise a one-line string saying why not.
 
     'subband_counts' is the kernel's own vector, i.e. already restricted by any early-trigger
     level (use check_cdd2_row() to check a whole makefile_helper row instead). Dout and Dcore

@@ -208,9 +208,11 @@ class _GpuRunner:
 
 
 class _CpuRunner:
-    """The same, through ReferenceDedisperser + ReferencePfSquare. Orders of magnitude slower;
-    the path for a config the GPU pipeline refuses (stage-2 dd_rank < 3, or a missing sbdd
-    kernel)."""
+    """The same estimate as _GpuRunner, through ReferenceDedisperser + ReferencePfSquare.
+
+    Orders of magnitude slower; the path for a config the GPU pipeline refuses (stage-2
+    dd_rank < 3, or a missing sbdd kernel).
+    """
 
     def __init__(self, geom, freq_variances, sophistication):
         from ..pirate_pybind11 import ReferenceDedisperser
@@ -256,8 +258,10 @@ class _CpuRunner:
         return out
 
     def _detrend(self, x):
-        """Detrend one chunk with the numpy spline detrender, padding included; see the GPU
-        runner's comment on why the padding is noise and not zeros."""
+        """Detrend one chunk with the numpy spline detrender, padding included.
+
+        See the GPU runner's comment on why the padding is noise and not zeros.
+        """
 
         g = self.geom
         W, nfreq, nt_in = g.W, g.nfreq, g.nt_in

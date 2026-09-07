@@ -42,8 +42,9 @@ import numpy as np
 
 class KnotVector:
     """
-    A validated knot vector plus the per-channel and per-basis-function lookups
-    derived from it.
+    A validated knot vector and its derived lookup tables.
+
+    The lookups are per-channel and per-basis-function; see Attributes below.
 
     Constructor arguments: 'knots' (integer array, non-decreasing), 'n_phi' (the
     spline degree) and 'nfreq'.  Raises ValueError on anything invalid.
@@ -143,8 +144,10 @@ class KnotVector:
                 f'knots={self.knots.tolist()})')
 
     def support_mask(self, j):
-        """Boolean array of length nfreq, true on supp(phi_j).  Interval arithmetic
-        only -- test_expand() checks it against the evaluated basis."""
+        """Boolean array of length nfreq, true on supp(phi_j).
+
+        Interval arithmetic only -- test_expand() checks it against the evaluated
+        basis."""
         m = np.zeros(self.nfreq, dtype=bool)
         m[self.supp_lo[j]:self.supp_hi[j]] = True
         return m

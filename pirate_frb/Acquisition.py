@@ -1,4 +1,4 @@
-"""Parsed view of an acquisition directory written by a 'start_stream' RPC."""
+"""Parsed view of an acquisition directory written by a StartStream or WriteFiles RPC."""
 
 import os
 import re

@@ -73,6 +73,8 @@ void register_kernel_bindings(pybind11::module &m)
     // MegaRingbuf is bound as an opaque handle: it is reachable only via a DedispersionPlan
     // (or a DedispersionKernelParams), and python callers pass it around rather than inspect
     // it. Only the few members a caller needs in order to size the ring buffer are exposed.
+    // No page in docs/source/python_class_reference.md, on purpose: a python caller gets one
+    // from DedispersionPlan.mega_ringbuf and never names the type.
     py::class_<MegaRingbuf, std::shared_ptr<MegaRingbuf>>(m, "MegaRingbuf",
         "The ring buffer through which stage-1 dedispersion feeds stage 2.\n\n"
         "Not constructible from python: obtain one from DedispersionPlan.mega_ringbuf. See\n"
@@ -95,6 +97,8 @@ void register_kernel_bindings(pybind11::module &m)
     // gets them from a DedispersionPlan (plan.stage1_dd_kernel_params etc.) and passes them
     // straight to a kernel constructor. They encode the ring-buffer lag structure, which must
     // not be re-derived on the python side.
+    // No page in docs/source/python_class_reference.md, on purpose: a python caller gets one
+    // from DedispersionPlan.stage{1,2}_dd_kernel_params and never names the type.
     py::class_<DedispersionKernelParams>(m, "DedispersionKernelParams",
         "Construction parameters for a (Reference|Gpu|GpuSb)DedispersionKernel.\n\n"
         "Not constructible from python: obtain one from DedispersionPlan.stage1_dd_kernel_params\n"
@@ -122,6 +126,8 @@ void register_kernel_bindings(pybind11::module &m)
                "Raises RuntimeError if any parameter is invalid.")
     ;
 
+    // No page in docs/source/python_class_reference.md, on purpose: a python caller gets one
+    // from DedispersionPlan.tree_gridding_kernel_params and never names the type.
     py::class_<TreeGriddingKernelParams>(m, "TreeGriddingKernelParams",
         "Construction parameters for a (Reference|Gpu)TreeGriddingKernel.\n\n"
         "Not constructible from python: obtain one from\n"
@@ -135,6 +141,8 @@ void register_kernel_bindings(pybind11::module &m)
                "Length (nchan+1) host array of frequency-channel edges, monotonically decreasing")
     ;
 
+    // No page in docs/source/python_class_reference.md, on purpose: this kernel exists for
+    // CPU-vs-GPU tests and variance studies, not for use by a typical python caller.
     py::class_<GpuSbDedispersionKernel>(m, "GpuSbDedispersionKernel",
         "Stage-2 dedispersion with frequency subbands: the GPU counterpart of\n"
         "ReferenceDedispersionKernel's 'sb_out' output, which the production dedisperser\n"
@@ -165,7 +173,7 @@ void register_kernel_bindings(pybind11::module &m)
                py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
                "GPU kernel launch (async, does not sync stream).\n\n"
                "Args:\n"
-               "    sb_out: Array, shape (beams_per_batch, Dpf, fs.M, ntime), float32, fully\n"
+               "    sb_out: cupy array, shape (beams_per_batch, Dpf, fs.M, ntime), float32, fully\n"
                "        contiguous, on GPU. The kernel derives all its strides from (M, ntime),\n"
                "        so a padded or sliced buffer is rejected.\n"
                "    in_: the ring buffer, a 1-d float32 GPU array of length\n"
@@ -305,9 +313,9 @@ void register_kernel_bindings(pybind11::module &m)
                py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
                "GPU kernel launch (async, does not sync stream).\n\n"
                "Args:\n"
-               "    data: Array, shape (M, nbuf), dtype float32, fully contiguous, on GPU.\n"
+               "    data: cupy array, shape (M, nbuf), dtype float32, fully contiguous, on GPU.\n"
                "          Modified in place.\n"
-               "    mask: Array, shape (M, nbuf), dtype uint8, fully contiguous, on GPU,\n"
+               "    mask: cupy array, shape (M, nbuf), dtype uint8, fully contiguous, on GPU,\n"
                "          {0,1}-valued. Modified in place, and the output mask is the\n"
                "          authoritative one (it can only lose samples).\n"
                "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
@@ -489,9 +497,9 @@ void register_kernel_bindings(pybind11::module &m)
                py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
                "GPU kernel launch (async, does not sync stream).\n\n"
                "Args:\n"
-               "    data: Array, shape (M, nfreq, nbuf), dtype float32, fully contiguous,\n"
+               "    data: cupy array, shape (M, nfreq, nbuf), dtype float32, fully contiguous,\n"
                "          on GPU. Modified in place over buffer samples [W, W+T).\n"
-               "    mask: Array, shape (M, nfreq, nbuf), dtype uint8, fully contiguous, on\n"
+               "    mask: cupy array, shape (M, nfreq, nbuf), dtype uint8, fully contiguous, on\n"
                "          GPU, {0,1}-valued. Modified in place over the same range, and the\n"
                "          output mask is the authoritative one (it can only lose samples).\n"
                "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
@@ -563,9 +571,9 @@ void register_kernel_bindings(pybind11::module &m)
                "Args:\n"
                "    out: Output array, shape (nbeams, nfreq, ntime), dtype matches\n"
                "         kernel's dtype (float32 or float16), fully contiguous, on GPU\n"
-               "    scales_offsets: Array, shape (nbeams, nfreq, ntime//256, 2), dtype float16,\n"
+               "    scales_offsets: cupy array, shape (nbeams, nfreq, ntime//256, 2), dtype float16,\n"
                "                    fully contiguous, on GPU. Last axis is (scale, offset).\n"
-               "    data_uint8: Array, shape (nbeams, nfreq, ntime//2), dtype uint8,\n"
+               "    data_uint8: cupy array, shape (nbeams, nfreq, ntime//2), dtype uint8,\n"
                "                fully contiguous, on GPU. Reinterpreted as int4 with shape\n"
                "                (nbeams, nfreq, ntime).\n"
                "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)\n\n"
@@ -626,9 +634,9 @@ void register_kernel_bindings(pybind11::module &m)
                "Args:\n"
                "    out: Output array, shape (nbeams, nfreq, ntime), dtype float32,\n"
                "         fully contiguous, on host\n"
-               "    scales_offsets: Array, shape (nbeams, nfreq, ntime//256, 2), dtype float16,\n"
+               "    scales_offsets: numpy array, shape (nbeams, nfreq, ntime//256, 2), dtype float16,\n"
                "                    fully contiguous, on host. Last axis is (scale, offset).\n"
-               "    data_uint8: Array, shape (nbeams, nfreq, ntime//2), dtype uint8,\n"
+               "    data_uint8: numpy array, shape (nbeams, nfreq, ntime//2), dtype uint8,\n"
                "                fully contiguous, on host. Reinterpreted as int4 with shape\n"
                "                (nbeams, nfreq, ntime).\n\n"
                "Each (scale, offset) pair is converted from fp16 to fp32 immediately,\n"
@@ -639,6 +647,8 @@ void register_kernel_bindings(pybind11::module &m)
                "int4 values: low nibble = even index, high nibble = odd index.")
     ;
 
+    // No page in docs/source/python_class_reference.md, on purpose: a python caller gets one
+    // from DedispersionPlan.lds_params and never names the type.
     py::class_<LaggedDownsamplingKernelParams>(m, "LaggedDownsamplingKernelParams",
         "Construction parameters for a (Reference|Gpu)LaggedDownsamplingKernel.\n\n"
         "Not constructible from python: obtain one from DedispersionPlan.lds_params.\n\n"
@@ -659,6 +669,8 @@ void register_kernel_bindings(pybind11::module &m)
                "Raises RuntimeError if any parameter is invalid.")
     ;
 
+    // No page in docs/source/python_class_reference.md, on purpose: a python caller gets one
+    // from DedispersionPlan.stage{1,2}_dd_buf_params and never names the type.
     py::class_<DedispersionBufferParams>(m, "DedispersionBufferParams",
         "Shape parameters for a DedispersionBuffer.\n\n"
         "Not constructible from python: obtain one from DedispersionPlan.stage1_dd_buf_params\n"
@@ -797,10 +809,10 @@ void register_kernel_bindings(pybind11::module &m)
                py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
                "GPU kernel launch (async, does not sync stream).\n\n"
                "Args:\n"
-               "    acc: Array, shape (beams_per_batch, ndm, nprofiles), float64, fully\n"
+               "    acc: cupy array, shape (beams_per_batch, ndm, nprofiles), float64, fully\n"
                "        contiguous, on GPU. ACCUMULATED INTO (+=), never overwritten, so the\n"
                "        caller zeroes it when a new accumulation starts.\n"
-               "    in_: Array, shape (beams_per_batch, ndm, nt_in), float32, fully\n"
+               "    in_: cupy array, shape (beams_per_batch, ndm, nt_in), float32, fully\n"
                "        contiguous, on GPU.\n"
                "    ibatch: 0 <= ibatch < nbatches. Calls must run 0, 1, ..., nbatches-1, 0,\n"
                "        ... -- the kernel checks, since it carries per-beam input history\n"
@@ -821,6 +833,8 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("test_random", &GpuPfSquare::test_random, py::call_guard<py::gil_scoped_release>())
     ;
 
+    // No page in docs/source/python_class_reference.md, on purpose: this kernel exists for
+    // CPU-vs-GPU tests and variance studies, not for use by a typical python caller.
     py::class_<ReferencePfSquare>(m, "ReferencePfSquare",
         "Reference (CPU) implementation of GpuPfSquare, with the same conventions::\n\n"
         "    k = ReferencePfSquare(max_kernel_width, total_beams, beams_per_batch, ndm, nt_in)\n"
@@ -845,10 +859,10 @@ void register_kernel_bindings(pybind11::module &m)
                py::call_guard<py::gil_scoped_release>(),   // heavy CPU loop, no python objects
                "acc += sum_t (h_p * in_)[t]^2, over this chunk's time samples.\n\n"
                "Args:\n"
-               "    acc: Array, shape (beams_per_batch, ndm, nprofiles), float64, on host.\n"
+               "    acc: numpy array, shape (beams_per_batch, ndm, nprofiles), float64, on host.\n"
                "        ACCUMULATED INTO (+=), never overwritten, so the caller zeroes it\n"
                "        when a new accumulation starts.\n"
-               "    in_: Array, shape (beams_per_batch, ndm, nt_in), float32, on host.\n"
+               "    in_: numpy array, shape (beams_per_batch, ndm, nt_in), float32, on host.\n"
                "    ibatch: 0 <= ibatch < nbatches. Calls must run 0, 1, ..., nbatches-1, 0,\n"
                "        ... -- checked, since the kernel carries per-beam input history\n"
                "        across chunks.")
@@ -892,8 +906,8 @@ void register_kernel_bindings(pybind11::module &m)
                py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
                "GPU kernel launch (async, does not sync stream).\n\n"
                "Args:\n"
-               "    out: Array, shape (beams_per_batch, nchan, ntime), kernel dtype, on GPU\n"
-               "    in_: Array, shape (beams_per_batch, nfreq, ntime), kernel dtype, on GPU\n"
+               "    out: cupy array, shape (beams_per_batch, nchan, ntime), kernel dtype, on GPU\n"
+               "    in_: cupy array, shape (beams_per_batch, nfreq, ntime), kernel dtype, on GPU\n"
                "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
           .def_readonly("params", &GpuTreeGriddingKernel::params)
           .def_readonly("is_allocated", &GpuTreeGriddingKernel::is_allocated)

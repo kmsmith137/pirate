@@ -38,8 +38,10 @@ def difference_matrix(n, k, dtype=np.float64):
 
 def _state_from_samples(k, dtype=np.float64):
     """
-    C with x[t] = C f[t:t+k], i.e. C[j,i] = (-1)^(j-i) C(j,i): the map from k
-    consecutive samples of f to the state (f, Delta f, ..., Delta^(k-1) f).
+    Returns the map from k consecutive samples of f to the state.
+
+    The state is x[t] = (f, Delta f, ..., Delta^(k-1) f) at time t, and the returned
+    matrix C satisfies x[t] = C f[t:t+k], i.e. C[j,i] = (-1)^(j-i) binom(j,i).
     """
     from math import comb
     C = np.zeros((k, k), dtype=dtype)
@@ -52,6 +54,8 @@ def _state_from_samples(k, dtype=np.float64):
 def detrend_brute_force(d, mask, k, tau, L, eps=1e-3, mu=1e-30, dtype=np.float64,
                        return_cond=False):
     """
+    Detrends a stream by solving each output's sub-problem as an explicit dense system.
+
     d, mask: shape (S, T).  Returns (residual, mask_out, rmin), each of shape
     (S, T-L), for outputs [0, T-L).
 

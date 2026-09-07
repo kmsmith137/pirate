@@ -80,8 +80,10 @@ def window_moments(G, U, tb, ntime):
 
 def zone_live_counts(G, kv, W, ntime):
     """
-    (M, ntime, nzone) int array: for each output sample and zone, the number of
-    window offsets at which that zone holds at least one unmasked channel.
+    Counts, per output sample and zone, the window offsets that hold unmasked data.
+
+    Returns an (M, ntime, nzone) int array: for each output sample and zone, the
+    number of window offsets at which that zone holds at least one unmasked channel.
 
     This is the 2-d generalization of the 1-d dead-zone test.  A degree-n fit in
     time is singular unless the zone has data at >= n+1 DISTINCT offsets -- no

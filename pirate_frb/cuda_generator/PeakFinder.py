@@ -660,10 +660,11 @@ class PeakFinder:
 
 
     def _m_field_expr(self, v):
-        """C++ expression unpacking a pair index m_ext (the C++ expression 'v') into the
-        token's two multiplet bytes, m = (v >> K) at bit 16 and mu = (v & (2^K - 1)) at bit
-        24. The inverse of process_pf_input()'s packing, and the only other place that knows
-        m_ext is a pair (see the class docstring).
+        """C++ expression unpacking a pair index m_ext into the token's two multiplet bytes.
+
+        'v' is the C++ expression holding m_ext; the two bytes are m = (v >> K) at bit 16 and
+        mu = (v & (2^K - 1)) at bit 24. The inverse of process_pf_input()'s packing, and the
+        only other place that knows m_ext is a pair (see the class docstring).
 
         At K == 0 this is the bare (v << 16)."""
 

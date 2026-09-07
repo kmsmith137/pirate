@@ -64,8 +64,7 @@ def default_eps(dtype):
 
 class ReferenceDetrenderLps2d:
     """
-    Fits a masked B-spline in frequency times a local polynomial in time, and
-    subtracts it.
+    Fits and subtracts a masked B-spline in frequency times a local polynomial in time.
 
     Over a window of 2W+1 time samples centred on each output, the spline
     coefficients are modelled as polynomials of degree n in the offset, fitted by
@@ -154,6 +153,8 @@ class ReferenceDetrenderLps2d:
 
     def detrend_chunk(self, d_buf, mask_buf):
         """
+        Detrends one chunk of the stream.
+
         d_buf, mask_buf: (M, nfreq, ntime + 2W).  'mask_buf' is read as boolean;
         d_buf is read only where it is true, so masked samples may hold anything
         including NaN.

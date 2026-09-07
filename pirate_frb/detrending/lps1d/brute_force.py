@@ -27,6 +27,8 @@ from . import LocalPolyFit
 def detrend_brute_force(d, mask, W, n=2, eps=1e-3, mu=1e-30, dtype=np.float64,
                       subtract_offset=True, kappa=None, max_outputs_per_pass=4096):
     """
+    Detrends a stream, computing each output window's moments directly from the definition.
+
     d, mask: shape (S, T).  Returns (residual, mask_out, rmin), each of shape
     (S, T - 2W), for output samples [W, T-W).
 

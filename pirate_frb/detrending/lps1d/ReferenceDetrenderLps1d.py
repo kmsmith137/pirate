@@ -1,6 +1,8 @@
 """
-The chunked, block-scan 1-d detrender (see notes/detrending.tex,
-section "Time detrending algorithm 1: local polynomial subtraction").
+The chunked, block-scan 1-d detrender.
+
+The algorithm is specified in notes/detrending.tex, section "Time detrending
+algorithm 1: local polynomial subtraction".
 
 Geometry.  The window is 2W+1 samples and the scan blocks are B = 2W samples, so
 a window spans *exactly* two adjacent blocks for every alignment: writing
@@ -67,6 +69,8 @@ class ReferenceDetrenderLps1d:
 
     def detrend_chunk(self, d_buf, mask_buf):
         """
+        Detrends one chunk of the stream.
+
         d_buf, mask_buf: shape (S, chunk_size + 2W), where S is a spectator axis
         carrying one entry per (beam,freq) pair.  Every operation is elementwise
         along S; there is no coupling between spectator entries.
@@ -148,6 +152,8 @@ class ReferenceDetrenderLps1d:
 
     def detrend_stream(self, d, mask):
         """
+        Detrends a whole stream, by calling detrend_chunk() on successive chunks.
+
         d, mask: shape (S, T) with (T - 2W) a positive multiple of chunk_size.
         Returns (residual, mask_out, rmin) for samples [W, T-W), i.e.
         each of shape (S, T - 2W).

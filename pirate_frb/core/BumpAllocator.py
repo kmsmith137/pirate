@@ -109,8 +109,9 @@ class BumpAllocatorInjections:
 
         Returns
         -------
-        ksgpu.Array
-            Allocated array backed by this allocator's memory
+        cupy.ndarray or numpy.ndarray
+            Allocated array, backed by this allocator's memory. cupy if the
+            allocator holds GPU memory, numpy if it holds host memory.
 
         Raises
         ------

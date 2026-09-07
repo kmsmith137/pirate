@@ -107,15 +107,20 @@ from ..utils import atomic_print
 
 
 def _tree(config, itree):
-    """One tree of 'config'. Tests are the one place a throwaway tree copy is the right tool
-    -- library code should hold the plan and index plan.trees."""
+    """One tree of 'config'.
+
+    Tests are the one place a throwaway tree copy is the right tool -- library code should
+    hold the plan and index plan.trees.
+    """
     return make_plan(config).trees[int(itree)]
 
 
 def _itree(config, primary_tree_index, early_trigger_level=0):
-    """The 'itree' of one tree of 'config', named by (primary_tree_index,
-    early_trigger_level). Same throwaway-plan convention as _tree() above: library code
-    should hold the plan and call DedispersionPlan.dedispersion_tree_index() on it."""
+    """The 'itree' of one tree of 'config', named by (primary_tree_index, early_trigger_level).
+
+    Same throwaway-plan convention as _tree() above: library code should hold the plan and
+    call DedispersionPlan.dedispersion_tree_index() on it.
+    """
     return int(make_plan(config).dedispersion_tree_index(primary_tree_index,
                                                         early_trigger_level))
 
@@ -192,8 +197,9 @@ def _rng(seed=None):
 
 
 def _random_config(rng=None, **kwargs):
-    """A random DedispersionConfig for the tests here: DedispersionConfig::make_random(), with
-    this file's standard draw settings filled in.
+    """A random DedispersionConfig for the tests here.
+
+    DedispersionConfig::make_random(), with this file's standard draw settings filled in.
 
     NOT A FILTER, and deliberately so. It applies no rejection sampling and enforces no
     structural property -- it forwards to make_random() and returns whatever comes back. If a
@@ -246,9 +252,10 @@ def _random_config(rng=None, **kwargs):
 
 def _make_test_config(toplevel_tree_rank, subband_counts, num_primary_trees=1,
                       num_early_triggers=0, max_width=4, nfreq=None):
-    """A small DedispersionConfig. Every tree gets 2^R coarse DM channels per multiplet
-    (DedispersionTree.dm_downsampling, not a config field), which is what the variance map's
-    index convention assumes.
+    """A small DedispersionConfig.
+
+    Every tree gets 2^R coarse DM channels per multiplet (DedispersionTree.dm_downsampling,
+    not a config field), which is what the variance map's index convention assumes.
     """
 
     from ..pirate_pybind11 import DedispersionConfig, PrimaryTree
@@ -278,8 +285,10 @@ def _make_test_config(toplevel_tree_rank, subband_counts, num_primary_trees=1,
 
 
 def _obvious_labels(m, L):
-    """The alpha -> beta map, computed the long way round: through the FULL-RESOLUTION DM of
-    each output rather than through the two lines of arithmetic VarianceMap uses.
+    """The alpha -> beta map, computed the long way round.
+
+    Goes through the FULL-RESOLUTION DM of each output rather than through the two lines of
+    arithmetic VarianceMap uses.
 
     A row's physical DM is a function of BOTH the coarse DM index d and the multiplet m,
 
@@ -327,8 +336,10 @@ def _obvious_beta(m, L):
 
 
 def _nalpha_of(config, itree):
-    """nalpha for one tree, without building a map. Used where a caller has to size 'nzero'
-    against the drawn geometry."""
+    """nalpha for one tree, without building a map.
+
+    Used where a caller has to size 'nzero' against the drawn geometry.
+    """
 
     tree = _tree(config, itree)
     fs = tree.frequency_subbands
@@ -720,8 +731,7 @@ def test_distance():
 
 
 def test_admissibility():
-    """measure_admissibility(): the coarse/fine theorem, the sign conventions, and the
-    inflation path.
+    """measure_admissibility(): the coarse/fine theorem, the sign conventions, the inflation path.
 
     Everything below shares ONE cell -- a fine map, its coarse-graining 'ref', and a uniform
     1.5x inflation of that -- because every property here is a statement about the same three
@@ -1106,8 +1116,10 @@ def test_estimate_distance():
 
 
 def test_multimap():
-    """VarianceMultiMap: one map per PRIMARY tree, sharing one config object, with apply()
-    covering every tree."""
+    """VarianceMultiMap: one map per PRIMARY tree, sharing one config object.
+
+    apply_fine() is checked to cover every tree, not just the primary ones.
+    """
 
     rng = _rng()
     config = _random_config(rng)
@@ -1190,9 +1202,11 @@ def test_multimap():
 
 
 class _eager_ctx:
-    """Wraps an already-read object as a no-op context manager, so that the eager and
-    memmapped readers can be driven by the same test body (open_asdf() is a context manager;
-    from_asdf() is not)."""
+    """Wraps an already-read object as a no-op context manager.
+
+    Lets the eager and memmapped readers be driven by the same test body (open_asdf() is a
+    context manager; from_asdf() is not).
+    """
 
     def __init__(self, obj):
         self.obj = obj
@@ -1429,17 +1443,21 @@ def test_factored_validation(K=None):
 
 @contextlib.contextmanager
 def _open_one(path, gamma):
-    """One primary tree's map from a memmapped read. VarianceMap has no open_asdf() of its
-    own -- the scoped opener lives on VarianceMultiMap -- and these test configs have a
-    single primary tree, so going through it is the same thing."""
+    """One primary tree's map from a memmapped read.
+
+    VarianceMap has no open_asdf() of its own -- the scoped opener lives on VarianceMultiMap
+    -- and these test configs have a single primary tree, so going through it is the same
+    thing.
+    """
 
     with VarianceMultiMap.open_asdf(path) as vmm:
         yield vmm.primary_map(gamma)
 
 
 def _corrupt(path, out, fn):
-    """Copy the variance-map file at 'path' to 'out', with fn(root) applied to its
-    'variance_multimap' block first.
+    """Copy the variance-map file at 'path' to 'out', corrupting it on the way.
+
+    fn(root) is applied to the file's 'variance_multimap' block before it is written out.
 
     This is how the reader's tripwires are tested: each one guards against a file written
     by something that got a convention wrong, and the only way to produce such a file here
@@ -1794,9 +1812,10 @@ def test_asdf_detrender():
 
 
 def test_asdf_factored(K=None):
-    """The factored half of the round trip, which completes the representation matrix:
-    factored x {fine, coarse} x {admissible, uncertified} x {y_true present, absent}, through
-    both readers.
+    """The factored half of the round trip, which completes the representation matrix.
+
+    Covers factored x {fine, coarse} x {admissible, uncertified} x {y_true present, absent},
+    through both readers.
 
     Also the reader's flag-versus-arrays checks. is_factored is never BELIEVED -- a block
     that carries both array groups or neither is refused by name, because that is exactly the
@@ -2462,8 +2481,11 @@ def test_lp_rescue():
     hurt = np.sort(rng.choice(nbeta, size=nhurt, replace=False))
 
     def flaky(M, B, cost, cfg, **kw):
-        """solve_covering_lps, with a few subproblems reported as failed -- which is exactly
-        what the solver does when it cannot solve one: it returns the seed and says so."""
+        """solve_covering_lps, with a few subproblems reported as failed.
+
+        That is exactly what the solver does when it cannot solve one: it returns the seed
+        and says so.
+        """
         X, info = solve_covering_lps(M, B, cost, cfg, **kw)
         X[hurt] = kw['x_seed'][hurt]
         return X, dict(info, failed=[int(i) for i in hurt], n_failed=int(hurt.size))
@@ -2732,8 +2754,11 @@ def _decaying_map(K=8, seed=None, rate=0.5):
 
 
 def test_svd(K=None):
-    """svd() and truncate(): the dense path against numpy, the factored path against the dense
-    one, and the flags against the matrices they describe."""
+    """svd() and truncate(): the dense path, the factored path, and the flags.
+
+    The dense path is checked against numpy, the factored path against the dense one, and the
+    flags against the matrices they describe.
+    """
 
     ref, fine, rng = _basis_cell()
     # lo=3 for two separate reasons: the eps assertions compare mode K-1 against mode 0,
@@ -2816,9 +2841,12 @@ def test_svd(K=None):
     scale = float(np.abs(np.asarray(ex.dense())).max())
 
     def err_of(m):
-        """(RMS, WORST-CASE) error against the exact truncation. The second is the one that
-        matters: a basis at the textbook sampling passes an RMS test comfortably and still
-        costs 1.4x in delivered D, because D is paid on each group's worst channel."""
+        """(RMS, WORST-CASE) error against the exact truncation.
+
+        The second is the one that matters: a basis at the textbook sampling passes an RMS
+        test comfortably and still costs 1.4x in delivered D, because D is paid on each
+        group's worst channel.
+        """
         d = np.asarray(m.dense()) - np.asarray(ex.dense())
         return (float(np.linalg.norm(d)) / float(np.linalg.norm(np.asarray(ex.dense()))),
                 float(np.max(np.abs(d))) / scale)
@@ -3218,8 +3246,10 @@ def test_greedy_bookkeeping():
 
 
 def test_basis_constructors(K=None):
-    """Every module-level basis constructor, through the one thing they are all for: a Q-step
-    against it produces an admissible map."""
+    """Every module-level basis constructor, through the one thing they are all for.
+
+    A Q-step against each of them must produce an admissible map.
+    """
 
     from . import basis as vb
 
@@ -4213,6 +4243,7 @@ def _sweep_work(geom):
 
 def test_multimap_vs_sweep(device='gpu', nrandom=5, verbose=True):
     """compute_detrender_free_multi_map() against the brute-force sweep, EVERY primary tree.
+
     Needs a plan, and by default a GPU.
 
     THE ONLY NUMERICAL CHECK ON THE ANALYTIC MAP AGAINST ANYTHING OUTSIDE
@@ -4611,9 +4642,11 @@ def _make_test_detrender(config, n_phi=2, n=2, W=4, nzone=2, kint=3, rng=None):
 
 
 def _abcd_all(config, As):
-    """sweep_all_trees_dense()'s output as the (2^(r-R), M, P, nfreq) array the analytic
-    references are indexed by, keyed by itree. The sweep's own (nalpha, nfreq) layout is that
-    array with its first three axes flattened, so this is a reshape and not a transpose.
+    """sweep_all_trees_dense()'s output, reshaped to the analytic references' index order.
+
+    Returns, keyed by itree, the (2^(r-R), M, P, nfreq) array the analytic references are
+    indexed by. The sweep's own (nalpha, nfreq) layout is that array with its first three axes
+    flattened, so this is a reshape and not a transpose.
 
     A VarianceMultiMap holds only the primary trees, so a test which wants to check EVERY
     tree against a per-tree oracle sweeps raw arrays rather than going through it.
@@ -4629,10 +4662,11 @@ def _abcd_all(config, As):
 
 
 def test_sweep_phase_collapse(r=7, verbose=True):
-    """With no detrender, the 2^gamma polyphase passes of a time-downsampled tree must give
-    the same result (notes/variance_map.tex: everything upstream of the downsampler is
-    instantaneous in time). This is the sharpest available test of the polyphase logic, and of
-    the single-pass shortcut the sweep takes when there is no detrender.
+    """With no detrender, the 2^gamma polyphase passes of a time-downsampled tree must agree.
+
+    That is notes/variance_map.tex: everything upstream of the downsampler is instantaneous in
+    time. This is the sharpest available test of the polyphase logic, and of the single-pass
+    shortcut the sweep takes when there is no detrender.
 
     Agreement is not bit-exact, even though the float32 output samples themselves are:
     shifting the one-hot moves the response relative to the chunk boundaries, so the same set
@@ -4714,9 +4748,11 @@ def test_sweep_column_norms_random(verbose=True, max_attempts=500):
 
 
 def test_sweep_column_norms(config, detrender=None, nifreq=2, verbose=True):
-    """Evaluates the defining identity ``A[alpha,F] = sum_{t'} L[alpha t, F t']^2`` LITERALLY
-    -- one pass per input time t', reading the output of one fixed chunk -- and compares it to
-    what the sweep computes, which is instead a sum over output times for one input time.
+    """The sweep against a LITERAL evaluation of the defining identity for A.
+
+    The identity is ``A[alpha,F] = sum_{t'} L[alpha t, F t']^2``, and evaluating it literally
+    is one pass per input time t', reading the output of one fixed chunk; the sweep instead
+    sums over output times for one input time.
 
     This is the test of the core math: the row-norm/column-norm exchange, the polyphase sum
     over 2^gamma phases, and the ntime/t0 sizing. It is also the only test that covers the
@@ -4808,8 +4844,9 @@ def test_sweep_column_norms(config, detrender=None, nifreq=2, verbose=True):
 
 
 def test_sweep_detrender_fp32(r=8, nifreq=16, verbose=True, rng=None):
-    """Measures the GpuDetrenderLps2d's own float32 penalty, by running the numpy detrender at
-    float32 and float64 on the same one-hots.
+    """Measures the GpuDetrenderLps2d's own float32 penalty.
+
+    Runs the numpy detrender at float32 and float64 on the same one-hots.
 
     The sweep itself runs the detrender at float64 (the rest of the chain is float32, so that
     is the accurate end), but the GPU GpuDetrenderLps2d is float32-only, so this is the error budget
@@ -5005,8 +5042,9 @@ def test_sweep_gpu_vs_cpu(config, detrender=None, nbeams=1, verbose=True):
 
 def test_sweep_streaming_coarse(r=6, subband_counts=None, num_early_triggers=0,
                                 detrender=False, verbose=True):
-    """The streaming coarse-graining inside the sweep, against coarse_grain() of the dense map
-    -- at EVERY legal L, and required to be bit-identical.
+    """The streaming coarse-graining inside the sweep, against coarse_grain() of the dense map.
+
+    At EVERY legal L, and required to be bit-identical.
 
     This is the property the whole scalable path rests on and the one thing the runtime cannot
     check for itself: above test scale the dense A is never formed, so there is nothing to
@@ -5139,8 +5177,9 @@ def run_primitive_tests(once):
 
 
 def test_apply_restriction():
-    """The row map of Proposition 1, as apply() uses it: restricting a parent's FINE apply()
-    result to a child tree's rows.
+    """The row map of Proposition 1, as apply() uses it.
+
+    Restricts a parent's FINE apply() result to a child tree's rows.
 
     This is NOT a test of Proposition 1 itself -- that is test_restriction_vs_sweep(), which
     needs a sweep. Here the maps are RANDOM, so the only thing under test is the index
@@ -5623,8 +5662,9 @@ def run_once():
 
 
 def run_all():
-    """Everything else, ONCE PER '-n' ITERATION, in dependency order: the index arithmetic
-    first, since the rest is built on it.
+    """Everything else, ONCE PER '-n' ITERATION, in dependency order.
+
+    The index arithmetic runs first, since the rest is built on it.
 
     Each test here draws its own geometry, so a long run explores rather than repeating. See
     run_once() for the handful that deliberately does not.

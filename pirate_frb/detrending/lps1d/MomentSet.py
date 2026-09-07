@@ -1,6 +1,8 @@
 """
-The 'moment monoid' used by the 1-d detrender (see notes/detrending.tex,
-section "Time detrending algorithm 1: local polynomial subtraction").
+The 'moment monoid' used by the 1-d detrender.
+
+The monoid is specified in notes/detrending.tex, section "Time detrending
+algorithm 1: local polynomial subtraction".
 
 A MomentSet represents, for some set S of time samples, the quantities
 
@@ -42,9 +44,10 @@ def _binom_table(K):
 
 def pascal_shift(v, delta, binom):
     """
-    Change of origin for a moment vector.  If v_j are moments about c, then the
-    moments about c' are given by (T_delta v)_r = sum_{j<=r} C(r,j) delta^(r-j) v_j,
-    with delta = (c - c')/W.
+    Change of origin for a moment vector.
+
+    If v_j are moments about c, then the moments about c' are given by
+    (T_delta v)_r = sum_{j<=r} C(r,j) delta^(r-j) v_j, with delta = (c - c')/W.
 
     'v' has shape (batch..., K) and 'delta' has shape (batch...,).  Note
     T_delta T_delta' = T_(delta+delta') exactly, so composing many small shifts
@@ -73,9 +76,11 @@ def pascal_shift(v, delta, binom):
 
 class MomentSet:
     """
-    Batched monoid elements.  Leading axes are batch; moments are on the last
-    array axis.  Inside ReferenceDetrenderLps1d the batch shape is (S, nblocks, B), where S is
-    the spectator axis (one entry per (beam,freq) pair).
+    Batched monoid elements.
+
+    Leading axes are batch; moments are on the last array axis.  Inside
+    ReferenceDetrenderLps1d the batch shape is (S, nblocks, B), where S is the
+    spectator axis (one entry per (beam,freq) pair).
 
     Fields:
        nv:  shape (batch...)         valid-sample count, stored as 'dtype'
@@ -105,15 +110,18 @@ class MomentSet:
         return self._like(self.nv.copy(), self.c.copy(), self.S.copy(), self.U.copy())
 
     def slice_pos(self, sl):
-        """Slice the last batch (position) axis.  Note we cannot use a plain
-        ms[..., sl] since S and U carry a trailing moment axis."""
+        """Slices the last batch (position) axis.
+
+        Note we cannot use a plain ms[..., sl], since S and U carry a trailing
+        moment axis."""
         return self._like(self.nv[..., sl], self.c[..., sl],
                           self.S[..., sl, :], self.U[..., sl, :])
 
     def take_batch(self, idx):
-        """Index the *leading* batch axes with 'idx' (a tuple).  The trailing
-        moment axis of S,U is left alone, which works because numpy applies a
-        short index tuple to the leading axes."""
+        """Indexes the *leading* batch axes with 'idx' (a tuple).
+
+        The trailing moment axis of S,U is left alone, which works because numpy
+        applies a short index tuple to the leading axes."""
         return self._like(self.nv[idx], self.c[idx], self.S[idx], self.U[idx])
 
     def set_pos(self, sl, other):
@@ -128,9 +136,10 @@ class MomentSet:
     @classmethod
     def leaves(cls, u, m, md, n, W, dtype):
         """
-        One MomentSet per sample.  'u' is the buffer-relative sample index, 'm'
-        the mask (0 or 1), 'md' the *masked* data value m*d.  All are broadcast
-        to a common shape.
+        One MomentSet per sample.
+
+        'u' is the buffer-relative sample index, 'm' the mask (0 or 1), 'md' the
+        *masked* data value m*d.  All are broadcast to a common shape.
 
         A masked leaf has nv = 0 and c = u, which is finite -- see the empty-set
         rule in merge().
@@ -157,9 +166,10 @@ class MomentSet:
     @classmethod
     def direct(cls, u, m, md, n, W, dtype, axis=-1):
         """
-        Compute the moments of a whole set directly from the definition, by
-        summing over 'axis'.  Used by reference.py and by the tests that merge()
-        is checked against.
+        Computes the moments of a whole set directly from the definition.
+
+        The sum is taken over 'axis'.  Used by reference.py and by the tests that
+        merge() is checked against.
         """
         u = np.asarray(u, dtype=dtype)
         m = np.asarray(m, dtype=dtype)
@@ -186,9 +196,11 @@ class MomentSet:
 
 def merge(a, b):
     """
-    Disjoint-union merge, a and b broadcastable.  'a' should be the earlier
-    (lower-index) range and 'b' the later one; the result is mathematically
-    symmetric, but keeping a consistent order keeps the rounding reproducible.
+    Disjoint-union merge of two broadcastable MomentSets.
+
+    'a' should be the earlier (lower-index) range and 'b' the later one; the result
+    is mathematically symmetric, but keeping a consistent order keeps the rounding
+    reproducible.
 
     The centroid update is written as c + f*Delta*W rather than
     (nv*c + nv'*c')/N to avoid forming the large product (Chan's parallel-mean

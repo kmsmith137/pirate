@@ -101,8 +101,10 @@ def row_dict(vmap, D, *, name=None, adm=None, extra=None, apply_cost=True):
 
 def frontier(ref, algorithm, ranks, *, name=None, measure=False, inflate=False, extra=None,
              **kwargs):
-    """The rank-versus-distance frontier: call ``algorithm(ref, K)`` for each K and report the
-    map it returns. Returns a list of records, one per K.
+    """The rank-versus-distance frontier: one record per rank in 'ranks'.
+
+    Calls ``algorithm(ref, K)`` for each K and reports the map it returns, as a list of
+    records.
 
     'algorithm' takes the reference map and a rank and returns a VarianceMap -- e.g.
     ``lambda ref, K: basis.svd_init(ref, K)``. An algorithm that naturally produces every rank
@@ -191,8 +193,11 @@ def format_row(r):
 
 
 def save_json(rows, path):
-    """Write records to json. Infinities become the strings 'inf' / '-inf', which is what makes
-    the file loadable by anything rather than only by us."""
+    """Write records to json.
+
+    Infinities become the strings 'inf' / '-inf', which is what makes the file loadable by
+    anything rather than only by us.
+    """
 
     def clean(v):
         v = _plain(v)

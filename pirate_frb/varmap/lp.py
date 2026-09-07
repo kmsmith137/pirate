@@ -471,9 +471,9 @@ class LpConfig:
 
     @classmethod
     def for_wstep(cls, **overrides):
-        """The W-step's settings, which are genuinely different settings and not the Q-step's
-        with a flag: clip_rel = 0.0, rescue = None, and the repair triple
-        (False, False, 'cols').
+        """The W-step's settings: clip_rel = 0.0, rescue = None, repair (False, False, 'cols').
+
+        These are genuinely different settings, not the Q-step's with a flag.
 
         The last is the transcription of a four-way choose-one knob whose shipped value is
         'cols'; the other three values are 'rows' -> (False, False, 'rows'), 'additive' ->
@@ -606,8 +606,9 @@ def _cfg(cfg):
 
 
 def blocking_is_exact(nfreq):
-    """True iff a row-blocked pass over the (nbeta, nfreq) product is bit-identical to the
-    unblocked one here, which holds iff nfreq is a multiple of 8.
+    """True iff a row-blocked pass over the product is bit-identical to the unblocked one.
+
+    For the (nbeta, nfreq) products computed here, that holds iff nfreq is a multiple of 8.
 
     Report it rather than assuming it: a bit-identity harness needs to know which of its
     comparisons are exact. Every geometry in the existing map library qualifies (400, 1600,
@@ -637,8 +638,11 @@ def _block_rows(nrow, ncol, cfg, arrays=1.5):
 
 
 def _blocks(nrow, block, min_rows):
-    """Row blocks of 'block' rows, EXCEPT that a ragged tail shorter than min_rows is merged
-    into the block before it (so the last block may be up to block + min_rows - 1)."""
+    """Row blocks of 'block' rows, with a short ragged tail merged into the block before it.
+
+    A tail shorter than 'min_rows' is what gets merged, so the last block may be up to
+    block + min_rows - 1 rows.
+    """
     nrow, block = int(nrow), int(block)
     if nrow <= 0:
         return
@@ -725,8 +729,10 @@ def _ratios_blocked(Abar, Q, W, mid, cfg, *, want_rows=True, want_cols=True, blo
 
 
 def violation_stats(Q, W, mid, Abar, cfg=None, *, block_rows=None):
-    """How badly ``Q mid W^T`` fails to dominate Abar: a dict with the count and fraction of
-    violated positive-rhs constraints, the number of rows involved, and the worst ratio.
+    """How badly ``Q mid W^T`` fails to dominate Abar.
+
+    Returns a dict with the count and fraction of violated positive-rhs constraints, the
+    number of rows involved, and the worst ratio.
 
     This is the answer to "is the point the solver returned actually admissible", which its
     reported status is not evidence of. The steps get these figures for free from the first
@@ -839,8 +845,9 @@ def _backoff(Abar, Q, W, mid, cfg, axis, X_in, cum, m_used, info):
 
 
 def _repair(Abar, Q, W, mid, cfg, axis, rows=None):
-    """Scale each row of Q (axis=0) or of W (axis=1) up to admissibility, ITERATING with a
-    growing margin until the recomputed product really does dominate Abar. In place.
+    """Scale each row of Q (axis=0) or of W (axis=1) up to admissibility, in place.
+
+    ITERATES with a growing margin until the recomputed product really does dominate Abar.
 
     Returns a stats dict. Raises if the iteration cap is exhausted, which means the signed
     cancellation in the product has swamped the margin rather than that the map is hopeless --
@@ -907,8 +914,11 @@ def _repair(Abar, Q, W, mid, cfg, axis, rows=None):
 
 
 def _backoff_subset(Abar, Q, W, mid, cfg, axis, X_in, cum, m_used, sub, info):
-    """_backoff() when only 'sub' rows of the factor were scaled: 'cum' is indexed by position
-    within 'sub' rather than by row, so the bisection is run on the sub-array and mapped back."""
+    """_backoff() when only the 'sub' rows of the factor were scaled.
+
+    'cum' is indexed by position within 'sub' rather than by row, so the bisection is run on
+    the sub-array and mapped back.
+    """
     X = Q if (axis == 0) else W
     sel = np.flatnonzero(cum > cfg.backoff_trigger)
     sel = sel[cum[sel] / (1.0 + m_used) >= 1.0]
@@ -945,8 +955,9 @@ def _backoff_subset(Abar, Q, W, mid, cfg, axis, X_in, cum, m_used, sub, info):
 
 
 def repair_rows(Q, W, mid, Abar, cfg=None, *, rows=None):
-    """Scale the rows of Q up until ``Q mid W^T >= Abar``, making the map admissible exactly
-    and locally. Returns (Q_new, stats); Q is not modified.
+    """Scale the rows of Q up until ``Q mid W^T >= Abar``.
+
+    Makes the map admissible exactly and locally. Returns (Q_new, stats); Q is not modified.
 
     Scaling one row of Q touches only that row of the product, so this cannot break anything
     else, and 'rows' restricts it to a subset for the same reason.
@@ -962,8 +973,9 @@ def repair_rows(Q, W, mid, Abar, cfg=None, *, rows=None):
 
 
 def repair_cols(Q, W, mid, Abar, cfg=None, *, cols=None):
-    """The column counterpart of repair_rows(): scale the rows of W -- i.e. the CHANNELS of
-    the product -- instead of the rows of Q. Returns (W_new, stats); W is not modified.
+    """The column counterpart of repair_rows(): scale the rows of W, not the rows of Q.
+
+    The rows of W are the CHANNELS of the product. Returns (W_new, stats); W is not modified.
 
     Same function, other axis, but do not assume a result measured on one axis transfers to
     the other: the row form maxes over nfreq and the column form over nbeta, and those differ
@@ -999,9 +1011,11 @@ def _require_identity_mid(mid, what):
 
 
 def repair_additive(Q, W, mid, Abar, cfg=None, *, rows=None):
-    """The additive lift, per GROUP: pick the cheapest nonnegative column of W that reaches
-    every deficit in that group and add the smallest multiple that makes the row dominate.
-    Returns (Q_new, stats); Q is not modified.
+    """The additive lift, per GROUP: cover each group's deficits with one column of W.
+
+    Picks the cheapest nonnegative column of W that reaches every deficit in that group and
+    adds the smallest multiple that makes the row dominate. Returns (Q_new, stats); Q is not
+    modified.
 
     Groups that no nonnegative column can reach fall back to a multiplicative row scale, so
     this is a COMPLETE repair on its own rather than a partial one -- which is why
@@ -1114,9 +1128,11 @@ def repair_additive(Q, W, mid, Abar, cfg=None, *, rows=None):
 
 
 def fix_nonneg(Q, W, mid, Abar, cfg=None, *, rows=None, max_iter=8):
-    """The additive lift, per ELEMENT: raise ``Q mid W^T`` to ``max(Abar, its own rounding
-    noise)`` using the cheapest nonnegative column of W in each CHANNEL. Returns (Q_new,
-    stats); Q is not modified.
+    """The additive lift, per ELEMENT: raise each element of ``Q mid W^T`` to a safe floor.
+
+    The floor is ``max(Abar, the element's own rounding noise)``, and it is reached with the
+    cheapest nonnegative column of W in each CHANNEL. Returns (Q_new, stats); Q is not
+    modified.
 
     This is the additive stage of the Q direction, and it is a different job from
     repair_additive(): the target is not Abar but max(Abar, noise), which is what makes it the
@@ -1420,9 +1436,11 @@ _CUTS_M_CACHE = {}
 
 
 def _cuts_seed(Mk, beff, sk, n_init):
-    """Initial working set: the rows that DEMAND the most relative to what any single column
-    can supply (these are the rows a covering LP binds on), plus, for each column, the rows
-    that column serves best."""
+    """Initial working set of rows for the cutting-plane loop.
+
+    The rows that DEMAND the most relative to what any single column can supply (these are the
+    rows a covering LP binds on), plus, for each column, the rows that column serves best.
+    """
     nk, K = Mk.shape
     n_init = int(min(nk, max(n_init, 8)))
     cap = np.abs(Mk).max(axis=1)
@@ -1740,8 +1758,10 @@ POOL_MIN_SECONDS = 2.0
 
 
 def _map_chunks(fn, n, shared, workers, cfg, chunk=None, progress=False):
-    """Run fn over [0, n) in chunks, in a fork pool, falling back to serial execution in the
-    parent if the pool cannot be created or stops producing results.
+    """Run fn over [0, n) in chunks, in a fork pool.
+
+    Falls back to serial execution in the parent if the pool cannot be created or stops
+    producing results.
 
     THE POOL IS NOT ALWAYS BUILT. The crossover between "fork 32 workers" and "just solve
     them here" depends on the LP size, the solver and the machine, so it is measured rather
@@ -1948,8 +1968,9 @@ def solve_covering_lps(M, B, cost, cfg, *, x_seed=None, live=None, lower=None,
 
 
 def apply_repair(Q, W, mid, Abar, cfg=None, *, axis='rows'):
-    """Run the whole three-stage repair, returning ``(Q, W, info)``. Neither factor is
-    modified in place.
+    """Run the whole three-stage repair, returning ``(Q, W, info)``.
+
+    Neither factor is modified in place.
 
     This is the pipeline both steps end with, exposed because re-applying a repair to a
     stored solution is a first-class operation: the repair is worth up to 2.5x in D by itself
@@ -2051,8 +2072,10 @@ def _apply_repair(Abar, Q, W, mid, cfg, axis, info):
 
 
 def _rescue_q_failed(Abar, W, Q, failed, cfg, workers, info):
-    """Re-solve the failed groups on PREFIXES of W, keeping a row only if its objective
-    strictly improves and the result is admissible. In place on Q; returns the number improved.
+    """Re-solve the failed groups on PREFIXES of W, in place on Q.
+
+    Keeps a row only if its objective strictly improves and the result is admissible. Returns
+    the number improved.
 
     Legitimate rather than a new algorithm: any solution of the restricted LP is a feasible
     point of the full one (pad with zeros), so it is admissible by the same argument; it uses
@@ -2265,8 +2288,10 @@ def q_step(Abar, W, cfg=None, *, Q0=None, q_lower=None, workers=None, progress=F
 
 
 def _majorizer(Q, s, y_true, labels, nbeta):
-    """The W-step objective ``g_c = sum_alpha w_alpha Q[labels[alpha],c]``, with
-    ``w_alpha = f'(y_approx/y_true)/y_true`` and w = 0 on the rows D does not score.
+    """The W-step objective ``g_c = sum_alpha w_alpha Q[labels[alpha],c]``.
+
+    The weights are ``w_alpha = f'(y_approx/y_true)/y_true``, with w = 0 on the rows D does
+    not score.
 
     THE FLOOR IS NOT OPTIONAL. An output with genuinely zero variance -- a GpuDetrenderLps2d with
     time half-width 0 annihilates the DM = 0 output exactly -- has y_true ~ 1e-14 rather than
@@ -2465,8 +2490,9 @@ def w_step(Abar, Q, y_true, labels, W0, cfg=None, *, pinned=None, workers=None,
 
 
 def covering_lp_data(vmap, ref, ibeta, cfg=None):
-    """(cost, M, b) for one group's Q-step LP -- the raw arrays, for inspection, for a
-    hand-written solver, or for a unit test.
+    """(cost, M, b) for one group's Q-step LP, as raw arrays.
+
+    For inspection, for a hand-written solver, or for a unit test.
 
     'b' may be READ-ONLY: with no clipping it is a view into the reference map. Copy it before
     modifying it.
@@ -2482,8 +2508,9 @@ def covering_lp_data(vmap, ref, ibeta, cfg=None):
 
 
 def majorizer_weights(vmap, ref):
-    """The length-K objective vector g of the W-step, ``g_c = sum_alpha w_alpha Q[alpha,c]``
-    with ``w_alpha = f'(y_approx/y_true) / y_true`` at the current iterate.
+    """The length-K objective vector g of the W-step, ``g_c = sum_alpha w_alpha Q[alpha,c]``.
+
+    The weights are ``w_alpha = f'(y_approx/y_true) / y_true`` at the current iterate.
 
     Note the sum is over FINE alpha with Q row-duplicated, so it is accumulated per group and
     then contracted with Q -- ``sum_beta (sum over alpha in beta of w_alpha) Q[beta,c]``. That

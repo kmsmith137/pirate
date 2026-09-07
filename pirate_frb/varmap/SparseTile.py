@@ -529,8 +529,10 @@ class SparseTile:
 
     @staticmethod
     def test_random_scale():
-        """Test the scale member: unpack multiplies data by scale, and iterate_aligned folds
-        it into its output (scale_out == 1) rather than dropping it.
+        """Test that the scale member survives unpack() and iterate_aligned().
+
+        unpack multiplies data by scale, and iterate_aligned folds it into its output
+        (scale_out == 1) rather than dropping it.
 
         The third property scale has -- that a scale-s singleton contributes s^2 to a
         VARIANCE, since variance is quadratic in the data -- used to be checked here against

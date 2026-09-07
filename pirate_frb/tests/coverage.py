@@ -91,8 +91,9 @@ class _Report:
         atomic_print('')
 
     def rate(self, label, count, n, band, consumer):
-        """A probability, printed as a percentage with its (count/n). 'band' is (lo, hi) in
-        percent; a rate outside it is flagged."""
+        """A probability, printed as a percentage with its (count/n).
+
+        'band' is (lo, hi) in percent; a rate outside it is flagged."""
 
         pct = (100.0 * count / n) if (n > 0) else float('nan')
         lo, hi = band
@@ -100,9 +101,11 @@ class _Report:
         self._emit('rate', label, f'{pct:5.1f}% ({count}/{n})', f'[{lo:g},{hi:g}]', ok, consumer)
 
     def dist(self, label, values, band, consumer, fmt='{:.3g}'):
-        """Percentiles of a drawn quantity. 'band' is (stat, lo, hi) where 'stat' is one
-        of 'p10', 'p50', 'p90', 'max', 'min' -- the one percentile worth a tripwire. Reporting the whole
-        spread but banding one number keeps the row readable."""
+        """Percentiles of a drawn quantity.
+
+        'band' is (stat, lo, hi) where 'stat' is one of 'p10', 'p50', 'p90', 'max', 'min' --
+        the one percentile worth a tripwire. Reporting the whole spread but banding one
+        number keeps the row readable."""
 
         v = np.asarray(list(values), dtype=float)
         if v.size == 0:
@@ -124,8 +127,10 @@ class _Report:
                    f'[{lo:g},{hi:g}]', lo <= value <= hi, consumer)
 
     def note(self, text):
-        """A histogram or similar, printed for context. Carries no band and is not counted:
-        it is here to EXPLAIN a row above it when that row moves."""
+        """A histogram or similar, printed for context.
+
+        Carries no band and is not counted: it is here to EXPLAIN a row above it when that
+        row moves."""
 
         atomic_print(f'          {text}')
 
@@ -171,8 +176,10 @@ def _hist(values, top=None):
 
 
 def _plan(config):
-    """A "minimal" DedispersionPlan: every section here needs the trees and nothing else, and
-    a minimal plan needs no GPU."""
+    """A "minimal" DedispersionPlan.
+
+    Every section here needs the trees and nothing else, and a minimal plan needs no GPU.
+    """
 
     from ..pirate_pybind11 import DedispersionPlan
     return DedispersionPlan(config, mega_ringbuf=False, gpu_kernels=False)
@@ -250,10 +257,11 @@ def _draw_config_rows(rep, configs, consumer, bands=None):
     mib, sbc = [], set()
 
     def _steps(pts, attr):
-        """True if the per-primary-tree chain of 'attr' is not flat. validate() constrains each
-        of the four chains to a single step size, so "does it vary" is the same question as
-        "does this chain ever take its step" -- and a flat chain is the degenerate case, the one
-        a consumer of per-tree variation sees nothing from."""
+        """True if the per-primary-tree chain of 'attr' is not flat.
+
+        validate() constrains each of the four chains to a single step size, so "does it vary"
+        is the same question as "does this chain ever take its step" -- and a flat chain is the
+        degenerate case, the one a consumer of per-tree variation sees nothing from."""
         return len(set(int(getattr(pt, attr)) for pt in pts)) > 1
 
     for c in configs:
@@ -473,8 +481,11 @@ def _sec_registries(rep):
 
 
 def _sec_varmap_config(rep, ndraw, nstraddle):
-    """_random_config() is make_random() plus a SIZE FLOOR and a drawn gpu_valid, and both
-    move the population enough that it needs its own section rather than a row under A."""
+    """Coverage rows for varmap.tests._random_config(), the varmap suite's config wrapper.
+
+    _random_config() is make_random() plus a SIZE FLOOR and a drawn gpu_valid, and both move
+    the population enough that it needs its own section rather than a row under A.
+    """
 
     from ..varmap.tests import _random_config, _rng
 
@@ -528,8 +539,10 @@ def _sec_varmap_config(rep, ndraw, nstraddle):
 
 
 def _straddle_rate(configs):
-    """(n_with_a_straddle, n_examined). Its own function because it is the one statistic in
-    section C that costs real work."""
+    """Returns (n_with_a_straddle, n_examined).
+
+    Its own function because it is the one statistic in section C that costs real work.
+    """
 
     import contextlib
     import io
@@ -549,9 +562,12 @@ def _straddle_rate(configs):
 
 
 def _sec_lp_cell(rep, ndraw):
-    """_draw_lp_cell_config() is a floor AND a ceiling, both on SIZE, and LP_CELL_BUDGET is
-    the cost knob for the whole LP and basis tier. Nothing else reports whether it still does
-    what its comment claims."""
+    """Coverage rows for varmap.tests._draw_lp_cell_config(), the LP/basis cell draw.
+
+    _draw_lp_cell_config() is a floor AND a ceiling, both on SIZE, and LP_CELL_BUDGET is the
+    cost knob for the whole LP and basis tier. Nothing else reports whether it still does what
+    its comment claims.
+    """
 
     from ..varmap.tests import LP_CELL_BUDGET, _draw_lp_cell_config, _rng, _tree
 

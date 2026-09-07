@@ -44,8 +44,9 @@ import numpy as np
 
 def d1_banded(kv, dtype=np.float64):
     """
-    The per-zone first-difference penalty, in the banded layout of reduce.py:
-    shape (N_phi, 2), with R[j,0] = D_{jj} and R[j,1] = D_{j,j+1}.
+    The per-zone first-difference penalty, in the banded layout of reduce.py.
+
+    Shape is (N_phi, 2), with R[j,0] = D_{jj} and R[j,1] = D_{j,j+1}.
 
     R[N_phi-1, 1] is zero, as is R[j,1] for any j at a zone boundary.
     """

@@ -137,8 +137,9 @@ def random_knots(rng, n_phi=2, nfreq=None, kind=None):
 
 def zoned_knots(n_phi, nfreq, nzone, kint):
     """
-    A DETERMINISTIC multi-zone knot vector: 'nzone' equal zones, each carrying
-    'kint' equally spaced simple interior knots.
+    A DETERMINISTIC multi-zone knot vector.
+
+    'nzone' equal zones, each carrying 'kint' equally spaced simple interior knots.
 
     random_knots() is the right tool for coverage and the wrong one for a pinned
     test: the margin at a geometry we have committed to should be a number that
@@ -255,8 +256,10 @@ def _interval_bounds(kv):
 
 def _run_in_interval(kv, rng, q=None, u=None, m=None):
     """
-    One contiguous unmasked run inside knot interval q, parameterized by fractional
-    offset u and length m rather than by (start, stop).
+    One contiguous unmasked run inside knot interval q.
+
+    The run is parameterized by fractional offset u and length m rather than by
+    (start, stop).
 
     That parameterization is the point: the measured worst masks sit at a specific
     fractional position within an interval, with length a fixed fraction of the
@@ -369,8 +372,10 @@ def random_mask_1d(kv, rng, eta, kind=None):
 
 def random_mask(shape, kv, rng, eta, kind=None):
     """
-    (M, nfreq, ntime) boolean mask; each (beam, time) column drawn independently
-    from random_mask_1d(), so one array covers many families at once.
+    An (M, nfreq, ntime) boolean mask.
+
+    Each (beam, time) column is drawn independently from random_mask_1d(), so one
+    array covers many families at once.
     """
     M_ax, nfreq, ntime = shape
     if nfreq != kv.nfreq:
@@ -442,8 +447,10 @@ STRIPE_PROB = 0.05
 
 def _powerlaw_extent(rng, T):
     """
-    Scale-free stamp length: with |u| uniform on (T^(-1/3), 1) and
-    n = floor(1/|u|^3), P(n > x) = (x^(-1/3) - T^(-1/3)) / (1 - T^(-1/3)).
+    Scale-free stamp length, power-law distributed and clamped to [1, T].
+
+    With |u| uniform on (T^(-1/3), 1) and n = floor(1/|u|^3),
+    P(n > x) = (x^(-1/3) - T^(-1/3)) / (1 - T^(-1/3)).
 
     The point of the clamp is that the distribution stays scale-free: the median
     stamp is 4-6 samples at every T while the mean grows as 9.5, 23, 86 at
@@ -475,10 +482,11 @@ def _knot_extent(rng, kv):
 
 def _perturb_rectangles(m, kv, rng):
     """
-    Stamp N random rectangles over the base mask, each set entirely masked or
-    entirely valid, applied in sequence so later ones overwrite earlier ones.
-    That produces nested structure -- an island of valid samples inside a dead
-    region -- and makes the result non-separable.
+    Stamps N random rectangles over the base mask, each fully masked or fully valid.
+
+    Stamps are applied in sequence, so later ones overwrite earlier ones.  That
+    produces nested structure -- an island of valid samples inside a dead region --
+    and makes the result non-separable.
 
         N = uniform_int(0, 20),  p = uniform(0,1) drawn ONCE per spectator
 
@@ -541,9 +549,11 @@ def _b_frozen(kv, rng, eta, nt, n, W):
 
 def _b_separable(kv, rng, eta, nt, n, W):
     """
-    m[f,t] = m_f[f] & m_t[t], the frequency half from this package's zoo and the
-    TIME half from detrending.lps1d's zoo -- which already knows about scan-block
-    alignment, long gaps, one-sided windows and narrow off-centre clusters.
+    A separable mask, m[f,t] = m_f[f] & m_t[t].
+
+    The frequency half comes from this package's zoo and the TIME half from
+    detrending.time_masks -- which already knows about scan-block alignment, long
+    gaps, one-sided windows and narrow off-centre clusters.
 
     NOT the same as window-constant, and the difference matters.  Here
     G[t] = m_t[t] * G_f, so the DATA block is G_f kron T_w with
@@ -598,8 +608,10 @@ def _b_widening(kv, rng, eta, nt, n, W):
 
 def _b_narrowband(kv, rng, eta, nt, n, W):
     """
-    A few channels dead for a run of times straddling the window length: does the
-    window see anything at all, and does it see the same thing at every offset.
+    A few channels dead for a run of times straddling the window length.
+
+    This asks whether the window sees anything at all, and whether it sees the same
+    thing at every offset.
     """
     nf = kv.nfreq
     m = np.ones((nf, nt), dtype=bool)
@@ -642,8 +654,10 @@ def _b_n_live(kv, rng, eta, nt, n, W):
 
 
 def _b_survivor_cluster(kv, rng, eta, nt, n, W):
-    """A wide masked band with c ADJACENT surviving channels, c swept across the
-    rank boundary c = n_phi+1 where the restricted Gram stops gaining rank."""
+    """A wide masked band with c ADJACENT surviving channels.
+
+    c is swept across the rank boundary c = n_phi+1, where the restricted Gram
+    stops gaining rank."""
     nf = kv.nfreq
     m = np.ones((nf, nt), dtype=bool)
     lo = int(rng.integers(0, max(1, nf//2)))
@@ -657,8 +671,10 @@ def _b_survivor_cluster(kv, rng, eta, nt, n, W):
 
 
 def _b_band_edge(kv, rng, eta, nt, n, W):
-    """Rolloff at both ends, where the clamped edge basis functions have reduced
-    support and therefore see the least data."""
+    """Rolloff at both ends of the band.
+
+    The band edges are where the clamped edge basis functions have reduced support
+    and therefore see the least data."""
     nf = kv.nfreq
     m = np.ones((nf, nt), dtype=bool)
     m[:int(rng.integers(0, max(1, nf//4)))] = False
@@ -691,8 +707,9 @@ def _b_all_masked(kv, rng, eta, nt, n, W):
 
 def adversarial_mask_2d(kv, rng, eta, n, W, nt, constrained=True, niter=20):
     """
-    The exact worst-case construction, extended from one time sample to the whole
-    window.  Returns (nfreq, nt) bool.
+    The exact worst-case construction, extended from one time sample to the whole window.
+
+    Returns (nfreq, nt) bool.
 
     Writing b(f,s) = sum_jq alpha_jq phi_j(f) p_q(s), the equilibrated Rayleigh
     quotient of the assembled 2-d matrix is
@@ -863,9 +880,10 @@ def random_mask_2d(shape, kv, rng, eta, n=0, W=0, time_kind=None, perturb=True):
 
 def mask_distribution(kv, rng, eta, n=0, W=0, ntime=9, ndraw=400):
     """
-    Measure what random_mask_2d actually EMITS, as opposed to what the weights
-    above ask for.  Returns a dict; see the module docstring for the numbers this
-    produced and why they, rather than the weights, are the specification.
+    Measures what random_mask_2d() actually EMITS, not what the weights above ask for.
+
+    Returns a dict; see the module docstring for the numbers this produced and why
+    they, rather than the weights, are the specification.
     """
     sep = frac = fullvalid = fullmask = 0
     ncols = []

@@ -1,6 +1,7 @@
 """
-Pure-numpy fixed-lag ("seam-free") Kalman detrender: a masked 1-d detrender whose
-committed baseline at time t is E[f[t] | d[0..t+L]], so every output has its own
+Pure-numpy fixed-lag ("seam-free") Kalman detrender for masked 1-d data.
+
+The committed baseline at time t is E[f[t] | d[0..t+L]], so every output has its own
 right endpoint and nothing depends on where the chunk boundaries fall.
 
 The algorithm is specified in notes/detrending.tex, section "Time detrending

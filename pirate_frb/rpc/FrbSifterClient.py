@@ -30,7 +30,7 @@ class FrbSifterEvents:
     - ``widths_ms`` (float64) -- intrinsic pulse width in milliseconds
     - ``subband_freqs_lo_MHz`` (float64) -- low edge of the event's frequency subband (MHz)
     - ``subband_freqs_hi_MHz`` (float64) -- high edge of the event's frequency subband (MHz)
-    - ``tree_index`` (int32)
+    - ``tree_index`` (int32) -- dedispersion-tree index of each event
 
     Other attributes:
 

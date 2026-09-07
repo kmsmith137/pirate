@@ -25,8 +25,10 @@ from .solve import zone_slices
 def detrend_brute_force(d_buf, mask_buf, kv, n=0, W=0, eta=3e-3, eps=1e-7,
                       dtype=np.float64, orthogonal_time=True):
     """
-    Signature and return values match ReferenceDetrenderLps2d.detrend_chunk(); see that
-    docstring.  Everything is computed in 'dtype'.
+    Signature and return values match ReferenceDetrenderLps2d.detrend_chunk().
+
+    See that docstring for the arguments and outputs.  Everything here is computed
+    in 'dtype'.
     """
     dtype = np.dtype(dtype)
     d_buf = np.asarray(d_buf)

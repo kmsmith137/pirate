@@ -1,6 +1,7 @@
 """
-Pure-numpy 1-d detrender: a masked, adaptively centered moving local polynomial
-fit, evaluated by a van Herk block decomposition over a moment monoid.
+Pure-numpy 1-d detrender: a masked, adaptively centered moving local polynomial fit.
+
+The fit is evaluated by a van Herk block decomposition over a moment monoid.
 
 The algorithm is specified in notes/detrending.tex, section "Time
 detrending algorithm 1: local polynomial subtraction", which also records the

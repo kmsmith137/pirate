@@ -383,8 +383,9 @@ def test_solve(rng, n_phi=None, verbose=True):
 # ---------------------------------------------------------------- T7, T8
 
 def _assert_not_removed(rng, n_phi, dtype, n=0, W=0, nfreq_lo=512, nfreq_hi=2048):
-    """The NEGATIVE CONTROL for the exactness tests: a signal outside the model
-    must SURVIVE.  Returns the fraction of it that did, for reporting.
+    """The NEGATIVE CONTROL for the exactness tests: a signal outside the model must SURVIVE.
+
+    Returns the fraction of it that did, for reporting.
 
     Every exactness assertion in this file is an upper bound on |r|, and a
     detrender that returned zeros would satisfy all of them.  This is the other
@@ -483,6 +484,8 @@ def test_flat_baseline_exact(rng, n_phi=None, verbose=True):
 
 def test_shrinkage_bias_bounded(rng, n_phi=None, verbose=True):
     """
+    Checks that the regulator's shrinkage bias stays bounded by a small multiple of eta.
+
     For a baseline exactly in the spline space, the leftover residual is bounded
     by a small multiple of eta times the baseline amplitude.
 
@@ -764,6 +767,8 @@ def test_zone_expansion(rng, n_phi=None, verbose=True):
 
 def test_dtype_agreement(rng, n_phi=None, verbose=True):
     """
+    Compares float32 against float64, each run at its own shipped eps.
+
     float32 at (eta, eps) = (ETA_DEFAULT, EPS_FLOAT32) = (1e-3, 3e-5) against
     float64 at (ETA_DEFAULT, EPS_FLOAT64) = (1e-3, 1e-7).
 
@@ -908,8 +913,9 @@ def test_dtype_agreement(rng, n_phi=None, verbose=True):
 # ================================================================ 2-d (time) tests
 
 def test_time_basis(rng, verbose=True):
-    """Orthogonality, parity, and the evaluation vector -- everything downstream
-    of timebasis.py assumes all three."""
+    """Orthogonality, parity, and the evaluation vector of the time basis.
+
+    Everything downstream of timebasis.py assumes all three."""
     for n in (0, 1, 2):
         for W in range(max(1, (n+1+1)//2), 9):
             if 2*W+1 < n+1:
@@ -939,8 +945,9 @@ def test_time_basis(rng, verbose=True):
 
 def test_bandwidth(rng, n_phi=None, verbose=True):
     """
-    The assembled matrix is banded only in coefficient-major order, and the
-    half-bandwidth is max(n_phi,1)(n+1)+n -- the max() because the regulator has
+    The assembled matrix is banded only in coefficient-major order.
+
+    The half-bandwidth is max(n_phi,1)(n+1)+n -- the max() because the regulator has
     half-bandwidth 1 in j regardless of n_phi, so at n_phi = 0 it is the WIDER of
     the two contributions.  Getting that wrong writes out of bounds rather than
     producing a wrong answer, but only at n_phi = 0.
@@ -971,10 +978,11 @@ def test_bandwidth(rng, n_phi=None, verbose=True):
 
 def test_2d_reference_agreement(rng, n_phi=None, verbose=True):
     """
-    The detrender against detrend_brute_force(), over drawn (n, W) -- including
-    (n, W) = (0, 0), i.e. the pure 1-d detrender, so this is the only place either
-    is checked against the reference implementation.  _draw_nW() gives W = 0 weight
-    of its own for exactly that reason.
+    The detrender against detrend_brute_force(), over drawn (n, W).
+
+    The draw includes (n, W) = (0, 0), i.e. the pure 1-d detrender, so this is the
+    only place either is checked against the reference implementation.  _draw_nW()
+    gives W = 0 weight of its own for exactly that reason.
 
     'eps' is DRAWN from the two shipped values rather than pinned at EPS_FLOAT64.
     Both runs are float64, so eps here is not a precision setting: it is the
@@ -1007,8 +1015,9 @@ def test_2d_reference_agreement(rng, n_phi=None, verbose=True):
 
 def test_2d_flat_baseline_exact(rng, n_phi=None, verbose=True):
     """
-    The 2-d generalization of test_flat_baseline_exact, and strictly stronger:
-    a baseline constant in frequency within a zone and an arbitrary polynomial of
+    The 2-d generalization of test_flat_baseline_exact, and strictly stronger.
+
+    A baseline constant in frequency within a zone and an arbitrary polynomial of
     degree <= n in TIME is removed to roundoff, at any eta.  Both halves matter --
     the frequency half is D_1's null space, the time half is that the model can
     represent any degree-n polynomial exactly.
@@ -1049,9 +1058,10 @@ def test_2d_flat_baseline_exact(rng, n_phi=None, verbose=True):
 
 def test_n1_degeneracy(rng, n_phi=None, verbose=True):
     """
-    n=1 is EXACTLY n=0 when the mask is window-constant, and differs when it is
-    not.  Both halves are asserted: the first pins the odd moments vanishing
-    exactly, the second is the entire reason n=1 is implemented at all.
+    n=1 is EXACTLY n=0 when the mask is window-constant, and differs when it is not.
+
+    Both halves are asserted: the first pins the odd moments vanishing exactly, the
+    second is the entire reason n=1 is implemented at all.
     """
     n_phi = msk.draw_n_phi(rng) if n_phi is None else n_phi
     same, diff = 0.0, 0.0
@@ -1085,9 +1095,10 @@ def test_n1_degeneracy(rng, n_phi=None, verbose=True):
 
 def test_time_rank_deficiency(rng, n_phi=None, verbose=True):
     """
-    A zone needs data at >= n+1 DISTINCT window offsets.  Below that the assembled
-    matrix is exactly singular no matter how many channels survive at the offsets
-    that do carry data, and the zone must be flagged.
+    A zone needs data at >= n+1 DISTINCT window offsets.
+
+    Below that the assembled matrix is exactly singular no matter how many channels
+    survive at the offsets that do carry data, and the zone must be flagged.
     """
     n_phi = msk.draw_n_phi(rng) if n_phi is None else n_phi
     for _ in range(8):
@@ -1114,6 +1125,7 @@ def test_time_rank_deficiency(rng, n_phi=None, verbose=True):
 def test_2d_chunk_invariance(rng, n_phi=None, verbose=True):
     """
     Bit-identical across time chunking, given the caller supplies the halo.
+
     The stencil sums the same 2W+1 buffer samples in the same order for every
     output regardless of the chunk length, so this holds by construction; the
     test is here to catch anyone replacing it with something shape-dependent.
@@ -1188,10 +1200,12 @@ _2D_RMIN_ETA_C = 1.0
 
 def test_2d_conditioning(rng, n_phi=None, verbose=True):
     """
-    r_min must not degrade going from 1-d to 2-d.  For a window-constant mask it
-    should be EQUAL: the Cholesky factor of A kron T is L_A kron L_T so the pivots
-    multiply, and an orthogonal time basis makes T = I.  This is the test that
-    justifies keeping eps unchanged from the 1-d detrender.
+    r_min must not degrade going from 1-d to 2-d.
+
+    For a window-constant mask it should be EQUAL: the Cholesky factor of A kron T
+    is L_A kron L_T so the pivots multiply, and an orthogonal time basis makes
+    T = I.  This is the test that justifies keeping eps unchanged from the 1-d
+    detrender.
     """
     n_phi = msk.draw_n_phi(rng) if n_phi is None else n_phi
     worst_abs = np.inf
@@ -1303,9 +1317,10 @@ def test_2d_dtype_agreement(rng, n_phi=None, verbose=True):
 
 def test_production_geometry(rng, verbose=True):
     """
-    One pinned end-to-end run at the geometry a GPU kernel would be compiled for:
-    n_phi = 2, nfreq = 30000, four zones of three interior knots each, n = 2,
-    W = 4, M = 2.
+    One pinned end-to-end run at the geometry a GPU kernel would be compiled for.
+
+    That geometry is n_phi = 2, nfreq = 30000, four zones of three interior knots
+    each, n = 2, W = 4, M = 2.
 
     Everything else in this file sweeps; this one deliberately does not.  It pins
     n_phi, n and W rather than drawing them, because the point is to
@@ -1478,6 +1493,7 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
     def check_expansion(kvx, m_in, m_gpu, p64, eps, Wx, Tx, tag):
         """
         The kernel emits no r_min, so expansion is checked against the reference's.
+
         Zone-samples whose r_min sits within a band of eps are exempt: the
         float32-vs-float64 disagreement in r_min reaches a few hundred machine epsilons
         (see RMIN_ABS_TOL_EPS), which is comparable to eps itself.
@@ -1796,8 +1812,10 @@ Two parts, and what separates them is HOW MANY KNOT VECTORS THEY USE, not what k
 
 def test_params_yaml(rng=None, verbose=True):
     """
-    DetrenderLps2dParams round-trips through yaml: from_yaml_string(to_yaml_string(p)) == p,
-    plus one case through a real file to cover from_yaml().
+    DetrenderLps2dParams must round-trip through yaml.
+
+    from_yaml_string(to_yaml_string(p)) == p, plus one case through a real file to
+    cover from_yaml().
 
     Skips itself if the extension is not built.  The knot geometries are drawn rather
     than pinned, since the knot vector is the only field whose yaml representation is
@@ -1866,6 +1884,8 @@ def test_params_yaml(rng=None, verbose=True):
 
 def run_all(verbose=True, rng=None, n_phi=None, iteration=0):
     """
+    Runs the detrending.lps2d test suite.
+
     All tests share one generator, so printing its entropy makes the whole run
     reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
 

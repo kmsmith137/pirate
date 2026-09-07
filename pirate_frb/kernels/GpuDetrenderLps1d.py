@@ -18,12 +18,12 @@ class GpuDetrenderLps1dInjections:
 
         Parameters
         ----------
-        data : ksgpu.Array
+        data : cupy.ndarray
             Shape (M, nbuf), dtype float32, fully contiguous, on GPU.
             Modified in place: buffer samples [W, W+T) of each row are
             replaced by the detrended residual, and the 2W padding samples
             are left untouched.
-        mask : ksgpu.Array
+        mask : cupy.ndarray
             Shape (M, nbuf), dtype uint8, fully contiguous, on GPU,
             {0,1}-valued. Modified in place over the same range, and the
             output mask is the authoritative one (see the class docstring).

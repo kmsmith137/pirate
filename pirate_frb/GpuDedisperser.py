@@ -130,8 +130,8 @@ class GpuDedisperserInjections:
 
         Yields
         ------
-        ksgpu.Array
-            Input buffer array that can be used as a cupy array.
+        cupy.ndarray
+            Input buffer, on the GPU. Write the batch's input into it.
 
         Examples
         --------

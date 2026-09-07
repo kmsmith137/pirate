@@ -651,9 +651,11 @@ class SdPlan:
 
 
     def _size_pass(self, init_sd_matrices, progress):
-        """Allocate both accumulators. ONE capacity dict, fed by both plans: nothing stops a
-        straddled entry's sdbits from coinciding with an unstraddled one's (measured, it never
-        does, but two dicts merged with update() would silently drop a group).
+        """Allocate both accumulators.
+
+        ONE capacity dict, fed by both plans: nothing stops a straddled entry's sdbits from
+        coinciding with an unstraddled one's (measured, it never does, but two dicts merged
+        with update() would silently drop a group).
         """
 
         sd_capacities = {} if init_sd_matrices else None       # COARSE sdbits -> row count

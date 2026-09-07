@@ -1,6 +1,8 @@
 """
-The per-window least-squares solve (see notes/detrending.tex,
-section "Time detrending algorithm 1: local polynomial subtraction", subsection "The estimator").
+The per-window least-squares solve.
+
+The estimator is specified in notes/detrending.tex, section "Time detrending
+algorithm 1: local polynomial subtraction", subsection "The estimator".
 
 Given the moments of a window, we fit a degree-n polynomial in x = (u-c)/W to
 the valid samples, and evaluate it back at the window center.  The normal
@@ -75,8 +77,10 @@ def gram(ms):
 
 def cholesky(G, mu):
     """
-    Unregularized Cholesky, returning (L, ratios) with ratios[...,i] = p_i/G_ii
-    the raw information fraction at order i.
+    Unregularized Cholesky factorization of the Gram matrix G.
+
+    Returns (L, ratios), with ratios[...,i] = p_i/G_ii the raw information fraction
+    at order i.
 
     mu is a NaN guard, not a tuning parameter.  p_i can be zero (a rank-deficient
     window) or slightly negative (cancellation), and sqrt of either would poison
@@ -112,8 +116,9 @@ def cholesky(G, mu):
 
 def solve(ms, u_eval, mu):
     """
-    Evaluate the local polynomial fit at buffer index 'u_eval' (broadcastable
-    against the batch shape of 'ms').
+    Evaluates the local polynomial fit at buffer index 'u_eval'.
+
+    'u_eval' is broadcastable against the batch shape of 'ms'.
 
     Returns (fhat, rmin), where 'rmin' is the conditioning statistic described in
     the module docstring.  On a sample whose rmin is below the caller's threshold,

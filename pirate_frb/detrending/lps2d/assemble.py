@@ -96,10 +96,11 @@ def assemble(Mcal, Vcal, kv, tb, D1, eta):
 
 def commit(alpha, tb, kv):
     """
-    (M, ntime, N_phi*(n+1)) coefficients -> (M, ntime, N_phi), the spline
-    coefficients of the baseline at the window centre.
+    Contracts the fitted time-polynomial coefficients down to the window centre.
 
-    This is the contraction sum_q alpha_jq p_q(0), NOT alpha_j0; see timebasis.py.
+    (M, ntime, N_phi*(n+1)) coefficients -> (M, ntime, N_phi), the spline
+    coefficients of the baseline at the window centre.  This is the contraction
+    sum_q alpha_jq p_q(0), NOT alpha_j0; see timebasis.py.
     """
     n, N = tb.n, kv.N_phi
     a = alpha.reshape(alpha.shape[:-1] + (N, n+1))

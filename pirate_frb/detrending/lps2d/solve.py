@@ -132,6 +132,8 @@ from .reduce import band_to_dense
 
 def equilibrate(A):
     """
+    Rescales a banded symmetric matrix to unit diagonal.
+
     (..., N, nb+1) banded, symmetric, positive diagonal -> (Ahat, s) with Ahat
     having unit diagonal and s = sqrt(diag(A)).
 
@@ -224,6 +226,8 @@ def zone_slices(kv):
 
 def solve_banded(A, U, kv, n, live, nmin):
     """
+    Solves the banded normal equations, and reports the per-zone conditioning statistic.
+
     A: (..., N_phi*(n+1), nb+1) banded and already regularized, U: (..., N_phi*(n+1)).
     live: (..., nzone) int, the number of window offsets at which each zone holds
     data (moments.zone_live_counts); nmin = n+1 is the number required.
@@ -255,8 +259,9 @@ def solve_banded(A, U, kv, n, live, nmin):
 
 def solve_normal_equations(G, U, kv, D1, eta, eps):
     """
-    The (n, W) = (0, 0) path, kept as a thin wrapper: G banded (..., N_phi,
-    n_phi+1), U (..., N_phi).  Returns (a, rmin, bad).
+    The (n, W) = (0, 0) path, kept as a thin wrapper around solve_banded().
+
+    G banded (..., N_phi, n_phi+1), U (..., N_phi).  Returns (a, rmin, bad).
     """
     dtype = G.dtype
     A = G.astype(dtype, copy=True)

@@ -1,8 +1,8 @@
 """
-The chunked fixed-lag ("seam-free") Kalman detrender (see notes/detrending.tex,
-section "Time detrending algorithm 2: Kalman filter").
+The chunked fixed-lag ("seam-free") Kalman detrender.
 
-The committed baseline at time t is
+The algorithm is specified in notes/detrending.tex, section "Time detrending
+algorithm 2: Kalman filter".  The committed baseline at time t is
 
     fhat[t] = E[ f[t] | d[0 .. t+L] ],
 
@@ -47,8 +47,10 @@ from .InfoFilter import forward_step, backward_step
 
 
 class KalmanState:
-    """Per-row filter state carried across chunks: J_f, eta_f and the constant
-    offset kappa that they are expressed relative to."""
+    """Per-row filter state carried across chunks.
+
+    Holds J_f and eta_f, plus the constant offset kappa that they are expressed
+    relative to."""
 
     def __init__(self, J, eta, kappa):
         self.J, self.eta, self.kappa = J, eta, kappa
@@ -85,6 +87,8 @@ class ReferenceDetrenderKf1d:
     def __init__(self, k, tau, L, chunk_size=2048, dtype=np.float32,
                  subtract_offset=True, eps=1e-3, mu=1e-30):
         """
+        Constructs a fixed-lag Kalman detrender (see the module docstring for the algorithm).
+
         k, tau and L are all required: tau is the smoothing timescale in samples and
         L the lookahead, and both have operational meaning that a default would hide.
         See from_equivalent_W() for the natural way to pick them.
@@ -128,8 +132,9 @@ class ReferenceDetrenderKf1d:
     @classmethod
     def from_equivalent_W(cls, k, W, n_ell=4.0, **kwargs):
         """
-        Construct with tau matched to a local polynomial fit of half-width W (see
-        model.tau_from_equivalent_W), and L = ceil(n_ell * ell).
+        Constructs a detrender matched to a local polynomial fit of half-width W.
+
+        tau is set by model.tau_from_equivalent_W(), and L = ceil(n_ell * ell).
 
         This is the entry point to use when comparing against detrending.lps1d: matching
         on tau alone is not a fair comparison, since the flux loss c_k/tau carries a
@@ -165,6 +170,8 @@ class ReferenceDetrenderKf1d:
 
     def detrend_chunk(self, d_buf, mask_buf, state):
         """
+        Detrends one chunk of the stream, and returns the state to carry to the next.
+
         d_buf, mask_buf: shape (S, chunk_size + L), where S is a spectator axis
         carrying one entry per (beam,freq) pair.  There is no prepadding.
 
@@ -250,6 +257,8 @@ class ReferenceDetrenderKf1d:
 
     def detrend_stream(self, d, mask, state=None):
         """
+        Detrends a whole stream, by calling detrend_chunk() on successive chunks.
+
         d, mask: shape (S, T) with (T - L) a positive multiple of chunk_size.
         Returns (residual, mask_out, rmin) for outputs [0, T-L), i.e. each of shape
         (S, T-L).

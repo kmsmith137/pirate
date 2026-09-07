@@ -102,8 +102,10 @@ def seed_rngs(seed):
 
 
 def draw_random_seed():
-    """A master seed from OS entropy, for 'pirate_frb test -r'. Printed by the caller, since
-    a randomized run that does not say what it drew cannot be replayed."""
+    """A master seed from OS entropy, for 'pirate_frb test -r'.
+
+    Printed by the caller, since a randomized run that does not say what it drew cannot be
+    replayed."""
 
     return int.from_bytes(os.urandom(4), 'little')
 
@@ -191,7 +193,7 @@ def test(args):
         # What replays: the config and every drawn parameter (python's global RandomState,
         # stdlib random, and ksgpu::default_rng() are all pinned on the main thread), and
         # --net's frame data -- randomize(normalize=False, gaussian=False) at
-        # test_network.py:495,760 runs on the main thread and takes AssembledFrame::randomize's
+        # test_network.py:501,766 runs on the main thread and takes AssembledFrame::randomize's
         # seeded mt19937 branch, not avx2_simulate_4bit_noise().
         #
         # What does not, in rough order of how much it matters:
@@ -200,9 +202,9 @@ def test(args):
         #     RNG is asked for depends on server timing, and the stream diverges from turn one.
         #     Pre-drawing the script would fix it.
         #   - --serv's frame data, from FakeXEngine's two randomizer threads
-        #     (test_server.py:489). ksgpu::seed_default_rng() reseeds only the CALLING thread,
+        #     (test_server.py:481). ksgpu::seed_default_rng() reseeds only the CALLING thread,
         #     so a thread spawned later self-seeds from std::random_device.
-        #   - The short-read pattern in Socket::_misbehave_maxbytes() (network_utils.cpp:611),
+        #   - The short-read pattern in Socket::_misbehave_maxbytes() (network_utils.cpp:609),
         #     drawn on the reader thread, same reason.
         atomic_print('NOTE: --net and --serv replay only PARTLY from the seed. The config, all'
                      ' drawn parameters, and --net\'s frame data do replay; the sequence of'
@@ -443,9 +445,10 @@ def parse_varmap(subparsers):
 
 
 def _add_varmap_common_args(parser):
-    """The three arguments both subcommands take, so the two cannot drift apart.
+    """The three arguments 'bf' and 'df' share, so the two cannot drift apart.
 
-    NOTE '-g/--gpu' is NOT here -- it is bf-only. See parse_varmap_df().
+    NOTE '-g/--gpu' is NOT here -- 'df' runs no GPU kernel. See parse_varmap_df().
+    ('mc' takes a map rather than a config, so it shares none of these; it has its own -g.)
     """
     parser.add_argument('config_file', help="Path to dedispersion YAML config file")
     parser.add_argument('-o', '--output', required=True, metavar='PATH',
@@ -565,8 +568,9 @@ def _parse_size(s):
 
 
 def _parse_channel_spec(spec, nfreq):
-    """A 'varmap bf --channels' argument as a sorted list of input channel indices. Accepts a
-    comma-separated mix of bare indices and LO:HI[:STEP] slices."""
+    """A 'varmap bf --channels' argument as a sorted list of input channel indices.
+
+    Accepts a comma-separated mix of bare indices and LO:HI[:STEP] slices."""
 
     out = []
     for part in spec.split(','):
@@ -718,8 +722,8 @@ def varmap_df(args):
     """Compute the analytic detrender-free map, and write a pirate_frb.varmap file.
 
     NO set_cuda_device() CALL, and no -g flag: this path runs no GPU kernel. It does still
-    need a CUDA CONTEXT, because config.make_channel_map() returns a ksgpu::Array allocated
-    through cudaHostAlloc -- with no device visible at all it fails with 'cudaHostAlloc
+    need a CUDA CONTEXT, because config.make_channel_map() allocates its result through
+    cudaHostAlloc -- with no device visible at all it fails with 'cudaHostAlloc
     returned 100 (no CUDA-capable device is detected)'. CUDA picks device 0 by default;
     a caller who needs to steer that uses CUDA_VISIBLE_DEVICES.
 
@@ -767,8 +771,10 @@ def varmap_df(args):
 
 
 def parse_varmap_mc(subparsers):
-    """Check a stored map against Monte-Carlo sims. Takes a MAP, not a config, so it shares
-    none of _add_varmap_common_args() -- there is no -o and no -L."""
+    """Check a stored map against Monte-Carlo sims.
+
+    Takes a MAP, not a config, so it shares none of _add_varmap_common_args() -- there is no
+    -o and no -L."""
     help_text = ("Check a stored variance map against Monte-Carlo sims of its embedded config")
     parser = subparsers.add_parser("mc", help=help_text, description=help_text)
     parser.set_defaults(func=varmap_mc)
@@ -1783,7 +1789,12 @@ def parse_run(subparsers):
 
 
 def parse_show(subparsers):
-    """The 'show' group: print something and exit. No side effects, no GPU work."""
+    """The 'show' group: print something and exit.
+
+    No side effects. 'show dedisperser' is the one that touches the GPU: building a
+    DedispersionPlan needs a CUDA device, and -r/--resources and --test build a
+    GpuDedisperser on top of that.
+    """
     help_text = "Subcommand for printing information about config files or kernel registry (see show --help)"
     sub = _add_group(subparsers, "show", help_text)
     parse_show_asdf(sub)
@@ -2300,7 +2311,7 @@ def random_kernels(args):
 
     if args.cdd2:
         # NOTE no Dcore/Dout: a cdd2 kernel's Dout is pinned to 2^dd_rank1 and its Dcore to
-        # min(Dout,8). See cuda_generator.cdd2_dout(). (The --pf branch below still prints
+        # min(Dout,8). See cuda_generator.cdd2_dout(). (The --pf branch above still prints
         # both, since standalone PeakFinder kernels have an independent Dout.)
         #
         # EVERY ROW PRINTED HERE IS BUILDABLE. A cdd2 row has to satisfy constraints that
@@ -2640,8 +2651,9 @@ def get_parser():
     """
     Create and return the argument parser for pirate_frb.
 
-    This function is separate from main() so that sphinx-argparse can
-    introspect the parser without actually parsing command-line arguments.
+    This function is separate from main() so that the docs build can introspect the
+    parser without actually parsing command-line arguments: docs/source/conf.py imports
+    it, walks the subcommand tree, and captures each format_help() into a cli/*.md page.
     """
     parser = _PirateParser(description="pirate_frb command-line driver (use --help for more info)")
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="command")

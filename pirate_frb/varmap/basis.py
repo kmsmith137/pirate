@@ -108,8 +108,9 @@ def basis_random(ref, factor_rank, *, rng, kind='smooth'):
 
 
 def basis_pivoted_qr(ref, factor_rank, *, max_bytes=1 << 31):
-    """A column-subset selection: the 'factor_rank' rows of 'ref' that a column-pivoted QR
-    picks out, as an ``(nfreq, K)`` array.
+    """A column-subset selection: the rows of 'ref' that a column-pivoted QR picks out.
+
+    Returns an ``(nfreq, K)`` array holding the 'factor_rank' selected rows.
 
     Cheap, and it inherits two properties from the data for free -- every atom is an actual
     group's row, so the basis is NONNEGATIVE (hence usable by the additive repair and the
@@ -267,8 +268,10 @@ class _AgglomerativeEnvelope:
         self.seconds = time.time() - t0
 
     def roots(self, K):
-        """(K0,) array giving each starting row's cluster at K clusters, by replaying the merge
-        sequence."""
+        """(K0,) array giving each starting row's cluster at K clusters.
+
+        Computed by replaying the merge sequence.
+        """
         K = int(K)
         parent = np.arange(self.K0)
         n = self.K0
@@ -302,8 +305,9 @@ class _AgglomerativeEnvelope:
 
 def basis_greedy_envelope(ref, factor_rank, *, on_shapes=True, tree=None, max_rows=32768,
                           verbose=False):
-    """Agglomerative max-envelope clustering of 'ref', as an ``(nfreq, K)`` array. Nonnegative
-    whenever ref is.
+    """Agglomerative max-envelope clustering of 'ref', as an ``(nfreq, K)`` array.
+
+    Nonnegative whenever ref is.
 
     Superseded by the SVD in general, but it still WINS at rank <= 8, so it is not a historical
     curiosity. Cost is what lost it: O(nbeta^2.4) against the SVD's seconds, and O(nbeta^2)
@@ -447,8 +451,10 @@ def spectrum_effective_rank(vmap, threshold=1.0e-2, *, max_bytes=1 << 31):
 
 
 def shape_cover_statistic(vmap, ref, *, block=None, max_bytes=1 << 31):
-    """Per-row cost of covering each of ref's groups from above with a SINGLE row of 'vmap',
-    both taken as unit-sum shapes. Returns a length-``ref.nbeta`` array, every entry >= 1.
+    """Per-row cost of covering each of ref's groups from above with a SINGLE row of 'vmap'.
+
+    Rows of both maps are taken as unit-sum shapes. Returns a length-``ref.nbeta`` array,
+    every entry >= 1.
 
     This is exactly the rank-1 Q-step, so it measures "how far outside vmap's shape repertoire
     each of ref's groups falls" in the campaign's own objective, at zero LP cost -- seconds,

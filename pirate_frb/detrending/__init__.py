@@ -1,6 +1,5 @@
 """
-Detrending: the pure-numpy reference detrenders, alongside the GPU kernels that are
-validated against them.
+Detrending: the pure-numpy reference detrenders, and the GPU kernels they validate.
 
     ReferenceDetrenderLps1d   <->   GpuDetrenderLps1d   (src_lib/DetrenderLps1d.cu)
     ReferenceDetrenderLps2d   <->   GpuDetrenderLps2d   (src_lib/DetrenderLps2d.cu)

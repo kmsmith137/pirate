@@ -8,7 +8,7 @@ processed independently: a fresh single-beam OfflineDedisperser (nbeams == 1) is
 built from scratch, and for each of that beam's time chunks the driver:
 
   1. uploads the quantized (int4) data to the GPU,
-  2. dequantizes it to float16,
+  2. dequantizes it to the config's float dtype (float16 or float32),
   3. tree-dedisperses it on the GPU,
   4. does rudimentary peak finding (per-chunk max SNR over the DM-vs-time plane of
      every dedispersion tree),

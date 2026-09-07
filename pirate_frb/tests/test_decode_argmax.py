@@ -163,8 +163,10 @@ def _test_grouper_plan_rebuild(config, plan, dcores, tuples):
 
 
 def _decode(plan, token, itree, dcore, idm_coarse, itime_coarse):
-    """Scalar decode. Decoding is a DedispersionPlan method; the vectorized form lives on
-    FrbGrouper (see test_server.py).
+    """Scalar decode.
+
+    Decoding is a DedispersionPlan method; the vectorized form lives on FrbGrouper (see
+    test_server.py).
 
     'dcore' is the producing peak-finding kernel's core factor, not a plan property -- here
     it is the value the scout ReferenceDedisperser was built with."""

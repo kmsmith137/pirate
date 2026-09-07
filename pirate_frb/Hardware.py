@@ -187,7 +187,7 @@ class Hardware:
         for n,ip in self._parse_ip_addr_show:
             if n == nic:
                 return ip
-        raise RuntimeError(f"Couldn't associate NIC {ip_addr} with a NIC")
+        raise RuntimeError(f"Couldn't associate NIC {nic!r} with an IP address")
 
     @functools.cache
     def nic_from_ip_addr(self, ip_addr, is_dst_addr=False):

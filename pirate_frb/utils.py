@@ -1,14 +1,24 @@
 """Utility functions and context managers for pirate_frb.
 
-This module was flattened from the former ``pirate_frb.utils`` package. The
-sections below (each introduced by a ``####`` comment banner) correspond to
-the former source files pirate_frb/utils/<name>.py.
+One flat module, divided by ``####`` comment banners into:
+
+  - package glue: pybind11 re-exports and ``__all__``
+  - integer/bit helpers, and subprocess-group orchestration
+  - random array shapes, for randomized unit tests
+  - ThreadAffinity, a context manager for pinning threads to vCPUs
+  - the grouper SNR histograms (GpuGrouperHistogram / GrouperHistogram)
+  - ASDF header display
+  - network/NIC helpers
+  - host<->device memcpy wrappers, for hugepage-backed buffers
+  - a python/cupy timing benchmark for GpuDedisperser
+
+Each banner says what its section is for, and why the code needs to exist.
 """
 
 
 ####################################################################################################
 #
-# former utils/__init__.py -- package glue: pybind11 re-exports and __all__.
+# Package glue: pybind11 re-exports and __all__.
 #
 # Names re-exported directly from the pybind11 module. (get_thread_affinity /
 # set_thread_affinity are also imported in the ThreadAffinity section below,
@@ -31,7 +41,7 @@ __all__ = ['integer_log2', 'print_separator', 'run_processes',
 
 ####################################################################################################
 #
-# former utils/core.py -- integer/bit helpers + subprocess-group orchestration.
+# Integer/bit helpers, and subprocess-group orchestration.
 
 
 import subprocess
@@ -107,8 +117,9 @@ def _monitor_children(procs):
 
 
 def _wait_children(procs, grace_sec=constants.default_shutdown_timeout_sec):
-    """Wait (grace_sec, total) for children to exit on their own. Survivors are the
-    caller's problem -- _terminate_children() runs next either way.
+    """Wait (grace_sec, total) for children to exit on their own.
+
+    Survivors are the caller's problem -- _terminate_children() runs next either way.
 
     Why the wait exists: a terminal Ctrl-C is delivered to the whole foreground
     process group, so by the time we see KeyboardInterrupt the children have had
@@ -180,7 +191,7 @@ def random_nfreq(rng, hi, lo=32):
 
 ####################################################################################################
 #
-# former utils/ThreadAffinity.py -- context manager for temporarily setting thread CPU affinity.
+# ThreadAffinity: a context manager for temporarily setting thread CPU affinity.
 
 
 from .pirate_pybind11 import get_thread_affinity, set_thread_affinity
@@ -219,8 +230,7 @@ class ThreadAffinity:
 
 ####################################################################################################
 #
-# former utils/GrouperHistogram.py -- SNR histograms for grouper main loops:
-# GPU accumulation + host-side analysis.
+# SNR histograms for grouper main loops: GPU accumulation + host-side analysis.
 #
 # Two classes, split along the finalization boundary:
 #
@@ -610,7 +620,7 @@ class GpuGrouperHistogram:
 
 ####################################################################################################
 #
-# former utils/show_asdf.py -- displaying ASDF file YAML headers.
+# Displaying ASDF file YAML headers.
 
 
 def show_asdf(f, out=None):
@@ -656,8 +666,7 @@ def _show_asdf_impl(fp, out):
 
 ####################################################################################################
 #
-# former utils/network.py -- small network/NIC helpers shared by the server and
-# fake X-engine entry points.
+# Small network/NIC helpers, shared by the server and fake X-engine entry points.
 
 
 import re
@@ -791,8 +800,8 @@ def check_mtu(hw, label, ip_addr, min_mtu, min_mtu_param, is_dst_addr=False):
 
 ####################################################################################################
 #
-# former utils/safe_memcpy.py -- host<->device cudaMemcpy* wrappers that handle
-# BumpAllocator chunked hugepage registration.
+# Host<->device cudaMemcpy* wrappers that handle BumpAllocator chunked hugepage
+# registration.
 #
 # cupy's `ndarray.set()` / `.get()` call cudaMemcpyAsync directly with no
 # splitting at cudaHostRegister chunk boundaries. When the host buffer
@@ -880,8 +889,7 @@ def safe_g2h_copy(cpu_arr, gpu_arr, stream):
 
 ####################################################################################################
 #
-# former utils/time_cupy_dedisperser.py -- timing benchmark for GpuDedisperser
-# using Python/cupy.
+# Timing benchmark for GpuDedisperser, driven from python/cupy.
 
 
 import cupy as cp

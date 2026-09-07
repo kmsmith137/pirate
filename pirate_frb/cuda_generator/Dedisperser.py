@@ -246,7 +246,9 @@ class Dedisperser:
 
         
     def _two_stage_dedispersion_core(self, k, *, return_early=False):
-        """If 'return_early' is True, we stop after the shared memory read, i.e. we emit the
+        """Emits the two-stage dedispersion core: rank0 passes, shmem transpose, rank1 passes.
+
+        If 'return_early' is True, we stop after the shared memory read, i.e. we emit the
         first (rank0) dedispersion passes and the shmem transpose, but not the remaining
         (rank1) passes. Only used by emit_subband_extraction(), which emits those remaining
         passes itself, interleaved with the subband outputs."""
@@ -286,8 +288,9 @@ class Dedisperser:
 
     
     def emit_subband_extraction(self, k, fs):
-        """Generator: emit the second stage of dedispersion, yielding one (rname, m, mu)
-        triple per (multiplet, "extra DM") pair.
+        """Generator: emit the second stage of dedispersion.
+
+        Yields one (rname, m, mu) triple per (multiplet, "extra DM") pair.
 
         Used by cuda_generator.CoalescedDdKernel2 (whose consumer feeds the peak-finder)
         and cuda_generator.SbDedisperser (whose consumer stores to global memory).

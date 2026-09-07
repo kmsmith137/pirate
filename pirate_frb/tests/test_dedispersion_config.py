@@ -1,6 +1,7 @@
 """
-Tests of DedispersionConfig::validate() and ::make_random() that random configs cannot
-exercise on their own (run via 'test --dd').
+Tests of DedispersionConfig::validate() and ::make_random(), run via 'test --dd'.
+
+Covers the cases that random configs cannot exercise on their own.
 
   - test_primary_tree_chains(): the four per-primary-tree fields that validate() CHAINS across
     primary trees. max_width, wt_dm_downsampling and wt_time_downsampling must each equal their

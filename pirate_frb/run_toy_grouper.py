@@ -160,7 +160,8 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
     'histogram_stem' is a filename stem (or None): on termination, pickle histograms
     of the steady-state out_max SNR values (all values, plus one-sample-per-(beam,
     chunk) maxes; warmup values are masked out -- see
-    pirate_frb.utils.GpuGrouperHistogram) to '<histogram_stem>.pkl'. Must not contain
+    pirate_frb.utils.GpuGrouperHistogram) to '<histogram_stem>.pkl', then analyze them
+    and write a plot to '<histogram_stem>.pdf'. Must not contain
     a '.' (guards against passing a full filename). (The CLI gives each grouper
     subprocess a distinct stem, so multi-grouper filenames don't collide.)
     """

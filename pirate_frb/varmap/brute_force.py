@@ -49,13 +49,12 @@ def compute_variance_multimap(config, detrender=None, *, device='gpu', L=None,
                               guard_chunk=True, progress=False, channels=None,
                               scratch_dir=None, provenance=None,
                               detrender_dtype=np.float64):
-    """Compute the variance map of every PRIMARY tree in 'config' by brute force, and return
-    a VarianceMultiMap.
+    """Compute the variance map of every PRIMARY tree in 'config' by brute force.
 
-    Every tree is swept -- they share one dedisperser and one pass over the input channels --
-    but only the (gamma, 0) maps are kept, since an early-trigger tree's map is a row subset
-    of its parent's (see VarianceMultiMap). Use sweep_all_trees_dense() if you want the child
-    matrices themselves.
+    Returns a VarianceMultiMap. Every tree is swept -- they share one dedisperser and one pass
+    over the input channels -- but only the (gamma, 0) maps are kept, since an early-trigger
+    tree's map is a row subset of its parent's (see VarianceMultiMap). Use
+    sweep_all_trees_dense() if you want the child matrices themselves.
 
     A CUDA device must already be selected (``ksgpu.set_cuda_device()``), even for
     ``device='cpu'``: DedispersionPlan allocates through cudaHostAlloc.
@@ -204,8 +203,9 @@ def _run_sweep(config, detrender=None, *, device='gpu', L=None, guard_chunk=True
 
 def sweep_all_trees_dense(config, detrender=None, *, device='cpu', guard_chunk=True,
                           progress=False, scratch_dir=None, detrender_dtype=np.float64):
-    """Sweep every tree and return the RAW dense matrices: a length-ntrees list of
-    ``(nalpha, nfreq)`` ndarrays, indexed by itree.
+    """Sweep every tree and return the RAW dense matrices, indexed by itree.
+
+    The return value is a length-ntrees list of ``(nalpha, nfreq)`` ndarrays.
 
     For TESTS, and specifically for comparing an early-trigger tree's matrix against its
     (primary_tree_index, 0) parent's -- which is what test_restriction_vs_sweep() does.
@@ -251,8 +251,10 @@ def sweep_all_trees_dense(config, detrender=None, *, device='cpu', guard_chunk=T
 
 
 class _SweepGeometry:
-    """The part of a sweep that does not depend on the device: what the config must satisfy,
-    the per-tree geometry, and how long one pass has to be.
+    """The part of a sweep that does not depend on the device.
+
+    Covers what the config must satisfy, the per-tree geometry, and how long one pass has to
+    be.
 
     Held by both _CpuSweep and _GpuSweep. Split out because the two sweeps disagree about
     almost everything else, and because the config rejections all belong in one place.
@@ -432,8 +434,10 @@ class _SweepGeometry:
         return ch
 
     def _zone_lo(self, ifreq):
-        """The first channel of the detrender spline zone containing channel 'ifreq' (or
-        nfreq if ifreq is out of range)."""
+        """The first channel of the detrender spline zone containing channel 'ifreq'.
+
+        Returns nfreq if 'ifreq' is out of range.
+        """
 
         from ..detrending.lps2d import zone_channel_ranges
 
@@ -443,9 +447,10 @@ class _SweepGeometry:
         return self.nfreq
 
     def one_hot_response(self, ifreq):
-        """What a one-hot in channel 'ifreq' contributes to the dedisperser's input stream, as
-        a ``(nfreq, 2W+1)`` array covering input times [t-W, t+W] relative to the one-hot's own
-        time t. With no detrender that is the one-hot itself (W = 0).
+        """What a one-hot in channel 'ifreq' contributes to the dedisperser's input stream.
+
+        Returned as a ``(nfreq, 2W+1)`` array covering input times [t-W, t+W] relative to the
+        one-hot's own time t. With no detrender that is the one-hot itself (W = 0).
 
         Everything outside that window is exactly zero, so this short buffer -- rather than a
         full chunk -- is all that has to be detrended. The detrender fits a window of 2W+1
@@ -480,8 +485,11 @@ class _SweepGeometry:
         return residual[0]
 
     def write_one_hot(self, input_array, resp, t_abs, jchunk):
-        """Write the part of a one_hot_response() placed at absolute input time 't_abs' that
-        falls in chunk 'jchunk' of the stream. 'input_array' must already be zeroed."""
+        """Write the part of a one_hot_response() that falls in chunk 'jchunk' of the stream.
+
+        The response 'resp' is placed at absolute input time 't_abs'. 'input_array' must
+        already be zeroed.
+        """
 
         lo = t_abs - self.W - jchunk*self.nt_in    # response index 0, relative to chunk start
         a = max(0, -lo)
@@ -515,8 +523,10 @@ class _SweepBase:
 
 
 class _CpuChain:
-    """A ReferenceDedisperser plus the per-tree ReferencePfSquare kernels that read its
-    subband arrays -- the CPU counterpart of _GpuSweep's
+    """A ReferenceDedisperser plus its per-tree ReferencePfSquare kernels: the CPU sweep's tail.
+
+    The kernels read the dedisperser's subband arrays, which makes this the CPU counterpart of
+    _GpuSweep's
 
         GpuSbDedispersionKernel -> sb_out -> GpuPfSquare
 
@@ -553,8 +563,9 @@ class _CpuChain:
         return self.rdd.input_array
 
     def dedisperse(self, ichunk):
-        """Run one chunk, and return that chunk's ``sum_t y^2`` per tree, as a list of
-        ``(2^(r-R), M, P)`` float64 arrays.
+        """Run one chunk, and return that chunk's ``sum_t y^2`` per tree.
+
+        The return value is a list of ``(2^(r-R), M, P)`` float64 arrays.
 
         Chunks must be supplied in order: both the dedisperser and the PfSquare kernels carry
         state across chunk boundaries.
@@ -599,8 +610,9 @@ class _CpuSweep(_SweepBase):
         return _CpuChain(self.geom)
 
     def run_pass(self, chain, ifreq, iphase, ipass, guard_chunk=True):
-        """Apply L to the one-hot e^(F,t_c), and return ``[sum_t y^2]`` per tree, as a list of
-        ``(2^(r-R), M, P)`` float64 arrays.
+        """Apply L to the one-hot e^(F,t_c), and return ``[sum_t y^2]`` per tree.
+
+        The return value is a list of ``(2^(r-R), M, P)`` float64 arrays.
 
         Passes are laid end to end in one continuous stream (pass 'ipass' occupies chunks
         ``[ipass*nchunks, (ipass+1)*nchunks)`` of 'chain'), so no persistent state is ever
@@ -660,8 +672,10 @@ class _CpuSweep(_SweepBase):
 
 
 class _GpuPipeline:
-    """The GPU dedispersion + PfSquare pipeline, shared by the brute-force sweep (_GpuSweep)
-    and the Monte-Carlo check (varmap/mc.py). The pipeline is
+    """The GPU dedispersion + PfSquare pipeline.
+
+    Shared by the brute-force sweep (_GpuSweep) and the Monte-Carlo check (varmap/mc.py). The
+    pipeline is
 
         stream_in -> [GpuDetrenderLps2d] -> GpuTreeGriddingKernel -> stage1_buf
                   -> [GpuLaggedDownsamplingKernel -> stage1_buf.bufs[1:]]
@@ -820,8 +834,9 @@ class _GpuPipeline:
 
 
     def run_chunk(self, ichunk):
-        """Walk the pipeline for one chunk, from the gridding kernel to the per-tree
-        accumulators. The CALLER has already filled self.stream_in.
+        """Walk the pipeline for one chunk, from the gridding kernel to the per-tree accumulators.
+
+        The CALLER has already filled self.stream_in.
 
         'ichunk' is the index in one continuous stream. Every kernel with inter-chunk state
         (the lagged downsampler, the stage-1 kernels via the MegaRingbuf, and GpuPfSquare via
@@ -883,8 +898,10 @@ class _GpuPipeline:
 
 
 class _GpuSweep(_SweepBase):
-    """The brute-force sweep on the GPU: push one-hots through a _GpuPipeline, one launch
-    group at a time, and read the per-tree accumulators once per interval.
+    """The brute-force sweep on the GPU, built on a _GpuPipeline.
+
+    Pushes one-hots through the pipeline one launch group at a time, and reads the per-tree
+    accumulators once per interval.
 
     Everything about the pipeline itself -- the kernels, the buffers, the config checks, the
     per-chunk launches -- lives in _GpuPipeline, which the Monte-Carlo check
@@ -901,7 +918,9 @@ class _GpuSweep(_SweepBase):
         self.pipe.allocate(allocator)
 
     def columns(self, *, channels=None, guard_chunk=True, progress=False):
-        """Passes are laid end to end in a single continuous stream: pass k occupies input
+        """Yield ``(ifreq, cols)`` once per pass (see _SweepBase), nbeams passes per launch.
+
+        Passes are laid end to end in a single continuous stream: pass k occupies input
         samples ``[k*nchunks*nt_in, (k+1)*nchunks*nt_in)``, which is long enough that pass k's
         response has died out before pass k+1's one-hot arrives. No kernel's persistent state,
         and no part of the ring buffer, is ever reset -- only the small GpuPfSquare
@@ -958,14 +977,18 @@ class _GpuSweep(_SweepBase):
 
     def _run_chunk(self, group, ichunk, j):
         """Run one chunk of one launch group: fill the input stream, then walk the pipeline.
-        'j' is the chunk's index within the interval (only chunk 0 carries a one-hot)."""
+
+        'j' is the chunk's index within the interval (only chunk 0 carries a one-hot).
+        """
 
         self._make_input_stream(group, j)
         self.pipe.run_chunk(ichunk)
 
     def _make_input_stream(self, group, j):
-        """Fill the pipeline's stream_in (the gridding kernel's input) with the one-hots of this
-        launch group, detrending them if a GpuDetrenderLps2d is configured.
+        """Fill the pipeline's stream_in with the one-hots of this launch group.
+
+        stream_in is the gridding kernel's input; the one-hots are detrended on the way in if
+        a GpuDetrenderLps2d is configured.
 
         Only chunk 0 of an interval carries anything: L is linear, so the all-zero chunks that
         follow map to zero, and running the detrender on them would be pure cost. The
@@ -1197,8 +1220,9 @@ class _Accumulator:
         self.transpose_seconds += time.time() - t0
 
     def finish(self, *, device, guard_chunk, sweep_seconds, progress=False, partial=False):
-        """Flush what is left and wrap each matrix in a VarianceMap. Returns the length-ntrees
-        list.
+        """Flush what is left and wrap each matrix in a VarianceMap.
+
+        Returns the length-ntrees list of maps.
 
         y_true is the streaming per-channel sum, in BOTH the dense and the coarse case. It is
         the same quantity a dense map's row_sums() computes, in a different summation order,

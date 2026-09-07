@@ -386,6 +386,8 @@ def _top_coeff(P, deg, W):
 
 def test_polynomial_exactness(rng=None, n=2, verbose=True):
     """
+    Checks that a noiseless polynomial of degree <= n is removed exactly.
+
     Feed d[t] = P(t) for a polynomial of degree <= n with an arbitrary mask and
     no noise.  Every window's valid samples then lie exactly on P, the local fit
     recovers it, and the residual must be zero at every valid sample where the
@@ -614,9 +616,10 @@ def test_dtype_agreement(rng=None, n=2, tol=1e-3, verbose=True):
 
 def test_masked_data_unused(rng=None, n=2, verbose=True):
     """
-    The detrender must never read a masked sample.  Checked by poisoning the
-    masked entries and requiring every output to be *bit-identical* to a run on
-    clean data.
+    The detrender must never read a masked sample.
+
+    Checked by poisoning the masked entries and requiring every output to be
+    *bit-identical* to a run on clean data.
 
     Bit-identity rather than "the tolerances still hold": a leak small enough to
     stay inside a tolerance would otherwise go unnoticed, and the whole point is
@@ -783,6 +786,8 @@ def _test_gpu_kernel_1(rng, det, cp, eps32, eps64, ndraw, tol, rmin_tol, verbose
 
 def run_all(verbose=True, rng=None, n=None):
     """
+    Runs the detrending.lps1d test suite.
+
     All eight tests share one generator, so printing its entropy makes the whole
     run reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
 

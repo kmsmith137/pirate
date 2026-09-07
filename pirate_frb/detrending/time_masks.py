@@ -37,7 +37,9 @@ import numpy as np
 
 
 def _loguniform_int(rng, lo, hi):
-    """Integer in [lo,hi], log-uniform, so that both small and large values of a
+    """Returns a log-uniform random integer in [lo,hi].
+
+    Log-uniform rather than uniform, so that both small and large values of a
     length or stride parameter are sampled."""
     lo, hi = max(1, int(lo)), max(1, int(hi))
     if hi <= lo:
@@ -65,8 +67,10 @@ def _bernoulli(T, W, rng):
 
 
 def _gap(T, W, rng):
-    """One contiguous masked run.  Length is log-uniform up to 4W, so this covers
-    both short dropouts and gaps wider than a full window."""
+    """One contiguous masked run.
+
+    Length is log-uniform up to 4W, so this covers both short dropouts and gaps
+    wider than a full window."""
     m = np.ones(T, dtype=bool)
     L = _loguniform_int(rng, 1, 4*W)
     lo = int(rng.integers(0, T))
@@ -75,9 +79,11 @@ def _gap(T, W, rng):
 
 
 def _one_sided(T, W, rng):
-    """Everything masked on one side of a random boundary.  Windows straddling it
-    see valid samples on one side only, which is the case that makes the fit an
-    extrapolation.  The side is randomized (the old fixed zoo only masked left)."""
+    """Everything masked on one side of a random boundary.
+
+    Windows straddling it see valid samples on one side only, which is the case
+    that makes the fit an extrapolation.  The side is randomized (the old fixed
+    zoo only masked left)."""
     b = int(rng.integers(0, T+1))
     m = np.ones(T, dtype=bool)
     if rng.random() < 0.5:
@@ -88,9 +94,11 @@ def _one_sided(T, W, rng):
 
 
 def _periodic(T, W, rng):
-    """Periodic dropouts.  The period is drawn from a set that deliberately
-    includes values commensurate with the block length B = 2W, plus a random one,
-    since commensurability with the scan geometry is what we want to stress."""
+    """Periodic dropouts.
+
+    The period is drawn from a set that deliberately includes values commensurate
+    with the block length B = 2W, plus a random one, since commensurability with
+    the scan geometry is what we want to stress."""
     cands = [max(2, W//2), max(2, W), max(2, 2*W), max(2, 4*W),
              int(rng.integers(2, max(3, 4*W)))]
     period = int(cands[rng.integers(len(cands))])
@@ -100,9 +108,10 @@ def _periodic(T, W, rng):
 
 
 def _cluster(T, W, rng):
-    """A single narrow run of valid samples, everything else masked.  As the
-    window slides past it the cluster's offset from the window center sweeps the
-    full range, which is the degenerate extrapolation geometry."""
+    """A single narrow run of valid samples, everything else masked.
+
+    As the window slides past it the cluster's offset from the window center
+    sweeps the full range, which is the degenerate extrapolation geometry."""
     m = np.zeros(T, dtype=bool)
     hw = int(rng.integers(0, max(1, W//8) + 1))
     c = int(rng.integers(0, T))
@@ -111,9 +120,11 @@ def _cluster(T, W, rng):
 
 
 def _bimodal(T, W, rng):
-    """Two narrow clusters.  When both fall inside one window, G_ii > 0 for every
-    i and yet the curvature is barely determined -- the case that motivates the
-    pivot floor acting on pivots rather than on the diagonal."""
+    """Two narrow clusters of valid samples, everything else masked.
+
+    When both fall inside one window, G_ii > 0 for every i and yet the curvature
+    is barely determined -- the case that motivates the pivot floor acting on
+    pivots rather than on the diagonal."""
     m = np.zeros(T, dtype=bool)
     c0 = int(rng.integers(0, T))
     sep = int(rng.integers(0, max(1, 3*W)))
@@ -125,10 +136,12 @@ def _bimodal(T, W, rng):
 
 
 def _masked_blocks(T, W, rng):
-    """One or more whole scan blocks masked -- the NaN trap for the empty-set rule
-    in lps1d.MomentSet.merge.  Absolute block boundaries in the stream fall at multiples
-    of B (the lattice is anchored at chunk_start - W and Tc is a multiple of B),
-    so half the time we align to one and half the time we deliberately do not."""
+    """One or more whole scan blocks masked.
+
+    This is the NaN trap for the empty-set rule in lps1d.MomentSet.merge.
+    Absolute block boundaries in the stream fall at multiples of B (the lattice
+    is anchored at chunk_start - W and Tc is a multiple of B), so half the time
+    we align to one and half the time we deliberately do not."""
     B = 2*W
     m = np.ones(T, dtype=bool)
     k = int(rng.integers(1, 4))
@@ -141,8 +154,10 @@ def _masked_blocks(T, W, rng):
 
 
 def _sparse_lattice(T, W, rng):
-    """A regular lattice of isolated valid samples, so that the valid count per
-    window is small and nearly uniform (nv down to 0 or 1)."""
+    """A regular lattice of isolated valid samples, everything else masked.
+
+    The valid count per window is then small and nearly uniform (nv down to
+    0 or 1)."""
     stride = _loguniform_int(rng, 2, 4*W)
     phase = int(rng.integers(0, stride))
     m = np.zeros(T, dtype=bool)
@@ -152,10 +167,11 @@ def _sparse_lattice(T, W, rng):
 
 def _perturb(m, T, W, rng):
     """
-    Stamp N random subintervals over the base mask, each set entirely masked or
-    entirely valid.  Applied in sequence, so later stamps overwrite earlier ones;
-    that is what produces nested structure, e.g. a short island of valid samples
-    inside a long masked stretch.
+    Stamps N random subintervals over the base mask, each fully masked or fully valid.
+
+    Stamps are applied in sequence, so later ones overwrite earlier ones; that is
+    what produces nested structure, e.g. a short island of valid samples inside a
+    long masked stretch.
 
         N  = uniform_int(0, 20)
         p  = uniform_float(0, 1)                    (one draw per row)
@@ -206,6 +222,8 @@ _PROBS = np.array([t[1] for t in MASK_TYPES])
 
 def random_mask(M, T, W, rng):
     """
+    Draws a random time mask, with a base geometry chosen independently per row.
+
     Returns (mask, labels): mask of shape (M,T) dtype bool, and a length-M list
     of the type name used for each row, so that a failing test can report which
     geometry produced it.

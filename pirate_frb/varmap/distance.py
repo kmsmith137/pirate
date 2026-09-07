@@ -1,5 +1,6 @@
-"""The distance function D on variance maps, and the value objects that VarianceMap's
-scoring methods return.
+"""The distance function D on variance maps.
+
+Also defines the value objects that VarianceMap's scoring methods return.
 
 D is defined in notes/variance_map.tex (section "Distance function"). It is one-sided:
 underestimating any single matrix element is catastrophic (false positives in the far tail of

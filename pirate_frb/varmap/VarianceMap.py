@@ -71,6 +71,7 @@ from .distance import YTRUE_FLOOR, f, AdmissibilityResult, DistanceEstimate
 
 def make_plan(config):
     """The "minimal" DedispersionPlan of 'config' (mega_ringbuf=False, gpu_kernels=False).
+
     Needs no GPU.
 
     Note that ``plan.trees`` is a fresh python list of COPIES on every attribute access
@@ -382,8 +383,10 @@ class VarianceMap:
                  L=None, is_admissible=False, pinned_columns=None,
                  Q_is_semiorthogonal=False, W_is_semiorthogonal=False,
                  history=None, plan=None):
-        """Low-level constructor: validates every shape against the geometry of tree 'itree'
-        of 'config', and every flag against the arrays.
+        """Low-level constructor, which validates everything it is handed.
+
+        Every shape is checked against the geometry of tree 'itree' of 'config', and every
+        flag against the arrays.
 
         Prefer from_dense(), or the classmethods of VarianceMultiMap, over calling this
         directly. Exactly one of {A} and {Q, W} must be given.
@@ -713,8 +716,9 @@ class VarianceMap:
 
     @property
     def nscored(self):
-        """Number of outputs that contribute to get_distance(): the count of alpha with
-        ``y_true[alpha] >= YTRUE_FLOOR``.
+        """Number of outputs that contribute to get_distance().
+
+        The count of alpha with ``y_true[alpha] >= YTRUE_FLOOR``.
 
         A property of the problem instance, not of any particular approximation, since
         y_true is carried unchanged by every transformation -- which is why reporting it
@@ -726,8 +730,7 @@ class VarianceMap:
 
 
     def rows(self, start, stop):
-        """Return rows [start, stop) of the stored (nbeta, nfreq) matrix, as a dense float64
-        array.
+        """Return rows [start, stop) of the stored (nbeta, nfreq) matrix, as dense float64.
 
         This is THE accessor: dense and factored maps differ only here, and every consumer
         goes through it, so that nothing ever needs the dense product of a factored map.
@@ -748,8 +751,7 @@ class VarianceMap:
 
 
     def cols(self, start, stop):
-        """Return columns [start, stop) of the stored matrix, as a dense (nbeta, ncol) float64
-        array.
+        """Return columns [start, stop) of the stored matrix, as dense (nbeta, ncol) float64.
 
         Note the cost asymmetry runs the OPPOSITE way from rows(): a dense map is stored
         C-order (nbeta, nfreq), so a column block is a strided gather. Size column blocks with
@@ -769,8 +771,9 @@ class VarianceMap:
 
 
     def dense(self, *, force=False, max_bytes=1 << 31):
-        """The full (nbeta, nfreq) matrix, as float64, READ-ONLY (it is rows() over the whole
-        matrix, so the same view-not-copy caveat applies).
+        """The full (nbeta, nfreq) matrix, as float64, READ-ONLY.
+
+        It is rows() over the whole matrix, so the same view-not-copy caveat applies.
 
         Raises if it would exceed 'max_bytes', since forming it is almost always a mistake at
         production scale; force=True overrides. For tests and small maps.
@@ -815,8 +818,10 @@ class VarianceMap:
 
 
     def apply(self, freq_variances):
-        """Evaluate ``y = A v`` for a length-nfreq input vector, returning a length-nbeta
-        array. This is the operation production actually performs."""
+        """Evaluate ``y = A v`` for a length-nfreq input vector, returning a length-nbeta array.
+
+        This is the operation production actually performs.
+        """
 
         v = np.asarray(freq_variances, dtype=np.float64)
         if v.shape != (self.nfreq,):
@@ -893,8 +898,9 @@ class VarianceMap:
 
 
     def apply_cost(self):
-        """Multiply-adds needed by apply(): ``nbeta * nfreq`` dense, or
-        ``factor_rank * nfreq + factor_rank^2 + nnz(Q)`` factored.
+        """Multiply-adds needed by apply().
+
+        ``nbeta * nfreq`` dense, or ``factor_rank * nfreq + factor_rank^2 + nnz(Q)`` factored.
 
         DESCRIPTIVE ONLY. The agreed figure of merit is RANK, not apply cost -- that was a
         deliberate decision, and it is why nothing here trades D away for a cheaper apply.
@@ -922,8 +928,9 @@ class VarianceMap:
     # ---------------- geometry helpers ----------------
 
     def alpha_to_beta_block(self, start, stop, L=None):
-        """The group index beta for each FINE index alpha in [start, stop), as an int array of
-        length (stop-start).
+        """The group index beta for each FINE index alpha in [start, stop).
+
+        Returns an int array of length (stop-start).
 
         Two lines of arithmetic on the index conventions in the module docstring, plus the
         small m_to_n table. The blockwise form is what the streaming sweep needs, since it
@@ -1018,8 +1025,9 @@ class VarianceMap:
     # ---------------- transformations ----------------
 
     def coarse_grain(self, L):
-        """Return the coarse-grained map ``Abar[beta,F] = max over alpha in beta of
-        A[alpha,F]``, at coarse-graining rank L. Requires ``R <= L <= r``.
+        """Return the coarse-grained map at coarse-graining rank L.
+
+        ``Abar[beta,F] = max over alpha in beta of A[alpha,F]``. Requires ``R <= L <= r``.
 
         Accepts a FINE map (the usual case) or an already-coarse one, in which case L must be
         strictly greater than self.L. That second case is not a convenience: a brute-force
@@ -1115,8 +1123,9 @@ class VarianceMap:
 
 
     def lift(self, *, max_bytes=1 << 31):
-        """Return the equivalent NON-coarse-grained map, with each coarse row duplicated
-        across its group.
+        """Return the equivalent NON-coarse-grained map.
+
+        Each coarse row is duplicated across its group.
 
         Conceptually useful and used by tests; for a DENSE map at production scale this is a
         memory disaster, so it refuses above 'max_bytes'. Prefer to keep maps coarse and let
@@ -1185,8 +1194,10 @@ class VarianceMap:
                                ' svd() first.')
 
     def _mid_is_identity(self):
-        """True iff 'mid' is exactly the identity. O(K^2), and the answer is what decides
-        whether a caller has to fold mid into Q."""
+        """True iff 'mid' is exactly the identity.
+
+        O(K^2), and the answer is what decides whether a caller has to fold mid into Q.
+        """
         return np.array_equal(np.asarray(self.mid), np.eye(self.factor_rank))
 
     def _QM(self):
@@ -1230,8 +1241,10 @@ class VarianceMap:
 
     @staticmethod
     def _svd_nkeep(s, factor_rank, eps):
-        """How many leading modes to keep: at most 'factor_rank', and none with
-        ``s < eps * s[0]``."""
+        """How many leading modes to keep.
+
+        At most 'factor_rank', and none with ``s < eps * s[0]``.
+        """
         n = s.size if (factor_rank is None) else min(int(factor_rank), s.size)
         if (eps is not None) and (s.size > 0):
             n = min(n, int(np.count_nonzero(s >= float(eps) * s[0])))
@@ -1278,8 +1291,9 @@ class VarianceMap:
         return out
 
     def _svd_randomized(self, factor_rank, rs, rng, oversample, power_iters):
-        """(U, s, V) of a dense self by a randomized range finder, in ``1 + 2*power_iters``
-        blocked passes with nothing of matrix size in memory.
+        """(U, s, V) of a dense self by a randomized range finder.
+
+        Runs in ``1 + 2*power_iters`` blocked passes with nothing of matrix size in memory.
 
         This is what makes an SVD basis reachable at a scale where the matrix is a file. It is
         APPROXIMATE and it depends on the draw, so pass an explicit 'rng' for anything that has
@@ -1323,8 +1337,10 @@ class VarianceMap:
 
     def _svd_dense(self, factor_rank, eps, shape_normalize, method, rng, oversample,
                    power_iters):
-        """(Q, mid, W, Q_is_semiorthogonal) for a truncated SVD of a DENSE self. 'method' is
-        already resolved to 'exact' or 'randomized'."""
+        """(Q, mid, W, Q_is_semiorthogonal) for a truncated SVD of a DENSE self.
+
+        'method' is already resolved to 'exact' or 'randomized'.
+        """
 
         rs = self._shape_scale(shape_normalize)
 
@@ -1346,8 +1362,9 @@ class VarianceMap:
         return Q, np.diag(s[:n]), np.ascontiguousarray(V[:, :n]), (rs is None)
 
     def _svd_factored(self, factor_rank, eps, shape_normalize, keep_pinned):
-        """(Q, mid, W, Q_is_semiorthogonal, npin) for a truncated SVD of a FACTORED self, with
-        no dense product anywhere: two thin QRs and one K-by-K SVD.
+        """(Q, mid, W, Q_is_semiorthogonal, npin) for a truncated SVD of a FACTORED self.
+
+        No dense product anywhere: two thin QRs and one K-by-K SVD.
 
         This is the rank-reduction path -- take an accurate high-rank factorization, drop modes,
         and let a Q-step restore admissibility -- so its cost must depend on K and not on nfreq
@@ -1409,8 +1426,9 @@ class VarianceMap:
     def svd(self, factor_rank=None, *, eps=None, shape_normalize=None, keep_pinned=True,
             method='auto', max_bytes=1 << 31, rng=None, oversample=None,
             power_iters=None):
-        """Return a factored VarianceMap holding a truncated SVD of self: ``Q = U``,
-        ``mid = diag(s)``, ``W = V``.
+        """Return a factored VarianceMap holding a truncated SVD of self.
+
+        The factors are ``Q = U``, ``mid = diag(s)``, ``W = V``.
 
         Keeps at most 'factor_rank' modes and drops any with ``s < eps * s[0]``; at least one of
         the two must be given. Very small singular values are not helping the approximation and
@@ -1574,9 +1592,10 @@ class VarianceMap:
                             is_admissible=False, history_record=rec)
 
     def reorthogonalize(self, *, keep_pinned=True):
-        """Re-express A as ``Q mid W.T`` with W semiorthogonal, at the same rank and with the
-        SAME matrix A -- exact, not an approximation. Nothing changes but the factorization and
-        the flags.
+        """Re-express A as ``Q mid W.T`` with W semiorthogonal, at the same rank.
+
+        Exact, not an approximation: the matrix A is the SAME one, and nothing changes but the
+        factorization and the flags.
 
         HOW THE PINNED COLUMNS SURVIVE, and why it is worth the trouble. A plain SVD-based
         reorthogonalization rotates every column together, which destroys the nonnegative column
@@ -1753,8 +1772,9 @@ class VarianceMap:
                             history_record=rec)
 
     def with_basis(self, W, *, mid=None, pinned_columns=None):
-        """Return a factored map with the given W and an UNSET Q (all zero), ready for a
-        qstep(). ``is_admissible`` is False, since a zero Q covers nothing.
+        """Return a factored map with the given W and an UNSET Q (all zero), ready for a qstep().
+
+        ``is_admissible`` is False, since a zero Q covers nothing.
 
         This is how a W-matrix built elsewhere enters the pipeline -- a different tree, a
         different config, a random matrix, a column-subset selection. It is a first-class entry
@@ -1780,8 +1800,9 @@ class VarianceMap:
     # ---------------- the column algebra ----------------
 
     def canonicalize_signs(self):
-        """Flip each FREE column of W so that its entries sum to >= 0, compensating exactly in
-        the other factors so that A is bitwise unchanged.
+        """Flip each FREE column of W so that its entries sum to >= 0.
+
+        Compensated exactly in the other factors, so that A is bitwise unchanged.
 
         Cheap, exactly invariant, and there is no reason not to call it on any freshly built
         basis: the LP is invariant under a per-column sign flip when q is sign-free, but the
@@ -1929,8 +1950,10 @@ class VarianceMap:
             history_record=rec)
 
     def select_columns(self, idx):
-        """Return a map keeping only these columns of W (and the matching columns of Q and rows
-        and columns of mid), at the reduced factor_rank. ``is_admissible`` becomes False.
+        """Return a map keeping only these columns of W, at the reduced factor_rank.
+
+        The matching columns of Q, and rows and columns of mid, are kept with them.
+        ``is_admissible`` becomes False.
 
         pinned_columns is REMAPPED, not carried: it holds column INDICES, so dropping a column
         shifts every index above it, and a naive copy leaves the pinned set pointing at the
@@ -1978,8 +2001,9 @@ class VarianceMap:
             is_admissible=False, history_record=rec)
 
     def augment_basis(self, W_extra):
-        """Append columns to W, with zero coefficients in Q so that the product is bitwise
-        unchanged and ``is_admissible`` survives.
+        """Append columns to W, with zero coefficients in Q.
+
+        The product is therefore bitwise unchanged, and ``is_admissible`` survives.
 
         The counterpart of select_columns(), and the primitive for GREEDY FORWARD SELECTION of a
         basis and for growing an existing approximation to a higher rank -- both posed and
@@ -2117,10 +2141,11 @@ class VarianceMap:
         return out.replace(history_record=rec)
 
     def seed_onehot(self, ref, *, block_rows=None):
-        """Return a map whose Q is the best ADMISSIBLE ONE-HOT choice for this W: per group, the
-        single NONNEGATIVE column of W that covers it most cheaply, scaled just enough to
-        dominate. ``is_admissible = ref.is_admissible``, by construction rather than by
-        measurement.
+        """Return a map whose Q is the best ADMISSIBLE ONE-HOT choice for this W.
+
+        Per group, the single NONNEGATIVE column of W that covers it most cheaply, scaled just
+        enough to dominate. ``is_admissible = ref.is_admissible``, by construction rather than
+        by measurement.
 
         Two jobs, and the second is the one that is easy to skip. It is a decent starting point
         in its own right -- a rescaled envelope, which is the baseline the whole low-rank family
@@ -2247,14 +2272,14 @@ class VarianceMap:
 
     def wstep(self, ref, *, cfg=None, repair=True, solve_fn=None, channels=None, workers=None,
               progress=False):
-        """One W-step: hold Q fixed and solve one majorize-minimize LP per channel for the rows
-        of W.
+        """One W-step: hold Q fixed and solve for the rows of W, one LP per channel.
 
-        Needs a majorization because the objective depends on W through column sums while the
-        constraint depends on it elementwise, so it does not decouple as written. f is concave,
-        so its tangent at the current iterate is a global UPPER bound; minimizing the tangent
-        cannot increase the true objective, and the tangent IS linear in W and does decouple over
-        channels. The tangent is taken at the FINE rows, which is why ref.y_true is required.
+        Each LP is a majorize-minimize step. A majorization is needed because the objective
+        depends on W through column sums while the constraint depends on it elementwise, so it
+        does not decouple as written. f is concave, so its tangent at the current iterate is a
+        global UPPER bound; minimizing the tangent cannot increase the true objective, and the
+        tangent IS linear in W and does decouple over channels. The tangent is taken at the
+        FINE rows, which is why ref.y_true is required.
 
         Columns listed in ``self.pinned_columns`` are excluded from the LP and left unchanged.
 
@@ -2293,8 +2318,9 @@ class VarianceMap:
                                  repair and self._cfg_repairs(cfg, 'cols'), qflag, False)
 
     def repair(self, ref, *, cfg=None, axis='rows'):
-        """Raise self until it dominates 'ref', with no LP at all. Returns a map with the same
-        factor_rank and ``is_admissible = ref.is_admissible``.
+        """Raise self until it dominates 'ref', with no LP at all.
+
+        Returns a map with the same factor_rank and ``is_admissible = ref.is_admissible``.
 
         Two uses, and the second is the one worth knowing. First, it is the cheap replacement for
         a TERMINAL Q-step: after a W-step the incumbent Q is stale but nearly right, and
@@ -2444,8 +2470,7 @@ class VarianceMap:
 
 
     def get_row_distances(self):
-        """The (nalpha,) array of per-row ``f(y_approx/y_true)``: which rows the distance is
-        being paid on.
+        """The (nalpha,) array of per-row ``f(y_approx/y_true)``: which rows D is paid on.
 
         A row with no variance comes back as NAN, not 0: it is excluded from the mean rather
         than contributing zero to it, and a 0 here would understate D. Use ``np.nanmean`` /
@@ -2572,8 +2597,9 @@ class VarianceMap:
 
 
     def measure_admissibility(self, ref, *, block_rows=None, inflate=False, viol_tol=1.0e-12):
-        """Test ``self >= ref`` elementwise, and summarize two ways. Returns an
-        AdmissibilityResult.
+        """Test ``self >= ref`` elementwise, and summarize two ways.
+
+        Returns an AdmissibilityResult.
 
         ``max_r = max over (row,F) of ref/self`` is the INFLATION FACTOR: the number self
         must be scaled by to dominate ref. ``max_diff = max|ref-self| / max|ref|`` is the

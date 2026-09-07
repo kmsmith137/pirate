@@ -131,6 +131,7 @@ def _parse_config(filename):
         'use_hugepages', 'data_ip_addrs', 'rpc_ip_addrs', 'grouper_ip_addrs',
         'check_mountpoints', 'ssd_dirs', 'ssd_threads_per_server',
         'nfs_dir', 'nfs_threads_per_server',
+        'min_data_mtu', 'min_rpc_mtu', 'ringbuf_nchunks',
     ]
 
     missing = [k for k in required_keys if k not in config]

@@ -37,13 +37,20 @@ aliases:
   # C++-only classes with no pybind11 binding (so no autoclass page is possible),
   # but with a notes page that IS their documentation.
   CudaEventRingbuf: notes/cuda_event_ringbuf
+  # Plurals. The registry is derived from the python domain, so it only knows the
+  # exact class name; a plural in prose is reported as 'unknown-class' and left
+  # unlinked. Add an entry here when a plural actually shows up in the docs.
+  AssembledFrameSets: classes/AssembledFrameSet
+  FileSubscribers: classes/FileSubscriber
+  PrimaryTrees: classes/PrimaryTree
   # Prose pointers to the compiled tex notes -> the served PDFs (open decision
-  # 5b). The notes are three separate documents, so there is deliberately NO
+  # 5b). The notes are four separate documents, so there is deliberately NO
   # bare "tex notes" alias: prose must say which one it means, and an unlinked
   # "tex notes" in a docstring or notes page is the signal to go fix it.
   dedispersion tex notes: static:_static/dedispersion.pdf
   detrending tex notes: static:_static/detrending.pdf
   variance map tex notes: static:_static/variance_map.pdf
+  inpainting tex notes: static:_static/inpainting.pdf
 
 # deny: suppress a keyword globally (no `page:`) or on one page. Add entries
 # here only when a match keeps recurring as a false positive.

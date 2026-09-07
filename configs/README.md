@@ -11,7 +11,7 @@ documentation snapshots (do not edit them by hand; regenerate by running
   (`python -m pirate_frb show file_format configs/xengine_metadata.yml`)
   -- the verbose ASDF YAML header emitted by `AssembledFrame::write_asdf()`.
 - `example_dedispersion_plan.yml`
-  (`python -m pirate_frb show dedisperser -v -a configs/dedispersion/chord_sb2_et.yml`)
+  (`python -m pirate_frb show dedisperser -v configs/dedispersion/chord_sb2_et.yml`)
   -- the dedispersion plan (`dedispersion_plan_yaml`) that the FRB search sends
   to the grouper at gRPC-handshake time. Use `-c` to also show the config and
   `-t` for plan-construction timing; the default output is reproducible.
@@ -26,7 +26,9 @@ documentation snapshots (do not edit them by hand; regenerate by running
     -- run GPU timing benchmarks.
 
   They are also the second positional argument to `pirate_frb run server` (see below), and
-  are consumed by `pirate_frb run offline_dedisperser` and `varmap mc`.
+  are consumed by `pirate_frb run offline_dedisperser` and `pirate_frb varmap bf/df`.
+  (`varmap mc` takes a stored variance-map `.asdf` file instead: its config is
+  embedded in the map.)
 
   `toy.yml` is a subscale config for quick testing; the remaining files are
   production-scale configs for CHIME and CHORD (with subband/early-trigger variants).

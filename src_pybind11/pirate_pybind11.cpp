@@ -1,12 +1,17 @@
 // Main pybind11 source file containing the PYBIND11_MODULE definition.
-// Main dedispersion bindings (DedispersionConfig, DedispersionPlan, GpuDedisperser) are defined here.
-// Other bindings are organized into separate files by subpackage:
-//   - pirate_pybind11_core.cu: core classes (pirate_frb.core)
-//   - pirate_pybind11_kernels.cu: GPU kernels (pirate_frb.kernels)
-//   - pirate_pybind11_casm.cu: CASM beamformer (pirate_frb.casm)
-//   - pirate_pybind11_loose_ends.cu: prototype functions (pirate_frb.loose_ends)
+// Main dedispersion bindings (DedispersionConfig, DedispersionPlan, GpuDedisperser,
+// ReferenceDedisperser) are defined here. Other bindings are organized into separate
+// files by subpackage:
+//   - pirate_pybind11_core.cpp: core classes (pirate_frb.core)
+//   - pirate_pybind11_varmap.cpp: variance-map C++ ports (pirate_frb.fast_varmap)
+//   - pirate_pybind11_kernels.cpp: GPU kernels (pirate_frb.kernels)
+//   - pirate_pybind11_casm.cpp: CASM beamformer (pirate_frb.casm)
+//   - pirate_pybind11_chime.cpp: CHIME beamformer (pirate_frb.chime)
+//   - pirate_pybind11_loose_ends.cpp: prototype functions (pirate_frb.loose_ends)
+//   - pirate_pybind11_simpulse.cpp: FRB pulse simulation (pirate_frb.simpulse)
+//   - pirate_pybind11_utils.cpp: pirate_frb.utils
 //
-// For an explanation of PY_ARRAY_UNIQUE_SYMBOL, see comments in ksgpu/src_pybind11/ksgpu_pybind11.cu.
+// For an explanation of PY_ARRAY_UNIQUE_SYMBOL, see comments in ksgpu/src_pybind11/ksgpu_pybind11.cpp.
 
 #define PY_ARRAY_UNIQUE_SYMBOL PyArray_API_pirate
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -311,7 +316,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def("make_channel_map", &DedispersionConfig::make_channel_map,
                "Create channel map array defining tree-to-frequency mapping.\n\n"
                "Returns:\n"
-               "    Array of length (2^toplevel_tree_rank + 1) with channel boundaries")
+               "    numpy array of length (2^toplevel_tree_rank + 1) with channel boundaries")
           // dtype: reads return numpy.dtype, writes accept strings/numpy dtypes/None,
           // via ksgpu's type_caster<ksgpu::Dtype> (no wrapper needed on either side).
           .def_readwrite("dtype", &DedispersionConfig::dtype,
@@ -397,7 +402,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "        be built without one.)\n"
                "    gpu_kernels: if False, then all gpu kernel params\n"
                "        (``tree_gridding_kernel_params`` ... ``h2h_copy_kernel_params``) are\n"
-               "        uninitialized. Requires ``mega_ringbuf=True``.")
+               "        uninitialized. Leaving it True requires ``mega_ringbuf=True``; the\n"
+               "        combination ``mega_ringbuf=False, gpu_kernels=True`` raises.")
           .def_readonly("config", &DedispersionPlan::config,
                "The DedispersionConfig used to create this plan")
           .def_readonly("dtype", &DedispersionPlan::dtype,
@@ -417,7 +423,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("ntrees", &DedispersionPlan::ntrees,
                "Total number of stage2 trees (num_primary_trees + number of early triggers)")
           .def_readonly("nbits", &DedispersionPlan::nbits,
-               "Number of bits per element (same as config.dtype.nbits)")
+               "Number of bits per element (= 8 * config.dtype.itemsize)")
           .def_readonly("trees", &DedispersionPlan::trees,
                "Vector of DedispersionTree objects representing stage2 output trees.\n"
                "Length is ntrees. Each tree is one (primary tree, early trigger) pair.\n"
@@ -488,7 +494,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("idm_coarse"), py::arg("itime_coarse"),
                "Decode an ``out_argmax`` token into the winning trial parameters, i.e. the\n"
                "(subband, peak-finding profile, fine-grained dm, fine-grained arrival time)\n"
-               "responsible for the coarse-grained maximum in ``trees[itree].out_max``.\n\n"
+               "responsible for the coarse-grained maximum in tree ``itree``'s ``out_max``\n"
+               "array.\n\n"
                "Raises on out-of-range indices or a malformed token. See DedispersionPlan.hpp\n"
                "for the full spec.\n\n"
                "Args:\n"
@@ -667,8 +674,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                },
                py::arg("seq_id"), py::arg("stream_ptr"),
                py::call_guard<py::gil_scoped_release>(),
-               "Acquire the input buffer for seq_id and return a\n"
-               "ksgpu.Array view of it. After this call 'stream' sees an empty\n"
+               "Acquire the input buffer for seq_id and return a cupy array\n"
+               "view of it. After this call 'stream' sees an empty\n"
                "input buffer ready for writing; the returned view is valid until\n"
                "the matching _release_input_and_launch_dd_kernels() call.")
           .def("_release_input_and_launch_dd_kernels",
@@ -686,7 +693,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("consumer_id"), py::arg("seq_id"), py::arg("stream_ptr"),
                py::call_guard<py::gil_scoped_release>(),
                "Acquire the output buffer for (consumer_id, seq_id) and return\n"
-               "an Outputs object holding list-of-Array views of out_max and out_argmax.\n"
+               "an Outputs object holding lists of cupy array views of out_max and out_argmax.\n"
                "After this call 'stream' sees a full output buffer ready for reading;\n"
                "the returned views are valid until the matching _release_output() call.\n"
                "consumer_id must be in [0, num_consumers).")
@@ -723,7 +730,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "nbatches_wt weight slots. Must call allocate() first.\n\n"
                "Args:\n"
                "    itree: tree index, in [0, ntrees)\n"
-               "    pf_weights: host ksgpu.Array<float>, shape (nbatches_wt, beams_per_batch,\n"
+               "    pf_weights: host numpy array, float32, shape (nbatches_wt, beams_per_batch,\n"
                "        t.ndm_wt, t.nt_wt, t.nprofiles, t.frequency_subbands.N) with\n"
                "        t = plan.trees[itree]. Weights may differ per slot and per beam.")
           .def("fill_analytic_weights", &GpuDedisperser::fill_analytic_weights,
@@ -735,7 +742,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "real search uses, so peak-finding out_max values come out as SNRs. Must\n"
                "call allocate() first; blocks (cudaDeviceSynchronize) before returning.\n\n"
                "Args:\n"
-               "    freq_variances: host ksgpu.Array<double>, length nfreq (all positive).\n"
+               "    freq_variances: host numpy array, float64, length nfreq (all positive).\n"
                "        Typically XEngineMetadata.get_channel_variances().")
     ;
 
@@ -746,7 +753,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "CPU reference dedisperser (for testing and variance studies).\n"
         "\n"
         "Constructed directly:\n"
-        "    ReferenceDedisperser(plan, sophistication, tree_domain_input=False)\n"
+        "    ReferenceDedisperser(plan, sophistication, tree_domain_input=False, Dcores=None)\n"
         "\n"
         "'sophistication' (0, 1, or 2) selects the reference implementation:\n"
         "\n"

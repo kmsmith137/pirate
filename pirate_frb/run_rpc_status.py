@@ -132,9 +132,9 @@ def run_rpc_status(ip_addrs):
 
     Prints a one-shot config dump for each server, then -- per server -- runs
     three daemon threads: one polls get_status() once per second (printing the
-    connection count, ring-buffer counters, and free-frame count), one waits
-    for the X-engine metadata and prints it once it arrives, and one prints
-    filenames as the server reports them over subscribe_files().
+    connection count and the ring-buffer counters), one waits for the X-engine
+    metadata and prints it once it arrives, and one prints filenames as the
+    server reports them over subscribe_files().
 
     Blocks until Ctrl-C or until any thread hits an error (the first error
     sets a shared stop_event that tears down every connection). Exits the

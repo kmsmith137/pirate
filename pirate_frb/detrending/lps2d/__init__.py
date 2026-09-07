@@ -1,8 +1,8 @@
 """
-Pure-numpy regularized spline detrender: a masked B-spline fit along the
-frequency axis, subtracted per (beam, time) sample.
+Pure-numpy regularized spline detrender: a masked B-spline fit along the frequency axis.
 
-The fit at each sample solves the REGULARIZED normal equations
+The fit is subtracted per (beam, time) sample, and at each sample solves the
+REGULARIZED normal equations
 
     (G + eta D_1) a = U,   G_jl = sum_f w_f phi_j(f) phi_l(f),
                            U_j  = sum_f w_f phi_j(f) d_f,

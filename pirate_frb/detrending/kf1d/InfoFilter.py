@@ -1,7 +1,8 @@
 """
-The two information-filter recursions of the fixed-lag detrender (see
-notes/detrending.tex, section "Time detrending algorithm 2: Kalman filter",
-eq (kf_fwd) and (kf_bwd)).
+The two information-filter recursions of the fixed-lag detrender.
+
+The recursions are specified in notes/detrending.tex, section "Time detrending
+algorithm 2: Kalman filter", eq (kf_fwd) and (kf_bwd).
 
 A Gaussian is carried in *information* form: the pair (J, eta) represents
 
@@ -90,8 +91,9 @@ def forward_step(J, eta, m, d, model):
 
 def backward_step(J, eta, m, d, model):
     """
-    One step of the backward information filter, absorbing the sample (m, d) at u+1
-    into a likelihood on x[u].  (J, eta) in and out represent
+    One step of the backward information filter, absorbing the sample (m, d) at u+1.
+
+    The sample is absorbed into a likelihood on x[u]: (J, eta) in and out represent
     p(d[u+1 .. b] | x[u]) as an unnormalized Gaussian in x[u].
 
     The exact mirror of forward_step(): measure, downdate, then a congruence by A^T

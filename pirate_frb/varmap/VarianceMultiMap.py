@@ -244,8 +244,9 @@ class VarianceMultiMap:
 
 
     def with_maps(self, maps, *, provenance=None):
-        """Return a new VarianceMultiMap with the same config and detrender and the given
-        per-PRIMARY-tree maps, re-validating.
+        """Return a new VarianceMultiMap with the given per-PRIMARY-tree maps.
+
+        Keeps the same config and detrender, and re-validates.
 
         This is the general per-primary-tree transformation::
 
@@ -352,9 +353,10 @@ class VarianceMultiMap:
 
     @classmethod
     def from_asdf(cls, filename):
-        """Read a variance-map file EAGERLY: ordinary in-memory arrays, no open file
-        handle, no lifetime contract. This is the one to use unless you have a specific
-        reason not to.
+        """Read a variance-map file EAGERLY.
+
+        Ordinary in-memory arrays, no open file handle, no lifetime contract. This is the one
+        to use unless you have a specific reason not to.
 
         The file must cover every PRIMARY tree of its config, since a multimap does; read a
         single-map file with ``VarianceMap.from_asdf(filename, gamma)``.

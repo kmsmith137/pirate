@@ -1,6 +1,8 @@
 """
-The state-space model behind the fixed-lag detrender (see notes/detrending.tex,
-section "Time detrending algorithm 2: Kalman filter", subsection "The model").
+The state-space model behind the fixed-lag detrender.
+
+The model is specified in notes/detrending.tex, section "Time detrending
+algorithm 2: Kalman filter", subsection "The model".
 
 The trend is a k-fold integrated random walk,
 
@@ -88,10 +90,12 @@ class StateSpaceModel:
 
 def tau_from_equivalent_W(k, W):
     """
-    The tau which matches a local polynomial fit of half-width W, by equating the
-    smoothing kernels at zero lag: h[0] = 9/(8W) there and c_k/tau here.  This also
-    matches the flux loss and the degrees of freedom removed, so it is the right way
-    to set up a like-for-like comparison of the two detrenders.
+    Returns the tau which matches a local polynomial fit of half-width W.
+
+    The match is made by equating the smoothing kernels at zero lag: h[0] = 9/(8W)
+    there and c_k/tau here.  This also matches the flux loss and the degrees of
+    freedom removed, so it is the right way to set up a like-for-like comparison of
+    the two detrenders.
 
     At k=2 this is tau = 0.314 W.
     """

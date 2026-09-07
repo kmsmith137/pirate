@@ -113,12 +113,12 @@ ROOT_KEY = 'variance_multimap'
 
 
 def _plain(x):
-    """Recursively convert numpy scalars, tuples and dataclasses to plain python, for the
-    free-form 'provenance' and 'history' records.
+    """Recursively convert numpy scalars, tuples and dataclasses to plain python.
 
-    Those are free-form on purpose, so the conversion is by TYPE rather than by schema.
-    ndarrays are passed through untouched: asdf stores them as blocks, which is the right
-    thing for anything large enough to be an array in the first place.
+    Used for the free-form 'provenance' and 'history' records. Those are free-form on purpose,
+    so the conversion is by TYPE rather than by schema. ndarrays are passed through untouched:
+    asdf stores them as blocks, which is the right thing for anything large enough to be an
+    array in the first place.
 
     THE DATACLASS CASE IS THE LOAD-BEARING ONE. A step's history record is meant to carry the
     config it ran under, and the natural way to write that is to stash the config OBJECT.
@@ -421,8 +421,11 @@ def _multimap_from_root(root, filename):
 
 
 def read_multimap(filename):
-    """Read a variance-map file EAGERLY: ordinary in-memory arrays, no open handle, no
-    lifetime contract. This is the one to use unless you have a specific reason not to."""
+    """Read a variance-map file EAGERLY.
+
+    Ordinary in-memory arrays, no open handle, no lifetime contract. This is the one to use
+    unless you have a specific reason not to.
+    """
 
     import asdf
 

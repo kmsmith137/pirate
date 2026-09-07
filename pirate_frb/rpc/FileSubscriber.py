@@ -29,6 +29,13 @@ class FileSubscriber:
     stream's stream_name for stream-triggered files (only delivered when
     the subscription was opened with subscribe_streams=True).
 
+    A subscriber must keep reading. If the unsent-notification backlog exceeds the
+    server's per-subscriber cap, the server stops the subscription and drops the
+    backlogged notifications; the next read then raises with status INTERNAL and a
+    "fell behind" message. Those notifications are gone, so a caller that still needs
+    to know which files exist must resubscribe and resynchronize by other means (for
+    example, by listing the acquisition directory).
+
     Not thread-safe: a single FileSubscriber must be iterated from
     one thread at a time. Multiple FileSubscriber objects from the
     same FrbSearchClient on different threads are fine (each gets its own
