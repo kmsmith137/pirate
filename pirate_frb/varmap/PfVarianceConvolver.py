@@ -95,7 +95,7 @@ class PfVarianceConvolver:
         return rho @ self.A[:P, :d].T        # (..., d) @ (d, P) -> (..., P)
 
     # ---------------------------------------------------------------------------
-    # Tests (dispatched from pirate_frb/__main__.py via 'test --avar').
+    # Tests (dispatched from pirate_frb/varmap/tests.py via 'test --varmap').
 
     @staticmethod
     def test_random_variance():

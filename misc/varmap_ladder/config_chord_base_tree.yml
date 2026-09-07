@@ -32,7 +32,7 @@ dtype: float16
 time_samples_per_chunk: 2048
 
 # 25 frequency subbands, as [5,9,7,3,1] over pf_level = 0..4.
-# Command line: pirate_frb make_subbands 300 1500 0.1 -r 4
+# Command line: pirate_frb dev make_subbands 300 1500 0.1 -r 4
 frequency_subband_counts: [5,9,7,3,1]
 
 max_gpu_clag: 5

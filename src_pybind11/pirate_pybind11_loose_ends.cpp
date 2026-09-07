@@ -38,7 +38,7 @@ void register_loose_ends_bindings(pybind11::module &m)
     m.def("test_gpu_transpose", &test_gpu_transpose, py::call_guard<py::gil_scoped_release>());
     m.def("test_gpu_reduce2", &test_gpu_reduce2, py::call_guard<py::gil_scoped_release>());
 
-    // Called by 'python -m pirate_frb dev scratch'. Defined in src_lib/utils.cu.
+    // Called by 'python -m pirate_frb dev scratch'. Defined in src_lib/scratch.cu.
     m.def("scratch", &scratch);
 
     // Called by 'python -m pirate_frb dev revisit_512gb'. Defined in src_lib/utils.cpp.

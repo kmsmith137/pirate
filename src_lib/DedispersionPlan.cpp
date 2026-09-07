@@ -544,7 +544,7 @@ static void _tree_to_yaml(YAML::Emitter &emitter, const DedispersionTree &tree,
 
 void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones) const
 {
-    // Top-of-file header comment (verbose only). Note that the 'show_dedisperser' CLI
+    // Top-of-file header comment (verbose only). Note that the 'pirate_frb show dedisperser' CLI
     // additionally prints a "# Created with: pirate_frb ..." line above this header,
     // recording the exact command line used to generate the file.
     if (verbose) {

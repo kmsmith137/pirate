@@ -3,7 +3,7 @@
 # Everything to do with variance maps lives here: the representation, the distance function,
 # the brute-force sweep, the analytic (detrender-free) map of the base tree, the multimap of
 # every primary tree derived from it, the map-free per-tree evaluation of A v that shares its
-# tile pass, the file format, and the 'pirate_frb varmap' CLI (subcommands 'bf' and 'df').
+# tile pass, the file format, and the 'pirate_frb varmap' CLI (subcommands 'bf', 'df' and 'mc').
 # SparseTile.py and PfVarianceConvolver.py are the low-level primitives detrender_free.py
 # is built on: the compressed representation of a one-hot's dedispersion output, and the
 # table that turns a time series into peak-finding output variances. They came from the

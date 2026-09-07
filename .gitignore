@@ -25,6 +25,12 @@ __pycache__/
 # to 'ls', so it is easy to sweep one into a commit with 'git add -A'.
 .nfs*
 
+# Emacs autosaves (#file#) and lock files (.#file). Same hazard as .nfs* above:
+# untracked, easy to sweep into a commit with 'git add -A', and easy to miss in
+# review because the name sorts oddly.
+\#*\#
+.\#*
+
 # GRPC
 grpc/*.pb.h
 grpc/*.pb.cc
