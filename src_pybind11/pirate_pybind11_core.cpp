@@ -1474,7 +1474,7 @@ void register_core_bindings(pybind11::module &m)
                "Monotone: a stale value only understates server progress (0\n"
                "before any data has flowed). -1 when paced=False. Use to bound\n"
                "SKIP jumps, which bypass the pacing gate: a skip that lands more\n"
-               "than (max_unprocessed_chunks - 3) chunks past rb_processed //\n"
+               "than (max_unprocessed_chunks - 4) chunks past rb_processed //\n"
                "nbeams can trip the server's keep-up bound when the next send\n"
                "fast-forwards assembly of the skipped span (the view is only a\n"
                "LOWER bound, and the receivers' 2-chunk assembly window adds\n"

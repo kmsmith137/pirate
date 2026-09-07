@@ -152,17 +152,23 @@ class NetworkTester:
             ringbuf_nchunks        = ringbuf_nchunks,
             max_unprocessed_chunks = M,
             pacing_budget_chunks   = pacing_budget,
-            # M-3, not M-2. A skip realized at the window edge lands the
-            # assembled frontier at (skip_window + 1) chunks past the pacing
-            # view, and the view is only a LOWER bound on rb_processed -- so
-            # the realized gap can reach (skip_window + 1) * nbeams frames,
-            # plus up to ~nbeams+1 more from the receivers' 2-chunk assembly
-            # window as the following sends land. Against the server's
-            # M * nbeams limit, M-2 leaves only nbeams frames of headroom and
-            # the slop can exceed it (observed: 69 frames vs a 68-frame limit,
-            # M=17/nbeams=4). M-3 leaves a full chunk of margin, which covers
-            # the slop for any nbeams >= 1. M >= 8, so skip_window >= 5.
-            skip_window            = M - 3,
+            # A skip realized at the window edge lands the assembled frontier
+            # at (skip_window + 1) chunks past the pacing view; the view is
+            # only a LOWER bound on rb_processed, and the receivers' assembly
+            # window adds up to TWO more chunks as the following sends land
+            # (it takes data from chunk c+2 to complete chunk c). So the
+            # realized gap can reach (skip_window + 3) * nbeams + 1 frames.
+            # Against the server's M * nbeams limit that needs
+            # skip_window <= M - 3 - 1/nbeams, i.e. M-4 for any nbeams >= 1.
+            #
+            # Both M-2 and M-3 were tried before this and each failed by
+            # exactly one frame -- 69 vs a 68-frame limit at M=17/nbeams=4,
+            # and 99 vs 98 at M=14/nbeams=7. Each was fitted to the run that
+            # exposed the previous one, in which the assembly window happened
+            # to contribute one chunk rather than its full two; M-4 is what
+            # the two-chunk window gives, rather than another fitted value.
+            # M >= 8, so skip_window >= 4.
+            skip_window            = M - 4,
             processing_delay_sec   = delay,
             no_dedispersion        = no_dedispersion,
         )
