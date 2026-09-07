@@ -11,7 +11,7 @@ useful on their own whenever you have pipeline logs to look at.
 
 ## Why these exist
 
-A sweep takes ~90 minutes, of which most is waiting. The agent's time went
+A sweep takes ~2.5 hours, of which most is waiting. The agent's time went
 instead into two things that recur identically on every run:
 
 - **Harness plumbing.** Background processes do not survive across an
