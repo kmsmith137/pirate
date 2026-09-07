@@ -29,7 +29,6 @@ dedispersion kernels.
 Run via: python -m pirate_frb test --serv
 """
 
-import math
 import os
 import queue as _queue
 import random
@@ -60,6 +59,7 @@ from ..pirate_pybind11 import (
     ReferenceDedisperser,
     ReferenceDequantizationKernel,
     constants,
+    peak_finding_test_tolerance,
 )
 from ..Hardware import Hardware
 from ..utils import ThreadAffinity
@@ -608,22 +608,14 @@ class ServerTester:
         self.dq_out = np.zeros((self.B, p['total_nfreq'], p['time_samples_per_chunk']),
                                dtype=np.float32)
 
-        # Comparison threshold, per tree -- same formula as test_one, but with
-        # coefficient 5 instead of 3:
-        #   eps = 5 * prec * sqrt(n+2),
-        #   n = primary_tree_index + tree_rank.
-        # The 3-sigma-style bound was flaky in this end-to-end test (~1-in-3
-        # runs failed on a single element, with |delta| up to ~1.45x the
-        # threshold, at a random position with a random config each time).
-        # Real bugs produce order-unity errors, so the looser bound loses
-        # essentially no detection power.
+        # Comparison threshold. The formula lives in C++ (peak_finding_test_tolerance(),
+        # declared in include/pirate/Dedisperser.hpp), shared with
+        # GpuDedisperser::test_one() so the two cannot drift apart.
         #
-        # 'prec' is a per-dtype test tolerance (the values ksgpu uses for its
-        # own array comparisons) -- deliberately looser than np.finfo(...).eps.
-        prec = {np.dtype(np.float16): 1.0e-3,
-                np.dtype(np.float32): 1.0e-6,
-                np.dtype(np.float64): 1.0e-15}[p['config'].dtype]
-        self.eps = [ 5.0 * prec * math.sqrt(tr.primary_tree_index + tr.tree_rank + 2) for tr in trees ]
+        # It depends on max |reference|, which is not known until the arrays exist, so
+        # only the per-tree 'n' is cached here; the call is made in _compare_chunk().
+        self.tol_dtype = p['config'].dtype
+        self.tol_n = [ tr.primary_tree_index + tr.tree_rank for tr in trees ]
 
         # First child message: the handshake echo (arrives once the producer's
         # handshake completes; the queue orders it before any outputs).
@@ -695,9 +687,12 @@ class ServerTester:
 
             for t in range(self.ntrees):
                 wt_ref = np.asarray(self.rdd.wt_arrays[t])
+                ref = np.asarray(self.rdd.out_max[t])
+                epsabs, epsrel = peak_finding_test_tolerance(
+                    self.tol_dtype, self.tol_n[t], float(np.max(np.abs(ref))))
                 d = ksgpu.assert_arrays_equal(
                     self.rdd.out_max[t], gpu_max[t], "ref_max", "gpu_max",
-                    ["beam", "pfdm", "pft"], epsabs=self.eps[t], epsrel=self.eps[t])
+                    ["beam", "pfdm", "pft"], epsabs=epsabs, epsrel=epsrel)
                 maxdiff = max(maxdiff, d)
 
                 # out_argmax: evaluate the GPU tokens with the reference kernel +
@@ -705,7 +700,7 @@ class ServerTester:
                 self.pf_kernels[t].eval_tokens(self.pf_tmp[t], gpu_tok[t], wt_ref)
                 d = ksgpu.assert_arrays_equal(
                     self.rdd.out_max[t], self.pf_tmp[t], "ref_max", "gpu_tokens",
-                    ["beam", "pfdm", "pft"], epsabs=self.eps[t], epsrel=self.eps[t])
+                    ["beam", "pfdm", "pft"], epsabs=epsabs, epsrel=epsrel)
                 maxdiff = max(maxdiff, d)
 
         return maxdiff

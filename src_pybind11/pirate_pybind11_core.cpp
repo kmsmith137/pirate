@@ -1062,6 +1062,20 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("trigger_frequency", &DedispersionTree::trigger_frequency)
     ;
 
+    m.def("peak_finding_test_tolerance", &peak_finding_test_tolerance,
+          py::arg("dtype"), py::arg("n"), py::arg("ref_max"),
+          "Tolerance for comparing a peak-finding 'out_max' array against a reference,\n"
+          "as the (epsabs, epsrel) pair that ksgpu.assert_arrays_equal() expects.\n\n"
+          "Exposed so that the end-to-end server test (pirate_frb/tests/test_server.py)\n"
+          "and GpuDedisperser::test_one() share ONE definition of the tolerance, rather\n"
+          "than each carrying its own hand-tuned constant.\n\n"
+          "Args:\n"
+          "    dtype: dedisperser dtype (float16 or float32).\n"
+          "    n: primary_tree_index + tree_rank of the tree being compared.\n"
+          "    ref_max: max |value| over the REFERENCE array.\n\n"
+          "Returns:\n"
+          "    (epsabs, epsrel) tuple.");
+
     // Thread affinity functions
     m.def("set_thread_affinity", &set_thread_affinity,
           py::arg("vcpu_list"),

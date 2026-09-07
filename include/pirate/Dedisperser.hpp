@@ -9,6 +9,7 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <utility>
 #include <memory>
 #include <iostream>
 #include <condition_variable>
@@ -539,6 +540,18 @@ struct ReferenceDedisperserBase
     // Factory function -- constructs ReferenceDedisperser of the sophistication in 'params'.
     static std::shared_ptr<ReferenceDedisperserBase> make(const Params &params);
 };
+
+
+// Tolerance for comparing a peak-finding 'out_max' array against a reference, as the
+// (epsabs, epsrel) pair that ksgpu::assert_arrays_equal() expects. Arguments are the
+// dedisperser dtype, n = (primary_tree_index + tree_rank) of the tree being compared,
+// and ref_max = max |value| over the REFERENCE array.
+//
+// Two tests make this same comparison and must use the same tolerance:
+// GpuDedisperser::test_one() ('pirate_frb test --dd') and the end-to-end server test
+// (pirate_frb/tests/test_server.py, which calls this through the pybind11 binding of
+// the same name). Keeping the tolerance here is what stops the two from drifting apart.
+std::pair<double, double> peak_finding_test_tolerance(ksgpu::Dtype dtype, long n, double ref_max);
 
 
 }  // namespace pirate

@@ -1296,6 +1296,54 @@ void GpuDedisperser::_fill_all_weights(long itree, const Array<float> &pf_weight
 
 
 // Static member function.
+// Coefficient in peak_finding_test_tolerance(). Calibrated, not guessed -- see below.
+static constexpr double pf_tol_coeff = 3.0;
+
+
+std::pair<double, double> peak_finding_test_tolerance(Dtype dtype, long n, double ref_max)
+{
+    xassert(n >= 0);
+    xassert(ref_max >= 0.0);
+
+    // Returns (epsabs, epsrel), so the per-element bound that assert_arrays_equal()
+    // applies is  pf_tol_coeff * dtype.epsilon() * sqrt(n+2) * (ref_max + |x| + |y|).
+    //
+    // Each of the three factors is load-bearing:
+    //
+    //  - dtype.epsilon(), NOT dtype.precision(). precision() returns round numbers
+    //    (float32 1e-6, float16 1e-3) sitting at very different multiples of true
+    //    machine epsilon -- 8.4x for float32 but only 1.02x for float16 -- so a bound
+    //    built on it would grant float32 eight times more slack than float16, and the
+    //    two dtypes would not be held to the same standard. Measured, the coefficient
+    //    float16 requires exceeds float32's by only 1.1-1.6x with epsilon().
+    //
+    //  - ref_max (max |value| over the REFERENCE array), NOT a bare constant 1.0. The
+    //    error being bounded is roundoff in dedispersion sums whose TERMS are of order
+    //    ref_max, whereas the out_max element being compared is usually much smaller
+    //    (median ~8% of ref_max: out_max is a max over candidates, and most candidates
+    //    are quiet). An absolute floor pinned to 1.0 would under-cover precisely the
+    //    small elements, where relative error is largest. This is why the tolerance
+    //    has to be recomputed per tree rather than hoisted out of the loop.
+    //
+    //  - sqrt(n+2), a random walk of (n+2) rounding steps down the tree. Measurement
+    //    says it is doing its job: the required coefficient is then flat in n
+    //    (0.37-0.95 over n = 5..12) and in array size N (0.24-0.59 over N = 64..49152),
+    //    so no additional N-dependent factor is warranted.
+    //
+    // Calibration, over 35k instrumented comparisons from 'test --dd' and 'test --serv'
+    // across both dtypes: the largest coefficient any single comparison required was
+    // 0.95. Fitting the upper tail to a Gumbel and extrapolating, coefficient 3.0 gives
+    // an expected 1.5e-5 assertion failures per 100-iteration run -- about one per
+    // 65000 runs -- with 3.2x margin over the worst case actually seen.
+    //
+    // The bound is looser for float16 and tighter for float32 than a bare-constant one
+    // of similar coefficient. That asymmetry is the correction, not lost detection
+    // power: real errors are order-unity relative, and stay far above it.
+    double u = pf_tol_coeff * dtype.epsilon() * sqrt(n+2);
+    return { u * ref_max, u };
+}
+
+
 void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, long nbatches_out, long nbatches_wt, long num_consumers, bool host_only)
 {
     cout << "\n" << "GpuDedisperser::test()" << endl;
@@ -1594,11 +1642,20 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 Array<uint> gpu_tokens = gdd_out.out_argmax.at(itree).to_host();
 
                 long n = tree.primary_tree_index + tree.tree_rank;
-                double eps = 3.0 * config.dtype.precision() * sqrt(n+2);
-                assert_arrays_equal(rdd0->out_max.at(itree), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"}, eps, eps);
+
+                // The tolerance scales with the reference array's own magnitude, so it
+                // must be recomputed per tree. Shared with test_server.py -- see
+                // peak_finding_test_tolerance().
+                const Array<float> &ref_max_arr = rdd0->out_max.at(itree);
+                double ref_max = 0.0;
+                for (auto ix = ref_max_arr.ix_start(); ref_max_arr.ix_valid(ix); ref_max_arr.ix_next(ix))
+                    ref_max = std::max(ref_max, std::abs((double) ref_max_arr.at(ix)));
+
+                auto [epsabs, epsrel] = peak_finding_test_tolerance(config.dtype, n, ref_max);
+                assert_arrays_equal(rdd0->out_max.at(itree), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"}, epsabs, epsrel);
 
                 pf_kernel->eval_tokens(pf_tmp.at(itree), gpu_tokens, rdd0->wt_arrays.at(itree));
-                assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"}, eps, eps);
+                assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"}, epsabs, epsrel);
             }
 
             if (!host_only && (num_consumers > 0)) {
