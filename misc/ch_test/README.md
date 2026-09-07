@@ -119,6 +119,16 @@ Two rules keep that honest, and both are load-bearing:
    yields no parseable lines is a FAIL, not a skip. If you add a check, add
    its guard too.
 
+   A parse failure is not the only way to pass vacuously. A check can also
+   parse fine and still have too little DATA to say anything -- the grouper
+   baseline in `check-logs.py` needs chunks where no beam detected anything,
+   and a production run leaves almost none (2 of 2122, against thousands in
+   a toy run). That reports `skip`, a third outcome meaning "this check
+   could not run here", which is neither the `ok` the sample size does not
+   justify nor a `warn` about a run that is behaving exactly as expected.
+   Reach for `skip` only when the shortage is structural and you can say why
+   -- an unexpectedly empty population is a `warn`.
+
 **If you change a log or print format in pirate, update the parser here in
 the same commit.** That is why these live in the pirate repo rather than
 next to the command file: the formats and the code that parse them version

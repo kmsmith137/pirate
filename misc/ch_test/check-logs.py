@@ -19,7 +19,9 @@ Checks, per log:
               line has been a real bug)
   grouper     coarse_snr_max baseline range over nevents=0 chunks, and the
               spike count -- baseline should sit around 5-9, spikes near the
-              injected SNR
+              injected SNR. The baseline is SKIPPED when too few chunks were
+              quiet to measure one (see MIN_BASELINE_CHUNKS); that is the
+              normal outcome at production beam counts, not a failure.
   xengine     injected-FRB count, the distinct SNR values, and per-beam counts
   sifter      BOTH event streams present (FROM_SIMULATOR truth and grouper
               search events), and what fraction of search detections have a DM
@@ -82,6 +84,16 @@ PROGRESS_RE = {
 # find_cascade_start() for why the region is never allowed to be shorter.
 MIN_CASCADE_LINES = 60
 
+# Minimum nevents=0 chunks before the grouper baseline is worth reporting.
+# coarse_snr_max is a max over ALL beams (per_beam_max.max() in
+# run_toy_grouper.py), and nevents counts the beams that detected something,
+# so a chunk is "quiet" only when NO beam detected anything -- a population
+# that shrinks as beam count grows. A toy run (16 beams) leaves thousands of
+# quiet chunks; a production run (120 beams) left 2 out of 2122. Below this
+# count we skip rather than report a median computed from a handful of
+# samples, which would be a pass the data does not support.
+MIN_BASELINE_CHUNKS = 30
+
 
 class Report:
     def __init__(self):
@@ -99,6 +111,12 @@ class Report:
 
     def warn(self, msg):
         print(f"  warn  {msg}")
+
+    def skip(self, msg):
+        # A check that could not run on this data -- neither a pass nor a
+        # failure. Distinct from warn, which means "ran, and the result is
+        # suspicious". Does not affect exit status.
+        print(f"  skip  {msg}")
 
 
 def read_lines(path):
@@ -146,14 +164,18 @@ def check_grouper(lines, r):
     if not base and not spikes:
         r.fail("no 'coarse_snr_max=..., nevents=...' lines -- format changed?")
         return
-    if base:
+    if len(base) >= MIN_BASELINE_CHUNKS:
         r.ok(f"baseline (nevents=0): {len(base)} chunks, "
              f"coarse_snr_max {min(base):.3g} .. {max(base):.3g}, "
              f"median {statistics.median(base):.3g}")
         if max(base) > 20:
             r.warn(f"baseline max {max(base):.3g} is high for a no-event chunk")
     else:
-        r.warn("every chunk had events -- no baseline to measure")
+        r.skip(f"baseline: only {len(base)}/{len(base) + spikes} chunk(s) had "
+               f"nevents=0, too few to measure (want {MIN_BASELINE_CHUNKS}). "
+               f"Expected when many beams are active -- see MIN_BASELINE_CHUNKS.")
+        r.info("the same noise floor is measured per-beam by check-truth.py, "
+               "from the offline-dedisperser log")
     r.ok(f"{spikes} chunk(s) with nevents >= 1")
     if spikes == 0:
         r.warn("no above-threshold events at all (expected if -f was omitted)")
