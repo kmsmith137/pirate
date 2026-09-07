@@ -40,6 +40,14 @@ public:
         int num_ssd_threads = 4;
         int num_nfs_threads = 2;
 
+        // Artificial delay (seconds) applied by an NFS thread to every
+        // ssd->nfs copy, i.e. to the first save_path of each frame (later
+        // save_paths are hardlinks within NFS, and are not delayed). Used to
+        // simulate a slow NFS mount, e.g. for testing FileWriter backlog and
+        // the RPC-subscriber overflow path; defaults to 0 (no delay).
+        // Interruptible by stop(), so it does not slow down shutdown.
+        double write_delay_sec = 0.0;
+
         // Max queued-but-unsent notifications per RPC subscriber. A
         // subscriber that falls this far behind (e.g. a SubscribeFiles
         // client that never reads) is stopped with a "fell behind" error
@@ -152,9 +160,15 @@ private:
     //   becomes ready simultaneously), and stop(). The predicate is
     //   deliberately queue-only: popped-and-mid-write frames are invisible
     //   to it (see the gate comment in _nfs_thread_main()).
+    //
+    // write_delay_cv -- waiters: nfs threads serving out the artificial
+    //   Params::write_delay_sec (predicate: stopped; a timeout ends the wait
+    //   otherwise). Signaled on: stop() only -- no other state change can end
+    //   the delay early.
     mutable std::condition_variable ssd_cv;
     mutable std::condition_variable nfs_cv;
     mutable std::condition_variable ssd_clear_cv;
+    mutable std::condition_variable write_delay_cv;
 
     mutable bool is_stopped = false;
     mutable std::exception_ptr error;
@@ -183,6 +197,7 @@ private:
     void _write_to_ssd(const std::shared_ptr<AssembledFrame> &frame, const std::filesystem::path &path);
     void _copy_from_ssd_to_nfs(const std::filesystem::path &path);
     void _try_to_delete_from_ssd(const std::filesystem::path &path);
+    void _apply_write_delay();
 
     // More helper functions called internally.
     void _ssd_worker_checks(const std::shared_ptr<AssembledFrame> &frame);
