@@ -577,6 +577,7 @@ SimulatedFrameFactory::_make_event(long beam_index, const simpulse::SinglePulse 
     ev.width_ms            = sp.params.intrinsic_width * 1.0e3;
     ev.subband_freq_lo_MHz = sp.params.subband_freq_lo_MHz;
     ev.subband_freq_hi_MHz = sp.params.subband_freq_hi_MHz;
+    ev.tree_index          = 0;
     return ev;
 }
 

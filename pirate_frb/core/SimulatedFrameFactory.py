@@ -50,5 +50,6 @@ class SimulatedFrameFactoryInjections:
             widths_ms            = np.array([e.width_ms            for e in events], dtype=np.float32),
             subband_freqs_lo_MHz = np.array([e.subband_freq_lo_MHz for e in events], dtype=np.float32),
             subband_freqs_hi_MHz = np.array([e.subband_freq_hi_MHz for e in events], dtype=np.float32),
+            tree_index           = np.array([e.tree_index          for e in events], dtype=np.int32),
             chunk_fpga_start     = chunk_fpga_start,
             chunk_fpga_end       = chunk_fpga_end)

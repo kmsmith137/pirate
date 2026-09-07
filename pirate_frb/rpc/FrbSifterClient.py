@@ -30,6 +30,7 @@ class FrbSifterEvents:
     - ``widths_ms`` (float64) -- intrinsic pulse width in milliseconds
     - ``subband_freqs_lo_MHz`` (float64) -- low edge of the event's frequency subband (MHz)
     - ``subband_freqs_hi_MHz`` (float64) -- high edge of the event's frequency subband (MHz)
+    - ``tree_index`` (int32)
 
     Other attributes:
 
@@ -48,6 +49,7 @@ class FrbSifterEvents:
         ("widths_ms",            "width_ms",            np.float64),
         ("subband_freqs_lo_MHz", "subband_freq_lo_MHz", np.float64),
         ("subband_freqs_hi_MHz", "subband_freq_hi_MHz", np.float64),
+        ("tree_index",           "tree_index",          np.int32),
     )
 
     @staticmethod
@@ -63,6 +65,7 @@ class FrbSifterEvents:
 
     def __init__(self, beam_ids, fpga_timestamps, dms, snrs, rfi_probs,
                  widths_ms, subband_freqs_lo_MHz, subband_freqs_hi_MHz,
+                 tree_index,
                  chunk_fpga_start, chunk_fpga_end):
         self.chunk_fpga_start = self._check_fpga_count("chunk_fpga_start", chunk_fpga_start)
         self.chunk_fpga_end = self._check_fpga_count("chunk_fpga_end", chunk_fpga_end)
@@ -73,7 +76,8 @@ class FrbSifterEvents:
         values = dict(beam_ids=beam_ids, fpga_timestamps=fpga_timestamps, dms=dms,
                       snrs=snrs, rfi_probs=rfi_probs, widths_ms=widths_ms,
                       subband_freqs_lo_MHz=subband_freqs_lo_MHz,
-                      subband_freqs_hi_MHz=subband_freqs_hi_MHz)
+                      subband_freqs_hi_MHz=subband_freqs_hi_MHz,
+                      tree_index=tree_index)
         for attr, _, dtype in self._FIELDS:
             val = values[attr]
             if type(val).__module__.split('.', 1)[0] == 'cupy':

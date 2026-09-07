@@ -76,6 +76,7 @@ message FrbEvent {
   double width_ms = 6;
   double subband_freq_lo_MHz = 7;
   double subband_freq_hi_MHz = 8;
+  int32 tree_index = 9;
 }
 
 // When events are sent from the search pipeline, we set from_simulator=false.
