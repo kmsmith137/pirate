@@ -1,0 +1,14 @@
+# hardware
+
+Show hardware information, including cpu affinity
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb show hardware [-h]
+
+Show hardware information, including cpu affinity
+
+options:
+  -h, --help  show this help message and exit
+```

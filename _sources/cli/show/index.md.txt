@@ -1,0 +1,26 @@
+# show
+
+Subcommand for printing information about config files or kernel registry (see show --help)
+
+| Subcommand | Description |
+|---|---|
+| [`show asdf`](asdf.md) | Print the YAML header of an ASDF file. (Note: 'asdftool --info' is also useful) |
+| [`show file_format`](file_format.md) | Make an asdf file from an `xengine_metadata` YAML file, and write the header to stdout. |
+| [`show dedisperser`](dedisperser.md) | Parse a dedisperser .yml file and write info to stdout |
+| [`show hardware`](hardware.md) | Show hardware information, including cpu affinity |
+| [`show kernels`](kernels.md) | Show registered cuda kernels (use flags to select specific registries) |
+| [`show random_config`](random_config.md) | For debugging: generate random DedispersionConfig(s) and print as YAML |
+| [`show xengine_metadata`](xengine_metadata.md) | Parse `xengine_metadata` yml file and write info to stdout |
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+asdf
+file_format
+dedisperser
+hardware
+kernels
+random_config
+xengine_metadata
+```

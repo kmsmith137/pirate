@@ -6,7 +6,8 @@ Run timings (use flags to select specific timings)
 :class: cli-help
 
 usage: pirate_frb time [-h] [-g GPU] [-t NTHREADS] [--ncu] [--gldk] [--gddk] [--casm]
-                       [--chime] [--zomb] [--cdd2] [--gdqk] [--gtgk] [--sim]
+                       [--chime] [--zomb] [--cdd2] [--gdqk] [--gtgk] [--sim] [--dtl1]
+                       [--dtl2]
 
 Run timings (use flags to select specific timings)
 
@@ -28,4 +29,8 @@ options:
   --gdqk                Runs GpuDequantizationKernel.time_selected()
   --gtgk                Runs GpuTreeGriddingKernel.time_selected()
   --sim                 Runs avx2_simulate_4bit_noise() timing
+  --dtl1                Runs GpuDetrenderLps1d.time_selected() (1-d local-polynomial
+                        detrender kernel)
+  --dtl2                Runs GpuDetrenderLps2d.time_selected() (2-d spline detrender
+                        kernel)
 ```

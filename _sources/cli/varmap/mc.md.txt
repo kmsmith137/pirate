@@ -1,0 +1,34 @@
+# mc
+
+Check a stored variance map against Monte-Carlo sims of its embedded config
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb varmap mc [-h] [-v PATH] [-n N] [--report-every N] [--cpu] [-s N]
+                            [-g GPU]
+                            map_file
+
+Check a stored variance map against Monte-Carlo sims of its embedded config
+
+positional arguments:
+  map_file              Path to a .asdf variance-map file
+
+options:
+  -h, --help            show this help message and exit
+  -v, --freq-variances PATH
+                        Length-nfreq input-channel variances: a .npy file, or a text
+                        file of whitespace-separated floats. Default all ones. NOTE the
+                        result is a statement about THIS v; a map is admissible for all
+                        v >= 0, and one run checks one of them.
+  -n, --nchunks N       Stop after N chunks (default: run until Ctrl-C)
+  --report-every N      Print the summary every N chunks (default 1)
+  --cpu                 Use ReferenceDedisperser instead of the GPU pipeline. Orders of
+                        magnitude slower; the path for a config the GPU pipeline refuses
+                        (stage-2 dd_rank < 3, or a missing sbdd kernel).
+  -s, --sophistication N
+                        ReferenceDedisperser sophistication (0, 1 or 2; default 1).
+                        --cpu only.
+  -g, --gpu GPU         GPU to use (default 0). Needed on BOTH paths: DedispersionPlan
+                        allocates through cudaHostAlloc.
+```

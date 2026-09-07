@@ -5,7 +5,7 @@ orphan: true
 # cf00_asdf.yml
 
 ```yaml
-# For use with 'python -m pirate_frb hwtest'.
+# For use with 'python -m pirate_frb dev hwtest'.
 # See cf00_all.yml for full syntax.
 
 ssd_dirs: [ '/scratch', '/scratch2' ]

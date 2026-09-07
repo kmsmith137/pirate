@@ -112,7 +112,7 @@ with sifter_cm as sifter, grouper_cm as grouper:
         # Events are identified by (snr, itree, ibeam, idm, itime, token) on the GPU. We copy this
         # data from the GPU to the CPU, and convert to "physical" quantities (DM, fpga_timestamp,
         # width, frequency subband) by decoding the out_argmax tokens. The math is explained in
-        # notes/tree_dedispersion.tex, and is implemented in a helper method
+        # notes/dedispersion.tex, and is implemented in a helper method
         # grouper.create_events(), which returns an FrbSifterEvents.
 
         ibeam = cp.nonzero(per_beam_max > snr_threshold)[0]   # global indices of above-threshold beams
@@ -244,7 +244,7 @@ Here are some details that are not obvious from the example code:
    checking `primary_tree_index > 0` or `dm_min > 0` in the per-tree metadata.)
    This may affect details of your peak-finding logic.
 
-   For a lot more info on these details, see the tex notes.
+   For a lot more info on these details, see the dedispersion tex notes.
 
  - The dedisperser passes `out_argmax` arrays to the grouper, to indicate which
    fine-grained (dm, time, frequency subband, peak-finding width) is responsible
@@ -252,14 +252,32 @@ Here are some details that are not obvious from the example code:
    "token" in an encoding that's convenient for the GPU kernel.
 
    `FrbGrouper.create_events()` decodes these tokens (via the vectorized
-   `decode_argmax_batch()` / `decode_argmax2_batch()` methods, which use the
-   producer's dedispersion plan from the handshake), so the per-event `dm`,
-   `fpga_timestamp`, `width_ms`, and frequency subband
+   `decode_argmax_batch()` / `decode_argmax2_batch()` methods), so the
+   per-event `dm`, `fpga_timestamp`, `width_ms`, and frequency subband
    (`subband_freq_{lo,hi}_MHz`) are the fine-grained "winning" trial
    parameters, not coarse-pixel centers. The grouper's job is to gather each
    selected peak's token on the GPU (inside the `get_output()` context
    manager, while the arrays are valid -- see the example code above) and pass
    it to `create_events()` via the `argmax` argument.
+
+   Decoding goes through a `DedispersionPlan` that the grouper rebuilds at
+   handshake time from the two yamls, via
+   `DedispersionPlan::from_yaml_string()`. That function builds the plan from
+   `dedispersion_config_yaml` and then cross-checks every field of
+   `dedispersion_plan_yaml` against it, which catches the case where the two
+   yamls describe different instruments.
+
+   Nothing is adopted from `dedispersion_plan_yaml`: a plan is a pure function of
+   its config, so the rebuilt plan is authoritative and the yaml is only checked
+   against it.
+
+   The one thing a consumer needs that is NOT in either yaml is the producer's
+   per-tree `Dcore`, which sets the time granularity of the out_argmax tokens. It
+   is a property of whichever peak-finding kernel the producer happens to have
+   compiled, so it travels as its own handshake field, `dcores`, surfaced as
+   `FrbGrouper::dcores`. A grouper built from a different `pirate` revision
+   cannot re-derive it and would mis-decode every token without it: pass
+   `dcores[itree]` to `DedispersionPlan::decode_argmax()`.
 
 The `FrbGrouper` and `FrbSifterClient` classes aren't well-optimized at all.
 However, I find empirically that the "toy" grouper does not slow down a CHORD-scale search.

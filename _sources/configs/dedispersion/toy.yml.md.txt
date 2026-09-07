@@ -7,7 +7,7 @@ orphan: true
 ```yaml
 # Subscale "toy" dedisperser, sometimes convenient for testing.
 # Does not need production_kernels=True in makefile_helper.py (unlike the chime/chord files in this directory).
-# For documentation on this file format, see chord_sb2_et.yml, and the tex notes.
+# For documentation on this file format, see chord_sb2_et.yml, and the dedispersion tex notes.
 
 # Overrideable params: frequency channels, time sample length, number of beams.
 zone_nfreq: [640]
@@ -33,9 +33,9 @@ num_active_batches: 2
 toplevel_tree_rank: 12
 
 primary_trees:
-  - {num_early_triggers: 0, max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 16, wt_time_downsampling: 16}
-  - {num_early_triggers: 1, max_width:  8, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 16, wt_time_downsampling: 16}
-  - {num_early_triggers: 2, max_width:  4, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 16, wt_time_downsampling: 16}
+  - {num_early_triggers: 0, max_width: 16, wt_dm_downsampling: 16, wt_time_downsampling: 16}
+  - {num_early_triggers: 1, max_width:  8, wt_dm_downsampling: 16, wt_time_downsampling: 16}
+  - {num_early_triggers: 2, max_width:  4, wt_dm_downsampling: 16, wt_time_downsampling: 16}
 
 # In this config, early triggers may extend 12*1024 samples into the future.
 # We add an extra ~2K samples, in case padding is desired.

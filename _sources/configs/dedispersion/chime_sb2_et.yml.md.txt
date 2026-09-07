@@ -5,7 +5,7 @@ orphan: true
 # chime_sb2_et.yml
 
 ```yaml
-# For documentation on this file format, see chord_sb2_et.yml, and the tex notes.
+# For documentation on this file format, see chord_sb2_et.yml, and the dedispersion tex notes.
 
 # Overrideable params: frequency channels, time sample length, number of beams.
 zone_nfreq: [16384]
@@ -17,7 +17,7 @@ beams_per_gpu: 200
 dtype: float16
 time_samples_per_chunk: 2048
 
-# pirate_frb make_subbands 400 800 0.1 -r 4
+# pirate_frb dev make_subbands 400 800 0.1 -r 4
 frequency_subband_counts: [0,5,7,3,1]
 
 # GPU configuration.
@@ -29,10 +29,10 @@ num_active_batches: 2
 toplevel_tree_rank: 15
 
 primary_trees:
-  - {num_early_triggers: 0, max_width: 32, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
-  - {num_early_triggers: 1, max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
-  - {num_early_triggers: 2, max_width:  8, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
-  - {num_early_triggers: 3, max_width:  4, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 0, max_width: 32, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 1, max_width: 16, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 2, max_width:  8, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {num_early_triggers: 3, max_width:  4, wt_dm_downsampling: 64, wt_time_downsampling: 64}
 
 # In this config, early triggers may extend 224*1024 samples into the future.
 # We add an extra ~5K samples, in case padding is desired.

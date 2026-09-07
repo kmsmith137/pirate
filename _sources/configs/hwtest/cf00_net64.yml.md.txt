@@ -5,7 +5,7 @@ orphan: true
 # cf00_net64.yml
 
 ```yaml
-# For use with 'python -m pirate_frb hwtest'.
+# For use with 'python -m pirate_frb dev hwtest'.
 # See cf00_all.yml for full syntax.
 
 ip_addrs: [ '10.0.0.1', '10.0.1.1', '10.0.2.1', '10.0.3.1' ]

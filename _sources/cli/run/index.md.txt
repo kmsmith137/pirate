@@ -1,0 +1,22 @@
+# run
+
+Subcommand for running server/grouper/fake-xengine/etc (see run --help)
+
+| Subcommand | Description |
+|---|---|
+| [`run server`](server.md) | Start FRB server(s) from an `frb_server` .yml file and a dedispersion .yml file |
+| [`run toy_grouper`](toy_grouper.md) | Toy FrbGrouper consumer(s): per-chunk peak SNR + argmax, optionally reported to a sifter |
+| [`run offline_dedisperser`](offline_dedisperser.md) | Toy offline dedispersion: per-chunk peak SNR over an acqdir of .asdf frames |
+| [`run toy_sifter`](toy_sifter.md) | Toy FrbSifter gRPC server: print a one-line summary of each received message |
+| [`run fake_xengine`](fake_xengine.md) | Send fake X-engine data to one or more running FrbServers |
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+server
+toy_grouper
+offline_dedisperser
+toy_sifter
+fake_xengine
+```

@@ -3,10 +3,10 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="time_dedisperser" href="time_dedisperser.html"><link rel="prev" title="check_avar_mc" href="check_avar_mc.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="time_dedisperser" href="time_dedisperser.html"><link rel="prev" title="test" href="test.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>time - pirate_frb 1.4.0 documentation</title>
+        <title>time - pirate_frb 1.5.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -164,7 +164,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.4.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.5.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -185,17 +185,30 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.4.0 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.5.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
   <input type="hidden" name="check_keywords" value="yes">
   <input type="hidden" name="area" value="default">
 </form>
-<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+<div id="searchbox"></div><div class="sidebar-scroll">
+<div class="sidebar-tree">
   <ul>
     <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
-    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+    <li class="toctree-l1 has-children">
+      <a class="reference internal" href="../index.html#tex-notes">Tex notes</a>
+      <input aria-label="Toggle navigation of Tex notes" class="toctree-checkbox"
+             id="toctree-checkbox-texnotes" name="toctree-checkbox-texnotes"
+             role="switch" type="checkbox"/>
+      <label for="toctree-checkbox-texnotes"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label>
+      <ul>
+        <li class="toctree-l2"><a class="reference external" href="../_static/dedispersion.pdf" target="_blank" rel="noopener">Dedispersion</a></li>
+        <li class="toctree-l2"><a class="reference external" href="../_static/detrending.pdf" target="_blank" rel="noopener">Detrending</a></li>
+        <li class="toctree-l2"><a class="reference external" href="../_static/variance_map.pdf" target="_blank" rel="noopener">Variance map</a></li>
+        <li class="toctree-l2"><a class="reference external" href="../_static/inpainting.pdf" target="_blank" rel="noopener">Inpainting</a></li>
+      </ul>
+    </li>
   </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul class="current">
@@ -207,37 +220,54 @@
 <li class="toctree-l1"><a class="reference internal" href="../notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../notes/hardware.html">Hardware</a></li>
 <li class="toctree-l1 current has-children"><a class="reference internal" href="../cli.html">CLI reference</a><input aria-label="Toggle navigation of CLI reference" checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
-<li class="toctree-l2"><a class="reference internal" href="run_server.html">run_server</a></li>
-<li class="toctree-l2"><a class="reference internal" href="run_toy_grouper.html">run_toy_grouper</a></li>
-<li class="toctree-l2"><a class="reference internal" href="run_offline_dedisperser.html">run_offline_dedisperser</a></li>
-<li class="toctree-l2"><a class="reference internal" href="run_toy_sifter.html">run_toy_sifter</a></li>
-<li class="toctree-l2"><a class="reference internal" href="run_fake_xengine.html">run_fake_xengine</a></li>
-<li class="toctree-l2"><a class="reference internal" href="rpc_status.html">rpc_status</a></li>
-<li class="toctree-l2"><a class="reference internal" href="rpc_rand_write.html">rpc_rand_write</a></li>
-<li class="toctree-l2"><a class="reference internal" href="rpc_start_stream.html">rpc_start_stream</a></li>
-<li class="toctree-l2"><a class="reference internal" href="rpc_cancel_stream.html">rpc_cancel_stream</a></li>
-<li class="toctree-l2"><a class="reference internal" href="rpc_show_streams.html">rpc_show_streams</a></li>
-<li class="toctree-l2"><a class="reference internal" href="test.html">test</a></li>
-<li class="toctree-l2"><a class="reference internal" href="test_simpulse.html">test_simpulse</a></li>
-<li class="toctree-l2"><a class="reference internal" href="check_avar_approximation.html">check_avar_approximation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="check_avar_mc.html">check_avar_mc</a></li>
-<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">time</a></li>
-<li class="toctree-l2"><a class="reference internal" href="time_dedisperser.html">time_dedisperser</a></li>
-<li class="toctree-l2"><a class="reference internal" href="show_asdf.html">show_asdf</a></li>
-<li class="toctree-l2"><a class="reference internal" href="show_file_format.html">show_file_format</a></li>
-<li class="toctree-l2"><a class="reference internal" href="show_dedisperser.html">show_dedisperser</a></li>
-<li class="toctree-l2"><a class="reference internal" href="show_hardware.html">show_hardware</a></li>
-<li class="toctree-l2"><a class="reference internal" href="show_kernels.html">show_kernels</a></li>
-<li class="toctree-l2"><a class="reference internal" href="show_random_config.html">show_random_config</a></li>
-<li class="toctree-l2"><a class="reference internal" href="show_xengine_metadata.html">show_xengine_metadata</a></li>
-<li class="toctree-l2"><a class="reference internal" href="hwtest.html">hwtest</a></li>
-<li class="toctree-l2"><a class="reference internal" href="make_subbands.html">make_subbands</a></li>
-<li class="toctree-l2"><a class="reference internal" href="random_kernels.html">random_kernels</a></li>
-<li class="toctree-l2"><a class="reference internal" href="scratch.html">scratch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="revisit_512gb.html">revisit_512gb</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="run/index.html">run</a><input aria-label="Toggle navigation of run" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="run/server.html">server</a></li>
+<li class="toctree-l3"><a class="reference internal" href="run/toy_grouper.html">toy_grouper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="run/offline_dedisperser.html">offline_dedisperser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="run/toy_sifter.html">toy_sifter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="run/fake_xengine.html">fake_xengine</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="rpc/index.html">rpc</a><input aria-label="Toggle navigation of rpc" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="rpc/status.html">status</a></li>
+<li class="toctree-l3"><a class="reference internal" href="rpc/rand_write.html">rand_write</a></li>
+<li class="toctree-l3"><a class="reference internal" href="rpc/start_stream.html">start_stream</a></li>
+<li class="toctree-l3"><a class="reference internal" href="rpc/cancel_stream.html">cancel_stream</a></li>
+<li class="toctree-l3"><a class="reference internal" href="rpc/show_streams.html">show_streams</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="show/index.html">show</a><input aria-label="Toggle navigation of show" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="show/asdf.html">asdf</a></li>
+<li class="toctree-l3"><a class="reference internal" href="show/file_format.html">file_format</a></li>
+<li class="toctree-l3"><a class="reference internal" href="show/dedisperser.html">dedisperser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="show/hardware.html">hardware</a></li>
+<li class="toctree-l3"><a class="reference internal" href="show/kernels.html">kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="show/random_config.html">random_config</a></li>
+<li class="toctree-l3"><a class="reference internal" href="show/xengine_metadata.html">xengine_metadata</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="varmap/index.html">varmap</a><input aria-label="Toggle navigation of varmap" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="varmap/bf.html">bf</a></li>
+<li class="toctree-l3"><a class="reference internal" href="varmap/df.html">df</a></li>
+<li class="toctree-l3"><a class="reference internal" href="varmap/mc.html">mc</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="dev/index.html">dev</a><input aria-label="Toggle navigation of dev" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="dev/coverage.html">coverage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="dev/hwtest.html">hwtest</a></li>
+<li class="toctree-l3"><a class="reference internal" href="dev/scratch.html">scratch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="dev/make_subbands.html">make_subbands</a></li>
+<li class="toctree-l3"><a class="reference internal" href="dev/random_kernels.html">random_kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="dev/test_simpulse.html">test_simpulse</a></li>
+<li class="toctree-l3"><a class="reference internal" href="dev/revisit_512gb.html">revisit_512gb</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="test.html">test</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">time</a></li>
+<li class="toctree-l2"><a class="reference internal" href="time_dedisperser.html">time_dedisperser</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" role="switch" type="checkbox"/><label for="toctree-checkbox-7"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
@@ -247,7 +277,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" role="switch" type="checkbox"/><label for="toctree-checkbox-8"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../classes/Acquisition.html">Acquisition</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrame.html">AssembledFrame</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrameAllocator.html">AssembledFrameAllocator</a></li>
@@ -255,6 +285,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../classes/BumpAllocator.html">BumpAllocator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionConfig.html">DedispersionConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionPlan.html">DedispersionPlan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionTree.html">DedispersionTree</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FakeXEngine.html">FakeXEngine</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FileSubscriber.html">FileSubscriber</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FileWriter.html">FileWriter</a></li>
@@ -275,13 +306,15 @@
 <li class="toctree-l2"><a class="reference internal" href="../classes/Receiver.html">Receiver</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/ReferenceDedisperser.html">ReferenceDedisperser</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/SimulatedFrameFactory.html">SimulatedFrameFactory</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/SinglePulse.html">SinglePulse</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/SlabAllocator.html">SlabAllocator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/ThreadAffinity.html">ThreadAffinity</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" role="switch" type="checkbox"/><label for="toctree-checkbox-9"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../notes/comments.html">Writing comments and docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/unit_tests.html">Randomized unit tests</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/pybind11.html">Pybind11</a></li>
@@ -334,7 +367,8 @@
 <h1>time<a class="headerlink" href="#time" title="Link to this heading">¶</a></h1>
 <p>Run timings (use flags to select specific timings)</p>
 <div class="cli-help highlight-text notranslate"><div class="highlight"><pre><span></span>usage: pirate_frb time [-h] [-g GPU] [-t NTHREADS] [--ncu] [--gldk] [--gddk] [--casm]
-                       [--chime] [--zomb] [--cdd2] [--gdqk] [--gtgk] [--sim]
+                       [--chime] [--zomb] [--cdd2] [--gdqk] [--gtgk] [--sim] [--dtl1]
+                       [--dtl2]
 
 Run timings (use flags to select specific timings)
 
@@ -356,6 +390,10 @@ options:
   --gdqk                Runs GpuDequantizationKernel.time_selected()
   --gtgk                Runs GpuTreeGriddingKernel.time_selected()
   --sim                 Runs avx2_simulate_4bit_noise() timing
+  --dtl1                Runs GpuDetrenderLps1d.time_selected() (1-d local-polynomial
+                        detrender kernel)
+  --dtl2                Runs GpuDetrenderLps2d.time_selected() (2-d spline detrender
+                        kernel)
 </pre></div>
 </div>
 </section>
@@ -374,14 +412,14 @@ options:
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="check_avar_mc.html">
+          <a class="prev-page" href="test.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">check_avar_mc</div>
+                <div class="title">test</div>
                 
               </div>
             </a>
@@ -409,7 +447,7 @@ options:
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=9172181d"></script>
+</div><script src="../_static/documentation_options.js?v=e0a75244"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

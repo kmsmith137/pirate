@@ -1,0 +1,18 @@
+# varmap
+
+Subcommand for working with asdf-serialized variance maps (see varmap --help)
+
+| Subcommand | Description |
+|---|---|
+| [`varmap bf`](bf.md) | Compute the variance map A by brute force (sweep), and write it to an ASDF file |
+| [`varmap df`](df.md) | Compute the variance map A by the fast detrender-free algorithm, and write it to an ASDF file |
+| [`varmap mc`](mc.md) | Check a stored variance map against Monte-Carlo sims of its embedded config |
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+bf
+df
+mc
+```

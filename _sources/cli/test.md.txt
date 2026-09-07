@@ -5,40 +5,75 @@ Run unit tests (use flags to select specific tests)
 ```{code-block} text
 :class: cli-help
 
-usage: pirate_frb test [-h] [-g GPU] [-n NITER] [--rt] [--pfwr] [--pfom] [--gldk]
-                       [--gddk] [--gpfk] [--grck] [--gtgk] [--gdqk] [--cdd2] [--casm]
-                       [--zomb] [--dd] [--avar] [--chime] [--net] [--serv] [--sim]
-                       [--amax] [--aout]
+usage: pirate_frb test [-h] [-g GPU] [-n NITER | -t SECONDS] [-s N | -r] [--rt] [--pfwr]
+                       [--pfom] [--pfsq] [--gldk] [--gddk] [--gpfk] [--grck] [--gtgk]
+                       [--gdqk] [--cdd2] [--sbdd] [--casm] [--zomb] [--dd] [--varmap]
+                       [--chime] [--net] [--serv] [--sim] [--amax] [--sb] [--aout]
+                       [--util] [--dtl1] [--dtk1] [--dtl2]
 
 Run unit tests (use flags to select specific tests)
 
 options:
-  -h, --help         show this help message and exit
-  -g, --gpu GPU      GPU to use for tests (default 0)
-  -n, --niter NITER  Number of unit test iterations (default 100)
-  --rt               Runs ReferenceTree and ReferenceLagbuf tests
-  --pfwr             Runs PfWeightReaderMicrokernel.test_random()
-  --pfom             Runs PfOutputMicrokernel.test_random()
-  --gldk             Runs GpuLaggedDownsamplingKernel.test_random()
-  --gddk             Runs GpuDedispersionKernel.test_random()
-  --gpfk             Runs GpuPeakFindingKernel.test_random()
-  --grck             Runs GpuRingbufCopyKernel.test_random()
-  --gtgk             Runs GpuTreeGriddingKernel.test_random()
-  --gdqk             Runs GpuDequantizationKernel.test_random()
-  --cdd2             Runs CoalescedDdKernel2.test_random()
-  --casm             Runs some casm tests
-  --zomb             Runs "zombie" tests (code that I wrote during protoyping that may
-                     never get used)
-  --dd               Runs GpuDedisperser.test_random()
-  --avar             Runs tests related to analytic variance
-  --chime            Runs test_chime_frb_{beamform,upchan}()
-  --net              Runs network/allocator tests (AssembledFrameAllocator, etc.)
-  --serv             Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser ->
-                     FrbGrouper test
-  --sim              Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame
-                     pulse-injection and pulse-invariants tests
-  --amax             Runs DedispersionPlan.decode_argmax() tests (black-box probe
-                     arrays)
-  --aout             Runs the serialized-output test (atomic_print/AtomicPrint, C++ and
-                     python threads)
+  -h, --help            show this help message and exit
+  -g, --gpu GPU         GPU to use for tests (default 0)
+  -n, --niter NITER     Number of unit test iterations (default 100)
+  -t, --time SECONDS    Run for at least SECONDS instead of a fixed iteration count. The
+                        check is at the BOTTOM of the loop, so at least one FULL
+                        iteration always runs and the elapsed time will overshoot by up
+                        to one iteration. Note a -t run is not directly replayable,
+                        since the iteration count depends on machine speed; the count to
+                        replay with -n is printed at the end.
+  -s, --seed N          Master RNG seed (default 137). Seeds the ksgpu (C++), numpy and
+                        stdlib-random generators. Replaying a run needs the same seed
+                        AND the same test flags AND the same -n, since the streams are
+                        shared and consumed in test order.
+  -r, --randomize-seed  Draw the master RNG seed from OS entropy instead of using the
+                        default. The seed is printed, so a failing run can be replayed
+                        with --seed.
+  --rt                  Runs ReferenceTree and ReferenceLagbuf tests
+  --pfwr                Runs PfWeightReaderMicrokernel.test_random()
+  --pfom                Runs PfOutputMicrokernel.test_random()
+  --pfsq                Runs the PfSquare tests (GpuPfSquare + ReferencePfSquare)
+  --gldk                Runs GpuLaggedDownsamplingKernel.test_random()
+  --gddk                Runs GpuDedispersionKernel.test_random()
+  --gpfk                Runs GpuPeakFindingKernel.test_random()
+  --grck                Runs GpuRingbufCopyKernel.test_random()
+  --gtgk                Runs GpuTreeGriddingKernel.test_random()
+  --gdqk                Runs GpuDequantizationKernel.test_random()
+  --cdd2                Runs CoalescedDdKernel2.test_random()
+  --sbdd                Runs GpuSbDedispersionKernel.test_random()
+  --casm                Runs some casm tests
+  --zomb                Runs "zombie" tests (code that I wrote during protoyping that
+                        may never get used)
+  --dd                  Runs GpuDedisperser.test_random()
+  --varmap              pirate_frb.varmap. Two halves, both run by this flag: everything
+                        checkable WITHOUT a dedisperser (the VarianceMap class, the
+                        covering-LP and basis machinery, and the analytic map of
+                        detrender_free.py against a hand-written oracle), and the brute-
+                        force sweep, which pushes a one-hot through the REAL dedisperser
+                        once per input channel and checks the analytic map against what
+                        comes out. Needs a DedispersionPlan and a GPU for the second
+                        half.
+  --chime               Runs test_chime_frb_{beamform,upchan}()
+  --net                 Runs network/allocator tests (AssembledFrameAllocator, etc.)
+  --serv                Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser ->
+                        FrbGrouper test
+  --sim                 Runs avx2_simulate_4bit_noise() distribution test +
+                        AssembledFrame pulse-injection and pulse-invariants tests
+  --amax                Runs DedispersionPlan.decode_argmax() tests (black-box probe
+                        arrays)
+  --sb                  Runs frequency-subband tests (C++/python parity of the two
+                        FrequencySubbands implementations, and the per-tree subband-set
+                        property)
+  --aout                Runs the serialized-output test (atomic_print/AtomicPrint, C++
+                        and python threads)
+  --util                Runs test_utils() (integer/bit helpers in inlines.hpp, plus
+                        bit_reverse_slow())
+  --dtl1                Runs pirate_frb.detrending.lps1d tests (1-d local-polynomial
+                        detrender: the numpy reference, plus GpuDetrenderLps1d against
+                        it)
+  --dtk1                Runs pirate_frb.detrending.kf1d tests (fixed-lag Kalman
+                        detrender; numpy only, there is no GPU kernel yet)
+  --dtl2                Runs pirate_frb.detrending.lps2d tests (2-d spline detrender:
+                        the numpy reference, plus GpuDetrenderLps2d against it)
 ```

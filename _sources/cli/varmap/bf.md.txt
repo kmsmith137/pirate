@@ -1,0 +1,43 @@
+# bf
+
+Compute the variance map A by brute force (sweep), and write it to an ASDF file
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb varmap bf [-h] -o PATH [-L L] [--no-detrender] [--cpu]
+                            [--channels SPEC] [--scratch-dir DIR] [--no-guard-chunk]
+                            [-g GPU]
+                            config_file [detrender_file]
+
+Compute the variance map A by brute force (sweep), and write it to an ASDF file
+
+positional arguments:
+  config_file           Path to dedispersion YAML config file
+  detrender_file        Path to DetrenderLps2dParams YAML file (omit with --no-
+                        detrender)
+
+options:
+  -h, --help            show this help message and exit
+  -o, --output PATH     Output .asdf file (required)
+  -L, --coarse-grain L  Coarse-grain at rank L rather than writing the dense fine map.
+                        This is what makes a large config reachable: at CHORD tree 0 the
+                        dense map is 1.2 TiB and the coarse map is 344 GiB at L=4. Legal
+                        range is R <= L <= r per tree. Omit to write the dense fine map,
+                        which is only viable at subscale.
+  --no-detrender        Run with no detrender; 'detrender_file' must then be omitted
+  --cpu                 Force the CPU sweep (default: GPU)
+  --channels SPEC       Sweep only these input channels, as a comma-separated list of
+                        indices or LO:HI[:STEP] slices. The result is a PARTIAL map
+                        whose other columns are zero, written with no y_true so that
+                        nothing downstream can score it. For timing a sweep before
+                        committing to the whole thing.
+  --scratch-dir DIR     Back the arrays of matrix size with memmaps under DIR instead of
+                        RAM. The fallback for a config whose accumulator does not fit;
+                        DIR must survive until the output file is written.
+  --no-guard-chunk      Skip the per-pass guard chunk. The guard is what proves no part
+                        of the impulse response was truncated, and an undersized sweep
+                        silently UNDERESTIMATES A, so only use this on a config you have
+                        already validated.
+  -g, --gpu GPU         GPU to use (default 0)
+```

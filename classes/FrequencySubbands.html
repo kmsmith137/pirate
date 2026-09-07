@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="GpuDedisperser" href="GpuDedisperser.html"><link rel="prev" title="FrbSifterEvents" href="FrbSifterEvents.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>FrequencySubbands - pirate_frb 1.4.0 documentation</title>
+        <title>FrequencySubbands - pirate_frb 1.5.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -164,7 +164,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.4.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.5.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -185,17 +185,30 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.4.0 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.5.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
   <input type="hidden" name="check_keywords" value="yes">
   <input type="hidden" name="area" value="default">
 </form>
-<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+<div id="searchbox"></div><div class="sidebar-scroll">
+<div class="sidebar-tree">
   <ul>
     <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
-    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+    <li class="toctree-l1 has-children">
+      <a class="reference internal" href="../index.html#tex-notes">Tex notes</a>
+      <input aria-label="Toggle navigation of Tex notes" class="toctree-checkbox"
+             id="toctree-checkbox-texnotes" name="toctree-checkbox-texnotes"
+             role="switch" type="checkbox"/>
+      <label for="toctree-checkbox-texnotes"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label>
+      <ul>
+        <li class="toctree-l2"><a class="reference external" href="../_static/dedispersion.pdf" target="_blank" rel="noopener">Dedispersion</a></li>
+        <li class="toctree-l2"><a class="reference external" href="../_static/detrending.pdf" target="_blank" rel="noopener">Detrending</a></li>
+        <li class="toctree-l2"><a class="reference external" href="../_static/variance_map.pdf" target="_blank" rel="noopener">Variance map</a></li>
+        <li class="toctree-l2"><a class="reference external" href="../_static/inpainting.pdf" target="_blank" rel="noopener">Inpainting</a></li>
+      </ul>
+    </li>
   </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul class="current">
@@ -207,37 +220,54 @@
 <li class="toctree-l1"><a class="reference internal" href="../notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../notes/hardware.html">Hardware</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../cli.html">CLI reference</a><input aria-label="Toggle navigation of CLI reference" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_server.html">run_server</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_toy_grouper.html">run_toy_grouper</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_offline_dedisperser.html">run_offline_dedisperser</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_toy_sifter.html">run_toy_sifter</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_fake_xengine.html">run_fake_xengine</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_status.html">rpc_status</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_rand_write.html">rpc_rand_write</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_start_stream.html">rpc_start_stream</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_cancel_stream.html">rpc_cancel_stream</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_show_streams.html">rpc_show_streams</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/test.html">test</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/test_simpulse.html">test_simpulse</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/check_avar_approximation.html">check_avar_approximation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/check_avar_mc.html">check_avar_mc</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/time.html">time</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/time_dedisperser.html">time_dedisperser</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_asdf.html">show_asdf</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_file_format.html">show_file_format</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_dedisperser.html">show_dedisperser</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_hardware.html">show_hardware</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_kernels.html">show_kernels</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_random_config.html">show_random_config</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_xengine_metadata.html">show_xengine_metadata</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/hwtest.html">hwtest</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/make_subbands.html">make_subbands</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/random_kernels.html">random_kernels</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/scratch.html">scratch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/revisit_512gb.html">revisit_512gb</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/run/index.html">run</a><input aria-label="Toggle navigation of run" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/server.html">server</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/toy_grouper.html">toy_grouper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/offline_dedisperser.html">offline_dedisperser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/toy_sifter.html">toy_sifter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/fake_xengine.html">fake_xengine</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/rpc/index.html">rpc</a><input aria-label="Toggle navigation of rpc" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/status.html">status</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/rand_write.html">rand_write</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/start_stream.html">start_stream</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/cancel_stream.html">cancel_stream</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/show_streams.html">show_streams</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/show/index.html">show</a><input aria-label="Toggle navigation of show" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/asdf.html">asdf</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/file_format.html">file_format</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/dedisperser.html">dedisperser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/hardware.html">hardware</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/kernels.html">kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/random_config.html">random_config</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/xengine_metadata.html">xengine_metadata</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/varmap/index.html">varmap</a><input aria-label="Toggle navigation of varmap" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/varmap/bf.html">bf</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/varmap/df.html">df</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/varmap/mc.html">mc</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/dev/index.html">dev</a><input aria-label="Toggle navigation of dev" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/coverage.html">coverage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/hwtest.html">hwtest</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/scratch.html">scratch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/make_subbands.html">make_subbands</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/random_kernels.html">random_kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/test_simpulse.html">test_simpulse</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/revisit_512gb.html">revisit_512gb</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/test.html">test</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/time.html">time</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/time_dedisperser.html">time_dedisperser</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" role="switch" type="checkbox"/><label for="toctree-checkbox-7"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
@@ -247,7 +277,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
-<li class="toctree-l1 current has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" checked="" class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" role="switch" type="checkbox"/><label for="toctree-checkbox-8"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="Acquisition.html">Acquisition</a></li>
 <li class="toctree-l2"><a class="reference internal" href="AssembledFrame.html">AssembledFrame</a></li>
 <li class="toctree-l2"><a class="reference internal" href="AssembledFrameAllocator.html">AssembledFrameAllocator</a></li>
@@ -255,6 +285,7 @@
 <li class="toctree-l2"><a class="reference internal" href="BumpAllocator.html">BumpAllocator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="DedispersionConfig.html">DedispersionConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="DedispersionPlan.html">DedispersionPlan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="DedispersionTree.html">DedispersionTree</a></li>
 <li class="toctree-l2"><a class="reference internal" href="FakeXEngine.html">FakeXEngine</a></li>
 <li class="toctree-l2"><a class="reference internal" href="FileSubscriber.html">FileSubscriber</a></li>
 <li class="toctree-l2"><a class="reference internal" href="FileWriter.html">FileWriter</a></li>
@@ -275,13 +306,15 @@
 <li class="toctree-l2"><a class="reference internal" href="Receiver.html">Receiver</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ReferenceDedisperser.html">ReferenceDedisperser</a></li>
 <li class="toctree-l2"><a class="reference internal" href="SimulatedFrameFactory.html">SimulatedFrameFactory</a></li>
+<li class="toctree-l2"><a class="reference internal" href="SinglePulse.html">SinglePulse</a></li>
 <li class="toctree-l2"><a class="reference internal" href="SlabAllocator.html">SlabAllocator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ThreadAffinity.html">ThreadAffinity</a></li>
 <li class="toctree-l2"><a class="reference internal" href="XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" role="switch" type="checkbox"/><label for="toctree-checkbox-9"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../notes/comments.html">Writing comments and docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/unit_tests.html">Randomized unit tests</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/pybind11.html">Pybind11</a></li>
@@ -339,18 +372,30 @@
 subbands searched by the peak-finding kernel. (Searching subbands, rather
 than only the full band, improves SNR for bursts that do not span the full
 frequency range.) A python caller will probably not need to use this class!</p>
-<p>The details of the subband representation are nontrivial to explain – see
-<a class="reference internal" href="../_static/tree_dedispersion.pdf">the tex notes</a>, section “Subband search”, whose subsection “Parameterization
-of subbands” explains them with examples and plots.</p>
+<p>The details of the subband representation are nontrivial to explain – see the
+<a class="reference internal" href="../_static/dedispersion.pdf">dedispersion tex notes</a>, section “Subband search”, whose subsection
+“Parameterization of subbands” explains them with examples and plots.</p>
 <p>The low-level C++ class can be constructed in one of four ways:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">FrequencySubbands</span><span class="p">()</span>                            <span class="c1"># full-band only</span>
 <span class="n">FrequencySubbands</span><span class="p">(</span><span class="n">subband_counts</span><span class="p">)</span>              <span class="c1"># e.g. [5,9,7,3,1]</span>
 <span class="n">FrequencySubbands</span><span class="p">(</span><span class="n">subband_counts</span><span class="p">,</span> <span class="n">fmin</span><span class="p">,</span> <span class="n">fmax</span><span class="p">)</span>  <span class="c1"># optional fmin/fmax in MHz</span>
 
-<span class="c1"># Same subbands as &#39;pirate_frb make_subbands FMIN FMAX THRESH -r PF_RANK&#39;</span>
+<span class="c1"># Same subbands as &#39;pirate_frb dev make_subbands FMIN FMAX THRESH -r PF_RANK&#39;</span>
 <span class="n">FrequencySubbands</span><span class="o">.</span><span class="n">from_threshold</span><span class="p">(</span><span class="n">fmin</span><span class="p">,</span> <span class="n">fmax</span><span class="p">,</span> <span class="n">threshold</span><span class="p">,</span> <span class="n">pf_rank</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
 </pre></div>
 </div>
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.core.FrequencySubbands.can_early_trigger">
+<span class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">can_early_trigger</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">subband_counts</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/collections.abc.html#collections.abc.Sequence" title="(in Python v3.14)"><span class="pre">collections.abc.Sequence</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">early_trigger_level</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span></span><a class="headerlink" href="#pirate_frb.core.FrequencySubbands.can_early_trigger" title="Link to this definition">¶</a></dt>
+<dd><p>True if <code class="docutils literal notranslate"><span class="pre">restrict_subband_counts()</span></code> is well-defined for this pair.</p>
+<p>Two conditions: the truncation must be in range
+(<code class="docutils literal notranslate"><span class="pre">early_trigger_level</span> <span class="pre">&lt;=</span> <span class="pre">pf_rank</span></code>), and the early-trigger tree’s own full
+band must already be one of the config’s bands – otherwise the early trigger
+would ADD a subband that the config never asked to search.</p>
+<p><a class="reference internal" href="DedispersionConfig.html#pirate_frb.DedispersionConfig.validate"><code class="docutils literal notranslate"><span class="pre">DedispersionConfig.validate()</span></code></a> requires this for every early-trigger level
+the config can produce, so a config which validates never trips it.</p>
+</dd></dl>
+
 <dl class="py method">
 <dt class="sig sig-object py" id="pirate_frb.core.FrequencySubbands.from_threshold">
 <span class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">from_threshold</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fmin</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsFloat" title="(in Python v3.14)"><span class="pre">SupportsFloat</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">fmax</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsFloat" title="(in Python v3.14)"><span class="pre">SupportsFloat</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">threshold</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsFloat" title="(in Python v3.14)"><span class="pre">SupportsFloat</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">pf_rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">4</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pirate_frb.core.FrequencySubbands" title="pirate_frb.pirate_pybind11.FrequencySubbands"><span class="pre">pirate_frb.pirate_pybind11.FrequencySubbands</span></a></span></span><a class="headerlink" href="#pirate_frb.core.FrequencySubbands.from_threshold" title="Link to this definition">¶</a></dt>
@@ -387,8 +432,21 @@ of subbands” explains them with examples and plots.</p>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="pirate_frb.core.FrequencySubbands.restrict_subband_counts">
-<span class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">restrict_subband_counts</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">subband_counts</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/collections.abc.html#collections.abc.Sequence" title="(in Python v3.14)"><span class="pre">collections.abc.Sequence</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">early_trigger_level</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">new_pf_rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)"><span class="pre">list</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#pirate_frb.core.FrequencySubbands.restrict_subband_counts" title="Link to this definition">¶</a></dt>
-<dd></dd></dl>
+<span class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">restrict_subband_counts</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">subband_counts</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/collections.abc.html#collections.abc.Sequence" title="(in Python v3.14)"><span class="pre">collections.abc.Sequence</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">early_trigger_level</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)"><span class="pre">list</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#pirate_frb.core.FrequencySubbands.restrict_subband_counts" title="Link to this definition">¶</a></dt>
+<dd><p>“Restrict” a config’s toplevel subband counts to one tree of that config.</p>
+<p>Truncates <code class="docutils literal notranslate"><span class="pre">subband_counts</span></code> by <code class="docutils literal notranslate"><span class="pre">early_trigger_level</span></code> levels (a no-op if it
+is zero), then clamps each surviving level to the number of bands that fit in
+the smaller tree. The result is always a SUBSET of the input band set.</p>
+<p>Throws unless <code class="docutils literal notranslate"><span class="pre">can_early_trigger(subband_counts,</span> <span class="pre">early_trigger_level)</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>subband_counts</strong> – the config’s toplevel <code class="docutils literal notranslate"><span class="pre">frequency_subband_counts</span></code>.</p></li>
+<li><p><strong>early_trigger_level</strong> – 0 for the main tree, 1 or more for early triggers.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="pirate_frb.core.FrequencySubbands.show">
@@ -398,11 +456,6 @@ of subbands” explains them with examples and plots.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="pirate_frb.core.FrequencySubbands.show_compact">
 <span class="sig-name descname"><span class="pre">show_compact</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.core.FrequencySubbands" title="pirate_frb.pirate_pybind11.FrequencySubbands"><span class="pre">pirate_frb.pirate_pybind11.FrequencySubbands</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span></span><a class="headerlink" href="#pirate_frb.core.FrequencySubbands.show_compact" title="Link to this definition">¶</a></dt>
-<dd></dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="pirate_frb.core.FrequencySubbands.show_token">
-<span class="sig-name descname"><span class="pre">show_token</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.core.FrequencySubbands" title="pirate_frb.pirate_pybind11.FrequencySubbands"><span class="pre">pirate_frb.pirate_pybind11.FrequencySubbands</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">token</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span></span><a class="headerlink" href="#pirate_frb.core.FrequencySubbands.show_token" title="Link to this definition">¶</a></dt>
 <dd></dd></dl>
 
 <dl class="py method">
@@ -476,6 +529,7 @@ of subbands” explains them with examples and plots.</p>
             <ul>
 <li><a class="reference internal" href="#">FrequencySubbands</a><ul>
 <li><a class="reference internal" href="#pirate_frb.core.FrequencySubbands"><code class="docutils literal notranslate"><span class="pre">FrequencySubbands</span></code></a><ul>
+<li><a class="reference internal" href="#pirate_frb.core.FrequencySubbands.can_early_trigger"><code class="docutils literal notranslate"><span class="pre">FrequencySubbands.can_early_trigger()</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.core.FrequencySubbands.from_threshold"><code class="docutils literal notranslate"><span class="pre">FrequencySubbands.from_threshold()</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.core.FrequencySubbands.m_to_fhi"><code class="docutils literal notranslate"><span class="pre">FrequencySubbands.m_to_fhi()</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.core.FrequencySubbands.m_to_flo"><code class="docutils literal notranslate"><span class="pre">FrequencySubbands.m_to_flo()</span></code></a></li>
@@ -484,7 +538,6 @@ of subbands” explains them with examples and plots.</p>
 <li><a class="reference internal" href="#pirate_frb.core.FrequencySubbands.restrict_subband_counts"><code class="docutils literal notranslate"><span class="pre">FrequencySubbands.restrict_subband_counts()</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.core.FrequencySubbands.show"><code class="docutils literal notranslate"><span class="pre">FrequencySubbands.show()</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.core.FrequencySubbands.show_compact"><code class="docutils literal notranslate"><span class="pre">FrequencySubbands.show_compact()</span></code></a></li>
-<li><a class="reference internal" href="#pirate_frb.core.FrequencySubbands.show_token"><code class="docutils literal notranslate"><span class="pre">FrequencySubbands.show_token()</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.core.FrequencySubbands.to_string"><code class="docutils literal notranslate"><span class="pre">FrequencySubbands.to_string()</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.core.FrequencySubbands.validate_subband_counts"><code class="docutils literal notranslate"><span class="pre">FrequencySubbands.validate_subband_counts()</span></code></a></li>
 </ul>
@@ -500,7 +553,7 @@ of subbands” explains them with examples and plots.</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=9172181d"></script>
+</div><script src="../_static/documentation_options.js?v=e0a75244"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

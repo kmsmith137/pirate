@@ -1,0 +1,22 @@
+# rpc
+
+Subcommand for sending RPCs (e.g. status, file-writes) to a running FrbServer (see rpc --help)
+
+| Subcommand | Description |
+|---|---|
+| [`rpc status`](status.md) | Connect to FrbServer(s) and stream status + filenames |
+| [`rpc rand_write`](rand_write.md) | Send `write_files` RPC to FrbServer(s) with random beams/time range |
+| [`rpc start_stream`](start_stream.md) | Send StartStream RPC to one or more FrbServers (write data to disk as it is received). Multiple addresses act as one 'super-server'. |
+| [`rpc cancel_stream`](cancel_stream.md) | Send CancelStream RPC to one or more FrbServers. Multiple addresses act as one 'super-server' (cancels loop over all servers). |
+| [`rpc show_streams`](show_streams.md) | Send ShowStreams RPC to one or more FrbServers and print the responses. Multiple addresses act as one 'super-server' (loops over all servers). |
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+status
+rand_write
+start_stream
+cancel_stream
+show_streams
+```

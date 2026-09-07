@@ -3,10 +3,10 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="FakeXEngine" href="FakeXEngine.html"><link rel="prev" title="DedispersionConfig" href="DedispersionConfig.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="DedispersionTree" href="DedispersionTree.html"><link rel="prev" title="DedispersionConfig" href="DedispersionConfig.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>DedispersionPlan - pirate_frb 1.4.0 documentation</title>
+        <title>DedispersionPlan - pirate_frb 1.5.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -164,7 +164,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.4.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.5.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -185,17 +185,30 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.4.0 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.5.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
   <input type="hidden" name="check_keywords" value="yes">
   <input type="hidden" name="area" value="default">
 </form>
-<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+<div id="searchbox"></div><div class="sidebar-scroll">
+<div class="sidebar-tree">
   <ul>
     <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
-    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+    <li class="toctree-l1 has-children">
+      <a class="reference internal" href="../index.html#tex-notes">Tex notes</a>
+      <input aria-label="Toggle navigation of Tex notes" class="toctree-checkbox"
+             id="toctree-checkbox-texnotes" name="toctree-checkbox-texnotes"
+             role="switch" type="checkbox"/>
+      <label for="toctree-checkbox-texnotes"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label>
+      <ul>
+        <li class="toctree-l2"><a class="reference external" href="../_static/dedispersion.pdf" target="_blank" rel="noopener">Dedispersion</a></li>
+        <li class="toctree-l2"><a class="reference external" href="../_static/detrending.pdf" target="_blank" rel="noopener">Detrending</a></li>
+        <li class="toctree-l2"><a class="reference external" href="../_static/variance_map.pdf" target="_blank" rel="noopener">Variance map</a></li>
+        <li class="toctree-l2"><a class="reference external" href="../_static/inpainting.pdf" target="_blank" rel="noopener">Inpainting</a></li>
+      </ul>
+    </li>
   </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul class="current">
@@ -207,37 +220,54 @@
 <li class="toctree-l1"><a class="reference internal" href="../notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../notes/hardware.html">Hardware</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../cli.html">CLI reference</a><input aria-label="Toggle navigation of CLI reference" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_server.html">run_server</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_toy_grouper.html">run_toy_grouper</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_offline_dedisperser.html">run_offline_dedisperser</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_toy_sifter.html">run_toy_sifter</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_fake_xengine.html">run_fake_xengine</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_status.html">rpc_status</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_rand_write.html">rpc_rand_write</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_start_stream.html">rpc_start_stream</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_cancel_stream.html">rpc_cancel_stream</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_show_streams.html">rpc_show_streams</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/test.html">test</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/test_simpulse.html">test_simpulse</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/check_avar_approximation.html">check_avar_approximation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/check_avar_mc.html">check_avar_mc</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/time.html">time</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/time_dedisperser.html">time_dedisperser</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_asdf.html">show_asdf</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_file_format.html">show_file_format</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_dedisperser.html">show_dedisperser</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_hardware.html">show_hardware</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_kernels.html">show_kernels</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_random_config.html">show_random_config</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_xengine_metadata.html">show_xengine_metadata</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/hwtest.html">hwtest</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/make_subbands.html">make_subbands</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/random_kernels.html">random_kernels</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/scratch.html">scratch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/revisit_512gb.html">revisit_512gb</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/run/index.html">run</a><input aria-label="Toggle navigation of run" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/server.html">server</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/toy_grouper.html">toy_grouper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/offline_dedisperser.html">offline_dedisperser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/toy_sifter.html">toy_sifter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/fake_xengine.html">fake_xengine</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/rpc/index.html">rpc</a><input aria-label="Toggle navigation of rpc" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/status.html">status</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/rand_write.html">rand_write</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/start_stream.html">start_stream</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/cancel_stream.html">cancel_stream</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/show_streams.html">show_streams</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/show/index.html">show</a><input aria-label="Toggle navigation of show" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/asdf.html">asdf</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/file_format.html">file_format</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/dedisperser.html">dedisperser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/hardware.html">hardware</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/kernels.html">kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/random_config.html">random_config</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/xengine_metadata.html">xengine_metadata</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/varmap/index.html">varmap</a><input aria-label="Toggle navigation of varmap" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/varmap/bf.html">bf</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/varmap/df.html">df</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/varmap/mc.html">mc</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/dev/index.html">dev</a><input aria-label="Toggle navigation of dev" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/coverage.html">coverage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/hwtest.html">hwtest</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/scratch.html">scratch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/make_subbands.html">make_subbands</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/random_kernels.html">random_kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/test_simpulse.html">test_simpulse</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/revisit_512gb.html">revisit_512gb</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/test.html">test</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/time.html">time</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/time_dedisperser.html">time_dedisperser</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" role="switch" type="checkbox"/><label for="toctree-checkbox-7"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
@@ -247,7 +277,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
-<li class="toctree-l1 current has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" checked="" class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" role="switch" type="checkbox"/><label for="toctree-checkbox-8"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="Acquisition.html">Acquisition</a></li>
 <li class="toctree-l2"><a class="reference internal" href="AssembledFrame.html">AssembledFrame</a></li>
 <li class="toctree-l2"><a class="reference internal" href="AssembledFrameAllocator.html">AssembledFrameAllocator</a></li>
@@ -255,6 +285,7 @@
 <li class="toctree-l2"><a class="reference internal" href="BumpAllocator.html">BumpAllocator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="DedispersionConfig.html">DedispersionConfig</a></li>
 <li class="toctree-l2 current current-page"><a class="current reference internal" href="#">DedispersionPlan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="DedispersionTree.html">DedispersionTree</a></li>
 <li class="toctree-l2"><a class="reference internal" href="FakeXEngine.html">FakeXEngine</a></li>
 <li class="toctree-l2"><a class="reference internal" href="FileSubscriber.html">FileSubscriber</a></li>
 <li class="toctree-l2"><a class="reference internal" href="FileWriter.html">FileWriter</a></li>
@@ -275,13 +306,15 @@
 <li class="toctree-l2"><a class="reference internal" href="Receiver.html">Receiver</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ReferenceDedisperser.html">ReferenceDedisperser</a></li>
 <li class="toctree-l2"><a class="reference internal" href="SimulatedFrameFactory.html">SimulatedFrameFactory</a></li>
+<li class="toctree-l2"><a class="reference internal" href="SinglePulse.html">SinglePulse</a></li>
 <li class="toctree-l2"><a class="reference internal" href="SlabAllocator.html">SlabAllocator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ThreadAffinity.html">ThreadAffinity</a></li>
 <li class="toctree-l2"><a class="reference internal" href="XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" role="switch" type="checkbox"/><label for="toctree-checkbox-9"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../notes/comments.html">Writing comments and docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/unit_tests.html">Randomized unit tests</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../notes/pybind11.html">Pybind11</a></li>
@@ -335,18 +368,16 @@
 <dl class="py class">
 <dt class="sig sig-object py" id="pirate_frb.DedispersionPlan">
 <span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pirate_frb.</span></span><span class="sig-name descname"><span class="pre">DedispersionPlan</span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan" title="Link to this definition">¶</a></dt>
-<dd><p>Large, low-level data structure created from a <a class="reference internal" href="DedispersionConfig.html#pirate_frb.DedispersionConfig">DedispersionConfig</a>.</p>
-<p>This class is probably not useful for python callers! Created from a
-<a class="reference internal" href="DedispersionConfig.html#pirate_frb.DedispersionConfig">DedispersionConfig</a>, this class contains all the derived parameters
-and data structures needed to execute dedispersion on the GPU. The plan includes:</p>
-<blockquote>
-<div><ul class="simple">
-<li><p>Stage1 and Stage2 dedispersion trees</p></li>
-<li><p>Kernel parameters for all processing stages</p></li>
-<li><p>Memory buffer layouts and ring buffer configuration</p></li>
-<li><p>Derived parameters like tree dimensions and output array shapes</p></li>
-</ul>
-</div></blockquote>
+<dd><p>Everything the dedisperser needs, derived from a <a class="reference internal" href="DedispersionConfig.html#pirate_frb.DedispersionConfig">DedispersionConfig</a>.</p>
+<p>Most of a plan is low-level GPU data (kernel params, buffer layouts, the ring
+buffer), which python callers rarely touch. The exception is <code class="docutils literal notranslate"><span class="pre">trees</span></code>, the
+per-(primary tree, early trigger) output geometry, and the decoding methods built
+on it – and those are available with no GPU, from a “minimal” plan:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">plan</span> <span class="o">=</span> <span class="n">DedispersionPlan</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">mega_ringbuf</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">gpu_kernels</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Both constructor flags default to True, which builds a complete plan and needs a
+CUDA device; see the constructor docstring for what each one turns off.</p>
 <p>The plan is immutable once constructed and is shared between dedisperser instances.</p>
 <p>Example:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">config</span> <span class="o">=</span> <span class="n">DedispersionConfig</span><span class="o">.</span><span class="n">from_yaml</span><span class="p">(</span><span class="s1">&#39;config.yaml&#39;</span><span class="p">)</span>
@@ -371,11 +402,20 @@ and data structures needed to execute dedispersion on the GPU. The plan includes
 <dl class="py method">
 <dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.compute_steady_state_it0">
 <span class="sig-name descname"><span class="pre">compute_steady_state_it0</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionPlan" title="pirate_frb.pirate_pybind11.DedispersionPlan"><span class="pre">pirate_frb.pirate_pybind11.DedispersionPlan</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">itree</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Array&lt;long&gt;</span></span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.compute_steady_state_it0" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a 1-d int64 array of shape (trees[itree].ndm_out,). A dedispersion
-output element (ichunk, ibeam, idm, it) of tree ‘itree’ is “steady-state”,
-i.e. unaffected by the zero-padding before the start of the acquisition, iff
-ichunk * nt_out + it &gt;= compute_steady_state_it0(itree)[idm]. Earlier elements
-have artificially low out_max values (warmup artifacts, not real triggers).</p>
+<dd><p>Time index at which each of tree <code class="docutils literal notranslate"><span class="pre">itree</span></code>’s DM channels becomes
+“steady-state”.</p>
+<p>A dedispersion output element <code class="docutils literal notranslate"><span class="pre">(ichunk,</span> <span class="pre">ibeam,</span> <span class="pre">idm,</span> <span class="pre">it)</span></code> of the tree is
+steady-state, i.e. unaffected by the zero-padding before the start of the
+acquisition, iff <code class="docutils literal notranslate"><span class="pre">ichunk*nt_out</span> <span class="pre">+</span> <span class="pre">it</span> <span class="pre">&gt;=</span> <span class="pre">result[idm]</span></code>. Earlier elements are
+computed from sums whose footprint extends past the start of the acquisition,
+so their <code class="docutils literal notranslate"><span class="pre">out_max</span></code> values are artificially low – warmup artifacts, not real
+triggers.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A 1-d int64 array of shape <code class="docutils literal notranslate"><span class="pre">(trees[itree].ndm_out,)</span></code>, in host memory.
+Needs no CUDA device.</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py property">
@@ -386,51 +426,70 @@ have artificially low out_max values (warmup artifacts, not real triggers).</p>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.decode_argmax">
-<span class="sig-name descname"><span class="pre">decode_argmax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionPlan" title="pirate_frb.pirate_pybind11.DedispersionPlan"><span class="pre">pirate_frb.pirate_pybind11.DedispersionPlan</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">token</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">itree</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">idm_coarse</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">itime_coarse</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)"><span class="pre">tuple</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.decode_argmax" title="Link to this definition">¶</a></dt>
-<dd><p>Decode an out_argmax token into the winning trial parameters.</p>
+<span class="sig-name descname"><span class="pre">decode_argmax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionPlan" title="pirate_frb.pirate_pybind11.DedispersionPlan"><span class="pre">pirate_frb.pirate_pybind11.DedispersionPlan</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">token</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">itree</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">Dcore</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">idm_coarse</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">itime_coarse</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)"><span class="pre">tuple</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.decode_argmax" title="Link to this definition">¶</a></dt>
+<dd><p>Decode an <code class="docutils literal notranslate"><span class="pre">out_argmax</span></code> token into the winning trial parameters, i.e. the
+(subband, peak-finding profile, fine-grained dm, fine-grained arrival time)
+responsible for the coarse-grained maximum in tree <code class="docutils literal notranslate"><span class="pre">itree</span></code>’s <code class="docutils literal notranslate"><span class="pre">out_max</span></code>
+array.</p>
+<p>Raises on out-of-range indices or a malformed token. See DedispersionPlan.hpp
+for the full spec.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>token</strong> – uint32 token from trees[itree]’s out_argmax array</p></li>
-<li><p><strong>itree</strong> – tree index, in [0, ntrees)</p></li>
-<li><p><strong>idm_coarse</strong> – dm index in out_max/out_argmax, in [0, trees[itree].ndm_out)</p></li>
-<li><p><strong>itime_coarse</strong> – time index in out_max/out_argmax, in [0, trees[itree].nt_out)</p></li>
+<li><p><strong>token</strong> – uint32 token from tree <code class="docutils literal notranslate"><span class="pre">itree</span></code>’s <code class="docutils literal notranslate"><span class="pre">out_argmax</span></code> array.</p></li>
+<li><p><strong>itree</strong> – tree index, in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">ntrees)</span></code>.</p></li>
+<li><p><strong>Dcore</strong> – internal time-downsampling factor of the peak-finding kernel that
+WROTE the token – <code class="docutils literal notranslate"><span class="pre">GpuDedisperser.Dcores[itree]</span></code>,
+<code class="docutils literal notranslate"><span class="pre">ReferenceDedisperser.Dcores[itree]</span></code>, or <code class="docutils literal notranslate"><span class="pre">FrbGrouper.dcores[itree]</span></code>.
+It is a property of that kernel, not of this plan, which is why it is
+an argument; a wrong (but legal) value silently mis-decodes fine times.</p></li>
+<li><p><strong>idm_coarse</strong> – dm index into <code class="docutils literal notranslate"><span class="pre">out_max</span></code> / <code class="docutils literal notranslate"><span class="pre">out_argmax</span></code>, in
+<code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">trees[itree].ndm_out)</span></code>.</p></li>
+<li><p><strong>itime_coarse</strong> – time index into <code class="docutils literal notranslate"><span class="pre">out_max</span></code> / <code class="docutils literal notranslate"><span class="pre">out_argmax</span></code>, in
+<code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">trees[itree].nt_out)</span></code>.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>fmin/fmax are the
-(inclusive) tree-freq range of the winning subband, in channels of the
-rank-toplevel_tree_rank gridding (0 &lt;= fmin &lt; fmax &lt; 2^toplevel_tree_rank).
-tlo/thi are the EXCLUSIVE trailing edges at channels fmin/fmax (one past
-the last-summed sample), in full-resolution samples with t=0 at chunk
-start (tlo &lt;= thi &lt;= nt_in; negative values refer to earlier chunks).
-p is the winning peak-finding profile index. Throws on out-of-range
-indices or a malformed token. See DedispersionPlan.hpp for the full
-specification.</p>
-</dd>
-<dt class="field-odd">Return type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>Tuple (fmin, fmax, tlo, thi, p), TOPLEVEL-relative</p>
+<dd class="field-even"><p>The tuple <code class="docutils literal notranslate"><span class="pre">(fmin,</span> <span class="pre">fmax,</span> <span class="pre">tlo,</span> <span class="pre">thi,</span> <span class="pre">p)</span></code>, all TOPLEVEL-relative. <code class="docutils literal notranslate"><span class="pre">fmin</span></code>
+and <code class="docutils literal notranslate"><span class="pre">fmax</span></code> are tree-freq channels of the toplevel gridding, spanning the
+winning frequency subband. <code class="docutils literal notranslate"><span class="pre">tlo</span></code> and <code class="docutils literal notranslate"><span class="pre">thi</span></code> are full-resolution time
+samples with <code class="docutils literal notranslate"><span class="pre">t=0</span></code> at the start of the current chunk; they are EXCLUSIVE
+trailing edges, and are frequently negative, since dedispersion delays
+usually exceed the chunk length (they then refer to earlier chunks). <code class="docutils literal notranslate"><span class="pre">p</span></code>
+is the winning peak-finding profile index.</p>
 </dd>
 </dl>
 </dd></dl>
 
 <dl class="py method">
-<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.decode_argmax2_batch">
-<span class="sig-name descname"><span class="pre">decode_argmax2_batch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionPlan" title="pirate_frb.pirate_pybind11.DedispersionPlan"><span class="pre">pirate_frb.pirate_pybind11.DedispersionPlan</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">itrees</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fmins</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fmaxs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tlos</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">this</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)"><span class="pre">tuple</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.decode_argmax2_batch" title="Link to this definition">¶</a></dt>
-<dd><p>Vectorized decode_argmax2(): converts decode_argmax_batch() outputs to
-physical params. Returns (freqs_lo_MHz, freqs_hi_MHz, dms, timestamps_samp,
-widths_samp), each a float64 array. Timestamps are CHUNK-RELATIVE toplevel
-sample counts (extrapolated to the full-band lowest frequency); the caller
-converts to absolute FPGA counts.</p>
+<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.decode_argmax2">
+<span class="sig-name descname"><span class="pre">decode_argmax2</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionPlan" title="pirate_frb.pirate_pybind11.DedispersionPlan"><span class="pre">pirate_frb.pirate_pybind11.DedispersionPlan</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">itree</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">fmin</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">fmax</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">tlo</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">thi</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)"><span class="pre">tuple</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.decode_argmax2" title="Link to this definition">¶</a></dt>
+<dd><p>Convert <code class="docutils literal notranslate"><span class="pre">decode_argmax()</span></code> output to physical parameters.</p>
+<p>The arguments <code class="docutils literal notranslate"><span class="pre">fmin</span></code>, <code class="docutils literal notranslate"><span class="pre">fmax</span></code>, <code class="docutils literal notranslate"><span class="pre">tlo</span></code>, <code class="docutils literal notranslate"><span class="pre">thi</span></code>, <code class="docutils literal notranslate"><span class="pre">p</span></code> are the tuple
+returned by <code class="docutils literal notranslate"><span class="pre">decode_argmax()</span></code> on the same <code class="docutils literal notranslate"><span class="pre">itree</span></code>. See
+DedispersionPlan.hpp for the full spec.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>The tuple <code class="docutils literal notranslate"><span class="pre">(freq_lo_MHz,</span> <span class="pre">freq_hi_MHz,</span> <span class="pre">dm,</span> <span class="pre">timestamp_samp,</span> <span class="pre">width_samp)</span></code> –
+the low/high radio frequency of the winning subband, the dispersion measure
+in pc/cm^3, the arrival time, and the winning peak-finder width in toplevel
+time samples. <code class="docutils literal notranslate"><span class="pre">timestamp_samp</span></code> is the estimated arrival time of the pulse
+center at the lowest radio frequency, in toplevel samples with <code class="docutils literal notranslate"><span class="pre">t=0</span></code> at
+the START OF THE CURRENT CHUNK (not at <code class="docutils literal notranslate"><span class="pre">fpga_seq=0</span></code>); the caller adds the
+chunk’s absolute FPGA start. It is NOT confined to <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">nt_in)</span></code> – an
+early-trigger tree extrapolates to the band bottom, so the time can lie past
+the chunk end, and the finite peak-finder kernel width can push an event
+detected near the chunk start slightly before it.</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py method">
-<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.decode_argmax_batch">
-<span class="sig-name descname"><span class="pre">decode_argmax_batch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionPlan" title="pirate_frb.pirate_pybind11.DedispersionPlan"><span class="pre">pirate_frb.pirate_pybind11.DedispersionPlan</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">tokens</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;uint&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">itrees</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">idms</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">itimes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Array&lt;long&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)"><span class="pre">tuple</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.decode_argmax_batch" title="Link to this definition">¶</a></dt>
-<dd><p>Vectorized decode_argmax() over 1-d nonempty arrays (one event per element;
-tokens: uint32, itrees/idms/itimes: int64). Returns TOPLEVEL-relative
-(fmins, fmaxs, tlos, this, ps), each an int64 array. Per-element validation
-(index ranges, malformed tokens) is inherited from decode_argmax().</p>
+<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.dedispersion_tree_index">
+<span class="sig-name descname"><span class="pre">dedispersion_tree_index</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionPlan" title="pirate_frb.pirate_pybind11.DedispersionPlan"><span class="pre">pirate_frb.pirate_pybind11.DedispersionPlan</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">primary_tree_index</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">early_trigger_level</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.dedispersion_tree_index" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the ‘itree’ of the tree with this (primary_tree_index,
+early_trigger_level) pair, i.e. the inverse of reading those two members of
+trees[itree]. Throws if either argument is out of range.</p>
 </dd></dl>
 
 <dl class="py property">
@@ -439,42 +498,76 @@ tokens: uint32, itrees/idms/itimes: int64). Returns TOPLEVEL-relative
 <dd><p>Data type for dedispersion (same as config.dtype)</p>
 </dd></dl>
 
-<dl class="py property">
-<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.gpu_runnable">
-<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">gpu_runnable</span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.gpu_runnable" title="Link to this definition">¶</a></dt>
-<dd><p>False if the plan was constructed as DedispersionPlan(config,
-gpu_runnable=False): per-tree Dcore values are defaults rather than cdd2
-kernel-registry values, so the plan cannot be used in a <a class="reference internal" href="GpuDedisperser.html#pirate_frb.GpuDedisperser">GpuDedisperser</a>.
-Useful in host-only contexts, such as the ‘<a class="reference internal" href="../cli/show_dedisperser.html">pirate_frb show_dedisperser</a>’ CLI.</p>
-</dd></dl>
-
-<dl class="py property">
-<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.is_incomplete">
-<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">is_incomplete</span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.is_incomplete" title="Link to this definition">¶</a></dt>
-<dd><p>True for plans built by make_incomplete_plan_from_yaml()</p>
-</dd></dl>
-
 <dl class="py method">
-<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.make_incomplete_plan_from_yaml">
-<span class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">make_incomplete_plan_from_yaml</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config_yaml_str</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">plan_yaml_str</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pirate_frb.DedispersionPlan" title="pirate_frb.pirate_pybind11.DedispersionPlan"><span class="pre">pirate_frb.pirate_pybind11.DedispersionPlan</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.make_incomplete_plan_from_yaml" title="Link to this definition">¶</a></dt>
-<dd><p>An ‘incomplete’ DedispersionPlan does not initialize any of the low-level
-data needed for compute kernels (especially the heavyweight MegaRingbuf) –
-only the members needed by decode_argmax(). This is a footgun, and is only
-used as a hack in <a class="reference internal" href="FrbGrouper.html#pirate_frb.rpc.FrbGrouper">FrbGrouper</a>; it may go away in the future!</p>
+<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.from_yaml_string">
+<span class="property"><span class="k"><span class="pre">static</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">from_yaml_string</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="DedispersionConfig.html#pirate_frb.DedispersionConfig" title="pirate_frb.pirate_pybind11.DedispersionConfig"><span class="pre">pirate_frb.pirate_pybind11.DedispersionConfig</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">plan_yaml</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#pirate_frb.DedispersionPlan" title="pirate_frb.pirate_pybind11.DedispersionPlan"><span class="pre">pirate_frb.pirate_pybind11.DedispersionPlan</span></a></span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.from_yaml_string" title="Link to this definition">¶</a></dt>
+<dd><p>Rebuild a producer’s plan, for a consumer that may be running a different
+pirate_frb build.</p>
+<p>Returns a “minimal” plan (see the constructor) built from <code class="docutils literal notranslate"><span class="pre">config</span></code>,
+cross-checked field by field against the yaml; a disagreement raises, naming
+the field and both values. Nothing is adopted from the yaml: a plan is a pure
+function of its config.</p>
+<p>Decoding the producer’s out_argmax tokens additionally needs its per-tree
+Dcore, which is a property of its compiled kernels rather than of the plan
+and travels as its own handshake field (see <a class="reference internal" href="FrbGrouper.html#pirate_frb.rpc.FrbGrouper">FrbGrouper.dcores</a>).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>config_yaml_str</strong> – producer’s <a class="reference internal" href="DedispersionConfig.html#pirate_frb.DedispersionConfig.to_yaml_string">DedispersionConfig.to_yaml_string</a>()</p></li>
-<li><p><strong>plan_yaml_str</strong> – producer’s DedispersionPlan.to_yaml_string()</p></li>
+<li><p><strong>config</strong> – the producer’s <a class="reference internal" href="DedispersionConfig.html#pirate_frb.DedispersionConfig">DedispersionConfig</a> (from the same handshake).</p></li>
+<li><p><strong>plan_yaml</strong> – the producer’s <code class="docutils literal notranslate"><span class="pre">to_yaml_string()</span></code> output.</p></li>
 </ul>
 </dd>
 </dl>
 </dd></dl>
 
 <dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.lds_params">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">lds_params</span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.lds_params" title="Link to this definition">¶</a></dt>
+<dd><p>LaggedDownsamplingKernelParams for this plan. Meaningful only when
+num_primary_trees &gt; 1, though it is filled (and valid) either way.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.m_index_mapping">
+<span class="sig-name descname"><span class="pre">m_index_mapping</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionPlan" title="pirate_frb.pirate_pybind11.DedispersionPlan"><span class="pre">pirate_frb.pirate_pybind11.DedispersionPlan</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">iparent</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">ichild</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)"><span class="pre">list</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.m_index_mapping" title="Link to this definition">¶</a></dt>
+<dd><p>As <code class="docutils literal notranslate"><span class="pre">n_index_mapping()</span></code>, but over multiplets: a list of length
+<code class="docutils literal notranslate"><span class="pre">trees[ichild].frequency_subbands.M</span></code>, whose entry <code class="docutils literal notranslate"><span class="pre">m_c</span></code> is the parent
+multiplet with the same band and the same fine-DM index within it.</p>
+<p>Additionally raises unless matched bands have the same subband level.</p>
+<p>Does NOT check <code class="docutils literal notranslate"><span class="pre">nprofiles</span></code> or the coarse-DM count <code class="docutils literal notranslate"><span class="pre">2**(tree_rank</span> <span class="pre">-</span>
+<span class="pre">pf_rank)</span></code>: those are not subband geometry, and a caller building a row map
+over (dm, multiplet, profile) must check them itself.</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.mega_ringbuf">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">mega_ringbuf</span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.mega_ringbuf" title="Link to this definition">¶</a></dt>
+<dd><p>the ring buffer through which stage 1 feeds stage 2.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>The MegaRingbuf</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.n_index_mapping">
+<span class="sig-name descname"><span class="pre">n_index_mapping</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pirate_frb.DedispersionPlan" title="pirate_frb.pirate_pybind11.DedispersionPlan"><span class="pre">pirate_frb.pirate_pybind11.DedispersionPlan</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">iparent</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">ichild</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsInt" title="(in Python v3.14)"><span class="pre">SupportsInt</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.SupportsIndex" title="(in Python v3.14)"><span class="pre">SupportsIndex</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)"><span class="pre">list</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.n_index_mapping" title="Link to this definition">¶</a></dt>
+<dd><p>Subband index mapping between two trees of this plan: a list of length
+<code class="docutils literal notranslate"><span class="pre">trees[ichild].frequency_subbands.N</span></code>, whose entry <code class="docutils literal notranslate"><span class="pre">n_c</span></code> is the parent
+subband searching the same toplevel band.</p>
+<p>Bands are matched by toplevel range <code class="docutils literal notranslate"><span class="pre">(n_to_toplevel_flo,</span> <span class="pre">n_to_toplevel_fhi)</span></code>,
+so trees of different rank are comparable. Raises if the child searches a band
+the parent does not; the message says so if the arguments look reversed.</p>
+<p>The usual pair is an early-trigger tree and its <code class="docutils literal notranslate"><span class="pre">(primary_tree_index,</span> <span class="pre">0)</span></code>
+parent, but equal <code class="docutils literal notranslate"><span class="pre">primary_tree_index</span></code> is not required, and the identity
+case <code class="docutils literal notranslate"><span class="pre">(t,</span> <span class="pre">t)</span></code> works. Calling both ways round tests set EQUALITY.</p>
+</dd></dl>
+
+<dl class="py property">
 <dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.nbits">
 <span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">nbits</span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.nbits" title="Link to this definition">¶</a></dt>
-<dd><p>Number of bits per element (same as config.dtype.nbits)</p>
+<dd><p>Number of bits per element (= 8 * config.dtype.itemsize)</p>
 </dd></dl>
 
 <dl class="py property">
@@ -529,10 +622,34 @@ Vector of length num_primary_trees.</p>
 </dd></dl>
 
 <dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.stage1_dd_buf_params">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">stage1_dd_buf_params</span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.stage1_dd_buf_params" title="Link to this definition">¶</a></dt>
+<dd><p>nbuf ==
+num_primary_trees, with entry ipri the input of primary tree ipri.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>DedispersionBufferParams for the stage-1 input buffers</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.stage1_dd_kernel_params">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">stage1_dd_kernel_params</span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.stage1_dd_kernel_params" title="Link to this definition">¶</a></dt>
+<dd><p>List of DedispersionKernelParams, length num_primary_trees.</p>
+</dd></dl>
+
+<dl class="py property">
 <dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.stage1_dd_rank">
 <span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">stage1_dd_rank</span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.stage1_dd_rank" title="Link to this definition">¶</a></dt>
 <dd><p>Active dedispersion rank of each stage1 tree.
 Vector of length num_primary_trees. Stage1 trees are internal to dedispersion.</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.stage2_dd_kernel_params">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">stage2_dd_kernel_params</span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.stage2_dd_kernel_params" title="Link to this definition">¶</a></dt>
+<dd><p>List of DedispersionKernelParams, length ntrees.</p>
 </dd></dl>
 
 <dl class="py method">
@@ -553,10 +670,19 @@ Vector of length num_primary_trees. Stage1 trees are internal to dedispersion.</
 </dd></dl>
 
 <dl class="py property">
+<dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.tree_gridding_kernel_params">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">tree_gridding_kernel_params</span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.tree_gridding_kernel_params" title="Link to this definition">¶</a></dt>
+<dd><p>TreeGriddingKernelParams for the (single) tree gridding kernel.</p>
+</dd></dl>
+
+<dl class="py property">
 <dt class="sig sig-object py" id="pirate_frb.DedispersionPlan.trees">
 <span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">trees</span></span><a class="headerlink" href="#pirate_frb.DedispersionPlan.trees" title="Link to this definition">¶</a></dt>
-<dd><p>Vector of DedispersionTree objects representing stage2 output trees.
-Length is ntrees. Each tree corresponds to one (primary tree, early trigger) pair.</p>
+<dd><p>Vector of <a class="reference internal" href="DedispersionTree.html#pirate_frb.core.DedispersionTree">DedispersionTree</a> objects representing stage2 output trees.
+Length is ntrees. Each tree is one (primary tree, early trigger) pair.
+Ordered by primary tree, then by DECREASING early-trigger level.</p>
+<p>Note this is a fresh list of COPIES on every attribute access, so code that
+needs one tree repeatedly should cache it.</p>
 </dd></dl>
 
 </dd></dl>
@@ -568,12 +694,12 @@ Length is ntrees. Each tree corresponds to one (primary tree, early trigger) pai
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="FakeXEngine.html">
+          <a class="next-page" href="DedispersionTree.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">FakeXEngine</div>
+                <div class="title">DedispersionTree</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
@@ -625,12 +751,14 @@ Length is ntrees. Each tree corresponds to one (primary tree, early trigger) pai
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.compute_steady_state_it0"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.compute_steady_state_it0()</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.config"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.config</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.decode_argmax"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.decode_argmax()</span></code></a></li>
-<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.decode_argmax2_batch"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.decode_argmax2_batch()</span></code></a></li>
-<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.decode_argmax_batch"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.decode_argmax_batch()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.decode_argmax2"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.decode_argmax2()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.dedispersion_tree_index"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.dedispersion_tree_index()</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.dtype"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.dtype</span></code></a></li>
-<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.gpu_runnable"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.gpu_runnable</span></code></a></li>
-<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.is_incomplete"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.is_incomplete</span></code></a></li>
-<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.make_incomplete_plan_from_yaml"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.make_incomplete_plan_from_yaml()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.from_yaml_string"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.from_yaml_string()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.lds_params"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.lds_params</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.m_index_mapping"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.m_index_mapping()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.mega_ringbuf"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.mega_ringbuf</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.n_index_mapping"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.n_index_mapping()</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.nbits"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.nbits</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.nbytes_per_segment"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.nbytes_per_segment</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.nelts_per_segment"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.nelts_per_segment</span></code></a></li>
@@ -640,8 +768,12 @@ Length is ntrees. Each tree corresponds to one (primary tree, early trigger) pai
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.num_active_batches"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.num_active_batches</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.num_primary_trees"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.num_primary_trees</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.stage1_amb_rank"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.stage1_amb_rank</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.stage1_dd_buf_params"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.stage1_dd_buf_params</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.stage1_dd_kernel_params"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.stage1_dd_kernel_params</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.stage1_dd_rank"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.stage1_dd_rank</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.stage2_dd_kernel_params"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.stage2_dd_kernel_params</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.to_yaml_string"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.to_yaml_string()</span></code></a></li>
+<li><a class="reference internal" href="#pirate_frb.DedispersionPlan.tree_gridding_kernel_params"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.tree_gridding_kernel_params</span></code></a></li>
 <li><a class="reference internal" href="#pirate_frb.DedispersionPlan.trees"><code class="docutils literal notranslate"><span class="pre">DedispersionPlan.trees</span></code></a></li>
 </ul>
 </li>
@@ -656,7 +788,7 @@ Length is ntrees. Each tree corresponds to one (primary tree, early trigger) pai
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=9172181d"></script>
+</div><script src="../_static/documentation_options.js?v=e0a75244"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

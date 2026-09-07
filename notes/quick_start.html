@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Developer notes" href="developer.html"><link rel="prev" title="Introduction" href="intro.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Quick start - pirate_frb 1.4.0 documentation</title>
+        <title>Quick start - pirate_frb 1.5.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -164,7 +164,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.4.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">pirate_frb 1.5.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -185,17 +185,30 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">pirate_frb 1.4.0 documentation</span>
+  <span class="sidebar-brand-text">pirate_frb 1.5.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
   <input type="hidden" name="check_keywords" value="yes">
   <input type="hidden" name="area" value="default">
 </form>
-<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+<div id="searchbox"></div><div class="sidebar-scroll">
+<div class="sidebar-tree">
   <ul>
     <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
-    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+    <li class="toctree-l1 has-children">
+      <a class="reference internal" href="../index.html#tex-notes">Tex notes</a>
+      <input aria-label="Toggle navigation of Tex notes" class="toctree-checkbox"
+             id="toctree-checkbox-texnotes" name="toctree-checkbox-texnotes"
+             role="switch" type="checkbox"/>
+      <label for="toctree-checkbox-texnotes"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label>
+      <ul>
+        <li class="toctree-l2"><a class="reference external" href="../_static/dedispersion.pdf" target="_blank" rel="noopener">Dedispersion</a></li>
+        <li class="toctree-l2"><a class="reference external" href="../_static/detrending.pdf" target="_blank" rel="noopener">Detrending</a></li>
+        <li class="toctree-l2"><a class="reference external" href="../_static/variance_map.pdf" target="_blank" rel="noopener">Variance map</a></li>
+        <li class="toctree-l2"><a class="reference external" href="../_static/inpainting.pdf" target="_blank" rel="noopener">Inpainting</a></li>
+      </ul>
+    </li>
   </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul class="current">
@@ -207,37 +220,54 @@
 <li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../cli.html">CLI reference</a><input aria-label="Toggle navigation of CLI reference" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_server.html">run_server</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_toy_grouper.html">run_toy_grouper</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_offline_dedisperser.html">run_offline_dedisperser</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_toy_sifter.html">run_toy_sifter</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/run_fake_xengine.html">run_fake_xengine</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_status.html">rpc_status</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_rand_write.html">rpc_rand_write</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_start_stream.html">rpc_start_stream</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_cancel_stream.html">rpc_cancel_stream</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/rpc_show_streams.html">rpc_show_streams</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/test.html">test</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/test_simpulse.html">test_simpulse</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/check_avar_approximation.html">check_avar_approximation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/check_avar_mc.html">check_avar_mc</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/time.html">time</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/time_dedisperser.html">time_dedisperser</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_asdf.html">show_asdf</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_file_format.html">show_file_format</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_dedisperser.html">show_dedisperser</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_hardware.html">show_hardware</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_kernels.html">show_kernels</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_random_config.html">show_random_config</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/show_xengine_metadata.html">show_xengine_metadata</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/hwtest.html">hwtest</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/make_subbands.html">make_subbands</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/random_kernels.html">random_kernels</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/scratch.html">scratch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../cli/revisit_512gb.html">revisit_512gb</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/run/index.html">run</a><input aria-label="Toggle navigation of run" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/server.html">server</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/toy_grouper.html">toy_grouper</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/offline_dedisperser.html">offline_dedisperser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/toy_sifter.html">toy_sifter</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/run/fake_xengine.html">fake_xengine</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/rpc/index.html">rpc</a><input aria-label="Toggle navigation of rpc" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/status.html">status</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/rand_write.html">rand_write</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/start_stream.html">start_stream</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/cancel_stream.html">cancel_stream</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/rpc/show_streams.html">show_streams</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/show/index.html">show</a><input aria-label="Toggle navigation of show" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/asdf.html">asdf</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/file_format.html">file_format</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/dedisperser.html">dedisperser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/hardware.html">hardware</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/kernels.html">kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/random_config.html">random_config</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/show/xengine_metadata.html">xengine_metadata</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/varmap/index.html">varmap</a><input aria-label="Toggle navigation of varmap" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/varmap/bf.html">bf</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/varmap/df.html">df</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/varmap/mc.html">mc</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cli/dev/index.html">dev</a><input aria-label="Toggle navigation of dev" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/coverage.html">coverage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/hwtest.html">hwtest</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/scratch.html">scratch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/make_subbands.html">make_subbands</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/random_kernels.html">random_kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/test_simpulse.html">test_simpulse</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cli/dev/revisit_512gb.html">revisit_512gb</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/test.html">test</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/time.html">time</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/time_dedisperser.html">time_dedisperser</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" role="switch" type="checkbox"/><label for="toctree-checkbox-7"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l2"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
@@ -247,7 +277,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" role="switch" type="checkbox"/><label for="toctree-checkbox-8"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../classes/Acquisition.html">Acquisition</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrame.html">AssembledFrame</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/AssembledFrameAllocator.html">AssembledFrameAllocator</a></li>
@@ -255,6 +285,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../classes/BumpAllocator.html">BumpAllocator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionConfig.html">DedispersionConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionPlan.html">DedispersionPlan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/DedispersionTree.html">DedispersionTree</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FakeXEngine.html">FakeXEngine</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FileSubscriber.html">FileSubscriber</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FileWriter.html">FileWriter</a></li>
@@ -275,13 +306,15 @@
 <li class="toctree-l2"><a class="reference internal" href="../classes/Receiver.html">Receiver</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/ReferenceDedisperser.html">ReferenceDedisperser</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/SimulatedFrameFactory.html">SimulatedFrameFactory</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/SinglePulse.html">SinglePulse</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/SlabAllocator.html">SlabAllocator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/ThreadAffinity.html">ThreadAffinity</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/XEngineMetadata.html">XEngineMetadata</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" role="switch" type="checkbox"/><label for="toctree-checkbox-9"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="comments.html">Writing comments and docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="unit_tests.html">Randomized unit tests</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
@@ -347,42 +380,42 @@ a single node, and uses a small fraction of a single GPU.
 To run the full sequence (fake X-engine) -&gt; (FRB search) -&gt; (grouper) -&gt; (sifter),
 run the following commands in separate terminal windows.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Window 1: start the sifter (waits for grouper to connect)</span>
-<span class="n">pirate_frb</span> <span class="n">run_toy_sifter</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7500</span>
+<span class="n">pirate_frb</span> <span class="n">run</span> <span class="n">toy_sifter</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7500</span>
 
 <span class="c1"># Window 2: start the grouper (waits for search to connect)</span>
-<span class="n">pirate_frb</span> <span class="n">run_toy_grouper</span> <span class="o">-</span><span class="n">s</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7000</span>
+<span class="n">pirate_frb</span> <span class="n">run</span> <span class="n">toy_grouper</span> <span class="o">-</span><span class="n">s</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7000</span>
 
 <span class="c1"># Window 3: start the search (waits for fake X-engine to connect)</span>
-<span class="n">pirate_frb</span> <span class="n">run_server</span> <span class="n">configs</span><span class="o">/</span><span class="n">frb_server</span><span class="o">/</span><span class="n">toy</span><span class="o">.</span><span class="n">yml</span> <span class="n">configs</span><span class="o">/</span><span class="n">dedispersion</span><span class="o">/</span><span class="n">toy</span><span class="o">.</span><span class="n">yml</span>
+<span class="n">pirate_frb</span> <span class="n">run</span> <span class="n">server</span> <span class="n">configs</span><span class="o">/</span><span class="n">frb_server</span><span class="o">/</span><span class="n">toy</span><span class="o">.</span><span class="n">yml</span> <span class="n">configs</span><span class="o">/</span><span class="n">dedispersion</span><span class="o">/</span><span class="n">toy</span><span class="o">.</span><span class="n">yml</span>
 
 <span class="c1"># Window 4: start the fake X-engine.</span>
 <span class="c1"># Data will start streaming through all 4 processes.</span>
 <span class="c1"># The -f flag randomly simulates FRBs.</span>
 <span class="c1"># The -g GAP_SEC flag puts a time gap between simulated FRBs.</span>
 <span class="c1"># The -s SIFTER_ADDR flag sends an event to the sifter for each simulated FRB.</span>
-<span class="n">pirate_frb</span> <span class="n">run_fake_xengine</span> <span class="o">-</span><span class="n">f</span> <span class="o">-</span><span class="n">g</span> <span class="mi">30</span> <span class="o">-</span><span class="n">s</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
+<span class="n">pirate_frb</span> <span class="n">run</span> <span class="n">fake_xengine</span> <span class="o">-</span><span class="n">f</span> <span class="o">-</span><span class="n">g</span> <span class="mi">30</span> <span class="o">-</span><span class="n">s</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
 
 <span class="c1"># Optional: in window 5, send RPC &quot;status&quot; requests to the server.</span>
 <span class="c1"># This will monitor connections, files written, and ring buffer state.</span>
-<span class="n">pirate_frb</span> <span class="n">rpc_status</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
+<span class="n">pirate_frb</span> <span class="n">rpc</span> <span class="n">status</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
 
 <span class="c1"># Optional: in window 6, send RPC &quot;start_stream&quot; requests to the server.</span>
 <span class="c1"># Here, we dump beam_id=10 for 1000 seconds. (The wallclock time will be smaller,</span>
 <span class="c1"># since the toy server runs faster than real time.) Filenames will be printed in</span>
-<span class="c1"># the &#39;rpc_status&#39; process (window 5) as they are written, and will look like:</span>
+<span class="c1"># the &#39;rpc status&#39; process (window 5) as they are written, and will look like:</span>
 <span class="c1">#   ~/pirate_toy/toy_stream_{date}_{time}/frame_b{beam}_t{chunk}.asdf</span>
-<span class="n">pirate_frb</span> <span class="n">rpc_start_stream</span> <span class="o">-</span><span class="n">b</span> <span class="mi">10</span> <span class="o">-</span><span class="n">d</span> <span class="mi">1000</span> <span class="o">-</span><span class="n">s</span> <span class="n">toy_stream</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
+<span class="n">pirate_frb</span> <span class="n">rpc</span> <span class="n">start_stream</span> <span class="o">-</span><span class="n">b</span> <span class="mi">10</span> <span class="o">-</span><span class="n">d</span> <span class="mi">1000</span> <span class="o">-</span><span class="n">s</span> <span class="n">toy_stream</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
 
 <span class="c1"># Optional: in window 7, send RPC &quot;show_streams&quot; requests to the server.</span>
 <span class="c1"># This will show the status of current streams, and the last 5 inactive streams.</span>
-<span class="c1"># Note: there is also a command &#39;pirate_frb rpc_cancel_stream&#39;.</span>
-<span class="n">pirate_frb</span> <span class="n">rpc_show_streams</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
+<span class="c1"># Note: there is also a command &#39;pirate_frb rpc cancel_stream&#39;.</span>
+<span class="n">pirate_frb</span> <span class="n">rpc</span> <span class="n">show_streams</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
 
 <span class="c1"># Optional: in window 8, send RPC &quot;write_files&quot; requests to the server, for randomly</span>
-<span class="c1"># chosen beams/times. Filenames will be printed in the &#39;rpc_status&#39; process (window 5)</span>
+<span class="c1"># chosen beams/times. Filenames will be printed in the &#39;rpc status&#39; process (window 5)</span>
 <span class="c1"># as they are written, and will look like:</span>
 <span class="c1">#   ~/pirate_toy/rand_write_{date}_{time}/frame_b{beam}_t{chunk}.asdf</span>
-<span class="n">pirate_frb</span> <span class="n">rpc_rand_write</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
+<span class="n">pirate_frb</span> <span class="n">rpc</span> <span class="n">rand_write</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
 </pre></div>
 </div>
 <p>In this example, we simulated FRBs and sent two event streams to the sifter.
@@ -393,7 +426,7 @@ These event streams are distinguished by the <code class="docutils literal notra
 (see <a class="reference internal" href="../grpc/frb_sifter.proto.html"><span class="std std-doc">frb_sifter.proto</span></a> or the sifter terminal output).</p>
 <p>Note that you don’t need to run this entire sequence every time!
 The programs above have command-line args to “short-circuit” the downstream programs.
-(For example, <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_server</span> <span class="pre">--no-grouper</span></code> or <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_toy_grouper</span> <span class="pre">--no-sifter</span></code>.)</p>
+(For example, <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run</span> <span class="pre">server</span> <span class="pre">--no-grouper</span></code> or <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run</span> <span class="pre">toy_grouper</span> <span class="pre">--no-sifter</span></code>.)</p>
 <p>To end a run, Ctrl-C the last process (in this case, the toy sifter).
 Errors will cascade backwards, and all processes will stop (with error messages).</p>
 </section>
@@ -406,13 +439,13 @@ sifter on cf05, but it could be run on cf00 (or a third node). Note that there
 are two grouper processes (one per GPU), each of which independently connects
 to the sifter.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Window 1 (cf05): start the sifter (waits for grouper to connect)</span>
-<span class="n">pirate_frb</span> <span class="n">run_toy_sifter</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">7500</span>
+<span class="n">pirate_frb</span> <span class="n">run</span> <span class="n">toy_sifter</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">7500</span>
 
 <span class="c1"># Window 2 (cf05): start the grouper (waits for search to connect)</span>
-<span class="n">pirate_frb</span> <span class="n">run_toy_grouper</span> <span class="o">-</span><span class="n">s</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7000</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7001</span>
+<span class="n">pirate_frb</span> <span class="n">run</span> <span class="n">toy_grouper</span> <span class="o">-</span><span class="n">s</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7000</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7001</span>
 
 <span class="c1"># Window 3 (cf05): start the search (waits for fake X-engine to connect)</span>
-<span class="n">pirate_frb</span> <span class="n">run_server</span> <span class="n">configs</span><span class="o">/</span><span class="n">frb_server</span><span class="o">/</span><span class="n">cf05_production</span><span class="o">.</span><span class="n">yml</span> <span class="n">configs</span><span class="o">/</span><span class="n">dedispersion</span><span class="o">/</span><span class="n">chord_sb2_et</span><span class="o">.</span><span class="n">yml</span>
+<span class="n">pirate_frb</span> <span class="n">run</span> <span class="n">server</span> <span class="n">configs</span><span class="o">/</span><span class="n">frb_server</span><span class="o">/</span><span class="n">cf05_production</span><span class="o">.</span><span class="n">yml</span> <span class="n">configs</span><span class="o">/</span><span class="n">dedispersion</span><span class="o">/</span><span class="n">chord_sb2_et</span><span class="o">.</span><span class="n">yml</span>
 
 <span class="c1"># NOTE: you&#39;ll need to wait ~60 seconds before starting the fake x-engine,</span>
 <span class="c1"># while the production-scale server initializes. When it&#39;s ready, you&#39;ll see:</span>
@@ -422,28 +455,28 @@ to the sifter.</p>
 <span class="c1"># Data will start streaming through all 4 processes.</span>
 <span class="c1"># The -f flag randomly simulates FRBs.</span>
 <span class="c1"># The -s SIFTER_ADDR flag sends an event to the sifter for each simulated FRB.</span>
-<span class="n">pirate_frb</span> <span class="n">run_fake_xengine</span> <span class="o">-</span><span class="n">f</span> <span class="o">-</span><span class="n">s</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
+<span class="n">pirate_frb</span> <span class="n">run</span> <span class="n">fake_xengine</span> <span class="o">-</span><span class="n">f</span> <span class="o">-</span><span class="n">s</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
 
 <span class="c1"># Optional: window 5 (either cf00 or cf05): send RPC &quot;status&quot; requests to the server.</span>
 <span class="c1"># This will monitor connections, files written, and ring buffer state.</span>
-<span class="n">pirate_frb</span> <span class="n">rpc_status</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
+<span class="n">pirate_frb</span> <span class="n">rpc</span> <span class="n">status</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
 
 <span class="c1"># Optional: in window 6, send RPC &quot;start_stream&quot; requests to the server.</span>
 <span class="c1"># Here, we dump beam_id=100 for 1000 seconds. Filenames will be printed in</span>
-<span class="c1"># the &#39;rpc_status&#39; process (window 5) as they are written, and will look like:</span>
+<span class="c1"># the &#39;rpc status&#39; process (window 5) as they are written, and will look like:</span>
 <span class="c1">#   /mnt/cs00/data/{user}/prod_stream_{date}_{time}/frame_b{beam}_t{chunk}.asdf</span>
-<span class="n">pirate_frb</span> <span class="n">rpc_start_stream</span> <span class="o">-</span><span class="n">b</span> <span class="mi">100</span> <span class="o">-</span><span class="n">d</span> <span class="mi">1000</span> <span class="o">-</span><span class="n">s</span> <span class="n">prod_stream</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
+<span class="n">pirate_frb</span> <span class="n">rpc</span> <span class="n">start_stream</span> <span class="o">-</span><span class="n">b</span> <span class="mi">100</span> <span class="o">-</span><span class="n">d</span> <span class="mi">1000</span> <span class="o">-</span><span class="n">s</span> <span class="n">prod_stream</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
 
 <span class="c1"># Optional: in window 7, send RPC &quot;show_streams&quot; requests to the server.</span>
 <span class="c1"># This will show the status of current streams, and the last 5 inactive streams.</span>
-<span class="c1"># Note: there is also a command &#39;pirate_frb rpc_cancel_stream&#39;.</span>
-<span class="n">pirate_frb</span> <span class="n">rpc_show_streams</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
+<span class="c1"># Note: there is also a command &#39;pirate_frb rpc cancel_stream&#39;.</span>
+<span class="n">pirate_frb</span> <span class="n">rpc</span> <span class="n">show_streams</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
 
 <span class="c1"># Optional: in window 8, send RPC &quot;write_files&quot; requests to the server, for randomly</span>
-<span class="c1"># chosen beams/times. Filenames will be printed in the &#39;rpc_status&#39; process (window 5)</span>
+<span class="c1"># chosen beams/times. Filenames will be printed in the &#39;rpc status&#39; process (window 5)</span>
 <span class="c1"># as they are written, and will look like:</span>
 <span class="c1">#   /mnt/cs00/data/{user}/rand_write_{date}_{time}/frame_b{beam}_t{chunk}.asdf</span>
-<span class="n">pirate_frb</span> <span class="n">rpc_rand_write</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
+<span class="n">pirate_frb</span> <span class="n">rpc</span> <span class="n">rand_write</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
 </pre></div>
 </div>
 <p>See above for more info on the simulated FRB event streams, or on “short-circuting” the
@@ -455,12 +488,12 @@ sequence of programs.</p>
 Here are some example runs, based on <code class="docutils literal notranslate"><span class="pre">start_stream</span></code> acquisitions from the sections above
 (which included simulated FRBs):</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Toy acquisition (note: your acqdir will be different)</span>
-<span class="n">pirate_frb</span> <span class="n">run_offline_dedisperser</span> \
+<span class="n">pirate_frb</span> <span class="n">run</span> <span class="n">offline_dedisperser</span> \
    <span class="o">~/</span><span class="n">pirate_toy</span><span class="o">/</span><span class="n">toy_stream_26_07_07_123508</span> \
    <span class="n">configs</span><span class="o">/</span><span class="n">dedispersion</span><span class="o">/</span><span class="n">toy</span><span class="o">.</span><span class="n">yml</span>
 
 <span class="c1"># &quot;Production&quot; acquisition (note: your acqdir will be different)</span>
-<span class="n">pirate_frb</span> <span class="n">run_offline_dedisperser</span> \
+<span class="n">pirate_frb</span> <span class="n">run</span> <span class="n">offline_dedisperser</span> \
     <span class="o">/</span><span class="n">mnt</span><span class="o">/</span><span class="n">cs00</span><span class="o">/</span><span class="n">data</span><span class="o">/</span><span class="n">kmsmith</span><span class="o">/</span><span class="n">prod_stream_26_07_07_155938</span> \
     <span class="n">configs</span><span class="o">/</span><span class="n">dedispersion</span><span class="o">/</span><span class="n">chord_sb2</span><span class="o">.</span><span class="n">yml</span>
 </pre></div>
@@ -550,7 +583,7 @@ logic).</p>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=9172181d"></script>
+</div><script src="../_static/documentation_options.js?v=e0a75244"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

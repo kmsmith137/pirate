@@ -1,0 +1,20 @@
+# coverage
+
+Coverage analysis of randomization utils in unit tests
+
+```{code-block} text
+:class: cli-help
+
+usage: pirate_frb dev coverage [-h] [--config] [--reg] [--varmap] [--dt] [-s X]
+
+Coverage analysis of randomization utils in unit tests
+
+options:
+  -h, --help     show this help message and exit
+  --config       DedispersionConfig::make_random(), at each setting its callers use
+  --reg          Kernel registry marginals (what this build compiled, not a draw)
+  --varmap       varmap draws: _random_config(), the LP cell, the sweep loops
+  --dt           Detrending draws: random_knots(), random_nfreq(), the 2-d masks
+  -s, --scale X  Multiply every draw count by X (default 1). Scale up when a rate is
+                 near a band edge and you want to know whether it moved.
+```

@@ -6,12 +6,11 @@ orphan: true
 
 ```yaml
 #ASDF 1.0.0
-#ASDF_STANDARD 1.2.0
+#ASDF_STANDARD 1.6.0
 # This is an ASDF file <https://asdf-standard.readthedocs.io/>
 %YAML 1.1
 %TAG ! tag:stsci.edu:asdf/
----
-!core/asdf-1.1.0
+--- !core/asdf-1.1.0
 
 # This file contains FRB intensity data for one "frame":
 #   - one beam
@@ -60,8 +59,8 @@ file_format_version: 1
 
 nfreq: 28160
 beam_id: 100
-beam_position_x: 0
-beam_position_y: 0
+beam_position_x: 0.0
+beam_position_y: 0.0
 ntime: 256
 time_chunk_index: 0
 fpga_seq: 0
@@ -91,12 +90,12 @@ xengine_metadata:
         -   2048
         -   3584
     zone_freq_edges:
-        -   300
-        -   350
-        -   450
-        -   600
-        -   800
-        -   1500
+        -   300.0
+        -   350.0
+        -   450.0
+        -   600.0
+        -   800.0
+        -   1500.0
 
 # integer identifier for this set of beams (sent by X-engine, opqaue to FRB search)
     beamset: 42
@@ -150,15 +149,15 @@ xengine_metadata:
     tel_dish_elev_axis:
         -   0.99999999838132392
         -   -5.6897733584326999e-05
-        -   0
+        -   0.0
     tel_dish_vert_axis:
-        -   0
-        -   0
-        -   1
+        -   0.0
+        -   0.0
+        -   1.0
 
 # The dish pointing angle, co-elevation in degrees: angle away from vertical,
 # north is positive.
-    tel_dish_coelev_deg: 0
+    tel_dish_coelev_deg: 0.0
 
 # Values of dish separation in x and y directions in meters.
     tel_dish_separation_x_m: 6.300156854906823
@@ -168,11 +167,11 @@ xengine_metadata:
 # Temporary kludge: the FRB server assumes mean-zero, time-uncorrelated
 # noise with this variance. Will be generalized later.
     noise_variance:
-        -   1
-        -   1
-        -   1
-        -   1
-        -   1
+        -   1.0
+        -   1.0
+        -   1.0
+        -   1.0
+        -   1.0
 
 # scales_offsets: per-(freq, minichunk) dequantization parameters as a
 # (nfreq, ntime/256, 2) float16 ndarray. The last axis is (scale, offset).
@@ -181,24 +180,20 @@ xengine_metadata:
 # (nbeams, nfreq, 2) float16 array per minichunk; this file aggregates
 # (ntime/256) minichunks for a single beam.
 
-scales_offsets: !core/ndarray-1.0.0
+scales_offsets: !core/ndarray-1.1.0
     source: 0
     datatype: float16
     byteorder: little
     shape: [28160, 1, 2]
-    offset: 0
-    strides: [4, 4, 2]
 
 # data: int4 intensity samples, shape (nfreq, ntime). int4 is stored on
 # disk as uint8 with shape (nfreq, ntime/2): two int4 values are packed
 # per byte as ((x[1] << 4) | x[0]). Each int4 holds a value in [-8, +7];
 # the reserved value -8 (encoded as 0x8) indicates a masked sample.
 
-data: !core/ndarray-1.0.0
+data: !core/ndarray-1.1.0
     source: 1
     datatype: uint8
     byteorder: little
     shape: [28160, 128]
-    offset: 0
-    strides: [128, 1]
 ```

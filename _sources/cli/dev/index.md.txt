@@ -1,0 +1,26 @@
+# dev
+
+Subcommand for developer utils: coverage, hardware probes, makefile helpers, scratch (see dev --help)
+
+| Subcommand | Description |
+|---|---|
+| [`dev coverage`](coverage.md) | Coverage analysis of randomization utils in unit tests |
+| [`dev hwtest`](hwtest.md) | Run hardware test from a hwtest YAML config file (use -s to send data instead of receiving) |
+| [`dev scratch`](scratch.md) | For debugging: run whatever code is currently in `src_lib`/scratch.cu |
+| [`dev make_subbands`](make_subbands.md) | A utility for maintaining `makefile_helper`.py |
+| [`dev random_kernels`](random_kernels.md) | A utility for maintaining `makefile_helper`.py |
+| [`dev test_simpulse`](test_simpulse.md) | Run simpulse tests (pulse-upsampling self-consistency) and write example plots to cwd |
+| [`dev revisit_512gb`](revisit_512gb.md) | Re-test the ~511 GiB cudaHostRegister cap (failure expected). |
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+coverage
+hwtest
+scratch
+make_subbands
+random_kernels
+test_simpulse
+revisit_512gb
+```
