@@ -1,0 +1,50 @@
+# config_chord_base_tree.yml: the CHORD base tree (tree 0), on its own.
+#
+# This is chord_sb2_et.yml with primary_trees truncated to its first entry. It is the
+# config the varmap benchmark ladder is defined on -- see README.md in this directory.
+#
+# WHY A SEPARATE FILE. The benchmark uses ONE tree, and carrying the other three invites
+# the reader to wonder which tree a number refers to. Tree 0 is also the expensive one
+# (the largest DM range, and no early triggers), so it is the tree a low-rank
+# approximation has to succeed on.
+#
+# THE TREE-0 GEOMETRY HERE IS IDENTICAL TO chord_sb2.yml AND chord_sb2_et.yml. Those two
+# differ from each other only in num_early_triggers for trees 1-3 (0,0,0 versus 1,2,3) and
+# in future_write_max_samples; their tree-0 lines are byte-identical, and dropping trees
+# 1-3 does not perturb tree 0. Verified by measurement across all three configs: build a
+# minimal plan (pirate_frb.varmap.VarianceMap.make_plan) and compare every scalar field of
+# plan.trees[0] -- amb_rank, dd_rank, dm_downsampling, time_downsampling, dm_min, dm_max,
+# ndm_out, ndm_wt, nprofiles, nt_ds, nt_out, nt_wt, primary_tree_rank, tree_rank,
+# trigger_frequency -- together with the (r, R, N, M, P, nfreq, nalpha) that
+# varmap.detrender_free.SdPlan derives from it. All identical.
+#
+# 'varmap bf' additionally overrides dtype (float16 -> float32; no sweep path implements
+# float16) and max_gpu_clag (5 -> 10000; the GPU sweep needs a pure-GPU ring buffer), and
+# prints both. Neither changes the tree geometry above -- also verified by the same
+# comparison, run on a float32 copy of this file.
+
+zone_freq_edges: [300, 350, 450, 600, 800, 1500]
+zone_nfreq: [ 8192, 8192, 6144, 2048, 3584 ]   # U = 32,16,8,4,1 (28160 freq channels total)
+
+time_sample_ms: 1.0
+beams_per_gpu: 60
+dtype: float16
+time_samples_per_chunk: 2048
+
+# 25 frequency subbands, as [5,9,7,3,1] over pf_level = 0..4.
+# Command line: pirate_frb make_subbands 300 1500 0.1 -r 4
+frequency_subband_counts: [5,9,7,3,1]
+
+max_gpu_clag: 5
+beams_per_batch: 2
+num_active_batches: 2
+
+toplevel_tree_rank: 16
+
+# The base tree only. num_early_triggers: 0 is what makes this the non-early-trigger tree
+# at 300 MHz, with a maximum dispersion delay of 65.536 seconds.
+primary_trees:
+  - {num_early_triggers: 0, max_width: 32, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+
+# No early triggers, so a WriteFiles request extends only ~5K samples into the future.
+future_write_max_samples: 5000

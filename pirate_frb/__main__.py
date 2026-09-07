@@ -589,14 +589,19 @@ def _parse_channel_spec(spec, nfreq):
 
 
 # Config keys that this tool overrides, with the value it forces, because the sweep requires
-# them (see varmap.brute_force._SweepGeometry). Each is safe to override because none can
+# them (see varmap.brute_force._SweepGeometry). All but the last are safe because none can
 # change A: the analytic route (varmap.detrender_free) computes the same matrix and never
-# reads any downsampling factor.
+# reads a beam count, a downsampling factor or a ring-buffer placement. 'dtype' is the
+# exception: it is not provably A-preserving, which is why it is announced in the log like the
+# rest and recorded in the file's provenance. Same list, for the same reasons, as
+# _varmap_mc_override_config().
 #
 # The peak-finder's Dcore is not among them, and could not be: it is a property of a
 # peak-finding kernel, not of the config. The sweep never sees it -- it ends in a PfSquare,
 # which evaluates h_p at every time sample.
 def _varmap_bf_override_config(config, nbeams=1):
+    import numpy as np
+
     overrides = []
 
     def _set(obj, field, want, label):
@@ -608,6 +613,17 @@ def _varmap_bf_override_config(config, nbeams=1):
     _set(config, 'beams_per_gpu', nbeams, 'beams_per_gpu')
     _set(config, 'beams_per_batch', nbeams, 'beams_per_batch')
     _set(config, 'num_active_batches', 1, 'num_active_batches')
+
+    # A pure-GPU MegaRingbuf, which the GPU pipeline requires.
+    _set(config, 'max_gpu_clag', 10000, 'max_gpu_clag')
+
+    # No sweep path implements float16, on either device: GpuSbDedispersionKernel is
+    # float32-only (_GpuPipeline says so and refuses), and the CPU sweep's
+    # ReferenceDedispersionKernel "uses float32, regardless of what dtype is specified".
+    if np.dtype(config.dtype) != np.float32:
+        overrides.append(f'dtype: {np.dtype(config.dtype)} -> float32'
+                         ' (no sweep path implements float16)')
+        config.dtype = np.float32
 
     return overrides
 
