@@ -1,0 +1,19 @@
+# Offline candidate extraction, grouping, and bounded-wait configuration.
+# Every section and field is required; unknown fields are rejected.
+
+peakfinding:
+  snr_threshold: 10.0  #  S/N threshold; must be finite.
+  dm_reach: 8          # Native DM bins searched on either side of a centre.
+  waist_bins: 1        # Extra coarse-time bins at the full-band Bowtie waist.
+
+grouping:
+  # Seam context in multiples of each tree's Bowtie time radius. Grouping
+  # tolerances apply only within the part resolved after chunk i+1.
+  halo_size: 2
+  dm_tolerance: 1.5    # Nonnegative factor of the coarser native DM spacing.
+  time_tolerance: 1.5  # Factor of the coarser candidate/tree time spacing.
+
+execution:
+  beam_batch_size: 1   # Maximum number of compatible beams resident together.
+  timeout_ms: 400      # Example deadline; zero disables the timeout.
+  timeout_policy: discard  # Exactly "discard" or "emit_partial".

@@ -68,6 +68,13 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
         per_beam_itime = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(time index)
         per_beam_token = cp.zeros((nbeams_tot,), dtype=cp.uint32)           # out_argmax token at the argmax
 
+        chunk_hit_ibeam = []
+        chunk_hit_itree = []
+        chunk_hit_idm = []
+        chunk_hit_itime = []
+        chunk_hit_snr = []
+        chunk_hit_token = []
+
         for ibatch in range(nbatches):          # inner loop over beam batches
             beam0 = ibatch * beams_per_batch    # global index of this batch's first beam
 
@@ -85,9 +92,82 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
                     # Per-beam max SNR + its (dm, time) argmax for this batch's beams.
                     # Done entirely on GPU; no gpu<->host copies in sight!
                     bpb, ndm, nt = tree_out.shape
+
+                    # Select every cell whose S/N exceeds the threshold.
+                    raw_hit_mask = tree_out > snr_threshold
+
+                    # During the initial chunks, discard cells affected by zero-padding.
+                    if ichunk < grouper.full_steady_ichunk:
+                        steady_mask = grouper.steady_state_mask(itree, ichunk)
+                        hit_mask = raw_hit_mask & steady_mask[None, :, :]
+                    else:
+                        hit_mask = raw_hit_mask
+
+                    # Print diagnostics only for the first batch of the first chunk.
+                    # Compact the valid hits into one-dimensional GPU arrays.
+                    hit_ibeam_local, hit_idm, hit_itime = cp.nonzero(hit_mask)
+
+                    # Convert the beam index from batch-local to global.
+                    hit_ibeam = hit_ibeam_local + beam0
+
+                    # Gather the S/N and out_argmax token at the selected cells.
+                    hit_snr = tree_out[hit_ibeam_local, hit_idm, hit_itime]
+                    hit_token = outputs.out_argmax[itree][
+                        hit_ibeam_local, hit_idm, hit_itime
+                    ]
+
+                    # Store the tree index explicitly for every hit.
+                    hit_itree = cp.full(hit_snr.shape, itree, dtype=cp.int64)
+
+                    # Temporary diagnostics.
+                    raw_nhits = int(cp.count_nonzero(raw_hit_mask).get())
+                    valid_nhits = hit_snr.size
+
+                    if valid_nhits > 0:
+                        chunk_hit_ibeam.append(hit_ibeam)
+                        chunk_hit_itree.append(hit_itree)
+                        chunk_hit_idm.append(hit_idm)
+                        chunk_hit_itime.append(hit_itime)
+                        chunk_hit_snr.append(hit_snr)
+                        chunk_hit_token.append(hit_token)
+
+                    if raw_nhits > 0:
+                        atomic_print(
+                            f"threshold hits: ichunk={ichunk}, ibatch={ibatch}, "
+                            f"itree={itree}, raw_nhits={raw_nhits}, "
+                            f"valid_nhits={valid_nhits}"
+                        )
+
+                        if valid_nhits > 0:
+                            nshow = min(5, valid_nhits)
+
+                            preview = cp.stack(
+                                (
+                                    hit_ibeam[:nshow],
+                                    hit_itree[:nshow],
+                                    hit_idm[:nshow],
+                                    hit_itime[:nshow],
+                                    hit_snr[:nshow],
+                                    hit_token[:nshow],
+                                ),
+                                axis=1,
+                            ).get()
+
+                            for row in preview:
+                                atomic_print(
+                                    "    "
+                                    f"beam={int(row[0])}, "
+                                    f"tree={int(row[1])}, "
+                                    f"idm={int(row[2])}, "
+                                    f"itime={int(row[3])}, "
+                                    f"snr={row[4]:.3f}, "
+                                    f"token={int(row[5])}"
+                                )
+
                     flat = tree_out.reshape(bpb, ndm * nt)
                     beam_max = flat.max(axis=1)
                     beam_arg = flat.argmax(axis=1)
+                    
                     beam_idm, beam_itime = beam_arg // nt, beam_arg % nt
 
                     # Winning out_argmax token, gathered at the same argmax position.
@@ -115,6 +195,78 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
                     per_beam_idm[sl]   = cp.where(upd, beam_idm,   per_beam_idm[sl])
                     per_beam_itime[sl] = cp.where(upd, beam_itime, per_beam_itime[sl])
                     per_beam_token[sl] = cp.where(upd, beam_tok,   per_beam_token[sl])
+
+
+        # Merge all batch/tree candidate arrays into one compact list for this chunk.
+        if chunk_hit_snr:
+            all_hit_ibeam = cp.concatenate(chunk_hit_ibeam)
+            all_hit_itree = cp.concatenate(chunk_hit_itree)
+            all_hit_idm = cp.concatenate(chunk_hit_idm)
+            all_hit_itime = cp.concatenate(chunk_hit_itime)
+            all_hit_snr = cp.concatenate(chunk_hit_snr)
+            all_hit_token = cp.concatenate(chunk_hit_token)
+        else:
+            all_hit_ibeam = cp.empty(0, dtype=cp.int64)
+            all_hit_itree = cp.empty(0, dtype=cp.int64)
+            all_hit_idm = cp.empty(0, dtype=cp.int64)
+            all_hit_itime = cp.empty(0, dtype=cp.int64)
+            all_hit_snr = cp.empty(0, dtype=cp.float32)
+            all_hit_token = cp.empty(0, dtype=cp.uint32)
+
+        total_nhits = all_hit_snr.size
+
+        if total_nhits > 0:
+            compact_nbytes = sum(
+                array.nbytes
+                for array in (
+                    all_hit_ibeam,
+                    all_hit_itree,
+                    all_hit_idm,
+                    all_hit_itime,
+                    all_hit_snr,
+                    all_hit_token,
+                )
+            )
+
+            atomic_print(
+                f"compact chunk hits: ichunk={ichunk}, "
+                f"total_nhits={total_nhits}, "
+                f"memory={compact_nbytes} bytes"
+            )
+
+        # Diagnostic only: decode every compact hit into physical coordinates.
+        decoded_hits = grouper.create_events(
+            ichunk,
+            all_hit_itree,
+            all_hit_ibeam,
+            all_hit_idm,
+            all_hit_itime,
+            all_hit_snr,
+            all_hit_token,
+        )
+
+        if total_nhits > 0:
+            # Show the ten strongest cells, rather than the first ten by array index.
+            order = decoded_hits.snrs.argsort()[::-1]
+            nshow = min(10, total_nhits)
+
+            atomic_print(
+                f"decoded chunk hits: ichunk={ichunk}, "
+                f"total_nhits={total_nhits}, showing_top={nshow}"
+            )
+
+            for i in order[:nshow]:
+                atomic_print(
+                    "    "
+                    f"beam={int(decoded_hits.beam_ids[i])}, "
+                    f"fpga={int(decoded_hits.fpga_timestamps[i])}, "
+                    f"dm={decoded_hits.dms[i]:.3f}, "
+                    f"snr={decoded_hits.snrs[i]:.3f}, "
+                    f"width={decoded_hits.widths_ms[i]:.3f} ms, "
+                    f"subband=["
+                    f"{decoded_hits.subband_freqs_lo_MHz[i]:.1f},"
+                    f"{decoded_hits.subband_freqs_hi_MHz[i]:.1f}] MHz"
+                )                        
 
         # Now we have one event per beam whose peak SNR exceeds threshold (0 <= nevents <= nbeams).
         # Events are identified by (snr, itree, ibeam, idm, itime, token) on the GPU. We copy this

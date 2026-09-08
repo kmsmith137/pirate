@@ -419,6 +419,14 @@ void register_core_bindings(pybind11::module &m)
             "If normalize=True, then offsets are zero, and scales are chosen to match\n"
             "metadata.noise_variance.\n\n"
             "sp (default None): a simulated FRB to add on top of the noise.")
+        .def("randomize_many", &AssembledFrame::randomize_many,
+            py::arg("normalize"), py::arg("gaussian"), py::arg("pulses"),
+            py::arg("dt_sp") = (long) 0,
+            py::call_guard<py::gil_scoped_release>(),
+            "Fill the frame with one noise realization plus zero or more simulated FRB pulses.\n\n"
+            "All pulses are validated before the frame is modified. Overlapping pulse signals\n"
+            "are summed before noise is added once and the sample is quantized once. An empty\n"
+            "pulse list gives Gaussian noise only; one pulse has the same semantics as randomize().")
     ;
 
     // AssembledFrameSet: container of (nbeams) AssembledFrames for one time chunk.

@@ -1,7 +1,7 @@
 [project]
 name = 'pirate_frb'
 version = '1.4.0'
-dependencies = [ 'pybind11', 'numpy', 'editables', 'ksgpu >= 1.4.0', 'argcomplete' ]
+dependencies = [ 'pybind11', 'numpy', 'editables', 'ksgpu >= 1.4.0', 'argcomplete', 'asdf', 'PyYAML >= 6.0' ]
 description = 'Perimeter Institute RAdio Transient Engine'
 requires-python = '>=3.8'
 # readme = 'README.md'
@@ -26,4 +26,3 @@ requires = [ 'pipmake >= 0.0.3', 'pybind11', 'numpy', 'editables', 'ksgpu >= 1.4
 # NOTE: I decided not to specify 'cupy' as a dependency, in order to avoid triggering
 # a pip install of cupy (since cupy is difficult to install with pip but straightforward
 # with other tools, e.g. conda).
-

@@ -34,6 +34,26 @@ documentation snapshots (do not edit them by hand; regenerate by running
   Production configs are also used by the build system (`makefile_helper.py`) to
   determine which CUDA kernels to autogenerate.
 
+- **`offline_grouper/`** -- strict peak-extraction, grouping, and execution
+  controls for `run_offline_grouper`. Start from
+  [`example.yml`](offline_grouper/example.yml); all three sections and every
+  documented field are required, and unknown fields are rejected. The command
+  takes this file as its second positional argument:
+
+  ```
+  pirate_frb run_offline_grouper ACQDIR configs/offline_grouper/example.yml
+  ```
+
+  The grouper finalizes chunk `i` after receiving only the configured left
+  halo from chunk `i+1`; an event is owned by `i` when any member came from
+  `i`. The configured radius multiplier defines the map-coordinate association
+  domain. Output metadata records its intersection with candidates resolved
+  after `i+1`; grouping tolerances apply only inside it and never introduce an
+  `i+2` dependency. `timeout_ms` bounds each GPU grouping window (`0` disables it), while
+  `timeout_policy` either discards that whole window or emits only its fully
+  completed groups. See the CLI reference for the exact ownership, timeout,
+  and catalog-provenance contracts.
+
 - **`frb_server/`** -- FRB search server configs (server/CPU layout, network addresses,
   host+GPU memory pools, ring buffer length, file-writing threads, SSD/NFS paths). Used by:
 

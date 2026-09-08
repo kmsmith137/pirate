@@ -65,6 +65,7 @@ def parse_test(subparsers):
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection and pulse-invariants tests')
     parser.add_argument('--amax', action='store_true', help='Runs DedispersionPlan.decode_argmax() tests (black-box probe arrays)')
     parser.add_argument('--aout', action='store_true', help='Runs the serialized-output test (atomic_print/AtomicPrint, C++ and python threads)')
+    parser.add_argument('--ofg', action='store_true', help='Runs offline-grouper ASDF loading tests')
 
 
 def rrange(registry_class):
@@ -85,7 +86,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout', 'ofg' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -130,6 +131,8 @@ def test(args):
         if run_all_tests or args.sim:
             utils.test_avx2_simulate_4bit_noise()
             tests.test_pulse_injection()
+            if i == 0:
+                tests.test_multi_burst_cli()
             tests.test_pulse_invariants()
 
         if run_all_tests or args.cdd2:
@@ -193,6 +196,10 @@ def test(args):
             # Output-funnel test is deterministic and fast; once is enough.
             if i == 0:
                 tests.test_atomic_out()
+
+        if run_all_tests or args.ofg:
+            if i == 0:
+                tests.test_offline_peak_milestone(args.gpu)
 
         if run_all_tests or args.net:
             # Network/allocator tests only need to run once (not niter times)
@@ -1692,7 +1699,7 @@ def run_toy_grouper_command(args):
 
 
 def parse_run_offline_dedisperser(subparsers):
-    help_text = "Toy offline dedispersion: per-chunk peak SNR over an acqdir of .asdf frames"
+    help_text = "Offline dedispersion and optional per-chunk S/N-map saving"
     parser = subparsers.add_parser("run_offline_dedisperser", help=help_text, description=help_text)
     parser.add_argument("acqdir",
                         help="acqdir of frame_b(BEAM)_t(CHUNK).asdf files")
@@ -1700,11 +1707,59 @@ def parse_run_offline_dedisperser(subparsers):
                         help="dedispersion config yaml")
     parser.add_argument("--max-chunks", type=int, default=None,
                         help="only process the first N chunks of each beam (default: all)")
+    parser.add_argument("--save", action="store_true",
+                        help="save each S/N map beside its input as *_snrmap.asdf")
 
 
 def run_offline_dedisperser_command(args):
     from .run_offline_dedisperser import run_offline_dedisperser
-    run_offline_dedisperser(args.acqdir, args.config, max_chunks=args.max_chunks)
+    run_offline_dedisperser(args.acqdir, args.config, max_chunks=args.max_chunks,
+                            save=args.save)
+
+
+######################################  run_offline_grouper command  #####################################
+
+
+def parse_run_offline_grouper(subparsers):
+    help_text = "Find and group offline candidates from saved S/N maps"
+    parser = subparsers.add_parser("run_offline_grouper", help=help_text, description=help_text)
+    parser.add_argument("acqdir", metavar="ACQDIR",
+                        help="directory containing frame_b(BEAM)_t(CHUNK)_snrmap.asdf files")
+    parser.add_argument(
+        "config_file", metavar="CONFIG.yml",
+        help="strict offline-grouper YAML configuration",
+    )
+    parser.add_argument("--max-chunks", type=int, default=None,
+                        help=("process the first N chunks of each independent "
+                              "beam stream without flushing (default: all)"))
+    parser.add_argument("--device", type=int, default=0,
+                        help="CUDA device (default: 0)")
+    parser.add_argument(
+        "--output", default=None,
+        help="write one compressed trigger ASDF (default: terminal output only)",
+    )
+    parser.add_argument(
+        "--assume-steady-state", action="store_true",
+        help=("treat every saved sample as startup-valid when producer-start "
+              "provenance is absent"),
+    )
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="print grouped member links after each event",
+    )
+
+
+def run_offline_grouper_command(args):
+    from .run_offline_grouper import run_offline_grouper
+    run_offline_grouper(
+        args.acqdir,
+        config_file=args.config_file,
+        cuda_device_id=args.device,
+        output=args.output,
+        max_chunks=args.max_chunks,
+        verbose=args.verbose,
+        assume_steady_state=args.assume_steady_state,
+    )
 
 
 ######################################  run_toy_sifter command  #####################################
@@ -1841,6 +1896,7 @@ def get_parser():
     parse_run_server(subparsers)
     parse_run_toy_grouper(subparsers)
     parse_run_offline_dedisperser(subparsers)
+    parse_run_offline_grouper(subparsers)
     parse_run_toy_sifter(subparsers)
     parse_run_fake_xengine(subparsers)
     parse_rpc_status(subparsers)
@@ -1977,6 +2033,8 @@ def main():
         run_toy_grouper_command(args)
     elif args.command == "run_offline_dedisperser":
         run_offline_dedisperser_command(args)
+    elif args.command == "run_offline_grouper":
+        run_offline_grouper_command(args)
     elif args.command == "run_toy_sifter":
         run_toy_sifter_command(args)
     elif args.command == "run_fake_xengine":

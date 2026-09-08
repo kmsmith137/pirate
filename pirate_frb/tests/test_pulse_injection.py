@@ -16,11 +16,23 @@ whose arrival extends to t < 0 (mixed-sign freq_it0) to stress the negative-time
 it_start/it_end bracketing invariant, integer-shift equivalence, shift_samples(), and the
 add_to_timestream(out, out_it0) span contract.
 """
+import contextlib
+import io
+import os
+import tempfile
 
 import numpy as np
 
-from ..core import AssembledFrameAllocator, BumpAllocator, SlabAllocator, XEngineMetadata
-from ..simpulse import SinglePulse
+from ..core import AssembledFrame, AssembledFrameAllocator, BumpAllocator, SlabAllocator, XEngineMetadata
+from ..make_simulated_acq import (
+    _dedispersed_reference_frequency_MHz,
+    _make_arg_parser,
+    _normalize_burst_parameters,
+    _toa_to_infinite_arrivals,
+    main as make_simulated_acq_main,
+    make_simulated_acq,
+)
+from ..simpulse import SinglePulse, dispersion_delay
 from ..utils import atomic_print
 
 
@@ -183,6 +195,166 @@ def test_pulse_injection():
     _expect_throw("freq_variances mismatch", lambda: frame.randomize(True, True, sp=sp_bad_var, dt_sp=0))
 
     atomic_print("    consistency/precondition checks all threw -- ok")
+
+    # ---- generalized multi-pulse path ----
+    def _pulse_at_start(start, burst_snr=12.0):
+        ref = _single_pulse(edges, variances, frame_dt_ms, snr=burst_snr, uat_sec=0.0)
+        arrival = (int(start) - int(ref.it_start)) * frame_dt_ms * 1.0e-3
+        out = _single_pulse(edges, variances, frame_dt_ms, snr=burst_snr, uat_sec=arrival)
+        assert int(out.it_start) == int(start)
+        return out
+
+    # Zero pulses is Gaussian noise only, and the old one-pulse method above remains supported.
+    noise_frame, _alloc = _make_frame(xmd, len(beam_ids), nfreq, ntime)
+    noise_frame.randomize_many(normalize=True, gaussian=True, pulses=[], dt_sp=0)
+    assert not (_unpack_int4(noise_frame) == -8).any()
+
+    # Two separated pulses must both survive one frame randomization.
+    sep_a = _pulse_at_start(64)
+    sep_b = _pulse_at_start(ntime - L - 64)
+    assert sep_a.it_end < sep_b.it_start
+    sep_frame, _alloc = _make_frame(xmd, len(beam_ids), nfreq, ntime)
+    sep_frame.randomize_many(normalize=True, gaussian=True, pulses=[sep_a, sep_b], dt_sp=0)
+    sep_deq = _dequantize(sep_frame)
+    for label, burst in (("separated A", sep_a), ("separated B", sep_b)):
+        expected = _expected_pulse(burst, nfreq, ntime, 0)
+        amp = float(np.sum(sep_deq * expected) / np.sum(expected * expected))
+        assert 0.3 < amp < 1.7, f"[{label}] matched-filter amplitude {amp:.3f}"
+
+    # Identical overlapping pulses are a sharp replacement-vs-sum check: replacing one pulse would
+    # give amplitude ~0.5 against the expected sum. The residual variance checks that overlap gets
+    # one noise contribution and one quantization, rather than independent noise per pulse.
+    overlap = _pulse_at_start(ntime // 2 - L // 2, burst_snr=6.0)
+    overlap_expected = 2.0 * _expected_pulse(overlap, nfreq, ntime, 0)
+    overlap_frame, _alloc = _make_frame(xmd, len(beam_ids), nfreq, ntime)
+    overlap_frame.randomize_many(normalize=True, gaussian=True, pulses=[overlap, overlap], dt_sp=0)
+    overlap_deq = _dequantize(overlap_frame)
+    overlap_amp = float(np.sum(overlap_deq * overlap_expected) /
+                        np.sum(overlap_expected * overlap_expected))
+    assert 0.70 < overlap_amp < 1.30, f"overlap sum amplitude {overlap_amp:.3f}"
+    overlap_mask = overlap_expected != 0.0
+    overlap_rvar = float((overlap_deq - overlap_expected)[overlap_mask].var())
+    assert 0.45 < overlap_rvar / V < 1.55, \
+        f"overlap residual variance {overlap_rvar:.4f} indicates noise was not added once"
+
+    # A pulse crossing a chunk seam must be visible with each chunk's dt_sp offset.
+    seam = _pulse_at_start(ntime - L // 2, burst_snr=20.0)
+    assert seam.it_start < ntime < seam.it_end
+    for ichunk in (0, 1):
+        seam_frame, _alloc = _make_frame(xmd, len(beam_ids), nfreq, ntime)
+        seam_frame.randomize_many(
+            normalize=True, gaussian=True, pulses=[seam], dt_sp=ichunk * ntime
+        )
+        expected = _expected_pulse(seam, nfreq, ntime, ichunk * ntime)
+        assert expected.any(), f"seam pulse missing from chunk {ichunk} test setup"
+        amp = float(np.sum(_dequantize(seam_frame) * expected) / np.sum(expected * expected))
+        assert 0.3 < amp < 1.8, f"seam chunk {ichunk} amplitude {amp:.3f}"
+
+    # Every pulse is checked before scales_offsets or data is changed.
+    untouched, _alloc = _make_frame(xmd, len(beam_ids), nfreq, ntime)
+    untouched.randomize_many(normalize=True, gaussian=True, pulses=[], dt_sp=0)
+    data_before = np.asarray(untouched.data).copy()
+    so_before = np.asarray(untouched.scales_offsets).copy()
+    _expect_throw(
+        "bad pulse in collection",
+        lambda: untouched.randomize_many(
+            normalize=True, gaussian=True, pulses=[sp, sp_bad_dt], dt_sp=0
+        ),
+    )
+    assert np.array_equal(np.asarray(untouched.data), data_before)
+    assert np.array_equal(np.asarray(untouched.scales_offsets), so_before)
+    atomic_print(
+        f"    multi-pulse: separated + overlap + seam -- ok "
+        f"(overlap amp={overlap_amp:.3f}, residual var={overlap_rvar:.3f})"
+    )
+
+def test_multi_burst_cli():
+    """Argument broadcasting, timestamp conversion, and generated-ASDF compatibility."""
+    atomic_print("  test_multi_burst_cli()...")
+
+    nfreq = 64
+    flo, fhi = 400.0, 800.0
+    beam_ids = [0, 1]
+    xmd = XEngineMetadata.make_fiducial([nfreq], [flo, fhi], beam_ids, 0.983)
+    xmd.validate()
+    # ---- Python argument handling and TOA conversion ----
+    toas, widths, burst_snrs = _normalize_burst_parameters(
+        toa=[5, 7, 12], arrival_sec=None, width_ms=[2], snr=[30]
+    )
+    assert toas == [5.0, 7.0, 12.0]
+    assert widths == [2.0, 2.0, 2.0]
+    assert burst_snrs == [30.0, 30.0, 30.0]
+
+    toas, widths, burst_snrs = _normalize_burst_parameters(
+        toa=[5, 7, 12], arrival_sec=None, width_ms=[1, 2, 1], snr=[30, 20, 40]
+    )
+    assert widths == [1.0, 2.0, 1.0] and burst_snrs == [30.0, 20.0, 40.0]
+
+    for option, kwargs in (
+        ("--width-ms", dict(width_ms=[1, 2], snr=[30])),
+        ("--snr", dict(width_ms=[1], snr=[30, 20])),
+    ):
+        try:
+            _normalize_burst_parameters(toa=[5, 7, 12], arrival_sec=None, **kwargs)
+        except ValueError as exc:
+            assert option in str(exc) and "one value or 3 values" in str(exc)
+        else:
+            raise AssertionError(f"invalid {option} length did not fail")
+
+    parsed = _make_arg_parser().parse_args([
+        "metadata.yml", "out", "--dm", "100", "--toa", "5", "7", "12",
+        "--width-ms", "1", "2", "1", "--snr", "30", "20", "40",
+    ])
+    assert parsed.toa == [5.0, 7.0, 12.0]
+    assert parsed.width_ms == [1.0, 2.0, 1.0]
+    assert parsed.snr == [30.0, 20.0, 40.0]
+
+    # main() validates list lengths before it attempts to read metadata or make an output directory.
+    invalid_out = os.path.join(tempfile.gettempdir(), "pirate_invalid_multi_burst_should_not_exist")
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        try:
+            make_simulated_acq_main([
+                "/metadata/does/not/exist.yml", invalid_out,
+                "--toa", "1", "2", "3", "--snr", "10", "20",
+            ])
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError("invalid CLI list length did not fail")
+    assert "--snr expects either one value or 3 values" in stderr.getvalue()
+    assert not os.path.exists(invalid_out)
+
+    reference_frequency_MHz = _dedispersed_reference_frequency_MHz(xmd)
+    assert reference_frequency_MHz == flo
+    arrivals, delay = _toa_to_infinite_arrivals([5.0, 7.0, 12.0], 100.0, 300.0)
+    assert abs(delay - float(dispersion_delay(100.0, 300.0))) < 1.0e-12
+    assert abs(delay - 4.6098) < 5.0e-4
+    assert np.allclose(arrivals, np.asarray([5.0, 7.0, 12.0]) - delay)
+
+    # A short generated multi-burst acquisition remains valid AssembledFrame ASDF.
+    with tempfile.TemporaryDirectory(prefix="pirate_multi_burst_") as tmpdir:
+        metadata_path = os.path.join(tmpdir, "metadata.yml")
+        outdir = os.path.join(tmpdir, "acq")
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            f.write(xmd.to_yaml_string())
+        make_simulated_acq(
+            metadata_path,
+            outdir,
+            nchunks=2,
+            ntime=256,
+            dm=1.0,
+            toa=[0.15, 0.30],
+            width_ms=[1.0],
+            snr=[12.0, 9.0],
+        )
+        for ichunk in (0, 1):
+            filename = os.path.join(outdir, f"frame_b{beam_ids[0]}_t{ichunk}.asdf")
+            loaded = AssembledFrame.from_asdf(filename)
+            assert loaded.nfreq == nfreq and loaded.ntime == 256
+            assert loaded.beam_id == beam_ids[0] and loaded.time_chunk_index == ichunk
+
+    atomic_print("    CLI broadcasting + metadata-derived TOA + ASDF round-trip -- ok")
 
 
 def test_pulse_invariants():

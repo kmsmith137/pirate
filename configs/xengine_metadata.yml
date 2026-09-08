@@ -73,7 +73,7 @@ beam_positions_y: [0.0, 0.0, 0.1 ]
 
 unix_ns_at_seq_0: 1772483060000000000
 dt_ns_per_seq: 5120    # note long, not double
-seq_per_frb_time_sample: 256
+seq_per_frb_time_sample: 195  # 0.9984 ms, nearest integer-tick cadence to 1 ms
 
 ##################################################
 # Telescope alignment and localization parameters.

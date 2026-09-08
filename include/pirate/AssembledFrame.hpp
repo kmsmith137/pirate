@@ -183,17 +183,15 @@ struct AssembledFrame
     //         gaussian. See src_lib/AssembledFrame.cpp for the derivation.) 'metadata' is non-null
     //         by invariant, and its zone_nfreq sums to this frame's nfreq by construction.
     //
-    // Pulse injection ('sp' nonempty): add a simulated FRB on top of the noise. REQUIRES
-    // gaussian=true and normalize=true (throws otherwise), and that 'sp' is consistent with this
-    // frame's 'metadata' -- same nfreq, per-channel freq edges, per-channel noise variances, and
-    // time-sample duration (throws otherwise). The pulse channel i maps DIRECTLY to frame row i
-    // (both ordered low-to-high in frequency). 'dt_sp' is the frame's time offset relative to the
-    // pulse: frame time sample it_frame corresponds to pulse sample (it_frame + dt_sp). The pulse
-    // is sparse, so most of the frame is still the fast avx2 noise fill; only each channel's
-    // (contiguous) pulse samples are recomputed as quantize(signal/S[f] + prequant_rms*gaussian).
-    // Partial overlap (part of the pulse falls outside [0,ntime)) is fine -- it is simply clipped.
-    // sp->freq_it0 may be negative (a pulse whose arrival extends to t < 0); the per-channel
-    // window clipping handles any (freq_it0, dt_sp) combination.
+    // Pulse injection ('sp' nonempty, or 'pulses' nonempty in randomize_many()): add simulated
+    // FRBs on top of the noise. REQUIRES gaussian=true and normalize=true (throws otherwise), and
+    // that every pulse is consistent with this frame's 'metadata' -- same nfreq, per-channel freq
+    // edges, per-channel noise variances, and time-sample duration (throws otherwise). All pulses
+    // are validated before either frame buffer is modified. The pulse channel i maps DIRECTLY to
+    // frame row i (both ordered low-to-high in frequency). 'dt_sp' is the frame's time offset
+    // relative to the pulses: frame time sample it_frame corresponds to pulse sample
+    // (it_frame + dt_sp). Pulse signals which overlap are summed in floating point, then noise is
+    // added once and the result is quantized once. Partial overlap with [0,ntime) is clipped.
     //
     // Thread-safety: snapshots the lock-protected 'scales_offsets'/'data' Arrays
     // under the lock, then fills them without the lock held (the snapshot pins
@@ -205,7 +203,13 @@ struct AssembledFrame
 
     void randomize(bool normalize, bool gaussian,
                    const std::shared_ptr<const simpulse::SinglePulse> &sp, long dt_sp);
-    
+
+    // Generalized injection API. An empty vector is equivalent to Gaussian-noise-only randomize();
+    // one pulse has the same semantics as randomize(..., sp, dt_sp). Null entries are rejected.
+    void randomize_many(bool normalize, bool gaussian,
+                        const std::vector<std::shared_ptr<const simpulse::SinglePulse>> &pulses,
+                        long dt_sp);
+
     // Members after this point are internal state.
     // These members are protected by the mutex, and are not saved to the ASDF file.
 
