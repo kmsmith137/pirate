@@ -1,4 +1,4 @@
-"""Parsed view of an acquisition directory written by a 'start_stream' RPC."""
+"""Parsed view of an acquisition directory written by a StartStream or WriteFiles RPC."""
 
 import os
 import re
@@ -21,7 +21,7 @@ _SNRMAP_RE = re.compile(r"^frame_b\d+_t\d+_snrmap\.asdf$")
 class Acquisition:
     """Helper class, to enumerate `frame_b{beam}_t{chunk}.asdf` files in a pirate acqdir.
 
-    Typically, the acqdir will be created by either `pirate_frb rpc_start_stream`,
+    Typically, the acqdir will be created by either `pirate_frb rpc start_stream`,
     or a triggered `WriteFiles` RPC. The constructor raises an exception if the
     acqdir contains a file that's not of the form `frame_b{beam}_t{chunk}.asdf`
     (except derived *_snrmap.asdf files and uncommitted C++ make_tmp_filename()

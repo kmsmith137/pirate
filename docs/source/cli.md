@@ -3,18 +3,24 @@
 Many `pirate` features are accessed via the command-line interface:
 ```
 pirate_frb SUBCOMMAND [ARGS...]
+pirate_frb GROUP SUBCOMMAND [ARGS...]
 ```
 where the list of subcommands, and documentation for each subcommand, are given below.
+Most subcommands are nested in a group (`run`, `rpc`, `show`, `varmap`, `dev`), whose row
+in the table below links to a page listing that group's subcommands; `test`, `time` and
+`time_dedisperser` are typed directly. Each subcommand's page embeds its `--help` output,
+captured from the argparse parser when the docs are built. Note that
+`python -m pirate_frb ...` is equivalent to `pirate_frb ...`.
 
 ```{include} _cli_generated.md
 ```
 
 ## Offline grouper configuration
 
-`run_offline_grouper` takes an acquisition directory and a strict YAML file:
+`run offline_grouper` takes an acquisition directory and a strict YAML file:
 
 ```
-pirate_frb run_offline_grouper ACQDIR CONFIG.yml
+pirate_frb run offline_grouper ACQDIR CONFIG.yml
 ```
 
 Scientific and execution settings come only from the YAML file. The CLI keeps
@@ -97,7 +103,7 @@ published.
   candidates.
 
 Processing then continues with the next window without accumulating a backlog.
-Terminal summaries identify every timeout. Version-2 trigger catalogs attach
+Terminal summaries identify every timeout. Version-3 trigger catalogs attach
 `grouping_window_id` and `grouping_timed_out` to event/member rows and store a
 record for every attempted window, including empty and discarded windows.
 Timeout provenance is deliberately separate from peakfinder `edge_flags`.

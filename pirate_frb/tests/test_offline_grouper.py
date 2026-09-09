@@ -1,26 +1,25 @@
-"""Loader and end-to-end checks on the supplied offline acquisitions."""
+"""Portable v3 writer, loader, grouping, and catalog regressions.
 
+Maps here are synthetic and use explicit producer Dcores and valid 1.5 tokens.
+Raw-frame dedispersion is verified separately; historical 1.4 golden data stays
+with the preserved 1.4 checkout rather than being relabelled for these tests.
+"""
 import os
 import tempfile
+from types import SimpleNamespace
 
 import numpy as np
 
+from ..ArgmaxMetadata import ARGMAX_ENCODING
 from ..FrbOfflineGrouper import FrbOfflineGrouper
-from ..GpuArgmaxDecoder import GpuArgmaxDecoder
-from ..OfflineCandidateGrouper import (
-    GroupingConfig,
-    GroupingGeometry,
-    group_candidates,
-)
-from ..Peakfinders import EdgeFlag, PeakFinderGeometry
+from ..OfflineCandidateGrouper import group_candidates
+from ..Peakfinders import EdgeFlag
 from ..TriggerCatalog import validate_trigger_catalog_tree
+from ..run_offline_dedisperser import _write_snr_asdf, _validate_snr_asdf_tree
 from .. import run_offline_grouper as runner
+from ..pirate_pybind11 import DedispersionPlan
+from .test_gpu_argmax_decoder import _make_plan
 from .test_offline_candidate_grouper import _candidates, _geometry
-
-
-_SIX_TREE_EXAMPLE = "/home/mtrudu/chordsim"
-_GROUPTEST = "/home/mtrudu/chordsim/grouptest"
-
 
 def _runner_config(directory, *, snr_threshold=10.0):
     """Write the strict runner fixture without depending on source-tree data."""
@@ -44,204 +43,238 @@ def _runner_config(directory, *, snr_threshold=10.0):
     return path
 
 
-def _examples_available():
-    """Return whether the optional repository-external integration data exists."""
 
-    return all(os.path.isdir(path) for path in (
-        _SIX_TREE_EXAMPLE, _GROUPTEST
-    ))
+def _rewrite_map(path, change):
+    """Modify only a freshly generated test file, never historical acquisitions."""
+    import asdf
+    with asdf.open(path, mode="rw", lazy_load=False, memmap=False) as af:
+        change(af.tree)
+        af.update()
 
 
-def test_six_tree_ragged_loading_and_startup(cuda_device_id=0):
-    """The six native map shapes upload independently and require an assumption."""
+def _write_toy_acquisition(directory, *, beams=(7, 11), chunks=(0, 1, 2),
+                           include_start=True):
+    """Exercise the real map writer with a small synthetic producer."""
+    plan, dcores = _make_plan()
+    # Deliberately choose a different first-tree granularity from _make_plan.
+    # Its only authority is the producer's dd.Dcores member below.
+    dcores = (2,) + dcores[1:]
+    producer_plan = DedispersionPlan(plan.config)
+    od = SimpleNamespace(
+        plan=producer_plan, config=producer_plan.config,
+        dd=SimpleNamespace(Dcores=dcores),
+        ntrees=int(plan.ntrees), trees=plan.trees,
+        nt_in=int(plan.nt_in), nfreq=int(plan.nfreq),
+        time_sample_ms=float(plan.config.time_sample_ms),
+    )
+    itree = 0
+    idm = int(plan.trees[itree].ndm_out) // 3
+    itime = int(plan.trees[itree].nt_out) // 2
+    token = (1 << 24) | (4 << 8)  # nonzero extra DM, temporal profile 4.
+    assert int(plan.trees[0].dm_downsampling) >> int(
+        plan.trees[0].frequency_subbands.pf_rank) > 1
+    files = {}
+    for beam in beams:
+        for chunk in chunks:
+            snr_maps = [
+                np.zeros((int(t.ndm_out), int(t.nt_out)), dtype=np.float32)
+                for t in plan.trees
+            ]
+            argmax_maps = [np.zeros(a.shape, dtype=np.uint32) for a in snr_maps]
+            if beam == beams[0] and chunk == 1:
+                snr_maps[itree][idm, itime] = 25.0
+                argmax_maps[itree][idm, itime] = np.uint32(token)
+            frame = SimpleNamespace(beam_id=beam, time_chunk_index=chunk)
+            path = os.path.join(directory, f"frame_b{beam}_t{chunk}_snrmap.asdf")
+            _write_snr_asdf(
+                path, f"synthetic_frame_b{beam}_t{chunk}.asdf",
+                frame, od, snr_maps, argmax_maps,
+                producer_start_time_chunk_index=0,
+            )
+            if not include_start:
+                _rewrite_map(path, lambda tree: tree.pop("producer_start_time_chunk_index"))
+            files[(beam, chunk)] = path
+    return SimpleNamespace(plan=plan, dcores=dcores, producer=od, files=files,
+                           token=token, tree=itree, idm=idm, itime=itime)
 
+
+def test_v3_writer_and_ragged_loader(cuda_device_id=0):
+    """Writer Dcores and all ragged map shapes survive ASDF and GPU upload."""
+    import asdf
     import cupy as cp
+    with cp.cuda.Device(cuda_device_id), tempfile.TemporaryDirectory(
+            prefix="pirate-v3-loader-") as tmp:
+        fixture = _write_toy_acquisition(tmp)
+        loader = FrbOfflineGrouper(tmp, cuda_device_id=cuda_device_id)
+        assert loader.ntrees == 6
+        assert loader.beam_ids == (7, 11)
+        assert loader.dcores == fixture.dcores
+        assert loader.argmax_encoding == ARGMAX_ENCODING
+        assert loader.plan_yaml == fixture.producer.plan.to_yaml_string()
+        assert loader.producer_start_by_beam == {7: 0, 11: 0}
+        assert len(set(loader.tree_shapes)) > 1
+        for path in fixture.files.values():
+            with asdf.open(path) as af:
+                assert af.tree["format_version"] == 3
+                assert tuple(af.tree["dcores"]) == fixture.dcores
+                assert af.tree["argmax_encoding"] == ARGMAX_ENCODING
+        maps = loader.load_beam_chunk((7, 11), 1)
+        assert maps.beam_ids == (7, 11) and maps.source_chunk_index == 1
+        for snr, tokens, shape in zip(
+                maps.snr_by_tree, maps.argmax_by_tree, loader.tree_shapes):
+            assert snr.shape == tokens.shape == (2,) + shape
+            assert snr.dtype == cp.float32 and tokens.dtype == cp.uint32
+        assert int(maps.argmax_by_tree[0][0, fixture.idm, fixture.itime].item()) == fixture.token
 
-    if not _examples_available():
-        return
-    loader = FrbOfflineGrouper(
-        _SIX_TREE_EXAMPLE, cuda_device_id=cuda_device_id
-    )
-    expected_shapes = (
-        (512, 256), (128, 128), (256, 128),
-        (128, 128), (128, 64), (256, 64),
-    )
-    assert loader.beam_ids == (100,)
-    assert loader.tree_shapes == expected_shapes
-    assert loader.chunks_by_beam[100] == tuple(range(10))
-    assert loader.producer_start_by_beam[100] is None
-    assert len(set(expected_shapes)) > 1
 
-    with cp.cuda.Device(cuda_device_id):
-        maps = loader.load_beam_chunk((100,), 0)
-        assert maps.source_chunk_index == 0
-        assert maps.beam_ids == (100,)
-        assert len(maps.snr_by_tree) == len(maps.argmax_by_tree) == 6
-        for snr, argmax, shape in zip(
-                maps.snr_by_tree, maps.argmax_by_tree, expected_shapes):
-            assert isinstance(snr, cp.ndarray)
-            assert isinstance(argmax, cp.ndarray)
-            assert snr.shape == argmax.shape == (1,) + shape
-            assert argmax.dtype == cp.uint32
+def test_v3_saved_map_to_catalog(cuda_device_id=0):
+    """A nonzero-mu candidate traverses the saved-map pipeline and keeps provenance."""
+    import asdf
+    import cupy as cp
+    with cp.cuda.Device(cuda_device_id), tempfile.TemporaryDirectory(
+            prefix="pirate-v3-catalog-") as tmp:
+        fixture = _write_toy_acquisition(tmp)
+        catalog = os.path.join(tmp, "events.asdf")
+        config_file = _runner_config(tmp)
+        lines = []
+        original_print = runner.atomic_print
+        runner.atomic_print = lines.append
+        try:
+            returned = runner.run_offline_grouper(
+                tmp, config_file, cuda_device_id=cuda_device_id, output=catalog,
+            )
+        finally:
+            runner.atomic_print = original_print
+        assert returned == os.path.abspath(catalog)
+        integer = fixture.plan.decode_argmax(
+            fixture.token, fixture.tree, fixture.dcores[fixture.tree],
+            fixture.idm, fixture.itime,
+        )
+        freq_lo, freq_hi, dm, toa, width = fixture.plan.decode_argmax2(
+            fixture.tree, *integer,
+        )
+        with asdf.open(catalog, lazy_load=False) as af:
+            validate_trigger_catalog_tree(af.tree)
+            assert af.tree["format_version"] == 3
+            producer = af.tree["metadata"]["producer"]
+            assert tuple(producer["dcores"]) == fixture.dcores
+            assert producer["argmax_encoding"] == ARGMAX_ENCODING
+            assert producer["plan_yaml"] == fixture.producer.plan.to_yaml_string()
+            assert af.tree["metadata"]["processing"]["complete"]
+            events, members = af.tree["events"], af.tree["members"]
+            assert len(events["event_id"]) == len(members["candidate_id"]) == 1
+            assert list(members["argmax_token"]) == [fixture.token]
+            assert list(members["source_chunk_index"]) == [1]
+            assert list(members["tree"]) == [0]
+            assert list(members["beam_id"]) == [7]
+            assert list(events["snr"]) == [25.0]
+            assert np.allclose(events["dm"], [dm], rtol=0, atol=1e-9)
+            assert np.allclose(events["toa_sample_abs"], [fixture.plan.nt_in + toa],
+                               rtol=0, atol=1e-9)
+            assert np.allclose(events["width_samp"], [width], rtol=0, atol=1e-9)
+            assert len(af.tree["coverage"]["beam_id"]) == 6
+        assert len([line for line in lines if line.startswith("event=")]) == 1
 
-    with tempfile.TemporaryDirectory(
-            prefix="pirate-offline-config-") as tmp:
-        config_file = _runner_config(tmp, snr_threshold=1.0e30)
+
+def test_v3_unknown_startup_requires_explicit_policy(cuda_device_id=0):
+    """Missing start stays unknown even with otherwise complete v3 metadata."""
+    import cupy as cp
+    with cp.cuda.Device(cuda_device_id), tempfile.TemporaryDirectory(
+            prefix="pirate-v3-startup-") as tmp:
+        _write_toy_acquisition(tmp, include_start=False)
+        loader = FrbOfflineGrouper(tmp, cuda_device_id=cuda_device_id)
+        assert loader.producer_start_by_beam == {7: None, 11: None}
+        config_file = _runner_config(tmp, snr_threshold=1e30)
         try:
             runner.run_offline_grouper(
-                _SIX_TREE_EXAMPLE,
-                config_file,
-                max_chunks=1,
-                cuda_device_id=cuda_device_id,
+                tmp, config_file, max_chunks=1, cuda_device_id=cuda_device_id,
             )
         except ValueError as exc:
             assert "producer-start provenance is missing" in str(exc)
         else:
-            raise AssertionError("missing startup provenance was accepted")
-
+            raise AssertionError("unknown startup was silently assumed")
         lines = []
         original_print = runner.atomic_print
         runner.atomic_print = lines.append
         try:
             runner.run_offline_grouper(
-                _SIX_TREE_EXAMPLE,
-                config_file,
-                max_chunks=1,
-                cuda_device_id=cuda_device_id,
+                tmp, config_file, max_chunks=1, cuda_device_id=cuda_device_id,
                 assume_steady_state=True,
             )
         finally:
             runner.atomic_print = original_print
-    assert any(
-        "startup=assumed" in line and "complete=false" in line
-        for line in lines
-    )
+        assert any("startup=assumed" in line and "complete=false" in line for line in lines)
 
 
-def test_grouptest_full_band_golden_and_catalog(cuda_device_id=0):
-    """The local DM-200 burst is emitted, decoded, labelled, and catalogued."""
-
+def test_v3_rejects_legacy_and_corrupt_decoder_metadata():
+    """Both writer validation and the loader reject incomplete decoder provenance."""
     import asdf
-    import cupy as cp
-
-    if not _examples_available():
-        return
-    loader = FrbOfflineGrouper(_GROUPTEST, cuda_device_id=cuda_device_id)
-    assert loader.beam_ids == (100,)
-    assert loader.producer_start_by_beam == {100: 0}
-    assert loader.tree_shapes == (
-        (4096, 128), (1024, 64), (2048, 64), (1024, 64),
-        (1024, 32), (2048, 32), (512, 32), (1024, 32),
-        (1024, 16), (2048, 16),
+    mutations = (
+        (lambda t: t.update(format_version=2, config_yaml="legacy YAML"), "format_version=3"),
+        (lambda t: t.update(format_version=3.0), "format_version=3"),
+        (lambda t: t.pop("argmax_encoding"), "argmax_encoding"),
+        (lambda t: t.update(argmax_encoding="t8-p8-m16"), "argmax_encoding"),
+        (lambda t: t.pop("dcores"), "dcores"),
+        (lambda t: t.update(dcores=[]), "dcores"),
+        (lambda t: t["dcores"].__setitem__(0, True), "dcores"),
+        (lambda t: t["dcores"].__setitem__(0, 3), "dcores"),
+        (lambda t: t["dcores"].__setitem__(0, 256), "Dout"),
+        (lambda t: t.update(time_sample_ms=2.0), "time_sample_ms"),
     )
+    for mutation, expected in mutations:
+        with tempfile.TemporaryDirectory(prefix="pirate-v3-invalid-") as tmp:
+            fixture = _write_toy_acquisition(tmp, beams=(7,), chunks=(0,))
+            path = fixture.files[(7, 0)]
+            _rewrite_map(path, mutation)
+            with asdf.open(path) as af:
+                try:
+                    _validate_snr_asdf_tree(af.tree)
+                except ValueError as exc:
+                    assert expected in str(exc), str(exc)
+                else:
+                    raise AssertionError("writer validator accepted malformed metadata")
+            try:
+                FrbOfflineGrouper(tmp)
+            except ValueError as exc:
+                assert path in str(exc) and expected in str(exc), str(exc)
+            else:
+                raise AssertionError("loader accepted malformed metadata")
 
-    with cp.cuda.Device(cuda_device_id):
-        geometries = tuple(
-            PeakFinderGeometry.from_plan(
-                loader.plan, tree, dm_reach=8, waist_bins=1,
+
+def test_v3_rejects_changed_producer_dcores():
+    """Equal YAML and array shapes cannot hide a different producer time grid."""
+    with tempfile.TemporaryDirectory(prefix="pirate-v3-mixed-") as tmp:
+        fixture = _write_toy_acquisition(tmp, beams=(7,), chunks=(0, 1))
+        _rewrite_map(fixture.files[(7, 1)],
+                     lambda tree: tree["dcores"].__setitem__(0, 1))
+        try:
+            FrbOfflineGrouper(tmp)
+        except ValueError as exc:
+            assert "Dcores" in str(exc) and "differ from the first file" in str(exc)
+        else:
+            raise AssertionError("mixed producer Dcores accepted")
+
+
+def test_v3_writer_requires_actual_producer_dcores():
+    """No file is written when the producer has not supplied kernel metadata."""
+    with tempfile.TemporaryDirectory(prefix="pirate-v3-uninitialized-") as tmp:
+        fixture = _write_toy_acquisition(tmp, beams=(7,), chunks=(0,))
+        fixture.producer.dd = None
+        snrs = [np.zeros((int(t.ndm_out), int(t.nt_out)), np.float32)
+                for t in fixture.plan.trees]
+        tokens = [np.zeros(a.shape, np.uint32) for a in snrs]
+        output = os.path.join(tmp, "must-not-exist.asdf")
+        try:
+            _write_snr_asdf(
+                output, "synthetic.asdf",
+                SimpleNamespace(beam_id=7, time_chunk_index=0),
+                fixture.producer, snrs, tokens, producer_start_time_chunk_index=0,
             )
-            for tree in range(loader.ntrees)
-        )
-        windows = []
-        coverage, startup, complete = runner._extract_beam_batch(
-            loader,
-            next(loader.iter_beam_batches()),
-            geometries,
-            GpuArgmaxDecoder(loader.plan, cuda_device_id=cuda_device_id),
-            GroupingGeometry.from_plan(loader.plan),
-            threshold=10.0,
-            halo_size=2,
-            timeout_ms=0,
-            timeout_policy="discard",
-            max_chunks=None,
-            assume_steady_state=False,
-            grouping_config=GroupingConfig(),
-            consume_window=windows.append,
-        )
-        assert len(windows) == 10
-        nonempty = [window for window in windows if len(window.grouped.events)]
-        assert len(nonempty) == 1
-        assert nonempty[0].output_status == "complete"
-        grouped = nonempty[0].grouped
-        candidates = grouped.candidates
-        assert len(candidates) == 1
-        assert cp.asnumpy(candidates.source_chunk_index).tolist() == [0]
-        assert cp.asnumpy(candidates.tree).tolist() == [0]
-        assert cp.asnumpy(candidates.idm).tolist() == [421]
-        assert cp.asnumpy(candidates.itime).tolist() == [127]
-        assert float(candidates.snr[0].item()) > 40.0
-        assert candidates.edge_flags.dtype == cp.uint8
-        assert cp.asnumpy(candidates.edge_flags).tolist() == [
-            int(EdgeFlag.STARTUP_INCOMPLETE)
-        ]
-        assert 199.8 < float(candidates.dm[0].item()) < 200.2
-        toa_s = (
-            float(candidates.toa_sample_abs[0].item())
-            * float(loader.plan.config.time_sample_ms) * 1.0e-3
-        )
-        assert np.isclose(toa_s, 2.6791791641, rtol=0.0, atol=1.0e-7)
-        assert np.isclose(
-            float(candidates.width_ms[0].item()),
-            3.93216,
-            rtol=0.0,
-            atol=1.0e-9,
-        )
-        absolute_coarse_output = (
-            int(candidates.source_chunk_index[0].item())
-            * geometries[0].ntime
-            + int(candidates.itime[0].item())
-        )
-        assert absolute_coarse_output == 127
-        assert int(geometries[0].steady_state_it0[421].item()) == 430
-        assert coverage == tuple((100, chunk) for chunk in range(10))
-        assert startup == "authoritative" and complete
-        assert len(grouped.events) == 1
-        assert np.array_equal(
-            cp.asnumpy(grouped.events.member_count), np.ones(1, np.int32)
-        )
-        assert cp.asnumpy(grouped.events.edge_flags).tolist() == [
-            int(EdgeFlag.STARTUP_INCOMPLETE)
-        ]
-
-    lines = []
-    original_print = runner.atomic_print
-    runner.atomic_print = lines.append
-    try:
-        with tempfile.TemporaryDirectory(
-                prefix="pirate-grouptest-catalog-") as tmp:
-            catalog = os.path.join(tmp, "events.asdf")
-            config_file = _runner_config(tmp)
-            returned = runner.run_offline_grouper(
-                _GROUPTEST,
-                config_file,
-                cuda_device_id=cuda_device_id,
-                output=catalog,
-            )
-            assert returned == os.path.abspath(catalog)
-            with asdf.open(catalog, lazy_load=False) as af:
-                validate_trigger_catalog_tree(af.tree)
-                assert len(af.tree["events"]["event_id"]) == 1
-                assert len(af.tree["members"]["candidate_id"]) == 1
-                assert np.asarray(
-                    af.tree["events"]["edge_flags"]
-                ).tolist() == [int(EdgeFlag.STARTUP_INCOMPLETE)]
-                assert np.asarray(
-                    af.tree["members"]["edge_flags"]
-                ).tolist() == [int(EdgeFlag.STARTUP_INCOMPLETE)]
-                assert (
-                    af.tree["metadata"]["startup_by_beam"][0]["status"]
-                    == "authoritative"
-                )
-    finally:
-        runner.atomic_print = original_print
-    event_lines = [line for line in lines if line.startswith("event=")]
-    assert len(event_lines) == 1
-    assert "dm=" in event_lines[0] and "toa=2.679179" in event_lines[0]
-    assert "startup_incomplete=true" in event_lines[0]
-    assert any("complete=true" in line for line in lines)
-
-    # The measured S/N and decoded physical width are intentionally not
-    # corrected for the conservative startup warning.
+        except ValueError as exc:
+            assert "GpuDedisperser.Dcores" in str(exc)
+        else:
+            raise AssertionError("writer invented producer metadata")
+        assert not os.path.exists(output)
 
 
 def test_terminal_output_names_startup_incomplete(cuda_device_id=0):

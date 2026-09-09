@@ -1,5 +1,7 @@
 """Focused NumPy regression tests for the fast analytic S/N-map simulator."""
 
+from pathlib import Path
+
 import numpy as np
 
 from .experiment_common import prepare_plan, tree_for_dm
@@ -7,8 +9,9 @@ from .fast_snrmap import FastSnrMapSimulator
 from .peakfinders import enumerate_plan_subbands
 
 
-CONFIG = "configs/dedispersion/chord_sb2.yml"
-METADATA = "configs/xengine_metadata.yml"
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG = str(ROOT / "configs/dedispersion/chord_sb2.yml")
+METADATA = str(ROOT / "configs/xengine_metadata.yml")
 
 
 def _expect_raises(exception, operation, contains):
@@ -21,9 +24,9 @@ def _expect_raises(exception, operation, contains):
 
 
 def _make_simulator():
-    config, xmd, plan = prepare_plan(CONFIG, METADATA)
+    config, xmd, plan, dcores = prepare_plan(CONFIG, METADATA)
     itree = tree_for_dm(plan, 100.0)
-    _, subbands, _ = enumerate_plan_subbands(plan, itree)
+    _, subbands, _ = enumerate_plan_subbands(plan, itree, dcores=dcores)
     full_bands = [band for band in subbands if band.is_full_band]
     assert len(full_bands) == 1
     reference_freq_mhz = float(np.asarray(xmd.get_channel_freq_edges())[0])
@@ -32,6 +35,7 @@ def _make_simulator():
         itree,
         full_bands[0],
         xp=np,
+        dcores=dcores,
         time_sample_s=float(config.time_sample_ms) / 1.0e3,
         nt_in=int(plan.nt_in),
         reference_freq_mhz=reference_freq_mhz,
@@ -45,7 +49,11 @@ def _make_simulator():
 
 def test_heterogeneous_injected_snrs():
     simulator = _make_simulator()
-    toas = (9.0, 9.1, 9.15)
+    target_idm = int(np.argmin(np.abs(simulator.dm_axis_cpu - 100.0)))
+    first_toa = (3 * simulator.chunk_duration_s
+                 + simulator.timestamp_by_fine_cpu[0, target_idm]
+                 + (simulator.nt // 2) * simulator.time_step_s)
+    toas = (first_toa, first_toa + 0.1, first_toa + 0.15)
     heterogeneous = (45.0, 30.0, 20.0)
 
     signal, argmax = simulator.signal_template(

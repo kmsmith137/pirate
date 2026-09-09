@@ -6,8 +6,6 @@
 #include "DedispersionConfig.hpp"
 #include "constants.hpp"            // FrbGrouperClient default timeouts
 
-#include <yaml-cpp/yaml.h>          // YAML::Node
-
 #include <chrono>
 #include <condition_variable>
 #include <exception>
@@ -126,15 +124,20 @@ struct FrbGrouper
 
     // ----- Metadata sent by the RPC client (populated at handshake) -----
     std::shared_ptr<XEngineMetadata> xengine_metadata;
-    DedispersionConfig dedispersion_config;
-    YAML::Node dedispersion_plan_yaml;      // NOT pybind-wrapped (see injections)
 
-    // "Incomplete" DedispersionPlan, deserialized from the handshake yamls -- see
-    // DedispersionPlan::make_incomplete_plan_from_yaml(). Supports decode_argmax*() and
-    // compute_steady_state_it0() (with the PRODUCER's per-tree Dcore values); its low-level
-    // members (MegaRingbuf, kernel/buffer params) are uninitialized. Internal hack --
-    // deliberately not pybind-wrapped.
-    std::shared_ptr<DedispersionPlan> incomplete_plan;
+    // Same as dedispersion_plan->config; kept as a separate member for convenience.
+    DedispersionConfig dedispersion_config;
+
+    // The producer's plan, rebuilt from the handshake's two yamls by
+    // DedispersionPlan::from_yaml_string(). Supports decode_argmax*() and
+    // compute_steady_state_it0(). The one decode input it does NOT carry is the producer's
+    // per-tree Dcore, which is a property of the producer's compiled kernels rather than of
+    // the plan -- see 'dcores' below.
+    //
+    // A DedispersionPlan::Params::minimal() plan, so it needs no GPU. Held by pointer
+    // because a plan has const members, hence cannot be assigned into a by-value member
+    // (the grouper is constructed long before the handshake).
+    std::shared_ptr<DedispersionPlan> dedispersion_plan;
 
     std::string xengine_metadata_yaml_string;
     std::string dedispersion_config_yaml_string;
@@ -168,9 +171,16 @@ struct FrbGrouper
                                   //   index of the first dedispersion output relative to
                                   //   FPGA seq 0; used to set Outputs::ichunk_fpga_based.
 
-    long ntrees = 0;              // = dedispersion_plan_yaml['ntrees']
-    std::vector<long> ndm_out;    // length ntrees, from dedispersion_plan_yaml['trees'][:]['ndm_out']
-    std::vector<long> nt_out;     // length ntrees, from dedispersion_plan_yaml['trees'][:]['nt_out']
+    long ntrees = 0;              // = dedispersion_plan->ntrees
+    std::vector<long> ndm_out;    // length ntrees, from dedispersion_plan->trees[:].ndm_out
+    std::vector<long> nt_out;     // length ntrees, from dedispersion_plan->trees[:].nt_out
+
+    // Per-tree peak-finder core factors (length ntrees), from the handshake. These are a
+    // property of the PRODUCER's compiled cdd2 kernels rather than of the plan, so they are
+    // adopted from the wire rather than recomputed here -- which is what makes token
+    // decoding correct even if this process runs a different pirate_frb build. Pass
+    // dcores[itree] to DedispersionPlan::decode_argmax().
+    std::vector<long> dcores;
 
     // ----- Lifecycle (entry points) -----
     //
@@ -204,10 +214,9 @@ struct FrbGrouper
     // thread will emit CONSUMED(seq_id).
     void release_output(long seq_id);
 
-    // Forwards to DedispersionPlan::compute_steady_state_it0() on the producer's
-    // (incomplete) plan from the handshake -- see that method for the meaning of the
-    // returned array. (A forwarder is needed since 'incomplete_plan' is deliberately
-    // not pybind-wrapped.) Valid only after the handshake.
+    // Forwards to DedispersionPlan::compute_steady_state_it0() on the producer's plan from
+    // the handshake -- see DedispersionPlan.hpp for the meaning of the returned array.
+    // Valid only after the handshake.
     ksgpu::Array<long> _compute_steady_state_it0(long itree) const;
 
     bool is_stopped_pub();   // lock-protected read, for Python polling

@@ -18,15 +18,15 @@ class GpuDequantizationKernelInjections:
 
         Parameters
         ----------
-        out : ksgpu.Array
+        out : cupy.ndarray
             Output array, shape (nbeams, nfreq, ntime), dtype matches
             kernel's dtype (float32 or float16), fully contiguous, on GPU.
-        scales_offsets : ksgpu.Array
+        scales_offsets : cupy.ndarray
             Shape (nbeams, nfreq, ntime//256, 2), dtype float16, fully
             contiguous, on GPU. Last axis is (scale, offset); one pair is
             applied to every int4 sample in the matching (beam, freq,
             minichunk) slice of data_uint8.
-        data_uint8 : ksgpu.Array
+        data_uint8 : cupy.ndarray
             Shape (nbeams, nfreq, ntime//2), dtype uint8, fully contiguous,
             on GPU. Reinterpreted as int4 with shape (nbeams, nfreq, ntime).
         stream : cupy.cuda.Stream or None, optional

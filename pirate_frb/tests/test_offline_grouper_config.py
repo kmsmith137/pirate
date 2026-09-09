@@ -156,11 +156,11 @@ execution:
 def test_offline_grouper_cli_has_only_operational_overrides():
     """Scientific and execution controls come only from the YAML file."""
 
-    from ..__main__ import get_parser
+    from ..__main__ import get_parser, run_offline_grouper_command
 
     parser = get_parser()
     args = parser.parse_args((
-        "run_offline_grouper",
+        "run", "offline_grouper",
         "/data/acquisition",
         "offline.yml",
         "--device", "3",
@@ -169,6 +169,9 @@ def test_offline_grouper_cli_has_only_operational_overrides():
         "--verbose",
         "--assume-steady-state",
     ))
+    assert args.command == "run"
+    assert args.run_command == "offline_grouper"
+    assert args.func is run_offline_grouper_command
     assert args.acqdir == "/data/acquisition"
     assert args.config_file == "offline.yml"
     assert args.device == 3
@@ -181,7 +184,11 @@ def test_offline_grouper_cli_has_only_operational_overrides():
         action for action in parser._actions
         if action.__class__.__name__ == "_SubParsersAction"
     )
-    help_text = subparser_action.choices["run_offline_grouper"].format_help()
+    run_subparsers = next(
+        action for action in subparser_action.choices["run"]._actions
+        if action.__class__.__name__ == "_SubParsersAction"
+    )
+    help_text = run_subparsers.choices["offline_grouper"].format_help()
     for removed in (
         "--snr-threshold",
         "--beam-batch-size",

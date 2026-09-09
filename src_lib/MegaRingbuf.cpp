@@ -149,6 +149,9 @@ void MegaRingbuf::finalize(bool delete_internals)
             // Check that s.chunk_lags is sorted. (This is true in our current use cases,
             // but a fully general MagaRingbuf implementation wouldn't need to assume it.
             // In the future I might relax this assumption, e.g. by putting a sort here.)
+            //
+            // Note: this is the basis for the following note in DedispersionPlan.{hpp,cpp}:
+            // "FIXME(?): ordering by decreasing early_trigger_level is awkward..."
 
             for (long i = 1; i < s.num_consumers; i++)
                 xassert(s.chunk_lags[i-1] <= s.chunk_lags[i]);

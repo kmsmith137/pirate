@@ -10,7 +10,7 @@ time_sample_ms values (framed identically near t=0): a coarse one (~100 samples,
 individual time-sample rectangles are visible) and a fine one (~1000 samples, drawn dotted as a
 smooth reference). This mirrors the original plots.
 
-Run it via 'python -m pirate_frb test_simpulse'. matplotlib is imported lazily inside make_plots(),
+Run it via 'python -m pirate_frb dev test_simpulse'. matplotlib is imported lazily inside make_plots(),
 so that 'import pirate_frb.simpulse' does not require matplotlib.
 """
 

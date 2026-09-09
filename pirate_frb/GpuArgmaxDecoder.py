@@ -6,12 +6,13 @@ was reduced into that map cell::
 
     bits  0..7   fine time ``t`` within the coarse output-time cell
     bits  8..15  peak-finding profile ``p`` (the temporal matched filter)
-    bits 16..31  multiplet ``m`` (frequency subband plus fine-DM trial)
+    bits 16..23  multiplet ``m`` (frequency subband plus fine-DM trial)
+    bits 24..31  extra-DM index ``mu`` within the coarse output-DM cell
 
 The token alone is not a physical event.  Decoding also needs the coarse
 ``(tree, idm, itime)`` coordinates and the *exact* producer
-``DedispersionPlan``: per-tree dimensions, frequency-subband mappings, and the
-producer kernel's ``Dcore`` determine which bit patterns and coordinates are
+``DedispersionPlan`` and explicit per-tree ``dcores``: dimensions, subband
+mappings, and producer kernel time granularity determine which bit patterns are
 legal.
 
 There are deliberately two conceptual decoding stages.  Integer decoding first
@@ -42,7 +43,7 @@ class ArgmaxDecodeStatus(IntEnum):
     A row can violate several constraints (the all-ones sentinel is also an
     invalid profile and multiplet, for example).  Validation is therefore
     ordered, and the first failing check performed by :meth:`decode` wins.  The
-    check order is tree, sentinel, coarse DM, coarse time, multiplet, profile,
+    check order is tree, sentinel, coarse DM, coarse time, multiplet, extra DM, profile,
     fine time, fine-time granularity, and absolute-chunk multiplication.  The
     numeric enum value is a stable diagnostic code, not a severity ordering.
     """
@@ -51,12 +52,13 @@ class ArgmaxDecodeStatus(IntEnum):
     INVALID_TREE = 1             # ``tree`` is outside ``[0, plan.ntrees)``.
     INVALID_COARSE_DM = 2         # ``idm`` is outside this tree's map rows.
     INVALID_COARSE_TIME = 3       # ``itime`` is outside this tree's map columns.
-    INVALID_MULTIPLET = 4         # Token bits 16..31 do not name a tree multiplet.
+    INVALID_MULTIPLET = 4         # Token bits 16..23 do not name a tree multiplet.
     INVALID_PROFILE = 5           # Token bits 8..15 do not name a tree profile.
     INVALID_FINE_TIME = 6         # Token bits 0..7 exceed the coarse time cell.
     INVALID_TIME_GRANULARITY = 7  # Fine time violates this profile's ``Dcore`` grid.
     INVALID_SENTINEL = 9          # Producer's ``0xffffffff`` no-winner sentinel.
     ABSOLUTE_TIME_OVERFLOW = 10   # ``source_chunk * plan.nt_in`` overflows int64.
+    INVALID_EXTRA_DM = 11        # Token bits 24..31 exceed this tree's DM sub-bins.
 
 
 class GpuArgmaxDecodeError(ValueError):
@@ -216,6 +218,11 @@ class GpuArgmaxDecoder:
         config and plan YAML saved beside the S/N maps.  Reconstructing a fresh
         plan from config alone is insufficient: compiled kernels may have used a
         different per-tree ``Dcore``, which controls legal fine-time tokens.
+    dcores : sequence of int
+        Required per-tree time granularities from the actual producer
+        (``GpuDedisperser.Dcores`` or the grouper handshake). PIRATE 1.5
+        no longer stores these in the plan. Never infer them from a
+        consumer's compiled kernels.
     cuda_device_id : int or None
         Device that owns input/output candidate arrays.  ``None`` captures the
         currently active CUDA device at construction.
@@ -240,7 +247,7 @@ class GpuArgmaxDecoder:
         "edge_flags": np.dtype(np.uint8),
     }
 
-    def __init__(self, plan, cuda_device_id=None):
+    def __init__(self, plan, cuda_device_id=None, *, dcores):
         """Validate one producer plan and upload reusable decoder tables.
 
         Parameters
@@ -250,6 +257,9 @@ class GpuArgmaxDecoder:
             configuration and plan YAML.  Per-tree token limits, subbands,
             profiles, frequency conversion, and chunk length are inspected on
             CPU.
+        dcores : sequence of int
+            Producer time granularity for each tree, carried separately
+            from the plan YAML. Required even for an empty candidate batch.
         cuda_device_id : int or None, optional
             CUDA device that will own the lookup tables and every input/output
             candidate batch.  ``None`` records the currently active device.
@@ -267,7 +277,7 @@ class GpuArgmaxDecoder:
         if cuda_device_id is None:
             cuda_device_id = cp.cuda.runtime.getDevice()
         self.cuda_device_id = int(cuda_device_id)
-        host = self._make_host_tables(plan)
+        host = self._make_host_tables(plan, dcores)
         self.ntrees = host.pop("ntrees")
         self.ntree = host.pop("ntree")
         self.nt_in = host.pop("nt_in")
@@ -277,7 +287,7 @@ class GpuArgmaxDecoder:
             self._tables = {name: cp.asarray(value) for name, value in host.items()}
 
     @staticmethod
-    def _make_host_tables(plan):
+    def _make_host_tables(plan, dcores):
         """Validate producer metadata and build CPU-side decoder lookup tables.
 
         The returned mapping contains Python scalar acquisition constants plus
@@ -305,6 +315,12 @@ class GpuArgmaxDecoder:
             config.toplevel_tree_rank, "config.toplevel_tree_rank")
         if ntrees <= 0 or ntrees != len(trees):
             raise ValueError("plan.ntrees disagrees with plan.trees")
+        dcores = tuple(
+            _plan_integer(value, f"dcores[{i}]")
+            for i, value in enumerate(dcores)
+        )
+        if len(dcores) != ntrees:
+            raise ValueError("dcores must contain one producer value per tree")
         if not 0 < top_rank <= 16:
             raise ValueError("config.toplevel_tree_rank must be in [1, 16]")
         if nt_in <= 0 or nt_in > np.iinfo(np.int64).max:
@@ -327,7 +343,8 @@ class GpuArgmaxDecoder:
         # count can all differ.  Small tree-indexed tables and flattened
         # variable-length tables preserve that layout without padding.
         names = ("Dout", "ndm_out", "nt_out", "nprofiles", "primary",
-                 "time_scale", "m_offset", "m_count", "profile_offset")
+                 "time_scale", "m_offset", "m_count", "extra_dm_count",
+                 "profile_offset")
         per_tree = {name: [] for name in names}
         m_fmin, m_fmax, m_high_lag, m_bandwidth, m_dfine = [], [], [], [], []
         profile_dt, profile_width, profile_shift = [], [], []
@@ -341,11 +358,12 @@ class GpuArgmaxDecoder:
             ndm_out = _plan_integer(tree.ndm_out, f"{label}.ndm_out")
             nt_out = _plan_integer(tree.nt_out, f"{label}.nt_out")
             nprofiles = _plan_integer(tree.nprofiles, f"{label}.nprofiles")
-            Dcore = _plan_integer(tree.Dcore, f"{label}.Dcore")
-            max_width = _plan_integer(tree.pf.max_width, f"{label}.pf.max_width")
+            Dcore = dcores[itree]
+            max_width = _plan_integer(
+                tree.primary_tree.max_width, f"{label}.primary_tree.max_width")
             fs = tree.frequency_subbands
             pf_rank = _plan_integer(fs.pf_rank, f"{label}.frequency_subbands.pf_rank")
-            rr = _plan_integer(tree.total_rank(), f"{label}.total_rank") + (ipri > 0)
+            rr = _plan_integer(tree.tree_rank, f"{label}.tree_rank") + (ipri > 0)
             if not 0 <= ipri <= top_rank or early < 0:
                 raise ValueError(f"{label} has invalid primary/early-trigger indices")
             if rr != top_rank - early or not 0 <= pf_rank <= rr:
@@ -375,12 +393,18 @@ class GpuArgmaxDecoder:
             m_to_d = tuple(int(x) for x in fs.m_to_d)
             n_to_flo = tuple(int(x) for x in fs.n_to_flo)
             n_to_fhi = tuple(int(x) for x in fs.n_to_fhi)
-            if not 0 < M <= 65536 or len(m_to_n) != M or len(m_to_d) != M:
+            if not 0 < M <= 256 or len(m_to_n) != M or len(m_to_d) != M:
                 raise ValueError(f"{label} has inconsistent multiplet tables")
             if N <= 0 or len(n_to_flo) != N or len(n_to_fhi) != N:
                 raise ValueError(f"{label} has inconsistent subband tables")
             coarse_nfreq = 1 << pf_rank
-            G = 1 << (rr - pf_rank)
+            dm_downsampling = _plan_integer(
+                tree.dm_downsampling, f"{label}.dm_downsampling")
+            extra_dm_count, remainder = divmod(dm_downsampling, coarse_nfreq)
+            if (remainder or not _power_of_two(extra_dm_count)
+                    or extra_dm_count > 256):
+                raise ValueError(f"{label} has invalid extra-DM token dimensions")
+            per_tree["extra_dm_count"].append(extra_dm_count)
             per_tree["m_offset"].append(len(m_fmin))
             per_tree["m_count"].append(M)
             for m, (n, dfine) in enumerate(zip(m_to_n, m_to_d)):
@@ -396,7 +420,8 @@ class GpuArgmaxDecoder:
                     raise ValueError(f"{label} subband {n} has invalid bounds")
                 if not 0 <= dfine < width:
                     raise ValueError(f"{label} multiplet {m} has invalid fine DM")
-                fmin, fmax = flo * G, fhi * G - 1
+                fmin = int(tree.n_to_toplevel_flo(n))
+                fmax = int(tree.n_to_toplevel_fhi(n)) - 1
                 if not 0 <= fmin < fmax < ntree:
                     raise ValueError(f"{label} multiplet {m} has invalid output band")
                 m_fmin.append(fmin)
@@ -592,12 +617,12 @@ class GpuArgmaxDecoder:
             itime = raw_fields["itime"].astype(cp.int64)
             source_chunk = raw_fields["source_chunk_index"]
             token = raw_fields["argmax_token"]
-            # Unpack the producer layout ``t | (p << 8) | (m << 16)``.  Coarse
-            # DM/time and tree indices live in separate raw columns and are just
-            # as essential to decoding as these three token fields.
+            # PIRATE 1.5 packs four independent bytes: t, p, m, mu.
+            # Coarse DM/time and tree indices are separate raw columns.
             fine_time = (token & cp.uint32(0xff)).astype(cp.int64)
             profile = ((token >> cp.uint32(8)) & cp.uint32(0xff)).astype(cp.int64)
-            multiplet = (token >> cp.uint32(16)).astype(cp.int64)
+            multiplet = ((token >> cp.uint32(16)) & cp.uint32(0xff)).astype(cp.int64)
+            extra_dm = (token >> cp.uint32(24)).astype(cp.int64)
             tree_ok = (tree >= 0) & (tree < self.ntrees)
             # Clipped "safe" indices prevent invalid rows from causing an
             # out-of-bounds table access while their ordered status is built.
@@ -610,6 +635,7 @@ class GpuArgmaxDecoder:
             primary = t["tree_primary"][safe_tree]
             time_scale = t["tree_time_scale"][safe_tree]
             m_count = t["tree_m_count"][safe_tree]
+            extra_dm_count = t["tree_extra_dm_count"][safe_tree]
 
             # Unsigned token fields cannot be negative.  Upper-bound predicates
             # are therefore sufficient before indexing flattened ragged tables.
@@ -649,6 +675,9 @@ class GpuArgmaxDecoder:
             status = self._set_first_status(
                 cp, status, ~m_ok, ArgmaxDecodeStatus.INVALID_MULTIPLET)
             status = self._set_first_status(
+                cp, status, extra_dm >= extra_dm_count,
+                ArgmaxDecodeStatus.INVALID_EXTRA_DM)
+            status = self._set_first_status(
                 cp, status, ~p_ok, ArgmaxDecodeStatus.INVALID_PROFILE)
             status = self._set_first_status(
                 cp, status, fine_time >= Dout,
@@ -669,13 +698,14 @@ class GpuArgmaxDecoder:
             # Integer decoding.  The multiplet lookup supplies the winning
             # inclusive subband and its fine-DM term.  A downsampled primary
             # family searches the upper half of its coarse-delay interval, hence
-            # the ndm_out offset in ``dhi``.
+            # the primary-family offset. Each coarse DM bin now contains
+            # extra_dm_count sub-bins, selected by the independent mu byte.
             fmin = t["m_fmin"][flat_m]
             fmax = t["m_fmax"][flat_m]
             high_lag = t["m_high_lag"][flat_m]
             bandwidth = t["m_bandwidth"][flat_m]
             dfine = t["m_dfine"][flat_m]
-            dhi = idm + cp.where(primary > 0, ndm_out, 0)
+            dhi = (idm + cp.where(primary > 0, ndm_out, 0)) * extra_dm_count + extra_dm
 
             # ``end`` is Tpf+1: coarse-bin start + token fine time + that
             # profile's token-time quantum.  Subtracting high-band lag and

@@ -1,0 +1,397 @@
+{
+  "schema_name": "pirate-1.5-migration-evidence",
+  "schema_version": 1,
+  "assembled_at_utc": "2026-09-09T21:26:22.617825+00:00",
+  "source_state_when_tests_ran": "Local integration worktree, before the merge commit; test groups were run as their respective patches were applied.",
+  "revisions": {
+    "checkpoint_parent": "22df18df146893f6aaf0643e5949ad5d59415e0d",
+    "upstream_parent": "255edd26c1c77e3f154fc5accd8014f073582b66",
+    "ksgpu": "5c81be2dea54226587f80eb206a35ca92c7160c5",
+    "asdf_cxx": "0b5a316398ce6a4fb2cf678e4125898ad17fdff6"
+  },
+  "environment": {
+    "path": "/home/mtrudu/software/miniforge3/envs/pirate-15-validation",
+    "conda_packages": [
+      {
+        "name": "asdf",
+        "version": "5.3.0",
+        "build": "pyhd8ed1ab_0"
+      },
+      {
+        "name": "cupy",
+        "version": "14.1.1",
+        "build": "py311he6f25ab_0"
+      },
+      {
+        "name": "cupy-core",
+        "version": "14.1.1",
+        "build": "py311hb94af43_0"
+      },
+      {
+        "name": "grpcio",
+        "version": "1.51.1",
+        "build": "py311hcafe171_3"
+      },
+      {
+        "name": "grpcio-tools",
+        "version": "1.51.1",
+        "build": "py311hcafe171_0"
+      },
+      {
+        "name": "libabseil",
+        "version": "20230125.0",
+        "build": "cxx17_hcb278e6_1"
+      },
+      {
+        "name": "libgrpc",
+        "version": "1.51.1",
+        "build": "hcf146ea_3"
+      },
+      {
+        "name": "libprotobuf",
+        "version": "3.21.12",
+        "build": "hfc55251_2"
+      },
+      {
+        "name": "mkl",
+        "version": "2026.1.0",
+        "build": "hecca717_243"
+      },
+      {
+        "name": "numpy",
+        "version": "2.4.6",
+        "build": "py311h2e04523_0"
+      },
+      {
+        "name": "pip",
+        "version": "26.1.2",
+        "build": "pyh8b19718_0"
+      },
+      {
+        "name": "protobuf",
+        "version": "4.21.12",
+        "build": "py311hcafe171_0"
+      },
+      {
+        "name": "pybind11",
+        "version": "3.0.3",
+        "build": "pyhfe8187e_0"
+      },
+      {
+        "name": "python",
+        "version": "3.11.15",
+        "build": "h7508c33_1_cpython"
+      },
+      {
+        "name": "pyyaml",
+        "version": "6.0.3",
+        "build": "py311h3778330_1"
+      },
+      {
+        "name": "yaml-cpp",
+        "version": "0.8.0",
+        "build": "h3f2d84a_0"
+      }
+    ],
+    "python_packages": {
+      "grpcio": "1.51.1",
+      "pip": "26.1.2",
+      "cupy": "14.1.1",
+      "pybind11": "3.0.3",
+      "numpy": "2.4.6",
+      "protobuf": "4.21.12",
+      "pyyaml": "6.0.3",
+      "asdf": "5.3.0",
+      "pytest": "9.1.1",
+      "ksgpu": "1.5.0",
+      "grpcio-tools": "1.51.1",
+      "pirate-frb": "1.5.0"
+    },
+    "note": "Selected observed versions, not a complete environment lockfile."
+  },
+  "test_groups": [
+    {
+      "name": "native offline batch decoder",
+      "result": "3 passed, 6 deselected",
+      "target": "pirate_frb/tests/test_gpu_argmax_decoder.py (batch tests)",
+      "evidence": "user-reported terminal output"
+    },
+    {
+      "name": "producer metadata and clean batch benchmark",
+      "result": "20 passed",
+      "target": "peakfinder_tests/test_peakfinder_batch_timing.py and test_producer_metadata.py",
+      "evidence": "user-reported terminal output"
+    },
+    {
+      "name": "Gaussian benchmark and DM-reach analysis",
+      "result": "17 passed",
+      "target": "peakfinder_tests/test_gaussian_corruption_timing.py and test_gaussian_corruption_dm_reach_analysis.py",
+      "evidence": "user-reported terminal output"
+    },
+    {
+      "name": "CPU/GPU benchmark variants and grouping",
+      "result": "59 passed",
+      "target": "test_gaussian_corruption_cpu_grouper_timing.py, test_concentrated_map_grouper_timing.py, test_benchmark_variants_1_5.py, test_gpu_representative_grouper.py",
+      "evidence": "user-reported terminal output"
+    },
+    {
+      "name": "toy helpers and executable campaigns",
+      "result": "19 passed",
+      "target": "test_experiment_common.py, test_fast_snrmap.py, test_toy_helpers_1_5.py",
+      "evidence": "user-reported terminal output"
+    },
+    {
+      "name": "active notebooks and incompatible input rejection",
+      "result": "8 passed",
+      "target": "peakfinder_tests/test_notebooks_1_5.py",
+      "evidence": "user-reported terminal output"
+    }
+  ],
+  "cli_checks": [
+    {
+      "command": "python -P -m pirate_frb test --amax -n 1",
+      "result": "exit 0, seed 137"
+    },
+    {
+      "command": "python -P -m pirate_frb test --ofg -n 1",
+      "result": "exit 0, seed 137"
+    },
+    {
+      "command": "python -P -m pirate_frb test --sim -n 1",
+      "result": "noise, pulse injection, multipulse CLI, ASDF round trip and pulse invariants passed"
+    },
+    {
+      "command": "python -P -m pirate_frb test --serv -n 1",
+      "result": "local server/grouper handshake and seven float16 chunks passed after correcting the gRPC library mix"
+    },
+    {
+      "command": "python -m pip check",
+      "result": "No broken requirements found."
+    }
+  ],
+  "reports": {
+    "raw_frame_to_catalog": {
+      "status": "PASS",
+      "checked_at_utc": "2026-09-08T18:36:43.028233+00:00",
+      "experiment": "/home/mtrudu/pirate-validation/pirate-1.5-toy-20260908",
+      "seed": 137,
+      "time_sample_ms": 0.9984,
+      "catalog_format_version": 3,
+      "argmax_encoding": "pirate-1.5:t8-p8-m8-mu8",
+      "producer_dcores": [
+        8,
+        8,
+        8,
+        4,
+        8,
+        8
+      ],
+      "chunks_checked": 8,
+      "events_checked": 2,
+      "members_checked": 2,
+      "raw_hashes_match": true,
+      "source_cells_match": true,
+      "cpp_decoder_physics_match_atol": 1e-09,
+      "startup": "authoritative",
+      "all_grouping_windows_complete": true,
+      "events": [
+        {
+          "event_id": 0,
+          "injected_toa_sec": 6.0,
+          "recovered_toa_sec": 6.00062147047619,
+          "toa_error_ms": 0.6214704761902112,
+          "injected_dm": 100.0,
+          "recovered_dm": 100.03107801964029,
+          "dm_error": 0.031078019640290222,
+          "dm_tolerance_one_map_bin": 0.41070495429048526,
+          "injected_snr": 30.0,
+          "recovered_snr": 30.20756721496582,
+          "injected_gaussian_sigma_ms": 2.0,
+          "nominal_filter_width_ms": 5.990399999999999,
+          "tree": 0,
+          "token": "0x01060604"
+        },
+        {
+          "event_id": 1,
+          "injected_toa_sec": 10.0,
+          "recovered_toa_sec": 10.00021187047619,
+          "toa_error_ms": 0.2118704761908674,
+          "injected_dm": 100.0,
+          "recovered_dm": 100.03107801964029,
+          "dm_error": 0.031078019640290222,
+          "dm_tolerance_one_map_bin": 0.41070495429048526,
+          "injected_snr": 40.0,
+          "recovered_snr": 38.835811614990234,
+          "injected_gaussian_sigma_ms": 4.0,
+          "nominal_filter_width_ms": 11.980799999999999,
+          "tree": 0,
+          "token": "0x01060904"
+        }
+      ],
+      "acceptance": "This fixed toy case: exactly two events; TOA within one input sample; DM within one native map bin; S/N within 20% of injection.",
+      "width_definition": "Injected width is Gaussian sigma; recovered width is the selected filter nominal width. Equality is not a recovery requirement.",
+      "scope": "One beam, two strong full-band bursts at DM 100, eight chunks, six dedispersion trees. This is not a performance or general completeness measurement.",
+      "catalog_sha256": "530a4060b3a4d78075b53b61bd8c63ee39c8e6f99931253764d4634394262571",
+      "map_sha256": {
+        "frame_b100_t0_snrmap.asdf": "537ef27e961a85acb98247e71d8e54278ab0dc0358d465c5bc3d9f3bfe33499d",
+        "frame_b100_t1_snrmap.asdf": "75a0d341e1fe54318d8d654cc7595110f017ada7becbc0ec0ab0252aad7e8e1a",
+        "frame_b100_t2_snrmap.asdf": "8094e27e763da415f3efd9bfac6fe8cdb2de99042daa32cf7181198836e01bb9",
+        "frame_b100_t3_snrmap.asdf": "f06b438615be80c4208c6517eac2c39a72328160bbd8014354613ca3be012544",
+        "frame_b100_t4_snrmap.asdf": "d7bbc013fc1d06f2be6f08929d8e8152b29c2cc21bbf13baa4c8652788624266",
+        "frame_b100_t5_snrmap.asdf": "4c35fa7c902b47131cf2140ac8d4fcd6d7aaf0271088dae9d9496d225bed8c8b",
+        "frame_b100_t6_snrmap.asdf": "9cc7e22e3e26852b0425e420fe41011cb60f3612c8ffae34a7dff8ae4fbf4ed3",
+        "frame_b100_t7_snrmap.asdf": "0d726b37fa0da79df58ce655e5f57de018be96ae2f00b252c7c7e3c73d24088d"
+      }
+    },
+    "clean_batch_smoke": {
+      "schema_name": "pirate-1.5-batch-smoke-validation",
+      "schema_version": 1,
+      "status": "PASS",
+      "scope": "Clean peakfinder benchmark compatibility and saved-result integrity",
+      "performance_report_ready": false,
+      "campaign_id": "0a67f83033d648c4",
+      "results_directory": "/home/mtrudu/pirate-validation/pirate-1.5-batch-smoke-20260908",
+      "result_schema_version": 2,
+      "argmax_encoding": "pirate-1.5:t8-p8-m8-mu8",
+      "dcores": [
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8
+      ],
+      "timing_rows": 2,
+      "summary_rows": 2,
+      "tree_diagnostic_rows": 20,
+      "total_beams": 2,
+      "iterations_per_configuration": 1,
+      "checked_source_paths": [
+        "/home/mtrudu/src/pirate-1.5-integration/peakfinder_tests/benchmark_peakfinder_batch_timing.py",
+        "/home/mtrudu/src/pirate-1.5-integration/pirate_frb/Peakfinders.py",
+        "/home/mtrudu/src/pirate-1.5-integration/configs/dedispersion/chord_sb2_et.yml"
+      ],
+      "notebook_sha256": "5e05e4d7ca2b6955f1616579775040f768b232e4de59c6caa9dc56cd02f366c4",
+      "result_sha256": {
+        "timings.csv": "c772990b1ea4d69aaf464494d824125b9c968f6c62e2127b78180c8cf549153d",
+        "summary.csv": "6a7abe0b660d994eab3de0d8193d9e015b18949f717d0737baac8f0f45dda66f",
+        "tree_diagnostics.csv": "6d52542c81343d0467dc854c5b7a89a6310d3a0c3090928ad9a179ce3589ac63",
+        "metadata.yaml": "482e40f0411f89f4569c5d2ad68078c195b7a8aa6b46401575bb61c63b7e9d60"
+      }
+    },
+    "gaussian_smoke": {
+      "schema_name": "pirate-1.5-gaussian-smoke-validation",
+      "schema_version": 1,
+      "status": "PASS",
+      "scope": "Gaussian candidate pipeline compatibility and saved-result integrity",
+      "performance_report_ready": false,
+      "campaign_id": "44e590c307a2a4b1",
+      "results_directory": "/home/mtrudu/pirate-validation/pirate-1.5-gaussian-smoke-20260908",
+      "result_schema_version": 2,
+      "argmax_encoding": "pirate-1.5:t8-p8-m8-mu8",
+      "dcores": [
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8
+      ],
+      "campaign": {
+        "trials": 1,
+        "percentage_grid": [
+          0.0,
+          0.001,
+          0.01
+        ],
+        "total_beams": 2,
+        "beam_batch_size": 2,
+        "device": 0,
+        "base_seed": 137,
+        "chunk_duration_ms": 2048.0,
+        "total_pixels_per_trial": 1966080
+      },
+      "rows": [
+        {
+          "corruption_percent": 0.0,
+          "pixels_above_threshold": 0,
+          "peakfinder_candidates": 0,
+          "decoded_candidates": 0,
+          "grouped_events": 0,
+          "status": "completed"
+        },
+        {
+          "corruption_percent": 0.001,
+          "pixels_above_threshold": 20,
+          "peakfinder_candidates": 8,
+          "decoded_candidates": 8,
+          "grouped_events": 8,
+          "status": "completed"
+        },
+        {
+          "corruption_percent": 0.01,
+          "pixels_above_threshold": 196,
+          "peakfinder_candidates": 22,
+          "decoded_candidates": 22,
+          "grouped_events": 22,
+          "status": "completed"
+        }
+      ],
+      "checked_sources": {
+        "Peakfinders": {
+          "path": "/home/mtrudu/src/pirate-1.5-integration/pirate_frb/Peakfinders.py",
+          "sha256": "76e8267eb76402e7a1ae3b1190c8bbf994167600fd7664866df4607deb176a51"
+        },
+        "GpuArgmaxDecoder": {
+          "path": "/home/mtrudu/src/pirate-1.5-integration/pirate_frb/GpuArgmaxDecoder.py",
+          "sha256": "d52cc12a7a96d3efaba86217ac16020b2cb4dfb3653ab0f7e041537de436330f"
+        },
+        "OfflineCandidateGrouper": {
+          "path": "/home/mtrudu/src/pirate-1.5-integration/pirate_frb/OfflineCandidateGrouper.py",
+          "sha256": "79d1f8397246bb14ba6631592b3d8d5e0d3dad988b42a0adfab858db9d678cfc"
+        },
+        "FrbOfflineGrouper": {
+          "path": "/home/mtrudu/src/pirate-1.5-integration/pirate_frb/FrbOfflineGrouper.py",
+          "sha256": "68370112cd434efe6d94409d9a64846ead18cd2f6cb6f3bdd2769531dcb11041"
+        },
+        "run_offline_grouper": {
+          "path": "/home/mtrudu/src/pirate-1.5-integration/pirate_frb/run_offline_grouper.py",
+          "sha256": "4bbc8c654992f98f1de00897e508c6c2a93f63a1d0203e170f2b1da7101c820d"
+        },
+        "gaussian_corruption_benchmark": {
+          "path": "/home/mtrudu/src/pirate-1.5-integration/peakfinder_tests/benchmark_gaussian_corruption_timing.py",
+          "sha256": "8d7ac55ac600456431186052f331122b3b6029395e626519c567badb2cc4fe70"
+        },
+        "peakfinder_batch_helpers": {
+          "path": "/home/mtrudu/src/pirate-1.5-integration/peakfinder_tests/benchmark_peakfinder_batch_timing.py",
+          "sha256": "aff4ac803256f32af23b20e98a093deda27c4c1e6c49323737d96e597bcac09f"
+        },
+        "producer_metadata": {
+          "path": "/home/mtrudu/src/pirate-1.5-integration/peakfinder_tests/producer_metadata.py",
+          "sha256": "59526f61e65ea80853b193ca879db9d262d9a1c0b4eee3200639288a65915527"
+        }
+      },
+      "config_sha256": "efafaef44f6652efec29e062178a3f270dfaf62734307a5e58b92879579cab56",
+      "notebook_sha256": "17626ad0487021cd5edf5a580b9e1f9209307f9b4423333b4937a38fd7780258",
+      "result_sha256": {
+        "trials.csv": "2ced4ddd39144235c3e70d3ddd06f26730add5e123ef91a55de9462778f14370",
+        "summary.csv": "ccbe84aa8bca8e98e170d55fb52988b3d0b19b88ffc00b317e1524a620b7896c",
+        "metadata.yaml": "7a5b0d83389fee4df6ad3d0ab0aa5713e92c7d1281e707ff4c9307fecd07b1a0"
+      }
+    }
+  },
+  "limits": [
+    "Test groups overlap and are not a single independently counted full-suite run.",
+    "The saved toy recovery covers one beam and two strong full-band bursts at DM 100.",
+    "Small timing campaigns validate compatibility and bookkeeping, not production capacity.",
+    "A custom online candidate-grouping pipeline and a performance publication remain later phases."
+  ]
+}

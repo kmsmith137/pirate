@@ -99,7 +99,7 @@ struct AssembledFrame
     // A future project: faster asdf?
     //
     //  - Currently, memory bandwidth of AssembledFrame::write_asdf() is 4-5x the memory
-    //    footprint. (Empirical, with 'pirate_frb hwtest configs/hwtest/cf00_asdf.yml'
+    //    footprint. (Empirical, with 'pirate_frb dev hwtest configs/hwtest/cf00_asdf.yml'
     //    and 'pcm-memory'.) This is potentially an issue (see 'misc/plan_hmem_bw.py').
     //
     //  - For binary "blobs", writing with open(..., O_DIRECT) -> write() is 1x the
@@ -129,7 +129,7 @@ struct AssembledFrame
     // If verbose=true, write_asdf() emits comments throughout the YAML header.
     // The comments should be detailed enough that the header can serve as
     // self-contained documentation of the file format. Intended for use
-    // with the 'pirate_frb show_file_format' CLI hook.
+    // with the 'pirate_frb show file_format' CLI hook.
     void write_asdf(const std::string &filename, bool sync=true, bool verbose=false) const;
     static std::shared_ptr<AssembledFrame> from_asdf(const std::string &filename);    // Call without lock held.
 

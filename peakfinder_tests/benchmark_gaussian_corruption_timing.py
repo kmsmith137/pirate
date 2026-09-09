@@ -37,7 +37,7 @@ from peakfinder_tests import benchmark_peakfinder_batch_timing as batch_benchmar
 
 
 SCHEMA_NAME = "pirate-gaussian-corruption-timing"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CORRUPTION_MODEL = "gaussian_mixture"
 METHOD = "full_band"
 SNR_DTYPE = np.dtype(np.float16)
@@ -47,7 +47,7 @@ ARGMAX_DTYPE = np.dtype(np.uint32)
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = REPOSITORY_ROOT / "configs/dedispersion/chord_sb2_et.yml"
 DEFAULT_RESULTS_DIR = (
-    Path(__file__).resolve().parent / "results_gaussian_corruption_timing"
+    Path(__file__).resolve().parent / "results_gaussian_corruption_timing_pirate15"
 )
 NOTEBOOK_PATH = (
     Path(__file__).resolve().parent / "analyze_gaussian_corruption_timing.ipynb"
@@ -892,6 +892,7 @@ def generate_valid_argmax_maps(
             "multiplet": int(multiplet),
             "profile": 0,
             "fine_time": 0,
+            "extra_dm": 0,
             "token_uint32": token,
         })
     result = tuple(maps)
@@ -905,7 +906,7 @@ def validate_tokens_with_plan(
     decoded = []
     for spec, item in zip(specs, token_policy):
         values = tuple(int(value) for value in plan.decode_argmax(
-            int(item["token_uint32"]), int(spec.tree_index), 0, 0
+            int(item["token_uint32"]), int(spec.tree_index), int(spec.dcore), 0, 0
         ))
         if len(values) != 5 or values[-1] != 0:
             raise ValueError(
@@ -1562,6 +1563,7 @@ def _benchmark_source_information() -> dict[str, Any]:
     paths = {
         "gaussian_corruption_benchmark": Path(__file__).resolve(),
         "peakfinder_batch_helpers": Path(batch_benchmark.__file__).resolve(),
+        "producer_metadata": REPOSITORY_ROOT / "peakfinder_tests/producer_metadata.py",
     }
     return {
         name: {"path": str(path), "sha256": _sha256_path(path)}
@@ -1581,6 +1583,9 @@ def _signature_payload(
             bundle.producer_plan_yaml.encode("utf-8")
         ).hexdigest(),
         "tree_shapes": [list(spec.shape) for spec in bundle.specs],
+        "dcores": list(bundle.dcores),
+        "argmax_encoding": bundle.argmax_encoding,
+        "token_geometry": [dict(spec.__dict__) for spec in bundle.specs],
         "percentages": [canonical_percentage(p) for p in args.percentages],
         "total_beams": args.total_beams,
         "beam_batch_size": args.beam_batch_size,
@@ -1660,9 +1665,12 @@ def build_metadata(
             "producer_plan_sha256": hashlib.sha256(
                 bundle.producer_plan_yaml.encode("utf-8")
             ).hexdigest(),
+            "dcores": list(bundle.dcores),
+            "argmax_encoding": bundle.argmax_encoding,
             "consumer_reconstruction": (
-                "DedispersionPlan(config,gpu_runnable=True), serialize, then "
-                "DedispersionPlan.make_incomplete_plan_from_yaml"
+                "DedispersionPlan(config); GpuDedisperser kernel selection for new "
+                "synthetic inputs; explicit GpuDedisperser.Dcores; "
+                "DedispersionPlan.from_yaml_string consumer reconstruction"
             ),
             "tree_shapes_ndm_ntime": [list(spec.shape) for spec in bundle.specs],
             "tree_plan": [
@@ -1676,6 +1684,8 @@ def build_metadata(
                     "multiplets": spec.multiplets,
                     "profiles": spec.profiles,
                     "token_dout": spec.token_dout,
+                    "dcore": spec.dcore,
+                    "token_extra_dm": spec.token_extra_dm,
                 }
                 for spec in bundle.specs
             ],
@@ -1774,7 +1784,8 @@ def build_metadata(
         },
         "argmax_tokens": {
             "policy": (
-                "one deterministic valid tree-specific multiplet, profile 0, fine time 0; "
+                "one deterministic valid tree-specific multiplet in bits 16..23; "
+                "extra DM (bits 24..31), profile and fine time are zero; "
                 "constant over every pixel and reused across trials/percentages"
             ),
             "trees": [
@@ -2148,7 +2159,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
             cp, bundle.plan, bundle.specs, (args.dm_reach,), args.waist_bins
         )
         geometries = geometries_by_reach[args.dm_reach]
-        decoder = GpuArgmaxDecoder(bundle.plan, cuda_device_id=args.device)
+        decoder = GpuArgmaxDecoder(bundle.plan, cuda_device_id=args.device, dcores=bundle.dcores)
         grouping_geometry = GroupingGeometry.from_plan(bundle.plan)
         grouping_config = GroupingConfig(
             dm_tolerance_bins=args.dm_tolerance_bins,

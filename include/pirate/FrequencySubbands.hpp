@@ -47,7 +47,7 @@ struct FrequencySubbands
     //
     //   - To disable subbands, and only search the full frequency band, set subband_counts = {1}.
     //
-    //   - The command 'python -m pirate_frb make_subbands FMIN FMAX THRESHOLD [-r PF_RANK]'
+    //   - The command 'python -m pirate_frb dev make_subbands FMIN FMAX THRESHOLD [-r PF_RANK]'
     //     may be useful for constructing new subband_counts: it calls from_threshold()
     //     and prints the result via show().
     //
@@ -66,6 +66,7 @@ struct FrequencySubbands
     std::vector<long> m_to_d;     // mapping (multiplet) -> fine_grained_dm
     std::vector<long> n_to_flo;   // mapping (frequency_subband) -> (coarse-freq index pair 0 <= flo < fhi <= 2^pf_rank)
     std::vector<long> n_to_fhi;   // mapping (frequency_subband) -> (coarse-freq index pair 0 <= flo < fhi <= 2^pf_rank)
+    std::vector<long> n_to_level; // mapping (frequency_subband) -> (pf_level, i.e. the index into subband_counts)
     std::vector<long> n_to_mbase; // mapping (frequency_subband) -> m-index range (mbase : mbase + 2^level)
 
     // f_to_freq: mapping (coarse-freq index 0 <= f <= 2^pf_rank) -> (physical frequency)
@@ -79,7 +80,6 @@ struct FrequencySubbands
 
     void show(std::ostream &os = std::cout) const;
     void show_compact(std::stringstream &ss) const;  // requires fmin/fmax specified at construction
-    void show_token(uint token, std::ostream &os = std::cout) const;
     std::string to_string() const;
 
     // Static member function.
@@ -88,10 +88,34 @@ struct FrequencySubbands
     static FrequencySubbands from_threshold(double fmin, double fmax, double threshold, long pf_rank = 4);
 
     // Static member function.
-    // "Restricts" top-level subband counts to a specific tree.
-    // The tree may have an early trigger (early_trigger_level > 0) or a different pf_rank.
+    // "Restricts" a config's toplevel subband counts to one tree of that config.
+    //
+    // Truncates 'subband_counts' by 'early_trigger_level' levels (a no-op if it is zero),
+    // then clamps each surviving level to the number of bands that fit in the smaller tree.
+    // The result is always a SUBSET of the input band set: a tree never searches a band the
+    // config did not ask for. (Both trees grid the band identically, because truncating one
+    // subband level per early-trigger level is exactly what keeps the coarse-freq channel
+    // width fixed -- see DedispersionPlan.cpp's _toplevel_channels_per_coarse_channel().)
+    //
+    // Note the returned counts can have pf_rank < (dd_rank+1)/2, in which case the tree's
+    // cdd2 kernel folds the difference into its argmax tokens (see the note on K in
+    // PeakFindingKernel.hpp).
+    //
+    // Requires can_early_trigger(subband_counts, early_trigger_level); throws otherwise. Any
+    // config which passed DedispersionConfig::validate() satisfies this for every tree it
+    // generates, so a throw here means the counts came from somewhere else.
 
-    static std::vector<long> restrict_subband_counts(const std::vector<long> &subband_counts, long early_trigger_level, long new_pf_rank);
+    static std::vector<long> restrict_subband_counts(const std::vector<long> &subband_counts, long early_trigger_level);
+
+    // Static member function.
+    // True if restrict_subband_counts(subband_counts, early_trigger_level) is well-defined:
+    // the truncation must be in range (early_trigger_level <= pf_rank), AND the
+    // early-trigger tree's own full band must already be one of the config's bands. The
+    // second condition is not a technicality: that band is a strict sub-range of the
+    // toplevel band, so manufacturing it would ADD a subband that the config never asked to
+    // search. Always true for early_trigger_level == 0.
+
+    static bool can_early_trigger(const std::vector<long> &subband_counts, long early_trigger_level);
 
     // For debugging/testing.
     static void validate_subband_counts(const std::vector<long> &subband_counts);

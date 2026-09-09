@@ -40,7 +40,7 @@ namespace pirate {
 //   ostream &operator<<(ostream &os, const Key &k);
 //   ostream &operator<<(ostream &os, const Val &v);
 //
-// Don't forget to add your registry to show_kernels() in utils.cu.
+// Don't forget to add your registry to show_kernels() in pirate_frb/__main__.py.
 
 
 template<class Key, class Val>

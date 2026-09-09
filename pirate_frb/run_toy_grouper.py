@@ -51,7 +51,7 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
             dedispersion_plan_yaml = grouper.dedispersion_plan_yaml_string,
             grouper_yaml = {'toy_grouper': True},  # placeholder for future expansion
             search_ip_addr = grouper.search_ip_addr)
-        
+
         atomic_print(f'{grouper.grouper_ip_addr}: connected to sifter at {sifter.server_address}, '
                      f'sent ConfigMessage')
 
@@ -167,7 +167,7 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
                     flat = tree_out.reshape(bpb, ndm * nt)
                     beam_max = flat.max(axis=1)
                     beam_arg = flat.argmax(axis=1)
-                    
+
                     beam_idm, beam_itime = beam_arg // nt, beam_arg % nt
 
                     # Winning out_argmax token, gathered at the same argmax position.
@@ -266,13 +266,13 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0, histog
                     f"subband=["
                     f"{decoded_hits.subband_freqs_lo_MHz[i]:.1f},"
                     f"{decoded_hits.subband_freqs_hi_MHz[i]:.1f}] MHz"
-                )                        
+                )
 
         # Now we have one event per beam whose peak SNR exceeds threshold (0 <= nevents <= nbeams).
         # Events are identified by (snr, itree, ibeam, idm, itime, token) on the GPU. We copy this
         # data from the GPU to the CPU, and convert to "physical" quantities (DM, fpga_timestamp,
         # width, frequency subband) by decoding the out_argmax tokens. The math is explained in
-        # notes/tree_dedispersion.tex, and is implemented in a helper method
+        # notes/dedispersion.tex, and is implemented in a helper method
         # grouper.create_events(), which returns an FrbSifterEvents.
 
         ibeam = cp.nonzero(per_beam_max > snr_threshold)[0]   # global indices of above-threshold beams
@@ -312,7 +312,8 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.
     'histogram_stem' is a filename stem (or None): on termination, pickle histograms
     of the steady-state out_max SNR values (all values, plus one-sample-per-(beam,
     chunk) maxes; warmup values are masked out -- see
-    pirate_frb.utils.GpuGrouperHistogram) to '<histogram_stem>.pkl'. Must not contain
+    pirate_frb.utils.GpuGrouperHistogram) to '<histogram_stem>.pkl', then analyze them
+    and write a plot to '<histogram_stem>.pdf'. Must not contain
     a '.' (guards against passing a full filename). (The CLI gives each grouper
     subprocess a distinct stem, so multi-grouper filenames don't collide.)
     """

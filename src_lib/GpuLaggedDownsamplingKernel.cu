@@ -953,22 +953,52 @@ struct TestInstanceLDS
         xassert(nchunks > 0);
     }
     
+    // ONE JOINT BUDGET, in units of (beam) x (dd channel) x (time sample), on
+    //
+    //    total_beams * 2^input_toplevel_rank * ntime * nchunks,
+    //
+    // which is the test's total work, and (since the buffers hold one chunk of one batch)
+    // an upper bound on its memory too. Every factor is drawn, so the budget can only be
+    // enforced if each draw is bounded by what the previous ones left.
+    static constexpr long work_budget = 10*1000*1000;
+
     static TestInstanceLDS make_random()
     {
         TestInstanceLDS ti;
         ti.params.dtype = (rand_uniform() < 0.5) ? Dtype::native<float>() : Dtype::native<__half>();
-        ti.params.output_dd_rank = rand_int(1,8);  // GpuLaggedDownsamplingKernel needs 1 <= output_dd_rank <= 7
-        ti.params.input_toplevel_rank = ti.params.output_dd_rank + rand_int(1,5);
-        ti.params.num_primary_trees = rand_int(1, constants::max_primary_trees);  // no +1 here
+        // AT LEAST 2, and up to max_primary_trees inclusive. One primary tree is legal but
+        // vacuous here: both GpuLaggedDownsamplingKernel::launch() and
+        // ReferenceLaggedDownsamplingKernel::apply() return immediately at npri <= 1, and
+        // test_random()'s comparison loop runs over ipri = 1 .. npri-1, so such an iteration
+        // asserts nothing at all. The upper end is inclusive because validate() allows
+        // max_primary_trees and nothing else in the suite draws it.
+        ti.params.num_primary_trees = rand_int(2, constants::max_primary_trees+1);
 
         auto v = ksgpu::random_integers_with_bounded_product(2,10);
         ti.params.total_beams = v[0] * v[1];
         ti.params.beams_per_batch = v[1];
         
         long nt_divisor = xdiv(1024, ti.params.dtype.nbits) * pow2(ti.params.num_primary_trees+1);
+
+        // THE RANKS ARE DRAWN AGAINST THE BUDGET, not clamped after the fact. 2^rank is the
+        // largest factor in it -- one rank is a factor of 2, where the two draws below are
+        // together at most a factor of ~q -- so a rank drawn first and repaired later either
+        // busts the budget or piles up on the cap. rank_hi is the largest input_toplevel_rank
+        // that still leaves room for ntime = nt_divisor and nchunks = 1; it is never below 2,
+        // since the largest possible (total_beams, nt_divisor) is 10 * 16384.
+        long rank_hi = 1;
+        while ((ti.params.total_beams * pow2(rank_hi+1) * nt_divisor) <= work_budget)
+            rank_hi++;
+        rank_hi = min(rank_hi, 11L);   // output_dd_rank <= 7 plus a gap of <= 4
+
+        // GpuLaggedDownsamplingKernel needs 1 <= output_dd_rank <= 7, and
+        // input_toplevel_rank > output_dd_rank.
+        ti.params.output_dd_rank = rand_int(1, min(7L, rank_hi-1) + 1);
+        long gap_hi = min(4L, rank_hi - ti.params.output_dd_rank);
+        ti.params.input_toplevel_rank = ti.params.output_dd_rank + rand_int(1, gap_hi+1);
+
         long p = ti.params.total_beams * pow2(ti.params.input_toplevel_rank) * nt_divisor;
-        long q = (10*1000*1000) / p;
-        q = max(q, 4L);
+        long q = max(work_budget / p, 1L);
 
         auto w = ksgpu::random_integers_with_bounded_product(2,q);
         ti.params.ntime = nt_divisor * w[0];

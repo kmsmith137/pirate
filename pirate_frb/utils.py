@@ -1,14 +1,24 @@
 """Utility functions and context managers for pirate_frb.
 
-This module was flattened from the former ``pirate_frb.utils`` package. The
-sections below (each introduced by a ``####`` comment banner) correspond to
-the former source files pirate_frb/utils/<name>.py.
+One flat module, divided by ``####`` comment banners into:
+
+  - package glue: pybind11 re-exports and ``__all__``
+  - integer/bit helpers, and subprocess-group orchestration
+  - random array shapes, for randomized unit tests
+  - ThreadAffinity, a context manager for pinning threads to vCPUs
+  - the grouper SNR histograms (GpuGrouperHistogram / GrouperHistogram)
+  - ASDF header display
+  - network/NIC helpers
+  - host<->device memcpy wrappers, for hugepage-backed buffers
+  - a python/cupy timing benchmark for GpuDedisperser
+
+Each banner says what its section is for, and why the code needs to exist.
 """
 
 
 ####################################################################################################
 #
-# former utils/__init__.py -- package glue: pybind11 re-exports and __all__.
+# Package glue: pybind11 re-exports and __all__.
 #
 # Names re-exported directly from the pybind11 module. (get_thread_affinity /
 # set_thread_affinity are also imported in the ThreadAffinity section below,
@@ -16,25 +26,26 @@ the former source files pirate_frb/utils/<name>.py.
 
 
 from .pirate_pybind11 import (get_thread_affinity, set_thread_affinity,
-                              atomic_print, test_atomic_print,
+                              atomic_print, test_atomic_print, test_utils,
                               test_avx2_simulate_4bit_noise, time_avx2_simulate_4bit_noise)
 
-__all__ = ['integer_log2', 'run_processes',
+__all__ = ['integer_log2', 'print_separator', 'run_processes',
            'ThreadAffinity', 'get_thread_affinity', 'set_thread_affinity',
            'GrouperHistogram', 'GpuGrouperHistogram',
            'time_cupy_dedisperser', 'show_asdf',
            'extract_ip', 'check_mtu', 'resolve_ip_spec', 'resolve_addr',
            'safe_h2g_copy', 'safe_g2h_copy',
-           'atomic_print', 'test_atomic_print',
+           'atomic_print', 'test_atomic_print', 'test_utils',
            'test_avx2_simulate_4bit_noise', 'time_avx2_simulate_4bit_noise']
 
 
 ####################################################################################################
 #
-# former utils/core.py -- integer/bit helpers + subprocess-group orchestration.
+# Integer/bit helpers, and subprocess-group orchestration.
 
 
 import subprocess
+import sys
 import time
 
 from .pirate_pybind11 import constants
@@ -51,6 +62,13 @@ def integer_log2(n):
     return n.bit_length() - 1
 
 
+def print_separator(label, filler='-'):
+    """A labelled full-width rule, for a CLI command whose output has sections."""
+    t = filler * (50 - len(label)//2)
+    atomic_print(f'\n{t}  {label}  {t}\n\n')
+    sys.stdout.flush()
+
+
 def run_processes(multi_args):
     """Run several commands as child processes in parallel, fail-fast.
 
@@ -62,6 +80,10 @@ def run_processes(multi_args):
 
     Returns 0 if every child that had exited did so cleanly (exit code 0), else 1.
     In status messages, each child is labelled by its command string.
+
+    Children may do real work on the way out (the toy grouper writes and plots its
+    --histogram files from a 'finally'), so on Ctrl-C they get a bounded chance to
+    finish before this function starts signalling. See _wait_children().
     """
     procs = []   # list of (label, Popen)
     rc = 0
@@ -72,7 +94,8 @@ def run_processes(multi_args):
             procs.append((" ".join(argv), subprocess.Popen(argv)))
         rc = _monitor_children(procs)
     except KeyboardInterrupt:
-        atomic_print("run_processes: interrupted; stopping all processes")
+        atomic_print("run_processes: interrupted; waiting for children to shut down")
+        _wait_children(procs)
     finally:
         _terminate_children(procs)
     return rc
@@ -91,6 +114,30 @@ def _monitor_children(procs):
                              f"stopping the other processes")
             return 0 if all(p.returncode == 0 for _, p in dead) else 1
         time.sleep(constants.default_poll_cadence_ms / 1000)
+
+
+def _wait_children(procs, grace_sec=constants.default_shutdown_timeout_sec):
+    """Wait (grace_sec, total) for children to exit on their own.
+
+    Survivors are the caller's problem -- _terminate_children() runs next either way.
+
+    Why the wait exists: a terminal Ctrl-C is delivered to the whole foreground
+    process group, so by the time we see KeyboardInterrupt the children have had
+    their own SIGINT for the same instant, and are already running their shutdown
+    paths. Signalling them right now would cut that short -- python's default
+    SIGTERM handler exits WITHOUT unwinding, so 'finally' blocks never run and
+    whatever a child writes on the way out is silently lost.
+
+    A second Ctrl-C during the wait propagates, and the caller's 'finally' then
+    signals immediately -- which is the behavior an impatient user expects.
+
+    'procs' is a list of (label, Popen) pairs."""
+    deadline = time.monotonic() + grace_sec
+    for _, p in procs:
+        try:
+            p.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def _terminate_children(procs, grace_sec=constants.default_shutdown_timeout_sec):
@@ -112,7 +159,39 @@ def _terminate_children(procs, grace_sec=constants.default_shutdown_timeout_sec)
 
 ####################################################################################################
 #
-# former utils/ThreadAffinity.py -- context manager for temporarily setting thread CPU affinity.
+# Helpers for drawing array shapes in randomized unit tests.
+#
+# The other half of this job is ksgpu.random_integers_with_bounded_product(n, bound), which
+# draws n factors of a bounded product -- use it when a test needs a random SHAPE whose cost
+# is capped. Note it draws from ksgpu::default_rng() rather than from a numpy Generator; see
+# its docstring.
+
+
+import numpy as np
+
+
+def random_nfreq(rng, hi, lo=32):
+    """A frequency-channel count drawn LOG-uniformly on [lo, hi].
+
+    Use this wherever the SIZE of the frequency axis is the thing being varied. A
+    uniform draw over a range like (600, 2500) puts essentially no weight on the
+    small-nfreq regime -- zones a few channels wide, one partial block in a strided
+    loop -- and that is where loop bounds and clamping are degenerate. Log-uniform
+    over the same span reaches it on an order-one fraction of calls, and costs less
+    rather than more.
+
+    'rng' is a numpy Generator, so the draw replays with everything else the caller
+    takes from it.
+    """
+    lo, hi = int(lo), int(hi)
+    if not (1 <= lo <= hi):
+        raise ValueError(f'random_nfreq: need 1 <= lo <= hi, got lo={lo}, hi={hi}')
+    return int(round(float(np.exp(rng.uniform(np.log(lo), np.log(hi))))))
+
+
+####################################################################################################
+#
+# ThreadAffinity: a context manager for temporarily setting thread CPU affinity.
 
 
 from .pirate_pybind11 import get_thread_affinity, set_thread_affinity
@@ -151,8 +230,7 @@ class ThreadAffinity:
 
 ####################################################################################################
 #
-# former utils/GrouperHistogram.py -- SNR histograms for grouper main loops:
-# GPU accumulation + host-side analysis.
+# SNR histograms for grouper main loops: GPU accumulation + host-side analysis.
 #
 # Two classes, split along the finalization boundary:
 #
@@ -542,7 +620,7 @@ class GpuGrouperHistogram:
 
 ####################################################################################################
 #
-# former utils/show_asdf.py -- displaying ASDF file YAML headers.
+# Displaying ASDF file YAML headers.
 
 
 def show_asdf(f, out=None):
@@ -588,8 +666,7 @@ def _show_asdf_impl(fp, out):
 
 ####################################################################################################
 #
-# former utils/network.py -- small network/NIC helpers shared by the server and
-# fake X-engine entry points.
+# Small network/NIC helpers, shared by the server and fake X-engine entry points.
 
 
 import re
@@ -723,8 +800,8 @@ def check_mtu(hw, label, ip_addr, min_mtu, min_mtu_param, is_dst_addr=False):
 
 ####################################################################################################
 #
-# former utils/safe_memcpy.py -- host<->device cudaMemcpy* wrappers that handle
-# BumpAllocator chunked hugepage registration.
+# Host<->device cudaMemcpy* wrappers that handle BumpAllocator chunked hugepage
+# registration.
 #
 # cupy's `ndarray.set()` / `.get()` call cudaMemcpyAsync directly with no
 # splitting at cudaHostRegister chunk boundaries. When the host buffer
@@ -812,8 +889,7 @@ def safe_g2h_copy(cpu_arr, gpu_arr, stream):
 
 ####################################################################################################
 #
-# former utils/time_cupy_dedisperser.py -- timing benchmark for GpuDedisperser
-# using Python/cupy.
+# Timing benchmark for GpuDedisperser, driven from python/cupy.
 
 
 import cupy as cp

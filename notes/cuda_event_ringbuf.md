@@ -40,8 +40,28 @@ struct CudaEventRingbuf
     //   - If blocking=true, the calling thread blocks until another thread produces the seq_id.
 
     void synchronize(long seq_id, bool blocking = false);
+
+    // Blocks the calling thread until 'seq_id' has been produced. Does NOT consume
+    // an event, or modify the ringbuf.
+
+    void synchronize_with_producer(long seq_id);
+
+    // Put the ringbuf into its "stopped" state, saving 'e' as the error.
+
+    void stop(std::exception_ptr e = std::exception_ptr()) const;
 };
 ```
+
+`CudaEventRingbuf` is a stoppable class (see [notes/stoppable_class.md](stoppable_class.md)).
+All four of `record()`, `wait()`, `synchronize()` and `synchronize_with_producer()` are entry
+points: called in the stopped state, they rethrow the exception stored by `stop()`. This is why
+the `seq_id < 0` cases above are not quite no-ops -- a stopped ringbuf throws for every `seq_id`,
+negative ones included.
+
+Special case `nconsumers=0`: no cuda events are allocated, `record()` and
+`synchronize_with_producer()` are allowed, and `wait()` / `synchronize()` throw for every
+`seq_id`. This is for pure producer-consumer sequencing between host threads, with no GPU
+event overhead.
 
 ## Example
 

@@ -41,16 +41,12 @@ namespace pirate {
 
 // -------------------------------------------------------------------------------------------------
 //
-// Vectorized ("batch") decode_argmax*() helpers, bound as methods on both DedispersionPlan
-// (in pirate_pybind11.cpp, which declares these prototypes) and FrbGrouper (below, forwarding
-// to its internal incomplete_plan). Non-static, since the two class bindings live in
-// different source files.
+// Argument checkers shared by FrbGrouper's vectorized ("batch") decode_argmax*() bindings,
+// whose bodies are inlined at the binding site below.
 //
-// Inputs are 1-d contiguous nonempty host arrays, one event per element. (Python callers
-// should short-circuit the zero-event case: the Array -> numpy caster rejects zero-size
-// arrays.) Outputs are freshly-allocated numpy arrays. Implemented as loops over the scalar
-// DedispersionPlan methods, so per-element validation (index ranges, malformed tokens)
-// comes from decode_argmax() itself.
+// Batch inputs are 1-d contiguous nonempty host arrays, one event per element. (Python
+// callers should short-circuit the zero-event case: the Array -> numpy caster rejects
+// zero-size arrays.)
 
 
 template<typename T>
@@ -62,71 +58,6 @@ static void _check_batch_arg(const char *fname, const char *arg_name, const ksgp
            << " of length " << n << ", got shape " << a.shape_str();
         throw runtime_error(ss.str());
     }
-}
-
-
-py::tuple _decode_argmax_batch(
-    const DedispersionPlan &plan, const Array<uint> &tokens,
-    const Array<long> &itrees, const Array<long> &idms, const Array<long> &itimes)
-{
-    const char *fname = "decode_argmax_batch";
-    long n = tokens.size;
-
-    if (n <= 0)
-        throw runtime_error("decode_argmax_batch: empty input arrays (callers should "
-                            "short-circuit the zero-event case)");
-
-    _check_batch_arg(fname, "tokens", tokens, n);
-    _check_batch_arg(fname, "itrees", itrees, n);
-    _check_batch_arg(fname, "idms", idms, n);
-    _check_batch_arg(fname, "itimes", itimes, n);
-
-    Array<long> fmins({n}, af_uhost);
-    Array<long> fmaxs({n}, af_uhost);
-    Array<long> tlos({n}, af_uhost);
-    Array<long> this_({n}, af_uhost);
-    Array<long> ps({n}, af_uhost);
-
-    for (long i = 0; i < n; i++)
-        plan.decode_argmax(tokens.data[i], itrees.data[i], idms.data[i], itimes.data[i],
-                           fmins.data[i], fmaxs.data[i], tlos.data[i], this_.data[i], ps.data[i]);
-
-    return py::make_tuple(fmins, fmaxs, tlos, this_, ps);
-}
-
-
-py::tuple _decode_argmax2_batch(
-    const DedispersionPlan &plan, const Array<long> &itrees,
-    const Array<long> &fmins, const Array<long> &fmaxs,
-    const Array<long> &tlos, const Array<long> &this_, const Array<long> &ps)
-{
-    const char *fname = "decode_argmax2_batch";
-    long n = itrees.size;
-
-    if (n <= 0)
-        throw runtime_error("decode_argmax2_batch: empty input arrays (callers should "
-                            "short-circuit the zero-event case)");
-
-    _check_batch_arg(fname, "itrees", itrees, n);
-    _check_batch_arg(fname, "fmins", fmins, n);
-    _check_batch_arg(fname, "fmaxs", fmaxs, n);
-    _check_batch_arg(fname, "tlos", tlos, n);
-    _check_batch_arg(fname, "this", this_, n);
-    _check_batch_arg(fname, "ps", ps, n);
-
-    Array<double> freqs_lo({n}, af_uhost);
-    Array<double> freqs_hi({n}, af_uhost);
-    Array<double> dms({n}, af_uhost);
-    Array<double> timestamps({n}, af_uhost);
-    Array<double> widths({n}, af_uhost);
-
-    for (long i = 0; i < n; i++)
-        plan.decode_argmax2(itrees.data[i], fmins.data[i], fmaxs.data[i],
-                            tlos.data[i], this_.data[i], ps.data[i],
-                            freqs_lo.data[i], freqs_hi.data[i], dms.data[i],
-                            timestamps.data[i], widths.data[i]);
-
-    return py::make_tuple(freqs_lo, freqs_hi, dms, timestamps, widths);
 }
 
 
@@ -385,7 +316,7 @@ void register_core_bindings(pybind11::module &m)
             "If verbose=True, emit comments throughout the YAML header. The\n"
             "comments are detailed enough that the header serves as self-\n"
             "contained documentation of the file format. Intended for use\n"
-            "with 'pirate_frb show_file_format'.")
+            "with 'pirate_frb show file_format'.")
         .def_static("make_uninitialized", &AssembledFrame::make_uninitialized,
             py::arg("xmd"), py::arg("ntime"), py::arg("beam_id"), py::arg("time_chunk_index"),
             py::call_guard<py::gil_scoped_release>(),   // pinned-host (cudaHostAlloc-scale) allocations
@@ -631,10 +562,16 @@ void register_core_bindings(pybind11::module &m)
     // python class "SimulatedFrameFactoryEvent". NOTE: this name is deliberately NOT re-exported
     // into pirate_frb.core -- it is only reachable as pirate_frb.pirate_pybind11.SimulatedFrameFactoryEvent
     // (see SimulatedFrameFactory._pop_events / the pop_events() injection).
+    //
+    // No page in docs/source/python_class_reference.md, on purpose: a python caller gets
+    // these from SimulatedFrameFactory and never names the type.
     py::class_<SimulatedFrameFactory::Event>(m, "SimulatedFrameFactoryEvent",
-        "One simulated-FRB injection event recorded by SimulatedFrameFactory (returned by\n"
-        "_pop_events()). fpga_timestamp is the arrival at the LOWEST frequency of the FULL band\n"
-        "(not the pulse's subband), as an FPGA sequence number.")
+        "One simulated-FRB injection event recorded by SimulatedFrameFactory.\n\n"
+        "Not constructible from python: a list of these is returned by the C++\n"
+        "SimulatedFrameFactory._pop_events(), which SimulatedFrameFactory.pop_events()\n"
+        "wraps (repackaging them as an FrbSifterEvents).\n\n"
+        "fpga_timestamp is the arrival at the LOWEST frequency of the FULL band (not the\n"
+        "pulse's subband), as an FPGA sequence number.")
         .def_readonly("beam_id", &SimulatedFrameFactory::Event::beam_id)
         .def_readonly("fpga_timestamp", &SimulatedFrameFactory::Event::fpga_timestamp)
         .def_readonly("dm", &SimulatedFrameFactory::Event::dm)
@@ -642,6 +579,7 @@ void register_core_bindings(pybind11::module &m)
         .def_readonly("width_ms", &SimulatedFrameFactory::Event::width_ms)
         .def_readonly("subband_freq_lo_MHz", &SimulatedFrameFactory::Event::subband_freq_lo_MHz)
         .def_readonly("subband_freq_hi_MHz", &SimulatedFrameFactory::Event::subband_freq_hi_MHz)
+        .def_readonly("tree_index", &SimulatedFrameFactory::Event::tree_index)
     ;
 
     // SimulatedFrameFactory: hands a consumer a stream of pre-randomized
@@ -844,14 +782,14 @@ void register_core_bindings(pybind11::module &m)
         "subbands searched by the peak-finding kernel. (Searching subbands, rather\n"
         "than only the full band, improves SNR for bursts that do not span the full\n"
         "frequency range.) A python caller will probably not need to use this class!\n\n"
-        "The details of the subband representation are nontrivial to explain -- see\n"
-        "the tex notes, section \"Subband search\", whose subsection \"Parameterization\n"
-        "of subbands\" explains them with examples and plots.\n\n"
+        "The details of the subband representation are nontrivial to explain -- see the\n"
+        "dedispersion tex notes, section \"Subband search\", whose subsection\n"
+        "\"Parameterization of subbands\" explains them with examples and plots.\n\n"
         "The low-level C++ class can be constructed in one of four ways::\n\n"
         "    FrequencySubbands()                            # full-band only\n"
         "    FrequencySubbands(subband_counts)              # e.g. [5,9,7,3,1]\n"
         "    FrequencySubbands(subband_counts, fmin, fmax)  # optional fmin/fmax in MHz\n\n"
-        "    # Same subbands as 'pirate_frb make_subbands FMIN FMAX THRESH -r PF_RANK'\n"
+        "    # Same subbands as 'pirate_frb dev make_subbands FMIN FMAX THRESH -r PF_RANK'\n"
         "    FrequencySubbands.from_threshold(fmin, fmax, threshold, pf_rank=4)")
           // Constructors
           .def(py::init<>())  // default constructor
@@ -867,6 +805,7 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("m_to_d", &FrequencySubbands::m_to_d)
           .def_readonly("n_to_flo", &FrequencySubbands::n_to_flo)
           .def_readonly("n_to_fhi", &FrequencySubbands::n_to_fhi)
+          .def_readonly("n_to_level", &FrequencySubbands::n_to_level)
           .def_readonly("n_to_mbase", &FrequencySubbands::n_to_mbase)
           .def_readonly("f_to_freq", &FrequencySubbands::f_to_freq)
           .def_readonly("fmin", &FrequencySubbands::fmin)
@@ -885,17 +824,29 @@ void register_core_bindings(pybind11::module &m)
               self.show_compact(ss);
               return ss.str();
           })
-          .def("show_token", [](const FrequencySubbands &self, uint token) {
-              std::ostringstream os;
-              self.show_token(token, os);
-              return os.str();
-          }, py::arg("token"))
           .def("to_string", &FrequencySubbands::to_string)
           // Static methods
           .def_static("from_threshold", &FrequencySubbands::from_threshold,
                py::arg("fmin"), py::arg("fmax"), py::arg("threshold"), py::arg("pf_rank") = 4)
           .def_static("restrict_subband_counts", &FrequencySubbands::restrict_subband_counts,
-               py::arg("subband_counts"), py::arg("early_trigger_level"), py::arg("new_pf_rank"))
+               py::arg("subband_counts"), py::arg("early_trigger_level"),
+               "\"Restrict\" a config's toplevel subband counts to one tree of that config.\n\n"
+               "Truncates ``subband_counts`` by ``early_trigger_level`` levels (a no-op if it\n"
+               "is zero), then clamps each surviving level to the number of bands that fit in\n"
+               "the smaller tree. The result is always a SUBSET of the input band set.\n\n"
+               "Throws unless ``can_early_trigger(subband_counts, early_trigger_level)``.\n\n"
+               "Args:\n"
+               "    subband_counts: the config's toplevel ``frequency_subband_counts``.\n"
+               "    early_trigger_level: 0 for the main tree, 1 or more for early triggers.")
+          .def_static("can_early_trigger", &FrequencySubbands::can_early_trigger,
+               py::arg("subband_counts"), py::arg("early_trigger_level"),
+               "True if ``restrict_subband_counts()`` is well-defined for this pair.\n\n"
+               "Two conditions: the truncation must be in range\n"
+               "(``early_trigger_level <= pf_rank``), and the early-trigger tree's own full\n"
+               "band must already be one of the config's bands -- otherwise the early trigger\n"
+               "would ADD a subband that the config never asked to search.\n\n"
+               "``DedispersionConfig.validate()`` requires this for every early-trigger level\n"
+               "the config can produce, so a config which validates never trips it.")
           .def_static("validate_subband_counts", &FrequencySubbands::validate_subband_counts,
                py::arg("subband_counts"))
           .def_static("make_random_subband_counts",
@@ -919,58 +870,48 @@ void register_core_bindings(pybind11::module &m)
     py::class_<DedispersionConfig::PrimaryTree>(m, "PrimaryTree",
         "Helper class for DedispersionConfig (one element of the 'primary_trees' member).\n\n"
         "DedispersionConfig.primary_trees is a list of PrimaryTrees. Each PrimaryTree is a\n"
-        "\"dataclass\" with six members as shown below. (See also\n"
+        "\"dataclass\" with four members as shown below. (See also\n"
         "configs/dedispersion/chord_sb2_et.yml for yaml representation.)\n\n"
         "Constructed either with default (zero) values::\n\n"
         "    pt = PrimaryTree()\n\n"
-        "or with all six members::\n\n"
-        "    pt = PrimaryTree(num_early_triggers, max_width, dm_downsampling,\n"
-        "                     time_downsampling, wt_dm_downsampling, wt_time_downsampling)")
+        "or with all four members::\n\n"
+        "    pt = PrimaryTree(num_early_triggers, max_width,\n"
+        "                     wt_dm_downsampling, wt_time_downsampling)")
           .def(py::init<>(),
                "Create a PrimaryTree with default (zero) values.")
-          .def(py::init([](long num_early_triggers, long max_width, long dm_downsampling,
-                          long time_downsampling, long wt_dm_downsampling, long wt_time_downsampling) {
+          .def(py::init([](long num_early_triggers, long max_width,
+                          long wt_dm_downsampling, long wt_time_downsampling) {
                    DedispersionConfig::PrimaryTree pt;
                    pt.num_early_triggers = num_early_triggers;
                    pt.max_width = max_width;
-                   pt.dm_downsampling = dm_downsampling;
-                   pt.time_downsampling = time_downsampling;
                    pt.wt_dm_downsampling = wt_dm_downsampling;
                    pt.wt_time_downsampling = wt_time_downsampling;
                    return pt;
                }),
                py::arg("num_early_triggers"),
                py::arg("max_width"),
-               py::arg("dm_downsampling"),
-               py::arg("time_downsampling"),
                py::arg("wt_dm_downsampling"),
                py::arg("wt_time_downsampling"),
                "Create a PrimaryTree.\n\n"
                "Args:\n"
                "    num_early_triggers: Number of early triggers (early_trigger_level = 1..num_early_triggers)\n"
                "    max_width: Maximum width of peak-finding kernel (in tree time samples)\n"
-               "    dm_downsampling: DM downsampling factor relative to tree\n"
-               "    time_downsampling: Time downsampling factor relative to tree\n"
-               "    wt_dm_downsampling: DM downsampling factor for weights (>= dm_downsampling)\n"
-               "    wt_time_downsampling: Time downsampling for weights (>= time_downsampling)")
+               "    wt_dm_downsampling: DM downsampling factor for weights\n"
+               "    wt_time_downsampling: Time downsampling factor for weights\n\n"
+               "Both wt_* factors must be >= the tree's own {dm,time}_downsampling, which are\n"
+               "not config fields (see DedispersionTree).")
           .def_readwrite("num_early_triggers", &DedispersionConfig::PrimaryTree::num_early_triggers,
                "Number of early triggers (early_trigger_level = 1..num_early_triggers, can be zero)")
           .def_readwrite("max_width", &DedispersionConfig::PrimaryTree::max_width,
                "Maximum width of peak-finding kernel (in tree time samples)")
-          .def_readwrite("dm_downsampling", &DedispersionConfig::PrimaryTree::dm_downsampling,
-               "DM downsampling factor of coarse-grained array relative to tree")
-          .def_readwrite("time_downsampling", &DedispersionConfig::PrimaryTree::time_downsampling,
-               "Time downsampling factor of coarse-grained array relative to tree")
           .def_readwrite("wt_dm_downsampling", &DedispersionConfig::PrimaryTree::wt_dm_downsampling,
-               "DM downsampling factor of weights array (must be >= dm_downsampling)")
+               "DM downsampling factor of weights array (must be >= the tree's dm_downsampling)")
           .def_readwrite("wt_time_downsampling", &DedispersionConfig::PrimaryTree::wt_time_downsampling,
-               "Time downsampling factor of weights array (must be >= time_downsampling)")
+               "Time downsampling factor of weights array (must be >= the tree's time_downsampling)")
           .def("__repr__", [](const DedispersionConfig::PrimaryTree &self) {
                std::ostringstream os;
                os << "PrimaryTree(num_early_triggers=" << self.num_early_triggers
                   << ", max_width=" << self.max_width
-                  << ", dm_downsampling=" << self.dm_downsampling
-                  << ", time_downsampling=" << self.time_downsampling
                   << ", wt_dm_downsampling=" << self.wt_dm_downsampling
                   << ", wt_time_downsampling=" << self.wt_time_downsampling << ")";
                return os.str();
@@ -1011,22 +952,114 @@ void register_core_bindings(pybind11::module &m)
                py::arg("multiplier"), py::arg("fine_grained"))
     ;
 
-    // DedispersionTree: simple data class representing output of dedisperser
-    // for one choice of (primary tree, early trigger).
-    py::class_<DedispersionTree>(m, "DedispersionTree")
+    // DedispersionTree: data class representing output of dedisperser for one choice of
+    // (primary tree, early trigger). Not constructible from python: the DedispersionPlan
+    // constructor is the only source of trees, and everything that INTERPRETS a tree
+    // (argmax decoding, yaml I/O) is a DedispersionPlan method -- see DedispersionTree.hpp.
+    //
+    // Most def_readonly members below are documented as a bullet in the class docstring
+    // rather than with a per-member docstring: that renders compactly and keeps them out
+    // of the sphinx sidebar (see notes/docstrings.md). The handful needing more than a
+    // line carry their own docstring instead.
+    py::class_<DedispersionTree>(m, "DedispersionTree",
+        "Output geometry of the dedisperser, for one (primary tree, early trigger) pair.\n"
+        "\n"
+        "This is what a downstream consumer needs in order to interpret dedispersion\n"
+        "outputs: the output array shapes and the frequency subbands searched. The methods\n"
+        "which INTERPRET a tree -- decoding ``out_argmax`` tokens, the subband index\n"
+        "mappings -- are DedispersionPlan methods taking an ``itree``.\n"
+        "\n"
+        "A tree is not constructible on its own: trees come from ``plan.trees``, and the\n"
+        "DedispersionPlan constructor is the only implementation of the geometry. Use\n"
+        "``DedispersionPlan(config, mega_ringbuf=False, gpu_kernels=False)`` to get at them\n"
+        "with no GPU -- which is what lets archived variance maps be analyzed anywhere.\n"
+        "\n"
+        "Note ``plan.trees`` is a fresh list of COPIES on every attribute access, so code\n"
+        "that needs one tree repeatedly should cache it.\n"
+        "\n"
+        "Trees are enumerated by primary tree, then by DECREASING early-trigger level\n"
+        "(earliest trigger first, then the main ``early_trigger_level=0`` tree). To go from a\n"
+        "``(primary_tree_index, early_trigger_level)`` pair to a tree index, use\n"
+        "``DedispersionPlan.dedispersion_tree_index()``; the reverse is just reading those two\n"
+        "attributes of ``plan.trees[itree]``.\n"
+        "\n"
+        "Attributes (read-only):\n"
+        "\n"
+        "- ``primary_tree_index`` (int) -- the primary tree this belongs to. Also selects the\n"
+        "  associated stage1 tree, whose input is downsampled in time by\n"
+        "  ``2**primary_tree_index``.\n"
+        "- ``early_trigger_level`` (int) -- 0 for the main tree, 1 or more for early triggers\n"
+        "  (larger means earlier).\n"
+        "- ``amb_rank`` (int) -- ambient rank of this tree (the dd_rank of the associated\n"
+        "  stage1 tree).\n"
+        "- ``dd_rank`` (int) -- active dedispersion rank of this tree.\n"
+        "- ``primary_tree_rank`` (int) -- rank of this tree's primary-tree family, from which\n"
+        "  its early triggers count down.\n"
+        "- ``nt_ds`` (int) -- downsampled time samples per chunk, i.e.\n"
+        "  ``config.time_samples_per_chunk`` divided by ``2**primary_tree_index``.\n"
+        "- ``frequency_subbands`` (FrequencySubbands) -- the subbands searched in this tree.\n"
+        "  Can be a strict subset of the config's subbands: early triggers and downsampling\n"
+        "  restrict which ones a given tree searches.\n"
+        "- ``primary_tree`` (PrimaryTree) -- an exact copy of\n"
+        "  ``config.primary_trees[primary_tree_index]``\n"
+        "  (nothing is resolved into it -- the resolved factors are ``dm_downsampling`` and\n"
+        "  ``time_downsampling`` below).\n"
+        "- ``nprofiles`` (int) -- number of peak-finder time profiles, equal to\n"
+        "  ``1 + 3*log2(primary_tree.max_width)``.\n"
+        "- ``ndm_out``, ``nt_out`` (int) -- this tree's ``out_max`` and ``out_argmax`` arrays\n"
+        "  have shape ``(beams_per_batch, ndm_out, nt_out)``.\n"
+        "- ``ndm_wt``, ``nt_wt`` (int) -- this tree's weights array has shape\n"
+        "  ``(beams_per_batch, ndm_wt, nt_wt, nprofiles, frequency_subbands.N)``.\n"
+        "- ``dm_min``, ``dm_max`` (float) -- DM range searched by this tree, in pc/cm^3.\n"
+        "- ``trigger_frequency`` (float) -- trigger frequency in MHz, for early-trigger trees.\n"
+        "\n"
+        "``dm_min``, ``dm_max`` and ``trigger_frequency`` are display values only: they\n"
+        "round-trip lossily through yaml (~6 significant digits), and no decode path reads\n"
+        "them.")
           .def_readonly("primary_tree_index", &DedispersionTree::primary_tree_index)
           .def_readonly("early_trigger_level", &DedispersionTree::early_trigger_level)
           .def_readonly("amb_rank", &DedispersionTree::amb_rank)
           .def_readonly("dd_rank", &DedispersionTree::dd_rank)
           .def_readonly("nt_ds", &DedispersionTree::nt_ds)
-          .def("total_rank", &DedispersionTree::total_rank,
-               "Total tree rank (amb_rank + dd_rank).")
+          .def_readonly("tree_rank", &DedispersionTree::tree_rank,
+               "This tree's own rank, ``amb_rank + dd_rank``. Equal to\n"
+               "``primary_tree_rank - early_trigger_level``.")
+          .def_readonly("toplevel_tree_rank", &DedispersionTree::toplevel_tree_rank,
+               "The ``toplevel_tree_rank`` of the config this tree came from.")
+          .def_readonly("primary_tree_rank", &DedispersionTree::primary_tree_rank,
+               "Rank of this tree's primary-tree family, ``toplevel_tree_rank`` minus one if\n"
+               "``primary_tree_index > 0`` (a downsampled primary tree gives up one rank).\n"
+               "The family's early triggers then run from this rank down: ``tree_rank =\n"
+               "primary_tree_rank - early_trigger_level``.")
+          .def("n_to_toplevel_flo", &DedispersionTree::n_to_toplevel_flo, py::arg("n"),
+               "Lowest toplevel tree-freq channel of subband ``n`` (INCLUSIVE).\n\n"
+               "Channels of the ``2**toplevel_tree_rank`` gridding, so subbands of\n"
+               "different trees of one config are directly comparable.")
+          .def("n_to_toplevel_fhi", &DedispersionTree::n_to_toplevel_fhi, py::arg("n"),
+               "One past the highest toplevel tree-freq channel of subband ``n``\n"
+               "(EXCLUSIVE), matching ``FrequencySubbands.n_to_fhi``. Note\n"
+               "``DedispersionPlan.decode_argmax()`` reports an inclusive ``fmax``, i.e.\n"
+               "``n_to_toplevel_fhi(n) - 1``.")
           .def_readonly("frequency_subbands", &DedispersionTree::frequency_subbands)
-          .def_readonly("pf", &DedispersionTree::pf)
-          .def_readonly("Dcore", &DedispersionTree::Dcore,
-               "Internal time-downsampling of this tree's peak-finding kernel (sets out_argmax\n"
-               "token granularity). From the cdd2 kernel registry; equals pf.time_downsampling\n"
-               "if the kernel is not compiled into this build.")
+          .def_readonly("primary_tree", &DedispersionTree::primary_tree)
+          .def_readonly("dm_downsampling", &DedispersionTree::dm_downsampling,
+               "DM downsampling factor of the coarse-grained array, relative to this tree:\n"
+               "``2**ceil(dd_rank/2)``, one output DM per warp of the GPU kernel's second\n"
+               "dedispersion stage (whose rank is ``dd_rank1`` in kernel code).\n\n"
+               "NOT a config field: it is fixed by the GPU kernel's warp geometry, and\n"
+               "``ceil(dd_rank/2)`` varies within a primary-tree family, so no single\n"
+               "per-primary-tree value could be right for all of its trees.\n\n"
+               "The peak-finder's extra-DM bit count is ``K = log2(dm_downsampling) -\n"
+               "frequency_subbands.pf_rank`` (``ReferencePeakFindingKernel.xdm_rank``): the\n"
+               "width of the ``mu`` byte of an ``out_argmax`` token. It is zero unless the\n"
+               "tree has an early trigger.")
+          .def_readonly("time_downsampling", &DedispersionTree::time_downsampling,
+               "Time downsampling factor of the coarse-grained array, relative to this tree.\n"
+               "Equal to ``dm_downsampling``, and likewise not a config field.\n\n"
+               "This value is the cdd2 registry key's ``Dout`` (``nt_out = nt_ds /\n"
+               "time_downsampling``), so pinning it to ``2**ceil(dd_rank/2)`` is also a statement\n"
+               "about which GPU kernels are compiled -- see the Dout invariant in\n"
+               "pirate_frb.cuda_generator.cdd2_dout().")
           .def_readonly("nprofiles", &DedispersionTree::nprofiles)
           .def_readonly("ndm_out", &DedispersionTree::ndm_out)
           .def_readonly("ndm_wt", &DedispersionTree::ndm_wt)
@@ -1036,6 +1069,20 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("dm_max", &DedispersionTree::dm_max)
           .def_readonly("trigger_frequency", &DedispersionTree::trigger_frequency)
     ;
+
+    m.def("peak_finding_test_tolerance", &peak_finding_test_tolerance,
+          py::arg("dtype"), py::arg("n"), py::arg("ref_max"),
+          "Tolerance for comparing a peak-finding 'out_max' array against a reference,\n"
+          "as the (epsabs, epsrel) pair that ksgpu.assert_arrays_equal() expects.\n\n"
+          "Exposed so that the end-to-end server test (pirate_frb/tests/test_server.py)\n"
+          "and GpuDedisperser::test_one() share ONE definition of the tolerance, rather\n"
+          "than each carrying its own hand-tuned constant.\n\n"
+          "Args:\n"
+          "    dtype: dedisperser dtype (float16 or float32).\n"
+          "    n: primary_tree_index + tree_rank of the tree being compared.\n"
+          "    ref_max: max |value| over the REFERENCE array.\n\n"
+          "Returns:\n"
+          "    (epsabs, epsrel) tuple.");
 
     // Thread affinity functions
     m.def("set_thread_affinity", &set_thread_affinity,
@@ -1059,8 +1106,8 @@ void register_core_bindings(pybind11::module &m)
         "places (allocator's canonical copy, per-frame ASDF projection, etc).\n\n"
         "See configs/xengine_metadata.yml for an example with per-field documentation.\n\n"
         "Obtained from XEngineMetadata.from_yaml_file(),\n"
-        "XEngineMetadata.from_yaml_string(), FrbSearchClient.xengine_metadata, or\n"
-        "AssembledFrameSet.metadata.")
+        "XEngineMetadata.from_yaml_string(), XEngineMetadata.make_fiducial(),\n"
+        "FrbSearchClient.xengine_metadata, or AssembledFrameSet.metadata.")
           .def(py::init<>())
           .def_readwrite("version", &XEngineMetadata::version,
                "Version number of the metadata format")
@@ -1160,7 +1207,7 @@ void register_core_bindings(pybind11::module &m)
     // Skipped methods: make_worker_metadata, worker_main, _worker_main, _send_all (private)
     py::class_<FakeXEngine, std::shared_ptr<FakeXEngine>>(m, "FakeXEngine",
         "Simulates multiple upstream X-engine nodes sending data to a receiver.\n\n"
-        "The command-line utility 'pirate_frb run_fake_xengine' is intended to be the\n"
+        "The command-line utility 'pirate_frb run fake_xengine' is intended to be the\n"
         "main interface to the fake X-engine code, and uses this class under the hood\n"
         "(paired with a SimulatedFrameFactory, which supplies the simulated data).\n"
         "Use the class directly only if you need something the CLI does not expose.\n\n"
@@ -1458,7 +1505,7 @@ void register_core_bindings(pybind11::module &m)
                "Monotone: a stale value only understates server progress (0\n"
                "before any data has flowed). -1 when paced=False. Use to bound\n"
                "SKIP jumps, which bypass the pacing gate: a skip that lands more\n"
-               "than (max_unprocessed_chunks - 3) chunks past rb_processed //\n"
+               "than (max_unprocessed_chunks - 4) chunks past rb_processed //\n"
                "nbeams can trip the server's keep-up bound when the next send\n"
                "fast-forwards assembly of the skipped span (the view is only a\n"
                "LOWER bound, and the receivers' 2-chunk assembly window adds\n"
@@ -1660,7 +1707,7 @@ void register_core_bindings(pybind11::module &m)
         "Includes network receive code, dedispersion, an RPC server for monitoring and\n"
         "file-writing callbacks, and the endpoint for communication with the downstream\n"
         "grouper. The grouper itself is a separate process, not part of the FrbServer.\n\n"
-        "The command-line utility 'pirate_frb run_server' is intended to be the main\n"
+        "The command-line utility 'pirate_frb run server' is intended to be the main\n"
         "interface to the FRB search server, and uses this class under the hood (it\n"
         "builds the allocator/Receiver constructor chain, then hands the pieces to\n"
         "FrbServer). Use the class directly only if you need something the CLI does\n"
@@ -1859,8 +1906,10 @@ void register_core_bindings(pybind11::module &m)
     // consumer of an FrbServer's GpuDedisperser::output_ringbuf over CUDA IPC.
     // py::dynamic_attr() lets the Python injection attach derived attributes (the
     // parsed-yaml dicts, steady_state_it0, full_steady_ichunk, etc.).
-    // Injections (pirate_frb/rpc/FrbGrouper.py) add __enter__/__exit__ and
-    // a get_output() context manager.
+    // Injections (pirate_frb/rpc/FrbGrouper.py) override __init__ -- python
+    // callers write FrbGrouper(ip_addr, restore_cuda_device), not the one-arg
+    // init bound below -- and add __enter__/__exit__ plus a get_output()
+    // context manager.
     // The class docstring (including the read-only-attribute bullet list) lives in
     // the Python injector pirate_frb/rpc/FrbGrouper.py, NOT here: FrbGrouper's
     // primary interface is the context-manager / get_output() usage defined there,
@@ -1898,15 +1947,56 @@ void register_core_bindings(pybind11::module &m)
                "a per-batch slice (nbeams == beams_per_batch) of output_ringbuf.")
           .def("_release_output", &FrbGrouper::release_output, py::arg("seq_id"),
                "Record that the caller is done with 'seq_id' (emits CONSUMED).")
-          // Vectorized decode of out_argmax tokens, forwarding to the grouper's internal
-          // "incomplete" DedispersionPlan (deserialized at handshake). The plan's per-tree
-          // Dcore values come from the PRODUCER, so tokens decode correctly even if this
-          // process runs a different pirate_frb build. Valid only after the handshake.
+          // Vectorized decode of out_argmax tokens, through the producer's DedispersionPlan
+          // (rebuilt at handshake) and the producer's per-tree 'dcores' (sent as their own
+          // handshake field), so tokens decode correctly even if this process runs a
+          // different pirate_frb build. Valid only after the handshake.
+          //
+          // These two are what the production event path calls (pirate_frb.rpc.FrbGrouper's
+          // create_events()); unlike offline plan batches, they get Dcores from the handshake. They
+          // are covered by _check_batch_decode() in pirate_frb/tests/test_server.py, i.e. by
+          // 'test --serv' -- NOT by '--amax', which only reaches the scalar
+          // DedispersionPlan methods these loop over.
           .def("decode_argmax_batch",
                [](const FrbGrouper &self, const Array<uint> &tokens, const Array<long> &itrees,
                   const Array<long> &idms, const Array<long> &itimes) {
-                   xassert(self.incomplete_plan);   // populated at handshake
-                   return _decode_argmax_batch(*self.incomplete_plan, tokens, itrees, idms, itimes);
+                   const char *fname = "decode_argmax_batch";
+                   const DedispersionPlan &plan = *self.dedispersion_plan;   // set at handshake
+                   long n = tokens.size;
+
+                   if (n <= 0)
+                       throw runtime_error("decode_argmax_batch: empty input arrays (callers"
+                                           " should short-circuit the zero-event case)");
+
+                   _check_batch_arg(fname, "tokens", tokens, n);
+                   _check_batch_arg(fname, "itrees", itrees, n);
+                   _check_batch_arg(fname, "idms", idms, n);
+                   _check_batch_arg(fname, "itimes", itimes, n);
+
+                   Array<long> fmins({n}, af_uhost);
+                   Array<long> fmaxs({n}, af_uhost);
+                   Array<long> tlos({n}, af_uhost);
+                   Array<long> this_({n}, af_uhost);
+                   Array<long> ps({n}, af_uhost);
+
+                   // Per-element validation (out-of-range itree, malformed tokens,
+                   // out-of-range dm/time indices) all comes from decode_argmax() itself.
+                   //
+                   // The one thing that has to be guarded here is the 'dcores' lookup, since
+                   // it is indexed by the caller's itree. Its fallback value is never read:
+                   // decode_argmax() range-checks itree before it looks at Dcore, so an
+                   // out-of-range itree throws there, with that function's message.
+                   for (long i = 0; i < n; i++) {
+                       long it = itrees.data[i];
+                       long dc = ((it >= 0) && (it < plan.ntrees)) ? self.dcores.at(it) : 1;
+
+                       plan.decode_argmax(tokens.data[i], it, dc,
+                                          idms.data[i], itimes.data[i],
+                                          fmins.data[i], fmaxs.data[i], tlos.data[i],
+                                          this_.data[i], ps.data[i]);
+                   }
+
+                   return py::make_tuple(fmins, fmaxs, tlos, this_, ps);
                },
                py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
                "Vectorized decode of out_argmax tokens (see DedispersionPlan.decode_argmax\n"
@@ -1918,9 +2008,37 @@ void register_core_bindings(pybind11::module &m)
                [](const FrbGrouper &self, const Array<long> &itrees, const Array<long> &fmins,
                   const Array<long> &fmaxs, const Array<long> &tlos, const Array<long> &this_,
                   const Array<long> &ps) {
-                   xassert(self.incomplete_plan);   // populated at handshake
-                   return _decode_argmax2_batch(*self.incomplete_plan, itrees, fmins, fmaxs,
-                                                tlos, this_, ps);
+                   const char *fname = "decode_argmax2_batch";
+                   const DedispersionPlan &plan = *self.dedispersion_plan;   // set at handshake
+                   long n = itrees.size;
+
+                   if (n <= 0)
+                       throw runtime_error("decode_argmax2_batch: empty input arrays (callers"
+                                           " should short-circuit the zero-event case)");
+
+                   _check_batch_arg(fname, "itrees", itrees, n);
+                   _check_batch_arg(fname, "fmins", fmins, n);
+                   _check_batch_arg(fname, "fmaxs", fmaxs, n);
+                   _check_batch_arg(fname, "tlos", tlos, n);
+                   _check_batch_arg(fname, "this", this_, n);
+                   _check_batch_arg(fname, "ps", ps, n);
+
+                   Array<double> freqs_lo({n}, af_uhost);
+                   Array<double> freqs_hi({n}, af_uhost);
+                   Array<double> dms({n}, af_uhost);
+                   Array<double> timestamps({n}, af_uhost);
+                   Array<double> widths({n}, af_uhost);
+
+                   for (long i = 0; i < n; i++) {
+                       plan.decode_argmax2(itrees.data[i],
+                                           fmins.data[i], fmaxs.data[i], tlos.data[i],
+                                           this_.data[i], ps.data[i],
+                                           freqs_lo.data[i], freqs_hi.data[i],
+                                           dms.data[i], timestamps.data[i],
+                                           widths.data[i]);
+                   }
+
+                   return py::make_tuple(freqs_lo, freqs_hi, dms, timestamps, widths);
                },
                py::arg("itrees"), py::arg("fmins"), py::arg("fmaxs"),
                py::arg("tlos"), py::arg("this"), py::arg("ps"),
@@ -1959,7 +2077,9 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("ntrees", &FrbGrouper::ntrees)
           .def_readonly("ndm_out", &FrbGrouper::ndm_out)
           .def_readonly("nt_out", &FrbGrouper::nt_out)
+          .def_readonly("dcores", &FrbGrouper::dcores)
           .def_readonly("dedispersion_config", &FrbGrouper::dedispersion_config)
+          .def_readonly("dedispersion_plan", &FrbGrouper::dedispersion_plan)
           .def_readonly("xengine_metadata", &FrbGrouper::xengine_metadata)
           .def_readonly("xengine_metadata_yaml_string", &FrbGrouper::xengine_metadata_yaml_string)
           .def_readonly("dedispersion_config_yaml_string", &FrbGrouper::dedispersion_config_yaml_string)
@@ -1994,17 +2114,19 @@ void register_core_bindings(pybind11::module &m)
         "                       shared_host_allocator=True)")
           .def(py::init([](const std::string &ssd_root, const std::string &nfs_root,
                            int num_ssd_threads, int num_nfs_threads,
-                           long max_subscriber_backlog) {
+                           double write_delay_sec, long max_subscriber_backlog) {
                FileWriter::Params params;
                params.ssd_root = ssd_root;
                params.nfs_root = nfs_root;
                params.num_ssd_threads = num_ssd_threads;
                params.num_nfs_threads = num_nfs_threads;
+               params.write_delay_sec = write_delay_sec;
                params.max_subscriber_backlog = max_subscriber_backlog;
                return std::make_shared<FileWriter>(params);
           }),
                py::arg("ssd_root"), py::arg("nfs_root"),
                py::arg("num_ssd_threads") = 4, py::arg("num_nfs_threads") = 2,
+               py::arg("write_delay_sec") = 0.0,
                py::arg("max_subscriber_backlog") = constants::max_file_subscriber_backlog,
                "Create a FileWriter.\n\n"
                "Args:\n"
@@ -2012,6 +2134,10 @@ void register_core_bindings(pybind11::module &m)
                "    nfs_root: Absolute path to NFS directory\n"
                "    num_ssd_threads: Number of threads for SSD writes (default 4)\n"
                "    num_nfs_threads: Number of threads for NFS copies (default 2)\n"
+               "    write_delay_sec: Artificial delay (seconds) applied to every\n"
+               "        SSD->NFS copy, to simulate a slow NFS mount (default 0).\n"
+               "        Later save_paths for the same frame are hardlinks within\n"
+               "        NFS, and are not delayed.\n"
                "    max_subscriber_backlog: Max queued-but-unsent notifications per\n"
                "        SubscribeFiles subscriber; a subscriber that falls this far\n"
                "        behind is stopped with a 'fell behind' error (mainly\n"

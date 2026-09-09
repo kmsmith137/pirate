@@ -24,14 +24,14 @@ class CasmBeamformerInjections:
 
         Parameters
         ----------
-        e_in : ksgpu.Array
+        e_in : cupy.ndarray
             Input electric field array, shape (T, F, 2, 256)
             where T = time samples, F = frequency channels,
             2 = polarizations, 256 = antennas
-        feed_weights : ksgpu.Array
+        feed_weights : cupy.ndarray
             Per-feed beamforming weights, shape (F, 2, 256, 2)
             where last axis is (real, imag)
-        i_out : ksgpu.Array
+        i_out : cupy.ndarray
             Output beamformed intensities, shape (Tout, F, B)
             where Tout = T / downsampling_factor, B = number of beams
         stream : cupy.cuda.Stream or None, optional

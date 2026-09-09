@@ -36,11 +36,11 @@ from peakfinder_tests import benchmark_peakfinder_batch_timing as production
 
 
 SCHEMA_NAME = "pirate-full-band-peakfinder-kernel-comparison"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RESULTS = (
     Path(__file__).resolve().parent
-    / "results_full_band_peakfinder_kernel"
+    / "results_full_band_peakfinder_kernel_pirate15"
     / "comparison.json"
 )
 
@@ -473,6 +473,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "warmup": args.warmup,
             "iterations": args.iterations,
             "base_seed": args.base_seed,
+        },
+        "producer": {
+            "dcores": list(bundle.dcores),
+            "argmax_encoding": bundle.argmax_encoding,
+            "plan_yaml": bundle.producer_plan_yaml,
+            "trees": [dict(spec.__dict__) for spec in bundle.specs],
         },
         "gpu": gpu,
         "software": software,

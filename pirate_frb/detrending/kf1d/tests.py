@@ -1,0 +1,785 @@
+"""
+Unit tests for the fixed-lag Kalman detrender.  Dispatched from pirate_frb/__main__.py:
+
+    python -m pirate_frb test --dtk1
+
+T1-T8 are debugging tests: each has an oracle or an analytic answer, so a failure
+points at a specific line.  T9 (test_dtype_agreement) is different in kind -- it is a
+test of whether we understand where this estimator's float32 error lives and whether
+rmin is the right mask criterion -- so it is run last and reported separately.  A T9
+failure is evidence about the design, not a bug to chase.
+
+Sizes are small (tau=4, L=32, Tc=64) except where noted; the algorithm is
+size-parameterized, so small sizes exercise the same code paths.
+"""
+
+import numpy as np
+
+from ..time_masks import random_mask
+from .model import StateSpaceModel, tau_from_equivalent_W
+from .InfoFilter import forward_step, backward_step
+from .ReferenceDetrenderKf1d import ReferenceDetrenderKf1d
+from .brute_force import (detrend_brute_force, impulse_kernel, difference_matrix,
+                          _state_from_samples)
+from ..testutils import (ExpansionTally, default_rng as _default_rng,
+                         maxdiff as _maxdiff, poison_masked, random_polynomial,
+                         random_spectator_shape, random_stream_geometry)
+
+
+# Kept separate from detrending.lps1d's tally: the two detrenders expand for different
+# reasons and at wildly different rates, so a pooled number would describe neither.
+# One bucket, since nothing here splits the population the way the polynomial degree
+# splits detrending.lps1d's.
+_EXPANSION = ExpansionTally(lambda _: '')
+
+
+def _draw_geometry(rng, L, nsamp, s_max):
+    """Draw (Tc, nchunk, S_ax, T) for one streaming test at lookahead L.
+
+    The detrender imposes no relation between chunk_size and L, so the chunk is drawn
+    freely; the buffer is chunk_size + L.  See random_stream_geometry().
+    """
+    return random_stream_geometry(rng, nsamp, s_max, lag=L)
+
+
+# Scaffolding geometry, for the handful of places that need A detrender rather than a
+# particular one (the constructor-rejection probes).  L/ell = 5.7 here.
+K, TAU, LAG, TC = 2, 4.0, 32, 64
+
+# Working precision of every test in this file.  Named because test_vs_brute_force()
+# reports its errors in units of eps_mach*cond(N) rather than as absolute magnitudes.
+_EPS64 = float(np.finfo(np.float64).eps)
+
+
+def _det(**kw):
+    kw.setdefault('k', K)
+    kw.setdefault('tau', TAU)
+    kw.setdefault('L', LAG)
+    kw.setdefault('chunk_size', TC)
+    kw.setdefault('dtype', np.float64)
+    return ReferenceDetrenderKf1d(**kw)
+
+
+def _draw_tau_L(rng, nl_lo=0.5, nl_hi=10.0, tau_lo=2.0, tau_hi=16.0):
+    """Draw (tau, L) with L/ell log-uniform in [nl_lo, nl_hi].  Returns (tau, L, ell).
+
+    L/ell IS THE NUMBER THAT SAYS HOW APPROXIMATE THIS ESTIMATOR IS, and it is the axis to
+    randomize on.  The smoother has an intrinsic correlation length ell = tau/sin(pi/2k),
+    which is sqrt(2)*tau at k=2; producing the output at sample t from data up to t+L instead
+    of from the whole future costs an error of order exp(-L/ell).  So L/ell near 1 is the
+    regime where the fixed-lag truncation genuinely bites and the backward pass carries the
+    most weight, and L/ell above ~6 is the regime where it is numerically absent.
+
+    Both are drawn because both are real: the shipped detrender is sized from
+    from_equivalent_W(), which puts L at n_ell = 4 ell by default, but nothing in
+    ReferenceDetrenderKf1d requires it -- L >= 1 is the only constraint.
+
+    'tau' is drawn too, log-uniformly, since it sets the absolute scale that ell and the
+    per-sample arithmetic both inherit.
+
+    Callers that need a LARGE L/ell pass nl_lo: see test_kernel_response(), which measures a
+    limit that only exists as L -> infinity, and test_polynomial_exactness()'s second arm.
+    """
+    tau = float(np.exp(rng.uniform(np.log(tau_lo), np.log(tau_hi))))
+    ell = tau / np.sin(np.pi / (2*K))
+    nl = float(np.exp(rng.uniform(np.log(nl_lo), np.log(nl_hi))))
+    return tau, max(1, int(round(nl * ell))), ell
+
+
+# --------------------------------------------------------------------- T1. model
+
+def test_model_algebra(rng=None, verbose=True):
+    rng = _default_rng(rng)
+    worst = 0.0
+
+    for k in (2, 3, 4):
+        for tau in (2.0, 4.0, 37.5):
+            mo = StateSpaceModel(k, tau, dtype=np.float64)
+
+            # A and A^-1 are exact integer matrices (no rescaling), so these are
+            # array_equal rather than allclose.
+            N = np.diag(np.ones(k-1), 1)
+            assert np.array_equal(mo.A, np.eye(k) + N), f'A != I+N at k={k}'
+            assert np.array_equal(mo.A @ mo.Ainv, np.eye(k)), f'A Ainv != I at k={k}'
+            assert np.array_equal(mo.Ainv @ mo.A, np.eye(k)), f'Ainv A != I at k={k}'
+
+            # A^s is the Pascal matrix; check it against repeated multiplication.
+            P = np.eye(k)
+            for s in range(0, 5):
+                assert np.array_equal(P, mo.A_pow(s)), f'A^{s} != Pascal at k={k}'
+                P = P @ mo.A
+
+            # parameter round-trip
+            worst = max(worst, abs(mo.rho - tau**(2*k))/mo.rho)
+            worst = max(worst, abs(mo.q*mo.rho - 1.0))
+            worst = max(worst, abs(mo.invq - mo.rho)/mo.rho)
+            s_ = np.sin(np.pi/(2*k))
+            worst = max(worst, abs(mo.ell - tau/s_)/mo.ell)
+            worst = max(worst, abs(mo.c_k - 1.0/(2*k*s_))*2*k)
+            worst = max(worst, abs(mo.ell - 2*k*mo.c_k*tau)/mo.ell)
+
+    # tau matched to a local polynomial fit of half-width W
+    assert abs(tau_from_equivalent_W(2, 256)/256 - 0.3143) < 1e-3
+
+    # k != 2 must be rejected by the detrender even though the model supports it.
+    for bad in (1, 3):
+        try:
+            _det(k=bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f'ReferenceDetrenderKf1d accepted k={bad}')
+
+    if verbose:
+        print(f'    T1 test_model_algebra: A, A^-1, A^s exact; params round-trip to {worst:.2e}')
+    assert worst < 1e-14
+
+
+# ------------------------------------------------------- T2. recursions vs dense
+
+def _dense_state_posterior(d_row, m_row, n_obs, k, tau):
+    """
+    Dense posterior of f on [0, n-1], where only the first 'n_obs' samples are observed.
+
+    Returns (Sigma, fhat_all, cond) with Sigma = N^-1, or None if the sub-problem
+    holds fewer than k valid samples, where N is singular and there is nothing to
+    compare against.
+
+    The trailing n - n_obs samples are unobserved on purpose: the forward filter's
+    state x[t] involves f[t..t+k-1], so the dense analogue has to extend past the
+    last observation.
+
+    'cond' is cond_1(N), which is HOW ACCURATE THIS ORACLE IS: an explicit inverse
+    costs about eps_mach*cond(N) of relative accuracy, and cond(N) is set by the draw
+    (tau^(2k) alone spans three decades).  Callers scale their tolerance by it rather
+    than comparing against a constant -- see test_recursions_vs_dense(), and the
+    longer discussion in detrend_brute_force() in brute_force.py.
+    """
+    n = len(m_row)
+    m_sub = m_row.astype(np.float64).copy()
+    m_sub[n_obs:] = 0.0
+    if m_sub.sum() < k:
+        return None
+    D = difference_matrix(n, k)
+    N = np.diag(m_sub) + (tau ** (2*k))*(D.T @ D)
+    Sigma = np.linalg.inv(N)
+    cond = float(np.abs(N).sum(axis=0).max() * np.abs(Sigma).sum(axis=0).max())
+    return Sigma, Sigma @ (m_sub * d_row), cond
+
+
+def _run_recursions(d_row, m_row, t, k, tau, L):
+    """Forward filter to t, backward over [t+1,t+L], and their sum.
+
+    One row, in plain python, so the test does not depend on ReferenceDetrenderKf1d's
+    chunking."""
+    mo = StateSpaceModel(k, tau, dtype=np.float64)
+    J = np.zeros((k, k))
+    eta = np.zeros(k)
+    for u in range(t+1):
+        Jm, em, J, eta = forward_step(J, eta, np.array(m_row[u]), np.array(d_row[u]), mo)
+    Jf, ef = Jm, em
+
+    Jb = np.zeros((k, k))
+    eb = np.zeros(k)
+    for u in range(t+L, t, -1):
+        Jb, eb = backward_step(Jb, eb, np.array(m_row[u]), np.array(d_row[u]), mo)
+    return (Jf, ef), (Jb, eb), (Jf+Jb, ef+eb)
+
+
+def test_recursions_vs_dense(rng=None, niter=3, verbose=True):
+    """
+    The test that pins the signs and the A vs A^-T placement.
+
+    Two independent dense comparisons: the forward filter alone against the posterior
+    of [0,t], and the combination against the posterior of [0,t+L].  Those two pin the
+    BACKWARD recursion as well, since J_b = J - J_f is then determined by difference
+    -- which is why there is no separate dense backward oracle here (the backward
+    factor is a likelihood, not a distribution, so it has no clean dense analogue).
+    """
+    rng = _default_rng(rng)
+    k = K
+    # The dense oracle inverts an (n x n) matrix per probe, with n up to t+L+1, so tau is
+    # capped well below the file's usual range.
+    tau, L, _ell = _draw_tau_L(rng, tau_hi=6.0)
+    C = _state_from_samples(k)
+    worst_f, worst_c = 0.0, 0.0
+    nchecked = 0
+
+    # The probes sit at fixed fractions of the stream, and the combined comparison reads
+    # [0, t+L], so T HAS TO SCALE WITH L.  A constant T is safe only while L is a constant
+    # too: the deepest probe needs T > max(probes) + L + 1.
+    T = 3*L + 12
+    probes = (T//8, T//4, T//2)
+
+    for _ in range(niter):
+        mask = random_mask(6, T, L, rng)[0]
+        d = rng.normal(size=(6, T))
+        for s in range(6):
+            for t in probes:
+                m_row, d_row = mask[s].astype(float), d[s]
+                (Jf, ef), _, (J, e) = _run_recursions(d_row, m_row, t, k, tau, L)
+
+                # forward alone: sub-problem on [0, t+k-1], observed only to t.
+                n = t + k
+                got = _dense_state_posterior(d_row[:n], m_row[:n], t+1, k, tau)
+                if got is not None:
+                    Sig, fh, cnd = got
+                    Jd = np.linalg.inv(C @ Sig[t:t+k, t:t+k] @ C.T)
+                    ed = Jd @ (C @ fh[t:t+k])
+                    scale = _EPS64 * cnd
+                    worst_f = max(worst_f, _maxdiff(Jf, Jd)/max(1.0, np.abs(Jd).max())/scale)
+                    worst_f = max(worst_f, _maxdiff(ef, ed)/max(1.0, np.abs(ed).max())/scale)
+
+                # combined: sub-problem on [0, t+L], all observed.
+                n = t + L + 1
+                got = _dense_state_posterior(d_row[:n], m_row[:n], n, k, tau)
+                if got is None:
+                    continue
+                Sig, fh, cnd = got
+                Jd = np.linalg.inv(C @ Sig[t:t+k, t:t+k] @ C.T)
+                ed = Jd @ (C @ fh[t:t+k])
+                scale = _EPS64 * cnd
+                worst_c = max(worst_c, _maxdiff(J, Jd)/max(1.0, np.abs(Jd).max())/scale)
+                worst_c = max(worst_c, _maxdiff(e, ed)/max(1.0, np.abs(ed).max())/scale)
+                nchecked += 1
+
+    if verbose:
+        print(f'    T2 test_recursions_vs_dense: {nchecked} points; forward {worst_f:.3f}, '
+              f'combined {worst_c:.3f} (x eps_mach*cond(N), relative)')
+    assert nchecked > 0
+    # Scaled by the dense oracle's own conditioning, for the reason spelled out in
+    # test_vs_brute_force() below: the flat 1e-8 that stood here was really a statement
+    # about how well-conditioned the draw happened to be, and it failed on about 0.3% of
+    # seeds.  Measured over 250 seeds (~12000 probe points) the worst ratio was 0.262
+    # forward and 0.683 combined, medians 0.046 and 0.075, so 20.0 leaves a factor of
+    # ~29 above the worst seen.
+    assert worst_f < 20.0, f'forward filter vs dense: {worst_f:.3f} x eps_mach*cond(N)'
+    assert worst_c < 20.0, f'combined vs dense: {worst_c:.3f} x eps_mach*cond(N)'
+
+
+# --------------------------------------------------- T3. polynomial exactness
+
+def test_polynomial_exactness(rng=None, verbose=True):
+    """
+    Checks which polynomial trends the estimator annihilates, and how exactly.
+
+    Degree <= k-1 is annihilated exactly, for any mask and any position, because
+    f = P zeroes BOTH terms of chi^2.  That is the analytic, tolerance-free test.
+
+    Degrees k .. 2k-1 are annihilated only on the infinite array: the obstruction is
+    an array endpoint, not a mask edge, and the fixed-lag estimator always has one L
+    away.  So degree 2k-1 is asserted two-sided -- O(1) near the stream start where
+    the left endpoint is close, and O(exp(-L/ell)) in the interior -- which is what
+    keeps either half from silently regressing.
+    """
+    rng = _default_rng(rng)
+    k = K
+    results = []
+
+    for dtype, tol in ((np.float64, 1e-10), (np.float32, 1e-4)):
+        for nsamp, s_max in ((1536, 8), (2048, 4)):
+            # Exact for any L: f = P zeroes both terms of chi^2, so the whole L/ell range is
+            # in scope here and nothing below is a tolerance on the truncation.
+            tau, L, _ell = _draw_tau_L(rng)
+            Tc, nchunk, S_ax, T = _draw_geometry(rng, L, nsamp, s_max)
+            worst, lbl = 0.0, '-'
+            mask, labels = random_mask(S_ax, T, L, rng)
+            P = random_polynomial(rng, S_ax, T, k-1, tau, dtype)
+            det = ReferenceDetrenderKf1d(k=k, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
+            resid, mko, _ = det.detrend_stream(P, mask)
+            _EXPANSION.note(None, mask[:, :T-L], mko)
+            for s in range(S_ax):
+                if not mko[s].any():
+                    continue
+                e = float(np.max(np.abs(resid[s][mko[s]])))
+                if e > worst:
+                    worst, lbl = e, labels[s]
+                assert e < tol, (f'T3 [{np.dtype(dtype).name} tau={tau:.3g} L={L} mask={labels[s]}]: '
+                                 f'deg<=k-1 residual {e:.3e} > {tol:.1e}')
+            results.append((np.dtype(dtype).name, tau, L/_ell, worst, lbl))
+
+    # (E2) two-sided at deg = 2k-1, on a fully valid mask so the only endpoint is the
+    # array's.
+    #
+    # THIS ARM NEEDS A LARGE L/ell AND THE OTHER ONE DOES NOT.  What it asserts is that the
+    # interior residual is suppressed by exp(-L/ell) relative to the head; at L/ell ~ 1 that
+    # factor is 0.4, the measured ratio is ~0.6, and the assertion is satisfied by arithmetic
+    # rather than by the estimator being right (the interior residual cannot exceed the head
+    # one by much in any case).  Drawn in [4, 10], where exp(-L/ell) is 1.8e-2 down to 4.5e-5
+    # and the bound has teeth.
+    tau, L, ell = _draw_tau_L(rng, nl_lo=4.0, tau_hi=8.0)
+    nl = L / ell
+    # THE INTERIOR WINDOW IS MEASURED IN ell AND THE STREAM IN L, so the chunk has to be long
+    # enough in BOTH units or the window below starts past the end of the output (length
+    # T - L).  12*ell is the smallest that leaves the window non-empty at nl = 4.
+    Tc = max(4*L, int(12*ell))
+    T = 2*Tc + L
+    det = ReferenceDetrenderKf1d(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
+    P = random_polynomial(rng, 1, T, 2*k-1, tau, np.float64)
+    r3, _, _ = det.detrend_stream(P, np.ones((1, T), dtype=bool))
+    hw, iw = int(2*ell), int(8*ell)
+    head = float(np.max(np.abs(r3[0, :hw])))
+    interior = float(np.max(np.abs(r3[0, iw:])))
+
+    # BOTH RESIDUALS ARE NORMALIZED BY THE POLYNOMIAL'S OWN CURVATURE over the window
+    # they are measured on.  Degrees <= k-1 are annihilated EXACTLY, so what can leak
+    # anywhere is the part of P that is not locally linear there -- and over 40000
+    # draws log(head) tracks log(curvature at the head) with correlation +0.99.
+    #
+    # Without that normalization the comparison is a lottery, and this was a real
+    # 0.03%-per-iteration flake (about one run of 'pirate_frb test' in 25).  P is a
+    # random cubic; on roughly 0.02% of draws its INFLECTION POINT lands in the first
+    # 2% of the buffer, P is then locally LINEAR at the stream start, the detrender
+    # reproduces it exactly, and 'head' collapses by two decades while 'interior' is
+    # untouched.  A bare interior/head then explodes with nothing wrong: measured, the
+    # failing draws had a head curvature 100x below the typical draw's.
+
+    def _d2(q):
+        # Max |second difference| over 'q', in the detrender's own length unit.
+        return float(np.max(np.abs(q[:-2] - 2*q[1:-1] + q[2:]))) * tau**2
+
+    d2_head, d2_int = _d2(P[0, :hw+2]), _d2(P[0, iw:])
+
+    # THE DECAY IS FLOORED AT THE INTERIOR WINDOW'S OWN POSITION.  The window starts at
+    # 8*ell, so the stream-start transient there is already down by exp(-8) however
+    # large L is, and no L can buy more suppression than the window placement already
+    # gives.  Without the floor the bound keeps tightening past L/ell ~ 8 while the
+    # measured ratio flattens, so the margin drifts upward across the draw range --
+    # measured, the bin medians ran 0.03 at L/ell in [4,5) to 0.22 at [9,10) before
+    # this, and 0.95 to 1.50 with no trend after.
+    bound = max(float(np.exp(-nl)), float(np.exp(-iw/ell)))
+    head_n = head / max(d2_head, 1e-300)
+    ratio = (interior / max(d2_int, 1e-300)) / max(head_n, 1e-300)
+    margin = ratio / bound
+
+    if verbose:
+        for name, tau_, nl_, w, lbl in results:
+            print(f'    T3 test_polynomial_exactness [{name} tau={tau_:.3g} L/ell={nl_:.1f}]: '
+                  f'max|resid| = {w:.2e} ({lbl})')
+        print(f'      deg={2*k-1} two-sided: head {head:.2e} (norm {head_n:.3f}), '
+              f'interior {interior:.2e}, margin {margin:.3f} x the exp(-L/ell) bound')
+    # Both constants are empirical, measured over 40000 draws of this geometry.
+    # Normalized head ran [0.315, 0.955], so 0.05 is 6x below anything seen and fires
+    # only if the stream-start effect has genuinely gone.  Margin ran median 1.30,
+    # p99.9 2.38, max 3.56 -- a spread of 2.7 across the whole sample -- so 20 leaves
+    # a factor of 5.6 above the worst.  A failure here is a real regression, not a
+    # draw: the metric no longer depends on where the cubic's inflection point fell.
+    assert head_n > 0.05, (f'deg 2k-1 should NOT be reproduced near the stream start: '
+                           f'head/curvature = {head_n:.3f}')
+    assert margin < 20.0, (f'deg 2k-1 not suppressed as exp(-L/ell) in the interior: '
+                           f'{margin:.3f} x the bound')
+
+
+# ------------------------------------------------------------- T4. seam freedom
+
+def test_seam_free(rng=None, verbose=True):
+    """
+    The headline test: the outputs must not depend on how the stream is split into chunks.
+
+    Because J_f and J_b are driven by the input mask alone, mask_out and rmin are
+    bit-identical across chunk decompositions unconditionally.  The residual is
+    bit-identical only when kappa is held fixed: with a per-buffer kappa the
+    decompositions see different buffers, so the residual differs by pure rounding.
+    Asserting bit-identity there would be asserting something false.
+    """
+    rng = _default_rng(rng)
+    k = K
+    tau, L, _ell = _draw_tau_L(rng)
+    # nout is a multiple of 8 so that the four decompositions below are exact; the
+    # spectator count and the stream length are otherwise free.
+    S_ax, nblk = random_spectator_shape(rng, 192, first_max=8)
+    nout = 8 * max(nblk, 1)
+    T = nout + L
+    mask, _ = random_mask(S_ax, T, L, rng)
+    d = rng.normal(size=(S_ax, T)) + 5.0
+    sizes = (nout, nout//2, nout//4, nout//8)
+
+    worst_r = 0.0
+    for offs in (False, True):
+        ref = None
+        for Tc in sizes:
+            det = ReferenceDetrenderKf1d(k=k, tau=tau, L=L, chunk_size=Tc,
+                                  dtype=np.float64, subtract_offset=offs)
+            out = det.detrend_stream(d, mask)
+            if ref is None:
+                ref = out
+                _EXPANSION.note(None, mask[:, :nout], out[1])
+                continue
+            for j, nm in ((1, 'mask_out'), (2, 'rmin')):
+                assert np.array_equal(out[j], ref[j]), \
+                    f'T4: {nm} not bit-identical at chunk_size={Tc} (subtract_offset={offs})'
+            if not offs:
+                assert np.array_equal(out[0], ref[0]), \
+                    f'T4: residual not bit-identical at chunk_size={Tc} with fixed kappa'
+            else:
+                worst_r = max(worst_r, _maxdiff(out[0], ref[0]))
+
+    if verbose:
+        print(f'    T4 test_seam_free: mask_out/rmin bit-identical over '
+              f'chunk sizes {sizes}; residual bit-identical at fixed kappa, '
+              f'{worst_r:.2e} with per-buffer kappa')
+    assert worst_r < 1e-12
+
+
+# --------------------------------------------------------- T5. vs the dense oracle
+
+def test_vs_brute_force(rng=None, verbose=True):
+    rng = _default_rng(rng)
+    k = K
+    # THE ORACLE IS O(S_ax * nout * T^3): it inverts an (n x n) matrix for every (row, output
+    # sample) pair, with n running up to T.  So T is what has to be bounded here, not L --
+    # and since T = 2*Tc + L, bounding T is what bounds the draw.  BUDGET is that product,
+    # at about what (S_ax, L, Tc) = (6, 16, 32) costs.
+    BUDGET = 6 * 64 * 80**3
+    tau, L, _ell = _draw_tau_L(rng, tau_hi=8.0)
+    Tc = max(2*k, int(rng.integers(L, 3*L + 1)))
+    T = 2*Tc + L
+    worst_r, worst_l, name, worst_cond = 0.0, 0.0, '', 0.0
+
+    for _ in range(2):
+        S_ax = max(1, min(6, int(BUDGET // ((T - L) * T**3))))
+        S_ax = int(rng.integers(1, S_ax + 1))
+        mask, labels = random_mask(S_ax, T, L, rng)
+        d = rng.normal(size=(S_ax, T)) + 2.0
+        det = ReferenceDetrenderKf1d(k=k, tau=tau, L=L, chunk_size=Tc, dtype=np.float64)
+        r, mk, rmn = det.detrend_stream(d, mask)
+        br, bmk, brmn, bcond = detrend_brute_force(d, mask, k, tau, L, eps=det.eps,
+                                                  return_cond=True)
+        _EXPANSION.note(None, mask[:, :T-L], mk)
+
+        assert np.array_equal(mk, bmk), (
+            f'T5: mask_out differs from the oracle on '
+            f'{int((mk != bmk).sum())} samples, masks {labels}')
+        if mk.any():
+            # BOTH TOLERANCES ARE SCALED BY THE ORACLE'S OWN CONDITIONING, PER SAMPLE,
+            # and the numbers below are in units of that bound rather than absolute.
+            # detrend_brute_force() forms an explicit inverse of an n x n matrix per
+            # output sample, which costs about eps_mach*cond(N) of relative accuracy;
+            # n runs up to T and cond(N) is set by the draw, since rho = tau^(2k)
+            # spans three decades on its own.  A FIXED tolerance here is therefore an
+            # assertion about the luck of the draw, not about the implementation --
+            # the 1e-9 that stood here failed on about 3% of seeds, and its worst
+            # observed miss (6.1e-08) was a well-conditioned all-valid mask whose
+            # oracle simply had no business being accurate to 1e-9.
+            #
+            # NOT the r_min of detrending.lps2d/solve.py, which is the house idiom
+            # for the same problem.  It does not transfer: r_min measures the k x k
+            # LOCAL fit, not the n x n solve, and over 5770 kept samples its
+            # correlation with this error is +0.05 -- none.  cond(N) reaches +0.60,
+            # and bounds the error to within a factor of 7 across four decades.
+            #
+            # cond_1(N) >= 1 always, so the division is safe on any kept sample.
+            tol = _EPS64 * bcond[mk] * max(1.0, float(np.abs(d).max()))
+            e = float((np.abs(r - br)[mk] / tol).max())
+            if e > worst_r:
+                worst_r, name = e, str(labels)
+                worst_cond = float(bcond[mk].max())
+            worst_l = max(worst_l, float((np.abs(rmn - brmn)[mk] / tol).max()))
+
+    if verbose:
+        print(f'    T5 test_vs_brute_force: residual {worst_r:.3f} x eps_mach*cond(N)*|d|, '
+              f'rmin {worst_l:.3f} x the same bound (worst cond(N) {worst_cond:.1e})')
+    # THE CONSTANT IS EMPIRICAL, NOT A THEOREM -- the same caveat solve.py attaches to
+    # eps_mach/r_min.  Over 300 seeds the worst ratio reported here was 0.103 for the
+    # residual and 0.011 for rmin, medians 0.034 and 0.003, so 4.0 leaves a factor of
+    # ~39 above the worst seen.  A failure here is a real disagreement with the oracle,
+    # not an unlucky draw; do not raise it without first checking that cond(N) has not
+    # itself blown up.
+    assert worst_r < 4.0, \
+        f'residual vs oracle: {worst_r:.3f} x eps_mach*cond(N)*|d| ({name})'
+    assert worst_l < 4.0, \
+        f'rmin vs oracle: {worst_l:.3f} x eps_mach*cond(N)*|d|'
+
+
+# ----------------------------------------------------- T6. steady-state response
+
+def test_kernel_response(rng=None, verbose=True):
+    """
+    On a full mask, the equivalent kernel at zero lag must approach h[0] = c_k/tau.
+
+    The closed form is from notes/detrending.tex, section "Time detrending
+    algorithm 2: Kalman filter", subsection "Response and numerics".
+
+    This is the strongest check in the file: the expected answer is analytic, so it
+    needs neither the dense oracle nor a statistical tolerance, and it exercises the
+    forward recursion, the backward recursion and the combine together.
+
+    c_k/tau is the continuum limit, approached from above as O(tau^-2) (measured
+    3.0e-2, 7.7e-3, 2.0e-3 at tau = 2, 4, 8), so what is asserted is the rate of
+    approach rather than a fixed tolerance.  Both the history behind the output
+    sample and the lag ahead of it must be several ell = tau/sin(pi/2k), or the
+    forward filter is still spinning up and the deviation is dominated by that
+    instead -- hence Tc and L scale with tau below.
+
+    THE ONE TEST HERE THAT DOES NOT DRAW ITS L/ell, and deliberately: c_k/tau is the
+    INFINITE-lag limit, so a small L is exactly what stops h[0] reaching it.  Measured over
+    the fixed tau sweep below, |h[0]/(c_k/tau) - 1| at L/ell = 0.5, 1, 2, 4 is
+    (0.76, 1.08, 0.95), (0.22, 0.17, 0.20), (0.100, 0.090, 0.080), (0.031, 0.008, 0.003):
+    below L/ell = 4 the deviation is not even monotone in tau, and the O(tau^-2) assertion
+    fails outright.  L/ell = 11 and 23 here.  See _draw_tau_L() for the tests that do draw.
+    """
+    k = K
+    c_k = 1.0 / (2*k*np.sin(np.pi/(2*k)))
+    devs = []
+
+    for tau in (2.0, 4.0, 8.0):
+        # ell = sqrt(2) tau at k=2; 64 samples is 11 ell at tau=8, 23 at tau=4.
+        n = int(64 * max(1.0, tau/4.0))
+        det = ReferenceDetrenderKf1d(k=k, tau=tau, L=n, chunk_size=n, dtype=np.float64,
+                              subtract_offset=False)
+        base = np.ones(det.buflen, dtype=bool)
+        t_out = n - 1                    # deepest into the chunk, so J_f is in steady state
+        kern, mk = impulse_kernel(det, base, t_out)
+        assert bool(mk[0]), 'T6: full-mask output was mask-expanded away'
+        h0 = float(kern[t_out])
+        assert 0.0 <= h0 <= 1.0, f'T6: h[0] outside [0,1]: {h0}'
+        devs.append(abs(h0/(c_k/tau) - 1.0))
+
+    if verbose:
+        print(f'    T6 test_kernel_response: |h[0]/(c_k/tau) - 1| = '
+              + ', '.join(f'{d:.2e}' for d in devs) + ' at tau = 2, 4, 8')
+    assert devs[0] > devs[1] > devs[2], \
+        f'continuum limit c_k/tau not approached: {devs}'
+    # O(tau^-2), so each doubling should gain a factor near 4; 3.0 leaves margin.
+    assert devs[0]/devs[1] > 3.0 and devs[1]/devs[2] > 3.0, \
+        f'approach to c_k/tau not O(tau^-2): {devs}'
+    assert devs[2] < 3e-3, f'h[0] vs c_k/tau at tau=8: {devs[2]}'
+
+
+# ------------------------------------------------------------ T7. PSD and finite
+
+def test_psd_and_finite(rng=None, verbose=True):
+    """
+    The recursions must stay symmetric, PSD and finite under every mask in the zoo.
+
+    "Every mask" includes all-masked rows and rows with a single valid sample.  The
+    only divide must never approach zero: beta >= 1/q always, by positive
+    semidefiniteness of J.
+    """
+    rng = _default_rng(rng)
+    k = K
+    # Scale-free: symmetry, PSD and beta >= 1/q hold at any lag, so the full L/ell range
+    # is in scope.
+    tau, L, _ell = _draw_tau_L(rng)
+    worst_asym, min_beta_ratio = 0.0, np.inf
+    nstep = 0
+
+    # PSD is exact in exact arithmetic, so the tolerance is pure roundoff and has to
+    # be per-dtype: a single loose threshold would hide a real fp64 failure behind
+    # fp32's noise.  Measured worst case is ~1e-17 (fp64) and ~1e-8 (fp32).
+    worst_neg = {np.dtype(np.float64): 0.0, np.dtype(np.float32): 0.0}
+    neg_tol = {np.dtype(np.float64): 1e-13, np.dtype(np.float32): 1e-6}
+
+    for dtype in (np.float64, np.float32):
+        mo = StateSpaceModel(k, tau, dtype=dtype)
+        # The per-sample python loop below is O(T), so the budget is spent on rows.
+        S_ax, T = random_spectator_shape(rng, 2304, first_max=48)
+        mask, _ = random_mask(S_ax, T, L, rng)
+        d = (rng.normal(size=(S_ax, T)) + 3.0).astype(dtype)
+        m = mask.astype(dtype)
+
+        for name, step in (('forward', forward_step), ('backward', backward_step)):
+            J = np.zeros((S_ax, k, k), dtype=dtype)
+            eta = np.zeros((S_ax, k), dtype=dtype)
+            for u in range(T):
+                beta = J[:, k-1, k-1] + mo.invq
+                min_beta_ratio = min(min_beta_ratio, float((beta/mo.invq).min()))
+                if name == 'forward':
+                    _Jm, _em, J, eta = step(J, eta, m[:, u], d[:, u], mo)
+                else:
+                    J, eta = step(J, eta, m[:, u], d[:, u], mo)
+                assert np.all(np.isfinite(J)) and np.all(np.isfinite(eta)), \
+                    f'T7: non-finite in {name} at u={u} ({np.dtype(dtype).name})'
+                worst_asym = max(worst_asym, _maxdiff(J, np.swapaxes(J, -1, -2)))
+                ev = np.linalg.eigvalsh(J.astype(np.float64))
+                scale = np.maximum(np.abs(ev).max(axis=-1), 1e-300)
+                worst_neg[np.dtype(dtype)] = max(worst_neg[np.dtype(dtype)],
+                                                 float((-ev.min(axis=-1)/scale).max()))
+                nstep += 1
+
+    # The full path, over the zoo, must also be finite everywhere.
+    for dtype in (np.float64, np.float32):
+        Tc, nchunk, S_ax, T = _draw_geometry(rng, L, 3456, 24)
+        det = ReferenceDetrenderKf1d(k=k, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
+        mask, _ = random_mask(S_ax, T, L, rng)
+        d = (rng.normal(size=(S_ax, T)) + 3.0).astype(dtype)
+        outs = det.detrend_stream(d, mask)
+        _EXPANSION.note(None, mask[:, :T-L], outs[1])
+        for nm, x in zip(('residual', 'mask_out', 'rmin'), outs):
+            assert np.all(np.isfinite(np.asarray(x, dtype=np.float64))), \
+                f'T7: non-finite {nm} ({np.dtype(dtype).name})'
+
+    if verbose:
+        neg = '  '.join(f'{dt.name} {v:.2e}' for dt, v in worst_neg.items())
+        print(f'    T7 test_psd_and_finite: {nstep} recursion steps; symmetry '
+              f'{worst_asym:.2e}, min beta/(1/q) = {min_beta_ratio:.4f}')
+        print(f'      worst relative negative eigenvalue: {neg}')
+    assert worst_asym < 1e-12
+    for dt, v in worst_neg.items():
+        assert v < neg_tol[dt], f'J went indefinite in {dt.name}: {v}'
+    assert min_beta_ratio >= 1.0 - 1e-12, f'beta fell below 1/q: {min_beta_ratio}'
+
+
+# ----------------------------------------------------- T8. masked data unread
+
+def test_masked_data_unused(rng=None, verbose=True):
+    """
+    Masked samples must never be read.
+
+    Checked by poisoning them and requiring every output to be BIT-IDENTICAL -- and,
+    unlike detrending.lps1d, the carried state too: a NaN reaching the state would
+    destroy every subsequent output of that row forever, which is the one failure
+    mode this estimator has and the local fit does not.
+    """
+    rng = _default_rng(rng)
+    checked = 0
+
+    for dtype in (np.float32, np.float64):
+        for nsamp in (2304, 3072):
+            # Bit-identity under poisoning holds at any lag.
+            tau, L, _ell = _draw_tau_L(rng)
+            Tc, nchunk, S_ax, T = _draw_geometry(rng, L, nsamp, 12)
+            mask, _ = random_mask(S_ax, T, L, rng)
+            clean = rng.normal(size=(S_ax, T)) + rng.uniform(0.0, 1e3)
+            poison = poison_masked(rng, clean, mask)
+
+            def run(x):
+                det = ReferenceDetrenderKf1d(k=K, tau=tau, L=L, chunk_size=Tc, dtype=dtype)
+                st = det.initial_state(S_ax)
+                outs = None
+                for i in range(nchunk):
+                    lo = i*Tc
+                    o, st = det.detrend_chunk(x.astype(dtype)[:, lo:lo+det.buflen],
+                                              mask[:, lo:lo+det.buflen], st)
+                    outs = o if outs is None else tuple(
+                        np.concatenate([a, b], axis=1) for a, b in zip(outs, o))
+                return outs, st
+
+            (oc, sc), (op, sp) = run(clean), run(poison)
+            for nm, x, y in zip(('residual', 'mask_out', 'rmin'), oc, op):
+                assert np.array_equal(x, y), \
+                    f'T8: {nm} changed under poisoning ({np.dtype(dtype).name}, tau={tau:.3g})'
+                checked += 1
+            for nm, x, y in ((f'state.J', sc.J, sp.J), ('state.eta', sc.eta, sp.eta),
+                             ('state.kappa', sc.kappa, sp.kappa)):
+                assert np.array_equal(x, y), \
+                    f'T8: {nm} changed under poisoning ({np.dtype(dtype).name}, tau={tau:.3g})'
+                checked += 1
+
+    if verbose:
+        print(f'    T8 test_masked_data_unused: {checked} arrays bit-identical under '
+              f'nan/inf/+-1e10 poisoning (outputs and carried state)')
+
+
+# ------------------------------------------- T9. dtype agreement (gated: see above)
+
+def test_dtype_agreement(rng=None, tol=1e-3, verbose=True):
+    """
+    Compares fp32 against fp64 through the whole pipeline.
+
+    A constant offset ~ U(0,1e3) exercises the kappa path, and a long stream checks
+    that the discrepancy does NOT grow with time -- which is the direct test of
+    whether the forward filter's exponential forgetting really bounds the
+    accumulated state error.
+
+    The two runs use different eps (1e-3 fp32, 1e-6 fp64) so that the test exercises
+    samples whose rmin roundoff could move them across the threshold; residuals are
+    compared on the intersection of the two masks.
+
+    Also reports max|rmin32 - rmin64|, which is the quantity eps has to clear for the
+    masking decision to be well defined.
+    """
+    rng = _default_rng(rng)
+    eps32, eps64 = 1e-3, 1e-6
+    worst, worst_name, worst_rmin = 0.0, '', 0.0
+    drift = []
+
+    for nsamp, s_max in ((3072, 12), (3072, 4)):
+        tau, L, _ell = _draw_tau_L(rng)
+        for _ in range(2):
+            Tc, nchunk, S_ax, T = _draw_geometry(rng, L, nsamp, s_max)
+            mask, labels = random_mask(S_ax, T, L, rng)
+            offset = rng.uniform(0.0, 1e3)
+            d64 = rng.normal(size=(S_ax, T)) + offset
+            d32 = d64.astype(np.float32)
+            dref = d32.astype(np.float64)          # bit-identical inputs
+
+            r32, m32, q32 = ReferenceDetrenderKf1d(k=K, tau=tau, L=L, chunk_size=Tc,
+                                            dtype=np.float32, eps=eps32
+                                            ).detrend_stream(d32, mask)
+            r64, m64, q64 = ReferenceDetrenderKf1d(k=K, tau=tau, L=L, chunk_size=Tc,
+                                            dtype=np.float64, eps=eps64
+                                            ).detrend_stream(dref, mask)
+            _EXPANSION.note(None, mask[:, :T-L], m32)
+            both = m32 & m64
+            worst_rmin = max(worst_rmin, _maxdiff(q32, q64))
+            for s in range(S_ax):
+                if not both[s].any():
+                    continue
+                e = _maxdiff(r32[s][both[s]], r64[s][both[s]])
+                if e > worst:
+                    worst, worst_name = e, f'tau={tau:.3g} L/ell={L/_ell:.1f} {labels[s]} offset={offset:.3g}'
+
+    # Does the error grow with time?  Split a long stream into thirds and compare the
+    # worst discrepancy in each.
+    # The LAG is drawn like everything else, but the stream geometry is pinned: the point
+    # is a long stream cut into many chunks, so that the three thirds are far enough apart
+    # for growth to show.
+    tau, L, _ell = _draw_tau_L(rng)
+    Tc, nchunk, S_ax = 64, 24, 8
+    T = nchunk*Tc + L
+    mask = np.ones((S_ax, T), dtype=bool)
+    d64 = rng.normal(size=(S_ax, T)) + rng.uniform(0.0, 1e3)
+    d32 = d64.astype(np.float32)
+    r32, m32, _ = ReferenceDetrenderKf1d(k=K, tau=tau, L=L, chunk_size=Tc,
+                                  dtype=np.float32).detrend_stream(d32, mask)
+    r64, m64, _ = ReferenceDetrenderKf1d(k=K, tau=tau, L=L, chunk_size=Tc,
+                                  dtype=np.float64).detrend_stream(
+                                      d32.astype(np.float64), mask)
+    nout = T - L
+    for a, b in ((0, nout//3), (nout//3, 2*nout//3), (2*nout//3, nout)):
+        drift.append(_maxdiff(r32[:, a:b], r64[:, a:b]))
+
+    if verbose:
+        print(f'    T9 test_dtype_agreement: max |r32-r64| = {worst:.3e} sigma ({worst_name})')
+        print(f'      max |rmin32-rmin64| = {worst_rmin:.3e}  (eps32={eps32:.0e})')
+        print(f'      drift over a {nout}-sample stream, by third: '
+              f'{" ".join(f"{x:.2e}" for x in drift)}')
+    assert worst < tol, f'T9: max |r32-r64| = {worst:.3e} > {tol:.0e} ({worst_name})'
+    assert worst_rmin < 0.1*eps32, \
+        f'T9: rmin fp32 noise {worst_rmin:.3e} is not clear of eps={eps32:.0e}'
+    assert drift[2] < 10*max(drift[0], 1e-12), \
+        f'T9: fp32-vs-fp64 error grows with time: {drift}'
+
+
+# ----------------------------------------------------------------- entry point
+
+_STAGE1 = [test_model_algebra, test_recursions_vs_dense, test_polynomial_exactness,
+           test_seam_free, test_vs_brute_force, test_kernel_response, test_psd_and_finite,
+           test_masked_data_unused]
+
+# T1 and T6 have no parameters: T1 enumerates a fixed (k, tau) grid and T6 a fixed sweep, and
+# neither draws anything -- so a second call says exactly what the first one did, and
+# notes/unit_tests.md point 11 puts them on iteration 0. Skipping them does not perturb the
+# shared generator, since neither touches it.
+_EXHAUSTIVE = (test_model_algebra, test_kernel_response)
+
+
+def run_all(verbose=True, rng=None, iteration=0):
+    """
+    Runs the detrending.kf1d test suite.
+
+    T1-T8 first, then T9.  All share one generator, so printing its entropy makes the
+    whole run reproducible: pass np.random.default_rng(<entropy>) back in as 'rng'.
+
+    'iteration' is the index of the caller's test loop; the two parameterless tests run
+    only at 0.  See _EXHAUSTIVE.
+    """
+    rng = _default_rng(rng)
+    print(f'  detrending.kf1d tests (rng entropy {rng.bit_generator.seed_seq.entropy})')
+    for fn in _STAGE1:
+        if (iteration == 0) or (fn not in _EXHAUSTIVE):
+            fn(rng, verbose=verbose)
+    test_dtype_agreement(rng, verbose=verbose)
+    print(f'  detrending.kf1d tests passed   '
+          f'[cumulative mask expansion: {_EXPANSION}]')

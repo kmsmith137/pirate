@@ -26,6 +26,19 @@ namespace pirate {
 // The array shape is (ndm_out, nt_out), where ndm_out and nt_out are members of 
 // struct PeakFindingKernelParams.
 //
+// The PeakFindingKernelParams also carry the two downsampling factors of the output arrays,
+// relative to the dedispersion output that feeds the peak-finder:
+//
+//   dm_downsampling = 2^(R+K)     where R = frequency_subbands.pf_rank, and K >= 0 is the
+//                                 number of "extra DM" bits (see the note on K below)
+//   time_downsampling = Tds
+//
+// Dedispersion and peak-finding have the following input/output shapes:
+//
+//   (nbeams, ndm_out * 2^(R+K), nt_out * Tds)               tree dedispersion output (all DMs)
+//      -> (nbeams, ndm_out * 2^K, fs.M, nt_out * Tds)       subband array = peak-finding input
+//      -> (nbeams, ndm_out, nt_out)                         peak-finding output
+//
 // Each element of the 'out_max' array is a detection significance in "sigmas". Conceptually,
 // it is obtained by taking a maximum over a 4-D "trial array" indexed by (frequency subband, 
 // fine-grained DM, fine-grained arrival time, peak-finding profile). The purpose of
@@ -34,18 +47,27 @@ namespace pirate {
 // 
 // The 'out_argmax' array has the same shape (ndm_out, nt_out). Each element of the
 // out_argmax array is an uint32 "token" which indicates which element of the 4-d trial
-// array (from the previous paragraph) is responsible for the maximum SNR. 
-// The tokens are defined as follows:
+// array (from the previous paragraph) is responsible for the maximum SNR. The tokens
+// are defined as follows:
 //
-//   token = (t) | (p << 8) | (m << 16);   // 8+8+16 bits
+//   token = (t) | (p << 8) | (m << 16) | (mu << 24);   // four bytes
 //
-//     where  0 <= t < (nt_in / nt_out)  indexes a fine-grained arrival time
-//            0 <= p < P                 indexes a peak-finding profile (see below)
-//            0 <= m < M                 indexes a "multiplet" (see below)
+//     where  0 <= t < time_downsampling  indexes a fine-grained arrival time
+//            0 <= p < P                  indexes a peak-finding profile (see below)
+//            0 <= m < M                  indexes a "multiplet" (see below)
+//            0 <= mu < 2^K               indexes an "extra DM" (see the note on K below)
 //
 // Note that 't' is quantized: for a profile at peak-finding level l (i.e. boxcar length
 // 2^l), 't' is a multiple of min(Dcore, 2^l), where Dcore is the kernel's internal
-// time-downsampling factor (see PeakFindingKernelParams::Dcore below).
+// time-downsampling factor (see validate_dcore() below).
+//
+// Note on K: K = log2(dm_downsampling) - pf_rank is the number of DM bits below the
+// multiplet's resolution that the peak-finder max-reduces over. Its input array has
+// (ndm_out << K) DM rows, and the low K bits of that index -- 0 <= mu < 2^K, the token's
+// fourth byte -- are reduced along with the multiplet index. All three peak-finders accept
+// any K >= 0: the reference kernel and the standalone GpuPeakFindingKernel read the extra
+// DMs from the (ndm_out << K, M) input array, and CoalescedDdKernel2 folds them in as it
+// dedisperses.
 //
 // It's convenient to combine the (frequency_subband, fine-grained DM) axes into
 // a single axis, indexed by a "multiplet" 0 <= m < M. The FrequencySubband helper
@@ -55,9 +77,8 @@ namespace pirate {
 //   FrequencySubband::M = number of distinct multiplets (freq_subband, fine_dm)
 //
 // The peak-finding profile 0 <= p < P indexes a trial profile (in time) which is
-// used to implement a (roughly) matched filter for a range of pulse widths. The
-// details of these profiles will be described later (FIXME), but for now we note
-// that the total number of profiles P is given by:
+// used to implement a (roughly) matched filter for a range of pulse widths.
+// See notes/dedispersion.tex for details. The total number of profiles P is given by:
 //
 //   P = 1 + 3 * log2(max_kernel_width)
 //
@@ -76,9 +97,7 @@ namespace pirate {
 //
 //   (ndm_wt, nt_wt, P, N)    (*)
 //
-// where (ndm_wt, nt_wt) are obtained by applying downsampling factors to (ndm_in, nt_in).
-// These "weights" downsampling factors are independent of the downsampling factors used
-// to obtain (ndm_out, nt_in), and are specified in DedispersionConfig.
+// where (ndm_wt, nt_wt) divide evenly into (ndm_out, nt_out).
 //
 // On the CPU, the weights array is represented as a 4-d array with shape (*), but
 // on the GPU we use a complicated, non-contiguous representation which is convenient
@@ -95,81 +114,91 @@ struct PeakFindingKernelParams
     long beams_per_batch = 0;
     long total_beams = 0;
 
-    // Peak-finding input array has shape (beams_per_batch, ndm_out, fs.M, nt_in).
+    // Downsampling factors of the output arrays, see the comment at the top of this file.
+    // Both are powers of two, and dm_downsampling is a multiple of 2^pf_rank (the quotient
+    // is 2^K).
+    long dm_downsampling = 0;
+    long time_downsampling = 0;
+
+    // Peak-finding input array has shape (beams_per_batch, ndm_out << K, fs.M, nt_in),
+    // where nt_in = nt_out * time_downsampling.
     // Output arrays have shape (beams_per_batch, ndm_out, nt_out).
     // Weight array has shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N).
 
     long ndm_out = 0;
     long ndm_wt = 0;
     long nt_out = 0;
-    long nt_in = 0;
     long nt_wt = 0;
-
-    // Internal time-downsampling factor ("core" downsampling) of the peak-finder. This sets
-    // the time granularity of the out_argmax tokens: at peak-finding level l, the token's
-    // fine-time field is a multiple of min(Dcore, 2^l).
-    //
-    // For GPU kernels, Dcore is a compile-time property of the autogenerated kernel, stored
-    // in the registry VALUE (not the key): query it with
-    // CoalescedDdKernel2::get_registry_dcore(). (The cdd2 and pf registries can in principle
-    // carry different Dcore values for the same pf params.) The GPU kernel constructors
-    // check that this member matches the compiled kernel.
-    //
-    // Dcore == 0 is invalid: validate() requires a power of two dividing (nt_in / nt_out).
-    // DedispersionPlan fills stage2_pf_params[:].Dcore from DedispersionTree::Dcore (which
-    // the plan fills from the cdd2 registry if Params::gpu_runnable -- the default -- and
-    // otherwise sets to the default value time_downsampling).
-    long Dcore = 0;
 
     void validate() const;  // throws an exception if anything is wrong
 
-    // Fill 'out' with peak-finding weights. base_weights[d,n,p] = 1/sqrt(variances[n,d,p]) when
-    // 'variances' is non-empty (shape (fs.N, ndm_wt, nprofiles), double). When 'variances' is an
-    // EMPTY array, base_weights instead uses the "bare-kernel" unit-variance-input prescription
+    // Fill 'out' with peak-finding weights.
+    //
+    //   'out'          shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
+    //   'variances'    shape (ndm_wt, fs.N, nprofiles), or empty (see below)
+    //
+    // If 'variances' is non-empty, sets weights[d,n,p] = 1/sqrt(variances[d,n,p]).
+    //
+    // If 'variances' is EMPTY, uses the "bare-kernel" unit-variance-input prescription instead
     // (per-profile = 1/sqrt(zero-lag kernel autocorrelation), broadcast over subband/dm) --
     // appropriate for testing a bare peak-finding or cdd2 kernel.
     // randomize=true scales each weight by a sparse random factor (see the .cu); randomize=false
     // uses the base_weights directly (no random multiplier).
-    //   out array shape = (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)   (float)
     //
-    // This depends only on the params (subband_counts -> fs.N, max_kernel_width -> nprofiles, and
-    // beams_per_batch/ndm_wt/nt_wt), NOT on any ReferencePeakFindingKernel state, so it is a method
-    // of PeakFindingKernelParams. This matters: constructing a ReferencePeakFindingKernel just to
-    // generate weights would eagerly allocate its large (and here unused) apply()/eval_tokens()
-    // scratch buffers.
+    // Note: member of PeakFindingKernelParams, rather than ReferencePeakFindingKernel,
+    // since constructing a ReferencePeakFindingKernel just to generate weights would
+    // eagerly allocate large buffers.
     void fill_host_weights(ksgpu::Array<float> &out, const ksgpu::Array<double> &variances, bool randomize) const;
 };
 
 
+// Throws unless 'Dcore' is a legal peak-finder core factor for output downsampling
+// 'Dout' = nt_in / nt_out: a power of two dividing Dout.
+//
+// Dcore sets the time granularity of the out_argmax tokens -- at peak-finding level l the
+// token's fine-time field is a multiple of min(Dcore, 2^l) -- and it is a property of the
+// peak-finding KERNEL, not of the params. A GPU kernel's Dcore is compiled in and read back
+// from GpuPeakFindingKernel::RegistryValue::Dcore; a ReferencePeakFindingKernel takes it as
+// a constructor argument.
+//
+// Defined in PeakFindingKernel.cu, next to PeakFindingKernelParams::validate().
+extern void validate_dcore(long Dcore, long Dout);
+
+
+// NOTE: this class and ReferencePfSquare (bottom of this file) independently encode the same
+// kernel bank h_{lambda,q}. That duplication is deliberate -- it is what makes
+// GpuPfSquare::test_random() an independent test rather than a restatement of the GPU kernel
+// -- and ReferencePfSquare::test_vs_peak_finder() is what stops the two encodings from
+// drifting apart. Do not reimplement either class in terms of the other.
+
 struct ReferencePeakFindingKernel
 {
     // Parameters specified at construction.
-    PeakFindingKernelParams params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt, Dcore
-    FrequencySubbands fs;             // pf_rank, N, M
-    long Dcore = 0;            // = params.Dcore
+    PeakFindingKernelParams params;  // beams_per_batch, total_beams, {dm,time}_downsampling, {ndm,nt}_{out,wt}
+    FrequencySubbands fs;            // pf_rank, N, M
+    long Dcore = 0;                  // constructor argument (see validate_dcore())
 
     // Derived parameters, computed in constructor.
-    long Dout = 0;             // = (nt_in/nt_out) = time downsampling factor of output array
     long nbatches = 0;         // = (total_beams / beams_per_batch)
     long nprofiles = 0;        // = (3 * log2(max_kernel_width) + 1)
+    long nt_in = 0;            // = (nt_out * time_downsampling)
+    long K = 0;                // = log2(dm_downsampling) - fs.pf_rank, see the note on K above
+    long pow2_K = 0;           // = pow2(K), the number of input DMs per output DM
 
     // Note that the reference kernel uses float32, regardless of what dtype is specified.
     // All arrays must be fully contiguous (this could be changed if needed).
 
-    ReferencePeakFindingKernel(const PeakFindingKernelParams &params);
+    ReferencePeakFindingKernel(const PeakFindingKernelParams &params, long Dcore);
 
     // The reference kernel uses float32, regardless of what dtype is specified.
     //
-    // The optional 'out_var' argument is either an empty array (feature disabled), or a
-    // fully-contiguous host array of shape (beams_per_batch, ndm_out, fs.M, nprofiles).
-    // If specified, it is OVERWRITTEN with the per-chunk mean square (a variance estimate,
-    // for mean-zero input) of each weighted peak-finding output 'w*y' that is max-reduced
-    // into out_max, resolved by (multiplet m, profile p) and normalized over time.
-    // The out_max and out_argmax arrays are unaffected by whether out_var is supplied.
+    // Note: to get a VARIANCE out of a peak-finding input array, use ReferencePfSquare (at the
+    // bottom of this file) rather than the peak-finder. It computes sum_t (h_p * y)[t]^2 at
+    // every time sample, which is the quantity a variance map is defined in terms of, and its
+    // row order is the caller's rather than the peak-finder's multiplet convention.
     void apply(ksgpu::Array<float> &out_max,     // shape (beams_per_batch, ndm_out, nt_out)
                ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
-               ksgpu::Array<double> &out_var,    // shape (beams_per_batch, ndm_out, fs.M, nprofiles), or empty
-               const ksgpu::Array<float> &in,    // shape (beams_per_batch, ndm_out, params.fs.M, nt_in)
+               const ksgpu::Array<float> &in,    // shape (beams_per_batch, ndm_out << K, fs.M, nt_in)
                const ksgpu::Array<float> &wt,    // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
                long ibatch,                      // 0 <= ibatch < nbatches
                bool debug = false);              // enables verbose debugging output
@@ -211,7 +240,7 @@ struct ReferencePeakFindingKernel
         const ksgpu::Array<float> &wt);         // input array, shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
 
     // Make a mean-zero input array for testing.
-    // Returns shape (nbeams_per_batch, ndm_out, params.fs.M, nt_in)
+    // Returns shape (nbeams_per_batch, ndm_out << K, fs.M, nt_in)
     ksgpu::Array<float> make_random_input_array();
 
     // Note: peak-finding weights are generated by PeakFindingKernelParams::fill_host_weights()
@@ -222,11 +251,15 @@ struct ReferencePeakFindingKernel
     //
     //  - tmp_dt[l]: step size (in time) of temp array
     //  - tmp_nt[l]: number of time samples in temp array
-    //  - tmp_arr[l]: array of shape is (B, D, M, tmp_nt[l]))
+    //  - tmp_arr[l]: array of shape (B, D, pow2_K, M, tmp_nt[l])
     //
-    // Array element tmp_arr[l][b,d,m,j] is obtained by summing:
+    // The (pow2_K, M) axes are the input array's own structure: tmp_arr[l][b,d,mu,m,:] is the
+    // downsampled input row ((d << K) | mu), multiplet m, so the fill from 'in' is a straight
+    // copy per (d, mu, m) triple.
     //
-    //    in[b,d,m, ilo:(ilo+2^l)]    where ilo = -tpad + j*tmp_dt[l]
+    // Array element tmp_arr[l][b,d,mu,m,j] is obtained by summing:
+    //
+    //    in[b, (d << K) | mu, m, ilo:(ilo+2^l)]    where ilo = -tpad + j*tmp_dt[l]
     //
     // We also compute the following members, for convenience in computing
     // "triggers":
@@ -243,10 +276,10 @@ struct ReferencePeakFindingKernel
     //   S = tmp_sout[l];   // spacing
     //
     //   for (isamp = 0; isamp < nsamp; isamp++) {
-    //       float x_0 = tmp_arr[l][b,d,m, I + tout*nsamp + isamp - (q-1)*S];
-    //       float x_1 = tmp_arr[l][b,d,m, I + tout*nsamp + isamp - (q-2)*S];
+    //       float x_0 = tmp_arr[l][b,d,mu,m, I + tout*nsamp + isamp - (q-1)*S];
+    //       float x_1 = tmp_arr[l][b,d,mu,m, I + tout*nsamp + isamp - (q-2)*S];
     //           ...
-    //       float x_end = tmp_arr[l][b,d,m, I + tout*nsamp + isamp];
+    //       float x_end = tmp_arr[l][b,d,mu,m, I + tout*nsamp + isamp];
 
     long tpad = 0;  // prepadding (in "input time samples"), same for all levels
     long num_levels = 0;
@@ -257,16 +290,19 @@ struct ReferencePeakFindingKernel
     std::vector<long> tmp_iout;
     std::vector<long> tmp_nout;
     std::vector<long> tmp_sout;
-    std::vector<ksgpu::Array<float>> tmp_arr;   // shape (B, D, M, tmp_nt[l])
+    std::vector<ksgpu::Array<float>> tmp_arr;   // shape (B, D, pow2_K, M, tmp_nt[l])
 
     // The reference rl allocates persistent state in the constructor (not a separate
     // allocate() method). We just save the last (tpad) samples from the previous chunk.
 
-    ksgpu::Array<float> pstate;  // shape (total_beams, ndm_out, M, tpad)
+    ksgpu::Array<float> pstate;  // shape (total_beams, ndm_out, pow2_K, M, tpad)
 
     // Helper for eval_tokens()
     static std::runtime_error _bad_token(uint token, const char *why);
 };
+
+
+// -------------------------------------------------------------------------------------------------
 
 
 // GpuPfWeightLayout: describes the layout of peak-finding weights on the GPU.
@@ -346,6 +382,9 @@ struct GpuPfWeightLayout
 
 struct GpuPeakFindingKernel
 {
+    // Takes the same params as ReferencePeakFindingKernel, K > 0 included. The registry key
+    // is (dtype, subband_counts, K, Tinner, Dout, Wmax); a combination that was not compiled
+    // fails in the registry lookup.
     GpuPeakFindingKernel(const PeakFindingKernelParams &params);
 
     void allocate(BumpAllocator &allocator);
@@ -356,7 +395,7 @@ struct GpuPeakFindingKernel
 
     void launch(ksgpu::Array<void> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
                 ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
-                const ksgpu::Array<void> &in,     // shape (beams_per_batch, ndm_out, M, nt_in)
+                const ksgpu::Array<void> &in,     // shape (beams_per_batch, ndm_out << K, M, nt_in)
                 const ksgpu::Array<void> &wt,     // see comment above
                 long ibatch,                      // 0 <= ibatch < nbatches
                 cudaStream_t stream);             // NULL stream is allowed, but is not the default);
@@ -367,8 +406,8 @@ struct GpuPeakFindingKernel
 
     // ------------------------  Members  ------------------------
 
-    PeakFindingKernelParams params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
-    FrequencySubbands fs;             // pf_rank, N, M
+    PeakFindingKernelParams params;  // beams_per_batch, total_beams, {dm,time}_downsampling, {ndm,nt}_{out,wt}
+    FrequencySubbands fs;            // pf_rank, N, M
 
     // Derived parameters chosen by the kernel.
     GpuPfWeightLayout pf_weight_layout;     // layout of peak-finding weights in GPU memory
@@ -378,7 +417,8 @@ struct GpuPeakFindingKernel
 
     // Derived parameters, computed in constructor.
     ksgpu::Dtype dtype;        // = params.dtype
-    long Dout = 0;             // = (nt_in/nt_out) = time downsampling factor of output array 
+    long Dout = 0;             // = params.time_downsampling
+    long K = 0;                // = log2(params.dm_downsampling) - fs.pf_rank, see the note on K above
     long nbatches = 0;         // = (total_beams / beams_per_batch)
     long nprofiles = 0;        // = (3 * log2(max_kernel_width) + 1)
 
@@ -397,6 +437,7 @@ struct GpuPeakFindingKernel
     {
         ksgpu::Dtype dtype;   // either float16 or float32
         std::vector<long> subband_counts;  // length (rank+1)
+        long K = 0;           // extra-DM bits, see the note on K above
         long Tinner = 0;      // for weights
         long Dout = 0;
         long Wmax = 0;
@@ -406,7 +447,7 @@ struct GpuPeakFindingKernel
     {
         // cuda_kernel(const void *in, void *out_max, uint *out_argmax, const void *wt, void *pstate, uint nt_in, uint ndm_out_per_wt, uint nt_in_per_wt)
         //
-        // in: shape (B*W, M, nt_in)
+        // in: shape (B*W, 2^K, M, nt_in), i.e. one (mu, m) block of (2^K * M) rows per warp
         // out_max: shape (B*W, nt_in/Dout)
         // out_argmax: shape (B*W, nt_in/Dout)
         // wt: complicated format (from class PfWeightLayout, see below)
@@ -430,8 +471,7 @@ struct GpuPeakFindingKernel
         // Layout of peak-finding weights in GPU memory, expected by the kernel.
         GpuPfWeightLayout pf_weight_layout;
 
-        long Dcore = 0;   // internal downsamplingq
-        //  factor (see discussion above)
+        long Dcore = 0;   // internal downsampling factor (see discussion above)
         long PW32 = -1;   // number of 32-bit registers per warp (= "one pf_rank")
     };
 
@@ -472,6 +512,7 @@ struct PfWeightReaderMicrokernel
     {
         ksgpu::Dtype dtype;     // either float16 or float32
         std::vector<long> subband_counts;  // length (rank+1)
+        long K = 0;             // extra-DM bits: the kernel reads for the peak-finder's pair index, 2^K per multiplet
         long Dcore = 0;
         long Tinner = 0;
         long P = 0;
@@ -517,7 +558,7 @@ struct PfWeightReaderMicrokernel
     static void test_random();
 };
 
-// Defined in GpuPeakFindingKernel.cu
+// Defined in PeakFindingKernel.cu
 extern bool operator==(const PfWeightReaderMicrokernel::RegistryKey &k1, const PfWeightReaderMicrokernel::RegistryKey &k2);
 extern std::ostream &operator<<(std::ostream &os, const PfWeightReaderMicrokernel::RegistryKey &k);
 extern std::ostream &operator<<(std::ostream &os, const PfWeightReaderMicrokernel::RegistryValue &v);
@@ -537,8 +578,8 @@ struct PfOutputMicrokernel
     {
         // cuda_kernel(void *zout, uint *aout, void *zin, uint *ain, uint nt_in)
         //
-        // zout: shape (nt_in//Dout) == (nt_in//4)
-        // aout: shape (nt_in//Dout) == (nt_in//4)
+        // zout: shape (nt_in//Dout)
+        // aout: shape (nt_in//Dout)
         // zin: shape (4, nt_in)
         // ain: shape (4, nt_in)
         // nt_in: number of input time samples
@@ -562,10 +603,170 @@ struct PfOutputMicrokernel
     static void test_random();
 };
 
-// Defined in GpuPeakFindingKernel.cu
+// Defined in PeakFindingKernel.cu
 extern bool operator==(const PfOutputMicrokernel::RegistryKey &k1, const PfOutputMicrokernel::RegistryKey &k2);
 extern std::ostream &operator<<(std::ostream &os, const PfOutputMicrokernel::RegistryKey &k);
 extern std::ostream &operator<<(std::ostream &os, const PfOutputMicrokernel::RegistryValue &v);
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// The "PfSquare" kernels (ReferencePfSquare, GpuPfSquare): convolve with the peak-finding
+// kernels h_p and accumulate sum_t (h_p * y)^2.
+//
+// These are for variance calculations (see the "variance map" section of
+// notes/variance_map.tex), not for the real-time search. Two differences from the
+// peak-finders above are essential rather than incidental:
+//
+//   - No weights, no max, no argmax, no coarse-graining. The output is the raw sum of
+//     squares, which is what a variance map needs.
+//
+//   - The convolution is evaluated at EVERY time sample. The peak-finders evaluate h_p only
+//     on a grid of spacing min(Dcore, 2^lambda), which is harmless when you want the
+//     variance of one output element (all elements have the same variance), but wrong when
+//     you want a sum over the whole time axis. So there is no Dcore here.
+//
+// The (dm, multiplet, beam) structure of the caller's data is irrelevant to these kernels:
+// every axis except time is a spectator. So the input is a 2-d array of 'nrows'
+// independent time series, and the caller flattens whatever it has into that. In
+// particular a subband array, shape (beams_per_batch, Dpf, M, ntime) -- a
+// GpuSbDedispersionKernel 'sb_out', or a ReferenceDedisperser 'out_sb' -- is fully
+// contiguous and reshapes to (beams_per_batch * Dpf * M, ntime) for free. This is what
+// makes the variance-map tools independent of the peak-finder's multiplet convention.
+//
+// Both run incrementally: call launch()/apply() once per (time chunk, beam batch). The
+// (2 * max_kernel_width) input samples preceding each chunk are carried in
+// 'persistent_state', so that profiles overlapping a chunk boundary are exact.
+//
+// The 'acc' array is float64 and is ACCUMULATED INTO (+=), never overwritten -- the caller
+// zeroes it to start a new accumulation. Float64 matters: a sweep accumulates ~10^5 terms
+// per element, which float32 could not hold. The GPU kernel does not pay for it, since the
+// float64 add happens once per row per chunk (see the accumulation comment in the .cu).
+
+
+// The CPU reference implementation, with the same conventions as GpuPfSquare below: same
+// 'nprofiles', same 'tpad' history, the same accumulate-don't-overwrite 'acc', and the same
+// ibatch ordering requirement. Two deliberate differences:
+//
+//   - Persistent state is allocated in the constructor, so there is no allocate().
+//
+//   - There is NO "nt_in is a multiple of 32" requirement. That is a GPU blocking
+//     constraint, not a property of the quantity being computed, and leaving it out keeps
+//     test_vs_peak_finder() free to choose its shapes. The two classes remain comparable
+//     wherever the GPU kernel will run at all, which is the only place they are compared.
+//
+// NOTE: this class and ReferencePeakFindingKernel independently encode the same kernel bank
+// h_{lambda,q}. That duplication is the price of GpuPfSquare::test_random() being a real
+// test of the GPU cascade rather than a restatement of it (see the comment on test_random()
+// in the .cu); test_vs_peak_finder() is what stops the two encodings from drifting apart,
+// and neither class may be reimplemented in terms of the other.
+
+struct ReferencePfSquare
+{
+    // 'ndm' is the number of independent time series per beam: any positive value, and not a
+    // DM axis -- it need not be a power of two.
+    ReferencePfSquare(long max_kernel_width, long total_beams, long beams_per_batch,
+                      long ndm, long nt_in);
+
+    // acc += sum_t (h_p * in)[t]^2, summed over this chunk's time samples.
+    //
+    // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam
+    // indices. Since 'persistent_state' carries the inter-chunk history, calls must be
+    // ordered ibatch = 0, 1, ..., nbatches-1, 0, 1, ... (checked, and the same convention as
+    // GpuPfSquare::launch() and ReferencePeakFindingKernel::apply()).
+
+    void apply(ksgpu::Array<double> &acc,       // shape (beams_per_batch, ndm, nprofiles)
+               const ksgpu::Array<float> &in,   // shape (beams_per_batch, ndm, nt_in)
+               long ibatch);                    // 0 <= ibatch < nbatches
+
+    // Static member function: the cross-family test against ReferencePeakFindingKernel.
+    // Runs one randomized iteration; see the comment on the definition in the .cu.
+    // Called by 'python -m pirate_frb test --pfsq'.
+    static void test_vs_peak_finder();
+
+
+    // ------------------------  Members  ------------------------
+
+    long max_kernel_width = 0;   // power of two, <= constants::max_pf_width
+    long total_beams = 0;
+    long beams_per_batch = 0;
+    long ndm = 0;
+    long nt_in = 0;
+
+    long nprofiles = 0;   // = (3 * log2(max_kernel_width) + 1)
+    long nbatches = 0;    // = (total_beams / beams_per_batch)
+    long nrows = 0;       // = (beams_per_batch * ndm), the number of time series per apply()
+    long num_levels = 0;  // = max(log2(max_kernel_width), 1)
+
+    // Number of input samples carried between chunks. Same value as GpuPfSquare::tpad,
+    // whose comment explains the rounding up to 32.
+    long tpad = 0;        // = max(2 * max_kernel_width, 32)
+
+    // Shape (total_beams, ndm, tpad): the 'tpad' input samples preceding the next chunk.
+    // Allocated and zeroed by the constructor; sliced along the beam axis in apply().
+    ksgpu::Array<float> persistent_state;
+    long expected_ibatch = 0;   // checked in apply()
+
+    // Scratch for apply(), shape (num_levels+1, tpad+nt_in): the boxcar cascade b_0..b_L of
+    // one row, materialized over the chunk and its preceding history.
+    ksgpu::Array<float> boxcars;
+};
+
+
+struct GpuPfSquare
+{
+    // 'ndm' is the number of independent time series per beam (any positive value; it need
+    // not be a power of two). 'nt_in' must be a multiple of 32.
+    GpuPfSquare(long max_kernel_width, long total_beams, long beams_per_batch,
+                long ndm, long nt_in);
+
+    // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized).
+    void allocate(BumpAllocator &allocator);
+
+    // launch(): asynchronously launch kernel, and return without synchronizing stream.
+    //
+    // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam
+    // indices. Since 'persistent_state' carries the inter-chunk history, calls must be
+    // ordered ibatch = 0, 1, ..., nbatches-1, 0, 1, ... (checked, and the same convention
+    // as ReferencePeakFindingKernel::apply()).
+
+    void launch(ksgpu::Array<double> &acc,   // shape (beams_per_batch, ndm, nprofiles)
+                const ksgpu::Array<float> &in,  // shape (beams_per_batch, ndm, nt_in)
+                long ibatch,                 // 0 <= ibatch < nbatches
+                cudaStream_t stream);        // NULL stream is allowed, but is not the default
+
+    // Static member function: runs one randomized test iteration.
+    // Called by 'python -m pirate_frb test --pfsq'.
+    static void test_random();
+
+
+    // ------------------------  Members  ------------------------
+
+    long max_kernel_width = 0;   // power of two, <= constants::max_pf_width
+    long total_beams = 0;
+    long beams_per_batch = 0;
+    long ndm = 0;
+    long nt_in = 0;
+
+    long nprofiles = 0;   // = (3 * log2(max_kernel_width) + 1)
+    long nbatches = 0;    // = (total_beams / beams_per_batch)
+    long nrows = 0;       // = (beams_per_batch * ndm), the number of time series per launch
+
+    // Number of input samples carried between chunks. The longest peak-finding kernel
+    // h_{Lambda-1,3} spans (2 * max_kernel_width) samples, which is the real requirement;
+    // we round up to 32 so that the kernel's warm-up loop is a whole number of warp-wide
+    // iterations. (Extra history is harmless -- it just lengthens the warm-up.)
+    long tpad = 0;        // = max(2 * max_kernel_width, 32)
+
+    // Shape (total_beams, ndm, tpad): the 'tpad' input samples preceding the next chunk.
+    // Allocated and zeroed by allocate(); sliced along the beam axis in launch().
+    ksgpu::Array<float> persistent_state;
+    bool is_allocated = false;
+    long expected_ibatch = 0;   // checked in launch()
+
+    // All rates are "per call to launch()".
+    ResourceTracker resource_tracker;
+};
 
 
 }  // namespace pirate

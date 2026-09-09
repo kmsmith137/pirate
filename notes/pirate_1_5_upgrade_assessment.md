@@ -1,3 +1,8 @@
+> Historical assessment, written before the migration. The findings and proposed
+> commands below describe that earlier state. See the
+> [completed implementation and validation record](pirate_1_5_migration.md)
+> for the changes actually made and the checks performed.
+
 PIRATE 1.5.0 impact assessment — 2026-09-08
 
 The update affects our custom offline peak-finding, decoding, and benchmark infrastructure substantially. The grouping algorithms and existing measurements remain useful, but our current code cannot run unchanged against 1.5.0. Treat this as a migration with regression checks, rather than just a pull and rebuild.

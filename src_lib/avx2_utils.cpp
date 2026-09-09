@@ -1,6 +1,8 @@
 #include "../include/pirate/avx2_utils.hpp"
 #include "../include/pirate/utils.hpp"      // AtomicPrint
 
+#include <ksgpu/rand_utils.hpp>             // default_rng()
+
 #include <immintrin.h>
 #include <random>
 #include <cmath>
@@ -116,15 +118,24 @@ static inline __m256i xoshiro8_next(__m256i &s0, __m256i &s1, __m256i &s2, __m25
 
 
 // Per-thread RNG state. Layout: t_state[w*8 + l] = word w (0..3) of lane l (0..7), i.e. each lane
-// is an independent 128-bit xoshiro128++. Seeded once per thread from std::random_device.
+// is an independent 128-bit xoshiro128++. Seeded once per thread, on first use.
 static thread_local uint32_t t_state[32];
 static thread_local bool t_seeded = false;
 
 static void seed_state()
 {
-    std::random_device rd;
+    // SEEDED FROM ksgpu::default_rng(), not std::random_device, so that 'pirate_frb test
+    // --seed N' replays '--sim' and test_pulse_injection -- the latter because
+    // AssembledFrame::randomize(gaussian=true) routes through avx2_simulate_4bit_noise().
+    //
+    // What this does and does not buy: both this state and ksgpu's generator are
+    // thread_local, and ksgpu::seed_default_rng() reseeds only the CALLING thread. So the
+    // main thread now replays, while a worker thread's default_rng() still self-seeds from
+    // std::random_device and its noise does not -- unchanged from before, and the same
+    // thread-boundary limit that 'pirate_frb test' prints for --net and --serv.
+    std::mt19937 &rng = ksgpu::default_rng();
     for (int i = 0; i < 32; i++)
-        t_state[i] = (uint32_t) rd();
+        t_state[i] = (uint32_t) rng();
     // xoshiro requires nonzero state per lane (all-zero would be a fixed point). Probability
     // 2^-128 per lane, but guard it anyway.
     for (int lane = 0; lane < 8; lane++)

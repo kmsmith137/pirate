@@ -2,13 +2,13 @@
 Toy offline dedispersion driver + rudimentary peak-finding over an acquisition directory.
 
 Reads a directory of acquired AssembledFrame ".asdf" files (one file per
-(beam, time chunk) -- as written by 'pirate_frb rpc_start_stream'). Beams and their
+(beam, time chunk) -- as written by 'pirate_frb rpc start_stream'). Beams and their
 time chunks are enumerated with pirate_frb.Acquisition. Each beam is
 processed independently: a fresh single-beam OfflineDedisperser (nbeams == 1) is
 built from scratch, and for each of that beam's time chunks the driver:
 
   1. uploads the quantized (int4) data to the GPU,
-  2. dequantizes it to float16,
+  2. dequantizes it to the config's float dtype (float16 or float32),
   3. tree-dedisperses it on the GPU,
   4. does rudimentary peak finding (per-chunk max SNR over the DM-vs-time plane of
      every dedispersion tree),
@@ -17,15 +17,18 @@ and prints the peak SNR of each chunk (one beam+chunk pair per line). With
 ``--save``, it also writes each S/N map beside its input frame using the name
 ``frame_b(BEAM)_t(CHUNK)_snrmap.asdf``.
 
-Run via: python -m pirate_frb run_offline_dedisperser ACQDIR CONFIG
+Run via: python -m pirate_frb run offline_dedisperser ACQDIR CONFIG
          [--max-chunks N] [--save]
 """
 import os
-from numbers import Real
 
 import numpy as np
 
 from .utils import atomic_print
+from .ArgmaxMetadata import (
+    ARGMAX_ENCODING, SNR_MAP_VERSION, read_argmax_metadata,
+    validate_snr_map_format, validate_saved_time_sample_ms,
+)
 
 
 DEFAULT_ACQDIR = "/mnt/cs00/data/kmsmith/2026-07-05/streams/kmsmith_26_07_05_202822"
@@ -33,18 +36,15 @@ DEFAULT_CONFIG = "configs/dedispersion/chord_sb2.yml"
 
 
 def _validate_snr_asdf_tree(asdf_tree):
-    """Validate a version-2 offline-dedisperser ASDF tree.
+    """Validate a version-3 offline-dedisperser ASDF tree.
 
     Returns the incomplete DedispersionPlan reconstructed from the saved YAML.
     This validates the decoder metadata and supplies authoritative tree shapes.
     """
     import numpy as np
-    from .pirate_pybind11 import DedispersionPlan
+    from .pirate_pybind11 import DedispersionConfig, DedispersionPlan
 
-    if asdf_tree.get("format") != "pirate_frb.offline_dedisperser_snr_maps":
-        raise ValueError("offline dedisperser ASDF: unexpected format")
-    if asdf_tree.get("format_version") != 2:
-        raise ValueError("offline dedisperser ASDF: expected format_version=2")
+    validate_snr_map_format(asdf_tree)
 
     config_yaml = asdf_tree.get("config_yaml")
     plan_yaml = asdf_tree.get("plan_yaml")
@@ -53,35 +53,13 @@ def _validate_snr_asdf_tree(asdf_tree):
     if not isinstance(plan_yaml, str) or not plan_yaml:
         raise ValueError("offline dedisperser ASDF: plan_yaml must be a nonempty string")
 
-    plan = DedispersionPlan.make_incomplete_plan_from_yaml(config_yaml, plan_yaml)
-
-    # The serialized config/plan pair is authoritative for all geometry. The
-    # optional top-level scalar is redundant convenience metadata: validate it
-    # on writer and reader paths, but never let it override the plan.
-    authoritative_time_sample_ms = float(plan.config.time_sample_ms)
-    if (not np.isfinite(authoritative_time_sample_ms)
-            or authoritative_time_sample_ms <= 0.0):
-        raise ValueError(
-            "offline dedisperser ASDF: authoritative plan time_sample_ms "
-            "must be finite and positive"
-        )
-    saved_time_sample_ms = asdf_tree.get("time_sample_ms")
-    if saved_time_sample_ms is not None:
-        if (isinstance(saved_time_sample_ms, (bool, np.bool_))
-                or not isinstance(saved_time_sample_ms, Real)):
-            raise ValueError(
-                "offline dedisperser ASDF: time_sample_ms must be numeric"
-            )
-        saved_time_sample_ms = float(saved_time_sample_ms)
-        if not np.isfinite(saved_time_sample_ms) or saved_time_sample_ms <= 0.0:
-            raise ValueError(
-                "offline dedisperser ASDF: time_sample_ms must be finite and positive"
-            )
-        if saved_time_sample_ms != authoritative_time_sample_ms:
-            raise ValueError(
-                "offline dedisperser ASDF: saved time_sample_ms disagrees with "
-                "the authoritative plan"
-            )
+    config = DedispersionConfig.from_yaml_string(config_yaml)
+    plan = DedispersionPlan.from_yaml_string(config, plan_yaml)
+    read_argmax_metadata(
+        asdf_tree, ntrees=int(plan.ntrees),
+        douts=tuple(int(t.nt_ds) // int(t.nt_out) for t in plan.trees),
+    )
+    validate_saved_time_sample_ms(asdf_tree, plan)
     trees = asdf_tree.get("trees")
     if not isinstance(trees, (list, tuple)) or len(trees) != plan.ntrees:
         raise ValueError(
@@ -157,9 +135,18 @@ def _write_snr_asdf(filename, input_filename, frame, od, snr_maps, argmax_maps,
             "argmax": argmax_map,
         })
 
+    # Read the actual initialized producer, whose kernels emitted these tokens.
+    # The plan alone cannot supply Dcore in PIRATE 1.5.
+    try:
+        dcores = list(od.dd.Dcores)
+    except AttributeError as exc:
+        raise ValueError("saving maps requires the initialized producer GpuDedisperser.Dcores") from exc
+
     asdf_tree = {
         "format": "pirate_frb.offline_dedisperser_snr_maps",
-        "format_version": 2,
+        "format_version": SNR_MAP_VERSION,
+        "argmax_encoding": ARGMAX_ENCODING,
+        "dcores": dcores,
         "config_yaml": od.config.to_yaml_string(),
         "plan_yaml": od.plan.to_yaml_string(),
         "source": {
@@ -168,9 +155,9 @@ def _write_snr_asdf(filename, input_filename, frame, od, snr_maps, argmax_maps,
             "time_chunk_index": int(frame.time_chunk_index),
         },
         # Authoritative for this saved-map producer: OfflineDedisperser is created
-        # immediately before the first frame in this beam is processed. Older v2
-        # files lack this optional field and remain "startup unknown" unless the
-        # offline grouper is given an explicit policy/value.
+        # immediately before the first frame in this beam is processed.
+        # Other v3 producers may omit this field; the loader then preserves
+        # startup as unknown until the caller supplies an explicit policy.
         "producer_start_time_chunk_index": int(
             producer_start_time_chunk_index),
 

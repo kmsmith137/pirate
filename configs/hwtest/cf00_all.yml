@@ -1,4 +1,4 @@
-# For use with 'python -m pirate_frb hwtest'.
+# For use with 'python -m pirate_frb dev hwtest'.
 
 # dedisperse: If true, then run one dedispersion worker per GPU.
 # FIXME for now, uses hardcoded CHIME-like parameters, but with small nbeams, so that it stays on gpu.

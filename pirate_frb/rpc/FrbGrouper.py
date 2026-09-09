@@ -68,7 +68,14 @@ class FrbGrouperInjections:
     - ``ntrees`` (int) -- number of dedispersion trees.
     - ``ndm_out`` (list of int) -- per-tree output DM-channel counts (length ntrees).
     - ``nt_out`` (list of int) -- per-tree output time-sample counts (length ntrees).
+    - ``dcores`` (list of int) -- per-tree peak-finder core factors of the PRODUCER's cdd2
+      kernels (length ntrees), from the handshake. Sets the time granularity of the
+      out_argmax tokens; pass ``dcores[itree]`` to ``dedispersion_plan.decode_argmax()``.
     - ``dedispersion_config`` (DedispersionConfig) -- producer's dedispersion config (from the handshake).
+    - ``dedispersion_plan`` (DedispersionPlan) -- producer's dedispersion plan, rebuilt from
+      the two handshake yamls by ``DedispersionPlan.from_yaml_string()``. A
+      "minimal" (GPU-less) plan; the batch decoders below go through it, supplying
+      the per-tree ``Dcore`` from ``dcores`` above (the plan does not carry it).
     - ``xengine_metadata`` (XEngineMetadata) -- X-engine metadata (from the handshake).
     - ``xengine_metadata_yaml_string`` (str) -- X-engine metadata as a YAML string.
     - ``dedispersion_config_yaml_string`` (str) -- dedispersion config as a YAML string.
@@ -335,7 +342,7 @@ class FrbGrouperInjections:
         triggers), or slightly before the chunk start (finite peak-finder kernel widths
         shift the estimated pulse-center time earlier than the detection sample).
         For more info, see the grouper-specific parts of the sphinx docs, and/or the
-        tex notes.
+        dedispersion tex notes.
 
         The per-event arrays (itrees, ibeams, idm, itime, snr, argmax) must all be
         1-d cupy arrays of the same length -- one event per element. The 'argmax'
@@ -427,6 +434,7 @@ class FrbGrouperInjections:
 
             beam_ids = self._beam_id_lut[ibeam_h]
             widths_ms = widths_samp * self._time_sample_ms
+            tree_index = itree_h
 
             # Per-event absolute timestamp = chunk start + chunk-relative offset (decoded
             # arrival time in input samples * fpga-counts-per-sample), rounded to the
@@ -443,6 +451,7 @@ class FrbGrouperInjections:
             beam_ids = np.zeros(0, dtype=np.int64)
             fpga_timestamps = np.zeros(0, dtype=np.int64)
             dms = freqs_lo = freqs_hi = widths_ms = np.zeros(0, dtype=np.float64)
+            tree_index = np.zeros(0, dtype=np.int32)
 
         # FrbSifterEvents casts dtypes and validates shapes. rfi_prob is the one remaining
         # placeholder (the grouper doesn't measure it).
@@ -457,6 +466,7 @@ class FrbGrouperInjections:
             subband_freqs_hi_MHz = freqs_hi,
             chunk_fpga_start = chunk_fpga_start,
             chunk_fpga_end = chunk_fpga_end,
+            tree_index = tree_index,
         )
 
 

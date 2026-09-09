@@ -193,13 +193,14 @@ class PeakFinderGeometry:
     time_radius: int
     requested_time_radius: int
     token_multiplets: int
+    token_extra_dm: int
     token_profiles: int
     token_dout: int
     profile_dt: Any
     steady_state_it0: Any
 
     @classmethod
-    def from_plan(cls, plan, tree, *, dm_reach=8, waist_bins=1):
+    def from_plan(cls, plan, tree, *, dcore, dm_reach=8, waist_bins=1):
         """Derive and upload the static search setup for one producer tree.
 
         Parameters
@@ -210,6 +211,9 @@ class PeakFinderGeometry:
             band, and steady-state table define the consumer geometry.
         tree : int
             Zero-based tree index.
+        dcore : int
+            Time granularity supplied by the producer for this tree.
+            It is separate from the plan in PIRATE 1.5.
         dm_reach : int, optional
             Number of native DM rows searched on either side of a centre.
         waist_bins : int, optional
@@ -302,13 +306,17 @@ class PeakFinderGeometry:
         if nt_ds <= 0 or nt_ds % ntime:
             raise ValueError("producer tree has inconsistent time dimensions")
         dout = nt_ds // ntime
-        dcore = int(plan_tree.Dcore)
+        dcore = _integer(dcore, "dcore")
         nprofiles = int(plan_tree.nprofiles)
         nmultiplets = int(plan_tree.frequency_subbands.M)
+        coarse_nfreq = 1 << int(plan_tree.frequency_subbands.pf_rank)
+        nextra_dm, remainder = divmod(int(plan_tree.dm_downsampling), coarse_nfreq)
         if (not 0 < dout <= 256 or not 0 < dcore <= dout
                 or dcore & (dcore - 1) or dout % dcore
                 or not 0 < nprofiles <= 256
-                or not 0 < nmultiplets <= 65536):
+                or not 0 < nmultiplets <= 256
+                or remainder or not 0 < nextra_dm <= 256
+                or nextra_dm & (nextra_dm - 1)):
             raise ValueError("producer tree has invalid argmax token dimensions")
         profile_dt = []
         for profile in range(nprofiles):
@@ -336,6 +344,7 @@ class PeakFinderGeometry:
             time_radius=footprint.shape[1] // 2,
             requested_time_radius=requested_time_radius,
             token_multiplets=nmultiplets,
+            token_extra_dm=nextra_dm,
             token_profiles=nprofiles,
             token_dout=dout,
             profile_dt=cp.asarray(profile_dt, dtype=cp.int64),
@@ -486,9 +495,9 @@ def _token_validity(argmax_map, geometry):
     """Return a GPU mask for tokens safe to decode and use as competitors.
 
     ``argmax_map`` has shape ``(beam, ndm, ntime)`` and dtype ``uint32``.
-    The low byte stores fine time, the next byte stores the profile index, and
-    the upper 16 bits store the frequency multiplet.  ``0xffffffff`` is the
-    producer's invalid sentinel.  Besides range-checking the three fields, a
+    From low to high, the four bytes store fine time, profile, frequency
+    multiplet, and extra DM. ``0xffffffff`` is the producer's invalid
+    sentinel. Besides range-checking the four fields independently, a
     fine-time value must be aligned to the profile's integration stride from
     ``geometry.profile_dt``.
 
@@ -501,7 +510,8 @@ def _token_validity(argmax_map, geometry):
     token = argmax_map
     fine_time = token & cp.uint32(0xff)
     profile = (token >> cp.uint32(8)) & cp.uint32(0xff)
-    multiplet = token >> cp.uint32(16)
+    multiplet = (token >> cp.uint32(16)) & cp.uint32(0xff)
+    extra_dm = token >> cp.uint32(24)
     # Clamp only for safe lookup.  The explicit profile-range predicate below
     # still marks an out-of-range profile invalid.
     safe_profile = cp.minimum(
@@ -511,6 +521,7 @@ def _token_validity(argmax_map, geometry):
     return (
         (token != cp.uint32(0xffffffff))
         & (multiplet < geometry.token_multiplets)
+        & (extra_dm < geometry.token_extra_dm)
         & (profile < geometry.token_profiles)
         & (fine_time < geometry.token_dout)
         & ((fine_time.astype(cp.int64) % dt) == 0)

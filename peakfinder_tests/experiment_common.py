@@ -15,11 +15,13 @@ import cupy as cp
 import numpy as np
 import yaml
 
-from pirate_frb import DedispersionConfig, DedispersionPlan
+from pirate_frb import DedispersionConfig
 from pirate_frb.OfflineDedisperser import OfflineDedisperser
 from pirate_frb.core import XEngineMetadata
 from pirate_frb.make_simulated_acq import create_simulated_acquisition
 from pirate_frb.simpulse import dispersion_delay
+
+from .producer_metadata import ARGMAX_ENCODING, build_producer_plan
 
 from .peakfinders import (
     BENCHMARK_METHODS,
@@ -28,10 +30,11 @@ from .peakfinders import (
     decode_candidates,
     empty_decoded_candidates,
     run_peakfinder,
+    producer_dcore_array,
     validate_candidate_set_containment,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SCHEMA_NAME = "pirate-peakfinder-full-band-benchmarks"
 DEFAULT_SEPARATION_BINS = (
     "0.50", "0.75", "1.00", "1.25", "1.50", "1.75", "2.00",
@@ -49,14 +52,14 @@ REALIZED_CHANNEL_CONVENTION = (
     "edge[i] < requested_hi; boundary-cut channels are included whole"
 )
 RNG_NOTE = (
-    "Simulation noise is not reproducible through the current public API. "
-    "ksgpu.seed_default_rng controls the mt19937 used on pulse-touched samples, "
-    "but bulk Gaussian noise comes from avx2_simulate_4bit_noise, whose separate "
-    "thread-local xoshiro state is seeded by std::random_device and has no setter. "
-    "All methods receive identical maps within a logical unit; different logical "
-    "units receive independent noise. Resume preserves completed units, but an "
-    "interrupted unit rerun is not guaranteed to reproduce its previous noise."
+    "The parameter seed controls burst parameters, not simulation noise. "
+    "PIRATE 1.5 seeds AVX2 noise from the calling thread's ksgpu default RNG "
+    "on first use; these campaigns do not seed or reset that noise stream per unit. "
+    "All methods receive identical maps within a logical unit. Resume preserves "
+    "completed units, but an interrupted unit rerun is not guaranteed to reproduce "
+    "its previous noise."
 )
+
 TIMESTAMP_SEMANTICS = (
     "decode_argmax2 returns a chunk-relative pulse-centre estimate in full-resolution "
     "input samples, extrapolated to the lowest edge of the complete observing band."
@@ -82,8 +85,8 @@ def file_identity(path):
     return {"path": str(path), "sha256": digest.hexdigest()}
 
 
-def prepare_plan(config_path, metadata_path):
-    """Construct the host plan with OfflineDedisperser's metadata overrides."""
+def prepare_plan(config_path, metadata_path, *, cuda_device_id=None):
+    """Prepare NEW simulations and return config, metadata, plan, producer Dcores."""
     config = DedispersionConfig.from_yaml(config_path)
     xmd = XEngineMetadata.from_yaml_file(metadata_path)
     xmd.validate()
@@ -94,11 +97,15 @@ def prepare_plan(config_path, metadata_path):
     config.zone_freq_edges = list(xmd.zone_freq_edges)
     config.time_sample_ms = xmd.dt_ns_per_seq * xmd.seq_per_frb_time_sample / 1.0e6
     config.validate()
-    return config, xmd, DedispersionPlan(config, gpu_runnable=False)
+    producer = build_producer_plan(config, cuda_device_id=cuda_device_id)
+    return config, xmd, producer.plan, producer.dcores
 
 
-def plan_summary(plan, time_sample_s):
+def plan_summary(plan, time_sample_s, *, dcores):
+    dcores = producer_dcore_array(plan, dcores)
     return [{
+        "dcore": int(dcores[itree]),
+        "argmax_encoding": ARGMAX_ENCODING,
         "tree": itree,
         "dm_min": float(tree.dm_min),
         "dm_max": float(tree.dm_max),
@@ -314,12 +321,13 @@ def sample_recall_burst_parameters(rng, plan, xmd, *, dm_reach=8):
     return result
 
 
-def decoded_timestamp_summary(plan, itree, time_sample_s):
+def decoded_timestamp_summary(plan, itree, time_sample_s, *, dcores):
+    dcore = int(producer_dcore_array(plan, dcores)[itree])
     tree = plan.trees[itree]
     profiles = []
     for profile in range(int(tree.nprofiles)):
         lpf = ((profile - 1) // 3) if profile else 0
-        token_quant_tree_samples = min(int(tree.Dcore), 1 << lpf)
+        token_quant_tree_samples = min(dcore, 1 << lpf)
         full_samples = token_quant_tree_samples * (1 << int(tree.primary_tree_index))
         profiles.append({
             "profile": profile,
@@ -330,7 +338,7 @@ def decoded_timestamp_summary(plan, itree, time_sample_s):
         "semantics": TIMESTAMP_SEMANTICS,
         "reference_frequency": "lowest edge of the complete observing band",
         "primary_tree_index": int(tree.primary_tree_index),
-        "Dcore": int(tree.Dcore),
+        "Dcore": dcore,
         "input_time_sample_ms": 1.0e3 * time_sample_s,
         "profile_quantization": profiles,
     }
@@ -1036,7 +1044,7 @@ def run_simulated_peakfinders(
     threshold, device, dm_reach, waist_bins, freq_lo_MHz, freq_hi_MHz,
     expected_tree=None, output_map_index=None,
 ):
-    """Run the two final methods on identical maps from one real simulation."""
+    """Run the retained production peak finder on real simulated acquisitions."""
     requested_toas = np.atleast_1d(np.asarray(toas, dtype=np.float64))
     if requested_toas.ndim != 1 or len(requested_toas) not in (1, 2):
         raise ValueError("toas must contain exactly one or two values")
@@ -1101,9 +1109,11 @@ def run_simulated_peakfinders(
                         intended_tree=expected_tree,
                     )
                     itree = dm_audit["tree"]
+                    dcores = producer_dcore_array(od.plan, od.dd.Dcores)
                     geometry = build_peakfinder_geometry(
                         od.plan,
                         itree,
+                        dcores=dcores,
                         time_sample_s=od.time_sample_ms / 1.0e3,
                         nt_in=od.nt_in,
                         reference_freq_mhz=simulation.reference_frequency_MHz,
@@ -1142,6 +1152,7 @@ def run_simulated_peakfinders(
                     decoded_parts[method].append(decode_candidates(
                         od.plan,
                         candidates,
+                        dcores=dcores,
                         itree=itree,
                         time_chunk_index=frame.time_chunk_index,
                         ntime=od.nt_in,
@@ -1163,12 +1174,14 @@ def run_simulated_peakfinders(
         "dm_validation": dm_audit,
         "time_bin_s": geometry.time_step_s,
         "geometry": geometry_diagnostics,
-        "plan": plan_summary(od.plan, time_sample_s),
+        "plan": plan_summary(od.plan, time_sample_s, dcores=dcores),
+        "dcores": dcores.tolist(),
+        "argmax_encoding": ARGMAX_ENCODING,
         "time_sample_ms": float(od.time_sample_ms),
         "reference_frequency_MHz": float(simulation.reference_frequency_MHz),
         "burst_summaries": [dict(summary) for summary in simulation.burst_summaries],
         "width_semantics": WIDTH_SEMANTICS,
-        "decoded_timestamp": decoded_timestamp_summary(od.plan, itree, time_sample_s),
+        "decoded_timestamp": decoded_timestamp_summary(od.plan, itree, time_sample_s, dcores=dcores),
         "requested_frequency_interval": requested_interval,
         "realized_channel_coverage": {
             key: value for key, value in coverage.items()

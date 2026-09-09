@@ -1,5 +1,7 @@
 """Full-band peakfinding and seamless offline-stream regressions."""
 
+from dataclasses import replace
+
 import numpy as np
 
 from ..Peakfinders import (
@@ -37,6 +39,7 @@ def _test_geometry(cp, *, ndm=5, ntime=7, footprint=None, steady=None):
         time_radius=int(footprint.shape[1] // 2),
         requested_time_radius=int(footprint.shape[1] // 2),
         token_multiplets=1,
+        token_extra_dm=1,
         token_profiles=1,
         token_dout=1,
         profile_dt=cp.asarray([1], dtype=cp.int64),
@@ -125,12 +128,12 @@ def test_direct_full_band_matches_archived_for_every_real_tree(
     import cupy as cp
 
     with cp.cuda.Device(cuda_device_id):
-        plan = _make_plan("chord_sb2_et.yml")
+        plan, dcores = _make_plan("chord_sb2_et.yml")
         saw_crop = False
         saw_unchanged = False
         for itree in range(int(plan.ntrees)):
             geometry = PeakFinderGeometry.from_plan(
-                plan, itree, dm_reach=4, waist_bins=1
+                plan, itree, dcore=dcores[itree], dm_reach=4, waist_bins=1
             )
             full_expected = _legacy_v1_2_full_band(cp, geometry, 4, 1)
             expected = full_expected
@@ -327,9 +330,9 @@ def test_startup_validity_and_missing_provenance(cuda_device_id=0):
     import cupy as cp
 
     with cp.cuda.Device(cuda_device_id):
-        plan = _make_plan()
+        plan, dcores = _make_plan()
         geometry = PeakFinderGeometry.from_plan(
-            plan, 0, dm_reach=1, waist_bins=0
+            plan, 0, dcore=dcores[0], dm_reach=1, waist_bins=0
         )
         source_chunk = 7
         producer_start = 5
@@ -525,3 +528,25 @@ def test_streaming_rejects_geometry_requiring_i_plus_2(cuda_device_id=0):
             assert "one-chunk streaming horizon" in str(exc)
         else:
             raise AssertionError("i+2-dependent peak geometry was accepted")
+
+
+def test_invalid_token_fields_do_not_suppress_valid_extra_dm(cuda_device_id=0):
+    """Legal nonzero mu survives louder neighbors with corrupt token bytes."""
+    import cupy as cp
+    with cp.cuda.Device(cuda_device_id):
+        geometry = replace(_test_geometry(cp, ndm=1, ntime=5), token_extra_dm=2)
+        valid_token = np.uint32(1 << 24)  # mu=1, not multiplet=256.
+        for corrupt in (1, 1 << 8, 1 << 16, 2 << 24, 0xffffffff):
+            snr = cp.zeros((1, 1, 5), dtype=cp.float32)
+            token = cp.zeros((1, 1, 5), dtype=cp.uint32)
+            snr[0, 0, 2] = 100.0
+            token[0, 0, 2] = cp.uint32(corrupt)
+            snr[0, 0, 3] = 20.0
+            token[0, 0, 3] = cp.uint32(valid_token)
+            selected = extract_candidates(
+                snr, token, geometry, threshold=10.0, beam_ids=(7,),
+                source_chunk_index=0, assume_steady_state=True,
+            )
+            assert cp.asnumpy(selected.itime).tolist() == [3], hex(corrupt)
+            assert cp.asnumpy(selected.argmax_token).tolist() == [int(valid_token)]
+            assert cp.asnumpy(selected.snr).tolist() == [20.0]

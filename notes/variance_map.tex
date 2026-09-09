@@ -1,0 +1,3299 @@
+\documentclass{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}  % load last
+
+\numberwithin{equation}{section}   % equations numbered (2.13), where "2" is the section number
+
+\def\DDS{{\rm DDS}}
+\def\DD{{\rm DD}}
+\def\TDS{{\rm TDS}}
+\def\LDS{{\rm LDS}}
+\def\LS{{\rm LS}}
+\def\LAG{{\rm LAG}}
+\def\nn{\nonumber}
+
+% These notes are split across four PDFs, compiled independently from
+% notes/dedispersion.tex, notes/detrending.tex, notes/variance_map.tex,
+% notes/inpainting.tex.
+% Everything above this comment is deliberately IDENTICAL in all four sources,
+% so that a section can be moved between them without touching the preamble.
+%
+% A \ref cannot cross documents, so a pointer into a companion PDF names its
+% section in prose instead: \ddnotes{Subband search} renders as
+% [dedispersion.pdf, "Subband search"]. Each source defines the macros for the
+% other three documents (any may be unused at any given moment). The argument
+% must reproduce a section or subsection title of the companion verbatim.
+\newcommand{\ddnotes}[1]{{\em dedispersion.pdf}, ``#1''}
+\newcommand{\dtnotes}[1]{{\em detrending.pdf}, ``#1''}
+\newcommand{\ipnotes}[1]{{\em inpainting.pdf}, ``#1''}
+
+\title{Notes on the ``pirate'' dedisperser: the variance map (in progress)}
+\author{Kendrick Smith}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+
+\setstretch{1.05}   % spacing between lines
+\setlength{\parskip}{2.5pt}  % spacing between paragraphs
+
+\clearpage
+
+\section{The variance map}
+\label{sec:variance_map}
+
+This section is work in progress, and its relation to the rest of the real-time
+pipeline won't be clear yet!
+
+\subsection{Setup}
+\label{ssec:variance_map_setup}
+
+Fix a {\tt DedispersionTree} and use notation from \ddnotes{Tree dedispersion}:
+\begin{align}
+r &= \mbox{tree rank} \\
+R &= \mbox{pf\_rank} \\
+M &= \mbox{number of multiplets} \\
+P &= \mbox{number of peak-finding profiles} \\
+\gamma &= \mbox{downsampling level (i.e.\ downsampling factor is $2^\gamma$)}
+\end{align}
+Consider a linear operator $L$, whose input is an $(N_{\rm freq}, N_{\rm time})$ array
+and whose output is a $(2^{r-R}, M, P, N_{\rm time}/2^\gamma)$ array defined by the
+following sequence of steps:
+\begin{enumerate}
+\item Apply a {\tt GpuDetrenderLps2d} to the $(N_{\rm freq}, N_{\rm time})$ array
+  in-place with {\bf no mask}. The parameters of the {\tt GpuDetrenderLps2d} are
+  part of the problem specification -- we might ``warm up'' with a simple
+  case (e.g.\ $n=W=0$).
+\item Apply tree dedispersion, including peak-finding convolution for each $0 \le p < P$, 
+  but {\bf not} multiplying by a weight array to normalize to ``sigmas'', or coarse-graining.
+  Thus, $L$ is the unnormalized dedispersion transform with explicit indices for subbands
+  and peak-finding kernel.
+\end{enumerate}
+Assume that each element of the input $(N_{\rm freq}, N_{\rm time})$ array is an independent
+mean-zero Gaussian with known variance $v_F$ which depends on frequency channel
+$0 \le F < N_{\rm freq}$ but not time.
+Then, after dedispersion reaches steady state, the variance of the output array $y_{dmp}$
+depends on $0 \le d < 2^{r-R}$, $0 \le m < M$, $0 \le p < P$, but not time.
+We sometimes ``flatten'' the indices $(d,m,p)$ to a single index $0 \le \alpha < 2^{r-R}MP$.
+Since $L$ is linear, the output variance $y_\alpha$ is linear in the input variance $v_F$:
+\begin{equation}
+y_\alpha = \sum_F A_{\alpha F} v_F  \label{eq:variance_map_def}
+\end{equation}
+where this equation defines the {\bf variance map} $A$, a $(2^{r-R}MP)$-by-$N_{\rm freq}$ matrix.
+
+In its dense matrix representation, the variance map is too expensive to compute (or even store)
+at CHIME/CHORD scale.
+This section is concerned with the following central, currently unsolved, problem:
+can we find a {\bf low-rank} approximation to the variance map $A \approx QW^T$, which can be computed
+in a reasonable amount of time?
+That is, we are trying to achieve three goals:
+\begin{enumerate}
+\item We want to minimize the rank of the approximation $A^{\rm approx} \equiv QW^T$.
+\item We want the approximation $A^{\rm approx} \approx A^{\rm true}$ to be accurate,
+ in the sense that a certain distance function $D(A^{\rm true}, A^{\rm approx})$ is
+ small. The choice of distance function is unusual, and is discussed in the next subsection.
+\item We want $A^{\rm approx}$ to be computable in a reasonable amount of time.
+ In particular, we'd like to avoid computing every matrix element of $A^{\rm true}$,
+ since this is cost-prohibitive at CHIME/CHORD scale.
+ This aspect of the problem is particularly challenging, so I suggest ``warming up'' by
+ exploring subscale examples, where computing $A^{\rm true}$ is feasible, and finding
+ a scalable solution later.
+\end{enumerate}
+
+\subsection{Distance function}
+\label{ssec:distance_function}
+
+Given matrices $A^{\rm true}_{\alpha F}, A^{\rm approx}_{\alpha F}$,
+our distance function $D(A^{\rm true}, A^{\rm approx})$ is defined as follows.
+First, we define vectors
+$y^{\rm true}_{\alpha}$, $y^{\rm approx}_{\alpha}$ by:
+\begin{equation}
+y^{\rm true}_{\alpha} \equiv \sum_F A^{\rm true}_{\alpha F}
+  \hspace{1.5cm}
+y^{\rm approx}_{\alpha} \equiv \sum_F A^{\rm approx}_{\alpha F}
+\label{eq:ytrue_def}
+\end{equation}
+Then we define:
+\begin{equation}
+D(A^{\rm true}, A^{\rm approx})
+ \equiv \begin{cases}
+   \infty & \mbox{if $A^{\rm approx}_{\alpha F} < A^{\rm true}_{\alpha F}$ for any $(\alpha,F)$} \\
+   N_\alpha^{-1} \sum_\alpha f(y_\alpha^{\rm approx}/y_\alpha^{\rm true})
+    & \mbox{otherwise}
+\end{cases} 
+\label{eq:distance_function}
+\end{equation}
+where $N_\alpha = \sum_\alpha 1$ is the number of $\alpha$-values, and $f(x)$ is defined by:
+\begin{equation}
+f(x) \equiv \frac{x-1}{1+(x/10)}
+\end{equation}
+This is implemented by \verb|VarianceMap.get_distance()| (in \verb|pirate_frb/varmap/|),
+which should be used wherever a distance is reported, so that results are comparable.
+Its companion \verb|VarianceMap.measure_admissibility()| reports the worst per-element ratio
+$\max_{\alpha F} (A^{\rm true}_{\alpha F} / A^{\rm approx}_{\alpha F})$ (\verb|max_r|)
+together with the $(\alpha,F)$ where it occurs, and with \verb|inflate=True| also the distance
+\verb|D_inflated| of $A^{\rm approx}$ rescaled by that ratio. These are more informative than
+$D$ alone: if the max ratio is only a little larger than $1$, then inflating $A^{\rm approx}$
+slightly gives a finite distance, so such an approximation is nearly usable -- whereas
+$D = \infty$ by itself does not distinguish it from a hopeless one.
+
+This unusual distance function has the following properties:
+\begin{enumerate}
+\item Underestimating any matrix element of $A$ is catastrophic -- the approximation
+ is considered infinitely bad.
+\item Overestimating is okay, but our goal is to minimize the average level of
+ overestimation.
+\item Extreme overestimation is fine, as long as it's confined to a small number
+ of $\alpha$-values. (If we send $y_\alpha \rightarrow \infty$ for a few $\alpha$
+ values, then it has a bounded effect on the distance function.)
+\end{enumerate}
+The motivation is as follows.
+In the real-time search, we normalize dedispersion outputs to ``sigmas'' by multiplying
+by $(Av)^{-1/2}$, where $v_F$ is a real-time estimate for the RFI-masked variance.
+We search a gigantic number of trials ($\sim\!10^{15}$) for rare events, and we use
+a high threshold (9--10$\sigma$) due to the high trial factor.
+
+Underestimating variance is catastrophic, even in corner cases, since it can generate
+a large number of false positives in the far tail of the SNR distribution.
+The RFI mask is unpredictable and can produce corner cases, such as a small number
+of frequency channels contributing.
+Therefore, we impose a strict constraint (per matrix element!) that we never underestimate
+variance.
+
+In contrast, overestimating variance is undesirable, since it reduces the total event rate,
+but this is a statistical concern, not a hard constraint.
+Because it's a statistical concern, our cost function focuses on the typical case where
+all channels have similar variance, not per-matrix-element analysis.
+
+\subsection{Tools and current status}
+
+\begin{itemize}
+
+\item The \verb|pirate_frb.varmap| subpackage contains tools for working with variance
+ maps. The central object is a \verb|VarianceMap| class which represents a variance map $A$,
+ in a flexible sense: $A$ can be either exact or approximate, can be either dense or low-rank,
+ and can be coarse-grained (in the sense defined by Eq.\ (\ref{eq:coarse_grain_def}) below).
+ The \verb|VarianceMap| class has methods that can manipulate a variance map (e.g.\ saving
+ to an asdf file).
+
+\item There is a ``brute-force'' algorithm to compute the variance map $A$ in dense form 
+ (\S\ref{sec:variance_map_bruteforce}), for any linear operator $L$ which commutes
+ with time translations. In our case of interest, where $L$ is defined by a {\tt DetrenderLps2dParams}
+ and a {\tt DedispersionConfig}, this algorithm is implemented (CLI: {\tt pirate\_frb varmap bf}).
+ This may be a useful ``crutch'' for initial exploration, although in the long run it won't
+ scale to CHIME/CHORD. It would be a significant milestone
+ to develop an algorithm which works well starting from a dense representation of $A$.
+
+\item In the ``detrender-free'' special case, there is a theorem that $A$ does not have
+ full rank (in general), and an algorithm for computing $A$ in low-rank form, without
+ computing a dense matrix as an intermedate.
+ This algorithm is implemented as {\tt pirate\_frb varmap df}.
+ Unfortunately, this algorithm does not generalize to the case where a {\tt GpuDetrenderLps2d}
+ is specified.
+
+\item There is a general notion of coarse-graining the variance map $A_{\alpha F}$.
+Recall that $0 \le \alpha < (2^{r-R}MP)$ is a ``flattened'' index. 
+Let $0\le \beta < (2^{r-L}NP)$ be a coarser ``flattened''
+index obtained by coarse-graining DM. Here, $L \ge R$ is a coarse-graining factor, 
+and $N \le M$ is the number of frequency subbands (a multiplet is a subband plus
+a fine-grained DM). Define the coarse-grained variance map $\bar A$ by:
+\begin{equation}
+\bar A_{\beta F} = \max_{\alpha\in\beta} A_{\alpha F}
+\label{eq:coarse_grain_def}
+\end{equation}
+Conversely, $\bar A$ (or a low-rank approximation to $\bar A$) can be ``lifted''
+to an approximation of $A$.
+At CHIME/CHORD scale, and with $L=6$ (say), working with $\bar A_{\beta F}$ is much
+more feasible than working with $A$, and the distance penalty due to the ``lift''
+turns out to be small.
+The {\tt varmap bf} and {\tt varmap df} CLI commands have a {\tt -L} flag to
+output a coarse-grained variance map.
+
+\item One detail: when we either coarse-grain a map $A_{\alpha F} \rightarrow \bar A_{\beta F}$,
+ or construct a low-rank approximation $A^{\rm approx} \approx A^{\rm true}$, we retain
+ the {\em true, fine-grained} vector $y^{\rm true}_\alpha$ defined in Eq.\ (\ref{eq:ytrue_def}).
+ We also retain a boolean flag \verb|is_admissible| which keeps track of whether the constraint
+ $A^{\rm approx}_{\alpha F} \ge A^{\rm true}_{\alpha F}$ is satisfied.
+ Together, these two pieces of data suffice to compute $D(A^{\rm true}, A^{\rm approx})$, and
+ thereby gauge the quality of the approximation (including coarse-graining distance penalty).
+
+\item In the general case (i.e.\ including a {\tt GpuDetrenderLps2d}), we're currently in the
+ process of exploring algorithms which start from the ``brute-force'' dense $A$, and
+ obtain a low-rank approximation, using a sequence of steps (e.g.\ coarse-graining,
+ SVD decomposition, linear programming).
+ Since this is work in progress and the details are still evolving,
+ I haven't written up the details in the tex -- see {\tt misc/varmap\_ladder/README.md}
+ for current status.
+
+\end{itemize}
+
+\section{Notes from ch-research campaigns}
+\label{sec:first_milestone}
+
+In this section, we'll explore algorithms for finding low-rank approximations,
+under the assumption that the dense $A$-matrix has been precomputed and saved to disk.
+
+This section is organized as alternating subsections which are human-authored
+or agent-authored.
+The human-authored sections usually propose ideas for the agent to explore, and the
+agent-authored sections usually report results (after running a ``campaign'' via the
+\verb|ch-research| skill).
+
+\subsection{Campaign 1 setup [human-authored]}
+
+Let's start by considering the following question.
+Suppose that we've precomputed the variance map $A$, given a {\tt DedispersionConfig} 
+and a {\tt DetrenderLps2dParams}, and written it to disk.
+What are some interesting algorithms for finding a low-rank approximation with
+small $D(A^{\rm true}, A^{\rm approx})$?
+
+An ideal milestone would be to have some code which reads a precomputed variance map $A$,
+and returns a few (matrix rank, distance) pairs, to get a sense for how the level of approximation
+might depend on the rank of the approximation.
+
+Some practical notes, to get started:
+\begin{itemize}
+
+\item To compute an $A$-matrix, use \verb|pirate_frb varmap bf <config> -o A.asdf| (the
+ brute-force sweep, \S\ref{sec:variance_map_bruteforce}, which takes an optional
+ \verb|<detrender>| positional argument or \verb|--no-detrender|) or
+ \verb|pirate_frb varmap df <config> -o A.asdf| (the analytic map, no detrender). To read one
+ back, use \verb|varmap.VarianceMultiMap.from_asdf()|, and to check one against Monte Carlo,
+ \verb|pirate_frb varmap mc A.asdf|.
+
+\item To evaluate the distance function, use \verb|VarianceMap.get_distance()| (in
+ \verb|pirate_frb/varmap/|, see \S\ref{ssec:distance_function}). Please use it, rather than
+ reimplementing $D$, so that distances reported by different experiments are comparable.
+ Besides \verb|D|, report \verb|max_r|, \verb|max_diff| and \verb|D_inflated| from
+ \verb|measure_admissibility(inflate=True)|: the first and third distinguish an approximation
+ which is nearly usable from one which is hopeless, and the second is the accuracy figure
+ (\verb|max_r| is an inflation factor, not an error -- see \S\ref{ssec:distance_function}).
+
+\item There is no subscale config in \verb|configs/dedispersion/| yet, so part of the task is to
+ create a variety of them, exploring the {\tt DedispersionConfig} and {\tt DetrenderLps2dParams}
+ parameter space. We are more interested in {\em typical} cases than in adversarial or edge
+ cases: the goal is an algorithm that works well on the configs we would actually run, not one
+ that survives a worst case we will never encounter.
+
+\end{itemize}
+
+Here are some initial thoughts and directions that may be interesting, but
+I encourage you to propose new ideas and directions:
+
+\begin{itemize}
+
+\item I suspect that heuristic algorithms and empirical approaches will
+ work best, and that making rigorous guarantees will be hard. (But I'd love to
+ be wrong about this!)
+
+\item Let's disable downsampled trees and early triggers. I suspect that
+ if we can solve the problem for a single {\tt DedispersionTree}, we'll
+ be able to solve the multi-tree case.
+
+\item To start out, let's also disable frequency subbands, so that the
+ main parameters to explore are the frequency zones, and the {\tt GpuDetrenderLps2d}.
+ Let's also use subscale instances (say rank-10 and $\sim$400 frequency channels).
+ Later, we can scale up, and add frequency subbands.
+
+\item Our distance function (\ref{eq:distance_function}) is discontinuous,
+ which makes it hard to use optimization-based approaches. It may be useful to
+ ``relax'' to a continuous distance function in an intermediate stage. Or, if
+ continuity turns out to be very helpful, then we could think about changing
+ the definition of the cost function.
+
+\item Suppose we have an accurate approximation $A_1 = Q W^T$ with
+ a large rank (say 1000). Can we find an algorithm to search for a lower-rank
+ (say 100) representation $A_2$ with small $D(A_1,A_2)$? If such an algorithm
+ exists, it could be useful for ``bootstrapping'' low-rank approximations from
+ medium-rank ones.
+
+\item Is coarse-graining DM a useful idea? Recall that $0 \le \alpha < (2^{r-R}MP)$
+is a ``flattened'' index. Let $0\le \beta < (2^{r-L}NP)$ be a coarser ``flattened''
+index obtained by coarse-graining DM. Here, $L \ge R$ is a coarse-graining factor, 
+and $N \le M$ is the number of frequency subbands (a multiplet is a subband plus
+a fine-grained DM). Define the coarse-grained variance map $\bar A$ by:
+\begin{equation}
+\bar A_{\beta F} = \max_{\alpha\in\beta} A_{\alpha F}
+\end{equation}
+One approach to controlling rank/cost is to find a low-rank approximation to $\bar A$, 
+and ``lift'' it to a low-rank approximation to $A$. (Note that our current ``production''
+GPU kernels use coarse-grained weights, which implicitly assumes that this approach is
+viable at some level.)
+
+\item If we're having trouble at low DM specifically, then we could inflate variance
+estimates at low DM (with little or no change in the rank). Given our unusual distance
+function $D$, it may not change the value of $D$ dramatically.
+
+\end{itemize}
+
+\subsection{Campaign 1 results [agent-authored]}
+\label{ssec:varmap_proposed}
+
+This subsection describes an algorithm which came out of an initial exploration of the
+milestone above, and the numbers it produces. The short version: the approximation which works is
+a {\em one-sided nonnegative factorization at coarse-grained DM}, built by alternating two
+linear programs. It is more accurate than any clustering we tried, it turns out to be cheaper to
+apply than the alternatives, it never forms the dense $A$, and its output is the array the
+production peak-finding kernel already stores.
+
+Throughout, $Q$ and $W$ are the factors of $A^{\rm approx} = QW^T$ as in
+\S\ref{ssec:variance_map_setup}: $W$ is $N_{\rm freq}$-by-$K$ and $Q$ is $(2^{r-R}MP)$-by-$K$.
+Note the symbol clash with the {\tt GpuDetrenderLps2d} time half-width $W$ of \dtnotes{2-d detrending};
+below, the detrender's half-width is always named in words, never as $W$.
+
+\paragraph*{Why not least squares.}
+It is worth being explicit about why the obvious tool fails, because it shapes everything else.
+The constraint in Eq.\ (\ref{eq:distance_function}) is {\em per matrix element}: a single
+$A^{\rm approx}_{\alpha F} < A^{\rm true}_{\alpha F}$ anywhere sends $D$ to infinity. So this is
+a {\em one-sided} (upper-bound) approximation problem, not a least-squares problem, and a
+truncated SVD is not merely suboptimal but usually inadmissible. A truncation has negative
+entries; clipping them to zero still leaves it underestimating $A$ somewhere, and no rescaling
+can repair that. On a rank-8 map with a detrender, truncations at rank 8, 16, 32 and 64 are all
+inadmissible ($D = \infty$); the first admissible one is rank 128, and it scores $D = 0.10$
+where a rank-128 envelope scores $0.054$. Least-squares accuracy is close to irrelevant here,
+and at low rank it is actively misleading.
+
+The exception is instructive. With {\em no} {\tt GpuDetrenderLps2d}, $A$ really is close to low rank
+-- numerically ${\rm rank}(A) = 54$ to $138$ on our maps -- and a clipped, inflated rank-16 SVD
+reaches $D \approx 10^{-6}$, four orders of magnitude better than any clustering at the same
+rank. Frequency subbands alone do not break this. It is the {\tt GpuDetrenderLps2d} that destroys the
+algebraic structure (\dtnotes{2-d detrending}: it smears every one-hot across its whole spline
+zone, which also destroys the exact zeros of $A$), and once it is switched on the SVD is dead at
+every rank below $N_{\rm freq}$. The algorithm below is aimed at that case, since it is the one
+we run.
+
+\paragraph*{The shape of the approximation: a coarse-grained $Q$.}
+Partition the $N_\alpha \equiv 2^{r-R}MP$ output indices $\alpha$ into $N_\beta$ groups, indexed by
+$\beta$, and write $\beta(\alpha)$ for the group containing $\alpha$. Give each {\em group} a
+single coefficient vector $q_\beta \in \mathbb{R}^K_{\ge 0}$, and let every $\alpha$ in that
+group share it:
+\begin{equation}
+A^{\rm approx}_{\alpha F} = (W q_{\beta(\alpha)})_F
+\label{eq:varmap_coarse_assign}
+\end{equation}
+To fix the shapes: $W$ is $N_{\rm freq}$-by-$K$, so its $K$ columns are frequency vectors;
+$q_\beta$ is a column vector of $K$ nonnegative numbers; $W q_\beta$ is
+therefore an $N_{\rm freq}$-vector, and $(\cdot)_F$ takes its $F$-th component. In words,
+Eq.\ (\ref{eq:varmap_coarse_assign}) says {\em every output row in a group is the same
+nonnegative combination of the same $K$ columns of $W$}.
+
+This is the notes' own coarse-graining of \S\ref{sec:first_milestone} with one generalization:
+instead of giving each group a single column of $W$, we let it use a nonnegative
+{\em combination} of them.
+
+{\bf Relation to $Q$, and the degrees of freedom.} Collect the $q_\beta$ as the rows of a
+$N_\beta$-by-$K$ matrix $\bar Q$. Then the $Q$ of $A^{\rm approx} = QW^T$ is $\bar Q$ with its rows
+duplicated across each group,
+\begin{equation}
+Q = S \bar Q,
+\hspace{1.5cm}
+S_{\alpha\beta} = \begin{cases} 1 & \mbox{if $\beta(\alpha) = \beta$} \\ 0 & \mbox{otherwise}\end{cases}
+\label{eq:varmap_qbar}
+\end{equation}
+where $S$ is the $N_\alpha$-by-$N_\beta$ one-hot group-membership matrix. So $Q$ formally has
+$N_\alpha$ rows, but only $N_\beta$ {\em distinct} ones, and the free parameters are $W$ and
+$\bar Q$ alone: $K(N_{\rm freq} + N_\beta)$ of them, against $K(N_{\rm freq} + N_\alpha)$ for an
+unrestricted per-row factorization. The rank is $K$ either way.
+
+That row duplication is not a technicality -- it is where the practical win comes from, since
+$N_\alpha / N_\beta = 2^{L-R} (M/N)$ is large (233 at CHORD tree 0). At the CHIME tree-0 geometry
+below, with $N_\alpha = 524288$, $N_\beta = 8192$, $N_{\rm freq} = 16384$ and $K = 32$: $W$ carries
+$5.2\times10^5$ parameters and $\bar Q$ carries $2.6\times10^5$ dense -- or $1.6\times10^4$
+nonzeros once $q_\beta$ is capped at two nonzero entries -- against $1.7\times10^7$ for a
+per-row $Q$ of the same rank.
+
+The groups are exactly the $\beta$ of \S\ref{sec:first_milestone}, so that
+$N_\beta = 2^{r-L}NP$: coarse-grain DM by a factor
+$2^{L-R}$, and never merge across a frequency subband or a peak-finding profile. An ablation
+over the three axes says this is not a stylistic choice -- merging subbands costs a factor
+$489$ to $3174$ at equal rank, merging profiles a factor $11$ to $175$, whereas merging
+{\em fine-grained} DM within a multiplet is nearly free (a factor $1.0$ to $3.9$). The reason
+subbands cannot be merged is that they have disjoint frequency support, and this survives the
+detrender: the support stops being disjoint but stays concentrated, which is enough.
+
+Define the coarse-grained variance map, as in \S\ref{sec:first_milestone},
+\begin{equation}
+\bar A_{\beta F} = \max_{\alpha \in \beta} A_{\alpha F}
+\label{eq:varmap_abar}
+\end{equation}
+Then any $q_\beta$ satisfying $W q_\beta \ge \bar A_{\beta,:}$ elementwise is automatically
+admissible for every fine row in the group, since $(Wq_\beta)_F \ge \bar A_{\beta F} \ge
+A_{\alpha F}$. {\bf This is the pivot of the whole algorithm}: admissibility becomes a property
+of $\bar A$ alone, so the optimization never needs to see a dense row of $A$.
+
+\paragraph*{What the algorithm needs, and why it is cheap.}
+Only three things: $\bar A$, the fine row sums $y_\alpha = \sum_F A_{\alpha F}$, and the group
+labels (pure geometry). The row sums are needed only to {\em score} the result, not to build it.
+Both $\bar A$ and $y$ are computable in a single streaming pass, because the brute-force sweep
+of \S\ref{sec:variance_map_bruteforce} already produces $A$ one input channel (one column) at a
+time: max-reduce each column into its groups as it appears, accumulate $y$, and discard the
+column. For a CHIME-shaped tree this is $1.0$ GiB of $\bar A$ instead of $64$ GiB of $A$; for
+CHORD, $5.4$ GiB instead of $1251$ GiB. Measured against a dense reduction on the $64$ GiB case,
+the streamed $\bar A$ is bit-identical, uses $1.9$ GiB of peak RSS against $128.5$ GiB, and is
+20\% faster.
+
+\paragraph*{Step 1: constructing $W$ (this is also the initialization).}
+We need an initial $W$, i.e.\ $K$ frequency vectors from which every group's row can be covered.
+Take the $N_\beta$ rows of $\bar A$, normalize each to unit sum,
+\begin{equation}
+\bar u_{\beta F} = \bar A_{\beta F} \Big/ \sum_{F'} \bar A_{\beta F'}
+\end{equation}
+and cluster them by greedy agglomerative merging: start with one cluster per group, and
+repeatedly merge the pair whose merge increases the objective least. The column of $W$ for
+cluster $c$ is the elementwise max over its members, $W_{Fc} = \max_{\beta \in c} \bar
+u_{\beta F}$.
+
+Two things about this are worth understanding rather than just implementing.
+
+{\em Why shapes and not rows.} If a group is given a single column of $W$, it is always
+free to rescale it -- $q_\beta = s e_c$ costs nothing in rank -- and the optimal $s$ is
+$\max_F \bar A_{\beta F}/W_{Fc}$. Substituting it, the resulting $y^{\rm approx}_\beta /
+y^{\rm true}_\beta$ is invariant under $W \to cW$ and does not involve the row's overall
+normalization at all. So {\em once rescaling is allowed, only the shapes matter}, and clustering
+the raw rows optimizes the wrong thing -- visibly so, since it produces a non-monotone frontier
+in $K$. Clustering the unit-sum shapes instead is worth 3--20\% (typically 11--14\%) at no extra
+cost, and the argument is stronger for the full algorithm below, whose $q_\beta$ is exactly
+scale-invariant in each atom. Note this construction of $W$ needs only $\bar A$ -- not even $y$.
+
+{\em Why this is a good enough starting point.} The initial $W$ is a max envelope, so the
+one-hot $q_\beta = e_{c(\beta)}$ is feasible: the alternation starts from an
+admissible point with a known finite $D$, and every step below preserves feasibility. The
+$W$ also does not have to be optimal, only reasonable: building it from $\bar A$ at the
+same coarse-graining used for $Q$ is within 3.6\% of building it from a finer $\bar A$,
+and within 3.5\% of building it from the dense $A$. So there is no reason to keep a finer
+$\bar A$ around -- the memory footprint is set by $Q$ alone.
+
+\paragraph*{Step 2: the Q-step (optimize $Q$, holding $W$ fixed).}
+Let $s_c = \sum_F W_{Fc}$, so that a group's approximate row sum is $s \cdot q_\beta$. Since $f$
+in Eq.\ (\ref{eq:distance_function}) is strictly increasing, minimizing $D$ over $q_\beta$ is
+exactly minimizing the row sum, and the groups are independent. So the Q-step is, for each
+$\beta$ separately, the covering linear program
+\begin{equation}
+\min_{q_\beta \ge 0} \ s \cdot q_\beta
+\hspace{1.2cm}\mbox{subject to}\hspace{1.2cm}
+W q_\beta \ \ge \ \bar A_{\beta,:}
+\label{eq:varmap_qstep}
+\end{equation}
+with $K$ variables and $N_{\rm freq}$ constraints. Three remarks. It is {\em exact}, not a
+heuristic -- given $W$, no better $Q$ exists. It uses only that $f$ is increasing, so it
+is insensitive to the exact shape of the cost function. And it is embarrassingly parallel over
+groups. At $N_{\rm freq} = 16384$ it should be solved with constraint generation (start from a
+subset of channels, add violated ones, repeat); this is $8.7\times$ faster than handing the
+solver all the constraints and agrees with it to $10^{-9}$, and without it the method looks
+unaffordable when it is not.
+
+\paragraph*{Step 3: the W-step (optimize $W$, holding $Q$ fixed).}
+This one needs a small trick, because the objective depends on $W$ through the column sums while
+the constraint depends on $W$ elementwise, so it does not decouple as written. Observe that $f$
+is concave:
+\begin{equation}
+f'(x) = \frac{1.1}{(1+x/10)^2} > 0,
+\hspace{1.5cm}
+f''(x) < 0
+\end{equation}
+For a concave $f$ the tangent at the current iterate is a global {\em upper} bound, $f(x) \le
+f(x_0) + f'(x_0)(x-x_0)$, so minimizing the tangent is a majorize-minimize step and is guaranteed
+not to increase the true objective. The majorizer is linear in $y$, hence linear in $W$: with
+weights $w_\alpha = f'(x_\alpha)/y^{\rm true}_\alpha$ evaluated at the current iterate, it is
+$\sum_{F,c} W_{Fc}\,(\sum_\alpha w_\alpha Q_{\alpha c})$, which {\em decouples over frequency
+channels}. So the W-step is, for each channel $F$ separately,
+\begin{equation}
+\min_{W_{F,:} \ge 0} \ g \cdot W_{F,:}
+\hspace{1.2cm}\mbox{subject to}\hspace{1.2cm}
+Q\,W_{F,:} \ \ge \ \bar A_{:,F},
+\hspace{1.2cm} g_c \equiv \sum_\alpha w_\alpha Q_{\alpha c}
+\label{eq:varmap_wstep}
+\end{equation}
+with $K$ variables and $N_\beta$ constraints. Again only $\bar A$ is touched.
+
+\paragraph*{Iteration schedule.}
+Feasibility is an invariant rather than a hope: after a W-step the current $q_\beta$ is still
+feasible for the next Q-step, and after a Q-step the current $W_{F,:}$ is still feasible for the
+next W-step. Starting from the admissible envelope of Step 1, every LP in every run we did was
+feasible.
+
+In practice, {\bf run three Q-steps and two W-steps and stop}. The first Q-step is 68--94\% of
+the total gain; the W-step is worth only a further 7--18\%, and {\em nothing at all} on a map
+with no detrender. Monotonicity was checked over 435 consecutive half-steps: the only increases
+were $\sim\!10^{-5}$ relative, all attributable to the admissibility repair below.
+
+\paragraph*{Numerical care (this is not optional).}
+An LP solution that is ``feasible'' to the solver can still violate $W q \ge \bar A$ enough to
+make $D$ infinite. The tolerance to budget for is {\em relative}, but a solver's tolerance is
+{\em absolute} -- HiGHS's default primal feasibility tolerance is $\sim\!10^{-7}$, which on a
+matrix element of $10^{-12}$ is meaningless. On one subbanded map the W-step set $W_{Fc} = 0$
+where $A^{\rm true} > 0$, which no rescaling can repair. Two fixes, both cheap:
+\begin{enumerate}
+\item {\bf Equilibrate every constraint to a right-hand side of 1}, i.e.\ rewrite $Mx \ge b$ as
+ $(M/b)x \ge 1$, dropping the $b=0$ rows (automatically satisfied since $M, x \ge 0$). The
+ solver's absolute tolerance is then a uniform relative one. This brought the worst violation
+ down to $1.3\times10^{-7}$ -- exactly the solver tolerance -- on every map.
+\item {\bf Repair exactly and locally afterwards}, rather than applying a blanket multiplicative
+ margin: scale row $\beta$ of $Q$ by $\max(1, \max_F \bar A_{\beta F}/(Wq_\beta)_F)$, and
+ similarly per channel after a W-step. Scaling one row of $Q$ touches only that row of the
+ product, so the repair cannot break anything else.
+\end{enumerate}
+With both in place, all 1944 approximations evaluated in the study were admissible with
+${\rm max\_r} = 1$ exactly.
+
+\paragraph*{Choosing the coarse-graining factor $L$.}
+There is a usable design rule. The {\em floor} $D_{\rm floor}(L)$ -- the plain max envelope of
+Eq.\ (\ref{eq:varmap_abar}) lifted back to $A$, with no LP at all -- is a hard lower bound for
+the whole coarse-grained-$Q$ family at any rank, and it is cheap to evaluate. Empirically the
+achieved distance adds it in quadrature to the distance the same algorithm would reach with
+unlimited $L$:
+\begin{equation}
+D(L) \ \approx \ \sqrt{D_\infty^2 + D_{\rm floor}(L)^2}
+\label{eq:varmap_quadrature}
+\end{equation}
+which held to $-6$\%/$+11$\% over 25 predictions spanning five octaves of $2^{r-L}$. So: pick $L$
+such that $D_{\rm floor}(L) \lesssim D_{\rm target}/3$, which requires only a streamed $\bar A$
+and one envelope evaluation, and then the LP machinery is worth building.
+
+A second empirical law is useful for extrapolating between configurations. At fixed
+$n_{\rm dm,wt} \equiv 2^{r-L}$ (the {\em number} of coarse DM bins), $D$ varies by only
+$1.15$--$1.37\times$ over tree ranks 12 to 16, whereas at fixed $L$ it varies by 12--$142\times$.
+So $D$ is set by $n_{\rm dm,wt}$, not by $L$, and in the fine regime
+\begin{equation}
+D \ \approx \ C(r) \, n_{\rm dm,wt}^{-0.85},
+\hspace{1.2cm} C \approx 1.3 \ \mbox{to} \ 2.6 \ \mbox{for} \ r = 8 \ \mbox{to} \ 16
+\end{equation}
+The exponent is $0.85$ and not $1$; assuming $1$ under-predicts $D$ by roughly $2\times$ per
+four octaves of extrapolation. Because a fixed \verb|wt_dm_downsampling| is a {\em finer}
+fractional DM cut at higher rank, production is better off than any subscale measurement
+suggests.
+
+\paragraph*{Results.}
+All distances below are from \verb|VarianceMap.get_distance()| (\S\ref{ssec:distance_function}) and all
+approximations are admissible (${\rm max\_r} = 1$). ``Envelope'' is the best plain clustering we
+found, which is the same greedy agglomerative merge in shape space but with one-hot $q_\beta$.
+
+One quantity in the table needs defining first. Write ${\rm nnz}$ for the number of {\em nonzero}
+entries of $q_\beta$: how many of the $K$ columns of $W$ a group actually uses. It is a
+separate budget from the rank -- $K$ is the number of {\em shared} columns of $W$, ${\rm nnz}$ is
+how much of it each group draws on -- and the two enter the cost differently (see below).
+The plain envelope is ${\rm nnz} = 1$ by construction, since each group uses one column of $W$.
+The Q-step of Eq.\ (\ref{eq:varmap_qstep}) is {\em not} asked to be sparse and returns
+${\rm nnz} = 2$ to $3$ anyway. The ``${\rm nnz} \le 2$'' row is the variant where it is
+additionally constrained: keep the best admissible subset of size 2 of the LP's own support,
+then re-run the alternation with that support frozen.
+
+The cleanest measurement is at the real CHIME tree-0 geometry ($r{=}15$, $N{=}1$, $P{=}16$,
+$N_{\rm freq} = 16384$, $N_\alpha = 524288$, dense $|A| = 64$ GiB), coarse-grained at
+$L$ corresponding to the shipped \verb|wt_dm_downsampling| $=64$, i.e.\ $N_\beta = 8192$ groups.
+The {\tt GpuDetrenderLps2d} is the one used throughout this study: a single spline zone with
+$n_\phi = 2$, $n = 2$, time half-width $2$, $T = 2048$, $\eta = 10^{-3}$,
+$\epsilon = 3\times10^{-5}$, and a uniform knot vector giving 8 knot intervals across the band
+(hence $N_\phi = 10$ spline basis functions), held fixed as $N_{\rm freq}$ varies.
+{\bf Note the time half-width is 2, which is the pessimistic end of the range}: it is the
+setting that makes the low-DM rows hard, and the distances below would improve by roughly
+$2.8\times$ at half-width 8 (see the last bullet of ``what is not yet established'' below).
+The table is therefore a conservative operating point, not a tuned one.
+
+\begin{center}
+\begin{tabular}{lcccc}
+rank $K$ & 8 & 16 & 32 & 64 \\
+\hline
+(a) envelope (one-hot, ${\rm nnz} = 1$) & 0.0750 & 0.0504 & 0.0357 & 0.0261 \\
+(b) {\bf this algorithm} (${\rm nnz}$ unconstrained) & {\bf 0.0412} & {\bf 0.0277} & {\bf 0.0191} & {\bf 0.0136} \\
+(c) this algorithm, ${\rm nnz} \le 2$ & 0.0470 & 0.0331 & 0.0235 & 0.0182 \\
+\hline
+gain at equal rank, (a)/(b) & 1.82$\times$ & 1.82$\times$ & 1.87$\times$ & 1.92$\times$ \\
+gain at equal rank, (a)/(c) & 1.60$\times$ & 1.52$\times$ & 1.52$\times$ & 1.43$\times$ \\
+\end{tabular}
+\end{center}
+
+Every entry is a distance $D$, and all three rows are the same rank $K$: they differ only in how
+many columns of $W$ each group may use. Constraining ${\rm nnz}$ to 2 costs 14--34\% in $D$
+and is worth doing only when it buys more than that in cost, which at this geometry it does not
+-- see below.
+
+For reference, the coarse-graining alone -- one weight per group, i.e.\ rank $N_\beta = 8192$ and
+no factorization at all, which is what production currently computes -- gives $D = 0.0043$ on
+the same map. That is the floor $D_{\rm floor}(L)$ of Eq.\ (\ref{eq:varmap_quadrature}).
+
+{\bf The trade this exposes is the useful output.} Rank 8192 at $D = 0.0043$ costs
+$1.34\times10^8$ multiply-adds to apply; rank 32 with ${\rm nnz}=2$ at $D = 0.0235$ costs
+$5.4\times10^5$, i.e.\ {\em 248$\times$ cheaper to apply for 5.4$\times$ more $D$}; rank 8 is
+$910\times$ cheaper for $11\times$ more $D$. Which point on that curve is wanted is a science
+question -- how much conservative overestimation of the output variance the peak-finder's
+threshold can absorb -- not an algorithmic one, and this is the curve on which to answer it.
+
+At equal {\em apply cost} rather than equal rank, the factorization is $2.4$--$3.1\times$ better
+in $D$ than the envelope at this geometry. On subscale detrended maps the equal-rank gain is
+$1.23$--$1.55\times$, so nothing about the gain was an artefact of small maps -- it grows with
+scale. Restricting the algorithm to see only $\bar A$, rather than giving it dense per-row
+access, costs $0.93$--$1.06\times$: nothing, and occasionally better, since the coarse constraint
+acts as a mild regularizer.
+
+Two further points, which were not obvious to us in advance:
+
+\begin{itemize}
+
+\item {\bf It is cheaper to apply, not just more accurate.} Evaluating $y = Q(W^Tv)$ costs
+ $K N_{\rm freq} + N_\beta\,{\rm nnz}$ multiply-adds, where ${\rm nnz}$ is the number of $W$-columns
+ vectors a group actually uses (the LP returns 2--3, without being asked). At the CHIME tree-0
+ geometry this buys $2.4$--$3.1\times$ in $D$ at equal apply cost. Note the
+ saving comes from coarse-graining $Q$: with a {\em per-row} $q_\alpha$ the same factorization is
+ {\em worse} than the envelope at equal cost, because the $N_\alpha\,{\rm nnz}$ term dominates.
+ Whether to additionally cap ${\rm nnz}$ at 2 depends on which term dominates: cap when
+ $N_\beta \gtrsim K N_{\rm freq}/4$, which is true at $N_{\rm freq} = 400$ and false at
+ $N_{\rm freq} = 16384$.
+
+\item {\bf The output is the array the kernel already stores.} \verb|PeakFindingKernelParams|'
+ weight array has shape $(n_{\rm dm,wt}, n_{t,\rm wt}, P, N)$, i.e.\ one scalar per
+ coarse-graining group $\beta$ -- which is precisely Eq.\ (\ref{eq:varmap_coarse_assign}) with
+ ${\rm nnz} = 1$. So this algorithm's $Q$ is the object production already has, generalized from
+ one entry per group to two or three; ${\rm nnz} = 2$ means the peak-finder applies the existing
+ weight multiply twice and adds. A per-{\em row} $Q$ is not expressible in the current
+ kernel at all. The reduction is therefore not only cheaper, it is the only one of the two that
+ fits the hardware.
+
+\end{itemize}
+
+\paragraph*{Two ideas that did not work.}
+Recorded because both look attractive and both cost real effort to rule out.
+
+The {\bf ``give up on the hard rows''} strategy suggested by the saturation of $f$ does not pay.
+Abandoning a fraction $q$ of rows (sending them to $y \to \infty$) adds $10q$ to $D$ and removes
+the share of $D$ those rows carried, and empirically that share is only $\approx 5q$ -- the
+cost is broad, not concentrated. Break-even therefore needs $D \gtrsim 2$, and measured $D$ is
+below that everywhere; 71 of 72 direct tests lost. The related suggestion of inflating variance
+at low DM should be dropped for the same reason.
+
+{\bf Non-uniform DM cuts} (log, sqrt, inverse-log spacings) are no better than uniform ones.
+
+\paragraph*{What is not yet established.}
+\begin{itemize}
+\item The high-rank ladder ($r > 12$) is all $N=1$, because no compiled
+ {\tt GpuSbDedispersionKernel} exists for $N>1$ at {\tt dd\_rank} 7--8. The design rules above
+ are statements about the DM axis and are unaffected, but the {\em absolute} $D$ at a subbanded
+ production config is not measured; the subband ablation suggests it is $1.2$--$2.4\times$
+ higher.
+\item Nothing at CHORD scale has been measured. The streaming reduction removes the memory
+ obstacle, but scoring $D$ against a fine reference still needs the dense $A$; a variant which
+ accepts $(\bar A, y, \mbox{labels})$ would close this, since for a coarse-grained-$Q$
+ approximation admissibility is a theorem rather than a measurement.
+\item Everything is single-tree with no early triggers, and no time-downsampled trees.
+\item The shape-space greedy construction of $W$ is the one step that does not scale:
+ $O(N_\beta^{2.4} N_{\rm freq})$, extrapolating to days at CHORD's $N_\beta$. Everything else is linear
+ or better. It is a clustering, so a cheaper one would do, but the obvious substitutes
+ (k-means on log-shape) are erratic at group granularity.
+\item The {\tt GpuDetrenderLps2d} time half-width is a large and cheap lever on all of this: raising it
+ from 2 to 8 improves $D$ at fixed rank by $2.8\times$, removes the low-DM cost concentration
+ entirely, makes the SVD viable again, and costs $\sim$7\% more sweep time. Whether that
+ half-width is acceptable on detrending grounds is a separate question, not addressed here.
+\end{itemize}
+
+\subsection{Campaign 2 setup [mostly human-authored]}
+\label{ssec:campaign2_setup}
+
+This is really interesting progress!
+So far we've learned that:
+
+\begin{enumerate}
+
+\item Coarse-graining $A \rightarrow \bar A$ is a good approximation in practice (in the
+ sense that $D(A,\mbox{lift}(\bar A))$ is small). It seems safe to assume that this should always be
+ the first step, and that further steps (such as $QW$-alternation) should operate on the
+ smaller $\bar A$ matrix for speed.
+
+\item $QW$-alternation is an interesting algorithm for optimizing $D(A^{\rm true}, A^{\rm approx})$, 
+ given a rank-$K$ initial guess for $A^{\rm approx}$. As currently formulated, $QW$-alternation
+ doesn't change the rank $K$.
+
+\item Truncating the SVD decomposition doesn't work on its own. (But I'd like to explore
+ using the SVD decomposition in combination with other ideas -- see below.)
+
+\end{enumerate}
+
+\par\noindent
+In campaign 2, I'd like to explore the following directions:
+
+\begin{itemize}
+
+\item
+I realized that I never specified targets for the distance $D$ and the rank $K$, so
+the problem we're exploring isn't really well-posed.
+For now, let's consider rank $K=8,16,32,64,128$.
+For each of these ranks (and for each choice of dedispersion+detrender config),
+please explore different algorithms and try to find the smallest $D$ that you can.
+This will give us a sense of the ``Pareto frontier'' of distance versus rank.
+
+\item While I was discussing the campaign 1 results with an agent, it emerged that 
+ the linear programs may have constraints that are not necessary.
+ For example, the $Q$-step (step 2) may currently have a constraint $q_\beta \ge 0$.
+ I don't think this is necessary (only the weaker constraint $W q_\beta \ge \bar A_{\beta,:}$).
+ Please investigate further and decide whether constraints can be dropped.
+ Does this significantly improve our results ($D$-values)?
+ What about the $W$-step?
+
+\item We have an analytic argument (\S\ref{sec:analytic_variance}) that $A$
+ has low rank if there is no detrender. If we didn't know about this analytic
+ argument, one way to ``discover'' the low rank empirically would be to compute
+ the SVD singular values, and find that most of them are zero (within roundoff).
+
+ This made me curious: what does the spectrum of singular values of $\bar A$ 
+ look like empirically, if there is a detrender? Do we find that the singular
+ values fall off quickly, and a low rank matrix is a good approximation (with 
+ respect to the Frobenius norm -- not necessarily with respect to our distance 
+ function).
+
+\item Given a rank-$K$ approximation $A^{\rm approx} = Q W^T$, and $K' < K$,
+ I'd like to explore the following idea for obtaining a rank-$K'$ approximation.
+ First, SVD-decompose $A^{\rm approx} = Q_0 \Lambda_0 W_0^T$, where $\Lambda_0$ is
+ $K$-by-$K$ diagonal. Then, decrease the rank to $K'$ by dropping the lowest 
+ (least significant) SVD modes, obtaining $A^{\rm new} = Q_1 \Lambda_1 W_1^T$.
+
+ As previously discussed, this may ruin the approximation, in the sense that
+ $D(\bar A^{\rm true}, A^{\rm new})=\infty$. However, we can use the ``$Q$-step''
+ above to update $A^{\rm new} \rightarrow Q_1' W_1$, where $Q_1'$ is a new
+ matrix obtained by solving a linear program, and $W_1$ is unchanged.
+ Then, $D(\bar A^{\rm true}, A^{\rm new})$ will be finite (under mild assumptions
+ on $W_1$) and we can continue the $QW$-alternation algorithm from here.
+
+ Similarly, we could also keep $Q_1$ fixed and use the ``$W$-step'' to
+ update $W_1$ -- I'm not sure which variant works better.
+
+ Note that before trying this idea, you may need to remove unnecessary
+ positivity constraints from the LP (see first bullet point above), since
+ SVD modes have arbitrary signs.
+
+\item Combining ideas from the previous two bullet points, we could also try 
+ initializing the low-rank decomposition $A^{\rm approx} = Q W^T$ using the
+ SVD decomposition of $\bar A$ (followed by $QW$-alternation), instead of the
+ clustering algorithm above (``Step 1: constructing $W$'').
+
+ This could either be done by keeping $K$ singular values, where $K$ is the
+ desired rank, or following a ``schedule'' where a larger number of singular
+ values are kept, and we alternate between $QW$-alternation (to reduce the
+ distance) and reducing the rank (using the idea from the previous bullet point).
+
+\item I'm wondering whether the SVD decomposition is also useful for setting
+ up the LP problems in the $Q$-step and $W$-step. For example, suppose that
+ we have a decomposition $A^{\rm approx} = Q W^T$, and we want to do a $Q$-step.
+
+ Suppose we SVD decompose $A^{\rm approx} = Q_0 \Lambda_0 W_0^T$, where $W_0$
+ is semiorthogonal ($W_0^T W_0 = 1$), and then solve an LP to obtain 
+ $A^{\rm new} = Q_1 W_0^T$. Is this more numerically stable, because we
+ have orthogonalized columns of $W_0$ to avoid near-cancellations? Are
+ there other technical advantages, such as a more principled way to set
+ numerical thresholds in the LP? Please investigate.
+ 
+ Another idea: if we find empirically that some singular values in $\Lambda_0$ 
+ are very small, then it may make more sense to drop these modes (decreasing the rank),
+ since the extra modes aren't ``helping'' the approximation.
+
+\item Another idea for initialization (in addition to the clustering algorithm or
+ the SVD decomposition). Let $\bar A_0$ be the coarse-grained variance map with the
+ detrender removed (but the dedispersion config unchanged). Using the algorithm in
+ \S\ref{sec:analytic_variance}, we have an exact low-rank decomposition $\bar A_0 = Q_0 W_0^T$.
+ Suppose that we fix $W_0$ and use a $Q$-step to approximate $\bar A \approx Q_1 W_0^T$.
+ Is this a useful starting point for obtaining a low-rank approximation?
+
+ More generally, if you have any other ``natural'' ideas for generating a $W$-matrix
+ (even if there is no obvious way to generate $Q$ beyond solving an LP), this could
+ be interesting to investigate.
+
+\item A small idea that may help speed up the LP solver.
+ Currently, we solve with a subset of the constraints for speed, then re-evaluate
+ all constraints. If any constraints fail, then we add constraints and re-solve.
+
+ Suppose that when we evaluate the constraints, we find that they only fail by
+ a small amount (say $A^{\rm approx} \ge (1-\epsilon) A^{\rm true}$ everywhere).
+ Then we could solve the constraints by simply rescaling the solution by $(1-\epsilon)^{-1}$ --
+ the only thing we lose is that the distance is slightly suboptimal.
+ In early stages of an iterative algorithm (either $QW$-iteration or a larger iterative
+ algorithm involving SVD decomposition and rank reduction) this may be a win -- it may
+ be better to trade strict optimality for speed in the early stages.
+
+\item So far we haven't analyzed dedispersion configs with \verb|subband_counts|.
+Do our results (1 and 2 above) hold up in this case?
+Does the distance-rank ``frontier'' get worse in the presence of \verb|subband_counts|?
+
+\item Similarly, how do our results depend on $W$?
+So far, we've only analyzed $W=2$.
+Note that $W=0$ implies $n=0$.
+
+\item Please be creative and pursue your own ideas, or extend/generalize the ideas here.
+ As you explore the problem, new ideas may suggest themselves.
+ Sometimes an experiment is useful if it improves general understanding of the problem domain,
+ even if it doesn't immediately lead to a concrete improvement in the algorithm.
+
+\end{itemize}
+
+\par\noindent
+In addition, here are some directions to explore that were suggested by an agent:
+
+\begin{itemize}
+
+\item {\bf The {\tt GpuDetrenderLps2d} knot vector as a design variable.}
+ Campaign 1 found that the detrender does not merely perturb the structure of $A$, it
+ destroys it: with no detrender, 33\% of a subbanded $A$ is exactly zero (a multiplet gets
+ no contribution from channels outside its subband), and adding a single-zone detrender
+ takes that to 0.0\%. But a detrender whose spline zones are {\em aligned with the frequency
+ zones} keeps 25\% of the zeros. So the sparsity that a low-rank construction would exploit
+ is partly a {\em choice} (the knot vector), not a given.
+
+ This suggests a direction that changes the problem rather than the algorithm: are there
+ knot vectors which leave $A$ substantially more approximable at fixed rank, and what do
+ they cost in detrending quality? The time half-width $W$ is one detrender knob and is
+ already covered above; the knot vector is a second, independent one, and nothing has
+ explored it. If the cost is small this may be the cheapest available win.
+
+\item {\bf Rank reduction guided by $D$ rather than by singular value.}
+ This is the natural competitor to the SVD-truncation idea above, and the two should be
+ measured head to head in the same experiment. Instead of dropping the modes with the
+ smallest singular values, drop the column of $W$ whose removal -- followed by a $Q$-step --
+ increases $D$ least, repeating until the rank is $K'$ (a ``leave-one-out'' criterion).
+
+ The motivation is that a singular value measures a mode's contribution in Frobenius norm,
+ which is the wrong norm here: campaign 1 found that pruning $W$ by column {\em
+ usage} was $2.1\times$ worse than simply rebuilding at the target rank, and diagnosed it as
+ keeping ``columns that supply mass, not columns that supply shapes nothing else covers''.
+ A singular value is also a mass-like criterion. A leave-one-out score is aligned with the
+ objective by construction. It costs $K$ $Q$-steps per removal, but those are independent
+ and each is cheap.
+
+\item {\bf Pivoted QR (or CUR) for choosing the columns of $W$.}
+ Campaign 1 tried using actual rows of $A$ as columns of $W$, chosen worst-covered-first,
+ and found them $1.2$--$1.4\times$ worse than the greedy clustering. That may say more about
+ the selection rule than about the idea: a rank-revealing QR with column pivoting applied to
+ $\bar A^T$ chooses a well-conditioned subset of rows, which is the principled version of
+ the same construction.
+
+ It has several practical advantages worth testing: it is deterministic, it costs
+ $O(K N_\beta N_{\rm freq})$ rather than the $O(K_0^{2.4})$ of the agglomerative greedy, the
+ atoms stay nonnegative and interpretable (each is a real output's frequency response), and
+ the pivot order gives a natural nested sequence of $W$-matrices -- which is exactly what a
+ rank schedule wants.
+
+\item {\bf Warm-starting the linear programs.}
+ The $Q$-step solves $N_\beta$ independent LPs, and the whole thing is repeated across
+ alternations and again at every rank in a schedule. Consecutive solves differ only
+ slightly, so a dual-simplex warm start from the previous optimal basis should be a large
+ constant factor. Neighbouring groups are also similar to each other (adjacent coarse DMs
+ have similar rows), so one group's basis can seed the next.
+
+ This is complementary to the constraint-generation idea above rather than an alternative to
+ it, and it may well be the larger of the two effects. Worth measuring as LP wall clock per
+ $Q$-step, with and without.
+
+\item {\bf Does a $W$-matrix transfer between trees and between configs?}
+ Building $W$ is the one step of the recommended algorithm that does not scale:
+ $O(K_0^{2.4} N_{\rm freq})$, which extrapolates to days at CHORD's $K_0$, while everything
+ else is linear or better. But a {\tt DedispersionPlan} has several trees, and production
+ needs weights for all of them.
+
+ So: does a $W$-matrix built for one tree work for another (same $N_{\rm freq}$, different
+ rank or subband structure)? If it does, the expensive step amortizes over trees, and
+ possibly over configs. There is some reason for optimism -- campaign 1 found $W$
+ need only be {\em reasonable} rather than optimal (a cheap k-means $W$ matched the
+ greedy at $K=32$). Note the related question of transfer across {\em granularity} within one
+ tree is already settled: building $W$ from $\bar A$ at the same $L$ used for
+ $Q$ is within a few percent of building it from a finer $\bar A$, so there is no
+ reason to keep a finer one around.
+
+\end{itemize}
+
+\subsection{Campaign 2 results [agent-authored]}
+\label{ssec:campaign2_results}
+
+Campaign 2 ran fourteen experiments against the questions above. The short version is that the
+algorithm of \S\ref{ssec:varmap_proposed} was replaced in two places, is now $2$--$3\times$
+better at every production rank, and has stopped being limited by rank at all. Two of the
+bullet-point directions turned out to be dead ends and are reported as such.
+
+\paragraph{The recipe, as it now stands.}
+Three of the four steps of \S\ref{ssec:varmap_proposed} survive unchanged: coarse-grain
+$A \rightarrow \bar A$ by a max over structured groups, solve one covering LP per group for
+$q_\beta$, and alternate with the $W$-step. What changed is how $W$ is built, and the
+{\em constraint set}:
+
+\begin{enumerate}
+\item {\bf $W$ is now a truncated SVD of $\bar A$}, not an agglomerative clustering.
+ Use the SVD of the unit-sum {\em shape} matrix $S_{\beta F} = \bar A_{\beta F}/\sum_F \bar A_{\beta F}$
+ for $K \gtrsim 32$ and of $\bar A$ itself below that. Only at $K \le 8$ does the clustering
+ still win.
+\item {\bf The $Q$-step constraint $q_\beta \ge 0$ is dropped.} It was never implied by the
+ problem -- admissibility constrains the {\em product} $W q_\beta \ge \bar A_{\beta,:}$, not the
+ coefficients -- and dropping it is worth $1.4$--$3.9\times$ in $D$ at fixed rank, like for like.
+ The $W$-step's $W \ge 0$ may be kept when the initial $W$ is nonnegative (it is inactive at the
+ optimum, worth $0$--$2.6\%$), but must {\em not} be imposed on top of a signed initializer,
+ where it costs $8.8\times$.
+\end{enumerate}
+
+\par\noindent
+The bullet points above asked whether the SVD could be used for initialization, for rank
+reduction, and for conditioning. The answers are yes, yes, and no -- but the reason the first
+answer is yes turns on a distinction the campaign took a long time to draw, and which is worth
+stating plainly because it is the single most useful idea to come out of this work:
+
+\begin{quote}
+{\bf The SVD as an {\em approximation} and the SVD as a {\em $W$-matrix} are different objects.}
+A truncated SVD used directly as $A^{\rm approx}$ has an admissibility cliff: below $K \approx 32$
+it puts a non-positive value on a positive entry of $\bar A$, which no rescaling can repair, so
+$D = \infty$. The same truncation used as the {\em $W$-matrix}, with the LP free to choose
+$q$, has no cliff at all.
+\end{quote}
+
+\par\noindent
+These two are easy to conflate, and conflating them is why the winning algorithm was nearly
+abandoned: measurements of the first were repeatedly read as verdicts on the second. Note also
+that the two changes are coupled. A signed $W$ is unusable while $q_\beta \ge 0$ is
+imposed -- the sign convention of an SVD mode is arbitrary, and with $q$ constrained the LP was
+infeasible on $400$ of $400$ sampled rows. With $q$ free the problem is exactly invariant under
+$W_{:,c} \rightarrow -W_{:,c}$, $q_c \rightarrow -q_c$, so the sign convention stops mattering
+(measured: identical $D_0$ to 17 digits). Dropping the constraint is what made an SVD $W$-matrix
+available at all.
+
+\paragraph{The frontier.}
+At the real CHIME tree-0 geometry ($r=15$, $N_{\rm freq} = 16384$, coarse-graining $L_0 = 6$),
+with the recipe above:
+
+\begin{center}
+\small
+\begin{tabular}{lccccc}
+\toprule
+rank $K$ & 8 & 16 & 32 & 64 & 128 \\
+\midrule
+$D$, campaign 1        & 0.0412 & 0.0277  & 0.0191  & 0.0136  & 0.0105  \\
+$D$, campaign 2        & 0.0376 & 0.0147  & 0.00686 & 0.00533 & 0.00462 \\
+improvement            & 1.10   & 1.88    & 2.78    & 2.56    & 2.28    \\
+$D/D_{\rm floor}$      & 8.52   & 3.34    & 1.55    & 1.21    & {\bf 1.05} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\par\noindent
+where $D_{\rm floor} = 0.00441$ is the coarse-graining floor: the covering constraint forces
+$y^{\rm approx}_\alpha \ge \sum_F \bar A_{\beta F}$ for every $\alpha \in \beta$, so {\em no}
+approximation with a coarse-grained $Q$, of {\em any} rank, can beat the unrescaled max-envelope over the
+$L_0$ groups. The last row is the important one.
+
+\paragraph{Rank is spent; the coarse-graining is the remaining lever.}
+At $K = 128$ we are $4.8\%$ above the floor, so further rank buys almost nothing. This was
+initially misread. The frontier's log-log slope softens steadily with $K$ (from $-0.57$ to
+$-0.22$), which looked like an unexplained bend, and the naive diagnostic -- ``$D$ is still
+$2.4\times$ the floor, so the floor is not binding'' -- is simply wrong reasoning. {\bf The floor
+enters additively}, and therefore governs the slope long before $D$ approaches it. Subtracting it
+leaves a clean power law,
+\begin{equation}
+D(K) \;\simeq\; D_{\rm floor} + c\,K^{-2}
+\label{eq:varmap_c2_powerlaw}
+\end{equation}
+which fits over a factor 16 in rank and predicted $D(K{=}128)$ to $0.5\%$ before it was measured.
+The right measure of ``how floor-limited is this cell'' is $1 - D_{\rm floor}/D$, not
+$D/D_{\rm floor}$.
+
+Since $D_{\rm floor}$ is set by $L_0$, the lever is $L_0$. Refining it from $6$ to $4$ buys
+$2.10\times$ at $K = 64$, against at most $1.21\times$ available from {\em any} rank at $L_0 = 6$
+-- about $7\times$ more per unit of storage. The crossover is sharp and production has just
+crossed it: at $2\times$ storage from $(L_0, K) = (6, 32)$, buying rank wins $1.45\times$ to
+$1.26\times$; from $(6, 64)$, buying groups wins $2.10\times$ to $1.15\times$. Below
+$K \approx 29$ buying groups is a $3$--$7\times$ mistake. {\bf So: refine $L_0$ first, then buy
+rank} -- and the campaign was right to optimize rank until the new $W$-matrix landed.
+
+The axis is short, and the limit is in the shipped code rather than in the mathematics:
+{\tt DedispersionPlan} accepts {\tt wt\_dm\_downsampling} $= 64, 32, 16$ but fails an assertion at
+$8$, because {\tt dm\_downsampling} defaults to $2^R$. Hence $L_0 \ge R$, giving exactly two
+refinements; after them $D/D_{\rm floor}$ is back to $2.3$ and rank binds again at $K \approx 75$.
+
+\paragraph{Cost: the one step that did not scale is gone.}
+The clustering construction of $W$ was $O(N_\beta^{2.4} N_{\rm freq})$ and extrapolated to days at
+CHORD. The SVD $W$ is one Gram eigendecomposition: $34$~s against $\sim 2.5$~h at subscale, and
+$120$--$730$~s against $\sim 44$~h at the production point. Everything else was already linear or
+better. Separately, $W$ turns out not to need {\em fitting} at all: one $W$-step takes
+a $W$-matrix built for a {\em different} tree, subband count or detrender to within $3$--$9\%$ of
+a purpose-built one, and the analytic no-detrender factorization of \S\ref{sec:analytic_variance}
+costs only $1.0$--$1.8\times$ with no clustering whatever. A {\em random} $W$ costs
+$1.2$--$2.0\times$, so the choice still matters -- it just needs no expensive search.
+
+\paragraph{Dependence on the configuration.}
+\begin{itemize}
+\item {\bf Subbands are expensive}: $D(N)/D(N{=}1)$ is $3.1$--$3.8\times$ at $N = 9$ and
+ $5.7$--$22.8\times$ at $N = 16$--$20$, far worse than campaign 1's $1.2$--$2.4\times$ ablation
+ estimate. At the CHORD-{\em shaped} subscale point ($r = 15$, $N = 25$, 400 channels --- CHORD's
+ subband shape at a rank and channel count we could afford, {\em not} the CHORD config, which is
+ $r = 16$ at 28160 channels) the recipe reaches $D = 0.047, 0.028, 0.014$ at $K = 32, 64, 128$.
+\item {\bf The detrender half-width $W$ is a real lever and does not saturate at 8}: $W = 8$ buys
+ $2.5\times$ at $K = 64$ over $W = 2$, and $W = 16$ a further $1.7\times$. Whether such a window
+ is acceptable on detrending grounds is still a separate question.
+\item {\bf The knot vector is a weak lever, but not a dead one.} Aligning spline zones with
+ {\em frequency} zones is worth nothing. Aligning them with {\em subband} boundaries is worth
+ $1.1\times$ at $K = 64$ and $2.5\times$ at $K = 128$. What that alignment costs in detrending
+ quality is not answerable from $A$ alone.
+\end{itemize}
+
+\paragraph{Two methodological warnings, both learned the hard way.}
+These cost the campaign more than any single measurement, and both should be applied to anything
+in this section:
+
+\begin{enumerate}
+\item {\bf A conclusion measured at $N_{\rm freq} = 400$ may reverse at $16384$.} It happened
+ three times: the SVD-versus-LP comparison, the subband rank-budgeting rule, and ``the $W$-step is
+ redundant''. The mechanism is understood -- the LP family gets $\sim 3\times$ {\em better} with
+ more channels while the SVD family gains nothing -- but the practical rule is simply to treat any
+ subscale recommendation as provisional.
+\item {\bf A floor-based conclusion is not an LP-based conclusion.} The coarse-graining floor
+ ranks the $W$ ladder perfectly and the knot-vector axis {\em oppositely}: one configuration with
+ a $19\times$ better floor is $1.3\times$ {\em worse} in achieved $D$. Use the floor as a bound,
+ never as a ranking. The singular-value spectrum of $\bar A$, by contrast, {\em does} rank
+ configurations correctly (Spearman $\rho \approx 0.97$--$0.99$) for the cost of one
+ eigendecomposition, and is a good cheap triage -- though it too degrades above $K \approx 64$,
+ where the floor takes over.
+\end{enumerate}
+
+\paragraph{What is still open.}
+The largest item is not a physics question but a solver one. The covering LPs are solved by HiGHS,
+and at high rank on heavily subbanded maps a small fraction of them ($\lesssim 1\%$) return a
+point that violates their own constraints while reporting success, or fall back to a crude seed.
+This is not a rounding-level nuisance: one failure per $\sim450$ groups costs more $D$ than an
+entire doubling of the rank, and it is why the refined-$L_0$, $K = 128$ cells are currently
+estimates rather than measurements. A repair is known (halve the rank, re-solve, keep the rank)
+and takes seconds; until it is in place, any number at $K \ge 128$ on a subbanded map should be
+treated as provisional. Beyond that: warm-starting the LPs was never attempted, and nothing has
+been measured at CHORD's channel count.
+
+\subsection{Campaign 3 setup [human + agent authored]}
+\label{ssec:campaign3_setup}
+
+Directions for the next campaign. (The rest of the campaign-2 leftovers -- the solver defect at
+$K \ge 128$, the exact $(L_0, K) = (4, 128)$ cell, LP warm starts, and CHORD's channel count --
+are tracked outside these notes.)
+
+The campaign 2 results look promising!
+The main things I'm worried about are {\bf scalability} and {\bf robustness}.
+Consider the CHORD scale config \verb|chord_sb2.yml| (primary tree 0 only), with
+$N_{\rm freq} = 28160$, rank $r=16$, and 25 subbands.\footnote{This said $r=15$ when the campaign
+was set up, and that was wrong: primary tree 0 has {\tt ipri == 0}, so it keeps
+{\tt toplevel\_tree\_rank}, which is 16. Trees 1--3 are $r=15,14,13$. Measured off
+{\tt DedispersionPlan} by two agents independently, and confirmed byte-exactly by the size of the
+resulting $\bar A$. It matters: the true geometry is $n_{\rm dm} = 4096$, $M = 91$, $P = 16$,
+$N_\alpha = 5\,963\,776$, so $N_\beta(L_0{=}4) = 1\,638\,400$ -- twice what the campaign first
+assumed, and every LP cost scales with it.}
+Can we reach this scale in a reasonable amount of computing time (say $<1$ day on 32 cores)?
+Will our current algorithm run into numerical instability (e.g.\ in the LP solver) before
+reaching this scale?
+What rank-$D$ ``Pareto frontier'' will we see at CHORD scale?
+
+\begin{itemize}
+
+\item Instead of running \verb|chord_sb2.yml| directly, approach it via a sequence of
+ increasingly large-scale configs (e.g.\ increasing $r$ by 1 and/or doubling $N_{\rm freq}$,
+ and/or adding subbands. You may find that new issues emerge as the scale increases.
+
+\item Try to reach as large a scale as possible, within the time horizon of the ch-research
+ skill. In order to achieve this goal, consider carefully what set of parallel subagents will
+ make best use of our 32 cores and 2 GPUs. For example, if you're precomputing $A$-matrices
+ on the GPU and solving LPs on the CPU, you may want to precompute the next problem instance
+ in parallel with solving the current instance.
+
+\item You may not reach CHORD scale within the time horizon. In that case, please try to
+ find an empirical scaling law based on your subscale results, and predict what ``Pareto
+ frontier'' we might see at CHORD scale.
+
+\item This idea is cut-and-paste from an earlier section -- I'm including it again since
+ it may be more helpful at scale.
+
+ A small idea that may help speed up the LP solver.
+ Currently, we solve with a subset of the constraints for speed, then re-evaluate
+ all constraints. If any constraints fail, then we add constraints and re-solve.
+
+ Suppose that when we evaluate the constraints, we find that they only fail by
+ a small amount (say $A^{\rm approx} \ge (1-\epsilon) A^{\rm true}$ everywhere).
+ Then we could solve the constraints by simply rescaling the solution by $(1-\epsilon)^{-1}$ --
+ the only thing we lose is that the distance is slightly suboptimal.
+ In early stages of an iterative algorithm (either $QW$-iteration or a larger iterative
+ algorithm involving SVD decomposition and rank reduction) this may be a win -- it may
+ be better to trade strict optimality for speed in the early stages.
+
+\item {\bf Pin a nonnegative column in $W$, and exclude it from the $W$-step.}
+ Here's a minor suggestion that may be useful.
+
+ Campaign 2 dropped $q_\beta \ge 0$ entirely and, under the SVD recipe, dropped $W \ge 0$ as
+ well, so both factors are now sign-free. That is where the performance came from, but it
+ quietly removed something several parts of the algorithm still rely on: {\em the existence of
+ at least one all-positive column of $W$}. Three places currently hope for one rather than
+ requiring it -- the additive admissibility repair (which raises the product in every channel at
+ once only if the column it adds is nonnegative), the one-hot seed for the first $Q$-step, and
+ the argument that a covering LP is feasible at all. Today that hope is usually satisfied only
+ because the leading SVD mode of a nonnegative matrix is itself nonnegative (Perron--Frobenius),
+ which is a fact about {\em one} mode and is not guaranteed to survive truncation, shape
+ normalization, or a differently-constructed $W$.
+
+ The proposal is to stop relying on it: reserve one column of $W$, fix it to a nonnegative
+ vector, and exclude it from the $W$-step so it cannot drift. The cost is bounded by one unit of
+ rank, and is probably less -- see below.
+
+ {\em Which vector.} An all-ones column is the obvious choice and is the wrong one. It is
+ nonnegative and dominating, but its cost in the objective is $s_c = N_{\rm freq}$, so covering
+ a group whose largest entry is $m$ costs $m N_{\rm freq}$ against a true row sum of
+ $\sum_F \bar A_{\beta F}$ -- i.e.\ one pays the row's peak-to-mean ratio. On a subbanded map a
+ row is supported on roughly $1/N$ of the band, so at CHORD's $N = 25$ the all-ones column is
+ $\sim 25\times$ more expensive than the row it is covering, and the LP would never choose it
+ except in extremis. A better choice is the elementwise column max over groups,
+ \begin{equation}
+ W_{F,c_0} = \max_\beta \bar A_{\beta F}
+ \label{eq:varmap_pinned_column}
+ \end{equation}
+ which is nonnegative by construction, is positive in exactly the channels where some group
+ needs it, costs one streaming pass to build (the same pass that already produces $\bar A$), and
+ is the {\em tightest} single vector that dominates every group. It is also the rank-1 member of
+ campaign 1's envelope family, so unlike an all-ones column it is a vector the LP will actually
+ use on hard groups.
+
+ {\em What it guarantees.} With Eq.\ (\ref{eq:varmap_pinned_column}) pinned, $q_\beta = e_{c_0}$
+ is a certified feasible point for {\em every} group, with a nonnegative product, whatever the
+ other $K-1$ columns look like. We currently have no such certificate, which is why campaign 2
+ had to prove feasibility by hand to establish that the solver was reporting a feasible LP as
+ infeasible. It also means the one-hot seed can never fail to exist, and the additive repair can
+ never run out of usable columns.
+
+ {\em What it does not fix.} It does not prevent the product $W q_\beta$ from going negative in
+ channels where $\bar A_{\beta F} = 0$ -- that is what constraining every channel is for -- it
+ only makes such a case repairable. And it does not address the solver's rank-dependent failures
+ at $K \ge 128$, which are a conditioning problem, not a feasibility one. It is complementary to
+ both: a certified feasible point is exactly what one would hand the solver as a warm start.
+
+ {\em The measurement.} Compare the current recipe at rank $K$ against the pinned variant at the
+ same rank $K$ (so $K-1$ learned columns plus one pinned), on at least one subbanded and one
+ unsubbanded map, reporting $D$ and the LP failure counts. The interesting question is whether
+ the pinned column costs a full unit of rank or a fraction of one: the leading SVD mode is
+ already approximately the mean spectrum, so a pinned envelope may be largely reconstructing
+ something the truncation would have spent a mode on anyway.
+
+\item Does it help (e.g.\ with numerical instability at scale) to ``re-orthogonalize'' the
+ rank-$K$ approximation after each $Q$-step or $W$-step, by taking the SVD decomposition? 
+ (Note: if we decide to ``pin'' one or more all-positive columns, as suggested in the previous
+ bullet point, then we'd want to exclude pinned columns from the re-orthogonalization.
+
+\item Feel free to pursue any loose ends from campaigns 1 and 2 that weren't fully resolved,
+ or that you want to revisit. 
+ In particular, ideas that were abandoned previously in subscale instances may prove
+ to be useful at larger scale.
+
+\item
+As usual, please get creative and explore your own ideas!
+
+\end{itemize}
+
+\subsection{Campaign 3 results [agent-authored]}
+\label{ssec:campaign3_results}
+
+Campaign 3 ran thirteen experiments and answered its question in the affirmative: the recipe
+reaches CHORD scale, the frontier there is {\em measured} rather than extrapolated, and the
+binding constraint turned out to be none of the things the setup worried about.
+
+\paragraph{The answer.}
+The real config was swept end to end: {\tt chord\_sb2.yml} primary tree 0, $28160$ passes,
+{\bf $5.6$ hours on one L40S}, with the dense $A$ never formed. At the resulting map, with
+$L_0 = 6$ ($N_\beta = 409\,600$), a frozen $W$ and $414\,208$ covering LPs -- all of which
+returned {\tt optimal}:
+
+\begin{center}
+\small
+\begin{tabular}{lccccc}
+\toprule
+rank $K$ & 8 & 16 & 32 & 64 & 128 \\
+\midrule
+$D$                             & 0.686 & 0.134 & 0.107 & 0.0651 & {\bf 0.0236} \\
+$D/D_{\rm floor}$               & 453   & 88    & 71    & 43     & {\bf 15.6} \\
+one $Q$-step, core-hours        & 43    & 69    & 280   & 1049   & 2823 \\
+\quad {\em with constraint generation} & 1.8 & 2.2 & 12.7 & 64 & {\bf 504} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\par\noindent
+with coarse-graining floor $D_{\rm floor} = 0.00151$. High ranks are an unbiased Monte-Carlo
+over a random subset of groups, with standard error $0.5$--$2\%$; the rest are exact.
+{\bf The question as posed -- what fits in under a day on 32 cores -- is answered $K \approx 150$.}
+
+The $K = 128$ value landed inside a prediction of $0.023$--$0.027$ that had been registered in
+advance, from a different tree geometry at one eighth of the channel count. That is the second
+pre-registered prediction of the campaign to hold; the first was the sweep time itself, predicted
+at $6.5 \pm 0.5$ hours by extrapolating a ladder and then measured at $5.6$.
+
+\paragraph{Nothing that was expected to be hard was hard.}
+The dense $A$ at this config would be $1.2$~TiB, so the dense-free construction of campaign 1 is
+what makes any of this possible -- but with it, {\bf the sweep is noise}: $5.6$ GPU-hours against
+an LP stage two to three orders of magnitude larger. The GPU kernel the config needs was already
+compiled, and {\tt dd\_rank} turns out to depend only on {\tt toplevel\_tree\_rank}, not on the
+channel count, so no new kernel was ever needed. Memory was a real threat and was removed by one
+fix: the admissibility repair was forming a dense $(N_\beta \times N_{\rm freq})$ product with a
+same-sized temporary up to ten times, which is $\sim 900$~GiB of transient at $L_0 = 4$; blocking
+it over rows is bit-identical, $1.4\times$ faster, and flat at $0.42$~GiB.
+
+\paragraph{CHORD and CHIME say opposite things, and CHIME was the misleading one.}
+Campaign 2 closed on {\em refine $L_0$, then buy rank}, because at the CHIME point $K = 128$ sits
+$1.05\times$ above the coarse-graining floor -- rank was spent. At CHORD, $K = 128$ is
+$15.6\times$ above the floor, refining $L_0$ is worth $\pm 2\%$ at {\em every} rank, and the
+$64 \to 128$ doubling still buys $2.8\times$. {\bf At CHORD, rank binds and $L_0$ is dead.}
+This is the exact inverse of the previous recommendation, and it is why the campaign's remaining
+effort went into making rank affordable rather than into better approximations.
+
+\paragraph{Two conclusions inherited from campaign 2 did not survive contact with the real scale.}
+Both had been measured at one subband and were being applied at twenty-five.
+
+\begin{enumerate}
+\item {\bf ``Subscale numbers are conservative'' is false at CHORD's subband count.} The LP was
+ measured to improve $\sim 3\times$ from 400 to 16384 channels at $N = 1$, and that licence was
+ used throughout two campaigns. On a paired six-rung ladder at $N = 25$, $D$ instead gets
+ {\em worse} by up to $5\times$ before saturating. So every 400-channel subbanded number in these
+ notes is anti-conservative, in the opposite direction to what was assumed. The mechanism was
+ measured: the shape spectrum flattens by $11\times$ with channel count.
+\item {\bf Sweep cost does not predict $D$ cost, on any axis.} Going from the subscale proxy to
+ the real geometry involves three changes, and their measured effects are unrelated to their
+ measured sweep costs: the peak-finding profile count $P$ ($1 \to 16$) is nearly free to sweep and
+ is the largest accuracy {\em gain}; the tree rank ($15 \to 16$) costs $4.1\times$ to sweep and is
+ worth $1.01\times$ in $D$ at $K = 128$; the five frequency zones are free to sweep and
+ {\em reverse sign}, helping at low rank and costing $1.5\times$ at $K \ge 64$.
+\end{enumerate}
+
+\par\noindent
+This is the same trap as campaign 2's ``a floor-based conclusion is not an LP-based conclusion'',
+in a new disguise: a cheap proxy that orders configurations correctly on one axis need not order
+them at all on another.
+
+\paragraph{The largest single win had been sitting unclaimed for two campaigns.}
+The covering LP has one constraint per frequency channel -- $28160$ of them for $K$ variables --
+and almost all are slack at the optimum. Constraint generation was proposed in campaign 1,
+measured at $8.7\times$, and never adopted. Brought forward unchanged it is a {\em loss} of
+$0.67$--$0.99\times$ at $K \ge 32$; the missing ingredient is a {\bf pool of binding constraints
+shared across groups}, and with it the $Q$-step is {\bf $5.6$--$32\times$ cheaper with $D$
+unchanged to 8--13 digits}. It is a $2.3\times$ loss below $\sim 1500$ channels, which is why the
+original subscale measurement undersold it.
+
+Boundedness is what makes this legal and is easy to get wrong. Dropping constraints from a
+free-sign LP creates a recession direction: sampling constraints and never adding them back leaves
+the LP {\em unbounded} on $896$ of $896$ groups. Keeping one aggregate row of the omitted
+constraints fixes it completely ($26/32$ relaxations unbounded without it, $0/32$ with).
+
+\paragraph{Two numerical defects, and neither is where we looked first.}
+Campaign 2 left a picture in which the solver was at fault. The solver is not at fault.
+
+\begin{itemize}
+\item {\bf The multiplicative repair.} When the LP returns a slightly inadmissible point, the
+ repair rescales a whole row (or column) upward -- and $D$ is precisely a penalty on scaling
+ things upward. Replacing that rescale by a rank-preserving {\em additive} lift restores identical
+ admissibility for a relative change of $10^{-9}$ instead of percents. This is a single function
+ acting on two axes: on the $Q$-side the damage grows with {\em rank} (up to $1.6\times$ at
+ $K = 384$, and it removes a provably-impossible non-monotonicity in which $K = 384$ scored worse
+ than its own $K = 256$); on the $W$-side it grows with {\em group count} (up to $2.5\times$),
+ because that multiplier maximizes over $N_\beta$ rather than over $N_{\rm freq}$.
+\item {\bf The dictionary column scale.} Rescaling the columns of $W$ is provably inert -- it
+ cannot change the feasible set or the objective -- yet it is worth up to $1.5\times$ in $D$.
+ {\bf The mechanism is not understood.} The natural explanation, that the columns sit far from
+ the solver's absolute feasibility tolerance, was tested and falsified: a $64\times$ change in
+ that tolerance moves $D$ in the eighth digit. This is the campaign's most interesting loose end.
+\end{itemize}
+
+\par\noindent
+Separating these two took most of the campaign, and one wrong hypothesis along the way (that they
+were the same defect) was refuted by measuring them crossed at fixed channel count.
+
+\paragraph{Freeze the $W$-step -- for cost, not for stability.}
+Whether to alternate at all turned out to depend on two axes that point in opposite directions:
+more channels help the $W$-step, more groups hurt it. At the real config, with the additive repair,
+it would help slightly ($1.1$--$1.2\times$). It is still not worth running: $K = 64 \to 128$ buys
+$2.8\times$ for $1774$ core-hours where a $W$-step buys $\sim 1.1\times$ for $\sim 1460$.
+{\bf Rank is simply the better purchase}, which is a more comfortable reason to freeze than the
+instability that motivated the question.
+
+\paragraph{The two ideas proposed in \S\ref{ssec:campaign3_setup}.}
+{\em Pinning a nonnegative column} works and is cheap insurance rather than a performance win: it
+costs a median $0.23$ columns of rank, and it guarantees by construction the nonnegative column
+that the seeding and repair machinery needs. That guarantee matters more than expected -- with
+{\tt numpy}'s raw SVD signs there are {\em zero} nonnegative columns and the one-hot seed fails on
+every map tested; canonicalizing signs recovers exactly one. One correction to the reasoning in the
+setup: the pinned envelope duplicates the leading SVD mode only when $N = 1$, so it should be added
+{\em to} that mode, not substituted for it.
+
+{\em Re-orthogonalization} is a no: it is provably a no-op on $D$, and empirically unreliable,
+helping at $K = 64$ and hurting by $3\times$ at $K = 128$. The factored formulation proposed in the
+setup -- orthogonalize the two tall-skinny factors separately and carry a $K \times K$ middle
+matrix -- is correct and removes the memory objection entirely ($1.7$~GB against $\sim 690$~GiB),
+but it lands {\em on} the column-scaling above rather than past it: putting $\Lambda$ entirely in
+$Q$ reproduces plain column normalization to eleven digits, and no other placement beats it. The
+middle matrix should be folded away, for a reason worth recording: the rotation destroys the
+nonnegative column, which no choice of $\Lambda$ recovers.
+
+\paragraph{What is still open.}
+The frontier above $K = 128$ has never been measured at the real point, and is now affordable.
+The mechanism behind the column scaling is unknown. The $W$-step recommendation rests on an
+extrapolation from $16384$ groups to $409\,600$ that one further cell would settle. And the
+channel-count trend turns over somewhere between $7040$ and $28160$ channels, which nobody has
+resolved.
+
+\subsection{Campaign 4 setup [mostly human authored]}
+\label{ssec:campaign4_setup}
+
+Between campaigns 3 and 4, we did some refactioring and cleanup.
+We started developing a new subpackage \verb|pirate_frb.varmap|,
+that will eventually supersede some of the code in \verb|slow_avar/| and \verb|research/.../*.py|.
+
+The central class in \verb|pirate_frb.varmap| is a flexible \verb|VarianceMap| class. 
+A lot of our existing code is naturally refactored around this class. For example, 
+the ``brute force'' algorithm for computing variance maps can be refactored as a 
+function that returns one or more \verb|VarianceMaps| (rather than new classes
+\verb|BruteForceVarianceMap|, \verb|GpuBruteForceVarianceMap|). Building blocks 
+of the low-rank approximation algorithm (e.g. SVD initialization, Q-step, W-step) 
+can be refactored as functions whose inputs/outputs are \verb|VarianceMaps|, 
+or as \verb|VarianceMap| methods.
+
+Eventually, we want the \verb|varmap| sub-package to supersede the following code
+(hereafter ``old code''):
+\begin{itemize}
+\item In \verb|slow_avar|: \verb|brute_force_*.py|, \verb|variance_map_io.py|,
+ \verb|VarMapDistance.py|, \verb|varmap_eval.py|
+\item All code in \verb|research/toplevel/*.py|.
+\end{itemize}
+The following code is NOT in the scope of this refactor (hereafter ``new code''):
+\begin{itemize}
+\item In \verb|slow_avar|: \verb|check_*.py|, \verb|PfVariance.py|, \verb|SparseTile.py|,
+ \verb|TmpVmap.py|
+\end{itemize}
+Assume that files in the previous bullet point will not be changed, and feel free to
+call code in these files from new code in \verb|varmap|.
+
+The main goal of \verb|varmap| is NOT to implement our current ``frontier'' algorithm as expediently as possible. 
+The main goals are {\bf flexibility} and {\bf generality}, since we're still in the process of 
+exploring algorithms. A good approach is to implement low-level ``building blocks'' that can be 
+called sequentially from a script to create a high-level algorithm. Simplicity and readability 
+are also important -- this is an opportunity to clean up historical baggage. 
+So please think carefully ``from scratch'' about whether existing code could be simplified, cleaned up, or improved.
+
+Currently, the refactor is logically complete, and we're nearly ready to
+delete the old code.
+Part of the purpose of campaign 4 is to try the new code (\verb|pirate_frb.varmap|)
+at scale.
+For now, I'm keeping around the old code as a reference.
+If campaign 4 goes smoothly, then the old code will be deleted.
+
+\par\noindent
+In campaign 4, please do the following:
+
+\begin{itemize}
+
+\item
+The ultimate goal of campaign 4 is to create an on-disk \verb|VarianceMap|
+at rank $K=128$, for \verb|chord_sb2_et.yml|, base tree (tree 0) only, and
+to collect timings and $D$-values (distance function) for each intermediate
+step. This will search as a benchmark for future campaigns, to try to improve
+either the timing or the final $D$-value.
+
+\item
+A secondary goal is to curate a well-defined ``ladder'' of subscale examples,
+which are similar to  \verb|chord_sb2_et.yml| (single-tree), but increase in
+scale by roughly a factor $\sim 2$. Use your judgement to decide how to define
+the ladder.
+
+For each example in the ladder, also collect timings and distance functions
+(as in the previous bullet point). This will also be part of our benchmarking
+suite for future campaigns.
+
+\item
+Throughout campaign 4, do not use any old code (see above) unless absolutely necessary.
+Instead, use the equivalent code in \verb|pirate_frb.varmap|.
+I haven't deleted the old code yet, in case it is useful for debugging.
+
+\item
+Normally, the toplevel agent is forbidden (via a rule in the ch-research skill) from
+modifying source files.
+During campaign 4, this rules are modified as follows.
+The toplevel agent may modify source files, but only in the \verb|varmap| subpackage,
+only if no subagents are running (in order to ensure that files are not modified while in use),
+and only if the modification is an unambiguous improvement (such as a bugfix).
+
+Bugfixes and improvements may be suggested by subagents (in addition to the oplevel agent).
+The toplevel agent should make a judgement call whether to ``drain'' subagents in order 
+to edit code (since code cannot be edited while subagents are running),
+or continue to spawn subagents and deprioritize code edits.
+
+The purpose of this rule is to allow debugging during campaign 4,
+since the new code may not fully be debugged.
+Note that in order to fix bugs, you'll need to ``drain'' running subagents --
+use your judgement to decide whether this is sensible.
+
+\item
+During campaign 4, don't explore new ideas or implement new features,
+but do feel free to experiment with different settings, and different features
+that are already implemented.
+The purpose of campaign 4 is to establish a baseline, using ideas that we've
+already implemented, for future improvements -- not to explore new ideass.
+
+\item
+At the end of campaign 4, make a recommendation: should we delete the old code,
+or is there still value in keeping it?
+
+\end{itemize}
+
+\par\noindent
+{\bf Update (after campaign 4).} The old code has been deleted. The
+\verb|pirate_frb.slow_avar| subpackage is gone, and with it \verb|PfVariance.py|'s
+\verb|PfVariance| / \verb|PfAvarExact| / \verb|PfAvarApproximation| classes,
+\verb|TmpVmap.py|, and the \verb|check_*.py| CLI entry points -- so the ``new code'' bullet
+above no longer describes anything on disk. Two pieces of it were kept, because they are
+substrate rather than an alternative route to the same answer, and both moved into
+\verb|varmap/|: \verb|SparseTile.py| (minus \verb|SparseTilePerM|, which had no consumer
+outside a test oracle) and \verb|PfVarianceConvolver|. On the C++ side,
+{\tt struct PfVariance} and {\tt class PfAvarApproximation} were removed from
+\verb|src_lib/varmap.cpp|, and the \verb|fast_avar| python subpackage was renamed
+\verb|fast_varmap|.
+
+\subsection{Campaign 4 results [agent-authored]}
+\label{ssec:campaign4_results}
+
+Campaign 4 ran nine experiments over 24 hours and did what it was asked: it built the rank-128
+CHORD map with {\tt pirate\_frb.varmap}, timed every step, curated a ladder, and came back with
+a recommendation on the old code. Nothing failed. The headline is that {\bf the port
+reproduces at production scale}; the more useful results are three things the campaign learned
+on the way, each of which changes how a future campaign should read its own numbers.
+
+Two facts made the campaign cheaper than planned. First, {\bf tree 0 of {\tt chord\_sb2\_et.yml}
+is byte-identical to tree 0 of {\tt chord\_sb2.yml}} -- the configs differ only in
+{\tt num\_early\_triggers} for trees 1--3 -- so campaign 3's archived sweep was reusable and no
+brute-force sweep was needed, saving $\approx 5$ GPU-hours. Second, $L = 6$ is not merely a good
+grouping but exactly the production one: $N_\beta = {\tt ndm\_wt} \times N \times P =
+1024 \times 25 \times 16 = 409\,600$.
+
+\paragraph{The deliverable.}
+An on-disk rank-$128$ {\tt VarianceMap} for {\tt chord\_sb2\_et.yml} tree 0, at $L_0 = 6$:
+
+\begin{center}
+\small
+\begin{tabular}{ll}
+\toprule
+$D$                         & $\mathbf{0.024308952727723543}$, ${\tt nscored} = 5\,963\,776$ \\
+file                        & {\tt research/agent037/chord\_t0\_L6\_K128.asdf}, 473.1 MiB \\
+$Q$-step cost               & {\bf 479.7 CPU-core-hours} measured, 9.02 h on 60 workers \\
+end-to-end from the seed    & 513.6 CPU-core-hours \\
+solver                      & $409\,600$ of $409\,600$ {\tt optimal}; zero failures, zero rescues \\
+admissibility               & ${\tt max\_r} = 0.9999999999886$, ${\tt nviol} = 0$ of $1.15\times 10^{10}$ \\
+read-back                   & $5.6\times10^{-14}$ relative \\
+\midrule
+$D$ before the $Q$-step     & $6.378$ (the SVD seed), so the step buys a factor $262$ \\
+$D/D_{\rm floor}$           & $16.1$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\par\noindent
+The intermediate steps: {\tt coarse\_grain(6)} of the archived $L=4$ map took 801~s and
+produced an 85.98~GiB reference; {\tt svd(128)} took 392~s (2.22 core-hours), with
+$W^TW = I$ to $2.4\times10^{-15}$; the serial repair, which does not parallelise, is
+$\approx 69$~min at this geometry.
+
+Against campaign 3's published $D = 0.023594$ for the same cell this is $+3.03\%$, and against
+its 504 core-hours, $+1.9\%$.\footnote{Campaign 3's cost figures are extrapolations from
+subsampled cells, carrying that campaign's own $\pm 27\%$ spread, whereas campaign 4's are
+measured full runs; the two should not be compared as equals. Campaign 3 also quotes
+$414\,208$ covering LPs for this cell against the $409\,600$ measured here.}
+
+\paragraph{$D$ is reproducible to $6\%$, not to machine precision.}
+This is the campaign's most important methodological result, and it was measured rather than
+assumed. {\bf Two solver arms whose LP objectives agree to $9\times10^{-14}$ give distances
+differing by $6.0\%$.} A degenerate covering LP has many optima with the same $s \cdot q$ and
+very different violation profiles, and the multiplicative repair charges a whole row for its
+single worst channel. So the $3\%$ gap above is agreement, not a discrepancy -- and every
+future comparison of two CHORD $D$ values has to be read against this floor.
+
+\paragraph{The ladder is on $L$, and it is a set of upper bounds rather than a curve.}
+The obvious ladder -- scaling $N_{\rm freq}$ down by powers of two -- is the wrong one: with
+constraint generation on, per-LP cost is {\em flat} in $N_{\rm freq}$, so every rung stays a
+full-price $409\,600$-LP job, and each rung needs its own GPU sweep. Scaling the
+coarse-graining level instead gives $N_\beta(L) = 2^{\,16-L} \times 400$, so each increment of
+$L$ halves the LP count exactly, every rung is {\tt coarse\_grain(L)} of one file with no GPU
+time at all, and the top rung {\em is} the production run. Forty cells were measured across
+rungs 0--8 at $K = 16, 32, 64, 128$; at $K = 128$:
+
+\begin{center}
+\small
+\begin{tabular}{lccccccccc|c}
+\toprule
+rung          & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & prod. \\
+$L$           & 16 & 15 & 14 & 13 & 12 & 11 & 10 & 9 & 8 & 6 \\
+$N_\beta$     & 400 & 800 & 1600 & 3200 & 6400 & 12800 & 25600 & 51200 & 102400 & $409\,600$ \\
+\midrule
+$D$           & 0.1611 & 0.0870 & 0.0519 & 0.0350 & 0.0289 & 0.0276 & 0.0276 & 0.0258 & 0.0250 & {\bf 0.0243} \\
+$D/D_{\rm prod}$ & 6.63 & 3.58 & 2.13 & 1.44 & 1.19 & 1.14 & 1.14 & 1.06 & 1.03 & 1 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\par\noindent
+{\bf A power law fitted up the ladder is wrong} -- it lands at $0.48\times$ the true rung-8
+value over rungs 0--8 -- because the low rungs {\em saturate in $K$}: at rung 0 an eightfold
+increase in rank buys only $1.35\times$ in $D$, against $5.67\times$ at production, since there
+the error is set by the max-envelope and not by the rank. The approach is not even monotone
+(rung 6 sits $0.1\%$ above rung 5, comfortably inside the $6\%$ floor). {\bf But every rung
+above its own knee is a $1.03$--$1.07\times$ conservative estimate of the production $D$},
+which is the useful way to spend the ladder: iterate at rung 5 (19.9 core-hours, $1.14\times$)
+or rung 7 (79.5 core-hours, $1.06\times$), never at rung 2 ($2.13\times$).
+
+\paragraph{The $W$-step is closed.}
+A production $W$-step costs {\bf 6202 core-hours -- $12.9\times$ the entire $Q$-step} -- and
+would buy $\approx 17\%$ in $D$, which is $9\times$ worse per core-hour than a rank doubling
+{\em even if it drove $D$ to zero}. The cause is specific: constraint generation does not run
+at all in the $W$ direction, because none of the sampled channels has a bounded first
+relaxation, so every LP falls back to the exact $409\,600$-row solve at 793 core-s each. {\bf
+The production recipe is $Q$-only}, and this should not be revisited without a reason.
+
+The way this was found is worth recording. A subscale study at $N_\beta \le 1600$ concluded the
+opposite -- that a $W$-step was $1.8\times$ {\em better} per core-hour than buying rank -- and
+projected the production cost at $2$--$13\%$ of a $Q$-step. It missed by $97$--$564\times$. The
+probe was careful and calibrated to $0.988\times$; the flaw was that its $N_\beta$-independent
+term is only independent {\em while the cut loop runs}, and at production the loop never runs.
+{\bf A cost model fitted where an optimisation works cannot see the cliff where that
+optimisation stops working} -- and the same shape appears above for $D$, where the low rungs
+cannot see what the production cell spends its rank on.
+
+\paragraph{Three corrections to the shipped code.}
+\begin{itemize}
+\item {\bf {\tt cuts\_pool\_window} should be 4, not 0.} At $K = 128$ this is the difference
+  between 1026 and 480 core-hours for a $10^{-14}$ change in the answer. It is a {\em
+  high-rank} knob, not a scale knob: $2.15\times$ at $K = 128$, $1.04\times$ at $K = 64$,
+  nothing below. Both the old code and the port ship the losing value, and both say in their
+  own comments that it is the losing value.
+\item {\bf The repair pipeline is worth $0.087\%$ at CHORD}, not the $2.5\times$ its docstring
+  claims from small geometries.
+\item {\bf One correctness bug, and the port introduced it.} At the shipped {\tt for\_wstep()}
+  default, {\tt wstep()} can return a map that does not dominate the reference while reporting
+  {\tt is\_admissible = True} and a finite $D$ -- precisely the failure the one-sided distance
+  exists to prevent. The additive repair decides whether to act from the {\em ratio}, which
+  cannot see a product entry that is negative where the reference is positive, while the lift
+  it computes is driven by the {\em deficit}, which can. The old {\tt free\_lp.py} gates on the
+  deficit and is correct. {\tt recommended('w')} is safe, so no campaign-4 measurement is
+  affected, but the defect grows with scale: 120 negative entries at production against 1 at
+  rung 2. The bit-identity gates do not cover the case, which is a gap in the gates as much as
+  a bug in the code.
+\end{itemize}
+
+\paragraph{Should the old code be deleted?}
+{\bf Yes, with one exception.} No campaign-4 agent imported any old code -- verified by grep
+across nine working directories, zero imports -- and no published number failed to reproduce.
+The {\tt slow\_avar} modules can go once four self-test calls are removed from
+{\tt \_\_main\_\_.py} and {\tt varmap/tests.py}'s cross-check helper is made to tolerate the
+missing import; its skip path already exists.
+
+The exception is {\tt research/toplevel/*.py}. It is untracked scratch, so deleting it buys no
+tidiness, and it is currently the only oracle that establishes what the additive repair's
+correct behaviour is. Fix the bug above against it, add a gate case with a negative product
+entry at ratio $\le 1$, and then delete it.
+
+\par\noindent
+The benchmark itself -- every cell, its recipe, its machine conditions and its solver counts --
+is in {\tt research/toplevel/BENCHMARK.md}, with a machine-readable copy in
+{\tt benchmark\_cells.json}. {\bf Rank beyond 128 is the only arm campaign 4 tested that beat
+everything it was compared against}, and the ladder now makes it cheap to ask what $K = 256$
+buys before paying for it at production.
+
+\clearpage
+
+\appendix
+
+\section{Variance maps of a config's trees are row-restrictions of one another}
+\label{sec:tree_restrictions}
+
+Label the trees of one {\tt DedispersionConfig} by a pair $(\gamma, e)$: primary-tree index
+$\gamma$ (downsampling factor $2^\gamma$) and early-trigger level $e$. Each tree has its own
+variance map $A^{(\gamma,e)}$, a $(D_{\gamma,e} M_{\gamma,e} P_\gamma)$-by-$N_{\rm freq}$
+matrix. Say that $A'$ is a {\bf row-restriction} of $A$ if there is an injection from the rows
+of $A'$ to the rows of $A$ under which corresponding rows are equal as vectors in
+$\mathbb{R}^{N_{\rm freq}}$. We prove:
+\begin{enumerate}
+\item $A^{(\gamma,e)}$ is a row-restriction of $A^{(\gamma,0)}$, for every $\gamma$ and $e$.
+\item In the ``no-detrender'' case (i.e.\ if the linear operator $L$ does not include a
+ {\tt GpuDetrenderLps2d}), $A^{(\gamma,0)}$ is a row-restriction of $A^{(0,0)}$, for every $\gamma$.
+\end{enumerate}
+In both cases the injection is explicit and is given below, which is what makes the result
+usable rather than merely existential.
+
+\medskip
+\par\noindent
+{\bf Scope.} The two propositions need different hypotheses, and it is worth separating them.
+Proposition 1 holds whatever the upstream processing, and in particular for $L$
+exactly as defined in \S\ref{ssec:variance_map_setup}, {\tt GpuDetrenderLps2d} included: the two
+trees it compares have the same $\gamma$, so they are fed by one and the same upstream chain
+(\ddnotes{Time-downsampled trees and early triggers}), and the proof shows that their
+operators agree row by row -- which needs nothing about what produced their common input, nor
+about the statistics of that input. Proposition 2 compares trees fed by {\em differently}
+downsampled inputs, and is proved only in the no-detrender setting of
+\S\ref{sec:avar_statement} (tree gridding $\to$ subbanded tree dedispersion $\to$ peak-finding
+convolution).
+
+\subsection{Inputs}
+\label{ssec:restriction_inputs}
+
+Write $r_{\rm top}$ for the config's toplevel tree rank and $R$ for the pf\_rank of its
+toplevel subband counts. We use the following facts about how a config's trees are built
+(\ddnotes{Time-downsampled trees and early triggers}, \ddnotes{Subband search}).
+
+\medskip
+\par\noindent
+{\bf (F1) Ranks.} Tree $(\gamma,e)$ performs rank-$\hat r$ dedispersion, $\hat r \equiv
+r_{\rm top} - e$, on the lowest $2^{\hat r}$ tree-freq channels of its input array, and its
+pf\_rank is $R_e = R - e$ (an early trigger removes one subband level per level of trigger).
+Its exported coarse-DM index runs over $0 \le d < D_{\gamma,e} = 2^{{\tt tree\_r} - R_e}$,
+where ${\tt tree\_r} = \hat r$ for $\gamma = 0$ and $\hat r - 1$ for $\gamma > 0$; the trees
+with $\gamma > 0$ keep only the upper half of the coarse DM range.
+
+\medskip
+\par\noindent
+{\bf (F2) Subband sets.} Let $\mathcal{B}(\gamma,e)$ be the set of {\em toplevel} tree-freq
+ranges $[f_{\rm lo}, f_{\rm hi})$ searched by tree $(\gamma,e)$ -- in the code, the set of
+pairs $\big({\tt n\_to\_toplevel\_flo}(n), {\tt n\_to\_toplevel\_fhi}(n)\big)$ over its
+subbands $n$. Then
+\begin{equation}
+\mathcal{B}(\gamma, e) \;\subseteq\; \mathcal{B}(\gamma, 0) \;=\; \mathcal{B}(0,0)
+\qquad \mbox{for every $(\gamma,e)$.}
+\label{eq:subband_property}
+\end{equation}
+That is: {\em time downsampling does not change which bands are searched, and an early
+trigger may only remove bands, never add or alter one.} This is a property of the
+config-to-tree construction and is unit-tested directly ({\tt test\_subband\_property} in
+{\tt pirate\_frb/tests/test\_subbands.py}, run by {\tt python -m pirate\_frb test --sb}), over
+random configs and every shipped config; we take it as given here.
+
+\medskip
+\par\noindent
+{\bf (F3) Locality of a subband output.} Let $X$ be the array that tree $(\gamma,e)$
+dedisperses -- whatever the upstream chain produced -- and let $b \in \mathcal{B}(\gamma,e)$
+be a band at level $l$, occupying the $2^K$ tree-freq channels $a \le f < a + 2^K$ with
+$K \equiv \hat r - R_e + l$. Then, indexing the tree's multiplets as $m = (b,j)$ with
+$0 \le j < 2^l$ (\ddnotes{Subband search}), the tree's output at trial $(d,(b,j),p)$ is
+\begin{equation}
+h_p * \Big[\, \DD(K) \; X\big|_{[a,\;a+2^K)} \,\Big]_{\;2^l d \,+\, j \,+\, \sigma_\gamma 2^{K-1}}
+\;\;\mbox{(up to a time shift)},
+\hspace{0.8cm} \sigma_\gamma \equiv \begin{cases} 0 & \gamma = 0 \\ 1 & \gamma > 0, \end{cases}
+\label{eq:restriction_locality}
+\end{equation}
+where $\DD(K)$ is the rank-$K$ dedispersion transform and $h_p$ the peak-finding kernel. In
+particular the output depends on $X$ only through the $2^K$ channels of $b$, and the recipe --
+which channels, which rank-$K$ DM index, which profile -- does not refer to the ambient tree.
+This is the content of the first two paragraphs of the proof of Lemma 1 in
+\S\ref{sec:dyadic_block} (its Cases 1 and 2, and the identification of the rank-$K$ DM index
+with $2^l d_{\rm hi} + d_{\rm lo}$), together with the upper-half restriction of (F1); it is
+algebra about the dedispersion transform and uses nothing about $X$. The time shift is the
+subband extraction lag, which drops out of everything below.
+
+\medskip
+\par\noindent
+{\bf (F4) Closed form (no detrender only).} Lemma 1 of \S\ref{sec:dyadic_block} -- whose proof
+is independent of this appendix, so there is no circularity -- evaluates
+(\ref{eq:restriction_locality}) in the setting of \S\ref{sec:avar_statement}. With $b$, $l$,
+$a$, $K$ as in (F3) and an input channel $F$, put
+\begin{equation}
+\Phi_{b,p,F}(x) \;\equiv\; 2^{-K} \sum_{u=0}^{2^K-1} \sum_{v=0}^{2^K-1}
+   w_{(a+u)F} \, w_{(a+v)F} \; A_p\big( L_K(u,x) - L_K(v,x) \big),
+\label{eq:restriction_phi}
+\end{equation}
+where $w_{fF} \ge 0$ are the tree-gridding weights, $L_K$ is the lag function and $A_p$ is the
+autocorrelation of $h_p$. Then
+\begin{equation}
+A^{(\gamma,e)}_{(d,\,(b,j),\,p),\,F} \;=\; \Phi_{b,p,F}\big( 2^l d + j + \sigma_\gamma 2^{K-1} \big).
+\label{eq:restriction_closedform}
+\end{equation}
+
+\medskip
+\par\noindent
+{\bf (F5) Profiles and {\tt max\_width}.} The number of peak-finding profiles is
+$P = 1 + 3\log_2 {\tt max\_width}$, where {\tt max\_width} is the widest boxcar the peak-finder
+searches, measured in the tree's own time samples. Profile $p$ denotes the same filter $h_p$
+whatever {\tt max\_width} is: $p=0$ is the identity, and $p = 3l+q$ with $q \in \{1,2,3\}$ is
+one of three shapes built from length-$2^l$ boxcars, so {\tt max\_width} enters only through how
+many levels $l$ exist. The bank for {\tt max\_width} is therefore a {\em prefix} of the bank for
+$2\,{\tt max\_width}$: doubling the width appends one level, i.e.\ three profiles, at the end.
+Now, {\tt max\_width} is a per-{\em primary}-tree config field, which the {\tt DedispersionPlan}
+constructor copies verbatim onto each tree, so every tree of one family reads the same value; and
+{\tt DedispersionConfig::validate()} requires each downsampled primary tree's {\tt max\_width} to
+equal its predecessor's or be half of it. Hence
+\begin{equation}
+P_\gamma \;=\; 1 + 3\log_2 {\tt max\_width}_\gamma
+\qquad \mbox{is independent of $e$, and non-increasing in $\gamma$.}
+\label{eq:restriction_profiles}
+\end{equation}
+
+\subsection{Three consequences of (F1), (F2) and (F5)}
+\label{ssec:restriction_bookkeeping}
+
+\par\noindent
+{\bf Observation.} {\em For every tree of the config,}
+\begin{equation}
+\hat r - R_e \;=\; (r_{\rm top} - e) - (R - e) \;=\; r_{\rm top} - R,
+\label{eq:restriction_invariant}
+\end{equation}
+{\em independent of $(\gamma,e)$. Consequently:}
+\begin{enumerate}
+\item[(a)] {\em One coarse-freq channel spans $2^{r_{\rm top}-R}$ toplevel tree-freq channels
+  in every tree. Hence a band $b \in \mathcal{B}(0,0)$ occupies $2^{l}\,2^{r_{\rm top}-R}$
+  toplevel channels in whichever tree searches it, so its level $l$, its multiplet count
+  $2^l$, its first channel $a$, and therefore $K = r_{\rm top} - R + l$, are attributes of $b$
+  alone and do not depend on which tree we are in.}
+\item[(b)] {\em $D_{\gamma,e}$ does not depend on $e$: $D_{\gamma,e} = D_\gamma$ with
+  $D_0 = 2^{r_{\rm top}-R}$ and $D_\gamma = 2^{r_{\rm top}-R-1}$ for $\gamma > 0$.}
+\end{enumerate}
+
+\medskip
+\par\noindent
+{\em Proof.} (\ref{eq:restriction_invariant}) is immediate from (F1). For (a), a level-$l$
+band spans $2^l$ coarse-freq channels by definition, and by (\ref{eq:restriction_invariant})
+a coarse-freq channel is $2^{\hat r - R_e} = 2^{r_{\rm top}-R}$ toplevel channels wide in
+every tree; since a tree's tree-freq channels are literally the lowest toplevel ones (F1),
+$a$ is the same integer read as a tree-freq or a toplevel index. The width therefore
+determines $l$, and $b$ determines $(l,a)$, in a tree-independent way. For (b), substitute
+(\ref{eq:restriction_invariant}) into $D_{\gamma,e} = 2^{{\tt tree\_r}-R_e}$, using
+${\tt tree\_r} - R_e = \hat r - R_e$ for $\gamma=0$ and $\hat r - R_e - 1$ for
+$\gamma>0$. $\square$
+
+\medskip
+\par\noindent
+Part (b) is the fact that makes statement 1 a restriction in the {\em multiplet} index only:
+an early trigger does not shorten the coarse-DM axis.
+
+\medskip
+\par\noindent
+{\bf (c) Profile ranges nest.} {\em $P$ is an attribute of the primary-tree family, so we may
+write $P_\gamma$ without an $e$; and $P_\gamma \le P_0$ for every $\gamma$, with equality iff
+the two families share a {\tt max\_width}. Since profile $p$ denotes the same filter in every
+tree, the profile index set $[0,P_\gamma)$ of any tree is contained in that of tree $(0,0)$, and
+an index the two trees share means the same thing in both.}
+
+\medskip
+\par\noindent
+{\em Proof.} Immediate from (F5): all trees of family $\gamma$ read one {\tt max\_width}, and
+(\ref{eq:restriction_profiles}) is non-increasing in $\gamma$. $\square$
+
+\medskip
+\par\noindent
+Part (c) is what makes statement 2 well-formed: without it, a downsampled tree could search
+profiles that tree $(0,0)$ does not, and the right-hand side of (\ref{eq:restriction_ds}) would
+be indexed out of range.
+
+\subsection{Statement 1: early triggers}
+\label{ssec:restriction_et}
+
+\par\noindent
+{\bf Proposition 1.} {\em Fix $\gamma$ and $e \ge 0$, and let the trees $(\gamma,e)$ and
+$(\gamma,0)$ be fed by a common upstream chain, which may be arbitrary. Then for every band
+$b \in \mathcal{B}(\gamma,e)$ at level $l$, every $0 \le j < 2^l$, every $0 \le d < D_\gamma$,
+every $0 \le p < P_\gamma$ and every $F$,}
+\begin{equation}
+A^{(\gamma,e)}_{(d,\,(b,j),\,p),\,F} \;=\; A^{(\gamma,0)}_{(d,\,(b,j),\,p),\,F}.
+\label{eq:restriction_et}
+\end{equation}
+{\em Hence $A^{(\gamma,e)}$ is a row-restriction of $A^{(\gamma,0)}$: it is obtained by
+deleting the rows whose band lies in $\mathcal{B}(\gamma,0) \setminus \mathcal{B}(\gamma,e)$,
+with $(d,j,p)$ carried over unchanged.}
+
+\medskip
+\par\noindent
+{\em Proof.} We show the two trees' linear operators agree row by row; the statement about
+$A$ then follows, since $A_{\alpha F} = \sum_{t'} L[\alpha t, F t']^2$ (and, for $\gamma>0$, a
+sum over the $2^\gamma$ polyphase components, which is the same set for both trees because
+$\gamma$ is).
+
+By (F2), $b \in \mathcal{B}(\gamma,e) \subseteq \mathcal{B}(\gamma,0)$, so both sides of
+(\ref{eq:restriction_et}) are defined. By the Observation (b) both trees have the same
+coarse-DM range $0 \le d < D_\gamma$, and by (a) the band contributes multiplets $(b,j)$,
+$0 \le j < 2^l$, with the same $l$, the same $a$ and the same $K$ in both. Both carry the same
+$\sigma_\gamma$, since $\gamma$ is the same on both sides. Having the same $\gamma$, the two
+trees dedisperse the same array $X$ -- tree $(\gamma,e)$ using only its lowest $2^{\hat r}$
+channels, which do contain $b$, since $a + 2^K \le 2^{\hat r}$ whenever tree $(\gamma,e)$
+searches $b$. So (F3) applies to each side and returns the same expression
+(\ref{eq:restriction_locality}) in $X$. $\square$
+
+\medskip
+\par\noindent
+Note what the proof does {\em not} need: no relation between the two trees' DM grids has to be
+established, because by (b) they are the same grid; and nothing at all is assumed about $X$,
+which is why the detrended operator of \S\ref{ssec:variance_map_setup} is covered. Early
+triggers are a pure restriction in $m$.
+
+\subsection{Statement 2: time downsampling}
+\label{ssec:restriction_ds}
+
+\par\noindent
+{\bf Proposition 2.} {\em Work in the no-detrender setting of \S\ref{sec:avar_statement}, and
+fix $\gamma > 0$. For every band $b \in \mathcal{B}(0,0)$ at level $l$, every
+$0 \le j < 2^l$, every $0 \le d < D_\gamma$, every $0 \le p < P_\gamma$ and every $F$,}
+\begin{equation}
+A^{(\gamma,0)}_{(d,\,(b,j),\,p),\,F} \;=\; A^{(0,0)}_{(d + D_0 - D_\gamma,\;(b,j),\;p),\,F},
+\hspace{1.2cm} D_0 - D_\gamma = \tfrac{1}{2} D_0 .
+\label{eq:restriction_ds}
+\end{equation}
+{\em Hence $A^{(\gamma,0)}$ is a row-restriction of $A^{(0,0)}$: it is the block of rows whose
+coarse-DM index lies in the upper half $D_0/2 \le d < D_0$, with $(m,p)$ carried over
+unchanged.}
+
+\medskip
+\par\noindent
+{\em Proof.} By (F2) with $e=0$, the two trees search the same band set
+$\mathcal{B}(\gamma,0) = \mathcal{B}(0,0)$, so by the Observation (a) they have the same
+multiplet set and the same $l$, $a$, $K$, hence the same $\Phi_{b,p,F}$ of
+(\ref{eq:restriction_phi}); in particular $M_{\gamma,0} = M_{0,0}$. By the Observation (b),
+$D_\gamma = D_0/2$, so $D_0 - D_\gamma = D_0/2$ and the map $d \mapsto d + D_0/2$ is an
+injection $[0,D_\gamma) \to [0,D_0)$.
+
+Apply (\ref{eq:restriction_closedform}) to each side. The left-hand side has $\gamma > 0$,
+hence $\sigma_\gamma = 1$:
+\begin{equation}
+A^{(\gamma,0)}_{(d,(b,j),p),F} \;=\; \Phi_{b,p,F}\big( 2^l d + j + 2^{K-1} \big).
+\end{equation}
+The right-hand side has $\gamma = 0$, hence $\sigma_0 = 0$, and coarse-DM index $d + D_0/2$:
+\begin{equation}
+A^{(0,0)}_{(d + D_0/2,\,(b,j),\,p),F} \;=\; \Phi_{b,p,F}\big( 2^l (d + D_0/2) + j \big)
+  \;=\; \Phi_{b,p,F}\big( 2^l d + j + 2^l D_0/2 \big).
+\end{equation}
+Finally $2^l D_0 / 2 = 2^l \, 2^{r_{\rm top}-R-1} = 2^{(r_{\rm top}-R+l)-1} = 2^{K-1}$ by the
+Observation (a), so the two arguments of $\Phi_{b,p,F}$ agree. $\square$
+
+\medskip
+\par\noindent
+A word on the profile index. The right-hand side of (\ref{eq:restriction_ds}) is defined
+because $P_\gamma \le P_0$ by the Observation (c), and a profile index the two trees share
+denotes the same filter by (F5) -- which is why $p$ can be ``carried over unchanged'' between
+trees that do not have the same number of profiles. So Proposition 2's restriction is in the
+coarse-DM index {\em and} the profile index, whereas Proposition 1's is in the multiplet index
+alone. The profile restriction is not vacuous: $P_\gamma$ is often strictly less than $P_0$. In
+{\tt configs/dedispersion/chord\_sb2\_et.yml}, whose four primary trees have
+${\tt max\_width} = 32, 16, 8, 4$, the profile counts are $P = 16, 13, 10, 7$. Anything deriving
+$A^{(\gamma,0)}$ from $A^{(0,0)}$ must therefore select the rows with $p < P_\gamma$ rather than
+assume the profile axes match -- the array shapes look plausible either way.
+
+\medskip
+\par\noindent
+Two remarks. First, in the no-detrender setting (\ref{eq:restriction_closedform}) depends on
+$\gamma$ only through $\sigma_\gamma \in \{0,1\}$ -- the downsampling factor $2^\gamma$ itself
+never appears. So any two trees of a config with $\gamma, \gamma' > 0$ and the same $e$ have
+{\em identical} rows at every profile index both of them have, i.e.\ for
+$0 \le p < \min(P_\gamma, P_{\gamma'})$. Their maps coincide outright when the two families
+share a {\tt max\_width}, and are nested otherwise: in {\tt chord\_sb2\_et.yml} the three
+downsampled families have $P = 13, 10, 7$, so there they are nested. Second, both propositions
+have been checked numerically over random configs, against maps computed in float64 by the
+algorithm of \S\ref{sec:analytic_variance}: the row identities (\ref{eq:restriction_et}) and
+(\ref{eq:restriction_ds}) hold to $0$ and one ulp respectively. Proposition 1 has additionally been checked with a {\tt GpuDetrenderLps2d} in front of
+the dedisperser, where it continues to hold and Proposition 2 fails outright.
+
+\section{Monotonicity of the variance map in the DM bits (no detrender)}
+\label{sec:dyadic_block}
+
+{\bf This appendix treats the no-detrender case only.} The linear operator is bare tree
+gridding $\to$ subbanded tree dedispersion $\to$ peak-finding convolution, as in
+\S\ref{sec:analytic_variance}, \S\ref{sec:avar_statement} -- {\em not} the detrended
+operator of \S\ref{ssec:variance_map_setup}, which includes a {\tt GpuDetrenderLps2d}.
+{\bf The result below is proved in that case only, and the restriction is not a
+technicality:} with a {\tt GpuDetrenderLps2d} in front of the dedisperser the property is not
+merely unproved but {\em false}, and badly so (\S\ref{ssec:dyadic_sharpness}).
+
+Fix one column of the variance map: a {\tt DedispersionTree}, a frequency subband, a
+peak-finding profile $p$, and a single input frequency channel $F$. What is left is a 1-d
+array $A[d_m]$ indexed by the subband's dispersion measure
+$d_m = 2^l d_{\rm hi} + d_{\rm lo}$ (\ddnotes{Subband search}). The purpose of this
+appendix is to prove that $A$ is {\em antitone in the binary digits of $d_m$}: writing
+$d \subseteq d'$ for the bitwise-subset partial order on DM indices (i.e.\ $d_b \le d'_b$
+for every bit $b$, equivalently $d \,\&\, d' = d$),
+\begin{equation}
+d \subseteq d' \hspace{5mm} \Longrightarrow \hspace{5mm} A[d'] \;\le\; A[d].
+\label{eq:bitwise_property}
+\end{equation}
+Equivalently: {\em setting a bit of the DM index never increases the variance},
+$A[d \,|\, 2^b] \le A[d]$. Two consequences are worth stating separately. First, taking
+$d = 0$, the DM index $d_m=0$ maximizes the column. Second, and more useful, the
+{\em dyadic-block property}: in every aligned dyadic block of $d_m$ indices, the {\em first}
+entry is the largest,
+\begin{equation}
+A\big[ 2^k j \big] \;=\; \max_{0 \le i < 2^k} A\big[ 2^k j + i \big]
+  \qquad \mbox{for every $k \ge 0$, $j \ge 0$ with indices in range,}
+\label{eq:dyadic_property}
+\end{equation}
+which follows from (\ref{eq:bitwise_property}) because $2^kj$ is the bitwise-minimal element
+of its own dyadic block ($2^kj$ and $i < 2^k$ have disjoint bits). The practical consequence
+is that an approximation to the variance map which resolves only the top DM bits, and which
+must never {\em under}estimate a variance (\S\ref{ssec:distance_function}), can simply be
+evaluated at the bottom of each dyadic DM block: no maximization over the block is needed,
+and the resulting bound is tight.
+
+Concretely, $A$ here is a reindexing of the variance map of
+Eq.\ (\ref{eq:variance_map_def}): with $m = (\mbox{subband}, d_{\rm lo})$ and $d = d_{\rm hi}$
+as in \S\ref{ssec:avar_map_indices}, the per-multiplet variance $A_{\alpha F}$ at
+$\alpha = (d_{\rm hi}, m, p)$ is $A[2^l d_{\rm hi} + d_{\rm lo}]$, so a dyadic block of $A$
+generally runs across several multiplets.
+
+Note that $A$ is {\em not} monotone in $d_m$ as an integer: it wanders up and down, but never
+above the value at any bitwise-subset index (\S\ref{ssec:dyadic_sharpness}).
+
+The proof splits into a statement about the lag function $L_r(f,d)$ (Lemmas 2--5: {\em the
+lag function is linear in the bits of $d$ with non-negative coefficients, so setting a DM bit
+can only spread the impulse response out}) and a statement about the peak-finding kernels
+(Lemma 6: {\em spreading out can only decrease the variance}). Both are needed;
+\S\ref{ssec:dyadic_sharpness} shows that neither hypothesis can be dropped, and that the
+bitwise-subset order is exactly the right partial order. {\bf The first hypothesis --
+non-negativity of the gridding weights -- is exactly what a detrender destroys, which is
+why the no-detrender assumption above cannot be relaxed.}
+
+\subsection{Setup}
+\label{ssec:dyadic_setup}
+
+We work in the no-detrender setting of \S\ref{sec:avar_statement}: the linear operator is
+(tree gridding) $\to$ (subbanded tree dedispersion) $\to$ (convolution with the peak-finding
+profile $h_p$), with no normalization to sigmas and no coarse-graining, and the dedisperser
+input has uncorrelated entries with per-channel variance $V_F$.
+
+Fix a {\tt DedispersionTree} with early-trigger level $e$ and primary-tree index $\gamma$,
+and write
+\begin{equation}
+\hat r \;\equiv\; r_{\rm top} - e
+\end{equation}
+for the rank of the dedispersion it performs: the tree dedisperses the lowest $2^{\hat r}$
+tree-freq channels of the band (\ddnotes{Time-downsampled trees and early triggers}). (In the code, {\tt tree\_r}
+is $\hat r$ for $\gamma = 0$ and $\hat r - 1$ for $\gamma > 0$, because the upper-DM-half
+restriction is folded into the rank.) Fix a subband $(l,s)$, $0 \le l \le R$, and let
+\begin{equation}
+K \;\equiv\; \hat r - R + l,
+  \hspace{1.5cm}
+a \;\equiv\; 2^{\hat r - R} \times (\mbox{index of the subband's first coarse-freq block}),
+\end{equation}
+so that the subband occupies the $2^K$ contiguous tree-freq channels $a \le f < a+2^K$
+(\ddnotes{Subband search}) and its DM index runs over
+$0 \le d_m < 2^K$. Finally let
+\begin{equation}
+w_u \;\equiv\; w_{(a+u)F} \;\ge\; 0
+  \hspace{1.5cm} (0 \le u < 2^K)
+\end{equation}
+be the tree-gridding weights (\ddnotes{Tree gridding kernel}) of input channel $F$ on the subband's
+channels. Non-negativity is the only property of them we use (they are overlap lengths; that
+their support is a short contiguous run is not needed).
+
+\medskip
+\par\noindent
+{\bf Lemma 1 (closed form).}
+{\em For a $\gamma=0$ tree, the variance-map column is}
+\begin{equation}
+A[d_m] \;=\; 2^{-K} \sum_{u=0}^{2^K-1} \sum_{v=0}^{2^K-1}
+   w_u \, w_v \; A_p\big( L_K(u,d_m) - L_K(v,d_m) \big),
+\label{eq:dyadic_closedform}
+\end{equation}
+{\em where $L_K$ is the lag function of \ddnotes{Non-recursive formulation of tree dedispersion}
+and $A_p$ is the autocorrelation of the
+peak-finding kernel $h_p$. For a $\gamma>0$ tree, the exported array is the upper DM half of
+(\ref{eq:dyadic_closedform}): $A[d_m] = (\mbox{RHS evaluated at } d_m + 2^{K-1})$.}
+
+\medskip
+\par\noindent
+{\em Proof.} Both cases of subbanded dedispersion (\ddnotes{Subband search}) compute
+exactly $\DD(K)$ applied to the subband's $2^K$ tree-freq channels, followed by a time shift.
+In Case 1 ($l=0$ or even $s$) the subband output is read off the intermediate array after
+$K = \hat r - R + l$ dedispersion steps, whose coarse-freq block $f$ is $\DD(K)$ applied to
+tree-freq channels $2^K f \le \cdot < 2^K (f+1)$ (Observation 1 of
+\ddnotes{The non-recursive formulation of tree dedispersion}). In Case 2 ($l>0$, odd $s$) the two adjacent level-$(K-1)$
+blocks $2f+1$ and $2f+2$ are combined by one further $\DDS$ step, in which block $2f+1$ plays
+the ``lower'' role and $2f+2$ the ``upper'' role. This pair is not aligned in the ambient
+tree, but the $\DDS$ formulas do not depend on the block index (Observation 1), so
+the last-step identity $\DD(K) = \DDS(K-1) \circ (1 \otimes \DD(K-1))$ applies to the pair
+verbatim: the result is $\DD(K)$ applied to
+their union, which is precisely the subband.
+
+In both cases the rank-$K$ DM index of that $\DD(K)$ is the subband DM index
+$d_m = 2^l d_{\rm hi} + d_{\rm lo}$. In Case 1 this is immediate ($d = d_{\rm hi}2^l +
+d_{\rm lo}$ in the notation of \ddnotes{Subband search}). In Case 2 the extra $\DDS$ step
+maps the level-$(K-1)$ index $d = d_{\rm hi}2^{l-1} + d_{\rm lo}$ to $2d + b$, i.e.\ to
+$2^l d_{\rm hi} + (2 d_{\rm lo} + b)$, and $2d_{\rm lo}+b$ is exactly the fine index of the
+multiplet which receives it.
+
+Therefore, by the non-recursive form of $\DD(K)$ (\ddnotes{Non-recursive formulation of tree
+dedispersion}) and the one-hot
+impulse response (\ref{eq:avar_impulse}), the impulse response of input channel $F$ in this
+subband is
+\begin{equation}
+G_{F,d_m}[t] \;=\; 2^{-K/2} \sum_u w_u \, \delta_{t,\, L_K(u,d_m) + T},
+\label{eq:dyadic_impulse}
+\end{equation}
+and Eqs.\ (\ref{eq:avar_master}), (\ref{eq:avar_autocorr}) give (\ref{eq:dyadic_closedform}),
+per unit input variance $V_F$. The subband extraction lag $T$ drops out because
+$\|h_p * g\|^2$ is translation invariant; note that this holds for {\em any} $T$, so the
+variance map is unchanged by the alternative time-lag convention discussed in the Remark of
+\ddnotes{Subband search}.
+
+For $\gamma>0$, the tree time-downsamples its input by $2^\gamma$ before dedispersing.
+Downsampling adds $2^\gamma$ samples and multiplies by $2^{-\gamma/2}$, so the downsampled
+array again has uncorrelated entries with per-channel variance $V_F$, and the argument above
+applies verbatim on the downsampled time grid. The only other difference is that the tree
+keeps just the upper half of the coarse DM range (\ddnotes{Time-downsampled trees and early triggers}): the top bit
+of $d_{\rm hi}$ is fixed to 1 and dropped, which is the DM range $d_m \ge 2^{K-1}$. $\square$
+
+\medskip
+\par\noindent
+Two remarks. First, early triggers have disappeared into the definition of $\hat r$: a tree
+with $e>0$ performs ordinary rank-$\hat r$ dedispersion on the first $2^{\hat r}$ tree-freq
+channels, i.e.\ the same statement with a truncated channel map. Second, only
+$w_u \ge 0$ is used below,
+so everything that follows holds for an arbitrary channel map and an arbitrary set of subband
+counts $C_l$, and -- summing (\ref{eq:dyadic_closedform}) against $V_F \ge 0$ -- for any
+non-negative combination of input channels.
+
+\subsection{Setting a DM bit spreads the impulse response out}
+\label{ssec:dyadic_lag}
+
+\par\noindent
+{\bf Lemma 2 (bitwise form of $L$).}
+{\em Write $d_m$ for bit $m$ of $d$. Then}
+\begin{equation}
+L_r(f,d) \;=\; \sum_{m=0}^{r-1} \big( 1 - f_{r-1-m} \big) \, c^{(m)}(d),
+  \hspace{1.2cm}
+c^{(m)}(d) \;\equiv\; \Big\lfloor \frac{d}{2^{m+1}} \Big\rfloor + d_m \;\ge\; 0,
+\label{eq:dyadic_bitwise}
+\end{equation}
+{\em and for every $0 \le m_0 < r$ (with $0 \le d < 2^r$),}
+\begin{equation}
+\sum_{m=m_0+1}^{r-1} c^{(m)}(d) \;=\; \Big\lfloor \frac{d}{2^{m_0+1}} \Big\rfloor
+  \;=\; c^{(m_0)}(d) - d_{m_0}.
+\label{eq:dyadic_telescope}
+\end{equation}
+{\em In particular $L_r(0,d) = d$ and $L_r(2^r-1,d) = 0$.}
+
+\medskip
+\par\noindent
+{\em Proof.} In the definition of the lag function $L_r(f,d)$ (\ddnotes{Non-recursive
+formulation of tree dedispersion}), the coefficient of $(1-f_i)$ is
+\begin{equation}
+\sum_{j=0}^{r-1} \Omega_{i+j-r} \, d_j
+ \;=\; \Omega_{-1} \, d_{r-1-i} + \sum_{j \ge r-i} 2^{i+j-r} d_j
+ \;=\; d_{r-1-i} + 2^{i-r} \cdot 2^{r-i} \Big\lfloor \frac{d}{2^{r-i}} \Big\rfloor
+ \;=\; d_m + \Big\lfloor \frac{d}{2^{m+1}} \Big\rfloor
+\end{equation}
+with $m \equiv r-1-i$, which is (\ref{eq:dyadic_bitwise}). For
+(\ref{eq:dyadic_telescope}), use $\lfloor d/2^m \rfloor = 2 \lfloor d/2^{m+1} \rfloor + d_m$
+to rewrite $c^{(m)}(d) = \lfloor d/2^m \rfloor - \lfloor d/2^{m+1} \rfloor$; the sum
+telescopes to $\lfloor d/2^{m_0+1} \rfloor - \lfloor d/2^r \rfloor$, and
+$\lfloor d/2^r \rfloor = 0$. Telescoping from $m=0$ instead gives
+$L_r(0,d) = \sum_m c^{(m)}(d) = d$, while $f = 2^r-1$ kills every term. $\square$
+
+\medskip
+\par\noindent
+{\bf Lemma 3 (monotonicity in frequency).}
+{\em For fixed $d$, the lag $L_r(f,d)$ is non-increasing in $f$. More precisely, if $f<f'$
+and $i_0$ is the highest bit in which they differ, then}
+\begin{equation}
+L_r(f,d) - L_r(f',d) \;\ge\; d_{\,r-1-i_0} \;\ge\; 0.
+\label{eq:dyadic_monotone}
+\end{equation}
+
+\medskip
+\par\noindent
+{\em Proof.} Write $m_0 = r-1-i_0$; since $f<f'$ we have $f_{i_0}=0$ and $f'_{i_0}=1$. In
+the difference of two copies of (\ref{eq:dyadic_bitwise}), terms with $i>i_0$ cancel, the
+$i=i_0$ term contributes $+c^{(m_0)}(d)$, and each term with $i<i_0$ (i.e.\ $m>m_0$)
+contributes at least $-c^{(m)}(d)$. Hence
+\begin{equation}
+L_r(f,d) - L_r(f',d) \;\ge\; c^{(m_0)}(d) - \sum_{m>m_0} c^{(m)}(d) \;=\; d_{m_0}
+\end{equation}
+by (\ref{eq:dyadic_telescope}). $\square$
+
+\medskip
+\par\noindent
+Lemma 3 is the algebraic form of an obvious physical statement: tree dedispersion delays the
+high tree-freq channels less than the low ones, the total spread being
+$L_r(0,d) - L_r(2^r-1,d) = d$. Note that the lag {\em difference} can vanish even when
+$f \ne f'$ (when $d_{m_0}=0$ and the lower bits conspire); this is the ``relative lags happen
+to cancel'' phenomenon which makes {\tt SparseTile}'s content bits sometimes a proper subset
+of the top $(i_0+1)$ bits (\S\ref{sec:avar_dbits}).
+
+\medskip
+\par\noindent
+{\bf Lemma 4 (the lag function is linear in the DM bits).}
+{\em For fixed $f$, the lag function is a non-negative linear form in the binary digits of
+$d$:}
+\begin{equation}
+L_r(f,d) \;=\; \sum_{b=0}^{r-1} d_b \; \lambda_b(f),
+  \hspace{1.2cm}
+\lambda_b(f) \;\equiv\; L_r\big(f, 2^b\big)
+  \;=\; \big(1 - f_{r-1-b}\big) + \sum_{m<b} \big(1-f_{r-1-m}\big) \, 2^{\,b-1-m} \;\ge\; 0.
+\label{eq:dyadic_bitlinear}
+\end{equation}
+{\em Equivalently, $L_r(f,\cdot)$ is additive on bitwise-disjoint DM indices: if
+$d \,\&\, e = 0$ then $L_r(f, d\,|\,e) = L_r(f,d) + L_r(f,e)$.}
+
+\medskip
+\par\noindent
+{\em Proof.} Expanding $\lfloor d/2^{m+1}\rfloor$ in binary,
+$c^{(m)}(d) = \lfloor d/2^{m+1}\rfloor + d_m = d_m + \sum_{j>m} 2^{\,j-m-1} d_j$,
+which is a linear form in the bits of $d$ with
+non-negative integer coefficients; substituting into (\ref{eq:dyadic_bitwise}) and exchanging
+the order of summation gives (\ref{eq:dyadic_bitlinear}), and evaluating it at $d = 2^b$
+identifies $\lambda_b(f)$. A linear form in the bits is additive whenever the bits add, i.e.\
+whenever the two arguments are bitwise disjoint. $\square$
+
+\medskip
+\par\noindent
+Physically: each DM {\em bit} contributes its own delay ramp $\lambda_b(\cdot)$ across the
+band, and a general DM index simply superposes the ramps of its set bits. (The lag is
+{\em not} linear in $d$ itself: $\lambda_b(f) \ne 2^b \lambda_0(f)$ in general, the difference
+being the rounding built into $\Omega_{-1}=1$.)
+
+\medskip
+\par\noindent
+{\bf Lemma 5 (bit spreading).}
+{\em Write $\Delta_{uv}(d) \equiv L_K(u,d) - L_K(v,d)$. Then for all $u \le v$ and all
+bitwise-disjoint $d, e$,}
+\begin{equation}
+\Delta_{uv}\big( d \,|\, e \big) \;=\; \Delta_{uv}(d) + \Delta_{uv}(e) \;\ge\; \Delta_{uv}(d)
+  \;\ge\; 0 .
+\label{eq:dyadic_spread}
+\end{equation}
+{\em Consequently $d \subseteq d'$ implies $\Delta_{uv}(d') \ge \Delta_{uv}(d) \ge 0$: setting
+DM bits can only increase every pairwise separation of the impulse response
+(\ref{eq:dyadic_impulse}).}
+
+\medskip
+\par\noindent
+{\em Proof.} The equality is Lemma 4 applied to $u$ and to $v$ and subtracted. Both
+inequalities are Lemma 3: $\Delta_{uv}(x) \ge 0$ for $u \le v$ and any $x$, applied to
+$x = e$ and to $x = d$. For the consequence, take $e = d' \setminus d$ (bitwise), so that
+$d' = d \,|\, e$ with $d \,\&\, e = 0$. $\square$
+
+\medskip
+\par\noindent
+Three remarks.
+
+First, {\em when is the increment zero?} By (\ref{eq:dyadic_bitwise}),
+$\Delta_{uv}(2^b) = \sum_{m \le b} \alpha_m c^{(m)}(2^b)$ with
+$\alpha_m = v_{K-1-m}-u_{K-1-m}$, since $c^{(m)}(2^b) = 0$ for $m > b$. If $i_0$ is the
+highest bit in which $u$ and $v$ differ and $m_0 = K-1-i_0$, then $\alpha_m = 0$ for $m<m_0$,
+so $\Delta_{uv}(2^b) = 0$ whenever $b < m_0$, while $\Delta_{uv}(2^{m_0}) \ge 1$ by
+(\ref{eq:dyadic_monotone}). (For $b > m_0$ the increment can also vanish accidentally, by the
+cancellation noted after Lemma 3.) So a low DM bit $b$ is felt only by pairs of channels lying
+in different coarse-frequency blocks of size $2^{K-b}$; a pair of nearby channels sees no
+change at all. This is why, numerically, most instances of (\ref{eq:bitwise_property}) are
+exact equalities, increasingly so for the low DM bits: the gridding weights $w_u$ of one input
+channel are supported on a short contiguous run of tree-freq channels.
+
+Second, Lemma 5 contains the ``dyadic'' statement that within an aligned dyadic block of DM
+indices every pairwise separation is smallest at the first index of the block: that is the
+case $(d,e) = (2^kj,\, i)$ with $0 \le i < 2^k$.
+
+Third, the same dyadic statement can be read off the lag-additivity identity of
+\ddnotes{The splitting identity} with $r''=k$, $r'=K-k$: writing $u = 2^{K-k}\bar u + u'$,
+\begin{equation}
+L_K\big(u,\, 2^k j + i\big) \;=\; L_{K-k}(u', j) \;+\; \big(2^k - 1 - \bar u\big) \, j
+   \;+\; L_k(\bar u, i),
+\label{eq:dyadic_split}
+\end{equation}
+whose only $i$-dependent term $L_k(\bar u, i)$ depends on $u$ only through its coarse block
+index $\bar u$, and is non-increasing in $\bar u$ by Lemma 3. In words: the low DM bits
+perform a rank-$k$ dedispersion {\em of the coarse blocks}, sliding them apart while leaving
+the arrangement of channels within each block untouched. This is a useful picture, but it is
+not needed for the proof: Lemma 4 supersedes it.
+
+\subsection{Spreading out decreases the variance}
+\label{ssec:dyadic_kernel}
+
+\par\noindent
+{\bf Lemma 6 (kernel autocorrelations are unimodal).}
+{\em For every peak-finding profile $p$ (\ddnotes{Peak-finding}), the autocorrelation
+$A_p[\delta] = \sum_t h_p[t] h_p[t+\delta]$ is even in $\delta$ and non-increasing in
+$|\delta|$.}
+
+\medskip
+\par\noindent
+{\em Proof.} Evenness is immediate. Write $B_n$ for the boxcar of length $n$ (all entries
+1). Each peak-finding kernel is a non-negative combination of boxcars which share a common
+center and whose lengths have a common parity: with $w = 2^\lambda$,
+\begin{equation}
+h_{\lambda,0} = B_w, \hspace{1cm}
+h_{\lambda,1} = B_{2w}, \hspace{1cm}
+h_{\lambda,2} = \tfrac12 B_{3w} + \tfrac12 B_w, \hspace{1cm}
+h_{\lambda,3} = \tfrac12 B_{4w} + \tfrac12 B_{2w},
+\end{equation}
+where in each case the boxcars are centered on the center of $h_{\lambda,q}$
+(e.g.\ $[\tfrac12, 1, \tfrac12] = \tfrac12 [1,1,1] + \tfrac12 [0,1,0]$). Hence $A_p$ is a
+non-negative combination of cross-correlations
+$\phi_{mn}[\delta] = \sum_t B_m[t] \, B_n[t+\delta]$ of co-centered boxcars, and for
+$m \equiv n$ (mod 2) and integer $\delta$,
+\begin{equation}
+\phi_{mn}[\delta] \;=\; \max\left( 0, \; \min\Big( m, \; n, \; \frac{m+n}{2} - |\delta| \Big) \right),
+\end{equation}
+which is even and non-increasing in $|\delta|$. A non-negative combination of such functions
+has the same property. $\square$
+
+\subsection{The theorem}
+\label{ssec:dyadic_theorem}
+
+\par\noindent
+{\bf Theorem 7.}
+{\em Let $K \ge 0$, let $w_u \ge 0$ for $0 \le u < 2^K$, and let
+$\phi : \mathbb{Z} \rightarrow \mathbb{R}$ be even and non-increasing on $\delta \ge 0$.
+Define}
+\begin{equation}
+A[d] \;=\; \sum_{u,v} w_u \, w_v \; \phi\big( L_K(u,d) - L_K(v,d) \big),
+  \hspace{1.5cm} 0 \le d < 2^K.
+\label{eq:dyadic_abstract}
+\end{equation}
+{\em Then $A[d'] \le A[d]$ whenever $d \subseteq d'$ bitwise. In particular
+$A[2^kj] \ge A[2^kj+i]$ for all $0 \le k \le K$, $0 \le j < 2^{K-k}$, $0 \le i < 2^k$, and
+$A[0] \ge A[d]$ for every $d$.}
+
+\medskip
+\par\noindent
+{\em Proof.} Let $d \subseteq d'$. By Lemma 5, for every pair $u \le v$ we have
+$0 \le \Delta_{uv}(d) \le \Delta_{uv}(d')$, whence $\phi(\Delta_{uv}(d)) \ge
+\phi(\Delta_{uv}(d'))$ because $\phi$ is even and non-increasing on non-negative arguments.
+Multiply by $w_uw_v \ge 0$ and sum over pairs (the sum over $u>v$ duplicates the sum over
+$u<v$, since $\phi$ is even and $\Delta_{vu} = -\Delta_{uv}$). The dyadic-block statement is
+the case $d = 2^kj$, $d' = 2^kj+i$, whose bits are disjoint. $\square$
+
+\medskip
+\par\noindent
+{\bf Corollary 8.}
+{\em The bitwise monotonicity (\ref{eq:bitwise_property}), and hence the dyadic-block property
+(\ref{eq:dyadic_property}), holds for every column of the variance map
+$A[d_m, \mbox{\rm subband}, p, F]$ of \S\ref{ssec:avar_map_indices}, in the no-detrender setting
+of \S\ref{ssec:dyadic_setup}, for every {\tt DedispersionTree} (any $\gamma$, any $e$), every
+subband (any pf\_level $l$, both the aligned Case 1 and the half-aligned Case 2), every
+profile $p$, and every input channel $F$.}
+
+\medskip
+\par\noindent
+{\em Proof.} Lemma 1 writes the column in the form (\ref{eq:dyadic_abstract}) with
+$w_u \ge 0$; Lemma 6 gives $\phi = A_p$ the required monotonicity; apply Theorem 7. For
+$\gamma>0$ the exported array is $A[d_m] = \tilde A[d_m + 2^{K-1}]$, where $\tilde A$
+satisfies the theorem; since $d_m \subseteq d'_m$ (with both $< 2^{K-1}$) implies
+$d_m + 2^{K-1} \subseteq d'_m + 2^{K-1}$, the property is inherited. $\square$
+
+\medskip
+\par\noindent
+Three extensions are immediate, because bitwise monotonicity is preserved by non-negative
+combinations and by pointwise maxima over a common DM index:
+\begin{itemize}
+\item {\bf Summing over frequency channels.} $y[d_m] = \sum_F V_F \, A[d_m,\cdot,\cdot,F]$
+has the property for any $V_F \ge 0$; this is the vector $Av$ of \S\ref{ssec:df_varfine}.
+\item {\bf Maximizing over profiles or multiplets.} Arrays which share the same $d_m$ index
+(e.g.\ the $P$ profiles) inherit the property under sums and pointwise maxima, since the
+maximizing index is common to all of them. The multiplets of one subband instead share the
+{\em coarse} DM index $d_{\rm hi}$, and the property passes to them too, because $d_{\rm hi}$
+and $d_{\rm lo}$ occupy disjoint bit ranges of $d_m = 2^l d_{\rm hi} + d_{\rm lo}$: each
+individual multiplet's array $d_{\rm hi} \mapsto A[2^l d_{\rm hi} + d_{\rm lo}]$ is bitwise
+monotone, since $d_{\rm hi} \subseteq d'_{\rm hi}$ implies
+$2^l d_{\rm hi} + d_{\rm lo} \subseteq 2^l d'_{\rm hi} + d_{\rm lo}$; and the array the
+peak-finder actually forms,
+$B[d_{\rm hi}] = \max_{d_{\rm lo}} A[2^l d_{\rm hi} + d_{\rm lo}]$, equals
+$A[2^l d_{\rm hi}]$ by Theorem 7 (as $0 \subseteq d_{\rm lo}$), i.e.\ it is the fine array
+sampled at multiples of $2^l$, and is therefore bitwise monotone in $d_{\rm hi}$. (Different
+subbands have different $l$ and hence different DM ranges, so a maximum over subbands only
+makes sense once they are put on a common DM grid; on such a grid it inherits the property
+as well.)
+\item {\bf Coarse-graining the DM axis.} If the DM axis is coarse-grained by a factor $2^c$
+using max (as in the dedispersion output arrays, \ddnotes{Dedispersion output arrays}),
+the coarse-grained array equals the fine array sampled at $d_m \equiv 0 \pmod {2^c}$, and
+$i \subseteq i'$ implies $2^c i \subseteq 2^c i'$, so the coarse array inherits the property.
+\end{itemize}
+\subsection{Sharpness}
+\label{ssec:dyadic_sharpness}
+
+Neither hypothesis of Theorem 7 can be dropped.
+\begin{itemize}
+\item {\em Non-negative weights.} Take $K=1$, $h=[1]$ (profile $p=0$) and $w = (1,-1)$. Then
+$A[0]=0$ and $A[1]=2$, so even the two-element instance $0 \subseteq 1$ of
+(\ref{eq:bitwise_property}) fails. This is why the argument does not survive a
+{\tt GpuDetrenderLps2d} in front of the dedisperser: the effective per-channel response is no longer
+a non-negative weight times a single delta, so neither hypothesis of Theorem 7 survives. This
+is not a gap in the proof but a real failure: computing the detrended variance map by brute
+force (\S\ref{sec:variance_map_bruteforce}) at rank 6 with {\tt subband\_counts}=[2,2,1],
+about half of all aligned dyadic blocks of $A[\cdot,\mbox{subband},p,F]$ are violated, with
+block maxima up to 5 times the block-bottom value for an $(n,W)=(2,4)$ detrender. For the
+$W=0$ detrender the failure is extreme and systematic: the detrender annihilates the zero-DM
+mode, so $A[0]$ is close to zero and is the block {\em minimum} rather than its maximum.
+\item {\em Unimodal kernel autocorrelation.} Take $K=3$, $w=(1,1,1,1,1,1,1,1)$ (a full-band,
+uniform gridding footprint) and the two-hump kernel $h = [1,0,0,0,1]$, whose autocorrelation
+$A_h = [2,0,0,0,1]$ is not monotone. Then $A = (128,64,48,32,30,32,26,24)$, which violates
+(\ref{eq:bitwise_property}) at $4 \subseteq 5$ ($A[5] = 32 > A[4] = 30$), and violates the
+dyadic-block property on the block $\{4,5\}$. All four current profile shapes are co-centered
+sums of boxcars, so Lemma 6 applies; but a future profile which is not (for example a matched
+filter for a scattered or multi-component pulse) would invalidate the conclusion, not merely
+the proof -- and, as this example shows, for perfectly ordinary gridding weights.
+\end{itemize}
+
+Nor can the bitwise-subset order be enlarged: it is exactly the set of pairs which the
+hypotheses of Theorem 7 constrain.
+
+\medskip
+\par\noindent
+{\bf Proposition 9 (the order is exactly right).}
+{\em Fix $K$ and $0 \le d, d' < 2^K$. The following are equivalent:}
+\begin{itemize}
+\item[(i)] $A[d'] \le A[d]$ for every $w \ge 0$ and every even, non-increasing $\phi$ in
+(\ref{eq:dyadic_abstract});
+\item[(ii)] $\Delta_{uv}(d') \ge \Delta_{uv}(d)$ for every $u \le v$;
+\item[(iii)] $d \subseteq d'$.
+\end{itemize}
+
+\medskip
+\par\noindent
+{\em Proof.} (iii)$\Rightarrow$(ii) is Lemma 5, and (ii)$\Rightarrow$(i) is the proof of
+Theorem 7.
+
+(i)$\Rightarrow$(ii): the case $u=v$ is trivial, so let $u<v$, and take the two-channel weight
+vector with $w_u = w_v = 1$ and all other entries zero, so that
+$A[x] = 2\phi(0) + 2\phi(\Delta_{uv}(x))$; take $\phi(\delta) = 1$ for $|\delta| \le t$ and
+$\phi(\delta) = 0$ otherwise, which is even and non-increasing on $\delta \ge 0$. If
+$\Delta_{uv}(d') < \Delta_{uv}(d)$, then $t = \Delta_{uv}(d')$ gives $A[d'] > A[d]$.
+
+(ii)$\Rightarrow$(iii): write $\epsilon_m = c^{(m)}(d') - c^{(m)}(d)$ and
+$D_m = \lfloor d'/2^m \rfloor - \lfloor d/2^m \rfloor$, so that $\epsilon_m = D_m - D_{m+1}$
+and $D_K = 0$ by (\ref{eq:dyadic_telescope}). By (\ref{eq:dyadic_bitwise}),
+$\Delta_{uv}(x) = \sum_m \alpha_m c^{(m)}(x)$ with $\alpha_m = v_{K-1-m} - u_{K-1-m}$; for a
+pair $u \le v$ whose highest differing bit is $i_0 = K-1-m_0$ we have $\alpha_m = 0$ for
+$m<m_0$, $\alpha_{m_0}=1$, and $\alpha_m \in \{-1,0,1\}$ arbitrary and independent for
+$m>m_0$ (the lower bits of $u$ and $v$ are unconstrained). Hence (ii) says exactly
+\begin{equation}
+\epsilon_{m_0} \;\ge\; \sum_{m>m_0} |\epsilon_m|
+  \hspace{1.5cm} \mbox{for every } 0 \le m_0 < K .
+\end{equation}
+Since the right side is $\ge 0$, every $\epsilon_m \ge 0$, so the constraint becomes
+$\epsilon_{m_0} \ge \sum_{m>m_0}\epsilon_m = D_{m_0+1}$, i.e.\ $D_{m_0} \ge 2 D_{m_0+1}$. But
+$D_{m} - 2D_{m+1} = d'_{m} - d_{m}$, so this says $d'_m \ge d_m$ for every $m$, which is
+$d \subseteq d'$. $\square$
+
+\medskip
+\par\noindent
+In particular $A$ need not be monotone in $d_m$ as an integer, and no weaker hypothesis on the
+DM indices will do. A minimal example within the hypotheses of Theorem 7, using a real
+peak-finding kernel: $K=2$, $w = (0,1,1,0)$, $h = B_2 = [1,1]$ (so $\phi = A_h = [2,1,0,\dots]$)
+gives $A = (8,6,8,6)$, which increases from $d=1$ to $d=2$. The reason is visible in
+(\ref{eq:dyadic_bitwise}): channels $u=1$ and $v=2$ have lags $(1,0)$ at $d=1$ but $(1,1)$ at
+$d=2$, so the pair is {\em less} spread out at the larger DM index -- while at $d=3 = 1|2$,
+which is above both in the subset order, the separation is back to 1. The same effect is easy
+to see in the real variance map: for instance in {\tt configs/dedispersion/toy.yml}, tree 0,
+subband $n=0$ ($l=1$, $\rho=9$), channel $F=328$, profile $p=0$, one finds
+$A[255] = 5.08\times10^{-4} < A[256] = 6.71\times10^{-4}$, with
+$A[255 \,\&\, 256] = A[0] = 9.77\times10^{-4}$ above both.
+
+Finally, the statement is about the {\em natural} (non-bit-reversed) DM index
+$d_m = 2^l d_{\rm hi} + d_{\rm lo}$, which is the convention of
+\S\ref{ssec:avar_map_indices}. Under a bit-reversed DM index, aligned dyadic blocks become strided
+sets, and (\ref{eq:bitwise_property}) becomes bitwise monotonicity with respect to the
+reversed bit labelling (the subset order is preserved by any relabelling of the bits, so the
+theorem is convention-independent; only its ``dyadic block'' phrasing is not).
+
+\clearpage
+
+\section{Brute-force computation of the variance map}
+\label{sec:variance_map_bruteforce}
+
+Although Eq.\ (\ref{eq:variance_map_def}) defines $A$ through a random ensemble, $A$ is really just
+a statement about the matrix elements of $L$, and can be computed one column at a time by applying
+$L$ to ``one-hot'' input arrays. This appendix works out that brute-force algorithm.
+
+It is very slow, but it treats every stage of $L$ as a black box, so it needs no new analysis to
+handle subbands, time-downsampled trees, early triggers, or -- most importantly -- the
+{\tt GpuDetrenderLps2d}, which the machinery of \S\ref{sec:analytic_variance} cannot currently handle at
+all. In fact the relationship is closer than that: \S\ref{sec:analytic_variance} {\em is} this
+algorithm, executed sparsely (propagating the one-hot impulse response through the dedispersion
+steps in compressed form) instead of densely. The brute-force version is the dense reference that
+the sparse version should be tested against.
+
+Besides the parameters of \S\ref{ssec:variance_map_setup}, we will need the {\tt GpuDetrenderLps2d} time
+half-width $W$ (\dtnotes{2-d detrending}) and the max peak-finding kernel width $W_{\rm max}$
+(\ddnotes{Peak-finding}).
+
+\subsection{$A$ as a set of column norms}
+
+Write the matrix elements of $L$ as $L_{\alpha t, F t'}$, i.e.
+\begin{equation}
+{\tt out}_\alpha[t] = \sum_{F=0}^{N_{\rm freq}-1} \sum_{t'} L_{\alpha t, F t'} \, {\tt in}[F,t']
+\label{eq:bf_L_matrix}
+\end{equation}
+where $0 \le \alpha < 2^{r-R}MP$ is the flattened output index, $t$ is a downsampled output time,
+and $t'$ is an undownsampled input time. Since the input has covariance
+$\langle {\tt in}[F,t'] \, {\tt in}[F',t''] \rangle = v_F \, \delta_{FF'} \, \delta_{t't''}$,
+\begin{equation}
+y_\alpha = \big\langle {\tt out}_\alpha[t]^2 \big\rangle = \sum_F v_F \sum_{t'} L_{\alpha t, F t'}^2
+\end{equation}
+and comparing with Eq.\ (\ref{eq:variance_map_def}),
+\begin{equation}
+A_{\alpha F} = \sum_{t'} L_{\alpha t, F t'}^2
+\label{eq:bf_A_colnorm}
+\end{equation}
+for any output time $t$ which has reached steady state. That is, {\bf a column of $A$ is a set of
+squared column norms of $L$}, taken over the input time axis at fixed output time.
+
+Now let $e^{(F,t_0)}$ denote the one-hot input array ${\tt in}[F',t'] = \delta_{FF'} \delta_{t't_0}$.
+Applying $L$ to it picks out a {\em row} of $L$, not a column:
+\begin{equation}
+\big( L \, e^{(F,t_0)} \big)_\alpha[t] = L_{\alpha t, F t_0}
+\hspace{1.2cm}\Longrightarrow\hspace{1.2cm}
+\sum_t \big( L \, e^{(F,t_0)} \big)_\alpha[t]^2 = \sum_t L_{\alpha t, F t_0}^2
+\label{eq:bf_rownorm}
+\end{equation}
+So the proposed algorithm computes a {\em row} norm where Eq.\ (\ref{eq:bf_A_colnorm}) asks for a
+{\em column} norm. The two agree by time-translation invariance -- but the details differ between
+$\gamma=0$ and $\gamma>0$, which is the one place where the algorithm needs care.
+
+\subsection{Undownsampled trees ($\gamma=0$)}
+
+Every stage of $L$ is time-translation invariant. The {\tt GpuDetrenderLps2d} run with no mask is a fixed
+FIR filter along time: with no mask its normal equations, and hence its mask expansion and its
+conditioning cuts, depend on neither the data nor $t$, so $L$ really is both linear and
+shift-invariant. Tree gridding acts only on the frequency axis, and tree dedispersion and the
+peak-finding convolutions are sums of lagged copies. Therefore
+\begin{equation}
+L_{\alpha t, F t'} = \ell_{\alpha F}[t-t']
+\end{equation}
+and Eqs.\ (\ref{eq:bf_A_colnorm}), (\ref{eq:bf_rownorm}) both collapse to
+$\sum_u \ell_{\alpha F}[u]^2$. Hence, for any $t_0$ satisfying the support conditions of
+\S\ref{ssec:bf_sizing} below,
+\begin{equation}
+A_{\alpha F} = \sum_t \big( L \, e^{(F,t_0)} \big)_\alpha[t]^2
+\label{eq:bf_master}
+\end{equation}
+i.e.\ apply $L$ to a one-hot input, square, and sum over the output time axis. One pass per input
+channel gives all $N_{\rm freq}$ columns of $A$.
+
+\subsection{Downsampled trees ($\gamma>0$)}
+
+For $\gamma>0$, the operator $L$ contains a time-downsampling stage $\TDS(\gamma)$
+(\ddnotes{Downsampled trees and the LaggedDownsampler}) between the detrender and the tree, and is therefore invariant
+only under input shifts by $2^\gamma$ samples. The right generalization is a {\em polyphase}
+decomposition of the input time index into a downsampled index and a phase,
+\begin{equation}
+t' = 2^\gamma s + c, \hspace{1.5cm} 0 \le c < 2^\gamma
+\end{equation}
+Invariance under $s \rightarrow s+1$ (which shifts the output by one downsampled sample) gives
+\begin{equation}
+L_{\alpha t, F(2^\gamma s + c)} = \ell^{(c)}_{\alpha F}[t-s]
+\end{equation}
+with $2^\gamma$ generally-distinct impulse responses $\ell^{(0)},\cdots,\ell^{(2^\gamma-1)}$.
+Eq.\ (\ref{eq:bf_A_colnorm}) now reads
+\begin{equation}
+A_{\alpha F} = \sum_{c=0}^{2^\gamma-1} \sum_s \ell^{(c)}_{\alpha F}[t-s]^2
+  = \sum_{c=0}^{2^\gamma-1} \big\| \ell^{(c)}_{\alpha F} \big\|^2
+\end{equation}
+whereas a single one-hot at input time $t_0$ sees only the phase $c = t_0 \bmod 2^\gamma$.
+So a downsampled tree does need $2^\gamma$ one-hot arrays per input channel, one per residue class
+of $t_0$ modulo $2^\gamma$, and the results are {\em summed} (not averaged):
+\begin{equation}
+A_{\alpha F} = \sum_{c=0}^{2^\gamma-1} \sum_t \big( L \, e^{(F,t_c)} \big)_\alpha[t]^2,
+  \hspace{1.5cm} t_c \equiv c \ (\mbox{mod } 2^\gamma)
+\label{eq:bf_master_ds}
+\end{equation}
+Any representative $t_c$ of each residue class will do; e.g.\ $t_c = t_0 + c$ with $t_0$ a multiple
+of $2^\gamma$.
+
+There is one important special case. If the part of $L$ upstream of $\TDS(\gamma)$ is
+{\em instantaneous} in time -- no detrender at all, or a {\tt GpuDetrenderLps2d} with $W=0$, which fits
+each time sample independently and is therefore a pure frequency-axis operator -- then
+$\TDS(\gamma)$ maps $e^{(F, 2^\gamma s + c)}$ to the {\em same} downsampled array for every $c$,
+the $2^\gamma$ phases coincide, and one pass suffices:
+\begin{equation}
+A_{\alpha F} = 2^\gamma \sum_t \big( L \, e^{(F,t_0)} \big)_\alpha[t]^2
+  \hspace{1.5cm} (W=0)
+\end{equation}
+This is the familiar statement that downsampling with a $2^{-\gamma/2}$ normalization leaves the
+variance unchanged (\ddnotes{Time-downsampled trees and early triggers}), and it is worth keeping as a unit test: with
+$W=0$ the $2^\gamma$ phase outputs must agree {\em exactly}. For $W>0$ they genuinely differ, since
+the polyphase components of the detrender's time response differ, and all $2^\gamma$ passes are
+needed.
+
+\subsection{Placing the one-hot, and sizing $N_{\rm time}$}
+\label{ssec:bf_sizing}
+
+Eqs.\ (\ref{eq:bf_master}), (\ref{eq:bf_master_ds}) are exact only if the {\em entire} impulse
+response is emitted: anything clipped at either end of the array is silently dropped from the sum
+of squares, and the result is an underestimate with no error indication. Three conditions.
+
+\begin{itemize}
+
+\item {\bf Detrender padding.} The {\tt GpuDetrenderLps2d} is handed a length-$(T+2W)$ buffer and
+overwrites only samples $[W, W+T)$ with the residual (\dtnotes{2-d detrending}). A one-hot at buffer
+index $t_0$ produces a detrended response on $[t_0-W,\, t_0+W]$, all of which must lie in the
+emitted region, so we need $t_0 \ge 2W$.
+
+\item {\bf No negative times.} Tree dedispersion defines ${\tt in}[\cdots,t] = 0$ for $t<0$
+(\ddnotes{Tree dedispersion}), so a response reaching back before the start of the stream would
+be truncated -- equivalently, we would be computing a non-steady-state variance
+(cf.\ the footnote to Eq.\ \ref{eq:avar_master}). The previous condition already rules this out,
+since the response starts at $t_0 - W \ge W \ge 0$.
+
+\item {\bf Enough room downstream.} Going forward from the one-hot, the response is spread by
+three stages:
+\begin{itemize}
+\item the detrender, over $2W+1$ undownsampled samples, hence
+$\lfloor 2W/2^\gamma \rfloor + 1$ downsampled samples after $\TDS(\gamma)$;
+\item (subbanded) tree dedispersion, by at most $\Delta_{\rm dd}$ downsampled samples, where
+\begin{equation}
+\Delta_{\rm dd} \equiv \begin{cases} 2^r & \mbox{if } \gamma = 0 \\
+                                     2^{r+1} & \mbox{if } \gamma > 0 \end{cases}
+\label{eq:bf_ddspread}
+\end{equation}
+\item the peak-finding convolution, by at most $T_{\rm max} - 1 = 2W_{\rm max}-1$ downsampled
+samples (\S\ref{sec:avar_convolver}). If the kernel applies a per-profile time shift
+(\ddnotes{Dedispersion output arrays}), that only translates the response, which is harmless
+here.
+\end{itemize}
+\end{itemize}
+\par\noindent
+Eq.\ (\ref{eq:bf_ddspread}) deserves a comment. $\Delta_{\rm dd}$ is simply the largest full-band
+delay searched by the tree, because the output time index is by construction the arrival time
+extrapolated to the top of the tree's own band (\ddnotes{Subband search}) -- so the per-subband
+time lags $T$ do not {\em add} to this bound, they are part of it. Concretely, in Case 1 of
+subbanded dedispersion (\ddnotes{Subband search}) the total lag from tree-freq $f$ to the
+output is at most
+\begin{equation}
+\underbrace{T}_{= \, d_{\rm hi}2^l(2^{R-l}-1-f)} + \underbrace{d}_{= \, d_{\rm hi}2^l + d_{\rm lo}}
+\ \le \ d_{\rm hi} 2^R + d_{\rm lo} \ \le \ (2^{r-R}-1)2^R + (2^l-1) \ < \ 2^r
+\end{equation}
+(maximized at $f=0$, and using the fact that the largest within-subband lag is
+$L_{r-R+l}(0,d) = d$), and Case 2 is the same. The two cases in Eq.\ (\ref{eq:bf_ddspread}) differ
+because for $\gamma>0$ the tree keeps only the upper DM half (\ddnotes{Time-downsampled trees and early triggers}), so
+the tree rank $r$ is one less than the rank of the underlying $\DD$: in the code,
+$r = {\tt total\_rank} = r_{\rm top} - e - [\gamma>0]$, and $\Delta_{\rm dd} = 2^{r_{\rm top}-e}$
+downsampled samples in both cases.
+
+Adding the three contributions, the response occupies at most
+\begin{equation}
+n_t = \left\lfloor \frac{2W}{2^\gamma} \right\rfloor + \Delta_{\rm dd} + 2 W_{\rm max}
+\end{equation}
+downsampled output samples starting from the one-hot, so it suffices to take
+\begin{equation}
+2W \le t_0 < 2W + 2^\gamma
+  \hspace{1.5cm}
+N_{\rm time} \ \ge \ 4W + 2^\gamma \big( \Delta_{\rm dd} + 2W_{\rm max} + 1 \big)
+\label{eq:bf_ntime}
+\end{equation}
+where the $4W$ is $2W$ from the placement of $t_0$, plus $W$ for the detrender's forward reach,
+plus $W$ of trailing detrender padding; and the ``$+1$'' inside the parentheses absorbs the choice
+of phase $c$.
+
+Two practical remarks. First, because the answer is a sum over {\em all} output times, the
+algorithm is insensitive to how the stream is chunked: one may equally run the dedisperser over
+several chunks totalling $N_{\rm time}$ samples and accumulate $\sum_t(\cdots)^2$ across them, and
+there is no need to know when each DM row reaches steady state. Second, the cheapest guard against
+a mis-sized array is to assert that the last few emitted output samples are identically zero;
+Eq.\ (\ref{eq:bf_ntime}) is a bound, not a tight estimate, and it is easy to get wrong by a factor
+of $2^\gamma$.
+
+\subsection{Cost, and relation to the other algorithms}
+
+Each pass costs one full evaluation of $L$ on an $(N_{\rm freq}, N_{\rm time})$ array, and
+$N_{\rm freq} 2^\gamma$ passes are needed per tree ($N_{\rm freq}$ passes if $W=0$). For a
+CHORD-sized config that is $28160$ passes per tree, each dedispersing $\sim\!10^5$ downsampled time
+samples at rank $r=16$: hopelessly slow. Brute force is a small-config reference implementation,
+not a production algorithm, and not a practical substitute for \S\ref{sec:analytic_variance},
+which runs at full CHIME/CHORD scale. Two things make it less bad than it looks: passes for different $F$ can be batched along the
+dedisperser's spectator beam axis, and almost all of the work in each pass is on identically-zero
+data, which a specialized implementation could skip. Skipping it systematically is precisely what
+\S\ref{sec:avar_sparsetile} does.
+
+Three remarks on how this fits with the rest of the notes.
+
+\begin{itemize}
+
+\item {\bf It generalizes the Monte Carlo check} of \S\ref{sec:avar_validation}. That check feeds
+random Gaussian noise with per-channel variance $V_F$ through a {\tt ReferenceDedisperser} and
+compares empirical variances against the analytic prediction. The brute-force algorithm runs the
+same forward machinery, but replaces the random ensemble by the deterministic standard basis
+$\{e^{(F,t_0)}\}$ -- so the result is exact rather than noisy, and it yields the full matrix $A$
+rather than a single product $Av$.
+
+\item {\bf It should agree with \S\ref{sec:analytic_variance}} wherever both apply. With the
+detrender disabled, Eq.\ (\ref{eq:bf_master}) must reproduce Eq.\ (\ref{eq:avar_master}) column
+by column: indeed $A_{(d,p),F} = \|h_p * G_{Fd}\|^2$ is exactly the statement that the two agree.
+This is the strongest end-to-end test we have, since the two computations share no code, and
+\S\ref{sec:avar_validation} describes how it is run.
+
+\item {\bf It is the only algorithm we have which handles the detrender.} The efficiency of
+\S\ref{sec:avar_sparsetile} rests on the gridding footprint ${\mathcal S}_F$ being a contiguous
+range of a few tree-freq channels. A {\tt GpuDetrenderLps2d} destroys this: the detrended response to a
+one-hot in channel $F$ is spread over every channel of $F$'s spline zone (\dtnotes{2-d detrending}),
+so the {\tt SparseTile} representation would degrade towards a dense one. Brute force is completely
+insensitive to it. Note also that these off-diagonal responses are individually small but not
+negligible in aggregate: each contributes $O(\lambda_F^2)$ to $A$, but there are $O(N_{\rm freq})$
+of them, so they are a percent-level effect rather than a rounding error.
+
+\end{itemize}
+\par\noindent
+Finally, three checks worth asserting in any implementation. Every entry of $A$ is a sum of
+squares, so $A_{\alpha F} \ge 0$ identically. For an early-triggered tree ($e>0$, and likewise for
+a tree whose subbands do not span the full band), the columns of all input channels outside the
+tree's frequency range must vanish identically. And the arithmetic should be done in float64: the
+one-hot response has amplitude $O(2^{-r/2})$ before squaring, and the detrender's off-diagonal
+contributions are smaller still, so in float32 the aggregate effect noted above would be at risk of
+being lost to roundoff against the diagonal term.
+
+\clearpage
+
+\section{Detrender-free computation of the variance map}
+\label{sec:analytic_variance}
+
+This appendix documents \verb|pirate_frb/varmap/detrender_free.py|, which computes the
+variance map $A$ of Eq.\ (\ref{eq:variance_map_def}) analytically -- no dedisperser is run and
+no GPU is used -- and returns it directly in low-rank form $A = QW^T$. (It does build a
+{\tt DedispersionPlan}, but a {\tt Params::minimal()} one, which is pure arithmetic: no
+ring buffer, no kernel params, no CUDA device. That is the only way to get at a config's
+{\tt DedispersionTree}s.) It is the algorithm behind {\tt pirate\_frb varmap df}.
+
+{\bf The no-detrender hypothesis is load-bearing, not a missing feature.} Throughout this
+appendix the linear operator $L$ of \S\ref{ssec:variance_map_setup} is taken with the
+{\tt GpuDetrenderLps2d} step omitted, so ``$A$'' here means the $A$ of
+Eq.\ (\ref{eq:variance_map_def}) for bare tree dedispersion. Three separate steps below are
+false with a detrender in front, and each says so where it is used: the sparse propagation of
+\S\ref{sec:avar_sparsetile} (whose efficiency needs a contiguous, narrow gridding footprint),
+the coarse-graining slice of \S\ref{ssec:df_coarse}, and the row restriction of
+\S\ref{ssec:df_multimap}. The brute-force algorithm of \S\ref{sec:variance_map_bruteforce} is
+the one that handles a detrender, at enormously greater cost.
+
+There are three entry points, and they differ in what they materialize:
+\begin{itemize}
+\item \verb|compute_detrender_free_base_map(config)| returns the map $A$ of the base tree, as
+a \verb|VarianceMap| in factored form. This is the most expensive of the three, because it is
+the only one that materializes $Q$.
+\item \verb|compute_detrender_free_multi_map(config)| returns a \verb|VarianceMultiMap|
+covering every tree of the config, by computing the base map once and slicing it
+(\S\ref{ssec:df_multimap}).
+\item \verb|compute_detrender_free_varfine(config, v)| and its coarse-grained sibling
+\verb|compute_detrender_free_varcoarse()| return the {\em vector} $Av$ for given input-channel
+variances $v_F$, for every tree, without ever forming $A$ (\S\ref{ssec:df_varfine}). This is
+what the real-time server consumes, and it has a C++ port
+(\verb|src_lib/varmap.cpp|) which is what actually runs in production.
+\end{itemize}
+The three share one implementation, the class \verb|SdPlan|, whose four passes are
+\S\ref{ssec:df_passes}.
+
+\subsection{Statement of the problem}
+\label{sec:avar_statement}
+
+The dedisperser input is a shape $(N_{\rm freq}, N_{\rm time})$ array ${\tt in}[F,t]$.
+We assume that its elements are uncorrelated, with a variance which depends on frequency but not
+time:
+\begin{equation}
+\big\langle {\tt in}[F,t] \, {\tt in}[F',t'] \big\rangle = V_F \, \delta_{FF'} \, \delta_{tt'}
+  \label{eq:avar_input}
+\end{equation}
+The three stages downstream -- tree gridding (\ddnotes{Tree gridding kernel}), tree dedispersion
+(\ddnotes{Tree dedispersion}), and convolution with the peak-finding kernels $h_p$
+(\ddnotes{Peak-finding}) -- are all linear, and are all time-translation invariant, so their
+composition can be written as
+\begin{equation}
+y_p[d,t] = \sum_{F=0}^{N_{\rm freq}-1} \sum_{t'} \big( h_p * G_{Fd} \big)[t-t'] \; {\tt in}[F,t']
+\end{equation}
+Here, $G_{Fd}$ is the {\em impulse response}: the tree dedispersion output at delay $d$, if
+gridding and $\DD(r)$ are run on an input array whose only nonzero element is ${\tt in}[F,0]=1$.
+Combining with Eq.\ (\ref{eq:avar_input}), the array we want to compute is
+\begin{equation}
+{\rm Var}[d,p] \equiv \big\langle y_p[d,t]^2 \big\rangle
+  = \sum_F V_F \, \big\| h_p * G_{Fd} \big\|^2
+  \hspace{1.5cm} \mbox{where } \|g\|^2 \equiv \sum_t g[t]^2
+  \label{eq:avar_master}
+\end{equation}
+Note that the RHS does not depend on $t$, i.e.\ every output time sample has the same
+variance.\footnote{This is a steady-state statement. Near the beginning of a run, output samples
+have a {\em smaller} variance, since part of the impulse response reaches back to times before the
+start of the stream (recall from \ddnotes{Tree dedispersion} that ${\tt in}[\cdots,t]$ is
+defined to be zero for $t<0$). The {\tt DedispersionPlan} knows when each DM row reaches steady
+state ({\tt compute\_steady\_state\_it0}), and the Monte Carlo check of
+\S\ref{sec:avar_validation} uses this.}
+Comparing with Eq.\ (\ref{eq:variance_map_def}), the matrix element of the variance map is
+\begin{equation}
+A_{\alpha F} = \big\| h_p * G_{Fd} \big\|^2
+\end{equation}
+so computing $A$ is exactly computing $\|h_p * G_{Fd}\|^2$ for every $(F, d, p)$.
+
+We can make Eq.\ (\ref{eq:avar_master}) completely explicit. Recall from
+\ddnotes{Non-recursive formulation of tree dedispersion} that $\DD(r)$ maps a one-hot
+tree-freq channel $f$ to a single
+sample, at lag $L_r(f,d)$ with amplitude $2^{-r/2}$, and from \ddnotes{Tree gridding kernel} that input
+channel $F$ is gridded onto tree-freq channels with weights $w_{fF}$. Therefore
+\begin{equation}
+G_{Fd}[t] = 2^{-r/2} \sum_{f \in {\mathcal S}_F} w_{fF} \; \delta_{t, L_r(f,d)}
+  \label{eq:avar_impulse}
+\end{equation}
+where the {\em gridding footprint} ${\mathcal S}_F \equiv \{ f : w_{fF} > 0 \}$ is the set of
+tree-freq channels whose interval $I_f$ overlaps the input channel $[F,F+1)$. Since the intervals
+$I_f$ tile the band, ${\mathcal S}_F$ is a contiguous range
+\begin{equation}
+f_0(F) \le f < f_1(F)
+\end{equation}
+which is usually just a few channels wide (in the CHORD config, $N_{\rm freq} = 28160$ input
+channels are gridded onto $2^r = 65536$ tree-freq channels).
+
+Thus the impulse response of a single input channel is a handful of delta functions, and
+Eqs.\ (\ref{eq:avar_master}), (\ref{eq:avar_impulse}) are a complete specification of the answer.
+However, evaluating them directly, for each $(F,d)$ pair, would be too slow
+($N_{\rm freq} 2^r \approx 2 \times 10^9$ pairs in the CHORD config), and would also be wasteful:
+we will see that the $2^r$ delays give rise to far fewer than $2^r$ distinct answers.
+
+\subsection{Variance from autocorrelations}
+\label{sec:avar_convolver}
+
+The lowest-level building block is the map $g \mapsto \|h_p * g\|^2$, for a short time series $g$
+and each of the $P$ peak-finding kernels. Expanding the convolutions and collecting terms by lag,
+\begin{equation}
+\big\| h_p * g \big\|^2 = \sum_{\delta} \rho_g[\delta] \, A_p[\delta]
+  = \rho_g[0] \, A_p[0] + 2 \sum_{\delta \ge 1} \rho_g[\delta] \, A_p[\delta]
+  \label{eq:avar_autocorr}
+\end{equation}
+where $\rho_g$ and $A_p$ are the (one-sided) autocorrelations of the data and of the kernel:
+\begin{equation}
+\rho_g[\delta] = \sum_t g[t] \, g[t+\delta]
+  \hspace{1.5cm}
+A_p[\delta] = \sum_t h_p[t] \, h_p[t+\delta]
+\end{equation}
+Two features of Eq.\ (\ref{eq:avar_autocorr}) are worth noting.
+\begin{itemize}
+\item $A_p[\delta]$ vanishes for $\delta \ge {\rm len}(h_p)$, so lags
+$\delta \ge T_{\rm max} \equiv \max_p {\rm len}(h_p) = 2 W_{\rm max}$ never contribute.
+The class \verb|PfVarianceConvolver| precomputes the shape $(P,T_{\rm max})$ table $A_p[\delta]$
+once, and Eq.\ (\ref{eq:avar_autocorr}) then becomes a small matrix multiply which returns all $P$
+profiles at once. The $\delta=0$ column is just the kernel norms:
+\begin{equation}
+A_p[0] = \|h_p\|^2 = 2^\lambda \times \big\{ 1, \; 2, \; \tfrac{3}{2}, \; \tfrac{5}{2} \big\}_q
+\end{equation}
+where $p = 3\lambda + q$ as in \ddnotes{Peak-finding}.
+Evaluating (\ref{eq:avar_autocorr}) for a time series whose support has length $n_t$ costs
+$O(n_t \min(n_t, T_{\rm max}))$ for $\rho_g$, plus $O(\min(n_t,T_{\rm max}) \, P)$ for the
+contraction.
+
+\item The LHS is invariant under a time translation $g[t] \rightarrow g[t-T]$. Therefore, we only
+need each impulse response {\em up to an arbitrary time shift}. This is the key to the
+compression in \S\ref{sec:avar_dbits}--\ref{sec:avar_sparsetile}: most of the $d$-dependence of
+$G_{Fd}$ is a pure time shift, and can simply be discarded.
+
+One consequence is worth stating early, because two later steps depend on it. The kernel
+autocorrelations $A_p[\delta]$ are non-negative and non-increasing in $\delta$, which holds
+because every profile is a co-centered non-negative sum of boxcars. That is a hypothesis of the
+monotonicity theorem of \S\ref{sec:dyadic_block}, which \S\ref{ssec:df_coarse} uses, so it is
+not a curiosity: it is checked by a unit test which fails with an explanation if the kernel bank
+ever stops having the property.
+\end{itemize}
+
+\subsection{Which delay bits matter}
+\label{sec:avar_dbits}
+
+By the time-translation invariance just noted, only the {\em relative} lags within the footprint
+matter in Eq.\ (\ref{eq:avar_impulse}). From the definition of the lag function
+(\ddnotes{Non-recursive formulation of tree dedispersion}),
+the relative lag of two tree-freq channels $f,f'$ is
+\begin{equation}
+L_r(f,d) - L_r(f',d) = \sum_{i=0}^{r-1} \sum_{j=0}^{r-1} \Omega_{i+j-r} \, (f'_i - f_i) \, d_j
+  \label{eq:avar_lagdiff}
+\end{equation}
+Suppose that $f$ and $f'$ agree in all bits above position $i_0$, so that only terms with
+$i \le i_0$ survive in Eq.\ (\ref{eq:avar_lagdiff}). Since $\Omega_n = 0$ for $n < -1$, a term also
+vanishes unless $j \ge r-1-i$. Therefore the relative lag depends only on the bits $d_j$ with
+$j \ge r-1-i_0$, i.e.\ on the top $(i_0+1)$ bits of $d$.
+For a contiguous footprint, all channels agree in the bits above
+\begin{equation}
+i_0(F) \equiv \Big\lfloor \log_2 \big( f_0(F) \oplus (f_1(F)-1) \big) \Big\rfloor
+  \label{eq:avar_i0}
+\end{equation}
+where $\oplus$ denotes bitwise XOR (and we define $i_0=-1$ if the footprint is a single channel).
+We conclude:
+\begin{quote}
+The contribution of input channel $F$ to Eq.\ (\ref{eq:avar_master}) depends on the delay $d$ only
+through its top $(i_0(F)+1)$ bits.
+\end{quote}
+In particular, if the footprint is a single tree-freq channel $f$, then the contribution is
+$d$-independent, and Eqs.\ (\ref{eq:avar_master}), (\ref{eq:avar_impulse}) collapse to
+\begin{equation}
+V_F \big\| h_p * G_{Fd} \big\|^2 = 2^{-r} \, V_F \, w_{fF}^2 \, \|h_p\|^2
+\end{equation}
+
+Eq.\ (\ref{eq:avar_i0}) has a simple interpretation: $i_0(F)$ is the largest $i$ such that the
+footprint straddles a boundary between two ``coarse'' frequency channels of width $2^i$
+(cf.\ the coarse-freq blocking of \ddnotes{Tree dedispersion}). Equivalently, $\DDS(i_0)$ is
+the last dedispersion step which
+combines two nonzero halves of the footprint with each other. There are only $2^{r-i}$ such
+boundaries in the band, and each one is straddled by at most one input channel, so at most
+$O(2^{r-i})$ input channels have $i_0 \ge i$: large $i_0(F)$ is rare, but expensive.
+
+This bit set is central to the algorithm, and the code carries it as a bitmask called
+{\tt dbits}, with $|{\tt dbits}|$ its popcount. Two properties are used repeatedly. First, it can
+be computed in closed form from $(f_0, f_1)$ alone, with no iteration and no data
+(\verb|SparseTile._predict_dbits()|); the planning pass of \S\ref{ssec:df_passes} runs on that
+closed form. Second, the closed form is an upper bound which the actual propagation of
+\S\ref{sec:avar_sparsetile} can improve on, since relative lags sometimes cancel. The two are
+reconciled by an assertion at the point where the two meet, which is what makes the plan and the
+data agree by construction rather than by hope.
+
+\subsection{Sparse propagation of the impulse response}
+\label{sec:avar_sparsetile}
+
+Recall from \ddnotes{Tree dedispersion} that the intermediate array after $k$ dedispersion steps
+has shape $(2^{r-k}, 2^k, N_{\rm time})$, with axes (coarse-freq, delay, time). For a one-hot
+input, such an array is highly structured, and the class \verb|SparseTile| represents it with the
+following members:
+\begin{itemize}
+\item $f_0, n_f$: the array vanishes outside coarse-freq channels $f_0 \le f < f_0 + n_f$.
+\item $n_t$: the stored data vanishes outside time samples $0 \le t < n_t$.
+\item {\tt dbits}: a bitmask selecting a subset of the $k$ delay bits (the ``content bits'').
+\item {\tt data}: an array of shape $(n_f, 2^{|{\tt dbits}|}, n_t)$.
+\item $t_0$ and $\tau_0, \cdots, \tau_{k-1}$: a constant time shift, and one time shift per delay bit.
+\item $s$: a scalar multiplier.
+\end{itemize}
+The dense array represented by the tile is
+\begin{equation}
+{\tt arr}[f,d,t] = s \cdot {\tt data}\big[ f - f_0, \; d|_{\tt dbits}, \; t - T(d) \big]
+  \hspace{1.2cm}
+T(d) = t_0 + \sum_{i=0}^{k-1} d_i \, \tau_i
+  \label{eq:avar_tile}
+\end{equation}
+where $d|_{\tt dbits}$ denotes the selected bits of $d$, packed (highest bit first) into an index
+$0 \le d|_{\tt dbits} < 2^{|{\tt dbits}|}$.
+The compression is therefore two-fold: the array is stored only on its $(n_f, n_t)$ support, and
+its $2^k$ delay rows are represented by $2^{|{\tt dbits}|}$ stored rows, plus a time shift $T(d)$
+which is affine in the bits of $d$.
+
+The starting point ($k=0$) is the gridding output for a one-hot input, which is a tile with
+$f_0 = f_0(F)$, $n_f = f_1(F) - f_0(F)$, $n_t = 1$, ${\tt dbits} = 0$, $s=1$, no shifts, and
+${\tt data}[f,0,0] = w_{fF}$.
+
+The tile representation is preserved by a dedispersion step $\DDS(k)$. Consider an output
+coarse-freq channel $f$, whose inputs are the ``lower'' channel $2f$ and the ``upper'' channel
+$2f+1$, and write the output delay index as $d' = 2d+b$ (so that $d'_0 = b$ and $d'_{j+1} = d_j$).
+There are three cases:
+\begin{itemize}
+
+\item {\bf Upper half only} (the lower half is outside the footprint).
+Then ${\tt out}[f,2d+b,t] = 2^{-1/2} \, {\tt in}[2f+1,d,t]$ for both $b=0,1$, i.e.\ the output does
+not depend on the new delay bit at all. The tile is unchanged, except that its bitmask and shift
+vector are ``lifted'' by one bit,
+\begin{equation}
+{\tt dbits} \rightarrow 2 \, {\tt dbits}
+  \hspace{1.5cm}
+(\tau_0, \cdots, \tau_{k-1}) \rightarrow (0, \tau_0, \cdots, \tau_{k-1})
+  \label{eq:avar_lift}
+\end{equation}
+and $s \rightarrow s/\sqrt{2}$. No data is touched.
+
+\item {\bf Lower half only}. Then ${\tt out}[f,2d+b,t] = 2^{-1/2} \, {\tt in}[2f,d,t-d-b]$, i.e.\ the
+output depends on the new delay bit only through a time shift. The bitmask and shift vector are
+lifted as in Eq.\ (\ref{eq:avar_lift}), and in addition the dedispersion lag $(d+b)$ is absorbed
+into the shifts, by adding
+\begin{equation}
+(1, 1, 2, 4, \cdots, 2^{k-1})
+  \label{eq:avar_ddshifts}
+\end{equation}
+to the (lifted) length-$(k+1)$ shift vector, using $d + b = b + \sum_{j \ge 1} d'_j 2^{j-1}$.
+Again no data is touched.
+
+\item {\bf Both halves.} Now the output is a sum of two ``legs'', each of which is a lifted copy of
+one input tile, and each of which carries its own shift vector: $\sigma^U$ for the upper leg, and
+$\sigma^L$ for the lower leg (which includes the extra dedispersion lags of
+Eq.\ \ref{eq:avar_ddshifts}). Only the {\em difference} between the two shift vectors is physical,
+so we factor the common part $\tau_j = \min(\sigma^L_j, \sigma^U_j)$ out into the output tile's
+shifts, and fold the residuals $(\sigma^L_j - \tau_j)$ and $(\sigma^U_j - \tau_j)$ into the data,
+by materializing each output row and adding the two legs at their residual offsets (the constant
+shifts $t_0$ are treated the same way). A delay bit $j$ becomes a content bit of the output if the
+two legs' residuals differ ($\sigma^L_j \ne \sigma^U_j$), or if it was already a content bit of
+either leg.
+
+This is the only case in which content bits are created, data is copied, and the time support
+grows (by up to $\sum_j (\sigma^L_j - \tau_j) \le 2^k$).
+
+\end{itemize}
+Since the footprint is contiguous, at most two coarse-freq channels -- the first and the last --
+can have a missing half. The class \verb|SparseTileTriple| exploits this by splitting the array
+into (at most) three tiles: first channel, bulk, last channel. The two edge tiles can then take
+the cheap single-leg cases, while the bulk is processed with the both-halves case uniformly.
+
+After enough dedispersion steps only one coarse-freq channel is left, and the resulting tile
+($n_f=1$) is an exact, compressed representation of the impulse response. Its content bits are
+always a subset of the bits predicted in \S\ref{sec:avar_dbits}, and are sometimes a proper
+subset, since the merge rule above only marks a bit when the two legs' residual shifts actually
+differ.
+
+Finally, since $\|h_p * g\|^2$ is invariant under time translation, the shifts $T(d)$ in
+Eq.\ (\ref{eq:avar_tile}) drop out of the variance entirely, leaving
+\begin{equation}
+\big\| h_p * G_{Fd} \big\|^2 = s^2 \, \big\| h_p * {\tt data}[0, \, d|_{\tt dbits}, \, \cdot] \big\|^2
+  \label{eq:avar_tile_variance}
+\end{equation}
+So we run each of the $2^{|{\tt dbits}|}$ stored rows through Eq.\ (\ref{eq:avar_autocorr}), and
+obtain a shape $(2^{|{\tt dbits}|}, P)$ array which is the entire contribution of one input
+channel to Eq.\ (\ref{eq:avar_master}), for one subband. The factor $s^2$ is easy to overlook and
+is not optional: an edge tile defers its $1/\sqrt2$ into $s$ rather than touching data, so
+dropping $s^2$ is silently wrong exactly where the single-leg cases fire.
+
+\subsection{Index conventions, and what a group holds}
+\label{ssec:avar_map_indices}
+
+So far we have suppressed subbands. Reinstating them, the output of a tree is indexed by a
+multiplet $0 \le m < M$ and a coarse DM $0 \le d < 2^{r-R}$, and a multiplet is a
+(subband, fine DM) pair: subband $0 \le n < N$ has a level $l_n$, occupies $2^{l_n}$ consecutive
+multiplets starting at $m_{\rm base}(n)$, and spans $2^{c_n}$ tree-freq channels with
+$c_n \equiv r - R + l_n$ (\ddnotes{Subband search}). So
+\begin{equation}
+m = m_{\rm base}(n) + e, \hspace{1.2cm} 0 \le e < 2^{l_n}
+\end{equation}
+and the flattened row index of \S\ref{ssec:variance_map_setup} is
+$\alpha = (d M + m) P + p$.
+
+The delay bits of \S\ref{sec:avar_dbits} refer to a subband's own dedispersion tree, which has
+depth $c_n$, not $r$. Rows coming from subbands of {\em different} levels have to be stored in a
+common labelling, and the one the code uses is {\bf level $r$}: the level-$r$ delay index of the
+output element $(d, m, p)$ with $m = m_{\rm base}(n) + e$ is
+\begin{equation}
+d_{\rm full} = (d \ll R) \; | \; (e \ll (R - l_n))
+  \label{eq:df_dfull}
+\end{equation}
+Lifting a tile from its own level $c_n$ to level $r$ is $r - c_n = R - l_n$ single-leg
+dedispersion steps, and by the first two cases of \S\ref{sec:avar_sparsetile} such a step leaves
+{\tt data} untouched, shifts {\tt dbits} left by one, and multiplies $s$ by $1/\sqrt2$. Hence
+\begin{equation}
+{\tt dbits}(\mbox{level } r) = {\tt dbits}(\mbox{level } c_n) \ll (R - l_n),
+  \hspace{1.2cm}
+{\rm var}(\mbox{level } r) = {\rm var}(\mbox{level } c_n) \cdot 2^{-(R - l_n)}
+  \label{eq:df_levelr}
+\end{equation}
+Every row is stored with the level-$r$ normalization of the second equation, and the factor
+$2^{R-l_n}$ is undone per subband at the very end (\S\ref{ssec:df_lift}). It cannot be folded
+into the stored row, precisely because two subbands sharing a row have different $l_n$. Omitting
+it is not a subtle error: measured on {\tt toy.yml} it moves the answer by $75\%$.
+
+\subsection{Grouping: entries, the {\tt sdbits} key, and straddled subbands}
+\label{ssec:df_groups}
+
+The central efficiency idea is that one tile computation and one convolution should serve as many
+output elements as possible. Fix an input channel $F$ with (unclipped) footprint $[j_0, j_1)$ in
+tree-freq units. For each subband $n$, the part of the footprint that subband sees is the
+intersection
+\begin{equation}
+[{\rm lo}, {\rm hi}) = [j_0, j_1) \cap [I_{\rm lo}(n), I_{\rm hi}(n))
+\end{equation}
+and the subband contributes nothing if this is empty. The observation is that two subbands seeing
+the {\em same} range $[{\rm lo}, {\rm hi})$ produce the {\em same} tile and therefore the same
+variance row, up to the per-subband normalization of Eq.\ (\ref{eq:df_levelr}) which is applied
+later. So the algorithm pools them: an {\bf entry} is a (channel, set-of-subbands) pair sharing
+one range, and it produces exactly one tile and one convolution.
+
+Measured, this is $2.9$ to $5.7$ times fewer convolutions than computing one tile per
+(channel, multiplet) pair.
+
+Entries are keyed by a single integer, {\tt sdbits}, which packs two fields:
+\begin{equation}
+{\tt sdbits} = ({\tt dbits} \ll 42) \; | \; {\tt sbits}
+\end{equation}
+where {\tt dbits} is the level-$r$ delay-bit mask and {\tt sbits} has bit $n$ set iff subband $n$
+is served. The split at 42 is chosen so the key fits a {\tt uint64} in the C++ port: $N \le 42$
+subbands and $r \le 16$, and both bounds are asserted up front, since exceeding either would
+corrupt keys silently rather than fail. Entries sharing a key are pooled into one {\bf group},
+which is what the SVD of \S\ref{ssec:df_lift} acts on.
+
+{\bf Half-aligned subbands need their own branch.} A subband is {\em aligned} (Case 1) if
+$I_{\rm lo}(n)$ is a multiple of $2^{c_n}$, so that the subband is a node of the toplevel
+dedispersion tree and ordinary aligned iteration reproduces its merges. A subband can instead be
+{\em half-aligned} (Case 2, \ddnotes{Subbanded dedispersion}), starting at an odd multiple of
+$2^{c_n - 1}$. Then the subband's own top merge joins the two blocks either side of its midpoint
+$I_{\rm mid}(n)$, and those are {\em not} an aligned pair of the toplevel tree: ordinary
+iteration would merge each with its absent neighbour instead. When such a subband's footprint
+{\em straddles} its own midpoint (${\rm lo} < I_{\rm mid}(n) < {\rm hi}$), the entry is put on a
+separate {\em straddled plan}, iterated only $c_n - 1$ times, and finished with an explicit merge
+of the two blocks indexed off the midpoint.
+
+Two remarks. First, a straddling subband always gets a row to itself, so the two fields of its
+{\tt sdbits} are redundant with each other -- which the code checks. Second, the branch is rare
+but not negligible: on {\tt toy.yml} it is $1$ row in $645$, and omitting it moves the answer by
+$1.6\times 10^{-3}$. It is also the reason the delay bits of \S\ref{sec:avar_dbits} are computed
+in {\em subband-local} coordinates $f - I_{\rm lo}(n)$: subtracting $I_{\rm lo}(n)$ (a multiple of
+$2^{c_n-1}$ in every case) preserves the block structure at every level below $c_n$, so in local
+coordinates a subband's dedispersion tree is the ordinary aligned tree, in Case 2 as much as in
+Case 1.
+
+\subsection{The four passes}
+\label{ssec:df_passes}
+
+The class \verb|SdPlan| computes everything except the final lift, in four passes over the input
+channels. The split exists because the sizes of all the accumulators are known before any data is
+touched, so nothing has to grow.
+
+\begin{enumerate}
+\item {\bf Planning.} For each channel and each subband it sees, compute
+$[{\rm lo}, {\rm hi})$ and the level-$r$ {\tt dbits} from the closed form of
+\S\ref{sec:avar_dbits}, classify the entry as straddled or not, and pool subbands sharing a range
+into one entry. This pass touches no data at all: it is pure integer arithmetic on footprints.
+\item {\bf Sizing.} Count how many rows each group will receive, and allocate one dense
+$({\rm capacity}, D\cdot P)$ matrix per group, where $D = 2^{|{\tt dbits}|}$. Because the
+planning pass is exact, capacity is a count and not an upper bound.
+\item {\bf Tiles.} Walk both plans, build each entry's tile by the propagation of
+\S\ref{sec:avar_sparsetile}, convert it to variances with Eq.\ (\ref{eq:avar_autocorr}), apply
+the level-$r$ normalization of Eq.\ (\ref{eq:df_levelr}), and write one row into the group's
+matrix. This is where essentially all the arithmetic happens.
+\item {\bf Factorization.} SVD each group's matrix and truncate (\S\ref{ssec:df_lift},
+\S\ref{ssec:df_epsilon}).
+\end{enumerate}
+
+Two accumulators are filled in parallel, and they do {\em not} share a key space, which is the
+one thing to get right when reading the code:
+\begin{itemize}
+\item {\tt sd\_matrices}, the per-group dense matrices, keyed by the {\em coarse} {\tt sdbits}
+(\S\ref{ssec:df_coarse}) and holding the possibly-sliced, {\em unweighted} rows;
+\item {\tt sd\_vectors}, keyed by the {\em full} {\tt sdbits} and holding the row {\em sums},
+weighted by $V_F$. These are what produce $y^{\rm true}$, which is defined at fine granularity
+whatever the map's coarse-graining rank (\S\ref{ssec:df_coarse}), and they are also the whole of
+the map-free route of \S\ref{ssec:df_varfine}.
+\end{itemize}
+At coarse-graining rank $L = R$ the two key spaces coincide, so indexing one with the other's key
+would pass every test that does not set $L$ -- and with $L$ set it is a quiet wrong answer rather
+than a crash, since a coarse key is a syntactically valid full key. Hence the code names which
+key it is using at every use site, and asserts that the full key space is never smaller than the
+coarse one.
+
+\subsection{Per-group SVD, and the lift to $Q$ and $W$}
+\label{ssec:df_lift}
+
+Each group holds a dense matrix whose rows are input channels and whose columns are
+(delay, profile) pairs -- that is, the {\em transpose} of the corresponding block of $A$. The map
+is numerically low-rank because the variance varies smoothly with input channel: two neighbouring
+channels have nearly the same footprint and hence nearly the same impulse response. So we take a
+truncated SVD in the transposed convention
+\begin{equation}
+{\tt dense\_matrix}^T \; \approx \; Q_{\rm grp} \, W_{\rm grp}^T
+  \label{eq:df_group_svd}
+\end{equation}
+with $Q_{\rm grp}$ of shape $(DP, K)$ and $W_{\rm grp}$ of shape $(F, K)$, splitting
+$\sqrt{\sigma_k}$ between the two factors. (Neither factor is semiorthogonal afterwards, which
+costs nothing here: the globally stacked factors are not orthogonal anyway, since different
+groups overlap in their rows of $A$.) A transpose slip in Eq.\ (\ref{eq:df_group_svd}) is silent
+whenever $DP = F$, since the shapes still match, so it is checked by a test rather than left to
+inspection.
+
+The groups are then stacked. Each group owns a disjoint block of $K$ columns, so
+$K_{\rm tot} = \sum_{\rm groups} K$, and:
+\begin{itemize}
+\item {\bf $W$ is a scatter.} $W[\,{\tt freq\_indices}, \, k_0{:}k_0{+}K\,] = W_{\rm grp}$. This
+is a plain scatter because the input channels within one group are distinct -- a property of the
+plan, which the planning pass checks in its debug mode.
+\item {\bf $Q$ is a gather, with the per-subband factor.} For each subband $n$ served by the
+group, and each $(d, e)$, the level-$r$ index $d_{\rm full}$ of Eq.\ (\ref{eq:df_dfull}) is
+mapped through the group's {\tt dbits} to pick the stored row, and the result is multiplied by
+$2^{R - l_n}$ to undo Eq.\ (\ref{eq:df_levelr}):
+\begin{equation}
+Q\big[ (d, \, m_{\rm base}(n) + e, \, p), \; k_0{+}k \big]
+  = 2^{R-l_n} \; Q_{\rm grp}\big[ (d_{\rm full}|_{\tt dbits}, \, p), \; k \big]
+\end{equation}
+These writes are assignments rather than accumulations: each group owns a disjoint column block,
+and within a group the subbands own disjoint multiplet ranges.
+\end{itemize}
+The result is $A \approx Q W^T$ with $Q$ of shape $(n_\beta, K_{\rm tot})$ and $W$ of shape
+$(N_{\rm freq}, K_{\rm tot})$, which is returned as a \verb|VarianceMap|.
+
+{\bf The lift is where the memory goes.} The per-group matrices are small -- at
+{\tt chord\_sb2\_et.yml} the first three passes run in $14$ seconds and hold $17$ MB of rows --
+but $Q$ is dense and $O(n_\beta K_{\rm tot})$, which is $63.8$ GiB for a fine map at that config.
+\S\ref{ssec:df_coarse} and \S\ref{ssec:df_varfine} are the two ways around that, and they are the
+reason \verb|SdPlan| is a class whose constructor does {\em not} lift: a caller who wants only
+the per-group factors, or only $Av$, would otherwise be handed an $O(n_\alpha)$ array to discard.
+
+\subsection{Truncation threshold}
+\label{ssec:df_epsilon}
+
+The per-group SVD keeps singular values above $\varepsilon \sigma_{\rm max}$. Truncating there
+perturbs the reconstruction at the $\varepsilon$ level, so $\varepsilon$ is an accuracy knob --
+but it is only meaningful above the float64 noise floor on singular values, which for an
+$(n_{\rm row}, n_{\rm col})$ matrix is of order $\max(n_{\rm row}, n_{\rm col}) \, \epsilon_{64}
+\, \sigma_{\rm max}$. At these matrices' sizes that floor can exceed the $10^{-11}$ which is safe
+for smaller ones, so the default takes whichever is larger,
+\begin{equation}
+\varepsilon = \max\Big( 10^{-11}, \; 16 \max(n_{\rm row}, n_{\rm col}) \, \epsilon_{64} \Big)
+  \label{eq:df_epsilon}
+\end{equation}
+and is computed per group, since the groups differ widely in shape. The CLI exposes it as
+{\tt varmap df -e}.
+
+\subsection{Coarse-graining is a slice, not a maximization}
+\label{ssec:df_coarse}
+
+Recall the coarse-grained map of Eq.\ (\ref{eq:coarse_grain_def}): $\bar A_{\beta F} =
+\max_{\alpha \in \beta} A_{\alpha F}$, where $\beta = (d_c, n, p)$ with
+$0 \le d_c < 2^{r-L}$ ranges over coarse DM and {\em subband} rather than multiplet. Computing
+this by building $A$ and reducing it would defeat the purpose, since building $A$ is the
+expensive step. With no detrender it is unnecessary:
+
+\begin{quote}
+The group $\beta$ consists of the fine rows whose subband DM index runs over an {\em aligned
+dyadic block}, and by the monotonicity theorem of \S\ref{sec:dyadic_block} the variance is
+antitone in the bits of that index. So the maximum over the block is attained at its
+{\em bottom}, and Eq.\ (\ref{eq:coarse_grain_def}) is evaluated by a slice rather than a
+reduction (Eq.\ \ref{eq:dyadic_property} says exactly this).
+\end{quote}
+
+This is cashed in at the point where a row is written, before any summation over channels and
+before the SVD. In the level-$r$ labelling the bottom of the block is ``all bits below $L$ are
+zero'', since Eq.\ (\ref{eq:df_dfull}) puts the low bits of the subband DM index into the low $L$
+bits of $d_{\rm full}$; and since the bit-packing of Eq.\ (\ref{eq:avar_tile}) preserves bit
+order, those bits occupy the lowest packed positions contiguously. So the slice is a reshape and
+an index. Taking the {\em top} of the block instead would produce a min-envelope, which is why
+the tests check both that some rows were actually sliced and that the resulting map still
+dominates $y^{\rm true}$.
+
+The maximization commutes with the group structure per column, which is what licenses doing it
+row by row: at fixed $F$ every $\alpha \in \beta$ takes its value from one plan entry, since the
+subbands within a group are disjoint and each subband is assigned to exactly one entry per
+channel.
+
+{\bf The no-detrender hypothesis is load-bearing here.} The same appendix shows the monotonicity
+property is false with a {\tt GpuDetrenderLps2d} in front, so the day a detrender path is added is the
+day this slice silently becomes wrong.
+
+Coarse-graining is nearly free, and it is the main lever on cost. At {\tt chord\_sb2\_et.yml} the
+lifted $Q$ goes $63.8$ GiB (fine) $\rightarrow 17.5$ ($L = R = 4$) $\rightarrow 4.3$ ($L=6$)
+$\rightarrow 0.96$ ($L=8$). Almost all of that is the row count: $K_{\rm tot}$ only moves
+$1435 \rightarrow 1399$ at $L=6$, so what $L$ buys is columns of $Q$ that are $14.6$ times
+shorter, not groups that compress better. The first three passes are unchanged by $L$ by design.
+
+One asymmetry is worth stating because it is easy to assume away: $y^{\rm true}$ of
+Eq.\ (\ref{eq:ytrue_def}) is {\em fine} whatever the map's coarse-graining rank, so it cannot be
+read off the coarse factors. It is accumulated separately, in the full delay-bit basis -- which is
+the second accumulator of \S\ref{ssec:df_passes}.
+
+\subsection{Reducing the rank: global svd-optimization}
+\label{ssec:df_svdopt}
+
+$K_{\rm tot}$ is the {\em sum} of the per-group ranks, and nothing in the construction makes
+columns from different groups independent of each other. So the stacked factorization is
+routinely far from minimal, and a global pass can reduce it, {\em exactly}. Given $A = Q\,{\rm
+mid}\,W^T$ at rank $K_0$, take thin SVDs $Q = Q'R$ and $W = W'S$ with $Q', W'$ semiorthogonal, so
+that
+\begin{equation}
+A = Q' \big( R \, {\rm mid} \, S^T \big) W'^T
+\end{equation}
+SVD the $K_0 \times K_0$ middle as $U {\rm diag}(\sigma) V^T$, and keep the $K_1$ singular values
+above a numerical cutoff. Then
+\begin{equation}
+Q_1 = Q'U, \hspace{1cm} {\rm mid}_1 = {\rm diag}(\sigma), \hspace{1cm} W_1 = W'V
+\end{equation}
+is a rank-$K_1$ factorization of the same matrix, with both factors semiorthogonal. If no
+singular value is below the cutoff the factorization cannot be improved and the map is returned
+unchanged.
+
+Measured, this removes $24\%$ of the rank at {\tt toy.yml}, $54$--$57\%$ at the CHIME configs and
+$59$--$60\%$ at the CHORD configs, at a relative change in $A$ of $10^{-12}$ or below -- far
+inside the margin that the admissibility bookkeeping of \S\ref{ssec:distance_function} allows, so
+the {\tt is\_admissible} flag survives.
+
+Two implementation notes. The cutoff is {\em numerical}, not an accuracy knob: it is
+$K_0 \epsilon_{64}$ relative to the largest singular value, and only removes modes that are
+numerically absent. (The accuracy knob is $\varepsilon$ of \S\ref{ssec:df_epsilon}, applied per
+group before this.) And the semiorthogonalization must be done with SVDs, not with the faster
+Gram-matrix or QR routes: forming $Q^TQ$ squares the condition number, and on these spectra --
+which span eleven decades -- that was measured to lose seven to eight digits and, worse, to
+{\em over}-truncate, reporting a smaller $K_1$ and discarding real content. A rank-revealing step
+is exactly where a non-SVD factorization cannot be trusted.
+
+One cost to be aware of: the thin SVD of $Q$ allocates a second array of the same shape, so the
+peak memory of the map path is about twice the $Q$ of \S\ref{ssec:df_lift} when this is on. That
+is accounted for in the {\tt max\_bytes} ceiling, which fails early and says so rather than
+letting a caller validate a budget and then need double it.
+
+The CLI exposes this as {\tt varmap df -s}, with level $0$ (off), $1$ (base tree) or $2$ (base
+tree and, after the restriction of \S\ref{ssec:df_multimap}, every other tree).
+
+\subsection{The other trees are row restrictions of the base tree}
+\label{ssec:df_multimap}
+
+Everything above computes the map of the {\em base} tree, i.e.\ the tree with
+(primary\_tree\_index, early\_trigger\_level) $= (0,0)$. That suffices for the whole config,
+because with no detrender every other tree's map is a subset of the base tree's {\em rows}, as
+proved in \S\ref{sec:tree_restrictions}. \verb|compute_detrender_free_multi_map()| cashes this in:
+it computes the base map once and slices it.
+
+For a downsampled primary tree $\gamma > 0$ (Proposition 2, \S\ref{ssec:restriction_ds}) the
+slice keeps the upper half of the coarse-DM axis, every multiplet, and the first $P_\gamma$
+profiles, with $W$ untouched -- the restriction acts on rows of $A$, not columns. Early-trigger
+trees (Proposition 1) are not stored at all: they are derived from their parent on demand by
+\verb|VarianceMultiMap|.
+
+Since a row subset of a map that dominates $A^{\rm true}$ elementwise also dominates it, each
+tree inherits whatever the base map earned, and the {\tt is\_admissible} flag carries over.
+
+The restriction can lower the rank: a column of $Q$ whose support lay entirely in the discarded
+rows is identically zero in the child. Re-running \S\ref{ssec:df_svdopt} on each child recovers
+that, and measured it is worth a further $0.8\%$ to $3.6\%$. It is worth knowing why it is
+small: on the CHIME configs every $\gamma$ lands on the same rank whatever $P_\gamma$ is, so what
+the second pass recovers is the DM-half restriction and not the profile truncation.
+
+Proposition 2 is false with a detrender, and by a wide margin rather than marginally: measured
+against the brute-force sweep on a small config, agreement is $5 \times 10^{-7}$ without a
+detrender and $2.1$ with one.
+
+\subsection{$Av$ without the map}
+\label{ssec:df_varfine}
+
+Production does not need $A$. What it needs, given the current input-channel variances $v_F$, is
+the single vector $y = Av$ per tree, from which the peak-finder's weights are the inverse square
+roots. That can be had by skipping the lift of \S\ref{ssec:df_lift} entirely: put the weight
+$v_F$ on the row {\em sums} -- the second accumulator of \S\ref{ssec:df_passes} -- and lift
+those. There is no $Q$, there are no dense group matrices, and there is no SVD.
+
+This is \verb|compute_detrender_free_varfine()|, and the saving is dramatic: at
+{\tt chord\_sb2\_et.yml} it delivers all ten trees in $16$ seconds within $0.49$ GiB, against
+$63.8$ GiB of $Q$ for the base tree alone.
+
+\verb|compute_detrender_free_varcoarse()| is the same result reduced to the granularity the
+weights array actually has, namely $L = \log_2({\tt wt\_dm\_downsampling})$ in DM and subbands
+rather than multiplets in frequency. The reduction is a {\em max}, because a stored variance has
+to dominate every output it covers. Note this is not the same thing as coarse-graining the map:
+$\bar A v$ maxes the map and then applies it, and dominates $\max_\alpha (Av)_\alpha$, which is
+what is computed here.
+
+The two routes share one code path, and share it exactly rather than approximately:
+\verb|compute_detrender_free_varfine(config, ones)| for the base tree is {\em bitwise} equal to
+the base map's $y^{\rm true}$. That is a deliberate property -- the weight is applied as a
+multiplication by exactly $1.0$ on a path the two share -- and it is asserted by a test, because
+it is what fails the moment the two paths stop being shared.
+
+This route, and only this route, is ported to C++ (\verb|src_lib/varmap.cpp|, exposed as
+\verb|pirate_frb.fast_varmap|). The port is $27$ times faster at {\tt chord\_sb2\_et.yml}
+($15.1$ s $\rightarrow 0.57$ s) and agrees with the python to $1.1 \times 10^{-14}$ relative.
+The python remains the reference implementation: the C++ ports only the map-free path, and is
+tested by asserting that it agrees with the python.
+
+\subsection{Validation}
+\label{sec:avar_validation}
+
+Everything here is run by \verb|pirate_frb test --varmap|.
+
+The building blocks are unit-tested against dense reference implementations: the
+\verb|SparseTile| operations are compared to a dense $\DDS(k)$ applied to randomly generated
+tiles, tree gridding is compared to \verb|ReferenceTreeGriddingKernel|, and
+\verb|PfVarianceConvolver| is compared both to a brute-force evaluation of $\|h_p * x\|^2$ and to
+the kernels which \verb|ReferencePeakFindingKernel| actually uses. The C++ port of each is
+compared to the python.
+
+End-to-end, the map is checked against the brute-force sweep of
+\S\ref{sec:variance_map_bruteforce}, which pushes a one-hot through the real dedisperser once per
+input channel and reads $A$ off the output column norms. The comparison is elementwise over the
+full matrix, for every primary tree, on random configs. The two sides share no code -- one is
+this appendix's analysis, the other is the shipped dedisperser -- so this is the only numerical
+oracle for the algorithm, and it is what licenses everything above. Agreement is at the float32
+floor of the dedispersion chain, measured $5 \times 10^{-7}$ to $2 \times 10^{-6}$. The same test
+covers \verb|compute_detrender_free_varfine()| against the same swept matrices, and covers
+Proposition 1 of \S\ref{sec:tree_restrictions} by comparing each early-trigger tree's swept matrix
+against a row subset of its parent's.
+
+Several properties which no comparison against another map would catch are tested separately:
+that the coarse construction of \S\ref{ssec:df_coarse} agrees with an explicit reduction of the
+fine map, that the resulting map still dominates $y^{\rm true}$, that the per-group
+factorization convention of Eq.\ (\ref{eq:df_group_svd}) is not transposed, and that
+\S\ref{ssec:df_svdopt} recovers the exactly-correct rank on a factorization with known
+redundancy.
+
+Finally, a stored \verb|VarianceMap| can be checked by Monte Carlo
+({\tt pirate\_frb varmap mc}): Gaussian noise with per-channel variance $V_F$ is fed through the
+dedisperser, a {\tt PfSquare} is run over each tree's subband array, and the resulting empirical
+per-chunk variances are compared to the map's prediction, restricted to output channels which
+have reached steady state. It reports the worst {\em under}-estimate and the worst
+{\em over}-estimate separately, since an admissible map may do the second but never the first.
+
+\end{document}

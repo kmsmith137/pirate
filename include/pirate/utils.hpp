@@ -2,6 +2,8 @@
 #define _PIRATE_UTILS_HPP
 
 #include <string>
+#include <vector>
+#include <utility>
 #include <sstream>
 #include <string_view>
 #include <cuda_runtime.h>   // cudaStream_t
@@ -110,7 +112,12 @@ protected:
 // Spawns 'nthreads' threads which each emit 'nlines' lines to 'fd', mixing the
 // one-liner and block forms of AtomicPrint with direct atomic_print() calls.
 // The caller checks the resulting fd for spliced or missing lines.
-extern void test_atomic_print(int fd, long nthreads, long nlines);
+//
+// 'line_pad' is the length of each line's filler run, and is a parameter because
+// message length is what the atomicity property turns on: one write(2) per message
+// is unsplittable up to PIPE_BUF, and only beyond it does a short write become a
+// possibility at all. The caller draws it.
+extern void test_atomic_print(int fd, long nthreads, long nlines, long line_pad = 200);
 
 
 // safe_memcpy_{h2g,g2h}_{sync,async}(): wrappers around
@@ -135,7 +142,7 @@ extern void safe_memcpy_g2h_async(void *dst, const void *src, long nbytes,
                                    cudaStream_t stream);
 
 
-// Diagnostic for 'pirate_frb revisit_512gb': mmap nbytes (with hugepages
+// Diagnostic for 'pirate_frb dev revisit_512gb': mmap nbytes (with hugepages
 // iff use_hugepages), prefault (for 4 KiB pages only -- hugepages are
 // pre-committed by mmap), and attempt a single cudaHostRegister() on
 // the entire region. Reports progress + result to stdout. Returns true
@@ -145,11 +152,20 @@ extern bool revisit_512gb_inner(long nbytes, bool use_hugepages);
 
 
 // Arguments must satisfy 0 <= i < pow2(nbits).
+// Note: we haven't bothered writing a fast bit_reverse function, since we don't
+// currently need bit-reversal in any critical paths. The "_slow" name is intended to
+// remind the caller that we could write a fast one if needed.
 extern int bit_reverse_slow(int i, int nbits);
 
-// If n=2^r, returns value of r.
-// If n is not a power of 2, throws an exception.
-extern int integer_log2(long n);
+// test_utils(): unit test for bit_reverse_slow() above, and for the integer/bit
+// helpers in inlines.hpp (is_power_of_two(), pow2(), popcount(), bit_length(),
+// bit_floor(), integer_log2(), align_up(), round_{up,down}_to_power_of_two(),
+// xdiv(), xmod()). Throws an exception on failure.
+//
+// Called from 'python -m pirate_frb test --util'. It exhausts the interesting
+// part of its parameter space in one call and takes milliseconds, so the caller
+// runs it once per invocation rather than once per test iteration.
+extern void test_utils();
 
 // rb_lag(): returns lag needed for two-stage dedispersion.
 // The index 0 <= freq_coarse < pow2(stage2_rank) represents a coarse frequency.
@@ -175,6 +191,51 @@ extern void dedisperse_non_incremental(ksgpu::Array<float> &arr, long nspec);
 extern long dedispersion_delay(int rank, long freq, long dm_brev);
 
 extern std::string hex_str(uint x);
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Shape draws shared by the kernel test_random()s.
+
+
+// The streaming shape that every kernel test_random() needs: how many chunks, how long a
+// chunk, how many beams per batch, how many batches. All of it comes out of ONE bounded
+// product, so the total array footprint stays under 'budget' however the draw splits it --
+// which is the property each of these tests needs and none can get from four independent
+// draws.
+//
+// Shared because a v[] index means nothing on its own -- three kernel tests need the same
+// index-to-meaning mapping, and a private copy of it in each would let them drift into
+// covering different shapes with nothing to make that visible.
+//
+// 'nt_in_divisor' is the granularity nt_in_per_chunk must be a multiple of -- 32 for a
+// float32 segment, or whatever random_nt_in_granularity() returned. 'nextra' asks for that
+// many further factors OF THE SAME PRODUCT, returned in 'extra': a caller uses them for the
+// per-kernel quantities that also have to fit inside the budget (an ambient rank, a
+// weight-array DM count), and taking them from the same product is what keeps the budget a
+// budget.
+struct RandomKernelShape
+{
+    long nchunks = 0;
+    long nt_in_per_chunk = 0;      // a multiple of the caller's nt_in_divisor
+    long beams_per_batch = 0;
+    long num_batches = 0;
+    long total_beams = 0;          // = beams_per_batch * num_batches
+    std::vector<long> extra;       // 'nextra' more factors of the same bounded product
+};
+
+extern RandomKernelShape random_kernel_shape(long budget, long nt_in_divisor, int nextra = 0);
+
+
+// The input-time granularity the peak-finding and cdd2 kernels impose, as
+// {nt_in_per_wt, nt_in_divisor}.
+//
+// nt_in_per_wt is the number of input samples one weight-array entry covers. A kernel with
+// Tinner > 1 has no freedom there -- the weight stride is fixed by the register layout -- so
+// the only randomized case is Tinner == 1, where the kernel accepts any power-of-two multiple
+// of a segment and the draw picks one. nt_in_divisor is then the granularity
+// PeakFindingKernelParams::validate() requires of nt_in.
+extern std::pair<long,long> random_nt_in_granularity(long simd_width, long Tinner);
 
 
 }  // namespace pirate

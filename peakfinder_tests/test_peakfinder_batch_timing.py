@@ -86,13 +86,14 @@ def _fake_plan():
             primary_tree_index=_PRIMARY[index],
             early_trigger_level=_EARLY[index],
             nprofiles=profiles,
-            frequency_subbands=SimpleNamespace(M=multiplets),
+            dm_downsampling=1,
+            frequency_subbands=SimpleNamespace(M=multiplets, pf_rank=0),
         ))
     return SimpleNamespace(ntrees=len(trees), trees=tuple(trees), nt_in=2048)
 
 
 def _specs():
-    return assert_expected_plan(_fake_plan())
+    return assert_expected_plan(_fake_plan(), dcores=_DOUT)
 
 
 def test_default_campaign_and_exact_plan_geometry():
@@ -109,7 +110,7 @@ def test_default_campaign_and_exact_plan_geometry():
     assert tuple(spec.shape for spec in shape_only) == EXPECTED_SHAPES
     assert sum(spec.pixels_per_beam for spec in shape_only) == EXPECTED_PIXELS_PER_BEAM
 
-    specs = expected_tree_specs(_fake_plan())
+    specs = expected_tree_specs(_fake_plan(), dcores=_DOUT)
     assert len(specs) == 10
     assert tuple(spec.shape for spec in specs) == EXPECTED_SHAPES
     assert sum(spec.pixels_per_beam for spec in specs) == 983_040
@@ -122,12 +123,12 @@ def test_default_campaign_and_exact_plan_geometry():
     bad = _fake_plan()
     bad.ntrees = 9
     with pytest.raises(ValueError, match="exactly 10"):
-        assert_expected_plan(bad)
+        assert_expected_plan(bad, dcores=_DOUT)
 
     bad = _fake_plan()
     bad.trees[0].ndm_out = 4095
     with pytest.raises(ValueError, match="unexpected plan tree shapes"):
-        assert_expected_plan(bad)
+        assert_expected_plan(bad, dcores=_DOUT)
 
 
 def test_exact_beam_partitions_and_nondivisor_final_batch():
@@ -221,8 +222,8 @@ def test_constant_tokens_are_decoded_by_the_authoritative_plan():
             self.profile = profile
             self.calls = []
 
-        def decode_argmax(self, token, tree, idm, itime):
-            self.calls.append((token, tree, idm, itime))
+        def decode_argmax(self, token, tree, dcore, idm, itime):
+            self.calls.append((token, tree, dcore, idm, itime))
             return (0, 1, -1, 1, self.profile)
 
     plan = Plan()
@@ -230,7 +231,7 @@ def test_constant_tokens_are_decoded_by_the_authoritative_plan():
         (0, 1, -1, 1, 0), (0, 1, -1, 1, 0)
     )
     assert plan.calls == [
-        (item.token, item.spec.tree_index, 0, 0) for item in inputs
+        (item.token, item.spec.tree_index, item.spec.dcore, 0, 0) for item in inputs
     ]
     with pytest.raises(ValueError, match="profile 0"):
         validate_tokens_with_plan(Plan(profile=1), inputs)
@@ -786,3 +787,23 @@ def test_analysis_notebook_is_cleared_compilable_and_has_exact_outputs():
     assert "chunk_duration_ms" in sources["wall-vs-batch"]
     assert "levels=[100.0]" in sources["load-heatmap"]
     assert "levels=[total_beams]" in sources["capacity-heatmap"]
+
+
+def test_v15_token_bytes_and_producer_quantization():
+    spec = benchmark.TreePlanSpec(0, 0, 0, 2, 3, 2, 7, 8, 4, 2)
+    valid = (1 << 24) | (1 << 16) | (4 << 8) | 2
+    tokens = np.full((1, 2, 3), valid, dtype=np.uint32)
+    validate_argmax_tokens((spec,), (tokens,))
+    for token in ((2 << 24), (2 << 16), (7 << 8), (4 << 8) | 1):
+        bad = tokens.copy()
+        bad[0, 0, 0] = token
+        with pytest.raises(ValueError, match="invalid tokens"):
+            validate_argmax_tokens((spec,), (bad,))
+
+
+def test_benchmark_plan_requires_explicit_dcores():
+    with pytest.raises(ValueError, match="dcores"):
+        expected_tree_specs(_fake_plan())
+    for dcores in (_DOUT[:-1], [0] * 10, [3] * 10, [True] * 10, [1.0] * 10):
+        with pytest.raises(ValueError):
+            assert_expected_plan(_fake_plan(), dcores=dcores)

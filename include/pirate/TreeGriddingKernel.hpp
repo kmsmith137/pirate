@@ -77,9 +77,19 @@ struct GpuTreeGriddingKernel
     // Reminder: contains 'channel_map', which lives in host memory.
     const TreeGriddingKernelParams params;
 
-    // If is_allocated=true, then 'gpu_channel_map' is a copy of 'channel_map' in GPU memory.
-    // FIXME: using double precision in a GPU kernel!! This is a temporary kludge.
-    ksgpu::Array<double> gpu_channel_map;
+    // If is_allocated=true, then 'gpu_channel_map' is a copy of 'channel_map' in GPU memory,
+    // converted to 32.32 fixed point: gpu_channel_map[i] = ulong(channel_map[i] * 2^32), so
+    // the high 32 bits are the integer part and the low 32 bits the fractional part.
+    //
+    // Why not just use the same dtype as the host? The kernel needs absolute precision ~1e-7
+    // on values which can be a few x 10^4. float32 is nowhere near (its absolute precision at
+    // 10^4 is ~1e-3), and float64 is very slow on the consumer GPUs we target (1/64 rate on an
+    // L40S), which made this kernel compute-bound rather than memory-bandwidth-bound. Fixed
+    // point gives a quantum of 2^-32 ~ 2.3e-10, and the kernel only ever converts the
+    // fractional part to float, where it is exact to 2^-24 ~ 6e-8. See the comments in
+    // GpuTreeGriddingKernel::allocate() and in the cuda kernel.
+
+    ksgpu::Array<ulong> gpu_channel_map;
     bool is_allocated = false;
 
     // All rates are "per call to launch()".

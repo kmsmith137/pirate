@@ -9,7 +9,7 @@ is framed near t=0 (via undispersed_arrival_time_sec) so the zero-based dense ar
 
 The test is APPROXIMATE and is not expected to pass to machine precision. It PRINTS the correlation
 coefficient and residual for the operator to interpret; it does not raise. Run it via
-'python -m pirate_frb test_simpulse'.
+'python -m pirate_frb dev test_simpulse'.
 """
 
 import numpy as np
@@ -166,7 +166,7 @@ class upsampling_test_instance:
         d = np.sum((a0-a1)**2)**0.5 / t**0.25
         r = np.sum(a0*a1) / t**0.5
 
-        atomic_print(self)
+        atomic_print(repr(self))
         atomic_print("\n")
         atomic_print('(nupfreq, nupsample) = (%d, %d)' % (nupfreq, nupsample))
         atomic_print(f'Correlation coefficient: {r}  (expect ~1; original float64 threshold was |r-1| < 1e-5)')

@@ -11,7 +11,7 @@ useful on their own whenever you have pipeline logs to look at.
 
 ## Why these exist
 
-A sweep takes ~90 minutes, of which most is waiting. The agent's time went
+A sweep takes ~2.5 hours, of which most is waiting. The agent's time went
 instead into two things that recur identically on every run:
 
 - **Harness plumbing.** Background processes do not survive across an
@@ -58,11 +58,11 @@ S=/tmp/sweep                       # scratch; anything untracked
 mkdir -p $S/logs && touch $S/sweep-start
 
 cat > $S/toy.plan <<'EOF'
-sifter     | waiting for grouper(s) to connect | 1 | 30 | pirate_frb run_toy_sifter 127.0.0.1:7500
-grouper    | waiting for FrbServer to connect  | 1 | 30 | pirate_frb run_toy_grouper -s 127.0.0.1:7500 127.0.0.1:7000
-server     | server(s) started                 | 1 | 90 | pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml
-xengine    | FakeXEngine(s) running            | 1 | 30 | pirate_frb run_fake_xengine -f -g 30 -s 127.0.0.1:7500 127.0.0.1:6000
-rpc_status | Running get_status                | 1 | 30 | pirate_frb rpc_status 127.0.0.1:6000
+sifter     | waiting for grouper(s) to connect | 1 | 30 | pirate_frb run toy_sifter 127.0.0.1:7500
+grouper    | waiting for FrbServer to connect  | 1 | 30 | pirate_frb run toy_grouper -s 127.0.0.1:7500 127.0.0.1:7000
+server     | server(s) started                 | 1 | 90 | pirate_frb run server configs/frb_server/toy.yml configs/dedispersion/toy.yml
+xengine    | FakeXEngine(s) running            | 1 | 30 | pirate_frb run fake_xengine -f -g 30 -s 127.0.0.1:7500 127.0.0.1:6000
+rpc_status | Running get_status                | 1 | 30 | pirate_frb rpc status 127.0.0.1:6000
 EOF
 
 misc/ch_test/launch-pipeline.sh $S/toy.plan $S/logs &      # blocks; run in background
@@ -72,7 +72,7 @@ misc/ch_test/launch-pipeline.sh $S/toy.plan $S/logs &      # blocks; run in back
 
 misc/ch_test/check-cascade.sh $S/logs sifter
 misc/ch_test/check-logs.py --logdir $S/logs --cascade --acqdir toy_stream_...
-pirate_frb run_offline_dedisperser ~/pirate_toy/toy_stream_... configs/dedispersion/toy.yml > $S/dedisp.log
+pirate_frb run offline_dedisperser ~/pirate_toy/toy_stream_... configs/dedispersion/toy.yml > $S/dedisp.log
 misc/ch_test/check-truth.py --xengine-log $S/logs/xengine.log --dedisp-log $S/dedisp.log \
                             --beam 10 --freq-lo 400 --freq-hi 800
 ```
@@ -118,6 +118,16 @@ Two rules keep that honest, and both are load-bearing:
    `0/0 matched, PASS`. Same for `check-logs.py`: a log that exists but
    yields no parseable lines is a FAIL, not a skip. If you add a check, add
    its guard too.
+
+   A parse failure is not the only way to pass vacuously. A check can also
+   parse fine and still have too little DATA to say anything -- the grouper
+   baseline in `check-logs.py` needs chunks where no beam detected anything,
+   and a production run leaves almost none (2 of 2122, against thousands in
+   a toy run). That reports `skip`, a third outcome meaning "this check
+   could not run here", which is neither the `ok` the sample size does not
+   justify nor a `warn` about a run that is behaving exactly as expected.
+   Reach for `skip` only when the shortage is structural and you can say why
+   -- an unexpectedly empty population is a `warn`.
 
 **If you change a log or print format in pirate, update the parser here in
 the same commit.** That is why these live in the pirate repo rather than

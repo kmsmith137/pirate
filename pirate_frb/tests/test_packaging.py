@@ -17,6 +17,7 @@ _REQUIRED_PYFILES = (
     "pirate_frb/__main__.py",
     "pirate_frb/Peakfinders.py",
     "pirate_frb/OfflineGrouperConfig.py",
+    "pirate_frb/ArgmaxMetadata.py",
     "pirate_frb/GpuArgmaxDecoder.py",
     "pirate_frb/OfflineCandidateGrouper.py",
     "pirate_frb/FrbOfflineGrouper.py",
@@ -181,6 +182,7 @@ def test_offline_peak_modules_packaged():
     for module_name in (
         "pirate_frb.Peakfinders",
         "pirate_frb.OfflineGrouperConfig",
+        "pirate_frb.ArgmaxMetadata",
         "pirate_frb.GpuArgmaxDecoder",
         "pirate_frb.OfflineCandidateGrouper",
         "pirate_frb.FrbOfflineGrouper",
@@ -194,7 +196,11 @@ def test_offline_peak_modules_packaged():
         action for action in parser._actions
         if action.__class__.__name__ == "_SubParsersAction"
     )
-    help_text = subparsers.choices["run_offline_grouper"].format_help()
+    run_subparsers = next(
+        action for action in subparsers.choices["run"]._actions
+        if action.__class__.__name__ == "_SubParsersAction"
+    )
+    help_text = run_subparsers.choices["offline_grouper"].format_help()
     assert "--output" in help_text
     assert "--assume-steady-state" in help_text
     assert "--device" in help_text

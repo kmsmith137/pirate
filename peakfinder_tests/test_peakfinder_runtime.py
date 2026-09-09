@@ -6,6 +6,8 @@ from pathlib import Path
 import cupy as cp
 import numpy as np
 
+from .producer_metadata import ARGMAX_ENCODING
+
 from .experiment_common import (
     SCHEMA_VERSION,
     atomic_write_csv,
@@ -42,7 +44,7 @@ def _parser():
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--config", default="configs/dedispersion/chord_sb2.yml")
     parser.add_argument("--metadata", default="configs/xengine_metadata.yml")
-    parser.add_argument("--results-dir", default="peakfinder_tests/results_final")
+    parser.add_argument("--results-dir", default="peakfinder_tests/results_final_pirate15")
     parser.add_argument("--threshold", type=float, default=10.0)
     parser.add_argument("--ndm", type=int, nargs="+", default=DEFAULT_NDM)
     parser.add_argument("--nt", type=int, nargs="+", default=DEFAULT_NT)
@@ -136,7 +138,8 @@ def main(argv=None):
     if not np.isfinite(args.threshold):
         raise ValueError("--threshold must be finite")
 
-    config, xmd, plan = prepare_plan(args.config, args.metadata)
+    config, xmd, plan, dcores = prepare_plan(
+        args.config, args.metadata, cuda_device_id=args.device)
     if not 0 <= args.geometry_tree < int(plan.ntrees):
         raise ValueError(f"--geometry-tree must be in [0, {plan.ntrees})")
     time_sample_s = float(config.time_sample_ms) / 1.0e3
@@ -147,6 +150,8 @@ def main(argv=None):
     }
 
     scientific_parameters = {
+        "dcores": list(dcores),
+        "argmax_encoding": ARGMAX_ENCODING,
         "schema_version": SCHEMA_VERSION,
         "methods": list(BENCHMARK_METHODS),
         "config": file_identity(args.config),
@@ -228,14 +233,14 @@ def main(argv=None):
                 "The result mapping is validated against the sole retained "
                 "full_band_bowtie method after timing each logical unit."
             ),
-            "plan": plan_summary(plan, time_sample_s),
+            "plan": plan_summary(plan, time_sample_s, dcores=dcores),
             "footprints": geometry_metadata,
         }, device=args.device)
 
     checkpoint_metadata()
     with cp.cuda.Device(args.device):
         geometry = build_peakfinder_geometry(
-            plan, args.geometry_tree, time_sample_s=time_sample_s, nt_in=plan.nt_in,
+            plan, args.geometry_tree, dcores=dcores, time_sample_s=time_sample_s, nt_in=plan.nt_in,
             reference_freq_mhz=reference_frequency,
             dm_reach=args.dm_reach, waist_bins=args.waist_bins,
         )

@@ -7,6 +7,7 @@ import numpy as np
 
 from ..OfflineCandidateGrouper import group_candidates
 from ..Peakfinders import EdgeFlag
+from ..ArgmaxMetadata import ARGMAX_ENCODING
 from ..TriggerCatalog import (
     CATALOG_FORMAT,
     CATALOG_VERSION,
@@ -55,6 +56,8 @@ def _metadata():
         plan_yaml="plan: exact\n",
         snr_threshold=10.0,
         dm_reach_by_tree=(4, 4, 4, 4),
+        dcores=(1, 2, 4, 8),
+        argmax_encoding=ARGMAX_ENCODING,
         waist_bins_by_tree=(1, 1, 1, 1),
         time_radius_by_tree=(3, 3, 3, 3),
         requested_time_radius_by_tree=(5, 5, 5, 5),
@@ -108,6 +111,8 @@ def test_discarded_timeout_window_is_traceable_without_rows():
         plan_yaml="plan: exact\n",
         snr_threshold=10.0,
         dm_reach_by_tree=(8,),
+        dcores=(1,),
+        argmax_encoding=ARGMAX_ENCODING,
         waist_bins_by_tree=(1,),
         time_radius_by_tree=(7,),
         requested_time_radius_by_tree=(15,),
@@ -259,7 +264,9 @@ def test_trigger_catalog_write_reopen_and_validate(cuda_device_id=0):
                 assert af.tree["metadata"]["processing"][
                     "grouping_association_domain"
                 ] == "owner_plus_resolved_next_map_halo"
-                assert af.tree["format_version"] == 2
+                assert af.tree["format_version"] == 3
+                assert af.tree["metadata"]["producer"]["dcores"] == [1, 2, 4, 8]
+                assert af.tree["metadata"]["producer"]["argmax_encoding"] == ARGMAX_ENCODING
                 assert (
                     af.tree["metadata"]["grouping_windows"][2]["output_status"]
                     == "partial"
@@ -297,3 +304,26 @@ def test_trigger_catalog_write_reopen_and_validate(cuda_device_id=0):
                 assert np.asarray(
                     events["grouping_timed_out"]
                 ).tolist() == [False, True]
+
+
+def test_catalog_rejects_missing_decoder_provenance():
+    """Version 3 requires encoding and Dcores even for an empty catalog."""
+    import copy
+    tree = build_trigger_catalog_tree(
+        (), coverage=((100, 2), (100, 3), (101, 7)), metadata=_metadata(),
+    )
+    for mutation in (
+            lambda t: t.update(format_version=2),
+            lambda t: t["metadata"]["producer"].pop("dcores"),
+            lambda t: t["metadata"]["producer"].pop("argmax_encoding"),
+            lambda t: t["metadata"]["producer"].update(argmax_encoding="legacy"),
+            lambda t: t["metadata"]["producer"].update(dcores=[1]),
+            lambda t: t["metadata"]["producer"].update(dcores=[1, 2, 3, 4])):
+        invalid = copy.deepcopy(tree)
+        mutation(invalid)
+        try:
+            validate_trigger_catalog_tree(invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("catalog accepted incompatible decoder provenance")

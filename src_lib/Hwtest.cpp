@@ -557,7 +557,7 @@ struct TcpReceiver : Hwtest::Worker
 
     virtual void worker_accept_connections()
     {
-        AtomicPrint() << worker_name << ": listening for TCP connections. Reminder: use 'pirate_frb hwtest -s <config.yml>' to send data";
+        AtomicPrint() << worker_name << ": listening for TCP connections. Reminder: use 'pirate_frb dev hwtest -s <config.yml>' to send data";
 
         this->data_sockets.resize(num_tcp_connections);
         this->listening_socket.listen();
@@ -698,12 +698,12 @@ struct ChimeWorker : public Hwtest::Worker
 
         // Four primary trees, no early triggers.
         // FIXME primary_trees peak-finding params are not quite right (same params at each primary tree).
-        // (num_early_triggers, max_width, dm_downsampling, time_downsampling, wt_dm_downsampling, wt_time_downsampling)
+        // (num_early_triggers, max_width, wt_dm_downsampling, wt_time_downsampling)
         dedispersion_config.primary_trees = {
-            { 0, 16, 0, 0, 64, 64 },
-            { 0, 16, 0, 0, 64, 64 },
-            { 0, 16, 0, 0, 64, 64 },
-            { 0, 16, 0, 0, 64, 64 }
+            { 0, 16, 64, 64 },
+            { 0, 16, 64, 64 },
+            { 0, 16, 64, 64 },
+            { 0, 16, 64, 64 }
         };
         
         dedispersion_config.validate();

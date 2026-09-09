@@ -15,7 +15,7 @@ class Hardware:
 
     Used when starting the real-time server, to decide which hardware to associate
     with each FrbServer instance. This is all currently done from python. To dump
-    what it discovers on the current machine, run 'pirate_frb show_hardware'.
+    what it discovers on the current machine, run 'pirate_frb show hardware'.
 
     The constructor takes no arguments and does no work: every accessor is cached
     (functools.cached_property for the no-argument ones, functools.cache for the
@@ -187,7 +187,7 @@ class Hardware:
         for n,ip in self._parse_ip_addr_show:
             if n == nic:
                 return ip
-        raise RuntimeError(f"Couldn't associate NIC {ip_addr} with a NIC")
+        raise RuntimeError(f"Couldn't associate NIC {nic!r} with an IP address")
 
     @functools.cache
     def nic_from_ip_addr(self, ip_addr, is_dst_addr=False):

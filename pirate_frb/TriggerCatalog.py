@@ -43,9 +43,11 @@ import tempfile
 
 import numpy as np
 
+from .ArgmaxMetadata import read_argmax_metadata
+
 
 CATALOG_FORMAT = "pirate_frb.offline_candidate_catalog"
-CATALOG_VERSION = 2
+CATALOG_VERSION = 3
 
 
 def _dtypes(**groups):
@@ -251,7 +253,7 @@ def catalog_batch_from_grouping_result(
     return CatalogBatch(events=events, members=members)
 
 def make_catalog_metadata(
-        *, config_yaml, plan_yaml, snr_threshold,
+        *, config_yaml, plan_yaml, dcores, argmax_encoding, snr_threshold,
         dm_reach_by_tree, waist_bins_by_tree, time_radius_by_tree,
         requested_time_radius_by_tree, halo_size,
         effective_grouping_halo_columns_by_tree,
@@ -266,6 +268,9 @@ def make_catalog_metadata(
         Exact non-empty YAML text embedded by the S/N-map producer. Together
         these reconstruct the frequency/time geometry and dedispersion trees
         needed to interpret DM, TOA, and argmax tokens.
+    dcores, argmax_encoding
+        Exact producer time granularities and token layout carried by the
+        saved maps. Required to interpret the retained raw tokens in 1.5.
     snr_threshold : float
         Finite S/N threshold applied to map cells.
     dm_reach_by_tree, waist_bins_by_tree, time_radius_by_tree,
@@ -357,6 +362,13 @@ def make_catalog_metadata(
     if any(effective > halo * radius for effective, radius in zip(
             grouping_halos, radii)):
         raise ValueError("effective grouping halo exceeds its configured halo")
+    producer_metadata = {
+        "config_yaml": config_yaml, "plan_yaml": plan_yaml,
+        "dcores": list(dcores), "argmax_encoding": argmax_encoding,
+    }
+    producer_metadata["dcores"] = list(read_argmax_metadata(
+        producer_metadata, ntrees=len(reaches),
+    ))
     startup = []
     for row in startup_by_beam:
         if not isinstance(row, Mapping):
@@ -443,7 +455,7 @@ def make_catalog_metadata(
             "timeout_ms": timeout,
             "timeout_policy": timeout_policy,
         },
-        "producer": {"config_yaml": config_yaml, "plan_yaml": plan_yaml},
+        "producer": producer_metadata,
         "startup_by_beam": startup,
         "grouping_windows": windows,
         "units": {
@@ -552,7 +564,7 @@ def _coverage_table(coverage):
 def _validate_metadata(metadata, coverage, events, members):
     """Validate essential provenance needed to interpret a reopened catalog.
 
-    This function checks the version-2 contract required by consumers: offline
+    This function checks the version-3 contract required by consumers: offline
     pipeline identity, producer/startup provenance, strict timeout controls,
     and the join between emitted rows and grouping-window records.
     """
@@ -613,6 +625,7 @@ def _validate_metadata(metadata, coverage, events, members):
             or not reaches
             or any(len(values) != len(reaches) for values in sequences[1:])):
         raise ValueError("catalog peakfinder geometry is malformed")
+    read_argmax_metadata(producer, ntrees=len(reaches))
     for name, values in (
             ("dm_reach_by_tree", reaches),
             ("waist_bins_by_tree", waists),
@@ -852,7 +865,7 @@ def build_trigger_catalog_tree(batches, *, coverage, metadata):
 
 
 def validate_trigger_catalog_tree(tree):
-    """Validate a materialized or reopened version-2 offline catalog.
+    """Validate a materialized or reopened version-3 offline catalog.
 
     The validator checks format/version, exact table schemas and dtypes,
     sorted-unique coverage, global ID/link consistency, representative-derived

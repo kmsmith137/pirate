@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, replace
 import cupy as cp
 import numpy as np
 
+from pirate_frb.ArgmaxMetadata import ARGMAX_ENCODING, read_argmax_metadata
+
 from pirate_frb.Peakfinders import (
     EdgeFlag,
     PeakFinderGeometry as _ProductionPeakFinderGeometry,
@@ -116,8 +118,19 @@ def _stable_subband_id(fmin, fmax):
     return f"f{int(fmin)}_{int(fmax)}"
 
 
-def enumerate_plan_subbands(plan, itree):
+def producer_dcore_array(plan, dcores):
+    """Validate explicit producer metadata and adapt it to the native batch API."""
+    values = read_argmax_metadata(
+        {"argmax_encoding": ARGMAX_ENCODING, "dcores": dcores},
+        ntrees=int(plan.ntrees),
+        douts=[int(tree.nt_ds) // int(tree.nt_out) for tree in plan.trees],
+    )
+    return np.ascontiguousarray(values, dtype=np.int64)
+
+
+def enumerate_plan_subbands(plan, itree, *, dcores):
     """Decode producer intervals for simulation setup, never peak selection."""
+    dcores = producer_dcore_array(plan, dcores)
     tree = plan.trees[int(itree)]
     fs = tree.frequency_subbands
     nmultiplets, nbands = int(fs.M), int(fs.N)
@@ -132,7 +145,7 @@ def enumerate_plan_subbands(plan, itree):
     itrees = np.full(nmultiplets, int(itree), dtype=np.int64)
     zeros = np.zeros(nmultiplets, dtype=np.int64)
     fmins, fmaxs, tlos, this_, profiles = plan.decode_argmax_batch(
-        tokens, itrees, zeros, zeros
+        tokens, itrees, zeros, zeros, dcores=dcores
     )
     freq_los, freq_his, _, _, _ = plan.decode_argmax2_batch(
         itrees, fmins, fmaxs, tlos, this_, profiles
@@ -213,18 +226,19 @@ def enumerate_plan_subbands(plan, itree):
     return m_to_band, bands, full_index
 
 
-def build_peakfinder_geometry(plan, itree, *, time_sample_s, nt_in,
+def build_peakfinder_geometry(plan, itree, *, dcores, time_sample_s, nt_in,
                               reference_freq_mhz, dm_reach=8, waist_bins=1):
     """Build the exact production full-band geometry for benchmark use."""
+    dcores = producer_dcore_array(plan, dcores)
     production = _ProductionPeakFinderGeometry.from_plan(
-        plan, itree, dm_reach=dm_reach, waist_bins=waist_bins
+        plan, itree, dcore=int(dcores[itree]), dm_reach=dm_reach, waist_bins=waist_bins
     )
     expected_time_step = float(time_sample_s) * int(nt_in) / production.ntime
     if not np.isclose(expected_time_step, production.time_step_s):
         raise ValueError("benchmark and production time sampling disagree")
     if not np.isclose(float(reference_freq_mhz), production.reference_freq_mhz):
         raise ValueError("benchmark and production reference frequencies disagree")
-    _, subbands, full_index = enumerate_plan_subbands(plan, itree)
+    _, subbands, full_index = enumerate_plan_subbands(plan, itree, dcores=dcores)
     return PeakFinderGeometry(production, subbands, full_index)
 
 
@@ -318,9 +332,10 @@ def empty_decoded_candidates():
     return {name: np.empty(0, dtype=dtype) for name, dtype in DECODED_DTYPES.items()}
 
 
-def decode_candidates(plan, candidates, *, itree, time_chunk_index, ntime,
+def decode_candidates(plan, candidates, *, dcores, itree, time_chunk_index, ntime,
                       time_sample_s):
     """Decode survivors, retaining all sub-band/profile fields used by this study."""
+    dcores = producer_dcore_array(plan, dcores)
     n = len(candidates)
     if not n:
         return empty_decoded_candidates()
@@ -330,7 +345,7 @@ def decode_candidates(plan, candidates, *, itree, time_chunk_index, ntime,
     tokens = np.ascontiguousarray(cp.asnumpy(candidates.argmax_token), dtype=np.uint32)
     itrees = np.full(n, int(itree), dtype=np.int64)
     fmin, fmax, tlo, thi, profile = plan.decode_argmax_batch(
-        tokens, itrees, idm, itime
+        tokens, itrees, idm, itime, dcores=dcores
     )
     freq_lo, freq_hi, dm, timestamp_samp, width_samp = plan.decode_argmax2_batch(
         itrees, fmin, fmax, tlo, thi, profile

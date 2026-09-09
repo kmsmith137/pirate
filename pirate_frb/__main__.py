@@ -2,12 +2,25 @@ import os
 import re
 import sys
 import time
+import itertools
 import shlex
 import random
 import textwrap
 import argparse
 import threading
 import traceback
+
+# BLAS THREAD COUNT, for 'pirate_frb test' only, and set HERE because OpenBLAS reads these
+# once, when numpy is first imported -- which the next line does, transitively. The unit tests
+# do thousands of SMALL linear-algebra calls (varmap's run_all() alone does ~280 SVDs), and an
+# unbounded thread pool spends more time synchronizing than computing: measured on this
+# 64-core host, varmap's run_all() takes 10.5 s at the default and 6.5 s at 4 threads. The
+# PRODUCTION paths want the full pool -- varmap at CHORD scale factorizes matrices of billions
+# of entries -- so this is scoped to the 'test' command, and it is a setdefault, so
+# 'OMP_NUM_THREADS=64 pirate_frb test ...' still gets the old behaviour.
+if (len(sys.argv) > 1) and (sys.argv[1] == 'test'):
+    for _blas_var in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'):
+        os.environ.setdefault(_blas_var, '4')
 
 import argcomplete
 import ksgpu
@@ -19,10 +32,9 @@ from . import kernels
 from . import loose_ends
 from . import core
 from . import tests
-from . import slow_avar
-from .fast_avar import PfAvarApproximation, test_fast_avar
+from . import varmap
+from .fast_varmap import compute_detrender_free_varcoarse
 
-from .slow_avar import SparseTile, SparseTileTriple, SparseTilePerM, PfVarianceConvolver, PfVariance
 
 from . import (
     DedispersionConfig,
@@ -34,7 +46,68 @@ from .Hardware import Hardware
 from .Hwtest import Hwtest
 from .HwtestSender import HwtestSender
 from .yaml_utils import indent_dedispersion_plan_comments, align_inline_comments
-from .utils import atomic_print
+from . import utils
+from .utils import atomic_print, print_separator
+
+
+############################################   seeding   ###########################################
+
+
+# Master seed for every RNG the tests draw from. Override with 'pirate_frb test --seed N',
+# or draw one from OS entropy with 'pirate_frb test -r'.
+DEFAULT_SEED = 137
+
+
+def seed_rngs(seed):
+    """Seeds every RNG the tests draw from, from one master seed.
+
+    THREE STREAMS, ONE NUMBER:
+
+      - ksgpu::default_rng(), the C++ side. Note this covers
+        DedispersionConfig::make_random(), which draws through ksgpu::rand_int(), and
+        avx2_simulate_4bit_noise(), whose per-thread xoshiro is seeded from it on first use.
+      - numpy's global RandomState (np.random.uniform() and friends).
+      - python's stdlib 'random', which tests/test_network.py and tests/test_server.py use.
+
+    The three are seeded from independent children of one SeedSequence rather than from the
+    master directly, so the streams are uncorrelated but the whole run replays from a single
+    pasteable integer.
+
+    NOTHING DRAWS FROM A FOURTH, UNSEEDED STREAM, and that is a rule rather than an accident.
+    A numpy Generator (np.random.default_rng) built with no argument seeds itself from OS
+    entropy and is therefore outside all of this; the suites that want one -- varmap and the
+    three detrending packages -- derive its seed from the global RandomState above, so
+    successive calls still differ while the run as a whole replays. See varmap/tests.py's
+    _rng() and detrending.testutils.default_rng(), which the three detrending suites share.
+
+    SEEDED ONCE PER PROCESS, NOT PER TEST, and that is the point: iteration i of the 'test
+    -n' loop draws different values from iteration j (so a long run explores the parameter
+    space), while rerunning the same command replays the same sequence (so a failure at
+    iteration 700 is reproducible). Seeding per test would give up the first property, and
+    not seeding at all gives up the second.
+
+    WHAT IT DOES NOT BUY is anything drawn on a thread other than this one:
+    ksgpu::seed_default_rng() reseeds only the CALLING thread, so any C++ thread spawned
+    later self-seeds from std::random_device; and in python a seeded RNG fixes the sequence
+    of values drawn but not which thread draws which. That affects --net and --serv only, and
+    test() prints exactly which parts of those two replay and which do not.
+    """
+
+    import numpy as np
+
+    s_np, s_ks, s_py = np.random.SeedSequence(seed).spawn(3)
+    np.random.seed(s_np.generate_state(4))
+    ksgpu.seed_default_rng(int(s_ks.generate_state(1, dtype=np.uint32)[0]))
+    random.seed(int(s_py.generate_state(1, dtype=np.uint32)[0]))
+
+
+def draw_random_seed():
+    """A master seed from OS entropy, for 'pirate_frb test -r'.
+
+    Printed by the caller, since a randomized run that does not say what it drew cannot be
+    replayed."""
+
+    return int.from_bytes(os.urandom(4), 'little')
 
 
 #########################################   test command  ##########################################
@@ -43,11 +116,24 @@ from .utils import atomic_print
 def parse_test(subparsers):
     help_text = "Run unit tests (use flags to select specific tests)"
     parser = subparsers.add_parser("test", help=help_text, description=help_text)
+    parser.set_defaults(func=test)
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
-    parser.add_argument('-n', '--niter', type=int, default=100, help="Number of unit test iterations (default 100)")
+    stop_group = parser.add_mutually_exclusive_group()
+    stop_group.add_argument('-n', '--niter', type=int, default=100,
+                            help="Number of unit test iterations (default 100)")
+    stop_group.add_argument('-t', '--time', type=float, metavar='SECONDS',
+                            help="Run for at least SECONDS instead of a fixed iteration count. The check is at the BOTTOM of the loop, so at least one FULL iteration always runs and the elapsed time will overshoot by up to one iteration. Note a -t run is not directly replayable, since the iteration count depends on machine speed; the count to replay with -n is printed at the end.")
+
+    seed_group = parser.add_mutually_exclusive_group()
+    seed_group.add_argument('-s', '--seed', type=int, default=DEFAULT_SEED, metavar='N',
+                            help=f"Master RNG seed (default {DEFAULT_SEED}). Seeds the ksgpu (C++), numpy and stdlib-random generators. Replaying a run needs the same seed AND the same test flags AND the same -n, since the streams are shared and consumed in test order.")
+    seed_group.add_argument('-r', '--randomize-seed', action='store_true',
+                            help="Draw the master RNG seed from OS entropy instead of using the default. The seed is printed, so a failing run can be replayed with --seed.")
+
     parser.add_argument('--rt', action='store_true', help='Runs ReferenceTree and ReferenceLagbuf tests')
     parser.add_argument('--pfwr', action='store_true', help='Runs PfWeightReaderMicrokernel.test_random()')
     parser.add_argument('--pfom', action='store_true', help='Runs PfOutputMicrokernel.test_random()')
+    parser.add_argument('--pfsq', action='store_true', help='Runs the PfSquare tests (GpuPfSquare + ReferencePfSquare)')
     parser.add_argument('--gldk', action='store_true', help='Runs GpuLaggedDownsamplingKernel.test_random()')
     parser.add_argument('--gddk', action='store_true', help='Runs GpuDedispersionKernel.test_random()')
     parser.add_argument('--gpfk', action='store_true', help='Runs GpuPeakFindingKernel.test_random()')
@@ -55,17 +141,23 @@ def parse_test(subparsers):
     parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.test_random()')
     parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.test_random()')
     parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.test_random()')
+    parser.add_argument('--sbdd', action='store_true', help='Runs GpuSbDedispersionKernel.test_random()')
     parser.add_argument('--casm', action='store_true', help='Runs some casm tests')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
-    parser.add_argument('--avar', action='store_true', help='Runs tests related to analytic variance')
+    parser.add_argument('--varmap', action='store_true', help="pirate_frb.varmap. Two halves, both run by this flag: everything checkable WITHOUT a dedisperser (the VarianceMap class, the covering-LP and basis machinery, and the analytic map of detrender_free.py against a hand-written oracle), and the brute-force sweep, which pushes a one-hot through the REAL dedisperser once per input channel and checks the analytic map against what comes out. Needs a DedispersionPlan and a GPU for the second half.")
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_{beamform,upchan}()')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection and pulse-invariants tests')
     parser.add_argument('--amax', action='store_true', help='Runs DedispersionPlan.decode_argmax() tests (black-box probe arrays)')
+    parser.add_argument('--sb', action='store_true', help='Runs frequency-subband tests (C++/python parity of the two FrequencySubbands implementations, and the per-tree subband-set property)')
     parser.add_argument('--aout', action='store_true', help='Runs the serialized-output test (atomic_print/AtomicPrint, C++ and python threads)')
-    parser.add_argument('--ofg', action='store_true', help='Runs offline-grouper ASDF loading tests')
+    parser.add_argument('--ofg', action='store_true', help='Runs offline peak-finding, decoding, grouping, and catalog tests')
+    parser.add_argument('--util', action='store_true', help='Runs test_utils() (integer/bit helpers in inlines.hpp, plus bit_reverse_slow())')
+    parser.add_argument('--dtl1', action='store_true', help='Runs pirate_frb.detrending.lps1d tests (1-d local-polynomial detrender: the numpy reference, plus GpuDetrenderLps1d against it)')
+    parser.add_argument('--dtk1', action='store_true', help='Runs pirate_frb.detrending.kf1d tests (fixed-lag Kalman detrender; numpy only, there is no GPU kernel yet)')
+    parser.add_argument('--dtl2', action='store_true', help='Runs pirate_frb.detrending.lps2d tests (2-d spline detrender: the numpy reference, plus GpuDetrenderLps2d against it)')
 
 
 def rrange(registry_class):
@@ -86,15 +178,64 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim', 'amax', 'aout', 'ofg' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'util', 'dtl1', 'dtk1', 'dtl2', 'ofg' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
-    
-    ksgpu.set_cuda_device(args.gpu)
-    from . import utils   # local import (utils pulls in heavier deps)
 
-    for i in range(args.niter):
-        atomic_print(f'\nIteration {i+1}/{args.niter}\n\n')
+    seed = draw_random_seed() if args.randomize_seed else args.seed
+    seed_rngs(seed)
+    atomic_print(f'RNG seed {seed} (replay with: --seed {seed}, the same test flags, and the'
+                 f' same iteration count)')
+
+    if run_all_tests or args.net or args.serv:
+        # Said out loud rather than left to be rediscovered, and split into what replays and
+        # what does not, because "not reproducible" is too blunt to act on -- a --net failure
+        # IS worth rerunning at the same seed, since the config and the frame data come back.
+        #
+        # What replays: the config and every drawn parameter (python's global RandomState,
+        # stdlib random, and ksgpu::default_rng() are all pinned on the main thread), and
+        # --net's frame data -- randomize(normalize=False, gaussian=False) at
+        # test_network.py:501,766 runs on the main thread and takes AssembledFrame::randomize's
+        # seeded mt19937 branch, not avx2_simulate_4bit_noise().
+        #
+        # What does not, in rough order of how much it matters:
+        #   - The SCRIPT --net issues. _maybe_issue_write() reads live rb_start/rb_processed/
+        #     rb_streamed and can return without drawing, so how many values the seeded python
+        #     RNG is asked for depends on server timing, and the stream diverges from turn one.
+        #     Pre-drawing the script would fix it.
+        #   - --serv's frame data, from FakeXEngine's two randomizer threads
+        #     (test_server.py:481). ksgpu::seed_default_rng() reseeds only the CALLING thread,
+        #     so a thread spawned later self-seeds from std::random_device.
+        #   - The short-read pattern in Socket::_misbehave_maxbytes() (network_utils.cpp:609),
+        #     drawn on the reader thread, same reason.
+        atomic_print('NOTE: --net and --serv replay only PARTLY from the seed. The config, all'
+                     ' drawn parameters, and --net\'s frame data do replay; the sequence of'
+                     ' operations --net issues does not (it depends on live server state), nor'
+                     ' does anything drawn on a spawned thread (--serv\'s frame data, the'
+                     ' short-read pattern). Every other test replays in full.')
+
+    ksgpu.set_cuda_device(args.gpu)
+
+    t_start = time.time()
+
+    for i in itertools.count():
+        if args.time is not None:
+            atomic_print(f'\nIteration {i+1} ({time.time()-t_start:.0f} of {args.time:g} s)'
+                         f'\n\n')
+        else:
+            atomic_print(f'\nIteration {i+1}/{args.niter}\n\n')
         
+        if run_all_tests or args.dtl1:
+            from .detrending.lps1d import tests as lps1d_tests
+            lps1d_tests.run_all()
+
+        if run_all_tests or args.dtk1:
+            from .detrending.kf1d import tests as kf1d_tests
+            kf1d_tests.run_all(iteration=i)
+
+        if run_all_tests or args.dtl2:
+            from .detrending.lps2d import tests as lps2d_tests
+            lps2d_tests.run_all(iteration=i)
+
         if run_all_tests or args.rt:
             kernels.ReferenceLagbuf.test_random()
             kernels.ReferenceTree.test_basics()
@@ -107,6 +248,16 @@ def test(args):
         if run_all_tests or args.pfom:
             for _ in rrange(kernels.PfOutputMicrokernel):
                 kernels.PfOutputMicrokernel.test_random()
+        
+        if run_all_tests or args.pfsq:
+            # test_vs_peak_finder() is the only link between the peak-finding kernels and
+            # the squaring kernels, which --gpfk and GpuPfSquare.test_random() each cover only
+            # one side of. What it uniquely protects is the STREAMING comparison -- chunk
+            # boundaries, tpad history, batch ordering, and (dpf, m) row order. (The
+            # peak-finder's h_p coefficients are also reached from the other side by
+            # PfVarianceConvolver.test_kernels_match_reference(), one impulse at a time.)
+            kernels.ReferencePfSquare.test_vs_peak_finder()
+            kernels.GpuPfSquare.test_random()
         
         if run_all_tests or args.gldk:
             kernels.GpuLaggedDownsamplingKernel.test_random()
@@ -138,6 +289,10 @@ def test(args):
         if run_all_tests or args.cdd2:
             for _ in rrange(kernels.CoalescedDdKernel2):
                 kernels.CoalescedDdKernel2.test_random()
+
+        if run_all_tests or args.sbdd:
+            for _ in rrange(kernels.GpuSbDedispersionKernel):
+                kernels.GpuSbDedispersionKernel.test_random()
         
         if run_all_tests or args.casm:
             atomic_print("\n")
@@ -149,7 +304,12 @@ def test(args):
             casm.CasmReferenceBeamformer.test_cuda_python_equivalence(linkage='pybind11')
             
         if run_all_tests or args.chime:
-            chime.test_chime_frb_beamform()
+            # test_chime_frb_beamform()'s CPU reference is a brute-force 512-point DFT per
+            # (time, freq, pol, ew), which is ~1.7 s on an average draw and the most
+            # expensive thing under --chime by a wide margin. Every tenth iteration keeps it
+            # randomized (its shape is drawn) without paying for it every time.
+            if (i % 10) == 0:
+                chime.test_chime_frb_beamform()
             chime.test_chime_frb_upchan()
 
         if run_all_tests or args.zomb:
@@ -162,49 +322,70 @@ def test(args):
         if run_all_tests or args.dd:
             if i == 0:
                 # Catches errors in DedispersionConfig::make_random() or validate().
-                for _ in range(500):
-                    c = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=4, gpu_valid=False)
-                    c.test()
+                tests.test_primary_tree_chains()
+
+            # BOTH OF THESE ARE RANDOMIZED, so they run every iteration rather than once:
+            # pinned to i == 0, a 1000-iteration overnight run saw exactly the same draws as
+            # a 5-iteration smoke test. Ten configs an iteration reaches 500 by '-n 50' and
+            # keeps going.
+            #
+            # The loop is really two checks. make_random() re-derives validate()'s rules in
+            # three places, so "make_random() never emits a config validate() rejects" is
+            # the one with content; config.test() adds the frequency_to_index round trip on
+            # top of it. gpu_valid alternates because the True path has a key chain to get
+            # right (DedispersionConfig.cpp) and the False path is the only one this loop
+            # ever exercised.
+            tests.test_random_args_flags()
+            for j in range(10):
+                c = DedispersionConfig.make_random(max_toplevel_rank=8, max_early_triggers=4,
+                                                   gpu_valid=bool(j % 2))
+                c.test()
+
             for _ in rrange(kernels.CoalescedDdKernel2):
                 GpuDedisperser.test_random()
         
-        if run_all_tests or args.avar:
-            SparseTileTriple.test_random_tree_gridding()
-            SparseTile.test_random_iterate_aligned()
-            SparseTile.test_random_iterate_singletons()
-            SparseTile.test_random_specialize_dbits()
-            SparseTile.test_random_remap_d()
-            SparseTile.test_random_scale()
-            SparseTilePerM.test_random_subbanded_dedispersion()
-            PfVarianceConvolver.test_reduces_to_norms()
-            PfVarianceConvolver.test_random_variance()
-            PfVariance.test_add_truncate_upper_half()
-            if i == 0:  # deterministic (no randomness); run once
-                PfVarianceConvolver.test_kernels_match_reference()
-
-            # fast_avar: C++ ports compared against the slow_avar python reference.
-            test_fast_avar.test_cpp_convolver()
-            test_fast_avar.test_cpp_sparse_tile_triple()
-            test_fast_avar.test_cpp_pf_variance()
-            if i == 0:  # end-to-end (builds a plan + runs the full python reference); run once
-                test_fast_avar.test_cpp_pf_avar_approximation()
+        if run_all_tests or args.varmap:
+            # run_tests() owns the cadences -- which group runs once per invocation, which
+            # every iteration, which every tenth. That is a property of the tests, so it
+            # lives with them rather than here.
+            from .varmap import tests as varmap_tests
+            varmap_tests.run_tests(i)
 
         if run_all_tests or args.amax:
             tests.test_decode_argmax()
 
-        if run_all_tests or args.aout:
-            # Output-funnel test is deterministic and fast; once is enough.
-            if i == 0:
-                tests.test_atomic_out()
+        if run_all_tests or args.sb:
+            # Each of these has a deterministic half that says the same thing every time --
+            # the exhaustive pf_rank <= 3 sweep, and the shipped-config re-parses -- and a
+            # randomized half. Run the deterministic halves once and the randomized halves
+            # every iteration; see each test's docstring.
+            tests.test_frequency_subbands_parity(sweep_low_ranks=(i == 0))
+            tests.test_subband_property(shipped=(i == 0))
 
-        if run_all_tests or args.ofg:
+        if run_all_tests or args.aout:
+            # NOT deterministic: it is a concurrency test, and one call samples one thread
+            # schedule. It draws its own thread counts, line counts and line length, and
+            # costs 5-20 ms, so it runs every iteration.
+            tests.test_atomic_out()
+
+        if run_all_tests or args.util:
+            # Integer/bit helpers: one call exhausts the interesting inputs, so once
+            # is enough (see notes/unit_tests.md, "exhaust the parameter space").
             if i == 0:
-                tests.test_offline_peak_milestone(args.gpu)
+                utils.test_utils()
+
+        if (run_all_tests or args.ofg) and i == 0:
+            tests.test_offline_peak_milestone(args.gpu)
 
         if run_all_tests or args.net:
-            # Network/allocator tests only need to run once (not niter times)
-            if i == 0:
-                tests.test_assembled_frame_allocator()
+            # Every one of its seven tests draws nfreq, time_samples_per_chunk, the beam
+            # ids and the consumer count, so a multi-iteration run covers more than a single
+            # one; it is host memory only and costs ~50 ms.
+            tests.test_assembled_frame_allocator()
+            # test_slow_subscriber() DOES draw its parameters (NetworkTester), so pinning it
+            # to i == 0 meant a 1000-iteration run tested one draw. It is ~1 s, which is
+            # most of a --net iteration, so every tenth rather than every one.
+            if (i % 10) == 0:
                 tests.test_slow_subscriber()
             tests.test_assembled_frame_asdf()
             tests.test_network()
@@ -212,13 +393,32 @@ def test(args):
         if run_all_tests or args.serv:
             tests.test_server()
 
+        # AT THE BOTTOM OF THE LOOP, so that '-t' always runs at least one FULL iteration.
+        # Two things follow, and both are deliberate: 'test -t 1' is a smoke test rather than
+        # a no-op, and the elapsed time overshoots the budget by up to one iteration -- which
+        # for a slow flag combination can be a lot, so -t bounds the START of the last
+        # iteration, not the end of the run.
+        if args.time is not None:
+            if (time.time() - t_start) >= args.time:
+                break
+        elif (i + 1) >= args.niter:
+            break
 
-######################################   test_simpulse command  #####################################
+    if args.time is not None:
+        # A -t run cannot be replayed with -t: the iteration count it reached depends on how
+        # fast this machine is. Print the count, so that the seed printed above is actually
+        # usable.
+        atomic_print(f'\nRan {i+1} iterations in {time.time()-t_start:.1f} s.'
+                     f' Replay with: --seed {seed} -n {i+1}\n')
+
+
+######################################   dev test_simpulse command  #####################################
 
 
 def parse_test_simpulse(subparsers):
     help_text = "Run simpulse tests (pulse-upsampling self-consistency) and write example plots to cwd"
     parser = subparsers.add_parser("test_simpulse", help=help_text, description=help_text)
+    parser.set_defaults(func=test_simpulse)
     parser.add_argument('-n', '--niter', type=int, default=100, help="Number of upsampling-test iterations (default 100)")
 
 
@@ -229,49 +429,490 @@ def test_simpulse(args):
     plot_pulses.make_plots()
 
 
-#################################   check_avar_approximation command  ###############################
+####################################   varmap subcommands  ##########################################
 
 
-def parse_check_avar_approximation(subparsers):
-    help_text = "Compare exact vs approximate analytic peak-finding variance for a config"
-    parser = subparsers.add_parser("check_avar_approximation", help=help_text, description=help_text)
+def parse_varmap(subparsers):
+    """The 'varmap' group: utils for working with asdf-serialized variance maps.
+
+    'bf' and 'df' COMPUTE a map; 'mc' CHECKS one that already exists.
+
+    The two that compute are not two speeds of one algorithm -- they produce different
+    objects. 'bf' sweeps the real dedisperser and returns A_true itself, carrying no
+    domination certificate until get_distance() scores it; 'df' is analytic and
+    SVD-truncated, and its map DOMINATES A_true by construction (is_admissible=True). Only
+    'bf' can take a detrender.
+    """
+    help_text = "Subcommand for working with asdf-serialized variance maps (see varmap --help)"
+    sub = _add_group(subparsers, "varmap", help_text)
+    parse_varmap_bf(sub)
+    parse_varmap_df(sub)
+    parse_varmap_mc(sub)
+
+
+def _add_varmap_common_args(parser):
+    """The three arguments 'bf' and 'df' share, so the two cannot drift apart.
+
+    NOTE '-g/--gpu' is NOT here -- 'df' runs no GPU kernel. See parse_varmap_df().
+    ('mc' takes a map rather than a config, so it shares none of these; it has its own -g.)
+    """
     parser.add_argument('config_file', help="Path to dedispersion YAML config file")
-    parser.add_argument('-r', '--random-variances', action='store_true',
-                        help="Use random per-channel variances (config.make_random_freq_variances) instead of all-ones")
+    parser.add_argument('-o', '--output', required=True, metavar='PATH',
+                        help="Output .asdf file (required)")
+    parser.add_argument('-L', '--coarse-grain', type=int, default=None, metavar='L',
+                        help="Coarse-grain at rank L rather than writing the dense fine map."
+                             " This is what makes a large config reachable: at CHORD tree 0"
+                             " the dense map is 1.2 TiB and the coarse map is 344 GiB at L=4."
+                             " Legal range is R <= L <= r per tree. Omit to write the dense"
+                             " fine map, which is only viable at subscale.")
 
 
-def check_avar_approximation(args):
+########################################   varmap bf command  #######################################
+
+
+def parse_varmap_bf(subparsers):
+    help_text = "Compute the variance map A by brute force (sweep), and write it to an ASDF file"
+    parser = subparsers.add_parser("bf", help=help_text, description=help_text)
+    parser.set_defaults(func=varmap_bf)
+    _add_varmap_common_args(parser)
+    parser.add_argument('detrender_file', nargs='?', default=None,
+                        help="Path to DetrenderLps2dParams YAML file (omit with --no-detrender)")
+    parser.add_argument('--no-detrender', action='store_true',
+                        help="Run with no detrender; 'detrender_file' must then be omitted")
+    parser.add_argument('--cpu', action='store_true',
+                        help="Force the CPU sweep (default: GPU)")
+    parser.add_argument('--channels', default=None, metavar='SPEC',
+                        help="Sweep only these input channels, as a comma-separated list of"
+                             " indices or LO:HI[:STEP] slices. The result is a PARTIAL map"
+                             " whose other columns are zero, written with no y_true so that"
+                             " nothing downstream can score it. For timing a sweep before"
+                             " committing to the whole thing.")
+    parser.add_argument('--scratch-dir', default=None, metavar='DIR',
+                        help="Back the arrays of matrix size with memmaps under DIR instead"
+                             " of RAM. The fallback for a config whose accumulator does not"
+                             " fit; DIR must survive until the output file is written.")
+    parser.add_argument('--no-guard-chunk', action='store_true',
+                        help="Skip the per-pass guard chunk. The guard is what proves no part"
+                             " of the impulse response was truncated, and an undersized sweep"
+                             " silently UNDERESTIMATES A, so only use this on a config you"
+                             " have already validated.")
+    parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use (default 0)")
+
+
+########################################   varmap df command  #######################################
+
+
+def parse_varmap_df(subparsers):
+    """The analytic, detrender-free map.
+
+    NO '-g/--gpu' FLAG, deliberately: this path runs no GPU kernel, so a device flag would
+    offer a choice that does not exist. It does still need a CUDA context -- see varmap_df().
+    """
+    help_text = ("Compute the variance map A by the fast detrender-free algorithm, and write"
+                 " it to an ASDF file")
+    parser = subparsers.add_parser("df", help=help_text, description=help_text)
+    parser.set_defaults(func=varmap_df)
+    _add_varmap_common_args(parser)
+    parser.add_argument('-e', '--epsilon', type=float, default=None, metavar='EPS',
+                        help="Relative singular-value threshold, applied per group. Omit for"
+                             " the per-group default max(1e-11, 16 * max(nrow,ncol) * eps_f64),"
+                             " which is the float64 noise floor on singular values at that"
+                             " group's size.")
+    parser.add_argument('-m', '--max-bytes', type=_parse_size, default=None, metavar='SIZE',
+                        help="Ceiling on the lifted Q, which is the only large allocation"
+                             " here (32.0 GiB for a fine map at chime_sb2_et.yml, 6.9 GiB at"
+                             " L=4), doubled when svd-optimization is on (-s 1 or 2), since"
+                             " the SVD allocates a second array of the same shape. Accepts a"
+                             " K/M/G/T suffix, e.g. '64G'. Omit for no limit; the size is"
+                             " reported before the allocation either way, so a run that is"
+                             " about to fail says why rather than being killed by the OOM"
+                             " reaper.")
+    parser.add_argument('-s', '--svd-optimization-level', type=int, default=2, metavar='N',
+                        choices=(0, 1, 2),
+                        help="How much of the factorization to rebuild at its true rank:"
+                             " 0 = none, 1 = the base tree only, 2 = the base tree and every"
+                             " higher tree again after the row restriction (default)."
+                             " Exact, not an approximation. The base pass is where the rank"
+                             " goes -- measured 24%% off at toy.yml, 54-57%% at CHIME and"
+                             " 59-60%% at CHORD -- and the second pass adds 0.8-3.6%%. Use 0"
+                             " if you are short of memory or in a hurry: at"
+                             " chord_sb2_et.yml the map builds in 26 s and the base"
+                             " optimization takes 854 s.")
+    parser.add_argument('--debug', action='store_true',
+                        help="Turn on SdPlan's O(subbands) planning-pass cross-checks. Too"
+                             " expensive to leave on at production scale.")
+
+    # Accepted only so that varmap_df() can reject them with a message naming 'varmap bf'.
+    # Without these, argparse reports 'unrecognized arguments: det.yml' against the TOP-LEVEL
+    # usage line, which tells a user neither what went wrong nor where to go. SUPPRESS keeps
+    # them out of --help, so they are not offered as options.
+    parser.add_argument('detrender_file', nargs='?', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--no-detrender', action='store_true', help=argparse.SUPPRESS)
+
+
+def _parse_size(s):
+    """A '--max-bytes' argument as an integer number of bytes.
+
+    Accepts a bare integer, or a decimal with a binary K/M/G/T suffix ('64G' = 64*2^30,
+    '1.5T'). Case-insensitive. Raises argparse.ArgumentTypeError on anything else, so
+    argparse reports it as a bad argument rather than a traceback.
+    """
+    t = str(s).strip().upper()
+    mult = 1
+    if t and t[-1] in 'KMGT':
+        mult = 1 << (10 * (1 + 'KMGT'.index(t[-1])))
+        t = t[:-1]
+    try:
+        v = float(t)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{s!r} is not a size: expected an integer number of bytes, optionally with a"
+            " K/M/G/T suffix (e.g. 1048576, '512M', '64G', '1.5T')")
+    if v <= 0:
+        raise argparse.ArgumentTypeError(f"{s!r} must be positive")
+    return int(v * mult)
+
+
+def _parse_channel_spec(spec, nfreq):
+    """A 'varmap bf --channels' argument as a sorted list of input channel indices.
+
+    Accepts a comma-separated mix of bare indices and LO:HI[:STEP] slices."""
+
+    out = []
+    for part in spec.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        if ':' in part:
+            f = part.split(':')
+            if len(f) > 3:
+                raise RuntimeError(f"varmap bf: --channels: '{part}' has too many colons")
+            lo = int(f[0]) if f[0] else 0
+            hi = int(f[1]) if (len(f) > 1 and f[1]) else nfreq
+            step = int(f[2]) if (len(f) > 2 and f[2]) else 1
+            out.extend(range(lo, hi, step))
+        else:
+            out.append(int(part))
+    if not out:
+        raise RuntimeError(f"varmap bf: --channels={spec!r} selects no channels")
+    return sorted(set(out))
+
+
+# Config keys that this tool overrides, with the value it forces, because the sweep requires
+# them (see varmap.brute_force._SweepGeometry). All but the last are safe because none can
+# change A: the analytic route (varmap.detrender_free) computes the same matrix and never
+# reads a beam count, a downsampling factor or a ring-buffer placement. 'dtype' is the
+# exception: it is not provably A-preserving, which is why it is announced in the log like the
+# rest and recorded in the file's provenance. Same list, for the same reasons, as
+# _varmap_mc_override_config().
+#
+# The peak-finder's Dcore is not among them, and could not be: it is a property of a
+# peak-finding kernel, not of the config. The sweep never sees it -- it ends in a PfSquare,
+# which evaluates h_p at every time sample.
+def _varmap_bf_override_config(config, nbeams=1):
+    import numpy as np
+
+    overrides = []
+
+    def _set(obj, field, want, label):
+        got = getattr(obj, field)
+        if int(got) != int(want):
+            setattr(obj, field, want)
+            overrides.append(f'{label}: {int(got)} -> {int(want)}')
+
+    _set(config, 'beams_per_gpu', nbeams, 'beams_per_gpu')
+    _set(config, 'beams_per_batch', nbeams, 'beams_per_batch')
+    _set(config, 'num_active_batches', 1, 'num_active_batches')
+
+    # A pure-GPU MegaRingbuf, which the GPU pipeline requires.
+    _set(config, 'max_gpu_clag', 10000, 'max_gpu_clag')
+
+    # No sweep path implements float16, on either device: GpuSbDedispersionKernel is
+    # float32-only (_GpuPipeline says so and refuses), and the CPU sweep's
+    # ReferenceDedispersionKernel "uses float32, regardless of what dtype is specified".
+    if np.dtype(config.dtype) != np.float32:
+        overrides.append(f'dtype: {np.dtype(config.dtype)} -> float32'
+                         ' (no sweep path implements float16)')
+        config.dtype = np.float32
+
+    return overrides
+
+
+def varmap_bf(args):
+    """Sweep, and write a pirate_frb.varmap file.
+
+    NOTE THE OUTPUT FORMAT: this writes varmap/asdf_io.py's format. An older, incompatible
+    variance-map format existed; the reader refuses such a file by name rather than
+    misreading it, and nothing can read one any more.
+    """
+
+    from .kernels import DetrenderLps2dParams
+
+    # ---- Argument-level rejections. The detrender arguments can contradict each other or
+    # be absent, and both are worth catching before a config is even loaded.
+    if args.no_detrender and (args.detrender_file is not None):
+        raise RuntimeError("varmap bf: --no-detrender was given together with"
+                           f" '{args.detrender_file}'. These say opposite things; pass one or"
+                           " the other.")
+    if (not args.no_detrender) and (args.detrender_file is None):
+        raise RuntimeError("varmap bf: no detrender specified. Pass a DetrenderLps2dParams"
+                           " yaml file, or --no-detrender to run without one.")
+
+    config = DedispersionConfig.from_yaml(args.config_file)
+    detrender = DetrenderLps2dParams.from_yaml(args.detrender_file) if args.detrender_file else None
+
+    # ---- Config-level rejections. Collected rather than raised one at a time, so that a
+    # user editing a config does not discover the requirements one run at a time.
+    #
+    # Only things the SWEEP cannot check for itself belong here. Device capabilities do not:
+    # _SweepGeometry and _GpuSweep check their own, and their messages name the kernel or the
+    # quantity at fault. A blanket rejection here drifts as those capabilities change -- this
+    # block used to refuse early triggers and num_primary_trees > 1 outright, which by the
+    # time it was removed was refusing configs that both sweeps handle (early triggers) and
+    # configs the CPU sweep handles (multiple primary trees).
+    errs = []
+
+    if detrender is not None:
+        # The two files carry three quantities in common. Beam counts are overridden rather
+        # than checked (they cannot change A); the other two must agree, since a mismatch
+        # means the pair of files does not describe one computation.
+        nfreq = int(config.get_total_nfreq())
+        if int(detrender.nfreq) != nfreq:
+            errs.append(f"{args.detrender_file}: nfreq = {int(detrender.nfreq)}, but"
+                        f" {args.config_file} has sum(zone_nfreq) = {nfreq}")
+        if int(detrender.T) != int(config.time_samples_per_chunk):
+            errs.append(f"{args.detrender_file}: time_samples_per_chunk ="
+                        f" {int(detrender.T)}, but {args.config_file} has"
+                        f" {int(config.time_samples_per_chunk)}")
+
+    if errs:
+        raise RuntimeError("varmap bf: the config is not usable by this tool:\n  - "
+                           + "\n  - ".join(errs))
+
+    # ---- Overrides. One beam always: the beam axis carries passes, not beams, and
+    # measurement showed that batching does not speed up a full sweep.
+    overrides = _varmap_bf_override_config(config, nbeams=1)
+    if detrender is not None and int(detrender.M) != 1:
+        overrides.append(f'detrender num_beams: {int(detrender.M)} -> 1')
+        detrender.M = 1
+
+    for o in overrides:
+        atomic_print(f"varmap bf: overriding {o}")
+
+    config.validate()
+
+    channels = (_parse_channel_spec(args.channels, int(config.get_total_nfreq()))
+                if (args.channels is not None) else None)
+
+    # Before constructing the plan, not just before the GPU sweep: DedispersionPlan allocates
+    # through cudaHostAlloc, so even the CPU path needs a cuda device selected.
+    ksgpu.set_cuda_device(args.gpu)
+
+    t0 = time.time()
+    vmm = varmap.compute_variance_multimap(
+        config, detrender=detrender, device=('cpu' if args.cpu else 'gpu'),
+        L=args.coarse_grain, guard_chunk=(not args.no_guard_chunk), progress=True,
+        channels=channels, scratch_dir=args.scratch_dir,
+        provenance=dict(overrides=overrides, command=' '.join(sys.argv)))
+    dt = time.time() - t0
+
+    vmm.write_asdf(args.output)
+
+    nbytes = sum(m.nbytes() for m in vmm.maps)
+    atomic_print(f"varmap bf: swept {vmm.provenance['npasses']} passes in {dt:.1f} s; wrote"
+                 f" {args.output} ({nbytes/2**20:.1f} MiB of float64 in"
+                 f" {vmm.num_primary_trees} primary tree(s), covering {vmm.ntrees} tree(s))")
+
+
+def varmap_df(args):
+    """Compute the analytic detrender-free map, and write a pirate_frb.varmap file.
+
+    NO set_cuda_device() CALL, and no -g flag: this path runs no GPU kernel. It does still
+    need a CUDA CONTEXT, because config.make_channel_map() allocates its result through
+    cudaHostAlloc -- with no device visible at all it fails with 'cudaHostAlloc
+    returned 100 (no CUDA-capable device is detected)'. CUDA picks device 0 by default;
+    a caller who needs to steer that uses CUDA_VISIBLE_DEVICES.
+
+    NO CONFIG OVERRIDES either, unlike 'varmap bf'. Those exist because the SWEEP requires
+    them (beams_per_gpu, beams_per_batch, num_active_batches); this path runs no dedisperser
+    and reads none of them. So the archived config is exactly the one the user wrote, which
+    is better provenance.
+    """
+
+    # THE NO-DETRENDER HYPOTHESIS IS LOAD-BEARING here, not a missing feature: the step from
+    # the base tree to the other primary trees is Proposition 2, which is FALSE with a
+    # GpuDetrenderLps2d in front (measured against the brute-force sweep at 4.9e-7 without one and
+    # 2.1 WITH one). So this is a real guard, and it points at the tool that can do the job.
+    if args.detrender_file is not None:
+        raise RuntimeError(f"varmap df: got a second positional argument"
+                           f" '{args.detrender_file}'. This algorithm is detrender-free by"
+                           " construction and takes no detrender file; use 'varmap bf' for a"
+                           " map with a GpuDetrenderLps2d.")
+    if args.no_detrender:
+        raise RuntimeError("varmap df: --no-detrender is not accepted, because this algorithm"
+                           " never uses a detrender -- there is nothing to switch off. It is"
+                           " 'varmap bf' that requires you to say which you want.")
+
     config = DedispersionConfig.from_yaml(args.config_file)
     config.validate()
-    plan = DedispersionPlan(config)
-    freq_variances = config.make_random_freq_variances(noisy=True) if args.random_variances else None
-    slow_avar.check_approximation(plan, freq_variances)
+
+    t0 = time.time()
+    vmm = varmap.compute_detrender_free_multi_map(
+        config, L=args.coarse_grain, epsilon=args.epsilon, max_bytes=args.max_bytes,
+        svd_optimization_level=args.svd_optimization_level,
+        progress=True, debug=args.debug,
+        provenance=dict(command=' '.join(sys.argv)))
+    dt = time.time() - t0
+
+    vmm.write_asdf(args.output)
+
+    nbytes = sum(m.nbytes() for m in vmm.maps)
+    ranks = [m.factor_rank for m in vmm.maps]
+    atomic_print(f"varmap df: built {vmm.num_primary_trees} map(s) in {dt:.1f} s at rank(s)"
+                 f" {ranks}; wrote {args.output} ({nbytes/2**20:.1f} MiB of float64 in"
+                 f" {vmm.num_primary_trees} primary tree(s), covering {vmm.ntrees} tree(s))")
 
 
-#################################   check_avar_mc command  ###############################
+########################################   varmap mc command  #######################################
 
 
-def parse_check_avar_mc(subparsers):
-    help_text = "Monte-Carlo check of analytic peak-finding variance vs a ReferenceDedisperser"
-    parser = subparsers.add_parser("check_avar_mc", help=help_text, description=help_text)
-    parser.add_argument('config_file', help="Path to dedispersion YAML config file")
-    parser.add_argument('-r', '--random-variances', action='store_true',
-                        help="Use random per-channel input variances (config.make_random_freq_variances) instead of all-ones")
-    parser.add_argument('-s', '--sophistication', type=int, default=1,
-                        help="ReferenceDedisperser sophistication (0, 1, or 2; default 1)")
+def parse_varmap_mc(subparsers):
+    """Check a stored map against Monte-Carlo sims.
+
+    Takes a MAP, not a config, so it shares none of _add_varmap_common_args() -- there is no
+    -o and no -L."""
+    help_text = ("Check a stored variance map against Monte-Carlo sims of its embedded config")
+    parser = subparsers.add_parser("mc", help=help_text, description=help_text)
+    parser.set_defaults(func=varmap_mc)
+    parser.add_argument('map_file', help="Path to a .asdf variance-map file")
+    parser.add_argument('-v', '--freq-variances', default=None, metavar='PATH',
+                        help="Length-nfreq input-channel variances: a .npy file, or a text"
+                             " file of whitespace-separated floats. Default all ones. NOTE the"
+                             " result is a statement about THIS v; a map is admissible for all"
+                             " v >= 0, and one run checks one of them.")
+    parser.add_argument('-n', '--nchunks', type=int, default=None, metavar='N',
+                        help="Stop after N chunks (default: run until Ctrl-C)")
+    parser.add_argument('--report-every', type=int, default=1, metavar='N',
+                        help="Print the summary every N chunks (default 1)")
+    parser.add_argument('--cpu', action='store_true',
+                        help="Use ReferenceDedisperser instead of the GPU pipeline. Orders of"
+                             " magnitude slower; the path for a config the GPU pipeline"
+                             " refuses (stage-2 dd_rank < 3, or a missing sbdd kernel).")
+    parser.add_argument('-s', '--sophistication', type=int, default=1, metavar='N',
+                        help="ReferenceDedisperser sophistication (0, 1 or 2; default 1)."
+                             " --cpu only.")
+    parser.add_argument('-g', '--gpu', type=int, default=0,
+                        help="GPU to use (default 0). Needed on BOTH paths: DedispersionPlan"
+                             " allocates through cudaHostAlloc.")
 
 
-def check_avar_mc(args):
-    config = DedispersionConfig.from_yaml(args.config_file)
-    atomic_print(f"check_avar_mc: forcing nbeams=1 (config had beams_per_gpu={config.beams_per_gpu}, "
-                 f"beams_per_batch={config.beams_per_batch})")
-    config.beams_per_gpu = 1
-    config.beams_per_batch = 1
-    config.num_active_batches = 1
+def _read_freq_variances(path, nfreq):
+    """A '-v' argument as a length-nfreq float64 array. .npy, else whitespace-separated text."""
+
+    import numpy as np
+
+    if path.endswith('.npy'):
+        v = np.load(path)
+    else:
+        v = np.loadtxt(path)
+    v = np.asarray(v, dtype=np.float64).reshape(-1)
+    if v.size != nfreq:
+        raise RuntimeError(f"varmap mc: {path}: got {v.size} variances, config has"
+                           f" nfreq={nfreq}")
+    return v
+
+
+# Config fields 'varmap mc' overrides, with why each is safe. Unlike varmap bf's list this one
+# also touches dtype, which is NOT provably A-preserving -- see the comment at its _set() call.
+def _varmap_mc_override_config(config):
+    import numpy as np
+
+    overrides = []
+
+    def _set(obj, field, want, label):
+        got = getattr(obj, field)
+        if str(got) != str(want):
+            setattr(obj, field, want)
+            overrides.append(f'{label}: {got} -> {want}')
+
+    # One beam. The beam axis is a pure spectator, so this cannot change A -- and for a fixed
+    # budget of beam-chunks, one beam wastes the least on warmup: B beams over N/B chunks give
+    # (N - B*S) steady samples against (N - S) for one beam, with S the settling chunk count.
+    _set(config, 'beams_per_gpu', 1, 'beams_per_gpu')
+    _set(config, 'beams_per_batch', 1, 'beams_per_batch')
+    _set(config, 'num_active_batches', 1, 'num_active_batches')
+
+    # A pure-GPU MegaRingbuf, which the GPU pipeline requires. This is a ring-buffer PLACEMENT
+    # decision -- where segments live, not what is computed -- so it cannot change A. The map's
+    # config is embedded in the asdf file, so without this a user would have to REGENERATE the
+    # map to check it.
+    _set(config, 'max_gpu_clag', 10000, 'max_gpu_clag')
+
+    # NO MC PATH IMPLEMENTS float16, on either device: GpuSbDedispersionKernel is float32-only,
+    # ReferenceDedispersionKernel "uses float32, regardless of what dtype is specified", and
+    # both PfSquares take float32. So there is no float16 MC to offer, and this is a conversion
+    # rather than a choice. What it does change: config.dtype drives the STAGE-1 kernel and the
+    # MegaRingbuf layout, which do support float16 -- so a float16 config would produce a ring
+    # buffer the float32-only stage-2 kernel cannot read.
+    # config.dtype is a numpy dtype on the python side, so compare and assign as one.
+    if np.dtype(config.dtype) != np.float32:
+        overrides.append(f'dtype: {np.dtype(config.dtype)} -> float32'
+                         ' (no MC path implements float16)')
+        config.dtype = np.float32
+
+    return overrides
+
+
+def varmap_mc(args):
+    """Monte-Carlo check of a stored variance map. See pirate_frb/varmap/mc.py."""
+
+    import numpy as np
+
+    if args.sophistication != 1 and not args.cpu:
+        raise RuntimeError("varmap mc: -s/--sophistication applies to ReferenceDedisperser,"
+                           " so it is meaningful only with --cpu.")
+
+    vmm = varmap.VarianceMultiMap.from_asdf(args.map_file)
+
+    # Collected rather than raised one at a time, as 'varmap bf' does.
+    errs = []
+    if vmm.provenance.get('partial'):
+        errs.append(f"{args.map_file} is a PARTIAL map (written by 'varmap bf --channels'):"
+                    " its unswept columns are zero and it carries no y_true, precisely so that"
+                    " nothing downstream scores it.")
+    if errs:
+        raise RuntimeError('varmap mc: this file cannot be checked:\n  - ' + '\n  - '.join(errs))
+
+    config = vmm.config
     config.validate()
-    plan = DedispersionPlan(config)
-    freq_variances = config.make_random_freq_variances(noisy=True) if args.random_variances else None
-    slow_avar.check_avar_mc(plan, sophistication=args.sophistication, freq_variances=freq_variances)
+    nfreq = int(config.get_total_nfreq())
+
+    v = (np.ones(nfreq) if (args.freq_variances is None)
+         else _read_freq_variances(args.freq_variances, nfreq))
+
+    overrides = _varmap_mc_override_config(config)
+
+    atomic_print(f"varmap mc: {args.map_file}: algorithm="
+                 f"{vmm.provenance.get('algorithm', '?')}, {vmm.num_primary_trees} primary"
+                 f" tree(s), {vmm.ntrees} tree(s)")
+    atomic_print(f"  freq_variances: {'all ones (pass -v to override)' if args.freq_variances is None else args.freq_variances}")
+    atomic_print(f"  detrender: {'none' if vmm.detrender is None else 'from the file'}")
+    for o in overrides:
+        atomic_print(f"  overriding {o}")
+    if any(o.startswith('dtype:') for o in overrides):
+        atomic_print("  NOTE: stage-1 dedispersion therefore runs in float32, where production"
+                     " would use\n        float16. Stages 2 and 3 are float32 either way, so"
+                     " that is the only\n        arithmetic that differs from production.")
+    atomic_print("  eps = MC/map - 1;  eps > 0 means the map UNDERESTIMATES"
+                 " (bad for an admissible map)")
+
+    # Before the plan is built, and needed even for --cpu: DedispersionPlan allocates through
+    # cudaHostAlloc.
+    ksgpu.set_cuda_device(args.gpu)
+
+    from .varmap.mc import run_mc
+    run_mc(vmm, v, device=('cpu' if args.cpu else 'gpu'), nchunks=args.nchunks,
+           report_every=args.report_every, sophistication=args.sophistication)
 
 
 #########################################   time command  ##########################################
@@ -280,6 +921,7 @@ def check_avar_mc(args):
 def parse_time(subparsers):
     help_text = "Run timings (use flags to select specific timings)"
     parser = subparsers.add_parser("time", help=help_text, description=help_text)
+    parser.set_defaults(func=time_command)
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for timing (default 0)")
     parser.add_argument('-t', '--nthreads', type=int, default=0, help="number of CPU threads (for time_cpu_downsample and time_avx2_simulate_4bit_noise)")
     parser.add_argument('--ncu', action='store_true', help="Just run a single kernel (intended for profiling with nvidia 'ncu')")
@@ -292,9 +934,11 @@ def parse_time(subparsers):
     parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.time_selected()')
     parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.time_selected()')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() timing')
+    parser.add_argument('--dtl1', action='store_true', help='Runs GpuDetrenderLps1d.time_selected() (1-d local-polynomial detrender kernel)')
+    parser.add_argument('--dtl2', action='store_true', help='Runs GpuDetrenderLps2d.time_selected() (2-d spline detrender kernel)')
 
 def time_command(args):
-    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim' ]
+    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim', 'dtl1', 'dtl2' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
     if args.ncu:
@@ -306,8 +950,7 @@ def time_command(args):
         
     ksgpu.set_cuda_device(args.gpu)
     nthreads = args.nthreads if (args.nthreads > 0) else os.cpu_count()
-    from . import utils   # local import (utils pulls in heavier deps)
-        
+
     if run_all_timings or args.gldk:
         kernels.GpuLaggedDownsamplingKernel.time_selected()
     if run_all_timings or args.gddk:
@@ -327,36 +970,43 @@ def time_command(args):
         kernels.GpuDequantizationKernel.time_selected()
     if run_all_timings or args.gtgk:
         kernels.GpuTreeGriddingKernel.time_selected()
+    if run_all_timings or args.dtl1:
+        kernels.GpuDetrenderLps1d.time_selected()
+    if run_all_timings or args.dtl2:
+        kernels.GpuDetrenderLps2d.time_selected()
     if run_all_timings or args.sim:
         utils.time_avx2_simulate_4bit_noise(nthreads)
 
 
-#####################################   show_hardware command  #####################################
+#####################################   show hardware command  #####################################
 
 
 def parse_show_hardware(subparsers):
     help_text = "Show hardware information, including cpu affinity"
-    subparsers.add_parser("show_hardware", help=help_text, description=help_text)
+    parser = subparsers.add_parser("hardware", help=help_text, description=help_text)
+    parser.set_defaults(func=show_hardware)
     
 def show_hardware(args):
     h = Hardware()
     h.show()
 
 
-######################################   show_kernels command  #####################################
+######################################   show kernels command  #####################################
 
 
 def parse_show_kernels(subparsers):
     help_text = "Show registered cuda kernels (use flags to select specific registries)"
-    parser = subparsers.add_parser("show_kernels", help=help_text, description=help_text)
+    parser = subparsers.add_parser("kernels", help=help_text, description=help_text)
+    parser.set_defaults(func=show_kernels)
     parser.add_argument('--pfom', action='store_true', help='Show PfOutputMicrokernel registry')
     parser.add_argument('--pfwr', action='store_true', help='Show PfWeightReaderMicrokernel registry')
     parser.add_argument('--gddk', action='store_true', help='Show GpuDedispersionKernel registry')
     parser.add_argument('--gpfk', action='store_true', help='Show GpuPeakFindingKernel registry')
     parser.add_argument('--cdd2', action='store_true', help='Show CoalescedDdKernel2 registry')
+    parser.add_argument('--sbdd', action='store_true', help='Show GpuSbDedispersionKernel registry')
     
 def show_kernels(args):
-    show_flags = [ 'pfom', 'pfwr', 'gddk', 'gpfk', 'cdd2' ]
+    show_flags = [ 'pfom', 'pfwr', 'gddk', 'gpfk', 'cdd2', 'sbdd' ]
     show_all = not any(getattr(args, x) for x in show_flags)
     first = True
 
@@ -367,6 +1017,14 @@ def show_kernels(args):
         n = kernels.CoalescedDdKernel2.registry_size()
         atomic_print(f"CoalescedDdKernel2 registry ({n} entries):")
         kernels.CoalescedDdKernel2.show_registry()
+
+    if show_all or args.sbdd:
+        if not first:
+            atomic_print("\n")
+        first = False
+        n = kernels.GpuSbDedispersionKernel.registry_size()
+        atomic_print(f"GpuSbDedispersionKernel registry ({n} entries):")
+        kernels.GpuSbDedispersionKernel.show_registry()
 
     if show_all or args.pfom:
         if not first:
@@ -401,7 +1059,7 @@ def show_kernels(args):
         kernels.GpuPeakFindingKernel.show_registry()
 
 
-######################################   make_subbands command  #####################################
+######################################   dev make_subbands command  #####################################
 
 
 def parse_make_subbands(subparsers):
@@ -416,14 +1074,15 @@ def parse_make_subbands(subparsers):
         Example usage::
 
            # Specify frequency min, max, and threshold
-           python -m pirate_frb make_subbands 300 1500 0.2
-           python -m pirate_frb make_subbands 400 800 0.1 -r 4""")
+           python -m pirate_frb dev make_subbands 300 1500 0.2
+           python -m pirate_frb dev make_subbands 400 800 0.1 -r 4""")
     parser = subparsers.add_parser(
         "make_subbands",
         help = help_text,
         description = description,
         formatter_class = argparse.RawDescriptionHelpFormatter,
     )
+    parser.set_defaults(func=make_subbands)
 
     parser.add_argument('fmin', type=float, help='Minimum frequency (MHz)')
     parser.add_argument('fmax', type=float, help='Maximum frequency (MHz)')
@@ -443,11 +1102,10 @@ def make_subbands(args):
     atomic_print(fs.show())
 
 
-########################################   hwtest command  #########################################
+########################################   dev hwtest command  #########################################
 
 
 def parse_hwtest(subparsers):
-    import argparse, textwrap
     help_text = "Run hardware test from a hwtest YAML config file (use -s to send data instead of receiving)"
     description = textwrap.dedent("""\
         Run hardware test using YAML config file (use -s to send data instead of receiving).
@@ -459,16 +1117,17 @@ def parse_hwtest(subparsers):
         Example networking-only run::
 
           # On cf00. The test will pause after "listening for TCP connections".
-          python -m pirate_frb hwtest configs/hwtest/cf00_net64.yml
+          python -m pirate_frb dev hwtest configs/hwtest/cf00_net64.yml
 
           # On cf05. Send to all four IP addresses on cf00.
-          python -m pirate_frb hwtest -s configs/hwtest/cf00_net64.yml
+          python -m pirate_frb dev hwtest -s configs/hwtest/cf00_net64.yml
 
         See configs/hwtest/*.yml for more examples.""")
     parser = subparsers.add_parser(
         "hwtest", help=help_text, description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.set_defaults(func=hwtest)
     parser.add_argument('config_file', help='Path to YAML config file')
     parser.add_argument('-t', '--time', type=float, default=20, help='Number of seconds to run test (default 20)')
     parser.add_argument('-s', '--send', action='store_true', help='Send data to test server (uses ip_addrs from config file)')
@@ -644,19 +1303,20 @@ def hwtest_send_from_config(config):
             atomic_print("\nInterrupted, stopping...")
 
 
-######################################   scratch command  #######################################
+######################################   dev scratch command  #######################################
 
 
 def parse_scratch(subparsers):
     help_text = "For debugging: run whatever code is currently in src_lib/scratch.cu"
-    subparsers.add_parser("scratch", help=help_text, description=help_text)
+    parser = subparsers.add_parser("scratch", help=help_text, description=help_text)
+    parser.set_defaults(func=scratch)
 
 def scratch(args):
     # The scratch() function is defined in src_lib/scratch.cu.
     pirate_pybind11.scratch()
 
 
-####################################   revisit_512gb command  ####################################
+####################################   dev revisit_512gb command  ####################################
 
 
 def parse_revisit_512gb(subparsers):
@@ -676,6 +1336,7 @@ def parse_revisit_512gb(subparsers):
     parser = subparsers.add_parser(
         "revisit_512gb", help=help_text, description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.set_defaults(func=revisit_512gb)
     parser.add_argument('-H', '--hugepages', action='store_true',
                         help='Use 2 MiB hugepages (default: 4 KiB regular pages).')
 
@@ -755,12 +1416,13 @@ def revisit_512gb(args):
     atomic_print(bar)
 
 
-################################   show_xengine_metadata command  ##################################
+################################   show xengine_metadata command  ##################################
 
 
 def parse_show_xengine_metadata(subparsers):
     help_text = "Parse xengine_metadata yml file and write info to stdout"
-    parser = subparsers.add_parser("show_xengine_metadata", help=help_text, description=help_text)
+    parser = subparsers.add_parser("xengine_metadata", help=help_text, description=help_text)
+    parser.set_defaults(func=show_xengine_metadata)
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
 
@@ -771,28 +1433,22 @@ def show_xengine_metadata(args):
     atomic_print(yaml_str)
 
 
-###################################   show_dedisperser command  ###################################
-
-
-def print_separator(label, filler='-'):
-    t = filler * (50 - len(label)//2)
-    atomic_print(f'\n{t}  {label}  {t}\n\n')
-    sys.stdout.flush()
+###################################   show dedisperser command  ###################################
 
 
 def parse_show_dedisperser(subparsers):
     help_text = "Parse a dedisperser .yml file and write info to stdout"
-    parser = subparsers.add_parser("show_dedisperser", help=help_text, description=help_text)
+    parser = subparsers.add_parser("dedisperser", help=help_text, description=help_text)
+    parser.set_defaults(func=show_dedisperser)
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
     parser.add_argument('-c', '--config', action='store_true', help="Also print the DedispersionConfig, with a separator, before the plan (by default only the plan is printed, matching the dedispersion_plan_yaml sent to the grouper)")
-    parser.add_argument('-t', '--time', action='store_true', help="Also print how long DedispersionPlan and C++ PfAvarApproximation construction took (non-deterministic lines; off by default so the output is reproducible)")
+    parser.add_argument('-t', '--time', action='store_true', help="Also print how long DedispersionPlan construction and the C++ compute_detrender_free_varcoarse() took (non-deterministic lines; off by default so the output is reproducible)")
     parser.add_argument('-z', '--zones', action='store_true', help="Include the per-clag mega_ringbuf host/gpu zone breakdown (independent of -v, which controls comments)")
     parser.add_argument('-s', '--streams', type=int, help="Override config.num_active_batches with specified value")
     parser.add_argument('-b', '--beams', type=int, help="Override config.beams_per_gpu with specified value")
     parser.add_argument('-g', '--max-gpu-clag', type=int, help="Override config.max_gpu_clag with specified value")
     parser.add_argument('--channel-map', action='store_true', help="Show channel map tree->freq (warning: produces long output!)")
-    parser.add_argument('-a', '--authoritative', action='store_true', help="guarantees consistency with GPU kernels (kernels must be precompiled)")
     parser.add_argument('-r', '--resources', action='store_true', help="Show resource tracking (all kernels must be precompiled)")
     parser.add_argument('-R', '--fine-grained-resources', action='store_true', help="Like -r, but shows fine-grained per-kernel info")
     parser.add_argument('--test', action='store_true', help="Run GpuDedisperser.test_one() with config")
@@ -833,25 +1489,21 @@ def show_dedisperser(args):
         atomic_print(config_yaml)
         print_separator('DedispersionPlan starts here')
 
-    # gpu_runnable iff some flag needs consistency with the compiled GPU kernels:
-    # -a requests it explicitly; -r/-R construct a GpuDedisperser from this plan.
-    # Otherwise the plan is displayable even in a build without the config's cdd2
-    # kernels, at the cost of showing default (non-registry) Dcore values.
-    gpu_runnable = args.authoritative or args.resources or args.fine_grained_resources
-
     t0 = time.time()
-    plan = DedispersionPlan(config, gpu_runnable=gpu_runnable)
+    plan = DedispersionPlan(config)
     plan_dt = time.time() - t0
     if args.time:
         atomic_print(f'# DedispersionPlan construction took {plan_dt:.3f} seconds\n\n')
-        # Also time the C++ PfAvarApproximation build from the plan (uses unit input variances;
-        # the construction time is independent of the variance values).
+        # Also time the C++ compute_detrender_free_varcoarse(). This is what the real-time
+        # server pays on every weight update: GpuDedisperser::_fill_analytic_weights() calls
+        # it, so the number below is the one that matters operationally. (Uses unit input
+        # variances -- the running time does not depend on the values.)
         import numpy as np
         freq_variances = np.ones(int(plan.nfreq), dtype=np.float64)
         t0 = time.time()
-        PfAvarApproximation(plan, freq_variances)
+        compute_detrender_free_varcoarse(plan, freq_variances)
         avar_dt = time.time() - t0
-        atomic_print(f'# C++ PfAvarApproximation construction took {avar_dt:.3f} seconds\n\n')
+        atomic_print(f'# C++ compute_detrender_free_varcoarse() took {avar_dt:.3f} seconds\n\n')
     plan_yaml = plan.to_yaml_string(args.verbose, args.zones)
     if args.verbose:
         plan_yaml = indent_dedispersion_plan_comments(plan_yaml)
@@ -898,12 +1550,13 @@ def show_dedisperser(args):
         atomic_print('Test passed!')
 
 
-###################################   show_random_config command  ###################################
+###################################   show random_config command  ###################################
 
 
 def parse_show_random_config(subparsers):
     help_text = "For debugging: generate random DedispersionConfig(s) and print as YAML"
-    parser = subparsers.add_parser("show_random_config", help=help_text, description=help_text)
+    parser = subparsers.add_parser("random_config", help=help_text, description=help_text)
+    parser.set_defaults(func=show_random_config)
     parser.add_argument('-n', type=int, default=1, metavar='NCONFIG', help='generate multiple random configs')
     parser.add_argument('-a', action='store_true', help='generate arbitrary random config, without restricting to precompiled kernels')
     parser.add_argument('-v', action='store_true', help='verbose')
@@ -921,12 +1574,38 @@ def show_random_config(args):
         atomic_print(yaml_str)
 
 
+######################################   dev coverage command  ######################################
+
+
+def parse_coverage(subparsers):
+    help_text = "Coverage analysis of randomization utils in unit tests"
+    parser = subparsers.add_parser("coverage", help=help_text, description=help_text)
+    parser.set_defaults(func=coverage)
+    parser.add_argument('--config', action='store_true',
+                        help='DedispersionConfig::make_random(), at each setting its callers use')
+    parser.add_argument('--reg', action='store_true',
+                        help='Kernel registry marginals (what this build compiled, not a draw)')
+    parser.add_argument('--varmap', action='store_true',
+                        help='varmap draws: _random_config(), the LP cell, the sweep loops')
+    parser.add_argument('--dt', action='store_true',
+                        help='Detrending draws: random_knots(), random_nfreq(), the 2-d masks')
+    parser.add_argument('-s', '--scale', type=float, default=1.0, metavar='X',
+                        help='Multiply every draw count by X (default 1). Scale up when a rate'
+                             ' is near a band edge and you want to know whether it moved.')
+
+
+def coverage(args):
+    flags = [f for f in ('config', 'reg', 'varmap', 'dt') if getattr(args, f)]
+    tests.report_coverage(select=flags, scale=args.scale)
+
+
 ###################################   time_dedisperser command  ###################################
 
 
 def parse_time_dedisperser(subparsers):
     help_text = "Run timing benchmarks from a dedisperser .yml file"
     parser = subparsers.add_parser("time_dedisperser", help=help_text, description=help_text)
+    parser.set_defaults(func=time_dedisperser)
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-n', '--niter', type=int, default=1000, help="Number of iterations for timing (default 1000)")
     parser.add_argument('-b', '--beams', type=int, help="Override config.beams_per_gpu with specified value")
@@ -936,7 +1615,6 @@ def parse_time_dedisperser(subparsers):
 
 
 def time_dedisperser(args):
-    from . import utils
     from .run_server import compute_async_bump_nthreads
 
     # Pin thread to first CPU (for consistent timing on dual-CPU systems)
@@ -1019,12 +1697,13 @@ def time_dedisperser(args):
     atomic_print('Timing complete!')
 
 
-###################################   show_asdf command  ###################################
+###################################   show asdf command  ###################################
 
 
 def parse_show_asdf(subparsers):
     help_text = "Print the YAML header of an ASDF file. (Note: 'asdftool --info' is also useful)"
-    parser = subparsers.add_parser("show_asdf", help=help_text, description=help_text)
+    parser = subparsers.add_parser("asdf", help=help_text, description=help_text)
+    parser.set_defaults(func=show_asdf)
     parser.add_argument('asdf_file', help="Path to ASDF file")
 
 
@@ -1033,12 +1712,13 @@ def show_asdf(args):
     _show_asdf(args.asdf_file)
 
 
-######################################   show_file_format command  ##################################
+######################################   show file_format command  ##################################
 
 
 def parse_show_file_format(subparsers):
     help_text = "Make an asdf file from an xengine_metadata YAML file, and write the header to stdout."
-    parser = subparsers.add_parser("show_file_format", help=help_text, description=help_text)
+    parser = subparsers.add_parser("file_format", help=help_text, description=help_text)
+    parser.set_defaults(func=show_file_format)
     parser.add_argument('metadata_yaml', help="Path to xengine_metadata YAML file")
     parser.add_argument('-n', '--non-verbose', action='store_true',
                         help="Emit the YAML header without the documentation comments (verbose=False).")
@@ -1077,12 +1757,106 @@ def show_file_format(args):
         os.remove(filename)
 
 
-########################################   rpc_status command  ######################################
+####################################   subcommand groups   ##########################################
+#
+# Five groups -- rpc, varmap, run, show, dev -- each a NESTED subparser level, so a command is
+# 'pirate_frb run server' rather than a flat 'run_server'. _add_group() is the one place that
+# knows how to make one; each parse_<group>() below just names its leaves.
+#
+# EVERY LEAF CARRIES ITS OWN HANDLER, via parser.set_defaults(func=...), and main() ends in a
+# single args.func(args). That replaces what used to be a top-level if/elif chain over
+# args.command plus one hand-written dispatch function per group -- which the old code already
+# flagged as not scaling past three groups. The win is not brevity: a leaf's parser and its
+# handler are now named in the SAME place, so adding a subcommand cannot half-land.
+
+
+def _add_group(subparsers, name, help_text):
+    """Add a group parser and return the subparsers object its leaves attach to.
+
+    parser_class=_PirateParser propagates the terse invalid-choice errors down to the leaves;
+    without it the leaves revert to argparse's default '(choose from ...)' wording. dest is
+    per-group ('<name>_command') rather than shared, so a future group that wants to read its
+    own subcommand name still can, and two groups can never collide.
+    """
+    parser = subparsers.add_parser(name, help=help_text, description=help_text)
+    return parser.add_subparsers(dest=f"{name}_command", required=True, metavar="subcommand",
+                                 parser_class=_PirateParser)
+
+
+def parse_run(subparsers):
+    """The 'run' group: long-running processes -- the real server, and the toy/offline rigs."""
+    help_text = "Subcommand for running server/grouper/fake-xengine/etc (see run --help)"
+    sub = _add_group(subparsers, "run", help_text)
+    parse_run_server(sub)
+    parse_run_toy_grouper(sub)
+    parse_run_offline_dedisperser(sub)
+    parse_run_offline_grouper(sub)
+    parse_run_toy_sifter(sub)
+    parse_run_fake_xengine(sub)
+
+
+def parse_show(subparsers):
+    """The 'show' group: print something and exit.
+
+    No side effects. 'show dedisperser' is the one that touches the GPU: building a
+    DedispersionPlan needs a CUDA device, and -r/--resources and --test build a
+    GpuDedisperser on top of that.
+    """
+    help_text = "Subcommand for printing information about config files or kernel registry (see show --help)"
+    sub = _add_group(subparsers, "show", help_text)
+    parse_show_asdf(sub)
+    parse_show_file_format(sub)
+    parse_show_dedisperser(sub)
+    parse_show_hardware(sub)
+    parse_show_kernels(sub)
+    parse_show_random_config(sub)
+    parse_show_xengine_metadata(sub)
+
+
+def parse_dev(subparsers):
+    """The 'dev' group: tools for working ON pirate, rather than for running it.
+
+    The membership rule is "would an operator ever type this?" -- if not, it belongs here.
+    That covers the makefile_helper.py maintenance utilities (make_subbands,
+    random_kernels), the scratch/hardware-probe entry points (scratch, revisit_512gb,
+    hwtest), the unit-test coverage report, and test_simpulse, which is a plotting rig
+    rather than part of 'pirate_frb test'.
+
+    'pirate_frb test' is deliberately NOT here: it is the one thing in this list that a
+    non-developer is told to run, and it is the entry point every notes/*.md points at.
+    """
+    help_text = "Subcommand for developer utils: coverage, hardware probes, makefile helpers, scratch (see dev --help)"
+    sub = _add_group(subparsers, "dev", help_text)
+    parse_coverage(sub)
+    parse_hwtest(sub)
+    parse_scratch(sub)
+    parse_make_subbands(sub)
+    parse_random_kernels(sub)
+    parse_test_simpulse(sub)
+    parse_revisit_512gb(sub)
+
+
+#########################################   rpc subcommands  ########################################
+
+
+def parse_rpc(subparsers):
+    """The 'rpc' group: clients that talk to a running FrbServer over gRPC."""
+    help_text = "Subcommand for sending RPCs (e.g. status, file-writes) to a running FrbServer (see rpc --help)"
+    sub = _add_group(subparsers, "rpc", help_text)
+    parse_rpc_status(sub)
+    parse_rpc_rand_write(sub)
+    parse_rpc_start_stream(sub)
+    parse_rpc_cancel_stream(sub)
+    parse_rpc_show_streams(sub)
+
+
+########################################   rpc status command  ######################################
 
 
 def parse_rpc_status(subparsers):
     help_text = "Connect to FrbServer(s) and stream status + filenames"
-    parser = subparsers.add_parser("rpc_status", help=help_text, description=help_text)
+    parser = subparsers.add_parser("status", help=help_text, description=help_text)
+    parser.set_defaults(func=rpc_status)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS', help='Server address(es) (e.g. 127.0.0.1:6000)')
 
 
@@ -1091,12 +1865,13 @@ def rpc_status(args):
     run_rpc_status(args.server_addresses)
 
 
-######################################   rpc_rand_write command  ####################################
+######################################   rpc rand_write command  ####################################
 
 
 def parse_rpc_rand_write(subparsers):
     help_text = "Send write_files RPC to FrbServer(s) with random beams/time range"
-    parser = subparsers.add_parser("rpc_rand_write", help=help_text, description=help_text)
+    parser = subparsers.add_parser("rand_write", help=help_text, description=help_text)
+    parser.set_defaults(func=rpc_rand_write)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS', help='Server address(es) (e.g. 127.0.0.1:6000)')
 
 
@@ -1219,7 +1994,8 @@ def _rpc_error_str(e):
 def parse_rpc_start_stream(subparsers):
     help_text = ("Send StartStream RPC to one or more FrbServers (write data to disk as it is "
                  "received). Multiple addresses act as one 'super-server'.")
-    parser = subparsers.add_parser("rpc_start_stream", help=help_text, description=help_text)
+    parser = subparsers.add_parser("start_stream", help=help_text, description=help_text)
+    parser.set_defaults(func=rpc_start_stream)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
                         help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
     parser.add_argument('-s', '--stem', default='stream',
@@ -1324,13 +2100,14 @@ def rpc_start_stream(args):
             client.close()
 
 
-##################################   rpc_cancel_stream command  #####################################
+##################################   rpc cancel_stream command  #####################################
 
 
 def parse_rpc_cancel_stream(subparsers):
     help_text = ("Send CancelStream RPC to one or more FrbServers. Multiple addresses act as one "
                  "'super-server' (cancels loop over all servers).")
-    parser = subparsers.add_parser("rpc_cancel_stream", help=help_text, description=help_text)
+    parser = subparsers.add_parser("cancel_stream", help=help_text, description=help_text)
+    parser.set_defaults(func=rpc_cancel_stream)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
                         help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
     parser.add_argument('-a', '--stream-name', default=None, metavar='STREAM_NAME',
@@ -1396,13 +2173,14 @@ def rpc_cancel_stream(args):
         sys.exit(1)
 
 
-###################################   rpc_show_streams command  #####################################
+###################################   rpc show_streams command  #####################################
 
 
 def parse_rpc_show_streams(subparsers):
     help_text = ("Send ShowStreams RPC to one or more FrbServers and print the responses. "
                  "Multiple addresses act as one 'super-server' (loops over all servers).")
-    parser = subparsers.add_parser("rpc_show_streams", help=help_text, description=help_text)
+    parser = subparsers.add_parser("show_streams", help=help_text, description=help_text)
+    parser.set_defaults(func=rpc_show_streams)
     parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS',
                         help='Server address(es) (e.g. 127.0.0.1:6000); multiple = one super-server')
 
@@ -1496,35 +2274,27 @@ def rpc_show_streams(args):
         sys.exit(1)
 
 
-#####################################   random_kernels command  #####################################
+#####################################   dev random_kernels command  #####################################
 
 
 def parse_random_kernels(subparsers):
     help_text = "A utility for maintaining makefile_helper.py"
     parser = subparsers.add_parser("random_kernels", help=help_text, description=help_text)
+    parser.set_defaults(func=random_kernels)
     parser.add_argument('-n', type=int, default=20, help='Number of random kernels to print (default 20)')
-    parser.add_argument('--pf', action='store_true', help='Print random PeakFinder kernel params')
-    parser.add_argument('--cdd2', action='store_true', help='Print random CoalescedDdKernel2 kernel params')
-    parser.add_argument('--pfwr', action='store_true', help='Print random PfWeightReader kernel params')
+    kind = parser.add_mutually_exclusive_group(required=True)
+    kind.add_argument('--pf', action='store_true', help='Print random PeakFinder kernel params')
+    kind.add_argument('--cdd2', action='store_true', help='Print random CoalescedDdKernel2 kernel params')
+    kind.add_argument('--pfwr', action='store_true', help='Print random PfWeightReader kernel params')
 
 
 def random_kernels(args):
     import numpy
-    
-    flags = [ 'pf', 'cdd2', 'pfwr' ]
-    nflags = sum(1 if getattr(args, x) else 0 for x in flags)
-    
-    if nflags != 1:
-        atomic_print("Error: precisely one of --pf, --cdd2, --pfwr must be specified", fd=2)
-        atomic_print("  --pf     Print random PeakFinder kernel params", fd=2)
-        atomic_print("  --cdd2   Print random CoalescedDdKernel2 kernel params", fd=2)
-        atomic_print("  --pfwr   Print random PfWeightReader kernel params", fd=2)
-        sys.exit(2)
 
     randi = lambda *a: int(numpy.random.randint(*a))
 
     if args.pf:
-        atomic_print('# (dtype, subband_counts, Wmax, Dcore, Dout, Tinner)')
+        atomic_print('# (dtype, subband_counts, K, Wmax, Dcore, Dout, Tinner)')
 
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
@@ -1543,45 +2313,82 @@ def random_kernels(args):
             
             Wmax = 2**randi(5)
             subband_counts = core.FrequencySubbands.make_random_subband_counts()
-            atomic_print(f"('fp{nbits}', {list(subband_counts)}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
+            K = randi(5)   # extra-DM bits; the standalone kernel accepts any K >= 0
+            atomic_print(f"('fp{nbits}', {list(subband_counts)}, {K}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
 
     if args.cdd2:
-        atomic_print("# (dtype, dd_rank, Wmax, Dcore, Dout, Tinner, subband_counts, et_levels)")
+        # NOTE no Dcore/Dout: a cdd2 kernel's Dout is pinned to 2^dd_rank1 and its Dcore to
+        # min(Dout,8). See cuda_generator.cdd2_dout(). (The --pf branch above still prints
+        # both, since standalone PeakFinder kernels have an independent Dout.)
+        #
+        # EVERY ROW PRINTED HERE IS BUILDABLE. A cdd2 row has to satisfy constraints that
+        # live in three different places -- the Dedisperser/PeakFinder constructors,
+        # FrequencySubbands.restrict_subband_counts(), and the Dout invariant -- so this
+        # draws within cuda_generator's bounds and then checks the result with
+        # cuda_generator.check_cdd2_row(), the same function makefile_helper.py calls on the
+        # rows it consumes. Do not re-derive a bound here; ask cuda_generator for it.
+        from .cuda_generator import max_cdd2_tinner, check_cdd2_row
+
+        atomic_print("# (dtype, dd_rank, Wmax, Tinner, subband_counts, num_early_triggers)")
 
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
-            subband_counts = core.FrequencySubbands.make_random_subband_counts()
+            dtype = f'fp{nbits}'
             Wmax = 2**randi(5)
-            Dcore = 32 // nbits
-            Dout = Dcore
-            Tinner = 1
-
-            for _ in range(5):
-                n = randi(4)
-                if n == 0:
-                    Tinner *= 2
-                if n == 1:
-                    Dcore *= 2
-                if 1 <= n <= 2:
-                    Dout *= 2
 
             # Currently, cdd2 assumes dd_rank >= 3
             dd_rank_max = randi(3,9)
             dd_rank_min = max(dd_rank_max-1, 3)
 
-            for dd_rank in range(dd_rank_min, dd_rank_max+1):
-                et_level_min = 1
-                et_level_max = dd_rank-3
-                et_candidates = list(range(et_level_min, et_level_max+1))
+            # PeakFinder requires Dout*Tinner <= 32*SW, and Dout follows dd_rank, so the
+            # bound is tightest at the LARGEST dd_rank in the row (fp32 dd_rank 8 admits
+            # only Tinner <= 2).
+            # max_cdd2_tinner() returns a power of two, so bit_length() is log2 + 1.
+            Tinner = 2**randi(max_cdd2_tinner(dtype, dd_rank_max).bit_length())
 
-                ncand = randi(0, len(et_candidates)+1)
-                et_levels = [0] + random.sample(et_candidates, ncand)
+            # subband_counts is a CONFIG's frequency_subband_counts, so it must satisfy
+            # pf_rank <= dd_rank1 at the SMALLEST dd_rank of the row (every larger one is
+            # implied), and must survive restriction by every et_level emitted.
+            #
+            # DRAW pf_rank, rather than always taking the maximum. A kernel with
+            # pf_rank < dd_rank1 emits (dd_rank1 - pf_rank) "extra DM" bits per warp, and
+            # taking the maximum here means that code path is only ever reached via early
+            # triggers -- so xdm_rank 3 and 4 were unreachable, and half the kernels drawn
+            # had xdm_rank 0. (Short subband_counts became legal after this function was
+            # written, and it was never updated.)
+            #
+            # Safe at every early-trigger level: restrict_subband_counts() drops pf_rank by
+            # one per level while dd_rank1 = ceil(dd_rank/2) drops by one every OTHER level,
+            # so pf_rank <= dd_rank1 at et_level 0 implies it everywhere above.
+            dd_rank1_min = (dd_rank_min + 1) // 2
+            subband_counts = core.FrequencySubbands.make_random_subband_counts(randi(0, dd_rank1_min + 1))
+
+            for dd_rank in range(dd_rank_min, dd_rank_max+1):
+                # The early-trigger levels of a row are 0..num_early_triggers, CONTIGUOUS,
+                # exactly as for a DedispersionConfig primary tree. So find the largest N
+                # for which every level up to N is usable, by walking up and stopping at the
+                # first failure -- the same thing DedispersionConfig::make_random() does.
+                # (restrict_subband_counts() is not monotone in et_level, so this is not the
+                # same as the largest individually-usable level.)
+                net_max = 0
+                while (net_max + 1 <= dd_rank - 3) and \
+                      core.FrequencySubbands.can_early_trigger(list(subband_counts), net_max + 1):
+                    net_max += 1
+
+                num_early_triggers = randi(0, net_max + 1)
+
+                # Belt and braces: the draws above are meant to guarantee this, so a failure
+                # here is a bug in them rather than a bad roll.
+                err = check_cdd2_row(dtype, dd_rank, Wmax, Tinner, list(subband_counts),
+                                     num_early_triggers)
+                assert err is None, f'random_kernels --cdd2 generated an unbuildable row: {err}'
 
                 s = '     # continuation' if (dd_rank > dd_rank_min) else ''
-                atomic_print(f"('fp{nbits}', {dd_rank}, {Wmax}, {Dcore}, {Dout}, {Tinner}, {list(subband_counts)}, {et_levels}),{s}")
+                atomic_print(f"('{dtype}', {dd_rank}, {Wmax}, {Tinner}, {list(subband_counts)},"
+                             f" {num_early_triggers}),{s}")
 
     if args.pfwr:
-        atomic_print('# (dtype, subband_counts, Dcore, P, Tinner)')
+        atomic_print('# (dtype, subband_counts, K, Dcore, P, Tinner)')
         
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
@@ -1590,21 +2397,28 @@ def random_kernels(args):
             Dcore_log = randi(6-Tinner_log) + (32//nbits) - 1
             P = randi(1,15)
             subband_counts = core.FrequencySubbands.make_random_subband_counts()
-            atomic_print(f"('fp{nbits}', {tuple(subband_counts)}, {2**Dcore_log}, {P}, {2**Tinner_log})")
+            K = randi(5)   # extra-DM bits
+            atomic_print(f"('fp{nbits}', {tuple(subband_counts)}, {K}, {2**Dcore_log}, {P}, {2**Tinner_log})")
 
 
-######################################  run_server command  #####################################
+######################################  run server command  #####################################
 
 
 def parse_run_server(subparsers):
     help_text = "Start FRB server(s) from an frb_server .yml file and a dedispersion .yml file"
-    parser = subparsers.add_parser("run_server", help=help_text, description=help_text)
+    parser = subparsers.add_parser("server", help=help_text, description=help_text)
+    parser.set_defaults(func=run_server_command)
     parser.add_argument('server_config', help='Path to FrbServer YAML config file')
     parser.add_argument('dedispersion_config', help='Path to DedispersionConfig YAML file')
-    parser.add_argument('-d', '--delay', type=float, default=0.0, metavar='SECONDS',
+    parser.add_argument('-p', '--processing-delay', type=float, default=0.0, metavar='SECONDS',
                         help='Artificial per-frame delay in the processing thread '
                              '(seconds; default 0). Used to simulate slow GPU work '
                              'for testing FakeXEngine pacing.')
+    parser.add_argument('-w', '--write-delay', type=float, default=0.0, metavar='SECONDS',
+                        help='Artificial delay (seconds; default 0) applied by the '
+                             'FileWriter to every SSD->NFS copy. Used to simulate a '
+                             'slow NFS mount, for testing the file-writing backlog '
+                             'seen by write_files / start_stream.')
     parser.add_argument('-G', '--no-grouper', action='store_true',
                         help='Disable FrbGrouper RPC even if grouper_ip_addrs '
                              'is set in the config (GpuDedisperser runs with '
@@ -1624,18 +2438,20 @@ def parse_run_server(subparsers):
 def run_server_command(args):
     from .run_server import run_server
     run_server(args.server_config, args.dedispersion_config,
-               processing_delay_sec=args.delay,
+               processing_delay_sec=args.processing_delay,
+               write_delay_sec=args.write_delay,
                no_grouper=args.no_grouper,
                no_dedispersion=args.no_dedispersion,
                quiet=args.quiet)
 
 
-######################################  run_toy_grouper command  #####################################
+######################################  run toy_grouper command  #####################################
 
 
 def parse_run_toy_grouper(subparsers):
     help_text = "Toy FrbGrouper consumer(s): per-chunk peak SNR + argmax, optionally reported to a sifter"
-    parser = subparsers.add_parser("run_toy_grouper", help=help_text, description=help_text)
+    parser = subparsers.add_parser("toy_grouper", help=help_text, description=help_text)
+    parser.set_defaults(func=run_toy_grouper_command)
     parser.add_argument('grouper_addrs', nargs='+', metavar='grouper_addr',
                         help="FrbGrouper listen address(es) 'ip:port' (e.g. 127.0.0.1:7000). "
                              "With more than one, each grouper runs in its own child "
@@ -1682,7 +2498,7 @@ def run_toy_grouper_command(args):
     from .utils import run_processes
     # Re-pass exactly one of the (mutually-exclusive, required) sifter flags.
     sifter_flag = ['--sifter', args.sifter] if (args.sifter is not None) else ['--no-sifter']
-    base = [sys.executable, '-m', 'pirate_frb', 'run_toy_grouper', *sifter_flag,
+    base = [sys.executable, '-m', 'pirate_frb', 'run', 'toy_grouper', *sifter_flag,
             '--delay', str(args.delay), '--snr-threshold', str(args.snr_threshold)]
     # Each child gets a distinct histogram stem (STEM1, STEM2, ...), so the
     # '<stem>.pkl' output filenames don't collide.
@@ -1695,12 +2511,13 @@ def run_toy_grouper_command(args):
         sys.exit(rc)
 
 
-######################################  run_offline_dedisperser command  #####################################
+######################################  run offline_dedisperser command  #####################################
 
 
 def parse_run_offline_dedisperser(subparsers):
     help_text = "Offline dedispersion and optional per-chunk S/N-map saving"
-    parser = subparsers.add_parser("run_offline_dedisperser", help=help_text, description=help_text)
+    parser = subparsers.add_parser("offline_dedisperser", help=help_text, description=help_text)
+    parser.set_defaults(func=run_offline_dedisperser_command)
     parser.add_argument("acqdir",
                         help="acqdir of frame_b(BEAM)_t(CHUNK).asdf files")
     parser.add_argument("config",
@@ -1717,12 +2534,13 @@ def run_offline_dedisperser_command(args):
                             save=args.save)
 
 
-######################################  run_offline_grouper command  #####################################
+# Offline grouper: shares processing code with the saved-map runner.
 
 
 def parse_run_offline_grouper(subparsers):
     help_text = "Find and group offline candidates from saved S/N maps"
-    parser = subparsers.add_parser("run_offline_grouper", help=help_text, description=help_text)
+    parser = subparsers.add_parser("offline_grouper", help=help_text, description=help_text)
+    parser.set_defaults(func=run_offline_grouper_command)
     parser.add_argument("acqdir", metavar="ACQDIR",
                         help="directory containing frame_b(BEAM)_t(CHUNK)_snrmap.asdf files")
     parser.add_argument(
@@ -1749,6 +2567,7 @@ def parse_run_offline_grouper(subparsers):
     )
 
 
+
 def run_offline_grouper_command(args):
     from .run_offline_grouper import run_offline_grouper
     run_offline_grouper(
@@ -1762,12 +2581,14 @@ def run_offline_grouper_command(args):
     )
 
 
-######################################  run_toy_sifter command  #####################################
+
+######################################  run toy_sifter command  #####################################
 
 
 def parse_run_toy_sifter(subparsers):
     help_text = "Toy FrbSifter gRPC server: print a one-line summary of each received message"
-    parser = subparsers.add_parser("run_toy_sifter", help=help_text, description=help_text)
+    parser = subparsers.add_parser("toy_sifter", help=help_text, description=help_text)
+    parser.set_defaults(func=run_toy_sifter_command)
     parser.add_argument('addr', metavar='ADDR',
                         help="Listen address 'ip:port' for the sifter gRPC server "
                              "(e.g. 127.0.0.1:7100; use [::]:7100 or 0.0.0.0:7100 for all interfaces).")
@@ -1778,12 +2599,13 @@ def run_toy_sifter_command(args):
     run_toy_sifter(args.addr)
 
 
-######################################  run_fake_xengine command  #####################################
+######################################  run fake_xengine command  #####################################
 
 
 def parse_run_fake_xengine(subparsers):
     help_text = "Send fake X-engine data to one or more running FrbServers"
-    parser = subparsers.add_parser("run_fake_xengine", help=help_text, description=help_text)
+    parser = subparsers.add_parser("fake_xengine", help=help_text, description=help_text)
+    parser.set_defaults(func=run_fake_xengine_command)
     parser.add_argument('rpc_addrs', nargs='+', metavar='RPC_ADDR',
                         help='One or more "ip:port" strings (one per server, matching the config\'s rpc_ip_addrs)')
     parser.add_argument('-w', '--workers', type=int, default=128,
@@ -1887,44 +2709,25 @@ def get_parser():
     """
     Create and return the argument parser for pirate_frb.
 
-    This function is separate from main() so that sphinx-argparse can
-    introspect the parser without actually parsing command-line arguments.
+    This function is separate from main() so that the docs build can introspect the
+    parser without actually parsing command-line arguments: docs/source/conf.py imports
+    it, walks the subcommand tree, and captures each format_help() into a cli/*.md page.
     """
     parser = _PirateParser(description="pirate_frb command-line driver (use --help for more info)")
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="command")
 
-    parse_run_server(subparsers)
-    parse_run_toy_grouper(subparsers)
-    parse_run_offline_dedisperser(subparsers)
-    parse_run_offline_grouper(subparsers)
-    parse_run_toy_sifter(subparsers)
-    parse_run_fake_xengine(subparsers)
-    parse_rpc_status(subparsers)
-    parse_rpc_rand_write(subparsers)
-    parse_rpc_start_stream(subparsers)
-    parse_rpc_cancel_stream(subparsers)
-    parse_rpc_show_streams(subparsers)
-    
+    # Declaration order here is what the reader of 'pirate_frb --help' sees, and what the
+    # docs build walks (docs/source/conf.py) to lay out the CLI reference. Groups first,
+    # then the handful of commands that are not in one.
+    parse_run(subparsers)
+    parse_rpc(subparsers)
+    parse_show(subparsers)
+    parse_varmap(subparsers)
+    parse_dev(subparsers)
+
     parse_test(subparsers)
-    parse_test_simpulse(subparsers)
-    parse_check_avar_approximation(subparsers)
-    parse_check_avar_mc(subparsers)
     parse_time(subparsers)
     parse_time_dedisperser(subparsers)
-    
-    parse_show_asdf(subparsers)
-    parse_show_file_format(subparsers)
-    parse_show_dedisperser(subparsers)
-    parse_show_hardware(subparsers)
-    parse_show_kernels(subparsers)
-    parse_show_random_config(subparsers)
-    parse_show_xengine_metadata(subparsers)
-    
-    parse_hwtest(subparsers)
-    parse_make_subbands(subparsers)
-    parse_random_kernels(subparsers)
-    parse_scratch(subparsers)
-    parse_revisit_512gb(subparsers)
 
     return parser
 
@@ -1974,74 +2777,29 @@ def _install_atomic_hooks():
 
 def main():
     _install_atomic_hooks()
-    ksgpu.seed_default_rng(137)   # reproducible run; remove for full randomness
+    seed_rngs(DEFAULT_SEED)   # 'pirate_frb test' re-seeds from its own --seed / -r flags
 
     parser = get_parser()
     argcomplete.autocomplete(parser)
 
     args = parser.parse_args()
 
-    if args.command == "test":
-        test(args)
-    elif args.command == "test_simpulse":
-        test_simpulse(args)
-    elif args.command == "check_avar_approximation":
-        check_avar_approximation(args)
-    elif args.command == "check_avar_mc":
-        check_avar_mc(args)
-    elif args.command == "time":
-        time_command(args)
-    elif args.command == "show_hardware":
-        show_hardware(args)
-    elif args.command == "show_kernels":
-        show_kernels(args)
-    elif args.command == "make_subbands":
-        make_subbands(args)
-    elif args.command == "show_xengine_metadata":
-        show_xengine_metadata(args)
-    elif args.command == "show_dedisperser":
-        show_dedisperser(args)
-    elif args.command == "time_dedisperser":
-        time_dedisperser(args)
-    elif args.command == "show_random_config":
-        show_random_config(args)
-    elif args.command == "hwtest":
-        hwtest(args)
-    elif args.command == "scratch":
-        scratch(args)
-    elif args.command == "revisit_512gb":
-        revisit_512gb(args)
-    elif args.command == "random_kernels":
-        random_kernels(args)
-    elif args.command == "show_asdf":
-        show_asdf(args)
-    elif args.command == "show_file_format":
-        show_file_format(args)
-    elif args.command == "rpc_status":
-        rpc_status(args)
-    elif args.command == "rpc_rand_write":
-        rpc_rand_write(args)
-    elif args.command == "rpc_start_stream":
-        rpc_start_stream(args)
-    elif args.command == "rpc_cancel_stream":
-        rpc_cancel_stream(args)
-    elif args.command == "rpc_show_streams":
-        rpc_show_streams(args)
-    elif args.command == "run_server":
-        run_server_command(args)
-    elif args.command == "run_toy_grouper":
-        run_toy_grouper_command(args)
-    elif args.command == "run_offline_dedisperser":
-        run_offline_dedisperser_command(args)
-    elif args.command == "run_offline_grouper":
-        run_offline_grouper_command(args)
-    elif args.command == "run_toy_sifter":
-        run_toy_sifter_command(args)
-    elif args.command == "run_fake_xengine":
-        run_fake_xengine_command(args)
-    else:
-        atomic_print(f"Command '{args.command}' not recognized", fd=2)
+    # Every leaf parser set its own handler (parser.set_defaults(func=...) in each parse_*),
+    # so there is no dispatch table to keep in step with the parsers. A group parser sets no
+    # 'func' of its own, but its subparsers are required=True, so argparse has already errored
+    # out before we get here if the user typed a bare group name.
+    #
+    # The getattr guard is for the one way this can go wrong: a new parse_*() that adds a
+    # subcommand but forgets its set_defaults(func=...). Without it that is a bare
+    # AttributeError on 'args.func' with no hint of the cause. It cannot be triggered by
+    # anything a USER types.
+    func = getattr(args, "func", None)
+    if func is None:
+        atomic_print(f"Internal error: subcommand '{parser.prog} {' '.join(sys.argv[1:])}'"
+                     " has no handler. Its parse_*() function is missing a"
+                     " parser.set_defaults(func=...) call.", fd=2)
         sys.exit(2)
+    func(args)
 
 
 if __name__ == '__main__':

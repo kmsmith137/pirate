@@ -428,6 +428,8 @@ def _metadata_specs():
             multiplets=1,
             profiles=1,
             token_dout=1,
+            dcore=1,
+            token_extra_dm=1,
         ))
     return tuple(result)
 
@@ -438,6 +440,8 @@ def test_cpu_metadata_records_transfer_timing_and_gpu_handoff_contracts():
     bundle = SimpleNamespace(
         config_document={"unit_test": True},
         producer_plan_yaml="unit-test-plan",
+        dcores=tuple(spec.dcore for spec in specs),
+        argmax_encoding=gaussian.batch_benchmark.ARGMAX_ENCODING,
         specs=specs,
         chunk_duration_ms=TEST_CHUNK_DURATION_MS,
     )
@@ -453,7 +457,10 @@ def test_cpu_metadata_records_transfer_timing_and_gpu_handoff_contracts():
     geometries = tuple(
         SimpleNamespace(time_radius=1, ntime=spec.ntime) for spec in specs
     )
-    payload = {"unit_test": "cpu-grouper-metadata"}
+    payload = benchmark.signature_payload(
+        args, bundle, gaussian_config, {"model": "test GPU"},
+        {"python": "test", "numpy": "test", "cupy": "test"},
+    )
     signature = gaussian.campaign_signature(payload)
     metadata = benchmark.build_metadata(
         args=args,
@@ -473,6 +480,9 @@ def test_cpu_metadata_records_transfer_timing_and_gpu_handoff_contracts():
     )
     assert metadata["schema_name"] == benchmark.SCHEMA_NAME
     assert metadata["schema_version"] == benchmark.SCHEMA_VERSION
+    assert metadata["schema_version"] == 2
+    assert metadata["plan"]["dcores"] == payload["dcores"] == list(bundle.dcores)
+    assert metadata["plan"]["argmax_encoding"] == payload["argmax_encoding"] == bundle.argmax_encoding
     cpu = metadata["cpu_grouper"]
     assert cpu["implementation_scope"].startswith("benchmark-only")
     assert cpu["partition_key"] == ["beam_id", "primary_tree_index"]
@@ -495,7 +505,7 @@ def test_cpu_metadata_records_transfer_timing_and_gpu_handoff_contracts():
     assert metadata["campaign_completeness"]["complete"] is False
 
 
-def test_analysis_notebook_is_cleared_compilable_and_has_exact_four_plots():
+def test_analysis_notebook_is_cleared_compilable_and_has_exact_five_plots():
     path = Path(__file__).with_name(
         "analyze_gaussian_corruption_cpu_grouper_timing.ipynb"
     )
@@ -538,6 +548,7 @@ def test_analysis_notebook_is_cleared_compilable_and_has_exact_four_plots():
         "cpu-breakdown-vs-candidates",
         "cpu-wall-vs-corruption",
         "post-peakfinder-cpu-vs-corruption",
+        "peakfinder-suppression-counts",
     }
     show_ids = {
         cell_id for cell_id, source in sources.items() if "plt.show()" in source
@@ -546,7 +557,7 @@ def test_analysis_notebook_is_cleared_compilable_and_has_exact_four_plots():
     for cell_id in plot_ids:
         source = sources[cell_id]
         assert source.count("plt.show()") == 1
-        assert ".scatter(" in source
+        assert any(call in source for call in (".scatter(", ".plot(", ".errorbar("))
     helpers = sources["plot-helpers"]
     for concept in (
         "np.min(values)", "np.quantile(values, 0.25)",

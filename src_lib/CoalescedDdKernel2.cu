@@ -1,13 +1,14 @@
 #include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"  // used in CoalescedDdKernel2::time()
 #include "../include/pirate/DedispersionPlan.hpp"    // used in CoalescedDdKernel2::time()
-#include "../include/pirate/DedispersionTree.hpp"    // used in get_registry_dcore(dtype, tree)
+#include "../include/pirate/DedispersionTree.hpp"    // used in _make_tree_key(dtype, tree)
 #include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
 #include "../include/pirate/constants.hpp"     // cuda_max_static_shmem_bytes
 
 #include <mutex>
+#include <cstring>   // memcpy()
 #include <sstream>
 #include <iomanip>
 #include <unordered_map>
@@ -25,16 +26,15 @@ namespace pirate {
 #endif
 
 
-// Shared core of _make_registry_key() and get_registry_dcore() below -- keeps the
+// Shared core of _make_registry_key() and _make_tree_key() below -- keeps the
 // Tinner formula and key-field mapping in one place.
 static CoalescedDdKernel2::RegistryKey _make_key(
     const Dtype &dtype, long dd_rank, long max_kernel_width,
-    long nt_in, long nt_out, long nt_wt, const vector<long> &subband_counts)
+    long nt_in, long nt_wt, const vector<long> &subband_counts)
 {
     CoalescedDdKernel2::RegistryKey key;
     key.dtype = dtype;
     key.dd_rank = dd_rank;
-    key.Dout = xdiv(nt_in, nt_out);
     key.Wmax = max_kernel_width;
     key.subband_counts = subband_counts;
 
@@ -51,28 +51,40 @@ static CoalescedDdKernel2::RegistryKey _make_key(
 }
 
 
-// File-local. Warning: a RegistryKey contains no Dcore, so registry().get() may return
-// a kernel whose Dcore does not match PeakFindingKernelParams::Dcore. (The
-// CoalescedDdKernel2 constructor checks this by hand.)
+// File-local. Note this does not call pf_params.validate(): test_random() builds a key from
+// params whose nt_out is not filled in yet (it comes from the kernel this key looks up).
 static CoalescedDdKernel2::RegistryKey _make_registry_key(
     const DedispersionKernelParams &dd_params, const PeakFindingKernelParams &pf_params)
 {
-    // Note: does not call pf_params.validate(), since test_random() calls this function
-    // (to peek the registry Dcore) while pf_params.Dcore is still unset.
-
     return _make_key(pf_params.dtype, dd_params.dd_rank, pf_params.max_kernel_width,
-                     pf_params.nt_in, pf_params.nt_out, pf_params.nt_wt, pf_params.subband_counts);
+                     pf_params.nt_out * pf_params.time_downsampling,   // nt_in
+                     pf_params.nt_wt, pf_params.subband_counts);
 }
 
 
-// Static member function. See doc-comment in CoalescedDdKernel2.hpp.
-long CoalescedDdKernel2::get_registry_dcore(
-    const ksgpu::Dtype &dtype, const DedispersionTree &tree)
+// File-local. Maps a DedispersionTree to the registry key of the cdd2 kernel which
+// implements it. Used by _all_kernels_registered() below.
+static CoalescedDdKernel2::RegistryKey _make_tree_key(
+    const Dtype &dtype, const DedispersionTree &tree)
 {
-    RegistryKey key = _make_key(dtype, tree.dd_rank, tree.pf.max_width,
-                                tree.nt_ds, tree.nt_out, tree.nt_wt,
-                                tree.frequency_subbands.subband_counts);
-    return registry().get(key, /*init_kernel=*/ false).Dcore;
+    return _make_key(dtype, tree.dd_rank, tree.primary_tree.max_width,
+                     tree.nt_ds, tree.nt_wt,
+                     tree.frequency_subbands.subband_counts);
+}
+
+
+// File-local. Returns true if every tree in 'plan' has a cdd2 kernel compiled into this
+// build. Called by time_one(), which uses it to skip (rather than throw) when kernels are
+// missing: makefile_helper.py only emits the "production" cdd2 kernels when its
+// 'production_kernels' flag is set, and even then only for the (dtype, subband_counts, ...)
+// combinations listed there.
+static bool _all_kernels_registered(const Dtype &dtype, const DedispersionPlan &plan)
+{
+    for (const DedispersionTree &tree: plan.trees)
+        if (!CoalescedDdKernel2::registry().has_key(_make_tree_key(dtype,tree)))
+            return false;
+
+    return true;
 }
 
 
@@ -98,16 +110,27 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     xassert_eq(pf_params.dtype, dd_params.dtype);
     xassert_eq(pf_params.beams_per_batch, dd_params.beams_per_batch);
     xassert_eq(pf_params.total_beams, dd_params.total_beams);
-    xassert_eq(pf_params.nt_in, dd_params.ntime);
-    xassert_eq(pf_params.ndm_out, pow2(dd_params.dd_rank + dd_params.amb_rank - fs.pf_rank));
+    xassert_eq(pf_params.nt_out * pf_params.time_downsampling, dd_params.ntime);
+
+    // One output DM per warp of the second dedispersion stage, hence 'dd_rank1' here rather
+    // than fs.pf_rank. If pf_rank < dd_rank1, the extra DM bits are folded into the
+    // peak-finder's multiplet index and max-reduced away. See CoalescedDdKernel2.hpp.
+    long dd_rank1 = dd_params.dd_rank - (dd_params.dd_rank / 2);
+    xassert_le(fs.pf_rank, dd_rank1);
+    xassert_eq(pf_params.ndm_out, pow2(dd_params.dd_rank + dd_params.amb_rank - dd_rank1));
+
+    // The DM coarse-graining is fixed by the kernel's own ranks (one output DM per warp of the
+    // second stage), so pf_params.dm_downsampling is redundant here -- but a caller who fills
+    // it wrongly should be caught, not silently overridden, since the same params also
+    // configure a ReferencePeakFindingKernel whose tokens must match this kernel's.
+    xassert_eq(pf_params.dm_downsampling, pow2(dd_rank1));
 
     // The initialization logic below is mostly cut-and-paste from either the
     // PeakFindingKernel or GpuDedispersionKernel constructor.
 
     this->dtype = dd_params.dtype;
     this->nbatches = xdiv(dd_params.total_beams, dd_params.beams_per_batch);
-    this->Dout = xdiv(pf_params.nt_in, pf_params.nt_out);
-    this->nprofiles = 3 * log2(pf_params.max_kernel_width) + 1;
+    this->nprofiles = 3 * integer_log2(pf_params.max_kernel_width) + 1;
 
     this->registry_key = _make_registry_key(dd_params, pf_params);
     this->registry_value = registry().get(registry_key);
@@ -118,8 +141,11 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     this->expected_wt_strides = pf_weight_layout.get_strides(pf_params.beams_per_batch, pf_params.ndm_wt, pf_params.nt_wt);
     this->Dcore = registry_value.Dcore;
 
-    // Caller-specified Dcore (e.g. from DedispersionPlan) must match the compiled kernel.
-    xassert_eq(pf_params.Dcore, Dcore);
+    // The coarse-graining factors the kernel was COMPILED with must match the caller's
+    // pf_params. They are not RegistryKey fields, so the key cannot pin them; the kernel
+    // checks them against the params instead.
+    xassert_eq(pf_params.dm_downsampling, registry_value.dm_downsampling);
+    xassert_eq(pf_params.time_downsampling, registry_value.time_downsampling);
 
     // Important: ensure that caller-specified 'nt_per_segment' matches GPU kernel.
     xassert_eq(dd_params.nt_per_segment, registry_value.nt_per_segment);
@@ -240,7 +266,8 @@ void CoalescedDdKernel2::launch(
     ulong nt_cumul = ichunk * dd_params.ntime;
     long rb_frame0 = (ichunk * dd_params.total_beams) + (ibatch * dd_params.beams_per_batch);
     long ndm_out_per_wt = xdiv(pf_params.ndm_out, pf_params.ndm_wt);
-    long nt_in_per_wt = xdiv(pf_params.nt_in, pf_params.nt_wt);
+    long nt_out_per_wt = xdiv(pf_params.nt_out, pf_params.nt_wt);
+    long nt_in_per_wt = nt_out_per_wt * pf_params.time_downsampling;
 
     // Output beam-strides (axis 0), expressed as multiples of 32 bits. We compute these directly
     // from Array::strides, as if the output arrays could be non-contiguous, even though the
@@ -257,12 +284,12 @@ void CoalescedDdKernel2::launch(
     dim3 block_dims = { 32, uint(registry_value.warps_per_threadblock), 1 };
 
     registry_value.cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
-        (in.data, gpu_ringbuf_quadruples.data, rb_frame0,  // void *grb_base_, uint *grb_quads_, long grb_frame0,
-         out_max.data, out_argmax.data, wt.data,           // void *out_max_, uint *out_argmax, const void *wt_,
-         out_max_bstride32, out_argmax_bstride32,          // uint out_max_bstride32, uint out_argmax_bstride32,
-         pstate.data, dd_params.ntime,                     // void *pstate_, int ntime,
-         nt_cumul, dd_params.input_is_downsampled_tree,    // ulong nt_cumul, bool input_is_downsampled_tree,
-         ndm_out_per_wt, nt_in_per_wt);                    // uint ndm_out_per_wt, uint nt_in_per_wt
+        (in.data, gpu_ringbuf_quadruples.data, rb_frame0,     // void *grb_base_, uint *grb_quads_, long grb_frame0,
+         out_max.data, out_argmax.data, wt.data,              // void *out_max_, uint *out_argmax, const void *wt_,
+         out_max_bstride32, out_argmax_bstride32,             // uint out_max_bstride32, uint out_argmax_bstride32,
+         pstate.data, dd_params.ntime,                        // void *pstate_, int ntime,
+         nt_cumul, dd_params.input_is_downsampled_tree,       // ulong nt_cumul, bool input_is_downsampled_tree,
+         ndm_out_per_wt, nt_in_per_wt);                       // uint ndm_out_per_wt, uint nt_in_per_wt
 
     CUDA_PEEK("coalesced_dd_kernel2 launch");
 }
@@ -279,17 +306,24 @@ void CoalescedDdKernel2::test_random()
     long dd_rank = key.dd_rank;
     long Tinner = key.Tinner;
 
-    long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : ((32 * simd_width) << rand_int(0,3));
-    long nt_in_divisor = max(32*simd_width, nt_in_per_wt);
+    // The kernel's second-stage rank, and the number of "extra DM" bits it emits per warp.
+    // (See cuda_generator/Dedisperser.emit_subband_extraction().)
+    long dd_rank1 = dd_rank - (dd_rank / 2);
+    long K = dd_rank1 - pf_rank;
 
-    auto v = ksgpu::random_integers_with_bounded_product(5, 30000 / pow2(dd_rank));
-    long nchunks = v[0];
-    long nt_in_per_chunk = nt_in_divisor * v[1];
-    long beams_per_batch = v[2];
-    long num_batches = v[3];
-    long total_beams = beams_per_batch * num_batches;
-    long amb_rank = min(8L, long(log2(v[4] + 0.5)));
-    long lg_ndm_out = amb_rank + dd_rank - pf_rank;
+    auto [nt_in_per_wt, nt_in_divisor] = random_nt_in_granularity(simd_width, Tinner);
+
+    // One extra factor of the same product for the ambient rank, so that a large ambient
+    // axis costs the draw the same as a long chunk would.
+    RandomKernelShape shape = random_kernel_shape(30000 / pow2(dd_rank), nt_in_divisor,
+                                                  /*nextra=*/ 1);
+    long nchunks = shape.nchunks;
+    long nt_in_per_chunk = shape.nt_in_per_chunk;
+    long beams_per_batch = shape.beams_per_batch;
+    long num_batches = shape.num_batches;
+    long total_beams = shape.total_beams;
+    long amb_rank = min(8L, long(bit_length(shape.extra[0]) - 1));   // = floor(log2(...))
+    long lg_ndm_out = amb_rank + dd_rank - dd_rank1;   // one output DM per warp
     long lg_ndm_wt = rand_int(0, lg_ndm_out+1);
     bool is_downsampled_tree = rand_bool();
 
@@ -305,7 +339,7 @@ void CoalescedDdKernel2::test_random()
     //
     // *** YOU MUST ALSO UNCOMMENT THE NEXT TWO LINES ***
     // total_beams = beams_per_batch * num_batches;
-    // lg_ndm_out = amb_rank + dd_rank - pf_rank;
+    // lg_ndm_out = amb_rank + dd_rank - dd_rank1;
 
     DedispersionKernelParams dd_params;
     dd_params.dtype = dtype;
@@ -331,27 +365,48 @@ void CoalescedDdKernel2::test_random()
     pf_params.max_kernel_width = key.Wmax;
     pf_params.beams_per_batch = beams_per_batch;
     pf_params.total_beams = total_beams;
+    pf_params.dm_downsampling = pow2(dd_rank1);
+    pf_params.time_downsampling = pow2(dd_rank1);
     pf_params.ndm_out = pow2(lg_ndm_out);
     pf_params.ndm_wt = pow2(lg_ndm_wt);
-    pf_params.nt_out = xdiv(nt_in_per_chunk, key.Dout);
-    pf_params.nt_in = nt_in_per_chunk;
+    pf_params.nt_out = xdiv(nt_in_per_chunk, pf_params.time_downsampling);
     pf_params.nt_wt = xdiv(nt_in_per_chunk, nt_in_per_wt);
 
-    // Dcore is a property of the compiled GPU kernel (registry value, not part of the
-    // key). Metadata-only peek: init_kernel=false skips GPU/kernel initialization.
-    pf_params.Dcore = registry().get(_make_registry_key(dd_params, pf_params),
-                                     /*init_kernel=*/ false).Dcore;
+    // Metadata-only peek at the compiled kernel: init_kernel=false skips GPU/kernel
+    // initialization.
+    //
+    // NOTE THE KEY IS REBUILT FROM 'pf_params' rather than reusing the 'key' drawn above.
+    // That is deliberate: if _make_registry_key()'s field mapping disagreed with the drawn
+    // key, this get() would throw "not found", which makes every test iteration an implicit
+    // params -> key -> same-kernel round-trip check. Do not "simplify" it to
+    // registry().get(key).
+    //
+    // The {dm,time}_downsampling above were DERIVED (2^dd_rank1 for both), because the key
+    // needs nt_in = nt_out * time_downsampling before the kernel can be looked up. That is
+    // the Dout invariant of the cdd2 build (makefile_helper.autogenerated_cdd2_kernels()),
+    // checked here so that a violation points at this test's assumption rather than at the
+    // constructor's params-vs-kernel assert.
+    RegistryValue val = registry().get(_make_registry_key(dd_params, pf_params),
+                                       /*init_kernel=*/ false);
+
+    xassert_eq(val.dm_downsampling, pf_params.dm_downsampling);
+    xassert_eq(val.time_downsampling, pf_params.time_downsampling);
 
     CoalescedDdKernel2 cdd2_kernel(dd_params, pf_params);
     BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
     cdd2_kernel.allocate(allocator);
 
     ReferenceDedispersionKernel ref_dd_kernel(dd_params, pf_params.subband_counts);
-    ReferencePeakFindingKernel ref_pf_kernel(pf_params);
+
+    // The reference peak-finder is parameterized identically to the GPU kernel's peak-finding
+    // half, K included, so it reads the same (ndm_out << K, M) subband array and
+    // emits the same argmax tokens.
+    ReferencePeakFindingKernel ref_pf_kernel(pf_params, cdd2_kernel.Dcore);
 
     FrequencySubbands &fs = cdd2_kernel.fs;
     GpuPfWeightLayout &wl = cdd2_kernel.pf_weight_layout;
     xassert(fs.pf_rank == pf_rank);
+    xassert_eq(ref_pf_kernel.K, K);   // the reference derives K from pf_params.dm_downsampling
 
     // Print this monstrosity.
     cout << "CoalescedDdKernel2::test()\n"
@@ -359,11 +414,12 @@ void CoalescedDdKernel2::test_random()
          << "    dd_rank = " << dd_params.dd_rank << "\n"
          << "    amb_rank = " << dd_params.amb_rank << "\n"
          << "    pf_rank = " << pf_rank << "\n"
+         << "    K = " << K << "\n"
          << "    is_downsampled_tree = " << is_downsampled_tree << "\n"
          << "    subbands = " << ksgpu::tuple_str(key.subband_counts) << "\n"
          << "    Wmax = " << key.Wmax << "\n"
          << "    Dcore = " << cdd2_kernel.Dcore << "\n"
-         << "    Dout = " << key.Dout << "\n"
+         << "    Dout = " << cdd2_kernel.pf_params.time_downsampling << "\n"
          << "    Tinner = " << key.Tinner << "\n"
          << "    M = " << fs.M << "\n"
          << "    N = " << fs.N << "\n"
@@ -399,31 +455,31 @@ void CoalescedDdKernel2::test_random()
     long T = nt_in_per_chunk;
     long D = pow2(dd_params.dd_rank);
     long M = fs.M;
-    long Dout = pow2(lg_ndm_out);
+    long ndm_out = pow2(lg_ndm_out);      // DM axis of out_max/out_argmax (one DM per warp)
+    long Dpf = ndm_out << K;              // DM axis of the reference dedisperser's 'sb_out'
     long Tout = pf_params.nt_out;
 
-    Array<float> dd_cpu({B,A,D,T}, af_uhost);      // 'dd_out' for ref_dd_kernel
-    Array<float> sb_cpu({B,Dout,M,T}, af_uhost);   // 'sb_out' for ref_pf_kernel, input for ref_pf_kernel
-    xassert(Dout == ref_dd_kernel.Dpf);
+    Array<float> dd_cpu({B,A,D,T}, af_uhost);     // 'dd_out' for ref_dd_kernel
+    Array<float> sb_cpu({B,Dpf,M,T}, af_uhost);   // 'sb_out' from ref_dd_kernel, and ref_pf_kernel's input
+    xassert(Dpf == ref_dd_kernel.Dpf);
 
-    Array<float> max_cpu({B,Dout,Tout}, af_uhost | af_zero);
-    Array<uint> argmax_cpu({B,Dout,Tout}, af_uhost | af_zero);
+    Array<float> max_cpu({B,ndm_out,Tout}, af_uhost | af_zero);
+    Array<uint> argmax_cpu({B,ndm_out,Tout}, af_uhost | af_zero);
 
-    Array<void> max_gpu(dtype, {B,Dout,Tout}, af_gpu | af_zero);
-    Array<uint> argmax_gpu({B,Dout,Tout}, af_gpu | af_zero);
+    Array<void> max_gpu(dtype, {B,ndm_out,Tout}, af_gpu | af_zero);
+    Array<uint> argmax_gpu({B,ndm_out,Tout}, af_gpu | af_zero);
 
     Array<float> wt_cpu({B, pf_params.ndm_wt, pf_params.nt_wt, ref_pf_kernel.nprofiles, fs.N}, af_rhost | af_zero);
     
     // Tmp buffer for comparing "argmax" arrays, see below.
-    Array<float> max_x({B,Dout,Tout}, af_uhost | af_zero);
+    Array<float> max_x({B,ndm_out,Tout}, af_uhost | af_zero);
 
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         for (long ibatch = 0; ibatch < num_batches; ibatch++) {                
             ref_dd_kernel.apply(in_cpu, dd_cpu, sb_cpu, ichunk, ibatch);
             pf_params.fill_host_weights(wt_cpu, Array<double>(), /*randomize=*/true);
 
-            Array<double> var_cpu;   // empty -> out_var feature disabled
-            ref_pf_kernel.apply(max_cpu, argmax_cpu, var_cpu, sb_cpu, wt_cpu, ibatch);
+            ref_pf_kernel.apply(max_cpu, argmax_cpu, sb_cpu, wt_cpu, ibatch);
 
             // CPU kernel done! Now run the GPU kernel.
             Array<void> wt_gpu = wl.to_gpu(wt_cpu);
@@ -450,11 +506,28 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
 {
     for (Dtype dtype : {Dtype::native<float>(), Dtype::native<__half>()}) {
         DedispersionConfig config = DedispersionConfig::make_mini_chord(dtype);
+        config.frequency_subband_counts = subband_counts;
+        config.validate();
+
+        // Check that this build actually contains the cdd2 kernels for 'config', and skip
+        // with a message if not. (A Params::minimal() plan does not query the registry, so it
+        // can be constructed in any build -- unlike the real plan below, which throws on a
+        // missing kernel -- and skips the MegaRingbuf allocation, which a registry probe has
+        // no use for.)
+        DedispersionPlan probe(config, DedispersionPlan::Params::minimal());
+
+        if (!_all_kernels_registered(dtype, probe)) {
+            cout << "\nCoalescedDdKernel2::time(): " << name << ", " << dtype.str()
+                 << ": no cdd2 kernel in this build, skipping"
+                 << " (see autogenerated_cdd2_kernels() in makefile_helper.py)" << endl;
+            continue;
+        }
+
         shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
 
         const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(0);
         const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(0);
-        shared_ptr<CoalescedDdKernel2> cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);        
+        shared_ptr<CoalescedDdKernel2> cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);
 
         BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
         cdd2_kernel->allocate(allocator);
@@ -476,7 +549,13 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
         wt_shape.insert(wt_shape.begin(), S);
         wt_strides.insert(wt_strides.begin(), wt_shape[1] * wt_strides[0]);
 
-        Array<void> in_gpu(dtype, {S,rb_nelts}, af_gpu | af_zero);
+        // All streams share ONE input ringbuf. It is read-only in the kernel, and in
+        // production there is a single MegaRingbuf shared by all streams -- so the
+        // per-stream copies this used to allocate were both unnecessary and unrealistic.
+        // (They also made the allocation num_active_batches times too large: ~27 GiB per
+        // copy, see make_mini_chord().) The other arrays below ARE per-stream, since
+        // concurrent launches write to them.
+        Array<void> in_gpu(dtype, {rb_nelts}, af_gpu | af_zero);
         Array<void> wt_gpu(dtype, wt_shape, wt_strides, af_gpu | af_zero);
         Array<void> max_gpu(dtype, {S,B,ndm_out,nt_out}, af_gpu | af_zero);
         Array<uint> argmax_gpu({S,B,ndm_out,nt_out}, af_gpu | af_zero);
@@ -487,18 +566,17 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
         while (kt.next()) {
             Array<void> max_gpu_slice = max_gpu.slice(0, kt.istream);
             Array<uint> argmax_gpu_slice = argmax_gpu.slice(0, kt.istream);
-            Array<void> in_gpu_slice = in_gpu.slice(0, kt.istream);
             Array<void> wt_gpu_slice = wt_gpu.slice(0, kt.istream);
             long ichunk = kt.curr_iteration / nbatches;
             long ibatch = kt.curr_iteration % nbatches;
 
             cdd2_kernel->launch(
                 max_gpu_slice,
-                argmax_gpu_slice, 
-                in_gpu_slice, 
+                argmax_gpu_slice,
+                in_gpu,
                 wt_gpu_slice,
-                ibatch, 
-                ichunk, 
+                ichunk,
+                ibatch,
                 kt.stream);
 
             if (kt.warmed_up && ((kt.curr_iteration % 10) == 9))
@@ -538,7 +616,6 @@ struct Cdd2Registry : public CoalescedDdKernel2::Registry
         xassert_ge(key.subband_counts.size(), 1);
         xassert(key.dd_rank > 0);
         xassert(key.Tinner > 0);
-        xassert(key.Dout > 0);
         xassert(key.Wmax > 0);
 
         xassert(val.cuda_kernel != nullptr);
@@ -546,6 +623,8 @@ struct Cdd2Registry : public CoalescedDdKernel2::Registry
         xassert(val.pstate32_per_small_tree >= 0);
         xassert(val.nt_per_segment > 0);
         xassert(val.Dcore > 0);
+        xassert(val.dm_downsampling > 0);
+        xassert(val.time_downsampling > 0);
         
         val.pf_weight_layout.validate();
         
@@ -597,7 +676,6 @@ bool operator==(const CoalescedDdKernel2::RegistryKey &k1, const CoalescedDdKern
         && (k1.dd_rank == k2.dd_rank)
         && (k1.subband_counts == k2.subband_counts)
         && (k1.Tinner == k2.Tinner)
-        && (k1.Dout == k2.Dout)
         && (k1.Wmax == k2.Wmax);
 }
 
@@ -608,7 +686,6 @@ ostream &operator<<(ostream &os, const CoalescedDdKernel2::RegistryKey &k)
        << ", dd_rank=" << k.dd_rank
        << ", subbands=" << tuple_str(k.subband_counts)
        << ", Tinner=" << k.Tinner
-       << ", Dout=" << k.Dout
        << ", Wmax=" << k.Wmax
        << ", N=" << fs.N
        << ", M=" << fs.M
@@ -619,6 +696,8 @@ ostream &operator<<(ostream &os, const CoalescedDdKernel2::RegistryKey &k)
 ostream &operator<<(ostream &os, const CoalescedDdKernel2::RegistryValue &v)
 {
     os << "(Dcore=" << v.Dcore
+       << ", dm_ds=" << v.dm_downsampling
+       << ", time_ds=" << v.time_downsampling
        << ", shmem=" << v.shmem_nbytes
        << ", warps=" << v.warps_per_threadblock
        << ", pstate32=" << v.pstate32_per_small_tree

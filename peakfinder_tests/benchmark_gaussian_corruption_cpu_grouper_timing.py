@@ -31,11 +31,11 @@ from peakfinder_tests.cpu_candidate_grouper import (
 
 
 SCHEMA_NAME = "pirate-gaussian-corruption-cpu-grouper-timing"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RESULTS_DIR = (
     Path(__file__).resolve().parent
-    / "results_gaussian_corruption_cpu_grouper_timing"
+    / "results_gaussian_corruption_cpu_grouper_timing_pirate15"
 )
 NOTEBOOK_PATH = (
     Path(__file__).resolve().parent
@@ -467,6 +467,7 @@ def benchmark_source_information() -> dict[str, Any]:
         ).resolve(),
         "gaussian_corruption_helpers": Path(gaussian.__file__).resolve(),
         "peakfinder_batch_helpers": Path(batch_benchmark.__file__).resolve(),
+        "producer_metadata": REPOSITORY_ROOT / "peakfinder_tests/producer_metadata.py",
     }
     return {
         name: {"path": str(path), "sha256": gaussian._sha256_path(path)}
@@ -707,7 +708,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
             cp, bundle.plan, bundle.specs, (args.dm_reach,), args.waist_bins
         )
         peak_geometries = geometries_by_reach[args.dm_reach]
-        decoder = GpuArgmaxDecoder(bundle.plan, cuda_device_id=args.device)
+        decoder = GpuArgmaxDecoder(bundle.plan, cuda_device_id=args.device, dcores=bundle.dcores)
         grouping_geometry = GroupingGeometry.from_plan(bundle.plan)
         grouping_config = GroupingConfig(
             dm_tolerance_bins=args.dm_tolerance_bins,

@@ -1,0 +1,31 @@
+# detrender_chord.yml: the DetrenderLps2dParams the variance-map benchmark ladder is
+# defined on.  See README.md in this directory.
+#
+# THE LADDER IS A DETRENDED BENCHMARK, and this file is half of its definition -- the
+# other half is config_chord_base_tree.yml.  A variance map swept with no detrender is a
+# DIFFERENT matrix (it has far lower rank, and its D values are not comparable), so a
+# sweep run with --no-detrender does not reproduce the numbers in README.md section 1.
+#
+# The parameter values are the campaign's "typical / production-like" detrender:
+# n_phi = 2 (quadratic spline in frequency), n = 2 (quadratic polynomial in time),
+# W = 2 (a 5-sample time window), eta = 1e-3, eps = 3e-5, and ONE spline zone -- all
+# interior knots simple -- divided into 8 uniform knot intervals, so N_phi = K + n_phi =
+# 10 basis functions.  See notes/detrending.tex for what each of them means.
+#
+# THE KNOT VECTOR IS FORCED TO THIS SHAPE, not chosen: 'varmap bf' rejects the pair of
+# files unless nfreq == sum(zone_nfreq) and time_samples_per_chunk matches the
+# dedispersion config's.  28160 = 8 * 3520, so the 8 intervals come out exactly equal.
+#
+# The yaml keys are spelled out rather than matching the C++ member names; the mapping
+# lives in DetrenderLps2dParams::to_yaml()/from_yaml() and nowhere else.  num_beams is
+# overridden to 1 by 'varmap bf' (the beam axis is a spectator and cannot change A).
+
+nfreq: 28160
+knots: [0, 0, 0, 3520, 7040, 10560, 14080, 17600, 21120, 24640, 28160, 28160, 28160]
+num_beams: 1
+spline_degree_freq: 2            # n_phi
+poly_degree_time: 2              # n
+time_halfwidth: 2                # W
+time_samples_per_chunk: 2048     # T
+regularization_strength: 0.001   # eta
+conditioning_threshold: 3e-05    # eps

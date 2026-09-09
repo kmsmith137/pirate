@@ -98,13 +98,14 @@ def _fake_plan():
             primary_tree_index=_PRIMARY[index],
             early_trigger_level=_EARLY[index],
             nprofiles=profiles,
-            frequency_subbands=SimpleNamespace(M=multiplets),
+            dm_downsampling=1,
+            frequency_subbands=SimpleNamespace(M=multiplets, pf_rank=0),
         ))
     return SimpleNamespace(ntrees=10, trees=tuple(trees), nt_in=2048)
 
 
 def _specs():
-    return benchmark.batch_benchmark.assert_expected_plan(_fake_plan())
+    return benchmark.batch_benchmark.assert_expected_plan(_fake_plan(), dcores=_DOUT)
 
 
 def _toy_specs():
@@ -434,12 +435,14 @@ def test_valid_constant_argmax_tokens_cover_all_ten_trees():
         token = np.uint32(item["token_uint32"])
         assert int(token & np.uint32(0xFF)) == 0  # fine time
         assert int((token >> np.uint32(8)) & np.uint32(0xFF)) == 0  # profile
-        assert int(token >> np.uint32(16)) == item["multiplet"]
+        assert int((token >> np.uint32(16)) & np.uint32(0xFF)) == item["multiplet"]
+        assert int(token >> np.uint32(24)) == item["extra_dm"] == 0
         assert 0 <= item["multiplet"] < spec.multiplets
         assert token != np.uint32(0xFFFFFFFF)
 
     class CheckingPlan:
-        def decode_argmax(self, token, tree_index, idm, itime):
+        def decode_argmax(self, token, tree_index, dcore, idm, itime):
+            assert dcore == specs[tree_index].dcore
             assert token & 0xFFFF == 0
             assert token >> 16 < specs[tree_index].multiplets
             assert idm == itime == 0
@@ -703,6 +706,8 @@ def test_metadata_records_reproducibility_timing_and_safety_contracts():
     bundle = SimpleNamespace(
         config_document={"test": True},
         producer_plan_yaml="test-plan-yaml",
+        dcores=tuple(spec.dcore for spec in specs),
+        argmax_encoding=benchmark.batch_benchmark.ARGMAX_ENCODING,
         specs=specs,
         chunk_duration_ms=TEST_CHUNK_DURATION_MS,
     )
@@ -749,6 +754,13 @@ def test_metadata_records_reproducibility_timing_and_safety_contracts():
     }
     assert required_sections <= set(metadata)
     assert metadata["schema_name"] == SCHEMA_NAME
+    assert metadata["schema_version"] == SCHEMA_VERSION == 2
+    assert metadata["plan"]["dcores"] == list(bundle.dcores)
+    assert metadata["plan"]["argmax_encoding"] == bundle.argmax_encoding
+    assert signature_payload["dcores"] == list(bundle.dcores)
+    assert signature_payload["argmax_encoding"] == bundle.argmax_encoding
+    changed_payload = dict(signature_payload, dcores=[1] * len(bundle.dcores))
+    assert campaign_signature(changed_payload) != signature
     assert campaign_signature(metadata["campaign_signature_payload"]) == signature
     assert metadata["plan"]["tree_shapes_ndm_ntime"] == [
         list(shape) for shape in EXPECTED_SHAPES
@@ -876,16 +888,13 @@ def test_cuda_production_path_candidate_decoder_and_grouper_counts():
         cp, GpuArgmaxDecoder, GroupingConfig, GroupingGeometry,
         group_candidates, concatenate_raw_candidates,
     ) = _cuda_or_skip()
-    try:
-        bundle = benchmark.batch_benchmark.load_authoritative_plan(
-            benchmark.DEFAULT_CONFIG
-        )
-        geometries_by_reach, _ = benchmark.batch_benchmark.build_geometries(
-            cp, bundle.plan, bundle.specs, (DEFAULT_DM_REACH,),
-            DEFAULT_WAIST_BINS,
-        )
-    except Exception as exc:  # pragma: no cover - environment dependent
-        pytest.skip(f"authoritative GPU plan cannot be constructed: {exc}")
+    bundle = benchmark.batch_benchmark.load_authoritative_plan(
+        benchmark.DEFAULT_CONFIG
+    )
+    geometries_by_reach, _ = benchmark.batch_benchmark.build_geometries(
+        cp, bundle.plan, bundle.specs, (DEFAULT_DM_REACH,),
+        DEFAULT_WAIST_BINS,
+    )
     geometries = geometries_by_reach[DEFAULT_DM_REACH]
     assert tuple(spec.shape for spec in bundle.specs) == EXPECTED_SHAPES
 
@@ -927,7 +936,7 @@ def test_cuda_production_path_candidate_decoder_and_grouper_counts():
     assert raw_counts.tolist() == repeated_counts.tolist() == [len(raw)]
     assert int(np.sum(raw_counts)) == len(raw)
 
-    decoder = GpuArgmaxDecoder(bundle.plan, cuda_device_id=0)
+    decoder = GpuArgmaxDecoder(bundle.plan, cuda_device_id=0, dcores=bundle.dcores)
     decoded = decoder.decode(raw)
     zero_decoded = decoder.decode(zero_raw)
     assert len(decoded) == len(raw)

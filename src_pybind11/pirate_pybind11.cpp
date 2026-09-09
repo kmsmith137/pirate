@@ -1,28 +1,35 @@
 // Main pybind11 source file containing the PYBIND11_MODULE definition.
-// Main dedispersion bindings (DedispersionConfig, DedispersionPlan, GpuDedisperser) are defined here.
-// Other bindings are organized into separate files by subpackage:
-//   - pirate_pybind11_core.cu: core classes (pirate_frb.core)
-//   - pirate_pybind11_kernels.cu: GPU kernels (pirate_frb.kernels)
-//   - pirate_pybind11_casm.cu: CASM beamformer (pirate_frb.casm)
-//   - pirate_pybind11_loose_ends.cu: prototype functions (pirate_frb.loose_ends)
+// Main dedispersion bindings (DedispersionConfig, DedispersionPlan, GpuDedisperser,
+// ReferenceDedisperser) are defined here. Other bindings are organized into separate
+// files by subpackage:
+//   - pirate_pybind11_core.cpp: core classes (pirate_frb.core)
+//   - pirate_pybind11_varmap.cpp: variance-map C++ ports (pirate_frb.fast_varmap)
+//   - pirate_pybind11_kernels.cpp: GPU kernels (pirate_frb.kernels)
+//   - pirate_pybind11_casm.cpp: CASM beamformer (pirate_frb.casm)
+//   - pirate_pybind11_chime.cpp: CHIME beamformer (pirate_frb.chime)
+//   - pirate_pybind11_loose_ends.cpp: prototype functions (pirate_frb.loose_ends)
+//   - pirate_pybind11_simpulse.cpp: FRB pulse simulation (pirate_frb.simpulse)
+//   - pirate_pybind11_utils.cpp: pirate_frb.utils
 //
-// For an explanation of PY_ARRAY_UNIQUE_SYMBOL, see comments in ksgpu/src_pybind11/ksgpu_pybind11.cu.
+// For an explanation of PY_ARRAY_UNIQUE_SYMBOL, see comments in ksgpu/src_pybind11/ksgpu_pybind11.cpp.
 
 #define PY_ARRAY_UNIQUE_SYMBOL PyArray_API_pirate
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/arrayobject.h>
 
 // Needed in order to wrap methods with STL arguments (e.g. const vector<int> &vcpu_list).
+#include <optional>
 #include <pybind11/stl.h>
 
 #include <ksgpu/pybind11.hpp>
 
 #include "../include/pirate/constants.hpp"
-#include "../include/pirate/CoalescedDdKernel2.hpp"    // GpuDedisperser.Dcore property
+#include "../include/pirate/CoalescedDdKernel2.hpp"    // GpuDedisperser::cdd2_kernels
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/inlines.hpp"             // xdiv()
 #include "../include/pirate/PeakFindingKernel.hpp"     // ReferenceDedisperser.pf_kernels
 
 using namespace std;
@@ -33,25 +40,100 @@ namespace py = pybind11;
 // Defined in separate source files.
 namespace pirate {
     void register_core_bindings(pybind11::module &m);
-    void register_avar_bindings(pybind11::module &m);
+    void register_varmap_bindings(pybind11::module &m);
     void register_kernel_bindings(pybind11::module &m);
     void register_casm_bindings(pybind11::module &m);
     void register_chime_bindings(pybind11::module &m);
     void register_loose_ends_bindings(pybind11::module &m);
     void register_simpulse_bindings(pybind11::module &m);
     void register_utils_bindings(pybind11::module &m);
+}
 
-    // Vectorized decode_argmax*() helpers, defined in pirate_pybind11_core.cpp and bound
-    // as methods on both DedispersionPlan (below) and FrbGrouper (in core.cpp).
-    pybind11::tuple _decode_argmax_batch(
-        const DedispersionPlan &plan, const ksgpu::Array<uint> &tokens,
-        const ksgpu::Array<long> &itrees, const ksgpu::Array<long> &idms,
-        const ksgpu::Array<long> &itimes);
-    pybind11::tuple _decode_argmax2_batch(
-        const DedispersionPlan &plan, const ksgpu::Array<long> &itrees,
-        const ksgpu::Array<long> &fmins, const ksgpu::Array<long> &fmaxs,
-        const ksgpu::Array<long> &tlos, const ksgpu::Array<long> &this_,
-        const ksgpu::Array<long> &ps);
+
+// The two decode methods return their results through reference arguments, which python
+// wants as a tuple.
+static py::tuple _plan_decode_argmax(const DedispersionPlan &plan, uint token, long itree,
+                                     long Dcore, long idm_coarse, long itime_coarse)
+{
+    long fmin, fmax, tlo, thi, p;
+    plan.decode_argmax(token, itree, Dcore, idm_coarse, itime_coarse, fmin, fmax, tlo, thi, p);
+    return py::make_tuple(fmin, fmax, tlo, thi, p);
+}
+
+
+static py::tuple _plan_decode_argmax2(const DedispersionPlan &plan, long itree,
+                                      long fmin, long fmax, long tlo, long thi, long p)
+{
+    double freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp;
+    plan.decode_argmax2(itree, fmin, fmax, tlo, thi, p,
+                        freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp);
+    return py::make_tuple(freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp);
+}
+
+
+// Offline batch callers carry the producer's Dcores separately from geometry.
+// Keep the event loop in C++, just as in the handshaken FrbGrouper bindings.
+template<typename T>
+static void _check_plan_batch_arg(const char *name, const Array<T> &a, long n)
+{
+    if ((a.ndim != 1) || !a.is_fully_contiguous() || !a.on_host() || (a.size != n))
+        throw runtime_error(string("plan batch decode: '") + name
+                            + "' must be a 1-d contiguous host array of length "
+                            + to_string(n));
+}
+
+static py::tuple _plan_decode_argmax_batch(
+    const DedispersionPlan &plan, const Array<uint> &tokens, const Array<long> &itrees,
+    const Array<long> &idms, const Array<long> &itimes, const Array<long> &dcores)
+{
+    long n = tokens.size;
+    if (n <= 0)
+        throw runtime_error("plan batch decode: empty input; callers should short-circuit it");
+    _check_plan_batch_arg("tokens", tokens, n);
+    _check_plan_batch_arg("itrees", itrees, n);
+    _check_plan_batch_arg("idms", idms, n);
+    _check_plan_batch_arg("itimes", itimes, n);
+    _check_plan_batch_arg("dcores", dcores, plan.ntrees);
+    // Validate the entire producer descriptor, including unused trees.
+    for (long it = 0; it < plan.ntrees; it++) {
+        const DedispersionTree &tree = plan.trees.at(it);
+        validate_dcore(dcores.data[it], xdiv(tree.nt_ds, tree.nt_out));
+    }
+
+    Array<long> fmins({n}, af_uhost), fmaxs({n}, af_uhost);
+    Array<long> tlos({n}, af_uhost), this_({n}, af_uhost), ps({n}, af_uhost);
+    for (long i = 0; i < n; i++) {
+        long it = itrees.data[i];
+        if ((it < 0) || (it >= plan.ntrees))
+            throw runtime_error("plan batch decode: tree index out of range");
+        plan.decode_argmax(tokens.data[i], it, dcores.data[it], idms.data[i], itimes.data[i],
+                           fmins.data[i], fmaxs.data[i], tlos.data[i], this_.data[i], ps.data[i]);
+    }
+    return py::make_tuple(fmins, fmaxs, tlos, this_, ps);
+}
+
+static py::tuple _plan_decode_argmax2_batch(
+    const DedispersionPlan &plan, const Array<long> &itrees, const Array<long> &fmins,
+    const Array<long> &fmaxs, const Array<long> &tlos, const Array<long> &this_,
+    const Array<long> &ps)
+{
+    long n = itrees.size;
+    if (n <= 0)
+        throw runtime_error("plan batch decode: empty input; callers should short-circuit it");
+    _check_plan_batch_arg("itrees", itrees, n);
+    _check_plan_batch_arg("fmins", fmins, n);
+    _check_plan_batch_arg("fmaxs", fmaxs, n);
+    _check_plan_batch_arg("tlos", tlos, n);
+    _check_plan_batch_arg("this", this_, n);
+    _check_plan_batch_arg("ps", ps, n);
+
+    Array<double> flo({n}, af_uhost), fhi({n}, af_uhost), dm({n}, af_uhost);
+    Array<double> toa({n}, af_uhost), width({n}, af_uhost);
+    for (long i = 0; i < n; i++)
+        plan.decode_argmax2(itrees.data[i], fmins.data[i], fmaxs.data[i],
+                            tlos.data[i], this_.data[i], ps.data[i],
+                            flo.data[i], fhi.data[i], dm.data[i], toa.data[i], width.data[i]);
+    return py::make_tuple(flo, fhi, dm, toa, width);
 }
 
 
@@ -73,7 +155,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     // shared_ptr<const SinglePulse>, which pybind can only convert once SinglePulse is registered.
     register_simpulse_bindings(m);
     register_core_bindings(m);
-    register_avar_bindings(m);
+    register_varmap_bindings(m);
     register_kernel_bindings(m);
     register_casm_bindings(m);
     register_chime_bindings(m);
@@ -162,27 +244,85 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                       "    filename: Path to YAML configuration file\n\n"
                       "Returns:\n"
                       "    DedispersionConfig object initialized from file")
+          .def_static("from_yaml_string", &DedispersionConfig::from_yaml_string,
+                      py::arg("yaml_string"),
+                      "Load DedispersionConfig from a YAML string: the inverse of\n"
+                      "to_yaml_string(). Use this wherever a config travels as a string\n"
+                      "rather than a file, e.g. one embedded in a variance-map file by\n"
+                      "pirate_frb.varmap.asdf_io.")
           .def_static("make_random",
-               [](int max_toplevel_rank, int max_early_triggers, bool gpu_valid, bool verbose) {
+               [](int max_toplevel_rank, int max_early_triggers, int min_primary_trees,
+                  bool single_beam, long tspc_multiple, long max_beams_per_gpu,
+                  int min_batch_slots, bool gpu_valid, bool verbose,
+                  bool force_float32, bool no_host_mega_ringbuf) {
                    DedispersionConfig::RandomArgs args;
                    args.max_toplevel_rank = max_toplevel_rank;
                    args.max_early_triggers = max_early_triggers;
+                   args.min_primary_trees = min_primary_trees;
+                   args.single_beam = single_beam;
+                   args.tspc_multiple = tspc_multiple;
+                   args.max_beams_per_gpu = max_beams_per_gpu;
+                   args.min_batch_slots = min_batch_slots;
                    args.gpu_valid = gpu_valid;
                    args.verbose = verbose;
+                   args.force_float32 = force_float32;
+                   args.no_host_mega_ringbuf = no_host_mega_ringbuf;
                    return DedispersionConfig::make_random(args);
                },
                py::arg("max_toplevel_rank") = 10,
                py::arg("max_early_triggers") = 5,
+               py::arg("min_primary_trees") = 1,
+               py::arg("single_beam") = false,
+               py::arg("tspc_multiple") = 1,
+               py::arg("max_beams_per_gpu") = 0,
+               py::arg("min_batch_slots") = 1,
                py::arg("gpu_valid") = true,
                py::arg("verbose") = false,
+               py::arg("force_float32") = false,
+               py::arg("no_host_mega_ringbuf") = false,
                "Generate a random DedispersionConfig for testing.\n\n"
                "Args:\n"
                "    max_toplevel_rank: Bounds toplevel_tree_rank (default=10)\n"
                "    max_early_triggers: Max number of early triggers (0 to disable, default=5)\n"
+               "    min_primary_trees: Lower bound on len(primary_trees), 1 to 4 (default=1).\n"
+               "        Honoured by construction, so a caller that needs more than one\n"
+               "        primary tree does not have to redraw. For an EXACT count, ask for it\n"
+               "        as a minimum and truncate primary_trees -- validate() only gets\n"
+               "        easier to satisfy as trees are dropped.\n"
+               "    single_beam: Set beams_per_gpu = beams_per_batch = num_active_batches = 1,\n"
+               "        and give the whole budget to time_samples_per_chunk (default=False).\n"
+               "        Use this instead of overwriting the beam fields after the draw, which\n"
+               "        leaves time_samples_per_chunk systematically small.\n"
+               "    tspc_multiple: Draw time_samples_per_chunk as a multiple of this\n"
+               "        (default=1, i.e. no constraint).\n"
+               "    max_beams_per_gpu: Upper bound on beams_per_gpu (default=0, no bound).\n"
+               "    min_batch_slots: Guarantee beams_per_gpu >= min_batch_slots *\n"
+               "        num_active_batches * beams_per_batch (default=1, which holds anyway).\n"
+               "        The last three are honoured BY CONSTRUCTION. Ask for them rather than\n"
+               "        drawing and retrying: all three correlate with num_primary_trees and\n"
+               "        dtype, so filtering afterwards reshapes the population under test.\n"
                "    gpu_valid: Generate GPU-valid configuration (default=True)\n"
-               "    verbose: Print debug info (default=False)\n\n"
+               "    verbose: Print debug info (default=False)\n"
+               "    force_float32: Draw only float32 configs (default=False)\n"
+               "    no_host_mega_ringbuf: Leave max_gpu_clag at its default, keeping the\n"
+               "        MegaRingbuf pure-GPU (default=False)\n\n"
+               "The last two narrow the draw so that the config is usable by the GPU\n"
+               "brute-force variance-map sweep (pirate_frb.varmap.brute_force).\n\n"
                "Returns:\n"
                "    Randomly generated DedispersionConfig")
+          .def_static("make_mini_chord", &DedispersionConfig::make_mini_chord,
+               py::arg("dtype"),
+               "A fixed, production-shaped config: toplevel_tree_rank=16, four primary\n"
+               "trees, 28160 frequency channels, no early triggers or subbands. Modelled\n"
+               "on configs/dedispersion/chord_sb0.yml, with the beam counts cut so that\n"
+               "the MegaRingbuf fits on one L40S.\n\n"
+               "Unlike the files in configs/, this one IS packaged with pirate_frb, so a\n"
+               "test that needs a valid production-scale config (rather than a random one)\n"
+               "can rely on it.\n\n"
+               "Args:\n"
+               "    dtype: float32 or float16\n\n"
+               "Returns:\n"
+               "    DedispersionConfig")
           .def("to_yaml_string", &DedispersionConfig::to_yaml_string,
                py::arg("verbose") = false,
                "Convert configuration to YAML string.\n\n"
@@ -243,14 +383,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def("make_channel_map", &DedispersionConfig::make_channel_map,
                "Create channel map array defining tree-to-frequency mapping.\n\n"
                "Returns:\n"
-               "    Array of length (2^toplevel_tree_rank + 1) with channel boundaries")
-          .def("make_random_freq_variances", &DedispersionConfig::make_random_freq_variances,
-               py::arg("noisy") = false,
-               "Random per-channel input variances for testing (one random value in [0,1] per zone).\n\n"
-               "Args:\n"
-               "    noisy: if true, print the per-zone variances\n\n"
-               "Returns:\n"
-               "    Array of length nfreq (constant within each frequency zone)")
+               "    numpy array of length (2^toplevel_tree_rank + 1) with channel boundaries")
           // dtype: reads return numpy.dtype, writes accept strings/numpy dtypes/None,
           // via ksgpu's type_caster<ksgpu::Dtype> (no wrapper needed on either side).
           .def_readwrite("dtype", &DedispersionConfig::dtype,
@@ -292,36 +425,52 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     ;
 
     // DedispersionPlan: construct via shared_ptr
-    py::class_<DedispersionPlan, std::shared_ptr<DedispersionPlan>>(m, "DedispersionPlan",
-        "Large, low-level data structure created from a DedispersionConfig.\n\n"
-        "This class is probably not useful for python callers! Created from a\n"
-        "DedispersionConfig, this class contains all the derived parameters\n"
-        "and data structures needed to execute dedispersion on the GPU. The plan includes:\n\n"
-        "  - Stage1 and Stage2 dedispersion trees\n"
-        "  - Kernel parameters for all processing stages\n"
-        "  - Memory buffer layouts and ring buffer configuration\n"
-        "  - Derived parameters like tree dimensions and output array shapes\n\n"
+    py::class_<DedispersionPlan, std::shared_ptr<DedispersionPlan>> plan_cls(m, "DedispersionPlan",
+        "Everything the dedisperser needs, derived from a DedispersionConfig.\n\n"
+        "Most of a plan is low-level GPU data (kernel params, buffer layouts, the ring\n"
+        "buffer), which python callers rarely touch. The exception is ``trees``, the\n"
+        "per-(primary tree, early trigger) output geometry, and the decoding methods built\n"
+        "on it -- and those are available with no GPU, from a \"minimal\" plan::\n\n"
+        "    plan = DedispersionPlan(config, mega_ringbuf=False, gpu_kernels=False)\n\n"
+        "Both constructor flags default to True, which builds a complete plan and needs a\n"
+        "CUDA device; see the constructor docstring for what each one turns off.\n\n"
         "The plan is immutable once constructed and is shared between dedisperser instances.\n\n"
         "Example::\n\n"
         "    config = DedispersionConfig.from_yaml('config.yaml')\n"
         "    plan = DedispersionPlan(config)\n"
         "    print(f'Plan has {plan.ntrees} trees')\n"
         "    for i, tree in enumerate(plan.trees):\n"
-        "        print(f'Tree {i}: primary_tree_index={tree.primary_tree_index}, dm_range=[{tree.dm_min:.1f}, {tree.dm_max:.1f}]')")
-          .def(py::init([](const DedispersionConfig &config, bool gpu_runnable) {
-                   DedispersionPlan::Params params;
-                   params.gpu_runnable = gpu_runnable;
-                   return std::make_shared<DedispersionPlan>(config, params);
-               }),
-               py::arg("config"), py::arg("gpu_runnable") = true,
+        "        print(f'Tree {i}: primary_tree_index={tree.primary_tree_index}, dm_range=[{tree.dm_min:.1f}, {tree.dm_max:.1f}]')");
+
+    plan_cls
+          // The C++ constructor takes a DedispersionPlan::Params, but that struct has only
+          // two members, so python spells them as keyword arguments instead of wrapping it.
+          .def(py::init([](const DedispersionConfig &config, bool mega_ringbuf, bool gpu_kernels) {
+              DedispersionPlan::Params params;
+              params.mega_ringbuf = mega_ringbuf;
+              params.gpu_kernels = gpu_kernels;
+              return new DedispersionPlan(config, params);
+          }),
+               py::arg("config"), py::arg("mega_ringbuf") = true, py::arg("gpu_kernels") = true,
                "Create a DedispersionPlan from a configuration.\n\n"
+               "The two flags select how much of the plan gets initialized. The default\n"
+               "(both True) is a 'complete' plan, which needs a CUDA device. Turning a flag\n"
+               "off leaves members uninitialized, in exchange for a plan that is cheaper --\n"
+               "and, with ``mega_ringbuf=False``, constructible with no CUDA device at all.\n\n"
+               "Both flags False gives a \"minimal\" plan: config-derived scalars, stage1\n"
+               "ranks and ``trees`` only. This is how GPU-less code (``pirate_frb.varmap``,\n"
+               "the grouper) gets at the dedispersion trees::\n\n"
+               "    plan = DedispersionPlan(config, mega_ringbuf=False, gpu_kernels=False)   # \"minimal\" plan\n\n"
                "Args:\n"
                "    config: DedispersionConfig object (must be validated)\n"
-               "    gpu_runnable: if True (default), per-tree Dcore values are taken from the\n"
-               "        cdd2 kernel registry, and an exception is thrown if a kernel is missing\n"
-               "        from this build. If False, default Dcore values are assigned, and the\n"
-               "        plan cannot be used in a GpuDedisperser (useful in host-only contexts,\n"
-               "        such as the 'pirate_frb show_dedisperser' CLI).")
+               "    mega_ringbuf: if False, then ``DedispersionPlan.mega_ringbuf`` is None.\n"
+               "        (Constructing a MegaRingbuf allocates page-locked host memory, so it\n"
+               "        needs a CUDA device; this is the flag that decides whether a plan can\n"
+               "        be built without one.)\n"
+               "    gpu_kernels: if False, then all gpu kernel params\n"
+               "        (``tree_gridding_kernel_params`` ... ``h2h_copy_kernel_params``) are\n"
+               "        uninitialized. Leaving it True requires ``mega_ringbuf=True``; the\n"
+               "        combination ``mega_ringbuf=False, gpu_kernels=True`` raises.")
           .def_readonly("config", &DedispersionPlan::config,
                "The DedispersionConfig used to create this plan")
           .def_readonly("dtype", &DedispersionPlan::dtype,
@@ -341,10 +490,19 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("ntrees", &DedispersionPlan::ntrees,
                "Total number of stage2 trees (num_primary_trees + number of early triggers)")
           .def_readonly("nbits", &DedispersionPlan::nbits,
-               "Number of bits per element (same as config.dtype.nbits)")
+               "Number of bits per element (= 8 * config.dtype.itemsize)")
           .def_readonly("trees", &DedispersionPlan::trees,
                "Vector of DedispersionTree objects representing stage2 output trees.\n"
-               "Length is ntrees. Each tree corresponds to one (primary tree, early trigger) pair.")
+               "Length is ntrees. Each tree is one (primary tree, early trigger) pair.\n"
+               "Ordered by primary tree, then by DECREASING early-trigger level.\n"
+               "\n"
+               "Note this is a fresh list of COPIES on every attribute access, so code that\n"
+               "needs one tree repeatedly should cache it.")
+          .def("dedispersion_tree_index", &DedispersionPlan::dedispersion_tree_index,
+               py::arg("primary_tree_index"), py::arg("early_trigger_level"),
+               "Returns the 'itree' of the tree with this (primary_tree_index,\n"
+               "early_trigger_level) pair, i.e. the inverse of reading those two members of\n"
+               "trees[itree]. Throws if either argument is out of range.")
           .def_readonly("stage1_dd_rank", &DedispersionPlan::stage1_dd_rank,
                "Active dedispersion rank of each stage1 tree.\n"
                "Vector of length num_primary_trees. Stage1 trees are internal to dedispersion.")
@@ -357,6 +515,24 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("nbytes_per_segment", &DedispersionPlan::nbytes_per_segment,
                "Number of bytes per GPU memory segment.\n"
                "Currently always constants::bytes_per_gpu_cache_line")
+          // Low-level kernel parameters. These are for callers that drive the GPU kernels by
+          // hand instead of using a GpuDedisperser (e.g. varmap.brute_force._GpuSweep).
+          // They encode the ring-buffer lag structure, so pass them through rather than
+          // reconstructing them.
+          .def_readonly("mega_ringbuf", &DedispersionPlan::mega_ringbuf,
+               "The MegaRingbuf: the ring buffer through which stage 1 feeds stage 2.")
+          .def_readonly("tree_gridding_kernel_params", &DedispersionPlan::tree_gridding_kernel_params,
+               "TreeGriddingKernelParams for the (single) tree gridding kernel.")
+          .def_readonly("lds_params", &DedispersionPlan::lds_params,
+               "LaggedDownsamplingKernelParams for this plan. Meaningful only when\n"
+               "num_primary_trees > 1, though it is filled (and valid) either way.")
+          .def_readonly("stage1_dd_buf_params", &DedispersionPlan::stage1_dd_buf_params,
+               "DedispersionBufferParams for the stage-1 input buffers: nbuf ==\n"
+               "num_primary_trees, with entry ipri the input of primary tree ipri.")
+          .def_readonly("stage1_dd_kernel_params", &DedispersionPlan::stage1_dd_kernel_params,
+               "List of DedispersionKernelParams, length num_primary_trees.")
+          .def_readonly("stage2_dd_kernel_params", &DedispersionPlan::stage2_dd_kernel_params,
+               "List of DedispersionKernelParams, length ntrees.")
           .def("to_yaml_string", &DedispersionPlan::to_yaml_string,
                py::arg("verbose") = false,
                py::arg("zones") = false,
@@ -366,69 +542,121 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    zones: Include the per-clag mega_ringbuf host/gpu zone breakdown\n\n"
                "Returns:\n"
                "    YAML string representation of the plan")
-          .def("decode_argmax",
-               [](const DedispersionPlan &self, uint token, long itree, long idm_coarse, long itime_coarse) {
-                   long fmin, fmax, tlo, thi, p;
-                   self.decode_argmax(token, itree, idm_coarse, itime_coarse, fmin, fmax, tlo, thi, p);
-                   return py::make_tuple(fmin, fmax, tlo, thi, p);
-               },
-               py::arg("token"), py::arg("itree"), py::arg("idm_coarse"), py::arg("itime_coarse"),
-               "Decode an out_argmax token into the winning trial parameters.\n\n"
+          .def_static("from_yaml_string", &DedispersionPlan::from_yaml_string,
+               py::arg("config"), py::arg("plan_yaml"),
+               "Rebuild a producer's plan, for a consumer that may be running a different\n"
+               "pirate_frb build.\n\n"
+               "Returns a \"minimal\" plan (see the constructor) built from ``config``,\n"
+               "cross-checked field by field against the yaml; a disagreement raises, naming\n"
+               "the field and both values. Nothing is adopted from the yaml: a plan is a pure\n"
+               "function of its config.\n\n"
+               "Decoding the producer's out_argmax tokens additionally needs its per-tree\n"
+               "Dcore, which is a property of its compiled kernels rather than of the plan\n"
+               "and travels as its own handshake field (see FrbGrouper.dcores).\n\n"
                "Args:\n"
-               "    token: uint32 token from trees[itree]'s out_argmax array\n"
-               "    itree: tree index, in [0, ntrees)\n"
-               "    idm_coarse: dm index in out_max/out_argmax, in [0, trees[itree].ndm_out)\n"
-               "    itime_coarse: time index in out_max/out_argmax, in [0, trees[itree].nt_out)\n\n"
+               "    config: the producer's DedispersionConfig (from the same handshake).\n"
+               "    plan_yaml: the producer's ``to_yaml_string()`` output.")
+          .def("decode_argmax", &_plan_decode_argmax,
+               py::arg("token"), py::arg("itree"), py::arg("Dcore"),
+               py::arg("idm_coarse"), py::arg("itime_coarse"),
+               "Decode an ``out_argmax`` token into the winning trial parameters, i.e. the\n"
+               "(subband, peak-finding profile, fine-grained dm, fine-grained arrival time)\n"
+               "responsible for the coarse-grained maximum in tree ``itree``'s ``out_max``\n"
+               "array.\n\n"
+               "Raises on out-of-range indices or a malformed token. See DedispersionPlan.hpp\n"
+               "for the full spec.\n\n"
+               "Args:\n"
+               "    token: uint32 token from tree ``itree``'s ``out_argmax`` array.\n"
+               "    itree: tree index, in ``[0, ntrees)``.\n"
+               "    Dcore: internal time-downsampling factor of the peak-finding kernel that\n"
+               "        WROTE the token -- ``GpuDedisperser.Dcores[itree]``,\n"
+               "        ``ReferenceDedisperser.Dcores[itree]``, or ``FrbGrouper.dcores[itree]``.\n"
+               "        It is a property of that kernel, not of this plan, which is why it is\n"
+               "        an argument; a wrong (but legal) value silently mis-decodes fine times.\n"
+               "    idm_coarse: dm index into ``out_max`` / ``out_argmax``, in\n"
+               "        ``[0, trees[itree].ndm_out)``.\n"
+               "    itime_coarse: time index into ``out_max`` / ``out_argmax``, in\n"
+               "        ``[0, trees[itree].nt_out)``.\n\n"
                "Returns:\n"
-               "    Tuple (fmin, fmax, tlo, thi, p), TOPLEVEL-relative: fmin/fmax are the\n"
-               "    (inclusive) tree-freq range of the winning subband, in channels of the\n"
-               "    rank-toplevel_tree_rank gridding (0 <= fmin < fmax < 2^toplevel_tree_rank).\n"
-               "    tlo/thi are the EXCLUSIVE trailing edges at channels fmin/fmax (one past\n"
-               "    the last-summed sample), in full-resolution samples with t=0 at chunk\n"
-               "    start (tlo <= thi <= nt_in; negative values refer to earlier chunks).\n"
-               "    p is the winning peak-finding profile index. Throws on out-of-range\n"
-               "    indices or a malformed token. See DedispersionPlan.hpp for the full\n"
-               "    specification.")
-          .def_static("make_incomplete_plan_from_yaml",
-               &DedispersionPlan::make_incomplete_plan_from_yaml,
-               py::arg("config_yaml_str"), py::arg("plan_yaml_str"),
-               "An 'incomplete' DedispersionPlan does not initialize any of the low-level\n"
-               "data needed for compute kernels (especially the heavyweight MegaRingbuf) --\n"
-               "only the members needed by decode_argmax(). This is a footgun, and is only\n"
-               "used as a hack in FrbGrouper; it may go away in the future!\n\n"
-               "Args:\n"
-               "    config_yaml_str: producer's DedispersionConfig.to_yaml_string()\n"
-               "    plan_yaml_str: producer's DedispersionPlan.to_yaml_string()")
-          .def_property_readonly("is_incomplete",
-               [](const DedispersionPlan &self) { return self.params.is_incomplete; },
-               "True for plans built by make_incomplete_plan_from_yaml()")
-          .def_property_readonly("gpu_runnable",
-               [](const DedispersionPlan &self) { return self.params.gpu_runnable; },
-               "False if the plan was constructed as DedispersionPlan(config,\n"
-               "gpu_runnable=False): per-tree Dcore values are defaults rather than cdd2\n"
-               "kernel-registry values, so the plan cannot be used in a GpuDedisperser.\n"
-               "Useful in host-only contexts, such as the 'pirate_frb show_dedisperser' CLI.")
-          .def("decode_argmax_batch", &_decode_argmax_batch,
+               "    The tuple ``(fmin, fmax, tlo, thi, p)``, all TOPLEVEL-relative. ``fmin``\n"
+               "    and ``fmax`` are tree-freq channels of the toplevel gridding, spanning the\n"
+               "    winning frequency subband. ``tlo`` and ``thi`` are full-resolution time\n"
+               "    samples with ``t=0`` at the start of the current chunk; they are EXCLUSIVE\n"
+               "    trailing edges, and are frequently negative, since dedispersion delays\n"
+               "    usually exceed the chunk length (they then refer to earlier chunks). ``p``\n"
+               "    is the winning peak-finding profile index.")
+          .def("decode_argmax2", &_plan_decode_argmax2,
+               py::arg("itree"), py::arg("fmin"), py::arg("fmax"), py::arg("tlo"),
+               py::arg("thi"), py::arg("p"),
+               "Convert ``decode_argmax()`` output to physical parameters.\n\n"
+               "The arguments ``fmin``, ``fmax``, ``tlo``, ``thi``, ``p`` are the tuple\n"
+               "returned by ``decode_argmax()`` on the same ``itree``. See\n"
+               "DedispersionPlan.hpp for the full spec.\n\n"
+               "Returns:\n"
+               "    The tuple ``(freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp)`` --\n"
+               "    the low/high radio frequency of the winning subband, the dispersion measure\n"
+               "    in pc/cm^3, the arrival time, and the winning peak-finder width in toplevel\n"
+               "    time samples. ``timestamp_samp`` is the estimated arrival time of the pulse\n"
+               "    center at the lowest radio frequency, in toplevel samples with ``t=0`` at\n"
+               "    the START OF THE CURRENT CHUNK (not at ``fpga_seq=0``); the caller adds the\n"
+               "    chunk's absolute FPGA start. It is NOT confined to ``[0, nt_in)`` -- an\n"
+               "    early-trigger tree extrapolates to the band bottom, so the time can lie past\n"
+               "    the chunk end, and the finite peak-finder kernel width can push an event\n"
+               "    detected near the chunk start slightly before it.")
+          .def("decode_argmax_batch", &_plan_decode_argmax_batch,
                py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
-               "Vectorized decode_argmax() over 1-d nonempty arrays (one event per element;\n"
-               "tokens: uint32, itrees/idms/itimes: int64). Returns TOPLEVEL-relative\n"
-               "(fmins, fmaxs, tlos, this, ps), each an int64 array. Per-element validation\n"
-               "(index ranges, malformed tokens) is inherited from decode_argmax().")
-          .def("decode_argmax2_batch", &_decode_argmax2_batch,
+               py::kw_only(), py::arg("dcores"),
+               "Native CPU batch form of decode_argmax(), for offline consumers.\n\n"
+               "Inputs are nonempty 1-d contiguous host arrays: uint32 tokens and int64\n"
+               "itrees/idms/itimes, one entry per event. The required keyword-only\n"
+               "dcores is an int64 array with one value per producer output tree,\n"
+               "taken from its GpuDedisperser.Dcores or saved-map metadata. It is\n"
+               "never inferred from the consumer plan or installed kernels.\n\n"
+               "Returns (fmins, fmaxs, tlos, this, ps), five int64 arrays with the\n"
+               "same coordinates as the scalar method. All Dcores and input rows\n"
+               "are validated; empty batches must be handled by the caller.")
+          .def("decode_argmax2_batch", &_plan_decode_argmax2_batch,
                py::arg("itrees"), py::arg("fmins"), py::arg("fmaxs"),
                py::arg("tlos"), py::arg("this"), py::arg("ps"),
-               "Vectorized decode_argmax2(): converts decode_argmax_batch() outputs to\n"
-               "physical params. Returns (freqs_lo_MHz, freqs_hi_MHz, dms, timestamps_samp,\n"
-               "widths_samp), each a float64 array. Timestamps are CHUNK-RELATIVE toplevel\n"
-               "sample counts (extrapolated to the full-band lowest frequency); the caller\n"
-               "converts to absolute FPGA counts.")
+               "Native CPU batch form of decode_argmax2(). Inputs are nonempty\n"
+               "1-d contiguous int64 host arrays of equal length. Returns five\n"
+               "float64 arrays: frequencies in MHz, DM, chunk-relative arrival\n"
+               "time in full-resolution samples, and nominal width in samples.\n"
+               "This physical conversion needs no Dcores; its input integer\n"
+               "coordinates have already been decoded using producer metadata.")
           .def("compute_steady_state_it0", &DedispersionPlan::compute_steady_state_it0,
                py::arg("itree"),
-               "Returns a 1-d int64 array of shape (trees[itree].ndm_out,). A dedispersion\n"
-               "output element (ichunk, ibeam, idm, it) of tree 'itree' is \"steady-state\",\n"
-               "i.e. unaffected by the zero-padding before the start of the acquisition, iff\n"
-               "ichunk * nt_out + it >= compute_steady_state_it0(itree)[idm]. Earlier elements\n"
-               "have artificially low out_max values (warmup artifacts, not real triggers).")
+               "Time index at which each of tree ``itree``'s DM channels becomes\n"
+               "\"steady-state\".\n\n"
+               "A dedispersion output element ``(ichunk, ibeam, idm, it)`` of the tree is\n"
+               "steady-state, i.e. unaffected by the zero-padding before the start of the\n"
+               "acquisition, iff ``ichunk*nt_out + it >= result[idm]``. Earlier elements are\n"
+               "computed from sums whose footprint extends past the start of the acquisition,\n"
+               "so their ``out_max`` values are artificially low -- warmup artifacts, not real\n"
+               "triggers.\n\n"
+               "Returns:\n"
+               "    A 1-d int64 array of shape ``(trees[itree].ndm_out,)``, in host memory.\n"
+               "    Needs no CUDA device.")
+          .def("n_index_mapping", &DedispersionPlan::n_index_mapping,
+               py::arg("iparent"), py::arg("ichild"),
+               "Subband index mapping between two trees of this plan: a list of length\n"
+               "``trees[ichild].frequency_subbands.N``, whose entry ``n_c`` is the parent\n"
+               "subband searching the same toplevel band.\n\n"
+               "Bands are matched by toplevel range ``(n_to_toplevel_flo, n_to_toplevel_fhi)``,\n"
+               "so trees of different rank are comparable. Raises if the child searches a band\n"
+               "the parent does not; the message says so if the arguments look reversed.\n\n"
+               "The usual pair is an early-trigger tree and its ``(primary_tree_index, 0)``\n"
+               "parent, but equal ``primary_tree_index`` is not required, and the identity\n"
+               "case ``(t, t)`` works. Calling both ways round tests set EQUALITY.")
+          .def("m_index_mapping", &DedispersionPlan::m_index_mapping,
+               py::arg("iparent"), py::arg("ichild"),
+               "As ``n_index_mapping()``, but over multiplets: a list of length\n"
+               "``trees[ichild].frequency_subbands.M``, whose entry ``m_c`` is the parent\n"
+               "multiplet with the same band and the same fine-DM index within it.\n\n"
+               "Additionally raises unless matched bands have the same subband level.\n\n"
+               "Does NOT check ``nprofiles`` or the coarse-DM count ``2**(tree_rank -\n"
+               "pf_rank)``: those are not subband geometry, and a caller building a row map\n"
+               "over (dm, multiplet, profile) must check them itself.")
     ;
 
     // Returned by GpuDedisperser.acquire_output(). Must be registered
@@ -503,15 +731,12 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("trees", &GpuDedisperser::trees)
           .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
           .def_readonly("stream_pool", &GpuDedisperser::stream_pool)
-          .def_property_readonly("Dcore", [](const GpuDedisperser &self) {
-               std::vector<long> ret;
-               for (const auto &k : self.cdd2_kernels)
-                   ret.push_back(k->Dcore);
-               return ret;
-          }, "Per-tree internal time-downsampling factors of the GPU peak-finding\n"
-             "kernels (length ntrees). Equal to plan.stage2_pf_params Dcore values, so a\n"
-             "ReferenceDedisperser built from the same plan mimics these kernels\n"
-             "automatically.")
+          .def_readonly("Dcores", &GpuDedisperser::Dcores,
+               "Per-tree internal time-downsampling factors of the GPU peak-finding kernels\n"
+               "(length ntrees). Compiled into the cdd2 kernels, so they cannot be predicted\n"
+               "from the plan: pass Dcores[itree] to DedispersionPlan.decode_argmax() to\n"
+               "decode this dedisperser's out_argmax tokens, and Dcores= to\n"
+               "ReferenceDedisperser to make its tokens identical to these kernels'.")
           .def("allocate", &GpuDedisperser::allocate,
                py::arg("gpu_allocator"), py::arg("host_allocator"),
                py::call_guard<py::gil_scoped_release>(),   // GPU/host buffer allocation + worker spawn
@@ -537,8 +762,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                },
                py::arg("seq_id"), py::arg("stream_ptr"),
                py::call_guard<py::gil_scoped_release>(),
-               "Acquire the input buffer for seq_id and return a\n"
-               "ksgpu.Array view of it. After this call 'stream' sees an empty\n"
+               "Acquire the input buffer for seq_id and return a cupy array\n"
+               "view of it. After this call 'stream' sees an empty\n"
                "input buffer ready for writing; the returned view is valid until\n"
                "the matching _release_input_and_launch_dd_kernels() call.")
           .def("_release_input_and_launch_dd_kernels",
@@ -556,7 +781,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("consumer_id"), py::arg("seq_id"), py::arg("stream_ptr"),
                py::call_guard<py::gil_scoped_release>(),
                "Acquire the output buffer for (consumer_id, seq_id) and return\n"
-               "an Outputs object holding list-of-Array views of out_max and out_argmax.\n"
+               "an Outputs object holding lists of cupy array views of out_max and out_argmax.\n"
                "After this call 'stream' sees a full output buffer ready for reading;\n"
                "the returned views are valid until the matching _release_output() call.\n"
                "consumer_id must be in [0, num_consumers).")
@@ -574,6 +799,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("nchunks"),
                py::arg("nbatches_out") = 0,
                py::arg("nbatches_wt") = 0,
+               py::arg("num_consumers") = 1,
                py::arg("host_only") = false,
                py::call_guard<py::gil_scoped_release>())
           .def("time", &GpuDedisperser::time,
@@ -592,7 +818,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "nbatches_wt weight slots. Must call allocate() first.\n\n"
                "Args:\n"
                "    itree: tree index, in [0, ntrees)\n"
-               "    pf_weights: host ksgpu.Array<float>, shape (nbatches_wt, beams_per_batch,\n"
+               "    pf_weights: host numpy array, float32, shape (nbatches_wt, beams_per_batch,\n"
                "        t.ndm_wt, t.nt_wt, t.nprofiles, t.frequency_subbands.N) with\n"
                "        t = plan.trees[itree]. Weights may differ per slot and per beam.")
           .def("fill_analytic_weights", &GpuDedisperser::fill_analytic_weights,
@@ -604,7 +830,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "real search uses, so peak-finding out_max values come out as SNRs. Must\n"
                "call allocate() first; blocks (cudaDeviceSynchronize) before returning.\n\n"
                "Args:\n"
-               "    freq_variances: host ksgpu.Array<double>, length nfreq (all positive).\n"
+               "    freq_variances: host numpy array, float64, length nfreq (all positive).\n"
                "        Typically XEngineMetadata.get_channel_variances().")
     ;
 
@@ -615,8 +841,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "CPU reference dedisperser (for testing and variance studies).\n"
         "\n"
         "Constructed directly:\n"
-        "    ReferenceDedisperser(plan, sophistication, enable_variances=False,\n"
-        "                         tree_domain_input=False)\n"
+        "    ReferenceDedisperser(plan, sophistication, tree_domain_input=False, Dcores=None)\n"
         "\n"
         "'sophistication' (0, 1, or 2) selects the reference implementation:\n"
         "\n"
@@ -630,41 +855,53 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         "\n"
         "All three produce the same peak-finding output, modulo float roundoff.\n"
         "\n"
-        "The per-tree peak-finder Dcore values come from the plan (filled from the cdd2\n"
-        "kernel registry when available), so the reference peak-finders mimic a\n"
-        "GpuDedisperser built from the same plan. Inspect via the Dcore property.\n"
+        "Dcores (list of int, length ntrees) sets the peak-finders' internal time\n"
+        "downsampling, which is the time granularity of their out_argmax tokens. The\n"
+        "default is one profile evaluation per output bin at the coarsest level\n"
+        "(trees[i].time_downsampling). To make the tokens identical to a GpuDedisperser's,\n"
+        "pass its ``Dcores``: the GPU values are compiled into the cdd2 kernels and cannot\n"
+        "be predicted from the plan.\n"
         "\n"
-        "If enable_variances=True, the per-tree out_var buffers are allocated and filled\n"
-        "by dedisperse() (per-chunk peak-finding variances; see ReferencePeakFindingKernel).\n"
+        "FOOTGUN: in a tree with K = ``pf_kernels[itree].xdm_rank`` > 0, the fourth byte of an\n"
+        "``out_argmax[itree]`` token is an extra-DM index mu, and the winning input DM row is\n"
+        "(d << K) | mu rather than the output row d. That is how the tokens are made identical\n"
+        "to a GpuDedisperser's. K is zero except in early-trigger trees, so code which\n"
+        "predates early triggers can look correct and not be. Use ``plan.decode_argmax()``\n"
+        "rather than parsing tokens by hand.\n"
+        "\n"
+        "``out_sb[itree]`` is free of that footgun and is what variance calculations should\n"
+        "use. It is the tree's subband array after dedisperse(), shape ``(beams_per_batch,\n"
+        "Dpf, M, t.nt_ds)`` with ``Dpf = 2^(r-R)`` the full coarse-DM count -- the same\n"
+        "layout GpuSbDedispersionKernel writes, whatever K is. Pair it with\n"
+        "ReferencePfSquare (reshaping the (Dpf, M) pair into its 'ndm' row count) to get a\n"
+        "CPU sweep that mirrors the GPU one. It is a view into internal storage, which the\n"
+        "next dedisperse() overwrites.\n"
         "\n"
         "If tree_domain_input=True, the tree gridding kernel is skipped: input_array has\n"
         "shape (beams_per_batch, 2^toplevel_tree_rank, nt_in) and is interpreted as an\n"
         "already-gridded toplevel tree-domain array. Used by unit tests that inject probes\n"
         "into specific tree-freq channels (see test_decode_argmax).")
         .def(py::init([](std::shared_ptr<DedispersionPlan> plan, int sophistication,
-                         bool enable_variances, bool tree_domain_input) {
+                         bool tree_domain_input, std::optional<std::vector<long>> Dcores) {
             ReferenceDedisperserBase::Params p;
             p.plan = plan;
             p.sophistication = sophistication;
-            p.enable_variances = enable_variances;
             p.tree_domain_input = tree_domain_input;
+            if (Dcores.has_value())
+                p.Dcores = *Dcores;
 
             // make() -- plan walk plus large host allocations -- runs GIL-free.
             py::gil_scoped_release nogil;
             return ReferenceDedisperserBase::make(p);
         }), py::arg("plan"), py::arg("sophistication"),
-            py::arg("enable_variances") = false,
-            py::arg("tree_domain_input") = false)
+            py::arg("tree_domain_input") = false,
+            py::arg("Dcores") = py::none())
         // params fields (nested) exposed as read-only properties:
         .def_property_readonly("sophistication",   [](const ReferenceDedisperserBase &d){ return d.params.sophistication; })
-        .def_property_readonly("enable_variances", [](const ReferenceDedisperserBase &d){ return d.params.enable_variances; })
         .def_property_readonly("tree_domain_input", [](const ReferenceDedisperserBase &d){ return d.params.tree_domain_input; })
-        .def_property_readonly("Dcore", [](const ReferenceDedisperserBase &d) {
-            std::vector<long> ret;
-            for (const auto &k : d.pf_kernels)
-                ret.push_back(k->Dcore);
-            return ret;
-        }, "Per-tree peak-finder internal time-downsampling factors (from the plan).")
+        .def_readonly("Dcores", &ReferenceDedisperserBase::Dcores,
+            "Per-tree peak-finder internal time-downsampling factors (length ntrees):\n"
+            "the constructor's Dcores argument, or the default described there.")
         // derived convenience members:
         .def_readonly("ntrees",          &ReferenceDedisperserBase::ntrees)
         .def_readonly("nfreq",           &ReferenceDedisperserBase::nfreq)
@@ -679,24 +916,13 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         .def_readonly("wt_arrays",       &ReferenceDedisperserBase::wt_arrays)
         // Per-tree ReferencePeakFindingKernels (e.g. for eval_tokens() in unit tests):
         .def_readonly("pf_kernels",      &ReferenceDedisperserBase::pf_kernels)
-        // Outputs (read after dedisperse()). out_var is empty unless enable_variances was set:
+        // Outputs (read after dedisperse()):
         .def_readonly("out_max",         &ReferenceDedisperserBase::out_max)
         .def_readonly("out_argmax",      &ReferenceDedisperserBase::out_argmax)
-        // out_var elements are empty when variances are disabled, and the Array->numpy caster
-        // rejects zero-size arrays -- so map empty -> None (the list is always length ntrees).
-        .def_property_readonly("out_var", [](const ReferenceDedisperserBase &d) {
-            py::list out;
-            for (const auto &v : d.out_var) {
-                if (v.size == 0)
-                    out.append(py::none());
-                else
-                    out.append(py::cast(v));
-            }
-            return out;
-        })
+        .def_readonly("out_sb",          &ReferenceDedisperserBase::out_sb)
         .def("dedisperse",               &ReferenceDedisperserBase::dedisperse,
              py::arg("ichunk"), py::arg("ibatch"),
              py::call_guard<py::gil_scoped_release>(),   // heavy CPU dedispersion + peak-finding
-             "Dedisperse one (ichunk, ibatch). Fills out_max/out_argmax (and out_var if enabled).")
+             "Dedisperse one (ichunk, ibatch). Fills out_max/out_argmax and out_sb.")
     ;
 }

@@ -19,7 +19,9 @@ namespace pirate {
 // Throws an exception if nelts_4bit is not a multiple of 64 (convenient for simd alignment).
 //
 // Thread-safe: the rng state is per-thread (thread_local), initialized once per thread from
-// std::random_device.
+// that thread's ksgpu::default_rng(). So on the MAIN thread the noise replays from
+// 'pirate_frb test --seed'; on a thread spawned later, ksgpu's generator has self-seeded from
+// std::random_device and the noise does not.
 
 void avx2_simulate_4bit_noise(unsigned int *dst, long nelts_4bit);
 
@@ -39,8 +41,9 @@ double avx2_4bit_postquant_noise_rms();
 
 // Unit test (dispatched from 'python -m pirate_frb test --sim'): generates noise, unpacks it, and
 // checks the level histogram against the quantized-Gaussian(rms=2.5) distribution (and that the
-// -8 sentinel never occurs). Throws on failure. Since seeding is from std::random_device, this
-// checks the distribution statistically, not exact bytes.
+// -8 sentinel never occurs). Throws on failure. It checks the DISTRIBUTION, not exact bytes:
+// the thresholds are what is under test, and a byte-exact expectation would have to be
+// regenerated whenever the generator changes.
 void test_avx2_simulate_4bit_noise();
 
 // Timing (dispatched from 'python -m pirate_frb time --sim'): reports avx2_simulate_4bit_noise()

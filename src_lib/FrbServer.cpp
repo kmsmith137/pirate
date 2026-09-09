@@ -1644,6 +1644,11 @@ void FrbServer::_fill_handshake(fg::Handshake *hs,
     // Geometry. (num_batch_slots == producer nbatches_out; the output_ringbuf
     // leading axis is num_batch_slots * beams_per_batch.)
     hs->set_num_trees(dd->ntrees);
+
+    // The cdd2 kernels' compiled-in peak-finder core factors. Not derivable from the
+    // yamls below, and the consumer needs them to decode out_argmax tokens.
+    for (long d: dd->Dcores)
+        hs->add_dcores(d);
     hs->set_num_batch_slots(dd->params.nbatches_out);
     hs->set_beams_per_batch(dd->beams_per_batch);
     hs->set_initial_chunk(dd->params.initial_chunk);   // -> Outputs::ichunk_fpga_based

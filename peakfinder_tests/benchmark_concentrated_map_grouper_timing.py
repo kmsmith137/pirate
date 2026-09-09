@@ -45,12 +45,12 @@ from peakfinder_tests import benchmark_peakfinder_batch_timing as batch_benchmar
 
 
 SCHEMA_NAME = "pirate-concentrated-map-grouper-timing"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = REPOSITORY_ROOT / "configs/dedispersion/chord_sb2_et.yml"
 DEFAULT_RESULTS_DIR = (
     Path(__file__).resolve().parent
-    / "results_concentrated_map_grouper_timing"
+    / "results_concentrated_map_grouper_timing_pirate15"
 )
 DEFAULT_LAYOUTS = ("single_map", "single_family", "all_maps")
 DEFAULT_HOT_PIXEL_COUNTS = (64, 128, 256, 512, 1024, 2048, 4096)
@@ -330,6 +330,7 @@ def _write_metadata(
         "decoder": REPOSITORY_ROOT / "pirate_frb/GpuArgmaxDecoder.py",
         "gpu_grouper": REPOSITORY_ROOT / "pirate_frb/OfflineCandidateGrouper.py",
         "cpu_grouper": Path(__file__).with_name("cpu_candidate_grouper.py"),
+        "producer_metadata": Path(__file__).with_name("producer_metadata.py"),
     }
     metadata = {
         "schema_name": SCHEMA_NAME,
@@ -341,6 +342,12 @@ def _write_metadata(
             "producer_plan_sha256": hashlib.sha256(
                 bundle.producer_plan_yaml.encode("utf-8")
             ).hexdigest(),
+        },
+        "producer": {
+            "dcores": list(bundle.dcores),
+            "argmax_encoding": bundle.argmax_encoding,
+            "plan_yaml": bundle.producer_plan_yaml,
+            "trees": [dict(spec.__dict__) for spec in bundle.specs],
         },
         "workload": {
             "layouts": list(args.layouts),
@@ -446,7 +453,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict[str, Any]]:
             cp, bundle.plan, bundle.specs, (args.dm_reach,), args.waist_bins
         )
         peak_geometries = geometries_by_reach[args.dm_reach]
-        decoder = GpuArgmaxDecoder(bundle.plan, cuda_device_id=args.device)
+        decoder = GpuArgmaxDecoder(bundle.plan, cuda_device_id=args.device, dcores=bundle.dcores)
         grouping_geometry = GroupingGeometry.from_plan(bundle.plan)
         grouping_config = GroupingConfig()
         clean_host = gaussian.generate_clean_context_maps(

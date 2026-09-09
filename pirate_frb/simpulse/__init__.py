@@ -4,7 +4,7 @@
 #
 # Note: the test/plot helpers (test_pulse_upsampling, plot_pulses) are NOT imported here, so that
 # 'import pirate_frb.simpulse' does not pull in matplotlib. Import them explicitly if needed
-# (e.g. the 'pirate_frb test_simpulse' command does).
+# (e.g. the 'pirate_frb dev test_simpulse' command does).
 
 # Import C++ class + functions from pirate_pybind11
 from ..pirate_pybind11 import (

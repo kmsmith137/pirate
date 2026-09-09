@@ -7,6 +7,8 @@ from pathlib import Path
 import cupy as cp
 import numpy as np
 
+from .producer_metadata import ARGMAX_ENCODING
+
 from .experiment_common import (
     DEFAULT_BANDWIDTH_MIN_MHZ,
     DEFAULT_DM_RANGE,
@@ -91,7 +93,7 @@ def _parser():
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--config", default="configs/dedispersion/chord_sb2.yml")
     parser.add_argument("--metadata", default="configs/xengine_metadata.yml")
-    parser.add_argument("--results-dir", default="peakfinder_tests/results_final")
+    parser.add_argument("--results-dir", default="peakfinder_tests/results_final_pirate15")
     parser.add_argument(
         "--separations-ms", nargs="+",
         default=[str(value) for value in DEFAULT_SEPARATIONS_MS])
@@ -157,7 +159,8 @@ def main(argv=None):
     if not np.isfinite(args.threshold):
         raise ValueError("--threshold must be finite")
 
-    config, xmd, host_plan = prepare_plan(args.config, args.metadata)
+    config, xmd, host_plan, dcores = prepare_plan(
+        args.config, args.metadata, cuda_device_id=args.device)
     if args.ntime != int(host_plan.nt_in):
         raise ValueError(f"--ntime={args.ntime} must match plan nt_in={host_plan.nt_in}")
     time_sample_s = float(config.time_sample_ms) / 1.0e3
@@ -169,7 +172,7 @@ def main(argv=None):
     intended_tree = int(dm_range["tree"])
     with cp.cuda.Device(args.device):
         geometry = build_peakfinder_geometry(
-            host_plan, intended_tree, time_sample_s=time_sample_s,
+            host_plan, intended_tree, dcores=dcores, time_sample_s=time_sample_s,
             nt_in=host_plan.nt_in,
             reference_freq_mhz=reference_frequency_MHz,
             dm_reach=args.dm_reach, waist_bins=args.waist_bins,
@@ -186,6 +189,8 @@ def main(argv=None):
         )
 
     scientific_parameters = {
+        "dcores": list(dcores),
+        "argmax_encoding": ARGMAX_ENCODING,
         "schema_version": SCHEMA_VERSION,
         "methods": list(BENCHMARK_METHODS),
         "config": file_identity(args.config),
@@ -283,7 +288,7 @@ def main(argv=None):
             "matching_convention": MATCHING_CONVENTION,
             "realized_channel_convention": REALIZED_CHANNEL_CONVENTION,
             "decoded_timestamp": decoded_timestamp_summary(
-                host_plan, intended_tree, time_sample_s),
+                host_plan, intended_tree, time_sample_s, dcores=dcores),
             "candidate_set_containment_required": (
                 "The result mapping contains exactly the retained full-band method"
             ),
@@ -299,7 +304,7 @@ def main(argv=None):
             "median_completed_unit_wall_time_s": (
                 float(np.median(list(wall_times.values()))) if wall_times else None
             ),
-            "plan": plan_summary(host_plan, time_sample_s),
+            "plan": plan_summary(host_plan, time_sample_s, dcores=dcores),
             "footprints": [geometry_diagnostics],
             "rng_limitation": RNG_NOTE,
         }, device=args.device)

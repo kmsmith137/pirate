@@ -29,7 +29,6 @@ dedispersion kernels.
 Run via: python -m pirate_frb test --serv
 """
 
-import math
 import os
 import queue as _queue
 import random
@@ -60,11 +59,74 @@ from ..pirate_pybind11 import (
     ReferenceDedisperser,
     ReferenceDequantizationKernel,
     constants,
+    peak_finding_test_tolerance,
 )
 from ..Hardware import Hardware
 from ..utils import ThreadAffinity
 from .utils import make_random_subscale_config, pick_receiver_worker_counts
 from ..utils import atomic_print
+
+
+def _check_batch_decode(g):
+    """Check FrbGrouper's vectorized decode_argmax*() bindings, in the grouper child.
+
+    These are the bindings the production event path uses (pirate_frb.rpc.FrbGrouper's
+    create_events()), and they need a handshaken grouper to be tested. Offline plan
+    batch bindings are tested separately with explicit producer Dcores. A change to
+    the vectorized helpers shows up HERE, under 'test --serv', not under '--amax'.
+
+    The scalar reference is the grouper's own DedispersionPlan, rebuilt from the handshake
+    yamls -- so a mismatch here is a bug in the vectorized wrapper, not a disagreement
+    between two reconstructions of the producer's geometry.
+    """
+
+    import numpy as np
+
+    plan = g.dedispersion_plan
+    trees = plan.trees
+    assert len(trees) == g.ntrees
+
+    # A few well-formed events per tree: token m=0/p=0/t=0 is always valid, and the
+    # (idm, itime) corners exercise the index arithmetic. Any valid input works -- this
+    # tests the vectorized wrapper (packing order, index bookkeeping), not the decode
+    # itself, which '--amax' covers exhaustively.
+    ev = [(it, 0, idm, ito)
+          for it in range(g.ntrees)
+          for idm in (0, trees[it].ndm_out - 1)
+          for ito in (0, trees[it].nt_out - 1)]
+
+    itrees = np.array([e[0] for e in ev], dtype=np.int64)
+    tokens = np.array([e[1] for e in ev], dtype=np.uint32)
+    idms = np.array([e[2] for e in ev], dtype=np.int64)
+    itimes = np.array([e[3] for e in ev], dtype=np.int64)
+
+    outs = g.decode_argmax_batch(tokens, itrees, idms, itimes)
+    outs2 = g.decode_argmax2_batch(itrees, *outs)
+
+    for i, (it, tok, idm, ito) in enumerate(ev):
+        assert tuple(int(a[i]) for a in outs) == \
+            plan.decode_argmax(tok, it, g.dcores[it], idm, ito), i
+        assert tuple(float(a[i]) for a in outs2) == \
+            plan.decode_argmax2(it, *(int(a[i]) for a in outs)), i
+
+    freqs_lo, freqs_hi, dms, ts_samp, widths_samp = outs2
+    assert (freqs_lo < freqs_hi).all() and (dms >= 0).all()
+    assert (widths_samp > 0).all() and np.isfinite(ts_samp).all()
+
+    # Range-checked, and empty inputs rejected (python callers short-circuit that case).
+    empty = np.zeros(0, dtype=np.int64)
+    for bad in (np.full(len(ev), -1, dtype=np.int64),
+                np.full(len(ev), g.ntrees, dtype=np.int64)):
+        try:
+            g.decode_argmax_batch(tokens, bad, idms, itimes)
+            raise AssertionError("decode_argmax_batch() should have thrown (itree out of range)")
+        except RuntimeError:
+            pass
+    try:
+        g.decode_argmax_batch(np.zeros(0, dtype=np.uint32), empty, empty, empty)
+        raise AssertionError("decode_argmax_batch() should have thrown on empty input")
+    except (RuntimeError, TypeError):
+        pass
 
 
 def _grouper_child_main(grouper_addr, nchunks, out_queue, shutdown_event):
@@ -91,7 +153,12 @@ def _grouper_child_main(grouper_addr, nchunks, out_queue, shutdown_event):
         # restore_cuda_device=False: this child process is a dedicated grouper
         # (same situation as run_toy_grouper; see FrbGrouper docstring).
         with FrbGrouper(grouper_addr, restore_cuda_device=False) as g:
-            out_queue.put(('handshake', g.nbatches, g.initial_chunk, g.ntrees))
+            # Before the first message: a failure here then reaches the parent as
+            # ('error', traceback) on its very first queue read, rather than racing the
+            # server's "grouper Session stream closed unexpectedly".
+            _check_batch_decode(g)
+            out_queue.put(('handshake', g.nbatches, g.initial_chunk, g.ntrees,
+                           list(g.dcores)))
             for ichunk in range(nchunks):
                 for ibatch in range(g.nbatches):
                     with g.get_output(ichunk, ibatch) as out:
@@ -130,21 +197,13 @@ class ServerTester:
         test --net (see tests/utils.py); no_dedispersion/pacing are never used
         here, and a grouper is always configured.
 
-        Extra rejection constraint vs test --net: a grouper-enabled FrbServer
-        builds its dedisperser with nbatches_out = 2*num_active_batches, and
-        FrbGrouper requires the output ring to fit within one chunk
-        (num_batch_slots * beams_per_batch <= total_beams; FrbGrouper.cpp) --
-        so require 2 * num_active_batches * beams_per_batch <= beams_per_gpu.
+        min_batch_slots=2 is the one thing this needs beyond test --net: a
+        grouper-enabled FrbServer builds its dedisperser with
+        nbatches_out = 2*num_active_batches, and FrbGrouper requires that output
+        ring to fit within one chunk (num_batch_slots * beams_per_batch <=
+        total_beams; FrbGrouper.cpp).
         """
-        for _ in range(200):
-            config = make_random_subscale_config()
-            if 2 * config.num_active_batches * config.beams_per_batch <= config.beams_per_gpu:
-                break
-        else:
-            raise RuntimeError(
-                "test_server: failed to generate a random DedispersionConfig with "
-                "2*num_active_batches*beams_per_batch <= beams_per_gpu in 200 attempts"
-            )
+        config = make_random_subscale_config(min_batch_slots=2)
         total_nfreq = sum(config.zone_nfreq)
         num_receivers, nworkers = pick_receiver_worker_counts(total_nfreq)
         nab = config.num_active_batches
@@ -538,9 +597,9 @@ class ServerTester:
             dd.fill_all_weights(t, w)
             self.wt.append(w)
 
-        # Reference chain. The per-tree Dcore values come from the plan (filled from
-        # the cdd2 registry), so the reference peak-finder mimics the GPU exactly.
-        self.rdd = ReferenceDedisperser(plan, sophistication=2)
+        # Reference chain. Dcores are the GPU cdd2 kernels' own, so the reference
+        # peak-finder emits exactly the same out_argmax tokens.
+        self.rdd = ReferenceDedisperser(plan, sophistication=2, Dcores=dd.Dcores)
         self.rdqk = ReferenceDequantizationKernel(self.B, p['total_nfreq'],
                                                   p['time_samples_per_chunk'])
         self.pf_kernels = self.rdd.pf_kernels
@@ -549,31 +608,28 @@ class ServerTester:
         self.dq_out = np.zeros((self.B, p['total_nfreq'], p['time_samples_per_chunk']),
                                dtype=np.float32)
 
-        # Comparison threshold, per tree -- same formula as test_one, but with
-        # coefficient 5 instead of 3:
-        #   eps = 5 * prec * sqrt(n+2),
-        #   n = ds_level + amb_rank + early_dd_rank.
-        # The 3-sigma-style bound was flaky in this end-to-end test (~1-in-3
-        # runs failed on a single element, with |delta| up to ~1.45x the
-        # threshold, at a random position with a random config each time).
-        # Real bugs produce order-unity errors, so the looser bound loses
-        # essentially no detection power.
+        # Comparison threshold. The formula lives in C++ (peak_finding_test_tolerance(),
+        # declared in include/pirate/Dedisperser.hpp), shared with
+        # GpuDedisperser::test_one() so the two cannot drift apart.
         #
-        # 'prec' is a per-dtype test tolerance (the values ksgpu uses for its
-        # own array comparisons) -- deliberately looser than np.finfo(...).eps.
-        prec = {np.dtype(np.float16): 1.0e-3,
-                np.dtype(np.float32): 1.0e-6,
-                np.dtype(np.float64): 1.0e-15}[p['config'].dtype]
-        self.eps = [ 5.0 * prec * math.sqrt(tr.primary_tree_index + tr.total_rank() + 2) for tr in trees ]
+        # It depends on max |reference|, which is not known until the arrays exist, so
+        # only the per-tree 'n' is cached here; the call is made in _compare_chunk().
+        self.tol_dtype = p['config'].dtype
+        self.tol_n = [ tr.primary_tree_index + tr.tree_rank for tr in trees ]
 
         # First child message: the handshake echo (arrives once the producer's
         # handshake completes; the queue orders it before any outputs).
         msg = self._queue_get()
         assert msg[0] == 'handshake', f"expected handshake message, got {msg[0]!r}"
-        _, g_nbatches, g_initial_chunk, g_ntrees = msg
+        _, g_nbatches, g_initial_chunk, g_ntrees, g_dcores = msg
         assert g_nbatches == self.nbatches
         assert g_initial_chunk == self.c0
         assert g_ntrees == self.ntrees
+
+        # The end-to-end statement that the producer's KERNEL properties crossed the wire:
+        # the grouper's dcores must be the GPU cdd2 kernels' own values. Nothing else checks
+        # this -- a wrong Dcore is a legal value that silently mis-decodes token fine times.
+        assert g_dcores == list(dd.Dcores), (g_dcores, list(dd.Dcores))
 
     # ---- Compare ----
 
@@ -631,9 +687,12 @@ class ServerTester:
 
             for t in range(self.ntrees):
                 wt_ref = np.asarray(self.rdd.wt_arrays[t])
+                ref = np.asarray(self.rdd.out_max[t])
+                epsabs, epsrel = peak_finding_test_tolerance(
+                    self.tol_dtype, self.tol_n[t], float(np.max(np.abs(ref))))
                 d = ksgpu.assert_arrays_equal(
                     self.rdd.out_max[t], gpu_max[t], "ref_max", "gpu_max",
-                    ["beam", "pfdm", "pft"], epsabs=self.eps[t], epsrel=self.eps[t])
+                    ["beam", "pfdm", "pft"], epsabs=epsabs, epsrel=epsrel)
                 maxdiff = max(maxdiff, d)
 
                 # out_argmax: evaluate the GPU tokens with the reference kernel +
@@ -641,7 +700,7 @@ class ServerTester:
                 self.pf_kernels[t].eval_tokens(self.pf_tmp[t], gpu_tok[t], wt_ref)
                 d = ksgpu.assert_arrays_equal(
                     self.rdd.out_max[t], self.pf_tmp[t], "ref_max", "gpu_tokens",
-                    ["beam", "pfdm", "pft"], epsabs=self.eps[t], epsrel=self.eps[t])
+                    ["beam", "pfdm", "pft"], epsabs=epsabs, epsrel=epsrel)
                 maxdiff = max(maxdiff, d)
 
         return maxdiff

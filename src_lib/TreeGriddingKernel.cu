@@ -115,7 +115,7 @@ GpuTreeGriddingKernel::GpuTreeGriddingKernel(const TreeGriddingKernelParams &par
     long T = params.ntime;
 
     resource_tracker.add_kernel("tree_gridding", B * (N+F+1) * T * S);
-    resource_tracker.add_gmem_footprint("channel_map", (N+1) * sizeof(double), true);
+    resource_tracker.add_gmem_footprint("channel_map", (N+1) * sizeof(ulong), true);
 
     this->nchan_per_thread = 4;   // reasonable default (?)
     long ny = (N + nchan_per_thread - 1) / nchan_per_thread;
@@ -135,9 +135,25 @@ void GpuTreeGriddingKernel::allocate(BumpAllocator &allocator)
 
     long nbytes_before = allocator.get_nbytes_allocated();
 
-    // Copy host -> GPU.
-    this->gpu_channel_map = allocator.allocate_array<double>({params.nchan + 1});
-    this->gpu_channel_map.fill(params.channel_map);
+    // Convert channel_map to 32.32 fixed point, then copy host -> GPU. (See the comments on
+    // 'gpu_channel_map' in TreeGriddingKernel.hpp for why we don't just use the host dtype.)
+    //
+    // The multiply by 2^32 is exact -- it only changes the exponent -- so the only error is
+    // the truncation of bits below 2^-32, i.e. 2.3e-10 per channel edge. Note that this can
+    // in principle collapse two adjacent edges which differ by less than 2^-32 into a single
+    // value, giving a zero-width tree channel; that is harmless (the channel gets weight zero
+    // everywhere), and the resulting discrepancy against the reference kernel is ~1e-10.
+    //
+    // channel_map values lie in [0,nfreq] (checked by validate()), so the integer part
+    // overflows 32 bits only for absurd nfreq >= 2^32.
+
+    Array<ulong> cmap_fixed({params.nchan + 1}, af_uhost);
+
+    for (long i = 0; i <= params.nchan; i++)
+        cmap_fixed.data[i] = ulong(params.channel_map.data[i] * 4294967296.0);   // 2^32
+
+    this->gpu_channel_map = allocator.allocate_array<ulong> ({params.nchan + 1});
+    this->gpu_channel_map.fill(cmap_fixed);
 
     long nbytes_allocated = allocator.get_nbytes_allocated() - nbytes_before;
     xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint("channel_map"));
@@ -150,8 +166,8 @@ void GpuTreeGriddingKernel::allocate(BumpAllocator &allocator)
 inline __device__ void _set_zero(float &x) { x = 0.0f; }
 inline __device__ void _set_zero(__half2 &x) { x = __float2half2_rn(0.0f); }
 
-inline __device__ float _mult(double w, float y) { return float(w) * y; }
-inline __device__ __half2 _mult(double w, __half2 y) { return __float2half2_rn(float(w)) * y; }
+inline __device__ float _mult(float w, float y) { return w * y; }
+inline __device__ __half2 _mult(float w, __half2 y) { return __float2half2_rn(w) * y; }
 
 
 // cuda kernel supports a flexible thread/block mapping:
@@ -160,13 +176,13 @@ inline __device__ __half2 _mult(double w, __half2 y) { return __float2half2_rn(f
 //   threadIdx.y = blockIdx.y = tree channel index  (0 <= n < N/Nbs)
 //   threadIdx.z = blockIdx.z = beam index  (0 <= b < B)
 //
-// FIXME: using double precision in a GPU kernel!! This is a temporary kludge.
+// The 'channel_map' argument is in 32.32 fixed point (see TreeGriddingKernel.hpp).
 
 template<typename T32>
 __global__ void gpu_tree_gridding_kernel(
     T32 *out,
     const T32 *in,
-    const double *channel_map,
+    const ulong *channel_map,
     long out_bstride32,
     long in_bstride32,
     int nchan_per_thread,   // must be <= 31
@@ -193,30 +209,52 @@ __global__ void gpu_tree_gridding_kernel(
     out += (b * out_bstride32) + (long(n) * long(ntime32)) + t;
     in += (b * in_bstride32) + t;
 
-    // Read channel_map[n:(n+M+1)]
+    // Read channel_map[n:(n+M+1)], and split each 32.32 fixed-point value into its integer
+    // and fractional parts. The fractional part is a 32-bit integer scaled by 2^-32; only its
+    // high 24 bits survive the conversion to float, giving absolute error < 2^-24 ~ 6e-8 on a
+    // quantity in [0,1). That is the same order as the float32 rounding of the final weight,
+    // which the reference kernel also incurs.
+
     int ix = min(threadIdx.x & 0x1f, M);
-    double cmap = channel_map[n + ix];
+    ulong cmap = channel_map[n + ix];
+
+    int cmap_i = int(cmap >> 32);                                // integer part
+    float cmap_f = float(uint(cmap)) * (1.0f / 4294967296.0f);   // fractional part, in [0,1)
 
     // Code optimization is imperfect here, but should still
     // be fast enough to be memory bandwidth limited.
-    
+
     for (int m = 0; m < M; m++) {
         // channel_map is monotonically decreasing, so channel_map[n+1] < channel_map[n].
-        // f0 is the lower bound, f1 is the upper bound.
-        double f0 = __shfl_sync(~0u, cmap, m+1);
-        double f1 = __shfl_sync(~0u, cmap, m);
-        
-        int if0 = max(int(f0), 0);
-        int if1 = min(int(f1)+1, nfreq);
+        // f0 is the lower bound, f1 is the upper bound. Each is held as (integer, fraction),
+        // i.e. f0 = i0 + x0 and f1 = i1 + x1.
+        int i0 = __shfl_sync(~0u, cmap_i, m+1);
+        float x0 = __shfl_sync(~0u, cmap_f, m+1);
+        int i1 = __shfl_sync(~0u, cmap_i, m);
+        float x1 = __shfl_sync(~0u, cmap_f, m);
+
+        int if0 = max(i0, 0);
+        int if1 = min(i1+1, nfreq);
 
         T32 t;
         _set_zero(t);
 
         for (int f = if0; f < if1; f++) {
-            double flo = max(f0, double(f));
-            double fhi = min(f1, double(f)+1);
-            double w = fhi - flo;
-            t += _mult(w, in[f*ntime32]);
+            // The weight is the overlap between the tree channel [f0,f1) and the frequency
+            // bin [f,f+1), i.e. w = min(f1,f+1) - max(f0,f). We compute both terms relative
+            // to f, which keeps the arithmetic in [0,1]:
+            //
+            //   max(f0,f) - f    = clamp(x0 + (i0-f), 0, 1)
+            //   min(f1,f+1) - f  = clamp(x1 + (i1-f), 0, 1)
+            //
+            // This is exact in float32, even though f0 and f1 are not. Since x0 lies in [0,1),
+            // the clamped value is x0 when (i0-f)==0, and saturates to 0 or 1 for every other
+            // value of (i0-f) -- so the precision of the float add only matters in the one
+            // case where the add is exact. (Note also that __saturatef() is a modifier on the
+            // add rather than a separate instruction.) Likewise for x1.
+            float a = __saturatef(x0 + float(i0 - f));
+            float b = __saturatef(x1 + float(i1 - f));
+            t += _mult(b - a, in[f*ntime32]);
         }
 
         out[m*ntime32] = t;
@@ -235,7 +273,7 @@ static void _launch(const GpuTreeGriddingKernel &k, Array<void> &out, const Arra
         <<< k.nblocks, k.nthreads, 0, stream >>>
         (reinterpret_cast<T32 *> (out.data),       // T32 *out,
          reinterpret_cast<const T32 *> (in.data),  // const T32 *in,
-         k.gpu_channel_map.data,                   // const double *channel_map,
+         k.gpu_channel_map.data,                   // const ulong *channel_map,
          xdiv(out.strides[0], s),                  // long out_bstride32,
          xdiv(in.strides[0], s),                   // long in_bstride32,
          k.nchan_per_thread,                       // int nchan_per_thread
@@ -295,7 +333,20 @@ void GpuTreeGriddingKernel::test_random()
     int F = v[1];
     int T = v[2] * Ncl;
     int N = rand_int(1, 2000/(v[0]*v[2]));
-    
+
+    // Sometimes use a CHORD-scale (nfreq, nchan) instead. This is a precision stress test:
+    // 'gpu_channel_map' is stored in 32.32 fixed point (see TreeGriddingKernel.hpp), and the
+    // error which that introduces only becomes visible on channel-map values of order 10^4,
+    // which the small random instances above never reach. We keep beams_per_batch and ntime
+    // minimal so that the (slow) reference kernel stays cheap.
+
+    if (rand_uniform() < 0.3) {
+        B = 1;
+        F = rand_int(20000, 40000);
+        N = rand_int(20000, 70000);
+        T = Ncl;
+    }
+
     long hs_in = rand_int(F*T, 2*F*T);   // host beam stride, input array
     long gs_in = rand_int(F*T, 2*F*T);   // gpu beam stride, input array
     long hs_out = rand_int(N*T, 2*N*T);  // host beam stride, output array

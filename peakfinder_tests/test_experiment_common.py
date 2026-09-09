@@ -57,8 +57,9 @@ from .peakfinders import (
     validate_candidate_set_containment,
 )
 
-CONFIG = "configs/dedispersion/chord_sb2.yml"
-METADATA = "configs/xengine_metadata.yml"
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG = str(ROOT / "configs/dedispersion/chord_sb2.yml")
+METADATA = str(ROOT / "configs/xengine_metadata.yml")
 
 
 def _expect_raises(exception, function, contains=None):
@@ -84,7 +85,7 @@ def _candidate_dict(toas, dms=None, snrs=None):
 def test_method_schema_and_old_schema_rejection():
     assert METHODS == ("full_band_bowtie",)
     assert BENCHMARK_METHODS == METHODS
-    assert SCHEMA_VERSION == 4
+    assert SCHEMA_VERSION == 5
     assert common.SCHEMA_NAME == "pirate-peakfinder-full-band-benchmarks"
     assert METHOD_LABELS == {"full_band_bowtie": "Full-band bowtie"}
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -100,11 +101,11 @@ def test_method_schema_and_old_schema_rejection():
 
 
 def test_plan_subbands_and_full_band_geometry_all_trees():
-    config, xmd, plan = prepare_plan(CONFIG, METADATA)
+    config, xmd, plan, dcores = prepare_plan(CONFIG, METADATA)
     reference = float(np.asarray(xmd.get_channel_freq_edges())[0])
     expected_counts = [5, 9, 7, 3, 1]
     for itree in range(int(plan.ntrees)):
-        m_to_band, bands, full_index = enumerate_plan_subbands(plan, itree)
+        m_to_band, bands, full_index = enumerate_plan_subbands(plan, itree, dcores=dcores)
         assert len(bands) == int(plan.trees[itree].frequency_subbands.N)
         assert len({band.subband_id for band in bands}) == len(bands)
         assert [sum(b.level == level for b in bands) for level in range(5)] == expected_counts
@@ -116,7 +117,7 @@ def test_plan_subbands_and_full_band_geometry_all_trees():
         assert np.array_equal(m_to_band, np.asarray(plan.trees[itree].frequency_subbands.m_to_n))
 
         geometry = build_peakfinder_geometry(
-            plan, itree, time_sample_s=float(config.time_sample_ms) / 1.0e3,
+            plan, itree, dcores=dcores, time_sample_s=float(config.time_sample_ms) / 1.0e3,
             nt_in=int(plan.nt_in), reference_freq_mhz=reference)
         footprint = geometry.full_band_footprint
         assert footprint.dtype == cp.bool_
@@ -155,7 +156,11 @@ def test_candidate_decoding_and_empty_schema():
                for key, dtype in DECODED_DTYPES.items())
 
     class FakePlan:
-        def decode_argmax_batch(self, tokens, itrees, idm, itime):
+        ntrees = 3
+        trees = [SimpleNamespace(nt_ds=800, nt_out=100)] * 3
+
+        def decode_argmax_batch(self, tokens, itrees, idm, itime, *, dcores):
+            assert np.array_equal(dcores, [8, 4, 2])
             assert tokens.dtype == np.uint32
             return (np.array([100, 200]), np.array([199, 399]),
                     np.array([1, 2]), np.array([3, 4]), np.array([7, 9]))
@@ -172,7 +177,7 @@ def test_candidate_decoding_and_empty_schema():
         cp.asarray([11, 12], dtype=cp.uint32),
     )
     decoded = decode_candidates(
-        FakePlan(), batch, itree=2, time_chunk_index=3,
+        FakePlan(), batch, dcores=(8, 4, 2), itree=2, time_chunk_index=3,
         ntime=1000, time_sample_s=0.001)
     assert tuple(decoded) == tuple(DECODED_DTYPES)
     assert np.array_equal(decoded["fmin"], [100, 200])
@@ -230,8 +235,8 @@ def test_channel_coverage_and_subband_selection():
                    lambda: realized_channel_coverage(FakeXmd(), 100.0, 200.0),
                    "activates no channels")
 
-    _, _, plan = prepare_plan(CONFIG, METADATA)
-    _, bands, _ = enumerate_plan_subbands(plan, 0)
+    _, _, plan, dcores = prepare_plan(CONFIG, METADATA)
+    _, bands, _ = enumerate_plan_subbands(plan, 0, dcores=dcores)
     selected = select_subbands(bands, [bands[-1].subband_id, bands[0].subband_id])
     assert selected == (bands[0], bands[-1])
     _expect_raises(ValueError,
@@ -248,7 +253,7 @@ def test_deterministic_parameter_sampling_and_dm_boundaries():
     assert unit_seed1 == unit_seed2
     assert unit_seed1 != different_seed
 
-    _, xmd, plan = prepare_plan(CONFIG, METADATA)
+    _, xmd, plan, dcores = prepare_plan(CONFIG, METADATA)
     sampled1 = sample_recall_burst_parameters(rng1, plan, xmd, dm_reach=8)
     sampled2 = sample_recall_burst_parameters(rng2, plan, xmd, dm_reach=8)
     assert sampled1 == sampled2
@@ -305,7 +310,7 @@ def test_arbitrary_interval_validation_and_sampling():
 
 
 def test_safe_toa_placement_worst_case_and_pair():
-    config, xmd, plan = prepare_plan(CONFIG, METADATA)
+    config, xmd, plan, dcores = prepare_plan(CONFIG, METADATA)
     time_sample_s = float(config.time_sample_ms) / 1.0e3
     tree = plan.trees[0]
     geometry = SimpleNamespace(
@@ -328,7 +333,7 @@ def test_safe_toa_placement_worst_case_and_pair():
         freq_hi_MHz=float(full_edges[-1]),
         geometry=geometry,
     )
-    assert placement["output_map_index"] == 2  # zero-based third map
+    assert placement["output_map_index"] == 3  # 0.9984 ms cadence: wide pulse fits the fourth map
     assert 9 <= placement["output_bin_indices"][0] < int(tree.nt_out) - 9
     assert 0.0 <= placement["first_toa_output_bin_phase"] < 1.0
     assert 0 <= placement["pulse_supports"][0][0]
@@ -616,7 +621,8 @@ def test_composite_checkpoint_and_resume_schema():
 
 
 def test_rng_note_and_runtime_aggregation():
-    assert "not reproducible" in RNG_NOTE
+    assert "not simulation noise" in RNG_NOTE
+    assert "on first use" in RNG_NOTE
     assert "same maps" not in RNG_NOTE  # Wording says identical maps within a logical unit.
     assert "identical maps within a logical unit" in RNG_NOTE
     rows = []

@@ -1,0 +1,240 @@
+"""
+Randomized TIME-axis mask generation, shared by every detrending test suite.
+
+Masks along the time axis are what all three detrenders consume, so this module sits
+beside the three algorithm subpackages rather than inside one of them.  (lps2d also
+draws masks along FREQUENCY; that is a different job, and lives in lps2d/masks.py.)
+
+random_mask() draws a shape (M,T) boolean mask by choosing a base *type*
+independently for each of the M rows, randomizing that type's parameters, and
+then perturbing the result with a random set of fully-masked / fully-valid
+subintervals (see _perturb).  Rows are
+therefore independent, which matches the real data layout (every (beam,freq) pair
+has its own RFI mask) and exercises the spectator axis rather than replicating one
+pattern across it.
+
+All-valid gets 50% of the *base* probability mass: it is by far the most common
+case in real data, and it is the case where the estimator has exact analytic
+properties (symmetric window => S_odd = 0 => checkerboard Gram), so it is worth
+hitting often.  The remaining 50% is spread over the geometries that broke earlier
+candidate algorithms -- long gaps, one-sided windows, narrow off-center clusters,
+and fully masked scan blocks.
+
+Note that the perturbation erodes this considerably: a base all-valid row survives
+intact only if none of its N stamps is a masking stamp, which has probability
+1/(N+1) averaged over p, or H_21/21 = 0.174 averaged over N as well.  So only
+about 50% * 0.174 = 9% of rows come out fully valid, and the measured figure is
+about 10%.  That is a consequence of the specified procedure rather than a
+tuning choice, and it is recorded here because the 50% figure above no longer
+describes the output distribution.
+
+Note that a single cluster in a length-T array automatically sweeps the whole
+range of within-window offsets as the window slides past it, so the cluster
+*position* within the window does not need to be randomized separately.
+"""
+
+import numpy as np
+
+
+def _loguniform_int(rng, lo, hi):
+    """Returns a log-uniform random integer in [lo,hi].
+
+    Log-uniform rather than uniform, so that both small and large values of a
+    length or stride parameter are sampled."""
+    lo, hi = max(1, int(lo)), max(1, int(hi))
+    if hi <= lo:
+        return lo
+    return int(np.clip(round(np.exp(rng.uniform(np.log(lo), np.log(hi)))), lo, hi))
+
+
+# ---------------------------------------------------------------- type builders
+# Each returns a 1-d bool array of length T.  'W' is the caller's own length scale, in
+# samples: the window half-width for the local polynomial fit (lps1d), the lookahead L
+# for the Kalman filter (kf1d).  Gap lengths and the like are drawn relative to it, so
+# that each suite gets masks whose features are the size its detrender cares about.
+
+def _all_valid(T, W, rng):
+    return np.ones(T, dtype=bool)
+
+
+def _all_masked(T, W, rng):
+    return np.zeros(T, dtype=bool)
+
+
+def _bernoulli(T, W, rng):
+    """iid Bernoulli, p ~ U(0,1) so the whole sparsity range is swept."""
+    return rng.random(T) < rng.uniform(0.0, 1.0)
+
+
+def _gap(T, W, rng):
+    """One contiguous masked run.
+
+    Length is log-uniform up to 4W, so this covers both short dropouts and gaps
+    wider than a full window."""
+    m = np.ones(T, dtype=bool)
+    L = _loguniform_int(rng, 1, 4*W)
+    lo = int(rng.integers(0, T))
+    m[lo:lo+L] = False
+    return m
+
+
+def _one_sided(T, W, rng):
+    """Everything masked on one side of a random boundary.
+
+    Windows straddling it see valid samples on one side only, which is the case
+    that makes the fit an extrapolation.  The side is randomized (the old fixed
+    zoo only masked left)."""
+    b = int(rng.integers(0, T+1))
+    m = np.ones(T, dtype=bool)
+    if rng.random() < 0.5:
+        m[:b] = False
+    else:
+        m[b:] = False
+    return m
+
+
+def _periodic(T, W, rng):
+    """Periodic dropouts.
+
+    The period is drawn from a set that deliberately includes values commensurate
+    with the block length B = 2W, plus a random one, since commensurability with
+    the scan geometry is what we want to stress."""
+    cands = [max(2, W//2), max(2, W), max(2, 2*W), max(2, 4*W),
+             int(rng.integers(2, max(3, 4*W)))]
+    period = int(cands[rng.integers(len(cands))])
+    duty = int(rng.integers(1, max(2, period)))     # masked samples per period
+    phase = int(rng.integers(0, period))
+    return ((np.arange(T) + phase) % period) >= duty
+
+
+def _cluster(T, W, rng):
+    """A single narrow run of valid samples, everything else masked.
+
+    As the window slides past it the cluster's offset from the window center
+    sweeps the full range, which is the degenerate extrapolation geometry."""
+    m = np.zeros(T, dtype=bool)
+    hw = int(rng.integers(0, max(1, W//8) + 1))
+    c = int(rng.integers(0, T))
+    m[max(0, c-hw):c+hw+1] = True
+    return m
+
+
+def _bimodal(T, W, rng):
+    """Two narrow clusters of valid samples, everything else masked.
+
+    When both fall inside one window, G_ii > 0 for every i and yet the curvature
+    is barely determined -- the case that motivates the pivot floor acting on
+    pivots rather than on the diagonal."""
+    m = np.zeros(T, dtype=bool)
+    c0 = int(rng.integers(0, T))
+    sep = int(rng.integers(0, max(1, 3*W)))
+    for c in (c0, c0 + sep):
+        if 0 <= c < T:
+            hw = int(rng.integers(0, max(1, W//8) + 1))
+            m[max(0, c-hw):c+hw+1] = True
+    return m
+
+
+def _masked_blocks(T, W, rng):
+    """One or more whole scan blocks masked.
+
+    This is the NaN trap for the empty-set rule in lps1d.MomentSet.merge.
+    Absolute block boundaries in the stream fall at multiples of B (the lattice
+    is anchored at chunk_start - W and Tc is a multiple of B), so half the time
+    we align to one and half the time we deliberately do not."""
+    B = 2*W
+    m = np.ones(T, dtype=bool)
+    k = int(rng.integers(1, 4))
+    if rng.random() < 0.5:
+        lo = int(rng.integers(0, max(1, T // B))) * B
+    else:
+        lo = int(rng.integers(0, T))
+    m[lo:lo+k*B] = False
+    return m
+
+
+def _sparse_lattice(T, W, rng):
+    """A regular lattice of isolated valid samples, everything else masked.
+
+    The valid count per window is then small and nearly uniform (nv down to
+    0 or 1)."""
+    stride = _loguniform_int(rng, 2, 4*W)
+    phase = int(rng.integers(0, stride))
+    m = np.zeros(T, dtype=bool)
+    m[phase::stride] = True
+    return m
+
+
+def _perturb(m, T, W, rng):
+    """
+    Stamps N random subintervals over the base mask, each fully masked or fully valid.
+
+    Stamps are applied in sequence, so later ones overwrite earlier ones; that is
+    what produces nested structure, e.g. a short island of valid samples inside a
+    long masked stretch.
+
+        N  = uniform_int(0, 20)
+        p  = uniform_float(0, 1)                    (one draw per row)
+        u  = uniform_float(-1, -T^(-1/3))           (per stamp)
+        nt = floor(-u^-3)                           in [1, T]
+
+    Since u < 0, -u^-3 = 1/|u|^3, which is how it is evaluated below (a negative
+    base with a float exponent is not well defined in numpy).  With |u| uniform
+    on (T^(-1/3), 1), the interval length nt follows a power law:
+    P(nt > x) = (x^(-1/3) - T^(-1/3)) / (1 - T^(-1/3)), so most stamps are a few
+    samples long and a few span a large fraction of the array.  The 1/3 exponent
+    is empirical -- it is simply what looked right on inspection.
+
+    p is drawn once per row rather than per stamp, so a row tends to be either
+    mostly-masking or mostly-unmasking rather than a wash.
+    """
+    if T <= 1:
+        return m
+    N = int(rng.integers(0, 21))            # uniform_int(0,20), 20 inclusive
+    p = rng.uniform(0.0, 1.0)
+    u_hi = -(T ** (-1.0/3.0))
+    for _ in range(N):
+        u = rng.uniform(-1.0, u_hi)
+        nt = int(np.clip(np.floor(1.0 / abs(u)**3), 1, T))
+        start = int(rng.integers(0, T - nt + 1))
+        m[start:start+nt] = (rng.random() >= p)
+    return m
+
+
+# name, probability, builder
+MASK_TYPES = (
+    ('all-valid',      0.50, _all_valid),
+    ('bernoulli',      0.15, _bernoulli),
+    ('gap',            0.05, _gap),
+    ('one-sided',      0.05, _one_sided),
+    ('masked-blocks',  0.05, _masked_blocks),
+    ('periodic',       0.04, _periodic),
+    ('cluster',        0.04, _cluster),
+    ('bimodal',        0.04, _bimodal),
+    ('sparse-lattice', 0.04, _sparse_lattice),
+    ('all-masked',     0.04, _all_masked),
+)
+
+assert abs(sum(t[1] for t in MASK_TYPES) - 1.0) < 1e-12
+
+_PROBS = np.array([t[1] for t in MASK_TYPES])
+
+
+def random_mask(M, T, W, rng):
+    """
+    Draws a random time mask, with a base geometry chosen independently per row.
+
+    Returns (mask, labels): mask of shape (M,T) dtype bool, and a length-M list
+    of the type name used for each row, so that a failing test can report which
+    geometry produced it.
+
+    'W' is the caller's length scale in samples; see the type-builder comment above.
+    """
+    picks = rng.choice(len(MASK_TYPES), size=M, p=_PROBS)
+    mask = np.empty((M, T), dtype=bool)
+    labels = []
+    for i, k in enumerate(picks):
+        name, _, builder = MASK_TYPES[k]
+        mask[i] = _perturb(builder(T, W, rng), T, W, rng)
+        labels.append(name)
+    return mask, labels

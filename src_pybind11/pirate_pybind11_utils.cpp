@@ -44,8 +44,11 @@ void register_utils_bindings(pybind11::module &m)
 
     // Concurrency smoke test for the above (see 'python -m pirate_frb test --aout').
     m.def("test_atomic_print", &test_atomic_print,
-          py::arg("fd"), py::arg("nthreads"), py::arg("nlines"),
+          py::arg("fd"), py::arg("nthreads"), py::arg("nlines"), py::arg("line_pad") = 200,
           py::call_guard<py::gil_scoped_release>());
+
+    // Integer/bit-helper test (see 'python -m pirate_frb test --util').
+    m.def("test_utils", &test_utils, py::call_guard<py::gil_scoped_release>());
 
     // avx2_simulate_4bit_noise() test + timing (see 'python -m pirate_frb test/time --sim').
     m.def("test_avx2_simulate_4bit_noise", &test_avx2_simulate_4bit_noise, py::call_guard<py::gil_scoped_release>());

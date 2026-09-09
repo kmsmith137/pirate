@@ -47,8 +47,15 @@ can slip in between).
   one process-global mutex). Each message is formatted in full, then
   emitted with a single `write(2)`.
 
+- `atomic_print()` takes a **`str`**, whereas `print()` took any object and
+  formatted it for you. So converting `print(x)` where `x` is not already a
+  string must become `atomic_print(str(x))` (or `repr(x)`); otherwise the
+  pybind11 binding raises `TypeError`, and only when that line actually runs.
+  This is easy to miss on a rarely-run path -- it is how
+  `test_pulse_upsampling.py`'s `atomic_print(self)` reached a commit.
+
 - The single syscall is what makes a line unsplittable across PROCESSES
-  sharing an fd -- `run_toy_grouper` spawns one child per grouper address,
+  sharing an fd -- `pirate_frb run toy_grouper` spawns one child per grouper
   all inheriting the parent's stdout, and no in-process lock can help
   there. The mutex covers everything in-process.
 
@@ -159,9 +166,6 @@ Documented exceptions, all deliberate:
   from the vendorized output.
 - `pirate_frb/cuda_generator/`: build-time code generation, which must stay
   importable without the compiled extension it helps build.
-- `pirate_frb/slow_avar/PfVariance.py`: `print(..., end="")` progress dots.
-  Incremental partial-line output is fundamentally incompatible with
-  line-atomic emission, and the incremental feedback is the point.
 - Docstring usage examples still say `print(...)`, since they illustrate
   the API for a reader rather than executing.
 

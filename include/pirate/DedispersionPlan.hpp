@@ -24,6 +24,9 @@ namespace pirate {
 #endif
 
 
+struct YamlFile;
+
+
 // Dedispersion is a two-stage process. In the first stage, there is one tree for each
 // primary tree (see DedispersionConfig.hpp). In the second stage, each primary tree is
 // expanded into (num_early_triggers+1) trees: the main (full-band) tree, plus one "early"
@@ -32,34 +35,25 @@ namespace pirate {
 
 struct DedispersionPlan
 {
+    // Selects how much of the plan gets initialized.
     struct Params
     {
-        // gpu_runnable: if true, then Dcore values will be taken from the cdd2 kernel
-        // registry, and an exception will be thrown if a cdd2 kernel is missing. If false,
-        // then default Dcore values will be assigned (Dcore = pf.time_downsampling), and
-        // the plan cannot be used in a GpuDedisperser (this is useful in contexts such as
-        // the 'pirate_frb show_dedisperser' CLI). Not to be confused with the config-level
-        // 'gpu_valid' flag in DedispersionConfig::make_random(), which restricts random
-        // configs to precompiled cdd2 kernels.
-        bool gpu_runnable = true;
+        // If false, then DedispersionPlan::mega_ringbuf is an empty pointer.
+        bool mega_ringbuf = true;
 
-        // is_incomplete: this is a hack, only used by make_incomplete_plan_from_yaml().
-        // If true, then the constructor just sets 'config' and 'params'. Some (but not all)
-        // remaining members are set by make_incomplete_plan_from_yaml() after the
-        // constructor returns (see below). Code which touches the "low-level data needed
-        // for compute kernels" should xassert(!params.is_incomplete) -- see e.g. to_yaml()
-        // and the GpuDedisperser/ReferenceDedisperser constructors.
-        //
-        // The constructor asserts !(is_incomplete && gpu_runnable): incomplete plans take
-        // their Dcore values from the producer's yaml, never from the local kernel registry.
-        bool is_incomplete = false;
+        // If false, then all gpu kernel params (tree_gridding_kernel_params
+        // ... h2h_copy_kernel_params) will be uninitialized. If mega_ringbuf=false
+        // and gpu_kernels=true, then an exception will be raised.
+        bool gpu_kernels = true;
+
+        // Both false: config-derived scalars, stage1 ranks and 'trees' only. Needs no CUDA
+        // device -- this is the plan that GPU-less consumers (pirate_frb.varmap,
+        // FrbGrouper) build in order to get at the trees.
+        static Params minimal();
     };
 
-    // The one-argument constructor delegates with default Params. (Two overloads rather
-    // than a default argument: C++ forbids 'params = Params()' here, since the nested
-    // class's default member initializers are incomplete inside the enclosing class.)
     DedispersionPlan(const DedispersionConfig &config, const Params &params);
-    explicit DedispersionPlan(const DedispersionConfig &config);
+    explicit DedispersionPlan(const DedispersionConfig &config);  // default Params
 
     const DedispersionConfig config;
     const Params params;
@@ -83,31 +77,80 @@ struct DedispersionPlan
     // Stage2 trees. These trees contain the output of the dedispersion, and are useful "from outside".
     // There is a lot of per-tree data, so I defined a helper class 'DedispersionTree'.
     // The number of trees is (config.num_primary_trees() + total number of early triggers).
+    //
+    // Trees are ordered by primary tree, then by DECREASING early-trigger level (earliest
+    // trigger first, then the main early_trigger_level=0 tree).
+    //
+    // FIXME(?): ordering by decreasing early_trigger_level is awkward (increasing would be more
+    // natural), but arises because of a technical issue in MegaRingbuf (per-segment mapping
+    // consumer_id -> chunk_lag must be monotone increasing). See MegaRingbuf.cpp for more info.
+    
     long ntrees = 0;
     std::vector<DedispersionTree> trees;  // length ntrees
 
+    // (primary_tree_index, early_trigger_level) -> itree, i.e. the inverse of reading
+    // trees[itree].{primary_tree_index, early_trigger_level}. Throws if either argument is
+    // out of range. Available on a Params::minimal() plan, i.e. with no GPU.
+    long dedispersion_tree_index(long primary_tree_index, long early_trigger_level) const;
+
     // 'verbose' controls explanatory comments; 'zones' independently controls
     // whether the mega_ringbuf per-clag host/gpu zone breakdown is emitted.
+    //
+    // An incomplete plan (Params::mega_ringbuf=false) serializes fine: its yaml is the same
+    // document with the 'mega_ringbuf' key absent. This is what lets a GPU-less process
+    // write a plan yaml (see pirate_frb.varmap's variance-map files).
     void to_yaml(YAML::Emitter &emitter, bool verbose = false, bool zones = false) const;
     std::string to_yaml_string(bool verbose = false, bool zones = false) const;
+
+    // The plan a PRODUCER serialized (DedispersionPlan::to_yaml_string(), as sent in the
+    // grouper handshake), rebuilt for a consumer that may be running a different pirate_frb
+    // build.
+    //
+    // Returns a Params::minimal() plan built from 'config', cross-checked field by field
+    // against the yaml; a disagreement throws, naming the field and both values. Nothing is
+    // adopted from the yaml: a plan is a pure function of its config.
+    //
+    // Note that decoding the producer's out_argmax tokens needs one thing this plan does
+    // NOT carry, because it is a property of the producer's compiled kernels rather than of
+    // the plan: their per-tree Dcore. See decode_argmax() below, and FrbGrouper::dcores.
+    static std::shared_ptr<DedispersionPlan> from_yaml(const DedispersionConfig &config,
+                                                       const YamlFile &plan_yaml);
+
+    static std::shared_ptr<DedispersionPlan> from_yaml_string(const DedispersionConfig &config,
+                                                              const std::string &plan_yaml);
+
+
+    // -------------------------------------------------------------------------------------------------
+    //
+    // Interpreting the dedisperser's output. All five methods below take an 'itree' index
+    // into 'trees' (throwing if it is out of range), and read nothing but 'config' and
+    // 'trees' -- so they are available on a Params::minimal() plan, i.e. with no GPU.
+
 
     // decode_argmax(): converts an out_argmax token (plus its array indices) into the
     // winning trial parameters, i.e. the (subband, peak-finding profile, fine-grained dm,
     // fine-grained arrival time) responsible for the coarse-grained maximum in 'out_max'.
     //
-    // Inputs:
+    // Inputs (see notes/dedispersion.tex for details of the out_argmax token format):
     //
-    //   argmax_token = uint32 token from trees[itree]'s out_argmax array
+    //   argmax_token = uint32 token from trees[itree]'s out_argmax array.
+    //   Dcore = the PRODUCING kernel's internal time-downsampling factor (see below)
     //   0 <= itree < ntrees
     //   0 <= idm_coarse < trees[itree].ndm_out     (dm index in out_max/out_argmax)
     //   0 <= itime_coarse < trees[itree].nt_out    (time index in out_max/out_argmax)
+    //
+    // 'Dcore' sets the time granularity of the token's fine-time field, and is a property of
+    // the peak-finding kernel that WROTE the token rather than of this plan. Take it from:
+    //    - GpuDedisperser::Dcores[itree] for GPU tokens,
+    //    - ReferenceDedisperserBase::Dcores[itree] for reference tokens
+    //    - FrbGrouper::dcores[itree] on the consumer side of a grouper handshake
     //
     // Outputs are TOPLEVEL-relative: tree-freq channels of the rank-toplevel_tree_rank
     // gridding, and full-resolution time samples with t=0 at the start of the current
     // chunk (i.e. no per-tree time downsampling or early-trigger reindexing -- all
     // per-tree reindexing is done here, not by the caller):
     //
-    //   0 <= fmin < fmax < pow2(toplevel_tree_rank)
+    //   0 <= fmin < fmax < pow2(config.toplevel_tree_rank)
     //       Tree-freq range (inclusive) spanned by the winning frequency subband.
     //       (Sharper per-tree bound: fmax < pow2(toplevel_tree_rank - early_trigger_level).)
     //
@@ -129,12 +172,11 @@ struct DedispersionPlan
     //
     // Throws an exception on out-of-range indices or a malformed token.
 
-    void decode_argmax(
-        uint argmax_token,
-        long itree, long idm_coarse, long itime_coarse,
-        long &fmin, long &fmax, long &tlo, long &thi, long &p) const;
+    void decode_argmax(uint argmax_token, long itree, long Dcore,
+                       long idm_coarse, long itime_coarse,
+                       long &fmin, long &fmax, long &tlo, long &thi, long &p) const;
 
-    
+
     // Convert the parameters (fmin, fmax, tlo, thi, p) returned by decode_argmax()
     // to "physical" params:
     //
@@ -155,13 +197,12 @@ struct DedispersionPlan
     // in the implementation) can push an event detected near the chunk start to a
     // slightly negative value, i.e. slightly before the chunk start.
 
-    void decode_argmax2(
-        long itree, long fmin, long fmax, long tlo, long thi, long p,
-        double &freq_lo_MHz, double &freq_hi_MHz, double &dm,
-        double &timestamp_samp, double &width_samp) const;
+    void decode_argmax2(long itree, long fmin, long fmax, long tlo, long thi, long p,
+                        double &freq_lo_MHz, double &freq_hi_MHz, double &dm,
+                        double &timestamp_samp, double &width_samp) const;
 
 
-    // Returns 1-d array of shape trees[itree].ndm_out (int64, on the host).
+    // Returns 1-d array of shape (trees[itree].ndm_out,) (int64, on the host).
     //
     // A dedispersion output element (ichunk, ibeam, idm, it) of tree 'itree' is
     // "steady-state", i.e. unaffected by the zero-padding before the start of the
@@ -172,25 +213,26 @@ struct DedispersionPlan
     // Earlier elements are computed from sums whose dedispersion + peak-finding
     // footprint extends past the start of the acquisition, so their out_max values
     // are artificially low (warmup artifacts, not real triggers).
+    //
+    
+    // Allocated in ordinary (unregistered) host memory, so this needs no CUDA device.
     ksgpu::Array<long> compute_steady_state_it0(long itree) const;
 
 
-    // An "incomplete" DedispersionPlan does not initialize any of the "low-level data needed
-    // for compute kernels", especially the heavyweight MegaRingbuf.  This is a footgun, and
-    // is only used as a hack in 'FrbGrouper' (where it is not externally visible).
-    // This hack may go away in the future!
+    // Relate the frequency subbands of two trees of this plan. Intended for use in
+    // pirate_frb.varmap, but may be useful elsewhere.
     //
-    // The arguments are the producer's DedispersionConfig::to_yaml_string() and
-    // DedispersionPlan::to_yaml_string() (as sent in the grouper Handshake). All members
-    // above this comment are naively transcribed from the yamls -- no code is shared with
-    // the normal constructor path, nothing is re-derived, and the kernel registry is not
-    // queried (in particular, trees[:].Dcore is the PRODUCER's value, which is what makes
-    // decode_argmax() correct for producer-generated tokens even if this process runs a
-    // different pirate_frb build).
+    // n_index_mapping(): length trees[ichild].frequency_subbands.N. Entry n_c is the parent
+    //   subband searching the same toplevel band. Throws if the child's subbands are not a
+    //   subset of the parent's subbands.
+    //
+    // m_index_mapping(): length trees[ichild].frequency_subbands.M. Entry m_c is the parent
+    //   multiplet with the same band and the same fine-DM index within it. Additionally
+    //   throws unless matched bands have the same subband level.
 
-    static std::shared_ptr<DedispersionPlan> make_incomplete_plan_from_yaml(
-        const std::string &config_yaml_str,
-        const std::string &plan_yaml_str);
+    std::vector<long> n_index_mapping(long iparent, long ichild) const;
+    std::vector<long> m_index_mapping(long iparent, long ichild) const;
+
 
     // -------------------------------------------------------------------------------------------------
     //
@@ -213,10 +255,6 @@ struct DedispersionPlan
     std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length num_primary_trees
     std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length ntrees
 
-    // Note: stage2_pf_params[:].Dcore is copied from trees[:].Dcore (which the constructor
-    // fills from the cdd2 kernel registry if params.gpu_runnable, else from a default; see
-    // Part 1), so that peak-finders built from the plan (GPU or reference) agree on
-    // out_argmax token granularity.
     std::vector<PeakFindingKernelParams> stage2_pf_params;          // length ntrees
 
     // Only needed if early triggers are used.

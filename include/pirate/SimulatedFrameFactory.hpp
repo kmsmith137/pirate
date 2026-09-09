@@ -218,6 +218,7 @@ struct SimulatedFrameFactory
         double width_ms;
         double subband_freq_lo_MHz;
         double subband_freq_hi_MHz;
+        long tree_index;
     };
 
     // Returns the recorded FRB-injection events (one per injected FRB) and clears the internal

@@ -213,6 +213,9 @@ def make_analytic_signal_template(
             best_token.astype(xp.uint32, copy=False))
 
 
+from .producer_metadata import ARGMAX_ENCODING
+
+
 class FastSnrMapSimulator:
     """Cache analytic signal templates and correlated backgrounds on one backend.
 
@@ -227,6 +230,7 @@ class FastSnrMapSimulator:
         subband,
         *,
         xp,
+        dcores,
         time_sample_s,
         nt_in,
         reference_freq_mhz,
@@ -236,7 +240,10 @@ class FastSnrMapSimulator:
         base_seed=12345,
         background_parameters=None,
     ):
+        from .peakfinders import producer_dcore_array
+
         self.plan = plan
+        self.dcores = producer_dcore_array(plan, dcores)
         self.itree = int(itree)
         self.subband = subband
         self.xp = xp
@@ -271,6 +278,7 @@ class FastSnrMapSimulator:
 
         coordinate_model = self._make_coordinate_model()
         self.representative_multiplet = coordinate_model["multiplet"]
+        self.extra_dm = coordinate_model["extra_dm"]
         self.profile = coordinate_model["profile"]
         self.profile_width_s = coordinate_model["profile_width_s"]
         self.fine_tokens_cpu = coordinate_model["fine_tokens"]
@@ -288,7 +296,8 @@ class FastSnrMapSimulator:
         idms = np.ascontiguousarray(idms, dtype=np.int64)
         itimes = np.ascontiguousarray(itimes, dtype=np.int64)
         itrees = np.full(tokens.size, self.itree, dtype=np.int64)
-        decoded = self.plan.decode_argmax_batch(tokens, itrees, idms, itimes)
+        decoded = self.plan.decode_argmax_batch(
+            tokens, itrees, idms, itimes, dcores=self.dcores)
         return decoded, self.plan.decode_argmax2_batch(itrees, *decoded)
 
     def _choose_multiplet(self):
@@ -304,18 +313,25 @@ class FastSnrMapSimulator:
         nominal_idm = int(np.clip(math.floor(fraction * self.ndm), 0, self.ndm - 1))
         nearby = np.arange(max(0, nominal_idm - 2),
                            min(self.ndm, nominal_idm + 3), dtype=np.int64)
-        trial_m = np.repeat(members.astype(np.int64), nearby.size)
-        trial_idm = np.tile(nearby, members.size)
-        tokens = (trial_m.astype(np.uint32) << np.uint32(16))
+        extra_count, remainder = divmod(int(self.tree.dm_downsampling), 1 << int(fs.pf_rank))
+        if remainder or not 1 <= extra_count <= 256:
+            raise ValueError("tree has invalid PIRATE 1.5 extra-DM token geometry")
+        trial_m, trial_mu, trial_idm = (
+            values.ravel() for values in np.meshgrid(
+                members, np.arange(extra_count, dtype=np.int64), nearby, indexing="ij")
+        )
+        tokens = ((trial_m.astype(np.uint32) << np.uint32(16))
+                  | (trial_mu.astype(np.uint32) << np.uint32(24)))
         _, physical = self._decode_physical(
             tokens, trial_idm, np.zeros(tokens.size, dtype=np.int64))
         dms = np.asarray(physical[2], dtype=np.float64)
         best = int(np.argmin(np.abs(dms - self.injected_dm)))
-        return int(trial_m[best])
+        return int(trial_m[best]), int(trial_mu[best])
 
-    def _choose_profile(self, multiplet):
+    def _choose_profile(self, multiplet, extra_dm):
         profiles = np.arange(int(self.tree.nprofiles), dtype=np.int64)
-        tokens = ((np.uint32(multiplet) << np.uint32(16))
+        tokens = ((np.uint32(extra_dm) << np.uint32(24))
+                  | (np.uint32(multiplet) << np.uint32(16))
                   | (profiles.astype(np.uint32) << np.uint32(8)))
         idm = np.full(profiles.size, self.ndm // 2, dtype=np.int64)
         _, physical = self._decode_physical(
@@ -326,17 +342,18 @@ class FastSnrMapSimulator:
         return profile, float(widths_s[profile])
 
     def _make_coordinate_model(self):
-        multiplet = self._choose_multiplet()
-        profile, profile_width_s = self._choose_profile(multiplet)
+        multiplet, extra_dm = self._choose_multiplet()
+        profile, profile_width_s = self._choose_profile(multiplet, extra_dm)
 
         dout = int(self.tree.nt_ds) // self.nt
         if dout < 1 or int(self.tree.nt_ds) % self.nt:
             raise RuntimeError("tree nt_ds/nt_out is not a positive integer")
         lpf = ((profile - 1) // 3) if profile else 0
-        token_quantization = min(int(self.tree.Dcore), 1 << lpf)
+        token_quantization = min(int(self.dcores[self.itree]), 1 << lpf)
         fine_time = np.arange(0, dout, token_quantization, dtype=np.uint32)
         fine_tokens = (
-            (np.uint32(multiplet) << np.uint32(16))
+            (np.uint32(extra_dm) << np.uint32(24))
+            | (np.uint32(multiplet) << np.uint32(16))
             | (np.uint32(profile) << np.uint32(8))
             | fine_time
         ).astype(np.uint32, copy=False)
@@ -378,6 +395,7 @@ class FastSnrMapSimulator:
 
         return {
             "multiplet": multiplet,
+            "extra_dm": extra_dm,
             "profile": profile,
             "profile_width_s": profile_width_s,
             "fine_tokens": fine_tokens,
@@ -475,10 +493,10 @@ class FastSnrMapSimulator:
             time_chunk_index = self.common_chunk_index(toas)
         signal, argmax = self.signal_template(
             toas, injected_snrs=injected_snrs,
-            time_chunk_index=time_chunk_index) 
-        
+            time_chunk_index=time_chunk_index)
+
         snr_map = signal + self.background(trial) - self.background_parameters.location
-        
+
         return snr_map.astype(self.xp.float32, copy=False), argmax, int(time_chunk_index)
 
     def synchronize(self):
@@ -538,6 +556,9 @@ class FastSnrMapSimulator:
             "subband_id": self.subband.subband_id,
             "shape": [self.ndm, self.nt],
             "representative_multiplet": self.representative_multiplet,
+            "representative_extra_dm": self.extra_dm,
+            "dcores": self.dcores.tolist(),
+            "argmax_encoding": ARGMAX_ENCODING,
             "representative_profile": self.profile,
             "representative_profile_width_ms": 1.0e3 * self.profile_width_s,
             "fine_time_states": int(self.fine_tokens_cpu.size),

@@ -30,9 +30,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .ArgmaxMetadata import (
+    read_argmax_metadata, validate_snr_map_format, validate_saved_time_sample_ms,
+)
+
 
 _SNRMAP_RE = re.compile(r"^frame_b(\d+)_t(\d+)_snrmap\.asdf$")
-_FORMAT = "pirate_frb.offline_dedisperser_snr_maps"
 
 
 def _integer(value, name, *, dtype=np.int64):
@@ -117,7 +120,7 @@ class GpuMapChunk:
     argmax_by_tree : tuple of cupy.ndarray
         Arrays matching `snr_by_tree` exactly in shape and GPU residence,
         with dtype `uint32`.  Tokens encode the fine time, profile, and
-        frequency-subband multiplet selected by dedispersion.
+        frequency-subband multiplet and extra DM selected by dedispersion.
     beam_ids : tuple of int
         Physical beam identifiers in the order used by axis zero of every
         array.  They are not assumed to be dense or zero based.
@@ -160,7 +163,7 @@ class BeamBatch:
 
 
 class FrbOfflineGrouper:
-    """Validated, read-only view of a version-2 offline S/N-map acquisition.
+    """Validated, read-only view of a version-3 offline S/N-map acquisition.
 
     Construction discovers files named
     `frame_b<BEAM>_t<CHUNK>_snrmap.asdf`, checks their ASDF schema and source
@@ -191,6 +194,10 @@ class FrbOfflineGrouper:
     plan
         Exact incomplete producer plan reconstructed from serialized YAML.
         It supplies the scientific DM/time geometry used downstream.
+    dcores : tuple[int, ...]
+        Actual producer kernel time granularities, separate from the plan.
+    argmax_encoding : str
+        Validated PIRATE 1.5 four-byte token layout identifier.
     beam_ids : tuple[int, ...]
         Sorted beam identifiers found in the directory.
     chunks_by_beam : dict[int, tuple[int, ...]]
@@ -222,7 +229,7 @@ class FrbOfflineGrouper:
         Parameters
         ----------
         acqdir : path-like
-            Directory searched non-recursively for version-2 S/N-map ASDF
+            Directory searched non-recursively for version-3 S/N-map ASDF
             filenames.  Unrelated entries are ignored.
         cuda_device_id : integer, optional
             Device identifier retained for later calls to `load_beam_chunk()`.
@@ -245,7 +252,7 @@ class FrbOfflineGrouper:
         """
 
         import asdf
-        from .pirate_pybind11 import DedispersionPlan
+        from .pirate_pybind11 import DedispersionConfig, DedispersionPlan
 
         self.acqdir = os.path.abspath(os.fspath(acqdir))
         self.cuda_device_id = _integer(
@@ -313,21 +320,22 @@ class FrbOfflineGrouper:
             try:
                 with asdf.open(path) as af:
                     saved = af.tree
-                    if saved.get("format") != _FORMAT:
-                        raise ValueError("unexpected ASDF format")
-                    if saved.get("format_version") != 2:
-                        raise ValueError("expected format_version=2")
+                    validate_snr_map_format(saved)
 
                     config_yaml = _require_text(
                         saved.get("config_yaml"), "config_yaml"
                     )
                     plan_yaml = _require_text(saved.get("plan_yaml"), "plan_yaml")
                     if reference is None:
-                        plan = DedispersionPlan.make_incomplete_plan_from_yaml(
-                            config_yaml, plan_yaml
-                        )
+                        config = DedispersionConfig.from_yaml_string(config_yaml)
+                        plan = DedispersionPlan.from_yaml_string(config, plan_yaml)
                     else:
                         plan = self.plan
+                    dcores = read_argmax_metadata(
+                        saved, ntrees=int(plan.ntrees),
+                        douts=tuple(int(t.nt_ds) // int(t.nt_out) for t in plan.trees),
+                    )
+                    validate_saved_time_sample_ms(saved, plan)
 
                     # Source coordinates are duplicated in filename and ASDF
                     # metadata by design; requiring agreement catches stale
@@ -350,7 +358,7 @@ class FrbOfflineGrouper:
                             f"{(saved_beam, saved_chunk)}"
                         )
 
-                    # Producer start is allowed to be absent for legacy maps,
+                    # Producer start may be absent even in a v3 map,
                     # but a known start cannot lie after the chunk being read.
                     # Its absence is preserved rather than interpreted as zero.
                     producer_start = saved.get(
@@ -427,17 +435,19 @@ class FrbOfflineGrouper:
                         tuple(shapes),
                         tuple(snr_dtypes),
                         tuple(argmax_dtypes),
+                        dcores,
+                        saved["argmax_encoding"],
                     )
                     if reference is None:
                         reference = metadata
                         self.plan = plan
                     elif metadata != reference:
                         raise ValueError(
-                            "producer config, plan, tree shapes, or dtypes "
+                            "producer config, plan, Dcores, encoding, tree shapes, or dtypes "
                             "differ from the first file"
                         )
             # Add the concrete pathname without swallowing validation detail.
-            except (KeyError, TypeError, ValueError) as exc:
+            except (KeyError, TypeError, ValueError, RuntimeError) as exc:
                 raise ValueError(f"{path}: {exc}") from exc
 
         # A beam's start provenance describes the whole producer stream and
@@ -459,6 +469,8 @@ class FrbOfflineGrouper:
         self.tree_shapes = reference[2]
         self.snr_dtypes = reference[3]
         self.argmax_dtypes = reference[4]
+        self.dcores = reference[5]
+        self.argmax_encoding = reference[6]
         self.ntrees = int(self.plan.ntrees)
         self.nt_in = int(self.plan.nt_in)
         self.nfreq = int(self.plan.nfreq)

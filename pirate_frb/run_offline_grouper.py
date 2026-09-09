@@ -548,7 +548,7 @@ def run_offline_grouper(
     Parameters
     ----------
     acqdir : path-like
-        Directory containing version-2 offline-dedisperser S/N-map ASDF files.
+        Directory containing version-3 offline-dedisperser S/N-map ASDF files.
     config_file : path-like
         Required strict YAML file with exactly ``peakfinding``, ``grouping``,
         and ``execution`` sections.  See ``configs/offline_grouper/example.yml``.
@@ -605,6 +605,7 @@ def run_offline_grouper(
             PeakFinderGeometry.from_plan(
                 loader.plan,
                 tree,
+                dcore=loader.dcores[tree],
                 dm_reach=peakfinding.dm_reach,
                 waist_bins=peakfinding.waist_bins,
             )
@@ -616,7 +617,7 @@ def run_offline_grouper(
             )
         )
         decoder = GpuArgmaxDecoder(
-            loader.plan, cuda_device_id=cuda_device_id
+            loader.plan, cuda_device_id=cuda_device_id, dcores=loader.dcores
         )
         grouping_geometry = GroupingGeometry.from_plan(loader.plan)
         event_offset = 0
@@ -712,6 +713,8 @@ def run_offline_grouper(
     metadata = make_catalog_metadata(
         config_yaml=loader.config_yaml,
         plan_yaml=loader.plan_yaml,
+        dcores=loader.dcores,
+        argmax_encoding=loader.argmax_encoding,
         snr_threshold=peakfinding.snr_threshold,
         dm_reach_by_tree=tuple(
             geometry.dm_radius for geometry in geometries

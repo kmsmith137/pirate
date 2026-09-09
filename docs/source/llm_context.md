@@ -10,6 +10,7 @@ or GPU kernels).
 maxdepth: 1
 ---
 notes/comments
+notes/unit_tests
 notes/cpp
 notes/gpu_kernels
 notes/pybind11

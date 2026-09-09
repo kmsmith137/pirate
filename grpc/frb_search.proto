@@ -42,7 +42,7 @@ service FrbSearch {
   rpc GetStatus (GetStatusRequest) returns (GetStatusResponse);
 
   // Returns the per-server configuration this server was started with.
-  // Loosely mirrors the run_server YAML config (flattened to a single server).
+  // Loosely mirrors the 'pirate_frb run server' YAML config (flattened to one server).
   rpc GetConfig (GetConfigRequest) returns (GetConfigResponse);
 
   // Returns XEngine metadata as a YAML string. Empty if metadata not yet available (the

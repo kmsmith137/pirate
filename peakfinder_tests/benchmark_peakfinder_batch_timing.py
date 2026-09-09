@@ -21,6 +21,7 @@ import importlib
 import json
 import math
 import os
+import operator
 import platform
 import subprocess
 import sys
@@ -34,9 +35,11 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 import yaml
 
+from .producer_metadata import ARGMAX_ENCODING, build_producer_plan
+
 
 SCHEMA_NAME = "pirate-peakfinder-batch-timing"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 METHOD = "full_band"
 NOISE_MODEL = "gaussian_white_noise_no_corruption"
 SNR_DTYPE = np.dtype(np.float16)
@@ -44,7 +47,7 @@ ARGMAX_DTYPE = np.dtype(np.uint32)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = REPOSITORY_ROOT / "configs/dedispersion/chord_sb2_et.yml"
-DEFAULT_RESULTS_DIR = Path(__file__).resolve().parent / "results_peakfinder_batch_timing"
+DEFAULT_RESULTS_DIR = Path(__file__).resolve().parent / "results_peakfinder_batch_timing_pirate15"
 DEFAULT_TOTAL_BEAMS = 60
 DEFAULT_BEAM_BATCH_SIZES = (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60)
 DEFAULT_DM_REACHES = (1, 2, 4, 8, 16, 32)
@@ -158,6 +161,8 @@ class TreePlanSpec:
     multiplets: int
     profiles: int
     token_dout: int
+    dcore: int
+    token_extra_dm: int
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -201,6 +206,14 @@ class PlanBundle:
     config_document: Mapping[str, Any]
     specs: tuple[TreePlanSpec, ...]
     chunk_duration_ms: float
+
+    @property
+    def dcores(self) -> tuple[int, ...]:
+        return tuple(spec.dcore for spec in self.specs)
+
+    @property
+    def argmax_encoding(self) -> str:
+        return ARGMAX_ENCODING
 
 
 @dataclass(frozen=True)
@@ -256,39 +269,55 @@ def _unique_positive_grid(values: Sequence[Any], name: str) -> tuple[int, ...]:
     return result
 
 
-def expected_tree_specs(plan: Any | None = None) -> tuple[TreePlanSpec, ...]:
-    """Return expected shapes, or validate and return specs from ``plan``."""
-
+def expected_tree_specs(plan: Any | None = None, *, dcores=None) -> tuple[TreePlanSpec, ...]:
+    """Return shape-only synthetic specs, or validate a plan with explicit Dcores."""
     if plan is not None:
-        return assert_expected_plan(plan)
+        if dcores is None:
+            raise ValueError("producer dcores are required with a plan")
+        return assert_expected_plan(plan, dcores=dcores)
     return tuple(
-        TreePlanSpec(i, -1, -1, ndm, ntime, 1, 1, 1)
+        TreePlanSpec(i, -1, -1, ndm, ntime, 1, 1, 1, 1, 1)
         for i, (ndm, ntime) in enumerate(EXPECTED_SHAPES)
     )
 
 
-def tree_specs_from_plan(plan: Any) -> tuple[TreePlanSpec, ...]:
+def tree_specs_from_plan(plan: Any, *, dcores: Sequence[int]) -> tuple[TreePlanSpec, ...]:
+    if len(dcores) != len(plan.trees):
+        raise ValueError("producer dcores must contain one value per output tree")
     specs = []
-    for tree_index, tree in enumerate(plan.trees):
-        nt_ds = int(tree.nt_ds)
-        ntime = int(tree.nt_out)
+    for tree_index, (tree, dcore) in enumerate(zip(plan.trees, dcores)):
+        if isinstance(dcore, (bool, np.bool_)):
+            raise ValueError("producer Dcore must be an integer")
+        try:
+            dcore = operator.index(dcore)
+        except TypeError as exc:
+            raise ValueError("producer Dcore must be an integer") from exc
+        nt_ds, ntime = int(tree.nt_ds), int(tree.nt_out)
         if ntime <= 0 or nt_ds <= 0 or nt_ds % ntime:
             raise ValueError(f"tree {tree_index} has inconsistent time dimensions")
+        dout = nt_ds // ntime
+        if dcore < 1 or dcore > 256 or dcore & (dcore-1) or dout % dcore:
+            raise ValueError(f"tree {tree_index} has an invalid producer Dcore")
+        dm_downsampling = int(tree.dm_downsampling)
+        granularity = 1 << int(tree.frequency_subbands.pf_rank)
+        if dm_downsampling <= 0 or dm_downsampling % granularity:
+            raise ValueError(f"tree {tree_index} has invalid extra-DM geometry")
+        extra_dm = dm_downsampling // granularity
+        if extra_dm > 256 or extra_dm & (extra_dm-1):
+            raise ValueError(f"tree {tree_index} has invalid extra-DM range")
         specs.append(TreePlanSpec(
             tree_index=tree_index,
             primary_tree_index=int(tree.primary_tree_index),
             early_trigger_level=int(tree.early_trigger_level),
-            ndm=int(tree.ndm_out),
-            ntime=ntime,
-            multiplets=int(tree.frequency_subbands.M),
-            profiles=int(tree.nprofiles),
-            token_dout=nt_ds // ntime,
+            ndm=int(tree.ndm_out), ntime=ntime,
+            multiplets=int(tree.frequency_subbands.M), profiles=int(tree.nprofiles),
+            token_dout=dout, dcore=dcore, token_extra_dm=extra_dm,
         ))
     return tuple(specs)
 
 
-def assert_expected_plan(plan: Any) -> tuple[TreePlanSpec, ...]:
-    specs = tree_specs_from_plan(plan)
+def assert_expected_plan(plan: Any, *, dcores: Sequence[int]) -> tuple[TreePlanSpec, ...]:
+    specs = tree_specs_from_plan(plan, dcores=dcores)
     shapes = tuple(spec.shape for spec in specs)
     if int(plan.ntrees) != 10 or len(specs) != 10:
         raise ValueError(f"expected exactly 10 output trees, found {len(specs)}")
@@ -300,7 +329,7 @@ def assert_expected_plan(plan: Any) -> tuple[TreePlanSpec, ...]:
             f"expected {EXPECTED_PIXELS_PER_BEAM} pixels per beam, found {pixels}"
         )
     for spec in specs:
-        if not (1 <= spec.multiplets <= 65_536):
+        if not (1 <= spec.multiplets <= 256):
             raise ValueError(f"tree {spec.tree_index} has invalid multiplet count")
         if not (1 <= spec.profiles <= 256):
             raise ValueError(f"tree {spec.tree_index} has invalid profile count")
@@ -312,7 +341,7 @@ def assert_expected_plan(plan: Any) -> tuple[TreePlanSpec, ...]:
 def load_authoritative_plan(config_path: Path | str) -> PlanBundle:
     """Build the registered producer plan and reconstruct its offline consumer."""
 
-    from pirate_frb import DedispersionConfig, DedispersionPlan
+    from pirate_frb import DedispersionConfig
 
     path = Path(config_path).resolve()
     with path.open("r", encoding="utf-8") as stream:
@@ -320,15 +349,10 @@ def load_authoritative_plan(config_path: Path | str) -> PlanBundle:
     if not isinstance(document, dict):
         raise ValueError("dedispersion config must contain a YAML mapping")
     config = DedispersionConfig.from_yaml(str(path))
-    # Match the active offline consumer: construct the authoritative producer
-    # plan, then reconstruct its serialized consumer plan so producer-selected
-    # Dcore/token metadata are retained exactly.
-    producer_plan = DedispersionPlan(config, gpu_runnable=True)
-    producer_plan_yaml = producer_plan.to_yaml_string()
-    plan = DedispersionPlan.make_incomplete_plan_from_yaml(
-        config.to_yaml_string(), producer_plan_yaml
-    )
-    specs = assert_expected_plan(plan)
+    producer = build_producer_plan(config)
+    plan = producer.plan
+    producer_plan_yaml = producer.plan_yaml
+    specs = assert_expected_plan(plan, dcores=producer.dcores)
     if str(document.get("dtype")) != "float16":
         raise ValueError("authoritative configuration must use float16 S/N maps")
     chunk_duration_ms = float(config.time_sample_ms) * int(plan.nt_in)
@@ -415,7 +439,7 @@ def tree_seed(base_seed: Any, tree_index: Any, purpose: str = "snr") -> int:
 def _valid_tree_token(spec: TreePlanSpec, base_seed: int) -> tuple[int, int]:
     multiplet = tree_seed(base_seed, spec.tree_index, "token") % spec.multiplets
     # Current ABI: profile bits 8..15 and fine time bits 0..7 are both zero;
-    # the tree-specific multiplet occupies bits 16..31.
+    # the multiplet occupies bits 16..23; extra-DM bits 24..31 are zero.
     token = int(np.uint32(multiplet) << np.uint32(16))
     return int(multiplet), token
 
@@ -432,13 +456,20 @@ def validate_argmax_tokens(
             raise ValueError(f"tree {spec.tree_index} argmax shape is invalid")
         if np.any(values == np.uint32(0xFFFFFFFF)):
             raise ValueError(f"tree {spec.tree_index} uses the invalid sentinel")
-        multiplet = values >> np.uint32(16)
+        multiplet = (values >> np.uint32(16)) & np.uint32(0xFF)
+        extra_dm = values >> np.uint32(24)
         profile = (values >> np.uint32(8)) & np.uint32(0xFF)
         fine_time = values & np.uint32(0xFF)
         if (np.any(multiplet >= spec.multiplets)
+                or np.any(extra_dm >= spec.token_extra_dm)
                 or np.any(profile >= spec.profiles)
                 or np.any(fine_time >= spec.token_dout)):
             raise ValueError(f"tree {spec.tree_index} contains invalid tokens")
+        for p in np.unique(profile):
+            level = (int(p) - 1) // 3 if p else 0
+            quantum = min(spec.dcore, 1 << level)
+            if quantum > 1 and np.any((profile == p) & ((fine_time % quantum) != 0)):
+                raise ValueError(f"tree {spec.tree_index} contains invalid tokens: fine-time quantization")
 
 
 def validate_tokens_with_plan(
@@ -448,7 +479,7 @@ def validate_tokens_with_plan(
     decoded = []
     for item in inputs:
         values = tuple(int(value) for value in plan.decode_argmax(
-            item.token, item.spec.tree_index, 0, 0
+            item.token, item.spec.tree_index, item.spec.dcore, 0, 0
         ))
         if len(values) != 5 or values[-1] != 0:
             raise ValueError(
@@ -907,7 +938,7 @@ def build_geometries(
         by_tree = []
         for spec in specs:
             geometry = PeakFinderGeometry.from_plan(
-                plan, spec.tree_index, dm_reach=reach,
+                plan, spec.tree_index, dcore=spec.dcore, dm_reach=reach,
                 waist_bins=waist_bins,
             )
             if (int(geometry.tree) != spec.tree_index
@@ -1165,10 +1196,12 @@ def _metadata_document(
         },
         "authoritative_plan": {
             "construction": (
-                "DedispersionConfig.from_yaml; DedispersionPlan(config, "
-                "gpu_runnable=True); serialized reconstruction with "
-                "DedispersionPlan.make_incomplete_plan_from_yaml"
+                "DedispersionPlan(config); GpuDedisperser kernel selection for new "
+                "synthetic inputs; explicit GpuDedisperser.Dcores; "
+                "DedispersionPlan.from_yaml_string consumer reconstruction"
             ),
+            "dcores": list(bundle.dcores),
+            "argmax_encoding": bundle.argmax_encoding,
             "plan_yaml": plan_yaml,
             "plan_yaml_sha256": hashlib.sha256(plan_yaml.encode("utf-8")).hexdigest(),
             "ntrees": len(bundle.specs),
@@ -1192,7 +1225,7 @@ def _metadata_document(
             "per_tree_realized": list(inputs_summary),
             "token_policy": (
                 "constant valid uint32 per tree; deterministic tree-specific "
-                "multiplet in bits 16..31, profile 0, fine time 0; no sentinel; "
+                "multiplet in bits 16..23, extra DM 0, profile 0, fine time 0; no sentinel; "
                 "each token is decoded once by the authoritative plan before timing"
             ),
             "reuse_policy": (
@@ -1318,6 +1351,7 @@ def _signature_payload(
         REPOSITORY_ROOT / "pirate_frb/Peakfinders.py",
     )
     return {
+        "argmax_encoding": ARGMAX_ENCODING,
         "schema_name": SCHEMA_NAME,
         "schema_version": SCHEMA_VERSION,
         "sources": [file_identity(path) for path in source_paths],

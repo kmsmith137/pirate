@@ -111,7 +111,7 @@ def main():
         print(f"    - {old.strip()}")
         print(f"    + {new.strip()}")
     print("\nEverything else is byte-identical to the source. Pass the new file "
-          "to run_server in place of the tracked one.")
+          "to 'pirate_frb run server' in place of the tracked one.")
     return 0
 
 

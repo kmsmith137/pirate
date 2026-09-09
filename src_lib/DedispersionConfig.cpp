@@ -2,6 +2,7 @@
 
 #include <cstring>                 // strlen()
 #include <algorithm>               // std::sort()
+#include <numeric>                 // std::gcd()
 #include <iomanip>                 // std::fixed, std::setprecision
 
 #include <ksgpu/Dtype.hpp>
@@ -11,8 +12,7 @@
 #include <ksgpu/string_utils.hpp>  // ksgpu::tuple_str()
 
 #include "../include/pirate/constants.hpp"
-#include "../include/pirate/utils.hpp"           // integer_log2()
-#include "../include/pirate/inlines.hpp"         // xdiv(), pow2(), print_kv(), is_power_of_two()
+#include "../include/pirate/inlines.hpp"         // xdiv(), pow2(), print_kv(), is_power_of_two(), integer_log2()
 #include "../include/pirate/YamlFile.hpp"
 #include "../include/pirate/FrequencySubbands.hpp"
 #include "../include/pirate/CoalescedDdKernel2.hpp"
@@ -250,28 +250,6 @@ Array<double> DedispersionConfig::make_channel_map() const
 }
 
 
-Array<double> DedispersionConfig::make_random_freq_variances(bool noisy) const
-{
-    long nzones = zone_nfreq.size();
-    long nfreq = this->get_total_nfreq();
-    Array<double> ret({nfreq}, af_rhost);
-
-    vector<double> zone_var(nzones);   // per-zone variances (also used by the 'noisy' print)
-    long ifreq = 0;
-    for (long z = 0; z < nzones; z++) {
-        zone_var[z] = rand_uniform(0.0, 1.0);
-        for (long i = 0; i < zone_nfreq[z]; i++)
-            ret.data[ifreq++] = zone_var[z];
-    }
-    xassert_eq(ifreq, nfreq);
-
-    if (noisy)
-        cout << "make_random_freq_variances: per-zone variances = " << tuple_str(zone_var) << endl;
-
-    return ret;
-}
-
-
 void DedispersionConfig::test() const
 {
     this->validate();
@@ -330,6 +308,54 @@ void DedispersionConfig::test() const
 }
 
 
+// Helper for DedispersionConfig::validate(): the "equal or halved" chain constraint shared by
+// max_width, wt_dm_downsampling and wt_time_downsampling.
+//
+// All three are per-primary-tree quantities expressed in that primary tree's OWN samples, and
+// primary tree i is downsampled by 2^i. So there are exactly two ways to scale one of them
+// deliberately: hold it fixed in POST-downsampling samples (equal from one primary tree to the
+// next, so the physical quantity doubles), or hold it fixed in PRE-downsampling samples
+// (halved, so the physical quantity is constant). Anything else -- an INCREASE in particular --
+// is almost always a mis-transcribed config rather than an intent.
+//
+// 'why' is the field-specific paragraph saying what else the rule buys. The shared framing is
+// here so that the three messages cannot drift apart.
+//
+// Caller contract: every value has already been checked positive and a power of two. Note that
+// if the predecessor's value is 1, the only legal successor is 1 -- halving would give 0, which
+// the per-tree loop rejects.
+
+static void _check_halving_chain(const std::vector<DedispersionConfig::PrimaryTree> &pts,
+                                 const char *name,
+                                 long DedispersionConfig::PrimaryTree::*field,
+                                 const char *why)
+{
+    for (size_t ipri = 1; ipri < pts.size(); ipri++) {
+        long w = pts.at(ipri).*field;
+        long w_prev = pts.at(ipri-1).*field;
+
+        if ((w == w_prev) || (2*w == w_prev))
+            continue;
+
+        stringstream ss;
+        ss << "DedispersionConfig: primary tree " << ipri << " has " << name << "=" << w
+           << ", but primary tree " << (ipri-1) << " has " << name << "=" << w_prev << "."
+           << " A downsampled primary tree's " << name << " must either EQUAL its predecessor's"
+           << " or be HALF of it.\n\n"
+           << name << " is in that primary tree's own samples, and primary tree i is"
+           << " downsampled by 2^i, so the two legal choices are the two ways of scaling it"
+           << " deliberately: an equal " << name << " holds the quantity fixed in"
+           << " POST-downsampling samples (so its physical size doubles per primary tree), and"
+           << " a halved " << name << " holds it fixed in PRE-downsampling samples (so its"
+           << " physical size is constant). Any other relation -- and an INCREASING " << name
+           << " in particular -- is almost always a mis-transcribed config rather than an"
+           << " intent.\n\n"
+           << why;
+        throw runtime_error(ss.str());
+    }
+}
+
+
 void DedispersionConfig::validate() const
 {
     // Check that all members have been initialized.
@@ -374,9 +400,8 @@ void DedispersionConfig::validate() const
     xassert_ge(max_gpu_clag, 0);
     xassert_ge(future_write_max_samples, 0);
 
-    // Validate frequency_subband_counts.
-    // FIXME add check that pf_rank is not too large for tree_index=0.
-    // (Not sure yet what the exact constraint will be, after dust settles on all code.)
+    // Validate frequency_subband_counts. (Its interaction with the early triggers is
+    // checked after the primary_trees loop below, where num_early_triggers is known good.)
     FrequencySubbands::validate_subband_counts(frequency_subband_counts);
 
     // Validate primary_trees.
@@ -419,18 +444,172 @@ void DedispersionConfig::validate() const
             throw runtime_error(ss.str());
         }
 
-        // dm_downsampling and time_downsampling are optional (can be zero).
-        // If specified, they must be powers of two and <= wt_* counterparts.
+        // NOTE there is no {dm,time}_downsampling here. Neither is a config field: the
+        // DedispersionPlan constructor pins both to pow2(dd_rank1), and dd_rank1 varies
+        // WITHIN a primary-tree family (early-trigger trees are smaller), so no single
+        // per-primary-tree value could be right for all of them. See
+        // DedispersionTree::dm_downsampling and ::time_downsampling.
 
-        if (pt.dm_downsampling > 0) {
-            xassert(is_power_of_two(pt.dm_downsampling));
-            xassert(pt.wt_dm_downsampling >= pt.dm_downsampling);
-        }
+        // wt_time_downsampling has the same lower bound as wt_dm_downsampling, for the same
+        // reason: the tree's own time_downsampling is pow2(dd_rank1), and the
+        // DedispersionPlan constructor requires wt_time_downsampling to be at least that.
+        //
+        // This is NOT only a range check. The plan constructor computes
+        // nt_out = xdiv(nt_ds, time_downsampling), and what makes that division exact is the
+        // chain time_downsampling <= wt_time_downsampling <= nt_ds with all three powers of
+        // two. Without this rule a bad config dies inside xdiv() with a bare assert.
+        //
+        // The bound is tightest at early_trigger_level=0 (the largest dd_rank in the
+        // family), so one check per primary tree suffices.
 
-        if (pt.time_downsampling > 0) {
-            xassert(is_power_of_two(pt.time_downsampling));
-            xassert(pt.wt_time_downsampling >= pt.time_downsampling);
+        long et0_dd_rank = primary_tree_rank - stage1_dd_rank;
+        long min_wt_ds = pow2((et0_dd_rank + 1) / 2);
+
+        if (pt.wt_time_downsampling < min_wt_ds) {
+            stringstream ss;
+            ss << "DedispersionConfig: wt_time_downsampling[" << ipri << "]=" << pt.wt_time_downsampling
+               << " must be >= " << min_wt_ds << ", the time_downsampling of the"
+               << " early_trigger_level=0 tree at primary_tree_index=" << ipri
+               << " (= 2^ceil(dd_rank/2) of that tree, which is fixed by the GPU kernel's warp"
+               << " geometry and is not choosable in the config file).";
+            throw runtime_error(ss.str());
         }
+    }
+
+    // Constraints coupling per-primary-tree quantities ACROSS primary trees. Like the checks
+    // below, these are config-authoring errors, so they throw with an explanatory message
+    // (following the wt_dm_downsampling precedent above) rather than a bare xassert.
+    //
+    // Placement: AFTER the loop, which has already established that every value is a positive
+    // power of two (and every num_early_triggers is in range), so these checks can compare
+    // neighbours without re-validating them.
+
+    _check_halving_chain(primary_trees, "max_width", &PrimaryTree::max_width,
+        "It is also load-bearing. nprofiles = 1 + 3*log2(max_width), and the peak-finding"
+        " kernel bank for a given max_width is a PREFIX of the bank for twice that width, so"
+        " this rule is what makes every downsampled primary tree's profile set a subset of"
+        " primary tree 0's. That containment is what lets a downsampled tree's variance map be"
+        " obtained from tree 0's by selecting rows (notes/variance_map.tex, appendix \"Variance"
+        " maps of a config's trees are row-restrictions of one another\", Proposition 2). With"
+        " an increasing max_width, a downsampled tree would search profiles that tree 0 does"
+        " not, and no such row selection would exist.");
+
+    _check_halving_chain(primary_trees, "wt_dm_downsampling", &PrimaryTree::wt_dm_downsampling,
+        "wt_dm_downsampling sets the DM resolution of the weights array that normalizes"
+        " dedispersion SNR: the DedispersionPlan constructor computes"
+        " ndm_wt = 2^tree_rank / wt_dm_downsampling. Adjacent primary trees search adjacent DM"
+        " ranges, so the rule is what keeps that resolution a deliberate function of the"
+        " primary tree index rather than an accident of transcription.");
+
+    _check_halving_chain(primary_trees, "wt_time_downsampling", &PrimaryTree::wt_time_downsampling,
+        "wt_time_downsampling sets the time resolution of the same weights array (the"
+        " DedispersionPlan constructor computes nt_wt = nt_ds / wt_time_downsampling), and the"
+        " same argument applies.");
+
+    // Constraint coupling num_early_triggers across primary trees. Same shape as the three
+    // chains above, but the step is +1 rather than a halving, so it does not share their
+    // helper.
+
+    for (long ipri = 1; ipri < num_primary_trees(); ipri++) {
+        long e = primary_trees.at(ipri).num_early_triggers;
+        long e_prev = primary_trees.at(ipri-1).num_early_triggers;
+
+        if ((e == e_prev) || (e == e_prev + 1))
+            continue;
+
+        stringstream ss;
+        ss << "DedispersionConfig: primary tree " << ipri << " has num_early_triggers=" << e
+           << ", but primary tree " << (ipri-1) << " has num_early_triggers=" << e_prev << "."
+           << " A downsampled primary tree's num_early_triggers must either EQUAL its"
+           << " predecessor's, or be ONE MORE.\n\n"
+           << "An early trigger at level L searches a frequency band 2^L times narrower, so it"
+           << " fires after 2^L times less dispersion delay. Primary tree i's DM range tops out"
+           << " at 2^(toplevel_tree_rank + i) input samples of delay (2^toplevel_tree_rank at"
+           << " i=0), so its EARLIEST trigger fires at"
+           << " 2^(toplevel_tree_rank + i - num_early_triggers[i]). The two legal steps are"
+           << " therefore the two deliberate choices: an equal num_early_triggers holds the"
+           << " NUMBER of triggers fixed (and doubles the trigger latency at each primary"
+           << " tree), and one more holds the LATENCY fixed. Any other step makes the latency"
+           << " jump by a factor of four or more, or run backwards -- a higher-DM range"
+           << " triggering sooner than the lower-DM range below it -- which is almost always a"
+           << " mis-transcribed config rather than an intent.";
+        throw runtime_error(ss.str());
+    }
+
+    // Constraints coupling frequency_subband_counts to the early triggers. These are
+    // config-authoring errors, so they throw with an explanatory message (following the
+    // wt_dm_downsampling precedent above) rather than a bare xassert.
+    //
+    // Placement: AFTER the loop, so num_early_triggers has been range-checked before
+    // 'max_net' is computed from it.
+
+    long pf_rank = long(frequency_subband_counts.size()) - 1;
+    long max_net = 0;
+
+    // Largest early_trigger_level any tree of this config will use. Note et_level runs over
+    // [0, num_early_triggers] INCLUSIVE, so the largest is max_net itself.
+    for (const PrimaryTree &pt: primary_trees)
+        max_net = std::max(max_net, pt.num_early_triggers);
+
+    // Check 1. An early-trigger tree at level L searches a band 2^L times narrower, and its
+    // subband levels are the config's truncated by L levels, so the truncation must be in
+    // range.
+    if (pf_rank < max_net) {
+        stringstream ss;
+        ss << "DedispersionConfig: frequency_subband_counts has pf_rank=" << pf_rank
+           << " (length " << frequency_subband_counts.size() << "), but some primary tree"
+           << " declares num_early_triggers=" << max_net << ". An early trigger at level L"
+           << " truncates the subband counts by L levels, so pf_rank >= num_early_triggers"
+           << " is required.";
+        throw runtime_error(ss.str());
+    }
+
+    // Check 2. Every tree needs pf_rank <= dd_rank1, where dd_rank1 = ceil(dd_rank/2) is the
+    // GPU kernel's second-stage rank -- otherwise a level-0 subband would be narrower than
+    // one second-stage register (see CoalescedDdKernel2.hpp).
+    //
+    // The minimum of dd_rank1 over the config is attained at early_trigger_level=0: the
+    // difference f(et) = dd_rank1(et) - pf_rank(et) is nondecreasing in et, since each step
+    // decreases dd_rank1 by 0 or 1 while the truncation decreases pf_rank by exactly 1. And
+    // over primary trees it is attained at ipri>0, where primary_tree_rank is one smaller.
+    // So the closed form below (= ceil(primary_tree_rank/4) at the smallest primary tree)
+    // covers every tree of the config.
+
+    long min_dd_rank1 = (toplevel_tree_rank + ((num_primary_trees() > 1) ? 2 : 3)) / 4;
+
+    if (pf_rank > min_dd_rank1) {
+        stringstream ss;
+        ss << "DedispersionConfig: frequency_subband_counts has pf_rank=" << pf_rank
+           << ", but the smallest dedispersion tree in this config has second-stage rank"
+           << " dd_rank1=" << min_dd_rank1 << ", and pf_rank <= dd_rank1 is required. Either"
+           << " shorten frequency_subband_counts, or increase toplevel_tree_rank (which is"
+           << " currently " << toplevel_tree_rank << ").";
+        throw runtime_error(ss.str());
+    }
+
+    // Check 3. The early-trigger tree at level L searches the band that
+    // frequency_subband_counts[pf_rank - L] provides, and that band is a strict sub-range of
+    // the toplevel band -- so it must already be one of the config's bands, or the early
+    // trigger would ADD a subband the config never asked to search. The et_level values used
+    // across all trees are exactly [0, max_net], so the levels truncation can land on are
+    // exactly [pf_rank - max_net, pf_rank]. (Level pf_rank itself needs no check:
+    // validate_subband_counts() already requires a count of 1 there.)
+    //
+    // Checks 1 and 3 together are exactly FrequencySubbands::can_early_trigger() for every
+    // et_level this config can produce.
+
+    for (long level = pf_rank - max_net; level < pf_rank; level++) {
+        if (frequency_subband_counts.at(level) >= 1)
+            continue;
+        stringstream ss;
+        ss << "DedispersionConfig: frequency_subband_counts[" << level << "]=0, but this"
+           << " config declares early triggers (largest num_early_triggers is " << max_net
+           << "). The early-trigger tree at early_trigger_level=" << (pf_rank - level)
+           << " searches exactly the band that frequency_subband_counts[" << level << "]"
+           << " would provide, so that count must be at least 1. (A config which searches"
+           << " only the full band cannot declare early triggers without also declaring the"
+           << " sub-bands its early-trigger trees will search.)";
+        throw runtime_error(ss.str());
     }
 }
 
@@ -532,8 +711,11 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         ss << "Frequency subbands: can improve SNR for bursts that don't span the full frequency range.\n"
            << "This is a length-(pf_rank+1) vector containing the number of frequency subbands at each level.\n"
            << "To disable subbands and only search the full frequency band, set to [1].\n"
-           << "For a tool for creating frequency_subband_counts, see 'python -m pirate_frb make_subbands --help'.\n"
+           << "For a tool for creating frequency_subband_counts, see 'python -m pirate_frb dev make_subbands --help'.\n"
            << "Note: these are the 'top-level' frequency subbands; fewer subbands may be searched in individual trees.\n"
+           << "If any primary tree declares early triggers, then the counts at the levels those triggers truncate to\n"
+           << "must be nonzero: an early-trigger tree searches a sub-band of the full band, and can only search bands\n"
+           << "which this config already declares.\n"
            << "In this config, there are " << fs.N << " top-level frequency subband(s):";
 
         fs.show_compact(ss);
@@ -556,14 +738,17 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             "(num_early_triggers+1) dedispersion trees: the main full-band tree, plus one\n"
             "early-trigger tree for each early_trigger_level = 1..num_early_triggers. Early triggers\n"
             "search a high-frequency subset of the band at reduced latency.\n"
-            "max_width and the four *_downsampling values must be powers of two (a *_downsampling\n"
-            "value of 0 means auto-select); num_early_triggers is an ordinary count.\n"
+            "max_width and the two wt_* factors must be powers of two; num_early_triggers is an\n"
+            "ordinary count.\n"
             "  num_early_triggers: number of early triggers (required, can be zero)\n"
             "  max_width: max width of peak-finding kernel, in \"tree\" time samples (required)\n"
-            "  dm_downsampling: downsampling factor of coarse-grained array, relative to tree (optional, 0 = auto-select 2^ceil(dd_rank/2) separately for each tree)\n"
-            "  time_downsampling: downsampling factor of coarse-grained array (optional, 0 = auto-select, matching the resolved dm_downsampling)\n"
-            "  wt_dm_downsampling: downsampling factor of weights array (required, must be >= dm_downsampling)\n"
-            "  wt_time_downsampling: downsampling factor of weights array (required, must be >= time_downsampling)"
+            "  wt_dm_downsampling: DM downsampling factor of weights array (required)\n"
+            "  wt_time_downsampling: time downsampling factor of weights array (required)\n"
+            "Both wt_* factors must be >= 2^ceil(dd_rank/2) of this primary tree's largest tree, which is\n"
+            "the {dm,time}_downsampling of the coarse-grained OUTPUT array. Those two are NOT settable:\n"
+            "they are fixed by the GPU kernel's warp geometry and differ between the trees of one primary\n"
+            "tree (early-trigger trees are smaller). The values chosen are reported per tree in the\n"
+            "dedispersion plan yaml."
         ) << YAML::Newline << YAML::Newline;
     }
 
@@ -579,8 +764,6 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             << YAML::BeginMap
             << YAML::Key << "num_early_triggers" << YAML::Value << pt.num_early_triggers
             << YAML::Key << "max_width" << YAML::Value << pt.max_width
-            << YAML::Key << "dm_downsampling" << YAML::Value << pt.dm_downsampling
-            << YAML::Key << "time_downsampling" << YAML::Value << pt.time_downsampling
             << YAML::Key << "wt_dm_downsampling" << YAML::Value << pt.wt_dm_downsampling
             << YAML::Key << "wt_time_downsampling" << YAML::Value << pt.wt_time_downsampling
             << YAML::EndMap;
@@ -657,6 +840,14 @@ DedispersionConfig DedispersionConfig::from_yaml(const string &filename)
 
 
 // static member function
+DedispersionConfig DedispersionConfig::from_yaml_string(const string &yaml_string)
+{
+    YamlFile f = YamlFile::from_string(yaml_string, "<dedispersion config string>");
+    return DedispersionConfig::from_yaml(f);
+}
+
+
+// static member function
 DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 {
     // Detect old config syntax and give targeted errors.
@@ -701,10 +892,26 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     for (long i = 0; i < pts.size(); i++) {
         YamlFile p = pts[i];
         PrimaryTree pt;
+        // '{dm,time}_downsampling' were REMOVED from the config file. Probe for them by
+        // name, so an older config gets an explanation rather than
+        // check_for_invalid_keys()'s generic "unexpected key(s)" -- both were long-standing
+        // fields, so configs in the wild all have them.
+        for (const char *removed: { "dm_downsampling", "time_downsampling" }) {
+            if (!p.has_key(removed))
+                continue;
+            stringstream ss;
+            ss << "DedispersionConfig: primary_trees[" << i << "] has a '" << removed
+               << "' field, which was REMOVED from the config file. The coarse-grained output"
+               << " array's downsampling factors are fixed by the GPU kernel's warp geometry"
+               << " (both equal 2^ceil(dd_rank/2)) and differ between the trees of one primary"
+               << " tree, so they now live on the tree instead. Delete the field. The values"
+               << " the dedisperser chose are still reported per tree in the dedispersion plan"
+               << " yaml, as 'dm_downsampling' and 'time_downsampling'.";
+            throw runtime_error(ss.str());
+        }
+
         pt.num_early_triggers = p.get_scalar<long> ("num_early_triggers");
         pt.max_width = p.get_scalar<long> ("max_width");
-        pt.dm_downsampling = p.get_scalar<long> ("dm_downsampling", 0L);
-        pt.time_downsampling = p.get_scalar<long> ("time_downsampling", 0L);
         pt.wt_dm_downsampling = p.get_scalar<long> ("wt_dm_downsampling");
         pt.wt_time_downsampling = p.get_scalar<long> ("wt_time_downsampling");
         ret.primary_trees.push_back(pt);
@@ -723,8 +930,6 @@ ostream &operator<<(ostream &os, const DedispersionConfig::PrimaryTree &pt)
     os << "{"
        << pt.num_early_triggers << ","
        << pt.max_width << ","
-       << pt.dm_downsampling << ","
-       << pt.time_downsampling << ","
        << pt.wt_dm_downsampling << ","
        << pt.wt_time_downsampling
        << "}";
@@ -762,6 +967,117 @@ void DedispersionConfig::emit_cpp(ostream &os, const char *name, int indent) con
 }
 
 
+// Helper for DedispersionConfig::make_random(): draws a chain of log2-values L[0..n-1] with
+//
+//     L[i] in {L[i-1], L[i-1]-1}      and      lo[i] <= L[i] <= hi[i],
+//
+// i.e. validate()'s "equal or halved" rule (see _check_halving_chain) written in log2 space.
+// wt_dm_downsampling and wt_time_downsampling therefore CANNOT be drawn independently per
+// primary tree, which is what this function exists for.
+//
+// The forward draw never gets stuck, PROVIDED A[i] <= B[i] for every i, where
+//
+//     A[i] = max_{j>=i} lo[j]            (L is non-increasing, so L[i] >= L[j] >= lo[j])
+//     B[i] = min_{j>=i} (hi[j] + j - i)  (steps are 0 or -1, so L[j] >= L[i] - (j-i))
+//
+// Proof: given L[i-1] in [A[i-1], B[i-1]], we have L[i-1] >= A[i-1] >= A[i], and
+// B[i-1] = min(hi[i-1], B[i]+1) <= B[i]+1 gives L[i-1]-1 <= B[i]. So "hold" always clears the
+// LOWER bound and "halve" always clears the UPPER one; and when hold fails (L[i-1] > B[i]),
+// halve clears both, since L[i-1] >= B[i]+1 >= A[i]+1.
+//
+// The xassert on A[i] <= B[i] is a tripwire, not a filter: the CALLER is responsible for
+// handing over ranges that admit a chain at all. For wt_time_downsampling that is exactly what
+// the Tinner chain in the key draw buys -- see the comment there.
+static vector<long> _draw_halving_chain(const vector<long> &lo, const vector<long> &hi)
+{
+    long n = long(lo.size());
+    xassert_eq(n, long(hi.size()));
+    xassert_gt(n, 0);
+
+    vector<long> A(n), B(n);
+    A.at(n-1) = lo.at(n-1);
+    B.at(n-1) = hi.at(n-1);
+
+    for (long i = n-2; i >= 0; i--) {
+        A.at(i) = std::max(lo.at(i), A.at(i+1));
+        B.at(i) = std::min(hi.at(i), B.at(i+1) + 1);
+    }
+
+    vector<long> ret(n);
+
+    for (long i = 0; i < n; i++) {
+        xassert_le(A.at(i), B.at(i));
+
+        if (i == 0) {
+            ret.at(0) = rand_int(A.at(0), B.at(0) + 1);
+            continue;
+        }
+
+        bool hold_ok = (ret.at(i-1) <= B.at(i));       // >= A[i] is automatic
+        bool halve_ok = (ret.at(i-1) - 1 >= A.at(i));  // <= B[i] is automatic
+        xassert(hold_ok || halve_ok);
+
+        ret.at(i) = (hold_ok && halve_ok) ? (ret.at(i-1) - rand_int(0,2))
+                  : (hold_ok ? ret.at(i-1) : (ret.at(i-1) - 1));
+    }
+
+    return ret;
+}
+
+
+// Helper for DedispersionConfig::make_random(): draws num_early_triggers for every primary
+// tree. validate() requires E[i] in {E[i-1], E[i-1]+1}, so E is non-decreasing with unit steps
+// and the per-tree values are not independent either.
+//
+// 'cap[i]' is the largest value primary tree i can support (GPU-kernel coverage, subband
+// truncation, and its own wt_dm_downsampling), and 'budget' bounds the TOTAL -- which is what
+// RandomArgs::max_early_triggers means, because the total is what sets the tree count
+// sum_i (E[i]+1) and hence the cost.
+//
+// Two facts make the forward draw safe:
+//
+//   - E non-decreasing gives E[i] <= E[j] <= cap[j] for every j >= i, so the binding cap is the
+//     SUFFIX MINIMUM M[i] = min_{j>=i} cap[j] -- which is itself non-decreasing, so
+//     E[i-1] <= M[i-1] <= M[i] and "hold" is always legal.
+//
+//   - The cheapest completion of a partial chain is to hold the current value to the end, so
+//     E[i] = v is affordable iff (spent so far) + (n-i)*v <= budget. That test is
+//     self-consistent: passing it at step i-1 for E[i-1] is literally the same inequality as
+//     passing it at step i for the same value, so "hold" is affordable too.
+//
+// THE BUDGET BITES HARDER ON A CHAIN THAN IT LOOKS. The equal-latency chain E = (0,1,2,...)
+// -- the shape the shipped early-trigger configs use -- costs npri*(npri-1)/2, so at the
+// default budget of 5 it is reachable at npri <= 3 but not at npri = 4. A caller who wants
+// deep early-trigger ladders at four primary trees has to raise max_early_triggers to 6.
+static vector<long> _draw_early_trigger_chain(const vector<long> &cap, long budget)
+{
+    long n = long(cap.size());
+    xassert_gt(n, 0);
+    xassert_ge(budget, 0);
+
+    vector<long> m(n);
+    m.at(n-1) = cap.at(n-1);
+    for (long i = n-2; i >= 0; i--)
+        m.at(i) = std::min(cap.at(i), m.at(i+1));
+
+    vector<long> ret(n);
+    long spent = 0;
+
+    for (long i = 0; i < n; i++) {
+        long emax = std::min(m.at(i), (budget - spent) / (n - i));
+        long emin = (i == 0) ? 0 : ret.at(i-1);
+        xassert_ge(emax, emin);
+
+        ret.at(i) = (i == 0) ? rand_int(0, emax+1)
+                             : (emin + ((emax > emin) ? rand_int(0,2) : 0));
+        spent += ret.at(i);
+    }
+
+    xassert_le(spent, budget);
+    return ret;
+}
+
+
 // Helper function for DedispersionConfig::make_random().
 static CoalescedDdKernel2::RegistryKey _make_random_cdd2_key(Dtype dtype, long dd_rank)
 {
@@ -771,10 +1087,20 @@ static CoalescedDdKernel2::RegistryKey _make_random_cdd2_key(Dtype dtype, long d
     ret.dd_rank = dd_rank;
     ret.Wmax = pow2(rand_int(0, integer_log2(constants::max_pf_width) + 1));
 
-    long i = rand_int(0,6);
-    long j = rand_int(0,6-i);
-    ret.Tinner = pow2(j);
-    ret.Dout = pow2(i) * xdiv(32,dtype.nbits);
+    // Tinner is bounded by the kernel's Dout, which is not a key field but IS a function of
+    // dd_rank (cuda_generator.cdd2_dout(); DedispersionTree::time_downsampling is the same
+    // number). make_random() draws wt_time_downsampling from [min_wtds, ...] with
+    // min_wtds = 1024/(Tinner*nbits), and validate() requires wt_time_downsampling >= Dout,
+    // so the pool must satisfy Dout <= min_wtds. (This replaces the old 'i+j <= 5' coupling,
+    // which bought the same property when Dout was drawn independently.)
+    //
+    // This is the one place outside the DedispersionPlan constructor where pow2(dd_rank1) is
+    // re-derived in C++. It is load-bearing rather than a tripwire: without it, min_lg2_wtds can exceed
+    // max_lg2_wtds below and the xassert_le fires instead of the key being skipped.
+    long dd_rank1 = (dd_rank + 1) / 2;
+    long max_Tinner = xdiv(1024, dtype.nbits) / pow2(dd_rank1);
+    xassert_ge(max_Tinner, 1);
+    ret.Tinner = pow2(rand_int(0, integer_log2(std::min(max_Tinner, 32L)) + 1));
 
     long pf_rank = (dd_rank+1) / 2;
     ret.subband_counts = FrequencySubbands::make_random_subband_counts(pf_rank);
@@ -782,14 +1108,84 @@ static CoalescedDdKernel2::RegistryKey _make_random_cdd2_key(Dtype dtype, long d
     return ret;
 }
 
+// The most primary trees DedispersionConfig::make_random() will draw. NOT
+// constants::max_primary_trees (which is what a hand-written config may have) -- this is the
+// ceiling of make_random()'s own draw, and args.min_primary_trees is checked against it.
+static constexpr long max_random_npri = 4;
+
+
+// Helper for DedispersionConfig::make_random(): the toplevel_tree_rank range that a base cdd2
+// key of the given dd_rank admits. Factored out because make_random() needs it twice -- once to
+// draw the rank, and once (when args.min_primary_trees > 1) to ask, BEFORE committing to a key,
+// whether any rank in the range leaves room for more than one primary tree.
+static std::pair<long,long> _toplevel_rank_range(long dd_rank, int max_toplevel_rank)
+{
+    return { std::max(2*dd_rank - 1, 2L), std::min(2*dd_rank, long(max_toplevel_rank)) };
+}
+
+
+// Helper for DedispersionConfig::make_random(): the part of "can this config have more than one
+// primary tree?" that holds on both the gpu_valid and !gpu_valid paths. 'config_pf_rank' is
+// frequency_subband_counts.size()-1, and R is toplevel_tree_rank.
+static bool _ds_pri_ok(long config_pf_rank, long R)
+{
+    return (config_pf_rank <= (R + 2) / 4) && ((R / 2) >= 1);
+}
+
+
+// Helper for DedispersionConfig::make_random(): can a config built from base key 'base', with
+// toplevel_tree_rank R, have MORE THAN ONE primary tree?
+//
+// This mirrors the guards on the npri draw in make_random(), and the two MUST stay in step --
+// args.min_primary_trees is honoured by construction, which means the key and rank draws are
+// filtered through here and then the npri draw is simply trusted. An xassert at the end of
+// make_random() is the tripwire if they ever diverge.
+//
+// On the gpu_valid path the downsampled trees' keys come from the registry, so there has to be
+// one with the config's (dtype, subband_counts) at the downsampled dd_rank, which is also a
+// legal FIRST step of BOTH key chains: Wmax equal to the base key's or half of it, and Tinner
+// equal to the base key's or twice it (see the Tinner comment in make_random()). Only the first
+// step can truncate either chain: whatever key it picks has Wmax == W and Tinner == T, so every
+// later step's pool contains at least that key.
+static bool _multi_pri_possible(const vector<CoalescedDdKernel2::RegistryKey> &all_keys,
+                                const CoalescedDdKernel2::RegistryKey &base, long R, bool gpu_valid)
+{
+    long config_pf_rank = long(base.subband_counts.size()) - 1;
+
+    if (!_ds_pri_ok(config_pf_rank, R))
+        return false;
+    if (!gpu_valid)
+        return true;   // no registry to satisfy: _make_random_cdd2_key() invents a key
+
+    long ds_stage2_dd_rank = R / 2;
+
+    for (const CoalescedDdKernel2::RegistryKey &k: all_keys)
+        if ((k.dtype == base.dtype) && (k.dd_rank == ds_stage2_dd_rank)
+            && (k.subband_counts == base.subband_counts)
+            && (pow2((k.dd_rank + 1) / 2) <= xdiv(1024, k.Tinner * k.dtype.nbits))
+            && ((k.Wmax == base.Wmax) || (2 * k.Wmax == base.Wmax))
+            && ((k.Tinner == base.Tinner) || (k.Tinner == 2 * base.Tinner)))
+            return true;
+
+    return false;
+}
+
+
 // static member function
 DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 {
     xassert(args.max_toplevel_rank >= 2);
     xassert(args.max_early_triggers >= 0);
+    xassert_ge(args.min_primary_trees, 1);
+    xassert_le(args.min_primary_trees, max_random_npri);
+    xassert_ge(args.tspc_multiple, 1L);
+    xassert_ge(args.max_beams_per_gpu, 0L);
+    xassert_ge(args.min_batch_slots, 1);
+    // single_beam pins beams_per_gpu to 1, which leaves room for exactly one batch slot.
+    xassert(!args.single_beam || (args.min_batch_slots == 1));
     long max_stage2_rank = (args.max_toplevel_rank + 1) / 2;
 
-    using Key2 = CoalescedDdKernel2::RegistryKey;  // (dtype, dd_rank, Tinner, Dout, Wmax)
+    using Key2 = CoalescedDdKernel2::RegistryKey;  // (dtype, dd_rank, Tinner, Wmax, subband_counts)
     vector<Key2> all_keys = CoalescedDdKernel2::registry().get_all_keys();
     vector<Key2> my_keys;
 
@@ -797,15 +1193,59 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
     if (args.gpu_valid) {
         vector<Key2> valid_keys;
-        for (const Key2 &k: all_keys)
-            if (k.dd_rank <= max_stage2_rank)
-                valid_keys.push_back(k);
+        Dtype f32 = Dtype::from_str("float32");
+
+        for (const Key2 &k: all_keys) {
+            if (k.dd_rank > max_stage2_rank)
+                continue;
+
+            // args.force_float32 must FILTER THE KEYS, not patch ret.dtype afterwards. On this
+            // path the dtype IS the key's (see 'ret.dtype = my_keys.at(0).dtype' below), and
+            // later code re-derives quantities from the PAIR (key, dtype) -- min_wtds =
+            // xdiv(1024, k.Tinner * ret.dtype.nbits), and get_nelts_per_segment(). Overwriting
+            // ret.dtype would desynchronize the config from the key it was built from, and
+            // xdiv() asserts exact division.
+            if (args.force_float32 && (k.dtype != f32))
+                continue;
+
+            // validate() requires wt_time_downsampling >= the tree's time_downsampling
+            // (= pow2(dd_rank1), which is also the kernel's Dout), and make_random draws
+            // wt_time_downsampling from [1024/(Tinner*nbits), ...]. So a key whose Dout
+            // exceeds 1024/(Tinner*nbits) admits no legal config. A tripwire in practice --
+            // the generator's Dout*Tinner <= 32*SW assert means no compiled kernel fails it
+            // -- but see the note in _make_random_cdd2_key(): it is what keeps
+            // min_lg2_wtds <= max_lg2_wtds below.
+            if (pow2((k.dd_rank + 1) / 2) > xdiv(1024, k.Tinner * k.dtype.nbits))
+                continue;
+
+            // args.min_primary_trees > 1 has to FILTER THE KEYS, not just raise the npri
+            // draw further down. Whether a base key can carry a second primary tree depends
+            // on the key (through dtype, subband_counts and Wmax) and on toplevel_tree_rank,
+            // which is drawn from a range the key's dd_rank fixes -- so ask here whether ANY
+            // rank in that range works, and drop the key if none does.
+            if (args.min_primary_trees > 1) {
+                auto [rlo, rhi] = _toplevel_rank_range(k.dd_rank, args.max_toplevel_rank);
+                bool ok = false;
+                for (long R = rlo; (R <= rhi) && !ok; R++)
+                    ok = _multi_pri_possible(all_keys, k, R, true);
+                if (!ok)
+                    continue;
+            }
+
+            // Note: EVERY remaining key is reachable from a config. We use the key's
+            // subband_counts as the config's frequency_subband_counts just below, and the
+            // et_level=0 tree gets them verbatim (restrict_subband_counts() is the identity
+            // there), so a key with pf_rank < dd_rank1 produces a config whose base tree
+            // matches it exactly.
+            valid_keys.push_back(k);
+        }
 
         if (valid_keys.size() == 0) {
             stringstream ss;
             ss << "DedispersionConfig::make_random(): no precompiled cdd2 kernel is available "
                << "(max_toplevel_rank=" << args.max_toplevel_rank << ", max_stage2_rank=" << max_stage2_rank
-               << ")";
+               << ", force_float32=" << (args.force_float32 ? "true" : "false")
+               << ", min_primary_trees=" << args.min_primary_trees << ")";
             throw runtime_error(ss.str());
         }
 
@@ -813,8 +1253,32 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         my_keys.push_back(valid_keys.at(ix));
     }
     else {
-        Dtype dtype = rand_bool() ? Dtype::from_str("float32") : Dtype::from_str("float16");
-        long dd_rank = rand_int(1, max_stage2_rank + 1);
+        Dtype dtype = (args.force_float32 || rand_bool()) ? Dtype::from_str("float32")
+                                                          : Dtype::from_str("float16");
+
+        // dd_rank is drawn from the values that admit args.min_primary_trees, for the same
+        // reason the key pool is filtered above. There is no registry on this path, so the
+        // only constraint is _ds_pri_ok(), which depends on the key only through
+        // subband_counts.size() -- and _make_random_cdd2_key() always returns pf_rank+1 of
+        // them with pf_rank = (dd_rank+1)/2. So the pool can be built before the draw.
+        vector<long> dd_ranks;
+        for (long d = 1; d <= max_stage2_rank; d++) {
+            bool ok = (args.min_primary_trees <= 1);
+            auto [rlo, rhi] = _toplevel_rank_range(d, args.max_toplevel_rank);
+            for (long R = rlo; (R <= rhi) && !ok; R++)
+                ok = _ds_pri_ok((d+1)/2, R);
+            if (ok)
+                dd_ranks.push_back(d);
+        }
+
+        if (dd_ranks.size() == 0) {
+            stringstream ss;
+            ss << "DedispersionConfig::make_random(): no dd_rank admits min_primary_trees="
+               << args.min_primary_trees << " (max_toplevel_rank=" << args.max_toplevel_rank << ")";
+            throw runtime_error(ss.str());
+        }
+
+        long dd_rank = dd_ranks.at(rand_int(0, dd_ranks.size()));
 
         Key2 base_key = _make_random_cdd2_key(dtype, dd_rank);
         my_keys.push_back(base_key);
@@ -827,9 +1291,32 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
     // Toplevel tree rank. (Locals named *_min/*_max to avoid confusion with
     // args.max_toplevel_rank, the caller-specified bound.)
-    long toplevel_rank_min = max(2 * my_keys.at(0).dd_rank - 1, 2L);
-    long toplevel_rank_max = (2 * my_keys.at(0).dd_rank);
-    ret.toplevel_tree_rank = rand_int(toplevel_rank_min, toplevel_rank_max+1);
+    //
+    // THE CLAMP BY args.max_toplevel_rank IS LOAD-BEARING, even though max_stage2_rank
+    // already bounds the key's dd_rank. For ODD max_toplevel_rank = m, the key pool is
+    // bounded by (m+1)/2, so 2*dd_rank can reach m+1 -- which both violates the documented
+    // "bounds toplevel_tree_rank" and makes make_random(m) and make_random(m+1) the same
+    // distribution. Without it, callers asking for an odd bound silently get the next even
+    // one (and pay for it: the cost of nearly everything downstream is 2^toplevel_tree_rank).
+    //
+    // min <= max still holds: the clamp binds only when 2*dd_rank > m, which for m odd needs
+    // dd_rank = (m+1)/2, and then toplevel_rank_min = 2*dd_rank-1 = m as well.
+    auto [toplevel_rank_min, toplevel_rank_max] =
+        _toplevel_rank_range(my_keys.at(0).dd_rank, args.max_toplevel_rank);
+    xassert_le(toplevel_rank_min, toplevel_rank_max);
+
+    if (args.min_primary_trees <= 1)
+        ret.toplevel_tree_rank = rand_int(toplevel_rank_min, toplevel_rank_max+1);
+    else {
+        // Only the ranks that leave room for args.min_primary_trees. The key draw above has
+        // already guaranteed there is at least one.
+        vector<long> ranks;
+        for (long R = toplevel_rank_min; R <= toplevel_rank_max; R++)
+            if (_multi_pri_possible(all_keys, my_keys.at(0), R, args.gpu_valid))
+                ranks.push_back(R);
+        xassert(ranks.size() > 0);
+        ret.toplevel_tree_rank = ranks.at(rand_int(0, ranks.size()));
+    }
 
     // Frequency zones.
     long nzones = rand_int(1,6);
@@ -845,55 +1332,208 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     // Choose the number of primary trees (npri) and my_keys[1:].
 
     long ds_stage2_dd_rank = ret.toplevel_tree_rank / 2;
-    long ds_pf_rank = (ds_stage2_dd_rank + 1) / 2;
-    vector<long> ds_subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, 0, ds_pf_rank);
+
+    // The tree rule is the identity at early_trigger_level=0, so a downsampled primary
+    // tree's main (non-early-trigger) tree gets the config's counts verbatim.
+    const vector<long> &ds_subband_counts = ret.frequency_subband_counts;
+
+    // Check 2 of validate(): every tree needs pf_rank <= dd_rank1. The base primary tree
+    // satisfies it by construction, since its counts came from a cdd2 registry key and every
+    // registered key has pf_rank <= dd_rank1. A DOWNSAMPLED primary tree has one less rank to
+    // work with, so it can fail; when it does, the config must have a single primary tree.
+    //
+    // On the gpu_valid path this is nearly implied by the registry lookup just below (which
+    // would find no key), but the !gpu_valid path has no such lookup and can violate check 2
+    // outright -- so make the guard explicit and let it cover both.
+
+    long config_pf_rank = long(ret.frequency_subband_counts.size()) - 1;
+    bool ds_pri_ok = (config_pf_rank <= (ret.toplevel_tree_rank + 2) / 4);
 
     // May be overridden shortly.
     long npri = 1;
 
-    if (args.gpu_valid && (ds_stage2_dd_rank >= 1)) {
+    if (args.gpu_valid && ds_pri_ok && (ds_stage2_dd_rank >= 1)) {
         // All keys with correct (dtype, dd_rank, subband_counts).
         vector<Key2> valid_keys;
         for (const Key2 &k: all_keys)
-            if ((k.dtype == ret.dtype) && (k.dd_rank == ds_stage2_dd_rank) && (k.subband_counts == ds_subband_counts))
+            if ((k.dtype == ret.dtype) && (k.dd_rank == ds_stage2_dd_rank) && (k.subband_counts == ds_subband_counts)
+                && (pow2((k.dd_rank + 1) / 2) <= xdiv(1024, k.Tinner * k.dtype.nbits)))
                 valid_keys.push_back(k);
 
         if (valid_keys.size() > 0) {
-            npri = rand_int(1,5);
+            npri = rand_int(args.min_primary_trees, max_random_npri+1);
+
+            // TWO KEY FIELDS ARE CHAINED ACROSS PRIMARY TREES, so neither can be drawn
+            // independently per tree (Dout still is, which is what exercises the kernels).
+            // Walk both chains together, picking a key that is a legal successor in each.
+            //
+            // Wmax, because validate() requires each downsampled primary tree's max_width to
+            // EQUAL its predecessor's or be HALF of it, and max_width IS the key's Wmax.
+            //
+            // Tinner, because validate() imposes the same rule on wt_time_downsampling, and
+            // Tinner is what pins that field. The kernel's weight layout (PeakFindingKernel.hpp)
+            // allows wt_time_downsampling >= 1024/nbits when Tinner == 1, but requires exactly
+            // 1024/(Tinner*nbits) when Tinner > 1. So a Tinner > 1 tree has a PINNED
+            // wt_time_downsampling, and the halving chain then forces
+            //
+            //     Tinner[i] in {Tinner[i-1], 2*Tinner[i-1]}
+            //
+            // -- a smaller Tinner would need a LARGER wt_time_downsampling, and a jump of 4x or
+            // more would need it to fall by more than the one halving a step allows. (In
+            // particular, once a tree has Tinner > 1, no later tree may return to Tinner == 1.)
+            // With that in force, _draw_halving_chain() below can always complete; without it,
+            // its A[i] <= B[i] tripwire is what fires.
+            long W = my_keys.at(0).Wmax;
+            long T = my_keys.at(0).Tinner;
+
             for (int ipri = 1; ipri < npri; ipri++) {
-                // For each downsampled primary tree, we choose independent (Dout, Tinner, Wmax).
-                // This is artificial, but does a good job of exercising kernels.
-                long ix = rand_int(0, valid_keys.size());
-                my_keys.push_back(valid_keys.at(ix));
+                // The registry pool is already filtered to (dtype, dd_rank, subband_counts), and
+                // may not contain a legal successor. Truncate the config rather than fail: an
+                // exception here would be a make_random() bug, not a caller error.
+                vector<Key2> wkeys;
+                for (const Key2 &k: valid_keys)
+                    if (((k.Wmax == W) || (2*k.Wmax == W)) && ((k.Tinner == T) || (k.Tinner == 2*T)))
+                        wkeys.push_back(k);
+
+                if (wkeys.size() == 0) {
+                    npri = ipri;
+                    break;
+                }
+
+                const Key2 &k = wkeys.at(rand_int(0, wkeys.size()));
+                W = k.Wmax;
+                T = k.Tinner;
+                my_keys.push_back(k);
             }
         }
     }
-    else if (!args.gpu_valid && (ds_stage2_dd_rank >= 1)) {
-        npri = rand_int(1,5);
+    else if (!args.gpu_valid && ds_pri_ok && (ds_stage2_dd_rank >= 1)) {
+        npri = rand_int(args.min_primary_trees, max_random_npri+1);
+
+        // Same Wmax and Tinner chains as the gpu_valid path above. There is no registry to
+        // satisfy here, so neither chain ever truncates: we overwrite the random key's Wmax and
+        // Tinner, the same clobber already applied to subband_counts.
+        //
+        // The Tinner ceiling is _make_random_cdd2_key()'s own: 1024/(nbits * 2^dd_rank1), capped
+        // at 32. It never blocks the "hold" step, since ds_stage2_dd_rank <= the base key's
+        // dd_rank makes the downsampled ceiling the LOOSER of the two.
+        long W = my_keys.at(0).Wmax;
+        long T = my_keys.at(0).Tinner;
+        long max_T = std::min(xdiv(1024, ret.dtype.nbits) / pow2((ds_stage2_dd_rank+1)/2), 32L);
 
         for (int ipri = 1; ipri < npri; ipri++) {
-            // For each downsampled primary tree, we choose independent (Dout, Tinner, Wmax).
+            if ((W > 1) && rand_bool())
+                W /= 2;
+            if ((2*T <= max_T) && rand_bool())
+                T *= 2;
+
+            // For each downsampled primary tree, we choose an independent Dout.
             Key2 ds_key = _make_random_cdd2_key(ret.dtype, ds_stage2_dd_rank);
             ds_key.subband_counts = ds_subband_counts;  // clobber
+            ds_key.Wmax = W;                            // clobber
+            ds_key.Tinner = T;                          // clobber
             my_keys.push_back(ds_key);
         }
     }
 
     // Time_samples_per_chunk, beam configuration.
 
+    // THE TRIPWIRE ON args.min_primary_trees. Everything above is arranged so that npri can
+    // reach it -- the base key, toplevel_tree_rank and (on the gpu_valid path) the max_width
+    // chain are all filtered through _multi_pri_possible(). If that reasoning ever drifts out
+    // of step with the draw, this fires instead of the caller silently getting fewer trees.
+    xassert_ge(npri, long(args.min_primary_trees));
+
+    // ONE BUDGET, split three ways or spent entirely on the chunk length:
+    //
+    //    (time_samples_per_chunk / nt_divisor) * beams_per_batch * nbatch  <=  8192 / nt_divisor,
+    //
+    // where nbatch = beams_per_gpu / beams_per_batch. It bounds time_samples_per_chunk *
+    // beams_per_gpu, i.e. the per-GPU footprint, which is why the three factors have to compete
+    // for one number rather than being drawn independently.
+    //
+    // args.tspc_multiple and args.min_batch_slots are folded in as a CHANGE OF VARIABLE below
+    // (w, not v), and args.max_beams_per_gpu as a two-stage draw. Under the defaults every
+    // substitution is the identity and the draw is exactly the plain three-way product.
     long nt_divisor = ret.get_nelts_per_segment() * pow2(npri-1);
     long n = xdiv(8192, nt_divisor);
-    auto v = ksgpu::random_integers_with_bounded_product(3, n);
 
-    ret.time_samples_per_chunk = v[0] * nt_divisor;
-    ret.beams_per_batch = v[1];
-    ret.beams_per_gpu = v[1] * v[2];
-    ret.num_active_batches = rand_int(1,v[2]+1);
+    // time_samples_per_chunk = v0 * nt_divisor is a multiple of nt_divisor for free, so
+    // tspc_multiple only has to be enforced through the part nt_divisor does not already cover.
+    // This is where the bias came from that the fields exist to remove: nt_divisor grows with
+    // npri and is twice as large for float16, so at high npri the constraint is free and at
+    // npri == 1 it costs a factor of 8.
+    long tspc_step = args.tspc_multiple / std::gcd(args.tspc_multiple, nt_divisor);
+
+    // Reserving min_batch_slots slots per active batch is what makes the guarantee hold by
+    // construction: with nbatch = slots*w2 and num_active_batches drawn from [1, w2],
+    // beams_per_gpu = beams_per_batch * slots * w2 >= slots * num_active_batches * beams_per_batch.
+    long slots = args.single_beam ? 1 : long(args.min_batch_slots);
+    long budget = n / (tspc_step * slots);
+
+    if (budget < 1) {
+        stringstream ss;
+        ss << "DedispersionConfig::make_random(): no config can satisfy tspc_multiple="
+           << args.tspc_multiple << " and min_batch_slots=" << args.min_batch_slots
+           << " here: num_primary_trees=" << npri << " and dtype=" << ret.dtype.str()
+           << " give nt_divisor=" << nt_divisor << ", leaving a budget of " << n;
+        throw runtime_error(ss.str());
+    }
+
+    vector<long> w;
+
+    if (args.single_beam || (args.max_beams_per_gpu <= 0))
+        w = ksgpu::random_integers_with_bounded_product(args.single_beam ? 1 : 3, budget);
+    else {
+        // BEAMS FIRST when they are capped, so that the cap is what sizes them and the chunk
+        // length takes what is left. Drawn as one three-way product and then rejected, the cap
+        // instead selects the draws that happened to leave the beams small -- and since the
+        // three factors compete, that means selecting for a LONG chunk, hence for high npri
+        // and float16. Same bias, arrived at from the other side.
+        long beam_budget = std::min(args.max_beams_per_gpu / slots, budget);
+
+        if (beam_budget < 1) {
+            stringstream ss;
+            ss << "DedispersionConfig::make_random(): max_beams_per_gpu="
+               << args.max_beams_per_gpu << " is too small for min_batch_slots="
+               << args.min_batch_slots;
+            throw runtime_error(ss.str());
+        }
+
+        vector<long> wb = ksgpu::random_integers_with_bounded_product(2, beam_budget);
+        long left = budget / (wb[0] * wb[1]);       // >= 1, since wb[0]*wb[1] <= beam_budget <= budget
+        xassert_ge(left, 1L);
+
+        w = { ksgpu::random_integers_with_bounded_product(1, left).at(0), wb[0], wb[1] };
+    }
+
+    ret.time_samples_per_chunk = tspc_step * w[0] * nt_divisor;
+
+    if (args.single_beam) {
+        ret.beams_per_batch = 1;
+        ret.beams_per_gpu = 1;
+        ret.num_active_batches = 1;
+    }
+    else {
+        ret.beams_per_batch = w[1];
+        ret.beams_per_gpu = w[1] * slots * w[2];
+        ret.num_active_batches = rand_int(1, w[2]+1);
+    }
+
+    // The three fields are honoured by construction; these are tripwires on the arithmetic
+    // above, not on the caller.
+    xassert((ret.time_samples_per_chunk % args.tspc_multiple) == 0);
+    xassert(!args.max_beams_per_gpu || (ret.beams_per_gpu <= args.max_beams_per_gpu));
+    xassert_le(args.min_batch_slots * ret.num_active_batches * ret.beams_per_batch, ret.beams_per_gpu);
 
     // GPU configuration.
-    long max_delay = pow2(ret.toplevel_tree_rank + npri - 1);
-    long max_clag = (max_delay / ret.time_samples_per_chunk) + 1;
-    ret.max_gpu_clag = rand_int(0, max_clag+1);
+    // The member's own default (10000) is the "no limit, pure-GPU ring buffer" value, so
+    // args.no_host_mega_ringbuf simply skips the draw.
+    if (!args.no_host_mega_ringbuf) {
+        long max_delay = pow2(ret.toplevel_tree_rank + npri - 1);
+        long max_clag = (max_delay / ret.time_samples_per_chunk) + 1;
+        ret.max_gpu_clag = rand_int(0, max_clag+1);
+    }
 
     // future_write_max_samples: zero 25% of the time (future writes disabled),
     // else uniform in [0, 4*time_samples_per_chunk] (i.e. up to ~4 chunks).
@@ -917,6 +1557,49 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
     // Loop over primary trees. Assign peak-finding params, and compute the max
     // supported num_early_triggers for each primary tree.
+    //
+    // Two passes, because validate() chains wt_dm_downsampling and wt_time_downsampling across
+    // primary trees (each equal to its predecessor or half of it). The per-tree log2 RANGES are
+    // independent, so pass 1 collects them; the values inside those ranges are not, so the two
+    // chains are drawn in one shot between the passes. max_width needs no work here: it is
+    // k.Wmax, and the key draw above already walked that chain.
+
+    vector<long> lo_lg2_wdds(npri), hi_lg2_wdds(npri);
+    vector<long> lo_lg2_wtds(npri), hi_lg2_wtds(npri);
+
+    for (long ipri = 0; ipri < npri; ipri++) {
+        const Key2 &k = my_keys.at(ipri);
+
+        long primary_tree_rank = ipri ? (ret.toplevel_tree_rank-1) : ret.toplevel_tree_rank;
+        long stage2_dd_rank = primary_tree_rank - (primary_tree_rank / 2);
+
+        // Min/max log2(PrimaryTree::wt_time_downsampling). The lower bound is the larger of
+        // the weight-layout bound and validate()'s rule (wt_time_downsampling >= the
+        // et_level=0 tree's time_downsampling = 2^dd_rank1). _make_random_cdd2_key() and the
+        // gpu_valid key filter both guarantee Dout <= 1024/(Tinner*nbits), so the max() below
+        // never exceeds max_lg2_wtds -- the xassert_le after it is the tripwire on that. (That
+        // same guarantee is why the max() is a no-op and the lower bound is just
+        // log2(1024/(Tinner*nbits)), which is what makes the Tinner chain sufficient for
+        // _draw_halving_chain() to complete.)
+        long nt_ds = xdiv(nt_divisor, pow2(ipri));
+        long min_wtds = xdiv(1024, k.Tinner * ret.dtype.nbits);
+
+        lo_lg2_wtds.at(ipri) = std::max((long)integer_log2(min_wtds), (stage2_dd_rank + 1) / 2);
+        hi_lg2_wtds.at(ipri) = (long)((k.Tinner == 1) ? integer_log2(nt_ds) : integer_log2(min_wtds));
+
+        // Min/max log2(PrimaryTree::wt_dm_downsampling). The lower bound is
+        // DedispersionTree::dm_downsampling of this family's largest tree, which the
+        // DedispersionPlan constructor requires wt_dm_downsampling to be at least.
+        lo_lg2_wdds.at(ipri) = (stage2_dd_rank + 1) / 2;  // = dd_rank1 of the et_level=0 tree
+        hi_lg2_wdds.at(ipri) = primary_tree_rank;
+
+        xassert_eq(k.dd_rank, stage2_dd_rank);
+        xassert_le(lo_lg2_wdds.at(ipri), hi_lg2_wdds.at(ipri));
+        xassert_le(lo_lg2_wtds.at(ipri), hi_lg2_wtds.at(ipri));
+    }
+
+    vector<long> lg2_wdds = _draw_halving_chain(lo_lg2_wdds, hi_lg2_wdds);
+    vector<long> lg2_wtds = _draw_halving_chain(lo_lg2_wtds, hi_lg2_wtds);
 
     vector<long> max_et(npri, 0);
 
@@ -927,30 +1610,11 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         long stage1_dd_rank = primary_tree_rank / 2;
         long stage2_dd_rank = primary_tree_rank - stage1_dd_rank;
 
-        // Min/max log2(PrimaryTree::wt_time_downsampling).
-        long nt_ds = xdiv(nt_divisor, pow2(ipri));
-        long min_wtds = xdiv(1024, k.Tinner * ret.dtype.nbits);
-        long min_lg2_wtds = integer_log2(min_wtds);
-        long max_lg2_wtds = (k.Tinner == 1) ? integer_log2(nt_ds) : min_lg2_wtds;
-
-        // Min/max log2(PrimaryTree::wt_dm_downsampling).
-        // FIXME: assuming default DM downsampling (PrimaryTree::dm_downsampling == 0) for now.
-        long min_lg2_wdds = (stage2_dd_rank + 1) / 2;  // same as pf_rank
-        long max_lg2_wdds = primary_tree_rank;
-
-        xassert_eq(k.dd_rank, stage2_dd_rank);
-        xassert_le(min_lg2_wdds, max_lg2_wdds);
-        xassert_le(min_lg2_wtds, max_lg2_wtds);
-
-        // FIXME using default dm/time downsampling factors for now.
-
         PrimaryTree pt;
         pt.num_early_triggers = 0;   // assigned below
         pt.max_width = k.Wmax;
-        pt.dm_downsampling = 0;    // see above
-        pt.time_downsampling = k.Dout;
-        pt.wt_dm_downsampling = pow2(rand_int(min_lg2_wdds, max_lg2_wdds+1));
-        pt.wt_time_downsampling = pow2(rand_int(min_lg2_wtds, max_lg2_wtds+1));
+        pt.wt_dm_downsampling = pow2(lg2_wdds.at(ipri));
+        pt.wt_time_downsampling = pow2(lg2_wtds.at(ipri));
         ret.primary_trees.push_back(pt);
 
         // FIXME min_et_rank should be (stage1_dd_rank). I'm currently using (stage1_dd_rank + 1)
@@ -969,14 +1633,22 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
             if (primary_tree_rank - et_level < min_et_rank)
                 break;
 
+            // Checks 1 and 3 of validate(): the subband counts must survive truncation by
+            // et_level levels. (make_random() must not emit a config that validate() would
+            // reject, and this fails often -- make_random_subband_counts() draws each count
+            // uniformly on [0, max_count], so a zero at the wrong level is common.)
+            if (!FrequencySubbands::can_early_trigger(ret.frequency_subband_counts, et_level))
+                break;
+
             if (args.gpu_valid) {
                 Key2 ds_key = k;
                 ds_key.dd_rank = stage2_dd_rank - et_level;
 
-                // Mimics the logic used in the DedispersionPlan constructor,
-                // to modify the subband_counts for the stage2 tree.
-                long pf_rank = (ds_key.dd_rank + 1) / 2;
-                ds_key.subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, et_level, pf_rank);
+                // Mimics the logic used in the DedispersionPlan constructor, to modify the
+                // subband_counts for the stage2 tree. (Third transcription of the tree rule,
+                // after the plan constructor's and makefile_helper.py's -- if the rule
+                // changes, all three move together.)
+                ds_key.subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, et_level);
 
                 // If there is no kernel in the registry for this (dd_rank, subband_counts),
                 // then this et_level (and all larger ones) is not supported.
@@ -988,23 +1660,15 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         }
     }
 
-    // Assign num_early_triggers to each primary tree, treating args.max_early_triggers
-    // as a bound on the TOTAL early-trigger count. Process the primary trees in random
-    // order, so the budget does not systematically starve large ipri.
+    // Assign num_early_triggers to each primary tree. args.max_early_triggers is a bound on
+    // the TOTAL, and validate() chains the per-tree values (equal to the predecessor's, or one
+    // more), so this is a chain draw and not npri independent ones. See
+    // _draw_early_trigger_chain() for how the two interact.
 
-    vector<long> ipri_order(npri);
-    for (long i = 0; i < npri; i++)
-        ipri_order[i] = i;
-    ksgpu::randomly_permute(ipri_order);
+    vector<long> nets = _draw_early_trigger_chain(max_et, args.max_early_triggers);
 
-    long et_budget = args.max_early_triggers;
-
-    for (long ipri: ipri_order) {
-        long cap = min(max_et.at(ipri), et_budget);
-        long num_et = rand_int(0, cap+1);
-        ret.primary_trees.at(ipri).num_early_triggers = num_et;
-        et_budget -= num_et;
-    }
+    for (long ipri = 0; ipri < npri; ipri++)
+        ret.primary_trees.at(ipri).num_early_triggers = nets.at(ipri);
 
     ret.validate();
     return ret;
@@ -1021,6 +1685,14 @@ DedispersionConfig DedispersionConfig::make_mini_chord(Dtype dtype)
     //   time_samples_per_chunk: 2048
     //   beams_per_batch: 2
     //   time_sample_ms: 1.0
+    //
+    // The beam counts are halved for float32, so that the MegaRingbuf's GPU zone is ~27 GiB
+    // for either dtype (its size scales as beams * sizeof(dtype)), and hence fits on a 46 GiB
+    // L40S. Without this, the float32 config would need ~54 GiB, and callers which actually
+    // allocate the ring buffer (e.g. CoalescedDdKernel2::time_one()) would fail with an
+    // out-of-memory error.
+
+    bool fp32 = (dtype == Dtype::native<float> ());
 
     DedispersionConfig ret;
     ret.zone_freq_edges = { 300, 350, 450, 600, 800, 1500 };
@@ -1029,18 +1701,18 @@ DedispersionConfig DedispersionConfig::make_mini_chord(Dtype dtype)
     ret.time_sample_ms = 1.0;
     ret.time_samples_per_chunk = 2048;
     ret.dtype = dtype;
-    ret.beams_per_gpu = 4;
-    ret.beams_per_batch = 2;
+    ret.beams_per_gpu = fp32 ? 2 : 4;
+    ret.beams_per_batch = fp32 ? 1 : 2;
     ret.num_active_batches = 2;
     ret.frequency_subband_counts = { 0, 0, 0, 0, 1 };
 
     // Four primary trees, no early triggers.
-    // (num_early_triggers, max_width, dm_downsampling, time_downsampling, wt_dm_downsampling, wt_time_downsampling)
+    // (num_early_triggers, max_width, wt_dm_downsampling, wt_time_downsampling)
     ret.primary_trees = {
-        { 0, 16, 0, 0, 64, 64 },
-        { 0, 16, 0, 0, 64, 64 },
-        { 0, 16, 0, 0, 64, 64 },
-        { 0, 16, 0, 0, 64, 64 }
+        { 0, 16, 64, 64 },
+        { 0, 16, 64, 64 },
+        { 0, 16, 64, 64 },
+        { 0, 16, 64, 64 }
     };
 
     ret.validate();

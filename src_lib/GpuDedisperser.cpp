@@ -9,7 +9,7 @@
 #include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/GpuDequantizationKernel.hpp"
 #include "../include/pirate/MegaRingbuf.hpp"
-#include "../include/pirate/PfVariance.hpp"
+#include "../include/pirate/varmap.hpp"
 #include "../include/pirate/constants.hpp"  // xdiv(), pow2()
 #include "../include/pirate/inlines.hpp"  // xdiv(), pow2()
 #include "../include/pirate/utils.hpp"    // safe_memcpy_*
@@ -92,10 +92,10 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
 {
     xassert(params.plan);
 
-    // Non-gpu_runnable plans have default (non-registry) Dcore values, which would not
-    // match the compiled cdd2 kernels. This also excludes incomplete plans (never
-    // gpu_runnable), which additionally lack the MegaRingbuf/kernel params used below.
-    xassert(params.plan->params.gpu_runnable);
+    // The plan must be a COMPLETE one (both DedispersionPlan::Params flags true): the
+    // kernel and buffer params used below are only filled in a gpu_kernels plan.
+    xassert(params.plan->params.mega_ringbuf);
+    xassert(params.plan->params.gpu_kernels);
     xassert(params.stream_pool);
     xassert(params.cuda_device_id >= 0);
     xassert_eq(params.plan->num_active_batches, params.stream_pool->num_compute_streams);
@@ -202,6 +202,7 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
         auto cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);
         this->resource_tracker += cdd2_kernel->resource_tracker;
         this->cdd2_kernels.push_back(cdd2_kernel);
+        this->Dcores.push_back(cdd2_kernel->Dcore);
     }
 
     // Set up the output ringbuf shape metadata (output_ringbuf.allocate() uses
@@ -1166,10 +1167,10 @@ void GpuDedisperser::_worker_main()
 
 
 // Fills every weight slot/beam with the SAME non-random analytic weights, computed from
-// a PfAvarApproximation. See Dedisperser.hpp.
+// compute_detrender_free_varcoarse(). See Dedisperser.hpp.
 //
 // Entry point: per the strict stoppable-class policy (notes/stoppable_class.md),
-// ANY exception from the body -- including PfAvarApproximation's argument
+// ANY exception from the body -- including compute_detrender_free_varcoarse()'s argument
 // validation and CUDA_CALL failures -- stops the GpuDedisperser.
 void GpuDedisperser::fill_analytic_weights(const Array<double> &freq_variances)
 {
@@ -1190,8 +1191,12 @@ void GpuDedisperser::_fill_analytic_weights(const Array<double> &freq_variances)
         _throw_if_unallocated("fill_analytic_weights");
     }
 
-    // Analytic per-(subband, dm, profile) variances for every tree (validates freq_variances).
-    PfAvarApproximation avar(plan, freq_variances);
+    // Analytic per-(dm, subband, profile) variances for every tree (validates freq_variances).
+    // Assumes no detrender!
+    std::vector<Array<double>> tree_variance =
+        compute_detrender_free_varcoarse(*plan, freq_variances);
+    xassert_eq(long(tree_variance.size()), ntrees);
+
     const long nslots = params.nbatches_wt * beams_per_batch;
 
     for (long itree = 0; itree < ntrees; itree++) {
@@ -1206,10 +1211,9 @@ void GpuDedisperser::_fill_analytic_weights(const Array<double> &freq_variances)
         pf_params.beams_per_batch = 1;
         pf_params.total_beams = 1;
 
-        // Non-random weights from the analytic variances. avar.tree_variance[itree] already has
-        // the (N, ndm_wt, nprofiles) shape that fill_host_weights() expects.
+        // Non-random weights from the analytic variances.
         Array<float> host_weights({1, t.ndm_wt, t.nt_wt, t.nprofiles, N}, af_rhost | af_zero);
-        pf_params.fill_host_weights(host_weights, avar.tree_variance.at(itree), /*randomize=*/ false);
+        pf_params.fill_host_weights(host_weights, tree_variance.at(itree), /*randomize=*/ false);
 
         // Fill the first beam slot via to_gpu(), then duplicate it to all 'nslots' beam slots with
         // GPU->GPU memcopies. wt_arrays[itree] flattens its (nbatches_wt, beams_per_batch) axes into
@@ -1292,7 +1296,55 @@ void GpuDedisperser::_fill_all_weights(long itree, const Array<float> &pf_weight
 
 
 // Static member function.
-void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, long nbatches_out, long nbatches_wt, bool host_only)
+// Coefficient in peak_finding_test_tolerance(). Calibrated, not guessed -- see below.
+static constexpr double pf_tol_coeff = 3.0;
+
+
+std::pair<double, double> peak_finding_test_tolerance(Dtype dtype, long n, double ref_max)
+{
+    xassert(n >= 0);
+    xassert(ref_max >= 0.0);
+
+    // Returns (epsabs, epsrel), so the per-element bound that assert_arrays_equal()
+    // applies is  pf_tol_coeff * dtype.epsilon() * sqrt(n+2) * (ref_max + |x| + |y|).
+    //
+    // Each of the three factors is load-bearing:
+    //
+    //  - dtype.epsilon(), NOT dtype.precision(). precision() returns round numbers
+    //    (float32 1e-6, float16 1e-3) sitting at very different multiples of true
+    //    machine epsilon -- 8.4x for float32 but only 1.02x for float16 -- so a bound
+    //    built on it would grant float32 eight times more slack than float16, and the
+    //    two dtypes would not be held to the same standard. Measured, the coefficient
+    //    float16 requires exceeds float32's by only 1.1-1.6x with epsilon().
+    //
+    //  - ref_max (max |value| over the REFERENCE array), NOT a bare constant 1.0. The
+    //    error being bounded is roundoff in dedispersion sums whose TERMS are of order
+    //    ref_max, whereas the out_max element being compared is usually much smaller
+    //    (median ~8% of ref_max: out_max is a max over candidates, and most candidates
+    //    are quiet). An absolute floor pinned to 1.0 would under-cover precisely the
+    //    small elements, where relative error is largest. This is why the tolerance
+    //    has to be recomputed per tree rather than hoisted out of the loop.
+    //
+    //  - sqrt(n+2), a random walk of (n+2) rounding steps down the tree. Measurement
+    //    says it is doing its job: the required coefficient is then flat in n
+    //    (0.37-0.95 over n = 5..12) and in array size N (0.24-0.59 over N = 64..49152),
+    //    so no additional N-dependent factor is warranted.
+    //
+    // Calibration, over 35k instrumented comparisons from 'test --dd' and 'test --serv'
+    // across both dtypes: the largest coefficient any single comparison required was
+    // 0.95. Fitting the upper tail to a Gumbel and extrapolating, coefficient 3.0 gives
+    // an expected 1.5e-5 assertion failures per 100-iteration run -- about one per
+    // 65000 runs -- with 3.2x margin over the worst case actually seen.
+    //
+    // The bound is looser for float16 and tighter for float32 than a bare-constant one
+    // of similar coefficient. That asymmetry is the correction, not lost detection
+    // power: real errors are order-unity relative, and stay far above it.
+    double u = pf_tol_coeff * dtype.epsilon() * sqrt(n+2);
+    return { u * ref_max, u };
+}
+
+
+void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, long nbatches_out, long nbatches_wt, long num_consumers, bool host_only)
 {
     cout << "\n" << "GpuDedisperser::test()" << endl;
     config.emit_cpp();
@@ -1306,11 +1358,28 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     long nfreq = config.get_total_nfreq();
     std::mt19937 &rng = ksgpu::default_rng();
 
+    xassert_ge(num_consumers, 0L);
+
     cout << "    nchunks = " << nchunks << ";\n"
          << "    nbatches_out = " << nbatches_out << ";"
          << "       // nstreams = " << nstreams << ", (chunks * batches) = " << (nchunks*nbatches) << "\n"
          << "    nbatches_wt = " << nbatches_wt << ";\n"
+         << "    num_consumers = " << num_consumers << ";\n"
          << "    host_only = " << host_only << ";" << endl;
+
+    // PER-CONSUMER OUTPUT CURSORS, and the schedule they follow is the whole point of drawing
+    // num_consumers > 1. Consumer c lags consumer 0 by c batches, so the cdd2 kernel's
+    // back-pressure wait resolves against the SLOWEST consumer instead of the only one; at
+    // num_consumers == 1 the loop below does exactly what it always did, and at 0 there is no
+    // output-side back-pressure at all (which is what FrbServer builds when it has no
+    // grouper). Consumer 0 stays at the front so the array comparisons still happen at
+    // 'seq_id' with no lookahead.
+    //
+    // EVERY CONSUMER MUST RECEIVE EVERY BATCH, exactly once: the cdd2 event ring is
+    // constructed with (num_consumers + 3) consumers, so an acquire_output() that never
+    // arrives leaves its event pinned forever. Hence the two drains below.
+    vector<long> consumer_cursor(max(num_consumers, 0L), 0);
+    long max_consumer_lag = 0;   // reported below: how far apart the cursors actually got
 
     if (host_only)
          cout << "    !!! Host-only test, GPU code will not be run !!!" << endl;
@@ -1325,15 +1394,35 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     xassert(nbatches_out <= nchunks * nbatches);
     xassert(nbatches_wt > 0);   // GpuDedisperser ctor additionally checks nbatches_wt >= nstreams
 
-    Array<double> freq_variance({nfreq}, af_uhost | af_zero);  // for PfAvarApproximation
+    Array<double> freq_variance({nfreq}, af_uhost | af_zero);  // for the analytic variances below
     for (long ifreq = 0; ifreq < nfreq; ifreq++)
         freq_variance.data[ifreq] = 1.0f;
 
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
-    shared_ptr<PfAvarApproximation> avar = make_shared<PfAvarApproximation> (plan, freq_variance);
+
+    // Same source as _fill_analytic_weights() uses in production; see the long comment there.
+    // Per-tree shape (ndm_wt, N, nprofiles).
+    std::vector<Array<double>> tree_variance =
+        compute_detrender_free_varcoarse(*plan, freq_variance);
+
     shared_ptr<GpuDedisperser> gdd;
     long ntrees = plan->ntrees;
-    
+
+    // Per-tree (primary_tree_index, early_trigger_level, K). Not an assertion -- coverage
+    // reporting. K = log2(dm_downsampling) - pf_rank, the peak-finder's extra-DM bit count,
+    // is nonzero only in early-trigger trees, and a random config which happens to produce
+    // K = 0 everywhere exercises neither the cdd2 kernel's extra-DM path nor the reference
+    // peak-finder's m_ext reindexing. That should be visible in the log rather than silent.
+    {
+        cout << "    trees (ipri,et_level,K) =";
+        for (long itree = 0; itree < ntrees; itree++) {
+            const DedispersionTree &t = plan->trees.at(itree);
+            long K = integer_log2(t.dm_downsampling) - t.frequency_subbands.pf_rank;
+            cout << " (" << t.primary_tree_index << "," << t.early_trigger_level << "," << K << ")";
+        }
+        cout << endl;
+    }
+
     if (!host_only) {
         // We use compute_stream_priority=-1 so that cudaMemcpyAsync(..., compute_stream)
         // will fill the GpuDedisperser input arrays as quickly as possible. See below.
@@ -1344,7 +1433,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         params.stream_pool = CudaStreamPool::create(nstreams, compute_stream_priority);
         params.nbatches_out = nbatches_out;
         params.nbatches_wt = nbatches_wt;
-        params.num_consumers = 1;
+        params.num_consumers = num_consumers;
         params.cuda_device_id = 0;
         params.initial_chunk = 0;   // test harness: outputs are zero-based
 
@@ -1353,14 +1442,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         BumpAllocator host_allocator(af_rhost | af_zero, -1);  // dummy allocator
         gdd->allocate(gpu_allocator, host_allocator);
     }
-
-    // Reference dedispersers take their per-tree Dcore from plan->stage2_pf_params, which
-    // the plan filled from the cdd2 registry -- so the reference peak-finders mimic the GPU
-    // kernels. (This assert is redundant with one in the CoalescedDdKernel2 constructor,
-    // but cheap documentation.)
-    if (!host_only)
-        for (long itree = 0; itree < ntrees; itree++)
-            xassert_eq(plan->stage2_pf_params.at(itree).Dcore, gdd->cdd2_kernels.at(itree)->Dcore);
 
     // pf_tmp: used to store output from ReferencePeakFindingKernel::eval_tokens().
     vector<Array<float>> pf_tmp(ntrees);
@@ -1372,6 +1453,12 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     // Create ReferenceDedispersers.
     ReferenceDedisperserBase::Params rdd_params;
     rdd_params.plan = plan;
+
+    // Give the reference peak-finders the GPU kernels' compiled-in Dcores, so the two sides
+    // emit identical out_argmax tokens. In host_only mode there is no GpuDedisperser to take
+    // them from, and nothing compares tokens across the two, so the default is fine.
+    if (!host_only)
+        rdd_params.Dcores = gdd->Dcores;
     rdd_params.sophistication = 0;  shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(rdd_params);
     rdd_params.sophistication = 1;  shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(rdd_params);
     rdd_params.sophistication = 2;  shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(rdd_params);
@@ -1397,6 +1484,24 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         for (long ibatch = 0; ibatch < nbatches; ibatch++) {
             long seq_id = ichunk * nbatches + ibatch;
             long seq_base = (seq_id / nbatches_out) * nbatches_out;
+
+            // DRAIN THE LAGGING CONSUMERS BEFORE THIS GROUP'S KERNELS ARE QUEUED, not after.
+            // _launch_cdd2() waits on every consumer's release of (seq_id - nbatches_out)
+            // with blocking=true, which blocks the HOST -- so queueing group g requires every
+            // consumer to have released all of group g-1, and a consumer lagging further than
+            // nbatches_out behind the launch cursor would deadlock this loop. That is not a
+            // defensive worry: measured over 4000 draws, nbatches_out is 1 on 20% of configs
+            // and 2 on another 18%, so this drain is load-bearing.
+            if (!host_only && (seq_id == seq_base)) {
+                for (long c = 1; c < num_consumers; c++) {
+                    max_consumer_lag = max(max_consumer_lag, consumer_cursor[0] - consumer_cursor[c]);
+                    while (consumer_cursor[c] < seq_base) {
+                        long q = consumer_cursor[c]++;
+                        gdd->acquire_output(c, q, nullptr, /*sync=*/false, /*noreturn=*/true);
+                        gdd->release_output(c, q, nullptr);
+                    }
+                }
+            }
 
             // Every (nbatches_out) batches, we do a large computation, to simulate
             // dd_in and pf_wt arrays, copy to the GPU, and launch all GPU compute.
@@ -1427,7 +1532,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 CUDA_CALL(cudaDeviceSynchronize());
 
                 for (long itree = 0; itree < ntrees; itree++) {
-                    Array<double> variances = avar->tree_variance.at(itree);
+                    Array<double> variances = tree_variance.at(itree);
 
                     // Re-randomize the entire weight ring (all nbatches_wt slots), so every slot
                     // that any batch in this group might select (seq_id % nbatches_wt) is valid.
@@ -1497,8 +1602,20 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
             rdd2->input_array.fill(dd_in);
             rdd2->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
             
-            if (!host_only)
+            if (!host_only && (num_consumers > 0))
                 gdd->acquire_output(0, seq_id, nullptr, /*sync=*/false, /*noreturn=*/true);
+            else if (!host_only) {
+                // With no consumers there is no acquire_output() to order the host reads
+                // below against the cdd2 kernel. This is the TEST's read ordering, not part
+                // of what num_consumers == 0 exercises.
+                //
+                // The ONE stream that produced this seq_id, not cudaDeviceSynchronize(): a
+                // device-wide sync would also drain the other streams, which is exactly the
+                // overlap the loop above is built to stress (see its "intended to be fast"
+                // comment).
+                CUDA_CALL(cudaStreamSynchronize(
+                    gdd->stream_pool->compute_streams.at(seq_id % nstreams)));
+            }
 
             for (long itree = 0; itree < ntrees; itree++) {
                 const DedispersionTree &tree = plan->trees.at(itree);
@@ -1524,19 +1641,74 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 Array<void> gdd_max = gdd_out.out_max.at(itree);
                 Array<uint> gpu_tokens = gdd_out.out_argmax.at(itree).to_host();
 
-                long n = tree.primary_tree_index + tree.total_rank();
-                double eps = 3.0 * config.dtype.precision() * sqrt(n+2);
-                assert_arrays_equal(rdd0->out_max.at(itree), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"}, eps, eps);
+                long n = tree.primary_tree_index + tree.tree_rank;
+
+                // The tolerance scales with the reference array's own magnitude, so it
+                // must be recomputed per tree. Shared with test_server.py -- see
+                // peak_finding_test_tolerance().
+                const Array<float> &ref_max_arr = rdd0->out_max.at(itree);
+                double ref_max = 0.0;
+                for (auto ix = ref_max_arr.ix_start(); ref_max_arr.ix_valid(ix); ref_max_arr.ix_next(ix))
+                    ref_max = std::max(ref_max, std::abs((double) ref_max_arr.at(ix)));
+
+                auto [epsabs, epsrel] = peak_finding_test_tolerance(config.dtype, n, ref_max);
+                assert_arrays_equal(rdd0->out_max.at(itree), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"}, epsabs, epsrel);
 
                 pf_kernel->eval_tokens(pf_tmp.at(itree), gpu_tokens, rdd0->wt_arrays.at(itree));
-                assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"}, eps, eps);
+                assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"}, epsabs, epsrel);
             }
 
-            if (!host_only)
+            if (!host_only && (num_consumers > 0)) {
                 gdd->release_output(0, seq_id, nullptr);
+                consumer_cursor[0] = seq_id + 1;
+
+                // The lagging consumers: consumer c handles (seq_id - c).
+                for (long c = 1; c < num_consumers; c++) {
+                    long q = seq_id - c;
+                    if ((q >= 0) && (q >= consumer_cursor[c])) {
+                        consumer_cursor[c] = q + 1;
+                        gdd->acquire_output(c, q, nullptr, /*sync=*/false, /*noreturn=*/true);
+                        gdd->release_output(c, q, nullptr);
+                    }
+                }
+            }
         }
     }
-    
+
+    // The tail of the lag: every consumer catches up to the end of the stream.
+    if (!host_only) {
+        long nseq = nchunks * nbatches;
+        for (long c = 1; c < num_consumers; c++) {
+            max_consumer_lag = max(max_consumer_lag, consumer_cursor[0] - consumer_cursor[c]);
+            while (consumer_cursor[c] < nseq) {
+                long q = consumer_cursor[c]++;
+                gdd->acquire_output(c, q, nullptr, /*sync=*/false, /*noreturn=*/true);
+                gdd->release_output(c, q, nullptr);
+            }
+        }
+    }
+
+    // REPORTED, not asserted: it is a property of the draw. A zero here at num_consumers > 1
+    // means the cursors never separated -- which happens legitimately at nbatches_out == 1,
+    // where the output slot is reused immediately and no consumer can fall behind -- and a
+    // zero at EVERY draw would mean the schedule above had stopped doing anything.
+    if (!host_only && (num_consumers > 1))
+        cout << "    max consumer lag = " << max_consumer_lag << " batches" << endl;
+
+    // Both output entry points range-check consumer_id. ONE probe, and it is the last thing
+    // done with this instance: acquire_output() stops the GpuDedisperser on any throw, so
+    // whichever of the two out-of-range values is drawn, nothing usable survives it.
+    if (!host_only) {
+        long bad = ksgpu::rand_bool() ? -1L : num_consumers;
+        bool threw = false;
+        try {
+            gdd->acquire_output(bad, 0, nullptr, /*sync=*/false, /*noreturn=*/true);
+        } catch (const std::exception &e) {
+            threw = (string(e.what()).find("out of range") != string::npos);
+        }
+        xassert_msg(threw, "acquire_output() accepted an out-of-range consumer_id");
+    }
+
     cout << endl;
 }
 
@@ -1548,11 +1720,27 @@ void GpuDedisperser::test_random()
     
     long ntree = pow2(config.toplevel_tree_rank);
     long nt_chunk = config.time_samples_per_chunk;
-    long min_nchunks = (ntree / nt_chunk) + 2;
+
+    // min_nchunks IS A FLOOR ON THE DRAW, not just on the range. It is the number of chunks
+    // the DEEPEST tree lag needs to propagate all the way through the ring buffer, so a
+    // shorter run ends with the deepest signal still in flight: every assertion still holds,
+    // but the pipeline being checked is shallower than the one the test was sized for.
+    // Drawing from 1 left that to chance -- measured, the floor was reached on 46% of
+    // configs on average, and on under 20% of the worst tenth.
+    //
+    // THE DEEPEST LAG IS 2^(toplevel_tree_rank + npri - 1), not 2^toplevel_tree_rank:
+    // primary tree p is time-downsampled by 2^p, so its delay in FULL-RESOLUTION samples
+    // (which is what nt_chunk counts) carries that factor. Same 2^(npri-1) that appears in
+    // DedispersionConfig::make_random()'s nt_divisor, for the same reason.
+    long deepest_lag = pow2(config.toplevel_tree_rank + config.num_primary_trees() - 1);
+    long min_nchunks = (deepest_lag / nt_chunk) + 2;
+
+    // A MEMORY budget, and it loses to the floor when the two disagree: a test that does not
+    // reach the deepest lag is not worth running cheaply.
     long max_nchunks = (1024*1024) / (ntree * nt_chunk * config.beams_per_gpu);
     max_nchunks = max(min_nchunks, max_nchunks);
 
-    long nchunks = ksgpu::rand_int(1, max_nchunks+1);
+    long nchunks = ksgpu::rand_int(min_nchunks, max_nchunks+1);
 
     long nfreq = config.get_total_nfreq();
     long beams_per_batch = config.beams_per_batch;
@@ -1569,7 +1757,15 @@ void GpuDedisperser::test_random()
     // GpuDedisperser ctor requires nbatches_wt >= num_active_batches.
     long nbatches_wt = ksgpu::rand_int(min_nbatches_out, 2*nbatches_out);
 
-    GpuDedisperser::test_one(config, nchunks, nbatches_out, nbatches_wt);
+    // num_consumers is DRAWN. Pinned at 1, the per-consumer release cursors, the per-consumer
+    // event rings and _launch_cdd2()'s "wait on ALL N of them" loop all run exactly once, so
+    // "wait for the slowest of several" was never exercised. 0 is reachable in production
+    // (FrbServer builds it when there is no grouper) and means no output-side back-pressure;
+    // 2 and 3 are not reachable in production yet, and are covered here so that the machinery
+    // is not mistaken for tested when a second consumer arrives.
+    long num_consumers = ksgpu::rand_int(0, 4);
+
+    GpuDedisperser::test_one(config, nchunks, nbatches_out, nbatches_wt, num_consumers);
 }
 
 

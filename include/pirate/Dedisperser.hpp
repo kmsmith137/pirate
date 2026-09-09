@@ -9,6 +9,7 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <utility>
 #include <memory>
 #include <iostream>
 #include <condition_variable>
@@ -46,8 +47,8 @@ struct GpuDedisperser
 {
     struct Params
     {
-        // Must be a gpu_runnable (hence non-incomplete) plan: the constructor asserts
-        // plan->params.gpu_runnable, since the Dcore values must match the compiled kernels.
+        // The plan must be complete, i.e. built with both DedispersionPlan::Params flags
+        // true: the constructor asserts it, since it reads the plan's kernel params.
         std::shared_ptr<DedispersionPlan> plan;
         std::shared_ptr<CudaStreamPool> stream_pool;
 
@@ -236,7 +237,8 @@ struct GpuDedisperser
     // Static member function: do one test run with specified configuration.
     // nbatches_out=0 defaults to nstreams; nbatches_wt=0 defaults to nbatches_out.
     static void test_one(const DedispersionConfig &config, long nchunks,
-                         long nbatches_out=0, long nbatches_wt=0, bool host_only=false);
+                         long nbatches_out=0, long nbatches_wt=0, long num_consumers=1,
+                         bool host_only=false);
 
     // Run timing benchmark (C++ version). Entry point: throws on a stopped
     // (or never-allocated) instance; any throw stops the GpuDedisperser.
@@ -246,7 +248,8 @@ struct GpuDedisperser
     void time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_allocator, long niterations);
 
     // Fills the peak-finding weight arrays (wt_arrays) with NON-random analytic weights,
-    // derived from a PfAvarApproximation built from (plan, freq_variances). All weight
+    // derived from compute_detrender_free_varcoarse(plan->config, freq_variances) -- which
+    // assumes NO DETRENDER; see the comment at _fill_analytic_weights(). All weight
     // slots and all beams get identical weights. Must be called after allocate(). Blocks
     // (calls cudaDeviceSynchronize) before returning, so the weights are in place on the
     // GPU when it returns. Entry point: throws on a stopped (or never-allocated)
@@ -307,6 +310,14 @@ public:
     std::shared_ptr<GpuTreeGriddingKernel> tree_gridding_kernel;
     std::vector<std::shared_ptr<GpuDedispersionKernel>> stage1_dd_kernels;
     std::vector<std::shared_ptr<CoalescedDdKernel2>> cdd2_kernels;
+
+    // Per-tree peak-finder core factors, = cdd2_kernels[i]->Dcore (length ntrees). These are
+    // compiled into the cdd2 kernels and cannot be predicted from the plan, so they are what
+    // a consumer of this dedisperser's out_argmax tokens needs in order to decode them:
+    // pass Dcores[itree] to DedispersionPlan::decode_argmax(). Filled by the constructor, so
+    // it is readable before allocate().
+    std::vector<long> Dcores;
+
     std::shared_ptr<GpuLaggedDownsamplingKernel> lds_kernel;
     std::shared_ptr<GpuRingbufCopyKernel> g2g_copy_kernel;
     std::shared_ptr<CpuRingbufCopyKernel> h2h_copy_kernel;
@@ -422,23 +433,24 @@ public:
 //
 //   - As close to GPU implementation as possible!
 //
-// Note on Dcore: the per-tree peak-finding Dcore values come from the plan
-// (plan->stage2_pf_params[:].Dcore, filled from the cdd2 kernel registry), so the
-// reference peak-finders mimic the GPU kernels whenever the corresponding cdd2 kernels
-// are compiled into the build. See PeakFindingKernelParams::Dcore for details.
-
 struct ReferenceDedisperserBase
 {
     struct Params {
         std::shared_ptr<DedispersionPlan> plan;
         int sophistication = -1;        // 0, 1, or 2 (see above)
-        bool enable_variances = false;  // if true, allocate + fill out_var
 
         // If true, the tree gridding kernel is skipped: 'input_array' has shape
         // (beams_per_batch, pow2(toplevel_tree_rank), nt_in) and is interpreted as an
         // already-gridded toplevel tree-domain array. Used by unit tests that need to
         // inject probes into specific tree-freq channels (see test_decode_argmax).
         bool tree_domain_input = false;
+
+        // Per-tree peak-finder core factors (length ntrees), or empty for the default
+        // Dcores[i] = trees[i].time_downsampling, i.e. one profile evaluation per output
+        // bin at the coarsest level. To make this dedisperser's out_argmax tokens identical
+        // to a GpuDedisperser's, pass its Dcores: the GPU value is a property of the
+        // compiled cdd2 kernel and cannot be predicted from the plan.
+        std::vector<long> Dcores;
     };
 
     // Constructor not intended to be called directly -- use make() below, which
@@ -459,8 +471,16 @@ struct ReferenceDedisperserBase
     long ntrees = 0;                       // same as params.plan->ntrees
     std::vector<DedispersionTree> trees;   // same as params.plan->trees
 
+    // Resolved Params::Dcores: either the caller's vector, or the default described there.
+    std::vector<long> Dcores;              // length ntrees
+
     std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
-    std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;  // length ntrees
+
+    // Length ntrees, constructed from plan->stage2_pf_params verbatim. NOTE their argmax
+    // tokens carry an extra-DM index 'mu' (K = pf_kernels[itree]->K bits, in the token's
+    // fourth byte) alongside the tree's own multiplet index m -- which is what makes the
+    // tokens identical to a cdd2 kernel's. K is zero except in early-trigger trees.
+    std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;
 
     // To process multiple chunks, call the dedisperse() method in a loop.
     // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
@@ -482,14 +502,56 @@ struct ReferenceDedisperserBase
     std::vector<ksgpu::Array<float>> out_max;     // length ntrees
     std::vector<ksgpu::Array<uint>> out_argmax;   // length ntrees
 
-    // Per-chunk peak-finding variance, only allocated if Params::enable_variances (else empty).
-    // Shape is (beams_per_batch, t.ndm_out, t.frequency_subbands.M, t.nprofiles).
-    // OVERWRITTEN each dedisperse() call. See ReferencePeakFindingKernel::apply().
-    std::vector<ksgpu::Array<double>> out_var;    // length ntrees (elements empty if disabled)
+    // After dedisperse() completes, the subband array of tree 'itree' -- the dedispersion
+    // output that the peak-finder reads. Shape is
+    //
+    //   (beams_per_batch, Dpf, t.frequency_subbands.M, t.nt_ds)   with t = trees[itree]
+    //
+    // where Dpf = (t.ndm_out << K) = 2^(r-R) is the tree's FULL coarse-DM count, with
+    // K = pf_kernels[itree]->K. This is the same layout as GpuSbDedispersionKernel's 'sb_out',
+    // which is what lets a CPU variance sweep mirror a GPU one line for line. Its row order
+    // (coarse dm, multiplet) does not depend on K, unlike the peak-finder's m_ext multiplet
+    // index -- which is why a variance calculation should run a ReferencePfSquare over THIS
+    // array rather than resolving anything by the peak-finder's convention.
+    //
+    // A view into internal storage, which the next dedisperse() overwrites. It IS the array
+    // handed to pf_kernels[itree] -- the peak-finder reads the extra DM bits in place.
+    std::vector<ksgpu::Array<float>> out_sb;      // length ntrees
+
+    // Allocates the subband ('sb_out') buffer for tree 'itree': the array that
+    // ReferenceDedispersionKernel writes and the peak-finder reads, and publishes the
+    // peak-finder's view of it as out_sb[itree].
+    //
+    // 'ndm' is the DM count the caller wants at the peak-finder's output granularity --
+    // trees[itree].ndm_out, or twice that at sophistication 0, which computes twice as many
+    // DMs in a downsampled tree and then drops the bottom half. The returned array has shape
+    //
+    //   (beams_per_batch, ndm << K, trees[itree].frequency_subbands.M, trees[itree].nt_ds)
+    //
+    // with K = pf_kernels[itree]->K (the peak-finder's extra-DM bits; at the tree level the
+    // same fact reads dm_downsampling = 2^(pf_rank + K)), since the dedispersion kernel emits
+    // 2^K DM channels per peak-finder DM channel.
+    //
+    // Allocating here rather than at each call site is what lets the out_sb[itree] view --
+    // the top (trees[itree].ndm_out << K) rows of the returned array -- be published from the
+    // one place that knows the shape.
+    ksgpu::Array<float> alloc_subband_buffer(long itree, long ndm);
 
     // Factory function -- constructs ReferenceDedisperser of the sophistication in 'params'.
     static std::shared_ptr<ReferenceDedisperserBase> make(const Params &params);
 };
+
+
+// Tolerance for comparing a peak-finding 'out_max' array against a reference, as the
+// (epsabs, epsrel) pair that ksgpu::assert_arrays_equal() expects. Arguments are the
+// dedisperser dtype, n = (primary_tree_index + tree_rank) of the tree being compared,
+// and ref_max = max |value| over the REFERENCE array.
+//
+// Two tests make this same comparison and must use the same tolerance:
+// GpuDedisperser::test_one() ('pirate_frb test --dd') and the end-to-end server test
+// (pirate_frb/tests/test_server.py, which calls this through the pybind11 binding of
+// the same name). Keeping the tolerance here is what stops the two from drifting apart.
+std::pair<double, double> peak_finding_test_tolerance(ksgpu::Dtype dtype, long n, double ref_max);
 
 
 }  // namespace pirate
