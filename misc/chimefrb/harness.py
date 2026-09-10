@@ -65,6 +65,24 @@ def workdir(test_dir):
     return d
 
 
+def _driver_libs(src):
+    """Libraries a driver asks for, via a '// LIBS: -lfoo -lbar' line near the top of it.
+
+    driver_flags() carries search paths but no -l flags, because which libraries a driver
+    needs is a property of the driver.  (The dispersion_delay example needs none: the
+    bonsai function it calls is header-only.)  Keeping the list in driver.cpp keeps a spot
+    check to two files.
+    """
+
+    with open(src) as f:
+        for line in f:
+            if line.startswith("// LIBS:"):
+                return line.split(":", 1)[1].split()
+            if not line.startswith("//") and line.strip():
+                break   # past the header comment
+    return []
+
+
 def build_driver(test_dir):
     """Compile <test_dir>/driver.cpp, and return the path to the executable.
 
@@ -86,7 +104,7 @@ def build_driver(test_dir):
 
     f = driver_flags()
     cmd = ([f["cxx"]] + f["cxxflags"].split() + f["incflags"].split()
-           + ["-o", exe, src] + f["libflags"].split())
+           + ["-o", exe, src] + f["libflags"].split() + _driver_libs(src))
 
     p = subprocess.run(cmd, cwd=test_dir, capture_output=True, text=True)
     if p.returncode != 0:
@@ -95,10 +113,11 @@ def build_driver(test_dir):
     return exe
 
 
-def run_driver(test_dir, in_array, params=None, dtype=np.float64):
+def run_driver(test_dir, in_array, params=None, dtype=None):
     """Write in_array, run the test's driver on it, and return what it wrote back.
 
     'params' is a dict of scalars, passed to the driver as key=value arguments.
+    'dtype' force-casts the input array; the default (None) preserves what the caller gave.
     """
 
     exe = build_driver(test_dir)
@@ -106,7 +125,13 @@ def run_driver(test_dir, in_array, params=None, dtype=np.float64):
     in_path = os.path.join(wd, "in.npy")
     out_path = os.path.join(wd, "out.npy")
 
-    np.save(in_path, np.ascontiguousarray(in_array, dtype=dtype))
+    # dtype=None preserves the caller's dtype.  Passing one force-casts, which is
+    # occasionally what you want and is otherwise a silent-upcast footgun: a caller
+    # who passes float32 or uint8 and forgets to say so gets a comparison that
+    # quietly measures something else.
+    arr = (np.ascontiguousarray(in_array, dtype=dtype) if dtype is not None
+           else np.ascontiguousarray(in_array))
+    np.save(in_path, arr)
     if os.path.exists(out_path):
         os.remove(out_path)
 
