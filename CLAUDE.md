@@ -20,6 +20,7 @@
 - If you need more info on CudaEventRingbuf, then read `notes/cuda_event_ringbuf.md` into context.
 - If you're writing docstrings, or need more info, then read `notes/docstrings.md` into context.
 - If you're editing a gRPC `.proto` file, or creating or modifying a gRPC server, then read `notes/grpc.md` into context.
+- If a task mentions the old chime-frb code, then read `notes/chimefrb.md` into context.
 
 ### Style/coding Guidelines
 

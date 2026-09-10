@@ -1,0 +1,10 @@
+--- a/ch_frb_l1.hpp
++++ b/ch_frb_l1.hpp
+@@ -4,6 +4,7 @@
+ #include <string>
+ #include <vector>
+ #include <cstring>
++#include <cassert>
+ #include <stdexcept>
+ #include <unordered_set>
+ 

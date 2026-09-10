@@ -31,6 +31,12 @@ __pycache__/
 \#*\#
 .\#*
 
+# The old CHIME pipeline build (misc/chimefrb/build_oldpipe.sh), plus the compiled
+# spot-test drivers and their scratch arrays underneath it. Per-worktree, ~100 MB, all
+# of it rebuilt from ~/ch/extern in about a minute, so there is nothing here worth
+# tracking or worth sharing between worktrees.
+misc/chimefrb/oldpipe/
+
 # GRPC
 grpc/*.pb.h
 grpc/*.pb.cc

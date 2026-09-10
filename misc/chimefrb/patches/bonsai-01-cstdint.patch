@@ -1,0 +1,10 @@
+--- a/bonsai-nanny.cpp
++++ b/bonsai-nanny.cpp
+@@ -5,6 +5,7 @@
+ #include <vector>
+ #include <cstring>
+ #include <climits>
++#include <cstdint>
+ #include <iostream>
+ 
+ using namespace std;
