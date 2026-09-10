@@ -18,6 +18,7 @@ when it stops matching how callers actually write code.
 ---
 maxdepth: 1
 ---
+classes/AssembledChunk
 classes/Acquisition
 classes/AssembledFrame
 classes/AssembledFrameAllocator

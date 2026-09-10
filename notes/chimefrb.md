@@ -34,7 +34,7 @@ Therefore, when doing chimefrb-porting tasks (e.g. the msgpack reader task menti
 
   - Put new C++ code in namespace `pirate::chimefrb`, and in the following files:
     ```
-      pirate/include/chimefrb/*.hpp
+      pirate/include/pirate/chimefrb/*.hpp
       pirate/src_lib/chimefrb/*.{cpp,cu}
       pirate/src_pybind11/pirate_pybind11_chimefrb.cpp
     ```

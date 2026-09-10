@@ -7,6 +7,7 @@
 //   - pirate_pybind11_kernels.cpp: GPU kernels (pirate_frb.kernels)
 //   - pirate_pybind11_casm.cpp: CASM beamformer (pirate_frb.casm)
 //   - pirate_pybind11_chime.cpp: CHIME beamformer (pirate_frb.chime)
+//   - pirate_pybind11_chimefrb.cpp: old CHIME FRB file reader (pirate_frb.chimefrb)
 //   - pirate_pybind11_loose_ends.cpp: prototype functions (pirate_frb.loose_ends)
 //   - pirate_pybind11_simpulse.cpp: FRB pulse simulation (pirate_frb.simpulse)
 //   - pirate_pybind11_utils.cpp: pirate_frb.utils
@@ -43,6 +44,7 @@ namespace pirate {
     void register_kernel_bindings(pybind11::module &m);
     void register_casm_bindings(pybind11::module &m);
     void register_chime_bindings(pybind11::module &m);
+    void register_chimefrb_bindings(pybind11::module &m);
     void register_loose_ends_bindings(pybind11::module &m);
     void register_simpulse_bindings(pybind11::module &m);
     void register_utils_bindings(pybind11::module &m);
@@ -92,6 +94,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     register_kernel_bindings(m);
     register_casm_bindings(m);
     register_chime_bindings(m);
+    register_chimefrb_bindings(m);
     register_loose_ends_bindings(m);
     register_utils_bindings(m);
 

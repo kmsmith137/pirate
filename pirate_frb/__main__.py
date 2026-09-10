@@ -28,6 +28,7 @@ import ksgpu
 from . import pirate_pybind11
 from . import casm
 from . import chime
+from .chimefrb import test_assembled_chunk as chimefrb_tests
 from . import kernels
 from . import loose_ends
 from . import core
@@ -147,6 +148,8 @@ def parse_test(subparsers):
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
     parser.add_argument('--varmap', action='store_true', help="pirate_frb.varmap. Two halves, both run by this flag: everything checkable WITHOUT a dedisperser (the VarianceMap class, the covering-LP and basis machinery, and the analytic map of detrender_free.py against a hand-written oracle), and the brute-force sweep, which pushes a one-hot through the REAL dedisperser once per input channel and checks the analytic map against what comes out. Needs a DedispersionPlan and a GPU for the second half.")
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_{beamform,upchan}()')
+    parser.add_argument('--cfrb', action='store_true',
+                        help='Run chimefrb tests (reading old CHIME FRB msgpack files)')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection and pulse-invariants tests')
@@ -177,7 +180,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'util', 'dtl1', 'dtk1', 'dtl2' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'cfrb', 'zomb', 'dd', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'util', 'dtl1', 'dtk1', 'dtl2' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
 
     seed = draw_random_seed() if args.randomize_seed else args.seed
@@ -308,6 +311,9 @@ def test(args):
             if (i % 10) == 0:
                 chime.test_chime_frb_beamform()
             chime.test_chime_frb_upchan()
+
+        if run_all_tests or args.cfrb:
+            chimefrb_tests.test_assembled_chunk(i)
 
         if run_all_tests or args.zomb:
             loose_ends.test_avx2_m64_outbuf()
