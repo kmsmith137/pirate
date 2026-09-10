@@ -59,254 +59,21 @@ from .TriggerCatalog import (
 from .utils import atomic_print
 
 
-@dataclass(frozen=True)
-class GroupingWindow:
-    """Final output and provenance for one owner-chunk grouping attempt."""
-
-    owner_source_chunk_index: int
-    grouped: GpuGroupingResult
-    output_status: str
-
-    def __post_init__(self):
-        if self.output_status not in ("complete", "discarded", "partial"):
-            raise ValueError("invalid grouping-window output status")
-        expected_timeout = self.output_status != "complete"
-        if self.grouped.timed_out != expected_timeout:
-            raise ValueError("grouping-window status disagrees with GPU result")
+# Compatibility exports for callers of the original offline helpers.
+from .SharedGrouper import (
+    GroupingWindow, StreamingGrouper, GrouperSetup, CatalogRecorder,
+    _optional_nonnegative_integer, _effective_grouping_halo_columns,
+    _raw_take, _raw_concatenate, _project_grouping_events,
+    _owned_grouping_result, _split_emitted_chunks, _partition_current_halo,
+    _group_streaming_window as _shared_group_streaming_window,
+)
 
 
-def _optional_nonnegative_integer(value, name):
-    """Normalize an optional exact non-negative orchestration integer."""
-
-    if value is None:
-        return None
-    if isinstance(value, (bool, np.bool_)):
-        raise TypeError(f"{name} must be an integer, not bool")
-    try:
-        value = int(operator.index(value))
-    except TypeError as exc:
-        raise TypeError(f"{name} must be an integer") from exc
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative")
-    return value
-
-
-def _effective_grouping_halo_columns(geometries, halo_size):
-    """Return each tree's resolved part of its configured next-chunk halo.
-
-    Cross-window association is defined in native map coordinates.  The
-    configured prefix is ``halo_size * time_radius``; after processing chunk
-    ``i+1``, only its first ``ntime - time_radius`` centres are peak-resolved.
-    Their intersection is the complete eligible domain for owner ``i``.
-    """
-
-    halo_size = _optional_nonnegative_integer(halo_size, "halo_size")
-    if halo_size < 2:
-        raise ValueError("halo_size must be at least 2")
-    effective = []
-    for tree, geometry in enumerate(geometries):
-        ntime = _optional_nonnegative_integer(
-            geometry.ntime, f"ntime for tree {tree}"
-        )
-        radius = _optional_nonnegative_integer(
-            geometry.time_radius, f"time radius for tree {tree}"
-        )
-        if not 0 <= radius <= ntime:
-            raise ValueError(f"tree {tree} has an invalid time radius")
-        resolvable = ntime - radius
-        effective.append(min(halo_size * radius, resolvable))
-    return tuple(effective)
-
-
-def _raw_take(raw, selector):
-    """Gather a raw-candidate table without moving candidate data to host."""
-
-    return GpuRawCandidates(**{
-        field.name: getattr(raw, field.name)[selector]
-        for field in fields(GpuRawCandidates)
-    })
-
-
-def _raw_concatenate(parts):
-    """Concatenate compact raw pieces and restore deterministic GPU order."""
-
-    return concatenate_raw_candidates(parts)
-
-
-def _project_grouping_events(cp, grouped, keep_event):
-    """Return a compact, internally valid projection of selected events.
-
-    Candidate rows stay in their relative grouping-input order.  Event and
-    member identifiers, representative indices, assignments, and the mapping
-    back to the grouping call are all rebased on the GPU.
-    """
-
-    nevents = len(grouped.events)
-    if (not isinstance(keep_event, cp.ndarray)
-            or keep_event.dtype != cp.bool_
-            or keep_event.shape != (nevents,)):
-        raise TypeError("keep_event must be one Boolean GPU value per event")
-
-    old_event = cp.flatnonzero(keep_event).astype(cp.int64, copy=False)
-    event_by_old = cp.full(nevents, -1, dtype=cp.int64)
-    event_by_old[old_event] = cp.arange(int(old_event.size), dtype=cp.int64)
-
-    candidate_keep = keep_event[grouped.candidate_event_id]
-    old_candidate = cp.flatnonzero(candidate_keep).astype(
-        cp.int64, copy=False
+def _group_streaming_window(*args, **kwargs):
+    # Keep the historical test seam; actual association remains shared.
+    return _shared_group_streaming_window(
+        *args, **kwargs, group_function=group_candidates
     )
-    candidate_by_old = cp.full(len(grouped.candidates), -1, dtype=cp.int64)
-    candidate_by_old[old_candidate] = cp.arange(
-        int(old_candidate.size), dtype=cp.int64
-    )
-    candidates = GpuDecodedCandidates(**{
-        field.name: getattr(grouped.candidates, field.name)[old_candidate]
-        for field in fields(GpuDecodedCandidates)
-    })
-
-    event_values = {
-        field.name: getattr(grouped.events, field.name)[old_event]
-        for field in fields(GpuEventTable)
-    }
-    event_values["event_id"] = cp.arange(
-        int(old_event.size), dtype=cp.int64
-    )
-    event_values["representative_candidate_index"] = candidate_by_old[
-        grouped.events.representative_candidate_index[old_event]
-    ]
-    events = GpuEventTable(**event_values)
-
-    member_keep = keep_event[grouped.members.event_id]
-    old_member_candidate = grouped.members.candidate_index[member_keep]
-    members = GpuMemberTable(
-        event_id=event_by_old[grouped.members.event_id[member_keep]],
-        candidate_index=candidate_by_old[old_member_candidate],
-        is_representative=grouped.members.is_representative[member_keep],
-    )
-    candidate_event_id = event_by_old[
-        grouped.candidate_event_id[old_candidate]
-    ]
-    return GpuGroupingResult(
-        candidates=candidates,
-        events=events,
-        members=members,
-        candidate_event_id=candidate_event_id,
-        input_candidate_index=grouped.input_candidate_index[old_candidate],
-        timed_out=grouped.timed_out,
-        complete=grouped.complete,
-    )
-
-
-def _owned_grouping_result(cp, grouped, owner_source_chunk_index):
-    """Select groups containing at least one member from the owner chunk."""
-
-    nevents = len(grouped.events)
-    if nevents == 0:
-        return _project_grouping_events(
-            cp, grouped, cp.empty(0, dtype=cp.bool_)
-        )
-    owner_member = (
-        grouped.candidates.source_chunk_index[
-            grouped.members.candidate_index
-        ] == owner_source_chunk_index
-    )
-    # CuPy's bincount rejects an empty input on the supported deployment
-    # version.  Counting every member with a zero/one owner weight handles the
-    # important future-only case without a host branch or candidate transfer.
-    owned_count = cp.bincount(
-        grouped.members.event_id,
-        weights=owner_member.astype(cp.int32),
-        minlength=nevents,
-    )
-    return _project_grouping_events(cp, grouped, owned_count != 0)
-
-
-def _group_streaming_window(
-        cp, owner_raw, halo_raw, owner_source_chunk_index, halo_chunk_index,
-        decoder, grouping_geometry, grouping_config, *, timeout_ms,
-        timeout_policy):
-    """Group one owner plus next-chunk halo and apply its timeout policy.
-
-    Returns ``(window, retained_halo)``.  Retained halo rows are candidates from
-    fully processed future-only groups; they remain ordinary bounded state for
-    their own future window.  Unprocessed halo rows are never carried after a
-    timeout.
-    """
-
-    window_raw = _raw_concatenate((owner_raw, halo_raw))
-    decoded = decoder.decode(window_raw)
-    grouped = group_candidates(
-        decoded,
-        grouping_geometry,
-        config=grouping_config,
-        timeout_ms=timeout_ms,
-    )
-    owned = _owned_grouping_result(
-        cp, grouped, owner_source_chunk_index
-    )
-
-    if grouped.timed_out and timeout_policy == "discard":
-        output = _project_grouping_events(
-            cp, grouped, cp.zeros(len(grouped.events), dtype=cp.bool_)
-        )
-        status = "discarded"
-    elif grouped.timed_out:
-        output = owned
-        status = "partial"
-    else:
-        output = owned
-        status = "complete"
-
-    if halo_chunk_index is None or not len(halo_raw):
-        retained_halo = GpuRawCandidates.empty()
-    elif grouped.timed_out and timeout_policy == "discard":
-        retained_halo = GpuRawCandidates.empty()
-    else:
-        # input_candidate_index addresses window_raw for both complete and
-        # partial results.  Only fully committed rows exist in a partial result.
-        committed = cp.zeros(len(window_raw), dtype=cp.bool_)
-        committed[grouped.input_candidate_index] = True
-        consumed = cp.zeros(len(window_raw), dtype=cp.bool_)
-        consumed[output.input_candidate_index] = True
-        retain = (
-            (window_raw.source_chunk_index == halo_chunk_index)
-            & committed
-            & ~consumed
-        )
-        retained_halo = _raw_take(window_raw, retain)
-
-    return (
-        GroupingWindow(
-            owner_source_chunk_index=owner_source_chunk_index,
-            grouped=output,
-            output_status=status,
-        ),
-        retained_halo,
-    )
-
-
-def _split_emitted_chunks(
-        cp, emitted, owner_source_chunk_index, current_source_chunk_index):
-    """Split newly resolved peaks into the previous and current chunk."""
-
-    owner = emitted.source_chunk_index == owner_source_chunk_index
-    current = emitted.source_chunk_index == current_source_chunk_index
-    if len(emitted) and not bool(cp.all(owner | current).item()):
-        raise RuntimeError(
-            "peak extractor emitted a candidate outside the adjacent chunks"
-        )
-    return _raw_take(emitted, owner), _raw_take(emitted, current)
-
-
-def _partition_current_halo(cp, current_raw, halo_columns_by_tree):
-    """Split current-chunk rows at each ragged tree's configured left halo."""
-
-    if not len(current_raw):
-        empty = GpuRawCandidates.empty()
-        return empty, empty
-    limit = halo_columns_by_tree[current_raw.tree]
-    in_halo = current_raw.itime.astype(cp.int64, copy=False) < limit
-    return _raw_take(current_raw, in_halo), _raw_take(current_raw, ~in_halo)
 
 
 def _event_host_columns(cp, events):
@@ -404,140 +171,26 @@ def _extract_beam_batch(
     ``list.append`` as the consumer, but production never materializes one.
     """
 
-    import cupy as cp
-
-    if not callable(consume_window):
-        raise TypeError("consume_window must be callable")
-
-    producer_start = beam_batch.producer_start_chunk
-    assumed = producer_start is None
-    if assumed and not assume_steady_state:
-        raise ValueError(
-            "producer-start provenance is missing for beams "
-            f"{beam_batch.beam_ids}; pass assume_steady_state=True explicitly"
-        )
-
-    if grouping_halo_columns_by_tree is None:
-        halo_columns = _effective_grouping_halo_columns(
-            geometries, halo_size
-        )
-    else:
-        halo_columns = tuple(grouping_halo_columns_by_tree)
-        if len(halo_columns) != len(geometries):
-            raise ValueError("grouping halo has the wrong tree count")
-        for tree, (columns, geometry) in enumerate(zip(
-                halo_columns, geometries)):
-            if (isinstance(columns, (bool, np.bool_))
-                    or not isinstance(columns, (int, np.integer))
-                    or not 0 <= int(columns) <= geometry.ntime):
-                raise ValueError(
-                    f"grouping halo for tree {tree} is outside its map"
-                )
-        halo_columns = tuple(int(value) for value in halo_columns)
-    # The extractor independently retains ``halo_size * h`` map columns for
-    # peak competition.  This smaller/equal prefix gates only cross-window
-    # candidate association: it is the intersection of that configured map
-    # halo with centres already resolved after one following chunk.  Some real
-    # ragged trees have 2*h > ntime-h, so admitting every retained context
-    # column as a candidate would require looking into i+2.
-    halo_columns_gpu = cp.asarray(halo_columns, dtype=cp.int64)
-
-    extractors = tuple(
-        OfflinePeakExtractor(
-            geometry,
-            threshold=threshold,
-            beam_ids=beam_batch.beam_ids,
-            assume_steady_state=assumed,
-            halo_size=halo_size,
-        )
-        for geometry in geometries
+    processor = StreamingGrouper(
+        geometries, decoder, grouping_geometry,
+        beam_ids=beam_batch.beam_ids,
+        producer_start_chunk=beam_batch.producer_start_chunk,
+        threshold=threshold, halo_size=halo_size, timeout_ms=timeout_ms,
+        timeout_policy=timeout_policy, assume_steady_state=assume_steady_state,
+        grouping_config=grouping_config, consume_window=consume_window,
+        grouping_halo_columns_by_tree=grouping_halo_columns_by_tree,
+        extractor_factory=OfflinePeakExtractor, group_function=group_candidates,
     )
     all_chunks = beam_batch.source_chunk_indices
-    selected_chunks = (
-        all_chunks if max_chunks is None else all_chunks[:max_chunks]
-    )
-
-    pending = GpuRawCandidates.empty()
-    previous_chunk = None
-    for source_chunk in selected_chunks:
+    selected = all_chunks if max_chunks is None else all_chunks[:max_chunks]
+    for source_chunk in selected:
         maps = loader.load_beam_chunk(beam_batch.beam_ids, source_chunk)
-        emitted_parts = []
-        for tree, extractor in enumerate(extractors):
-            startup_mask = (
-                None if assumed else make_startup_valid_mask(
-                    geometries[tree], source_chunk, producer_start
-                )
-            )
-            emitted_parts.append(extractor.process_chunk(
-                maps.snr_by_tree[tree],
-                maps.argmax_by_tree[tree],
-                source_chunk,
-                startup_valid_mask=startup_mask,
-            ))
-        del maps
-        emitted = _raw_concatenate(emitted_parts)
-
-        if previous_chunk is None:
-            if len(emitted) and not bool(cp.all(
-                    emitted.source_chunk_index == source_chunk).item()):
-                raise RuntimeError("first peak emission has invalid ownership")
-            pending = emitted
-            previous_chunk = source_chunk
-            continue
-
-        owner_tail, current_resolved = _split_emitted_chunks(
-            cp, emitted, previous_chunk, source_chunk
+        processor.process_chunk(
+            maps.snr_by_tree, maps.argmax_by_tree, source_chunk
         )
-        owner_raw = _raw_concatenate((pending, owner_tail))
-        halo_raw, outside_halo = _partition_current_halo(
-            cp, current_resolved, halo_columns_gpu
-        )
-        window, retained_halo = _group_streaming_window(
-            cp,
-            owner_raw,
-            halo_raw,
-            previous_chunk,
-            source_chunk,
-            decoder,
-            grouping_geometry,
-            grouping_config,
-            timeout_ms=timeout_ms,
-            timeout_policy=timeout_policy,
-        )
-        consume_window(window)
-        pending = _raw_concatenate((outside_halo, retained_halo))
-        previous_chunk = source_chunk
-
-    complete = len(selected_chunks) == len(all_chunks)
-    if complete and selected_chunks:
-        final_tail = _raw_concatenate(
-            extractor.flush() for extractor in extractors
-        )
-        if len(final_tail) and not bool(cp.all(
-                final_tail.source_chunk_index == previous_chunk).item()):
-            raise RuntimeError("final peak emission has invalid ownership")
-        owner_raw = _raw_concatenate((pending, final_tail))
-        window, _ = _group_streaming_window(
-            cp,
-            owner_raw,
-            GpuRawCandidates.empty(),
-            previous_chunk,
-            None,
-            decoder,
-            grouping_geometry,
-            grouping_config,
-            timeout_ms=timeout_ms,
-            timeout_policy=timeout_policy,
-        )
-        consume_window(window)
-
-    coverage = tuple(
-        (beam_id, source_chunk)
-        for beam_id in beam_batch.beam_ids
-        for source_chunk in selected_chunks
-    )
-    startup_status = "assumed" if assumed else "authoritative"
-    return coverage, startup_status, complete
+    complete = len(selected) == len(all_chunks)
+    processor.finish(physical_end=complete)
+    return processor.coverage, processor.startup_status, complete
 
 
 def run_offline_grouper(
@@ -601,25 +254,14 @@ def run_offline_grouper(
     grouping_windows = []
     all_complete = True
     with cp.cuda.Device(cuda_device_id):
-        geometries = tuple(
-            PeakFinderGeometry.from_plan(
-                loader.plan,
-                tree,
-                dcore=loader.dcores[tree],
-                dm_reach=peakfinding.dm_reach,
-                waist_bins=peakfinding.waist_bins,
-            )
-            for tree in range(loader.ntrees)
+        setup = GrouperSetup(
+            loader.plan, loader.dcores, configuration, cuda_device_id=cuda_device_id
         )
-        effective_grouping_halo_columns_by_tree = (
-            _effective_grouping_halo_columns(
-                geometries, grouping.halo_size
-            )
-        )
-        decoder = GpuArgmaxDecoder(
-            loader.plan, cuda_device_id=cuda_device_id, dcores=loader.dcores
-        )
-        grouping_geometry = GroupingGeometry.from_plan(loader.plan)
+        geometries = setup.geometries
+        effective_grouping_halo_columns_by_tree = setup.halo_columns
+        decoder = setup.decoder
+        grouping_geometry = setup.grouping_geometry
+        grouping_config = setup.grouping_config
         event_offset = 0
         candidate_offset = 0
         window_id = 0

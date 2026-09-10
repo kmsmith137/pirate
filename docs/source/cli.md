@@ -6,7 +6,7 @@ pirate_frb SUBCOMMAND [ARGS...]
 pirate_frb GROUP SUBCOMMAND [ARGS...]
 ```
 where the list of subcommands, and documentation for each subcommand, are given below.
-Most subcommands are nested in a group (`run`, `rpc`, `show`, `varmap`, `dev`), whose row
+Most subcommands are nested in a group (`run`, `rpc`, `show`, `varmap`, `dev`, `experiment`), whose row
 in the table below links to a page listing that group's subcommands; `test`, `time` and
 `time_dedisperser` are typed directly. Each subcommand's page embeds its `--help` output,
 captured from the argparse parser when the docs are built. Note that
@@ -107,3 +107,30 @@ Terminal summaries identify every timeout. Version-3 trigger catalogs attach
 `grouping_window_id` and `grouping_timed_out` to event/member rows and store a
 record for every attempted window, including empty and discarded windows.
 Timeout provenance is deliberately separate from peakfinder `edge_flags`.
+
+
+## Controlled CHORD online/offline experiment
+
+The `experiment` group prepares one prescribed CHORD observation and runs its
+identical saved frames through offline and live inputs to the same scientific
+processor:
+
+```text
+pirate_frb experiment prepare CONFIG.yml BUNDLE
+pirate_frb experiment generate BUNDLE
+pirate_frb experiment offline BUNDLE OUTPUT --gpu 0
+pirate_frb experiment online BUNDLE OUTPUT --gpu 0
+pirate_frb experiment online BUNDLE CONTROL_OUTPUT --gpu 0 --suppress-early-capture
+pirate_frb experiment compare BUNDLE OFFLINE ONLINE_EARLY ONLINE_FULL REPORT.json --markdown REPORT.md
+```
+
+Observation and run directories are created exclusively. Online replay runs at
+the observing rate; `--max-lag-seconds` sets its sender abort limit (default one
+second). The control suppresses early **capture decisions**, preserving the
+scientific search and catalog. Classifier bypass is explicit in the configuration
+and reports. Scientific agreement and timely raw capture are validated separately.
+
+See the [controlled CHORD experiment guide](../../notes/controlled_chord_experiment.md)
+for the configuration, exact environment and run commands, timing budget, output
+contracts and limitations. This two-beam correctness experiment is not a
+production-throughput benchmark.

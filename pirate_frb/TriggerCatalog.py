@@ -1,4 +1,4 @@
-"""Versioned ASDF output for the offline candidate pipeline.
+"""Versioned ASDF output for the shared offline and online candidate pipeline.
 
 The catalog contains two column-oriented tables.  `events` has one row per
 group and reports the physical measurements of that group's representative
@@ -259,8 +259,11 @@ def make_catalog_metadata(
         effective_grouping_halo_columns_by_tree,
         dm_tolerance, time_tolerance, beam_batch_size,
         timeout_ms, timeout_policy, grouping_windows,
-        startup_by_beam, complete=True):
+        startup_by_beam, complete=True, pipeline="offline"):
     """Build scientific, processing, and producer-provenance metadata.
+
+    The pipeline argument identifies the input adapter (offline or online);
+    both use the identical scientific processing schema and algorithms.
 
     Parameters
     ----------
@@ -430,11 +433,14 @@ def make_catalog_metadata(
             range(len(windows))):
         raise ValueError("grouping window IDs must be contiguous from zero")
 
+    if pipeline not in ("offline", "online"):
+        raise ValueError("pipeline must be offline or online")
+
     # Keep the exact producer text rather than a parsed/re-emitted equivalent:
     # the decoder and loader reconstruct the plan from these authoritative
     # strings, and textual retention also makes provenance auditing possible.
     return {
-        "pipeline": "offline",
+        "pipeline": pipeline,
         "processing": {
             "complete": bool(complete),
             "peakfinder": "full_band",
@@ -564,13 +570,13 @@ def _coverage_table(coverage):
 def _validate_metadata(metadata, coverage, events, members):
     """Validate essential provenance needed to interpret a reopened catalog.
 
-    This function checks the version-3 contract required by consumers: offline
+    This function checks the version-3 contract required by consumers: input
     pipeline identity, producer/startup provenance, strict timeout controls,
     and the join between emitted rows and grouping-window records.
     """
 
-    if not isinstance(metadata, Mapping) or metadata.get("pipeline") != "offline":
-        raise ValueError("catalog metadata must identify the offline pipeline")
+    if not isinstance(metadata, Mapping) or metadata.get("pipeline") not in ("offline", "online"):
+        raise ValueError("catalog metadata must identify the offline or online pipeline")
     for key in (
             "processing", "producer", "startup_by_beam", "grouping_windows",
             "units"):

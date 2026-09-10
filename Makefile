@@ -388,6 +388,13 @@ PYFILES = \
   pirate_frb/OfflineGrouperConfig.py \
   pirate_frb/OfflineCandidateGrouper.py \
   pirate_frb/TriggerCatalog.py \
+  pirate_frb/ControlledObservation.py \
+  pirate_frb/ReplayObservation.py \
+  pirate_frb/SharedGrouper.py \
+  pirate_frb/OnlineGrouper.py \
+  pirate_frb/ControlledCapture.py \
+  pirate_frb/ControlledExperiment.py \
+  pirate_frb/ControlledComparison.py \
   pirate_frb/run_server.py \
   pirate_frb/run_fake_xengine.py \
   pirate_frb/run_rpc_status.py \
@@ -483,6 +490,12 @@ PYFILES = \
   pirate_frb/tests/test_pulse_injection.py \
   pirate_frb/tests/test_server.py \
   pirate_frb/tests/test_trigger_catalog.py \
+  pirate_frb/tests/test_controlled_observation.py \
+  pirate_frb/tests/test_replay_observation.py \
+  pirate_frb/tests/test_shared_online_grouper.py \
+  pirate_frb/tests/test_controlled_capture.py \
+  pirate_frb/tests/test_controlled_lifecycle.py \
+  pirate_frb/tests/test_controlled_comparison.py \
   pirate_frb/tests/test_subbands.py \
   pirate_frb/tests/utils.py \
   pirate_frb/utils.py \
@@ -634,6 +647,9 @@ DEPFILES := $(ALL_SRCFILES_CU:%.cu=%.d) $(ALL_SRCFILES_CPP:%.cpp=%.d) $(ALL_SRCF
 SDIST_FILES := pyproject.toml Makefile makefile_helper.py autogenerate_kernel.py vendorize.py
 SDIST_FILES += $(PYFILES) $(CUDAGEN_PYFILES) $(LIB_SRCFILES) $(PYEXT_SRCFILES) $(HFILES) $(GRPC_PROTO)
 SDIST_FILES += $(OFFLINE_PEAK_TEST_DATA) $(OFFLINE_GROUPER_EXAMPLE)
+SDIST_FILES += configs/experiments/chord_replay.yml configs/dedispersion/chord_sb2_et.yml configs/xengine_metadata.yml
+SDIST_FILES += notes/controlled_observation.md notes/controlled_chord_experiment.md
+SDIST_FILES += notes/controlled_chord_results.md notes/validation/controlled_chord_20260910.json
 SDIST_FILES += grpc/finalize_grpc_stubs.py grpc/wrap_ndebug.py
 SDIST_FILES += $(ASDF_CXX_SRCFILES) $(ASDF_CXX_HFILES) misc/asdf_cxx_config.hxx
 

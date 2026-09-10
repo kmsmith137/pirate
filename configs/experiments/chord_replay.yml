@@ -1,0 +1,50 @@
+# Generate this observation once; replay the identical saved frames in both modes.
+version: 1
+metadata: ../xengine_metadata.yml
+dedispersion: ../dedispersion/chord_sb2_et.yml
+observation:
+  duration_seconds: 220.0  # Rounded upwards to a whole number of chunks.
+  initial_chunk: 0
+  beam_ids: [100, 101]     # Two beams satisfy the live active-batch constraint.
+  noise_seed: 137
+  latency_budget_seconds: 4.0  # In addition to completion + receiver + grouper lookahead.
+dedispersion_overrides:
+  beams_per_batch: 1
+  num_active_batches: 1
+bursts:
+  - id: low_dm
+    role: full_band
+    beam_id: 100
+    dm: 100.0
+    toa_seconds: 90.0
+    reference_frequency_MHz: 300.0
+    width_ms: 2.0  # Intrinsic Gaussian sigma; not a recovered boxcar width.
+    snr: 50.0
+    spectral_index: 0.0
+    subband_lo_MHz: 300.0
+    subband_hi_MHz: 1500.0
+  - id: high_dm
+    role: early_trigger
+    beam_id: 100
+    dm: 2000.0
+    toa_seconds: 200.0
+    reference_frequency_MHz: 300.0
+    width_ms: 4.0
+    snr: 50.0
+    spectral_index: 0.0
+    subband_lo_MHz: 300.0
+    subband_hi_MHz: 1500.0
+grouper:
+  peakfinding: {snr_threshold: 10.0, dm_reach: 8, waist_bins: 1}
+  grouping: {halo_size: 2, dm_tolerance: 1.5, time_tolerance: 1.5}
+  execution: {beam_batch_size: 1, timeout_ms: 0, timeout_policy: discard}
+capture:
+  version: 1
+  classifier_mode: bypass
+  snr_threshold: 10.0
+  buffer_seconds: 60.0
+  pre_padding_seconds: 1.0
+  post_padding_seconds: 1.0
+  association_dm_tolerance: 5.0
+  association_toa_tolerance_seconds: 0.1
+  write_timeout_seconds: 60.0

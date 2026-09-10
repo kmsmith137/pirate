@@ -2725,6 +2725,9 @@ def get_parser():
     parse_varmap(subparsers)
     parse_dev(subparsers)
 
+    from .ControlledExperiment import add_experiment_parser
+    add_experiment_parser(subparsers)
+
     parse_test(subparsers)
     parse_time(subparsers)
     parse_time_dedisperser(subparsers)
