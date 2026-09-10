@@ -554,6 +554,41 @@ def _markdown(report):
     return "\n".join(lines)
 
 
+
+def _validate_terminal_session(directory, run):
+    """Validate archived component acknowledgments without probing old PIDs."""
+    from .ControlledTerminals import ROLES, _configuration_digest
+
+    manifest = _json(directory / "session.json")
+    _require(type(manifest.get("version")) is int and manifest["version"] == 1,
+             "Invalid terminal-session version")
+    digest = _configuration_digest(manifest)
+    _require(manifest.get("configuration_sha256") == digest,
+             "Terminal-session configuration changed")
+    _require(manifest["session_id"] == run.get("session_id"),
+             "Run belongs to a different terminal session")
+    _require(manifest["bundle_manifest_sha256"] == run["bundle_manifest_sha256"],
+             "Terminal session used a different observation")
+    _require(manifest["source"]["module_sha256"] == run["source"]["module_sha256"],
+             "Terminal-session source differs from executed source")
+    _require(not (directory / "_session" / "stop.json").exists(),
+             "Terminal session was explicitly stopped")
+    hashes = {}
+    for role in ROLES:
+        path = directory / "_session" / f"{role}.json"
+        status = _json(path)
+        _require(status.get("session_id") == manifest["session_id"]
+                 and status.get("configuration_sha256") == digest and status.get("role") == role,
+                 f"{role}: component acknowledgment belongs to another session")
+        _require(status.get("state") == "complete" and status.get("exitcode") == 0,
+                 f"{role}: component did not acknowledge clean completion")
+        if role != "server":
+            _require(run.get("component_status", {}).get(role) == status,
+                     f"{role}: final run acknowledgment differs from component record")
+        hashes[role] = _hash(path)
+    return dict(complete=True, configuration_sha256=digest,
+                session_manifest_sha256=_hash(directory / "session.json"), component_status_sha256=hashes)
+
 def compare_controlled_experiment(bundle_dir, offline_dir, online_early_dir,
                                   online_full_dir, output_json, output_markdown=None):
     """Validate all modes, persist evidence, and raise on any mismatch."""
@@ -583,8 +618,11 @@ def compare_controlled_experiment(bundle_dir, offline_dir, online_early_dir,
             catalog = read_catalog(directory / "events.asdf")
             _validate_catalog_completion(catalog, bundle, "offline" if mode == "offline" else "online")
             catalogs[mode] = catalog
-            report["execution_provenance"][mode] = _validate_run(_json(directory / "run.json"),
+            run = _json(directory / "run.json")
+            report["execution_provenance"][mode] = _validate_run(run,
                 catalog, bundle, online=mode != "offline")
+            if run.get("launch_mode") == "separate_terminals":
+                report["execution_provenance"][mode]["terminal_session"] = _validate_terminal_session(directory, run)
             report["recovery"][mode] = validate_recovery(catalog, bursts, bundle["time_sample_ms"]*.001)
         signatures = [value["source"]["module_sha256"] for value in report["execution_provenance"].values()]
         _require(all(value == signatures[0] for value in signatures[1:]),

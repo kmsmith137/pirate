@@ -157,6 +157,10 @@ bounded. Cleanup attempts remaining resources even if an earlier step fails.
 A run is marked complete only after clean shutdown. Failures leave a failed
 report and preserved artifacts for diagnosis.
 
+To launch the working components in four separate terminals, follow
+[the terminal-session tutorial](controlled_terminals.md). The combined commands
+below remain available.
+
 ## Run the experiment
 
 Use a build containing phase 2 in the integration checkout. The environment must

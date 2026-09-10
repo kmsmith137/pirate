@@ -394,6 +394,7 @@ PYFILES = \
   pirate_frb/OnlineGrouper.py \
   pirate_frb/ControlledCapture.py \
   pirate_frb/ControlledExperiment.py \
+  pirate_frb/ControlledTerminals.py \
   pirate_frb/ControlledComparison.py \
   pirate_frb/run_server.py \
   pirate_frb/run_fake_xengine.py \
@@ -495,6 +496,7 @@ PYFILES = \
   pirate_frb/tests/test_shared_online_grouper.py \
   pirate_frb/tests/test_controlled_capture.py \
   pirate_frb/tests/test_controlled_lifecycle.py \
+  pirate_frb/tests/test_controlled_terminals.py \
   pirate_frb/tests/test_controlled_comparison.py \
   pirate_frb/tests/test_subbands.py \
   pirate_frb/tests/utils.py \
@@ -650,6 +652,7 @@ SDIST_FILES += $(OFFLINE_PEAK_TEST_DATA) $(OFFLINE_GROUPER_EXAMPLE)
 SDIST_FILES += configs/experiments/chord_replay.yml configs/dedispersion/chord_sb2_et.yml configs/xengine_metadata.yml
 SDIST_FILES += notes/controlled_observation.md notes/controlled_chord_experiment.md
 SDIST_FILES += notes/controlled_chord_results.md notes/validation/controlled_chord_20260910.json
+SDIST_FILES += notes/controlled_terminals.md notes/validation/controlled_terminals_20260910.json
 SDIST_FILES += grpc/finalize_grpc_stubs.py grpc/wrap_ndebug.py
 SDIST_FILES += $(ASDF_CXX_SRCFILES) $(ASDF_CXX_HFILES) misc/asdf_cxx_config.hxx
 

@@ -29,6 +29,7 @@ _REQUIRED_PYFILES = (
     "pirate_frb/ReplayObservation.py",
     "pirate_frb/ControlledCapture.py",
     "pirate_frb/ControlledExperiment.py",
+    "pirate_frb/ControlledTerminals.py",
     "pirate_frb/ControlledComparison.py",
     "pirate_frb/tests/__init__.py",
     "pirate_frb/tests/test_peakfinders_stream.py",
@@ -51,6 +52,7 @@ _REQUIRED_SDIST_ONLY_FILES = (
     "configs/dedispersion/chord_sb2_et.yml",
     "configs/xengine_metadata.yml",
     "notes/controlled_chord_experiment.md",
+    "notes/controlled_terminals.md",
 )
 _FORBIDDEN_DISTRIBUTION_FILES = (
     "pirate_frb/BowtieBank.py",

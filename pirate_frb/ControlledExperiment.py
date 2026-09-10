@@ -42,7 +42,7 @@ def _source_identity():
     import subprocess
     root = Path(__file__).resolve().parent.parent
     modules = ("ControlledObservation.py", "ReplayObservation.py", "SharedGrouper.py",
-               "OnlineGrouper.py", "ControlledCapture.py", "ControlledExperiment.py",
+               "OnlineGrouper.py", "ControlledCapture.py", "ControlledExperiment.py", "ControlledTerminals.py",
                "Peakfinders.py", "GpuArgmaxDecoder.py", "OfflineCandidateGrouper.py")
     result = {name: hashlib.sha256((root / "pirate_frb" / name).read_bytes()).hexdigest()
               for name in modules}
@@ -447,8 +447,10 @@ def run_controlled_online(bundle_dir, output_dir, *, accept_early=True,
 
 
 def add_experiment_parser(subparsers):
+    from .ControlledTerminals import add_session_parser
     parser = subparsers.add_parser("experiment", help="Controlled CHORD online/offline observation")
     sub = parser.add_subparsers(dest="experiment_command", required=True)
+    add_session_parser(sub)
     prepare = sub.add_parser("prepare", help="Validate configuration and prepare an observation bundle")
     prepare.add_argument("config")
     prepare.add_argument("bundle")

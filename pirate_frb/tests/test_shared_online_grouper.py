@@ -198,7 +198,10 @@ def test_live_recycled_maps_match_offline_and_flush_only_real_observation(tmp_pa
             assert not report["complete"] and not online_path.exists()
             assert len(report["chunks"]) == len(beam_ids)
             return
-        run_online_grouper(tmp_path, online_path, "unused", expected_start_chunk=first, expected_nchunks=count)
+        progress = []
+        run_online_grouper(tmp_path, online_path, "unused", expected_start_chunk=first, expected_nchunks=count, progress=progress.append)
+        assert [p["completed_chunks"] for p in progress if p["phase"] == "chunk"] == list(range(1, count + 1))
+        assert sum(p["events"] for p in progress if p["phase"] == "window") > 0
         import asdf
         with asdf.open(online_path) as af:
             assert af.tree["metadata"]["pipeline"] == "online"

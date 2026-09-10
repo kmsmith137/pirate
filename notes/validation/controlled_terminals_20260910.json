@@ -1,0 +1,1328 @@
+{
+  "recorded_date": "2026-09-10",
+  "branch": "feature/controlled-chord-experiment",
+  "base_revision": "86c13a618afaeea4dcce8f44e27f004b4dbdc1fd",
+  "artifact_directory": "/home/mtrudu/pirate-validation/chord-terminals-20260910",
+  "executed_module_hashes_verified_against_integration": true,
+  "execution_devices": {
+    "offline": 0,
+    "online_early": 1,
+    "online_full": 0
+  },
+  "timing_context": "The two online runs overlapped on separate GPUs. These are correctness and capture-feasibility checks, not isolated performance measurements.",
+  "tests": {
+    "passed": 158,
+    "elapsed_seconds": 36.25,
+    "files": [
+      "pirate_frb/tests/test_controlled_terminals.py",
+      "pirate_frb/tests/test_controlled_observation.py",
+      "pirate_frb/tests/test_controlled_capture.py",
+      "pirate_frb/tests/test_controlled_lifecycle.py",
+      "pirate_frb/tests/test_replay_observation.py",
+      "pirate_frb/tests/test_controlled_comparison.py",
+      "pirate_frb/tests/test_shared_online_grouper.py",
+      "pirate_frb/tests/test_offline_grouper_streaming.py",
+      "pirate_frb/tests/test_offline_grouper.py",
+      "pirate_frb/tests/test_trigger_catalog.py",
+      "pirate_frb/tests/test_gpu_argmax_decoder.py",
+      "pirate_frb/tests/test_peakfinders_stream.py",
+      "pirate_frb/tests/test_packaging.py"
+    ],
+    "python": "/home/mtrudu/software/miniforge3/envs/pirate-15-validation/bin/python"
+  },
+  "auxiliary_checks": {
+    "coordinated_stop": {
+      "pass_": true,
+      "launch_order": [
+        "replay",
+        "capture",
+        "server",
+        "grouper"
+      ],
+      "stopped_after_first_dispatched_chunk": true,
+      "all_supervisors_failed": true,
+      "all_native_workers_exited": true,
+      "role_statuses": {
+        "grouper": {
+          "session_id": "1126b751278644c7b200483477b36154",
+          "configuration_sha256": "6ab491f35a98a9235c35349e1fa80c7bccd8ced152cbdfb35119bfc2e8e25975",
+          "role": "grouper",
+          "state": "failed",
+          "pid": 1353008,
+          "process_token": "48173349",
+          "started_monotonic_s": 481734.300583724,
+          "worker_pid": 1353024,
+          "listening": true,
+          "ready": true,
+          "error": "InterruptedError: session stop requested"
+        },
+        "server": {
+          "session_id": "1126b751278644c7b200483477b36154",
+          "configuration_sha256": "6ab491f35a98a9235c35349e1fa80c7bccd8ced152cbdfb35119bfc2e8e25975",
+          "role": "server",
+          "state": "failed",
+          "pid": 1353007,
+          "process_token": "48173349",
+          "started_monotonic_s": 481734.288286874,
+          "worker_pid": 1353020,
+          "ready": true,
+          "error": "InterruptedError: session stop requested"
+        },
+        "capture": {
+          "session_id": "1126b751278644c7b200483477b36154",
+          "configuration_sha256": "6ab491f35a98a9235c35349e1fa80c7bccd8ced152cbdfb35119bfc2e8e25975",
+          "role": "capture",
+          "state": "failed",
+          "pid": 1353006,
+          "process_token": "48173349",
+          "started_monotonic_s": 481734.282177056,
+          "worker_pid": 1353017,
+          "ready": true,
+          "error": "InterruptedError: session stop requested"
+        },
+        "replay": {
+          "session_id": "1126b751278644c7b200483477b36154",
+          "configuration_sha256": "6ab491f35a98a9235c35349e1fa80c7bccd8ced152cbdfb35119bfc2e8e25975",
+          "role": "replay",
+          "state": "failed",
+          "pid": 1353005,
+          "process_token": "48173349",
+          "started_monotonic_s": 481734.297519642,
+          "worker_pid": 1353022,
+          "replay_started_monotonic_s": 481740.078807465,
+          "chunks_dispatched": 1,
+          "error": "InterruptedError: session stop requested"
+        }
+      }
+    },
+    "original_combined_launcher": {
+      "pass_": true,
+      "input_science_chunks_per_beam": 6,
+      "complete": true,
+      "grouper_exitcode": 0
+    },
+    "artifact_sha256": {
+      "check_pirate_terminal_abort.py": "308046681481c0bdcfdfe3c64a99fd358ab682485fe6db482a3608c19cbfd8b9",
+      "combined_prefix/capture.json": "84ee2799c01cf9c59f95d316ed6882ebb2f2cdfb6ac7a64919f7e61ffb2ac8d2",
+      "combined_prefix/events.asdf.online.json": "958a5629a5161c9dd91f89f26a387cbc7513f9094d25d6e959e584272dc5b065",
+      "combined_prefix/replay.json": "4bfca17482adcbe7e780d3bd5b643883f22c2a8ce249b46882f2d85bef77a061",
+      "combined_prefix/run.json": "8161ec39da40de07245b954ead92ca9316af1d89841e9d35d82bc1910d4649a0",
+      "coordinated_stop/_session/capture.claim": "a9d4633d018c2d492c4ea7c4960222e061851e9b5455e82f3a0ade50c85de2f1",
+      "coordinated_stop/_session/capture.json": "7d635cf8864496b6504ed9f64b9feb51af384f4de0cf48a0ef99b0263202e3fe",
+      "coordinated_stop/_session/decision.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "coordinated_stop/_session/grouper.claim": "a0e861af461d535c02d0e83298223822fde69affcdf91c0caa6154ae8b7e4024",
+      "coordinated_stop/_session/grouper.json": "c2307a77b11962a2f94692dcdd27e54eb40f601c6baf083d389e6ecef345a156",
+      "coordinated_stop/_session/replay.claim": "f032d84f8b1f8bf9304276b5bfe91e85d36a6dce1e037cde2ad6dbef29145c4f",
+      "coordinated_stop/_session/replay.json": "2f85b5aff7ce65b058ebe077883a5d0a450cf707f2ca28eec8ecc00d2ef89c0f",
+      "coordinated_stop/_session/server.claim": "c40e7b4ac460ebd258c05dc4cb2eb4a99e11bd77dea84d14e795fe8e9aaa40f1",
+      "coordinated_stop/_session/server.json": "317afcfc6436a3452cfde9be65f19a8308f970bead36d8a10c031e406a207f88",
+      "coordinated_stop/_session/stop.json": "cbbd5435b84b2d76f412278765a3674016aa9d7c51193897c9f892847c603b8d",
+      "coordinated_stop/capture.json": "9f1a207dd27027823376d189fed0ca0366daacb21c990b8227679163cd843376",
+      "coordinated_stop/capture.log": "f751e4219087c79f03f80ecefaf1b44d43a1662a6978965ef1cbb4ff92984dc7",
+      "coordinated_stop/events.asdf.online.json": "ae2c433de94484de0cc31adcdf66c09989085803e2108070c74567c416dcec08",
+      "coordinated_stop/grouper.log": "02071731cae2859ac7322409790638a65742f382b2ac9e268ca01dd68434b3a5",
+      "coordinated_stop/replay.json": "1a95c6d1e399dddeea93d14446dc33cf46b566c629119e5a56bcb93d10f3b6eb",
+      "coordinated_stop/replay.log": "dea11258dcf21b1144d66607893ea0770ec3787835f61df38505a48ccbb9e05d",
+      "coordinated_stop/run.json": "a112c586759a291f11470778902edb1ee2d05a92d34bd1cb1a7e01fc398041c4",
+      "coordinated_stop/server.log": "a5f6c19278f7089001896e1c92e63fc36520c3204bed6646843ab96ece88658d",
+      "coordinated_stop/session.json": "0d8c5a0bc3adf0197225c4afc5426cbfab585e9905d95954988260944888e5ef",
+      "run_pirate_terminal_check.py": "e992bda40d9b04c029782194c9fddd5d435f545125e63cfe7ccf38d0876dc038"
+    }
+  },
+  "comparison": {
+    "schema_version": 1,
+    "status": "pass",
+    "catalog_comparisons": {
+      "online_early": {
+        "pass_": true,
+        "events": 3,
+        "members": 3,
+        "source_cells": 3,
+        "max_absolute_differences": {
+          "dm": 0.0,
+          "freq_hi_MHz": 0.0,
+          "freq_lo_MHz": 0.0,
+          "snr": 0.0,
+          "toa_sample_abs": 0.0,
+          "width_ms": 0.0,
+          "width_samp": 0.0,
+          "dm_step": 0.0,
+          "time_step_samples": 0.0
+        },
+        "ignored_identity_fields": [
+          "candidate_id",
+          "event_id",
+          "grouping_window_id",
+          "representative_candidate_id"
+        ],
+        "ignored_producer_batch_fields": [
+          "beams_per_batch",
+          "beams_per_gpu",
+          "num_active_batches"
+        ]
+      },
+      "online_full": {
+        "pass_": true,
+        "events": 3,
+        "members": 3,
+        "source_cells": 3,
+        "max_absolute_differences": {
+          "dm": 0.0,
+          "freq_hi_MHz": 0.0,
+          "freq_lo_MHz": 0.0,
+          "snr": 0.0,
+          "toa_sample_abs": 0.0,
+          "width_ms": 0.0,
+          "width_samp": 0.0,
+          "dm_step": 0.0,
+          "time_step_samples": 0.0
+        },
+        "ignored_identity_fields": [
+          "candidate_id",
+          "event_id",
+          "grouping_window_id",
+          "representative_candidate_id"
+        ],
+        "ignored_producer_batch_fields": [
+          "beams_per_batch",
+          "beams_per_gpu",
+          "num_active_batches"
+        ]
+      }
+    },
+    "recovery": {
+      "offline": [
+        {
+          "burst_id": "low_dm",
+          "role": "full_band",
+          "detections": [
+            {
+              "tree": 0,
+              "early_trigger_level": 0,
+              "event_id": 0,
+              "source_cell": [
+                100,
+                44,
+                0,
+                277,
+                2,
+                4916738
+              ],
+              "dm": 99.9905346257046,
+              "dm_error": -0.009465374295402285,
+              "dm_tolerance": 0.04512139390398399,
+              "toa_seconds": 89.99980335989014,
+              "toa_error_seconds": -0.0001966401098627557,
+              "toa_tolerance_seconds": 0.0039936,
+              "snr": 48.75,
+              "nominal_filter_width_ms": 5.990399999999999
+            }
+          ],
+          "injected_gaussian_sigma_ms": 2.0
+        },
+        {
+          "burst_id": "high_dm",
+          "role": "early_trigger",
+          "detections": [
+            {
+              "tree": 1,
+              "early_trigger_level": 1,
+              "event_id": 1,
+              "source_cell": [
+                100,
+                76,
+                1,
+                361,
+                11,
+                2164224
+              ],
+              "dm": 2000.0216992186436,
+              "dm_error": 0.021699218643561835,
+              "dm_tolerance": 0.18048557561593595,
+              "toa_seconds": 200.00151380713524,
+              "toa_error_seconds": 0.001513807135239631,
+              "toa_tolerance_seconds": 0.0119808,
+              "snr": 35.6875,
+              "nominal_filter_width_ms": 11.980799999999999
+            },
+            {
+              "tree": 2,
+              "early_trigger_level": 0,
+              "event_id": 2,
+              "source_cell": [
+                100,
+                97,
+                2,
+                722,
+                52,
+                5178882
+              ],
+              "dm": 1999.9911808437414,
+              "dm_error": -0.008819156258596195,
+              "dm_tolerance": 0.09024278780796798,
+              "toa_seconds": 200.0001632587411,
+              "toa_error_seconds": 0.00016325874111089433,
+              "toa_tolerance_seconds": 0.0079872,
+              "snr": 49.6875,
+              "nominal_filter_width_ms": 11.980799999999999
+            }
+          ],
+          "injected_gaussian_sigma_ms": 4.0
+        }
+      ],
+      "online_early": [
+        {
+          "burst_id": "low_dm",
+          "role": "full_band",
+          "detections": [
+            {
+              "tree": 0,
+              "early_trigger_level": 0,
+              "event_id": 0,
+              "source_cell": [
+                100,
+                44,
+                0,
+                277,
+                2,
+                4916738
+              ],
+              "dm": 99.9905346257046,
+              "dm_error": -0.009465374295402285,
+              "dm_tolerance": 0.04512139390398399,
+              "toa_seconds": 89.99980335989014,
+              "toa_error_seconds": -0.0001966401098627557,
+              "toa_tolerance_seconds": 0.0039936,
+              "snr": 48.75,
+              "nominal_filter_width_ms": 5.990399999999999
+            }
+          ],
+          "injected_gaussian_sigma_ms": 2.0
+        },
+        {
+          "burst_id": "high_dm",
+          "role": "early_trigger",
+          "detections": [
+            {
+              "tree": 1,
+              "early_trigger_level": 1,
+              "event_id": 1,
+              "source_cell": [
+                100,
+                76,
+                1,
+                361,
+                11,
+                2164224
+              ],
+              "dm": 2000.0216992186436,
+              "dm_error": 0.021699218643561835,
+              "dm_tolerance": 0.18048557561593595,
+              "toa_seconds": 200.00151380713524,
+              "toa_error_seconds": 0.001513807135239631,
+              "toa_tolerance_seconds": 0.0119808,
+              "snr": 35.6875,
+              "nominal_filter_width_ms": 11.980799999999999
+            },
+            {
+              "tree": 2,
+              "early_trigger_level": 0,
+              "event_id": 2,
+              "source_cell": [
+                100,
+                97,
+                2,
+                722,
+                52,
+                5178882
+              ],
+              "dm": 1999.9911808437414,
+              "dm_error": -0.008819156258596195,
+              "dm_tolerance": 0.09024278780796798,
+              "toa_seconds": 200.0001632587411,
+              "toa_error_seconds": 0.00016325874111089433,
+              "toa_tolerance_seconds": 0.0079872,
+              "snr": 49.6875,
+              "nominal_filter_width_ms": 11.980799999999999
+            }
+          ],
+          "injected_gaussian_sigma_ms": 4.0
+        }
+      ],
+      "online_full": [
+        {
+          "burst_id": "low_dm",
+          "role": "full_band",
+          "detections": [
+            {
+              "tree": 0,
+              "early_trigger_level": 0,
+              "event_id": 0,
+              "source_cell": [
+                100,
+                44,
+                0,
+                277,
+                2,
+                4916738
+              ],
+              "dm": 99.9905346257046,
+              "dm_error": -0.009465374295402285,
+              "dm_tolerance": 0.04512139390398399,
+              "toa_seconds": 89.99980335989014,
+              "toa_error_seconds": -0.0001966401098627557,
+              "toa_tolerance_seconds": 0.0039936,
+              "snr": 48.75,
+              "nominal_filter_width_ms": 5.990399999999999
+            }
+          ],
+          "injected_gaussian_sigma_ms": 2.0
+        },
+        {
+          "burst_id": "high_dm",
+          "role": "early_trigger",
+          "detections": [
+            {
+              "tree": 1,
+              "early_trigger_level": 1,
+              "event_id": 1,
+              "source_cell": [
+                100,
+                76,
+                1,
+                361,
+                11,
+                2164224
+              ],
+              "dm": 2000.0216992186436,
+              "dm_error": 0.021699218643561835,
+              "dm_tolerance": 0.18048557561593595,
+              "toa_seconds": 200.00151380713524,
+              "toa_error_seconds": 0.001513807135239631,
+              "toa_tolerance_seconds": 0.0119808,
+              "snr": 35.6875,
+              "nominal_filter_width_ms": 11.980799999999999
+            },
+            {
+              "tree": 2,
+              "early_trigger_level": 0,
+              "event_id": 2,
+              "source_cell": [
+                100,
+                97,
+                2,
+                722,
+                52,
+                5178882
+              ],
+              "dm": 1999.9911808437414,
+              "dm_error": -0.008819156258596195,
+              "dm_tolerance": 0.09024278780796798,
+              "toa_seconds": 200.0001632587411,
+              "toa_error_seconds": 0.00016325874111089433,
+              "toa_tolerance_seconds": 0.0079872,
+              "snr": 49.6875,
+              "nominal_filter_width_ms": 11.980799999999999
+            }
+          ],
+          "injected_gaussian_sigma_ms": 4.0
+        }
+      ]
+    },
+    "capture_checks": {
+      "online_early": {
+        "complete": true,
+        "checked_files": 49,
+        "requests": 2,
+        "bursts": [
+          {
+            "burst_id": "low_dm",
+            "role": "full_band",
+            "complete": true,
+            "first_capture_id": 0,
+            "first_early_trigger_level": 0,
+            "needed_chunks": 4,
+            "saved_chunks": 4,
+            "missing_chunks": [],
+            "earliest_required_frame_id": 82,
+            "live_frame_lower_bound_at_request": 32,
+            "first_request_receiver_elapsed_seconds": 107.39309855096508,
+            "request_time_reference": "seconds since this capture receiver started; not replay elapsed time",
+            "first_request_rpc_seconds": 0.0011714640422724187,
+            "first_request_missing_files": [],
+            "leading_frame_retention_margin_chunks": 25.0,
+            "first_request_status": {
+              "rb_start": 32,
+              "rb_reaped": 32,
+              "rb_processed": 92,
+              "rb_streamed": 92,
+              "rb_assembled": 92,
+              "rb_end": 92
+            }
+          },
+          {
+            "burst_id": "high_dm",
+            "role": "early_trigger",
+            "complete": true,
+            "first_capture_id": 1,
+            "first_early_trigger_level": 1,
+            "needed_chunks": 44,
+            "saved_chunks": 44,
+            "missing_chunks": [],
+            "earliest_required_frame_id": 108,
+            "live_frame_lower_bound_at_request": 96,
+            "first_request_receiver_elapsed_seconds": 172.8048087359639,
+            "request_time_reference": "seconds since this capture receiver started; not replay elapsed time",
+            "first_request_rpc_seconds": 0.0006999100442044437,
+            "first_request_missing_files": [],
+            "leading_frame_retention_margin_chunks": 6.0,
+            "first_request_status": {
+              "rb_start": 96,
+              "rb_reaped": 96,
+              "rb_processed": 156,
+              "rb_streamed": 156,
+              "rb_assembled": 156,
+              "rb_end": 156
+            }
+          }
+        ]
+      },
+      "online_full": {
+        "complete": true,
+        "checked_files": 34,
+        "requests": 2,
+        "bursts": [
+          {
+            "burst_id": "low_dm",
+            "role": "full_band",
+            "complete": true,
+            "first_capture_id": 0,
+            "first_early_trigger_level": 0,
+            "needed_chunks": 4,
+            "saved_chunks": 4,
+            "missing_chunks": [],
+            "earliest_required_frame_id": 82,
+            "live_frame_lower_bound_at_request": 32,
+            "first_request_receiver_elapsed_seconds": 102.32358318701154,
+            "request_time_reference": "seconds since this capture receiver started; not replay elapsed time",
+            "first_request_rpc_seconds": 0.0013214770006015897,
+            "first_request_missing_files": [],
+            "leading_frame_retention_margin_chunks": 25.0,
+            "first_request_status": {
+              "rb_start": 32,
+              "rb_reaped": 32,
+              "rb_processed": 92,
+              "rb_streamed": 92,
+              "rb_assembled": 92,
+              "rb_end": 92
+            }
+          },
+          {
+            "burst_id": "high_dm",
+            "role": "early_trigger",
+            "complete": false,
+            "first_capture_id": 1,
+            "first_early_trigger_level": 0,
+            "needed_chunks": 44,
+            "saved_chunks": 29,
+            "missing_chunks": [
+              54,
+              55,
+              56,
+              57,
+              58,
+              59,
+              60,
+              61,
+              62,
+              63,
+              64,
+              65,
+              66,
+              67,
+              68
+            ],
+            "earliest_required_frame_id": 108,
+            "live_frame_lower_bound_at_request": 138,
+            "first_request_receiver_elapsed_seconds": 210.69320694397902,
+            "request_time_reference": "seconds since this capture receiver started; not replay elapsed time",
+            "first_request_rpc_seconds": 0.0011598090059123933,
+            "first_request_missing_files": [
+              "event_000001/frame_b100_t54.asdf",
+              "event_000001/frame_b100_t55.asdf",
+              "event_000001/frame_b100_t56.asdf",
+              "event_000001/frame_b100_t57.asdf",
+              "event_000001/frame_b100_t58.asdf",
+              "event_000001/frame_b100_t59.asdf",
+              "event_000001/frame_b100_t60.asdf",
+              "event_000001/frame_b100_t61.asdf",
+              "event_000001/frame_b100_t62.asdf",
+              "event_000001/frame_b100_t63.asdf",
+              "event_000001/frame_b100_t64.asdf",
+              "event_000001/frame_b100_t65.asdf",
+              "event_000001/frame_b100_t66.asdf",
+              "event_000001/frame_b100_t67.asdf",
+              "event_000001/frame_b100_t68.asdf"
+            ],
+            "leading_frame_retention_margin_chunks": -15.0,
+            "first_request_status": {
+              "rb_start": 138,
+              "rb_reaped": 138,
+              "rb_processed": 198,
+              "rb_streamed": 198,
+              "rb_assembled": 198,
+              "rb_end": 198
+            }
+          }
+        ]
+      }
+    },
+    "timing": {
+      "online_early": {
+        "rate": 1.0,
+        "max_enqueue_lag_s": 0.09175015799701214,
+        "max_chunk_dispatch_lag_s": 0.007420729030855,
+        "allowed_sender_lag_s": 4.0,
+        "max_observed_backlog_chunks": 0.0,
+        "min_observed_unreaped_retention_s": 0.0,
+        "max_observed_unreaped_retention_s": 61.341696
+      },
+      "online_full": {
+        "rate": 1.0,
+        "max_enqueue_lag_s": 0.11910593794891611,
+        "max_chunk_dispatch_lag_s": 0.0075672350358217955,
+        "allowed_sender_lag_s": 4.0,
+        "max_observed_backlog_chunks": 0.0,
+        "min_observed_unreaped_retention_s": 0.0,
+        "max_observed_unreaped_retention_s": 61.341696
+      }
+    },
+    "detection_timing": {
+      "online_early": {
+        "available": true,
+        "time_reference": "seconds since replay monotonic observation origin",
+        "receiver_assembly_lookahead_chunks": 2,
+        "grouping_lookahead_chunks": 1,
+        "detections": [
+          {
+            "burst_id": "low_dm",
+            "tree": 0,
+            "available": true,
+            "early_trigger_level": 0,
+            "grouping_window_id": 88,
+            "owner_source_chunk_index": 44,
+            "available_source_chunk_index": 45,
+            "expected_tree_arrival_elapsed_seconds": 90.0,
+            "output_available_replay_elapsed_seconds": 96.39068002003478,
+            "grouped_replay_elapsed_seconds": 96.44988908804953,
+            "grouping_after_tree_arrival_seconds": 6.449889088049531,
+            "lead_to_300MHz_arrival_seconds": -6.449889088049531
+          },
+          {
+            "burst_id": "high_dm",
+            "tree": 1,
+            "available": true,
+            "early_trigger_level": 1,
+            "grouping_window_id": 152,
+            "owner_source_chunk_index": 76,
+            "available_source_chunk_index": 77,
+            "expected_tree_arrival_elapsed_seconds": 155.746048,
+            "output_available_replay_elapsed_seconds": 161.82081584702246,
+            "grouped_replay_elapsed_seconds": 161.87138147401856,
+            "grouping_after_tree_arrival_seconds": 6.125333474018561,
+            "lead_to_300MHz_arrival_seconds": 38.12861852598144
+          },
+          {
+            "burst_id": "high_dm",
+            "tree": 2,
+            "available": true,
+            "early_trigger_level": 0,
+            "grouping_window_id": 194,
+            "owner_source_chunk_index": 97,
+            "available_source_chunk_index": 98,
+            "expected_tree_arrival_elapsed_seconds": 200.0,
+            "output_available_replay_elapsed_seconds": 204.76142483000876,
+            "grouped_replay_elapsed_seconds": 204.81952821701998,
+            "grouping_after_tree_arrival_seconds": 4.819528217019979,
+            "lead_to_300MHz_arrival_seconds": -4.819528217019979
+          }
+        ]
+      },
+      "online_full": {
+        "available": true,
+        "time_reference": "seconds since replay monotonic observation origin",
+        "receiver_assembly_lookahead_chunks": 2,
+        "grouping_lookahead_chunks": 1,
+        "detections": [
+          {
+            "burst_id": "low_dm",
+            "tree": 0,
+            "available": true,
+            "early_trigger_level": 0,
+            "grouping_window_id": 88,
+            "owner_source_chunk_index": 44,
+            "available_source_chunk_index": 45,
+            "expected_tree_arrival_elapsed_seconds": 90.0,
+            "output_available_replay_elapsed_seconds": 96.39085345104104,
+            "grouped_replay_elapsed_seconds": 96.4497840370168,
+            "grouping_after_tree_arrival_seconds": 6.449784037016798,
+            "lead_to_300MHz_arrival_seconds": -6.449784037016798
+          },
+          {
+            "burst_id": "high_dm",
+            "tree": 1,
+            "available": true,
+            "early_trigger_level": 1,
+            "grouping_window_id": 152,
+            "owner_source_chunk_index": 76,
+            "available_source_chunk_index": 77,
+            "expected_tree_arrival_elapsed_seconds": 155.746048,
+            "output_available_replay_elapsed_seconds": 161.82187274703756,
+            "grouped_replay_elapsed_seconds": 161.87976087804418,
+            "grouping_after_tree_arrival_seconds": 6.133712878044179,
+            "lead_to_300MHz_arrival_seconds": 38.12023912195582
+          },
+          {
+            "burst_id": "high_dm",
+            "tree": 2,
+            "available": true,
+            "early_trigger_level": 0,
+            "grouping_window_id": 194,
+            "owner_source_chunk_index": 97,
+            "available_source_chunk_index": 98,
+            "expected_tree_arrival_elapsed_seconds": 200.0,
+            "output_available_replay_elapsed_seconds": 204.76108157099225,
+            "grouped_replay_elapsed_seconds": 204.81894130504224,
+            "grouping_after_tree_arrival_seconds": 4.8189413050422445,
+            "lead_to_300MHz_arrival_seconds": -4.8189413050422445
+          }
+        ]
+      }
+    },
+    "execution_provenance": {
+      "offline": {
+        "weights_mode": "analytic",
+        "detrending": false,
+        "weight_values_read_back": false,
+        "noise_variance": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": {
+          "git_revision": "86c13a618afaeea4dcce8f44e27f004b4dbdc1fd",
+          "module_sha256": {
+            "ControlledObservation.py": "b7becfb41ecda6ff16185abe2dd5b8018c59fd7e8ed4c904434190b5ed50f0b1",
+            "ReplayObservation.py": "4cda9e05f013651b0115a53745519989b7f9cb6b659301af6beb8b51b318d1bf",
+            "SharedGrouper.py": "687a3d8529d3cf6b14ec3957130f56763efb0c6a8622533044ddb43da0d2be61",
+            "OnlineGrouper.py": "095e5c33677e3cd0c2f080a4d4c4fb0e74e026f0323cf4042d300c90e4a70c10",
+            "ControlledCapture.py": "5edae3f8cf1d6fa5f3852fe256165ad6dda46fb91b08c8ee7c16ddb82e465c6f",
+            "ControlledExperiment.py": "39f10dd09cee03748f35467e2ee864f73c9a16c01866592c95121bbf63a04c7f",
+            "ControlledTerminals.py": "85f9e9a88a14b28a9eff4de017c907332b409752c1a70b2a018075bb8f7236b9",
+            "Peakfinders.py": "76e8267eb76402e7a1ae3b1190c8bbf994167600fd7664866df4607deb176a51",
+            "GpuArgmaxDecoder.py": "d52cc12a7a96d3efaba86217ac16020b2cb4dfb3653ab0f7e041537de436330f",
+            "OfflineCandidateGrouper.py": "79d1f8397246bb14ba6631592b3d8d5e0d3dad988b42a0adfab858db9d678cfc"
+          }
+        }
+      },
+      "online_early": {
+        "weights_mode": "analytic",
+        "detrending": false,
+        "weight_values_read_back": false,
+        "noise_variance": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": {
+          "git_revision": "86c13a618afaeea4dcce8f44e27f004b4dbdc1fd",
+          "module_sha256": {
+            "ControlledObservation.py": "b7becfb41ecda6ff16185abe2dd5b8018c59fd7e8ed4c904434190b5ed50f0b1",
+            "ReplayObservation.py": "4cda9e05f013651b0115a53745519989b7f9cb6b659301af6beb8b51b318d1bf",
+            "SharedGrouper.py": "687a3d8529d3cf6b14ec3957130f56763efb0c6a8622533044ddb43da0d2be61",
+            "OnlineGrouper.py": "095e5c33677e3cd0c2f080a4d4c4fb0e74e026f0323cf4042d300c90e4a70c10",
+            "ControlledCapture.py": "5edae3f8cf1d6fa5f3852fe256165ad6dda46fb91b08c8ee7c16ddb82e465c6f",
+            "ControlledExperiment.py": "39f10dd09cee03748f35467e2ee864f73c9a16c01866592c95121bbf63a04c7f",
+            "ControlledTerminals.py": "85f9e9a88a14b28a9eff4de017c907332b409752c1a70b2a018075bb8f7236b9",
+            "Peakfinders.py": "76e8267eb76402e7a1ae3b1190c8bbf994167600fd7664866df4607deb176a51",
+            "GpuArgmaxDecoder.py": "d52cc12a7a96d3efaba86217ac16020b2cb4dfb3653ab0f7e041537de436330f",
+            "OfflineCandidateGrouper.py": "79d1f8397246bb14ba6631592b3d8d5e0d3dad988b42a0adfab858db9d678cfc"
+          }
+        },
+        "channel_variance_sha256": "9534995a448a5ddf5c569f9987770cf2fe7cb684dfa2c4c8743d378774deb4df",
+        "weights_evidence": "FrbServer analytic initialization from received channel variances",
+        "terminal_session": {
+          "complete": true,
+          "configuration_sha256": "9f0a14e4ce6817bad1e9b121f4ef970eef814ed74425fdd1dd51fcaab006f3db",
+          "session_manifest_sha256": "0fd13d04f1214ee3e6e35233283f5a527d5c1ae8af896fafb999e4eea0992642",
+          "component_status_sha256": {
+            "grouper": "2b70b3cce79386b823842c79f6a33cf76412e132e8227caf10e3596963c0f8de",
+            "server": "8dd8b02f9de93761d726f8d744866e8d1634c098cc3b84023bc5a53e2741b8ce",
+            "capture": "42609bbcb4c0e3050fd769b0738d56ddadeae0863481a75df823aea10c1f485a",
+            "replay": "4b7454498d57545cc0b3738b51a2fca34161a9082b78e9d40c9abe000c2d2eb8"
+          }
+        }
+      },
+      "online_full": {
+        "weights_mode": "analytic",
+        "detrending": false,
+        "weight_values_read_back": false,
+        "noise_variance": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": {
+          "git_revision": "86c13a618afaeea4dcce8f44e27f004b4dbdc1fd",
+          "module_sha256": {
+            "ControlledObservation.py": "b7becfb41ecda6ff16185abe2dd5b8018c59fd7e8ed4c904434190b5ed50f0b1",
+            "ReplayObservation.py": "4cda9e05f013651b0115a53745519989b7f9cb6b659301af6beb8b51b318d1bf",
+            "SharedGrouper.py": "687a3d8529d3cf6b14ec3957130f56763efb0c6a8622533044ddb43da0d2be61",
+            "OnlineGrouper.py": "095e5c33677e3cd0c2f080a4d4c4fb0e74e026f0323cf4042d300c90e4a70c10",
+            "ControlledCapture.py": "5edae3f8cf1d6fa5f3852fe256165ad6dda46fb91b08c8ee7c16ddb82e465c6f",
+            "ControlledExperiment.py": "39f10dd09cee03748f35467e2ee864f73c9a16c01866592c95121bbf63a04c7f",
+            "ControlledTerminals.py": "85f9e9a88a14b28a9eff4de017c907332b409752c1a70b2a018075bb8f7236b9",
+            "Peakfinders.py": "76e8267eb76402e7a1ae3b1190c8bbf994167600fd7664866df4607deb176a51",
+            "GpuArgmaxDecoder.py": "d52cc12a7a96d3efaba86217ac16020b2cb4dfb3653ab0f7e041537de436330f",
+            "OfflineCandidateGrouper.py": "79d1f8397246bb14ba6631592b3d8d5e0d3dad988b42a0adfab858db9d678cfc"
+          }
+        },
+        "channel_variance_sha256": "9534995a448a5ddf5c569f9987770cf2fe7cb684dfa2c4c8743d378774deb4df",
+        "weights_evidence": "FrbServer analytic initialization from received channel variances",
+        "terminal_session": {
+          "complete": true,
+          "configuration_sha256": "3549ad795535f1962a40131f3a1e3c868c3e1c1a26023cd936dd0383764142b8",
+          "session_manifest_sha256": "31a63fdae680f9a109d81d94c33ce90a5b1ea9ffbafd9d602387bb2d57e3108f",
+          "component_status_sha256": {
+            "grouper": "147f5f8188b46f02307a4fe8e48a165cc8f68fef14f7846fc5e4d7f4f8155cce",
+            "server": "248e80696a8e99ab5e2cd7f719d8a734e15bf8faa4affc2bf4d256318498bb82",
+            "capture": "540687e61aec6fa251e5b32f9fa3ba99cf97f16fb971bbb432688631dc3bfadf",
+            "replay": "679079ac51309e90c9ff3239750735da8a96d212d92ff722768f11cd07ebe025"
+          }
+        }
+      }
+    },
+    "numerical_tolerances": {
+      "snr": {
+        "rtol": 0.001,
+        "atol": 0.002
+      },
+      "toa_sample_abs": {
+        "rtol": 0.0,
+        "atol": 1e-06
+      },
+      "dm": {
+        "rtol": 1e-12,
+        "atol": 1e-09
+      },
+      "width_samp": {
+        "rtol": 0.0,
+        "atol": 1e-12
+      },
+      "width_ms": {
+        "rtol": 1e-12,
+        "atol": 1e-12
+      },
+      "freq_lo_MHz": {
+        "rtol": 0.0,
+        "atol": 1e-09
+      },
+      "freq_hi_MHz": {
+        "rtol": 0.0,
+        "atol": 1e-09
+      },
+      "dm_step": {
+        "rtol": 1e-12,
+        "atol": 1e-12
+      },
+      "time_step_samples": {
+        "rtol": 0.0,
+        "atol": 1e-12
+      }
+    },
+    "performance_benchmark": false,
+    "bundle_sha256": "4a09153c1cd8ee86fb2fdb9808b7481bce4ff4c0d208bece2a4c6a0d96efeecc",
+    "truth_sha256": "ee17419daf1a22e358e52bf8964cce7450acb4982f763d89c5ea6245319cd696",
+    "producer_science": {
+      "config": {
+        "zone_nfreq": [
+          8192,
+          8192,
+          6144,
+          2048,
+          3584
+        ],
+        "zone_freq_edges": [
+          300,
+          350,
+          450,
+          600,
+          800,
+          1500
+        ],
+        "time_sample_ms": 0.9984,
+        "toplevel_tree_rank": 16,
+        "time_samples_per_chunk": 2048,
+        "dtype": "float16",
+        "frequency_subband_counts": [
+          5,
+          9,
+          7,
+          3,
+          1
+        ],
+        "primary_trees": [
+          {
+            "num_early_triggers": 0,
+            "max_width": 32,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64
+          },
+          {
+            "num_early_triggers": 1,
+            "max_width": 16,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64
+          },
+          {
+            "num_early_triggers": 2,
+            "max_width": 8,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64
+          },
+          {
+            "num_early_triggers": 3,
+            "max_width": 4,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64
+          }
+        ],
+        "future_write_max_samples": 464000,
+        "max_gpu_clag": 5
+      },
+      "geometry": {
+        "dtype": "float16",
+        "nfreq": 28160,
+        "nt_in": 2048,
+        "toplevel_tree_rank": 16,
+        "num_primary_trees": 4,
+        "stage1_dd_rank": [
+          8,
+          7,
+          7,
+          7
+        ],
+        "stage1_amb_rank": [
+          8,
+          8,
+          8,
+          8
+        ],
+        "ntrees": 10,
+        "trees": [
+          {
+            "tree_index": 0,
+            "ndm_out": 4096,
+            "nt_out": 128,
+            "dm_min": 0,
+            "dm_max": 1478.537835445747,
+            "trigger_frequency": 300,
+            "primary_tree_index": 0,
+            "early_trigger_level": 0,
+            "amb_rank": 8,
+            "dd_rank": 8,
+            "nt_ds": 2048,
+            "max_width": 32,
+            "dm_downsampling": 16,
+            "time_downsampling": 16,
+            "nprofiles": 16,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64,
+            "ndm_wt": 1024,
+            "nt_wt": 32,
+            "frequency_subband_counts": [
+              5,
+              9,
+              7,
+              3,
+              1
+            ]
+          },
+          {
+            "tree_index": 1,
+            "ndm_out": 1024,
+            "nt_out": 64,
+            "dm_min": 1478.537835445747,
+            "dm_max": 2957.075670891494,
+            "trigger_frequency": 416.0251471689218,
+            "primary_tree_index": 1,
+            "early_trigger_level": 1,
+            "amb_rank": 7,
+            "dd_rank": 7,
+            "nt_ds": 1024,
+            "max_width": 16,
+            "dm_downsampling": 16,
+            "time_downsampling": 16,
+            "nprofiles": 13,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64,
+            "ndm_wt": 256,
+            "nt_wt": 16,
+            "frequency_subband_counts": [
+              5,
+              7,
+              3,
+              1
+            ]
+          },
+          {
+            "tree_index": 2,
+            "ndm_out": 2048,
+            "nt_out": 64,
+            "dm_min": 1478.537835445747,
+            "dm_max": 2957.075670891494,
+            "trigger_frequency": 300,
+            "primary_tree_index": 1,
+            "early_trigger_level": 0,
+            "amb_rank": 7,
+            "dd_rank": 8,
+            "nt_ds": 1024,
+            "max_width": 16,
+            "dm_downsampling": 16,
+            "time_downsampling": 16,
+            "nprofiles": 13,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64,
+            "ndm_wt": 512,
+            "nt_wt": 16,
+            "frequency_subband_counts": [
+              5,
+              9,
+              7,
+              3,
+              1
+            ]
+          },
+          {
+            "tree_index": 3,
+            "ndm_out": 1024,
+            "nt_out": 64,
+            "dm_min": 2957.075670891494,
+            "dm_max": 5914.151341782988,
+            "trigger_frequency": 566.9467095138408,
+            "primary_tree_index": 2,
+            "early_trigger_level": 2,
+            "amb_rank": 7,
+            "dd_rank": 6,
+            "nt_ds": 512,
+            "max_width": 8,
+            "dm_downsampling": 8,
+            "time_downsampling": 8,
+            "nprofiles": 10,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64,
+            "ndm_wt": 128,
+            "nt_wt": 8,
+            "frequency_subband_counts": [
+              4,
+              3,
+              1
+            ]
+          },
+          {
+            "tree_index": 4,
+            "ndm_out": 1024,
+            "nt_out": 32,
+            "dm_min": 2957.075670891494,
+            "dm_max": 5914.151341782988,
+            "trigger_frequency": 416.0251471689218,
+            "primary_tree_index": 2,
+            "early_trigger_level": 1,
+            "amb_rank": 7,
+            "dd_rank": 7,
+            "nt_ds": 512,
+            "max_width": 8,
+            "dm_downsampling": 16,
+            "time_downsampling": 16,
+            "nprofiles": 10,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64,
+            "ndm_wt": 256,
+            "nt_wt": 8,
+            "frequency_subband_counts": [
+              5,
+              7,
+              3,
+              1
+            ]
+          },
+          {
+            "tree_index": 5,
+            "ndm_out": 2048,
+            "nt_out": 32,
+            "dm_min": 2957.075670891494,
+            "dm_max": 5914.151341782988,
+            "trigger_frequency": 300,
+            "primary_tree_index": 2,
+            "early_trigger_level": 0,
+            "amb_rank": 7,
+            "dd_rank": 8,
+            "nt_ds": 512,
+            "max_width": 8,
+            "dm_downsampling": 16,
+            "time_downsampling": 16,
+            "nprofiles": 10,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64,
+            "ndm_wt": 512,
+            "nt_wt": 8,
+            "frequency_subband_counts": [
+              5,
+              9,
+              7,
+              3,
+              1
+            ]
+          },
+          {
+            "tree_index": 6,
+            "ndm_out": 512,
+            "nt_out": 32,
+            "dm_min": 5914.151341782988,
+            "dm_max": 11828.302683565977,
+            "trigger_frequency": 750,
+            "primary_tree_index": 3,
+            "early_trigger_level": 3,
+            "amb_rank": 7,
+            "dd_rank": 5,
+            "nt_ds": 256,
+            "max_width": 4,
+            "dm_downsampling": 8,
+            "time_downsampling": 8,
+            "nprofiles": 7,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64,
+            "ndm_wt": 64,
+            "nt_wt": 4,
+            "frequency_subband_counts": [
+              2,
+              1
+            ]
+          },
+          {
+            "tree_index": 7,
+            "ndm_out": 1024,
+            "nt_out": 32,
+            "dm_min": 5914.151341782988,
+            "dm_max": 11828.302683565977,
+            "trigger_frequency": 566.9467095138408,
+            "primary_tree_index": 3,
+            "early_trigger_level": 2,
+            "amb_rank": 7,
+            "dd_rank": 6,
+            "nt_ds": 256,
+            "max_width": 4,
+            "dm_downsampling": 8,
+            "time_downsampling": 8,
+            "nprofiles": 7,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64,
+            "ndm_wt": 128,
+            "nt_wt": 4,
+            "frequency_subband_counts": [
+              4,
+              3,
+              1
+            ]
+          },
+          {
+            "tree_index": 8,
+            "ndm_out": 1024,
+            "nt_out": 16,
+            "dm_min": 5914.151341782988,
+            "dm_max": 11828.302683565977,
+            "trigger_frequency": 416.0251471689218,
+            "primary_tree_index": 3,
+            "early_trigger_level": 1,
+            "amb_rank": 7,
+            "dd_rank": 7,
+            "nt_ds": 256,
+            "max_width": 4,
+            "dm_downsampling": 16,
+            "time_downsampling": 16,
+            "nprofiles": 7,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64,
+            "ndm_wt": 256,
+            "nt_wt": 4,
+            "frequency_subband_counts": [
+              5,
+              7,
+              3,
+              1
+            ]
+          },
+          {
+            "tree_index": 9,
+            "ndm_out": 2048,
+            "nt_out": 16,
+            "dm_min": 5914.151341782988,
+            "dm_max": 11828.302683565977,
+            "trigger_frequency": 300,
+            "primary_tree_index": 3,
+            "early_trigger_level": 0,
+            "amb_rank": 7,
+            "dd_rank": 8,
+            "nt_ds": 256,
+            "max_width": 4,
+            "dm_downsampling": 16,
+            "time_downsampling": 16,
+            "nprofiles": 7,
+            "wt_dm_downsampling": 64,
+            "wt_time_downsampling": 64,
+            "ndm_wt": 512,
+            "nt_wt": 4,
+            "frequency_subband_counts": [
+              5,
+              9,
+              7,
+              3,
+              1
+            ]
+          }
+        ]
+      },
+      "dcores": [
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8
+      ],
+      "argmax_encoding": "pirate-1.5:t8-p8-m8-mu8",
+      "processing": {
+        "complete": true,
+        "dm_reach_by_tree": [
+          8,
+          8,
+          8,
+          8,
+          8,
+          8,
+          8,
+          8,
+          8,
+          8
+        ],
+        "dm_tolerance": 1.5,
+        "effective_grouping_halo_columns_by_tree": [
+          18,
+          34,
+          18,
+          33,
+          17,
+          18,
+          17,
+          17,
+          9,
+          9
+        ],
+        "grouping_association_domain": "owner_plus_resolved_next_map_halo",
+        "grouping_method": "persistent_partition_representative",
+        "halo_size": 2,
+        "peakfinder": "full_band",
+        "requested_time_radius_by_tree": [
+          9,
+          17,
+          9,
+          33,
+          17,
+          9,
+          65,
+          33,
+          17,
+          9
+        ],
+        "snr_threshold": 10.0,
+        "time_radius_by_tree": [
+          9,
+          17,
+          9,
+          31,
+          15,
+          9,
+          15,
+          15,
+          7,
+          7
+        ],
+        "time_tolerance": 1.5,
+        "timeout_ms": 0,
+        "timeout_policy": "discard",
+        "waist_bins_by_tree": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      "startup": [
+        {
+          "beam_id": 100,
+          "producer_start_chunk_index": 0,
+          "status": "authoritative"
+        },
+        {
+          "beam_id": 101,
+          "producer_start_chunk_index": 0,
+          "status": "authoritative"
+        }
+      ],
+      "units": {
+        "dm": "pc cm^-3",
+        "freq_hi_MHz": "MHz",
+        "freq_lo_MHz": "MHz",
+        "toa_sample_abs": "full-resolution samples at complete-band low frequency",
+        "width_ms": "ms",
+        "width_samp": "full-resolution samples"
+      }
+    },
+    "artifact_sha256": {
+      "offline": {
+        "events.asdf": "02b02e40a34bd0f5504ac5f6399795ff9210c52b080e062ac7941d1b17ffc614",
+        "run.json": "928050372c4998bffc4210ac45b339951b9f73b8bd2da2bee52bb2c96e5202a3"
+      },
+      "online_early": {
+        "events.asdf": "13b9a6c67f938d36f2a58791fc9d14d08d92f41a3f1f48666870d49cef4bcd12",
+        "events.asdf.online.json": "efa61097e3feccbddd6ce23e99bb7c9550257f2196aa80abb228b445898226fc",
+        "run.json": "33124c5a27dfe38a9628bbd03f52c465dcb22016cf4477430f8e572551ca4e27",
+        "capture.json": "095d8c66436fd23cf647ab6c3cb06fd39e4bd5173d8ffff92a5377b4e237c5b1",
+        "replay.json": "7d348569bc82b53462e9e98072ac172bade07a5f198329995c90c54e61ab63a6"
+      },
+      "online_full": {
+        "events.asdf": "13b9a6c67f938d36f2a58791fc9d14d08d92f41a3f1f48666870d49cef4bcd12",
+        "events.asdf.online.json": "35ec5b265a437a590a5cef63375bd98ff319d749077d3cfe5fe00083423df907",
+        "run.json": "0c0d6ea603535d8a0c4dacc61e9e06a4aceb0bbe105999e51a0fc90d7c7c4a36",
+        "capture.json": "85cd488bb679d5f2d4385cf4728be4bd3e3956e9853fcee586d1b504c2003069",
+        "replay.json": "ebf7422651afb50026c47415fdea89f27a571ef2f488b1bd5daaef4fd372b924"
+      }
+    }
+  }
+}

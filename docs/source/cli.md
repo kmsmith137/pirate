@@ -134,3 +134,29 @@ See the [controlled CHORD experiment guide](../../notes/controlled_chord_experim
 for the configuration, exact environment and run commands, timing budget, output
 contracts and limitations. This two-beam correctness experiment is not a
 production-throughput benchmark.
+
+
+## Controlled experiment in separate terminals
+
+The working scientific grouper, native server, capture receiver and controlled
+replay can also be launched independently. Prepare one fresh session directory:
+
+```bash
+pirate_frb experiment session prepare BUNDLE OUTPUT --gpu 0
+```
+
+Run each of the following in its own terminal on the same host and environment:
+
+```bash
+pirate_frb experiment session grouper OUTPUT
+pirate_frb experiment session server OUTPUT
+pirate_frb experiment session capture OUTPUT
+pirate_frb experiment session replay OUTPUT
+```
+
+The session coordinates readiness and finite completion. The grouper uses the
+same scientific core as offline, and the capture receiver bypasses the classifier.
+Use `experiment session status OUTPUT` to inspect state or
+`experiment session stop OUTPUT` to request shutdown. Do not reuse a completed
+or failed session for another acquisition. See
+[the complete terminal tutorial](../../notes/controlled_terminals.md).

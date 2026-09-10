@@ -119,7 +119,7 @@ def validate_live_handshake(grouper, bundle, *, expected_start_chunk, expected_n
 def run_online_grouper(bundle_dir, output, grouper_addr, *, sifter_addr=None,
                        stop_event=None, ready_event=None, completion_event=None,
                        status_queue=None, expected_start_chunk=None,
-                       expected_nchunks=None, report_path=None):
+                       expected_nchunks=None, report_path=None, progress=None):
     """Process a finite controlled observation, then hold IPC until server stops.
 
     The sender must supply its two transport-drain chunks. They cause final real
@@ -130,6 +130,8 @@ def run_online_grouper(bundle_dir, output, grouper_addr, *, sifter_addr=None,
     ``stop_event``. A premature stop or disconnect is an error, never a physical
     end. ``ready_event`` follows the producer handshake, so the sender must run
     before the coordinator waits for it. CUDA must use spawn, not fork.
+    Optional ``progress`` receives CPU-only window/chunk summaries. It must be
+    fast; an exception aborts processing rather than changing scientific output.
     """
     from .ControlledObservation import load_experiment_bundle
     from .OfflineGrouperConfig import load_offline_grouper_config
@@ -217,6 +219,8 @@ def run_online_grouper(bundle_dir, output, grouper_addr, *, sifter_addr=None,
                             seq_per_sample=g.xengine_metadata.seq_per_frb_time_sample)
                         sifter.send_events(int(g.xengine_metadata.beamset), events, coarsegrain[owner])
                     coarsegrain.pop(owner, None)
+                if progress is not None:
+                    progress(dict(phase="window", **report["windows"][-1]))
 
             for ibatch in range(int(g.nbatches)):
                 first = ibatch * int(g.beams_per_batch)
@@ -250,6 +254,8 @@ def run_online_grouper(bundle_dir, output, grouper_addr, *, sifter_addr=None,
                         beam_ids=list(processor.beam_ids), wait_started_monotonic_ns=acquired_begin,
                         available_monotonic_ns=active_available,
                         released_monotonic_ns=time.monotonic_ns()))
+                if progress is not None:
+                    progress(dict(phase="chunk", completed_chunks=relative + 1, expected_chunks=count))
             for processor in processors:
                 processor.finish(physical_end=True)
             if pending_messages:
