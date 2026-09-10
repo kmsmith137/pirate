@@ -16,9 +16,9 @@ when it stops matching how callers actually write code.
 
 ```{toctree}
 ---
-maxdepth: 1
+maxdepth: 2
 ---
-classes/AssembledChunk
+classes/chimefrb/index
 classes/Acquisition
 classes/AssembledFrame
 classes/AssembledFrameAllocator

@@ -1,3 +1,5 @@
+# The old chimefrb code
+
 `pirate` is a new real-time FRB search, under development for the CHORD radio telescope,
 that will supersede the "chimefrb" search code that we wrote a few years ago.
 

@@ -16,6 +16,7 @@ notes/gpu_kernels
 notes/pybind11
 notes/grpc
 notes/docstrings
+notes/chimefrb
 notes/stoppable_class
 notes/thread_backed_class
 notes/cuda_event_ringbuf
