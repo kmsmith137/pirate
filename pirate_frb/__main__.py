@@ -29,6 +29,7 @@ from . import pirate_pybind11
 from . import casm
 from . import chime
 from .chimefrb import test_assembled_chunk as chimefrb_tests
+from .chimefrb import test_wi_downsampler as chimefrb_wi_tests
 from . import kernels
 from . import loose_ends
 from . import core
@@ -149,7 +150,7 @@ def parse_test(subparsers):
     parser.add_argument('--varmap', action='store_true', help="pirate_frb.varmap. Two halves, both run by this flag: everything checkable WITHOUT a dedisperser (the VarianceMap class, the covering-LP and basis machinery, and the analytic map of detrender_free.py against a hand-written oracle), and the brute-force sweep, which pushes a one-hot through the REAL dedisperser once per input channel and checks the analytic map against what comes out. Needs a DedispersionPlan and a GPU for the second half.")
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_{beamform,upchan}()')
     parser.add_argument('--cfrb', action='store_true',
-                        help='Run chimefrb tests (reading old CHIME FRB msgpack files)')
+                        help='Runs the chimefrb port tests (reading old CHIME FRB msgpack files, and GpuWiDownsampler against its numpy reference)')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection and pulse-invariants tests')
@@ -314,6 +315,7 @@ def test(args):
 
         if run_all_tests or args.cfrb:
             chimefrb_tests.test_assembled_chunk(i)
+            chimefrb_wi_tests.test_wi_downsampler(i)
 
         if run_all_tests or args.zomb:
             loose_ends.test_avx2_m64_outbuf()
@@ -936,9 +938,10 @@ def parse_time(subparsers):
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() timing')
     parser.add_argument('--dtl1', action='store_true', help='Runs GpuDetrenderLps1d.time_selected() (1-d local-polynomial detrender kernel)')
     parser.add_argument('--dtl2', action='store_true', help='Runs GpuDetrenderLps2d.time_selected() (2-d spline detrender kernel)')
+    parser.add_argument('--cfrb', action='store_true', help='Runs chimefrb.GpuWiDownsampler.time_selected() (the old search\'s (Df,Dt) downsampler)')
 
 def time_command(args):
-    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim', 'dtl1', 'dtl2' ]
+    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'cfrb', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim', 'dtl1', 'dtl2' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
     if args.ncu:
@@ -970,6 +973,8 @@ def time_command(args):
         kernels.GpuDequantizationKernel.time_selected()
     if run_all_timings or args.gtgk:
         kernels.GpuTreeGriddingKernel.time_selected()
+    if run_all_timings or args.cfrb:
+        chimefrb_wi_tests.GpuWiDownsampler.time_selected()
     if run_all_timings or args.dtl1:
         kernels.GpuDetrenderLps1d.time_selected()
     if run_all_timings or args.dtl2:
@@ -1589,13 +1594,15 @@ def parse_coverage(subparsers):
                         help='varmap draws: _random_config(), the LP cell, the sweep loops')
     parser.add_argument('--dt', action='store_true',
                         help='Detrending draws: random_knots(), random_nfreq(), the 2-d masks')
+    parser.add_argument('--cfrb', action='store_true',
+                        help='chimefrb draws: the GpuWiDownsampler test config, geometry and arrays')
     parser.add_argument('-s', '--scale', type=float, default=1.0, metavar='X',
                         help='Multiply every draw count by X (default 1). Scale up when a rate'
                              ' is near a band edge and you want to know whether it moved.')
 
 
 def coverage(args):
-    flags = [f for f in ('config', 'reg', 'varmap', 'dt') if getattr(args, f)]
+    flags = [f for f in ('config', 'reg', 'varmap', 'dt', 'cfrb') if getattr(args, f)]
     tests.report_coverage(select=flags, scale=args.scale)
 
 

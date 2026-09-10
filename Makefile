@@ -349,6 +349,7 @@ LIB_SRCFILES = \
   src_lib/varmap.cpp \
   src_lib/XEngineMetadata.cpp \
   src_lib/chimefrb/AssembledChunk.cpp \
+  src_lib/chimefrb/WiDownsampler.cu \
   src_lib/loose_ends/cpu_downsample.cpp \
   src_lib/loose_ends/gpu_downsample.cu \
   src_lib/loose_ends/gpu_transpose.cu \
@@ -395,7 +396,9 @@ PYFILES = \
   pirate_frb/yaml_utils.py \
   pirate_frb/chime/__init__.py \
   pirate_frb/chimefrb/__init__.py \
+  pirate_frb/chimefrb/ReferenceWiDownsampler.py \
   pirate_frb/chimefrb/test_assembled_chunk.py \
+  pirate_frb/chimefrb/test_wi_downsampler.py \
   pirate_frb/casm/__init__.py \
   pirate_frb/casm/CasmBeamformer.py \
   pirate_frb/casm/CasmReferenceBeamformer.py \
@@ -545,6 +548,7 @@ HFILES = \
   include/pirate/YamlFile.hpp \
   include/pirate/loose_ends/avx256_downsample.hpp \
   include/pirate/chimefrb/AssembledChunk.hpp \
+  include/pirate/chimefrb/WiDownsampler.hpp \
   include/pirate/loose_ends/bitvec.hpp \
   include/pirate/loose_ends/cpu_downsample.hpp \
   include/pirate/loose_ends/DownsampleKernel.hpp \

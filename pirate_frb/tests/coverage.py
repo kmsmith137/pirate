@@ -746,7 +746,57 @@ def _sec_detrending(rep, ndraw):
 # Entry point.
 
 
-_SECTIONS = ('config', 'reg', 'varmap', 'dt')
+_SECTIONS = ('config', 'reg', 'varmap', 'dt', 'cfrb')
+
+
+def _sec_chimefrb(rep, ndraw):
+    from ..chimefrb import test_wi_downsampler as wd
+
+    rep.section('chimefrb.test_wi_downsampler randomization',
+                subtitle=f'{ndraw} draws of random_config() + random_geometry() + random_arrays()',
+                consumer='test --cfrb: GpuWiDownsampler against ReferenceWiDownsampler')
+
+    rng = np.random.default_rng()
+    production, transposed, strided = 0, 0, 0
+    any_masked, all_masked, none_masked = 0, 0, 0
+    masked_frac = []
+
+    for _ in range(ndraw):
+        (Df, Dt, transpose) = wd.random_config(rng)
+        (B, F, T) = wd.random_geometry(rng, Df, Dt)
+        (_, w) = wd.random_arrays(rng, B, F, T)
+
+        production += (Df, Dt, transpose) in wd.PRODUCTION_CONFIGS
+        transposed += bool(transpose)
+        strided += (Dt > 1)
+
+        # Downsampled weights, which is all the out_w <= 0 branch depends on.
+        out_w = w.reshape(B, F//Df, Df, T//Dt, Dt).sum(axis=(2, 4))
+        frac = float(np.mean(out_w <= 0))
+        masked_frac.append(frac)
+        any_masked += (frac > 0)
+        all_masked += (frac == 1)
+        none_masked += (frac == 0)
+
+    rep.rate('config drawn from the production four', production, ndraw, (50, 90),
+             'spends most iterations on the (Df,Dt,transpose) the port will actually use')
+    rep.rate('transpose', transposed, ndraw, (30, 70),
+             'the shared-memory staging path, and the swapaxes structural check')
+    rep.rate('Dt > 1 (strided per-lane read)', strided, ndraw, (25, 70),
+             'the access pattern the kernel design was least sure of')
+
+    # The guarded divide (out_i = 0 where the cell has no weight) is the kernel's only
+    # branch, so a draw with no fully-masked cell tests it not at all. This row is the
+    # tripwire on that: if random_arrays() ever stops drawing low unmask probabilities,
+    # it collapses to zero and the branch silently stops being covered.
+    rep.rate('>= 1 fully-masked output cell', any_masked, ndraw, (25, 85),
+             'test_wi_downsampler: the out_w <= 0 branch (out_i is 0, not a NaN)')
+    rep.rate('every cell masked (all-zero weights)', all_masked, ndraw, (1, 30),
+             'the degenerate extreme: whole output is zero')
+    rep.rate('no cell masked', none_masked, ndraw, (15, 75),
+             'the ordinary case, which must stay the common one')
+    rep.dist('fraction of cells fully masked', masked_frac, ('p90', 0.001, 1.0),
+             'test_wi_downsampler', fmt='{:.3g}')
 
 
 def report_coverage(select=(), scale=1.0):
@@ -777,5 +827,7 @@ def report_coverage(select=(), scale=1.0):
         _sec_sweep(rep, n(40))
     if 'dt' in sel:
         _sec_detrending(rep, n(600))
+    if 'cfrb' in sel:
+        _sec_chimefrb(rep, n(200))
 
     rep.finish()
