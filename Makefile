@@ -532,6 +532,7 @@ HFILES = \
   include/pirate/DedispersionPlan.hpp \
   include/pirate/DedispersionTree.hpp \
   include/pirate/Detrender.hpp \
+  include/pirate/detrender_kernels.hpp \
   include/pirate/Hwtest.hpp \
   include/pirate/FakeXEngine.hpp \
   include/pirate/file_utils.hpp \

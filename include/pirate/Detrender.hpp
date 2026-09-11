@@ -236,9 +236,11 @@ struct GpuDetrenderLps2d
 
 private:
     // Persistent device arrays, built once in the constructor: the per-channel basis
-    // tables, and the freq-range / zone descriptors. See the .cu file.
+    // tables, the freq-range / zone descriptors, and the banded regulator table. See the
+    // .cu file and detrender_kernels.hpp.
     ksgpu::Array<float> phi_tab;      // (nfreq, phi_stride)
     ksgpu::Array<float> prod_tab;     // (nfreq, prod_stride)
+    ksgpu::Array<float> reg_tab;      // (N_phi, max(n_phi,1)+1)
     ksgpu::Array<int> fr_desc;        // (nfrange, 4)
     ksgpu::Array<int> zone_desc;      // (nzone, 4)
 

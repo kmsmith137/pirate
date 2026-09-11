@@ -1,4 +1,5 @@
 #include "../include/pirate/Detrender.hpp"
+#include "../include/pirate/detrender_kernels.hpp"
 
 #include <cmath>
 #include <sstream>
@@ -20,743 +21,30 @@ namespace pirate {
 #endif
 
 
-// -------------------------------------------------------------------------------------------------
-//
-// Overview.
-//
-// Notation follows notes/detrending.tex, section "2-d detrending"; the numpy
-// reference is pirate_frb/detrending/lps2d, and the two are compared by
-// test_gpu_kernel() in that package.
-//
-// Three kernels, in stream order. The split is forced by the shape of the problem: the
-// fit at one time sample couples every channel of a zone, so the full-resolution data
-// must be reduced to sufficient statistics, solved, and then swept again. There is no
-// single-pass formulation.
-//
-//   1. accumulate: (data, mask) -> (G, U), the per-freq-range sufficient statistics
-//      G_jl[t] = sum_f m[f,t] phi_j(f) phi_l(f),   U_j[t] = sum_f m[f,t] phi_j(f) d[f,t].
-//   2. solve: window-average (G,U) over 2W+1 samples, assemble the regularized normal
-//      equations, factor, solve, and commit the baseline coefficients at the window
-//      centre. One thread per (beam, zone, output sample).
-//   3. subtract: evaluate the baseline at full resolution, subtract, expand the mask.
-//
-// WHERE THE TIME GOES. Kernels 1 and 3 move 15 bytes of DRAM traffic per (beam, channel,
-// output sample) and do 9 and 3 FMA respectively, i.e. 3.6 and 0.6 flop/byte against an
-// L40S balance point of 106. They are pure bandwidth with a 30x margin, so the only
-// things that matter in them are full cache lines and enough warps in flight. Kernel 2
-// does ~2000 FMA per (beam, zone, output sample) but there are only M*nzone*T of those,
-// which is ~3% of the chunk; it is written for clarity, not speed.
-//
-// FREQ-RANGES. A "freq-range" is a contiguous run of channels inside a single non-empty
-// knot interval, so every channel in it shares a span index j0 and exactly n_phi+1 basis
-// functions are nonzero on it. Kernel 1 therefore accumulates a fixed
-// (n_phi+1)x(n_phi+1) symmetric block plus a length-(n_phi+1) vector -- 9 floats at
-// n_phi=2 -- per (beam, freq-range, buffer sample), and kernel 2 sums the freq-ranges of
-// a zone. Their width is the occupancy knob: it sets the block count in kernels 1 and 3.
-//
-// CHUNK INVARIANCE, AND WHAT IT NOW DEPENDS ON. Output sample t is computed by an
-// identical sequence of floating point operations whatever T is, so results are
-// bit-identical across chunkings (given consistent padding, which is the caller's
-// contract) and across runs -- PROVIDED channels_per_range is held fixed. That proviso is
-// new and is the price of deriving it from the instance size: the freq-range partition is
-// part of the frequency summation order, so two instances with different
-// channels_per_range agree only to roundoff, not bit-for-bit.
-//
-// Everything else the property needs still holds unconditionally: the partition does not
-// depend on M (so the beam axis stays a spectator -- beam 0's output is identical whether
-// it was processed alone or alongside others), the per-thread accumulation blocking is a
-// compile-time constant, and there are NO atomics anywhere in the reduction. Reducing
-// (G,U) with atomicAdd would be slightly simpler and about as fast, and would give up
-// run-to-run determinism as well; do not do it without revisiting test_gpu_kernel()'s
-// bit-identity assertions, which are the strongest structural tests we have.
-//
-// NAN SAFETY. Masked samples are allowed to hold anything, including NaN from a dropped
-// packet. Every use of the data is a SELECT on the mask, never a multiply, because
-// 0*nan = nan. This is checked by bit-identity under poisoning.
+// The three kernels, the launch-geometry helpers and the time-stencil struct live in
+// include/pirate/detrender_kernels.hpp, together with the overview of the algorithm's
+// structure (three kernels, freq-ranges, zones, chunk invariance, NaN safety). This file
+// is the host side of GpuDetrenderLps2d: parameter validation and yaml, the knot-vector
+// machinery and basis tables, the D_1 regulator table, and the launch dispatch.
 
-
-// COMPILE-TIME PARAMETERS, as template arguments throughout:
-//
-//   NPHI       spline degree in frequency          (n_phi in the reference and the tex)
-//   n_deg  degree of the local time polynomial (n)
-//
-// These two must be compile-time: they size register arrays (acc[NCOMP], a[NPHI+1],
-// Mc[NPAIR_T], Vc[n_deg+1]) and drive the #pragma unroll in kernel 1's inner loop.
-//
-// T (chunk length) and W (window half-width) are RUNTIME kernel arguments. Neither sizes
-// a register array: T appears only as a stride and a bound, and W only as a loop bound
-// and an offset into shared memory, once kernel 2's parity fold is written with k on the
-// outside (see there). W is bounded by MAX_W only because the stencil struct is passed by
-// value; T must be a positive multiple of 32.
-
-static constexpr int PASS_THREADS = 256;
-
-// Largest supported window half-width. It bounds nothing in the algorithm -- it exists
-// only to give the by-value stencil struct a compile-time size.
-static constexpr int MAX_W = 16;
-
-// Largest supported time-polynomial degree, and the pair count it implies. Like MAX_W
-// these bound nothing in the algorithm: they give the by-value stencil struct and kernel
-// 2's moment registers a compile-time size.
-static constexpr int MAX_NDEG = 3;
-static constexpr int MAX_NPAIR_T = (MAX_NDEG+1)*(MAX_NDEG+2)/2;
 
 // Largest TIME polynomial degree we are willing to RUN, as opposed to the largest the
-// arrays are sized for. The two differ on purpose. The numpy reference
-// (pirate_frb/detrending/lps2d) rejects n > 2, so n = 3 would be a configuration no test
-// can validate -- and the parts of this kernel that n touches are exactly the parts a
-// test would need to check: the (q,r) assembly loops, the moment stencils, and the
-// Theta = I structure of the regulator. Refusing it is better than shipping an
-// unvalidated path. Raising it is a two-step change, reference first, then here.
+// kernel's arrays are sized for (MAX_NDEG in detrender_kernels.hpp). The two differ on
+// purpose. The numpy reference (pirate_frb/detrending/lps2d) rejects n > 2, so n = 3 would
+// be a configuration no test can validate -- and the parts of the kernel that n touches
+// are exactly the parts a test would need to check: the (q,r) assembly loops, the moment
+// stencils, and the Theta = I structure of the regulator. Refusing it is better than
+// shipping an unvalidated path. Raising it is a two-step change, reference first, then
+// here.
 //
 // This is specific to n. The SPLINE degree n_phi = 3 is fully supported and tested on
 // both sides.
 static constexpr int MAX_ORACLE_NDEG = 2;
 
-// Freq-range width is DERIVED from the instance size rather than fixed, because the right
-// value moves by 4x across the sizes we care about and the penalty for getting it wrong is
-// large in one direction. Kernels 1 and 3 launch M * nfrange * ntile blocks; at a fixed
-// 512 channels a small instance (M=1, nfreq=4096, T=512) gets nfrange = 8 and therefore 24
-// blocks on 142 SMs, and runs 43% slower than the same instance at 128 channels. Measured
-// on an L40S:
-//
-//     channels_per_range   128     256     512    1875
-//     M=2 F=30000 T=2048   3.99    3.91    4.11    4.35   ms
-//     M=1 F=4096  T=512    0.108   0.158   0.158   0.158  ms
-//
-// Note the asymmetry: over-provisioning freq-ranges costs almost nothing (the extra load
-// falls on kernel 2, which is ~3% of the chunk), while under-provisioning costs 40%. So
-// the target block count is deliberately generous, and M is left OUT of the estimate --
-// using M = 1 is the conservative choice, and it is what keeps the beam axis a spectator
-// (see "chunk invariance" above).
-static constexpr long CPR_TARGET_BLOCKS = 1024;
-static constexpr long CPR_MIN = 128;
-static constexpr long CPR_MAX = 1024;
-
-// The Makefile compiles with --use_fast_math, which turns '/' into an unrefined
-// MUFU.RCP and 'sqrtf' into MUFU.RSQ, both ~2^-22 relative. That is twice float32
-// machine epsilon, and the conditioning design is budgeted at eps_mach/(4 r_min), so
-// kernel 2's factorization uses the correctly-rounded intrinsics instead. One
-// reciprocal per row followed by multiplies costs ~1 ulp against 0.5 for a true divide,
-// and is far cheaper than n_b divides. Kernels 1 and 3 are pure FMA and are unaffected.
-static __device__ __forceinline__ float rn_rsqrt(float x)
-{
-    return __frcp_rn(__fsqrt_rn(x));
-}
-
-
-// Half-bandwidth of the assembled matrix, in the coefficient-major index order
-// I = j*(n+1)+q. The max() is not cosmetic: the assembled matrix carries bands from two
-// sources with different bandwidths in j -- the data block (n_phi) and the regulator
-// (1, whatever n_phi is, since D_1 is a difference penalty on coefficient indices and
-// knows nothing about the spline degree). At n_phi = 0 the regulator is the wider of
-// the two and a formula using n_phi alone would under-allocate.
-static __host__ __device__ constexpr int bandwidth(int n_phi, int n)
-{
-    return ((n_phi > 1) ? n_phi : 1) * (n + 1) + n;
-}
-
-// Packed index of the unordered pair (a,b) over 0..deg, enumerated (0,0),(0,1),...
-static __host__ __device__ constexpr int pair_index(int deg, int a, int b)
-{
-    int lo = (a < b) ? a : b;
-    int hi = (a < b) ? b : a;
-    return lo*(deg+1) - (lo*(lo-1))/2 + (hi - lo);
-}
-
-
-// The time-axis stencils. Everything about the polynomial basis {p_q} is compile-time
-// data (it depends only on n and W), so it is computed once on the host and passed to
-// the kernel BY VALUE: cuda puts kernel parameters in the constant bank, so this is a
-// __constant__ broadcast without the cudaMemcpyToSymbol dance.
-//
-// Folded by parity. On a symmetric window the orthonormal basis polynomials have
-// definite parity, so every stencil is even or odd in s and the window is summed in half
-// the multiplies. That also makes the even/odd structure EXACT rather than a
-// cancellation of rounding errors, which matters because "n=1 reduces to n=0 for a
-// window-constant mask" depends on the odd moments vanishing identically.
-struct TimeStencils
-{
-    float gs[MAX_NPAIR_T][MAX_W+1];   // gs[p][k] = p_q(k) p_r(k), the s >= 0 half
-    float us[MAX_NDEG+1][MAX_W+1];    // us[q][k] = p_q(k)
-    float gpar[MAX_NPAIR_T];          // +1 if even in s, -1 if odd
-    float upar[MAX_NDEG+1];
-    float eval0[MAX_NDEG+1];          // p_q(0): the contraction that commits the baseline
-};
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// Kernel 1: accumulate.
-//
-// gridDim = (ntile, nfrange, M), blockDim = PASS_THREADS. Thread i of tile b owns ONE
-// buffer sample t = b*PASS_THREADS + i and loops over its freq-range's channels. A warp
-// therefore reads 128 contiguous bytes of 'data' (one full cache line) and 32 contiguous
-// bytes of 'mask' (one 32-byte sector), so nothing is wasted at DRAM granularity.
-//
-// The basis tables are broadcast loads -- every thread in the block reads the same
-// address -- so the ~1 MB of tables is served from L1/L2, not DRAM. They are read as
-// scalars rather than 128-bit vectors: at 9 broadcast loads per 9 FMA the LSU ceiling is
-// tens of TB/s, i.e. 30x above DRAM, so vectorizing them would buy nothing. The tables
-// are padded to a multiple of 4 floats per channel anyway, so a future 128-bit load
-// needs no change to the host side.
-
-template<int NPHI>
-__global__ void __launch_bounds__(PASS_THREADS)
-detrend_2d_accum_kernel(const float *data, const unsigned char *mask, float *gu,
-                        const float *phi_tab, const float *prod_tab, const int *fr_desc,
-                        int nfreq, int nfrange, int nbuf,
-                        int phi_stride, int prod_stride)
-{
-    constexpr int NPAIR_F = (NPHI+1)*(NPHI+2)/2;
-    constexpr int NCOMP   = NPAIR_F + (NPHI+1);
-
-    const int t = blockIdx.x*PASS_THREADS + threadIdx.x;
-    const int fr = blockIdx.y;
-    const int m = blockIdx.z;
-
-    // The buffer length need not be a multiple of PASS_THREADS (nbuf = T + 2W), so the
-    // last tile is partially predicated off. There is no __syncthreads() in this kernel,
-    // so an early return is safe.
-    if (t >= nbuf)
-        return;
-
-    const int c_lo = fr_desc[4*fr + 0];
-    const int c_hi = fr_desc[4*fr + 1];
-
-    // Apply per-block and per-thread offsets to the full-resolution arrays.
-    //   before: shape (M, nfreq, nbuf), contiguous
-    //   after:  shape (nfreq,), stride nbuf  -- one element per channel
-    data += (long(m)*nfreq)*nbuf + t;
-    mask += (long(m)*nfreq)*nbuf + t;
-
-    float acc[NCOMP];
-    #pragma unroll
-    for (int c = 0; c < NCOMP; c++)
-        acc[c] = 0.0f;
-
-    // Two-level accumulation, and this is accuracy rather than an optimization. The
-    // reference reduces over frequency with an explicit binary tree because a zone can be
-    // thousands of channels wide; a flat float32 sum over a 512-channel freq-range carries
-    // ~23 eps of rounding, while the 32-then-16 split below brings it to ~10, within 3x of
-    // a full tree, for 9 extra registers and 3% more adds.
-    for (int f0 = c_lo; f0 < c_hi; f0 += 32) {
-        const int f1 = min(f0 + 32, c_hi);
-
-        float blk[NCOMP];
-        #pragma unroll
-        for (int c = 0; c < NCOMP; c++)
-            blk[c] = 0.0f;
-
-        #pragma unroll 4
-        for (int f = f0; f < f1; f++) {
-            const float dv = data[long(f)*nbuf];
-            const bool mv = (mask[long(f)*nbuf] != 0);
-
-            // SELECT, never multiply: dv may be NaN where mv is false.
-            const float w  = mv ? 1.0f : 0.0f;
-            const float wd = mv ? dv : 0.0f;
-
-            #pragma unroll
-            for (int p = 0; p < NPAIR_F; p++)
-                blk[p] += w * __ldg(prod_tab + long(f)*prod_stride + p);
-            #pragma unroll
-            for (int a = 0; a <= NPHI; a++)
-                blk[NPAIR_F+a] += wd * __ldg(phi_tab + long(f)*phi_stride + a);
-        }
-
-        #pragma unroll
-        for (int c = 0; c < NCOMP; c++)
-            acc[c] += blk[c];
-    }
-
-    // Layout (M, nfrange, NCOMP, nbuf), time fastest: each component is a coalesced
-    // 32-bit store, one full cache line per warp.
-    gu += ((long(m)*nfrange + fr)*NCOMP)*nbuf + t;
-    #pragma unroll
-    for (int c = 0; c < NCOMP; c++)
-        gu[long(c)*nbuf] = acc[c];
-}
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// Kernel 2: assemble and solve.
-//
-// gridDim = (T/S, nzone, M), blockDim = S threads. ONE THREAD PER (beam, zone, output
-// sample): block (b,z,m) owns output samples [b*S, (b+1)*S) of zone z, hence buffer
-// samples [b*S, (b+1)*S + 2W).
-//
-// WHY ONE THREAD PER SOLVE, WITH SHARED MEMORY. The per-solve working set is the banded
-// matrix (N_blk, n_b+1) plus the right-hand side and the equilibration scales, 11*N_blk
-// floats = 792 bytes at n_phi = n = 2. That is past registers, and registers are not an
-// option anyway: N_blk is a runtime quantity (arbitrary knots, and zones within one
-// launch may differ), so the loops cannot be unrolled and a local array would spill.
-// Shared memory it is, with the THREAD INDEX FASTEST in every array, so that all lanes
-// of a warp touch distinct banks on every access -- conflict-free with no padding.
-//
-// S is chosen by the host from the shared-memory budget and must divide T. The shared
-// layout is sized by the LARGEST zone so that every block agrees on the offsets.
-//
-// Stage 1 reduces the zone's freq-ranges into shared Z, cooperatively. Doing it once per
-// block rather than once per thread is worth 8x in global loads: each thread would
-// otherwise read nfr*9*(2W+1) floats of its own.
-
-template<int NPHI>
-__global__ void __launch_bounds__(256)
-detrend_2d_solve_kernel(const float *gu, float *acoef, float *rmin_out,
-                        const int *zone_desc, const int *fr_desc,
-                        int nfrange, int nzone, int N_phi, int nbuf, int nphi_zone_max,
-                        int n_deg, int W, int T, float eta, float eps, TimeStencils tb)
-{
-    constexpr int NPAIR_F = (NPHI+1)*(NPHI+2)/2;
-    constexpr int NCOMP   = NPAIR_F + (NPHI+1);
-    const int NPAIR_T = (n_deg+1)*(n_deg+2)/2;
-    const int NB      = bandwidth(NPHI, n_deg);
-    const int NQ      = n_deg + 1;
-
-    const int S = blockDim.x;
-    const int tid = threadIdx.x;
-    const int b = blockIdx.x;
-    const int z = blockIdx.y;
-    const int m = blockIdx.z;
-
-    const int fr_lo   = zone_desc[4*z + 0];
-    const int fr_hi   = zone_desc[4*z + 1];
-    const int coef_lo = zone_desc[4*z + 2];
-    const int nphi_z  = zone_desc[4*z + 3];
-
-    const int nblk   = nphi_z * NQ;             // dimension of this zone's linear system
-    const int ncompz = nphi_z * (NPHI+2);       // banded G (n_phi+1 bands) plus U, per coefficient
-    const int nloc   = S + 2*W;                 // buffer samples this block needs
-
-    // Shared layout. Offsets use the LARGEST zone, not this block's, so that all blocks
-    // in the grid agree; a block whose zone is smaller simply under-uses its slice.
-    extern __shared__ float sh[];
-    const int nblk_max   = nphi_zone_max * NQ;
-    const int ncompz_max = nphi_zone_max * (NPHI+2);
-    float *A     = sh;                                  // A[(I*(NB+1)+B)*S + tid]
-    float *u     = A + long(nblk_max)*(NB+1)*S;         // u[I*S + tid]
-    float *rs    = u + long(nblk_max)*S;                // rs[I*S + tid]
-    float *Z     = rs + long(nblk_max)*S;               // Z[e*nloc + i]
-    float *Zlive = Z + long(ncompz_max)*nloc;           // Zlive[i]
-
-    // ---- Stage 1: reduce this zone's freq-ranges into Z, one buffer sample per thread.
-    //
-    // Thread i owns buffer sample b*S+i EXCLUSIVELY, so the scatter-add needs no atomics
-    // and no conflict resolution. nloc slightly exceeds S, so the loop is strided and the
-    // first 2W threads take a second sample.
-    for (int i = tid; i < nloc; i += S) {
-        const int s = b*S + i;
-
-        for (int e = 0; e < ncompz; e++)
-            Z[e*nloc + i] = 0.0f;
-
-        for (int fr = fr_lo; fr < fr_hi; fr++) {
-            const int j0 = fr_desc[4*fr + 2];
-            const int jb = j0 - NPHI - coef_lo;          // zone-local base coefficient
-            const float *g = gu + ((long(m)*nfrange + fr)*NCOMP)*nbuf + s;
-
-            // Enumerate the frequency pairs in the same order kernel 1 stored them.
-            int p = 0;
-            for (int a = 0; a <= NPHI; a++)
-                for (int c = a; c <= NPHI; c++, p++)
-                    Z[((jb+a)*(NPHI+1) + (c-a))*nloc + i] += g[long(p)*nbuf];
-            for (int a = 0; a <= NPHI; a++)
-                Z[(nphi_z*(NPHI+1) + jb + a)*nloc + i] += g[long(NPAIR_F+a)*nbuf];
-        }
-
-        // The rank test's per-offset bit. sum_j G_jj > 0 iff this zone holds at least one
-        // unmasked channel at this buffer sample: one unmasked channel contributes at
-        // least sum_j phi_j(f)^2 >= 1/(n_phi+1) to the diagonal sum, so there is no
-        // underflow-to-zero hazard in float32.
-        float live = 0.0f;
-        for (int j = 0; j < nphi_z; j++)
-            live += Z[(j*(NPHI+1))*nloc + i];
-        Zlive[i] = live;
-    }
-
-    __syncthreads();
-
-    // ---- Stage 2: one solve per thread, for output sample t = b*S + tid.
-    const int t = b*S + tid;
-
-    for (int k = 0; k < nblk*(NB+1); k++)
-        A[k*S + tid] = 0.0f;
-
-    // Window stencil + assembly, fused: the moment arrays M and V are never materialized.
-    for (int j = 0; j < nphi_z; j++) {
-
-        // --- the G entries of coefficient j: bands 0..n_phi, i.e. G_{j,j+bd}.
-        for (int bd = 0; bd <= NPHI; bd++) {
-            if (j + bd >= nphi_z)
-                continue;                       // no coupling across the zone boundary
-
-            const float *zz = Z + long((j*(NPHI+1) + bd))*nloc + tid;
-
-            // Fold the window by parity, with k on the OUTSIDE.  The natural order is k
-            // inner, with the folded halves precomputed into ev[W]/od[W] -- but those are
-            // register arrays sized by W, and they are the only thing in the whole kernel
-            // that would force W to be a compile-time constant.  This form needs two
-            // scalars per k instead, is register-cheaper, and accumulates each Mc[p] over
-            // k in exactly the same order, so it is bit-identical.
-            float Mc[MAX_NPAIR_T];
-            #pragma unroll
-            for (int p = 0; p < NPAIR_T; p++)
-                Mc[p] = tb.gs[p][0] * zz[W];
-
-            for (int k = 1; k <= W; k++) {
-                const float e = zz[W+k] + zz[W-k];
-                const float o = zz[W+k] - zz[W-k];
-                #pragma unroll
-                for (int p = 0; p < NPAIR_T; p++)
-                    Mc[p] += tb.gs[p][k] * ((tb.gpar[p] > 0.0f) ? e : o);
-            }
-
-            // Scatter into the banded matrix. Coefficient-major indexing I = j*(n+1)+q
-            // is load-bearing: it is what makes the assembled matrix banded with
-            // half-bandwidth NB. The other natural order, I = q*N_phi+j, has
-            // half-bandwidth n*N_phi + n_phi, which grows with N_phi and is effectively
-            // dense -- an O(N nb^2) factorization would silently become O(N^3).
-            #pragma unroll
-            for (int q = 0; q <= n_deg; q++) {
-                #pragma unroll
-                for (int r = 0; r <= n_deg; r++) {
-                    if ((bd == 0) && (r < q))
-                        continue;               // held by the (r,q) entry instead
-                    const int I = j*NQ + q;
-                    const int B = bd*NQ + (r - q);
-                    A[(I*(NB+1) + B)*S + tid] += Mc[pair_index(n_deg, q, r)];
-                }
-            }
-        }
-
-        // --- the regulator, eta * D_1 kron Theta.
-        //
-        // D_1 is the per-zone first-difference penalty; its null space is the zone's
-        // all-ones vector, which (because the basis is a partition of unity on each zone)
-        // IS the constant function, so a baseline constant in frequency is removed
-        // exactly at any eta. It is assembled per zone, never across a boundary: a
-        // difference penalty spanning two zones would couple them with weight 1 and drop
-        // the null space to a single global constant.
-        //
-        // Theta = I exactly, because the time basis is orthonormal -- so there is no
-        // Kronecker contraction here, only the q == r diagonal. The kernel implements
-        // ONLY the orthonormal basis; the reference's monomial option exists to
-        // cross-check assembly and costs up to 5x in conditioning at n = 2.
-        const float d0 = (nphi_z == 1) ? 0.0f : (((j == 0) || (j == nphi_z-1)) ? 1.0f : 2.0f);
-        const float d1 = (j < nphi_z-1) ? -1.0f : 0.0f;
-        #pragma unroll
-        for (int q = 0; q <= n_deg; q++) {
-            const int I = j*NQ + q;
-            A[(I*(NB+1) + 0)*S + tid] += eta * d0;
-            if (j+1 < nphi_z)
-                A[(I*(NB+1) + NQ)*S + tid] += eta * d1;
-        }
-
-        // --- the right-hand side.
-        {
-            const float *zz = Z + long(nphi_z*(NPHI+1) + j)*nloc + tid;
-            float Vc[MAX_NDEG+1];
-            #pragma unroll
-            for (int q = 0; q <= n_deg; q++)
-                Vc[q] = tb.us[q][0] * zz[W];
-
-            for (int k = 1; k <= W; k++) {
-                const float e = zz[W+k] + zz[W-k];
-                const float o = zz[W+k] - zz[W-k];
-                #pragma unroll
-                for (int q = 0; q <= n_deg; q++)
-                    Vc[q] += tb.us[q][k] * ((tb.upar[q] > 0.0f) ? e : o);
-            }
-            #pragma unroll
-            for (int q = 0; q <= n_deg; q++)
-                u[(j*NQ + q)*S + tid] = Vc[q];
-        }
-    }
-
-    // ---- Equilibrate to unit diagonal.
-    //
-    // Load-bearing twice over. It is what makes eps a scale-invariant threshold, so the
-    // masking decision does not depend on the units of the data. Less obviously it is
-    // also what makes the problem well conditioned at all: the raw matrix G + eta*D_1 has
-    // condition number O(h/eta) -- linear in the widest knot interval and inverse in eta,
-    // so order 1e5 at h = 3000, eta = 1e-3 -- and equilibration removes BOTH factors,
-    // since a coefficient with no data has diagonal eta*(D_1)_jj and one with data has
-    // diagonal O(h). Do not optimize it away, and do not threshold an un-equilibrated
-    // pivot.
-    for (int I = 0; I < nblk; I++) {
-        const float d = A[(I*(NB+1))*S + tid];
-        rs[I*S + tid] = (d > 0.0f) ? rn_rsqrt(d) : 1.0f;
-    }
-    for (int I = 0; I < nblk; I++) {
-        const float rI = rs[I*S + tid];
-        for (int B = 1; B <= NB; B++)
-            if (I+B < nblk)
-                A[(I*(NB+1) + B)*S + tid] *= rI * rs[(I+B)*S + tid];
-    }
-    for (int I = 0; I < nblk; I++) {
-        // Set the diagonal to exactly 1 (or 0 for a row with no data) rather than letting
-        // it come out 1 +- 2 ulp. r_min is then literally the smallest pivot.
-        const float d = A[(I*(NB+1))*S + tid];
-        A[(I*(NB+1))*S + tid] = (d > 0.0f) ? 1.0f : 0.0f;
-    }
-
-    // ---- Banded Cholesky, in place, recording the smallest pivot.
-    //
-    // The factor overwrites A in the "column band" convention LU[j][b] = L_{j+b,j}, which
-    // is what makes the factorization in-place: at step j we read A[j][0..NB] and write
-    // LU[j][0..NB] into the same slots, while every OTHER entry the step reads
-    // (LU[j-c][*]) belongs to an earlier column and is already final.
-    //
-    // A non-positive pivot can only arise in a zone with no unmasked channels. The guard
-    // is not paranoia: unguarded, a fully dead zone produces a negative pivot in every
-    // measured case, and the resulting NaN does not stay in its zone -- the banded write
-    // crosses into the next one, and 0/NaN = NaN. Zone decoupling is a property of the
-    // matrix, not of the factorization loop. Such a zone is masked out wholesale anyway
-    // (its r_min is 0), so the guard exists only to keep NaN and Inf away from the caller.
-    float rmin = 1.0f;
-    for (int j = 0; j < nblk; j++) {
-        float acc = A[(j*(NB+1))*S + tid];
-        const int cmax = min(NB, j);
-        for (int c = 1; c <= cmax; c++) {
-            const float v = A[((j-c)*(NB+1) + c)*S + tid];
-            acc -= v*v;
-        }
-
-        const bool good = (acc > 0.0f);
-        rmin = fminf(rmin, good ? acc : 0.0f);
-
-        const float diag = good ? __fsqrt_rn(acc) : 1.0f;
-        A[(j*(NB+1))*S + tid] = diag;
-        const float rdiag = __frcp_rn(diag);
-
-        const int bmax = min(NB, nblk-1-j);
-        for (int bb = 1; bb <= bmax; bb++) {
-            float acc2 = A[(j*(NB+1) + bb)*S + tid];
-            const int cm = min(NB-bb, j);
-            for (int c = 1; c <= cm; c++)
-                acc2 -= A[((j-c)*(NB+1) + c)*S + tid] * A[((j-c)*(NB+1) + bb+c)*S + tid];
-            A[(j*(NB+1) + bb)*S + tid] = good ? (acc2 * rdiag) : 0.0f;
-        }
-    }
-
-    // ---- The rank test, which generalizes the 1-d dead-zone test.
-    //
-    // At n = 0 "at least one unmasked channel" is exactly "live >= 1". At n > 0 a
-    // degree-n fit in time is singular unless the zone carries data at n+1 DISTINCT
-    // window offsets, whatever the channel count at those offsets, because a nonzero
-    // degree-n polynomial vanishing on every populated offset is a null direction of the
-    // whole assembled matrix. Structural and exact, and not inferrable from a pivot.
-    int live = 0;
-    for (int k = 0; k <= 2*W; k++)
-        live += (Zlive[tid + k] > 0.0f) ? 1 : 0;
-    if (live < n_deg+1)
-        rmin = 0.0f;
-
-    // ---- Solve, unscale, commit.
-    for (int I = 0; I < nblk; I++)
-        u[I*S + tid] *= rs[I*S + tid];
-
-    for (int j = 0; j < nblk; j++) {          // forward substitution, L y = b
-        float acc = u[j*S + tid];
-        const int cmax = min(NB, j);
-        for (int c = 1; c <= cmax; c++)
-            acc -= A[((j-c)*(NB+1) + c)*S + tid] * u[(j-c)*S + tid];
-        u[j*S + tid] = acc * __frcp_rn(A[(j*(NB+1))*S + tid]);
-    }
-    for (int j = nblk-1; j >= 0; j--) {       // backward substitution, L^T x = y
-        float acc = u[j*S + tid];
-        const int bmax = min(NB, nblk-1-j);
-        for (int bb = 1; bb <= bmax; bb++)
-            acc -= A[(j*(NB+1) + bb)*S + tid] * u[(j+bb)*S + tid];
-        u[j*S + tid] = acc * __frcp_rn(A[(j*(NB+1))*S + tid]);
-    }
-    for (int I = 0; I < nblk; I++)
-        u[I*S + tid] *= rs[I*S + tid];
-
-    // The committed baseline is sum_q alpha_jq p_q(0), NOT alpha_j0. Those coincide only
-    // for monomials, where p_q(0) = delta_q0; with an orthonormal basis every even q
-    // contributes. Getting it wrong is silent -- it still produces a plausible baseline,
-    // just the wrong one.
-    const bool bad = (rmin < eps);
-    for (int j = 0; j < nphi_z; j++) {
-        float a = 0.0f;
-        #pragma unroll
-        for (int q = 0; q <= n_deg; q++)
-            a += u[(j*NQ + q)*S + tid] * tb.eval0[q];
-        // A select, not a multiply: 'a' may be Inf or NaN in a zone that failed above.
-        acoef[(long(m)*N_phi + coef_lo + j)*T + t] = bad ? 0.0f : a;
-    }
-    rmin_out[(long(m)*nzone + z)*T + t] = rmin;
-}
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// Kernel 3: evaluate, subtract, expand the mask.
-//
-// Same block decomposition as kernel 1 -- the freq-range descriptors and basis tables are
-// reused verbatim -- but over the OUTPUT region only, buffer samples [W, W+T).
-//
-// The n_phi+1 coefficients and the zone's r_min are loaded ONCE per thread, not once per
-// channel: they depend on (j, t) and the freq-range fixes j. The channel loop is 3 FMA
-// against 10 bytes of DRAM traffic.
-//
-// Mask expansion is whole-zone-only, and a freq-range lies in exactly one zone, so
-// "expand" is the single '&& !bad' below. There is no connected-component chase through
-// G's zero pattern; that is what eta > 0 bought.
-//
-// PERFORMANCE, AND WHAT HAS ALREADY BEEN RULED OUT. This kernel is ~72% of the chunk and
-// sustains only 62% of peak DRAM bandwidth, against kernel 1's 92%, and it reads about
-// 250 MB more than it asks for (866 MB measured against 614 MB of useful traffic). The
-// one structural difference from kernel 1 is that this is a read+write stream where that
-// one is read-only, and ~62% is a plausible GDDR6 figure for a 1:1 mix. Three hypotheses
-// were tested and are NOT the answer -- do not spend time on them again:
-//
-//   - Load-to-store dependency stalling. The body reads and writes the same address, so
-//     each iteration carries a dependency. Unrolling 4x changed nothing.
-//   - Basis-table locality. The phi_tab broadcasts are 11.5 M sectors and a block streams
-//     ~480 KB, so the resident working set rivals the 96 MB L2. Staging the table into
-//     shared memory moved DRAM traffic by 0.2%. The tables hit L2 fine.
-//   - Sector misalignment. This one WAS real and is fixed above (tiling on the buffer
-//     index rather than the output index). It cut L1 sectors 12% and left DRAM unchanged.
-//
-// What remains untried is widening the per-thread access: 4 samples per thread would make
-// a warp write a full 128-byte line of mask instead of a 32-byte sector, which is the last
-// partial write in the kernel. It requires 4 | W, 4 | T and 4 | nbuf.
-
-template<int NPHI>
-__global__ void __launch_bounds__(PASS_THREADS)
-detrend_2d_subtract_kernel(float *data, unsigned char *mask,
-                           const float *acoef, const float *rmin,
-                           const float *phi_tab, const int *fr_desc,
-                           int nfreq, int N_phi, int nzone, int nbuf,
-                           int W, int T, int phi_stride, float eps)
-{
-    // TILED ON THE BUFFER INDEX, NOT THE OUTPUT INDEX, and this is worth 30% of the
-    // kernel's DRAM traffic.
-    //
-    // The output region starts at buffer sample W, so tiling on t would put every warp's
-    // base at (W + 32k) floats. DRAM granularity is a 32-byte sector, i.e. 8 floats, and
-    // a channel row is nbuf floats long; with nbuf = 2056 = 8 (mod 32) each row already
-    // starts on a sector boundary, so the only misalignment is the +W itself. At W = 4
-    // that is 16 bytes -- half a sector -- and every warp's 128-byte data access then
-    // straddles 5 sectors instead of 4 (+25%), while every 32-byte mask access straddles
-    // 2 instead of 1 (+100%). Measured: 863 MB of DRAM reads against 614 MB of useful
-    // traffic, and 62% of peak bandwidth against kernel 1's 92%.
-    //
-    // Tiling on the buffer index puts warp bases at multiples of 32 floats, which is
-    // sector-aligned for every channel, and the ends are predicated off instead. The
-    // cost is one extra block per (freq-range, beam) and a comparison.
-    const int bi = blockIdx.x*PASS_THREADS + threadIdx.x;   // buffer sample
-    const int fr = blockIdx.y;
-    const int m = blockIdx.z;
-
-    if ((bi < W) || (bi >= W + T))
-        return;
-    const int t = bi - W;                                   // output sample
-
-    const int c_lo = fr_desc[4*fr + 0];
-    const int c_hi = fr_desc[4*fr + 1];
-    const int j0   = fr_desc[4*fr + 2];
-    const int z    = fr_desc[4*fr + 3];
-
-    float a[NPHI+1];
-    #pragma unroll
-    for (int aa = 0; aa <= NPHI; aa++)
-        a[aa] = acoef[(long(m)*N_phi + j0 - NPHI + aa)*T + t];
-
-    // Kernel 2 already zeroed the coefficients of a flagged zone, so the model is zero
-    // there and the select below is belt and braces -- but the mask must be cleared here
-    // regardless, and that is what makes the zone actually disappear downstream.
-    const bool bad = (rmin[(long(m)*nzone + z)*T + t] < eps);
-
-    // Apply per-block and per-thread offsets to the full-resolution arrays.
-    //   before: shape (M, nfreq, nbuf), contiguous
-    //   after:  shape (nfreq,), stride nbuf, based at output sample t
-    data += (long(m)*nfreq)*nbuf + bi;
-    mask += (long(m)*nfreq)*nbuf + bi;
-
-    #pragma unroll 4
-    for (int f = c_lo; f < c_hi; f++) {
-        // Summed by an explicit loop in a fixed order, matching the reference: the
-        // grouping is part of the bit-identity contract, not an implementation detail.
-        float model = 0.0f;
-        #pragma unroll
-        for (int aa = 0; aa <= NPHI; aa++)
-            model += __ldg(phi_tab + long(f)*phi_stride + aa) * a[aa];
-
-        const float dv = data[long(f)*nbuf];
-        const bool keep = (mask[long(f)*nbuf] != 0) && !bad;
-
-        // SELECT, do not multiply. 'dv - model' IS computed at masked channels and may be
-        // NaN there; the select discards it. The arithmetic form mask*(d-model) would
-        // propagate the NaN, since 0*nan = nan.
-        data[long(f)*nbuf] = keep ? (dv - model) : 0.0f;
-        mask[long(f)*nbuf] = keep ? 1 : 0;
-    }
-}
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// Host code: knot vector, basis tables, freq-ranges, zones, time basis.
-
-
-// Exact blocks-per-SM for kernel 2, from the occupancy API rather than an estimate.
-//
-// Dividing the per-SM shared memory by the per-block request is off by one at the
-// boundary and ignores register pressure entirely. Measured on an L40S at 256 threads:
-// 49 KB per block gives 2 resident blocks and 50 KB gives 1, even though 2 x 50 KB is
-// exactly the 100 KB the device reports per SM -- there is about 1 KB of reserve, and
-// MaxSharedMemoryPerBlockOptin (99 KB) is the pool that actually predicts it. Rather than
-// encode that, ask CUDA.
-//
-// The MaxDynamicSharedMemorySize attribute must be raised BEFORE querying, or the API
-// reports 0 for any request above 48 KB.
-template<int NPHI>
-static int solve_blocks_per_sm_t(long threads, long shmem)
-{
-    int nb = 0;
-    CUDA_CALL(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &nb, detrend_2d_solve_kernel<NPHI>, int(threads), size_t(shmem)));
-    return nb;
-}
-
-template<int NPHI>
-static void solve_permit_shmem_t(long bytes)
-{
-    CUDA_CALL(cudaFuncSetAttribute(detrend_2d_solve_kernel<NPHI>,
-                                   cudaFuncAttributeMaxDynamicSharedMemorySize, int(bytes)));
-}
-
-static int solve_blocks_per_sm(long n_phi, long threads, long shmem)
-{
-    switch (n_phi) {
-        case 0: return solve_blocks_per_sm_t<0>(threads, shmem);
-        case 1: return solve_blocks_per_sm_t<1>(threads, shmem);
-        case 2: return solve_blocks_per_sm_t<2>(threads, shmem);
-        case 3: return solve_blocks_per_sm_t<3>(threads, shmem);
-    }
-    throw runtime_error("GpuDetrenderLps2d: internal error in solve_blocks_per_sm()");
-}
-
-static void solve_permit_shmem(long n_phi, long bytes)
-{
-    switch (n_phi) {
-        case 0: solve_permit_shmem_t<0>(bytes); return;
-        case 1: solve_permit_shmem_t<1>(bytes); return;
-        case 2: solve_permit_shmem_t<2>(bytes); return;
-        case 3: solve_permit_shmem_t<3>(bytes); return;
-    }
-    throw runtime_error("GpuDetrenderLps2d: internal error in solve_permit_shmem()");
-}
-
 
 // The compiled configurations. To add one: add a row here, and a line to the dispatch in
 // launch(). T is deliberately NOT part of a configuration -- it is a runtime kernel
-// argument (see the glossary at the top), so a caller may pick any chunk length without
+// argument (see detrender_kernels.hpp), so a caller may pick any chunk length without
 // a recompile, and test_gpu_kernel() uses a small one to keep its numpy oracle cheap.
 struct GpuDetrenderLps2dConfig { long n_phi; };
 
@@ -889,6 +177,17 @@ static void fill_stencils(TimeStencils &tb, const vector<double> &P, int n_deg, 
         tb.upar[q] = float(parity[q]);
         tb.eval0[q] = float(P[W*nq + q]);
     }
+}
+
+
+// Declared in detrender_kernels.hpp.
+TimeStencils make_time_stencils(long n, long W)
+{
+    vector<double> P;
+    build_time_basis(n, W, P);
+    TimeStencils tb{};
+    fill_stencils(tb, P, int(n), int(W));
+    return tb;
 }
 
 
@@ -1160,6 +459,19 @@ DetrenderLps2dParams DetrenderLps2dParams::from_yaml(const YamlFile &f)
 // -------------------------------------------------------------------------------------------------
 
 
+// One line per compiled n_phi; see detrender_2d_configs[] above.
+static long _choose_solve_threads(long n_phi, long T, long nblk_max, long NB, long ncompz_max, long W)
+{
+    switch (n_phi) {
+        case 0: return choose_solve_threads<0, FixedStrength>(T, nblk_max, NB, ncompz_max, W);
+        case 1: return choose_solve_threads<1, FixedStrength>(T, nblk_max, NB, ncompz_max, W);
+        case 2: return choose_solve_threads<2, FixedStrength>(T, nblk_max, NB, ncompz_max, W);
+        case 3: return choose_solve_threads<3, FixedStrength>(T, nblk_max, NB, ncompz_max, W);
+    }
+    throw runtime_error("GpuDetrenderLps2d: internal error in _choose_solve_threads()");
+}
+
+
 GpuDetrenderLps2d::GpuDetrenderLps2d(const DetrenderLps2dParams &params_) :
     params(params_), nbuf(params_.T + 2*params_.W)
 {
@@ -1216,13 +528,8 @@ GpuDetrenderLps2d::GpuDetrenderLps2d(const DetrenderLps2dParams &params_) :
         zone_of_coef[j] = z;
     }
 
-    // ---- Freq-range width, derived from the instance size (see above).
-    {
-        const long ntile = (nbuf + PASS_THREADS - 1) / PASS_THREADS;
-        channels_per_range = (nfreq * ntile) / CPR_TARGET_BLOCKS;
-        channels_per_range = max(channels_per_range, CPR_MIN);
-        channels_per_range = min(channels_per_range, CPR_MAX);
-    }
+    // ---- Freq-range width, derived from the instance size (see derive_channels_per_range()).
+    channels_per_range = derive_channels_per_range(nfreq, nbuf);
 
     // ---- Basis tables, built in float64 and cast, so that the working dtype affects the
     // arithmetic that uses the basis but not the basis itself.
@@ -1319,65 +626,48 @@ GpuDetrenderLps2d::GpuDetrenderLps2d(const DetrenderLps2dParams &params_) :
     }
     zone_desc = zone_host.to_gpu();
 
-    // ---- The time basis (compile-time in (n, W), so this runs once and never changes).
-    vector<double> P;
-    build_time_basis(n, W, P);
-    TimeStencils *tb = new TimeStencils;
-    fill_stencils(*tb, P, int(n), int(W));
-    tb_blob = tb;
+    // ---- The regulator table: D_1, the per-zone first-difference penalty, in the banded
+    // layout kernel 2 reads (see detrender_kernels.hpp); the kernel multiplies it by eta.
+    //
+    // D_1's null space is the zone's all-ones vector, which (because the basis is a
+    // partition of unity on each zone) IS the constant function, so a baseline constant
+    // in frequency is removed exactly at any eta. It is assembled per zone, never across
+    // a boundary: a difference penalty spanning two zones would couple them with weight 1
+    // and drop the null space to a single global constant. Only bands 0 and 1 are
+    // nonzero, hence nreg_bands = 2 in _launch().
+    {
+        const long nreg = reg_table_width(int(n_phi));
+        Array<float> reg_host({N_phi, nreg}, af_uhost | af_zero);
+        for (long z = 0; z < nzone; z++) {
+            const long clo = zone_host.data[4*z + 2];
+            const long nphi_z = zone_host.data[4*z + 3];
+            for (long j = 0; j < nphi_z; j++) {
+                const float d0 = (nphi_z == 1) ? 0.0f : (((j == 0) || (j == nphi_z-1)) ? 1.0f : 2.0f);
+                reg_host.data[(clo+j)*nreg + 0] = d0;
+                if (j+1 < nphi_z)
+                    reg_host.data[(clo+j)*nreg + 1] = -1.0f;
+            }
+        }
+        reg_tab = reg_host.to_gpu();
+    }
 
-    // ---- Kernel-2 block size. One thread per (beam, zone, output sample) solve, so the
-    // shared memory scales with the block, and the grid is T/solve_threads blocks -- hence
-    // solve_threads must divide T. Choose the largest that fits, since a larger block
-    // amortizes the stage-1 staging over more solves.
-    const long NB = ((n_phi > 1) ? n_phi : 1)*(n+1) + n;
+    // ---- The time basis (a function of (n, W) only, so this runs once and never changes).
+    tb_blob = new TimeStencils(make_time_stencils(n, W));
+
+    // ---- Kernel-2 block size, from the shared-memory budget (see choose_solve_threads()
+    // in detrender_kernels.hpp, which also raises this instantiation's dynamic
+    // shared-memory limit).
+    const long NB = bandwidth(int(n_phi), int(n));
     const long nblk_max = nphi_zone_max * (n+1);
     const long ncompz_max = nphi_zone_max * (n_phi+2);
 
-    int shmem_max = 0, max_threads_sm = 0;
-    CUDA_CALL(cudaDeviceGetAttribute(&shmem_max, cudaDevAttrMaxSharedMemoryPerBlockOptin, 0));
-    CUDA_CALL(cudaDeviceGetAttribute(&max_threads_sm, cudaDevAttrMaxThreadsPerMultiProcessor, 0));
-
-    // Raise the limit once, to the device maximum, so the occupancy queries below see the
-    // same permission every launch will. Idempotent across instances.
-    solve_permit_shmem(n_phi, shmem_max);
-
-    // MAXIMIZE THREADS PER SM, NOT THREADS PER BLOCK, and the difference is not academic.
-    // The obvious rule -- take the largest block that fits -- is actively wrong here,
-    // because shared memory per block is what caps blocks per SM. At the production
-    // configuration a 64-thread block needs 57.9 KB, and an SM has 100 KB, so exactly ONE
-    // block is resident: 64 threads. A 32-thread block needs 29.3 KB, so THREE are
-    // resident: 96 threads. Measured, the 32-thread choice runs kernel 2 in 112 us
-    // against 124 us, i.e. 10% faster, despite doing more work -- its stage-1 halo is
-    // amortized over half as many solves (40/32 against 72/64). Blocks per SM comes from
-    // the occupancy API, not arithmetic; see solve_blocks_per_sm().
-    //
-    // Ties go to the largest block, since that is the one with the least halo redundancy.
-    // Sub-warp blocks (16, 8) are allowed and are not a mistake: they waste most of a
-    // warp, but a large zone running at quarter-warp occupancy is very much better than a
-    // configuration the kernel refuses outright, and at 8 threads a zone of ~60 basis
-    // functions still fits -- more than anything random_knots can produce at n_phi = 3.
-    solve_threads = 0;
-    long best_threads_sm = -1;
-    for (long s: { 256L, 128L, 64L, 32L, 16L, 8L }) {
-        if (T % s != 0)
-            continue;
-        const long bytes = ((nblk_max*(NB+1) + 2*nblk_max)*s + ncompz_max*(s + 2*W) + (s + 2*W)) * 4;
-        if (bytes > shmem_max)
-            continue;
-        const long blocks = solve_blocks_per_sm(n_phi, s, bytes);
-        const long threads = min(blocks * s, long(max_threads_sm));
-        if (threads > best_threads_sm) {
-            best_threads_sm = threads;
-            solve_threads = s;
-        }
-    }
+    solve_threads = _choose_solve_threads(n_phi, T, nblk_max, NB, ncompz_max, W);
     if (solve_threads == 0) {
         stringstream ss;
         ss << "GpuDetrenderLps2d: the largest zone has " << nphi_zone_max << " basis functions,"
-           << " which needs more shared memory than this GPU offers (" << shmem_max
-           << " bytes) even at 8 threads per block. Use more zone boundaries, i.e."
-           << " interior knots of multiplicity n_phi+1, to split the frequency band.";
+           << " which needs more shared memory than this GPU offers even at 8 threads per"
+           << " block. Use more zone boundaries, i.e. interior knots of multiplicity"
+           << " n_phi+1, to split the frequency band.";
         throw runtime_error(ss.str());
     }
 
@@ -1399,7 +689,7 @@ GpuDetrenderLps2d::~GpuDetrenderLps2d()
 template<int NPHI>
 static void _launch(const GpuDetrenderLps2d &d, float *data, unsigned char *mask,
                     float *gu, float *acoef, float *rmin,
-                    const float *phi_tab, const float *prod_tab,
+                    const float *phi_tab, const float *prod_tab, const float *reg_tab,
                     const int *fr_desc, const int *zone_desc,
                     long nphi_zone_max, long solve_threads,
                     long phi_stride, long prod_stride, const void *tb_blob,
@@ -1418,7 +708,7 @@ static void _launch(const GpuDetrenderLps2d &d, float *data, unsigned char *mask
     // Kernel 1.
     {
         dim3 nblocks((nbuf + PASS_THREADS - 1)/PASS_THREADS, int(d.nfrange), M);
-        detrend_2d_accum_kernel<NPHI> <<< nblocks, PASS_THREADS, 0, stream >>>
+        detrend_2d_accum_kernel<NPHI, MaskedInput> <<< nblocks, PASS_THREADS, 0, stream >>>
             (data, mask, gu, phi_tab, prod_tab, fr_desc,
              int(d.params.nfreq), int(d.nfrange), nbuf, int(phi_stride), int(prod_stride));
         CUDA_PEEK("detrend_2d_accum_kernel");
@@ -1429,7 +719,7 @@ static void _launch(const GpuDetrenderLps2d &d, float *data, unsigned char *mask
     {
         const long nblk_max = long(nphi_zone_max)*(long(n_deg)+1);
         const long ncompz_max = long(nphi_zone_max)*(NPHI+2);
-        const long shmem = ((nblk_max*(NB+1) + 2*nblk_max)*S + ncompz_max*(S + 2*W) + (S + 2*W)) * 4;
+        const long shmem = solve_shmem_bytes(nblk_max, NB, ncompz_max, S, W, /*scaled=*/false);
 
         // No cudaFuncSetAttribute here: the constructor already raised the limit to the
         // device maximum, which is idempotent across instances and immune to the ordering
@@ -1437,8 +727,8 @@ static void _launch(const GpuDetrenderLps2d &d, float *data, unsigned char *mask
         // a limit an earlier instance with a big zone depends on).
 
         dim3 nblocks(int(T/S), int(d.nzone), M);
-        detrend_2d_solve_kernel<NPHI> <<< nblocks, S, size_t(shmem), stream >>>
-            (gu, acoef, rmin, zone_desc, fr_desc,
+        detrend_2d_solve_kernel<NPHI, FixedStrength> <<< nblocks, S, size_t(shmem), stream >>>
+            (gu, acoef, rmin, zone_desc, fr_desc, reg_tab, /*unit_coef=*/nullptr, /*nreg_bands=*/2,
              int(d.nfrange), int(d.nzone), int(d.N_phi), nbuf, int(nphi_zone_max),
              n_deg, W, T, float(d.params.eta), float(d.params.eps), tb);
         CUDA_PEEK("detrend_2d_solve_kernel");
@@ -1447,7 +737,7 @@ static void _launch(const GpuDetrenderLps2d &d, float *data, unsigned char *mask
     // Kernel 3.
     {
         dim3 nblocks((nbuf + PASS_THREADS - 1)/PASS_THREADS, int(d.nfrange), M);
-        detrend_2d_subtract_kernel<NPHI> <<< nblocks, PASS_THREADS, 0, stream >>>
+        detrend_2d_subtract_kernel<NPHI, MaskedInput> <<< nblocks, PASS_THREADS, 0, stream >>>
             (data, mask, acoef, rmin, phi_tab, fr_desc,
              int(d.params.nfreq), int(d.N_phi), int(d.nzone), nbuf, W, T, int(phi_stride),
              float(d.params.eps));
@@ -1469,7 +759,7 @@ void GpuDetrenderLps2d::launch(Array<float> &data, Array<unsigned char> &mask, c
     // One line per compiled n_phi; see detrender_2d_configs[] above.
     #define _DT2D_DISPATCH(P)                                                          \
         _launch<P> (*this, data.data, mask.data, gu.data, acoef.data, rmin.data,        \
-                    phi_tab.data, prod_tab.data, fr_desc.data, zone_desc.data,          \
+                    phi_tab.data, prod_tab.data, reg_tab.data, fr_desc.data, zone_desc.data, \
                     nphi_zone_max, solve_threads, phi_stride, prod_stride, tb_blob, stream)
 
     if (params.n_phi == 0)
