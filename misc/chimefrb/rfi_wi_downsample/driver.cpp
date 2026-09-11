@@ -26,48 +26,48 @@
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-	fprintf(stderr, "usage: driver <input.npy> <output.npy> Df=<int> Dt=<int>\n");
-	return 2;
+        fprintf(stderr, "usage: driver <input.npy> <output.npy> Df=<int> Dt=<int>\n");
+        return 2;
     }
 
     try {
-	npy::array<float> in = npy::read<float> (argv[1]);
-	npy::params p(argc, argv);
+        npy::array<float> in = npy::read<float> (argv[1]);
+        npy::params p(argc, argv);
 
-	long Df = p.get_long("Df", 1);
-	long Dt = p.get_long("Dt", 1);
+        long Df = p.get_long("Df", 1);
+        long Dt = p.get_long("Dt", 1);
 
-	if ((in.shape.size() != 3) || (in.shape[0] != 2)) {
-	    fprintf(stderr, "driver: expected a (2,F,T) input array\n");
-	    return 2;
-	}
+        if ((in.shape.size() != 3) || (in.shape[0] != 2)) {
+            fprintf(stderr, "driver: expected a (2,F,T) input array\n");
+            return 2;
+        }
 
-	size_t F = in.shape[1];
-	size_t T = in.shape[2];
+        size_t F = in.shape[1];
+        size_t T = in.shape[2];
 
-	if ((Df < 1) || (Dt < 1) || (F % Df) || (T % Dt)) {
-	    fprintf(stderr, "driver: bad (Df,Dt)=(%ld,%ld) for (F,T)=(%zu,%zu)\n", Df, Dt, F, T);
-	    return 2;
-	}
+        if ((Df < 1) || (Dt < 1) || (F % Df) || (T % Dt)) {
+            fprintf(stderr, "driver: bad (Df,Dt)=(%ld,%ld) for (F,T)=(%zu,%zu)\n", Df, Dt, F, T);
+            return 2;
+        }
 
-	size_t F_ds = F / Df;
-	size_t T_ds = T / Dt;
+        size_t F_ds = F / Df;
+        size_t T_ds = T / Dt;
 
-	std::vector<float> out(2 * F_ds * T_ds, 0.0);
+        std::vector<float> out(2 * F_ds * T_ds, 0.0);
 
-	rf_kernels::wi_downsampler ds(Df, Dt);
+        rf_kernels::wi_downsampler ds(Df, Dt);
 
-	ds.downsample(F_ds, T_ds,
-		      &out[0], T_ds,                 // out_i
-		      &out[F_ds*T_ds], T_ds,         // out_w
-		      &in.data[0], T,                // in_i
-		      &in.data[F*T], T);             // in_w
+        ds.downsample(F_ds, T_ds,
+                      &out[0], T_ds,                 // out_i
+                      &out[F_ds*T_ds], T_ds,         // out_w
+                      &in.data[0], T,                // in_i
+                      &in.data[F*T], T);             // in_w
 
-	npy::write<float> (argv[2], { 2, F_ds, T_ds }, &out[0]);
+        npy::write<float> (argv[2], { 2, F_ds, T_ds }, &out[0]);
     }
     catch (std::exception &e) {
-	fprintf(stderr, "driver: %s\n", e.what());
-	return 1;
+        fprintf(stderr, "driver: %s\n", e.what());
+        return 1;
     }
 
     return 0;

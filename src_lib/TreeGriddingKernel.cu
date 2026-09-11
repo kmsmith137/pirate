@@ -41,10 +41,10 @@ const TreeGriddingKernelParams &TreeGriddingKernelParams::validate() const
 
     // Check that channel_map values are in-range and monotonically decreasing.
     for (long i = 0; i <= nchan; i++) {
-	    double c = channel_map.data[i];
-	    xassert((c >= 0) && (c <= nfreq));
-	    if (i > 0)
-	        xassert(channel_map.data[i-1] > c);
+        double c = channel_map.data[i];
+        xassert((c >= 0) && (c <= nfreq));
+        if (i > 0)
+            xassert(channel_map.data[i-1] > c);
     }
     
     return *this;

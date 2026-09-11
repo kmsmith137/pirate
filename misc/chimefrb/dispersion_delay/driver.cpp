@@ -19,31 +19,31 @@
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-	fprintf(stderr, "usage: driver <input.npy> <output.npy>\n");
-	return 2;
+        fprintf(stderr, "usage: driver <input.npy> <output.npy>\n");
+        return 2;
     }
 
     try {
-	npy::array<double> in = npy::read<double> (argv[1]);
+        npy::array<double> in = npy::read<double> (argv[1]);
 
-	if ((in.shape.size() != 2) || (in.cols() != 2)) {
-	    fprintf(stderr, "driver: expected an (N,2) input array\n");
-	    return 2;
-	}
+        if ((in.shape.size() != 2) || (in.cols() != 2)) {
+            fprintf(stderr, "driver: expected an (N,2) input array\n");
+            return 2;
+        }
 
-	std::vector<double> out(in.rows());
+        std::vector<double> out(in.rows());
 
-	for (size_t i = 0; i < in.rows(); i++) {
-	    double dm = in.data[2*i];
-	    double freq_MHz = in.data[2*i + 1];
-	    out[i] = bonsai::dispersion_delay(dm, freq_MHz);
-	}
+        for (size_t i = 0; i < in.rows(); i++) {
+            double dm = in.data[2*i];
+            double freq_MHz = in.data[2*i + 1];
+            out[i] = bonsai::dispersion_delay(dm, freq_MHz);
+        }
 
-	npy::write<double> (argv[2], out);
+        npy::write<double> (argv[2], out);
     }
     catch (std::exception &e) {
-	fprintf(stderr, "driver: %s\n", e.what());
-	return 1;
+        fprintf(stderr, "driver: %s\n", e.what());
+        return 1;
     }
 
     return 0;

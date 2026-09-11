@@ -30,43 +30,43 @@
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-	fprintf(stderr, "usage: driver <input.npy> <output.npy> niter=<int>"
-		" iter_sigma=<float> two_pass=<0|1>\n");
-	return 2;
+        fprintf(stderr, "usage: driver <input.npy> <output.npy> niter=<int>"
+                " iter_sigma=<float> two_pass=<0|1>\n");
+        return 2;
     }
 
     try {
-	npy::array<float> in = npy::read<float> (argv[1]);
-	npy::params p(argc, argv);
+        npy::array<float> in = npy::read<float> (argv[1]);
+        npy::params p(argc, argv);
 
-	long niter = p.get_long("niter", 1);
-	double iter_sigma = p.get_double("iter_sigma", 0.0);
-	bool two_pass = (p.get_long("two_pass", 1) != 0);
+        long niter = p.get_long("niter", 1);
+        double iter_sigma = p.get_double("iter_sigma", 0.0);
+        bool two_pass = (p.get_long("two_pass", 1) != 0);
 
-	if ((in.shape.size() != 3) || (in.shape[0] != 2)) {
-	    fprintf(stderr, "driver: expected a (2,R,L) input array\n");
-	    return 2;
-	}
+        if ((in.shape.size() != 3) || (in.shape[0] != 2)) {
+            fprintf(stderr, "driver: expected a (2,R,L) input array\n");
+            return 2;
+        }
 
-	size_t R = in.shape[1];
-	size_t L = in.shape[2];
+        size_t R = in.shape[1];
+        size_t L = in.shape[2];
 
-	rf_kernels::weighted_mean_rms wrms(R, L, rf_kernels::AXIS_TIME, 1, 1,
-					   niter, iter_sigma, two_pass);
+        rf_kernels::weighted_mean_rms wrms(R, L, rf_kernels::AXIS_TIME, 1, 1,
+                                           niter, iter_sigma, two_pass);
 
-	wrms.compute_wrms(&in.data[0], L, &in.data[R*L], L);
+        wrms.compute_wrms(&in.data[0], L, &in.data[R*L], L);
 
-	std::vector<float> out(2 * R);
-	for (size_t r = 0; r < R; r++) {
-	    out[r] = wrms.out_mean[r];
-	    out[R + r] = wrms.out_rms[r];
-	}
+        std::vector<float> out(2 * R);
+        for (size_t r = 0; r < R; r++) {
+            out[r] = wrms.out_mean[r];
+            out[R + r] = wrms.out_rms[r];
+        }
 
-	npy::write<float> (argv[2], { 2, R }, &out[0]);
+        npy::write<float> (argv[2], { 2, R }, &out[0]);
     }
     catch (std::exception &e) {
-	fprintf(stderr, "driver: %s\n", e.what());
-	return 1;
+        fprintf(stderr, "driver: %s\n", e.what());
+        return 1;
     }
 
     return 0;

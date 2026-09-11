@@ -22,45 +22,45 @@
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-	fprintf(stderr, "usage: driver <input.npy> <output.npy>\n");
-	return 2;
+        fprintf(stderr, "usage: driver <input.npy> <output.npy>\n");
+        return 2;
     }
 
     try {
-	npy::array<float> in = npy::read<float> (argv[1]);
+        npy::array<float> in = npy::read<float> (argv[1]);
 
-	if (in.shape.size() != 2) {
-	    fprintf(stderr, "driver: expected a 2-d (nfreq, nt) input array\n");
-	    return 2;
-	}
+        if (in.shape.size() != 2) {
+            fprintf(stderr, "driver: expected a 2-d (nfreq, nt) input array\n");
+            return 2;
+        }
 
-	int nfreq = int(in.rows());
-	int nt = int(in.cols());
+        int nfreq = int(in.rows());
+        int nt = int(in.cols());
 
-	if ((nt % 8) != 0) {
-	    fprintf(stderr, "driver: nt must be a multiple of 8\n");
-	    return 2;
-	}
+        if ((nt % 8) != 0) {
+            fprintf(stderr, "driver: nt must be a multiple of 8\n");
+            return 2;
+        }
 
-	std::vector<uint8_t> out(size_t(nfreq) * (nt/8), 0);
+        std::vector<uint8_t> out(size_t(nfreq) * (nt/8), 0);
 
-	rf_kernels::mask_counter_data d;
-	d.nfreq = nfreq;
-	d.nt_chunk = nt;
-	d.in = in.data.data();
-	d.istride = nt;
-	d.out_bitmask = out.data();
-	d.out_bmstride = nt/8;
+        rf_kernels::mask_counter_data d;
+        d.nfreq = nfreq;
+        d.nt_chunk = nt;
+        d.in = in.data.data();
+        d.istride = nt;
+        d.out_bitmask = out.data();
+        d.out_bmstride = nt/8;
 
-	// Use the reference kernel, not the AVX2 one: rf_kernels' own test checks the two
-	// against each other, and the reference is the readable statement of the format.
-	d.slow_reference_mask_count();
+        // Use the reference kernel, not the AVX2 one: rf_kernels' own test checks the two
+        // against each other, and the reference is the readable statement of the format.
+        d.slow_reference_mask_count();
 
-	npy::write<uint8_t> (argv[2], { size_t(nfreq), size_t(nt/8) }, out.data());
+        npy::write<uint8_t> (argv[2], { size_t(nfreq), size_t(nt/8) }, out.data());
     }
     catch (std::exception &e) {
-	fprintf(stderr, "driver: %s\n", e.what());
-	return 1;
+        fprintf(stderr, "driver: %s\n", e.what());
+        return 1;
     }
 
     return 0;
