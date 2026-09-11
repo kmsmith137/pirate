@@ -751,12 +751,13 @@ _SECTIONS = ('config', 'reg', 'varmap', 'dt', 'cfrb')
 
 def _sec_chimefrb(rep, ndraw):
     from ..chimefrb import test_wi_downsampler as wd
+    from ..chimefrb.testutils import default_rng
 
     rep.section('chimefrb.test_wi_downsampler randomization',
                 subtitle=f'{ndraw} draws of random_config() + random_geometry() + random_arrays()',
                 consumer='test --cfrb: GpuWiDownsampler against ReferenceWiDownsampler')
 
-    rng = np.random.default_rng()
+    rng = default_rng()
     production, transposed, strided = 0, 0, 0
     any_masked, all_masked, none_masked = 0, 0, 0
     masked_frac = []

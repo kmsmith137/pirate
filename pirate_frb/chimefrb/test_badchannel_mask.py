@@ -18,6 +18,7 @@ import numpy as np
 from . import GpuBadChannelMask, ReferenceBadChannelMask, badchannel_keep
 from .ReferenceBadChannelMask import FUDGE
 from ..utils import atomic_print
+from .testutils import default_rng as _default_rng
 
 
 # The production config's mask ranges, in MHz: the badchannel_mask node of
@@ -420,7 +421,7 @@ def test_badchannel_mask(iteration=0, rng=None, verbose=False):
             atomic_print('    test_badchannel_mask: cupy not available, skipped')
         return
 
-    rng = np.random.default_rng() if (rng is None) else rng
+    rng = _default_rng(rng)
 
     _check_kernel(cp, rng, verbose)
     _check_keep(rng, verbose)

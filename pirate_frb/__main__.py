@@ -81,10 +81,11 @@ def seed_rngs(seed):
 
     NOTHING DRAWS FROM A FOURTH, UNSEEDED STREAM, and that is a rule rather than an accident.
     A numpy Generator (np.random.default_rng) built with no argument seeds itself from OS
-    entropy and is therefore outside all of this; the suites that want one -- varmap and the
-    three detrending packages -- derive its seed from the global RandomState above, so
-    successive calls still differ while the run as a whole replays. See varmap/tests.py's
-    _rng() and detrending.testutils.default_rng(), which the three detrending suites share.
+    entropy and is therefore outside all of this; the suites that want one -- varmap, the
+    three detrending packages and the chimefrb port -- derive its seed from the global
+    RandomState above, so successive calls still differ while the run as a whole replays.
+    See varmap/tests.py's _rng(), detrending.testutils.default_rng() (shared by the three
+    detrending suites) and chimefrb.testutils.default_rng().
 
     SEEDED ONCE PER PROCESS, NOT PER TEST, and that is the point: iteration i of the 'test
     -n' loop draws different values from iteration j (so a long run explores the parameter

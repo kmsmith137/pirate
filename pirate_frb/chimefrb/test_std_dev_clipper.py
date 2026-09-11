@@ -143,6 +143,7 @@ from .ReferenceStdDevClipper import clip_1d as _clip_1d, std_dev_apply
 from . import (ClipperAxis, GpuStdDevClipper, GpuWiDownsampler, GpuWrms,
                ReferenceStdDevClipper)
 from ..utils import atomic_print
+from .testutils import default_rng as _default_rng
 
 
 WARP_COUNTS = [4, 8, 16, 32]
@@ -318,7 +319,7 @@ def test_std_dev_clipper(iteration=0, rng=None, verbose=False):
             atomic_print('    test_std_dev_clipper: cupy not available, skipped')
         return
 
-    rng = np.random.default_rng() if (rng is None) else rng
+    rng = _default_rng(rng)
 
     (axis, Df, Dt, sigma, two_pass, warps) = random_config(rng)
     (B, F, T) = random_geometry(rng, axis, Df, Dt)

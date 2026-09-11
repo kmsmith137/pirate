@@ -412,6 +412,7 @@ PYFILES = \
   pirate_frb/chimefrb/test_std_dev_clipper.py \
   pirate_frb/chimefrb/test_wi_downsampler.py \
   pirate_frb/chimefrb/test_wrms.py \
+  pirate_frb/chimefrb/testutils.py \
   pirate_frb/casm/__init__.py \
   pirate_frb/casm/CasmBeamformer.py \
   pirate_frb/casm/CasmReferenceBeamformer.py \

@@ -52,6 +52,7 @@ import numpy as np
 
 from . import GpuWrms, ReferenceWrms, wrms_iterate, iclip
 from ..utils import atomic_print
+from .testutils import default_rng as _default_rng
 
 
 THREAD_COUNTS = [128, 256, 512, 1024]
@@ -250,7 +251,7 @@ def test_wrms(iteration=0, rng=None, verbose=False):
             atomic_print('    test_wrms: cupy not available, skipped')
         return
 
-    rng = np.random.default_rng() if (rng is None) else rng
+    rng = _default_rng(rng)
 
     (L, R, niter, iter_sigma, two_pass, tpb) = random_config(rng)
     (in_i, in_w) = random_arrays(rng, R, L)

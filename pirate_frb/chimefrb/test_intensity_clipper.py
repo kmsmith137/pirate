@@ -36,6 +36,7 @@ from . import (AXIS_FREQ, AXIS_TIME, AXIS_NONE, ClipperAxis, GpuIntensityClipper
                GpuWiDownsampler, GpuWrms, ReferenceIntensityClipper, intensity_clip)
 from .test_wrms import EPS32, MARGIN
 from ..utils import atomic_print
+from .testutils import default_rng as _default_rng
 
 
 WARP_COUNTS = [4, 8, 16, 32]
@@ -300,7 +301,7 @@ def test_intensity_clipper(iteration=0, rng=None, verbose=False):
             atomic_print('    test_intensity_clipper: cupy not available, skipped')
         return
 
-    rng = np.random.default_rng() if (rng is None) else rng
+    rng = _default_rng(rng)
 
     (axis, Df, Dt, niter, sigma, iter_sigma, two_pass, warps) = random_config(rng)
     (B, F, T) = random_geometry(rng, axis, Df, Dt)

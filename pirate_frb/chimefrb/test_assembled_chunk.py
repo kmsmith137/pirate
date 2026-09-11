@@ -19,6 +19,7 @@ import numpy as np
 
 from . import AssembledChunk
 from ..utils import atomic_print
+from .testutils import default_rng as _default_rng
 
 
 # The format's fixed header string, and the only version we generate or accept.
@@ -495,7 +496,7 @@ def test_parse(chunk=None, rng=None):
     if chunk is None:
         chunk = make_random_chunk()
     if rng is None:
-        rng = np.random.default_rng(np.random.randint(1 << 30))
+        rng = _default_rng()
 
     with TempChunkFile(chunk.to_msgpack(rng=rng)) as fn:
         c = AssembledChunk.from_msgpack(fn)
@@ -572,7 +573,7 @@ def test_rejections():
     be worse than a crash, so each case asserts that an exception is raised."""
 
     chunk = make_random_chunk()
-    rng = np.random.default_rng(np.random.randint(1 << 30))
+    rng = _default_rng()
 
     def expect_raise(payload, what):
         with TempChunkFile(payload) as fn:

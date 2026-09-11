@@ -18,6 +18,7 @@ import numpy as np
 
 from . import GpuWiDownsampler, ReferenceWiDownsampler
 from ..utils import atomic_print
+from .testutils import default_rng as _default_rng
 
 
 # The (Df, Dt, transpose) configurations used by the old search's production RFI config.
@@ -116,7 +117,7 @@ def test_wi_downsampler(iteration=0, rng=None, verbose=False):
             atomic_print('    test_wi_downsampler: cupy not available, skipped')
         return
 
-    rng = np.random.default_rng() if (rng is None) else rng
+    rng = _default_rng(rng)
 
     (Df, Dt, transpose) = random_config(rng)
     W = WARP_COUNTS[rng.integers(len(WARP_COUNTS))]
