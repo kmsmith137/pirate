@@ -7,6 +7,7 @@
 //   - GpuWiDownsampler: launch() converts stream=None to the current cupy stream
 //   - GpuWrms: same, and lets the caller omit the scratch array
 //   - GpuIntensityClipper: same
+//   - GpuSplineDetrender: same
 //   - GpuStdDevClipper: same
 //   - GpuBadChannelMask: __init__ also takes bool/integer arrays; from_mask_ranges() factory;
 //     launch() converts stream=None
@@ -25,6 +26,7 @@
 #include "../include/pirate/chimefrb/ClipperAxis.hpp"
 #include "../include/pirate/chimefrb/ClipperBase.hpp"
 #include "../include/pirate/chimefrb/IntensityClipper.hpp"
+#include "../include/pirate/chimefrb/SplineDetrender.hpp"
 #include "../include/pirate/chimefrb/StdDevClipper.hpp"
 #include "../include/pirate/chimefrb/WiDownsampler.hpp"
 #include "../include/pirate/chimefrb/Wrms.hpp"
@@ -342,6 +344,86 @@ void register_chimefrb_bindings(pybind11::module &m)
             "    in_i: shape (R, L). Intensity. Read only.\n"
             "    in_w: shape (R, L). Weights, which must be >= 0. Read only.\n"
             "    scratch: shape (scratch_nelts(R),), or empty when that is zero.\n"
+            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
+        ;
+
+    // GpuSplineDetrender: Python injections in pirate_frb/chimefrb/ReferenceSplineDetrender.py:
+    // launch() converts stream=None to the current cupy stream.
+    py::class_<GpuSplineDetrender>(m, "GpuSplineDetrender",
+        "A port of rf_kernels::spline_detrender, the frequency-direction detrender of the\n"
+        "old CHIME FRB search's RFI chain.\n"
+        "\n"
+        "Per (beam, time sample), independently: fit a piecewise-cubic spline in frequency\n"
+        "-- ``nbins`` equal bins, C^1 at the bin edges, 2*(nbins+1) coefficients -- to the\n"
+        "intensity by weighted least squares, and subtract it from every channel. The fit\n"
+        "is regularized by ``epsilon * (sum of weights) / nbins`` times the integrated\n"
+        "squared slope, so a constant baseline is removed exactly and the penalty weakens\n"
+        "with the sample's total weight. Weights are real-valued and nonnegative ({0,1} at\n"
+        "full resolution, integer counts after downsampling, in the production chain), and\n"
+        "are read but never modified. A sample whose weights are all zero is left untouched.\n"
+        "\n"
+        "This reproduces the old code's ESTIMATOR, including its bin geometry to the\n"
+        "fraction of a channel, but not its arithmetic: the solve is equilibrated, and a\n"
+        "zero-weight channel contributes exactly zero even if its intensity is NaN. There\n"
+        "is no mask expansion and no conditioning statistic. Validated against\n"
+        ":class:`ReferenceSplineDetrender`, a transcription of the old code's own reference;\n"
+        "the GPU kernels are those of :class:`pirate_frb.kernels.GpuDetrenderLps2d`,\n"
+        "instantiated with the Hermite basis.\n"
+        "\n"
+        "Attributes (read-only):\n"
+        "\n"
+        "- ``nfreq``, ``nbins``, ``epsilon``, ``M``, ``T`` -- the constructor arguments.\n"
+        "- ``N_phi`` (int) -- number of spline coefficients, 2*(nbins+1).\n"
+        "- ``nfrange``, ``channels_per_range``, ``solve_threads`` -- launch geometry, derived\n"
+        "  in the constructor; of interest to timing runs only.\n")
+
+        .def(py::init<long, long, double, long, long>(),
+            py::arg("nfreq"), py::arg("nbins"), py::arg("epsilon"), py::arg("M"), py::arg("T"),
+            "Create a GpuSplineDetrender.\n"
+            "\n"
+            "Args:\n"
+            "    nfreq: frequency channels.\n"
+            "    nbins: equal bins; the spline is C^1 across bin edges.\n"
+            "    epsilon: regularization strength (the production chain uses 3e-4).\n"
+            "    M: beams per launch.\n"
+            "    T: time samples per launch; a positive multiple of 32.\n"
+            "\n"
+            "Raises:\n"
+            "    RuntimeError: on nbins < 1, nfreq < nbins, epsilon <= 0, M < 1, or T not a\n"
+            "        positive multiple of 32.")
+
+        .def_readonly("nfreq", &GpuSplineDetrender::nfreq)
+        .def_readonly("nbins", &GpuSplineDetrender::nbins)
+        .def_readonly("epsilon", &GpuSplineDetrender::epsilon)
+        .def_readonly("M", &GpuSplineDetrender::M)
+        .def_readonly("T", &GpuSplineDetrender::T)
+        .def_readonly("N_phi", &GpuSplineDetrender::N_phi)
+        .def_readonly("nfrange", &GpuSplineDetrender::nfrange)
+        .def_readonly("channels_per_range", &GpuSplineDetrender::channels_per_range)
+        .def_readonly("solve_threads", &GpuSplineDetrender::solve_threads)
+
+        .def("bin_edges", &GpuSplineDetrender::bin_edges,
+            "The bin edges as channel indices, length nbins+1, running from 0 to nfreq.")
+
+        .def_static("time_selected", &GpuSplineDetrender::time_selected,
+            py::call_guard<py::gil_scoped_release>(),
+            "Run timing benchmarks at the two shapes the old search's production RFI chain\n"
+            "uses this detrender at (called via 'python -m pirate_frb time --cfrb')")
+
+        .def("launch",
+            [](const GpuSplineDetrender &self, Array<float> &intensity,
+               const Array<float> &weights, uintptr_t stream_ptr) {
+                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                self.launch(intensity, weights, stream);
+            },
+            py::arg("intensity"), py::arg("weights"), py::arg("stream_ptr"),
+            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+            "GPU kernel launch (async, does not sync stream).\n"
+            "\n"
+            "Args:\n"
+            "    intensity: shape (M, nfreq, T), cupy float32, fully contiguous, on GPU. The\n"
+            "        fitted baseline is subtracted in place at every channel.\n"
+            "    weights: same shape and dtype. Must be >= 0 (not checked). Read only.\n"
             "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 

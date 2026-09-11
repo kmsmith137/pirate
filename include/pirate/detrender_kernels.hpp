@@ -2,9 +2,10 @@
 #define _PIRATE_DETRENDER_KERNELS_HPP
 
 // The cuda kernels of the 2-d spline detrender, and the host helpers that size their
-// launches. Shared by GpuDetrenderLps2d (src_lib/DetrenderLps2d.cu) and by any other
-// class that wants the same three-kernel pipeline with a different basis, weight
-// convention or regulator; the two policy structs below are the knobs.
+// launches. Shared by GpuDetrenderLps2d (src_lib/DetrenderLps2d.cu) and by
+// pirate::chimefrb::GpuSplineDetrender (src_lib/chimefrb/SplineDetrender.cu), which drives
+// the same three-kernel pipeline with a different basis, weight convention and regulator;
+// the two policy structs below are the knobs.
 //
 // This header is DEVICE code and is included from .cu files only. Detrender.hpp, the
 // public header, deliberately knows nothing about it.
@@ -187,9 +188,11 @@ TimeStencils make_time_stencils(long n, long W);
 //
 // load(): from the second array's element and the datum, produce the weight w and the
 // weighted datum wd that kernel 1 accumulates. store(): what kernel 3 writes back, given
-// the datum, the fitted model, and whether kernel 2 flagged the zone. Static member
-// functions rather than lambdas, so that the header can be instantiated from more than
-// one .cu file (notes/cpp.md).
+// the datum, the fitted model, and whether kernel 2 flagged the zone. weight_t is the
+// element type of the second array; out_weight_t is the type kernel 3 points at it with,
+// writable for a mask that gets expanded and const for weights that are never touched.
+// Static member functions rather than lambdas, so that the header can be instantiated
+// from more than one .cu file (notes/cpp.md).
 
 // A uint8 mask, {0,1}-valued. Masked samples are SELECTED away, never multiplied, and
 // kernel 3 writes a zero residual and clears the mask wherever the sample is masked or
@@ -197,6 +200,7 @@ TimeStencils make_time_stencils(long n, long W);
 struct MaskedInput
 {
     using weight_t = unsigned char;
+    using out_weight_t = unsigned char;
 
     static __device__ __forceinline__ void load(unsigned char m, float d, float &w, float &wd)
     {
@@ -218,14 +222,14 @@ struct MaskedInput
 
 // Real-valued nonnegative weights, as the chimefrb pipeline carries them. The fit is
 // weighted least squares; kernel 3 subtracts the model at EVERY channel and never writes
-// the weight array. Nothing instantiates this yet; it exists so that the kernels' shape
-// is fixed before a second user arrives.
+// the weight array. This is the pirate::chimefrb::GpuSplineDetrender convention.
 //
 // The select on wt != 0 is deliberate: a plain wt*d would let a NaN at a zero-weight
 // channel poison the whole time sample.
 struct WeightedInput
 {
     using weight_t = float;
+    using out_weight_t = const float;
 
     static __device__ __forceinline__ void load(float wt, float d, float &w, float &wd)
     {
@@ -233,7 +237,7 @@ struct WeightedInput
         wd = (wt != 0.0f) ? wt*d : 0.0f;
     }
 
-    static __device__ __forceinline__ void store(float *data, float *, float dv, float model, bool)
+    static __device__ __forceinline__ void store(float *data, const float *, float dv, float model, bool)
     {
         *data = dv - model;
     }
@@ -243,7 +247,7 @@ struct WeightedInput
 // Regulator-strength policies (kernel 2). With FixedStrength the regulator is
 // reg_strength * R. With WeightScaledStrength it is (reg_strength * W_tot[t]) * R, where
 // W_tot[t] is the total weight of the window-centre sample, and kernel 2 computes W_tot
-// from the Gram matrix already in shared memory. Nothing instantiates the latter yet.
+// from the Gram matrix already in shared memory.
 struct FixedStrength        { static constexpr bool scaled = false; };
 struct WeightScaledStrength { static constexpr bool scaled = true;  };
 
@@ -727,7 +731,7 @@ detrend_2d_solve_kernel(const float *gu, float *acoef, float *rmin_out,
 
 template<int NPHI, class In>
 __global__ void __launch_bounds__(PASS_THREADS)
-detrend_2d_subtract_kernel(float *data, typename In::weight_t *wt,
+detrend_2d_subtract_kernel(float *data, typename In::out_weight_t *wt,
                            const float *acoef, const float *rmin,
                            const float *phi_tab, const int *fr_desc,
                            int nfreq, int N_phi, int nzone, int nbuf,
@@ -902,9 +906,11 @@ static void solve_permit_shmem(long bytes)
 template<int NPHI, class Reg>
 static long choose_solve_threads(long T, long nblk_max, long NB, long ncompz_max, long W)
 {
-    int shmem_max = 0, max_threads_sm = 0;
-    CUDA_CALL(cudaDeviceGetAttribute(&shmem_max, cudaDevAttrMaxSharedMemoryPerBlockOptin, 0));
-    CUDA_CALL(cudaDeviceGetAttribute(&max_threads_sm, cudaDevAttrMaxThreadsPerMultiProcessor, 0));
+    // The device the kernels will run on: the caller's current device, not device 0.
+    int dev = 0, shmem_max = 0, max_threads_sm = 0;
+    CUDA_CALL(cudaGetDevice(&dev));
+    CUDA_CALL(cudaDeviceGetAttribute(&shmem_max, cudaDevAttrMaxSharedMemoryPerBlockOptin, dev));
+    CUDA_CALL(cudaDeviceGetAttribute(&max_threads_sm, cudaDevAttrMaxThreadsPerMultiProcessor, dev));
 
     solve_permit_shmem<NPHI, Reg>(shmem_max);
 

@@ -1061,6 +1061,57 @@ def _sec_chimefrb(rep, ndraw):
     rep.rate('skipped, near a fudge boundary', near, ndraw, (0, 1),
              'must essentially never happen: such draws are not compared')
 
+    # ---- GpuSplineDetrender
+
+    from ..chimefrb import test_spline_detrender as spd
+    from ..chimefrb.ReferenceSplineDetrender import bin_edges
+
+    rep.section('chimefrb.test_spline_detrender randomization',
+                subtitle=f'{ndraw} draws of random_config() + random_weights() (8 columns each)',
+                consumer='test --cfrb: GpuSplineDetrender against ReferenceSplineDetrender')
+
+    rng = default_rng()
+    production, big, ncols = 0, 0, 0
+    zero, single, dead_bin, nonbinary, full = 0, 0, 0, 0, 0
+
+    for _ in range(ndraw):
+        (nfreq, nbins, epsilon, kind) = spd.random_config(rng)
+        production += (nfreq, nbins, epsilon, kind) in spd.PRODUCTION_CONFIGS
+        big += (nfreq >= 4096)
+
+        # Eight columns per draw, not a full (M, T) geometry: the column patterns are
+        # what matters here, and a 16384-channel draw at T = 128 would dominate the run.
+        w = spd.random_weights(rng, 1, nfreq, nbins, 8, kind)[0]
+        edges = bin_edges(nfreq, nbins)
+        for t in range(w.shape[1]):
+            c = w[:, t]
+            nz = int(np.count_nonzero(c))
+            ncols += 1
+            zero += (nz == 0)
+            single += (nz == 1)
+            full += (nz == nfreq)
+            nonbinary += bool(np.any((c != 0) & (c != 1)))
+            dead_bin += (nz > 0) and any(not np.any(c[edges[b]:edges[b+1]]) for b in range(nbins))
+
+    rep.rate('config drawn from the production two', production, ndraw, (25, 50),
+             'spends iterations at the shapes the port will run at')
+    rep.rate('nfreq >= 4096', big, ndraw, (30, 60),
+             'full-band scale: freq-ranges of hundreds of channels, the longest accumulations')
+
+    # The column patterns, each of which is a code path or a structural check in
+    # test_spline_detrender(); a row collapsing to zero means that check has gone vacuous.
+    rep.rate('column: all weights zero', zero, ncols, (2, 12),
+             'test_spline_detrender: the untouched-sample path')
+    rep.rate('column: exactly one nonzero weight', single, ncols, (1, 10),
+             'the fit passes through one point; the regulator sets everything else')
+    rep.rate('column: a whole bin with no weight (and not all zero)', dead_bin, ncols, (10, 45),
+             'coefficients set by the regulator alone -- a bad-channel run covering a bin')
+    rep.rate('column: non-binary weights', nonbinary, ncols, (30, 65),
+             'the weighted fit: counts and continuous weights, not a mask')
+    rep.rate('column: fully valid', full, ncols, (8, 35),
+             'the ordinary case, which must stay common')
+
+
 def report_coverage(select=(), scale=1.0):
     """Print the coverage report. 'select' is a subset of _SECTIONS (empty = all).
 

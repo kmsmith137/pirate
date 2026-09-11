@@ -11,6 +11,7 @@ subpackage follows, and for how it is spot-checked against the original code.
 | [`GpuBadChannelMask`](GpuBadChannelMask.md) | Zeroes the weights of whole frequency channels (a port of `rf_pipelines::badchannel_mask`) |
 | [`GpuClipperBase`](GpuClipperBase.md) | What the chimefrb RFI clippers share: geometry, the per-row statistic, argument checking |
 | [`GpuStdDevClipper`](GpuStdDevClipper.md) | Zeroes channels or time samples whose variance is an outlier (a port of `rf_kernels::std_dev_clipper`) |
+| [`GpuSplineDetrender`](GpuSplineDetrender.md) | Fits and subtracts a regularized cubic spline in frequency, per time sample (a port of `rf_kernels::spline_detrender`) |
 
 ```{toctree}
 :hidden:
@@ -19,5 +20,6 @@ subpackage follows, and for how it is spot-checked against the original code.
 AssembledChunk
 GpuBadChannelMask
 GpuClipperBase
+GpuSplineDetrender
 GpuStdDevClipper
 ```

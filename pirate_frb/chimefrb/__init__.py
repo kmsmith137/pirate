@@ -19,3 +19,4 @@ from .ReferenceIntensityClipper import (AXIS_FREQ, AXIS_TIME, AXIS_NONE, Clipper
 from .ReferenceStdDevClipper import (GpuStdDevClipper, ReferenceStdDevClipper, clip_1d,
                                      std_dev_apply)
 from .ReferenceBadChannelMask import GpuBadChannelMask, ReferenceBadChannelMask, badchannel_keep
+from .ReferenceSplineDetrender import GpuSplineDetrender, ReferenceSplineDetrender
