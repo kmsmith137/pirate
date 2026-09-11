@@ -21,10 +21,18 @@ namespace chimefrb {
 // Shared helpers.
 
 
-// Shared memory available to the "small L" kernel, in bytes. 48 KB is what a block gets
-// without opting in via cudaFuncSetAttribute(); opting in would raise the ceiling on L
-// from 6144 to about 12000, which no caller in the RFI chain needs.
-static constexpr long smem_budget = 48 * 1024;
+// Shared memory available to the "small L" kernel for staging its row, in bytes.
+//
+// A block gets 48 KB total without opting in via cudaFuncSetAttribute(), and the
+// block-reduction buffer comes out of the SAME budget -- 3 floats per warp, so 384 bytes
+// at the largest supported block size. Forgetting it does not cost performance: it makes
+// the launch fail with "invalid argument" for L within 12 of the ceiling, a band narrow
+// enough to hide behind a lot of testing before it shows up.
+//
+// Opting in would raise the ceiling on L from ~6000 to about 12000, which no caller in
+// the RFI chain needs: its largest per-row case is L = 4096.
+static constexpr long smem_reduction_bytes = 3 * 32 * long(sizeof(float));
+static constexpr long smem_budget = 48*1024 - smem_reduction_bytes;
 
 // Target samples per block on the "large L" path. Small enough that a plane spreads over
 // many blocks (the AXIS_NONE caller has only a handful of rows, so per-row parallelism
@@ -336,9 +344,15 @@ GpuWrms::GpuWrms(long L_, long niter_, double iter_sigma_, bool two_pass_,
 }
 
 
+long GpuWrms::max_shared_L()
+{
+    return smem_budget / (2 * long(sizeof(float)));
+}
+
+
 bool GpuWrms::is_shared_memory_path() const
 {
-    return (2 * L * long(sizeof(float))) <= smem_budget;
+    return L <= max_shared_L();
 }
 
 

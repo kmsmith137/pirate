@@ -815,7 +815,7 @@ def _sec_chimefrb(rep, ndraw):
         (L, R, niter, iter_sigma, two_pass, _tpb) = wr.random_config(rng)
         (I, W) = wr.random_arrays(rng, R, L)
 
-        shared += (2 * L * 4) <= (48 * 1024)
+        shared += (L <= wr.L_SHARED_MAX)
         refined += (niter > 1)
         twopass += bool(two_pass)
 

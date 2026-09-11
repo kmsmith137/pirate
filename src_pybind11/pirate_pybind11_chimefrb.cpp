@@ -294,6 +294,11 @@ void register_chimefrb_bindings(pybind11::module &m)
             "(the row is re-read once per refinement). A test or a timing run wants to say\n"
             "which path it measured.")
 
+        .def_static("max_shared_L", &GpuWrms::max_shared_L,
+            "The largest L that uses the shared-memory kernel. One source of truth for\n"
+            "the threshold, so that a test drawing L either side of it cannot drift from\n"
+            "the kernel's own idea of where it is.")
+
         .def("scratch_nelts", &GpuWrms::scratch_nelts, py::arg("R"),
             "Number of float32 scratch elements launch() needs for R rows. Zero on the\n"
             "shared-memory path.")

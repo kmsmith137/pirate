@@ -118,6 +118,11 @@ struct GpuWrms
     // perform very differently, so a test or a timing run wants to say which it measured.
     bool is_shared_memory_path() const;
 
+    // The largest L that uses the shared-memory kernel. One source of truth for the
+    // threshold: a test that wants to draw L either side of it should ask, rather than
+    // recompute it from the shared-memory budget and drift.
+    static long max_shared_L();
+
     // Number of float32 scratch elements launch() needs for R rows. Zero on the
     // shared-memory path, in which case 'scratch' may be an empty array.
     long scratch_nelts(long R) const;

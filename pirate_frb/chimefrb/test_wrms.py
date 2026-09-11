@@ -49,8 +49,10 @@ from ..utils import atomic_print
 THREAD_COUNTS = [128, 256, 512, 1024]
 
 # The kernel switches from the shared-memory path to the global-memory one when a row
-# stops fitting in 48 KB. Tests draw L on both sides of this.
-L_SHARED_MAX = 48 * 1024 // (2 * 4)
+# stops fitting in shared memory. Asked for rather than recomputed: the budget has to
+# leave room for the block-reduction buffer as well as the row, and a test that worked
+# that out for itself would be free to get it wrong in the same way the kernel once did.
+L_SHARED_MAX = GpuWrms.max_shared_L()
 
 
 def random_config(rng):
@@ -63,7 +65,14 @@ def random_config(rng):
     kernel would starve, so it is worth sampling honestly rather than making R large.
     """
 
-    if rng.uniform() < 0.7:
+    u = rng.uniform()
+    if u < 0.1:
+        # Right at the boundary between the two paths, a few percent of the time. This
+        # band is where a shared-memory budget that forgets an allocation shows up -- as a
+        # launch failure rather than a wrong answer -- and it is narrow enough to hide for
+        # a long time behind a uniform draw. It has caught one such bug already.
+        L = int(rng.integers(L_SHARED_MAX - 16, L_SHARED_MAX + 17))
+    elif u < 0.7:
         L = int(rng.integers(32, L_SHARED_MAX + 1))         # shared-memory path
     else:
         L = int(rng.integers(L_SHARED_MAX + 1, 40000))      # global-memory path

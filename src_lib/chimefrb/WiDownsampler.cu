@@ -21,30 +21,79 @@ namespace chimefrb {
 // The kernel.
 //
 // One threadblock produces a 32-by-32 tile of output cells, and one thread walks the
-// (Df,Dt) input block behind each of its cells. WARPS says how many warps share a tile,
-// so each thread owns CELLS = 32/WARPS of them; it is a pure occupancy knob, and
-// GpuWiDownsampler::time_selected() is what decides the default.
+// (Df,Dt) input block behind each of its cells. The number of warps sharing a tile is a
+// pure occupancy knob, taken from blockDim.y at runtime, so each thread handles
+// (32 / blockDim.y) cells.
 //
-// The transposed and untransposed cases differ only in the last few lines: 'Transpose'
-// stages the finished tile through shared memory so that the global write stays
-// coalesced. When Transpose=false the shared arrays do not exist.
+// NOTHING HERE IS TEMPLATED ON THE THREAD COUNT, deliberately. An earlier version was,
+// and it bought nothing: the threads in this kernel are independent -- there is no block
+// reduction, so no cross-warp loop bound to constant-fold -- and a measurement put the
+// runtime version within 0.3% at 32 warps -- the default, and the best setting at every
+// configuration the RFI chain uses. (GpuWrms is templated on its thread count for exactly
+// the reason this kernel is not: it reduces across the block once per refinement.) Note
+// that this is also why the per-cell values are stored as they are computed rather than
+// accumulated into a register array first: an array needs a compile-time size.
+//
+// What the runtime trip count does cost is at LOW warp counts, where a thread owns several
+// cells and the compiler can no longer unroll the loop over them, so each cell's loads
+// serialize behind the previous cell's: (Df,Dt)=(2,16) at 4 warps drops from 646 to 491
+// GB/s. A '#pragma unroll 4' recovers that and costs 39% at 32 warps, which is the wrong
+// trade -- so the loop is left alone, and the knob's low end is simply not where anyone
+// should set it.
+//
+// The transposed and untransposed cases differ only in whether the finished tile goes
+// through shared memory on its way out. When Transpose=false the shared arrays do not
+// exist.
 
 
-template<bool Transpose, int WARPS>
-__global__ void __launch_bounds__(32*WARPS)
+// _reduce_cell(): one output cell, from the (Df,Dt) input block behind it.
+//
+// 'in_i' and 'in_w' are already offset to the block's tile. Frequency is the outer loop
+// and time the inner one, deliberately: the inner loop then reads Dt consecutive floats,
+// which the compiler can vectorize, where the other order strides by T and cannot. It
+// also means a warp finishes one input row before touching the next, so its live L1
+// footprint is one row-segment rather than all Df of them at once.
+__device__ __forceinline__ void _reduce_cell(const float *in_i, const float *in_w,
+                                             int f_local, int t_local, int Df, int Dt,
+                                             long T, float &out_i, float &out_w)
+{
+    const float *ip = in_i + long(f_local*Df)*T + long(t_local)*Dt;
+    const float *wp = in_w + long(f_local*Df)*T + long(t_local)*Dt;
+
+    float wsum = 0.0f;
+    float wisum = 0.0f;
+
+    for (int df = 0; df < Df; df++) {
+        for (int dt = 0; dt < Dt; dt++) {
+            float w = wp[dt];
+            wsum += w;
+            wisum += w * ip[dt];
+        }
+        ip += T;
+        wp += T;
+    }
+
+    // Guarded divide, following rf_kernels: a cell with no weight gets intensity zero
+    // rather than a NaN. Note that this is an exact test, not a threshold, since a sum of
+    // nonnegative floats is zero iff every term is zero.
+    out_w = wsum;
+    out_i = (wsum > 0.0f) ? (wisum / wsum) : 0.0f;
+}
+
+
+template<bool Transpose>
+__global__ void __launch_bounds__(1024)
 wi_downsample_kernel(float *out_i, float *out_w,
                      const float *in_i, const float *in_w,
                      int Df, int Dt, long F, long T, long F_ds, long T_ds)
 {
-    static_assert((WARPS >= 1) && (WARPS <= 32) && ((32 % WARPS) == 0));
-    constexpr int CELLS = 32 / WARPS;
-
-    // Within a tile, 'tx' is the time index and (ty + k*WARPS) is the frequency index,
+    // Within a tile, 'tx' is the time index and 'ty' strides over the frequency index,
     // both in units of output cells. Note that tx is the lane index, so a warp covers 32
     // consecutive output time samples, which is what makes the reads and writes below
     // cache-line-aligned when Dt=1.
     const int tx = threadIdx.x;
     const int ty = threadIdx.y;
+    const int W = blockDim.y;
 
     const long f0 = long(blockIdx.y) * 32;   // tile origin, in output cells
     const long t0 = long(blockIdx.x) * 32;
@@ -69,74 +118,29 @@ wi_downsample_kernel(float *out_i, float *out_w,
         out_w += b*F_ds*T_ds + f0*T_ds + t0;
     }
 
-    // Reduce: one (Df,Dt) block per cell.
-    //
-    // Frequency is the outer loop and time is the inner loop, deliberately. The inner
-    // loop then reads Dt consecutive floats, which can vectorize; the other order strides
-    // by T and cannot. It also means the warp finishes one input row before touching the
-    // next, so its live L1 footprint is one row-segment (32*Dt floats) rather than all Df
-    // of them at once.
-
-    float vi[CELLS];
-    float vw[CELLS];
-
-    #pragma unroll
-    for (int k = 0; k < CELLS; k++) {
-        const int f_local = ty + k*WARPS;
-        const float *ip = in_i + long(f_local*Df)*T + long(tx)*Dt;
-        const float *wp = in_w + long(f_local*Df)*T + long(tx)*Dt;
-
-        float wsum = 0.0f;
-        float wisum = 0.0f;
-
-        for (int df = 0; df < Df; df++) {
-            for (int dt = 0; dt < Dt; dt++) {
-                float w = wp[dt];
-                wsum += w;
-                wisum += w * ip[dt];
-            }
-            ip += T;
-            wp += T;
-        }
-
-        // Guarded divide, following rf_kernels: a cell with no weight gets intensity zero
-        // rather than a NaN. Note that this is an exact test, not a threshold, since a sum
-        // of nonnegative floats is zero iff every term is zero.
-        vw[k] = wsum;
-        vi[k] = (wsum > 0.0f) ? (wisum / wsum) : 0.0f;
-    }
-
     if constexpr (Transpose) {
         // The 33 is the usual padding against shared-memory bank conflicts: it makes both
         // the row-wise write and the column-wise read below hit 32 distinct banks.
         __shared__ float tile_i[32][33];
         __shared__ float tile_w[32][33];
 
-        #pragma unroll
-        for (int k = 0; k < CELLS; k++) {
-            const int f_local = ty + k*WARPS;
-            tile_i[f_local][tx] = vi[k];
-            tile_w[f_local][tx] = vw[k];
-        }
+        for (int f_local = ty; f_local < 32; f_local += W)
+            _reduce_cell(in_i, in_w, f_local, tx, Df, Dt, T,
+                         tile_i[f_local][tx], tile_w[f_local][tx]);
 
         __syncthreads();
 
         // Now each thread writes the output cells with f_local = tx, so that consecutive
         // lanes write consecutive addresses along the (contiguous) frequency axis.
-        #pragma unroll
-        for (int k = 0; k < CELLS; k++) {
-            const int t_local = ty + k*WARPS;
+        for (int t_local = ty; t_local < 32; t_local += W) {
             out_i[t_local*F_ds + tx] = tile_i[tx][t_local];
             out_w[t_local*F_ds + tx] = tile_w[tx][t_local];
         }
     }
     else {
-        #pragma unroll
-        for (int k = 0; k < CELLS; k++) {
-            const int f_local = ty + k*WARPS;
-            out_i[f_local*T_ds + tx] = vi[k];
-            out_w[f_local*T_ds + tx] = vw[k];
-        }
+        for (int f_local = ty; f_local < 32; f_local += W)
+            _reduce_cell(in_i, in_w, f_local, tx, Df, Dt, T,
+                         out_i[f_local*T_ds + tx], out_w[f_local*T_ds + tx]);
     }
 }
 
@@ -166,17 +170,18 @@ GpuWiDownsampler::GpuWiDownsampler(long Df_, long Dt_, bool transpose_, long war
 }
 
 
-template<bool Transpose, int WARPS>
+template<bool Transpose>
 static void _launch(float *out_i, float *out_w, const float *in_i, const float *in_w,
-                    long Df, long Dt, long B, long F, long T, cudaStream_t stream)
+                    long Df, long Dt, long B, long F, long T, long warps_per_block,
+                    cudaStream_t stream)
 {
     long F_ds = F / Df;
     long T_ds = T / Dt;
 
     dim3 nblocks(T_ds/32, F_ds/32, B);
-    dim3 nthreads(32, WARPS);
+    dim3 nthreads(32, warps_per_block);
 
-    wi_downsample_kernel<Transpose,WARPS> <<< nblocks, nthreads, 0, stream >>>
+    wi_downsample_kernel<Transpose> <<< nblocks, nthreads, 0, stream >>>
         (out_i, out_w, in_i, in_w, int(Df), int(Dt), F, T, F_ds, T_ds);
 
     CUDA_PEEK("wi_downsample_kernel");
@@ -235,25 +240,12 @@ void GpuWiDownsampler::launch(Array<float> &out_i, Array<float> &out_w,
     xassert(out_i.data != in_w.data);
     xassert(out_w.data != in_i.data);
 
-    if (transpose) {
-        switch (warps_per_block) {
-            case 4:  _launch<true,4>  (out_i.data, out_w.data, in_i.data, in_w.data, Df, Dt, B, F, T, stream); return;
-            case 8:  _launch<true,8>  (out_i.data, out_w.data, in_i.data, in_w.data, Df, Dt, B, F, T, stream); return;
-            case 16: _launch<true,16> (out_i.data, out_w.data, in_i.data, in_w.data, Df, Dt, B, F, T, stream); return;
-            case 32: _launch<true,32> (out_i.data, out_w.data, in_i.data, in_w.data, Df, Dt, B, F, T, stream); return;
-        }
-    }
-    else {
-        switch (warps_per_block) {
-            case 4:  _launch<false,4>  (out_i.data, out_w.data, in_i.data, in_w.data, Df, Dt, B, F, T, stream); return;
-            case 8:  _launch<false,8>  (out_i.data, out_w.data, in_i.data, in_w.data, Df, Dt, B, F, T, stream); return;
-            case 16: _launch<false,16> (out_i.data, out_w.data, in_i.data, in_w.data, Df, Dt, B, F, T, stream); return;
-            case 32: _launch<false,32> (out_i.data, out_w.data, in_i.data, in_w.data, Df, Dt, B, F, T, stream); return;
-        }
-    }
-
-    throw runtime_error("GpuWiDownsampler::launch(): internal error, unhandled warps_per_block");
+    if (transpose)
+        _launch<true> (out_i.data, out_w.data, in_i.data, in_w.data, Df, Dt, B, F, T, warps_per_block, stream);
+    else
+        _launch<false> (out_i.data, out_w.data, in_i.data, in_w.data, Df, Dt, B, F, T, warps_per_block, stream);
 }
+
 
 
 // -------------------------------------------------------------------------------------------------
