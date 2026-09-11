@@ -10,3 +10,4 @@ from ..pirate_pybind11 import AssembledChunk
 # alongside its numpy reference. That module both applies the injections (as an
 # import side effect) and re-exports the class.
 from .ReferenceWiDownsampler import GpuWiDownsampler, ReferenceWiDownsampler
+from .ReferenceWrms import GpuWrms, ReferenceWrms, wrms_iterate, iclip

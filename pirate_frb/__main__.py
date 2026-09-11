@@ -30,6 +30,7 @@ from . import casm
 from . import chime
 from .chimefrb import test_assembled_chunk as chimefrb_tests
 from .chimefrb import test_wi_downsampler as chimefrb_wi_tests
+from .chimefrb import test_wrms as chimefrb_wrms_tests
 from . import kernels
 from . import loose_ends
 from . import core
@@ -150,7 +151,7 @@ def parse_test(subparsers):
     parser.add_argument('--varmap', action='store_true', help="pirate_frb.varmap. Two halves, both run by this flag: everything checkable WITHOUT a dedisperser (the VarianceMap class, the covering-LP and basis machinery, and the analytic map of detrender_free.py against a hand-written oracle), and the brute-force sweep, which pushes a one-hot through the REAL dedisperser once per input channel and checks the analytic map against what comes out. Needs a DedispersionPlan and a GPU for the second half.")
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_{beamform,upchan}()')
     parser.add_argument('--cfrb', action='store_true',
-                        help='Runs the chimefrb port tests (reading old CHIME FRB msgpack files, and GpuWiDownsampler against its numpy reference)')
+                        help='Runs the chimefrb port tests (reading old CHIME FRB msgpack files, and GpuWiDownsampler / GpuWrms against their numpy references)')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection and pulse-invariants tests')
@@ -316,6 +317,7 @@ def test(args):
         if run_all_tests or args.cfrb:
             chimefrb_tests.test_assembled_chunk(i)
             chimefrb_wi_tests.test_wi_downsampler(i)
+            chimefrb_wrms_tests.test_wrms(i)
 
         if run_all_tests or args.zomb:
             loose_ends.test_avx2_m64_outbuf()
@@ -938,7 +940,7 @@ def parse_time(subparsers):
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() timing')
     parser.add_argument('--dtl1', action='store_true', help='Runs GpuDetrenderLps1d.time_selected() (1-d local-polynomial detrender kernel)')
     parser.add_argument('--dtl2', action='store_true', help='Runs GpuDetrenderLps2d.time_selected() (2-d spline detrender kernel)')
-    parser.add_argument('--cfrb', action='store_true', help='Runs chimefrb.GpuWiDownsampler.time_selected() (the old search\'s (Df,Dt) downsampler)')
+    parser.add_argument('--cfrb', action='store_true', help='Runs time_selected() for the chimefrb port\'s kernels (GpuWiDownsampler, GpuWrms)')
 
 def time_command(args):
     timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'cfrb', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim', 'dtl1', 'dtl2' ]
@@ -975,6 +977,7 @@ def time_command(args):
         kernels.GpuTreeGriddingKernel.time_selected()
     if run_all_timings or args.cfrb:
         chimefrb_wi_tests.GpuWiDownsampler.time_selected()
+        chimefrb_wrms_tests.GpuWrms.time_selected()
     if run_all_timings or args.dtl1:
         kernels.GpuDetrenderLps1d.time_selected()
     if run_all_timings or args.dtl2:

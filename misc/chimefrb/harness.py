@@ -5,6 +5,10 @@ standalone C++ program with one job:
 
     driver <input.npy> <output.npy> [key=value ...]
 
+A transform that operates on an (intensity, weights) PAIR stacks the two along a
+leading length-2 axis, since only one array travels each way; see
+misc/chimefrb/rfi_wi_downsample/driver.cpp.
+
 It links only old libraries, prints nothing on success, and signals failure by exit
 status.  It does not know pirate exists, what it is being compared against, or what
 counts as agreement.  Everything else -- generating the input, running pirate,
@@ -199,6 +203,52 @@ class Test:
             print("       worst at flat index %d: got %.17g, want %.17g"
                   % (i, got.flat[i], want.flat[i]))
             self.failures.append("%s: max rel diff %.3g exceeds %.3g" % (label, worst, rtol))
+
+        return ok
+
+    def check_sandwich(self, label, got, lo, hi, why=None):
+        """Check lo <= got <= hi elementwise, and say how far outside anything fell.
+
+        A bracket rather than a tolerance. Several of the RFI transforms make a hard
+        decision on a floating-point statistic -- clip or do not clip, variance valid or
+        not -- and two implementations that sum in different orders will occasionally
+        land on opposite sides of it. Running the reference twice with the threshold
+        perturbed either way turns "the two disagree" into the reviewable statement
+        "the fast code's answer lies between what the reference gives at thresholds
+        either side of the real one", which is what a correct implementation must do and
+        an incorrect one generally will not.
+
+        This is the tool for that; check_allclose() cannot express it. Booleans work:
+        pass 0/1 arrays to bracket a decision rather than a value.
+        """
+
+        got = np.asarray(got, dtype=np.float64)
+        lo = np.asarray(lo, dtype=np.float64)
+        hi = np.asarray(hi, dtype=np.float64)
+
+        if not (got.shape == lo.shape == hi.shape):
+            self.failures.append("%s: shape %s vs [%s, %s]"
+                                 % (label, got.shape, lo.shape, hi.shape))
+            print("  FAIL %s: shape %s vs [%s, %s]"
+                  % (label, got.shape, lo.shape, hi.shape))
+            return False
+
+        excursion = np.maximum(lo - got, got - hi)
+        worst = float(excursion.max()) if excursion.size else 0.0
+        nbad = int(np.sum(excursion > 0.0))
+        ok = (nbad == 0)
+
+        print("  %s %-22s %d/%d outside bracket   (worst excursion %.3g)"
+              % ("ok  " if ok else "FAIL", label, nbad, excursion.size, worst))
+        if why:
+            print("       %s" % why)
+
+        if not ok:
+            i = int(np.argmax(excursion))
+            print("       worst at flat index %d: got %.17g, bracket [%.17g, %.17g]"
+                  % (i, got.flat[i], lo.flat[i], hi.flat[i]))
+            self.failures.append("%s: %d element(s) outside bracket, worst %.3g"
+                                 % (label, nbad, worst))
 
         return ok
 

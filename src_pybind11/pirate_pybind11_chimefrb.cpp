@@ -5,6 +5,7 @@
 // Method injections, if any, live in pirate_frb/chimefrb/<ClassName>.py:
 //   - AssembledChunk: none
 //   - GpuWiDownsampler: launch() converts stream=None to the current cupy stream
+//   - GpuWrms: same, and lets the caller omit the scratch array
 
 #define PY_ARRAY_UNIQUE_SYMBOL PyArray_API_pirate
 #define NO_IMPORT_ARRAY  // Secondary file: don't call _import_array()
@@ -17,6 +18,7 @@
 
 #include "../include/pirate/chimefrb/AssembledChunk.hpp"
 #include "../include/pirate/chimefrb/WiDownsampler.hpp"
+#include "../include/pirate/chimefrb/Wrms.hpp"
 #include "../include/pirate/SlabAllocator.hpp"
 
 using namespace std;
@@ -234,6 +236,96 @@ void register_chimefrb_bindings(pybind11::module &m)
             "Raises:\n"
             "    RuntimeError: unless F is divisible by 32*Df and T by 32*Dt (the 32 is the\n"
             "        output tile size, and the kernel has no edge predication).")
+        ;
+
+    // GpuWrms: Python injections in pirate_frb/chimefrb/ReferenceWrms.py:
+    //   - launch: converts stream=None to current cupy stream, allocates scratch=None
+    py::class_<GpuWrms>(m, "GpuWrms",
+        "The weighted mean and variance of each row of an (R, L) array, refined by\n"
+        "iterated sigma clipping. A port of rf_kernels::weighted_mean_rms, and the\n"
+        "statistic both chimefrb clippers are built on.\n"
+        "\n"
+        "Does NOT apply any threshold to the weights -- that is a separate kernel. Its\n"
+        "only outputs are, per row, a mean and a variance.\n"
+        "\n"
+        "The three clipper axes all arrive here as row reductions of a contiguous 2-D\n"
+        "array, so this class knows nothing about frequencies, times or axes: the caller\n"
+        "views GpuWiDownsampler's output as (R, L), and the whole-plane case is the same\n"
+        "thing with one long row.\n"
+        "\n"
+        "Two things are easy to misread: 'niter' counts TOTAL passes, so niter=1 means no\n"
+        "refinement at all; and var == 0 is the 'no usable statistic' signal, which a row\n"
+        "gets when it has no weight or when its variance falls below the algorithm's\n"
+        "float32 epsilon cutoffs. Once a row's variance is zero, every later refinement\n"
+        "leaves it zero. See plans/chimefrb_wrms.md section 2 for the full algorithm.")
+
+        .def(py::init<long, long, double, bool, long>(),
+            py::arg("L"), py::arg("niter"), py::arg("iter_sigma"), py::arg("two_pass"),
+            py::arg("threads_per_block") = 128,
+            "Create a GpuWrms.\n"
+            "\n"
+            "Args:\n"
+            "    L: samples per row. A constructor argument because it decides which of\n"
+            "        two kernels runs: a row that fits in shared memory is refined\n"
+            "        on-chip, a longer one is re-read from global once per refinement.\n"
+            "    niter: TOTAL passes. 1 means no refinement.\n"
+            "    iter_sigma: the threshold used BY THE REFINEMENTS, in units of the\n"
+            "        current rms. Not the intensity_clipper's final-clip sigma, which is\n"
+            "        a different number applied by a different kernel. Ignored at niter=1.\n"
+            "    two_pass: use the stabler two-pass first pass.\n"
+            "    threads_per_block: performance knob, 128/256/512/1024. Must not change\n"
+            "        the result. The default is the smallest value, unlike\n"
+            "        GpuWiDownsampler: see time_selected().\n"
+            "\n"
+            "Raises:\n"
+            "    RuntimeError: on L < 1, niter < 1, iter_sigma < 0, or an unsupported\n"
+            "        threads_per_block.")
+
+        .def_readonly("L", &GpuWrms::L, "Samples per row")
+        .def_readonly("niter", &GpuWrms::niter, "TOTAL passes; 1 means no refinement")
+        .def_readonly("iter_sigma", &GpuWrms::iter_sigma,
+            "Refinement clipping threshold, in units of the current rms")
+        .def_readonly("two_pass", &GpuWrms::two_pass, "Use the stabler two-pass first pass")
+        .def_readonly("threads_per_block", &GpuWrms::threads_per_block, "128, 256, 512 or 1024")
+
+        .def_property_readonly("is_shared_memory_path", &GpuWrms::is_shared_memory_path,
+            "True if this L uses the shared-memory kernel (the row is staged on-chip and\n"
+            "the input is read exactly once), False if it uses the global-memory kernel\n"
+            "(the row is re-read once per refinement). A test or a timing run wants to say\n"
+            "which path it measured.")
+
+        .def("scratch_nelts", &GpuWrms::scratch_nelts, py::arg("R"),
+            "Number of float32 scratch elements launch() needs for R rows. Zero on the\n"
+            "shared-memory path.")
+
+        .def_static("time_selected", &GpuWrms::time_selected,
+            py::call_guard<py::gil_scoped_release>(),
+            "Run timing benchmarks, for the configurations the old search's production\n"
+            "RFI chain uses (called via 'python -m pirate_frb time --cfrb')")
+
+        .def("launch",
+            [](const GpuWrms &self, Array<float> &mean, Array<float> &var,
+               const Array<float> &in_i, const Array<float> &in_w,
+               Array<float> &scratch, uintptr_t stream_ptr) {
+                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                self.launch(mean, var, in_i, in_w, scratch, stream);
+            },
+            py::arg("mean"), py::arg("var"), py::arg("in_i"), py::arg("in_w"),
+            py::arg("scratch"), py::arg("stream_ptr"),
+            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+            "GPU kernel launch (async, does not sync stream).\n"
+            "\n"
+            "All arrays are cupy float32 arrays, fully contiguous, on GPU, and the outputs\n"
+            "must not alias the inputs.\n"
+            "\n"
+            "Args:\n"
+            "    mean: shape (R,). Weighted mean of each row. Fully overwritten.\n"
+            "    var: shape (R,). Weighted variance, or 0 for a row with no usable\n"
+            "        statistic. Fully overwritten, and never negative.\n"
+            "    in_i: shape (R, L). Intensity. Read only.\n"
+            "    in_w: shape (R, L). Weights, which must be >= 0. Read only.\n"
+            "    scratch: shape (scratch_nelts(R),), or empty when that is zero.\n"
+            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 }
 

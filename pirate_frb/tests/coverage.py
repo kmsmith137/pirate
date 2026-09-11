@@ -798,6 +798,59 @@ def _sec_chimefrb(rep, ndraw):
     rep.dist('fraction of cells fully masked', masked_frac, ('p90', 0.001, 1.0),
              'test_wi_downsampler', fmt='{:.3g}')
 
+    # ---- GpuWrms
+
+    from ..chimefrb import test_wrms as wr
+    from ..chimefrb import ReferenceWrms
+
+    rep.section('chimefrb.test_wrms randomization',
+                subtitle=f'{ndraw} draws of random_config() + random_arrays()',
+                consumer='test --cfrb: GpuWrms against ReferenceWrms')
+
+    shared, refined, twopass = 0, 0, 0
+    any_dead, any_clipped = 0, 0
+    dead_frac = []
+
+    for _ in range(ndraw):
+        (L, R, niter, iter_sigma, two_pass, _tpb) = wr.random_config(rng)
+        (I, W) = wr.random_arrays(rng, R, L)
+
+        shared += (2 * L * 4) <= (48 * 1024)
+        refined += (niter > 1)
+        twopass += bool(two_pass)
+
+        (mean, var) = ReferenceWrms(1, iter_sigma, two_pass).apply(I, W)
+        frac = float(np.mean(var <= 0))
+        dead_frac.append(frac)
+        any_dead += (frac > 0)
+
+        # Does the first refinement actually discard anything? On clean Gaussian data a
+        # 2-6 sigma clip discards nothing, so without injected outliers every niter > 1
+        # draw would silently test the same thing as niter = 1.
+        ok = var > 0
+        if ok.any():
+            d = np.abs(I[ok].astype(np.float64) - mean[ok][:, None])
+            any_clipped += bool(np.any(d >= (iter_sigma * np.sqrt(var[ok]))[:, None]))
+
+    rep.rate('shared-memory path', shared, ndraw, (50, 90),
+             'the fast path: row staged on-chip, input read once')
+    rep.rate('global-memory path', ndraw - shared, ndraw, (10, 50),
+             'the AXIS_NONE path: row re-read once per refinement')
+    rep.rate('niter > 1 (refinements run)', refined, ndraw, (55, 90),
+             'test_wrms: the inductive branch, and the only user of iter_sigma')
+    rep.rate('two_pass', twopass, ndraw, (30, 70),
+             'the stabler first pass; its absence is what makes the variance cancel')
+
+    # The validity cutoffs are the kernel's sharpest decision and the reason the test
+    # brackets at all. If random_arrays() ever stops drawing degenerate rows, this
+    # collapses and the bracketing silently stops being exercised.
+    rep.rate('>= 1 row with no usable statistic', any_dead, ndraw, (40, 100),
+             'test_wrms: the eps_2/eps_3 variance cutoffs, and the dead-row check')
+    rep.rate('first refinement discards something', any_clipped, ndraw, (40, 100),
+             'test_wrms: without this, niter > 1 tests nothing that niter = 1 does not')
+    rep.dist('fraction of rows with no statistic', dead_frac, ('p90', 0.001, 1.0),
+             'test_wrms', fmt='{:.3g}')
+
 
 def report_coverage(select=(), scale=1.0):
     """Print the coverage report. 'select' is a subset of _SECTIONS (empty = all).
