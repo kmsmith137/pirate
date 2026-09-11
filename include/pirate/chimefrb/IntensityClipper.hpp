@@ -4,7 +4,7 @@
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
 
-#include "ClipperAxis.hpp"
+#include "ClipperBase.hpp"
 
 namespace pirate {
 namespace chimefrb {
@@ -17,15 +17,12 @@ namespace chimefrb {
 // deviations from a weighted mean. A port of rf_kernels::intensity_clipper, which is the
 // old CHIME FRB search's principal RFI flagger (48 of its production chain's 120 nodes).
 //
-// Three steps, of which only the last is new code:
+// Three steps, of which only the last is this class's own code:
 //
-//   1. GpuWiDownsampler(Df, Dt, false), skipped when (Df,Dt) == (1,1) because it is then
-//      the identity.
-//   2. GpuWiDownsampler(1, 1, true) on that result when axis == FREQ, since the statistic
-//      wants a contiguous frequency column. Then GpuWrms on the resulting array, viewed
-//      as (R, L): the three axes differ only in how the caller reshapes.
-//   3. intensity_clip: mask every downsampled cell with |I_ds - mean| >= sigma*sqrt(var),
-//      and zero all Df*Dt full-resolution weights of a masked cell.
+//   1-2. The per-row weighted mean and variance, computed by GpuClipperBase: downsample
+//        by (Df, Dt), transpose if axis == FREQ, then GpuWrms at (niter, iter_sigma).
+//   3.   intensity_clip: mask every downsampled cell with |I_ds - mean| >= sigma*sqrt(var),
+//        and zero all Df*Dt full-resolution weights of a masked cell.
 //
 // Three things are worth knowing before calling it:
 //
@@ -39,22 +36,14 @@ namespace chimefrb {
 //     the mean. That is intentional in the original: no usable statistic means no usable
 //     data.
 //
-//   - CHUNKING. The old code applies this transform to one 'nt_chunk' block of the stream
-//     at a time, and the result does depend on where those boundaries fall. This class
-//     requires the array to hold exactly ONE chunk, which is all the production RFI chain
-//     needs (every intensity_clipper in it has nt_chunk = 4096, and so does the chain).
-//     Processing T = N*nt_chunk samples in one call would be a useful generalization and
-//     is deliberately left for later: AXIS_TIME and AXIS_FREQ are nearly free (for TIME,
-//     (B,F,T) reshapes to (B,F,N,nt_chunk), which is contiguous; for FREQ the boundaries
-//     are irrelevant, since each time column is its own statistic), but AXIS_NONE needs
-//     real work, because its sub-planes are strided in frequency and GpuWrms cannot view
-//     them as rows. ReferenceIntensityClipper already implements the general case, so
-//     the semantics are pinned down and tested.
+//   - CHUNKING: the array must hold exactly ONE nt_chunk, as for every GpuClipperBase;
+//     see the chunking note in ClipperBase.hpp. ReferenceIntensityClipper implements
+//     T = N*nt_chunk.
 //
 // Nothing here is stateful ACROSS chunks: no ring buffers, no lag buffers, no carry-over
 // of any kind. See notes/chimefrb.md for the porting rules this class follows.
 
-struct GpuIntensityClipper
+struct GpuIntensityClipper : public GpuClipperBase
 {
     // (B, F, nt_chunk) is the full-resolution array shape: beams, frequency channels, and
     // time samples. The old code calls the last two (nfreq, nt_chunk) and has no beam
@@ -63,9 +52,9 @@ struct GpuIntensityClipper
     // GpuWrms needs at construction, and B because it fixes the row count and the scratch
     // size.
     //
-    // Throws on: F % (32*Df) != 0 or nt_chunk % (32*Dt) != 0 (the 32 is GpuWiDownsampler's
-    // output tile size, and intensity_clip's warp width); B < 1; Df < 1; Dt < 1;
-    // niter < 1; sigma < 0; iter_sigma < 0; an unsupported warps_per_block.
+    // Throws on sigma < 0 or an unsupported warps_per_block, and on everything
+    // GpuClipperBase checks: F % (32*Df) != 0 or nt_chunk % (32*Dt) != 0; B < 1; Df < 1;
+    // Dt < 1; niter < 1; iter_sigma < 0.
     //
     // 'sigma' is the FINAL clip threshold, in units of the row's rms.
     // 'iter_sigma' is the threshold used BY THE STATISTIC'S REFINEMENTS, in the same
@@ -90,29 +79,11 @@ struct GpuIntensityClipper
                         long Df, long Dt, long niter, double iter_sigma, bool two_pass,
                         long warps_per_block = 16);
 
-    const long B, F, nt_chunk;     // full-resolution array shape, (B, F, nt_chunk)
-    const ClipperAxis axis;
-    const double sigma;            // FINAL clip threshold, in rms units
-    const long Df, Dt;             // downsampling factors
-    const long niter;              // TOTAL passes; 1 means no refinement
-    const double iter_sigma;       // REFINEMENT threshold; ignored when niter == 1
-    const bool two_pass;
-    const long warps_per_block;    // 4, 8, 16 or 32
+    const double sigma;            // FINAL clip threshold, in rms units (not iter_sigma)
+    const long warps_per_block;    // 4, 8, 16 or 32; intensity_clip only
 
-    // Derived geometry. Exposed because the unit test reconstructs the internal pipeline
-    // from public pieces and compares against it -- which is how rf_kernels' own test
-    // checks this transform (it runs the production weighted_mean_rms and references only
-    // the final clip). rf_kernels::intensity_clipper exposes nfreq_ds and nt_ds for the
-    // same reason.
-    const long F_ds, T_ds;         // F/Df, nt_chunk/Dt
-    const long wrms_L;             // samples per statistic row
-    const long wrms_R;             // statistic rows: B*F_ds (TIME), B*T_ds (FREQ), B (NONE)
-
-    // Number of float32 scratch elements launch() needs. Covers the downsampled and
-    // transposed arrays, the (mean, var) outputs, and GpuWrms' own scratch. Never zero:
-    // (mean, var) always live here. A chain should allocate the max over its transforms
-    // once and share one array.
-    const long scratch_nelts;
+    // Inherited from GpuClipperBase: B, F, nt_chunk, axis, Df, Dt, niter, iter_sigma,
+    // two_pass; the derived geometry F_ds, T_ds, wrms_L, wrms_R; and scratch_nelts.
 
     // launch(): asynchronously launch the kernels, and return without synchronizing the
     // stream. Note: stream=NULL is allowed, but is not the default.

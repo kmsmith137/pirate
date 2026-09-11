@@ -923,6 +923,75 @@ def _sec_chimefrb(rep, ndraw):
              'test_intensity_clipper', fmt='{:.3g}')
 
 
+    # ---- GpuStdDevClipper
+
+    from ..chimefrb import test_std_dev_clipper as sdt
+    from ..chimefrb import ReferenceStdDevClipper, clip_1d
+
+    rep.section('chimefrb.test_std_dev_clipper randomization',
+                subtitle=f'{ndraw} draws of random_config() + random_geometry() + random_arrays()',
+                consumer='test --cfrb: GpuStdDevClipper against ReferenceStdDevClipper')
+
+    production, per_axis, downsampled, twopass, low_sigma = 0, {}, 0, 0, 0
+    any_clipped, any_beam_killed, any_rejected, samuelson, illcond = 0, 0, 0, 0, 0
+    clip_frac = []
+
+    for _ in range(ndraw):
+        (axis, Df, Dt, sigma, two_pass, _w) = sdt.random_config(rng)
+        (B, F, T) = sdt.random_geometry(rng, axis, Df, Dt)
+        (I, W) = sdt.random_arrays(rng, B, F, T, axis, Df, Dt)
+
+        production += (axis, Df, Dt) in sdt.PRODUCTION_CONFIGS
+        per_axis[axis] = per_axis.get(axis, 0) + 1
+        downsampled += (Df, Dt) != (1, 1)
+        twopass += bool(two_pass)
+        low_sigma += (sigma < 2.5)
+
+        # Stage 1 from the float64 reference, then stage 2: enough to say which corners the
+        # draw reaches.
+        (_, v) = ReferenceStdDevClipper(axis, sigma, Df, Dt, two_pass).variances(I, W)
+        out = clip_1d(v, sigma)
+        valid = (v > 0)
+        n = valid.sum(axis=1)
+
+        illcond += bool(sdt.ill_conditioned(v).any())
+        any_rejected += bool((~valid).any())
+        any_beam_killed += bool((n <= 1).any())
+        samuelson += bool(((n >= 2) & (sigma >= np.sqrt(np.maximum(n - 1, 1)))).any())
+
+        clipped = valid & (out == 0) & (n >= 2)[:, None]
+        nv = int(valid[n >= 2].sum())
+        clip_frac.append(float(clipped.sum()) / max(nv, 1))
+        any_clipped += bool(clipped.any())
+
+    rep.rate('config drawn from the production two', production, ndraw, (40, 85),
+             'most iterations on (AXIS_TIME or AXIS_FREQ, (1,1)), which is all the chain uses')
+    for (ax, label) in ((ClipperAxis.TIME, 'AXIS_TIME'), (ClipperAxis.FREQ, 'AXIS_FREQ')):
+        rep.rate(label, per_axis.get(ax, 0), ndraw, (30, 70),
+                 'both axes: they differ in the transpose and in which way rows are zeroed')
+    rep.rate('(Df,Dt) != (1,1)', downsampled, ndraw, (15, 55),
+             'the downsampler, and Df/Dt blocks in the apply')
+    rep.rate('two_pass', twopass, ndraw, (30, 70), 'the stabler form of the stage-1 variance')
+    rep.rate('sigma < 2.5', low_sigma, ndraw, (10, 35),
+             'stage 2 clips a large fraction of rows, exercising the apply hard')
+
+    # The vacuity tripwire: a draw in which stage 2 clips nothing tests stage 2 not at all.
+    rep.rate('stage 2 clips >= 1 row', any_clipped, ndraw, (50, 100),
+             'test_std_dev_clipper: without this, the sigma bracket is vacuous')
+    # Wide on top: draws whose weights are all zero (about 9%, by random_arrays()'s design)
+    # count here too, since every beam then has no valid row.
+    rep.rate('>= 1 beam with at most one valid row', any_beam_killed, ndraw, (2, 45),
+             'the whole-beam branch (the old code\'s acc0 < 1.5)')
+    rep.rate('stage 1 rejects >= 1 row', any_rejected, ndraw, (30, 100),
+             'the epsilon cutoffs, and the conditioning in the end-to-end check')
+    rep.rate('some beam cannot clip (Samuelson)', samuelson, ndraw, (0, 15),
+             'sigma >= sqrt(n-1): should stay rare, or stage 2 silently tests nothing')
+    rep.rate('ill-conditioned (all valid variances equal)', illcond, ndraw, (0, 1),
+             'must not be drawn: no bracket covers it, and the test skips such draws')
+    rep.dist('fraction of valid rows clipped by stage 2', clip_frac, ('p90', 0.001, 1.0),
+             'test_std_dev_clipper', fmt='{:.3g}')
+
+
 def report_coverage(select=(), scale=1.0):
     """Print the coverage report. 'select' is a subset of _SECTIONS (empty = all).
 
