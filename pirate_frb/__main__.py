@@ -31,6 +31,7 @@ from . import chime
 from .chimefrb import test_assembled_chunk as chimefrb_tests
 from .chimefrb import test_wi_downsampler as chimefrb_wi_tests
 from .chimefrb import test_wrms as chimefrb_wrms_tests
+from .chimefrb import test_intensity_clipper as chimefrb_ic_tests
 from . import kernels
 from . import loose_ends
 from . import core
@@ -318,6 +319,7 @@ def test(args):
             chimefrb_tests.test_assembled_chunk(i)
             chimefrb_wi_tests.test_wi_downsampler(i)
             chimefrb_wrms_tests.test_wrms(i)
+            chimefrb_ic_tests.test_intensity_clipper(i)
 
         if run_all_tests or args.zomb:
             loose_ends.test_avx2_m64_outbuf()
@@ -940,7 +942,7 @@ def parse_time(subparsers):
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() timing')
     parser.add_argument('--dtl1', action='store_true', help='Runs GpuDetrenderLps1d.time_selected() (1-d local-polynomial detrender kernel)')
     parser.add_argument('--dtl2', action='store_true', help='Runs GpuDetrenderLps2d.time_selected() (2-d spline detrender kernel)')
-    parser.add_argument('--cfrb', action='store_true', help='Runs time_selected() for the chimefrb port\'s kernels (GpuWiDownsampler, GpuWrms)')
+    parser.add_argument('--cfrb', action='store_true', help='Runs time_selected() for the chimefrb port\'s kernels (GpuWiDownsampler, GpuWrms, GpuIntensityClipper)')
 
 def time_command(args):
     timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'cfrb', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim', 'dtl1', 'dtl2' ]
@@ -978,6 +980,7 @@ def time_command(args):
     if run_all_timings or args.cfrb:
         chimefrb_wi_tests.GpuWiDownsampler.time_selected()
         chimefrb_wrms_tests.GpuWrms.time_selected()
+        chimefrb_ic_tests.GpuIntensityClipper.time_selected()
     if run_all_timings or args.dtl1:
         kernels.GpuDetrenderLps1d.time_selected()
     if run_all_timings or args.dtl2:

@@ -6,6 +6,7 @@
 //   - AssembledChunk: none
 //   - GpuWiDownsampler: launch() converts stream=None to the current cupy stream
 //   - GpuWrms: same, and lets the caller omit the scratch array
+//   - GpuIntensityClipper: same
 
 #define PY_ARRAY_UNIQUE_SYMBOL PyArray_API_pirate
 #define NO_IMPORT_ARRAY  // Secondary file: don't call _import_array()
@@ -17,6 +18,8 @@
 #include <ksgpu/pybind11.hpp>
 
 #include "../include/pirate/chimefrb/AssembledChunk.hpp"
+#include "../include/pirate/chimefrb/ClipperAxis.hpp"
+#include "../include/pirate/chimefrb/IntensityClipper.hpp"
 #include "../include/pirate/chimefrb/WiDownsampler.hpp"
 #include "../include/pirate/chimefrb/Wrms.hpp"
 #include "../include/pirate/SlabAllocator.hpp"
@@ -331,6 +334,137 @@ void register_chimefrb_bindings(pybind11::module &m)
             "    in_w: shape (R, L). Weights, which must be >= 0. Read only.\n"
             "    scratch: shape (scratch_nelts(R),), or empty when that is zero.\n"
             "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
+        ;
+
+    py::enum_<ClipperAxis>(m, "ClipperAxis",
+        "Which axis a chimefrb clipper reduces along.\n"
+        "\n"
+        "The numeric values match rf_kernels::axis_type, and the AXIS_FREQ/AXIS_TIME/\n"
+        "AXIS_NONE constants in pirate_frb.chimefrb: a spot-check driver casts an integer\n"
+        "straight to the old enum, so the three must not drift apart.")
+        .value("FREQ", ClipperAxis::FREQ,
+            "One statistic per downsampled time sample, reducing over frequency")
+        .value("TIME", ClipperAxis::TIME,
+            "One statistic per downsampled frequency, reducing over time")
+        .value("NONE", ClipperAxis::NONE,
+            "One statistic per beam, reducing over the whole plane")
+        ;
+
+    // GpuIntensityClipper: Python injections in
+    // pirate_frb/chimefrb/ReferenceIntensityClipper.py:
+    //   - launch: converts stream=None to current cupy stream, allocates scratch=None
+    py::class_<GpuIntensityClipper>(m, "GpuIntensityClipper",
+        "Zeroes the weights of samples that sit more than 'sigma' standard deviations from\n"
+        "a weighted mean. A port of rf_kernels::intensity_clipper, the old CHIME FRB\n"
+        "search's principal RFI flagger (48 of its production chain's 120 nodes).\n"
+        "\n"
+        "Three steps, of which only the last is new code: downsample by (Df, Dt), compute\n"
+        "the weighted mean and variance over ``axis`` (GpuWrms), then mask every\n"
+        "downsampled cell with ``|I_ds - mean| >= sigma*sqrt(var)``, zeroing all Df*Dt\n"
+        "full-resolution weights of a masked cell.\n"
+        "\n"
+        "Three things are worth knowing before calling it:\n"
+        "\n"
+        "``sigma`` and ``iter_sigma`` are DIFFERENT NUMBERS. sigma is the final clip;\n"
+        "iter_sigma is used inside the statistic's refinements. In the production chain\n"
+        "they are 5 and 3.\n"
+        "\n"
+        "A row whose variance was rejected (var == 0) gets a threshold of zero, and the\n"
+        "strict '<' in the survivor test then masks EVERY sample in the row. That is\n"
+        "intentional in the original: no usable statistic means no usable data.\n"
+        "\n"
+        "CHUNKING: the old code applies this transform to one 'nt_chunk' block of the\n"
+        "stream at a time, and the result does depend on where those boundaries fall. This\n"
+        "class requires the array to hold exactly ONE chunk, which is all the production\n"
+        "RFI chain needs. Processing T = N*nt_chunk samples in one call would be a useful\n"
+        "generalization and is deliberately left for later; ReferenceIntensityClipper does\n"
+        "implement it, so the semantics are pinned down and tested.")
+
+        .def(py::init<long, long, long, ClipperAxis, double, long, long, long, double, bool, long>(),
+            py::arg("B"), py::arg("F"), py::arg("nt_chunk"), py::arg("axis"), py::arg("sigma"),
+            py::arg("Df"), py::arg("Dt"), py::arg("niter"), py::arg("iter_sigma"),
+            py::arg("two_pass"), py::arg("warps_per_block") = 16,
+            "Create a GpuIntensityClipper.\n"
+            "\n"
+            "Args:\n"
+            "    B, F, nt_chunk: the full-resolution array shape. All three are\n"
+            "        constructor arguments, so the geometry is fixed at construction: F\n"
+            "        and nt_chunk fix the statistic's row length, which GpuWrms needs at\n"
+            "        construction, and B fixes the row count and the scratch size.\n"
+            "    axis: a ClipperAxis.\n"
+            "    sigma: the FINAL clip threshold, in units of the row's rms.\n"
+            "    Df, Dt: downsampling factors for frequency and time.\n"
+            "    niter: TOTAL passes of the statistic. 1 means no refinement.\n"
+            "    iter_sigma: the threshold used BY THE REFINEMENTS, in the same units.\n"
+            "        Ignored at niter=1. Unlike rf_kernels::intensity_clipper, 0 has no\n"
+            "        special meaning here (there it means 'use sigma').\n"
+            "    two_pass: use the stabler two-pass first pass of the statistic.\n"
+            "    warps_per_block: performance knob, 4/8/16/32, for the final clip kernel.\n"
+            "        Must not change the result. The default is the MIDDLE of the menu,\n"
+            "        unlike either of the other two chimefrb kernels. See time_selected().\n"
+            "\n"
+            "Raises:\n"
+            "    RuntimeError: unless F is divisible by 32*Df and nt_chunk by 32*Dt; also\n"
+            "        on B < 1, Df < 1, Dt < 1, niter < 1, sigma < 0, iter_sigma < 0, or an\n"
+            "        unsupported warps_per_block.")
+
+        .def_readonly("B", &GpuIntensityClipper::B, "Beams")
+        .def_readonly("F", &GpuIntensityClipper::F, "Full-resolution frequency channels")
+        .def_readonly("nt_chunk", &GpuIntensityClipper::nt_chunk,
+            "Full-resolution time samples. The array must hold exactly one chunk.")
+        .def_readonly("axis", &GpuIntensityClipper::axis, "The ClipperAxis being reduced")
+        .def_readonly("sigma", &GpuIntensityClipper::sigma,
+            "FINAL clip threshold, in units of the row's rms (not iter_sigma)")
+        .def_readonly("Df", &GpuIntensityClipper::Df, "Frequency downsampling factor")
+        .def_readonly("Dt", &GpuIntensityClipper::Dt, "Time downsampling factor")
+        .def_readonly("niter", &GpuIntensityClipper::niter,
+            "TOTAL passes of the statistic; 1 means no refinement")
+        .def_readonly("iter_sigma", &GpuIntensityClipper::iter_sigma,
+            "REFINEMENT threshold, in rms units; ignored at niter=1")
+        .def_readonly("two_pass", &GpuIntensityClipper::two_pass,
+            "Use the stabler two-pass first pass")
+        .def_readonly("warps_per_block", &GpuIntensityClipper::warps_per_block,
+            "Performance knob for the final clip kernel (4, 8, 16 or 32)")
+
+        .def_readonly("F_ds", &GpuIntensityClipper::F_ds, "F // Df")
+        .def_readonly("T_ds", &GpuIntensityClipper::T_ds, "nt_chunk // Dt")
+        .def_readonly("wrms_L", &GpuIntensityClipper::wrms_L,
+            "Samples per statistic row. Exposed so that a test can rebuild the internal\n"
+            "GpuWrms exactly, which is how this transform is checked: the statistic comes\n"
+            "from the GPU and only the final clip is referenced.")
+        .def_readonly("wrms_R", &GpuIntensityClipper::wrms_R,
+            "Statistic rows: B*F_ds (TIME), B*T_ds (FREQ), or B (NONE)")
+        .def_readonly("scratch_nelts", &GpuIntensityClipper::scratch_nelts,
+            "Number of float32 scratch elements launch() needs. Never zero.")
+
+        .def_static("time_selected", &GpuIntensityClipper::time_selected,
+            py::call_guard<py::gil_scoped_release>(),
+            "Run timing benchmarks, for the four configurations the old search's\n"
+            "production RFI chain uses (called via 'python -m pirate_frb time --cfrb')")
+
+        .def("launch",
+            [](const GpuIntensityClipper &self, const Array<float> &intensity,
+               Array<float> &weights, Array<float> &scratch, uintptr_t stream_ptr) {
+                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                self.launch(intensity, weights, scratch, stream);
+            },
+            py::arg("intensity"), py::arg("weights"), py::arg("scratch"), py::arg("stream_ptr"),
+            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+            "GPU kernel launch (async, does not sync stream).\n"
+            "\n"
+            "All arrays are cupy float32 arrays, fully contiguous, and on GPU.\n"
+            "\n"
+            "Args:\n"
+            "    intensity: shape (B, F, nt_chunk). Read only, never modified.\n"
+            "    weights: shape (B, F, nt_chunk). MODIFIED IN PLACE: zeroed where the clip\n"
+            "        fires, bit-identical everywhere else. Must be >= 0 on entry.\n"
+            "    scratch: shape (scratch_nelts,). Contents ignored on entry, garbage on exit.\n"
+            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)\n"
+            "\n"
+            "Raises:\n"
+            "    RuntimeError: on a shape mismatch. A time axis that is a multiple of\n"
+            "        nt_chunk gets a message saying so: T = N*nt_chunk is a generalization\n"
+            "        we have not implemented, not a caller error.")
         ;
 }
 

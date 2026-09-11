@@ -11,3 +11,6 @@ from ..pirate_pybind11 import AssembledChunk
 # import side effect) and re-exports the class.
 from .ReferenceWiDownsampler import GpuWiDownsampler, ReferenceWiDownsampler
 from .ReferenceWrms import GpuWrms, ReferenceWrms, wrms_iterate, iclip
+from .ReferenceIntensityClipper import (AXIS_FREQ, AXIS_TIME, AXIS_NONE, ClipperAxis,
+                                        GpuIntensityClipper, ReferenceIntensityClipper,
+                                        intensity_clip, wrms_view)

@@ -36,6 +36,14 @@ include/pirate/chimefrb/Wrms.hpp, and the final clip IS tested against an indepe
 reference. The spot check in misc/chimefrb/rfi_wrms/ closes it too, by running the old
 kernel's own internal masking.
 
+A NOTE ON GPU-VS-GPU COMPARISONS. Nothing here compares two GPU runs and asserts that
+they agree on a sharp decision. Two block sizes sum in a different order, so a row whose
+variance sits within roundoff of a validity cutoff lands on either side depending on the
+block size, and requiring them to agree is requiring something no two correct
+implementations must satisfy. Every such comparison goes through the bracket instead.
+(Bitwise comparisons are fine where nothing sharp is involved -- determinism, row
+independence, and the masked-data check below are all bitwise.)
+
 WHAT THIS FILE CANNOT ESTABLISH: the numpy reference is a transcription, so a shared
 misreading would pass everything here. That is what the spot check is for.
 """
@@ -270,9 +278,9 @@ def test_wrms(iteration=0, rng=None, verbose=False):
         # budget for even on the single-pass path: pass two_pass=True here.
         (rm, rr, nboth) = _check(f'niter={niter}', L, True, gpu_mean, gpu_var, ref)
 
-    # Structural check 1: threads_per_block is a performance knob, and must not change
-    # the answer. Not bitwise -- a different block size sums in a different order -- so it
-    # is held to the same budget as the reference comparison.
+    # Structural check 1: threads_per_block is a performance knob. Every value on the menu
+    # is held to the reference, with the same bracketing and the same budgets as the main
+    # comparison above.
     #
     # AT niter=1 ONLY, and deliberately so. Comparing two full refinement chains is the
     # comparison the induction above exists to avoid: two correct float32 runs genuinely
@@ -282,23 +290,21 @@ def test_wrms(iteration=0, rng=None, verbose=False):
     # measured at 1.5e-5 on the mean, 40x its budget, from a single sample flipping in a
     # row of 6000 -- and it is the whole reason two_pass exists. niter=1 is where the block
     # reduction, which is the only thing threads_per_block changes, is exercised cleanly.
-    base = GpuWrms(L, 1, iter_sigma, two_pass, tpb)
-    (b_mean, b_var) = _run_gpu(cp, base, in_i, in_w)
+    #
+    # Note what is NOT asserted: that two block sizes produce the same SET of valid rows.
+    # The validity cutoff is a hard decision on a float32 variance, and two block sizes sum
+    # in a different order, so a row whose variance sits within roundoff of the cutoff can
+    # legitimately land on either side. That is not rare and not hypothetical -- it happens
+    # on about 1% of draws, always on the single-pass path, always within 0.2% of the
+    # cutoff, because random_arrays() deliberately makes some rows nearly constant at a
+    # large mean in order to reach exactly this corner. Bracketing each block size against
+    # the reference is both correct and strictly stronger than requiring them to agree with
+    # each other.
+    ref1 = ref if (niter == 1) else _reference_triple(1, iter_sigma, two_pass, I, W)
 
     for tpb2 in THREAD_COUNTS:
-        if tpb2 == tpb:
-            continue
         (m2, v2) = _run_gpu(cp, GpuWrms(L, 1, iter_sigma, two_pass, tpb2), in_i, in_w)
-        assert np.array_equal(v2 > 0, b_var > 0), \
-            f'threads_per_block {tpb} vs {tpb2}: different set of valid rows'
-        ok = (b_var > 0)
-        if ok.any():
-            rms = np.sqrt(b_var[ok])
-            (eps_m, eps_r) = _budgets(L, two_pass, b_mean[ok], rms)
-            assert np.all(np.abs(m2[ok] - b_mean[ok]) <= eps_m), \
-                f'threads_per_block {tpb} vs {tpb2}: mean differs by more than its budget'
-            assert np.all(np.abs(np.sqrt(v2[ok]) - rms) <= eps_r), \
-                f'threads_per_block {tpb} vs {tpb2}: rms differs by more than its budget'
+        _check(f'niter=1, tpb={tpb2}', L, two_pass, m2, v2, ref1)
 
     # Structural check 2: rows are independent. Catches a scratch-indexing error on the
     # global path, where blocks from different rows share one scratch array.

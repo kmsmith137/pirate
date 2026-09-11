@@ -851,6 +851,77 @@ def _sec_chimefrb(rep, ndraw):
     rep.dist('fraction of rows with no statistic', dead_frac, ('p90', 0.001, 1.0),
              'test_wrms', fmt='{:.3g}')
 
+    # ---- GpuIntensityClipper
+
+    from ..chimefrb import test_intensity_clipper as ict
+    from ..chimefrb import (ClipperAxis, ReferenceWiDownsampler, ReferenceWrms,
+                            intensity_clip, wrms_view)
+
+    rep.section('chimefrb.test_intensity_clipper randomization',
+                subtitle=f'{ndraw} draws of random_config() + random_geometry() + random_arrays()',
+                consumer='test --cfrb: GpuIntensityClipper against ReferenceIntensityClipper')
+
+    production, downsampled, refined, global_path = 0, 0, 0, 0
+    per_axis = {ClipperAxis.FREQ: 0, ClipperAxis.TIME: 0, ClipperAxis.NONE: 0}
+    any_clipped, any_dead, sigma_differs = 0, 0, 0
+    clip_frac = []
+
+    for _ in range(ndraw):
+        (axis, Df, Dt, niter, sigma, iter_sigma, two_pass, _w) = ict.random_config(rng)
+        (B, F, T) = ict.random_geometry(rng, axis, Df, Dt)
+        (I, W) = ict.random_arrays(rng, B, F, T)
+
+        production += (axis, Df, Dt) in ict.PRODUCTION_CONFIGS
+        per_axis[axis] += 1
+        downsampled += (Df, Dt) != (1, 1)
+        refined += (niter > 1)
+        sigma_differs += (abs(sigma - iter_sigma) > 0.5)
+
+        # The three steps of the reference, at niter=1 (cheap, and enough to say which
+        # corner cases the draw reaches). Done here rather than through
+        # ReferenceIntensityClipper.apply() because this needs the variance as well as
+        # the clipped weights.
+        (i_ds, w_ds) = ReferenceWiDownsampler(Df, Dt, transpose=False).apply(I, W)
+        (mean, var) = ReferenceWrms(1, iter_sigma, two_pass).apply(
+            wrms_view(i_ds, axis), wrms_view(w_ds, axis))
+
+        global_path += (var.shape[0] > 0) and (wrms_view(i_ds, axis).shape[1] > wr.L_SHARED_MAX)
+        any_dead += bool(np.any(var <= 0))
+
+        w_out = intensity_clip(i_ds, W, mean, var, sigma, axis, Df, Dt)
+        nw = int(np.sum(W > 0))
+        frac = float(np.sum((w_out == 0) & (W > 0))) / max(nw, 1)
+        clip_frac.append(frac)
+        any_clipped += (frac > 0)
+
+    rep.rate('config drawn from the production four', production, ndraw, (40, 80),
+             'spends most iterations on the (axis, Df, Dt) the port will actually use')
+    for (ax, label) in ((ClipperAxis.FREQ, 'AXIS_FREQ'), (ClipperAxis.TIME, 'AXIS_TIME'),
+                        (ClipperAxis.NONE, 'AXIS_NONE')):
+        rep.rate(label, per_axis[ax], ndraw, (15, 55),
+                 'all three axes must be sampled: they differ in the reshape and in'
+                 ' which arrays get materialized')
+    rep.rate('(Df,Dt) != (1,1) (downsampler runs)', downsampled, ndraw, (30, 75),
+             'test_intensity_clipper: the Df/Dt write loop and the cell-uniformity check')
+    rep.rate('niter > 1 (refinements run)', refined, ndraw, (40, 80),
+             'the GPU-supplied-(mean,var) comparison is the only one that runs here')
+    rep.rate('GpuWrms global-memory path', global_path, ndraw, (3, 40),
+             'only AXIS_NONE reaches it; random_geometry() straddles the threshold on'
+             ' purpose')
+    rep.rate('sigma and iter_sigma differ by > 0.5', sigma_differs, ndraw, (55, 95),
+             'a kernel that confused the two is invisible when they are drawn equal')
+
+    # The tripwire on vacuity. A draw where the clip fires on nothing compares two
+    # untouched weight arrays and tests almost nothing, so this must stay high. It is
+    # sensitive to the injected-outlier amplitudes in random_arrays(), which have to stay
+    # clear of the rms they themselves inflate -- see the comment there.
+    rep.rate('>= 1 weight clipped', any_clipped, ndraw, (60, 100),
+             'test_intensity_clipper: without this the comparison is vacuous')
+    rep.rate('>= 1 row with no usable statistic', any_dead, ndraw, (30, 100),
+             'the var == 0 path, where a whole row of weights is zeroed')
+    rep.dist('fraction of weights clipped', clip_frac, ('p90', 0.001, 1.0),
+             'test_intensity_clipper', fmt='{:.3g}')
+
 
 def report_coverage(select=(), scale=1.0):
     """Print the coverage report. 'select' is a subset of _SECTIONS (empty = all).
