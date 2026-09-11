@@ -20,3 +20,4 @@ from .ReferenceStdDevClipper import (GpuStdDevClipper, ReferenceStdDevClipper, c
                                      std_dev_apply)
 from .ReferenceBadChannelMask import GpuBadChannelMask, ReferenceBadChannelMask, badchannel_keep
 from .ReferenceSplineDetrender import GpuSplineDetrender, ReferenceSplineDetrender
+from .ReferencePolynomialDetrender import GpuPolynomialDetrender, ReferencePolynomialDetrender

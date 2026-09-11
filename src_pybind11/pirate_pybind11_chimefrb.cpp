@@ -7,6 +7,7 @@
 //   - GpuWiDownsampler: launch() converts stream=None to the current cupy stream
 //   - GpuWrms: same, and lets the caller omit the scratch array
 //   - GpuIntensityClipper: same
+//   - GpuPolynomialDetrender: same
 //   - GpuSplineDetrender: same
 //   - GpuStdDevClipper: same
 //   - GpuBadChannelMask: __init__ also takes bool/integer arrays; from_mask_ranges() factory;
@@ -26,6 +27,7 @@
 #include "../include/pirate/chimefrb/ClipperAxis.hpp"
 #include "../include/pirate/chimefrb/ClipperBase.hpp"
 #include "../include/pirate/chimefrb/IntensityClipper.hpp"
+#include "../include/pirate/chimefrb/PolynomialDetrender.hpp"
 #include "../include/pirate/chimefrb/SplineDetrender.hpp"
 #include "../include/pirate/chimefrb/StdDevClipper.hpp"
 #include "../include/pirate/chimefrb/WiDownsampler.hpp"
@@ -424,6 +426,81 @@ void register_chimefrb_bindings(pybind11::module &m)
             "    intensity: shape (M, nfreq, T), cupy float32, fully contiguous, on GPU. The\n"
             "        fitted baseline is subtracted in place at every channel.\n"
             "    weights: same shape and dtype. Must be >= 0 (not checked). Read only.\n"
+            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
+        ;
+
+    // GpuPolynomialDetrender: Python injections in
+    // pirate_frb/chimefrb/ReferencePolynomialDetrender.py:
+    //   - launch: converts stream=None to current cupy stream
+    py::class_<GpuPolynomialDetrender>(m, "GpuPolynomialDetrender",
+        "A port of rf_pipelines::polynomial_detrender along the time axis, the only axis\n"
+        "the old CHIME FRB search's production RFI chain ran it on.\n"
+        "\n"
+        "Per (beam, channel, chunk of ``nt_chunk`` samples), independently: fit a polynomial\n"
+        "of degree ``polydeg`` in time to the intensity by weighted least squares (Legendre\n"
+        "basis, no regularization), and subtract it at every sample of the chunk. Before\n"
+        "the solve, a CONDITIONING GATE decides whether the row is fit at all: the normal\n"
+        "matrix is Cholesky-factored pivot by pivot, and the row passes only if at every\n"
+        "pivot the Schur complement exceeds ``epsilon`` times the diagonal entry. A row that\n"
+        "fails has ALL its weights set to zero and its intensity left untouched -- the\n"
+        "transform's only effect on the weights, and not a corner case: at the production\n"
+        "setting (degree 4, epsilon 0.01, 1024-sample chunks) a channel whose weighted\n"
+        "samples form one contiguous run shorter than about half the chunk is erased for\n"
+        "that chunk.\n"
+        "\n"
+        "This reproduces the old code's ESTIMATOR and gate DECISION, not its arithmetic:\n"
+        "the solve is rescaled to unit diagonal first, and a row within float32 roundoff\n"
+        "of the threshold may be decided either way. A NaN intensity at a zero-weight\n"
+        "sample contributes exactly zero (the old code let it poison the row). Validated\n"
+        "against :class:`ReferencePolynomialDetrender`, a transcription of the old kernel,\n"
+        "which also implements the old code's AXIS_FREQ variant.\n"
+        "\n"
+        "Stateless: one instance may be used from any number of streams at once.\n"
+        "\n"
+        "Attributes (read-only):\n"
+        "\n"
+        "- ``polydeg``, ``epsilon``, ``nt_chunk``, ``warps_per_block`` -- the constructor\n"
+        "  arguments.\n")
+
+        .def(py::init<long, double, long, long>(),
+            py::arg("polydeg"), py::arg("epsilon"), py::arg("nt_chunk"), py::arg("warps_per_block") = 16,
+            "Create a GpuPolynomialDetrender.\n"
+            "\n"
+            "Args:\n"
+            "    polydeg: degree of the fit, 0..8 (the production chain uses 4).\n"
+            "    epsilon: gate threshold, > 0 (the production chain uses 0.01).\n"
+            "    nt_chunk: samples per independent fit; a positive multiple of 64 (the\n"
+            "        production chain uses 1024, one assembled chunk).\n"
+            "    warps_per_block: 4, 8 or 16. A performance knob; does not change the result.\n"
+            "\n"
+            "Raises:\n"
+            "    RuntimeError: on an argument outside those ranges.")
+
+        .def_readonly("polydeg", &GpuPolynomialDetrender::polydeg)
+        .def_readonly("epsilon", &GpuPolynomialDetrender::epsilon)
+        .def_readonly("nt_chunk", &GpuPolynomialDetrender::nt_chunk)
+        .def_readonly("warps_per_block", &GpuPolynomialDetrender::warps_per_block)
+
+        .def_static("time_selected", &GpuPolynomialDetrender::time_selected,
+            py::call_guard<py::gil_scoped_release>(),
+            "Run timing benchmarks at the production configuration, at the two channel\n"
+            "counts the old chain uses (called via 'python -m pirate_frb time --cfrb')")
+
+        .def("launch",
+            [](const GpuPolynomialDetrender &self, Array<float> &intensity,
+               Array<float> &weights, uintptr_t stream_ptr) {
+                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                self.launch(intensity, weights, stream);
+            },
+            py::arg("intensity"), py::arg("weights"), py::arg("stream_ptr"),
+            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+            "GPU kernel launch (async, does not sync stream).\n"
+            "\n"
+            "Args:\n"
+            "    intensity: shape (M, nfreq, T), cupy float32, fully contiguous, on GPU, T a\n"
+            "        multiple of nt_chunk. Detrended in place on rows that pass the gate.\n"
+            "    weights: same shape and dtype. Must be >= 0 (not checked). MODIFIED IN\n"
+            "        PLACE: zeroed on rows that fail the gate, untouched elsewhere.\n"
             "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 

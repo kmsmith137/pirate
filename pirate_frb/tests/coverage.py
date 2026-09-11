@@ -1111,6 +1111,82 @@ def _sec_chimefrb(rep, ndraw):
     rep.rate('column: fully valid', full, ncols, (8, 35),
              'the ordinary case, which must stay common')
 
+    # ---- GpuPolynomialDetrender
+
+    from ..chimefrb import test_polynomial_detrender as pdt
+    from ..chimefrb import ReferencePolynomialDetrender
+
+    rep.section('chimefrb.test_polynomial_detrender randomization',
+                subtitle=f'{ndraw} draws of random_config() + random_geometry() + random_weights() + inject_nans()',
+                consumer='test --cfrb: GpuPolynomialDetrender against ReferencePolynomialDetrender')
+
+    production, deg4, deg0, deg6, multichunk, nonbinary, nan_planted = 0, 0, 0, 0, 0, 0, 0
+    any_masked, any_singular, any_zero, any_full, prod_masked, nprod = 0, 0, 0, 0, 0, 0
+    masked_frac, band_frac = [], []
+
+    for _ in range(ndraw):
+        (polydeg, epsilon, nt_chunk, kind, _W) = pdt.random_config(rng)
+        (M, nfreq, nchunk) = pdt.random_geometry(rng)
+        shape = (M, nfreq, nchunk * nt_chunk)
+        ref = ReferencePolynomialDetrender(polydeg, epsilon, nt_chunk)
+        w = pdt.random_weights(rng, ref, shape, kind)
+        intensity = pdt.random_intensity(rng, ref, shape)
+        (_, _, zw_nan, rows_wnan, rows_nanw) = pdt.inject_nans(rng, ref, intensity, w)
+
+        is_prod = (polydeg, epsilon, nt_chunk, kind) in pdt.PRODUCTION_CONFIGS
+        production += is_prod
+        deg4 += (polydeg == 4)
+        deg0 += (polydeg == 0)
+        deg6 += (polydeg >= 6)
+        multichunk += (nchunk > 1)
+        nonbinary += bool(np.any((w != 0) & (w != 1)))
+        nan_planted += bool(zw_nan.any() or rows_wnan.any() or rows_nanw.any())
+
+        # The gate decision and its roundoff band, from the reference; the row patterns
+        # that reach the kernel's branches.
+        (surely_masked, _, band) = pdt.gate_bracket(ref, w)
+        nz = (w.reshape(M, nfreq, nchunk, nt_chunk) != 0).sum(axis=3)
+        any_masked += bool(surely_masked.any())
+        masked_frac.append(float(surely_masked.mean()))
+        band_frac.append(float(band.mean()))
+        any_singular += bool(((nz > 0) & (nz <= polydeg)).any())
+        any_zero += bool((nz == 0).any())
+        any_full += bool((nz == nt_chunk).any())
+        if is_prod:
+            nprod += 1
+            prod_masked += bool(surely_masked.any())
+
+    rep.rate('config drawn from the production two', production, ndraw, (30, 55),
+             'spends iterations at the configuration the port will run at')
+    rep.rate('polydeg = 4', deg4, ndraw, (35, 65), 'the production degree (N = 5)')
+    rep.rate('polydeg = 0', deg0, ndraw, (2, 15), 'a weighted mean; the gate is sum(w) > 0')
+    rep.rate('polydeg >= 6', deg6, ndraw, (10, 35),
+             'the register-heavy instantiations, and the pivots that compound roundoff')
+    rep.rate('nchunk > 1', multichunk, ndraw, (45, 85), 'test_polynomial_detrender: chunk independence')
+    rep.rate('non-binary weights', nonbinary, ndraw, (55, 95), 'the weighted fit, not a mask')
+    rep.rate('NaN planted somewhere', nan_planted, ndraw, (10, 40),
+             'the select at zero weight, the all-NaN row, the NaN weight')
+
+    # The tripwire on the gate. A draw that masks no row tests the transform\'s main
+    # behaviour not at all; and the production configuration reaches it only through the
+    # dead runs random_weights() cuts into production rows.
+    rep.rate('>= 1 row masked by the gate', any_masked, ndraw, (60, 100),
+             'test_polynomial_detrender: without this the gate sandwich is vacuous')
+    rep.rate('production draw with >= 1 masked row', prod_masked, max(nprod, 1), (70, 100),
+             'the gate at (degree 4, epsilon 0.01, 1024 samples): the dead-run rows')
+    rep.rate('>= 1 exactly singular row (1..polydeg weighted samples)', any_singular, ndraw, (25, 70),
+             'the sparse kind: the old test\'s only gate case')
+    rep.rate('>= 1 row with no weight', any_zero, ndraw, (25, 75), 'pivot 0 fails; untouched')
+    rep.rate('>= 1 fully weighted row', any_full, ndraw, (40, 100), 'the ordinary case, which must stay common')
+    rep.dist('fraction of rows masked', masked_frac, ('p90', 0.01, 1.0),
+             'test_polynomial_detrender', fmt='{:.3g}')
+    # Rows inside the band are accepted either way, so the band must stay a small fraction
+    # of rows for the sandwich to have teeth. It is not rare per DRAW: at small epsilon and
+    # high degree float32 cannot decide many rows (see GATE_BAND), and those draws are meant
+    # to be drawn.
+    rep.dist('fraction of rows inside the gate band', band_frac, ('p90', 0.0, 0.25),
+             'test_polynomial_detrender: accepted either way (see GATE_BAND)', fmt='{:.3g}')
+
 
 def report_coverage(select=(), scale=1.0):
     """Print the coverage report. 'select' is a subset of _SECTIONS (empty = all).

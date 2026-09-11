@@ -35,6 +35,7 @@ from .chimefrb import test_intensity_clipper as chimefrb_ic_tests
 from .chimefrb import test_std_dev_clipper as chimefrb_sd_tests
 from .chimefrb import test_badchannel_mask as chimefrb_bcm_tests
 from .chimefrb import test_spline_detrender as chimefrb_spd_tests
+from .chimefrb import test_polynomial_detrender as chimefrb_pd_tests
 from . import kernels
 from . import loose_ends
 from . import core
@@ -327,6 +328,7 @@ def test(args):
             chimefrb_sd_tests.test_std_dev_clipper(i)
             chimefrb_bcm_tests.test_badchannel_mask(i)
             chimefrb_spd_tests.test_spline_detrender(i)
+            chimefrb_pd_tests.test_polynomial_detrender(i)
 
         if run_all_tests or args.zomb:
             loose_ends.test_avx2_m64_outbuf()
@@ -949,7 +951,7 @@ def parse_time(subparsers):
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() timing')
     parser.add_argument('--dtl1', action='store_true', help='Runs GpuDetrenderLps1d.time_selected() (1-d local-polynomial detrender kernel)')
     parser.add_argument('--dtl2', action='store_true', help='Runs GpuDetrenderLps2d.time_selected() (2-d spline detrender kernel)')
-    parser.add_argument('--cfrb', action='store_true', help='Runs time_selected() for the chimefrb port\'s kernels (GpuWiDownsampler, GpuWrms, GpuIntensityClipper, GpuStdDevClipper, GpuBadChannelMask, GpuSplineDetrender)')
+    parser.add_argument('--cfrb', action='store_true', help='Runs time_selected() for the chimefrb port\'s kernels (GpuWiDownsampler, GpuWrms, GpuIntensityClipper, GpuStdDevClipper, GpuBadChannelMask, GpuSplineDetrender, GpuPolynomialDetrender)')
 
 def time_command(args):
     timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'cfrb', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim', 'dtl1', 'dtl2' ]
@@ -991,6 +993,7 @@ def time_command(args):
         chimefrb_sd_tests.GpuStdDevClipper.time_selected()
         chimefrb_bcm_tests.GpuBadChannelMask.time_selected()
         chimefrb_spd_tests.GpuSplineDetrender.time_selected()
+        chimefrb_pd_tests.GpuPolynomialDetrender.time_selected()
     if run_all_timings or args.dtl1:
         kernels.GpuDetrenderLps1d.time_selected()
     if run_all_timings or args.dtl2:
