@@ -199,9 +199,8 @@ class ReferencePolynomialDetrender:
         equilibrated normal matrix, shaped _row_shape() + (N,).
 
         Zero at every pivot for a row with no weight, NaN for a row whose weights are not
-        finite. The row is masked iff NOT min(pivots) > epsilon. Exposed so that a test can
-        size the roundoff band of the gate decision per row: float32 error in pivot j is
-        amplified by the pivots before it, roughly in proportion to sum_{k<j} 1/pivot_k.
+        finite. The row is masked iff NOT min(pivots) > epsilon. Exposed, with
+        gate_error_scales(), so that a test can bracket the gate decision pivot by pivot.
         """
         (Ahat, ok, finite) = self._gate_matrices(weights)
         K = Ahat.shape[0]
@@ -209,6 +208,27 @@ class ReferencePolynomialDetrender:
         if ok.any():
             piv[ok] = pivot_ratios(Ahat[ok])
         return piv.reshape(self._row_shape(np.shape(weights)) + (self.N,))
+
+    def gate_error_scales(self, weights):
+        """How sensitive each pivot is to roundoff in the normal matrix, shaped
+        _row_shape() + (N,): entry j is 1 / lambda_min of the leading j x j block of the
+        equilibrated normal matrix, for j >= 1, and 0 for j = 0.
+
+        Pivot j is the Schur complement a_jj - a_j^T A_j^{-1} a_j of the leading block A_j.
+        Perturbing the matrix by E moves it by about |E| (1 + |x|)^2 with x = A_j^{-1} a_j,
+        and |x|^2 <= 1/lambda_min(A_j) since x^T A_j x = 1 - pivot_j <= 1; so a float32
+        implementation computes pivot j to about eps_mach / lambda_min(A_j), however small
+        the pivot itself. Exposed for the tests' gate bracket. Same conventions as
+        gate_pivots() for rows with no weight (0) or non-finite weights (NaN).
+        """
+        (Ahat, ok, finite) = self._gate_matrices(weights)
+        K = Ahat.shape[0]
+        scale = np.where(finite[:, None], 0.0, np.nan) * np.ones((K, self.N))
+        if ok.any():
+            for j in range(1, self.N):
+                lam = np.linalg.eigvalsh(Ahat[ok][:, :j, :j])[:, 0]
+                scale[ok, j] = 1.0 / np.maximum(lam, np.finfo(np.float64).tiny)
+        return scale.reshape(self._row_shape(np.shape(weights)) + (self.N,))
 
     def conditioning(self, weights):
         """Two conditioning statistics of every row's fit, each shaped like _row_shape().

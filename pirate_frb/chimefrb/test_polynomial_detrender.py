@@ -51,26 +51,34 @@ WARP_COUNTS = [4, 8, 16]
 # implementation is held to that decision only where the float64 reference puts the pivot
 # clearly on one side: with, per pivot,
 #
-#     band_j = GATE_BAND * epsilon  +  GATE_BAND_MACH * eps_mach * sum_{k < j} 1 / pivot_k,
+#     band_j = GATE_BAND * epsilon  +  GATE_BAND_MACH * eps_mach / lambda_min(A_j),
 #
-# a row with SOME pivot_j < epsilon - band_j must be masked by the kernel, a row with EVERY
-# pivot_j > epsilon + band_j must not be, and any other row may go either way. Two terms
-# because float32 error in a pivot has two sources. The pivot is the difference
-# 1 - sum_k L_jk^2, which near the threshold is a small fraction of its terms, so the
-# roundoff in the accumulated normal matrix (about sqrt(n)*eps_mach relative) is amplified
-# by the cancellation -- to a few 1e-4 relative at n = 1024 and epsilon = 0.01, an order of
-# magnitude under the first term. And each pivot is computed THROUGH the ones before it,
-# dividing by L_kk = sqrt(pivot_k) at every step, so a run of small pivots compounds the
-# error roughly as the sum of their inverses; at degree 7 with pivots of 1e-3 that reaches
-# 1e-3 absolute, far beyond any relative band on a small epsilon. MEASURED on the two rows
-# that first exposed this: error / (eps_mach * sum) of 1.6 and 0.2; GATE_BAND_MACH = 8 is
-# 5x above the larger. At the production configuration the second term is ~1e-5 against a
-# first term of 2e-4, so a row lands in the band only when a dead run's length is within a
-# couple of samples of the crossing; the coverage report tracks how often. Same
-# construction as stage2_bracket() in test_std_dev_clipper.py: a bracket, because the old
-# code is float32 too.
+# A_j the leading j x j block of the equilibrated normal matrix
+# (ReferencePolynomialDetrender.gate_error_scales), a row with SOME pivot_j < epsilon - band_j
+# must be masked by the kernel, a row with EVERY pivot_j > epsilon + band_j must not be, and
+# any other row may go either way. Two terms because float32 error in a pivot has two
+# sources. The pivot is the difference 1 - sum_k L_jk^2, which near the threshold is a small
+# fraction of its terms, so the roundoff in the accumulated normal matrix (about
+# sqrt(n)*eps_mach relative) is amplified by the cancellation -- to a few 1e-4 relative at
+# n = 1024 and epsilon = 0.01, an order of magnitude under the first term. And pivot j is
+# the Schur complement of A_j, whose sensitivity to roundoff in the matrix is 1/lambda_min(A_j)
+# (see gate_error_scales): after a run of small pivots it can be thousands of eps_mach,
+# however small epsilon is, so no relative band can cover it. MEASURED against a float32
+# emulation of the kernel over 10278 (row, pivot) pairs at degrees 4-8: error /
+# (eps_mach / lambda_min) has median 0.21, p99 1.4 and maximum 3.3, the same at every degree
+# (a sum-of-inverse-pivots form reached 176 at degree 8 and let a real failure through);
+# and against the GPU's own decisions on 2304 rows x 240 epsilons at degrees 1-8, where a
+# constant of 0.5 already leaves no violation -- the emulation is pessimistic, lacking the
+# kernel's fused multiply-adds. GATE_BAND_MACH = 16 is 5x above the emulation's maximum,
+# which is the margin the old code, float32 and unequilibrated, gets in the spot check. At
+# the production configuration the second term is ~1e-5
+# against a first term of 2e-4, so a row lands in the band only when a dead run's length is
+# within a couple of samples of the crossing; at small epsilon and high degree, where
+# float32 cannot decide, a third of a draw's rows can. The coverage report tracks the band
+# fraction. Same construction as stage2_bracket() in test_std_dev_clipper.py: a bracket,
+# because the old code is float32 too.
 GATE_BAND = 0.02
-GATE_BAND_MACH = 8.0
+GATE_BAND_MACH = 16.0
 
 
 def gate_bracket(ref, weights):
@@ -79,10 +87,9 @@ def gate_bracket(ref, weights):
     codes do with it.
     """
     piv = ref.gate_pivots(weights)                                  # (..., N)
-    with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
-        inv = np.where(piv > 0, 1.0 / np.where(piv > 0, piv, 1.0), 0.0)
-        S = np.cumsum(inv, axis=-1) - inv                           # sum over k < j
-        band = GATE_BAND * ref.epsilon + GATE_BAND_MACH * np.finfo(np.float32).eps * S
+    scale = ref.gate_error_scales(weights)                          # (..., N)
+    with np.errstate(invalid='ignore', over='ignore'):
+        band = GATE_BAND * ref.epsilon + GATE_BAND_MACH * np.finfo(np.float32).eps * scale
         surely_masked = np.any(~(piv >= ref.epsilon - band), axis=-1)
         surely_passed = np.all(piv > ref.epsilon + band, axis=-1)
     return (surely_masked, surely_passed, ~surely_masked & ~surely_passed)
