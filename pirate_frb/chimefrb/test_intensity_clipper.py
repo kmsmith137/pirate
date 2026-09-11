@@ -339,8 +339,9 @@ def test_intensity_clipper(iteration=0, rng=None, verbose=False):
     # Structural check 1: AXIS_FREQ equals AXIS_TIME on the transposed input, BITWISE.
     # The FREQ path transposes and then reduces rows, which is the same kernel on the same
     # values in the same order as the TIME path on pre-transposed input, so there is no
-    # roundoff to allow for. This is the cheapest strong check on the transpose plumbing,
-    # and it needs no reference at all.
+    # roundoff to allow for -- provided GpuWiDownsampler's (1,1) transpose copies the
+    # intensity through exactly, which it does. This is the cheapest strong check on the
+    # transpose plumbing, and it needs no reference at all.
     if (Df == 1) and (Dt == 1) and (axis == ClipperAxis.FREQ):
         ic_t = GpuIntensityClipper(B, T, F, ClipperAxis.TIME, sigma, 1, 1, niter,
                                    iter_sigma, two_pass, warps)

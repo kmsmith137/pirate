@@ -8,6 +8,8 @@
 //   - GpuWrms: same, and lets the caller omit the scratch array
 //   - GpuIntensityClipper: same
 //   - GpuStdDevClipper: same
+//   - GpuBadChannelMask: __init__ also takes bool/integer arrays; from_mask_ranges() factory;
+//     launch() converts stream=None
 
 #define PY_ARRAY_UNIQUE_SYMBOL PyArray_API_pirate
 #define NO_IMPORT_ARRAY  // Secondary file: don't call _import_array()
@@ -19,6 +21,7 @@
 #include <ksgpu/pybind11.hpp>
 
 #include "../include/pirate/chimefrb/AssembledChunk.hpp"
+#include "../include/pirate/chimefrb/BadChannelMask.hpp"
 #include "../include/pirate/chimefrb/ClipperAxis.hpp"
 #include "../include/pirate/chimefrb/ClipperBase.hpp"
 #include "../include/pirate/chimefrb/IntensityClipper.hpp"
@@ -178,6 +181,9 @@ void register_chimefrb_bindings(pybind11::module &m)
         "\n"
         "    out_w = sum of the cell's weights          (SUM, not mean)\n"
         "    out_i = (sum of w*i) / out_w,  or 0 where out_w <= 0\n"
+        "\n"
+        "At (Df, Dt) = (1, 1), out_i is the input intensity exactly (where out_w > 0), not\n"
+        "(w*i)/w, which can differ in the last bit.\n"
         "\n"
         "The 'sum, not mean' is worth flagging: rf_kernels::wi_downsampler (which this\n"
         "ports) sums, while the python helper rf_pipelines.utils.wi_downsample() takes the\n"
@@ -563,6 +569,59 @@ void register_chimefrb_bindings(pybind11::module &m)
             "    weights: shape (B, F, nt_chunk). MODIFIED IN PLACE: whole rows are zeroed\n"
             "        where the clip fires, bit-identical everywhere else. Must be >= 0.\n"
             "    scratch: shape (scratch_nelts,). Contents ignored on entry, garbage on exit.\n"
+            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
+        ;
+
+    // GpuBadChannelMask: Python injections in pirate_frb/chimefrb/ReferenceBadChannelMask.py:
+    //   - __init__: also accepts a 1-d bool or integer array, converting it to uint8
+    //   - from_mask_ranges: static factory, taking the old transform's list of MHz ranges
+    //   - launch: converts stream=None to current cupy stream
+    py::class_<GpuBadChannelMask>(m, "GpuBadChannelMask",
+        "Zeroes the weights of whole frequency channels. A port of rf_pipelines::badchannel_mask,\n"
+        "which the old CHIME FRB search used at the start of its RFI chain to remove channels\n"
+        "known in advance to be bad.\n"
+        "\n"
+        "The channels are given as a per-channel ``keep`` array (0 = mask). The old transform\n"
+        "takes a list of (freq_lo, freq_hi) MHz ranges instead: :meth:`from_mask_ranges` takes\n"
+        "that syntax, converting with ``badchannel_keep()``, whose docstring states the rule and\n"
+        "its quirks. This class itself never sees a frequency.\n"
+        "\n"
+        "A masked channel is set to +0.0, whatever it held (the old code stores a literal 0),\n"
+        "and every other weight is left bit-identical. The kernel writes only the zeros, so its\n"
+        "cost is proportional to the number of masked channels. Nothing depends on time, so\n"
+        "there is no chunking rule.")
+
+        .def(py::init<const Array<uint8_t> &, long>(),
+            py::arg("keep"), py::arg("warps_per_block") = 4,
+            py::call_guard<py::gil_scoped_release>(),   // copies 'keep' to the GPU; pure C++
+            "C++ constructor, from a 1-d uint8 host array (0 = mask). Wrapped by a python\n"
+            "__init__ that also accepts bool and integer arrays.")
+
+        .def_readonly("F", &GpuBadChannelMask::F, "Number of frequency channels")
+        .def_readonly("nmasked", &GpuBadChannelMask::nmasked, "Number of masked channels")
+        .def_readonly("keep", &GpuBadChannelMask::keep,
+            "The keep array, normalized to 0/1, in GPU memory (a cupy array)")
+        .def_readonly("warps_per_block", &GpuBadChannelMask::warps_per_block,
+            "Performance knob for the kernel (4, 8, 16 or 32)")
+
+        .def_static("time_selected", &GpuBadChannelMask::time_selected,
+            py::call_guard<py::gil_scoped_release>(),
+            "Run timing benchmarks at the production array size, for masks from one channel to\n"
+            "all of them (called via 'python -m pirate_frb time --cfrb')")
+
+        .def("launch",
+            [](const GpuBadChannelMask &self, Array<float> &weights, uintptr_t stream_ptr) {
+                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                self.launch(weights, stream);
+            },
+            py::arg("weights"), py::arg("stream_ptr"),
+            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+            "GPU kernel launch (async, does not sync stream).\n"
+            "\n"
+            "Args:\n"
+            "    weights: cupy float32 array, shape (B, F, T), fully contiguous, on GPU, with\n"
+            "        any B and T. MODIFIED IN PLACE: masked channels become +0.0, and every\n"
+            "        other weight is left bit-identical.\n"
             "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 }

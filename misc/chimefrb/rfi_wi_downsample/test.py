@@ -25,7 +25,9 @@ guarded divide yields 0/1), but it short-circuits (Df,Dt)=(1,1) to a plain memcp
 through untouched. pirate writes 0 in both cases: one rule instead of two, and a
 consumer that forgets to check the weight sees zeros rather than stale intensity. So
 the intensity comparison below runs where out_w > 0, which is where it is defined, and
-the masked cells are checked separately against pirate's stronger guarantee.
+the masked cells are checked separately against pirate's stronger guarantee. Where a
+(1,1) cell has weight, both codes copy the intensity through exactly -- rf_kernels by
+its memcpy, pirate by design -- so there the comparison is exact.
 
 NOT COVERED HERE: 'transpose', which the old kernel does not have. The transposed path
 is pinned instead by a structural check in pirate_frb/chimefrb/test_wi_downsampler.py
@@ -123,6 +125,11 @@ def main():
         t.check_allclose("out_i (Df=%d, Dt=%d)" % (Df, Dt), new_i[0][ok], old[0][ok], rtol=RTOL,
                          why="weighted mean over each cell, compared where out_w > 0; both"
                              " sum the same terms in different orders and precisions")
+
+        if (Df, Dt) == (1, 1):
+            t.check_allclose("out_i exact (1,1)", new_i[0][ok], old[0][ok], rtol=0.0,
+                             why="a (1,1) cell with weight is copied through bit for bit by"
+                                 " both codes; the clippers' AXIS_FREQ path relies on it")
 
         # pirate zeroes the masked cells; the old code does so too except at (1,1),
         # where its memcpy shortcut leaves the raw intensity there. Checking pirate's

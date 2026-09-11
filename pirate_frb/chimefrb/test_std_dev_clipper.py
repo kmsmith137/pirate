@@ -363,7 +363,9 @@ def test_std_dev_clipper(iteration=0, rng=None, verbose=False):
 
     # Structural check 1: AXIS_FREQ equals AXIS_TIME on the transposed input, BITWISE, at
     # (1,1): the FREQ path transposes and reduces rows, then stage 2 sees the same values in
-    # the same order.
+    # the same order. That needs GpuWiDownsampler's (1,1) transpose to copy the intensity
+    # through exactly; (w*i)/w would move the variances by roundoff, and a stage-2 decision
+    # within roundoff of its threshold would then flip.
     if (Df, Dt) == (1, 1) and (axis == ClipperAxis.FREQ):
         sd_t = GpuStdDevClipper(B, T, F, ClipperAxis.TIME, sigma, 1, 1, two_pass, warps)
         w_t = _run_gpu(cp, sd_t, np.ascontiguousarray(np.swapaxes(in_i, 1, 2)),

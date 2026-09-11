@@ -170,6 +170,18 @@ def test_wi_downsampler(iteration=0, rng=None, verbose=False):
             assert np.array_equal(one_i[0], gpu_i[b]), f'beam {b} of out_i is not a spectator'
             assert np.array_equal(one_w[0], gpu_w[b]), f'beam {b} of out_w is not a spectator'
 
+    # Structural check 4: at (1,1) -- which is always transposed, since (1,1,False) is the
+    # identity and is rejected -- the output is the input, transposed, BITWISE: the weights,
+    # and the intensity wherever the weight is positive. The clippers' AXIS_FREQ-vs-AXIS_TIME
+    # checks rely on this; (w*i)/w would miss it in the last bit.
+    if (Df, Dt) == (1, 1):
+        t_i = np.ascontiguousarray(np.swapaxes(in_i, 1, 2))
+        t_w = np.ascontiguousarray(np.swapaxes(in_w, 1, 2))
+        assert np.array_equal(gpu_w.view(np.uint32), t_w.view(np.uint32)), \
+            'the (1,1) transpose changed a weight'
+        assert np.array_equal(gpu_i, np.where(t_w > 0, t_i, np.float32(0))), \
+            'the (1,1) transpose did not copy the intensity through exactly'
+
     if verbose:
         atomic_print(f'    test_wi_downsampler(Df={Df}, Dt={Dt}, transpose={transpose},'
                      f' warps_per_block={W}, B={B}, F={F}, T={T}):'

@@ -54,6 +54,9 @@ class ReferenceWiDownsampler:
     every consumer multiplies it by that zero weight. We write 0 there. rf_kernels
     writes 0 too, except at (Df,Dt) = (1,1), where its memcpy short-circuit passes the
     raw intensity through instead. misc/chimefrb/rfi_wi_downsample/ measures this.
+
+    Where a (1,1) cell has weight, its intensity is copied through exactly, not recomputed
+    as (w*i)/w; see GpuWiDownsampler.
     """
 
     def __init__(self, Df, Dt, transpose):
@@ -72,14 +75,19 @@ class ReferenceWiDownsampler:
         assert (F % self.Df == 0) and (T % self.Dt == 0)
         (F_ds, T_ds) = (F // self.Df, T // self.Dt)
 
-        # Reshape splits each axis into (coarse, fine), and the sum is over the two
-        # fine axes. Done in float64 so that the reference is more accurate than the
-        # kernel it is checking, not equally inaccurate.
-        w = in_w.astype(np.float64).reshape(B, F_ds, self.Df, T_ds, self.Dt)
-        wi = w * in_i.astype(np.float64).reshape(B, F_ds, self.Df, T_ds, self.Dt)
+        if (self.Df, self.Dt) == (1, 1):
+            # A (1,1) cell is one sample, copied through exactly (see the class docstring).
+            out_w = in_w.astype(np.float64)
+            out_i = np.where(out_w > 0, in_i.astype(np.float64), 0.0)
+        else:
+            # Reshape splits each axis into (coarse, fine), and the sum is over the two
+            # fine axes. Done in float64 so that the reference is more accurate than the
+            # kernel it is checking, not equally inaccurate.
+            w = in_w.astype(np.float64).reshape(B, F_ds, self.Df, T_ds, self.Dt)
+            wi = w * in_i.astype(np.float64).reshape(B, F_ds, self.Df, T_ds, self.Dt)
 
-        out_w = w.sum(axis=(2, 4))
-        out_i = np.where(out_w > 0, wi.sum(axis=(2, 4)) / np.where(out_w > 0, out_w, 1), 0.0)
+            out_w = w.sum(axis=(2, 4))
+            out_i = np.where(out_w > 0, wi.sum(axis=(2, 4)) / np.where(out_w > 0, out_w, 1), 0.0)
 
         if self.transpose:
             out_i = np.ascontiguousarray(np.swapaxes(out_i, 1, 2))

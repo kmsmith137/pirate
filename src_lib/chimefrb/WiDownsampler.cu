@@ -60,6 +60,19 @@ __device__ __forceinline__ void _reduce_cell(const float *in_i, const float *in_
     const float *ip = in_i + long(f_local*Df)*T + long(t_local)*Dt;
     const float *wp = in_w + long(f_local*Df)*T + long(t_local)*Dt;
 
+    // A (1,1) cell is one sample, and its intensity is copied through exactly. The general
+    // formula below would give (w*i)/w, which rounds to within an ulp of i but not always to
+    // i -- and the clippers' AXIS_FREQ path transposes with this kernel at (1,1), so a
+    // last-bit change here moves their statistics by roundoff, and makes them disagree with
+    // AXIS_TIME on pre-transposed input. (Df, Dt) are uniform over the grid, so this branch
+    // costs nothing.
+    if ((Df == 1) && (Dt == 1)) {
+        const float w = wp[0];
+        out_w = w;
+        out_i = (w > 0.0f) ? ip[0] : 0.0f;
+        return;
+    }
+
     float wsum = 0.0f;
     float wisum = 0.0f;
 

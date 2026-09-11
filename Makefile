@@ -349,6 +349,7 @@ LIB_SRCFILES = \
   src_lib/varmap.cpp \
   src_lib/XEngineMetadata.cpp \
   src_lib/chimefrb/AssembledChunk.cpp \
+  src_lib/chimefrb/BadChannelMask.cu \
   src_lib/chimefrb/ClipperBase.cu \
   src_lib/chimefrb/IntensityClipper.cu \
   src_lib/chimefrb/StdDevClipper.cu \
@@ -400,11 +401,13 @@ PYFILES = \
   pirate_frb/yaml_utils.py \
   pirate_frb/chime/__init__.py \
   pirate_frb/chimefrb/__init__.py \
+  pirate_frb/chimefrb/ReferenceBadChannelMask.py \
   pirate_frb/chimefrb/ReferenceIntensityClipper.py \
   pirate_frb/chimefrb/ReferenceStdDevClipper.py \
   pirate_frb/chimefrb/ReferenceWiDownsampler.py \
   pirate_frb/chimefrb/ReferenceWrms.py \
   pirate_frb/chimefrb/test_assembled_chunk.py \
+  pirate_frb/chimefrb/test_badchannel_mask.py \
   pirate_frb/chimefrb/test_intensity_clipper.py \
   pirate_frb/chimefrb/test_std_dev_clipper.py \
   pirate_frb/chimefrb/test_wi_downsampler.py \
@@ -558,6 +561,7 @@ HFILES = \
   include/pirate/YamlFile.hpp \
   include/pirate/loose_ends/avx256_downsample.hpp \
   include/pirate/chimefrb/AssembledChunk.hpp \
+  include/pirate/chimefrb/BadChannelMask.hpp \
   include/pirate/chimefrb/ClipperAxis.hpp \
   include/pirate/chimefrb/ClipperBase.hpp \
   include/pirate/chimefrb/IntensityClipper.hpp \

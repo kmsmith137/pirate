@@ -992,6 +992,74 @@ def _sec_chimefrb(rep, ndraw):
              'test_std_dev_clipper', fmt='{:.3g}')
 
 
+    # ---- GpuBadChannelMask
+
+    from ..chimefrb import test_badchannel_mask as bct
+
+    rep.section('chimefrb.test_badchannel_mask randomization',
+                subtitle=f'{ndraw} draws of random_kernel_case(), and {ndraw} of random_range_case()',
+                consumer='test --cfrb: GpuBadChannelMask against ReferenceBadChannelMask, and'
+                         ' badchannel_keep() against keep_by_rule()')
+
+    keep_kinds, production, odd_F, odd_T, short_T, as_uint8, strided, nonfinite = {}, 0, 0, 0, 0, 0, 0, 0
+
+    for _ in range(ndraw):
+        c = bct.random_kernel_case(rng)
+        keep_kinds[c['keep_kind']] = keep_kinds.get(c['keep_kind'], 0) + 1
+        production += (c['F'], c['T']) == (1024, 4096)
+        odd_F += (c['F'] % 32) != 0
+        odd_T += (c['T'] % 32) != 0
+        short_T += (c['T'] < 32)
+        as_uint8 += (c['keep_arg'].dtype == np.uint8)
+        strided += (c['keep_arg'].strides[0] != c['keep_arg'].itemsize)
+        nonfinite += any((not c['keep'][f]) for (_, f, _, _) in c['plants'])
+
+    for kind in ('all kept', 'all masked', 'independent', 'runs'):
+        band = (2, 10) if kind.startswith('all') else (30, 60)
+        rep.rate(f'keep: {kind}', keep_kinds.get(kind, 0), ndraw, band,
+                 'masks of every shape, and launch()\'s early return when nothing is masked')
+    rep.rate('production (F, T) = (1024, 4096)', production, ndraw, (4, 18),
+             'the size the chain runs at')
+    rep.rate('F % 32 != 0', odd_F, ndraw, (50, 85),
+             'the kernel has no divisibility rule, unlike every other chimefrb kernel')
+    rep.rate('T % 32 != 0', odd_T, ndraw, (65, 95),
+             'rows that are not whole cache lines: the row loop\'s bound is the tail predicate')
+    rep.rate('T < 32', short_T, ndraw, (10, 28), 'rows shorter than a warp')
+    rep.rate('keep passed as uint8', as_uint8, ndraw, (35, 65),
+             'the C++ normalization of arbitrary nonzero values (otherwise bool, via __init__)')
+    rep.rate('keep passed as a strided view', strided, ndraw, (7, 25),
+             'the constructor accepts any stride')
+    rep.rate('non-finite weight in a masked channel', nonfinite, ndraw, (10, 55),
+             'a masked channel must become +0.0 whatever it held')
+
+    kinds, nranges, empty, clamp_decides, near = {}, 0, 0, 0, 0
+
+    for _ in range(ndraw):
+        (ranges, rkinds, nfreq, flo, fhi) = bct.random_range_case(rng)
+        for k in rkinds:
+            kinds[k] = kinds.get(k, 0) + 1
+        nranges += len(rkinds)
+        empty += (len(rkinds) == 0)
+
+        if bct.near_fudge_boundary(ranges, nfreq, flo, fhi):
+            near += 1
+            continue
+
+        with_clamp = bct.keep_by_rule(ranges, nfreq, flo, fhi)
+        without_clamp = bct.keep_by_rule(ranges, nfreq, flo, fhi, bottom_clamp=False)
+        clamp_decides += not np.array_equal(with_clamp, without_clamp)
+
+    for k in bct.RANGE_KINDS:
+        rep.rate(f'range kind: {k}', kinds.get(k, 0), max(nranges, 1), (8, 18),
+                 'badchannel_keep(): each clipping branch, and the corners in its docstring')
+    rep.rate('no ranges at all', empty, ndraw, (4, 15), 'an empty mask')
+    # About 15% by construction: it takes a 'touch_bottom' range, and no other range that
+    # masks the bottom channel anyway ('straddle_bottom', or 'edge_inside' at the bottom).
+    rep.rate('the bottom-channel clamp decides the answer', clamp_decides, ndraw, (8, 30),
+             'the first quirk in badchannel_keep()\'s docstring')
+    rep.rate('skipped, near a fudge boundary', near, ndraw, (0, 1),
+             'must essentially never happen: such draws are not compared')
+
 def report_coverage(select=(), scale=1.0):
     """Print the coverage report. 'select' is a subset of _SECTIONS (empty = all).
 
