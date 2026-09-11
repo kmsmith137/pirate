@@ -9,6 +9,7 @@
 //   - GpuIntensityClipper: same
 //   - GpuPolynomialDetrender: same
 //   - GpuSplineDetrender: same
+//   - GpuWeightUpsampler: launch() converts stream=None to the current cupy stream
 //   - GpuStdDevClipper: same
 //   - GpuBadChannelMask: __init__ also takes bool/integer arrays; from_mask_ranges() factory;
 //     launch() converts stream=None
@@ -30,6 +31,7 @@
 #include "../include/pirate/chimefrb/PolynomialDetrender.hpp"
 #include "../include/pirate/chimefrb/SplineDetrender.hpp"
 #include "../include/pirate/chimefrb/StdDevClipper.hpp"
+#include "../include/pirate/chimefrb/WeightUpsampler.hpp"
 #include "../include/pirate/chimefrb/WiDownsampler.hpp"
 #include "../include/pirate/chimefrb/Wrms.hpp"
 #include "../include/pirate/SlabAllocator.hpp"
@@ -781,6 +783,75 @@ void register_chimefrb_bindings(pybind11::module &m)
             "    weights: cupy float32 array, shape (B, F, T), fully contiguous, on GPU, with\n"
             "        any B and T. MODIFIED IN PLACE: masked channels become +0.0, and every\n"
             "        other weight is left bit-identical.\n"
+            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
+        ;
+
+    // GpuWeightUpsampler: Python injections in pirate_frb/chimefrb/ReferenceWeightUpsampler.py:
+    //   - launch: converts stream=None to current cupy stream
+    py::class_<GpuWeightUpsampler>(m, "GpuWeightUpsampler",
+        "Pushes a low-resolution weight mask back up to full resolution. A port of\n"
+        "rf_kernels::weight_upsampler, which rf_pipelines::wi_sub_pipeline runs after its\n"
+        "sub-pipeline: every full-resolution weight whose (Df x Dt) cell has a low-resolution\n"
+        "weight ``w_lo <= w_cutoff`` is set to +0.0, and every other weight is left\n"
+        "bit-identical.\n"
+        "\n"
+        "The comparison is the old code's exactly: strict (a weight equal to the cutoff is\n"
+        "masked), in float32 against ``float32(w_cutoff)``, and false for NaN, so a NaN\n"
+        "low-resolution weight masks its cell. Denormal weights are not supported: they may\n"
+        "compare as zero on the GPU.\n"
+        "\n"
+        "The kernel writes only the zeros and never reads the full-resolution weights, so its\n"
+        "cost is one read of the low-resolution array plus the masked cells. There is no\n"
+        "chunking rule, and no shape needs to be a multiple of anything.")
+
+        .def(py::init<long, long, double, long>(),
+            py::arg("Df"), py::arg("Dt"), py::arg("w_cutoff") = 0.0,
+            py::arg("warps_per_block") = 32,
+            "Create a GpuWeightUpsampler.\n"
+            "\n"
+            "Args:\n"
+            "    Df: frequency upsampling factor, >= 1\n"
+            "    Dt: time upsampling factor, >= 1\n"
+            "    w_cutoff: a cell is kept iff its low-resolution weight exceeds this. The\n"
+            "        production chain uses 0.\n"
+            "    warps_per_block: performance knob, 4/8/16/32. Must not change the result.\n"
+            "        See time_selected().\n"
+            "\n"
+            "Raises:\n"
+            "    RuntimeError: on Df < 1, Dt < 1, w_cutoff < 0 or NaN, or an unsupported\n"
+            "        warps_per_block.")
+
+        .def_readonly("Df", &GpuWeightUpsampler::Df, "Frequency upsampling factor")
+        .def_readonly("Dt", &GpuWeightUpsampler::Dt, "Time upsampling factor")
+        .def_readonly("w_cutoff", &GpuWeightUpsampler::w_cutoff,
+            "A cell is kept iff its low-resolution weight exceeds ``float32(w_cutoff)``")
+        .def_readonly("warps_per_block", &GpuWeightUpsampler::warps_per_block,
+            "Performance knob for the kernel (4, 8, 16 or 32)")
+
+        .def_static("time_selected", &GpuWeightUpsampler::time_selected,
+            py::call_guard<py::gil_scoped_release>(),
+            "Run timing benchmarks at the production configuration, for masks from nothing to\n"
+            "everything (called via 'python -m pirate_frb time --cfrb')")
+
+        .def("launch",
+            [](const GpuWeightUpsampler &self, Array<float> &w_hires,
+               const Array<float> &w_lores, uintptr_t stream_ptr) {
+                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                self.launch(w_hires, w_lores, stream);
+            },
+            py::arg("w_hires"), py::arg("w_lores"), py::arg("stream_ptr"),
+            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+            "GPU kernel launch (async, does not sync stream).\n"
+            "\n"
+            "Note the order: the array that is modified comes first, as in the old code. At\n"
+            "(Df, Dt) = (1, 1) the two shapes agree, so a swapped call is not caught.\n"
+            "\n"
+            "Args:\n"
+            "    w_hires: cupy float32 array, shape (B, F_lo*Df, T_lo*Dt), fully contiguous, on\n"
+            "        GPU. MODIFIED IN PLACE: every weight in a masked cell becomes +0.0, and\n"
+            "        every other weight is left bit-identical. Never read.\n"
+            "    w_lores: cupy float32 array, shape (B, F_lo, T_lo), fully contiguous, on GPU,\n"
+            "        with any B, F_lo, T_lo. Read only. Must not be the same array as w_hires.\n"
             "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 }

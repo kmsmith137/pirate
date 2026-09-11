@@ -13,6 +13,7 @@ subpackage follows, and for how it is spot-checked against the original code.
 | [`GpuPolynomialDetrender`](GpuPolynomialDetrender.md) | Fits and subtracts a polynomial in time per channel and chunk, zeroing the weights of poorly conditioned rows (a port of `rf_pipelines::polynomial_detrender`) |
 | [`GpuStdDevClipper`](GpuStdDevClipper.md) | Zeroes channels or time samples whose variance is an outlier (a port of `rf_kernels::std_dev_clipper`) |
 | [`GpuSplineDetrender`](GpuSplineDetrender.md) | Fits and subtracts a regularized cubic spline in frequency, per time sample (a port of `rf_kernels::spline_detrender`) |
+| [`GpuWeightUpsampler`](GpuWeightUpsampler.md) | Zeroes the full-resolution weights under masked low-resolution cells (a port of `rf_kernels::weight_upsampler`) |
 
 ```{toctree}
 :hidden:
@@ -24,4 +25,5 @@ GpuClipperBase
 GpuPolynomialDetrender
 GpuSplineDetrender
 GpuStdDevClipper
+GpuWeightUpsampler
 ```

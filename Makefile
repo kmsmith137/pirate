@@ -355,6 +355,7 @@ LIB_SRCFILES = \
   src_lib/chimefrb/PolynomialDetrender.cu \
   src_lib/chimefrb/SplineDetrender.cu \
   src_lib/chimefrb/StdDevClipper.cu \
+  src_lib/chimefrb/WeightUpsampler.cu \
   src_lib/chimefrb/WiDownsampler.cu \
   src_lib/chimefrb/Wrms.cu \
   src_lib/loose_ends/cpu_downsample.cpp \
@@ -408,6 +409,7 @@ PYFILES = \
   pirate_frb/chimefrb/ReferencePolynomialDetrender.py \
   pirate_frb/chimefrb/ReferenceSplineDetrender.py \
   pirate_frb/chimefrb/ReferenceStdDevClipper.py \
+  pirate_frb/chimefrb/ReferenceWeightUpsampler.py \
   pirate_frb/chimefrb/ReferenceWiDownsampler.py \
   pirate_frb/chimefrb/ReferenceWrms.py \
   pirate_frb/chimefrb/test_assembled_chunk.py \
@@ -416,6 +418,7 @@ PYFILES = \
   pirate_frb/chimefrb/test_polynomial_detrender.py \
   pirate_frb/chimefrb/test_spline_detrender.py \
   pirate_frb/chimefrb/test_std_dev_clipper.py \
+  pirate_frb/chimefrb/test_weight_upsampler.py \
   pirate_frb/chimefrb/test_wi_downsampler.py \
   pirate_frb/chimefrb/test_wrms.py \
   pirate_frb/chimefrb/testutils.py \
@@ -576,6 +579,7 @@ HFILES = \
   include/pirate/chimefrb/PolynomialDetrender.hpp \
   include/pirate/chimefrb/SplineDetrender.hpp \
   include/pirate/chimefrb/StdDevClipper.hpp \
+  include/pirate/chimefrb/WeightUpsampler.hpp \
   include/pirate/chimefrb/WiDownsampler.hpp \
   include/pirate/chimefrb/Wrms.hpp \
   include/pirate/loose_ends/bitvec.hpp \

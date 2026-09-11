@@ -993,6 +993,58 @@ def _sec_chimefrb(rep, ndraw):
              'test_std_dev_clipper', fmt='{:.3g}')
 
 
+    # ---- GpuWeightUpsampler
+
+    from ..chimefrb import test_weight_upsampler as wut
+
+    rep.section('chimefrb.test_weight_upsampler randomization',
+                subtitle=f'{ndraw} draws of random_config() + random_geometry() + random_lores()',
+                consumer='test --cfrb: GpuWeightUpsampler against ReferenceWeightUpsampler')
+
+    kinds, production, unit, odd_factor, odd_T, short_T = {}, 0, 0, 0, 0, 0
+    cutoff_pos, cutoff_inexact, none_masked, all_masked = 0, 0, 0, 0
+
+    for _ in range(ndraw):
+        (Df, Dt, w_cutoff, _) = wut.random_config(rng)
+        (B, F_lo, T_lo) = wut.random_geometry(rng, Df, Dt)
+        (lo, planted) = wut.random_lores(rng, B, F_lo, T_lo, Df, Dt, w_cutoff)
+
+        production += (Df, Dt) == wut.PRODUCTION_CONFIG
+        unit += (Df, Dt) == (1, 1)
+        odd_factor += (Df not in (1, 2, 4, 8, 16)) or (Dt not in (1, 2, 4, 8, 16))
+        odd_T += (T_lo % 32) != 0
+        short_T += (T_lo < 32)
+        cutoff_pos += (w_cutoff > 0)
+        cutoff_inexact += (w_cutoff in wut.INEXACT_CUTOFFS)
+
+        for k in planted:
+            kinds[k] = kinds.get(k, 0) + 1
+
+        masked = ~(lo > np.float32(w_cutoff))
+        none_masked += not masked.any()
+        all_masked += masked.all()
+
+    rep.rate('production (Df, Dt) = (16, 1)', production, ndraw, (20, 48),
+             'the chain\'s one instance, the wi_sub_pipeline upsample')
+    rep.rate('(Df, Dt) = (1, 1)', unit, ndraw, (1, 12),
+             'the degenerate case, which is NOT the identity: it still masks')
+    rep.rate('a factor that is not a power of two', odd_factor, ndraw, (10, 40),
+             '(Df, Dt) are runtime arguments; nothing restricts them to powers of two')
+    rep.rate('T_lo % 32 != 0', odd_T, ndraw, (75, 99),
+             'the kernel has no divisibility rule: its tail predicate is the loop bound')
+    rep.rate('T_lo < 32', short_T, ndraw, (12, 40), 'rows shorter than a warp')
+    rep.rate('w_cutoff > 0', cutoff_pos, ndraw, (25, 55),
+             'production uses 0, but the old code takes any nonnegative cutoff')
+    rep.rate('w_cutoff not representable in float32', cutoff_inexact, ndraw, (8, 35),
+             'the comparison is made in float32, against float32(w_cutoff)')
+    rep.rate('no cells masked', none_masked, ndraw, (2, 18),
+             'the kernel then writes nothing, and every weight must be left bit-identical')
+    rep.rate('every cell masked', all_masked, ndraw, (2, 18), 'the kernel then writes zeros everywhere')
+
+    for k in wut.LORES_KINDS:
+        rep.rate(f'planted low-resolution weight: {k}', kinds.get(k, 0), ndraw, (10, 50),
+                 'the corner cases of the comparison; the ulp pair needs w_cutoff > 0')
+
     # ---- GpuBadChannelMask
 
     from ..chimefrb import test_badchannel_mask as bct

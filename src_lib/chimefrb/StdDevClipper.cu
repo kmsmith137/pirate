@@ -188,7 +188,7 @@ sd_apply_kernel(float *weights, const float *var, int Df, int Dt,
         while (killed) {
             const int j = __ffs(killed) - 1;
             killed &= (killed - 1);
-            clipper_zero_cell(weights, b, f0 + j, t_ds, F_ds, T_ds, Df, Dt);
+            zero_cell(weights, b, f0 + j, t_ds, F_ds, T_ds, Df, Dt);
         }
     }
     else {
@@ -197,7 +197,7 @@ sd_apply_kernel(float *weights, const float *var, int Df, int Dt,
             return;
 
         for (int j = 0; j < 32; j++)
-            clipper_zero_cell(weights, b, f0 + j, t_ds, F_ds, T_ds, Df, Dt);
+            zero_cell(weights, b, f0 + j, t_ds, F_ds, T_ds, Df, Dt);
     }
 }
 

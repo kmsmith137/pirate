@@ -85,9 +85,9 @@ intensity_clip_kernel(float *weights, const float *i_ds,
     if (wrms_survives(ival - mean[r], thresh))
         return;
 
-    // Only masked cells get here. See clipper_zero_cell() for the (deliberately strided)
-    // store pattern.
-    clipper_zero_cell(weights, b, f_ds, t_ds, F_ds, T_ds, Df, Dt);
+    // Only masked cells get here. See zero_cell() in WeightUpsampler.hpp for the
+    // (deliberately strided) store pattern.
+    zero_cell(weights, b, f_ds, t_ds, F_ds, T_ds, Df, Dt);
 }
 
 

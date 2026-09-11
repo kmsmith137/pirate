@@ -6,6 +6,7 @@
 #include <ksgpu/Array.hpp>
 
 #include "ClipperAxis.hpp"
+#include "WeightUpsampler.hpp"   // zero_cell(), which both clippers' final kernels call
 
 namespace pirate {
 namespace chimefrb {
@@ -112,33 +113,6 @@ __device__ __forceinline__ long clipper_row(int axis, long b, long f_ds, long t_
     if (axis == int(ClipperAxis::FREQ))
         return b*T_ds + t_ds;
     return b;
-}
-
-
-// clipper_zero_cell(): zero the Df-by-Dt block of full-resolution weights behind one
-// downsampled cell. 'weights' is the full (B, F_ds*Df, T_ds*Dt) contiguous array.
-//
-// The stores are 32-bit and, for Dt > 1, strided when a warp calls this from 32
-// consecutive cells: its lanes are Dt*4 bytes apart, so one instruction touches up to 32
-// sectors rather than one cache line. Deliberate. The clippers only zero cells that are
-// being masked, and when a whole row is masked the warp's Dt stores together cover
-// 32*Dt*4 contiguous bytes anyway. GpuWiDownsampler reads through exactly this pattern at
-// 657 GB/s.
-__device__ __forceinline__ void clipper_zero_cell(float *weights, long b, long f_ds,
-                                                  long t_ds, long F_ds, long T_ds,
-                                                  int Df, int Dt)
-{
-    // Apply per-cell pointer offset.
-    //   before: shape (B, F_ds*Df, T_ds*Dt), contiguous
-    //   after: shape (Df, Dt), strides (T_ds*Dt, 1)
-    const long T = T_ds * Dt;
-    float *wp = weights + ((b*F_ds + f_ds)*Df)*T + t_ds*Dt;
-
-    for (int df = 0; df < Df; df++) {
-        for (int dt = 0; dt < Dt; dt++)
-            wp[dt] = 0.0f;
-        wp += T;
-    }
 }
 
 #endif  // __CUDACC__
