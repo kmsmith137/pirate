@@ -135,8 +135,15 @@ Each spot check is a directory under `misc/chimefrb/` holding exactly two files:
 The driver is a standalone program with one job:
 
 ```
-driver <input.npy> <output.npy> [key=value ...]
+driver <in_1.npy> ... <in_m.npy> <out_1.npy> ... <out_n.npy> [key=value ...]
 ```
+
+Most drivers read one array and write one (`m = n = 1`). The driver knows its own `m` and
+`n`, and one with more than one array on either side parses its command line with
+`npy::cmdline(argc, argv, m, n)`, which throws if a test passes the wrong number of
+arrays. Arrays that share a shape and travel together, like an (intensity, weights) pair,
+are stacked into one array along a leading length-2 axis; arrays of different shapes, or
+that are different things, are passed separately.
 
 It links only chimefrb libraries, prints nothing on success, and signals failure by
 exit status. It knows nothing about pirate, about what it is being compared against, or
@@ -146,7 +153,7 @@ the pirate side, and decides the tolerance.
 `.npy` is the exchange format because numpy reads and writes it for free on the pirate
 side, and `misc/chimefrb/npy.hpp` handles it on the chimefrb side. `misc/chimefrb/harness.py`
 supplies `run_driver()`, which compiles the driver on demand and moves the arrays
-across, and `Test.check_allclose()`, which reports the disagreement it actually
+across (one array or a list, each way), and `Test.check_allclose()`, which reports the disagreement it actually
 measured rather than just pass/fail.
 
 Read `misc/chimefrb/dispersion_delay/` before writing a new one. It is short on purpose,
@@ -159,7 +166,7 @@ expectation.
 1. Make a directory `misc/chimefrb/<name>/` and copy the two files from
    `dispersion_delay/` as a starting point.
 2. In `driver.cpp`, include `"../npy.hpp"` plus whatever chimefrb headers you need,
-   read one array, compute, write one array. Do not print on success.
+   read the input arrays, compute, write the output arrays. Do not print on success.
 3. In `test.py`, generate the input, call `harness.run_driver()`, compute the pirate
    answer, and compare with `Test.check_allclose()`.
 4. Run it. `run_spot_tests.py` picks it up automatically; `test.py` also runs directly,

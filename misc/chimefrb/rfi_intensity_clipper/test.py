@@ -20,8 +20,8 @@ what rf_kernels' own unit test does (test-intensity-clipper.cpp), and for a good
 The production clipper runs nine rounds of refinement, and after nine rounds a single
 sample that lands on the other side of a threshold in float32 than in float64 has moved
 everything downstream. Comparing two full refinement chains is a coin flip, not a test.
-So the driver is run twice -- once for the clipped weights, once for the statistic -- and
-the reference supplies only the final clip, bracketed at sigma*(1 +/- 1e-4). Both sides
+So one run of the driver returns both the clipped weights and the statistic, and the
+reference supplies only the final clip, bracketed at sigma*(1 +/- 1e-4). Both sides
 then start from bit-identical statistics and there is nothing to amplify.
 
 The secondary check runs the whole reference end to end, but only at niter=1, where there
@@ -128,22 +128,16 @@ def make_input(rng):
     return np.stack([intensity, weights]).astype(np.float32)
 
 
-def run_old_weights(x, axis, Df, Dt, sigma, niter, iter_sigma, two_pass):
-    """Clipped weights, shape (F, T), from rf_kernels::intensity_clipper."""
+def run_old(x, axis, Df, Dt, sigma, niter, iter_sigma, two_pass):
+    """One run of the old code on x: the clipped weights (F, T) from
+    rf_kernels::intensity_clipper, and (mean, var) from rf_kernels::weighted_mean_rms, the
+    statistic that clipper thresholds against. The driver reports rms, so square it."""
 
-    return harness.run_driver(HERE, x, dtype=np.float32, params={
-        "output": "weights", "axis": int(axis), "sigma": sigma, "Df": Df, "Dt": Dt,
+    (w, wrms) = harness.run_driver(HERE, x, dtype=np.float32, noutputs=2, params={
+        "axis": int(axis), "sigma": sigma, "Df": Df, "Dt": Dt,
         "niter": niter, "iter_sigma": iter_sigma, "two_pass": int(two_pass)})
 
-
-def run_old_wrms(x, axis, Df, Dt, niter, iter_sigma, two_pass):
-    """(mean, var) from rf_kernels::weighted_mean_rms. The driver reports rms, so square it."""
-
-    out = harness.run_driver(HERE, x, dtype=np.float32, params={
-        "output": "wrms", "axis": int(axis), "Df": Df, "Dt": Dt,
-        "niter": niter, "iter_sigma": iter_sigma, "two_pass": int(two_pass)})
-
-    return (out[0].astype(np.float64), out[1].astype(np.float64)**2)
+    return (w, wrms[0].astype(np.float64), wrms[1].astype(np.float64)**2)
 
 
 def check_final_clip(t, label, x, axis, Df, Dt, sigma, niter, iter_sigma, two_pass):
@@ -154,8 +148,7 @@ def check_final_clip(t, label, x, axis, Df, Dt, sigma, niter, iter_sigma, two_pa
     is new code rather than already-validated pieces.
     """
 
-    w_old = run_old_weights(x, axis, Df, Dt, sigma, niter, iter_sigma, two_pass)
-    (mean, var) = run_old_wrms(x, axis, Df, Dt, niter, iter_sigma, two_pass)
+    (w_old, mean, var) = run_old(x, axis, Df, Dt, sigma, niter, iter_sigma, two_pass)
 
     I = x[0].astype(np.float64)[None, :, :]      # (1, F, T): the reference takes a beam axis
     W = x[1].astype(np.float64)[None, :, :]
@@ -191,7 +184,7 @@ def check_end_to_end(t, label, x, axis, Df, Dt, sigma, niter, iter_sigma, two_pa
     that the amplification rate on this data is on the record.
     """
 
-    w_old = run_old_weights(x, axis, Df, Dt, sigma, niter, iter_sigma, two_pass)
+    (w_old, _, _) = run_old(x, axis, Df, Dt, sigma, niter, iter_sigma, two_pass)
 
     I = x[0].astype(np.float64)[None, :, :]
     W = x[1].astype(np.float64)[None, :, :]

@@ -207,9 +207,11 @@ inline void write(const std::string &filename, const std::vector<T> &data)
 
 // -------------------------------------------------------------------------------------------------
 //
-// Command-line parameters.  A driver is invoked as
-//     driver <input.npy> <output.npy> [key=value ...]
-// and reads the key=value pairs through this.
+// The command line.  A driver is invoked as
+//     driver <in_1.npy> ... <in_m.npy> <out_1.npy> ... <out_n.npy> [key=value ...]
+// with m input files and n output files, and reads the key=value pairs through 'params'.
+// Most drivers have m = n = 1: they read argv[1], write argv[2], and construct 'params'
+// directly.  A driver with more files uses 'cmdline' below, which also checks the count.
 
 
 struct params {
@@ -244,6 +246,45 @@ struct params {
     {
         std::string s = get(key, "");
         return s.empty() ? fallback : strtol(s.c_str(), nullptr, 10);
+    }
+};
+
+
+// The whole command line of a driver with 'm' input files and 'n' output files.
+//
+// Throws unless exactly m + n arguments come before the first key=value one.  Nothing on
+// the command line marks where the inputs stop and the outputs start, so without this
+// check a test that passed the wrong number of arrays would have the driver read the
+// wrong file, or overwrite one of its inputs.
+struct cmdline {
+    std::vector<std::string> inputs;    // m paths
+    std::vector<std::string> outputs;   // n paths
+    params kv;                          // the key=value arguments
+
+    cmdline(int argc, char **argv, int m, int n) :
+        kv(argc, argv, _checked_nfiles(argc, argv, m, n) + 1)
+    {
+        for (int i = 0; i < m; i++)
+            inputs.push_back(argv[1 + i]);
+        for (int i = 0; i < n; i++)
+            outputs.push_back(argv[1 + m + i]);
+    }
+
+    // Returns m + n, after checking that this is the number of file arguments.
+    static int _checked_nfiles(int argc, char **argv, int m, int n)
+    {
+        int nfiles = 0;
+        while ((1 + nfiles < argc) && !strchr(argv[1 + nfiles], '='))
+            nfiles++;
+
+        if (nfiles != m + n) {
+            std::stringstream ss;
+            ss << "expected " << m << " input and " << n << " output file(s) before the"
+               << " key=value arguments, got " << nfiles;
+            throw std::runtime_error(ss.str());
+        }
+
+        return m + n;
     }
 };
 

@@ -5,10 +5,11 @@
 // Runs rf_kernels::wi_downsampler, the (Df,Dt) downsampler used throughout the old
 // CHIME FRB search's RFI chain.
 //
-// These transforms operate on an (intensity, weights) PAIR, and harness.run_driver()
-// moves one array each way, so both arrays travel stacked along a leading length-2
-// axis:  arr[0] = intensity, arr[1] = weights.  The RFI spot tests that follow this
-// one should use the same convention.
+// These transforms operate on an (intensity, weights) PAIR of arrays with the same
+// shape, and the pair travels as one array, stacked along a leading length-2 axis:
+// arr[0] = intensity, arr[1] = weights.  The RFI spot tests that follow this one use
+// the same convention.  (Arrays of different shapes travel as separate arrays; see
+// npy::cmdline in ../npy.hpp.)
 //
 //    input:   (2, F, T)        float32
 //    output:  (2, F/Df, T/Dt)  float32

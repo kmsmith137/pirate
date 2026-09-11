@@ -1,6 +1,6 @@
 // Old-side driver for the 'rfi_intensity_clipper' spot test.
 //
-//    driver <input.npy> <output.npy> output=<weights|wrms> axis=<0|1|2> sigma=<float>
+//    driver <input.npy> <weights.npy> <wrms.npy> axis=<0|1|2> sigma=<float>
 //           Df=<int> Dt=<int> niter=<int> iter_sigma=<float> two_pass=<0|1>
 //
 // Runs rf_kernels::intensity_clipper, the principal RFI flagger in the old CHIME FRB
@@ -12,13 +12,13 @@
 //
 //    input:   (2, F, T)  float32     arr[0] = intensity, arr[1] = weights
 //
-// The output depends on 'output=', because a driver writes one array and this test needs
-// two different things from the same run:
+// Two outputs, both computed from that one input:
 //
-//    output=weights:  (F, T)     float32   the clipped weights
-//    output=wrms:     (2, nout)  float32   out[0] = mean, out[1] = rms
+//    weights:  (F, T)     float32   the clipped weights, from intensity_clipper::clip()
+//    wrms:     (2, nout)  float32   out[0] = mean, out[1] = rms, from weighted_mean_rms
+//                                   with the clipper's own (Df, Dt, niter, iter_sigma)
 //
-// The 'wrms' mode exists because of how this transform has to be tested. Comparing nine
+// The 'wrms' output exists because of how this transform has to be tested. Comparing nine
 // float32 refinements against nine float64 ones is a coin flip, not a test -- one sample
 // landing on the other side of a threshold moves everything after it. So the primary
 // check takes the OLD kernel's own (mean, rms) and references only the final clip, which
@@ -43,18 +43,18 @@
 
 int main(int argc, char **argv)
 {
-    if (argc < 3) {
-        fprintf(stderr, "usage: driver <input.npy> <output.npy> output=<weights|wrms>"
+    if (argc < 4) {
+        fprintf(stderr, "usage: driver <input.npy> <weights.npy> <wrms.npy>"
                 " axis=<0|1|2> sigma=<float> Df=<int> Dt=<int> niter=<int>"
                 " iter_sigma=<float> two_pass=<0|1>\n");
         return 2;
     }
 
     try {
-        npy::array<float> in = npy::read<float> (argv[1]);
-        npy::params p(argc, argv);
+        npy::cmdline cl(argc, argv, 1, 2);
+        const npy::params &p = cl.kv;
+        npy::array<float> in = npy::read<float> (cl.inputs[0]);
 
-        std::string what = p.get("output", "weights");
         int axis = int(p.get_long("axis", 1));
         double sigma = p.get_double("sigma", 5.0);
         int Df = int(p.get_long("Df", 1));
@@ -74,7 +74,18 @@ int main(int argc, char **argv)
         const float *intensity = &in.data[0];
         const float *weights = &in.data[F*T];
 
-        if (what == "wrms") {
+        {
+            rf_kernels::intensity_clipper ic(F, T, rf_kernels::axis_type(axis), sigma,
+                                             Df, Dt, niter, iter_sigma, two_pass);
+
+            // clip() modifies the weights in place, so hand it a copy.
+            std::vector<float> w(weights, weights + F*T);
+            ic.clip(intensity, T, &w[0], T);
+
+            npy::write<float> (cl.outputs[0], { F, T }, &w[0]);
+        }
+
+        {
             // Note: rf_kernels calls this argument 'sigma', but it is the REFINEMENT
             // threshold -- the intensity_clipper passes its iter_sigma here.
             rf_kernels::weighted_mean_rms wrms(F, T, rf_kernels::axis_type(axis), Df, Dt,
@@ -89,25 +100,8 @@ int main(int argc, char **argv)
                 out[nout + i] = wrms.out_rms[i];
             }
 
-            npy::write<float> (argv[2], { 2, nout }, &out[0]);
-            return 0;
+            npy::write<float> (cl.outputs[1], { 2, nout }, &out[0]);
         }
-
-        if (what == "weights") {
-            rf_kernels::intensity_clipper ic(F, T, rf_kernels::axis_type(axis), sigma,
-                                             Df, Dt, niter, iter_sigma, two_pass);
-
-            // clip() modifies the weights in place, so hand it a copy.
-            std::vector<float> w(weights, weights + F*T);
-            ic.clip(intensity, T, &w[0], T);
-
-            npy::write<float> (argv[2], { F, T }, &w[0]);
-            return 0;
-        }
-
-        fprintf(stderr, "driver: unknown output=%s (expected 'weights' or 'wrms')\n",
-                what.c_str());
-        return 2;
     }
     catch (std::exception &e) {
         fprintf(stderr, "driver: %s\n", e.what());

@@ -3,11 +3,13 @@
 A spot test compares pirate against the old CHIME pipeline.  The old side is a
 standalone C++ program with one job:
 
-    driver <input.npy> <output.npy> [key=value ...]
+    driver <in_1.npy> ... <in_m.npy> <out_1.npy> ... <out_n.npy> [key=value ...]
 
-A transform that operates on an (intensity, weights) PAIR stacks the two along a
-leading length-2 axis, since only one array travels each way; see
-misc/chimefrb/rfi_wi_downsample/driver.cpp.
+Most drivers read one array and write one.  Arrays that share a shape and travel
+together, like an (intensity, weights) pair, are stacked along a leading length-2 axis
+(see misc/chimefrb/rfi_wi_downsample/driver.cpp); arrays of different shapes travel
+separately.  A driver with more than one array on either side parses its command line
+with npy::cmdline (npy.hpp), which checks that the test passed the right number.
 
 It links only old libraries, prints nothing on success, and signals failure by exit
 status.  It does not know pirate exists, what it is being compared against, or what
@@ -117,29 +119,60 @@ def build_driver(test_dir):
     return exe
 
 
-def run_driver(test_dir, in_array, params=None, dtype=None):
-    """Write in_array, run the test's driver on it, and return what it wrote back.
+def run_driver(test_dir, inputs, params=None, dtype=None, noutputs=None):
+    """Run the test's driver on one or more input arrays, and return what it wrote.
+
+    'inputs' is a numpy array, or a list or tuple of them, passed to the driver in order
+    as its input files.  'noutputs' is the number of arrays the driver writes: None (the
+    default) means one, returned bare; an integer k means k, returned as a list, even
+    when k is 1.
 
     'params' is a dict of scalars, passed to the driver as key=value arguments.
-    'dtype' force-casts the input array; the default (None) preserves what the caller gave.
+    'dtype' force-casts every input; the default (None) preserves what the caller gave.
     """
+
+    # A list is several inputs, so a nested list meant as ONE array would be misread;
+    # require arrays rather than guess.
+    if isinstance(inputs, (list, tuple)):
+        arrays = list(inputs)
+        for i, a in enumerate(arrays):
+            if not isinstance(a, np.ndarray):
+                raise TypeError("run_driver(): inputs[%d] is a %s, not a numpy array"
+                                % (i, type(a).__name__))
+    else:
+        arrays = [inputs]
+
+    nout = 1 if (noutputs is None) else int(noutputs)
+    if nout < 1:
+        raise ValueError("run_driver(): expected noutputs >= 1, got %r" % (noutputs,))
 
     exe = build_driver(test_dir)
     wd = workdir(test_dir)
-    in_path = os.path.join(wd, "in.npy")
-    out_path = os.path.join(wd, "out.npy")
+
+    # File paths go on the driver's command line, where an '=' would read as key=value.
+    if "=" in wd:
+        _die("the scratch directory %s contains '=', which a driver would take for a"
+             " key=value argument" % wd)
+
+    # Remove every array an earlier run left behind, so that none can be returned as this
+    # run's output, or mislead someone inspecting the directory afterwards.
+    for f in os.listdir(wd):
+        if f.endswith(".npy") and (f.startswith("in") or f.startswith("out")):
+            os.remove(os.path.join(wd, f))
+
+    in_paths = [os.path.join(wd, "in%d.npy" % i) for i in range(len(arrays))]
+    out_paths = [os.path.join(wd, "out%d.npy" % i) for i in range(nout)]
 
     # dtype=None preserves the caller's dtype.  Passing one force-casts, which is
     # occasionally what you want and is otherwise a silent-upcast footgun: a caller
     # who passes float32 or uint8 and forgets to say so gets a comparison that
     # quietly measures something else.
-    arr = (np.ascontiguousarray(in_array, dtype=dtype) if dtype is not None
-           else np.ascontiguousarray(in_array))
-    np.save(in_path, arr)
-    if os.path.exists(out_path):
-        os.remove(out_path)
+    for (path, a) in zip(in_paths, arrays):
+        arr = (np.ascontiguousarray(a, dtype=dtype) if dtype is not None
+               else np.ascontiguousarray(a))
+        np.save(path, arr)
 
-    cmd = [exe, in_path, out_path]
+    cmd = [exe] + in_paths + out_paths
     for k, v in sorted((params or {}).items()):
         cmd.append("%s=%s" % (k, v))
 
@@ -147,10 +180,13 @@ def run_driver(test_dir, in_array, params=None, dtype=None):
     if p.returncode != 0:
         _die("driver failed (exit %d)\n  %s\n%s"
              % (p.returncode, " ".join(cmd), (p.stderr or p.stdout).strip()))
-    if not os.path.exists(out_path):
-        _die("driver exited 0 but wrote no output:\n  %s" % " ".join(cmd))
 
-    return np.load(out_path)
+    missing = [os.path.basename(q) for q in out_paths if not os.path.exists(q)]
+    if missing:
+        _die("driver exited 0 but did not write %s:\n  %s" % (", ".join(missing), " ".join(cmd)))
+
+    outs = [np.load(q) for q in out_paths]
+    return outs[0] if (noutputs is None) else outs
 
 
 class Test:

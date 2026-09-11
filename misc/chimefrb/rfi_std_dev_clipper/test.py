@@ -3,20 +3,15 @@
 
 Compares pirate_frb.chimefrb.ReferenceStdDevClipper against rf_kernels::std_dev_clipper, the
 most numerous transform in the old CHIME FRB search's RFI chain (60 of its 120 nodes).
+Stage 2 of the transform, std_dev_clipper::_clip_1d(), is also checked on its own, on
+constructed inputs, by misc/chimefrb/rfi_std_dev_clip_1d/: the more important of the two
+checks, since that function has no reference implementation anywhere in the old code.
 
-WHY THIS TEST MATTERS MORE THAN MOST. Stage 2 of this transform, std_dev_clipper::_clip_1d(),
-has no reference implementation anywhere in the old code: its own comment says it was never
-unit-tested, and the old test of the transform is circular (it calls the real _clip_1d). So
-our clip_1d() is the first independent check it has ever had, and a disagreement found here
-could be a bug in the OLD code. That is why the first thing this test does is drive the real
-_clip_1d() directly (the driver's output=clip1d mode), on vectors we construct -- including
-the degenerate ones random data never reaches.
-
-The full-transform checks follow the intensity clipper's: the primary one feeds the OLD
-kernel's own stage-1 variances into our stage 2 and apply, so only stage 2 and the apply are
-under test; the secondary one runs our whole reference, conditioned on the old kernel's
-stage-1 decisions. Conditioning rather than bracketing, because a stage-1 decision changes the
-population stage 2 sees, so bracketing it does not bracket stage 2 (plan 9.2b).
+The checks here follow the intensity clipper's: the primary one feeds the OLD kernel's own
+stage-1 variances into our stage 2 and apply, so only stage 2 and the apply are under test;
+the secondary one runs our whole reference, conditioned on the old kernel's stage-1
+decisions. Conditioning rather than bracketing, because a stage-1 decision changes the
+population stage 2 sees, so bracketing it does not bracket stage 2.
 
 Needs a built oldpipe (misc/chimefrb/build_oldpipe.sh). Run me directly, or through
 misc/chimefrb/run_spot_tests.py.
@@ -30,8 +25,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harness
 
-from pirate_frb.chimefrb import (AXIS_FREQ, AXIS_TIME, ReferenceStdDevClipper, clip_1d,
-                                 std_dev_apply)
+from pirate_frb.chimefrb import AXIS_FREQ, AXIS_TIME, ReferenceStdDevClipper, std_dev_apply
 from pirate_frb.chimefrb.test_std_dev_clipper import (stage2_bracket, end_to_end_bracket,
                                                       ill_conditioned, keep_bracket)
 
@@ -44,95 +38,6 @@ NFREQ = 128
 NT = 512
 SIGMA = 3.0          # the production value
 AXIS_NAMES = {AXIS_FREQ: "FREQ", AXIS_TIME: "TIME"}
-
-
-# -------------------------------------------------------------------------------------------------
-#
-# _clip_1d in isolation
-
-
-def clip1d_cases(rng):
-    """(label, V) pairs, V a (K, n) float32 batch of variance vectors, n a multiple of 8."""
-
-    def gaussian(K, n, frac_invalid, noutliers):
-        V = np.abs(1.0 + 0.03 * rng.normal(size=(K, n)))
-        V[rng.uniform(size=(K, n)) < frac_invalid] = 0.0
-        for k in range(K):
-            cols = rng.choice(n, size=noutliers, replace=False)
-            V[k, cols] = rng.choice([0.5, 1.5], size=noutliers)
-        return V
-
-    def nvalid(K, n, m):
-        V = np.zeros((K, n))
-        for k in range(K):
-            cols = rng.choice(n, size=m, replace=False)
-            V[k, cols] = rng.uniform(0.5, 2.0, size=m)
-        return V
-
-    cases = [
-        ("gaussian n=1024", gaussian(16, 1024, 0.05, 3)),
-        ("gaussian n=4096", gaussian(4, 4096, 0.05, 6)),
-        ("mostly invalid n=256", gaussian(8, 256, 0.70, 2)),
-        ("n_valid=0", np.zeros((2, 64))),
-        ("n_valid=1", nvalid(4, 64, 1)),
-        ("n_valid=2", nvalid(4, 64, 2)),
-        ("n_valid=3", nvalid(4, 64, 3)),
-        ("small n=8", np.abs(1.0 + 0.3 * rng.normal(size=(16, 8)))),
-        ("wide range n=512", 10.0 ** rng.uniform(-3.0, 3.0, size=(8, 512))),
-    ]
-    return [(label, V.astype(np.float32)) for (label, V) in cases]
-
-
-def check_clip1d(t, label, V, sigma):
-    """The real _clip_1d against our clip_1d(), on the same variances."""
-
-    old = harness.run_driver(HERE, V, dtype=np.float32,
-                             params={"output": "clip1d", "sigma": sigma})
-
-    lo = np.zeros(V.shape, dtype=bool)
-    hi = np.zeros(V.shape, dtype=bool)
-    for k in range(V.shape[0]):
-        assert not ill_conditioned(V[k:k+1])[0], "test input must not be ill-conditioned"
-        d = stage2_bracket(V[k:k+1], sigma)
-        (lo[k], hi[k]) = keep_bracket(V[k], sigma, d)
-
-    kept = (old != 0)
-    ok = t.check_sandwich("clip1d %s s=%g" % (label, sigma), kept, lo, hi,
-                          why="which variances survive; our float64 sums vs the old float32"
-                              " sequential ones, bracketed on sigma per stage2_bracket()")
-    ok &= t.check_allclose("clip1d %s s=%g kept" % (label, sigma), old[kept], V[kept],
-                           rtol=0.0, why="a surviving variance is passed through untouched")
-    t.note("        %d of %d entries clipped (of %d valid)"
-           % (int(np.sum((V > 0) & ~kept)), V.size, int(np.sum(V > 0))))
-    return ok
-
-
-def report_all_equal(t, rng):
-    """The ill-conditioned corner: every valid variance equal. REPORTED, NOT ASSERTED.
-
-    Exact arithmetic clips every row (s = 0). The old float32 loop usually does not come back
-    to exactly x for its mean, and then clips nothing -- how often depends on n and x. Our
-    float64 clip_1d() sums exactly here and clips everything. Both are 'right'; see
-    plans/chimefrb_std_dev_clipper.md 2.4.
-    """
-
-    t.note("  info all-equal valid variances (ill-conditioned, not asserted), sigma=%g:" % SIGMA)
-    for m in (2, 3, 64, 1024):
-        K = 100
-        V = np.zeros((K, 1024), dtype=np.float32)
-        for k in range(K):
-            V[k, :m] = np.float32(rng.uniform(1.0, 1000.0))
-        old = harness.run_driver(HERE, V, dtype=np.float32,
-                                 params={"output": "clip1d", "sigma": SIGMA})
-        ours = clip_1d(V.astype(np.float64), SIGMA)
-        t.note("         n_valid=%4d: old clips everything in %3d of %d, ours in %3d of %d"
-               % (m, int(np.sum(np.all(old == 0, axis=1))), K,
-                  int(np.sum(np.all(ours == 0, axis=1))), K))
-
-
-# -------------------------------------------------------------------------------------------------
-#
-# The whole transform
 
 
 def make_input(rng):
@@ -176,16 +81,17 @@ def make_one_valid(rng, axis):
     return x
 
 
-def run_old(x, output, axis, two_pass):
-    return harness.run_driver(HERE, x, dtype=np.float32, params={
-        "output": output, "axis": axis, "sigma": SIGMA, "Df": 1, "Dt": 1,
-        "two_pass": int(two_pass)})
+def run_old(x, axis, two_pass):
+    """One run of the old std_dev_clipper on x: (clipped weights, clipped variances, wrms).
+    The last is (2, nrows), mean and rms, from the clipper's stage 1."""
+
+    return harness.run_driver(HERE, x, dtype=np.float32, noutputs=3, params={
+        "axis": axis, "sigma": SIGMA, "Df": 1, "Dt": 1, "two_pass": int(two_pass)})
 
 
 def check_transform(t, label, x, axis, two_pass):
-    w_old = run_old(x, "weights", axis, two_pass)
-    vclip_old = run_old(x, "clipped_var", axis, two_pass).astype(np.float64)
-    wrms = run_old(x, "wrms", axis, two_pass)
+    (w_old, vclip_old, wrms) = run_old(x, axis, two_pass)
+    vclip_old = vclip_old.astype(np.float64)
     v_old = wrms[1].astype(np.float64) ** 2         # the driver reports rms
 
     W = x[1].astype(np.float64)[None]               # (1, F, T): the reference has a beam axis
@@ -240,12 +146,6 @@ def main():
                 t.note(line.strip())
 
     rng = np.random.default_rng(SEED)
-
-    # _clip_1d first: it is the function with no reference anywhere in the old code.
-    for (label, V) in clip1d_cases(rng):
-        for sigma in (1.5, SIGMA):
-            check_clip1d(t, label, V, sigma)
-    report_all_equal(t, rng)
 
     x = make_input(rng)
     t.note("(2, %d, %d) intensity/weights from seed %d" % (NFREQ, NT, SEED))

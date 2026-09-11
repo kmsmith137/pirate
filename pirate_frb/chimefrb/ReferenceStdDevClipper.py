@@ -8,7 +8,7 @@ Stage 1 -- one variance per row -- is ReferenceWrms at niter=1, already validate
 rf_kernels. Stage 2 is clip_1d() below, transcribed from std_dev_clipper.cpp::_clip_1d() in
 ../../extern/rf_kernels. That function has no reference implementation anywhere in the old
 code (its own comment says it was never unit-tested), so clip_1d() is a genuinely new test of
-it, and misc/chimefrb/rfi_std_dev_clipper/ drives the real _clip_1d() directly to compare.
+it, and misc/chimefrb/rfi_std_dev_clip_1d/ drives the real _clip_1d() directly to compare.
 """
 
 import numpy as np

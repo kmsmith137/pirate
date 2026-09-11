@@ -200,9 +200,9 @@ Each test is a directory holding exactly two files:
 `dispersion_delay/` is the worked example.  Read it before adding another; it is short
 on purpose.
 
-The driver is a standalone program:
+The driver is a standalone program, usually reading one array and writing one:
 
-    driver <input.npy> <output.npy> [key=value ...]
+    driver <in_1.npy> ... <in_m.npy> <out_1.npy> ... <out_n.npy> [key=value ...]
 
 linking only old libraries, silent on stdout, exit status its only signal.  It does not
 know pirate exists, what it is compared against, or what the tolerance is.  `test.py`
