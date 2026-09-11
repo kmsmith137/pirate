@@ -297,8 +297,22 @@ void GpuWiDownsampler::time_selected()
         long F_ds = c.F / c.Df;
         long T_ds = c.T / c.Dt;
 
-        Array<float> in_i({c.B, c.F, c.T}, af_gpu | af_zero);
-        Array<float> in_w({c.B, c.F, c.T}, af_gpu | af_zero);
+        // Random intensity and unit weights, not zeros: the (1,1) case reads a cell's
+        // intensity only where its weight is positive (see _reduce_cell()), so on zero
+        // weights it would skip half its reads, and the bandwidth below would credit
+        // traffic that never happened. (Array::randomize() works on host arrays only, hence
+        // the host staging.)
+        Array<float> in_i({c.B, c.F, c.T}, af_gpu);
+        Array<float> in_w({c.B, c.F, c.T}, af_gpu);
+        {
+            Array<float> hi({c.B, c.F, c.T}, af_uhost);
+            Array<float> hw({c.B, c.F, c.T}, af_uhost);
+            hi.randomize();
+            for (long j = 0; j < c.B*c.F*c.T; j++)
+                hw.data[j] = 1.0f;
+            in_i.fill(hi);
+            in_w.fill(hw);
+        }
 
         vector<long> oshape = c.transpose ? vector<long>{c.B, T_ds, F_ds}
                                           : vector<long>{c.B, F_ds, T_ds};
