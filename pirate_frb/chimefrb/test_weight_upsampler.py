@@ -51,7 +51,11 @@ def random_config(rng):
         (Df, Dt) = PRODUCTION_CONFIG
     else:
         # Nothing restricts (Df, Dt) to powers of two -- they are runtime kernel arguments.
-        Df = int(rng.choice([1, 2, 3, 4, 5, 8, 16]))
+        # 1 appears twice in both menus so that (Df, Dt) = (1, 1) -- the degenerate case,
+        # which still masks -- is drawn about 5% of the time. With 1 listed once in Df it
+        # came out at 2.8%, which is a coverage row sitting on its band edge: measured over
+        # 300 seeds, 1.3% of them drew it fewer than twice in 200 and tripped the band.
+        Df = int(rng.choice([1, 1, 2, 3, 4, 5, 8, 16]))
         Dt = int(rng.choice([1, 1, 2, 3, 4, 8, 16]))
 
     x = rng.uniform()

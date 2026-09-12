@@ -1091,8 +1091,14 @@ def _sec_chimefrb(rep, ndraw):
         short_T += (c['T'] < 32)
         nonfinite += any((not c['keep'][f]) for (_, f, _, _) in c['plants'])
 
+    # 'all kept' and 'all masked' are drawn at 5% each, so 200 draws has a mean of 10 counts
+    # and an sd of 3.1. The (2, 10) band this used to carry -- 4 to 20 counts -- put its lower
+    # edge under 2 sd from the mean, and measured over 200 seeds it tripped on 1.0% ('all
+    # masked') and 1.5% ('all kept') of them by chance alone. (1, 12) still catches what the
+    # row is for -- a kind that stops being drawn at all, 0 or 1 of 200 -- at a false-alarm
+    # rate under 0.1%. Do not re-tighten it without re-measuring.
     for kind in ('all kept', 'all masked', 'independent', 'runs'):
-        band = (2, 10) if kind.startswith('all') else (30, 60)
+        band = (1, 12) if kind.startswith('all') else (30, 60)
         rep.rate(f'keep: {kind}', keep_kinds.get(kind, 0), ndraw, band,
                  'masks of every shape, and launch()\'s early return when nothing is masked')
     rep.rate('production (F, T) = (1024, 4096)', production, ndraw, (4, 18),
