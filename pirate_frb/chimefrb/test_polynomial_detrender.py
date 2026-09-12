@@ -75,7 +75,7 @@ WARP_COUNTS = [4, 8, 16]
 # the production configuration the second term is ~1e-5
 # against a first term of 2e-4, so a row lands in the band only when a live run's length is
 # within a couple of samples of the crossing; at small epsilon and high degree, where
-# float32 cannot decide, a third of a draw's rows can. The coverage report tracks the band
+# float32 cannot decide, half of a draw's rows can. The coverage report tracks the band
 # fraction. Same construction as stage2_bracket() in test_std_dev_clipper.py: a bracket,
 # because the old code is float32 too.
 GATE_BAND = 0.02
