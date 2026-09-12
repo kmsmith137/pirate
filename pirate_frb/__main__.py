@@ -1866,6 +1866,147 @@ def parse_dev(subparsers):
     parse_revisit_512gb(sub)
 
 
+########################################   cfrb subcommands  ########################################
+
+
+def parse_cfrb(subparsers):
+    """The 'cfrb' group: the CHIME FRB port (pirate_frb.chimefrb).
+
+    Tools for the ported RFI chain itself -- converting the old rf_pipelines json configs,
+    and timing a chain on the GPU. The port's unit tests are 'pirate_frb test --cfrb' and its
+    per-kernel timings are 'pirate_frb time --cfrb'; neither belongs here.
+    """
+    help_text = "Subcommand for the chimefrb port: convert a legacy json chain, time a chain (see cfrb --help)"
+    sub = _add_group(subparsers, "cfrb", help_text)
+    parse_cfrb_json2yaml(sub)
+    parse_cfrb_time_pipeline(sub)
+
+
+######################################   cfrb json2yaml command  ####################################
+
+
+def parse_cfrb_json2yaml(subparsers):
+    help_text = "Convert a legacy rf_pipelines json RFI chain to the chimefrb yaml format (on stdout)"
+    parser = subparsers.add_parser("json2yaml", help=help_text, description=help_text)
+    parser.set_defaults(func=cfrb_json2yaml)
+    parser.add_argument('json_file', metavar='PIPELINE_JSON',
+                        help='a legacy rf_pipelines chain (e.g. misc/chimefrb/configs/21-03-07-low-latency-uniform-badchannel-mask-noplot.json)')
+    parser.add_argument('--nbeams', type=int, default=1, help='beams the chain is BUILT at (default 1)')
+    parser.add_argument('--nfreq', type=int, default=16384, help='channels the chain is BUILT at (default 16384, the full CHIME band)')
+    parser.add_argument('--ntime', type=int, default=4096, help='time samples the chain is BUILT at (default 4096)')
+
+
+def cfrb_json2yaml(args):
+    """A legacy rf_pipelines json chain -> chimefrb yaml, written to stdout.
+
+    The geometry flags are needed to BUILD the chain -- every transform is constructed for a
+    block shape -- but the yaml records no geometry, and can be read back at any shape the
+    transforms accept. Notes from the conversion (elements skipped because they have no pirate
+    counterpart, the CHIME band assumed for badchannel_mask) go to stderr, so that stdout is
+    clean yaml.
+    """
+    from .chimefrb import (PIPELINE_YAML_HEADER, read_json, transform_from_json_dict,
+                           yaml_string)
+
+    chain = transform_from_json_dict(read_json(args.json_file), args.nbeams, args.nfreq, args.ntime)
+    if chain is None:
+        sys.exit(f'{args.json_file}: the top-level element has no pirate counterpart')
+
+    header = (f'# Converted by "pirate_frb cfrb json2yaml" from\n'
+              f'# {os.path.basename(args.json_file)} at nbeams={args.nbeams}'
+              f' nfreq={args.nfreq} ntime={args.ntime}.\n' + PIPELINE_YAML_HEADER)
+    sys.stdout.write(yaml_string(chain.to_yaml_dict(), header=header))
+
+
+####################################   cfrb time_pipeline command  ##################################
+
+
+# CHIME's sampling time in milliseconds -- the stream duration one time sample covers. Used
+# only to turn a measured launch time into "how many beams could this GPU keep up with".
+CHIME_TSAMP_MS = 0.983
+
+
+def parse_cfrb_time_pipeline(subparsers):
+    help_text = "Time a chimefrb transform chain on the GPU, and report real-time beams per GPU"
+    parser = subparsers.add_parser("time_pipeline", help=help_text, description=help_text)
+    parser.set_defaults(func=cfrb_time_pipeline)
+    parser.add_argument('yaml_file', metavar='PIPELINE_YML',
+                        help='a chain in the chimefrb yaml format (see "pirate_frb cfrb json2yaml")')
+    parser.add_argument('-g', '--gpu', type=int, default=0, help='GPU to use (default 0)')
+    parser.add_argument('--nbeams', type=int, nargs='+', default=[1], metavar='N',
+                        help='beam counts to time, one run each (default: 1)')
+    parser.add_argument('--nfreq', type=int, default=16384, help='channels (default 16384, the full CHIME band)')
+    parser.add_argument('--ntime', type=int, default=4096, help='time samples per chunk (default 4096)')
+    parser.add_argument('--nchunks', type=int, default=32, help='chunks per timed run (default 32)')
+    parser.add_argument('--tsamp', type=float, default=CHIME_TSAMP_MS,
+                        help=f'sampling time in ms (default {CHIME_TSAMP_MS}, as in CHIME)')
+
+
+def cfrb_time_pipeline(args):
+    """Time one chain at each beam count, and report the beams a GPU could keep up with.
+
+    Every chunk copies a pristine (intensity, weights) pair over the working arrays before
+    launching. Without that, each chunk would start from the previous chunk's output -- and
+    since the transforms only ever ZERO weights, the chain would get cheaper, and less
+    realistic, chunk by chunk. The copy is inside the timed loop because a real pipeline also
+    pays to get its data into place.
+
+    "Real-time beams per GPU" is the headline number: one chunk holds ntime*tsamp seconds of
+    one beam's data, so a run that processes nbeams*nchunks chunk-beams in 'dt' seconds keeps
+    up with nbeams*nchunks*ntime*tsamp/dt beams of a live stream.
+    """
+    import cupy as cp
+    from .chimefrb import read_yaml, transform_from_yaml_dict
+
+    ksgpu.set_cuda_device(args.gpu)
+
+    d = read_yaml(args.yaml_file)
+    (nfreq, ntime, nchunks) = (args.nfreq, args.ntime, args.nchunks)
+    chunk_sec = ntime * args.tsamp * 1.0e-3      # stream seconds in one chunk, for one beam
+
+    print(f'{args.yaml_file}: nfreq={nfreq}, ntime={ntime}, {nchunks} chunks per run,'
+          f' tsamp={args.tsamp} ms')
+    print(f'One chunk is {chunk_sec:.3f} s of one beam\'s data.'
+          f' Each run is preceded by one untimed chunk (kernel load + autotune).\n')
+    print(f'{"nbeams":>7} {"scratch":>10} {"total":>9} {"per chunk":>11} {"real-time beams/GPU":>21}')
+
+    d2d = cp.cuda.runtime.memcpyDeviceToDevice
+    stream = cp.cuda.get_current_stream()
+
+    for nbeams in args.nbeams:
+        chain = transform_from_yaml_dict(d, nbeams, nfreq, ntime)
+        shape = (nbeams, nfreq, ntime)
+
+        intensity0 = cp.random.standard_normal(shape, dtype=cp.float32)
+        weights0 = cp.random.random(shape, dtype=cp.float32)
+        intensity = cp.empty(shape, dtype=cp.float32)
+        weights = cp.empty(shape, dtype=cp.float32)
+        scratch = cp.empty(int(chain.scratch_nelts), dtype=cp.float32)
+
+        def one_chunk():
+            cp.cuda.runtime.memcpyAsync(intensity.data.ptr, intensity0.data.ptr,
+                                        intensity0.nbytes, d2d, stream.ptr)
+            cp.cuda.runtime.memcpyAsync(weights.data.ptr, weights0.data.ptr,
+                                        weights0.nbytes, d2d, stream.ptr)
+            chain.launch(intensity, weights, scratch, stream)
+
+        one_chunk()
+        stream.synchronize()
+
+        t0 = time.time()
+        for _ in range(nchunks):
+            one_chunk()
+        stream.synchronize()
+        dt = time.time() - t0
+
+        rt_beams = nbeams * nchunks * chunk_sec / dt
+        print(f'{nbeams:7d} {scratch.nbytes/2**20:9.1f}M {dt:8.3f}s'
+              f' {dt/nchunks*1e3:10.1f}ms {rt_beams:21.1f}')
+
+        del intensity0, weights0, intensity, weights, scratch, chain
+        cp.get_default_memory_pool().free_all_blocks()
+
+
 #########################################   rpc subcommands  ########################################
 
 
@@ -2702,6 +2843,7 @@ def get_parser():
     parse_rpc(subparsers)
     parse_show(subparsers)
     parse_varmap(subparsers)
+    parse_cfrb(subparsers)
     parse_dev(subparsers)
 
     parse_test(subparsers)

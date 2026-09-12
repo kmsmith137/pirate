@@ -79,8 +79,8 @@ the C++ side of the launch checks. A newly ported transform should follow it (co
 geometry first, then the semantic parameters in the old code's order, then performance
 knobs), and only transforms with a legacy json form get a `from_json_dict()`. Transforms
 that need no C++ are written in cupy on `CupyTransformBase`; `ExampleCupyTransform` is the
-worked example. `misc/chimefrb/configs/legacy_json_to_yaml.py` converts an old json chain
-to the yaml form.
+worked example. `pirate_frb cfrb json2yaml` converts an old json chain to the yaml form,
+and `pirate_frb cfrb time_pipeline` times one on the GPU.
 
 ## Appendix A: building the chimefrb code
 

@@ -12,8 +12,7 @@ block through `launch(intensity, weights, scratch, stream=None)`, and reads and 
 yaml form through `to_yaml_dict()` / `from_yaml_dict()`. `WiPipeline` runs a list of
 transforms in order; `RfiMaskPipeline` runs a list on a downsampled copy of the data and
 feeds the mask back. Both read the old rf_pipelines json configs
-(`WiPipeline.read_json_file`), and `misc/chimefrb/configs/legacy_json_to_yaml.py` converts
-one to yaml.
+(`WiPipeline.read_json_file`), and `pirate_frb cfrb json2yaml` converts one to yaml.
 
 **Writing your own transform.** Subclass `CupyTransformBase`: a constructor that takes
 `(nbeams, nfreq, ntime, ...)`, a `launch_checked()` that does the work in cupy, in place, and
