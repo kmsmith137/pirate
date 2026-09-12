@@ -863,6 +863,7 @@ def _sec_chimefrb(rep, ndraw):
                 consumer='test --cfrb: GpuIntensityClipper against ReferenceIntensityClipper')
 
     production, downsampled, refined, global_path = 0, 0, 0, 0
+    ic_cost = []
     per_axis = {ClipperAxis.FREQ: 0, ClipperAxis.TIME: 0, ClipperAxis.NONE: 0}
     any_clipped, any_dead, sigma_differs = 0, 0, 0
     clip_frac = []
@@ -871,6 +872,7 @@ def _sec_chimefrb(rep, ndraw):
         (axis, Df, Dt, niter, sigma, iter_sigma, two_pass, _w) = ict.random_config(rng)
         (B, F, T) = ict.random_geometry(rng, axis, Df, Dt)
         (I, W) = ict.random_arrays(rng, B, F, T)
+        ic_cost.append(B * F * T)
 
         production += (axis, Df, Dt) in ict.PRODUCTION_CONFIGS
         per_axis[axis] += 1
@@ -923,6 +925,15 @@ def _sec_chimefrb(rep, ndraw):
     rep.dist('fraction of weights clipped', clip_frac, ('p90', 0.001, 1.0),
              'test_intensity_clipper', fmt='{:.3g}')
 
+    # THE COST TRIPWIRE. random_geometry() bounds the TILE counts, not their product, so the
+    # size of the array the float64 reference runs on has a long tail -- and nothing else
+    # here would notice it growing. MEASURED p50 7.4e4, p90 7.9e5, max 4.7e6. The band
+    # leaves 3x over p90: enough that an ordinary geometry change does not trip it, tight
+    # enough to catch one that makes the suite crawl.
+    rep.dist('B * F * T (the reference array)', ic_cost, ('p90', 0, 2.5e6),
+             'test_intensity_clipper: the float64 reference runs on every element',
+             fmt='{:.3g}')
+
 
     # ---- GpuStdDevClipper
 
@@ -934,6 +945,7 @@ def _sec_chimefrb(rep, ndraw):
                 consumer='test --cfrb: GpuStdDevClipper against ReferenceStdDevClipper')
 
     production, per_axis, downsampled, twopass, low_sigma = 0, {}, 0, 0, 0
+    sd_cost = []
     any_clipped, any_beam_killed, any_rejected, samuelson, illcond = 0, 0, 0, 0, 0
     clip_frac = []
 
@@ -941,6 +953,7 @@ def _sec_chimefrb(rep, ndraw):
         (axis, Df, Dt, sigma, two_pass, _w) = sdt.random_config(rng)
         (B, F, T) = sdt.random_geometry(rng, axis, Df, Dt)
         (I, W) = sdt.random_arrays(rng, B, F, T, axis, Df, Dt)
+        sd_cost.append(B * F * T)
 
         production += (axis, Df, Dt) in sdt.PRODUCTION_CONFIGS
         per_axis[axis] = per_axis.get(axis, 0) + 1
@@ -991,6 +1004,14 @@ def _sec_chimefrb(rep, ndraw):
              'must not be drawn: no bracket covers it, and the test skips such draws')
     rep.dist('fraction of valid rows clipped by stage 2', clip_frac, ('p90', 0.001, 1.0),
              'test_std_dev_clipper', fmt='{:.3g}')
+
+    # The cost tripwire, as under the intensity clipper. This draw has the heavier tail of
+    # the two -- MEASURED p50 1.6e4, p90 2.0e5, max 6.3e6 -- because random_geometry() puts
+    # the row count and the statistic length on separate axes, so the band is set from p90
+    # rather than the max, which a single draw dominates.
+    rep.dist('B * F * T (the reference array)', sd_cost, ('p90', 0, 1.0e6),
+             'test_std_dev_clipper: the float64 reference runs on every element',
+             fmt='{:.3g}')
 
 
     # ---- GpuWeightUpsampler
@@ -1119,17 +1140,21 @@ def _sec_chimefrb(rep, ndraw):
     from ..chimefrb.ReferenceSplineDetrender import bin_edges
 
     rep.section('chimefrb.test_spline_detrender randomization',
-                subtitle=f'{ndraw} draws of random_config() + random_weights() (8 columns each)',
+                subtitle=f'{ndraw} draws of random_config() + random_geometry()'
+                         f' + random_weights() (8 columns each)',
                 consumer='test --cfrb: GpuSplineDetrender against ReferenceSplineDetrender')
 
     rng = default_rng()
     production, big, ncols = 0, 0, 0
+    spd_cost = []
     zero, single, dead_bin, nonbinary, full = 0, 0, 0, 0, 0
 
     for _ in range(ndraw):
         (nfreq, nbins, epsilon, kind) = spd.random_config(rng)
+        (M, T) = spd.random_geometry(rng, nfreq)
         production += (nfreq, nbins, epsilon, kind) in spd.PRODUCTION_CONFIGS
         big += (nfreq >= 4096)
+        spd_cost.append(nfreq * M * T)
 
         # Eight columns per draw, not a full (M, T) geometry: the column patterns are
         # what matters here, and a 16384-channel draw at T = 128 would dominate the run.
@@ -1147,8 +1172,20 @@ def _sec_chimefrb(rep, ndraw):
 
     rep.rate('config drawn from the production two', production, ndraw, (25, 50),
              'spends iterations at the shapes the port will run at')
-    rep.rate('nfreq >= 4096', big, ndraw, (30, 60),
+    # MEASURED at 29.8% +/- 0.3 over 20000 draws of random_config(), so the floor of 30 this
+    # row used to carry sat BELOW its own mean and the row read OUT about half the time. The
+    # band is a tripwire on the full-band corner becoming unreachable, not a claim about the
+    # rate, so it belongs several sigma clear on both sides.
+    rep.rate('nfreq >= 4096', big, ndraw, (15, 50),
              'full-band scale: freq-ranges of hundreds of channels, the longest accumulations')
+
+    # THE COST TRIPWIRE, and the reason random_geometry() takes nfreq at all: nfreq comes
+    # from random_config() and (M, T) from random_geometry(), so their product is the one
+    # number no single randomizer controls -- and it is what a draw costs. Banded on the MAX,
+    # because random_geometry() enforces COST_BUDGET exactly: a max above it means the
+    # budget has been bypassed, not that one draw got unlucky.
+    rep.dist('nfreq * M * T (the reference batch)', spd_cost, ('max', 0, spd.COST_BUDGET),
+             f'test_spline_detrender: COST_BUDGET = {spd.COST_BUDGET:g}', fmt='{:.3g}')
 
     # The column patterns, each of which is a code path or a structural check in
     # test_spline_detrender(); a row collapsing to zero means that check has gone vacuous.
@@ -1169,10 +1206,12 @@ def _sec_chimefrb(rep, ndraw):
     from ..chimefrb import ReferencePolynomialDetrender
 
     rep.section('chimefrb.test_polynomial_detrender randomization',
-                subtitle=f'{ndraw} draws of random_config() + random_geometry() + random_weights() + inject_nans()',
+                subtitle=f'{ndraw} draws of random_config() + random_geometry()'
+                         f' + random_weights() + random_noise_level() + inject_nans()',
                 consumer='test --cfrb: GpuPolynomialDetrender against ReferencePolynomialDetrender')
 
     production, deg4, deg0, deg6, multichunk, nonbinary, nan_planted = 0, 0, 0, 0, 0, 0, 0
+    nulling = 0
     any_masked, any_singular, any_zero, any_full, prod_masked, nprod = 0, 0, 0, 0, 0, 0
     masked_frac, band_frac = [], []
 
@@ -1182,7 +1221,8 @@ def _sec_chimefrb(rep, ndraw):
         shape = (M, nfreq, nchunk * nt_chunk)
         ref = ReferencePolynomialDetrender(polydeg, epsilon, nt_chunk)
         w = pdt.random_weights(rng, ref, shape, kind)
-        intensity = pdt.random_intensity(rng, ref, shape)
+        noise = pdt.random_noise_level(rng)
+        intensity = pdt.random_intensity(rng, ref, shape, noise)
         (_, _, zw_nan, rows_wnan, rows_nanw) = pdt.inject_nans(rng, ref, intensity, w)
 
         is_prod = (polydeg, epsilon, nt_chunk, kind) in pdt.PRODUCTION_CONFIGS
@@ -1193,6 +1233,7 @@ def _sec_chimefrb(rep, ndraw):
         multichunk += (nchunk > 1)
         nonbinary += bool(np.any((w != 0) & (w != 1)))
         nan_planted += bool(zw_nan.any() or rows_wnan.any() or rows_nanw.any())
+        nulling += (noise == 0.0)
 
         # The gate decision and its roundoff band, from the reference; the row patterns
         # that reach the kernel's branches.
@@ -1218,6 +1259,10 @@ def _sec_chimefrb(rep, ndraw):
     rep.rate('non-binary weights', nonbinary, ndraw, (55, 95), 'the weighted fit, not a mask')
     rep.rate('NaN planted somewhere', nan_planted, ndraw, (10, 40),
              'the select at zero weight, the all-NaN row, the NaN weight')
+    # The nulling draw, at one in ten by construction. Reportable at all only because the
+    # level is drawn by a named randomizer rather than inline in the test.
+    rep.rate('noise = 0 (a nulling draw)', nulling, ndraw, (3, 20),
+             'test_polynomial_detrender: the fit must recover the planted polynomial exactly')
 
     # The tripwire on the gate. A draw that masks no row tests the transform\'s main
     # behaviour not at all; and the production configuration reaches it only through the

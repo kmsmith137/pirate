@@ -19,3 +19,27 @@ def default_rng(rng=None):
     tests before it: e.g. test_std_dev_clipper(1, rng=np.random.default_rng(235)).
     """
     return np.random.default_rng(np.random.randint(0, 1 << 32)) if rng is None else rng
+
+
+def draw_within_budget(rng, candidates, cost, budget):
+    """Draw one of 'candidates' uniformly, among those whose 'cost' fits in 'budget'.
+
+    Several shape draws here have a cost that is a PRODUCT of things drawn separately: the
+    spline detrender costs nfreq*M*T, with nfreq from random_config() and (M, T) from
+    random_geometry(). Drawing the factors independently lets a rare expensive corner run
+    away with the whole suite's runtime, which is what notes/unit_tests.md item 4 means by
+    bounding a machine-independent proxy for running time.
+
+    The candidate shapes are ENUMERATED and filtered rather than drawn and retried: the set
+    is small, a filter cannot loop, and a budget that excludes everything still yields the
+    CHEAPEST candidate instead of raising. That last part is what keeps the degenerate
+    shapes -- one beam, the shortest chunk -- reachable at every size, and those are the
+    ones that break loop bounds.
+
+    'cost' is called on each candidate and compared against 'budget', both in whatever
+    units the caller finds natural.
+    """
+    affordable = [c for c in candidates if cost(c) <= budget]
+    if not affordable:
+        return min(candidates, key=cost)
+    return affordable[int(rng.integers(len(affordable)))]

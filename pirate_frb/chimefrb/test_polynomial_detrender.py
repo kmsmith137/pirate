@@ -236,6 +236,17 @@ def random_weights(rng, ref, shape, kind=None):
     return ref._unrows(w, shape).astype(np.float32)
 
 
+def random_noise_level(rng):
+    """The noise level for random_intensity(): zero one draw in ten, unity otherwise.
+
+    Its own function, rather than a line in the test, so that 'dev coverage' can sample the
+    rate without allocating an intensity array (notes/unit_tests.md item 8). A zero level
+    turns the reference comparison into a nulling test: the fit recovers the planted
+    polynomial exactly, so any residual is the port's own error rather than noise.
+    """
+    return 0.0 if (rng.uniform() < 0.1) else 1.0
+
+
 def random_intensity(rng, ref, shape, noise=1.0):
     """(M, F, T) float32: per row, a polynomial in the fit's span plus Gaussian noise.
 
@@ -334,7 +345,7 @@ def test_polynomial_detrender(iteration=0, rng=None, verbose=False):
     shape = (M, nfreq, T)
     ref = ReferencePolynomialDetrender(polydeg, epsilon, nt_chunk)
     weights = random_weights(rng, ref, shape, kind)
-    noise = 0.0 if (rng.uniform() < 0.1) else 1.0
+    noise = random_noise_level(rng)
     intensity = random_intensity(rng, ref, shape, noise)
     (intensity, weights, zw_nan, rows_wnan, rows_nanw) = inject_nans(rng, ref, intensity, weights)
     tag = (f'(polydeg={polydeg}, epsilon={epsilon:.3g}, nt_chunk={nt_chunk}, kind={kind}, W={W},'

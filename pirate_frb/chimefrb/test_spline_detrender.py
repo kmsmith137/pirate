@@ -28,7 +28,7 @@ import numpy as np
 from . import GpuSplineDetrender, ReferenceSplineDetrender
 from .ReferenceSplineDetrender import bin_edges, hermite_basis
 from ..utils import atomic_print
-from .testutils import default_rng as _default_rng
+from .testutils import default_rng as _default_rng, draw_within_budget
 
 
 # The two shapes the old search's production RFI chain runs the detrender at, as
@@ -87,11 +87,29 @@ def random_config(rng):
     return (nfreq, nbins, epsilon, None)
 
 
-def random_geometry(rng):
-    """Draw (M, T). Small: the reference solves an (M*T)-batch of dense systems."""
-    M = int(rng.integers(1, 4))
-    T = int(rng.choice([32, 64, 128]))
-    return (M, T)
+# A cap on nfreq*M*T, which is what one draw of this test costs: the reference evaluates
+# the basis over nfreq channels and solves an (M*T)-batch of dense systems, and the measured
+# runtime tracks that product at a correlation of 0.98. The cap is needed because nfreq is
+# drawn by random_config() while (M, T) are drawn here, so an independent draw let the
+# full-band corner run away with the suite: MEASURED without it, 3 draws in 60 -- all at
+# nfreq = 16384 -- took 42% of this test's runtime, and this test alone was half of
+# 'test --cfrb'. 1.2e6 leaves three shapes reachable at 16384 channels, one of them with
+# M > 1 so the beam-spectator check still runs there, and leaves all nine reachable at the
+# production 1024.
+COST_BUDGET = 1.2e6
+
+# The shapes to choose among. T is a multiple of 32, which the GPU kernel requires.
+GEOMETRIES = [(M, T) for M in (1, 2, 3) for T in (32, 64, 128)]
+
+
+def random_geometry(rng, nfreq):
+    """Draw (M, T) with nfreq*M*T <= COST_BUDGET.
+
+    Uniform over GEOMETRIES where they all fit, and restricted to those that do as nfreq
+    grows. The cheapest shape (1, 32) fits at every nfreq, so a single beam and the
+    shortest chunk stay reachable even at full band.
+    """
+    return draw_within_budget(rng, GEOMETRIES, lambda mt: nfreq * mt[0] * mt[1], COST_BUDGET)
 
 
 def _weight_column(rng, nfreq, nbins, edges, kind):
@@ -206,7 +224,7 @@ def test_spline_detrender(iteration=0, rng=None, verbose=False):
     rng = _default_rng(rng)
 
     (nfreq, nbins, epsilon, kind) = random_config(rng)
-    (M, T) = random_geometry(rng)
+    (M, T) = random_geometry(rng, nfreq)
     weights = random_weights(rng, M, nfreq, nbins, T, kind)
     intensity = random_intensity(rng, M, nfreq, nbins, T)
     tag = f'(nfreq={nfreq}, nbins={nbins}, epsilon={epsilon:.3g}, kind={kind}, M={M}, T={T})'
