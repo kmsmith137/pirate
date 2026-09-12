@@ -20,7 +20,7 @@ import json
 import os
 import sys
 
-from pirate_frb.chimefrb import transform_from_json_dict
+from pirate_frb.chimefrb import PIPELINE_YAML_HEADER, transform_from_json_dict, yaml_string
 
 DEFAULT_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             '21-03-07-low-latency-uniform-badchannel-mask-noplot.json')
@@ -41,10 +41,10 @@ def main():
     if chain is None:
         sys.exit(f'{args.json_file}: the top-level element has no pirate counterpart')
 
-    sys.stdout.write(f'# Converted by misc/chimefrb/configs/legacy_json_to_yaml.py from\n'
-                     f'# {os.path.basename(args.json_file)} at nbeams={args.nbeams}'
-                     f' nfreq={args.nfreq} ntime={args.ntime}.\n')
-    sys.stdout.write(chain.yaml_string())
+    header = (f'# Converted by misc/chimefrb/configs/legacy_json_to_yaml.py from\n'
+              f'# {os.path.basename(args.json_file)} at nbeams={args.nbeams}'
+              f' nfreq={args.nfreq} ntime={args.ntime}.\n' + PIPELINE_YAML_HEADER)
+    sys.stdout.write(yaml_string(chain.to_yaml_dict(), header=header))
 
 
 if __name__ == '__main__':

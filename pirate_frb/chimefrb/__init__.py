@@ -29,8 +29,9 @@ from .ReferencePolynomialDetrender import GpuPolynomialDetrender, ReferencePolyn
 
 # The transform interface (the "protocol"), and the two pipeline classes that run transforms.
 from .transform_io import (CHIME_FREQ_RANGE, IGNORED_JSON_CLASSES, LEGACY_JSON_CLASS_NAMES,
-                           axis_from_str, axis_to_str, check_yaml_keys, resolve_class,
-                           transform_from_json_dict, transform_from_yaml_dict)
+                           PIPELINE_YAML_HEADER, axis_from_str, axis_to_str, check_yaml_keys,
+                           read_json, read_yaml, resolve_class, transform_from_json_dict,
+                           transform_from_yaml_dict, write_yaml, yaml_string)
 from .CupyTransformBase import CupyTransformBase
 from .ExampleCupyTransform import ExampleCupyTransform
 from .WiPipeline import WiPipeline

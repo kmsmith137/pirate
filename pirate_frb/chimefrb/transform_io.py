@@ -57,7 +57,10 @@ yourself, in your own module or in a notebook, gets found), then as an attribute
 class names first.
 """
 
+import json
+
 import numpy as np
+import yaml
 
 from ..pirate_pybind11 import ClipperAxis
 from ..utils import atomic_print
@@ -313,3 +316,55 @@ def check_launch_args(intensity, weights, scratch, shape, scratch_nelts, who):
             hi_a = arr.data.ptr + 4 * arr.size
             if (scratch.data.ptr < hi_a) and (arr.data.ptr < hi_s):
                 raise ValueError(f"{who}.launch(): 'scratch' overlaps '{name}'")
+
+
+# -------------------------------------------------------------------------------------------------
+#
+# yaml / json files. Plain functions on plain dicts; WiPipeline.write_yaml_file() and friends
+# are thin wrappers around these.
+
+
+# The comment WiPipeline/RfiMaskPipeline.write_yaml_file() put at the top of a file.
+PIPELINE_YAML_HEADER = ('# A pirate_frb.chimefrb transform chain. Read with\n'
+                        '#   WiPipeline.read_yaml_file(filename, nbeams=..., nfreq=..., ntime=...)\n'
+                        '# (or RfiMaskPipeline.read_yaml_file, if that is the top-level class_name).\n')
+
+
+class _YamlDumper(yaml.SafeDumper):
+    """yaml.SafeDumper, except that a list of scalars is written on one line
+    (``freq_range: [400.0, 800.0]``, one ``[lo, hi]`` per mask range) while lists of mappings
+    -- the transforms -- stay one element per line."""
+
+
+def _represent_list(dumper, data):
+    flow = (len(data) > 0) and all(isinstance(x, (int, float, str, bool)) for x in data)
+    return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=flow)
+
+
+_YamlDumper.add_representer(list, _represent_list)
+
+
+def yaml_string(data, header=None):
+    """``data`` (a plain dict, e.g. a ``to_yaml_dict()``) as yaml text, keys in their natural
+    order and lists of numbers on one line, preceded by ``header`` (a string of ``#`` comment
+    lines, ending in a newline) if one is given."""
+    s = yaml.dump(data, Dumper=_YamlDumper, sort_keys=False)
+    return (header + s) if (header is not None) else s
+
+
+def write_yaml(filename, data, header=None):
+    """Write :func:`yaml_string` of ``data`` to a file."""
+    with open(filename, 'w') as f:
+        f.write(yaml_string(data, header))
+
+
+def read_yaml(filename):
+    """The dict in a yaml file (``yaml.safe_load``)."""
+    with open(filename) as f:
+        return yaml.safe_load(f)
+
+
+def read_json(filename):
+    """The dict in a json file, e.g. a legacy rf_pipelines config."""
+    with open(filename) as f:
+        return json.load(f)

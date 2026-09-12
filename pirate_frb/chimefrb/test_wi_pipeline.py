@@ -23,13 +23,17 @@ transforms (which catches a scratch accounting error, since the C++ transforms a
 scratch size), and ExampleCupyTransform on planted outliers.
 """
 
+import os
+import tempfile
+
 import numpy as np
 import yaml
 
 from . import (ClipperAxis, CupyTransformBase, ExampleCupyTransform, GpuBadChannelMask,
                GpuIntensityClipper, GpuPolynomialDetrender, GpuSplineDetrender,
                GpuStdDevClipper, RfiMaskPipeline, WiPipeline)
-from .transform_io import check_yaml_keys, transform_from_json_dict, transform_from_yaml_dict
+from .transform_io import (check_yaml_keys, transform_from_json_dict, transform_from_yaml_dict,
+                           yaml_string)
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng
 
@@ -270,7 +274,15 @@ def _check_legacy_json():
     assert d2 == d, 'yaml.safe_dump/safe_load changed the dict (a non-plain type in to_yaml_dict?)'
     p2 = WiPipeline.from_yaml_dict(d2, nbeams, nfreq, ntime)
     assert p2.to_yaml_dict() == d
-    assert isinstance(p.yaml_string(), str) and ('class_name: WiPipeline' in p.yaml_string())
+    assert 'class_name: WiPipeline' in yaml_string(d)
+
+    # The file-level pair, through a temporary file.
+    with tempfile.TemporaryDirectory() as tmp:
+        fname = os.path.join(tmp, 'chain.yml')
+        p.write_yaml_file(fname)
+        p3 = WiPipeline.read_yaml_file(fname, nbeams=nbeams, nfreq=nfreq, ntime=ntime)
+        assert p3.to_yaml_dict() == d, 'write_yaml_file/read_yaml_file changed the pipeline'
+        assert open(fname).readline().startswith('#'), 'write_yaml_file should start with a comment header'
     assert len(p.describe().splitlines()) == 1 + 4 + 3 + 1
 
     # Two more legacy conventions: the consistency check when both spellings are given, and

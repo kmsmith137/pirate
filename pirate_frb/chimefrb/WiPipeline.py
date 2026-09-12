@@ -7,12 +7,9 @@ downsampled copy of the data instead; both are transforms themselves (see
 transform_io.py for the interface), so they nest.
 """
 
-import json
-import yaml
-
-from .transform_io import (check_json_keys, check_launch_args, check_yaml_keys,
-                           default_scratch_and_stream, transform_from_json_dict,
-                           transform_from_yaml_dict)
+from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, check_launch_args,
+                           check_yaml_keys, default_scratch_and_stream, read_json, read_yaml,
+                           transform_from_json_dict, transform_from_yaml_dict, write_yaml)
 
 
 def check_transforms(transforms, who):
@@ -69,68 +66,7 @@ def describe_lines(transform, depth=0):
     return [f"{pad}{d['class_name']} {params}"]
 
 
-class _YamlDumper(yaml.SafeDumper):
-    """yaml.SafeDumper, except that a list of scalars is written on one line
-    (``freq_range: [400.0, 800.0]``, one ``[lo, hi]`` per mask range) while lists of mappings
-    -- the transforms -- stay one element per line."""
-
-
-def _represent_list(dumper, data):
-    flow = (len(data) > 0) and all(isinstance(x, (int, float, str, bool)) for x in data)
-    return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=flow)
-
-
-_YamlDumper.add_representer(list, _represent_list)
-
-
-class PipelineFileIO:
-    """The file-level yaml/json methods shared by WiPipeline and RfiMaskPipeline. Each class
-    supplies ``to_yaml_dict``, ``from_yaml_dict`` and ``from_json_dict``."""
-
-    @classmethod
-    def read_yaml_file(cls, filename, *, nbeams, nfreq, ntime, classes=None):
-        """Read a yaml file written by :meth:`write_yaml_file`, building the pipeline for the
-        given data geometry.
-
-        Parameters
-        ----------
-        filename : str
-        nbeams, nfreq, ntime : int
-            The block shape the pipeline will be launched on. A yaml file records no
-            geometry; the same file serves any geometry its transforms accept.
-        classes : sequence of type or None, optional
-            Transform classes of your own that the file may name (matched by class name);
-            anything in ``pirate_frb.chimefrb`` is found without this. See
-            ``pirate_frb.chimefrb.transform_io``.
-        """
-        with open(filename) as f:
-            d = yaml.safe_load(f)
-        return cls.from_yaml_dict(d, nbeams, nfreq, ntime, classes=classes)
-
-    @classmethod
-    def read_json_file(cls, filename, *, nbeams, nfreq, ntime):
-        """Read a legacy rf_pipelines json file (one written by the old ``jsonize()``), building
-        the pipeline for the given data geometry. Elements with no pirate counterpart that do
-        not modify the data are skipped, with a printed note; see ``transform_io``."""
-        with open(filename) as f:
-            d = json.load(f)
-        return cls.from_json_dict(d, nbeams, nfreq, ntime)
-
-    def yaml_string(self):
-        """The pipeline as yaml text: a header comment, then ``to_yaml_dict()`` dumped with
-        keys in their natural order and lists of numbers (a frequency range) on one line."""
-        header = ('# A pirate_frb.chimefrb transform chain. Read with\n'
-                  '#   WiPipeline.read_yaml_file(filename, nbeams=..., nfreq=..., ntime=...)\n'
-                  '# (or RfiMaskPipeline.read_yaml_file, if that is the top-level class_name).\n')
-        return header + yaml.dump(self.to_yaml_dict(), Dumper=_YamlDumper, sort_keys=False)
-
-    def write_yaml_file(self, filename):
-        """Write :meth:`yaml_string` to a file."""
-        with open(filename, 'w') as f:
-            f.write(self.yaml_string())
-
-
-class WiPipeline(PipelineFileIO):
+class WiPipeline:
     """An ordered list of transforms, run one after another on the same block of data.
 
     A port of rf_pipelines::pipeline, the container the old CHIME FRB search's RFI chain was
@@ -216,6 +152,36 @@ class WiPipeline(PipelineFileIO):
         if len(transforms) == 0:
             raise ValueError("WiPipeline.from_json_dict: the legacy 'pipeline' has no element with a pirate counterpart")
         return cls(transforms)
+
+    @classmethod
+    def read_yaml_file(cls, filename, *, nbeams, nfreq, ntime, classes=None):
+        """Read a yaml file written by :meth:`write_yaml_file`, building the pipeline for the
+        given data geometry.
+
+        Parameters
+        ----------
+        filename : str
+        nbeams, nfreq, ntime : int
+            The block shape the pipeline will be launched on. A yaml file records no
+            geometry; the same file serves any geometry its transforms accept.
+        classes : sequence of type or None, optional
+            Transform classes of your own that the file may name (matched by class name);
+            anything in ``pirate_frb.chimefrb`` is found without this. See
+            ``pirate_frb.chimefrb.transform_io``.
+        """
+        return cls.from_yaml_dict(read_yaml(filename), nbeams, nfreq, ntime, classes=classes)
+
+    @classmethod
+    def read_json_file(cls, filename, *, nbeams, nfreq, ntime):
+        """Read a legacy rf_pipelines json file (one written by the old ``jsonize()``), building
+        the pipeline for the given data geometry. Elements with no pirate counterpart that do
+        not modify the data are skipped, with a note on stderr; see ``transform_io``."""
+        return cls.from_json_dict(read_json(filename), nbeams, nfreq, ntime)
+
+    def write_yaml_file(self, filename):
+        """Write :meth:`to_yaml_dict` to a yaml file, after a comment saying how to read it
+        (``transform_io.write_yaml``)."""
+        write_yaml(filename, self.to_yaml_dict(), header=PIPELINE_YAML_HEADER)
 
     def describe(self):
         """A multi-line listing of the pipeline: one indented line per transform, with its yaml

@@ -9,17 +9,17 @@ import math
 
 from .ReferenceWeightUpsampler import GpuWeightUpsampler
 from .ReferenceWiDownsampler import GpuWiDownsampler
-from .WiPipeline import PipelineFileIO, WiPipeline, describe_lines
-from .transform_io import (check_json_keys, check_launch_args, check_yaml_keys,
-                           default_scratch_and_stream, transform_from_json_dict,
-                           transform_from_yaml_dict)
+from .WiPipeline import WiPipeline, describe_lines
+from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, check_launch_args,
+                           check_yaml_keys, default_scratch_and_stream, read_json, read_yaml,
+                           transform_from_json_dict, transform_from_yaml_dict, write_yaml)
 
 
 def _round_up(n, m):
     return ((n + m - 1) // m) * m
 
 
-class RfiMaskPipeline(PipelineFileIO):
+class RfiMaskPipeline:
     """Transforms run on a (Df, Dt)-downsampled copy of the data, whose mask is then applied
     to the full-resolution weights.
 
@@ -222,6 +222,36 @@ class RfiMaskPipeline(PipelineFileIO):
             raise ValueError(f"{who}: the legacy 'sub_pipeline' has no element with a pirate counterpart")
 
         return cls(transforms, Df, Dt, float(d['w_cutoff']))
+
+    @classmethod
+    def read_yaml_file(cls, filename, *, nbeams, nfreq, ntime, classes=None):
+        """Read a yaml file written by :meth:`write_yaml_file` whose top-level class_name is
+        RfiMaskPipeline, building it for the given FULL-RESOLUTION data geometry.
+
+        Parameters
+        ----------
+        filename : str
+        nbeams, nfreq, ntime : int
+            The block shape the pipeline will be launched on. A yaml file records no
+            geometry; the same file serves any geometry its transforms accept.
+        classes : sequence of type or None, optional
+            Transform classes of your own that the file may name (matched by class name);
+            anything in ``pirate_frb.chimefrb`` is found without this. See
+            ``pirate_frb.chimefrb.transform_io``.
+        """
+        return cls.from_yaml_dict(read_yaml(filename), nbeams, nfreq, ntime, classes=classes)
+
+    @classmethod
+    def read_json_file(cls, filename, *, nbeams, nfreq, ntime):
+        """Read a legacy rf_pipelines json file whose top-level element is a ``wi_sub_pipeline``,
+        building it for the given FULL-RESOLUTION data geometry. Elements with no pirate counterpart that do
+        not modify the data are skipped, with a note on stderr; see ``transform_io``."""
+        return cls.from_json_dict(read_json(filename), nbeams, nfreq, ntime)
+
+    def write_yaml_file(self, filename):
+        """Write :meth:`to_yaml_dict` to a yaml file, after a comment saying how to read it
+        (``transform_io.write_yaml``)."""
+        write_yaml(filename, self.to_yaml_dict(), header=PIPELINE_YAML_HEADER)
 
     def describe(self):
         """A multi-line listing: this pipeline's parameters, then one indented line per
