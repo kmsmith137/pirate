@@ -3,8 +3,9 @@ badchannel_keep(): the conversion from MHz ranges to channels.
 
 rf_pipelines::badchannel_mask zeroes whole frequency channels, chosen by a list of (freq_lo,
 freq_hi) ranges in MHz. The zeroing is trivial. The conversion from MHz to channel indices is
-not, and it is done here, in python only: GpuBadChannelMask takes a per-channel 'keep' array
-and never sees a frequency.
+not: GpuBadChannelMask's constructor does it in C++ (src_lib/chimefrb/BadChannelMask.cu), and
+badchannel_keep() below is the python transcription of the same arithmetic, which the unit
+test holds the C++ to exactly.
 
 badchannel_keep() is transcribed from _bind_transform() in
 ../../extern/rf_pipelines/badchannel_mask.cpp. The old code has no reference implementation
@@ -18,7 +19,10 @@ import operator
 import numpy as np
 
 import ksgpu
+from ..utils import atomic_print
 from ..pirate_pybind11 import GpuBadChannelMask
+from .transform_io import (CHIME_FREQ_RANGE, check_json_keys, check_yaml_keys,
+                           default_scratch_and_stream)
 
 
 # The old code's allowance for a frequency that is meant to be a channel edge but is off by
@@ -127,89 +131,103 @@ def badchannel_keep(mask_ranges, nfreq, freq_lo_MHz, freq_hi_MHz):
     return keep
 
 
-def _as_keep(keep):
-    """Converts GpuBadChannelMask's constructor argument to the uint8 array the C++ takes."""
+# The yaml keys of GpuBadChannelMask, which are also its constructor's argument names after
+# the geometry.
+BADCHANNEL_MASK_YAML_KEYS = ('mask_ranges', 'freq_range')
 
-    keep = np.asarray(keep)   # a cupy array fails here, as it should: 'keep' is host-side
 
-    if keep.ndim != 1:
-        raise ValueError(f'GpuBadChannelMask: expected a 1-d keep array, got shape {keep.shape}')
-    if keep.dtype == np.uint8:
-        return keep   # the C++ constructor treats any nonzero value as "keep"
-    if (keep.dtype == np.bool_) or np.issubdtype(keep.dtype, np.integer):
-        return (keep != 0).astype(np.uint8)
-
-    # A float array is more likely a row of weights than a mask.
-    raise TypeError(f'GpuBadChannelMask: expected a bool or integer keep array, got dtype {keep.dtype}')
+def _as_range_list(mask_ranges):
+    """A list of (float, float) pairs, from any sequence of pairs (a numpy (n, 2) array
+    included), with a clear error for anything else."""
+    ranges = []
+    for r in mask_ranges:
+        r = tuple(r)
+        if len(r) != 2:
+            raise ValueError(f'GpuBadChannelMask: expected each mask range to be a (lo, hi) pair, got {r!r}')
+        ranges.append((float(r[0]), float(r[1])))
+    return ranges
 
 
 @ksgpu.inject_methods(GpuBadChannelMask)
 class GpuBadChannelMaskInjections:
     # No class docstring here: GpuBadChannelMask's docstring lives in the pybind11 binding
-    # (option 1 in notes/docstrings.md). This injector widens the constructor to bool and
-    # integer arrays, adds the from_mask_ranges() factory, and adds a stream argument for
-    # launch().
+    # (option 1 in notes/docstrings.md). This injector normalizes the constructor's range
+    # arguments, and adds the python side of the transform protocol (transform_io.py):
+    # launch() with stream=None and scratch=None handling, and the yaml/legacy-json methods.
 
     # Save references to C++ methods
     _cpp_init = GpuBadChannelMask.__init__
     _cpp_launch = GpuBadChannelMask.launch
 
-    def __init__(self, keep, warps_per_block=4):
+    def __init__(self, nbeams, nfreq, ntime, mask_ranges, freq_range, warps_per_block=4):
         """Create a GpuBadChannelMask.
 
         Parameters
         ----------
-        keep : array-like
-            Shape ``(F,)``, one entry per frequency channel, of bool or integer dtype, in host
-            memory. False (or 0) masks the channel, and anything else keeps it. Copied to the
-            GPU, so the caller may reuse its array.
+        nbeams, nfreq, ntime : int
+            The array shape launch() will be given.
+        mask_ranges : sequence of (lo, hi) pairs
+            Frequency ranges to mask, in MHz, each with lo < hi, in any order. A numpy array
+            of shape (n, 2) is fine.
+        freq_range : (lo, hi)
+            The band in MHz, channel 0 at the top; (400, 800) for CHIME.
         warps_per_block : int, optional
             Performance knob, 4, 8, 16 or 32, which must not change the result. See
             :meth:`time_selected`.
         """
-        self._cpp_init(_as_keep(keep), warps_per_block)
+        band = _as_range_list([freq_range])[0]
+        self._cpp_init(int(nbeams), int(nfreq), int(ntime), _as_range_list(mask_ranges), band,
+                       int(warps_per_block))
 
-    @staticmethod
-    def from_mask_ranges(mask_ranges, nfreq, freq_lo_MHz, freq_hi_MHz, warps_per_block=4):
-        """The old transform's constructor syntax: masks the channels that a list of MHz
-        ranges touches, by the rule (and the quirks) in ``badchannel_keep()``.
-
-        Parameters
-        ----------
-        mask_ranges : sequence of (lo, hi) pairs
-            Frequency ranges to mask, in MHz.
-        nfreq : int
-            Number of frequency channels, F.
-        freq_lo_MHz, freq_hi_MHz : float
-            The band, with channel 0 at the top.
-        warps_per_block : int, optional
-            As for the constructor.
-
-        Returns
-        -------
-        GpuBadChannelMask
-        """
-        keep = badchannel_keep(mask_ranges, nfreq, freq_lo_MHz, freq_hi_MHz)
-        return GpuBadChannelMask(keep, warps_per_block)
-
-    def launch(self, weights, stream=None):
+    def launch(self, intensity, weights, scratch, stream=None):
         """GPU kernel launch (async, does not sync stream).
 
         Parameters
         ----------
+        intensity : cupy.ndarray
+            Shape ``(nbeams, nfreq, ntime)``, float32, fully contiguous, on GPU. Checked and
+            never touched.
         weights : cupy.ndarray
-            Shape ``(B, F, T)``, float32, fully contiguous, on GPU, with any B and T. MODIFIED
-            IN PLACE: every weight in a masked channel becomes +0.0, and every other weight is
-            left bit-identical.
+            Same shape and dtype. MODIFIED IN PLACE: every weight in a masked channel becomes
+            +0.0, and every other weight is left bit-identical.
+        scratch : cupy.ndarray or None
+            Unused (``scratch_nelts`` is 0): any 1-d float32 array, or None.
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
         """
-        import cupy as cp
+        (scratch, stream) = default_scratch_and_stream(scratch, stream, self.scratch_nelts)
+        self._cpp_launch(intensity, weights, scratch, stream.ptr)
 
-        if stream is None:
-            stream = cp.cuda.get_current_stream()
+    def to_yaml_dict(self):
+        """The yaml form (see ``transform_io``): the class name, ``freq_range`` and
+        ``mask_ranges``, in MHz as given to the constructor."""
+        return {'class_name': 'GpuBadChannelMask',
+                'freq_range': [float(self.freq_range[0]), float(self.freq_range[1])],
+                'mask_ranges': [[float(lo), float(hi)] for (lo, hi) in self.mask_ranges]}
 
-        self._cpp_launch(weights, stream.ptr)
+    @classmethod
+    def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
+        """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
+        check_yaml_keys(d, 'GpuBadChannelMask', BADCHANNEL_MASK_YAML_KEYS)
+        return cls(nbeams, nfreq, ntime, d['mask_ranges'], d['freq_range'])
+
+    @classmethod
+    def from_json_dict(cls, d, nbeams, nfreq, ntime):
+        """From the legacy rf_pipelines json element (``class_name: badchannel_mask``).
+
+        The legacy json carries the MHz ranges but NOT the band, which rf_pipelines read
+        from the stream at bind time; the CHIME band (400, 800) is assumed, and a line saying
+        so is printed to stderr. A nonempty ``mask_path`` (a file of extra ranges) is not
+        supported.
+        """
+        check_json_keys(d, 'badchannel_mask', ['mask_ranges', 'mask_path'])
+        if d['mask_path']:
+            raise NotImplementedError(f"GpuBadChannelMask.from_json_dict: mask_path={d['mask_path']!r}"
+                                      f" (a file of extra ranges) is not supported; only 'mask_ranges' is")
+        atomic_print(f'GpuBadChannelMask.from_json_dict: assuming freq_range = {CHIME_FREQ_RANGE} MHz'
+                     f' (the legacy json does not record the band; rf_pipelines took it from the stream)',
+                     fd=2)   # stderr, so that a converter writing yaml to stdout stays clean
+        return cls(nbeams, nfreq, ntime, d['mask_ranges'], CHIME_FREQ_RANGE)
 
 
 class ReferenceBadChannelMask:

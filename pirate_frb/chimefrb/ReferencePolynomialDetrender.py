@@ -12,39 +12,76 @@ check misc/chimefrb/polynomial_detrender/ is what pins it to the old binary.
 import numpy as np
 
 import ksgpu
-from ..pirate_pybind11 import GpuPolynomialDetrender
+from ..pirate_pybind11 import ClipperAxis, GpuPolynomialDetrender
 from .ReferenceIntensityClipper import AXIS_FREQ, AXIS_TIME
+from .transform_io import (axis_from_json, check_json_keys, check_yaml_keys,
+                           default_scratch_and_stream)
+
+
+# The yaml keys of GpuPolynomialDetrender: its constructor's argument names after the
+# geometry, plus 'axis', which the old json carries and which must be 'time' (the only axis
+# this class implements; ReferencePolynomialDetrender also does 'freq').
+POLYNOMIAL_DETRENDER_YAML_KEYS = ('polydeg', 'epsilon', 'nt_chunk', 'axis')
 
 
 @ksgpu.inject_methods(GpuPolynomialDetrender)
 class GpuPolynomialDetrenderInjections:
     # No class docstring here: GpuPolynomialDetrender's docstring lives in the pybind11
-    # binding (option 1 in notes/docstrings.md); this injector adds a stream argument
-    # for launch().
+    # binding (option 1 in notes/docstrings.md). This injector adds the python side of the
+    # transform protocol (transform_io.py): launch() with stream=None and scratch=None
+    # handling, and the yaml/legacy-json methods.
 
     # Save reference to C++ method
     _cpp_launch = GpuPolynomialDetrender.launch
 
-    def launch(self, intensity, weights, stream=None):
+    def launch(self, intensity, weights, scratch, stream=None):
         """GPU kernel launch (async, does not sync stream).
 
         Parameters
         ----------
         intensity : cupy.ndarray
-            Shape (M, nfreq, T), float32, fully contiguous, on GPU, T a multiple of
-            nt_chunk. Detrended in place on rows that pass the gate.
+            Shape (nbeams, nfreq, ntime), float32, fully contiguous, on GPU. Detrended in
+            place on rows that pass the gate.
         weights : cupy.ndarray
             Same shape and dtype. Must be >= 0. MODIFIED IN PLACE: zeroed on rows that
             fail the gate, untouched elsewhere.
+        scratch : cupy.ndarray or None
+            Unused (``scratch_nelts`` is 0): any 1-d float32 array, or None.
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
         """
-        import cupy as cp
+        (scratch, stream) = default_scratch_and_stream(scratch, stream, self.scratch_nelts)
+        self._cpp_launch(intensity, weights, scratch, stream.ptr)
 
-        if stream is None:
-            stream = cp.cuda.get_current_stream()
+    def to_yaml_dict(self):
+        """The yaml form (see ``transform_io``): the class name, ``polydeg``, ``epsilon``,
+        ``nt_chunk``, and ``axis: time``."""
+        return {'class_name': 'GpuPolynomialDetrender', 'polydeg': int(self.polydeg),
+                'epsilon': float(self.epsilon), 'nt_chunk': int(self.nt_chunk), 'axis': 'time'}
 
-        self._cpp_launch(intensity, weights, stream.ptr)
+    @classmethod
+    def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
+        """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
+        check_yaml_keys(d, 'GpuPolynomialDetrender', POLYNOMIAL_DETRENDER_YAML_KEYS)
+        if d['axis'] != 'time':
+            raise ValueError(f"GpuPolynomialDetrender.from_yaml_dict: axis={d['axis']!r}, but this class"
+                             f" implements axis 'time' only (ReferencePolynomialDetrender also does 'freq')")
+        return cls(nbeams, nfreq, ntime, d['polydeg'], d['epsilon'], d['nt_chunk'])
+
+    @classmethod
+    def from_json_dict(cls, d, nbeams, nfreq, ntime):
+        """From the legacy rf_pipelines json element (``class_name: polynomial_detrender``),
+        whose ``polydeg`` is written as a double and whose ``nt_chunk == 0`` means the whole
+        block (here ``ntime``)."""
+        check_json_keys(d, 'polynomial_detrender', ['axis', 'polydeg', 'epsilon', 'nt_chunk'])
+        if axis_from_json(d['axis']) != ClipperAxis.TIME:
+            raise ValueError(f"GpuPolynomialDetrender.from_json_dict: axis={d['axis']!r}, but this class"
+                             f" implements AXIS_TIME only (ReferencePolynomialDetrender also does AXIS_FREQ)")
+        polydeg = d['polydeg']
+        if int(polydeg) != polydeg:
+            raise ValueError(f"GpuPolynomialDetrender.from_json_dict: polydeg={polydeg!r} is not an integer")
+        nt_chunk = d['nt_chunk'] if d['nt_chunk'] else ntime
+        return cls(nbeams, nfreq, ntime, int(polydeg), d['epsilon'], nt_chunk)
 
 
 def z_grid(n):

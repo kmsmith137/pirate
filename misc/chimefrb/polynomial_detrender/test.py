@@ -190,10 +190,10 @@ def main():
 
         if (gpu is not None) and (axis == AXIS_TIME):
             (cp, Gpu) = gpu
-            det = Gpu(polydeg, epsilon, nt_chunk)
+            det = Gpu(1, F, T, polydeg, epsilon, nt_chunk)
             gi = cp.asarray(x[0][None])
             gw = cp.asarray(x[1][None])
-            det.launch(gi, gw)
+            det.launch(gi, gw, None)
             cp.cuda.get_current_stream().synchronize()
             (gi, gw) = (cp.asnumpy(gi)[0], cp.asnumpy(gw)[0])
             gpu_masked = compare(t, "GPU vs reference", x, gi, gw, ref, model)

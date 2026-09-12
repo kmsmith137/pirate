@@ -44,19 +44,23 @@ namespace chimefrb {
 // which also implements the old code's AXIS_FREQ variant; misc/chimefrb/polynomial_detrender/
 // is the spot check against the old code itself.
 //
-// STATELESS: no tables and no scratch arrays (a whole fit lives in one warp's registers),
-// so one instance may be used from any number of streams at once. This differs from
-// GpuSplineDetrender and the clippers, which own per-launch scratch and want one instance
-// per stream.
+// STATELESS: no tables and no scratch (a whole fit lives in one warp's registers), so one
+// instance may be used from any number of streams at once.
 //
 // IMPLEMENTATION: one warp per row; see the .cu file.
 //
-// See notes/chimefrb.md for the porting rules this class follows.
+// Every chimefrb transform's launch() takes (intensity, weights, scratch, stream) on arrays
+// of shape (nbeams, nfreq, ntime); see launch_utils.hpp. See notes/chimefrb.md for the
+// porting rules this class follows.
 
 struct GpuPolynomialDetrender
 {
-    // Throws on polydeg outside 0..8, epsilon <= 0, nt_chunk not a positive multiple of
-    // 64, or warps_per_block not one of 4, 8, 16.
+    // (nbeams, nfreq, ntime) is the shape of the arrays launch() will be given, with ntime a
+    // multiple of nt_chunk: one fit per (beam, channel, chunk).
+    //
+    // Throws on nbeams or nfreq < 1, polydeg outside 0..8, epsilon <= 0, nt_chunk not a
+    // positive multiple of 64, ntime not a positive multiple of nt_chunk, or
+    // warps_per_block not one of 4, 8, 16.
     //
     // polydeg <= 8 follows the old code's own tests (float32 fails above that). The
     // multiple-of-64 rule is two samples per lane of a warp, which lets the kernel use
@@ -66,28 +70,33 @@ struct GpuPolynomialDetrender
     // registers would not fit a 1024-thread block. Measured on an L40S at the production
     // configuration (8 beams, 16384 channels, one 1024-sample chunk): 663, 665 and 672 GB/s
     // for 4, 8 and 16, so the default is 16.
-    GpuPolynomialDetrender(long polydeg, double epsilon, long nt_chunk, long warps_per_block = 16);
+    GpuPolynomialDetrender(long nbeams, long nfreq, long ntime, long polydeg, double epsilon,
+                           long nt_chunk, long warps_per_block = 16);
 
-    const long polydeg;          // degree; the fit has polydeg+1 coefficients
-    const double epsilon;        // gate threshold (the production chain uses 0.01)
-    const long nt_chunk;         // samples per independent fit; positive multiple of 64
-    const long warps_per_block;  // 4, 8 or 16
+    const long nbeams, nfreq, ntime;   // array shape; ntime a positive multiple of nt_chunk
+    const long polydeg;                // degree; the fit has polydeg+1 coefficients
+    const double epsilon;              // gate threshold (the production chain uses 0.01)
+    const long nt_chunk;               // samples per independent fit; positive multiple of 64
+    const long warps_per_block;        // 4, 8 or 16
+    const long scratch_nelts = 0;      // launch() needs no scratch
 
     // launch(): asynchronously launch the kernel, and return without synchronizing the
     // stream. Note: stream=NULL is allowed, but is not the default.
     //
-    //   intensity  shape (M, nfreq, T), float32, fully contiguous, on GPU, with T a positive
-    //              multiple of nt_chunk. One fit per (beam, channel, chunk). The fitted
-    //              polynomial is subtracted in place at every sample of a row that passes
-    //              the gate; a row that fails is left untouched.
+    //   intensity  shape (nbeams, nfreq, ntime), float32, fully contiguous, on GPU. One fit
+    //              per (beam, channel, chunk). The fitted polynomial is subtracted in place
+    //              at every sample of a row that passes the gate; a row that fails is left
+    //              untouched.
     //
     //   weights    same shape, dtype and layout, not aliased with 'intensity'. MODIFIED IN
     //              PLACE: all nt_chunk weights of a failing row are set to zero, and every
     //              other weight is left bit-identical. Must be >= 0 on entry, which is NOT
     //              checked (every producer in the chain guarantees it by construction; a
     //              negative weight would make the normal equations indefinite).
+    //
+    //   scratch    1-d, or empty. Unused: scratch_nelts == 0.
     void launch(ksgpu::Array<float> &intensity, ksgpu::Array<float> &weights,
-                cudaStream_t stream) const;
+                ksgpu::Array<float> &scratch, cudaStream_t stream) const;
 
     // Static timing function (called via 'python -m pirate_frb time --cfrb'). Times the
     // production configuration at the two channel counts the old chain runs it at, for

@@ -161,9 +161,9 @@ def main():
                              " rescaling, the reference is float64")
 
         if cp is not None:
-            det = GpuSplineDetrender(nfreq, nbins, epsilon, 1, NT)
+            det = GpuSplineDetrender(1, nfreq, NT, nbins, epsilon)
             gi = cp.asarray(x[0][None, :, :])
-            det.launch(gi, cp.asarray(x[1][None, :, :]))
+            det.launch(gi, cp.asarray(x[1][None, :, :]), None)
             cp.cuda.get_current_stream().synchronize()
             base_gpu = x[0].astype(np.float64) - cp.asnumpy(gi)[0]
 

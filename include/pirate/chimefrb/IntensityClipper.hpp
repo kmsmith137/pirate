@@ -36,25 +36,22 @@ namespace chimefrb {
 //     the mean. That is intentional in the original: no usable statistic means no usable
 //     data.
 //
-//   - CHUNKING: the array must hold exactly ONE nt_chunk, as for every GpuClipperBase;
-//     see the chunking note in ClipperBase.hpp. ReferenceIntensityClipper implements
-//     T = N*nt_chunk.
+//   - CHUNKING: ntime == nt_chunk is required, as for every GpuClipperBase; see the
+//     chunking note in ClipperBase.hpp. ReferenceIntensityClipper implements
+//     ntime = N*nt_chunk.
 //
 // Nothing here is stateful ACROSS chunks: no ring buffers, no lag buffers, no carry-over
 // of any kind. See notes/chimefrb.md for the porting rules this class follows.
 
 struct GpuIntensityClipper : public GpuClipperBase
 {
-    // (B, F, nt_chunk) is the full-resolution array shape: beams, frequency channels, and
-    // time samples. The old code calls the last two (nfreq, nt_chunk) and has no beam
-    // axis. All three are constructor arguments, so the array geometry is fully fixed at
-    // construction: F and nt_chunk because they fix the statistic's row length, which
-    // GpuWrms needs at construction, and B because it fixes the row count and the scratch
-    // size.
+    // (nbeams, nfreq, ntime) is the full-resolution array shape, fixed at construction, and
+    // nt_chunk the samples per chunk, which must equal ntime for now (ClipperBase.hpp). The
+    // old code has no beam axis.
     //
     // Throws on sigma < 0 or an unsupported warps_per_block, and on everything
-    // GpuClipperBase checks: F % (32*Df) != 0 or nt_chunk % (32*Dt) != 0; B < 1; Df < 1;
-    // Dt < 1; niter < 1; iter_sigma < 0.
+    // GpuClipperBase checks: ntime != nt_chunk; nfreq % (32*Df) != 0 or
+    // nt_chunk % (32*Dt) != 0; nbeams < 1; Df < 1; Dt < 1; niter < 1; iter_sigma < 0.
     //
     // 'sigma' is the FINAL clip threshold, in units of the row's rms.
     // 'iter_sigma' is the threshold used BY THE STATISTIC'S REFINEMENTS, in the same
@@ -75,29 +72,30 @@ struct GpuIntensityClipper : public GpuClipperBase
     // while 32 costs up to 7% of the whole transform. Three kernels in one port, three
     // different answers: run time_selected() on a new GPU rather than assuming any of
     // them carries over.
-    GpuIntensityClipper(long B, long F, long nt_chunk, ClipperAxis axis, double sigma,
-                        long Df, long Dt, long niter, double iter_sigma, bool two_pass,
-                        long warps_per_block = 16);
+    GpuIntensityClipper(long nbeams, long nfreq, long ntime, long nt_chunk, ClipperAxis axis,
+                        double sigma, long Df, long Dt, long niter, double iter_sigma,
+                        bool two_pass, long warps_per_block = 16);
 
     const double sigma;            // FINAL clip threshold, in rms units (not iter_sigma)
     const long warps_per_block;    // 4, 8, 16 or 32; intensity_clip only
 
-    // Inherited from GpuClipperBase: B, F, nt_chunk, axis, Df, Dt, niter, iter_sigma,
-    // two_pass; the derived geometry F_ds, T_ds, wrms_L, wrms_R; and scratch_nelts.
+    // Inherited from GpuClipperBase: nbeams, nfreq, ntime, nt_chunk, axis, Df, Dt, niter,
+    // iter_sigma, two_pass; the derived geometry F_ds, T_ds, wrms_L, wrms_R; and
+    // scratch_nelts.
 
     // launch(): asynchronously launch the kernels, and return without synchronizing the
     // stream. Note: stream=NULL is allowed, but is not the default.
     //
     // All arrays are float32, fully contiguous, and in GPU memory.
     //
-    //   intensity  shape (B, F, nt_chunk). Read only, never modified.
+    //   intensity  shape (nbeams, nfreq, ntime). Read only, never modified.
     //
-    //   weights    shape (B, F, nt_chunk). MODIFIED IN PLACE: zeroed where the clip
+    //   weights    shape (nbeams, nfreq, ntime). MODIFIED IN PLACE: zeroed where the clip
     //              fires, and left bit-identical everywhere else. Must be >= 0 on entry,
     //              which is not checked (see GpuWrms::launch()).
     //
-    //   scratch    shape (scratch_nelts,). Contents on entry are ignored and on exit are
-    //              garbage.
+    //   scratch    1-d, with at least scratch_nelts elements. Contents on entry are ignored
+    //              and on exit are garbage.
     //
     //   stream     CUDA stream.
     //

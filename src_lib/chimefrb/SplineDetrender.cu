@@ -1,4 +1,5 @@
 #include "../../include/pirate/chimefrb/SplineDetrender.hpp"
+#include "../../include/pirate/chimefrb/launch_utils.hpp"
 #include "../../include/pirate/detrender_kernels.hpp"
 
 #include <cmath>
@@ -86,8 +87,8 @@ static void hermite_slope_penalty(double Q[4][4])
 }
 
 
-GpuSplineDetrender::GpuSplineDetrender(long nfreq_, long nbins_, double epsilon_, long M_, long T_) :
-    nfreq(nfreq_), nbins(nbins_), epsilon(epsilon_), M(M_), T(T_)
+GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, long nbins_, double epsilon_) :
+    nbeams(nbeams_), nfreq(nfreq_), ntime(ntime_), nbins(nbins_), epsilon(epsilon_)
 {
     if (nbins < 1)
         throw runtime_error("GpuSplineDetrender: expected nbins >= 1");
@@ -102,11 +103,11 @@ GpuSplineDetrender::GpuSplineDetrender(long nfreq_, long nbins_, double epsilon_
         ss << "GpuSplineDetrender: epsilon=" << epsilon << " must be > 0";
         throw runtime_error(ss.str());
     }
-    if (M < 1)
-        throw runtime_error("GpuSplineDetrender: expected M >= 1");
-    if ((T <= 0) || (T % 32 != 0)) {
+    if (nbeams < 1)
+        throw runtime_error("GpuSplineDetrender: expected nbeams >= 1");
+    if ((ntime <= 0) || (ntime % 32 != 0)) {
         stringstream ss;
-        ss << "GpuSplineDetrender: T=" << T << " must be a positive multiple of 32";
+        ss << "GpuSplineDetrender: ntime=" << ntime << " must be a positive multiple of 32";
         throw runtime_error(ss.str());
     }
 
@@ -162,7 +163,7 @@ GpuSplineDetrender::GpuSplineDetrender(long nfreq_, long nbins_, double epsilon_
     // the accumulate and subtract kernels only 6 * ceil(T/256) blocks per beam. Smaller
     // ranges cost a few more shared-memory adds in the solve kernel's staging, which is
     // nothing. The beam axis is the other occupancy knob: batch beams.
-    channels_per_range = derive_channels_per_range(nfreq, T, /*cpr_min=*/32);
+    channels_per_range = derive_channels_per_range(nfreq, ntime, /*cpr_min=*/32);
 
     vector<long> fr_lo, fr_hi, fr_j0;
     for (long b = 0; b < nbins; b++) {
@@ -231,7 +232,7 @@ GpuSplineDetrender::GpuSplineDetrender(long nfreq_, long nbins_, double epsilon_
     const long nblk_max = N_phi;                    // (n+1) = 1 coefficient per basis function
     const long ncompz_max = N_phi * (n_phi + 2);    // banded G plus U, per coefficient
 
-    solve_threads = choose_solve_threads<3, WeightScaledStrength>(T, nblk_max, NB, ncompz_max, /*W=*/0);
+    solve_threads = choose_solve_threads<3, WeightScaledStrength>(ntime, nblk_max, NB, ncompz_max, /*W=*/0);
     if (solve_threads == 0) {
         stringstream ss;
         ss << "GpuSplineDetrender: nbins=" << nbins << " gives " << N_phi << " coefficients,"
@@ -239,11 +240,11 @@ GpuSplineDetrender::GpuSplineDetrender(long nfreq_, long nbins_, double epsilon_
         throw runtime_error(ss.str());
     }
 
-    // ---- Per-launch scratch.
-    const long ncomp = npair + n_phi + 1;           // 14
-    gu = Array<float>({M, nfrange, ncomp, T}, af_gpu | af_zero);
-    acoef = Array<float>({M, N_phi, T}, af_gpu | af_zero);
-    rmin = Array<float>({M, 1, T}, af_gpu | af_zero);
+    // ---- Per-launch scratch: the three arrays launch() carves from the caller's scratch,
+    // in this order -- gu (nbeams, nfrange, ncomp, ntime), acoef (nbeams, N_phi, ntime),
+    // rmin (nbeams, 1, ntime).
+    ncomp = npair + n_phi + 1;                      // 14
+    scratch_nelts = nbeams * ntime * (nfrange*ncomp + N_phi + 1);
 }
 
 
@@ -260,27 +261,29 @@ vector<long> GpuSplineDetrender::bin_edges() const
 }
 
 
-void GpuSplineDetrender::launch(Array<float> &intensity, const Array<float> &weights, cudaStream_t stream) const
+void GpuSplineDetrender::launch(Array<float> &intensity, const Array<float> &weights,
+                                Array<float> &scratch, cudaStream_t stream) const
 {
-    xassert_shape_eq(intensity, ({M, nfreq, T}));
-    xassert_shape_eq(weights, ({M, nfreq, T}));
-    xassert(intensity.is_fully_contiguous());
-    xassert(weights.is_fully_contiguous());
-    xassert(intensity.on_gpu());
-    xassert(weights.on_gpu());
-    xassert(intensity.data != weights.data);
+    check_launch_args(intensity, weights, scratch, nbeams, nfreq, ntime, scratch_nelts);
+
+    // The per-launch workspace, in the order the constructor's scratch_nelts assumes.
+    long pos = 0;
+    Array<float> gu = carve_scratch(scratch, pos, {nbeams, nfrange, ncomp, ntime});
+    Array<float> acoef = carve_scratch(scratch, pos, {nbeams, N_phi, ntime});
+    Array<float> rmin = carve_scratch(scratch, pos, {nbeams, 1, ntime});
+    xassert_eq(pos, scratch_nelts);
 
     const TimeStencils &tb = *reinterpret_cast<const TimeStencils *>(tb_blob);
 
     constexpr int NPHI = 3;
     const int NB = bandwidth(NPHI, 0);
-    const int nbuf = int(T);                        // no time window, so no padding
+    const int nbuf = int(ntime);                    // no time window, so no padding
     const int S = int(solve_threads);
     const int phi_stride = 4, prod_stride = 12;
 
     // Kernel 1: (intensity, weights) -> per-freq-range Gram matrices and data moments.
     {
-        dim3 nblocks((nbuf + PASS_THREADS - 1)/PASS_THREADS, int(nfrange), int(M));
+        dim3 nblocks((nbuf + PASS_THREADS - 1)/PASS_THREADS, int(nfrange), int(nbeams));
         detrend_2d_accum_kernel<NPHI, WeightedInput> <<< nblocks, PASS_THREADS, 0, stream >>>
             (intensity.data, weights.data, gu.data, phi_tab.data, prod_tab.data, fr_desc.data,
              int(nfreq), int(nfrange), nbuf, phi_stride, prod_stride);
@@ -296,21 +299,21 @@ void GpuSplineDetrender::launch(Array<float> &intensity, const Array<float> &wei
         const long ncompz_max = N_phi * (NPHI + 2);
         const long shmem = solve_shmem_bytes(nblk_max, NB, ncompz_max, S, /*W=*/0, /*scaled=*/true);
 
-        dim3 nblocks(int(T/S), 1, int(M));
+        dim3 nblocks(int(ntime/S), 1, int(nbeams));
         detrend_2d_solve_kernel<NPHI, WeightScaledStrength> <<< nblocks, S, size_t(shmem), stream >>>
             (gu.data, acoef.data, rmin.data, zone_desc.data, fr_desc.data,
              reg_tab.data, unit_coef.data, /*nreg_bands=*/4,
              int(nfrange), /*nzone=*/1, int(N_phi), nbuf, int(nblk_max),
-             /*n_deg=*/0, /*W=*/0, int(T), /*reg_strength=*/float(epsilon / double(nbins)), /*eps=*/0.0f, tb);
+             /*n_deg=*/0, /*W=*/0, int(ntime), /*reg_strength=*/float(epsilon / double(nbins)), /*eps=*/0.0f, tb);
         CUDA_PEEK("detrend_2d_solve_kernel<WeightScaledStrength>");
     }
 
     // Kernel 3: evaluate the spline and subtract it at every channel.
     {
-        dim3 nblocks((nbuf + PASS_THREADS - 1)/PASS_THREADS, int(nfrange), int(M));
+        dim3 nblocks((nbuf + PASS_THREADS - 1)/PASS_THREADS, int(nfrange), int(nbeams));
         detrend_2d_subtract_kernel<NPHI, WeightedInput> <<< nblocks, PASS_THREADS, 0, stream >>>
             (intensity.data, weights.data, acoef.data, rmin.data, phi_tab.data, fr_desc.data,
-             int(nfreq), int(N_phi), /*nzone=*/1, nbuf, /*W=*/0, int(T), phi_stride, /*eps=*/0.0f);
+             int(nfreq), int(N_phi), /*nzone=*/1, nbuf, /*W=*/0, int(ntime), phi_stride, /*eps=*/0.0f);
         CUDA_PEEK("detrend_2d_subtract_kernel<WeightedInput>");
     }
 }
@@ -334,7 +337,8 @@ void GpuSplineDetrender::time_selected()
     const int niter = 20;
 
     for (const TimingConfig &c: configs) {
-        GpuSplineDetrender det(c.nfreq, c.nbins, epsilon, M, T);
+        GpuSplineDetrender det(M, c.nfreq, T, c.nbins, epsilon);
+        Array<float> scratch({det.scratch_nelts}, af_gpu | af_zero);
 
         // Random intensity and unit weights. The kernels are branch-free and their work
         // is weight-independent, so the timing does not depend on the data; unit weights
@@ -368,7 +372,7 @@ void GpuSplineDetrender::time_selected()
         KernelTimer kt(niter, 1);
         double dt = 0.0;
         while (kt.next()) {
-            det.launch(intensity, weights, kt.stream);
+            det.launch(intensity, weights, scratch, kt.stream);
             if (kt.warmed_up)
                 dt = kt.dt;
         }

@@ -52,35 +52,37 @@ namespace chimefrb {
 // table. The time window of that detrender is not used: this class runs the kernels at
 // (n, W) = (0, 0), one independent fit per time sample. See the .cu file.
 //
-// THREAD SAFETY: an instance owns per-launch scratch arrays, so one instance must not be
-// used concurrently from two streams. Construct one instance per stream.
+// STATELESS across launches: an instance holds only read-only tables, and its per-launch
+// workspace is carved from the caller's scratch array, so one instance may be used from any
+// number of streams at once (with one scratch per stream).
 //
-// See notes/chimefrb.md for the porting rules this class follows.
+// Every chimefrb transform's launch() takes (intensity, weights, scratch, stream) on arrays
+// of shape (nbeams, nfreq, ntime); see launch_utils.hpp. See notes/chimefrb.md for the
+// porting rules this class follows.
 
 struct GpuSplineDetrender
 {
-    // Throws on nbins < 1, nfreq < nbins (every bin must hold at least one channel),
-    // epsilon <= 0, M < 1, or T not a positive multiple of 32.
+    // (nbeams, nfreq, ntime) is the shape of the arrays launch() will be given; the tables
+    // and the kernel geometry are built from it.
     //
-    // 'M' (beams) and 'T' (time samples per launch) are constructor arguments because the
-    // scratch arrays are sized from them. T is a runtime kernel argument otherwise; the
-    // multiple-of-32 rule keeps the solve kernel's grid free of a predicated tail. The
-    // old code's nfreq >= 16*nbins was an AVX2 convenience and is not carried over.
-    GpuSplineDetrender(long nfreq, long nbins, double epsilon, long M, long T);
+    // Throws on nbeams < 1, ntime not a positive multiple of 32, nbins < 1, nfreq < nbins
+    // (every bin must hold at least one channel), or epsilon <= 0. The multiple-of-32 rule
+    // keeps the solve kernel's grid free of a predicated tail. The old code's
+    // nfreq >= 16*nbins was an AVX2 convenience and is not carried over.
+    GpuSplineDetrender(long nbeams, long nfreq, long ntime, long nbins, double epsilon);
 
     ~GpuSplineDetrender();
 
-    const long nfreq;
-    const long nbins;         // equal bins; the spline is C^1 across bin edges
-    const double epsilon;     // regularization strength (see the class comment)
-    const long M;             // spectator (beam) rows per launch
-    const long T;             // time samples per launch; positive multiple of 32
+    const long nbeams, nfreq, ntime;   // array shape; ntime a positive multiple of 32
+    const long nbins;                  // equal bins; the spline is C^1 across bin edges
+    const double epsilon;              // regularization strength (see the class comment)
 
     // Derived in the constructor.
     long N_phi;               // 2*(nbins+1): value and slope at each bin edge
     long nfrange;             // freq-ranges (an internal decomposition; see the .cu)
-    long channels_per_range;  // freq-range width used, derived from (nfreq, T)
+    long channels_per_range;  // freq-range width used, derived from (nfreq, ntime)
     long solve_threads;       // block size of the solve kernel
+    long scratch_nelts;       // float32 elements of scratch launch() needs
 
     // The bin edges, channel indices of length nbins+1, running from 0 to nfreq. Exposed
     // so that a test can check them against the reference rather than recompute them.
@@ -89,16 +91,20 @@ struct GpuSplineDetrender
     // launch(): asynchronously launch the kernels, and return without synchronizing the
     // stream. Note: stream=NULL is allowed, but is not the default.
     //
-    //   intensity  shape (M, nfreq, T), float32, fully contiguous, on GPU. The fitted
-    //              baseline is subtracted in place at EVERY channel, weighted or not. A
-    //              time sample whose weights are all zero is left untouched.
+    //   intensity  shape (nbeams, nfreq, ntime), float32, fully contiguous, on GPU. The
+    //              fitted baseline is subtracted in place at EVERY channel, weighted or not.
+    //              A time sample whose weights are all zero is left untouched.
     //
-    //   weights    shape (M, nfreq, T), float32, fully contiguous, on GPU. Must be >= 0.
-    //              NOT checked (that would cost a pass over the data, and every producer
-    //              in the chain guarantees it by construction); negative weights would
-    //              make the normal equations indefinite. Read only.
+    //   weights    same shape and layout, not aliased with 'intensity'. Must be >= 0. NOT
+    //              checked (that would cost a pass over the data, and every producer in the
+    //              chain guarantees it by construction); negative weights would make the
+    //              normal equations indefinite. Read only.
+    //
+    //   scratch    1-d, with at least scratch_nelts elements. Contents on entry are ignored
+    //              and on exit are garbage.
     void launch(ksgpu::Array<float> &intensity,
                 const ksgpu::Array<float> &weights,
+                ksgpu::Array<float> &scratch,
                 cudaStream_t stream) const;
 
     // Static timing function (called via 'python -m pirate_frb time --cfrb'). Times the
@@ -118,11 +124,9 @@ private:
     ksgpu::Array<int> fr_desc;        // (nfrange, 4)
     ksgpu::Array<int> zone_desc;      // (1, 4)
 
-    // Per-launch scratch. Sized in the constructor and reused, which is why an instance
-    // is single-stream (see the class comment).
-    mutable ksgpu::Array<float> gu;      // (M, nfrange, 14, T)
-    mutable ksgpu::Array<float> acoef;   // (M, N_phi, T)
-    mutable ksgpu::Array<float> rmin;    // (M, 1, T); computed by the shared kernel, unused here
+    // Per-freq-range components the first kernel accumulates (14 for the cubic Hermite
+    // basis); with N_phi it fixes the scratch layout that launch() carves.
+    long ncomp;
 
     std::vector<long> _bin_edges;
 

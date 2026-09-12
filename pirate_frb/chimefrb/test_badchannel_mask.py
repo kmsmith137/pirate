@@ -3,10 +3,16 @@ they share with misc/chimefrb/rfi_badchannel_mask/.
 
 Dispatched from ``python -m pirate_frb test --cfrb``.
 
-Two independent things are tested. The kernel does no arithmetic, so it is compared with
+Three things are tested. The kernel does no arithmetic, so it is compared with
 ReferenceBadChannelMask BITWISE: no tolerance, no bracket. badchannel_keep(), which turns MHz
 ranges into channels, is all arithmetic but integer-valued, so it is compared EXACTLY with
-keep_by_rule(), a second statement of the same rule written a different way.
+keep_by_rule(), a second statement of the same rule written a different way. And the C++
+port of that conversion in GpuBadChannelMask's constructor is compared EXACTLY with
+badchannel_keep(), through the 'keep' array it exposes.
+
+The kernel cases draw a keep pattern and hand it to the constructor as MHz ranges, through
+ranges_for_keep() -- the inverse of the conversion, one range per masked run -- so that the
+kernel is still tested on masks of every shape.
 
 WHAT THIS FILE CANNOT ESTABLISH: that badchannel_keep() matches the old code. Both it and
 keep_by_rule() come from one reading of rf_pipelines' _bind_transform(), so a misreading
@@ -101,28 +107,48 @@ def random_keep(rng, F):
     return (keep, 'runs')
 
 
+def ranges_for_keep(keep, freq_range):
+    """MHz ranges that badchannel_keep() converts back to exactly this keep array.
+
+    One range per masked run [a, b), spanning channel edges b and a, where edge i sits at
+    fhi - i*(fhi-flo)/F. The conversion's 1e-3-channel fudge absorbs the roundoff in the edge
+    positions, so the round trip is exact (asserted by every caller). An all-masked array
+    becomes the band itself, the one spelling of "everything" the old code accepts; an
+    all-kept one becomes no ranges at all.
+    """
+
+    keep = np.asarray(keep, dtype=bool)
+    F = keep.size
+    (flo, fhi) = (float(freq_range[0]), float(freq_range[1]))
+
+    if not keep.any():
+        return [(flo, fhi)]
+
+    def edge(i):
+        return fhi - i * (fhi - flo) / F
+
+    masked = np.flatnonzero(~keep)
+    ranges = []
+    for run in np.split(masked, np.flatnonzero(np.diff(masked) > 1) + 1):
+        if run.size > 0:
+            (a, b) = (int(run[0]), int(run[-1]) + 1)
+            ranges.append((edge(b), edge(a)))
+    return ranges
+
+
 def random_kernel_case(rng):
     """Draw one kernel test case, as a dict.
 
-    Holds the geometry, the keep array and the form it is passed in, warps_per_block, and
-    where to plant non-finite weights. random_weights() makes the array itself, so that
-    coverage can draw cases without allocating it.
+    Holds the geometry, the keep array and the MHz ranges and band that encode it (see
+    ranges_for_keep()), warps_per_block, and where to plant non-finite weights.
+    random_weights() makes the array itself, so that coverage can draw cases without
+    allocating it.
     """
 
     (B, F, T) = random_geometry(rng)
     (keep, kind) = random_keep(rng, F)
-
-    # How 'keep' reaches the constructor: as uint8 with arbitrary nonzero values, which the
-    # C++ normalizes, sometimes as a strided view, which it must accept; or as bool, which the
-    # python __init__ converts.
-    if rng.uniform() < 0.5:
-        keep_arg = np.where(keep, rng.integers(1, 256, size=F), 0).astype(np.uint8)
-        if rng.uniform() < 0.3:
-            big = np.zeros(2*F, dtype=np.uint8)
-            big[::2] = keep_arg
-            keep_arg = big[::2]
-    else:
-        keep_arg = keep.copy()
+    band = random_band(rng)
+    ranges = ranges_for_keep(keep, band)
 
     # A few non-finite weights, in kept and masked rows alike: a kept row must come back
     # bit-identical, and a masked one must become +0.0 whatever it held.
@@ -131,7 +157,7 @@ def random_kernel_case(rng):
         (b, f, t) = (int(rng.integers(B)), int(rng.integers(F)), int(rng.integers(T)))
         plants.append((b, f, t, float(rng.choice([np.nan, np.inf, -np.inf]))))
 
-    return dict(B=B, F=F, T=T, keep=keep, keep_kind=kind, keep_arg=keep_arg,
+    return dict(B=B, F=F, T=T, keep=keep, keep_kind=kind, ranges=ranges, band=band,
                 warps=int(rng.choice(WARP_COUNTS)), plants=plants)
 
 
@@ -159,17 +185,28 @@ def _check_kernel(cp, rng, verbose):
 
     c = random_kernel_case(rng)
     w = random_weights(rng, c)
+    (B, F, T) = (c['B'], c['F'], c['T'])
+    (flo, fhi) = c['band']
 
-    g = GpuBadChannelMask(c['keep_arg'], c['warps'])
-    assert g.F == c['F']
+    # The ranges must encode exactly the drawn mask, or the kernel is tested on some other one.
+    assert np.array_equal(badchannel_keep(c['ranges'], F, flo, fhi) != 0, c['keep']), \
+        'ranges_for_keep() did not round-trip through badchannel_keep()'
+
+    g = GpuBadChannelMask(B, F, T, c['ranges'], c['band'], c['warps'])
+    assert (g.nbeams, g.nfreq, g.ntime, g.scratch_nelts) == (B, F, T, 0)
     assert g.nmasked == int((~c['keep']).sum())
     assert np.array_equal(cp.asnumpy(g.keep), c['keep'].astype(np.uint8)), \
-        'GpuBadChannelMask.keep is not the normalized keep array'
+        'GpuBadChannelMask.keep differs from the mask its ranges encode'
 
+    # The intensity is checked and never touched; the scratch is unused.
+    i_gpu = cp.asarray(rng.standard_normal(size=(B, F, T)).astype(np.float32))
+    i_before = cp.asnumpy(i_gpu)
     w_gpu = cp.asarray(w)
-    g.launch(w_gpu)
+    g.launch(i_gpu, w_gpu, None)
     got = cp.asnumpy(w_gpu)
     want = ReferenceBadChannelMask(c['keep']).apply(w)
+    assert np.array_equal(cp.asnumpy(i_gpu).view(np.uint32), i_before.view(np.uint32)), \
+        'GpuBadChannelMask modified the intensity'
 
     # Bitwise, through a uint32 view: that is also how NaN compares equal to itself, and how
     # +0.0 is told from -0.0.
@@ -183,8 +220,8 @@ def _check_kernel(cp, rng, verbose):
 
     if verbose:
         atomic_print(f'    test_badchannel_mask: kernel (B,F,T)=({c["B"]},{c["F"]},{c["T"]}),'
-                     f' keep={c["keep_kind"]} ({g.nmasked} masked), keep dtype'
-                     f' {c["keep_arg"].dtype}, warps_per_block={c["warps"]}: ok')
+                     f' keep={c["keep_kind"]} ({g.nmasked} masked, {len(c["ranges"])} range(s)),'
+                     f' warps_per_block={c["warps"]}: ok')
 
 
 # -------------------------------------------------------------------------------------------------
@@ -319,8 +356,9 @@ def near_fudge_boundary(mask_ranges, nfreq, freq_lo_MHz, freq_hi_MHz, tol=1.0e-9
     return False
 
 
-def _check_keep(rng, verbose):
-    """badchannel_keep() against keep_by_rule(), exactly."""
+def _check_keep(cp, rng, verbose):
+    """badchannel_keep() against keep_by_rule(), exactly; and the C++ conversion in
+    GpuBadChannelMask's constructor against badchannel_keep(), exactly."""
 
     (ranges, kinds, nfreq, flo, fhi) = random_range_case(rng)
 
@@ -337,6 +375,16 @@ def _check_keep(rng, verbose):
         raise AssertionError(
             f'test_badchannel_mask: badchannel_keep() and keep_by_rule() disagree at'
             f' {int((got != want).sum())} channel(s), first at {f} (got keep={got[f]}); nfreq={nfreq},'
+            f' band=({flo!r}, {fhi!r}), ranges={ranges!r}, kinds={kinds}')
+
+    # The C++ port of the same arithmetic, read back through the 'keep' member. Exact: the
+    # C++ forces the same two roundings the python does (see BadChannelMask.cu).
+    cxx = cp.asnumpy(GpuBadChannelMask(1, nfreq, 32, ranges, (flo, fhi)).keep)
+    if not np.array_equal(cxx, got):
+        f = int(np.flatnonzero(cxx != got)[0])
+        raise AssertionError(
+            f'test_badchannel_mask: the C++ conversion and badchannel_keep() disagree at'
+            f' {int((cxx != got).sum())} channel(s), first at {f} (C++ keep={cxx[f]}); nfreq={nfreq},'
             f' band=({flo!r}, {fhi!r}), ranges={ranges!r}, kinds={kinds}')
 
     if verbose:
@@ -357,7 +405,7 @@ def _expect_raise(exc, f, *args, **kwargs):
     raise AssertionError(f'test_badchannel_mask: expected {exc.__name__} from {f.__name__}{args!r}')
 
 
-def _check_production():
+def _check_production(cp):
     """The production mask, pinned, and the documented quirks, as named cases."""
 
     expected = np.ones(1024, dtype=np.uint8)
@@ -368,8 +416,11 @@ def _check_production():
     assert np.array_equal(keep, expected), 'the production mask at 1024 channels has changed'
     assert int((keep == 0).sum()) == 129
 
-    g = GpuBadChannelMask.from_mask_ranges(PRODUCTION_MASK_RANGES, 1024, 400.0, 800.0)
-    assert (g.F == 1024) and (g.nmasked == 129)
+    g = GpuBadChannelMask(1, 1024, 64, PRODUCTION_MASK_RANGES, (400.0, 800.0))
+    assert (g.nfreq == 1024) and (g.nmasked == 129)
+    assert np.array_equal(cp.asnumpy(g.keep), expected), 'the C++ conversion of the production mask differs'
+    assert g.mask_ranges == [tuple(r) for r in PRODUCTION_MASK_RANGES]
+    assert g.freq_range == (400.0, 800.0)
 
     def masked(ranges):
         return list(np.flatnonzero(badchannel_keep(ranges, 1024, 400.0, 800.0) == 0))
@@ -390,21 +441,39 @@ def _check_raises():
     _expect_raise(ValueError, badchannel_keep, [], 0, 400.0, 800.0)
     _expect_raise(ValueError, badchannel_keep, [], 1024, 800.0, 400.0)
 
+    # The C++ conversion refuses the same inputs (a C++ exception arrives as RuntimeError);
+    # a malformed range is caught by the python __init__ first.
+    for ranges in ([(500.0, 500.0)], [(501.0, 500.0)], [(300.0, 350.0)], [(850.0, 900.0)],
+                   [(390.0, 810.0)], [(410.0, 420.0), (300.0, 350.0)]):
+        _expect_raise(RuntimeError, GpuBadChannelMask, 1, 1024, 64, ranges, (400.0, 800.0))
+    _expect_raise(RuntimeError, GpuBadChannelMask, 1, 1024, 64, [], (800.0, 400.0))
+    _expect_raise(ValueError, GpuBadChannelMask, 1, 1024, 64, [(410.0,)], (400.0, 800.0))
+
 
 def _check_arguments(cp):
-    keep = np.array([True, False, True, True])
+    """Geometry and launch() argument checks: at 8 channels over 400-800 MHz, (500, 510)
+    masks channel 5 and nothing else."""
 
-    _expect_raise(ValueError, GpuBadChannelMask, np.ones((2, 3), dtype=bool))
-    _expect_raise(TypeError, GpuBadChannelMask, np.ones(4, dtype=np.float32))
-    _expect_raise(TypeError, GpuBadChannelMask, cp.ones(4, dtype=bool))
-    _expect_raise(RuntimeError, GpuBadChannelMask, np.ones(0, dtype=bool))
-    _expect_raise(RuntimeError, GpuBadChannelMask, keep, 5)
+    ranges = [(500.0, 510.0)]
+    band = (400.0, 800.0)
 
-    g = GpuBadChannelMask(keep)
-    _expect_raise(RuntimeError, g.launch, cp.zeros((2, 5, 8), dtype=cp.float32))    # wrong F
-    _expect_raise(RuntimeError, g.launch, cp.zeros((4, 8), dtype=cp.float32))       # 2-d
-    _expect_raise(RuntimeError, g.launch, cp.zeros((2, 4, 16), dtype=cp.float32)[:, :, ::2])
-    _expect_raise(RuntimeError, g.launch, cp.zeros((0, 4, 8), dtype=cp.float32))    # empty
+    _expect_raise(RuntimeError, GpuBadChannelMask, 0, 8, 8, ranges, band)      # nbeams
+    _expect_raise(RuntimeError, GpuBadChannelMask, 1, 0, 8, ranges, band)      # nfreq
+    _expect_raise(RuntimeError, GpuBadChannelMask, 1, 8, 0, ranges, band)      # ntime
+    _expect_raise(RuntimeError, GpuBadChannelMask, 1, 8, 8, ranges, band, 5)   # warps_per_block
+
+    g = GpuBadChannelMask(2, 8, 8, ranges, band)
+    assert g.nmasked == 1 and np.array_equal(cp.asnumpy(g.keep), [1, 1, 1, 1, 1, 0, 1, 1])
+
+    i = cp.zeros((2, 8, 8), dtype=cp.float32)
+    w = cp.zeros((2, 8, 8), dtype=cp.float32)
+    _expect_raise(RuntimeError, g.launch, i, cp.zeros((2, 9, 8), dtype=cp.float32), None)   # wrong nfreq
+    _expect_raise(RuntimeError, g.launch, i, cp.zeros((8, 8), dtype=cp.float32), None)      # 2-d
+    _expect_raise(RuntimeError, g.launch, i, cp.zeros((2, 8, 16), dtype=cp.float32)[:, :, ::2], None)
+    _expect_raise(RuntimeError, g.launch, cp.zeros((3, 8, 8), dtype=cp.float32), w, None)   # wrong nbeams
+    _expect_raise(RuntimeError, g.launch, w, w, None)                                       # aliased
+    g.launch(i, w, cp.empty(0, dtype=cp.float32))                                           # empty scratch is fine
+    g.launch(i, w, None)
 
 
 # -------------------------------------------------------------------------------------------------
@@ -424,9 +493,9 @@ def test_badchannel_mask(iteration=0, rng=None, verbose=False):
     rng = _default_rng(rng)
 
     _check_kernel(cp, rng, verbose)
-    _check_keep(rng, verbose)
+    _check_keep(cp, rng, verbose)
 
     if iteration == 0:
-        _check_production()
+        _check_production(cp)
         _check_raises()
         _check_arguments(cp)

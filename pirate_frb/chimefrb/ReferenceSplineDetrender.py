@@ -9,37 +9,73 @@ class docstring).
 import numpy as np
 
 import ksgpu
-from ..pirate_pybind11 import GpuSplineDetrender
+from ..pirate_pybind11 import ClipperAxis, GpuSplineDetrender
+from .transform_io import (axis_from_json, check_json_keys, check_yaml_keys,
+                           default_scratch_and_stream)
+
+
+# The yaml keys of GpuSplineDetrender: its constructor's argument names after the geometry,
+# plus 'axis', which the old json carries and which must be 'freq' (the only axis this class
+# implements).
+SPLINE_DETRENDER_YAML_KEYS = ('nbins', 'epsilon', 'axis')
 
 
 @ksgpu.inject_methods(GpuSplineDetrender)
 class GpuSplineDetrenderInjections:
     # No class docstring here: GpuSplineDetrender's docstring lives in the pybind11
-    # binding (option 1 in notes/docstrings.md); this injector adds a stream argument
-    # for launch().
+    # binding (option 1 in notes/docstrings.md). This injector adds the python side of the
+    # transform protocol (transform_io.py): launch() with stream=None and scratch=None
+    # handling, and the yaml/legacy-json methods.
 
     # Save reference to C++ method
     _cpp_launch = GpuSplineDetrender.launch
 
-    def launch(self, intensity, weights, stream=None):
+    def launch(self, intensity, weights, scratch, stream=None):
         """GPU kernel launch (async, does not sync stream).
 
         Parameters
         ----------
         intensity : cupy.ndarray
-            Shape (M, nfreq, T), float32, fully contiguous, on GPU. The fitted baseline
-            is subtracted in place at every channel.
+            Shape (nbeams, nfreq, ntime), float32, fully contiguous, on GPU. The fitted
+            baseline is subtracted in place at every channel.
         weights : cupy.ndarray
             Same shape and dtype. Must be >= 0. Read only.
+        scratch : cupy.ndarray or None
+            1-d float32, on GPU, with at least ``self.scratch_nelts`` elements; garbage in,
+            garbage out. None allocates one -- convenient for tests, wasteful in a loop.
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
         """
-        import cupy as cp
+        (scratch, stream) = default_scratch_and_stream(scratch, stream, self.scratch_nelts)
+        self._cpp_launch(intensity, weights, scratch, stream.ptr)
 
-        if stream is None:
-            stream = cp.cuda.get_current_stream()
+    def to_yaml_dict(self):
+        """The yaml form (see ``transform_io``): the class name, ``nbins``, ``epsilon``, and
+        ``axis: freq``."""
+        return {'class_name': 'GpuSplineDetrender', 'nbins': int(self.nbins),
+                'epsilon': float(self.epsilon), 'axis': 'freq'}
 
-        self._cpp_launch(intensity, weights, stream.ptr)
+    @classmethod
+    def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
+        """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
+        check_yaml_keys(d, 'GpuSplineDetrender', SPLINE_DETRENDER_YAML_KEYS)
+        if d['axis'] != 'freq':
+            raise ValueError(f"GpuSplineDetrender.from_yaml_dict: axis={d['axis']!r}, but this class"
+                             f" implements axis 'freq' only (as did the old code)")
+        return cls(nbeams, nfreq, ntime, d['nbins'], d['epsilon'])
+
+    @classmethod
+    def from_json_dict(cls, d, nbeams, nfreq, ntime):
+        """From the legacy rf_pipelines json element (``class_name: spline_detrender``). Its
+        ``nt_chunk`` is a processing granularity with no effect on the result (the fit is per
+        time sample), and is ignored."""
+        check_json_keys(d, 'spline_detrender', ['axis', 'nbins', 'epsilon', 'nt_chunk'])
+        if axis_from_json(d['axis']) != ClipperAxis.FREQ:
+            raise ValueError(f"GpuSplineDetrender.from_json_dict: axis={d['axis']!r}, but this class"
+                             f" implements AXIS_FREQ only (as did the old code)")
+        if d['nt_chunk'] < 0:
+            raise ValueError(f"GpuSplineDetrender.from_json_dict: nt_chunk={d['nt_chunk']} < 0")
+        return cls(nbeams, nfreq, ntime, d['nbins'], d['epsilon'])
 
 
 # Q[a,c] = int_0^1 h_a'(x) h_c'(x) dx for the cubic Hermite basis (h00, h10, h01, h11) on

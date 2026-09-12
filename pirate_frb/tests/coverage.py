@@ -1075,7 +1075,7 @@ def _sec_chimefrb(rep, ndraw):
                 consumer='test --cfrb: GpuBadChannelMask against ReferenceBadChannelMask, and'
                          ' badchannel_keep() against keep_by_rule()')
 
-    keep_kinds, production, odd_F, odd_T, short_T, as_uint8, strided, nonfinite = {}, 0, 0, 0, 0, 0, 0, 0
+    keep_kinds, production, odd_F, odd_T, short_T, nonfinite = {}, 0, 0, 0, 0, 0
 
     for _ in range(ndraw):
         c = bct.random_kernel_case(rng)
@@ -1084,8 +1084,6 @@ def _sec_chimefrb(rep, ndraw):
         odd_F += (c['F'] % 32) != 0
         odd_T += (c['T'] % 32) != 0
         short_T += (c['T'] < 32)
-        as_uint8 += (c['keep_arg'].dtype == np.uint8)
-        strided += (c['keep_arg'].strides[0] != c['keep_arg'].itemsize)
         nonfinite += any((not c['keep'][f]) for (_, f, _, _) in c['plants'])
 
     for kind in ('all kept', 'all masked', 'independent', 'runs'):
@@ -1099,10 +1097,6 @@ def _sec_chimefrb(rep, ndraw):
     rep.rate('T % 32 != 0', odd_T, ndraw, (65, 95),
              'rows that are not whole cache lines: the row loop\'s bound is the tail predicate')
     rep.rate('T < 32', short_T, ndraw, (10, 28), 'rows shorter than a warp')
-    rep.rate('keep passed as uint8', as_uint8, ndraw, (35, 65),
-             'the C++ normalization of arbitrary nonzero values (otherwise bool, via __init__)')
-    rep.rate('keep passed as a strided view', strided, ndraw, (7, 25),
-             'the constructor accepts any stride')
     rep.rate('non-finite weight in a masked channel', nonfinite, ndraw, (10, 55),
              'a masked channel must become +0.0 whatever it held')
 

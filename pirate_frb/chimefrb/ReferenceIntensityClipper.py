@@ -14,6 +14,8 @@ import numpy as np
 
 import ksgpu
 from ..pirate_pybind11 import ClipperAxis, GpuIntensityClipper
+from .transform_io import (axis_from_json, axis_from_str, axis_to_str, check_json_keys,
+                           check_yaml_keys, default_scratch_and_stream)
 from .ReferenceWiDownsampler import ReferenceWiDownsampler
 from .ReferenceWrms import ReferenceWrms
 
@@ -31,41 +33,69 @@ assert (int(ClipperAxis.FREQ), int(ClipperAxis.TIME), int(ClipperAxis.NONE)) == 
     (AXIS_FREQ, AXIS_TIME, AXIS_NONE)
 
 
+# The yaml keys of GpuIntensityClipper, which are also its constructor's argument names after
+# the geometry.
+INTENSITY_CLIPPER_YAML_KEYS = ('nt_chunk', 'axis', 'sigma', 'niter', 'iter_sigma', 'Df', 'Dt', 'two_pass')
+
+
 @ksgpu.inject_methods(GpuIntensityClipper)
 class GpuIntensityClipperInjections:
     # No class docstring here: GpuIntensityClipper's docstring lives in the pybind11
-    # binding (option 1 in notes/docstrings.md); this injector adds a stream argument
-    # for launch(), and lets the caller omit the scratch array.
+    # binding (option 1 in notes/docstrings.md). This injector adds the python side of the
+    # transform protocol (transform_io.py): launch() with stream=None and scratch=None
+    # handling, and the yaml/legacy-json methods.
 
     # Save reference to C++ method
     _cpp_launch = GpuIntensityClipper.launch
 
-    def launch(self, intensity, weights, scratch=None, stream=None):
+    def launch(self, intensity, weights, scratch, stream=None):
         """GPU kernel launch (async, does not sync stream).
 
         Parameters
         ----------
         intensity : cupy.ndarray
-            Shape (B, F, nt_chunk), float32, fully contiguous, on GPU. Read only.
+            Shape (nbeams, nfreq, ntime), float32, fully contiguous, on GPU. Read only.
         weights : cupy.ndarray
             Same shape and dtype. MODIFIED IN PLACE: zeroed where the clip fires, and
             bit-identical everywhere else. Must be >= 0 on entry.
-        scratch : cupy.ndarray or None, optional
-            Shape ``(self.scratch_nelts,)``, float32, on GPU. If None, one is allocated
-            here -- convenient for tests, wasteful in a loop, since the whole point of
-            the argument is to reuse one allocation across chunks and across the many
-            clippers in a chain.
+        scratch : cupy.ndarray or None
+            1-d float32, on GPU, with at least ``self.scratch_nelts`` elements; garbage in,
+            garbage out. None allocates one -- convenient for tests, wasteful in a loop,
+            since the point of the argument is to reuse one allocation across chunks and
+            across the many clippers in a chain.
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
         """
-        import cupy as cp
-
-        if stream is None:
-            stream = cp.cuda.get_current_stream()
-        if scratch is None:
-            scratch = cp.empty(self.scratch_nelts, dtype=cp.float32)
-
+        (scratch, stream) = default_scratch_and_stream(scratch, stream, self.scratch_nelts)
         self._cpp_launch(intensity, weights, scratch, stream.ptr)
+
+    def to_yaml_dict(self):
+        """The yaml form (see ``transform_io``): the class name and the semantic parameters
+        (``nt_chunk``, ``axis`` as 'freq'/'time'/'none', ``sigma``, ``niter``,
+        ``iter_sigma``, ``Df``, ``Dt``, ``two_pass``)."""
+        return {'class_name': 'GpuIntensityClipper', 'nt_chunk': int(self.nt_chunk),
+                'axis': axis_to_str(self.axis), 'sigma': float(self.sigma),
+                'niter': int(self.niter), 'iter_sigma': float(self.iter_sigma),
+                'Df': int(self.Df), 'Dt': int(self.Dt), 'two_pass': bool(self.two_pass)}
+
+    @classmethod
+    def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
+        """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
+        check_yaml_keys(d, 'GpuIntensityClipper', INTENSITY_CLIPPER_YAML_KEYS)
+        return cls(nbeams, nfreq, ntime, d['nt_chunk'], axis_from_str(d['axis']), d['sigma'],
+                   d['Df'], d['Dt'], d['niter'], d['iter_sigma'], d['two_pass'])
+
+    @classmethod
+    def from_json_dict(cls, d, nbeams, nfreq, ntime):
+        """From the legacy rf_pipelines json element (``class_name: intensity_clipper``),
+        applying two of its conventions: ``nt_chunk == 0`` means the whole block (here
+        ``ntime``), and ``iter_sigma == 0`` means ``sigma``."""
+        check_json_keys(d, 'intensity_clipper',
+                        ['axis', 'sigma', 'niter', 'iter_sigma', 'Df', 'Dt', 'two_pass', 'nt_chunk'])
+        nt_chunk = d['nt_chunk'] if d['nt_chunk'] else ntime
+        iter_sigma = d['iter_sigma'] if d['iter_sigma'] else d['sigma']
+        return cls(nbeams, nfreq, ntime, nt_chunk, axis_from_json(d['axis']), d['sigma'],
+                   d['Df'], d['Dt'], d['niter'], iter_sigma, d['two_pass'])
 
 
 def wrms_view(arr, axis):

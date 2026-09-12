@@ -66,6 +66,22 @@ Therefore, when doing chimefrb-porting tasks (e.g. the msgpack reader task menti
 It will usually be obvious whether a task is a "chimefrb-porting" task or not (and I'll try to remember to indicate
 explicitly), but if you're unsure, just ask.
 
+## The transform interface
+
+The ported RFI transforms (GpuBadChannelMask, GpuIntensityClipper, GpuStdDevClipper,
+GpuPolynomialDetrender, GpuSplineDetrender) share one python-side interface, so that the
+container classes `WiPipeline` (a port of `rf_pipelines::pipeline`) and `RfiMaskPipeline`
+(`rf_pipelines::wi_sub_pipeline`) can run any sequence of them: geometry members `nbeams`,
+`nfreq`, `ntime`, `scratch_nelts`; `launch(intensity, weights, scratch, stream=None)`; and
+`to_yaml_dict()` / `from_yaml_dict()`. The interface is stated in full in
+`pirate_frb/chimefrb/transform_io.py`, and `include/pirate/chimefrb/launch_utils.hpp` holds
+the C++ side of the launch checks. A newly ported transform should follow it (constructor:
+geometry first, then the semantic parameters in the old code's order, then performance
+knobs), and only transforms with a legacy json form get a `from_json_dict()`. Transforms
+that need no C++ are written in cupy on `CupyTransformBase`; `ExampleCupyTransform` is the
+worked example. `misc/chimefrb/configs/legacy_json_to_yaml.py` converts an old json chain
+to the yaml form.
+
 ## Appendix A: building the chimefrb code
 
 The 11 repos above do not build out of the box on a modern system, and their `master`

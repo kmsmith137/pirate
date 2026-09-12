@@ -29,6 +29,7 @@ misc/chimefrb/polynomial_detrender/ runs the old code itself.
 
 import numpy as np
 
+from . import GpuPolynomialDetrender
 from .ReferencePolynomialDetrender import (ReferencePolynomialDetrender, AXIS_TIME,
                                            legendre, z_grid)
 from ..utils import atomic_print
@@ -320,7 +321,7 @@ def _run_gpu(cp, det, intensity, weights):
     """Run one GpuPolynomialDetrender on numpy inputs; returns (intensity, weights) after."""
     gi = cp.asarray(intensity)          # copies: the kernel works in place on both
     gw = cp.asarray(weights)
-    det.launch(gi, gw)
+    det.launch(gi, gw, None)
     cp.cuda.get_current_stream().synchronize()
     return (cp.asnumpy(gi), cp.asnumpy(gw))
 
@@ -334,8 +335,6 @@ def test_polynomial_detrender(iteration=0, rng=None, verbose=False):
         if verbose:
             atomic_print('    test_polynomial_detrender: cupy not available, skipped')
         return
-
-    from . import GpuPolynomialDetrender
 
     rng = _default_rng(rng)
 
@@ -351,7 +350,7 @@ def test_polynomial_detrender(iteration=0, rng=None, verbose=False):
     tag = (f'(polydeg={polydeg}, epsilon={epsilon:.3g}, nt_chunk={nt_chunk}, kind={kind}, W={W},'
            f' M={M}, nfreq={nfreq}, nchunk={nchunk})')
 
-    det = GpuPolynomialDetrender(polydeg, epsilon, nt_chunk, W)
+    det = GpuPolynomialDetrender(M, nfreq, T, polydeg, epsilon, nt_chunk, W)
     (gi, gw) = _run_gpu(cp, det, intensity, weights)
 
     def rows(a):
@@ -411,7 +410,7 @@ def test_polynomial_detrender(iteration=0, rng=None, verbose=False):
     (gi2, gw2) = _run_gpu(cp, det, intensity, weights)
     assert _same(gi2, gi).all() and _same(gw2, gw).all(), f'not reproducible {tag}'
     W2 = WARP_COUNTS[(WARP_COUNTS.index(W) + 1 + int(rng.integers(3))) % len(WARP_COUNTS)]
-    det2 = GpuPolynomialDetrender(polydeg, epsilon, nt_chunk, W2)
+    det2 = GpuPolynomialDetrender(M, nfreq, T, polydeg, epsilon, nt_chunk, W2)
     (gi2, gw2) = _run_gpu(cp, det2, intensity, weights)
     assert _same(gi2, gi).all() and _same(gw2, gw).all(), f'warps_per_block {W} vs {W2} differ {tag}'
 
@@ -420,13 +419,15 @@ def test_polynomial_detrender(iteration=0, rng=None, verbose=False):
     perm = rng.permutation(M * nfreq)
     flat_i = intensity.reshape(M * nfreq, T)[perm][None]
     flat_w = weights.reshape(M * nfreq, T)[perm][None]
-    (gi2, gw2) = _run_gpu(cp, det, np.ascontiguousarray(flat_i), np.ascontiguousarray(flat_w))
+    det_flat = GpuPolynomialDetrender(1, M * nfreq, T, polydeg, epsilon, nt_chunk, W)
+    (gi2, gw2) = _run_gpu(cp, det_flat, np.ascontiguousarray(flat_i), np.ascontiguousarray(flat_w))
     assert _same(gi2[0], gi.reshape(M * nfreq, T)[perm]).all() and \
         _same(gw2[0], gw.reshape(M * nfreq, T)[perm]).all(), f'rows are not independent {tag}'
 
     # ---- Chunks are independent: the first chunk alone gives the same answer.
     if nchunk > 1:
-        (gi2, gw2) = _run_gpu(cp, det, np.ascontiguousarray(intensity[:, :, :nt_chunk]),
+        det_c0 = GpuPolynomialDetrender(M, nfreq, nt_chunk, polydeg, epsilon, nt_chunk, W)
+        (gi2, gw2) = _run_gpu(cp, det_c0, np.ascontiguousarray(intensity[:, :, :nt_chunk]),
                               np.ascontiguousarray(weights[:, :, :nt_chunk]))
         assert _same(gi2, gi[:, :, :nt_chunk]).all() and _same(gw2, gw[:, :, :nt_chunk]).all(), \
             f'chunk 0 alone differs from chunk 0 of the full launch {tag}'

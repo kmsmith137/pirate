@@ -205,8 +205,8 @@ def _check_composition(cp, rng, verbose):
 
     # The transform itself.
     g_w = cp.asarray(W)
-    GpuIntensityClipper(B, F, T, axis, sigma, Df, Dt, niter, iter_sigma,
-                        two_pass).launch(cp.asarray(I), g_w)
+    GpuIntensityClipper(B, F, T, T, axis, sigma, Df, Dt, niter, iter_sigma,
+                        two_pass).launch(cp.asarray(I), g_w, None)
     cp.cuda.get_current_stream().synchronize()
     direct = cp.asnumpy(g_w)
 
@@ -215,8 +215,8 @@ def _check_composition(cp, rng, verbose):
     ds_w = cp.empty((B, F_ds, T_ds), dtype=cp.float32)
     GpuWiDownsampler(Df, Dt, False).launch(ds_i, ds_w, cp.asarray(I), cp.asarray(W))
 
-    GpuIntensityClipper(B, F_ds, T_ds, axis, sigma, 1, 1, niter, iter_sigma,
-                        two_pass).launch(ds_i, ds_w)
+    GpuIntensityClipper(B, F_ds, T_ds, T_ds, axis, sigma, 1, 1, niter, iter_sigma,
+                        two_pass).launch(ds_i, ds_w, None)
 
     g_w2 = cp.asarray(W)
     GpuWeightUpsampler(Df, Dt, 0.0).launch(g_w2, ds_w)

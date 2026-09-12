@@ -412,6 +412,11 @@ PYFILES = \
   pirate_frb/chimefrb/ReferenceWeightUpsampler.py \
   pirate_frb/chimefrb/ReferenceWiDownsampler.py \
   pirate_frb/chimefrb/ReferenceWrms.py \
+  pirate_frb/chimefrb/CupyTransformBase.py \
+  pirate_frb/chimefrb/ExampleCupyTransform.py \
+  pirate_frb/chimefrb/RfiMaskPipeline.py \
+  pirate_frb/chimefrb/WiPipeline.py \
+  pirate_frb/chimefrb/transform_io.py \
   pirate_frb/chimefrb/test_assembled_chunk.py \
   pirate_frb/chimefrb/test_badchannel_mask.py \
   pirate_frb/chimefrb/test_intensity_clipper.py \
@@ -420,6 +425,7 @@ PYFILES = \
   pirate_frb/chimefrb/test_std_dev_clipper.py \
   pirate_frb/chimefrb/test_weight_upsampler.py \
   pirate_frb/chimefrb/test_wi_downsampler.py \
+  pirate_frb/chimefrb/test_wi_pipeline.py \
   pirate_frb/chimefrb/test_wrms.py \
   pirate_frb/chimefrb/testutils.py \
   pirate_frb/casm/__init__.py \
@@ -576,6 +582,7 @@ HFILES = \
   include/pirate/chimefrb/ClipperAxis.hpp \
   include/pirate/chimefrb/ClipperBase.hpp \
   include/pirate/chimefrb/IntensityClipper.hpp \
+  include/pirate/chimefrb/launch_utils.hpp \
   include/pirate/chimefrb/PolynomialDetrender.hpp \
   include/pirate/chimefrb/SplineDetrender.hpp \
   include/pirate/chimefrb/StdDevClipper.hpp \

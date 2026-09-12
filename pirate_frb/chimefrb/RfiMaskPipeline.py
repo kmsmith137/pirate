@@ -1,0 +1,233 @@
+"""RfiMaskPipeline: run a list of chimefrb transforms on a downsampled copy of the data, and
+feed only the resulting mask back to full resolution.
+
+A python port of rf_pipelines::wi_sub_pipeline. See the class docstring, and WiPipeline.py
+for the plain (undownsampled) container.
+"""
+
+import math
+
+from .ReferenceWeightUpsampler import GpuWeightUpsampler
+from .ReferenceWiDownsampler import GpuWiDownsampler
+from .WiPipeline import PipelineFileIO, WiPipeline, describe_lines
+from .transform_io import (check_json_keys, check_launch_args, check_yaml_keys,
+                           default_scratch_and_stream, transform_from_json_dict,
+                           transform_from_yaml_dict)
+
+
+def _round_up(n, m):
+    return ((n + m - 1) // m) * m
+
+
+class RfiMaskPipeline(PipelineFileIO):
+    """Transforms run on a (Df, Dt)-downsampled copy of the data, whose mask is then applied
+    to the full-resolution weights.
+
+    A port of rf_pipelines::wi_sub_pipeline. The old CHIME FRB search ran most of its RFI
+    chain this way: at 1024 channels instead of 16384, so that 108 clippers cost a sixteenth
+    of what they would at full resolution, with the resulting mask upsampled back. One launch
+    does three things:
+
+    1. Downsample (intensity, weights) by (Df, Dt) with :class:`GpuWiDownsampler` into
+       scratch. Downsampled weights are the SUM of a cell's weights, not the mean, so {0,1}
+       weights become counts up to Df*Dt.
+    2. Run the transforms, in order, on the downsampled pair.
+    3. With :class:`GpuWeightUpsampler`, zero every full-resolution weight whose cell's
+       downsampled weight is ``<= w_cutoff``; leave every other weight bit-identical.
+
+    Two consequences worth knowing: the full-resolution INTENSITY is never modified (only its
+    weights are), and whatever the transforms do to the downsampled intensity is discarded
+    with the scratch. The transforms' geometry is the INNER one, (nbeams, nfreq/Df,
+    ntime/Dt); the pipeline's own is the full-resolution shape.
+
+    An RfiMaskPipeline is itself a transform (see ``pirate_frb.chimefrb.transform_io``), so
+    it is normally one element of a :class:`WiPipeline`. Like a WiPipeline it holds no
+    per-launch state, so one instance may be launched on several streams at once with one
+    scratch per stream; and one ``launch()`` processes exactly one block, which the caller
+    assembles.
+
+    Attributes (read-only by convention):
+
+    - ``transforms`` (tuple) -- the transforms, in launch order, at the inner geometry.
+    - ``Df``, ``Dt``, ``w_cutoff`` -- the constructor arguments.
+    - ``nbeams``, ``nfreq``, ``ntime`` -- the FULL-RESOLUTION block shape.
+    - ``scratch_nelts`` (int) -- float32 scratch elements ``launch()`` needs: the two
+      downsampled arrays plus what the transforms need.
+    """
+
+    def __init__(self, transforms, Df, Dt, w_cutoff=0.0):
+        """Create an RfiMaskPipeline.
+
+        Parameters
+        ----------
+        transforms : sequence
+            One or more transforms at the INNER geometry (nbeams, nfreq/Df, ntime/Dt), all
+            alike. The inner nfreq and ntime must be multiples of 32 (GpuWiDownsampler's
+            output tile).
+        Df, Dt : int
+            Downsampling factors in frequency and time, each >= 1 and not both 1: at (1, 1)
+            the bracket would only copy the data, and it is not a no-op even then (the
+            transforms' intensity changes would be discarded), so a WiPipeline should be
+            used instead.
+        w_cutoff : float, optional
+            A full-resolution weight is zeroed when its cell's downsampled weight is
+            ``<= w_cutoff`` (strictly: a downsampled weight equal to the cutoff masks). The
+            production chain uses 0.
+        """
+        self._inner = WiPipeline(transforms)      # validates them, and owns the sequential launch
+        self.transforms = self._inner.transforms
+        (nbeams, nfreq_ds, ntime_ds) = (self._inner.nbeams, self._inner.nfreq, self._inner.ntime)
+
+        for (name, x) in (('Df', Df), ('Dt', Dt)):
+            if not (isinstance(x, int) and (x >= 1)):
+                raise ValueError(f'RfiMaskPipeline: expected {name} to be an integer >= 1, got {x!r}')
+        if (Df, Dt) == (1, 1):
+            raise ValueError('RfiMaskPipeline: (Df, Dt) = (1, 1) is not supported. The bracket would'
+                             ' only copy the data (and would still discard the transforms\' intensity'
+                             ' changes); use a WiPipeline if you do not need the downsampling')
+        w_cutoff = float(w_cutoff)
+        if not (w_cutoff >= 0.0) or math.isnan(w_cutoff):
+            raise ValueError(f'RfiMaskPipeline: expected w_cutoff >= 0, got {w_cutoff!r}')
+        if (nfreq_ds % 32 != 0) or (ntime_ds % 32 != 0):
+            raise ValueError(f'RfiMaskPipeline: the transforms\' (nfreq, ntime) = ({nfreq_ds}, {ntime_ds})'
+                             f' must both be multiples of 32, the output tile of GpuWiDownsampler'
+                             f' (the full-resolution shape is then a multiple of (32*Df, 32*Dt))')
+
+        self.Df = Df
+        self.Dt = Dt
+        self.w_cutoff = w_cutoff
+        self.nbeams = nbeams
+        self.nfreq = nfreq_ds * Df
+        self.ntime = ntime_ds * Dt
+
+        self._downsampler = GpuWiDownsampler(Df, Dt, False)
+        self._upsampler = GpuWeightUpsampler(Df, Dt, w_cutoff)
+
+        # Scratch layout: the downsampled intensity, the downsampled weights, then (at an
+        # offset rounded to 64 elements, for the transforms' wide loads) the transforms' own
+        # scratch.
+        self._ds_shape = (nbeams, nfreq_ds, ntime_ds)
+        self._ds_nelts = nbeams * nfreq_ds * ntime_ds
+        self._sub_offset = _round_up(2 * self._ds_nelts, 64)
+        self.scratch_nelts = self._sub_offset + self._inner.scratch_nelts
+
+    def launch(self, intensity, weights, scratch, stream=None):
+        """Downsample, run the transforms, upsample the mask (async; does not sync the stream).
+
+        Parameters
+        ----------
+        intensity : cupy.ndarray
+            Shape (nbeams, nfreq, ntime), float32, C-contiguous. Read only.
+        weights : cupy.ndarray
+            Same shape and dtype, distinct. MODIFIED IN PLACE: zeroed under every downsampled
+            cell whose weight ends up ``<= w_cutoff``, bit-identical elsewhere.
+        scratch : cupy.ndarray or None
+            1-d float32 with at least ``scratch_nelts`` elements, or None to allocate one.
+        stream : cupy.cuda.Stream or None, optional
+            CUDA stream to use. If None, uses current cupy stream.
+        """
+        (scratch, stream) = default_scratch_and_stream(scratch, stream, self.scratch_nelts)
+        check_launch_args(intensity, weights, scratch, (self.nbeams, self.nfreq, self.ntime),
+                          self.scratch_nelts, 'RfiMaskPipeline')
+
+        n = self._ds_nelts
+        i_ds = scratch[:n].reshape(self._ds_shape)
+        w_ds = scratch[n:2*n].reshape(self._ds_shape)
+        sub = scratch[self._sub_offset:]
+
+        self._downsampler.launch(i_ds, w_ds, intensity, weights, stream=stream)
+        self._inner.launch(i_ds, w_ds, sub, stream=stream)
+        self._upsampler.launch(weights, w_ds, stream=stream)
+
+    def to_yaml_dict(self):
+        """``{'class_name': 'RfiMaskPipeline', 'Df', 'Dt', 'w_cutoff', 'transforms': [...]}``."""
+        return {'class_name': 'RfiMaskPipeline', 'Df': int(self.Df), 'Dt': int(self.Dt),
+                'w_cutoff': float(self.w_cutoff),
+                'transforms': [t.to_yaml_dict() for t in self.transforms]}
+
+    @classmethod
+    def from_yaml_dict(cls, d, nbeams, nfreq, ntime, classes=None):
+        """The inverse of :meth:`to_yaml_dict`, at the given FULL-RESOLUTION geometry; the
+        transforms are built at (nbeams, nfreq/Df, ntime/Dt). ``classes`` is passed to the
+        reader of each element (see :meth:`read_yaml_file`)."""
+        check_yaml_keys(d, 'RfiMaskPipeline', ['Df', 'Dt', 'w_cutoff', 'transforms'])
+        (Df, Dt) = (d['Df'], d['Dt'])
+        for (name, x) in (('Df', Df), ('Dt', Dt)):
+            if not (isinstance(x, int) and (x >= 1)):
+                raise ValueError(f'RfiMaskPipeline.from_yaml_dict: expected {name} to be an integer >= 1, got {x!r}')
+        if (nfreq % Df != 0) or (ntime % Dt != 0):
+            raise ValueError(f'RfiMaskPipeline.from_yaml_dict: (nfreq, ntime) = ({nfreq}, {ntime}) is not'
+                             f' divisible by (Df, Dt) = ({Df}, {Dt})')
+        if not (isinstance(d['transforms'], list) and (len(d['transforms']) > 0)):
+            raise ValueError("RfiMaskPipeline.from_yaml_dict: 'transforms' must be a non-empty list")
+        transforms = [transform_from_yaml_dict(e, nbeams, nfreq // Df, ntime // Dt, classes)
+                      for e in d['transforms']]
+        return cls(transforms, Df, Dt, d['w_cutoff'])
+
+    @classmethod
+    def from_json_dict(cls, d, nbeams, nfreq, ntime, nds=1):
+        """From a legacy rf_pipelines ``wi_sub_pipeline`` element, at the given FULL-RESOLUTION
+        geometry.
+
+        The old object could be given (Df, Dt) directly, or as the downsampled channel count
+        ``nfreq_out`` and the downsampled time resolution ``nds_out`` (relative to the native
+        stream), with 0 meaning "not given"; both spellings are resolved as the old bind step
+        did. ``nds`` is the time downsampling of the data arriving here (1 at top level). The
+        old ``sub_pipeline`` is always a ``pipeline`` in practice; its elements become this
+        object's transforms (skipping the inert unported ones, see ``transform_io``), and a
+        bare transform is accepted as a list of one.
+        """
+        check_json_keys(d, 'wi_sub_pipeline', ['sub_pipeline', 'w_cutoff', 'nfreq_out', 'nds_out', 'Df', 'Dt'])
+        (Df_j, Dt_j, nfreq_out, nds_out) = (int(d['Df']), int(d['Dt']), int(d['nfreq_out']), int(d['nds_out']))
+        who = 'RfiMaskPipeline.from_json_dict'
+
+        if min(Df_j, Dt_j, nfreq_out, nds_out) < 0:
+            raise ValueError(f'{who}: Df, Dt, nfreq_out and nds_out must all be >= 0 (0 means unspecified)')
+        if (Df_j == 0) and (nfreq_out == 0):
+            raise ValueError(f'{who}: either nfreq_out or Df must be specified')
+        if (Dt_j == 0) and (nds_out == 0):
+            raise ValueError(f'{who}: either nds_out or Dt must be specified')
+
+        if Df_j:
+            Df = Df_j
+            if nfreq_out and (nfreq != nfreq_out * Df):
+                raise ValueError(f'{who}: nfreq={nfreq} does not match nfreq_out*Df = {nfreq_out}*{Df}')
+        else:
+            if nfreq % nfreq_out:
+                raise ValueError(f'{who}: nfreq={nfreq} is not a multiple of nfreq_out={nfreq_out}')
+            Df = nfreq // nfreq_out
+
+        if Dt_j:
+            Dt = Dt_j
+            if nds_out and (nds_out != nds * Dt):
+                raise ValueError(f'{who}: nds_out={nds_out} does not match nds*Dt = {nds}*{Dt}')
+        else:
+            if nds_out % nds:
+                raise ValueError(f'{who}: nds_out={nds_out} is not a multiple of the incoming nds={nds}')
+            Dt = nds_out // nds
+
+        if (nfreq % Df) or (ntime % Dt):
+            raise ValueError(f'{who}: (nfreq, ntime) = ({nfreq}, {ntime}) is not divisible by (Df, Dt) = ({Df}, {Dt})')
+
+        sub = d['sub_pipeline']
+        inner = (nbeams, nfreq // Df, ntime // Dt)
+        if isinstance(sub, dict) and (sub.get('class_name') == 'pipeline'):
+            check_json_keys(sub, 'pipeline', ['elements'])
+            elements = sub['elements']
+        else:
+            elements = [sub]
+        transforms = [transform_from_json_dict(e, *inner, nds=nds*Dt) for e in elements]
+        transforms = [t for t in transforms if t is not None]
+        if len(transforms) == 0:
+            raise ValueError(f"{who}: the legacy 'sub_pipeline' has no element with a pirate counterpart")
+
+        return cls(transforms, Df, Dt, float(d['w_cutoff']))
+
+    def describe(self):
+        """A multi-line listing: this pipeline's parameters, then one indented line per
+        transform (see :meth:`WiPipeline.describe`)."""
+        return '\n'.join(describe_lines(self))
+
+    def __repr__(self):
+        return (f'RfiMaskPipeline(nbeams={self.nbeams}, nfreq={self.nfreq}, ntime={self.ntime},'
+                f' Df={self.Df}, Dt={self.Dt}, w_cutoff={self.w_cutoff}, {len(self.transforms)} transform(s))')

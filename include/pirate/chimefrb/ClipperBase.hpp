@@ -8,6 +8,9 @@
 #include "ClipperAxis.hpp"
 #include "WeightUpsampler.hpp"   // zero_cell(), which both clippers' final kernels call
 
+// Every chimefrb transform's launch() takes (intensity, weights, scratch, stream) on arrays of
+// shape (nbeams, nfreq, ntime); see launch_utils.hpp.
+
 namespace pirate {
 namespace chimefrb {
 #if 0
@@ -33,13 +36,14 @@ namespace chimefrb {
 //
 // CHUNKING. The old code applies each clipper to one 'nt_chunk' block of the stream at a
 // time, and the result does depend on where those boundaries fall. This class requires
-// the array to hold exactly ONE chunk, which is all the production RFI chain needs (every
-// clipper in it has nt_chunk = 4096, and so does the chain). Processing T = N*nt_chunk
-// samples in one call would be a useful generalization and is deliberately left for
-// later. AXIS_TIME and AXIS_FREQ are nearly free: for TIME, (B,F,T) reshapes to
-// (B,F,N,nt_chunk), which is contiguous; for FREQ the boundaries only change which rows
-// a clipper pools together. AXIS_NONE needs real work, because its sub-planes are strided
-// in frequency and GpuWrms cannot view them as rows. The numpy references
+// ntime == nt_chunk -- the array holds exactly ONE chunk -- which is all the production RFI
+// chain needs (every clipper in it has nt_chunk = 4096, and the chain runs at ntime = 4096).
+// Both are constructor arguments, and kept as separate members even though they are equal,
+// because nt_chunk is the semantic parameter that a saved configuration carries. Processing
+// ntime = N*nt_chunk in one launch would be a useful generalization and is deliberately
+// left for later: for AXIS_TIME the rows just regroup, but for AXIS_FREQ GpuStdDevClipper
+// pools its variances per (beam, chunk), and AXIS_NONE has sub-planes strided in
+// frequency that GpuWrms cannot view as rows. The numpy references
 // (ReferenceIntensityClipper, ReferenceStdDevClipper) implement the general case, so the
 // semantics are pinned down and tested.
 //
@@ -49,7 +53,8 @@ namespace chimefrb {
 
 struct GpuClipperBase
 {
-    const long B, F, nt_chunk;     // full-resolution array shape, (B, F, nt_chunk)
+    const long nbeams, nfreq, ntime;   // full-resolution array shape
+    const long nt_chunk;               // samples per chunk; == ntime (see CHUNKING above)
     const ClipperAxis axis;
     const long Df, Dt;             // downsampling factors
     const long niter;              // TOTAL passes of the statistic (1 for GpuStdDevClipper)
@@ -59,9 +64,9 @@ struct GpuClipperBase
     // Derived geometry. Public because the unit tests rebuild steps 1-2 from
     // GpuWiDownsampler and GpuWrms, and compare -- which is how rf_kernels' own tests check
     // the clippers.
-    const long F_ds, T_ds;         // F/Df, nt_chunk/Dt
+    const long F_ds, T_ds;         // nfreq/Df, nt_chunk/Dt
     const long wrms_L;             // samples per statistic row
-    const long wrms_R;             // statistic rows: B*F_ds (TIME), B*T_ds (FREQ), B (NONE)
+    const long wrms_R;             // statistic rows: nbeams*F_ds (TIME), nbeams*T_ds (FREQ), nbeams (NONE)
 
     // Number of float32 scratch elements launch() needs. Covers the downsampled and
     // transposed arrays, the (mean, var) outputs, and GpuWrms' own scratch. Never zero:
@@ -73,11 +78,13 @@ protected:
     // 'name' prefixes every exception message, so that a caller sees "GpuStdDevClipper:
     // ..." rather than "GpuClipperBase: ...".
     //
-    // Throws on: F % (32*Df) != 0 or nt_chunk % (32*Dt) != 0 (the 32 is GpuWiDownsampler's
-    // output tile size, and the clip kernels' warp width); B < 1; Df < 1; Dt < 1;
-    // niter < 1; iter_sigma < 0. The derived class checks its own parameters.
-    GpuClipperBase(const char *name, long B, long F, long nt_chunk, ClipperAxis axis,
-                   long Df, long Dt, long niter, double iter_sigma, bool two_pass);
+    // Throws on: ntime != nt_chunk (see CHUNKING above); nfreq % (32*Df) != 0 or
+    // nt_chunk % (32*Dt) != 0 (the 32 is GpuWiDownsampler's output tile size, and the clip
+    // kernels' warp width); nbeams < 1; nt_chunk < 1; Df < 1; Dt < 1; niter < 1;
+    // iter_sigma < 0. The derived class checks its own parameters.
+    GpuClipperBase(const char *name, long nbeams, long nfreq, long ntime, long nt_chunk,
+                   ClipperAxis axis, long Df, long Dt, long niter, double iter_sigma,
+                   bool two_pass);
 
     const std::string name;
 
@@ -85,14 +92,13 @@ protected:
     // 'cell_i' is the UNTRANSPOSED downsampled intensity, which the clip kernels read,
     // and IS 'intensity' when (Df,Dt) == (1,1).
     struct StatisticOutputs {
-        ksgpu::Array<float> cell_i;    // (B, F_ds, T_ds)
+        ksgpu::Array<float> cell_i;    // (nbeams, F_ds, T_ds)
         ksgpu::Array<float> mean;      // (wrms_R,)
         ksgpu::Array<float> var;       // (wrms_R,)
     };
 
-    // Checks the launch() arguments -- shapes, contiguity, location, aliasing, and the
-    // T == nt_chunk rule with an exception that explains it -- then launches steps 1-2
-    // on 'stream', without synchronizing.
+    // Checks the launch() arguments (shapes, contiguity, location, aliasing, scratch size),
+    // then launches steps 1-2 on 'stream', without synchronizing.
     StatisticOutputs _launch_statistic(const ksgpu::Array<float> &intensity,
                                        const ksgpu::Array<float> &weights,
                                        ksgpu::Array<float> &scratch,

@@ -15,45 +15,69 @@ import numpy as np
 
 import ksgpu
 from ..pirate_pybind11 import GpuStdDevClipper
+from .transform_io import (axis_from_json, axis_from_str, axis_to_str, check_json_keys,
+                           check_yaml_keys, default_scratch_and_stream)
 from .ReferenceIntensityClipper import AXIS_FREQ, AXIS_TIME, AXIS_NONE, wrms_view
 from .ReferenceWiDownsampler import ReferenceWiDownsampler
 from .ReferenceWrms import ReferenceWrms
 
 
+# The yaml keys of GpuStdDevClipper, which are also its constructor's argument names after
+# the geometry.
+STD_DEV_CLIPPER_YAML_KEYS = ('nt_chunk', 'axis', 'sigma', 'Df', 'Dt', 'two_pass')
+
+
 @ksgpu.inject_methods(GpuStdDevClipper)
 class GpuStdDevClipperInjections:
     # No class docstring here: GpuStdDevClipper's docstring lives in the pybind11 binding
-    # (option 1 in notes/docstrings.md); this injector adds a stream argument for
-    # launch(), and lets the caller omit the scratch array.
+    # (option 1 in notes/docstrings.md). This injector adds the python side of the
+    # transform protocol (transform_io.py): launch() with stream=None and scratch=None
+    # handling, and the yaml/legacy-json methods.
 
     # Save reference to C++ method
     _cpp_launch = GpuStdDevClipper.launch
 
-    def launch(self, intensity, weights, scratch=None, stream=None):
+    def launch(self, intensity, weights, scratch, stream=None):
         """GPU kernel launch (async, does not sync stream).
 
         Parameters
         ----------
         intensity : cupy.ndarray
-            Shape (B, F, nt_chunk), float32, fully contiguous, on GPU. Read only.
+            Shape (nbeams, nfreq, ntime), float32, fully contiguous, on GPU. Read only.
         weights : cupy.ndarray
             Same shape and dtype. MODIFIED IN PLACE: whole rows are zeroed where the clip
             fires, and every other weight is left bit-identical. Must be >= 0 on entry.
-        scratch : cupy.ndarray or None, optional
-            Shape ``(self.scratch_nelts,)``, float32, on GPU. If None, one is allocated
-            here -- convenient for tests, wasteful in a loop, since the point of the
-            argument is to share one allocation across chunks and across a chain's clippers.
+        scratch : cupy.ndarray or None
+            1-d float32, on GPU, with at least ``self.scratch_nelts`` elements; garbage in,
+            garbage out. None allocates one -- convenient for tests, wasteful in a loop.
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
         """
-        import cupy as cp
-
-        if stream is None:
-            stream = cp.cuda.get_current_stream()
-        if scratch is None:
-            scratch = cp.empty(self.scratch_nelts, dtype=cp.float32)
-
+        (scratch, stream) = default_scratch_and_stream(scratch, stream, self.scratch_nelts)
         self._cpp_launch(intensity, weights, scratch, stream.ptr)
+
+    def to_yaml_dict(self):
+        """The yaml form (see ``transform_io``): the class name and the semantic parameters
+        (``nt_chunk``, ``axis`` as 'freq'/'time', ``sigma``, ``Df``, ``Dt``, ``two_pass``)."""
+        return {'class_name': 'GpuStdDevClipper', 'nt_chunk': int(self.nt_chunk),
+                'axis': axis_to_str(self.axis), 'sigma': float(self.sigma),
+                'Df': int(self.Df), 'Dt': int(self.Dt), 'two_pass': bool(self.two_pass)}
+
+    @classmethod
+    def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
+        """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
+        check_yaml_keys(d, 'GpuStdDevClipper', STD_DEV_CLIPPER_YAML_KEYS)
+        return cls(nbeams, nfreq, ntime, d['nt_chunk'], axis_from_str(d['axis']), d['sigma'],
+                   d['Df'], d['Dt'], d['two_pass'])
+
+    @classmethod
+    def from_json_dict(cls, d, nbeams, nfreq, ntime):
+        """From the legacy rf_pipelines json element (``class_name: std_dev_clipper``);
+        ``nt_chunk == 0`` means the whole block (here ``ntime``)."""
+        check_json_keys(d, 'std_dev_clipper', ['axis', 'sigma', 'Df', 'Dt', 'two_pass', 'nt_chunk'])
+        nt_chunk = d['nt_chunk'] if d['nt_chunk'] else ntime
+        return cls(nbeams, nfreq, ntime, nt_chunk, axis_from_json(d['axis']), d['sigma'],
+                   d['Df'], d['Dt'], d['two_pass'])
 
 
 def clip_1d(v, sigma):

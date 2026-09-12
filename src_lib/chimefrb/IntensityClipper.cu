@@ -115,11 +115,11 @@ static long _checked_warps(long warps_per_block)
 }
 
 
-GpuIntensityClipper::GpuIntensityClipper(long B_, long F_, long nt_chunk_, ClipperAxis axis_,
-                                         double sigma_, long Df_, long Dt_, long niter_,
-                                         double iter_sigma_, bool two_pass_,
+GpuIntensityClipper::GpuIntensityClipper(long nbeams_, long nfreq_, long ntime_, long nt_chunk_,
+                                         ClipperAxis axis_, double sigma_, long Df_, long Dt_,
+                                         long niter_, double iter_sigma_, bool two_pass_,
                                          long warps_per_block_) :
-    GpuClipperBase("GpuIntensityClipper", B_, F_, nt_chunk_, axis_, Df_, Dt_,
+    GpuClipperBase("GpuIntensityClipper", nbeams_, nfreq_, ntime_, nt_chunk_, axis_, Df_, Dt_,
                    niter_, iter_sigma_, two_pass_),
     sigma(_checked_sigma(sigma_)),
     warps_per_block(_checked_warps(warps_per_block_))
@@ -135,7 +135,7 @@ void GpuIntensityClipper::launch(const Array<float> &intensity, Array<float> &we
     // Step 3: the final clip. Note that this reads the UNTRANSPOSED downsampled intensity
     // (st.cell_i): the statistic wants frequency contiguous, and the mask application
     // wants time contiguous.
-    long ntiles = B * F_ds * (T_ds / 32);
+    long ntiles = nbeams * F_ds * (T_ds / 32);
     long nblocks = (ntiles + warps_per_block - 1) / warps_per_block;
     dim3 nthreads(32, warps_per_block);
 
@@ -214,7 +214,7 @@ void GpuIntensityClipper::time_selected()
         const long T_ds = T / c.Dt;
         const bool need_ds = (c.Df != 1) || (c.Dt != 1);
 
-        GpuIntensityClipper probe(B, F, T, c.axis, c.sigma, c.Df, c.Dt, c.niter,
+        GpuIntensityClipper probe(B, F, T, T, c.axis, c.sigma, c.Df, c.Dt, c.niter,
                                   c.iter_sigma, two_pass);
         GpuWrms wprobe(probe.wrms_L, c.niter, c.iter_sigma, two_pass);
 
@@ -249,7 +249,7 @@ void GpuIntensityClipper::time_selected()
              << " (clean data: the clip writes ~nothing)" << endl;
 
         for (long W: warp_counts) {
-            GpuIntensityClipper ic(B, F, T, c.axis, c.sigma, c.Df, c.Dt, c.niter,
+            GpuIntensityClipper ic(B, F, T, T, c.axis, c.sigma, c.Df, c.Dt, c.niter,
                                    c.iter_sigma, two_pass, W);
             KernelTimer kt(niter_timing, 1);
             double dt = 0.0;

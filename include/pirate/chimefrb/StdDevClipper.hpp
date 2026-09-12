@@ -40,20 +40,21 @@ namespace chimefrb {
 //     clips none, and this class and the old code round differently. Real data cannot
 //     produce it (it needs bit-identical variances); it is documented rather than fixed.
 //
-//   - CHUNKING: the array must hold exactly ONE nt_chunk, as for every GpuClipperBase;
-//     see the chunking note in ClipperBase.hpp. ReferenceStdDevClipper implements
-//     T = N*nt_chunk.
+//   - CHUNKING: ntime == nt_chunk is required, as for every GpuClipperBase; see the
+//     chunking note in ClipperBase.hpp. ReferenceStdDevClipper implements
+//     ntime = N*nt_chunk.
 //
 // AXIS_NONE is not supported: the old code does not implement it, and the chain does not
 // use it. Nothing here is stateful across chunks.
 
 struct GpuStdDevClipper : public GpuClipperBase
 {
-    // (B, F, nt_chunk) is the full-resolution array shape, fixed at construction.
+    // (nbeams, nfreq, ntime) is the full-resolution array shape, fixed at construction, and
+    // nt_chunk the samples per chunk, which must equal ntime for now (ClipperBase.hpp).
     //
     // Throws on axis == NONE, sigma < 0, or an unsupported warps_per_block, and on
-    // everything GpuClipperBase checks: F % (32*Df) != 0 or nt_chunk % (32*Dt) != 0;
-    // B < 1; Df < 1; Dt < 1.
+    // everything GpuClipperBase checks: ntime != nt_chunk; nfreq % (32*Df) != 0 or
+    // nt_chunk % (32*Dt) != 0; nbeams < 1; Df < 1; Dt < 1.
     //
     // 'sigma' is step 3's threshold, in units of the standard deviation OF THE VARIANCES.
     // Unlike rf_kernels, which requires sigma >= 1, any sigma >= 0 is accepted; note that
@@ -66,29 +67,29 @@ struct GpuStdDevClipper : public GpuClipperBase
     // configurations, 4, 8 and 16 are within 0.1% of each other and 32 is about 0.5%
     // slower, so the default is 16. Do not assume a setting carries over from another
     // chimefrb kernel: the ones built so far have each wanted a different one.
-    GpuStdDevClipper(long B, long F, long nt_chunk, ClipperAxis axis, double sigma,
-                     long Df, long Dt, bool two_pass, long warps_per_block = 16);
+    GpuStdDevClipper(long nbeams, long nfreq, long ntime, long nt_chunk, ClipperAxis axis,
+                     double sigma, long Df, long Dt, bool two_pass, long warps_per_block = 16);
 
     const double sigma;            // step-3 threshold, in units of sd(variances)
     const long warps_per_block;    // 4, 8, 16 or 32; step 4 only
 
-    // Inherited from GpuClipperBase: B, F, nt_chunk, axis, Df, Dt, two_pass; the derived
-    // geometry F_ds, T_ds, wrms_L, wrms_R (the rows per beam are wrms_R / B); scratch_nelts;
-    // and niter and iter_sigma, which are always 1 and 0 here.
+    // Inherited from GpuClipperBase: nbeams, nfreq, ntime, nt_chunk, axis, Df, Dt, two_pass;
+    // the derived geometry F_ds, T_ds, wrms_L, wrms_R (the rows per beam are wrms_R / nbeams);
+    // scratch_nelts; and niter and iter_sigma, which are always 1 and 0 here.
 
     // launch(): asynchronously launch the kernels, and return without synchronizing the
     // stream. Note: stream=NULL is allowed, but is not the default.
     //
     // All arrays are float32, fully contiguous, and in GPU memory.
     //
-    //   intensity  shape (B, F, nt_chunk). Read only, never modified.
+    //   intensity  shape (nbeams, nfreq, ntime). Read only, never modified.
     //
-    //   weights    shape (B, F, nt_chunk). MODIFIED IN PLACE: whole rows are zeroed where
-    //              the clip fires, and every other weight is left bit-identical. Must be
-    //              >= 0 on entry, which is not checked (see GpuWrms::launch()).
+    //   weights    shape (nbeams, nfreq, ntime). MODIFIED IN PLACE: whole rows are zeroed
+    //              where the clip fires, and every other weight is left bit-identical. Must
+    //              be >= 0 on entry, which is not checked (see GpuWrms::launch()).
     //
-    //   scratch    shape (scratch_nelts,). Contents on entry are ignored and on exit are
-    //              garbage.
+    //   scratch    1-d, with at least scratch_nelts elements. Contents on entry are ignored
+    //              and on exit are garbage.
     //
     //   stream     CUDA stream.
     void launch(const ksgpu::Array<float> &intensity,

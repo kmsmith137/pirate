@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Spot test: badchannel_mask, pirate vs rf_pipelines.
 
-Compares pirate_frb.chimefrb.badchannel_keep() -- the conversion from MHz ranges to channels
-that GpuBadChannelMask.from_mask_ranges() uses -- against rf_pipelines::badchannel_mask, run
-through the real pipeline machinery.
+Compares pirate_frb.chimefrb.badchannel_keep() -- the python transcription of the conversion
+from MHz ranges to channels, which GpuBadChannelMask's constructor ports to C++ and the unit
+test holds the C++ to exactly -- against rf_pipelines::badchannel_mask, run through the real
+pipeline machinery.
 
 WHY THIS TEST MATTERS. The old code has no reference implementation of this arithmetic: its
 python transform in rf_pipelines/retirement_home follows different rules, and there is no C++

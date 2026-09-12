@@ -1,4 +1,5 @@
 #include "../../include/pirate/chimefrb/PolynomialDetrender.hpp"
+#include "../../include/pirate/chimefrb/launch_utils.hpp"
 
 #include <sstream>
 #include <iostream>
@@ -311,7 +312,35 @@ static long _checked_warps(long warps_per_block)
 }
 
 
-GpuPolynomialDetrender::GpuPolynomialDetrender(long polydeg_, double epsilon_, long nt_chunk_, long warps_per_block_) :
+static long _checked_positive(const char *what, long x)
+{
+    if (x < 1) {
+        stringstream ss;
+        ss << "GpuPolynomialDetrender: expected " << what << " >= 1, got " << x;
+        throw runtime_error(ss.str());
+    }
+    return x;
+}
+
+
+// Also checks nt_chunk, since 'ntime' is initialized before 'nt_chunk' is.
+static long _checked_ntime(long ntime, long nt_chunk)
+{
+    _checked_nt_chunk(nt_chunk);
+    if ((ntime <= 0) || (ntime % nt_chunk != 0)) {
+        stringstream ss;
+        ss << "GpuPolynomialDetrender: ntime=" << ntime << " must be a positive multiple of nt_chunk=" << nt_chunk;
+        throw runtime_error(ss.str());
+    }
+    return ntime;
+}
+
+
+GpuPolynomialDetrender::GpuPolynomialDetrender(long nbeams_, long nfreq_, long ntime_, long polydeg_,
+                                               double epsilon_, long nt_chunk_, long warps_per_block_) :
+    nbeams(_checked_positive("nbeams", nbeams_)),
+    nfreq(_checked_positive("nfreq", nfreq_)),
+    ntime(_checked_ntime(ntime_, nt_chunk_)),
     polydeg(_checked_polydeg(polydeg_)),
     epsilon(_checked_epsilon(epsilon_)),
     nt_chunk(_checked_nt_chunk(nt_chunk_)),
@@ -332,17 +361,10 @@ static void _launch(float *intensity, float *weights, long nrows, long n, double
 }
 
 
-void GpuPolynomialDetrender::launch(Array<float> &intensity, Array<float> &weights, cudaStream_t stream) const
+void GpuPolynomialDetrender::launch(Array<float> &intensity, Array<float> &weights,
+                                    Array<float> &scratch, cudaStream_t stream) const
 {
-    xassert_eq(intensity.ndim, 3);
-    xassert_eq(weights.ndim, 3);
-    for (int d = 0; d < 3; d++)
-        xassert_eq(intensity.shape[d], weights.shape[d]);
-    xassert(intensity.is_fully_contiguous());
-    xassert(weights.is_fully_contiguous());
-    xassert(intensity.on_gpu());
-    xassert(weights.on_gpu());
-    xassert(intensity.data != weights.data);
+    check_launch_args(intensity, weights, scratch, nbeams, nfreq, ntime, scratch_nelts);
 
     // The kernel loads and stores float2, so both base pointers must be 8-byte aligned. A
     // cudaMalloc'ed array always is; a contiguous view starting at an odd element offset
@@ -350,19 +372,7 @@ void GpuPolynomialDetrender::launch(Array<float> &intensity, Array<float> &weigh
     xassert((reinterpret_cast<uintptr_t>(intensity.data) & 7) == 0);
     xassert((reinterpret_cast<uintptr_t>(weights.data) & 7) == 0);
 
-    const long M = intensity.shape[0];
-    const long nfreq = intensity.shape[1];
-    const long T = intensity.shape[2];
-
-    if ((T <= 0) || (T % nt_chunk != 0)) {
-        stringstream ss;
-        ss << "GpuPolynomialDetrender::launch(): T=" << T << " must be a positive multiple of nt_chunk=" << nt_chunk;
-        throw runtime_error(ss.str());
-    }
-
-    const long nrows = M * nfreq * (T / nt_chunk);
-    if (nrows == 0)
-        return;
+    const long nrows = nbeams * nfreq * (ntime / nt_chunk);
     xassert_lt((nrows + warps_per_block - 1) / warps_per_block, (1L << 31));
 
     float *ip = intensity.data;
@@ -431,13 +441,15 @@ void GpuPolynomialDetrender::time_selected()
              << (c.nfreq * M * T * 4 * 2 < 96L*1024*1024 ? "  (fits in the L40S's 96 MB L2; the bandwidth below is optimistic)" : "")
              << endl;
 
+        Array<float> scratch({1}, af_gpu | af_zero);    // unused: scratch_nelts == 0
+
         for (long W: warp_counts) {
-            GpuPolynomialDetrender det(polydeg, epsilon, nt_chunk, W);
+            GpuPolynomialDetrender det(M, c.nfreq, T, polydeg, epsilon, nt_chunk, W);
 
             KernelTimer kt(niter, 1);
             double dt = 0.0;
             while (kt.next()) {
-                det.launch(intensity, weights, kt.stream);
+                det.launch(intensity, weights, scratch, kt.stream);
                 if (kt.warmed_up)
                     dt = kt.dt;
             }

@@ -1,6 +1,10 @@
 """Pieces of the old CHIME FRB search, ported to pirate: a reader for its msgpack data
-files, and GPU ports of the transforms in its production RFI chain, each with a numpy
-reference.
+files, GPU ports of the transforms in its production RFI chain (each with a numpy
+reference), and the two containers that chain them -- WiPipeline and RfiMaskPipeline --
+which read the old json configs and read/write a yaml format of their own.
+
+Every transform follows one interface, stated in ``transform_io.py``; ``CupyTransformBase``
+and the worked example ``ExampleCupyTransform`` are how to add a transform in cupy.
 
 See ``notes/chimefrb.md`` for the porting rules this subpackage follows.
 """
@@ -22,3 +26,12 @@ from .ReferenceStdDevClipper import (GpuStdDevClipper, ReferenceStdDevClipper, c
 from .ReferenceBadChannelMask import GpuBadChannelMask, ReferenceBadChannelMask, badchannel_keep
 from .ReferenceSplineDetrender import GpuSplineDetrender, ReferenceSplineDetrender
 from .ReferencePolynomialDetrender import GpuPolynomialDetrender, ReferencePolynomialDetrender
+
+# The transform interface (the "protocol"), and the two pipeline classes that run transforms.
+from .transform_io import (CHIME_FREQ_RANGE, IGNORED_JSON_CLASSES, LEGACY_JSON_CLASS_NAMES,
+                           axis_from_str, axis_to_str, check_yaml_keys, resolve_class,
+                           transform_from_json_dict, transform_from_yaml_dict)
+from .CupyTransformBase import CupyTransformBase
+from .ExampleCupyTransform import ExampleCupyTransform
+from .WiPipeline import WiPipeline
+from .RfiMaskPipeline import RfiMaskPipeline

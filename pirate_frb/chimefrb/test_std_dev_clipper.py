@@ -259,7 +259,7 @@ def _run_gpu(cp, sd, in_i, in_w):
 
     g_i = cp.asarray(in_i)
     g_w = cp.asarray(in_w)
-    sd.launch(g_i, g_w)
+    sd.launch(g_i, g_w, None)
     cp.cuda.get_current_stream().synchronize()
 
     assert np.array_equal(cp.asnumpy(g_i), in_i), 'GpuStdDevClipper modified the intensity'
@@ -275,15 +275,15 @@ def _run_statistic(cp, sd, in_i, in_w):
     g_w = cp.asarray(in_w)
 
     if (sd.Df, sd.Dt) != (1, 1):
-        ds_i = cp.empty((sd.B, sd.F_ds, sd.T_ds), dtype=cp.float32)
-        ds_w = cp.empty((sd.B, sd.F_ds, sd.T_ds), dtype=cp.float32)
+        ds_i = cp.empty((sd.nbeams, sd.F_ds, sd.T_ds), dtype=cp.float32)
+        ds_w = cp.empty((sd.nbeams, sd.F_ds, sd.T_ds), dtype=cp.float32)
         GpuWiDownsampler(sd.Df, sd.Dt, False).launch(ds_i, ds_w, g_i, g_w)
     else:
         (ds_i, ds_w) = (g_i, g_w)
 
     if sd.axis == ClipperAxis.FREQ:
-        t_i = cp.empty((sd.B, sd.T_ds, sd.F_ds), dtype=cp.float32)
-        t_w = cp.empty((sd.B, sd.T_ds, sd.F_ds), dtype=cp.float32)
+        t_i = cp.empty((sd.nbeams, sd.T_ds, sd.F_ds), dtype=cp.float32)
+        t_w = cp.empty((sd.nbeams, sd.T_ds, sd.F_ds), dtype=cp.float32)
         GpuWiDownsampler(1, 1, True).launch(t_i, t_w, ds_i, ds_w)
         (ds_i, ds_w) = (t_i, t_w)
 
@@ -293,7 +293,7 @@ def _run_statistic(cp, sd, in_i, in_w):
         mean, var, ds_i.reshape(sd.wrms_R, sd.wrms_L), ds_w.reshape(sd.wrms_R, sd.wrms_L))
 
     cp.cuda.get_current_stream().synchronize()
-    return cp.asnumpy(var).reshape(sd.B, -1)
+    return cp.asnumpy(var).reshape(sd.nbeams, -1)
 
 
 def _sandwich(label, got, lo, hi):
@@ -326,7 +326,7 @@ def test_std_dev_clipper(iteration=0, rng=None, verbose=False):
     (in_i, in_w) = random_arrays(rng, B, F, T, axis, Df, Dt)
     W64 = in_w.astype(np.float64)
 
-    sd = GpuStdDevClipper(B, F, T, axis, sigma, Df, Dt, two_pass, warps)
+    sd = GpuStdDevClipper(B, F, T, T, axis, sigma, Df, Dt, two_pass, warps)
     w_gpu = _run_gpu(cp, sd, in_i, in_w)
     v_gpu = _run_statistic(cp, sd, in_i, in_w)
 
@@ -368,7 +368,7 @@ def test_std_dev_clipper(iteration=0, rng=None, verbose=False):
     # through exactly; (w*i)/w would move the variances by roundoff, and a stage-2 decision
     # within roundoff of its threshold would then flip.
     if (Df, Dt) == (1, 1) and (axis == ClipperAxis.FREQ):
-        sd_t = GpuStdDevClipper(B, T, F, ClipperAxis.TIME, sigma, 1, 1, two_pass, warps)
+        sd_t = GpuStdDevClipper(B, T, F, F, ClipperAxis.TIME, sigma, 1, 1, two_pass, warps)
         w_t = _run_gpu(cp, sd_t, np.ascontiguousarray(np.swapaxes(in_i, 1, 2)),
                        np.ascontiguousarray(np.swapaxes(in_w, 1, 2)))
         assert np.array_equal(np.swapaxes(w_t, 1, 2), w_gpu), \
@@ -399,7 +399,7 @@ def test_std_dev_clipper(iteration=0, rng=None, verbose=False):
     # only sd_apply, which involves no statistic.
     for w2 in WARP_COUNTS:
         if w2 != warps:
-            sd2 = GpuStdDevClipper(B, F, T, axis, sigma, Df, Dt, two_pass, w2)
+            sd2 = GpuStdDevClipper(B, F, T, T, axis, sigma, Df, Dt, two_pass, w2)
             assert np.array_equal(_run_gpu(cp, sd2, in_i, in_w), w_gpu), \
                 f'warps_per_block {warps} vs {w2}: different result'
 
@@ -416,7 +416,7 @@ def test_std_dev_clipper(iteration=0, rng=None, verbose=False):
 
     # Structural check 8: B is a spectator.
     if B > 1:
-        sd1 = GpuStdDevClipper(1, F, T, axis, sigma, Df, Dt, two_pass, warps)
+        sd1 = GpuStdDevClipper(1, F, T, T, axis, sigma, Df, Dt, two_pass, warps)
         for b in range(B):
             assert np.array_equal(_run_gpu(cp, sd1, in_i[b:b+1], in_w[b:b+1])[0], w_gpu[b]), \
                 f'beam {b} depends on the other beams'

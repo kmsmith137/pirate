@@ -237,11 +237,11 @@ static long _checked_warps(long warps_per_block)
 
 // Step 2 is a single pass (niter = 1), so the base gets iter_sigma = 0, which GpuWrms
 // ignores at niter = 1.
-GpuStdDevClipper::GpuStdDevClipper(long B_, long F_, long nt_chunk_, ClipperAxis axis_,
-                                   double sigma_, long Df_, long Dt_, bool two_pass_,
-                                   long warps_per_block_) :
-    GpuClipperBase("GpuStdDevClipper", B_, F_, nt_chunk_, _checked_axis(axis_), Df_, Dt_,
-                   1, 0.0, two_pass_),
+GpuStdDevClipper::GpuStdDevClipper(long nbeams_, long nfreq_, long ntime_, long nt_chunk_,
+                                   ClipperAxis axis_, double sigma_, long Df_, long Dt_,
+                                   bool two_pass_, long warps_per_block_) :
+    GpuClipperBase("GpuStdDevClipper", nbeams_, nfreq_, ntime_, nt_chunk_, _checked_axis(axis_),
+                   Df_, Dt_, 1, 0.0, two_pass_),
     sigma(_checked_sigma(sigma_)),
     warps_per_block(_checked_warps(warps_per_block_))
 { }
@@ -255,13 +255,13 @@ void GpuStdDevClipper::launch(const Array<float> &intensity, Array<float> &weigh
     StatisticOutputs st = _launch_statistic(intensity, weights, scratch, stream);
 
     // Step 3, in place on st.var.
-    const long nrows = wrms_R / B;
-    sd_clip_1d_kernel <<< B, sd_clip_nthreads, 0, stream >>>
+    const long nrows = wrms_R / nbeams;
+    sd_clip_1d_kernel <<< nbeams, sd_clip_nthreads, 0, stream >>>
         (st.var.data, nrows, float(sigma));
     CUDA_PEEK("sd_clip_1d_kernel");
 
     // Step 4.
-    const long ntiles = B * (F_ds / 32) * (T_ds / 32);
+    const long ntiles = nbeams * (F_ds / 32) * (T_ds / 32);
     const long nblocks = (ntiles + warps_per_block - 1) / warps_per_block;
     const dim3 nthreads(32, warps_per_block);
 
@@ -315,7 +315,7 @@ void GpuStdDevClipper::time_selected()
 
     for (ClipperAxis axis: axes) {
         const bool freq = (axis == ClipperAxis::FREQ);
-        GpuStdDevClipper probe(B, F, T, axis, sigma, 1, 1, two_pass);
+        GpuStdDevClipper probe(B, F, T, T, axis, sigma, 1, 1, two_pass);
         Array<float> scratch({probe.scratch_nelts}, af_gpu | af_zero);
 
         // Predicted global memory traffic, following plans/chimefrb_std_dev_clipper.md
@@ -370,7 +370,7 @@ void GpuStdDevClipper::time_selected()
         }
 
         for (long W: warp_counts) {
-            GpuStdDevClipper sd(B, F, T, axis, sigma, 1, 1, two_pass, W);
+            GpuStdDevClipper sd(B, F, T, T, axis, sigma, 1, 1, two_pass, W);
             for (Array<float> &wc: wcopies)
                 wc.fill(weights);
 

@@ -206,7 +206,7 @@ def _run_gpu(cp, det, intensity, weights):
     """Run one GpuSplineDetrender on numpy inputs; returns the detrended intensity (numpy)."""
     gi = cp.asarray(intensity)          # a copy: the kernel works in place
     gw = cp.asarray(weights)
-    det.launch(gi, gw)
+    det.launch(gi, gw, None)
     cp.cuda.get_current_stream().synchronize()
     return cp.asnumpy(gi)
 
@@ -229,7 +229,7 @@ def test_spline_detrender(iteration=0, rng=None, verbose=False):
     intensity = random_intensity(rng, M, nfreq, nbins, T)
     tag = f'(nfreq={nfreq}, nbins={nbins}, epsilon={epsilon:.3g}, kind={kind}, M={M}, T={T})'
 
-    det = GpuSplineDetrender(nfreq, nbins, epsilon, M, T)
+    det = GpuSplineDetrender(M, nfreq, T, nbins, epsilon)
     ref = ReferenceSplineDetrender(nfreq, nbins, epsilon)
     assert list(det.bin_edges()) == list(ref.edges), f'bin edges differ {tag}'
 
@@ -261,7 +261,7 @@ def test_spline_detrender(iteration=0, rng=None, verbose=False):
     # ---- The beam axis is a spectator (the old code ran one beam per pipeline, so this
     # axis is ours and nothing else checks it).
     if M > 1:
-        det1 = GpuSplineDetrender(nfreq, nbins, epsilon, 1, T)
+        det1 = GpuSplineDetrender(1, nfreq, T, nbins, epsilon)
         for m in range(M):
             one = _run_gpu(cp, det1, intensity[m:m+1], weights[m:m+1])
             assert np.array_equal(one[0], gpu[m]), f'beam {m} is not a spectator {tag}'

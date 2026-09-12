@@ -37,6 +37,7 @@ from .chimefrb import test_badchannel_mask as chimefrb_bcm_tests
 from .chimefrb import test_spline_detrender as chimefrb_spd_tests
 from .chimefrb import test_polynomial_detrender as chimefrb_pd_tests
 from .chimefrb import test_weight_upsampler as chimefrb_wu_tests
+from .chimefrb import test_wi_pipeline as chimefrb_wp_tests
 from . import kernels
 from . import loose_ends
 from . import core
@@ -158,7 +159,7 @@ def parse_test(subparsers):
     parser.add_argument('--varmap', action='store_true', help="pirate_frb.varmap. Two halves, both run by this flag: everything checkable WITHOUT a dedisperser (the VarianceMap class, the covering-LP and basis machinery, and the analytic map of detrender_free.py against a hand-written oracle), and the brute-force sweep, which pushes a one-hot through the REAL dedisperser once per input channel and checks the analytic map against what comes out. Needs a DedispersionPlan and a GPU for the second half.")
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_{beamform,upchan}()')
     parser.add_argument('--cfrb', action='store_true',
-                        help='Runs the chimefrb port tests (reading old CHIME FRB msgpack files, and the GPU ports of its RFI transforms against their numpy references)')
+                        help='Runs the chimefrb port tests (reading old CHIME FRB msgpack files, the GPU ports of its RFI transforms against their numpy references, and the WiPipeline/RfiMaskPipeline containers)')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection and pulse-invariants tests')
@@ -331,6 +332,7 @@ def test(args):
             chimefrb_spd_tests.test_spline_detrender(i)
             chimefrb_pd_tests.test_polynomial_detrender(i)
             chimefrb_wu_tests.test_weight_upsampler(i)
+            chimefrb_wp_tests.test_wi_pipeline(i)
 
         if run_all_tests or args.zomb:
             loose_ends.test_avx2_m64_outbuf()

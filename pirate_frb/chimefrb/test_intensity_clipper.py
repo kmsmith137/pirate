@@ -179,7 +179,7 @@ def _run_gpu(cp, ic, in_i, in_w):
     g_i = cp.asarray(in_i)
     g_w = cp.asarray(in_w)
 
-    ic.launch(g_i, g_w)
+    ic.launch(g_i, g_w, None)
     cp.cuda.get_current_stream().synchronize()
 
     out = cp.asnumpy(g_w)
@@ -201,15 +201,15 @@ def _run_pipeline(cp, ic, in_i, in_w):
     g_w = cp.asarray(in_w)
 
     if (ic.Df, ic.Dt) != (1, 1):
-        ds_i = cp.empty((ic.B, ic.F_ds, ic.T_ds), dtype=cp.float32)
-        ds_w = cp.empty((ic.B, ic.F_ds, ic.T_ds), dtype=cp.float32)
+        ds_i = cp.empty((ic.nbeams, ic.F_ds, ic.T_ds), dtype=cp.float32)
+        ds_w = cp.empty((ic.nbeams, ic.F_ds, ic.T_ds), dtype=cp.float32)
         GpuWiDownsampler(ic.Df, ic.Dt, False).launch(ds_i, ds_w, g_i, g_w)
     else:
         (ds_i, ds_w) = (g_i, g_w)
 
     if ic.axis == ClipperAxis.FREQ:
-        t_i = cp.empty((ic.B, ic.T_ds, ic.F_ds), dtype=cp.float32)
-        t_w = cp.empty((ic.B, ic.T_ds, ic.F_ds), dtype=cp.float32)
+        t_i = cp.empty((ic.nbeams, ic.T_ds, ic.F_ds), dtype=cp.float32)
+        t_w = cp.empty((ic.nbeams, ic.T_ds, ic.F_ds), dtype=cp.float32)
         GpuWiDownsampler(1, 1, True).launch(t_i, t_w, ds_i, ds_w)
         (st_i, st_w) = (t_i, t_w)
     else:
@@ -310,7 +310,7 @@ def test_intensity_clipper(iteration=0, rng=None, verbose=False):
     I64 = in_i.astype(np.float64)
     W64 = in_w.astype(np.float64)
 
-    ic = GpuIntensityClipper(B, F, T, axis, sigma, Df, Dt, niter, iter_sigma, two_pass, warps)
+    ic = GpuIntensityClipper(B, F, T, T, axis, sigma, Df, Dt, niter, iter_sigma, two_pass, warps)
     w_gpu = _run_gpu(cp, ic, in_i, in_w)
 
     # Check 1 (the main one): the statistic comes from the GPU, the clip from numpy.
@@ -328,7 +328,7 @@ def test_intensity_clipper(iteration=0, rng=None, verbose=False):
     if niter == 1:
         (ic1, w1, m1, v1) = (ic, w_gpu, mean, var)
     else:
-        ic1 = GpuIntensityClipper(B, F, T, axis, sigma, Df, Dt, 1, iter_sigma, two_pass, warps)
+        ic1 = GpuIntensityClipper(B, F, T, T, axis, sigma, Df, Dt, 1, iter_sigma, two_pass, warps)
         w1 = _run_gpu(cp, ic1, in_i, in_w)
         (_, m1, v1) = _run_pipeline(cp, ic1, in_i, in_w)
 
@@ -344,7 +344,7 @@ def test_intensity_clipper(iteration=0, rng=None, verbose=False):
     # intensity through exactly, which it does. This is the cheapest strong check on the
     # transpose plumbing, and it needs no reference at all.
     if (Df == 1) and (Dt == 1) and (axis == ClipperAxis.FREQ):
-        ic_t = GpuIntensityClipper(B, T, F, ClipperAxis.TIME, sigma, 1, 1, niter,
+        ic_t = GpuIntensityClipper(B, T, F, F, ClipperAxis.TIME, sigma, 1, 1, niter,
                                    iter_sigma, two_pass, warps)
         w_t = _run_gpu(cp, ic_t, np.ascontiguousarray(np.swapaxes(in_i, 1, 2)),
                        np.ascontiguousarray(np.swapaxes(in_w, 1, 2)))
@@ -367,7 +367,7 @@ def test_intensity_clipper(iteration=0, rng=None, verbose=False):
     for w2 in WARP_COUNTS:
         if w2 == warps:
             continue
-        ic2 = GpuIntensityClipper(B, F, T, axis, sigma, Df, Dt, niter, iter_sigma, two_pass, w2)
+        ic2 = GpuIntensityClipper(B, F, T, T, axis, sigma, Df, Dt, niter, iter_sigma, two_pass, w2)
         assert np.array_equal(_run_gpu(cp, ic2, in_i, in_w), w_gpu), \
             f'warps_per_block {warps} vs {w2}: different result'
 
@@ -389,7 +389,7 @@ def test_intensity_clipper(iteration=0, rng=None, verbose=False):
     # Structural check 7: B is a spectator. The only axis we added ourselves, and the
     # check is nearly free.
     if B > 1:
-        ic1b = GpuIntensityClipper(1, F, T, axis, sigma, Df, Dt, niter, iter_sigma,
+        ic1b = GpuIntensityClipper(1, F, T, T, axis, sigma, Df, Dt, niter, iter_sigma,
                                    two_pass, warps)
         for b in range(B):
             w_b = _run_gpu(cp, ic1b, in_i[b:b+1], in_w[b:b+1])
