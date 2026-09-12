@@ -6,7 +6,7 @@ and the simd_trimatrix::cholesky_in_place_checked() they call -- NOT from the ol
 transform in rf_pipelines/retirement_home/polynomial_detrender.py, which samples a
 different grid, has no conditioning gate and ignores epsilon. The gate has no reference
 implementation anywhere in the old code; this is its first transcription, and the spot
-check misc/chimefrb/polynomial_detrender/ is what pins it to the old binary.
+check misc/chimefrb/rfi_polynomial_detrender/ is what pins it to the old binary.
 """
 
 import numpy as np

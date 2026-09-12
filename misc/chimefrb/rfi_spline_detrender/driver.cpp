@@ -1,4 +1,4 @@
-// Old-side driver for the 'spline_detrender' spot test.
+// Old-side driver for the 'rfi_spline_detrender' spot test.
 //
 //    driver <input.npy> <output.npy> nbins=<int> epsilon=<float>
 //

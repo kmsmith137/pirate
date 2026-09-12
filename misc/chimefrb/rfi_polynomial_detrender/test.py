@@ -157,7 +157,7 @@ def compare(t, label, x, out_i, out_w, ref, model):
 
 
 def main():
-    t = harness.Test("polynomial_detrender")
+    t = harness.Test("rfi_polynomial_detrender")
 
     manifest = harness.build_manifest()
     if manifest:

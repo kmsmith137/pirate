@@ -89,7 +89,7 @@ def make_input(rng, nfreq, nbins, kind):
 
 
 def main():
-    t = harness.Test("spline_detrender")
+    t = harness.Test("rfi_spline_detrender")
 
     manifest = harness.build_manifest()
     if manifest:

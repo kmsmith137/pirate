@@ -74,6 +74,10 @@ class ReferenceWeightUpsampler:
         (B, F_lo, T_lo) = w_lores.shape
         assert np.shape(w_hires) == (B, F_lo * self.Df, T_lo * self.Dt)
 
+        # The cast is what makes this a float32 comparison, as the old code's is. Do not
+        # drop it: on numpy >= 2 a bare python float happens to give the same answer (NEP
+        # 50 makes it a weak type, so the array is not upcast) and no test would catch the
+        # removal, but against a float64 cutoff it changes which cells are masked.
         keep = w_lores > np.float32(self.w_cutoff)
         keep = np.repeat(np.repeat(keep, self.Df, axis=1), self.Dt, axis=2)
 

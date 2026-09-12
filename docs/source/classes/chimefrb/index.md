@@ -26,10 +26,13 @@ as `classes=[MyTransform]`.
 | [`AssembledChunk`](AssembledChunk.md) | One "assembled_chunk in msgpack format" data file, and its decode methods |
 | [`GpuBadChannelMask`](GpuBadChannelMask.md) | Zeroes the weights of whole frequency channels (a port of `rf_pipelines::badchannel_mask`) |
 | [`GpuClipperBase`](GpuClipperBase.md) | What the chimefrb RFI clippers share: geometry, the per-row statistic, argument checking |
+| [`GpuIntensityClipper`](GpuIntensityClipper.md) | Zeroes the weights of samples more than `sigma` standard deviations from a weighted mean; the chain's principal flagger (a port of `rf_kernels::intensity_clipper`) |
 | [`GpuPolynomialDetrender`](GpuPolynomialDetrender.md) | Fits and subtracts a polynomial in time per channel and chunk, zeroing the weights of poorly conditioned rows (a port of `rf_pipelines::polynomial_detrender`) |
 | [`GpuStdDevClipper`](GpuStdDevClipper.md) | Zeroes channels or time samples whose variance is an outlier (a port of `rf_kernels::std_dev_clipper`) |
 | [`GpuSplineDetrender`](GpuSplineDetrender.md) | Fits and subtracts a regularized cubic spline in frequency, per time sample (a port of `rf_kernels::spline_detrender`) |
 | [`GpuWeightUpsampler`](GpuWeightUpsampler.md) | Zeroes the full-resolution weights under masked low-resolution cells (a port of `rf_kernels::weight_upsampler`) |
+| [`GpuWiDownsampler`](GpuWiDownsampler.md) | Reduces an (intensity, weights) pair by `(Df, Dt)`, summing the weights rather than averaging them (a port of `rf_kernels::wi_downsampler`) |
+| [`GpuWrms`](GpuWrms.md) | The weighted mean and variance of each row, refined by iterated sigma clipping; the statistic both clippers are built on (a port of `rf_kernels::weighted_mean_rms`) |
 | [`WiPipeline`](WiPipeline.md) | Runs a list of transforms in order on one block (a port of `rf_pipelines::pipeline`) |
 | [`RfiMaskPipeline`](RfiMaskPipeline.md) | Runs a list of transforms on a downsampled copy and feeds the mask back (a port of `rf_pipelines::wi_sub_pipeline`) |
 | [`CupyTransformBase`](CupyTransformBase.md) | Base class for a transform written in cupy |
@@ -42,10 +45,13 @@ as `classes=[MyTransform]`.
 AssembledChunk
 GpuBadChannelMask
 GpuClipperBase
+GpuIntensityClipper
 GpuPolynomialDetrender
 GpuSplineDetrender
 GpuStdDevClipper
 GpuWeightUpsampler
+GpuWiDownsampler
+GpuWrms
 WiPipeline
 RfiMaskPipeline
 CupyTransformBase

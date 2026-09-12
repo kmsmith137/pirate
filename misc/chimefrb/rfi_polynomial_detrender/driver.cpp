@@ -1,4 +1,4 @@
-// Old-side driver for the 'polynomial_detrender' spot test.
+// Old-side driver for the 'rfi_polynomial_detrender' spot test.
 //
 //    driver <input.npy> <output.npy> polydeg=<int> epsilon=<float> axis=<0|1> nt_chunk=<int>
 //
