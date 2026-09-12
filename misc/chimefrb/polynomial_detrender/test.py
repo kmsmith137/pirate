@@ -80,9 +80,9 @@ AXIS_NAMES = {AXIS_FREQ: "FREQ", AXIS_TIME: "TIME"}
 def make_input(rng, ref, F, T, kind):
     """A (2, F, T) float32 array: arr[0] = intensity, arr[1] = weights.
 
-    The production kinds ('counts', 'binary') get a dead run on two rows in three, so
-    that the gate is exercised on the weights the chain really produces; the mixed
-    kind already includes dead runs.
+    The production kinds ('counts', 'binary') are reduced to a live run on two rows in
+    three, so that the gate is exercised on the weights the chain really produces; the
+    mixed kind already includes live runs.
     """
     shape = (1, F, T)
     intensity = random_intensity(rng, ref, shape)[0]
@@ -90,7 +90,7 @@ def make_input(rng, ref, F, T, kind):
         weights = random_weights(rng, ref, shape)[0]
     else:
         weights = random_weights(rng, ref, shape, kind)[0]
-        runs = random_weights(rng, ref, shape, 'dead_run')[0]
+        runs = random_weights(rng, ref, shape, 'live_run')[0]
         pick = (rng.uniform(size=ref._row_shape(shape)) < 2.0 / 3.0)
         pick = np.broadcast_to(ref._row_mask_expand(pick, shape), shape)[0]
         weights = np.where(pick, np.where(runs != 0, weights, 0.0), weights).astype(np.float32)

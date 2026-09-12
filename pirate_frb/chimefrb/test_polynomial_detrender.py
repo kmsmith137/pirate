@@ -8,7 +8,7 @@ the old kernel, on the weight patterns the real pipeline produces. The transform
 behaviour is its conditioning GATE (see the reference's class docstring): at the
 production setting it zeroes the weights of any channel whose weighted samples form a
 contiguous run shorter than about half the chunk, and leaves that channel's intensity
-alone. So the weights drawn here are dominated by contiguous dead runs of 30-90% of the
+alone. So the weights drawn here are dominated by contiguous live runs of 30-90% of the
 chunk, which straddle the gate for every degree, and the gate decision is checked
 first, as a sandwich: a row the float64 reference puts clearly on one side must land
 there on the GPU, and only rows within a roundoff band of the threshold may go either
@@ -33,7 +33,7 @@ from . import GpuPolynomialDetrender
 from .ReferencePolynomialDetrender import (ReferencePolynomialDetrender, AXIS_TIME,
                                            legendre, z_grid)
 from ..utils import atomic_print
-from .testutils import default_rng as _default_rng
+from .testutils import BASE_KINDS, default_rng as _default_rng, random_weight_base
 
 
 # The production chain's three instances are one configuration, (polydeg, epsilon,
@@ -43,7 +43,7 @@ from .testutils import default_rng as _default_rng
 PRODUCTION_CONFIGS = [(4, 0.01, 1024, 'counts'), (4, 0.01, 1024, 'binary')]
 
 # Per-row weight patterns; see weight_row().
-WEIGHT_KINDS = ['ones', 'binary', 'counts', 'continuous', 'dead_run', 'gap', 'sparse', 'zero']
+WEIGHT_KINDS = ['ones', 'binary', 'counts', 'continuous', 'live_run', 'gap', 'sparse', 'zero']
 
 WARP_COUNTS = [4, 8, 16]
 
@@ -73,7 +73,7 @@ WARP_COUNTS = [4, 8, 16]
 # kernel's fused multiply-adds. GATE_BAND_MACH = 16 is 5x above the emulation's maximum,
 # which is the margin the old code, float32 and unequilibrated, gets in the spot check. At
 # the production configuration the second term is ~1e-5
-# against a first term of 2e-4, so a row lands in the band only when a dead run's length is
+# against a first term of 2e-4, so a row lands in the band only when a live run's length is
 # within a couple of samples of the crossing; at small epsilon and high degree, where
 # float32 cannot decide, a third of a draw's rows can. The coverage report tracks the band
 # fraction. Same construction as stage2_bracket() in test_std_dev_clipper.py: a bracket,
@@ -107,7 +107,7 @@ def gate_bracket(ref, weights):
 # error is the accumulation plus an equilibrated solve whose error is of order
 # eps_mach / rmin -- and here the gate GUARANTEES rmin > epsilon on every row compared, so
 # the first bound is at worst eps_mach * scale / epsilon. At a sample without weight the
-# polynomial is extrapolated across a gap or beyond a dead run, in the directions the
+# polynomial is extrapolated across a gap or beyond a live run, in the directions the
 # pivots see least, where the coefficient error is of order eps_mach / lmin.
 #
 # MEASURED over 400 random draws, production configuration included, in these units:
@@ -162,19 +162,18 @@ def weight_row(rng, n, N, kind, base=None):
       counts       integers 0..16, Binomial(16, p) (16x-downsampled clipper output)
       continuous   uniform in [0, 2] (nothing in the pipeline makes these; they pin the
                    weighted fit)
-      dead_run     one of the above with all weight OUTSIDE a contiguous run of length
-                   0.3-0.9 n set to zero: the production mask geometry, and the pattern
-                   that straddles the gate (a run of about half the chunk at degree 4)
+      live_run     one of the above with all weight OUTSIDE a contiguous run of length
+                   0.3-0.9 n set to zero, so the weighted samples ARE that run: the
+                   production mask geometry, and the pattern that straddles the gate (a
+                   run of about half the chunk at degree 4)
       gap          ones or binary with an interior zero gap of 0.3-0.8 n and data on both
                    sides: usually passes the gate, and makes the fit extrapolate
       sparse       k isolated weighted samples, k in 1..N+3: exactly singular for k <= N-1
       zero         no weight: pivot 0 fails, the row is left untouched
 
-    'base' names the pattern under a dead run or gap ('ones', 'binary', 'counts' or
+    'base' names the pattern under a live run or gap ('ones', 'binary', 'counts' or
     'continuous'); by default one is drawn at random.
     """
-    if kind == 'ones':
-        return np.ones(n)
     if kind == 'zero':
         return np.zeros(n)
     if kind == 'sparse':
@@ -183,26 +182,17 @@ def weight_row(rng, n, N, kind, base=None):
         c[rng.choice(n, k, replace=False)] = rng.uniform(0.5, 16.0, size=k)
         return c
 
-    p = rng.uniform(0.3, 1.0)
-    if kind in ('binary', 'counts', 'continuous'):
+    if kind in ('ones', 'binary', 'counts', 'continuous'):
         base = kind
     elif base is None:
         base = ['ones', 'binary', 'counts', 'continuous'][int(rng.integers(4))]
-    if base == 'ones':
-        c = np.ones(n)
-    elif base == 'binary':
-        c = (rng.uniform(size=n) < p).astype(np.float64)
-    elif base == 'counts':
-        c = rng.binomial(16, p, size=n).astype(np.float64)
-    else:
-        c = rng.uniform(0.0, 2.0, size=n)
+    c = random_weight_base(rng, n, base)
 
-    if kind == 'dead_run':
+    if kind == 'live_run':
         L = max(1, int(round(rng.uniform(0.3, 0.9) * n)))
         lo = int(rng.integers(0, n - L + 1))
-        keep = np.zeros(n, dtype=bool)
-        keep[lo:lo+L] = True
-        c[~keep] = 0.0
+        c[:lo] = 0.0
+        c[lo+L:] = 0.0
     elif kind == 'gap':
         g = int(round(rng.uniform(0.3, 0.8) * n))
         g = int(np.clip(g, 1, max(1, n - 2)))
@@ -215,12 +205,12 @@ def random_weights(rng, ref, shape, kind=None):
     """(M, F, T) float32 weights, one pattern per row of the reference's axis.
 
     kind=None mixes the families with the probabilities below. A fixed kind (the
-    production draws) uses that family, with a dead run cut into one row in three: the
+    production draws) uses that family, with one row in three reduced to a live run: the
     chain's clippers flag in runs, and without them the production configuration would
     never reach the gate (a Bernoulli or Binomial mask alone does not trip it).
     """
     probs = {'ones': 0.10, 'binary': 0.15, 'counts': 0.15, 'continuous': 0.10,
-             'dead_run': 0.25, 'gap': 0.10, 'sparse': 0.10, 'zero': 0.05}
+             'live_run': 0.25, 'gap': 0.10, 'sparse': 0.10, 'zero': 0.05}
     kinds = list(probs.keys())
     pk = np.array(list(probs.values()))
 
@@ -231,7 +221,10 @@ def random_weights(rng, ref, shape, kind=None):
         if kind is None:
             w[k] = weight_row(rng, n, ref.N, kinds[rng.choice(len(kinds), p=pk)])
         elif rng.uniform() < 1.0 / 3.0:
-            w[k] = weight_row(rng, n, ref.N, 'dead_run', base=kind)
+            # 'kind' can serve as the base under the run only if it names a family; when a
+            # caller asks for a structural kind outright, let weight_row() draw the base.
+            w[k] = weight_row(rng, n, ref.N, 'live_run',
+                              base=(kind if (kind in BASE_KINDS) else None))
         else:
             w[k] = weight_row(rng, n, ref.N, kind)
     return ref._unrows(w, shape).astype(np.float32)

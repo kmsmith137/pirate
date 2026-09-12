@@ -36,7 +36,7 @@ from . import (AXIS_FREQ, AXIS_TIME, AXIS_NONE, ClipperAxis, GpuIntensityClipper
                GpuWiDownsampler, GpuWrms, ReferenceIntensityClipper, intensity_clip)
 from .test_wrms import EPS32, MARGIN
 from ..utils import atomic_print
-from .testutils import default_rng as _default_rng
+from .testutils import default_rng as _default_rng, plant_degenerate_rows, random_wi_pair
 
 
 WARP_COUNTS = [4, 8, 16, 32]
@@ -125,27 +125,22 @@ def random_arrays(rng, B, F, T):
 
     Designed around the code paths rather than around realism:
 
-      - a large per-beam offset, because the eps_2*mean variance cutoff is inert when the
-        mean is near zero, and because it is what makes the single-pass variance cancel;
+      - a large per-beam offset and a Bernoulli weight mask, from
+        testutils.random_wi_pair(), which says why the offset matters here;
       - whole bad channels and whole bad time samples, which are the two RFI shapes
         AXIS_TIME and AXIS_FREQ respectively exist to catch, plus isolated spikes for
         AXIS_NONE. Without them a 2-6 sigma clip on clean Gaussian data masks nothing and
         the whole test is a comparison of two untouched weight arrays;
       - a few percent of channels fully masked, constant, or near-constant at a large
-        mean, which are the three ways to land on a variance-validity cutoff (and a
-        rejected variance zeroes an entire row).
+        mean, which are the three ways to land on a variance-validity cutoff
+        (testutils.plant_degenerate_rows()).
 
     Deliberately NOT included: samples placed AT a threshold. Sampling the ambiguous
     region on purpose would make the brackets straddle at a controlled rate rather than a
     negligible one, which is worse, not better.
     """
 
-    offset = rng.uniform(-1.0e3, 1.0e3)
-    scale = rng.uniform(0.5, 20.0)
-    intensity = rng.normal(offset, scale, size=(B, F, T))
-
-    p = np.clip(rng.uniform(-0.1, 1.1), 0.0, 1.0)
-    weights = (rng.uniform(size=(B, F, T)) < p) * rng.uniform(0.5, 1.5, size=(B, F, T))
+    x = random_wi_pair(rng, (B, F, T))
 
     for b in range(B):
         # The bad rows are kept to about 1.5% and the spikes are made much larger than
@@ -155,22 +150,16 @@ def random_arrays(rng, B, F, T):
         # A = 20 that factor is 3.5 -- enough that a 20-sigma sample is no longer an
         # outlier by the plane's own standard, and the clip fires on nothing.
         for f in rng.choice(F, size=max(1, F // 64), replace=False):
-            intensity[b, f, :] = offset + 20.0 * scale
+            x.intensity[b, f, :] = x.offset + 20.0 * x.scale
         for t in rng.choice(T, size=max(1, T // 64), replace=False):
-            intensity[b, :, t] = offset + 20.0 * scale
+            x.intensity[b, :, t] = x.offset + 20.0 * x.scale
         for _ in range(max(1, (F*T) // 500)):
-            intensity[b, rng.integers(F), rng.integers(T)] = \
-                offset + 40.0 * scale * rng.choice([-1.0, 1.0])
+            x.intensity[b, rng.integers(F), rng.integers(T)] = \
+                x.offset + 40.0 * x.scale * rng.choice([-1.0, 1.0])
 
-        # Degenerate channels, a few percent each.
-        for f in np.flatnonzero(rng.uniform(size=F) < 0.05):
-            intensity[b, f, :] = offset                     # variance exactly zero
-        for f in np.flatnonzero(rng.uniform(size=F) < 0.05):
-            weights[b, f, :] = 0.0                          # no weight at all
-        for f in np.flatnonzero(rng.uniform(size=F) < 0.05):
-            intensity[b, f, :] = offset * (1.0 + 1.0e-6 * rng.normal(size=T))  # on the cutoff
+        plant_degenerate_rows(rng, x, F, lambda f: (b, f, slice(None)))
 
-    return (intensity.astype(np.float32), weights.astype(np.float32))
+    return (x.intensity.astype(np.float32), x.weights.astype(np.float32))
 
 
 def _run_gpu(cp, ic, in_i, in_w):

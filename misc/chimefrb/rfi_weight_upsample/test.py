@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harness
 
 from pirate_frb.chimefrb import ReferenceWeightUpsampler
+from pirate_frb.chimefrb.test_weight_upsampler import random_hires, random_lores
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -55,41 +56,21 @@ DT_CHOICES = [1, 2, 4, 8, 16]
 NDRAW = 30
 
 
-def make_lores(rng, nfreq_lo, nt_lo, Df, Dt, w_cutoff):
-    """Low-resolution weights: counts, with the corner cases of the docstring planted in."""
+def make_pair(rng, nfreq_lo, nt_lo, Df, Dt, w_cutoff):
+    """The (full-resolution, low-resolution) weight pair for one comparison.
 
-    ncell = Df * Dt
-    w = rng.integers(0, ncell + 1, size=(nfreq_lo, nt_lo)).astype(np.float32)
+    Both halves come from the unit test's own generators
+    (pirate_frb/chimefrb/test_weight_upsampler.py), so the two tests plant one set of
+    corner cases rather than two that can drift apart: a low-resolution weight exactly at
+    the cutoff, one ulp either side of it, NaN, inf, negative and negative zero; and
+    non-finite values and -0.0 scattered through the full-resolution array, every one of
+    which must come back with its exact bits wherever its cell is kept.
 
-    # A few percent of cells of each awkward kind. The ulp-adjacent pair is only drawn for a
-    # positive cutoff: one ulp below zero is denormal, which no draw may contain.
-    kinds = [np.float32(w_cutoff), np.float32(-0.0), np.float32(-1.5), np.float32(np.nan),
-             np.float32(np.inf)]
-    if w_cutoff > 0:
-        c = np.float32(w_cutoff)
-        kinds += [np.nextafter(c, np.float32(0)), np.nextafter(c, np.float32(np.inf))]
-
-    flat = w.reshape(-1)
-    for x in kinds:
-        n = max(1, flat.size // 50)
-        flat[rng.choice(flat.size, size=n, replace=False)] = x
-
-    return w
-
-
-def make_hires(rng, nfreq_hi, nt_hi):
-    """Full-resolution weights: {0,1}-like counts, with non-finite values and -0.0 planted in
-    kept and masked cells alike -- a kept weight must come back with its exact bits."""
-
-    w = rng.uniform(0.5, 1.5, size=(nfreq_hi, nt_hi)).astype(np.float32)
-    w *= (rng.uniform(size=(nfreq_hi, nt_hi)) < 0.8)
-
-    flat = w.reshape(-1)
-    for x in (np.float32(np.nan), np.float32(np.inf), np.float32(-np.inf), np.float32(-0.0)):
-        n = max(1, flat.size // 100)
-        flat[rng.choice(flat.size, size=n, replace=False)] = x
-
-    return w
+    Those generators take a leading beam axis, and this test compares one beam.
+    """
+    (lo, _kinds) = random_lores(rng, 1, nfreq_lo, nt_lo, Df, Dt, w_cutoff)
+    hi = random_hires(rng, 1, nfreq_lo*Df, nt_lo*Dt)
+    return (hi[0], lo[0])
 
 
 def bits(a):
@@ -141,8 +122,7 @@ def main():
 
     # The production configuration, on a few channels' worth of the real shape.
     (Df, Dt, w_cutoff) = PRODUCTION
-    lo = make_lores(rng, 64, 64, Df, Dt, w_cutoff)
-    hi = make_hires(rng, 64*Df, 64*Dt)
+    (hi, lo) = make_pair(rng, 64, 64, Df, Dt, w_cutoff)
     check(t, "production (16,1) cutoff 0", cp, hi, lo, Df, Dt, w_cutoff)
 
     # Random draws over what the old kernel accepts.
@@ -157,8 +137,7 @@ def main():
         nt_lo = 8 * int(rng.integers(1, 9))          # the old kernel needs nt_lo % 8 == 0
         w_cutoff = float(rng.choice([0.0, 0.0, 0.1, float(rng.uniform(0.5, 3.0))]))
 
-        lo = make_lores(rng, nfreq_lo, nt_lo, Df, Dt, w_cutoff)
-        hi = make_hires(rng, nfreq_lo*Df, nt_lo*Dt)
+        (hi, lo) = make_pair(rng, nfreq_lo, nt_lo, Df, Dt, w_cutoff)
         check(t, "Df=%d Dt=%d cutoff=%g" % (Df, Dt, w_cutoff), cp, hi, lo, Df, Dt, w_cutoff)
 
     return t.done()

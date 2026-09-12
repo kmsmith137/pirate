@@ -27,8 +27,9 @@ import numpy as np
 
 from . import GpuSplineDetrender, ReferenceSplineDetrender
 from .ReferenceSplineDetrender import bin_edges, hermite_basis
-from ..utils import atomic_print
-from .testutils import default_rng as _default_rng, draw_within_budget
+from ..utils import atomic_print, random_nfreq
+from .testutils import (default_rng as _default_rng, draw_within_budget,
+                       random_weight_base)
 
 
 # The two shapes the old search's production RFI chain runs the detrender at, as
@@ -82,7 +83,7 @@ def random_config(rng):
         return PRODUCTION_CONFIGS[rng.integers(len(PRODUCTION_CONFIGS))]
 
     nbins = int(rng.integers(1, 9))
-    nfreq = int(np.exp(rng.uniform(np.log(max(nbins, 8)), np.log(16384))))
+    nfreq = random_nfreq(rng, 16384, lo=max(nbins, 8))
     epsilon = float(10.0 ** rng.uniform(-6.0, -2.0))
     return (nfreq, nbins, epsilon, None)
 
@@ -114,8 +115,6 @@ def random_geometry(rng, nfreq):
 
 def _weight_column(rng, nfreq, nbins, edges, kind):
     """One (nfreq,) float64 weight column of the given kind."""
-    if kind == 'ones':
-        return np.ones(nfreq)
     if kind == 'zero':
         return np.zeros(nfreq)
     if kind == 'single':
@@ -123,15 +122,8 @@ def _weight_column(rng, nfreq, nbins, edges, kind):
         c[rng.integers(nfreq)] = rng.uniform(0.5, 16.0)
         return c
 
-    p = rng.uniform(0.3, 1.0)
-    if kind == 'binary':
-        c = (rng.uniform(size=nfreq) < p).astype(np.float64)
-    elif kind == 'counts':
-        c = rng.binomial(16, p, size=nfreq).astype(np.float64)
-    elif kind == 'continuous':
-        c = rng.uniform(0.0, 2.0, size=nfreq)
-    else:
-        c = np.ones(nfreq)                                    # dead_run
+    # 'dead_run' is a run cut into otherwise unit weights; the rest name their own family.
+    c = random_weight_base(rng, nfreq, 'ones' if (kind == 'dead_run') else kind)
 
     # A contiguous dead run -- what a bad-channel mask looks like -- always for
     # 'dead_run', half the time for the clipper-like kinds. Half of the runs are aligned

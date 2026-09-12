@@ -143,7 +143,7 @@ from .ReferenceStdDevClipper import clip_1d as _clip_1d, std_dev_apply
 from . import (ClipperAxis, GpuStdDevClipper, GpuWiDownsampler, GpuWrms,
                ReferenceStdDevClipper)
 from ..utils import atomic_print
-from .testutils import default_rng as _default_rng
+from .testutils import default_rng as _default_rng, plant_degenerate_rows, random_wi_pair
 
 
 WARP_COUNTS = [4, 8, 16, 32]
@@ -203,55 +203,48 @@ def random_arrays(rng, B, F, T, axis, Df, Dt):
       - the injected RFI is rows with the wrong NOISE LEVEL (noise scaled by 3-10), since a
         bright but steady row barely moves a variance. Kept to a few percent of rows: they
         inflate the very spread they are measured against;
-      - a large random offset, which makes the single-pass variance cancel and the
-        epsilon cutoffs matter;
+      - a large random offset and a Bernoulli weight mask, from
+        testutils.random_wi_pair(), which says why the offset matters here;
       - a few percent of rows constant, fully masked, or nearly constant at a large mean --
-        the three ways to make a stage-1 variance invalid;
+        the three ways to make a stage-1 variance invalid
+        (testutils.plant_degenerate_rows());
       - a few percent of beams with at most one valid row, so the whole-beam branch runs.
 
     Deliberately NOT produced: every valid variance in a beam bit-identical (ill-conditioned,
     plans/chimefrb_std_dev_clipper.md 2.4), and rows placed at the stage-2 threshold.
     """
 
-    offset = rng.uniform(-1.0e3, 1.0e3)
-    scale = rng.uniform(0.5, 20.0)
-    intensity = rng.normal(offset, scale, size=(B, F, T))
-
-    p = np.clip(rng.uniform(-0.1, 1.1), 0.0, 1.0)
-    weights = (rng.uniform(size=(B, F, T)) < p) * rng.uniform(0.5, 1.5, size=(B, F, T))
+    x = random_wi_pair(rng, (B, F, T))
 
     # Rows, in the reduced sense: a block of Df channels (TIME) or Dt time samples (FREQ).
     time_axis = (axis == ClipperAxis.TIME)
     nrows = (F // Df) if time_axis else (T // Dt)
     D = Df if time_axis else Dt
 
-    def rowslice(r):
-        return (slice(None), slice(r*D, (r+1)*D)) if time_axis else (slice(None), slice(None), slice(r*D, (r+1)*D))
+    # Where row r of beam b lives: a block of Df channels at every time (TIME), or every
+    # channel at a block of Dt times (FREQ).
+    def rowsel(b, r):
+        s = slice(r*D, (r+1)*D)
+        return (b, s) if time_axis else (b, slice(None), s)
 
     for b in range(B):
-        def sel(r):
-            s = rowslice(r)
-            return (b,) + s[1:]
+        # This transform's own RFI shape: rows whose NOISE LEVEL is wrong, which is what a
+        # variance notices. A bright but steady row barely moves one.
+        for r in np.flatnonzero(rng.uniform(size=nrows) < 0.03):
+            blk = x.intensity[rowsel(b, r)]
+            x.intensity[rowsel(b, r)] = x.offset + (blk - x.offset) * rng.uniform(3.0, 10.0)
 
-        for r in np.flatnonzero(rng.uniform(size=nrows) < 0.03):
-            blk = intensity[sel(r)]
-            intensity[sel(r)] = offset + (blk - offset) * rng.uniform(3.0, 10.0)
-        for r in np.flatnonzero(rng.uniform(size=nrows) < 0.03):
-            intensity[sel(r)] = offset                                        # variance zero
-        for r in np.flatnonzero(rng.uniform(size=nrows) < 0.03):
-            weights[sel(r)] = 0.0                                             # no weight
-        for r in np.flatnonzero(rng.uniform(size=nrows) < 0.03):
-            blk = intensity[sel(r)]
-            intensity[sel(r)] = offset * (1.0 + 1.0e-6 * rng.normal(size=blk.shape))   # on the cutoff
+        plant_degenerate_rows(rng, x, nrows, lambda r: rowsel(b, r))
 
+        # A few percent of beams keep one row's weights and no more, so that the clipper's
+        # whole-beam branch runs.
         if rng.uniform() < 0.05:
             keep = int(rng.integers(nrows))
-            w = np.zeros_like(weights[b])
-            s = rowslice(keep)[1:]
-            w[s] = weights[b][s]
-            weights[b] = w
+            kept = x.weights[rowsel(b, keep)].copy()
+            x.weights[b] = 0.0
+            x.weights[rowsel(b, keep)] = kept
 
-    return (intensity.astype(np.float32), weights.astype(np.float32))
+    return (x.intensity.astype(np.float32), x.weights.astype(np.float32))
 
 
 def _run_gpu(cp, sd, in_i, in_w):

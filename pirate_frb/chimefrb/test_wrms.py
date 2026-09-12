@@ -52,7 +52,7 @@ import numpy as np
 
 from . import GpuWrms, ReferenceWrms, wrms_iterate, iclip
 from ..utils import atomic_print
-from .testutils import default_rng as _default_rng
+from .testutils import default_rng as _default_rng, plant_degenerate_rows, random_wi_pair
 
 
 THREAD_COUNTS = [128, 256, 512, 1024]
@@ -104,40 +104,29 @@ def random_arrays(rng, R, L):
 
     Designed around the code paths rather than around realism:
 
-      - a large per-row offset, because the eps_2*mean cutoff is inert when the mean is
-        near zero, and because it is what makes the single-pass variance actually
-        cancel -- which is the whole reason two_pass exists;
+      - a large per-row offset and a Bernoulli weight mask, from
+        testutils.random_wi_pair(), which says why the offset matters here;
       - 20-sigma outliers in some rows, so the refinements discard something (on clean
         Gaussian data a 5-sigma clip discards nothing and niter is untested);
       - a few percent of rows fully masked, constant, or near-constant at a large mean,
-        which are the three ways to land on a validity cutoff.
+        which are the three ways to land on a validity cutoff
+        (testutils.plant_degenerate_rows()).
 
     Deliberately NOT included: samples placed AT a threshold. Sampling the ambiguous
     region on purpose would make the brackets straddle at a controlled rate rather than a
     negligible one, which is worse, not better.
     """
 
-    offset = rng.uniform(-1.0e3, 1.0e3)
-    scale = rng.uniform(0.5, 20.0)
-    intensity = rng.normal(offset, scale, size=(R, L))
-
-    p = np.clip(rng.uniform(-0.1, 1.1), 0.0, 1.0)
-    weights = (rng.uniform(size=(R, L)) < p) * rng.uniform(0.5, 1.5, size=(R, L))
+    x = random_wi_pair(rng, (R, L))
 
     # Outliers, in a random subset of rows.
     for r in np.flatnonzero(rng.uniform(size=R) < 0.3):
         cols = rng.integers(0, L, size=max(1, L // 200))
-        intensity[r, cols] = offset + 20.0 * scale * rng.choice([-1.0, 1.0])
+        x.intensity[r, cols] = x.offset + 20.0 * x.scale * rng.choice([-1.0, 1.0])
 
-    # Degenerate rows, a few percent each.
-    for r in np.flatnonzero(rng.uniform(size=R) < 0.05):
-        intensity[r, :] = offset                       # variance exactly zero
-    for r in np.flatnonzero(rng.uniform(size=R) < 0.05):
-        weights[r, :] = 0.0                            # no weight at all
-    for r in np.flatnonzero(rng.uniform(size=R) < 0.05):
-        intensity[r, :] = offset * (1.0 + 1.0e-6 * rng.normal(size=L))   # on the cutoff
+    plant_degenerate_rows(rng, x, R, lambda r: (r, slice(None)))
 
-    return (intensity.astype(np.float32), weights.astype(np.float32))
+    return (x.intensity.astype(np.float32), x.weights.astype(np.float32))
 
 
 def _run_gpu(cp, wrms, in_i, in_w):

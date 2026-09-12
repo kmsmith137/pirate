@@ -71,6 +71,13 @@ def random_arrays(rng, B, F, T):
     which is the only way to exercise the guarded divide. The intensity carries a
     large random offset so that the wisum/wsum division is tested where cancellation
     matters, not only near zero.
+
+    DELIBERATELY NOT testutils.random_wi_pair(), which the three clipper tests share.
+    This kernel has no threshold anywhere -- its only branch is out_w > 0, and a sum of
+    nonnegative floats is zero if and only if every term is -- so it needs none of the
+    degenerate rows that helper exists to feed, and it wants a weight model of its own:
+    a binary mask, scaled on a random half of the array, which is what a DOWNSAMPLED
+    weight array looks like to the clippers that consume one.
     """
 
     p = np.clip(rng.uniform(-0.1, 1.1), 0.0, 1.0)
