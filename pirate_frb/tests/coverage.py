@@ -672,13 +672,18 @@ def _sec_detrending(rep, ndraw):
     from ..detrending.lps2d import masks as msk
     from ..detrending.lps2d.ReferenceDetrenderLps2d import ETA_DEFAULT
     from ..detrending.lps2d.reduce import CHANNEL_BLOCK
+    from ..detrending.testutils import default_rng
     from ..utils import random_nfreq
 
     rep.section('detrending.lps2d.masks.random_knots()',
                 subtitle=f'{ndraw} knot vectors, n_phi from masks.draw_n_phi(), as the tests do',
                 consumer='test --dtl2: every test in the spline suite')
 
-    rng = np.random.default_rng()
+    # Seeded, like every other section here: default_rng(None) takes its seed from numpy's
+    # global RandomState, which __main__ pins at import, so two runs report the same numbers.
+    # Unseeded -- which this was -- the rows below cannot be compared between runs, and that
+    # comparison is exactly what you need when a row sits near the edge of its band.
+    rng = default_rng(None)
     kvs, nz, nfr, kinds = [], [], [], []
     for _ in range(ndraw):
         n_phi = msk.draw_n_phi(rng)
