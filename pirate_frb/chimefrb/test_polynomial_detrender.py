@@ -30,8 +30,7 @@ misc/chimefrb/spot_checks/rfi_polynomial_detrender/ runs the old code itself.
 import numpy as np
 
 from . import GpuPolynomialDetrender
-from .ReferencePolynomialDetrender import (ReferencePolynomialDetrender, AXIS_TIME,
-                                           legendre, z_grid)
+from .ReferencePolynomialDetrender import (ReferencePolynomialDetrender, legendre, z_grid)
 from ..utils import atomic_print
 from .testutils import BASE_KINDS, default_rng as _default_rng, random_weight_base
 

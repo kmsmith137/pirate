@@ -44,8 +44,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harness
 
-from pirate_frb.chimefrb import (AXIS_FREQ, AXIS_TIME, AXIS_NONE,
-                                 ReferenceIntensityClipper, ReferenceWiDownsampler,
+from pirate_frb.chimefrb import (ReferenceIntensityClipper, ReferenceWiDownsampler,
                                  intensity_clip)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -65,13 +64,15 @@ NT = 512
 #
 # (axis, Df, Dt, sigma, iter_sigma) -- all with niter=9 in production.
 CONFIGS = [
-    (AXIS_FREQ, 1, 1,  5.0, 5.0),
-    (AXIS_TIME, 1, 1,  5.0, 5.0),
-    (AXIS_NONE, 2, 16, 5.0, 3.0),
-    (AXIS_FREQ, 2, 16, 5.0, 3.0),
+    ('freq', 1, 1,  5.0, 5.0),
+    ('time', 1, 1,  5.0, 5.0),
+    ('none', 2, 16, 5.0, 3.0),
+    ('freq', 2, 16, 5.0, 3.0),
 ]
 
-AXIS_NAMES = {AXIS_FREQ: "FREQ", AXIS_TIME: "TIME", AXIS_NONE: "NONE"}
+# rf_kernels::axis_type, which the driver casts an integer straight to. This is the only
+# place the old numbering survives in python; everywhere else an axis is its name.
+AXIS_INT = {"freq": 0, "time": 1, "none": 2}
 
 # The bracket on the final clip, in relative units of sigma. This is not a fudge factor:
 # it is the amount of roundoff we are prepared to tolerate in |I_ds - mean| vs sigma*rms,
@@ -108,14 +109,14 @@ def make_input(rng):
     intensity = rng.normal(offset, scale, size=(NFREQ, NT))
     weights = (rng.uniform(size=(NFREQ, NT)) < 0.8) * rng.uniform(0.5, 1.5, size=(NFREQ, NT))
 
-    # Whole bad channels and whole bad time samples: the two RFI shapes the AXIS_TIME and
-    # AXIS_FREQ clippers respectively exist to catch.
+    # Whole bad channels and whole bad time samples: the two RFI shapes the 'time' and
+    # 'freq' clippers respectively exist to catch.
     for f in rng.choice(NFREQ, size=4, replace=False):
         intensity[f, :] = offset + 20.0 * scale
     for t in rng.choice(NT, size=8, replace=False):
         intensity[:, t] = offset + 20.0 * scale
 
-    # Isolated spikes, which AXIS_NONE catches and the other two mostly do not.
+    # Isolated spikes, which 'none' catches and the other two mostly do not.
     for _ in range(20):
         f = rng.integers(0, NFREQ)
         t = rng.integers(0, NT)
@@ -134,7 +135,7 @@ def run_old(x, axis, Df, Dt, sigma, niter, iter_sigma, two_pass):
     statistic that clipper thresholds against. The driver reports rms, so square it."""
 
     (w, wrms) = harness.run_driver(HERE, x, dtype=np.float32, noutputs=2, params={
-        "axis": int(axis), "sigma": sigma, "Df": Df, "Dt": Dt,
+        "axis": AXIS_INT[axis], "sigma": sigma, "Df": Df, "Dt": Dt,
         "niter": niter, "iter_sigma": iter_sigma, "two_pass": int(two_pass)})
 
     return (w, wrms[0].astype(np.float64), wrms[1].astype(np.float64)**2)
@@ -223,7 +224,7 @@ def main():
 
     for (axis, Df, Dt, sigma, iter_sigma) in CONFIGS:
         for two_pass in (True, False):
-            tag = "%s (%d,%d) tp=%d" % (AXIS_NAMES[axis], Df, Dt, int(two_pass))
+            tag = "%s (%d,%d) tp=%d" % (axis, Df, Dt, int(two_pass))
 
             # niter=1: no refinements, so the whole reference can be compared directly.
             check_end_to_end(t, tag + " n1", x, axis, Df, Dt, sigma, 1, iter_sigma,

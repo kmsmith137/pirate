@@ -140,7 +140,7 @@ def keep_bracket(v, sigma, d):
 # Bitwise GPU-vs-GPU checks are used only where nothing sharp differs between the runs.
 
 from .ReferenceStdDevClipper import clip_1d as _clip_1d, std_dev_apply
-from . import (ClipperAxis, GpuStdDevClipper, GpuWiDownsampler, GpuWrms,
+from . import (GpuStdDevClipper, GpuWiDownsampler, GpuWrms,
                ReferenceStdDevClipper)
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng, plant_degenerate_rows, random_wi_pair
@@ -148,8 +148,8 @@ from .testutils import default_rng as _default_rng, plant_degenerate_rows, rando
 
 WARP_COUNTS = [4, 8, 16, 32]
 
-# The production chain's std_dev_clippers: 36 AXIS_TIME and 24 AXIS_FREQ, all at (1,1).
-PRODUCTION_CONFIGS = [(ClipperAxis.TIME, 1, 1), (ClipperAxis.FREQ, 1, 1)]
+# The production chain's std_dev_clippers: 36 'time' and 24 'freq', all at (1,1).
+PRODUCTION_CONFIGS = [('time', 1, 1), ('freq', 1, 1)]
 
 
 def random_config(rng):
@@ -158,7 +158,7 @@ def random_config(rng):
     if rng.uniform() < 0.6:
         (axis, Df, Dt) = PRODUCTION_CONFIGS[int(rng.integers(len(PRODUCTION_CONFIGS)))]
     else:
-        axis = [ClipperAxis.TIME, ClipperAxis.FREQ][int(rng.integers(2))]
+        axis = ['time', 'freq'][int(rng.integers(2))]
         # Nothing requires powers of two.
         Df = int(rng.choice([1, 1, 2, 3, 4]))
         Dt = int(rng.choice([1, 1, 2, 3, 8, 16]))
@@ -191,7 +191,7 @@ def random_geometry(rng, axis, Df, Dt):
     rows = int(rng.choice([1, 2, 2, 4, 4, 8]))      # nrows = 32*rows
     other = int(rng.choice([1, 2, 4]))              # the statistic's L = 32*other
 
-    (a, b) = (rows, other) if (axis == ClipperAxis.TIME) else (other, rows)
+    (a, b) = (rows, other) if (axis == 'time') else (other, rows)
     return (B, 32*a*Df, 32*b*Dt)
 
 
@@ -217,7 +217,7 @@ def random_arrays(rng, B, F, T, axis, Df, Dt):
     x = random_wi_pair(rng, (B, F, T))
 
     # Rows, in the reduced sense: a block of Df channels (TIME) or Dt time samples (FREQ).
-    time_axis = (axis == ClipperAxis.TIME)
+    time_axis = (axis == 'time')
     nrows = (F // Df) if time_axis else (T // Dt)
     D = Df if time_axis else Dt
 
@@ -274,7 +274,7 @@ def _run_statistic(cp, sd, in_i, in_w):
     else:
         (ds_i, ds_w) = (g_i, g_w)
 
-    if sd.axis == ClipperAxis.FREQ:
+    if sd.axis == 'freq':
         t_i = cp.empty((sd.nbeams, sd.T_ds, sd.F_ds), dtype=cp.float32)
         t_w = cp.empty((sd.nbeams, sd.T_ds, sd.F_ds), dtype=cp.float32)
         GpuWiDownsampler(1, 1, True).launch(t_i, t_w, ds_i, ds_w)
@@ -355,22 +355,22 @@ def test_std_dev_clipper(iteration=0, rng=None, verbose=False):
     (wlo, whi) = _weights_bracket(W64, klo, khi, axis, Df, Dt)
     _sandwich('end-to-end, conditioned on the GPU stage-1 decisions', w_gpu, wlo, whi)
 
-    # Structural check 1: AXIS_FREQ equals AXIS_TIME on the transposed input, BITWISE, at
+    # Structural check 1: 'freq' equals 'time' on the transposed input, BITWISE, at
     # (1,1): the FREQ path transposes and reduces rows, then stage 2 sees the same values in
     # the same order. That needs GpuWiDownsampler's (1,1) transpose to copy the intensity
     # through exactly; (w*i)/w would move the variances by roundoff, and a stage-2 decision
     # within roundoff of its threshold would then flip.
-    if (Df, Dt) == (1, 1) and (axis == ClipperAxis.FREQ):
-        sd_t = GpuStdDevClipper(B, T, F, F, ClipperAxis.TIME, sigma, 1, 1, two_pass, warps)
+    if (Df, Dt) == (1, 1) and (axis == 'freq'):
+        sd_t = GpuStdDevClipper(B, T, F, F, 'time', sigma, 1, 1, two_pass, warps)
         w_t = _run_gpu(cp, sd_t, np.ascontiguousarray(np.swapaxes(in_i, 1, 2)),
                        np.ascontiguousarray(np.swapaxes(in_w, 1, 2)))
         assert np.array_equal(np.swapaxes(w_t, 1, 2), w_gpu), \
-            'AXIS_FREQ disagrees with AXIS_TIME on the transposed input'
+            "axis 'freq' disagrees with 'time' on the transposed input"
 
     # Structural check 2: the mask is constant along the reduced axis. Every row -- a block
     # of Df channels (TIME) or Dt time samples (FREQ) -- is either entirely zero or
     # untouched. Exact, and the direct test of sd_apply_kernel's tile loop.
-    if axis == ClipperAxis.TIME:
+    if axis == 'time':
         wg = w_gpu.reshape(B, F // Df, Df * T)
         wi = in_w.reshape(B, F // Df, Df * T)
     else:

@@ -156,7 +156,7 @@ static const int _ntiming_masks = 5;
 static const char *_timing_mask_names[_ntiming_masks] = {
     "nothing masked (the floor: one read of w_lores, no stores)",
     "a contiguous run of F_lo/8 channels (the bad-channel shape: whole rows)",
-    "every 32nd time sample (the std_dev AXIS_FREQ shape: isolated columns)",
+    "every 32nd time sample (the std_dev axis=freq shape: isolated columns)",
     "3% of cells, independently (the intensity-clipper shape: isolated cells)",
     "everything masked (a memset of w_hires)"
 };

@@ -13,23 +13,18 @@ which is checked against rf_kernels::intensity_clipper in misc/chimefrb/spot_che
 import numpy as np
 
 import ksgpu
-from ..pirate_pybind11 import ClipperAxis, GpuIntensityClipper
-from .transform_io import (axis_from_json, axis_from_str, axis_to_str, check_json_keys)
+from ..pirate_pybind11 import GpuIntensityClipper
+from .transform_io import (axis_from_json, check_json_keys)
 from .ReferenceWiDownsampler import ReferenceWiDownsampler
 from .ReferenceWrms import ReferenceWrms
 
 
-# Axis codes. These three numbers are shared by rf_kernels::axis_type (core.hpp),
-# pirate::chimefrb::ClipperAxis, and this module, deliberately: a spot-check driver casts
-# an integer straight to the old enum, and int(ClipperAxis.FREQ) == AXIS_FREQ here.
-AXIS_FREQ = 0    # one statistic per downsampled time sample, reducing over frequency
-AXIS_TIME = 1    # one statistic per downsampled frequency, reducing over time
-AXIS_NONE = 2    # one statistic per beam, reducing over the whole plane
-
-# Checked here rather than trusted, since a silent drift would make the spot-check driver
-# run a different transform from the one the test thinks it asked for.
-assert (int(ClipperAxis.FREQ), int(ClipperAxis.TIME), int(ClipperAxis.NONE)) == \
-    (AXIS_FREQ, AXIS_TIME, AXIS_NONE)
+# The axis is one of the three strings 'freq', 'time', 'none' -- the same spelling the GPU
+# classes take, a saved yaml file carries, and C++ uses (axis_to_string() in
+# include/pirate/chimefrb/ClipperAxis.hpp). The old code spells them 'freq' and so on,
+# and numbers them 0, 1, 2; that numbering survives only where a spot-check driver casts an
+# integer to rf_kernels::axis_type, and the old spelling only in
+# transform_io.axis_from_json().
 
 
 # The yaml keys of GpuIntensityClipper, which are also its constructor's argument names after
@@ -48,7 +43,7 @@ class GpuIntensityClipperInjections:
         (``nt_chunk``, ``axis`` as 'freq'/'time'/'none', ``sigma``, ``niter``,
         ``iter_sigma``, ``Df``, ``Dt``, ``two_pass``)."""
         return {'class_name': 'GpuIntensityClipper', 'nt_chunk': int(self.nt_chunk),
-                'axis': axis_to_str(self.axis), 'sigma': float(self.sigma),
+                'axis': self.axis, 'sigma': float(self.sigma),
                 'niter': int(self.niter), 'iter_sigma': float(self.iter_sigma),
                 'Df': int(self.Df), 'Dt': int(self.Dt), 'two_pass': bool(self.two_pass)}
 
@@ -56,7 +51,7 @@ class GpuIntensityClipperInjections:
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
         """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
         cls.check_yaml_keys(d, INTENSITY_CLIPPER_YAML_KEYS)
-        return cls(nbeams, nfreq, ntime, d['nt_chunk'], axis_from_str(d['axis']), d['sigma'],
+        return cls(nbeams, nfreq, ntime, d['nt_chunk'], d['axis'], d['sigma'],
                    d['Df'], d['Dt'], d['niter'], d['iter_sigma'], d['two_pass'])
 
     @classmethod
@@ -76,25 +71,23 @@ def wrms_view(arr, axis):
     """Reshape a downsampled (B, F_ds, T_ds) array to the (R, L) form GpuWrms wants.
 
     The clippers reduce along three axes, but by the time the statistic runs there is only
-    one shape: one output per row of a contiguous 2-D array. AXIS_NONE works because a
+    one shape: one output per row of a contiguous 2-D array. 'none' works because a
     contiguous (B, F_ds, T_ds) array IS a (B, F_ds*T_ds) array -- reducing a whole plane is
     reducing one long row.
 
-    Note that AXIS_FREQ is the one that moves data (the frequency axis has to become the
+    Note that 'freq' is the one that moves data (the frequency axis has to become the
     fast one). GpuIntensityClipper does the same thing with GpuWiDownsampler(1,1,True).
     """
 
     (B, F_ds, T_ds) = arr.shape
-    ax = int(axis)
-
-    if ax == AXIS_TIME:
+    if axis == 'time':
         return arr.reshape(B * F_ds, T_ds)
-    if ax == AXIS_FREQ:
+    if axis == 'freq':
         return np.ascontiguousarray(np.swapaxes(arr, 1, 2)).reshape(B * T_ds, F_ds)
-    if ax == AXIS_NONE:
+    if axis == 'none':
         return arr.reshape(B, F_ds * T_ds)
 
-    raise RuntimeError(f'bad axis {axis}')
+    raise RuntimeError(f'bad axis {axis!r}')
 
 
 def intensity_clip(i_ds, weights, mean, var, sigma, axis, Df, Dt):
@@ -118,7 +111,7 @@ def intensity_clip(i_ds, weights, mean, var, sigma, axis, Df, Dt):
         iter_sigma -- in the production chain they are 5 and 3 -- and confusing the two
         produces a plausible-looking wrong answer.
     axis : int
-        AXIS_FREQ, AXIS_TIME or AXIS_NONE.
+        'freq', 'time' or 'none'.
 
     Notes
     -----
@@ -140,12 +133,12 @@ def intensity_clip(i_ds, weights, mean, var, sigma, axis, Df, Dt):
 
     # Broadcast (mean, thresh) back against the downsampled cell grid. The reshape is the
     # inverse of wrms_view()'s, and is the only place the axis matters.
-    ax = int(axis)
-    if ax == AXIS_TIME:
+    ax = axis
+    if ax == 'time':
         shape = (B, F_ds, 1)
-    elif ax == AXIS_FREQ:
+    elif ax == 'freq':
         shape = (B, 1, T_ds)
-    elif ax == AXIS_NONE:
+    elif ax == 'none':
         shape = (B, 1, 1)
     else:
         raise RuntimeError(f'bad axis {axis}')
@@ -179,9 +172,9 @@ class ReferenceIntensityClipper:
 
     Two consequences of that, since a reader will wonder:
 
-    * For ``axis = AXIS_FREQ`` the answer does not depend on ``nt_chunk`` at all. Each
+    * For ``axis = 'freq'`` the answer does not depend on ``nt_chunk`` at all. Each
       time column is its own statistic, so chunking the time axis changes nothing. Only
-      AXIS_TIME and AXIS_NONE see the boundaries.
+      'time' and 'none' see the boundaries.
     * ``nt_chunk`` must be a multiple of ``Dt``, so that a downsampled cell cannot
       straddle a boundary, and ``T`` must be a multiple of ``nt_chunk``.
 
@@ -193,12 +186,12 @@ class ReferenceIntensityClipper:
 
     def __init__(self, axis, sigma, Df, Dt, niter, iter_sigma, two_pass,
                  nt_chunk=None, eps_multiplier=1.0):
-        assert int(axis) in (AXIS_FREQ, AXIS_TIME, AXIS_NONE)
+        assert axis in ('freq', 'time', 'none')
         assert Df >= 1 and Dt >= 1
         assert niter >= 1
         assert sigma >= 0.0 and iter_sigma >= 0.0
 
-        self.axis = int(axis)
+        self.axis = axis
         self.sigma = float(sigma)
         self.Df = int(Df)
         self.Dt = int(Dt)

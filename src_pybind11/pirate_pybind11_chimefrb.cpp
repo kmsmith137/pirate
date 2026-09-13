@@ -48,6 +48,43 @@ using namespace pirate::chimefrb;
 namespace py = pybind11;
 
 
+// type_caster<ClipperAxis>: python sees the three axis names, C++ sees the enum, with the
+// conversion here -- the arrangement ksgpu uses for Dtype (python sees numpy.dtype) and for
+// Array<T>. The mapping itself is axis_to_string() / axis_from_string() in ClipperAxis.hpp,
+// where C++ callers (the time_selected() printouts) use it too.
+//
+// load() THROWS on a bad value rather than returning false. A soft failure makes pybind11
+// report "incompatible function arguments" followed by every overload's signature, which is
+// useless to read after a typo; ksgpu's Array caster made the same choice for the same
+// reason. The isinstance check is what makes axis=1 read like axis='freqq' rather than like
+// a pybind11 internal cast error.
+namespace PYBIND11_NAMESPACE {
+namespace detail {
+
+template<>
+struct type_caster<pirate::chimefrb::ClipperAxis>
+{
+    PYBIND11_TYPE_CASTER(pirate::chimefrb::ClipperAxis, const_name("str"));
+
+    bool load(handle src, bool)
+    {
+        if (!isinstance<str>(src))
+            throw std::runtime_error("chimefrb: expected axis to be the string 'freq', 'time'"
+                                     " or 'none', got a " + std::string(str(src.get_type().attr("__name__"))));
+
+        value = pirate::chimefrb::axis_from_string(src.cast<std::string>());
+        return true;
+    }
+
+    static handle cast(pirate::chimefrb::ClipperAxis axis, return_value_policy, handle)
+    {
+        return str(pirate::chimefrb::axis_to_string(axis)).release();
+    }
+};
+
+}}  // namespace PYBIND11_NAMESPACE::detail
+
+
 namespace pirate {
 
 
@@ -512,7 +549,7 @@ void register_chimefrb_bindings(pybind11::module &m)
         "of the threshold may be decided either way. A NaN intensity at a zero-weight\n"
         "sample contributes exactly zero (the old code let it poison the row). Validated\n"
         "against :class:`ReferencePolynomialDetrender`, a transcription of the old kernel,\n"
-        "which also implements the old code's AXIS_FREQ variant.\n"
+        "which also implements the old code's 'freq' variant.\n"
         "\n"
         "Stateless: one instance may be used from any number of streams at once.\n"
         "\n"
@@ -554,20 +591,6 @@ void register_chimefrb_bindings(pybind11::module &m)
 
         ;
 
-    py::enum_<ClipperAxis>(m, "ClipperAxis",
-        "Which axis a chimefrb clipper reduces along.\n"
-        "\n"
-        "The numeric values match rf_kernels::axis_type, and the AXIS_FREQ/AXIS_TIME/\n"
-        "AXIS_NONE constants in pirate_frb.chimefrb: a spot-check driver casts an integer\n"
-        "straight to the old enum, so the three must not drift apart.")
-        .value("FREQ", ClipperAxis::FREQ,
-            "One statistic per downsampled time sample, reducing over frequency")
-        .value("TIME", ClipperAxis::TIME,
-            "One statistic per downsampled frequency, reducing over time")
-        .value("NONE", ClipperAxis::NONE,
-            "One statistic per beam, reducing over the whole plane")
-        ;
-
     // GpuClipperBase: bound without a constructor. It exists so that the attributes the
     // clippers share (axis, statistic parameters, derived geometry) are bound, and
     // documented, once; the clippers are bound as its subclasses.
@@ -583,7 +606,8 @@ void register_chimefrb_bindings(pybind11::module &m)
 
         .def_readonly("nt_chunk", &GpuClipperBase::nt_chunk,
             "Samples per chunk. Currently required to equal ntime.")
-        .def_readonly("axis", &GpuClipperBase::axis, "The ClipperAxis being reduced")
+        .def_readonly("axis", &GpuClipperBase::axis,
+            "Which axis is reduced: 'freq', 'time' or 'none'")
         .def_readonly("Df", &GpuClipperBase::Df, "Frequency downsampling factor")
         .def_readonly("Dt", &GpuClipperBase::Dt, "Time downsampling factor")
         .def_readonly("niter", &GpuClipperBase::niter,
@@ -646,7 +670,7 @@ void register_chimefrb_bindings(pybind11::module &m)
             "Args:\n"
             "    nbeams, nfreq, ntime: the full-resolution array shape, fixed at construction.\n"
             "    nt_chunk: samples per chunk; must equal ntime for now (see CHUNKING above).\n"
-            "    axis: a ClipperAxis.\n"
+            "    axis: 'freq', 'time' or 'none' -- which axis the statistic reduces along.\n"
             "    sigma: the FINAL clip threshold, in units of the row's rms.\n"
             "    Df, Dt: downsampling factors for frequency and time.\n"
             "    niter: TOTAL passes of the statistic. 1 means no refinement.\n"
@@ -679,7 +703,7 @@ void register_chimefrb_bindings(pybind11::module &m)
     // GpuStdDevClipper: Python injections in pirate_frb/chimefrb/ReferenceStdDevClipper.py
     // (the yaml and legacy-json methods; see the top of this file).
     py::class_<GpuStdDevClipper, GpuClipperBase>(m, "GpuStdDevClipper",
-        "Zeroes whole channels (AXIS_TIME) or whole time samples (AXIS_FREQ) whose variance\n"
+        "Zeroes whole channels (axis 'time') or whole time samples (axis 'freq') whose variance\n"
         "is an outlier among its peers. A port of rf_kernels::std_dev_clipper, the most\n"
         "numerous transform in the old CHIME FRB search's RFI chain (60 of its 120 nodes).\n"
         "Where GpuIntensityClipper catches samples that are too bright, this catches rows\n"
@@ -701,7 +725,7 @@ void register_chimefrb_bindings(pybind11::module &m)
         "none), and this class and the old code round differently. Real data cannot produce\n"
         "it; it is documented rather than fixed.\n"
         "\n"
-        "AXIS_NONE is not supported, as in the old code. Like every GpuClipperBase, it\n"
+        "Axis 'none' is not supported, as in the old code. Like every GpuClipperBase, it\n"
         "requires ntime == nt_chunk (the array holds exactly one chunk).\n"
         "\n"
         "launch() modifies ``weights`` only; ``intensity`` is read.")
@@ -714,7 +738,7 @@ void register_chimefrb_bindings(pybind11::module &m)
             "Args:\n"
             "    nbeams, nfreq, ntime: the full-resolution array shape, fixed at construction.\n"
             "    nt_chunk: samples per chunk; must equal ntime for now.\n"
-            "    axis: ClipperAxis.TIME or ClipperAxis.FREQ.\n"
+            "    axis: 'time' or 'freq' ('none' is not supported; see above).\n"
             "    sigma: the clip threshold, in units of the standard deviation OF THE\n"
             "        VARIANCES. Nothing can be clipped if sigma >= sqrt(n-1), for n usable\n"
             "        rows in a beam.\n"

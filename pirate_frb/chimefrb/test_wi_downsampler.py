@@ -180,7 +180,7 @@ def test_wi_downsampler(iteration=0, rng=None, verbose=False):
 
     # Structural check 4: at (1,1) -- which is always transposed, since (1,1,False) is the
     # identity and is rejected -- the output is the input, transposed, BITWISE: the weights,
-    # and the intensity wherever the weight is positive. The clippers' AXIS_FREQ-vs-AXIS_TIME
+    # and the intensity wherever the weight is positive. The clippers' 'freq'-vs-'time'
     # checks rely on this; (w*i)/w would miss it in the last bit.
     if (Df, Dt) == (1, 1):
         t_i = np.ascontiguousarray(np.swapaxes(in_i, 1, 2))

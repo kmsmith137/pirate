@@ -162,17 +162,6 @@ struct TimingConfig
 };
 
 
-static const char *_axis_name(ClipperAxis axis)
-{
-    switch (axis) {
-        case ClipperAxis::FREQ: return "FREQ";
-        case ClipperAxis::TIME: return "TIME";
-        case ClipperAxis::NONE: return "NONE";
-    }
-    return "???";
-}
-
-
 void GpuIntensityClipper::time_selected()
 {
     // The four distinct intensity_clippers in the production RFI config
@@ -238,7 +227,7 @@ void GpuIntensityClipper::time_selected()
         Array<float> scratch({probe.scratch_nelts}, af_gpu | af_zero);
 
         cout << "\nGpuIntensityClipper::time_selected()\n"
-             << "    axis=" << _axis_name(c.axis) << ", (Df,Dt)=(" << c.Df << "," << c.Dt
+             << "    axis=" << axis_to_string(c.axis) << ", (Df,Dt)=(" << c.Df << "," << c.Dt
              << "), sigma=" << c.sigma << ", niter=" << c.niter
              << ", iter_sigma=" << c.iter_sigma << "\n"
              << "    (B, F, T) = (" << B << ", " << F << ", " << T << "),"

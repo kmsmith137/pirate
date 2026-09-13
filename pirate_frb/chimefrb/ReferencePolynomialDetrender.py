@@ -12,8 +12,7 @@ check misc/chimefrb/spot_checks/rfi_polynomial_detrender/ is what pins it to the
 import numpy as np
 
 import ksgpu
-from ..pirate_pybind11 import ClipperAxis, GpuPolynomialDetrender
-from .ReferenceIntensityClipper import AXIS_FREQ, AXIS_TIME
+from ..pirate_pybind11 import GpuPolynomialDetrender
 from .transform_io import (axis_from_json, check_json_keys)
 
 
@@ -50,9 +49,9 @@ class GpuPolynomialDetrenderInjections:
         whose ``polydeg`` is written as a double and whose ``nt_chunk == 0`` means the whole
         block (here ``ntime``)."""
         check_json_keys(d, 'polynomial_detrender', ['axis', 'polydeg', 'epsilon', 'nt_chunk'])
-        if axis_from_json(d['axis']) != ClipperAxis.TIME:
+        if axis_from_json(d['axis']) != 'time':
             raise ValueError(f"GpuPolynomialDetrender.from_json_dict: axis={d['axis']!r}, but this class"
-                             f" implements AXIS_TIME only (ReferencePolynomialDetrender also does AXIS_FREQ)")
+                             f" implements axis 'time' only (ReferencePolynomialDetrender also does 'freq')")
         polydeg = d['polydeg']
         if int(polydeg) != polydeg:
             raise ValueError(f"GpuPolynomialDetrender.from_json_dict: polydeg={polydeg!r} is not an integer")
@@ -110,7 +109,7 @@ def pivot_ratios(Ahat):
 
 class ReferencePolynomialDetrender:
     """Numpy reference for GpuPolynomialDetrender (src_lib/chimefrb/PolynomialDetrender.cu),
-    and for the old code's AXIS_FREQ variant, which the GPU class does not implement.
+    and for the old code's 'freq' variant, which the GPU class does not implement.
 
     Per row -- one (beam, channel, chunk of ``nt_chunk`` samples) along time, or one
     (beam, time sample) across all channels along frequency -- fit a polynomial of degree
@@ -137,12 +136,12 @@ class ReferencePolynomialDetrender:
     - ``N`` (int) -- number of coefficients, polydeg + 1.
     """
 
-    def __init__(self, polydeg, epsilon, nt_chunk, axis=AXIS_TIME):
+    def __init__(self, polydeg, epsilon, nt_chunk, axis='time'):
         polydeg, nt_chunk = int(polydeg), int(nt_chunk)
         assert polydeg >= 0
         assert epsilon > 0
-        assert axis in (AXIS_FREQ, AXIS_TIME)
-        if axis == AXIS_TIME:
+        assert axis in ('freq', 'time')
+        if axis == 'time':
             assert nt_chunk >= 1
 
         self.polydeg = polydeg
@@ -159,21 +158,21 @@ class ReferencePolynomialDetrender:
         arr = np.asarray(arr, dtype=np.float64)
         assert arr.ndim == 3
         (M, F, T) = arr.shape
-        if self.axis == AXIS_TIME:
+        if self.axis == 'time':
             assert T % self.nt_chunk == 0, 'T must be a multiple of nt_chunk'
             return arr.reshape(M * F * (T // self.nt_chunk), self.nt_chunk)
         return np.ascontiguousarray(arr.transpose(0, 2, 1)).reshape(M * T, F)
 
     def _unrows(self, rows, shape):
         (M, F, T) = shape
-        if self.axis == AXIS_TIME:
+        if self.axis == 'time':
             return rows.reshape(M, F, T)
         return rows.reshape(M, T, F).transpose(0, 2, 1)
 
     def _row_shape(self, shape):
         """Shape of a per-row statistic: (M, F, nchunk) along time, (M, T) along frequency."""
         (M, F, T) = shape
-        return (M, F, T // self.nt_chunk) if (self.axis == AXIS_TIME) else (M, T)
+        return (M, F, T // self.nt_chunk) if (self.axis == 'time') else (M, T)
 
     def _normal_equations(self, d_rows, w_rows):
         """(A, v, wsum) of every row: A (K, N, N), v (K, N), wsum (K,)."""
@@ -324,6 +323,6 @@ class ReferencePolynomialDetrender:
     def _row_mask_expand(self, per_row, shape):
         """A per-row boolean (see _row_shape()) broadcast to the (M, F, T) array shape."""
         (M, F, T) = shape
-        if self.axis == AXIS_TIME:
+        if self.axis == 'time':
             return np.repeat(per_row, self.nt_chunk, axis=2).reshape(M, F, T)
         return per_row[:, None, :]

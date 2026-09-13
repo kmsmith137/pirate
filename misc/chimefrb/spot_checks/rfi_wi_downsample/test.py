@@ -129,7 +129,7 @@ def main():
         if (Df, Dt) == (1, 1):
             t.check_allclose("out_i exact (1,1)", new_i[0][ok], old[0][ok], rtol=0.0,
                              why="a (1,1) cell with weight is copied through bit for bit by"
-                                 " both codes; the clippers' AXIS_FREQ path relies on it")
+                                 " both codes; the clippers' 'freq' path relies on it")
 
         # pirate zeroes the masked cells; the old code does so too except at (1,1),
         # where its memcpy shortcut leaves the raw intensity there. Checking pirate's

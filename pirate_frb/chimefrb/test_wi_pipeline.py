@@ -32,7 +32,7 @@ import tempfile
 import numpy as np
 import yaml
 
-from . import (ClipperAxis, ExampleCupyTransform, GpuBadChannelMask, GpuContainerBase,
+from . import (ExampleCupyTransform, GpuBadChannelMask, GpuContainerBase,
                GpuIntensityClipper, GpuPolynomialDetrender, GpuPythonTransform,
                GpuSplineDetrender, GpuStdDevClipper, GpuTransformBase, RfiMaskPipeline,
                WiPipeline)
@@ -322,9 +322,9 @@ def _check_legacy_json():
     assert len(sub1.transforms) == 3, 'chime_slow_pulsar_writer should have been skipped'
     (sd, ic, pd) = sub1.transforms
     assert isinstance(sd, GpuStdDevClipper) and (sd.nfreq, sd.ntime, sd.nt_chunk) == (128, 1024, 1024), 'nt_chunk 0 means ntime'
-    assert sd.axis == ClipperAxis.TIME and sd.sigma == 3.0 and sd.two_pass
+    assert sd.axis == 'time' and sd.sigma == 3.0 and sd.two_pass
     assert isinstance(ic, GpuIntensityClipper) and ic.iter_sigma == 5.0, 'iter_sigma 0 means sigma'
-    assert (ic.axis, ic.Df, ic.Dt, ic.niter, ic.two_pass, ic.nt_chunk) == (ClipperAxis.NONE, 2, 16, 9, False, 1024)
+    assert (ic.axis, ic.Df, ic.Dt, ic.niter, ic.two_pass, ic.nt_chunk) == ('none', 2, 16, 9, False, 1024)
     assert isinstance(pd, GpuPolynomialDetrender) and (pd.polydeg, pd.nt_chunk, pd.ntime) == (4, 512, 1024)
 
     assert isinstance(sub2, RfiMaskPipeline) and (sub2.Df, sub2.Dt, sub2.w_cutoff) == (2, 2, 1.5)
@@ -534,8 +534,8 @@ def _check_real_transforms(cp, rng):
 
     (B, F, T) = (1, 128, 128)
     (Fd, Td) = (F // 2, T)
-    inner = [GpuStdDevClipper(B, Fd, Td, Td, ClipperAxis.TIME, 3.0, 1, 1, True),
-             GpuIntensityClipper(B, Fd, Td, Td, ClipperAxis.FREQ, 5.0, 1, 1, 2, 3.0, True),
+    inner = [GpuStdDevClipper(B, Fd, Td, Td, 'time', 3.0, 1, 1, True),
+             GpuIntensityClipper(B, Fd, Td, Td, 'freq', 5.0, 1, 1, 2, 3.0, True),
              GpuPolynomialDetrender(B, Fd, Td, 2, 0.01, 64),
              GpuSplineDetrender(B, Fd, Td, 3, 3.0e-4),
              ExampleCupyTransform(B, Fd, Td, 3.0)]

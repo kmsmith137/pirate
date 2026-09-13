@@ -69,7 +69,7 @@ def random_config(rng):
 
     L straddles the shared-memory threshold, because the two paths are different kernels
     and only a draw on each side exercises both. R is then bounded so that R*L stays
-    manageable -- the large-L path has few rows by nature (its caller is the AXIS_NONE
+    manageable -- the large-L path has few rows by nature (its caller is the 'none'
     clipper, whose 'row' is a whole plane), which is exactly the regime where a per-row
     kernel would starve, so it is worth sampling honestly rather than making R large.
     """

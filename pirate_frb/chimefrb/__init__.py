@@ -30,8 +30,7 @@ from .GpuPythonTransform import GpuPythonTransform
 from .ReferenceWiDownsampler import GpuWiDownsampler, ReferenceWiDownsampler
 from .ReferenceWeightUpsampler import GpuWeightUpsampler, ReferenceWeightUpsampler
 from .ReferenceWrms import GpuWrms, ReferenceWrms, wrms_iterate, iclip
-from .ReferenceIntensityClipper import (AXIS_FREQ, AXIS_TIME, AXIS_NONE, ClipperAxis,
-                                        GpuIntensityClipper, ReferenceIntensityClipper,
+from .ReferenceIntensityClipper import (GpuIntensityClipper, ReferenceIntensityClipper,
                                         intensity_clip, wrms_view)
 from .ReferenceStdDevClipper import (GpuStdDevClipper, ReferenceStdDevClipper, clip_1d,
                                      std_dev_apply)
@@ -41,7 +40,7 @@ from .ReferencePolynomialDetrender import GpuPolynomialDetrender, ReferencePolyn
 
 # The transform interface (the "protocol"), and the two pipeline classes that run transforms.
 from .transform_io import (CHIME_FREQ_RANGE, IGNORED_JSON_CLASSES, LEGACY_JSON_CLASS_NAMES,
-                           PIPELINE_YAML_HEADER, YAML_WIDTH, axis_from_str, axis_to_str,
+                           PIPELINE_YAML_HEADER, YAML_WIDTH,
                            read_json, read_yaml, resolve_class, transform_from_json_dict,
                            transform_from_yaml_dict, write_yaml, yaml_string)
 from .ExampleCupyTransform import ExampleCupyTransform

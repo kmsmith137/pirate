@@ -62,9 +62,9 @@ __device__ __forceinline__ void _reduce_cell(const float *in_i, const float *in_
 
     // A (1,1) cell is one sample, and its intensity is copied through exactly. The general
     // formula below would give (w*i)/w, which rounds to within an ulp of i but not always to
-    // i -- and the clippers' AXIS_FREQ path transposes with this kernel at (1,1), so a
+    // i -- and the clippers' ClipperAxis::FREQ path transposes with this kernel at (1,1), so a
     // last-bit change here moves their statistics by roundoff, and makes them disagree with
-    // AXIS_TIME on pre-transposed input. (Df, Dt) are uniform over the grid, so this branch
+    // ClipperAxis::TIME on pre-transposed input. (Df, Dt) are uniform over the grid, so this branch
     // costs nothing.
     if ((Df == 1) && (Dt == 1)) {
         const float w = wp[0];
@@ -285,9 +285,9 @@ void GpuWiDownsampler::time_selected()
     // Beam counts differ so that every row moves a comparable number of bytes.
     const vector<TimingConfig> configs = {
         { 16, 1,  false, 1, 16384, 4096, "16K -> 1K sub-pipeline downsample" },
-        { 1,  1,  true,  8, 1024,  4096, "AXIS_FREQ clipper statistic (pure transpose)" },
-        { 2,  16, true,  8, 1024,  4096, "AXIS_FREQ clipper statistic, (Df,Dt)=(2,16)" },
-        { 2,  16, false, 8, 1024,  4096, "AXIS_NONE clipper, and AXIS_FREQ mask application" },
+        { 1,  1,  true,  8, 1024,  4096, "axis=freq clipper statistic (pure transpose)" },
+        { 2,  16, true,  8, 1024,  4096, "axis=freq clipper statistic, (Df,Dt)=(2,16)" },
+        { 2,  16, false, 8, 1024,  4096, "axis=none clipper, and axis=freq mask application" },
     };
 
     const vector<long> warp_counts = { 4, 8, 16, 32 };

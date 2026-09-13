@@ -39,8 +39,9 @@ namespace chimefrb {
 // Both are constructor arguments, and kept as separate members even though they are equal,
 // because nt_chunk is the semantic parameter that a saved configuration carries. Processing
 // ntime = N*nt_chunk in one launch would be a useful generalization and is deliberately
-// left for later: for AXIS_TIME the rows just regroup, but for AXIS_FREQ GpuStdDevClipper
-// pools its variances per (beam, chunk), and AXIS_NONE has sub-planes strided in
+// left for later: for ClipperAxis::TIME the rows just regroup, but for ClipperAxis::FREQ
+// GpuStdDevClipper pools its variances per (beam, chunk), and ClipperAxis::NONE has
+// sub-planes strided in
 // frequency that GpuWrms cannot view as rows. The numpy references
 // (ReferenceIntensityClipper, ReferenceStdDevClipper) implement the general case, so the
 // semantics are pinned down and tested.

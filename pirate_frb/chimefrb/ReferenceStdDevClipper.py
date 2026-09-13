@@ -1,6 +1,6 @@
 """Numpy reference for GpuStdDevClipper.
 
-The std_dev_clipper flags whole channels (AXIS_TIME) or whole time samples (AXIS_FREQ) whose
+The std_dev_clipper flags whole channels (axis 'time') or whole time samples (axis 'freq') whose
 NOISE LEVEL is anomalous: it computes one variance per row, then clips outliers in that
 array of variances.
 
@@ -15,8 +15,8 @@ import numpy as np
 
 import ksgpu
 from ..pirate_pybind11 import GpuStdDevClipper
-from .transform_io import (axis_from_json, axis_from_str, axis_to_str, check_json_keys)
-from .ReferenceIntensityClipper import AXIS_FREQ, AXIS_TIME, AXIS_NONE, wrms_view
+from .transform_io import (axis_from_json, check_json_keys)
+from .ReferenceIntensityClipper import wrms_view
 from .ReferenceWiDownsampler import ReferenceWiDownsampler
 from .ReferenceWrms import ReferenceWrms
 
@@ -36,14 +36,14 @@ class GpuStdDevClipperInjections:
         """The yaml form (see ``transform_io``): the class name and the semantic parameters
         (``nt_chunk``, ``axis`` as 'freq'/'time', ``sigma``, ``Df``, ``Dt``, ``two_pass``)."""
         return {'class_name': 'GpuStdDevClipper', 'nt_chunk': int(self.nt_chunk),
-                'axis': axis_to_str(self.axis), 'sigma': float(self.sigma),
+                'axis': self.axis, 'sigma': float(self.sigma),
                 'Df': int(self.Df), 'Dt': int(self.Dt), 'two_pass': bool(self.two_pass)}
 
     @classmethod
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
         """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
         cls.check_yaml_keys(d, STD_DEV_CLIPPER_YAML_KEYS)
-        return cls(nbeams, nfreq, ntime, d['nt_chunk'], axis_from_str(d['axis']), d['sigma'],
+        return cls(nbeams, nfreq, ntime, d['nt_chunk'], d['axis'], d['sigma'],
                    d['Df'], d['Dt'], d['two_pass'])
 
     @classmethod
@@ -104,22 +104,22 @@ def std_dev_apply(weights, v, axis, Df, Dt):
     """Step 4: zero the full-resolution weights of every row whose variance is zero.
 
     'weights' is (B, F, T); 'v' is (B, nrows), or anything reshapeable to it, with
-    nrows = F/Df for AXIS_TIME and T/Dt for AXIS_FREQ. Returns a new array. A killed row is
+    nrows = F/Df for 'time' and T/Dt for 'freq'. Returns a new array. A killed row is
     Df whole channels (TIME) or Dt whole time samples across every frequency (FREQ).
     """
 
     weights = np.asarray(weights)
     (B, F, T) = weights.shape
-    ax = int(axis)
+    ax = axis
 
-    if ax == AXIS_TIME:
+    if ax == 'time':
         kill = (np.asarray(v).reshape(B, F // Df) == 0)
         kill = np.repeat(kill, Df, axis=1)[:, :, None]      # (B, F, 1)
-    elif ax == AXIS_FREQ:
+    elif ax == 'freq':
         kill = (np.asarray(v).reshape(B, T // Dt) == 0)
         kill = np.repeat(kill, Dt, axis=1)[:, None, :]      # (B, 1, T)
     else:
-        raise RuntimeError('std_dev_apply: the std_dev_clipper does not implement AXIS_NONE')
+        raise RuntimeError("std_dev_apply: the std_dev_clipper does not implement axis 'none'")
 
     return np.where(kill, 0, weights)
 
@@ -129,7 +129,7 @@ class ReferenceStdDevClipper:
 
     Same semantics and argument names, in float64. Stage 1 is ReferenceWiDownsampler, then
     ReferenceWrms at niter=1 on the wrms_view() of the downsampled pair; stage 2 is clip_1d()
-    per beam; then std_dev_apply(). AXIS_NONE is rejected, as in the old code.
+    per beam; then std_dev_apply(). Axis 'none' is rejected, as in the old code.
 
     Like ReferenceIntensityClipper, this implements T = N*nt_chunk, which the GPU class does
     not: apply() on a (B, F, N*nt_chunk) array returns exactly what N separate calls on the
@@ -143,14 +143,14 @@ class ReferenceStdDevClipper:
     """
 
     def __init__(self, axis, sigma, Df, Dt, two_pass, nt_chunk=None, eps_multiplier=1.0):
-        if int(axis) == AXIS_NONE:
-            raise RuntimeError('ReferenceStdDevClipper: AXIS_NONE is not supported'
+        if axis == 'none':
+            raise RuntimeError("ReferenceStdDevClipper: axis 'none' is not supported"
                                ' (rf_kernels::std_dev_clipper does not implement it)')
-        assert int(axis) in (AXIS_FREQ, AXIS_TIME)
+        assert axis in ('freq', 'time')
         assert Df >= 1 and Dt >= 1
         assert sigma >= 0.0
 
-        self.axis = int(axis)
+        self.axis = axis
         self.sigma = float(sigma)
         self.Df = int(Df)
         self.Dt = int(Dt)

@@ -35,7 +35,7 @@ static constexpr long smem_reduction_bytes = 3 * 32 * long(sizeof(float));
 static constexpr long smem_budget = 48*1024 - smem_reduction_bytes;
 
 // Target samples per block on the "large L" path. Small enough that a plane spreads over
-// many blocks (the AXIS_NONE caller has only a handful of rows, so per-row parallelism
+// many blocks (the axis='none' caller has only a handful of rows, so per-row parallelism
 // alone would leave the GPU idle), large enough that the per-block overhead is amortized.
 static constexpr long target_chunk = 1024;
 static constexpr long max_nchunk = 1024;   // so one block can always finalize a row
@@ -238,7 +238,7 @@ wrms_smem_kernel(float *mean_out, float *var_out,
 // Global-memory kernels: one step is a partial-sum kernel plus a finalize kernel.
 //
 // Used when a row does not fit in shared memory, which in the RFI chain means the
-// AXIS_NONE clipper, whose "row" is a whole (F_ds, T_ds) plane. There are only a handful
+// axis='none' clipper, whose "row" is a whole (F_ds, T_ds) plane. There are only a handful
 // of rows there, so the work has to be spread along the row rather than across rows.
 
 
@@ -502,12 +502,12 @@ void GpuWrms::time_selected()
     // two_pass is true throughout: it costs one extra on-chip sweep, and the point of
     // the timing is the global traffic.
     const vector<TimingConfig> configs = {
-        { 4096,   8*1024, 1, 0.0, "std_dev_clipper(AXIS_TIME, 1, 1)" },
-        { 4096,   8*1024, 9, 5.0, "intensity_clipper(AXIS_TIME, 1, 1)" },
-        { 1024,   8*4096, 1, 0.0, "std_dev_clipper(AXIS_FREQ, 1, 1)" },
-        { 1024,   8*4096, 9, 5.0, "intensity_clipper(AXIS_FREQ, 1, 1)" },
-        { 512,    8*256,  9, 3.0, "intensity_clipper(AXIS_FREQ, 2, 16)" },
-        { 131072, 8,      9, 3.0, "intensity_clipper(AXIS_NONE, 2, 16)" },
+        { 4096,   8*1024, 1, 0.0, "std_dev_clipper(time, 1, 1)" },
+        { 4096,   8*1024, 9, 5.0, "intensity_clipper(time, 1, 1)" },
+        { 1024,   8*4096, 1, 0.0, "std_dev_clipper(freq, 1, 1)" },
+        { 1024,   8*4096, 9, 5.0, "intensity_clipper(freq, 1, 1)" },
+        { 512,    8*256,  9, 3.0, "intensity_clipper(freq, 2, 16)" },
+        { 131072, 8,      9, 3.0, "intensity_clipper(none, 2, 16)" },
     };
 
     const vector<long> tpb_values = { 128, 256, 512, 1024 };

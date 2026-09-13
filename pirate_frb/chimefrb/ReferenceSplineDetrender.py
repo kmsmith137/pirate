@@ -9,7 +9,7 @@ class docstring).
 import numpy as np
 
 import ksgpu
-from ..pirate_pybind11 import ClipperAxis, GpuSplineDetrender
+from ..pirate_pybind11 import GpuSplineDetrender
 from .transform_io import (axis_from_json, check_json_keys)
 
 
@@ -46,9 +46,9 @@ class GpuSplineDetrenderInjections:
         ``nt_chunk`` is a processing granularity with no effect on the result (the fit is per
         time sample), and is ignored."""
         check_json_keys(d, 'spline_detrender', ['axis', 'nbins', 'epsilon', 'nt_chunk'])
-        if axis_from_json(d['axis']) != ClipperAxis.FREQ:
+        if axis_from_json(d['axis']) != 'freq':
             raise ValueError(f"GpuSplineDetrender.from_json_dict: axis={d['axis']!r}, but this class"
-                             f" implements AXIS_FREQ only (as did the old code)")
+                             f" implements axis 'freq' only (as did the old code)")
         if d['nt_chunk'] < 0:
             raise ValueError(f"GpuSplineDetrender.from_json_dict: nt_chunk={d['nt_chunk']} < 0")
         return cls(nbeams, nfreq, ntime, d['nbins'], d['epsilon'])

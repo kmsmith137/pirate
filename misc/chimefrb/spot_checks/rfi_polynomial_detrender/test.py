@@ -40,8 +40,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harness
 
-from pirate_frb.chimefrb.ReferencePolynomialDetrender import (ReferencePolynomialDetrender,
-                                                              AXIS_FREQ, AXIS_TIME)
+from pirate_frb.chimefrb.ReferencePolynomialDetrender import ReferencePolynomialDetrender
 from pirate_frb.chimefrb.test_polynomial_detrender import (gate_bracket, random_weights,
                                                            random_intensity)
 
@@ -55,11 +54,11 @@ SEED = 137
 # test_polynomial_detrender.weight_row(); the production rows pin their own kind but are
 # given dead runs too, since that is what the chain produces.
 EPSILON = 0.01
-CONFIGS = ([(AXIS_TIME, 4, EPSILON, 1024, 64, 2048, 'counts'),
-            (AXIS_TIME, 4, EPSILON, 1024, 64, 2048, 'binary'),
-            (AXIS_TIME, 4, EPSILON, 1024, 64, 2048, None)]
-           + [(AXIS_TIME, d, EPSILON, 256, 32, 512, None) for d in range(0, 9)]
-           + [(AXIS_FREQ, d, EPSILON, 0, 512, 32, None) for d in (0, 4, 8)])
+CONFIGS = ([('time', 4, EPSILON, 1024, 64, 2048, 'counts'),
+            ('time', 4, EPSILON, 1024, 64, 2048, 'binary'),
+            ('time', 4, EPSILON, 1024, 64, 2048, None)]
+           + [('time', d, EPSILON, 256, 32, 512, None) for d in range(0, 9)]
+           + [('freq', d, EPSILON, 0, 512, 32, None) for d in (0, 4, 8)])
 
 # See "what agree means". Both relative to each row's max |fit|, and per axis. MEASURED
 # (seed 137): along time, weighted samples differ from the float64 reference by at most
@@ -71,10 +70,12 @@ CONFIGS = ([(AXIS_TIME, 4, EPSILON, 1024, 64, 2048, 'counts'),
 # magnified by extrapolation -- so the zero-weight comparison is not made along frequency:
 # it would say nothing about either code. A semantic error (a wrong grid, basis or
 # coefficient order) shows up at weighted samples at 1e-1 and beyond.
-RTOL_WEIGHTED = {AXIS_TIME: 2.0e-4, AXIS_FREQ: 4.0e-3}
-RTOL_UNWEIGHTED = {AXIS_TIME: 5.0e-2}
+RTOL_WEIGHTED = {'time': 2.0e-4, 'freq': 4.0e-3}
+RTOL_UNWEIGHTED = {'time': 5.0e-2}
 
-AXIS_NAMES = {AXIS_FREQ: "FREQ", AXIS_TIME: "TIME"}
+# rf_kernels::axis_type, which the driver casts an integer straight to. This is the only
+# place the old numbering survives in python; everywhere else an axis is its name.
+AXIS_INT = {"freq": 0, "time": 1, "none": 2}
 
 
 def make_input(rng, ref, F, T, kind):
@@ -179,16 +180,16 @@ def main():
         ref = ReferencePolynomialDetrender(polydeg, epsilon, nt_chunk, axis)
         x = make_input(rng, ref, F, T, kind)
         t.note("axis=%s polydeg=%d epsilon=%g nt_chunk=%d (F, T)=(%d, %d) weights=%s, seed %d"
-               % (AXIS_NAMES[axis], polydeg, epsilon, nt_chunk, F, T, kind or 'mix', SEED))
+               % (axis, polydeg, epsilon, nt_chunk, F, T, kind or 'mix', SEED))
 
         old = harness.run_driver(HERE, x, params={"polydeg": polydeg, "epsilon": epsilon,
-                                                  "axis": int(axis), "nt_chunk": nt_chunk},
+                                                  "axis": AXIS_INT[axis], "nt_chunk": nt_chunk},
                                  dtype=np.float32)
 
         model = ref.fit(x[0][None], x[1][None])
         old_masked = compare(t, "old vs reference", x, old[0], old[1], ref, model)
 
-        if (gpu is not None) and (axis == AXIS_TIME):
+        if (gpu is not None) and (axis == 'time'):
             (cp, Gpu) = gpu
             det = Gpu(1, F, T, polydeg, epsilon, nt_chunk)
             gi = cp.asarray(x[0][None])

@@ -39,8 +39,9 @@ namespace chimefrb {
 //
 // Where a cell HAS weight, (Df,Dt) = (1,1) is exact: the intensity is copied through bit for
 // bit, as rf_kernels' memcpy does, rather than computed as (w*i)/w, which rounds to within an
-// ulp of i but not always to i. The clippers depend on this: their AXIS_FREQ path transposes
-// with (1,1,true), and its statistic must see exactly the values that an AXIS_TIME statistic
+// ulp of i but not always to i. The clippers depend on this: their ClipperAxis::FREQ path
+// transposes with (1,1,true), and its statistic must see exactly the values that a
+// ClipperAxis::TIME statistic
 // sees on pre-transposed input.
 //
 // (Df, Dt) and the array shapes are runtime, so there is no table of supported

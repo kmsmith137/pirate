@@ -25,7 +25,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harness
 
-from pirate_frb.chimefrb import AXIS_FREQ, AXIS_TIME, ReferenceStdDevClipper, std_dev_apply
+from pirate_frb.chimefrb import ReferenceStdDevClipper, std_dev_apply
 from pirate_frb.chimefrb.test_std_dev_clipper import (stage2_bracket, end_to_end_bracket,
                                                       ill_conditioned, keep_bracket)
 
@@ -37,7 +37,9 @@ SEED = 137
 NFREQ = 128
 NT = 512
 SIGMA = 3.0          # the production value
-AXIS_NAMES = {AXIS_FREQ: "FREQ", AXIS_TIME: "TIME"}
+# rf_kernels::axis_type, which the driver casts an integer straight to. This is the only
+# place the old numbering survives in python; everywhere else an axis is its name.
+AXIS_INT = {"freq": 0, "time": 1, "none": 2}
 
 
 def make_input(rng):
@@ -74,7 +76,7 @@ def make_one_valid(rng, axis):
 
     x = make_input(rng)
     x[1] = 0.0
-    if axis == AXIS_TIME:
+    if axis == 'time':
         x[1, 40, :] = 1.0
     else:
         x[1, :, 300] = 1.0
@@ -86,7 +88,7 @@ def run_old(x, axis, two_pass):
     The last is (2, nrows), mean and rms, from the clipper's stage 1."""
 
     return harness.run_driver(HERE, x, dtype=np.float32, noutputs=3, params={
-        "axis": axis, "sigma": SIGMA, "Df": 1, "Dt": 1, "two_pass": int(two_pass)})
+        "axis": AXIS_INT[axis], "sigma": SIGMA, "Df": 1, "Dt": 1, "two_pass": int(two_pass)})
 
 
 def check_transform(t, label, x, axis, two_pass):
@@ -126,7 +128,7 @@ def check_transform(t, label, x, axis, two_pass):
                      why="a variance is valid or not; eps_multiplier bracket 1.5 / 0.5")
 
     v_cond = np.where(v1 > 0, v_p, 0.0)
-    L = NT if (axis == AXIS_TIME) else NFREQ
+    L = NT if (axis == 'time') else NFREQ
     dB = end_to_end_bracket(v_cond, m_p, L, two_pass, SIGMA)
     (klo, khi) = keep_bracket(v_cond, SIGMA, dB)
     wlo = std_dev_apply(W, klo.astype(np.float64), axis, 1, 1)
@@ -150,9 +152,9 @@ def main():
     x = make_input(rng)
     t.note("(2, %d, %d) intensity/weights from seed %d" % (NFREQ, NT, SEED))
 
-    for axis in (AXIS_TIME, AXIS_FREQ):
+    for axis in ('time', 'freq'):
         for two_pass in (True, False):
-            tag = "%s tp=%d" % (AXIS_NAMES[axis], int(two_pass))
+            tag = "%s tp=%d" % (axis, int(two_pass))
             check_transform(t, tag, x, axis, two_pass)
             check_transform(t, tag + " 1-valid", make_one_valid(rng, axis), axis, two_pass)
 

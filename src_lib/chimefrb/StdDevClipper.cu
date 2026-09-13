@@ -137,8 +137,8 @@ sd_clip_1d_kernel(float *var, long nrows, float sigma)
 //
 // Step 4: sd_apply_kernel, zero the full-resolution weights of every killed row.
 //
-// STORES ZEROS ONLY. The old code ANDs a mask into the weights (AXIS_FREQ) or memsets whole
-// rows (AXIS_TIME); storing +0.0f only where a row was killed is bit-identical to both, and
+// STORES ZEROS ONLY. The old code ANDs a mask into the weights (its AXIS_FREQ) or memsets
+// whole rows (AXIS_TIME); storing +0.0f only where a row was killed is bit-identical to both, and
 // touches the weights only in proportion to the killed fraction.
 //
 // A warp owns a 32-by-32 tile of downsampled cells: 32 consecutive t_ds (one per lane) by
@@ -208,7 +208,7 @@ sd_apply_kernel(float *weights, const float *var, int Df, int Dt,
 static ClipperAxis _checked_axis(ClipperAxis axis)
 {
     if (axis == ClipperAxis::NONE)
-        throw runtime_error("GpuStdDevClipper: AXIS_NONE is not supported"
+        throw runtime_error("GpuStdDevClipper: axis 'none' is not supported"
                             " (rf_kernels::std_dev_clipper does not implement it)");
     return axis;
 }
@@ -278,7 +278,7 @@ void GpuStdDevClipper::time_selected()
 {
     // The two std_dev_clippers in the production RFI config
     // (misc/chimefrb/configs/21-03-07-low-latency-uniform-badchannel-mask-noplot.json), each
-    // of which appears there with both two_pass values: 36 AXIS_TIME and 24 AXIS_FREQ, all
+    // of which appears there with both two_pass values: 36 'time' and 24 'freq', all
     // at (Df,Dt) = (1,1) and sigma = 3.
     const vector<ClipperAxis> axes = { ClipperAxis::TIME, ClipperAxis::FREQ };
 
@@ -326,7 +326,7 @@ void GpuStdDevClipper::time_selected()
         const double nbytes = freq ? (6.0 * full) : (2.0 * full);
 
         cout << "\nGpuStdDevClipper::time_selected()\n"
-             << "    axis=" << (freq ? "FREQ" : "TIME") << ", (Df,Dt)=(1,1), sigma=" << sigma
+             << "    axis=" << axis_to_string(axis) << ", (Df,Dt)=(1,1), sigma=" << sigma
              << ", two_pass=" << two_pass << "\n"
              << "    (B, F, T) = (" << B << ", " << F << ", " << T << "),"
              << " (R, L) = (" << probe.wrms_R << ", " << probe.wrms_L << ")\n"

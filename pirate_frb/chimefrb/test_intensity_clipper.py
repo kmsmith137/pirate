@@ -32,7 +32,7 @@ is what misc/chimefrb/spot_checks/rfi_intensity_clipper/ is for.
 
 import numpy as np
 
-from . import (AXIS_FREQ, AXIS_TIME, AXIS_NONE, ClipperAxis, GpuIntensityClipper,
+from . import (GpuIntensityClipper,
                GpuWiDownsampler, GpuWrms, ReferenceIntensityClipper, intensity_clip)
 from .test_wrms import EPS32, MARGIN
 from ..utils import atomic_print
@@ -45,10 +45,10 @@ WARP_COUNTS = [4, 8, 16, 32]
 # is 3, not 5, for the (2,16) pair: the two thresholds are different numbers, and a test
 # that always drew them equal could not see a kernel that confused them.
 PRODUCTION_CONFIGS = [
-    (ClipperAxis.FREQ, 1, 1),
-    (ClipperAxis.TIME, 1, 1),
-    (ClipperAxis.NONE, 2, 16),
-    (ClipperAxis.FREQ, 2, 16),
+    ('freq', 1, 1),
+    ('time', 1, 1),
+    ('none', 2, 16),
+    ('freq', 2, 16),
 ]
 
 # The bracket on the final clip, in relative units of sigma: how much roundoff we accept
@@ -75,7 +75,7 @@ def random_config(rng):
     if rng.uniform() < 0.5:
         (axis, Df, Dt) = PRODUCTION_CONFIGS[int(rng.integers(len(PRODUCTION_CONFIGS)))]
     else:
-        axis = [ClipperAxis.FREQ, ClipperAxis.TIME, ClipperAxis.NONE][int(rng.integers(3))]
+        axis = ['freq', 'time', 'none'][int(rng.integers(3))]
         # Nothing requires Df or Dt to be a power of two, so draw some that are not.
         Df = int(rng.choice([1, 1, 2, 3, 4]))
         Dt = int(rng.choice([1, 1, 2, 3, 8, 16]))
@@ -99,8 +99,8 @@ def random_geometry(rng, axis, Df, Dt):
     """Draw (B, F, nt_chunk) satisfying F % (32*Df) == 0 and nt_chunk % (32*Dt) == 0.
 
     Writing F_ds = 32*a and T_ds = 32*b, the statistic's row length L is 32*b for
-    AXIS_TIME, 32*a for AXIS_FREQ, and 1024*a*b for AXIS_NONE. Only the last can reach
-    GpuWrms's global-memory kernel at any geometry small enough to test, so AXIS_NONE
+    'time', 32*a for 'freq', and 1024*a*b for 'none'. Only the last can reach
+    GpuWrms's global-memory kernel at any geometry small enough to test, so 'none'
     draws sometimes put a*b either side of the threshold on purpose: a shared-memory
     budget that forgets an allocation fails to launch only in a narrow band, which a
     uniform draw hides for a long time (that is not hypothetical -- it is what happened
@@ -109,7 +109,7 @@ def random_geometry(rng, axis, Df, Dt):
 
     B = int(rng.integers(1, 4))
 
-    if (axis == ClipperAxis.NONE) and (rng.uniform() < 0.25):
+    if (axis == 'none') and (rng.uniform() < 0.25):
         ab0 = max(1, L_SHARED_MAX // 1024)      # largest a*b that still fits on-chip
         ab = int(rng.integers(max(1, ab0 - 1), ab0 + 3))
         (a, b) = (1, ab) if rng.integers(2) else (ab, 1)
@@ -128,8 +128,8 @@ def random_arrays(rng, B, F, T):
       - a large per-beam offset and a Bernoulli weight mask, from
         testutils.random_wi_pair(), which says why the offset matters here;
       - whole bad channels and whole bad time samples, which are the two RFI shapes
-        AXIS_TIME and AXIS_FREQ respectively exist to catch, plus isolated spikes for
-        AXIS_NONE. Without them a 2-6 sigma clip on clean Gaussian data masks nothing and
+        'time' and 'freq' respectively exist to catch, plus isolated spikes for
+        'none'. Without them a 2-6 sigma clip on clean Gaussian data masks nothing and
         the whole test is a comparison of two untouched weight arrays;
       - a few percent of channels fully masked, constant, or near-constant at a large
         mean, which are the three ways to land on a variance-validity cutoff
@@ -144,7 +144,7 @@ def random_arrays(rng, B, F, T):
 
     for b in range(B):
         # The bad rows are kept to about 1.5% and the spikes are made much larger than
-        # them, for a reason specific to AXIS_NONE: its statistic is the whole plane, so
+        # them, for a reason specific to 'none': its statistic is the whole plane, so
         # bad rows inflate the very rms the clip is measured against. A fraction f of
         # samples at A sigma raises the plane's rms by sqrt(1 + f*A^2), and at f = 3% and
         # A = 20 that factor is 3.5 -- enough that a 20-sigma sample is no longer an
@@ -196,7 +196,7 @@ def _run_pipeline(cp, ic, in_i, in_w):
     else:
         (ds_i, ds_w) = (g_i, g_w)
 
-    if ic.axis == ClipperAxis.FREQ:
+    if ic.axis == 'freq':
         t_i = cp.empty((ic.nbeams, ic.T_ds, ic.F_ds), dtype=cp.float32)
         t_w = cp.empty((ic.nbeams, ic.T_ds, ic.F_ds), dtype=cp.float32)
         GpuWiDownsampler(1, 1, True).launch(t_i, t_w, ds_i, ds_w)
@@ -280,6 +280,30 @@ def _reference_bracket(axis, sigma, Df, Dt, niter, iter_sigma, two_pass, I, W,
             run(sigma * (1.0 + sigma_bracket), EPS_LO))
 
 
+def _check_axis_argument():
+    """The axis is one of three strings, in and out, and anything else is refused with a
+    message that says what to write. The three spellings are the whole vocabulary: the same
+    strings appear in a yaml file, in C++ (axis_to_string() in ClipperAxis.hpp) and in the
+    'time --cfrb' printout, so a caller never has to convert."""
+
+    (B, F, T) = (1, 64, 64)
+    for axis in ('freq', 'time', 'none'):
+        ic = GpuIntensityClipper(B, F, T, T, axis, 5.0, 1, 1, 1, 3.0, True)
+        assert ic.axis == axis, f'axis={axis!r} read back as {ic.axis!r}'
+        assert ic.to_yaml_dict()['axis'] == axis
+
+    # A typo, the old uppercase spelling, and a non-string. The message names the three
+    # accepted values in every case: 'FREQ' is refused on purpose (one spelling, no case
+    # folding), and an integer no longer means anything (it used to be the enum's value).
+    for bad in ('freqq', 'FREQ', 'AXIS_FREQ', '', 1, None):
+        try:
+            GpuIntensityClipper(B, F, T, T, bad, 5.0, 1, 1, 1, 3.0, True)
+        except RuntimeError as e:
+            assert "'freq', 'time' or 'none'" in str(e), f'axis={bad!r}: unhelpful message {e}'
+        else:
+            raise AssertionError(f'axis={bad!r} was accepted')
+
+
 def test_intensity_clipper(iteration=0, rng=None, verbose=False):
     """One randomized comparison of GpuIntensityClipper against its numpy reference."""
 
@@ -291,6 +315,9 @@ def test_intensity_clipper(iteration=0, rng=None, verbose=False):
         return
 
     rng = _default_rng(rng)
+
+    if iteration == 0:
+        _check_axis_argument()
 
     (axis, Df, Dt, niter, sigma, iter_sigma, two_pass, warps) = random_config(rng)
     (B, F, T) = random_geometry(rng, axis, Df, Dt)
@@ -326,19 +353,19 @@ def test_intensity_clipper(iteration=0, rng=None, verbose=False):
                                       I64, W64, sb)
     _sandwich('end-to-end (niter=1)', w1, r_lo, r_hi)
 
-    # Structural check 1: AXIS_FREQ equals AXIS_TIME on the transposed input, BITWISE.
+    # Structural check 1: 'freq' equals 'time' on the transposed input, BITWISE.
     # The FREQ path transposes and then reduces rows, which is the same kernel on the same
     # values in the same order as the TIME path on pre-transposed input, so there is no
     # roundoff to allow for -- provided GpuWiDownsampler's (1,1) transpose copies the
     # intensity through exactly, which it does. This is the cheapest strong check on the
     # transpose plumbing, and it needs no reference at all.
-    if (Df == 1) and (Dt == 1) and (axis == ClipperAxis.FREQ):
-        ic_t = GpuIntensityClipper(B, T, F, F, ClipperAxis.TIME, sigma, 1, 1, niter,
+    if (Df == 1) and (Dt == 1) and (axis == 'freq'):
+        ic_t = GpuIntensityClipper(B, T, F, F, 'time', sigma, 1, 1, niter,
                                    iter_sigma, two_pass, warps)
         w_t = _run_gpu(cp, ic_t, np.ascontiguousarray(np.swapaxes(in_i, 1, 2)),
                        np.ascontiguousarray(np.swapaxes(in_w, 1, 2)))
         assert np.array_equal(np.swapaxes(w_t, 1, 2), w_gpu), \
-            'AXIS_FREQ disagrees with AXIS_TIME on the transposed input'
+            "axis 'freq' disagrees with 'time' on the transposed input"
 
     # Structural check 2: the mask is constant within a (Df, Dt) cell. Either all of a
     # cell's weights are zero, or none of them changed. This is the direct test of the

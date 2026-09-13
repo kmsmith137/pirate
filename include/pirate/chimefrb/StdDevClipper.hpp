@@ -13,7 +13,8 @@ namespace chimefrb {
 #endif
 
 
-// GpuStdDevClipper: zeroes whole channels (AXIS_TIME) or whole time samples (AXIS_FREQ)
+// GpuStdDevClipper: zeroes whole channels (ClipperAxis::TIME) or whole time samples
+// (ClipperAxis::FREQ)
 // whose variance is an outlier among its peers. A port of rf_kernels::std_dev_clipper, the
 // most numerous transform in the old CHIME FRB search's RFI chain (60 of its 120 nodes).
 // Where GpuIntensityClipper catches samples that are too bright, this catches rows whose
@@ -44,7 +45,7 @@ namespace chimefrb {
 //     chunking note in ClipperBase.hpp. ReferenceStdDevClipper implements
 //     ntime = N*nt_chunk.
 //
-// AXIS_NONE is not supported: the old code does not implement it, and the chain does not
+// ClipperAxis::NONE is not supported: the old code does not implement it, and the chain does not
 // use it. Nothing here is stateful across chunks.
 
 struct GpuStdDevClipper : public GpuClipperBase

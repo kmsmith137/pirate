@@ -67,7 +67,6 @@ import json
 
 import yaml
 
-from ..pirate_pybind11 import ClipperAxis
 from ..utils import atomic_print
 
 
@@ -219,25 +218,13 @@ def check_json_keys(d, class_name, required):
 # Axis strings (yaml and legacy json)
 
 
-_AXIS_STR = {int(ClipperAxis.FREQ): 'freq', int(ClipperAxis.TIME): 'time', int(ClipperAxis.NONE): 'none'}
-_AXIS_FROM_STR = {'freq': ClipperAxis.FREQ, 'time': ClipperAxis.TIME, 'none': ClipperAxis.NONE}
-_AXIS_FROM_JSON = {'AXIS_FREQ': ClipperAxis.FREQ, 'AXIS_TIME': ClipperAxis.TIME, 'AXIS_NONE': ClipperAxis.NONE}
-
-
-def axis_to_str(axis):
-    """'freq', 'time' or 'none', from a ClipperAxis or the AXIS_* integer."""
-    return _AXIS_STR[int(axis)]
-
-
-def axis_from_str(s):
-    """A ClipperAxis, from the yaml strings 'freq', 'time', 'none'."""
-    if s not in _AXIS_FROM_STR:
-        raise ValueError(f"expected axis to be one of {sorted(_AXIS_FROM_STR)}, got {s!r}")
-    return _AXIS_FROM_STR[s]
+# The one place the OLD spelling of an axis survives. Everywhere else -- a constructor
+# argument, a yaml file, a C++ printout -- an axis is 'freq', 'time' or 'none'.
+_AXIS_FROM_JSON = {'AXIS_FREQ': 'freq', 'AXIS_TIME': 'time', 'AXIS_NONE': 'none'}
 
 
 def axis_from_json(s):
-    """A ClipperAxis, from the legacy json strings 'AXIS_FREQ', 'AXIS_TIME', 'AXIS_NONE'."""
+    """The axis name, from the legacy json spellings 'AXIS_FREQ', 'AXIS_TIME', 'AXIS_NONE'."""
     if s not in _AXIS_FROM_JSON:
         raise ValueError(f"expected a legacy axis string, one of {sorted(_AXIS_FROM_JSON)}, got {s!r}")
     return _AXIS_FROM_JSON[s]

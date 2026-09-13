@@ -841,7 +841,7 @@ def _sec_chimefrb(rep, ndraw):
     rep.rate('shared-memory path', shared, ndraw, (50, 90),
              'the fast path: row staged on-chip, input read once')
     rep.rate('global-memory path', ndraw - shared, ndraw, (10, 50),
-             'the AXIS_NONE path: row re-read once per refinement')
+             "the axis='none' path: row re-read once per refinement")
     rep.rate('niter > 1 (refinements run)', refined, ndraw, (55, 90),
              'test_wrms: the inductive branch, and the only user of iter_sigma')
     rep.rate('two_pass', twopass, ndraw, (30, 70),
@@ -860,7 +860,7 @@ def _sec_chimefrb(rep, ndraw):
     # ---- GpuIntensityClipper
 
     from ..chimefrb import test_intensity_clipper as ict
-    from ..chimefrb import (ClipperAxis, ReferenceWiDownsampler, ReferenceWrms,
+    from ..chimefrb import (ReferenceWiDownsampler, ReferenceWrms,
                             intensity_clip, wrms_view)
 
     rep.section('chimefrb.test_intensity_clipper randomization',
@@ -869,7 +869,7 @@ def _sec_chimefrb(rep, ndraw):
 
     production, downsampled, refined, global_path = 0, 0, 0, 0
     ic_cost = []
-    per_axis = {ClipperAxis.FREQ: 0, ClipperAxis.TIME: 0, ClipperAxis.NONE: 0}
+    per_axis = {'freq': 0, 'time': 0, 'none': 0}
     any_clipped, any_dead, sigma_differs = 0, 0, 0
     clip_frac = []
 
@@ -904,8 +904,8 @@ def _sec_chimefrb(rep, ndraw):
 
     rep.rate('config drawn from the production four', production, ndraw, (40, 80),
              'spends most iterations on the (axis, Df, Dt) the port will actually use')
-    for (ax, label) in ((ClipperAxis.FREQ, 'AXIS_FREQ'), (ClipperAxis.TIME, 'AXIS_TIME'),
-                        (ClipperAxis.NONE, 'AXIS_NONE')):
+    for ax in ('freq', 'time', 'none'):
+        label = f"axis={ax!r}"
         rep.rate(label, per_axis[ax], ndraw, (15, 55),
                  'all three axes must be sampled: they differ in the reshape and in'
                  ' which arrays get materialized')
@@ -914,8 +914,8 @@ def _sec_chimefrb(rep, ndraw):
     rep.rate('niter > 1 (refinements run)', refined, ndraw, (40, 80),
              'the GPU-supplied-(mean,var) comparison is the only one that runs here')
     rep.rate('GpuWrms global-memory path', global_path, ndraw, (3, 40),
-             'only AXIS_NONE reaches it; random_geometry() straddles the threshold on'
-             ' purpose')
+             "only axis='none' reaches it; random_geometry() straddles the threshold on"
+             " purpose")
     rep.rate('sigma and iter_sigma differ by > 0.5', sigma_differs, ndraw, (55, 95),
              'a kernel that confused the two is invisible when they are drawn equal')
 
@@ -984,8 +984,9 @@ def _sec_chimefrb(rep, ndraw):
         any_clipped += bool(clipped.any())
 
     rep.rate('config drawn from the production two', production, ndraw, (40, 85),
-             'most iterations on (AXIS_TIME or AXIS_FREQ, (1,1)), which is all the chain uses')
-    for (ax, label) in ((ClipperAxis.TIME, 'AXIS_TIME'), (ClipperAxis.FREQ, 'AXIS_FREQ')):
+             "most iterations on (axis='time' or 'freq', (1,1)), which is all the chain uses")
+    for ax in ('time', 'freq'):
+        label = f"axis={ax!r}"
         rep.rate(label, per_axis.get(ax, 0), ndraw, (30, 70),
                  'both axes: they differ in the transpose and in which way rows are zeroed')
     rep.rate('(Df,Dt) != (1,1)', downsampled, ndraw, (15, 55),

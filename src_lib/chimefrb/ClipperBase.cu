@@ -51,7 +51,7 @@ static void _check_args(const char *name, long nfreq, long ntime, long nt_chunk,
 
     // One uniform rule at every axis and every (Df,Dt). The 32 is GpuWiDownsampler's
     // output tile size and the clip kernels' warp width. It is slightly stronger than
-    // strictly necessary -- AXIS_TIME and AXIS_NONE at (Df,Dt)=(1,1) run no downsampler,
+    // strictly necessary -- ClipperAxis::TIME and ::NONE at (Df,Dt)=(1,1) run no downsampler,
     // and so need only nt_chunk % 32 == 0 -- but one rule is worth more than the extra
     // freedom, since the tests compare axes against each other on the same geometry.
     if ((nfreq % (32*Df)) || (nt_chunk % (32*Dt))) {
@@ -153,7 +153,7 @@ GpuClipperBase::_launch_statistic(const Array<float> &intensity, const Array<flo
         GpuWiDownsampler(Df, Dt, false).launch(out.cell_i, cell_w, intensity, weights, stream);
     }
 
-    // Step 1b: for AXIS_FREQ, transpose the (small) downsampled arrays so that the
+    // Step 1b: for ClipperAxis::FREQ, transpose the (small) downsampled arrays so that the
     // statistic's row -- a frequency column -- is contiguous.
     //
     // Note that this is a transpose of the DOWNSAMPLED arrays, not a second downsample
