@@ -229,8 +229,14 @@ class Test:
         worst = float(rel.max()) if rel.size else 0.0
 
         ok = bool(np.allclose(got, want, rtol=rtol, atol=atol))
-        print("  %s %-22s max rel diff %.3g   (tolerance %.3g)"
-              % ("ok  " if ok else "FAIL", label, worst, rtol))
+        line = ("  %s %-22s max rel diff %.3g   (tolerance %.3g)"
+                % ("ok  " if ok else "FAIL", label, worst, rtol))
+        if atol != 0.0:
+            # The relative figure says little when the tolerance is absolute; add the number
+            # np.allclose() actually held against atol.
+            worst_abs = float(np.abs(got - want).max()) if got.size else 0.0
+            line += "   max abs diff %.3g   (atol %.3g)" % (worst_abs, atol)
+        print(line)
         if why:
             print("       %s" % why)
 

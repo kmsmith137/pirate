@@ -1546,8 +1546,12 @@ def show_dedisperser(args):
         atomic_print("\n")
         atomic_print('Channel map (tree_index -> freq_index -> frequency)')
         for i in range(len(channel_map)):
+            # delay_to_frequency(i), not index_to_frequency(channel_map[i]): within a channel
+            # the map's fractional part is placed in freq^(-2), not in frequency (see
+            # DedispersionConfig::make_channel_map()), so the round trip would be off by
+            # ~1e-5 of a channel.
             freq_index = channel_map[i]
-            freq = config.index_to_frequency(freq_index)
+            freq = config.delay_to_frequency(i)
             atomic_print(f'  tree_index={i}  freq_index={freq_index:.4f}  freq={freq:.2f}')
 
     if args.resources or args.fine_grained_resources:

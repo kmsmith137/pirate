@@ -164,7 +164,18 @@ struct DedispersionConfig
     // define the edges of the tree channel in frequency space. (Note: channel_map is
     // monotonically decreasing, so channel_map[n+1] < channel_map[n].)
     //
-    // NOTE: we use double precision, since weights are computed by differencing
+    // NOTE 1: there are two ways to implement this, the "simple" way and the "chime" method.
+    // The difference is negligible (of order ~1e-5). We currently use the chime method, since
+    // precise agreement with bonsai is helpful for debugging.
+    //
+    // However, the chime method has the following unfortunate property: delay_to_frequency(n)
+    // is not equal to index_to_frequency(channel_map[n]). The former is preferred (and using
+    // the latter may cause unit tests to fail!). For this reason (and because the simple
+    // method is fewer lines of code), we may switch to the simple method in the future.
+    //
+    // For more info on the "simple" and "chime" methods, see comments in DedispersionConfig.cpp.
+    //
+    // NOTE 2: we use double precision, since weights are computed by differencing
     // (channel_map[i+1] - channel_map[i]), which loses a lot of relative precision.
 
     ksgpu::Array<double> make_channel_map() const;

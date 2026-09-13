@@ -317,7 +317,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Samples random values and checks that forward/inverse transforms\n"
                "are correct. Throws an exception if test fails.")
           .def("make_channel_map", &DedispersionConfig::make_channel_map,
-               "Create channel map array defining tree-to-frequency mapping.\n\n"
+               "Create channel map array c_f defining tree-to-frequency mapping.\n\n"
+               "For more info, see the dedispersion tex notes.\n\n"
                "Returns:\n"
                "    numpy array of length (2^toplevel_tree_rank + 1) with channel boundaries")
           // dtype: reads return numpy.dtype, writes accept strings/numpy dtypes/None,

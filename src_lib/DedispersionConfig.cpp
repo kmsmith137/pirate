@@ -239,11 +239,60 @@ long DedispersionConfig::max_width_of_base_tree() const
 Array<double> DedispersionConfig::make_channel_map() const
 {
     long nchan = pow2(toplevel_tree_rank);
+    long nfreq = this->get_total_nfreq();
     Array<double> channel_map({nchan+1}, af_rhost);
+    
+    // The channel_map defines the mapping between "tree" channels and frequency channels.
+    // Given tree channel 0 <= n < ntree, the values (channel_map[n+1], channel_map[n])
+    // define the edges of the tree channel in frequency space. (Note: channel_map is
+    // monotonically decreasing, so channel_map[n+1] < channel_map[n].)
+    //
+    // There are two ways to implement this, the "simple" way and the "chime" method.
+    // The difference is negligible (of order ~1e-5). We currently use the chime method, since
+    // precise agreement with bonsai is helpful for debugging.
+    //
+    // However, the chime method has the following unfortunate property: delay_to_frequency(n)
+    // is not equal to index_to_frequency(channel_map[n]). The former is preferred (and using
+    // the latter may cause unit tests to fail!). For this reason (and because the simple
+    // method is fewer lines of code), we may switch to the simple method in the future.
     
     for (long n = 0; n <= nchan; n++) {
         double freq = this->delay_to_frequency(n);
-        channel_map.data[n] = this->frequency_to_index(freq);
+        double c = this->frequency_to_index(freq);
+
+        // Method 1: "simple" method (currently disabled!)
+        // channel_map.data[n] = this->frequency_to_index(freq);
+
+        // Method 2: "chime" method.
+        //
+        // The entries are fractional frequency-channel indices, but NOT frequency_to_index()
+        // of the tree-channel edges: within a frequency channel, an edge is placed at the
+        // fraction of the channel measured in freq^(-2), not in frequency. This is what makes
+        // the gridding kernel split a straddling frequency channel in proportion to dispersion
+        // delay, the same rule as bonsai; see the dedispersion tex notes ("Tree gridding kernel").
+        //
+        // The two placements differ by at most ~3/8 of a channel's fractional width, i.e. ~1e-5
+        // of a channel at CHIME/CHORD resolution, so anything that converts an entry back to a
+        // frequency should use delay_to_frequency(n) rather than index_to_frequency(channel_map[n]).
+
+        // The frequency channel containing the edge. Clamped so that the band top
+        // (c == nfreq) resolves to the last channel, with fraction 1 below.
+        long F = std::min(long(c), nfreq - 1);
+
+        double nu0 = this->index_to_frequency(F);      // the channel's lower edge
+        double nu1 = this->index_to_frequency(F+1);    // the channel's upper edge
+        double x0 = 1.0 / (nu0 * nu0);
+        double x1 = 1.0 / (nu1 * nu1);
+        double x = 1.0 / (freq * freq);
+
+        // Fraction of the channel lying below 'freq', measured in x. The clamp absorbs
+        // roundoff in delay_to_frequency() and frequency_to_index(), which can put 'freq'
+        // marginally outside [nu0, nu1] when the edge coincides with a channel boundary.
+        double frac = (x0 - x) / (x0 - x1);
+        frac = std::max(frac, 0.0);
+        frac = std::min(frac, 1.0);
+
+        channel_map.data[n] = double(F) + frac;
     }
 
     return channel_map;

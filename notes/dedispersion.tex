@@ -55,47 +55,77 @@
 \subsection{Tree gridding kernel}
 \label{sec:gridding}
 
-Our starting point for tree dedispersion is a shape $(N_{\rm freq}, N_{\rm time})$ array representing channelized intensity time series. We do not assume that frequency channels are evenly spaced (in CHORD we use unequal spacing).
-We want to search this array for FRBs with delay $\propto \nu^{-2}$.
+The dedisperser's input is a shape $(N_{\rm freq}, N_{\rm time})$ array of channelized intensity time series, in which an FRB appears as a sweep with delay $\propto \nu^{-2}$.
+The frequency channels need not be evenly spaced (in CHORD they are not).
+Tree dedispersion (\S\ref{sec:tree_dedispersion}) searches for {\em straight lines}, so the first step is a change of variables on the frequency axis which makes the dispersion sweep straight.
+This is the tree gridding kernel.
+Its output is a shape $(N_{\rm tree}, N_{\rm time})$ array, where $N_{\rm tree} = 2^r$ and $r$ is the tree ``rank'' specified in the config file.
+We index input frequency channels by $0 \le F < N_{\rm freq}$, and output ``tree-freq'' channels by $0 \le f < N_{\rm tree}$.
+The time axis is a spectator: the kernel applies the same linear map to every time sample.
 
-The first step is a ``tree gridding'' kernel which changes variables so that the delay is linear (i.e.~the FRB dispersion sweep looks like a straight line).
-The input of the tree gridding kernel is a shape $(N_{\rm freq}, N_{\rm time})$ array, and the output is a shape $(N_{\rm tree}, N_{\rm time})$ array, where $N_{\rm tree}=2^r$.
-The parameter $r$ is the tree dedispersion ``rank'' and is specified in a config file.
+\par\noindent
+{\bf Tree-freq channels.}
+Dispersion delay is linear in $\nu^{-2}$, so tree-freq channels are equally spaced in $\nu^{-2}$.
+Writing $[\nu_{\rm lo}, \nu_{\rm hi}]$ for the band, the $f$-th tree-freq edge $\nu_f$ is defined by
+\begin{equation}
+\nu_f^{-2} = \nu_{\rm hi}^{-2} + \frac{f}{N_{\rm tree}} \left( \nu_{\rm lo}^{-2} - \nu_{\rm hi}^{-2} \right),
+  \qquad 0 \le f \le N_{\rm tree},
+\end{equation}
+and tree-freq channel $f$ is the frequency interval $[\nu_{f+1}, \nu_f]$.
+Note that $f = 0$ is the {\em top} of the band: tree-freq index decreases with frequency.
+An FRB with positive dispersion (lowest frequencies arrive last) is therefore a line of {\em positive} slope in the tree array (highest tree-freq channels arrive last), which is the convention used in the next section.
 
-The leading axis of the input array represents frequency channels, and will be indexed by $0 \le F < N_{\rm freq}$.
-The leading axis of the output array represents a reparameterized frequency channel (``tree-freq'' channel for short), and will be indexed by $0\le f < 2^r$.
-Conceptually, the tree gridding kernel just reparameterizes the frequency axis (i.e.\ the time axis is a spectator.)
-
-The tree gridding kernel also takes an auxiliary array \verb|channel_map|, which describes the mapping between frequency channels $0 \le F < N_{\rm freq}$ and tree-freq channels $0 \le f < N_{\rm tree}$.
-The array \verb|channel_map| has length $N_{\rm tree}+1$, and its entries are (in general non-integer) frequency-channel indices in the range $[0, N_{\rm freq}]$.
-Writing $c_f$ for the $f$-th entry, tree-freq channel $f$ is defined to occupy the half-open interval of frequency channels
+\par\noindent
+{\bf Rebinning.}
+The gridding kernel is a linear rebinning: each tree-freq channel is a weighted sum of the frequency channels which overlap it,
+\begin{equation}
+{\rm out}[f] = \sum_F w_{fF}\, {\rm in}[F], \qquad w_{fF} \ge 0,
+\end{equation}
+where ${\rm in}[F]$ and ${\rm out}[f]$ are length-$N_{\rm time}$ time series.
+The weights are specified through an auxiliary length-$(N_{\rm tree}+1)$ array \verb|channel_map|, whose entries $c_f$ are floating-point frequency-channel indices, in the coordinate where frequency channel $F$ is the unit interval $[F, F+1)$.
+Tree-freq channel $f$ is defined to occupy the interval
 \begin{equation}
 I_f = \big[\, c_{f+1},\ c_f \,\big), \qquad 0 \le f < N_{\rm tree},
+\label{eq:tg_If_def}
 \end{equation}
-i.e.~consecutive entries give the lower and upper edges of each tree-freq channel.
-The entries are fixed by the dispersion geometry: the tree-freq channels are equally spaced in the dispersion variable $x \equiv \nu^{-2}$ (this is the change of variables that linearizes the delay), so the $f$-th edge sits at
-\begin{equation}
-x_f = \nu_{\rm hi}^{-2} + \frac{f}{N_{\rm tree}}\left(\nu_{\rm lo}^{-2} - \nu_{\rm hi}^{-2}\right),
-\end{equation}
-and $c_f$ is the frequency-channel index of the frequency $\nu_f = x_f^{-1/2}$, where the index increases with frequency, running from $0$ at the band bottom $\nu_{\rm lo}$ to $N_{\rm freq}$ at the band top $\nu_{\rm hi}$.
-In particular $c_0 = N_{\rm freq}$ and $c_{N_{\rm tree}} = 0$, so \verb|channel_map| is monotonically {\em decreasing} ($c_{f+1} < c_f$).
-We store it in double precision, since the gridding weights below are obtained by differencing adjacent entries, which loses relative precision.
-
-The details of the tree gridding kernel are as follows.
-Each output tree-freq channel $f$ is a weighted sum of the input frequency channels whose bins overlap the interval $I_f = [c_{f+1}, c_f)$:
-\begin{equation}
-{\rm out}[f] = \sum_{F=0}^{N_{\rm freq}-1} w_{fF}\, {\rm in}[F],
-\end{equation}
-where ${\rm in}[F]$ and ${\rm out}[f]$ are length-$N_{\rm time}$ time series, and the same weights are applied at every time sample (the time axis is untouched).
-The weight $w_{fF}$ is the length of the overlap between the tree-freq channel interval $I_f$ and the unit-width frequency bin $[F, F+1)$:
+and $w_{fF}$ is the length of its overlap with frequency channel $F$:
 \begin{equation}
 w_{fF} = \max\!\big(\,0,\ \min(c_f,\, F+1) - \max(c_{f+1},\, F)\,\big).
 \end{equation}
-A frequency channel lying entirely within $I_f$ contributes with weight $1$, while a channel straddling an edge of $I_f$ contributes a fractional weight.
-Because the intervals $I_f$ tile $[0, N_{\rm freq}]$, the weights of any fixed input channel sum to one, $\sum_f w_{fF} = 1$; the gridding kernel is thus a delay-linearizing rebinning of the frequency axis that conserves total intensity, $\sum_f {\rm out}[f] = \sum_F {\rm in}[F]$.
+Since the intervals $I_f$ tile $[0, N_{\rm freq}]$, a frequency channel lying inside $I_f$ is copied to tree-freq channel $f$ with weight $1$, and a frequency channel containing an edge $c_f$ is split between tree-freq channels $f$ and $f-1$, with weights summing to $1$.
+Thus $\sum_f w_{fF} = 1$ for every $F$, and the kernel conserves total intensity.
 
-Note that the tree gridding kernel is a monotone {\em decreasing} reindexing operation.
-Thus, to search for FRBs with positive dispersion (lowest frequencies arise last), we want to search over lines in the tree array with positive slope (highest tree-freq channels arrive last).
+Conceptually, $c_f$ is the position of tree-freq edge $\nu_f$ in frequency-channel units: if $\nu_f$ falls inside frequency channel $F$, then $F \le c_f \le F+1$.
+Note that $c_f$ is monotone decreasing, and $c_0 = N_{\rm freq}$, $c_{N_{\rm tree}} = 0$.
+
+\par\noindent
+{\bf The split rule.}
+So far, we have explained how the tree gridding kernel is defined in terms of $c_f$, but we have not explained precisely how $c_f$ is defined.
+We next describe two reasonable methods for defining $c_f$, the ``simple'' method and the ``chime'' method.
+The difference is unimportant in practice.
+We currently use the chime method, so that pirate's gridding agrees with bonsai's to roundoff.
+We may switch to the simple method in the future, since it's a little more intuitive, and takes fewer lines of code.
+
+Suppose tree-freq edge $\nu_f$ falls inside frequency channel $F$, whose edges are $\nu_F^- < \nu_F^+$, and write
+\begin{equation}
+c_f = F + s_f, \qquad 0 \le s_f \le 1.
+\label{eq:cf_split}
+\end{equation}
+By Eq.\ (\ref{eq:tg_If_def}), $s_f$ is the fraction of channel $F$ assigned to tree-freq channel $f$ (the part below the edge), the remaining $1 - s_f$ going to tree-freq channel $f-1$.
+A frequency channel gives one number for its whole bandwidth, so choosing $s_f$ requires an assumption about how intensity is distributed inside the channel.
+Two natural choices are
+\begin{align}
+\mbox{``simple'' method:} \qquad
+  s_f &= \frac{\nu_f - \nu_F^-}{\nu_F^+ - \nu_F^-}
+  & \mbox{(intensity uniform in $\nu$)} \label{eq:split_simple} \\
+\mbox{``chime'' method:} \qquad
+  s_f &= \frac{(\nu_F^-)^{-2} - \nu_f^{-2}}{(\nu_F^-)^{-2} - (\nu_F^+)^{-2}}
+  & \mbox{(intensity uniform in $\nu^{-2}$)} \label{eq:split_chime}
+\end{align}
+The simple method splits in proportion to bandwidth; $c_f$ is then just the fractional channel index of $\nu_f$ ({\tt frequency\_to\_index()} in the code).
+The chime method splits in proportion to dispersion delay, and is the rule used by bonsai, the CHIME dedisperser.
+Neither is more correct than the other: they amount to assuming a within-channel spectral index of $0$ or $-3$ respectively, which the data cannot distinguish.
+They differ by at most $\frac{3}{8}\,\Delta\nu/\nu$ per weight, i.e.\ $10^{-5}$--$10^{-4}$ for CHIME and CHORD channel widths: irrelevant for detection, but far above float32 roundoff.
 
 \subsection{Tree dedispersion}
 \label{sec:tree_dedispersion}
