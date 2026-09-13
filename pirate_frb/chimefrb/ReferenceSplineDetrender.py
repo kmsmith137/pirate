@@ -10,7 +10,7 @@ import numpy as np
 
 import ksgpu
 from ..pirate_pybind11 import ClipperAxis, GpuSplineDetrender
-from .transform_io import (axis_from_json, check_json_keys, check_yaml_keys)
+from .transform_io import (axis_from_json, check_json_keys)
 
 
 # The yaml keys of GpuSplineDetrender: its constructor's argument names after the geometry,
@@ -34,7 +34,7 @@ class GpuSplineDetrenderInjections:
     @classmethod
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
         """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
-        check_yaml_keys(d, 'GpuSplineDetrender', SPLINE_DETRENDER_YAML_KEYS)
+        cls.check_yaml_keys(d, SPLINE_DETRENDER_YAML_KEYS)
         if d['axis'] != 'freq':
             raise ValueError(f"GpuSplineDetrender.from_yaml_dict: axis={d['axis']!r}, but this class"
                              f" implements axis 'freq' only (as did the old code)")

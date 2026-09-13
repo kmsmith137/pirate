@@ -8,10 +8,11 @@ for the plain (undownsampled) container.
 import math
 
 from .GpuTransformBase import GpuTransformBase
+from .GpuPythonTransform import GpuPythonTransform
 from .ReferenceWeightUpsampler import GpuWeightUpsampler
 from .ReferenceWiDownsampler import GpuWiDownsampler
 from .WiPipeline import WiPipeline, describe_lines
-from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, check_yaml_keys, read_json,
+from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, read_json,
                            read_yaml, transform_from_json_dict, transform_from_yaml_dict,
                            write_yaml)
 
@@ -20,7 +21,7 @@ def _round_up(n, m):
     return ((n + m - 1) // m) * m
 
 
-class RfiMaskPipeline(GpuTransformBase):
+class RfiMaskPipeline(GpuPythonTransform):
     """Transforms run on a (Df, Dt)-downsampled copy of the data, whose mask is then applied
     to the full-resolution weights.
 
@@ -136,7 +137,7 @@ class RfiMaskPipeline(GpuTransformBase):
         """The inverse of :meth:`to_yaml_dict`, at the given FULL-RESOLUTION geometry; the
         transforms are built at (nbeams, nfreq/Df, ntime/Dt). ``classes`` is passed to the
         reader of each element (see :meth:`read_yaml_file`)."""
-        check_yaml_keys(d, 'RfiMaskPipeline', ['Df', 'Dt', 'w_cutoff', 'transforms'])
+        cls.check_yaml_keys(d, ['Df', 'Dt', 'w_cutoff', 'transforms'])
         (Df, Dt) = (d['Df'], d['Dt'])
         for (name, x) in (('Df', Df), ('Dt', Dt)):
             if not (isinstance(x, int) and (x >= 1)):

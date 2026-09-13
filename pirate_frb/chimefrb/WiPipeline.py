@@ -3,12 +3,13 @@
 A python port of rf_pipelines::pipeline, the container the old CHIME FRB search's RFI chain
 was built from. ("wi" is the old code's abbreviation for a (weights, intensity) pair.) Its
 companion RfiMaskPipeline (rf_pipelines::wi_sub_pipeline) runs a list of transforms on a
-downsampled copy of the data instead; both are transforms themselves (subclasses of
-GpuTransformBase, like every transform), so they nest.
+downsampled copy of the data instead; both are transforms themselves (python ones, on
+GpuPythonTransform), so they nest.
 """
 
 from .GpuTransformBase import GpuTransformBase
-from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, check_yaml_keys, read_json,
+from .GpuPythonTransform import GpuPythonTransform
+from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, read_json,
                            read_yaml, transform_from_json_dict, transform_from_yaml_dict,
                            write_yaml)
 
@@ -59,7 +60,7 @@ def describe_lines(transform, depth=0):
     return [f"{pad}{d['class_name']} {params}"]
 
 
-class WiPipeline(GpuTransformBase):
+class WiPipeline(GpuPythonTransform):
     """An ordered list of transforms, run one after another on the same block of data.
 
     A port of rf_pipelines::pipeline, the container the old CHIME FRB search's RFI chain was
@@ -116,7 +117,7 @@ class WiPipeline(GpuTransformBase):
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime, classes=None):
         """The inverse of :meth:`to_yaml_dict`, at the given geometry. ``classes`` is passed to
         the reader of each element (see :meth:`read_yaml_file`)."""
-        check_yaml_keys(d, 'WiPipeline', ['transforms'])
+        cls.check_yaml_keys(d, ['transforms'])
         if not (isinstance(d['transforms'], list) and (len(d['transforms']) > 0)):
             raise ValueError("WiPipeline.from_yaml_dict: 'transforms' must be a non-empty list")
         return cls([transform_from_yaml_dict(e, nbeams, nfreq, ntime, classes) for e in d['transforms']])

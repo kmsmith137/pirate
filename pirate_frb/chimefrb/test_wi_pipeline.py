@@ -1,6 +1,6 @@
 """Tests for WiPipeline and RfiMaskPipeline (the containers of the chimefrb port), and for
-the python side of GpuTransformBase (the base class every transform, and every python
-transform, subclasses).
+GpuPythonTransform (the base class of every transform written in python) together with the
+python side of GpuTransformBase underneath it.
 
 Dispatched from ``python -m pirate_frb test --cfrb``.
 
@@ -33,9 +33,9 @@ import numpy as np
 import yaml
 
 from . import (ClipperAxis, ExampleCupyTransform, GpuBadChannelMask, GpuIntensityClipper,
-               GpuPolynomialDetrender, GpuSplineDetrender, GpuStdDevClipper, GpuTransformBase,
-               RfiMaskPipeline, WiPipeline)
-from .transform_io import (check_yaml_keys, transform_from_json_dict, transform_from_yaml_dict,
+               GpuPolynomialDetrender, GpuPythonTransform, GpuSplineDetrender, GpuStdDevClipper,
+               GpuTransformBase, RfiMaskPipeline, WiPipeline)
+from .transform_io import (transform_from_json_dict, transform_from_yaml_dict,
                            yaml_string)
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng
@@ -43,12 +43,12 @@ from .testutils import default_rng as _default_rng
 
 # -------------------------------------------------------------------------------------------------
 #
-# Toy transforms. Each is a complete transform (GpuTransformBase supplies the checked launch),
+# Toy transforms. Each is a complete transform (GpuPythonTransform supplies the checked launch),
 # so they also exercise the base class and the 'classes=' mechanism of the yaml reader, which
 # is how the reader finds classes that are not part of pirate_frb.chimefrb.
 
 
-class _ToyAdd(GpuTransformBase):
+class _ToyAdd(GpuPythonTransform):
     """intensity += c. Asks for scratch: inside an RfiMaskPipeline, a wrong scratch offset
     shows up as a too-small or overlapping scratch, which the base class's checks refuse."""
 
@@ -67,11 +67,11 @@ class _ToyAdd(GpuTransformBase):
 
     @classmethod
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
-        check_yaml_keys(d, '_ToyAdd', ['c'])
+        cls.check_yaml_keys(d, ['c'])
         return cls(nbeams, nfreq, ntime, d['c'])
 
 
-class _ToyScale(GpuTransformBase):
+class _ToyScale(GpuPythonTransform):
     """intensity *= m."""
 
     def __init__(self, nbeams, nfreq, ntime, m):
@@ -86,11 +86,11 @@ class _ToyScale(GpuTransformBase):
 
     @classmethod
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
-        check_yaml_keys(d, '_ToyScale', ['m'])
+        cls.check_yaml_keys(d, ['m'])
         return cls(nbeams, nfreq, ntime, d['m'])
 
 
-class _ToyZeroChannels(GpuTransformBase):
+class _ToyZeroChannels(GpuPythonTransform):
     """weights[:, ::step, :] = 0."""
 
     def __init__(self, nbeams, nfreq, ntime, step):
@@ -105,13 +105,14 @@ class _ToyZeroChannels(GpuTransformBase):
 
     @classmethod
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
-        check_yaml_keys(d, '_ToyZeroChannels', ['step'])
+        cls.check_yaml_keys(d, ['step'])
         return cls(nbeams, nfreq, ntime, d['step'])
 
 
 class _DuckTransform:
-    """Has every attribute and method of a transform, but does not subclass GpuTransformBase.
-    A pipeline must refuse it: the base class is where the launch checks live."""
+    """Has every attribute and method of a transform, but subclasses neither GpuPythonTransform
+    nor GpuTransformBase. A pipeline must refuse it: the base class is where the launch
+    checks live."""
 
     def __init__(self, nbeams, nfreq, ntime):
         (self.nbeams, self.nfreq, self.ntime, self.scratch_nelts) = (nbeams, nfreq, ntime, 0)
@@ -123,7 +124,7 @@ class _DuckTransform:
         return {'class_name': '_DuckTransform'}
 
 
-class _ToySpy(GpuTransformBase):
+class _ToySpy(GpuPythonTransform):
     """Records what its launch_checked() was handed -- the current stream, the scratch array's
     shape and dtype, and the three arrays' device pointers -- and modifies nothing. This is
     the check of the base class's contract for a python subclass."""
@@ -337,8 +338,8 @@ def _check_arguments():
     _expect_raise(ValueError, RfiMaskPipeline, [add], 1, 1)                                # (1, 1)
     _expect_raise(ValueError, RfiMaskPipeline, [add], 2, 1, -1.0)                          # w_cutoff < 0
     _expect_raise(ValueError, RfiMaskPipeline, [_ToyAdd(B, 48, T, 1)], 2, 1)              # inner nfreq % 32
-    _expect_raise(RuntimeError, GpuTransformBase, 0, F, T)                                 # nbeams < 1
-    _expect_raise(RuntimeError, GpuTransformBase, B, F, T, -1)                             # scratch_nelts < 0
+    _expect_raise(RuntimeError, GpuPythonTransform, 0, F, T)                               # nbeams < 1
+    _expect_raise(RuntimeError, GpuPythonTransform, B, F, T, -1)                           # scratch_nelts < 0
     _expect_raise(TypeError, WiPipeline, [add, _DuckTransform(B, F, T)])                    # not a GpuTransformBase
 
     _expect_raise(ValueError, transform_from_yaml_dict, {'class_name': 'NoSuchTransform'}, B, F, T)
@@ -364,11 +365,12 @@ def _check_arguments():
 
 
 def _check_base_class(cp):
-    """GpuTransformBase's contract for a PYTHON subclass, which goes through the C++ base class
-    and back: launch_checked() runs on the launch stream, sees exactly scratch_nelts elements
-    of scratch, and sees the caller's arrays (not copies); a failed check names the subclass;
-    a missing launch_checked() is a NotImplementedError; and every transform, C++ or python,
-    is a GpuTransformBase."""
+    """GpuPythonTransform's contract for a python transform, which goes through the C++ base
+    class and back: launch_checked() runs on the launch stream, sees exactly scratch_nelts
+    elements of scratch, and sees the caller's arrays (not copies); a failed check names the
+    subclass; a missing launch_checked() is a NotImplementedError; a python class that skips
+    GpuPythonTransform is refused at its first launch; check_yaml_keys() checks by class name;
+    and every transform, C++ or python, is a GpuTransformBase."""
 
     (B, F, T) = (2, 64, 128)
     intensity = cp.zeros((B, F, T), dtype=cp.float32)
@@ -406,13 +408,39 @@ def _check_base_class(cp):
 
     # The stubs a subclass must replace, reached through the trampoline (launch_checked) or
     # directly (to_yaml_dict).
-    bare = GpuTransformBase(B, F, T)
+    bare = GpuPythonTransform(B, F, T)
     _expect_raise(NotImplementedError, bare.launch, intensity, weights, None)
     _expect_raise(NotImplementedError, bare.to_yaml_dict)
+
+    # A python class that subclasses the C++ base directly, skipping GpuPythonTransform, is
+    # constructible but has no dispatcher for the trampoline to call: its first launch is a
+    # RuntimeError that says where to derive from, and its launch_checked() is never reached.
+    class _Direct(GpuTransformBase):
+        def __init__(self):
+            super().__init__('_Direct', B, F, T, 0)
+
+        def launch_checked(self, intensity, weights, scratch):
+            raise AssertionError('a launch_checked() defined outside GpuPythonTransform was called')
+
+    for t in (GpuTransformBase('Bare', B, F, T, 0), _Direct()):
+        try:
+            t.launch(intensity, weights, None)
+        except RuntimeError as e:
+            assert 'GpuPythonTransform' in str(e), str(e)
+        else:
+            raise AssertionError(f'{type(t).__name__}.launch() was accepted without a dispatcher')
+
+    # check_yaml_keys() by name: the class's own name, exactly the given keys.
+    _ToyAdd.check_yaml_keys({'class_name': '_ToyAdd', 'c': 1.0}, ['c'])
+    _expect_raise(ValueError, _ToyAdd.check_yaml_keys, {'class_name': '_ToyScale', 'c': 1.0}, ['c'])
+    _expect_raise(ValueError, _ToyAdd.check_yaml_keys, {'class_name': '_ToyAdd', 'c': 1.0, 'd': 2}, ['c'])
+    _expect_raise(ValueError, _ToyAdd.check_yaml_keys, 'not a dict', ['c'])
 
     for t in (GpuBadChannelMask(B, F, T, [(500.0, 520.0)], (400.0, 800.0)), spy,
               WiPipeline([spy]), RfiMaskPipeline([_ToyAdd(B, F // 2, T, 1.0)], 2, 1)):
         assert isinstance(t, GpuTransformBase), f'{type(t).__name__} is not a GpuTransformBase'
+    assert isinstance(spy, GpuPythonTransform) and isinstance(WiPipeline([spy]), GpuPythonTransform)
+    assert not isinstance(GpuBadChannelMask(B, F, T, [(500.0, 520.0)], (400.0, 800.0)), GpuPythonTransform)
 
 
 def _check_real_transforms(cp, rng):
@@ -485,8 +513,8 @@ def _check_example_transform(cp, rng):
 def test_wi_pipeline(iteration=0, rng=None, verbose=False):
     """One random pipeline of toy transforms, launched and checked against its closed-form
     result, then round-tripped through yaml; on iteration 0, also the legacy json reader, the
-    refused arguments, the base class's contract for a python subclass, a smoke launch of the
-    real transforms, and ExampleCupyTransform."""
+    refused arguments, GpuPythonTransform's contract for a python transform, a smoke launch of
+    the real transforms, and ExampleCupyTransform."""
 
     try:
         import cupy as cp

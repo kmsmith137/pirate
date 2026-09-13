@@ -14,7 +14,7 @@ import numpy as np
 import ksgpu
 from ..pirate_pybind11 import ClipperAxis, GpuPolynomialDetrender
 from .ReferenceIntensityClipper import AXIS_FREQ, AXIS_TIME
-from .transform_io import (axis_from_json, check_json_keys, check_yaml_keys)
+from .transform_io import (axis_from_json, check_json_keys)
 
 
 # The yaml keys of GpuPolynomialDetrender: its constructor's argument names after the
@@ -38,7 +38,7 @@ class GpuPolynomialDetrenderInjections:
     @classmethod
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
         """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
-        check_yaml_keys(d, 'GpuPolynomialDetrender', POLYNOMIAL_DETRENDER_YAML_KEYS)
+        cls.check_yaml_keys(d, POLYNOMIAL_DETRENDER_YAML_KEYS)
         if d['axis'] != 'time':
             raise ValueError(f"GpuPolynomialDetrender.from_yaml_dict: axis={d['axis']!r}, but this class"
                              f" implements axis 'time' only (ReferencePolynomialDetrender also does 'freq')")

@@ -14,8 +14,7 @@ import numpy as np
 
 import ksgpu
 from ..pirate_pybind11 import ClipperAxis, GpuIntensityClipper
-from .transform_io import (axis_from_json, axis_from_str, axis_to_str, check_json_keys,
-                           check_yaml_keys)
+from .transform_io import (axis_from_json, axis_from_str, axis_to_str, check_json_keys)
 from .ReferenceWiDownsampler import ReferenceWiDownsampler
 from .ReferenceWrms import ReferenceWrms
 
@@ -56,7 +55,7 @@ class GpuIntensityClipperInjections:
     @classmethod
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
         """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
-        check_yaml_keys(d, 'GpuIntensityClipper', INTENSITY_CLIPPER_YAML_KEYS)
+        cls.check_yaml_keys(d, INTENSITY_CLIPPER_YAML_KEYS)
         return cls(nbeams, nfreq, ntime, d['nt_chunk'], axis_from_str(d['axis']), d['sigma'],
                    d['Df'], d['Dt'], d['niter'], d['iter_sigma'], d['two_pass'])
 

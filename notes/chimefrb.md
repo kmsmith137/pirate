@@ -78,10 +78,13 @@ the geometry members `nbeams`, `nfreq`, `ntime`, `scratch_nelts` and the non-vir
 virtual `launch_checked()` -- overridden in C++ by the ported transforms, and in python by
 the pipelines, `ExampleCupyTransform`, and anything a user writes (a pybind11 trampoline in
 `src_pybind11/pirate_pybind11_chimefrb.cpp` carries the call into python). The python side
-of the interface -- `launch()` with `stream=None` / `scratch=None`, the `to_yaml_dict()` /
-`from_yaml_dict()` stubs, the docstring a python author reads -- is injected in
-`pirate_frb/chimefrb/GpuTransformBase.py`, and `pirate_frb/chimefrb/transform_io.py` states
-the whole interface. A newly ported transform should follow it (constructor: geometry
+shared by every transform -- `launch()` with `stream=None` / `scratch=None`, the
+`check_yaml_keys()` classmethod, `__repr__` -- is injected in
+`pirate_frb/chimefrb/GpuTransformBase.py`. A transform written in python subclasses
+`GpuPythonTransform` (`pirate_frb/chimefrb/GpuPythonTransform.py`), a plain python class on
+top of the base that holds the constructor, the `launch_checked()` and yaml stubs a
+subclass replaces, the hook the trampoline calls, and the docstring a python author reads;
+`pirate_frb/chimefrb/transform_io.py` states the whole interface. A newly ported transform should follow it (constructor: geometry
 first, then the semantic parameters in the old code's order, then performance knobs; the
 class name passed to the base is what prefixes its error messages), and only transforms
 with a legacy json form get a `from_json_dict()`. `pirate_frb cfrb json2yaml` converts an

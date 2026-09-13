@@ -4,7 +4,8 @@ reference), and the two containers that chain them -- WiPipeline and RfiMaskPipe
 which read the old json configs and read/write a yaml format of their own.
 
 Every transform is a subclass of ``GpuTransformBase`` (the interface is stated in
-``transform_io.py``); the worked example ``ExampleCupyTransform`` shows how to add one in cupy.
+``transform_io.py``); one written in python subclasses ``GpuPythonTransform``, and the
+worked example ``ExampleCupyTransform`` shows how.
 
 See ``notes/chimefrb.md`` for the porting rules this subpackage follows.
 """
@@ -12,9 +13,12 @@ See ``notes/chimefrb.md`` for the porting rules this subpackage follows.
 # Import C++ classes from pirate_pybind11
 from ..pirate_pybind11 import AssembledChunk, GpuClipperBase
 
-# GpuTransformBase, the base class of every transform, has method injections (its whole
-# python-side interface) in GpuTransformBase.py, which applies them and re-exports the class.
+# GpuTransformBase, the base class of every transform, has method injections (the python
+# side shared by C++ and python transforms) in GpuTransformBase.py, which applies them and
+# re-exports the class. GpuPythonTransform, the base of a transform written in python, is
+# plain python on top of it.
 from .GpuTransformBase import GpuTransformBase
+from .GpuPythonTransform import GpuPythonTransform
 
 # GpuWiDownsampler has method injections, which live in ReferenceWiDownsampler.py
 # alongside its numpy reference. That module both applies the injections (as an
@@ -33,7 +37,7 @@ from .ReferencePolynomialDetrender import GpuPolynomialDetrender, ReferencePolyn
 
 # The transform interface (the "protocol"), and the two pipeline classes that run transforms.
 from .transform_io import (CHIME_FREQ_RANGE, IGNORED_JSON_CLASSES, LEGACY_JSON_CLASS_NAMES,
-                           PIPELINE_YAML_HEADER, axis_from_str, axis_to_str, check_yaml_keys,
+                           PIPELINE_YAML_HEADER, axis_from_str, axis_to_str,
                            read_json, read_yaml, resolve_class, transform_from_json_dict,
                            transform_from_yaml_dict, write_yaml, yaml_string)
 from .ExampleCupyTransform import ExampleCupyTransform

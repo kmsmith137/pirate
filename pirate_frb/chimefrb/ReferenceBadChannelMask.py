@@ -21,7 +21,7 @@ import numpy as np
 import ksgpu
 from ..utils import atomic_print
 from ..pirate_pybind11 import GpuBadChannelMask
-from .transform_io import (CHIME_FREQ_RANGE, check_json_keys, check_yaml_keys)
+from .transform_io import (CHIME_FREQ_RANGE, check_json_keys)
 
 
 # The old code's allowance for a frequency that is meant to be a channel edge but is off by
@@ -187,7 +187,7 @@ class GpuBadChannelMaskInjections:
     @classmethod
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
         """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
-        check_yaml_keys(d, 'GpuBadChannelMask', BADCHANNEL_MASK_YAML_KEYS)
+        cls.check_yaml_keys(d, BADCHANNEL_MASK_YAML_KEYS)
         return cls(nbeams, nfreq, ntime, d['mask_ranges'], d['freq_range'])
 
     @classmethod

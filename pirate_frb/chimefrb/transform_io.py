@@ -3,10 +3,11 @@ or legacy-json ``class_name`` into a class, the axis strings, and the yaml/json 
 
 WHAT A TRANSFORM IS. A subclass of :class:`GpuTransformBase`, which is anything a
 :class:`WiPipeline` or :class:`RfiMaskPipeline` can run. Five are C++ (GpuBadChannelMask,
-GpuIntensityClipper, GpuStdDevClipper, GpuPolynomialDetrender, GpuSplineDetrender), the two
-pipeline classes are transforms themselves so that they nest, and any number can be written
-in python on top of the same base (``ExampleCupyTransform`` is the worked example;
-``GpuTransformBase``'s docstring says how). Every transform has::
+GpuIntensityClipper, GpuStdDevClipper, GpuPolynomialDetrender, GpuSplineDetrender), on that
+class directly; a transform written in python subclasses :class:`GpuPythonTransform`, which
+is plain python on top of it -- the two pipeline classes (transforms themselves, so that
+they nest), ``ExampleCupyTransform`` (the worked example), and anything a user writes.
+``GpuPythonTransform``'s docstring says how. Every transform has::
 
     nbeams, nfreq, ntime    ints: the (beams, channels, time samples) block it processes,
                             fixed at construction
@@ -47,7 +48,8 @@ SERIALIZATION.
   never writes performance knobs, so a file is not tied to a GPU.
 - ``from_yaml_dict(d, nbeams, nfreq, ntime)`` checks that ``d['class_name']`` is the class's
   own name and that the other keys are EXACTLY the expected ones (a misspelled key must not
-  silently become a default), then constructs. :func:`check_yaml_keys` does both checks.
+  silently become a default), then constructs. The ``check_yaml_keys()`` classmethod of
+  GpuTransformBase does both checks.
 - ``from_json_dict`` reads one element of the old rf_pipelines json, whose ``class_name`` is
   the legacy name (``badchannel_mask``, ``intensity_clipper``, ...).
 
@@ -212,29 +214,7 @@ def check_json_keys(d, class_name, required):
 
 # -------------------------------------------------------------------------------------------------
 #
-# Yaml helpers
-
-
-def check_yaml_keys(d, class_name, keys):
-    """The check every ``from_yaml_dict`` starts with: ``d['class_name'] == class_name``, and
-    the other keys of ``d`` are exactly ``keys`` -- a missing key and an unexpected key are
-    both errors, with a message naming them."""
-
-    if not isinstance(d, dict):
-        raise ValueError(f"{class_name}.from_yaml_dict: expected a dict, got {type(d).__name__}")
-    if d.get('class_name') != class_name:
-        raise ValueError(f"{class_name}.from_yaml_dict: expected class_name {class_name!r},"
-                         f" got {d.get('class_name')!r}")
-
-    got = set(d) - {'class_name'}
-    want = set(keys)
-    if got != want:
-        parts = []
-        if want - got:
-            parts.append(f"missing key(s) {sorted(want - got)}")
-        if got - want:
-            parts.append(f"unexpected key(s) {sorted(got - want)}")
-        raise ValueError(f"{class_name}.from_yaml_dict: " + ", ".join(parts))
+# Axis strings (yaml and legacy json)
 
 
 _AXIS_STR = {int(ClipperAxis.FREQ): 'freq', int(ClipperAxis.TIME): 'time', int(ClipperAxis.NONE): 'none'}

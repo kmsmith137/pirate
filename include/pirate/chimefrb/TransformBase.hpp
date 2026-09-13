@@ -25,10 +25,13 @@ namespace chimefrb {
 // ExampleCupyTransform, and whatever a user writes). Which of the two arrays a transform
 // modifies is the transform's business, stated in its docstring.
 //
-// The python side of the interface -- the stream=None / scratch=None conventions of
-// launch(), the yaml methods, and the docstring a python author reads -- lives in
-// pirate_frb/chimefrb/GpuTransformBase.py. See notes/chimefrb.md for the porting rules the
-// chimefrb classes follow.
+// The python side of the interface is in two python files: what every transform shares
+// (the stream=None / scratch=None conventions of launch(), the yaml key check, __repr__)
+// is injected onto this class from pirate_frb/chimefrb/GpuTransformBase.py; what a
+// transform WRITTEN in python needs (its constructor, the methods it defines, the hook the
+// trampoline calls) is the plain python subclass GpuPythonTransform in
+// pirate_frb/chimefrb/GpuPythonTransform.py, which is the class python authors derive
+// from. See notes/chimefrb.md for the porting rules the chimefrb classes follow.
 
 struct GpuTransformBase
 {

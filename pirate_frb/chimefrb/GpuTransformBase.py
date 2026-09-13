@@ -1,8 +1,10 @@
-"""GpuTransformBase: the base class of every chimefrb transform, and the file to read before
-writing one in python. See the class docstring; ExampleCupyTransform.py is a complete example.
+"""GpuTransformBase: the base class of every chimefrb transform, and its python side.
 
 The class itself is C++ (include/pirate/chimefrb/TransformBase.hpp), bound with pybind11. This
-module adds its python-side methods with ksgpu.inject_methods, and re-exports it.
+module adds, with ksgpu.inject_methods, the python-side methods that every transform, C++ or
+python, shares -- launch() with its stream=None / scratch=None conventions, the
+check_yaml_keys() classmethod, and __repr__ -- and re-exports the class. A transform written
+in python subclasses GpuPythonTransform (GpuPythonTransform.py), not this class directly.
 """
 
 import ksgpu
@@ -16,65 +18,15 @@ class GpuTransformBaseInjections:
     :class:`RfiMaskPipeline` can run.
 
     A transform processes one (nbeams, nfreq, ntime) block of intensity and weights, in place,
-    on the GPU. The five ported RFI transforms (GpuBadChannelMask, GpuIntensityClipper,
-    GpuStdDevClipper, GpuPolynomialDetrender, GpuSplineDetrender) are C++ subclasses; the two
-    pipeline classes and :class:`ExampleCupyTransform` are python subclasses; yours can be
-    either. To write one in python::
+    on the GPU, through :meth:`launch`, which checks its arguments and then runs the
+    transform's computation. Which of the two arrays a transform modifies is stated in its
+    class docstring.
 
-        class MyTransform(GpuTransformBase):
-            def __init__(self, nbeams, nfreq, ntime, sigma=3.0):
-                super().__init__(nbeams, nfreq, ntime)      # scratch_nelts=... if you need scratch
-                self.sigma = float(sigma)
-
-            def launch_checked(self, intensity, weights, scratch):
-                ...   # cupy code, in place on 'intensity' and 'weights'
-
-            def to_yaml_dict(self):
-                return {'class_name': 'MyTransform', 'sigma': self.sigma}
-
-            @classmethod
-            def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
-                check_yaml_keys(d, 'MyTransform', ['sigma'])
-                return cls(nbeams, nfreq, ntime, sigma=d['sigma'])
-
-    :class:`ExampleCupyTransform` is this, complete, in forty lines. Everything python code
-    can see of this class is in this file (``pirate_frb/chimefrb/GpuTransformBase.py``). The
-    one part written in C++ is the argument checking that ``launch()`` does before calling your
-    ``launch_checked()``; what it checks is listed under :meth:`launch_checked`, and a failed
-    check raises ``RuntimeError`` with a message that starts with your class's name.
-
-    What ``launch_checked()`` may assume, and must respect:
-
-    - ``intensity`` and ``weights`` are cupy float32 arrays of shape (nbeams, nfreq, ntime),
-      C-contiguous, distinct, and to be modified IN PLACE (either, both, or neither). Weights
-      are nonnegative, and a zero weight means "ignore this sample". Two footguns: a NaN
-      intensity at a zero-weight sample must not poison its row -- select with
-      ``cp.where(weights != 0, weights*intensity, 0)``, never multiply -- and a row with no
-      weight at all must not divide by zero.
-    - The arrays are VIEWS of the caller's arrays (new python objects on the same memory), so
-      write through them -- ``weights[...] = 0``, ``intensity += c`` -- and never rebind them.
-    - ``scratch`` is a 1-d cupy float32 array of exactly ``scratch_nelts`` elements, garbage
-      on entry and on exit. Most transforms should leave ``scratch_nelts`` at 0 and ignore it:
-      cupy's memory pool makes ordinary temporaries cheap. The mechanism exists for a
-      transform that calls a raw kernel needing a workspace, or that must not allocate; such
-      a transform passes its ``scratch_nelts`` to this constructor and carves what it needs
-      out of the array it is handed.
-    - It runs with the pipeline's CUDA stream made current, so cupy puts its kernels on that
-      stream, in order with everything else in the chain. Do not synchronize.
-
-    The yaml methods are the subclass's own, so that what a file contains is visible in the
-    subclass rather than assembled by machinery elsewhere. ``class_name`` is the class's
-    python name. When a file is read, a class that is not part of ``pirate_frb.chimefrb`` must
-    be handed to the reader::
-
-        WiPipeline.read_yaml_file(path, nbeams=1, nfreq=16384, ntime=4096, classes=[MyTransform])
-
-    There is no ``from_json_dict``: the legacy rf_pipelines json describes only the ported
-    transforms. ``pirate_frb.chimefrb.transform_io`` states the whole interface.
-
-    Subclassing one of the five C++ transforms in python works for python methods (a
-    different ``to_yaml_dict``, say), but a ``launch_checked()`` defined there is NOT called:
-    those classes' computation is C++, and ``launch()`` runs the C++ one.
+    The class is C++ (``include/pirate/chimefrb/TransformBase.hpp``), and its direct subclasses
+    are the five ported RFI transforms (GpuBadChannelMask, GpuIntensityClipper,
+    GpuStdDevClipper, GpuPolynomialDetrender, GpuSplineDetrender) and
+    :class:`GpuPythonTransform`. To write a transform in python, subclass GpuPythonTransform,
+    not this class; its docstring is the how-to.
 
     Attributes (read-only):
 
@@ -82,27 +34,8 @@ class GpuTransformBaseInjections:
     - ``scratch_nelts`` -- float32 scratch elements ``launch()`` needs, from the constructor.
     """
 
-    # Save references to C++ methods
-    _cpp_init = GpuTransformBase.__init__
+    # Save reference to C++ method
     _cpp_launch = GpuTransformBase.launch
-
-    def __init__(self, nbeams, nfreq, ntime, scratch_nelts=0):
-        """Create the base of a transform. A subclass's ``__init__`` calls this first.
-
-        Parameters
-        ----------
-        nbeams, nfreq, ntime : int
-            The block shape ``launch()`` will be given; each >= 1.
-        scratch_nelts : int, optional
-            Float32 scratch elements ``launch_checked()`` needs; 0 for most transforms.
-
-        Raises
-        ------
-        RuntimeError
-            On a shape value < 1 or a negative ``scratch_nelts``.
-        """
-        # The C++ constructor takes the class name too, for its messages.
-        self._cpp_init(type(self).__name__, nbeams, nfreq, ntime, scratch_nelts)
 
     def launch(self, intensity, weights, scratch, stream=None):
         """Run the transform on one block (async; does not sync the stream).
@@ -140,37 +73,28 @@ class GpuTransformBaseInjections:
 
         self._cpp_launch(intensity, weights, scratch, stream.ptr)
 
-    def launch_checked(self, intensity, weights, scratch):
-        """The computation, defined by the subclass. Called by :meth:`launch` after the
-        arguments have been validated, with the pipeline's stream made current and
-        ``scratch`` cut to exactly ``scratch_nelts`` elements. See the class docstring for the
-        contract."""
-        raise NotImplementedError(f'{type(self).__name__} must define launch_checked(); see GpuTransformBase')
-
-    def _dispatch_launch_checked(self, intensity, weights, scratch, stream_ptr):
-        # Called from C++ -- GpuTransformBase::launch(), through the pybind11 trampoline in
-        # src_pybind11/pirate_pybind11_chimefrb.cpp -- when the transform's launch_checked()
-        # is written in python. The arguments have already been checked, and 'scratch' is
-        # None when scratch_nelts is 0. Making the stream current is what lets cupy code in
-        # launch_checked() run in order with the rest of the chain.
-        import cupy as cp
-
-        if scratch is None:
-            scratch = cp.empty(0, dtype=cp.float32)
-
-        with cp.cuda.ExternalStream(stream_ptr):
-            self.launch_checked(intensity, weights, scratch)
-
-    def to_yaml_dict(self):
-        """The transform's yaml form: ``{'class_name': <python class name>, **parameters}``.
-        Defined by the subclass (see the class docstring)."""
-        raise NotImplementedError(f'{type(self).__name__} must define to_yaml_dict(); see GpuTransformBase')
-
     @classmethod
-    def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
-        """The inverse of :meth:`to_yaml_dict`, at the given geometry. Defined by the subclass
-        (see the class docstring)."""
-        raise NotImplementedError(f'{cls.__name__} must define from_yaml_dict(); see GpuTransformBase')
+    def check_yaml_keys(cls, d, keys):
+        """The check every ``from_yaml_dict`` starts with: ``d`` is a dict whose ``class_name``
+        is this class's name, and whose other keys are exactly ``keys`` -- a missing key and
+        an unexpected key are both errors, with a message naming them."""
+        name = cls.__name__
+
+        if not isinstance(d, dict):
+            raise ValueError(f"{name}.from_yaml_dict: expected a dict, got {type(d).__name__}")
+        if d.get('class_name') != name:
+            raise ValueError(f"{name}.from_yaml_dict: expected class_name {name!r},"
+                             f" got {d.get('class_name')!r}")
+
+        got = set(d) - {'class_name'}
+        want = set(keys)
+        if got != want:
+            parts = []
+            if want - got:
+                parts.append(f"missing key(s) {sorted(want - got)}")
+            if got - want:
+                parts.append(f"unexpected key(s) {sorted(got - want)}")
+            raise ValueError(f"{name}.from_yaml_dict: " + ", ".join(parts))
 
     def __repr__(self):
         return f'{type(self).__name__}(nbeams={self.nbeams}, nfreq={self.nfreq}, ntime={self.ntime})'

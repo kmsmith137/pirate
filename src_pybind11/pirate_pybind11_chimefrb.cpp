@@ -8,9 +8,11 @@
 //   - GpuWrms: same, and lets the caller omit the scratch array
 //   - GpuWeightUpsampler: launch() converts stream=None to the current cupy stream
 //   - GpuTransformBase (injections in pirate_frb/chimefrb/GpuTransformBase.py, not a
-//     Reference*.py): the whole python side of the transform interface -- __init__,
-//     launch() with stream=None and scratch=None handling, the launch_checked() and yaml
-//     stubs, __repr__ -- inherited by every transform, C++ or python.
+//     Reference*.py): the python side shared by every transform, C++ or python --
+//     launch() with stream=None and scratch=None handling, the check_yaml_keys()
+//     classmethod, __repr__. The python side specific to transforms WRITTEN in python
+//     (the constructor, the launch_checked() and yaml stubs, the hook the trampoline
+//     below calls) is the plain python class GpuPythonTransform, not an injection.
 //   - The five "transforms" -- GpuBadChannelMask, GpuIntensityClipper, GpuStdDevClipper,
 //     GpuPolynomialDetrender, GpuSplineDetrender -- add to_yaml_dict() / from_yaml_dict()
 //     (the yaml form) and from_json_dict() (the old rf_pipelines json form); see
@@ -63,9 +65,11 @@ static Array<float> _decode_dst(const AssembledChunk &self, optional<Array<float
 // python class subclasses GpuTransformBase, pybind11 constructs this class in its place, so
 // that launch_checked() -- called by GpuTransformBase::launch() after the argument checks --
 // reaches the python subclass. It hands everything to ONE python method,
-// _dispatch_launch_checked() in pirate_frb/chimefrb/GpuTransformBase.py, which makes the
-// stream current and calls the subclass's launch_checked(intensity, weights, scratch).
-// Keeping the stream and scratch handling in python keeps it readable from python.
+// GpuPythonTransform._dispatch_launch_checked() (pirate_frb/chimefrb/GpuPythonTransform.py),
+// which makes the stream current and calls the subclass's launch_checked(intensity,
+// weights, scratch). Keeping the stream and scratch handling in python keeps it readable
+// from python. A python class that subclasses GpuTransformBase directly, rather than
+// GpuPythonTransform, has no such method, and its first launch() is refused here.
 //
 // The three arrays reach python as new cupy objects on the caller's memory (the ksgpu
 // caster's DLPack export), so in-place writes in launch_checked() land in the caller's
@@ -82,8 +86,9 @@ struct PyGpuTransformBase : public GpuTransformBase
         py::function f = py::get_override(static_cast<const GpuTransformBase *>(this),
                                           "_dispatch_launch_checked");
         if (!f)
-            throw std::runtime_error(name + ": _dispatch_launch_checked() not found on the python"
-                                     " class; is pirate_frb.chimefrb imported?");
+            throw std::runtime_error(name + ": a transform written in python must derive from"
+                                     " GpuPythonTransform (pirate_frb.chimefrb), not from"
+                                     " GpuTransformBase directly; see GpuPythonTransform.py");
 
         py::object s = (scratch_nelts > 0) ? py::cast(scratch) : py::object(py::none());
         f(intensity, weights, s, reinterpret_cast<uintptr_t>(stream));
@@ -389,12 +394,14 @@ void register_chimefrb_bindings(pybind11::module &m)
 
     // GpuTransformBase: the base class of every transform. Python injections in
     // pirate_frb/chimefrb/GpuTransformBase.py, which also carries the class docstring
-    // (option 2 in notes/docstrings.md): __init__ (supplies 'name'), launch() with
-    // stream=None and scratch=None handling, the launch_checked() / yaml stubs, __repr__,
-    // and _dispatch_launch_checked(), which the trampoline above calls.
+    // (option 2 in notes/docstrings.md): launch() with stream=None and scratch=None
+    // handling, the check_yaml_keys() classmethod, and __repr__. The python-only side is
+    // GpuPythonTransform (see the trampoline above).
     py::class_<GpuTransformBase, PyGpuTransformBase>(m, "GpuTransformBase")
         .def(py::init<const std::string &, long, long, long, long>(),
-            py::arg("name"), py::arg("nbeams"), py::arg("nfreq"), py::arg("ntime"), py::arg("scratch_nelts"))
+            py::arg("name"), py::arg("nbeams"), py::arg("nfreq"), py::arg("ntime"), py::arg("scratch_nelts"),
+            "The C++ constructor, called by GpuPythonTransform.__init__() with the python class's\n"
+            "name. Not for direct use: a bare GpuTransformBase has no computation to launch.")
 
         .def_readonly("nbeams", &GpuTransformBase::nbeams)
         .def_readonly("nfreq", &GpuTransformBase::nfreq)

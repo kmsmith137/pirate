@@ -11,18 +11,18 @@ Every transform is a subclass of `GpuTransformBase` (the module docstring of
 `(nbeams, nfreq, ntime)` block through `launch(intensity, weights, scratch, stream=None)`,
 which the base class supplies and which checks its arguments before running the
 transform's `launch_checked()`, and it reads and writes a yaml form through
-`to_yaml_dict()` / `from_yaml_dict()`. `WiPipeline` runs a list of transforms in order;
+`to_yaml_dict()` / `from_yaml_dict()`. The five ported transforms are C++; a transform
+written in python subclasses `GpuPythonTransform`, a plain python class on top of the base. `WiPipeline` runs a list of transforms in order;
 `RfiMaskPipeline` runs a list on a downsampled copy of the data and feeds the mask back.
 Both read the old rf_pipelines json configs (`WiPipeline.read_json_file`), and
 `pirate_frb cfrb json2yaml` converts one to yaml.
 
-**Writing your own transform.** Subclass `GpuTransformBase` in python: a constructor that
-calls `super().__init__(nbeams, nfreq, ntime)`, a `launch_checked(intensity, weights,
-scratch)` that does the work in cupy, in place, and a `to_yaml_dict()` / `from_yaml_dict()`
-pair:
+**Writing your own transform.** Subclass `GpuPythonTransform`: a constructor that calls
+`super().__init__(nbeams, nfreq, ntime)`, a `launch_checked(intensity, weights, scratch)`
+that does the work in cupy, in place, and a `to_yaml_dict()` / `from_yaml_dict()` pair:
 
 ```python
-class MyTransform(GpuTransformBase):
+class MyTransform(GpuPythonTransform):
     def __init__(self, nbeams, nfreq, ntime, sigma=3.0):
         super().__init__(nbeams, nfreq, ntime)
         self.sigma = float(sigma)
@@ -35,16 +35,17 @@ class MyTransform(GpuTransformBase):
 
     @classmethod
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
-        check_yaml_keys(d, 'MyTransform', ['sigma'])
+        cls.check_yaml_keys(d, ['sigma'])
         return cls(nbeams, nfreq, ntime, sigma=d['sigma'])
 ```
 
-`ExampleCupyTransform` is a complete example in forty lines, and the `GpuTransformBase`
+`ExampleCupyTransform` is a complete example in forty lines, and the `GpuPythonTransform`
 docstring states the contract (`launch_checked()` gets checked cupy arrays, views of the
-caller's, with the pipeline's stream current). Everything python code can see of the base
-class is in `pirate_frb/chimefrb/GpuTransformBase.py`; its C++ side is only the argument
-checking, and a failed check raises `RuntimeError` with a message starting with your class's
-name (`MyTransform.launch(): expected 'weights' of shape (1, 64, 64), got (1, 64, 32)`).
+caller's, with the pipeline's stream current). `GpuPythonTransform` is plain python, in
+`pirate_frb/chimefrb/GpuPythonTransform.py`; what it inherits from the C++ base is python
+too (`launch()`, in `GpuTransformBase.py`) except the argument checking, and a failed check
+raises `RuntimeError` with a message starting with your class's name
+(`MyTransform.launch(): expected 'weights' of shape (1, 64, 64), got (1, 64, 32)`).
 Forgetting `super().__init__()` is a `TypeError` at construction; forgetting
 `launch_checked()` is a `NotImplementedError` at the first launch. A class defined outside
 `pirate_frb.chimefrb` is handed to the yaml reader as `classes=[MyTransform]`.
@@ -53,7 +54,8 @@ Forgetting `super().__init__()` is a `TypeError` at construction; forgetting
 |---|---|
 | [`AssembledChunk`](AssembledChunk.md) | One "assembled_chunk in msgpack format" data file, and its decode methods |
 | [`GpuBadChannelMask`](GpuBadChannelMask.md) | Zeroes the weights of whole frequency channels (a port of `rf_pipelines::badchannel_mask`) |
-| [`GpuTransformBase`](GpuTransformBase.md) | Base class of every transform: the geometry, the checked `launch()`, and the contract a subclass's `launch_checked()` follows |
+| [`GpuTransformBase`](GpuTransformBase.md) | Base class of every transform, C++ or python: the geometry and the checked `launch()` |
+| [`GpuPythonTransform`](GpuPythonTransform.md) | Base class of a transform written in python: what to define, and the contract `launch_checked()` gets |
 | [`GpuClipperBase`](GpuClipperBase.md) | What the chimefrb RFI clippers share on top of `GpuTransformBase`: axis, downsampling, the per-row statistic |
 | [`GpuIntensityClipper`](GpuIntensityClipper.md) | Zeroes the weights of samples more than `sigma` standard deviations from a weighted mean; the chain's principal flagger (a port of `rf_kernels::intensity_clipper`) |
 | [`GpuPolynomialDetrender`](GpuPolynomialDetrender.md) | Fits and subtracts a polynomial in time per channel and chunk, zeroing the weights of poorly conditioned rows (a port of `rf_pipelines::polynomial_detrender`) |
@@ -72,6 +74,7 @@ Forgetting `super().__init__()` is a `TypeError` at construction; forgetting
 
 AssembledChunk
 GpuTransformBase
+GpuPythonTransform
 GpuBadChannelMask
 GpuClipperBase
 GpuIntensityClipper
