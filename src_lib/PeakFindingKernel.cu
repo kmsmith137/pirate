@@ -407,8 +407,8 @@ void ReferencePeakFindingKernel::apply(
 
                             float y0 = x3;
                             float y1 = (x2 + x3);
-                            float y2 = (0.5f*x1 + x2 + 0.5f*x3);
-                            float y3 = (0.5f*x0 + x1 + x2 + 0.5f*x3);
+                            float y2 = (constants::pf_xi3*x1 + x2 + constants::pf_xi3*x3);
+                            float y3 = (constants::pf_xi4*x0 + x1 + x2 + constants::pf_xi4*x3);
 
                             if (l == 0)
                                 _update_pf(maxval, argmax, w0*y0, token0);
@@ -521,9 +521,9 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
                 else if (q == 1)
                     out_max.at({b,d,tout}) = w * (x2 + x3);
                 else if (q == 2)
-                    out_max.at({b,d,tout}) = w * (0.5f*x1 + x2 + 0.5f*x3);
+                    out_max.at({b,d,tout}) = w * (constants::pf_xi3*x1 + x2 + constants::pf_xi3*x3);
                 else if (q == 3)
-                    out_max.at({b,d,tout}) = w * (0.5f*x0 + x1 + x2 + 0.5f*x3);
+                    out_max.at({b,d,tout}) = w * (constants::pf_xi4*x0 + x1 + x2 + constants::pf_xi4*x3);
                 else
                     throw _bad_token(token, "bad value of q, this should never happen");
 
@@ -1460,6 +1460,9 @@ void ReferencePfSquare::apply(Array<double> &acc, const Array<float> &in, long i
     xassert(acc.get_ncontig() >= 1);   // profile axis must be contiguous
     xassert(in.get_ncontig() >= 1);    // time axis must be contiguous
 
+    constexpr float xi3 = constants::pf_xi3;
+    constexpr float xi4 = constants::pf_xi4;
+
     const long L = num_levels;
     const long nt = tpad + nt_in;
     const long b0 = ibatch * beams_per_batch;
@@ -1497,14 +1500,15 @@ void ReferencePfSquare::apply(Array<double> &acc, const Array<float> &in, long i
             }
 
             // Profiles at level 'lam' (S = 2^lam), from the "Peak-finding kernels" section of
-            // notes/dedispersion.tex, written in terms of b_{lam+1} exactly as the GPU kernel
-            // writes them (see gpu_pf_square_kernel()):
+            // notes/dedispersion.tex, written against the boxcar cascade exactly as the GPU
+            // kernel writes them (see gpu_pf_square_kernel()):
             //
             //   h_{lam,0} = [1]^S                   -> y = b_lam[u]      (lam == 0 only)
             //   h_{lam,1} = [1]^2S                  -> y = b_{lam+1}[u]
-            //   h_{lam,2} = [1/2]^S [1]^S [1/2]^S   -> y = (b_{lam+1}[u] + b_{lam+1}[u-S])/2
-            //   h_{lam,3} = [1/2]^S [1]^2S [1/2]^S  -> y = (b_{lam+1}[u] + b_{lam+1}[u-S]
-            //                                                + b_{lam+1}[u-2S])/2
+            //   h_{lam,2} = [xi3]^S [1]^S [xi3]^S   -> y = xi3 b_lam[u] + (1-xi3) b_lam[u-S]
+            //                                                + xi3 b_{lam+1}[u-S]
+            //   h_{lam,3} = [xi4]^S [1]^2S [xi4]^S  -> y = xi4 b_{lam+1}[u] + (1-xi4) b_{lam+1}[u-S]
+            //                                                + xi4 b_{lam+1}[u-2S]
             //
             // Profile index is p = 3*lam + q. Level 0 contributes q=0..3 and higher levels
             // q=1..3, which the two conditionals below encode: q=0 exists only at lam==0, and
@@ -1514,6 +1518,7 @@ void ReferencePfSquare::apply(Array<double> &acc, const Array<float> &in, long i
             double *a = &acc.at({b,d,0});   // length nprofiles
 
             for (long lam = 0; lam < L; lam++) {
+                const float *bs = &boxcars.at({lam,0});
                 const float *bl = &boxcars.at({lam+1,0});
                 long S = pow2(lam);
 
@@ -1525,8 +1530,8 @@ void ReferencePfSquare::apply(Array<double> &acc, const Array<float> &in, long i
 
                     if (3*lam + 3 < nprofiles) {
                         float y1 = bl[t];
-                        float y2 = 0.5f * (bl[t] + bl[t-S]);
-                        float y3 = 0.5f * (bl[t] + bl[t-S] + bl[t-2*S]);
+                        float y2 = xi3*bs[t] + (1.0f-xi3)*bs[t-S] + xi3*bl[t-S];
+                        float y3 = xi4*bl[t] + (1.0f-xi4)*bl[t-S] + xi4*bl[t-2*S];
 
                         a[3*lam+1] += double(y1) * y1;
                         a[3*lam+2] += double(y2) * y2;
@@ -1769,6 +1774,8 @@ gpu_pf_square_kernel(
     constexpr int P = 3*W + 1;             // number of peak-finding profiles
     constexpr int L = (W > 0) ? W : 1;     // number of peak-finding levels
     constexpr int NB = L + 1;              // number of boxcars maintained (b_0 .. b_L)
+    constexpr float xi3 = constants::pf_xi3;
+    constexpr float xi4 = constants::pf_xi4;
 
     const int lane = threadIdx.x;
     long row = (long(blockIdx.x) * long(blockDim.y)) + threadIdx.y;
@@ -1837,14 +1844,16 @@ gpu_pf_square_kernel(
                 //
                 //   h_{lam,0} = [1]^S                   -> y = b_lam[u]
                 //   h_{lam,1} = [1]^2S                  -> y = b_{lam+1}[u]
-                //   h_{lam,2} = [1/2]^S [1]^S [1/2]^S   -> y = (b_{lam+1}[u] + b_{lam+1}[u-S])/2
-                //   h_{lam,3} = [1/2]^S [1]^2S [1/2]^S  -> y = (b_{lam+1}[u] + b_{lam+1}[u-S]
-                //                                                + b_{lam+1}[u-2S])/2
+                //   h_{lam,2} = [xi3]^S [1]^S [xi3]^S   -> y = xi3 b_lam[u] + (1-xi3) b_lam[u-S]
+                //                                                + xi3 b_{lam+1}[u-S]
+                //   h_{lam,3} = [xi4]^S [1]^2S [xi4]^S  -> y = xi4 b_{lam+1}[u] + (1-xi4) b_{lam+1}[u-S]
+                //                                                + xi4 b_{lam+1}[u-2S]
                 //
-                // The last two identities are what make this cheap. Written in terms of
-                // b_lam they need four taps at spacing S; written in terms of b_{lam+1} they
-                // need two, and one of those (the u-2S tap) is the cascade shift sh[lam+1],
-                // already computed above.
+                // The last two identities are what make this cheap. Written against b_lam
+                // alone they need four taps at spacing S; written this way they need three,
+                // and all but one are already in registers -- b_lam[u] is cur[lam], b_lam[u-S]
+                // is the cascade shift sh[lam], and b_{lam+1}[u-2S] is sh[lam+1]. So the two
+                // profiles together cost the single shuffle s1.
                 //
                 // Profile index is p = 3*lam + q. Level 0 contributes q=0..3 and higher
                 // levels contribute q=1..3, which the two conditionals below encode: q=0
@@ -1861,8 +1870,8 @@ gpu_pf_square_kernel(
                     if (3*lam + 3 < P) {
                         float s1 = _pfsq_shift(cur[lam+1], prev[lam+1], 1 << lam, lane);
                         float y1 = cur[lam+1];
-                        float y2 = 0.5f * (y1 + s1);
-                        float y3 = 0.5f * (y1 + s1 + sh[lam+1]);
+                        float y2 = xi3*cur[lam] + (1.0f-xi3)*sh[lam] + xi3*s1;
+                        float y3 = xi4*y1 + (1.0f-xi4)*s1 + xi4*sh[lam+1];
 
                         accum[3*lam+1] = fmaf(y1, y1, accum[3*lam+1]);
                         accum[3*lam+2] = fmaf(y2, y2, accum[3*lam+2]);

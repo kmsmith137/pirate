@@ -109,6 +109,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
             "Maximum number of primary trees.")
         .def_readonly_static("max_pf_width", &constants::max_pf_width,
             "Maximum peak-finding kernel width (PrimaryTree::max_width), in tree time samples.")
+        .def_readonly_static("pf_xi3", &constants::pf_xi3,
+            "Taper of the 3-block peak-finding profile: [pf_xi3]^w [1]^w [pf_xi3]^w.")
+        .def_readonly_static("pf_xi4", &constants::pf_xi4,
+            "Taper of the 4-block peak-finding profile: [pf_xi4]^w [1]^2w [pf_xi4]^w.")
         .def_readonly_static("k_dm", &constants::k_dm,
             "Dispersion constant K_DM, in (ms MHz^2) per (pc cm^{-3}): dispersion delay (ms) = "
             "k_dm * DM * (f_lo^{-2} - f_hi^{-2}), with frequencies in MHz.")

@@ -42,6 +42,13 @@ struct constants
     static constexpr int max_pf_width = 32;           // hard to change
     static constexpr int max_peak_finding_rank = 4;   // hard to change
 
+    // Tapers of the two non-boxcar peak-finding profiles: at level lambda (block width
+    // w = 2^lambda) the profiles are [xi3]^w [1]^w [xi3]^w and [xi4]^w [1]^2w [xi4]^w.
+    // The subscript is the profile's width in blocks, not its q index (pf_xi3 is q=2,
+    // pf_xi4 is q=3). See the "Peak-finding kernels" section of notes/dedispersion.tex.
+    static constexpr float pf_xi3 = 0.5f;
+    static constexpr float pf_xi4 = 0.5f;
+
     // FRB params.
     // Dispersion delay (ms) = k_dm * DM * (f_lo^{-2} - f_hi^{-2}), with freqs in MHz.
     // Scattering time tau ~ (radio frequency)^{-frb_scattering_index}.
@@ -98,6 +105,12 @@ struct constants
 
     static_assert((max_pf_width & (max_pf_width-1)) == 0,
                   "max_pf_kernels must be a power of two");
+
+    // Outside [0,1] a profile stops being a non-negative sum of co-centered boxcars,
+    // which the variance-map monotonicity result assumes (notes/variance_map.tex,
+    // "Monotonicity of the variance map in the DM bits (no detrender)", Lemma 6).
+    static_assert((pf_xi3 >= 0.0f) && (pf_xi3 <= 1.0f));
+    static_assert((pf_xi4 >= 0.0f) && (pf_xi4 <= 1.0f));
     
     // The constant is power-of-two so the splitter can use bit-arithmetic.
     static_assert((cuda_host_register_chunk_size

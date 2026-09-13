@@ -993,6 +993,9 @@ void DedispersionPlan::decode_argmax2(
     //  pf_shift = offset between pf-kernel center-of-mass and "trailing edge" of kernel
     //
     // Currently, we use an informal definition of pf_width, but pf_shift is unambiguous.
+    // The informal definition is the kernel's total area, i.e. the width of the boxcar of
+    // unit height with the same area. (Every profile is symmetric, so pf_shift is just half
+    // the support width, independent of the tapers constants::pf_xi{3,4}.)
 
     long pdiv = p / 3;
     long pmod = p - 3*pdiv;
@@ -1009,13 +1012,13 @@ void DedispersionPlan::decode_argmax2(
         pf_shift = 0.5 * (1 << (ipri+pdiv+1));
     }
     else if (pmod == 2) {
-        // kernel = [0.5,1,0.5] upsampled by 2^{ipri+pdiv}.
-        pf_width = 2.0 * (1 << (ipri+pdiv));    // let's say pre-upsampled kernel has nomimal width 2
+        // kernel = [xi3,1,xi3] upsampled by 2^{ipri+pdiv}.
+        pf_width = (1.0 + 2.0*constants::pf_xi3) * (1 << (ipri+pdiv));   // pre-upsampled area
         pf_shift = 1.5 * (1 << (ipri+pdiv));    // pre-upsampled kernel has pshift 1.5 (unambiguous)
     }
     else {
-        // kernel = [0.5,1,1,0.5] upsamled by 2^(ipri+pdiv-1)
-        pf_width = 3.0 * (1 << (ipri+pdiv-1));   // let's say "base" kernel has nominal width 3
+        // kernel = [xi4,1,1,xi4] upsamled by 2^(ipri+pdiv-1)
+        pf_width = (2.0 + 2.0*constants::pf_xi4) * (1 << (ipri+pdiv-1));  // pre-upsampled area
         pf_shift = 2.0 * (1 << (ipri+pdiv-1));   // pre-upsampled kernel has pshift 2.0 (unambiguous)
     }
 

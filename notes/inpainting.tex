@@ -116,7 +116,9 @@ $[1]$, and each level $j = 0,\ldots,4$ contributes three, the boxcar of width $2
 tapered kernels $[\tfrac12 \times 2^j,\ 1 \times 2^j,\ \tfrac12 \times 2^j]$ and
 $[\tfrac12 \times 2^j,\ 1 \times 2^{j+1},\ \tfrac12 \times 2^j]$ (widths $3 \cdot 2^j$ and $4 \cdot 2^j$),
 with $p = 3j + q$ for $q = 1,2,3$.  (The level is called $\lambda$ in \ddnotes{Peak-finding}; here
-$\lambda$ is the leverage, so the level is $j$.)  The kernels are non-negative and unnormalized.  We write
+$\lambda$ is the leverage, so the level is $j$.)  The kernels are non-negative and unnormalized.
+The taper $\tfrac12$ is the pair of code constants $\xi_3 = \xi_4 = \tfrac12$
+(\ddnotes{Peak-finding kernels}); every number in this note is computed at those values.  We write
 \begin{align}
 k_p &= \mbox{the kernel, as a vector; $k_{p,t}$ is the same vector placed at sample $t$} \nn \\
 W_p &= \mbox{its support width (1 to 64)} \nn \\

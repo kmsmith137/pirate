@@ -3,6 +3,13 @@ import numpy as np
 import scipy.linalg
 
 
+# Tapers of the two non-boxcar peak-finding profiles (see get_profiles()). This script is
+# standalone by design -- it imports nothing from pirate -- so these must be kept equal to
+# pirate::constants::pf_xi3 and pf_xi4 by hand.
+PF_XI3 = 0.5
+PF_XI4 = 0.5
+
+
 def is_integer(n):
     return isinstance(n,int) or isinstance(n,np.int64) or isinstance(n,np.int32)
 
@@ -552,8 +559,8 @@ class TreeMatrix:
 
         if E > 1:
             ret[1,:2] = [1.0, 1.0]
-            ret[2,:3] = [0.5, 1.0, 0.5]
-            ret[3,:4] = [0.5, 1.0, 1.0, 0.5]
+            ret[2,:3] = [PF_XI3, 1.0, PF_XI3]
+            ret[3,:4] = [PF_XI4, 1.0, 1.0, PF_XI4]
 
         if E > 2:
             ret2 = cls.get_profiles(E//2, normalize=False)

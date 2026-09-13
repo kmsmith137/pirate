@@ -290,9 +290,7 @@ class CoalescedDdKernel2:
 
         self.dd._emit_rsqrt2(k)
 
-        if self.Wmax > 1:
-            k.emit(f'const {self.dt32} pf_a = {self.dtype.from_float("0.5f")};')
-            k.emit()
+        self.pf._emit_pf_constants(k)
 
         self.dd._apply_inbuf_offsets(k)    # operates on grb* pointers, since self.dd.input_is_ringbuf == True
 

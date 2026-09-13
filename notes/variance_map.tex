@@ -2213,11 +2213,13 @@ center and whose lengths have a common parity: with $w = 2^\lambda$,
 \begin{equation}
 h_{\lambda,0} = B_w, \hspace{1cm}
 h_{\lambda,1} = B_{2w}, \hspace{1cm}
-h_{\lambda,2} = \tfrac12 B_{3w} + \tfrac12 B_w, \hspace{1cm}
-h_{\lambda,3} = \tfrac12 B_{4w} + \tfrac12 B_{2w},
+h_{\lambda,2} = \xi_3 B_{3w} + (1-\xi_3) B_w, \hspace{1cm}
+h_{\lambda,3} = \xi_4 B_{4w} + (1-\xi_4) B_{2w},
 \end{equation}
 where in each case the boxcars are centered on the center of $h_{\lambda,q}$
-(e.g.\ $[\tfrac12, 1, \tfrac12] = \tfrac12 [1,1,1] + \tfrac12 [0,1,0]$). Hence $A_p$ is a
+(e.g.\ $[\xi_3, 1, \xi_3] = \xi_3 [1,1,1] + (1-\xi_3) [0,1,0]$), and the tapers satisfy
+$0 \le \xi_3, \xi_4 \le 1$ (\ddnotes{Peak-finding kernels}), which is what makes these
+combinations non-negative. Hence $A_p$ is a
 non-negative combination of cross-correlations
 $\phi_{mn}[\delta] = \sum_t B_m[t] \, B_n[t+\delta]$ of co-centered boxcars, and for
 $m \equiv n$ (mod 2) and integer $\delta$,

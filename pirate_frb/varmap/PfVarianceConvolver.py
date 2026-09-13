@@ -41,15 +41,19 @@ class PfVarianceConvolver:
     @staticmethod
     def peak_finding_kernels(Wmax):
         """Returns a length-Pmax list of 1-d arrays, containing peak-finding kernels."""
-        
+
+        from ..pirate_pybind11 import constants    # lazy: keep this module's top level pybind-free
+        xi3 = float(constants.pf_xi3)
+        xi4 = float(constants.pf_xi4)
+
         Lq = integer_log2(Wmax)       # = log2(Wmax) = number of levels carrying q=1,2,3 profiles
         kernels = [np.ones(1)]        # p=0: finest single sample (l=0, q=0)
         
         for l in range(Lq):           # level l adds the three profiles p = 3l+q (q = 1, 2, 3)
             w = 1 << l
             kernels.append(np.ones(2 * w))
-            kernels.append(np.concatenate([0.5 * np.ones(w), np.ones(w),     0.5 * np.ones(w)]))
-            kernels.append(np.concatenate([0.5 * np.ones(w), np.ones(2 * w), 0.5 * np.ones(w)]))
+            kernels.append(np.concatenate([xi3 * np.ones(w), np.ones(w),     xi3 * np.ones(w)]))
+            kernels.append(np.concatenate([xi4 * np.ones(w), np.ones(2 * w), xi4 * np.ones(w)]))
 
         assert len(kernels) == 3 * Lq + 1
         return kernels
@@ -120,13 +124,19 @@ class PfVarianceConvolver:
 
     @staticmethod
     def test_reduces_to_norms():
-        """x = [1] (T=1) must reproduce ||h_p||^2 = {1, 2, 3/2, 5/2} * 2^l per profile."""
+        """x = [1] (T=1) must reproduce ||h_p||^2 = {1, 2, 1+2 xi3^2, 2+2 xi4^2} * 2^l per profile."""
+        from ..pirate_pybind11 import constants    # lazy: keep this module's top level pybind-free
+        xi3 = float(constants.pf_xi3)
+        xi4 = float(constants.pf_xi4)
+
         pfv = PfVarianceConvolver()
         var = pfv.variance(np.array([1.0]), pfv.Pmax)    # (Pmax,) == A[:, 0] == ||h_p||^2
         for p in range(pfv.Pmax):
             l, q = (0, 0) if p == 0 else ((p - 1) // 3, (p - 1) % 3 + 1)   # invert p = 3l+q
             w = 1 << l
-            want = {0: 1.0, 1: 2.0 * w, 2: 1.5 * w, 3: 2.5 * w}[q]
+            # Closed forms, deliberately NOT read off peak_finding_kernels(): deriving them
+            # independently is the whole point of this test.
+            want = {0: 1.0, 1: 2.0 * w, 2: (1 + 2*xi3**2) * w, 3: (2 + 2*xi4**2) * w}[q]
             assert abs(var[p] - want) < 1e-9, (p, l, q, var[p], want)
         # P-slicing: variance(x, P) is the length-P prefix of variance(x, Pmax).
         for P in [1, 4, 7, 13, pfv.Pmax]:
@@ -168,9 +178,9 @@ class PfVarianceConvolver:
             # all Pmax profiles covers every config.
             a = pfv.A[p]
 
-            # The current kernel coefficients (halves and ones) are exactly representable, so their
-            # autocorrelations are exact. A future kernel with rounded coefficients could show O(eps)
-            # non-monotonicity, which is not the failure this test is looking for.
+            # The tapers constants::pf_xi{3,4} are float32 constants widened to double, so a
+            # kernel's autocorrelation carries their rounding. This eps absorbs that; O(eps)
+            # non-monotonicity is not the failure this test is looking for.
             eps = 1e-12 * a[0]
 
             rise = np.nonzero(np.diff(a) > eps)[0]

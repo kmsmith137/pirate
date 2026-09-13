@@ -538,6 +538,9 @@ PfVarianceConvolver::PfVarianceConvolver()
     long Lq = integer_log2(Wmax);            // number of levels carrying q=1,2,3 profiles
     Pmax = 3 * Lq + 1;
 
+    const double xi3 = constants::pf_xi3;
+    const double xi4 = constants::pf_xi4;
+
     // Build the peak-finding kernels (python peak_finding_kernels()). We only need each kernel's
     // one-sided autocorrelation (its A row), but it's clearest to materialize the kernel first.
     std::vector<std::vector<double>> kernels;
@@ -546,19 +549,19 @@ PfVarianceConvolver::PfVarianceConvolver()
         long w = 1L << l;
         kernels.push_back(std::vector<double>(2 * w, 1.0));    // q=1: ones(2w)
         {
-            std::vector<double> h;                            // q=2: [0.5]*w + [1]*w + [0.5]*w
+            std::vector<double> h;                            // q=2: [xi3]*w + [1]*w + [xi3]*w
             h.reserve(2 * w);
-            for (long i = 0; i < w; i++) h.push_back(0.5);
+            for (long i = 0; i < w; i++) h.push_back(xi3);
             for (long i = 0; i < w; i++) h.push_back(1.0);
-            for (long i = 0; i < w; i++) h.push_back(0.5);
+            for (long i = 0; i < w; i++) h.push_back(xi3);
             kernels.push_back(std::move(h));
         }
         {
-            std::vector<double> h;                            // q=3: [0.5]*w + [1]*2w + [0.5]*w
+            std::vector<double> h;                            // q=3: [xi4]*w + [1]*2w + [xi4]*w
             h.reserve(4 * w);
-            for (long i = 0; i < w; i++)     h.push_back(0.5);
+            for (long i = 0; i < w; i++)     h.push_back(xi4);
             for (long i = 0; i < 2 * w; i++) h.push_back(1.0);
-            for (long i = 0; i < w; i++)     h.push_back(0.5);
+            for (long i = 0; i < w; i++)     h.push_back(xi4);
             kernels.push_back(std::move(h));
         }
     }
