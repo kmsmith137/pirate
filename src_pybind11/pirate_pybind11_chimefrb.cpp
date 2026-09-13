@@ -68,9 +68,11 @@ struct type_caster<pirate::chimefrb::ClipperAxis>
 
     bool load(handle src, bool)
     {
-        if (!isinstance<str>(src))
+        if (!isinstance<str>(src)) {
+            std::string t = str(type::handle_of(src).attr("__name__"));
             throw std::runtime_error("chimefrb: expected axis to be the string 'freq', 'time'"
-                                     " or 'none', got a " + std::string(str(src.get_type().attr("__name__"))));
+                                     " or 'none', got a " + t);
+        }
 
         value = pirate::chimefrb::axis_from_string(src.cast<std::string>());
         return true;
