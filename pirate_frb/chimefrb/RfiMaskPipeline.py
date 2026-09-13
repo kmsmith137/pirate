@@ -7,21 +7,17 @@ for the plain (undownsampled) container.
 
 import math
 
-from .GpuTransformBase import GpuTransformBase
-from .GpuPythonTransform import GpuPythonTransform
+from .GpuContainerBase import GpuContainerBase
 from .ReferenceWeightUpsampler import GpuWeightUpsampler
 from .ReferenceWiDownsampler import GpuWiDownsampler
-from .WiPipeline import WiPipeline
-from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, read_json,
-                           read_yaml, transform_from_json_dict, transform_from_yaml_dict,
-                           write_yaml)
+from .transform_io import check_json_keys
 
 
 def _round_up(n, m):
     return ((n + m - 1) // m) * m
 
 
-class RfiMaskPipeline(GpuPythonTransform):
+class RfiMaskPipeline(GpuContainerBase):
     """Transforms run on a (Df, Dt)-downsampled copy of the data, whose mask is then applied
     to the full-resolution weights.
 
@@ -43,7 +39,7 @@ class RfiMaskPipeline(GpuPythonTransform):
     downsampled intensity is discarded with the scratch. The transforms' geometry is the
     INNER one, (nbeams, nfreq/Df, ntime/Dt); the pipeline's own is the full-resolution shape.
 
-    An RfiMaskPipeline is itself a transform (a :class:`GpuTransformBase`), so it is normally
+    An RfiMaskPipeline is itself a transform (a :class:`GpuContainerBase`), so it is normally
     one element of a :class:`WiPipeline`. Like a WiPipeline it holds no
     per-launch state, so one instance may be launched on several streams at once with one
     scratch per stream; and one ``launch()`` processes exactly one block, which the caller
@@ -77,8 +73,7 @@ class RfiMaskPipeline(GpuPythonTransform):
             ``<= w_cutoff`` (strictly: a downsampled weight equal to the cutoff masks). The
             production chain uses 0.
         """
-        inner = WiPipeline(transforms)      # validates them, and owns the sequential launch
-        (nbeams, nfreq_ds, ntime_ds) = (inner.nbeams, inner.nfreq, inner.ntime)
+        (transforms, (nbeams, nfreq_ds, ntime_ds)) = self.check_transforms(transforms)
 
         for (name, x) in (('Df', Df), ('Dt', Dt)):
             if not (isinstance(x, int) and (x >= 1)):
@@ -100,10 +95,10 @@ class RfiMaskPipeline(GpuPythonTransform):
         # scratch.
         ds_nelts = nbeams * nfreq_ds * ntime_ds
         sub_offset = _round_up(2 * ds_nelts, 64)
-        super().__init__(nbeams, nfreq_ds * Df, ntime_ds * Dt, sub_offset + inner.scratch_nelts)
+        super().__init__(nbeams, nfreq_ds * Df, ntime_ds * Dt,
+                         sub_offset + self.max_scratch_nelts(transforms))
 
-        self._inner = inner
-        self.transforms = inner.transforms
+        self.transforms = transforms
         self.Df = Df
         self.Dt = Dt
         self.w_cutoff = w_cutoff
@@ -123,7 +118,7 @@ class RfiMaskPipeline(GpuPythonTransform):
         sub = scratch[self._sub_offset:]
 
         self._downsampler.launch(i_ds, w_ds, intensity, weights)
-        self._inner.launch(i_ds, w_ds, sub)
+        self.launch_transforms(i_ds, w_ds, sub)
         self._upsampler.launch(weights, w_ds)
 
     def to_yaml_dict(self):
@@ -145,10 +140,8 @@ class RfiMaskPipeline(GpuPythonTransform):
         if (nfreq % Df != 0) or (ntime % Dt != 0):
             raise ValueError(f'RfiMaskPipeline.from_yaml_dict: (nfreq, ntime) = ({nfreq}, {ntime}) is not'
                              f' divisible by (Df, Dt) = ({Df}, {Dt})')
-        if not (isinstance(d['transforms'], list) and (len(d['transforms']) > 0)):
-            raise ValueError("RfiMaskPipeline.from_yaml_dict: 'transforms' must be a non-empty list")
-        transforms = [transform_from_yaml_dict(e, nbeams, nfreq // Df, ntime // Dt, classes)
-                      for e in d['transforms']]
+        # The elements are built at the INNER geometry: that is what they will be launched at.
+        transforms = cls.transforms_from_yaml_list(d, nbeams, nfreq // Df, ntime // Dt, classes)
         return cls(transforms, Df, Dt, d['w_cutoff'])
 
     @classmethod
@@ -197,48 +190,15 @@ class RfiMaskPipeline(GpuPythonTransform):
             raise ValueError(f'{who}: (nfreq, ntime) = ({nfreq}, {ntime}) is not divisible by (Df, Dt) = ({Df}, {Dt})')
 
         sub = d['sub_pipeline']
-        inner = (nbeams, nfreq // Df, ntime // Dt)
         if isinstance(sub, dict) and (sub.get('class_name') == 'pipeline'):
             check_json_keys(sub, 'pipeline', ['elements'])
             elements = sub['elements']
         else:
             elements = [sub]
-        transforms = [transform_from_json_dict(e, *inner, nds=nds*Dt) for e in elements]
-        transforms = [t for t in transforms if t is not None]
-        if len(transforms) == 0:
-            raise ValueError(f"{who}: the legacy 'sub_pipeline' has no element with a pirate counterpart")
+        transforms = cls.transforms_from_json_elements(elements, nbeams, nfreq // Df, ntime // Dt,
+                                                       nds * Dt, 'sub_pipeline')
 
         return cls(transforms, Df, Dt, float(d['w_cutoff']))
-
-    @classmethod
-    def read_yaml_file(cls, filename, *, nbeams, nfreq, ntime, classes=None):
-        """Read a yaml file written by :meth:`write_yaml_file` whose top-level class_name is
-        RfiMaskPipeline, building it for the given FULL-RESOLUTION data geometry.
-
-        Parameters
-        ----------
-        filename : str
-        nbeams, nfreq, ntime : int
-            The block shape the pipeline will be launched on. A yaml file records no
-            geometry; the same file serves any geometry its transforms accept.
-        classes : sequence of type or None, optional
-            Transform classes of your own that the file may name (matched by class name);
-            anything in ``pirate_frb.chimefrb`` is found without this. See
-            ``pirate_frb.chimefrb.transform_io``.
-        """
-        return cls.from_yaml_dict(read_yaml(filename), nbeams, nfreq, ntime, classes=classes)
-
-    @classmethod
-    def read_json_file(cls, filename, *, nbeams, nfreq, ntime):
-        """Read a legacy rf_pipelines json file whose top-level element is a ``wi_sub_pipeline``,
-        building it for the given FULL-RESOLUTION data geometry. Elements with no pirate counterpart that do
-        not modify the data are skipped, with a note on stderr; see ``transform_io``."""
-        return cls.from_json_dict(read_json(filename), nbeams, nfreq, ntime)
-
-    def write_yaml_file(self, filename):
-        """Write :meth:`to_yaml_dict` to a yaml file, after a comment saying how to read it
-        (``transform_io.write_yaml``)."""
-        write_yaml(filename, self.to_yaml_dict(), header=PIPELINE_YAML_HEADER)
 
     def __repr__(self):
         return (f'RfiMaskPipeline(nbeams={self.nbeams}, nfreq={self.nfreq}, ntime={self.ntime},'

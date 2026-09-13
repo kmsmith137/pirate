@@ -50,12 +50,17 @@ Forgetting `super().__init__()` is a `TypeError` at construction; forgetting
 `launch_checked()` is a `NotImplementedError` at the first launch. A class defined outside
 `pirate_frb.chimefrb` is handed to the yaml reader as `classes=[MyTransform]`.
 
+A transform that RUNS other transforms subclasses `GpuContainerBase` instead, one level
+further down. That is how the yaml reader knows to pass `classes` on to it, so that the
+elements it holds are resolved too.
+
 | Class | Description |
 |---|---|
 | [`AssembledChunk`](AssembledChunk.md) | One "assembled_chunk in msgpack format" data file, and its decode methods |
 | [`GpuBadChannelMask`](GpuBadChannelMask.md) | Zeroes the weights of whole frequency channels (a port of `rf_pipelines::badchannel_mask`) |
 | [`GpuTransformBase`](GpuTransformBase.md) | Base class of every transform, C++ or python: the geometry and the checked `launch()` |
 | [`GpuPythonTransform`](GpuPythonTransform.md) | Base class of a transform written in python: what to define, and the contract `launch_checked()` gets |
+| [`GpuContainerBase`](GpuContainerBase.md) | Base class of a transform that RUNS other transforms: what `WiPipeline` and `RfiMaskPipeline` share |
 | [`GpuClipperBase`](GpuClipperBase.md) | What the chimefrb RFI clippers share on top of `GpuTransformBase`: axis, downsampling, the per-row statistic |
 | [`GpuIntensityClipper`](GpuIntensityClipper.md) | Zeroes the weights of samples more than `sigma` standard deviations from a weighted mean; the chain's principal flagger (a port of `rf_kernels::intensity_clipper`) |
 | [`GpuPolynomialDetrender`](GpuPolynomialDetrender.md) | Fits and subtracts a polynomial in time per channel and chunk, zeroing the weights of poorly conditioned rows (a port of `rf_pipelines::polynomial_detrender`) |
@@ -75,6 +80,7 @@ Forgetting `super().__init__()` is a `TypeError` at construction; forgetting
 AssembledChunk
 GpuTransformBase
 GpuPythonTransform
+GpuContainerBase
 GpuBadChannelMask
 GpuClipperBase
 GpuIntensityClipper

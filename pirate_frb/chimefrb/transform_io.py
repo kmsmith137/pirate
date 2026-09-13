@@ -5,9 +5,12 @@ WHAT A TRANSFORM IS. A subclass of :class:`GpuTransformBase`, which is anything 
 :class:`WiPipeline` or :class:`RfiMaskPipeline` can run. Five are C++ (GpuBadChannelMask,
 GpuIntensityClipper, GpuStdDevClipper, GpuPolynomialDetrender, GpuSplineDetrender), on that
 class directly; a transform written in python subclasses :class:`GpuPythonTransform`, which
-is plain python on top of it -- the two pipeline classes (transforms themselves, so that
-they nest), ``ExampleCupyTransform`` (the worked example), and anything a user writes.
-``GpuPythonTransform``'s docstring says how. Every transform has::
+is plain python on top of it -- ``ExampleCupyTransform`` (the worked example) and anything a
+user writes. ``GpuPythonTransform``'s docstring says how. A transform that RUNS other
+transforms subclasses :class:`GpuContainerBase` one level further down: the two pipeline
+classes are those, and its ``from_yaml_dict`` / ``from_json_dict`` take the extra
+``classes`` / ``nds`` arguments that the two dispatchers below forward to a container and
+not to a leaf. Every transform has::
 
     nbeams, nfreq, ntime    ints: the (beams, channels, time samples) block it processes,
                             fixed at construction
@@ -119,26 +122,23 @@ def _checked_transform_class(cls, class_name):
     return cls
 
 
-def _pipeline_classes():
-    """The two container classes, whose factories take an extra argument (see
-    transform_from_yaml_dict() and transform_from_json_dict())."""
-    import pirate_frb.chimefrb as pkg
-    return (pkg.WiPipeline, pkg.RfiMaskPipeline)
-
-
 def transform_from_yaml_dict(d, nbeams, nfreq, ntime, classes=None):
     """Build the transform that the yaml dict ``d`` describes, at the given geometry.
 
-    Dispatches on ``d['class_name']`` (see :func:`resolve_class`). The two pipeline classes
-    are the only ones whose ``from_yaml_dict`` takes ``classes``, and it is passed only to
-    them, so that a leaf transform's factory keeps the plain four-argument signature.
+    Dispatches on ``d['class_name']`` (see :func:`resolve_class`). A CONTAINER -- a
+    transform that runs other transforms, i.e. a :class:`GpuContainerBase` -- is the only
+    kind whose ``from_yaml_dict`` takes ``classes``, and it is passed only to those, so that
+    a leaf transform's factory keeps the plain four-argument signature. A container needs it
+    in order to resolve its own elements, at any depth.
     """
+
+    from .GpuContainerBase import GpuContainerBase     # here, not at module level: import cycle
 
     if not isinstance(d, dict) or ('class_name' not in d):
         raise ValueError(f"expected a dict with a 'class_name' key describing a transform, got {d!r}")
 
     cls = resolve_class(d['class_name'], classes)
-    if issubclass(cls, _pipeline_classes()):
+    if issubclass(cls, GpuContainerBase):
         return cls.from_yaml_dict(d, nbeams, nfreq, ntime, classes=classes)
     return cls.from_yaml_dict(d, nbeams, nfreq, ntime)
 
@@ -177,9 +177,11 @@ def transform_from_json_dict(d, nbeams, nfreq, ntime, nds=1):
     given geometry -- or return None if the element is one of :data:`IGNORED_JSON_CLASSES`.
 
     ``nds`` is the time downsampling of the data relative to the native stream (1 at top
-    level; ``nds*Dt`` inside a wi_sub_pipeline), which only the pipelines need, to resolve a
+    level; ``nds*Dt`` inside a wi_sub_pipeline), which only a container needs, to resolve a
     ``wi_sub_pipeline`` given as ``nds_out``.
     """
+
+    from .GpuContainerBase import GpuContainerBase     # here, not at module level: import cycle
 
     if not isinstance(d, dict) or ('class_name' not in d):
         raise ValueError(f"expected a legacy json element with a 'class_name' key, got {d!r}")
@@ -196,7 +198,7 @@ def transform_from_json_dict(d, nbeams, nfreq, ntime, nds=1):
                          f"{sorted(LEGACY_JSON_CLASS_NAMES)}, skipped names: {sorted(IGNORED_JSON_CLASSES)}")
 
     cls = resolve_class(LEGACY_JSON_CLASS_NAMES[name])
-    if issubclass(cls, _pipeline_classes()):
+    if issubclass(cls, GpuContainerBase):
         return cls.from_json_dict(d, nbeams, nfreq, ntime, nds=nds)
     return cls.from_json_dict(d, nbeams, nfreq, ntime)
 

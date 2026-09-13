@@ -32,9 +32,10 @@ import tempfile
 import numpy as np
 import yaml
 
-from . import (ClipperAxis, ExampleCupyTransform, GpuBadChannelMask, GpuIntensityClipper,
-               GpuPolynomialDetrender, GpuPythonTransform, GpuSplineDetrender, GpuStdDevClipper,
-               GpuTransformBase, RfiMaskPipeline, WiPipeline)
+from . import (ClipperAxis, ExampleCupyTransform, GpuBadChannelMask, GpuContainerBase,
+               GpuIntensityClipper, GpuPolynomialDetrender, GpuPythonTransform,
+               GpuSplineDetrender, GpuStdDevClipper, GpuTransformBase, RfiMaskPipeline,
+               WiPipeline)
 from .transform_io import (transform_from_json_dict, transform_from_yaml_dict,
                            yaml_string)
 from ..utils import atomic_print
@@ -109,6 +110,30 @@ class _ToyZeroChannels(GpuPythonTransform):
         return cls(nbeams, nfreq, ntime, d['step'])
 
 
+class _ToyContainer(GpuContainerBase):
+    """The smallest possible container: runs its elements in order, at its own geometry.
+
+    It exercises GpuContainerBase's helpers, and it stands in for a container written
+    OUTSIDE pirate_frb.chimefrb, which is the case transform_io has to get right (see
+    _check_container_base)."""
+
+    def __init__(self, transforms):
+        (transforms, (nbeams, nfreq, ntime)) = self.check_transforms(transforms)
+        super().__init__(nbeams, nfreq, ntime, self.max_scratch_nelts(transforms))
+        self.transforms = transforms
+
+    def launch_checked(self, intensity, weights, scratch):
+        self.launch_transforms(intensity, weights, scratch)
+
+    def to_yaml_dict(self):
+        return {'class_name': '_ToyContainer', 'transforms': self.transforms_yaml_list()}
+
+    @classmethod
+    def from_yaml_dict(cls, d, nbeams, nfreq, ntime, classes=None):
+        cls.check_yaml_keys(d, ['transforms'])
+        return cls(cls.transforms_from_yaml_list(d, nbeams, nfreq, ntime, classes))
+
+
 class _DuckTransform:
     """Has every attribute and method of a transform, but subclasses neither GpuPythonTransform
     nor GpuTransformBase. A pipeline must refuse it: the base class is where the launch
@@ -140,7 +165,7 @@ class _ToySpy(GpuPythonTransform):
                          ptrs=(intensity.data.ptr, weights.data.ptr, scratch.data.ptr))
 
 
-TOY_CLASSES = [_ToyAdd, _ToyScale, _ToyZeroChannels]
+TOY_CLASSES = [_ToyAdd, _ToyScale, _ToyZeroChannels, _ToyContainer]
 
 
 def predict(pipeline, intensity, weights):
@@ -455,6 +480,52 @@ def _check_base_class(cp):
     assert not isinstance(GpuBadChannelMask(B, F, T, [(500.0, 520.0)], (400.0, 800.0)), GpuPythonTransform)
 
 
+def _check_container_base(cp):
+    """GpuContainerBase: the base class of a transform that runs other transforms.
+
+    The case that matters is a container defined OUTSIDE pirate_frb.chimefrb.
+    transform_io decides whether to pass 'classes' down to a factory by testing
+    issubclass(cls, GpuContainerBase), so such a container must have its own elements
+    resolved from the caller's list. When the two pipeline classes were hardcoded instead,
+    this raised "unknown transform class_name '_ToyAdd'" -- telling the caller to pass a
+    class they had already passed."""
+
+    (B, F, T) = (1, 64, 64)
+    p = WiPipeline([_ToyContainer([_ToyAdd(B, F, T, 2.0), _ToyScale(B, F, T, 3.0)])])
+    d = p.to_yaml_dict()
+    assert d['transforms'][0]['class_name'] == '_ToyContainer'
+    assert _count_transforms(d) == 1 + 1 + 2
+
+    back = WiPipeline.from_yaml_dict(d, B, F, T, classes=TOY_CLASSES)
+    assert back.to_yaml_dict() == d, "a caller's own container did not round-trip through yaml"
+    # ... and the classes= list really is what finds the nested toys.
+    _expect_raise(ValueError, WiPipeline.from_yaml_dict, d, B, F, T)
+
+    # It runs: (i + 2) * 3, through the container, on the caller's arrays.
+    intensity = np.ones((B, F, T), dtype=np.float32)
+    weights = np.ones((B, F, T), dtype=np.float32)
+    (gi, gw) = _run(cp, back, intensity, weights, None)
+    _assert_equal(gi, 9.0 * np.ones((B, F, T), dtype=np.float32), 'intensity through _ToyContainer')
+
+    # Containers are GpuContainerBase; leaf transforms are not.
+    assert isinstance(p, GpuContainerBase) and isinstance(back.transforms[0], GpuContainerBase)
+    assert isinstance(RfiMaskPipeline([_ToyAdd(B, F // 2, T, 1.0)], 2, 1), GpuContainerBase)
+    assert not isinstance(_ToyAdd(B, F, T, 1.0), GpuContainerBase)
+    assert not isinstance(GpuBadChannelMask(B, F, T, [(500.0, 520.0)], (400.0, 800.0)), GpuContainerBase)
+
+    # check_transforms(), called by name: it reports the class it was called on.
+    (ts, geom) = _ToyContainer.check_transforms([_ToyAdd(B, F, T, 1.0)])
+    assert (geom == (B, F, T)) and (len(ts) == 1) and isinstance(ts, tuple)
+    _expect_raise(ValueError, _ToyContainer.check_transforms, [])
+    _expect_raise(TypeError, _ToyContainer.check_transforms, [_DuckTransform(B, F, T)])
+    try:
+        _ToyContainer.check_transforms([_ToyAdd(B, F, T, 1.0), _ToyAdd(B, 2 * F, T, 1.0)])
+    except ValueError as e:
+        assert str(e).startswith('_ToyContainer:'), str(e)
+    else:
+        raise AssertionError('check_transforms accepted a mixed geometry')
+
+
 def _check_real_transforms(cp, rng):
     """One smoke launch of a chain of the real transforms, in the production's shape. Not a
     correctness check: the transforms have their own tests. It catches a scratch accounting
@@ -571,6 +642,7 @@ def test_wi_pipeline(iteration=0, rng=None, verbose=False):
         _check_legacy_json()
         _check_arguments()
         _check_base_class(cp)
+        _check_container_base(cp)
         _check_real_transforms(cp, rng)
         _check_example_transform(cp, rng)
 

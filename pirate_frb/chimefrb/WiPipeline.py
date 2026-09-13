@@ -3,51 +3,21 @@
 A python port of rf_pipelines::pipeline, the container the old CHIME FRB search's RFI chain
 was built from. ("wi" is the old code's abbreviation for a (weights, intensity) pair.) Its
 companion RfiMaskPipeline (rf_pipelines::wi_sub_pipeline) runs a list of transforms on a
-downsampled copy of the data instead; both are transforms themselves (python ones, on
-GpuPythonTransform), so they nest.
+downsampled copy of the data instead; both are containers (GpuContainerBase, which supplies
+what they share) and transforms themselves, so they nest.
 """
 
-from .GpuTransformBase import GpuTransformBase
-from .GpuPythonTransform import GpuPythonTransform
-from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, read_json,
-                           read_yaml, transform_from_json_dict, transform_from_yaml_dict,
-                           write_yaml)
+from .GpuContainerBase import GpuContainerBase
+from .transform_io import check_json_keys
 
 
-def check_transforms(transforms, who):
-    """Validate a sequence of transforms that are to share one block: each is a
-    :class:`GpuTransformBase` (which guarantees the geometry attributes and the checked
-    ``launch()``), and all have the same geometry. Returns
-    ``(tuple_of_transforms, (nbeams, nfreq, ntime))``."""
-
-    transforms = tuple(transforms)
-    if len(transforms) == 0:
-        raise ValueError(f'{who}: expected at least one transform')
-
-    geometry = None
-    for (i, t) in enumerate(transforms):
-        what = f'{who}: transforms[{i}] ({type(t).__name__})'
-        if not isinstance(t, GpuTransformBase):
-            raise TypeError(f"{what} is not a transform: it does not subclass GpuTransformBase; see"
-                            f" pirate_frb.chimefrb.transform_io for what a transform is")
-
-        g = (t.nbeams, t.nfreq, t.ntime)
-        if geometry is None:
-            geometry = g
-        elif g != geometry:
-            raise ValueError(f'{what} has geometry (nbeams, nfreq, ntime) = {g}, but transforms[0]'
-                             f' has {geometry}; every transform in a pipeline processes the same block')
-
-    return (transforms, geometry)
-
-
-class WiPipeline(GpuPythonTransform):
+class WiPipeline(GpuContainerBase):
     """An ordered list of transforms, run one after another on the same block of data.
 
     A port of rf_pipelines::pipeline, the container the old CHIME FRB search's RFI chain was
     built from ("wi" is the old code's abbreviation for a (weights, intensity) pair). Each
     transform sees the output of the one before it. A WiPipeline is itself a transform (a
-    :class:`GpuTransformBase`, like every transform), so pipelines nest, and an
+    :class:`GpuContainerBase`, so it may hold other containers), so pipelines nest, and an
     :class:`RfiMaskPipeline` -- the old code's downsampled sub-pipeline -- can be one of its
     elements. ``launch()`` runs every transform in order; whichever arrays they modify, it
     modifies.
@@ -79,29 +49,26 @@ class WiPipeline(GpuPythonTransform):
             One or more transforms (:class:`GpuTransformBase` subclasses), all with the same
             (nbeams, nfreq, ntime).
         """
-        (transforms, (nbeams, nfreq, ntime)) = check_transforms(transforms, 'WiPipeline')
-        super().__init__(nbeams, nfreq, ntime, max(t.scratch_nelts for t in transforms))
+        (transforms, (nbeams, nfreq, ntime)) = self.check_transforms(transforms)
+        super().__init__(nbeams, nfreq, ntime, self.max_scratch_nelts(transforms))
         self.transforms = transforms
 
     def launch_checked(self, intensity, weights, scratch):
-        # The pipeline's stream is current (GpuTransformBase.launch() made it so), and each
-        # transform's launch() defaults to it. 'scratch' is the largest any of them needs.
-        for t in self.transforms:
-            t.launch(intensity, weights, scratch)
+        # 'scratch' is the largest any of them needs, and the pipeline's stream is current
+        # (GpuTransformBase.launch() made it so), which each transform's launch() defaults to.
+        self.launch_transforms(intensity, weights, scratch)
 
     def to_yaml_dict(self):
         """``{'class_name': 'WiPipeline', 'transforms': [...]}``, each element its own
         ``to_yaml_dict()``."""
-        return {'class_name': 'WiPipeline', 'transforms': [t.to_yaml_dict() for t in self.transforms]}
+        return {'class_name': 'WiPipeline', 'transforms': self.transforms_yaml_list()}
 
     @classmethod
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime, classes=None):
         """The inverse of :meth:`to_yaml_dict`, at the given geometry. ``classes`` is passed to
         the reader of each element (see :meth:`read_yaml_file`)."""
         cls.check_yaml_keys(d, ['transforms'])
-        if not (isinstance(d['transforms'], list) and (len(d['transforms']) > 0)):
-            raise ValueError("WiPipeline.from_yaml_dict: 'transforms' must be a non-empty list")
-        return cls([transform_from_yaml_dict(e, nbeams, nfreq, ntime, classes) for e in d['transforms']])
+        return cls(cls.transforms_from_yaml_list(d, nbeams, nfreq, ntime, classes))
 
     @classmethod
     def from_json_dict(cls, d, nbeams, nfreq, ntime, nds=1):
@@ -110,41 +77,7 @@ class WiPipeline(GpuPythonTransform):
         (see ``transform_io``); ``nds`` is the data's time downsampling relative to the native
         stream, needed only by nested ``wi_sub_pipeline`` elements."""
         check_json_keys(d, 'pipeline', ['elements'])
-        transforms = [transform_from_json_dict(e, nbeams, nfreq, ntime, nds) for e in d['elements']]
-        transforms = [t for t in transforms if t is not None]
-        if len(transforms) == 0:
-            raise ValueError("WiPipeline.from_json_dict: the legacy 'pipeline' has no element with a pirate counterpart")
-        return cls(transforms)
-
-    @classmethod
-    def read_yaml_file(cls, filename, *, nbeams, nfreq, ntime, classes=None):
-        """Read a yaml file written by :meth:`write_yaml_file`, building the pipeline for the
-        given data geometry.
-
-        Parameters
-        ----------
-        filename : str
-        nbeams, nfreq, ntime : int
-            The block shape the pipeline will be launched on. A yaml file records no
-            geometry; the same file serves any geometry its transforms accept.
-        classes : sequence of type or None, optional
-            Transform classes of your own that the file may name (matched by class name);
-            anything in ``pirate_frb.chimefrb`` is found without this. See
-            ``pirate_frb.chimefrb.transform_io``.
-        """
-        return cls.from_yaml_dict(read_yaml(filename), nbeams, nfreq, ntime, classes=classes)
-
-    @classmethod
-    def read_json_file(cls, filename, *, nbeams, nfreq, ntime):
-        """Read a legacy rf_pipelines json file (one written by the old ``jsonize()``), building
-        the pipeline for the given data geometry. Elements with no pirate counterpart that do
-        not modify the data are skipped, with a note on stderr; see ``transform_io``."""
-        return cls.from_json_dict(read_json(filename), nbeams, nfreq, ntime)
-
-    def write_yaml_file(self, filename):
-        """Write :meth:`to_yaml_dict` to a yaml file, after a comment saying how to read it
-        (``transform_io.write_yaml``)."""
-        write_yaml(filename, self.to_yaml_dict(), header=PIPELINE_YAML_HEADER)
+        return cls(cls.transforms_from_json_elements(d['elements'], nbeams, nfreq, ntime, nds, 'pipeline'))
 
     def __repr__(self):
         return (f'WiPipeline(nbeams={self.nbeams}, nfreq={self.nfreq}, ntime={self.ntime},'

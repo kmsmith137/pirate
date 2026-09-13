@@ -413,6 +413,7 @@ PYFILES = \
   pirate_frb/chimefrb/ReferenceWeightUpsampler.py \
   pirate_frb/chimefrb/ReferenceWiDownsampler.py \
   pirate_frb/chimefrb/ReferenceWrms.py \
+  pirate_frb/chimefrb/GpuContainerBase.py \
   pirate_frb/chimefrb/GpuPythonTransform.py \
   pirate_frb/chimefrb/GpuTransformBase.py \
   pirate_frb/chimefrb/ExampleCupyTransform.py \

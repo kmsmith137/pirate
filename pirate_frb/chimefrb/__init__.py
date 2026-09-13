@@ -5,7 +5,8 @@ which read the old json configs and read/write a yaml format of their own.
 
 Every transform is a subclass of ``GpuTransformBase`` (the interface is stated in
 ``transform_io.py``); one written in python subclasses ``GpuPythonTransform``, and the
-worked example ``ExampleCupyTransform`` shows how.
+worked example ``ExampleCupyTransform`` shows how. One that RUNS other transforms
+subclasses ``GpuContainerBase``, as the two containers do.
 
 See ``notes/chimefrb.md`` for the porting rules this subpackage follows.
 """
@@ -19,6 +20,9 @@ from ..pirate_pybind11 import AssembledChunk, GpuClipperBase
 # plain python on top of it.
 from .GpuTransformBase import GpuTransformBase
 from .GpuPythonTransform import GpuPythonTransform
+
+# GpuContainerBase, the base of a transform that runs other transforms, imports transform_io,
+# so it is imported below with the two containers rather than here.
 
 # GpuWiDownsampler has method injections, which live in ReferenceWiDownsampler.py
 # alongside its numpy reference. That module both applies the injections (as an
@@ -41,5 +45,6 @@ from .transform_io import (CHIME_FREQ_RANGE, IGNORED_JSON_CLASSES, LEGACY_JSON_C
                            read_json, read_yaml, resolve_class, transform_from_json_dict,
                            transform_from_yaml_dict, write_yaml, yaml_string)
 from .ExampleCupyTransform import ExampleCupyTransform
+from .GpuContainerBase import GpuContainerBase
 from .WiPipeline import WiPipeline
 from .RfiMaskPipeline import RfiMaskPipeline

@@ -83,8 +83,11 @@ shared by every transform -- `launch()` with `stream=None` / `scratch=None`, the
 `pirate_frb/chimefrb/GpuTransformBase.py`. A transform written in python subclasses
 `GpuPythonTransform` (`pirate_frb/chimefrb/GpuPythonTransform.py`), a plain python class on
 top of the base that holds the constructor, the `launch_checked()` and yaml stubs a
-subclass replaces, the hook the trampoline calls, and the docstring a python author reads;
-`pirate_frb/chimefrb/transform_io.py` states the whole interface. A newly ported transform should follow it (constructor: geometry
+subclass replaces, the hook the trampoline calls, and the docstring a python author reads.
+One that RUNS other transforms subclasses `GpuContainerBase` one level further down (the
+two pipeline classes are those): it supplies what they share, and it is what
+`transform_io` tests in order to pass the extra `classes` / `nds` arguments down to a
+container's factory. `pirate_frb/chimefrb/transform_io.py` states the whole interface. A newly ported transform should follow it (constructor: geometry
 first, then the semantic parameters in the old code's order, then performance knobs; the
 class name passed to the base is what prefixes its error messages), and only transforms
 with a legacy json form get a `from_json_dict()`. `pirate_frb cfrb json2yaml` converts an
