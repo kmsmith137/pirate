@@ -258,6 +258,10 @@ PIPELINE_YAML_HEADER = ('# A pirate_frb.chimefrb transform chain. Read with\n'
 # on the old search's production chain, whose longest transform would be 136 on one line).
 YAML_WIDTH = 100
 
+# Columns per level of nesting. Note pyyaml pads the '-' of a block sequence entry out to
+# the full indent, so a nested transform in block style starts '-   class_name:'.
+YAML_INDENT = 4
+
 
 class _YamlDumper(yaml.SafeDumper):
     """yaml.SafeDumper, except that anything whose entries are all scalars is written inline:
@@ -289,12 +293,16 @@ _YamlDumper.add_representer(list, _represent_list)
 _YamlDumper.add_representer(dict, _represent_dict)
 
 
-def yaml_string(data, header=None):
+def yaml_string(data, header=None, width=None):
     """``data`` (a plain dict, e.g. a ``to_yaml_dict()``) as yaml text, keys in their natural
-    order and each transform's parameters inline (:class:`_YamlDumper`, wrapped at
-    :data:`YAML_WIDTH` columns), preceded by ``header`` (a string of ``#`` comment lines,
-    ending in a newline) if one is given."""
-    s = yaml.dump(data, Dumper=_YamlDumper, sort_keys=False, width=YAML_WIDTH)
+    order and each transform's parameters inline (:class:`_YamlDumper`), preceded by
+    ``header`` (a string of ``#`` comment lines, ending in a newline) if one is given.
+
+    ``width`` is the wrap column, defaulting to :data:`YAML_WIDTH`. Note that pyyaml ignores
+    a width of 4 or less (it falls back to 80), so callers that expose this should refuse a
+    small one rather than pass it through."""
+    s = yaml.dump(data, Dumper=_YamlDumper, sort_keys=False, indent=YAML_INDENT,
+                  width=(YAML_WIDTH if (width is None) else width))
     return (header + s) if (header is not None) else s
 
 

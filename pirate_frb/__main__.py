@@ -1890,6 +1890,8 @@ def parse_cfrb(subparsers):
 
 
 def parse_cfrb_json2yaml(subparsers):
+    from .chimefrb import YAML_WIDTH     # the -w default, so there is one source of truth
+
     help_text = "Convert a legacy rf_pipelines json RFI chain to the chimefrb yaml format (on stdout)"
     parser = subparsers.add_parser("json2yaml", help=help_text, description=help_text)
     parser.set_defaults(func=cfrb_json2yaml)
@@ -1898,6 +1900,10 @@ def parse_cfrb_json2yaml(subparsers):
     parser.add_argument('--nbeams', type=int, default=1, help='beams the chain is BUILT at (default 1)')
     parser.add_argument('--nfreq', type=int, default=16384, help='channels the chain is BUILT at (default 16384, the full CHIME band)')
     parser.add_argument('--ntime', type=int, default=4096, help='time samples the chain is BUILT at (default 4096)')
+    parser.add_argument('-w', '--width', type=int, default=YAML_WIDTH, metavar='COLS',
+                        help=f"wrap each transform's parameters at COLS columns (default {YAML_WIDTH});"
+                             f" a soft target, since the break falls at the last comma that fits, and a"
+                             f" COLS larger than the longest transform puts every transform on one line")
 
 
 def cfrb_json2yaml(args):
@@ -1912,14 +1918,25 @@ def cfrb_json2yaml(args):
     from .chimefrb import (PIPELINE_YAML_HEADER, read_json, transform_from_json_dict,
                            yaml_string)
 
+    # Below 40, every parameter wraps (a transform's opening '- {class_name: ...,' is
+    # already ~38 columns) and the inline form buys nothing; pyyaml would also silently
+    # substitute 80 for a width of 4 or less.
+    if args.width < 40:
+        sys.exit(f'pirate_frb cfrb json2yaml: expected -w/--width >= 40, got {args.width}')
+
     chain = transform_from_json_dict(read_json(args.json_file), args.nbeams, args.nfreq, args.ntime)
     if chain is None:
         sys.exit(f'{args.json_file}: the top-level element has no pirate counterpart')
 
-    header = (f'# Converted by "pirate_frb cfrb json2yaml" from\n'
-              f'# {os.path.basename(args.json_file)} at nbeams={args.nbeams}'
-              f' nfreq={args.nfreq} ntime={args.ntime}.\n' + PIPELINE_YAML_HEADER)
-    sys.stdout.write(yaml_string(chain.to_yaml_dict(), header=header))
+    # First header line: a command line that regenerates this file, so that a reader knows
+    # the geometry the chain was built at and can reproduce the layout. Built from the parsed
+    # arguments rather than sys.argv, so that every flag appears with the value used even when
+    # it was left at its default. The 'pirate_frb' prefix is literal (argv[0] is the
+    # __main__.py path under 'python -m pirate_frb').
+    cmdline = (f'pirate_frb cfrb json2yaml {shlex.quote(args.json_file)}'
+               f' --nbeams {args.nbeams} --nfreq {args.nfreq} --ntime {args.ntime} -w {args.width}')
+    header = f'# Created with: {cmdline}\n' + PIPELINE_YAML_HEADER
+    sys.stdout.write(yaml_string(chain.to_yaml_dict(), header=header, width=args.width))
 
 
 ####################################   cfrb time_pipeline command  ##################################
