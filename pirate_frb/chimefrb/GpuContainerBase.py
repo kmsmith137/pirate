@@ -1,11 +1,11 @@
 """GpuContainerBase: the base class of every chimefrb transform that runs OTHER transforms.
 
-WiPipeline and RfiMaskPipeline are the two in this package; a user may write another. See
+Pipeline and RfiMaskPipeline are the two in this package; a user may write another. See
 the class docstring for what a subclass supplies and what it inherits.
 """
 
 from .GpuPythonTransform import GpuPythonTransform
-from .GpuTransformBase import GpuTransformBase
+from .GpuTransform import GpuTransform
 from .transform_io import (PIPELINE_YAML_HEADER, read_json, read_yaml,
                            transform_from_json_dict, transform_from_yaml_dict, write_yaml)
 
@@ -15,7 +15,7 @@ class GpuContainerBase(GpuPythonTransform):
 
     A container is a transform whose work is done by a list of other transforms: it holds
     them in ``self.transforms``, and its ``launch_checked()`` runs them, possibly with
-    something of its own around them. :class:`WiPipeline` runs them in order on the caller's
+    something of its own around them. :class:`Pipeline` runs them in order on the caller's
     block; :class:`RfiMaskPipeline` runs them on a downsampled copy and feeds the resulting
     mask back. A container is itself a transform, so containers nest.
 
@@ -60,7 +60,7 @@ class GpuContainerBase(GpuPythonTransform):
     @classmethod
     def check_transforms(cls, transforms):
         """Validate a sequence of transforms that are to share one block: each is a
-        :class:`GpuTransformBase` (which guarantees the geometry attributes and the checked
+        :class:`GpuTransform` (which guarantees the geometry attributes and the checked
         ``launch()``), and all have the same geometry. Returns
         ``(tuple_of_transforms, (nbeams, nfreq, ntime))``.
 
@@ -80,8 +80,8 @@ class GpuContainerBase(GpuPythonTransform):
         geometry = None
         for (i, t) in enumerate(transforms):
             what = f'{who}: transforms[{i}] ({type(t).__name__})'
-            if not isinstance(t, GpuTransformBase):
-                raise TypeError(f"{what} is not a transform: it does not subclass GpuTransformBase; see"
+            if not isinstance(t, GpuTransform):
+                raise TypeError(f"{what} is not a transform: it does not subclass GpuTransform; see"
                                 f" pirate_frb.chimefrb.transform_io for what a transform is")
 
             g = (t.nbeams, t.nfreq, t.ntime)

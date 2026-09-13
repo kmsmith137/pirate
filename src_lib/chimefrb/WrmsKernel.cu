@@ -1,4 +1,4 @@
-#include "../../include/pirate/chimefrb/Wrms.hpp"
+#include "../../include/pirate/chimefrb/WrmsKernel.hpp"
 
 #include <sstream>
 #include <iostream>
@@ -321,36 +321,36 @@ wrms_finalize_kernel(float *mean, float *var, const float *scratch, int nchunk, 
 // -------------------------------------------------------------------------------------------------
 
 
-GpuWrms::GpuWrms(long L_, long niter_, double iter_sigma_, bool two_pass_,
-                 long threads_per_block_) :
+GpuWrmsKernel::GpuWrmsKernel(long L_, long niter_, double iter_sigma_, bool two_pass_,
+                             long threads_per_block_) :
     L(L_), niter(niter_), iter_sigma(iter_sigma_), two_pass(two_pass_),
     threads_per_block(threads_per_block_)
 {
     if (L < 1)
-        throw runtime_error("GpuWrms: expected L >= 1");
+        throw runtime_error("GpuWrmsKernel: expected L >= 1");
     if (niter < 1)
-        throw runtime_error("GpuWrms: expected niter >= 1 (niter counts total passes,"
+        throw runtime_error("GpuWrmsKernel: expected niter >= 1 (niter counts total passes,"
                             " so niter=1 means no refinement)");
     if (iter_sigma < 0.0)
-        throw runtime_error("GpuWrms: expected iter_sigma >= 0");
+        throw runtime_error("GpuWrmsKernel: expected iter_sigma >= 0");
 
     if ((threads_per_block != 128) && (threads_per_block != 256)
         && (threads_per_block != 512) && (threads_per_block != 1024)) {
         stringstream ss;
-        ss << "GpuWrms: threads_per_block=" << threads_per_block
+        ss << "GpuWrmsKernel: threads_per_block=" << threads_per_block
            << " is not supported (expected 128, 256, 512 or 1024)";
         throw runtime_error(ss.str());
     }
 }
 
 
-long GpuWrms::max_shared_L()
+long GpuWrmsKernel::max_shared_L()
 {
     return smem_budget / (2 * long(sizeof(float)));
 }
 
 
-bool GpuWrms::is_shared_memory_path() const
+bool GpuWrmsKernel::is_shared_memory_path() const
 {
     return L <= max_shared_L();
 }
@@ -364,7 +364,7 @@ static long _nchunk(long L)
 }
 
 
-long GpuWrms::scratch_nelts(long R) const
+long GpuWrmsKernel::scratch_nelts(long R) const
 {
     if (is_shared_memory_path())
         return 0;
@@ -422,9 +422,9 @@ static void _launch_global(float *mean, float *var, const float *in_i, const flo
 }
 
 
-void GpuWrms::launch(Array<float> &mean, Array<float> &var,
-                     const Array<float> &in_i, const Array<float> &in_w,
-                     Array<float> &scratch, cudaStream_t stream) const
+void GpuWrmsKernel::launch(Array<float> &mean, Array<float> &var,
+                           const Array<float> &in_i, const Array<float> &in_w,
+                           Array<float> &scratch, cudaStream_t stream) const
 {
     xassert_eq(in_i.ndim, 2);
     xassert_eq(in_i.shape[1], L);
@@ -478,7 +478,7 @@ void GpuWrms::launch(Array<float> &mean, Array<float> &var,
         }
     }
 
-    throw runtime_error("GpuWrms::launch(): internal error, unhandled threads_per_block");
+    throw runtime_error("GpuWrmsKernel::launch(): internal error, unhandled threads_per_block");
 }
 
 
@@ -496,7 +496,7 @@ struct TimingConfig
 };
 
 
-void GpuWrms::time_selected()
+void GpuWrmsKernel::time_selected()
 {
     // The distinct (L, niter) shapes the production chain asks for, at B = 8 beams.
     // two_pass is true throughout: it costs one extra on-chip sweep, and the point of
@@ -529,7 +529,7 @@ void GpuWrms::time_selected()
             in_w.fill(ones);
         }
 
-        GpuWrms probe(c.L, c.niter, c.iter_sigma, true);
+        GpuWrmsKernel probe(c.L, c.niter, c.iter_sigma, true);
         bool shared = probe.is_shared_memory_path();
 
         // Global memory traffic. On the shared-memory path each input array is read
@@ -543,7 +543,7 @@ void GpuWrms::time_selected()
         double unique_bytes = 2.0 * c.R * c.L * 4.0;
         double nbytes = unique_bytes * double(nsteps);
 
-        cout << "\nGpuWrms::time_selected()\n"
+        cout << "\nGpuWrmsKernel::time_selected()\n"
              << "    (L, R, niter) = (" << c.L << ", " << c.R << ", " << c.niter << "):  "
              << c.what << "\n"
              << "    path = " << (shared ? "shared memory" : "global memory")
@@ -551,7 +551,7 @@ void GpuWrms::time_selected()
              << " MB footprint = " << (nbytes / 1.0e9) << " GB requested" << endl;
 
         for (long tpb: tpb_values) {
-            GpuWrms wrms(c.L, c.niter, c.iter_sigma, true, tpb);
+            GpuWrmsKernel wrms(c.L, c.niter, c.iter_sigma, true, tpb);
             Array<float> scratch({max(1L, wrms.scratch_nelts(c.R))}, af_gpu | af_zero);
 
             KernelTimer kt(niter_timing, 1);

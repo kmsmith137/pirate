@@ -20,7 +20,7 @@ namespace chimefrb {
 // Three steps, of which only the last is this class's own code:
 //
 //   1-2. The per-row weighted mean and variance, computed by GpuClipperBase: downsample
-//        by (Df, Dt), transpose if axis == FREQ, then GpuWrms at (niter, iter_sigma).
+//        by (Df, Dt), transpose if axis == FREQ, then GpuWrmsKernel at (niter, iter_sigma).
 //   3.   intensity_clip: mask every downsampled cell with |I_ds - mean| >= sigma*sqrt(var),
 //        and zero all Df*Dt full-resolution weights of a masked cell.
 //
@@ -56,7 +56,7 @@ struct GpuIntensityClipper : public GpuClipperBase
     // 'sigma' is the FINAL clip threshold, in units of the row's rms.
     // 'iter_sigma' is the threshold used BY THE STATISTIC'S REFINEMENTS, in the same
     // units. Ignored when niter == 1. Unlike rf_kernels::intensity_clipper, 0 has no
-    // special meaning here (there it means "use sigma"): GpuWrms already gives 0 a
+    // special meaning here (there it means "use sigma"): GpuWrmsKernel already gives 0 a
     // meaning of its own, and one value meaning two things in adjacent classes is worse
     // than making the caller say what it wants.
     // 'niter' counts TOTAL passes of the statistic, so niter == 1 means no refinement.
@@ -64,10 +64,10 @@ struct GpuIntensityClipper : public GpuClipperBase
     //
     // 'warps_per_block' is a performance knob for the intensity_clip kernel, not a
     // semantic one: it must not change the result. Must be 4, 8, 16 or 32. It does not
-    // affect the downsampler or GpuWrms, which use their own defaults.
+    // affect the downsampler or GpuWrmsKernel, which use their own defaults.
     //
-    // The default is 16, which is the MIDDLE of the menu -- GpuWiDownsampler wants 32 and
-    // GpuWrms wants the smallest block on its own menu, and this kernel wants neither.
+    // The default is 16, which is the MIDDLE of the menu -- GpuWiDownsamplingKernel wants 32 and
+    // GpuWrmsKernel wants the smallest block on its own menu, and this kernel wants neither.
     // 16 measures best or within 0.2% of best at every configuration the RFI chain uses,
     // while 32 costs up to 7% of the whole transform. Three kernels in one port, three
     // different answers: run time_selected() on a new GPU rather than assuming any of
@@ -79,12 +79,12 @@ struct GpuIntensityClipper : public GpuClipperBase
     const double sigma;            // FINAL clip threshold, in rms units (not iter_sigma)
     const long warps_per_block;    // 4, 8, 16 or 32; intensity_clip only
 
-    // Inherited from GpuClipperBase and GpuTransformBase: name, nbeams, nfreq, ntime,
+    // Inherited from GpuClipperBase and GpuTransform: name, nbeams, nfreq, ntime,
     // nt_chunk, axis, Df, Dt, niter, iter_sigma, two_pass; the derived geometry F_ds, T_ds,
     // wrms_L, wrms_R; scratch_nelts; and launch().
 
     // launch_checked(): asynchronously launch the kernels, and return without synchronizing
-    // the stream. Called by GpuTransformBase::launch(), which checks the arguments first.
+    // the stream. Called by GpuTransform::launch(), which checks the arguments first.
     //
     // All arrays are float32, fully contiguous, and in GPU memory.
     //
@@ -92,7 +92,7 @@ struct GpuIntensityClipper : public GpuClipperBase
     //
     //   weights    shape (nbeams, nfreq, ntime). MODIFIED IN PLACE: zeroed where the clip
     //              fires, and left bit-identical everywhere else. Must be >= 0 on entry,
-    //              which is not checked (see GpuWrms::launch()).
+    //              which is not checked (see GpuWrmsKernel::launch()).
     //
     //   scratch    1-d, exactly scratch_nelts elements. Contents on entry are ignored and
     //              on exit are garbage.

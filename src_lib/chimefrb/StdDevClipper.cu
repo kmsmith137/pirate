@@ -1,6 +1,6 @@
 #include "../../include/pirate/chimefrb/StdDevClipper.hpp"
-#include "../../include/pirate/chimefrb/WiDownsampler.hpp"
-#include "../../include/pirate/chimefrb/Wrms.hpp"
+#include "../../include/pirate/chimefrb/WiDownsamplingKernel.hpp"
+#include "../../include/pirate/chimefrb/WrmsKernel.hpp"
 
 #include <sstream>
 #include <iostream>
@@ -121,7 +121,7 @@ sd_clip_1d_kernel(float *var, long nrows, float sigma)
     const float thresh = sigma * s;
 
     // Pass 3: clip. This is the old code's '>=' written out, and deliberately NOT a call
-    // to wrms_survives(): that predicate is shared between GpuWrms's refinements and the
+    // to wrms_survives(): that predicate is shared between GpuWrmsKernel's refinements and the
     // intensity clip because those two decisions must agree, while this is a different
     // decision on a different statistic. (The old code also visits the zero entries, where
     // the clip is a no-op; skipping them saves the stores.)
@@ -235,7 +235,7 @@ static long _checked_warps(long warps_per_block)
 }
 
 
-// Step 2 is a single pass (niter = 1), so the base gets iter_sigma = 0, which GpuWrms
+// Step 2 is a single pass (niter = 1), so the base gets iter_sigma = 0, which GpuWrmsKernel
 // ignores at niter = 1.
 GpuStdDevClipper::GpuStdDevClipper(long nbeams_, long nfreq_, long ntime_, long nt_chunk_,
                                    ClipperAxis axis_, double sigma_, long Df_, long Dt_,
@@ -250,7 +250,7 @@ GpuStdDevClipper::GpuStdDevClipper(long nbeams_, long nfreq_, long ntime_, long 
 void GpuStdDevClipper::launch_checked(Array<float> &intensity, Array<float> &weights,
                                       Array<float> &scratch, cudaStream_t stream) const
 {
-    // Steps 1-2 (downsample, transpose if FREQ, GpuWrms at niter = 1). Only st.var is used;
+    // Steps 1-2 (downsample, transpose if FREQ, GpuWrmsKernel at niter = 1). Only st.var is used;
     // the mean is computed and discarded.
     StatisticOutputs st = _launch_statistic(intensity, weights, scratch, stream);
 
@@ -319,7 +319,7 @@ void GpuStdDevClipper::time_selected()
         Array<float> scratch({probe.scratch_nelts}, af_gpu | af_zero);
 
         // Predicted global memory traffic, following plans/chimefrb_std_dev_clipper.md
-        // section 4: GpuWrms reads the (intensity, weights) pair once, the FREQ transpose
+        // section 4: GpuWrmsKernel reads the (intensity, weights) pair once, the FREQ transpose
         // reads and writes it once more, and steps 3-4 touch only the R-float variance
         // array plus the killed rows' weights, which is negligible.
         const double full = 4.0 * B * F * T;
@@ -346,8 +346,8 @@ void GpuStdDevClipper::time_selected()
             Array<float> var({probe.wrms_R}, af_gpu | af_zero);
             Array<float> empty;
 
-            GpuWiDownsampler tr(1, 1, true);
-            GpuWrms wrms(probe.wrms_L, 1, 0.0, two_pass);
+            GpuWiDownsamplingKernel tr(1, 1, true);
+            GpuWrmsKernel wrms(probe.wrms_L, 1, 0.0, two_pass);
             KernelTimer kt(niter_timing, 1);
             double dt = 0.0;
 

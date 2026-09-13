@@ -1,6 +1,6 @@
-"""Tests for WiPipeline and RfiMaskPipeline (the containers of the chimefrb port), and for
+"""Tests for Pipeline and RfiMaskPipeline (the containers of the chimefrb port), and for
 GpuPythonTransform (the base class of every transform written in python) together with the
-python side of GpuTransformBase underneath it.
+python side of GpuTransform underneath it.
 
 Dispatched from ``python -m pirate_frb test --cfrb``.
 
@@ -15,14 +15,14 @@ the closed-form prediction with np.array_equal. Nothing here compares one GPU ke
 against another run of itself, and nothing depends on the real transforms being
 bit-reproducible.
 
-Every iteration builds one random pipeline in the production chain's shape -- a WiPipeline
+Every iteration builds one random pipeline in the production chain's shape -- a Pipeline
 holding an RfiMaskPipeline and two leaves, in a random order -- launches it, checks the
 prediction, then round-trips it through yaml and launches the reconstruction. At iteration 0
 only: a hardcoded legacy json (the old rf_pipelines format) exercising every branch of the
 reader, a list of arguments that must be refused, the base class's contract for a python
 subclass (the arguments launch_checked() receives, the stream, the error messages), one
 smoke launch of a chain of the REAL transforms (which catches a scratch accounting error,
-since the C++ transforms assert their scratch size), and ExampleCupyTransform on planted
+since the C++ transforms assert their scratch size), and ExamplePythonTransform on planted
 outliers.
 """
 
@@ -32,10 +32,10 @@ import tempfile
 import numpy as np
 import yaml
 
-from . import (ExampleCupyTransform, GpuBadChannelMask, GpuContainerBase,
+from . import (ExamplePythonTransform, GpuBadChannelMask, GpuContainerBase,
                GpuIntensityClipper, GpuPolynomialDetrender, GpuPythonTransform,
-               GpuSplineDetrender, GpuStdDevClipper, GpuTransformBase, RfiMaskPipeline,
-               WiPipeline)
+               GpuSplineDetrender, GpuStdDevClipper, GpuTransform, RfiMaskPipeline,
+               Pipeline)
 from .transform_io import (transform_from_json_dict, transform_from_yaml_dict,
                            yaml_string)
 from ..utils import atomic_print
@@ -136,7 +136,7 @@ class _ToyContainer(GpuContainerBase):
 
 class _DuckTransform:
     """Has every attribute and method of a transform, but subclasses neither GpuPythonTransform
-    nor GpuTransformBase. A pipeline must refuse it: the base class is where the launch
+    nor GpuTransform. A pipeline must refuse it: the base class is where the launch
     checks live."""
 
     def __init__(self, nbeams, nfreq, ntime):
@@ -207,7 +207,7 @@ def predict(pipeline, intensity, weights):
 
 
 def random_pipeline(rng):
-    """One random pipeline in the production's shape: a WiPipeline holding, in a random order,
+    """One random pipeline in the production's shape: a Pipeline holding, in a random order,
     a _ToyAdd, a _ToyScale, and an RfiMaskPipeline of [_ToyAdd, _ToyZeroChannels].
 
     Small integer constants and unit weights, so that predict() is exact in float32. The
@@ -227,7 +227,7 @@ def random_pipeline(rng):
              _ToyScale(nbeams, nfreq, ntime, int(rng.integers(2, 5))),
              RfiMaskPipeline(inner, Df, Dt, w_cutoff)]
     order = rng.permutation(3)
-    return WiPipeline([outer[k] for k in order])
+    return Pipeline([outer[k] for k in order])
 
 
 def random_data(rng, shape):
@@ -249,7 +249,7 @@ def _assert_equal(got, want, what):
     if not np.array_equal(got, want):
         bad = np.argwhere(got != want)
         (b, f, t) = bad[0]
-        raise AssertionError(f'test_wi_pipeline: {what}: {len(bad)} of {got.size} elements differ;'
+        raise AssertionError(f'test_pipeline: {what}: {len(bad)} of {got.size} elements differ;'
                              f' first at (b,f,t) = ({b},{f},{t}): got {got[b,f,t]}, want {want[b,f,t]}')
 
 
@@ -264,7 +264,7 @@ def _expect_raise(exc, f, *args, **kwargs):
         f(*args, **kwargs)
     except exc:
         return
-    raise AssertionError(f'test_wi_pipeline: expected {exc.__name__} from {getattr(f, "__name__", f)}')
+    raise AssertionError(f'test_pipeline: expected {exc.__name__} from {getattr(f, "__name__", f)}')
 
 
 # -------------------------------------------------------------------------------------------------
@@ -307,7 +307,7 @@ LEGACY_JSON = {
 
 def _check_legacy_json():
     (nbeams, nfreq, ntime) = (1, 512, 1024)
-    p = WiPipeline.from_json_dict(LEGACY_JSON, nbeams, nfreq, ntime)
+    p = Pipeline.from_json_dict(LEGACY_JSON, nbeams, nfreq, ntime)
     assert (p.nbeams, p.nfreq, p.ntime) == (nbeams, nfreq, ntime)
     assert len(p.transforms) == 4, 'mask_counter should have been skipped'
 
@@ -337,21 +337,21 @@ def _check_legacy_json():
     d = p.to_yaml_dict()
     d2 = yaml.safe_load(yaml.safe_dump(d, sort_keys=False))
     assert d2 == d, 'yaml.safe_dump/safe_load changed the dict (a non-plain type in to_yaml_dict?)'
-    p2 = WiPipeline.from_yaml_dict(d2, nbeams, nfreq, ntime)
+    p2 = Pipeline.from_yaml_dict(d2, nbeams, nfreq, ntime)
     assert p2.to_yaml_dict() == d
     # The file-level string's layout (transform_io._YamlDumper): a pipeline stays in block
     # style, since it holds a list of transforms, while a leaf transform's parameters go
     # inline -- which is what keeps a long chain readable (the production chain is 183 lines
     # this way and 893 with every parameter on its own line).
     text = yaml_string(d)
-    assert text.startswith('class_name: WiPipeline\n'), text[:200]
+    assert text.startswith('class_name: Pipeline\n'), text[:200]
     assert any(line.lstrip().startswith('- {class_name: Gpu') for line in text.splitlines()), text
 
     # The file-level pair, through a temporary file.
     with tempfile.TemporaryDirectory() as tmp:
         fname = os.path.join(tmp, 'chain.yml')
         p.write_yaml_file(fname)
-        p3 = WiPipeline.read_yaml_file(fname, nbeams=nbeams, nfreq=nfreq, ntime=ntime)
+        p3 = Pipeline.read_yaml_file(fname, nbeams=nbeams, nfreq=nfreq, ntime=ntime)
         assert p3.to_yaml_dict() == d, 'write_yaml_file/read_yaml_file changed the pipeline'
         assert open(fname).readline().startswith('#'), 'write_yaml_file should start with a comment header'
     assert _count_transforms(d) == 1 + 4 + 3 + 1, 'the legacy json produced the wrong nesting'
@@ -369,25 +369,25 @@ def _check_arguments():
     (B, F, T) = (1, 64, 64)
     add = _ToyAdd(B, F, T, 1)
 
-    _expect_raise(ValueError, WiPipeline, [])
-    _expect_raise(ValueError, WiPipeline, [add, _ToyAdd(B, 2*F, T, 1)])                   # mixed geometry
-    _expect_raise(TypeError, WiPipeline, [add, 'not a transform'])
+    _expect_raise(ValueError, Pipeline, [])
+    _expect_raise(ValueError, Pipeline, [add, _ToyAdd(B, 2*F, T, 1)])                   # mixed geometry
+    _expect_raise(TypeError, Pipeline, [add, 'not a transform'])
     _expect_raise(ValueError, RfiMaskPipeline, [add], 1, 1)                                # (1, 1)
     _expect_raise(ValueError, RfiMaskPipeline, [add], 2, 1, -1.0)                          # w_cutoff < 0
     _expect_raise(ValueError, RfiMaskPipeline, [_ToyAdd(B, 48, T, 1)], 2, 1)              # inner nfreq % 32
     _expect_raise(RuntimeError, GpuPythonTransform, 0, F, T)                               # nbeams < 1
     _expect_raise(RuntimeError, GpuPythonTransform, B, F, T, -1)                           # scratch_nelts < 0
-    _expect_raise(TypeError, WiPipeline, [add, _DuckTransform(B, F, T)])                    # not a GpuTransformBase
+    _expect_raise(TypeError, Pipeline, [add, _DuckTransform(B, F, T)])                    # not a GpuTransform
 
     _expect_raise(ValueError, transform_from_yaml_dict, {'class_name': 'NoSuchTransform'}, B, F, T)
     _expect_raise(ValueError, transform_from_yaml_dict, {'class_name': '_ToyAdd', 'c': 1.0}, B, F, T)  # no classes=
     _expect_raise(ValueError, _ToyAdd.from_yaml_dict, {'class_name': '_ToyAdd', 'c': 1.0, 'd': 2}, B, F, T)  # extra key
     _expect_raise(ValueError, _ToyAdd.from_yaml_dict, {'class_name': '_ToyAdd'}, B, F, T)              # missing key
     _expect_raise(ValueError, _ToyAdd.from_yaml_dict, {'class_name': '_ToyScale', 'c': 1.0}, B, F, T)  # wrong class
-    _expect_raise(ValueError, WiPipeline.from_yaml_dict, {'class_name': 'WiPipeline', 'transforms': []}, B, F, T)
+    _expect_raise(ValueError, Pipeline.from_yaml_dict, {'class_name': 'Pipeline', 'transforms': []}, B, F, T)
     _expect_raise(ValueError, RfiMaskPipeline.from_yaml_dict,
                   {'class_name': 'RfiMaskPipeline', 'Df': 3, 'Dt': 1, 'w_cutoff': 0.0,
-                   'transforms': [{'class_name': 'ExampleCupyTransform', 'sigma': 3.0}]}, B, F, T)     # 64 % 3
+                   'transforms': [{'class_name': 'ExamplePythonTransform', 'sigma': 3.0}]}, B, F, T)     # 64 % 3
     _expect_raise(ValueError, GpuPolynomialDetrender.from_yaml_dict,
                   {'class_name': 'GpuPolynomialDetrender', 'polydeg': 4, 'epsilon': 0.01,
                    'nt_chunk': 64, 'axis': 'freq'}, B, F, T)                                          # wrong axis
@@ -407,7 +407,7 @@ def _check_base_class(cp):
     elements of scratch, and sees the caller's arrays (not copies); a failed check names the
     subclass; a missing launch_checked() is a NotImplementedError; a python class that skips
     GpuPythonTransform is refused at its first launch; check_yaml_keys() checks by class name;
-    and every transform, C++ or python, is a GpuTransformBase."""
+    and every transform, C++ or python, is a GpuTransform."""
 
     (B, F, T) = (2, 64, 128)
     intensity = cp.zeros((B, F, T), dtype=cp.float32)
@@ -452,14 +452,14 @@ def _check_base_class(cp):
     # A python class that subclasses the C++ base directly, skipping GpuPythonTransform, is
     # constructible but has no dispatcher for the trampoline to call: its first launch is a
     # RuntimeError that says where to derive from, and its launch_checked() is never reached.
-    class _Direct(GpuTransformBase):
+    class _Direct(GpuTransform):
         def __init__(self):
             super().__init__('_Direct', B, F, T, 0)
 
         def launch_checked(self, intensity, weights, scratch):
             raise AssertionError('a launch_checked() defined outside GpuPythonTransform was called')
 
-    for t in (GpuTransformBase('Bare', B, F, T, 0), _Direct()):
+    for t in (GpuTransform('Bare', B, F, T, 0), _Direct()):
         try:
             t.launch(intensity, weights, None)
         except RuntimeError as e:
@@ -474,9 +474,9 @@ def _check_base_class(cp):
     _expect_raise(ValueError, _ToyAdd.check_yaml_keys, 'not a dict', ['c'])
 
     for t in (GpuBadChannelMask(B, F, T, [(500.0, 520.0)], (400.0, 800.0)), spy,
-              WiPipeline([spy]), RfiMaskPipeline([_ToyAdd(B, F // 2, T, 1.0)], 2, 1)):
-        assert isinstance(t, GpuTransformBase), f'{type(t).__name__} is not a GpuTransformBase'
-    assert isinstance(spy, GpuPythonTransform) and isinstance(WiPipeline([spy]), GpuPythonTransform)
+              Pipeline([spy]), RfiMaskPipeline([_ToyAdd(B, F // 2, T, 1.0)], 2, 1)):
+        assert isinstance(t, GpuTransform), f'{type(t).__name__} is not a GpuTransform'
+    assert isinstance(spy, GpuPythonTransform) and isinstance(Pipeline([spy]), GpuPythonTransform)
     assert not isinstance(GpuBadChannelMask(B, F, T, [(500.0, 520.0)], (400.0, 800.0)), GpuPythonTransform)
 
 
@@ -491,15 +491,15 @@ def _check_container_base(cp):
     class they had already passed."""
 
     (B, F, T) = (1, 64, 64)
-    p = WiPipeline([_ToyContainer([_ToyAdd(B, F, T, 2.0), _ToyScale(B, F, T, 3.0)])])
+    p = Pipeline([_ToyContainer([_ToyAdd(B, F, T, 2.0), _ToyScale(B, F, T, 3.0)])])
     d = p.to_yaml_dict()
     assert d['transforms'][0]['class_name'] == '_ToyContainer'
     assert _count_transforms(d) == 1 + 1 + 2
 
-    back = WiPipeline.from_yaml_dict(d, B, F, T, classes=TOY_CLASSES)
+    back = Pipeline.from_yaml_dict(d, B, F, T, classes=TOY_CLASSES)
     assert back.to_yaml_dict() == d, "a caller's own container did not round-trip through yaml"
     # ... and the classes= list really is what finds the nested toys.
-    _expect_raise(ValueError, WiPipeline.from_yaml_dict, d, B, F, T)
+    _expect_raise(ValueError, Pipeline.from_yaml_dict, d, B, F, T)
 
     # It runs: (i + 2) * 3, through the container, on the caller's arrays.
     intensity = np.ones((B, F, T), dtype=np.float32)
@@ -538,10 +538,10 @@ def _check_real_transforms(cp, rng):
              GpuIntensityClipper(B, Fd, Td, Td, 'freq', 5.0, 1, 1, 2, 3.0, True),
              GpuPolynomialDetrender(B, Fd, Td, 2, 0.01, 64),
              GpuSplineDetrender(B, Fd, Td, 3, 3.0e-4),
-             ExampleCupyTransform(B, Fd, Td, 3.0)]
-    p = WiPipeline([GpuBadChannelMask(B, F, T, [(500.0, 520.0)], (400.0, 800.0)),
-                    RfiMaskPipeline(inner, 2, 1, 0.0),
-                    GpuPolynomialDetrender(B, F, T, 2, 0.01, T)])
+             ExamplePythonTransform(B, Fd, Td, 3.0)]
+    p = Pipeline([GpuBadChannelMask(B, F, T, [(500.0, 520.0)], (400.0, 800.0)),
+                  RfiMaskPipeline(inner, 2, 1, 0.0),
+                  GpuPolynomialDetrender(B, F, T, 2, 0.01, T)])
 
     assert p.scratch_nelts >= max(t.scratch_nelts for t in inner)
     assert _count_transforms(p.to_yaml_dict()) == 1 + 1 + 1 + 5 + 1
@@ -557,7 +557,7 @@ def _check_real_transforms(cp, rng):
 
 
 def _check_example_transform(cp, rng):
-    """ExampleCupyTransform on Gaussian data with eight planted 10-sigma outliers: the eight
+    """ExamplePythonTransform on Gaussian data with eight planted 10-sigma outliers: the eight
     are masked, nothing within 2.5 sigma of its row mean is, the intensity is untouched, and a
     NaN at a zero-weight sample changes nothing."""
 
@@ -571,10 +571,10 @@ def _check_example_transform(cp, rng):
     planted = planted.reshape(B, F, T)
     intensity[planted] = 10.0 * rng.choice([-1.0, 1.0], size=8)
 
-    ex = ExampleCupyTransform(B, F, T, sigma=3.0)
+    ex = ExamplePythonTransform(B, F, T, sigma=3.0)
     (gi, gw) = _run(cp, ex, intensity, weights, None)
 
-    assert np.array_equal(gi, intensity), 'ExampleCupyTransform modified the intensity'
+    assert np.array_equal(gi, intensity), 'ExamplePythonTransform modified the intensity'
     assert (gw[planted] == 0).all(), 'a planted 10-sigma outlier was not masked'
     d = np.abs(intensity - intensity.mean(axis=2, keepdims=True))
     assert (gw[d < 2.5] == 1).all(), 'a sample within 2.5 sigma of its row mean was masked'
@@ -593,17 +593,17 @@ def _check_example_transform(cp, rng):
 # -------------------------------------------------------------------------------------------------
 
 
-def test_wi_pipeline(iteration=0, rng=None, verbose=False):
+def test_pipeline(iteration=0, rng=None, verbose=False):
     """One random pipeline of toy transforms, launched and checked against its closed-form
     result, then round-tripped through yaml; on iteration 0, also the legacy json reader, the
     refused arguments, GpuPythonTransform's contract for a python transform, a smoke launch of
-    the real transforms, and ExampleCupyTransform."""
+    the real transforms, and ExamplePythonTransform."""
 
     try:
         import cupy as cp
     except ImportError:
         if verbose:
-            atomic_print('    test_wi_pipeline: cupy not available, skipped')
+            atomic_print('    test_pipeline: cupy not available, skipped')
         return
 
     rng = _default_rng(rng)
@@ -630,13 +630,13 @@ def test_wi_pipeline(iteration=0, rng=None, verbose=False):
     d = p.to_yaml_dict()
     d2 = yaml.safe_load(yaml.safe_dump(d, sort_keys=False))
     assert d2 == d, f'yaml.safe_dump/safe_load changed the dict {tag}'
-    p2 = WiPipeline.from_yaml_dict(d2, *shape, classes=TOY_CLASSES)
+    p2 = Pipeline.from_yaml_dict(d2, *shape, classes=TOY_CLASSES)
     assert p2.to_yaml_dict() == d, f'yaml round trip changed the pipeline {tag}'
     assert p2.scratch_nelts == p.scratch_nelts
     (gi, gw) = _run(cp, p2, intensity, weights, None)
     _assert_equal(gi, want_i, f'intensity after yaml round trip {tag}')
     _assert_equal(gw, want_w, f'weights after yaml round trip {tag}')
-    _expect_raise(ValueError, WiPipeline.from_yaml_dict, d2, *shape)
+    _expect_raise(ValueError, Pipeline.from_yaml_dict, d2, *shape)
 
     if iteration == 0:
         _check_legacy_json()
@@ -647,4 +647,4 @@ def test_wi_pipeline(iteration=0, rng=None, verbose=False):
         _check_example_transform(cp, rng)
 
     if verbose:
-        atomic_print(f'    test_wi_pipeline: {p!r}: ok')
+        atomic_print(f'    test_pipeline: {p!r}: ok')

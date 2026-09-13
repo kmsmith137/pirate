@@ -5,9 +5,10 @@ weighted mean and variance over an axis, then zeroes the weights of every sample
 than 'sigma' standard deviations away.
 
 Almost nothing here is transcribed from the old C++, because the pieces it is built from
-already are: ReferenceWiDownsampler and ReferenceWrms, each validated against rf_kernels
-by its own spot test. What is new is intensity_clip(), the final clip and mask upsample,
-which is checked against rf_kernels::intensity_clipper in misc/chimefrb/spot_checks/rfi_intensity_clipper/.
+already are: ReferenceWiDownsamplingKernel and ReferenceWrmsKernel, each validated against
+rf_kernels by its own spot test. What is new is intensity_clip(), the final clip and mask
+upsample, which is checked against rf_kernels::intensity_clipper in
+misc/chimefrb/spot_checks/rfi_intensity_clipper/.
 """
 
 import numpy as np
@@ -15,8 +16,8 @@ import numpy as np
 import ksgpu
 from ..pirate_pybind11 import GpuIntensityClipper
 from .transform_io import (axis_from_json, check_json_keys)
-from .ReferenceWiDownsampler import ReferenceWiDownsampler
-from .ReferenceWrms import ReferenceWrms
+from .ReferenceWiDownsamplingKernel import ReferenceWiDownsamplingKernel
+from .ReferenceWrmsKernel import ReferenceWrmsKernel
 
 
 # The axis is one of the three strings 'freq', 'time', 'none' -- the same spelling the GPU
@@ -35,7 +36,7 @@ INTENSITY_CLIPPER_YAML_KEYS = ('nt_chunk', 'axis', 'sigma', 'niter', 'iter_sigma
 @ksgpu.inject_methods(GpuIntensityClipper)
 class GpuIntensityClipperInjections:
     # No class docstring here: GpuIntensityClipper's docstring lives in the pybind11
-    # binding (option 1 in notes/docstrings.md). launch() is inherited from GpuTransformBase;
+    # binding (option 1 in notes/docstrings.md). launch() is inherited from GpuTransform;
     # this injector adds the yaml and legacy-json methods (transform_io.py).
 
     def to_yaml_dict(self):
@@ -68,7 +69,7 @@ class GpuIntensityClipperInjections:
 
 
 def wrms_view(arr, axis):
-    """Reshape a downsampled (B, F_ds, T_ds) array to the (R, L) form GpuWrms wants.
+    """Reshape a downsampled (B, F_ds, T_ds) array to the (R, L) form GpuWrmsKernel wants.
 
     The clippers reduce along three axes, but by the time the statistic runs there is only
     one shape: one output per row of a contiguous 2-D array. 'none' works because a
@@ -76,7 +77,7 @@ def wrms_view(arr, axis):
     reducing one long row.
 
     Note that 'freq' is the one that moves data (the frequency axis has to become the
-    fast one). GpuIntensityClipper does the same thing with GpuWiDownsampler(1,1,True).
+    fast one). GpuIntensityClipper does the same thing with GpuWiDownsamplingKernel(1,1,True).
     """
 
     (B, F_ds, T_ds) = arr.shape
@@ -178,7 +179,7 @@ class ReferenceIntensityClipper:
     * ``nt_chunk`` must be a multiple of ``Dt``, so that a downsampled cell cannot
       straddle a boundary, and ``T`` must be a multiple of ``nt_chunk``.
 
-    Unlike ReferenceWrms there is no ``dtype`` argument: this reference is float64
+    Unlike ReferenceWrmsKernel there is no ``dtype`` argument: this reference is float64
     throughout, because its job is to be more accurate than the kernel it checks. The
     free function intensity_clip() is dtype-agnostic, which is what a float32 comparison
     against the kernel's own (mean, var) needs.
@@ -228,10 +229,10 @@ class ReferenceIntensityClipper:
         I = np.asarray(in_i, dtype=np.float64)
         W = np.asarray(in_w, dtype=np.float64)
 
-        (i_ds, w_ds) = ReferenceWiDownsampler(self.Df, self.Dt, transpose=False).apply(I, W)
+        (i_ds, w_ds) = ReferenceWiDownsamplingKernel(self.Df, self.Dt, transpose=False).apply(I, W)
 
-        wrms = ReferenceWrms(self.niter, self.iter_sigma, self.two_pass,
-                             eps_multiplier=self.eps_multiplier)
+        wrms = ReferenceWrmsKernel(self.niter, self.iter_sigma, self.two_pass,
+                                   eps_multiplier=self.eps_multiplier)
         (mean, var) = wrms.apply(wrms_view(i_ds, self.axis), wrms_view(w_ds, self.axis))
 
         # Note sigma here, not iter_sigma: the refinements clipped at iter_sigma, and this

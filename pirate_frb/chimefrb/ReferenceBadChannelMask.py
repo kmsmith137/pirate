@@ -150,7 +150,7 @@ def _as_range_list(mask_ranges):
 @ksgpu.inject_methods(GpuBadChannelMask)
 class GpuBadChannelMaskInjections:
     # No class docstring here: GpuBadChannelMask's docstring lives in the pybind11 binding
-    # (option 1 in notes/docstrings.md). launch() is inherited from GpuTransformBase; this
+    # (option 1 in notes/docstrings.md). launch() is inherited from GpuTransform; this
     # injector normalizes the constructor's range arguments, and adds the yaml and
     # legacy-json methods (transform_io.py).
 

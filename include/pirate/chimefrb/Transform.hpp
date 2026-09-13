@@ -1,5 +1,5 @@
-#ifndef _PIRATE_CHIMEFRB_TRANSFORM_BASE_HPP
-#define _PIRATE_CHIMEFRB_TRANSFORM_BASE_HPP
+#ifndef _PIRATE_CHIMEFRB_TRANSFORM_HPP
+#define _PIRATE_CHIMEFRB_TRANSFORM_HPP
 
 #include <string>
 #include <initializer_list>
@@ -13,8 +13,8 @@ namespace chimefrb {
 #endif
 
 
-// GpuTransformBase: the base class of every chimefrb transform -- anything that a
-// WiPipeline or RfiMaskPipeline (pirate_frb.chimefrb) can run. A transform processes one
+// GpuTransform: the base class of every chimefrb transform -- anything that a
+// Pipeline or RfiMaskPipeline (pirate_frb.chimefrb) can run. A transform processes one
 // (nbeams, nfreq, ntime) block of intensity and weights, in place, on the GPU.
 //
 // The base class owns the part of the interface that is the same for every transform: the
@@ -22,26 +22,26 @@ namespace chimefrb {
 // the virtual launch_checked(). A C++ subclass overrides launch_checked() in C++ (the five
 // ported RFI transforms); a python subclass overrides it in python, through a pybind11
 // trampoline in src_pybind11/pirate_pybind11_chimefrb.cpp (the two pipeline classes,
-// ExampleCupyTransform, and whatever a user writes). Which of the two arrays a transform
+// ExamplePythonTransform, and whatever a user writes). Which of the two arrays a transform
 // modifies is the transform's business, stated in its docstring.
 //
 // The python side of the interface is in two python files: what every transform shares
 // (the stream=None / scratch=None conventions of launch(), the yaml key check, __repr__)
-// is injected onto this class from pirate_frb/chimefrb/GpuTransformBase.py; what a
+// is injected onto this class from pirate_frb/chimefrb/GpuTransform.py; what a
 // transform WRITTEN in python needs (its constructor, the methods it defines, the hook the
 // trampoline calls) is the plain python subclass GpuPythonTransform in
 // pirate_frb/chimefrb/GpuPythonTransform.py, which is the class python authors derive
 // from. See notes/chimefrb.md for the porting rules the chimefrb classes follow.
 
-struct GpuTransformBase
+struct GpuTransform
 {
     // 'name' is the class name as python sees it, and prefixes every message this class
     // throws ("GpuStdDevClipper: ...", "MyTransform.launch(): ..."). A C++ subclass passes
     // its own name; the python side passes type(self).__name__.
     //
     // Throws std::runtime_error on nbeams, nfreq or ntime < 1, or scratch_nelts < 0.
-    GpuTransformBase(const std::string &name, long nbeams, long nfreq, long ntime, long scratch_nelts);
-    virtual ~GpuTransformBase() = default;
+    GpuTransform(const std::string &name, long nbeams, long nfreq, long ntime, long scratch_nelts);
+    virtual ~GpuTransform() = default;
 
     const std::string name;
     const long nbeams, nfreq, ntime;   // shape of the arrays launch() takes
@@ -86,4 +86,4 @@ protected:
 
 }}  // namespace pirate::chimefrb
 
-#endif  // _PIRATE_CHIMEFRB_TRANSFORM_BASE_HPP
+#endif  // _PIRATE_CHIMEFRB_TRANSFORM_HPP

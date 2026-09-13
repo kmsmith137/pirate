@@ -1,4 +1,4 @@
-"""Numpy reference for GpuWiDownsampler, plus that class's method injections.
+"""Numpy reference for GpuWiDownsamplingKernel, plus that class's method injections.
 
 The reference is transcribed from reference_wi_downsample() in
 ../../extern/rf_kernels/test-downsample.cpp, which is the old code's own scalar
@@ -8,17 +8,17 @@ reference for rf_kernels::wi_downsampler.
 import numpy as np
 
 import ksgpu
-from ..pirate_pybind11 import GpuWiDownsampler
+from ..pirate_pybind11 import GpuWiDownsamplingKernel
 
 
-@ksgpu.inject_methods(GpuWiDownsampler)
-class GpuWiDownsamplerInjections:
-    # No class docstring here: GpuWiDownsampler's docstring lives in the pybind11
+@ksgpu.inject_methods(GpuWiDownsamplingKernel)
+class GpuWiDownsamplingKernelInjections:
+    # No class docstring here: GpuWiDownsamplingKernel's docstring lives in the pybind11
     # binding (option 1 in notes/docstrings.md); this injector adds a stream
     # argument for launch().
 
     # Save reference to C++ method
-    _cpp_launch = GpuWiDownsampler.launch
+    _cpp_launch = GpuWiDownsamplingKernel.launch
 
     def launch(self, out_i, out_w, in_i, in_w, stream=None):
         """GPU kernel launch (async, does not sync stream).
@@ -42,8 +42,8 @@ class GpuWiDownsamplerInjections:
         self._cpp_launch(out_i, out_w, in_i, in_w, stream.ptr)
 
 
-class ReferenceWiDownsampler:
-    """Numpy reference for GpuWiDownsampler (src_lib/chimefrb/WiDownsampler.cu).
+class ReferenceWiDownsamplingKernel:
+    """Numpy reference for GpuWiDownsamplingKernel (src_lib/chimefrb/WiDownsamplingKernel.cu).
 
     Same semantics, same argument names. Two things to know:
 
@@ -56,7 +56,7 @@ class ReferenceWiDownsampler:
     raw intensity through instead. misc/chimefrb/spot_checks/rfi_wi_downsample/ measures this.
 
     Where a (1,1) cell has weight, its intensity is copied through exactly, not recomputed
-    as (w*i)/w; see GpuWiDownsampler.
+    as (w*i)/w; see GpuWiDownsamplingKernel.
     """
 
     def __init__(self, Df, Dt, transpose):

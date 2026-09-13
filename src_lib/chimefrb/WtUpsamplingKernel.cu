@@ -1,4 +1,4 @@
-#include "../../include/pirate/chimefrb/WeightUpsampler.hpp"
+#include "../../include/pirate/chimefrb/WtUpsamplingKernel.hpp"
 
 #include <random>
 #include <sstream>
@@ -31,7 +31,7 @@ namespace chimefrb {
 //
 // The last tile of a row may be partial (lanes past T_lo return), so there is no
 // divisibility rule. Nothing is templated and nothing synchronizes or shuffles, so the warp
-// count is a runtime parameter taken from blockDim.y (the rule in WiDownsampler.cu), and
+// count is a runtime parameter taken from blockDim.y (the rule in WiDownsamplingKernel.cu), and
 // lanes may return independently.
 
 __global__ void __launch_bounds__(1024)
@@ -73,7 +73,7 @@ static long _checked_factor(const char *name, long D)
 {
     if (D < 1) {
         stringstream ss;
-        ss << "GpuWeightUpsampler: expected " << name << " >= 1, got " << D;
+        ss << "GpuWtUpsamplingKernel: expected " << name << " >= 1, got " << D;
         throw runtime_error(ss.str());
     }
     return D;
@@ -86,7 +86,7 @@ static double _checked_cutoff(double w_cutoff)
     // which lets NaN through, and a NaN cutoff would then mask everything.)
     if (!(w_cutoff >= 0.0)) {
         stringstream ss;
-        ss << "GpuWeightUpsampler: expected w_cutoff >= 0, got " << w_cutoff;
+        ss << "GpuWtUpsamplingKernel: expected w_cutoff >= 0, got " << w_cutoff;
         throw runtime_error(ss.str());
     }
     return w_cutoff;
@@ -98,7 +98,7 @@ static long _checked_warps(long warps_per_block)
     if ((warps_per_block != 4) && (warps_per_block != 8)
         && (warps_per_block != 16) && (warps_per_block != 32)) {
         stringstream ss;
-        ss << "GpuWeightUpsampler: warps_per_block=" << warps_per_block
+        ss << "GpuWtUpsamplingKernel: warps_per_block=" << warps_per_block
            << " is not supported (expected 4, 8, 16 or 32)";
         throw runtime_error(ss.str());
     }
@@ -106,7 +106,7 @@ static long _checked_warps(long warps_per_block)
 }
 
 
-GpuWeightUpsampler::GpuWeightUpsampler(long Df_, long Dt_, double w_cutoff_, long warps_per_block_) :
+GpuWtUpsamplingKernel::GpuWtUpsamplingKernel(long Df_, long Dt_, double w_cutoff_, long warps_per_block_) :
     Df(_checked_factor("Df", Df_)),
     Dt(_checked_factor("Dt", Dt_)),
     w_cutoff(_checked_cutoff(w_cutoff_)),
@@ -114,8 +114,8 @@ GpuWeightUpsampler::GpuWeightUpsampler(long Df_, long Dt_, double w_cutoff_, lon
 { }
 
 
-void GpuWeightUpsampler::launch(Array<float> &w_hires, const Array<float> &w_lores,
-                                cudaStream_t stream) const
+void GpuWtUpsamplingKernel::launch(Array<float> &w_hires, const Array<float> &w_lores,
+                                   cudaStream_t stream) const
 {
     xassert_eq(w_lores.ndim, 3);
     xassert_gt(w_lores.size, 0);
@@ -196,7 +196,7 @@ static Array<float> _timing_lores(long B, long F_lo, long T_lo, int which, long 
 }
 
 
-void GpuWeightUpsampler::time_selected()
+void GpuWtUpsamplingKernel::time_selected()
 {
     // The production call: the wi_sub_pipeline upsample, 1024 -> 16384 channels at native
     // time resolution. 8 beams make w_hires 2.1 GB, so that every mask's writes go well past
@@ -224,7 +224,7 @@ void GpuWeightUpsampler::time_selected()
         const double nbytes = lores_bytes + 4.0 * Df * Dt * nmasked;
         const double nbytes_rmw = lores_bytes + 2.0 * hires_bytes;
 
-        cout << "\nGpuWeightUpsampler::time_selected()\n"
+        cout << "\nGpuWtUpsamplingKernel::time_selected()\n"
              << "    (Df, Dt) = (" << Df << ", " << Dt << "), w_cutoff = 0, (B, F_lo, T_lo) = ("
              << B << ", " << F_lo << ", " << T_lo << ") -> (" << B << ", " << F_hi << ", "
              << T_hi << ")\n"
@@ -234,7 +234,7 @@ void GpuWeightUpsampler::time_selected()
              << " read-modify-write: " << (nbytes_rmw / 1.0e9) << " GB)" << endl;
 
         for (long W: warp_counts) {
-            GpuWeightUpsampler ups(Df, Dt, 0.0, W);
+            GpuWtUpsamplingKernel ups(Df, Dt, 0.0, W);
             KernelTimer kt(niter_timing, 1);
             double dt = 0.0;
 

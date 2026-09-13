@@ -1,26 +1,26 @@
-"""WiPipeline: run a list of chimefrb transforms in order on one block of data.
+"""Pipeline: run a list of chimefrb transforms in order on one block of data.
 
 A python port of rf_pipelines::pipeline, the container the old CHIME FRB search's RFI chain
-was built from. ("wi" is the old code's abbreviation for a (weights, intensity) pair.) Its
-companion RfiMaskPipeline (rf_pipelines::wi_sub_pipeline) runs a list of transforms on a
-downsampled copy of the data instead; both are containers (GpuContainerBase, which supplies
-what they share) and transforms themselves, so they nest.
+was built from. Its companion RfiMaskPipeline (rf_pipelines::wi_sub_pipeline; "wi" is the old
+code's abbreviation for a (weights, intensity) pair, and survives in the name
+GpuWiDownsamplingKernel) runs a list of transforms on a downsampled copy of the data
+instead. Both are containers (GpuContainerBase, which supplies what they share) and
+transforms themselves, so they nest.
 """
 
 from .GpuContainerBase import GpuContainerBase
 from .transform_io import check_json_keys
 
 
-class WiPipeline(GpuContainerBase):
+class Pipeline(GpuContainerBase):
     """An ordered list of transforms, run one after another on the same block of data.
 
     A port of rf_pipelines::pipeline, the container the old CHIME FRB search's RFI chain was
-    built from ("wi" is the old code's abbreviation for a (weights, intensity) pair). Each
-    transform sees the output of the one before it. A WiPipeline is itself a transform (a
-    :class:`GpuContainerBase`, so it may hold other containers), so pipelines nest, and an
-    :class:`RfiMaskPipeline` -- the old code's downsampled sub-pipeline -- can be one of its
-    elements. ``launch()`` runs every transform in order; whichever arrays they modify, it
-    modifies.
+    built from. Each transform sees the output of the one before it. A Pipeline is itself a
+    transform (a :class:`GpuContainerBase`, so it may hold other containers), so pipelines
+    nest, and an :class:`RfiMaskPipeline` -- the old code's downsampled sub-pipeline -- can be
+    one of its elements. ``launch()`` runs every transform in order; whichever arrays they
+    modify, it modifies.
 
     One ``launch()`` processes exactly one (nbeams, nfreq, ntime) block. Assembling that block
     from the data source (four 1024-sample AssembledChunks for the production chain, whose
@@ -29,7 +29,7 @@ class WiPipeline(GpuContainerBase):
     by block reproduces the old streaming pipeline exactly, provided ``ntime`` is a multiple of
     every transform's ``nt_chunk``.
 
-    A WiPipeline holds no per-launch state, so one instance may be launched on several
+    A Pipeline holds no per-launch state, so one instance may be launched on several
     streams at once, provided each stream has its own scratch array.
 
     Attributes (read-only):
@@ -41,12 +41,12 @@ class WiPipeline(GpuContainerBase):
     """
 
     def __init__(self, transforms):
-        """Create a WiPipeline.
+        """Create a Pipeline.
 
         Parameters
         ----------
         transforms : sequence
-            One or more transforms (:class:`GpuTransformBase` subclasses), all with the same
+            One or more transforms (:class:`GpuTransform` subclasses), all with the same
             (nbeams, nfreq, ntime).
         """
         (transforms, (nbeams, nfreq, ntime)) = self.check_transforms(transforms)
@@ -55,13 +55,13 @@ class WiPipeline(GpuContainerBase):
 
     def launch_checked(self, intensity, weights, scratch):
         # 'scratch' is the largest any of them needs, and the pipeline's stream is current
-        # (GpuTransformBase.launch() made it so), which each transform's launch() defaults to.
+        # (GpuTransform.launch() made it so), which each transform's launch() defaults to.
         self.launch_transforms(intensity, weights, scratch)
 
     def to_yaml_dict(self):
-        """``{'class_name': 'WiPipeline', 'transforms': [...]}``, each element its own
+        """``{'class_name': 'Pipeline', 'transforms': [...]}``, each element its own
         ``to_yaml_dict()``."""
-        return {'class_name': 'WiPipeline', 'transforms': self.transforms_yaml_list()}
+        return {'class_name': 'Pipeline', 'transforms': self.transforms_yaml_list()}
 
     @classmethod
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime, classes=None):
@@ -80,5 +80,5 @@ class WiPipeline(GpuContainerBase):
         return cls(cls.transforms_from_json_elements(d['elements'], nbeams, nfreq, ntime, nds, 'pipeline'))
 
     def __repr__(self):
-        return (f'WiPipeline(nbeams={self.nbeams}, nfreq={self.nfreq}, ntime={self.ntime},'
+        return (f'Pipeline(nbeams={self.nbeams}, nfreq={self.nfreq}, ntime={self.ntime},'
                 f' {len(self.transforms)} transform(s))')

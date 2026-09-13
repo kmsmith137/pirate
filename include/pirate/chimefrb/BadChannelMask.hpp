@@ -7,7 +7,7 @@
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
 
-#include "TransformBase.hpp"
+#include "Transform.hpp"
 
 namespace pirate {
 namespace chimefrb {
@@ -33,11 +33,11 @@ namespace chimefrb {
 //
 // Nothing depends on time, so ntime may be anything. The intensity is never touched: it is
 // a launch() argument only because every chimefrb transform takes the same four
-// (see GpuTransformBase in TransformBase.hpp).
+// (see GpuTransform in Transform.hpp).
 //
 // See notes/chimefrb.md for the porting rules this class follows.
 
-struct GpuBadChannelMask : public GpuTransformBase
+struct GpuBadChannelMask : public GpuTransform
 {
     // (nbeams, nfreq, ntime) is the shape of the arrays launch() will be given.
     //
@@ -62,7 +62,7 @@ struct GpuBadChannelMask : public GpuTransformBase
                       std::pair<double,double> freq_range,
                       long warps_per_block = 4);
 
-    // Inherited from GpuTransformBase: nbeams, nfreq, ntime (the array shape), scratch_nelts
+    // Inherited from GpuTransform: nbeams, nfreq, ntime (the array shape), scratch_nelts
     // (always 0: the kernel needs no scratch), and launch().
     const std::vector<std::pair<double,double>> mask_ranges;   // MHz, as given
     const std::pair<double,double> freq_range;                 // (lo, hi) MHz of the band
@@ -71,7 +71,7 @@ struct GpuBadChannelMask : public GpuTransformBase
     const ksgpu::Array<uint8_t> keep;                          // shape (nfreq,), IN GPU MEMORY, 0 or 1
 
     // launch_checked(): asynchronously launch the kernel, and return without synchronizing
-    // the stream. Called by GpuTransformBase::launch(), which checks the arguments first.
+    // the stream. Called by GpuTransform::launch(), which checks the arguments first.
     //
     //   intensity  shape (nbeams, nfreq, ntime), float32, fully contiguous, in GPU memory.
     //              Never touched.

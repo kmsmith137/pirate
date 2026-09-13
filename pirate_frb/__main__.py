@@ -29,15 +29,15 @@ from . import pirate_pybind11
 from . import casm
 from . import chime
 from .chimefrb import test_assembled_chunk as chimefrb_tests
-from .chimefrb import test_wi_downsampler as chimefrb_wi_tests
-from .chimefrb import test_wrms as chimefrb_wrms_tests
+from .chimefrb import test_wi_downsampling_kernel as chimefrb_wi_tests
+from .chimefrb import test_wrms_kernel as chimefrb_wrms_tests
 from .chimefrb import test_intensity_clipper as chimefrb_ic_tests
 from .chimefrb import test_std_dev_clipper as chimefrb_sd_tests
 from .chimefrb import test_badchannel_mask as chimefrb_bcm_tests
 from .chimefrb import test_spline_detrender as chimefrb_spd_tests
 from .chimefrb import test_polynomial_detrender as chimefrb_pd_tests
-from .chimefrb import test_weight_upsampler as chimefrb_wu_tests
-from .chimefrb import test_wi_pipeline as chimefrb_wp_tests
+from .chimefrb import test_wt_upsampling_kernel as chimefrb_wt_tests
+from .chimefrb import test_pipeline as chimefrb_pipe_tests
 from . import kernels
 from . import loose_ends
 from . import core
@@ -159,7 +159,7 @@ def parse_test(subparsers):
     parser.add_argument('--varmap', action='store_true', help="pirate_frb.varmap. Two halves, both run by this flag: everything checkable WITHOUT a dedisperser (the VarianceMap class, the covering-LP and basis machinery, and the analytic map of detrender_free.py against a hand-written oracle), and the brute-force sweep, which pushes a one-hot through the REAL dedisperser once per input channel and checks the analytic map against what comes out. Needs a DedispersionPlan and a GPU for the second half.")
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_{beamform,upchan}()')
     parser.add_argument('--cfrb', action='store_true',
-                        help='Runs the chimefrb port tests (reading old CHIME FRB msgpack files, the GPU ports of its RFI transforms against their numpy references, and the WiPipeline/RfiMaskPipeline containers)')
+                        help='Runs the chimefrb port tests (reading old CHIME FRB msgpack files, the GPU ports of its RFI transforms against their numpy references, and the Pipeline/RfiMaskPipeline containers)')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
     parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection and pulse-invariants tests')
@@ -324,15 +324,15 @@ def test(args):
 
         if run_all_tests or args.cfrb:
             chimefrb_tests.test_assembled_chunk(i)
-            chimefrb_wi_tests.test_wi_downsampler(i)
-            chimefrb_wrms_tests.test_wrms(i)
+            chimefrb_wi_tests.test_wi_downsampling_kernel(i)
+            chimefrb_wrms_tests.test_wrms_kernel(i)
             chimefrb_ic_tests.test_intensity_clipper(i)
             chimefrb_sd_tests.test_std_dev_clipper(i)
             chimefrb_bcm_tests.test_badchannel_mask(i)
             chimefrb_spd_tests.test_spline_detrender(i)
             chimefrb_pd_tests.test_polynomial_detrender(i)
-            chimefrb_wu_tests.test_weight_upsampler(i)
-            chimefrb_wp_tests.test_wi_pipeline(i)
+            chimefrb_wt_tests.test_wt_upsampling_kernel(i)
+            chimefrb_pipe_tests.test_pipeline(i)
 
         if run_all_tests or args.zomb:
             loose_ends.test_avx2_m64_outbuf()
@@ -955,7 +955,7 @@ def parse_time(subparsers):
     parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() timing')
     parser.add_argument('--dtl1', action='store_true', help='Runs GpuDetrenderLps1d.time_selected() (1-d local-polynomial detrender kernel)')
     parser.add_argument('--dtl2', action='store_true', help='Runs GpuDetrenderLps2d.time_selected() (2-d spline detrender kernel)')
-    parser.add_argument('--cfrb', action='store_true', help='Runs time_selected() for the chimefrb port\'s kernels (GpuWiDownsampler, GpuWrms, GpuIntensityClipper, GpuStdDevClipper, GpuBadChannelMask, GpuSplineDetrender, GpuPolynomialDetrender, GpuWeightUpsampler)')
+    parser.add_argument('--cfrb', action='store_true', help='Runs time_selected() for the chimefrb port\'s kernels (GpuWiDownsamplingKernel, GpuWrmsKernel, GpuIntensityClipper, GpuStdDevClipper, GpuBadChannelMask, GpuSplineDetrender, GpuPolynomialDetrender, GpuWtUpsamplingKernel)')
 
 def time_command(args):
     timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'cfrb', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim', 'dtl1', 'dtl2' ]
@@ -991,14 +991,14 @@ def time_command(args):
     if run_all_timings or args.gtgk:
         kernels.GpuTreeGriddingKernel.time_selected()
     if run_all_timings or args.cfrb:
-        chimefrb_wi_tests.GpuWiDownsampler.time_selected()
-        chimefrb_wrms_tests.GpuWrms.time_selected()
+        chimefrb_wi_tests.GpuWiDownsamplingKernel.time_selected()
+        chimefrb_wrms_tests.GpuWrmsKernel.time_selected()
         chimefrb_ic_tests.GpuIntensityClipper.time_selected()
         chimefrb_sd_tests.GpuStdDevClipper.time_selected()
         chimefrb_bcm_tests.GpuBadChannelMask.time_selected()
         chimefrb_spd_tests.GpuSplineDetrender.time_selected()
         chimefrb_pd_tests.GpuPolynomialDetrender.time_selected()
-        chimefrb_wu_tests.GpuWeightUpsampler.time_selected()
+        chimefrb_wt_tests.GpuWtUpsamplingKernel.time_selected()
     if run_all_timings or args.dtl1:
         kernels.GpuDetrenderLps1d.time_selected()
     if run_all_timings or args.dtl2:
@@ -1623,7 +1623,7 @@ def parse_coverage(subparsers):
     parser.add_argument('--dt', action='store_true',
                         help='Detrending draws: random_knots(), random_nfreq(), the 2-d masks')
     parser.add_argument('--cfrb', action='store_true',
-                        help='chimefrb draws: the GpuWiDownsampler test config, geometry and arrays')
+                        help='chimefrb draws: the GpuWiDownsamplingKernel test config, geometry and arrays')
     parser.add_argument('-s', '--scale', type=float, default=1.0, metavar='X',
                         help='Multiply every draw count by X (default 1). Scale up when a rate'
                              ' is near a band edge and you want to know whether it moved.')

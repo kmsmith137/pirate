@@ -355,10 +355,10 @@ LIB_SRCFILES = \
   src_lib/chimefrb/PolynomialDetrender.cu \
   src_lib/chimefrb/SplineDetrender.cu \
   src_lib/chimefrb/StdDevClipper.cu \
-  src_lib/chimefrb/TransformBase.cpp \
-  src_lib/chimefrb/WeightUpsampler.cu \
-  src_lib/chimefrb/WiDownsampler.cu \
-  src_lib/chimefrb/Wrms.cu \
+  src_lib/chimefrb/Transform.cpp \
+  src_lib/chimefrb/WiDownsamplingKernel.cu \
+  src_lib/chimefrb/WrmsKernel.cu \
+  src_lib/chimefrb/WtUpsamplingKernel.cu \
   src_lib/loose_ends/cpu_downsample.cpp \
   src_lib/loose_ends/gpu_downsample.cu \
   src_lib/loose_ends/gpu_transpose.cu \
@@ -410,26 +410,26 @@ PYFILES = \
   pirate_frb/chimefrb/ReferencePolynomialDetrender.py \
   pirate_frb/chimefrb/ReferenceSplineDetrender.py \
   pirate_frb/chimefrb/ReferenceStdDevClipper.py \
-  pirate_frb/chimefrb/ReferenceWeightUpsampler.py \
-  pirate_frb/chimefrb/ReferenceWiDownsampler.py \
-  pirate_frb/chimefrb/ReferenceWrms.py \
+  pirate_frb/chimefrb/ReferenceWiDownsamplingKernel.py \
+  pirate_frb/chimefrb/ReferenceWrmsKernel.py \
+  pirate_frb/chimefrb/ReferenceWtUpsamplingKernel.py \
   pirate_frb/chimefrb/GpuContainerBase.py \
   pirate_frb/chimefrb/GpuPythonTransform.py \
-  pirate_frb/chimefrb/GpuTransformBase.py \
-  pirate_frb/chimefrb/ExampleCupyTransform.py \
+  pirate_frb/chimefrb/GpuTransform.py \
+  pirate_frb/chimefrb/ExamplePythonTransform.py \
+  pirate_frb/chimefrb/Pipeline.py \
   pirate_frb/chimefrb/RfiMaskPipeline.py \
-  pirate_frb/chimefrb/WiPipeline.py \
   pirate_frb/chimefrb/transform_io.py \
   pirate_frb/chimefrb/test_assembled_chunk.py \
   pirate_frb/chimefrb/test_badchannel_mask.py \
   pirate_frb/chimefrb/test_intensity_clipper.py \
+  pirate_frb/chimefrb/test_pipeline.py \
   pirate_frb/chimefrb/test_polynomial_detrender.py \
   pirate_frb/chimefrb/test_spline_detrender.py \
   pirate_frb/chimefrb/test_std_dev_clipper.py \
-  pirate_frb/chimefrb/test_weight_upsampler.py \
-  pirate_frb/chimefrb/test_wi_downsampler.py \
-  pirate_frb/chimefrb/test_wi_pipeline.py \
-  pirate_frb/chimefrb/test_wrms.py \
+  pirate_frb/chimefrb/test_wi_downsampling_kernel.py \
+  pirate_frb/chimefrb/test_wrms_kernel.py \
+  pirate_frb/chimefrb/test_wt_upsampling_kernel.py \
   pirate_frb/chimefrb/testutils.py \
   pirate_frb/casm/__init__.py \
   pirate_frb/casm/CasmBeamformer.py \
@@ -588,10 +588,10 @@ HFILES = \
   include/pirate/chimefrb/PolynomialDetrender.hpp \
   include/pirate/chimefrb/SplineDetrender.hpp \
   include/pirate/chimefrb/StdDevClipper.hpp \
-  include/pirate/chimefrb/TransformBase.hpp \
-  include/pirate/chimefrb/WeightUpsampler.hpp \
-  include/pirate/chimefrb/WiDownsampler.hpp \
-  include/pirate/chimefrb/Wrms.hpp \
+  include/pirate/chimefrb/Transform.hpp \
+  include/pirate/chimefrb/WiDownsamplingKernel.hpp \
+  include/pirate/chimefrb/WrmsKernel.hpp \
+  include/pirate/chimefrb/WtUpsamplingKernel.hpp \
   include/pirate/loose_ends/bitvec.hpp \
   include/pirate/loose_ends/cpu_downsample.hpp \
   include/pirate/loose_ends/DownsampleKernel.hpp \
@@ -683,7 +683,7 @@ configs/example_dedispersion_plan.yml: configs/dedispersion/chord_sb2_et.yml $(P
 	$(PYTHON) -m pirate_frb show dedisperser -v $< > $@
 
 # Auto-generated conversion of the old CHIME FRB search's production RFI chain (the json
-# that ran on CHIME on 2021-03-07) to the chimefrb yaml format that WiPipeline reads.
+# that ran on CHIME on 2021-03-07) to the chimefrb yaml format that Pipeline reads.
 # Checked into git and included in the Sphinx docs. The conversion prints notes to stderr
 # (elements skipped because they have no pirate counterpart, the CHIME band assumed for
 # badchannel_mask); they are left visible, since they say what the conversion dropped.

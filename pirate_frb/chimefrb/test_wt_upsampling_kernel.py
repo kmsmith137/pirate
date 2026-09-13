@@ -1,9 +1,9 @@
-"""Randomized unit tests for GpuWeightUpsampler.
+"""Randomized unit tests for GpuWtUpsamplingKernel.
 
 Dispatched from ``python -m pirate_frb test --cfrb``.
 
 The kernel does no arithmetic -- one float32 comparison per cell, and a store -- so it is
-compared with ReferenceWeightUpsampler BITWISE, with no tolerance and no bracket. What can go
+compared with ReferenceWtUpsamplingKernel BITWISE, with no tolerance and no bracket. What can go
 wrong is the cell geometry (which full-resolution block a cell owns) and the comparison
 itself (strict, in float32, false for NaN), and the draws are built to reach both. Because
 the comparison is bitwise over the whole array, it subsumes the usual determinism,
@@ -21,8 +21,8 @@ what misc/chimefrb/spot_checks/rfi_weight_upsample/ is for.
 
 import numpy as np
 
-from . import (GpuIntensityClipper, GpuWeightUpsampler, GpuWiDownsampler,
-               ReferenceWeightUpsampler)
+from . import (GpuIntensityClipper, GpuWtUpsamplingKernel, GpuWiDownsamplingKernel,
+               ReferenceWtUpsamplingKernel)
 from . import test_intensity_clipper as ict
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng
@@ -150,14 +150,14 @@ def random_hires(rng, B, F_hi, T_hi):
 
 
 def _check_kernel(cp, rng, verbose):
-    """GpuWeightUpsampler against ReferenceWeightUpsampler, bitwise."""
+    """GpuWtUpsamplingKernel against ReferenceWtUpsamplingKernel, bitwise."""
 
     (Df, Dt, w_cutoff, warps) = random_config(rng)
     (B, F_lo, T_lo) = random_geometry(rng, Df, Dt)
     (lo, kinds) = random_lores(rng, B, F_lo, T_lo, Df, Dt, w_cutoff)
     hi = random_hires(rng, B, F_lo*Df, T_lo*Dt)
 
-    ups = GpuWeightUpsampler(Df, Dt, w_cutoff, warps)
+    ups = GpuWtUpsamplingKernel(Df, Dt, w_cutoff, warps)
     assert (ups.Df, ups.Dt, ups.warps_per_block) == (Df, Dt, warps)
     assert ups.w_cutoff == w_cutoff
 
@@ -166,7 +166,7 @@ def _check_kernel(cp, rng, verbose):
     cp.cuda.get_current_stream().synchronize()
 
     got = cp.asnumpy(g_hi)
-    want = ReferenceWeightUpsampler(Df, Dt, w_cutoff).apply(hi, lo)
+    want = ReferenceWtUpsamplingKernel(Df, Dt, w_cutoff).apply(hi, lo)
 
     # Bitwise, through a uint32 view: that is also how NaN compares equal to itself, and how
     # +0.0 is told from -0.0.
@@ -174,14 +174,14 @@ def _check_kernel(cp, rng, verbose):
     if bad.any():
         (b, f, t) = np.argwhere(bad)[0]
         raise AssertionError(
-            f'test_weight_upsampler: GPU and reference differ at {int(bad.sum())} of'
+            f'test_wt_upsampling_kernel: GPU and reference differ at {int(bad.sum())} of'
             f' {bad.size} weights; first at (b,f,t) = ({b},{f},{t}), with'
             f' w_lores = {lo[b, f//Df, t//Dt]!r} and w_cutoff = {w_cutoff!r}:'
             f' got {got[b,f,t]!r}, want {want[b,f,t]!r}')
 
     if verbose:
         nmasked = int(np.sum(~(lo > np.float32(w_cutoff))))
-        atomic_print(f'    test_weight_upsampler: (Df,Dt)=({Df},{Dt}),'
+        atomic_print(f'    test_wt_upsampling_kernel: (Df,Dt)=({Df},{Dt}),'
                      f' (B,F_lo,T_lo)=({B},{F_lo},{T_lo}), w_cutoff={w_cutoff},'
                      f' warps_per_block={warps}, {nmasked} of {lo.size} cells masked,'
                      f' planted {kinds}: ok')
@@ -191,7 +191,7 @@ def _check_composition(cp, rng, verbose):
     """A clipper at (Df,Dt) equals downsample, clip at (1,1), upsample the mask -- bitwise.
 
     The two paths run the same kernels with the same parameters on the same values, so they
-    make the same decisions: the (Df,Dt) clipper downsamples with GpuWiDownsampler and then
+    make the same decisions: the (Df,Dt) clipper downsamples with GpuWiDownsamplingKernel and then
     thresholds, and the composed path hands that same downsampled pair to a (1,1) clipper.
     Where the first zeroes a cell's Df-by-Dt block of weights, the second zeroes the cell's
     low-resolution weight and this class zeroes the block. The composed path also zeroes the
@@ -217,13 +217,13 @@ def _check_composition(cp, rng, verbose):
     # The same thing, composed out of three classes.
     ds_i = cp.empty((B, F_ds, T_ds), dtype=cp.float32)
     ds_w = cp.empty((B, F_ds, T_ds), dtype=cp.float32)
-    GpuWiDownsampler(Df, Dt, False).launch(ds_i, ds_w, cp.asarray(I), cp.asarray(W))
+    GpuWiDownsamplingKernel(Df, Dt, False).launch(ds_i, ds_w, cp.asarray(I), cp.asarray(W))
 
     GpuIntensityClipper(B, F_ds, T_ds, T_ds, axis, sigma, 1, 1, niter, iter_sigma,
                         two_pass).launch(ds_i, ds_w, None)
 
     g_w2 = cp.asarray(W)
-    GpuWeightUpsampler(Df, Dt, 0.0).launch(g_w2, ds_w)
+    GpuWtUpsamplingKernel(Df, Dt, 0.0).launch(g_w2, ds_w)
     cp.cuda.get_current_stream().synchronize()
     composed = cp.asnumpy(g_w2)
 
@@ -231,13 +231,13 @@ def _check_composition(cp, rng, verbose):
     if bad.any():
         (b, f, t) = np.argwhere(bad)[0]
         raise AssertionError(
-            f'test_weight_upsampler: the clipper at (Df,Dt)=({Df},{Dt}) and its'
+            f'test_wt_upsampling_kernel: the clipper at (Df,Dt)=({Df},{Dt}) and its'
             f' downsample/clip/upsample composition differ at {int(bad.sum())} of {bad.size}'
             f' weights; first at (b,f,t) = ({b},{f},{t}): {direct[b,f,t]!r} vs'
             f' {composed[b,f,t]!r}')
 
     if verbose:
-        atomic_print(f'    test_weight_upsampler: downsampling reduction, axis={axis},'
+        atomic_print(f'    test_wt_upsampling_kernel: downsampling reduction, axis={axis},'
                      f' (Df,Dt)=({Df},{Dt}), (B,F,T)=({B},{F},{T}), niter={niter}: ok')
 
 
@@ -249,15 +249,15 @@ def _check_arguments(cp):
             f()
         except (RuntimeError, ValueError, TypeError):
             return
-        raise AssertionError(f'test_weight_upsampler: expected an exception: {label}')
+        raise AssertionError(f'test_wt_upsampling_kernel: expected an exception: {label}')
 
-    expect_raise('Df = 0', lambda: GpuWeightUpsampler(0, 1))
-    expect_raise('Dt = 0', lambda: GpuWeightUpsampler(1, 0))
-    expect_raise('w_cutoff < 0', lambda: GpuWeightUpsampler(1, 1, -1.0))
-    expect_raise('w_cutoff = NaN', lambda: GpuWeightUpsampler(1, 1, float('nan')))
-    expect_raise('warps_per_block = 5', lambda: GpuWeightUpsampler(1, 1, 0.0, 5))
+    expect_raise('Df = 0', lambda: GpuWtUpsamplingKernel(0, 1))
+    expect_raise('Dt = 0', lambda: GpuWtUpsamplingKernel(1, 0))
+    expect_raise('w_cutoff < 0', lambda: GpuWtUpsamplingKernel(1, 1, -1.0))
+    expect_raise('w_cutoff = NaN', lambda: GpuWtUpsamplingKernel(1, 1, float('nan')))
+    expect_raise('warps_per_block = 5', lambda: GpuWtUpsamplingKernel(1, 1, 0.0, 5))
 
-    ups = GpuWeightUpsampler(2, 2)
+    ups = GpuWtUpsamplingKernel(2, 2)
     lo = cp.ones((1, 4, 4), dtype=cp.float32)
     hi = cp.ones((1, 8, 8), dtype=cp.float32)
 
@@ -266,12 +266,12 @@ def _check_arguments(cp):
     expect_raise('w_lores is 2-d', lambda: ups.launch(hi, cp.ones((4, 4), dtype=cp.float32)))
     expect_raise('host arrays', lambda: ups.launch(np.ones((1, 8, 8), dtype=np.float32),
                                                    np.ones((1, 4, 4), dtype=np.float32)))
-    expect_raise('w_hires is w_lores', lambda: GpuWeightUpsampler(1, 1).launch(lo, lo))
+    expect_raise('w_hires is w_lores', lambda: GpuWtUpsamplingKernel(1, 1).launch(lo, lo))
     expect_raise('w_hires not contiguous',
                  lambda: ups.launch(cp.ones((1, 8, 16), dtype=cp.float32)[:, :, ::2], lo))
 
 
-def test_weight_upsampler(iteration=0, rng=None, verbose=False):
+def test_wt_upsampling_kernel(iteration=0, rng=None, verbose=False):
     import cupy as cp
 
     rng = _default_rng(rng)

@@ -13,8 +13,8 @@
 //    output:  (2, R)     float32     out[0] = mean, out[1] = RMS (not variance)
 //
 // The old kernel computes one statistic per row of an (R, L) array when it is called
-// with axis=AXIS_TIME and Df=Dt=1, which is exactly pirate's GpuWrms signature: pirate
-// does the axis handling one layer up, in GpuWiDownsampler.
+// with axis=AXIS_TIME and Df=Dt=1, which is exactly pirate's GpuWrmsKernel signature: pirate
+// does the axis handling one layer up, in GpuWiDownsamplingKernel.
 //
 // LIBS: -lrf_kernels
 

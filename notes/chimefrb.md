@@ -69,18 +69,18 @@ explicitly), but if you're unsure, just ask.
 ## The transform interface
 
 Every ported RFI transform (GpuBadChannelMask, GpuIntensityClipper, GpuStdDevClipper,
-GpuPolynomialDetrender, GpuSplineDetrender) is a subclass of the C++ class `GpuTransformBase`
-(`include/pirate/chimefrb/TransformBase.hpp`), and so are the container classes `WiPipeline`
+GpuPolynomialDetrender, GpuSplineDetrender) is a subclass of the C++ class `GpuTransform`
+(`include/pirate/chimefrb/Transform.hpp`), and so are the container classes `Pipeline`
 (a port of `rf_pipelines::pipeline`) and `RfiMaskPipeline` (`rf_pipelines::wi_sub_pipeline`),
 which are python; a pipeline can therefore run any sequence of them. The base class owns
 the geometry members `nbeams`, `nfreq`, `ntime`, `scratch_nelts` and the non-virtual
 `launch(intensity, weights, scratch, stream)`, which checks its arguments and calls the
 virtual `launch_checked()` -- overridden in C++ by the ported transforms, and in python by
-the pipelines, `ExampleCupyTransform`, and anything a user writes (a pybind11 trampoline in
+the pipelines, `ExamplePythonTransform`, and anything a user writes (a pybind11 trampoline in
 `src_pybind11/pirate_pybind11_chimefrb.cpp` carries the call into python). The python side
 shared by every transform -- `launch()` with `stream=None` / `scratch=None`, the
 `check_yaml_keys()` classmethod, `__repr__` -- is injected in
-`pirate_frb/chimefrb/GpuTransformBase.py`. A transform written in python subclasses
+`pirate_frb/chimefrb/GpuTransform.py`. A transform written in python subclasses
 `GpuPythonTransform` (`pirate_frb/chimefrb/GpuPythonTransform.py`), a plain python class on
 top of the base that holds the constructor, the `launch_checked()` and yaml stubs a
 subclass replaces, the hook the trampoline calls, and the docstring a python author reads.

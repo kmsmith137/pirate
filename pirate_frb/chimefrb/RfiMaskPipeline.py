@@ -1,15 +1,15 @@
 """RfiMaskPipeline: run a list of chimefrb transforms on a downsampled copy of the data, and
 feed only the resulting mask back to full resolution.
 
-A python port of rf_pipelines::wi_sub_pipeline. See the class docstring, and WiPipeline.py
+A python port of rf_pipelines::wi_sub_pipeline. See the class docstring, and Pipeline.py
 for the plain (undownsampled) container.
 """
 
 import math
 
 from .GpuContainerBase import GpuContainerBase
-from .ReferenceWeightUpsampler import GpuWeightUpsampler
-from .ReferenceWiDownsampler import GpuWiDownsampler
+from .ReferenceWtUpsamplingKernel import GpuWtUpsamplingKernel
+from .ReferenceWiDownsamplingKernel import GpuWiDownsamplingKernel
 from .transform_io import check_json_keys
 
 
@@ -26,11 +26,11 @@ class RfiMaskPipeline(GpuContainerBase):
     of what they would at full resolution, with the resulting mask upsampled back. One launch
     does three things:
 
-    1. Downsample (intensity, weights) by (Df, Dt) with :class:`GpuWiDownsampler` into
+    1. Downsample (intensity, weights) by (Df, Dt) with :class:`GpuWiDownsamplingKernel` into
        scratch. Downsampled weights are the SUM of a cell's weights, not the mean, so {0,1}
        weights become counts up to Df*Dt.
     2. Run the transforms, in order, on the downsampled pair.
-    3. With :class:`GpuWeightUpsampler`, zero every full-resolution weight whose cell's
+    3. With :class:`GpuWtUpsamplingKernel`, zero every full-resolution weight whose cell's
        downsampled weight is ``<= w_cutoff``; leave every other weight bit-identical.
 
     Two consequences worth knowing: ``launch()`` never modifies the full-resolution INTENSITY
@@ -40,10 +40,9 @@ class RfiMaskPipeline(GpuContainerBase):
     INNER one, (nbeams, nfreq/Df, ntime/Dt); the pipeline's own is the full-resolution shape.
 
     An RfiMaskPipeline is itself a transform (a :class:`GpuContainerBase`), so it is normally
-    one element of a :class:`WiPipeline`. Like a WiPipeline it holds no
-    per-launch state, so one instance may be launched on several streams at once with one
-    scratch per stream; and one ``launch()`` processes exactly one block, which the caller
-    assembles.
+    one element of a :class:`Pipeline`. Like a Pipeline it holds no per-launch state, so one
+    instance may be launched on several streams at once with one scratch per stream; and one
+    ``launch()`` processes exactly one block, which the caller assembles.
 
     Attributes (read-only):
 
@@ -61,13 +60,13 @@ class RfiMaskPipeline(GpuContainerBase):
         ----------
         transforms : sequence
             One or more transforms at the INNER geometry (nbeams, nfreq/Df, ntime/Dt), all
-            alike. The inner nfreq and ntime must be multiples of 32 (GpuWiDownsampler's
+            alike. The inner nfreq and ntime must be multiples of 32 (GpuWiDownsamplingKernel's
             output tile).
         Df, Dt : int
             Downsampling factors in frequency and time, each >= 1 and not both 1: at (1, 1)
             the bracket would only copy the data, and it is not a no-op even then (the
-            transforms' intensity changes would be discarded), so a WiPipeline should be
-            used instead.
+            transforms' intensity changes would be discarded), so a Pipeline should be used
+            instead.
         w_cutoff : float, optional
             A full-resolution weight is zeroed when its cell's downsampled weight is
             ``<= w_cutoff`` (strictly: a downsampled weight equal to the cutoff masks). The
@@ -81,13 +80,13 @@ class RfiMaskPipeline(GpuContainerBase):
         if (Df, Dt) == (1, 1):
             raise ValueError('RfiMaskPipeline: (Df, Dt) = (1, 1) is not supported. The bracket would'
                              ' only copy the data (and would still discard the transforms\' intensity'
-                             ' changes); use a WiPipeline if you do not need the downsampling')
+                             ' changes); use a Pipeline if you do not need the downsampling')
         w_cutoff = float(w_cutoff)
         if not (w_cutoff >= 0.0) or math.isnan(w_cutoff):
             raise ValueError(f'RfiMaskPipeline: expected w_cutoff >= 0, got {w_cutoff!r}')
         if (nfreq_ds % 32 != 0) or (ntime_ds % 32 != 0):
             raise ValueError(f'RfiMaskPipeline: the transforms\' (nfreq, ntime) = ({nfreq_ds}, {ntime_ds})'
-                             f' must both be multiples of 32, the output tile of GpuWiDownsampler'
+                             f' must both be multiples of 32, the output tile of GpuWiDownsamplingKernel'
                              f' (the full-resolution shape is then a multiple of (32*Df, 32*Dt))')
 
         # Scratch layout: the downsampled intensity, the downsampled weights, then (at an
@@ -103,15 +102,15 @@ class RfiMaskPipeline(GpuContainerBase):
         self.Dt = Dt
         self.w_cutoff = w_cutoff
 
-        self._downsampler = GpuWiDownsampler(Df, Dt, False)
-        self._upsampler = GpuWeightUpsampler(Df, Dt, w_cutoff)
+        self._downsampler = GpuWiDownsamplingKernel(Df, Dt, False)
+        self._upsampler = GpuWtUpsamplingKernel(Df, Dt, w_cutoff)
         self._ds_shape = (nbeams, nfreq_ds, ntime_ds)
         self._ds_nelts = ds_nelts
         self._sub_offset = sub_offset
 
     def launch_checked(self, intensity, weights, scratch):
         # Steps 1-3 of the class docstring. The pipeline's stream is current
-        # (GpuTransformBase.launch() made it so), and every launch below defaults to it.
+        # (GpuTransform.launch() made it so), and every launch below defaults to it.
         n = self._ds_nelts
         i_ds = scratch[:n].reshape(self._ds_shape)
         w_ds = scratch[n:2*n].reshape(self._ds_shape)

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Spot test: the weighted mean and variance, pirate vs rf_kernels.
 
-Compares pirate_frb.chimefrb.ReferenceWrms against rf_kernels::weighted_mean_rms, the
+Compares pirate_frb.chimefrb.ReferenceWrmsKernel against rf_kernels::weighted_mean_rms, the
 kernel it was transcribed from. This is the statistic both chimefrb clippers are built
 on, and it is the subtlest numerics in the port, so it is the reference most worth
 pinning against the real thing.
 
 WHY THIS TEST EXISTS. The routine unit test ('pirate_frb test --cfrb') compares the CUDA
-kernel GpuWrms against ReferenceWrms, so it establishes that the two pirate
+kernel GpuWrmsKernel against ReferenceWrmsKernel, so it establishes that the two pirate
 implementations agree -- but both were written from one reading of the old code. This is
 the test that reads the old code by running it.
 
@@ -16,7 +16,7 @@ TWO THINGS MAKE IT MORE THAN A CALL AND AN allclose().
 First, the variance-validity cutoffs. A row whose variance falls below (eps_2*mean)^2 or
 eps_3*mean^2 is declared dead and its variance set to exactly zero, and our reference
 does not evaluate those cutoffs in quite the same arithmetic as the old kernel (see
-ReferenceWrms's docstring: the two-pass 'finalize' has no '- dmean^2' term and applies
+ReferenceWrmsKernel's docstring: the two-pass 'finalize' has no '- dmean^2' term and applies
 only one of the two cutoffs, where a second iterate step applies both). So the
 comparison brackets the decision: run the reference with eps_multiplier 0.5 and 1.5, and
 require the old kernel's validity to lie between the two. Only then are the numbers
@@ -44,7 +44,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harness
 
-from pirate_frb.chimefrb import ReferenceWrms, wrms_iterate, iclip
+from pirate_frb.chimefrb import ReferenceWrmsKernel, wrms_iterate, iclip
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -170,8 +170,8 @@ def main():
             # Base case: no refinements, so a direct comparison is safe.
             refs = {}
             for (name, eps) in (("lo", 0.5), ("hi", 1.5)):
-                refs[name] = ReferenceWrms(niter, iter_sigma, two_pass,
-                                           eps_multiplier=eps).apply(I, W)
+                refs[name] = ReferenceWrmsKernel(niter, iter_sigma, two_pass,
+                                                 eps_multiplier=eps).apply(I, W)
             compare(t, tag, x, niter, iter_sigma, two_pass, old_mean, old_var,
                     refs["lo"][0], refs["lo"][1], refs["hi"][0], refs["hi"][1])
             continue

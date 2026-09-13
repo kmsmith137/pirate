@@ -1,4 +1,4 @@
-"""Numpy reference for GpuWeightUpsampler, plus that class's method injections.
+"""Numpy reference for GpuWtUpsamplingKernel, plus that class's method injections.
 
 The reference is transcribed from reference_weight_upsample() in
 ../../extern/rf_kernels/test-upsample.cpp, the old code's own scalar reference for
@@ -8,16 +8,16 @@ rf_kernels::weight_upsampler, which the old unit test compares with the AVX2 ker
 import numpy as np
 
 import ksgpu
-from ..pirate_pybind11 import GpuWeightUpsampler
+from ..pirate_pybind11 import GpuWtUpsamplingKernel
 
 
-@ksgpu.inject_methods(GpuWeightUpsampler)
-class GpuWeightUpsamplerInjections:
-    # No class docstring here: GpuWeightUpsampler's docstring lives in the pybind11 binding
+@ksgpu.inject_methods(GpuWtUpsamplingKernel)
+class GpuWtUpsamplingKernelInjections:
+    # No class docstring here: GpuWtUpsamplingKernel's docstring lives in the pybind11 binding
     # (option 1 in notes/docstrings.md); this injector adds a stream argument for launch().
 
     # Save reference to C++ method
-    _cpp_launch = GpuWeightUpsampler.launch
+    _cpp_launch = GpuWtUpsamplingKernel.launch
 
     def launch(self, w_hires, w_lores, stream=None):
         """GPU kernel launch (async, does not sync stream).
@@ -45,8 +45,8 @@ class GpuWeightUpsamplerInjections:
         self._cpp_launch(w_hires, w_lores, stream.ptr)
 
 
-class ReferenceWeightUpsampler:
-    """Numpy reference for GpuWeightUpsampler (src_lib/chimefrb/WeightUpsampler.cu): zeroes
+class ReferenceWtUpsamplingKernel:
+    """Numpy reference for GpuWtUpsamplingKernel (src_lib/chimefrb/WtUpsamplingKernel.cu): zeroes
     every full-resolution weight whose ``(Df, Dt)`` cell has a low-resolution weight
     ``w_lo <= w_cutoff``, and leaves every other weight bit-identical.
 

@@ -6,7 +6,7 @@ Dispatched from ``python -m pirate_frb test --cfrb``.
 
 import numpy as np
 
-from .test_wrms import EPS32, MARGIN
+from .test_wrms_kernel import EPS32, MARGIN
 
 
 # Never bracket stage 2 more tightly than this, relative to sigma. It is the number the old
@@ -54,7 +54,7 @@ def stage2_bracket(v, sigma):
     sigma*s that is eps*(1 + (vbar + s)/(sigma*s)) -- and the second term is NOT small,
     because in noise the variances are all similar: s/vbar ~ sqrt(2/L), about 0.02 at
     L = 4096, so vbar/(sigma*s) is around 15 and a flat 1e-4 would be marginal. The budget
-    uses test_wrms.py's MARGIN and EPS32, so the port has one error model.
+    uses test_wrms_kernel.py's MARGIN and EPS32, so the port has one error model.
 
     Beams with fewer than two valid rows have no threshold (their outcome is an exact count),
     and ill-conditioned beams are skipped; callers must exclude those (ill_conditioned()).
@@ -73,7 +73,7 @@ def end_to_end_bracket(v, mean, L, two_pass, sigma):
     """d_B: d_A plus the effect of the stage-1 variances THEMSELVES differing, float32 against
     float64. 'v' and 'mean' are the float64 reference's stage-1 outputs, (B, nrows).
 
-    test_wrms.py budgets the rms error as eps_r = MARGIN*EPS32*rms, plus
+    test_wrms_kernel.py budgets the rms error as eps_r = MARGIN*EPS32*rms, plus
     MARGIN*EPS32*sqrt(L)*|mean| on the single-pass path, where var = <I^2> - mean^2 cancels.
     As a variance that is e_i = 2*rms_i*eps_r_i. In stage 2, |v_i - vbar| then moves by up to
     e_i + mean(e) and s by up to about max(e), so relative to sigma*s the bracket grows by
@@ -122,10 +122,11 @@ def keep_bracket(v, sigma, d):
 #
 # THE VARIANCES COME FROM THE GPU, AND WHAT FOLLOWS THEM FROM NUMPY -- the intensity clipper's
 # central move, from rf_kernels' own clipper tests. Rebuilding steps 1-2 from
-# GpuWiDownsampler and GpuWrms (deliberately not through GpuClipperBase, so that the check is
-# independent of the plumbing it checks) gives the exact float32 variances the clipper used;
-# numpy's clip_1d() and std_dev_apply() on those, bracketed on sigma, must sandwich the
-# kernel's weights. That tests stage 2 and the apply with nothing upstream in the way.
+# GpuWiDownsamplingKernel and GpuWrmsKernel (deliberately not through GpuClipperBase, so
+# that the check is independent of the plumbing it checks) gives the exact float32
+# variances the clipper used; numpy's clip_1d() and std_dev_apply() on those, bracketed on
+# sigma, must sandwich the kernel's weights. That tests stage 2 and the apply with nothing
+# upstream in the way.
 #
 # The end-to-end comparison against the float64 reference cannot use the intensity
 # clipper's form. There, a smaller sigma and a larger eps_multiplier both clip more, so two
@@ -133,14 +134,14 @@ def keep_bracket(v, sigma, d):
 # near its cutoff changes the POPULATION stage 2 sees -- one near-zero variance counted as
 # valid drags vbar down and inflates s, which spares rows that would otherwise be clipped --
 # so admitting fewer rows in stage 1 can clip fewer in stage 2. Instead, the stage-1
-# decision is bracketed on its own (exactly as test_wrms.py does), the GPU's decision is then
+# decision is bracketed on its own (exactly as test_wrms_kernel.py does), the GPU's decision is then
 # imposed on the reference, and only stage 2 is bracketed on sigma, where it is monotone.
 #
-# Nothing here compares two GPU runs on a sharp decision; see test_wrms.py's docstring.
+# Nothing here compares two GPU runs on a sharp decision; see test_wrms_kernel.py's docstring.
 # Bitwise GPU-vs-GPU checks are used only where nothing sharp differs between the runs.
 
 from .ReferenceStdDevClipper import clip_1d as _clip_1d, std_dev_apply
-from . import (GpuStdDevClipper, GpuWiDownsampler, GpuWrms,
+from . import (GpuStdDevClipper, GpuWiDownsamplingKernel, GpuWrmsKernel,
                ReferenceStdDevClipper)
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng, plant_degenerate_rows, random_wi_pair
@@ -260,7 +261,7 @@ def _run_gpu(cp, sd, in_i, in_w):
 
 
 def _run_statistic(cp, sd, in_i, in_w):
-    """Steps 1-2 rebuilt from GpuWiDownsampler and GpuWrms: the float32 variances the
+    """Steps 1-2 rebuilt from GpuWiDownsamplingKernel and GpuWrmsKernel: the float32 variances the
     clipper used, shaped (B, nrows). Bit-identical to the clipper's, since these are the
     same kernels with the same parameters on the same input."""
 
@@ -270,19 +271,19 @@ def _run_statistic(cp, sd, in_i, in_w):
     if (sd.Df, sd.Dt) != (1, 1):
         ds_i = cp.empty((sd.nbeams, sd.F_ds, sd.T_ds), dtype=cp.float32)
         ds_w = cp.empty((sd.nbeams, sd.F_ds, sd.T_ds), dtype=cp.float32)
-        GpuWiDownsampler(sd.Df, sd.Dt, False).launch(ds_i, ds_w, g_i, g_w)
+        GpuWiDownsamplingKernel(sd.Df, sd.Dt, False).launch(ds_i, ds_w, g_i, g_w)
     else:
         (ds_i, ds_w) = (g_i, g_w)
 
     if sd.axis == 'freq':
         t_i = cp.empty((sd.nbeams, sd.T_ds, sd.F_ds), dtype=cp.float32)
         t_w = cp.empty((sd.nbeams, sd.T_ds, sd.F_ds), dtype=cp.float32)
-        GpuWiDownsampler(1, 1, True).launch(t_i, t_w, ds_i, ds_w)
+        GpuWiDownsamplingKernel(1, 1, True).launch(t_i, t_w, ds_i, ds_w)
         (ds_i, ds_w) = (t_i, t_w)
 
     mean = cp.empty(sd.wrms_R, dtype=cp.float32)
     var = cp.empty(sd.wrms_R, dtype=cp.float32)
-    GpuWrms(sd.wrms_L, 1, 0.0, sd.two_pass).launch(
+    GpuWrmsKernel(sd.wrms_L, 1, 0.0, sd.two_pass).launch(
         mean, var, ds_i.reshape(sd.wrms_R, sd.wrms_L), ds_w.reshape(sd.wrms_R, sd.wrms_L))
 
     cp.cuda.get_current_stream().synchronize()
@@ -357,7 +358,7 @@ def test_std_dev_clipper(iteration=0, rng=None, verbose=False):
 
     # Structural check 1: 'freq' equals 'time' on the transposed input, BITWISE, at
     # (1,1): the FREQ path transposes and reduces rows, then stage 2 sees the same values in
-    # the same order. That needs GpuWiDownsampler's (1,1) transpose to copy the intensity
+    # the same order. That needs GpuWiDownsamplingKernel's (1,1) transpose to copy the intensity
     # through exactly; (w*i)/w would move the variances by roundoff, and a stage-2 decision
     # within roundoff of its threshold would then flip.
     if (Df, Dt) == (1, 1) and (axis == 'freq'):

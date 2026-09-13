@@ -183,7 +183,7 @@ GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, l
 
 GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, long nbins_, double epsilon_,
                                        const Geometry &g) :
-    GpuTransformBase("GpuSplineDetrender", nbeams_, nfreq_, ntime_, g.scratch_nelts(nbeams_, ntime_)),
+    GpuTransform("GpuSplineDetrender", nbeams_, nfreq_, ntime_, g.scratch_nelts(nbeams_, ntime_)),
     nbins(nbins_), epsilon(_checked_epsilon(epsilon_)),
     N_phi(g.N_phi), nfrange(g.nfrange()), channels_per_range(g.channels_per_range),
     ncomp(g.ncomp), _bin_edges(g.bin_edges)

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Spot test: the (Df,Dt) downsampler, pirate vs rf_kernels.
 
-Compares pirate_frb.chimefrb.ReferenceWiDownsampler against
+Compares pirate_frb.chimefrb.ReferenceWiDownsamplingKernel against
 rf_kernels::wi_downsampler, the kernel it was transcribed from.
 
 WHY THIS TEST EXISTS. The routine unit test ('pirate_frb test --cfrb') compares the
-CUDA kernel GpuWiDownsampler against ReferenceWiDownsampler, so it establishes that
+CUDA kernel GpuWiDownsamplingKernel against ReferenceWiDownsamplingKernel, so it establishes that
 the two pirate implementations agree -- but both were written from one reading of the
 old code, and a misreading would pass it. This is the test that reads the old code by
 running it.
@@ -30,7 +30,7 @@ the masked cells are checked separately against pirate's stronger guarantee. Whe
 its memcpy, pirate by design -- so there the comparison is exact.
 
 NOT COVERED HERE: 'transpose', which the old kernel does not have. The transposed path
-is pinned instead by a structural check in pirate_frb/chimefrb/test_wi_downsampler.py
+is pinned instead by a structural check in pirate_frb/chimefrb/test_wi_downsampling_kernel.py
 -- the two orientations must be bitwise swapaxes of each other. So the division of
 labour is: this test fixes the semantics, that one fixes the layout.
 
@@ -46,7 +46,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harness
 
-from pirate_frb.chimefrb import ReferenceWiDownsampler
+from pirate_frb.chimefrb import ReferenceWiDownsamplingKernel
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -113,7 +113,7 @@ def main():
     for (Df, Dt) in CONFIGS:
         old = harness.run_driver(HERE, x, params={"Df": Df, "Dt": Dt}, dtype=np.float32)
 
-        ref = ReferenceWiDownsampler(Df, Dt, transpose=False)
+        ref = ReferenceWiDownsamplingKernel(Df, Dt, transpose=False)
         (new_i, new_w) = ref.apply(x[0][None, :, :], x[1][None, :, :])
 
         # The intensity is only defined where the cell has weight; see the docstring.

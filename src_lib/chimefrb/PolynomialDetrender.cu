@@ -326,8 +326,8 @@ static long _checked_ntime(long ntime, long nt_chunk)
 
 GpuPolynomialDetrender::GpuPolynomialDetrender(long nbeams_, long nfreq_, long ntime_, long polydeg_,
                                                double epsilon_, long nt_chunk_, long warps_per_block_) :
-    GpuTransformBase("GpuPolynomialDetrender", nbeams_, nfreq_, _checked_ntime(ntime_, nt_chunk_),
-                     /*scratch_nelts=*/0),
+    GpuTransform("GpuPolynomialDetrender", nbeams_, nfreq_, _checked_ntime(ntime_, nt_chunk_),
+                 /*scratch_nelts=*/0),
     polydeg(_checked_polydeg(polydeg_)),
     epsilon(_checked_epsilon(epsilon_)),
     nt_chunk(_checked_nt_chunk(nt_chunk_)),

@@ -1,4 +1,4 @@
-"""ExampleCupyTransform: a worked example of a chimefrb transform written in cupy, on top of
+"""ExamplePythonTransform: a worked example of a chimefrb transform written in cupy, on top of
 GpuPythonTransform. It exists to show the shape of a transform -- the constructor, the
 computation, the two yaml methods -- and is not meant for use: GpuIntensityClipper is the
 real thing (see the class docstring). Nothing here needs C++: GpuPythonTransform.py is
@@ -8,7 +8,7 @@ the whole base class a python transform sees.
 from .GpuPythonTransform import GpuPythonTransform
 
 
-class ExampleCupyTransform(GpuPythonTransform):
+class ExamplePythonTransform(GpuPythonTransform):
     """Masks every sample more than ``sigma`` standard deviations from its row's mean.
 
     Per (beam, channel) row, over time: the weighted mean and variance of the intensity, then
@@ -31,7 +31,7 @@ class ExampleCupyTransform(GpuPythonTransform):
         super().__init__(nbeams, nfreq, ntime)
 
         if not (sigma > 0):
-            raise ValueError(f'ExampleCupyTransform: expected sigma > 0, got {sigma!r}')
+            raise ValueError(f'ExamplePythonTransform: expected sigma > 0, got {sigma!r}')
         self.sigma = float(sigma)
 
     def launch_checked(self, intensity, weights, scratch):
@@ -46,7 +46,7 @@ class ExampleCupyTransform(GpuPythonTransform):
         weights[cp.abs(d) > self.sigma * cp.sqrt(var)] = 0                 # var == 0 masks nothing
 
     def to_yaml_dict(self):
-        return {'class_name': 'ExampleCupyTransform', 'sigma': self.sigma}
+        return {'class_name': 'ExamplePythonTransform', 'sigma': self.sigma}
 
     @classmethod
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime):

@@ -25,7 +25,7 @@ POLYNOMIAL_DETRENDER_YAML_KEYS = ('polydeg', 'epsilon', 'nt_chunk', 'axis')
 @ksgpu.inject_methods(GpuPolynomialDetrender)
 class GpuPolynomialDetrenderInjections:
     # No class docstring here: GpuPolynomialDetrender's docstring lives in the pybind11
-    # binding (option 1 in notes/docstrings.md). launch() is inherited from GpuTransformBase;
+    # binding (option 1 in notes/docstrings.md). launch() is inherited from GpuTransform;
     # this injector adds the yaml and legacy-json methods (transform_io.py).
 
     def to_yaml_dict(self):

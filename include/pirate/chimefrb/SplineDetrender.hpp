@@ -5,7 +5,7 @@
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
 
-#include "TransformBase.hpp"
+#include "Transform.hpp"
 
 namespace pirate {
 namespace chimefrb {
@@ -59,10 +59,10 @@ namespace chimefrb {
 // number of streams at once (with one scratch per stream).
 //
 // Every chimefrb transform's launch() takes (intensity, weights, scratch, stream) on arrays
-// of shape (nbeams, nfreq, ntime); see GpuTransformBase in TransformBase.hpp. See
+// of shape (nbeams, nfreq, ntime); see GpuTransform in Transform.hpp. See
 // notes/chimefrb.md for the porting rules this class follows.
 
-struct GpuSplineDetrender : public GpuTransformBase
+struct GpuSplineDetrender : public GpuTransform
 {
     // (nbeams, nfreq, ntime) is the shape of the arrays launch() will be given; the tables
     // and the kernel geometry are built from it.
@@ -75,7 +75,7 @@ struct GpuSplineDetrender : public GpuTransformBase
 
     ~GpuSplineDetrender();
 
-    // Inherited from GpuTransformBase: nbeams, nfreq, ntime (the array shape; ntime a positive
+    // Inherited from GpuTransform: nbeams, nfreq, ntime (the array shape; ntime a positive
     // multiple of 32), scratch_nelts (the float32 elements launch() needs), and launch().
     const long nbins;                  // equal bins; the spline is C^1 across bin edges
     const double epsilon;              // regularization strength (see the class comment)
@@ -91,7 +91,7 @@ struct GpuSplineDetrender : public GpuTransformBase
     std::vector<long> bin_edges() const;
 
     // launch_checked(): asynchronously launch the kernels, and return without synchronizing
-    // the stream. Called by GpuTransformBase::launch(), which checks the arguments first.
+    // the stream. Called by GpuTransform::launch(), which checks the arguments first.
     //
     //   intensity  shape (nbeams, nfreq, ntime), float32, fully contiguous, on GPU. The
     //              fitted baseline is subtracted in place at EVERY channel, weighted or not.
@@ -117,7 +117,7 @@ private:
     // Everything the constructor derives from (nfreq, ntime, nbins) alone: the bin edges,
     // the freq-range decomposition, and the counts that fix the scratch layout. It is
     // computed by _geometry() BEFORE the base class is constructed, because
-    // GpuTransformBase::scratch_nelts is a const member and must be known then; the public
+    // GpuTransform::scratch_nelts is a const member and must be known then; the public
     // constructor delegates to the private one below with the result.
     struct Geometry {
         std::vector<long> bin_edges;              // nbins+1 channel indices, 0 .. nfreq

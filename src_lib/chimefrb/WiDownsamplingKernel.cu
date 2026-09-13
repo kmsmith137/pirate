@@ -1,4 +1,4 @@
-#include "../../include/pirate/chimefrb/WiDownsampler.hpp"
+#include "../../include/pirate/chimefrb/WiDownsamplingKernel.hpp"
 
 #include <sstream>
 #include <iostream>
@@ -29,7 +29,7 @@ namespace chimefrb {
 // and it bought nothing: the threads in this kernel are independent -- there is no block
 // reduction, so no cross-warp loop bound to constant-fold -- and a measurement put the
 // runtime version within 0.3% at 32 warps -- the default, and the best setting at every
-// configuration the RFI chain uses. (GpuWrms is templated on its thread count for exactly
+// configuration the RFI chain uses. (GpuWrmsKernel is templated on its thread count for exactly
 // the reason this kernel is not: it reduces across the block once per refinement.) Note
 // that this is also why the per-cell values are stored as they are computed rather than
 // accumulated into a register array first: an array needs a compile-time size.
@@ -161,24 +161,25 @@ wi_downsample_kernel(float *out_i, float *out_w,
 // -------------------------------------------------------------------------------------------------
 
 
-GpuWiDownsampler::GpuWiDownsampler(long Df_, long Dt_, bool transpose_, long warps_per_block_) :
+GpuWiDownsamplingKernel::GpuWiDownsamplingKernel(long Df_, long Dt_, bool transpose_,
+                                                 long warps_per_block_) :
     Df(Df_), Dt(Dt_), transpose(transpose_), warps_per_block(warps_per_block_)
 {
     if (Df < 1)
-        throw runtime_error("GpuWiDownsampler: expected Df >= 1");
+        throw runtime_error("GpuWiDownsamplingKernel: expected Df >= 1");
     if (Dt < 1)
-        throw runtime_error("GpuWiDownsampler: expected Dt >= 1");
+        throw runtime_error("GpuWiDownsamplingKernel: expected Dt >= 1");
 
     if ((warps_per_block != 4) && (warps_per_block != 8)
         && (warps_per_block != 16) && (warps_per_block != 32)) {
         stringstream ss;
-        ss << "GpuWiDownsampler: warps_per_block=" << warps_per_block
+        ss << "GpuWiDownsamplingKernel: warps_per_block=" << warps_per_block
            << " is not supported (expected 4, 8, 16 or 32)";
         throw runtime_error(ss.str());
     }
 
     if ((Df == 1) && (Dt == 1) && !transpose)
-        throw runtime_error("GpuWiDownsampler: (Df,Dt,transpose)=(1,1,false) is the identity."
+        throw runtime_error("GpuWiDownsamplingKernel: (Df,Dt,transpose)=(1,1,false) is the identity."
                             " Use the input array directly, rather than paying for a copy.");
 }
 
@@ -201,9 +202,9 @@ static void _launch(float *out_i, float *out_w, const float *in_i, const float *
 }
 
 
-void GpuWiDownsampler::launch(Array<float> &out_i, Array<float> &out_w,
-                              const Array<float> &in_i, const Array<float> &in_w,
-                              cudaStream_t stream) const
+void GpuWiDownsamplingKernel::launch(Array<float> &out_i, Array<float> &out_w,
+                                     const Array<float> &in_i, const Array<float> &in_w,
+                                     cudaStream_t stream) const
 {
     xassert_eq(in_i.ndim, 3);
 
@@ -218,7 +219,7 @@ void GpuWiDownsampler::launch(Array<float> &out_i, Array<float> &out_w,
     // cells, and the kernel has no edge predication.
     if ((F % (32*Df)) || (T % (32*Dt))) {
         stringstream ss;
-        ss << "GpuWiDownsampler::launch(): expected F divisible by 32*Df and T divisible"
+        ss << "GpuWiDownsamplingKernel::launch(): expected F divisible by 32*Df and T divisible"
            << " by 32*Dt, got (F,T)=(" << F << "," << T << ") with (Df,Dt)=("
            << Df << "," << Dt << ")";
         throw runtime_error(ss.str());
@@ -278,7 +279,7 @@ struct TimingConfig
 };
 
 
-void GpuWiDownsampler::time_selected()
+void GpuWiDownsamplingKernel::time_selected()
 {
     // The four configurations used by the old search's production RFI config
     // (misc/chimefrb/configs/21-03-07-low-latency-uniform-badchannel-mask-noplot.json).
@@ -324,7 +325,7 @@ void GpuWiDownsampler::time_selected()
         // (time -> bandwidth) is the figure of merit.
         double nbytes = 4.0 * (2.0*c.B*c.F*c.T + 2.0*c.B*F_ds*T_ds);
 
-        cout << "\nGpuWiDownsampler::time_selected()\n"
+        cout << "\nGpuWiDownsamplingKernel::time_selected()\n"
              << "    (Df, Dt, transpose) = (" << c.Df << ", " << c.Dt << ", "
              << (c.transpose ? "true" : "false") << "):  " << c.what << "\n"
              << "    (B, F, T) = (" << c.B << ", " << c.F << ", " << c.T << ")"
@@ -334,7 +335,7 @@ void GpuWiDownsampler::time_selected()
              << endl;
 
         for (long W: warp_counts) {
-            GpuWiDownsampler ds(c.Df, c.Dt, c.transpose, W);
+            GpuWiDownsamplingKernel ds(c.Df, c.Dt, c.transpose, W);
             KernelTimer kt(niter, 1);
             double dt = 0.0;
 

@@ -1,25 +1,25 @@
 """GpuPythonTransform: the base class of every chimefrb transform written in python, and the
-file to read before writing one. See the class docstring; ExampleCupyTransform.py is a
+file to read before writing one. See the class docstring; ExamplePythonTransform.py is a
 complete example.
 
-Its own base class, GpuTransformBase, is C++ (bound with pybind11): it owns the array
-geometry and the checked launch(), and its python-side methods are in GpuTransformBase.py.
+Its own base class, GpuTransform, is C++ (bound with pybind11): it owns the array
+geometry and the checked launch(), and its python-side methods are in GpuTransform.py.
 This class is plain python. Everything a python transform inherits that is specific to
 being written in python -- the constructor, the methods a subclass defines, and the hook
 the C++ side calls -- is in this file.
 """
 
-from .GpuTransformBase import GpuTransformBase
+from .GpuTransform import GpuTransform
 
 
-class GpuPythonTransform(GpuTransformBase):
+class GpuPythonTransform(GpuTransform):
     """Base class of a chimefrb transform written in python.
 
     A transform processes one (nbeams, nfreq, ntime) block of intensity and weights, in place,
-    on the GPU, and is anything a :class:`WiPipeline` or :class:`RfiMaskPipeline` can run. The
+    on the GPU, and is anything a :class:`Pipeline` or :class:`RfiMaskPipeline` can run. The
     five ported RFI transforms (GpuBadChannelMask, GpuIntensityClipper, GpuStdDevClipper,
-    GpuPolynomialDetrender, GpuSplineDetrender) are C++, on :class:`GpuTransformBase` directly;
-    the two pipeline classes, :class:`ExampleCupyTransform`, and anything you write in python
+    GpuPolynomialDetrender, GpuSplineDetrender) are C++, on :class:`GpuTransform` directly;
+    the two pipeline classes, :class:`ExamplePythonTransform`, and anything you write in python
     are subclasses of this class. To write one::
 
         class MyTransform(GpuPythonTransform):
@@ -38,10 +38,10 @@ class GpuPythonTransform(GpuTransformBase):
                 cls.check_yaml_keys(d, ['sigma'])
                 return cls(nbeams, nfreq, ntime, sigma=d['sigma'])
 
-    :class:`ExampleCupyTransform` is this, complete, in forty lines. This class is plain
-    python, and this file is all of it. What it inherits from GpuTransformBase is python too
+    :class:`ExamplePythonTransform` is this, complete, in forty lines. This class is plain
+    python, and this file is all of it. What it inherits from GpuTransform is python too
     (``launch()``, ``check_yaml_keys()`` and ``__repr__``, in
-    ``pirate_frb/chimefrb/GpuTransformBase.py``), except the argument checking that
+    ``pirate_frb/chimefrb/GpuTransform.py``), except the argument checking that
     ``launch()`` does before calling your ``launch_checked()``, which is C++; what it checks is
     listed under :meth:`launch_checked`, and a failed check raises ``RuntimeError`` with a
     message that starts with your class's name.
@@ -70,18 +70,18 @@ class GpuPythonTransform(GpuTransformBase):
     python name. When a file is read, a class that is not part of ``pirate_frb.chimefrb`` must
     be handed to the reader::
 
-        WiPipeline.read_yaml_file(path, nbeams=1, nfreq=16384, ntime=4096, classes=[MyTransform])
+        Pipeline.read_yaml_file(path, nbeams=1, nfreq=16384, ntime=4096, classes=[MyTransform])
 
     There is no ``from_json_dict``: the legacy rf_pipelines json describes only the ported
     transforms. ``pirate_frb.chimefrb.transform_io`` states the whole interface.
 
     Three things to know about the class hierarchy. A pipeline accepts any
-    :class:`GpuTransformBase`, C++ or python, so the ``isinstance`` checks in the package test
+    :class:`GpuTransform`, C++ or python, so the ``isinstance`` checks in the package test
     that class, not this one. Subclassing one of the five C++ transforms in python works for
     python methods (a different ``to_yaml_dict``, say), but a ``launch_checked()`` defined
     there is NOT called: those classes' computation is C++, and ``launch()`` runs the C++ one.
     And a subclass that forgets ``super().__init__()`` gets pybind11's ``TypeError:
-    ...GpuTransformBase.__init__() must be called when overriding __init__``, which names the
+    ...GpuTransform.__init__() must be called when overriding __init__``, which names the
     C++ base rather than this class.
 
     Attributes (read-only):
@@ -116,7 +116,7 @@ class GpuPythonTransform(GpuTransformBase):
         raise NotImplementedError(f'{type(self).__name__} must define launch_checked(); see GpuPythonTransform')
 
     def _dispatch_launch_checked(self, intensity, weights, scratch, stream_ptr):
-        # Called from C++ -- GpuTransformBase::launch(), through the pybind11 trampoline in
+        # Called from C++ -- GpuTransform::launch(), through the pybind11 trampoline in
         # src_pybind11/pirate_pybind11_chimefrb.cpp -- after the arguments have been checked.
         # 'scratch' is None when scratch_nelts is 0. Making the stream current is what lets
         # cupy code in launch_checked() run in order with the rest of the chain.

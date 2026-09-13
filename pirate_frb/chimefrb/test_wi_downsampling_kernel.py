@@ -1,8 +1,8 @@
-"""Randomized unit tests for GpuWiDownsampler.
+"""Randomized unit tests for GpuWiDownsamplingKernel.
 
 Dispatched from ``python -m pirate_frb test --cfrb``.
 
-The GPU kernel is checked against ReferenceWiDownsampler, a numpy transcription of the
+The GPU kernel is checked against ReferenceWiDownsamplingKernel, a numpy transcription of the
 old code's own scalar reference. There are no sharp thresholds anywhere in this kernel --
 the only branch is ``out_w > 0``, and a sum of nonnegative floats is zero if and only if
 every term is zero -- so this is a plain float32-tolerance comparison, with none of the
@@ -16,7 +16,7 @@ is for; see notes/chimefrb.md.
 
 import numpy as np
 
-from . import GpuWiDownsampler, ReferenceWiDownsampler
+from . import GpuWiDownsamplingKernel, ReferenceWiDownsamplingKernel
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng
 
@@ -95,7 +95,7 @@ def random_arrays(rng, B, F, T):
 
 
 def _run_gpu(cp, ds, in_i, in_w):
-    """Run one GpuWiDownsampler on numpy inputs; returns numpy (out_i, out_w).
+    """Run one GpuWiDownsamplingKernel on numpy inputs; returns numpy (out_i, out_w).
 
     The output arrays are pre-filled with NaN, and the caller checks that none
     survives: that is what catches a grid-dimension error which silently skips a tile.
@@ -114,14 +114,14 @@ def _run_gpu(cp, ds, in_i, in_w):
     return (cp.asnumpy(g_out_i), cp.asnumpy(g_out_w))
 
 
-def test_wi_downsampler(iteration=0, rng=None, verbose=False):
-    """One randomized comparison of GpuWiDownsampler against ReferenceWiDownsampler."""
+def test_wi_downsampling_kernel(iteration=0, rng=None, verbose=False):
+    """One randomized comparison of GpuWiDownsamplingKernel against its numpy reference."""
 
     try:
         import cupy as cp
     except ImportError:
         if verbose:
-            atomic_print('    test_wi_downsampler: cupy not available, skipped')
+            atomic_print('    test_wi_downsampling_kernel: cupy not available, skipped')
         return
 
     rng = _default_rng(rng)
@@ -132,13 +132,13 @@ def test_wi_downsampler(iteration=0, rng=None, verbose=False):
     (B, F, T) = random_geometry(rng, Df, Dt)
     (in_i, in_w) = random_arrays(rng, B, F, T)
 
-    ds = GpuWiDownsampler(Df, Dt, transpose, W)
+    ds = GpuWiDownsamplingKernel(Df, Dt, transpose, W)
     (gpu_i, gpu_w) = _run_gpu(cp, ds, in_i, in_w)
 
-    assert not np.isnan(gpu_i).any(), 'GpuWiDownsampler left part of out_i unwritten'
-    assert not np.isnan(gpu_w).any(), 'GpuWiDownsampler left part of out_w unwritten'
+    assert not np.isnan(gpu_i).any(), 'GpuWiDownsamplingKernel left part of out_i unwritten'
+    assert not np.isnan(gpu_w).any(), 'GpuWiDownsamplingKernel left part of out_w unwritten'
 
-    (ref_i, ref_w) = ReferenceWiDownsampler(Df, Dt, transpose).apply(in_i, in_w)
+    (ref_i, ref_w) = ReferenceWiDownsamplingKernel(Df, Dt, transpose).apply(in_i, in_w)
 
     # Tolerance: the two sum a (Df,Dt) block in different orders, and the reference sums
     # in float64. The relative error is at the float32 roundoff level times sqrt(Df*Dt),
@@ -156,7 +156,7 @@ def test_wi_downsampler(iteration=0, rng=None, verbose=False):
     for W2 in WARP_COUNTS:
         if W2 == W:
             continue
-        (alt_i, alt_w) = _run_gpu(cp, GpuWiDownsampler(Df, Dt, transpose, W2), in_i, in_w)
+        (alt_i, alt_w) = _run_gpu(cp, GpuWiDownsamplingKernel(Df, Dt, transpose, W2), in_i, in_w)
         assert np.array_equal(alt_i, gpu_i), f'out_i differs between warps_per_block {W} and {W2}'
         assert np.array_equal(alt_w, gpu_w), f'out_w differs between warps_per_block {W} and {W2}'
 
@@ -166,7 +166,7 @@ def test_wi_downsampler(iteration=0, rng=None, verbose=False):
     # matters because the transpose is the one feature the old kernel does not have, and
     # so is the one thing a spot check against the old code cannot cover.
     if (Df, Dt) != (1, 1):
-        (flip_i, flip_w) = _run_gpu(cp, GpuWiDownsampler(Df, Dt, not transpose, W), in_i, in_w)
+        (flip_i, flip_w) = _run_gpu(cp, GpuWiDownsamplingKernel(Df, Dt, not transpose, W), in_i, in_w)
         assert np.array_equal(np.swapaxes(flip_i, 1, 2), gpu_i), 'transpose changes out_i'
         assert np.array_equal(np.swapaxes(flip_w, 1, 2), gpu_w), 'transpose changes out_w'
 
@@ -191,6 +191,6 @@ def test_wi_downsampler(iteration=0, rng=None, verbose=False):
             'the (1,1) transpose did not copy the intensity through exactly'
 
     if verbose:
-        atomic_print(f'    test_wi_downsampler(Df={Df}, Dt={Dt}, transpose={transpose},'
+        atomic_print(f'    test_wi_downsampling_kernel(Df={Df}, Dt={Dt}, transpose={transpose},'
                      f' warps_per_block={W}, B={B}, F={F}, T={T}):'
                      f' max rel err {max(err_i, err_w):.3e}')

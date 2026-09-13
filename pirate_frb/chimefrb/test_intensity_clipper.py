@@ -12,14 +12,14 @@ twice, with sigma perturbed either way.
 The reason is that the production clipper runs nine rounds of refinement. After nine
 rounds, a single sample that lands on the other side of a threshold in float32 than in
 float64 has moved everything downstream: comparing two full refinement chains is a coin
-flip, not a test (test_wrms.py's docstring has the measured numbers). Feeding both sides
+flip, not a test (test_wrms_kernel.py's docstring has the measured numbers). Feeding both sides
 the same (mean, var) removes the amplification entirely, and the statistic is not left
-untested -- test_wrms.py tests it, with its own induction.
+untested -- test_wrms_kernel.py tests it, with its own induction.
 
 Rebuilding the clipper's internal pipeline from public pieces is also a real test in its
-own right: it asserts that the class wires GpuWiDownsampler -> GpuWiDownsampler(transpose)
--> GpuWrms together the way its header says it does, which is where an axis or transpose
-bug would live.
+own right: it asserts that the class wires GpuWiDownsamplingKernel ->
+GpuWiDownsamplingKernel(transpose) -> GpuWrmsKernel together the way its header says it
+does, which is where an axis or transpose bug would live.
 
 The end-to-end comparison against the float64 ReferenceIntensityClipper is confined to
 niter=1, where there are no refinements and nothing can amplify. That is what checks the
@@ -33,8 +33,8 @@ is what misc/chimefrb/spot_checks/rfi_intensity_clipper/ is for.
 import numpy as np
 
 from . import (GpuIntensityClipper,
-               GpuWiDownsampler, GpuWrms, ReferenceIntensityClipper, intensity_clip)
-from .test_wrms import EPS32, MARGIN
+               GpuWiDownsamplingKernel, GpuWrmsKernel, ReferenceIntensityClipper, intensity_clip)
+from .test_wrms_kernel import EPS32, MARGIN
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng, plant_degenerate_rows, random_wi_pair
 
@@ -63,10 +63,10 @@ SIGMA_BRACKET = 1.0e-4
 # tolerance. 1.5 rejects more variances (clips more), 0.5 fewer.
 EPS_HI, EPS_LO = 1.5, 0.5
 
-# GpuWrms switches from its shared-memory kernel to its global-memory one when a row stops
+# GpuWrmsKernel switches from its shared-memory kernel to its global-memory one when a row stops
 # fitting in shared memory. Asked for rather than recomputed, so that the test cannot drift
 # from the kernel's own idea of where the boundary is.
-L_SHARED_MAX = GpuWrms.max_shared_L()
+L_SHARED_MAX = GpuWrmsKernel.max_shared_L()
 
 
 def random_config(rng):
@@ -100,11 +100,11 @@ def random_geometry(rng, axis, Df, Dt):
 
     Writing F_ds = 32*a and T_ds = 32*b, the statistic's row length L is 32*b for
     'time', 32*a for 'freq', and 1024*a*b for 'none'. Only the last can reach
-    GpuWrms's global-memory kernel at any geometry small enough to test, so 'none'
+    GpuWrmsKernel's global-memory kernel at any geometry small enough to test, so 'none'
     draws sometimes put a*b either side of the threshold on purpose: a shared-memory
     budget that forgets an allocation fails to launch only in a narrow band, which a
     uniform draw hides for a long time (that is not hypothetical -- it is what happened
-    to GpuWrms).
+    to GpuWrmsKernel).
     """
 
     B = int(rng.integers(1, 4))
@@ -192,14 +192,14 @@ def _run_pipeline(cp, ic, in_i, in_w):
     if (ic.Df, ic.Dt) != (1, 1):
         ds_i = cp.empty((ic.nbeams, ic.F_ds, ic.T_ds), dtype=cp.float32)
         ds_w = cp.empty((ic.nbeams, ic.F_ds, ic.T_ds), dtype=cp.float32)
-        GpuWiDownsampler(ic.Df, ic.Dt, False).launch(ds_i, ds_w, g_i, g_w)
+        GpuWiDownsamplingKernel(ic.Df, ic.Dt, False).launch(ds_i, ds_w, g_i, g_w)
     else:
         (ds_i, ds_w) = (g_i, g_w)
 
     if ic.axis == 'freq':
         t_i = cp.empty((ic.nbeams, ic.T_ds, ic.F_ds), dtype=cp.float32)
         t_w = cp.empty((ic.nbeams, ic.T_ds, ic.F_ds), dtype=cp.float32)
-        GpuWiDownsampler(1, 1, True).launch(t_i, t_w, ds_i, ds_w)
+        GpuWiDownsamplingKernel(1, 1, True).launch(t_i, t_w, ds_i, ds_w)
         (st_i, st_w) = (t_i, t_w)
     else:
         (st_i, st_w) = (ds_i, ds_w)
@@ -207,7 +207,7 @@ def _run_pipeline(cp, ic, in_i, in_w):
     mean = cp.empty(ic.wrms_R, dtype=cp.float32)
     var = cp.empty(ic.wrms_R, dtype=cp.float32)
 
-    wrms = GpuWrms(ic.wrms_L, ic.niter, ic.iter_sigma, ic.two_pass)
+    wrms = GpuWrmsKernel(ic.wrms_L, ic.niter, ic.iter_sigma, ic.two_pass)
     wrms.launch(mean, var, st_i.reshape(ic.wrms_R, ic.wrms_L),
                 st_w.reshape(ic.wrms_R, ic.wrms_L))
 
@@ -239,7 +239,7 @@ def _sigma_bracket(L, two_pass, sigma, mean, var):
     of magnitude too tight. (Measured: it fails on roughly one draw in 250, always on the
     single-pass path, always with |mean|/rms in the tens.)
 
-    The budget is test_wrms's, imported rather than restated so that the port has one
+    The budget is test_wrms_kernel's, imported rather than restated so that the port has one
     error model rather than two. Converting it to a sigma perturbation: the threshold moves
     by sigma*eps_r, and the mean moves the compared quantity by eps_m, so the relative
     perturbation that covers both is eps_r/rms + eps_m/(sigma*rms). The max over rows is
@@ -356,7 +356,7 @@ def test_intensity_clipper(iteration=0, rng=None, verbose=False):
     # Structural check 1: 'freq' equals 'time' on the transposed input, BITWISE.
     # The FREQ path transposes and then reduces rows, which is the same kernel on the same
     # values in the same order as the TIME path on pre-transposed input, so there is no
-    # roundoff to allow for -- provided GpuWiDownsampler's (1,1) transpose copies the
+    # roundoff to allow for -- provided GpuWiDownsamplingKernel's (1,1) transpose copies the
     # intensity through exactly, which it does. This is the cheapest strong check on the
     # transpose plumbing, and it needs no reference at all.
     if (Df == 1) and (Dt == 1) and (axis == 'freq'):
@@ -378,7 +378,7 @@ def test_intensity_clipper(iteration=0, rng=None, verbose=False):
         'a (Df,Dt) cell was partially masked; the clip must zero a cell as a unit'
 
     # Structural check 3: warps_per_block is a performance knob, and must not change the
-    # answer. Bitwise, and safe at any niter -- unlike GpuWrms's threads_per_block, this
+    # answer. Bitwise, and safe at any niter -- unlike GpuWrmsKernel's threads_per_block, this
     # knob changes nothing inside the statistic.
     for w2 in WARP_COUNTS:
         if w2 == warps:

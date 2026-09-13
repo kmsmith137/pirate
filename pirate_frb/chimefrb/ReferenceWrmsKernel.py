@@ -1,15 +1,15 @@
-"""Numpy reference for GpuWrms, plus that class's method injections.
+"""Numpy reference for GpuWrmsKernel, plus that class's method injections.
 
 The primitive wrms_iterate() is transcribed from _ref_wrms_iterate() in
 ../../extern/rf_kernels/test-intensity-clipper.cpp, which is the old code's own scalar
-reference for rf_kernels::weighted_mean_rms. ReferenceWrms then assembles a whole wrms
+reference for rf_kernels::weighted_mean_rms. ReferenceWrmsKernel then assembles a whole wrms
 from it the same way reference_wrms_compute() does.
 """
 
 import numpy as np
 
 import ksgpu
-from ..pirate_pybind11 import GpuWrms
+from ..pirate_pybind11 import GpuWrmsKernel
 
 
 # The variance-validity cutoffs, as FLOAT32 constants even though this reference runs in
@@ -20,14 +20,14 @@ EPS_2 = 1.0e2 * EPS_MACH_F32
 EPS_3 = 1.0e3 * EPS_MACH_F32
 
 
-@ksgpu.inject_methods(GpuWrms)
-class GpuWrmsInjections:
-    # No class docstring here: GpuWrms's docstring lives in the pybind11 binding
+@ksgpu.inject_methods(GpuWrmsKernel)
+class GpuWrmsKernelInjections:
+    # No class docstring here: GpuWrmsKernel's docstring lives in the pybind11 binding
     # (option 1 in notes/docstrings.md); this injector adds a stream argument for
     # launch(), and lets the caller omit the scratch array.
 
     # Save reference to C++ method
-    _cpp_launch = GpuWrms.launch
+    _cpp_launch = GpuWrmsKernel.launch
 
     def launch(self, mean, var, in_i, in_w, scratch=None, stream=None):
         """GPU kernel launch (async, does not sync stream).
@@ -65,7 +65,7 @@ def wrms_iterate(mean_in, I, W, eps_multiplier=1.0):
     rejected variance becomes exactly zero while the mean is updated anyway.
 
     'eps_multiplier' scales both variance-validity cutoffs. It exists for the bracketing
-    in test_wrms.py: running the reference at 0.5 and 1.5 brackets the cutoff decision, so
+    in test_wrms_kernel.py: running the reference at 0.5 and 1.5 brackets the cutoff decision, so
     that a kernel which lands on the other side of it near roundoff is not called wrong.
     """
 
@@ -101,15 +101,15 @@ def iclip(mean, thresh, I, W):
     row -- that is how a rejected variance propagates.
 
     This is also what the intensity_clipper applies to the weights at the end of its run,
-    which is the identity the induction in test_wrms.py rests on.
+    which is the identity the induction in test_wrms_kernel.py rests on.
     """
 
     survive = np.abs(I - np.asarray(mean)[:, None]) < np.asarray(thresh)[:, None]
     return np.where(survive, W, 0)
 
 
-class ReferenceWrms:
-    """Numpy reference for GpuWrms (src_lib/chimefrb/Wrms.cu).
+class ReferenceWrmsKernel:
+    """Numpy reference for GpuWrmsKernel (src_lib/chimefrb/WrmsKernel.cu).
 
     Same semantics, same argument names, one output per row of an (R, L) array.
 
@@ -119,7 +119,7 @@ class ReferenceWrms:
     old code's own reference does. The two agree except for rows whose variance sits
     within roundoff of a validity cutoff, because the kernel's two-pass 'finalize' has no
     '- dmean^2' term and applies only the eps_2 cutoff where a second iterate applies
-    both. Bracketing with eps_multiplier is what covers that corner; see test_wrms.py.
+    both. Bracketing with eps_multiplier is what covers that corner; see test_wrms_kernel.py.
     """
 
     def __init__(self, niter, iter_sigma, two_pass, eps_multiplier=1.0, dtype=np.float64):

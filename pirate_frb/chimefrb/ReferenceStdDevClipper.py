@@ -4,7 +4,7 @@ The std_dev_clipper flags whole channels (axis 'time') or whole time samples (ax
 NOISE LEVEL is anomalous: it computes one variance per row, then clips outliers in that
 array of variances.
 
-Stage 1 -- one variance per row -- is ReferenceWrms at niter=1, already validated against
+Stage 1 -- one variance per row -- is ReferenceWrmsKernel at niter=1, already validated against
 rf_kernels. Stage 2 is clip_1d() below, transcribed from std_dev_clipper.cpp::_clip_1d() in
 ../../extern/rf_kernels. That function has no reference implementation anywhere in the old
 code (its own comment says it was never unit-tested), so clip_1d() is a genuinely new test of
@@ -17,8 +17,8 @@ import ksgpu
 from ..pirate_pybind11 import GpuStdDevClipper
 from .transform_io import (axis_from_json, check_json_keys)
 from .ReferenceIntensityClipper import wrms_view
-from .ReferenceWiDownsampler import ReferenceWiDownsampler
-from .ReferenceWrms import ReferenceWrms
+from .ReferenceWiDownsamplingKernel import ReferenceWiDownsamplingKernel
+from .ReferenceWrmsKernel import ReferenceWrmsKernel
 
 
 # The yaml keys of GpuStdDevClipper, which are also its constructor's argument names after
@@ -29,7 +29,7 @@ STD_DEV_CLIPPER_YAML_KEYS = ('nt_chunk', 'axis', 'sigma', 'Df', 'Dt', 'two_pass'
 @ksgpu.inject_methods(GpuStdDevClipper)
 class GpuStdDevClipperInjections:
     # No class docstring here: GpuStdDevClipper's docstring lives in the pybind11 binding
-    # (option 1 in notes/docstrings.md). launch() is inherited from GpuTransformBase; this
+    # (option 1 in notes/docstrings.md). launch() is inherited from GpuTransform; this
     # injector adds the yaml and legacy-json methods (transform_io.py).
 
     def to_yaml_dict(self):
@@ -127,8 +127,8 @@ def std_dev_apply(weights, v, axis, Df, Dt):
 class ReferenceStdDevClipper:
     """Numpy reference for GpuStdDevClipper (src_lib/chimefrb/StdDevClipper.cu).
 
-    Same semantics and argument names, in float64. Stage 1 is ReferenceWiDownsampler, then
-    ReferenceWrms at niter=1 on the wrms_view() of the downsampled pair; stage 2 is clip_1d()
+    Same semantics and argument names, in float64. Stage 1 is ReferenceWiDownsamplingKernel, then
+    ReferenceWrmsKernel at niter=1 on the wrms_view() of the downsampled pair; stage 2 is clip_1d()
     per beam; then std_dev_apply(). Axis 'none' is rejected, as in the old code.
 
     Like ReferenceIntensityClipper, this implements T = N*nt_chunk, which the GPU class does
@@ -170,8 +170,8 @@ class ReferenceStdDevClipper:
         (B, F, T) = I.shape
         assert (self.nt_chunk is None) or (T == self.nt_chunk)
 
-        (i_ds, w_ds) = ReferenceWiDownsampler(self.Df, self.Dt, transpose=False).apply(I, W)
-        wrms = ReferenceWrms(1, 0.0, self.two_pass, eps_multiplier=self.eps_multiplier)
+        (i_ds, w_ds) = ReferenceWiDownsamplingKernel(self.Df, self.Dt, transpose=False).apply(I, W)
+        wrms = ReferenceWrmsKernel(1, 0.0, self.two_pass, eps_multiplier=self.eps_multiplier)
         (mean, var) = wrms.apply(wrms_view(i_ds, self.axis), wrms_view(w_ds, self.axis))
         return (mean.reshape(B, -1), var.reshape(B, -1))
 

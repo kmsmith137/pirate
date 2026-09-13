@@ -1,6 +1,6 @@
 #include "../../include/pirate/chimefrb/ClipperBase.hpp"
-#include "../../include/pirate/chimefrb/WiDownsampler.hpp"
-#include "../../include/pirate/chimefrb/Wrms.hpp"
+#include "../../include/pirate/chimefrb/WiDownsamplingKernel.hpp"
+#include "../../include/pirate/chimefrb/WrmsKernel.hpp"
 
 #include <sstream>
 #include <ksgpu/xassert.hpp>
@@ -18,7 +18,7 @@ namespace chimefrb {
 // -------------------------------------------------------------------------------------------------
 //
 // Constructor helpers. The clipper's argument checks and its scratch size are computed by
-// _checked_scratch_nelts(), which runs as the GpuTransformBase constructor's argument --
+// _checked_scratch_nelts(), which runs as the GpuTransform constructor's argument --
 // i.e. before anything else, since the base class is initialized before any member. That
 // is what lets the derived members below divide by Df and Dt safely, and what makes
 // scratch_nelts (a const member of the base) known in time.
@@ -27,7 +27,7 @@ namespace chimefrb {
 static void _check_args(const char *name, long nfreq, long ntime, long nt_chunk,
                         long Df, long Dt, long niter, double iter_sigma)
 {
-    // nbeams, nfreq and ntime >= 1 are GpuTransformBase's checks.
+    // nbeams, nfreq and ntime >= 1 are GpuTransform's checks.
     if (nt_chunk < 1)
         throw runtime_error(string(name) + ": expected nt_chunk >= 1");
     if (ntime != nt_chunk) {
@@ -49,7 +49,7 @@ static void _check_args(const char *name, long nfreq, long ntime, long nt_chunk,
     if (iter_sigma < 0.0)
         throw runtime_error(string(name) + ": expected iter_sigma >= 0");
 
-    // One uniform rule at every axis and every (Df,Dt). The 32 is GpuWiDownsampler's
+    // One uniform rule at every axis and every (Df,Dt). The 32 is GpuWiDownsamplingKernel's
     // output tile size and the clip kernels' warp width. It is slightly stronger than
     // strictly necessary -- ClipperAxis::TIME and ::NONE at (Df,Dt)=(1,1) run no downsampler,
     // and so need only nt_chunk % 32 == 0 -- but one rule is worth more than the extra
@@ -92,7 +92,7 @@ static long _wrms_R(ClipperAxis axis, long B, long F_ds, long T_ds)
 //    (I_ds, W_ds)   ncell each, only when (Df,Dt) != (1,1)
 //    (I_t,  W_t)    ncell each, only when axis == FREQ
 //    mean, var      wrms_R each
-//    GpuWrms        its own scratch, nonzero only on the global-memory path
+//    GpuWrmsKernel        its own scratch, nonzero only on the global-memory path
 //
 static long _checked_scratch_nelts(const char *name, long B, long nfreq, long ntime, long nt_chunk,
                                    ClipperAxis axis, long Df, long Dt, long niter,
@@ -111,7 +111,7 @@ static long _checked_scratch_nelts(const char *name, long B, long nfreq, long nt
     if (axis == ClipperAxis::FREQ)
         n += 2*ncell;
 
-    GpuWrms wrms(_wrms_L(axis, F_ds, T_ds), niter, iter_sigma, two_pass);
+    GpuWrmsKernel wrms(_wrms_L(axis, F_ds, T_ds), niter, iter_sigma, two_pass);
     return n + wrms.scratch_nelts(R);
 }
 
@@ -119,9 +119,9 @@ static long _checked_scratch_nelts(const char *name, long B, long nfreq, long nt
 GpuClipperBase::GpuClipperBase(const char *name_, long nbeams_, long nfreq_, long ntime_,
                                long nt_chunk_, ClipperAxis axis_, long Df_, long Dt_,
                                long niter_, double iter_sigma_, bool two_pass_) :
-    GpuTransformBase(name_, nbeams_, nfreq_, ntime_,
-                     _checked_scratch_nelts(name_, nbeams_, nfreq_, ntime_, nt_chunk_, axis_, Df_, Dt_,
-                                            niter_, iter_sigma_, two_pass_)),
+    GpuTransform(name_, nbeams_, nfreq_, ntime_,
+                 _checked_scratch_nelts(name_, nbeams_, nfreq_, ntime_, nt_chunk_, axis_, Df_, Dt_,
+                                        niter_, iter_sigma_, two_pass_)),
     nt_chunk(nt_chunk_), axis(axis_), Df(Df_), Dt(Dt_),
     niter(niter_), iter_sigma(iter_sigma_), two_pass(two_pass_),
     F_ds(nfreq_ / Df_), T_ds(nt_chunk_ / Dt_),
@@ -150,7 +150,7 @@ GpuClipperBase::_launch_statistic(const Array<float> &intensity, const Array<flo
     if (need_ds) {
         out.cell_i = carve_scratch(scratch, pos, {nbeams, F_ds, T_ds});
         cell_w = carve_scratch(scratch, pos, {nbeams, F_ds, T_ds});
-        GpuWiDownsampler(Df, Dt, false).launch(out.cell_i, cell_w, intensity, weights, stream);
+        GpuWiDownsamplingKernel(Df, Dt, false).launch(out.cell_i, cell_w, intensity, weights, stream);
     }
 
     // Step 1b: for ClipperAxis::FREQ, transpose the (small) downsampled arrays so that the
@@ -168,7 +168,7 @@ GpuClipperBase::_launch_statistic(const Array<float> &intensity, const Array<flo
     if (axis == ClipperAxis::FREQ) {
         stat_i = carve_scratch(scratch, pos, {nbeams, T_ds, F_ds});
         stat_w = carve_scratch(scratch, pos, {nbeams, T_ds, F_ds});
-        GpuWiDownsampler(1, 1, true).launch(stat_i, stat_w, out.cell_i, cell_w, stream);
+        GpuWiDownsamplingKernel(1, 1, true).launch(stat_i, stat_w, out.cell_i, cell_w, stream);
     }
 
     // Step 2: the statistic. All three axes are now "one output per row of a contiguous
@@ -180,7 +180,7 @@ GpuClipperBase::_launch_statistic(const Array<float> &intensity, const Array<flo
     out.mean = carve_scratch(scratch, pos, {wrms_R});
     out.var = carve_scratch(scratch, pos, {wrms_R});
 
-    GpuWrms wrms(wrms_L, niter, iter_sigma, two_pass);
+    GpuWrmsKernel wrms(wrms_L, niter, iter_sigma, two_pass);
     long nw = wrms.scratch_nelts(wrms_R);
     Array<float> wrms_scratch = (nw > 0) ? carve_scratch(scratch, pos, {nw}) : Array<float>();
 

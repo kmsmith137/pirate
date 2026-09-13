@@ -1,4 +1,4 @@
-"""Randomized unit tests for GpuWrms.
+"""Randomized unit tests for GpuWrmsKernel.
 
 Dispatched from ``python -m pirate_frb test --cfrb``.
 
@@ -8,7 +8,7 @@ code's own unit test (rf_kernels/test-intensity-clipper.cpp) rather than invente
 BRACKETING, for the variance-validity cutoffs. A row whose variance falls below
 (eps_2*mean)^2 or eps_3*mean^2 is declared dead and its variance set to exactly zero. The
 kernel and the reference do not evaluate those cutoffs in identical arithmetic -- see
-ReferenceWrms's docstring -- so instead of a tolerance we bracket the decision: run the
+ReferenceWrmsKernel's docstring -- so instead of a tolerance we bracket the decision: run the
 reference at eps_multiplier 0.5 and 1.5, and require the kernel's set of valid rows to lie
 between the conservative and permissive ones. Only then are the numbers compared, and only
 on rows both call valid.
@@ -32,7 +32,7 @@ That induction has a hole, and it is closed elsewhere on purpose: the survivor s
 feeds the reference comes from our own iclip(), so a wrong comparison in the kernel's
 refinement would cancel out. What closes it is that the kernel's refinement and (later)
 the intensity_clipper's final clip share one __device__ predicate, wrms_survives() in
-include/pirate/chimefrb/Wrms.hpp, and the final clip IS tested against an independent
+include/pirate/chimefrb/WrmsKernel.hpp, and the final clip IS tested against an independent
 reference. The spot check in misc/chimefrb/spot_checks/rfi_wrms/ closes it too, by running the old
 kernel's own internal masking.
 
@@ -50,7 +50,7 @@ misreading would pass everything here. That is what the spot check is for.
 
 import numpy as np
 
-from . import GpuWrms, ReferenceWrms, wrms_iterate, iclip
+from . import GpuWrmsKernel, ReferenceWrmsKernel, wrms_iterate, iclip
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng, plant_degenerate_rows, random_wi_pair
 
@@ -61,7 +61,7 @@ THREAD_COUNTS = [128, 256, 512, 1024]
 # stops fitting in shared memory. Asked for rather than recomputed: the budget has to
 # leave room for the block-reduction buffer as well as the row, and a test that worked
 # that out for itself would be free to get it wrong in the same way the kernel once did.
-L_SHARED_MAX = GpuWrms.max_shared_L()
+L_SHARED_MAX = GpuWrmsKernel.max_shared_L()
 
 
 def random_config(rng):
@@ -130,7 +130,7 @@ def random_arrays(rng, R, L):
 
 
 def _run_gpu(cp, wrms, in_i, in_w):
-    """Run one GpuWrms on numpy inputs; returns numpy (mean, var).
+    """Run one GpuWrmsKernel on numpy inputs; returns numpy (mean, var).
 
     The outputs are pre-filled with NaN, and the caller checks that none survives: that
     is what catches a row the kernel never wrote.
@@ -144,9 +144,9 @@ def _run_gpu(cp, wrms, in_i, in_w):
     cp.cuda.get_current_stream().synchronize()
 
     (mean, var) = (cp.asnumpy(g_mean), cp.asnumpy(g_var))
-    assert not np.isnan(mean).any(), 'GpuWrms left part of mean unwritten'
-    assert not np.isnan(var).any(), 'GpuWrms left part of var unwritten'
-    assert np.all(var >= 0.0), 'GpuWrms returned a negative variance'
+    assert not np.isnan(mean).any(), 'GpuWrmsKernel left part of mean unwritten'
+    assert not np.isnan(var).any(), 'GpuWrmsKernel left part of var unwritten'
+    assert np.all(var >= 0.0), 'GpuWrmsKernel returned a negative variance'
     return (mean, var)
 
 
@@ -226,18 +226,18 @@ def _check(label, L, two_pass, got_mean, got_var, ref):
 def _reference_triple(niter, iter_sigma, two_pass, I, W):
     """The reference at eps_multiplier 0.5, 1.0 and 1.5."""
 
-    return {e: ReferenceWrms(niter, iter_sigma, two_pass, eps_multiplier=e).apply(I, W)
+    return {e: ReferenceWrmsKernel(niter, iter_sigma, two_pass, eps_multiplier=e).apply(I, W)
             for e in (0.5, 1.0, 1.5)}
 
 
-def test_wrms(iteration=0, rng=None, verbose=False):
-    """One randomized comparison of GpuWrms against ReferenceWrms."""
+def test_wrms_kernel(iteration=0, rng=None, verbose=False):
+    """One randomized comparison of GpuWrmsKernel against ReferenceWrmsKernel."""
 
     try:
         import cupy as cp
     except ImportError:
         if verbose:
-            atomic_print('    test_wrms: cupy not available, skipped')
+            atomic_print('    test_wrms_kernel: cupy not available, skipped')
         return
 
     rng = _default_rng(rng)
@@ -248,7 +248,7 @@ def test_wrms(iteration=0, rng=None, verbose=False):
     I = in_i.astype(np.float64)
     W = in_w.astype(np.float64)
 
-    wrms = GpuWrms(L, niter, iter_sigma, two_pass, tpb)
+    wrms = GpuWrmsKernel(L, niter, iter_sigma, two_pass, tpb)
     (gpu_mean, gpu_var) = _run_gpu(cp, wrms, in_i, in_w)
 
     if niter == 1:
@@ -259,7 +259,7 @@ def test_wrms(iteration=0, rng=None, verbose=False):
         (rm, rr, nboth) = _check('niter=1', L, two_pass, gpu_mean, gpu_var, ref)
     else:
         # Inductive step: one reference refinement from the KERNEL's own niter-1 state.
-        prev = GpuWrms(L, niter-1, iter_sigma, two_pass, tpb)
+        prev = GpuWrmsKernel(L, niter-1, iter_sigma, two_pass, tpb)
         (pm, pv) = _run_gpu(cp, prev, in_i, in_w)
 
         Wk = iclip(pm, iter_sigma * np.sqrt(pv), I, W)
@@ -293,7 +293,7 @@ def test_wrms(iteration=0, rng=None, verbose=False):
     ref1 = ref if (niter == 1) else _reference_triple(1, iter_sigma, two_pass, I, W)
 
     for tpb2 in THREAD_COUNTS:
-        (m2, v2) = _run_gpu(cp, GpuWrms(L, 1, iter_sigma, two_pass, tpb2), in_i, in_w)
+        (m2, v2) = _run_gpu(cp, GpuWrmsKernel(L, 1, iter_sigma, two_pass, tpb2), in_i, in_w)
         _check(f'niter=1, tpb={tpb2}', L, two_pass, m2, v2, ref1)
 
     # Structural check 2: rows are independent. Catches a scratch-indexing error on the
@@ -315,7 +315,7 @@ def test_wrms(iteration=0, rng=None, verbose=False):
     # Structural check 4: determinism. Catches races and uninitialized scratch.
     (m_d, v_d) = _run_gpu(cp, wrms, in_i, in_w)
     assert np.array_equal(m_d, gpu_mean) and np.array_equal(v_d, gpu_var), \
-        'GpuWrms is not deterministic'
+        'GpuWrmsKernel is not deterministic'
 
     # Structural check 5: a dead row stays dead. A row with no weight has no statistic at
     # any niter, and a rejected variance must not come back to life in a later refinement
@@ -327,6 +327,6 @@ def test_wrms(iteration=0, rng=None, verbose=False):
 
     if verbose:
         path = 'shared' if wrms.is_shared_memory_path else 'global'
-        atomic_print(f'    test_wrms(L={L}, R={R}, niter={niter}, two_pass={two_pass},'
+        atomic_print(f'    test_wrms_kernel(L={L}, R={R}, niter={niter}, two_pass={two_pass},'
                      f' tpb={tpb}, {path}): {nboth} rows compared,'
                      f' mean {rm:.2f}x budget, rms {rr:.2f}x budget')

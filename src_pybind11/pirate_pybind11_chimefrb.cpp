@@ -4,10 +4,10 @@
 //
 // Method injections, if any, live in pirate_frb/chimefrb/Reference<ClassName>.py:
 //   - AssembledChunk: none
-//   - GpuWiDownsampler: launch() converts stream=None to the current cupy stream
-//   - GpuWrms: same, and lets the caller omit the scratch array
-//   - GpuWeightUpsampler: launch() converts stream=None to the current cupy stream
-//   - GpuTransformBase (injections in pirate_frb/chimefrb/GpuTransformBase.py, not a
+//   - GpuWiDownsamplingKernel: launch() converts stream=None to the current cupy stream
+//   - GpuWrmsKernel: same, and lets the caller omit the scratch array
+//   - GpuWtUpsamplingKernel: launch() converts stream=None to the current cupy stream
+//   - GpuTransform (injections in pirate_frb/chimefrb/GpuTransform.py, not a
 //     Reference*.py): the python side shared by every transform, C++ or python --
 //     launch() with stream=None and scratch=None handling, the check_yaml_keys()
 //     classmethod, __repr__. The python side specific to transforms WRITTEN in python
@@ -36,10 +36,10 @@
 #include "../include/pirate/chimefrb/PolynomialDetrender.hpp"
 #include "../include/pirate/chimefrb/SplineDetrender.hpp"
 #include "../include/pirate/chimefrb/StdDevClipper.hpp"
-#include "../include/pirate/chimefrb/TransformBase.hpp"
-#include "../include/pirate/chimefrb/WeightUpsampler.hpp"
-#include "../include/pirate/chimefrb/WiDownsampler.hpp"
-#include "../include/pirate/chimefrb/Wrms.hpp"
+#include "../include/pirate/chimefrb/Transform.hpp"
+#include "../include/pirate/chimefrb/WtUpsamplingKernel.hpp"
+#include "../include/pirate/chimefrb/WiDownsamplingKernel.hpp"
+#include "../include/pirate/chimefrb/WrmsKernel.hpp"
 #include "../include/pirate/SlabAllocator.hpp"
 
 using namespace std;
@@ -98,34 +98,34 @@ static Array<float> _decode_dst(const AssembledChunk &self, optional<Array<float
 }
 
 
-// PyGpuTransformBase: the python side of GpuTransformBase (a pybind11 "trampoline"). When a
-// python class subclasses GpuTransformBase, pybind11 constructs this class in its place, so
-// that launch_checked() -- called by GpuTransformBase::launch() after the argument checks --
+// PyGpuTransform: the python side of GpuTransform (a pybind11 "trampoline"). When a
+// python class subclasses GpuTransform, pybind11 constructs this class in its place, so
+// that launch_checked() -- called by GpuTransform::launch() after the argument checks --
 // reaches the python subclass. It hands everything to ONE python method,
 // GpuPythonTransform._dispatch_launch_checked() (pirate_frb/chimefrb/GpuPythonTransform.py),
 // which makes the stream current and calls the subclass's launch_checked(intensity,
 // weights, scratch). Keeping the stream and scratch handling in python keeps it readable
-// from python. A python class that subclasses GpuTransformBase directly, rather than
+// from python. A python class that subclasses GpuTransform directly, rather than
 // GpuPythonTransform, has no such method, and its first launch() is refused here.
 //
 // The three arrays reach python as new cupy objects on the caller's memory (the ksgpu
 // caster's DLPack export), so in-place writes in launch_checked() land in the caller's
 // arrays. 'scratch' is passed as None when scratch_nelts == 0.
-struct PyGpuTransformBase : public GpuTransformBase
+struct PyGpuTransform : public GpuTransform
 {
-    using GpuTransformBase::GpuTransformBase;
+    using GpuTransform::GpuTransform;
 
     void launch_checked(Array<float> &intensity, Array<float> &weights,
                         Array<float> &scratch, cudaStream_t stream) const override
     {
         py::gil_scoped_acquire gil;   // launch() is bound with the GIL released
 
-        py::function f = py::get_override(static_cast<const GpuTransformBase *>(this),
+        py::function f = py::get_override(static_cast<const GpuTransform *>(this),
                                           "_dispatch_launch_checked");
         if (!f)
             throw std::runtime_error(name + ": a transform written in python must derive from"
                                      " GpuPythonTransform (pirate_frb.chimefrb), not from"
-                                     " GpuTransformBase directly; see GpuPythonTransform.py");
+                                     " GpuTransform directly; see GpuPythonTransform.py");
 
         py::object s = (scratch_nelts > 0) ? py::cast(scratch) : py::object(py::none());
         f(intensity, weights, s, reinterpret_cast<uintptr_t>(stream));
@@ -257,9 +257,10 @@ void register_chimefrb_bindings(pybind11::module &m)
             "extra masking source: decode_weights() already zeroes those samples.")
         ;
 
-    // GpuWiDownsampler: Python injections in pirate_frb/chimefrb/ReferenceWiDownsampler.py:
+    // GpuWiDownsamplingKernel: Python injections in
+    // pirate_frb/chimefrb/ReferenceWiDownsamplingKernel.py:
     //   - launch: converts stream=None to current cupy stream
-    py::class_<GpuWiDownsampler>(m, "GpuWiDownsampler",
+    py::class_<GpuWiDownsamplingKernel>(m, "GpuWiDownsamplingKernel",
         "Reduces an (intensity, weights) pair by a factor Df in frequency and Dt in time,\n"
         "using the normalization of the old CHIME FRB search::\n"
         "\n"
@@ -282,7 +283,7 @@ void register_chimefrb_bindings(pybind11::module &m)
 
         .def(py::init<long, long, bool, long>(),
             py::arg("Df"), py::arg("Dt"), py::arg("transpose"), py::arg("warps_per_block") = 32,
-            "Create a GpuWiDownsampler.\n"
+            "Create a GpuWiDownsamplingKernel.\n"
             "\n"
             "Args:\n"
             "    Df: frequency downsampling factor\n"
@@ -295,20 +296,20 @@ void register_chimefrb_bindings(pybind11::module &m)
             "    RuntimeError: on Df < 1, Dt < 1, an unsupported warps_per_block, or\n"
             "        (Df, Dt, transpose) = (1, 1, False), which is the identity.")
 
-        .def_readonly("Df", &GpuWiDownsampler::Df, "Frequency downsampling factor")
-        .def_readonly("Dt", &GpuWiDownsampler::Dt, "Time downsampling factor")
-        .def_readonly("transpose", &GpuWiDownsampler::transpose,
+        .def_readonly("Df", &GpuWiDownsamplingKernel::Df, "Frequency downsampling factor")
+        .def_readonly("Dt", &GpuWiDownsamplingKernel::Dt, "Time downsampling factor")
+        .def_readonly("transpose", &GpuWiDownsamplingKernel::transpose,
             "If True, output axes are (beam, time, freq)")
-        .def_readonly("warps_per_block", &GpuWiDownsampler::warps_per_block,
+        .def_readonly("warps_per_block", &GpuWiDownsamplingKernel::warps_per_block,
             "Warps sharing one 32-by-32 output tile (4, 8, 16 or 32)")
 
-        .def_static("time_selected", &GpuWiDownsampler::time_selected,
+        .def_static("time_selected", &GpuWiDownsamplingKernel::time_selected,
             py::call_guard<py::gil_scoped_release>(),
             "Run timing benchmarks, for the (Df, Dt, transpose) configurations used by the\n"
             "old search's production RFI chain (called via 'python -m pirate_frb time --cfrb')")
 
         .def("launch",
-            [](const GpuWiDownsampler &self, Array<float> &out_i, Array<float> &out_w,
+            [](const GpuWiDownsamplingKernel &self, Array<float> &out_i, Array<float> &out_w,
                const Array<float> &in_i, const Array<float> &in_w, uintptr_t stream_ptr) {
                 cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                 self.launch(out_i, out_w, in_i, in_w, stream);
@@ -334,9 +335,9 @@ void register_chimefrb_bindings(pybind11::module &m)
             "        output tile size, and the kernel has no edge predication).")
         ;
 
-    // GpuWrms: Python injections in pirate_frb/chimefrb/ReferenceWrms.py:
+    // GpuWrmsKernel: Python injections in pirate_frb/chimefrb/ReferenceWrmsKernel.py:
     //   - launch: converts stream=None to current cupy stream, allocates scratch=None
-    py::class_<GpuWrms>(m, "GpuWrms",
+    py::class_<GpuWrmsKernel>(m, "GpuWrmsKernel",
         "The weighted mean and variance of each row of an (R, L) array, refined by\n"
         "iterated sigma clipping. A port of rf_kernels::weighted_mean_rms, and the\n"
         "statistic both chimefrb clippers are built on.\n"
@@ -346,7 +347,7 @@ void register_chimefrb_bindings(pybind11::module &m)
         "\n"
         "The three clipper axes all arrive here as row reductions of a contiguous 2-D\n"
         "array, so this class knows nothing about frequencies, times or axes: the caller\n"
-        "views GpuWiDownsampler's output as (R, L), and the whole-plane case is the same\n"
+        "views GpuWiDownsamplingKernel's output as (R, L), and the whole-plane case is the same\n"
         "thing with one long row.\n"
         "\n"
         "Two things are easy to misread: 'niter' counts TOTAL passes, so niter=1 means no\n"
@@ -358,7 +359,7 @@ void register_chimefrb_bindings(pybind11::module &m)
         .def(py::init<long, long, double, bool, long>(),
             py::arg("L"), py::arg("niter"), py::arg("iter_sigma"), py::arg("two_pass"),
             py::arg("threads_per_block") = 128,
-            "Create a GpuWrms.\n"
+            "Create a GpuWrmsKernel.\n"
             "\n"
             "Args:\n"
             "    L: samples per row. A constructor argument because it decides which of\n"
@@ -371,41 +372,41 @@ void register_chimefrb_bindings(pybind11::module &m)
             "    two_pass: use the stabler two-pass first pass.\n"
             "    threads_per_block: performance knob, 128/256/512/1024. Must not change\n"
             "        the result. The default is the smallest value, unlike\n"
-            "        GpuWiDownsampler: see time_selected().\n"
+            "        GpuWiDownsamplingKernel: see time_selected().\n"
             "\n"
             "Raises:\n"
             "    RuntimeError: on L < 1, niter < 1, iter_sigma < 0, or an unsupported\n"
             "        threads_per_block.")
 
-        .def_readonly("L", &GpuWrms::L, "Samples per row")
-        .def_readonly("niter", &GpuWrms::niter, "TOTAL passes; 1 means no refinement")
-        .def_readonly("iter_sigma", &GpuWrms::iter_sigma,
+        .def_readonly("L", &GpuWrmsKernel::L, "Samples per row")
+        .def_readonly("niter", &GpuWrmsKernel::niter, "TOTAL passes; 1 means no refinement")
+        .def_readonly("iter_sigma", &GpuWrmsKernel::iter_sigma,
             "Refinement clipping threshold, in units of the current rms")
-        .def_readonly("two_pass", &GpuWrms::two_pass, "Use the stabler two-pass first pass")
-        .def_readonly("threads_per_block", &GpuWrms::threads_per_block, "128, 256, 512 or 1024")
+        .def_readonly("two_pass", &GpuWrmsKernel::two_pass, "Use the stabler two-pass first pass")
+        .def_readonly("threads_per_block", &GpuWrmsKernel::threads_per_block, "128, 256, 512 or 1024")
 
-        .def_property_readonly("is_shared_memory_path", &GpuWrms::is_shared_memory_path,
+        .def_property_readonly("is_shared_memory_path", &GpuWrmsKernel::is_shared_memory_path,
             "True if this L uses the shared-memory kernel (the row is staged on-chip and\n"
             "the input is read exactly once), False if it uses the global-memory kernel\n"
             "(the row is re-read once per refinement). A test or a timing run wants to say\n"
             "which path it measured.")
 
-        .def_static("max_shared_L", &GpuWrms::max_shared_L,
+        .def_static("max_shared_L", &GpuWrmsKernel::max_shared_L,
             "The largest L that uses the shared-memory kernel. One source of truth for\n"
             "the threshold, so that a test drawing L either side of it cannot drift from\n"
             "the kernel's own idea of where it is.")
 
-        .def("scratch_nelts", &GpuWrms::scratch_nelts, py::arg("R"),
+        .def("scratch_nelts", &GpuWrmsKernel::scratch_nelts, py::arg("R"),
             "Number of float32 scratch elements launch() needs for R rows. Zero on the\n"
             "shared-memory path.")
 
-        .def_static("time_selected", &GpuWrms::time_selected,
+        .def_static("time_selected", &GpuWrmsKernel::time_selected,
             py::call_guard<py::gil_scoped_release>(),
             "Run timing benchmarks, for the configurations the old search's production\n"
             "RFI chain uses (called via 'python -m pirate_frb time --cfrb')")
 
         .def("launch",
-            [](const GpuWrms &self, Array<float> &mean, Array<float> &var,
+            [](const GpuWrmsKernel &self, Array<float> &mean, Array<float> &var,
                const Array<float> &in_i, const Array<float> &in_w,
                Array<float> &scratch, uintptr_t stream_ptr) {
                 cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
@@ -429,24 +430,24 @@ void register_chimefrb_bindings(pybind11::module &m)
             "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 
-    // GpuTransformBase: the base class of every transform. Python injections in
-    // pirate_frb/chimefrb/GpuTransformBase.py, which also carries the class docstring
+    // GpuTransform: the base class of every transform. Python injections in
+    // pirate_frb/chimefrb/GpuTransform.py, which also carries the class docstring
     // (option 2 in notes/docstrings.md): launch() with stream=None and scratch=None
     // handling, the check_yaml_keys() classmethod, and __repr__. The python-only side is
     // GpuPythonTransform (see the trampoline above).
-    py::class_<GpuTransformBase, PyGpuTransformBase>(m, "GpuTransformBase")
+    py::class_<GpuTransform, PyGpuTransform>(m, "GpuTransform")
         .def(py::init<const std::string &, long, long, long, long>(),
             py::arg("name"), py::arg("nbeams"), py::arg("nfreq"), py::arg("ntime"), py::arg("scratch_nelts"),
             "The C++ constructor, called by GpuPythonTransform.__init__() with the python class's\n"
-            "name. Not for direct use: a bare GpuTransformBase has no computation to launch.")
+            "name. Not for direct use: a bare GpuTransform has no computation to launch.")
 
-        .def_readonly("nbeams", &GpuTransformBase::nbeams)
-        .def_readonly("nfreq", &GpuTransformBase::nfreq)
-        .def_readonly("ntime", &GpuTransformBase::ntime)
-        .def_readonly("scratch_nelts", &GpuTransformBase::scratch_nelts)
+        .def_readonly("nbeams", &GpuTransform::nbeams)
+        .def_readonly("nfreq", &GpuTransform::nfreq)
+        .def_readonly("ntime", &GpuTransform::ntime)
+        .def_readonly("scratch_nelts", &GpuTransform::scratch_nelts)
 
         .def("launch",
-            [](const GpuTransformBase &self, Array<float> &intensity, Array<float> &weights,
+            [](const GpuTransform &self, Array<float> &intensity, Array<float> &weights,
                Array<float> &scratch, uintptr_t stream_ptr) {
                 cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                 self.launch(intensity, weights, scratch, stream);
@@ -459,7 +460,7 @@ void register_chimefrb_bindings(pybind11::module &m)
 
     // GpuSplineDetrender: Python injections in pirate_frb/chimefrb/ReferenceSplineDetrender.py
     // (the yaml and legacy-json methods; see the top of this file).
-    py::class_<GpuSplineDetrender, GpuTransformBase>(m, "GpuSplineDetrender",
+    py::class_<GpuSplineDetrender, GpuTransform>(m, "GpuSplineDetrender",
         "A port of rf_kernels::spline_detrender, the frequency-direction detrender of the\n"
         "old CHIME FRB search's RFI chain.\n"
         "\n"
@@ -528,7 +529,7 @@ void register_chimefrb_bindings(pybind11::module &m)
     // GpuPolynomialDetrender: Python injections in
     // pirate_frb/chimefrb/ReferencePolynomialDetrender.py (the yaml and legacy-json methods;
     // see the top of this file).
-    py::class_<GpuPolynomialDetrender, GpuTransformBase>(m, "GpuPolynomialDetrender",
+    py::class_<GpuPolynomialDetrender, GpuTransform>(m, "GpuPolynomialDetrender",
         "A port of rf_pipelines::polynomial_detrender along the time axis, the only axis\n"
         "the old CHIME FRB search's production RFI chain ran it on.\n"
         "\n"
@@ -594,10 +595,10 @@ void register_chimefrb_bindings(pybind11::module &m)
     // GpuClipperBase: bound without a constructor. It exists so that the attributes the
     // clippers share (axis, statistic parameters, derived geometry) are bound, and
     // documented, once; the clippers are bound as its subclasses.
-    py::class_<GpuClipperBase, GpuTransformBase>(m, "GpuClipperBase",
-        "What the chimefrb clippers have in common, on top of GpuTransformBase: axis,\n"
+    py::class_<GpuClipperBase, GpuTransform>(m, "GpuClipperBase",
+        "What the chimefrb clippers have in common, on top of GpuTransform: axis,\n"
         "(Df, Dt), the per-row weighted mean and variance (downsample, transpose if\n"
-        "axis == FREQ, then GpuWrms), and the scratch layout. Not constructible on its own:\n"
+        "axis == FREQ, then GpuWrmsKernel), and the scratch layout. Not constructible on its own:\n"
         "GpuIntensityClipper and GpuStdDevClipper derive from it.\n"
         "\n"
         "CHUNKING: every clipper requires ntime == nt_chunk (the array holds exactly one\n"
@@ -622,8 +623,9 @@ void register_chimefrb_bindings(pybind11::module &m)
         .def_readonly("T_ds", &GpuClipperBase::T_ds, "nt_chunk // Dt")
         .def_readonly("wrms_L", &GpuClipperBase::wrms_L,
             "Samples per statistic row. Exposed so that a test can rebuild the statistic\n"
-            "from GpuWiDownsampler and GpuWrms exactly, which is how the clippers are\n"
-            "checked: the statistic comes from the GPU, and what follows it from numpy.")
+            "from GpuWiDownsamplingKernel and GpuWrmsKernel exactly, which is how the\n"
+            "clippers are checked: the statistic comes from the GPU, and what follows it\n"
+            "from numpy.")
         .def_readonly("wrms_R", &GpuClipperBase::wrms_R,
             "Statistic rows: nbeams*F_ds (TIME), nbeams*T_ds (FREQ), or nbeams (NONE)")
         ;
@@ -637,7 +639,7 @@ void register_chimefrb_bindings(pybind11::module &m)
         "search's principal RFI flagger (48 of its production chain's 120 nodes).\n"
         "\n"
         "Three steps, of which only the last is new code: downsample by (Df, Dt), compute\n"
-        "the weighted mean and variance over ``axis`` (GpuWrms), then mask every\n"
+        "the weighted mean and variance over ``axis`` (GpuWrmsKernel), then mask every\n"
         "downsampled cell with ``|I_ds - mean| >= sigma*sqrt(var)``, zeroing all Df*Dt\n"
         "full-resolution weights of a masked cell.\n"
         "\n"
@@ -687,7 +689,7 @@ void register_chimefrb_bindings(pybind11::module &m)
             "        nt_chunk by 32*Dt; also on nbeams < 1, Df < 1, Dt < 1, niter < 1,\n"
             "        sigma < 0, iter_sigma < 0, or an unsupported warps_per_block.")
 
-        // The shared attributes are bound on GpuClipperBase and GpuTransformBase.
+        // The shared attributes are bound on GpuClipperBase and GpuTransform.
         .def_readonly("sigma", &GpuIntensityClipper::sigma,
             "FINAL clip threshold, in units of the row's rms (not iter_sigma)")
         .def_readonly("warps_per_block", &GpuIntensityClipper::warps_per_block,
@@ -709,7 +711,7 @@ void register_chimefrb_bindings(pybind11::module &m)
         "Where GpuIntensityClipper catches samples that are too bright, this catches rows\n"
         "whose NOISE LEVEL is wrong.\n"
         "\n"
-        "Per row, a weighted variance (GpuWrms at niter=1 -- variances, not standard\n"
+        "Per row, a weighted variance (GpuWrmsKernel at niter=1 -- variances, not standard\n"
         "deviations, despite the name). Per beam, the mean vbar and standard deviation s of\n"
         "the nonzero variances (s divides by n, not n-1), computed before anything is\n"
         "clipped; every row with ``|v - vbar| >= sigma*s`` then has all its weights zeroed.\n"
@@ -752,7 +754,7 @@ void register_chimefrb_bindings(pybind11::module &m)
             "        32*Df and nt_chunk by 32*Dt; and on nbeams < 1, Df < 1, Dt < 1,\n"
             "        sigma < 0, or an unsupported warps_per_block.")
 
-        // The shared attributes are bound on GpuClipperBase and GpuTransformBase.
+        // The shared attributes are bound on GpuClipperBase and GpuTransform.
         .def_readonly("sigma", &GpuStdDevClipper::sigma,
             "Clip threshold, in units of the standard deviation of the variances")
         .def_readonly("warps_per_block", &GpuStdDevClipper::warps_per_block,
@@ -768,7 +770,7 @@ void register_chimefrb_bindings(pybind11::module &m)
     // GpuBadChannelMask: Python injections in pirate_frb/chimefrb/ReferenceBadChannelMask.py
     // (the yaml and legacy-json methods; see the top of this file). Its __init__ also
     // normalizes 'mask_ranges' and 'freq_range' to python floats.
-    py::class_<GpuBadChannelMask, GpuTransformBase>(m, "GpuBadChannelMask",
+    py::class_<GpuBadChannelMask, GpuTransform>(m, "GpuBadChannelMask",
         "Zeroes the weights of whole frequency channels. A port of rf_pipelines::badchannel_mask,\n"
         "which the old CHIME FRB search used at the start of its RFI chain to remove channels\n"
         "known in advance to be bad.\n"
@@ -828,9 +830,10 @@ void register_chimefrb_bindings(pybind11::module &m)
 
         ;
 
-    // GpuWeightUpsampler: Python injections in pirate_frb/chimefrb/ReferenceWeightUpsampler.py:
+    // GpuWtUpsamplingKernel: Python injections in
+    // pirate_frb/chimefrb/ReferenceWtUpsamplingKernel.py:
     //   - launch: converts stream=None to current cupy stream
-    py::class_<GpuWeightUpsampler>(m, "GpuWeightUpsampler",
+    py::class_<GpuWtUpsamplingKernel>(m, "GpuWtUpsamplingKernel",
         "Pushes a low-resolution weight mask back up to full resolution. A port of\n"
         "rf_kernels::weight_upsampler, which rf_pipelines::wi_sub_pipeline runs after its\n"
         "sub-pipeline: every full-resolution weight whose (Df x Dt) cell has a low-resolution\n"
@@ -849,7 +852,7 @@ void register_chimefrb_bindings(pybind11::module &m)
         .def(py::init<long, long, double, long>(),
             py::arg("Df"), py::arg("Dt"), py::arg("w_cutoff") = 0.0,
             py::arg("warps_per_block") = 32,
-            "Create a GpuWeightUpsampler.\n"
+            "Create a GpuWtUpsamplingKernel.\n"
             "\n"
             "Args:\n"
             "    Df: frequency upsampling factor, >= 1\n"
@@ -863,20 +866,20 @@ void register_chimefrb_bindings(pybind11::module &m)
             "    RuntimeError: on Df < 1, Dt < 1, w_cutoff < 0 or NaN, or an unsupported\n"
             "        warps_per_block.")
 
-        .def_readonly("Df", &GpuWeightUpsampler::Df, "Frequency upsampling factor")
-        .def_readonly("Dt", &GpuWeightUpsampler::Dt, "Time upsampling factor")
-        .def_readonly("w_cutoff", &GpuWeightUpsampler::w_cutoff,
+        .def_readonly("Df", &GpuWtUpsamplingKernel::Df, "Frequency upsampling factor")
+        .def_readonly("Dt", &GpuWtUpsamplingKernel::Dt, "Time upsampling factor")
+        .def_readonly("w_cutoff", &GpuWtUpsamplingKernel::w_cutoff,
             "A cell is kept iff its low-resolution weight exceeds ``float32(w_cutoff)``")
-        .def_readonly("warps_per_block", &GpuWeightUpsampler::warps_per_block,
+        .def_readonly("warps_per_block", &GpuWtUpsamplingKernel::warps_per_block,
             "Performance knob for the kernel (4, 8, 16 or 32)")
 
-        .def_static("time_selected", &GpuWeightUpsampler::time_selected,
+        .def_static("time_selected", &GpuWtUpsamplingKernel::time_selected,
             py::call_guard<py::gil_scoped_release>(),
             "Run timing benchmarks at the production configuration, for masks from nothing to\n"
             "everything (called via 'python -m pirate_frb time --cfrb')")
 
         .def("launch",
-            [](const GpuWeightUpsampler &self, Array<float> &w_hires,
+            [](const GpuWtUpsamplingKernel &self, Array<float> &w_hires,
                const Array<float> &w_lores, uintptr_t stream_ptr) {
                 cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                 self.launch(w_hires, w_lores, stream);

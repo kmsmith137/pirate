@@ -1,8 +1,8 @@
 # Created with: pirate_frb cfrb json2yaml misc/chimefrb/configs/21-03-07-low-latency-uniform-badchannel-mask-noplot.json --nbeams 1 --nfreq 16384 --ntime 4096 -w 130
 # A pirate_frb.chimefrb transform chain. Read with
-#   WiPipeline.read_yaml_file(filename, nbeams=..., nfreq=..., ntime=...)
+#   Pipeline.read_yaml_file(filename, nbeams=..., nfreq=..., ntime=...)
 # (or RfiMaskPipeline.read_yaml_file, if that is the top-level class_name).
-class_name: WiPipeline
+class_name: Pipeline
 transforms:
 -   class_name: RfiMaskPipeline
     Df: 16

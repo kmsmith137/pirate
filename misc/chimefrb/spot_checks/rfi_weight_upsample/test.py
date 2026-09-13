@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Spot test: the weight upsampler, pirate vs rf_kernels.
 
-Compares pirate_frb.chimefrb.ReferenceWeightUpsampler -- and GpuWeightUpsampler, when cupy
+Compares pirate_frb.chimefrb.ReferenceWtUpsamplingKernel -- and GpuWtUpsamplingKernel, when cupy
 is available -- against rf_kernels::weight_upsampler, the kernel it was transcribed from.
 
 WHY THIS TEST EXISTS. The routine unit test ('pirate_frb test --cfrb') compares the CUDA
@@ -36,8 +36,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harness
 
-from pirate_frb.chimefrb import ReferenceWeightUpsampler
-from pirate_frb.chimefrb.test_weight_upsampler import random_hires, random_lores
+from pirate_frb.chimefrb import ReferenceWtUpsamplingKernel
+from pirate_frb.chimefrb.test_wt_upsampling_kernel import random_hires, random_lores
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -60,7 +60,7 @@ def make_pair(rng, nfreq_lo, nt_lo, Df, Dt, w_cutoff):
     """The (full-resolution, low-resolution) weight pair for one comparison.
 
     Both halves come from the unit test's own generators
-    (pirate_frb/chimefrb/test_weight_upsampler.py), so the two tests plant one set of
+    (pirate_frb/chimefrb/test_wt_upsampling_kernel.py), so the two tests plant one set of
     corner cases rather than two that can drift apart: a low-resolution weight exactly at
     the cutoff, one ulp either side of it, NaN, inf, negative and negative zero; and
     non-finite values and -0.0 scattered through the full-resolution array, every one of
@@ -82,7 +82,7 @@ def check(t, label, cp, hi, lo, Df, Dt, w_cutoff):
     old = harness.run_driver(HERE, [hi, lo], dtype=np.float32,
                              params={"Df": Df, "Dt": Dt, "w_cutoff": repr(float(w_cutoff))})
 
-    ref = ReferenceWeightUpsampler(Df, Dt, w_cutoff).apply(hi[None], lo[None])[0]
+    ref = ReferenceWtUpsamplingKernel(Df, Dt, w_cutoff).apply(hi[None], lo[None])[0]
 
     ok = t.check_allclose(label, bits(ref), bits(old), rtol=0.0,
                           why="bit patterns of the upsampled weights; no arithmetic is done,"
@@ -92,9 +92,9 @@ def check(t, label, cp, hi, lo, Df, Dt, w_cutoff):
     t.note("        %d of %d full-resolution weights newly zeroed" % (nmasked, old.size))
 
     if cp is not None:
-        from pirate_frb.chimefrb import GpuWeightUpsampler
+        from pirate_frb.chimefrb import GpuWtUpsamplingKernel
         g_hi = cp.asarray(hi[None])
-        GpuWeightUpsampler(Df, Dt, w_cutoff).launch(g_hi, cp.asarray(lo[None]))
+        GpuWtUpsamplingKernel(Df, Dt, w_cutoff).launch(g_hi, cp.asarray(lo[None]))
         cp.cuda.get_current_stream().synchronize()
         ok &= t.check_allclose(label + " (gpu)", bits(cp.asnumpy(g_hi)[0]), bits(old), rtol=0.0,
                                why="the CUDA kernel against the old code, same comparison")

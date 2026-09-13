@@ -1,6 +1,6 @@
-"""GpuTransformBase: the base class of every chimefrb transform, and its python side.
+"""GpuTransform: the base class of every chimefrb transform, and its python side.
 
-The class itself is C++ (include/pirate/chimefrb/TransformBase.hpp), bound with pybind11. This
+The class itself is C++ (include/pirate/chimefrb/Transform.hpp), bound with pybind11. This
 module adds, with ksgpu.inject_methods, the python-side methods that every transform, C++ or
 python, shares -- launch() with its stream=None / scratch=None conventions, the
 check_yaml_keys() classmethod, and __repr__ -- and re-exports the class. A transform written
@@ -9,12 +9,12 @@ in python subclasses GpuPythonTransform (GpuPythonTransform.py), not this class 
 
 import ksgpu
 
-from ..pirate_pybind11 import GpuTransformBase
+from ..pirate_pybind11 import GpuTransform
 
 
-@ksgpu.inject_methods(GpuTransformBase)
-class GpuTransformBaseInjections:
-    """Base class of every chimefrb transform: anything a :class:`WiPipeline` or
+@ksgpu.inject_methods(GpuTransform)
+class GpuTransformInjections:
+    """Base class of every chimefrb transform: anything a :class:`Pipeline` or
     :class:`RfiMaskPipeline` can run.
 
     A transform processes one (nbeams, nfreq, ntime) block of intensity and weights, in place,
@@ -22,7 +22,7 @@ class GpuTransformBaseInjections:
     transform's computation. Which of the two arrays a transform modifies is stated in its
     class docstring.
 
-    The class is C++ (``include/pirate/chimefrb/TransformBase.hpp``), and its direct subclasses
+    The class is C++ (``include/pirate/chimefrb/Transform.hpp``), and its direct subclasses
     are the five ported RFI transforms (GpuBadChannelMask, GpuIntensityClipper,
     GpuStdDevClipper, GpuPolynomialDetrender, GpuSplineDetrender) and
     :class:`GpuPythonTransform`. To write a transform in python, subclass GpuPythonTransform,
@@ -35,7 +35,7 @@ class GpuTransformBaseInjections:
     """
 
     # Save reference to C++ method
-    _cpp_launch = GpuTransformBase.launch
+    _cpp_launch = GpuTransform.launch
 
     def launch(self, intensity, weights, scratch, stream=None):
         """Run the transform on one block (async; does not sync the stream).

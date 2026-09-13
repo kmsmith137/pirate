@@ -11,9 +11,9 @@ implementations agree -- but both were written from one reading of the old code.
 the test that reads the old code by running it.
 
 Most of the reference is already pinned down elsewhere: it is built out of
-ReferenceWiDownsampler and ReferenceWrms, each with its own spot test. What is new, and
-what this test is really about, is intensity_clip() -- the final clip and the upsample of
-the cell mask back to full resolution.
+ReferenceWiDownsamplingKernel and ReferenceWrmsKernel, each with its own spot test. What is
+new, and what this test is really about, is intensity_clip() -- the final clip and the
+upsample of the cell mask back to full resolution.
 
 THE PRIMARY CHECK TAKES THE OLD KERNEL'S OWN (mean, rms). That is not a shortcut; it is
 what rf_kernels' own unit test does (test-intensity-clipper.cpp), and for a good reason.
@@ -44,7 +44,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harness
 
-from pirate_frb.chimefrb import (ReferenceIntensityClipper, ReferenceWiDownsampler,
+from pirate_frb.chimefrb import (ReferenceIntensityClipper, ReferenceWiDownsamplingKernel,
                                  intensity_clip)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -153,7 +153,7 @@ def check_final_clip(t, label, x, axis, Df, Dt, sigma, niter, iter_sigma, two_pa
 
     I = x[0].astype(np.float64)[None, :, :]      # (1, F, T): the reference takes a beam axis
     W = x[1].astype(np.float64)[None, :, :]
-    (i_ds, _) = ReferenceWiDownsampler(Df, Dt, transpose=False).apply(I, W)
+    (i_ds, _) = ReferenceWiDownsamplingKernel(Df, Dt, transpose=False).apply(I, W)
 
     # Smaller sigma clips more, so it is the lower bound on the surviving weights.
     lo = intensity_clip(i_ds, W, mean, var, sigma * (1.0 - SIGMA_BRACKET), axis, Df, Dt)

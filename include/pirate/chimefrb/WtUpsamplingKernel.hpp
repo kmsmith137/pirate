@@ -1,5 +1,5 @@
-#ifndef _PIRATE_CHIMEFRB_WEIGHT_UPSAMPLER_HPP
-#define _PIRATE_CHIMEFRB_WEIGHT_UPSAMPLER_HPP
+#ifndef _PIRATE_CHIMEFRB_WT_UPSAMPLING_KERNEL_HPP
+#define _PIRATE_CHIMEFRB_WT_UPSAMPLING_KERNEL_HPP
 
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
@@ -11,7 +11,7 @@ namespace chimefrb {
 #endif
 
 
-// GpuWeightUpsampler: pushes a low-resolution weight mask back up to full resolution. A port
+// GpuWtUpsamplingKernel: pushes a low-resolution weight mask back up to full resolution. A port
 // of rf_kernels::weight_upsampler, which rf_pipelines::wi_sub_pipeline runs after its
 // sub-pipeline: every full-resolution weight whose (Df x Dt) cell has a low-resolution weight
 // w_lo <= w_cutoff is set to +0.0, and every other one is left bit-identical.
@@ -26,7 +26,7 @@ namespace chimefrb {
 //
 // See notes/chimefrb.md for the porting rules this class follows.
 
-struct GpuWeightUpsampler
+struct GpuWtUpsamplingKernel
 {
     // Throws on Df < 1, Dt < 1, w_cutoff < 0 or NaN, and an unsupported warps_per_block.
     // (Df, Dt) = (1, 1) is allowed, and is not the identity: it zeroes w_hires wherever
@@ -40,7 +40,7 @@ struct GpuWeightUpsampler
     // 14% with every cell masked. It is 5% SLOWER on a mask that stores nothing at all, where
     // the whole cost is the read and the launch. Run time_selected() on a new GPU before
     // assuming it still holds.
-    GpuWeightUpsampler(long Df, long Dt, double w_cutoff = 0.0, long warps_per_block = 32);
+    GpuWtUpsamplingKernel(long Df, long Dt, double w_cutoff = 0.0, long warps_per_block = 32);
 
     const long Df;                 // frequency upsampling factor
     const long Dt;                 // time upsampling factor
@@ -78,7 +78,7 @@ struct GpuWeightUpsampler
 // zero_cell(): zero the Df-by-Dt block of full-resolution weights behind one low-resolution
 // cell (b, f_lo, t_lo). 'w_hires' is the whole (B, F_lo*Df, T_lo*Dt) contiguous array.
 //
-// This is a one-cell weight upsample, so it lives here: GpuWeightUpsampler's kernel calls it
+// This is a one-cell weight upsample, so it lives here: GpuWtUpsamplingKernel's kernel calls it
 // for every cell that fails its test, and the clippers' final kernels (IntensityClipper.cu,
 // StdDevClipper.cu) call it for every downsampled cell they mask.
 //
@@ -86,7 +86,7 @@ struct GpuWeightUpsampler
 // cells: its lanes are Dt*4 bytes apart, so one instruction touches up to 32 sectors rather
 // than one cache line. Deliberate. Callers zero only cells that are being masked, and when a
 // whole row is masked the warp's Dt stores together cover 32*Dt*4 contiguous bytes anyway.
-// GpuWiDownsampler reads through exactly this pattern at 657 GB/s.
+// GpuWiDownsamplingKernel reads through exactly this pattern at 657 GB/s.
 __device__ __forceinline__ void zero_cell(float *w_hires, long b, long f_lo, long t_lo,
                                           long F_lo, long T_lo, int Df, int Dt)
 {
@@ -108,4 +108,4 @@ __device__ __forceinline__ void zero_cell(float *w_hires, long b, long f_lo, lon
 
 }}  // namespace pirate::chimefrb
 
-#endif  // _PIRATE_CHIMEFRB_WEIGHT_UPSAMPLER_HPP
+#endif  // _PIRATE_CHIMEFRB_WT_UPSAMPLING_KERNEL_HPP

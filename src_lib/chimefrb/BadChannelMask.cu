@@ -29,7 +29,7 @@ namespace chimefrb {
 //
 // The row loop's bound (t < T) doubles as the tail predicate, so there is no divisibility
 // requirement on anything. Nothing is templated and nothing synchronizes, so the warp count is
-// a runtime parameter, taken from blockDim.y (the rule in WiDownsampler.cu).
+// a runtime parameter, taken from blockDim.y (the rule in WiDownsamplingKernel.cu).
 //
 // Single-float stores, not float4: on an L40S, float4 stores measured no faster at any mask
 // time_selected() tries, so the simpler loop stays.
@@ -184,7 +184,7 @@ GpuBadChannelMask::GpuBadChannelMask(long nbeams_, long nfreq_, long ntime_,
                                      const vector<pair<double,double>> &mask_ranges_,
                                      pair<double,double> freq_range_, long warps_per_block_,
                                      const Array<uint8_t> &host_keep) :
-    GpuTransformBase("GpuBadChannelMask", nbeams_, nfreq_, ntime_, /*scratch_nelts=*/0),
+    GpuTransform("GpuBadChannelMask", nbeams_, nfreq_, ntime_, /*scratch_nelts=*/0),
     mask_ranges(mask_ranges_),
     freq_range(freq_range_),
     warps_per_block(_checked_warps(warps_per_block_)),

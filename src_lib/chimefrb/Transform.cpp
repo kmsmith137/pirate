@@ -1,4 +1,4 @@
-#include "../../include/pirate/chimefrb/TransformBase.hpp"
+#include "../../include/pirate/chimefrb/Transform.hpp"
 
 #include <cstdint>
 #include <sstream>
@@ -41,8 +41,8 @@ static long _checked_scratch_nelts(const string &name, long scratch_nelts)
 }
 
 
-GpuTransformBase::GpuTransformBase(const string &name_, long nbeams_, long nfreq_, long ntime_,
-                                   long scratch_nelts_) :
+GpuTransform::GpuTransform(const string &name_, long nbeams_, long nfreq_, long ntime_,
+                           long scratch_nelts_) :
     name(name_),
     nbeams(_checked_positive(name_, "nbeams", nbeams_)),
     nfreq(_checked_positive(name_, "nfreq", nfreq_)),
@@ -98,8 +98,8 @@ static void _check_data_array(const string &name, const char *what, const Array<
 }
 
 
-void GpuTransformBase::launch(Array<float> &intensity, Array<float> &weights,
-                              Array<float> &scratch, cudaStream_t stream) const
+void GpuTransform::launch(Array<float> &intensity, Array<float> &weights,
+                          Array<float> &scratch, cudaStream_t stream) const
 {
     _check_data_array(name, "intensity", intensity, nbeams, nfreq, ntime);
     _check_data_array(name, "weights", weights, nbeams, nfreq, ntime);
@@ -139,8 +139,8 @@ void GpuTransformBase::launch(Array<float> &intensity, Array<float> &weights,
 }
 
 
-Array<float> GpuTransformBase::carve_scratch(Array<float> &scratch, long &pos,
-                                             initializer_list<long> shape)
+Array<float> GpuTransform::carve_scratch(Array<float> &scratch, long &pos,
+                                         initializer_list<long> shape)
 {
     long n = 1;
     for (long s: shape)

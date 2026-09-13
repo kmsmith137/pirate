@@ -1,5 +1,5 @@
-#ifndef _PIRATE_CHIMEFRB_WRMS_HPP
-#define _PIRATE_CHIMEFRB_WRMS_HPP
+#ifndef _PIRATE_CHIMEFRB_WRMS_KERNEL_HPP
+#define _PIRATE_CHIMEFRB_WRMS_KERNEL_HPP
 
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
@@ -26,7 +26,7 @@ constexpr float wrms_eps_3 = 1.0e3f * 1.19e-07f;
 // wrms_survives(): does a sample at distance 'd' from the mean survive a clip at
 // 'thresh'?
 //
-// THIS PREDICATE IS SHARED ON PURPOSE, and the sharing is load-bearing. GpuWrms uses it
+// THIS PREDICATE IS SHARED ON PURPOSE, and the sharing is load-bearing. GpuWrmsKernel uses it
 // to decide which samples a refinement keeps; the intensity_clipper's final clip uses its
 // exact complement to decide which weights to zero. They must agree, including on the
 // boundary -- note the strict '<', which means thresh = 0 kills everything, and which is
@@ -34,7 +34,7 @@ constexpr float wrms_eps_3 = 1.0e3f * 1.19e-07f;
 //
 // The reason to share one function rather than write the comparison twice: the final clip
 // is tested against an independent reference, but the refinement's copy is not (the
-// induction in test_wrms.py supplies the survivor set from our own clip, so a wrong
+// induction in test_wrms_kernel.py supplies the survivor set from our own clip, so a wrong
 // comparison would cancel out). Sharing is what carries the tested one's guarantee over
 // to the untested one.
 __device__ __forceinline__ bool wrms_survives(float d, float thresh)
@@ -44,7 +44,7 @@ __device__ __forceinline__ bool wrms_survives(float d, float thresh)
 #endif
 
 
-// GpuWrms: the weighted mean and variance of each row of an (R, L) array, refined by
+// GpuWrmsKernel: the weighted mean and variance of each row of an (R, L) array, refined by
 // iterated sigma clipping. A port of rf_kernels::weighted_mean_rms.
 //
 // This is the statistic both chimefrb clippers are built on. It does NOT apply any
@@ -52,7 +52,7 @@ __device__ __forceinline__ bool wrms_survives(float d, float thresh)
 // row, a mean and a variance.
 //
 // The three clipper axes all arrive here as row reductions of a contiguous 2-D array, so
-// this class knows nothing about frequencies, times or axes: GpuWiDownsampler has already
+// this class knows nothing about frequencies, times or axes: GpuWiDownsamplingKernel has already
 // produced either a plain (B, F_ds, T_ds) array or a transposed (B, T_ds, F_ds) one, and
 // the caller views it as (R, L). The whole-plane case is the same thing with one long row,
 // since a contiguous (B, F_ds, T_ds) array IS a (B, F_ds*T_ds) array -- which is why L
@@ -82,7 +82,7 @@ __device__ __forceinline__ bool wrms_survives(float d, float thresh)
 // zero; and a rejected variance stays rejected, because zero variance means zero
 // threshold means no survivors.
 
-struct GpuWrms
+struct GpuWrmsKernel
 {
     // Throws on L < 1, niter < 1, iter_sigma < 0, or an unsupported threads_per_block.
     //
@@ -99,14 +99,14 @@ struct GpuWrms
     // 'threads_per_block' is a performance knob, not a semantic one: it must not change
     // the result. Must be 128, 256, 512 or 1024.
     //
-    // The default is the SMALLEST value, which is the opposite of GpuWiDownsampler's
+    // The default is the SMALLEST value, which is the opposite of GpuWiDownsamplingKernel's
     // default and is not an oversight. Each step here ends in a block-wide reduction
     // whose cost grows with the warp count, while the work per block is fixed by L, so a
     // big block does more synchronizing and less summing: at (L, niter) = (1024, 9),
     // 1024 threads measures 9x slower than 128. See time_selected(); 128 is best or
     // within 2% of best at every configuration the RFI chain uses.
-    GpuWrms(long L, long niter, double iter_sigma, bool two_pass,
-            long threads_per_block = 128);
+    GpuWrmsKernel(long L, long niter, double iter_sigma, bool two_pass,
+                  long threads_per_block = 128);
 
     const long L;                   // samples per row
     const long niter;               // TOTAL passes; 1 means no refinement
@@ -171,4 +171,4 @@ struct GpuWrms
 
 }}  // namespace pirate::chimefrb
 
-#endif  // _PIRATE_CHIMEFRB_WRMS_HPP
+#endif  // _PIRATE_CHIMEFRB_WRMS_KERNEL_HPP

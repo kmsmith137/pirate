@@ -23,7 +23,7 @@ namespace chimefrb {
 // Four steps, the first two inherited from GpuClipperBase:
 //
 //   1. Downsample by (Df, Dt), and transpose if axis == FREQ.
-//   2. One variance per row with GpuWrms at niter = 1 -- variances, not standard
+//   2. One variance per row with GpuWrmsKernel at niter = 1 -- variances, not standard
 //      deviations, despite the name. A variance of zero means "no usable statistic".
 //   3. Per beam, over its rows' variances: the mean vbar and standard deviation s of the
 //      nonzero ones (s divides by n, not n-1), computed before anything is clipped; then
@@ -74,13 +74,13 @@ struct GpuStdDevClipper : public GpuClipperBase
     const double sigma;            // step-3 threshold, in units of sd(variances)
     const long warps_per_block;    // 4, 8, 16 or 32; step 4 only
 
-    // Inherited from GpuClipperBase and GpuTransformBase: name, nbeams, nfreq, ntime,
+    // Inherited from GpuClipperBase and GpuTransform: name, nbeams, nfreq, ntime,
     // nt_chunk, axis, Df, Dt, two_pass; the derived geometry F_ds, T_ds, wrms_L, wrms_R (the
     // rows per beam are wrms_R / nbeams); scratch_nelts; launch(); and niter and iter_sigma,
     // which are always 1 and 0 here.
 
     // launch_checked(): asynchronously launch the kernels, and return without synchronizing
-    // the stream. Called by GpuTransformBase::launch(), which checks the arguments first.
+    // the stream. Called by GpuTransform::launch(), which checks the arguments first.
     //
     // All arrays are float32, fully contiguous, and in GPU memory.
     //
@@ -88,7 +88,7 @@ struct GpuStdDevClipper : public GpuClipperBase
     //
     //   weights    shape (nbeams, nfreq, ntime). MODIFIED IN PLACE: whole rows are zeroed
     //              where the clip fires, and every other weight is left bit-identical. Must
-    //              be >= 0 on entry, which is not checked (see GpuWrms::launch()).
+    //              be >= 0 on entry, which is not checked (see GpuWrmsKernel::launch()).
     //
     //   scratch    1-d, exactly scratch_nelts elements. Contents on entry are ignored and
     //              on exit are garbage.

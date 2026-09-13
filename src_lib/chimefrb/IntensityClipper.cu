@@ -1,5 +1,5 @@
 #include "../../include/pirate/chimefrb/IntensityClipper.hpp"
-#include "../../include/pirate/chimefrb/Wrms.hpp"
+#include "../../include/pirate/chimefrb/WrmsKernel.hpp"
 
 #include <sstream>
 #include <iostream>
@@ -38,9 +38,9 @@ namespace chimefrb {
 // Nothing is templated, and there is no block reduction, no shared memory and no
 // __syncthreads(): the threads are completely independent. That is what makes the warp
 // count a runtime parameter (taken from blockDim.y) rather than a template one, following
-// GpuWiDownsampler; see the comment in WiDownsampler.cu for the measurement behind that
-// rule. It is also what lets a warp return early on the last block without stranding
-// anyone -- which most of them do, since most cells survive the clip.
+// GpuWiDownsamplingKernel; see the comment in WiDownsamplingKernel.cu for the measurement
+// behind that rule. It is also what lets a warp return early on the last block without
+// stranding anyone -- which most of them do, since most cells survive the clip.
 
 
 __global__ void __launch_bounds__(1024)
@@ -85,7 +85,7 @@ intensity_clip_kernel(float *weights, const float *i_ds,
     if (wrms_survives(ival - mean[r], thresh))
         return;
 
-    // Only masked cells get here. See zero_cell() in WeightUpsampler.hpp for the
+    // Only masked cells get here. See zero_cell() in WtUpsamplingKernel.hpp for the
     // (deliberately strided) store pattern.
     zero_cell(weights, b, f_ds, t_ds, F_ds, T_ds, Df, Dt);
 }
@@ -129,7 +129,7 @@ GpuIntensityClipper::GpuIntensityClipper(long nbeams_, long nfreq_, long ntime_,
 void GpuIntensityClipper::launch_checked(Array<float> &intensity, Array<float> &weights,
                                          Array<float> &scratch, cudaStream_t stream) const
 {
-    // Steps 1-2 (downsample, transpose if FREQ, GpuWrms).
+    // Steps 1-2 (downsample, transpose if FREQ, GpuWrmsKernel).
     StatisticOutputs st = _launch_statistic(intensity, weights, scratch, stream);
 
     // Step 3: the final clip. Note that this reads the UNTRANSPOSED downsampled intensity
@@ -205,12 +205,12 @@ void GpuIntensityClipper::time_selected()
 
         GpuIntensityClipper probe(B, F, T, T, c.axis, c.sigma, c.Df, c.Dt, c.niter,
                                   c.iter_sigma, two_pass);
-        GpuWrms wprobe(probe.wrms_L, c.niter, c.iter_sigma, two_pass);
+        GpuWrmsKernel wprobe(probe.wrms_L, c.niter, c.iter_sigma, two_pass);
 
         // Predicted global memory traffic, following the cost model in
         // plans/chimefrb_intensity_clipper.md section 4: the downsample reads the
         // full-resolution pair and writes the downsampled one; the transpose reads and
-        // writes the downsampled pair; GpuWrms reads it once (shared path) or once per
+        // writes the downsampled pair; GpuWrmsKernel reads it once (shared path) or once per
         // step (global path); and the clip reads the downsampled intensity and, on clean
         // data, writes essentially nothing.
         const double full = 4.0 * B * F * T;
@@ -232,7 +232,7 @@ void GpuIntensityClipper::time_selected()
              << ", iter_sigma=" << c.iter_sigma << "\n"
              << "    (B, F, T) = (" << B << ", " << F << ", " << T << "),"
              << " (R, L) = (" << probe.wrms_R << ", " << probe.wrms_L << "),"
-             << " GpuWrms path = " << (wprobe.is_shared_memory_path() ? "shared" : "global") << "\n"
+             << " GpuWrmsKernel path = " << (wprobe.is_shared_memory_path() ? "shared" : "global") << "\n"
              << "    predicted traffic = " << (nbytes / 1.0e9) << " GB = "
              << (nbytes / full) << " full-resolution array passes"
              << " (clean data: the clip writes ~nothing)" << endl;

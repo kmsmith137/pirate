@@ -4,7 +4,7 @@
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
 
-#include "TransformBase.hpp"
+#include "Transform.hpp"
 
 namespace pirate {
 namespace chimefrb {
@@ -52,10 +52,10 @@ namespace chimefrb {
 // IMPLEMENTATION: one warp per row; see the .cu file.
 //
 // Every chimefrb transform's launch() takes (intensity, weights, scratch, stream) on arrays
-// of shape (nbeams, nfreq, ntime); see GpuTransformBase in TransformBase.hpp. See
+// of shape (nbeams, nfreq, ntime); see GpuTransform in Transform.hpp. See
 // notes/chimefrb.md for the porting rules this class follows.
 
-struct GpuPolynomialDetrender : public GpuTransformBase
+struct GpuPolynomialDetrender : public GpuTransform
 {
     // (nbeams, nfreq, ntime) is the shape of the arrays launch() will be given, with ntime a
     // multiple of nt_chunk: one fit per (beam, channel, chunk).
@@ -75,7 +75,7 @@ struct GpuPolynomialDetrender : public GpuTransformBase
     GpuPolynomialDetrender(long nbeams, long nfreq, long ntime, long polydeg, double epsilon,
                            long nt_chunk, long warps_per_block = 16);
 
-    // Inherited from GpuTransformBase: nbeams, nfreq, ntime (the array shape; ntime a positive
+    // Inherited from GpuTransform: nbeams, nfreq, ntime (the array shape; ntime a positive
     // multiple of nt_chunk), scratch_nelts (always 0: the kernel needs no scratch), and launch().
     const long polydeg;                // degree; the fit has polydeg+1 coefficients
     const double epsilon;              // gate threshold (the production chain uses 0.01)
@@ -83,7 +83,7 @@ struct GpuPolynomialDetrender : public GpuTransformBase
     const long warps_per_block;        // 4, 8 or 16
 
     // launch_checked(): asynchronously launch the kernel, and return without synchronizing
-    // the stream. Called by GpuTransformBase::launch(), which checks the arguments first.
+    // the stream. Called by GpuTransform::launch(), which checks the arguments first.
     //
     //   intensity  shape (nbeams, nfreq, ntime), float32, fully contiguous, on GPU. One fit
     //              per (beam, channel, chunk). The fitted polynomial is subtracted in place

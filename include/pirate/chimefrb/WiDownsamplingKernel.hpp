@@ -1,5 +1,5 @@
-#ifndef _PIRATE_CHIMEFRB_WI_DOWNSAMPLER_HPP
-#define _PIRATE_CHIMEFRB_WI_DOWNSAMPLER_HPP
+#ifndef _PIRATE_CHIMEFRB_WI_DOWNSAMPLING_KERNEL_HPP
+#define _PIRATE_CHIMEFRB_WI_DOWNSAMPLING_KERNEL_HPP
 
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
@@ -11,7 +11,7 @@ namespace chimefrb {
 #endif
 
 
-// GpuWiDownsampler: reduces an (intensity, weights) pair by a factor Df in frequency
+// GpuWiDownsamplingKernel: reduces an (intensity, weights) pair by a factor Df in frequency
 // and Dt in time, using the normalization of the old CHIME FRB search:
 //
 //    out_w = sum of the cell's weights          <--- SUM, not mean
@@ -49,7 +49,7 @@ namespace chimefrb {
 //
 // See notes/chimefrb.md for the porting rules this class follows.
 
-struct GpuWiDownsampler
+struct GpuWiDownsamplingKernel
 {
     // Throws on Df < 1, Dt < 1, or an unsupported warps_per_block. Also throws on
     // (Df, Dt, transpose) = (1, 1, false), which is the identity: a caller should use
@@ -64,7 +64,7 @@ struct GpuWiDownsampler
     // L40S, at every configuration the old RFI chain uses -- by 1% where the block
     // count is already large, and by 5% on the pure transpose. Run time_selected() on
     // a new GPU before assuming it still holds.
-    GpuWiDownsampler(long Df, long Dt, bool transpose, long warps_per_block = 32);
+    GpuWiDownsamplingKernel(long Df, long Dt, bool transpose, long warps_per_block = 32);
 
     const long Df;                // frequency downsampling factor
     const long Dt;                // time downsampling factor
@@ -113,4 +113,4 @@ struct GpuWiDownsampler
 
 }}  // namespace pirate::chimefrb
 
-#endif  // _PIRATE_CHIMEFRB_WI_DOWNSAMPLER_HPP
+#endif  // _PIRATE_CHIMEFRB_WI_DOWNSAMPLING_KERNEL_HPP

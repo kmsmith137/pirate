@@ -1,11 +1,11 @@
 """The interface every chimefrb transform follows, and the helpers behind it: turning a yaml
 or legacy-json ``class_name`` into a class, the axis strings, and the yaml/json file functions.
 
-WHAT A TRANSFORM IS. A subclass of :class:`GpuTransformBase`, which is anything a
-:class:`WiPipeline` or :class:`RfiMaskPipeline` can run. Five are C++ (GpuBadChannelMask,
+WHAT A TRANSFORM IS. A subclass of :class:`GpuTransform`, which is anything a
+:class:`Pipeline` or :class:`RfiMaskPipeline` can run. Five are C++ (GpuBadChannelMask,
 GpuIntensityClipper, GpuStdDevClipper, GpuPolynomialDetrender, GpuSplineDetrender), on that
 class directly; a transform written in python subclasses :class:`GpuPythonTransform`, which
-is plain python on top of it -- ``ExampleCupyTransform`` (the worked example) and anything a
+is plain python on top of it -- ``ExamplePythonTransform`` (the worked example) and anything a
 user writes. ``GpuPythonTransform``'s docstring says how. A transform that RUNS other
 transforms subclasses :class:`GpuContainerBase` one level further down: the two pipeline
 classes are those, and its ``from_yaml_dict`` / ``from_json_dict`` take the extra
@@ -16,7 +16,7 @@ not to a leaf. Every transform has::
                             fixed at construction
     scratch_nelts           int: float32 scratch elements launch() needs; may be 0
 
-    launch(intensity, weights, scratch, stream=None)     inherited from GpuTransformBase
+    launch(intensity, weights, scratch, stream=None)     inherited from GpuTransform
     to_yaml_dict()                              -> dict
     from_yaml_dict(d, nbeams, nfreq, ntime)     classmethod -> instance
 
@@ -25,7 +25,7 @@ which the old rf_pipelines json format describes)::
 
     from_json_dict(d, nbeams, nfreq, ntime)     classmethod -> instance
 
-THE launch() CONTRACT. ``launch()`` is GpuTransformBase's; it checks everything below and
+THE launch() CONTRACT. ``launch()`` is GpuTransform's; it checks everything below and
 raises RuntimeError, naming the transform, on a violation, before running the transform's
 ``launch_checked()``.
 
@@ -46,13 +46,13 @@ SERIALIZATION.
 
 - ``to_yaml_dict()`` returns a plain dict of python scalars and lists that
   ``yaml.safe_dump`` accepts: a ``class_name`` key holding the transform's PYTHON class
-  name (``GpuBadChannelMask``, ``WiPipeline``, ...), then its semantic parameters. It never
+  name (``GpuBadChannelMask``, ``Pipeline``, ...), then its semantic parameters. It never
   writes nbeams/nfreq/ntime (they are properties of the data, supplied when reading) and
   never writes performance knobs, so a file is not tied to a GPU.
 - ``from_yaml_dict(d, nbeams, nfreq, ntime)`` checks that ``d['class_name']`` is the class's
   own name and that the other keys are EXACTLY the expected ones (a misspelled key must not
   silently become a default), then constructs. The ``check_yaml_keys()`` classmethod of
-  GpuTransformBase does both checks.
+  GpuTransform does both checks.
 - ``from_json_dict`` reads one element of the old rf_pipelines json, whose ``class_name`` is
   the legacy name (``badchannel_mask``, ``intensity_clipper``, ...).
 
@@ -94,7 +94,7 @@ def resolve_class(class_name, classes=None):
     Raises
     ------
     ValueError
-        If nothing of that name is found, or what is found is not a GpuTransformBase subclass.
+        If nothing of that name is found, or what is found is not a GpuTransform subclass.
     """
 
     if not isinstance(class_name, str):
@@ -115,9 +115,9 @@ def resolve_class(class_name, classes=None):
 
 
 def _checked_transform_class(cls, class_name):
-    from .GpuTransformBase import GpuTransformBase     # here, not at module level: import cycle
-    if not (isinstance(cls, type) and issubclass(cls, GpuTransformBase)):
-        raise ValueError(f"{class_name!r} is not a transform class (it does not subclass GpuTransformBase)")
+    from .GpuTransform import GpuTransform     # here, not at module level: import cycle
+    if not (isinstance(cls, type) and issubclass(cls, GpuTransform)):
+        raise ValueError(f"{class_name!r} is not a transform class (it does not subclass GpuTransform)")
     return cls
 
 
@@ -150,7 +150,7 @@ def transform_from_yaml_dict(d, nbeams, nfreq, ntime, classes=None):
 # Legacy rf_pipelines class_name -> python class name, for everything that has a port. Closed
 # set: a new transform has no legacy form.
 LEGACY_JSON_CLASS_NAMES = {
-    'pipeline': 'WiPipeline',
+    'pipeline': 'Pipeline',
     'wi_sub_pipeline': 'RfiMaskPipeline',
     'badchannel_mask': 'GpuBadChannelMask',
     'std_dev_clipper': 'GpuStdDevClipper',
@@ -232,13 +232,13 @@ def axis_from_json(s):
 
 # -------------------------------------------------------------------------------------------------
 #
-# yaml / json files. Plain functions on plain dicts; WiPipeline.write_yaml_file() and friends
+# yaml / json files. Plain functions on plain dicts; Pipeline.write_yaml_file() and friends
 # are thin wrappers around these.
 
 
-# The comment WiPipeline/RfiMaskPipeline.write_yaml_file() put at the top of a file.
+# The comment Pipeline/RfiMaskPipeline.write_yaml_file() put at the top of a file.
 PIPELINE_YAML_HEADER = ('# A pirate_frb.chimefrb transform chain. Read with\n'
-                        '#   WiPipeline.read_yaml_file(filename, nbeams=..., nfreq=..., ntime=...)\n'
+                        '#   Pipeline.read_yaml_file(filename, nbeams=..., nfreq=..., ntime=...)\n'
                         '# (or RfiMaskPipeline.read_yaml_file, if that is the top-level class_name).\n')
 
 
