@@ -11,7 +11,7 @@ from .GpuTransformBase import GpuTransformBase
 from .GpuPythonTransform import GpuPythonTransform
 from .ReferenceWeightUpsampler import GpuWeightUpsampler
 from .ReferenceWiDownsampler import GpuWiDownsampler
-from .WiPipeline import WiPipeline, describe_lines
+from .WiPipeline import WiPipeline
 from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, read_json,
                            read_yaml, transform_from_json_dict, transform_from_yaml_dict,
                            write_yaml)
@@ -239,11 +239,6 @@ class RfiMaskPipeline(GpuPythonTransform):
         """Write :meth:`to_yaml_dict` to a yaml file, after a comment saying how to read it
         (``transform_io.write_yaml``)."""
         write_yaml(filename, self.to_yaml_dict(), header=PIPELINE_YAML_HEADER)
-
-    def describe(self):
-        """A multi-line listing: this pipeline's parameters, then one indented line per
-        transform (see :meth:`WiPipeline.describe`)."""
-        return '\n'.join(describe_lines(self))
 
     def __repr__(self):
         return (f'RfiMaskPipeline(nbeams={self.nbeams}, nfreq={self.nfreq}, ntime={self.ntime},'

@@ -41,25 +41,6 @@ def check_transforms(transforms, who):
     return (transforms, geometry)
 
 
-def describe_lines(transform, depth=0):
-    """The lines of :meth:`WiPipeline.describe`: one per transform, with its yaml parameters,
-    recursing into anything that has a ``transforms`` attribute."""
-
-    pad = '  ' * depth
-    d = transform.to_yaml_dict()
-    if hasattr(transform, 'transforms'):
-        params = {k: v for (k, v) in d.items() if k not in ('class_name', 'transforms')}
-        head = f"{pad}{d['class_name']}" + (f" {params}" if params else '') \
-            + f"   [{len(transform.transforms)} transform(s), ({transform.nbeams}, {transform.nfreq}, {transform.ntime})]"
-        lines = [head]
-        for t in transform.transforms:
-            lines += describe_lines(t, depth + 1)
-        return lines
-
-    params = {k: v for (k, v) in d.items() if k != 'class_name'}
-    return [f"{pad}{d['class_name']} {params}"]
-
-
 class WiPipeline(GpuPythonTransform):
     """An ordered list of transforms, run one after another on the same block of data.
 
@@ -164,11 +145,6 @@ class WiPipeline(GpuPythonTransform):
         """Write :meth:`to_yaml_dict` to a yaml file, after a comment saying how to read it
         (``transform_io.write_yaml``)."""
         write_yaml(filename, self.to_yaml_dict(), header=PIPELINE_YAML_HEADER)
-
-    def describe(self):
-        """A multi-line listing of the pipeline: one indented line per transform, with its yaml
-        parameters, nested pipelines indented under their parent."""
-        return '\n'.join(describe_lines(self))
 
     def __repr__(self):
         return (f'WiPipeline(nbeams={self.nbeams}, nfreq={self.nfreq}, ntime={self.ntime},'

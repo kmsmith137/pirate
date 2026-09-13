@@ -228,6 +228,12 @@ def _assert_equal(got, want, what):
                              f' first at (b,f,t) = ({b},{f},{t}): got {got[b,f,t]}, want {want[b,f,t]}')
 
 
+def _count_transforms(d):
+    """Nodes in a pipeline's yaml dict: the transform itself, plus its elements, recursively.
+    Used to check that a chain came out with the nesting it should have."""
+    return 1 + sum(_count_transforms(e) for e in d.get('transforms', []))
+
+
 def _expect_raise(exc, f, *args, **kwargs):
     try:
         f(*args, **kwargs)
@@ -323,7 +329,7 @@ def _check_legacy_json():
         p3 = WiPipeline.read_yaml_file(fname, nbeams=nbeams, nfreq=nfreq, ntime=ntime)
         assert p3.to_yaml_dict() == d, 'write_yaml_file/read_yaml_file changed the pipeline'
         assert open(fname).readline().startswith('#'), 'write_yaml_file should start with a comment header'
-    assert len(p.describe().splitlines()) == 1 + 4 + 3 + 1
+    assert _count_transforms(d) == 1 + 4 + 3 + 1, 'the legacy json produced the wrong nesting'
 
     # Two more legacy conventions: the consistency check when both spellings are given, and
     # the explicit-nds spelling inside a nested wi_sub_pipeline.
@@ -467,7 +473,7 @@ def _check_real_transforms(cp, rng):
                     GpuPolynomialDetrender(B, F, T, 2, 0.01, T)])
 
     assert p.scratch_nelts >= max(t.scratch_nelts for t in inner)
-    assert len(p.describe().splitlines()) == 1 + 1 + 1 + 5 + 1
+    assert _count_transforms(p.to_yaml_dict()) == 1 + 1 + 1 + 5 + 1
 
     intensity = (100.0 + rng.standard_normal((B, F, T))).astype(np.float32)
     intensity[0, 7, 3] = 1.0e4                                   # a spike for the clippers
