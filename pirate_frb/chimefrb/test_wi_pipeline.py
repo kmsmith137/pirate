@@ -308,7 +308,13 @@ def _check_legacy_json():
     assert d2 == d, 'yaml.safe_dump/safe_load changed the dict (a non-plain type in to_yaml_dict?)'
     p2 = WiPipeline.from_yaml_dict(d2, nbeams, nfreq, ntime)
     assert p2.to_yaml_dict() == d
-    assert 'class_name: WiPipeline' in yaml_string(d)
+    # The file-level string's layout (transform_io._YamlDumper): a pipeline stays in block
+    # style, since it holds a list of transforms, while a leaf transform's parameters go
+    # inline -- which is what keeps a long chain readable (the production chain is 183 lines
+    # this way and 893 with every parameter on its own line).
+    text = yaml_string(d)
+    assert text.startswith('class_name: WiPipeline\n'), text[:200]
+    assert any(line.lstrip().startswith('- {class_name: Gpu') for line in text.splitlines()), text
 
     # The file-level pair, through a temporary file.
     with tempfile.TemporaryDirectory() as tmp:

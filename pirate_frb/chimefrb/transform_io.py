@@ -253,25 +253,48 @@ PIPELINE_YAML_HEADER = ('# A pirate_frb.chimefrb transform chain. Read with\n'
                         '# (or RfiMaskPipeline.read_yaml_file, if that is the top-level class_name).\n')
 
 
+# Line width that _YamlDumper wraps a transform's parameters at. A soft target: pyyaml
+# breaks at the last comma that fits, so a line can overshoot it a little (to 105 columns
+# on the old search's production chain, whose longest transform would be 136 on one line).
+YAML_WIDTH = 100
+
+
 class _YamlDumper(yaml.SafeDumper):
-    """yaml.SafeDumper, except that a list of scalars is written on one line
-    (``freq_range: [400.0, 800.0]``, one ``[lo, hi]`` per mask range) while lists of mappings
-    -- the transforms -- stay one element per line."""
+    """yaml.SafeDumper, except that anything whose entries are all scalars is written inline:
+    a list (``freq_range: [400.0, 800.0]``, one ``[lo, hi]`` per mask range), and a mapping,
+    which is how a transform's parameters end up on one line
+
+        - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, ...}
+
+    rather than nine. Anything holding a list or another mapping -- the two pipeline classes,
+    and GpuBadChannelMask with its list of mask ranges -- stays in block style, so the
+    structure of a chain is still one element per line."""
+
+
+def _is_scalar(x):
+    return isinstance(x, (int, float, str, bool)) or (x is None)
 
 
 def _represent_list(dumper, data):
-    flow = (len(data) > 0) and all(isinstance(x, (int, float, str, bool)) for x in data)
+    flow = (len(data) > 0) and all(_is_scalar(x) for x in data)
     return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=flow)
 
 
+def _represent_dict(dumper, data):
+    flow = (len(data) > 0) and all(_is_scalar(v) for v in data.values())
+    return dumper.represent_mapping('tag:yaml.org,2002:map', data, flow_style=flow)
+
+
 _YamlDumper.add_representer(list, _represent_list)
+_YamlDumper.add_representer(dict, _represent_dict)
 
 
 def yaml_string(data, header=None):
     """``data`` (a plain dict, e.g. a ``to_yaml_dict()``) as yaml text, keys in their natural
-    order and lists of numbers on one line, preceded by ``header`` (a string of ``#`` comment
-    lines, ending in a newline) if one is given."""
-    s = yaml.dump(data, Dumper=_YamlDumper, sort_keys=False)
+    order and each transform's parameters inline (:class:`_YamlDumper`, wrapped at
+    :data:`YAML_WIDTH` columns), preceded by ``header`` (a string of ``#`` comment lines,
+    ending in a newline) if one is given."""
+    s = yaml.dump(data, Dumper=_YamlDumper, sort_keys=False, width=YAML_WIDTH)
     return (header + s) if (header is not None) else s
 
 
