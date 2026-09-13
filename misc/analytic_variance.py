@@ -6,7 +6,7 @@ import scipy.linalg
 # Tapers of the two non-boxcar peak-finding profiles (see get_profiles()). This script is
 # standalone by design -- it imports nothing from pirate -- so these must be kept equal to
 # pirate::constants::pf_xi3 and pf_xi4 by hand.
-PF_XI3 = 0.5
+PF_XI3 = 1.0 / 3.0
 PF_XI4 = 0.5
 
 

@@ -427,7 +427,9 @@ h_{\lambda,2} &= [\,\underbrace{\xi_3,\dots}_{2^\lambda},\ \underbrace{1,\dots}_
 h_{\lambda,3} &= [\,\underbrace{\xi_4,\dots}_{2^\lambda},\ \underbrace{1,\dots,\dots,1}_{2^{\lambda+1}},\ \underbrace{\xi_4,\dots}_{2^\lambda}\,]
 \end{align}
 The {\em tapers} $\xi_3$ and $\xi_4$ are the code constants {\tt constants::pf\_xi3} and
-{\tt constants::pf\_xi4}, both currently $1/2$. The subscript is the kernel's width in blocks,
+{\tt constants::pf\_xi4}, currently $1/3$ and $1/2$. These are the values used by bonsai, the
+CHIME dedisperser, whose unnormalized profiles are $[1,3,1]$ and $[1,2,2,1]$.
+The subscript is the kernel's width in blocks,
 not its $q$ index: $\xi_3$ tapers the 3-block kernel $h_{\lambda,2}$, and $\xi_4$ the 4-block
 kernel $h_{\lambda,3}$. We require $0 \le \xi_3, \xi_4 \le 1$, so that each kernel remains a
 non-negative sum of co-centered boxcars (a hypothesis of the variance-map monotonicity result

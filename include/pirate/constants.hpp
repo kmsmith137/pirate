@@ -46,8 +46,8 @@ struct constants
     // w = 2^lambda) the profiles are [xi3]^w [1]^w [xi3]^w and [xi4]^w [1]^2w [xi4]^w.
     // The subscript is the profile's width in blocks, not its q index (pf_xi3 is q=2,
     // pf_xi4 is q=3). See the "Peak-finding kernels" section of notes/dedispersion.tex.
-    static constexpr float pf_xi3 = 0.5f;
-    static constexpr float pf_xi4 = 0.5f;
+    static constexpr float pf_xi3 = 1.0f / 3.0f;      // following CHIME, may change later
+    static constexpr float pf_xi4 = 0.5f;             // following CHIME, may change later
 
     // FRB params.
     // Dispersion delay (ms) = k_dm * DM * (f_lo^{-2} - f_hi^{-2}), with freqs in MHz.
