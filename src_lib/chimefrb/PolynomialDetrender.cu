@@ -1,5 +1,4 @@
 #include "../../include/pirate/chimefrb/PolynomialDetrender.hpp"
-#include "../../include/pirate/chimefrb/launch_utils.hpp"
 
 #include <sstream>
 #include <iostream>
@@ -312,18 +311,7 @@ static long _checked_warps(long warps_per_block)
 }
 
 
-static long _checked_positive(const char *what, long x)
-{
-    if (x < 1) {
-        stringstream ss;
-        ss << "GpuPolynomialDetrender: expected " << what << " >= 1, got " << x;
-        throw runtime_error(ss.str());
-    }
-    return x;
-}
-
-
-// Also checks nt_chunk, since 'ntime' is initialized before 'nt_chunk' is.
+// Also checks nt_chunk, since 'ntime' is initialized (by the base class) before 'nt_chunk' is.
 static long _checked_ntime(long ntime, long nt_chunk)
 {
     _checked_nt_chunk(nt_chunk);
@@ -338,9 +326,8 @@ static long _checked_ntime(long ntime, long nt_chunk)
 
 GpuPolynomialDetrender::GpuPolynomialDetrender(long nbeams_, long nfreq_, long ntime_, long polydeg_,
                                                double epsilon_, long nt_chunk_, long warps_per_block_) :
-    nbeams(_checked_positive("nbeams", nbeams_)),
-    nfreq(_checked_positive("nfreq", nfreq_)),
-    ntime(_checked_ntime(ntime_, nt_chunk_)),
+    GpuTransformBase("GpuPolynomialDetrender", nbeams_, nfreq_, _checked_ntime(ntime_, nt_chunk_),
+                     /*scratch_nelts=*/0),
     polydeg(_checked_polydeg(polydeg_)),
     epsilon(_checked_epsilon(epsilon_)),
     nt_chunk(_checked_nt_chunk(nt_chunk_)),
@@ -361,11 +348,9 @@ static void _launch(float *intensity, float *weights, long nrows, long n, double
 }
 
 
-void GpuPolynomialDetrender::launch(Array<float> &intensity, Array<float> &weights,
-                                    Array<float> &scratch, cudaStream_t stream) const
+void GpuPolynomialDetrender::launch_checked(Array<float> &intensity, Array<float> &weights,
+                                            Array<float> &scratch, cudaStream_t stream) const
 {
-    check_launch_args(intensity, weights, scratch, nbeams, nfreq, ntime, scratch_nelts);
-
     // The kernel loads and stores float2, so both base pointers must be 8-byte aligned. A
     // cudaMalloc'ed array always is; a contiguous view starting at an odd element offset
     // of a larger array is not, and would fault inside the kernel rather than here.
@@ -390,7 +375,7 @@ void GpuPolynomialDetrender::launch(Array<float> &intensity, Array<float> &weigh
         case 7: _launch<8> (ip, wp, nrows, nt_chunk, epsilon, W, stream); break;
         case 8: _launch<9> (ip, wp, nrows, nt_chunk, epsilon, W, stream); break;
         default:
-            throw logic_error("GpuPolynomialDetrender::launch(): polydeg out of range (constructor should have caught this)");
+            throw logic_error("GpuPolynomialDetrender::launch_checked(): polydeg out of range (constructor should have caught this)");
     }
 }
 

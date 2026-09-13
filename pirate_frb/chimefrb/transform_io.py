@@ -1,18 +1,18 @@
-"""The interface every chimefrb transform follows ("the transform protocol"), and the
-helpers behind it: turning a yaml or legacy-json ``class_name`` into a class, the axis
-strings, and the argument checks a python-side ``launch()`` makes.
+"""The interface every chimefrb transform follows, and the helpers behind it: turning a yaml
+or legacy-json ``class_name`` into a class, the axis strings, and the yaml/json file functions.
 
-WHAT A TRANSFORM IS. Any python object that a :class:`WiPipeline` or
-:class:`RfiMaskPipeline` can run. Five come from C++ (GpuBadChannelMask,
+WHAT A TRANSFORM IS. A subclass of :class:`GpuTransformBase`, which is anything a
+:class:`WiPipeline` or :class:`RfiMaskPipeline` can run. Five are C++ (GpuBadChannelMask,
 GpuIntensityClipper, GpuStdDevClipper, GpuPolynomialDetrender, GpuSplineDetrender), the two
 pipeline classes are transforms themselves so that they nest, and any number can be written
-in cupy on top of :class:`CupyTransformBase`. A transform has::
+in python on top of the same base (``ExampleCupyTransform`` is the worked example;
+``GpuTransformBase``'s docstring says how). Every transform has::
 
     nbeams, nfreq, ntime    ints: the (beams, channels, time samples) block it processes,
                             fixed at construction
     scratch_nelts           int: float32 scratch elements launch() needs; may be 0
 
-    launch(intensity, weights, scratch, stream=None)
+    launch(intensity, weights, scratch, stream=None)     inherited from GpuTransformBase
     to_yaml_dict()                              -> dict
     from_yaml_dict(d, nbeams, nfreq, ntime)     classmethod -> instance
 
@@ -21,7 +21,9 @@ which the old rf_pipelines json format describes)::
 
     from_json_dict(d, nbeams, nfreq, ntime)     classmethod -> instance
 
-THE launch() CONTRACT.
+THE launch() CONTRACT. ``launch()`` is GpuTransformBase's; it checks everything below and
+raises RuntimeError, naming the transform, on a violation, before running the transform's
+``launch_checked()``.
 
 - ``intensity`` and ``weights`` are cupy float32 arrays of shape (nbeams, nfreq, ntime),
   C-contiguous, and distinct. Either or both may be modified in place; which one is the
@@ -32,8 +34,7 @@ THE launch() CONTRACT.
   0), or the literal ``None``, which allocates one. There is deliberately no default, so
   that a caller who wants the allocation says ``scratch=None`` and can see it in the call.
   Contents on entry are ignored and on exit are garbage; a transform uses a prefix of it,
-  and it must not alias the data arrays. One call processes exactly one block, and every
-  launch validates all of this and raises on a violation.
+  and it must not alias the data arrays. One call processes exactly one block.
 - ``stream`` is a cupy stream, or None for the current cupy stream. The launch is
   asynchronous on that stream; nothing synchronizes.
 
@@ -59,7 +60,6 @@ class names first.
 
 import json
 
-import numpy as np
 import yaml
 
 from ..pirate_pybind11 import ClipperAxis
@@ -90,7 +90,7 @@ def resolve_class(class_name, classes=None):
     Raises
     ------
     ValueError
-        If nothing of that name is found, or what is found has no ``from_yaml_dict``.
+        If nothing of that name is found, or what is found is not a GpuTransformBase subclass.
     """
 
     if not isinstance(class_name, str):
@@ -111,8 +111,9 @@ def resolve_class(class_name, classes=None):
 
 
 def _checked_transform_class(cls, class_name):
-    if not (isinstance(cls, type) and hasattr(cls, 'from_yaml_dict')):
-        raise ValueError(f"{class_name!r} is not a transform class (it has no from_yaml_dict())")
+    from .GpuTransformBase import GpuTransformBase     # here, not at module level: import cycle
+    if not (isinstance(cls, type) and issubclass(cls, GpuTransformBase)):
+        raise ValueError(f"{class_name!r} is not a transform class (it does not subclass GpuTransformBase)")
     return cls
 
 
@@ -258,64 +259,6 @@ def axis_from_json(s):
     if s not in _AXIS_FROM_JSON:
         raise ValueError(f"expected a legacy axis string, one of {sorted(_AXIS_FROM_JSON)}, got {s!r}")
     return _AXIS_FROM_JSON[s]
-
-
-# -------------------------------------------------------------------------------------------------
-#
-# launch() helpers
-
-
-def default_scratch_and_stream(scratch, stream, scratch_nelts):
-    """Resolve the two launch() arguments that may be None: ``scratch=None`` allocates a
-    cupy float32 array of ``scratch_nelts`` elements, and ``stream=None`` is the current cupy
-    stream. Returns ``(scratch, stream)``."""
-
-    import cupy as cp
-
-    if stream is None:
-        stream = cp.cuda.get_current_stream()
-    if scratch is None:
-        scratch = cp.empty(int(scratch_nelts), dtype=cp.float32)
-    return (scratch, stream)
-
-
-def check_launch_args(intensity, weights, scratch, shape, scratch_nelts, who):
-    """The python-side version of the launch() argument checks (module docstring): both data
-    arrays cupy float32, C-contiguous, of ``shape``, and distinct; ``scratch`` a 1-d
-    C-contiguous cupy float32 array with at least ``scratch_nelts`` elements, aliasing
-    neither. ``who`` names the caller in the message. Call after
-    :func:`default_scratch_and_stream`, so that ``scratch`` is an array."""
-
-    import cupy as cp
-
-    for (name, arr) in (('intensity', intensity), ('weights', weights)):
-        if not isinstance(arr, cp.ndarray):
-            raise TypeError(f"{who}.launch(): expected '{name}' to be a cupy array, got {type(arr).__name__}")
-        if arr.dtype != np.float32:
-            raise TypeError(f"{who}.launch(): expected '{name}' to be float32, got {arr.dtype}")
-        if arr.shape != tuple(shape):
-            raise ValueError(f"{who}.launch(): expected '{name}' of shape {tuple(shape)}, got {arr.shape}")
-        if not arr.flags.c_contiguous:
-            raise ValueError(f"{who}.launch(): expected '{name}' to be C-contiguous")
-
-    if intensity.data.ptr == weights.data.ptr:
-        raise ValueError(f"{who}.launch(): 'intensity' and 'weights' must be distinct arrays")
-
-    if not isinstance(scratch, cp.ndarray):
-        raise TypeError(f"{who}.launch(): expected 'scratch' to be a cupy array or None, got {type(scratch).__name__}")
-    if scratch.dtype != np.float32:
-        raise TypeError(f"{who}.launch(): expected 'scratch' to be float32, got {scratch.dtype}")
-    if (scratch.ndim != 1) or (not scratch.flags.c_contiguous):
-        raise ValueError(f"{who}.launch(): expected 'scratch' to be a 1-d contiguous array, got shape {scratch.shape}")
-    if scratch.size < scratch_nelts:
-        raise ValueError(f"{who}.launch(): 'scratch' has {scratch.size} elements, need at least {scratch_nelts}")
-    if scratch.size > 0:
-        for (name, arr) in (('intensity', intensity), ('weights', weights)):
-            lo = min(scratch.data.ptr, arr.data.ptr)
-            hi_s = scratch.data.ptr + 4 * scratch.size
-            hi_a = arr.data.ptr + 4 * arr.size
-            if (scratch.data.ptr < hi_a) and (arr.data.ptr < hi_s):
-                raise ValueError(f"{who}.launch(): 'scratch' overlaps '{name}'")
 
 
 # -------------------------------------------------------------------------------------------------

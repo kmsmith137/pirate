@@ -5,6 +5,8 @@
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
 
+#include "TransformBase.hpp"
+
 namespace pirate {
 namespace chimefrb {
 #if 0
@@ -57,10 +59,10 @@ namespace chimefrb {
 // number of streams at once (with one scratch per stream).
 //
 // Every chimefrb transform's launch() takes (intensity, weights, scratch, stream) on arrays
-// of shape (nbeams, nfreq, ntime); see launch_utils.hpp. See notes/chimefrb.md for the
-// porting rules this class follows.
+// of shape (nbeams, nfreq, ntime); see GpuTransformBase in TransformBase.hpp. See
+// notes/chimefrb.md for the porting rules this class follows.
 
-struct GpuSplineDetrender
+struct GpuSplineDetrender : public GpuTransformBase
 {
     // (nbeams, nfreq, ntime) is the shape of the arrays launch() will be given; the tables
     // and the kernel geometry are built from it.
@@ -73,39 +75,37 @@ struct GpuSplineDetrender
 
     ~GpuSplineDetrender();
 
-    const long nbeams, nfreq, ntime;   // array shape; ntime a positive multiple of 32
+    // Inherited from GpuTransformBase: nbeams, nfreq, ntime (the array shape; ntime a positive
+    // multiple of 32), scratch_nelts (the float32 elements launch() needs), and launch().
     const long nbins;                  // equal bins; the spline is C^1 across bin edges
     const double epsilon;              // regularization strength (see the class comment)
 
     // Derived in the constructor.
-    long N_phi;               // 2*(nbins+1): value and slope at each bin edge
-    long nfrange;             // freq-ranges (an internal decomposition; see the .cu)
-    long channels_per_range;  // freq-range width used, derived from (nfreq, ntime)
-    long solve_threads;       // block size of the solve kernel
-    long scratch_nelts;       // float32 elements of scratch launch() needs
+    const long N_phi;               // 2*(nbins+1): value and slope at each bin edge
+    const long nfrange;             // freq-ranges (an internal decomposition; see the .cu)
+    const long channels_per_range;  // freq-range width used, derived from (nfreq, ntime)
+    long solve_threads;             // block size of the solve kernel
 
     // The bin edges, channel indices of length nbins+1, running from 0 to nfreq. Exposed
     // so that a test can check them against the reference rather than recompute them.
     std::vector<long> bin_edges() const;
 
-    // launch(): asynchronously launch the kernels, and return without synchronizing the
-    // stream. Note: stream=NULL is allowed, but is not the default.
+    // launch_checked(): asynchronously launch the kernels, and return without synchronizing
+    // the stream. Called by GpuTransformBase::launch(), which checks the arguments first.
     //
     //   intensity  shape (nbeams, nfreq, ntime), float32, fully contiguous, on GPU. The
     //              fitted baseline is subtracted in place at EVERY channel, weighted or not.
     //              A time sample whose weights are all zero is left untouched.
     //
-    //   weights    same shape and layout, not aliased with 'intensity'. Must be >= 0. NOT
-    //              checked (that would cost a pass over the data, and every producer in the
-    //              chain guarantees it by construction); negative weights would make the
-    //              normal equations indefinite. Read only.
+    //   weights    same shape and layout. Must be >= 0. NOT checked (that would cost a
+    //              pass over the data, and every producer in the chain guarantees it by
+    //              construction); negative weights would make the normal equations
+    //              indefinite. Read only.
     //
-    //   scratch    1-d, with at least scratch_nelts elements. Contents on entry are ignored
-    //              and on exit are garbage.
-    void launch(ksgpu::Array<float> &intensity,
-                const ksgpu::Array<float> &weights,
-                ksgpu::Array<float> &scratch,
-                cudaStream_t stream) const;
+    //   scratch    1-d, exactly scratch_nelts elements. Contents on entry are ignored and
+    //              on exit are garbage.
+    void launch_checked(ksgpu::Array<float> &intensity, ksgpu::Array<float> &weights,
+                        ksgpu::Array<float> &scratch, cudaStream_t stream) const override;
 
     // Static timing function (called via 'python -m pirate_frb time --cfrb'). Times the
     // two shapes the old search's production RFI chain uses this detrender at, and
@@ -114,6 +114,28 @@ struct GpuSplineDetrender
     static void time_selected();
 
 private:
+    // Everything the constructor derives from (nfreq, ntime, nbins) alone: the bin edges,
+    // the freq-range decomposition, and the counts that fix the scratch layout. It is
+    // computed by _geometry() BEFORE the base class is constructed, because
+    // GpuTransformBase::scratch_nelts is a const member and must be known then; the public
+    // constructor delegates to the private one below with the result.
+    struct Geometry {
+        std::vector<long> bin_edges;              // nbins+1 channel indices, 0 .. nfreq
+        std::vector<long> fr_lo, fr_hi, fr_j0;    // one freq-range per element (see the .cu)
+        long N_phi = 0;                           // 2*(nbins+1)
+        long channels_per_range = 0;
+        long ncomp = 0;                           // per-freq-range components (14)
+
+        long nfrange() const { return long(fr_lo.size()); }
+        long scratch_nelts(long nbeams, long ntime) const;
+    };
+
+    // Checks nbins, nfreq and ntime (see the public constructor), then fills a Geometry.
+    static Geometry _geometry(long nfreq, long ntime, long nbins);
+
+    GpuSplineDetrender(long nbeams, long nfreq, long ntime, long nbins, double epsilon,
+                       const Geometry &g);
+
     // Persistent device arrays, built once in the constructor: the per-channel basis
     // tables, the regulator table and the constant function's coefficients, and the
     // freq-range / zone descriptors. See the .cu file and detrender_kernels.hpp.
@@ -125,10 +147,10 @@ private:
     ksgpu::Array<int> zone_desc;      // (1, 4)
 
     // Per-freq-range components the first kernel accumulates (14 for the cubic Hermite
-    // basis); with N_phi it fixes the scratch layout that launch() carves.
-    long ncomp;
+    // basis); with N_phi it fixes the scratch layout that launch_checked() carves.
+    const long ncomp;
 
-    std::vector<long> _bin_edges;
+    const std::vector<long> _bin_edges;
 
     // The time-basis stencils (trivial at (n,W) = (0,0), but the kernel takes them by
     // value), held as an opaque blob so that this header does not need the device-code

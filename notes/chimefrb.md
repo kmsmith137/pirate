@@ -68,19 +68,24 @@ explicitly), but if you're unsure, just ask.
 
 ## The transform interface
 
-The ported RFI transforms (GpuBadChannelMask, GpuIntensityClipper, GpuStdDevClipper,
-GpuPolynomialDetrender, GpuSplineDetrender) share one python-side interface, so that the
-container classes `WiPipeline` (a port of `rf_pipelines::pipeline`) and `RfiMaskPipeline`
-(`rf_pipelines::wi_sub_pipeline`) can run any sequence of them: geometry members `nbeams`,
-`nfreq`, `ntime`, `scratch_nelts`; `launch(intensity, weights, scratch, stream=None)`; and
-`to_yaml_dict()` / `from_yaml_dict()`. The interface is stated in full in
-`pirate_frb/chimefrb/transform_io.py`, and `include/pirate/chimefrb/launch_utils.hpp` holds
-the C++ side of the launch checks. A newly ported transform should follow it (constructor:
-geometry first, then the semantic parameters in the old code's order, then performance
-knobs), and only transforms with a legacy json form get a `from_json_dict()`. Transforms
-that need no C++ are written in cupy on `CupyTransformBase`; `ExampleCupyTransform` is the
-worked example. `pirate_frb cfrb json2yaml` converts an old json chain to the yaml form,
-and `pirate_frb cfrb time_pipeline` times one on the GPU.
+Every ported RFI transform (GpuBadChannelMask, GpuIntensityClipper, GpuStdDevClipper,
+GpuPolynomialDetrender, GpuSplineDetrender) is a subclass of the C++ class `GpuTransformBase`
+(`include/pirate/chimefrb/TransformBase.hpp`), and so are the container classes `WiPipeline`
+(a port of `rf_pipelines::pipeline`) and `RfiMaskPipeline` (`rf_pipelines::wi_sub_pipeline`),
+which are python; a pipeline can therefore run any sequence of them. The base class owns
+the geometry members `nbeams`, `nfreq`, `ntime`, `scratch_nelts` and the non-virtual
+`launch(intensity, weights, scratch, stream)`, which checks its arguments and calls the
+virtual `launch_checked()` -- overridden in C++ by the ported transforms, and in python by
+the pipelines, `ExampleCupyTransform`, and anything a user writes (a pybind11 trampoline in
+`src_pybind11/pirate_pybind11_chimefrb.cpp` carries the call into python). The python side
+of the interface -- `launch()` with `stream=None` / `scratch=None`, the `to_yaml_dict()` /
+`from_yaml_dict()` stubs, the docstring a python author reads -- is injected in
+`pirate_frb/chimefrb/GpuTransformBase.py`, and `pirate_frb/chimefrb/transform_io.py` states
+the whole interface. A newly ported transform should follow it (constructor: geometry
+first, then the semantic parameters in the old code's order, then performance knobs; the
+class name passed to the base is what prefixes its error messages), and only transforms
+with a legacy json form get a `from_json_dict()`. `pirate_frb cfrb json2yaml` converts an
+old json chain to the yaml form, and `pirate_frb cfrb time_pipeline` times one on the GPU.
 
 ## Appendix A: building the chimefrb code
 

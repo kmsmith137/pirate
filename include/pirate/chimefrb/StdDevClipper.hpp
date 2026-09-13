@@ -73,12 +73,13 @@ struct GpuStdDevClipper : public GpuClipperBase
     const double sigma;            // step-3 threshold, in units of sd(variances)
     const long warps_per_block;    // 4, 8, 16 or 32; step 4 only
 
-    // Inherited from GpuClipperBase: nbeams, nfreq, ntime, nt_chunk, axis, Df, Dt, two_pass;
-    // the derived geometry F_ds, T_ds, wrms_L, wrms_R (the rows per beam are wrms_R / nbeams);
-    // scratch_nelts; and niter and iter_sigma, which are always 1 and 0 here.
+    // Inherited from GpuClipperBase and GpuTransformBase: name, nbeams, nfreq, ntime,
+    // nt_chunk, axis, Df, Dt, two_pass; the derived geometry F_ds, T_ds, wrms_L, wrms_R (the
+    // rows per beam are wrms_R / nbeams); scratch_nelts; launch(); and niter and iter_sigma,
+    // which are always 1 and 0 here.
 
-    // launch(): asynchronously launch the kernels, and return without synchronizing the
-    // stream. Note: stream=NULL is allowed, but is not the default.
+    // launch_checked(): asynchronously launch the kernels, and return without synchronizing
+    // the stream. Called by GpuTransformBase::launch(), which checks the arguments first.
     //
     // All arrays are float32, fully contiguous, and in GPU memory.
     //
@@ -88,14 +89,12 @@ struct GpuStdDevClipper : public GpuClipperBase
     //              where the clip fires, and every other weight is left bit-identical. Must
     //              be >= 0 on entry, which is not checked (see GpuWrms::launch()).
     //
-    //   scratch    1-d, with at least scratch_nelts elements. Contents on entry are ignored
-    //              and on exit are garbage.
+    //   scratch    1-d, exactly scratch_nelts elements. Contents on entry are ignored and
+    //              on exit are garbage.
     //
     //   stream     CUDA stream.
-    void launch(const ksgpu::Array<float> &intensity,
-                ksgpu::Array<float> &weights,
-                ksgpu::Array<float> &scratch,
-                cudaStream_t stream) const;
+    void launch_checked(ksgpu::Array<float> &intensity, ksgpu::Array<float> &weights,
+                        ksgpu::Array<float> &scratch, cudaStream_t stream) const override;
 
     // Static timing function (called via 'python -m pirate_frb time --cfrb'). Times the two
     // configurations the old search's production RFI chain uses, at every supported

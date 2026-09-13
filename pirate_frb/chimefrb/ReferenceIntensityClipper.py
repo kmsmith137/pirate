@@ -15,7 +15,7 @@ import numpy as np
 import ksgpu
 from ..pirate_pybind11 import ClipperAxis, GpuIntensityClipper
 from .transform_io import (axis_from_json, axis_from_str, axis_to_str, check_json_keys,
-                           check_yaml_keys, default_scratch_and_stream)
+                           check_yaml_keys)
 from .ReferenceWiDownsampler import ReferenceWiDownsampler
 from .ReferenceWrms import ReferenceWrms
 
@@ -41,33 +41,8 @@ INTENSITY_CLIPPER_YAML_KEYS = ('nt_chunk', 'axis', 'sigma', 'niter', 'iter_sigma
 @ksgpu.inject_methods(GpuIntensityClipper)
 class GpuIntensityClipperInjections:
     # No class docstring here: GpuIntensityClipper's docstring lives in the pybind11
-    # binding (option 1 in notes/docstrings.md). This injector adds the python side of the
-    # transform protocol (transform_io.py): launch() with stream=None and scratch=None
-    # handling, and the yaml/legacy-json methods.
-
-    # Save reference to C++ method
-    _cpp_launch = GpuIntensityClipper.launch
-
-    def launch(self, intensity, weights, scratch, stream=None):
-        """GPU kernel launch (async, does not sync stream).
-
-        Parameters
-        ----------
-        intensity : cupy.ndarray
-            Shape (nbeams, nfreq, ntime), float32, fully contiguous, on GPU. Read only.
-        weights : cupy.ndarray
-            Same shape and dtype. MODIFIED IN PLACE: zeroed where the clip fires, and
-            bit-identical everywhere else. Must be >= 0 on entry.
-        scratch : cupy.ndarray or None
-            1-d float32, on GPU, with at least ``self.scratch_nelts`` elements; garbage in,
-            garbage out. None allocates one -- convenient for tests, wasteful in a loop,
-            since the point of the argument is to reuse one allocation across chunks and
-            across the many clippers in a chain.
-        stream : cupy.cuda.Stream or None, optional
-            CUDA stream to use. If None, uses current cupy stream.
-        """
-        (scratch, stream) = default_scratch_and_stream(scratch, stream, self.scratch_nelts)
-        self._cpp_launch(intensity, weights, scratch, stream.ptr)
+    # binding (option 1 in notes/docstrings.md). launch() is inherited from GpuTransformBase;
+    # this injector adds the yaml and legacy-json methods (transform_io.py).
 
     def to_yaml_dict(self):
         """The yaml form (see ``transform_io``): the class name and the semantic parameters

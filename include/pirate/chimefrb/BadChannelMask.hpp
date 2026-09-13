@@ -7,6 +7,8 @@
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
 
+#include "TransformBase.hpp"
+
 namespace pirate {
 namespace chimefrb {
 #if 0
@@ -31,11 +33,11 @@ namespace chimefrb {
 //
 // Nothing depends on time, so ntime may be anything. The intensity is never touched: it is
 // a launch() argument only because every chimefrb transform takes the same four
-// (see launch_utils.hpp).
+// (see GpuTransformBase in TransformBase.hpp).
 //
 // See notes/chimefrb.md for the porting rules this class follows.
 
-struct GpuBadChannelMask
+struct GpuBadChannelMask : public GpuTransformBase
 {
     // (nbeams, nfreq, ntime) is the shape of the arrays launch() will be given.
     //
@@ -60,31 +62,30 @@ struct GpuBadChannelMask
                       std::pair<double,double> freq_range,
                       long warps_per_block = 4);
 
-    const long nbeams, nfreq, ntime;                           // array shape
+    // Inherited from GpuTransformBase: nbeams, nfreq, ntime (the array shape), scratch_nelts
+    // (always 0: the kernel needs no scratch), and launch().
     const std::vector<std::pair<double,double>> mask_ranges;   // MHz, as given
     const std::pair<double,double> freq_range;                 // (lo, hi) MHz of the band
     const long warps_per_block;                                // 4, 8, 16 or 32
     const long nmasked;                                        // number of channels with keep == 0
     const ksgpu::Array<uint8_t> keep;                          // shape (nfreq,), IN GPU MEMORY, 0 or 1
-    const long scratch_nelts = 0;                              // launch() needs no scratch
 
-    // launch(): asynchronously launch the kernel, and return without synchronizing the
-    // stream. Note: stream=NULL is allowed, but is not the default.
+    // launch_checked(): asynchronously launch the kernel, and return without synchronizing
+    // the stream. Called by GpuTransformBase::launch(), which checks the arguments first.
     //
     //   intensity  shape (nbeams, nfreq, ntime), float32, fully contiguous, in GPU memory.
-    //              Checked and never touched.
+    //              Never touched.
     //
-    //   weights    same shape and layout, not aliased with 'intensity'. MODIFIED IN PLACE:
-    //              every weight in a masked channel is set to +0.0, and every other weight
-    //              is left bit-identical.
+    //   weights    same shape and layout. MODIFIED IN PLACE: every weight in a masked
+    //              channel is set to +0.0, and every other weight is left bit-identical.
     //
-    //   scratch    1-d, or empty. Unused: scratch_nelts == 0.
+    //   scratch    Unused: scratch_nelts == 0.
     //
     //   stream     CUDA stream.
     //
-    // When nmasked == 0, launch() checks its arguments and returns without launching.
-    void launch(const ksgpu::Array<float> &intensity, ksgpu::Array<float> &weights,
-                ksgpu::Array<float> &scratch, cudaStream_t stream) const;
+    // When nmasked == 0, returns without launching.
+    void launch_checked(ksgpu::Array<float> &intensity, ksgpu::Array<float> &weights,
+                        ksgpu::Array<float> &scratch, cudaStream_t stream) const override;
 
     // Static timing function (called via 'python -m pirate_frb time --cfrb').
     // Times the kernel at the production array size, for masks from one channel to all of

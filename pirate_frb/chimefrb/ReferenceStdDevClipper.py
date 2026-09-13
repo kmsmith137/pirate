@@ -16,7 +16,7 @@ import numpy as np
 import ksgpu
 from ..pirate_pybind11 import GpuStdDevClipper
 from .transform_io import (axis_from_json, axis_from_str, axis_to_str, check_json_keys,
-                           check_yaml_keys, default_scratch_and_stream)
+                           check_yaml_keys)
 from .ReferenceIntensityClipper import AXIS_FREQ, AXIS_TIME, AXIS_NONE, wrms_view
 from .ReferenceWiDownsampler import ReferenceWiDownsampler
 from .ReferenceWrms import ReferenceWrms
@@ -30,31 +30,8 @@ STD_DEV_CLIPPER_YAML_KEYS = ('nt_chunk', 'axis', 'sigma', 'Df', 'Dt', 'two_pass'
 @ksgpu.inject_methods(GpuStdDevClipper)
 class GpuStdDevClipperInjections:
     # No class docstring here: GpuStdDevClipper's docstring lives in the pybind11 binding
-    # (option 1 in notes/docstrings.md). This injector adds the python side of the
-    # transform protocol (transform_io.py): launch() with stream=None and scratch=None
-    # handling, and the yaml/legacy-json methods.
-
-    # Save reference to C++ method
-    _cpp_launch = GpuStdDevClipper.launch
-
-    def launch(self, intensity, weights, scratch, stream=None):
-        """GPU kernel launch (async, does not sync stream).
-
-        Parameters
-        ----------
-        intensity : cupy.ndarray
-            Shape (nbeams, nfreq, ntime), float32, fully contiguous, on GPU. Read only.
-        weights : cupy.ndarray
-            Same shape and dtype. MODIFIED IN PLACE: whole rows are zeroed where the clip
-            fires, and every other weight is left bit-identical. Must be >= 0 on entry.
-        scratch : cupy.ndarray or None
-            1-d float32, on GPU, with at least ``self.scratch_nelts`` elements; garbage in,
-            garbage out. None allocates one -- convenient for tests, wasteful in a loop.
-        stream : cupy.cuda.Stream or None, optional
-            CUDA stream to use. If None, uses current cupy stream.
-        """
-        (scratch, stream) = default_scratch_and_stream(scratch, stream, self.scratch_nelts)
-        self._cpp_launch(intensity, weights, scratch, stream.ptr)
+    # (option 1 in notes/docstrings.md). launch() is inherited from GpuTransformBase; this
+    # injector adds the yaml and legacy-json methods (transform_io.py).
 
     def to_yaml_dict(self):
         """The yaml form (see ``transform_io``): the class name and the semantic parameters

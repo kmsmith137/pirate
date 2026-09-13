@@ -3,14 +3,18 @@ files, GPU ports of the transforms in its production RFI chain (each with a nump
 reference), and the two containers that chain them -- WiPipeline and RfiMaskPipeline --
 which read the old json configs and read/write a yaml format of their own.
 
-Every transform follows one interface, stated in ``transform_io.py``; ``CupyTransformBase``
-and the worked example ``ExampleCupyTransform`` are how to add a transform in cupy.
+Every transform is a subclass of ``GpuTransformBase`` (the interface is stated in
+``transform_io.py``); the worked example ``ExampleCupyTransform`` shows how to add one in cupy.
 
 See ``notes/chimefrb.md`` for the porting rules this subpackage follows.
 """
 
 # Import C++ classes from pirate_pybind11
 from ..pirate_pybind11 import AssembledChunk, GpuClipperBase
+
+# GpuTransformBase, the base class of every transform, has method injections (its whole
+# python-side interface) in GpuTransformBase.py, which applies them and re-exports the class.
+from .GpuTransformBase import GpuTransformBase
 
 # GpuWiDownsampler has method injections, which live in ReferenceWiDownsampler.py
 # alongside its numpy reference. That module both applies the injections (as an
@@ -32,7 +36,6 @@ from .transform_io import (CHIME_FREQ_RANGE, IGNORED_JSON_CLASSES, LEGACY_JSON_C
                            PIPELINE_YAML_HEADER, axis_from_str, axis_to_str, check_yaml_keys,
                            read_json, read_yaml, resolve_class, transform_from_json_dict,
                            transform_from_yaml_dict, write_yaml, yaml_string)
-from .CupyTransformBase import CupyTransformBase
 from .ExampleCupyTransform import ExampleCupyTransform
 from .WiPipeline import WiPipeline
 from .RfiMaskPipeline import RfiMaskPipeline

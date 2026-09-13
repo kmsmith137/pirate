@@ -1,5 +1,6 @@
-"""Tests for WiPipeline, RfiMaskPipeline and CupyTransformBase: the containers of the
-chimefrb port.
+"""Tests for WiPipeline and RfiMaskPipeline (the containers of the chimefrb port), and for
+the python side of GpuTransformBase (the base class every transform, and every python
+transform, subclasses).
 
 Dispatched from ``python -m pirate_frb test --cfrb``.
 
@@ -18,9 +19,11 @@ Every iteration builds one random pipeline in the production chain's shape -- a 
 holding an RfiMaskPipeline and two leaves, in a random order -- launches it, checks the
 prediction, then round-trips it through yaml and launches the reconstruction. At iteration 0
 only: a hardcoded legacy json (the old rf_pipelines format) exercising every branch of the
-reader, a list of arguments that must be refused, one smoke launch of a chain of the REAL
-transforms (which catches a scratch accounting error, since the C++ transforms assert their
-scratch size), and ExampleCupyTransform on planted outliers.
+reader, a list of arguments that must be refused, the base class's contract for a python
+subclass (the arguments launch_checked() receives, the stream, the error messages), one
+smoke launch of a chain of the REAL transforms (which catches a scratch accounting error,
+since the C++ transforms assert their scratch size), and ExampleCupyTransform on planted
+outliers.
 """
 
 import os
@@ -29,9 +32,9 @@ import tempfile
 import numpy as np
 import yaml
 
-from . import (ClipperAxis, CupyTransformBase, ExampleCupyTransform, GpuBadChannelMask,
-               GpuIntensityClipper, GpuPolynomialDetrender, GpuSplineDetrender,
-               GpuStdDevClipper, RfiMaskPipeline, WiPipeline)
+from . import (ClipperAxis, ExampleCupyTransform, GpuBadChannelMask, GpuIntensityClipper,
+               GpuPolynomialDetrender, GpuSplineDetrender, GpuStdDevClipper, GpuTransformBase,
+               RfiMaskPipeline, WiPipeline)
 from .transform_io import (check_yaml_keys, transform_from_json_dict, transform_from_yaml_dict,
                            yaml_string)
 from ..utils import atomic_print
@@ -40,12 +43,12 @@ from .testutils import default_rng as _default_rng
 
 # -------------------------------------------------------------------------------------------------
 #
-# Toy transforms. Each is a complete transform (CupyTransformBase supplies the checked launch),
+# Toy transforms. Each is a complete transform (GpuTransformBase supplies the checked launch),
 # so they also exercise the base class and the 'classes=' mechanism of the yaml reader, which
 # is how the reader finds classes that are not part of pirate_frb.chimefrb.
 
 
-class _ToyAdd(CupyTransformBase):
+class _ToyAdd(GpuTransformBase):
     """intensity += c. Asks for scratch: inside an RfiMaskPipeline, a wrong scratch offset
     shows up as a too-small or overlapping scratch, which the base class's checks refuse."""
 
@@ -68,7 +71,7 @@ class _ToyAdd(CupyTransformBase):
         return cls(nbeams, nfreq, ntime, d['c'])
 
 
-class _ToyScale(CupyTransformBase):
+class _ToyScale(GpuTransformBase):
     """intensity *= m."""
 
     def __init__(self, nbeams, nfreq, ntime, m):
@@ -87,7 +90,7 @@ class _ToyScale(CupyTransformBase):
         return cls(nbeams, nfreq, ntime, d['m'])
 
 
-class _ToyZeroChannels(CupyTransformBase):
+class _ToyZeroChannels(GpuTransformBase):
     """weights[:, ::step, :] = 0."""
 
     def __init__(self, nbeams, nfreq, ntime, step):
@@ -104,6 +107,36 @@ class _ToyZeroChannels(CupyTransformBase):
     def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
         check_yaml_keys(d, '_ToyZeroChannels', ['step'])
         return cls(nbeams, nfreq, ntime, d['step'])
+
+
+class _DuckTransform:
+    """Has every attribute and method of a transform, but does not subclass GpuTransformBase.
+    A pipeline must refuse it: the base class is where the launch checks live."""
+
+    def __init__(self, nbeams, nfreq, ntime):
+        (self.nbeams, self.nfreq, self.ntime, self.scratch_nelts) = (nbeams, nfreq, ntime, 0)
+
+    def launch(self, intensity, weights, scratch, stream=None):
+        pass
+
+    def to_yaml_dict(self):
+        return {'class_name': '_DuckTransform'}
+
+
+class _ToySpy(GpuTransformBase):
+    """Records what its launch_checked() was handed -- the current stream, the scratch array's
+    shape and dtype, and the three arrays' device pointers -- and modifies nothing. This is
+    the check of the base class's contract for a python subclass."""
+
+    def __init__(self, nbeams, nfreq, ntime, scratch_nelts):
+        super().__init__(nbeams, nfreq, ntime, scratch_nelts=scratch_nelts)
+        self.seen = None
+
+    def launch_checked(self, intensity, weights, scratch):
+        import cupy as cp
+        self.seen = dict(stream_ptr=cp.cuda.get_current_stream().ptr,
+                         scratch_shape=scratch.shape, scratch_dtype=scratch.dtype,
+                         ptrs=(intensity.data.ptr, weights.data.ptr, scratch.data.ptr))
 
 
 TOY_CLASSES = [_ToyAdd, _ToyScale, _ToyZeroChannels]
@@ -304,7 +337,9 @@ def _check_arguments():
     _expect_raise(ValueError, RfiMaskPipeline, [add], 1, 1)                                # (1, 1)
     _expect_raise(ValueError, RfiMaskPipeline, [add], 2, 1, -1.0)                          # w_cutoff < 0
     _expect_raise(ValueError, RfiMaskPipeline, [_ToyAdd(B, 48, T, 1)], 2, 1)              # inner nfreq % 32
-    _expect_raise(ValueError, CupyTransformBase, 0, F, T)
+    _expect_raise(RuntimeError, GpuTransformBase, 0, F, T)                                 # nbeams < 1
+    _expect_raise(RuntimeError, GpuTransformBase, B, F, T, -1)                             # scratch_nelts < 0
+    _expect_raise(TypeError, WiPipeline, [add, _DuckTransform(B, F, T)])                    # not a GpuTransformBase
 
     _expect_raise(ValueError, transform_from_yaml_dict, {'class_name': 'NoSuchTransform'}, B, F, T)
     _expect_raise(ValueError, transform_from_yaml_dict, {'class_name': '_ToyAdd', 'c': 1.0}, B, F, T)  # no classes=
@@ -326,6 +361,58 @@ def _check_arguments():
     _expect_raise(ValueError, GpuPolynomialDetrender.from_json_dict,
                   {'class_name': 'polynomial_detrender', 'epsilon': 0.01, 'polydeg': 4.5,
                    'nt_chunk': 64, 'axis': 'AXIS_TIME'}, B, F, T)                                     # non-integer polydeg
+
+
+def _check_base_class(cp):
+    """GpuTransformBase's contract for a PYTHON subclass, which goes through the C++ base class
+    and back: launch_checked() runs on the launch stream, sees exactly scratch_nelts elements
+    of scratch, and sees the caller's arrays (not copies); a failed check names the subclass;
+    a missing launch_checked() is a NotImplementedError; and every transform, C++ or python,
+    is a GpuTransformBase."""
+
+    (B, F, T) = (2, 64, 128)
+    intensity = cp.zeros((B, F, T), dtype=cp.float32)
+    weights = cp.ones((B, F, T), dtype=cp.float32)
+
+    # The stream and the arrays. The scratch is oversized on purpose: launch_checked() must
+    # see exactly scratch_nelts elements of it.
+    spy = _ToySpy(B, F, T, 100)
+    scratch = cp.empty(137, dtype=cp.float32)
+    stream = cp.cuda.Stream()
+    spy.launch(intensity, weights, scratch, stream=stream)
+    stream.synchronize()
+    assert spy.seen is not None, 'a python launch_checked() was not called'
+    assert spy.seen['stream_ptr'] == stream.ptr, 'launch_checked() did not run with the launch stream current'
+    assert spy.seen['scratch_shape'] == (100,) and spy.seen['scratch_dtype'] == cp.float32
+    assert spy.seen['ptrs'] == (intensity.data.ptr, weights.data.ptr, scratch.data.ptr), \
+        'launch_checked() did not receive views of the caller\'s arrays'
+
+    spy0 = _ToySpy(B, F, T, 0)
+    spy0.launch(intensity, weights, None)
+    assert spy0.seen['scratch_shape'] == (0,) and spy0.seen['scratch_dtype'] == cp.float32
+
+    # A failed check is a RuntimeError from C++, worded for a python reader, naming the class.
+    try:
+        spy.launch(intensity, cp.ones((B, F, T // 2), dtype=cp.float32), None)
+    except RuntimeError as e:
+        msg = str(e)
+        assert msg.startswith('_ToySpy.launch():') and "'weights'" in msg and '(2, 64, 64)' in msg, msg
+    else:
+        raise AssertionError('a wrong-shaped weights array was accepted')
+    _expect_raise(RuntimeError, spy.launch, intensity, weights, cp.empty(5, dtype=cp.float32))   # too small
+    _expect_raise(RuntimeError, spy.launch, intensity, intensity, None)                            # aliased
+    _expect_raise(RuntimeError, spy.launch, intensity, np.ones((B, F, T), dtype=np.float32), None) # host array
+    _expect_raise(TypeError, spy.launch, intensity, cp.ones((B, F, T), dtype=cp.float64), None)   # wrong dtype
+
+    # The stubs a subclass must replace, reached through the trampoline (launch_checked) or
+    # directly (to_yaml_dict).
+    bare = GpuTransformBase(B, F, T)
+    _expect_raise(NotImplementedError, bare.launch, intensity, weights, None)
+    _expect_raise(NotImplementedError, bare.to_yaml_dict)
+
+    for t in (GpuBadChannelMask(B, F, T, [(500.0, 520.0)], (400.0, 800.0)), spy,
+              WiPipeline([spy]), RfiMaskPipeline([_ToyAdd(B, F // 2, T, 1.0)], 2, 1)):
+        assert isinstance(t, GpuTransformBase), f'{type(t).__name__} is not a GpuTransformBase'
 
 
 def _check_real_transforms(cp, rng):
@@ -398,7 +485,8 @@ def _check_example_transform(cp, rng):
 def test_wi_pipeline(iteration=0, rng=None, verbose=False):
     """One random pipeline of toy transforms, launched and checked against its closed-form
     result, then round-tripped through yaml; on iteration 0, also the legacy json reader, the
-    refused arguments, a smoke launch of the real transforms, and ExampleCupyTransform."""
+    refused arguments, the base class's contract for a python subclass, a smoke launch of the
+    real transforms, and ExampleCupyTransform."""
 
     try:
         import cupy as cp
@@ -442,6 +530,7 @@ def test_wi_pipeline(iteration=0, rng=None, verbose=False):
     if iteration == 0:
         _check_legacy_json()
         _check_arguments()
+        _check_base_class(cp)
         _check_real_transforms(cp, rng)
         _check_example_transform(cp, rng)
 

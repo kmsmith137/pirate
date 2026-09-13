@@ -7,12 +7,15 @@
 //   - GpuWiDownsampler: launch() converts stream=None to the current cupy stream
 //   - GpuWrms: same, and lets the caller omit the scratch array
 //   - GpuWeightUpsampler: launch() converts stream=None to the current cupy stream
+//   - GpuTransformBase (injections in pirate_frb/chimefrb/GpuTransformBase.py, not a
+//     Reference*.py): the whole python side of the transform interface -- __init__,
+//     launch() with stream=None and scratch=None handling, the launch_checked() and yaml
+//     stubs, __repr__ -- inherited by every transform, C++ or python.
 //   - The five "transforms" -- GpuBadChannelMask, GpuIntensityClipper, GpuStdDevClipper,
-//     GpuPolynomialDetrender, GpuSplineDetrender -- share one python-side interface (see
-//     pirate_frb/chimefrb/transform_io.py): launch() converts stream=None to the current
-//     cupy stream and allocates scratch=None; to_yaml_dict() / from_yaml_dict() read and
-//     write the yaml form; from_json_dict() reads the old rf_pipelines json form.
-//     GpuBadChannelMask's __init__ also normalizes its range arguments to python floats.
+//     GpuPolynomialDetrender, GpuSplineDetrender -- add to_yaml_dict() / from_yaml_dict()
+//     (the yaml form) and from_json_dict() (the old rf_pipelines json form); see
+//     pirate_frb/chimefrb/transform_io.py. GpuBadChannelMask's __init__ also normalizes
+//     its range arguments to python floats.
 
 #define PY_ARRAY_UNIQUE_SYMBOL PyArray_API_pirate
 #define NO_IMPORT_ARRAY  // Secondary file: don't call _import_array()
@@ -31,6 +34,7 @@
 #include "../include/pirate/chimefrb/PolynomialDetrender.hpp"
 #include "../include/pirate/chimefrb/SplineDetrender.hpp"
 #include "../include/pirate/chimefrb/StdDevClipper.hpp"
+#include "../include/pirate/chimefrb/TransformBase.hpp"
 #include "../include/pirate/chimefrb/WeightUpsampler.hpp"
 #include "../include/pirate/chimefrb/WiDownsampler.hpp"
 #include "../include/pirate/chimefrb/Wrms.hpp"
@@ -53,6 +57,38 @@ static Array<float> _decode_dst(const AssembledChunk &self, optional<Array<float
         return *out;
     return Array<float> ({self.nfreq(), self.nt()}, af_uhost);
 }
+
+
+// PyGpuTransformBase: the python side of GpuTransformBase (a pybind11 "trampoline"). When a
+// python class subclasses GpuTransformBase, pybind11 constructs this class in its place, so
+// that launch_checked() -- called by GpuTransformBase::launch() after the argument checks --
+// reaches the python subclass. It hands everything to ONE python method,
+// _dispatch_launch_checked() in pirate_frb/chimefrb/GpuTransformBase.py, which makes the
+// stream current and calls the subclass's launch_checked(intensity, weights, scratch).
+// Keeping the stream and scratch handling in python keeps it readable from python.
+//
+// The three arrays reach python as new cupy objects on the caller's memory (the ksgpu
+// caster's DLPack export), so in-place writes in launch_checked() land in the caller's
+// arrays. 'scratch' is passed as None when scratch_nelts == 0.
+struct PyGpuTransformBase : public GpuTransformBase
+{
+    using GpuTransformBase::GpuTransformBase;
+
+    void launch_checked(Array<float> &intensity, Array<float> &weights,
+                        Array<float> &scratch, cudaStream_t stream) const override
+    {
+        py::gil_scoped_acquire gil;   // launch() is bound with the GIL released
+
+        py::function f = py::get_override(static_cast<const GpuTransformBase *>(this),
+                                          "_dispatch_launch_checked");
+        if (!f)
+            throw std::runtime_error(name + ": _dispatch_launch_checked() not found on the python"
+                                     " class; is pirate_frb.chimefrb imported?");
+
+        py::object s = (scratch_nelts > 0) ? py::cast(scratch) : py::object(py::none());
+        f(intensity, weights, s, reinterpret_cast<uintptr_t>(stream));
+    }
+};
 
 
 void register_chimefrb_bindings(pybind11::module &m)
@@ -351,9 +387,35 @@ void register_chimefrb_bindings(pybind11::module &m)
             "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 
+    // GpuTransformBase: the base class of every transform. Python injections in
+    // pirate_frb/chimefrb/GpuTransformBase.py, which also carries the class docstring
+    // (option 2 in notes/docstrings.md): __init__ (supplies 'name'), launch() with
+    // stream=None and scratch=None handling, the launch_checked() / yaml stubs, __repr__,
+    // and _dispatch_launch_checked(), which the trampoline above calls.
+    py::class_<GpuTransformBase, PyGpuTransformBase>(m, "GpuTransformBase")
+        .def(py::init<const std::string &, long, long, long, long>(),
+            py::arg("name"), py::arg("nbeams"), py::arg("nfreq"), py::arg("ntime"), py::arg("scratch_nelts"))
+
+        .def_readonly("nbeams", &GpuTransformBase::nbeams)
+        .def_readonly("nfreq", &GpuTransformBase::nfreq)
+        .def_readonly("ntime", &GpuTransformBase::ntime)
+        .def_readonly("scratch_nelts", &GpuTransformBase::scratch_nelts)
+
+        .def("launch",
+            [](const GpuTransformBase &self, Array<float> &intensity, Array<float> &weights,
+               Array<float> &scratch, uintptr_t stream_ptr) {
+                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                self.launch(intensity, weights, scratch, stream);
+            },
+            py::arg("intensity"), py::arg("weights"), py::arg("scratch"), py::arg("stream_ptr"),
+            py::call_guard<py::gil_scoped_release>(),   // async launch; a python subclass re-acquires
+            "The raw form of launch(): stream_ptr is an integer. Python callers use the injected\n"
+            "launch(intensity, weights, scratch, stream=None), which wraps this.")
+        ;
+
     // GpuSplineDetrender: Python injections in pirate_frb/chimefrb/ReferenceSplineDetrender.py
-    // (the shared transform interface; see the top of this file).
-    py::class_<GpuSplineDetrender>(m, "GpuSplineDetrender",
+    // (the yaml and legacy-json methods; see the top of this file).
+    py::class_<GpuSplineDetrender, GpuTransformBase>(m, "GpuSplineDetrender",
         "A port of rf_kernels::spline_detrender, the frequency-direction detrender of the\n"
         "old CHIME FRB search's RFI chain.\n"
         "\n"
@@ -378,6 +440,8 @@ void register_chimefrb_bindings(pybind11::module &m)
         "workspace comes from the caller's scratch array, so one instance may be used from\n"
         "any number of streams at once (with one scratch per stream).\n"
         "\n"
+        "launch() modifies ``intensity`` only; ``weights`` is read.\n"
+        "\n"
         "Attributes (read-only):\n"
         "\n"
         "- ``nbeams``, ``nfreq``, ``ntime``, ``nbins``, ``epsilon`` -- the constructor arguments.\n"
@@ -400,12 +464,8 @@ void register_chimefrb_bindings(pybind11::module &m)
             "    RuntimeError: on nbeams < 1, ntime not a positive multiple of 32, nbins < 1,\n"
             "        nfreq < nbins, or epsilon <= 0.")
 
-        .def_readonly("nbeams", &GpuSplineDetrender::nbeams)
-        .def_readonly("nfreq", &GpuSplineDetrender::nfreq)
-        .def_readonly("ntime", &GpuSplineDetrender::ntime)
         .def_readonly("nbins", &GpuSplineDetrender::nbins)
         .def_readonly("epsilon", &GpuSplineDetrender::epsilon)
-        .def_readonly("scratch_nelts", &GpuSplineDetrender::scratch_nelts)
         .def_readonly("N_phi", &GpuSplineDetrender::N_phi)
         .def_readonly("nfrange", &GpuSplineDetrender::nfrange)
         .def_readonly("channels_per_range", &GpuSplineDetrender::channels_per_range)
@@ -419,28 +479,12 @@ void register_chimefrb_bindings(pybind11::module &m)
             "Run timing benchmarks at the two shapes the old search's production RFI chain\n"
             "uses this detrender at (called via 'python -m pirate_frb time --cfrb')")
 
-        .def("launch",
-            [](const GpuSplineDetrender &self, Array<float> &intensity,
-               const Array<float> &weights, Array<float> &scratch, uintptr_t stream_ptr) {
-                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                self.launch(intensity, weights, scratch, stream);
-            },
-            py::arg("intensity"), py::arg("weights"), py::arg("scratch"), py::arg("stream_ptr"),
-            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
-            "GPU kernel launch (async, does not sync stream).\n"
-            "\n"
-            "Args:\n"
-            "    intensity: shape (nbeams, nfreq, ntime), cupy float32, fully contiguous, on\n"
-            "        GPU. The fitted baseline is subtracted in place at every channel.\n"
-            "    weights: same shape and dtype. Must be >= 0 (not checked). Read only.\n"
-            "    scratch: 1-d cupy float32, at least scratch_nelts elements; garbage in and out.\n"
-            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 
     // GpuPolynomialDetrender: Python injections in
-    // pirate_frb/chimefrb/ReferencePolynomialDetrender.py (the shared transform interface;
+    // pirate_frb/chimefrb/ReferencePolynomialDetrender.py (the yaml and legacy-json methods;
     // see the top of this file).
-    py::class_<GpuPolynomialDetrender>(m, "GpuPolynomialDetrender",
+    py::class_<GpuPolynomialDetrender, GpuTransformBase>(m, "GpuPolynomialDetrender",
         "A port of rf_pipelines::polynomial_detrender along the time axis, the only axis\n"
         "the old CHIME FRB search's production RFI chain ran it on.\n"
         "\n"
@@ -465,6 +509,9 @@ void register_chimefrb_bindings(pybind11::module &m)
         "\n"
         "Stateless: one instance may be used from any number of streams at once.\n"
         "\n"
+        "launch() modifies both arrays: ``intensity`` on rows that pass the gate, ``weights``\n"
+        "on rows that fail it.\n"
+        "\n"
         "Attributes (read-only):\n"
         "\n"
         "- ``nbeams``, ``nfreq``, ``ntime``, ``polydeg``, ``epsilon``, ``nt_chunk``,\n"
@@ -488,37 +535,16 @@ void register_chimefrb_bindings(pybind11::module &m)
             "Raises:\n"
             "    RuntimeError: on an argument outside those ranges.")
 
-        .def_readonly("nbeams", &GpuPolynomialDetrender::nbeams)
-        .def_readonly("nfreq", &GpuPolynomialDetrender::nfreq)
-        .def_readonly("ntime", &GpuPolynomialDetrender::ntime)
         .def_readonly("polydeg", &GpuPolynomialDetrender::polydeg)
         .def_readonly("epsilon", &GpuPolynomialDetrender::epsilon)
         .def_readonly("nt_chunk", &GpuPolynomialDetrender::nt_chunk)
         .def_readonly("warps_per_block", &GpuPolynomialDetrender::warps_per_block)
-        .def_readonly("scratch_nelts", &GpuPolynomialDetrender::scratch_nelts)
 
         .def_static("time_selected", &GpuPolynomialDetrender::time_selected,
             py::call_guard<py::gil_scoped_release>(),
             "Run timing benchmarks at the production configuration, at the two channel\n"
             "counts the old chain uses (called via 'python -m pirate_frb time --cfrb')")
 
-        .def("launch",
-            [](const GpuPolynomialDetrender &self, Array<float> &intensity,
-               Array<float> &weights, Array<float> &scratch, uintptr_t stream_ptr) {
-                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                self.launch(intensity, weights, scratch, stream);
-            },
-            py::arg("intensity"), py::arg("weights"), py::arg("scratch"), py::arg("stream_ptr"),
-            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
-            "GPU kernel launch (async, does not sync stream).\n"
-            "\n"
-            "Args:\n"
-            "    intensity: shape (nbeams, nfreq, ntime), cupy float32, fully contiguous, on\n"
-            "        GPU. Detrended in place on rows that pass the gate.\n"
-            "    weights: same shape and dtype. Must be >= 0 (not checked). MODIFIED IN\n"
-            "        PLACE: zeroed on rows that fail the gate, untouched elsewhere.\n"
-            "    scratch: 1-d cupy float32, or empty. Unused (scratch_nelts is 0).\n"
-            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 
     py::enum_<ClipperAxis>(m, "ClipperAxis",
@@ -536,21 +562,18 @@ void register_chimefrb_bindings(pybind11::module &m)
         ;
 
     // GpuClipperBase: bound without a constructor. It exists so that the attributes the
-    // clippers share (geometry, axis, statistic parameters) are bound, and documented,
-    // once; the clippers are bound as its subclasses.
-    py::class_<GpuClipperBase>(m, "GpuClipperBase",
-        "What the chimefrb clippers have in common: array geometry, axis, (Df, Dt), the\n"
-        "per-row weighted mean and variance (downsample, transpose if axis == FREQ, then\n"
-        "GpuWrms), argument checking, and the scratch layout. Not constructible on its own:\n"
+    // clippers share (axis, statistic parameters, derived geometry) are bound, and
+    // documented, once; the clippers are bound as its subclasses.
+    py::class_<GpuClipperBase, GpuTransformBase>(m, "GpuClipperBase",
+        "What the chimefrb clippers have in common, on top of GpuTransformBase: axis,\n"
+        "(Df, Dt), the per-row weighted mean and variance (downsample, transpose if\n"
+        "axis == FREQ, then GpuWrms), and the scratch layout. Not constructible on its own:\n"
         "GpuIntensityClipper and GpuStdDevClipper derive from it.\n"
         "\n"
         "CHUNKING: every clipper requires ntime == nt_chunk (the array holds exactly one\n"
         "chunk). The old code's ntime = N*nt_chunk behaviour is implemented by the numpy\n"
         "references, not here.")
 
-        .def_readonly("nbeams", &GpuClipperBase::nbeams, "Beams")
-        .def_readonly("nfreq", &GpuClipperBase::nfreq, "Full-resolution frequency channels")
-        .def_readonly("ntime", &GpuClipperBase::ntime, "Full-resolution time samples per launch")
         .def_readonly("nt_chunk", &GpuClipperBase::nt_chunk,
             "Samples per chunk. Currently required to equal ntime.")
         .def_readonly("axis", &GpuClipperBase::axis, "The ClipperAxis being reduced")
@@ -572,12 +595,10 @@ void register_chimefrb_bindings(pybind11::module &m)
             "checked: the statistic comes from the GPU, and what follows it from numpy.")
         .def_readonly("wrms_R", &GpuClipperBase::wrms_R,
             "Statistic rows: nbeams*F_ds (TIME), nbeams*T_ds (FREQ), or nbeams (NONE)")
-        .def_readonly("scratch_nelts", &GpuClipperBase::scratch_nelts,
-            "Number of float32 scratch elements launch() needs. Never zero.")
         ;
 
     // GpuIntensityClipper: Python injections in
-    // pirate_frb/chimefrb/ReferenceIntensityClipper.py (the shared transform interface; see
+    // pirate_frb/chimefrb/ReferenceIntensityClipper.py (the yaml and legacy-json methods; see
     // the top of this file).
     py::class_<GpuIntensityClipper, GpuClipperBase>(m, "GpuIntensityClipper",
         "Zeroes the weights of samples that sit more than 'sigma' standard deviations from\n"
@@ -605,7 +626,9 @@ void register_chimefrb_bindings(pybind11::module &m)
         "the production RFI chain needs. Processing ntime = N*nt_chunk samples in one call\n"
         "would be a useful generalization and is deliberately left for later;\n"
         "ReferenceIntensityClipper does implement it, so the semantics are pinned down and\n"
-        "tested.")
+        "tested.\n"
+        "\n"
+        "launch() modifies ``weights`` only; ``intensity`` is read.")
 
         .def(py::init<long, long, long, long, ClipperAxis, double, long, long, long, double, bool, long>(),
             py::arg("nbeams"), py::arg("nfreq"), py::arg("ntime"), py::arg("nt_chunk"), py::arg("axis"),
@@ -633,7 +656,7 @@ void register_chimefrb_bindings(pybind11::module &m)
             "        nt_chunk by 32*Dt; also on nbeams < 1, Df < 1, Dt < 1, niter < 1,\n"
             "        sigma < 0, iter_sigma < 0, or an unsupported warps_per_block.")
 
-        // The shared attributes (nbeams, nfreq, ..., scratch_nelts) are bound on GpuClipperBase.
+        // The shared attributes are bound on GpuClipperBase and GpuTransformBase.
         .def_readonly("sigma", &GpuIntensityClipper::sigma,
             "FINAL clip threshold, in units of the row's rms (not iter_sigma)")
         .def_readonly("warps_per_block", &GpuIntensityClipper::warps_per_block,
@@ -644,28 +667,10 @@ void register_chimefrb_bindings(pybind11::module &m)
             "Run timing benchmarks, for the four configurations the old search's\n"
             "production RFI chain uses (called via 'python -m pirate_frb time --cfrb')")
 
-        .def("launch",
-            [](const GpuIntensityClipper &self, const Array<float> &intensity,
-               Array<float> &weights, Array<float> &scratch, uintptr_t stream_ptr) {
-                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                self.launch(intensity, weights, scratch, stream);
-            },
-            py::arg("intensity"), py::arg("weights"), py::arg("scratch"), py::arg("stream_ptr"),
-            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
-            "GPU kernel launch (async, does not sync stream).\n"
-            "\n"
-            "All arrays are cupy float32 arrays, fully contiguous, and on GPU.\n"
-            "\n"
-            "Args:\n"
-            "    intensity: shape (nbeams, nfreq, ntime). Read only, never modified.\n"
-            "    weights: shape (nbeams, nfreq, ntime). MODIFIED IN PLACE: zeroed where the\n"
-            "        clip fires, bit-identical everywhere else. Must be >= 0 on entry.\n"
-            "    scratch: 1-d, at least scratch_nelts elements. Garbage on entry and exit.\n"
-            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 
     // GpuStdDevClipper: Python injections in pirate_frb/chimefrb/ReferenceStdDevClipper.py
-    // (the shared transform interface; see the top of this file).
+    // (the yaml and legacy-json methods; see the top of this file).
     py::class_<GpuStdDevClipper, GpuClipperBase>(m, "GpuStdDevClipper",
         "Zeroes whole channels (AXIS_TIME) or whole time samples (AXIS_FREQ) whose variance\n"
         "is an outlier among its peers. A port of rf_kernels::std_dev_clipper, the most\n"
@@ -690,7 +695,9 @@ void register_chimefrb_bindings(pybind11::module &m)
         "it; it is documented rather than fixed.\n"
         "\n"
         "AXIS_NONE is not supported, as in the old code. Like every GpuClipperBase, it\n"
-        "requires ntime == nt_chunk (the array holds exactly one chunk).")
+        "requires ntime == nt_chunk (the array holds exactly one chunk).\n"
+        "\n"
+        "launch() modifies ``weights`` only; ``intensity`` is read.")
 
         .def(py::init<long, long, long, long, ClipperAxis, double, long, long, bool, long>(),
             py::arg("nbeams"), py::arg("nfreq"), py::arg("ntime"), py::arg("nt_chunk"), py::arg("axis"),
@@ -714,7 +721,7 @@ void register_chimefrb_bindings(pybind11::module &m)
             "        32*Df and nt_chunk by 32*Dt; and on nbeams < 1, Df < 1, Dt < 1,\n"
             "        sigma < 0, or an unsupported warps_per_block.")
 
-        // The shared attributes (nbeams, nfreq, ..., scratch_nelts) are bound on GpuClipperBase.
+        // The shared attributes are bound on GpuClipperBase and GpuTransformBase.
         .def_readonly("sigma", &GpuStdDevClipper::sigma,
             "Clip threshold, in units of the standard deviation of the variances")
         .def_readonly("warps_per_block", &GpuStdDevClipper::warps_per_block,
@@ -725,30 +732,12 @@ void register_chimefrb_bindings(pybind11::module &m)
             "Run timing benchmarks, for the two configurations the old search's production\n"
             "RFI chain uses (called via 'python -m pirate_frb time --cfrb')")
 
-        .def("launch",
-            [](const GpuStdDevClipper &self, const Array<float> &intensity,
-               Array<float> &weights, Array<float> &scratch, uintptr_t stream_ptr) {
-                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                self.launch(intensity, weights, scratch, stream);
-            },
-            py::arg("intensity"), py::arg("weights"), py::arg("scratch"), py::arg("stream_ptr"),
-            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
-            "GPU kernel launch (async, does not sync stream).\n"
-            "\n"
-            "All arrays are cupy float32 arrays, fully contiguous, and on GPU.\n"
-            "\n"
-            "Args:\n"
-            "    intensity: shape (nbeams, nfreq, ntime). Read only, never modified.\n"
-            "    weights: shape (nbeams, nfreq, ntime). MODIFIED IN PLACE: whole rows are\n"
-            "        zeroed where the clip fires, bit-identical everywhere else. Must be >= 0.\n"
-            "    scratch: 1-d, at least scratch_nelts elements. Garbage on entry and exit.\n"
-            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 
     // GpuBadChannelMask: Python injections in pirate_frb/chimefrb/ReferenceBadChannelMask.py
-    // (the shared transform interface; see the top of this file). Its __init__ also
+    // (the yaml and legacy-json methods; see the top of this file). Its __init__ also
     // normalizes 'mask_ranges' and 'freq_range' to python floats.
-    py::class_<GpuBadChannelMask>(m, "GpuBadChannelMask",
+    py::class_<GpuBadChannelMask, GpuTransformBase>(m, "GpuBadChannelMask",
         "Zeroes the weights of whole frequency channels. A port of rf_pipelines::badchannel_mask,\n"
         "which the old CHIME FRB search used at the start of its RFI chain to remove channels\n"
         "known in advance to be bad.\n"
@@ -762,7 +751,9 @@ void register_chimefrb_bindings(pybind11::module &m)
         "A masked channel is set to +0.0, whatever it held (the old code stores a literal 0),\n"
         "and every other weight is left bit-identical. The kernel writes only the zeros, so its\n"
         "cost is proportional to the number of masked channels. Nothing depends on time, so\n"
-        "ntime may be anything; the intensity is checked and never touched.\n"
+        "ntime may be anything.\n"
+        "\n"
+        "launch() modifies ``weights`` only; ``intensity`` is checked and never touched.\n"
         "\n"
         "Attributes (read-only):\n"
         "\n"
@@ -793,38 +784,17 @@ void register_chimefrb_bindings(pybind11::module &m)
             "        channel, pass the band itself); freq_range with lo >= hi; or an\n"
             "        unsupported warps_per_block.")
 
-        .def_readonly("nbeams", &GpuBadChannelMask::nbeams)
-        .def_readonly("nfreq", &GpuBadChannelMask::nfreq)
-        .def_readonly("ntime", &GpuBadChannelMask::ntime)
         .def_readonly("mask_ranges", &GpuBadChannelMask::mask_ranges)
         .def_readonly("freq_range", &GpuBadChannelMask::freq_range)
         .def_readonly("warps_per_block", &GpuBadChannelMask::warps_per_block)
         .def_readonly("nmasked", &GpuBadChannelMask::nmasked)
         .def_readonly("keep", &GpuBadChannelMask::keep)
-        .def_readonly("scratch_nelts", &GpuBadChannelMask::scratch_nelts)
 
         .def_static("time_selected", &GpuBadChannelMask::time_selected,
             py::call_guard<py::gil_scoped_release>(),
             "Run timing benchmarks at the production array size, for masks from one channel to\n"
             "all of them (called via 'python -m pirate_frb time --cfrb')")
 
-        .def("launch",
-            [](const GpuBadChannelMask &self, const Array<float> &intensity, Array<float> &weights,
-               Array<float> &scratch, uintptr_t stream_ptr) {
-                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                self.launch(intensity, weights, scratch, stream);
-            },
-            py::arg("intensity"), py::arg("weights"), py::arg("scratch"), py::arg("stream_ptr"),
-            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
-            "GPU kernel launch (async, does not sync stream).\n"
-            "\n"
-            "Args:\n"
-            "    intensity: cupy float32 array, shape (nbeams, nfreq, ntime), fully contiguous,\n"
-            "        on GPU. Checked and never touched.\n"
-            "    weights: same shape and dtype. MODIFIED IN PLACE: masked channels become +0.0,\n"
-            "        and every other weight is left bit-identical.\n"
-            "    scratch: 1-d cupy float32, or empty. Unused (scratch_nelts is 0).\n"
-            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 
     // GpuWeightUpsampler: Python injections in pirate_frb/chimefrb/ReferenceWeightUpsampler.py:

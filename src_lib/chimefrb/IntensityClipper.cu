@@ -126,10 +126,10 @@ GpuIntensityClipper::GpuIntensityClipper(long nbeams_, long nfreq_, long ntime_,
 { }
 
 
-void GpuIntensityClipper::launch(const Array<float> &intensity, Array<float> &weights,
-                                 Array<float> &scratch, cudaStream_t stream) const
+void GpuIntensityClipper::launch_checked(Array<float> &intensity, Array<float> &weights,
+                                         Array<float> &scratch, cudaStream_t stream) const
 {
-    // Steps 1-2 (downsample, transpose if FREQ, GpuWrms), and all argument checking.
+    // Steps 1-2 (downsample, transpose if FREQ, GpuWrms).
     StatisticOutputs st = _launch_statistic(intensity, weights, scratch, stream);
 
     // Step 3: the final clip. Note that this reads the UNTRANSPOSED downsampled intensity

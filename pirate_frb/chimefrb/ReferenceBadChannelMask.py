@@ -21,8 +21,7 @@ import numpy as np
 import ksgpu
 from ..utils import atomic_print
 from ..pirate_pybind11 import GpuBadChannelMask
-from .transform_io import (CHIME_FREQ_RANGE, check_json_keys, check_yaml_keys,
-                           default_scratch_and_stream)
+from .transform_io import (CHIME_FREQ_RANGE, check_json_keys, check_yaml_keys)
 
 
 # The old code's allowance for a frequency that is meant to be a channel edge but is off by
@@ -151,13 +150,12 @@ def _as_range_list(mask_ranges):
 @ksgpu.inject_methods(GpuBadChannelMask)
 class GpuBadChannelMaskInjections:
     # No class docstring here: GpuBadChannelMask's docstring lives in the pybind11 binding
-    # (option 1 in notes/docstrings.md). This injector normalizes the constructor's range
-    # arguments, and adds the python side of the transform protocol (transform_io.py):
-    # launch() with stream=None and scratch=None handling, and the yaml/legacy-json methods.
+    # (option 1 in notes/docstrings.md). launch() is inherited from GpuTransformBase; this
+    # injector normalizes the constructor's range arguments, and adds the yaml and
+    # legacy-json methods (transform_io.py).
 
     # Save references to C++ methods
     _cpp_init = GpuBadChannelMask.__init__
-    _cpp_launch = GpuBadChannelMask.launch
 
     def __init__(self, nbeams, nfreq, ntime, mask_ranges, freq_range, warps_per_block=4):
         """Create a GpuBadChannelMask.
@@ -178,25 +176,6 @@ class GpuBadChannelMaskInjections:
         band = _as_range_list([freq_range])[0]
         self._cpp_init(int(nbeams), int(nfreq), int(ntime), _as_range_list(mask_ranges), band,
                        int(warps_per_block))
-
-    def launch(self, intensity, weights, scratch, stream=None):
-        """GPU kernel launch (async, does not sync stream).
-
-        Parameters
-        ----------
-        intensity : cupy.ndarray
-            Shape ``(nbeams, nfreq, ntime)``, float32, fully contiguous, on GPU. Checked and
-            never touched.
-        weights : cupy.ndarray
-            Same shape and dtype. MODIFIED IN PLACE: every weight in a masked channel becomes
-            +0.0, and every other weight is left bit-identical.
-        scratch : cupy.ndarray or None
-            Unused (``scratch_nelts`` is 0): any 1-d float32 array, or None.
-        stream : cupy.cuda.Stream or None, optional
-            CUDA stream to use. If None, uses current cupy stream.
-        """
-        (scratch, stream) = default_scratch_and_stream(scratch, stream, self.scratch_nelts)
-        self._cpp_launch(intensity, weights, scratch, stream.ptr)
 
     def to_yaml_dict(self):
         """The yaml form (see ``transform_io``): the class name, ``freq_range`` and

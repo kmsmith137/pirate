@@ -7,19 +7,20 @@ for the plain (undownsampled) container.
 
 import math
 
+from .GpuTransformBase import GpuTransformBase
 from .ReferenceWeightUpsampler import GpuWeightUpsampler
 from .ReferenceWiDownsampler import GpuWiDownsampler
 from .WiPipeline import WiPipeline, describe_lines
-from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, check_launch_args,
-                           check_yaml_keys, default_scratch_and_stream, read_json, read_yaml,
-                           transform_from_json_dict, transform_from_yaml_dict, write_yaml)
+from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, check_yaml_keys, read_json,
+                           read_yaml, transform_from_json_dict, transform_from_yaml_dict,
+                           write_yaml)
 
 
 def _round_up(n, m):
     return ((n + m - 1) // m) * m
 
 
-class RfiMaskPipeline:
+class RfiMaskPipeline(GpuTransformBase):
     """Transforms run on a (Df, Dt)-downsampled copy of the data, whose mask is then applied
     to the full-resolution weights.
 
@@ -35,18 +36,19 @@ class RfiMaskPipeline:
     3. With :class:`GpuWeightUpsampler`, zero every full-resolution weight whose cell's
        downsampled weight is ``<= w_cutoff``; leave every other weight bit-identical.
 
-    Two consequences worth knowing: the full-resolution INTENSITY is never modified (only its
-    weights are), and whatever the transforms do to the downsampled intensity is discarded
-    with the scratch. The transforms' geometry is the INNER one, (nbeams, nfreq/Df,
-    ntime/Dt); the pipeline's own is the full-resolution shape.
+    Two consequences worth knowing: ``launch()`` never modifies the full-resolution INTENSITY
+    (only the weights, zeroed under every downsampled cell whose weight ends up
+    ``<= w_cutoff`` and bit-identical elsewhere), and whatever the transforms do to the
+    downsampled intensity is discarded with the scratch. The transforms' geometry is the
+    INNER one, (nbeams, nfreq/Df, ntime/Dt); the pipeline's own is the full-resolution shape.
 
-    An RfiMaskPipeline is itself a transform (see ``pirate_frb.chimefrb.transform_io``), so
-    it is normally one element of a :class:`WiPipeline`. Like a WiPipeline it holds no
+    An RfiMaskPipeline is itself a transform (a :class:`GpuTransformBase`), so it is normally
+    one element of a :class:`WiPipeline`. Like a WiPipeline it holds no
     per-launch state, so one instance may be launched on several streams at once with one
     scratch per stream; and one ``launch()`` processes exactly one block, which the caller
     assembles.
 
-    Attributes (read-only by convention):
+    Attributes (read-only):
 
     - ``transforms`` (tuple) -- the transforms, in launch order, at the inner geometry.
     - ``Df``, ``Dt``, ``w_cutoff`` -- the constructor arguments.
@@ -74,9 +76,8 @@ class RfiMaskPipeline:
             ``<= w_cutoff`` (strictly: a downsampled weight equal to the cutoff masks). The
             production chain uses 0.
         """
-        self._inner = WiPipeline(transforms)      # validates them, and owns the sequential launch
-        self.transforms = self._inner.transforms
-        (nbeams, nfreq_ds, ntime_ds) = (self._inner.nbeams, self._inner.nfreq, self._inner.ntime)
+        inner = WiPipeline(transforms)      # validates them, and owns the sequential launch
+        (nbeams, nfreq_ds, ntime_ds) = (inner.nbeams, inner.nfreq, inner.ntime)
 
         for (name, x) in (('Df', Df), ('Dt', Dt)):
             if not (isinstance(x, int) and (x >= 1)):
@@ -93,51 +94,36 @@ class RfiMaskPipeline:
                              f' must both be multiples of 32, the output tile of GpuWiDownsampler'
                              f' (the full-resolution shape is then a multiple of (32*Df, 32*Dt))')
 
-        self.Df = Df
-        self.Dt = Dt
-        self.w_cutoff = w_cutoff
-        self.nbeams = nbeams
-        self.nfreq = nfreq_ds * Df
-        self.ntime = ntime_ds * Dt
-
-        self._downsampler = GpuWiDownsampler(Df, Dt, False)
-        self._upsampler = GpuWeightUpsampler(Df, Dt, w_cutoff)
-
         # Scratch layout: the downsampled intensity, the downsampled weights, then (at an
         # offset rounded to 64 elements, for the transforms' wide loads) the transforms' own
         # scratch.
+        ds_nelts = nbeams * nfreq_ds * ntime_ds
+        sub_offset = _round_up(2 * ds_nelts, 64)
+        super().__init__(nbeams, nfreq_ds * Df, ntime_ds * Dt, sub_offset + inner.scratch_nelts)
+
+        self._inner = inner
+        self.transforms = inner.transforms
+        self.Df = Df
+        self.Dt = Dt
+        self.w_cutoff = w_cutoff
+
+        self._downsampler = GpuWiDownsampler(Df, Dt, False)
+        self._upsampler = GpuWeightUpsampler(Df, Dt, w_cutoff)
         self._ds_shape = (nbeams, nfreq_ds, ntime_ds)
-        self._ds_nelts = nbeams * nfreq_ds * ntime_ds
-        self._sub_offset = _round_up(2 * self._ds_nelts, 64)
-        self.scratch_nelts = self._sub_offset + self._inner.scratch_nelts
+        self._ds_nelts = ds_nelts
+        self._sub_offset = sub_offset
 
-    def launch(self, intensity, weights, scratch, stream=None):
-        """Downsample, run the transforms, upsample the mask (async; does not sync the stream).
-
-        Parameters
-        ----------
-        intensity : cupy.ndarray
-            Shape (nbeams, nfreq, ntime), float32, C-contiguous. Read only.
-        weights : cupy.ndarray
-            Same shape and dtype, distinct. MODIFIED IN PLACE: zeroed under every downsampled
-            cell whose weight ends up ``<= w_cutoff``, bit-identical elsewhere.
-        scratch : cupy.ndarray or None
-            1-d float32 with at least ``scratch_nelts`` elements, or None to allocate one.
-        stream : cupy.cuda.Stream or None, optional
-            CUDA stream to use. If None, uses current cupy stream.
-        """
-        (scratch, stream) = default_scratch_and_stream(scratch, stream, self.scratch_nelts)
-        check_launch_args(intensity, weights, scratch, (self.nbeams, self.nfreq, self.ntime),
-                          self.scratch_nelts, 'RfiMaskPipeline')
-
+    def launch_checked(self, intensity, weights, scratch):
+        # Steps 1-3 of the class docstring. The pipeline's stream is current
+        # (GpuTransformBase.launch() made it so), and every launch below defaults to it.
         n = self._ds_nelts
         i_ds = scratch[:n].reshape(self._ds_shape)
         w_ds = scratch[n:2*n].reshape(self._ds_shape)
         sub = scratch[self._sub_offset:]
 
-        self._downsampler.launch(i_ds, w_ds, intensity, weights, stream=stream)
-        self._inner.launch(i_ds, w_ds, sub, stream=stream)
-        self._upsampler.launch(weights, w_ds, stream=stream)
+        self._downsampler.launch(i_ds, w_ds, intensity, weights)
+        self._inner.launch(i_ds, w_ds, sub)
+        self._upsampler.launch(weights, w_ds)
 
     def to_yaml_dict(self):
         """``{'class_name': 'RfiMaskPipeline', 'Df', 'Dt', 'w_cutoff', 'transforms': [...]}``."""

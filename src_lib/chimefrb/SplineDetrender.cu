@@ -1,5 +1,4 @@
 #include "../../include/pirate/chimefrb/SplineDetrender.hpp"
-#include "../../include/pirate/chimefrb/launch_utils.hpp"
 #include "../../include/pirate/detrender_kernels.hpp"
 
 #include <cmath>
@@ -87,8 +86,27 @@ static void hermite_slope_penalty(double Q[4][4])
 }
 
 
-GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, long nbins_, double epsilon_) :
-    nbeams(nbeams_), nfreq(nfreq_), ntime(ntime_), nbins(nbins_), epsilon(epsilon_)
+// The Hermite basis: n_phi+1 = 4 functions per channel, 10 pairwise products, and the
+// padded table widths the kernels read (4*((n_phi+1 + 3)/4) and 4*((npair + 3)/4), as the
+// pirate detrender's constructor pads them).
+static constexpr int SPLINE_N_PHI = 3;
+static constexpr long SPLINE_NPAIR = 10;
+static constexpr long SPLINE_PHI_STRIDE = 4;
+static constexpr long SPLINE_PROD_STRIDE = 12;
+
+
+static double _checked_epsilon(double epsilon)
+{
+    if (!(epsilon > 0.0)) {
+        stringstream ss;
+        ss << "GpuSplineDetrender: epsilon=" << epsilon << " must be > 0";
+        throw runtime_error(ss.str());
+    }
+    return epsilon;
+}
+
+
+GpuSplineDetrender::Geometry GpuSplineDetrender::_geometry(long nfreq, long ntime, long nbins)
 {
     if (nbins < 1)
         throw runtime_error("GpuSplineDetrender: expected nbins >= 1");
@@ -98,40 +116,83 @@ GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, l
            << "; every bin must hold at least one channel";
         throw runtime_error(ss.str());
     }
-    if (!(epsilon > 0.0)) {
-        stringstream ss;
-        ss << "GpuSplineDetrender: epsilon=" << epsilon << " must be > 0";
-        throw runtime_error(ss.str());
-    }
-    if (nbeams < 1)
-        throw runtime_error("GpuSplineDetrender: expected nbeams >= 1");
     if ((ntime <= 0) || (ntime % 32 != 0)) {
         stringstream ss;
         ss << "GpuSplineDetrender: ntime=" << ntime << " must be a positive multiple of 32";
         throw runtime_error(ss.str());
     }
 
-    N_phi = 2*(nbins+1);
+    Geometry g;
+    g.N_phi = 2*(nbins+1);
 
     // ---- Bin edges, as in rf_kernels' _spline_detrender_init(): b*nfreq/nbins rounded
     // to the nearest channel. The expression is written in the same order as the old
     // code's, so the rounding agrees even at exact half-integers.
-    _bin_edges.resize(nbins+1);
+    g.bin_edges.resize(nbins+1);
     for (long b = 0; b <= nbins; b++)
-        _bin_edges[b] = long(double(b) / double(nbins) * double(nfreq) + 0.5);
+        g.bin_edges[b] = long(double(b) / double(nbins) * double(nfreq) + 0.5);
 
-    xassert_eq(_bin_edges[0], 0);
-    xassert_eq(_bin_edges[nbins], nfreq);
+    xassert_eq(g.bin_edges[0], 0);
+    xassert_eq(g.bin_edges[nbins], nfreq);
     for (long b = 0; b < nbins; b++)
-        xassert_lt(_bin_edges[b], _bin_edges[b+1]);   // guaranteed by nfreq >= nbins
+        xassert_lt(g.bin_edges[b], g.bin_edges[b+1]);   // guaranteed by nfreq >= nbins
 
+    // ---- Freq-ranges: each bin cut into pieces of about channels_per_range channels.
+    // The floor is 32 rather than the pirate detrender's 128: at the production shape
+    // nfreq = 1024, nbins = 6, the bins are 171 channels, and one range per bin would give
+    // the accumulate and subtract kernels only 6 * ceil(T/256) blocks per beam. Smaller
+    // ranges cost a few more shared-memory adds in the solve kernel's staging, which is
+    // nothing. The beam axis is the other occupancy knob: batch beams.
+    g.channels_per_range = derive_channels_per_range(nfreq, ntime, /*cpr_min=*/32);
+
+    for (long b = 0; b < nbins; b++) {
+        const long lo0 = g.bin_edges[b];
+        const long len = g.bin_edges[b+1] - lo0;
+        long k = (len + g.channels_per_range/2) / g.channels_per_range;
+        if (k < 1)
+            k = 1;
+        for (long i = 0; i < k; i++) {
+            const long lo = lo0 + (len*i)/k;
+            const long hi = lo0 + (len*(i+1))/k;
+            if (hi <= lo)
+                continue;
+            g.fr_lo.push_back(lo);
+            g.fr_hi.push_back(hi);
+            g.fr_j0.push_back(2*b + 3);
+        }
+    }
+    xassert_gt(g.nfrange(), 0);
+
+    g.ncomp = SPLINE_NPAIR + SPLINE_N_PHI + 1;      // 14
+    return g;
+}
+
+
+// The per-launch scratch, in the order launch_checked() carves it: gu (nbeams, nfrange,
+// ncomp, ntime), acoef (nbeams, N_phi, ntime), rmin (nbeams, 1, ntime).
+long GpuSplineDetrender::Geometry::scratch_nelts(long nbeams, long ntime) const
+{
+    return nbeams * ntime * (nfrange()*ncomp + N_phi + 1);
+}
+
+
+GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, long nbins_, double epsilon_) :
+    GpuSplineDetrender(nbeams_, nfreq_, ntime_, nbins_, epsilon_, _geometry(nfreq_, ntime_, nbins_))
+{ }
+
+
+GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, long nbins_, double epsilon_,
+                                       const Geometry &g) :
+    GpuTransformBase("GpuSplineDetrender", nbeams_, nfreq_, ntime_, g.scratch_nelts(nbeams_, ntime_)),
+    nbins(nbins_), epsilon(_checked_epsilon(epsilon_)),
+    N_phi(g.N_phi), nfrange(g.nfrange()), channels_per_range(g.channels_per_range),
+    ncomp(g.ncomp), _bin_edges(g.bin_edges)
+{
     // ---- Basis tables, built in float64 and cast. Channel f in bin b has fractional
     // bin coordinate x = nbins*(f+1/2)/nfreq - b, in [0,1]; again the old code's
     // expression, in its order.
-    const int n_phi = 3;
-    const long npair = 10;
-    const long phi_stride = 4;      // 4*((n_phi+1 + 3)/4), as the pirate constructor pads
-    const long prod_stride = 12;    // 4*((npair + 3)/4)
+    const long phi_stride = SPLINE_PHI_STRIDE;
+    const long prod_stride = SPLINE_PROD_STRIDE;
 
     Array<float> phi_host({nfreq, phi_stride}, af_uhost | af_zero);
     Array<float> prod_host({nfreq, prod_stride}, af_uhost | af_zero);
@@ -150,46 +211,19 @@ GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, l
             for (long a = 0; a < 4; a++)
                 for (long c = a; c < 4; c++, p++)
                     prod_host.data[f*prod_stride + p] = float(h[a] * h[c]);
-            xassert_eq(p, npair);
+            xassert_eq(p, SPLINE_NPAIR);
         }
     }
 
     phi_tab = phi_host.to_gpu();
     prod_tab = prod_host.to_gpu();
 
-    // ---- Freq-ranges: each bin cut into pieces of about channels_per_range channels.
-    // The floor is 32 rather than the pirate detrender's 128: at the production shape
-    // nfreq = 1024, nbins = 6, the bins are 171 channels, and one range per bin would give
-    // the accumulate and subtract kernels only 6 * ceil(T/256) blocks per beam. Smaller
-    // ranges cost a few more shared-memory adds in the solve kernel's staging, which is
-    // nothing. The beam axis is the other occupancy knob: batch beams.
-    channels_per_range = derive_channels_per_range(nfreq, ntime, /*cpr_min=*/32);
-
-    vector<long> fr_lo, fr_hi, fr_j0;
-    for (long b = 0; b < nbins; b++) {
-        const long lo0 = _bin_edges[b];
-        const long len = _bin_edges[b+1] - lo0;
-        long k = (len + channels_per_range/2) / channels_per_range;
-        if (k < 1)
-            k = 1;
-        for (long i = 0; i < k; i++) {
-            const long lo = lo0 + (len*i)/k;
-            const long hi = lo0 + (len*(i+1))/k;
-            if (hi <= lo)
-                continue;
-            fr_lo.push_back(lo);
-            fr_hi.push_back(hi);
-            fr_j0.push_back(2*b + 3);
-        }
-    }
-    nfrange = long(fr_lo.size());
-    xassert_gt(nfrange, 0);
-
+    // ---- Freq-range descriptors, from the decomposition _geometry() chose.
     Array<int> fr_host({nfrange, 4}, af_uhost | af_zero);
     for (long i = 0; i < nfrange; i++) {
-        fr_host.data[4*i + 0] = int(fr_lo[i]);
-        fr_host.data[4*i + 1] = int(fr_hi[i]);
-        fr_host.data[4*i + 2] = int(fr_j0[i]);
+        fr_host.data[4*i + 0] = int(g.fr_lo[i]);
+        fr_host.data[4*i + 1] = int(g.fr_hi[i]);
+        fr_host.data[4*i + 2] = int(g.fr_j0[i]);
         fr_host.data[4*i + 3] = 0;                  // zone
     }
     fr_desc = fr_host.to_gpu();
@@ -209,7 +243,7 @@ GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, l
         double Q[4][4];
         hermite_slope_penalty(Q);
 
-        const long nreg = reg_table_width(n_phi);   // 4
+        const long nreg = reg_table_width(SPLINE_N_PHI);   // 4
         Array<float> reg_host({N_phi, nreg}, af_uhost | af_zero);
         for (long b = 0; b < nbins; b++)
             for (long a = 0; a < 4; a++)
@@ -228,9 +262,9 @@ GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, l
 
     // ---- Solve-kernel block size, from the shared-memory budget. At nbins = 6 a
     // 128-thread block fits and a 256-thread one does not; the chooser sorts it out.
-    const long NB = bandwidth(n_phi, 0);            // 3
-    const long nblk_max = N_phi;                    // (n+1) = 1 coefficient per basis function
-    const long ncompz_max = N_phi * (n_phi + 2);    // banded G plus U, per coefficient
+    const long NB = bandwidth(SPLINE_N_PHI, 0);            // 3
+    const long nblk_max = N_phi;                           // (n+1) = 1 coefficient per basis function
+    const long ncompz_max = N_phi * (SPLINE_N_PHI + 2);    // banded G plus U, per coefficient
 
     solve_threads = choose_solve_threads<3, WeightScaledStrength>(ntime, nblk_max, NB, ncompz_max, /*W=*/0);
     if (solve_threads == 0) {
@@ -239,12 +273,6 @@ GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, l
            << " which need more shared memory than this GPU offers even at 8 threads per block";
         throw runtime_error(ss.str());
     }
-
-    // ---- Per-launch scratch: the three arrays launch() carves from the caller's scratch,
-    // in this order -- gu (nbeams, nfrange, ncomp, ntime), acoef (nbeams, N_phi, ntime),
-    // rmin (nbeams, 1, ntime).
-    ncomp = npair + n_phi + 1;                      // 14
-    scratch_nelts = nbeams * ntime * (nfrange*ncomp + N_phi + 1);
 }
 
 
@@ -261,12 +289,10 @@ vector<long> GpuSplineDetrender::bin_edges() const
 }
 
 
-void GpuSplineDetrender::launch(Array<float> &intensity, const Array<float> &weights,
-                                Array<float> &scratch, cudaStream_t stream) const
+void GpuSplineDetrender::launch_checked(Array<float> &intensity, Array<float> &weights,
+                                        Array<float> &scratch, cudaStream_t stream) const
 {
-    check_launch_args(intensity, weights, scratch, nbeams, nfreq, ntime, scratch_nelts);
-
-    // The per-launch workspace, in the order the constructor's scratch_nelts assumes.
+    // The per-launch workspace, in the order Geometry::scratch_nelts() assumes.
     long pos = 0;
     Array<float> gu = carve_scratch(scratch, pos, {nbeams, nfrange, ncomp, ntime});
     Array<float> acoef = carve_scratch(scratch, pos, {nbeams, N_phi, ntime});

@@ -1,15 +1,12 @@
 #ifndef _PIRATE_CHIMEFRB_CLIPPER_BASE_HPP
 #define _PIRATE_CHIMEFRB_CLIPPER_BASE_HPP
 
-#include <string>
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
 
 #include "ClipperAxis.hpp"
+#include "TransformBase.hpp"
 #include "WeightUpsampler.hpp"   // zero_cell(), which both clippers' final kernels call
-
-// Every chimefrb transform's launch() takes (intensity, weights, scratch, stream) on arrays of
-// shape (nbeams, nfreq, ntime); see launch_utils.hpp.
 
 namespace pirate {
 namespace chimefrb {
@@ -18,10 +15,11 @@ namespace chimefrb {
 #endif
 
 
-// GpuClipperBase: what the chimefrb clippers have in common -- array geometry, axis,
-// (Df, Dt), the per-row wrms statistic, argument checking, the chunking rule, and the
-// scratch layout. Not a transform on its own: GpuIntensityClipper and GpuStdDevClipper
-// derive from it, each adding its own threshold and its own final kernel(s).
+// GpuClipperBase: what the chimefrb clippers have in common -- axis, (Df, Dt), the per-row
+// wrms statistic, the chunking rule, and the scratch layout -- on top of GpuTransformBase
+// (TransformBase.hpp), which supplies the array geometry and the checked launch(). Not a
+// transform on its own: GpuIntensityClipper and GpuStdDevClipper derive from it, each
+// adding its own threshold and its own final kernel(s).
 //
 // The statistic is two steps, shared by both clippers:
 //
@@ -47,13 +45,14 @@ namespace chimefrb {
 // (ReferenceIntensityClipper, ReferenceStdDevClipper) implement the general case, so the
 // semantics are pinned down and tested.
 //
-// Not for polymorphic use. There are no virtual functions, and a clipper must never be
-// deleted through a GpuClipperBase pointer. (The destructor is public only because
-// pybind11 needs it in order to register the base class.)
+// Not constructible on its own (the constructor is protected), and adds no virtual
+// functions of its own: the virtual launch_checked() that the clippers override is
+// GpuTransformBase's.
 
-struct GpuClipperBase
+struct GpuClipperBase : public GpuTransformBase
 {
-    const long nbeams, nfreq, ntime;   // full-resolution array shape
+    // Inherited from GpuTransformBase: name, nbeams, nfreq, ntime (the full-resolution
+    // array shape), scratch_nelts, and launch().
     const long nt_chunk;               // samples per chunk; == ntime (see CHUNKING above)
     const ClipperAxis axis;
     const long Df, Dt;             // downsampling factors
@@ -68,11 +67,9 @@ struct GpuClipperBase
     const long wrms_L;             // samples per statistic row
     const long wrms_R;             // statistic rows: nbeams*F_ds (TIME), nbeams*T_ds (FREQ), nbeams (NONE)
 
-    // Number of float32 scratch elements launch() needs. Covers the downsampled and
-    // transposed arrays, the (mean, var) outputs, and GpuWrms' own scratch. Never zero:
-    // (mean, var) always live here. A chain should allocate the max over its transforms
-    // once and share one array.
-    const long scratch_nelts;
+    // scratch_nelts (inherited) covers the downsampled and transposed arrays, the (mean, var)
+    // outputs, and GpuWrms' own scratch. Never zero: (mean, var) always live there. A chain
+    // should allocate the max over its transforms once and share one array.
 
 protected:
     // 'name' prefixes every exception message, so that a caller sees "GpuStdDevClipper:
@@ -80,13 +77,12 @@ protected:
     //
     // Throws on: ntime != nt_chunk (see CHUNKING above); nfreq % (32*Df) != 0 or
     // nt_chunk % (32*Dt) != 0 (the 32 is GpuWiDownsampler's output tile size, and the clip
-    // kernels' warp width); nbeams < 1; nt_chunk < 1; Df < 1; Dt < 1; niter < 1;
-    // iter_sigma < 0. The derived class checks its own parameters.
+    // kernels' warp width); nt_chunk < 1; Df < 1; Dt < 1; niter < 1; iter_sigma < 0; and
+    // whatever GpuTransformBase throws on (nbeams, nfreq or ntime < 1). The derived class
+    // checks its own parameters.
     GpuClipperBase(const char *name, long nbeams, long nfreq, long ntime, long nt_chunk,
                    ClipperAxis axis, long Df, long Dt, long niter, double iter_sigma,
                    bool two_pass);
-
-    const std::string name;
 
     // What steps 1-2 leave behind. 'mean' and 'var' are views into the caller's scratch;
     // 'cell_i' is the UNTRANSPOSED downsampled intensity, which the clip kernels read,
@@ -97,8 +93,9 @@ protected:
         ksgpu::Array<float> var;       // (wrms_R,)
     };
 
-    // Checks the launch() arguments (shapes, contiguity, location, aliasing, scratch size),
-    // then launches steps 1-2 on 'stream', without synchronizing.
+    // Launches steps 1-2 on 'stream', without synchronizing. Called from the clippers'
+    // launch_checked(), so the arguments have already been checked by
+    // GpuTransformBase::launch(), and 'scratch' holds exactly scratch_nelts elements.
     StatisticOutputs _launch_statistic(const ksgpu::Array<float> &intensity,
                                        const ksgpu::Array<float> &weights,
                                        ksgpu::Array<float> &scratch,

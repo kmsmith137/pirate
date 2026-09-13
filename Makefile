@@ -355,6 +355,7 @@ LIB_SRCFILES = \
   src_lib/chimefrb/PolynomialDetrender.cu \
   src_lib/chimefrb/SplineDetrender.cu \
   src_lib/chimefrb/StdDevClipper.cu \
+  src_lib/chimefrb/TransformBase.cpp \
   src_lib/chimefrb/WeightUpsampler.cu \
   src_lib/chimefrb/WiDownsampler.cu \
   src_lib/chimefrb/Wrms.cu \
@@ -412,7 +413,7 @@ PYFILES = \
   pirate_frb/chimefrb/ReferenceWeightUpsampler.py \
   pirate_frb/chimefrb/ReferenceWiDownsampler.py \
   pirate_frb/chimefrb/ReferenceWrms.py \
-  pirate_frb/chimefrb/CupyTransformBase.py \
+  pirate_frb/chimefrb/GpuTransformBase.py \
   pirate_frb/chimefrb/ExampleCupyTransform.py \
   pirate_frb/chimefrb/RfiMaskPipeline.py \
   pirate_frb/chimefrb/WiPipeline.py \

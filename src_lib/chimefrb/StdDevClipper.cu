@@ -247,11 +247,11 @@ GpuStdDevClipper::GpuStdDevClipper(long nbeams_, long nfreq_, long ntime_, long 
 { }
 
 
-void GpuStdDevClipper::launch(const Array<float> &intensity, Array<float> &weights,
-                              Array<float> &scratch, cudaStream_t stream) const
+void GpuStdDevClipper::launch_checked(Array<float> &intensity, Array<float> &weights,
+                                      Array<float> &scratch, cudaStream_t stream) const
 {
-    // Steps 1-2 (downsample, transpose if FREQ, GpuWrms at niter = 1), and all argument
-    // checking. Only st.var is used; the mean is computed and discarded.
+    // Steps 1-2 (downsample, transpose if FREQ, GpuWrms at niter = 1). Only st.var is used;
+    // the mean is computed and discarded.
     StatisticOutputs st = _launch_statistic(intensity, weights, scratch, stream);
 
     // Step 3, in place on st.var.

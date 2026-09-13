@@ -1,7 +1,6 @@
 #include "../../include/pirate/chimefrb/ClipperBase.hpp"
 #include "../../include/pirate/chimefrb/WiDownsampler.hpp"
 #include "../../include/pirate/chimefrb/Wrms.hpp"
-#include "../../include/pirate/chimefrb/launch_utils.hpp"
 
 #include <sstream>
 #include <ksgpu/xassert.hpp>
@@ -18,16 +17,17 @@ namespace chimefrb {
 
 // -------------------------------------------------------------------------------------------------
 //
-// Constructor helpers. These run from the initializer list, so that argument checking
-// happens before the derived members (which divide by Df and Dt) are computed.
+// Constructor helpers. The clipper's argument checks and its scratch size are computed by
+// _checked_scratch_nelts(), which runs as the GpuTransformBase constructor's argument --
+// i.e. before anything else, since the base class is initialized before any member. That
+// is what lets the derived members below divide by Df and Dt safely, and what makes
+// scratch_nelts (a const member of the base) known in time.
 
 
-// Returns its nbeams argument, so that it can initialize 'nbeams'.
-static long _checked_nbeams(const char *name, long nbeams, long nfreq, long ntime, long nt_chunk,
-                            long Df, long Dt, long niter, double iter_sigma)
+static void _check_args(const char *name, long nfreq, long ntime, long nt_chunk,
+                        long Df, long Dt, long niter, double iter_sigma)
 {
-    if (nbeams < 1)
-        throw runtime_error(string(name) + ": expected nbeams >= 1");
+    // nbeams, nfreq and ntime >= 1 are GpuTransformBase's checks.
     if (nt_chunk < 1)
         throw runtime_error(string(name) + ": expected nt_chunk >= 1");
     if (ntime != nt_chunk) {
@@ -61,8 +61,6 @@ static long _checked_nbeams(const char *name, long nbeams, long nfreq, long ntim
            << Df << "," << Dt << ")";
         throw runtime_error(ss.str());
     }
-
-    return nbeams;
 }
 
 
@@ -88,17 +86,21 @@ static long _wrms_R(ClipperAxis axis, long B, long F_ds, long T_ds)
 }
 
 
-// Scratch layout, in float32 elements. Kept in one place, and in the same order that
-// _launch_statistic() carves it:
+// Checks the arguments (above), then returns the scratch layout's size in float32 elements.
+// The layout is kept in one place, and in the same order that _launch_statistic() carves it:
 //
 //    (I_ds, W_ds)   ncell each, only when (Df,Dt) != (1,1)
 //    (I_t,  W_t)    ncell each, only when axis == FREQ
 //    mean, var      wrms_R each
 //    GpuWrms        its own scratch, nonzero only on the global-memory path
 //
-static long _scratch_nelts(ClipperAxis axis, long B, long F_ds, long T_ds,
-                           long Df, long Dt, long niter, double iter_sigma, bool two_pass)
+static long _checked_scratch_nelts(const char *name, long B, long nfreq, long ntime, long nt_chunk,
+                                   ClipperAxis axis, long Df, long Dt, long niter,
+                                   double iter_sigma, bool two_pass)
 {
+    _check_args(name, nfreq, ntime, nt_chunk, Df, Dt, niter, iter_sigma);
+
+    const long F_ds = nfreq / Df, T_ds = nt_chunk / Dt;
     const long ncell = B * F_ds * T_ds;
     const long R = _wrms_R(axis, B, F_ds, T_ds);
     const bool need_ds = (Df != 1) || (Dt != 1);
@@ -117,15 +119,14 @@ static long _scratch_nelts(ClipperAxis axis, long B, long F_ds, long T_ds,
 GpuClipperBase::GpuClipperBase(const char *name_, long nbeams_, long nfreq_, long ntime_,
                                long nt_chunk_, ClipperAxis axis_, long Df_, long Dt_,
                                long niter_, double iter_sigma_, bool two_pass_) :
-    nbeams(_checked_nbeams(name_, nbeams_, nfreq_, ntime_, nt_chunk_, Df_, Dt_, niter_, iter_sigma_)),
-    nfreq(nfreq_), ntime(ntime_), nt_chunk(nt_chunk_), axis(axis_), Df(Df_), Dt(Dt_),
+    GpuTransformBase(name_, nbeams_, nfreq_, ntime_,
+                     _checked_scratch_nelts(name_, nbeams_, nfreq_, ntime_, nt_chunk_, axis_, Df_, Dt_,
+                                            niter_, iter_sigma_, two_pass_)),
+    nt_chunk(nt_chunk_), axis(axis_), Df(Df_), Dt(Dt_),
     niter(niter_), iter_sigma(iter_sigma_), two_pass(two_pass_),
     F_ds(nfreq_ / Df_), T_ds(nt_chunk_ / Dt_),
     wrms_L(_wrms_L(axis_, nfreq_/Df_, nt_chunk_/Dt_)),
-    wrms_R(_wrms_R(axis_, nbeams_, nfreq_/Df_, nt_chunk_/Dt_)),
-    scratch_nelts(_scratch_nelts(axis_, nbeams_, nfreq_/Df_, nt_chunk_/Dt_, Df_, Dt_,
-                                 niter_, iter_sigma_, two_pass_)),
-    name(name_)
+    wrms_R(_wrms_R(axis_, nbeams_, nfreq_/Df_, nt_chunk_/Dt_))
 { }
 
 
@@ -136,8 +137,6 @@ GpuClipperBase::StatisticOutputs
 GpuClipperBase::_launch_statistic(const Array<float> &intensity, const Array<float> &weights,
                                   Array<float> &scratch, cudaStream_t stream) const
 {
-    check_launch_args(intensity, weights, scratch, nbeams, nfreq, ntime, scratch_nelts);
-
     const bool need_ds = (Df != 1) || (Dt != 1);
     long pos = 0;
 

@@ -1,14 +1,15 @@
 """ExampleCupyTransform: a worked example of a chimefrb transform written in cupy, on top of
-CupyTransformBase. It exists to show the shape of a transform -- the constructor, the
+GpuTransformBase. It exists to show the shape of a transform -- the constructor, the
 computation, the two yaml methods -- and is not meant for use: GpuIntensityClipper is the
-real thing (see the class docstring).
+real thing (see the class docstring). Nothing here needs the C++ side of GpuTransformBase:
+everything a python transform can see of its base class is in GpuTransformBase.py.
 """
 
-from .CupyTransformBase import CupyTransformBase
+from .GpuTransformBase import GpuTransformBase
 from .transform_io import check_yaml_keys
 
 
-class ExampleCupyTransform(CupyTransformBase):
+class ExampleCupyTransform(GpuTransformBase):
     """Masks every sample more than ``sigma`` standard deviations from its row's mean.
 
     Per (beam, channel) row, over time: the weighted mean and variance of the intensity, then
@@ -22,8 +23,8 @@ class ExampleCupyTransform(CupyTransformBase):
     ``>=`` where this uses ``>``. It is here as the example to copy when writing a transform
     in cupy, not as something to run.
 
-    Attributes (read-only by convention): ``nbeams``, ``nfreq``, ``ntime``, ``scratch_nelts``
-    (always 0), and ``sigma``.
+    Attributes (read-only): ``nbeams``, ``nfreq``, ``ntime``, ``scratch_nelts`` (always 0), and
+    ``sigma``.
     """
 
     def __init__(self, nbeams, nfreq, ntime, sigma=3.0):

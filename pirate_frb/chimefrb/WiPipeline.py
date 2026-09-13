@@ -3,18 +3,20 @@
 A python port of rf_pipelines::pipeline, the container the old CHIME FRB search's RFI chain
 was built from. ("wi" is the old code's abbreviation for a (weights, intensity) pair.) Its
 companion RfiMaskPipeline (rf_pipelines::wi_sub_pipeline) runs a list of transforms on a
-downsampled copy of the data instead; both are transforms themselves (see
-transform_io.py for the interface), so they nest.
+downsampled copy of the data instead; both are transforms themselves (subclasses of
+GpuTransformBase, like every transform), so they nest.
 """
 
-from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, check_launch_args,
-                           check_yaml_keys, default_scratch_and_stream, read_json, read_yaml,
-                           transform_from_json_dict, transform_from_yaml_dict, write_yaml)
+from .GpuTransformBase import GpuTransformBase
+from .transform_io import (PIPELINE_YAML_HEADER, check_json_keys, check_yaml_keys, read_json,
+                           read_yaml, transform_from_json_dict, transform_from_yaml_dict,
+                           write_yaml)
 
 
 def check_transforms(transforms, who):
-    """Validate a sequence of transforms (see transform_io.py) that are to share one block:
-    each has the protocol's attributes and methods, and all have the same geometry. Returns
+    """Validate a sequence of transforms that are to share one block: each is a
+    :class:`GpuTransformBase` (which guarantees the geometry attributes and the checked
+    ``launch()``), and all have the same geometry. Returns
     ``(tuple_of_transforms, (nbeams, nfreq, ntime))``."""
 
     transforms = tuple(transforms)
@@ -24,20 +26,11 @@ def check_transforms(transforms, who):
     geometry = None
     for (i, t) in enumerate(transforms):
         what = f'{who}: transforms[{i}] ({type(t).__name__})'
-        for attr in ('nbeams', 'nfreq', 'ntime', 'scratch_nelts'):
-            if not hasattr(t, attr):
-                raise TypeError(f"{what} has no '{attr}' attribute; see pirate_frb.chimefrb.transform_io"
-                                f" for what a transform must define")
-        for attr in ('launch', 'to_yaml_dict'):
-            if not callable(getattr(t, attr, None)):
-                raise TypeError(f"{what} has no {attr}() method; see pirate_frb.chimefrb.transform_io")
+        if not isinstance(t, GpuTransformBase):
+            raise TypeError(f"{what} is not a transform: it does not subclass GpuTransformBase; see"
+                            f" pirate_frb.chimefrb.transform_io for what a transform is")
 
-        g = (int(t.nbeams), int(t.nfreq), int(t.ntime))
-        if min(g) < 1:
-            raise ValueError(f'{what} has geometry (nbeams, nfreq, ntime) = {g}; all must be >= 1')
-        if int(t.scratch_nelts) < 0:
-            raise ValueError(f'{what} has scratch_nelts = {t.scratch_nelts} < 0')
-
+        g = (t.nbeams, t.nfreq, t.ntime)
         if geometry is None:
             geometry = g
         elif g != geometry:
@@ -66,15 +59,16 @@ def describe_lines(transform, depth=0):
     return [f"{pad}{d['class_name']} {params}"]
 
 
-class WiPipeline:
+class WiPipeline(GpuTransformBase):
     """An ordered list of transforms, run one after another on the same block of data.
 
     A port of rf_pipelines::pipeline, the container the old CHIME FRB search's RFI chain was
     built from ("wi" is the old code's abbreviation for a (weights, intensity) pair). Each
-    transform sees the output of the one before it. A WiPipeline is itself a transform (see
-    ``pirate_frb.chimefrb.transform_io`` for the interface), so pipelines nest, and an
+    transform sees the output of the one before it. A WiPipeline is itself a transform (a
+    :class:`GpuTransformBase`, like every transform), so pipelines nest, and an
     :class:`RfiMaskPipeline` -- the old code's downsampled sub-pipeline -- can be one of its
-    elements.
+    elements. ``launch()`` runs every transform in order; whichever arrays they modify, it
+    modifies.
 
     One ``launch()`` processes exactly one (nbeams, nfreq, ntime) block. Assembling that block
     from the data source (four 1024-sample AssembledChunks for the production chain, whose
@@ -86,7 +80,7 @@ class WiPipeline:
     A WiPipeline holds no per-launch state, so one instance may be launched on several
     streams at once, provided each stream has its own scratch array.
 
-    Attributes (read-only by convention):
+    Attributes (read-only):
 
     - ``transforms`` (tuple) -- the transforms, in launch order.
     - ``nbeams``, ``nfreq``, ``ntime`` -- the block shape, shared by every transform.
@@ -100,31 +94,18 @@ class WiPipeline:
         Parameters
         ----------
         transforms : sequence
-            One or more transforms (``pirate_frb.chimefrb.transform_io``), all with the same
+            One or more transforms (:class:`GpuTransformBase` subclasses), all with the same
             (nbeams, nfreq, ntime).
         """
-        (self.transforms, (self.nbeams, self.nfreq, self.ntime)) = check_transforms(transforms, 'WiPipeline')
-        self.scratch_nelts = max(int(t.scratch_nelts) for t in self.transforms)
+        (transforms, (nbeams, nfreq, ntime)) = check_transforms(transforms, 'WiPipeline')
+        super().__init__(nbeams, nfreq, ntime, max(t.scratch_nelts for t in transforms))
+        self.transforms = transforms
 
-    def launch(self, intensity, weights, scratch, stream=None):
-        """Run every transform, in order (async; does not sync the stream).
-
-        Parameters
-        ----------
-        intensity, weights : cupy.ndarray
-            Shape (nbeams, nfreq, ntime), float32, C-contiguous, distinct. Modified in place
-            by whichever transforms modify them.
-        scratch : cupy.ndarray or None
-            1-d float32 with at least ``scratch_nelts`` elements, or None to allocate one
-            (convenient interactively, wasteful in a loop).
-        stream : cupy.cuda.Stream or None, optional
-            CUDA stream to use. If None, uses current cupy stream.
-        """
-        (scratch, stream) = default_scratch_and_stream(scratch, stream, self.scratch_nelts)
-        check_launch_args(intensity, weights, scratch, (self.nbeams, self.nfreq, self.ntime),
-                          self.scratch_nelts, 'WiPipeline')
+    def launch_checked(self, intensity, weights, scratch):
+        # The pipeline's stream is current (GpuTransformBase.launch() made it so), and each
+        # transform's launch() defaults to it. 'scratch' is the largest any of them needs.
         for t in self.transforms:
-            t.launch(intensity, weights, scratch, stream=stream)
+            t.launch(intensity, weights, scratch)
 
     def to_yaml_dict(self):
         """``{'class_name': 'WiPipeline', 'transforms': [...]}``, each element its own

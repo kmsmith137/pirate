@@ -4,6 +4,8 @@
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
 
+#include "TransformBase.hpp"
+
 namespace pirate {
 namespace chimefrb {
 #if 0
@@ -50,10 +52,10 @@ namespace chimefrb {
 // IMPLEMENTATION: one warp per row; see the .cu file.
 //
 // Every chimefrb transform's launch() takes (intensity, weights, scratch, stream) on arrays
-// of shape (nbeams, nfreq, ntime); see launch_utils.hpp. See notes/chimefrb.md for the
-// porting rules this class follows.
+// of shape (nbeams, nfreq, ntime); see GpuTransformBase in TransformBase.hpp. See
+// notes/chimefrb.md for the porting rules this class follows.
 
-struct GpuPolynomialDetrender
+struct GpuPolynomialDetrender : public GpuTransformBase
 {
     // (nbeams, nfreq, ntime) is the shape of the arrays launch() will be given, with ntime a
     // multiple of nt_chunk: one fit per (beam, channel, chunk).
@@ -73,30 +75,30 @@ struct GpuPolynomialDetrender
     GpuPolynomialDetrender(long nbeams, long nfreq, long ntime, long polydeg, double epsilon,
                            long nt_chunk, long warps_per_block = 16);
 
-    const long nbeams, nfreq, ntime;   // array shape; ntime a positive multiple of nt_chunk
+    // Inherited from GpuTransformBase: nbeams, nfreq, ntime (the array shape; ntime a positive
+    // multiple of nt_chunk), scratch_nelts (always 0: the kernel needs no scratch), and launch().
     const long polydeg;                // degree; the fit has polydeg+1 coefficients
     const double epsilon;              // gate threshold (the production chain uses 0.01)
     const long nt_chunk;               // samples per independent fit; positive multiple of 64
     const long warps_per_block;        // 4, 8 or 16
-    const long scratch_nelts = 0;      // launch() needs no scratch
 
-    // launch(): asynchronously launch the kernel, and return without synchronizing the
-    // stream. Note: stream=NULL is allowed, but is not the default.
+    // launch_checked(): asynchronously launch the kernel, and return without synchronizing
+    // the stream. Called by GpuTransformBase::launch(), which checks the arguments first.
     //
     //   intensity  shape (nbeams, nfreq, ntime), float32, fully contiguous, on GPU. One fit
     //              per (beam, channel, chunk). The fitted polynomial is subtracted in place
     //              at every sample of a row that passes the gate; a row that fails is left
     //              untouched.
     //
-    //   weights    same shape, dtype and layout, not aliased with 'intensity'. MODIFIED IN
-    //              PLACE: all nt_chunk weights of a failing row are set to zero, and every
-    //              other weight is left bit-identical. Must be >= 0 on entry, which is NOT
-    //              checked (every producer in the chain guarantees it by construction; a
-    //              negative weight would make the normal equations indefinite).
+    //   weights    same shape, dtype and layout. MODIFIED IN PLACE: all nt_chunk weights of
+    //              a failing row are set to zero, and every other weight is left
+    //              bit-identical. Must be >= 0 on entry, which is NOT checked (every producer
+    //              in the chain guarantees it by construction; a negative weight would make
+    //              the normal equations indefinite).
     //
-    //   scratch    1-d, or empty. Unused: scratch_nelts == 0.
-    void launch(ksgpu::Array<float> &intensity, ksgpu::Array<float> &weights,
-                ksgpu::Array<float> &scratch, cudaStream_t stream) const;
+    //   scratch    Unused: scratch_nelts == 0.
+    void launch_checked(ksgpu::Array<float> &intensity, ksgpu::Array<float> &weights,
+                        ksgpu::Array<float> &scratch, cudaStream_t stream) const override;
 
     // Static timing function (called via 'python -m pirate_frb time --cfrb'). Times the
     // production configuration at the two channel counts the old chain runs it at, for

@@ -1,5 +1,4 @@
 #include "../../include/pirate/chimefrb/BadChannelMask.hpp"
-#include "../../include/pirate/chimefrb/launch_utils.hpp"
 
 #include <cmath>
 #include <sstream>
@@ -151,17 +150,6 @@ static Array<uint8_t> _host_keep(const vector<pair<double,double>> &mask_ranges,
 // -------------------------------------------------------------------------------------------------
 
 
-static long _checked_positive(const char *what, long x)
-{
-    if (x < 1) {
-        stringstream ss;
-        ss << "GpuBadChannelMask: expected " << what << " >= 1, got " << x;
-        throw runtime_error(ss.str());
-    }
-    return x;
-}
-
-
 static long _checked_warps(long warps_per_block)
 {
     if ((warps_per_block != 4) && (warps_per_block != 8)
@@ -196,9 +184,7 @@ GpuBadChannelMask::GpuBadChannelMask(long nbeams_, long nfreq_, long ntime_,
                                      const vector<pair<double,double>> &mask_ranges_,
                                      pair<double,double> freq_range_, long warps_per_block_,
                                      const Array<uint8_t> &host_keep) :
-    nbeams(_checked_positive("nbeams", nbeams_)),
-    nfreq(_checked_positive("nfreq", nfreq_)),
-    ntime(_checked_positive("ntime", ntime_)),
+    GpuTransformBase("GpuBadChannelMask", nbeams_, nfreq_, ntime_, /*scratch_nelts=*/0),
     mask_ranges(mask_ranges_),
     freq_range(freq_range_),
     warps_per_block(_checked_warps(warps_per_block_)),
@@ -207,11 +193,9 @@ GpuBadChannelMask::GpuBadChannelMask(long nbeams_, long nfreq_, long ntime_,
 { }
 
 
-void GpuBadChannelMask::launch(const Array<float> &intensity, Array<float> &weights,
-                               Array<float> &scratch, cudaStream_t stream) const
+void GpuBadChannelMask::launch_checked(Array<float> &intensity, Array<float> &weights,
+                                       Array<float> &scratch, cudaStream_t stream) const
 {
-    check_launch_args(intensity, weights, scratch, nbeams, nfreq, ntime, scratch_nelts);
-
     // The kernel would do nothing, but it would still cost a launch.
     if (nmasked == 0)
         return;
