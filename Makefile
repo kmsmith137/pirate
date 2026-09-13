@@ -584,10 +584,10 @@ HFILES = \
   include/pirate/chimefrb/ClipperAxis.hpp \
   include/pirate/chimefrb/ClipperBase.hpp \
   include/pirate/chimefrb/IntensityClipper.hpp \
-  include/pirate/chimefrb/launch_utils.hpp \
   include/pirate/chimefrb/PolynomialDetrender.hpp \
   include/pirate/chimefrb/SplineDetrender.hpp \
   include/pirate/chimefrb/StdDevClipper.hpp \
+  include/pirate/chimefrb/TransformBase.hpp \
   include/pirate/chimefrb/WeightUpsampler.hpp \
   include/pirate/chimefrb/WiDownsampler.hpp \
   include/pirate/chimefrb/Wrms.hpp \
@@ -667,7 +667,7 @@ WHEEL_FILES := $(PYFILES) $(CUDAGEN_PYFILES) $(GRPC_PYFILES) $(PIRATE_PYEXT) pir
 WHEEL_FILES += $(HFILES:%=pirate_frb/%)
 
 # Phony targets. The special targets 'build_wheel' and 'build_sdist' are needed by pip/pipmake.
-lib: $(PIRATE_LIB) $(PIRATE_PYEXT) configs/example_asdf_header.yml configs/example_dedispersion_plan.yml
+lib: $(PIRATE_LIB) $(PIRATE_PYEXT) configs/example_asdf_header.yml configs/example_dedispersion_plan.yml configs/chimefrb/rfi_21_03_07.yml
 build_wheel: wheel_files.txt $(PIRATE_LIB) $(PIRATE_PYEXT)
 build_sdist: sdist_files.txt
 
@@ -680,6 +680,15 @@ configs/example_asdf_header.yml: configs/xengine_metadata.yml $(PIRATE_PYEXT) $(
 # dedispersion config. Checked into git and included in the Sphinx docs.
 configs/example_dedispersion_plan.yml: configs/dedispersion/chord_sb2_et.yml $(PIRATE_PYEXT) $(PIRATE_LIB) $(GRPC_PYFILES)
 	$(PYTHON) -m pirate_frb show dedisperser -v $< > $@
+
+# Auto-generated conversion of the old CHIME FRB search's production RFI chain (the json
+# that ran on CHIME on 2021-03-07) to the chimefrb yaml format that WiPipeline reads.
+# Checked into git and included in the Sphinx docs. The conversion prints notes to stderr
+# (elements skipped because they have no pirate counterpart, the CHIME band assumed for
+# badchannel_mask); they are left visible, since they say what the conversion dropped.
+configs/chimefrb/rfi_21_03_07.yml: misc/chimefrb/configs/21-03-07-low-latency-uniform-badchannel-mask-noplot.json $(PIRATE_PYEXT) $(PIRATE_LIB) $(GRPC_PYFILES)
+	@mkdir -p $(@D)
+	$(PYTHON) -m pirate_frb cfrb json2yaml -w 130 $< > $@
 
 # Symlink {include,lib} into python directory 'pirate_frb'.
 pirate_frb/include:

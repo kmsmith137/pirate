@@ -1,0 +1,134 @@
+# Created with: pirate_frb cfrb json2yaml misc/chimefrb/configs/21-03-07-low-latency-uniform-badchannel-mask-noplot.json --nbeams 1 --nfreq 16384 --ntime 4096 -w 130
+# A pirate_frb.chimefrb transform chain. Read with
+#   WiPipeline.read_yaml_file(filename, nbeams=..., nfreq=..., ntime=...)
+# (or RfiMaskPipeline.read_yaml_file, if that is the top-level class_name).
+class_name: WiPipeline
+transforms:
+-   class_name: RfiMaskPipeline
+    Df: 16
+    Dt: 1
+    w_cutoff: 0.0
+    transforms:
+    -   class_name: GpuBadChannelMask
+        freq_range: [400.0, 800.0]
+        mask_ranges:
+        - [440.2099609375, 440.4052734375]
+        - [417.1630859375, 417.626953125]
+        - [418.310546875, 419.2138671875]
+        - [781.8115234375, 786.6943359375]
+        - [627.1728515625, 641.40625]
+        - [449.9755859375, 450.4150390625]
+        - [453.2470703125, 453.3203125]
+        - [730.078125, 755.859375]
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: true}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: true}
+    - {class_name: GpuPolynomialDetrender, polydeg: 4, epsilon: 0.01, nt_chunk: 1024, axis: time}
+    - {class_name: GpuSplineDetrender, nbins: 6, epsilon: 0.0003, axis: freq}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: time, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuStdDevClipper, nt_chunk: 4096, axis: freq, sigma: 3.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+    - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+- {class_name: GpuPolynomialDetrender, polydeg: 4, epsilon: 0.01, nt_chunk: 1024, axis: time}
+- {class_name: GpuSplineDetrender, nbins: 6, epsilon: 0.0003, axis: freq}
