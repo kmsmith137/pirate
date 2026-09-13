@@ -20,7 +20,7 @@ the bit. It is the direct test that {0,1} weights and counts are one algorithm.
 
 WHAT THIS FILE CANNOT ESTABLISH: a misreading of the old kernel would pass every check
 here, since the reference and the port were written from the same reading. The spot
-check misc/chimefrb/rfi_spline_detrender/ runs the old code itself.
+check misc/chimefrb/spot_checks/rfi_spline_detrender/ runs the old code itself.
 """
 
 import numpy as np

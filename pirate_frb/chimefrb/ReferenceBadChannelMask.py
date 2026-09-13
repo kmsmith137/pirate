@@ -10,7 +10,7 @@ test holds the C++ to exactly.
 badchannel_keep() is transcribed from _bind_transform() in
 ../../extern/rf_pipelines/badchannel_mask.cpp. The old code has no reference implementation
 of that arithmetic (its python transform in rf_pipelines/retirement_home follows different
-rules), so misc/chimefrb/rfi_badchannel_mask/ runs the real transform to compare.
+rules), so misc/chimefrb/spot_checks/rfi_badchannel_mask/ runs the real transform to compare.
 """
 
 import math
@@ -215,7 +215,7 @@ class ReferenceBadChannelMask:
 
     Trivial on purpose. The part of badchannel_mask that is hard to get right is the
     conversion from MHz ranges, and its references are the old code
-    (misc/chimefrb/rfi_badchannel_mask/) and a second statement of the rule
+    (misc/chimefrb/spot_checks/rfi_badchannel_mask/) and a second statement of the rule
     (test_badchannel_mask.keep_by_rule()), not a second implementation.
     """
 

@@ -1,5 +1,5 @@
 """Randomized unit tests for GpuBadChannelMask and badchannel_keep(), and the random draws
-they share with misc/chimefrb/rfi_badchannel_mask/.
+they share with misc/chimefrb/spot_checks/rfi_badchannel_mask/.
 
 Dispatched from ``python -m pirate_frb test --cfrb``.
 
@@ -16,7 +16,7 @@ kernel is still tested on masks of every shape.
 
 WHAT THIS FILE CANNOT ESTABLISH: that badchannel_keep() matches the old code. Both it and
 keep_by_rule() come from one reading of rf_pipelines' _bind_transform(), so a misreading
-would pass here. That is what misc/chimefrb/rfi_badchannel_mask/ is for.
+would pass here. That is what misc/chimefrb/spot_checks/rfi_badchannel_mask/ is for.
 """
 
 import numpy as np

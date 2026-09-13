@@ -139,12 +139,13 @@ not (the `hdf5=1.10` pin in particular is load-bearing in both directions).
 
 A "spot check" runs one piece of the old code and compares it against its pirate
 equivalent. These are one-off correctness checks used during development, not part of
-the pirate test suite.
+the pirate test suite. They live in `misc/chimefrb/spot_checks/`, beside the build script
+that produces the `oldpipe/` they run against (Appendix A).
 
 ```
-misc/chimefrb/run_spot_tests.py             # all
-misc/chimefrb/run_spot_tests.py -l          # list them
-misc/chimefrb/run_spot_tests.py <name>      # just one
+misc/chimefrb/spot_checks/run_spot_tests.py             # all
+misc/chimefrb/spot_checks/run_spot_tests.py -l          # list them
+misc/chimefrb/spot_checks/run_spot_tests.py <name>      # just one
 ```
 
 They are deliberately NOT dispatched from `pirate_frb/__main__.py`, and should not be:
@@ -152,7 +153,8 @@ they need `oldpipe/` built, which `python -m pirate_frb test` must never require
 
 ### How one is put together
 
-Each spot check is a directory under `misc/chimefrb/` holding exactly two files:
+Each spot check is a directory under `misc/chimefrb/spot_checks/` holding exactly two
+files:
 
 ```
 <name>/driver.cpp    the OLD side
@@ -178,19 +180,20 @@ about what counts as agreement. `test.py` owns all of that: it generates the inp
 the pirate side, and decides the tolerance.
 
 `.npy` is the exchange format because numpy reads and writes it for free on the pirate
-side, and `misc/chimefrb/npy.hpp` handles it on the chimefrb side. `misc/chimefrb/harness.py`
-supplies `run_driver()`, which compiles the driver on demand and moves the arrays
-across (one array or a list, each way), and `Test.check_allclose()`, which reports the disagreement it actually
-measured rather than just pass/fail.
+side, and `misc/chimefrb/spot_checks/npy.hpp` handles it on the chimefrb side.
+`misc/chimefrb/spot_checks/harness.py` supplies `run_driver()`, which compiles the driver
+on demand and moves the arrays across (one array or a list, each way), and
+`Test.check_allclose()`, which reports the disagreement it actually measured rather than
+just pass/fail.
 
-Read `misc/chimefrb/dispersion_delay/` before writing a new one. It is short on purpose,
-and it is a real comparison: bonsai and pirate use dispersion constants that differ by
-4.8e-7, so it is an example of a spot check where exact agreement is the wrong
+Read `misc/chimefrb/spot_checks/dispersion_delay/` before writing a new one. It is short
+on purpose, and it is a real comparison: bonsai and pirate use dispersion constants that
+differ by 4.8e-7, so it is an example of a spot check where exact agreement is the wrong
 expectation.
 
 ### Adding a new spot check
 
-1. Make a directory `misc/chimefrb/<name>/` and copy the two files from
+1. Make a directory `misc/chimefrb/spot_checks/<name>/` and copy the two files from
    `dispersion_delay/` as a starting point.
 2. In `driver.cpp`, include `"../npy.hpp"` plus whatever chimefrb headers you need,
    read the input arrays, compute, write the output arrays. Do not print on success.

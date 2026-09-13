@@ -27,7 +27,7 @@ downsample, the statistic and the axis reshaping as a unit rather than only as a
 
 WHAT THIS FILE CANNOT ESTABLISH: the numpy reference and the CUDA kernel were written
 from one reading of the old code, so a shared misreading would pass everything here. That
-is what misc/chimefrb/rfi_intensity_clipper/ is for.
+is what misc/chimefrb/spot_checks/rfi_intensity_clipper/ is for.
 """
 
 import numpy as np

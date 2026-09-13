@@ -8,7 +8,7 @@ exists only to generate test inputs -- nothing outside this file should write th
 
 WHAT THIS FILE CANNOT ESTABLISH: the python reader here is a second implementation written
 from the same reading of ch_frb_io as the C++ one, so a shared misreading of the format
-would pass every test below. That is what the spot checks in ``misc/chimefrb/`` are for --
+would pass every test below. That is what the spot checks in ``misc/chimefrb/spot_checks/`` are for --
 they link the real ch_frb_io reader, writer and decode. See notes/chimefrb.md.
 """
 

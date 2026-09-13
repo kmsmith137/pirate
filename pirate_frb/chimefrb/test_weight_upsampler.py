@@ -16,7 +16,7 @@ check that ties this kernel's cell geometry to the clippers'.
 
 WHAT THIS FILE CANNOT ESTABLISH: that the numpy reference matches the old code. Both pirate
 implementations were written from one reading of it, so a misreading would pass here. That is
-what misc/chimefrb/rfi_weight_upsample/ is for.
+what misc/chimefrb/spot_checks/rfi_weight_upsample/ is for.
 """
 
 import numpy as np

@@ -7,7 +7,7 @@ than 'sigma' standard deviations away.
 Almost nothing here is transcribed from the old C++, because the pieces it is built from
 already are: ReferenceWiDownsampler and ReferenceWrms, each validated against rf_kernels
 by its own spot test. What is new is intensity_clip(), the final clip and mask upsample,
-which is checked against rf_kernels::intensity_clipper in misc/chimefrb/rfi_intensity_clipper/.
+which is checked against rf_kernels::intensity_clipper in misc/chimefrb/spot_checks/rfi_intensity_clipper/.
 """
 
 import numpy as np

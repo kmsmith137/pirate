@@ -35,7 +35,7 @@ namespace chimefrb {
 // path writes 0, but it short-circuits (Df,Dt)=(1,1) to a memcpy, which passes the
 // intensity through untouched. This class writes 0 in every case -- one rule instead of
 // two, and a consumer that forgets to check the weight sees zeros rather than stale
-// intensity. misc/chimefrb/rfi_wi_downsample/ is the spot test that measures this.
+// intensity. misc/chimefrb/spot_checks/rfi_wi_downsample/ is the spot test that measures this.
 //
 // Where a cell HAS weight, (Df,Dt) = (1,1) is exact: the intensity is copied through bit for
 // bit, as rf_kernels' memcpy does, rather than computed as (w*i)/w, which rounds to within an

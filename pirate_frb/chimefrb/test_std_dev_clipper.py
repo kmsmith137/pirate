@@ -1,5 +1,5 @@
 """Randomized unit tests for GpuStdDevClipper, and the tolerance helpers they share with
-the spot checks misc/chimefrb/rfi_std_dev_clipper/ and misc/chimefrb/rfi_std_dev_clip_1d/.
+the spot checks misc/chimefrb/spot_checks/rfi_std_dev_clipper/ and misc/chimefrb/spot_checks/rfi_std_dev_clip_1d/.
 
 Dispatched from ``python -m pirate_frb test --cfrb``.
 """

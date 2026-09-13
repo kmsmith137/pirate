@@ -1,5 +1,5 @@
 """Randomized unit tests for GpuPolynomialDetrender, and the data generators they share
-with misc/chimefrb/rfi_polynomial_detrender/.
+with misc/chimefrb/spot_checks/rfi_polynomial_detrender/.
 
 Dispatched from ``python -m pirate_frb test --cfrb``.
 
@@ -24,7 +24,7 @@ sqrt and reciprocal so is the float32 arithmetic).
 WHAT THIS FILE CANNOT ESTABLISH: a misreading of the old kernel would pass every check
 here, since the reference and the port were written from the same reading -- and the
 gate has no reference implementation in the old code at all. The spot check
-misc/chimefrb/rfi_polynomial_detrender/ runs the old code itself.
+misc/chimefrb/spot_checks/rfi_polynomial_detrender/ runs the old code itself.
 """
 
 import numpy as np

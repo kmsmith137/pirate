@@ -10,7 +10,7 @@ threshold-bracketing machinery the clippers will need.
 
 WHAT THIS FILE CANNOT ESTABLISH: the numpy reference is a transcription, so a misreading
 of the old kernel's semantics would pass every test below. The weight normalization is
-the trap (sum over the cell, not mean). That is what a spot check under misc/chimefrb/
+the trap (sum over the cell, not mean). That is what a spot check under misc/chimefrb/spot_checks/
 is for; see notes/chimefrb.md.
 """
 

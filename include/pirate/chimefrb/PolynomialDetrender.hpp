@@ -43,7 +43,7 @@ namespace chimefrb {
 // is rescaled to unit diagonal first (the gate is invariant under that), sums run in a
 // different order, and a row within float32 roundoff of the gate threshold may be decided
 // either way. The numpy reference is pirate_frb.chimefrb.ReferencePolynomialDetrender,
-// which also implements the old code's AXIS_FREQ variant; misc/chimefrb/polynomial_detrender/
+// which also implements the old code's AXIS_FREQ variant; misc/chimefrb/spot_checks/rfi_polynomial_detrender/
 // is the spot check against the old code itself.
 //
 // STATELESS: no tables and no scratch (a whole fit lives in one warp's registers), so one

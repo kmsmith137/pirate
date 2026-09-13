@@ -53,7 +53,7 @@ class ReferenceWiDownsampler:
     And where a cell's weights sum to zero, the downsampled intensity is undefined --
     every consumer multiplies it by that zero weight. We write 0 there. rf_kernels
     writes 0 too, except at (Df,Dt) = (1,1), where its memcpy short-circuit passes the
-    raw intensity through instead. misc/chimefrb/rfi_wi_downsample/ measures this.
+    raw intensity through instead. misc/chimefrb/spot_checks/rfi_wi_downsample/ measures this.
 
     Where a (1,1) cell has weight, its intensity is copied through exactly, not recomputed
     as (w*i)/w; see GpuWiDownsampler.

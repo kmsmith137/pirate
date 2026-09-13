@@ -33,7 +33,7 @@ feeds the reference comes from our own iclip(), so a wrong comparison in the ker
 refinement would cancel out. What closes it is that the kernel's refinement and (later)
 the intensity_clipper's final clip share one __device__ predicate, wrms_survives() in
 include/pirate/chimefrb/Wrms.hpp, and the final clip IS tested against an independent
-reference. The spot check in misc/chimefrb/rfi_wrms/ closes it too, by running the old
+reference. The spot check in misc/chimefrb/spot_checks/rfi_wrms/ closes it too, by running the old
 kernel's own internal masking.
 
 A NOTE ON GPU-VS-GPU COMPARISONS. Nothing here compares two GPU runs and asserts that

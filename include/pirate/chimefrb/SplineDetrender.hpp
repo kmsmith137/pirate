@@ -45,7 +45,7 @@ namespace chimefrb {
 // code multiplies, and 0*NaN would poison the whole time sample).
 //
 // The numpy reference is pirate_frb.chimefrb.ReferenceSplineDetrender, transcribed
-// from the old code's own reference implementation; misc/chimefrb/spline_detrender/ is
+// from the old code's own reference implementation; misc/chimefrb/spot_checks/rfi_spline_detrender/ is
 // the spot check against the old code itself.
 //
 // IMPLEMENTATION. The three cuda kernels are those of GpuDetrenderLps2d, shared through
