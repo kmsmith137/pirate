@@ -140,6 +140,20 @@ array bodies, ~30x faster than a full read and validating the file just as thoro
 arrays raise if touched. Use it to ask what a directory contains (beams, FPGA ranges) or
 whether its files have the uniform parameters that sharing one `SlabAllocator` requires.
 
+That is what `pirate_frb cfrb check_acq <acqdir>` does
+(`pirate_frb/chimefrb/acquisition.py`), and it is worth running before pointing anything at a
+directory of `chunk_NNNNNNNN.msg` files. AN ACQDIR IS NOT NECESSARILY ONE ACQUISITION: some of
+ours have gaps in the chunk indices, and some change `beam_id` partway through
+(`/scratch/tweiss_rfi/incoherent_2026-05-22` is 3018 chunks of beam 1000 followed by 10752 of
+beam 0). Anything that treats a whole acqdir as one stream -- an `AssembledChunkReader` over
+the sorted file list, a `SlabAllocator` sized from the first file -- is wrong on those.
+check_acq splits the directory into its largest valid subacquisitions, where valid means
+consecutive chunk indices and one value each of (beam_id, nupfreq, nt_per_packet,
+fpga_counts_per_sample, nrfifreq), and names the reason for every break. Its `-s/--split`
+flag then MOVES the files, putting each subacquisition in a sibling directory
+`<acqdir>_sub1`, `_sub2`, ...; files belonging to no subacquisition (unreadable ones, and
+anything not named `chunk_NNNNNNNN.msg`) stay behind in the original.
+
 ## Appendix A: building the chimefrb code
 
 The 11 repos above do not build out of the box on a modern system, and their `master`

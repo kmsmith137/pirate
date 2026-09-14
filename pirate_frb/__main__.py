@@ -40,6 +40,7 @@ from .chimefrb import test_polynomial_detrender as chimefrb_pd_tests
 from .chimefrb import test_wt_upsampling_kernel as chimefrb_wt_tests
 from .chimefrb import test_chime_dequantization_kernel as chimefrb_cdq_tests
 from .chimefrb import test_rfi_mask_packing_kernel as chimefrb_rmp_tests
+from .chimefrb import test_acquisition as chimefrb_acq_tests
 from .chimefrb import test_pipeline as chimefrb_pipe_tests
 from .chimefrb import test_rfi_mask_extractor as chimefrb_rme_tests
 from .chimefrb import test_chime_pre_dedisperser as chimefrb_cpd_tests
@@ -330,6 +331,7 @@ def test(args):
         if run_all_tests or args.cfrb:
             chimefrb_tests.test_assembled_chunk(i)
             chimefrb_acr_tests.test_assembled_chunk_reader(i)
+            chimefrb_acq_tests.test_acquisition(i)
             chimefrb_cdq_tests.test_chime_dequantization_kernel(i)
             chimefrb_rmp_tests.test_rfi_mask_packing_kernel(i)
             chimefrb_wi_tests.test_wi_downsampling_kernel(i)
@@ -1889,14 +1891,96 @@ def parse_cfrb(subparsers):
     """The 'cfrb' group: the CHIME FRB port (pirate_frb.chimefrb).
 
     Tools for the ported RFI chain itself -- converting the old rf_pipelines json configs,
-    and timing a chain on the GPU. The port's unit tests are 'pirate_frb test --cfrb' and its
-    per-kernel timings are 'pirate_frb time --cfrb'; neither belongs here.
+    timing a chain on the GPU, and surveying a directory of old data files. The port's unit
+    tests are 'pirate_frb test --cfrb' and its per-kernel timings are 'pirate_frb time
+    --cfrb'; neither belongs here.
     """
-    help_text = "Subcommand for the chimefrb port: convert a legacy json chain, time a chain, reproduce a saved RFI mask (see cfrb --help)"
+    help_text = "Subcommand for the chimefrb port: check an acqdir, time a chain, reproduce a saved RFI mask, etc. (see cfrb --help)"
     sub = _add_group(subparsers, "cfrb", help_text)
+    parse_cfrb_check_acq(sub)
     parse_cfrb_json2yaml(sub)
     parse_cfrb_time_pipeline(sub)
     parse_cfrb_reproduce_rfimask(sub)
+
+
+######################################   cfrb check_acq command  ####################################
+
+
+def parse_cfrb_check_acq(subparsers):
+    help_text = "Split a directory of chimefrb data files into its largest valid subacquisitions"
+    parser = subparsers.add_parser("check_acq", help=help_text, description=help_text)
+    parser.set_defaults(func=cfrb_check_acq)
+    parser.add_argument('acqdir', metavar='ACQDIR',
+                        help='a directory of chunk_NNNNNNNN.msg files'
+                             ' (e.g. /scratch/tweiss_rfi/incoherent_2026-05-22)')
+    parser.add_argument('-j', '--nthreads', type=int, default=16, metavar='N',
+                        help='files to read at once (default 16). The scan is IO-bound (four'
+                             ' small reads per file), and on local NVMe 16 threads read a'
+                             ' cold file in 0.035 ms against 0.32 ms single-threaded.')
+    parser.add_argument('-s', '--split', action='store_true',
+                        help='MOVES FILES: split the acquisition, putting each subacquisition'
+                             " in a directory of its own next to ACQDIR ('<ACQDIR>_sub1',"
+                             " '_sub2', ...). Does nothing if the acquisition is already"
+                             ' valid. Files belonging to no subacquisition (unreadable ones,'
+                             ' and anything not named chunk_NNNNNNNN.msg) stay in ACQDIR.')
+
+
+def cfrb_check_acq(args):
+    """Report the largest valid subacquisitions of one acqdir, and optionally split it.
+
+    An acquisition is valid if its chunk indices are consecutive and every file agrees on
+    (beam_id, nupfreq, nt_per_packet, fpga_counts_per_sample, nrfifreq). Some of ours are
+    not, which is what this exists to find: the report is one line per subacquisition, with
+    the reason for each break -- a gap, a changed field, an unreadable file -- on an indented
+    line between the two rows it separates.
+
+    With -s the report is printed FIRST and the files are moved after, so that the record of
+    what was done is on stdout even if a move fails partway.
+
+    Exits 0 whether or not the acquisition is valid; only an unusable ACQDIR, or a split that
+    could not be carried out, is an error. The summary line starts with VALID or INVALID, for
+    a caller looping over directories.
+    """
+    from .chimefrb.acquisition import check_acq, split_into_dirs, subacquisition_dirs
+
+    if args.nthreads < 1:
+        sys.exit(f'pirate_frb cfrb check_acq: expected -j/--nthreads >= 1, got {args.nthreads}')
+
+    # Absolute, because the split names its output directories after this string and moves
+    # files into them: a reader of the output should not have to know the cwd.
+    acqdir = os.path.abspath(args.acqdir)
+
+    try:
+        (report, entries, subacqs) = check_acq(acqdir, nthreads=args.nthreads)
+    except ValueError as e:
+        sys.exit(f'pirate_frb cfrb check_acq: {e}')
+
+    sys.stdout.write(report)
+
+    if len(subacqs) < 2:
+        if args.split:
+            print(f'\n-s/--split: nothing to split ({len(subacqs)} subacquisition).')
+        return
+
+    if not args.split:
+        dirs = subacquisition_dirs(acqdir, len(subacqs))
+        print(f'\nPass -s/--split to move each subacquisition into a directory of its own'
+              f' ({os.path.basename(dirs[0])}, ..., {os.path.basename(dirs[-1])}).')
+        return
+
+    try:
+        moved = split_into_dirs(acqdir, entries, subacqs)
+    except ValueError as e:
+        sys.exit(f'pirate_frb cfrb check_acq --split: {e}')
+
+    print(f'\nSplit into {len(moved)} directories:')
+    for (d, n) in moved:
+        print(f'    {d}  ({n} files)')
+
+    left = sorted(os.listdir(acqdir))
+    if left:
+        print(f'    {len(left)} file(s) left in {acqdir}: '
+              + ', '.join(left[:4]) + (', ...' if len(left) > 4 else ''))
 
 
 ######################################   cfrb json2yaml command  ####################################

@@ -428,7 +428,9 @@ PYFILES = \
   pirate_frb/chimefrb/RfiMaskExtractor.py \
   pirate_frb/chimefrb/ChimePreDedisperser.py \
   pirate_frb/chimefrb/reproduce_rfimask.py \
+  pirate_frb/chimefrb/acquisition.py \
   pirate_frb/chimefrb/utils.py \
+  pirate_frb/chimefrb/test_acquisition.py \
   pirate_frb/chimefrb/test_assembled_chunk.py \
   pirate_frb/chimefrb/test_assembled_chunk_reader.py \
   pirate_frb/chimefrb/test_badchannel_mask.py \
