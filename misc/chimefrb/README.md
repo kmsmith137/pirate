@@ -8,6 +8,9 @@ pipeline, which is what a spot check runs against; the checks themselves live in
 ## Layout
 
     build_oldpipe.sh    builds ~/ch/extern/* into ./oldpipe/prefix
+    01-reproduce-rfimask.py
+                        reruns an acquisition's RFI chain on its saved data and compares
+                        the mask with the one saved in real time -- see below
     patches/            source fixes, applied to the working copy only
     configs/            old rf_pipelines configs, kept as inputs (not part of the build)
     spot_checks/        the spot checks, their runner and their harness -- see its README
@@ -184,6 +187,34 @@ writes trigger files, and h5py reads both, all against the same libhdf5 1.10.5.
 
 To add it, clone `kiyo-masui/bitshuffle` into `~/ch/extern` and build its `--h5plugin`
 target, then set `HDF5_PLUGIN_PATH`.
+
+## Reproducing a saved RFI mask
+
+The L1 server saved, in every `chunk_NNNNNNNN.msg` file of a callback acquisition, the RFI
+mask it computed from that file's data in real time, at the 1K resolution of the RFI
+chain's sub-pipeline.  `01-reproduce-rfimask.py` runs the same chain on the same raw data,
+with the build above, and reports how well the two masks agree:
+
+    misc/chimefrb/01-reproduce-rfimask.py <acqdir> <rfi_chain.json>
+
+    # e.g. /scratch/tweiss_rfi/frb_B0037+56_down3_2026-05-22-09-26/beam_3146
+    #      misc/chimefrb/configs/21-03-07-low-latency-uniform-badchannel-mask-noplot.json
+
+It needs no pirate code, and runs under the old python 2.7: invoked from python 3 it
+re-executes itself there, saying so.  It prints the percentage of samples in each of the
+four (saved, new) x (masked, unmasked) combinations, and exits 0 only if the masks are
+identical.  `-p/--prescale` applies the L1 server's `intensity_prescale` (1e-4 in
+production; the default here is 1, and the report reminds you).  `--help` has the rest.
+
+The files at either end that do not complete a 4096-sample RFI chunk are dropped, because
+the L1 server aligned those chunks to ichunk % 4 == 0, and the file sequence must have no
+gaps.  Everything in the json after the sub-pipeline is skipped: it cannot affect the mask,
+and the slow-pulsar writers in it cannot run offline anyway.
+
+On beam_3146 of the acquisition above (1196 files), the masks reproduce exactly with
+`-p 1e-4`.  With the default prescale of 1 they agree except for a few hundred scattered
+samples in two files, out of 1.25e9: threshold decisions that the different rounding of
+the rescaled arithmetic flips.
 
 ## Spot checks
 
