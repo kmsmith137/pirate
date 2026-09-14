@@ -62,6 +62,7 @@ grouping, and the paragraphs above are where the relationships are explained.
 |---|---|
 | [`AssembledChunk`](AssembledChunk.md) | One "assembled_chunk in msgpack format" data file, and its decode methods |
 | [`AssembledChunkReader`](AssembledChunkReader.md) | Reads a list of those files with a thread pool, and hands them back in filename order |
+| [`ChimeDequantizationKernel`](ChimeDequantizationKernel.md) | Turns one chunk's raw arrays into the (intensity, weights) pair a chain runs on, on the GPU |
 | [`ExamplePythonTransform`](ExamplePythonTransform.md) | A worked example of a cupy transform: a 3-sigma clip per channel |
 | [`GpuBadChannelMask`](GpuBadChannelMask.md) | Zeroes the weights of whole frequency channels (a port of `rf_pipelines::badchannel_mask`) |
 | [`GpuClipperBase`](GpuClipperBase.md) | What the chimefrb RFI clippers share on top of `GpuTransform`: axis, downsampling, the per-row statistic |
@@ -84,6 +85,7 @@ grouping, and the paragraphs above are where the relationships are explained.
 
 AssembledChunk
 AssembledChunkReader
+ChimeDequantizationKernel
 ExamplePythonTransform
 GpuBadChannelMask
 GpuClipperBase

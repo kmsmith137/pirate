@@ -101,6 +101,13 @@ the point in the sequence where a serial loop would have raised, not before. It 
 thread-backed class, so notes/thread_backed_class.md applies -- with one documented departure,
 that a worker's read error waits in its file's slot instead of stopping the reader on the spot.
 
+Getting a chunk from there into the chain is `ChimeDequantizationKernel`
+(`include/pirate/chimefrb/ChimeDequantizationKernel.hpp`), the GPU version of
+`AssembledChunk`'s two decode methods: it turns the raw (scales, offsets, data, rfi_mask)
+into the (intensity, weights) pair a transform runs on, writing into a column window of a
+pipeline block so that several chunks can fill one block's time axis. It agrees with the CPU
+decode bit for bit, which is what its unit test asserts.
+
 Surveying files is a different job from reading them, and `AssembledChunk.from_msgpack(filename,
 metadata_only=True)` is the cheap way to do it: it parses every scalar and stops before the
 array bodies, ~30x faster than a full read and validating the file just as thoroughly. The

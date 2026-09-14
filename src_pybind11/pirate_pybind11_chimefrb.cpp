@@ -19,11 +19,16 @@
 //     pirate_frb/chimefrb/utils.py. GpuBadChannelMask's __init__ also normalizes
 //     its range arguments to python floats.
 //
-// AssembledChunkReader is the exception: its injections are in a file of its own,
-// pirate_frb/chimefrb/AssembledChunkReader.py, since it is the step before the transforms
-// rather than part of the transform interface. They are __iter__ (so "for chunk in reader"
-// works), the context-manager pair, and __repr__, plus the class docstring (option 2 in
-// notes/docstrings.md), since the python interface IS the injection.
+// Two classes are the exception, both of them steps BEFORE the transforms rather than part
+// of the transform interface, and both with their injections in a file of their own:
+//
+//   - AssembledChunkReader (pirate_frb/chimefrb/AssembledChunkReader.py): __iter__ (so
+//     "for chunk in reader" works), the context-manager pair, and __repr__, plus the class
+//     docstring (option 2 in notes/docstrings.md), since the python interface IS the
+//     injection.
+//   - ChimeDequantizationKernel (pirate_frb/chimefrb/ChimeDequantizationKernel.py):
+//     launch() converts stream=None to the current cupy stream and rfi_mask=None to an
+//     empty array. Its class docstring is here (option 1), like the other kernels'.
 //
 // The numpy reference for each transform and kernel is a file of its own,
 // pirate_frb/chimefrb/Reference<ClassName>.py, and holds no injections.
@@ -40,6 +45,7 @@
 #include "../include/pirate/chimefrb/AssembledChunk.hpp"
 #include "../include/pirate/chimefrb/AssembledChunkReader.hpp"
 #include "../include/pirate/chimefrb/BadChannelMask.hpp"
+#include "../include/pirate/chimefrb/ChimeDequantizationKernel.hpp"
 #include "../include/pirate/chimefrb/ClipperAxis.hpp"
 #include "../include/pirate/chimefrb/ClipperBase.hpp"
 #include "../include/pirate/chimefrb/IntensityClipper.hpp"
@@ -926,6 +932,100 @@ void register_chimefrb_bindings(pybind11::module &m)
             "Run timing benchmarks at the production array size, for masks from one channel to\n"
             "all of them (called via 'python -m pirate_frb time --cfrb')")
 
+        ;
+
+    // ChimeDequantizationKernel: Python injections in ChimeDequantizationKernel.py:
+    //   - launch: converts stream=None to the current cupy stream, and rfi_mask=None to an
+    //     empty array (the ksgpu caster cannot convert None)
+    py::class_<ChimeDequantizationKernel>(m, "ChimeDequantizationKernel",
+        "Turns one AssembledChunk's raw arrays into the (intensity, weights) pair the ported\n"
+        "RFI chain runs on, on the GPU::\n"
+        "\n"
+        "    intensity[f,t] = scales[ifc,itc] * data[f,t] + offsets[ifc,itc]\n"
+        "    weights[f,t]   = 0 where data is 0 or 255 (the saturation sentinels), else 1\n"
+        "\n"
+        "where ``ifc = f/nupfreq`` and ``itc = t/16``, and where -- if ``apply_rfimask`` is\n"
+        "True -- both outputs are instead +0.0 wherever the file's RFI mask marks the sample\n"
+        "bad.\n"
+        "\n"
+        "This is the GPU version of :meth:`AssembledChunk.decode_intensity` and\n"
+        ":meth:`AssembledChunk.decode_weights`, and agrees with them BIT FOR BIT. See\n"
+        ":class:`AssembledChunk` for what the mask's polarity and resolution mean. Note the\n"
+        "class name: ``pirate_frb.kernels.GpuDequantizationKernel`` is a different operation\n"
+        "on a different data format.\n"
+        "\n"
+        "The kernel does NOT copy anything to the GPU -- its inputs are cupy arrays, and\n"
+        "getting a chunk there is the caller's job.")
+
+        .def(py::init<long, long, long, long, long>(),
+            py::arg("nfreq"), py::arg("nt"), py::arg("nfreq_coarse"), py::arg("nt_coarse"),
+            py::arg("warps_per_block") = 32,
+            "Create a ChimeDequantizationKernel.\n"
+            "\n"
+            "Args:\n"
+            "    nfreq: fine frequency channels\n"
+            "    nt: time samples, which must equal 16*nt_coarse\n"
+            "    nfreq_coarse: coarse channels, one (scale, offset) row each; must divide\n"
+            "        nfreq\n"
+            "    nt_coarse: (scale, offset) columns\n"
+            "    warps_per_block: performance knob, 4/8/16/32. Must not change the result.\n"
+            "        See time_selected().\n"
+            "\n"
+            "The nt == 16*nt_coarse rule is nt_per_packet == 16, which this kernel requires\n"
+            "and every file we have satisfies (AssembledChunk's parser accepts any value;\n"
+            "only the kernels are specialized).\n"
+            "\n"
+            "Raises:\n"
+            "    RuntimeError: on non-positive geometry, nfreq_coarse not dividing nfreq,\n"
+            "        nt != 16*nt_coarse, or an unsupported warps_per_block.")
+
+        .def_readonly("nfreq", &ChimeDequantizationKernel::nfreq, "Fine frequency channels")
+        .def_readonly("nt", &ChimeDequantizationKernel::nt, "Time samples, == 16*nt_coarse")
+        .def_readonly("nfreq_coarse", &ChimeDequantizationKernel::nfreq_coarse,
+            "Coarse channels: one (scale, offset) row each")
+        .def_readonly("nt_coarse", &ChimeDequantizationKernel::nt_coarse,
+            "(scale, offset) columns, == nt/16")
+        .def_readonly("nupfreq", &ChimeDequantizationKernel::nupfreq,
+            "Fine channels per coarse channel, == nfreq/nfreq_coarse")
+        .def_readonly("warps_per_block", &ChimeDequantizationKernel::warps_per_block,
+            "Performance knob for the kernel (4, 8, 16 or 32)")
+
+        .def_static("time_selected", &ChimeDequantizationKernel::time_selected,
+            py::call_guard<py::gil_scoped_release>(),
+            "Run timing benchmarks at the production CHIME geometry, with and without the\n"
+            "RFI mask (called via 'python -m pirate_frb time --cfrb')")
+
+        .def("launch",
+            [](const ChimeDequantizationKernel &self, Array<float> &intensity,
+               Array<float> &weights, const Array<float> &scales, const Array<float> &offsets,
+               const Array<uint8_t> &data, const Array<uint8_t> &rfi_mask, bool apply_rfimask,
+               uintptr_t stream_ptr) {
+                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                self.launch(intensity, weights, scales, offsets, data, rfi_mask,
+                            apply_rfimask, stream);
+            },
+            py::arg("intensity"), py::arg("weights"), py::arg("scales"), py::arg("offsets"),
+            py::arg("data"), py::arg("rfi_mask"), py::arg("apply_rfimask"),
+            py::arg("stream_ptr"),
+            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+            "GPU kernel launch (async, does not sync stream).\n"
+            "\n"
+            "Args:\n"
+            "    intensity: cupy float32 array, shape (nfreq, nt), on GPU. Fully overwritten.\n"
+            "        PARTIALLY CONTIGUOUS: the time stride must be 1, but the frequency\n"
+            "        stride is free (>= nt), so this may be a column slice of a larger block.\n"
+            "    weights: same rules as 'intensity', and its own frequency stride. Fully\n"
+            "        overwritten. Must not be the same array as 'intensity'.\n"
+            "    scales: cupy float32 array, shape (nfreq_coarse, nt_coarse), contiguous, on\n"
+            "        GPU. Read only.\n"
+            "    offsets: same as 'scales'.\n"
+            "    data: cupy uint8 array, shape (nfreq, nt), contiguous, on GPU. Read only.\n"
+            "    rfi_mask: cupy uint8 array, shape (nrfifreq, nt/8), contiguous, on GPU,\n"
+            "        bit-packed LSB-first with a SET bit meaning GOOD data. nrfifreq must\n"
+            "        divide nfreq. Ignored when apply_rfimask is False, and may then be empty.\n"
+            "    apply_rfimask: if True, both outputs are +0.0 wherever the mask marks the\n"
+            "        sample bad. No default, as for AssembledChunk.decode_intensity().\n"
+            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 
     // GpuWtUpsamplingKernel: Python injections in cpp_transforms.py:

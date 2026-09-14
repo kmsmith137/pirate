@@ -351,6 +351,7 @@ LIB_SRCFILES = \
   src_lib/chimefrb/AssembledChunk.cpp \
   src_lib/chimefrb/AssembledChunkReader.cpp \
   src_lib/chimefrb/BadChannelMask.cu \
+  src_lib/chimefrb/ChimeDequantizationKernel.cu \
   src_lib/chimefrb/ClipperBase.cu \
   src_lib/chimefrb/IntensityClipper.cu \
   src_lib/chimefrb/PolynomialDetrender.cu \
@@ -407,6 +408,7 @@ PYFILES = \
   pirate_frb/chime/__init__.py \
   pirate_frb/chimefrb/__init__.py \
   pirate_frb/chimefrb/AssembledChunkReader.py \
+  pirate_frb/chimefrb/ChimeDequantizationKernel.py \
   pirate_frb/chimefrb/ReferenceBadChannelMask.py \
   pirate_frb/chimefrb/ReferenceIntensityClipper.py \
   pirate_frb/chimefrb/ReferencePolynomialDetrender.py \
@@ -425,6 +427,7 @@ PYFILES = \
   pirate_frb/chimefrb/test_assembled_chunk.py \
   pirate_frb/chimefrb/test_assembled_chunk_reader.py \
   pirate_frb/chimefrb/test_badchannel_mask.py \
+  pirate_frb/chimefrb/test_chime_dequantization_kernel.py \
   pirate_frb/chimefrb/test_intensity_clipper.py \
   pirate_frb/chimefrb/test_pipeline.py \
   pirate_frb/chimefrb/test_polynomial_detrender.py \
@@ -586,6 +589,7 @@ HFILES = \
   include/pirate/chimefrb/AssembledChunk.hpp \
   include/pirate/chimefrb/AssembledChunkReader.hpp \
   include/pirate/chimefrb/BadChannelMask.hpp \
+  include/pirate/chimefrb/ChimeDequantizationKernel.hpp \
   include/pirate/chimefrb/ClipperAxis.hpp \
   include/pirate/chimefrb/ClipperBase.hpp \
   include/pirate/chimefrb/IntensityClipper.hpp \

@@ -28,9 +28,11 @@ from .cpp_transforms import (GpuTransform, GpuBadChannelMask, GpuIntensityClippe
                              GpuPolynomialDetrender, GpuSplineDetrender, GpuStdDevClipper,
                              GpuWiDownsamplingKernel, GpuWrmsKernel, GpuWtUpsamplingKernel)
 
-# AssembledChunkReader has injections of its own (iteration, the context manager), in a file
-# of its own: it is the step BEFORE the transforms, not part of the transform interface.
+# Two more classes with injections in files of their own, both steps BEFORE the transforms
+# rather than part of the transform interface: the reader (iteration, the context manager)
+# and the kernel that turns a chunk into the (intensity, weights) pair a chain runs on.
 from .AssembledChunkReader import AssembledChunkReader
+from .ChimeDequantizationKernel import ChimeDequantizationKernel
 
 # GpuPythonTransform, the base class of a transform written in python, is plain python on
 # top of GpuTransform.
