@@ -1,4 +1,4 @@
-"""Numpy reference for GpuPolynomialDetrender, plus that class's method injections.
+"""Numpy reference for GpuPolynomialDetrender.
 
 The reference is transcribed from the old code's KERNEL -- _kernel_detrend_t() and
 _kernel_detrend_f() in ../../extern/rf_kernels/rf_kernels/polynomial_detrender_internals.hpp,
@@ -10,53 +10,6 @@ check misc/chimefrb/spot_checks/rfi_polynomial_detrender/ is what pins it to the
 """
 
 import numpy as np
-
-import ksgpu
-from ..pirate_pybind11 import GpuPolynomialDetrender
-from .transform_io import (axis_from_json, check_json_keys)
-
-
-# The yaml keys of GpuPolynomialDetrender: its constructor's argument names after the
-# geometry, plus 'axis', which the old json carries and which must be 'time' (the only axis
-# this class implements; ReferencePolynomialDetrender also does 'freq').
-POLYNOMIAL_DETRENDER_YAML_KEYS = ('polydeg', 'epsilon', 'nt_chunk', 'axis')
-
-
-@ksgpu.inject_methods(GpuPolynomialDetrender)
-class GpuPolynomialDetrenderInjections:
-    # No class docstring here: GpuPolynomialDetrender's docstring lives in the pybind11
-    # binding (option 1 in notes/docstrings.md). launch() is inherited from GpuTransform;
-    # this injector adds the yaml and legacy-json methods (transform_io.py).
-
-    def to_yaml_dict(self):
-        """The yaml form (see ``transform_io``): the class name, ``polydeg``, ``epsilon``,
-        ``nt_chunk``, and ``axis: time``."""
-        return {'class_name': 'GpuPolynomialDetrender', 'polydeg': int(self.polydeg),
-                'epsilon': float(self.epsilon), 'nt_chunk': int(self.nt_chunk), 'axis': 'time'}
-
-    @classmethod
-    def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
-        """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
-        cls.check_yaml_keys(d, POLYNOMIAL_DETRENDER_YAML_KEYS)
-        if d['axis'] != 'time':
-            raise ValueError(f"GpuPolynomialDetrender.from_yaml_dict: axis={d['axis']!r}, but this class"
-                             f" implements axis 'time' only (ReferencePolynomialDetrender also does 'freq')")
-        return cls(nbeams, nfreq, ntime, d['polydeg'], d['epsilon'], d['nt_chunk'])
-
-    @classmethod
-    def from_json_dict(cls, d, nbeams, nfreq, ntime):
-        """From the legacy rf_pipelines json element (``class_name: polynomial_detrender``),
-        whose ``polydeg`` is written as a double and whose ``nt_chunk == 0`` means the whole
-        block (here ``ntime``)."""
-        check_json_keys(d, 'polynomial_detrender', ['axis', 'polydeg', 'epsilon', 'nt_chunk'])
-        if axis_from_json(d['axis']) != 'time':
-            raise ValueError(f"GpuPolynomialDetrender.from_json_dict: axis={d['axis']!r}, but this class"
-                             f" implements axis 'time' only (ReferencePolynomialDetrender also does 'freq')")
-        polydeg = d['polydeg']
-        if int(polydeg) != polydeg:
-            raise ValueError(f"GpuPolynomialDetrender.from_json_dict: polydeg={polydeg!r} is not an integer")
-        nt_chunk = d['nt_chunk'] if d['nt_chunk'] else ntime
-        return cls(nbeams, nfreq, ntime, int(polydeg), d['epsilon'], nt_chunk)
 
 
 def z_grid(n):

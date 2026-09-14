@@ -13,47 +13,9 @@ it, and misc/chimefrb/spot_checks/rfi_std_dev_clip_1d/ drives the real _clip_1d(
 
 import numpy as np
 
-import ksgpu
-from ..pirate_pybind11 import GpuStdDevClipper
-from .transform_io import (axis_from_json, check_json_keys)
 from .ReferenceIntensityClipper import wrms_view
 from .ReferenceWiDownsamplingKernel import ReferenceWiDownsamplingKernel
 from .ReferenceWrmsKernel import ReferenceWrmsKernel
-
-
-# The yaml keys of GpuStdDevClipper, which are also its constructor's argument names after
-# the geometry.
-STD_DEV_CLIPPER_YAML_KEYS = ('nt_chunk', 'axis', 'sigma', 'Df', 'Dt', 'two_pass')
-
-
-@ksgpu.inject_methods(GpuStdDevClipper)
-class GpuStdDevClipperInjections:
-    # No class docstring here: GpuStdDevClipper's docstring lives in the pybind11 binding
-    # (option 1 in notes/docstrings.md). launch() is inherited from GpuTransform; this
-    # injector adds the yaml and legacy-json methods (transform_io.py).
-
-    def to_yaml_dict(self):
-        """The yaml form (see ``transform_io``): the class name and the semantic parameters
-        (``nt_chunk``, ``axis`` as 'freq'/'time', ``sigma``, ``Df``, ``Dt``, ``two_pass``)."""
-        return {'class_name': 'GpuStdDevClipper', 'nt_chunk': int(self.nt_chunk),
-                'axis': self.axis, 'sigma': float(self.sigma),
-                'Df': int(self.Df), 'Dt': int(self.Dt), 'two_pass': bool(self.two_pass)}
-
-    @classmethod
-    def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
-        """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
-        cls.check_yaml_keys(d, STD_DEV_CLIPPER_YAML_KEYS)
-        return cls(nbeams, nfreq, ntime, d['nt_chunk'], d['axis'], d['sigma'],
-                   d['Df'], d['Dt'], d['two_pass'])
-
-    @classmethod
-    def from_json_dict(cls, d, nbeams, nfreq, ntime):
-        """From the legacy rf_pipelines json element (``class_name: std_dev_clipper``);
-        ``nt_chunk == 0`` means the whole block (here ``ntime``)."""
-        check_json_keys(d, 'std_dev_clipper', ['axis', 'sigma', 'Df', 'Dt', 'two_pass', 'nt_chunk'])
-        nt_chunk = d['nt_chunk'] if d['nt_chunk'] else ntime
-        return cls(nbeams, nfreq, ntime, nt_chunk, axis_from_json(d['axis']), d['sigma'],
-                   d['Df'], d['Dt'], d['two_pass'])
 
 
 def clip_1d(v, sigma):

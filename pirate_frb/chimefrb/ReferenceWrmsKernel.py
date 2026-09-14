@@ -1,4 +1,4 @@
-"""Numpy reference for GpuWrmsKernel, plus that class's method injections.
+"""Numpy reference for GpuWrmsKernel.
 
 The primitive wrms_iterate() is transcribed from _ref_wrms_iterate() in
 ../../extern/rf_kernels/test-intensity-clipper.cpp, which is the old code's own scalar
@@ -8,9 +8,6 @@ from it the same way reference_wrms_compute() does.
 
 import numpy as np
 
-import ksgpu
-from ..pirate_pybind11 import GpuWrmsKernel
-
 
 # The variance-validity cutoffs, as FLOAT32 constants even though this reference runs in
 # float64. They are part of the algorithm as chimefrb defines it -- simd_helpers hardcodes
@@ -18,42 +15,6 @@ from ..pirate_pybind11 import GpuWrmsKernel
 EPS_MACH_F32 = 1.19e-07
 EPS_2 = 1.0e2 * EPS_MACH_F32
 EPS_3 = 1.0e3 * EPS_MACH_F32
-
-
-@ksgpu.inject_methods(GpuWrmsKernel)
-class GpuWrmsKernelInjections:
-    # No class docstring here: GpuWrmsKernel's docstring lives in the pybind11 binding
-    # (option 1 in notes/docstrings.md); this injector adds a stream argument for
-    # launch(), and lets the caller omit the scratch array.
-
-    # Save reference to C++ method
-    _cpp_launch = GpuWrmsKernel.launch
-
-    def launch(self, mean, var, in_i, in_w, scratch=None, stream=None):
-        """GPU kernel launch (async, does not sync stream).
-
-        Parameters
-        ----------
-        mean, var : cupy.ndarray
-            Shape (R,), float32, contiguous, on GPU. Fully overwritten.
-        in_i, in_w : cupy.ndarray
-            Shape (R, L), float32, fully contiguous, on GPU. Read only, and must not
-            alias the outputs. ``in_w`` must be >= 0.
-        scratch : cupy.ndarray or None, optional
-            Shape ``(self.scratch_nelts(R),)``, float32, on GPU. If None, one is
-            allocated here -- convenient for tests, wasteful in a loop, since the
-            whole point of the argument is to reuse one allocation across chunks.
-        stream : cupy.cuda.Stream or None, optional
-            CUDA stream to use. If None, uses current cupy stream.
-        """
-        import cupy as cp
-
-        if stream is None:
-            stream = cp.cuda.get_current_stream()
-        if scratch is None:
-            scratch = cp.empty(self.scratch_nelts(in_i.shape[0]), dtype=cp.float32)
-
-        self._cpp_launch(mean, var, in_i, in_w, scratch, stream.ptr)
 
 
 def wrms_iterate(mean_in, I, W, eps_multiplier=1.0):

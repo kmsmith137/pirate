@@ -1,4 +1,4 @@
-"""Numpy reference for GpuWtUpsamplingKernel, plus that class's method injections.
+"""Numpy reference for GpuWtUpsamplingKernel.
 
 The reference is transcribed from reference_weight_upsample() in
 ../../extern/rf_kernels/test-upsample.cpp, the old code's own scalar reference for
@@ -6,43 +6,6 @@ rf_kernels::weight_upsampler, which the old unit test compares with the AVX2 ker
 """
 
 import numpy as np
-
-import ksgpu
-from ..pirate_pybind11 import GpuWtUpsamplingKernel
-
-
-@ksgpu.inject_methods(GpuWtUpsamplingKernel)
-class GpuWtUpsamplingKernelInjections:
-    # No class docstring here: GpuWtUpsamplingKernel's docstring lives in the pybind11 binding
-    # (option 1 in notes/docstrings.md); this injector adds a stream argument for launch().
-
-    # Save reference to C++ method
-    _cpp_launch = GpuWtUpsamplingKernel.launch
-
-    def launch(self, w_hires, w_lores, stream=None):
-        """GPU kernel launch (async, does not sync stream).
-
-        Note the order: the array that is modified comes first, as in the old code. At
-        ``(Df, Dt) = (1, 1)`` the two shapes agree, so a swapped call is not caught.
-
-        Parameters
-        ----------
-        w_hires : cupy.ndarray
-            Shape ``(B, F_lo*Df, T_lo*Dt)``, float32, fully contiguous, on GPU. MODIFIED IN
-            PLACE: every weight in a masked cell becomes +0.0, and every other weight is
-            left bit-identical. Never read.
-        w_lores : cupy.ndarray
-            Shape ``(B, F_lo, T_lo)``, float32, fully contiguous, on GPU, with any ``B``,
-            ``F_lo`` and ``T_lo``. Read only. Must not be the same array as ``w_hires``.
-        stream : cupy.cuda.Stream or None, optional
-            CUDA stream to use. If None, uses current cupy stream.
-        """
-        import cupy as cp
-
-        if stream is None:
-            stream = cp.cuda.get_current_stream()
-
-        self._cpp_launch(w_hires, w_lores, stream.ptr)
 
 
 class ReferenceWtUpsamplingKernel:

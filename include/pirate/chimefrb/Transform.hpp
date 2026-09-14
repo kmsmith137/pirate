@@ -27,7 +27,7 @@ namespace chimefrb {
 //
 // The python side of the interface is in two python files: what every transform shares
 // (the stream=None / scratch=None conventions of launch(), the yaml key check, __repr__)
-// is injected onto this class from pirate_frb/chimefrb/GpuTransform.py; what a
+// is injected onto this class from pirate_frb/chimefrb/cpp_transforms.py; what a
 // transform WRITTEN in python needs (its constructor, the methods it defines, the hook the
 // trampoline calls) is the plain python subclass GpuPythonTransform in
 // pirate_frb/chimefrb/GpuPythonTransform.py, which is the class python authors derive

@@ -80,16 +80,17 @@ the pipelines, `ExamplePythonTransform`, and anything a user writes (a pybind11 
 `src_pybind11/pirate_pybind11_chimefrb.cpp` carries the call into python). The python side
 shared by every transform -- `launch()` with `stream=None` / `scratch=None`, the
 `check_yaml_keys()` classmethod, `__repr__` -- is injected in
-`pirate_frb/chimefrb/GpuTransform.py`. A transform written in python subclasses
+`pirate_frb/chimefrb/cpp_transforms.py`. A transform written in python subclasses
 `GpuPythonTransform` (`pirate_frb/chimefrb/GpuPythonTransform.py`), a plain python class on
 top of the base that holds the constructor, the `launch_checked()` and yaml stubs a
 subclass replaces, the hook the trampoline calls, and the docstring a python author reads.
 One that RUNS other transforms subclasses `GpuContainerBase` one level further down (the
-two pipeline classes are those): it supplies what they share, and it is what
-`transform_io` tests in order to pass the extra `classes` / `nds` arguments down to a
-container's factory. `pirate_frb/chimefrb/transform_io.py` states the whole interface. A newly ported transform should follow it (constructor: geometry
-first, then the semantic parameters in the old code's order, then performance knobs; the
-class name passed to the base is what prefixes its error messages), and only transforms
+two pipeline classes are those): it supplies what they share, and it is the class the
+readers in `pirate_frb/chimefrb/utils.py` test in order to pass the extra `classes` / `nds`
+arguments down to a container's factory. That file states the whole interface. A newly
+ported transform should follow it (constructor: geometry first, then the semantic
+parameters in the old code's order, then performance knobs; the class name passed to the
+base is what prefixes its error messages), and only transforms
 with a legacy json form get a `from_json_dict()`. `pirate_frb cfrb json2yaml` converts an
 old json chain to the yaml form, and `pirate_frb cfrb time_pipeline` times one on the GPU.
 

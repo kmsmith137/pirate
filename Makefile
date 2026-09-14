@@ -415,11 +415,11 @@ PYFILES = \
   pirate_frb/chimefrb/ReferenceWtUpsamplingKernel.py \
   pirate_frb/chimefrb/GpuContainerBase.py \
   pirate_frb/chimefrb/GpuPythonTransform.py \
-  pirate_frb/chimefrb/GpuTransform.py \
+  pirate_frb/chimefrb/cpp_transforms.py \
   pirate_frb/chimefrb/ExamplePythonTransform.py \
   pirate_frb/chimefrb/Pipeline.py \
   pirate_frb/chimefrb/RfiMaskPipeline.py \
-  pirate_frb/chimefrb/transform_io.py \
+  pirate_frb/chimefrb/utils.py \
   pirate_frb/chimefrb/test_assembled_chunk.py \
   pirate_frb/chimefrb/test_badchannel_mask.py \
   pirate_frb/chimefrb/test_intensity_clipper.py \

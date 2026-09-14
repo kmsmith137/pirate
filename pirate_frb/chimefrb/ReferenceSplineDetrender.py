@@ -1,4 +1,4 @@
-"""Numpy reference for GpuSplineDetrender, plus that class's method injections.
+"""Numpy reference for GpuSplineDetrender.
 
 The reference is transcribed from reference_spline_detrender in
 ../../extern/rf_kernels/test-spline-detrender.cpp, which is the old code's own scalar
@@ -7,51 +7,6 @@ class docstring).
 """
 
 import numpy as np
-
-import ksgpu
-from ..pirate_pybind11 import GpuSplineDetrender
-from .transform_io import (axis_from_json, check_json_keys)
-
-
-# The yaml keys of GpuSplineDetrender: its constructor's argument names after the geometry,
-# plus 'axis', which the old json carries and which must be 'freq' (the only axis this class
-# implements).
-SPLINE_DETRENDER_YAML_KEYS = ('nbins', 'epsilon', 'axis')
-
-
-@ksgpu.inject_methods(GpuSplineDetrender)
-class GpuSplineDetrenderInjections:
-    # No class docstring here: GpuSplineDetrender's docstring lives in the pybind11
-    # binding (option 1 in notes/docstrings.md). launch() is inherited from GpuTransform;
-    # this injector adds the yaml and legacy-json methods (transform_io.py).
-
-    def to_yaml_dict(self):
-        """The yaml form (see ``transform_io``): the class name, ``nbins``, ``epsilon``, and
-        ``axis: freq``."""
-        return {'class_name': 'GpuSplineDetrender', 'nbins': int(self.nbins),
-                'epsilon': float(self.epsilon), 'axis': 'freq'}
-
-    @classmethod
-    def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
-        """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
-        cls.check_yaml_keys(d, SPLINE_DETRENDER_YAML_KEYS)
-        if d['axis'] != 'freq':
-            raise ValueError(f"GpuSplineDetrender.from_yaml_dict: axis={d['axis']!r}, but this class"
-                             f" implements axis 'freq' only (as did the old code)")
-        return cls(nbeams, nfreq, ntime, d['nbins'], d['epsilon'])
-
-    @classmethod
-    def from_json_dict(cls, d, nbeams, nfreq, ntime):
-        """From the legacy rf_pipelines json element (``class_name: spline_detrender``). Its
-        ``nt_chunk`` is a processing granularity with no effect on the result (the fit is per
-        time sample), and is ignored."""
-        check_json_keys(d, 'spline_detrender', ['axis', 'nbins', 'epsilon', 'nt_chunk'])
-        if axis_from_json(d['axis']) != 'freq':
-            raise ValueError(f"GpuSplineDetrender.from_json_dict: axis={d['axis']!r}, but this class"
-                             f" implements axis 'freq' only (as did the old code)")
-        if d['nt_chunk'] < 0:
-            raise ValueError(f"GpuSplineDetrender.from_json_dict: nt_chunk={d['nt_chunk']} < 0")
-        return cls(nbeams, nfreq, ntime, d['nbins'], d['epsilon'])
 
 
 # Q[a,c] = int_0^1 h_a'(x) h_c'(x) dx for the cubic Hermite basis (h00, h10, h01, h11) on

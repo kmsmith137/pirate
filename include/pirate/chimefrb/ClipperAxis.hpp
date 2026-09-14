@@ -33,7 +33,7 @@ enum class ClipperAxis {
 // strings (a pybind11 type_caster in src_pybind11/pirate_pybind11_chimefrb.cpp converts, so
 // python never sees the enum), a saved yaml file carries one, and the timing printouts use
 // one. The legacy rf_pipelines json spells them 'AXIS_FREQ' and so on, which is mapped in
-// pirate_frb/chimefrb/transform_io.py, the one place that old spelling survives.
+// pirate_frb/chimefrb/utils.py, the one place that old spelling survives.
 
 inline const char *axis_to_string(ClipperAxis axis)
 {

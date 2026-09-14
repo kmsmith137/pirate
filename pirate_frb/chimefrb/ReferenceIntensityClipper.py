@@ -13,9 +13,6 @@ misc/chimefrb/spot_checks/rfi_intensity_clipper/.
 
 import numpy as np
 
-import ksgpu
-from ..pirate_pybind11 import GpuIntensityClipper
-from .transform_io import (axis_from_json, check_json_keys)
 from .ReferenceWiDownsamplingKernel import ReferenceWiDownsamplingKernel
 from .ReferenceWrmsKernel import ReferenceWrmsKernel
 
@@ -25,47 +22,7 @@ from .ReferenceWrmsKernel import ReferenceWrmsKernel
 # include/pirate/chimefrb/ClipperAxis.hpp). The old code spells them 'freq' and so on,
 # and numbers them 0, 1, 2; that numbering survives only where a spot-check driver casts an
 # integer to rf_kernels::axis_type, and the old spelling only in
-# transform_io.axis_from_json().
-
-
-# The yaml keys of GpuIntensityClipper, which are also its constructor's argument names after
-# the geometry.
-INTENSITY_CLIPPER_YAML_KEYS = ('nt_chunk', 'axis', 'sigma', 'niter', 'iter_sigma', 'Df', 'Dt', 'two_pass')
-
-
-@ksgpu.inject_methods(GpuIntensityClipper)
-class GpuIntensityClipperInjections:
-    # No class docstring here: GpuIntensityClipper's docstring lives in the pybind11
-    # binding (option 1 in notes/docstrings.md). launch() is inherited from GpuTransform;
-    # this injector adds the yaml and legacy-json methods (transform_io.py).
-
-    def to_yaml_dict(self):
-        """The yaml form (see ``transform_io``): the class name and the semantic parameters
-        (``nt_chunk``, ``axis`` as 'freq'/'time'/'none', ``sigma``, ``niter``,
-        ``iter_sigma``, ``Df``, ``Dt``, ``two_pass``)."""
-        return {'class_name': 'GpuIntensityClipper', 'nt_chunk': int(self.nt_chunk),
-                'axis': self.axis, 'sigma': float(self.sigma),
-                'niter': int(self.niter), 'iter_sigma': float(self.iter_sigma),
-                'Df': int(self.Df), 'Dt': int(self.Dt), 'two_pass': bool(self.two_pass)}
-
-    @classmethod
-    def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
-        """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
-        cls.check_yaml_keys(d, INTENSITY_CLIPPER_YAML_KEYS)
-        return cls(nbeams, nfreq, ntime, d['nt_chunk'], d['axis'], d['sigma'],
-                   d['Df'], d['Dt'], d['niter'], d['iter_sigma'], d['two_pass'])
-
-    @classmethod
-    def from_json_dict(cls, d, nbeams, nfreq, ntime):
-        """From the legacy rf_pipelines json element (``class_name: intensity_clipper``),
-        applying two of its conventions: ``nt_chunk == 0`` means the whole block (here
-        ``ntime``), and ``iter_sigma == 0`` means ``sigma``."""
-        check_json_keys(d, 'intensity_clipper',
-                        ['axis', 'sigma', 'niter', 'iter_sigma', 'Df', 'Dt', 'two_pass', 'nt_chunk'])
-        nt_chunk = d['nt_chunk'] if d['nt_chunk'] else ntime
-        iter_sigma = d['iter_sigma'] if d['iter_sigma'] else d['sigma']
-        return cls(nbeams, nfreq, ntime, nt_chunk, axis_from_json(d['axis']), d['sigma'],
-                   d['Df'], d['Dt'], d['niter'], iter_sigma, d['two_pass'])
+# chimefrb.utils.axis_from_json().
 
 
 def wrms_view(arr, axis):

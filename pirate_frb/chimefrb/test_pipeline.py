@@ -36,7 +36,7 @@ from . import (ExamplePythonTransform, GpuBadChannelMask, GpuContainerBase,
                GpuIntensityClipper, GpuPolynomialDetrender, GpuPythonTransform,
                GpuSplineDetrender, GpuStdDevClipper, GpuTransform, RfiMaskPipeline,
                Pipeline)
-from .transform_io import (transform_from_json_dict, transform_from_yaml_dict,
+from .utils import (transform_from_json_dict, transform_from_yaml_dict,
                            yaml_string)
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng
@@ -114,7 +114,7 @@ class _ToyContainer(GpuContainerBase):
     """The smallest possible container: runs its elements in order, at its own geometry.
 
     It exercises GpuContainerBase's helpers, and it stands in for a container written
-    OUTSIDE pirate_frb.chimefrb, which is the case transform_io has to get right (see
+    OUTSIDE pirate_frb.chimefrb, which is the case chimefrb.utils has to get right (see
     _check_container_base)."""
 
     def __init__(self, transforms):
@@ -339,7 +339,7 @@ def _check_legacy_json():
     assert d2 == d, 'yaml.safe_dump/safe_load changed the dict (a non-plain type in to_yaml_dict?)'
     p2 = Pipeline.from_yaml_dict(d2, nbeams, nfreq, ntime)
     assert p2.to_yaml_dict() == d
-    # The file-level string's layout (transform_io._YamlDumper): a pipeline stays in block
+    # The file-level string's layout (chimefrb.utils._YamlDumper): a pipeline stays in block
     # style, since it holds a list of transforms, while a leaf transform's parameters go
     # inline -- which is what keeps a long chain readable (the production chain is 183 lines
     # this way and 893 with every parameter on its own line).
@@ -484,7 +484,7 @@ def _check_container_base(cp):
     """GpuContainerBase: the base class of a transform that runs other transforms.
 
     The case that matters is a container defined OUTSIDE pirate_frb.chimefrb.
-    transform_io decides whether to pass 'classes' down to a factory by testing
+    chimefrb.utils decides whether to pass 'classes' down to a factory by testing
     issubclass(cls, GpuContainerBase), so such a container must have its own elements
     resolved from the caller's list. When the two pipeline classes were hardcoded instead,
     this raised "unknown transform class_name '_ToyAdd'" -- telling the caller to pass a

@@ -2,22 +2,25 @@
 // are defined in include/pirate/chimefrb/*.hpp; see pirate_pybind11.cpp for the main
 // module.
 //
-// Method injections, if any, live in pirate_frb/chimefrb/Reference<ClassName>.py:
-//   - AssembledChunk: none
+// EVERY method injection in this subpackage lives in one file,
+// pirate_frb/chimefrb/cpp_transforms.py, which applies them and re-exports the classes:
+//   - AssembledChunk, GpuClipperBase: none
 //   - GpuWiDownsamplingKernel: launch() converts stream=None to the current cupy stream
 //   - GpuWrmsKernel: same, and lets the caller omit the scratch array
 //   - GpuWtUpsamplingKernel: launch() converts stream=None to the current cupy stream
-//   - GpuTransform (injections in pirate_frb/chimefrb/GpuTransform.py, not a
-//     Reference*.py): the python side shared by every transform, C++ or python --
-//     launch() with stream=None and scratch=None handling, the check_yaml_keys()
-//     classmethod, __repr__. The python side specific to transforms WRITTEN in python
-//     (the constructor, the launch_checked() and yaml stubs, the hook the trampoline
-//     below calls) is the plain python class GpuPythonTransform, not an injection.
+//   - GpuTransform: the python side shared by every transform, C++ or python -- launch()
+//     with stream=None and scratch=None handling, the check_yaml_keys() classmethod,
+//     __repr__. The python side specific to transforms WRITTEN in python (the constructor,
+//     the launch_checked() and yaml stubs, the hook the trampoline below calls) is the
+//     plain python class GpuPythonTransform, not an injection.
 //   - The five "transforms" -- GpuBadChannelMask, GpuIntensityClipper, GpuStdDevClipper,
 //     GpuPolynomialDetrender, GpuSplineDetrender -- add to_yaml_dict() / from_yaml_dict()
 //     (the yaml form) and from_json_dict() (the old rf_pipelines json form); see
-//     pirate_frb/chimefrb/transform_io.py. GpuBadChannelMask's __init__ also normalizes
+//     pirate_frb/chimefrb/utils.py. GpuBadChannelMask's __init__ also normalizes
 //     its range arguments to python floats.
+//
+// The numpy reference for each class is a file of its own,
+// pirate_frb/chimefrb/Reference<ClassName>.py, and holds no injections.
 
 #define PY_ARRAY_UNIQUE_SYMBOL PyArray_API_pirate
 #define NO_IMPORT_ARRAY  // Secondary file: don't call _import_array()
@@ -259,8 +262,7 @@ void register_chimefrb_bindings(pybind11::module &m)
             "extra masking source: decode_weights() already zeroes those samples.")
         ;
 
-    // GpuWiDownsamplingKernel: Python injections in
-    // pirate_frb/chimefrb/ReferenceWiDownsamplingKernel.py:
+    // GpuWiDownsamplingKernel: Python injections in cpp_transforms.py:
     //   - launch: converts stream=None to current cupy stream
     py::class_<GpuWiDownsamplingKernel>(m, "GpuWiDownsamplingKernel",
         "Reduces an (intensity, weights) pair by a factor Df in frequency and Dt in time,\n"
@@ -337,7 +339,7 @@ void register_chimefrb_bindings(pybind11::module &m)
             "        output tile size, and the kernel has no edge predication).")
         ;
 
-    // GpuWrmsKernel: Python injections in pirate_frb/chimefrb/ReferenceWrmsKernel.py:
+    // GpuWrmsKernel: Python injections in cpp_transforms.py:
     //   - launch: converts stream=None to current cupy stream, allocates scratch=None
     py::class_<GpuWrmsKernel>(m, "GpuWrmsKernel",
         "The weighted mean and variance of each row of an (R, L) array, refined by\n"
@@ -433,7 +435,7 @@ void register_chimefrb_bindings(pybind11::module &m)
         ;
 
     // GpuTransform: the base class of every transform. Python injections in
-    // pirate_frb/chimefrb/GpuTransform.py, which also carries the class docstring
+    // pirate_frb/chimefrb/cpp_transforms.py, which also carries the class docstring
     // (option 2 in notes/docstrings.md): launch() with stream=None and scratch=None
     // handling, the check_yaml_keys() classmethod, and __repr__. The python-only side is
     // GpuPythonTransform (see the trampoline above).
@@ -460,8 +462,8 @@ void register_chimefrb_bindings(pybind11::module &m)
             "launch(intensity, weights, scratch, stream=None), which wraps this.")
         ;
 
-    // GpuSplineDetrender: Python injections in pirate_frb/chimefrb/ReferenceSplineDetrender.py
-    // (the yaml and legacy-json methods; see the top of this file).
+    // GpuSplineDetrender: Python injections in cpp_transforms.py (the yaml and
+    // legacy-json methods; see the top of this file).
     py::class_<GpuSplineDetrender, GpuTransform>(m, "GpuSplineDetrender",
         "A port of rf_kernels::spline_detrender, the frequency-direction detrender of the\n"
         "old CHIME FRB search's RFI chain.\n"
@@ -528,9 +530,8 @@ void register_chimefrb_bindings(pybind11::module &m)
 
         ;
 
-    // GpuPolynomialDetrender: Python injections in
-    // pirate_frb/chimefrb/ReferencePolynomialDetrender.py (the yaml and legacy-json methods;
-    // see the top of this file).
+    // GpuPolynomialDetrender: Python injections in cpp_transforms.py (the yaml and
+    // legacy-json methods; see the top of this file).
     py::class_<GpuPolynomialDetrender, GpuTransform>(m, "GpuPolynomialDetrender",
         "A port of rf_pipelines::polynomial_detrender along the time axis, the only axis\n"
         "the old CHIME FRB search's production RFI chain ran it on.\n"
@@ -632,9 +633,8 @@ void register_chimefrb_bindings(pybind11::module &m)
             "Statistic rows: nbeams*F_ds (TIME), nbeams*T_ds (FREQ), or nbeams (NONE)")
         ;
 
-    // GpuIntensityClipper: Python injections in
-    // pirate_frb/chimefrb/ReferenceIntensityClipper.py (the yaml and legacy-json methods; see
-    // the top of this file).
+    // GpuIntensityClipper: Python injections in cpp_transforms.py (the yaml and
+    // legacy-json methods; see the top of this file).
     py::class_<GpuIntensityClipper, GpuClipperBase>(m, "GpuIntensityClipper",
         "Zeroes the weights of samples that sit more than 'sigma' standard deviations from\n"
         "a weighted mean. A port of rf_kernels::intensity_clipper, the old CHIME FRB\n"
@@ -704,8 +704,8 @@ void register_chimefrb_bindings(pybind11::module &m)
 
         ;
 
-    // GpuStdDevClipper: Python injections in pirate_frb/chimefrb/ReferenceStdDevClipper.py
-    // (the yaml and legacy-json methods; see the top of this file).
+    // GpuStdDevClipper: Python injections in cpp_transforms.py (the yaml and
+    // legacy-json methods; see the top of this file).
     py::class_<GpuStdDevClipper, GpuClipperBase>(m, "GpuStdDevClipper",
         "Zeroes whole channels (axis 'time') or whole time samples (axis 'freq') whose variance\n"
         "is an outlier among its peers. A port of rf_kernels::std_dev_clipper, the most\n"
@@ -769,9 +769,9 @@ void register_chimefrb_bindings(pybind11::module &m)
 
         ;
 
-    // GpuBadChannelMask: Python injections in pirate_frb/chimefrb/ReferenceBadChannelMask.py
-    // (the yaml and legacy-json methods; see the top of this file). Its __init__ also
-    // normalizes 'mask_ranges' and 'freq_range' to python floats.
+    // GpuBadChannelMask: Python injections in cpp_transforms.py (the yaml and legacy-json
+    // methods; see the top of this file). Its __init__ also normalizes 'mask_ranges' and
+    // 'freq_range' to python floats.
     py::class_<GpuBadChannelMask, GpuTransform>(m, "GpuBadChannelMask",
         "Zeroes the weights of whole frequency channels. A port of rf_pipelines::badchannel_mask,\n"
         "which the old CHIME FRB search used at the start of its RFI chain to remove channels\n"
@@ -832,8 +832,7 @@ void register_chimefrb_bindings(pybind11::module &m)
 
         ;
 
-    // GpuWtUpsamplingKernel: Python injections in
-    // pirate_frb/chimefrb/ReferenceWtUpsamplingKernel.py:
+    // GpuWtUpsamplingKernel: Python injections in cpp_transforms.py:
     //   - launch: converts stream=None to current cupy stream
     py::class_<GpuWtUpsamplingKernel>(m, "GpuWtUpsamplingKernel",
         "Pushes a low-resolution weight mask back up to full resolution. A port of\n"

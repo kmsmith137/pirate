@@ -115,7 +115,7 @@ def resolve_class(class_name, classes=None):
 
 
 def _checked_transform_class(cls, class_name):
-    from .GpuTransform import GpuTransform     # here, not at module level: import cycle
+    from .cpp_transforms import GpuTransform   # here, not at module level: import cycle
     if not (isinstance(cls, type) and issubclass(cls, GpuTransform)):
         raise ValueError(f"{class_name!r} is not a transform class (it does not subclass GpuTransform)")
     return cls

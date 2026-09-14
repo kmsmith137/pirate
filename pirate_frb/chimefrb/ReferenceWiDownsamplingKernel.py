@@ -1,4 +1,4 @@
-"""Numpy reference for GpuWiDownsamplingKernel, plus that class's method injections.
+"""Numpy reference for GpuWiDownsamplingKernel.
 
 The reference is transcribed from reference_wi_downsample() in
 ../../extern/rf_kernels/test-downsample.cpp, which is the old code's own scalar
@@ -6,40 +6,6 @@ reference for rf_kernels::wi_downsampler.
 """
 
 import numpy as np
-
-import ksgpu
-from ..pirate_pybind11 import GpuWiDownsamplingKernel
-
-
-@ksgpu.inject_methods(GpuWiDownsamplingKernel)
-class GpuWiDownsamplingKernelInjections:
-    # No class docstring here: GpuWiDownsamplingKernel's docstring lives in the pybind11
-    # binding (option 1 in notes/docstrings.md); this injector adds a stream
-    # argument for launch().
-
-    # Save reference to C++ method
-    _cpp_launch = GpuWiDownsamplingKernel.launch
-
-    def launch(self, out_i, out_w, in_i, in_w, stream=None):
-        """GPU kernel launch (async, does not sync stream).
-
-        Parameters
-        ----------
-        out_i, out_w : cupy.ndarray
-            Shape (B, F//Df, T//Dt), or (B, T//Dt, F//Df) if ``transpose``.
-            Float32, fully contiguous, on GPU. Fully overwritten.
-        in_i, in_w : cupy.ndarray
-            Shape (B, F, T), float32, fully contiguous, on GPU. Read only, and
-            must not alias the output arrays. ``in_w`` must be >= 0.
-        stream : cupy.cuda.Stream or None, optional
-            CUDA stream to use. If None, uses current cupy stream.
-        """
-        import cupy as cp
-
-        if stream is None:
-            stream = cp.cuda.get_current_stream()
-
-        self._cpp_launch(out_i, out_w, in_i, in_w, stream.ptr)
 
 
 class ReferenceWiDownsamplingKernel:

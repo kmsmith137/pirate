@@ -1,5 +1,5 @@
-"""Numpy reference for GpuBadChannelMask, that class's method injections, and
-badchannel_keep(): the conversion from MHz ranges to channels.
+"""Numpy reference for GpuBadChannelMask, and badchannel_keep(): the conversion from MHz
+ranges to channels.
 
 rf_pipelines::badchannel_mask zeroes whole frequency channels, chosen by a list of (freq_lo,
 freq_hi) ranges in MHz. The zeroing is trivial. The conversion from MHz to channel indices is
@@ -17,11 +17,6 @@ import math
 import operator
 
 import numpy as np
-
-import ksgpu
-from ..utils import atomic_print
-from ..pirate_pybind11 import GpuBadChannelMask
-from .transform_io import (CHIME_FREQ_RANGE, check_json_keys)
 
 
 # The old code's allowance for a frequency that is meant to be a channel edge but is off by
@@ -128,85 +123,6 @@ def badchannel_keep(mask_ranges, nfreq, freq_lo_MHz, freq_hi_MHz):
         keep[start:end] = 0   # empty when end <= start
 
     return keep
-
-
-# The yaml keys of GpuBadChannelMask, which are also its constructor's argument names after
-# the geometry.
-BADCHANNEL_MASK_YAML_KEYS = ('mask_ranges', 'freq_range')
-
-
-def _as_range_list(mask_ranges):
-    """A list of (float, float) pairs, from any sequence of pairs (a numpy (n, 2) array
-    included), with a clear error for anything else."""
-    ranges = []
-    for r in mask_ranges:
-        r = tuple(r)
-        if len(r) != 2:
-            raise ValueError(f'GpuBadChannelMask: expected each mask range to be a (lo, hi) pair, got {r!r}')
-        ranges.append((float(r[0]), float(r[1])))
-    return ranges
-
-
-@ksgpu.inject_methods(GpuBadChannelMask)
-class GpuBadChannelMaskInjections:
-    # No class docstring here: GpuBadChannelMask's docstring lives in the pybind11 binding
-    # (option 1 in notes/docstrings.md). launch() is inherited from GpuTransform; this
-    # injector normalizes the constructor's range arguments, and adds the yaml and
-    # legacy-json methods (transform_io.py).
-
-    # Save references to C++ methods
-    _cpp_init = GpuBadChannelMask.__init__
-
-    def __init__(self, nbeams, nfreq, ntime, mask_ranges, freq_range, warps_per_block=4):
-        """Create a GpuBadChannelMask.
-
-        Parameters
-        ----------
-        nbeams, nfreq, ntime : int
-            The array shape launch() will be given.
-        mask_ranges : sequence of (lo, hi) pairs
-            Frequency ranges to mask, in MHz, each with lo < hi, in any order. A numpy array
-            of shape (n, 2) is fine.
-        freq_range : (lo, hi)
-            The band in MHz, channel 0 at the top; (400, 800) for CHIME.
-        warps_per_block : int, optional
-            Performance knob, 4, 8, 16 or 32, which must not change the result. See
-            :meth:`time_selected`.
-        """
-        band = _as_range_list([freq_range])[0]
-        self._cpp_init(int(nbeams), int(nfreq), int(ntime), _as_range_list(mask_ranges), band,
-                       int(warps_per_block))
-
-    def to_yaml_dict(self):
-        """The yaml form (see ``transform_io``): the class name, ``freq_range`` and
-        ``mask_ranges``, in MHz as given to the constructor."""
-        return {'class_name': 'GpuBadChannelMask',
-                'freq_range': [float(self.freq_range[0]), float(self.freq_range[1])],
-                'mask_ranges': [[float(lo), float(hi)] for (lo, hi) in self.mask_ranges]}
-
-    @classmethod
-    def from_yaml_dict(cls, d, nbeams, nfreq, ntime):
-        """The inverse of :meth:`to_yaml_dict`, at the given geometry."""
-        cls.check_yaml_keys(d, BADCHANNEL_MASK_YAML_KEYS)
-        return cls(nbeams, nfreq, ntime, d['mask_ranges'], d['freq_range'])
-
-    @classmethod
-    def from_json_dict(cls, d, nbeams, nfreq, ntime):
-        """From the legacy rf_pipelines json element (``class_name: badchannel_mask``).
-
-        The legacy json carries the MHz ranges but NOT the band, which rf_pipelines read
-        from the stream at bind time; the CHIME band (400, 800) is assumed, and a line saying
-        so is printed to stderr. A nonempty ``mask_path`` (a file of extra ranges) is not
-        supported.
-        """
-        check_json_keys(d, 'badchannel_mask', ['mask_ranges', 'mask_path'])
-        if d['mask_path']:
-            raise NotImplementedError(f"GpuBadChannelMask.from_json_dict: mask_path={d['mask_path']!r}"
-                                      f" (a file of extra ranges) is not supported; only 'mask_ranges' is")
-        atomic_print(f'GpuBadChannelMask.from_json_dict: assuming freq_range = {CHIME_FREQ_RANGE} MHz'
-                     f' (the legacy json does not record the band; rf_pipelines took it from the stream)',
-                     fd=2)   # stderr, so that a converter writing yaml to stdout stays clean
-        return cls(nbeams, nfreq, ntime, d['mask_ranges'], CHIME_FREQ_RANGE)
 
 
 class ReferenceBadChannelMask:

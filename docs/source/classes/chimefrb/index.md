@@ -7,7 +7,7 @@ RFI chain, and the two containers that chain them. See
 and for how it is spot-checked against the original code.
 
 Every transform is a subclass of `GpuTransform` (the module docstring of
-`pirate_frb.chimefrb.transform_io` states the whole interface): it processes one
+`pirate_frb.chimefrb.utils` states the whole interface): it processes one
 `(nbeams, nfreq, ntime)` block through `launch(intensity, weights, scratch, stream=None)`,
 which the base class supplies and which checks its arguments before running the
 transform's `launch_checked()`, and it reads and writes a yaml form through
@@ -43,7 +43,7 @@ class MyTransform(GpuPythonTransform):
 docstring states the contract (`launch_checked()` gets checked cupy arrays, views of the
 caller's, with the pipeline's stream current). `GpuPythonTransform` is plain python, in
 `pirate_frb/chimefrb/GpuPythonTransform.py`; what it inherits from the C++ base is python
-too (`launch()`, in `GpuTransform.py`) except the argument checking, and a failed check
+too (`launch()`, in `cpp_transforms.py`) except the argument checking, and a failed check
 raises `RuntimeError` with a message starting with your class's name
 (`MyTransform.launch(): expected 'weights' of shape (1, 64, 64), got (1, 64, 32)`).
 Forgetting `super().__init__()` is a `TypeError` at construction; forgetting

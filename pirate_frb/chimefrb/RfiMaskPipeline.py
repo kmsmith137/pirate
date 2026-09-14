@@ -8,9 +8,8 @@ for the plain (undownsampled) container.
 import math
 
 from .GpuContainerBase import GpuContainerBase
-from .ReferenceWtUpsamplingKernel import GpuWtUpsamplingKernel
-from .ReferenceWiDownsamplingKernel import GpuWiDownsamplingKernel
-from .transform_io import check_json_keys
+from .cpp_transforms import GpuWiDownsamplingKernel, GpuWtUpsamplingKernel
+from .utils import check_json_keys
 
 
 def _round_up(n, m):
@@ -153,7 +152,7 @@ class RfiMaskPipeline(GpuContainerBase):
         stream), with 0 meaning "not given"; both spellings are resolved as the old bind step
         did. ``nds`` is the time downsampling of the data arriving here (1 at top level). The
         old ``sub_pipeline`` is always a ``pipeline`` in practice; its elements become this
-        object's transforms (skipping the inert unported ones, see ``transform_io``), and a
+        object's transforms (skipping the inert unported ones, see ``chimefrb.utils``), and a
         bare transform is accepted as a list of one.
         """
         check_json_keys(d, 'wi_sub_pipeline', ['sub_pipeline', 'w_cutoff', 'nfreq_out', 'nds_out', 'Df', 'Dt'])

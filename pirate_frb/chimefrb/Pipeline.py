@@ -9,7 +9,7 @@ transforms themselves, so they nest.
 """
 
 from .GpuContainerBase import GpuContainerBase
-from .transform_io import check_json_keys
+from .utils import check_json_keys
 
 
 class Pipeline(GpuContainerBase):
@@ -74,7 +74,7 @@ class Pipeline(GpuContainerBase):
     def from_json_dict(cls, d, nbeams, nfreq, ntime, nds=1):
         """From a legacy rf_pipelines ``pipeline`` element. Its ``name`` is ignored; elements
         with no pirate counterpart that do not modify the data are skipped with a printed note
-        (see ``transform_io``); ``nds`` is the data's time downsampling relative to the native
+        (see ``chimefrb.utils``); ``nds`` is the data's time downsampling relative to the native
         stream, needed only by nested ``wi_sub_pipeline`` elements."""
         check_json_keys(d, 'pipeline', ['elements'])
         return cls(cls.transforms_from_json_elements(d['elements'], nbeams, nfreq, ntime, nds, 'pipeline'))

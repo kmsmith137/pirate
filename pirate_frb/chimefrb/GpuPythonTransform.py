@@ -3,13 +3,13 @@ file to read before writing one. See the class docstring; ExamplePythonTransform
 complete example.
 
 Its own base class, GpuTransform, is C++ (bound with pybind11): it owns the array
-geometry and the checked launch(), and its python-side methods are in GpuTransform.py.
+geometry and the checked launch(), and its python-side methods are in cpp_transforms.py.
 This class is plain python. Everything a python transform inherits that is specific to
 being written in python -- the constructor, the methods a subclass defines, and the hook
 the C++ side calls -- is in this file.
 """
 
-from .GpuTransform import GpuTransform
+from .cpp_transforms import GpuTransform
 
 
 class GpuPythonTransform(GpuTransform):
@@ -41,7 +41,7 @@ class GpuPythonTransform(GpuTransform):
     :class:`ExamplePythonTransform` is this, complete, in forty lines. This class is plain
     python, and this file is all of it. What it inherits from GpuTransform is python too
     (``launch()``, ``check_yaml_keys()`` and ``__repr__``, in
-    ``pirate_frb/chimefrb/GpuTransform.py``), except the argument checking that
+    ``pirate_frb/chimefrb/cpp_transforms.py``), except the argument checking that
     ``launch()`` does before calling your ``launch_checked()``, which is C++; what it checks is
     listed under :meth:`launch_checked`, and a failed check raises ``RuntimeError`` with a
     message that starts with your class's name.
@@ -73,7 +73,7 @@ class GpuPythonTransform(GpuTransform):
         Pipeline.read_yaml_file(path, nbeams=1, nfreq=16384, ntime=4096, classes=[MyTransform])
 
     There is no ``from_json_dict``: the legacy rf_pipelines json describes only the ported
-    transforms. ``pirate_frb.chimefrb.transform_io`` states the whole interface.
+    transforms. ``pirate_frb.chimefrb.utils`` states the whole interface.
 
     Three things to know about the class hierarchy. A pipeline accepts any
     :class:`GpuTransform`, C++ or python, so the ``isinstance`` checks in the package test

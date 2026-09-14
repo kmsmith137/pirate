@@ -5,8 +5,8 @@ the class docstring for what a subclass supplies and what it inherits.
 """
 
 from .GpuPythonTransform import GpuPythonTransform
-from .GpuTransform import GpuTransform
-from .transform_io import (PIPELINE_YAML_HEADER, read_json, read_yaml,
+from .cpp_transforms import GpuTransform
+from .utils import (PIPELINE_YAML_HEADER, read_json, read_yaml,
                            transform_from_json_dict, transform_from_yaml_dict, write_yaml)
 
 
@@ -28,7 +28,7 @@ class GpuContainerBase(GpuPythonTransform):
     WHY THIS CLASS IS A SEPARATE ONE, and not just shared code. A container's
     ``from_yaml_dict()`` and ``from_json_dict()`` take an argument that a leaf transform's
     do not -- ``classes`` and ``nds`` respectively -- because a container has to pass them
-    down when it builds its elements. ``transform_io.transform_from_yaml_dict()`` and
+    down when it builds its elements. ``chimefrb.utils.transform_from_yaml_dict()`` and
     ``transform_from_json_dict()`` decide whether to supply that argument by testing
     ``issubclass(cls, GpuContainerBase)``, so a container written outside this package is
     recognized exactly as the two here are. Deriving from :class:`GpuPythonTransform` and
@@ -82,7 +82,7 @@ class GpuContainerBase(GpuPythonTransform):
             what = f'{who}: transforms[{i}] ({type(t).__name__})'
             if not isinstance(t, GpuTransform):
                 raise TypeError(f"{what} is not a transform: it does not subclass GpuTransform; see"
-                                f" pirate_frb.chimefrb.transform_io for what a transform is")
+                                f" pirate_frb.chimefrb.utils for what a transform is")
 
             g = (t.nbeams, t.nfreq, t.ntime)
             if geometry is None:
@@ -137,7 +137,7 @@ class GpuContainerBase(GpuPythonTransform):
     def transforms_from_json_elements(cls, elements, nbeams, nfreq, ntime, nds, what):
         """The transforms that a list of legacy rf_pipelines elements describes, built at the
         given geometry. Elements with no pirate counterpart that do not modify the data are
-        skipped (``transform_io.transform_from_json_dict`` returns None and prints a note);
+        skipped (``chimefrb.utils.transform_from_json_dict`` returns None and prints a note);
         ``what`` is the legacy key they came from, named in the message if that leaves
         nothing at all."""
 
@@ -167,7 +167,7 @@ class GpuContainerBase(GpuPythonTransform):
         classes : sequence of type or None, optional
             Transform classes of your own that the file may name (matched by class name);
             anything in ``pirate_frb.chimefrb`` is found without this. See
-            ``pirate_frb.chimefrb.transform_io``.
+            ``pirate_frb.chimefrb.utils``.
         """
         return cls.from_yaml_dict(read_yaml(filename), nbeams, nfreq, ntime, classes=classes)
 
@@ -176,10 +176,10 @@ class GpuContainerBase(GpuPythonTransform):
         """Read a legacy rf_pipelines json file (one written by the old ``jsonize()``) whose
         top-level element is this class's, building it for the given data geometry. Elements
         with no pirate counterpart that do not modify the data are skipped, with a note on
-        stderr; see ``transform_io``."""
+        stderr; see ``chimefrb.utils``."""
         return cls.from_json_dict(read_json(filename), nbeams, nfreq, ntime)
 
     def write_yaml_file(self, filename):
         """Write :meth:`to_yaml_dict` to a yaml file, after a comment saying how to read it
-        (``transform_io.write_yaml``)."""
+        (``chimefrb.utils.write_yaml``)."""
         write_yaml(filename, self.to_yaml_dict(), header=PIPELINE_YAML_HEADER)
