@@ -84,5 +84,5 @@ done
 
 echo
 echo "Note: rows marked 'this sweep' were created by this run. Annotate any that"
-echo "were throwaway scratch (a debugging experiment rather than the step-4 /"
-echo "step-5 acquisitions) so the user can clean up selectively. Delete nothing."
+echo "were throwaway scratch (a debugging experiment rather than the toy and"
+echo "production acquisitions) so the user can clean up selectively. Delete nothing."
