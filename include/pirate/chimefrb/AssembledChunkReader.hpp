@@ -37,6 +37,10 @@ namespace chimefrb {
 // wait on the disk. Reading a file is mostly I/O plus one large memcpy, which is what the
 // pool overlaps; see AssembledChunk.hpp for the file format.
 //
+// A METADATA SCAN DOES NOT WANT THIS CLASS. What the pool hides is the 17 MB body read, and
+// AssembledChunk::from_msgpack(filename, /*metadata_only=*/true) does not do one; its python
+// binding also releases the GIL, so a thread pool in python parallelizes a scan directly.
+//
 // MEMORY. At most 'nthreads' chunks exist inside the reader at once (some read, some being
 // read). At the production CHIME geometry one chunk owns a ~17 MB buffer, so the default
 // nthreads=4 costs about 68 MB. A caller that RETAINS the chunks it takes defeats that

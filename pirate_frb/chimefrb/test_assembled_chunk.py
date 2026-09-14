@@ -18,6 +18,7 @@ import struct
 import numpy as np
 
 from . import AssembledChunk
+from ..core import SlabAllocator
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng
 
@@ -477,6 +478,17 @@ class TempChunkFile:
 # The tests.
 
 
+def _expect_raise(what, f):
+    """Call f(), asserting that it raises. (Every error from the C++ side arrives as a
+    RuntimeError.)"""
+
+    try:
+        f()
+    except RuntimeError:
+        return
+    raise AssertionError(f'expected {what} to raise')
+
+
 def _assert_metadata_equal(got, want, tag):
     for field in ('version', 'compression', 'beam_id', 'binning', 'nupfreq', 'nt_per_packet',
                   'fpga_counts_per_sample', 'nt_coarse', 'nscales', 'ndata', 'nrfifreq',
@@ -516,11 +528,6 @@ def test_parse(chunk=None, rng=None):
         assert np.array_equal(np.asarray(c.rfi_mask), ref.rfi_mask), f'{tag}: rfi_mask mismatch'
     else:
         assert c.rfi_mask is None, f'{tag}: expected rfi_mask to be None'
-
-    # fraction_missing() counts zero-scale blocks, i.e. blocks where no packet arrived.
-    want = float(np.mean(chunk.scales == 0.0))
-    assert abs(c.fraction_missing() - want) < 1.0e-6, \
-        f'{tag}: fraction_missing {c.fraction_missing()} != {want}'
 
     return c, ref, tag
 
@@ -568,6 +575,70 @@ def test_decode(chunk=None):
         f'{tag}: out= gave a different answer'
 
 
+def test_metadata_only(chunk=None, rng=None):
+    """from_msgpack(metadata_only=True): every scalar a full read gives, and no arrays.
+
+    The arrays RAISE rather than coming back empty or None. An empty ksgpu Array has no
+    numpy representation at all, and a caller who forgot the flag is better told why than
+    handed something that misbehaves later (np.asarray(None) is a 0-d object array).
+    """
+
+    if chunk is None:
+        chunk = make_random_chunk(force_ntpp16=True)
+    if rng is None:
+        rng = _default_rng()
+
+    with TempChunkFile(chunk.to_msgpack(rng=rng)) as fn:
+        full = AssembledChunk.from_msgpack(fn)
+        meta = AssembledChunk.from_msgpack(fn, metadata_only=True)
+
+        tag = (f'nfreq_coarse={chunk.nfreq_coarse} nupfreq={chunk.nupfreq} '
+               f'nt_coarse={chunk.nt_coarse} has_rfi_mask={chunk.has_rfi_mask}')
+
+        # The scalars, against the full read and against the python writer.
+        _assert_metadata_equal(meta, full, tag)
+        _assert_metadata_equal(meta, chunk, tag)
+        assert meta.metadata_only and not full.metadata_only, tag
+        assert meta.filename == fn and full.filename == fn, tag
+        assert repr(meta) == f"AssembledChunk('{fn}', metadata_only=True)", repr(meta)
+        assert repr(full) == f"AssembledChunk('{fn}', metadata_only=False)", repr(full)
+
+        # The arrays, and the two methods that need them.
+        for attr in ('data', 'scales', 'offsets', 'rfi_mask'):
+            _expect_raise(f'{tag}: chunk.{attr} on a metadata-only chunk',
+                          lambda a=attr: getattr(meta, a))
+        for name in ('decode_intensity', 'decode_weights'):
+            _expect_raise(f'{tag}: {name}() on a metadata-only chunk',
+                          lambda n=name: getattr(meta, n)(apply_rfimask=False))
+
+
+def check_metadata_only_allocator(chunk, rng=None):
+    """A metadata-only read leaves the allocator untouched: it takes no slab, so the slab
+    size is still unset afterwards and a chunk of a DIFFERENT size can be served next.
+
+    This is what lets a caller use a metadata scan to choose a slab size, so it is worth
+    pinning. 'chunk' is the full-size (17 MB) draw and the second file is a small random
+    one, because a SlabAllocator compares the SLAB SIZE, not the parameters: two small
+    chunks can differ in nupfreq and still want the same number of bytes, while a few KB
+    against 17 MB cannot collide. (test_assembled_chunk_reader.check_allocator_size_mismatch
+    makes the same argument for the same reason.)
+    """
+
+    if rng is None:
+        rng = _default_rng()
+    small = make_random_chunk()
+
+    with TempChunkFile(chunk.to_msgpack(rng=rng)) as fn_big:
+        with TempChunkFile(small.to_msgpack(rng=rng)) as fn_small:
+            allocator = SlabAllocator('af_uhost')
+            c = AssembledChunk.from_msgpack(fn_big, metadata_only=True, allocator=allocator)
+            assert c.metadata_only and (c.nfreq == chunk.nfreq)
+
+            # Had the read above taken a 17 MB slab, this would fail with a size mismatch.
+            c2 = AssembledChunk.from_msgpack(fn_small, allocator=allocator)
+            assert not c2.metadata_only and (c2.nfreq == small.nfreq)
+
+
 def test_rejections():
     """Every malformed input the reader is supposed to refuse. A silent misparse here would
     be worse than a crash, so each case asserts that an exception is raised."""
@@ -576,12 +647,16 @@ def test_rejections():
     rng = _default_rng()
 
     def expect_raise(payload, what):
+        # Both modes. A metadata-only read runs the same parse and the same checks, stopping
+        # only before the array bodies, so every file here must be rejected either way. The
+        # truncation cases are the ones that would regress if the whole-file layout check
+        # (parse_tail, which compares the computed layout against the file size) were ever
+        # moved into the body-reading step.
         with TempChunkFile(payload) as fn:
-            try:
-                AssembledChunk.from_msgpack(fn)
-            except RuntimeError:
-                return
-            raise AssertionError(f'expected from_msgpack() to reject {what}')
+            for metadata_only in (False, True):
+                _expect_raise(f'from_msgpack(metadata_only={metadata_only}) on {what}',
+                              lambda m=metadata_only: AssembledChunk.from_msgpack(
+                                  fn, metadata_only=m))
 
     # Version 1 (a 17-item array), and a bogus version number.
     expect_raise(chunk.to_msgpack(rng=rng, version=1), 'a version-1 file')
@@ -610,23 +685,16 @@ def test_rejections():
         c8 = make_random_chunk(force_ntpp16=False)
     with TempChunkFile(c8.to_msgpack(rng=rng)) as fn:
         c = AssembledChunk.from_msgpack(fn)     # parses
-        try:
-            c.decode_intensity(apply_rfimask=False)
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError(f'expected decode to reject nt_per_packet={c8.nt_per_packet}')
+        _expect_raise(f'decode with nt_per_packet={c8.nt_per_packet}',
+                      lambda: c.decode_intensity(apply_rfimask=False))
 
     # apply_rfimask=True on a file with no mask must raise, not silently do nothing.
     cm = make_random_chunk(force_ntpp16=True, has_rfi_mask=False)
     with TempChunkFile(cm.to_msgpack(rng=rng)) as fn:
         c = AssembledChunk.from_msgpack(fn)
-        for fn_name in ('decode_intensity', 'decode_weights'):
-            try:
-                getattr(c, fn_name)(apply_rfimask=True)
-            except RuntimeError:
-                continue
-            raise AssertionError(f'expected {fn_name}(apply_rfimask=True) to reject a maskless file')
+        for name in ('decode_intensity', 'decode_weights'):
+            _expect_raise(f'{name}(apply_rfimask=True) on a maskless file',
+                          lambda n=name: getattr(c, n)(apply_rfimask=True))
 
 
 def test_assembled_chunk(i):
@@ -638,9 +706,12 @@ def test_assembled_chunk(i):
     """
 
     if i == 0:
-        test_decode(make_random_chunk(full_size=True))
+        big = make_random_chunk(full_size=True)
+        test_decode(big)
         atomic_print('    test_assembled_chunk: full-size (16384 x 1024) draw passed')
+        check_metadata_only_allocator(big)   # reuses the expensive draw
 
     test_parse()                       # any nt_per_packet, parse only
     test_decode()                      # nt_per_packet == 16, parse + decode
+    test_metadata_only()               # metadata_only=True: scalars yes, arrays no
     test_rejections()

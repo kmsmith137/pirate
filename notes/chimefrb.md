@@ -101,6 +101,12 @@ the point in the sequence where a serial loop would have raised, not before. It 
 thread-backed class, so notes/thread_backed_class.md applies -- with one documented departure,
 that a worker's read error waits in its file's slot instead of stopping the reader on the spot.
 
+Surveying files is a different job from reading them, and `AssembledChunk.from_msgpack(filename,
+metadata_only=True)` is the cheap way to do it: it parses every scalar and stops before the
+array bodies, ~30x faster than a full read and validating the file just as thoroughly. The
+arrays raise if touched. Use it to ask what a directory contains (beams, FPGA ranges) or
+whether its files have the uniform parameters that sharing one `SlabAllocator` requires.
+
 ## Appendix A: building the chimefrb code
 
 The 11 repos above do not build out of the box on a modern system, and their `master`

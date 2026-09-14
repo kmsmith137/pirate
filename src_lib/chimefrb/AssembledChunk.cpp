@@ -495,6 +495,7 @@ static void init_array(Array<T> &arr, const shared_ptr<void> &buffer, long byte_
 
 
 shared_ptr<AssembledChunk> AssembledChunk::from_msgpack(const string &filename,
+                                                        bool metadata_only,
                                                         const shared_ptr<SlabAllocator> &allocator)
 {
     Fd f(::open(filename.c_str(), O_RDONLY));
@@ -507,6 +508,8 @@ shared_ptr<AssembledChunk> AssembledChunk::from_msgpack(const string &filename,
     long file_nbytes = st.st_size;
 
     auto chunk = make_shared<AssembledChunk> ();
+    chunk->filename = filename;
+    chunk->metadata_only = metadata_only;
     FileLayout layout;
 
     // Step 1: a fixed prefix, big enough for items 0..13 plus the item-14 bin header.
@@ -524,6 +527,12 @@ shared_ptr<AssembledChunk> AssembledChunk::from_msgpack(const string &filename,
     // then check the computed layout against the file size.
     resolve_mid_headers(f.fd, layout, file_nbytes, filename);
     parse_tail(*chunk, layout, f.fd, file_nbytes, filename);
+
+    // A metadata-only read stops here. Everything above is the parse -- no array body has
+    // been touched (those are steps 5 and 6 below), and no slab has been requested, so a
+    // metadata scan does not fix a fresh SlabAllocator's slab size.
+    if (metadata_only)
+        return chunk;
 
     long mask_nbytes = chunk->has_rfi_mask ? (chunk->nrfifreq * chunk->nt_per_chunk / 8) : 0;
     SlabLayout slab = get_slab_layout(*chunk, mask_nbytes);
@@ -616,7 +625,9 @@ static void check_decode_args(const AssembledChunk &c, const Array<float> &dst,
         throw runtime_error(ss.str());
     }
     if (!c.data.data)
-        throw runtime_error(string(where) + ": chunk has no data (was it default-constructed?)");
+        throw runtime_error(string(where) + ": this chunk has no data arrays"
+                            + (c.metadata_only ? " (it was read with metadata_only=true)"
+                                               : " (was it default-constructed?)"));
 
     xassert_shape_eq(dst, ({c.nfreq(), c.nt()}));
     xassert(dst.on_host());
@@ -721,20 +732,6 @@ void AssembledChunk::decode_weights(Array<float> &dst, bool apply_rfimask) const
             _mm256_storeu_ps(dp + 16*itc + 8, w1);
         }
     }
-}
-
-
-float AssembledChunk::fraction_missing() const
-{
-    if (!scales.data || (nscales <= 0))
-        return 0.0f;
-
-    long nzero = 0;
-    for (long i = 0; i < nscales; i++)
-        if (scales.data[i] == 0.0f)
-            nzero++;
-
-    return float(double(nzero) / double(nscales));
 }
 
 

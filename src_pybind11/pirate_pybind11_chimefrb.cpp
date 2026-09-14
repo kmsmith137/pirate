@@ -100,6 +100,20 @@ struct type_caster<pirate::chimefrb::ClipperAxis>
 namespace pirate {
 
 
+// Guard for the four array attributes, which are empty on a metadata-only chunk. Left as
+// plain def_readonly, such an attribute would fail inside the ksgpu caster, whose message
+// ("Converting zero-dimensional C++ arrays to python is currently not allowed") names
+// neither the attribute nor the flag that explains it.
+static void _check_arrays_read(const AssembledChunk &self, const char *name)
+{
+    if (self.metadata_only)
+        throw std::runtime_error("AssembledChunk." + std::string(name) + ": this chunk was read"
+                                 " with metadata_only=True, so it has the scalar metadata but"
+                                 " none of the arrays. Re-read the file with metadata_only=False"
+                                 " (the default) if you need them.");
+}
+
+
 // Helper for the two decode bindings: use the caller's 'out' array if there is one,
 // otherwise allocate a fresh (nfreq, nt) float32 array.
 static Array<float> _decode_dst(const AssembledChunk &self, optional<Array<float>> &out)
@@ -161,17 +175,37 @@ void register_chimefrb_bindings(pybind11::module &m)
         "\n"
         "The ``data``, ``scales``, ``offsets`` and ``rfi_mask`` attributes are zero-copy\n"
         "numpy views into one buffer owned by the chunk. They stay valid for as long as the\n"
-        "arrays themselves are alive -- no context manager is needed.")
+        "arrays themselves are alive -- no context manager is needed.\n"
+        "\n"
+        "A chunk read with ``metadata_only=True`` has every scalar attribute but none of the\n"
+        "arrays: those four attributes raise, as do :meth:`decode_intensity` and\n"
+        ":meth:`decode_weights`. Such a read is ~30x cheaper (four small reads instead of\n"
+        "17 MB) and validates the file just as thoroughly, which makes it the cheap way to\n"
+        "survey an acquisition. :meth:`from_msgpack` releases the GIL, so a\n"
+        "``concurrent.futures.ThreadPoolExecutor`` parallelizes such a scan.")
 
         .def_static("from_msgpack", &AssembledChunk::from_msgpack,
-            py::arg("filename"), py::arg("allocator") = std::shared_ptr<SlabAllocator>(),
+            py::arg("filename"), py::arg("metadata_only") = false,
+            py::arg("allocator") = std::shared_ptr<SlabAllocator>(),
             py::call_guard<py::gil_scoped_release>(),
             "Read and parse one file. Raises if it is truncated, corrupt, compressed, or not\n"
             "msgpack format version 2.\n"
             "\n"
+            "With 'metadata_only' True, the array bodies are not read (see the class\n"
+            "docstring), and 'allocator' goes unused -- in particular such a read does not fix\n"
+            "a fresh SlabAllocator's slab size, so it can be used to choose that size.\n"
+            "\n"
             "If 'allocator' is given, the chunk's buffer comes from it. Note a SlabAllocator\n"
             "serves a single slab size, so all files sharing one allocator must have identical\n"
             "parameters.")
+
+        // A docstring even though the meaning is obvious: sphinx autoclass uses ':members:'
+        // without ':undoc-members:', so an undocumented property does not appear in the docs.
+        .def_readonly("filename", &AssembledChunk::filename,
+            "The file this chunk was read from, as passed to from_msgpack().")
+        .def_readonly("metadata_only", &AssembledChunk::metadata_only,
+            "True if this chunk was read with from_msgpack(metadata_only=True), so it has the\n"
+            "scalar metadata but none of the arrays.")
 
         .def_readonly("version", &AssembledChunk::version, "msgpack format version (always 2).")
         .def_readonly("compression", &AssembledChunk::compression,
@@ -206,16 +240,31 @@ void register_chimefrb_bindings(pybind11::module &m)
             "frequency (800 MHz), decreasing to 400 MHz -- the same convention pirate uses.")
         .def_property_readonly("nt", &AssembledChunk::nt, "Time samples; same as nt_per_chunk.")
 
-        .def_readonly("data", &AssembledChunk::data,
+        // The four arrays go through _check_arrays_read() (see its comment), so that a
+        // metadata-only chunk raises a message that says so.
+        .def_property_readonly("data",
+            [](const AssembledChunk &self) {
+                _check_arrays_read(self, "data");
+                return self.data;
+            },
             "Raw uint8 data, shape (nfreq, nt). Most callers want decode_intensity() instead.")
-        .def_readonly("scales", &AssembledChunk::scales,
+        .def_property_readonly("scales",
+            [](const AssembledChunk &self) {
+                _check_arrays_read(self, "scales");
+                return self.scales;
+            },
             "float32 array of shape (nfreq_coarse, nt_coarse).")
-        .def_readonly("offsets", &AssembledChunk::offsets,
+        .def_property_readonly("offsets",
+            [](const AssembledChunk &self) {
+                _check_arrays_read(self, "offsets");
+                return self.offsets;
+            },
             "float32 array of shape (nfreq_coarse, nt_coarse).")
         // Returns None rather than an empty array when the file carried no mask: ksgpu's
         // type_caster has no numpy representation for a null-pointer Array.
         .def_property_readonly("rfi_mask",
             [](const AssembledChunk &self) -> py::object {
+                _check_arrays_read(self, "rfi_mask");
                 if (!self.has_rfi_mask || (self.rfi_mask.size == 0))
                     return py::none();
                 return py::cast(self.rfi_mask);
@@ -261,12 +310,13 @@ void register_chimefrb_bindings(pybind11::module &m)
             "exactly, which is what a comparison against the old pipeline needs. See\n"
             "decode_intensity() for the apply_rfimask semantics.")
 
-        .def("fraction_missing", &AssembledChunk::fraction_missing,
-            "Fraction of (coarse channel, time block) pairs for which no packet ever arrived.\n"
-            "\n"
-            "This is packet loss, and it is the only thing that distinguishes packet loss from\n"
-            "RFI flagging -- the raw data is zero in these blocks either way. It is NOT an\n"
-            "extra masking source: decode_weights() already zeroes those samples.")
+        // Names the file and whether its arrays were read -- the chunk's other attributes
+        // say nothing about either.
+        .def("__repr__",
+            [](const AssembledChunk &self) {
+                return "AssembledChunk('" + self.filename + "', metadata_only="
+                       + (self.metadata_only ? "True" : "False") + ")";
+            })
         ;
 
     // AssembledChunkReader: no class docstring here -- it lives in the injector,

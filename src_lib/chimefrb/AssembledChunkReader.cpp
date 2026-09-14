@@ -179,7 +179,7 @@ void AssembledChunkReader::_worker_main()
         std::exception_ptr e;
 
         try {
-            chunk = AssembledChunk::from_msgpack(filenames[j], allocator);
+            chunk = AssembledChunk::from_msgpack(filenames[j], /*metadata_only=*/false, allocator);
         } catch (...) {
             e = std::current_exception();
         }
