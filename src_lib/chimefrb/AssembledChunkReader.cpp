@@ -173,7 +173,8 @@ void AssembledChunkReader::_worker_main()
 
         // 'filenames' is const and fully built before any thread was spawned, so it needs
         // no lock. from_msgpack() is reentrant (its own fd, pread() only, no mutable
-        // globals), so several workers may be inside it at once.
+        // globals), so several workers may be inside it at once. Its exception is stored
+        // as-is -- see the header on what its text names.
         shared_ptr<AssembledChunk> chunk;
         std::exception_ptr e;
 

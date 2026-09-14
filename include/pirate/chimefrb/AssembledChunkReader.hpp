@@ -49,6 +49,11 @@ namespace chimefrb {
 // Rethrowing then stops the reader, so nothing is read past the failure and every later
 // get_chunk() rethrows the same error.
 //
+// The exception is from_msgpack()'s own, unwrapped. Every error the FILE can cause names it
+// ("chimefrb: <filename>: ..."), which is why the reader adds nothing -- but a resource
+// failure inside from_msgpack() (an allocation, an Array invariant) does not, and is then
+// indistinguishable from the same failure anywhere else.
+//
 // Follows the "thread-backed class" pattern (notes/thread_backed_class.md): stop() puts the
 // object in a stopped state and wakes every thread, and the destructor calls stop() and
 // joins. Stop-reporting follows the documented "done-value" variant (see "Error reporting"
@@ -105,8 +110,7 @@ struct AssembledChunkReader
     // read; rethrows the stored error if it was error-stopped.
     //
     // Rethrows this file's own read error, if it had one, having first stopped the reader
-    // (see READ ERRORS above). The exception is whatever AssembledChunk::from_msgpack()
-    // threw, so its text already names the file.
+    // (see READ ERRORS above, including what its text does and does not name).
     //
     // Thread-safe, but meant for ONE consumer thread: it is the "i-th call returns the i-th
     // file" contract that makes this a drop-in for a serial loop. With several consumers

@@ -113,7 +113,9 @@ def check_read_error(chunks, rng, nthreads, ibad):
 
     The bad file is truncated to a few bytes, which from_msgpack() rejects while parsing the
     header -- before it allocates anything. Files 0..ibad-1 must still arrive, in order, and
-    the ibad'th get_chunk() must raise, with the filename in the message.
+    the ibad'th get_chunk() must raise. The message names the file because this is a
+    FILE-fault path; from_msgpack()'s resource failures do not name it (see READ ERRORS in
+    AssembledChunkReader.hpp), so do not read a general guarantee into the assert below.
     """
 
     with TempChunkFiles(chunks, rng) as filenames:
