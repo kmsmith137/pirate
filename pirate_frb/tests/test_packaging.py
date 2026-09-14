@@ -25,12 +25,10 @@ _REQUIRED_PYFILES = (
     "pirate_frb/run_offline_grouper.py",
     "pirate_frb/SharedGrouper.py",
     "pirate_frb/OnlineGrouper.py",
-    "pirate_frb/ControlledObservation.py",
-    "pirate_frb/ReplayObservation.py",
-    "pirate_frb/ControlledCapture.py",
-    "pirate_frb/ControlledExperiment.py",
-    "pirate_frb/ControlledTerminals.py",
-    "pirate_frb/ControlledComparison.py",
+    "pirate_frb/LivePipeline.py",
+    "pirate_frb/Observation.py",
+    "pirate_frb/DedispersionServer.py",
+    "pirate_frb/tests/test_live_pipeline.py",
     "pirate_frb/tests/__init__.py",
     "pirate_frb/tests/test_peakfinders_stream.py",
     "pirate_frb/tests/test_gpu_argmax_decoder.py",
@@ -45,14 +43,23 @@ _REQUIRED_DATA_FILES = (
     "pirate_frb/tests/data/toy.yml",
     "pirate_frb/tests/data/chord_sb2_et.yml",
 )
-_REQUIRED_DISTRIBUTION_FILES = _REQUIRED_PYFILES + _REQUIRED_DATA_FILES
+_LIVE_DATA_FILES = ("pirate_frb/tests/data/chord_8beams.yml", "pirate_frb/tests/data/xengine_metadata.yml")
+_REQUIRED_DISTRIBUTION_FILES = _REQUIRED_PYFILES + _REQUIRED_DATA_FILES + _LIVE_DATA_FILES
 _REQUIRED_SDIST_ONLY_FILES = (
+    "AIclassifier/README.md",
+    "AIclassifier/requirements.txt",
+    "AIclassifier/RetrieveEvent.ipynb",
+    "AIclassifier/data/events.asdf",
+    "AIclassifier/data/frame_b1_t19_snrmap.asdf",
+    "examples/README.md",
+    "examples/simple_frb/README.md",
+    "examples/simple_frb/generate.py",
+    "examples/simple_frb/observation.yml",
+    "examples/simple_frb/dedispersion.yml",
     "configs/offline_grouper/example.yml",
-    "configs/experiments/chord_replay.yml",
+    "configs/experiments/chord_8beams.yml",
     "configs/dedispersion/chord_sb2_et.yml",
     "configs/xengine_metadata.yml",
-    "notes/controlled_chord_experiment.md",
-    "notes/controlled_terminals.md",
 )
 _FORBIDDEN_DISTRIBUTION_FILES = (
     "pirate_frb/BowtieBank.py",
@@ -91,7 +98,7 @@ def test_offline_peak_modules_packaged():
     # The pytest-free decoder/integration tests reconstruct producer plans from
     # two package-local wheel data files.  ``repository`` is the source root
     # in-tree and the isolated installation target when installed.
-    for required in _REQUIRED_DATA_FILES:
+    for required in _REQUIRED_DATA_FILES + _LIVE_DATA_FILES:
         assert (repository / required).is_file(), (
             f"installed offline milestone tests omit fixture {required}"
         )
@@ -191,7 +198,7 @@ def test_offline_peak_modules_packaged():
 
     # Exercise the same public import and parser surface from both a source
     # checkout and an isolated wheel target.  The release verification also
-    # invokes ``python -m pirate_frb --help`` in a subprocess from /tmp.
+    # invokes ``python -m pirate_frb --help`` from a directory outside the source checkout.
     for module_name in (
         "pirate_frb.Peakfinders",
         "pirate_frb.OfflineGrouperConfig",

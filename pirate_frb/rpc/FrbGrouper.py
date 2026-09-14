@@ -63,7 +63,7 @@ class FrbGrouperInjections:
     - ``total_beams`` (int) -- total beams per chunk (= beams_per_gpu).
     - ``beams_per_batch`` (int) -- beams per output batch.
     - ``nbatches`` (int) -- beam-batches per chunk (= total_beams / beams_per_batch); producer ``seq_id = ichunk*nbatches + ibatch``.
-    - ``num_batch_slots`` (int) -- output ring-buffer depth; leading beam axis = ``num_batch_slots*beams_per_batch`` (<= total_beams).
+    - ``num_batch_slots`` (int) -- output ring-buffer depth; leading beam axis = ``num_batch_slots*beams_per_batch``; slots may span multiple time chunks.
     - ``initial_chunk`` (int) -- chunk index of the producer's first output vs FPGA seq 0 (sets GpuDedisperserOutputs.ichunk_fpga_based).
     - ``ntrees`` (int) -- number of dedispersion trees.
     - ``ndm_out`` (list of int) -- per-tree output DM-channel counts (length ntrees).

@@ -36,6 +36,14 @@ documentation snapshots (do not edit them by hand; regenerate by running
   Production configs are also used by the build system (`makefile_helper.py`) to
   determine which CUDA kernels to autogenerate.
 
+- **`experiments/`** -- Observation recipes for the four-terminal live pipeline.
+  Configure beam IDs, duration, bursts and the dedispersion/grouping settings.
+  Start with [`chord_8beams.yml`](experiments/chord_8beams.yml).
+  For a smaller offline/online walkthrough, see the
+  [one-beam example](../examples/simple_frb/README.md).
+  Live commands read the recipe directly
+  and do not save input data, captures or result files.
+
 - **`offline_grouper/`** -- strict peak-extraction, grouping, and execution
   controls for `run offline_grouper`. Start from
   [`example.yml`](offline_grouper/example.yml); all three sections and every

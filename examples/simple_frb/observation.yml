@@ -1,0 +1,27 @@
+# Shared burst and noise parameters for the offline and online examples.
+version: 1
+metadata: ../../configs/xengine_metadata.yml
+dedispersion: dedispersion.yml
+observation:
+  duration_seconds: 64.0  # Rounded up to whole 2048-sample chunks.
+  initial_chunk: 0
+  beam_ids: [1]
+  noise_seed: 137
+dedispersion_overrides:
+  beams_per_batch: 1
+  num_active_batches: 1
+bursts:
+  - id: broadband_frb
+    beam_id: 1
+    dm: 500.0
+    toa_seconds: 40.0  # Arrival at 300 MHz, measured from observation start.
+    reference_frequency_MHz: 300.0
+    width_ms: 1.0  # Intrinsic Gaussian sigma, not FWHM or boxcar width.
+    snr: 50.0
+    spectral_index: 0.0
+    subband_lo_MHz: 300.0
+    subband_hi_MHz: 1500.0
+grouper:
+  peakfinding: {snr_threshold: 10.0, dm_reach: 8, waist_bins: 1}
+  grouping: {halo_size: 2, dm_tolerance: 1.5, time_tolerance: 1.5}
+  execution: {beam_batch_size: 1, timeout_ms: 0, timeout_policy: discard}

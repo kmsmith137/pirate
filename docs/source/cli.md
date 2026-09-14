@@ -6,7 +6,7 @@ pirate_frb SUBCOMMAND [ARGS...]
 pirate_frb GROUP SUBCOMMAND [ARGS...]
 ```
 where the list of subcommands, and documentation for each subcommand, are given below.
-Most subcommands are nested in a group (`run`, `rpc`, `show`, `varmap`, `dev`, `experiment`), whose row
+Most subcommands are nested in a group (`run`, `rpc`, `show`, `varmap`, `dev`, `live`), whose row
 in the table below links to a page listing that group's subcommands; `test`, `time` and
 `time_dedisperser` are typed directly. Each subcommand's page embeds its `--help` output,
 captured from the argparse parser when the docs are built. Note that
@@ -14,6 +14,37 @@ captured from the argparse parser when the docs are built. Note that
 
 ```{include} _cli_generated.md
 ```
+
+## Live detection
+
+The four commands are `live grouper`, `live dedisperser`,
+`live event_monitor`, and `live observation`. Each takes the same observation
+YAML. They process generated intensity data in memory and print detections,
+without session preparation or saved output files.
+
+Start the grouper, dedisperser and event monitor in that order, each in its own
+terminal. Wait for the dedisperser and event monitor to print `Listening`, then
+start the observation in a fourth terminal. After processing completes, stop the
+dedisperser first with Ctrl-C, then the grouper and event monitor.
+
+From the repository root, use the following commands, one per terminal:
+
+```bash
+python -B -m pirate_frb live grouper configs/experiments/chord_8beams.yml
+python -B -m pirate_frb live dedisperser configs/experiments/chord_8beams.yml
+python -B -m pirate_frb live event_monitor configs/experiments/chord_8beams.yml
+python -B -m pirate_frb live observation configs/experiments/chord_8beams.yml
+```
+
+The default loopback ports are 19700-19703. Supply the same `--base-port`
+to every command to use a different range. The dedisperser accepts `--gpu`
+(default 0); use the same `CUDA_VISIBLE_DEVICES` setting in all terminals to
+select the GPU used by both dedispersion and grouping.
+The observation sends simulated Gaussian noise and the bursts specified in the
+recipe. The event monitor prints detections, including beam, DM, S/N, sub-band,
+and arrival time relative to the observation start. The observation's
+`Sending complete` message precedes the grouper's `Processing complete`
+message; wait for the latter before stopping the pipeline.
 
 ## Offline grouper configuration
 
@@ -107,56 +138,3 @@ Terminal summaries identify every timeout. Version-3 trigger catalogs attach
 `grouping_window_id` and `grouping_timed_out` to event/member rows and store a
 record for every attempted window, including empty and discarded windows.
 Timeout provenance is deliberately separate from peakfinder `edge_flags`.
-
-
-## Controlled CHORD online/offline experiment
-
-The `experiment` group prepares one prescribed CHORD observation and runs its
-identical saved frames through offline and live inputs to the same scientific
-processor:
-
-```text
-pirate_frb experiment prepare CONFIG.yml BUNDLE
-pirate_frb experiment generate BUNDLE
-pirate_frb experiment offline BUNDLE OUTPUT --gpu 0
-pirate_frb experiment online BUNDLE OUTPUT --gpu 0
-pirate_frb experiment online BUNDLE CONTROL_OUTPUT --gpu 0 --suppress-early-capture
-pirate_frb experiment compare BUNDLE OFFLINE ONLINE_EARLY ONLINE_FULL REPORT.json --markdown REPORT.md
-```
-
-Observation and run directories are created exclusively. Online replay runs at
-the observing rate; `--max-lag-seconds` sets its sender abort limit (default one
-second). The control suppresses early **capture decisions**, preserving the
-scientific search and catalog. Classifier bypass is explicit in the configuration
-and reports. Scientific agreement and timely raw capture are validated separately.
-
-See the [controlled CHORD experiment guide](../../notes/controlled_chord_experiment.md)
-for the configuration, exact environment and run commands, timing budget, output
-contracts and limitations. This two-beam correctness experiment is not a
-production-throughput benchmark.
-
-
-## Controlled experiment in separate terminals
-
-The working scientific grouper, native server, capture receiver and controlled
-replay can also be launched independently. Prepare one fresh session directory:
-
-```bash
-pirate_frb experiment session prepare BUNDLE OUTPUT --gpu 0
-```
-
-Run each of the following in its own terminal on the same host and environment:
-
-```bash
-pirate_frb experiment session grouper OUTPUT
-pirate_frb experiment session server OUTPUT
-pirate_frb experiment session capture OUTPUT
-pirate_frb experiment session replay OUTPUT
-```
-
-The session coordinates readiness and finite completion. The grouper uses the
-same scientific core as offline, and the capture receiver bypasses the classifier.
-Use `experiment session status OUTPUT` to inspect state or
-`experiment session stop OUTPUT` to request shutdown. Do not reuse a completed
-or failed session for another acquisition. See
-[the complete terminal tutorial](../../notes/controlled_terminals.md).

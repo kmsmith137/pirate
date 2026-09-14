@@ -153,6 +153,7 @@ def parse_test(subparsers):
     parser.add_argument('--amax', action='store_true', help='Runs DedispersionPlan.decode_argmax() tests (black-box probe arrays)')
     parser.add_argument('--sb', action='store_true', help='Runs frequency-subband tests (C++/python parity of the two FrequencySubbands implementations, and the per-tree subband-set property)')
     parser.add_argument('--aout', action='store_true', help='Runs the serialized-output test (atomic_print/AtomicPrint, C++ and python threads)')
+    parser.add_argument("--live", action="store_true", help="Checks live recipes and command wiring without a live run")
     parser.add_argument('--ofg', action='store_true', help='Runs offline peak-finding, decoding, grouping, and catalog tests')
     parser.add_argument('--util', action='store_true', help='Runs test_utils() (integer/bit helpers in inlines.hpp, plus bit_reverse_slow())')
     parser.add_argument('--dtl1', action='store_true', help='Runs pirate_frb.detrending.lps1d tests (1-d local-polynomial detrender: the numpy reference, plus GpuDetrenderLps1d against it)')
@@ -178,7 +179,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'util', 'dtl1', 'dtk1', 'dtl2', 'ofg' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'util', 'dtl1', 'dtk1', 'dtl2', 'ofg', 'live' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
 
     seed = draw_random_seed() if args.randomize_seed else args.seed
@@ -373,6 +374,10 @@ def test(args):
             # is enough (see notes/unit_tests.md, "exhaust the parameter space").
             if i == 0:
                 utils.test_utils()
+
+        if (run_all_tests or args.live) and i == 0:
+            from .tests.test_live_pipeline import test_live_pipeline
+            test_live_pipeline()
 
         if (run_all_tests or args.ofg) and i == 0:
             tests.test_offline_peak_milestone(args.gpu)
@@ -2725,8 +2730,8 @@ def get_parser():
     parse_varmap(subparsers)
     parse_dev(subparsers)
 
-    from .ControlledExperiment import add_experiment_parser
-    add_experiment_parser(subparsers)
+    from .LivePipeline import add_live_parser
+    add_live_parser(subparsers)
 
     parse_test(subparsers)
     parse_time(subparsers)

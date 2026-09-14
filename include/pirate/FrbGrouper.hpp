@@ -315,8 +315,8 @@ private:
     // initialized until the handshake is processed (see _process_handshake); it
     // is an empty Outputs before a client connects. Full ring buffer:
     // nbeams == num_batch_slots * beams_per_batch (== producer nbatches_out *
-    // beams_per_batch); this is <= total_beams (beams_per_gpu), NOT equal to it
-    // in general. Private: consumers reach per-batch slices only via acquire_output().
+    // beams_per_batch), independently of total_beams: slots can span time chunks.
+    // Private: consumers reach per-batch slices only via acquire_output().
     GpuDedisperser::Outputs output_ringbuf;
 
     // IPC mapping base; deleter calls cudaIpcCloseMemHandle. Every output

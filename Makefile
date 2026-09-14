@@ -388,14 +388,11 @@ PYFILES = \
   pirate_frb/OfflineGrouperConfig.py \
   pirate_frb/OfflineCandidateGrouper.py \
   pirate_frb/TriggerCatalog.py \
-  pirate_frb/ControlledObservation.py \
-  pirate_frb/ReplayObservation.py \
   pirate_frb/SharedGrouper.py \
   pirate_frb/OnlineGrouper.py \
-  pirate_frb/ControlledCapture.py \
-  pirate_frb/ControlledExperiment.py \
-  pirate_frb/ControlledTerminals.py \
-  pirate_frb/ControlledComparison.py \
+  pirate_frb/LivePipeline.py \
+  pirate_frb/Observation.py \
+  pirate_frb/DedispersionServer.py \
   pirate_frb/run_server.py \
   pirate_frb/run_fake_xengine.py \
   pirate_frb/run_rpc_status.py \
@@ -491,13 +488,7 @@ PYFILES = \
   pirate_frb/tests/test_pulse_injection.py \
   pirate_frb/tests/test_server.py \
   pirate_frb/tests/test_trigger_catalog.py \
-  pirate_frb/tests/test_controlled_observation.py \
-  pirate_frb/tests/test_replay_observation.py \
-  pirate_frb/tests/test_shared_online_grouper.py \
-  pirate_frb/tests/test_controlled_capture.py \
-  pirate_frb/tests/test_controlled_lifecycle.py \
-  pirate_frb/tests/test_controlled_terminals.py \
-  pirate_frb/tests/test_controlled_comparison.py \
+  pirate_frb/tests/test_live_pipeline.py \
   pirate_frb/tests/test_subbands.py \
   pirate_frb/tests/utils.py \
   pirate_frb/utils.py \
@@ -507,12 +498,12 @@ PYFILES = \
   pirate_frb/rpc/FrbSearchClient.py \
   pirate_frb/rpc/FrbSifterClient.py
 
-# The installed pytest-free offline milestone runner reconstructs the same two
-# authoritative producer plans used by its CPU/GPU golden tests.  Ship only
-# these small YAML fixtures, not the repository's full configuration tree.
+# Installed tests carry their own observation recipes and producer plans.
 OFFLINE_PEAK_TEST_DATA = \
   pirate_frb/tests/data/toy.yml \
-  pirate_frb/tests/data/chord_sb2_et.yml
+  pirate_frb/tests/data/chord_sb2_et.yml \
+  pirate_frb/tests/data/chord_8beams.yml \
+  pirate_frb/tests/data/xengine_metadata.yml
 
 # User-facing strict configuration example.  It is useful in a source release,
 # but is not runtime package data and therefore does not belong in the wheel.
@@ -649,10 +640,14 @@ DEPFILES := $(ALL_SRCFILES_CU:%.cu=%.d) $(ALL_SRCFILES_CPP:%.cpp=%.d) $(ALL_SRCF
 SDIST_FILES := pyproject.toml Makefile makefile_helper.py autogenerate_kernel.py vendorize.py
 SDIST_FILES += $(PYFILES) $(CUDAGEN_PYFILES) $(LIB_SRCFILES) $(PYEXT_SRCFILES) $(HFILES) $(GRPC_PROTO)
 SDIST_FILES += $(OFFLINE_PEAK_TEST_DATA) $(OFFLINE_GROUPER_EXAMPLE)
-SDIST_FILES += configs/experiments/chord_replay.yml configs/dedispersion/chord_sb2_et.yml configs/xengine_metadata.yml
-SDIST_FILES += notes/controlled_observation.md notes/controlled_chord_experiment.md
-SDIST_FILES += notes/controlled_chord_results.md notes/validation/controlled_chord_20260910.json
-SDIST_FILES += notes/controlled_terminals.md notes/validation/controlled_terminals_20260910.json
+SDIST_FILES += configs/dedispersion/chord_sb2_et.yml configs/xengine_metadata.yml
+SDIST_FILES += configs/experiments/chord_8beams.yml
+SDIST_FILES += README.md notes/install.md configs/README.md
+SDIST_FILES += environment_minimal.yml environment_dev.yml asdf-cxx/LICENSE.rst
+SDIST_FILES += examples/README.md examples/simple_frb/README.md
+SDIST_FILES += examples/simple_frb/generate.py examples/simple_frb/observation.yml examples/simple_frb/dedispersion.yml
+SDIST_FILES += AIclassifier/README.md AIclassifier/requirements.txt AIclassifier/RetrieveEvent.ipynb
+SDIST_FILES += AIclassifier/data/events.asdf AIclassifier/data/frame_b1_t19_snrmap.asdf
 SDIST_FILES += grpc/finalize_grpc_stubs.py grpc/wrap_ndebug.py
 SDIST_FILES += $(ASDF_CXX_SRCFILES) $(ASDF_CXX_HFILES) misc/asdf_cxx_config.hxx
 
