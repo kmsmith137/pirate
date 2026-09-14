@@ -123,7 +123,12 @@ struct AssembledChunk
     // If 'allocator' is non-null, the buffer comes from it. Note SlabAllocator fixes its
     // slab size on first use, so a sequence of files with differing parameters cannot
     // share one allocator; the mismatch is reported as an exception naming the parameter.
-    // The default (no allocator) allocates independently per call.
+    // The default (no allocator) allocates independently per call, in UNPINNED host memory
+    // (af_uhost), so a copy of the arrays to the GPU is staged by the CUDA runtime. The
+    // simplest way to get pinned (page-locked) memory instead, and DMA copies, is a
+    // dummy-mode allocator, SlabAllocator::create(af_rhost): it hands out fresh page-locked
+    // memory per call and never blocks, at the cost of registering a 17 MB buffer per file
+    // (a few milliseconds each).
     static std::shared_ptr<AssembledChunk> from_msgpack(
         const std::string &filename,
         bool metadata_only = false,
@@ -131,11 +136,14 @@ struct AssembledChunk
 
     // Decode to physical units, writing a full-resolution (nfreq, nt) float32 array:
     //
-    //   intensity = scales[ifc,itc] * data + offsets[ifc,itc]
+    //   intensity = (scales[ifc,itc] * scale) * data + (offsets[ifc,itc] * scale)
     //   weights   = 0 where data is 0 or 255 (the saturation sentinels), else 1
     //
     // These reproduce ch_frb_io's assembled_chunk::decode() when apply_rfimask is false,
-    // which is what a comparison against the old pipeline needs.
+    // which is what a comparison against the old pipeline needs -- including its 'prescale'
+    // argument, which is 'scale' here: the CHIME L1 server decoded with intensity_prescale
+    // = 1e-4, and the two products are rounded to float32 before the one fused multiply-add,
+    // as its decode did. With scale = 1 (the default) the products are exact.
     //
     // 'apply_rfimask' has NO DEFAULT on purpose: on real data it changes ~46% of samples,
     // so every call site should state its intent. When true, samples the rfi_mask marks
@@ -145,7 +153,7 @@ struct AssembledChunk
     //
     // Requires nt_per_packet == 16 (true of every file we have); other values throw, as
     // does a metadata-only chunk, which has no data to decode.
-    void decode_intensity(ksgpu::Array<float> &dst, bool apply_rfimask) const;
+    void decode_intensity(ksgpu::Array<float> &dst, bool apply_rfimask, float scale = 1.0f) const;
     void decode_weights(ksgpu::Array<float> &dst, bool apply_rfimask) const;
 };
 

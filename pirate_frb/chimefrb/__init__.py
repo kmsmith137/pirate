@@ -55,12 +55,20 @@ from .ReferenceBadChannelMask import ReferenceBadChannelMask
 from .ReferenceSplineDetrender import ReferenceSplineDetrender
 from .ReferencePolynomialDetrender import ReferencePolynomialDetrender
 
+# The transform that marks where a chain's RFI mask is taken, and packs it (python, on
+# GpuPythonTransform); a chain reproducing the old real-time mask has exactly one.
+from .RfiMaskExtractor import RfiMaskExtractor
+
 # The two pipeline classes that run transforms. Nothing from utils.py is re-exported either
 # (read_yaml, transform_from_yaml_dict, YAML_WIDTH, ...): import from pirate_frb.chimefrb.utils.
 from .ExamplePythonTransform import ExamplePythonTransform
 from .GpuContainerBase import GpuContainerBase
 from .Pipeline import Pipeline
 from .RfiMaskPipeline import RfiMaskPipeline
+
+# The driver: a stream of AssembledChunks in, one RFI mask per chunk out, with the chain
+# and the GPU in between. Not a transform.
+from .ChimePreDedisperser import ChimePreDedisperser
 
 # WARNING: the CLASSES above are load-bearing, and not merely a convenience. utils.
 # resolve_class() turns a yaml 'class_name' into a class by getattr() on this package, so

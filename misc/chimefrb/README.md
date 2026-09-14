@@ -216,6 +216,9 @@ On beam_3146 of the acquisition above (1196 files), the masks reproduce exactly 
 samples in two files, out of 1.25e9: threshold decisions that the different rounding of
 the rescaled arithmetic flips.
 
+The GPU counterpart, running pirate's ported chain instead of the old code, is
+`pirate_frb cfrb reproduce_rfimask`, with the same file rules and the same report.
+
 ## Spot checks
 
 See `spot_checks/README.md`.  They run against the `oldpipe/` this file tells you how

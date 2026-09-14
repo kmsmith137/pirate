@@ -313,13 +313,18 @@ def _broadcast_rfimask(chunk):
     return np.repeat(bits, fdiv, axis=0)
 
 
-def decode_intensity_reference(chunk, apply_rfimask):
-    """Reference decode, in plain float32 (see the tolerance note in test_decode())."""
+def decode_intensity_reference(chunk, apply_rfimask, scale=1.0):
+    """Reference decode, in plain float32 (see the tolerance note in test_decode()).
+
+    'scale' multiplies the scales and offsets first, each product rounded to float32, as
+    AssembledChunk.decode_intensity() does; the reference then rounds the multiply and the
+    add separately where the kernel fuses them.
+    """
 
     d = chunk.data.reshape(chunk.nfreq_coarse, chunk.nupfreq, chunk.nt_coarse, chunk.nt_per_packet)
-    sc = chunk.scales[:, None, :, None]
-    of = chunk.offsets[:, None, :, None]
-    out = (sc.astype(np.float32) * d.astype(np.float32) + of.astype(np.float32))
+    sc = (chunk.scales.astype(np.float32) * np.float32(scale))[:, None, :, None]
+    of = (chunk.offsets.astype(np.float32) * np.float32(scale))[:, None, :, None]
+    out = (sc * d.astype(np.float32) + of)
     out = out.reshape(chunk.nfreq, chunk.nt)
     if apply_rfimask:
         out = out * _broadcast_rfimask(chunk)
@@ -333,9 +338,10 @@ def decode_weights_reference(chunk, apply_rfimask):
     return np.ascontiguousarray(w, dtype=np.float32)
 
 
-def intensity_tolerance(chunk):
+def intensity_tolerance(chunk, scale=1.0):
     """Elementwise-derived, then maximized: the largest disagreement possible between our
-    kernel's single fused multiply-add and the reference's separate multiply and add.
+    kernel's single fused multiply-add and the reference's separate multiply and add, with
+    both starting from the same float32 products scales*scale and offsets*scale.
 
     With u = eps_f32/2 the unit roundoff,
         reference = (s*x*(1+d1) + o)*(1+d2),  kernel = (s*x + o)*(1+d3),  |di| <= u
@@ -347,8 +353,10 @@ def intensity_tolerance(chunk):
     """
 
     d = chunk.data.reshape(chunk.nfreq_coarse, chunk.nupfreq, chunk.nt_coarse, chunk.nt_per_packet)
-    sx = np.abs(chunk.scales[:, None, :, None].astype(np.float64) * d)
-    return float(np.finfo(np.float32).eps * np.max(2.0*sx + np.abs(chunk.offsets[:, None, :, None])))
+    sc = (chunk.scales.astype(np.float32) * np.float32(scale)).astype(np.float64)
+    of = (chunk.offsets.astype(np.float32) * np.float32(scale)).astype(np.float64)
+    sx = np.abs(sc[:, None, :, None] * d)
+    return float(np.finfo(np.float32).eps * np.max(2.0*sx + np.abs(of[:, None, :, None])))
 
 
 ####################################################################################################
@@ -532,14 +540,22 @@ def test_parse(chunk=None, rng=None):
     return c, ref, tag
 
 
+def random_scale():
+    """A 'scale' for the decode: 1 (no scaling), the production 1e-4, or something else."""
+    return float(np.random.choice([1.0, 1.0e-4, np.random.uniform(0.01, 100.0)]))
+
+
 def test_decode(chunk=None):
-    """Decode with both kernels, for both values of apply_rfimask, against the numpy reference."""
+    """Decode with both kernels, for both values of apply_rfimask and a random scale, against
+    the numpy reference."""
 
     if chunk is None:
         chunk = make_random_chunk(force_ntpp16=True)
     assert chunk.nt_per_packet == 16
 
     c, ref, tag = test_parse(chunk)
+    scale = random_scale()
+    tag = f'{tag} scale={scale:g}'
 
     mask_choices = [False, True] if chunk.has_rfi_mask else [False]
     for apply_rfimask in mask_choices:
@@ -552,9 +568,9 @@ def test_decode(chunk=None):
 
         # Intensity: our kernel is one FMA, the reference rounds twice. See
         # intensity_tolerance() for the derivation -- the bound is not fitted.
-        i = np.asarray(c.decode_intensity(apply_rfimask=apply_rfimask))
-        i_ref = decode_intensity_reference(ref, apply_rfimask)
-        atol = intensity_tolerance(ref)
+        i = np.asarray(c.decode_intensity(apply_rfimask=apply_rfimask, scale=scale))
+        i_ref = decode_intensity_reference(ref, apply_rfimask, scale)
+        atol = intensity_tolerance(ref, scale)
         err = float(np.max(np.abs(i - i_ref))) if i.size else 0.0
         assert err <= atol, \
             f'{tag}: intensity max error {err:.6g} exceeds bound {atol:.6g} ' \
@@ -562,10 +578,15 @@ def test_decode(chunk=None):
 
     # Applying the mask must be exactly a multiply by 0.0 or 1.0, so this is bit-exact.
     if chunk.has_rfi_mask:
-        i0 = np.asarray(c.decode_intensity(apply_rfimask=False))
-        i1 = np.asarray(c.decode_intensity(apply_rfimask=True))
+        i0 = np.asarray(c.decode_intensity(apply_rfimask=False, scale=scale))
+        i1 = np.asarray(c.decode_intensity(apply_rfimask=True, scale=scale))
         assert np.array_equal(i1, i0 * _broadcast_rfimask(ref)), \
             f'{tag}: apply_rfimask is not a clean 0/1 multiply'
+
+    # scale=1 is the default, and must be exactly what no scale gives (the products are exact).
+    assert np.array_equal(np.asarray(c.decode_intensity(apply_rfimask=False, scale=1.0)),
+                          np.asarray(c.decode_intensity(apply_rfimask=False))), \
+        f'{tag}: scale=1.0 differs from the default'
 
     # 'out=' must write in place and return the same buffer.
     out = np.zeros((c.nfreq, c.nt), dtype=np.float32)

@@ -104,6 +104,16 @@ class GpuTransformInjections:
 
         self._cpp_launch(intensity, weights, scratch, stream.ptr)
 
+    def get_mask_extractor(self):
+        """The :class:`RfiMaskExtractor` in this transform, if there is exactly one.
+
+        None for a transform that is not one and holds none, which is every C++ transform.
+        A container (:class:`GpuContainerBase`) returns the one it holds, at any depth, or
+        None, and raises ``ValueError`` if it holds more than one, since a chain with two
+        extraction points has no single mask. The extractor itself returns itself. This is
+        how a driver such as :class:`ChimePreDedisperser` finds where to plant the mask."""
+        return None
+
     @classmethod
     def check_yaml_keys(cls, d, keys):
         """The check every ``from_yaml_dict`` starts with: ``d`` is a dict whose ``class_name``

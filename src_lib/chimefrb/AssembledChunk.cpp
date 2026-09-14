@@ -652,7 +652,7 @@ static inline __m256 rfimask_bits_to_ps(uint8_t bits)
 }
 
 
-void AssembledChunk::decode_intensity(Array<float> &dst, bool apply_rfimask) const
+void AssembledChunk::decode_intensity(Array<float> &dst, bool apply_rfimask, float scale) const
 {
     check_decode_args(*this, dst, apply_rfimask, "AssembledChunk::decode_intensity()");
 
@@ -673,9 +673,12 @@ void AssembledChunk::decode_intensity(Array<float> &dst, bool apply_rfimask) con
                                                 : nullptr;
 
             for (long itc = 0; itc < nt_coarse; itc++) {
+                // The scale is applied to the two coefficients first, each product rounded
+                // once, then one FMA per sample: the operation order of ch_frb_io's
+                // decode(prescale), and of the GPU kernel.
                 __m128i b = _mm_loadu_si128((const __m128i *)(src + 16*itc));
-                __m256 vs = _mm256_set1_ps(sc[itc]);
-                __m256 vo = _mm256_set1_ps(of[itc]);
+                __m256 vs = _mm256_set1_ps(sc[itc] * scale);
+                __m256 vo = _mm256_set1_ps(of[itc] * scale);
                 __m256 y0 = _mm256_fmadd_ps(vs, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(b)), vo);
                 __m256 y1 = _mm256_fmadd_ps(vs, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_srli_si128(b,8))), vo);
 

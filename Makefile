@@ -425,6 +425,9 @@ PYFILES = \
   pirate_frb/chimefrb/ExamplePythonTransform.py \
   pirate_frb/chimefrb/Pipeline.py \
   pirate_frb/chimefrb/RfiMaskPipeline.py \
+  pirate_frb/chimefrb/RfiMaskExtractor.py \
+  pirate_frb/chimefrb/ChimePreDedisperser.py \
+  pirate_frb/chimefrb/reproduce_rfimask.py \
   pirate_frb/chimefrb/utils.py \
   pirate_frb/chimefrb/test_assembled_chunk.py \
   pirate_frb/chimefrb/test_assembled_chunk_reader.py \
@@ -432,6 +435,8 @@ PYFILES = \
   pirate_frb/chimefrb/test_chime_dequantization_kernel.py \
   pirate_frb/chimefrb/test_intensity_clipper.py \
   pirate_frb/chimefrb/test_pipeline.py \
+  pirate_frb/chimefrb/test_rfi_mask_extractor.py \
+  pirate_frb/chimefrb/test_chime_pre_dedisperser.py \
   pirate_frb/chimefrb/test_polynomial_detrender.py \
   pirate_frb/chimefrb/test_rfi_mask_packing_kernel.py \
   pirate_frb/chimefrb/test_spline_detrender.py \

@@ -15,11 +15,14 @@ namespace chimefrb {
 // ChimeDequantizationKernel: turns one AssembledChunk's raw arrays into the (intensity,
 // weights) pair the ported RFI chain runs on, on the GPU.
 //
-//   intensity[f,t] = scales[ifc,itc] * data[f,t] + offsets[ifc,itc]
+//   intensity[f,t] = (scales[ifc,itc] * scale) * data[f,t] + (offsets[ifc,itc] * scale)
 //   weights[f,t]   = 0 where data is 0 or 255 (the saturation sentinels), else 1
 //
 // where ifc = f/nupfreq and itc = t/16, and where -- if 'apply_rfimask' is true -- both
-// outputs are instead +0.0 wherever the file's RFI mask marks the sample bad.
+// outputs are instead +0.0 wherever the file's RFI mask marks the sample bad. 'scale' is the
+// CHIME L1 server's 'intensity_prescale' (1e-4 in production), applied the way its decode
+// applied it: the two products are rounded to float32 first, then one fused multiply-add.
+// With scale = 1 the products are exact and nothing changes.
 //
 // This is the GPU version of AssembledChunk::decode_intensity() and decode_weights(), whose
 // header comment is the reference for the semantics (frequency ordering, what the RFI mask's
@@ -79,6 +82,9 @@ struct ChimeDequantizationKernel
     //               when 'apply_rfimask' is false, and may then be an empty array.
     //
     //   stream      CUDA stream.
+    //   scale       multiplies scales and offsets before the decode (see the class comment).
+    //
+    //   stream      CUDA stream.
     void launch(ksgpu::Array<float> &intensity,
                 ksgpu::Array<float> &weights,
                 const ksgpu::Array<float> &scales,
@@ -86,6 +92,7 @@ struct ChimeDequantizationKernel
                 const ksgpu::Array<uint8_t> &data,
                 const ksgpu::Array<uint8_t> &rfi_mask,
                 bool apply_rfimask,
+                float scale,
                 cudaStream_t stream) const;
 
     // Static timing function (called via 'python -m pirate_frb time --cfrb'). Times the

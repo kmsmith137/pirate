@@ -74,6 +74,12 @@ struct AssembledChunkReader
     // 'nthreads' must be >= 1, and is clamped to the number of files. The clamped value is
     // BOTH the worker count and the read-ahead depth (see 'nthreads' below).
     //
+    // Without an allocator, each chunk's buffer is allocated per file in UNPINNED host
+    // memory (af_uhost), so copying its arrays to the GPU is a staged copy. The simplest way
+    // to get pinned memory instead is a dummy-mode allocator, SlabAllocator::create(af_rhost),
+    // which hands out fresh page-locked memory per file, never blocks (so the pool-size rule
+    // below does not apply), and costs a few milliseconds per file to register the buffer.
+    //
     // If 'allocator' is non-null, every chunk's buffer is taken from it instead of being
     // allocated per file. Three things to know before passing one:
     //

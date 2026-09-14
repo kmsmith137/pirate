@@ -12,6 +12,10 @@ The central check of pirate's chimefrb reader.  It covers three things at once:
     it produces are handed to ch_frb_io's own msgpack adaptor, which throws if they are not
     a well-formed assembled_chunk.
 
+Each configuration is run with prescale 1 and with the production value 1e-4 (the CHIME
+L1 server's intensity_prescale), since pirate's decode_intensity(scale=...) claims to
+reproduce ch_frb_io's decode(prescale) arithmetic and not just the unscaled decode.
+
 Both of ch_frb_io's decode paths are run.  assembled_chunk::make() returns a
 fast_assembled_chunk (AVX2) when nt_per_packet==16 and nupfreq is even, and a plain
 assembled_chunk otherwise; production CHIME data hits the fast path, so that is the
@@ -105,25 +109,26 @@ def main():
         configs.append((NUPFREQ, "fast"))
 
     for nupfreq, force in configs:
+      for prescale in (1.0, 1.0e-4):
         chunk = make_chunk(nupfreq, rng)
         payload = chunk.to_msgpack(rng=rng)
-        t.note("nupfreq=%d, force=%s, %d bytes" % (nupfreq, force, len(payload)))
+        t.note("nupfreq=%d, force=%s, prescale=%g, %d bytes" % (nupfreq, force, prescale, len(payload)))
 
         # dtype=np.uint8 is not optional: the driver reads a uint8 array.
         old = harness.run_driver(HERE, np.frombuffer(payload, dtype=np.uint8),
-                                 params={"force": force}, dtype=np.uint8)
+                                 params={"force": force, "prescale": repr(prescale)}, dtype=np.uint8)
         old_i, old_w = old[0], old[1]
 
         with cfrb_test.TempChunkFile(payload) as fn:
             c = chimefrb.AssembledChunk.from_msgpack(fn)
             # apply_rfimask=False on both: ch_frb_io's decode() ignores the rfi_mask, so
             # comparing with masking on would be comparing two different quantities.
-            new_i = np.asarray(c.decode_intensity(apply_rfimask=False))
+            new_i = np.asarray(c.decode_intensity(apply_rfimask=False, scale=prescale))
             new_w = np.asarray(c.decode_weights(apply_rfimask=False))
             ref = cfrb_test.read_msgpack(fn)
 
-        atol = cfrb_test.intensity_tolerance(ref)
-        t.check_allclose("intensity (nupfreq=%d, %s)" % (nupfreq, force),
+        atol = cfrb_test.intensity_tolerance(ref, prescale)
+        t.check_allclose("intensity (nupfreq=%d, %s, prescale=%g)" % (nupfreq, force, prescale),
                          new_i.ravel().astype(np.float64), old_i.ravel().astype(np.float64),
                          rtol=0.0, atol=atol,
                          why="ch_frb_io computes scale*x+offset as a multiply then an add "
@@ -135,7 +140,7 @@ def main():
                              "cancel for x near 128 and a relative bound on the result would "
                              "be meaningless")
 
-        t.check_allclose("weights (nupfreq=%d, %s)" % (nupfreq, force),
+        t.check_allclose("weights (nupfreq=%d, %s, prescale=%g)" % (nupfreq, force, prescale),
                          new_w.ravel().astype(np.float64), old_w.ravel().astype(np.float64),
                          rtol=0.0, atol=0.0,
                          why="a comparison against 0 and 255 involves no arithmetic, so any "

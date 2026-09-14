@@ -44,7 +44,12 @@ class AssembledChunkReaderInjections:
     serial loop would. Raising stops the reader, so nothing is read past the failure.
 
     ``allocator`` (optional) is a :class:`SlabAllocator` to take the chunk buffers from,
-    instead of allocating per file. Three conditions come with it: all the files must have
+    instead of allocating per file. Without one, a chunk's buffer is UNPINNED host memory,
+    so copying its arrays to the GPU is staged by the CUDA runtime; the simplest way to get
+    pinned memory, and DMA copies, is a dummy-mode allocator, ``SlabAllocator('af_rhost')``,
+    which hands out fresh page-locked memory per file and never blocks (a few milliseconds
+    per file to register the buffer). Three conditions come with a POOLED allocator, one
+    built on a :class:`BumpAllocator`: all the files must have
     identical parameters (a SlabAllocator serves one slab size); the pool must hold at least
     ``nthreads`` slabs, or the reader DEADLOCKS (a dummy-mode allocator, which never blocks,
     is always safe); and the reader stops the allocator on teardown, so it must not be

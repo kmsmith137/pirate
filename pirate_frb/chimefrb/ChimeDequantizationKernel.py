@@ -21,7 +21,7 @@ class ChimeDequantizationKernelInjections:
     _cpp_launch = ChimeDequantizationKernel.launch
 
     def launch(self, intensity, weights, scales, offsets, data,
-               rfi_mask=None, apply_rfimask=False, stream=None):
+               rfi_mask=None, apply_rfimask=False, scale=1.0, stream=None):
         """GPU kernel launch (async, does not sync stream).
 
         Parameters
@@ -45,6 +45,10 @@ class ChimeDequantizationKernelInjections:
             If True, both outputs are +0.0 wherever the mask marks the sample bad. Defaults
             to False, so that a caller who passes no mask gets the unmasked decode rather
             than an error.
+        scale : float, optional
+            Multiplies the scales and offsets before the decode, the way the CHIME L1
+            server's ``intensity_prescale`` (1e-4 in production) did; see the class
+            docstring. Defaults to 1.
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
         """
@@ -58,4 +62,4 @@ class ChimeDequantizationKernelInjections:
             rfi_mask = cp.empty((0, 0), dtype=cp.uint8)
 
         self._cpp_launch(intensity, weights, scales, offsets, data, rfi_mask,
-                         apply_rfimask, stream.ptr)
+                         apply_rfimask, float(scale), stream.ptr)

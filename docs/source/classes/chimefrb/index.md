@@ -16,6 +16,10 @@ written in python subclasses `GpuPythonTransform`, a plain python class on top o
 base. `Pipeline` runs a list of transforms in order; `RfiMaskPipeline` runs a list on a
 downsampled copy of the data and feeds the mask back. Both read the old rf_pipelines json
 configs (`Pipeline.read_json_file`), and `pirate_frb cfrb json2yaml` converts one to yaml.
+`RfiMaskExtractor` marks the point in a chain where the RFI mask is taken, and packs it;
+`ChimePreDedisperser` drives a whole stream of chunks through a chain and hands back one
+mask per chunk, which is how `pirate_frb cfrb reproduce_rfimask` compares pirate's masks
+with the ones the telescope saved.
 
 **Writing your own transform.** Subclass `GpuPythonTransform`: a constructor that calls
 `super().__init__(nbeams, nfreq, ntime)`, a `launch_checked(intensity, weights, scratch)`
@@ -63,6 +67,7 @@ grouping, and the paragraphs above are where the relationships are explained.
 | [`AssembledChunk`](AssembledChunk.md) | One "assembled_chunk in msgpack format" data file, and its decode methods |
 | [`AssembledChunkReader`](AssembledChunkReader.md) | Reads a list of those files with a thread pool, and hands them back in filename order |
 | [`ChimeDequantizationKernel`](ChimeDequantizationKernel.md) | Turns one chunk's raw arrays into the (intensity, weights) pair a chain runs on, on the GPU |
+| [`ChimePreDedisperser`](ChimePreDedisperser.md) | Runs a chain on a stream of chunks and hands back one RFI mask per chunk: the driver around everything else here |
 | [`ExamplePythonTransform`](ExamplePythonTransform.md) | A worked example of a cupy transform: a 3-sigma clip per channel |
 | [`GpuBadChannelMask`](GpuBadChannelMask.md) | Zeroes the weights of whole frequency channels (a port of `rf_pipelines::badchannel_mask`) |
 | [`GpuClipperBase`](GpuClipperBase.md) | What the chimefrb RFI clippers share on top of `GpuTransform`: axis, downsampling, the per-row statistic |
@@ -77,6 +82,7 @@ grouping, and the paragraphs above are where the relationships are explained.
 | [`GpuWrmsKernel`](GpuWrmsKernel.md) | The weighted mean and variance of each row, refined by iterated sigma clipping; the statistic both clippers are built on (a port of `rf_kernels::weighted_mean_rms`) |
 | [`GpuWtUpsamplingKernel`](GpuWtUpsamplingKernel.md) | Zeroes the full-resolution weights under masked low-resolution cells (a port of `rf_kernels::weight_upsampler`) |
 | [`Pipeline`](Pipeline.md) | Runs a list of transforms in order on one block (a port of `rf_pipelines::pipeline`) |
+| [`RfiMaskExtractor`](RfiMaskExtractor.md) | The transform whose position in a chain defines the RFI mask, and which packs it (the old `mask_counter` in its mask-saving role) |
 | [`RfiMaskPackingKernel`](RfiMaskPackingKernel.md) | Packs the weights a chain leaves behind into a data file's bit-packed RFI mask, on the GPU |
 | [`RfiMaskPipeline`](RfiMaskPipeline.md) | Runs a list of transforms on a downsampled copy and feeds the mask back (a port of `rf_pipelines::wi_sub_pipeline`) |
 
@@ -87,6 +93,7 @@ grouping, and the paragraphs above are where the relationships are explained.
 AssembledChunk
 AssembledChunkReader
 ChimeDequantizationKernel
+ChimePreDedisperser
 ExamplePythonTransform
 GpuBadChannelMask
 GpuClipperBase
@@ -101,6 +108,7 @@ GpuWiDownsamplingKernel
 GpuWrmsKernel
 GpuWtUpsamplingKernel
 Pipeline
+RfiMaskExtractor
 RfiMaskPackingKernel
 RfiMaskPipeline
 ```

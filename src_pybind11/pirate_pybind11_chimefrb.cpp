@@ -208,7 +208,10 @@ void register_chimefrb_bindings(pybind11::module &m)
             "\n"
             "If 'allocator' is given, the chunk's buffer comes from it. Note a SlabAllocator\n"
             "serves a single slab size, so all files sharing one allocator must have identical\n"
-            "parameters.")
+            "parameters. Without one, the buffer is UNPINNED host memory, so a copy of the\n"
+            "arrays to the GPU is staged by the CUDA runtime; the simplest way to get pinned\n"
+            "memory (and DMA copies) is a dummy-mode allocator, SlabAllocator('af_rhost'),\n"
+            "which hands out fresh page-locked memory per file and never blocks.")
 
         // A docstring even though the meaning is obvious: sphinx autoclass uses ':members:'
         // without ':undoc-members:', so an undocumented property does not appear in the docs.
@@ -288,20 +291,26 @@ void register_chimefrb_bindings(pybind11::module &m)
             "fine channels. None if has_rfi_mask is False.")
 
         .def("decode_intensity",
-            [](const AssembledChunk &self, bool apply_rfimask, optional<Array<float>> out) {
+            [](const AssembledChunk &self, bool apply_rfimask, optional<Array<float>> out, float scale) {
                 Array<float> dst = _decode_dst(self, out);
-                self.decode_intensity(dst, apply_rfimask);
+                self.decode_intensity(dst, apply_rfimask, scale);
                 return dst;
             },
-            py::arg("apply_rfimask"), py::arg("out") = std::nullopt,
+            py::arg("apply_rfimask"), py::arg("out") = std::nullopt, py::arg("scale") = 1.0f,
             py::call_guard<py::gil_scoped_release>(),
-            "Decode to physical units: scales*data + offsets, as a (nfreq, nt) float32 array.\n"
+            "Decode to physical units, (scales*scale)*data + (offsets*scale), as a (nfreq, nt)\n"
+            "float32 array.\n"
             "\n"
             "'apply_rfimask' has no default on purpose -- on real data it changes ~46% of\n"
             "samples. When True, samples the RFI mask marks bad are zeroed, and the call\n"
             "raises if the file carried no mask. Pass the SAME value to decode_weights():\n"
             "masking the intensity but not the weights leaves a masked sample looking like a\n"
             "real measurement of zero.\n"
+            "\n"
+            "'scale' is ch_frb_io's decode(prescale): the CHIME L1 server decoded with\n"
+            "intensity_prescale = 1e-4, multiplying the scales and offsets by it (each product\n"
+            "rounded to float32) before the one fused multiply-add per sample, and this does\n"
+            "the same. With the default of 1 the products are exact.\n"
             "\n"
             "If 'out' is given it is written in place and returned; otherwise a new array is\n"
             "allocated. Requires nt_per_packet == 16.")
@@ -946,12 +955,14 @@ void register_chimefrb_bindings(pybind11::module &m)
         "Turns one AssembledChunk's raw arrays into the (intensity, weights) pair the ported\n"
         "RFI chain runs on, on the GPU::\n"
         "\n"
-        "    intensity[f,t] = scales[ifc,itc] * data[f,t] + offsets[ifc,itc]\n"
+        "    intensity[f,t] = (scales[ifc,itc] * scale) * data[f,t] + (offsets[ifc,itc] * scale)\n"
         "    weights[f,t]   = 0 where data is 0 or 255 (the saturation sentinels), else 1\n"
         "\n"
         "where ``ifc = f/nupfreq`` and ``itc = t/16``, and where -- if ``apply_rfimask`` is\n"
         "True -- both outputs are instead +0.0 wherever the file's RFI mask marks the sample\n"
-        "bad.\n"
+        "bad. ``scale`` is the CHIME L1 server's ``intensity_prescale`` (1e-4 in production),\n"
+        "applied as its decode applied it: the two products are rounded to float32 first,\n"
+        "then one fused multiply-add. With scale = 1 the products are exact.\n"
         "\n"
         "This is the GPU version of :meth:`AssembledChunk.decode_intensity` and\n"
         ":meth:`AssembledChunk.decode_weights`, and agrees with them BIT FOR BIT. See\n"
@@ -1004,13 +1015,13 @@ void register_chimefrb_bindings(pybind11::module &m)
             [](const ChimeDequantizationKernel &self, Array<float> &intensity,
                Array<float> &weights, const Array<float> &scales, const Array<float> &offsets,
                const Array<uint8_t> &data, const Array<uint8_t> &rfi_mask, bool apply_rfimask,
-               uintptr_t stream_ptr) {
+               float scale, uintptr_t stream_ptr) {
                 cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                 self.launch(intensity, weights, scales, offsets, data, rfi_mask,
-                            apply_rfimask, stream);
+                            apply_rfimask, scale, stream);
             },
             py::arg("intensity"), py::arg("weights"), py::arg("scales"), py::arg("offsets"),
-            py::arg("data"), py::arg("rfi_mask"), py::arg("apply_rfimask"),
+            py::arg("data"), py::arg("rfi_mask"), py::arg("apply_rfimask"), py::arg("scale"),
             py::arg("stream_ptr"),
             py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
             "GPU kernel launch (async, does not sync stream).\n"
@@ -1030,6 +1041,8 @@ void register_chimefrb_bindings(pybind11::module &m)
             "        divide nfreq. Ignored when apply_rfimask is False, and may then be empty.\n"
             "    apply_rfimask: if True, both outputs are +0.0 wherever the mask marks the\n"
             "        sample bad. No default, as for AssembledChunk.decode_intensity().\n"
+            "    scale: multiplies the scales and offsets before the decode (see the class\n"
+            "        docstring); 1 for no scaling.\n"
             "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 

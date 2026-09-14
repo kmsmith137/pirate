@@ -133,5 +133,6 @@ transforms:
     - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: time, sigma: 5.0, niter: 9, iter_sigma: 5.0, Df: 1, Dt: 1, two_pass: false}
     - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: none, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
     - {class_name: GpuIntensityClipper, nt_chunk: 4096, axis: freq, sigma: 5.0, niter: 9, iter_sigma: 3.0, Df: 2, Dt: 16, two_pass: false}
+    - {class_name: RfiMaskExtractor}
 - {class_name: GpuPolynomialDetrender, polydeg: 4, epsilon: 0.01, nt_chunk: 1024, axis: time}
 - {class_name: GpuSplineDetrender, nbins: 6, epsilon: 0.0003, axis: freq}

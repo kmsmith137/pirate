@@ -20,8 +20,9 @@ not to a leaf. Every transform has::
     to_yaml_dict()                              -> dict
     from_yaml_dict(d, nbeams, nfreq, ntime)     classmethod -> instance
 
-and, for the five C++ transforms and the two pipelines only (the "legacy" transforms,
-which the old rf_pipelines json format describes)::
+and, for the transforms with a legacy form only -- the five C++ transforms, the two
+pipelines, and :class:`RfiMaskExtractor`, which is the old ``mask_counter`` in its
+mask-saving role::
 
     from_json_dict(d, nbeams, nfreq, ntime)     classmethod -> instance
 
@@ -57,7 +58,9 @@ SERIALIZATION.
   silently become a default), then constructs. The ``check_yaml_keys()`` classmethod of
   GpuTransform does both checks.
 - ``from_json_dict`` reads one element of the old rf_pipelines json, whose ``class_name`` is
-  the legacy name (``badchannel_mask``, ``intensity_clipper``, ...).
+  the legacy name (``badchannel_mask``, ``intensity_clipper``, ...). A WHOLE legacy file goes
+  through :func:`legacy_chain_from_json`, not ``from_json_dict`` directly, because of the
+  ``mask_counter`` rule described there.
 
 HOW A class_name BECOMES A CLASS. :func:`resolve_class` looks the name up first among the
 ``classes`` the caller passed in (matched by ``__name__``; this is how a transform you wrote
@@ -66,6 +69,7 @@ yourself, in your own module or in a notebook, gets found), then as an attribute
 class names first.
 """
 
+import copy
 import json
 
 import yaml
@@ -167,7 +171,9 @@ def transform_from_yaml_dict(d, nbeams, nfreq, ntime, classes=None):
 
 
 # Legacy rf_pipelines class_name -> python class name, for everything that has a port. Closed
-# set: a new transform has no legacy form.
+# set: a new transform has no legacy form. 'mask_counter' is special: only the one that
+# legacy_chain_from_json() has marked as the extraction point becomes an RfiMaskExtractor,
+# and the others are skipped (see transform_from_json_dict()).
 LEGACY_JSON_CLASS_NAMES = {
     'pipeline': 'Pipeline',
     'wi_sub_pipeline': 'RfiMaskPipeline',
@@ -176,15 +182,20 @@ LEGACY_JSON_CLASS_NAMES = {
     'intensity_clipper': 'GpuIntensityClipper',
     'polynomial_detrender': 'GpuPolynomialDetrender',
     'spline_detrender': 'GpuSplineDetrender',
+    'mask_counter': 'RfiMaskExtractor',
 }
 
-# Legacy classes with no port that DO NOT CHANGE THE DATA -- counters, writers, and consumers
-# that read the stream without touching it. transform_from_json_dict() skips these, with a
-# printed note. Anything else unported raises, so that a transform that does change the
-# data (mask_expander, chime_16k_derippler, noise_filler, ...) is refused rather than
-# silently dropped.
+# The key legacy_chain_from_json() adds to the one 'mask_counter' element that is the chain's
+# extraction point. No old file carries it.
+LEGACY_EXTRACT_KEY = 'pirate_extract'
+
+# Legacy classes with no port that DO NOT CHANGE THE DATA -- writers and consumers that read
+# the stream without touching it. transform_from_json_dict() skips these, with a printed
+# note. Anything else unported raises, so that a transform that does change the data
+# (mask_expander, chime_16k_derippler, noise_filler, ...) is refused rather than silently
+# dropped.
 IGNORED_JSON_CLASSES = frozenset([
-    'mask_counter', 'chime_slow_pulsar_writer', 'chime_file_writer',
+    'chime_slow_pulsar_writer', 'chime_file_writer',
     'chime_assembled_chunk_file_writer', 'chime_packetizer', 'bonsai_dedisperser',
     'plotter_transform',
 ])
@@ -192,11 +203,14 @@ IGNORED_JSON_CLASSES = frozenset([
 
 def transform_from_json_dict(d, nbeams, nfreq, ntime, nds=1):
     """Build the transform that one element of a legacy rf_pipelines json describes, at the
-    given geometry -- or return None if the element is one of :data:`IGNORED_JSON_CLASSES`.
+    given geometry -- or return None if the element is one of :data:`IGNORED_JSON_CLASSES`,
+    or a ``mask_counter`` that is not the marked extraction point.
 
-    ``nds`` is the time downsampling of the data relative to the native stream (1 at top
-    level; ``nds*Dt`` inside a wi_sub_pipeline), which only a container needs, to resolve a
-    ``wi_sub_pipeline`` given as ``nds_out``.
+    A whole file should go through :func:`legacy_chain_from_json`, which does the marking;
+    called on an unmarked tree, this skips every ``mask_counter``. ``nds`` is the time
+    downsampling of the data relative to the native stream (1 at top level; ``nds*Dt`` inside
+    a wi_sub_pipeline), which only a container needs, to resolve a ``wi_sub_pipeline`` given
+    as ``nds_out``.
     """
 
     from .GpuContainerBase import GpuContainerBase     # here, not at module level: import cycle
@@ -205,6 +219,12 @@ def transform_from_json_dict(d, nbeams, nfreq, ntime, nds=1):
         raise ValueError(f"expected a legacy json element with a 'class_name' key, got {d!r}")
 
     name = d['class_name']
+    if (name == 'mask_counter') and not d.get(LEGACY_EXTRACT_KEY, False):
+        atomic_print(f"transform_from_json_dict: skipping a 'mask_counter' element (where="
+                     f"{d.get('where')!r}): in the old code it only fed monitoring statistics."
+                     f" The LAST mask_counter of a chain is its extraction point and becomes an"
+                     f" RfiMaskExtractor (see legacy_chain_from_json)", fd=2)
+        return None
     if name in IGNORED_JSON_CLASSES:
         # To stderr, so that a converter writing yaml to stdout stays clean.
         atomic_print(f"transform_from_json_dict: skipping a '{name}' element (no pirate counterpart,"
@@ -219,6 +239,63 @@ def transform_from_json_dict(d, nbeams, nfreq, ntime, nds=1):
     if issubclass(cls, GpuContainerBase):
         return cls.from_json_dict(d, nbeams, nfreq, ntime, nds=nds)
     return cls.from_json_dict(d, nbeams, nfreq, ntime)
+
+
+def _legacy_leaves(d):
+    """The leaf elements of a legacy json tree, in document order: a 'pipeline' yields its
+    elements' leaves, a 'wi_sub_pipeline' its sub-pipeline's, anything else itself."""
+
+    name = d.get('class_name') if isinstance(d, dict) else None
+    if name == 'pipeline':
+        for e in d.get('elements', []):
+            yield from _legacy_leaves(e)
+    elif name == 'wi_sub_pipeline':
+        yield from _legacy_leaves(d.get('sub_pipeline', {}))
+    else:
+        yield d
+
+
+def legacy_chain_from_json(d, nbeams, nfreq, ntime):
+    """Build the transform that a WHOLE legacy rf_pipelines json describes, at the given
+    geometry: the entry point for a legacy file (``Pipeline.read_json_file`` and
+    ``pirate_frb cfrb json2yaml`` both come here).
+
+    THE LAST ``mask_counter`` IS THE EXTRACTION POINT. The old CHIME L1 server saved the RFI
+    mask at the last ``mask_counter`` of its chain, in document order, and used the others
+    for monitoring statistics only. So this marks the last one (a private key on a COPY of
+    the tree; the caller's dict is untouched), which :func:`transform_from_json_dict` then
+    turns into an :class:`RfiMaskExtractor`, and skips the rest with a note.
+
+    The L1 server also refused a chain in which a clipper followed that mask_counter. Pirate
+    runs such a chain -- the mask is whatever the extractor sees -- but prints a note on
+    stderr, since the mask then differs from what the old server would have saved.
+
+    Returns the top-level transform, or None if the top-level element has no pirate
+    counterpart (a lone writer, say).
+    """
+
+    d = copy.deepcopy(d)
+    leaves = list(_legacy_leaves(d))
+    counters = [i for (i, e) in enumerate(leaves) if e.get('class_name') == 'mask_counter']
+
+    if counters:
+        last = counters[-1]
+        leaves[last][LEGACY_EXTRACT_KEY] = True
+
+        clippers_after = [e['class_name'] for e in leaves[last+1:]
+                          if 'clipper' in str(e.get('class_name', ''))]
+        if clippers_after:
+            atomic_print(f"legacy_chain_from_json: {len(clippers_after)} clipper(s) follow the last"
+                         f" mask_counter ({clippers_after}). The old L1 server refused such a"
+                         f" chain; pirate takes the mask at the RfiMaskExtractor, before them",
+                         fd=2)
+
+    chain = transform_from_json_dict(d, nbeams, nfreq, ntime)
+
+    if counters and (chain is not None) and (chain.get_mask_extractor() is None):
+        raise RuntimeError('legacy_chain_from_json: internal error: the marked mask_counter did'
+                           ' not become an RfiMaskExtractor')
+    return chain
 
 
 def check_json_keys(d, class_name, required):

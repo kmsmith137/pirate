@@ -72,8 +72,9 @@ class GpuPythonTransform(GpuTransform):
 
         Pipeline.read_yaml_file(path, nbeams=1, nfreq=16384, ntime=4096, classes=[MyTransform])
 
-    There is no ``from_json_dict``: the legacy rf_pipelines json describes only the ported
-    transforms. ``pirate_frb.chimefrb.utils`` states the whole interface.
+    There is no ``from_json_dict`` unless the transform has a legacy counterpart, which only
+    :class:`RfiMaskExtractor` (the old ``mask_counter``) does. ``pirate_frb.chimefrb.utils``
+    states the whole interface.
 
     Three things to know about the class hierarchy. A pipeline accepts any
     :class:`GpuTransform`, C++ or python, so the ``isinstance`` checks in the package test

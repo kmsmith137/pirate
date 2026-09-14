@@ -1,6 +1,6 @@
 // Old-side driver for the 'assembled_chunk_decode' spot test.
 //
-//    driver <input.npy> <output.npy> [force=reference|fast]
+//    driver <input.npy> <output.npy> [force=reference|fast] [prescale=<float>]
 //
 // LIBS: -lch_frb_io -lhdf5 -llz4 -lzmq -ljsoncpp -lcurl
 //
@@ -12,6 +12,10 @@
 // are being compared against.  Passing the file through memory rather than through a
 // temp file means the adaptor -- convert<shared_ptr<assembled_chunk>> -- is exercised
 // directly, which is where the format actually lives.
+//
+// 'prescale' is passed straight to decode(): the CHIME L1 server decoded with
+// intensity_prescale = 1e-4, and pirate's decode_intensity(scale=...) claims to reproduce
+// that arithmetic, so the test runs both values.
 //
 // 'force' selects which decode() ch_frb_io uses.  assembled_chunk::make() returns a
 // fast_assembled_chunk (AVX2 kernels) when nt_per_packet==16 and nupfreq is even, and a
@@ -25,6 +29,7 @@
 #include "../npy.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -44,13 +49,14 @@ static std::string get_param(int argc, char **argv, const char *key, const char 
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: driver <input.npy> <output.npy> [force=reference|fast]\n");
+        fprintf(stderr, "usage: driver <input.npy> <output.npy> [force=reference|fast] [prescale=<float>]\n");
         return 2;
     }
 
     try {
         npy::array<uint8_t> in = npy::read<uint8_t> (argv[1]);
         std::string force = get_param(argc, argv, "force", "reference");
+        float prescale = std::strtof(get_param(argc, argv, "prescale", "1").c_str(), nullptr);
 
         if ((force != "reference") && (force != "fast")) {
             fprintf(stderr, "driver: force= must be 'reference' or 'fast'\n");
@@ -85,7 +91,7 @@ int main(int argc, char **argv)
         size_t npix = size_t(nfreq) * size_t(nt);
 
         std::vector<float> out(2 * npix);
-        ch->decode(out.data(), out.data() + npix, nt, nt);
+        ch->decode(out.data(), out.data() + npix, nt, nt, prescale);
 
         npy::write<float> (argv[2], { size_t(2), size_t(nfreq), size_t(nt) }, out.data());
     }

@@ -6,7 +6,7 @@ the class docstring for what a subclass supplies and what it inherits.
 
 from .GpuPythonTransform import GpuPythonTransform
 from .cpp_transforms import GpuTransform
-from .utils import (pipeline_yaml_header, read_json, read_yaml,
+from .utils import (legacy_chain_from_json, pipeline_yaml_header, read_json, read_yaml,
                     transform_from_json_dict, transform_from_yaml_dict, write_yaml)
 
 
@@ -113,6 +113,17 @@ class GpuContainerBase(GpuPythonTransform):
         for t in self.transforms:
             t.launch(intensity, weights, scratch)
 
+    def get_mask_extractor(self):
+        """The unique :class:`RfiMaskExtractor` among this container's elements, at any depth,
+        or None; raises ``ValueError`` if there is more than one (see
+        :meth:`GpuTransform.get_mask_extractor`)."""
+        found = [e for e in (t.get_mask_extractor() for t in self.transforms) if e is not None]
+        if len(found) > 1:
+            raise ValueError(f'{type(self).__name__}.get_mask_extractor(): this container holds'
+                             f' {len(found)} RfiMaskExtractors, and a chain with more than one'
+                             f' extraction point has no single mask')
+        return found[0] if found else None
+
     # ---------------------------------------------------------------------------------
     #
     # The yaml and legacy-json forms of the element list
@@ -176,8 +187,13 @@ class GpuContainerBase(GpuPythonTransform):
         """Read a legacy rf_pipelines json file (one written by the old ``jsonize()``) whose
         top-level element is this class's, building it for the given data geometry. Elements
         with no pirate counterpart that do not modify the data are skipped, with a note on
-        stderr; see ``chimefrb.utils``."""
-        return cls.from_json_dict(read_json(filename), nbeams, nfreq, ntime)
+        stderr, and the chain's last ``mask_counter`` becomes an :class:`RfiMaskExtractor`;
+        see ``chimefrb.utils.legacy_chain_from_json``."""
+        chain = legacy_chain_from_json(read_json(filename), nbeams, nfreq, ntime)
+        if not isinstance(chain, cls):
+            raise ValueError(f'{cls.__name__}.read_json_file: the top-level element of {filename!r}'
+                             f' is a {type(chain).__name__}, not a {cls.__name__}')
+        return chain
 
     def write_yaml_file(self, filename):
         """Write :meth:`to_yaml_dict` to a yaml file, after a comment saying how to read it

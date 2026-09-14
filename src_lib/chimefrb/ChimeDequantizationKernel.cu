@@ -43,7 +43,7 @@ chime_dequantize_kernel(float *intensity, float *weights,
                         const float *scales, const float *offsets,
                         const uint8_t *data, const uint8_t *rfi_mask,
                         long nfreq, long nt, long nt_coarse, long i_fstride, long w_fstride,
-                        int nupfreq, int fdiv, bool apply_rfimask, long nwarps)
+                        int nupfreq, int fdiv, bool apply_rfimask, float scale, long nwarps)
 {
     // Decompose the warp index into (f, t_tile): one integer division per warp.
     long g = long(blockIdx.x) * blockDim.y + threadIdx.y;
@@ -82,10 +82,14 @@ chime_dequantize_kernel(float *intensity, float *weights,
         const long itc = t >> 4;
         const uint32_t u = src[t];
 
-        // ONE fused multiply-add, as the CPU reference's _mm256_fmadd_ps is: written as
-        // fmaf() rather than (s*x + o) so that a single rounding is not left to the
-        // compiler's contraction. This is what makes the two bit-identical.
-        float y = fmaf(sc[itc], float(u), of[itc]);
+        // The scale is applied to the two coefficients FIRST, each product rounded once
+        // (__fmul_rn is never contracted), and then ONE fused multiply-add, as the CPU
+        // reference's _mm256_fmadd_ps is: written as fmaf() rather than (s*x + o) so that a
+        // single rounding is not left to the compiler's contraction. This is what makes the
+        // two bit-identical, and it is the operation order of ch_frb_io's decode(prescale).
+        const float s = __fmul_rn(sc[itc], scale);
+        const float o = __fmul_rn(of[itc], scale);
+        float y = fmaf(s, float(u), o);
         float w = ((u != 0) && (u != 255)) ? 1.0f : 0.0f;
 
         if (apply_rfimask) {
@@ -200,7 +204,7 @@ static void _check_output(const Array<float> &arr, const char *name, long nfreq,
 void ChimeDequantizationKernel::launch(Array<float> &intensity, Array<float> &weights,
                                        const Array<float> &scales, const Array<float> &offsets,
                                        const Array<uint8_t> &data, const Array<uint8_t> &rfi_mask,
-                                       bool apply_rfimask, cudaStream_t stream) const
+                                       bool apply_rfimask, float scale, cudaStream_t stream) const
 {
     _check_output(intensity, "intensity", nfreq, nt);
     _check_output(weights, "weights", nfreq, nt);
@@ -244,7 +248,7 @@ void ChimeDequantizationKernel::launch(Array<float> &intensity, Array<float> &we
     chime_dequantize_kernel <<< nblocks, nthreads, 0, stream >>>
         (intensity.data, weights.data, scales.data, offsets.data, data.data, rfi_mask.data,
          nfreq, nt, nt_coarse, intensity.strides[0], weights.strides[0],
-         int(nupfreq), int(fdiv), apply_rfimask, nwarps);
+         int(nupfreq), int(fdiv), apply_rfimask, scale, nwarps);
 
     CUDA_PEEK("chime_dequantize_kernel");
 }
@@ -303,7 +307,7 @@ void ChimeDequantizationKernel::time_selected()
             double dt = 0.0;
 
             while (kt.next()) {
-                k.launch(out_i, out_w, scales, offsets, data, rfi_mask, apply_rfimask, kt.stream);
+                k.launch(out_i, out_w, scales, offsets, data, rfi_mask, apply_rfimask, 1.0f, kt.stream);
                 if (kt.warmed_up)
                     dt = kt.dt;
             }
@@ -322,7 +326,7 @@ void ChimeDequantizationKernel::time_selected()
             double dt = 0.0;
 
             while (kt.next()) {
-                k.launch(slice_i, slice_w, scales, offsets, data, rfi_mask, apply_rfimask, kt.stream);
+                k.launch(slice_i, slice_w, scales, offsets, data, rfi_mask, apply_rfimask, 1.0f, kt.stream);
                 if (kt.warmed_up)
                     dt = kt.dt;
             }

@@ -120,6 +120,20 @@ web viewer) that pirate has no counterpart for, which is also why `mask_counter`
 `IGNORED_JSON_CLASSES` in `pirate_frb/chimefrb/utils.py`. Neither kernel of the pair is a
 `GpuTransform`, and neither appears in a chain.
 
+Where in a chain the mask is taken is itself a transform, `RfiMaskExtractor`
+(`pirate_frb/chimefrb/RfiMaskExtractor.py`, python): it changes nothing and packs the weights
+it sees, at its own resolution, with `RfiMaskPackingKernel`. It is the old `mask_counter` in
+its mask-saving role -- the CHIME L1 server saved the mask at the LAST mask_counter of its
+chain and used the others for statistics, so the legacy-json reader
+(`chimefrb.utils.legacy_chain_from_json`, behind `Pipeline.read_json_file` and `cfrb
+json2yaml`) turns that one into an extractor and skips the rest. Since `launch()` carries only
+(intensity, weights, scratch, stream), the extractor's destination is PLANTED before a launch
+with `set_rfi_mask()`, and every transform has `get_mask_extractor()` (None for a leaf, the
+unique one for a container) so that a driver can find it. That driver is `ChimePreDedisperser`
+(`pirate_frb/chimefrb/ChimePreDedisperser.py`, python): chunks in, one mask per chunk out, the
+decode, the chain and the copies in between, on one stream with no ring buffers. `pirate_frb
+cfrb reproduce_rfimask` runs it over an acquisition and compares against the saved masks.
+
 Surveying files is a different job from reading them, and `AssembledChunk.from_msgpack(filename,
 metadata_only=True)` is the cheap way to do it: it parses every scalar and stops before the
 array bodies, ~30x faster than a full read and validating the file just as thoroughly. The

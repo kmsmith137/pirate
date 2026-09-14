@@ -5,9 +5,10 @@ Dispatched from ``python -m pirate_frb test --cfrb``.
 The oracle is ``AssembledChunk.decode_intensity()`` / ``decode_weights()`` -- the CPU
 implementation of the same operation -- and the comparison is BITWISE, with no tolerance.
 That is not optimism: the intensity is one fused multiply-add on both sides (AVX2's
-``_mm256_fmadd_ps`` and the GPU's FFMA both round once), and the weights are comparisons
-against 0 and 255. Two things the bitwise comparison is there to catch, which a tolerance
-would hide:
+``_mm256_fmadd_ps`` and the GPU's FFMA both round once), preceded on both sides by the
+same two float32 products with ``scale`` (drawn at random here, including the production
+1e-4), and the weights are comparisons against 0 and 255. Two things the bitwise
+comparison is there to catch, which a tolerance would hide:
 
 - masking must be a SELECT, not a multiply. The reference ANDs the float with an
   all-ones/all-zeros mask, so a masked sample is +0.0 whatever it held; multiplying by 0.0f
@@ -29,7 +30,7 @@ import numpy as np
 
 from . import AssembledChunk, ChimeDequantizationKernel
 from ..utils import atomic_print
-from .test_assembled_chunk import (TempChunkFile, _expect_raise, make_random_chunk)
+from .test_assembled_chunk import (TempChunkFile, _expect_raise, make_random_chunk, random_scale)
 from .testutils import default_rng as _default_rng
 
 
@@ -57,9 +58,9 @@ def _gpu_inputs(cp, c):
             mask)
 
 
-def _tag(c, apply_rfimask, warps):
+def _tag(c, apply_rfimask, warps, scale):
     return (f'(nfreq,nt)=({c.nfreq},{c.nt}) nupfreq={c.nupfreq} nt_coarse={c.nt_coarse}'
-            f' nrfifreq={c.nrfifreq} apply_rfimask={apply_rfimask} warps={warps}')
+            f' nrfifreq={c.nrfifreq} apply_rfimask={apply_rfimask} warps={warps} scale={scale:g}')
 
 
 def _compare(got, want, name, tag):
@@ -74,7 +75,7 @@ def _compare(got, want, name, tag):
             f' got {got[f,t]!r}, want {want[f,t]!r}. [{tag}]')
 
 
-def _launch(cp, c, inputs, apply_rfimask, warps, out=None):
+def _launch(cp, c, inputs, apply_rfimask, warps, scale, out=None):
     """Run the kernel on 'c', returning (intensity, weights) as numpy arrays.
 
     'out' is an optional (intensity, weights) pair of cupy arrays to write into -- which is
@@ -93,7 +94,7 @@ def _launch(cp, c, inputs, apply_rfimask, warps, out=None):
                                                             c.nt_coarse)
     assert (k.nupfreq, k.warps_per_block) == (c.nupfreq, warps)
 
-    k.launch(out[0], out[1], scales, offsets, data, mask, apply_rfimask)
+    k.launch(out[0], out[1], scales, offsets, data, mask, apply_rfimask, scale=scale)
     cp.cuda.get_current_stream().synchronize()
     return (cp.asnumpy(out[0]), cp.asnumpy(out[1]))
 
@@ -102,12 +103,13 @@ def _check_kernel(cp, rng, c, inputs, verbose):
     """The GPU kernel against the CPU decode, bitwise, for every applicable apply_rfimask."""
 
     warps = int(rng.choice(WARP_COUNTS))
+    scale = random_scale()
     mask_choices = (False, True) if c.has_rfi_mask else (False,)
 
     for apply_rfimask in mask_choices:
-        (got_i, got_w) = _launch(cp, c, inputs, apply_rfimask, warps)
-        tag = _tag(c, apply_rfimask, warps)
-        _compare(got_i, np.asarray(c.decode_intensity(apply_rfimask=apply_rfimask)),
+        (got_i, got_w) = _launch(cp, c, inputs, apply_rfimask, warps, scale)
+        tag = _tag(c, apply_rfimask, warps, scale)
+        _compare(got_i, np.asarray(c.decode_intensity(apply_rfimask=apply_rfimask, scale=scale)),
                  'intensity', tag)
         _compare(got_w, np.asarray(c.decode_weights(apply_rfimask=apply_rfimask)),
                  'weights', tag)
@@ -130,6 +132,7 @@ def _check_freq_stride(cp, rng, c, inputs, verbose):
     off = int(rng.integers(0, pad + 1))
     apply_rfimask = bool(c.has_rfi_mask and (rng.uniform() < 0.5))
     warps = int(rng.choice(WARP_COUNTS))
+    scale = random_scale()
 
     # Independent strides for the two outputs, since the kernel takes them separately: a
     # kernel that used the intensity's stride for both would pass with equal padding.
@@ -140,10 +143,10 @@ def _check_freq_stride(cp, rng, c, inputs, verbose):
     full_w = cp.full((c.nfreq, c.nt + pad_w), np.nan, dtype=cp.float32)
     out = (full_i[:, off:off+c.nt], full_w[:, off_w:off_w+c.nt])
 
-    (got_i, got_w) = _launch(cp, c, inputs, apply_rfimask, warps, out=out)
-    tag = _tag(c, apply_rfimask, warps) + f' pad=({pad},{pad_w}) off=({off},{off_w})'
+    (got_i, got_w) = _launch(cp, c, inputs, apply_rfimask, warps, scale, out=out)
+    tag = _tag(c, apply_rfimask, warps, scale) + f' pad=({pad},{pad_w}) off=({off},{off_w})'
 
-    _compare(got_i, np.asarray(c.decode_intensity(apply_rfimask=apply_rfimask)),
+    _compare(got_i, np.asarray(c.decode_intensity(apply_rfimask=apply_rfimask, scale=scale)),
              'intensity', tag)
     _compare(got_w, np.asarray(c.decode_weights(apply_rfimask=apply_rfimask)),
              'weights', tag)

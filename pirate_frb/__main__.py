@@ -41,6 +41,8 @@ from .chimefrb import test_wt_upsampling_kernel as chimefrb_wt_tests
 from .chimefrb import test_chime_dequantization_kernel as chimefrb_cdq_tests
 from .chimefrb import test_rfi_mask_packing_kernel as chimefrb_rmp_tests
 from .chimefrb import test_pipeline as chimefrb_pipe_tests
+from .chimefrb import test_rfi_mask_extractor as chimefrb_rme_tests
+from .chimefrb import test_chime_pre_dedisperser as chimefrb_cpd_tests
 from . import kernels
 from . import loose_ends
 from . import core
@@ -339,6 +341,8 @@ def test(args):
             chimefrb_pd_tests.test_polynomial_detrender(i)
             chimefrb_wt_tests.test_wt_upsampling_kernel(i)
             chimefrb_pipe_tests.test_pipeline(i)
+            chimefrb_rme_tests.test_rfi_mask_extractor(i)
+            chimefrb_cpd_tests.test_chime_pre_dedisperser(i)
 
         if run_all_tests or args.zomb:
             loose_ends.test_avx2_m64_outbuf()
@@ -1888,10 +1892,11 @@ def parse_cfrb(subparsers):
     and timing a chain on the GPU. The port's unit tests are 'pirate_frb test --cfrb' and its
     per-kernel timings are 'pirate_frb time --cfrb'; neither belongs here.
     """
-    help_text = "Subcommand for the chimefrb port: convert a legacy json chain, time a chain (see cfrb --help)"
+    help_text = "Subcommand for the chimefrb port: convert a legacy json chain, time a chain, reproduce a saved RFI mask (see cfrb --help)"
     sub = _add_group(subparsers, "cfrb", help_text)
     parse_cfrb_json2yaml(sub)
     parse_cfrb_time_pipeline(sub)
+    parse_cfrb_reproduce_rfimask(sub)
 
 
 ######################################   cfrb json2yaml command  ####################################
@@ -1919,11 +1924,13 @@ def cfrb_json2yaml(args):
 
     The geometry flags are needed to BUILD the chain -- every transform is constructed for a
     block shape -- but the yaml records no geometry, and can be read back at any shape the
-    transforms accept. Notes from the conversion (elements skipped because they have no pirate
-    counterpart, the CHIME band assumed for badchannel_mask) go to stderr, so that stdout is
+    transforms accept. The chain's last mask_counter becomes an RfiMaskExtractor and the
+    others are skipped (chimefrb.utils.legacy_chain_from_json). Notes from the conversion
+    (elements skipped because they have no pirate counterpart, the CHIME band assumed for
+    badchannel_mask, a clipper after the extraction point) go to stderr, so that stdout is
     clean yaml.
     """
-    from .chimefrb.utils import (pipeline_yaml_header, read_json, transform_from_json_dict,
+    from .chimefrb.utils import (legacy_chain_from_json, pipeline_yaml_header, read_json,
                                  yaml_string)
 
     # Below 40, every parameter wraps (a transform's opening '- {class_name: ...,' is
@@ -1932,7 +1939,7 @@ def cfrb_json2yaml(args):
     if args.width < 40:
         sys.exit(f'pirate_frb cfrb json2yaml: expected -w/--width >= 40, got {args.width}')
 
-    chain = transform_from_json_dict(read_json(args.json_file), args.nbeams, args.nfreq, args.ntime)
+    chain = legacy_chain_from_json(read_json(args.json_file), args.nbeams, args.nfreq, args.ntime)
     if chain is None:
         sys.exit(f'{args.json_file}: the top-level element has no pirate counterpart')
 
@@ -2007,6 +2014,12 @@ def cfrb_time_pipeline(args):
         chain = transform_from_yaml_dict(d, nbeams, nfreq, ntime)
         shape = (nbeams, nfreq, ntime)
 
+        # A chain with an RfiMaskExtractor refuses to launch with nothing planted, so plant a
+        # whole-block mask nobody reads: the packing is part of what is being timed.
+        ext = chain.get_mask_extractor()
+        if ext is not None:
+            ext.set_rfi_mask(cp.empty((1, nbeams, ext.nfreq, ext.ntime // 8), dtype=cp.uint8))
+
         intensity0 = cp.random.standard_normal(shape, dtype=cp.float32)
         weights0 = cp.random.random(shape, dtype=cp.float32)
         intensity = cp.empty(shape, dtype=cp.float32)
@@ -2035,6 +2048,50 @@ def cfrb_time_pipeline(args):
 
         del intensity0, weights0, intensity, weights, scratch, chain
         cp.get_default_memory_pool().free_all_blocks()
+
+
+##################################   cfrb reproduce_rfimask command  ###############################
+
+
+def parse_cfrb_reproduce_rfimask(subparsers):
+    from .chimefrb.reproduce_rfimask import REALTIME_PRESCALE
+
+    help_text = "Rerun an acquisition's RFI chain on the GPU and compare the mask with the one saved in real time"
+    parser = subparsers.add_parser("reproduce_rfimask", help=help_text, description=help_text)
+    parser.set_defaults(func=cfrb_reproduce_rfimask)
+    parser.add_argument('acqdir', metavar='ACQDIR',
+                        help='directory of chunk_NNNNNNNN.msg files written by the CHIME L1 server'
+                             ' (e.g. /scratch/tweiss_rfi/frb_B0037+56_down3_2026-05-22-09-26/beam_3146)')
+    parser.add_argument('yaml_file', metavar='PIPELINE_YML',
+                        help='the chain in the chimefrb yaml format, containing an RfiMaskExtractor'
+                             ' (e.g. configs/chimefrb/rfi_21_03_07.yml; see "pirate_frb cfrb json2yaml")')
+    parser.add_argument('-p', '--prescale', type=float, default=1.0,
+                        help=f'multiply the intensity by this at decode time (default 1; the real-time'
+                             f' pipeline used {REALTIME_PRESCALE:g})')
+    parser.add_argument('--ntime', type=int, default=4096,
+                        help='the block length the chain is built at (default 4096, as the L1 server ran it)')
+    parser.add_argument('--nfiles', type=int, default=0, metavar='N',
+                        help='after trimming, use only the first N files (a multiple of the chunks per block), for a quick run')
+    parser.add_argument('--nthreads', type=int, default=4, help='file-reading threads (default 4)')
+    parser.add_argument('--pinned', action='store_true',
+                        help='read the chunks into pinned host memory (a dummy-mode SlabAllocator), so their copies to the GPU are DMAs')
+    parser.add_argument('-g', '--gpu', type=int, default=0, help='GPU to use (default 0)')
+    parser.add_argument('-v', '--verbose', action='store_true', help='one line per file')
+
+
+def cfrb_reproduce_rfimask(args):
+    """The GPU counterpart of misc/chimefrb/01-reproduce-rfimask.py: the same file rules and
+    the same report, with pirate's transforms driven by ChimePreDedisperser. Exit status 0 if
+    the masks are identical, 2 if they differ, 1 on an error."""
+    from .chimefrb.reproduce_rfimask import reproduce_rfimask
+
+    try:
+        status = reproduce_rfimask(args.acqdir, args.yaml_file, prescale=args.prescale, ntime=args.ntime,
+                                   nfiles=args.nfiles, nthreads=args.nthreads, gpu=args.gpu,
+                                   pinned=args.pinned, verbose=args.verbose)
+    except (ValueError, RuntimeError) as e:
+        sys.exit(f'pirate_frb cfrb reproduce_rfimask: {e}')
+    sys.exit(status)
 
 
 #########################################   rpc subcommands  ########################################
