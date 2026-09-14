@@ -17,8 +17,10 @@ runs __init__.py first). Import these classes from pirate_frb.chimefrb, or from 
 from pirate_frb.pirate_pybind11, which hands back the same class objects but does not guarantee
 that the injections have run.
 
-Two bound classes have no injections and so do not appear here: AssembledChunk and
-GpuClipperBase, which __init__.py imports straight from pirate_frb.pirate_pybind11.
+Not every bound class in the subpackage is here. AssembledChunk and GpuClipperBase have no
+injections at all, and __init__.py imports them straight from pirate_frb.pirate_pybind11;
+AssembledChunkReader has its own file, since it is the step before the transforms rather
+than part of the transform interface.
 """
 
 import ksgpu

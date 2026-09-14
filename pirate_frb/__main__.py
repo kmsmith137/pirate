@@ -29,6 +29,7 @@ from . import pirate_pybind11
 from . import casm
 from . import chime
 from .chimefrb import test_assembled_chunk as chimefrb_tests
+from .chimefrb import test_assembled_chunk_reader as chimefrb_acr_tests
 from .chimefrb import test_wi_downsampling_kernel as chimefrb_wi_tests
 from .chimefrb import test_wrms_kernel as chimefrb_wrms_tests
 from .chimefrb import test_intensity_clipper as chimefrb_ic_tests
@@ -324,6 +325,7 @@ def test(args):
 
         if run_all_tests or args.cfrb:
             chimefrb_tests.test_assembled_chunk(i)
+            chimefrb_acr_tests.test_assembled_chunk_reader(i)
             chimefrb_wi_tests.test_wi_downsampling_kernel(i)
             chimefrb_wrms_tests.test_wrms_kernel(i)
             chimefrb_ic_tests.test_intensity_clipper(i)

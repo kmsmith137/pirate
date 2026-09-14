@@ -2,7 +2,7 @@
 // are defined in include/pirate/chimefrb/*.hpp; see pirate_pybind11.cpp for the main
 // module.
 //
-// EVERY method injection in this subpackage lives in one file,
+// The method injections of the transforms and kernels all live in one file,
 // pirate_frb/chimefrb/cpp_transforms.py, which applies them and re-exports the classes:
 //   - AssembledChunk, GpuClipperBase: none
 //   - GpuWiDownsamplingKernel: launch() converts stream=None to the current cupy stream
@@ -19,7 +19,13 @@
 //     pirate_frb/chimefrb/utils.py. GpuBadChannelMask's __init__ also normalizes
 //     its range arguments to python floats.
 //
-// The numpy reference for each class is a file of its own,
+// AssembledChunkReader is the exception: its injections are in a file of its own,
+// pirate_frb/chimefrb/AssembledChunkReader.py, since it is the step before the transforms
+// rather than part of the transform interface. They are __iter__ (so "for chunk in reader"
+// works), the context-manager pair, and __repr__, plus the class docstring (option 2 in
+// notes/docstrings.md), since the python interface IS the injection.
+//
+// The numpy reference for each transform and kernel is a file of its own,
 // pirate_frb/chimefrb/Reference<ClassName>.py, and holds no injections.
 
 #define PY_ARRAY_UNIQUE_SYMBOL PyArray_API_pirate
@@ -32,6 +38,7 @@
 #include <ksgpu/pybind11.hpp>
 
 #include "../include/pirate/chimefrb/AssembledChunk.hpp"
+#include "../include/pirate/chimefrb/AssembledChunkReader.hpp"
 #include "../include/pirate/chimefrb/BadChannelMask.hpp"
 #include "../include/pirate/chimefrb/ClipperAxis.hpp"
 #include "../include/pirate/chimefrb/ClipperBase.hpp"
@@ -260,6 +267,45 @@ void register_chimefrb_bindings(pybind11::module &m)
             "This is packet loss, and it is the only thing that distinguishes packet loss from\n"
             "RFI flagging -- the raw data is zero in these blocks either way. It is NOT an\n"
             "extra masking source: decode_weights() already zeroes those samples.")
+        ;
+
+    // AssembledChunkReader: no class docstring here -- it lives in the injector,
+    // pirate_frb/chimefrb/AssembledChunkReader.py (option 2 in notes/docstrings.md), next
+    // to the __iter__ and context-manager methods that are how python callers use this.
+    // shared_ptr holder: it is a stoppable class (notes/stoppable_class.md).
+    py::class_<AssembledChunkReader, std::shared_ptr<AssembledChunkReader>>(m, "AssembledChunkReader")
+        .def(py::init<const std::vector<std::string> &, long, const std::shared_ptr<SlabAllocator> &>(),
+            py::arg("filename_list"), py::arg("nthreads") = 4,
+            py::arg("allocator") = std::shared_ptr<SlabAllocator>(),
+            py::call_guard<py::gil_scoped_release>())
+
+        .def_readonly("filenames", &AssembledChunkReader::filenames)
+        .def_readonly("nfiles", &AssembledChunkReader::nfiles)
+        .def_readonly("nthreads", &AssembledChunkReader::nthreads)
+        .def_readonly("allocator", &AssembledChunkReader::allocator)
+
+        // is_stopped is lock-protected, so it goes through the lock-taking getter rather
+        // than def_readonly (notes/stoppable_class.md, "pybind11 bindings").
+        .def_property_readonly("is_stopped", &AssembledChunkReader::get_is_stopped)
+
+        // Releases the GIL: this blocks on the worker threads for as long as a file read
+        // takes, and must not stall the caller's other python threads meanwhile.
+        .def("get_chunk", &AssembledChunkReader::get_chunk,
+            py::call_guard<py::gil_scoped_release>(),
+            "The next file in ``filenames``, as an :class:`AssembledChunk`. Blocks until it\n"
+            "has been read. Returns None at the end of the list, and after a clean stop().\n"
+            "\n"
+            "Raises whatever from_msgpack() raised on that file, if it failed -- so the files\n"
+            "before it are still delivered first, exactly as a serial loop would. The reader\n"
+            "is stopped once that happens, and every later call raises the same error.")
+
+        // A no-argument lambda, as everywhere else in the codebase: python has no way to
+        // make a std::exception_ptr, so the only stop it can ask for is a clean one.
+        .def("stop", [](const AssembledChunkReader &self) { self.stop(); },
+            py::call_guard<py::gil_scoped_release>(),
+            "Stop the reader, cleanly: get_chunk() returns None from now on, even if chunks\n"
+            "have already been read, and the worker threads exit. Also stops 'allocator', if\n"
+            "one was given. Idempotent, and safe to call from any thread.")
         ;
 
     // GpuWiDownsamplingKernel: Python injections in cpp_transforms.py:

@@ -94,6 +94,13 @@ base is what prefixes its error messages), and only transforms
 with a legacy json form get a `from_json_dict()`. `pirate_frb cfrb json2yaml` converts an
 old json chain to the yaml form, and `pirate_frb cfrb time_pipeline` times one on the GPU.
 
+Feeding a chain from real data means reading a lot of `.msg` files, so `AssembledChunkReader`
+(`include/pirate/chimefrb/AssembledChunkReader.hpp`) does it with a thread pool while keeping
+serial semantics: chunks come back in filename order, and a file that fails to read raises at
+the point in the sequence where a serial loop would have raised, not before. It is a
+thread-backed class, so notes/thread_backed_class.md applies -- with one documented departure,
+that a worker's read error waits in its file's slot instead of stopping the reader on the spot.
+
 ## Appendix A: building the chimefrb code
 
 The 11 repos above do not build out of the box on a modern system, and their `master`

@@ -1,7 +1,8 @@
 """Pieces of the old CHIME FRB search, ported to pirate: a reader for its msgpack data
-files, GPU ports of the transforms in its production RFI chain (each with a numpy
-reference), and the two containers that chain them -- Pipeline and RfiMaskPipeline --
-which read the old json configs and read/write a yaml format of their own.
+files (one at a time with ``AssembledChunk``, or a whole list, several at once, with
+``AssembledChunkReader``), GPU ports of the transforms in its production RFI chain (each
+with a numpy reference), and the two containers that chain them -- Pipeline and
+RfiMaskPipeline -- which read the old json configs and read/write a yaml format of their own.
 
 Every transform is a subclass of ``GpuTransform`` (the interface is stated in
 ``utils.py``); one written in python subclasses ``GpuPythonTransform``, and the
@@ -26,6 +27,10 @@ from ..pirate_pybind11 import AssembledChunk, GpuClipperBase
 from .cpp_transforms import (GpuTransform, GpuBadChannelMask, GpuIntensityClipper,
                              GpuPolynomialDetrender, GpuSplineDetrender, GpuStdDevClipper,
                              GpuWiDownsamplingKernel, GpuWrmsKernel, GpuWtUpsamplingKernel)
+
+# AssembledChunkReader has injections of its own (iteration, the context manager), in a file
+# of its own: it is the step BEFORE the transforms, not part of the transform interface.
+from .AssembledChunkReader import AssembledChunkReader
 
 # GpuPythonTransform, the base class of a transform written in python, is plain python on
 # top of GpuTransform.

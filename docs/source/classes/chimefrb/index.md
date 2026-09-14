@@ -57,6 +57,7 @@ elements it holds are resolved too.
 | Class | Description |
 |---|---|
 | [`AssembledChunk`](AssembledChunk.md) | One "assembled_chunk in msgpack format" data file, and its decode methods |
+| [`AssembledChunkReader`](AssembledChunkReader.md) | Reads a list of those files with a thread pool, and hands them back in filename order |
 | [`GpuBadChannelMask`](GpuBadChannelMask.md) | Zeroes the weights of whole frequency channels (a port of `rf_pipelines::badchannel_mask`) |
 | [`GpuTransform`](GpuTransform.md) | Base class of every transform, C++ or python: the geometry and the checked `launch()` |
 | [`GpuPythonTransform`](GpuPythonTransform.md) | Base class of a transform written in python: what to define, and the contract `launch_checked()` gets |
@@ -78,6 +79,7 @@ elements it holds are resolved too.
 :maxdepth: 1
 
 AssembledChunk
+AssembledChunkReader
 GpuTransform
 GpuPythonTransform
 GpuContainerBase
