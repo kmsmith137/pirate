@@ -29,6 +29,7 @@ from . import loose_ends
 from . import core
 from . import varmap
 from . import rpc  # noqa: F401  (RPC client/server classes; also applies FrbGrouper injections)
+from . import chimefrb
 
 # Method injections for pybind11 classes live in per-class modules (e.g.
 # core/BumpAllocator.py, casm/CasmBeamformer.py, kernels/GpuDequantizationKernel.py,

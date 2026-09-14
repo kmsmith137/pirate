@@ -54,25 +54,29 @@ A transform that RUNS other transforms subclasses `GpuContainerBase` instead, on
 further down. That is how the yaml reader knows to pass `classes` on to it, so that the
 elements it holds are resolved too.
 
+The table and the sidebar below are ALPHABETICAL -- keep a new class in order rather than
+next to its relatives. The subpackage is large enough that finding a name beats reading a
+grouping, and the paragraphs above are where the relationships are explained.
+
 | Class | Description |
 |---|---|
 | [`AssembledChunk`](AssembledChunk.md) | One "assembled_chunk in msgpack format" data file, and its decode methods |
 | [`AssembledChunkReader`](AssembledChunkReader.md) | Reads a list of those files with a thread pool, and hands them back in filename order |
+| [`ExamplePythonTransform`](ExamplePythonTransform.md) | A worked example of a cupy transform: a 3-sigma clip per channel |
 | [`GpuBadChannelMask`](GpuBadChannelMask.md) | Zeroes the weights of whole frequency channels (a port of `rf_pipelines::badchannel_mask`) |
-| [`GpuTransform`](GpuTransform.md) | Base class of every transform, C++ or python: the geometry and the checked `launch()` |
-| [`GpuPythonTransform`](GpuPythonTransform.md) | Base class of a transform written in python: what to define, and the contract `launch_checked()` gets |
-| [`GpuContainerBase`](GpuContainerBase.md) | Base class of a transform that RUNS other transforms: what `Pipeline` and `RfiMaskPipeline` share |
 | [`GpuClipperBase`](GpuClipperBase.md) | What the chimefrb RFI clippers share on top of `GpuTransform`: axis, downsampling, the per-row statistic |
+| [`GpuContainerBase`](GpuContainerBase.md) | Base class of a transform that RUNS other transforms: what `Pipeline` and `RfiMaskPipeline` share |
 | [`GpuIntensityClipper`](GpuIntensityClipper.md) | Zeroes the weights of samples more than `sigma` standard deviations from a weighted mean; the chain's principal flagger (a port of `rf_kernels::intensity_clipper`) |
 | [`GpuPolynomialDetrender`](GpuPolynomialDetrender.md) | Fits and subtracts a polynomial in time per channel and chunk, zeroing the weights of poorly conditioned rows (a port of `rf_pipelines::polynomial_detrender`) |
-| [`GpuStdDevClipper`](GpuStdDevClipper.md) | Zeroes channels or time samples whose variance is an outlier (a port of `rf_kernels::std_dev_clipper`) |
+| [`GpuPythonTransform`](GpuPythonTransform.md) | Base class of a transform written in python: what to define, and the contract `launch_checked()` gets |
 | [`GpuSplineDetrender`](GpuSplineDetrender.md) | Fits and subtracts a regularized cubic spline in frequency, per time sample (a port of `rf_kernels::spline_detrender`) |
-| [`GpuWtUpsamplingKernel`](GpuWtUpsamplingKernel.md) | Zeroes the full-resolution weights under masked low-resolution cells (a port of `rf_kernels::weight_upsampler`) |
+| [`GpuStdDevClipper`](GpuStdDevClipper.md) | Zeroes channels or time samples whose variance is an outlier (a port of `rf_kernels::std_dev_clipper`) |
+| [`GpuTransform`](GpuTransform.md) | Base class of every transform, C++ or python: the geometry and the checked `launch()` |
 | [`GpuWiDownsamplingKernel`](GpuWiDownsamplingKernel.md) | Reduces an (intensity, weights) pair by `(Df, Dt)`, summing the weights rather than averaging them (a port of `rf_kernels::wi_downsampler`) |
 | [`GpuWrmsKernel`](GpuWrmsKernel.md) | The weighted mean and variance of each row, refined by iterated sigma clipping; the statistic both clippers are built on (a port of `rf_kernels::weighted_mean_rms`) |
+| [`GpuWtUpsamplingKernel`](GpuWtUpsamplingKernel.md) | Zeroes the full-resolution weights under masked low-resolution cells (a port of `rf_kernels::weight_upsampler`) |
 | [`Pipeline`](Pipeline.md) | Runs a list of transforms in order on one block (a port of `rf_pipelines::pipeline`) |
 | [`RfiMaskPipeline`](RfiMaskPipeline.md) | Runs a list of transforms on a downsampled copy and feeds the mask back (a port of `rf_pipelines::wi_sub_pipeline`) |
-| [`ExamplePythonTransform`](ExamplePythonTransform.md) | A worked example of a cupy transform: a 3-sigma clip per channel |
 
 ```{toctree}
 :hidden:
@@ -80,19 +84,19 @@ elements it holds are resolved too.
 
 AssembledChunk
 AssembledChunkReader
-GpuTransform
-GpuPythonTransform
-GpuContainerBase
+ExamplePythonTransform
 GpuBadChannelMask
 GpuClipperBase
+GpuContainerBase
 GpuIntensityClipper
 GpuPolynomialDetrender
+GpuPythonTransform
 GpuSplineDetrender
 GpuStdDevClipper
-GpuWtUpsamplingKernel
+GpuTransform
 GpuWiDownsamplingKernel
 GpuWrmsKernel
+GpuWtUpsamplingKernel
 Pipeline
 RfiMaskPipeline
-ExamplePythonTransform
 ```
