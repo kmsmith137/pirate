@@ -21,8 +21,8 @@ would pass here. That is what misc/chimefrb/spot_checks/rfi_badchannel_mask/ is 
 
 import numpy as np
 
-from . import GpuBadChannelMask, ReferenceBadChannelMask, badchannel_keep
-from .ReferenceBadChannelMask import FUDGE
+from . import GpuBadChannelMask, ReferenceBadChannelMask
+from .ReferenceBadChannelMask import FUDGE, badchannel_keep
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng
 

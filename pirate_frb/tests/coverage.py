@@ -860,8 +860,8 @@ def _sec_chimefrb(rep, ndraw):
     # ---- GpuIntensityClipper
 
     from ..chimefrb import test_intensity_clipper as ict
-    from ..chimefrb import (ReferenceWiDownsamplingKernel, ReferenceWrmsKernel,
-                            intensity_clip, wrms_view)
+    from ..chimefrb import ReferenceWiDownsamplingKernel, ReferenceWrmsKernel
+    from ..chimefrb.ReferenceIntensityClipper import intensity_clip, wrms_view
 
     rep.section('chimefrb.test_intensity_clipper randomization',
                 subtitle=f'{ndraw} draws of random_config() + random_geometry() + random_arrays()',
@@ -943,7 +943,8 @@ def _sec_chimefrb(rep, ndraw):
     # ---- GpuStdDevClipper
 
     from ..chimefrb import test_std_dev_clipper as sdt
-    from ..chimefrb import ReferenceStdDevClipper, clip_1d
+    from ..chimefrb import ReferenceStdDevClipper
+    from ..chimefrb.ReferenceStdDevClipper import clip_1d
 
     rep.section('chimefrb.test_std_dev_clipper randomization',
                 subtitle=f'{ndraw} draws of random_config() + random_geometry() + random_arrays()',

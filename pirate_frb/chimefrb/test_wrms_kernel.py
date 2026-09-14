@@ -50,7 +50,8 @@ misreading would pass everything here. That is what the spot check is for.
 
 import numpy as np
 
-from . import GpuWrmsKernel, ReferenceWrmsKernel, wrms_iterate, iclip
+from . import GpuWrmsKernel, ReferenceWrmsKernel
+from .ReferenceWrmsKernel import wrms_iterate, iclip
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng, plant_degenerate_rows, random_wi_pair
 

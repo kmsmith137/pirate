@@ -32,8 +32,9 @@ is what misc/chimefrb/spot_checks/rfi_intensity_clipper/ is for.
 
 import numpy as np
 
-from . import (GpuIntensityClipper,
-               GpuWiDownsamplingKernel, GpuWrmsKernel, ReferenceIntensityClipper, intensity_clip)
+from . import (GpuIntensityClipper, GpuWiDownsamplingKernel, GpuWrmsKernel,
+               ReferenceIntensityClipper)
+from .ReferenceIntensityClipper import intensity_clip
 from .test_wrms_kernel import EPS32, MARGIN
 from ..utils import atomic_print
 from .testutils import default_rng as _default_rng, plant_degenerate_rows, random_wi_pair

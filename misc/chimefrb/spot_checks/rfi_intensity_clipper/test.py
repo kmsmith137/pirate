@@ -44,8 +44,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harness
 
-from pirate_frb.chimefrb import (ReferenceIntensityClipper, ReferenceWiDownsamplingKernel,
-                                 intensity_clip)
+from pirate_frb.chimefrb import ReferenceIntensityClipper, ReferenceWiDownsamplingKernel
+from pirate_frb.chimefrb.ReferenceIntensityClipper import intensity_clip
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 

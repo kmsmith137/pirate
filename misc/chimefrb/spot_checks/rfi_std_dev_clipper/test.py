@@ -25,7 +25,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harness
 
-from pirate_frb.chimefrb import ReferenceStdDevClipper, std_dev_apply
+from pirate_frb.chimefrb import ReferenceStdDevClipper
+from pirate_frb.chimefrb.ReferenceStdDevClipper import std_dev_apply
 from pirate_frb.chimefrb.test_std_dev_clipper import (stage2_bracket, end_to_end_bracket,
                                                       ill_conditioned, keep_bracket)
 

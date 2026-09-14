@@ -1892,7 +1892,7 @@ def parse_cfrb(subparsers):
 
 
 def parse_cfrb_json2yaml(subparsers):
-    from .chimefrb import YAML_WIDTH     # the -w default, so there is one source of truth
+    from .chimefrb.utils import YAML_WIDTH   # the -w default, so there is one source of truth
 
     help_text = "Convert a legacy rf_pipelines json RFI chain to the chimefrb yaml format (on stdout)"
     parser = subparsers.add_parser("json2yaml", help=help_text, description=help_text)
@@ -1917,8 +1917,8 @@ def cfrb_json2yaml(args):
     counterpart, the CHIME band assumed for badchannel_mask) go to stderr, so that stdout is
     clean yaml.
     """
-    from .chimefrb import (PIPELINE_YAML_HEADER, read_json, transform_from_json_dict,
-                           yaml_string)
+    from .chimefrb.utils import (PIPELINE_YAML_HEADER, read_json, transform_from_json_dict,
+                                 yaml_string)
 
     # Below 40, every parameter wraps (a transform's opening '- {class_name: ...,' is
     # already ~38 columns) and the inline form buys nothing; pyyaml would also silently
@@ -1979,7 +1979,7 @@ def cfrb_time_pipeline(args):
     up with nbeams*nchunks*ntime*tsamp/dt beams of a live stream.
     """
     import cupy as cp
-    from .chimefrb import read_yaml, transform_from_yaml_dict
+    from .chimefrb.utils import read_yaml, transform_from_yaml_dict
 
     ksgpu.set_cuda_device(args.gpu)
 

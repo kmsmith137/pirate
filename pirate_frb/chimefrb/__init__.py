@@ -36,23 +36,29 @@ from .AssembledChunkReader import AssembledChunkReader
 # top of GpuTransform.
 from .GpuPythonTransform import GpuPythonTransform
 
-# The numpy reference for each class above, and the standalone functions alongside them.
+# The numpy reference for each class above. The standalone functions in those files
+# (badchannel_keep, clip_1d, wrms_iterate, ...) are NOT re-exported: import them from the
+# module that defines them, e.g. 'from pirate_frb.chimefrb.ReferenceStdDevClipper import
+# clip_1d'. They are pieces of the ports, each validated on its own by a spot check, rather
+# than part of the transform interface.
 from .ReferenceWiDownsamplingKernel import ReferenceWiDownsamplingKernel
 from .ReferenceWtUpsamplingKernel import ReferenceWtUpsamplingKernel
-from .ReferenceWrmsKernel import ReferenceWrmsKernel, wrms_iterate, iclip
-from .ReferenceIntensityClipper import ReferenceIntensityClipper, intensity_clip, wrms_view
-from .ReferenceStdDevClipper import ReferenceStdDevClipper, clip_1d, std_dev_apply
-from .ReferenceBadChannelMask import ReferenceBadChannelMask, badchannel_keep
+from .ReferenceWrmsKernel import ReferenceWrmsKernel
+from .ReferenceIntensityClipper import ReferenceIntensityClipper
+from .ReferenceStdDevClipper import ReferenceStdDevClipper
+from .ReferenceBadChannelMask import ReferenceBadChannelMask
 from .ReferenceSplineDetrender import ReferenceSplineDetrender
 from .ReferencePolynomialDetrender import ReferencePolynomialDetrender
 
-# The transform interface (the "protocol"), and the two pipeline classes that run transforms.
-# GpuContainerBase imports utils, so it is imported here rather than with the base classes.
-from .utils import (CHIME_FREQ_RANGE, IGNORED_JSON_CLASSES, LEGACY_JSON_CLASS_NAMES,
-                    PIPELINE_YAML_HEADER, YAML_WIDTH,
-                    read_json, read_yaml, resolve_class, transform_from_json_dict,
-                    transform_from_yaml_dict, write_yaml, yaml_string)
+# The two pipeline classes that run transforms. Nothing from utils.py is re-exported either
+# (read_yaml, transform_from_yaml_dict, YAML_WIDTH, ...): import from pirate_frb.chimefrb.utils.
 from .ExamplePythonTransform import ExamplePythonTransform
 from .GpuContainerBase import GpuContainerBase
 from .Pipeline import Pipeline
 from .RfiMaskPipeline import RfiMaskPipeline
+
+# WARNING: the CLASSES above are load-bearing, and not merely a convenience. utils.
+# resolve_class() turns a yaml 'class_name' into a class by getattr() on this package, so
+# dropping one from this file makes every yaml file that names it unreadable -- reported as
+# "unknown transform class_name ...", which reads like a bad file rather than a missing
+# export. Functions are not resolved this way, which is why they can go.

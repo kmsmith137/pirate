@@ -2,8 +2,9 @@
 """Spot test: std_dev_clipper::_clip_1d() on its own, pirate vs rf_kernels.
 
 _clip_1d() is stage 2 of rf_kernels::std_dev_clipper: given one variance per row, it zeroes
-the outliers among them. This test compares pirate_frb.chimefrb.clip_1d() against the real
-function, which the driver calls directly.
+the outliers among them. This test compares clip_1d() (in
+pirate_frb/chimefrb/ReferenceStdDevClipper.py) against the real function, which the driver
+calls directly.
 
 WHY THIS TEST MATTERS MORE THAN MOST. _clip_1d() has no reference implementation anywhere
 in the old code: its own comment says it was never unit-tested, and the old test of the
@@ -26,7 +27,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harness
 
-from pirate_frb.chimefrb import clip_1d
+from pirate_frb.chimefrb.ReferenceStdDevClipper import clip_1d
 from pirate_frb.chimefrb.test_std_dev_clipper import stage2_bracket, ill_conditioned, keep_bracket
 
 HERE = os.path.dirname(os.path.abspath(__file__))
