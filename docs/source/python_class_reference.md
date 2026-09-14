@@ -14,9 +14,15 @@ uses the class, not by where its name appears.
 This is a judgement call about typical usage, and typical usage changes -- so revisit it
 when it stops matching how callers actually write code.
 
+% maxdepth is 1 on purpose. Raising it does NOT expand classes/chimefrb/index in this list
+% -- that page's own toctree is :hidden:, so it feeds the sidebar and not a parent toctree.
+% All a deeper maxdepth does here is pull in each page's py:class object entry (sphinx's
+% toc_object_entries, on by default since 5.2), so every class is listed twice. The sidebar
+% submenu works at maxdepth 1: furo builds it from the global toctree, not from this one.
+
 ```{toctree}
 ---
-maxdepth: 2
+maxdepth: 1
 ---
 classes/chimefrb/index
 classes/Acquisition
