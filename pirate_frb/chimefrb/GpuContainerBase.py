@@ -6,8 +6,8 @@ the class docstring for what a subclass supplies and what it inherits.
 
 from .GpuPythonTransform import GpuPythonTransform
 from .cpp_transforms import GpuTransform
-from .utils import (PIPELINE_YAML_HEADER, read_json, read_yaml,
-                           transform_from_json_dict, transform_from_yaml_dict, write_yaml)
+from .utils import (pipeline_yaml_header, read_json, read_yaml,
+                    transform_from_json_dict, transform_from_yaml_dict, write_yaml)
 
 
 class GpuContainerBase(GpuPythonTransform):
@@ -181,5 +181,6 @@ class GpuContainerBase(GpuPythonTransform):
 
     def write_yaml_file(self, filename):
         """Write :meth:`to_yaml_dict` to a yaml file, after a comment saying how to read it
-        (``chimefrb.utils.write_yaml``)."""
-        write_yaml(filename, self.to_yaml_dict(), header=PIPELINE_YAML_HEADER)
+        (``chimefrb.utils.pipeline_yaml_header``, ``chimefrb.utils.write_yaml``)."""
+        header = pipeline_yaml_header(type(self).__name__)
+        write_yaml(filename, self.to_yaml_dict(), header=header)

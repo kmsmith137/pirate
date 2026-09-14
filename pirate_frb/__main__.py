@@ -1917,7 +1917,7 @@ def cfrb_json2yaml(args):
     counterpart, the CHIME band assumed for badchannel_mask) go to stderr, so that stdout is
     clean yaml.
     """
-    from .chimefrb.utils import (PIPELINE_YAML_HEADER, read_json, transform_from_json_dict,
+    from .chimefrb.utils import (pipeline_yaml_header, read_json, transform_from_json_dict,
                                  yaml_string)
 
     # Below 40, every parameter wraps (a transform's opening '- {class_name: ...,' is
@@ -1937,7 +1937,8 @@ def cfrb_json2yaml(args):
     # __main__.py path under 'python -m pirate_frb').
     cmdline = (f'pirate_frb cfrb json2yaml {shlex.quote(args.json_file)}'
                f' --nbeams {args.nbeams} --nfreq {args.nfreq} --ntime {args.ntime} -w {args.width}')
-    header = f'# Created with: {cmdline}\n' + PIPELINE_YAML_HEADER
+    header = (f'# Created with: {cmdline}\n\n'
+              + pipeline_yaml_header(type(chain).__name__, from_json=True))
     sys.stdout.write(yaml_string(chain.to_yaml_dict(), header=header, width=args.width))
 
 

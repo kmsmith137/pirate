@@ -255,10 +255,32 @@ def axis_from_json(s):
 # are thin wrappers around these.
 
 
-# The comment Pipeline/RfiMaskPipeline.write_yaml_file() put at the top of a file.
-PIPELINE_YAML_HEADER = ('# A pirate_frb.chimefrb transform chain. Read with\n'
-                        '#   Pipeline.read_yaml_file(filename, nbeams=..., nfreq=..., ntime=...)\n'
-                        '# (or RfiMaskPipeline.read_yaml_file, if that is the top-level class_name).\n')
+def pipeline_yaml_header(class_name, from_json=False):
+    """The comment that Pipeline/RfiMaskPipeline.write_yaml_file() and 'pirate_frb cfrb
+    json2yaml' put at the top of a file: what the format is, and the line of python that
+    reads the file back.
+
+    ``class_name`` must be the file's top-level ``class_name`` ('Pipeline' or
+    'RfiMaskPipeline'), since that is the class whose ``read_yaml_file()`` accepts the
+    file -- ``GpuTransform.check_yaml_keys()`` rejects a file whose top-level class is a
+    different one, so a header naming the wrong class would send the reader into that
+    error. ``from_json`` adds a line saying the chain was converted from the legacy
+    rf_pipelines json format.
+
+    The result is ``#`` comment lines ending in a blank line, ready to be the ``header`` of
+    :func:`yaml_string` or :func:`write_yaml`."""
+
+    lines = ['This is the "pirate" yaml format for a CHIMEFRB transform chain.']
+
+    if from_json:
+        lines += ['It was converted from the "rf_pipelines" json format,'
+                  " using 'pirate_frb cfrb json2yaml'."]
+
+    lines += ['To read it:',
+              f'  pipeline = pirate_frb.chimefrb.{class_name}.read_yaml_file'
+              '(filename, nbeams=..., nfreq=..., ntime=...)']
+
+    return ''.join(f'# {line}\n' for line in lines) + '\n'
 
 
 # Line width that _YamlDumper wraps a transform's parameters at. A soft target: pyyaml
@@ -304,7 +326,8 @@ _YamlDumper.add_representer(dict, _represent_dict)
 def yaml_string(data, header=None, width=None):
     """``data`` (a plain dict, e.g. a ``to_yaml_dict()``) as yaml text, keys in their natural
     order and each transform's parameters inline (:class:`_YamlDumper`), preceded by
-    ``header`` (a string of ``#`` comment lines, ending in a newline) if one is given.
+    ``header`` (a string of ``#`` comment lines, ending in a newline -- see
+    :func:`pipeline_yaml_header`) if one is given.
 
     ``width`` is the wrap column, defaulting to :data:`YAML_WIDTH`. Note that pyyaml ignores
     a width of 4 or less (it falls back to 80), so callers that expose this should refuse a
