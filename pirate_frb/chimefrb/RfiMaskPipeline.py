@@ -9,11 +9,7 @@ import math
 
 from .GpuContainerBase import GpuContainerBase
 from .cpp_transforms import GpuWiDownsamplingKernel, GpuWtUpsamplingKernel
-from .utils import check_json_keys
-
-
-def _round_up(n, m):
-    return ((n + m - 1) // m) * m
+from .utils import check_json_keys, padded_scratch_nelts
 
 
 class RfiMaskPipeline(GpuContainerBase):
@@ -88,11 +84,12 @@ class RfiMaskPipeline(GpuContainerBase):
                              f' must both be multiples of 32, the output tile of GpuWiDownsamplingKernel'
                              f' (the full-resolution shape is then a multiple of (32*Df, 32*Dt))')
 
-        # Scratch layout: the downsampled intensity, the downsampled weights, then (at an
-        # offset rounded to 64 elements, for the transforms' wide loads) the transforms' own
-        # scratch.
+        # Scratch layout: the downsampled intensity, the downsampled weights, then the
+        # transforms' own scratch. Each piece is padded to a 128-byte boundary
+        # (padded_scratch_nelts()), so all three start on a cache line.
         ds_nelts = nbeams * nfreq_ds * ntime_ds
-        sub_offset = _round_up(2 * ds_nelts, 64)
+        ds_stride = padded_scratch_nelts(ds_nelts)
+        sub_offset = 2 * ds_stride
         super().__init__(nbeams, nfreq_ds * Df, ntime_ds * Dt,
                          sub_offset + self.max_scratch_nelts(transforms))
 
@@ -105,14 +102,15 @@ class RfiMaskPipeline(GpuContainerBase):
         self._upsampler = GpuWtUpsamplingKernel(Df, Dt, w_cutoff)
         self._ds_shape = (nbeams, nfreq_ds, ntime_ds)
         self._ds_nelts = ds_nelts
+        self._ds_stride = ds_stride
         self._sub_offset = sub_offset
 
     def launch_checked(self, intensity, weights, scratch):
         # Steps 1-3 of the class docstring. The pipeline's stream is current
         # (GpuTransform.launch() made it so), and every launch below defaults to it.
-        n = self._ds_nelts
+        (n, stride) = (self._ds_nelts, self._ds_stride)
         i_ds = scratch[:n].reshape(self._ds_shape)
-        w_ds = scratch[n:2*n].reshape(self._ds_shape)
+        w_ds = scratch[stride:stride+n].reshape(self._ds_shape)
         sub = scratch[self._sub_offset:]
 
         self._downsampler.launch(i_ds, w_ds, intensity, weights)

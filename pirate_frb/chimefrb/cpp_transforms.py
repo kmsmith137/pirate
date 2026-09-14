@@ -81,7 +81,9 @@ class GpuTransformInjections:
         scratch : cupy.ndarray or None
             1-d float32 with at least ``scratch_nelts`` elements (any array when that is 0),
             or None to allocate one -- convenient interactively, wasteful in a loop, since the
-            point of the argument is to share one allocation across a whole chain.
+            point of the argument is to share one allocation across a whole chain. The caller
+            is responsible for 128-byte alignment, which is not checked (a cupy allocation
+            always is): a transform's internal sub-arrays are aligned relative to the base.
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
 

@@ -169,10 +169,15 @@ GpuSplineDetrender::Geometry GpuSplineDetrender::_geometry(long nfreq, long ntim
 
 
 // The per-launch scratch, in the order launch_checked() carves it: gu (nbeams, nfrange,
-// ncomp, ntime), acoef (nbeams, N_phi, ntime), rmin (nbeams, 1, ntime).
+// ncomp, ntime), acoef (nbeams, N_phi, ntime), rmin (nbeams, 1, ntime). Each piece is padded
+// to a 128-byte boundary (padded_scratch_nelts(), in Transform.hpp), exactly as
+// carve_scratch() advances -- which is what makes the xassert_eq(pos, scratch_nelts) at the
+// end of launch_checked() hold.
 long GpuSplineDetrender::Geometry::scratch_nelts(long nbeams, long ntime) const
 {
-    return nbeams * ntime * (nfrange()*ncomp + N_phi + 1);
+    return (padded_scratch_nelts(nbeams * nfrange() * ncomp * ntime)
+            + padded_scratch_nelts(nbeams * N_phi * ntime)
+            + padded_scratch_nelts(nbeams * ntime));
 }
 
 

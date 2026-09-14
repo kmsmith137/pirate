@@ -38,7 +38,10 @@ raises RuntimeError, naming the transform, on a violation, before running the tr
   0), or the literal ``None``, which allocates one. There is deliberately no default, so
   that a caller who wants the allocation says ``scratch=None`` and can see it in the call.
   Contents on entry are ignored and on exit are garbage; a transform uses a prefix of it,
-  and it must not alias the data arrays. One call processes exactly one block.
+  and it must not alias the data arrays. One call processes exactly one block. The caller is
+  responsible for passing a 128-byte-aligned array, which is not checked (a cupy allocation
+  always is): the sub-arrays a transform carves out are aligned relative to the base, so a
+  misaligned base misaligns all of them.
 - ``stream`` is a cupy stream, or None for the current cupy stream. The launch is
   asynchronous on that stream; nothing synchronizes.
 
@@ -73,6 +76,22 @@ from ..utils import atomic_print
 # The CHIME band, which the legacy json never recorded: rf_pipelines' badchannel_mask read
 # it from the stream at bind time. GpuBadChannelMask.from_json_dict() assumes it.
 CHIME_FREQ_RANGE = (400.0, 800.0)
+
+
+# float32 elements per 128-byte GPU cache line (constants::bytes_per_gpu_cache_line in C++).
+SCRATCH_ALIGN = 32
+
+
+def padded_scratch_nelts(nelts):
+    """How many float32 elements a scratch sub-array of ``nelts`` OCCUPIES, once padded to a
+    128-byte boundary.
+
+    A transform that carves several sub-arrays out of one scratch array concatenates them
+    back-to-back, and each one should start on a cache line, which is what a coalesced GPU
+    load wants. Pad every piece with this, both when laying the array out and when adding up
+    ``scratch_nelts``, so the two cannot drift apart. The C++ twin is
+    ``padded_scratch_nelts()`` in include/pirate/chimefrb/Transform.hpp."""
+    return ((nelts + SCRATCH_ALIGN - 1) // SCRATCH_ALIGN) * SCRATCH_ALIGN
 
 
 # -------------------------------------------------------------------------------------------------

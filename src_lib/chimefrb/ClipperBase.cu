@@ -94,6 +94,9 @@ static long _wrms_R(ClipperAxis axis, long B, long F_ds, long T_ds)
 //    mean, var      wrms_R each
 //    GpuWrmsKernel        its own scratch, nonzero only on the global-memory path
 //
+// Every piece is padded to a 128-byte boundary (padded_scratch_nelts(), in Transform.hpp),
+// exactly as carve_scratch() advances, so the total below is what the carving consumes.
+//
 static long _checked_scratch_nelts(const char *name, long B, long nfreq, long ntime, long nt_chunk,
                                    ClipperAxis axis, long Df, long Dt, long niter,
                                    double iter_sigma, bool two_pass)
@@ -105,14 +108,14 @@ static long _checked_scratch_nelts(const char *name, long B, long nfreq, long nt
     const long R = _wrms_R(axis, B, F_ds, T_ds);
     const bool need_ds = (Df != 1) || (Dt != 1);
 
-    long n = 2*R;
+    long n = 2 * padded_scratch_nelts(R);
     if (need_ds)
-        n += 2*ncell;
+        n += 2 * padded_scratch_nelts(ncell);
     if (axis == ClipperAxis::FREQ)
-        n += 2*ncell;
+        n += 2 * padded_scratch_nelts(ncell);
 
     GpuWrmsKernel wrms(_wrms_L(axis, F_ds, T_ds), niter, iter_sigma, two_pass);
-    return n + wrms.scratch_nelts(R);
+    return n + padded_scratch_nelts(wrms.scratch_nelts(R));
 }
 
 

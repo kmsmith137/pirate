@@ -6,11 +6,26 @@
 #include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
 
+#include "../constants.hpp"   // bytes_per_gpu_cache_line
+#include "../inlines.hpp"     // align_up()
+
 namespace pirate {
 namespace chimefrb {
 #if 0
 }}  // editor auto-indent
 #endif
+
+
+// A transform that needs per-launch workspace carves it out of the caller's 'scratch'
+// array, one sub-array after another (see carve_scratch() below). Each sub-array starts on
+// a 128-byte boundary -- constants::bytes_per_gpu_cache_line, the alignment the GPU wants
+// for a coalesced load, and the one BumpAllocator and SlabAllocator hand out -- so a
+// sub-array of 'nelts' float32 elements OCCUPIES this many. carve_scratch() advances by it,
+// and every scratch_nelts() computation adds it up, which is what keeps the two in step.
+inline long padded_scratch_nelts(long nelts)
+{
+    return align_up(nelts, constants::bytes_per_gpu_cache_line / long(sizeof(float)));
+}
 
 
 // GpuTransform: the base class of every chimefrb transform -- anything that a
@@ -58,7 +73,9 @@ struct GpuTransform
     //   scratch    1-d, fully contiguous, in GPU memory, with at least scratch_nelts
     //              elements, aliasing neither data array. May be any array, even an empty
     //              one, when scratch_nelts == 0. Contents on entry are ignored and on exit
-    //              are garbage.
+    //              are garbage. The CALLER is responsible for passing a 128-byte-aligned
+    //              array (this is not checked): the sub-arrays a transform carves out of it
+    //              are aligned relative to its base, so a misaligned base misaligns them all.
     //
     //   stream     CUDA stream.
     //
@@ -76,9 +93,10 @@ struct GpuTransform
 
 protected:
     // carve_scratch(): the next sub-array of the given shape out of the caller's 1-d
-    // scratch array, advancing 'pos'. A transform that lays its per-launch workspace out
-    // inside the caller's scratch (GpuClipperBase, GpuSplineDetrender) carves the pieces in
-    // a fixed order, so that its scratch_nelts is the sum of the pieces.
+    // scratch array, advancing 'pos' by padded_scratch_nelts() of the shape's size, so that
+    // the NEXT sub-array starts 128-byte-aligned too. A transform that lays its per-launch
+    // workspace out inside the caller's scratch (GpuClipperBase, GpuSplineDetrender) carves
+    // the pieces in a fixed order, so that its scratch_nelts is the sum of the PADDED sizes.
     static ksgpu::Array<float> carve_scratch(ksgpu::Array<float> &scratch, long &pos,
                                              std::initializer_list<long> shape);
 };

@@ -148,7 +148,7 @@ Array<float> GpuTransform::carve_scratch(Array<float> &scratch, long &pos,
 
     xassert_le(pos + n, scratch.shape[0]);
     Array<float> ret = scratch.slice(0, pos, pos+n).reshape(shape);
-    pos += n;
+    pos += padded_scratch_nelts(n);   // the next sub-array starts 128-byte-aligned
     return ret;
 }
 
