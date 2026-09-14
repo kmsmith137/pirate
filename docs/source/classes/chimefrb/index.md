@@ -77,6 +77,7 @@ grouping, and the paragraphs above are where the relationships are explained.
 | [`GpuWrmsKernel`](GpuWrmsKernel.md) | The weighted mean and variance of each row, refined by iterated sigma clipping; the statistic both clippers are built on (a port of `rf_kernels::weighted_mean_rms`) |
 | [`GpuWtUpsamplingKernel`](GpuWtUpsamplingKernel.md) | Zeroes the full-resolution weights under masked low-resolution cells (a port of `rf_kernels::weight_upsampler`) |
 | [`Pipeline`](Pipeline.md) | Runs a list of transforms in order on one block (a port of `rf_pipelines::pipeline`) |
+| [`RfiMaskPackingKernel`](RfiMaskPackingKernel.md) | Packs the weights a chain leaves behind into a data file's bit-packed RFI mask, on the GPU |
 | [`RfiMaskPipeline`](RfiMaskPipeline.md) | Runs a list of transforms on a downsampled copy and feeds the mask back (a port of `rf_pipelines::wi_sub_pipeline`) |
 
 ```{toctree}
@@ -100,5 +101,6 @@ GpuWiDownsamplingKernel
 GpuWrmsKernel
 GpuWtUpsamplingKernel
 Pipeline
+RfiMaskPackingKernel
 RfiMaskPipeline
 ```

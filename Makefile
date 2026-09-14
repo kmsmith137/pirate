@@ -355,6 +355,7 @@ LIB_SRCFILES = \
   src_lib/chimefrb/ClipperBase.cu \
   src_lib/chimefrb/IntensityClipper.cu \
   src_lib/chimefrb/PolynomialDetrender.cu \
+  src_lib/chimefrb/RfiMaskPackingKernel.cu \
   src_lib/chimefrb/SplineDetrender.cu \
   src_lib/chimefrb/StdDevClipper.cu \
   src_lib/chimefrb/Transform.cpp \
@@ -409,6 +410,7 @@ PYFILES = \
   pirate_frb/chimefrb/__init__.py \
   pirate_frb/chimefrb/AssembledChunkReader.py \
   pirate_frb/chimefrb/ChimeDequantizationKernel.py \
+  pirate_frb/chimefrb/RfiMaskPackingKernel.py \
   pirate_frb/chimefrb/ReferenceBadChannelMask.py \
   pirate_frb/chimefrb/ReferenceIntensityClipper.py \
   pirate_frb/chimefrb/ReferencePolynomialDetrender.py \
@@ -431,6 +433,7 @@ PYFILES = \
   pirate_frb/chimefrb/test_intensity_clipper.py \
   pirate_frb/chimefrb/test_pipeline.py \
   pirate_frb/chimefrb/test_polynomial_detrender.py \
+  pirate_frb/chimefrb/test_rfi_mask_packing_kernel.py \
   pirate_frb/chimefrb/test_spline_detrender.py \
   pirate_frb/chimefrb/test_std_dev_clipper.py \
   pirate_frb/chimefrb/test_wi_downsampling_kernel.py \
@@ -594,6 +597,7 @@ HFILES = \
   include/pirate/chimefrb/ClipperBase.hpp \
   include/pirate/chimefrb/IntensityClipper.hpp \
   include/pirate/chimefrb/PolynomialDetrender.hpp \
+  include/pirate/chimefrb/RfiMaskPackingKernel.hpp \
   include/pirate/chimefrb/SplineDetrender.hpp \
   include/pirate/chimefrb/StdDevClipper.hpp \
   include/pirate/chimefrb/Transform.hpp \

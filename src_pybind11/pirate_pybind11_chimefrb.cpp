@@ -19,16 +19,20 @@
 //     pirate_frb/chimefrb/utils.py. GpuBadChannelMask's __init__ also normalizes
 //     its range arguments to python floats.
 //
-// Two classes are the exception, both of them steps BEFORE the transforms rather than part
-// of the transform interface, and both with their injections in a file of their own:
+// Three classes are the exception, none of them part of the transform interface -- they are
+// the steps that surround a chain rather than links in it -- and each with its injections in
+// a file of its own:
 //
 //   - AssembledChunkReader (pirate_frb/chimefrb/AssembledChunkReader.py): __iter__ (so
 //     "for chunk in reader" works), the context-manager pair, and __repr__, plus the class
 //     docstring (option 2 in notes/docstrings.md), since the python interface IS the
 //     injection.
-//   - ChimeDequantizationKernel (pirate_frb/chimefrb/ChimeDequantizationKernel.py):
-//     launch() converts stream=None to the current cupy stream and rfi_mask=None to an
-//     empty array. Its class docstring is here (option 1), like the other kernels'.
+//   - ChimeDequantizationKernel (pirate_frb/chimefrb/ChimeDequantizationKernel.py), the step
+//     BEFORE a chain: launch() converts stream=None to the current cupy stream and
+//     rfi_mask=None to an empty array. Its class docstring is here (option 1), like the
+//     other kernels'.
+//   - RfiMaskPackingKernel (pirate_frb/chimefrb/RfiMaskPackingKernel.py), the step AFTER
+//     a chain: launch() converts stream=None to the current cupy stream.
 //
 // The numpy reference for each transform and kernel is a file of its own,
 // pirate_frb/chimefrb/Reference<ClassName>.py, and holds no injections.
@@ -46,6 +50,7 @@
 #include "../include/pirate/chimefrb/AssembledChunkReader.hpp"
 #include "../include/pirate/chimefrb/BadChannelMask.hpp"
 #include "../include/pirate/chimefrb/ChimeDequantizationKernel.hpp"
+#include "../include/pirate/chimefrb/RfiMaskPackingKernel.hpp"
 #include "../include/pirate/chimefrb/ClipperAxis.hpp"
 #include "../include/pirate/chimefrb/ClipperBase.hpp"
 #include "../include/pirate/chimefrb/IntensityClipper.hpp"
@@ -1025,6 +1030,85 @@ void register_chimefrb_bindings(pybind11::module &m)
             "        divide nfreq. Ignored when apply_rfimask is False, and may then be empty.\n"
             "    apply_rfimask: if True, both outputs are +0.0 wherever the mask marks the\n"
             "        sample bad. No default, as for AssembledChunk.decode_intensity().\n"
+            "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
+        ;
+
+    // RfiMaskPackingKernel: Python injections in RfiMaskPackingKernel.py:
+    //   - launch: converts stream=None to the current cupy stream
+    py::class_<RfiMaskPackingKernel>(m, "RfiMaskPackingKernel",
+        "Turns the weights an RFI chain leaves behind into the bit-packed RFI mask that a\n"
+        "chimefrb data file carries, on the GPU::\n"
+        "\n"
+        "    rfi_mask[f, t/8] bit (t%8) = 1  if  weights[f,t] > 0,  else 0\n"
+        "\n"
+        "A SET bit means GOOD data, and the packing is LSB-FIRST: bit i of byte j is time\n"
+        "sample 8*j+i. That convention is not a choice -- it is the one\n"
+        "``rf_kernels::mask_counter_data`` used, and rf_pipelines pointed that kernel's output\n"
+        "straight at a live assembled_chunk, so it is the code that packed every mask in every\n"
+        "file :class:`AssembledChunk` reads.\n"
+        "\n"
+        "Together with :class:`ChimeDequantizationKernel` this pair brackets a ported chain:\n"
+        "that one consumes a packed mask and produces (intensity, weights), this one consumes\n"
+        "the weights and produces a packed mask. Neither is a :class:`GpuTransform`, and\n"
+        "neither appears in a chain.\n"
+        "\n"
+        "The threshold is STRICTLY > 0, which makes NaN and -0.0 masked. Packing is a\n"
+        "comparison, not arithmetic, so the result agrees with the CPU bit for bit -- except\n"
+        "for a positive DENORMAL weight (below 1.18e-38), which the GPU comparison flushes to\n"
+        "zero and calls bad. Chain weights are 0, 1, or averages of those, so this cannot\n"
+        "arise in practice.\n"
+        "\n"
+        "The kernel does NOT copy anything to the GPU -- its arrays are cupy arrays.")
+
+        .def(py::init<long, long, long>(),
+            py::arg("nfreq"), py::arg("nt"), py::arg("warps_per_block") = 32,
+            "Create a RfiMaskPackingKernel.\n"
+            "\n"
+            "Args:\n"
+            "    nfreq: frequency channels. The mask has nfreq rows too -- this kernel does\n"
+            "        no frequency downsampling, as the old one did not.\n"
+            "    nt: time samples, which must be a multiple of 1024\n"
+            "    warps_per_block: performance knob, 4/8/16/32. Must not change the result.\n"
+            "        See time_selected().\n"
+            "\n"
+            "The multiple-of-1024 rule is the kernel's tiling, not a property of the data:\n"
+            "one warp packs 1024 time samples into the 128 bytes that are exactly one cache\n"
+            "line. Every chimefrb config runs the mask counter at nt_chunk = 1024.\n"
+            "\n"
+            "Raises:\n"
+            "    RuntimeError: on non-positive geometry, nt not a multiple of 1024, or an\n"
+            "        unsupported warps_per_block.")
+
+        .def_readonly("nfreq", &RfiMaskPackingKernel::nfreq,
+            "Frequency channels (the mask has nfreq rows too)")
+        .def_readonly("nt", &RfiMaskPackingKernel::nt, "Time samples, a multiple of 1024")
+        .def_readonly("warps_per_block", &RfiMaskPackingKernel::warps_per_block,
+            "Performance knob for the kernel (4, 8, 16 or 32)")
+
+        .def_static("time_selected", &RfiMaskPackingKernel::time_selected,
+            py::call_guard<py::gil_scoped_release>(),
+            "Run timing benchmarks at the production CHIME geometry and two larger ones,\n"
+            "against a read-only ceiling (called via 'python -m pirate_frb time --cfrb')")
+
+        .def("launch",
+            [](const RfiMaskPackingKernel &self, Array<uint8_t> &rfi_mask,
+               const Array<float> &weights, uintptr_t stream_ptr) {
+                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                self.launch(rfi_mask, weights, stream);
+            },
+            py::arg("rfi_mask"), py::arg("weights"), py::arg("stream_ptr"),
+            py::call_guard<py::gil_scoped_release>(),   // async launch; body is pure C++
+            "GPU kernel launch (async, does not sync stream).\n"
+            "\n"
+            "Args:\n"
+            "    rfi_mask: cupy uint8 array, shape (nfreq, nt/8), FULLY CONTIGUOUS, on GPU.\n"
+            "        Fully overwritten. The contiguity is what makes each row start on a\n"
+            "        128-byte boundary, which is what lets a warp store its whole tile in one\n"
+            "        aligned instruction; a chunk's mask buffer is contiguous anyway.\n"
+            "    weights: cupy float32 array, shape (nfreq, nt), on GPU. Read only, and must\n"
+            "        not be the same array as 'rfi_mask'. PARTIALLY CONTIGUOUS: the time\n"
+            "        stride must be 1, but the frequency stride is free (>= nt), so this may\n"
+            "        be a column slice of a larger block.\n"
             "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)")
         ;
 

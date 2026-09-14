@@ -108,6 +108,18 @@ into the (intensity, weights) pair a transform runs on, writing into a column wi
 pipeline block so that several chunks can fill one block's time axis. It agrees with the CPU
 decode bit for bit, which is what its unit test asserts.
 
+The mirror image, at the far end of the chain, is `RfiMaskPackingKernel`
+(`include/pirate/chimefrb/RfiMaskPackingKernel.hpp`): it packs the weights a chain leaves
+behind into the bit-packed RFI mask a data file carries, which is what
+`ChimeDequantizationKernel` consumes on the way back in. It is the port of
+`rf_kernels::mask_counter_data` -- the code that `rf_pipelines::mask_counter_transform`
+pointed straight at a live `assembled_chunk`, so it packed every mask in every file we read.
+We do NOT port that kernel's other output, the per-frequency and total counts of unmasked
+samples: their consumers were CHIME L1 infrastructure (the mask_measurements ring buffer, the
+web viewer) that pirate has no counterpart for, which is also why `mask_counter` is listed in
+`IGNORED_JSON_CLASSES` in `pirate_frb/chimefrb/utils.py`. Neither kernel of the pair is a
+`GpuTransform`, and neither appears in a chain.
+
 Surveying files is a different job from reading them, and `AssembledChunk.from_msgpack(filename,
 metadata_only=True)` is the cheap way to do it: it parses every scalar and stops before the
 array bodies, ~30x faster than a full read and validating the file just as thoroughly. The
