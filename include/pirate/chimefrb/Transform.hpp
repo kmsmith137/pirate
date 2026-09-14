@@ -17,15 +17,56 @@ namespace chimefrb {
 
 
 // A transform that needs per-launch workspace carves it out of the caller's 'scratch'
-// array, one sub-array after another (see carve_scratch() below). Each sub-array starts on
-// a 128-byte boundary -- constants::bytes_per_gpu_cache_line, the alignment the GPU wants
-// for a coalesced load, and the one BumpAllocator and SlabAllocator hand out -- so a
-// sub-array of 'nelts' float32 elements OCCUPIES this many. carve_scratch() advances by it,
-// and every scratch_nelts() computation adds it up, which is what keeps the two in step.
+// array, one sub-array after another (see ScratchLayout below). Each sub-array starts on a
+// 128-byte boundary -- constants::bytes_per_gpu_cache_line, the alignment the GPU wants for
+// a coalesced load, and the one BumpAllocator and SlabAllocator hand out -- so a sub-array
+// of 'nelts' float32 elements OCCUPIES this many. ScratchLayout::carve() is the only caller
+// in C++; the twin of this function on the python side, for containers written in python,
+// is padded_scratch_nelts() in pirate_frb/chimefrb/utils.py.
 inline long padded_scratch_nelts(long nelts)
 {
     return align_up(nelts, constants::bytes_per_gpu_cache_line / long(sizeof(float)));
 }
+
+
+// ScratchLayout: the cursor a transform uses to lay out its per-launch workspace inside the
+// caller's 'scratch' array. It runs in two modes, so that a transform can describe its
+// layout ONCE and have both the size and the sub-arrays come out of that one description:
+//
+//   ScratchLayout lay;                  // SIZING: carve() returns an empty Array and only
+//   my_layout(lay);                     //   advances nelts(). Use it in the constructor,
+//   scratch_nelts = lay.nelts();        //   where there is no array yet.
+//
+//   ScratchLayout lay(scratch);         // CARVING: carve() returns views into 'scratch'.
+//   Scratch s = my_layout(lay);         //   Use it in launch_checked().
+//
+// Writing the layout twice -- once to add up a size, once to carve -- is what this replaces;
+// the two drifting apart was a standing hazard, and for a CONDITIONAL layout (GpuClipperBase,
+// whose pieces depend on axis and on (Df,Dt)) it meant writing the same conditionals twice in
+// two different forms.
+//
+// The layout function must be a function of the transform's const members only, or the two
+// passes can disagree; launch_checked() should assert nelts() == scratch_nelts to pin that.
+
+class ScratchLayout
+{
+public:
+    ScratchLayout() = default;                                  // sizing mode
+    explicit ScratchLayout(ksgpu::Array<float> &scratch);        // carving mode
+
+    // The next sub-array of the given shape, starting on a 128-byte boundary. In sizing mode
+    // the result is an EMPTY Array -- assign it, do not dereference it.
+    ksgpu::Array<float> carve(std::initializer_list<long> shape);
+
+    // Float32 elements consumed so far, padding included. After the layout function has run
+    // in sizing mode, this is the transform's scratch_nelts.
+    long nelts() const { return _pos; }
+
+private:
+    ksgpu::Array<float> _scratch;    // empty in sizing mode
+    bool _carving = false;
+    long _pos = 0;
+};
 
 
 // GpuTransform: the base class of every chimefrb transform -- anything that a
@@ -60,7 +101,13 @@ struct GpuTransform
 
     const std::string name;
     const long nbeams, nfreq, ntime;   // shape of the arrays launch() takes
-    const long scratch_nelts;          // float32 scratch elements launch() needs; may be 0
+    // Float32 scratch elements launch() needs; may be 0. NOT const, but treat it as if it
+    // were: the constructor sets it -- either from its argument, or, for a subclass that
+    // lays out its own workspace, by running that layout in sizing mode (see ScratchLayout)
+    // once the members it depends on exist -- and nothing changes it afterwards. A subclass
+    // assigning it in its body bypasses the constructor's "scratch_nelts >= 0" check, which
+    // is harmless: ScratchLayout::nelts() cannot be negative.
+    long scratch_nelts;
 
     // launch(): check the arguments, then call launch_checked(). Asynchronous on 'stream';
     // nothing synchronizes. Note: stream=NULL is allowed, but is not the default.
@@ -91,14 +138,6 @@ struct GpuTransform
     virtual void launch_checked(ksgpu::Array<float> &intensity, ksgpu::Array<float> &weights,
                                 ksgpu::Array<float> &scratch, cudaStream_t stream) const = 0;
 
-protected:
-    // carve_scratch(): the next sub-array of the given shape out of the caller's 1-d
-    // scratch array, advancing 'pos' by padded_scratch_nelts() of the shape's size, so that
-    // the NEXT sub-array starts 128-byte-aligned too. A transform that lays its per-launch
-    // workspace out inside the caller's scratch (GpuClipperBase, GpuSplineDetrender) carves
-    // the pieces in a fixed order, so that its scratch_nelts is the sum of the PADDED sizes.
-    static ksgpu::Array<float> carve_scratch(ksgpu::Array<float> &scratch, long &pos,
-                                             std::initializer_list<long> shape);
 };
 
 

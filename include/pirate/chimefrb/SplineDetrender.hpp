@@ -114,11 +114,22 @@ struct GpuSplineDetrender : public GpuTransform
     static void time_selected();
 
 private:
+    // The per-launch workspace. Filled by _carve(), which is the ONLY description of the
+    // layout: the constructor runs it in sizing mode to get scratch_nelts, launch_checked()
+    // runs it in carving mode to get the sub-arrays. See ScratchLayout in Transform.hpp.
+    struct Scratch {
+        ksgpu::Array<float> gu;       // (nbeams, nfrange, ncomp, ntime)
+        ksgpu::Array<float> acoef;    // (nbeams, N_phi, ntime)
+        ksgpu::Array<float> rmin;     // (nbeams, 1, ntime)
+    };
+
+    Scratch _carve(ScratchLayout &lay) const;
+
     // Everything the constructor derives from (nfreq, ntime, nbins) alone: the bin edges,
-    // the freq-range decomposition, and the counts that fix the scratch layout. It is
-    // computed by _geometry() BEFORE the base class is constructed, because
-    // GpuTransform::scratch_nelts is a const member and must be known then; the public
-    // constructor delegates to the private one below with the result.
+    // the freq-range decomposition, and the counts that fix the scratch layout. Computed by
+    // _geometry() before the base class is constructed, and the public constructor delegates
+    // to the private one below with the result -- which is how the several const members
+    // taken from it can all come out of one _geometry() call.
     struct Geometry {
         std::vector<long> bin_edges;              // nbins+1 channel indices, 0 .. nfreq
         std::vector<long> fr_lo, fr_hi, fr_j0;    // one freq-range per element (see the .cu)
@@ -127,7 +138,6 @@ private:
         long ncomp = 0;                           // per-freq-range components (14)
 
         long nfrange() const { return long(fr_lo.size()); }
-        long scratch_nelts(long nbeams, long ntime) const;
     };
 
     // Checks nbins, nfreq and ntime (see the public constructor), then fills a Geometry.

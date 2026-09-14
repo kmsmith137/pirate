@@ -168,16 +168,17 @@ GpuSplineDetrender::Geometry GpuSplineDetrender::_geometry(long nfreq, long ntim
 }
 
 
-// The per-launch scratch, in the order launch_checked() carves it: gu (nbeams, nfrange,
-// ncomp, ntime), acoef (nbeams, N_phi, ntime), rmin (nbeams, 1, ntime). Each piece is padded
-// to a 128-byte boundary (padded_scratch_nelts(), in Transform.hpp), exactly as
-// carve_scratch() advances -- which is what makes the xassert_eq(pos, scratch_nelts) at the
-// end of launch_checked() hold.
-long GpuSplineDetrender::Geometry::scratch_nelts(long nbeams, long ntime) const
+// The per-launch workspace: three sub-arrays of the caller's scratch, each starting on a
+// 128-byte boundary (ScratchLayout::carve()). This is the ONLY place the layout is written --
+// the constructor runs it in sizing mode for scratch_nelts, launch_checked() in carving mode
+// for the arrays -- so the size and the carving cannot drift apart.
+GpuSplineDetrender::Scratch GpuSplineDetrender::_carve(ScratchLayout &lay) const
 {
-    return (padded_scratch_nelts(nbeams * nfrange() * ncomp * ntime)
-            + padded_scratch_nelts(nbeams * N_phi * ntime)
-            + padded_scratch_nelts(nbeams * ntime));
+    Scratch s;
+    s.gu    = lay.carve({nbeams, nfrange, ncomp, ntime});
+    s.acoef = lay.carve({nbeams, N_phi, ntime});
+    s.rmin  = lay.carve({nbeams, 1, ntime});
+    return s;
 }
 
 
@@ -188,11 +189,17 @@ GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, l
 
 GpuSplineDetrender::GpuSplineDetrender(long nbeams_, long nfreq_, long ntime_, long nbins_, double epsilon_,
                                        const Geometry &g) :
-    GpuTransform("GpuSplineDetrender", nbeams_, nfreq_, ntime_, g.scratch_nelts(nbeams_, ntime_)),
+    GpuTransform("GpuSplineDetrender", nbeams_, nfreq_, ntime_, /*scratch_nelts=*/0),
     nbins(nbins_), epsilon(_checked_epsilon(epsilon_)),
     N_phi(g.N_phi), nfrange(g.nfrange()), channels_per_range(g.channels_per_range),
     ncomp(g.ncomp), _bin_edges(g.bin_edges)
 {
+    // scratch_nelts, from the layout itself (see _carve()). Has to be here rather than in
+    // the initializer list: the members _carve() reads do not exist until now.
+    ScratchLayout lay;
+    _carve(lay);
+    scratch_nelts = lay.nelts();
+
     // ---- Basis tables, built in float64 and cast. Channel f in bin b has fractional
     // bin coordinate x = nbins*(f+1/2)/nfreq - b, in [0,1]; again the old code's
     // expression, in its order.
@@ -297,12 +304,14 @@ vector<long> GpuSplineDetrender::bin_edges() const
 void GpuSplineDetrender::launch_checked(Array<float> &intensity, Array<float> &weights,
                                         Array<float> &scratch, cudaStream_t stream) const
 {
-    // The per-launch workspace, in the order Geometry::scratch_nelts() assumes.
-    long pos = 0;
-    Array<float> gu = carve_scratch(scratch, pos, {nbeams, nfrange, ncomp, ntime});
-    Array<float> acoef = carve_scratch(scratch, pos, {nbeams, N_phi, ntime});
-    Array<float> rmin = carve_scratch(scratch, pos, {nbeams, 1, ntime});
-    xassert_eq(pos, scratch_nelts);
+    // The per-launch workspace. _carve() is the same function the constructor sized from,
+    // so the assert can only fail if _carve() ever reads something that is not a const
+    // member -- which is exactly what it is here to catch.
+    ScratchLayout lay(scratch);
+    Scratch s = _carve(lay);
+    xassert_eq(lay.nelts(), scratch_nelts);
+
+    Array<float> gu = s.gu, acoef = s.acoef, rmin = s.rmin;
 
     const TimeStencils &tb = *reinterpret_cast<const TimeStencils *>(tb_blob);
 

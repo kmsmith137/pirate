@@ -86,6 +86,20 @@ protected:
                    ClipperAxis axis, long Df, long Dt, long niter, double iter_sigma,
                    bool two_pass);
 
+    // The per-launch workspace of steps 1-2. Filled by _carve_statistic(), which is the ONLY
+    // description of the layout: the constructor runs it in sizing mode to get scratch_nelts,
+    // _launch_statistic() runs it in carving mode to get the sub-arrays. See ScratchLayout in
+    // Transform.hpp. Note the layout is CONDITIONAL -- the pieces a configuration does not
+    // need are empty Arrays, and cost nothing -- which is exactly why writing it once matters.
+    struct StatisticScratch {
+        ksgpu::Array<float> cell_i, cell_w;   // (nbeams, F_ds, T_ds); empty unless (Df,Dt) != (1,1)
+        ksgpu::Array<float> stat_i, stat_w;   // (nbeams, T_ds, F_ds); empty unless axis == FREQ
+        ksgpu::Array<float> mean, var;        // (wrms_R,)
+        ksgpu::Array<float> wrms;             // GpuWrmsKernel's own; empty on the shared-memory path
+    };
+
+    StatisticScratch _carve_statistic(ScratchLayout &lay) const;
+
     // What steps 1-2 leave behind. 'mean' and 'var' are views into the caller's scratch;
     // 'cell_i' is the UNTRANSPOSED downsampled intensity, which the clip kernels read,
     // and IS 'intensity' when (Df,Dt) == (1,1).

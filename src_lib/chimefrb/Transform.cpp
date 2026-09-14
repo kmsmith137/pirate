@@ -139,16 +139,26 @@ void GpuTransform::launch(Array<float> &intensity, Array<float> &weights,
 }
 
 
-Array<float> GpuTransform::carve_scratch(Array<float> &scratch, long &pos,
-                                         initializer_list<long> shape)
+ScratchLayout::ScratchLayout(Array<float> &scratch) :
+    _scratch(scratch), _carving(true)
+{ }
+
+
+Array<float> ScratchLayout::carve(initializer_list<long> shape)
 {
     long n = 1;
     for (long s: shape)
         n *= s;
 
-    xassert_le(pos + n, scratch.shape[0]);
-    Array<float> ret = scratch.slice(0, pos, pos+n).reshape(shape);
-    pos += padded_scratch_nelts(n);   // the next sub-array starts 128-byte-aligned
+    Array<float> ret;
+    if (_carving) {
+        xassert_le(_pos + n, _scratch.shape[0]);
+        ret = _scratch.slice(0, _pos, _pos+n).reshape(shape);
+    }
+
+    // Advance by the PADDED size, in both modes, so that the next sub-array starts
+    // 128-byte-aligned and so that sizing and carving consume the same total.
+    _pos += padded_scratch_nelts(n);
     return ret;
 }
 

@@ -1,6 +1,7 @@
 #include "../../include/pirate/chimefrb/ClipperBase.hpp"
 #include "../../include/pirate/chimefrb/WiDownsamplingKernel.hpp"
 #include "../../include/pirate/chimefrb/WrmsKernel.hpp"
+#include "../../include/pirate/inlines.hpp"   // xdiv()
 
 #include <sstream>
 #include <ksgpu/xassert.hpp>
@@ -17,15 +18,18 @@ namespace chimefrb {
 
 // -------------------------------------------------------------------------------------------------
 //
-// Constructor helpers. The clipper's argument checks and its scratch size are computed by
-// _checked_scratch_nelts(), which runs as the GpuTransform constructor's argument --
-// i.e. before anything else, since the base class is initialized before any member. That
-// is what lets the derived members below divide by Df and Dt safely, and what makes
-// scratch_nelts (a const member of the base) known in time.
+// Constructor helpers. _checked_ntime() runs the clipper's argument checks and returns
+// 'ntime', so that the constructor can call it as the GpuTransform constructor's ntime
+// argument -- i.e. before any member is initialized, since a base class is initialized first.
+// That ordering is load-bearing: F_ds and T_ds divide by Df and Dt, so a Df of 0 has to be
+// rejected before they are computed. (They also use xdiv(), which asserts the divisor and
+// the divisibility, so the member initializers are safe even if that ordering is ever
+// disturbed -- but xdiv's message names a line of inlines.hpp, where _checked_ntime's names
+// the parameter, so the check below is the one a caller wants to hit.)
 
 
-static void _check_args(const char *name, long nfreq, long ntime, long nt_chunk,
-                        long Df, long Dt, long niter, double iter_sigma)
+static long _checked_ntime(const char *name, long nfreq, long ntime, long nt_chunk,
+                           long Df, long Dt, long niter, double iter_sigma)
 {
     // nbeams, nfreq and ntime >= 1 are GpuTransform's checks.
     if (nt_chunk < 1)
@@ -61,6 +65,8 @@ static void _check_args(const char *name, long nfreq, long ntime, long nt_chunk,
            << Df << "," << Dt << ")";
         throw runtime_error(ss.str());
     }
+
+    return ntime;
 }
 
 
@@ -86,54 +92,58 @@ static long _wrms_R(ClipperAxis axis, long B, long F_ds, long T_ds)
 }
 
 
-// Checks the arguments (above), then returns the scratch layout's size in float32 elements.
-// The layout is kept in one place, and in the same order that _launch_statistic() carves it:
-//
-//    (I_ds, W_ds)   ncell each, only when (Df,Dt) != (1,1)
-//    (I_t,  W_t)    ncell each, only when axis == FREQ
-//    mean, var      wrms_R each
-//    GpuWrmsKernel        its own scratch, nonzero only on the global-memory path
-//
-// Every piece is padded to a 128-byte boundary (padded_scratch_nelts(), in Transform.hpp),
-// exactly as carve_scratch() advances, so the total below is what the carving consumes.
-//
-static long _checked_scratch_nelts(const char *name, long B, long nfreq, long ntime, long nt_chunk,
-                                   ClipperAxis axis, long Df, long Dt, long niter,
-                                   double iter_sigma, bool two_pass)
-{
-    _check_args(name, nfreq, ntime, nt_chunk, Df, Dt, niter, iter_sigma);
-
-    const long F_ds = nfreq / Df, T_ds = nt_chunk / Dt;
-    const long ncell = B * F_ds * T_ds;
-    const long R = _wrms_R(axis, B, F_ds, T_ds);
-    const bool need_ds = (Df != 1) || (Dt != 1);
-
-    long n = 2 * padded_scratch_nelts(R);
-    if (need_ds)
-        n += 2 * padded_scratch_nelts(ncell);
-    if (axis == ClipperAxis::FREQ)
-        n += 2 * padded_scratch_nelts(ncell);
-
-    GpuWrmsKernel wrms(_wrms_L(axis, F_ds, T_ds), niter, iter_sigma, two_pass);
-    return n + padded_scratch_nelts(wrms.scratch_nelts(R));
-}
-
-
 GpuClipperBase::GpuClipperBase(const char *name_, long nbeams_, long nfreq_, long ntime_,
                                long nt_chunk_, ClipperAxis axis_, long Df_, long Dt_,
                                long niter_, double iter_sigma_, bool two_pass_) :
-    GpuTransform(name_, nbeams_, nfreq_, ntime_,
-                 _checked_scratch_nelts(name_, nbeams_, nfreq_, ntime_, nt_chunk_, axis_, Df_, Dt_,
-                                        niter_, iter_sigma_, two_pass_)),
+    GpuTransform(name_, nbeams_, nfreq_,
+                 _checked_ntime(name_, nfreq_, ntime_, nt_chunk_, Df_, Dt_, niter_, iter_sigma_),
+                 /*scratch_nelts=*/0),      // set in the body: the layout needs the members below
     nt_chunk(nt_chunk_), axis(axis_), Df(Df_), Dt(Dt_),
     niter(niter_), iter_sigma(iter_sigma_), two_pass(two_pass_),
-    F_ds(nfreq_ / Df_), T_ds(nt_chunk_ / Dt_),
-    wrms_L(_wrms_L(axis_, nfreq_/Df_, nt_chunk_/Dt_)),
-    wrms_R(_wrms_R(axis_, nbeams_, nfreq_/Df_, nt_chunk_/Dt_))
-{ }
+    F_ds(xdiv(nfreq_, Df_)), T_ds(xdiv(nt_chunk_, Dt_)),
+    wrms_L(_wrms_L(axis_, xdiv(nfreq_, Df_), xdiv(nt_chunk_, Dt_))),
+    wrms_R(_wrms_R(axis_, nbeams_, xdiv(nfreq_, Df_), xdiv(nt_chunk_, Dt_)))
+{
+    ScratchLayout lay;
+    _carve_statistic(lay);
+    scratch_nelts = lay.nelts();
+}
 
 
 // -------------------------------------------------------------------------------------------------
+
+
+// The per-launch workspace of steps 1-2, and the ONLY description of its layout: the
+// constructor runs this in sizing mode for scratch_nelts, _launch_statistic() below runs it
+// in carving mode for the arrays. Both take the same branches, since every condition is a
+// const member -- which is what makes the two agree by construction rather than by review.
+GpuClipperBase::StatisticScratch GpuClipperBase::_carve_statistic(ScratchLayout &lay) const
+{
+    StatisticScratch s;
+
+    // The downsampled pair, only when (Df,Dt) != (1,1) -- at (1,1) the downsample is the
+    // identity, and the full-resolution arrays are used in place.
+    if ((Df != 1) || (Dt != 1)) {
+        s.cell_i = lay.carve({nbeams, F_ds, T_ds});
+        s.cell_w = lay.carve({nbeams, F_ds, T_ds});
+    }
+
+    // The transposed pair, only for ClipperAxis::FREQ (see _launch_statistic() for why).
+    if (axis == ClipperAxis::FREQ) {
+        s.stat_i = lay.carve({nbeams, T_ds, F_ds});
+        s.stat_w = lay.carve({nbeams, T_ds, F_ds});
+    }
+
+    s.mean = lay.carve({wrms_R});
+    s.var = lay.carve({wrms_R});
+
+    // GpuWrmsKernel's own scratch: zero on the shared-memory path, and then nothing is carved.
+    long nw = GpuWrmsKernel(wrms_L, niter, iter_sigma, two_pass).scratch_nelts(wrms_R);
+    if (nw > 0)
+        s.wrms = lay.carve({nw});
+
+    return s;
+}
 
 
 GpuClipperBase::StatisticOutputs
@@ -141,7 +151,10 @@ GpuClipperBase::_launch_statistic(const Array<float> &intensity, const Array<flo
                                   Array<float> &scratch, cudaStream_t stream) const
 {
     const bool need_ds = (Df != 1) || (Dt != 1);
-    long pos = 0;
+
+    ScratchLayout lay(scratch);
+    StatisticScratch s = _carve_statistic(lay);
+    xassert_eq(lay.nelts(), scratch_nelts);   // the constructor sized from this same function
 
     StatisticOutputs out;
 
@@ -151,8 +164,8 @@ GpuClipperBase::_launch_statistic(const Array<float> &intensity, const Array<flo
     out.cell_i = intensity;
 
     if (need_ds) {
-        out.cell_i = carve_scratch(scratch, pos, {nbeams, F_ds, T_ds});
-        cell_w = carve_scratch(scratch, pos, {nbeams, F_ds, T_ds});
+        out.cell_i = s.cell_i;
+        cell_w = s.cell_w;
         GpuWiDownsamplingKernel(Df, Dt, false).launch(out.cell_i, cell_w, intensity, weights, stream);
     }
 
@@ -169,8 +182,8 @@ GpuClipperBase::_launch_statistic(const Array<float> &intensity, const Array<flo
     Array<float> stat_w = cell_w;
 
     if (axis == ClipperAxis::FREQ) {
-        stat_i = carve_scratch(scratch, pos, {nbeams, T_ds, F_ds});
-        stat_w = carve_scratch(scratch, pos, {nbeams, T_ds, F_ds});
+        stat_i = s.stat_i;
+        stat_w = s.stat_w;
         GpuWiDownsamplingKernel(1, 1, true).launch(stat_i, stat_w, out.cell_i, cell_w, stream);
     }
 
@@ -180,15 +193,12 @@ GpuClipperBase::_launch_statistic(const Array<float> &intensity, const Array<flo
     // (nbeams,F_ds,T_ds) -> (nbeams, F_ds*T_ds) for NONE, since a contiguous 3-d array is
     // also a 2-d one. The
     // device helper clipper_row() in ClipperBase.hpp is the inverse of this reshape.
-    out.mean = carve_scratch(scratch, pos, {wrms_R});
-    out.var = carve_scratch(scratch, pos, {wrms_R});
+    out.mean = s.mean;
+    out.var = s.var;
 
     GpuWrmsKernel wrms(wrms_L, niter, iter_sigma, two_pass);
-    long nw = wrms.scratch_nelts(wrms_R);
-    Array<float> wrms_scratch = (nw > 0) ? carve_scratch(scratch, pos, {nw}) : Array<float>();
-
     wrms.launch(out.mean, out.var, stat_i.reshape({wrms_R, wrms_L}),
-                stat_w.reshape({wrms_R, wrms_L}), wrms_scratch, stream);
+                stat_w.reshape({wrms_R, wrms_L}), s.wrms, stream);
 
     return out;
 }
