@@ -31,9 +31,8 @@ Checks, per log:
 
 With --cascade (the run ended with a deliberate SIGINT), errors are EXPECTED
 in the tail of each log -- that is the documented "errors cascade backwards"
-path. Errors are then a failure only if they appear before the cascade
-region, which is located by find_cascade_start(). Without --cascade, any
-error is a failure.
+path. An error is then a failure only if the process kept WORKING after it
+(see trailing_progress()). Without --cascade, any error is a failure.
 
 Exit status 0 if every check passed, 1 if any hard check failed, 2 on usage
 error. A log that exists but yields zero parseable lines is a FAILURE, not a
@@ -70,8 +69,8 @@ RE_RPC = re.compile(r'\[([^\]]+)\] connections=(\d+), rb=\[([\d,]+)\]')
 RB_LABELS = ['start', 'reaped', 'processed', 'streamed', 'assembled', 'end']
 
 # The "normal progress" line of each log: what the process prints while it is
-# doing its job. Used by find_cascade_start() to locate where the shutdown
-# begins, since a process that is shutting down stops making progress.
+# doing its job. Used by trailing_progress() to tell a shutdown cascade from a
+# mid-run failure, since a process that is shutting down stops making progress.
 PROGRESS_RE = {
     'server': RE_SERVER,
     'grouper': RE_GROUPER,
@@ -80,9 +79,19 @@ PROGRESS_RE = {
     'rpc_status': RE_RPC,
 }
 
-# Smallest cascade region we will ever consider, in lines. See
-# find_cascade_start() for why the region is never allowed to be shorter.
+# Fallback cascade region, in lines, for a log with no known progress line.
+# See trailing_progress(); every log we actually parse has one, so this is a
+# backstop rather than the main guard.
 MIN_CASCADE_LINES = 60
+
+# How many progress lines may follow an error and still read as shutdown.
+# A merged log is not perfectly ordered: the production grouper forks one child
+# per GPU into a SINGLE log, so one child can print its traceback while another
+# is still finishing the chunk it had in flight (observed: exactly 1 such line).
+# An error during healthy running is followed by the whole rest of the run --
+# hundreds or thousands of progress lines -- so the two cases sit orders of
+# magnitude apart and the exact cutoff does not matter.
+MAX_TRAILING_PROGRESS = 10
 
 # Minimum nevents=0 chunks before the grouper baseline is worth reporting.
 # coarse_snr_max is a max over ALL beams (per_beam_max.max() in
@@ -282,34 +291,27 @@ def check_rpc_status(lines, r, acqdir):
         (r.ok if n else r.fail)(f"{n} received filename(s) mention acqdir {acqdir!r}")
 
 
-def find_cascade_start(name, lines):
-    """Index of the first line that may belong to the shutdown cascade.
+def trailing_progress(name, lines, idx):
+    """How many NORMAL PROGRESS lines appear after lines[idx].
 
-    A fixed-size tail is not enough. The production grouper forks one child per
-    GPU and every child dumps its own ~30-line traceback into this one log, so
-    the cascade region grows with the process count -- a 2-GPU run overflows a
-    60-line window and its perfectly normal cascade reads as a mid-run error.
+    This is how check_errors() tells a shutdown cascade from a mid-run failure.
+    Once a process starts shutting down it stops doing its job, so a cascade
+    error has almost nothing after it, while an error during healthy running is
+    followed by the rest of the run.
 
-    So anchor on the last line of NORMAL PROGRESS instead: once a process starts
-    shutting down it stops doing its job, and anything after that point is
-    shutdown output however long it runs. Errors that appear while the process
-    is still making progress stay failures, which is the case worth catching.
+    Counting is deliberate: POSITION alone does not work on a merged log. The
+    production grouper forks one child per GPU into a single log, and one
+    child's traceback can be followed by another child's last in-flight
+    progress line. Anchoring on the LAST progress line put that first traceback
+    outside the cascade region and failed a completely healthy production run.
 
-    The region is never allowed to be shorter than MIN_CASCADE_LINES, because a
-    log can emit a few in-flight progress lines AFTER its shutdown message (the
-    sifter's gRPC worker threads do exactly that) -- which would otherwise drag
-    the anchor to the very end and fail a healthy run.
+    Returns None if this log has no known progress line, in which case the
+    caller falls back to a fixed-size tail window.
     """
-    tail_start = max(0, len(lines) - MIN_CASCADE_LINES)
     prog = PROGRESS_RE.get(name)
     if prog is None:
-        return tail_start
-    for i in range(len(lines) - 1, -1, -1):
-        if prog.search(lines[i]):
-            return min(tail_start, i + 1)
-    # No progress lines at all. The per-log checkers already fail loudly on
-    # that ("format changed?"), so just keep the fixed window here.
-    return tail_start
+        return None
+    return sum(1 for ln in lines[idx+1:] if prog.search(ln))
 
 
 def check_errors(name, lines, r, cascade):
@@ -319,16 +321,31 @@ def check_errors(name, lines, r, cascade):
         r.ok(f"{name}: no errors ({len(lines)} lines)")
         return
     first = hits[0][0]
-    tail_start = find_cascade_start(name, lines)
-    if cascade and first >= tail_start:
-        r.ok(f"{name}: {len(hits)} error line(s), all in the final "
-             f"{len(lines) - first} lines (the expected shutdown cascade)")
-    elif cascade:
-        r.fail(f"{name}: error at line {first + 1}/{len(lines)}, well before the "
-               f"cascade region -- not explained by the deliberate SIGINT")
-        r.info(f"first: {hits[0][1].strip()[:120]}")
-    else:
+
+    if not cascade:
         r.fail(f"{name}: {len(hits)} error line(s), first at line {first + 1}")
+        r.info(f"first: {hits[0][1].strip()[:120]}")
+        return
+
+    trailing = trailing_progress(name, lines, first)
+    if trailing is None:
+        # Backstop for a log with no known progress line: a fixed tail window.
+        if first >= max(0, len(lines) - MIN_CASCADE_LINES):
+            r.ok(f"{name}: {len(hits)} error line(s), all in the final "
+                 f"{len(lines) - first} lines (the expected shutdown cascade)")
+        else:
+            r.fail(f"{name}: error at line {first + 1}/{len(lines)}, before the "
+                   f"final {MIN_CASCADE_LINES} lines -- not explained by the "
+                   f"deliberate SIGINT")
+            r.info(f"first: {hits[0][1].strip()[:120]}")
+    elif trailing <= MAX_TRAILING_PROGRESS:
+        r.ok(f"{name}: {len(hits)} error line(s), first at line {first + 1}/"
+             f"{len(lines)}, followed by only {trailing} progress line(s) "
+             f"(the expected shutdown cascade)")
+    else:
+        r.fail(f"{name}: error at line {first + 1}/{len(lines)}, followed by "
+               f"{trailing} more progress line(s) -- the process kept working "
+               f"afterwards, so this is not the deliberate SIGINT")
         r.info(f"first: {hits[0][1].strip()[:120]}")
 
 
