@@ -9,6 +9,11 @@ The search includes network reception, ring buffers, file-writing RPCs, and GPU
 dedispersion. **RFI flagging is not implemented.** The live example uses simulated
 Gaussian noise and injected bursts; it is a diagnostic, not an on-sky validation.
 
+Integration of Martin's classifier and connection to the production sifting
+pipeline are still unfinished. The live event monitor is a test receiver for
+the sifter RPC interface: it prints detections without classifying or sifting
+them. Saved trigger catalogs support offline testing and inspection.
+
 ## Build and check
 
 Building requires Ubuntu Linux, a physical NVIDIA GPU, the system CUDA toolkit
@@ -32,7 +37,8 @@ python -m pirate_frb test -n 1
 ## Grouper implementation
 
 See the [module guide](notes/grouper_modules.md) for the shared processing stages,
-configuration types and import names.
+configuration types and import names. See the [Grouper memo](docs/Pirate-Grouper.pdf)
+for the algorithm, explanatory figures and measured performance.
 
 ## Examples
 
@@ -61,7 +67,10 @@ python -B -m pirate_frb live observation examples/chord_8beams/observation.yml
 ```
 
 The recipe generates eight beams with three injected bursts. The event monitor
-prints detected beam IDs, DM, S/N, frequency bands, and arrival times. Processing
+prints detected beam IDs, DM, S/N, frequency bands, and arrival times. The
+validated run produced four detections for the three bursts: the high-DM burst
+was reported by both an early-trigger tree and a full-band tree. See the
+[eight-beam walkthrough](examples/chord_8beams/README.md) for expected output. Processing
 uses memory and does not save observation data or detection catalogs. Wait for
 the grouper's `Processing complete` message, then stop the dedisperser first with
 Ctrl-C, followed by any remaining grouper and event-monitor processes.
